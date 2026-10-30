@@ -137,8 +137,8 @@ class CorroboratingOrigin:
     parser_version: str
     mapping_version: str
     value_key: str
-    confidence: Decimal
     fetch: MarketPriceFetcher
+    confidence: Decimal | None = None
     # Which vendor the corroborating bytes came from, so they land under that vendor's
     # content-addressed prefix rather than the primary's.
     raw_source: DataSource = DataSource.TWELVE_DATA
@@ -237,10 +237,6 @@ class MarketPriceAdapter:
                 record_id=f"chart:{target.symbol}:{quote.as_of.isoformat()}",
             ),
             normalized_sha256=canonical_sha256(payload),
-            # A single public feed with no SLA (init.md's yfinance note) — the limitation
-            # is represented as confidence, never as a provenance branch downstream;
-            # graded per cell against the target's settled session (#641 D6).
-            confidence=graded_price_confidence(as_of=quote.as_of, expected_session=target.cutoff),
             valid_from=quote.as_of,
             transaction_time=quote.knowable_at,
             record=NormalizedRecord(payload=payload, parser_version=PARSER_VERSION, mapping_version=MAPPING_VERSION),
@@ -286,7 +282,6 @@ class MarketPriceAdapter:
             return FetchSuccess(
                 raw=self._raw(origin, target, quote),
                 normalized_sha256=canonical_sha256(payload),
-                confidence=failover_confidence(origin.confidence),
                 valid_from=quote.as_of,
                 transaction_time=quote.knowable_at,
                 record=NormalizedRecord(
@@ -367,44 +362,6 @@ def _serves_session(quote: MarketPriceQuote, target: MarketPriceTarget) -> bool:
     if quote.as_of != target.cutoff or quote.knowable_at.date() > target.cutoff:
         return False
     return target.run_cutoff is None or quote.knowable_at <= target.run_cutoff
-
-
-# The price confidence scale (#641 D6): the no-SLA primary's fresh-close grade, the step one
-# grade costs, and the floor no price cell falls below.
-PRIMARY_PRICE_CONFIDENCE = Decimal("0.85")
-PRICE_GRADE_STEP = Decimal("0.10")
-PRICE_CONFIDENCE_FLOOR = Decimal("0.50")
-
-
-def graded_price_confidence(*, as_of: date, expected_session: date) -> Decimal:
-    """Per-cell price confidence (#641 D6, #863 calendar-aware) — a grade, not a constant.
-
-    Rule 15 mandates per-cell confidence; financial facts honor it (0.50-0.92
-    on the current heads) while every price cell asserted a flat 0.85. The
-    grade starts at that same 0.85 (the no-SLA primary, init.md's yfinance
-    note) and drops 0.10 per TRADING SESSION the served bar lags the last settled
-    session, floored at 0.50 — a capture that had to fall back (the vendor's
-    overnight null-close window #622, holidays) now says so in its confidence
-    instead of asserting the fresh-close grade for stale data.
-
-    Uses `truealpha_contracts.calendar` (#863) so exchange holidays (e.g. Thanksgiving)
-    are not penalized as session lag.
-    """
-    from truealpha_contracts.calendar import count_market_sessions_between
-
-    lag_sessions = count_market_sessions_between(as_of, expected_session)
-    graded = PRIMARY_PRICE_CONFIDENCE - PRICE_GRADE_STEP * lag_sessions
-    return max(graded, PRICE_CONFIDENCE_FLOOR)
-
-
-def failover_confidence(origin_confidence: Decimal) -> Decimal:
-    """A failover-served close's confidence: its origin's normal grade, one step down (#862).
-
-    The step is the one a session of lag costs (`graded_price_confidence`): the cell was
-    served, but not by the source the policy prefers, and the no-SLA primary it replaced
-    is exactly the dependency init.md §9 says a critical path must not rest on alone.
-    """
-    return max(origin_confidence - PRICE_GRADE_STEP, PRICE_CONFIDENCE_FLOOR)
 
 
 def last_settled_session_date(cutoff: datetime) -> date:

@@ -295,7 +295,6 @@ def _routes(
             parser_version="twelve-data-parser:v1",
             mapping_version="twelve-data-map:v1",
             value_key="price",
-            confidence=Decimal("0.85"),
             fetch=lambda symbol, cutoff: _quote("40"),
         )
         if outage is None
@@ -306,7 +305,6 @@ def _routes(
             parser_version="twelve-data-parser:v3",
             mapping_version="twelve-data-map:v3",
             value_key="close",
-            confidence=Decimal("0.85"),
             fetch=origin_fetch(outage.twelve_data),
         )
     )
@@ -318,7 +316,6 @@ def _routes(
         parser_version=MOOMOO_KLINE_PARSER_VERSION,
         mapping_version="moomoo-kline-map:v1",
         value_key="close",
-        confidence=Decimal("0.80"),
         fetch=origin_fetch(outage.moomoo if outage is not None else True),
         raw_source=DataSource.MOOMOO,
     )
@@ -326,7 +323,6 @@ def _routes(
         origin="moomoo-financials",
         parser_version=MOOMOO_FINANCIALS_PARSER_VERSION,
         mapping_version="moomoo-financials-map:v1",
-        confidence=Decimal("0.75"),
         fetch=lambda ticker, cutoff: _moomoo_statements(ticker),
     )
     price = MarketPriceAdapter(
@@ -606,21 +602,18 @@ def test_the_quality_report_names_no_band_and_serves_the_stamped_confidence(conn
         assert cell["outcome"] == "agreed", listing
         for graded in (cell, *cell["fields"].values()):
             assert {"band", "confidence"}.isdisjoint(graded), listing
-    stamped_mean = connection.execute(
+    null_stamps = connection.execute(
         """
-        select (sum(top) / %s)::numeric(10, 4)
-        from (
-            select max(o.confidence) as top
-            from raw.capture_obligations ob
-            join staging.capture_observation_obligations oo on oo.capture_obligation_id = ob.obligation_id
-            join staging.capture_normalized_observations o on o.observation_id = oo.observation_id
-            where ob.run_id = %s
-            group by ob.obligation_id
-        ) per_cell
+        select count(*)
+        from raw.capture_obligations ob
+        join staging.capture_observation_obligations oo on oo.capture_obligation_id = ob.obligation_id
+        join staging.capture_normalized_observations o on o.observation_id = oo.observation_id
+        where ob.run_id = %s and o.confidence is not null
         """,
-        (report["requested_count"], plan.run_id),
+        (plan.run_id,),
     ).fetchone()[0]
-    assert Decimal(report["denominator_mean_confidence"]) == stamped_mean
+    assert null_stamps == 0, "new capture rows leave staging.capture_normalized_observations.confidence NULL"
+    assert Decimal("0.7") < Decimal(report["denominator_mean_confidence"]) < Decimal("1.0")
 
 
 def test_every_bar_field_reaches_two_independent_origins(connection) -> None:
@@ -735,16 +728,7 @@ def test_confidence_report_grades_the_captured_run_from_its_origins(connection) 
     # TOPT is not a filing fund: neither plane family is graded, rather than graded empty.
     assert {"index_membership", "etf_weight"}.isdisjoint(report["families"])
     assert set(report["sources_connected"]) == {"moomoo", "sec-company-facts", "test-fixture", "twelve-data", "yahoo"}
-    # Measured from the run's own rows (whether a semantic's stamp is constant is a fact
-    # about the data, asserted on production, not here) and never read by the cells.
-    stored = report["metadata"]["stored_confidence"]
-    assert stored["used_for_bands"] is False
-    assert set(stored["values_by_semantic"]) == {
-        "financial-fact",
-        "listing-identity",
-        "market-price",
-        "universe-membership",
-    }
+    assert "stored_confidence" not in report["metadata"]
     # The sample names TOPT issuers the harness captured, with a value from each origin.
     sample = report["sample"]["listing:xnys:jpm"]
     assert sample["in_universe"] and "verdict" not in sample["close"]

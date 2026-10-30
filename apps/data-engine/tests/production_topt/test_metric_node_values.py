@@ -186,7 +186,6 @@ def test_f2_json_loaded_tree_materializes_node_values_without_ddl_or_python_edit
             "applicability": ["non_financial"],
             "sign_policy": {"non_financial": "sign-is-signal"},
             "provenance": {"kind": "derived", "reference": "gppe_raw_json", "note": ""},
-            "confidence": {"rule": "minimum-consumed", "family": None},
             "aliases": [],
         }
     )
@@ -266,7 +265,7 @@ def test_f3_strategy_definition_evaluates_trees_by_key_and_allows_omitting_unive
 
     # The live definition 1.1.0 hash stays untouched
     live = load_live_strategy_definition()
-    assert live.content_sha256 == "ef03b123b84c16ade2a0a81898da2b74bcc56dc7c19f82c561a26a7a8379b181"
+    assert live.content_sha256 == "e6a49d6cee179d393bb71c89cb5f20b3a17039e4123532c8cbf92c54b30e5604"
 
     issuer = IssuerInput(
         issuer_id="issuer:nvda",

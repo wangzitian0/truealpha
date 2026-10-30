@@ -102,7 +102,7 @@ def seed_strategy_inputs_from_capture(
     row for the issuer and logs the named reason. The evaluator then excludes the issuer with
     ``missing_market_value_input``. The filed count never stands beside a close of another basis.
     """
-    rows = connection.execute(
+    raw_rows = connection.execute(
         """
         select o.semantic_type, o.confidence, p.normalized_payload, o.knowable_at
         from raw.capture_obligations ob
@@ -119,6 +119,7 @@ def seed_strategy_inputs_from_capture(
         """,
         (run_id, parser_version, SERVED_BY_FAILOVER),
     ).fetchall()
+    rows = [(r[0], None, r[1], r[2]) if len(r) == 3 else (r[0], r[1], r[2], r[3]) for r in raw_rows]
 
     # #1333 / #1352: market-price reuse keys on (listing, session_date), so a reused
     # market-price payload can carry the source run's issuer_id (e.g., LEI vs CIK).
@@ -134,11 +135,15 @@ def seed_strategy_inputs_from_capture(
             listing_to_issuer.setdefault(str(payload["listing_id"]), str(payload["issuer_id"]))
     primary = choose_primary_listings(connection, _listings_by_issuer(listing_to_issuer), known_at=cutoff)
 
-    # issuer -> (primary listing, payload, confidence, the observation's own knowable_at)
-    financial: dict[str, tuple[str, dict, Decimal, datetime]] = {}
-    price: dict[str, tuple[str, dict, Decimal, datetime]] = {}
+    from data_engine.datahub.confidence_report import evaluate_and_persist_run_cell_confidence
 
-    for semantic_type, confidence, payload, observed_at in rows:
+    cell_confidences = evaluate_and_persist_run_cell_confidence(connection, run_id, cutoff=cutoff)
+
+    # issuer -> (primary listing, fallback confidence, payload, the observation's own knowable_at)
+    financial: dict[str, tuple[str, Decimal | None, dict, datetime]] = {}
+    price: dict[str, tuple[str, Decimal | None, dict, datetime]] = {}
+
+    for semantic_type, raw_conf, payload, observed_at in rows:
         if semantic_type == "listing-identity":
             continue
         listing_id = str(payload["listing_id"])
@@ -149,9 +154,16 @@ def seed_strategy_inputs_from_capture(
         )
         bucket = financial if semantic_type == "financial-fact" else price
         if primary.get(issuer_id) == listing_id and issuer_id not in bucket:
-            bucket[issuer_id] = (listing_id, payload, Decimal(str(confidence)), observed_at)
+            conf_dec = Decimal(str(raw_conf)) if raw_conf is not None else None
+            bucket[issuer_id] = (listing_id, conf_dec, payload, observed_at)
 
-    on_basis = _counts_on_close_basis(connection, run_id, financial, price, parser_version=parser_version)
+    on_basis = _counts_on_close_basis(
+        connection,
+        run_id,
+        {k: (v[0], v[2], v[3]) for k, v in financial.items()},
+        {k: (v[0], v[2], v[3]) for k, v in price.items()},
+        parser_version=parser_version,
+    )
     written = 0
     for issuer_id in sorted(set(financial) | set(price)):
         # `knowable_at` is the observation's OWN knowable time, not a constant offset from
@@ -163,16 +175,21 @@ def seed_strategy_inputs_from_capture(
         # basis spans several filings (#284).
         inputs: list[InputCell] = []
         if issuer_id in financial:
-            _listing, payload, confidence, observed_at = financial[issuer_id]
+            fin_listing, fallback_conf, payload, observed_at = financial[issuer_id]
+            listing_confs = {metric: conf for (subj, metric), conf in cell_confidences.items() if subj == fin_listing}
             inputs.extend(
-                _on_close_basis_rows(financial_input_rows(payload, confidence, observed_at), on_basis.get(issuer_id))
+                _on_close_basis_rows(
+                    financial_input_rows(payload, fallback_conf, observed_at, confidence_by_key=listing_confs),
+                    on_basis.get(issuer_id),
+                )
             )
         if issuer_id in price:
-            _listing, payload, confidence, observed_at = price[issuer_id]
-            fin_currency = financial[issuer_id][1].get("currency") if issuer_id in financial else None
+            price_listing, fallback_price_conf, payload, observed_at = price[issuer_id]
+            fin_currency = financial[issuer_id][2].get("currency") if issuer_id in financial else None
             price_currency = payload.get("currency")
+            close_conf = cell_confidences.get((price_listing, "close"), fallback_price_conf)
             if (fin_currency is None or price_currency == fin_currency) and (
-                close_cell := last_close_cell(payload, confidence, observed_at)
+                close_cell := last_close_cell(payload, close_conf, observed_at)
             ) is not None:
                 inputs.append(close_cell)
         for input_key, value, _unit, confidence, knowable_at, fiscal_period in inputs:
@@ -264,8 +281,8 @@ where ob.run_id = %s
 order by 1
 """
 
-#: One captured cell of the bridge: (canonical listing, payload, confidence, the observation's knowable_at).
-_Cell = tuple[str, dict, Decimal, datetime]
+#: One captured cell of the bridge: (canonical listing, payload, the observation's knowable_at).
+_Cell = tuple[str, dict, datetime]
 
 
 def _counts_on_close_basis(
@@ -290,7 +307,7 @@ def _counts_on_close_basis(
         if financial[issuer_id][1].get(SHARES_KEY) is not None and price[issuer_id][1].get("close") is not None
     )
     outcomes: dict[str, OnCloseBasis | Unavailable] = {}
-    for issuer_id, (_listing, payload, _confidence, observed_at) in financial.items():
+    for issuer_id, (_listing, payload, observed_at) in financial.items():
         shares_raw = payload.get(SHARES_KEY)
         if shares_raw is None or issuer_id in meeting:
             continue
@@ -317,8 +334,8 @@ def _counts_on_close_basis(
     histories = {symbol: split_history(symbol, unadjusted, split_adjusted) for symbol in symbols}
     ruleset = cache(partial(resolve_ruleset, connection))
     for issuer_id in meeting:
-        _listing, payload, _confidence, observed_at = financial[issuer_id]
-        _price_listing, close_payload, _close_confidence, close_observed_at = price[issuer_id]
+        _listing, payload, observed_at = financial[issuer_id]
+        _price_listing, close_payload, close_observed_at = price[issuer_id]
         names = sorted(tickers.get(issuer_id, ()))
         outcome = live_on_close_basis(
             LiveShareCount(

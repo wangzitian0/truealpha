@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime
-from decimal import Decimal
 
 import pytest
 from data_engine.datahub.production_topt.executor import FetchSuccess
@@ -60,7 +59,7 @@ def test_listing_identity_success_is_exact() -> None:
     adapter = ReleaseDerivedAdapter({item.work_item_id: record}, cutoff=_CUTOFF)
     result = adapter.fetch(item)
     assert isinstance(result, FetchSuccess)
-    assert result.confidence == Decimal("1.0")
+    assert result.confidence is None
     assert adapter.fetch(item).normalized_sha256 == result.normalized_sha256
 
 

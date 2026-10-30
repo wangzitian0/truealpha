@@ -206,10 +206,37 @@ def _consensus_row(payload: object, company_id: str) -> dict[str, Any] | None:
         "buy_count": _count_from_share(count, payload.get("buy")),
         "hold_count": _count_from_share(count, payload.get("hold")),
         "sell_count": _count_from_share(count, payload.get("sell")),
-        "confidence": Decimal("0.85"),
+        "confidence": _consensus_confidence(company_id),
         "availability_status": "available",
         "reason_codes": [],
     }
+
+
+def _consensus_confidence(company_id: str) -> Decimal:
+    safe_company = "".join(c if c.isalnum() or c in "._:/@+-" else "-" for c in company_id).strip("-") or "issuer"
+    return evaluate_cell_confidence(
+        case_id=f"analyst-consensus:{safe_company}",
+        sources=(
+            SourceConfidenceEvidence(
+                provider_id="origin:moomoo-ratings:v1",
+                origin_group_id="lineage:moomoo",
+                independence_weight=Decimal("1"),
+                reliability_prior=source_reliability_prior("origin:moomoo-ratings:v1"),
+                successful_outcome_mass=Decimal("0"),
+                failed_outcome_mass=Decimal("0"),
+                freshness=Decimal("1"),
+                sample_conformance=Decimal("1"),
+                transport_integrity=Decimal("1"),
+                evidence_ids=(f"consensus:{safe_company}",),
+                reason_codes=("reason:single_origin",),
+            ),
+        ),
+        agreement=Decimal("1"),
+        semantic_mapping_quality=Decimal("1"),
+        lineage_completeness=Decimal("1"),
+        required_component_completeness=Decimal("1"),
+        policy=_CONFIDENCE_POLICY,
+    ).confidence
 
 
 def _analyst_confidence(analyst_id: str, raw_sr: object) -> Decimal:

@@ -454,10 +454,10 @@ class PostgresCaptureControlRepository:
         observation: NormalizedObservation,
         *,
         normalized_payload: dict[str, Any],
-        confidence: Decimal,
+        confidence: Decimal | None = None,
         freshness_state: str = "unknown",
     ) -> bool:
-        if not Decimal("0") <= confidence <= Decimal("1"):
+        if confidence is not None and not Decimal("0") <= confidence <= Decimal("1"):
             raise ValueError("observation confidence must be between zero and one")
         if canonical_sha256(normalized_payload) != observation.normalized_payload_sha256:
             raise ValueError("normalized payload does not match the observation hash")

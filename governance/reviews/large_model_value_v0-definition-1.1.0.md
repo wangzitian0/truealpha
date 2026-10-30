@@ -9,8 +9,8 @@ A record, not a gate (see `governance/README.md`). It is an authoring record. It
 | Strategy | `large_model_value_v0` |
 | Definition version | `1.1.0` (`provisional_semantics: false`, the value of 1.0.0) |
 | Definition file | `common/contracts/src/truealpha_contracts/data/large_model_value_v0_definition_1_1_0.json` |
-| Definition content sha256 | `ef03b123b84c16ade2a0a81898da2b74bcc56dc7c19f82c561a26a7a8379b181` |
-| Strategy definition id | `strategy-definition:ef03b123b84c16ade2a0a81898da2b74bcc56dc7c19f82c561a26a7a8379b181` |
+| Definition content sha256 | `e6a49d6cee179d393bb71c89cb5f20b3a17039e4123532c8cbf92c54b30e5604` |
+| Strategy definition id | `strategy-definition:e6a49d6cee179d393bb71c89cb5f20b3a17039e4123532c8cbf92c54b30e5604` |
 | Replaces | definition `1.0.0`, sha256 `a0c6f1f003373b5eff85872fd493de91e2fd6d9fa3d15e78e278f96b88bd8803`. The file of 1.0.0 stays: the frozen #21 replay and the stored runs use it. |
 | Issue | wangzitian0/truealpha#1518 (step 3), wangzitian0/truealpha#1517 (stage A4) |
 
@@ -26,9 +26,9 @@ The definition states no labor-efficiency formula. It pins one tree of the metri
 
 | Class | Tree key | Tree version | Tree sha256 |
 |---|---|---|---|
-| `financial` | `gppe_banking_tce` | `v2` | `65a5ecb0e9baf1df506748505c90f4d66411c698e94224a26c8b3247d25a32cd` |
-| `non_financial` | `gppe` | `production-topt-v0.2.0` | `2fdad23895c026e4e6b14cb808f794e1d8936666097506122ba8dc3c55e0c26d` |
-| `insurance` | `gppe` | `production-topt-v0.2.0` | `2fdad23895c026e4e6b14cb808f794e1d8936666097506122ba8dc3c55e0c26d` |
+| `financial` | `gppe_banking_tce` | `v2` | `85b35b68c57dd7d8c0b55d9ef70175b395d97a75257f26aabe69bdbc551400bb` |
+| `non_financial` | `gppe` | `production-topt-v0.2.0` | `a3759a0fb3a4982bc1ed6c6901038225f0826bbaebb583e5a681272df9b56feb` |
+| `insurance` | `gppe` | `production-topt-v0.2.0` | `a3759a0fb3a4982bc1ed6c6901038225f0826bbaebb583e5a681272df9b56feb` |
 
 `factors.forest.bound_tree` raises when a pin differs from the registered tree. The core and the composite evaluate the same pinned tree.
 

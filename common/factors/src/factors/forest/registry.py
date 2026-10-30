@@ -35,8 +35,6 @@ from truealpha_contracts.metrics import UnitFamily
 from factors.forest.model import (
     ALL_ISSUER_CLASSES,
     AliasKind,
-    ConfidenceBand,
-    ConfidenceRule,
     Decomposition,
     Forest,
     IssuerClass,
@@ -86,13 +84,6 @@ PHYSICALLY_NON_NEGATIVE: Mapping[str, str] = MappingProxyType(
 )
 
 
-def _captured(family: str) -> ConfidenceBand:
-    return ConfidenceBand(rule=ConfidenceRule.AS_CAPTURED, family=family)
-
-
-_DERIVED_CONFIDENCE = ConfidenceBand(rule=ConfidenceRule.MINIMUM_CONSUMED)
-
-
 LABOR_EFFICIENCY = MetricNode(
     node_id=UUID("8f78ed40-9625-58eb-a866-4fd42015b43d"),
     key="labor_efficiency",
@@ -107,7 +98,6 @@ LABOR_EFFICIENCY = MetricNode(
     applicability=_EVERY_CLASS,
     sign_policy={},
     provenance=Provenance(kind=ProvenanceKind.CONCEPT, reference="init.md#7-module-2"),
-    confidence=None,
 )
 
 GROSS_PROFIT = MetricNode(
@@ -123,7 +113,6 @@ GROSS_PROFIT = MetricNode(
     # A loss-making product line can sell below cost; the sign carries no rule by itself.
     sign_policy=_policy(SignPolicy.MAY_BE_NEGATIVE, _NON_BANK),
     provenance=Provenance(kind=ProvenanceKind.METRIC_REGISTRY, reference="gross_profit"),
-    confidence=_captured("gross_profit"),
     aliases=(
         NodeAlias(kind=AliasKind.METRIC, value="gross_profit"),
         NodeAlias(kind=AliasKind.INPUT_KEY, value="gross_profit"),
@@ -145,7 +134,6 @@ PRE_PROVISION_PROFIT = MetricNode(
         reference="gross_profit",
         note="financial-issuer split: a bank's gross-profit proxy (METRICS gross_profit.financial_issuer_split)",
     ),
-    confidence=_captured("pre_provision_profit"),
     aliases=(NodeAlias(kind=AliasKind.TOPT_SNAPSHOT_FIELD, value="pre_provision_profit"),),
 )
 
@@ -159,7 +147,6 @@ TOTAL_ASSETS = MetricNode(
     applicability=_EVERY_CLASS,
     sign_policy=_policy(SignPolicy.MUST_BE_NON_NEGATIVE),
     provenance=Provenance(kind=ProvenanceKind.METRIC_REGISTRY, reference="total_assets"),
-    confidence=_captured("total_assets"),
     aliases=(
         NodeAlias(kind=AliasKind.METRIC, value="total_assets"),
         NodeAlias(kind=AliasKind.INPUT_KEY, value="total_assets"),
@@ -177,7 +164,6 @@ EMPLOYEES_TOTAL = MetricNode(
     applicability=_EVERY_CLASS,
     sign_policy=_policy(SignPolicy.MUST_BE_NON_NEGATIVE),
     provenance=Provenance(kind=ProvenanceKind.METRIC_REGISTRY, reference="employees_total"),
-    confidence=_captured("headcount"),
     aliases=(
         NodeAlias(kind=AliasKind.METRIC, value="employees_total"),
         NodeAlias(kind=AliasKind.INPUT_KEY, value="headcount"),
@@ -195,7 +181,6 @@ RISK_FREE_RATE = MetricNode(
     applicability=_EVERY_CLASS,
     sign_policy=_policy(SignPolicy.MUST_BE_NON_NEGATIVE),
     provenance=Provenance(kind=ProvenanceKind.DEFINITION_PARAMETER, reference="risk_free_rate"),
-    confidence=ConfidenceBand(rule=ConfidenceRule.DEFINITIONAL),
     aliases=(NodeAlias(kind=AliasKind.DEFINITION_PARAMETER, value="risk_free_rate"),),
 )
 
@@ -212,7 +197,6 @@ OPERATING_GROSS_PROFIT = MetricNode(
     applicability=_EVERY_CLASS,
     sign_policy=_policy(SignPolicy.MAY_BE_NEGATIVE),
     provenance=Provenance(kind=ProvenanceKind.DERIVED, reference="gppe"),
-    confidence=_DERIVED_CONFIDENCE,
 )
 
 CAPITAL_CHARGE = MetricNode(
@@ -225,7 +209,6 @@ CAPITAL_CHARGE = MetricNode(
     applicability=_EVERY_CLASS,
     sign_policy=_policy(SignPolicy.MUST_BE_NON_NEGATIVE),
     provenance=Provenance(kind=ProvenanceKind.DERIVED, reference="gppe"),
-    confidence=_DERIVED_CONFIDENCE,
 )
 
 CAPITAL_ADJUSTED_GROSS_PROFIT = MetricNode(
@@ -238,7 +221,6 @@ CAPITAL_ADJUSTED_GROSS_PROFIT = MetricNode(
     applicability=_EVERY_CLASS,
     sign_policy=_policy(SignPolicy.SIGN_IS_SIGNAL),
     provenance=Provenance(kind=ProvenanceKind.DERIVED, reference="gppe"),
-    confidence=_DERIVED_CONFIDENCE,
     aliases=(NodeAlias(kind=AliasKind.TOPT_SNAPSHOT_FIELD, value="capital_adjusted_gross_profit"),),
 )
 
@@ -257,7 +239,6 @@ GPPE = MetricNode(
     applicability=_EVERY_CLASS,
     sign_policy=_policy(SignPolicy.SIGN_IS_SIGNAL),
     provenance=Provenance(kind=ProvenanceKind.DERIVED, reference="gppe"),
-    confidence=_DERIVED_CONFIDENCE,
 )
 
 # --- gppe_banking_tce_v1 (#1176): FINANCIAL only, capital base = measured tangible common equity.
@@ -281,7 +262,6 @@ STOCKHOLDERS_EQUITY = MetricNode(
     # Negative equity is a real state (buybacks, losses). It is not a defect.
     sign_policy=_financial_policy(SignPolicy.MAY_BE_NEGATIVE),
     provenance=Provenance(kind=ProvenanceKind.METRIC_REGISTRY, reference="stockholders_equity"),
-    confidence=_captured("stockholders_equity"),
     aliases=(
         NodeAlias(kind=AliasKind.METRIC, value="stockholders_equity"),
         NodeAlias(kind=AliasKind.TOPT_SNAPSHOT_FIELD, value="stockholders_equity"),
@@ -301,7 +281,6 @@ PREFERRED_STOCK_VALUE = MetricNode(
     applicability=_FINANCIAL,
     sign_policy=_financial_policy(SignPolicy.MUST_BE_NON_NEGATIVE),
     provenance=Provenance(kind=ProvenanceKind.METRIC_REGISTRY, reference="preferred_stock_value"),
-    confidence=_captured("preferred_stock_value"),
     aliases=(
         NodeAlias(kind=AliasKind.METRIC, value="preferred_stock_value"),
         NodeAlias(kind=AliasKind.TOPT_SNAPSHOT_FIELD, value="preferred_stock_value"),
@@ -318,7 +297,6 @@ GOODWILL = MetricNode(
     applicability=_FINANCIAL,
     sign_policy=_financial_policy(SignPolicy.MUST_BE_NON_NEGATIVE),
     provenance=Provenance(kind=ProvenanceKind.METRIC_REGISTRY, reference="goodwill"),
-    confidence=_captured("goodwill"),
     aliases=(
         NodeAlias(kind=AliasKind.METRIC, value="goodwill"),
         NodeAlias(kind=AliasKind.TOPT_SNAPSHOT_FIELD, value="goodwill"),
@@ -335,7 +313,6 @@ INTANGIBLE_ASSETS = MetricNode(
     applicability=_FINANCIAL,
     sign_policy=_financial_policy(SignPolicy.MUST_BE_NON_NEGATIVE),
     provenance=Provenance(kind=ProvenanceKind.METRIC_REGISTRY, reference="intangible_assets_net_excluding_goodwill"),
-    confidence=_captured("intangible_assets_net_excluding_goodwill"),
     aliases=(
         NodeAlias(kind=AliasKind.METRIC, value="intangible_assets_net_excluding_goodwill"),
         NodeAlias(kind=AliasKind.TOPT_SNAPSHOT_FIELD, value="intangible_assets_net_excluding_goodwill"),
@@ -352,7 +329,6 @@ TANGIBLE_DEDUCTIONS = MetricNode(
     applicability=_FINANCIAL,
     sign_policy=_financial_policy(SignPolicy.MUST_BE_NON_NEGATIVE),
     provenance=Provenance(kind=ProvenanceKind.DERIVED, reference="gppe_banking_tce_v1"),
-    confidence=_DERIVED_CONFIDENCE,
 )
 
 TANGIBLE_COMMON_EQUITY = MetricNode(
@@ -366,7 +342,6 @@ TANGIBLE_COMMON_EQUITY = MetricNode(
     # Tangible equity can be negative for a weak balance sheet. That is economic, not a defect.
     sign_policy=_financial_policy(SignPolicy.MAY_BE_NEGATIVE),
     provenance=Provenance(kind=ProvenanceKind.DERIVED, reference="gppe_banking_tce_v1"),
-    confidence=_DERIVED_CONFIDENCE,
 )
 
 CHARGED_TANGIBLE_COMMON_EQUITY = MetricNode(
@@ -384,7 +359,6 @@ CHARGED_TANGIBLE_COMMON_EQUITY = MetricNode(
     applicability=_FINANCIAL,
     sign_policy=_financial_policy(SignPolicy.MUST_BE_NON_NEGATIVE),
     provenance=Provenance(kind=ProvenanceKind.DERIVED, reference="gppe_banking_tce_v1"),
-    confidence=_DERIVED_CONFIDENCE,
 )
 
 CAPITAL_CHARGE_TCE = MetricNode(
@@ -397,7 +371,6 @@ CAPITAL_CHARGE_TCE = MetricNode(
     applicability=_FINANCIAL,
     sign_policy=_financial_policy(SignPolicy.MAY_BE_NEGATIVE),
     provenance=Provenance(kind=ProvenanceKind.DERIVED, reference="gppe_banking_tce_v1"),
-    confidence=_DERIVED_CONFIDENCE,
 )
 
 CAPITAL_ADJUSTED_TCE = MetricNode(
@@ -410,7 +383,6 @@ CAPITAL_ADJUSTED_TCE = MetricNode(
     applicability=_FINANCIAL,
     sign_policy=_financial_policy(SignPolicy.SIGN_IS_SIGNAL),
     provenance=Provenance(kind=ProvenanceKind.DERIVED, reference="gppe_banking_tce_v1"),
-    confidence=_DERIVED_CONFIDENCE,
 )
 
 GPPE_BANKING_TCE_V1 = MetricNode(
@@ -427,7 +399,6 @@ GPPE_BANKING_TCE_V1 = MetricNode(
     applicability=_FINANCIAL,
     sign_policy=_financial_policy(SignPolicy.SIGN_IS_SIGNAL),
     provenance=Provenance(kind=ProvenanceKind.DERIVED, reference="gppe_banking_tce_v1"),
-    confidence=_DERIVED_CONFIDENCE,
 )
 
 #: v2 (#1518): the four captured leaves name the snapshot field that carries each one, so the TOPT

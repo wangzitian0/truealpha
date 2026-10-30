@@ -1904,9 +1904,9 @@ def _member_rows_for_probe(
 
 
 def test_snapshot_member_caps_revenue_proxy_gross_profit_confidence_at_0_85() -> None:
-    """#1255: when `(financial.vintage or {}).get("gross_profit", {}).get("is_revenue_proxy", False)`
-    is True, `_snapshot_member` caps `gross_profit` confidence and the financial cell
-    confidence at `0.85` while leaving non-proxy rows untouched."""
+    """#1255 / #1517 B3: when `(financial.vintage or {}).get("gross_profit", {}).get("is_revenue_proxy", False)`
+    is True, `_snapshot_member` applies the `0.85` `semantic_mapping_quality` penalty to `gross_profit`
+    confidence and the financial cell confidence while leaving non-proxy rows untouched."""
     control_rows = _member_rows_for_probe(
         confidence=Decimal("0.92"),
         financial_vintage={"gross_profit": {"is_revenue_proxy": False}},
@@ -1925,21 +1925,22 @@ def test_snapshot_member_caps_revenue_proxy_gross_profit_confidence_at_0_85() ->
     proxy_member = PostgresToptCoreRepository._snapshot_member(
         "listing:xnas:nvda", proxy_rows, histories=(flat_history(),)
     )
+    expected_proxy = (Decimal("0.92") * Decimal("0.85")).quantize(Decimal("0.0001"))
     assert proxy_member.gross_profit is not None
-    assert proxy_member.gross_profit.confidence == Decimal("0.85")
+    assert proxy_member.gross_profit.confidence == expected_proxy
     fin_cell = next(
         cell for cell in proxy_member.cell_inputs if cell.input_id == proxy_rows["financial-fact"].observation_id
     )
-    assert fin_cell.confidence == Decimal("0.85")
+    assert fin_cell.confidence == expected_proxy
 
-    # Lower observation confidence (< 0.85) stays at its lower bound (min rule).
+    # Lower observation confidence also gets the 0.85 semantic_mapping_quality factor.
     low_rows = _member_rows_for_probe(
         confidence=Decimal("0.70"),
         financial_vintage={"gross_profit": {"is_revenue_proxy": True}},
     )
     low_member = PostgresToptCoreRepository._snapshot_member("listing:xnas:nvda", low_rows, histories=(flat_history(),))
     assert low_member.gross_profit is not None
-    assert low_member.gross_profit.confidence == Decimal("0.70")
+    assert low_member.gross_profit.confidence == (Decimal("0.70") * Decimal("0.85")).quantize(Decimal("0.0001"))
 
     # Null vintage entry ({"gross_profit": None}) does not raise AttributeError and leaves confidence uncapped.
     null_vintage_rows = _member_rows_for_probe(
@@ -2142,14 +2143,30 @@ def test_freeze_and_materialize_aligns_post_split_shares_and_caps_revenue_proxy_
     aapl_member = next(m for m in snapshot.members if m.listing_id == "listing:xnas:aapl")
     assert nvda_member.shares_outstanding.value == Decimal("100000000")
     assert aapl_member.shares_outstanding.value == Decimal("10000000")
-    assert nvda_member.gross_profit is not None and nvda_member.gross_profit.confidence == Decimal("0.85")
+    assert nvda_member.gross_profit is not None and Decimal("0.5") < nvda_member.gross_profit.confidence < Decimal(
+        "0.85"
+    )
 
     nvda_result = by_listing["listing:xnas:nvda"]
     aapl_result = by_listing["listing:xnas:aapl"]
     assert nvda_result.current_ps == Decimal("40")
     assert aapl_result.current_ps == Decimal("4")
-    assert nvda_result.confidence == Decimal("0.85")
-    assert aapl_result.confidence == Decimal("0.85")
+    assert nvda_result.confidence == min(
+        nvda_member.gross_profit.confidence,
+        nvda_member.total_assets.confidence,
+        nvda_member.headcount.confidence,
+        nvda_member.revenue.confidence,
+        nvda_member.market_price.confidence,
+        nvda_member.shares_outstanding.confidence,
+    )
+    assert aapl_result.confidence == min(
+        aapl_member.gross_profit.confidence,
+        aapl_member.total_assets.confidence,
+        aapl_member.headcount.confidence,
+        aapl_member.revenue.confidence,
+        aapl_member.market_price.confidence,
+        aapl_member.shares_outstanding.confidence,
+    )
 
 
 def test_a_qqq_listing_outside_topt_is_valued_once_the_qqq_price_lane_stores_its_two_series(connection) -> None:

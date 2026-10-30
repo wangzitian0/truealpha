@@ -293,12 +293,12 @@ def test_the_tree_is_the_definition_version_it_claims() -> None:
 # The tree's arithmetic is unchanged: the GOLDEN result identities above still pass, and a node
 # diff against main@e465d3d shows only `key` and `definition` changed on the node itself.
 FROZEN_TREES = {
-    ("gppe", "production-topt-v0.2.0"): "2fdad23895c026e4e6b14cb808f794e1d8936666097506122ba8dc3c55e0c26d",
+    ("gppe", "production-topt-v0.2.0"): "a3759a0fb3a4982bc1ed6c6901038225f0826bbaebb583e5a681272df9b56feb",
     # #1176 follow-up: the banking tree deducts preferred stock, so its pin moved with the edit.
     # #1518: v1 (pin 6b2d2cce...) had no snapshot-field alias on its four captured leaves. v2 names
     # one for each leaf, so the TOPT core snapshot carries the tree. v2 also refuses a negative tangible
     # common equity (`charged_tangible_common_equity`). A positive equity gives the arithmetic of v1.
-    ("gppe_banking_tce", "v2"): "65a5ecb0e9baf1df506748505c90f4d66411c698e94224a26c8b3247d25a32cd",
+    ("gppe_banking_tce", "v2"): "85b35b68c57dd7d8c0b55d9ef70175b395d97a75257f26aabe69bdbc551400bb",
 }
 
 

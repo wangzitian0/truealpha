@@ -468,9 +468,7 @@ def test_the_projector_rows_match_the_rows_the_live_bridge_writes_for_the_same_p
     outcome = adapter.fetch(item)
     assert isinstance(outcome, FetchSuccess)
 
-    live = _LiveConnection(
-        ("financial-fact", str(outcome.confidence), outcome.record.payload, outcome.transaction_time)
-    )
+    live = _LiveConnection(("financial-fact", outcome.record.payload, outcome.transaction_time))
     assert seed_strategy_inputs_from_capture(live, "run:live", cutoff=cutoff) == len(live.inserts)
     live_rows = {(params[2], params[6], Decimal(str(params[3])), params[4]) for params in live.inserts}
 
@@ -730,16 +728,19 @@ def test_a_restated_value_lands_as_a_new_row_only_for_the_cutoffs_after_its_fili
 
 
 def test_the_price_reader_takes_unadjusted_bars_of_sessions_before_the_cutoff_date(connection) -> None:
+    from data_engine.datahub.strategy_history import _twelve_data_bar_confidence
+
     _insert_bar(connection, "ZZ1139", date(2025, 5, 29), "100")
     _insert_bar(connection, "ZZ1139", date(2025, 5, 30), "110")
     _insert_bar(connection, "ZZ1139", date(2025, 5, 30), "55", adjust="splits")
     _insert_bar(connection, "ZZ1139", date(2025, 6, 1), "999")
     _insert_bar(connection, "ZZ1139", date(2025, 6, 2), "888")
 
+    expected_conf = _twelve_data_bar_confidence("ZZ1139")
     friday = postgres_last_close(connection)("ZZ1139", _utc(2025, 6, 1))
-    assert friday == LastClose(Decimal("110"), Decimal("0.9"), datetime(2025, 5, 30, 20, 0, tzinfo=UTC))
+    assert friday == LastClose(Decimal("110"), expected_conf, datetime(2025, 5, 30, 20, 0, tzinfo=UTC))
     assert postgres_last_close(connection)("ZZ1139", _utc(2025, 5, 30)) == LastClose(
-        Decimal("100"), Decimal("0.9"), datetime(2025, 5, 29, 20, 0, tzinfo=UTC)
+        Decimal("100"), expected_conf, datetime(2025, 5, 29, 20, 0, tzinfo=UTC)
     )
     assert postgres_last_close(connection)("ZZ1139", _utc(2025, 5, 29)) is None
 
