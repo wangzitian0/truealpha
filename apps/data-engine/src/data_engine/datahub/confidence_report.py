@@ -1067,8 +1067,12 @@ def _resolve_financial_observation(
     payload: Mapping[str, Any],
     knowable_at: datetime | None,
     observation_id: str | None,
+    *,
+    allow_integration_parser: bool = False,
 ) -> FinancialObservation | None:
-    if parser_version in PARSER_VERSION_HISTORY or parser_version == "production-topt-integration-parser:v1":
+    if parser_version in PARSER_VERSION_HISTORY or (
+        allow_integration_parser and parser_version == "production-topt-integration-parser:v1"
+    ):
         return FinancialObservation(
             True, SEC_COMPANY_FACTS_SOURCE, SEC_COMPANY_FACTS_ORIGIN, payload, knowable_at, observation_id
         )
@@ -1078,15 +1082,25 @@ def _resolve_financial_observation(
     return FinancialObservation(False, coordinate[0], coordinate[1], payload, knowable_at, observation_id)
 
 
-def _resolve_market_price_coordinate(parser_version: str) -> tuple[str, str, str] | None:
+def _resolve_market_price_coordinate(
+    parser_version: str,
+    *,
+    allow_integration_parser: bool = False,
+) -> tuple[str, str, str] | None:
     return SOURCE_BY_PARSER.get(parser_version) or (
         (SEC_COMPANY_FACTS_SOURCE, SEC_COMPANY_FACTS_ORIGIN, "close")
-        if parser_version == "production-topt-integration-parser:v1"
+        if allow_integration_parser and parser_version == "production-topt-integration-parser:v1"
         else None
     )
 
 
-def load_run_subjects(connection: Connection[Any], run_id: str, cutoff: datetime) -> dict[str, _Subject]:
+def load_run_subjects(
+    connection: Connection[Any],
+    run_id: str,
+    cutoff: datetime,
+    *,
+    allow_integration_parser: bool = False,
+) -> dict[str, _Subject]:
     """Every subject the run requested, with what each origin asserted per family."""
     subjects: dict[str, _Subject] = {
         str(row[0]): _Subject()
@@ -1117,14 +1131,22 @@ def load_run_subjects(connection: Connection[Any], run_id: str, cutoff: datetime
         if semantic_type in RELEASE_SEMANTICS:
             subject.ticker = subject.ticker or payload.get("ticker")
         elif semantic_type == MARKET_PRICE_SEMANTIC:
-            coordinate = _resolve_market_price_coordinate(parser_version)
+            coordinate = _resolve_market_price_coordinate(
+                parser_version, allow_integration_parser=allow_integration_parser
+            )
             if coordinate is not None:
                 for family, origin in bar_origins(
                     coordinate, payload, knowable_at=knowable_at, observation_id=observation_id
                 ).items():
                     subject.add(family, origin)
         elif semantic_type == "financial-fact":
-            fin_obs = _resolve_financial_observation(parser_version, payload, knowable_at, observation_id)
+            fin_obs = _resolve_financial_observation(
+                parser_version,
+                payload,
+                knowable_at,
+                observation_id,
+                allow_integration_parser=allow_integration_parser,
+            )
             if fin_obs is not None:
                 financial.setdefault(str(subject_id), []).append(fin_obs)
     for subject_id, observations in financial.items():
@@ -1731,7 +1753,7 @@ def evaluate_and_persist_run_cell_confidence(
         ).fetchone()
         cutoff = row[0] if row is not None and row[0] is not None else datetime.now(UTC)
 
-    subjects = load_run_subjects(connection, run_id, cutoff)
+    subjects = load_run_subjects(connection, run_id, cutoff, allow_integration_parser=True)
     oracle_rows = load_oracle_confidence_inputs(connection, run_id=run_id, cutoff=cutoff)
     outcome_mass_by_origin = oracle_outcome_mass_by_origin(oracle_rows, cutoff=cutoff)
 

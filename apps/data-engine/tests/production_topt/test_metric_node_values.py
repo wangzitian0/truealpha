@@ -186,7 +186,6 @@ def test_f2_json_loaded_tree_materializes_node_values_without_ddl_or_python_edit
             "applicability": ["non_financial"],
             "sign_policy": {"non_financial": "sign-is-signal"},
             "provenance": {"kind": "derived", "reference": "gppe_raw_json", "note": ""},
-            "confidence": {"rule": "minimum-consumed", "family": None},
             "aliases": [],
         }
     )

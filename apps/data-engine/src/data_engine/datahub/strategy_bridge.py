@@ -104,7 +104,7 @@ def seed_strategy_inputs_from_capture(
     """
     rows = connection.execute(
         """
-        select o.semantic_type, p.normalized_payload, o.knowable_at
+        select o.semantic_type, o.confidence, p.normalized_payload, o.knowable_at
         from raw.capture_obligations ob
         join staging.capture_observation_obligations oo on oo.capture_obligation_id = ob.obligation_id
         join staging.capture_normalized_observations o on o.observation_id = oo.observation_id
@@ -126,10 +126,10 @@ def seed_strategy_inputs_from_capture(
     # financial-fact before bucketing price observations.
     listing_to_issuer: dict[str, str] = {
         str(payload["listing_id"]): str(payload["issuer_id"])
-        for semantic_type, payload, _obs_at in rows
+        for semantic_type, _conf, payload, _obs_at in rows
         if semantic_type in ("listing-identity", "financial-fact")
     }
-    for semantic_type, payload, _obs_at in rows:
+    for semantic_type, _conf, payload, _obs_at in rows:
         if semantic_type == "market-price":
             listing_to_issuer.setdefault(str(payload["listing_id"]), str(payload["issuer_id"]))
     primary = choose_primary_listings(connection, _listings_by_issuer(listing_to_issuer), known_at=cutoff)
@@ -138,11 +138,11 @@ def seed_strategy_inputs_from_capture(
 
     cell_confidences = evaluate_and_persist_run_cell_confidence(connection, run_id, cutoff=cutoff)
 
-    # issuer -> (primary listing, payload, the observation's own knowable_at)
-    financial: dict[str, tuple[str, dict, datetime]] = {}
-    price: dict[str, tuple[str, dict, datetime]] = {}
+    # issuer -> (primary listing, fallback confidence, payload, the observation's own knowable_at)
+    financial: dict[str, tuple[str, Decimal | None, dict, datetime]] = {}
+    price: dict[str, tuple[str, Decimal | None, dict, datetime]] = {}
 
-    for semantic_type, payload, observed_at in rows:
+    for semantic_type, raw_conf, payload, observed_at in rows:
         if semantic_type == "listing-identity":
             continue
         listing_id = str(payload["listing_id"])
@@ -153,9 +153,16 @@ def seed_strategy_inputs_from_capture(
         )
         bucket = financial if semantic_type == "financial-fact" else price
         if primary.get(issuer_id) == listing_id and issuer_id not in bucket:
-            bucket[issuer_id] = (listing_id, payload, observed_at)
+            conf_dec = Decimal(str(raw_conf)) if raw_conf is not None else None
+            bucket[issuer_id] = (listing_id, conf_dec, payload, observed_at)
 
-    on_basis = _counts_on_close_basis(connection, run_id, financial, price, parser_version=parser_version)
+    on_basis = _counts_on_close_basis(
+        connection,
+        run_id,
+        {k: (v[0], v[2], v[3]) for k, v in financial.items()},
+        {k: (v[0], v[2], v[3]) for k, v in price.items()},
+        parser_version=parser_version,
+    )
     written = 0
     for issuer_id in sorted(set(financial) | set(price)):
         # `knowable_at` is the observation's OWN knowable time, not a constant offset from
@@ -167,19 +174,19 @@ def seed_strategy_inputs_from_capture(
         # basis spans several filings (#284).
         inputs: list[InputCell] = []
         if issuer_id in financial:
-            fin_listing, payload, observed_at = financial[issuer_id]
+            fin_listing, fallback_conf, payload, observed_at = financial[issuer_id]
             listing_confs = {metric: conf for (subj, metric), conf in cell_confidences.items() if subj == fin_listing}
             inputs.extend(
                 _on_close_basis_rows(
-                    financial_input_rows(payload, None, observed_at, confidence_by_key=listing_confs),
+                    financial_input_rows(payload, fallback_conf, observed_at, confidence_by_key=listing_confs),
                     on_basis.get(issuer_id),
                 )
             )
         if issuer_id in price:
-            price_listing, payload, observed_at = price[issuer_id]
-            fin_currency = financial[issuer_id][1].get("currency") if issuer_id in financial else None
+            price_listing, fallback_price_conf, payload, observed_at = price[issuer_id]
+            fin_currency = financial[issuer_id][2].get("currency") if issuer_id in financial else None
             price_currency = payload.get("currency")
-            close_conf = cell_confidences.get((price_listing, "close"))
+            close_conf = cell_confidences.get((price_listing, "close"), fallback_price_conf)
             if (fin_currency is None or price_currency == fin_currency) and (
                 close_cell := last_close_cell(payload, close_conf, observed_at)
             ) is not None:
