@@ -3637,6 +3637,17 @@ def test_gates_runs_complexity_gate() -> None:
     )
 
 
+def test_test_core_checks_out_full_git_history_for_release_tag_checks() -> None:
+    """#1412 R4: `test_release_replays.py` runs inside `test-core` and compares HEAD against the
+    newest reachable `vX.Y.Z` release tag. A shallow `fetch-depth: 1` checkout has no tags."""
+    checkout = next(
+        spec for spec in job(PYTHON, "test-core")["steps"] if str(spec.get("uses", "")).startswith("actions/checkout")
+    )
+    assert checkout.get("with", {}).get("fetch-depth") == 0, (
+        "ci-python.yml test-core must check out full history (`fetch-depth: 0`) so release-tag replay checks see vX.Y.Z tags"
+    )
+
+
 def test_ci_python_survives_a_github_504_on_the_infra2_wheel() -> None:
     """#1248: each ci-python job that runs uv sync gets uv from the retrying shared action first.
 
