@@ -43,6 +43,7 @@ DECLARATION = "apps/data-engine/release-replays.json"
 _KEY = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 #: A trailer is one line. Control characters would split it or hide text in the tag annotation.
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+_TAG_PATTERN = re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+$")
 
 Reader = Callable[[str, str], str | None]
 
@@ -55,6 +56,37 @@ def git_show(rev: str, path: str) -> str | None:
     """The text of `path` at `rev`, or None when the commit does not hold the file."""
     result = subprocess.run(["git", "show", f"{rev}:{path}"], capture_output=True, text=True, check=False)
     return result.stdout if result.returncode == 0 else None
+
+
+def _tag_key(name: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in name[1:].split("."))
+
+
+def newest_release_tag(target: str = "HEAD") -> tuple[str, str] | None:
+    """Return `(tag_name, commit_sha)` of the newest `vX.Y.Z` tag reachable from `target`."""
+    listed = subprocess.run(
+        ["git", "tag", "--list", "v[0-9]*.[0-9]*.[0-9]*"], capture_output=True, text=True, check=False
+    )
+    candidates = [line.strip() for line in listed.stdout.splitlines() if _TAG_PATTERN.match(line.strip())]
+    for name in sorted(candidates, key=_tag_key, reverse=True):
+        peeled = subprocess.run(
+            ["git", "rev-parse", "--verify", "--quiet", f"refs/tags/{name}^{{commit}}"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        sha = peeled.stdout.strip()
+        if peeled.returncode != 0 or not sha:
+            continue
+        ancestor = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", sha, target],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if ancestor.returncode == 0:
+            return name, sha
+    return None
 
 
 def _without_docstrings(tree: ast.Module) -> ast.Module:

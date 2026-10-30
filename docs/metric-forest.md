@@ -348,7 +348,7 @@ means. The suite also asserts two things the tree implies:
 Under v0.2.0 the nodes declare #59's reading: `gppe_uniform_charge_v0` and `capital_adjusted_gross_profit` are
 `sign-is-signal` for every class. JPM's value (−514,726.13 on both governed heads, measured 2026-09-16; earlier ticks published −510,498 and −528,986) is therefore neither refused nor exempted:
 it is printed by name on every tick and every nightly run. #909 therefore removes the #528
-entry from `tools/output_invariant_exemptions.json`, which today still defers
+entry from `tools/output_invariant_exemptions.json`, which today still defers <!-- doc-drift: history -->
 `gppe-not-negative` until 2026-09-23.
 
 Red-proofs that #909 adds, all against a real materialized governed head
@@ -502,7 +502,7 @@ Each step is one PR with its own acceptance check (AGENTS.md rule 7).
 1. Step B is reviewed and merged.
 2. The owner confirms D1 below (done 2026-09-17, §12).
 3. A data-engine release containing B reaches staging and production by 2026-09-23 UTC. The
-   image carries `tools/output_invariant_exemptions.json` and the gate code. The exemption is
+   image carries `tools/output_invariant_exemptions.json` and the gate code. The exemption is <!-- doc-drift: history -->
    valid through 2026-09-23 and lapses on 2026-09-24.
 
 Step B needs no migration.

@@ -2158,6 +2158,8 @@ def test_a_pull_request_that_changes_only_unread_documents_starts_no_test_lane()
     ("code_path", "needed"),
     [
         ("common/runtime/src/truealpha_runtime/sample.py", {"python", "runtime", "data_engine"}),
+        ("common/runtime/src/truealpha_tools/output_invariants.py", {"db", "python", "runtime", "data_engine"}),
+        ("common/runtime/src/truealpha_tools/schema_drift.py", {"db", "python", "runtime", "data_engine"}),
         (".github/workflows/ci-web.yml", {"python", "web"}),
         ("db/migrations/20261020T0000_sample.sql", {"db", "python", "runtime", "data_engine"}),
         ("uv.lock", {"python", "runtime", "data_engine"}),

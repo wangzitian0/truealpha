@@ -82,9 +82,12 @@ jobs:
         with:
           filters: |
             db:
-              # ci-db executes tools/output_invariants.py against the migrated
-              # schema; editing that tool must re-run it.
+              # ci-db executes tools/output_invariants.py and tools/schema_drift.py
+              # against the migrated schema; editing those tools or their runtime
+              # implementations must re-run it (#1523).
               - 'tools/**'
+              - 'common/runtime/src/truealpha_tools/output_invariants.py'
+              - 'common/runtime/src/truealpha_tools/schema_drift.py'
               - 'db/**'
               - '.github/workflows/ci-db.yml'
               - '.github/workflows/ci-required.yml'

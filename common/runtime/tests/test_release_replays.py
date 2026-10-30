@@ -75,6 +75,63 @@ def test_the_projector_identity_watches_the_history_projector() -> None:
     assert "apps/data-engine/src/data_engine/datahub/strategy_history.py" in projector["paths"]
 
 
+def test_the_working_tree_declares_replays_since_the_newest_release_tag() -> None:
+    """#1412 R4: a PR or commit that changes a watched identity without adding a replay entry
+    fails here before merge, instead of breaking `auto-release-staging` after merge."""
+    resolved = _module.newest_release_tag("HEAD")
+    assert resolved is not None, "no vX.Y.Z release tag is reachable from HEAD"
+    base_tag, base_sha = resolved
+
+    def read(rev: str, path: str) -> str | None:
+        return _working_tree(rev, path) if rev == "HEAD" else _module.git_show(rev, path)
+
+    lines = _module.trailers(base_sha, base_tag, "HEAD", read)
+    assert f"Rollback-Tag: {base_tag}" in lines
+
+
+def test_removing_the_replay_entry_for_a_changed_identity_since_the_newest_tag_fails() -> None:
+    """Falsifiability proof for the PR-time replay check (#1412): when an identity changed
+    since the newest release tag, dropping its new replay entry raises `ReplayError`."""
+    resolved = _module.newest_release_tag("HEAD")
+    assert resolved is not None, "no vX.Y.Z release tag is reachable from HEAD"
+    base_tag, base_sha = resolved
+    base_decl = _module.parse_declaration(_module.git_show(base_sha, _module.DECLARATION), base_sha)
+    head_decl = _declaration()
+    changed_keys = [
+        key
+        for key, spec in head_decl["identities"].items()
+        if _module.identity_value(base_sha, spec, _module.git_show)
+        != _module.identity_value("HEAD", spec, _working_tree)
+    ]
+    if not changed_keys:
+        # Mutate one watched identity in memory so the check is falsifiable even at a tagged commit.
+        first_key, first_spec = next(iter(head_decl["identities"].items()))
+        mutated_path = first_spec["path"] if "name" in first_spec else first_spec["paths"][0]
+        changed_keys = [first_key]
+        stripped_decl = json.dumps({"identities": head_decl["identities"], "replays": base_decl["replays"]})
+
+        def read_mutated(rev: str, path: str) -> str | None:
+            if rev == "HEAD" and path == _module.DECLARATION:
+                return stripped_decl
+            if rev == "HEAD" and path == mutated_path:
+                return (_working_tree(rev, path) or "") + "\n_PROBE = 'mutated'\n"
+            return _working_tree(rev, path) if rev == "HEAD" else _module.git_show(rev, path)
+
+        with pytest.raises(_module.ReplayError, match="no declared replay"):
+            _module.trailers(base_sha, base_tag, "HEAD", read_mutated)
+        return
+
+    stripped = json.dumps({"identities": head_decl["identities"], "replays": base_decl["replays"]})
+
+    def read(rev: str, path: str) -> str | None:
+        if rev == "HEAD" and path == _module.DECLARATION:
+            return stripped
+        return _working_tree(rev, path) if rev == "HEAD" else _module.git_show(rev, path)
+
+    with pytest.raises(_module.ReplayError, match=changed_keys[0]):
+        _module.trailers(base_sha, base_tag, "HEAD", read)
+
+
 @pytest.mark.parametrize(
     ("text", "refusal"),
     [
