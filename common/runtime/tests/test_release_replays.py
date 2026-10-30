@@ -97,39 +97,20 @@ def test_removing_the_replay_entry_for_a_changed_identity_since_the_newest_tag_f
     base_tag, base_sha = resolved
     base_decl = _module.parse_declaration(_module.git_show(base_sha, _module.DECLARATION), base_sha)
     head_decl = _declaration()
-    changed_keys = [
-        key
-        for key, spec in head_decl["identities"].items()
-        if _module.identity_value(base_sha, spec, _module.git_show)
-        != _module.identity_value("HEAD", spec, _working_tree)
-    ]
-    if not changed_keys:
-        # Mutate one watched identity in memory so the check is falsifiable even at a tagged commit.
-        first_key, first_spec = next(iter(head_decl["identities"].items()))
-        mutated_path = first_spec["path"] if "name" in first_spec else first_spec["paths"][0]
-        changed_keys = [first_key]
-        stripped_decl = json.dumps({"identities": head_decl["identities"], "replays": base_decl["replays"]})
-
-        def read_mutated(rev: str, path: str) -> str | None:
-            if rev == "HEAD" and path == _module.DECLARATION:
-                return stripped_decl
-            if rev == "HEAD" and path == mutated_path:
-                return (_working_tree(rev, path) or "") + "\n_PROBE = 'mutated'\n"
-            return _working_tree(rev, path) if rev == "HEAD" else _module.git_show(rev, path)
-
-        with pytest.raises(_module.ReplayError, match="no declared replay"):
-            _module.trailers(base_sha, base_tag, "HEAD", read_mutated)
-        return
-
+    first_key, first_spec = next(iter(head_decl["identities"].items()))
+    mutated_path = first_spec["path"] if "name" in first_spec else first_spec["paths"][0]
+    suffix = f"\n{first_spec['name']} = ('mutated',)\n" if "name" in first_spec else "\n_PROBE = 'mutated'\n"
     stripped = json.dumps({"identities": head_decl["identities"], "replays": base_decl["replays"]})
 
-    def read(rev: str, path: str) -> str | None:
+    def read_mutated(rev: str, path: str) -> str | None:
         if rev == "HEAD" and path == _module.DECLARATION:
             return stripped
+        if rev == "HEAD" and path == mutated_path:
+            return (_working_tree(rev, path) or "") + suffix
         return _working_tree(rev, path) if rev == "HEAD" else _module.git_show(rev, path)
 
-    with pytest.raises(_module.ReplayError, match=changed_keys[0]):
-        _module.trailers(base_sha, base_tag, "HEAD", read)
+    with pytest.raises(_module.ReplayError, match=first_key):
+        _module.trailers(base_sha, base_tag, "HEAD", read_mutated)
 
 
 @pytest.mark.parametrize(
