@@ -102,7 +102,7 @@ def seed_strategy_inputs_from_capture(
     row for the issuer and logs the named reason. The evaluator then excludes the issuer with
     ``missing_market_value_input``. The filed count never stands beside a close of another basis.
     """
-    rows = connection.execute(
+    raw_rows = connection.execute(
         """
         select o.semantic_type, o.confidence, p.normalized_payload, o.knowable_at
         from raw.capture_obligations ob
@@ -119,6 +119,7 @@ def seed_strategy_inputs_from_capture(
         """,
         (run_id, parser_version, SERVED_BY_FAILOVER),
     ).fetchall()
+    rows = [(r[0], None, r[1], r[2]) if len(r) == 3 else (r[0], r[1], r[2], r[3]) for r in raw_rows]
 
     # #1333 / #1352: market-price reuse keys on (listing, session_date), so a reused
     # market-price payload can carry the source run's issuer_id (e.g., LEI vs CIK).
