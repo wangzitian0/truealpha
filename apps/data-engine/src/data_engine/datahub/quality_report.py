@@ -436,6 +436,49 @@ def latest_run(conn: psycopg.Connection[Any]) -> str:
     return row[0]
 
 
+_FINANCIAL_OBLIGATION_METRICS: frozenset[str] = frozenset(
+    {
+        "gross_profit",
+        "total_assets",
+        "shares_outstanding",
+        "revenue",
+        "net_income",
+        "headcount",
+        "pre_provision_profit",
+    }
+)
+
+
+def _obligation_cell_confidence(
+    cell_confidences: Mapping[tuple[str, str], Decimal],
+    obligation_subject: str,
+    semantic_type: str,
+) -> Decimal | None:
+    if semantic_type == "market-price":
+        return cell_confidences.get((obligation_subject, "close"))
+    if semantic_type in ("listing-identity", "universe-membership"):
+        return cell_confidences.get((obligation_subject, semantic_type))
+    if semantic_type == "financial-fact":
+        fin_confs = [
+            conf
+            for (subj, metric), conf in cell_confidences.items()
+            if subj == obligation_subject and metric in _FINANCIAL_OBLIGATION_METRICS and conf > Decimal("0")
+        ]
+        return min(fin_confs) if fin_confs else Decimal("0")
+    return None
+
+
+def _record_plausibility(plausibility: dict[str, dict[str, Any]], subject_id: str, payload: Mapping[str, Any]) -> None:
+    try:
+        violations = _plausibility_violations(FinancialFactPayload.model_validate(payload))
+    except ValidationError:
+        return  # unparseable payloads are availability's finding, not this one's
+    cell_grades = plausibility.setdefault(subject_id, {"outcome": "plausible", "violated": []})
+    merged = sorted(set(cell_grades["violated"]) | set(violations))
+    cell_grades["violated"] = merged
+    cell_grades["outcome"] = "implausible" if merged else "plausible"
+
+
 def build_report(
     conn: psycopg.Connection[Any], run_id: str, *, object_store: _ObjectReader | None = None
 ) -> dict[str, Any]:
@@ -526,29 +569,7 @@ def build_report(
         if observation_id is None:
             continue
         cell.fresh = cell.fresh or freshness_state == "fresh"
-        obs_conf: Decimal | None = None
-        if semantic_type == "market-price":
-            obs_conf = cell_confidences.get((str(obligation_subject), "close"))
-        elif semantic_type in ("listing-identity", "universe-membership"):
-            obs_conf = cell_confidences.get((str(obligation_subject), semantic_type))
-        elif semantic_type == "financial-fact":
-            fin_confs = [
-                conf
-                for (subj, metric), conf in cell_confidences.items()
-                if subj == str(obligation_subject)
-                and metric
-                in (
-                    "gross_profit",
-                    "total_assets",
-                    "shares_outstanding",
-                    "revenue",
-                    "net_income",
-                    "headcount",
-                    "pre_provision_profit",
-                )
-                and conf > Decimal("0")
-            ]
-            obs_conf = min(fin_confs) if fin_confs else Decimal("0")
+        obs_conf = _obligation_cell_confidence(cell_confidences, str(obligation_subject), semantic_type)
         if obs_conf is not None:
             cell.confidence = obs_conf if cell.confidence is None else max(cell.confidence, obs_conf)
         if not cell.available:
@@ -557,19 +578,7 @@ def build_report(
             subject_semantics[semantic_type] = True
         if semantic_type == "financial-fact" and payload is not None and subject_id is not None:
             record_listing_ratio(listing_ratio, str(subject_id), payload)
-            try:
-                violations = _plausibility_violations(FinancialFactPayload.model_validate(payload))
-            except ValidationError:
-                pass  # unparseable payloads are availability's finding, not this one's
-            else:
-                # UNION across a subject's observations: a later plausible parse
-                # must never flip an earlier violation off the record (Copilot on
-                # #599 — the capture plane can bind several observations to one
-                # subject).
-                cell_grades = plausibility.setdefault(str(subject_id), {"outcome": "plausible", "violated": []})
-                merged = sorted(set(cell_grades["violated"]) | set(violations))
-                cell_grades["violated"] = merged
-                cell_grades["outcome"] = "implausible" if merged else "plausible"
+            _record_plausibility(plausibility, str(subject_id), payload)
         if not cell.lineage_complete and payload is not None and object_uri is not None:
             cell.lineage_complete = pointers.dereferences(
                 object_uri=object_uri,
