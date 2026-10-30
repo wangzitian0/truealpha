@@ -34,8 +34,7 @@
       "field": "node_env",
       "env": "NODE_ENV",
       "group": "runtime",
-      "source": "code",
-      "injected": true
+      "source": "code"
     },
     {
       "field": "app_env",
