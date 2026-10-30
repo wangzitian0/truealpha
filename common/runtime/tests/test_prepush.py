@@ -44,12 +44,12 @@ def bash4() -> str:
     pytest.skip("no bash >= 4 available; tools/prepush.sh requires one and says so")
 
 
-def run_prepush(*arguments: str) -> subprocess.CompletedProcess[str]:
+def run_prepush(*arguments: str, cwd: Path = REPO_ROOT) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [bash4(), str(PREPUSH), *arguments],
         capture_output=True,
         text=True,
-        cwd=REPO_ROOT,
+        cwd=cwd,
         check=False,
     )
 
@@ -81,15 +81,24 @@ def test_an_empty_change_set_is_an_error_not_a_pass(tmp_path: Path) -> None:
         )
 
 
-def test_untracked_files_are_examined() -> None:
+def test_untracked_files_are_examined(tmp_path: Path) -> None:
     """A new file is invisible to `git diff` until added — and a new file is
-    exactly what most needs a syntax check."""
+    exactly what most needs a syntax check. Run in a throwaway worktree so a
+    dirty caller tree does not trigger whole-suite diff-scope tests."""
     if os.environ.get("TRUEALPHA_PREPUSH"):
         pytest.skip("already inside a prepush run — running it again here recurses without bound")
-    probe = REPO_ROOT / "tools" / "prepush_probe_delete_me.sh"
-    probe.write_text("#!/usr/bin/env bash\nif [ 1 = 1 ]; then\n", encoding="utf-8")  # unterminated `if`
+    tree = tmp_path / "untracked"
+    subprocess.run(
+        ["git", "worktree", "add", "--detach", str(tree), "HEAD"],
+        capture_output=True,
+        text=True,
+        cwd=REPO_ROOT,
+        check=True,
+    )
     try:
-        result = run_prepush("HEAD")
+        probe = tree / "tools" / "prepush_probe_delete_me.sh"
+        probe.write_text("#!/usr/bin/env bash\nif [ 1 = 1 ]; then\n", encoding="utf-8")  # unterminated `if`
+        result = run_prepush("HEAD", cwd=tree)
         combined = result.stdout + result.stderr
         assert "prepush_probe_delete_me.sh" in combined, (
             "an untracked file was not examined — `git ls-files --others` is gone and every "
@@ -97,8 +106,9 @@ def test_untracked_files_are_examined() -> None:
         )
         assert "FAIL" in combined, "the untracked file's broken syntax was examined but not reported"
     finally:
-        probe.unlink(missing_ok=True)
-    assert not probe.exists()
+        subprocess.run(
+            ["git", "worktree", "remove", "--force", str(tree)], capture_output=True, cwd=REPO_ROOT, check=False
+        )
 
 
 def test_it_refuses_a_bash_too_old_to_run_it() -> None:
@@ -129,3 +139,17 @@ def test_it_names_its_own_preconditions_instead_of_failing_cryptically() -> None
         line for line in (REPO_ROOT / "Makefile").read_text(encoding="utf-8").splitlines() if line.startswith(".PHONY")
     )
     assert " prepush" in phony, "make prepush is not .PHONY — a file of that name would silence it"
+
+
+def test_it_runs_the_same_fast_stdlib_gates_as_ci_python_gates() -> None:
+    """Every fast stdlib gate in `ci-python.yml` (`gates` job) runs locally in `tools/prepush.sh`
+    when a Python file changes, so a static contract violation fails before `git push`."""
+    script = PREPUSH.read_text(encoding="utf-8")
+    for gate in (
+        "python3 tools/check_route_manifest.py",
+        "python3 tools/check_factor_contract.py",
+        "python3 tools/complexity_gate.py --check",
+        "python3 tools/reachability_ratchet.py --check",
+        "python3 tools/sql_literal_gate.py",
+    ):
+        assert gate in script, f"prepush.sh is missing fast stdlib gate {gate!r}"

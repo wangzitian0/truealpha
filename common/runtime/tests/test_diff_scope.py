@@ -82,7 +82,7 @@ files = ["pkg/alpha/src", "pkg/beta/src", "common/runtime/src"]
         "from truealpha_runtime.testing import load_tool\n\nprobe = load_tool('probe')\n\n"
         "def test_probe():\n    assert probe.ANSWER == 42\n"
     ),
-    "common/runtime/tests/test_ci_workflows.py": "def test_workflows():\n    pass\n",
+    "common/runtime/tests/test_ci_workflows.py": "TOOLS_DIR = 'common/runtime/src/truealpha_tools'\n\ndef test_workflows():\n    pass\n",
     "common/runtime/tests/test_migration_chain.py": "def test_chain():\n    pass\n",
     "common/runtime/tests/test_reads_migrations.py": (
         "from pathlib import Path\n\nMIGRATIONS = Path('db') / 'migrations'\n\ndef test_reads():\n    pass\n"
@@ -178,6 +178,7 @@ def test_a_helper_on_sys_path_reaches_the_test_that_imports_it_by_bare_name(repo
 
 
 def test_load_tool_reaches_the_tool_module(repo: Path) -> None:
+    """Editing one tool module selects only its test, even when another test names the package directory."""
     _edit(repo, "common/runtime/src/truealpha_tools/probe.py")
     assert select(repo, "base").pytest == ["common/runtime/tests/test_probe.py"]
 

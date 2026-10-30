@@ -96,8 +96,11 @@ for path in "${CHANGED[@]}"; do
 done
 
 if [ "${#PY[@]}" -gt 0 ]; then
+  run "route manifest gate" python3 tools/check_route_manifest.py
+  run "factor contract gate" python3 tools/check_factor_contract.py
   run "cyclomatic complexity gate" python3 tools/complexity_gate.py --check
   run "reachability ratchet" python3 tools/reachability_ratchet.py --check
+  run "sql literal gate" python3 tools/sql_literal_gate.py
 fi
 for path in "${YML[@]}"; do
   # uv's interpreter, not the system one: PyYAML is a workspace dependency and
