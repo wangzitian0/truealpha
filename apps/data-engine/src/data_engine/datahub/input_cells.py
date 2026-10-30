@@ -226,9 +226,12 @@ def financial_input_rows(
     snapshot (``production_topt.materialization``) call this function. All three get the same keys, the same
     period tags, the same units and the same confidence rule (#1517 B3).
     """
-    if observed_at is None:
-        observed_at = datetime.now(UTC)
-    stamp_of = live_knowable_at(payload, observed_at) if knowable_at_of is None else knowable_at_of
+    if observed_at is None and knowable_at_of is None:
+        raise ValueError("financial_input_rows requires observed_at or knowable_at_of (no wall-clock default)")
+    stamp_of = (
+        live_knowable_at(payload, observed_at) if knowable_at_of is None and observed_at is not None else knowable_at_of
+    )
+    assert stamp_of is not None
     currency = str(payload.get("currency", ""))
     is_proxy = _is_revenue_proxy(payload)
 
@@ -267,15 +270,13 @@ def financial_input_rows(
 
 def last_close_cell(
     payload: Mapping[str, Any],
-    confidence: Decimal | None = None,
-    observed_at: datetime | None = None,
+    confidence: Decimal | None,
+    observed_at: datetime,
 ) -> InputCell | None:
     """The cell of the captured close of one market-price payload, or None when the payload holds none."""
     close = payload.get("close")
     if close is None:
         return None
-    if observed_at is None:
-        observed_at = datetime.now(UTC)
     resolved_conf = confidence if confidence is not None else _evaluate_close_confidence(payload)
     return InputCell(
         LAST_CLOSE_KEY,
