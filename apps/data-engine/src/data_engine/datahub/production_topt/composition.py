@@ -1063,7 +1063,10 @@ def run_topt_pipeline(
     # durable by now. A cutoff with no usable rate raises `MissingRiskFreeRate` here: after the
     # evidence is kept, and before anything is frozen, materialized or published. The pointer stays on
     # the previous accepted run, and the retry of the same tick resumes at this line.
+    from data_engine.datahub.confidence_report import evaluate_and_persist_run_cell_confidence
+
     rate = risk_free_rate_at(connection, cutoff)
+    evaluate_and_persist_run_cell_confidence(connection, plan.run_id, cutoff=cutoff)
     core = PostgresToptCoreRepository(connection)
     snapshot = core.freeze_snapshot(run_id=plan.run_id, release_manifest_id=plan.release_manifest_id)
     results = core.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate=rate.value))

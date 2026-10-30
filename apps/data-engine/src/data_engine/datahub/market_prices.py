@@ -42,13 +42,17 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import psycopg
+from factors.confidence import evaluate_cell_confidence
+from truealpha_contracts.confidence import ContinuousConfidencePolicy, SourceConfidenceEvidence
 from truealpha_contracts.environment_contract import load_environment_contract
 
 from data_engine.config import settings
 from data_engine.datahub.fetch_key import FetchKey
+from data_engine.datahub.production_topt.source_registrations import source_reliability_prior
 from data_engine.sources import gateway
 
 log = logging.getLogger(__name__)
+_CONFIDENCE_POLICY = ContinuousConfidencePolicy()
 
 
 def stored_symbols(connection: psycopg.Connection, *, known_at: datetime) -> tuple[str, ...]:
@@ -111,13 +115,6 @@ DAILY_LOOKBACK_YEARS = 3
 #: two sessions behind has missed a whole night, and the freshness verdict goes red. The live
 #: strategy seed accepts the same lag for its split series (`share_basis`, #1262).
 MAX_BAR_LAG_SESSIONS = 1
-
-# Declared single-source confidence grade: this pipeline fetches Twelve Data alone, with
-# no independent corroborating origin (unlike `production_topt.market_price_adapter`'s
-# multi-origin adapter). One `PRICE_GRADE_STEP` below that adapter's
-# `PRIMARY_PRICE_CONFIDENCE` (0.85) for a primary, corroborated close -- a declared
-# policy grade, not a per-row measurement.
-SINGLE_SOURCE_CONFIDENCE = Decimal("0.75")
 
 _RAW_REF_PREFIX = "twelvedata:time_series"
 
@@ -649,8 +646,8 @@ def _latest_vintages(
 def _provenance(record: PriceBarRecord, *, adjust: str) -> tuple[datetime, Decimal, str]:
     """The (transaction_time, confidence, raw_ref) triple every appended row carries.
 
-    See the module docstring and `xnys_session_close_utc`/`SINGLE_SOURCE_CONFIDENCE` for
-    what each one means and why. `raw_ref` documents provenance without claiming a
+    See the module docstring and `xnys_session_close_utc` for what each one means and why.
+    `raw_ref` documents provenance without claiming a
     `raw.fetches` object pointer this pipeline does not write -- it never persists to
     `raw.fetches`/object storage (unlike `production_topt`'s adapters), which stays a
     known gap, not a pretended one.
@@ -663,7 +660,31 @@ def _provenance(record: PriceBarRecord, *, adjust: str) -> tuple[datetime, Decim
     raw_ref = (
         f"{_RAW_REF_PREFIX}:{record.source}:{record.symbol}:{record.resolution}:{record.date.isoformat()}:{adjust}"
     )
-    return xnys_session_close_utc(record.date), SINGLE_SOURCE_CONFIDENCE, raw_ref
+    safe_symbol = "".join(c if c.isalnum() or c in "._:/@+-" else "-" for c in record.symbol).strip("-") or "symbol"
+    confidence = evaluate_cell_confidence(
+        case_id=f"market-prices:{safe_symbol}:{record.date.isoformat()}",
+        sources=(
+            SourceConfidenceEvidence(
+                provider_id="origin:twelve-data:v1",
+                origin_group_id="lineage:twelve-data",
+                independence_weight=Decimal("1"),
+                reliability_prior=source_reliability_prior("origin:twelve-data:v1"),
+                successful_outcome_mass=Decimal("0"),
+                failed_outcome_mass=Decimal("0"),
+                freshness=Decimal("1"),
+                sample_conformance=Decimal("1"),
+                transport_integrity=Decimal("1"),
+                evidence_ids=(f"bar:{safe_symbol}:{record.date.isoformat()}",),
+                reason_codes=("reason:single_origin",),
+            ),
+        ),
+        agreement=Decimal("1"),
+        semantic_mapping_quality=Decimal("1"),
+        lineage_completeness=Decimal("1"),
+        required_component_completeness=Decimal("1"),
+        policy=_CONFIDENCE_POLICY,
+    ).confidence
+    return xnys_session_close_utc(record.date), confidence, raw_ref
 
 
 def insert_market_prices_daily(

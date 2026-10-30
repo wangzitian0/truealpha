@@ -29,7 +29,6 @@ import pytest
 from data_engine import dagster_defs
 from data_engine.config import settings
 from data_engine.datahub.market_prices import (
-    SINGLE_SOURCE_CONFIDENCE,
     TwelveDataApiError,
     TwelveDataClient,
     ingest_daily_series,
@@ -499,7 +498,8 @@ def test_both_series_land_with_the_provenance_of_every_daily_bar(connection: psy
     ).fetchall()
     assert len(rows) == 8
     for adjust, trading_date, source, confidence, transaction_time, raw_ref in rows:
-        assert (source, confidence) == ("twelvedata", SINGLE_SOURCE_CONFIDENCE)
+        assert source == "twelvedata"
+        assert Decimal("0.5") < confidence < Decimal("1.0")
         assert transaction_time == xnys_session_close_utc(trading_date), "knowable at the session close"
         assert raw_ref.endswith(f":{adjust}")
 

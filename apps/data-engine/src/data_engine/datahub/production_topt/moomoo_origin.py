@@ -89,10 +89,6 @@ FINANCIALS_PARSER_VERSION = MOOMOO_FINANCIALS_PARSER_VERSION
 FINANCIALS_MAPPING_VERSION = MOOMOO_FINANCIALS_MAPPING_VERSION
 
 CALLER = "moomoo_origin"
-# A no-SLA consolidated-tape close and a vendor-normalized statement: below the primary's
-# grade, above the floor a stale fallback earns (`graded_price_confidence`).
-KLINE_CONFIDENCE = Decimal("0.80")
-FINANCIALS_CONFIDENCE = Decimal("0.75")
 # Two weeks of calendar days covers any holiday cluster before the cutoff so the settled
 # session is inside the window; `max_count` bounds the answer to the same span.
 _KLINE_LOOKBACK_DAYS = 14
@@ -340,7 +336,6 @@ def moomoo_kline_origin() -> CorroboratingOrigin | None:
         parser_version=KLINE_PARSER_VERSION,
         mapping_version=KLINE_MAPPING_VERSION,
         value_key=KLINE_VALUE_KEY,
-        confidence=KLINE_CONFIDENCE,
         fetch=MoomooKlineFetcher(OpenDClient()),
         raw_source=DataSource.MOOMOO,
     )
@@ -528,7 +523,6 @@ def moomoo_financials_origin() -> FinancialFactCorroboratingOrigin | None:
         origin=FINANCIALS_ORIGIN,
         parser_version=FINANCIALS_PARSER_VERSION,
         mapping_version=FINANCIALS_MAPPING_VERSION,
-        confidence=FINANCIALS_CONFIDENCE,
         fetch=MoomooFinancialsFetcher(OpenDClient()),
         raw_source=DataSource.MOOMOO,
     )

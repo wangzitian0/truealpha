@@ -298,8 +298,8 @@ class FinancialFactCorroboratingOrigin:
     origin: str
     parser_version: str
     mapping_version: str
-    confidence: Decimal
     fetch: FinancialFactCorroborator
+    confidence: Decimal | None = None
     raw_source: DataSource = DataSource.MOOMOO
 
 
@@ -1412,7 +1412,6 @@ class SecFinancialFactAdapter:
                 record_id=f"companyfacts:CIK{target.cik:010d}",
             ),
             normalized_sha256=canonical_sha256(payload),
-            confidence=_confidence(payload),
             valid_from=knowable_at.date(),
             transaction_time=knowable_at,
             record=NormalizedRecord(
@@ -1460,17 +1459,6 @@ def _mark_unclassified(payload: dict[str, Any], target: SecTarget) -> None:
     """
     if target.registry_unavailable:
         payload[UNAVAILABLE_PAYLOAD_KEY] = True
-
-
-def _confidence(payload: Mapping[str, Any]) -> Decimal:
-    """Per-source-class confidence prior (#207/#404) with period coherence zero-gate (#1108); calibrated continuous formula remains #337."""
-    # Backstop. `fetch` drops an operating metric of another period, so a payload that
-    # reaches this gate with two different periods must not carry a positive confidence.
-    if _periods_differ(payload.get("operating_period_end"), payload.get("revenue_period_end")):
-        return Decimal("0.00")
-
-    present = sum(payload.get(field) is not None for field in ("gross_profit", "total_assets", "shares_outstanding"))
-    return {3: Decimal("0.92"), 2: Decimal("0.80"), 1: Decimal("0.65")}.get(present, Decimal("0.50"))
 
 
 def _periods_differ(operating_end: object | None, revenue_end: object | None) -> bool:

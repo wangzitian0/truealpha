@@ -16,8 +16,6 @@ from factors.forest.binding import (
 from factors.forest.model import (
     ALL_ISSUER_CLASSES,
     AliasKind,
-    ConfidenceBand,
-    ConfidenceRule,
     Decomposition,
     Forest,
     IssuerClass,
@@ -44,8 +42,6 @@ __all__ = [
     "GPPE_V0_TREE",
     "PUBLISHED_COLUMNS",
     "AliasKind",
-    "ConfidenceBand",
-    "ConfidenceRule",
     "Decomposition",
     "Forest",
     "IssuerClass",

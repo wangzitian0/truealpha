@@ -268,7 +268,6 @@ def test_the_market_price_adapter_attaches_the_third_origin_under_moomoos_own_so
         parser_version=origin_module.KLINE_PARSER_VERSION,
         mapping_version=origin_module.KLINE_MAPPING_VERSION,
         value_key=origin_module.KLINE_VALUE_KEY,
-        confidence=origin_module.KLINE_CONFIDENCE,
         fetch=MoomooKlineFetcher(_CassetteClient(bars={"US.AAPL": _SETTLED_WINDOW})),
         raw_source=DataSource.MOOMOO,
     )
@@ -385,7 +384,6 @@ def _moomoo_financials_origin(client: _CassetteClient) -> FinancialFactCorrobora
         origin=origin_module.FINANCIALS_ORIGIN,
         parser_version=origin_module.FINANCIALS_PARSER_VERSION,
         mapping_version=origin_module.FINANCIALS_MAPPING_VERSION,
-        confidence=origin_module.FINANCIALS_CONFIDENCE,
         fetch=MoomooFinancialsFetcher(client),
     )
 

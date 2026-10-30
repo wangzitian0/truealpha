@@ -113,19 +113,19 @@ class Corroboration:
 
     origin: str
     record: NormalizedRecord
-    confidence: Decimal
     raw: RawResponse
     normalized_sha256: str
     # The second origin's own source time (its settled bar's date) — the sink
     # persists it as the corroborating observation's knowable_at and the
     # vintage's source_published_at (#530 slice 3).
     transaction_time: datetime
+    confidence: Decimal | None = None
 
     def __post_init__(self) -> None:
         _require_digest(self.normalized_sha256)
         if canonical_sha256(dict(self.record.payload)) != self.normalized_sha256:
             raise ValueError("corroboration payload does not match its normalized digest")
-        if not (Decimal(0) <= self.confidence <= Decimal(1)):
+        if self.confidence is not None and not (Decimal(0) <= self.confidence <= Decimal(1)):
             raise ValueError("confidence must be in [0, 1]")
         if self.transaction_time.tzinfo is None or self.transaction_time.utcoffset() is None:
             raise ValueError("corroboration transaction_time must be timezone-aware")
@@ -142,9 +142,9 @@ class FetchSuccess:
 
     raw: RawResponse
     normalized_sha256: str
-    confidence: Decimal
     valid_from: date
     transaction_time: datetime
+    confidence: Decimal | None = None
     record: NormalizedRecord | None = None
     corroborations: tuple[Corroboration, ...] = field(default=())
     # Set only on a success a `FailoverFetchPort` returned: the origin that served the
@@ -163,7 +163,7 @@ class FetchSuccess:
 
     def __post_init__(self) -> None:
         _require_digest(self.normalized_sha256)
-        if not (Decimal(0) <= self.confidence <= Decimal(1)):
+        if self.confidence is not None and not (Decimal(0) <= self.confidence <= Decimal(1)):
             raise ValueError("confidence must be in [0, 1]")
         if self.record is not None and canonical_sha256(dict(self.record.payload)) != self.normalized_sha256:
             raise ValueError("normalized payload does not match its normalized digest")

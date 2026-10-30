@@ -13,8 +13,6 @@ from factors.forest import (
     GPPE_V0_TREE,
     PUBLISHED_COLUMNS,
     AliasKind,
-    ConfidenceBand,
-    ConfidenceRule,
     Decomposition,
     Forest,
     IssuerClass,
@@ -72,18 +70,6 @@ def test_minted_uuids_never_change() -> None:
     assert {node.key: str(node.node_id) for node in FOREST.nodes} == MINTED
     assert str(GPPE_V0_TREE.tree_id) == "ef13b940-b695-5f5f-846a-a36face5cc3e"
     assert str(GPPE_BANKING_TCE_TREE.tree_id) == "96fd6d4a-8983-5caf-b647-360122569d00"
-
-
-def test_captured_inputs_name_a_confidence_family_and_nothing_else_does() -> None:
-    for node in FOREST.nodes:
-        if node.kind is NodeKind.INPUT:
-            assert node.confidence is not None and node.confidence.family, node.key
-        elif node.confidence is not None:
-            assert node.confidence.family is None, node.key
-    with pytest.raises(ValidationError, match="confidence-report family"):
-        ConfidenceBand(rule=ConfidenceRule.MINIMUM_CONSUMED, family="gross_profit")
-    with pytest.raises(ValidationError, match="confidence-report family"):
-        ConfidenceBand(rule=ConfidenceRule.AS_CAPTURED)
 
 
 def test_a_node_declares_a_sign_policy_for_exactly_its_classes() -> None:

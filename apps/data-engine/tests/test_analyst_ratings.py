@@ -572,11 +572,13 @@ def test_every_row_is_stamped_with_the_heads_cutoff_not_the_clock() -> None:
 
 
 def test_the_confidence_of_each_kind_of_row() -> None:
-    """0.85 for a real consensus; 0 for a row that holds no rating, whatever the reason."""
+    """Continuous confidence for a real consensus; 0 for a row that holds no rating, whatever the reason."""
+    from data_engine.datahub.analyst_ratings import _consensus_confidence
+
     responses = {"US.DDOG": _sample("DDOG"), "US.NICE": {}, "US.SHOP": "first failure"}
     conn, _result = _run_universe(responses)
 
-    assert [params[8] for _, params in conn.executed] == [Decimal("0.85"), Decimal("0"), Decimal("0")]
+    assert [params[8] for _, params in conn.executed] == [_consensus_confidence(DDOG), Decimal("0"), Decimal("0")]
     assert [params[9] for _, params in conn.executed] == [
         [],
         ["no_analyst_coverage"],

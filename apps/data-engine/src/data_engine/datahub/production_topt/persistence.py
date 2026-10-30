@@ -459,7 +459,7 @@ class PostgresCaptureControlSink:
         payload: dict[str, Any],
         parser_version: str,
         mapping_version: str,
-        confidence: Decimal,
+        confidence: Decimal | None = None,
         source_vintage_id: str,
         knowable_at: datetime,
         valid_from: datetime,

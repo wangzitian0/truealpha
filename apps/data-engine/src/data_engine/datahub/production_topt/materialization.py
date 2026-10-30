@@ -487,10 +487,10 @@ class _ObservationRow:
     listing_id: str
     semantic_type: str
     observation_id: str
-    confidence: Decimal
     freshness: MetricFreshness
     knowable_at: datetime
     payload: dict[str, Any]
+    confidence: Decimal | None = None
 
 
 def _metric(
@@ -499,6 +499,7 @@ def _metric(
     name: str,
     value: Decimal | None,
     cell: InputCell | None = None,
+    confidence: Decimal | None = None,
     knowable_at: datetime | None = None,
     unavailable_reason: ToptCoreReasonCode | None = None,
 ) -> ToptMetricInput:
@@ -508,11 +509,18 @@ def _metric(
     """
     if knowable_at is None:
         knowable_at = row.knowable_at if cell is None else cell.knowable_at
+    resolved_confidence = (
+        cell.confidence
+        if cell is not None
+        else (
+            confidence if confidence is not None else (row.confidence if row.confidence is not None else Decimal("0"))
+        )
+    )
     return ToptMetricInput(
         input_id=row.observation_id,
         metric=name,
         value=value,
-        confidence=row.confidence if cell is None else cell.confidence,
+        confidence=resolved_confidence,
         knowable_at=knowable_at,
         freshness=row.freshness,
         availability=MetricAvailability.AVAILABLE if value is not None else MetricAvailability.UNAVAILABLE,
@@ -561,10 +569,12 @@ def _shares_cell_at(cell: InputCell | None, knowable_at: datetime) -> dict[str, 
     return {} if cell is None else {SHARES_KEY: cell._replace(knowable_at=knowable_at)}
 
 
-def _cell(row: _ObservationRow) -> ToptCellQualityInput:
+def _cell(row: _ObservationRow, confidence: Decimal | None = None) -> ToptCellQualityInput:
     return ToptCellQualityInput(
         input_id=row.observation_id,
-        confidence=row.confidence,
+        confidence=confidence
+        if confidence is not None
+        else (row.confidence if row.confidence is not None else Decimal("1")),
         knowable_at=row.knowable_at,
         freshness=row.freshness,
     )
@@ -651,6 +661,9 @@ class PostgresToptCoreRepository:
             maximum_age=timedelta(days=definition.eligibility.maximum_input_age_days),
             deciding={name: deciding_input_keys(definition, IssuerClass(name)) for name in definition_pins(definition)},
         )
+        from data_engine.datahub.confidence_report import evaluate_and_persist_run_cell_confidence
+
+        cell_confidences = evaluate_and_persist_run_cell_confidence(self._connection, run_id, cutoff=cutoff)
         members = tuple(
             self._snapshot_member(
                 listing_id,
@@ -668,6 +681,9 @@ class PostgresToptCoreRepository:
                 ruleset=ruleset,
                 is_primary=primary_by_listing.get(listing_id, False),
                 input_age=input_age,
+                listing_confidences={
+                    metric: conf for (subj, metric), conf in cell_confidences.items() if subj == listing_id
+                },
             )
             for listing_id, by_type in grouped.items()
         )
@@ -742,7 +758,6 @@ class PostgresToptCoreRepository:
                     obligation.subject_id,
                     obligation.capture_requirement_id,
                     observation.observation_id,
-                    observation.confidence,
                     case
                         when %(cutoff)s - observation.knowable_at <= coalesce(nullif(policy.semantic_freshness_max_age->>observation.semantic_type, '')::interval, policy.freshness_max_age) then 'fresh'
                         else 'stale'
@@ -805,14 +820,14 @@ class PostgresToptCoreRepository:
             )
             select obligation_id, subject_id,
                    regexp_replace(capture_requirement_id, ':v1$', ''),
-                   observation_id, confidence, cutoff_freshness_state, knowable_at,
+                   observation_id, cutoff_freshness_state, knowable_at,
                    normalized_payload, selection_count
             from selected where selection_rank = 1
             order by subject_id, capture_requirement_id
             """,
             {"cutoff": cutoff, "run_id": run_id},
         ).fetchall()
-        ambiguous = [row[0] for row in rows if row[8] != 1]
+        ambiguous = [row[0] for row in rows if row[7] != 1]
         if ambiguous:
             raise ValueError(
                 "Production terminal source vintage does not resolve exactly one "
@@ -824,10 +839,9 @@ class PostgresToptCoreRepository:
                 listing_id=row[1],
                 semantic_type=row[2],
                 observation_id=row[3],
-                confidence=row[4],
-                freshness=MetricFreshness(row[5]),
-                knowable_at=row[6],
-                payload=row[7],
+                freshness=MetricFreshness(row[4]),
+                knowable_at=row[5],
+                payload=row[6],
             )
             for row in rows
         )
@@ -889,6 +903,7 @@ class PostgresToptCoreRepository:
         ruleset: Callable[[], ConceptMappingRuleset] | None = None,
         is_primary: bool = False,
         input_age: InputAgeLimit | None = None,
+        listing_confidences: Mapping[str, Decimal] | None = None,
     ) -> SnapshotMember:
         if set(by_type) != _REQUIRED_TYPES:
             raise ValueError(f"listing {listing_id} does not have the exact four TOPT semantic cells")
@@ -915,10 +930,20 @@ class PostgresToptCoreRepository:
         # one definition. A periodic series is a decision input only. The snapshot reads the scalar cells.
         cells = {
             cell.input_key: cell
-            for cell in financial_input_rows(financial_row.payload, financial_row.confidence, financial_row.knowable_at)
+            for cell in financial_input_rows(
+                financial_row.payload,
+                financial_row.confidence,
+                financial_row.knowable_at,
+                confidence_by_key=listing_confidences,
+            )
             if cell.fiscal_period is None
         }
-        price_cell = last_close_cell(market_row.payload, market_row.confidence, market_row.knowable_at)
+        close_conf = (
+            listing_confidences.get("close")
+            if listing_confidences is not None and "close" in listing_confidences
+            else market_row.confidence
+        )
+        price_cell = last_close_cell(market_row.payload, close_conf, market_row.knowable_at)
 
         shares_cell = cells.get(SHARES_KEY)
         shares_value, shares_knowable_at, shares_reason = PostgresToptCoreRepository._resolve_shares_on_close_basis(
@@ -943,9 +968,23 @@ class PostgresToptCoreRepository:
             financial_row = replace(financial_row, freshness=MetricFreshness.STALE)
         # The cell confidence is the lowest of the payload's cells: the cap of a revenue-proxy gross profit
         # applies in the cells, so the core and the decision read one confidence.
-        financial_cell_confidence = min((financial_row.confidence, *(cell.confidence for cell in cells.values())))
+        cell_confs = [cell.confidence for cell in cells.values()]
+        if financial_row.confidence is not None:
+            cell_confs.append(financial_row.confidence)
+        financial_cell_confidence = min(cell_confs, default=Decimal("0"))
         # A bank's pre-provision profit is the figure of its gross-profit cell: the adapter fills both from one filing.
         profit_cell = cells.get("gross_profit")
+        listing_id_conf = (
+            listing_confidences.get("listing-identity")
+            if listing_confidences is not None
+            else by_type["listing-identity"].confidence
+        )
+        market_cell_conf = price_cell.confidence if price_cell is not None else (close_conf or Decimal("0"))
+        membership_conf = (
+            listing_confidences.get("universe-membership")
+            if listing_confidences is not None
+            else by_type["universe-membership"].confidence
+        )
 
         return SnapshotMember(
             issuer_id=listing.issuer_id,
@@ -965,45 +1004,55 @@ class PostgresToptCoreRepository:
                     knowable_at=financial_row.knowable_at,
                     freshness=financial_row.freshness,
                 ),
-                _cell(by_type["listing-identity"]),
-                _cell(by_type["market-price"]),
-                _cell(by_type["universe-membership"]),
+                _cell(by_type["listing-identity"], listing_id_conf),
+                _cell(by_type["market-price"], market_cell_conf),
+                _cell(by_type["universe-membership"], membership_conf),
             ),
             gross_profit=_metric(
                 financial_row,
                 name="gross_profit",
                 value=financial.gross_profit,
                 cell=profit_cell,
+                confidence=financial_cell_confidence,
             ),
             total_assets=_metric(
                 financial_row,
                 name="total_assets",
                 value=financial.total_assets,
                 cell=cells.get("total_assets"),
+                confidence=financial_cell_confidence,
             ),
             headcount=_metric(
                 financial_row,
                 name="headcount",
                 value=financial.headcount,
                 cell=cells.get("headcount"),
+                confidence=financial_cell_confidence,
             ),
             revenue=_metric(
                 financial_row,
                 name="revenue",
                 value=financial.revenue,
                 cell=cells.get("revenue"),
+                confidence=financial_cell_confidence,
             ),
             pre_provision_profit=_metric(
                 financial_row,
                 name="pre_provision_profit",
                 value=financial.pre_provision_profit,
                 cell=None if financial.pre_provision_profit is None else profit_cell,
+                confidence=(
+                    listing_confidences.get("pre_provision_profit", financial_cell_confidence)
+                    if listing_confidences is not None
+                    else financial_cell_confidence
+                ),
             ),
             shares_outstanding=_metric(
                 financial_row,
                 name="shares_outstanding",
                 value=shares_value,
                 cell=shares_cell,
+                confidence=financial_cell_confidence,
                 knowable_at=shares_knowable_at,
                 unavailable_reason=shares_reason,
             ),
@@ -1012,6 +1061,7 @@ class PostgresToptCoreRepository:
                 name="market_price",
                 value=price_value,
                 cell=price_cell,
+                confidence=market_cell_conf,
                 unavailable_reason=price_reason,
             ),
             is_primary=is_primary,
@@ -1022,6 +1072,11 @@ class PostgresToptCoreRepository:
                     name=name,
                     value=getattr(financial, name),
                     cell=cells.get(name),
+                    confidence=(
+                        listing_confidences.get(name, financial_cell_confidence)
+                        if listing_confidences is not None
+                        else financial_cell_confidence
+                    ),
                 )
                 for name in TCE_SNAPSHOT_FIELDS
                 if getattr(financial, name) is not None

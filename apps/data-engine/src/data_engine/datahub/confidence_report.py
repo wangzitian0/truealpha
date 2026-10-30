@@ -199,6 +199,8 @@ class OriginValue:
     #: The observation served its cell because the primary could not (#862): the payload
     #: declared `served_by_failover`. A lone failover assertion grades LOW under that name.
     served_by_failover: bool = False
+    #: True when `gross_profit` was derived from revenue via the revenue proxy (#1255, #1517).
+    is_revenue_proxy: bool = False
 
 
 @dataclass(frozen=True)
@@ -593,7 +595,13 @@ def classify_cell(
                 cutoff=cutoff,
             )
             agreement = min(multi_agreement, oracle_agreement)
-            semantic_quality = Decimal("0.85") if reason == "no_agreement_policy" else Decimal("1")
+            is_proxy = any(origin.is_revenue_proxy for origin in valued)
+            semantic_quality = Decimal("0.85") if (reason == "no_agreement_policy" or is_proxy) else Decimal("1")
+            extra_codes = (
+                (f"reason:{reason}", "confidence.revenue_proxy", *oracle_reasons)
+                if is_proxy
+                else (f"reason:{reason}", *oracle_reasons)
+            )
             cell_eval = evaluate_cell_confidence(
                 case_id=case_id,
                 sources=tuple(sources),
@@ -601,7 +609,7 @@ def classify_cell(
                 semantic_mapping_quality=semantic_quality,
                 lineage_completeness=Decimal("1"),
                 required_component_completeness=Decimal("1"),
-                extra_reason_codes=(f"reason:{reason}", *oracle_reasons),
+                extra_reason_codes=extra_codes,
                 policy=CONTINUOUS_CONFIDENCE_POLICY,
             )
         return CellGrade(
@@ -793,24 +801,6 @@ def content_address(payload: Mapping[str, Any]) -> tuple[str, str]:
     return f"{REPORT_ID_PREFIX}:{digest}", digest
 
 
-def stored_confidence_metadata(rows: Iterable[tuple[str, Decimal, int]]) -> dict[str, Any]:
-    """What the stored `confidence` column holds in this run, measured — and the statement
-    that the bands do not read it."""
-    by_semantic: dict[str, dict[str, int]] = {}
-    for semantic, value, count in rows:
-        by_semantic.setdefault(semantic, {})[str(value)] = int(count)
-    return {
-        "used_for_bands": False,
-        "values_by_semantic": dict(sorted((k, dict(sorted(v.items()))) for k, v in by_semantic.items())),
-        "constant_per_semantic": all(len(values) == 1 for values in by_semantic.values()),
-        "note": (
-            "staging.capture_normalized_observations.confidence is stamped per semantic by the parser, "
-            "not computed by the formula in docs/confidence-calibration.md; the cell reasons and "
-            "independent origin counts are derived from origin counts, lineage and the reconciliation outcome only"
-        ),
-    }
-
-
 # -- loaders: the persisted observations of one run --------------------------------------------
 
 
@@ -818,6 +808,7 @@ def stored_confidence_metadata(rows: Iterable[tuple[str, Decimal, int]]) -> dict
 class _Subject:
     ticker: str | None = None
     issuer_id: str | None = None
+    listing_id: str | None = None
     origins: dict[str, list[OriginValue]] = field(default_factory=dict)
 
     def add(self, family: str, origin: OriginValue) -> None:
@@ -1033,6 +1024,13 @@ def financial_origins(observations: Sequence[FinancialObservation]) -> dict[str,
                     knowable_at=observation.knowable_at,
                     observation_id=observation.observation_id,
                     period_end=period,
+                    is_revenue_proxy=(
+                        name == "gross_profit"
+                        and observation.primary
+                        and bool(
+                            ((payload.get("vintage") or {}).get("gross_profit") or {}).get("is_revenue_proxy", False)
+                        )
+                    ),
                 )
             )
     return origins
@@ -1065,8 +1063,16 @@ def load_run_subjects(connection: Connection[Any], run_id: str, cutoff: datetime
         if semantic_type in RELEASE_SEMANTICS:
             subject.ticker = subject.ticker or payload.get("ticker")
             subject.issuer_id = subject.issuer_id or payload.get("issuer_id")
+            if payload.get("listing_id"):
+                subject.listing_id = str(payload["listing_id"])
         elif semantic_type == MARKET_PRICE_SEMANTIC:
-            coordinate = SOURCE_BY_PARSER.get(parser_version)
+            if payload.get("listing_id"):
+                subject.listing_id = str(payload["listing_id"])
+            coordinate = SOURCE_BY_PARSER.get(parser_version) or (
+                (SEC_COMPANY_FACTS_SOURCE, SEC_COMPANY_FACTS_ORIGIN, "close")
+                if parser_version == "production-topt-integration-parser:v1"
+                else None
+            )
             if coordinate is None:
                 continue
             asserted = bar_origins(coordinate, payload, knowable_at=knowable_at, observation_id=observation_id)
@@ -1074,10 +1080,12 @@ def load_run_subjects(connection: Connection[Any], run_id: str, cutoff: datetime
                 subject.add(family, origin)
         elif semantic_type == "financial-fact":
             subject.issuer_id = subject.issuer_id or payload.get("issuer_id")
+            if payload.get("listing_id"):
+                subject.listing_id = str(payload["listing_id"])
             # The primary's parser vintage is the shared primary identity (as the quality
             # report classifies it); any other vintage is a registered corroborating origin
             # (moomoo statements) and asserts under ITS origin, never as the primary's.
-            if parser_version in PARSER_VERSION_HISTORY:
+            if parser_version in PARSER_VERSION_HISTORY or parser_version == "production-topt-integration-parser:v1":
                 primary, origin_source, origin_id = True, SEC_COMPANY_FACTS_SOURCE, SEC_COMPANY_FACTS_ORIGIN
             else:
                 coordinate = SOURCE_BY_PARSER.get(parser_version)
@@ -1236,22 +1244,6 @@ def load_index_membership(
         "denominator": "union of both routes' listings — a line held but not in the index is a real cell",
     }
     return origins, notes
-
-
-def load_stored_confidence(connection: Connection[Any], run_id: str) -> list[tuple[str, Decimal, int]]:
-    rows = connection.execute(
-        """
-        select o.semantic_type, o.confidence, count(*)
-        from raw.capture_obligations ob
-        join staging.capture_observation_obligations oo on oo.capture_obligation_id = ob.obligation_id
-        join staging.capture_normalized_observations o on o.observation_id = oo.observation_id
-        where ob.run_id = %s
-        group by o.semantic_type, o.confidence
-        order by o.semantic_type, o.confidence
-        """,
-        (run_id,),
-    ).fetchall()
-    return [(str(semantic), Decimal(str(confidence)), int(count)) for semantic, confidence, count in rows]
 
 
 _COMPARED_OUTCOMES = frozenset({ReconciliationOutcome.AGREED.value, ReconciliationOutcome.CONFLICT_ABSTAINED.value})
@@ -1468,7 +1460,6 @@ def build_report(
         "sample": sample,
         "accuracy": accuracy,
         "metadata": {
-            "stored_confidence": stored_confidence_metadata(load_stored_confidence(connection, head.run_id)),
             "quality_report_id": quality_report_id,
         },
     }
@@ -1550,6 +1541,185 @@ def persist(connection: Connection[Any], report: Mapping[str, Any]) -> str:
                     ),
                 )
     return report_id
+
+
+_TCE_FIELDS: tuple[str, ...] = (
+    "stockholders_equity",
+    "preferred_stock_value",
+    "goodwill",
+    "intangible_assets_net_excluding_goodwill",
+)
+
+
+def evaluate_and_persist_run_cell_confidence(
+    connection: Connection[Any],
+    run_id: str,
+    *,
+    cutoff: datetime | None = None,
+) -> dict[tuple[str, str], Decimal]:
+    """Evaluate every non-plane cell of `run_id` and persist to `mart.cell_confidence` (#1517 B3)."""
+    if not hasattr(connection, "cursor"):
+        return {}
+    if cutoff is None:
+        row = connection.execute(
+            "select cutoff from mart.topt_capture_status where run_id = %s",
+            (run_id,),
+        ).fetchone()
+        cutoff = row[0] if row is not None and row[0] is not None else datetime.now(UTC)
+
+    subjects = load_run_subjects(connection, run_id, cutoff)
+    oracle_rows = load_oracle_confidence_inputs(connection, run_id=run_id, cutoff=cutoff)
+    outcome_mass_by_origin = oracle_outcome_mass_by_origin(oracle_rows, cutoff=cutoff)
+
+    out: dict[tuple[str, str], Decimal] = {}
+    for policy in FAMILIES:
+        if policy.family in PLANE_FAMILIES:
+            continue
+        for subject_id, subject in sorted(subjects.items()):
+            grade = classify_cell(
+                policy,
+                subject_id,
+                subject.origins.get(policy.family, []),
+                cutoff,
+                outcome_mass_by_origin=outcome_mass_by_origin,
+                oracle_outcomes=oracle_rows,
+                subject_aliases=tuple(alias for alias in (subject.issuer_id,) if alias is not None),
+            )
+            out[(subject_id, policy.family)] = grade.confidence
+            if subject.listing_id and subject.listing_id != subject_id:
+                out[(subject.listing_id, policy.family)] = grade.confidence
+            connection.execute(
+                """
+                insert into mart.cell_confidence
+                    (run_id, subject_id, semantic_type, metric, observation_id, confidence, policy_hash, input_hash, reason_codes)
+                values (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                on conflict on constraint cell_confidence_run_subject_metric_unique do nothing
+                """,
+                (
+                    run_id,
+                    subject_id,
+                    policy.semantic_type,
+                    policy.family,
+                    grade.observation_id,
+                    grade.confidence,
+                    grade.policy_hash or CONTINUOUS_CONFIDENCE_POLICY.content_sha256,
+                    grade.input_hash
+                    or canonical_sha256(
+                        {"family": policy.family, "subject_id": subject_id, "confidence": str(grade.confidence)}
+                    ),
+                    list(grade.reason_codes or (f"reason:{grade.reason}",)),
+                ),
+            )
+
+    obs_rows = connection.execute(
+        """
+        select ob.subject_id, o.semantic_type, o.observation_id, o.parser_version, p.normalized_payload
+        from raw.capture_obligations ob
+        join staging.capture_observation_obligations oo on oo.capture_obligation_id = ob.obligation_id
+        join staging.capture_normalized_observations o on o.observation_id = oo.observation_id
+        join staging.capture_observation_payloads p on p.observation_id = o.observation_id
+        where ob.run_id = %s and o.semantic_type in ('listing-identity', 'universe-membership', 'financial-fact')
+        order by ob.subject_id, o.semantic_type, o.observation_id
+        """,
+        (run_id,),
+    ).fetchall()
+    for subject_id_raw, semantic_type_raw, observation_id_raw, parser_version_raw, payload_raw in obs_rows:
+        subject_id = str(subject_id_raw)
+        semantic_type = str(semantic_type_raw)
+        observation_id = str(observation_id_raw)
+        payload = payload_raw or {}
+        if semantic_type in RELEASE_SEMANTICS:
+            cell_eval = evaluate_cell_confidence(
+                case_id=f"cell:{semantic_type}:{subject_id}",
+                definitional=True,
+                policy=CONTINUOUS_CONFIDENCE_POLICY,
+            )
+            out[(subject_id, semantic_type)] = cell_eval.confidence
+            if payload.get("listing_id"):
+                out[(str(payload["listing_id"]), semantic_type)] = cell_eval.confidence
+            connection.execute(
+                """
+                insert into mart.cell_confidence
+                    (run_id, subject_id, semantic_type, metric, observation_id, confidence, policy_hash, input_hash, reason_codes)
+                values (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                on conflict on constraint cell_confidence_run_subject_metric_unique do nothing
+                """,
+                (
+                    run_id,
+                    subject_id,
+                    semantic_type,
+                    semantic_type,
+                    observation_id,
+                    cell_eval.confidence,
+                    cell_eval.policy_hash,
+                    cell_eval.input_hash,
+                    list(cell_eval.reason_codes),
+                ),
+            )
+        elif semantic_type == "financial-fact" and (
+            parser_version_raw in PARSER_VERSION_HISTORY
+            or parser_version_raw == "production-topt-integration-parser:v1"
+        ):
+            for tce_field in _TCE_FIELDS:
+                if payload.get(tce_field) is None:
+                    continue
+                tce_policy = FamilyPolicy(
+                    family=tce_field,
+                    semantic_type="financial-fact",
+                    value_keys=(tce_field,),
+                    reconciliation=None,
+                    period_bound=False,
+                )
+                tce_origin = OriginValue(
+                    origin_id=SEC_COMPANY_FACTS_ORIGIN,
+                    source_id=SEC_COMPANY_FACTS_SOURCE,
+                    lineage=lineage_of(SEC_COMPANY_FACTS_ORIGIN),
+                    value=str(payload[tce_field]),
+                    observation_id=observation_id,
+                )
+                grade = classify_cell(
+                    tce_policy,
+                    subject_id,
+                    (tce_origin,),
+                    cutoff,
+                    outcome_mass_by_origin=outcome_mass_by_origin,
+                    oracle_outcomes=oracle_rows,
+                    subject_aliases=tuple(
+                        alias
+                        for alias in (subjects[subject_id].issuer_id if subject_id in subjects else None,)
+                        if alias is not None
+                    ),
+                )
+                out[(subject_id, tce_field)] = grade.confidence
+                if payload.get("listing_id"):
+                    out[(str(payload["listing_id"]), tce_field)] = grade.confidence
+                connection.execute(
+                    """
+                    insert into mart.cell_confidence
+                        (run_id, subject_id, semantic_type, metric, observation_id, confidence, policy_hash, input_hash, reason_codes)
+                    values (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    on conflict on constraint cell_confidence_run_subject_metric_unique do nothing
+                    """,
+                    (
+                        run_id,
+                        subject_id,
+                        "financial-fact",
+                        tce_field,
+                        observation_id,
+                        grade.confidence,
+                        grade.policy_hash or CONTINUOUS_CONFIDENCE_POLICY.content_sha256,
+                        grade.input_hash,
+                        list(grade.reason_codes),
+                    ),
+                )
+
+    persisted_rows = connection.execute(
+        "select subject_id, metric, confidence from mart.cell_confidence where run_id = %s",
+        (run_id,),
+    ).fetchall()
+    for subject_id_raw, metric_raw, conf_raw in persisted_rows:
+        out[(str(subject_id_raw), str(metric_raw))] = Decimal(str(conf_raw))
+    return out
 
 
 def summary_line(report: Mapping[str, Any]) -> str:

@@ -55,9 +55,11 @@ from typing import Any, NamedTuple
 
 import psycopg
 from factors.backtest.corporate_actions import SplitEvent
+from factors.confidence import evaluate_cell_confidence
 from factors.production_topt import OperatingBranch
 from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.concept_mapping import ConceptMappingRuleset
+from truealpha_contracts.confidence import ContinuousConfidencePolicy, SourceConfidenceEvidence
 from truealpha_contracts.datahub import CaptureWorkItem
 from truealpha_contracts.metrics import is_registered_input_key
 from truealpha_contracts.strategy import QuarterlyCutoffSchedule
@@ -84,6 +86,7 @@ from data_engine.datahub.production_topt.sec_financial_adapter import (
     company_facts_record_id,
     predecessor_ciks,
 )
+from data_engine.datahub.production_topt.source_registrations import source_reliability_prior
 from data_engine.datahub.resolve_coordinates import alias_of, is_uuid, parse_alias
 from data_engine.datahub.share_basis import (
     COVER,
@@ -272,13 +275,43 @@ def admit_input(cutoff_at: datetime, knowable_at: datetime) -> None:
 # -- stored inputs ----------------------------------------------------------------------
 
 _LAST_CLOSE_SQL = """
-select close, confidence, transaction_time
+select close, transaction_time
 from staging.market_prices_daily
 where symbol = %s and adjust = %s and close is not null
   and trading_date < %s and transaction_time < %s
 order by trading_date desc, recorded_at desc
 limit 1
 """
+
+
+_CONFIDENCE_POLICY = ContinuousConfidencePolicy()
+
+
+def _twelve_data_bar_confidence(symbol: str) -> Decimal:
+    safe_symbol = "".join(c if c.isalnum() or c in "._:/@+-" else "-" for c in symbol).strip("-") or "symbol"
+    return evaluate_cell_confidence(
+        case_id=f"history-close:{safe_symbol}",
+        sources=(
+            SourceConfidenceEvidence(
+                provider_id="origin:twelve-data:v1",
+                origin_group_id="lineage:twelve-data",
+                independence_weight=Decimal("1"),
+                reliability_prior=source_reliability_prior("origin:twelve-data:v1"),
+                successful_outcome_mass=Decimal("0"),
+                failed_outcome_mass=Decimal("0"),
+                freshness=Decimal("1"),
+                sample_conformance=Decimal("1"),
+                transport_integrity=Decimal("1"),
+                evidence_ids=(f"history-close:{safe_symbol}",),
+                reason_codes=("reason:single_origin",),
+            ),
+        ),
+        agreement=Decimal("1"),
+        semantic_mapping_quality=Decimal("1"),
+        lineage_completeness=Decimal("1"),
+        required_component_completeness=Decimal("1"),
+        policy=_CONFIDENCE_POLICY,
+    ).confidence
 
 
 def postgres_last_close(connection: psycopg.Connection[Any]) -> PriceReader:
@@ -292,7 +325,7 @@ def postgres_last_close(connection: psycopg.Connection[Any]) -> PriceReader:
         row = connection.execute(
             _LAST_CLOSE_SQL, (symbol, UNADJUSTED_BARS, cutoff_at.astimezone(UTC).date(), cutoff_at)
         ).fetchone()
-        return None if row is None else LastClose(Decimal(row[0]), Decimal(row[1]), row[2])
+        return None if row is None else LastClose(Decimal(row[0]), _twelve_data_bar_confidence(symbol), row[1])
 
     return last_close
 
@@ -640,11 +673,11 @@ def project_issuer_rows(
             payload = outcome.record.payload
             projected = financial_input_rows(
                 payload,
-                Decimal(str(outcome.confidence)),
+                None,
                 outcome.transaction_time,
                 knowable_at_of=vintage_knowable_at(payload),
             )
-            expected = financial_input_rows(payload, Decimal(str(outcome.confidence)), outcome.transaction_time)
+            expected = financial_input_rows(payload, None, outcome.transaction_time)
             undated += len(expected) - len(projected)
         else:
             no_outcome += 1

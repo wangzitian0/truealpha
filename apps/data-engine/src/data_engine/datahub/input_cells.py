@@ -17,15 +17,17 @@ from datetime import UTC, date, datetime, time
 from decimal import Decimal
 from typing import Any, NamedTuple
 
+from factors.confidence import evaluate_cell_confidence
+from truealpha_contracts.confidence import ContinuousConfidencePolicy, SourceConfidenceEvidence
 from truealpha_contracts.fiscal_period import encode_annual
 from truealpha_contracts.metrics import INPUT_KEY_ALIASES, METRICS, UnitFamily, input_key_for_metric
+
+from data_engine.datahub.production_topt.source_registrations import source_reliability_prior
 
 #: The input key of the captured close. It travels in the market-price payload, not in the financial one.
 LAST_CLOSE_KEY = "last_close"
 
-#: The cap on the confidence of a gross profit that the revenue proxy derived (#1255). Cause 1 of #1517
-#: removes it. Until then this is its one copy: the seed, the projector and the core all read the cell.
-REVENUE_PROXY_CONFIDENCE_CAP = Decimal("0.85")
+_CONFIDENCE_POLICY = ContinuousConfidencePolicy()
 
 # Every registered metric except `price` surfaces as the scalar half of its financial-fact input: one
 # cell with `fiscal_period` None, under the registry's own spelling (init.md rule 22, #770 finding 2).
@@ -139,30 +141,106 @@ def _is_revenue_proxy(payload: Mapping[str, Any]) -> bool:
     return bool(isinstance(entry, Mapping) and entry.get("is_revenue_proxy", False))
 
 
+def _evaluate_sec_field_confidence(key: str, payload: Mapping[str, Any]) -> Decimal:
+    """Evaluate single-source SEC field confidence via `evaluate_cell_confidence` (#1517 B3)."""
+    is_proxy = key == "gross_profit" and _is_revenue_proxy(payload)
+    if key == "headcount":
+        vintage = payload.get("vintage") or {}
+        producer = str((vintage.get("headcount") or {}).get("source") or "10k-extraction")
+        provider_id = f"origin:headcount:{producer}"
+        lineage = "sec-10k"
+    else:
+        provider_id = "origin:sec-company-facts:v1"
+        lineage = "sec-company-facts"
+    prior = source_reliability_prior(provider_id) or source_reliability_prior("origin:sec-company-facts:v1")
+    extra_codes = ("reason:single_origin", "confidence.revenue_proxy") if is_proxy else ("reason:single_origin",)
+    return evaluate_cell_confidence(
+        case_id=f"cell:{key}:{payload.get('listing_id') or payload.get('issuer_id') or 'sec'}",
+        sources=(
+            SourceConfidenceEvidence(
+                provider_id=provider_id,
+                origin_group_id=f"lineage:{lineage}",
+                independence_weight=Decimal("1"),
+                reliability_prior=prior,
+                successful_outcome_mass=Decimal("0"),
+                failed_outcome_mass=Decimal("0"),
+                freshness=Decimal("1"),
+                sample_conformance=Decimal("1"),
+                transport_integrity=Decimal("1"),
+                evidence_ids=(f"obs:{key}",),
+                reason_codes=("reason:single_origin",),
+            ),
+        ),
+        agreement=Decimal("1"),
+        semantic_mapping_quality=Decimal("0.85") if is_proxy else Decimal("1"),
+        lineage_completeness=Decimal("1"),
+        required_component_completeness=Decimal("1"),
+        extra_reason_codes=extra_codes,
+        policy=_CONFIDENCE_POLICY,
+    ).confidence
+
+
+def _evaluate_close_confidence(payload: Mapping[str, Any]) -> Decimal:
+    """Evaluate single-source close confidence via `evaluate_cell_confidence` (#1517 B3)."""
+    served_by = payload.get("served_by_failover")
+    origin_id = str(served_by) if served_by else "origin:yahoo:v1"
+    lineage = origin_id.split(":")[1] if origin_id.startswith("origin:") and origin_id.count(":") >= 2 else "yahoo"
+    prior = source_reliability_prior(origin_id) or source_reliability_prior("origin:yahoo:v1")
+    return evaluate_cell_confidence(
+        case_id=f"cell:close:{payload.get('listing_id') or 'listing'}",
+        sources=(
+            SourceConfidenceEvidence(
+                provider_id=origin_id,
+                origin_group_id=f"lineage:{lineage}",
+                independence_weight=Decimal("1"),
+                reliability_prior=prior,
+                successful_outcome_mass=Decimal("0"),
+                failed_outcome_mass=Decimal("0"),
+                freshness=Decimal("1"),
+                sample_conformance=Decimal("0.90") if served_by else Decimal("1"),
+                transport_integrity=Decimal("1"),
+                evidence_ids=("obs:close",),
+                reason_codes=("reason:served_by_failover" if served_by else "reason:single_origin",),
+            ),
+        ),
+        agreement=Decimal("1"),
+        semantic_mapping_quality=Decimal("1"),
+        lineage_completeness=Decimal("1"),
+        required_component_completeness=Decimal("1"),
+        extra_reason_codes=("reason:served_by_failover" if served_by else "reason:single_origin",),
+        policy=_CONFIDENCE_POLICY,
+    ).confidence
+
+
 def financial_input_rows(
     payload: Mapping[str, Any],
-    confidence: Decimal,
-    observed_at: datetime,
+    confidence: Decimal | None = None,
+    observed_at: datetime | None = None,
     *,
     knowable_at_of: KnowableAtOf | None = None,
+    confidence_by_key: Mapping[str, Decimal] | None = None,
 ) -> list[InputCell]:
     """The input cells that one financial-fact payload yields.
 
     The seed of the live tick, the historical projector (``datahub.strategy_history``) and the TOPT core
     snapshot (``production_topt.materialization``) call this function. All three get the same keys, the same
-    period tags, the same units and the same confidence rule.
-
-    The confidence of a gross profit that the revenue proxy derived is capped at
-    ``REVENUE_PROXY_CONFIDENCE_CAP``. Every other cell carries ``confidence``.
-
-    ``knowable_at_of(input_key, period_end)`` returns the filing time of one input. ``period_end`` is None
-    for a scalar input. The default is ``live_knowable_at``. The projector passes ``vintage_knowable_at``
-    instead: a None result drops the cell, because an input without a filing time has no knowable time and
-    nothing may invent one.
+    period tags, the same units and the same confidence rule (#1517 B3).
     """
+    if observed_at is None:
+        observed_at = datetime.now(UTC)
     stamp_of = live_knowable_at(payload, observed_at) if knowable_at_of is None else knowable_at_of
     currency = str(payload.get("currency", ""))
-    capped = min(confidence, REVENUE_PROXY_CONFIDENCE_CAP) if _is_revenue_proxy(payload) else confidence
+    is_proxy = _is_revenue_proxy(payload)
+
+    def _conf_for(key: str) -> Decimal:
+        if confidence_by_key is not None and key in confidence_by_key:
+            return confidence_by_key[key]
+        if confidence is not None:
+            if key == "gross_profit" and is_proxy:
+                return (confidence * Decimal("0.85")).quantize(Decimal("0.0001"))
+            return confidence
+        return _evaluate_sec_field_confidence(key, payload)
+
     cells: list[InputCell] = []
     for key in _STRATEGY_FINANCIAL_KEYS:
         value = payload.get(key)
@@ -172,35 +250,38 @@ def financial_input_rows(
                     key,
                     Decimal(str(value)),
                     unit_of(key, currency),
-                    capped if key == "gross_profit" else confidence,
+                    _conf_for(key),
                     stamp,
                     None,
                 )
             )
     for key, payload_key in _STRATEGY_PERIODIC_KEYS.items():
-        # The period tag mirrors staging's own encoding so `factors.base.peg` parses one shape wherever the
-        # series came from. Only the end date is known here, and an annual period's start is its end less a
-        # year. The factor re-checks the duration floor rather than trusting the tag. One encoder, shared with
-        # the factor that parses it (init.md Section 6): a tag built here and matched with a regex there is how
-        # a format drifts into an empty series instead of an error.
+        key_conf = _conf_for(key)
         for period_end, value in sorted((payload.get(payload_key) or {}).items()):
             if (stamp := stamp_of(key, period_end)) is None:
                 continue
             tag = encode_annual(date.fromisoformat(period_end))
-            cells.append(InputCell(key, Decimal(str(value)), unit_of(key, currency), confidence, stamp, tag))
+            cells.append(InputCell(key, Decimal(str(value)), unit_of(key, currency), key_conf, stamp, tag))
     return cells
 
 
-def last_close_cell(payload: Mapping[str, Any], confidence: Decimal, observed_at: datetime) -> InputCell | None:
+def last_close_cell(
+    payload: Mapping[str, Any],
+    confidence: Decimal | None = None,
+    observed_at: datetime | None = None,
+) -> InputCell | None:
     """The cell of the captured close of one market-price payload, or None when the payload holds none."""
     close = payload.get("close")
     if close is None:
         return None
+    if observed_at is None:
+        observed_at = datetime.now(UTC)
+    resolved_conf = confidence if confidence is not None else _evaluate_close_confidence(payload)
     return InputCell(
         LAST_CLOSE_KEY,
         Decimal(str(close)),
         unit_of(LAST_CLOSE_KEY, str(payload.get("currency", ""))),
-        confidence,
+        resolved_conf,
         observed_at,
         None,
     )

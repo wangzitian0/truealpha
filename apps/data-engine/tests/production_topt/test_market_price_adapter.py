@@ -56,7 +56,7 @@ def test_success_is_decimal_and_deterministic() -> None:
     adapter = _adapter(item, lambda symbol, cutoff: _quote(date(2026, 3, 31), "150.25"))
     result = adapter.fetch(item)
     assert isinstance(result, FetchSuccess)
-    assert result.confidence == Decimal("0.85")
+    assert result.confidence is None
     # Same inputs → identical normalized identity.
     assert adapter.fetch(item).normalized_sha256 == result.normalized_sha256
 
@@ -164,24 +164,6 @@ def test_last_settled_session_date_never_returns_a_weekend() -> None:
     assert last_settled_session_date(sunday_evening).isoformat() == "2026-08-21"
     monday_pre_market = datetime(2026, 8, 24, 11, 0, tzinfo=UTC)  # 07:00 ET Monday
     assert last_settled_session_date(monday_pre_market).isoformat() == "2026-08-21"
-
-
-def test_price_confidence_grades_by_session_lag() -> None:
-    """#641 D6: price confidence is a grade, not a constant — a bar that lags
-    the settled session says so."""
-    from datetime import date as _date
-    from decimal import Decimal as _D
-
-    from data_engine.datahub.production_topt.market_price_adapter import graded_price_confidence
-
-    monday, tuesday = _date(2026, 8, 17), _date(2026, 8, 18)
-    assert graded_price_confidence(as_of=tuesday, expected_session=tuesday) == _D("0.85")
-    assert graded_price_confidence(as_of=monday, expected_session=tuesday) == _D("0.75")
-    # Friday bar against Monday's settled session: the weekend is not a lag.
-    friday, next_monday = _date(2026, 8, 14), _date(2026, 8, 17)
-    assert graded_price_confidence(as_of=friday, expected_session=next_monday) == _D("0.75")
-    # Deep staleness floors at 0.50 rather than going negative.
-    assert graded_price_confidence(as_of=_date(2026, 7, 1), expected_session=tuesday) == _D("0.50")
 
 
 def test_success_payload_carries_the_full_ohlcv_bar_from_both_origins() -> None:
@@ -327,7 +309,6 @@ def _twelve_data(fetch) -> CorroboratingOrigin:
         parser_version=twelve.PARSER_VERSION,
         mapping_version=twelve.MAPPING_VERSION,
         value_key=twelve.VALUE_KEY,
-        confidence=Decimal("0.85"),
         fetch=fetch,
     )
 
@@ -346,7 +327,6 @@ def _moomoo_kline(fetch) -> CorroboratingOrigin:
         parser_version=MOOMOO_KLINE_PARSER_VERSION,
         mapping_version=MOOMOO_KLINE_MAPPING_VERSION,
         value_key=MOOMOO_KLINE_VALUE_KEY,
-        confidence=Decimal("0.80"),
         fetch=fetch,
         raw_source=DataSource.MOOMOO,
     )
@@ -433,7 +413,7 @@ def test_an_unavailable_primary_is_served_by_twelve_data_graded_one_step_lower(c
     )
     assert served.record.payload["close"] == "150.30"
     assert served.record.payload["served_by_failover"] == twelve.ORIGIN
-    assert served.confidence == Decimal("0.75")
+    assert served.confidence is None
     assert served.transaction_time == datetime(2026, 3, 31, tzinfo=UTC)
     assert served.corroborations == ()
     assert twelve_fetch.calls == 1, "the failover origin is asked once, not once per primary retry"
@@ -478,14 +458,14 @@ def test_a_null_primary_fails_over_in_the_fusion_policy_order() -> None:
     served = sink.calls[0]["success"]
     assert served.served_by_failover == "twelve-data"
     assert [corroboration.origin for corroboration in served.corroborations] == ["moomoo-kline"]
-    assert served.corroborations[0].confidence == Decimal("0.80")
+    assert served.corroborations[0].confidence is None
     assert "served_by_failover" not in served.corroborations[0].record.payload
     assert (twelve_fetch.calls, moomoo_fetch.calls) == (1, 1)
 
 
 def test_the_next_origin_serves_when_the_second_has_nothing() -> None:
-    """Twelve Data has no settled close; moomoo does. moomoo serves at 0.70 (its 0.80 one
-    grade down), and Twelve Data, already asked, is not asked again for a corroboration."""
+    """Twelve Data has no settled close; moomoo does. moomoo serves with no adapter-stamped
+    confidence, and Twelve Data, already asked, is not asked again for a corroboration."""
     from truealpha_contracts.models import DataSource
 
     item = _work_item("e" * 64)
@@ -497,7 +477,7 @@ def test_the_next_origin_serves_when_the_second_has_nothing() -> None:
     served = sink.calls[0]["success"]
     assert served.served_by_failover == "moomoo-kline"
     assert served.raw.source is DataSource.MOOMOO
-    assert served.confidence == Decimal("0.70")
+    assert served.confidence is None
     assert served.corroborations == ()
     assert (twelve_fetch.calls, moomoo_fetch.calls) == (1, 1)
 
@@ -787,12 +767,9 @@ def test_last_settled_session_and_confidence_honor_exchange_holidays() -> None:
     Black Friday 2026-11-27 17:00 ET (early close session) -> settles to 2026-11-27.
     Price confidence does not penalize market holidays as lag.
     """
-    from datetime import date as _date
-    from decimal import Decimal as _D
     from zoneinfo import ZoneInfo as _ZI
 
     from data_engine.datahub.production_topt.market_price_adapter import (
-        graded_price_confidence,
         last_settled_session_date,
     )
 
@@ -805,13 +782,6 @@ def test_last_settled_session_and_confidence_honor_exchange_holidays() -> None:
     # 2. Black Friday evening 17:00 ET settles to Friday 2026-11-27
     black_friday_evening = datetime(2026, 11, 27, 17, 0, tzinfo=ny)
     assert last_settled_session_date(black_friday_evening).isoformat() == "2026-11-27"
-
-    # 3. Confidence does not penalize Thanksgiving holiday as an extra lag session
-    wednesday = _date(2026, 11, 25)
-    friday = _date(2026, 11, 27)
-    # Only 1 trading session elapsed between Wednesday close and Friday close (Thursday was closed)
-    # 0.85 - 0.10 * 1 = 0.75 (previously was incorrectly penalized as 2 sessions -> 0.65)
-    assert graded_price_confidence(as_of=wednesday, expected_session=friday) == _D("0.75")
 
 
 def test_build_route_defensively_ignores_drill_without_arm() -> None:

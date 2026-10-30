@@ -650,6 +650,5 @@ def twelve_data_origin(*, connection: Any = None) -> CorroboratingOrigin | None:
         parser_version=PARSER_VERSION,
         mapping_version=MAPPING_VERSION,
         value_key=VALUE_KEY,
-        confidence=Decimal("0.85"),
         fetch=TwelveDataQuoteFetcher(settings.twelve_data_api_key, connection=connection),
     )

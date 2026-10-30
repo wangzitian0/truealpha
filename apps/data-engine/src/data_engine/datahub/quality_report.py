@@ -474,7 +474,6 @@ def build_report(
                o.observation_id,
                p.normalized_payload,
                meta.freshness_state,
-               o.confidence,
                f.object_uri,
                f.payload_sha256,
                f.byte_length,
@@ -500,6 +499,9 @@ def build_report(
         (run_id,),
     ).fetchall()
 
+    from data_engine.datahub.confidence_report import evaluate_and_persist_run_cell_confidence
+
+    cell_confidences = evaluate_and_persist_run_cell_confidence(conn, run_id)
     pointers = _PointerDereferencer(object_store)
     cells: dict[str, _Cell] = {}
     plausibility: dict[str, dict[str, Any]] = {}
@@ -513,7 +515,6 @@ def build_report(
         observation_id,
         payload,
         freshness_state,
-        confidence,
         object_uri,
         payload_sha256,
         byte_length,
@@ -525,8 +526,31 @@ def build_report(
         if observation_id is None:
             continue
         cell.fresh = cell.fresh or freshness_state == "fresh"
-        if confidence is not None:
-            cell.confidence = confidence if cell.confidence is None else max(cell.confidence, confidence)
+        obs_conf: Decimal | None = None
+        if semantic_type == "market-price":
+            obs_conf = cell_confidences.get((str(obligation_subject), "close"))
+        elif semantic_type in ("listing-identity", "universe-membership"):
+            obs_conf = cell_confidences.get((str(obligation_subject), semantic_type))
+        elif semantic_type == "financial-fact":
+            fin_confs = [
+                conf
+                for (subj, metric), conf in cell_confidences.items()
+                if subj == str(obligation_subject)
+                and metric
+                in (
+                    "gross_profit",
+                    "total_assets",
+                    "shares_outstanding",
+                    "revenue",
+                    "net_income",
+                    "headcount",
+                    "pre_provision_profit",
+                )
+                and conf > Decimal("0")
+            ]
+            obs_conf = min(fin_confs) if fin_confs else Decimal("0")
+        if obs_conf is not None:
+            cell.confidence = obs_conf if cell.confidence is None else max(cell.confidence, obs_conf)
         if not cell.available:
             cell.available = _observation_usable(semantic_type, payload)
         if cell.available:

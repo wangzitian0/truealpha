@@ -14,7 +14,6 @@ import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date, datetime
-from decimal import Decimal
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
@@ -108,7 +107,6 @@ class ReleaseDerivedAdapter:
                 record_id=f"{record.semantic_type}:{record.subject_id}",
             ),
             normalized_sha256=canonical_sha256(record.payload),
-            confidence=Decimal("1.0"),  # a frozen release projection is exact
             valid_from=record.knowable_at.date(),
             transaction_time=record.knowable_at,
             record=NormalizedRecord(

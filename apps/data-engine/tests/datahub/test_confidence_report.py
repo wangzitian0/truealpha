@@ -37,7 +37,6 @@ from data_engine.datahub.confidence_report import (
     content_address,
     family_policy,
     persist,
-    stored_confidence_metadata,
 )
 from data_engine.datahub.production_topt import source_registrations as registry
 from data_engine.datahub.quality_report import (
@@ -972,29 +971,8 @@ def test_the_compile_time_is_not_part_of_the_content_address() -> None:
     }
     again = {**first, "generated_at": "2026-09-16T00:45:00+00:00"}
     assert content_address(again) == content_address(first)
-    assert content_address({k: v for k, v in first.items() if k != "generated_at"}) == content_address(first)
+    assert content_address({k: v for k in first if k != "generated_at" for v in (first[k],)}) == content_address(first)
     assert content_address({**again, "families": {"close": {"cells": 20}}}) != content_address(first)
-
-
-# -- metadata: the stored confidence column is a constant and is not used ---------------------
-
-
-def test_stored_confidence_is_reported_as_measured_and_marked_unused() -> None:
-    rows = [
-        ("market-price", Decimal("0.85"), 204),
-        ("financial-fact", Decimal("0.92"), 102),
-        ("listing-identity", Decimal("1.0"), 102),
-    ]
-    metadata = stored_confidence_metadata(rows)
-    assert metadata["used_for_bands"] is False
-    assert metadata["values_by_semantic"] == {
-        "financial-fact": {"0.92": 102},
-        "listing-identity": {"1.0": 102},
-        "market-price": {"0.85": 204},
-    }
-    assert metadata["constant_per_semantic"] is True
-    varied = stored_confidence_metadata(rows + [("market-price", Decimal("0.75"), 3)])
-    assert varied["constant_per_semantic"] is False
 
 
 # -- the deployed wiring ---------------------------------------------------------------------------

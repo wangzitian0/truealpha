@@ -315,8 +315,9 @@ def test_a_refused_share_count_lowers_the_recorded_confidence() -> None:
     stale = _fetched("2010-01-27", "2010-02-03", 469280842)
     fresh = _fetched("2026-01-31", "2026-02-10", 1000)
     assert isinstance(stale, FetchSuccess) and isinstance(fresh, FetchSuccess)
-    assert stale.confidence < fresh.confidence
+    assert stale.confidence is None and fresh.confidence is None
     assert stale.record.payload["shares_outstanding"] is None
+    assert fresh.record.payload["shares_outstanding"] == "1000"
     assert stale.record.payload["shares_period_end"] == "2010-01-27"
 
 
@@ -395,7 +396,7 @@ def test_a_payload_with_no_eligible_fact_is_captured_with_nulls() -> None:
     assert result.record is not None
     assert result.record.payload["gross_profit"] is None
     assert result.record.payload["total_assets"] is None
-    assert result.confidence == Decimal("0.50")
+    assert result.confidence is None
 
 
 def _bundle(**overrides: object) -> FinancialFactsBundle:
@@ -417,7 +418,7 @@ def test_adapter_success_carries_the_identity_and_branch() -> None:
     adapter = SecFinancialFactAdapter({item.work_item_id: _target(320193)}, lambda cik, cutoff, branch: _bundle())
     result = adapter.fetch(item)
     assert isinstance(result, FetchSuccess)
-    assert result.confidence == Decimal("0.92")  # all three core fields present
+    assert result.confidence is None
     assert result.record is not None
     assert result.record.payload["issuer_id"] == "issuer:lei:X"
     assert result.record.payload["operating_branch"] == "non_financial"
@@ -1566,23 +1567,6 @@ def test_adapter_fetch_merges_holdco_and_predecessor_when_documents_present() ->
     assert outcome_unsigned.record.payload["total_assets"] is None
 
 
-def test_period_mismatch_yields_zero_confidence() -> None:
-    # Backstop (#1108). The adapter drops a stale operating metric (#1114), so this payload
-    # cannot leave the adapter. If one still reached `_confidence` with operating_period_end
-    # and revenue_period_end apart, confidence must be Decimal("0.00").
-    payload = {
-        "operating_period_end": "2018-09-29",
-        "revenue_period_end": "2025-09-27",
-        "gross_profit": "101839000000",
-        "revenue": "391035000000",
-        "total_assets": "352583000000",
-        "shares_outstanding": "15115822000",
-    }
-    from data_engine.datahub.production_topt.sec_financial_adapter import _confidence
-
-    assert _confidence(payload) == Decimal("0.00")
-
-
 @pytest.mark.parametrize("branch", [OperatingBranch.NON_FINANCIAL, OperatingBranch.FINANCIAL])
 def test_a_period_mismatch_never_yields_a_positive_confidence_operating_metric(branch: OperatingBranch) -> None:
     """The adapter output holds no operating metric when its period differs from the revenue period."""
@@ -1605,10 +1589,9 @@ def test_a_period_mismatch_never_yields_a_positive_confidence_operating_metric(b
     assert payload["operating_period_stale"] is True
     assert payload["stale_operating_period_end"] == "2018-09-29"
     assert payload["revenue_period_end"] == "2025-09-27"
-    # The other inputs stay: only the stale metric is dropped. Assets and shares give 0.80.
     assert payload["revenue"] == "391035000000"
     assert payload["total_assets"] == "500"
-    assert result.confidence == Decimal("0.80")
+    assert result.confidence is None
     assert "gross_profit" not in payload["vintage"]
 
 
@@ -1624,7 +1607,7 @@ def test_matching_periods_keep_the_operating_metric_and_add_no_stale_marker() ->
     assert payload["operating_period_end"] == "2025-12-31"
     assert "operating_period_stale" not in payload
     assert "stale_operating_period_end" not in payload
-    assert result.confidence == Decimal("0.92")
+    assert result.confidence is None
 
 
 def _bkng_shaped_facts(*, gross_profit_end: str, gross_profit_filed: str) -> dict:
@@ -1660,12 +1643,16 @@ def _gppe_for_facts(facts: dict) -> tuple[FetchSuccess, ToptGppeResult]:
     cutoff = datetime(2026, 4, 2, tzinfo=UTC)
     observation_ids = tuple(f"normalized-observation:{character * 64}" for character in "1234")
 
+    from data_engine.datahub.input_cells import _evaluate_sec_field_confidence
+
+    sec_conf = _evaluate_sec_field_confidence("gross_profit", result.record.payload)
+
     def metric(name: str, value: Decimal | None) -> ToptMetricInput:
         return ToptMetricInput(
             input_id=observation_ids[0],
             metric=name,
             value=value,
-            confidence=result.confidence,
+            confidence=sec_conf,
             knowable_at=cutoff - timedelta(days=1),
             freshness=MetricFreshness.FRESH,
             availability=MetricAvailability.AVAILABLE if value is not None else MetricAvailability.UNAVAILABLE,
@@ -1687,7 +1674,7 @@ def _gppe_for_facts(facts: dict) -> tuple[FetchSuccess, ToptGppeResult]:
         cell_inputs=tuple(
             ToptCellQualityInput(
                 input_id=input_id,
-                confidence=result.confidence,
+                confidence=sec_conf,
                 knowable_at=cutoff - timedelta(days=1),
                 freshness=MetricFreshness.FRESH,
             )
@@ -1742,7 +1729,7 @@ def test_a_gross_profit_older_than_the_revenue_period_makes_gppe_unavailable_wit
     assert payload["gross_profit"] is None
     assert payload["operating_period_stale"] is True
     assert payload["stale_operating_period_end"] == "2017-12-31"
-    assert result.confidence > Decimal("0")
+    assert result.confidence is None
     assert gppe.availability is ToptCoreAvailability.UNAVAILABLE
     assert gppe.reason_codes == (ToptCoreReasonCode.MISSING_GROSS_PROFIT,)
 

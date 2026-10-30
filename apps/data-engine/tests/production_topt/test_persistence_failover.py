@@ -302,7 +302,6 @@ def _routes(
             parser_version="twelve-data-parser:v1",
             mapping_version="twelve-data-map:v1",
             value_key="price",
-            confidence=Decimal("0.85"),
             fetch=lambda symbol, cutoff: _quote("40"),
         )
         if outage is None
@@ -313,7 +312,6 @@ def _routes(
             parser_version="twelve-data-parser:v3",
             mapping_version="twelve-data-map:v3",
             value_key="close",
-            confidence=Decimal("0.85"),
             fetch=origin_fetch(outage.twelve_data),
         )
     )
@@ -325,7 +323,6 @@ def _routes(
         parser_version=MOOMOO_KLINE_PARSER_VERSION,
         mapping_version="moomoo-kline-map:v1",
         value_key="close",
-        confidence=Decimal("0.80"),
         fetch=origin_fetch(outage.moomoo if outage is not None else True),
         raw_source=DataSource.MOOMOO,
     )
@@ -333,7 +330,6 @@ def _routes(
         origin="moomoo-financials",
         parser_version=MOOMOO_FINANCIALS_PARSER_VERSION,
         mapping_version="moomoo-financials-map:v1",
-        confidence=Decimal("0.75"),
         fetch=lambda ticker, cutoff: _moomoo_statements(ticker),
     )
     price = MarketPriceAdapter(
@@ -880,7 +876,12 @@ def test_a_cell_the_primary_cannot_serve_is_served_by_the_next_registered_origin
     victim_listing_id = plan.coordinates[victim_listing][2]
     member = next(member for member in snapshot.members if member.listing_id == victim_listing_id)
     assert member.market_price.value == Decimal(_FAILOVER_CLOSE)
-    assert member.market_price.confidence == Decimal("0.75")
+    cell_conf = connection.execute(
+        "select confidence from mart.cell_confidence where run_id = %s and subject_id = %s and metric = 'close'",
+        (plan.run_id, victim_listing),
+    ).fetchone()[0]
+    assert Decimal("0.5") < cell_conf < Decimal("1.0")
+    assert member.market_price.confidence == cell_conf
     bound = connection.execute(
         """
         select o.parser_version, o.source_vintage_id, p.normalized_payload->>'served_by_failover'
@@ -902,7 +903,7 @@ def test_a_cell_the_primary_cannot_serve_is_served_by_the_next_registered_origin
         """,
         (plan.run_id, victim_listing),
     ).fetchone()
-    assert meta == ("twelve-data-parser:v3", Decimal("0.75"), ["served_by_failover", "transient_network"])
+    assert meta == ("twelve-data-parser:v3", None, ["served_by_failover", "transient_network"])
 
     from data_engine.datahub.strategy_bridge import seed_strategy_inputs_from_capture
 
@@ -917,7 +918,7 @@ def test_a_cell_the_primary_cannot_serve_is_served_by_the_next_registered_origin
         (CUTOFF,),
     ).fetchall()
     by_issuer = {issuer: (value, confidence) for issuer, value, confidence in closes}
-    assert by_issuer[victim_issuer] == (Decimal(_FAILOVER_CLOSE), Decimal("0.75"))
+    assert by_issuer[victim_issuer] == (Decimal(_FAILOVER_CLOSE), cell_conf)
     assert len(by_issuer) == len({c[0] for c in plan.coordinates.values()})
 
 

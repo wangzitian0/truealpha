@@ -139,31 +139,6 @@ class Provenance(_Frozen):
         return self
 
 
-class ConfidenceRule(StrEnum):
-    #: The selected observation's own confidence (fusion carries it; the node does not set it).
-    AS_CAPTURED = "as-captured"
-    #: A composite never exceeds the minimum confidence it consumed (init.md §7).
-    MINIMUM_CONSUMED = "minimum-consumed"
-    #: A definition parameter is a declaration, not a measurement.
-    DEFINITIONAL = "definitional"
-
-
-class ConfidenceBand(_Frozen):
-    """How a node's confidence is formed and which confidence-report family bands it."""
-
-    rule: ConfidenceRule
-    #: The `data_engine.datahub.confidence_report` family an input is banded under (its
-    #: high/medium/low/missing band). None for a derived node, whose band is the worst band it
-    #: consumed, and for a parameter, which is declared rather than measured.
-    family: str | None = None
-
-    @model_validator(mode="after")
-    def _family(self) -> Self:
-        if (self.rule is ConfidenceRule.AS_CAPTURED) != (self.family is not None):
-            raise ValueError("exactly the captured inputs name a confidence-report family")
-        return self
-
-
 class MetricNode(_Frozen):
     node_id: UUID
     key: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
@@ -176,7 +151,6 @@ class MetricNode(_Frozen):
     #: One policy per applicable class. A concept declares none.
     sign_policy: Mapping[IssuerClass, SignPolicy]
     provenance: Provenance
-    confidence: ConfidenceBand | None
     aliases: tuple[NodeAlias, ...] = ()
 
     @field_serializer("applicability")
@@ -186,13 +160,13 @@ class MetricNode(_Frozen):
     @model_validator(mode="after")
     def _consistent(self) -> Self:
         if self.kind is NodeKind.CONCEPT:
-            if self.unit is not None or self.sign_policy or self.confidence is not None:
-                raise ValueError(f"concept {self.key} carries no value, so no unit, sign policy or confidence")
+            if self.unit is not None or self.sign_policy:
+                raise ValueError(f"concept {self.key} carries no value, so no unit or sign policy")
             if self.period is not PeriodSemantics.NONE:
                 raise ValueError(f"concept {self.key} describes no period")
         else:
-            if self.unit is None or self.confidence is None:
-                raise ValueError(f"node {self.key} must declare its unit and confidence band")
+            if self.unit is None:
+                raise ValueError(f"node {self.key} must declare its unit")
             if set(self.sign_policy) != set(self.applicability):
                 raise ValueError(f"node {self.key} must declare a sign policy for exactly its applicable classes")
         if AliasKind.KEY in {alias.kind for alias in self.aliases}:
