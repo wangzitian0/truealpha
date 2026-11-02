@@ -86,6 +86,15 @@ def _find(facts: Sequence[Fact], entity_id: str, metric: str) -> Fact | None:
     return matches[0] if matches else None
 
 
+def _resolve_leaf_fact(facts: Sequence[Fact], entity_id: str, metric: str) -> Fact | None:
+    fact = _find(facts, entity_id, metric)
+    if fact is None and metric == "pre_provision_profit":
+        return _find(facts, entity_id, _GROSS_PROFIT)
+    if fact is None and metric == "bank_net_revenue":
+        return _find(facts, entity_id, "pre_provision_profit") or _find(facts, entity_id, _GROSS_PROFIT)
+    return fact
+
+
 @factor(
     "gross_profit_per_employee",
     kind="base",
@@ -93,6 +102,8 @@ def _find(facts: Sequence[Fact], entity_id: str, metric: str) -> Fact | None:
     inputs=(
         "gross_profit",
         "pre_provision_profit",
+        "bank_net_revenue",
+        "financial_returns",
         "total_assets",
         "employees_total",
         "stockholders_equity",
@@ -129,11 +140,11 @@ def gross_profit_per_employee(
             tree_inputs[node.key] = risk_free_rate
             continue
         metric = metric_of(node)
-        fact = _find(facts, entity_id, metric)
-        if fact is None and metric == "pre_provision_profit":
-            fact = _find(facts, entity_id, _GROSS_PROFIT)
+        fact = _resolve_leaf_fact(facts, entity_id, metric)
         tree_inputs[node.key] = None
         if fact is None or fact.value is None:
+            if node.default_when_missing is not None:
+                continue
             flag = _MISSING_LEAF_FLAGS.get(metric, f"missing_{metric}")
             if flag not in flags:
                 flags.append(flag)

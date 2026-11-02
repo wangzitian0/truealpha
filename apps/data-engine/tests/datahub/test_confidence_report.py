@@ -948,6 +948,29 @@ def test_close_origins_are_the_registrations_origins_and_the_deployed_policy() -
     assert set(cr.CLOSE_ORIGINS.values()) <= set(registry.source_by_parser().values())
 
 
+def test_family_applicability_filters_pre_provision_profit_to_financial_and_gross_profit_to_non_bank() -> None:
+    """#1518: FamilyPolicy applicability derives from FOREST.snapshot_field_nodes(), so pre_provision_profit
+    grades only FINANCIAL subjects and gross_profit grades only NON_FINANCIAL and INSURANCE subjects."""
+    from factors.forest import IssuerClass
+
+    assert family_policy("pre_provision_profit").applicability == frozenset({IssuerClass.FINANCIAL})
+    assert family_policy("gross_profit").applicability == frozenset({IssuerClass.NON_FINANCIAL, IssuerClass.INSURANCE})
+    assert family_policy("revenue").applicability == frozenset(IssuerClass)
+    assert "bank_net_revenue" in cr._SINGLE_ORIGIN_FINANCIAL_FIELDS
+    assert "financial_assets" in cr._SINGLE_ORIGIN_FINANCIAL_FIELDS
+    assert "financial_returns" in cr._SINGLE_ORIGIN_FINANCIAL_FIELDS
+
+    bank_subj = cr._Subject(operating_branch=IssuerClass.FINANCIAL)
+    non_bank_subj = cr._Subject(operating_branch=IssuerClass.NON_FINANCIAL)
+    insurer_subj = cr._Subject(operating_branch=IssuerClass.INSURANCE)
+    assert cr._subject_applies(bank_subj, family_policy("pre_provision_profit"))
+    assert not cr._subject_applies(non_bank_subj, family_policy("pre_provision_profit"))
+    assert not cr._subject_applies(insurer_subj, family_policy("pre_provision_profit"))
+    assert not cr._subject_applies(bank_subj, family_policy("gross_profit"))
+    assert cr._subject_applies(non_bank_subj, family_policy("gross_profit"))
+    assert cr._subject_applies(insurer_subj, family_policy("gross_profit"))
+
+
 # -- content addressing --------------------------------------------------------------------------
 
 

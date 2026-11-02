@@ -102,9 +102,17 @@ def operating_numerator_node(tree: MetricTree, issuer_class: IssuerClass, *, for
         raise ValueError(f"tree {tree.key} {tree.version}: the capital-adjusted node is not numerator minus charge")
     key = capital_adjusted.operands[issuer_class][0]
     while (chain := tree.decomposition_of(key)) is not None:
-        if chain.formula_id != "identity":
-            raise ValueError(f"tree {tree.key} {tree.version}: the numerator {key} is not a captured input")
-        (key,) = chain.operands[issuer_class]
+        if chain.formula_id == "identity":
+            (key,) = chain.operands[issuer_class]
+            continue
+        if chain.formula_id == "sum":
+            required = [
+                operand for operand in chain.operands[issuer_class] if forest.node(operand).default_when_missing is None
+            ]
+            if len(required) == 1:
+                (key,) = required
+                continue
+        raise ValueError(f"tree {tree.key} {tree.version}: the numerator {key} is not a captured input")
     return forest.node(key)
 
 

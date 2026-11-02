@@ -61,6 +61,8 @@
       "inputs": [
         "gross_profit",
         "pre_provision_profit",
+        "bank_net_revenue",
+        "financial_returns",
         "total_assets",
         "employees_total",
         "stockholders_equity",

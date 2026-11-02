@@ -223,10 +223,11 @@ def test_f2_json_loaded_tree_materializes_node_values_without_ddl_or_python_edit
         evidence_by_listing={"listing:xnas:nvda": InputEvidenceStatus.VERIFIED},
         forest=extended_forest,
     )
-    # 4 derived nodes from GPPE_V0_TREE + 1 derived node from custom_tree = 5 rows
-    assert count == 5
+    # 4 derived nodes from GPPE_V0_TREE + 4 NON_FINANCIAL derived nodes from GPPE_OPERATING_FINANCIAL_TREE + 1 from custom_tree = 9 rows
+    assert count == 9
     by_key = {row[3]: row for row in conn.inserted_rows}
     assert "gppe_uniform_charge_v0" in by_key
+    assert "gppe_operating_financial_v1" in by_key
     assert "gppe_raw" in by_key
     raw_row = by_key["gppe_raw"]
     assert raw_row[2] == UUID("11111111-2222-5333-8444-555555555555")
@@ -459,3 +460,102 @@ def test_d6_lookahead_fact_raises_lookahead_error_at_gateway_and_evaluator() -> 
             cutoff_at=CUTOFF,
             risk_free_rate=Decimal("0.05"),
         )
+
+
+def test_subtree_scoped_confidence_isolates_headcount_low_confidence_to_gppe_roots() -> None:
+    """Intermediate nodes that do not consume headcount keep their consumed XBRL confidence (0.75),
+    while GPPE roots that divide by headcount inherit min(0.75, 0.50) = 0.50."""
+    factor_input = _sample_factor_input()
+    factor_input = factor_input.model_copy(
+        update={
+            "cell_inputs": tuple(
+                cell.model_copy(update={"confidence": Decimal("0.75")}) for cell in factor_input.cell_inputs
+            ),
+            "gross_profit": factor_input.gross_profit.model_copy(update={"confidence": Decimal("0.75")}),
+            "total_assets": factor_input.total_assets.model_copy(update={"confidence": Decimal("0.75")}),
+            "headcount": factor_input.headcount.model_copy(update={"confidence": Decimal("0.50")}),
+        }
+    )
+    conn = _FakeNodeConnection()
+    materialize_metric_node_values(
+        conn,  # type: ignore[arg-type]
+        factor_inputs=(factor_input,),
+        gppe_definition=GppeV0Definition(risk_free_rate=Decimal("0.05")),
+        tier_definition_id="strategy-definition:" + "e" * 64,
+        periods_by_listing={"listing:xnas:nvda": (date(2025, 12, 31), date(2025, 12, 31), date(2025, 12, 31))},
+        evidence_by_listing={"listing:xnas:nvda": InputEvidenceStatus.VERIFIED},
+    )
+    by_tree_and_key = {(row[14], row[3]): row[12] for row in conn.inserted_rows}
+    assert by_tree_and_key[("production-topt-v0.2.0", "operating_gross_profit")] == Decimal("0.75")
+    assert by_tree_and_key[("production-topt-v0.2.0", "capital_charge")] == Decimal("0.75")
+    assert by_tree_and_key[("production-topt-v0.2.0", "capital_adjusted_gross_profit")] == Decimal("0.75")
+    assert by_tree_and_key[("production-topt-v0.2.0", "gppe_uniform_charge_v0")] == Decimal("0.50")
+    assert by_tree_and_key[("1.0.0", "total_gross_return")] == Decimal("0.75")
+    assert by_tree_and_key[("1.0.0", "capital_adjusted_operating_financial")] == Decimal("0.75")
+    assert by_tree_and_key[("1.0.0", "gppe_operating_financial_v1")] == Decimal("0.50")
+
+
+def test_financial_issuer_under_gppe_operating_financial_tree_only_materializes_reachable_derived_nodes() -> None:
+    """Under GPPE_OPERATING_FINANCIAL_TREE, a FINANCIAL issuer reaches capital_charge_tce rather than
+    capital_charge; capital_charge (though globally _EVERY_CLASS) must not be materialized as unavailable."""
+    from data_engine.datahub.production_topt.metric_node_values import _materialize_issuer_tree
+    from factors.forest import GPPE_OPERATING_FINANCIAL_TREE
+    from truealpha_contracts.execution import FactorValidationStatus
+
+    base = _sample_factor_input()
+    obs_id = base.observation_ids[0]
+
+    def _m(metric: str, val: str) -> ToptMetricInput:
+        return ToptMetricInput(
+            input_id=obs_id,
+            metric=metric,
+            value=Decimal(val),
+            confidence=Decimal("0.85"),
+            knowable_at=KNOWN,
+            freshness=MetricFreshness.FRESH,
+            availability=MetricAvailability.AVAILABLE,
+        )
+
+    bank_input = base.model_copy(
+        update={
+            "issuer_id": "issuer:jpm",
+            "instrument_id": "security:jpm",
+            "listing_id": "listing:xnys:jpm",
+            "operating_branch": OperatingBranch.FINANCIAL,
+            "gross_profit": None,
+            "pre_provision_profit": _m("pre_provision_profit", "86807000000"),
+            "bank_net_revenue": _m("bank_net_revenue", "150000000000"),
+            "stockholders_equity": _m("stockholders_equity", "362438000000"),
+            "preferred_stock_value": _m("preferred_stock_value", "20045000000"),
+            "goodwill": _m("goodwill", "52731000000"),
+            "intangible_assets_net_excluding_goodwill": _m("intangible_assets_net_excluding_goodwill", "2600000000"),
+        }
+    )
+    conn = _FakeNodeConnection()
+    _materialize_issuer_tree(
+        conn,  # type: ignore[arg-type]
+        forest=FOREST,
+        tree=GPPE_OPERATING_FINANCIAL_TREE,
+        tree_sha256=FOREST.tree_sha256(GPPE_OPERATING_FINANCIAL_TREE),
+        factor_input=bank_input,
+        issuer_class=IssuerClass.FINANCIAL,
+        gppe_definition=GppeV0Definition(risk_free_rate=Decimal("0.05")),
+        financial_payload={},
+        periods=(date(2025, 12, 31), date(2025, 12, 31), date(2025, 12, 31)),
+        freshness=MetricFreshness.FRESH,
+        base_confidence=Decimal("0.85"),
+        source_evidence=InputEvidenceStatus.VERIFIED,
+        validation_status=FactorValidationStatus.ACCEPTED,
+    )
+    materialized_keys = {row[3] for row in conn.inserted_rows}
+    assert "capital_charge" not in materialized_keys
+    assert "total_gross_return" not in materialized_keys
+    assert materialized_keys == {
+        "tangible_deductions",
+        "tangible_common_equity",
+        "charged_tangible_common_equity",
+        "capital_charge_tce",
+        "capital_adjusted_operating_financial",
+        "gppe_operating_financial_v1",
+    }
+    assert all(row[8] == "available" for row in conn.inserted_rows)

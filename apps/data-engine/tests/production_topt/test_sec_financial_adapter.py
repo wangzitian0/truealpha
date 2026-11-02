@@ -2373,6 +2373,42 @@ def test_financial_branch_separates_pre_provision_profit_and_never_populates_gro
     assert "gross_profit" not in validated.vintage
 
 
+def test_expanded_cost_of_revenue_concepts_and_bank_net_revenue_resolve() -> None:
+    """#1518 / #1522: CostOfSales, DirectOperatingCosts, ProgrammingAndProductionCosts derive gross_profit,
+    and bank_net_revenue resolves from RevenuesNetOfInterestExpense or InterestIncomeExpenseNet + NoninterestIncome."""
+    from data_engine.datahub.production_topt.sec_financial_adapter import bank_net_revenue
+
+    for cogs_concept in ("CostOfSales", "DirectOperatingCosts", "ProgrammingAndProductionCosts"):
+        facts = {
+            "facts": {
+                "us-gaap": {
+                    "Revenues": _units([_annual("2025-12-31", "2025-01-01", 1000, "2026-02-01")]),
+                    cogs_concept: _units([_annual("2025-12-31", "2025-01-01", 400, "2026-02-01")]),
+                }
+            }
+        }
+        datum = gross_profit(facts, _CUTOFF)
+        assert datum is not None, f"gross_profit did not resolve from {cogs_concept}"
+        assert datum.value == Decimal("600")
+
+    bank_sum_facts = {
+        "facts": {
+            "us-gaap": {
+                "InterestIncomeExpenseNet": _units([_annual("2025-12-31", "2025-01-01", 90000000000, "2026-02-15")]),
+                "NoninterestIncome": _units([_annual("2025-12-31", "2025-01-01", 60000000000, "2026-02-15")]),
+                "NoninterestExpense": _units([_annual("2025-12-31", "2025-01-01", 80000000000, "2026-02-15")]),
+                "Assets": _units([{"end": "2025-12-31", "val": 4000000000000, "filed": "2026-02-15"}]),
+            }
+        }
+    }
+    net_rev = bank_net_revenue(bank_sum_facts, _CUTOFF)
+    assert net_rev is not None
+    assert net_rev.value == Decimal("150000000000")
+
+    bundle = build_bundle(bank_sum_facts, _CUTOFF, OperatingBranch.FINANCIAL)
+    assert bundle.bank_net_revenue == Decimal("150000000000")
+
+
 def test_gbp_price_against_usd_filing_marks_only_that_listing_currency_mismatch_in_live_tick() -> None:
     """Step 4 (`#1519`): when one listing (`MSFT`) has a `GBP` price quote against a `USD` filing,
     `run_topt_live_tick` marks only that listing's `market_price` unavailable with `currency_mismatch`,

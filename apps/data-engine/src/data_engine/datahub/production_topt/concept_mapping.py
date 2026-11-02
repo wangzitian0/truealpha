@@ -25,12 +25,13 @@ from truealpha_contracts.concept_mapping import ConceptMappingRuleset
 
 _KIND = "concept-mapping"
 
+
 # The mapping the image ships with — the state #501/#507 arrived at, now expressed as data.
 # Synonym vs fallback is declared per field and is the load-bearing distinction; see the
 # contract's docstring for why merging the two produces a silently wrong number.
 DEFAULT_RULESET = ConceptMappingRuleset.model_validate(
     {
-        "version": "production-topt-concepts:v4",
+        "version": "production-topt-concepts:v5",
         "mappings": (
             {
                 # #1379: CRWD tags its revenue only under the Including form. Its companyfacts give
@@ -64,6 +65,9 @@ DEFAULT_RULESET = ConceptMappingRuleset.model_validate(
                     {"taxonomy": "us-gaap", "concept": "CostOfGoodsAndServicesSold"},
                     {"taxonomy": "us-gaap", "concept": "CostOfGoodsSold"},
                     {"taxonomy": "us-gaap", "concept": "CostOfServices"},
+                    {"taxonomy": "us-gaap", "concept": "CostOfSales"},
+                    {"taxonomy": "us-gaap", "concept": "DirectOperatingCosts"},
+                    {"taxonomy": "us-gaap", "concept": "ProgrammingAndProductionCosts"},
                 ),
             },
             {
@@ -193,6 +197,24 @@ DEFAULT_RULESET = ConceptMappingRuleset.model_validate(
                     {"taxonomy": "us-gaap", "concept": "RevenuesNetOfInterestExpense"},
                     {"taxonomy": "us-gaap", "concept": "Revenues"},
                 ),
+            },
+            {
+                "field": "bank_net_revenue",
+                "unit": "USD",
+                "kind": "synonym",
+                "concepts": ({"taxonomy": "us-gaap", "concept": "RevenuesNetOfInterestExpense"},),
+            },
+            {
+                "field": "interest_income_expense_net",
+                "unit": "USD",
+                "kind": "synonym",
+                "concepts": ({"taxonomy": "us-gaap", "concept": "InterestIncomeExpenseNet"},),
+            },
+            {
+                "field": "noninterest_income",
+                "unit": "USD",
+                "kind": "synonym",
+                "concepts": ({"taxonomy": "us-gaap", "concept": "NoninterestIncome"},),
             },
             {
                 # Stand-ins: the entries measure different nettings, so recency must not

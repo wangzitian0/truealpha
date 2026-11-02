@@ -61,6 +61,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Protocol
 
 from factors.confidence import evaluate_cell_confidence
+from factors.forest import ALL_ISSUER_CLASSES, FOREST, IssuerClass
 from psycopg import Connection
 from psycopg.types.json import Jsonb
 from truealpha_contracts.common import canonical_sha256
@@ -224,6 +225,9 @@ class FamilyPolicy:
     #: identity, so it must be the family's own (a fund weight is a percent of net assets,
     #: never a dollar figure).
     unit: str = "USD"
+    #: The issuer classes for which this family carries an obligation (`FOREST` input node
+    #: applicability; #1518).
+    applicability: frozenset[IssuerClass] = ALL_ISSUER_CLASSES
 
 
 CONTINUOUS_CONFIDENCE_POLICY = ContinuousConfidencePolicy()
@@ -321,6 +325,10 @@ def _market_price_families() -> tuple[FamilyPolicy, ...]:
     )
 
 
+_FIELD_APPLICABILITY: Mapping[str, frozenset[IssuerClass]] = {
+    field_name: node.applicability for field_name, node in FOREST.snapshot_field_nodes().items()
+}
+
 FAMILIES: tuple[FamilyPolicy, ...] = (
     *_market_price_families(),
     # The fields the quality report fuses reconcile under its policy, aligned on the primary's
@@ -333,6 +341,7 @@ FAMILIES: tuple[FamilyPolicy, ...] = (
             value_keys=(name,),
             reconciliation=FINANCIAL_FACT_RECONCILIATION_POLICY if name in FINANCIAL_FACT_FUSION_FIELDS else None,
             period_bound=name in FINANCIAL_FACT_FUSION_FIELDS,
+            applicability=_FIELD_APPLICABILITY.get(name, ALL_ISSUER_CLASSES),
         )
         for name in FINANCIAL_FIELDS
     ),
@@ -828,10 +837,15 @@ class _Subject:
     ticker: str | None = None
     issuer_id: str | None = None
     listing_id: str | None = None
+    operating_branch: IssuerClass | None = None
     origins: dict[str, list[OriginValue]] = field(default_factory=dict)
 
     def add(self, family: str, origin: OriginValue) -> None:
         self.origins.setdefault(family, []).append(origin)
+
+
+def _subject_applies(subject: _Subject, policy: FamilyPolicy) -> bool:
+    return subject.operating_branch is None or subject.operating_branch in policy.applicability
 
 
 def _cik_of(
@@ -1126,6 +1140,12 @@ def load_run_subjects(
                 ).items():
                     subject.add(family, origin)
         elif semantic_type == "financial-fact":
+            raw_branch = payload.get("operating_branch")
+            if raw_branch is not None and subject.operating_branch is None:
+                try:
+                    subject.operating_branch = IssuerClass(str(raw_branch))
+                except ValueError:
+                    pass
             fin_obs = _resolve_financial_observation(
                 parser_version,
                 payload,
@@ -1581,12 +1601,10 @@ def persist(connection: Connection[Any], report: Mapping[str, Any]) -> str:
     return report_id
 
 
-_TCE_FIELDS: tuple[str, ...] = (
-    "stockholders_equity",
-    "preferred_stock_value",
-    "goodwill",
-    "intangible_assets_net_excluding_goodwill",
+_SINGLE_ORIGIN_FINANCIAL_FIELDS: tuple[str, ...] = tuple(
+    field_name for field_name in FOREST.snapshot_field_nodes() if field_name not in FINANCIAL_FIELDS
 )
+_TCE_FIELDS: tuple[str, ...] = _SINGLE_ORIGIN_FINANCIAL_FIELDS
 
 
 def _insert_cell_confidence_row(
@@ -1748,6 +1766,8 @@ def evaluate_and_persist_run_cell_confidence(
         if policy.family in PLANE_FAMILIES:
             continue
         for subject_id, subject in sorted(subjects.items()):
+            if not _subject_applies(subject, policy):
+                continue
             grade = classify_cell(
                 policy,
                 subject_id,

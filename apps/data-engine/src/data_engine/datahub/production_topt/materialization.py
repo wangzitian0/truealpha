@@ -14,7 +14,7 @@ from typing import Any, Self
 from factors.composite.strategy_evaluator import deciding_input_keys
 from factors.forest import IssuerClass, definition_pins
 from factors.production_topt import (
-    TCE_SNAPSHOT_FIELDS,
+    OPTIONAL_SNAPSHOT_FIELDS,
     GppeV0Definition,
     MetricAvailability,
     MetricFreshness,
@@ -130,6 +130,7 @@ class FinancialFactPayload(_FrozenModel):
     # source never published — the first is a dated gap, the second an absence.
     shares_period_end: date | None = None
     # #1176: banking tangible-common-equity inputs. Written on a FINANCIAL row only.
+    bank_net_revenue: Decimal | None = None
     stockholders_equity: Decimal | None = None
     preferred_stock_value: Decimal | None = None
     goodwill: Decimal | None = None
@@ -186,6 +187,9 @@ class FinancialFactPayload(_FrozenModel):
         "net_income",
         "earnings_cagr_3y",
         "listing_units_per_share",
+        "bank_net_revenue",
+        "financial_assets",
+        "financial_returns",
         "stockholders_equity",
         "preferred_stock_value",
         "goodwill",
@@ -267,6 +271,9 @@ class SnapshotMember(_FrozenModel):
     preferred_stock_value: ToptMetricInput | None = None
     goodwill: ToptMetricInput | None = None
     intangible_assets_net_excluding_goodwill: ToptMetricInput | None = None
+    financial_assets: ToptMetricInput | None = None
+    financial_returns: ToptMetricInput | None = None
+    bank_net_revenue: ToptMetricInput | None = None
 
     @model_serializer(mode="wrap")
     def omit_absent_optional_fields(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
@@ -383,7 +390,7 @@ class ToptCoreSnapshot(_FrozenModel):
             pre_provision_profit=common_metric("pre_provision_profit"),
             market_value_components=components,
             primary_listing_undeclared=undeclared,
-            **{name: common_metric(name) for name in TCE_SNAPSHOT_FIELDS},
+            **{name: common_metric(name) for name in OPTIONAL_SNAPSHOT_FIELDS},
         )
 
 
@@ -990,7 +997,8 @@ class PostgresToptCoreRepository:
             financial.operating_branch.value, {**cells, **_shares_cell_at(shares_cell, shares_knowable_at)}
         ):
             financial_row = replace(financial_row, freshness=MetricFreshness.STALE)
-        cell_confs = [cell.confidence for cell in cells.values()] + (
+        xbrl_confs = [cell.confidence for key, cell in cells.items() if key != "headcount"]
+        cell_confs = (xbrl_confs or [cell.confidence for cell in cells.values()]) + (
             [financial_row.confidence] if financial_row.confidence is not None else []
         )
         financial_cell_confidence = min(cell_confs, default=Decimal("0"))
@@ -1098,7 +1106,7 @@ class PostgresToptCoreRepository:
                     confidence=_override_confidence(listing_confidences, name, financial_cell_confidence)
                     or financial_cell_confidence,
                 )
-                for name in TCE_SNAPSHOT_FIELDS
+                for name in OPTIONAL_SNAPSHOT_FIELDS
                 if getattr(financial, name) is not None
             },
         )

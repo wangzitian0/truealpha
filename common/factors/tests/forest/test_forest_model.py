@@ -10,6 +10,7 @@ import pytest
 from factors.forest import (
     FOREST,
     GPPE_BANKING_TCE_TREE,
+    GPPE_OPERATING_FINANCIAL_TREE,
     GPPE_V0_TREE,
     PUBLISHED_COLUMNS,
     AliasKind,
@@ -63,6 +64,13 @@ MINTED = {
     "capital_charge_tce": "588a8f4d-b301-5a2e-b0f3-de6743d60af4",
     "capital_adjusted_tce": "57204502-7b9c-5671-b392-424b4368d9f1",
     "gppe_banking_tce_v1": "582c62d6-4873-5ff4-ad91-eba1d571fc4c",
+    # #1518: gppe_operating_financial_v1 and its operating + financial return inputs and derived nodes.
+    "financial_assets": "31e866ea-79cd-5bc5-8203-04fc40e3240f",
+    "financial_returns": "c7f19762-975d-52b1-86db-360f8f7958fc",
+    "bank_net_revenue": "4e99982c-03e2-510d-84fa-b7d8e988783e",
+    "total_gross_return": "1519c717-370f-5b3f-a8fd-d37fc895d160",
+    "capital_adjusted_operating_financial": "5e4a472f-71cd-57b3-90e6-21a5b94cc4cb",
+    "gppe_operating_financial_v1": "25ff84c7-8f4d-515c-a6bb-e33cf52a2ef1",
 }
 
 
@@ -70,6 +78,7 @@ def test_minted_uuids_never_change() -> None:
     assert {node.key: str(node.node_id) for node in FOREST.nodes} == MINTED
     assert str(GPPE_V0_TREE.tree_id) == "ef13b940-b695-5f5f-846a-a36face5cc3e"
     assert str(GPPE_BANKING_TCE_TREE.tree_id) == "96fd6d4a-8983-5caf-b647-360122569d00"
+    assert str(GPPE_OPERATING_FINANCIAL_TREE.tree_id) == "7183c828-7252-5591-81a8-99fd05737995"
 
 
 def test_a_node_declares_a_sign_policy_for_exactly_its_classes() -> None:

@@ -173,6 +173,7 @@ class FinancialFactsBundle:
     intangible_assets_net_excluding_goodwill: Decimal | None = None
     intangible_basis: str | None = None
     tangible_equity_period_end: date | None = None
+    bank_net_revenue: Decimal | None = None
     currency: str | None = None
 
 
@@ -651,6 +652,26 @@ def pre_provision_profit(
     )
 
 
+def bank_net_revenue(
+    facts: dict[str, Any], cutoff: date, ruleset: ConceptMappingRuleset = DEFAULT_RULESET
+) -> _Datum | None:
+    """Bank net revenue (`RevenuesNetOfInterestExpense` or `InterestIncomeExpenseNet + NoninterestIncome`).
+
+    Directly reported `RevenuesNetOfInterestExpense` is preferred at the same period end; a later
+    period where both `InterestIncomeExpenseNet` and `NoninterestIncome` are reported outranks an
+    older direct figure. Falls back to `bank_revenue` when neither is reported.
+    """
+    direct = _latest(resolve_field(facts, ruleset, "bank_net_revenue", cutoff))
+    nii = resolve_field(facts, ruleset, "interest_income_expense_net", cutoff)
+    nonii = resolve_field(facts, ruleset, "noninterest_income", cutoff)
+    shared = sorted(set(nii) & set(nonii))
+    derived = _sum_at(shared[-1], [nii[shared[-1]], nonii[shared[-1]]]) if shared else None
+    candidates = [datum for datum in (direct, derived) if datum is not None]
+    if candidates:
+        return max(candidates, key=lambda datum: (datum.period_end, -datum.rank))
+    return _latest(resolve_field(facts, ruleset, "bank_revenue", cutoff))
+
+
 _INVESTMENT_TIERS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("short_term_investments+long_term_investments", ("short_term_investments", "long_term_investments")),
     ("marketable_securities", ("marketable_securities_current", "marketable_securities_noncurrent")),
@@ -888,10 +909,12 @@ def build_bundle(
     # banks use the pre-provision proxy, insurers revenue-minus-claims (#496), everyone
     # else reported/derived gross profit.
     pre_provision: _Datum | None = None
+    bank_net_rev: _Datum | None = None
     insurer_profit: _Datum | None = None
     gp_datum: _Datum | None = None
     if branch is OperatingBranch.FINANCIAL:
         pre_provision = pre_provision_profit(facts, cutoff, ruleset)
+        bank_net_rev = bank_net_revenue(facts, cutoff, ruleset)
         profit = pre_provision
     elif branch is OperatingBranch.INSURANCE:
         insurer_profit = insurance_pre_claims_profit(facts, cutoff, ruleset)
@@ -910,6 +933,7 @@ def build_bundle(
         datum
         for datum in (
             profit,
+            bank_net_rev,
             assets,
             shares,
             revenue,
@@ -929,6 +953,7 @@ def build_bundle(
         for name, datum in (
             ("gross_profit", gp_datum),
             ("pre_provision_profit", pre_provision),
+            ("bank_net_revenue", bank_net_rev),
             ("insurance_pre_claims_profit", insurer_profit),
             ("total_assets", assets),
             ("shares_outstanding", shares),
@@ -987,6 +1012,7 @@ def build_bundle(
         intangible_assets_net_excluding_goodwill=_v(tangible.intangible_assets),
         intangible_basis=tangible.intangible_basis,
         tangible_equity_period_end=tangible.period_end,
+        bank_net_revenue=_v(bank_net_rev),
         currency=_ruleset_currency(ruleset),
     )
 
@@ -1149,11 +1175,13 @@ def _payload_vintage(
     bundle: FinancialFactsBundle,
     gross_profit_value: Decimal | None,
     headcount_evidence: dict[str, Any] | None,
+    bank_net_revenue_value: Decimal | None = None,
 ) -> dict[str, Any]:
     vintage = {
         key: bundle.vintages[key]
         for key in sorted(bundle.vintages)
         if not (key == "gross_profit" and gross_profit_value is None)
+        and not (key == "bank_net_revenue" and bank_net_revenue_value is None)
     }
     if headcount_evidence is not None:
         # #747: the side-plane input names its evidence next to the XBRL inputs.
@@ -1287,10 +1315,12 @@ class SecFinancialFactAdapter:
         # periods. The marker below records why the metric is absent.
         operating_period_stale = _periods_differ(bundle.operating_period_end, bundle.revenue_period_end)
         pre_provision_value = bundle.pre_provision_profit
+        bank_net_revenue_value = bundle.bank_net_revenue
         withheld = _operating_withheld(operating_period_stale, target)
         if withheld:
             gross_profit_value = None
             pre_provision_value = None
+            bank_net_revenue_value = None
         # Enrich with the #70 headcount extraction, if any, respecting point-in-time.
         # A payload that resolved nothing is knowable at the end of the cutoff day: what it
         # asserts is "this source has no such fact yet", not a dated figure.
@@ -1329,13 +1359,14 @@ class SecFinancialFactAdapter:
             # surfaces it per observation, so a served number names its document. A key is
             # present only for an input the payload actually asserts: when the revenue proxy
             # is refused above, `gross_profit` is null and must not claim a filing.
-            "vintage": _payload_vintage(bundle, gross_profit_value, headcount_evidence),
+            "vintage": _payload_vintage(bundle, gross_profit_value, headcount_evidence, bank_net_revenue_value),
         }
         if target.operating_branch is OperatingBranch.FINANCIAL:
             # #1176: the banking tangible-common-equity inputs. Written for a bank only, so the
             # payload hash of a non-financial row does not move.
             payload.update(
                 {
+                    "bank_net_revenue": _s(bank_net_revenue_value),
                     "stockholders_equity": _s(bundle.stockholders_equity),
                     "preferred_stock_value": _s(bundle.preferred_stock_value),
                     "goodwill": _s(bundle.goodwill),

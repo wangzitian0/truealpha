@@ -1,6 +1,7 @@
 """Versioned Production TOPT core factor definitions and kernel."""
 
 from factors.production_topt.core import (
+    OPTIONAL_SNAPSHOT_FIELDS,
     SHARE_BASIS_REASON_CODES,
     TCE_SNAPSHOT_FIELDS,
     GppeV0Definition,
@@ -22,6 +23,7 @@ from factors.production_topt.core import (
 )
 
 __all__ = [
+    "OPTIONAL_SNAPSHOT_FIELDS",
     "SHARE_BASIS_REASON_CODES",
     "TCE_SNAPSHOT_FIELDS",
     "GppeV0Definition",
