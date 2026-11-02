@@ -962,9 +962,8 @@ def test_governed_entities_resolve_display_name_passes_with_real_names_and_fails
     # Insert real company names into staging.kg_entities for both issuers -> passes!
     for issuer_id, name in [("issuer:jpm", "JPMorgan Chase & Co."), ("issuer:lly", "Eli Lilly and Company")]:
         conn.execute(
-            "insert into staging.kg_entities (entity_id, entity_type, canonical_id, display_name) "
-            "values (%s, 'issuer', %s, %s)",
-            (f"kg:{issuer_id}", issuer_id, name),
+            "insert into staging.kg_entities (id, entity_type, display_name) values (%s, 'company', %s)",
+            (issuer_id, name),
         )
     code_ok, output_ok = _parity_verdict(conn, capsys, DISPLAY_NAME_INVARIANT)
     assert code_ok == 0, output_ok
