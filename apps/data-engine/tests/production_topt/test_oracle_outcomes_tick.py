@@ -314,7 +314,7 @@ def test_a_figure_that_the_stored_filing_repeats_is_an_independent_parse_agree_r
     for ticker, field in [("AAPL", "revenue"), ("AAPL", "gross_profit"), ("PDD", "gross_profit")]:
         row = rows[(ticker, "independent_parse", field)]
         assert (row["result"], row["ratio"]) == ("agree", Decimal(1)), (ticker, field)
-    assert len([key for key in rows if key[1] == "independent_parse"]) == 4
+    assert len([key for key in rows if key[1] == "independent_parse"]) == 6
 
 
 def test_aapl_known_answers_are_recorded_as_superseded_on_a_newer_filing(tick: Tick) -> None:
@@ -336,7 +336,7 @@ def test_aapl_known_answers_are_recorded_as_superseded_on_a_newer_filing(tick: T
 def test_the_pointer_advances_whatever_the_comparison_says(tick: Tick) -> None:
     """A `disagree` row is data. The run committed, and the governed pointer heads it."""
     assert tick.metadata["pointer_advanced"] is True
-    assert tick.metadata["oracle_outcomes_written"] is True and tick.metadata["oracle_outcomes_rows"] == 8
+    assert tick.metadata["oracle_outcomes_written"] is True and tick.metadata["oracle_outcomes_rows"] == 10
     with psycopg.connect(tick.url) as reader:
         head = reader.execute(
             "select count(*) from mart.current_pointer_head where target_run_id = %s",
@@ -354,7 +354,7 @@ def test_a_second_run_of_the_same_run_id_writes_no_second_row(tick: Tick) -> Non
         )
         connection.commit()
         after = connection.execute("select count(*) from mart.oracle_outcomes").fetchone()
-    assert again == 0 and before == after == (8,)
+    assert again == 0 and before == after == (10,)
 
 
 def test_a_writer_that_raises_does_not_stop_the_tick(failing_tick: Tick) -> None:

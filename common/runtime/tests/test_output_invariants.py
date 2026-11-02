@@ -938,3 +938,34 @@ def test_the_expected_inputs_follow_the_class_of_the_issuer() -> None:
     assert ("total_assets", "financial") not in pairs
     assert ("total_assets", "non_financial") in pairs and ("total_assets", "insurance") in pairs
     assert ("net_income", "financial") in pairs and ("net_income", "non_financial") in pairs, "PEG reads every class"
+
+
+DISPLAY_NAME_INVARIANT = "governed-entities-resolve-display-name"
+
+
+def test_governed_entities_resolve_display_name_passes_with_real_names_and_fails_on_null_or_ticker(
+    conn: psycopg.Connection, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """#1517: every member in an active governed head must resolve to a non-empty company name
+    in `mart.entity_display_resolution` that is neither its raw `issuer_id` nor its bare `ticker`."""
+    issuers = [
+        _issuer("jpm", "jpm0", revenue_period_end=date(2025, 12, 31)),
+        _issuer("lly", "lly0", revenue_period_end=date(2025, 12, 31)),
+    ]
+    run_id = _seed_head(conn, REVENUE_UNIVERSE, issuers)
+
+    # Without KG / alias names, mart.entity_display_resolution resolves display_name as NULL -> violation!
+    code, output = _parity_verdict(conn, capsys, DISPLAY_NAME_INVARIANT)
+    assert code == 1, output
+    assert f"{DISPLAY_NAME_INVARIANT}: 2 violation(s)" in output
+
+    # Insert real company names into staging.kg_entities for both issuers -> passes!
+    for issuer_id, name in [("issuer:jpm", "JPMorgan Chase & Co."), ("issuer:lly", "Eli Lilly and Company")]:
+        conn.execute(
+            "insert into staging.kg_entities (id, entity_type, display_name) values (%s, 'company', %s)",
+            (issuer_id, name),
+        )
+    code_ok, output_ok = _parity_verdict(conn, capsys, DISPLAY_NAME_INVARIANT)
+    assert code_ok == 0, output_ok
+    assert f"ok       {DISPLAY_NAME_INVARIANT}: 2 row(s) examined" in output_ok
+    assert run_id is not None

@@ -628,6 +628,40 @@ _TEMPLATES: tuple[Invariant, ...] = (
               and r.revenue_period_end is not null
         """,
     ),
+    Invariant(
+        id="governed-entities-resolve-display-name",
+        claim=(
+            "every issuer in an active governed head resolves to a human-readable company name in "
+            "mart.entity_display_resolution, never NULL, its raw issuer_id, or its bare ticker (#1517)"
+        ),
+        violations="""
+            with heads as (
+                select h.universe_id, coalesce(h.run_id, h.head_run_id) as run_id
+                from mart.served_head h
+                where h.factor_id = 'gross_profit_per_employee'
+                  and __HEAD_IS_SCHEDULED__
+            ),
+            members as (
+                select distinct heads.universe_id, r.run_id, r.issuer_id
+                from heads
+                join mart.topt_core_results r on r.run_id = heads.run_id
+            )
+            select m.universe_id, m.run_id, m.issuer_id, coalesce(d.display_name, 'NULL')
+            from members m
+            left join mart.entity_display_resolution d on d.issuer_id = m.issuer_id
+            where nullif(btrim(d.display_name), '') is null
+               or lower(btrim(d.display_name)) = lower(btrim(m.issuer_id))
+               or lower(btrim(d.display_name)) = lower(btrim(coalesce(d.ticker, '')))
+            order by 1, 2, 3
+        """,
+        population="""
+            select count(distinct (r.run_id, r.issuer_id))
+            from mart.served_head h
+            join mart.topt_core_results r on r.run_id = coalesce(h.run_id, h.head_run_id)
+            where h.factor_id = 'gross_profit_per_employee'
+              and __HEAD_IS_SCHEDULED__
+        """,
+    ),
 )
 
 

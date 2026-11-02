@@ -79,6 +79,7 @@ INDEPENDENT_KIND = "independent_parse"
 INDEPENDENT_PARSERS: dict[str, Callable[[dict[str, Any], date], vendor_oracle.VendorFact | None]] = {
     "revenue": vendor_oracle.revenue,
     "gross_profit": vendor_oracle.gross_profit,
+    "total_assets": vendor_oracle.total_assets,
 }
 #: The unit of the figures that the independent parse reads.
 INDEPENDENT_UNIT = "USD"

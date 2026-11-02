@@ -18,6 +18,7 @@
 
 import { randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
+import { UNIVERSES } from "@/contracts/environmentContract.generated";
 import { withAppRuntime } from "@/server/auth/db";
 
 type TriggerRuntime = <T>(fn: (client: Pick<PoolClient, "query">) => Promise<T>) => Promise<T>;
@@ -34,8 +35,24 @@ export interface TriggerRequestPrincipal {
   principalKind: "member" | "administrator" | "service";
 }
 
+export type TriggerJobName = `${string}_live_pipeline`;
+
+const ALLOWED_JOBS = new Map<string, TriggerJobName>();
+for (const universe of UNIVERSES) {
+  const jobName: TriggerJobName = `${universe.key}_live_pipeline`;
+  ALLOWED_JOBS.set(universe.key, jobName);
+  ALLOWED_JOBS.set(jobName, jobName);
+}
+
 export type TriggerRequestOutcome =
-  | { kind: "accepted"; requestId: number; dedupeKey: string; executedAt: string; forceFetch: boolean }
+  | {
+      kind: "accepted";
+      requestId: number;
+      dedupeKey: string;
+      executedAt: string;
+      forceFetch: boolean;
+      jobName: TriggerJobName;
+    }
   | { kind: "denied" }
   | { kind: "invalid"; message: string }
   | { kind: "error"; message: string };
@@ -44,6 +61,7 @@ export async function requestPipelineTrigger(
   principal: TriggerRequestPrincipal | null,
   executedAtInput: string | undefined,
   forceFetchInput: unknown = undefined,
+  jobNameInput: unknown = undefined,
 ): Promise<TriggerRequestOutcome> {
   if (principal === null || principal.principalKind !== "administrator") {
     return { kind: "denied" };
@@ -60,24 +78,47 @@ export async function requestPipelineTrigger(
   }
   const forceFetch = forceFetchInput === true;
 
+  let jobName: TriggerJobName = "topt_live_pipeline";
+  if (jobNameInput !== undefined) {
+    if (typeof jobNameInput !== "string" || !ALLOWED_JOBS.has(jobNameInput.trim().toLowerCase())) {
+      const validNames = UNIVERSES.map((u) => `${u.key}_live_pipeline`).join(", ");
+      return { kind: "invalid", message: `job_name must be one of: ${validNames}` };
+    }
+    jobName = ALLOWED_JOBS.get(jobNameInput.trim().toLowerCase())!;
+  }
+
   const dedupeKey = `admin:${randomUUID()}`;
   const runtime: TriggerRuntime = runtimeOverride ?? withAppRuntime;
   try {
     const requestId = await runtime(async (client) => {
+      if (jobName === "topt_live_pipeline") {
+        const inserted = forceFetch
+          ? await client.query(
+              "insert into staging.pipeline_trigger_requests (job_name, executed_at, requested_by, dedupe_key, force_fetch) " +
+                "values ('topt_live_pipeline', $1, $2, $3, $4) returning request_id",
+              [executedAt.toISOString(), principal.principalId, dedupeKey, true],
+            )
+          : await client.query(
+              "insert into staging.pipeline_trigger_requests (job_name, executed_at, requested_by, dedupe_key) " +
+                "values ('topt_live_pipeline', $1, $2, $3) returning request_id",
+              [executedAt.toISOString(), principal.principalId, dedupeKey],
+            );
+        return Number(inserted.rows[0].request_id);
+      }
       const inserted = forceFetch
         ? await client.query(
             "insert into staging.pipeline_trigger_requests (job_name, executed_at, requested_by, dedupe_key, force_fetch) " +
-              "values ('topt_live_pipeline', $1, $2, $3, $4) returning request_id",
-            [executedAt.toISOString(), principal.principalId, dedupeKey, true],
+              "values ($1, $2, $3, $4, $5) returning request_id",
+            [jobName, executedAt.toISOString(), principal.principalId, dedupeKey, true],
           )
         : await client.query(
             "insert into staging.pipeline_trigger_requests (job_name, executed_at, requested_by, dedupe_key) " +
-              "values ('topt_live_pipeline', $1, $2, $3) returning request_id",
-            [executedAt.toISOString(), principal.principalId, dedupeKey],
+              "values ($1, $2, $3, $4) returning request_id",
+            [jobName, executedAt.toISOString(), principal.principalId, dedupeKey],
           );
       return Number(inserted.rows[0].request_id);
     });
-    return { kind: "accepted", requestId, dedupeKey, executedAt: executedAt.toISOString(), forceFetch };
+    return { kind: "accepted", requestId, dedupeKey, executedAt: executedAt.toISOString(), forceFetch, jobName };
   } catch (error) {
     return { kind: "error", message: error instanceof Error ? error.message : String(error) };
   }

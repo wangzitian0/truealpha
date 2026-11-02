@@ -152,3 +152,21 @@ def test_capture_entity_refs_persisted(connection) -> None:
     assert len(refs) > 0
     roles = {r[0] for r in refs}
     assert {"issuer", "instrument", "listing"} <= roles
+
+
+def test_resolve_coordinates_asserts_issuer_display_name_aliases_for_all_topt_members(connection) -> None:
+    """#1517: `resolve_coordinates` asserts a `scheme = 'name'` alias on every TOPT issuer entity,
+    including the 9 XNYS issuers (`ABBV`, `BRK.B`, `XOM`, `JPM`, `JNJ`, `LLY`, `MA`, `V`, `WMT`),
+    so `mart.entity_display_resolution` resolves their human-readable company names."""
+    from data_engine.datahub.production_topt.composition import plan_and_persist
+
+    plan = plan_and_persist(connection, cutoff=CUTOFF, version="test-xnys-names")
+    seen_issuers: dict[str, str] = {}
+    for _subject_id, (issuer_id, _instrument_id, _listing_id, ticker) in plan.coordinates.items():
+        name_val = alias_of(connection, issuer_id, "name", valid_at=TODAY, known_at=CUTOFF)
+        assert name_val is not None and name_val != ticker and name_val != issuer_id
+        seen_issuers[ticker] = name_val
+    assert seen_issuers["JPM"] == "JPMorgan Chase & Co."
+    assert seen_issuers["LLY"] == "Eli Lilly and Company"
+    assert seen_issuers["BRK.B"] == "Berkshire Hathaway Inc."
+    assert seen_issuers["WMT"] == "Walmart Inc."

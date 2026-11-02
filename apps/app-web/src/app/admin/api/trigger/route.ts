@@ -17,12 +17,14 @@ export const dynamic = "force-dynamic";
 export async function POST(request: Request): Promise<NextResponse> {
   const principal = await getServerPrincipal();
   const body = await request.json().catch(() => ({}));
+  const requestedJob = body?.job_name ?? body?.pipeline ?? body?.universe;
   const outcome = await requestPipelineTrigger(
     principal === null
       ? null
       : { principalId: principal.context.principalId, principalKind: principal.principalKind },
     typeof body?.executed_at === "string" ? body.executed_at : undefined,
     body?.force_fetch,
+    requestedJob,
   );
 
   switch (outcome.kind) {
@@ -33,6 +35,7 @@ export async function POST(request: Request): Promise<NextResponse> {
           dedupe_key: outcome.dedupeKey,
           executed_at: outcome.executedAt,
           force_fetch: outcome.forceFetch,
+          job_name: outcome.jobName,
           run_key: `manual:${outcome.dedupeKey}`,
         },
         { status: 202 },

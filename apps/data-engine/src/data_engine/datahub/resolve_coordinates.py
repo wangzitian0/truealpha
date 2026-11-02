@@ -61,6 +61,94 @@ def is_uuid(value: str) -> bool:
 #: The classification file of primary listings (data/primary_listings.v1.json).
 PRIMARY_LISTINGS_FILENAME = "primary_listings.v1.json"
 
+#: Official company names for governed TOPT and canary issuers (#1517).
+#: XNAS constituents also receive their name from `staging.etf_constituent_facts` (QQQ),
+#: whereas XNYS TOPT members and static canary members have no QQQ constituent row unless
+#: asserted on their issuer entity under `scheme = 'name'`.
+_CANONICAL_ISSUER_NAMES: dict[str, str] = {
+    "ABBV": "AbbVie Inc.",
+    "AAPL": "Apple Inc.",
+    "AMZN": "Amazon.com, Inc.",
+    "ASML": "ASML Holding N.V.",
+    "AVGO": "Broadcom Inc.",
+    "BRK.B": "Berkshire Hathaway Inc.",
+    "CINF": "Cincinnati Financial Corporation",
+    "COST": "Costco Wholesale Corporation",
+    "CRWD": "CrowdStrike Holdings, Inc.",
+    "GOOG": "Alphabet Inc.",
+    "GOOGL": "Alphabet Inc.",
+    "HBAN": "Huntington Bancshares Incorporated",
+    "JNJ": "Johnson & Johnson",
+    "JPM": "JPMorgan Chase & Co.",
+    "LLY": "Eli Lilly and Company",
+    "MA": "Mastercard Incorporated",
+    "META": "Meta Platforms, Inc.",
+    "MSFT": "Microsoft Corporation",
+    "MU": "Micron Technology, Inc.",
+    "NFLX": "Netflix, Inc.",
+    "NVDA": "NVIDIA Corporation",
+    "TSLA": "Tesla, Inc.",
+    "V": "Visa Inc.",
+    "WMT": "Walmart Inc.",
+    "XOM": "Exxon Mobil Corporation",
+}
+
+
+def canonical_issuer_name(ticker: str) -> str | None:
+    """Return the canonical company name for a governed ticker, or None if not in the static map."""
+    return _CANONICAL_ISSUER_NAMES.get(ticker.strip().upper())
+
+
+def _resolve_issuer_display_name(connection: psycopg.Connection[Any], ticker: str) -> str | None:
+    """Resolve the display name for an issuer from `staging.etf_constituent_facts` or the canonical map (#1517)."""
+    normalized = ticker.strip().upper()
+    if not normalized:
+        return None
+    row = connection.execute(
+        """
+        select nullif(btrim(company_name), '')
+        from staging.etf_constituent_facts
+        where upper(ticker) = %s
+          and nullif(btrim(company_name), '') is not null
+          and upper(btrim(company_name)) <> upper(btrim(ticker))
+        order by knowable_at desc, as_of desc, etf_symbol asc
+        limit 1
+        """,
+        (normalized,),
+    ).fetchone()
+    if row and row[0]:
+        return str(row[0])
+    return canonical_issuer_name(normalized)
+
+
+def _assert_issuer_name_alias(
+    connection: psycopg.Connection[Any],
+    issuer_uuid: uuid.UUID,
+    display_name: str,
+    *,
+    known_at: datetime,
+) -> None:
+    """Write a `scheme = 'name'` alias on `issuer_uuid` when none exists yet (#1517)."""
+    existing = connection.execute(
+        """
+        select 1 from staging.entity_aliases
+        where entity_id = %s and scheme = 'name' and value = %s
+        """,
+        (issuer_uuid, display_name),
+    ).fetchone()
+    if existing:
+        return
+    connection.execute(
+        """
+        insert into staging.entity_aliases (
+            entity_id, scheme, value, valid_from, valid_to, transaction_time, source,
+            raw_ref, method, confidence, mapping_version
+        ) values (%s, 'name', %s, '-infinity'::date, null, least(%s, clock_timestamp()), 'datahub.capture', %s, 'asserted', 1.0, 'datahub:v1')
+        on conflict do nothing
+        """,
+        (issuer_uuid, display_name, known_at, f"name:{issuer_uuid}"),
+    )
+
 
 @cache
 def primary_listing_ids() -> frozenset[str]:
@@ -293,6 +381,8 @@ def resolve_coordinates(
         # The classification file names the primary listing. This resolver writes it, and no one else does.
         if listing_raw in primary_listing_ids():
             _assert_relation(connection, "primary_listing", issuer_uuid, listing_uuid, known_at=known_at)
+        if (display_name := _resolve_issuer_display_name(connection, ticker)) is not None:
+            _assert_issuer_name_alias(connection, issuer_uuid, display_name, known_at=known_at)
 
         result[subject_id] = (str(issuer_uuid), str(instrument_uuid), str(listing_uuid), ticker)
 

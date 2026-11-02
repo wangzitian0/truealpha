@@ -68,6 +68,12 @@ _REVENUE_CONCEPTS = (
     "SalesRevenueGoodsNet",
     "SalesRevenueServicesNet",
     "RevenuesNetOfInterestExpense",
+    "PremiumsEarnedNet",
+    "InterestIncomeExpenseNet",
+    "NoninterestIncome",
+    "FinancialServicesRevenue",
+    "HealthCareOrganizationRevenue",
+    "OperatingLeasesIncomeStatementLeaseRevenue",
 )
 _COGS_CONCEPTS = (
     "CostOfRevenue",
@@ -75,7 +81,13 @@ _COGS_CONCEPTS = (
     "CostOfGoodsSold",
     "CostOfServices",
     "CostOfSales",
+    "ProgrammingAndProductionCosts",
+    "DirectOperatingCosts",
+    "OperatingCostsAndExpenses",
+    "BenefitsLossesAndExpenses",
+    "PolicyholderBenefitsAndClaimsIncurredNet",
 )
+_ASSETS_CONCEPTS = ("Assets",)
 
 
 @dataclass(frozen=True)
@@ -212,6 +224,11 @@ def latest_across_variants(
 def revenue(facts: dict[str, Any], cutoff: date) -> VendorFact | None:
     """Reported revenue of the most recent annual period across every revenue variant."""
     return latest_across_variants(facts, _REVENUE_CONCEPTS, "USD", cutoff)
+
+
+def total_assets(facts: dict[str, Any], cutoff: date) -> VendorFact | None:
+    """Reported total assets of the most recent annual period (#1517)."""
+    return latest_across_variants(facts, _ASSETS_CONCEPTS, "USD", cutoff)
 
 
 def gross_profit(facts: dict[str, Any], cutoff: date) -> VendorFact | None:
