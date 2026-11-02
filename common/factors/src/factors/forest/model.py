@@ -26,10 +26,18 @@ from collections.abc import Callable, Mapping, Sequence
 from decimal import ROUND_HALF_EVEN, Context, Decimal, localcontext
 from enum import StrEnum
 from functools import reduce
-from typing import Literal, Self
+from typing import Any, Literal, Self
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_serializer, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    field_serializer,
+    model_serializer,
+    model_validator,
+)
 from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.metrics import METRICS, UnitFamily
 
@@ -152,10 +160,20 @@ class MetricNode(_Frozen):
     sign_policy: Mapping[IssuerClass, SignPolicy]
     provenance: Provenance
     aliases: tuple[NodeAlias, ...] = ()
+    #: Optional coalesce default when a captured input is absent (None). Only valid on INPUT nodes.
+    #: Absent from `model_dump` when None so existing tree hashes remain unchanged.
+    default_when_missing: Decimal | None = None
 
     @field_serializer("applicability")
     def _dump_applicability(self, values: frozenset[IssuerClass]) -> list[str]:
         return _sorted_classes(values)
+
+    @model_serializer(mode="wrap")
+    def _omit_absent_default(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        data: dict[str, Any] = handler(self)
+        if self.default_when_missing is None:
+            data.pop("default_when_missing", None)
+        return data
 
     @model_validator(mode="after")
     def _consistent(self) -> Self:
@@ -169,6 +187,11 @@ class MetricNode(_Frozen):
                 raise ValueError(f"node {self.key} must declare its unit")
             if set(self.sign_policy) != set(self.applicability):
                 raise ValueError(f"node {self.key} must declare a sign policy for exactly its applicable classes")
+        if self.default_when_missing is not None:
+            if self.kind is not NodeKind.INPUT:
+                raise ValueError(f"node {self.key}: default_when_missing is only valid on INPUT nodes")
+            if not self.default_when_missing.is_finite():
+                raise ValueError(f"node {self.key}: default_when_missing must be finite")
         if AliasKind.KEY in {alias.kind for alias in self.aliases}:
             raise ValueError(f"node {self.key}: the key alias is implied, not declared")
         return self
@@ -324,14 +347,22 @@ class Forest(_Frozen):
             raise ValueError(f"tree {tree.key} must realize a registered concept")
         if len({item.output for item in tree.decompositions}) != len(tree.decompositions):
             raise ValueError(f"tree {tree.key} decomposes a node twice")
+        root = by_key.get(tree.root)
+        if root is None or root.kind is not NodeKind.DERIVED:
+            raise ValueError(f"tree {tree.key}: root {tree.root} is not a registered derived node")
+        root_decomp = tree.decomposition_of(tree.root)
+        if root_decomp is None:
+            raise ValueError(f"tree {tree.key}: root {tree.root} is not decomposed in this tree")
+        if set(root_decomp.operands) != set(tree.applicability):
+            raise ValueError(f"tree {tree.key}: {tree.root} must bind operands for every class")
         for decomposition in tree.decompositions:
             output = by_key.get(decomposition.output)
             if output is None or output.kind is not NodeKind.DERIVED:
                 raise ValueError(f"tree {tree.key}: {decomposition.output} is not a registered derived node")
-            if set(decomposition.operands) != set(tree.applicability):
-                raise ValueError(f"tree {tree.key}: {decomposition.output} must bind operands for every class")
-            if not tree.applicability <= output.applicability:
-                raise ValueError(f"tree {tree.key}: {decomposition.output} does not apply to every class of the tree")
+            if not set(decomposition.operands) <= (set(tree.applicability) & set(output.applicability)):
+                raise ValueError(
+                    f"tree {tree.key}: {decomposition.output} must bind operands for every class within its applicability"
+                )
             for issuer_class, operands in decomposition.operands.items():
                 for operand in operands:
                     node = by_key.get(operand)
@@ -341,24 +372,23 @@ class Forest(_Frozen):
                         raise ValueError(f"tree {tree.key}: {operand} does not apply to {issuer_class}")
                     if node.kind is NodeKind.DERIVED and tree.decomposition_of(operand) is None:
                         raise ValueError(f"tree {tree.key}: {operand} is derived but not decomposed in this tree")
-        # Every decomposition is reachable from the root, and nothing is cyclic.
+        # Every decomposition is reachable from the root for its applicable classes, and nothing is cyclic.
         reached: set[str] = set()
 
-        def visit(key: str, path: tuple[str, ...]) -> None:
+        def visit_class(key: str, issuer_class: IssuerClass, path: tuple[str, ...]) -> None:
             if key in path:
                 raise ValueError(f"tree {tree.key} is cyclic at {' -> '.join((*path, key))}")
             decomposition = tree.decomposition_of(key)
             if decomposition is None:
                 return
+            if issuer_class not in decomposition.operands:
+                raise ValueError(f"tree {tree.key}: {key} must bind operands for every class that reaches it")
             reached.add(key)
-            for operands in decomposition.operands.values():
-                for operand in operands:
-                    visit(operand, (*path, key))
+            for operand in decomposition.operands[issuer_class]:
+                visit_class(operand, issuer_class, (*path, key))
 
-        root = by_key.get(tree.root)
-        if root is None or root.kind is not NodeKind.DERIVED:
-            raise ValueError(f"tree {tree.key}: root {tree.root} is not a registered derived node")
-        visit(tree.root, ())
+        for issuer_class in tree.applicability:
+            visit_class(tree.root, issuer_class, ())
         unreachable = {item.output for item in tree.decompositions} - reached
         if unreachable:
             raise ValueError(f"tree {tree.key}: {sorted(unreachable)} are not reachable from the root")
@@ -374,6 +404,19 @@ class Forest(_Frozen):
             if (tree.key, tree.version) == (key, version):
                 return tree
         raise KeyError((key, version))
+
+    def input_nodes(self) -> tuple[MetricNode, ...]:
+        """Every registered INPUT node of the forest, in registration order."""
+        return tuple(node for node in self.nodes if node.kind is NodeKind.INPUT)
+
+    def snapshot_field_nodes(self) -> Mapping[str, MetricNode]:
+        """`topt_snapshot_field` alias -> `MetricNode` for every registered input node with that alias."""
+        out: dict[str, MetricNode] = {}
+        for node in self.input_nodes():
+            field_name = node.alias(AliasKind.TOPT_SNAPSHOT_FIELD)
+            if field_name is not None:
+                out[field_name] = node
+        return out
 
     def tree_sha256(self, tree: MetricTree) -> str:
         """The tree's identity: its own fields plus every node it reaches, so a changed unit,
@@ -446,6 +489,10 @@ def evaluate(
         decomposition = tree.decomposition_of(key)
         if decomposition is None:
             value = inputs.get(key)
+            if value is None:
+                node = forest.node(key)
+                if node.default_when_missing is not None:
+                    value = node.default_when_missing
             values[key] = value
             if value is None:
                 undefined[key] = "missing_input"

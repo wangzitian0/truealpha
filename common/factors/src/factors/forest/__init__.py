@@ -33,12 +33,20 @@ from factors.forest.model import (
     judge_sign,
     required_inputs,
 )
-from factors.forest.registry import FOREST, GPPE_BANKING_TCE_TREE, GPPE_V0_TREE, PUBLISHED_COLUMNS, published_node
+from factors.forest.registry import (
+    FOREST,
+    GPPE_BANKING_TCE_TREE,
+    GPPE_OPERATING_FINANCIAL_TREE,
+    GPPE_V0_TREE,
+    PUBLISHED_COLUMNS,
+    published_node,
+)
 
 __all__ = [
     "ALL_ISSUER_CLASSES",
     "FOREST",
     "GPPE_BANKING_TCE_TREE",
+    "GPPE_OPERATING_FINANCIAL_TREE",
     "GPPE_V0_TREE",
     "PUBLISHED_COLUMNS",
     "AliasKind",

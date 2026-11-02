@@ -18,19 +18,28 @@ pointer advance is visible in the data rather than only in a changelog.
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
+import psycopg
 from psycopg import Connection
 from truealpha_contracts.concept_mapping import ConceptMappingRuleset
 
 _KIND = "concept-mapping"
+_VERSION_RE = re.compile(r"^production-topt-concepts:v(\d+)$")
+
+
+def _ruleset_version_number(version: str) -> int | None:
+    match = _VERSION_RE.match(version)
+    return int(match.group(1)) if match else None
+
 
 # The mapping the image ships with — the state #501/#507 arrived at, now expressed as data.
 # Synonym vs fallback is declared per field and is the load-bearing distinction; see the
 # contract's docstring for why merging the two produces a silently wrong number.
 DEFAULT_RULESET = ConceptMappingRuleset.model_validate(
     {
-        "version": "production-topt-concepts:v4",
+        "version": "production-topt-concepts:v5",
         "mappings": (
             {
                 # #1379: CRWD tags its revenue only under the Including form. Its companyfacts give
@@ -64,6 +73,9 @@ DEFAULT_RULESET = ConceptMappingRuleset.model_validate(
                     {"taxonomy": "us-gaap", "concept": "CostOfGoodsAndServicesSold"},
                     {"taxonomy": "us-gaap", "concept": "CostOfGoodsSold"},
                     {"taxonomy": "us-gaap", "concept": "CostOfServices"},
+                    {"taxonomy": "us-gaap", "concept": "CostOfSales"},
+                    {"taxonomy": "us-gaap", "concept": "DirectOperatingCosts"},
+                    {"taxonomy": "us-gaap", "concept": "ProgrammingAndProductionCosts"},
                 ),
             },
             {
@@ -193,6 +205,24 @@ DEFAULT_RULESET = ConceptMappingRuleset.model_validate(
                     {"taxonomy": "us-gaap", "concept": "RevenuesNetOfInterestExpense"},
                     {"taxonomy": "us-gaap", "concept": "Revenues"},
                 ),
+            },
+            {
+                "field": "bank_net_revenue",
+                "unit": "USD",
+                "kind": "synonym",
+                "concepts": ({"taxonomy": "us-gaap", "concept": "RevenuesNetOfInterestExpense"},),
+            },
+            {
+                "field": "interest_income_expense_net",
+                "unit": "USD",
+                "kind": "synonym",
+                "concepts": ({"taxonomy": "us-gaap", "concept": "InterestIncomeExpenseNet"},),
+            },
+            {
+                "field": "noninterest_income",
+                "unit": "USD",
+                "kind": "synonym",
+                "concepts": ({"taxonomy": "us-gaap", "concept": "NoninterestIncome"},),
             },
             {
                 # Stand-ins: the entries measure different nettings, so recency must not
@@ -348,7 +378,21 @@ def resolve_ruleset(connection: Connection[Any] | None) -> ConceptMappingRuleset
     ).fetchone()
     if row is None:
         return DEFAULT_RULESET
-    return ConceptMappingRuleset.model_validate(row[0])
+    stored = ConceptMappingRuleset.model_validate(row[0])
+    stored_num = _ruleset_version_number(stored.version)
+    default_num = _ruleset_version_number(DEFAULT_RULESET.version)
+    if stored_num is not None and default_num is not None and stored_num < default_num:
+        try:
+            with connection.transaction():
+                publish_ruleset(
+                    connection,
+                    DEFAULT_RULESET,
+                    note="Auto-advance governed concept-mapping head to code DEFAULT_RULESET",
+                )
+        except psycopg.Error:
+            pass
+        return DEFAULT_RULESET
+    return stored
 
 
 def publish_ruleset(connection: Connection[Any], ruleset: ConceptMappingRuleset, *, note: str) -> tuple[str, int]:

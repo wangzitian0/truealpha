@@ -59,20 +59,25 @@ def _resolve_input_value(
     factor_input: ToptCoreSnapshotInput,
     gppe_definition: GppeV0Definition,
     financial_payload: Mapping[str, Any],
-) -> tuple[Decimal | None, str | None]:
+) -> tuple[Decimal | None, str | None, Decimal | None]:
     parameter = node.alias(AliasKind.DEFINITION_PARAMETER)
     if parameter is not None:
         val = getattr(gppe_definition, parameter, None)
-        return (_parse_decimal(val), None if val is not None else f"missing_{parameter}")
+        return (_parse_decimal(val), None if val is not None else f"missing_{parameter}", None)
 
     field = node.alias(AliasKind.TOPT_SNAPSHOT_FIELD)
     if field is not None and hasattr(factor_input, field):
         metric = getattr(factor_input, field)
-        if metric is None or metric.availability is MetricAvailability.UNAVAILABLE or metric.value is None:
-            return None, f"missing_{field}"
-        if field == "headcount" and metric.value <= 0:
-            return None, "nonpositive_headcount"
-        return metric.value, None
+        if metric is not None and metric.availability is MetricAvailability.AVAILABLE and metric.value is not None:
+            if field == "headcount" and metric.value <= 0:
+                return None, "nonpositive_headcount", None
+            return metric.value, None, metric.confidence
+        # If the snapshot field is None/unavailable, still check `financial_payload` before failing,
+        # unless it is a core field without a payload override.
+        if field not in financial_payload or financial_payload.get(field) is None:
+            if node.default_when_missing is not None:
+                return node.default_when_missing, None, None
+            return None, f"missing_{field}", None
 
     for candidate_key in (
         node.alias(AliasKind.METRIC),
@@ -83,10 +88,28 @@ def _resolve_input_value(
             parsed = _parse_decimal(financial_payload[candidate_key])
             if parsed is not None:
                 if node.key == "employees_total" and parsed <= 0:
-                    return None, "nonpositive_headcount"
-                return parsed, None
+                    return None, "nonpositive_headcount", None
+                return parsed, None, None
+    if node.default_when_missing is not None:
+        return node.default_when_missing, None, None
     missing_label = field or node.alias(AliasKind.INPUT_KEY) or node.alias(AliasKind.METRIC) or node.key
-    return None, f"missing_{missing_label}"
+    return None, f"missing_{missing_label}", None
+
+
+def _subtree_input_keys(tree: MetricTree, node_key: str, issuer_class: IssuerClass) -> tuple[str, ...]:
+    """The input/parameter node keys consumed by `node_key`'s subtree for `issuer_class`."""
+    ordered: dict[str, None] = {}
+
+    def visit(key: str) -> None:
+        decomposition = tree.decomposition_of(key)
+        if decomposition is None:
+            ordered.setdefault(key, None)
+            return
+        for operand in decomposition.operands[issuer_class]:
+            visit(operand)
+
+    visit(node_key)
+    return tuple(ordered)
 
 
 def _node_period(
@@ -209,8 +232,9 @@ def _materialize_issuer_tree(
 ) -> int:
     inputs: dict[str, Decimal | None] = {}
     input_reasons: dict[str, str] = {}
+    input_confidences: dict[str, Decimal] = {}
     for node in required_inputs(forest, tree, issuer_class):
-        value, reason = _resolve_input_value(
+        value, reason, conf = _resolve_input_value(
             node,
             factor_input=factor_input,
             gppe_definition=gppe_definition,
@@ -219,6 +243,8 @@ def _materialize_issuer_tree(
         inputs[node.key] = value
         if reason is not None:
             input_reasons[node.key] = reason
+        if conf is not None:
+            input_confidences[node.key] = conf
 
     freshness_reasons: list[str] = []
     if freshness is MetricFreshness.STALE:
@@ -227,23 +253,30 @@ def _materialize_issuer_tree(
         freshness_reasons.append("unknown_freshness")
 
     evaluation = evaluate(forest, tree, issuer_class=issuer_class, inputs=inputs)
-    derived_keys = sorted(key for key in leaf_and_derived_keys(tree) if forest.node(key).kind is NodeKind.DERIVED)
+    derived_keys = sorted(
+        key
+        for key in leaf_and_derived_keys(tree)
+        if forest.node(key).kind is NodeKind.DERIVED and issuer_class in forest.node(key).applicability
+    )
     count = 0
     for node_key in derived_keys:
         node = forest.node(node_key)
         raw_val = evaluation.values.get(node_key)
-        node_reasons = list(dict.fromkeys([*input_reasons.values(), *freshness_reasons]))
+        consumed_keys = _subtree_input_keys(tree, node_key, issuer_class)
+        subtree_reasons = [input_reasons[k] for k in consumed_keys if k in input_reasons]
+        node_reasons = list(dict.fromkeys([*subtree_reasons, *freshness_reasons]))
         if raw_val is None and not node_reasons:
             undef_reason = evaluation.undefined.get(node_key, "undefined_operand")
             node_reasons.append(undef_reason)
-        if freshness_reasons or raw_val is None or input_reasons:
+        if freshness_reasons or raw_val is None or subtree_reasons:
             persisted_value: Decimal | None = None
             availability_str = "unavailable"
             node_confidence = Decimal("0")
         else:
             persisted_value = raw_val
             availability_str = "available"
-            node_confidence = base_confidence
+            consumed_confs = [input_confidences[k] for k in consumed_keys if k in input_confidences]
+            node_confidence = min(consumed_confs) if consumed_confs else base_confidence
         avail_status: AvailabilityStatus = availability_status_for(
             availability=availability_str,
             freshness=freshness.value,

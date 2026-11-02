@@ -27,6 +27,7 @@ per-component policies. It will be a new tree version, never an edit to this one
 from __future__ import annotations
 
 from collections.abc import Mapping
+from decimal import Decimal
 from types import MappingProxyType
 from uuid import UUID
 
@@ -80,6 +81,7 @@ PHYSICALLY_NON_NEGATIVE: Mapping[str, str] = MappingProxyType(
         "preferred_stock_value": "a carrying amount of preferred stock; a negative balance is a sign or unit defect in the filing parse",
         "tangible_deductions": "the sum of three non-negative balances (preferred stock, goodwill and intangibles)",
         "charged_tangible_common_equity": "tangible common equity when it is not negative; undefined otherwise (#1518)",
+        "financial_assets": "a carrying balance of cash and marketable investments; a negative balance is a sign or unit defect",
     }
 )
 
@@ -502,6 +504,172 @@ GPPE_V0_TREE = MetricTree(
     decimal_precision=34,
 )
 
+# --- gppe_operating_financial_v1 (#1518, #528): operating + financial return decomposition.
+
+FINANCIAL_ASSETS = MetricNode(
+    node_id=UUID("31e866ea-79cd-5bc5-8203-04fc40e3240f"),
+    key="financial_assets",
+    kind=NodeKind.INPUT,
+    definition="Cash and marketable investment balances on the balance sheet at the fiscal year end (#528).",
+    unit=UnitFamily.CURRENCY,
+    period=PeriodSemantics.FISCAL_YEAR_END_STOCK,
+    applicability=_EVERY_CLASS,
+    sign_policy=_policy(SignPolicy.MUST_BE_NON_NEGATIVE),
+    provenance=Provenance(kind=ProvenanceKind.METRIC_REGISTRY, reference="financial_assets"),
+    aliases=(
+        NodeAlias(kind=AliasKind.METRIC, value="financial_assets"),
+        NodeAlias(kind=AliasKind.INPUT_KEY, value="financial_assets"),
+        NodeAlias(kind=AliasKind.TOPT_SNAPSHOT_FIELD, value="financial_assets"),
+    ),
+)
+
+FINANCIAL_RETURNS = MetricNode(
+    node_id=UUID("c7f19762-975d-52b1-86db-360f8f7958fc"),
+    key="financial_returns",
+    kind=NodeKind.INPUT,
+    definition=(
+        "Investment income, dividends, and investment gains for the fiscal year (#528). Coalesces to 0 "
+        "when an issuer holds no marketable securities or reports no separate investment return line."
+    ),
+    unit=UnitFamily.CURRENCY,
+    period=PeriodSemantics.FISCAL_YEAR_FLOW,
+    applicability=_NON_BANK,
+    sign_policy=_policy(SignPolicy.MAY_BE_NEGATIVE, _NON_BANK),
+    provenance=Provenance(kind=ProvenanceKind.METRIC_REGISTRY, reference="financial_returns"),
+    aliases=(
+        NodeAlias(kind=AliasKind.METRIC, value="financial_returns"),
+        NodeAlias(kind=AliasKind.INPUT_KEY, value="financial_returns"),
+        NodeAlias(kind=AliasKind.TOPT_SNAPSHOT_FIELD, value="financial_returns"),
+    ),
+    default_when_missing=Decimal("0"),
+)
+
+BANK_NET_REVENUE = MetricNode(
+    node_id=UUID("4e99982c-03e2-510d-84fa-b7d8e988783e"),
+    key="bank_net_revenue",
+    kind=NodeKind.INPUT,
+    definition="A bank's net revenue for the fiscal year: net interest income plus noninterest income (#1518).",
+    unit=UnitFamily.CURRENCY,
+    period=PeriodSemantics.FISCAL_YEAR_FLOW,
+    applicability=_FINANCIAL,
+    sign_policy=_financial_policy(SignPolicy.MAY_BE_NEGATIVE),
+    provenance=Provenance(kind=ProvenanceKind.METRIC_REGISTRY, reference="bank_net_revenue"),
+    aliases=(
+        NodeAlias(kind=AliasKind.METRIC, value="bank_net_revenue"),
+        NodeAlias(kind=AliasKind.INPUT_KEY, value="bank_net_revenue"),
+        NodeAlias(kind=AliasKind.TOPT_SNAPSHOT_FIELD, value="bank_net_revenue"),
+    ),
+)
+
+TOTAL_GROSS_RETURN = MetricNode(
+    node_id=UUID("1519c717-370f-5b3f-a8fd-d37fc895d160"),
+    key="total_gross_return",
+    kind=NodeKind.DERIVED,
+    definition="Total gross return before capital charge (#528, #1518): operating gross profit plus financial returns.",
+    unit=UnitFamily.CURRENCY,
+    period=PeriodSemantics.FISCAL_YEAR_FLOW,
+    applicability=_NON_BANK,
+    sign_policy=_policy(SignPolicy.MAY_BE_NEGATIVE, _NON_BANK),
+    provenance=Provenance(kind=ProvenanceKind.DERIVED, reference="gppe_operating_financial_v1"),
+)
+
+CAPITAL_ADJUSTED_OPERATING_FINANCIAL = MetricNode(
+    node_id=UUID("5e4a472f-71cd-57b3-90e6-21a5b94cc4cb"),
+    key="capital_adjusted_operating_financial",
+    kind=NodeKind.DERIVED,
+    definition=(
+        "Capital-adjusted operating and financial return (#528, #1518): total gross return minus "
+        "total-assets capital charge for non-banks, or bank net revenue minus TCE capital charge for banks."
+    ),
+    unit=UnitFamily.CURRENCY,
+    period=PeriodSemantics.FISCAL_YEAR_FLOW,
+    applicability=_EVERY_CLASS,
+    sign_policy=_policy(SignPolicy.SIGN_IS_SIGNAL),
+    provenance=Provenance(kind=ProvenanceKind.DERIVED, reference="gppe_operating_financial_v1"),
+)
+
+GPPE_OPERATING_FINANCIAL_V1 = MetricNode(
+    node_id=UUID("25ff84c7-8f4d-515c-a6bb-e33cf52a2ef1"),
+    key="gppe_operating_financial_v1",
+    kind=NodeKind.DERIVED,
+    definition=(
+        "gppe_operating_financial_v1 (#528, #1518): capital-adjusted operating and financial return "
+        "per employee across all issuer classes."
+    ),
+    unit=UnitFamily.PER_EMPLOYEE,
+    period=PeriodSemantics.FISCAL_YEAR_FLOW,
+    applicability=_EVERY_CLASS,
+    sign_policy=_policy(SignPolicy.SIGN_IS_SIGNAL),
+    provenance=Provenance(kind=ProvenanceKind.DERIVED, reference="gppe_operating_financial_v1"),
+)
+
+GPPE_OPERATING_FINANCIAL_TREE = MetricTree(
+    tree_id=UUID("7183c828-7252-5591-81a8-99fd05737995"),
+    key="gppe_operating_financial",
+    version="1.0.0",
+    realizes=LABOR_EFFICIENCY.key,
+    root=GPPE_OPERATING_FINANCIAL_V1.key,
+    applicability=_EVERY_CLASS,
+    decompositions=(
+        Decomposition(
+            output=GPPE_OPERATING_FINANCIAL_V1.key,
+            formula_id="ratio",
+            formula_version=1,
+            operands={c: (CAPITAL_ADJUSTED_OPERATING_FINANCIAL.key, EMPLOYEES_TOTAL.key) for c in _EVERY_CLASS},
+        ),
+        Decomposition(
+            output=CAPITAL_ADJUSTED_OPERATING_FINANCIAL.key,
+            formula_id="difference",
+            formula_version=1,
+            operands={
+                IssuerClass.NON_FINANCIAL: (TOTAL_GROSS_RETURN.key, CAPITAL_CHARGE.key),
+                IssuerClass.INSURANCE: (TOTAL_GROSS_RETURN.key, CAPITAL_CHARGE.key),
+                IssuerClass.FINANCIAL: (BANK_NET_REVENUE.key, CAPITAL_CHARGE_TCE.key),
+            },
+        ),
+        Decomposition(
+            output=TOTAL_GROSS_RETURN.key,
+            formula_id="sum",
+            formula_version=1,
+            operands={
+                IssuerClass.NON_FINANCIAL: (GROSS_PROFIT.key, FINANCIAL_RETURNS.key),
+                IssuerClass.INSURANCE: (GROSS_PROFIT.key, FINANCIAL_RETURNS.key),
+            },
+        ),
+        Decomposition(
+            output=CAPITAL_CHARGE.key,
+            formula_id="product",
+            formula_version=1,
+            operands={c: (TOTAL_ASSETS.key, RISK_FREE_RATE.key) for c in _EVERY_CLASS},
+        ),
+        Decomposition(
+            output=CAPITAL_CHARGE_TCE.key,
+            formula_id="product",
+            formula_version=1,
+            operands={IssuerClass.FINANCIAL: (CHARGED_TANGIBLE_COMMON_EQUITY.key, RISK_FREE_RATE.key)},
+        ),
+        Decomposition(
+            output=CHARGED_TANGIBLE_COMMON_EQUITY.key,
+            formula_id="non_negative",
+            formula_version=1,
+            operands={IssuerClass.FINANCIAL: (TANGIBLE_COMMON_EQUITY.key,)},
+        ),
+        Decomposition(
+            output=TANGIBLE_COMMON_EQUITY.key,
+            formula_id="difference",
+            formula_version=1,
+            operands={IssuerClass.FINANCIAL: (STOCKHOLDERS_EQUITY.key, TANGIBLE_DEDUCTIONS.key)},
+        ),
+        Decomposition(
+            output=TANGIBLE_DEDUCTIONS.key,
+            formula_id="sum",
+            formula_version=1,
+            operands={IssuerClass.FINANCIAL: (PREFERRED_STOCK_VALUE.key, GOODWILL.key, INTANGIBLE_ASSETS.key)},
+        ),
+    ),
+    decimal_precision=34,
+)
+
 FOREST = Forest(
     nodes=(
         LABOR_EFFICIENCY,
@@ -524,8 +692,14 @@ FOREST = Forest(
         CAPITAL_CHARGE_TCE,
         CAPITAL_ADJUSTED_TCE,
         GPPE_BANKING_TCE_V1,
+        FINANCIAL_ASSETS,
+        FINANCIAL_RETURNS,
+        BANK_NET_REVENUE,
+        TOTAL_GROSS_RETURN,
+        CAPITAL_ADJUSTED_OPERATING_FINANCIAL,
+        GPPE_OPERATING_FINANCIAL_V1,
     ),
-    trees=(GPPE_V0_TREE, GPPE_BANKING_TCE_TREE),
+    trees=(GPPE_V0_TREE, GPPE_BANKING_TCE_TREE, GPPE_OPERATING_FINANCIAL_TREE),
 )
 
 #: Published mart columns -> the node whose SIGN POLICY judges each one, per table. This is not a statement of what

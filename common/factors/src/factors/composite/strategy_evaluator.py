@@ -100,6 +100,7 @@ _METRIC_FOR_KEY = INPUT_KEY_ALIASES
 _REQUIRED_INPUT_REASONS: tuple[tuple[str, ExclusionReason], ...] = (
     ("gross_profit", ExclusionReason.MISSING_GROSS_PROFIT_FACT),
     ("pre_provision_profit", ExclusionReason.MISSING_GROSS_PROFIT_FACT),
+    ("bank_net_revenue", ExclusionReason.MISSING_GROSS_PROFIT_FACT),
     ("total_assets", ExclusionReason.MISSING_TOTAL_ASSETS_FACT),
     ("stockholders_equity", ExclusionReason.MISSING_TANGIBLE_COMMON_EQUITY),
     ("goodwill", ExclusionReason.MISSING_TANGIBLE_COMMON_EQUITY),
@@ -372,6 +373,8 @@ def _facts_for(issuer: IssuerInput, keys: Sequence[str], *, as_of: datetime) -> 
         record = issuer.records.get(key)
         if record is None and key == "pre_provision_profit":
             record = issuer.records.get("gross_profit")
+        if record is None and key == "bank_net_revenue":
+            record = issuer.records.get("pre_provision_profit") or issuer.records.get("gross_profit")
         if record is None:
             continue
         metric = _METRIC_FOR_KEY.get(key, key)
@@ -420,6 +423,8 @@ def _has_stale_period(issuer: IssuerInput, keys: Sequence[str], *, as_of: dateti
         record = issuer.records.get(key)
         if record is None and key == "pre_provision_profit":
             record = issuer.records.get("gross_profit")
+        if record is None and key == "bank_net_revenue":
+            record = issuer.records.get("pre_provision_profit") or issuer.records.get("gross_profit")
         if record is None:
             continue
         measure, _conf = record
@@ -433,6 +438,16 @@ def _has_stale_period(issuer: IssuerInput, keys: Sequence[str], *, as_of: dateti
 
 class LookAheadError(ValueError):
     """Raised when an input's `knowable_at` is strictly after the evaluation `cutoff_at` (#1413 D6)."""
+
+
+def _resolve_bank_numerator_key(key: str, mapping: Mapping[str, object]) -> str:
+    if key in mapping:
+        return key
+    if key in ("pre_provision_profit", "bank_net_revenue"):
+        for fallback in ("pre_provision_profit", "gross_profit"):
+            if fallback in mapping:
+                return fallback
+    return key
 
 
 def _has_stale_required_input(
@@ -450,14 +465,7 @@ def _has_stale_required_input(
             raise LookAheadError(
                 f"{issuer.issuer_id}: input {key!r} has knowable_at {knowable_instant.isoformat()} > cutoff {as_of.isoformat()}"
             )
-    resolved_keys = [
-        (
-            "gross_profit"
-            if key == "pre_provision_profit" and key not in issuer.knowable_at and "gross_profit" in issuer.knowable_at
-            else key
-        )
-        for key in keys
-    ]
+    resolved_keys = [_resolve_bank_numerator_key(key, issuer.knowable_at) for key in keys]
     unknown = [key for key in resolved_keys if key not in issuer.knowable_at]
     if unknown:
         raise ValueError(f"{issuer.issuer_id}: knowable_at lacks the required inputs {unknown}")
@@ -469,11 +477,7 @@ def _missing_required_reason(
     required: Sequence[tuple[str, ExclusionReason]],
 ) -> ExclusionReason | None:
     return next(
-        (
-            reason
-            for key, reason in required
-            if key not in issuer.records and not (key == "pre_provision_profit" and "gross_profit" in issuer.records)
-        ),
+        (reason for key, reason in required if _resolve_bank_numerator_key(key, issuer.records) not in issuer.records),
         None,
     )
 
@@ -482,22 +486,28 @@ def _consumed_confidence_for(
     issuer: IssuerInput,
     required: Sequence[tuple[str, ExclusionReason]],
 ) -> Decimal:
-    return min(
-        (issuer.records[key][1] if key in issuer.records else issuer.records["gross_profit"][1])
-        for key, _reason in required
-    )
+    return min(issuer.records[_resolve_bank_numerator_key(key, issuer.records)][1] for key, _reason in required)
 
 
 def _multiple_facts_for(
     issuer: IssuerInput,
     basis: ValuationBasis,
     as_of: datetime,
+    *,
+    tree: MetricTree | None = None,
+    forest: Forest = FOREST,
 ) -> list[Fact]:
-    facts = _facts_for(issuer, _input_keys(basis.value, issuer_class=issuer.issuer_class), as_of=as_of)
+    keys = list(_input_keys(basis.value, issuer_class=issuer.issuer_class))
+    if basis is ValuationBasis.PRICE_TO_GROSS_PROFIT and tree is not None and issuer.issuer_class is not None:
+        from factors.forest.binding import operating_numerator_node
+
+        num_key = input_key_of(operating_numerator_node(tree, issuer.issuer_class, forest=forest))
+        keys = [num_key if k in ("gross_profit", "pre_provision_profit") else k for k in keys]
+    facts = _facts_for(issuer, keys, as_of=as_of)
     if basis is ValuationBasis.PRICE_TO_GROSS_PROFIT and not any(f.metric == "gross_profit" for f in facts):
-        ppnr = next((f for f in facts if f.metric == "pre_provision_profit"), None)
-        if ppnr is not None:
-            return [*facts, ppnr.model_copy(update={"metric": "gross_profit"})]
+        proxy = next((f for f in facts if f.metric in ("pre_provision_profit", "bank_net_revenue")), None)
+        if proxy is not None:
+            return [*facts, proxy.model_copy(update={"metric": "gross_profit"})]
     return facts
 
 
@@ -596,7 +606,11 @@ def _evaluate_issuer(
     multiple_result = (
         ps_result
         if basis is ValuationBasis.PRICE_TO_SALES
-        else _MULTIPLE_FACTOR[basis](_multiple_facts_for(issuer, basis, as_of), entity_id=issuer.issuer_id, as_of=as_of)
+        else _MULTIPLE_FACTOR[basis](
+            _multiple_facts_for(issuer, basis, as_of, tree=tree, forest=forest),
+            entity_id=issuer.issuer_id,
+            as_of=as_of,
+        )
     )
     # P/S gates only when it is the valuation basis (then it IS `multiple_result`). Under a P/GP
     # definition a P/S that cannot be computed is recorded as None and decides nothing.

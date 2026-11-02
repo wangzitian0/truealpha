@@ -24,6 +24,7 @@ import pytest
 from factors.forest import (
     FOREST,
     GPPE_BANKING_TCE_TREE,
+    GPPE_OPERATING_FINANCIAL_TREE,
     GPPE_V0_TREE,
     AliasKind,
     IssuerClass,
@@ -301,6 +302,7 @@ FROZEN_TREES = {
     # #1519 step 6: PRE_PROVISION_PROFIT declares METRIC_REGISTRY("pre_provision_profit") with METRIC
     # and INPUT_KEY aliases, removing the financial_issuer_split overload on gross_profit.
     ("gppe_banking_tce", "v2"): "a6d6ca21a0a92144e46a95054b111ad4e5cd0455dcb7741991e6660e7fc8153b",
+    ("gppe_operating_financial", "1.0.0"): "39f0b445af54adcb0ca9c3a028c45adc353523657b336f61e387e6720f7b1a6d",
 }
 
 
@@ -579,3 +581,56 @@ def test_a_class_without_a_pin_is_an_unavailable_core_row_and_not_an_abort() -> 
     )
     assert result.availability.value == "unavailable"
     assert [reason.value for reason in result.reason_codes] == ["labor_efficiency_tree_unpinned"]
+
+
+def test_gppe_operating_financial_tree_evaluates_all_classes_and_coalesces_missing_financial_returns() -> None:
+    non_bank_with_returns = evaluate(
+        FOREST,
+        GPPE_OPERATING_FINANCIAL_TREE,
+        issuer_class=IssuerClass.NON_FINANCIAL,
+        inputs={
+            "gross_profit": Decimal("100000000000"),
+            "financial_returns": Decimal("5000000000"),
+            "total_assets": Decimal("200000000000"),
+            "employees_total": Decimal("50000"),
+            "risk_free_rate": Decimal("0.05"),
+        },
+    )
+    # (100B + 5B - 200B * 0.05) / 50,000 = 95B / 50,000 = 1,900,000
+    assert non_bank_with_returns.undefined == {}
+    assert non_bank_with_returns.values["total_gross_return"] == Decimal("105000000000")
+    assert non_bank_with_returns.values["capital_adjusted_operating_financial"] == Decimal("95000000000")
+    assert non_bank_with_returns.values["gppe_operating_financial_v1"] == Decimal("1900000")
+
+    # Missing financial_returns coalesces to 0 via default_when_missing.
+    non_bank_missing_returns = evaluate(
+        FOREST,
+        GPPE_OPERATING_FINANCIAL_TREE,
+        issuer_class=IssuerClass.INSURANCE,
+        inputs={
+            "gross_profit": Decimal("100000000000"),
+            "financial_returns": None,
+            "total_assets": Decimal("200000000000"),
+            "employees_total": Decimal("50000"),
+            "risk_free_rate": Decimal("0.05"),
+        },
+    )
+    assert non_bank_missing_returns.undefined == {}
+    assert non_bank_missing_returns.values["financial_returns"] == Decimal("0")
+    assert non_bank_missing_returns.values["total_gross_return"] == Decimal("100000000000")
+    assert non_bank_missing_returns.values["gppe_operating_financial_v1"] == Decimal("1800000")
+
+    bank_eval = evaluate(
+        FOREST,
+        GPPE_OPERATING_FINANCIAL_TREE,
+        issuer_class=IssuerClass.FINANCIAL,
+        inputs={
+            "bank_net_revenue": Decimal("86807000000"),
+            **{name: Decimal(value) for name, value in JPM_TCE_LEAVES.items()},
+            "employees_total": Decimal("318512"),
+            "risk_free_rate": Decimal("0.05"),
+        },
+    )
+    assert bank_eval.undefined == {}
+    assert bank_eval.values["capital_adjusted_operating_financial"] == Decimal("72453900000")
+    assert bank_eval.values["gppe_operating_financial_v1"] == _tce_kernel("0.05")[1]

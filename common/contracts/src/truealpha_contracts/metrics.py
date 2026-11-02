@@ -172,6 +172,21 @@ _SPECS = (
         unit_family=UnitFamily.PER_EMPLOYEE,
         description="Gross profit per employee for non-financial issuers (#1523).",
     ),
+    MetricSpec(
+        name="financial_assets",
+        unit_family=UnitFamily.CURRENCY,
+        description="Cash and marketable investment balances on the balance sheet at the fiscal year end (#528).",
+    ),
+    MetricSpec(
+        name="financial_returns",
+        unit_family=UnitFamily.CURRENCY,
+        description="Investment income, dividends, and investment gains for the fiscal year (#528).",
+    ),
+    MetricSpec(
+        name="bank_net_revenue",
+        unit_family=UnitFamily.CURRENCY,
+        description="Bank net revenue (revenues net of interest expense, or net interest income plus noninterest income).",
+    ),
 )
 
 

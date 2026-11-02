@@ -137,6 +137,9 @@ class ToptCoreReasonCode(StrEnum):
     MISSING_PREFERRED_STOCK_VALUE = "missing_preferred_stock_value"
     MISSING_GOODWILL = "missing_goodwill"
     MISSING_INTANGIBLE_ASSETS_NET_EXCLUDING_GOODWILL = "missing_intangible_assets_net_excluding_goodwill"
+    MISSING_BANK_NET_REVENUE = "missing_bank_net_revenue"
+    MISSING_FINANCIAL_ASSETS = "missing_financial_assets"
+    MISSING_FINANCIAL_RETURNS = "missing_financial_returns"
     NONPOSITIVE_HEADCOUNT = "nonpositive_headcount"
     NONPOSITIVE_REVENUE = "nonpositive_revenue"
     NONPOSITIVE_SHARES_OUTSTANDING = "nonpositive_shares_outstanding"
@@ -184,6 +187,8 @@ SHARE_BASIS_REASON_CODES = frozenset(
 )
 
 
+_BASE_SNAPSHOT_FIELDS = frozenset({"gross_profit", "total_assets", "headcount", "revenue", "pre_provision_profit"})
+
 #: The snapshot fields that only the banking tree reads (#1518): the captured leaves of `gppe_banking_tce`.
 #: `test_core.py` holds this tuple equal to the `topt_snapshot_field` aliases of those leaves.
 TCE_SNAPSHOT_FIELDS = (
@@ -193,14 +198,20 @@ TCE_SNAPSHOT_FIELDS = (
     "intangible_assets_net_excluding_goodwill",
 )
 
+#: All optional forest snapshot fields (banking TCE leaves + operating/financial decomposition leaves).
+#: Derived from `FOREST` input nodes whose `topt_snapshot_field` alias is outside `_BASE_SNAPSHOT_FIELDS`.
+OPTIONAL_SNAPSHOT_FIELDS: tuple[str, ...] = tuple(
+    field for field in FOREST.snapshot_field_nodes() if field not in _BASE_SNAPSHOT_FIELDS
+)
+
 
 def drop_absent_banking_leaves(data: dict[str, Any]) -> dict[str, Any]:
-    """The dump ``data`` of a snapshot type without each banking leaf that is None (#1518).
+    """The dump ``data`` of a snapshot type without each optional forest leaf that is None (#1518).
 
     The core snapshot input and the snapshot member share this one rule, so a snapshot stored before
-    the leaves existed, and the snapshot of any issuer that is not a bank, keep their content hash.
+    the leaves existed, and the snapshot of any issuer that carries none, keep their content hash.
     """
-    return {key: value for key, value in data.items() if key not in TCE_SNAPSHOT_FIELDS or value is not None}
+    return {key: value for key, value in data.items() if key not in OPTIONAL_SNAPSHOT_FIELDS or value is not None}
 
 
 class ToptMetricInput(_FrozenModel):
@@ -372,6 +383,9 @@ class ToptCoreSnapshotInput(_FrozenModel):
     preferred_stock_value: ToptMetricInput | None = None
     goodwill: ToptMetricInput | None = None
     intangible_assets_net_excluding_goodwill: ToptMetricInput | None = None
+    financial_assets: ToptMetricInput | None = None
+    financial_returns: ToptMetricInput | None = None
+    bank_net_revenue: ToptMetricInput | None = None
 
     @model_serializer(mode="wrap")
     def omit_absent_optional_fields(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
@@ -407,7 +421,7 @@ class ToptCoreSnapshotInput(_FrozenModel):
             "headcount": self.headcount,
             "revenue": self.revenue,
             "pre_provision_profit": self.pre_provision_profit,
-            **{name: getattr(self, name) for name in TCE_SNAPSHOT_FIELDS},
+            **{name: getattr(self, name) for name in OPTIONAL_SNAPSHOT_FIELDS},
         }
         for expected_metric, metric in expected_metrics.items():
             if metric is None:
@@ -741,6 +755,7 @@ def compute_topt_gppe(
         )
     inputs: dict[str, Decimal | None] = {}
     reasons_list: list[ToptCoreReasonCode] = []
+    consumed_confidences: list[Decimal] = []
     for node in required_inputs(FOREST, tree, issuer_class):
         parameter = node.alias(AliasKind.DEFINITION_PARAMETER)
         if parameter is not None:
@@ -751,9 +766,13 @@ def compute_topt_gppe(
             raise AssertionError(f"GPPE tree input {node.key} names no snapshot field")
         metric: ToptMetricInput | None = getattr(snapshot, field)
         if metric is None or metric.availability is MetricAvailability.UNAVAILABLE or metric.value is None:
+            if node.default_when_missing is not None:
+                inputs[node.key] = None
+                continue
             reasons_list.append(_missing_metric_reason(metric, field))
             continue
         inputs[node.key] = metric.value
+        consumed_confidences.append(metric.confidence)
     reasons = tuple(reasons_list)
     freshness = _snapshot_freshness(snapshot)
     if freshness is MetricFreshness.STALE:
@@ -783,7 +802,7 @@ def compute_topt_gppe(
             freshness=freshness,
         )
 
-    confidence = min(cell.confidence for cell in snapshot.cell_inputs)
+    confidence = min([cell.confidence for cell in snapshot.cell_inputs] + consumed_confidences)
     # One pinned tree per class: a bank's numerator is its pre-provision profit, everyone else's is
     # gross profit. The capital charge is the tree's: total assets for the uniform tree, measured
     # tangible common equity for the banking tree. The tree's decimal context is the one this kernel always used.
