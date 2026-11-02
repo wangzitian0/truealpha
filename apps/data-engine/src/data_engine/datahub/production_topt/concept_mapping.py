@@ -18,22 +18,12 @@ pointer advance is visible in the data rather than only in a changelog.
 from __future__ import annotations
 
 import json
-import logging
-import re
 from typing import Any
 
-import psycopg
 from psycopg import Connection
 from truealpha_contracts.concept_mapping import ConceptMappingRuleset
 
-logger = logging.getLogger(__name__)
 _KIND = "concept-mapping"
-_VERSION_RE = re.compile(r"^production-topt-concepts:v(\d+)$")
-
-
-def _ruleset_version_number(version: str) -> int | None:
-    match = _VERSION_RE.match(version)
-    return int(match.group(1)) if match else None
 
 
 # The mapping the image ships with — the state #501/#507 arrived at, now expressed as data.
@@ -380,25 +370,7 @@ def resolve_ruleset(connection: Connection[Any] | None) -> ConceptMappingRuleset
     ).fetchone()
     if row is None:
         return DEFAULT_RULESET
-    stored = ConceptMappingRuleset.model_validate(row[0])
-    stored_num = _ruleset_version_number(stored.version)
-    default_num = _ruleset_version_number(DEFAULT_RULESET.version)
-    if stored_num is not None and default_num is not None and stored_num < default_num:
-        try:
-            with connection.transaction():
-                publish_ruleset(
-                    connection,
-                    DEFAULT_RULESET,
-                    note="Auto-advance governed concept-mapping head to code DEFAULT_RULESET",
-                )
-        except psycopg.Error as exc:
-            logger.warning(
-                "Failed to auto-advance governed concept-mapping ruleset head to %s: %s",
-                DEFAULT_RULESET.version,
-                exc,
-            )
-        return DEFAULT_RULESET
-    return stored
+    return ConceptMappingRuleset.model_validate(row[0])
 
 
 def publish_ruleset(connection: Connection[Any], ruleset: ConceptMappingRuleset, *, note: str) -> tuple[str, int]:

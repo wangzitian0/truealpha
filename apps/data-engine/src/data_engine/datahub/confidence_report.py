@@ -1437,9 +1437,7 @@ def build_report(
             origins_by_subject = {listing: family_origins[listing] for listing in sorted(family_origins)}
         else:
             origins_by_subject = {
-                subject_id: subject.origins.get(policy.family, [])
-                for subject_id, subject in sorted(subjects.items())
-                if _subject_applies(subject, policy)
+                subject_id: subject.origins.get(policy.family, []) for subject_id, subject in sorted(subjects.items())
             }
         grades[policy.family] = {
             subject_id: classify_cell(
