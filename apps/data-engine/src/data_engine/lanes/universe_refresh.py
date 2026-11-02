@@ -10,7 +10,7 @@ from truealpha_contracts.environment_contract import load_environment_contract
 
 from data_engine.config import settings
 from data_engine.external_op import external_op
-from data_engine.lanes.capture import is_universe_scheduled
+from data_engine.lanes.capture import is_universe_list_refresh_scheduled, is_universe_scheduled
 from data_engine.sources import gateway
 
 # -- universe refresh (#539 owner requirement: automatic pulls) ------------------------
@@ -28,12 +28,12 @@ SP500_UNIVERSE_REFRESH_CRON = "37 8 * * 6"
 
 
 def _is_source_refresh_enabled(source) -> bool:
-    """Refresh the constituents and the N-PORT holdings of a universe that the process environment runs.
+    """Refresh the constituents of a universe that the process environment schedules or lists in `list_refresh`.
 
-    The contract is the only source of "scheduled" and "stopped" (#67, #1310): a stopped universe, and
-    a universe that the environment does not list, are not refreshed.
+    The contract is the only source of "scheduled", "stopped" and `list_refresh` (#67, #1310, #1523 D2):
+    a stopped universe, and a universe that the environment neither schedules nor refreshes, are skipped.
     """
-    return is_universe_scheduled(source.etf, settings.app_env)
+    return is_universe_list_refresh_scheduled(source.etf, settings.app_env)
 
 
 @external_op
@@ -106,7 +106,7 @@ def _refresh_universes(
     from data_engine.datahub.production_topt.nport_holdings import capture_fund_holdings
 
     for source in active_sources:
-        if source.nport_ticker is None:
+        if source.nport_ticker is None or not is_universe_scheduled(source.etf, settings.app_env):
             continue
         try:
             with psycopg.connect(settings.database_url) as connection:
@@ -148,12 +148,12 @@ def build_universe_refresh_schedule(app_env: str = settings.app_env) -> dg.Sched
         job=universe_refresh_pipeline_job,
         cron_schedule=UNIVERSE_REFRESH_CRON,
         execution_timezone="UTC",
-        # The refresh runs where the environment schedules a universe whose members an index API gives
-        # (staging runs TOPT only and exercises the plane through the operator script when needed).
+        # The refresh runs where the environment schedules or refreshes a universe whose members an index API gives
+        # (#1523 D2: staging refreshes the QQQ constituent list weekly without running a QQQ capture tick).
         default_status=(
             dg.DefaultScheduleStatus.RUNNING
             if any(
-                is_universe_scheduled(key, app_env)
+                is_universe_list_refresh_scheduled(key, app_env)
                 for key, universe in load_environment_contract().universes.items()
                 if universe.membership.kind == "index_api"
             )

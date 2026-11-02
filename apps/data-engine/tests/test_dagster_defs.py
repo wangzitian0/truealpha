@@ -992,6 +992,23 @@ def test_refresh_universes_skips_stopped_sp500_and_isolates_per_universe_transac
     assert nport_calls == ["QQQ"]
     assert len(commits) == 3  # canary constituents + QQQ N-PORT + identity enrichment
 
+    # #1523 D2: in staging, QQQ is in list_refresh (constituents refreshed weekly), not scheduled (no N-PORT capture).
+    refreshed.clear()
+    nport_calls.clear()
+    commits.clear()
+    monkeypatch.setattr(settings, "app_env", "staging")
+    universe_refresh._refresh_universes(
+        ctx,
+        UNIVERSE_SOURCES,
+        latest_quarter_end,
+        lambda conn, source, *, report_date, note, openfigi_api_key="": (
+            refreshed.append(source.etf) or f"published:{source.etf}:{report_date}"
+        ),
+    )
+    assert refreshed == ["qqq", "canary"]
+    assert nport_calls == []
+    assert len(commits) == 3  # qqq constituents + canary constituents + identity enrichment
+
 
 # -- #1310: the SP500 schedule stays STOPPED while its status in the contract is stopped ------------------
 
@@ -1189,9 +1206,10 @@ def test_the_sp500_stop_is_read_from_the_contract_and_from_no_constant() -> None
 def test_the_refresh_of_a_universe_follows_the_contract_of_the_process_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`_is_source_refresh_enabled` refreshes a universe where the contract schedules it, and the canary
-    where the contract declares its tick. The SP500 waits in production and is absent in staging.
-    Staging runs the TOPT universe only, so it refreshes no QQQ. A source outside the records raises."""
+    """`_is_source_refresh_enabled` refreshes a universe where the contract schedules it or lists it in
+    `list_refresh` (#1523 D2), and the canary where the contract declares its tick. The SP500 waits in
+    production and is absent in staging. Staging refreshes the QQQ constituent list weekly without running a
+    QQQ tick or N-PORT holdings capture. A source outside the records raises."""
     from data_engine.config import settings
     from data_engine.lanes import universe_refresh
     from truealpha_contracts.environment_contract import EnvironmentContract, load_environment_contract
@@ -1210,7 +1228,8 @@ def test_the_refresh_of_a_universe_follows_the_contract_of_the_process_environme
     monkeypatch.setattr(settings, "app_env", "production")
     assert enabled() == {"qqq": True, "sp500": False, "canary": True}, SP500_STOPPED_BECAUSE
     monkeypatch.setattr(settings, "app_env", "staging")
-    assert enabled() == {"qqq": False, "sp500": False, "canary": True}
+    assert enabled() == {"qqq": True, "sp500": False, "canary": True}
+    assert capture.is_universe_scheduled("qqq", "staging") is False
     with pytest.raises(UnknownUniverse):
         universe_refresh._is_source_refresh_enabled(_Source("universe-the-contract-does-not-list"))
 
@@ -1220,12 +1239,12 @@ def test_the_refresh_of_a_universe_follows_the_contract_of_the_process_environme
         "a scheduled status in the contract schedules the SP500"
     )
     monkeypatch.setattr(settings, "app_env", "staging")
-    assert enabled() == {"qqq": False, "sp500": False, "canary": True}, "staging does not list the SP500"
+    assert enabled() == {"qqq": True, "sp500": False, "canary": True}, "staging does not list the SP500"
 
 
 @pytest.mark.parametrize("app_env", ["dev", "typo-in-app-env", ""])
 def test_an_environment_the_contract_does_not_name_runs_the_topt_tick_and_the_canary_only(app_env: str) -> None:
-    """A mistyped APP_ENV must never start the production schedules (QQQ, the S&P 500). It takes the rule of staging."""
+    """A mistyped APP_ENV must never start the production ticks (QQQ, the S&P 500). It takes the rule of staging."""
     from data_engine.environment_universes import rule_environment, scheduled_universe_names
 
     rows = _schedule_rows(dagster_defs.build_definitions(app_env))
@@ -1234,7 +1253,7 @@ def test_an_environment_the_contract_does_not_name_runs_the_topt_tick_and_the_ca
     assert scheduled_universe_names(app_env) == ("topt",)
     assert rows["topt_live_schedule"][1] == "RUNNING" and rows["canary_daily_schedule"][1] == "RUNNING"
     assert rows["qqq_live_schedule"][1] == "STOPPED" and rows["sp500_live_schedule"][1] == "STOPPED"
-    assert rows["universe_refresh_schedule"][1] == "STOPPED"
+    assert rows["universe_refresh_schedule"][1] == "RUNNING"
 
 
 def test_the_production_alias_prod_is_production_for_the_universe_names() -> None:

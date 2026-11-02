@@ -12,6 +12,7 @@ from data_engine.datahub.production_topt.source_registrations import (
     AsOfAxis,
     SourceRegistration,
     knowable_instant,
+    last_settled_accession_date,
 )
 
 
@@ -22,6 +23,28 @@ def test_knowable_instant_stamps_explicit_utc_time_for_every_axis() -> None:
     assert knowable_instant(AsOfAxis.ACCESSION, day) == datetime(2026, 3, 31, 23, 59, 59, 999999, tzinfo=UTC)
     assert knowable_instant(AsOfAxis.RELEASE, day) == datetime(2026, 3, 31, 0, 0, tzinfo=UTC)
     assert knowable_instant(AsOfAxis.BUSINESS_DAY, day) == datetime(2026, 4, 1, 0, 0, tzinfo=UTC)
+
+
+def test_last_settled_accession_date_never_exceeds_cutoff_and_routes_through_composition() -> None:
+    """Every live tick runs before 23:59:59.999999Z, so `last_settled_accession_date` must step back
+    to the prior UTC day whenever `cutoff < day 23:59:59.999999Z`, and `composition.build_routes`
+    must pass `last_settled_accession_date(plan.cutoff)` rather than raw `plan.cutoff.date()` (#1519)."""
+    for cutoff, expected in (
+        (datetime(2026, 10, 30, 0, 0, tzinfo=UTC), date(2026, 10, 29)),
+        (datetime(2026, 10, 30, 22, 15, tzinfo=UTC), date(2026, 10, 29)),
+        (datetime(2026, 10, 30, 23, 47, tzinfo=UTC), date(2026, 10, 29)),
+        (datetime(2026, 10, 30, 23, 59, 59, 999999, tzinfo=UTC), date(2026, 10, 30)),
+    ):
+        settled = last_settled_accession_date(cutoff)
+        assert settled == expected
+        assert knowable_instant(AsOfAxis.ACCESSION, settled) <= cutoff
+
+    data_engine_src = Path(__file__).resolve().parents[1] / "src" / "data_engine"
+    comp_text = (data_engine_src / "datahub" / "production_topt" / "composition.py").read_text(encoding="utf-8")
+    hist_text = (data_engine_src / "datahub" / "strategy_history.py").read_text(encoding="utf-8")
+    assert "cutoff_date=last_settled_accession_date(plan.cutoff)" in comp_text
+    assert "as_of = last_settled_accession_date(cutoff_at)" in hist_text
+    assert "cutoff_at.astimezone(UTC).date() - timedelta(days=1)" not in hist_text
 
 
 def test_all_registered_sources_declare_an_as_of_axis() -> None:

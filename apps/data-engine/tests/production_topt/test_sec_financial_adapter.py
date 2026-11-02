@@ -2501,3 +2501,60 @@ def test_gbp_price_against_usd_filing_marks_only_that_listing_currency_mismatch_
         ranked = [issuer_id for issuer_id, reason in decisions.items() if reason is None]
         assert len(ranked) == 19
         assert msft_issuer not in ranked
+
+
+def test_live_tick_settled_accession_cutoff_keeps_same_day_filing_and_empty_bundle_within_bitemporal_bounds() -> None:
+    """At a 22:15Z live tick on day D, `last_settled_accession_date(cutoff)` is D-1, so:
+    1) an issuer filing on day D (`AMZN`/`ADP` on 2026-10-30) selects its prior settled filing (`<= D-1`),
+       and
+    2) a foreign/non-XBRL issuer with an empty bundle (`TRI`) stamps fallback
+       `knowable_instant(AsOfAxis.ACCESSION, D-1) == (D-1) 23:59:59.999999Z <= cutoff`,
+    satisfying `BitemporalStamp(transaction_time=result.transaction_time, recorded_at=cutoff)` (#1519)."""
+    from data_engine.datahub.production_topt.source_registrations import last_settled_accession_date
+    from truealpha_contracts.evidence_graph import BitemporalStamp
+
+    tick_cutoff = datetime(2026, 10, 30, 22, 15, tzinfo=UTC)
+    settled_cutoff_date = last_settled_accession_date(tick_cutoff)
+    assert settled_cutoff_date == date(2026, 10, 29)
+
+    same_day_facts = _facts()
+    same_day_facts["facts"]["us-gaap"]["GrossProfit"]["units"]["USD"].append(
+        _annual("2026-09-30", "2025-10-01", 777, "2026-10-30")
+    )
+    bundle_settled = build_bundle(same_day_facts, settled_cutoff_date, OperatingBranch.NON_FINANCIAL)
+    assert bundle_settled.gross_profit == Decimal("999")
+    assert bundle_settled.knowable_at == datetime(2026, 4, 20, 23, 59, 59, 999999, tzinfo=UTC)
+    assert bundle_settled.knowable_at <= tick_cutoff
+
+    tri_item = _work_item("f" * 64)
+    tri_target = SecTarget(
+        cik=1144354,
+        cutoff=settled_cutoff_date,
+        issuer_id="issuer:lei:549300561UZND4C7B569",
+        instrument_id="security:cusip:884903808",
+        listing_id="listing:xnas:tri",
+        operating_branch=OperatingBranch.NON_FINANCIAL,
+        ticker="TRI",
+    )
+    tri_adapter = SecFinancialFactAdapter(
+        {tri_item.work_item_id: tri_target},
+        lambda _cik, _cutoff, _branch: FinancialFactsBundle(
+            gross_profit=None,
+            total_assets=None,
+            shares_outstanding=None,
+            revenue=None,
+            pre_provision_profit=None,
+            raw_bytes=b"{}",
+            knowable_at=None,
+        ),
+    )
+    tri_outcome = tri_adapter.fetch(tri_item)
+    assert isinstance(tri_outcome, FetchSuccess)
+    assert tri_outcome.transaction_time == datetime(2026, 10, 29, 23, 59, 59, 999999, tzinfo=UTC)
+    assert tri_outcome.transaction_time <= tick_cutoff
+    stamp = BitemporalStamp(
+        valid_from=tri_outcome.valid_from,
+        transaction_time=tri_outcome.transaction_time,
+        recorded_at=tick_cutoff,
+    )
+    assert stamp.transaction_time <= stamp.recorded_at

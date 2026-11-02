@@ -169,6 +169,7 @@ def test_health_hides_the_verdict_rows_of_a_universe_that_the_environment_does_n
         ("question_coverage@universe-list:qqq", ran, True, "ok"),
         ("datahub_confidence_report@universe-list:qqq", ran, True, "ok"),
         ("runtime_shape", ran, True, "ok"),
+        ("fetch_keys_once", ran, True, "ok: retired check row in append-only table"),
     ]
     monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: _VerdictsOnly(rows))
 
@@ -178,7 +179,7 @@ def test_health_hides_the_verdict_rows_of_a_universe_that_the_environment_does_n
     production = [entry["check"] for entry in TestClient(app).get("/health").json()["nightly_verdicts"]]
 
     assert staging == ["theme_purity@topt", "runtime_shape"]
-    assert production == [row[0] for row in rows]
+    assert production == [row[0] for row in rows if row[0] != "fetch_keys_once"]
 
 
 def test_a_pending_verdict_is_reported_as_null_not_as_red(monkeypatch) -> None:

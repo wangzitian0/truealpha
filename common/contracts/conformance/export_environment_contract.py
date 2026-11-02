@@ -115,11 +115,16 @@ def render() -> str:
             for env_name, limits in contract.model_seat.environments.items()
         },
     }
+    nightly_verdicts = {
+        "checks": list(contract.nightly_verdicts.checks.keys()),
+        "per_universe": list(contract.nightly_verdicts.per_universe.keys()),
+    }
     ticks_json = json.dumps(ticks_by_env, indent=2)
     universes_json = json.dumps(universes, indent=2)
     sentinels_json = json.dumps(sentinels, indent=2)
     vendor_accounts_json = json.dumps(vendor_accounts, indent=2)
     model_seat_json = json.dumps(model_seat, indent=2)
+    nightly_verdicts_json = json.dumps(nightly_verdicts, indent=2)
     return f"""\
 /**
  * GENERATED FILE. DO NOT EDIT.
@@ -228,6 +233,11 @@ export interface ModelSeatContract {{
   readonly environments: Readonly<Record<string, ModelSeatEnvironmentLimitsContract>>;
 }}
 
+export interface NightlyVerdictsContract {{
+  readonly checks: readonly string[];
+  readonly per_universe: readonly string[];
+}}
+
 export const ENVIRONMENT_CONTRACT_VERSION = {json.dumps(contract.contract_version)} as const;
 export const ENVIRONMENT_CONTRACT_SHA256 = {json.dumps(contract.content_sha256)} as const;
 export const UTILIZATION_CEILING = {UTILIZATION_CEILING} as const;
@@ -248,6 +258,8 @@ export const UNIVERSES: readonly UniverseRecordContract[] = {universes_json} as 
 export const VENDOR_ACCOUNTS: readonly VendorAccountContract[] = {vendor_accounts_json} as const;
 
 export const MODEL_SEAT: ModelSeatContract = {model_seat_json} as const;
+
+export const NIGHTLY_VERDICTS: NightlyVerdictsContract = {nightly_verdicts_json} as const;
 
 /** The vendor account row `name` of the environment contract (#1520). */
 export function vendorAccountRecord(name: string): VendorAccountContract {{
@@ -355,6 +367,38 @@ export function isHeadScheduledFromContract(
   }}
   const rule = envTicks[key];
   return rule ? rule.scheduled : false;
+}}
+
+/**
+ * Whether `environment` records the nightly verdict `check` (#1521, #1522).
+ * Mirrors `EnvironmentContract.expects_verdict`: retired checks (`fetch_keys_once`) and per-universe checks
+ * of unscheduled universes (`@universe-list:qqq` in staging) return false so append-only rows are not rendered.
+ */
+export function expectsVerdictFromContract(
+  check: string,
+  environment: string | null | undefined,
+): boolean {{
+  const atIndex = check.indexOf("@");
+  if (atIndex === -1) {{
+    return NIGHTLY_VERDICTS.checks.includes(check);
+  }}
+  const prefix = check.slice(0, atIndex);
+  const laneName = check.slice(atIndex + 1);
+  if (!NIGHTLY_VERDICTS.per_universe.includes(prefix)) {{
+    return false;
+  }}
+  const universe = UNIVERSES.find((u) => u.lane_name === laneName);
+  if (!universe) {{
+    return false;
+  }}
+  const rawEnv = (environment || "").trim().toLowerCase();
+  const env = rawEnv === "prod" ? "production" : rawEnv;
+  const envTicks = ENVIRONMENT_TICKS[env];
+  if (!envTicks) {{
+    return true;
+  }}
+  const rule = envTicks[universe.key];
+  return rule ? rule.scheduled && !universe.roles.includes("sentinel") : false;
 }}
 """
 

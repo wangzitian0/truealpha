@@ -208,6 +208,11 @@ def is_universe_scheduled(universe: str, environment: str) -> bool:
     return load_environment_contract().is_universe_scheduled(universe, rule_environment(environment))
 
 
+def is_universe_list_refresh_scheduled(universe: str, environment: str) -> bool:
+    """Whether `environment` refreshes the constituent plane of `universe` weekly (#1523 D2)."""
+    return load_environment_contract().is_universe_list_refresh_scheduled(universe, rule_environment(environment))
+
+
 @contextmanager
 def _summary_on_failure(context: dg.OpExecutionContext, label: str, tally: CorroborationTally) -> Iterator[None]:
     """A tick that fails — a capture refused for its shortfall (#538) included — still

@@ -144,6 +144,7 @@
       "universes": [
         {"key": "topt", "status": "scheduled"}
       ],
+      "list_refresh": ["qqq"],
       "ticks": {
         "topt": {},
         "canary": {}
@@ -416,6 +417,25 @@
     "environments": {
       "production": {"max_concurrent_calls": 2, "calls_per_minute": 10, "probe_offset_minutes": 0, "decoding_version": "v1"},
       "staging": {"max_concurrent_calls": 1, "calls_per_minute": 3, "probe_offset_minutes": 7, "decoding_version": "v1"}
+    }
+  },
+  "nightly_verdicts": {
+    "description": "The nightly in-environment checks that mart.nightly_verdicts records and tools/nightly_verdicts.py bounds (#876, #1521, #1522). A per_universe check expands over the lane names of the universes that an environment schedules. A stored row whose check or lane is not declared here is a retired check and is ignored by /api/health and /admin/datahub.",
+    "checks": {
+      "market_data_freshness": {"cadence_hours": 72, "job": "market_data_refresh_pipeline"},
+      "model_key_health": {"cadence_hours": 24, "job": "model_key_health"},
+      "output_invariants": {"cadence_hours": 24, "job": "output_invariants_check"},
+      "release_fetch_proof": {"cadence_hours": 24, "job": "release_fetch_proof"},
+      "job_run_health": {"cadence_hours": 24, "job": "job_run_health_check"},
+      "runtime_shape": {"cadence_hours": 24, "job": "runtime_shape_check"},
+      "report_surface_proof": {"cadence_hours": 24, "job": "output_invariants_check"},
+      "nightly_backtest": {"cadence_hours": 72, "job": "nightly_backtest_pipeline"},
+      "macro_freshness": {"cadence_hours": 24, "job": "macro_data_refresh_pipeline"}
+    },
+    "per_universe": {
+      "datahub_confidence_report": {"cadence_hours": 24, "job": "datahub_confidence_report"},
+      "question_coverage": {"cadence_hours": 24, "job": "head_reports_pipeline"},
+      "theme_purity": {"cadence_hours": 24, "job": "head_reports_pipeline"}
     }
   }
 }

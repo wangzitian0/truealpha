@@ -219,6 +219,13 @@ def knowable_instant(axis: AsOfAxis | str, day: date) -> datetime:
     return datetime.combine(day, time.min, tzinfo=UTC)
 
 
+def last_settled_accession_date(cutoff: datetime) -> date:
+    """The latest calendar day whose `AsOfAxis.ACCESSION` instant is knowable at `cutoff` (#1519)."""
+    instant = cutoff.astimezone(UTC)
+    day = instant.date()
+    return day if knowable_instant(AsOfAxis.ACCESSION, day) <= instant else day - timedelta(days=1)
+
+
 def _validate_as_of_axis(raw: AsOfAxis | str | None, owner_name: str, *, allow_none: bool = False) -> AsOfAxis | None:
     if raw is None and allow_none:
         return None

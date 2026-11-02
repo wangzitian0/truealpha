@@ -669,6 +669,25 @@ def test_an_operator_list_after_the_cutoff_is_no_witness(connection) -> None:
     assert _rows(connection, run.run_id) == {}
 
 
+def test_a_pre_migration_operator_list_with_only_null_sale_prices_is_no_witness() -> None:
+    """When `staging.etf_constituent_facts` holds only pre-migration rows with `last_sale_price is null`,
+    `operator_figures` must filter `max(as_of)` by `market_cap is not null and last_sale_price is not null
+    and last_sale_price > 0` so `operator_outcomes` returns `[]` instead of 21 `not_comparable` rows (#1523)."""
+    executed_sql: list[str] = []
+
+    class _PreMigrationConn:
+        def execute(self, sql: str, _params: object = None) -> _PreMigrationConn:
+            executed_sql.append(" ".join(sql.lower().split()))
+            return self
+
+        def fetchall(self) -> list:
+            return []
+
+    figures, newest = oracle_outcomes.operator_figures(_PreMigrationConn(), KNOWN)
+    assert (figures, newest) == ({}, None)
+    assert any("last_sale_price is not null and last_sale_price > 0" in sql for sql in executed_sql)
+
+
 def test_every_issuer_gets_one_row_with_its_result_and_a_replay_writes_nothing(connection) -> None:
     run, served = _frozen(connection)
     cutoff = _cutoff(connection, run.run_id)

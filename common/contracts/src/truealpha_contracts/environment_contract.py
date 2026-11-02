@@ -151,6 +151,8 @@ class EnvironmentSpec(_StrictFrozenModel):
     trigger: str = Field(min_length=1)
     live_vendor_calls: bool
     universes: tuple[EnvironmentUniverse, ...]
+    #: Universes whose constituent list this environment refreshes weekly without running a capture tick (#1523 D2).
+    list_refresh: tuple[str, ...] = ()
     ticks: Mapping[str, EnvironmentTickContract]
 
     @model_validator(mode="after")
@@ -158,6 +160,8 @@ class EnvironmentSpec(_StrictFrozenModel):
         keys = [universe.key for universe in self.universes]
         if len(set(keys)) != len(keys):
             raise ValueError(f"{self.environment}: a universe is listed twice: {keys}")
+        if len(set(self.list_refresh)) != len(self.list_refresh):
+            raise ValueError(f"{self.environment}: a list_refresh universe is listed twice: {self.list_refresh}")
         return self
 
 
@@ -583,6 +587,21 @@ class ModelSeatContract(_StrictFrozenModel):
         return f"{self.probe_offset_minutes(environment)} {self.probe.hour_utc} * * *"
 
 
+class NightlyVerdictExpectationSpec(_StrictFrozenModel):
+    """One nightly in-environment check declaration (#876, #1521, #1522)."""
+
+    cadence_hours: int = Field(gt=0)
+    job: str = Field(min_length=1)
+
+
+class NightlyVerdictsContract(_StrictFrozenModel):
+    """The nightly in-environment checks that ``mart.nightly_verdicts`` records (#876, #1521, #1522)."""
+
+    description: str = Field(min_length=1)
+    checks: Mapping[str, NightlyVerdictExpectationSpec] = Field(min_length=1)
+    per_universe: Mapping[str, NightlyVerdictExpectationSpec] = Field(min_length=1)
+
+
 class EnvironmentContract(_StrictFrozenModel):
     schema_version: Literal[1]
     contract_version: str = Field(min_length=1)
@@ -594,6 +613,7 @@ class EnvironmentContract(_StrictFrozenModel):
     run_time_bounds: RunTimeBounds
     code_server_capacity: CodeServerCapacity
     model_seat: ModelSeatContract
+    nightly_verdicts: NightlyVerdictsContract
 
     @model_validator(mode="after")
     def _the_records_agree_with_the_environments(self) -> Self:
@@ -608,9 +628,14 @@ class EnvironmentContract(_StrictFrozenModel):
                     f"{env_name}: the ticks {sorted(spec.ticks)} and the universe records with a cron {sorted(ticking)} differ"
                 )
             listed = {entry.key for entry in spec.universes}
-            unknown = sorted(listed - set(self.universes))
+            unknown = sorted((listed | set(spec.list_refresh)) - set(self.universes))
             if unknown:
                 raise ValueError(f"{env_name}: the environment names universes with no record: {unknown}")
+            for refresh_key in spec.list_refresh:
+                if self.universes[refresh_key].membership.kind != "index_api":
+                    raise ValueError(
+                        f"{env_name}: list_refresh names {refresh_key!r}, whose membership is not index_api"
+                    )
             served_ticks = {key for key in spec.ticks if not self.universes[key].is_sentinel}
             if listed != served_ticks:
                 raise ValueError(
@@ -707,14 +732,17 @@ class EnvironmentContract(_StrictFrozenModel):
     def expects_verdict(self, check: str, environment: str | None) -> bool:
         """Whether ``environment`` records the nightly verdict ``check``.
 
-        A per-universe name (``check@lane_name``) is recorded only where the environment schedules that
-        universe: staging runs TOPT only, so it records no QQQ verdict. No environment records a name whose
-        lane is in no record: the stored row of a retired universe stays in the append-only table and is
-        no check. Any other name, and any environment that the contract does not name, records it.
+        A non-universe check must be declared in ``nightly_verdicts.checks``; a per-universe name
+        (``check@lane_name``) must name a prefix in ``nightly_verdicts.per_universe`` and a universe that
+        the environment schedules: staging runs TOPT only, so it records no QQQ verdict. No environment
+        records a retired check or a name whose lane is in no record: the stored row stays in the
+        append-only table and is no check (#1521, #1522).
         """
-        _, at, lane_name = check.partition("@")
+        prefix, at, lane_name = check.partition("@")
         if not at:
-            return True
+            return prefix in self.nightly_verdicts.checks
+        if prefix not in self.nightly_verdicts.per_universe:
+            return False
         try:
             key = self.universe_of_lane(lane_name)
         except UnknownUniverse:
@@ -734,6 +762,18 @@ class EnvironmentContract(_StrictFrozenModel):
         if spec is None or universe not in spec.ticks:
             return False
         return record.is_sentinel or self.universe_status(universe, environment) == "scheduled"
+
+    def is_universe_list_refresh_scheduled(self, universe: str, environment: str) -> bool:
+        """Whether ``environment`` refreshes the constituent plane of ``universe`` weekly (#1523 D2).
+
+        True when the environment runs the universe tick on a schedule or lists ``universe`` in
+        ``list_refresh`` (refresh-only operator witness in staging).
+        """
+        self.record(universe)
+        if self.is_universe_scheduled(universe, environment):
+            return True
+        spec = self.environments.get(self.normalize_environment(environment))
+        return spec is not None and universe in spec.list_refresh
 
     def unscheduled_id_prefixes(self) -> Mapping[str, tuple[str, ...]]:
         """For each environment that gates its heads: the id prefixes of the universes it does not tick (#1522).
