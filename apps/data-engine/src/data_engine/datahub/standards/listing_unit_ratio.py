@@ -259,7 +259,7 @@ def cover_securities(body: bytes) -> tuple[CoverSecurity, ...]:
         target.setdefault(fact.context_id, []).append(fact.text)
     paired: list[CoverSecurity] = []
     for context, ctx_titles in titles.items():
-        ctx_symbols = symbols.get(context, ())
+        ctx_symbols = symbols.get(context, [])
         if len(set(ctx_symbols)) != 1:
             continue
         non_debt = [title for title in ctx_titles if not is_debt_security_title(title)]
