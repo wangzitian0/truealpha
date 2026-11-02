@@ -601,9 +601,13 @@ def test_a_measured_cell_is_never_replaced_by_a_not_measured_one_of_the_same_sub
 
     record_listing_ratio(cells, "listing:xnas:acme", {"revenue": "1"})
     assert cells["listing:xnas:acme"]["outcome"] == OUTCOME_NOT_MEASURED
+    assert cells["listing:xnas:acme"]["ticker"] is None
     record_listing_ratio(cells, "listing:xnas:acme", measured)
     assert cells["listing:xnas:acme"]["outcome"] == OUTCOME_ORDINARY
-    record_listing_ratio(cells, "listing:xnas:acme", {"revenue": "1"})
+    assert cells["listing:xnas:acme"]["ticker"] is None
+    record_listing_ratio(cells, "listing:xnas:acme", {"revenue": "1"}, ticker="ACME")
     assert cells["listing:xnas:acme"]["outcome"] == OUTCOME_ORDINARY, "not measured does not erase a measurement"
+    assert cells["listing:xnas:acme"]["ticker"] == "ACME", "ticker is backfilled onto a prior measured cell"
     record_listing_ratio(cells, "listing:xnas:acme", unparsed)
     assert cells["listing:xnas:acme"]["outcome"] == OUTCOME_UNPARSED, "a later measurement replaces an earlier one"
+    assert cells["listing:xnas:acme"]["ticker"] == "ACME", "ticker survives replacement by a later measurement"

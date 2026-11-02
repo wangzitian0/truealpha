@@ -1174,3 +1174,47 @@ def test_the_financial_policy_is_the_measured_one_and_the_price_policy_names_the
     assert RECONCILIATION_POLICY.source_priority == ("yahoo-chart:v1", "twelve-data:v1", "moomoo-kline:v1")
     assert RECONCILIATION_POLICY.policy_version == "market-price-fusion:v4"
     assert RECONCILIATION_POLICY.relative_tolerance == Decimal("0.001")
+
+
+def test_record_listing_ratio_backfills_and_preserves_ticker_across_measurements() -> None:
+    """`record_listing_ratio` backfills `ticker` onto a prior measured cell when a later unmeasured payload
+    supplies `ticker=`, preserves an existing `ticker` across replacement by a later measured payload without
+    one, and extracts subject tickers from identity rows via `_tickers_by_subject`."""
+    from data_engine.datahub.quality_report import _tickers_by_subject, record_listing_ratio
+    from data_engine.datahub.standards.listing_unit_ratio import OUTCOME_ORDINARY, OUTCOME_UNPARSED, PATTERN_PLAIN_SHARE
+
+    cells: dict[str, dict] = {}
+    measured = {
+        "issuer_id": "issuer:cik:1",
+        "listing_id": "listing:xnas:acme",
+        "listing_units_per_share": "1",
+        "ratio_pattern": PATTERN_PLAIN_SHARE,
+        "ratio_title": "Common Stock",
+        "ratio_reason": None,
+        "ratio_accession": "0000000001-26-000001",
+        "ratio_form": "10-K",
+        "ratio_filed": "2026-02-20",
+    }
+    record_listing_ratio(cells, "listing:xnas:acme", measured)
+    assert cells["listing:xnas:acme"]["outcome"] == OUTCOME_ORDINARY
+    assert cells["listing:xnas:acme"]["ticker"] is None
+
+    record_listing_ratio(cells, "listing:xnas:acme", {"revenue": "1"}, ticker="ACME")
+    assert cells["listing:xnas:acme"]["outcome"] == OUTCOME_ORDINARY
+    assert cells["listing:xnas:acme"]["ticker"] == "ACME"
+
+    later_unparsed = {
+        **measured,
+        "listing_units_per_share": None,
+        "ratio_pattern": "unparsed",
+        "ratio_reason": "unfamiliar_title",
+    }
+    record_listing_ratio(cells, "listing:xnas:acme", later_unparsed)
+    assert cells["listing:xnas:acme"]["outcome"] == OUTCOME_UNPARSED
+    assert cells["listing:xnas:acme"]["ticker"] == "ACME"
+
+    rows = [
+        ("ob:1", "listing-identity", "listing:xnas:acme", "listing:xnas:acme", "obs:1", {"ticker": " ACME "}),
+        ("ob:2", "financial-fact", "listing:xnas:acme", "listing:xnas:acme", "obs:2", {"revenue": "1"}),
+    ]
+    assert _tickers_by_subject(rows) == {"listing:xnas:acme": "ACME"}
