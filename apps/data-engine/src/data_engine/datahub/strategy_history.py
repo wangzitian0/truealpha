@@ -49,7 +49,7 @@ import dataclasses
 import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any, NamedTuple
 
@@ -86,7 +86,10 @@ from data_engine.datahub.production_topt.sec_financial_adapter import (
     company_facts_record_id,
     predecessor_ciks,
 )
-from data_engine.datahub.production_topt.source_registrations import source_reliability_prior
+from data_engine.datahub.production_topt.source_registrations import (
+    last_settled_accession_date,
+    source_reliability_prior,
+)
 from data_engine.datahub.resolve_coordinates import alias_of, is_uuid, parse_alias
 from data_engine.datahub.share_basis import (
     COVER,
@@ -644,7 +647,7 @@ def project_issuer_rows(
     cover_concepts, statement_concepts = share_count_concepts(ruleset)
     bases = {COVER: 0, STATEMENT: 0, UNRECOGNISED: 0}
     for cutoff_at in cutoffs:
-        as_of = cutoff_at.astimezone(UTC).date() - timedelta(days=1)
+        as_of = last_settled_accession_date(cutoff_at)
         item = _work_item(issuer, cutoff_at)
         target = SecTarget(
             cik=issuer.cik,

@@ -98,10 +98,16 @@ def test_production_lists_topt_and_qqq_as_scheduled_and_sp500_as_stopped() -> No
 
 
 def test_staging_lists_only_topt() -> None:
-    """Owner decision of 2026-10-21: staging runs TOPT only. The QQQ and SP500 ticks are not declared there."""
-    staging = load_environment_contract().environments["staging"]
+    """Owner decision of 2026-10-21: staging runs TOPT only. The QQQ and SP500 ticks are not declared there.
+    #1523 D2: staging refreshes the QQQ constituent list weekly without running a QQQ capture tick."""
+    contract = load_environment_contract()
+    staging = contract.environments["staging"]
 
     assert [(entry.key, entry.status) for entry in staging.universes] == [("topt", "scheduled")]
+    assert staging.list_refresh == ("qqq",)
+    assert contract.is_universe_scheduled("qqq", "staging") is False
+    assert contract.is_universe_list_refresh_scheduled("qqq", "staging") is True
+    assert contract.is_universe_list_refresh_scheduled("sp500", "staging") is False
     assert set(staging.ticks) == {"topt", "canary"}
 
 
@@ -215,6 +221,9 @@ def test_a_universe_list_that_breaks_a_rule_is_refused(mutate, message: str) -> 
         ("theme_purity@topt", "production", True),
         ("theme_purity@universe-list:sp500", "production", False),
         ("runtime_shape", "staging", True),
+        ("fetch_keys_once", "staging", False),
+        ("fetch_keys_once", "production", False),
+        ("retired_check@topt", "production", False),
         ("theme_purity@universe-list:qqq", "dev", True),
         ("theme_purity@universe-list:qqq", None, True),
     ],
@@ -247,6 +256,16 @@ def test_the_universe_records_hold_the_names_the_lanes_and_the_pointer_use() -> 
     assert contract.universe_of_id("universe:topt-us-2026-03-31") == "topt"
     assert contract.universe_of_lane("universe-list:qqq") == "qqq"
     assert [key for key, record in contract.universes.items() if record.is_sentinel] == ["canary"]
+
+
+def test_nightly_verdicts_in_contract_equal_tools_nightly_verdicts_json() -> None:
+    """`environment_contract.v1.json` and `tools/nightly_verdicts.json` hold the exact same checks and per_universe maps (#1521, #1522)."""
+    contract = load_environment_contract()
+    tools_raw = json.loads((REPO_ROOT / "tools" / "nightly_verdicts.json").read_text(encoding="utf-8"))
+    assert contract.nightly_verdicts.model_dump(mode="json", exclude={"description"}) == {
+        "checks": tools_raw["checks"],
+        "per_universe": tools_raw["per_universe"],
+    }
 
 
 @pytest.mark.parametrize(

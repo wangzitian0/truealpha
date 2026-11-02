@@ -105,8 +105,13 @@ export interface ModelSeatContract {
   readonly environments: Readonly<Record<string, ModelSeatEnvironmentLimitsContract>>;
 }
 
+export interface NightlyVerdictsContract {
+  readonly checks: readonly string[];
+  readonly per_universe: readonly string[];
+}
+
 export const ENVIRONMENT_CONTRACT_VERSION = "3.0.0" as const;
-export const ENVIRONMENT_CONTRACT_SHA256 = "8013ef48bb8888f1ed1419ee375762883682c707d2c9ed78e5118cb92336edc2" as const;
+export const ENVIRONMENT_CONTRACT_SHA256 = "992f7b3fc130fd9fedcd57239f663fc2d38f1797c0c6bc4416aa45a8a04323bb" as const;
 export const UTILIZATION_CEILING = 0.7 as const;
 export const DAY_SECONDS = 86400 as const;
 
@@ -699,6 +704,25 @@ export const MODEL_SEAT: ModelSeatContract = {
   }
 } as const;
 
+export const NIGHTLY_VERDICTS: NightlyVerdictsContract = {
+  "checks": [
+    "market_data_freshness",
+    "model_key_health",
+    "output_invariants",
+    "release_fetch_proof",
+    "job_run_health",
+    "runtime_shape",
+    "report_surface_proof",
+    "nightly_backtest",
+    "macro_freshness"
+  ],
+  "per_universe": [
+    "datahub_confidence_report",
+    "question_coverage",
+    "theme_purity"
+  ]
+} as const;
+
 /** The vendor account row `name` of the environment contract (#1520). */
 export function vendorAccountRecord(name: string): VendorAccountContract {
   const found = VENDOR_ACCOUNTS.find((account) => account.name === name);
@@ -805,4 +829,36 @@ export function isHeadScheduledFromContract(
   }
   const rule = envTicks[key];
   return rule ? rule.scheduled : false;
+}
+
+/**
+ * Whether `environment` records the nightly verdict `check` (#1521, #1522).
+ * Mirrors `EnvironmentContract.expects_verdict`: retired checks (`fetch_keys_once`) and per-universe checks
+ * of unscheduled universes (`@universe-list:qqq` in staging) return false so append-only rows are not rendered.
+ */
+export function expectsVerdictFromContract(
+  check: string,
+  environment: string | null | undefined,
+): boolean {
+  const atIndex = check.indexOf("@");
+  if (atIndex === -1) {
+    return NIGHTLY_VERDICTS.checks.includes(check);
+  }
+  const prefix = check.slice(0, atIndex);
+  const laneName = check.slice(atIndex + 1);
+  if (!NIGHTLY_VERDICTS.per_universe.includes(prefix)) {
+    return false;
+  }
+  const universe = UNIVERSES.find((u) => u.lane_name === laneName);
+  if (!universe) {
+    return false;
+  }
+  const rawEnv = (environment || "").trim().toLowerCase();
+  const env = rawEnv === "prod" ? "production" : rawEnv;
+  const envTicks = ENVIRONMENT_TICKS[env];
+  if (!envTicks) {
+    return true;
+  }
+  const rule = envTicks[universe.key];
+  return rule ? rule.scheduled && !universe.roles.includes("sentinel") : false;
 }

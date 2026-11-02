@@ -102,6 +102,7 @@ from data_engine.datahub.production_topt.source_registrations import (
     RouteCell,
     RouteContext,
     configured_origin_sources,
+    last_settled_accession_date,
     registered_semantic_types,
     registration_for,
 )
@@ -510,7 +511,7 @@ def build_routes(plan: PlannedRun, connection: psycopg.Connection[Any] | None = 
     """
     context = RouteContext(
         cutoff=plan.cutoff,
-        cutoff_date=plan.cutoff.astimezone(UTC).date(),
+        cutoff_date=last_settled_accession_date(plan.cutoff),
         # Price targets get the last SETTLED session, not the calendar date: a
         # mid-session run must not treat the in-progress bar as a close (#637).
         price_cutoff_date=last_settled_session_date(plan.cutoff),

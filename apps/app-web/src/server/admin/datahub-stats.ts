@@ -18,6 +18,7 @@ import {
   UTILIZATION_CEILING,
   VENDOR_ACCOUNTS,
   accountShare,
+  expectsVerdictFromContract,
 } from "../../contracts/environmentContract.generated";
 import {
   ACCEPTED_SERVICE_OBJECTIVES,
@@ -1342,7 +1343,9 @@ export async function loadDatahubStats(): Promise<DatahubStats> {
       ),
       confidence: confidenceReportRows(confidence.rows),
       questionCoverage: questionCoverageRows(questionCoverage.rows),
-      nightlyVerdicts: nightlyVerdicts.rows.map(verdictRow),
+      nightlyVerdicts: nightlyVerdicts.rows
+        .filter((row) => expectsVerdictFromContract(row.check_name, activeEnv))
+        .map(verdictRow),
       heads: heads.rows.map((row: HeadDbRow) => {
         const parsedAvail =
           row.availability !== null && row.availability !== undefined

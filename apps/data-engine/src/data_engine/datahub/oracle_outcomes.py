@@ -277,9 +277,11 @@ def _operator_not_comparable(
 def operator_figures(
     connection: psycopg.Connection[Any], cutoff: datetime
 ) -> tuple[dict[str, OperatorFigure], date | None]:
-    """The operator's newest list knowable at `cutoff`, by ticker, and its date; none when none exists.
+    """The operator's newest comparable list knowable at `cutoff`, by ticker, and its date; none when none exists.
 
     The lists are the index lists of `UNIVERSE_SOURCES` (a static member list holds no operator figure).
+    A snapshot whose rows all lack `last_sale_price` (written before the migration added the column) holds no
+    comparable witness, so `max(as_of)` picks the newest snapshot that carries at least one comparable figure (#1523).
     """
     etfs = [source.etf for source in UNIVERSE_SOURCES.values() if source.index_api]
     figures: dict[str, OperatorFigure] = {}
@@ -293,7 +295,11 @@ def operator_figures(
               and knowable_at <= %(cutoff)s
               and as_of = (
                   select max(as_of) from staging.etf_constituent_facts
-                  where etf_symbol = %(etf)s and knowable_at <= %(cutoff)s
+                  where etf_symbol = %(etf)s
+                    and knowable_at <= %(cutoff)s
+                    and market_cap is not null
+                    and last_sale_price is not null
+                    and last_sale_price > 0
               )
             order by id
             """,

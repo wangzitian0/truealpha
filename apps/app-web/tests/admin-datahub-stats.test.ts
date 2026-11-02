@@ -11,6 +11,7 @@ import {
   UTILIZATION_CEILING,
   VENDOR_ACCOUNTS,
   accountShare,
+  expectsVerdictFromContract,
 } from "../src/contracts/environmentContract.generated";
 import { idPrefixLikesOfRole } from "../src/contracts/universes";
 import {
@@ -975,6 +976,19 @@ const nightlyVerdictRows = [
     VENDOR_LEDGER_TODAY_SQL.includes("provider_code = '1302'") &&
       MODEL_1302_BY_DAY_SQL.includes("provider_code = '1302'"),
     "both ledger queries count provider_code = '1302' (#1520 step 5)",
+  );
+
+  // #1521 / #1522: retired checks (`fetch_keys_once`) and per-universe checks of unscheduled universes
+  // (`@universe-list:qqq` in staging) are filtered out of `/admin/datahub` nightlyVerdicts.
+  assert(
+    expectsVerdictFromContract("output_invariants", "staging") === true &&
+      expectsVerdictFromContract("fetch_keys_once", "staging") === false &&
+      expectsVerdictFromContract("fetch_keys_once", "production") === false &&
+      expectsVerdictFromContract("theme_purity@topt", "staging") === true &&
+      expectsVerdictFromContract("theme_purity@universe-list:qqq", "staging") === false &&
+      expectsVerdictFromContract("theme_purity@universe-list:qqq", "production") === true &&
+      expectsVerdictFromContract("theme_purity@universe-list:sp500", "production") === false,
+    "expectsVerdictFromContract rejects retired fetch_keys_once and unscheduled universe verdicts (#1521, #1522)",
   );
 }
 
