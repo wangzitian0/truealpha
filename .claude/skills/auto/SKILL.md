@@ -31,7 +31,7 @@ Run this after `smoke` passes. Use `prr` for the review and gate mechanics.
 
 ## Post-delivery retrospective (Conditional Retrospective Swarm: M=3)
 
-On a clean first-pass delivery (zero CI failures, zero gate rejections, at most one review round), skip the swarm and proceed directly to `ws-delivery-status` and `close`. When rework occurred, dispatch 1 Retrospective Swarm (M=3 Interns via `subagent_batch`) before concluding the delivery:
+On a clean first-pass delivery (zero CI failures, zero gate rejections, at most one review round), skip the swarm and proceed directly to `ws-delivery-status` and `close`. When rework occurred, dispatch 1 Retrospective Swarm (M=3 Interns via `swarm` skill) before concluding the delivery:
 
 1. **Intern 1: Recurring mistake and harness constraint check**:
    - Check if any review comment, gate rejection, or CI retry occurred during this delivery.

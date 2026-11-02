@@ -55,7 +55,7 @@ gh pr list --state merged --limit 300 --json headRefName --jq '.[].headRefName' 
 
 ## 5. Init Swarm (M=4)
 
-For complex tasks or large repositories, dispatch 1 Init Swarm (M=4 Interns via `subagent_batch`):
+For complex tasks or large repositories, dispatch 1 Init Swarm (M=4 Interns via `swarm` skill):
 - **Intern 1 (Key List)**: Scans `MANIFEST.yaml` and `tools/` for reusable components.
 - **Intern 2 (Intent & History)**: Runs git log search for past PRs touching the target subsystem.
 - **Intern 3 (Memory Recall)**: Executes global `search_notes` across all projects.

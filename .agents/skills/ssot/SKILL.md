@@ -48,7 +48,7 @@ An `/ssot` pass fails closed unless every gate below passes with physical comman
 
 ## SSOT Swarm (M=10)
 
-Before major refactorings or cleanups, dispatch 1 SSOT Swarm (M=10 Interns via `subagent_batch`). The Director dynamically defines the focus dimensions and allocation across the following baseline topology:
+Before major refactorings or cleanups, dispatch 1 SSOT Swarm (M=10 Interns via `swarm` skill). The Director dynamically defines the focus dimensions and allocation across the following baseline topology:
 - **Intern 1 (Call graph reachability)**: Scans public entry points vs call graph to locate uncalled dead code and unused modules.
 - **Intern 2 (Multi-source configuration drift)**: Scans for duplicate configuration definitions between Host, Repo, and App layers.
 - **Intern 3 (Orphan links & rotting documentation)**: Runs link checkers (`python -m tools.doc_link_check`) to find broken documentation links and stale claims.
