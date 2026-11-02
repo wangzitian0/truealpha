@@ -50,6 +50,7 @@ export type ListingRatioOutcome = "parsed" | "ordinary" | "unparsed" | "not_meas
 export interface ListingRatioCell {
   listing_id: string;
   issuer_id: string | null;
+  ticker?: string | null;
   outcome: ListingRatioOutcome;
   /** Ordinary shares that one listed unit stands for. */
   listing_units_per_share: string | null;
@@ -297,6 +298,7 @@ export interface OracleOutcomeCell {
   agree: number;
   disagree: number;
   not_comparable: number;
+  no_served_value_count: number;
   newest_compared_at: string | null;
   wilson_95_upper_bound: string | null;
 }
@@ -318,6 +320,7 @@ export interface OracleOutcomeDbRow {
   agree: number;
   disagree: number;
   not_comparable: number;
+  no_served_value_count?: number;
   newest_compared_at: string | null;
   wilson_95_upper_bound: string | null;
 }
@@ -345,6 +348,7 @@ export const ORACLE_OUTCOMES_SQL = `
       h.universe_id,
       o.field,
       o.result,
+      o.reason,
       o.compared_at
     from mart.served_head h
     join mart.oracle_outcomes o
@@ -359,6 +363,7 @@ export const ORACLE_OUTCOMES_SQL = `
       (count(*) filter (where result = 'agree'))::int as agree,
       (count(*) filter (where result = 'disagree'))::int as disagree,
       (count(*) filter (where result = 'not_comparable'))::int as not_comparable,
+      (count(*) filter (where result = 'not_comparable' and reason = 'no_served_value'))::int as no_served_value_count,
       to_char(max(compared_at) at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as newest_compared_at
     from deduped
     group by universe_id, field
@@ -370,6 +375,7 @@ export const ORACLE_OUTCOMES_SQL = `
     agree,
     disagree,
     not_comparable,
+    no_served_value_count,
     newest_compared_at,
     case
       when compared <= 0 then null
@@ -427,6 +433,7 @@ export function oracleOutcomesTable(
     const agree = Number(row.agree ?? 0);
     const disagree = Number(row.disagree ?? 0);
     const notComparable = Number(row.not_comparable ?? 0);
+    const noServedValueCount = Number(row.no_served_value_count ?? 0);
     if (compared + notComparable <= 0) continue;
     if (!ORACLE_OUTCOME_METRICS.includes(row.field as (typeof ORACLE_OUTCOME_METRICS)[number])) {
       extraMetrics.add(row.field);
@@ -436,6 +443,7 @@ export function oracleOutcomesTable(
       agree,
       disagree,
       not_comparable: notComparable,
+      no_served_value_count: noServedValueCount,
       newest_compared_at: row.newest_compared_at ?? null,
       wilson_95_upper_bound: row.wilson_95_upper_bound ?? null,
     });
@@ -1259,6 +1267,7 @@ export function listingRatioReport(block: unknown): ListingRatioReport | null {
     rows.push({
       listing_id: text(entry.listing_id) ?? key,
       issuer_id: text(entry.issuer_id),
+      ticker: text(entry.ticker),
       outcome,
       listing_units_per_share: text(entry.listing_units_per_share),
       pattern: text(entry.pattern),
