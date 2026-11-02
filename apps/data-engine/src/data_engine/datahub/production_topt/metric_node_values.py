@@ -53,6 +53,20 @@ def _parse_decimal(raw: Any) -> Decimal | None:
     return value if value.is_finite() else None
 
 
+def _resolve_from_payload(
+    node: MetricNode,
+    financial_payload: Mapping[str, Any],
+) -> tuple[Decimal | None, str | None, Decimal | None] | None:
+    for candidate_key in (node.alias(AliasKind.METRIC), node.alias(AliasKind.INPUT_KEY), node.key):
+        if candidate_key and candidate_key in financial_payload:
+            parsed = _parse_decimal(financial_payload[candidate_key])
+            if parsed is not None:
+                if node.key == "employees_total" and parsed <= 0:
+                    return None, "nonpositive_headcount", None
+                return parsed, None, None
+    return None
+
+
 def _resolve_input_value(
     node: MetricNode,
     *,
@@ -79,17 +93,9 @@ def _resolve_input_value(
                 return node.default_when_missing, None, None
             return None, f"missing_{field}", None
 
-    for candidate_key in (
-        node.alias(AliasKind.METRIC),
-        node.alias(AliasKind.INPUT_KEY),
-        node.key,
-    ):
-        if candidate_key and candidate_key in financial_payload:
-            parsed = _parse_decimal(financial_payload[candidate_key])
-            if parsed is not None:
-                if node.key == "employees_total" and parsed <= 0:
-                    return None, "nonpositive_headcount", None
-                return parsed, None, None
+    from_payload = _resolve_from_payload(node, financial_payload)
+    if from_payload is not None:
+        return from_payload
     if node.default_when_missing is not None:
         return node.default_when_missing, None, None
     missing_label = field or node.alias(AliasKind.INPUT_KEY) or node.alias(AliasKind.METRIC) or node.key

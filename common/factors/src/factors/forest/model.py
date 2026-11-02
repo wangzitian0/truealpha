@@ -341,6 +341,29 @@ class Forest(_Frozen):
         return self
 
     @staticmethod
+    def _validate_decomposition_operands(
+        tree: MetricTree,
+        decomposition: Decomposition,
+        by_key: Mapping[str, MetricNode],
+    ) -> None:
+        output = by_key.get(decomposition.output)
+        if output is None or output.kind is not NodeKind.DERIVED:
+            raise ValueError(f"tree {tree.key}: {decomposition.output} is not a registered derived node")
+        if not set(decomposition.operands) <= (set(tree.applicability) & set(output.applicability)):
+            raise ValueError(
+                f"tree {tree.key}: {decomposition.output} must bind operands for every class within its applicability"
+            )
+        for issuer_class, operands in decomposition.operands.items():
+            for operand in operands:
+                node = by_key.get(operand)
+                if node is None or node.kind is NodeKind.CONCEPT:
+                    raise ValueError(f"tree {tree.key}: operand {operand} is not a registered valued node")
+                if issuer_class not in node.applicability:
+                    raise ValueError(f"tree {tree.key}: {operand} does not apply to {issuer_class}")
+                if node.kind is NodeKind.DERIVED and tree.decomposition_of(operand) is None:
+                    raise ValueError(f"tree {tree.key}: {operand} is derived but not decomposed in this tree")
+
+    @staticmethod
     def _validate_tree(tree: MetricTree, by_key: Mapping[str, MetricNode]) -> None:
         concept = by_key.get(tree.realizes)
         if concept is None or concept.kind is not NodeKind.CONCEPT:
@@ -356,22 +379,7 @@ class Forest(_Frozen):
         if set(root_decomp.operands) != set(tree.applicability):
             raise ValueError(f"tree {tree.key}: {tree.root} must bind operands for every class")
         for decomposition in tree.decompositions:
-            output = by_key.get(decomposition.output)
-            if output is None or output.kind is not NodeKind.DERIVED:
-                raise ValueError(f"tree {tree.key}: {decomposition.output} is not a registered derived node")
-            if not set(decomposition.operands) <= (set(tree.applicability) & set(output.applicability)):
-                raise ValueError(
-                    f"tree {tree.key}: {decomposition.output} must bind operands for every class within its applicability"
-                )
-            for issuer_class, operands in decomposition.operands.items():
-                for operand in operands:
-                    node = by_key.get(operand)
-                    if node is None or node.kind is NodeKind.CONCEPT:
-                        raise ValueError(f"tree {tree.key}: operand {operand} is not a registered valued node")
-                    if issuer_class not in node.applicability:
-                        raise ValueError(f"tree {tree.key}: {operand} does not apply to {issuer_class}")
-                    if node.kind is NodeKind.DERIVED and tree.decomposition_of(operand) is None:
-                        raise ValueError(f"tree {tree.key}: {operand} is derived but not decomposed in this tree")
+            Forest._validate_decomposition_operands(tree, decomposition, by_key)
         # Every decomposition is reachable from the root for its applicable classes, and nothing is cyclic.
         reached: set[str] = set()
 

@@ -712,6 +712,35 @@ def _unavailable_gppe(
     )
 
 
+def _collect_gppe_tree_inputs(
+    snapshot: ToptCoreSnapshotInput,
+    gppe_definition: GppeV0Definition,
+    tree: Any,
+    issuer_class: IssuerClass,
+) -> tuple[dict[str, Decimal | None], tuple[ToptCoreReasonCode, ...], list[Decimal]]:
+    inputs: dict[str, Decimal | None] = {}
+    reasons_list: list[ToptCoreReasonCode] = []
+    consumed_confidences: list[Decimal] = []
+    for node in required_inputs(FOREST, tree, issuer_class):
+        parameter = node.alias(AliasKind.DEFINITION_PARAMETER)
+        if parameter is not None:
+            inputs[node.key] = getattr(gppe_definition, parameter)
+            continue
+        field = node.alias(AliasKind.TOPT_SNAPSHOT_FIELD)
+        if field is None:
+            raise AssertionError(f"GPPE tree input {node.key} names no snapshot field")
+        metric: ToptMetricInput | None = getattr(snapshot, field)
+        if metric is None or metric.availability is MetricAvailability.UNAVAILABLE or metric.value is None:
+            if node.default_when_missing is not None:
+                inputs[node.key] = None
+                continue
+            reasons_list.append(_missing_metric_reason(metric, field))
+            continue
+        inputs[node.key] = metric.value
+        consumed_confidences.append(metric.confidence)
+    return inputs, tuple(reasons_list), consumed_confidences
+
+
 def compute_topt_gppe(
     snapshot: ToptCoreSnapshotInput,
     *,
@@ -753,27 +782,7 @@ def compute_topt_gppe(
             reasons=(ToptCoreReasonCode.LABOR_EFFICIENCY_TREE_UNPINNED,),
             freshness=_snapshot_freshness(snapshot),
         )
-    inputs: dict[str, Decimal | None] = {}
-    reasons_list: list[ToptCoreReasonCode] = []
-    consumed_confidences: list[Decimal] = []
-    for node in required_inputs(FOREST, tree, issuer_class):
-        parameter = node.alias(AliasKind.DEFINITION_PARAMETER)
-        if parameter is not None:
-            inputs[node.key] = getattr(gppe_definition, parameter)
-            continue
-        field = node.alias(AliasKind.TOPT_SNAPSHOT_FIELD)
-        if field is None:
-            raise AssertionError(f"GPPE tree input {node.key} names no snapshot field")
-        metric: ToptMetricInput | None = getattr(snapshot, field)
-        if metric is None or metric.availability is MetricAvailability.UNAVAILABLE or metric.value is None:
-            if node.default_when_missing is not None:
-                inputs[node.key] = None
-                continue
-            reasons_list.append(_missing_metric_reason(metric, field))
-            continue
-        inputs[node.key] = metric.value
-        consumed_confidences.append(metric.confidence)
-    reasons = tuple(reasons_list)
+    inputs, reasons, consumed_confidences = _collect_gppe_tree_inputs(snapshot, gppe_definition, tree, issuer_class)
     freshness = _snapshot_freshness(snapshot)
     if freshness is MetricFreshness.STALE:
         reasons = (*reasons, ToptCoreReasonCode.STALE_INPUT)
