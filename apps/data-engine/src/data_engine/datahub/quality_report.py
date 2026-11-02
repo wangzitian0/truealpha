@@ -478,6 +478,20 @@ def _obligation_cell_confidence(
     return None
 
 
+def _tickers_by_subject(rows: Sequence[Sequence[Any]]) -> dict[str, str]:
+    tickers: dict[str, str] = {}
+    for row in rows:
+        sem_type, ob_subject, subj_id, row_payload = row[1], row[2], row[3], row[5]
+        if sem_type in _IDENTITY_SEMANTICS and isinstance(row_payload, Mapping):
+            raw_ticker = row_payload.get("ticker")
+            if isinstance(raw_ticker, str) and raw_ticker.strip():
+                t = raw_ticker.strip()
+                tickers[str(ob_subject)] = t
+                if subj_id is not None:
+                    tickers[str(subj_id)] = t
+    return tickers
+
+
 def _record_plausibility(plausibility: dict[str, dict[str, Any]], subject_id: str, payload: Mapping[str, Any]) -> None:
     try:
         violations = _plausibility_violations(FinancialFactPayload.model_validate(payload))
@@ -559,15 +573,7 @@ def build_report(
     cells: dict[str, _Cell] = {}
     plausibility: dict[str, dict[str, Any]] = {}
     listing_ratio: dict[str, dict[str, Any]] = {}
-    tickers_by_subject: dict[str, str] = {}
-    for _ob_id, sem_type, ob_subject, subj_id, _obs_id, row_payload, *_ in rows:
-        if sem_type in _IDENTITY_SEMANTICS and isinstance(row_payload, Mapping):
-            raw_ticker = row_payload.get("ticker")
-            if isinstance(raw_ticker, str) and raw_ticker.strip():
-                t = raw_ticker.strip()
-                tickers_by_subject[str(ob_subject)] = t
-                if subj_id is not None:
-                    tickers_by_subject[str(subj_id)] = t
+    tickers_by_subject = _tickers_by_subject(rows)
     usable_by_subject: dict[str, dict[str, bool]] = {}
     for (
         obligation_id,
@@ -596,8 +602,12 @@ def build_report(
         if cell.available:
             subject_semantics[semantic_type] = True
         if semantic_type == "financial-fact" and payload is not None and subject_id is not None:
-            subject_ticker = tickers_by_subject.get(str(subject_id)) or tickers_by_subject.get(str(obligation_subject))
-            record_listing_ratio(listing_ratio, str(subject_id), payload, ticker=subject_ticker)
+            record_listing_ratio(
+                listing_ratio,
+                str(subject_id),
+                payload,
+                ticker=tickers_by_subject.get(str(subject_id), tickers_by_subject.get(str(obligation_subject))),
+            )
             _record_plausibility(plausibility, str(subject_id), payload)
         if not cell.lineage_complete and payload is not None and object_uri is not None:
             cell.lineage_complete = pointers.dereferences(
