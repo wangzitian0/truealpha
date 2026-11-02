@@ -113,6 +113,7 @@ def _factor_input(
     *listings: tuple[str, Decimal | None],
     revenue: Decimal | None = None,
     gross_profit: Decimal | None = None,
+    total_assets: Decimal | None = None,
     unit: str | None = None,
 ) -> ToptCoreSnapshotInput:
     observation_ids = tuple(f"normalized-observation:{index:064x}" for index in range(1, 4 * len(listings) + 1))
@@ -136,7 +137,7 @@ def _factor_input(
             for observation_id in observation_ids
         ),
         gross_profit=_metric("gross_profit", gross_profit, observation_ids[0], unit),
-        total_assets=None,
+        total_assets=_metric("total_assets", total_assets, observation_ids[0], unit),
         headcount=None,
         revenue=_metric("revenue", revenue, observation_ids[0], unit),
         pre_provision_profit=None,
@@ -333,10 +334,13 @@ def test_gross_profit_is_the_difference_that_the_stored_filing_implies_when_it_r
 
 
 def test_the_two_fields_of_one_issuer_are_two_comparisons() -> None:
-    factor_input = _factor_input(("listing:a", Decimal("1")), revenue=Decimal(1000), gross_profit=Decimal(1))
+    factor_input = _factor_input(
+        ("listing:a", Decimal("1")), revenue=Decimal(1000), gross_profit=Decimal(1), total_assets=Decimal(2000)
+    )
     document = _document(
         Revenues=[_annual("2025-12-31", "1000", "2026-02-20", start="2025-01-01")],
         GrossProfit=[_annual("2025-12-31", "500", "2026-02-20", start="2025-01-01")],
+        Assets=[_annual("2025-12-31", "2000", "2026-02-20", start="2025-01-01")],
     )
     results = {
         field: compare_independent_parse(
@@ -344,7 +348,7 @@ def test_the_two_fields_of_one_issuer_are_two_comparisons() -> None:
         ).result
         for field in oracle_outcomes.INDEPENDENT_PARSERS
     }
-    assert results == {"revenue": AGREE, "gross_profit": DISAGREE}
+    assert results == {"revenue": AGREE, "gross_profit": DISAGREE, "total_assets": AGREE}
 
 
 @pytest.mark.parametrize(
@@ -654,9 +658,9 @@ def _rows(connection, run_id: str) -> dict[str, tuple]:
 
 
 def test_a_run_with_no_operator_list_writes_no_operator_row(connection) -> None:
-    """The independent parse and filing comparisons still run: 20 issuers (40 independent parse, 6 filing)."""
+    """The independent parse and filing comparisons still run: 20 issuers (60 independent parse, 6 filing)."""
     run, _served = _frozen(connection)
-    assert oracle_outcomes.record_oracle_outcomes(connection, run.run_id, compared_at=KNOWN) == 46
+    assert oracle_outcomes.record_oracle_outcomes(connection, run.run_id, compared_at=KNOWN) == 66
     assert _rows(connection, run.run_id) == {}
 
 
@@ -665,7 +669,7 @@ def test_an_operator_list_after_the_cutoff_is_no_witness(connection) -> None:
     _operator_list(
         connection, {"AAPL": ("400000000", "40")}, knowable_at=_cutoff(connection, run.run_id) + timedelta(days=1)
     )
-    assert oracle_outcomes.record_oracle_outcomes(connection, run.run_id, compared_at=KNOWN) == 46
+    assert oracle_outcomes.record_oracle_outcomes(connection, run.run_id, compared_at=KNOWN) == 66
     assert _rows(connection, run.run_id) == {}
 
 
@@ -710,7 +714,7 @@ def test_every_issuer_gets_one_row_with_its_result_and_a_replay_writes_nothing(c
     written = oracle_outcomes.record_oracle_outcomes(connection, run.run_id, compared_at=KNOWN)
     rows = _rows(connection, run.run_id)
 
-    assert written == 66 and len(rows) == 20, "20 operator rows, 40 independent parse rows, and 6 filing rows"
+    assert written == 86 and len(rows) == 20, "20 operator rows, 60 independent parse rows, and 6 filing rows"
     subject = {ticker: rows[_issuer_of(connection, run.run_id, by_ticker[ticker])] for ticker in by_ticker}
     assert subject["AAPL"][1] == AGREE and subject["AAPL"][3] == Decimal(1)
     assert subject["NVDA"][1] == DISAGREE and subject["NVDA"][3] == Decimal(4)
@@ -815,7 +819,7 @@ def test_the_whole_head_is_reparsed_from_its_stored_bytes_and_a_replay_writes_no
     rows = _independent_rows(connection, run.run_id, served)
     tolerance = load_oracle_policy().relative_tolerance(INDEPENDENT_COMPARATOR)
 
-    assert written == 46 and len(rows) == 40, "twenty issuers, two fields each plus six filing rows; no operator row"
+    assert written == 66 and len(rows) == 60, "twenty issuers, three fields each plus six filing rows; no operator row"
     assert rows[("AAPL", "revenue")] == (
         DISAGREE,
         None,
@@ -830,7 +834,7 @@ def test_the_whole_head_is_reparsed_from_its_stored_bytes_and_a_replay_writes_no
     assert rows[("JPM", "gross_profit")][:2] == (NOT_COMPARABLE, "no_served_value")
     cutoff_day = _cutoff(connection, run.run_id).date().isoformat()
     missing = {key: row for key, row in rows.items() if key[0] not in filings}
-    assert len(missing) == 34 and {(row[0], row[1], row[4]) for row in missing.values()} == {
+    assert len(missing) == 51 and {(row[0], row[1], row[4]) for row in missing.values()} == {
         (NOT_COMPARABLE, "no_document", cutoff_day)
     }
     # A replay of the same run, even with another clock, writes nothing.
@@ -854,7 +858,7 @@ def test_both_comparators_write_through_the_one_function(connection, stored_byte
         "select oracle_kind, count(*) from mart.oracle_outcomes where run_id = %s group by 1 order by 1",
         (run.run_id,),
     ).fetchall()
-    assert kinds == [("filing", 6), ("independent_parse", 40), ("operator", 20)] and written == 66
+    assert kinds == [("filing", 6), ("independent_parse", 60), ("operator", 20)] and written == 86
     assert oracle_outcomes.record_oracle_outcomes(connection, run.run_id, compared_at=KNOWN) == 0
 
 
@@ -880,7 +884,7 @@ def test_the_writer_makes_no_vendor_call(connection, monkeypatch: pytest.MonkeyP
     for name in ("_http_json", "ticker_cik_index", "company_facts"):
         monkeypatch.setattr(vendor_oracle, name, refused)
     run, _served = _frozen(connection)
-    assert oracle_outcomes.record_oracle_outcomes(connection, run.run_id, compared_at=KNOWN) == 46
+    assert oracle_outcomes.record_oracle_outcomes(connection, run.run_id, compared_at=KNOWN) == 66
 
 
 class _Log:

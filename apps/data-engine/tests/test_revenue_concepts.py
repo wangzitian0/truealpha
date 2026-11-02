@@ -53,6 +53,12 @@ _ORACLE_ONLY = {
     "SalesRevenueGoodsNet": "The goods part of SalesRevenueNet. NICE and PLUG tag it last for FY2017.",
     "SalesRevenueServicesNet": "The services part of SalesRevenueNet. NICE, PLUG and SHOP tag it last for FY2017.",
     "RevenuesNetOfInterestExpense": "A bank's top line. The ruleset declares it under `bank_revenue`.",
+    "PremiumsEarnedNet": "An insurer's earned premiums top line (#1517).",
+    "InterestIncomeExpenseNet": "A bank's net interest income component when total revenue is untagged (#1517).",
+    "NoninterestIncome": "A bank's noninterest income component when total revenue is untagged (#1517).",
+    "FinancialServicesRevenue": "Financial and payment services revenue (#1517).",
+    "HealthCareOrganizationRevenue": "Healthcare services revenue (#1517).",
+    "OperatingLeasesIncomeStatementLeaseRevenue": "Operating lease top-line revenue (#1517).",
 }
 
 

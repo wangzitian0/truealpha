@@ -270,3 +270,45 @@ def test_seed_strategy_inputs_maps_listing_reused_price_to_target_issuer() -> No
     assert by_key["last_close"][0] == "issuer:cik:0000320193"
     assert by_key["last_close"][3] == Decimal("225.50")
     assert by_key["last_close"][4] == Decimal("0.90")
+
+
+def test_seed_strategy_inputs_maps_listing_reused_financial_fact_to_target_issuer() -> None:
+    """#1517: when a `financial-fact` observation is reused across universes by `listing_id`
+    (e.g., from TOPT's LEI-keyed run into QQQ's CIK-keyed run), `seed_strategy_inputs_from_capture`
+    maps its financial inputs to the target run's `issuer_id` from `listing-identity`."""
+    import data_engine.datahub.strategy_bridge as strategy_bridge
+
+    cutoff = datetime(2026, 1, 1, tzinfo=UTC)
+    listing_payload = {
+        "issuer_id": "issuer:cik:0000320193",
+        "instrument_id": "instrument:cik:0000320193",
+        "listing_id": "listing:xnas:aapl",
+        "ticker": "AAPL",
+    }
+    reused_financial_payload = {
+        "issuer_id": "issuer:lei:HWUPKR0MPOU8FGXBT394",
+        "instrument_id": "instrument:us0378331005",
+        "listing_id": "listing:xnas:aapl",
+        "revenue": "390000000000",
+        "gross_profit": "180000000000",
+    }
+    reused_price_payload = {
+        "issuer_id": "issuer:lei:HWUPKR0MPOU8FGXBT394",
+        "instrument_id": "instrument:us0378331005",
+        "listing_id": "listing:xnas:aapl",
+        "close": "225.50",
+    }
+    fake = _FakeConnection(
+        [
+            ("listing-identity", "1.00", listing_payload, cutoff),
+            ("financial-fact", "0.95", reused_financial_payload, cutoff),
+            ("market-price", "0.90", reused_price_payload, cutoff),
+        ]
+    )
+    written = strategy_bridge.seed_strategy_inputs_from_capture(fake, run_id="run:test-fin-reuse", cutoff=cutoff)
+    assert written == 3
+    by_key = {params[2]: params for params in fake.inserts}
+    assert set(by_key) == {"revenue", "gross_profit", "last_close"}
+    assert by_key["revenue"][0] == "issuer:cik:0000320193"
+    assert by_key["gross_profit"][0] == "issuer:cik:0000320193"
+    assert by_key["last_close"][0] == "issuer:cik:0000320193"

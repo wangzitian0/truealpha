@@ -799,22 +799,16 @@ def _satisfy_from_recent_observations(
              and orig_done.terminal_state = 'success'
              and orig_done.completed_at > %(cutoff)s - %(max_age)s::interval
              and orig_done.completed_at <= %(cutoff)s
-            -- #684 / #1333 / #1352: market-price reuse keys on (listing, session_date);
-            -- issuer-scoped semantics (financial-fact) also require matching issuer_id
-            -- and instrument_id.
+            -- #684 / #1333 / #1352 / #1517: market-price and financial-fact reuse
+            -- keys on listing_id so overlapping universes (TOPT, QQQ, canary) share
+            -- captured observations even when their corpora identify the issuer via
+            -- different schemes (e.g., LEI vs CIK).
             join staging.capture_observation_payloads anchor_payload
               on anchor_payload.observation_id = o.observation_id
              and anchor_payload.normalized_payload->>'listing_id' = m.listing_id
              -- #1323: an observation of an issuer the registry could not classify never satisfies
              -- another run. The next unforced run asks the registry again.
              and anchor_payload.normalized_payload->>%(unavailable_key)s is distinct from 'true'
-             and (
-                 m.semantic_type = 'market-price'
-                 or (
-                     anchor_payload.normalized_payload->>'issuer_id' = m.issuer_id
-                     and anchor_payload.normalized_payload->>'instrument_id' = m.instrument_id
-                 )
-             )
         ), bound_set as (
             select a.target_obligation_id, a.semantic_type, a.anchor_vintage_id, a.knowable_at,
                    bound.observation_id,
@@ -822,16 +816,8 @@ def _satisfy_from_recent_observations(
                    -- Judged per member, decided per set (below). NULL (no payload row,
                    -- a missing key) is a disqualification, not an abstention.
                    coalesce(
-                       -- The whole BOUND set must match listing_id, plus (issuer_id,
-                       -- instrument_id) for non-market-price semantics (#1333, #1352).
+                       -- The whole BOUND set must match listing_id (#1333, #1352, #1517).
                        bound_payload.normalized_payload->>'listing_id' = m.listing_id
-                       and (
-                           a.semantic_type = 'market-price'
-                           or (
-                               bound_payload.normalized_payload->>'issuer_id' = m.issuer_id
-                               and bound_payload.normalized_payload->>'instrument_id' = m.instrument_id
-                           )
-                       )
                        -- Look-ahead guard on the whole bound set, not just the anchor:
                        -- nothing knowable after THIS run's cutoff may ride into it
                        -- (review on #664).

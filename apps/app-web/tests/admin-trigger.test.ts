@@ -76,5 +76,28 @@ for (const malformed of ["true", 1, null, {}]) {
   assert(calls.length === 0, "nothing is inserted for an invalid request");
 }
 
+// --- declared universe pipelines (qqq, sp500, canary) are accepted by key or job_name (#1517) ---
+for (const [input, expectedJob] of [
+  ["qqq", "qqq_live_pipeline"],
+  ["qqq_live_pipeline", "qqq_live_pipeline"],
+  ["sp500", "sp500_live_pipeline"],
+  ["canary", "canary_live_pipeline"],
+] as const) {
+  const calls: Call[] = [];
+  __setTestTriggerRuntime(recordingRuntime(calls));
+  const outcome = await requestPipelineTrigger(administrator, "2026-09-16T21:30:00Z", false, input);
+  assert(outcome.kind === "accepted" && outcome.jobName === expectedJob, `expected ${expectedJob}`);
+  assert(calls.length === 1 && calls[0].params[0] === expectedJob, "job_name bound as $1");
+}
+
+// --- an undeclared job_name is refused before touching the database ---
+for (const badJob of ["unknown_pipeline", 123, {}]) {
+  const calls: Call[] = [];
+  __setTestTriggerRuntime(recordingRuntime(calls));
+  const outcome = await requestPipelineTrigger(administrator, undefined, false, badJob);
+  assert(outcome.kind === "invalid" && outcome.message.includes("job_name"), "bad job_name refused");
+  assert(calls.length === 0, "no insert for invalid job_name");
+}
+
 __setTestTriggerRuntime(null);
 console.log("admin-trigger: all assertions passed");

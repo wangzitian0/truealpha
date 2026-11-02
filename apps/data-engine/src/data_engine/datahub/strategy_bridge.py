@@ -122,17 +122,17 @@ def seed_strategy_inputs_from_capture(
     ).fetchall()
     rows = [(r[0], None, r[1], r[2]) if len(r) == 3 else (r[0], r[1], r[2], r[3]) for r in raw_rows]
 
-    # #1333 / #1352: market-price reuse keys on (listing, session_date), so a reused
-    # market-price payload can carry the source run's issuer_id (e.g., LEI vs CIK).
-    # Resolve the target run's issuer_id for each listing from listing-identity or
-    # financial-fact before bucketing price observations.
+    # #1333 / #1352 / #1517: market-price and financial-fact reuse keys on listing_id,
+    # so a reused payload can carry the source run's issuer_id (e.g., LEI vs CIK).
+    # Resolve the target run's issuer_id for each listing from listing-identity first
+    # before bucketing financial and price observations.
     listing_to_issuer: dict[str, str] = {
         str(payload["listing_id"]): str(payload["issuer_id"])
         for semantic_type, _conf, payload, _obs_at in rows
-        if semantic_type in ("listing-identity", "financial-fact")
+        if semantic_type == "listing-identity"
     }
     for semantic_type, _conf, payload, _obs_at in rows:
-        if semantic_type == "market-price":
+        if semantic_type in ("financial-fact", "market-price"):
             listing_to_issuer.setdefault(str(payload["listing_id"]), str(payload["issuer_id"]))
     primary = choose_primary_listings(connection, _listings_by_issuer(listing_to_issuer), known_at=cutoff)
 
@@ -148,11 +148,7 @@ def seed_strategy_inputs_from_capture(
         if semantic_type == "listing-identity":
             continue
         listing_id = str(payload["listing_id"])
-        issuer_id = (
-            str(payload["issuer_id"])
-            if semantic_type == "financial-fact"
-            else listing_to_issuer.get(listing_id, str(payload["issuer_id"]))
-        )
+        issuer_id = listing_to_issuer.get(listing_id, str(payload["issuer_id"]))
         bucket = financial if semantic_type == "financial-fact" else price
         if primary.get(issuer_id) == listing_id and issuer_id not in bucket:
             conf_dec = Decimal(str(raw_conf)) if raw_conf is not None else None
@@ -217,15 +213,20 @@ def seed_strategy_inputs_from_capture(
 
 
 # The listing and the issuer of each listing-identity and financial-fact cell of the run.
+# listing-identity wins when a reused financial-fact cell carries a foreign issuer_id (#1517).
 _RUN_LISTINGS_SQL = """
-select distinct p.normalized_payload ->> 'listing_id', p.normalized_payload ->> 'issuer_id'
+select distinct on (p.normalized_payload ->> 'listing_id')
+       p.normalized_payload ->> 'listing_id',
+       p.normalized_payload ->> 'issuer_id'
 from raw.capture_obligations ob
 join staging.capture_observation_obligations oo on oo.capture_obligation_id = ob.obligation_id
 join staging.capture_normalized_observations o on o.observation_id = oo.observation_id
 join staging.capture_observation_payloads p on p.observation_id = o.observation_id
 where ob.run_id = %s
   and o.semantic_type in ('listing-identity', 'financial-fact')
-order by 1, 2
+order by p.normalized_payload ->> 'listing_id',
+         (o.semantic_type = 'listing-identity') desc,
+         p.normalized_payload ->> 'issuer_id'
 """
 
 
@@ -277,7 +278,7 @@ join raw.capture_source_vintages v on v.source_vintage_id = o.source_vintage_id
 where ob.run_id = %s
   and o.semantic_type = 'financial-fact'
   and o.parser_version = %s
-  and p.normalized_payload ->> 'issuer_id' = %s
+  and (p.normalized_payload ->> 'issuer_id' = %s or p.normalized_payload ->> 'listing_id' = %s)
   and v.raw_fetch_id is not null
 order by 1
 """
@@ -335,7 +336,7 @@ def _counts_on_close_basis(
     histories = {symbol: split_history(symbol, unadjusted, split_adjusted) for symbol in symbols}
     ruleset = cache(partial(resolve_ruleset, connection))
     for issuer_id in meeting:
-        _listing, payload, observed_at = financial[issuer_id]
+        fin_listing, payload, observed_at = financial[issuer_id]
         _price_listing, close_payload, close_observed_at = price[issuer_id]
         names = sorted(tickers.get(issuer_id, ()))
         outcome = live_on_close_basis(
@@ -351,7 +352,9 @@ def _counts_on_close_basis(
             [histories[symbol] for symbol in names],
             listing_units_per_share=listing_units_per_share_of(payload),
             shares_basis=payload.get("shares_basis"),
-            documents=partial(_company_facts_documents, connection, run_id, issuer_id, parser_version),
+            documents=partial(
+                _company_facts_documents, connection, run_id, issuer_id, parser_version, listing_id=fin_listing
+            ),
             ruleset=ruleset,
         )
         if isinstance(outcome, Unavailable):
@@ -376,7 +379,12 @@ def _counts_on_close_basis(
 
 
 def _company_facts_documents(
-    connection: psycopg.Connection[Any], run_id: str, issuer_id: str, parser_version: str
+    connection: psycopg.Connection[Any],
+    run_id: str,
+    issuer_id: str,
+    parser_version: str,
+    *,
+    listing_id: str = "",
 ) -> list[dict[str, Any]]:
     """The stored company-facts documents behind one issuer's financial-fact cells of the run.
 
@@ -384,7 +392,9 @@ def _company_facts_documents(
     and ``live_on_close_basis`` makes the issuer unavailable.
     """
     documents: list[dict[str, Any]] = []
-    for (raw_fetch_id,) in connection.execute(_FINANCIAL_SOURCES_SQL, (run_id, parser_version, issuer_id)).fetchall():
+    for (raw_fetch_id,) in connection.execute(
+        _FINANCIAL_SOURCES_SQL, (run_id, parser_version, issuer_id, listing_id or issuer_id)
+    ).fetchall():
         try:
             documents.append(json.loads(raw_store.get_payload(connection, raw_fetch_id)))
         except (LookupError, StorageError, ValueError) as error:
@@ -500,17 +510,28 @@ def _issuer_periods_for_run(
     """The annual fiscal period of each issuer's operating numerator and revenue in one capture run (#1519)."""
     rows = connection.execute(
         """
-        select distinct p.normalized_payload ->> 'issuer_id',
+        with listing_issuers as (
+            select distinct p.normalized_payload ->> 'listing_id' as listing_id,
+                            p.normalized_payload ->> 'issuer_id' as issuer_id
+            from raw.capture_obligations ob
+            join staging.capture_observation_obligations oo on oo.capture_obligation_id = ob.obligation_id
+            join staging.capture_normalized_observations o on o.observation_id = oo.observation_id
+            join staging.capture_observation_payloads p on p.observation_id = o.observation_id
+            where ob.run_id = %s
+              and o.semantic_type = 'listing-identity'
+        )
+        select distinct coalesce(li.issuer_id, p.normalized_payload ->> 'issuer_id'),
                         p.normalized_payload ->> 'operating_period_end',
                         p.normalized_payload ->> 'revenue_period_end'
         from raw.capture_obligations ob
         join staging.capture_observation_obligations oo on oo.capture_obligation_id = ob.obligation_id
         join staging.capture_normalized_observations o on o.observation_id = oo.observation_id
         join staging.capture_observation_payloads p on p.observation_id = o.observation_id
+        left join listing_issuers li on li.listing_id = p.normalized_payload ->> 'listing_id'
         where ob.run_id = %s
           and o.semantic_type = 'financial-fact'
         """,
-        (run_id,),
+        (run_id, run_id),
     ).fetchall()
     result: dict[str, dict[str, AnnualFiscalPeriod]] = {}
     for issuer_id, op_end_raw, rev_end_raw in rows:
@@ -537,15 +558,27 @@ def _issuer_classes_for_run(connection: psycopg.Connection[Any], run_id: str) ->
     with no class here gets `missing_issuer_class` in the evaluator."""
     rows = connection.execute(
         """
-        select distinct p.normalized_payload ->> 'issuer_id', p.normalized_payload ->> 'operating_branch'
+        with listing_issuers as (
+            select distinct p.normalized_payload ->> 'listing_id' as listing_id,
+                            p.normalized_payload ->> 'issuer_id' as issuer_id
+            from raw.capture_obligations ob
+            join staging.capture_observation_obligations oo on oo.capture_obligation_id = ob.obligation_id
+            join staging.capture_normalized_observations o on o.observation_id = oo.observation_id
+            join staging.capture_observation_payloads p on p.observation_id = o.observation_id
+            where ob.run_id = %s
+              and o.semantic_type = 'listing-identity'
+        )
+        select distinct coalesce(li.issuer_id, p.normalized_payload ->> 'issuer_id'),
+                        p.normalized_payload ->> 'operating_branch'
         from raw.capture_obligations ob
         join staging.capture_observation_obligations oo on oo.capture_obligation_id = ob.obligation_id
         join staging.capture_normalized_observations o on o.observation_id = oo.observation_id
         join staging.capture_observation_payloads p on p.observation_id = o.observation_id
+        left join listing_issuers li on li.listing_id = p.normalized_payload ->> 'listing_id'
         where ob.run_id = %s
           and o.semantic_type = 'financial-fact'
         """,
-        (run_id,),
+        (run_id, run_id),
     ).fetchall()
     classes: dict[str, IssuerClass] = {}
     for issuer_id, branch in rows:

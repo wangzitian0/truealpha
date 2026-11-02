@@ -512,10 +512,10 @@ def test_a_fully_reused_run_still_exists_on_the_evidence_plane(tick_database_url
 
 
 def test_reuse_requires_identity_coordinate_equality(tick_database_url, monkeypatch) -> None:
-    """#684 / #1333 / #1352: `market-price` reuse keys on `(listing, session_date)` so
-    universes that key the same listing under different issuer namespaces (TOPT's LEI vs
-    the planes' CIK) share daily price captures, while issuer-scoped `financial-fact`
-    still requires matching `(issuer_id, instrument_id, listing_id)`."""
+    """#684 / #1333 / #1352 / #1517: `market-price` and `financial-fact` reuse keys on `listing_id`
+    so universes that key the same listing under different issuer namespaces (TOPT's LEI vs
+    the planes' CIK) share captured price and financial observations, while a different
+    `listing_id` fetches fresh."""
     _arm(monkeypatch)
     cutoff = datetime(2026, 3, 31, 22, 15, tzinfo=UTC)
     _run_tick(tick_database_url, version="coordinate-source", cutoff=cutoff)
@@ -543,9 +543,9 @@ def test_reuse_requires_identity_coordinate_equality(tick_database_url, monkeypa
             semantic = binding.obligation.capture_requirement_id.removesuffix(":v1")
             cells = reused_by_subject.setdefault(binding.obligation.subject.id, {})
             cells[semantic] = work_item_id in satisfied
-        # Same listing_id + different issuer_id: market-price reuses, financial-fact fetches fresh.
+        # Same listing_id + different issuer_id: both market-price and financial-fact reuse.
         assert reused_by_subject[victim_issuer]["market-price"] is True
-        assert reused_by_subject[victim_issuer]["financial-fact"] is False
+        assert reused_by_subject[victim_issuer]["financial-fact"] is True
         # Different listing_id: both market-price and financial-fact fetch fresh.
         assert reused_by_subject[victim_listing]["market-price"] is False
         assert reused_by_subject[victim_listing]["financial-fact"] is False
