@@ -14,12 +14,10 @@ from factors.forest import (
     IssuerClass,
     MetricNode,
     MetricTree,
-    NodeKind,
     PeriodSemantics,
     evaluate,
     required_inputs,
 )
-from factors.forest.model import leaf_and_derived_keys
 from factors.production_topt import (
     GppeV0Definition,
     MetricAvailability,
@@ -116,6 +114,22 @@ def _subtree_input_keys(tree: MetricTree, node_key: str, issuer_class: IssuerCla
 
     visit(node_key)
     return tuple(ordered)
+
+
+def _reachable_derived_keys(tree: MetricTree, issuer_class: IssuerClass) -> tuple[str, ...]:
+    """The derived node keys reachable from `tree.root` for `issuer_class`, sorted."""
+    reached: set[str] = set()
+
+    def visit(key: str) -> None:
+        decomposition = tree.decomposition_of(key)
+        if decomposition is None or issuer_class not in decomposition.operands:
+            return
+        reached.add(key)
+        for operand in decomposition.operands[issuer_class]:
+            visit(operand)
+
+    visit(tree.root)
+    return tuple(sorted(reached))
 
 
 def _node_period(
@@ -259,11 +273,7 @@ def _materialize_issuer_tree(
         freshness_reasons.append("unknown_freshness")
 
     evaluation = evaluate(forest, tree, issuer_class=issuer_class, inputs=inputs)
-    derived_keys = sorted(
-        key
-        for key in leaf_and_derived_keys(tree)
-        if forest.node(key).kind is NodeKind.DERIVED and issuer_class in forest.node(key).applicability
-    )
+    derived_keys = _reachable_derived_keys(tree, issuer_class)
     count = 0
     for node_key in derived_keys:
         node = forest.node(node_key)

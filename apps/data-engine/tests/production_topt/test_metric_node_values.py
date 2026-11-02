@@ -493,3 +493,69 @@ def test_subtree_scoped_confidence_isolates_headcount_low_confidence_to_gppe_roo
     assert by_tree_and_key[("1.0.0", "total_gross_return")] == Decimal("0.75")
     assert by_tree_and_key[("1.0.0", "capital_adjusted_operating_financial")] == Decimal("0.75")
     assert by_tree_and_key[("1.0.0", "gppe_operating_financial_v1")] == Decimal("0.50")
+
+
+def test_financial_issuer_under_gppe_operating_financial_tree_only_materializes_reachable_derived_nodes() -> None:
+    """Under GPPE_OPERATING_FINANCIAL_TREE, a FINANCIAL issuer reaches capital_charge_tce rather than
+    capital_charge; capital_charge (though globally _EVERY_CLASS) must not be materialized as unavailable."""
+    from data_engine.datahub.production_topt.metric_node_values import _materialize_issuer_tree
+    from factors.forest import GPPE_OPERATING_FINANCIAL_TREE
+    from truealpha_contracts.execution import FactorValidationStatus
+
+    base = _sample_factor_input()
+    obs_id = base.observation_ids[0]
+
+    def _m(metric: str, val: str) -> ToptMetricInput:
+        return ToptMetricInput(
+            input_id=obs_id,
+            metric=metric,
+            value=Decimal(val),
+            confidence=Decimal("0.85"),
+            knowable_at=KNOWN,
+            freshness=MetricFreshness.FRESH,
+            availability=MetricAvailability.AVAILABLE,
+        )
+
+    bank_input = base.model_copy(
+        update={
+            "issuer_id": "issuer:jpm",
+            "instrument_id": "security:jpm",
+            "listing_id": "listing:xnys:jpm",
+            "operating_branch": OperatingBranch.FINANCIAL,
+            "gross_profit": None,
+            "pre_provision_profit": _m("pre_provision_profit", "86807000000"),
+            "bank_net_revenue": _m("bank_net_revenue", "150000000000"),
+            "stockholders_equity": _m("stockholders_equity", "362438000000"),
+            "preferred_stock_value": _m("preferred_stock_value", "20045000000"),
+            "goodwill": _m("goodwill", "52731000000"),
+            "intangible_assets_net_excluding_goodwill": _m("intangible_assets_net_excluding_goodwill", "2600000000"),
+        }
+    )
+    conn = _FakeNodeConnection()
+    _materialize_issuer_tree(
+        conn,  # type: ignore[arg-type]
+        forest=FOREST,
+        tree=GPPE_OPERATING_FINANCIAL_TREE,
+        tree_sha256=FOREST.tree_sha256(GPPE_OPERATING_FINANCIAL_TREE),
+        factor_input=bank_input,
+        issuer_class=IssuerClass.FINANCIAL,
+        gppe_definition=GppeV0Definition(risk_free_rate=Decimal("0.05")),
+        financial_payload={},
+        periods=(date(2025, 12, 31), date(2025, 12, 31), date(2025, 12, 31)),
+        freshness=MetricFreshness.FRESH,
+        base_confidence=Decimal("0.85"),
+        source_evidence=InputEvidenceStatus.VERIFIED,
+        validation_status=FactorValidationStatus.ACCEPTED,
+    )
+    materialized_keys = {row[3] for row in conn.inserted_rows}
+    assert "capital_charge" not in materialized_keys
+    assert "total_gross_return" not in materialized_keys
+    assert materialized_keys == {
+        "tangible_deductions",
+        "tangible_common_equity",
+        "charged_tangible_common_equity",
+        "capital_charge_tce",
+        "capital_adjusted_operating_financial",
+        "gppe_operating_financial_v1",
+    }
+    assert all(row[8] == "available" for row in conn.inserted_rows)

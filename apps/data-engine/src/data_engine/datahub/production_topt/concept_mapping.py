@@ -18,6 +18,7 @@ pointer advance is visible in the data rather than only in a changelog.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Any
 
@@ -25,6 +26,7 @@ import psycopg
 from psycopg import Connection
 from truealpha_contracts.concept_mapping import ConceptMappingRuleset
 
+logger = logging.getLogger(__name__)
 _KIND = "concept-mapping"
 _VERSION_RE = re.compile(r"^production-topt-concepts:v(\d+)$")
 
@@ -389,8 +391,12 @@ def resolve_ruleset(connection: Connection[Any] | None) -> ConceptMappingRuleset
                     DEFAULT_RULESET,
                     note="Auto-advance governed concept-mapping head to code DEFAULT_RULESET",
                 )
-        except psycopg.Error:
-            pass
+        except psycopg.Error as exc:
+            logger.warning(
+                "Failed to auto-advance governed concept-mapping ruleset head to %s: %s",
+                DEFAULT_RULESET.version,
+                exc,
+            )
         return DEFAULT_RULESET
     return stored
 
