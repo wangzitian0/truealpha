@@ -376,7 +376,7 @@ class _PointerDereferencer:
         return result
 
 
-def listing_ratio_cell(payload: Mapping[str, Any]) -> dict[str, Any]:
+def listing_ratio_cell(payload: Mapping[str, Any], *, ticker: str | None = None) -> dict[str, Any]:
     """The dashboard row of one financial-fact payload: how the cover read for this listing (#1519, step 1a).
 
     The row is a measurement. No grade, no gate and no served value reads it.
@@ -384,6 +384,7 @@ def listing_ratio_cell(payload: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "issuer_id": payload.get("issuer_id"),
         "listing_id": payload.get("listing_id"),
+        "ticker": payload.get("ticker") if payload.get("ticker") is not None else ticker,
         "outcome": outcome_of_payload(payload),
         "listing_units_per_share": payload.get("listing_units_per_share"),
         "pattern": payload.get("ratio_pattern"),
@@ -395,14 +396,23 @@ def listing_ratio_cell(payload: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def record_listing_ratio(cells: dict[str, dict[str, Any]], subject_id: str, payload: Mapping[str, Any]) -> None:
+def record_listing_ratio(
+    cells: dict[str, dict[str, Any]],
+    subject_id: str,
+    payload: Mapping[str, Any],
+    *,
+    ticker: str | None = None,
+) -> None:
     """Put the cell of one financial-fact payload into `cells`.
 
     A measured cell is never replaced by a `not_measured` one from another observation of the same subject.
     """
-    cell = listing_ratio_cell(payload)
+    existing_ticker = cells[subject_id].get("ticker") if subject_id in cells else None
+    cell = listing_ratio_cell(payload, ticker=ticker if ticker is not None else existing_ticker)
     if cell["outcome"] != OUTCOME_NOT_MEASURED or subject_id not in cells:
         cells[subject_id] = cell
+    elif cell["ticker"] is not None and cells[subject_id].get("ticker") is None:
+        cells[subject_id]["ticker"] = cell["ticker"]
 
 
 def listing_ratio_report(cells: Mapping[str, dict[str, Any]]) -> dict[str, Any]:
@@ -466,6 +476,20 @@ def _obligation_cell_confidence(
         ]
         return min(fin_confs) if fin_confs else Decimal("0")
     return None
+
+
+def _tickers_by_subject(rows: Sequence[Sequence[Any]]) -> dict[str, str]:
+    tickers: dict[str, str] = {}
+    for row in rows:
+        sem_type, ob_subject, subj_id, row_payload = row[1], row[2], row[3], row[5]
+        if sem_type in _IDENTITY_SEMANTICS and isinstance(row_payload, Mapping):
+            raw_ticker = row_payload.get("ticker")
+            if isinstance(raw_ticker, str) and raw_ticker.strip():
+                t = raw_ticker.strip()
+                tickers[str(ob_subject)] = t
+                if subj_id is not None:
+                    tickers[str(subj_id)] = t
+    return tickers
 
 
 def _record_plausibility(plausibility: dict[str, dict[str, Any]], subject_id: str, payload: Mapping[str, Any]) -> None:
@@ -549,6 +573,7 @@ def build_report(
     cells: dict[str, _Cell] = {}
     plausibility: dict[str, dict[str, Any]] = {}
     listing_ratio: dict[str, dict[str, Any]] = {}
+    tickers_by_subject = _tickers_by_subject(rows)
     usable_by_subject: dict[str, dict[str, bool]] = {}
     for (
         obligation_id,
@@ -577,7 +602,12 @@ def build_report(
         if cell.available:
             subject_semantics[semantic_type] = True
         if semantic_type == "financial-fact" and payload is not None and subject_id is not None:
-            record_listing_ratio(listing_ratio, str(subject_id), payload)
+            record_listing_ratio(
+                listing_ratio,
+                str(subject_id),
+                payload,
+                ticker=tickers_by_subject.get(str(subject_id), tickers_by_subject.get(str(obligation_subject))),
+            )
             _record_plausibility(plausibility, str(subject_id), payload)
         if not cell.lineage_complete and payload is not None and object_uri is not None:
             cell.lineage_complete = pointers.dereferences(

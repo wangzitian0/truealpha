@@ -58,6 +58,7 @@ const headRows = [
         "listing:xnas:aapl": {
           issuer_id: "issuer:cik:0000320193",
           listing_id: "listing:xnas:aapl",
+          ticker: "AAPL",
           outcome: "ordinary",
           listing_units_per_share: "1",
           pattern: "plain_share_title",
@@ -70,6 +71,7 @@ const headRows = [
         "listing:xnas:pdd": {
           issuer_id: "issuer:cik:0001737806",
           listing_id: "listing:xnas:pdd",
+          ticker: "PDD",
           outcome: "parsed",
           listing_units_per_share: "4",
           pattern: "depositary_each_representing",
@@ -303,6 +305,7 @@ const oracleOutcomeRows = [
     agree: 4,
     disagree: 1,
     not_comparable: 2,
+    no_served_value_count: 1,
     newest_compared_at: "2026-10-28T00:30:00Z",
     wilson_95_upper_bound: "0.624465",
   },
@@ -412,10 +415,11 @@ const nightlyVerdictRows = [
       qqqRevenueCell.agree === 4 &&
       qqqRevenueCell.disagree === 1 &&
       qqqRevenueCell.not_comparable === 2 &&
+      qqqRevenueCell.no_served_value_count === 1 &&
       qqqRevenueCell.newest_compared_at === "2026-10-28T00:30:00Z" &&
       qqqRevenueCell.wilson_95_upper_bound === "0.624465" &&
       grossProfitOutcomeRow?.cells["universe:qqq-us-2026-06-30"] === null,
-    "mart.oracle_outcomes rollup populates the metrics-by-universes table and leaves uncompared metrics null (#1523 S3)",
+    "mart.oracle_outcomes rollup populates the metrics-by-universes table (including no_served_value_count) and leaves uncompared metrics null (#1523 S3, #1519)",
   );
   const close = stats.confidence[0].families.find((f) => f.family === "close");
   assert(
@@ -547,9 +551,12 @@ const nightlyVerdictRows = [
       ratio.cells[0].title === "Units, each consisting of one share and one warrant" &&
       ratio.cells[0].reason === "unfamiliar_title" &&
       ratio.cells[0].listing_units_per_share === null &&
+      ratio.cells[0].ticker === null &&
       ratio.cells[1].listing_units_per_share === "4" &&
-      ratio.cells[1].accession === "0001737806-26-000005",
-    "an unparsed listing keeps its title text and reason; a parsed one keeps its ratio and filing",
+      ratio.cells[1].ticker === "PDD" &&
+      ratio.cells[1].accession === "0001737806-26-000005" &&
+      ratio.cells[2].ticker === "AAPL",
+    "an unparsed listing keeps its title text and reason; a parsed one keeps its ratio, ticker and filing",
   );
   assert(
     listingRatioReport(null) === null && listingRatioReport({}) === null && listingRatioReport("x") === null,

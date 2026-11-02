@@ -27,6 +27,7 @@ from data_engine.datahub.standards.listing_unit_ratio import (
     PATTERN_PLAIN_SHARE,
     PATTERN_UNPARSED,
     PAYLOAD_KEYS,
+    REASON_DEBT_SECURITY_ON_EQUITY_TICKER,
     REASON_DEPOSITARY_WITHOUT_QUANTITY,
     REASON_NO_ANNUAL_FILING,
     REASON_NO_TICKER,
@@ -112,6 +113,14 @@ def test_an_unfamiliar_title_gives_no_value_and_keeps_its_text() -> None:
         ("ADSs, each representing one hundred Class A ordinary shares", 100),
         ("American Depositary Shares, each ADS representing five ordinary shares of par value NIS 0.1", 5),
         ("American Depositary Shares, each representing the right to receive four ordinary shares", 4),
+        (
+            "Class A ordinary shares, par value US$0.000005 per share (one American depositary share representing four Class A ordinary shares)",
+            4,
+        ),
+        (
+            "Class A ordinary shares, par value US$0.000005 per share (1 American depositary share representing 8 Class A ordinary shares)",
+            8,
+        ),
     ],
 )
 def test_the_quantity_of_a_depositary_title_is_the_number_it_states(title: str, units: int) -> None:
@@ -132,6 +141,11 @@ def test_the_quantity_of_a_depositary_title_is_the_number_it_states(title: str, 
         "Common Shares, without par value",
         "Common Stock $0.01 par value",
         "Common stock",
+        "Common Stock—Par Value $1.00 Per Share",
+        "Common Stock – par value $.001 per share",
+        "Common Stock - par value $0.01 per share",
+        "Class A Voting Common Stock, par value $0.01 per share",
+        "Class B Non-Voting Common Stock, par value $0.01 per share",
     ],
 )
 def test_a_plain_share_title_is_one_ordinary_share(title: str) -> None:
@@ -193,7 +207,45 @@ def test_a_title_pairs_with_the_ticker_of_its_own_context() -> None:
 
     assert _ratio(body, "V").listing_units_per_share == Decimal(1)
     assert _ratio(body, "PDD").listing_units_per_share == Decimal(4)
-    assert _ratio(body, "V26").reason == REASON_UNFAMILIAR_TITLE
+    assert _ratio(body, "V26").reason == REASON_DEBT_SECURITY_ON_EQUITY_TICKER
+
+
+def test_debt_notes_sharing_ticker_or_context_with_equity_do_not_poison_the_equity_ratio() -> None:
+    """MSFT and PG list Eurobonds under Section 12(b) on their 10-K cover page (`"3.125% Notes due 2028"`,
+    `"2.625% Notes due 2033"`), sometimes repeating the equity ticker (`MSFT` / `PG`) or sharing the XBRL context.
+    The equity row resolves cleanly to `Decimal(1)` (`plain_share_title`), while a ticker with only debt notes
+    is refused with `debt_security_on_equity_ticker`."""
+    msft_separate_contexts = cover_html(
+        ("MSFT", "Common stock, $0.00000625 par value per share"),
+        ("MSFT", "3.125% Notes due 2028"),
+        ("MSFT", "2.625% Notes due 2033"),
+    )
+    msft_ratio = _ratio(msft_separate_contexts, "MSFT")
+    assert msft_ratio.listing_units_per_share == Decimal(1)
+    assert msft_ratio.pattern == PATTERN_PLAIN_SHARE
+    assert msft_ratio.outcome == OUTCOME_ORDINARY
+    assert msft_ratio.title == "Common stock, $0.00000625 par value per share"
+    assert msft_ratio.reason is None
+
+    pg_shared_context = (
+        b'<ix:nonNumeric contextRef="c-1" name="dei:Security12bTitle">Common Stock, without Par Value</ix:nonNumeric>'
+        b'<ix:nonNumeric contextRef="c-1" name="dei:Security12bTitle">2.125% Notes due 2021</ix:nonNumeric>'
+        b'<ix:nonNumeric contextRef="c-1" name="dei:Security12bTitle">3.125% Notes due 2028</ix:nonNumeric>'
+        b'<ix:nonNumeric contextRef="c-1" name="dei:TradingSymbol">PG</ix:nonNumeric>'
+    )
+    pg_ratio = _ratio(pg_shared_context, "PG")
+    assert pg_ratio.listing_units_per_share == Decimal(1)
+    assert pg_ratio.pattern == PATTERN_PLAIN_SHARE
+    assert pg_ratio.outcome == OUTCOME_ORDINARY
+    assert pg_ratio.title == "Common Stock, without Par Value"
+    assert pg_ratio.reason is None
+
+    only_debt = cover_html(("MSFT28", "3.125% Notes due 2028"), ("MSFT28", "Debentures due 2035"))
+    debt_ratio = _ratio(only_debt, "MSFT28")
+    assert debt_ratio.listing_units_per_share is None
+    assert debt_ratio.pattern == PATTERN_UNPARSED
+    assert debt_ratio.reason == REASON_DEBT_SECURITY_ON_EQUITY_TICKER
+    assert debt_ratio.title == "3.125% Notes due 2028"
 
 
 def test_a_title_without_a_ticker_in_its_context_is_not_a_cover_line() -> None:
@@ -499,13 +551,19 @@ def test_the_report_cell_of_a_payload_carries_the_outcome_and_the_evidence() -> 
     from data_engine.datahub.quality_report import listing_ratio_cell, listing_ratio_report
 
     parsed = _ratio(cover_html(("PDD", "American Depositary Shares, each representing four ordinary shares")), "PDD")
-    payload = {"issuer_id": "issuer:cik:1737806", "listing_id": "listing:xnas:pdd", **parsed.payload_fields()}
+    payload = {
+        "issuer_id": "issuer:cik:1737806",
+        "listing_id": "listing:xnas:pdd",
+        "ticker": "PDD",
+        **parsed.payload_fields(),
+    }
 
     cell = listing_ratio_cell(payload)
 
     assert cell == {
         "issuer_id": "issuer:cik:1737806",
         "listing_id": "listing:xnas:pdd",
+        "ticker": "PDD",
         "outcome": OUTCOME_PARSED,
         "listing_units_per_share": "4",
         "pattern": PATTERN_DEPOSITARY,
@@ -517,6 +575,7 @@ def test_the_report_cell_of_a_payload_carries_the_outcome_and_the_evidence() -> 
     }
     block = listing_ratio_report({"b": listing_ratio_cell({"listing_id": "b"}), "a": cell})
     assert block["counts"] == {"parsed": 1, "ordinary": 0, "unparsed": 0, "not_measured": 1}
+    assert block["cells"]["b"]["ticker"] is None
     assert list(block["cells"]) == ["a", "b"], (
         "the cells are in a fixed order, so the report hash does not depend on it"
     )
@@ -542,9 +601,13 @@ def test_a_measured_cell_is_never_replaced_by_a_not_measured_one_of_the_same_sub
 
     record_listing_ratio(cells, "listing:xnas:acme", {"revenue": "1"})
     assert cells["listing:xnas:acme"]["outcome"] == OUTCOME_NOT_MEASURED
+    assert cells["listing:xnas:acme"]["ticker"] is None
     record_listing_ratio(cells, "listing:xnas:acme", measured)
     assert cells["listing:xnas:acme"]["outcome"] == OUTCOME_ORDINARY
-    record_listing_ratio(cells, "listing:xnas:acme", {"revenue": "1"})
+    assert cells["listing:xnas:acme"]["ticker"] is None
+    record_listing_ratio(cells, "listing:xnas:acme", {"revenue": "1"}, ticker="ACME")
     assert cells["listing:xnas:acme"]["outcome"] == OUTCOME_ORDINARY, "not measured does not erase a measurement"
+    assert cells["listing:xnas:acme"]["ticker"] == "ACME", "ticker is backfilled onto a prior measured cell"
     record_listing_ratio(cells, "listing:xnas:acme", unparsed)
     assert cells["listing:xnas:acme"]["outcome"] == OUTCOME_UNPARSED, "a later measurement replaces an earlier one"
+    assert cells["listing:xnas:acme"]["ticker"] == "ACME", "ticker survives replacement by a later measurement"

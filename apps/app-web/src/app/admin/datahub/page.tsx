@@ -115,7 +115,7 @@ function ListingRatioBlock({ report }: { report: ListingRatioReport | null }) {
         {counts.not_measured} not measured
       </p>
       {report.cells.length > 0 && (
-        <details className="mt-1">
+        <details open={counts.unparsed > 0} className="mt-1">
           <summary className="cursor-pointer text-gray-500">{report.cells.length} listings, unparsed first</summary>
           <table className="mt-2 w-full text-left">
             <thead>
@@ -129,7 +129,9 @@ function ListingRatioBlock({ report }: { report: ListingRatioReport | null }) {
             <tbody>
               {report.cells.map((cell) => (
                 <tr key={cell.listing_id} className={cell.outcome === "unparsed" ? "text-amber-400" : ""}>
-                  <td className="pr-4 font-mono">{cell.listing_id}</td>
+                  <td className="pr-4 font-mono">
+                    {cell.ticker ? `${cell.ticker} (${cell.listing_id})` : cell.listing_id}
+                  </td>
                   <td className="pr-4">{listingRatioText(cell)}</td>
                   <td className="pr-4">{formatCell(cell.title)}</td>
                   <td className="font-mono">{formatCell(listingRatioFiling(cell))}</td>
@@ -654,6 +656,15 @@ export default async function AdminDatahubPage({
                                 {outcomeCell.disagree}
                               </span>{" "}
                               · not_comparable <span className="font-mono">{outcomeCell.not_comparable}</span>
+                              {outcomeCell.no_served_value_count > 0 && (
+                                <>
+                                  {" "}
+                                  · no_served_value{" "}
+                                  <span className="font-mono text-amber-400 font-medium">
+                                    {outcomeCell.no_served_value_count}
+                                  </span>
+                                </>
+                              )}
                             </div>
                             <div className="text-gray-400">
                               wilson_95_upper_bound{" "}

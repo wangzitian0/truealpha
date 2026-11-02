@@ -63,6 +63,7 @@ REASON_TICKER_NOT_ON_COVER = "ticker_not_on_cover"
 REASON_UNFAMILIAR_TITLE = "unfamiliar_title"
 REASON_DEPOSITARY_WITHOUT_QUANTITY = "depositary_title_without_quantity"
 REASON_TITLES_DISAGREE = "titles_disagree"
+REASON_DEBT_SECURITY_ON_EQUITY_TICKER = "debt_security_on_equity_ticker"
 #: The reads of this run ended after `COVER_OUTAGE_AFTER` shared failures in a row.
 REASON_READ_SKIPPED = "read_skipped_after_outage"
 #: Followed by `:` and the class name of the error, for example `read_failed:HTTPStatusError`.
@@ -121,19 +122,34 @@ _QUANTITY = (
 # One class of share: an optional class mark, an optional kind, then the noun.
 _SHARE = (
     r"(?:(?:class|series) [a-z0-9]+ )?"
-    r"(?:(?:ordinary|common|capital|subordinate voting) )?"
+    r"(?:(?:ordinary|common|capital|subordinate voting|non[- ]voting|voting) )*"
     r"(?:shares?|stock)"
 )
 # What may follow the share noun. A tail that is not in this list (for example "of 5.75% preferred")
 # means the title is about another security, so the pattern does not match.
-_TAIL = r"(?=\s*$|\s*[,;(]|\s+(?:of )?(?:par|nominal|no par|without par)\b|\s+[$€£¥]\s*[\d.])"
+_TAIL = (
+    r"(?=\s*$|\s*(?:[,;()]|[-–—])\s*"
+    r"|\s+(?:of )?(?:par|nominal|no par|without par)\b|\s+[$€£¥]\s*[\d.])"
+)
 
 _DEPOSITARY_WORD = re.compile(r"\b(?:depositary|adss?|adrs?)\b")
 _DEPOSITARY_EACH = re.compile(
-    r"\beach (?:(?:ads|adr|american depositary share|depositary share) )?(?:representing|represents|represent) "
+    r"\b(?:each (?:(?:ads|adr|american depositary share|depositary share) )?"
+    r"|(?:one|1) (?:ads|adr|american depositary share|depositary share) )"
+    r"(?:representing|represents|represent) "
     r"(?:the right to receive )?" + _QUANTITY + r" " + _SHARE + _TAIL
 )
 _PLAIN_SHARE = re.compile(r"^" + _SHARE + _TAIL)
+_DEBT_NOTE = re.compile(
+    r"(?:\b\d+(?:\.\d+)?%\s*(?:(?:senior|subordinated|floating[- ]rate|fixed[- ]rate)\s+)*(?:notes?|debentures?|bonds?)\b"
+    r"|\b(?:(?:senior|subordinated|floating[- ]rate|fixed[- ]rate)\s+)*(?:notes?|debentures?|bonds?)\b.*?\bdue\s+\d{4}\b)",
+    re.IGNORECASE,
+)
+
+
+def is_debt_security_title(title: str) -> bool:
+    """Whether a cover security title names a debt note, debenture or bond rather than equity."""
+    return _DEBT_NOTE.search(" ".join(title.split())) is not None
 
 
 @dataclass(frozen=True)
@@ -230,7 +246,9 @@ def cover_securities(body: bytes) -> tuple[CoverSecurity, ...]:
     """The cover lines of an inline XBRL filing that pair one title with one ticker in one context.
 
     A title with no ticker in its context (the notes of a bank, "Not for trading" lines) is left out.
-    A context with several titles or several tickers cannot be paired and is left out.
+    A context with several titles or several tickers cannot be paired and is left out, except when
+    debt/note titles share a context with one equity title (as on 10-K covers that list Eurobonds under
+    Section 12(b)).
     """
     from data_engine.datahub.standards.inline_xbrl import InlineXbrl
 
@@ -239,11 +257,16 @@ def cover_securities(body: bytes) -> tuple[CoverSecurity, ...]:
     for fact in InlineXbrl(body).text_facts((TITLE_CONCEPT, SYMBOL_CONCEPT), limit=_TITLE_LIMIT):
         target = titles if fact.concept == TITLE_CONCEPT else symbols
         target.setdefault(fact.context_id, []).append(fact.text)
-    return tuple(
-        CoverSecurity(symbol=symbols[context][0], title=titles[context][0])
-        for context in titles
-        if len(set(titles[context])) == 1 and len(set(symbols.get(context, ()))) == 1
-    )
+    paired: list[CoverSecurity] = []
+    for context, ctx_titles in titles.items():
+        ctx_symbols = symbols.get(context, [])
+        if len(set(ctx_symbols)) != 1:
+            continue
+        non_debt = [title for title in ctx_titles if not is_debt_security_title(title)]
+        candidates = non_debt if non_debt else ctx_titles
+        if len(set(candidates)) == 1:
+            paired.append(CoverSecurity(symbol=ctx_symbols[0], title=candidates[0]))
+    return tuple(paired)
 
 
 def _symbol_key(symbol: str) -> str:
@@ -257,13 +280,18 @@ def ratio_for_ticker(
     """The ratio of the cover line under `ticker`.
 
     Two lines under one ticker must agree on the value. If they differ, or one does not parse, the
-    result has no value: the cover does not say which line the listing is (#1519, U7).
+    result has no value: the cover does not say which line the listing is (#1519, U7). Debt/note lines
+    that repeat the equity ticker on a 10-K cover (Eurobonds of `MSFT` or `PG`) are ignored when at
+    least one non-debt line matches `ticker`.
     """
     filing: dict[str, Any] = {"accession": accession, "form": form, "filed": filed}
     wanted = _symbol_key(ticker)
-    lines = [line for line in securities if _symbol_key(line.symbol) == wanted]
-    if not lines:
+    matches = [line for line in securities if _symbol_key(line.symbol) == wanted]
+    if not matches:
         return unparsed(REASON_TICKER_NOT_ON_COVER, **filing)
+    lines = [line for line in matches if not is_debt_security_title(line.title)]
+    if not lines:
+        return unparsed(REASON_DEBT_SECURITY_ON_EQUITY_TICKER, title=matches[0].title, **filing)
     readings = [(line, read_title(line.title)) for line in lines]
     for line, reading in readings:
         if reading.listing_units_per_share is None:
