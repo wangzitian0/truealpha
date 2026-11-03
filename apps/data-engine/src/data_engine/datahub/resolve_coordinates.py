@@ -30,23 +30,15 @@ def ontology_kind_namespace(kind: str) -> uuid.UUID:
 
 
 def lookup_minted_entity(
-    connection: psycopg.Connection[Any],
-    scheme: str,
-    value: str,
-    *,
-    known_at: datetime,
+    connection: psycopg.Connection[Any], scheme: str, value: str, *, known_at: datetime
 ) -> uuid.UUID | None:
     """Return the surviving entity UUID if `(scheme, value)` was already minted in `staging.entities` (generation 1)."""
-    existing_row = connection.execute(
+    if existing_row := connection.execute(
         "select entity_id from staging.entities"
         " where birth_scheme = %s and birth_value = staging.entity_alias_normalize(%s, %s) and birth_generation = 1",
         (scheme, scheme, value),
-    ).fetchone()
-    if existing_row and existing_row[0]:
-        survivor = connection.execute(
-            "select staging.entity_survivor(%s, %s)",
-            (existing_row[0], known_at),
-        ).fetchone()
+    ).fetchone():
+        survivor = connection.execute("select staging.entity_survivor(%s, %s)", (existing_row[0], known_at)).fetchone()
         return survivor[0] if survivor and survivor[0] else existing_row[0]
     return None
 
@@ -266,22 +258,18 @@ def _assert_relation(
     *,
     known_at: datetime,
 ) -> None:
-    """Write one `datahub.capture` relation, unless the store already holds that claim.
-
-    The transaction time is the cutoff, or the clock when the cutoff lies ahead of it.
-    """
-    if connection.execute(
+    """Write one `datahub.capture` relation, unless the store already holds that claim."""
+    if not connection.execute(
         "select 1 from staging.entity_relations where relation_type = %s and from_entity_id = %s and to_entity_id = %s and source = 'datahub.capture'",
         (relation_type, from_entity, to_entity),
     ).fetchone():
-        return
-    connection.execute(
-        "with t as (select least(%(known_at)s::timestamptz, clock_timestamp()) as tx_time),"
-        " r as (select staging.entity_relation_uuid(%(type)s, %(from)s, %(to)s, '-infinity'::date, t.tx_time, 'datahub.capture', 'asserted') as rel_id, t.tx_time from t)"
-        " insert into staging.entity_relations (relation_id, relation_type, from_entity_id, to_entity_id, valid_from, transaction_time, source, raw_ref, method, confidence, mapping_version)"
-        " select r.rel_id, %(type)s, %(from)s, %(to)s, '-infinity'::date, r.tx_time, 'datahub.capture', 'rel:' || r.rel_id, 'asserted', 1.0, 'datahub:v1' from r on conflict do nothing",
-        {"known_at": known_at, "type": relation_type, "from": from_entity, "to": to_entity},
-    )
+        connection.execute(
+            "with t as (select least(%(known_at)s::timestamptz, clock_timestamp()) as tx_time),"
+            " r as (select staging.entity_relation_uuid(%(type)s, %(from)s, %(to)s, '-infinity'::date, t.tx_time, 'datahub.capture', 'asserted') as rel_id, t.tx_time from t)"
+            " insert into staging.entity_relations (relation_id, relation_type, from_entity_id, to_entity_id, valid_from, transaction_time, source, raw_ref, method, confidence, mapping_version)"
+            " select r.rel_id, %(type)s, %(from)s, %(to)s, '-infinity'::date, r.tx_time, 'datahub.capture', 'rel:' || r.rel_id, 'asserted', 1.0, 'datahub:v1' from r on conflict do nothing",
+            {"known_at": known_at, "type": relation_type, "from": from_entity, "to": to_entity},
+        )
 
 
 def resolve_coordinates(
@@ -291,39 +279,25 @@ def resolve_coordinates(
     as_of: date,
     known_at: datetime | None = None,
 ) -> dict[str, tuple[str, str, str, str]]:
-    """Resolve universe instruments to dictionary mapping listing_id -> (issuer_uuid, instrument_uuid, listing_uuid, ticker).
-
-    If connection is None, returns raw string coordinates.
-    """
+    """Resolve universe instruments to dictionary mapping listing_id -> (issuer_uuid, instrument_uuid, listing_uuid, ticker)."""
     if known_at is None:
         known_at = datetime.combine(as_of, datetime.min.time(), tzinfo=UTC)
-
     result: dict[str, tuple[str, str, str, str]] = {}
     for row in instruments:
-        issuer_raw = str(row[0])
-        instrument_raw = str(row[1])
-        listing_raw = str(row[2])
-        ticker = str(row[3])
-        subject_id = listing_raw
-
+        issuer_raw, instrument_raw, listing_raw, ticker = str(row[0]), str(row[1]), str(row[2]), str(row[3])
         if connection is None:
-            result[subject_id] = (issuer_raw, instrument_raw, listing_raw, ticker)
+            result[listing_raw] = (issuer_raw, instrument_raw, listing_raw, ticker)
             continue
-
         issuer_uuid = resolve_entity(connection, issuer_raw, "issuer", as_of=as_of, known_at=known_at)
         instrument_uuid = resolve_entity(connection, instrument_raw, "instrument", as_of=as_of, known_at=known_at)
         listing_uuid = resolve_entity(connection, listing_raw, "listing", as_of=as_of, known_at=known_at)
-
         _assert_relation(connection, "issues", issuer_uuid, instrument_uuid, known_at=known_at)
         _assert_relation(connection, "listed_as", instrument_uuid, listing_uuid, known_at=known_at)
-        # The classification file names the primary listing. This resolver writes it, and no one else does.
         if listing_raw in primary_listing_ids():
             _assert_relation(connection, "primary_listing", issuer_uuid, listing_uuid, known_at=known_at)
         if name := _resolve_issuer_display_name(connection, ticker, issuer_raw=issuer_raw, issuer_uuid=issuer_uuid):
             _assert_issuer_name_alias(connection, issuer_uuid, name, known_at=known_at)
-
-        result[subject_id] = (str(issuer_uuid), str(instrument_uuid), str(listing_uuid), ticker)
-
+        result[listing_raw] = (str(issuer_uuid), str(instrument_uuid), str(listing_uuid), ticker)
     return result
 
 

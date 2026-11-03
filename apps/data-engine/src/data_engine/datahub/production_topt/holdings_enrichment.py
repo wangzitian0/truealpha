@@ -105,17 +105,18 @@ def figi_from_raw(connection, isins: list[str], *, store=None) -> tuple[dict[str
     return {i: found[i].records for i in isins if i in found}, [i for i in isins if i not in found]
 
 
-def _holding_display_name(connection, *, isin: str, ticker: str, listing_name: str | None, target: str) -> str:
-    """Resolve the display name for an enriched holding without falling back to a bare ticker (#1518)."""
+def _holding_display_name(connection, *, isin: str, ticker: str, listing_name: str | None) -> str | None:
+    """Resolve the display name for an enriched holding without falling back to a bare ticker or ISIN (#1518)."""
     if name := (listing_name or "").strip():
         return name
     row = connection.execute(
         "select nullif(btrim(holding_name), '') from staging.fund_holding_facts"
         " where isin = %s and nullif(btrim(holding_name), '') is not null"
-        " and upper(btrim(holding_name)) <> upper(btrim(%s)) order by transaction_time desc limit 1",
-        (isin, ticker),
+        " and upper(btrim(holding_name)) not in (upper(btrim(%s)), upper(btrim(%s)))"
+        " order by transaction_time desc limit 1",
+        (isin, ticker, isin),
     ).fetchone()
-    return str(row[0]) if row and row[0] else target
+    return str(row[0]) if row and row[0] else None
 
 
 def enrich_holding_identities(
@@ -237,7 +238,7 @@ def enrich_holding_identities(
                 connection,
                 target,
                 "company",
-                _holding_display_name(connection, isin=isin, ticker=ticker, listing_name=listing.name, target=target),
+                _holding_display_name(connection, isin=isin, ticker=ticker, listing_name=listing.name) or target,
             )
             for id_type, id_value in (("isin", isin), ("ticker", ticker)):
                 er.assert_identifier(
