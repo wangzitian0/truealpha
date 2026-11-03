@@ -72,14 +72,11 @@ def resolve_issuers(
     cutoff: datetime | None = None,
 ) -> list[UniverseIssuer]:
     """The universe's issuers with a CIK each. One SEC crosswalk call when a CIK is missing."""
-    try:
-        issuers = (
-            universe_issuers(connection, universe, cutoff=cutoff)
-            if cutoff is not None
-            else universe_issuers(connection, universe)
-        )
-    except TypeError:
-        issuers = universe_issuers(connection, universe)
+    issuers = (
+        universe_issuers(connection, universe, cutoff=cutoff)
+        if cutoff is not None
+        else universe_issuers(connection, universe)
+    )
     if any(issuer.cik is None for issuer in issuers):
         index = sec.ticker_cik_index(http, via=gateway)
         issuers = resolve_missing_ciks(issuers, index)

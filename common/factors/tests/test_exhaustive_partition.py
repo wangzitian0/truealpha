@@ -127,7 +127,10 @@ def test_a_proposal_naming_a_part_recall_never_found_is_refused_not_raised() -> 
         select_exhaustive_partition(candidates, total=Decimal("100"), tolerance=TOL, indices=[-1])
         is PartitionRefusal.INDEX_OUT_OF_RANGE
     )
-    assert select_exhaustive_partition(parts("50"), total=Decimal("100"), tolerance=TOL, indices=[0, 0]) is None
+    assert (
+        select_exhaustive_partition(parts("50"), total=Decimal("100"), tolerance=TOL, indices=[0, 0])
+        is PartitionRefusal.DUPLICATE_INDEX
+    )
 
 
 def test_a_subset_that_happens_to_balance_is_accepted_with_its_own_indices() -> None:
@@ -167,6 +170,7 @@ def test_the_partitioner_protocol_is_structural() -> None:
         PartitionRefusal.NO_CANDIDATES,
         PartitionRefusal.NO_TOTAL,
         PartitionRefusal.INDEX_OUT_OF_RANGE,
+        PartitionRefusal.DUPLICATE_INDEX,
     ],
 )
 def test_a_refusal_is_never_mistaken_for_a_partition(bad) -> None:

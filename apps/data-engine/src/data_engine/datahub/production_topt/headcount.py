@@ -76,7 +76,7 @@ def validate_cited_headcount_fact(
         )
 
 
-def _is_eligible_headcount_row(
+def is_eligible_headcount_row(
     *,
     knowable_at: datetime,
     source: str,
@@ -129,7 +129,7 @@ def lookup_headcount(connection: Connection[Any], cik: int, cutoff: date) -> Hea
     row = connection.execute(f"{_SELECT_HEADCOUNT_SQL} limit 1", params).fetchone()
     if row is None:
         return None
-    if not _is_eligible_headcount_row(
+    if not is_eligible_headcount_row(
         knowable_at=row[1],
         source=str(row[2]),
         evidence_ref=str(row[3]),
@@ -140,7 +140,7 @@ def lookup_headcount(connection: Connection[Any], cik: int, cutoff: date) -> Hea
             (
                 candidate
                 for candidate in rows
-                if _is_eligible_headcount_row(
+                if is_eligible_headcount_row(
                     knowable_at=candidate[1],
                     source=str(candidate[2]),
                     evidence_ref=str(candidate[3]),

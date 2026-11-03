@@ -498,7 +498,7 @@ def test_capacity_exhaustion_defers_the_cell_instead_of_failing_the_run() -> Non
 def test_run_over_a_universe_plans_only_open_cells_and_persists_the_report(monkeypatch) -> None:
     connection = FakeConnection({1045810: [(EXTRACTION_SOURCE, CUTOFF - timedelta(days=10))]})  # NVDA already cited
     issuers = [_issuer(1045810, "NVDA"), _issuer(59478, "LLY"), _issuer(1730168, "AVGO")]
-    monkeypatch.setattr(backfill_module, "universe_issuers", lambda _c, _u: issuers)
+    monkeypatch.setattr(backfill_module, "universe_issuers", lambda _c, _u, **_k: issuers)
     lines: list[str] = []
 
     report = run_standard_backfill(
@@ -552,7 +552,7 @@ def test_a_holdco_with_no_filing_under_its_new_cik_falls_back_to_the_predecessor
     issuers = planner_module.universe_issuers(connection, "topt")
     assert issuers[0].cik is None and issuers[0].predecessor_cik == 34088
     issuers = planner_module.resolve_missing_ciks(issuers, {"XOM": 2115436})
-    monkeypatch.setattr(backfill_module, "universe_issuers", lambda _c, _u: issuers)
+    monkeypatch.setattr(backfill_module, "universe_issuers", lambda _c, _u, **_k: issuers)
 
     report = run_standard_backfill(
         connection,
@@ -829,7 +829,7 @@ def test_without_a_seated_model_the_cell_stays_needs_model_selection(monkeypatch
 
 def test_probe_run_writes_only_the_ledger_and_the_report(monkeypatch, call_ledger) -> None:
     connection = FakeConnection()
-    monkeypatch.setattr(backfill_module, "universe_issuers", lambda _c, _u: [_issuer(1045810, "NVDA")])
+    monkeypatch.setattr(backfill_module, "universe_issuers", lambda _c, _u, **_k: [_issuer(1045810, "NVDA")])
     report = run_standard_backfill(
         connection,
         universe="topt",
