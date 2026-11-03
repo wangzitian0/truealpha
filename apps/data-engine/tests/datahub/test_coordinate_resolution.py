@@ -174,8 +174,20 @@ def test_resolve_coordinates_asserts_issuer_display_name_aliases_for_all_topt_me
 
 
 def test_resolve_coordinates_holds_no_hardcoded_issuer_name_dictionary() -> None:
-    """#1518: `resolve_coordinates` resolves TOPT issuer names from the packaged corpus without a hardcoded Python dict."""
+    """#1518: `resolve_coordinates` resolves TOPT issuer names from the packaged corpus without a hardcoded Python dict,
+    and `_holding_display_name` returns None rather than an ISIN or bare ticker when both names are blank."""
+    from unittest.mock import MagicMock
+
     from data_engine.datahub import resolve_coordinates as rc
+    from data_engine.datahub.production_topt.holdings_enrichment import _holding_display_name
 
     assert not hasattr(rc, "_CANONICAL_ISSUER_NAMES") and not hasattr(rc, "canonical_issuer_name")
     assert rc._corpus_issuer_names()["JPM"] == "JPMorgan Chase & Co."
+    conn_empty = MagicMock(**{"execute.return_value.fetchone.return_value": None})
+    assert _holding_display_name(conn_empty, isin="US0378331005", ticker="AAPL", listing_name="  ") is None
+    assert conn_empty.execute.call_args[0][1] == ("US0378331005", "AAPL", "US0378331005")
+    conn_named = MagicMock(**{"execute.return_value.fetchone.return_value": ("Apple Inc.",)})
+    assert _holding_display_name(conn_named, isin="US0378331005", ticker="AAPL", listing_name=None) == "Apple Inc."
+    assert _holding_display_name(conn_empty, isin="US0378331005", ticker="AAPL", listing_name="APPLE INC") == (
+        "APPLE INC"
+    )
