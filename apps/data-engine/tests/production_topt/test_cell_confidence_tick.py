@@ -107,6 +107,11 @@ def test_capture_leaves_observation_confidence_null_and_persists_cell_confidence
         expected_close_conf = cell_confs[(member.listing_id, "close")]
         assert member.market_price.confidence == expected_close_conf
         assert Decimal("0.5") < member.market_price.confidence < Decimal("1.0")
+    gppe_confs = connection.execute(
+        "select confidence from mart.topt_gppe_results where run_id = %s and availability = 'available'",
+        (plan.run_id,),
+    ).fetchall()
+    assert gppe_confs and all(Decimal("0.5") < c < Decimal("1.0") for (c,) in gppe_confs)
 
     connection.execute("delete from staging.strategy_backtest_inputs where cutoff_at = %s", (CUTOFF,))
     written = seed_strategy_inputs_from_capture(connection, plan.run_id, cutoff=CUTOFF)

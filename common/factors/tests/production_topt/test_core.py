@@ -218,6 +218,57 @@ def test_identity_cell_freshness_and_confidence_are_not_dropped() -> None:
     assert available.confidence == Decimal("0.2")
 
 
+def test_topt_gppe_confidence_ignores_unconsumed_shares_outstanding_and_market_price() -> None:
+    cells = (
+        _cell(OBSERVATION_IDS[0], confidence="0.4"),
+        _cell(OBSERVATION_IDS[1], confidence="0.3"),
+        _cell(OBSERVATION_IDS[2], confidence="0.9"),
+        _cell(OBSERVATION_IDS[3], confidence="0.9"),
+    )
+    component = _component(
+        price="40",
+        shares="10000000",
+    ).model_copy(
+        update={
+            "market_price": _metric("market_price", "40", input_id=OBSERVATION_IDS[1], confidence="0.3"),
+            "shares_outstanding": _metric(
+                "shares_outstanding", "10000000", input_id=OBSERVATION_IDS[0], confidence="0.4"
+            ),
+        }
+    )
+    snapshot = _snapshot(
+        cell_inputs=cells,
+        gross_profit=_metric("gross_profit", "210000000", confidence="0.88"),
+        total_assets=_metric("total_assets", "200000000", confidence="0.92"),
+        headcount=_metric("headcount", "100", confidence="0.85"),
+        revenue=_metric("revenue", "100000000", confidence="0.50"),
+        market_value_components=(component,),
+    )
+    definition = load_live_strategy_definition()
+    gppe_result = compute_topt_gppe(
+        snapshot,
+        invocation_id=f"topt-gppe-invocation:{'f' * 64}",
+        gppe_definition=GppeV0Definition(risk_free_rate="0.05"),
+        definition=definition,
+    )
+    assert gppe_result.confidence == Decimal("0.85")
+    core_result = compute_topt_core(
+        snapshot,
+        gppe_result,
+        invocation_id=f"topt-core-invocation:{'e' * 64}",
+        definition=definition,
+    )
+    assert core_result.confidence == Decimal("0.3")
+    high_cells_snapshot = snapshot.model_copy(update={"cell_inputs": _cells()})
+    core_with_high_cells = compute_topt_core(
+        high_cells_snapshot,
+        gppe_result,
+        invocation_id=f"topt-core-invocation:{'d' * 64}",
+        definition=definition,
+    )
+    assert core_with_high_cells.confidence == Decimal("0.3")
+
+
 def test_current_ps_values_company_total_shares_once_per_issuer() -> None:
     # #705: every listing's dei share count is the COMPANY total, so identical
     # counts across classes are one company, not one per class — the old pin

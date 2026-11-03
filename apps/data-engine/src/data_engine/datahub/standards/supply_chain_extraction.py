@@ -14,7 +14,7 @@ import logging
 import re
 import uuid
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any
@@ -139,29 +139,56 @@ class SupplyChainEdgeCandidate:
 
 
 _CASE_ID_SANITIZE_RE = re.compile(r"[^A-Za-z0-9._:/@+-]+")
+_WS_RE = re.compile(r"\s+")
 
 
 def _safe_case_id_part(value: str, fallback: str) -> str:
     return _CASE_ID_SANITIZE_RE.sub("-", value).strip("-") or fallback
 
 
-def _edge_confidence(issuer_id: str, accession: str, target_name: str, rel: str, quote_len: int) -> Decimal:
-    sample_conf = Decimal("0.98") if quote_len >= 40 else Decimal("0.92")
+def _quote_is_anchored(quote: str, filing_text: str) -> bool:
+    norm_quote = _WS_RE.sub(" ", quote).strip().lower()
+    if not norm_quote:
+        return False
+    norm_text = _WS_RE.sub(" ", filing_text).strip().lower()
+    return norm_quote in norm_text
+
+
+def _filing_freshness(filing_date: date, cutoff: date | datetime | None) -> Decimal:
+    ref_date = cutoff.date() if isinstance(cutoff, datetime) else cutoff
+    if ref_date is None:
+        return Decimal("1")
+    age_days = max(0, (ref_date - filing_date).days)
+    if age_days <= 365:
+        return Decimal("1")
+    return max(Decimal("0.20"), Decimal("1") - (Decimal(age_days - 365) * Decimal("0.001")).quantize(Decimal("0.0001")))
+
+
+def _edge_confidence(
+    issuer_id: str,
+    accession: str,
+    target_name: str,
+    rel: str,
+    filing_date: date,
+    *,
+    cutoff: date | datetime | None = None,
+) -> Decimal:
     safe_issuer = _safe_case_id_part(issuer_id, "issuer")
     safe_acc = _safe_case_id_part(accession, "acc")
     safe_target = _safe_case_id_part(target_name, "partner")
+    prior = source_reliability_prior("origin:llm-extractor:v1") or source_reliability_prior("origin:sec-10k:v1")
     return evaluate_cell_confidence(
         case_id=f"supply-chain:{safe_issuer}:{safe_acc}:{safe_target}",
         sources=(
             SourceConfidenceEvidence(
-                provider_id="origin:sec-10k:v1",
+                provider_id="origin:llm-extractor:v1",
                 origin_group_id="lineage:sec-10k",
                 independence_weight=Decimal("1"),
-                reliability_prior=source_reliability_prior("origin:sec-10k:v1"),
+                reliability_prior=prior,
                 successful_outcome_mass=Decimal("0"),
                 failed_outcome_mass=Decimal("0"),
-                freshness=Decimal("1"),
-                sample_conformance=sample_conf,
+                freshness=_filing_freshness(filing_date, cutoff),
+                sample_conformance=Decimal("1"),
                 transport_integrity=Decimal("1"),
                 evidence_ids=(f"accession:{safe_acc}",),
                 reason_codes=(f"relation:{rel}",),
@@ -188,6 +215,7 @@ def extract_supply_chain_relationships(
     accession: str,
     cik: int | None = None,
     issuer_label: str | None = None,
+    cutoff: date | datetime | None = None,
     connection: Connection[Any] | None = None,
     llm_gateway: Any | None = None,
     persist: bool = True,
@@ -197,7 +225,6 @@ def extract_supply_chain_relationships(
     Raises `llm.ModelContextLimitError` when the filing exceeds the 1,000,000-token ceiling so
     the caller records `context_window_exceeded` and alerts instead of silently returning `()`.
     """
-    _ = filing_date
     if not filing_text or len(filing_text.strip()) < 40:
         return ()
     resolved_cik = cik if cik is not None else _parse_cik_from_identifier(issuer_id or accession)
@@ -214,6 +241,8 @@ def extract_supply_chain_relationships(
     results: list[SupplyChainEdgeCandidate] = []
     seen_pairs: set[tuple[str, str]] = set()
     for partner in extraction.partners:
+        if not _quote_is_anchored(partner.evidence_quote, filing_text):
+            continue
         pair = (partner.relation_type, partner.partner_name.lower())
         if pair in seen_pairs:
             continue
@@ -229,7 +258,8 @@ def extract_supply_chain_relationships(
                     accession,
                     partner.partner_name,
                     partner.relation_type,
-                    len(partner.evidence_quote),
+                    filing_date,
+                    cutoff=cutoff,
                 ),
                 target_ticker=partner.ticker,
                 revenue_share_pct=partner.revenue_share_pct,
@@ -562,14 +592,40 @@ class _ExtractionDiagnostics:
     replayed: int = 0
     context_window_exceeded: int = 0
     model_errors: int = 0
-    exceeded_issuers: dict[str, str] = None  # type: ignore[assignment]
-    issuer_extractors: dict[str, str] = None  # type: ignore[assignment]
+    exceeded_issuers: dict[str, str] = field(default_factory=dict)
+    issuer_extractors: dict[str, str] = field(default_factory=dict)
 
-    def __post_init__(self) -> None:
-        if self.exceeded_issuers is None:
-            self.exceeded_issuers = {}
-        if self.issuer_extractors is None:
-            self.issuer_extractors = {}
+
+def _issuer_display_name(
+    connection: Connection[Any],
+    canonical_issuer_id: str,
+    ticker: str,
+    tx_time: datetime,
+) -> str:
+    clean_ticker = ticker.strip().upper()
+    if is_uuid(canonical_issuer_id):
+        row = connection.execute(
+            """
+            select btrim(value)
+            from staging.entity_aliases
+            where entity_id = %s::uuid
+              and scheme = 'name'
+              and nullif(btrim(value), '') is not null
+              and upper(btrim(value)) <> %s
+              and transaction_time <= %s
+            order by confidence desc, transaction_time desc, alias_id desc
+            limit 1
+            """,
+            (canonical_issuer_id, clean_ticker, tx_time),
+        ).fetchone()
+        if row and row[0]:
+            return str(row[0])
+    if clean_ticker:
+        connection.execute(
+            "update staging.kg_entities set display_name = '' where id = %s and upper(btrim(display_name)) = %s",
+            (canonical_issuer_id, clean_ticker),
+        )
+    return ""
 
 
 def _persist_single_candidate_edge(
@@ -606,7 +662,8 @@ def _persist_single_candidate_edge(
     )
     try:
         with _optional_savepoint(connection):
-            ensure_entity(connection, canonical_issuer_id, "company", matched.ticker)
+            issuer_name = _issuer_display_name(connection, canonical_issuer_id, matched.ticker, tx_time)
+            ensure_entity(connection, canonical_issuer_id, "company", issuer_name)
             ensure_entity(connection, partner_uuid, "company", cand.target_entity_name)
             return bool(
                 add_edge(
@@ -633,6 +690,7 @@ def _extract_filing_for_issuer(
     filing_dt: date,
     accession: str,
     cik_int: int,
+    cutoff: datetime,
     llm_gateway: Any | None,
     diag: _ExtractionDiagnostics,
 ) -> tuple[SupplyChainEdgeCandidate, ...] | None:
@@ -645,6 +703,7 @@ def _extract_filing_for_issuer(
             accession=accession,
             cik=cik_int,
             issuer_label=matched.ticker or canonical_issuer_id,
+            cutoff=cutoff,
             connection=connection,
             llm_gateway=llm_gateway,
             persist=True,
@@ -737,6 +796,7 @@ def persist_extracted_supply_chain_edges(
             filing_dt=filing_dt,
             accession=str(meta.get("accession") or source_record_id),
             cik_int=_extract_cik_int(source_record_id, meta, matched),
+            cutoff=cutoff,
             llm_gateway=llm_gateway,
             diag=diag,
         )
@@ -849,10 +909,9 @@ def _load_issuer_graph_partners(
 ) -> list[SupplyChainPartner]:
     partners: list[SupplyChainPartner] = []
     seen_edges: set[tuple[str, str]] = set()
-    for endpoint_id in dict.fromkeys((issuer.issuer_id, issuer.legacy_id)):
-        if not endpoint_id:
-            continue
-        rows = connection.execute(
+    query_specs = (
+        (
+            "customer",
             """
             select e.to_id, coalesce(ent.display_name, e.to_id), e.confidence
             from staging.kg_edges e
@@ -860,22 +919,9 @@ def _load_issuer_graph_partners(
             where e.from_id = %s and e.relation_type = 'supplies_to' and e.transaction_time <= %s
               and (e.valid_time is null or e.valid_time @> %s::date)
             """,
-            (endpoint_id, cutoff, cutoff_date),
-        ).fetchall()
-        for p_id, p_name, conf in rows:
-            key = ("customer", str(p_id))
-            if key not in seen_edges:
-                seen_edges.add(key)
-                partners.append(
-                    SupplyChainPartner(
-                        partner_id=str(p_id),
-                        partner_name=str(p_name),
-                        relation_type="customer",
-                        revenue_share=None,
-                        confidence=Decimal(str(conf)) if conf is not None else Decimal("0"),
-                    )
-                )
-        supplier_rows = connection.execute(
+        ),
+        (
+            "supplier",
             """
             select e.from_id, coalesce(ent.display_name, e.from_id), e.confidence
             from staging.kg_edges e
@@ -883,21 +929,25 @@ def _load_issuer_graph_partners(
             where e.to_id = %s and e.relation_type = 'supplies_to' and e.transaction_time <= %s
               and (e.valid_time is null or e.valid_time @> %s::date)
             """,
-            (endpoint_id, cutoff, cutoff_date),
-        ).fetchall()
-        for p_id, p_name, conf in supplier_rows:
-            key = ("supplier", str(p_id))
-            if key not in seen_edges:
-                seen_edges.add(key)
-                partners.append(
-                    SupplyChainPartner(
-                        partner_id=str(p_id),
-                        partner_name=str(p_name),
-                        relation_type="supplier",
-                        revenue_share=None,
-                        confidence=Decimal(str(conf)) if conf is not None else Decimal("0"),
+        ),
+    )
+    for endpoint_id in dict.fromkeys((issuer.issuer_id, issuer.legacy_id)):
+        if not endpoint_id:
+            continue
+        for rel_type, sql in query_specs:
+            for p_id, p_name, conf in connection.execute(sql, (endpoint_id, cutoff, cutoff_date)).fetchall():
+                key = (rel_type, str(p_id))
+                if key not in seen_edges:
+                    seen_edges.add(key)
+                    partners.append(
+                        SupplyChainPartner(
+                            partner_id=str(p_id),
+                            partner_name=str(p_name),
+                            relation_type=rel_type,
+                            revenue_share=None,
+                            confidence=Decimal(str(conf)) if conf is not None else Decimal("0"),
+                        )
                     )
-                )
     return partners
 
 
@@ -965,34 +1015,28 @@ def materialize_universe_supply_chain_exposure(
             partners, entity_id=issuer.issuer_id, as_of=cutoff, supplies_to_edges_exist=supplies_to_edges_exist
         )
         extractor = diag.issuer_extractors.get(issuer.issuer_id, "graph:kg-edges:v1")
-        if extractor != "graph:kg-edges:v1":
-            avail = "available" if not record.result.flags and record.exposure_score is not None else "unavailable"
-            count += materialize_supply_chain_exposure(
-                connection,
-                run_id=run_id,
-                cutoff=cutoff,
-                exposure_data=[
-                    {
-                        "issuer_id": record.entity_id,
-                        "exposure_score": record.exposure_score,
-                        "direct_partners": record.direct_partners,
-                        "suppliers_count": record.suppliers_count,
-                        "customers_count": record.customers_count,
-                        "max_partner_share": record.max_partner_share,
-                        "confidence": record.result.confidence,
-                        "reason_codes": list(record.result.flags),
-                        "extractor": extractor,
-                        "availability_status": avail,
-                    }
-                ],
-            )
-        else:
-            count += materialize_supply_chain_exposure(
-                connection,
-                run_id=run_id,
-                cutoff=cutoff,
-                exposure_data=[record],
-            )
+        avail = "available" if not record.result.flags and record.exposure_score is not None else "unavailable"
+        count += materialize_supply_chain_exposure(
+            connection,
+            run_id=run_id,
+            cutoff=cutoff,
+            exposure_data=[
+                {
+                    "issuer_id": record.entity_id,
+                    "exposure_score": record.exposure_score,
+                    "direct_partners": record.direct_partners,
+                    "suppliers_count": record.suppliers_count,
+                    "customers_count": record.customers_count,
+                    "max_partner_share": record.max_partner_share,
+                    "confidence": record.result.confidence,
+                    "reason_codes": list(record.result.flags),
+                    "extractor": extractor,
+                    "availability_status": avail,
+                }
+            ]
+            if extractor != "graph:kg-edges:v1"
+            else [record],
+        )
     return SupplyChainRunReport(
         count,
         edges_inserted=diag.edges_inserted,
