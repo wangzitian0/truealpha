@@ -127,6 +127,7 @@ def test_a_proposal_naming_a_part_recall_never_found_is_refused_not_raised() -> 
         select_exhaustive_partition(candidates, total=Decimal("100"), tolerance=TOL, indices=[-1])
         is PartitionRefusal.INDEX_OUT_OF_RANGE
     )
+    assert select_exhaustive_partition(parts("50"), total=Decimal("100"), tolerance=TOL, indices=[0, 0]) is None
 
 
 def test_a_subset_that_happens_to_balance_is_accepted_with_its_own_indices() -> None:

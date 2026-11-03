@@ -43,7 +43,7 @@ def served_financial_record(
         lambda ciks: issuer_registry.RegistryReading(
             classifications={
                 requested: issuer_registry.IssuerClassification(
-                    operating_branch=OperatingBranch.NON_FINANCIAL, revenue_proxy_allowed=False
+                    operating_branch=OperatingBranch.NON_FINANCIAL,
                 )
                 for requested in ciks.values()
             }
