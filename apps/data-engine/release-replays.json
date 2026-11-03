@@ -68,6 +68,14 @@
     {
       "identity": "production-topt-concept-ruleset",
       "replay": "The next scheduled ticks write financial-fact payloads under the new ruleset (production-topt-concepts:v5). These ticks are topt_live_pipeline (22:15 UTC production, 22:45 UTC staging) and qqq_live_pipeline (23:20 UTC, production only). They re-read SEC companyfacts. A manual tick within 12 hours of a tick on the old image reuses the old rows unless it sets force_fetch, because reuse keys on parser_version only. strategy_history_projection_pipeline re-projects past cutoffs from stored companyfacts. An environment with a published head (staging.accepted_ruleset_head, kind concept-mapping) keeps the old rules until publish_ruleset(DEFAULT_RULESET) runs there"
+    },
+    {
+      "identity": "production-topt-concept-ruleset",
+      "replay": "The change of #1519 orders us-gaap:Revenues before us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax in DEFAULT_RULESET (production-topt-concepts:v5) so consolidated total revenue wins over partial ASC 606 customer-contract revenue at the same period end. The next scheduled ticks (topt_live_pipeline and qqq_live_pipeline) re-read SEC companyfacts, and strategy_history_projection_pipeline re-projects past cutoffs from stored companyfacts."
+    },
+    {
+      "identity": "strategy-history-projector",
+      "replay": "The change of #1519 removes the dead revenue_proxy_allowed field and _revenue_proxy_signature helper from strategy_history.py. strategy_history_projection_pipeline re-projects the past cutoffs with the projector code of this release. Launch it by hand on staging after the deploy of this release with ops.project_strategy_history_op.config.executed_at set to an ISO 8601 time with a time zone, or wait for the scheduled run (20:07 UTC on weekdays)."
     }
   ]
 }

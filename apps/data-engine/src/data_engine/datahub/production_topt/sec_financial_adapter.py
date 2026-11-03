@@ -218,11 +218,6 @@ class SecTarget:
     # `issuer_registry.StatementFiling`), for telling a figure the issuer has superseded
     # from a current one.
     statement_filings: tuple[StatementFiling, ...] = ()
-    # #533: whether this issuer's industry may substitute revenue for an untagged gross
-    # profit. Resolved from the EDGAR SIC at planning, exactly like `operating_branch`.
-    # Defaults False so a target assembled without the registry cannot inherit a
-    # substitution that only holds for ~zero-COGS industries.
-    revenue_proxy_allowed: bool = False
     # True when the issuer registry gave no classification after its attempts (#1323). The
     # operating branch above is then a placeholder. The payload withholds both numerators and
     # carries `UNAVAILABLE_PAYLOAD_KEY`, so the tick excludes the issuer with the reason
@@ -1357,8 +1352,7 @@ class SecFinancialFactAdapter:
             },
             # #530 item 4: the filing behind each input, on the row. `mart.topt_core_meta_info`
             # surfaces it per observation, so a served number names its document. A key is
-            # present only for an input the payload actually asserts: when the revenue proxy
-            # is refused above, `gross_profit` is null and must not claim a filing.
+            # present only for an input the payload actually asserts.
             "vintage": _payload_vintage(bundle, gross_profit_value, headcount_evidence, bank_net_revenue_value),
         }
         if target.operating_branch is OperatingBranch.FINANCIAL:
@@ -1684,9 +1678,6 @@ def build_route(context: RouteContext, cells: Sequence[RouteCell]) -> SecFinanci
             operating_branch=(
                 classifications[cik].operating_branch if cik in classifications else OperatingBranch.NON_FINANCIAL
             ),
-            # #533: only the industries whose cost of revenue is ~zero may substitute
-            # revenue for an untagged gross profit. Absent from the registry means no.
-            revenue_proxy_allowed=cik in classifications and classifications[cik].revenue_proxy_allowed,
             registry_unavailable=cik in registry.unavailable,
             # only meaningful when it differs from the mapped CIK — the fallback would
             # otherwise refetch the same empty document.

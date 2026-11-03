@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from typing import Any
 
 import pytest
 from data_engine.datahub.fetch_key import FetchKey
@@ -52,7 +53,7 @@ class _Result:
 class FakeConnection:
     """Answers the exact statements the loop issues; records every write."""
 
-    def __init__(self, facts: dict[int, list[tuple[str, datetime]]] | None = None) -> None:
+    def __init__(self, facts: dict[int, list[tuple[Any, ...]]] | None = None) -> None:
         self.facts = facts or {}
         self.predecessors: dict[str, int] = {}
         self.model_invocations: list[tuple] = []
@@ -63,12 +64,20 @@ class FakeConnection:
 
     def execute(self, sql: str, params: tuple = ()):
         text = " ".join(sql.split())
-        if text.startswith("select source, knowable_at from staging.issuer_headcount_facts"):
+        if text.startswith("select source, knowable_at"):
             cik, cutoff, priority = params
-            eligible = [r for r in self.facts.get(cik, []) if r[1] <= cutoff]
+            eligible = [r for r in self.facts.get(cik, []) if r[1] <= cutoff and r[0] != "curated-10k-2025"]
             rank = {source: index for index, source in enumerate(priority)}
             rows = sorted(eligible, key=lambda r: (rank.get(r[0], len(priority)), -r[1].timestamp()))
-            return _Result(rows[:1])
+            return _Result(rows[:1] if "limit 1" in text else rows)
+        if text.startswith("select 1 from raw.fetches"):
+            prefix, after, before, _vf, _va, _vb = params
+            hits = [
+                r
+                for r in self.raw_rows
+                if str(r[1]).startswith(str(prefix).removesuffix("%")) and after < r[5] <= before
+            ]
+            return _Result([(1,)] if hits else [])
         if text.startswith("select 1 from staging.issuer_headcount_facts"):
             cik, _source, like = params
             accession = like.removeprefix("accession=").split(" ")[0]
@@ -918,3 +927,111 @@ def test_tesla_post_positioned_employee_headcount_phrasing_is_recalled_and_selec
     assert status_2021 == "resolved" and chosen_2021 is not None
     assert chosen_2021.value == 99290
     assert parse_as_of(chosen_2021.as_of) == date(2021, 12, 31)
+
+
+def test_decimal_and_scale_word_headcount_phrases_are_recalled_and_scaled() -> None:
+    """#1519: Walmart ('approximately 2.1 million associates') and thousand-scaled filings."""
+    for phrase, expected in (
+        ("As of January 31, 2026, we employed approximately 2.1 million associates worldwide.", 2_100_000),
+        ("As of December 31, 2025, we had 61 thousand employees globally.", 61_000),
+    ):
+        status, chosen = select_total(candidates(filing_plain_text(_html(phrase))))
+        assert status == "resolved" and chosen is not None and chosen.value == expected
+
+
+def test_extract_headcount_catches_candidate_parse_exceptions_and_returns_error(monkeypatch) -> None:
+    """#1519: an extraction parse exception turns into ExtractionOutcome(status='error')."""
+    from data_engine.datahub.standards import filing_extraction as fe_module
+
+    connection = FakeConnection()
+    http = FakeHttp({1045810: [("10-K", "2026-02-25", "0001045810-26-000021", _html(NVDA))]})
+    monkeypatch.setattr(fe_module, "candidates", lambda _t: (_ for _ in ()).throw(RuntimeError("boom")))
+    outcome = extract_headcount(
+        1045810,
+        connection=connection,
+        http=http,
+        gateway=_gateway(connection),
+        standard=STANDARD,
+        cutoff=CUTOFF,
+        write=False,
+        store=FakeStore(),
+    )
+    assert outcome.status == "error" and "RuntimeError: boom" in outcome.detail
+
+
+def test_universe_issuers_passes_cutoff_instead_of_wall_clock(monkeypatch) -> None:
+    """#1519: planner.universe_issuers forwards cutoff to primary-listing and KG lookups."""
+    from data_engine.datahub.standards import planner as planner_module
+
+    recorded_known_at: list[datetime] = []
+    recorded_as_of: list[date] = []
+    uuid_issuer = "11111111-2222-3333-4444-555555555555"
+    monkeypatch.setattr(
+        planner_module,
+        "load_corpus",
+        lambda _f: {
+            "topt_denominator": {
+                "instruments": [
+                    [uuid_issuer, "sec:1", "listing:xnas:aapl", "AAPL"],
+                    ["issuer:lei:TEST", "sec:2", "listing:xnys:msft", "MSFT"],
+                ]
+            }
+        },
+    )
+    monkeypatch.setattr(
+        planner_module,
+        "choose_primary_listings",
+        lambda _c, by_issuer, *, known_at: (
+            recorded_known_at.append(known_at) or {k: v[0] for k, v in by_issuer.items()}
+        ),
+    )
+    monkeypatch.setattr(
+        planner_module,
+        "lookup_entity",
+        lambda _c, _id, _kind, *, as_of, known_at: (
+            recorded_as_of.append(as_of) or recorded_known_at.append(known_at) or "22222222-2222-2222-2222-222222222222"
+        ),
+    )
+    monkeypatch.setattr(
+        planner_module,
+        "alias_of",
+        lambda _c, _eid, _ns, *, valid_at, known_at: (
+            recorded_as_of.append(valid_at) or recorded_known_at.append(known_at) or "320193"
+        ),
+    )
+    monkeypatch.setattr(planner_module, "signed_predecessor_ciks", lambda _c, _m: {})
+    historical_cutoff = datetime(2024, 6, 30, 23, 59, 59, tzinfo=UTC)
+    issuers = planner_module.universe_issuers(FakeConnection(), "topt", cutoff=historical_cutoff)
+    assert [i.cik for i in issuers] == [320193, 320193]
+    assert set(recorded_known_at) == {historical_cutoff} and set(recorded_as_of) == {date(2024, 6, 30)}
+
+
+def test_open_cells_reopens_for_newer_annual_filing_and_ignores_ineligible_rows() -> None:
+    """#1519: a newer annual filing knowable at cutoff reopens the cell before max_age_days,
+    and uncited or curated-10k-2025 rows do not close the cell."""
+    prior_filing = CUTOFF - timedelta(days=200)
+    newer_filing = CUTOFF - timedelta(days=10)
+    connection = FakeConnection(
+        {
+            100: [
+                (
+                    EXTRACTION_SOURCE,
+                    prior_filing,
+                    f"accession=000000010025000001 filed={prior_filing.date().isoformat()}",
+                    prior_filing.date(),
+                )
+            ],
+            200: [
+                ("curated-10k-2025", CUTOFF - timedelta(days=5), "curated", CUTOFF.date()),
+                (EXTRACTION_SOURCE, CUTOFF - timedelta(days=15), "uncited-no-accession", CUTOFF.date()),
+            ],
+        }
+    )
+    connection.raw_rows.append(
+        ("sec", "filing-document:CIK0000000100:000000010026000001:10k.htm", "s3://raw/k", "sha", 10, newer_filing)
+    )
+    cells = {
+        cell.issuer.cik: cell.reason
+        for cell in open_cells(connection, [_issuer(100), _issuer(200)], standard=STANDARD, cutoff=CUTOFF)
+    }
+    assert cells == {100: "stale", 200: "no_fact"}

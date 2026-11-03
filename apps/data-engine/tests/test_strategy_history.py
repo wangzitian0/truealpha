@@ -541,30 +541,8 @@ def test_an_observation_becomes_a_history_issuer_with_cik_ticker_and_branch() ->
         ticker="BRK.B",
         cik=1067983,
         operating_branch=OperatingBranch.INSURANCE,
-        revenue_proxy_allowed=False,
     )
-
-
-def test_the_revenue_proxy_is_allowed_only_when_the_live_payload_shows_it() -> None:
-    base = {
-        "issuer_id": "issuer:cik:1403161",
-        "instrument_id": "security:cusip:92826C839",
-        "listing_id": "listing:xnys:v",
-        "operating_branch": "non_financial",
-        "revenue": "32653000000",
-        "gross_profit": "32653000000",
-        "vintage": {
-            "revenue": {"accession": "0001-26-000001", "filed": "2025-11-14"},
-            "gross_profit": {"accession": "0001-26-000001", "filed": "2025-11-14"},
-        },
-    }
-    assert issuer_from_observation(base, "companyfacts:CIK0001403161", connection=None).revenue_proxy_allowed is True
-    reported = {**base, "gross_profit": "20000000000", "vintage": {**base["vintage"], "gross_profit": {"filed": "x"}}}
-    assert (
-        issuer_from_observation(reported, "companyfacts:CIK0001403161", connection=None).revenue_proxy_allowed is False
-    )
-    bank = {**base, "operating_branch": "financial"}
-    assert issuer_from_observation(bank, "companyfacts:CIK0001403161", connection=None).revenue_proxy_allowed is False
+    assert "revenue_proxy_allowed" not in HistoryIssuer.__dataclass_fields__
 
 
 def test_an_observation_without_a_company_facts_record_has_no_history_issuer() -> None:

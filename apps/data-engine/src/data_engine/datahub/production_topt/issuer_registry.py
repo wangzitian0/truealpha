@@ -32,22 +32,6 @@ from data_engine.sources.gateway import CapacityExceeded
 _DEPOSITORY_INSTITUTION_SIC = range(6000, 6100)
 _INSURANCE_SIC = range(6300, 6400)
 
-# The industries whose cost of revenue really is ~zero, and so may substitute revenue for
-# gross profit when the issuer tags neither concept (#496 owner decision, 2026-07-28).
-#
-# The decision named payment networks — "payment networks carry ~zero COGS; the bias is
-# small and its direction known". It was implemented as "no GrossProfit and no COGS-family
-# concept at all", which also captures issuers whose COGS is enormous but simply untagged:
-# XOM (SIC 2911, Petroleum Refining) took the proxy and published gross profit equal to its
-# $332B revenue, or $5.36M per employee — ranking Exxon Mobil above NVIDIA as the most
-# labour-efficient issuer in the universe, selected at half the target weight (#533).
-#
-# So eligibility is a property of the industry, not of which tags happen to be missing.
-# Resolved from the EDGAR SIC the same way the operating branch is — registry metadata,
-# never a ticker allowlist. V and MA are 7389; widening this set is a one-line versioned
-# change if the owner intends another industry to qualify.
-_NO_COGS_SERVICES_SIC = frozenset({7389})
-
 
 # The EDGAR forms that carry an issuer's periodic financial statements: audited annual
 # reports and reviewed quarterly ones, with their amendments and transition-period variants.
@@ -102,23 +86,11 @@ def operating_branch_for_sic(sic: str | None) -> OperatingBranch:
     return OperatingBranch.NON_FINANCIAL
 
 
-def revenue_proxy_allowed_for_sic(sic: str | None) -> bool:
-    """Whether this industry may substitute revenue for an untagged gross profit (#533).
-
-    Unclassifiable resolves to False: an issuer we cannot place in an industry must not
-    receive a substitution that only holds for one.
-    """
-    if sic is None or not sic.strip().isdigit():
-        return False
-    return int(sic.strip()) in _NO_COGS_SERVICES_SIC
-
-
 @dataclass(frozen=True)
 class IssuerClassification:
     """What the registry asserts about one issuer's economics."""
 
     operating_branch: OperatingBranch
-    revenue_proxy_allowed: bool
     # The periodic-statement filings the EDGAR index lists, read from the same submissions
     # document, so a capture can tell when its company-facts figures trail a filed period.
     statement_filings: tuple[StatementFiling, ...] = ()
@@ -232,7 +204,6 @@ def resolve_issuer_classifications(ciks: Mapping[str, int]) -> RegistryReading:
             sic = read.submissions.get("sic")
             classifications[cik] = IssuerClassification(
                 operating_branch=operating_branch_for_sic(sic),
-                revenue_proxy_allowed=revenue_proxy_allowed_for_sic(sic),
                 statement_filings=statement_filings(read.submissions),
             )
     return RegistryReading(classifications=classifications, unavailable=unavailable)

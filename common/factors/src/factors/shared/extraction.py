@@ -254,7 +254,7 @@ def select_exhaustive_partition(
     total: Decimal | None,
     tolerance: Decimal,
     indices: Sequence[int] | None = None,
-) -> Partition | PartitionRefusal:
+) -> Partition | PartitionRefusal | None:
     """Accept a candidate set only when its parts sum to a total measured ELSEWHERE.
 
     The check that makes a decomposition safe is not "did recall find plausible parts" but
@@ -284,6 +284,8 @@ def select_exhaustive_partition(
     chosen = tuple(indices) if indices is not None else tuple(range(len(candidates)))
     if not chosen:
         return PartitionRefusal.NO_CANDIDATES
+    if len(set(chosen)) != len(chosen):
+        return None
     if any(index < 0 or index >= len(candidates) for index in chosen):
         return PartitionRefusal.INDEX_OUT_OF_RANGE
     # `Candidate.value` is int|float by contract (see its docstring); the sum is taken in
@@ -351,6 +353,7 @@ def select_first_balancing_set(
         verdict = select_exhaustive_partition(candidates, total=total, tolerance=tolerances[index])
         if isinstance(verdict, Partition):
             return SetPartition(index, None, verdict)
+        assert verdict is not None
         refusals.append(verdict)
     for index, candidates in enumerate(candidate_sets):
         if refusals[index] is not PartitionRefusal.SHORT or completions is None:

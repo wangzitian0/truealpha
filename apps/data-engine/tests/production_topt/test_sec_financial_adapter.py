@@ -10,7 +10,6 @@ import pytest
 from data_engine.datahub.production_topt.executor import FetchFailure, FetchSuccess
 from data_engine.datahub.production_topt.issuer_registry import (
     operating_branch_for_sic,
-    revenue_proxy_allowed_for_sic,
 )
 from data_engine.datahub.production_topt.materialization import FinancialFactPayload
 from data_engine.datahub.production_topt.sec_financial_adapter import (
@@ -145,7 +144,6 @@ def test_the_revenue_proxy_is_refused_for_an_industry_it_was_not_approved_for() 
         instrument_id="security:cusip:30231G102",
         listing_id="listing:xnys:xom",
         operating_branch=OperatingBranch.NON_FINANCIAL,
-        revenue_proxy_allowed=False,
     )
     adapter = SecFinancialFactAdapter(
         {item.work_item_id: target}, lambda cik, cutoff, branch: build_bundle(_no_cogs_facts(), cutoff, branch)
@@ -160,9 +158,14 @@ def test_the_revenue_proxy_is_refused_for_an_industry_it_was_not_approved_for() 
     assert "revenue" in result.record.payload["vintage"]
 
 
-def test_no_cogs_issuer_without_gross_profit_resolves_none_even_when_revenue_proxy_allowed() -> None:
+def test_no_cogs_issuer_without_gross_profit_resolves_none() -> None:
     """#1519 step 6: `gross_profit` is never filled from `revenue` when neither `GrossProfit`
-    nor a COGS concept is reported, regardless of `revenue_proxy_allowed`."""
+    nor a COGS concept is reported, and `revenue_proxy_allowed` plumbing is deleted."""
+    from data_engine.datahub.production_topt import issuer_registry
+
+    assert not hasattr(issuer_registry, "revenue_proxy_allowed_for_sic")
+    assert not hasattr(issuer_registry.IssuerClassification, "revenue_proxy_allowed")
+    assert "revenue_proxy_allowed" not in SecTarget.__dataclass_fields__
     item = _work_item("f" * 64)
     target = SecTarget(
         cik=1403161,
@@ -171,7 +174,6 @@ def test_no_cogs_issuer_without_gross_profit_resolves_none_even_when_revenue_pro
         instrument_id="security:cusip:92826C839",
         listing_id="listing:xnys:v",
         operating_branch=OperatingBranch.NON_FINANCIAL,
-        revenue_proxy_allowed=True,
     )
     adapter = SecFinancialFactAdapter(
         {item.work_item_id: target}, lambda cik, cutoff, branch: build_bundle(_no_cogs_facts(), cutoff, branch)
@@ -207,11 +209,10 @@ def _multi_class_facts(shares_end: str, shares_filed: str, shares_val: object) -
 
 def _issuer_shape(
     *,
-    sic: str,
     shares: tuple[str, str, object] | None,
     reports_gross_profit: bool,
-) -> tuple[dict, bool]:
-    """One issuer's company-facts shape plus the registry verdict its SIC produces.
+) -> dict:
+    """One issuer's company-facts shape.
 
     `shares=None` means the issuer tags a current `CommonStockSharesOutstanding` (the
     ordinary case); a tuple is the multi-class shape where only a `dei` cover-page fact
@@ -223,7 +224,7 @@ def _issuer_shape(
         facts["facts"]["us-gaap"]["Revenues"] = {
             "units": {"USD": [_annual("2025-12-31", "2025-01-01", 332238000000, "2026-02-01")]}
         }
-    return facts, revenue_proxy_allowed_for_sic(sic)
+    return facts
 
 
 # The universe's real shapes, so a regression in either guard turns this red rather than
@@ -252,7 +253,7 @@ _UNIVERSE_SHAPES = [
 
 def test_both_guards_hold_across_every_shape_in_the_universe() -> None:
     for label, sic, shares, reports_gp, expect_gp, expect_shares in _UNIVERSE_SHAPES:
-        facts, proxy_allowed = _issuer_shape(sic=sic, shares=shares, reports_gross_profit=reports_gp)
+        facts = _issuer_shape(shares=shares, reports_gross_profit=reports_gp)
         branch = operating_branch_for_sic(sic)
         item = _work_item("1" * 64)
         target = SecTarget(
@@ -262,7 +263,6 @@ def test_both_guards_hold_across_every_shape_in_the_universe() -> None:
             instrument_id="security:cusip:Y",
             listing_id="listing:xnas:x",
             operating_branch=branch,
-            revenue_proxy_allowed=proxy_allowed,
         )
         adapter = SecFinancialFactAdapter(
             {item.work_item_id: target}, lambda cik, cutoff, b, _f=facts: build_bundle(_f, cutoff, b)
@@ -1909,8 +1909,8 @@ def test_xom_signed_predecessor_merges_revenue_and_net_income_while_refusing_rev
     """#1263 + #533: XOM holdco CIK 2115436 reports balance-sheet Assets and CommonStockSharesOutstanding,
     while predecessor CIK 34088 reports Revenues and NetIncomeLoss without us-gaap GrossProfit or
     CostOfGoodsAndServicesSold (crude oil purchases use custom xom: extension tags). Merging via the
-    signed predecessor restores revenue and net_income, while SIC 2911 (`revenue_proxy_allowed=False`)
-    keeps `gross_profit=None` so Petroleum Refining never substitutes revenue for gross profit."""
+    signed predecessor restores revenue and net_income, while keeping `gross_profit=None` so
+    Petroleum Refining never substitutes revenue for gross profit."""
     holdco_doc = {
         "facts": {
             "us-gaap": {
@@ -1996,7 +1996,6 @@ def test_xom_signed_predecessor_merges_revenue_and_net_income_while_refusing_rev
         operating_branch=OperatingBranch.NON_FINANCIAL,
         predecessor_cik=34088,
         predecessor_signed=True,
-        revenue_proxy_allowed=False,
         ticker="XOM",
     )
     adapter = SecFinancialFactAdapter({item.work_item_id: target}, fetcher)
@@ -2594,3 +2593,17 @@ def test_live_tick_settled_accession_cutoff_keeps_same_day_filing_and_empty_bund
         recorded_at=tick_cutoff,
     )
     assert stamp.transaction_time <= stamp.recorded_at
+
+
+def test_adm_consolidated_revenues_beats_partial_customer_contract_revenue_in_same_10k() -> None:
+    """#1519 Cause 3: ADM reports consolidated total `Revenues` ($80,269M) and the ASC 606
+    subset `RevenueFromContractWithCustomerExcludingAssessedTax` ($24,956M) in its FY2025 10-K.
+    `DEFAULT_RULESET` prioritizes `Revenues` before the customer-contract subset so `build_bundle`
+    resolves consolidated revenue."""
+    adm_path = Path(__file__).resolve().parents[2] / "samples" / "sec" / "ADM_CIK0000007084.json"
+    facts = json.loads(adm_path.read_bytes())
+    bundle = build_bundle(facts, date(2026, 3, 31), OperatingBranch.NON_FINANCIAL)
+    assert bundle.revenue == Decimal("80269000000")
+    assert bundle.revenue_period_end == date(2025, 12, 31)
+    assert bundle.gross_profit == Decimal("5033000000")
+    assert bundle.operating_period_end == date(2025, 12, 31)

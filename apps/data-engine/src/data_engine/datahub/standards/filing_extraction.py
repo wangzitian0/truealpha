@@ -29,7 +29,7 @@ import re
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any, Literal
 
 from factors.shared import extraction as extraction_primitive
@@ -69,14 +69,18 @@ _PLAUSIBLE = (10, 5_000_000)
 # all misses on the first real QQQ probe (2026-09-04), so the workforce qualifier may
 # stack up to three words joined by "and"/"or". Deliberately loose: a missed candidate
 # is unrecoverable downstream, whereas a spurious one is discarded by selection.
+_SCALE_MULTIPLIERS = {
+    "thousand": Decimal(1_000),
+    "million": Decimal(1_000_000),
+}
 _HEADCOUNT = re.compile(
     r"(?:had|employed|have|of|total of)\s+"
     r"(?:approximately\s+|about\s+|over\s+|more than\s+|nearly\s+)?"
-    r"([\d][\d,]{2,12})\s+"
+    r"([\d][\d,]*(?:\.\d+)?)\s+(?:(million|thousand)\s+)?"
     r"(?:(?:full[- ]time|part[- ]time|regular|global|salaried|equivalent|permanent)(?:\s+(?:and|or)\s+|\s+)){0,3}"
     r"(?:employees|persons|people|associates|team members|staff members|colleagues)"
     r"|(?:employee headcount(?:\s+worldwide)?|full[- ]time count for [a-z' ]{1,35}employees(?:\s+worldwide)?)\s+was\s+"
-    r"(?:approximately\s+|about\s+)?([\d][\d,]{2,12})",
+    r"(?:approximately\s+|about\s+)?([\d][\d,]*(?:\.\d+)?)(?:\s+(million|thousand))?",
     re.I,
 )
 _AS_OF = re.compile(r"[Aa]s of ([A-Z][a-z]+ \d{1,2},? \d{4})")
@@ -173,6 +177,22 @@ def _sentence(text: str, start: int, end: int) -> str:
     return (head_parts[-1] + text[start:end] + tail_parts[0]).strip()
 
 
+def _parse_headcount_value(raw_number: str | None, raw_scale: str | None) -> int | None:
+    if not raw_number:
+        return None
+    cleaned = raw_number.replace(",", "")
+    scale = _SCALE_MULTIPLIERS.get(raw_scale.lower()) if raw_scale else None
+    if scale is None and ("." in cleaned or len(cleaned) < 3 or len(cleaned) > 13):
+        return None
+    try:
+        scaled = Decimal(cleaned) * (scale if scale is not None else Decimal(1))
+    except InvalidOperation:
+        return None
+    if scaled != int(scaled):
+        return None
+    return int(scaled)
+
+
 def candidates(text: str) -> list[FilingCandidate]:
     """Every stated headcount with its sentence, as-of date and a partial/total mark."""
     found: dict[tuple[int, str | None, str], FilingCandidate] = {}
@@ -180,11 +200,10 @@ def candidates(text: str) -> list[FilingCandidate]:
         sentence = _sentence(text, match.start(), match.end())
         if _TAG_SOUP.search(sentence):
             continue
-        raw_digits = match.group(1) or match.group(2)
-        if not raw_digits:
-            continue
-        value = int(raw_digits.replace(",", ""))
-        if not _PLAUSIBLE[0] <= value <= _PLAUSIBLE[1]:
+        raw_digits = match.group(1) or match.group(3)
+        raw_scale = match.group(2) or match.group(4)
+        value = _parse_headcount_value(raw_digits, raw_scale)
+        if value is None or not _PLAUSIBLE[0] <= value <= _PLAUSIBLE[1]:
             continue
         # The as-of date usually sits in the sentence; a cover-page figure may state it
         # one sentence earlier, so fall back to the surrounding window.
@@ -565,7 +584,10 @@ def extract_headcount(
     if document is None:
         return ExtractionOutcome(cik, "no_annual_filing", detail="no 10-K/20-F on file at the cutoff")
 
-    found = candidates(filing_plain_text(document.body))
+    try:
+        found = candidates(filing_plain_text(document.body))
+    except Exception as error:  # noqa: BLE001 - malformed filing body/token must not crash the backfill loop
+        return ExtractionOutcome(cik, "error", detail=f"{type(error).__name__}: {error}")
     totals = [c for c in found if not c.partial]
     # Precision is the model's half (#70 scope 2): it chooses among the enumerated
     # company-wide statements, or declines. A declined or non-candidate answer stays
@@ -650,7 +672,7 @@ def extract_headcount(
     filing_cik = "" if record_cik == cik else f" filing_cik={cik}"
     evidence_ref = (
         f"accession={document.accession} form={document.form} filed={document.filing_date.isoformat()}{filing_cik} "
-        f"raw=raw.fetches:{raw_id} extractor={extractor}{model_detail.replace(' model=', ' model=', 1)} "
+        f"raw=raw.fetches:{raw_id} extractor={extractor}{model_detail} "
         f"span={chosen.sentence[:400]!r}"
     )
     fact_id = record_headcount(

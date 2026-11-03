@@ -50,7 +50,7 @@ import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from typing import Any, NamedTuple
 
 import psycopg
@@ -148,7 +148,6 @@ class HistoryIssuer:
     ticker: str
     cik: int
     operating_branch: OperatingBranch
-    revenue_proxy_allowed: bool = False
     predecessor_cik: int | None = None
     predecessor_signed: bool = False
 
@@ -451,27 +450,6 @@ def _ticker_of(listing_id: str, connection: psycopg.Connection[Any] | None, know
     return value.split(":", 1)[1]
 
 
-def _revenue_proxy_signature(payload: Mapping[str, Any]) -> bool:
-    """True when the live payload shows gross profit resolved by the revenue proxy.
-
-    Submissions metadata (the SIC) is not stored, and this run makes no vendor call. A proxy
-    sets gross profit equal to revenue under one filing, so the live payload of an issuer the
-    proxy was approved for shows that pair. The signature is evidence from the issuer's own
-    capture, not an allowlist.
-    """
-    if payload.get("operating_branch") != OperatingBranch.NON_FINANCIAL.value:
-        return False
-    gross, revenue = payload.get("gross_profit"), payload.get("revenue")
-    vintage = payload.get("vintage") or {}
-    if gross is None or revenue is None or not vintage.get("revenue"):
-        return False
-    try:
-        same_value = Decimal(str(gross)) == Decimal(str(revenue))
-    except InvalidOperation:
-        return False
-    return same_value and vintage.get("gross_profit") == vintage.get("revenue")
-
-
 def issuer_from_observation(
     payload: Mapping[str, Any],
     source_record_id: str,
@@ -499,7 +477,6 @@ def issuer_from_observation(
         ticker=ticker,
         cik=int(digits),
         operating_branch=OperatingBranch(branch),
-        revenue_proxy_allowed=_revenue_proxy_signature(payload),
     )
 
 
@@ -656,7 +633,6 @@ def project_issuer_rows(
             instrument_id=issuer.instrument_id,
             listing_id=issuer.listing_id,
             operating_branch=issuer.operating_branch,
-            revenue_proxy_allowed=issuer.revenue_proxy_allowed,
             predecessor_cik=issuer.predecessor_cik,
             predecessor_signed=issuer.predecessor_signed,
             ticker=issuer.ticker,

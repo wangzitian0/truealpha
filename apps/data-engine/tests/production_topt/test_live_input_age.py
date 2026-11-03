@@ -149,7 +149,6 @@ def _routes(plan: PlannedRun, connection) -> dict[str, SourceFetchPort]:
                 instrument_id=instrument_id,
                 listing_id=listing_id,
                 operating_branch=OperatingBranch.FINANCIAL if ticker == _BANK_TICKER else OperatingBranch.NON_FINANCIAL,
-                revenue_proxy_allowed=ticker in PROXY_TICKERS,
                 ticker=ticker,
             )
         else:

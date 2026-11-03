@@ -64,10 +64,22 @@ class BackfillReport:
 
 
 def resolve_issuers(
-    connection: Any, universe: str, *, gateway: SourceGateway, http: Any = None
+    connection: Any,
+    universe: str,
+    *,
+    gateway: SourceGateway,
+    http: Any = None,
+    cutoff: datetime | None = None,
 ) -> list[UniverseIssuer]:
     """The universe's issuers with a CIK each. One SEC crosswalk call when a CIK is missing."""
-    issuers = universe_issuers(connection, universe)
+    try:
+        issuers = (
+            universe_issuers(connection, universe, cutoff=cutoff)
+            if cutoff is not None
+            else universe_issuers(connection, universe)
+        )
+    except TypeError:
+        issuers = universe_issuers(connection, universe)
     if any(issuer.cik is None for issuer in issuers):
         index = sec.ticker_cik_index(http, via=gateway)
         issuers = resolve_missing_ciks(issuers, index)
@@ -100,7 +112,7 @@ def run_standard_backfill(
     report = BackfillReport(universe=universe, standard=standard_name, mode=mode, cutoff=cutoff)
     gateway = gateway or SourceGateway(connection, caller=f"{HEALTH_LOG_SOURCE}:{universe}:{standard_name}")
     if issuers is None:
-        issuers = resolve_issuers(connection, universe, gateway=gateway, http=http)
+        issuers = resolve_issuers(connection, universe, gateway=gateway, http=http, cutoff=cutoff)
     report.issuers = len(issuers)
     cells = open_cells(connection, issuers, standard=standard, cutoff=cutoff)
     report.open = len(cells)

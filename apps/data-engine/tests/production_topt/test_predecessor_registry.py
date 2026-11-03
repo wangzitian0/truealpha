@@ -69,7 +69,6 @@ def test_canonical_uuid_resolves_signed_predecessor_via_entity_aliases(connectio
             classifications={
                 cik: issuer_registry.IssuerClassification(
                     operating_branch=OperatingBranch.NON_FINANCIAL,
-                    revenue_proxy_allowed=False,
                 )
                 for cik in ciks.values()
             }
@@ -136,7 +135,6 @@ def test_canonical_uuid_resolves_signed_predecessor_via_entity_aliases(connectio
     assert target.cik == 2115436
     assert target.predecessor_cik == 34088
     assert target.predecessor_signed is True
-    assert target.revenue_proxy_allowed is False
 
     holdco_doc = {
         "facts": {
