@@ -25,6 +25,7 @@ import contextvars
 import hashlib
 import json
 import logging
+import re
 import urllib.request
 from collections.abc import Callable, Sequence
 from contextlib import nullcontext
@@ -1427,7 +1428,31 @@ def _parse_supply_chain_partners(content: str) -> dict[str, Any]:
     return {"partners": partners, "reason": "ok"}
 
 
-_SUPPLY_CHAIN_MAX_FILING_CHARS = 120_000
+_SUPPLY_CHAIN_MAX_FILING_CHARS = (MAX_CONTEXT_TOKENS - 8_000) // 8 - 4_000
+_SUPPLY_CHAIN_ANCHOR_RE = re.compile(
+    r"supply[\s-]*chain|customer|supplier|concentration|segment|10%|item\s+1a?\b",
+    re.IGNORECASE,
+)
+
+
+def _merge_anchor_spans(text: str, start_bound: int, end_bound: int, budget: int) -> list[tuple[int, int]]:
+    spans: list[tuple[int, int]] = []
+    used = 0
+    for match in _SUPPLY_CHAIN_ANCHOR_RE.finditer(text, start_bound, end_bound):
+        win_start = max(start_bound, match.start() - 1_500)
+        win_end = min(end_bound, match.end() + 2_500)
+        if spans and win_start <= spans[-1][1]:
+            prev_s, prev_e = spans[-1]
+            added = max(0, win_end - prev_e)
+            if used + added <= budget:
+                spans[-1] = (prev_s, max(prev_e, win_end))
+                used += added
+            continue
+        if used + (win_end - win_start) > budget:
+            break
+        spans.append((win_start, win_end))
+        used += win_end - win_start
+    return spans
 
 
 def _bound_supply_chain_filing_text(filing_text: str) -> str:
@@ -1435,7 +1460,13 @@ def _bound_supply_chain_filing_text(filing_text: str) -> str:
         return filing_text
     if int(len(filing_text) / _CHARS_PER_TOKEN_FLOOR) > MAX_CONTEXT_TOKENS:
         return filing_text
-    return filing_text[:_SUPPLY_CHAIN_MAX_FILING_CHARS]
+    head_len = _SUPPLY_CHAIN_MAX_FILING_CHARS // 3
+    tail_len = _SUPPLY_CHAIN_MAX_FILING_CHARS // 6
+    mid_budget = _SUPPLY_CHAIN_MAX_FILING_CHARS - head_len - tail_len - 128
+    tail_start = len(filing_text) - tail_len
+    spans = _merge_anchor_spans(filing_text, head_len, tail_start, mid_budget)
+    parts = [filing_text[:head_len], *(filing_text[s:e] for s, e in spans), filing_text[tail_start:]]
+    return "\n...\n".join(parts)
 
 
 def identify_supply_chain_partners(
