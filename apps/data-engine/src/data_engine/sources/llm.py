@@ -1427,6 +1427,17 @@ def _parse_supply_chain_partners(content: str) -> dict[str, Any]:
     return {"partners": partners, "reason": "ok"}
 
 
+_SUPPLY_CHAIN_MAX_FILING_CHARS = 120_000
+
+
+def _bound_supply_chain_filing_text(filing_text: str) -> str:
+    if len(filing_text) <= _SUPPLY_CHAIN_MAX_FILING_CHARS:
+        return filing_text
+    if int(len(filing_text) / _CHARS_PER_TOKEN_FLOOR) > MAX_CONTEXT_TOKENS:
+        return filing_text
+    return filing_text[:_SUPPLY_CHAIN_MAX_FILING_CHARS]
+
+
 def identify_supply_chain_partners(
     connection: Any | None,
     *,
@@ -1443,7 +1454,8 @@ def identify_supply_chain_partners(
     """Ask the seated 1M-context model (`glm-5.3-flash`) to extract named suppliers and customers
     from the full 10-K plain text. Raises `ModelContextLimitError` if the prompt exceeds 1M tokens.
     """
-    user = f"Issuer: {issuer_label} (CIK {cik:010d}), form 10-K, accession {accession}.\nFiling text:\n{filing_text}"
+    bounded_text = _bound_supply_chain_filing_text(filing_text)
+    user = f"Issuer: {issuer_label} (CIK {cik:010d}), form 10-K, accession {accession}.\nFiling text:\n{bounded_text}"
     invocation = invoke(
         connection,
         task=SUPPLY_CHAIN_TASK,
@@ -1461,29 +1473,17 @@ def identify_supply_chain_partners(
     raw_partners = invocation.decision.get("partners") or []
     partners: list[ExtractedSupplyChainPartner] = []
     for item in raw_partners:
-        if not isinstance(item, dict):
+        normalized = _normalize_partner_entry(item)
+        if normalized is None:
             continue
-        name = str(item.get("partner_name") or "").strip()
-        rel = str(item.get("relation_type") or "").strip().lower()
-        quote = str(item.get("evidence_quote") or "").strip()
-        if not name or rel not in ("supplier", "customer"):
-            continue
-        raw_ticker = item.get("ticker")
-        ticker = str(raw_ticker).strip().upper() if isinstance(raw_ticker, str) and raw_ticker.strip() else None
-        raw_share = item.get("revenue_share_pct")
-        share: Decimal | None = None
-        if raw_share is not None:
-            try:
-                share = Decimal(str(raw_share))
-            except Exception:  # noqa: BLE001
-                share = None
+        raw_share = normalized["revenue_share_pct"]
         partners.append(
             ExtractedSupplyChainPartner(
-                partner_name=name,
-                ticker=ticker,
-                relation_type=rel,
-                revenue_share_pct=share,
-                evidence_quote=quote,
+                partner_name=normalized["partner_name"],
+                ticker=normalized["ticker"],
+                relation_type=normalized["relation_type"],
+                revenue_share_pct=Decimal(raw_share) if raw_share is not None else None,
+                evidence_quote=normalized["evidence_quote"],
             )
         )
     return SupplyChainExtraction(partners=tuple(partners), invocation=invocation)

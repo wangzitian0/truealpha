@@ -811,7 +811,7 @@ def compute_topt_gppe(
             freshness=freshness,
         )
 
-    confidence = min([cell.confidence for cell in snapshot.cell_inputs] + consumed_confidences)
+    confidence = min(consumed_confidences)
     # One pinned tree per class: a bank's numerator is its pre-provision profit, everyone else's is
     # gross profit. The capital charge is the tree's: total assets for the uniform tree, measured
     # tangible common equity for the banking tree. The tree's decimal context is the one this kernel always used.
@@ -1107,7 +1107,14 @@ def compute_topt_core(
         target_pgp_upper=target_pgp_upper,
         target_pgp_midpoint=target_pgp_midpoint,
         valuation_gap=valuation_gap,
-        confidence=min(gppe_result.confidence, *(cell.confidence for cell in snapshot.cell_inputs)),
+        confidence=min(
+            gppe_result.confidence,
+            snapshot.revenue.confidence,
+            numerator.confidence,
+            *(c.market_price.confidence for c in snapshot.market_value_components),
+            *(c.shares_outstanding.confidence for c in snapshot.market_value_components),
+            *(cell.confidence for cell in snapshot.cell_inputs),
+        ),
         freshness=gppe_result.freshness,
         input_observation_ids=snapshot.observation_ids,
         gppe_invocation_id=gppe_result.invocation_id,

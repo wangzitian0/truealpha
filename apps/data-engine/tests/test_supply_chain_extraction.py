@@ -359,7 +359,13 @@ def test_real_10k_html_extraction_with_lei_issuer_and_supplier_customer_directio
 
     gateway = _StubLLMGateway(
         partners=(
-            llm.ExtractedSupplyChainPartner("TSMC", "TSM", "supplier", None, "We utilize foundries, such as TSMC."),
+            llm.ExtractedSupplyChainPartner(
+                "TSMC",
+                "TSM",
+                "supplier",
+                None,
+                "We utilize foundries, such as Taiwan Semiconductor Manufacturing Company Limited, or TSMC",
+            ),
             llm.ExtractedSupplyChainPartner(
                 "Samsung Electronics", None, "supplier", None, "Samsung Electronics Co., Ltd."
             ),
@@ -619,3 +625,129 @@ def test_build_issuer_lookup_resolves_ciks_via_governed_members(monkeypatch: pyt
     issuers = [CanonicalIssuer(issuer_id=nvda_uuid, legacy_id="issuer:lei:549300S4KLFTLO7GSQ80", ticker="NVDA")]
     by_cik, _, _ = _build_issuer_lookup(issuers, conn, run_id="capture-run:topt")  # type: ignore[arg-type]
     assert by_cik.get("1045810") == issuers[0]
+
+
+def test_supply_chain_rejects_unanchored_quotes_computes_filing_age_freshness_and_bounds_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1517 Cause 1: unanchored evidence_quote is rejected, freshness is derived from filing_date,
+    issuer kg_entities display_name is never polluted with a bare ticker, and oversized filing_text is bounded."""
+    from data_engine.datahub.standards.supply_chain_extraction import persist_extracted_supply_chain_edges
+
+    text = (
+        "Item 1. Business\n"
+        "The company supplies to Apple Inc. as its primary distribution partner across North America.\n"
+    )
+    gateway = _StubLLMGateway(
+        partners=(
+            llm.ExtractedSupplyChainPartner(
+                partner_name="Apple Inc.",
+                ticker="AAPL",
+                relation_type="customer",
+                revenue_share_pct=None,
+                evidence_quote="The company supplies to   Apple Inc. as its primary distribution partner across North America.",
+            ),
+            llm.ExtractedSupplyChainPartner(
+                partner_name="Hallucinated Corp",
+                ticker="HAL",
+                relation_type="supplier",
+                revenue_share_pct=None,
+                evidence_quote="Hallucinated Corp fabricates all quantum chips on Mars.",
+            ),
+        )
+    )
+    nvda_uuid = _issuer_id("nvda")
+    fresh_edges = extract_supply_chain_relationships(
+        text,
+        issuer_id=nvda_uuid,
+        filing_date=date(2026, 2, 15),
+        accession="0001045810-26-000001",
+        cutoff=datetime(2026, 3, 1, tzinfo=UTC),
+        llm_gateway=gateway,
+    )
+    stale_edges = extract_supply_chain_relationships(
+        text,
+        issuer_id=nvda_uuid,
+        filing_date=date(2024, 1, 1),
+        accession="0001045810-26-000001",
+        cutoff=datetime(2026, 3, 1, tzinfo=UTC),
+        llm_gateway=gateway,
+    )
+    assert [e.target_entity_name for e in fresh_edges] == ["Apple Inc."]
+    assert fresh_edges[0].confidence > stale_edges[0].confidence
+
+    # Verify _persist_single_candidate_edge never writes bare ticker NVDA into kg_entities.display_name
+    entities_written: dict[str, str] = {}
+
+    class _EntityCheckConn(_MockConnection):
+        def cursor(self):
+            class _RegCur(_MockCursor):
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *args: object):
+                    pass
+
+                def fetchone(self):
+                    return ("raw.fetches",)
+
+            return _RegCur()
+
+        def execute(self, sql: str, params: object = None):
+            cur = _MockCursor()
+            p = tuple(params) if isinstance(params, list | tuple) else ()
+            if "from raw.fetches" in sql:
+                cur.fetchall = lambda: [  # type: ignore[method-assign]
+                    (
+                        101,
+                        "filing-document:CIK0001045810:0001045810-26-000001",
+                        "sec/10k.txt",
+                        datetime(2026, 2, 15, tzinfo=UTC),
+                        {"plain_text": text, "accession": "0001045810-26-000001"},
+                    )
+                ]
+            elif "insert into staging.kg_entities" in sql:
+                entities_written[str(p[0])] = str(p[2])
+            elif "insert into staging.kg_edges" in sql:
+                cur.fetchone = lambda: (1,)  # type: ignore[method-assign]
+            return cur
+
+    conn = _EntityCheckConn()
+    persist_extracted_supply_chain_edges(
+        conn,  # type: ignore[arg-type]
+        issuers=[CanonicalIssuer(issuer_id=nvda_uuid, legacy_id="company:cik:0001045810", ticker="NVDA")],
+        cutoff=datetime(2026, 3, 1, tzinfo=UTC),
+        llm_gateway=gateway,
+    )
+    assert entities_written[nvda_uuid] != "NVDA"
+
+    # Verify identify_supply_chain_partners bounds normal oversized 10-K text (<= 120_000 chars)
+    captured_users: list[str] = []
+
+    def fake_invoke(_conn: Any, **kwargs: Any) -> llm.ModelInvocation:
+        captured_users.append(str(kwargs["user_content"]))
+        return llm.ModelInvocation(
+            decision={"partners": []},
+            model="glm-5.3-flash",
+            provider="zhipu-glm-coding-plan",
+            prompt_sha256="a" * 64,
+            request_sha256="b" * 64,
+            response_sha256="c" * 64,
+            prompt_tokens=100,
+            completion_tokens=10,
+            invocation_id="model-invocation:" + "e" * 64,
+            replayed=False,
+            served_model="glm-5.3-flash",
+        )
+
+    monkeypatch.setattr(llm, "invoke", fake_invoke)
+    llm.identify_supply_chain_partners(
+        None,
+        cik=1045810,
+        accession="0001045810-26-000001",
+        issuer_label="NVDA",
+        filing_text="Item 1. Business. " + ("word " * 40_000),
+        persist=False,
+    )
+    assert len(captured_users) == 1
+    assert len(captured_users[0]) <= 120_200
