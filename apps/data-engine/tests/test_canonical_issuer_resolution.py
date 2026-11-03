@@ -1492,6 +1492,11 @@ def _capture_filing(connection: psycopg.Connection[Any], head: question_coverage
             at=datetime(2026, 1, 1, tzinfo=UTC),
         )
     published = head.cutoff.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=30)
+    plain_text = (
+        "10-K " * 40
+        + "Apple Inc is a customer of the issuer, as the filing states in its business section. "
+        + "Contoso Widgets Ltd is a supplier of the issuer, as the filing states in its business section."
+    )
     connection.execute(
         """
         insert into raw.fetches (source, source_record_id, payload_sha256, object_uri, content_type,
@@ -1503,7 +1508,7 @@ def _capture_filing(connection: psycopg.Connection[Any], head: question_coverage
             "e" * 64,
             published,
             published,
-            json.dumps({"cik": cik, "form": "10-K", "accession": f"{cik:010d}-26-000001", "plain_text": "10-K " * 40}),
+            json.dumps({"cik": cik, "form": "10-K", "accession": f"{cik:010d}-26-000001", "plain_text": plain_text}),
         ),
     )
     return cik

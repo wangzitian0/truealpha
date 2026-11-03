@@ -256,7 +256,8 @@ begin
        or gppe_result.operating_branch <> new.operating_branch
        or gppe_result.operating_metric <> new.operating_metric
        or gppe_result.input_observation_ids <> new.input_observation_ids
-       or gppe_result.confidence <> new.confidence
+       or new.confidence > gppe_result.confidence
+       or (new.availability = 'unavailable' and gppe_result.confidence <> new.confidence)
        or gppe_result.freshness <> new.freshness
        or (gppe_result.availability = 'unavailable' and (
            new.availability <> 'unavailable'

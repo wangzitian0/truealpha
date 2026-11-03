@@ -721,11 +721,11 @@ def test_supply_chain_rejects_unanchored_quotes_computes_filing_age_freshness_an
     )
     assert entities_written[nvda_uuid] != "NVDA"
 
-    # Verify identify_supply_chain_partners bounds normal oversized 10-K text (<= 120_000 chars)
-    captured_users: list[str] = []
+    # Verify identify_supply_chain_partners bounds normal oversized 10-K text while keeping head, anchored middle, and tail
+    captured: dict[str, str] = {}
 
     def fake_invoke(_conn: Any, **kwargs: Any) -> llm.ModelInvocation:
-        captured_users.append(str(kwargs["user_content"]))
+        captured["prompt"] = str(kwargs["user_content"])
         return llm.ModelInvocation(
             decision={"partners": []},
             model="glm-5.3-flash",
@@ -741,13 +741,25 @@ def test_supply_chain_rejects_unanchored_quotes_computes_filing_age_freshness_an
         )
 
     monkeypatch.setattr(llm, "invoke", fake_invoke)
+    oversized_filing = (
+        "HEAD_MARKER "
+        + ("A" * 60_000)
+        + " UNANCHORED_MIDDLE_MARKER "
+        + ("B" * 40_000)
+        + " Major customer concentration: Acme Corp accounted for 14% of revenue. ANCHORED_MIDDLE_MARKER "
+        + ("C" * 60_000)
+        + " TAIL_MARKER"
+    )
     llm.identify_supply_chain_partners(
         None,
         cik=1045810,
         accession="0001045810-26-000001",
         issuer_label="NVDA",
-        filing_text="Item 1. Business. " + ("word " * 40_000),
+        filing_text=oversized_filing,
         persist=False,
     )
-    assert len(captured_users) == 1
-    assert len(captured_users[0]) <= 120_200
+    assert len(captured["prompt"]) <= 120_200
+    assert "HEAD_MARKER" in captured["prompt"]
+    assert "UNANCHORED_MIDDLE_MARKER" not in captured["prompt"]
+    assert "ANCHORED_MIDDLE_MARKER" in captured["prompt"]
+    assert "TAIL_MARKER" in captured["prompt"]
