@@ -555,6 +555,21 @@ def fetch_annual_filing(
         return ExtractionOutcome(cik, "error", detail=f"{type(error).__name__}: {error}")
 
 
+def _model_selection_summary(
+    model_runs: Sequence[llm.ModelSelection], status: ExtractionStatus
+) -> tuple[str, bool | None]:
+    if not model_runs:
+        return "", None
+    # The primitive asks the selector at most once, so the list holds one run.
+    (model_run,) = model_runs
+    detail = f" model={model_run.model} invocation={model_run.invocation_id}" + (
+        " (replayed)" if model_run.replayed else ""
+    )
+    if status == "model_declined":
+        detail += f" reason={model_run.reason!r}"
+    return detail, model_run.replayed
+
+
 def extract_headcount(
     cik: int,
     *,
@@ -620,17 +635,7 @@ def extract_headcount(
         status = "needs_model_selection"
     chosen = _chosen_total(totals, selection) if selection is not None else None
     extractor = selection.extractor if selection is not None else RULE_SINGLE_CANDIDATE
-    model_detail = ""
-    model_replayed: bool | None = None
-    if model_runs:
-        # The primitive asks the selector at most once, so the list holds one run.
-        (model_run,) = model_runs
-        model_replayed = model_run.replayed
-        model_detail = f" model={model_run.model} invocation={model_run.invocation_id}" + (
-            " (replayed)" if model_run.replayed else ""
-        )
-        if status == "model_declined":
-            model_detail += f" reason={model_run.reason!r}"
+    model_detail, model_replayed = _model_selection_summary(model_runs, status)
     outcome = ExtractionOutcome(
         cik,
         status,
