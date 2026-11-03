@@ -145,6 +145,23 @@ def test_the_vendor_oracle_differs_from_the_ruleset_only_where_stated() -> None:
     assert [name for name in ruleset if name not in oracle] == []
     assert sorted(name.removeprefix("us-gaap:") for name in oracle - set(ruleset)) == sorted(_ORACLE_ONLY)
     assert "us-gaap:RevenuesNetOfInterestExpense" in _ruleset_names("bank_revenue")
+    expected_cogs = [
+        n.removeprefix("us-gaap:") for n in _ruleset_names("cost_of_revenue") + _ruleset_names("insurance_claims")
+    ]
+    assert list(vendor_oracle._COGS_CONCEPTS) == list(dict.fromkeys(expected_cogs))
+    assert "OperatingCostsAndExpenses" not in vendor_oracle._COGS_CONCEPTS
+    assert list(vendor_oracle._ASSETS_CONCEPTS) == [n.removeprefix("us-gaap:") for n in _ruleset_names("total_assets")]
+    facts = {
+        "facts": {
+            "us-gaap": {
+                "Revenues": {"units": {"USD": [_annual("2025-12-31", "2025-01-01", 1000, "2026-02-10")]}},
+                "OperatingCostsAndExpenses": {
+                    "units": {"USD": [_annual("2025-12-31", "2025-01-01", 800, "2026-02-10")]}
+                },
+            }
+        }
+    }
+    assert vendor_oracle.gross_profit(facts, _CUTOFF) is None
 
 
 @pytest.mark.parametrize("sample", ["NICE_CIK0001003935.json", "PLUG_CIK0001093691.json"])

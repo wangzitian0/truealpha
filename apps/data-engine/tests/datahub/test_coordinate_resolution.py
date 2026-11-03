@@ -155,11 +155,12 @@ def test_capture_entity_refs_persisted(connection) -> None:
 
 
 def test_resolve_coordinates_asserts_issuer_display_name_aliases_for_all_topt_members(connection) -> None:
-    """#1517: `resolve_coordinates` asserts a `scheme = 'name'` alias on every TOPT issuer entity,
-    including the 9 XNYS issuers (`ABBV`, `BRK.B`, `XOM`, `JPM`, `JNJ`, `LLY`, `MA`, `V`, `WMT`),
-    so `mart.entity_display_resolution` resolves their human-readable company names."""
+    """#1517, #1518: `resolve_coordinates` asserts a `scheme = 'name'` alias on every TOPT issuer entity
+    without any hardcoded Python dictionary."""
+    from data_engine.datahub import resolve_coordinates as rc
     from data_engine.datahub.production_topt.composition import plan_and_persist
 
+    assert not hasattr(rc, "_CANONICAL_ISSUER_NAMES") and not hasattr(rc, "canonical_issuer_name")
     plan = plan_and_persist(connection, cutoff=CUTOFF, version="test-xnys-names")
     seen_issuers: dict[str, str] = {}
     for _subject_id, (issuer_id, _instrument_id, _listing_id, ticker) in plan.coordinates.items():
@@ -170,3 +171,11 @@ def test_resolve_coordinates_asserts_issuer_display_name_aliases_for_all_topt_me
     assert seen_issuers["LLY"] == "Eli Lilly and Company"
     assert seen_issuers["BRK.B"] == "Berkshire Hathaway Inc."
     assert seen_issuers["WMT"] == "Walmart Inc."
+
+
+def test_resolve_coordinates_holds_no_hardcoded_issuer_name_dictionary() -> None:
+    """#1518: `resolve_coordinates` resolves TOPT issuer names from the packaged corpus without a hardcoded Python dict."""
+    from data_engine.datahub import resolve_coordinates as rc
+
+    assert not hasattr(rc, "_CANONICAL_ISSUER_NAMES") and not hasattr(rc, "canonical_issuer_name")
+    assert rc._corpus_issuer_names()["JPM"] == "JPMorgan Chase & Co."

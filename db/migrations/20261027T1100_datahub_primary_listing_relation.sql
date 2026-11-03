@@ -191,7 +191,7 @@ select
     e.entity_id,
     e.kind,
     coalesce(dt.ticker, it.ticker, inst.ticker) as current_ticker,
-    coalesce(dn.name, kg.display_name) as name,
+    coalesce(dn.name, case when upper(btrim(kg.display_name)) <> upper(btrim(coalesce(dt.ticker, it.ticker, inst.ticker, ''))) then nullif(btrim(kg.display_name), '') end) as name,
     dc.cik,
     dl.lei,
     coalesce(dlist.listing_id, ilist.listing_id) as listing_id,
@@ -321,9 +321,9 @@ select
     rt.listing_id,
     rt.ticker,
     coalesce(
-        nullif(btrim(e.display_name), ''),
-        nullif(btrim(e_legacy.display_name), ''),
         inam.display_name,
+        case when upper(btrim(e.display_name)) <> upper(btrim(coalesce(rt.ticker, ''))) then nullif(btrim(e.display_name), '') end,
+        case when upper(btrim(e_legacy.display_name)) <> upper(btrim(coalesce(rt.ticker, ''))) then nullif(btrim(e_legacy.display_name), '') end,
         cn.display_name
     ) as display_name
 from resolved_tickers rt

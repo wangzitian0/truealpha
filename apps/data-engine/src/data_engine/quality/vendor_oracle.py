@@ -49,45 +49,44 @@ from psycopg import Connection
 from truealpha_contracts.universes import id_prefix_like, universe_with_role
 
 from data_engine.datahub.fetch_key import FetchKey
+from data_engine.datahub.production_topt.concept_mapping import DEFAULT_RULESET
 
 _COMPANY_FACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik:010d}.json"
 _TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 # An annual period. 350 days absorbs 52/53-week fiscal calendars.
 _ANNUAL_MINIMUM_DAYS = 350
 
+
+def _ruleset_us_gaap_concepts(*fields: str, extra: Sequence[str] = ()) -> tuple[str, ...]:
+    """Return deduplicated `us-gaap` concept names from `DEFAULT_RULESET` plus `extra` (#1518)."""
+    concepts = [
+        item.concept
+        for field in fields
+        if (mapping := DEFAULT_RULESET.mapping_for(field)) is not None
+        for item in mapping.concepts
+        if item.taxonomy == "us-gaap"
+    ]
+    return tuple(dict.fromkeys([*concepts, *extra]))
+
+
 # Wider than the adapter's frozen mapping on purpose — see the module docstring. An
 # oracle that only knows the tags we already declared cannot reveal a tag we missed.
 # It holds every revenue concept of the ruleset too. `tests/test_revenue_concepts.py`
 # states each concept beyond the ruleset and its reason (#1379).
-_REVENUE_CONCEPTS = (
-    "Revenues",
-    "RevenueFromContractWithCustomerExcludingAssessedTax",
-    "RevenueFromContractWithCustomerIncludingAssessedTax",
-    "RegulatedAndUnregulatedOperatingRevenue",
+_EXTRA_REVENUE = (
     "SalesRevenueNet",
     "SalesRevenueGoodsNet",
     "SalesRevenueServicesNet",
-    "RevenuesNetOfInterestExpense",
     "PremiumsEarnedNet",
-    "InterestIncomeExpenseNet",
-    "NoninterestIncome",
     "FinancialServicesRevenue",
     "HealthCareOrganizationRevenue",
     "OperatingLeasesIncomeStatementLeaseRevenue",
 )
-_COGS_CONCEPTS = (
-    "CostOfRevenue",
-    "CostOfGoodsAndServicesSold",
-    "CostOfGoodsSold",
-    "CostOfServices",
-    "CostOfSales",
-    "ProgrammingAndProductionCosts",
-    "DirectOperatingCosts",
-    "OperatingCostsAndExpenses",
-    "BenefitsLossesAndExpenses",
-    "PolicyholderBenefitsAndClaimsIncurredNet",
+_REVENUE_CONCEPTS = _ruleset_us_gaap_concepts(
+    "revenue", "bank_revenue", "interest_income_expense_net", "noninterest_income", extra=_EXTRA_REVENUE
 )
-_ASSETS_CONCEPTS = ("Assets",)
+_COGS_CONCEPTS = _ruleset_us_gaap_concepts("cost_of_revenue", "insurance_claims")
+_ASSETS_CONCEPTS = _ruleset_us_gaap_concepts("total_assets")
 
 
 @dataclass(frozen=True)
