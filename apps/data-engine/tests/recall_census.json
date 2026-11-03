@@ -31,20 +31,6 @@
       "declared_segments": "us-gaap:NumberOfReportableSegments=3@2025-12-31",
       "tagged_segments": [
         {
-          "concept": "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
-          "shape": "all",
-          "members": [
-            "adm:AgServicesandOilseedsMember",
-            "adm:CarbohydrateSolutionsMember",
-            "adm:NutritionMember"
-          ],
-          "reconciling": [
-            "us-gaap:CorporateNonSegmentMember"
-          ],
-          "sum": "24507000000",
-          "refusal": null
-        },
-        {
           "concept": "us-gaap:Revenues",
           "shape": "all",
           "members": [
@@ -56,6 +42,20 @@
             "us-gaap:CorporateNonSegmentMember"
           ],
           "sum": "79820000000",
+          "refusal": null
+        },
+        {
+          "concept": "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
+          "shape": "all",
+          "members": [
+            "adm:AgServicesandOilseedsMember",
+            "adm:CarbohydrateSolutionsMember",
+            "adm:NutritionMember"
+          ],
+          "reconciling": [
+            "us-gaap:CorporateNonSegmentMember"
+          ],
+          "sum": "24507000000",
           "refusal": null
         }
       ]

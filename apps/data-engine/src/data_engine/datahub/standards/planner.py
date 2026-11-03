@@ -16,7 +16,7 @@ from truealpha_contracts.standards import MetricStandard
 
 from data_engine.datahub.canonical_issuer import signed_predecessor_ciks
 from data_engine.datahub.primary_listing import choose_primary_listings
-from data_engine.datahub.production_topt.headcount import _is_eligible_headcount_row
+from data_engine.datahub.production_topt.headcount import is_eligible_headcount_row
 from data_engine.datahub.production_topt.universe_corpus import TOPT_CORPUS_FILENAME, load_corpus
 from data_engine.datahub.production_topt.universe_plane import resolve_universe_corpus
 from data_engine.datahub.resolve_coordinates import alias_of, is_uuid, lookup_entity
@@ -113,7 +113,7 @@ def resolve_missing_ciks(issuers: list[UniverseIssuer], ticker_index: dict[str, 
 
 def _resolve_headcount_row(connection: Any, cik: int, cutoff: datetime, priority: list[str], first_row: Any) -> Any:
     """Apply the same citation eligibility contract as `lookup_headcount` (#1519)."""
-    if len(first_row) >= 4 and not _is_eligible_headcount_row(
+    if len(first_row) >= 4 and not is_eligible_headcount_row(
         knowable_at=first_row[1], source=str(first_row[0]), evidence_ref=str(first_row[2]), period_end=first_row[3]
     ):
         return None
@@ -133,7 +133,7 @@ def _resolve_headcount_row(connection: Any, cik: int, cutoff: datetime, priority
             r
             for r in rows
             if len(r) < 4
-            or _is_eligible_headcount_row(knowable_at=r[1], source=str(r[0]), evidence_ref=str(r[2]), period_end=r[3])
+            or is_eligible_headcount_row(knowable_at=r[1], source=str(r[0]), evidence_ref=str(r[2]), period_end=r[3])
         ),
         None,
     )
