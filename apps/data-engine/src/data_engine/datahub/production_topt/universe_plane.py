@@ -273,7 +273,7 @@ def refresh_etf_constituents(
     fetched_at = datetime.now(UTC)
     as_of = as_of or fetched_at.date()
     if source.static_members:
-        from data_engine.datahub.resolve_coordinates import canonical_issuer_name
+        from data_engine.datahub.resolve_coordinates import _resolve_issuer_display_name
 
         # The membership IS the operator's versioned configuration — land it as the
         # fetch body so the denominator's raw lineage points at exactly what was
@@ -281,7 +281,7 @@ def refresh_etf_constituents(
         rows: list[ConstituentRow] = [
             {
                 "ticker": ticker,
-                "name": canonical_issuer_name(ticker) or ticker,
+                "name": _resolve_issuer_display_name(connection, ticker) or ticker,
                 "market_cap": None,
                 "last_sale_price": None,
             }

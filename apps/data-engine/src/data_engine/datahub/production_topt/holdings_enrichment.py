@@ -220,7 +220,18 @@ def enrich_holding_identities(
             continue
         target = f"issuer:cik:{cik:010d}"
         if (er.resolve(connection, "isin", isin, as_of=at) or "").startswith(_MINTED_PREFIX):
-            er.ensure_entity(connection, target, "company", listing.name or ticker)
+            holding_row = connection.execute(
+                "select nullif(btrim(holding_name), '') from staging.fund_holding_facts"
+                " where isin = %s and nullif(btrim(holding_name), '') is not null"
+                " and upper(btrim(holding_name)) <> upper(btrim(%s)) order by transaction_time desc limit 1",
+                (isin, ticker),
+            ).fetchone()
+            er.ensure_entity(
+                connection,
+                target,
+                "company",
+                (listing.name or "").strip() or (holding_row[0] if holding_row else None) or target,
+            )
             for id_type, id_value in (("isin", isin), ("ticker", ticker)):
                 er.assert_identifier(
                     connection,

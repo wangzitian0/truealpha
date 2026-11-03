@@ -74,7 +74,8 @@ def test_view_resolves_every_corpus_issuer_with_non_null_ticker(frozen_members) 
 
 def test_display_name_is_null_without_kg_and_fills_through_the_join(frozen_members) -> None:
     connection, snapshot = frozen_members
-    issuer = snapshot.members[0].issuer_id
+    member = snapshot.members[0]
+    issuer, ticker = member.issuer_id, member.listing_id.split(":", 2)[2].upper()
 
     before = connection.execute(
         "select display_name from mart.entity_display_resolution where issuer_id = %s", (issuer,)
@@ -83,7 +84,16 @@ def test_display_name_is_null_without_kg_and_fills_through_the_join(frozen_membe
 
     connection.execute(
         "insert into staging.kg_entities (id, entity_type, display_name) values (%s, 'company', %s)",
-        (issuer, "Resolution Probe Co"),
+        (issuer, ticker),
+    )
+    bare_ticker = connection.execute(
+        "select display_name from mart.entity_display_resolution where issuer_id = %s", (issuer,)
+    ).fetchone()
+    assert bare_ticker == (None,), "a bare ticker in kg_entities.display_name must not masquerade as a company name"
+
+    connection.execute(
+        "update staging.kg_entities set display_name = %s where id = %s",
+        ("Resolution Probe Co", issuer),
     )
     after = connection.execute(
         "select display_name from mart.entity_display_resolution where issuer_id = %s", (issuer,)

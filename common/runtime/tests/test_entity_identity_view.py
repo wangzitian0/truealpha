@@ -676,3 +676,15 @@ def test_a_live_view_names_no_ticker_literal(conn: psycopg.Connection, view: str
 
     assert "goog" not in str(row[0]).lower()
     assert "primary_listing" in str(row[0])
+
+
+def test_bare_ticker_in_kg_entities_never_masquerades_as_company_name(conn: psycopg.Connection) -> None:
+    """#1518: `mart.entity_identity` ignores a `staging.kg_entities.display_name` equal to `current_ticker`."""
+    store = Store(conn)
+    issuer, _list_c, list_a = seed_two_listings_of_one_issuer(store, 906)
+    store.relate("primary_listing", issuer, list_a, at=T0)
+    store.kg(issuer, "GOOGL")
+    sql = "select current_ticker, name from mart.entity_identity where entity_id = %s::uuid"
+    assert conn.execute(sql, (issuer,)).fetchone() == ("GOOGL", None)
+    store.alias(issuer, "name", "Alphabet Inc.", at=T0)
+    assert conn.execute(sql, (issuer,)).fetchone() == ("GOOGL", "Alphabet Inc.")

@@ -38,10 +38,8 @@ def lookup_minted_entity(
 ) -> uuid.UUID | None:
     """Return the surviving entity UUID if `(scheme, value)` was already minted in `staging.entities` (generation 1)."""
     existing_row = connection.execute(
-        """
-        select entity_id from staging.entities
-        where birth_scheme = %s and birth_value = staging.entity_alias_normalize(%s, %s) and birth_generation = 1
-        """,
+        "select entity_id from staging.entities"
+        " where birth_scheme = %s and birth_value = staging.entity_alias_normalize(%s, %s) and birth_generation = 1",
         (scheme, scheme, value),
     ).fetchone()
     if existing_row and existing_row[0]:
@@ -61,93 +59,57 @@ def is_uuid(value: str) -> bool:
 #: The classification file of primary listings (data/primary_listings.v1.json).
 PRIMARY_LISTINGS_FILENAME = "primary_listings.v1.json"
 
-#: Official company names for governed TOPT and canary issuers (#1517).
-#: XNAS constituents also receive their name from `staging.etf_constituent_facts` (QQQ),
-#: whereas XNYS TOPT members and static canary members have no QQQ constituent row unless
-#: asserted on their issuer entity under `scheme = 'name'`.
-_CANONICAL_ISSUER_NAMES: dict[str, str] = {
-    "ABBV": "AbbVie Inc.",
-    "AAPL": "Apple Inc.",
-    "AMZN": "Amazon.com, Inc.",
-    "ASML": "ASML Holding N.V.",
-    "AVGO": "Broadcom Inc.",
-    "BRK.B": "Berkshire Hathaway Inc.",
-    "CINF": "Cincinnati Financial Corporation",
-    "COST": "Costco Wholesale Corporation",
-    "CRWD": "CrowdStrike Holdings, Inc.",
-    "GOOG": "Alphabet Inc.",
-    "GOOGL": "Alphabet Inc.",
-    "HBAN": "Huntington Bancshares Incorporated",
-    "JNJ": "Johnson & Johnson",
-    "JPM": "JPMorgan Chase & Co.",
-    "LLY": "Eli Lilly and Company",
-    "MA": "Mastercard Incorporated",
-    "META": "Meta Platforms, Inc.",
-    "MSFT": "Microsoft Corporation",
-    "MU": "Micron Technology, Inc.",
-    "NFLX": "Netflix, Inc.",
-    "NVDA": "NVIDIA Corporation",
-    "TSLA": "Tesla, Inc.",
-    "V": "Visa Inc.",
-    "WMT": "Walmart Inc.",
-    "XOM": "Exxon Mobil Corporation",
-}
+
+@cache
+def _corpus_issuer_names() -> dict[str, str]:
+    """Return the ticker-to-name mapping from the packaged TOPT corpus."""
+    from data_engine.datahub.production_topt.universe_corpus import TOPT_CORPUS_FILENAME, load_corpus
+
+    names = load_corpus(TOPT_CORPUS_FILENAME)["topt_denominator"].get("issuer_names", {})
+    return {str(k).strip().upper(): str(v).strip() for k, v in names.items() if str(v).strip()}
 
 
-def canonical_issuer_name(ticker: str) -> str | None:
-    """Return the canonical company name for a governed ticker, or None if not in the static map."""
-    return _CANONICAL_ISSUER_NAMES.get(ticker.strip().upper())
-
-
-def _resolve_issuer_display_name(connection: psycopg.Connection[Any], ticker: str) -> str | None:
-    """Resolve the display name for an issuer from `staging.etf_constituent_facts` or the canonical map (#1517)."""
-    normalized = ticker.strip().upper()
-    if not normalized:
+def _resolve_issuer_display_name(
+    connection: psycopg.Connection[Any], ticker: str, *, issuer_raw: str = "", issuer_uuid: uuid.UUID | None = None
+) -> str | None:
+    """Resolve the display name for an issuer from staging tables or packaged corpus metadata (#1518)."""
+    if not (normalized := ticker.strip().upper()):
         return None
-    row = connection.execute(
-        """
-        select nullif(btrim(company_name), '')
-        from staging.etf_constituent_facts
-        where upper(ticker) = %s
-          and nullif(btrim(company_name), '') is not null
-          and upper(btrim(company_name)) <> upper(btrim(ticker))
-        order by knowable_at desc, as_of desc, etf_symbol asc
-        limit 1
-        """,
+    if row := connection.execute(
+        "select nullif(btrim(company_name), '') from staging.etf_constituent_facts"
+        " where upper(ticker) = %s and nullif(btrim(company_name), '') is not null"
+        " and upper(btrim(company_name)) <> upper(btrim(ticker))"
+        " order by knowable_at desc, as_of desc, etf_symbol asc limit 1",
         (normalized,),
-    ).fetchone()
-    if row and row[0]:
+    ).fetchone():
         return str(row[0])
-    return canonical_issuer_name(normalized)
+    if (kg_ids := [item for item in (str(issuer_uuid) if issuer_uuid else "", issuer_raw.strip()) if item]) and (
+        kg_row := connection.execute(
+            "select nullif(btrim(display_name), '') from staging.kg_entities"
+            " where id = any(%s) and nullif(btrim(display_name), '') is not null"
+            " and upper(btrim(display_name)) <> %s and btrim(display_name) <> id limit 1",
+            (kg_ids, normalized),
+        ).fetchone()
+    ):
+        return str(kg_row[0])
+    return _corpus_issuer_names().get(normalized)
 
 
 def _assert_issuer_name_alias(
-    connection: psycopg.Connection[Any],
-    issuer_uuid: uuid.UUID,
-    display_name: str,
-    *,
-    known_at: datetime,
+    connection: psycopg.Connection[Any], issuer_uuid: uuid.UUID, display_name: str, *, known_at: datetime
 ) -> None:
     """Write a `scheme = 'name'` alias on `issuer_uuid` when none exists yet (#1517)."""
-    existing = connection.execute(
-        """
-        select 1 from staging.entity_aliases
-        where entity_id = %s and scheme = 'name' and value = %s
-        """,
+    if not connection.execute(
+        "select 1 from staging.entity_aliases where entity_id = %s and scheme = 'name' and value = %s",
         (issuer_uuid, display_name),
-    ).fetchone()
-    if existing:
-        return
-    connection.execute(
-        """
-        insert into staging.entity_aliases (
-            entity_id, scheme, value, valid_from, valid_to, transaction_time, source,
-            raw_ref, method, confidence, mapping_version
-        ) values (%s, 'name', %s, '-infinity'::date, null, least(%s, clock_timestamp()), 'datahub.capture', %s, 'asserted', 1.0, 'datahub:v1')
-        on conflict do nothing
-        """,
-        (issuer_uuid, display_name, known_at, f"name:{issuer_uuid}"),
-    )
+    ).fetchone():
+        connection.execute(
+            "insert into staging.entity_aliases (entity_id, scheme, value, valid_from, valid_to,"
+            " transaction_time, source, raw_ref, method, confidence, mapping_version)"
+            " values (%s, 'name', %s, '-infinity'::date, null, least(%s, clock_timestamp()),"
+            " 'datahub.capture', %s, 'asserted', 1.0, 'datahub:v1') on conflict do nothing",
+            (issuer_uuid, display_name, known_at, f"name:{issuer_uuid}"),
+        )
 
 
 @cache
@@ -276,26 +238,20 @@ def resolve_entity(
 
     # Insert birth alias to satisfy require_birth_alias trigger
     connection.execute(
-        """
-        insert into staging.entity_aliases (
-            entity_id, scheme, value, valid_from, valid_to, transaction_time, source,
-            raw_ref, method, confidence, mapping_version
-        ) values (%s, %s, %s, '-infinity'::date, null, least(%s, clock_timestamp()), 'datahub.capture', %s, 'asserted', 1.0, 'datahub:v1')
-        on conflict do nothing
-        """,
+        "insert into staging.entity_aliases (entity_id, scheme, value, valid_from, valid_to, transaction_time, source,"
+        " raw_ref, method, confidence, mapping_version)"
+        " values (%s, %s, %s, '-infinity'::date, null, least(%s, clock_timestamp()), 'datahub.capture', %s, 'asserted', 1.0, 'datahub:v1')"
+        " on conflict do nothing",
         (minted_id, scheme, value, known_at, f"mint:{minted_id}"),
     )
 
     # If scheme was not legacy-id, also record legacy-id alias
     if scheme != "legacy-id":
         connection.execute(
-            """
-            insert into staging.entity_aliases (
-                entity_id, scheme, value, valid_from, valid_to, transaction_time, source,
-                raw_ref, method, confidence, mapping_version
-            ) values (%s, 'legacy-id', %s, '-infinity'::date, null, least(%s, clock_timestamp()), 'datahub.capture', %s, 'asserted', 1.0, 'datahub:v1')
-            on conflict do nothing
-            """,
+            "insert into staging.entity_aliases (entity_id, scheme, value, valid_from, valid_to, transaction_time, source,"
+            " raw_ref, method, confidence, mapping_version)"
+            " values (%s, 'legacy-id', %s, '-infinity'::date, null, least(%s, clock_timestamp()), 'datahub.capture', %s, 'asserted', 1.0, 'datahub:v1')"
+            " on conflict do nothing",
             (minted_id, raw, known_at, f"mint:{minted_id}"),
         )
 
@@ -314,34 +270,16 @@ def _assert_relation(
 
     The transaction time is the cutoff, or the clock when the cutoff lies ahead of it.
     """
-    existing = connection.execute(
-        """
-        select 1 from staging.entity_relations
-        where relation_type = %s and from_entity_id = %s and to_entity_id = %s and source = 'datahub.capture'
-        """,
+    if connection.execute(
+        "select 1 from staging.entity_relations where relation_type = %s and from_entity_id = %s and to_entity_id = %s and source = 'datahub.capture'",
         (relation_type, from_entity, to_entity),
-    ).fetchone()
-    if existing:
+    ).fetchone():
         return
     connection.execute(
-        """
-        with t as (
-            select least(%(known_at)s::timestamptz, clock_timestamp()) as tx_time
-        ),
-        r as (
-            select staging.entity_relation_uuid(%(type)s, %(from)s, %(to)s, '-infinity'::date, t.tx_time, 'datahub.capture', 'asserted') as rel_id,
-                   t.tx_time
-            from t
-        )
-        insert into staging.entity_relations (
-            relation_id, relation_type, from_entity_id, to_entity_id, valid_from,
-            transaction_time, source, raw_ref, method, confidence, mapping_version
-        )
-        select
-            r.rel_id, %(type)s, %(from)s, %(to)s, '-infinity'::date, r.tx_time, 'datahub.capture', 'rel:' || r.rel_id, 'asserted', 1.0, 'datahub:v1'
-        from r
-        on conflict do nothing
-        """,
+        "with t as (select least(%(known_at)s::timestamptz, clock_timestamp()) as tx_time),"
+        " r as (select staging.entity_relation_uuid(%(type)s, %(from)s, %(to)s, '-infinity'::date, t.tx_time, 'datahub.capture', 'asserted') as rel_id, t.tx_time from t)"
+        " insert into staging.entity_relations (relation_id, relation_type, from_entity_id, to_entity_id, valid_from, transaction_time, source, raw_ref, method, confidence, mapping_version)"
+        " select r.rel_id, %(type)s, %(from)s, %(to)s, '-infinity'::date, r.tx_time, 'datahub.capture', 'rel:' || r.rel_id, 'asserted', 1.0, 'datahub:v1' from r on conflict do nothing",
         {"known_at": known_at, "type": relation_type, "from": from_entity, "to": to_entity},
     )
 
@@ -381,8 +319,8 @@ def resolve_coordinates(
         # The classification file names the primary listing. This resolver writes it, and no one else does.
         if listing_raw in primary_listing_ids():
             _assert_relation(connection, "primary_listing", issuer_uuid, listing_uuid, known_at=known_at)
-        if (display_name := _resolve_issuer_display_name(connection, ticker)) is not None:
-            _assert_issuer_name_alias(connection, issuer_uuid, display_name, known_at=known_at)
+        if name := _resolve_issuer_display_name(connection, ticker, issuer_raw=issuer_raw, issuer_uuid=issuer_uuid):
+            _assert_issuer_name_alias(connection, issuer_uuid, name, known_at=known_at)
 
         result[subject_id] = (str(issuer_uuid), str(instrument_uuid), str(listing_uuid), ticker)
 
@@ -400,17 +338,11 @@ def alias_of(
     """Retrieve the authoritative alias for an entity at a given validity and known_at time."""
     entity_uuid = uuid.UUID(str(entity_id))
     row = connection.execute(
-        """
-        select alias.value
-        from staging.entity_aliases alias
-        where staging.entity_survivor(alias.entity_id, %s) = staging.entity_survivor(%s, %s)
-          and alias.scheme = %s
-          and alias.valid_from <= %s
-          and coalesce(%s < staging.entity_alias_valid_to(alias.alias_id, %s), true)
-          and alias.transaction_time <= %s
-        order by alias.confidence desc, alias.transaction_time desc
-        limit 1
-        """,
+        "select alias.value from staging.entity_aliases alias"
+        " where staging.entity_survivor(alias.entity_id, %s) = staging.entity_survivor(%s, %s)"
+        " and alias.scheme = %s and alias.valid_from <= %s"
+        " and coalesce(%s < staging.entity_alias_valid_to(alias.alias_id, %s), true)"
+        " and alias.transaction_time <= %s order by alias.confidence desc, alias.transaction_time desc limit 1",
         (known_at, entity_uuid, known_at, scheme, valid_at, valid_at, known_at, known_at),
     ).fetchone()
     return row[0] if row else None

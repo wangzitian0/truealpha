@@ -61,6 +61,7 @@
       ["issuer:lei:Y87794H0US1R65VBXU25", "security:cusip:931142103", "listing:xnas:wmt", "WMT"]
     ],
     "instrument_tuple_fields": ["issuer_id", "instrument_id", "listing_id", "ticker"],
+    "issuer_names": {"ABBV": "AbbVie Inc.", "AAPL": "Apple Inc.", "AMZN": "Amazon.com, Inc.", "AVGO": "Broadcom Inc.", "BRK.B": "Berkshire Hathaway Inc.", "COST": "Costco Wholesale Corporation", "GOOG": "Alphabet Inc.", "GOOGL": "Alphabet Inc.", "JNJ": "Johnson & Johnson", "JPM": "JPMorgan Chase & Co.", "LLY": "Eli Lilly and Company", "MA": "Mastercard Incorporated", "META": "Meta Platforms, Inc.", "MSFT": "Microsoft Corporation", "MU": "Micron Technology, Inc.", "NFLX": "Netflix, Inc.", "NVDA": "NVIDIA Corporation", "TSLA": "Tesla, Inc.", "V": "Visa Inc.", "WMT": "Walmart Inc.", "XOM": "Exxon Mobil Corporation"},
     "identity_assertions": [
       "the 21 rows contain exactly 20 distinct issuer_id values",
       "GOOG and GOOGL have distinct instrument_id and listing_id values",
