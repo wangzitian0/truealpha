@@ -1,23 +1,34 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 
-from truealpha_runtime.checks import run_dependency_checks
+from infra2_sdk.runtime.health import check_health
+
+from truealpha_runtime.checks import DatabaseCheck, GraphStoreCheck, ObjectStorageCheck
 from truealpha_runtime.config import RuntimeSettings
 from truealpha_runtime.manifest import DEPENDENCY_MANIFEST
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Validate TrueAlpha runtime dependencies")
-    parser.add_argument("check", nargs="?", choices=("check",), default="check")
+    parser.add_argument("check", nargs="?", choices=("check", "health-check"), default="check")
     parser.add_argument("--live", action="store_true", help="probe PostgreSQL, KG tables, and object storage")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     settings = RuntimeSettings()
     required = DEPENDENCY_MANIFEST.required_for(settings.environment_tier)
     print(f"runtime tier={settings.environment_tier.value} required={','.join(sorted(required))}")
-    if not args.live:
+    if not args.live and args.check != "health-check":
         return 0
-    results = run_dependency_checks(settings)
-    for result in results:
-        print(f"{result.name}: {result.status.value} ({result.duration_ms:.1f}ms) {result.detail}")
-    return 0 if all(result.present for result in results if result.name in required) else 1
+    checks = (DatabaseCheck(settings), GraphStoreCheck(settings), ObjectStorageCheck(settings))
+    status_code, body = asyncio.run(
+        check_health(
+            checks,
+            manifest=DEPENDENCY_MANIFEST,
+            tier=settings.environment_tier,
+        )
+    )
+    for check in checks:
+        entry = body["checks"][check.name]
+        print(f"{check.name}: {entry['status']} ({entry['duration_ms']:.1f}ms) {entry['detail']}")
+    return 0 if status_code == 200 else 1

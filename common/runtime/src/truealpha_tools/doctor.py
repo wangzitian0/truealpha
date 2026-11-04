@@ -23,6 +23,8 @@ import urllib.request
 from collections.abc import Sequence
 from pathlib import Path
 
+from infra2_sdk.routing import resolve_app_hostname
+
 ROOT = Path(__file__).resolve().parents[4]
 #: The tracked hook directory. core.hooksPath is relative, so each worktree of a clone
 #: runs its own checked-out hook (#1412 T0).
@@ -170,12 +172,20 @@ def check_local_services() -> None:
         print("    [INFO] OpenD loopback (11111): closed (not running or host outside VPS)")
 
 
+def _remote_health_url(env: str) -> str | None:
+    if env not in ("production", "staging"):
+        return None
+    host = resolve_app_hostname(
+        "truealpha",
+        env,
+        base_domain="truealpha.club",
+        custom_prod_domain="truealpha.club",
+    )
+    return f"https://{host}/api/health"
+
+
 def check_remote(env: str) -> bool:
-    urls = {
-        "production": "https://truealpha.club/api/health",
-        "staging": "https://truealpha-staging.truealpha.club/api/health",
-    }
-    url = urls.get(env)
+    url = _remote_health_url(env)
     if not url:
         print(f"[FAIL] Unknown remote environment: {env}")
         return False

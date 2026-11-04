@@ -12,6 +12,7 @@ from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.responses import RedirectResponse
+from infra2_sdk.fastapi import init_service
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from truealpha_contracts.environment_contract import load_environment_contract
 from truealpha_runtime.boot import assert_environment
@@ -188,6 +189,11 @@ def health() -> dict[str, Any]:
         # "unknown" when the read failed; an empty list when no check has ever recorded one.
         "nightly_verdicts": verdicts,
     }
+
+
+# Register /livez and /readyz via infra2_sdk.fastapi.init_service AFTER our own /health route
+# so FastAPI matches the TrueAlpha /health handler ("status": "ok" + git_sha) first (#1528).
+init_service(app, "truealpha-llm-service", enable_otel=False)
 
 
 #: The newest verdict per nightly check (`db/migrations/20260916T0848_factors_nightly_verdicts.sql`).

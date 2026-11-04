@@ -349,6 +349,16 @@ def test_default_health_url_points_to_staging() -> None:
     """Owner principle: deployment to staging is the completion boundary."""
     assert _module.DEFAULT_HEALTH == "https://truealpha-staging.truealpha.club/api/health"
     assert _module.DEFAULT_HEALTH == _module.STAGING_HEALTH
+    assert _module.PRODUCTION_HEALTH == "https://truealpha.club/api/health"
+    assert (
+        _module.resolve_app_hostname(
+            "truealpha",
+            "staging",
+            base_domain="truealpha.club",
+            custom_prod_domain="truealpha.club",
+        )
+        in _module.STAGING_HEALTH
+    )
 
 
 def test_explicit_production_health_url_targets_production(

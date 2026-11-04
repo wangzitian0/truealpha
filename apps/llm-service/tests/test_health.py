@@ -765,3 +765,27 @@ def test_the_mcp_surface_keeps_tls_the_prefix_and_its_endpoint(
     assert trusted_slash.headers["location"].startswith("https://"), (
         "the proxy's X-Forwarded-Proto was ignored — ProxyHeadersMiddleware is not installed"
     )
+
+
+def test_init_service_registers_livez_and_readyz_while_keeping_pinned_health_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1528: infra2_sdk.fastapi.init_service provides /livez and /readyz while our /health
+    registered first keeps its pinned 'ok' status and git_sha body."""
+    _stub_no_db_when_unarmed(monkeypatch)
+    monkeypatch.setattr(main, "settings", Settings(_env_file=None, git_commit_sha="v0.2.78"))
+    client = TestClient(app)
+
+    livez = client.get("/livez")
+    assert livez.status_code == 200
+    assert livez.json() == {"status": "alive", "service": "truealpha-llm-service"}
+
+    readyz = client.get("/readyz")
+    assert readyz.status_code == 200
+    assert readyz.json() == {"status": "ready", "service": "truealpha-llm-service"}
+
+    health = client.get("/health")
+    assert health.status_code == 200
+    body = health.json()
+    assert body["status"] == "ok"
+    assert body["git_sha"] == "v0.2.78"

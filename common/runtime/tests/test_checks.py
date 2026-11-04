@@ -11,8 +11,8 @@ from truealpha_runtime.checks import (
     DatabaseCheck,
     GraphStoreCheck,
     ObjectStorageCheck,
-    run_dependency_checks,
 )
+from truealpha_runtime.cli import main as cli_main
 from truealpha_runtime.config import RuntimeSettings
 
 
@@ -220,16 +220,18 @@ def test_object_storage_check_reports_absent_on_error() -> None:
     assert result.name == "object_storage"
 
 
-def test_run_dependency_checks_aggregates_all_probes(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_cli_check_live_runs_check_health_and_exits_nonzero_when_required_probe_absent(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     fake_conn = FakeConnection(query_result=(1,))
     monkeypatch.setattr(psycopg, "connect", lambda *args, **kwargs: fake_conn)
 
-    settings = RuntimeSettings(
-        database_url="postgresql://user:pass@localhost:5432/testdb",
-        _env_file=None,
-    )
-    results = run_dependency_checks(settings)
+    exit_code = cli_main(["check", "--live"])
+    out = capsys.readouterr().out
 
-    assert len(results) == 3
-    names = {r.name for r in results}
-    assert names == {"database", "graph_store", "object_storage"}
+    assert exit_code == 1
+    assert "database: present" in out
+    assert "graph_store: present" in out
+    assert "object_storage: absent" in out
+    assert not hasattr(checks_module, "run_dependency_checks")

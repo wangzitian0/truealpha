@@ -98,3 +98,16 @@ def test_make_install_installs_the_hook() -> None:
     recipe = subprocess.run(["make", "-n", "install"], cwd=REPO_ROOT, capture_output=True, text=True, check=True).stdout
     assert "tools/doctor.py --install-hooks" in recipe, recipe
     assert "|| true" not in recipe, "an install step that cannot fail hides a missing hook"
+
+
+def test_doctor_remote_health_url_uses_infra2_sdk_routing(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert doctor._remote_health_url("production") == "https://truealpha.club/api/health"
+    assert doctor._remote_health_url("staging") == "https://truealpha-staging.truealpha.club/api/health"
+    assert doctor._remote_health_url("unknown") is None
+
+    monkeypatch.setattr(
+        doctor,
+        "resolve_app_hostname",
+        lambda slug, tier, *, base_domain, custom_prod_domain: f"{slug}-{tier}.{base_domain}",
+    )
+    assert doctor._remote_health_url("production") == "https://truealpha-production.truealpha.club/api/health"

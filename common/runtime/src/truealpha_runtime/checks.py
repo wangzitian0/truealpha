@@ -111,19 +111,10 @@ class ObjectStorageCheck:
             )
 
 
-def run_dependency_checks(settings: RuntimeSettings) -> tuple[ProbeResult, ...]:
-    return (
-        DatabaseCheck(settings).probe(),
-        GraphStoreCheck(settings).probe(),
-        ObjectStorageCheck(settings).probe(),
-    )
-
-
 __all__ = [
     "DatabaseCheck",
     "DependencyStatus",
     "GraphStoreCheck",
     "ObjectStorageCheck",
     "ProbeResult",
-    "run_dependency_checks",
 ]

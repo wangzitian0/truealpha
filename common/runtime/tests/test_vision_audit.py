@@ -253,3 +253,30 @@ def test_with_no_agree_row_gate_1_reads_open_no_comparator(monkeypatch: pytest.M
     assert gate_4.status == "OPEN"
     assert gate_4.verified is False
     assert report.all_passed is False
+
+
+def test_vision_audit_resolves_health_url_via_infra2_sdk_routing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#1528: audit_vision derives environment health URLs from infra2_sdk.routing.resolve_app_hostname."""
+    verdicts = _verdicts_without()
+    seen_urls: list[str] = []
+
+    def fake_read_report(url: str, _http_get: Any) -> _FakeHealthReport:
+        seen_urls.append(url)
+        return _FakeHealthReport(verdicts, "v0.1.2")
+
+    monkeypatch.setattr(_module, "read_report", fake_read_report)
+    monkeypatch.setattr(
+        _module,
+        "resolve_app_hostname",
+        lambda slug, tier, *, base_domain, custom_prod_domain: f"{slug}-{tier}.{base_domain}",
+    )
+
+    prod_report = audit_vision(env="production")
+    staging_report = audit_vision(env="staging")
+
+    assert prod_report.health_url == "https://truealpha-production.truealpha.club/api/health"
+    assert staging_report.health_url == "https://truealpha-staging.truealpha.club/api/health"
+    assert seen_urls == [
+        "https://truealpha-production.truealpha.club/api/health",
+        "https://truealpha-staging.truealpha.club/api/health",
+    ]
