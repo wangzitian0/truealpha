@@ -180,6 +180,28 @@ def test_images_build_beside_the_tests_and_publish_only_after_them() -> None:
     )
 
 
+def test_release_tags_trigger_ci_required_and_publish_semver_and_bare_sha_tags() -> None:
+    """#1588: release tag pushes (`vX.Y.Z`) trigger ci-required, skip paths-filter so test lanes
+    skip cleanly while images_build and images_release build and publish all three images with
+    `:vX.Y.Z`, `:sha-<short>`, and bare `:<short>` (`sha[:7]`)."""
+    push_trigger = triggers(REQUIRED)["push"]
+    assert push_trigger["branches"] == ["main"]
+    assert push_trigger["tags"] == ["v[0-9]+.[0-9]+.[0-9]+"]
+
+    changes = job(REQUIRED, "changes")
+    filter_step = next(s for s in changes["steps"] if s.get("id") == "filter")
+    assert "github.ref_type != 'tag'" in str(filter_step.get("if", "")), (
+        "paths-filter must skip on tag pushes so test lanes do not re-run against 0000000000000000000000000000000000000000"
+    )
+
+    publish_steps = job(IMAGES, "publish")["steps"]
+    meta_step = next(s for s in publish_steps if s.get("id") == "meta")
+    meta_tags = [line.strip() for line in str(meta_step["with"]["tags"]).splitlines() if line.strip()]
+    assert "type=sha,format=short" in meta_tags
+    assert "type=sha,prefix=,format=short" in meta_tags
+    assert "type=semver,pattern=v{{version}}" in meta_tags
+
+
 # --- escalation lifecycle: open on red, resolve on green (#876) ---------------
 
 ESCALATE_TOOL = "tools/escalate_issue.py"
