@@ -124,6 +124,7 @@ export function findHostLazyRows(rows) {
 
 /** Valid inside an inline script: a JSON string with `<` escaped, so that `</script` cannot end the script. */
 const scriptFor = (text) => `<script>self.__next_f.push([1,${JSON.stringify(text).replace(/</g, "\\u003c")}])</script>`;
+const STATIC_CHUNK_REQUEST = /^\/_next\/static\/.*\.js(?:\?|$)/;
 
 /**
  * Splits a document in two. `early` has every row except the rows that a host element holds as a
@@ -154,18 +155,43 @@ export function splitAtLateRows(html) {
 
 /**
  * Starts a proxy in front of `origin`. For every document that has a late row, it sends `early`,
- * waits `holdMs`, then sends `late`. Other responses pass through.
+ * waits until a `/_next/static/*.js` chunk request arrives or `holdMs` elapses, then sends `late`.
+ * Other responses pass through.
  *
- * @param {{ origin: string, holdMs: number }} options
- * @returns {Promise<{ url: string, stats: { held: string[], unheld: string[] }, close: () => Promise<void> }>}
+ * @param {{ origin: string, holdMs: number, releaseOnStaticChunk?: boolean }} options
+ * @returns {Promise<{
+ *   url: string,
+ *   stats: { held: string[], unheld: string[], jsRequestedWhileHeld: number, staticChunksWhileHeld: string[] },
+ *   close: () => Promise<void>,
+ * }>}
  *   `stats.held` lists the request paths of the documents that were held, one entry per document.
  *   `stats.unheld` lists the documents that had no late row to hold back.
+ *   `stats.jsRequestedWhileHeld` counts `/_next/static/*.js` requests observed while a held tail was pending.
+ *   `stats.staticChunksWhileHeld` lists the held document paths that saw a static JS chunk request before flushing.
  */
-export async function startLateRowProxy({ origin, holdMs }) {
+export async function startLateRowProxy({ origin, holdMs, releaseOnStaticChunk = false }) {
   const target = new URL(origin);
-  const stats = { held: /** @type {string[]} */ ([]), unheld: /** @type {string[]} */ ([]) };
+  const stats = {
+    held: /** @type {string[]} */ ([]),
+    unheld: /** @type {string[]} */ ([]),
+    jsRequestedWhileHeld: 0,
+    staticChunksWhileHeld: /** @type {string[]} */ ([]),
+  };
+  /** @type {Set<{ path: string, sawChunk: boolean, flush: () => void }>} */
+  const activeHolds = new Set();
 
   const server = http.createServer((request, response) => {
+    const reqUrl = request.url ?? "";
+    if (STATIC_CHUNK_REQUEST.test(reqUrl) && activeHolds.size > 0) {
+      stats.jsRequestedWhileHeld += 1;
+      for (const hold of [...activeHolds]) {
+        if (!hold.sawChunk) {
+          hold.sawChunk = true;
+          stats.staticChunksWhileHeld.push(hold.path);
+        }
+        if (releaseOnStaticChunk) hold.flush();
+      }
+    }
     const headers = { ...request.headers, host: target.host };
     // The proxy reads the document, so it asks for an identity encoding.
     delete headers["accept-encoding"];
@@ -190,13 +216,30 @@ export async function startLateRowProxy({ origin, holdMs }) {
           delete outgoing["content-length"];
           response.writeHead(answer.statusCode ?? 502, outgoing);
           if (split === null) {
-            stats.unheld.push(request.url ?? "");
+            stats.unheld.push(reqUrl);
             response.end(html);
             return;
           }
-          stats.held.push(request.url ?? "");
+          stats.held.push(reqUrl);
           response.write(split.early);
-          setTimeout(() => response.end(split.late), holdMs);
+          let flushed = false;
+          const hold = {
+            path: reqUrl,
+            sawChunk: false,
+            flush: () => {
+              if (flushed) return;
+              flushed = true;
+              clearTimeout(timer);
+              activeHolds.delete(hold);
+              response.end(split.late);
+            },
+          };
+          activeHolds.add(hold);
+          const timer = setTimeout(() => hold.flush(), holdMs);
+          response.on("close", () => {
+            clearTimeout(timer);
+            activeHolds.delete(hold);
+          });
         });
       },
     );
