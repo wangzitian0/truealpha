@@ -145,8 +145,8 @@ class Cron:
             days=days,
             months=months,
             weekdays=frozenset(day % 7 for day in weekdays),
-            days_restricted=not parts[2].startswith("*"),
-            weekdays_restricted=not parts[4].startswith("*"),
+            days_restricted=parts[2] != "*",
+            weekdays_restricted=parts[4] != "*",
         )
 
     def fires_on(self, day: date) -> bool:

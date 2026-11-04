@@ -731,6 +731,20 @@ def test_every_declared_cadence_is_its_jobs_schedule_period() -> None:
         )
 
 
+def test_cron_treats_step_expressions_as_restricted_fields() -> None:
+    """Only literal '*' is unrestricted in cron; step expressions like '*/2' restrict DOM/DOW."""
+    from datetime import date
+
+    cron = _module.Cron.parse("0 0 */2 * 1")
+    assert cron.days_restricted is True
+    assert cron.weekdays_restricted is True
+    # 2026-09-14 is a Monday (day=14, not in 1..31 step 2) -> fires via OR because both are restricted
+    assert cron.fires_on(date(2026, 9, 14)) is True
+    assert _module.Cron.parse("0 0 * * */2").weekdays_restricted is True
+    assert _module.Cron.parse("0 0 * * *").days_restricted is False
+    assert _module.Cron.parse("0 0 * * *").weekdays_restricted is False
+
+
 def test_a_missing_binary_is_no_grace_not_a_crash() -> None:
     """Review on #901: an exec failure (no `git`) must fall back like any other step."""
 
