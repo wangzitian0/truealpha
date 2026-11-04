@@ -604,7 +604,7 @@ def test_the_backtest_starts_after_the_refresh_has_ended_in_each_environment(con
     assert twelve.window_seconds is not None
     refresh_duration = timedelta(seconds=math.ceil(len(requests) / twelve.calls_per_window) * twelve.window_seconds)
 
-    cron = load_tool("scheduler_liveness").Cron
+    cron = load_tool("nightly_verdicts").Cron
     refresh, backtest = cron.parse(market_data.MARKET_DATA_REFRESH_CRON), cron.parse(backtest_lane.BACKTEST_CRON)
     monday = datetime(2026, 10, 12, tzinfo=UTC)
     refreshes = refresh.fires_between(monday, monday + timedelta(days=7))

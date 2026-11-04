@@ -28,13 +28,11 @@ import shutil
 import subprocess
 import sys
 import tomllib
-from datetime import UTC, datetime, timedelta
 from functools import cache
 from pathlib import Path
 
 import pytest
 import yaml
-from truealpha_runtime.testing import load_tool
 
 # Loaded the way every test in this directory loads its subject — the tests are
 # not a package, and pytest's importlib mode does not put this directory on the
@@ -63,9 +61,6 @@ triggers = _contract.triggers
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
-RELEASE = "deploy-release.yml"
-WALK = "walk-release.yml"
-DELIVERY = "delivery-report.yml"
 REPROOF = "mutation-reproof.yml"
 MAIN_HEALTH = "main-health.yml"
 CLOSE_GUARD = "issue-close-guard.yml"
@@ -73,11 +68,8 @@ REQUIRED = "ci-required.yml"
 PYTHON = "ci-python.yml"
 DB = "ci-db.yml"
 RUNTIME = "ci-runtime.yml"
-NIGHTLY = "nightly-dagster-liveness.yml"
 WEB = "ci-web.yml"
 IMAGES = "release-images.yml"
-LIVENESS = "scheduler-liveness.yml"
-AUTO_RELEASE = "auto-release-staging.yml"
 SHARD_REFRESH = "shard-weight-refresh.yml"
 
 
@@ -88,7 +80,7 @@ def test_a_missing_step_names_what_it_was_looking_for() -> None:
     """The property that makes the rest of this file trustworthy: a renamed step
     fails loudly here instead of quietly re-pointing an assertion."""
     with pytest.raises(WorkflowContractError, match="has no step named"):
-        step(RELEASE, "A step nobody wrote")
+        step(REQUIRED, "A step nobody wrote")
 
 
 # --- ci-required -------------------------------------------------------------
@@ -110,15 +102,9 @@ def test_manual_image_release_is_explicit_and_waits_for_required_jobs() -> None:
             f"images_release must wait for {dependency}"
         )
     assert release["with"]["publish"] is True
-    # #731: a main push publishes only the images whose filter matched; a tag and
-    # the manual force publish all three. Before this, every uv.lock or common/**
-    # merge republished app-web for a dependency it does not use.
     for image in ("app_web", "llm_service", "data_engine"):
-        expression = str(release["with"][image])
-        assert "github.ref_type == 'tag'" in expression, f"{image}: a tag must publish every image"
-        assert "inputs.force_images" in expression, f"{image}: the manual force must publish every image"
-        assert f"needs.changes.outputs.image_{image} == 'true'" in expression, (
-            f"{image}: a main push must publish only what its filter matched"
+        assert release["with"][image] is True, (
+            f"{image}: images_release must publish every image on main push and manual force"
         )
 
     text = source(REQUIRED)
@@ -153,7 +139,6 @@ def test_images_build_beside_the_tests_and_publish_only_after_them() -> None:
     assert build["with"]["publish"] is False
     for event in ("pull_request", "merge_group", "push", "workflow_dispatch"):
         assert f"github.event_name == '{event}'" in str(build["if"]), f"images_build no longer runs on {event}"
-    assert "github.ref_type == 'tag'" in str(build["if"])
     assert "prebuilt" not in build["with"], "the pre-build cannot itself be pre-built"
 
     release = job(REQUIRED, "images_release")
@@ -166,14 +151,13 @@ def test_images_build_beside_the_tests_and_publish_only_after_them() -> None:
     )
     assert release["with"]["prebuilt"] is True
     for image in ("app_web", "llm_service", "data_engine"):
+        assert release["with"][image] is True
         for clause in (
             f"needs.changes.outputs.image_{image} == 'true'",
-            "github.ref_type == 'tag'",
+            "github.event_name == 'push'",
             "inputs.force_images",
         ):
-            assert clause in str(build["with"][image]) and clause in str(release["with"][image]), (
-                f"{image}: images_build and images_release select images differently on {clause!r}"
-            )
+            assert clause in str(build["with"][image]), f"{image}: images_build must select image on {clause!r}"
 
     prebuilt = triggers(IMAGES)["workflow_call"]["inputs"]["prebuilt"]
     assert prebuilt["type"] == "boolean" and prebuilt["default"] is False and prebuilt["required"] is False
@@ -194,225 +178,6 @@ def test_images_build_beside_the_tests_and_publish_only_after_them() -> None:
     assert "images_build" in required["needs"] and "images_check" not in required["needs"], (
         "required must summarise images_build — a broken Dockerfile would otherwise merge green on main"
     )
-
-
-# --- deploy-release ----------------------------------------------------------
-
-
-def test_the_release_dispatches_only_the_rendered_sdk_request() -> None:
-    workflow = source(RELEASE)
-    assert triggers(RELEASE)["workflow_dispatch"]["inputs"]["deploy_type"]["options"] == [
-        "preview/tag",
-        "staging",
-        "prod",
-    ]
-    assert job(RELEASE, "request") is not None
-    for clause in (
-        'GITHUB_REF" != "refs/heads/main"',
-        'rev-parse --verify --quiet "refs/tags/${VERSION_REF}^{commit}"',
-        "version_ref must identify an existing commit tag",
-        "merge-base --is-ancestor",
-        '.path == ".github/workflows/ci-required.yml"',
-        '.event == "push"',
-        ".merge_commit_sha == $sha",
-        '.base.ref == "main"',
-        # infra2#571 blocker 2: staging evidence is this repo's OWN "Deploy
-        # staging" run, matching infra2's verifier — never an infra2 receiver run.
-        'this repo\'s own successful "Deploy staging <tag>" run URL',
-    ):
-        assert clause in workflow, f"the release request must still assert {clause!r}"
-
-
-def test_the_health_gate_passes_the_kind_the_runtime_reports() -> None:
-    """#526: the gate compared a 40-hex sha against a runtime that reports the
-    release tag, so every prod release recorded FAILURE while deploying fine."""
-    gate = step_text(RELEASE, "Confirm the deployed release is healthy")
-    assert "version_ref" in gate, "the gate must compare the release ref the runtime reports"
-    assert "source_sha" not in gate, "the gate must not pass a commit sha while the runtime reports a tag (#526)"
-
-
-def test_the_release_no_longer_runs_the_surface_walk_itself() -> None:
-    """#855/#860: the walk moved to its own deferred workflow so a walk flake
-    (#811) costs a walk re-run, not a re-dispatch of the whole 5-6 min infra2
-    deploy. deploy-release.yml's own green must no longer depend on it."""
-    workflow = source(RELEASE)
-    for name in (
-        "Are the surface-walk credentials configured",
-        "Cache the Playwright browser",
-        "Walk the deployed surface",
-    ):
-        with pytest.raises(WorkflowContractError, match="has no step named"):
-            step(RELEASE, name)
-    assert "walk-release.yml" in workflow, "the release run must point at where the walk actually lives now"
-
-
-def test_the_release_leaves_an_honest_but_non_blocking_walk_signal_for_prod() -> None:
-    """#855/#860: `staging_run_url` used to prove BOTH "staging deployed" and
-    "staging was walked", because the walk ran inside that same run. Now that
-    the walk is a separate, asynchronously-triggered workflow, the prod gate's
-    hard requirement (a green "Deploy staging <tag>" run) can no longer prove
-    the second half — and must not be turned into a hard requirement either,
-    or a direct `workflow_dispatch` to prod deadlocks exactly the way #560
-    describes the moment the walk workflow has not fired yet.
-
-    Asserted as one exact, verbatim block rather than a fragile split-and-scan
-    (the reason `tests/workflow_contract.py` exists at all, #583): if a later
-    edit turns this into a hard failure, the literal text below no longer
-    matches and this test breaks loudly, naming exactly what moved.
-    """
-    dispatch = step_text(RELEASE, "Dispatch the validated request to infra2")
-    assert (
-        "if uv run --no-sync python tools/walk_evidence.py \\\n"
-        '      --deploy-type staging --release "$version_ref" >walk_note.log 2>&1; then\n'
-        "    cat walk_note.log\n"
-        "  else\n"
-        '    echo "::warning::promoting ${version_ref} to prod without confirmed staging '
-        'walk evidence: $(tail -n1 walk_note.log)"\n'
-        '    cat walk_note.log >>"$GITHUB_STEP_SUMMARY"\n'
-        "  fi"
-    ) in dispatch, "the staging-walk check for a prod promotion must be an ::warning::, never an ::error:: exit"
-
-
-def test_the_surface_walk_examines_every_credential_it_uses() -> None:
-    """#560: the member pass needs TA_MEMBER_EMAIL; a probe that checks two of
-    three secrets lets the walk start and fail later, less clearly."""
-    probe = step_text(WALK, "Are the surface-walk credentials configured")
-    for variable in ("TA_EMAIL", "TA_PASSWORD", "TA_MEMBER_EMAIL"):
-        assert f'"${{{variable}}}"' in probe, f"{variable} must be examined before the walk runs"
-
-
-def test_an_unconfigured_walk_is_skipped_rather_than_exiting_zero() -> None:
-    """#560: a step that exits 0 without walking reports `success`, which
-    tools/walk_evidence.py reads as evidence of a walk that never ran."""
-    walk = step(WALK, "Walk the deployed surface")
-    assert walk["if"] == "${{ steps.walk_credentials.outputs.ready == 'true' }}", (
-        "an unconfigured walk must be SKIPPED, never a step that exits 0 and reports success"
-    )
-    assert "exit 0" not in str(walk.get("run", ""))
-
-
-def test_every_release_walk_probes_the_mcp_credential_gate() -> None:
-    """#42: #728 closed with no deployed probe, and production MCP stayed open. The walk of
-    every staging and production release runs the unauthenticated-401 probe. The probe needs
-    no credential, so it is never skipped with the walk; it runs after a failed walk too, so
-    a broken page does not hide an open MCP route."""
-    spec = step(WALK, "Probe the MCP credential gate")
-    run = str(spec["run"])
-    assert "tools/surface_contract.py" in run and '"$TA_BASE_URL"' in run, run
-    condition = str(spec.get("if", ""))
-    assert "walk_credentials" not in condition, "the probe must not depend on the walk credentials"
-    assert "!cancelled()" in condition, "a failed walk step must not skip the probe"
-    assert "working-directory" not in spec, "tools/surface_contract.py resolves from the repository root"
-    names = [str(item.get("name", "")) for item in job(WALK, "walk")["steps"]]
-    assert names.index("Probe the MCP credential gate") > names.index("Walk the deployed surface")
-    # One definition of the deployed base URL for the walk and the probe.
-    assert "TA_BASE_URL" in job(WALK, "walk")["env"]
-    assert "TA_BASE_URL" not in (step(WALK, "Walk the deployed surface").get("env") or {})
-
-
-def test_the_walk_calls_mcp_with_the_token_of_its_own_environment() -> None:
-    """#1437 acceptance 3: the authenticated half runs only with a configured secret, is
-    skipped (never a success) without one, and picks the token by the walked environment,
-    so a missing production secret cannot fall back to the staging token."""
-    probe = step(WALK, "Is the MCP token of this environment configured")
-    call = step(WALK, "Call the MCP route with the environment token")
-    assert "steps.mcp_token.outputs.ready == 'true'" in str(call["if"])
-    assert "exit 0" not in str(call["run"])
-    assert "--authenticated" in str(call["run"]) and '"$TA_BASE_URL"' in str(call["run"])
-    for spec in (probe, call):
-        env = spec.get("env") or {}
-        assert env.get("STAGING_TOKEN") == "${{ secrets.MCP_BEARER_TOKEN_STAGING }}"
-        assert env.get("PROD_TOKEN") == "${{ secrets.MCP_BEARER_TOKEN_PROD }}"
-        assert "secrets." not in str(spec.get("run", "")), "a secret is selected in the shell, not in an expression"
-        assert '[ "$DEPLOY_TYPE" = "prod" ]' in str(spec["run"])
-    assert "UNVERIFIED" in str(probe["run"]) and "exit 1" not in str(probe["run"])
-
-
-def test_the_release_lane_is_not_deadlocked_by_a_missing_secret() -> None:
-    """#560: failing the run on unconfigured credentials blocked every prod
-    release, since prod requires a successful staging run."""
-    probe = str(step(WALK, "Are the surface-walk credentials configured")["run"])
-    assert "ready=false" in probe, "an unconfigured walk must be reported"
-    assert "exit 1" not in probe, "and must not fail the release lane"
-    assert "UNVERIFIED" in probe, "but must be unmistakable in the run summary"
-
-
-def test_the_walk_only_runs_after_a_successful_deploy_or_by_hand() -> None:
-    """#855/#860: a failed or cancelled deploy-release run has nothing live to
-    walk. The workflow_run trigger fires on EVERY conclusion (success, failure,
-    cancelled...), so the job itself must gate on success; workflow_dispatch is
-    the deliberate manual exception (the #811 flake recovery)."""
-    trigger = triggers(WALK)
-    assert trigger["workflow_run"]["workflows"] == ["Deploy release"]
-    assert trigger["workflow_run"]["types"] == ["completed"]
-    dispatch_inputs = trigger["workflow_dispatch"]["inputs"]
-    assert dispatch_inputs["deploy_type"]["options"] == ["staging", "prod"]
-    assert "version_ref" in dispatch_inputs
-
-    resolve = job(WALK, "resolve")
-    condition = str(resolve["if"])
-    assert "github.event_name == 'workflow_dispatch'" in condition
-    assert "github.event.workflow_run.conclusion == 'success'" in condition
-
-    walk_job = job(WALK, "walk")
-    assert walk_job["needs"] == "resolve"
-    assert "needs.resolve.outputs.applicable == 'true'" in str(walk_job["if"]), (
-        "a run that could not resolve a staging/prod deploy_type+version_ref must not attempt to walk anything"
-    )
-
-
-def test_the_walk_checks_out_the_released_tag_not_whatever_main_has_become() -> None:
-    """The tag is what deploy-release.yml actually built and deployed; main can
-    advance in the minutes this workflow waits to be triggered."""
-    checkout = next(
-        spec for spec in job(WALK, "walk")["steps"] if str(spec.get("uses", "")).startswith("actions/checkout")
-    )
-    assert checkout["with"]["ref"] == "refs/tags/${{ needs.resolve.outputs.version_ref }}"
-
-
-def test_the_sender_and_the_contract_agree_on_whose_staging_run_counts() -> None:
-    """infra2#571 blocker 2: the sender required an infra2 receiver-run URL while
-    infra2's verifier required this repo's own staging run."""
-    cli = (REPO_ROOT / "common/runtime/src/truealpha_tools/app_deploy_request.py").read_text(encoding="utf-8")
-    assert '_STAGING_RUN_PATH_RE = re.compile(r"\\A/wangzitian0/truealpha/actions/runs/' in cli
-    workflow = source(RELEASE)
-    assert "https://github.com/wangzitian0/truealpha/actions/runs/" in workflow
-    assert 'staging_run="$(gh api "/repos/wangzitian0/infra2/actions/runs/' not in workflow
-
-
-# --- delivery-report (#1412 R2 and R3; it replaces deploy-freshness) ---------------
-
-
-def test_the_delivery_report_is_a_scheduled_dashboard_not_a_gate() -> None:
-    """ADR A8: the report is a dashboard. It runs daily and on demand, holds no write grant,
-    and opens no issue. A pull_request trigger would make it a merge gate."""
-    on = triggers(DELIVERY)
-    assert set(on) == {"schedule", "workflow_dispatch"}, f"delivery-report triggers on {sorted(on)}"
-    assert on["schedule"] == [{"cron": "0 7 * * *"}], (
-        "the report reads the nightly verdicts at 07:00 UTC, after the last nightly check (06:15 UTC)"
-    )
-    workflow = yaml.safe_load(source(DELIVERY))
-    assert workflow["permissions"] == {"contents": "read", "actions": "read"}
-    assert list(workflow["jobs"]) == ["report"]
-    assert "permissions" not in workflow["jobs"]["report"], "a job-level grant would replace the workflow grant"
-    text = source(DELIVERY)
-    for writer in ("tools/escalate_issue.py", "gh issue", "issues: write"):
-        assert writer not in text, f"the dashboard calls {writer!r}: ADR A8 says it opens no issue"
-
-
-def test_the_delivery_report_runs_the_tool_with_the_token_and_the_tags() -> None:
-    """The report reads runs, attempts and jobs with the workflow token, and reads the nightly
-    expectations at the served release tag. A shallow checkout has no tags."""
-    report = step(DELIVERY, "Write the delivery report")
-    assert report.get("env", {}).get("GH_TOKEN") == "${{ github.token }}"
-    run = str(report["run"])
-    assert "${{" not in run, "an expression is interpolated into the shell; pass it through env"
-    assert run.strip() == "python3 tools/delivery_report.py --repo .", run
-    steps_of = job(DELIVERY, "report")["steps"]
-    checkout = next(s for s in steps_of if str(s.get("uses", "")).startswith("actions/checkout"))
-    assert checkout["with"]["fetch-depth"] == 0, "the expected checks are read at the deployed tag"
-    assert any("git fetch --tags" in str(s.get("run", "")) for s in steps_of)
-    assert not any("uv sync" in str(s.get("run", "")) for s in steps_of), "the report is stdlib-only"
 
 
 # --- escalation lifecycle: open on red, resolve on green (#876) ---------------
@@ -610,138 +375,6 @@ def test_the_condition_evaluator_keeps_githubs_precedence() -> None:
         _decides("contains(github.a, 'b')", {})
 
 
-# --- scheduler-liveness (#876 W5) ----------------------------------------------
-
-# The estate the watchdog of watchdogs covers. Every repository here runs, or
-# may run, a scheduled check; dropping one from the workflow's list makes its
-# dead schedules invisible again.
-ESTATE_REPOS = {
-    "wangzitian0/truealpha",
-    "wangzitian0/infra2",
-    "wangzitian0/finance_report",
-    "wangzitian0/infra2-sdk",
-}
-LIVENESS_CHECK = "Check every scheduled workflow in the estate is still ticking"
-
-
-def _liveness_arguments() -> list[str]:
-    """The tool's command line in the check step, with shell continuations joined."""
-    run = str(step(LIVENESS, LIVENESS_CHECK)["run"]).replace("\\\n", " ")
-    lines = [line for line in run.splitlines() if "tools/scheduler_liveness.py" in line]
-    assert len(lines) == 1, f"expected one scheduler_liveness.py call, found {lines}"
-    tokens = shlex.split(lines[0].split("|", 1)[0])
-    return tokens[tokens.index("tools/scheduler_liveness.py") + 1 :]
-
-
-def test_scheduler_liveness_covers_the_whole_estate_on_its_own_schedule() -> None:
-    """#876 W5: the check runs on a schedule and by hand, never on a PR (it holds
-    `issues: write` at workflow level), over all four repositories, reading the
-    runs listings it needs and nothing more."""
-    on = triggers(LIVENESS)
-    assert set(on) == {"schedule", "workflow_dispatch"}, f"scheduler-liveness triggers on {sorted(on)}"
-    workflow = yaml.safe_load(source(LIVENESS))
-    assert workflow["permissions"] == {"contents": "read", "actions": "read", "issues": "write"}
-    assert "permissions" not in job(LIVENESS, "liveness"), "a job-level grant would replace the pinned one"
-    assert workflow["concurrency"]["cancel-in-progress"] is False, "an open and a close must not cancel each other"
-
-    # Every positional argument is a repository, and together they are the
-    # estate: nothing else narrows the run.
-    positional = [argument for argument in _liveness_arguments() if not argument.startswith("-")]
-    positional.remove("$BOUND_CAP_HOURS")
-    assert sorted(positional) == sorted(ESTATE_REPOS), (
-        f"scheduler-liveness checks {sorted(positional)}; the estate is {sorted(ESTATE_REPOS)} — a repository "
-        f"missing here has its dead schedules invisible again"
-    )
-
-    tool = load_tool("scheduler_liveness")
-    crons = [tool.Cron.parse(expression) for expression in tool.schedule_of(source(LIVENESS))]
-    gap = tool.largest_gap(crons, datetime.now(UTC))
-    assert gap == timedelta(hours=6), f"scheduler-liveness ticks every {gap}, not every 6 hours"
-    assert all(0 not in cron.minutes for cron in crons), "top-of-hour schedules are the ones GitHub drops first"
-
-
-def test_scheduler_liveness_passes_the_cap_through_env_and_installs_what_it_reads_with() -> None:
-    """The dispatch input reaches the tool through env (never spliced into the
-    shell), under the context that exists on a schedule event, with no default
-    that would cap every manual run."""
-    check = step(LIVENESS, LIVENESS_CHECK)
-    assert check["env"]["BOUND_CAP_HOURS"] == "${{ github.event.inputs.bound_cap_hours }}"
-    assert check["env"]["GH_TOKEN"] == "${{ github.token }}"
-    run = str(check["run"])
-    assert "${{" not in run, "an expression is interpolated into the shell; pass it through env"
-    assert "set -euo pipefail" in run, "without pipefail the tee decides the step's verdict, not the tool"
-    arguments = _liveness_arguments()
-    assert arguments[arguments.index("--bound-cap-hours") + 1] == "$BOUND_CAP_HOURS"
-    dispatch = triggers(LIVENESS)["workflow_dispatch"]["inputs"]["bound_cap_hours"]
-    assert not dispatch.get("default"), "a defaulted cap would apply to every manual run, including the close"
-    # The tool reads workflow files with PyYAML; the sync must install it.
-    steps = job(LIVENESS, "liveness")["steps"]
-    sync = [str(item.get("run", "")) for item in steps if "uv sync" in str(item.get("run", ""))]
-    assert sync == ["uv sync --package truealpha-runtime --frozen"], sync
-    runtime = (REPO_ROOT / "common/runtime/pyproject.toml").read_text(encoding="utf-8")
-    assert '"pyyaml>=' in runtime, "truealpha-runtime no longer declares PyYAML; the liveness sync would not install it"
-
-
-def test_the_liveness_alert_opens_on_red_and_closes_only_at_the_measured_bounds() -> None:
-    """The open-and-resolve lifecycle (#876 W3), with the cap as the drill input: a
-    capped dispatch is a drill, and must never close a real alert."""
-    assert job(LIVENESS, "liveness")["env"]["ESCALATION_TITLE"] == (
-        "scheduler-liveness is red: a scheduled workflow stopped ticking"
-    ), "an open issue under an old title is never closed"
-    escalate = step(LIVENESS, "Escalate a scheduled failure to an issue")
-    resolve = step(LIVENESS, "Resolve the issue once every scheduler is ticking")
-    _assert_calls_the_tool(escalate, "open", "liveness escalate")
-    _assert_calls_the_tool(resolve, "resolve", "liveness resolve")
-
-    main = "refs/heads/main"
-    closes = [
-        ({"event_name": "schedule", "ref": main}, "the scheduled run"),
-        (
-            {"event_name": "workflow_dispatch", "ref": main, "event": {"inputs": {"bound_cap_hours": ""}}},
-            "a dispatch at the measured bounds",
-        ),
-        ({"event_name": "workflow_dispatch", "ref": main, "event": {"inputs": {}}}, "a dispatch without the input"),
-    ]
-    for github, what in closes:
-        assert _decides(resolve["if"], github), f"{what} is green at the measured bounds and must close the alert"
-        assert not _decides(resolve["if"], github, succeeded=False), f"a red {what} closed the alert"
-        assert _decides(escalate["if"], github, succeeded=False), f"a red {what} no longer escalates"
-        assert not _decides(escalate["if"], github), f"a green {what} escalates"
-    never = [
-        (
-            {"event_name": "workflow_dispatch", "ref": main, "event": {"inputs": {"bound_cap_hours": "0"}}},
-            "the drill",
-        ),
-        (
-            {"event_name": "workflow_dispatch", "ref": main, "event": {"inputs": {"bound_cap_hours": "999"}}},
-            "a capped dispatch",
-        ),
-        (
-            {"event_name": "workflow_dispatch", "ref": "refs/heads/feature", "event": {"inputs": {}}},
-            "a branch dispatch",
-        ),
-        ({"event_name": "schedule", "ref": "refs/heads/feature"}, "a run off main"),
-        ({"event_name": "pull_request", "ref": "refs/pull/1/merge"}, "a pull_request run"),
-        ({"event_name": "push", "ref": main}, "a push run"),
-    ]
-    for github, what in never:
-        assert not _decides(resolve["if"], github), f"{what} can close the scheduler-liveness alert"
-
-
-def test_every_schedule_in_this_repository_is_one_the_liveness_check_can_read() -> None:
-    """The live run reads every repository's files; this one's are checked at
-    review time too, so a cron the tool cannot read fails here before it turns
-    the watchdog red on main."""
-    tool = load_tool("scheduler_liveness")
-    now = datetime.now(UTC)
-    scheduled = {}
-    for path in sorted((REPO_ROOT / ".github/workflows").glob("*.yml")):
-        expressions = tool.schedule_of(path.read_text(encoding="utf-8"))
-        if expressions is not None:
-            scheduled[path.name] = tool.largest_gap([tool.Cron.parse(item) for item in expressions], now)
-    assert {DELIVERY, REPROOF, NIGHTLY, LIVENESS, SHARD_REFRESH} <= set(scheduled), sorted(scheduled)
-
-
 # --- issue-close-guard -------------------------------------------------------
 
 
@@ -771,240 +404,70 @@ def test_abolished_vision_close_workflows_and_guard_remain_deleted() -> None:
         assert not target.exists(), f"{rel_path} was abolished by ADR A8 and must not be restored"
 
 
-# --- auto-release-staging: the owner's 2026-09-17 decision ("先在 staging 做吧，
-# prod 回头再说", #860) is that an automatic release is staging-only, full stop.
-# `tools/auto_release.py`'s own decision logic is tested in test_auto_release.py
-# (#583's boundary: a tool's behaviour is tested beside the tool, a workflow's
-# shape is tested here); these tests are only about what this file can never
-# be made to do.
+# --- #1588: legacy CD/SRE workflows and runtime-hooks.manifest.json ----------
 
 
-def test_auto_release_never_writes_prod_anywhere_in_the_file() -> None:
-    """The direct, textual proof: no STEP this workflow runs ever types the
-    substring `--prod` — scoped to parsed step content (`run`/`if`/`env`/
-    `with`/`uses`), not the surrounding comments that explain why, which
-    necessarily name the very flag they forbid. `cut_release.sh` itself
-    additionally refuses `--auto --prod` together (test_cut_release.py) — this
-    is the other half of that defense: the automated path never types it."""
-    offenders = [spec_text(spec) for spec in steps(AUTO_RELEASE) if "--prod" in spec_text(spec)]
-    assert not offenders, offenders
+def test_legacy_cd_and_sre_workflows_and_scripts_remain_deleted() -> None:
+    """#1588: CD, surface walk, delivery report, and scheduler liveness moved to infra2.
+    The legacy workflows and scripts must remain deleted from the repository.
+    """
+    for rel_path in (
+        ".github/workflows/deploy-release.yml",
+        ".github/workflows/auto-release-staging.yml",
+        ".github/workflows/walk-release.yml",
+        ".github/workflows/delivery-report.yml",
+        ".github/workflows/scheduler-liveness.yml",
+        ".github/workflows/nightly-dagster-liveness.yml",
+        "tools/cut_release.sh",
+        "tools/owner_approval_gate.sh",
+        "tools/production_evidence_policy.json",
+        "tools/auto_release.py",
+        "tools/staging_evidence.py",
+        "tools/delivery_report.py",
+        "tools/walk_evidence.py",
+        "tools/app_deploy_request.py",
+        "tools/app_deploy_transport.py",
+        "tools/scheduler_liveness.py",
+        "tools/verified_sha_images.py",
+        "common/runtime/src/truealpha_tools/auto_release.py",
+        "common/runtime/src/truealpha_tools/staging_evidence.py",
+        "common/runtime/src/truealpha_tools/delivery_report.py",
+        "common/runtime/src/truealpha_tools/walk_evidence.py",
+        "common/runtime/src/truealpha_tools/release_runs.py",
+        "common/runtime/src/truealpha_tools/app_deploy_request.py",
+        "common/runtime/src/truealpha_tools/app_deploy_transport.py",
+        "common/runtime/src/truealpha_tools/scheduler_liveness.py",
+        "common/runtime/src/truealpha_tools/verified_sha_images.py",
+    ):
+        target = REPO_ROOT / rel_path
+        assert not target.exists(), f"{rel_path} was removed in #1588 and must not be restored"
 
 
-def test_auto_release_triggers_only_after_a_green_push_to_main() -> None:
-    """`branches: [main]` matches the head BRANCH NAME, which a pull_request
-    from a fork's own `main` also carries (main-health.yml's own comment) —
-    only a push event is a main commit, and only a green one may release."""
-    trigger = triggers(AUTO_RELEASE)
-    assert trigger["workflow_run"]["workflows"] == ["ci-required"]
-    assert trigger["workflow_run"]["types"] == ["completed"]
-    assert trigger["workflow_run"]["branches"] == ["main"]
-    release_job = job(AUTO_RELEASE, "release")
-    condition = str(release_job["if"])
-    assert "github.event.workflow_run.event == 'push'" in condition
-    assert "github.event.workflow_run.conclusion == 'success'" in condition
+def test_runtime_hooks_manifest_declares_the_four_verification_slots() -> None:
+    """#1588: runtime-hooks.manifest.json is the single contract for infra2 release-train hooks."""
+    from infra2_sdk.manifests import load_hooks_manifest
 
+    manifest_path = REPO_ROOT / "runtime-hooks.manifest.json"
+    assert manifest_path.is_file(), "runtime-hooks.manifest.json must exist at repository root"
+    hooks = load_hooks_manifest(manifest_path)
+    assert hooks.schema_version == 1
+    assert hooks.service == "truealpha/app"
+    assert set(hooks.slots) == {"smoke", "preview_gate", "staging_gate", "scheduled_audit"}
 
-def test_auto_release_is_debounced_for_twenty_minutes_before_it_re_reads_head() -> None:
-    """Owner constraint (#1322): a burst of merges batches into one release after a
-    3-minute quiet period. The wait runs before the checkout so `tools/auto_release.py`
-    re-reads main HEAD fresh afterwards."""
-    quiet = step_text(AUTO_RELEASE, "Quiet period")
-    assert "sleep 180" in quiet, "180s = 3 min debounce (#1322)"
-    release_steps = job(AUTO_RELEASE, "release")["steps"]
-    names = [s.get("name") for s in release_steps]
-    checkout_index = next(
-        i for i, s in enumerate(release_steps) if str(s.get("uses", "")).startswith("actions/checkout")
-    )
-    assert names.index("Quiet period") < checkout_index, (
-        "the checkout must happen AFTER the wait, or it cannot see a later push"
-    )
-
-
-def test_auto_release_checks_out_a_local_main_with_full_tag_history() -> None:
-    """`cut_release.sh` runs `git rev-parse main` and reads every vX.Y.Z tag —
-    a detached checkout or a shallow one makes both silently wrong."""
-    checkout = next(
-        spec
-        for spec in job(AUTO_RELEASE, "release")["steps"]
-        if str(spec.get("uses", "")).startswith("actions/checkout")
-    )
-    assert checkout["with"]["ref"] == "main"
-    assert checkout["with"]["fetch-depth"] == 0
-
-
-def test_auto_release_pushes_the_tag_with_a_real_user_token_not_github_token() -> None:
-    """#940: v0.0.87's tag push ran under the default GITHUB_TOKEN, and
-    GitHub's recursive-workflow guard silently drops any run-triggering event
-    produced by a push made with that token — the tag was pushed, claimed its
-    number, and 0 workflow runs ever started for it (measured: v0.0.86, pushed
-    by a human, triggered `ci-required` normally the same day). A live probe
-    on a throwaway branch/tag reproduced the same split before this fix
-    landed: INFRA2_PAT push -> 1 downstream run, github.token push -> 0. The
-    guard does not apply to a PAT (it is tied to a real user — `gh api user`
-    resolves INFRA2_PAT to the repo owner, not github-actions[bot]), so the
-    checkout must carry it: everything else in this job's git operations,
-    including cut_release.sh's own `git push origin $TAG`, inherits whatever
-    credential checkout configures.
-
-    This only proves the workflow's SHAPE — that the field is wired — not
-    that GitHub's live recursion guard behaves as documented; that half is
-    platform behaviour no unit test can exercise (the same honest limitation
-    #936 already flagged for this file) and was instead verified by the probe
-    above, by hand, against the real repository."""
-    checkout = next(
-        spec
-        for spec in job(AUTO_RELEASE, "release")["steps"]
-        if str(spec.get("uses", "")).startswith("actions/checkout")
-    )
-    assert checkout["with"].get("token") == "${{ secrets.INFRA2_PAT }}", (
-        "the tag push must run under a real-user credential, not this workflow's own "
-        "GITHUB_TOKEN, or its push triggers nothing downstream (#940)"
-    )
-
-
-def test_auto_release_fails_closed_before_checkout_when_the_push_credential_is_missing() -> None:
-    """A missing or rotated INFRA2_PAT must not silently fall through to a
-    bare `actions/checkout` (which would default back to github.token,
-    reintroducing #940) or fail later on checkout's own opaque auth error."""
-    release_steps = job(AUTO_RELEASE, "release")["steps"]
-    names = [s.get("name") for s in release_steps]
-    guard_index = names.index("Require a push credential GitHub's own token cannot provide")
-    checkout_index = next(
-        i for i, s in enumerate(release_steps) if str(s.get("uses", "")).startswith("actions/checkout")
-    )
-    assert guard_index < checkout_index, "the guard must run before checkout can fall back to github.token"
-    guard = release_steps[guard_index]
-    assert "secrets.INFRA2_PAT" in spec_text(guard)
-    assert "exit 1" in spec_text(guard)
-
-
-def test_auto_release_reads_the_push_credential_from_env_not_inlined_in_the_script() -> None:
-    """#941 review: the guard's secret check must come through `env:`, the
-    same pattern deploy-release.yml's own INFRA2_PAT check already uses — not
-    spliced directly into the `run:` block, which would put the secret
-    reference inside the rendered shell text `${{ }}`-expanded rather than
-    read from a shell variable."""
-    guard = step(AUTO_RELEASE, "Require a push credential GitHub's own token cannot provide")
-    assert guard.get("env", {}).get("INFRA2_PAT") == "${{ secrets.INFRA2_PAT }}"
-    assert "secrets.INFRA2_PAT" not in str(guard.get("run", "")), (
-        "the secret must be read from the env var, not interpolated directly into run:"
-    )
-    assert "INFRA2_PAT" in str(guard.get("run", "")), "the run: block must still read the env var it was given"
-
-
-def test_auto_release_configures_a_git_identity_before_tagging() -> None:
-    """No other workflow in this repository creates a `git commit` or `git tag
-    -a` — they all go through `gh`, which needs no local identity. This is the
-    first one that does (via `cut_release.sh`'s annotated tag), and a GitHub
-    Actions runner carries no default `user.name`/`user.email`: an annotated
-    tag fails outright without one."""
-    workflow = source(AUTO_RELEASE)
-    assert "git config user.name" in workflow
-    assert "git config user.email" in workflow
-
-    steps = job(AUTO_RELEASE, "release")["steps"]
-    identity_index = next(i for i, s in enumerate(steps) if "git config user.name" in str(s.get("run", "")))
-    cut_index = next(i for i, s in enumerate(steps) if "cut_release.sh" in str(s.get("run", "")))
-    assert identity_index < cut_index
-
-
-def test_auto_release_decides_with_stdlib_only_and_installs_no_workspace() -> None:
-    """`tools/auto_release.py`'s own docstring: "the job that runs this
-    installs nothing but the checkout." A `uv sync` here would be pure waste —
-    and if the tool ever stopped being stdlib-only, `test_ci_workflows.py`'s
-    own `test_every_workflow_installs_what_the_tools_it_runs_import` would
-    catch the missing install, so this is a cost check, not a safety net."""
-    offenders = [spec_text(spec) for spec in steps(AUTO_RELEASE) if "uv sync" in spec_text(spec)]
-    assert not offenders, offenders
-    decide_text = step_text(AUTO_RELEASE, "Decide whether to release")
-    assert "python3 tools/auto_release.py" in decide_text
-
-
-def test_auto_release_keeps_the_staging_red_issue_in_step_with_every_decision() -> None:
-    """#1468 F1: the decide step passes `--report-staging-red`. Without it a stopped train holds
-    its release and nothing names the red step, which is the state that the issue measured."""
-    decide_text = step_text(AUTO_RELEASE, "Decide whether to release")
-    assert "--report-staging-red" in decide_text
-    assert "--github-output" in decide_text
-
-
-def test_the_run_names_of_the_release_workflows_render_titles_that_the_train_reads() -> None:
-    """The train reads staging deploy and walk runs by title (`truealpha_tools.release_runs`).
-    If a run-name changes, the reader sees an empty history. This test renders both run-names with
-    sample values and matches them against the patterns that the reader uses."""
-    from truealpha_tools.release_runs import DEPLOY_TITLE, WALK_TITLE
-
-    deploy_name = yaml.safe_load(source(RELEASE))["run-name"]
-    rendered = deploy_name.replace("${{ inputs.deploy_type }}", "staging").replace(
-        "${{ inputs.version_ref }}", "v0.2.5"
-    )
-    deploy = DEPLOY_TITLE.match(rendered)
-    assert deploy is not None, rendered
-    assert (deploy["deploy_type"], deploy["release"]) == ("staging", "v0.2.5")
-
-    # The reader looks for the words "staging" and "prod" in the title. A rename of one option of
-    # the deploy type would leave the page matching through the other and read an empty history.
-    for file in (RELEASE, WALK):
-        dispatch = (yaml.safe_load(source(file)).get(True) or yaml.safe_load(source(file))["on"])["workflow_dispatch"]
-        assert {"staging", "prod"} <= set(dispatch["inputs"]["deploy_type"]["options"]), file
-
-    walk_name = yaml.safe_load(source(WALK))["run-name"]
-    # A manual walk renders `Walk Deploy <type> <ref>`. A walk that follows a deploy renders
-    # `Walk <display title of the deploy run>`, which is `Walk Deploy <type> <ref>` again.
-    manual = re.search(r"format\('(Walk Deploy \{0\} \{1\})'", walk_name)
-    chained = re.search(r"format\('(Walk \{0\})', github\.event\.workflow_run\.display_title\)", walk_name)
-    assert manual is not None and chained is not None, walk_name
-    for title in (manual.group(1).format("staging", "v0.2.5"), chained.group(1).format(rendered)):
-        walk = WALK_TITLE.match(title)
-        assert walk is not None, title
-        assert (walk["deploy_type"], walk["release"]) == ("staging", "v0.2.5")
-
-
-def test_auto_release_writes_trigger_sha_only_through_env_not_into_the_script() -> None:
-    """workflow_run executes this file from the default branch (main-health.yml's
-    own comment on the same trigger type) with a write token; nothing from the
-    triggering run is interpolated straight into a `run:` block regardless."""
-    decide_step = step(AUTO_RELEASE, "Decide whether to release")
-    assert decide_step["env"]["TRIGGER_SHA"] == "${{ github.event.workflow_run.head_sha }}"
-    assert "github.event.workflow_run" not in str(decide_step.get("run", ""))
-
-
-def test_auto_release_only_cuts_when_the_tool_said_release_and_passes_its_own_tag() -> None:
-    """The gate between "decided" and "acted": a step that ran regardless of
-    `steps.decide.outputs.release` would tag on every green main push, quiet
-    period or not."""
-    cut_step = step(AUTO_RELEASE, "Cut the release (staging only)")
-    assert cut_step["if"] == "steps.decide.outputs.release == 'true'"
-    text = spec_text(cut_step)
-    assert "cut_release.sh" in text
-    assert "--auto" in text, "marks the tag so tools/auto_release.py's own daily cap can count it (test_cut_release.py)"
-    assert "TAG" in cut_step.get("env", {}) and cut_step["env"]["TAG"] == "${{ steps.decide.outputs.tag }}"
-
-
-def test_auto_release_is_serialised_so_two_decisions_never_race_one_tag() -> None:
-    workflow = yaml.safe_load(source(AUTO_RELEASE))
-    concurrency = workflow["concurrency"]
-    assert concurrency["group"] == "auto-release-staging"
-    assert concurrency["cancel-in-progress"] is False
-
-
-def test_auto_release_has_only_the_permissions_it_needs() -> None:
-    """`contents: read` for the one contents read `github.token` still does —
-    `tools/auto_release.py`'s `GET /repos/.../commits/main` (#941 review: the
-    tag PUSH runs under INFRA2_PAT, not this token, so it no longer needs
-    `write`). `gh run list` / `gh run view` (main's ci-required, the tag's own
-    ci-required, the deploy/walk runs) are the Actions API, not `contents` —
-    covered by `actions: write`, which also dispatches the staging deploy and
-    surface walk. `pull-requests: read` is for the derived PR review-thread
-    check. `issues: write` is for the one staging-red issue (#1468 F1).
-    Nothing broader."""
-    workflow = yaml.safe_load(source(AUTO_RELEASE))
-    permissions = workflow["permissions"]
-    assert permissions["contents"] == "read"
-    assert permissions["actions"] == "write"
-    assert permissions["pull-requests"] == "read"
-    assert permissions["issues"] == "write", "the staging-red issue is opened, commented on and closed (#1468 F1)"
-    assert set(permissions) == {"contents", "actions", "pull-requests", "issues"}
+    for gate_slot in ("preview_gate", "staging_gate"):
+        spec = hooks.slots[gate_slot]
+        assert spec.run.index("tools/warm_surface.sh") < spec.run.index("node e2e/walk-tree.mjs"), (
+            f"{gate_slot} must warm the surface before running walk-tree.mjs"
+        )
+        assert "tools/surface_contract.py --authenticated" in spec.run
+        assert set(spec.required_env) == {
+            "APP_URL",
+            "APP_VERSION_REF",
+            "TA_EMAIL",
+            "TA_PASSWORD",
+            "TA_MEMBER_EMAIL",
+            "TA_MCP_TOKEN",
+        }
 
 
 # --- shard-weight refresh (#1503) ---------------------------------------------
@@ -1650,29 +1113,6 @@ def test_a_bare_python_runs_a_tool_only_after_its_job_installs_what_the_tool_imp
     )
 
 
-def test_two_different_releases_never_queue_behind_each_other() -> None:
-    """`docs/release-protocol.md` tells an author the tag push is the only lock
-    and that parallel releases do not deadlock. That claim rests entirely on the
-    version being part of the concurrency key, which is one edit away from being
-    false — and a workflow-level `group: truealpha-release` would serialise every
-    release behind every other with no error anywhere to say so.
-
-    `cancel-in-progress: false` is the other half: a second dispatch of the same
-    release is usually a retry of a deploy whose outcome is unknown, and
-    cancelling the first would leave nobody watching it.
-    """
-    workflow = yaml.safe_load(source(RELEASE))
-    concurrency = workflow["concurrency"]
-    assert "inputs.version_ref" in concurrency["group"], (
-        f"the release concurrency key is {concurrency['group']!r} and does not include the "
-        f"version, so two different releases would serialise (docs/release-protocol.md)"
-    )
-    assert "inputs.deploy_type" in concurrency["group"], (
-        "staging and prod for one version would serialise behind each other"
-    )
-    assert concurrency["cancel-in-progress"] is False, "a retry must wait for the in-flight deploy, never cancel it"
-
-
 def test_anything_that_caches_can_actually_save() -> None:
     """`actions/cache` needs `actions: write` to populate. With read-only it
     restores, misses every time, and reports success — an optimisation that
@@ -1762,8 +1202,6 @@ def test_the_split_python_jobs_cover_every_testpath() -> None:
             # test_pytest_shard.py separately proves the shards partition that
             # root exactly — neither check alone would be enough.
             for match in re.finditer(r"pytest_shard\.py\s+(.+?)\s+--shard", run):
-                import shlex
-
                 for arg in shlex.split(match.group(1)):
                     covered.add(arg)
             if run.startswith("uv run pytest "):
@@ -1771,8 +1209,6 @@ def test_the_split_python_jobs_cover_every_testpath() -> None:
                 # as a path would make the equality fail on correct workflows —
                 # or worse, mask a genuinely dropped package behind a flag
                 # token that happens to balance the set sizes (review).
-                import shlex
-
                 tokens = shlex.split(run)
                 covered.update(t for t in tokens[3:] if not t.startswith("-"))
     assert covered == testpaths, (
@@ -2200,220 +1636,6 @@ def test_each_image_lane_selects_only_the_paths_its_image_is_built_from(path: st
     assert selected_lanes(REQUIRED, [path]) & image_lanes == images
 
 
-def test_a_tag_run_attests_instead_of_re_running() -> None:
-    """A4 D2 (#673): a tag names a SHA main already proved.
-
-    Eleven August tags each re-ran the full suite on an identical, already-green
-    SHA. On a tag the suite lanes are now replaced by one attestation job before
-    the image publish (changes and the security lane still run; they cost
-    seconds); every clause the deploy evidence pins (workflow path, push event,
-    tag head_branch, title, success conclusion) is untouched, so this asserts
-    the mechanics that make that safe:
-
-    - the four suite lanes are EXPLICITLY off on tags — not left to whatever the
-      paths filter computes for a tag push, which is undefined behaviour;
-    - the attestation queries main's runs for THIS sha, green, push — drop any
-      of those qualifiers and a red or foreign run attests;
-    - both the image publish and the required summariser gate on it, so a tag on
-      an unverified SHA publishes nothing and the run is red.
-    """
-    workflow = yaml.safe_load(source(REQUIRED))
-    jobs = workflow["jobs"]
-
-    for lane in ("db", "python", "runtime", "web"):
-        assert "github.ref_type != 'tag'" in str(jobs[lane]["if"]), (
-            f"the {lane} lane runs on tags again — the tag run is back to re-proving an already-green SHA (#673 D2)"
-        )
-
-    attest = jobs["tag_verified"]
-    assert attest["if"] == "github.ref_type == 'tag'"
-    # Find the query by content, not position — steps[0] would go stale on the
-    # first added checkout/setup step without any behaviour change (review).
-    queries = [
-        str(step.get("run", ""))
-        for step in attest["steps"]
-        if "/actions/workflows/ci-required.yml/runs?" in str(step.get("run", ""))
-    ]
-    assert len(queries) == 1, (
-        f"expected exactly one step querying ci-required runs in tag_verified, found {len(queries)}"
-    )
-    query = queries[0]
-    for qualifier in ("head_sha=${{ github.sha }}", "branch=main", "event=push", "status=success"):
-        assert qualifier in query, (
-            f"the attestation no longer requires {qualifier!r} — without it a red, foreign or "
-            f"different-SHA run can attest a tag"
-        )
-
-    assert "tag_verified" in jobs["images_release"]["needs"]
-    assert "needs.tag_verified.result == 'success' || needs.tag_verified.result == 'skipped'" in str(
-        jobs["images_release"]["if"]
-    ), "an unattested tag must not publish images"
-    assert "tag_verified" in jobs["required"]["needs"], (
-        "required does not aggregate tag_verified — an unattested tag run would summarise green"
-    )
-
-
-def test_a_tag_re_tags_what_main_published_instead_of_rebuilding_it() -> None:
-    """#860: the tag run measured 2.2 min, and every second of it re-produced images the
-    SHA already had -- three cache-hit builds and three ~1 min publishes that minted a
-    second digest of the same bytes and, in passing, moved main's own `sha-<short>` pointer
-    onto it (v0.0.63: all three `sha-7de7813` tags equal the `v0.0.63` digests, none equal
-    what main had pushed). `tag_verified` already asserts that main published this SHA, so
-    the release re-tags main's digests and builds only what main did not publish (#731
-    skips an image the merge left untouched). What makes that safe:
-
-    - only a tag reuses; a main push and the manual force ARE the publisher, and the PR-time
-      `images_build` (which absorbed the PR-time `images_check`, #869) never sees the input,
-      so a PR still proves its image builds;
-    - `plan` decides per image through tools/verified_sha_images.py, whose own tests pin
-      that 404 is the one answer that means "build" and everything else is red;
-    - `retag` publishes nothing but a pointer: `imagetools create` at the digest `plan`
-      resolved, then an inspect that fails the job if the tag names anything else;
-    - `retag` and `publish` derive their tags from one identical metadata-action spec, so a
-      tag scheme change cannot leave the two paths naming different things; and the spec
-      still carries `type=sha,format=short`, the spelling the tool asks the registry for.
-    """
-    release = job(REQUIRED, "images_release")
-    assert str(release["with"]["reuse_verified_sha"]) == "${{ github.ref_type == 'tag' }}", (
-        "images_release must reuse on a tag and only on a tag — main and the manual force are the publisher"
-    )
-    assert "reuse_verified_sha" not in (job(REQUIRED, "images_build").get("with") or {}), (
-        "a PR must still prove its image BUILDS; reuse would let a broken Dockerfile merge green"
-    )
-    reuse = triggers(IMAGES)["workflow_call"]["inputs"]["reuse_verified_sha"]
-    assert reuse["type"] == "boolean" and reuse["default"] is False and reuse["required"] is False
-
-    select = step(IMAGES, "Select available images")
-    assert "python3 tools/verified_sha_images.py" in str(select["run"]), (
-        "plan no longer asks the registry what main published — every tag rebuilds again"
-    )
-    assert select["env"]["REUSE_VERIFIED_SHA"] == "${{ inputs.reuse_verified_sha }}"
-    assert select["env"]["SHA"] == "${{ github.sha }}", "the SHA asked about must be the one the tag points at"
-    assert 'if [[ "$REUSE_VERIFIED_SHA" == "true" ]]' in str(select["run"]), "the split must be gated on the input"
-    assert "set -euo pipefail" in str(select["run"]), "a failed split must fail the plan, not feed jq an empty string"
-    plan = job(IMAGES, "plan")
-    for output in ("matrix", "has_images", "retag_matrix", "has_retag"):
-        assert output in plan["outputs"], f"plan no longer exposes {output}"
-
-    retag = job(IMAGES, "retag")
-    assert retag["needs"] == "plan", "retag depends on the plan and on nothing that builds"
-    assert "inputs.publish" in str(retag["if"]) and "has_retag == 'true'" in str(retag["if"]), (
-        "a publish: false call (images_build on a PR) must never push a tag"
-    )
-    assert "fromJSON(needs.plan.outputs.retag_matrix)" in str(retag["strategy"]["matrix"])
-    pointer = step(IMAGES, "Re-tag ${{ matrix.image }} at the digest main published")
-    assert pointer["env"]["SOURCE"].endswith("@${{ matrix.digest }}"), (
-        "the re-tag must name the digest plan resolved, not a tag that could have moved since"
-    )
-    run = str(pointer["run"])
-    assert "docker buildx imagetools create" in run
-    assert "imagetools inspect" in run and '[ "$resolved" != "$DIGEST" ]' in run and "exit 1" in run, (
-        "the re-tag no longer verifies that the tag resolves to the verified digest"
-    )
-    assert "docker/build-push-action" not in "\n".join(spec_text(spec) for spec in retag["steps"]), (
-        "retag builds — the job exists precisely so a tag never does"
-    )
-
-    def metadata(job_id: str) -> dict:
-        specs = [spec for spec in job(IMAGES, job_id)["steps"] if "docker/metadata-action" in str(spec.get("uses", ""))]
-        assert len(specs) == 1, f"{job_id} has {len(specs)} metadata-action steps"
-        return specs[0]["with"]
-
-    assert metadata("retag")["tags"] == metadata("publish")["tags"], (
-        "retag and publish derive their tags from different specs — the two paths can name different things"
-    )
-    assert metadata("retag")["images"] == metadata("publish")["images"]
-    assert "type=sha,format=short" in metadata("publish")["tags"], (
-        "publish no longer tags sha-<short> — the reference tools/verified_sha_images.py asks the registry for"
-    )
-    # A build never runs for a re-tagged image: the build matrix is what the split left.
-    assert str(job(IMAGES, "build")["strategy"]["matrix"]) == "${{ fromJSON(needs.plan.outputs.matrix) }}"
-
-
-def test_the_plan_job_installs_the_sdk_on_each_run_that_asks_the_registry() -> None:
-    """#1369: `plan` installs what tools/verified_sha_images.py imports, on each run that calls it.
-
-    The split calls the tool only when `REUSE_VERIFIED_SHA` is "true", and that variable carries one input.
-    So each install step runs before the split, on that same input.
-    The general check above reads neither `if:` conditions nor the contents of an install. This test pins both.
-    The metadata of this environment maps each module that the tool imports to its distribution.
-    The dependency group that `uv sync --frozen --only-group` names must list that distribution.
-    """
-    plan = job(IMAGES, "plan")["steps"]
-    names = [spec.get("name") for spec in plan]
-    split = names.index("Select available images")
-    gate = str(plan[split]["env"]["REUSE_VERIFIED_SHA"]).removeprefix("${{").removesuffix("}}").strip()
-    setup = job_step(IMAGES, "plan", "Install uv for the verified-SHA split")
-    sync = job_step(IMAGES, "plan", "Install the pinned SDK for the verified-SHA split")
-    for spec in (setup, sync):
-        assert names.index(spec["name"]) < split, f"plan runs {spec['name']!r} after the split that needs it"
-        condition = str(spec.get("if", "")).removeprefix("${{").removesuffix("}}").strip()
-        assert condition == gate, (
-            f"plan runs {spec['name']!r} on {condition!r}, and the split runs on {gate!r}: "
-            f"a tag run can call the tool without the SDK (#1369)"
-        )
-
-    install = re.search(r"\buv sync --frozen --only-group (\S+)", str(sync["run"]))
-    assert install, "plan no longer runs `uv sync --frozen --only-group <group>`, so uv.lock does not pin the SDK"
-    group = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))["dependency-groups"]
-    assert install.group(1) in group, (
-        f"plan installs the group {install.group(1)!r}, and pyproject.toml has only {sorted(group)}"
-    )
-    listed = {
-        re.sub(r"[-_.]+", "-", re.split(r"[\s\[<>=!~;@]", str(requirement), maxsplit=1)[0]).lower()
-        for requirement in group[install.group(1)]
-    }
-    imported = _module_level_imports("verified_sha_images")
-    assert imported, (
-        "tools/verified_sha_images.py imports only the stdlib again: delete the two plan install steps and this test"
-    )
-    distributions = importlib.metadata.packages_distributions()
-    for module in sorted(imported):
-        provided = {re.sub(r"[-_.]+", "-", name).lower() for name in distributions.get(module, [])}
-        assert provided & listed, (
-            f"tools/verified_sha_images.py imports {module} (distribution {sorted(provided)}), and the "
-            f"{install.group(1)!r} group that plan installs lists only {sorted(listed)} (#1369)"
-        )
-
-
-def test_release_script_reviews_the_pr_that_produced_the_release_sha() -> None:
-    """v0.0.34's first prod dispatch: deploy-release's prod gate pins the
-    reviewed PR's merge_commit_sha to the release SHA, but cut_release passed
-    PR_LIST[0] — in a batch, only the last-merged PR satisfies the gate. Pin
-    both halves of the fix:
-
-    - cut_release selects the reviewed PR by merge-commit == main HEAD and
-      fails closed before tagging when no named PR matches;
-    - the health-confirm step's fromJson is guarded, so a failed request step
-      reports its own error instead of "Error reading JToken" template noise.
-    """
-    script = (REPO_ROOT / "tools" / "cut_release.sh").read_text(encoding="utf-8")
-    assert '[ "$MERGE_SHA" = "$LOCAL_MAIN" ] && REVIEWED_PR="$PR"' in script, (
-        "cut_release no longer selects the reviewed PR by merge==HEAD"
-    )
-    assert '[ -n "$REVIEWED_PR" ] || fail' in script, (
-        "cut_release no longer fails closed before tagging when no named PR produced main HEAD"
-    )
-    assert 'reviewed_change_url="https://github.com/$REPO/pull/$REVIEWED_PR"' in script, (
-        "prod dispatch does not use the merge==HEAD PR as the reviewed change (the v0.0.34 PR_LIST[0] defect)"
-    )
-
-    deploy = source(RELEASE)
-    guarded = "steps.request.outputs.json != '' && fromJson(steps.request.outputs.json)"
-    assert guarded in deploy, (
-        "EXPECTED_RELEASE fromJson is unguarded again — a failed request step will bury "
-        "its error under a JToken template failure"
-    )
-    confirm = step(RELEASE, "Confirm the deployed release is healthy")
-    assert "steps.request.outputs.json != ''" in str(confirm.get("if", "")), (
-        "the health confirmation no longer skips on an empty request output — with the env "
-        "guard falling back to '', health_check treats empty expected as don't-verify"
-    )
-    assert "refusing a vacuous health confirmation" in str(confirm.get("run", "")), (
-        "the health confirmation no longer fails closed on an empty EXPECTED_RELEASE"
-    )
-
-
 def test_a_failing_shard_lane_fails_instead_of_running_the_whole_suite() -> None:
     """A4 B1 (#673): the degraded path of the sharded data-engine lane.
 
@@ -2556,11 +1778,8 @@ def test_dagster_liveness_job_is_gated_off_a_pr_and_unconditional_elsewhere() ->
     ci-required.yml's `python` job computes the decision (not `github.event_name` read
     inside the called workflow, whose value in a called workflow is the CALLER's and not
     this repo's to assume) and passes it as a `workflow_call` input; ci-python.yml's
-    liveness job is gated on that input, or on `dagster_liveness_only`, which the nightly
-    caller sets — the standing check that PR-gating does not mean "only tested by
-    accident". The three heavier jobs skip on that same input so the nightly is
-    liveness-only, not a timer that re-runs the whole suite. Every gate here is an input
-    the caller names, never a read of the caller's event.
+    liveness job is gated on that input. Every gate here is an input the caller names,
+    never a read of the caller's event.
     """
     caller = job(REQUIRED, "python")
     decision = str(caller["with"]["dagster_liveness_required"])
@@ -2573,29 +1792,18 @@ def test_dagster_liveness_job_is_gated_off_a_pr_and_unconditional_elsewhere() ->
         f"PR that touches the dagster surface would never run the liveness job either"
     )
 
-    for name in ("dagster_liveness_required", "dagster_liveness_only"):
-        liveness_input = triggers(PYTHON)["workflow_call"]["inputs"][name]
-        assert liveness_input["type"] == "boolean" and liveness_input["default"] is False, (
-            f"{name} must default closed — an unset input on a direct call must not silently change what runs"
-        )
+    liveness_input = triggers(PYTHON)["workflow_call"]["inputs"]["dagster_liveness_required"]
+    assert liveness_input["type"] == "boolean" and liveness_input["default"] is False, (
+        "dagster_liveness_required must default closed — an unset input on a direct call must not silently change what runs"
+    )
 
-    # The nightly is a scheduled CALLER, and ci-python.yml stays `workflow_call`-only: a
-    # reusable workflow that also declares its own triggers and permissions gets NO run on a
-    # PR — #878's first push never started ci-required at all, with no error anywhere.
+    # ci-python.yml stays `workflow_call`-only: a reusable workflow that also declares its
+    # own triggers and permissions gets NO run on a PR — #878's first push never started
+    # ci-required at all, with no error anywhere.
     assert set(triggers(PYTHON)) == {"workflow_call"}, (
         f"ci-python.yml declares {sorted(triggers(PYTHON))} — a reusable workflow with its own "
-        f"triggers silently gets no PR run (#878); the nightly belongs in {NIGHTLY}"
+        f"triggers silently gets no PR run (#878)"
     )
-    nightly = triggers(NIGHTLY)
-    assert nightly.get("schedule") and nightly["schedule"][0].get("cron"), (
-        f"{NIGHTLY} no longer has a schedule — #855 A4's nightly coverage for the PRs the "
-        f"narrow filter does not match is gone"
-    )
-    assert "workflow_dispatch" in nightly, f"{NIGHTLY} must be runnable by hand for a drill"
-    caller = job(NIGHTLY, "python")
-    assert caller["uses"] == "./.github/workflows/ci-python.yml"
-    assert caller["with"]["dagster_liveness_only"] is True, "the nightly must force the liveness job on, alone"
-    assert caller["permissions"].get("actions") == "write", "setup-uv's cache saves only with actions: write (#645)"
 
     liveness = job(PYTHON, "dagster-code-server-liveness")
     condition = str(liveness["if"])
@@ -2603,23 +1811,14 @@ def test_dagster_liveness_job_is_gated_off_a_pr_and_unconditional_elsewhere() ->
         f"the liveness job's if is {condition!r} — it no longer reads the caller's decision, so "
         f"it either always runs (back on the PR critical path) or never does"
     )
-    assert "inputs.dagster_liveness_only" in condition, (
-        f"the liveness job's if is {condition!r} — the nightly's input no longer forces it on, so "
-        f"a nightly run would tick green while testing nothing"
-    )
     assert "github.event_name" not in condition, (
         f"the liveness job's if is {condition!r} — inside a reusable workflow that context is the "
         f"caller's; the contract is the named inputs"
     )
 
-    for lane in ("gates", "test-core"):
-        assert str(job(PYTHON, lane)["if"]) == "${{ !inputs.dagster_liveness_only }}", (
-            f"{lane} runs on the nightly too — the nightly is meant to be liveness-only, "
-            f"not a timer that re-runs the whole suite"
-        )
     de_cond = str(job(PYTHON, "test-data-engine")["if"])
-    assert "!inputs.dagster_liveness_only" in de_cond and "inputs.data_engine_required" in de_cond, (
-        f"test-data-engine condition {de_cond!r} must skip on nightly and gate on data_engine_required"
+    assert "inputs.data_engine_required" in de_cond, (
+        f"test-data-engine condition {de_cond!r} must gate on data_engine_required"
     )
 
 
@@ -3191,31 +2390,9 @@ def test_no_code_path_reintroduces_qlib() -> None:
 
 
 def test_main_pushes_never_collide_and_a_tag_run_can_never_be_cancelled() -> None:
-    """#708 measured 2 of 14 main merges colliding and turned `cancel-in-progress`
-    on for every event, so main pushes collapse instead of each burst queueing
-    ~16 extra jobs in front of every open PR. Re-measured 2026-09-16 (#860): 6 of
-    27 main-push runs were cancelled (22%, five times #708's rate), and one of
-    them — 57d25316 — was a run `cut_release` was WAITING ON: it died mid-flight
-    with "finished non-green: cancelled" and the release ceremony restarted from
-    scratch instead of resuming. Collapsing collisions is not the same as
-    preventing them, and #708 did not measure what happens when the collision
-    kills a run something else is blocked on.
-
-    So a non-tag push now keys its group by `github.sha`: each main commit gets
-    its own group, nothing else can ever share it, and `cancel-in-progress`
-    never has a second run in the group to cancel it with — main can no longer
-    cancel a run something else is waiting on, by construction, the same way
-    finance_report's `ci.yml` already does for its push group.
-
-    A tag push is the one push that keeps the OLD `github.ref` key (moved from
-    the test this replaces, not deleted): a tag's SHA is always one main already
-    ran and published green — `cut_release` refuses to tag otherwise — so it
-    never needs isolating from main, only from another run on the SAME tag ref,
-    which the ref already gives it, and which the event suffix protects from a
-    workflow_dispatch on that same ref: without the event in the key, a manual
-    dispatch on the same tag ref shares the group and cancels the release run
-    mid-publish. Two dispatches on the same ref, or two tag pushes, still
-    cancel each other — that is still what you want.
+    """#708/#860: each main push keys its concurrency group by `github.sha` so two
+    main commits never share a group and `cancel-in-progress` never kills a main-branch
+    image build/publish mid-flight, while PR runs still collapse to their newest push.
     """
     concurrency = yaml.safe_load(source(REQUIRED))["concurrency"]
     group = str(concurrency["group"])
@@ -3223,79 +2400,16 @@ def test_main_pushes_never_collide_and_a_tag_run_can_never_be_cancelled() -> Non
         "PR runs no longer collapse to their newest push — every superseded PR run now queues "
         "behind the one that replaced it"
     )
-    assert "github.event_name == 'push'" in group and "github.ref_type != 'tag'" in group, (
-        f"the concurrency key is {group!r}: a non-tag push is no longer routed to its own "
-        f"SHA-keyed group, so two main commits can land in the same group again and "
-        f"cancel-in-progress can kill a run a release ceremony or an open PR is waiting on"
+    assert "github.event_name == 'push'" in group, (
+        f"the concurrency key is {group!r}: a main push is no longer routed to its own "
+        f"SHA-keyed group, so two main commits can land in the same group again"
     )
     assert "github.sha" in group, (
-        f"the concurrency key is {group!r}: it no longer uses github.sha, so a non-tag push "
+        f"the concurrency key is {group!r}: it no longer uses github.sha, so a main push "
         f"cannot get its own group and main pushes go back to colliding (measured 6/27, #860)"
     )
-    assert "github.ref" in group, (
-        f"the concurrency key is {group!r}: with cancel-in-progress on and no ref in the key, a "
-        f"merge landing during a tag run CANCELS it — the release publishes no images and fails "
-        f"after the tag push, which the protocol treats as the lock"
-    )
-    assert "github.event_name" in group, (
-        f"the concurrency key is {group!r}: the ref alone does not isolate a tag PUSH from a "
-        f"manual workflow_dispatch on the same tag, which would share the group and cancel the "
-        f"release run mid-publish"
-    )
-
-
-def test_the_walk_warms_the_pages_it_is_about_to_open() -> None:
-    """#698: the walk's first navigation raced the container swap — v0.0.34's
-    prod deploy timed out on `networkidle` at /research/rankings and a rerun on
-    the warm container passed with no code change (run 33356222058). The health
-    gate polls llm-service; app-web is a different container.
-
-    This asserts only the wiring — that the walk calls the warm-up first, with
-    its own base URL. Whether the warm-up can fail is a property of
-    `tools/warm_surface.sh`, and it is proven by RUNNING it in
-    test_warm_surface.py. The first version of this test asserted that by
-    slicing the YAML text, and the slice silently selected the whole script,
-    including the walk invocation: PyYAML strips a block scalar's common
-    indentation, so the separator (copied from how the line looks in the file)
-    was never found and `split` returned its input. It passed for a reason
-    unrelated to the property — the #583 shape, one function below the docstring
-    that describes it.
-    """
-    walk = str(step(WALK, "Walk the deployed surface")["run"])
-    assert "tools/warm_surface.sh" in walk, (
-        "the walk no longer warms the app-web surface before opening it — the first navigation "
-        "races the container swap again (#698)"
-    )
-    # The path must RESOLVE from the step's own working-directory, not merely
-    # appear in the text. This is the defect that shipped: the step sets
-    # `working-directory: apps/app-web` for the walk, so a bare
-    # `tools/warm_surface.sh` resolved to apps/app-web/tools/warm_surface.sh
-    # and `Deploy staging v0.0.38` died with exit 127. The guard above asserted
-    # the call was present and said nothing about whether it could run —
-    # another lane found it in production and spent a PR on it (#717).
-    spec = step(WALK, "Walk the deployed surface")
-    workdir = str(spec.get("working-directory", ""))
-    for line in str(spec["run"]).splitlines():
-        if "warm_surface.sh" not in line or line.strip().startswith("#"):
-            continue
-        invocation = line.strip().split()[0].strip('"')
-        resolved = (
-            REPO_ROOT / invocation.replace("$GITHUB_WORKSPACE/", "")
-            if "$GITHUB_WORKSPACE" in invocation
-            else REPO_ROOT / workdir / invocation
-        )
-        assert resolved.exists(), (
-            f"the walk invokes {invocation!r} from working-directory {workdir!r}, which resolves to "
-            f"{resolved.relative_to(REPO_ROOT) if REPO_ROOT in resolved.parents else resolved} — "
-            f"that file does not exist, and the step dies with exit 127 on the next deploy (#717)"
-        )
-    assert walk.index("warm_surface.sh") < walk.index("node e2e/walk-tree.mjs"), (
-        "the warm-up runs after the walk, which is no warm-up at all"
-    )
-    assert '"$TA_BASE_URL"' in walk.split("node e2e", 1)[0], (
-        "the warm-up targets something other than the walk's own base URL — two definitions of "
-        "where the deployment lives is one too many"
-    )
+    assert "github.ref" in group
+    assert "github.event_name" in group
 
 
 def test_the_split_web_jobs_still_run_every_web_check() -> None:
@@ -3409,7 +2523,7 @@ def test_every_buildx_setup_retries_once_after_a_docker_hub_failure() -> None:
     test green, and the re-run passed. Each job that sets up buildx does so twice: once with
     `continue-on-error`, then — only if that failed — after a pause. A job that drops the
     retry is back to one flaky pull deciding main's colour."""
-    for name in ("build", "publish", "retag"):
+    for name in ("build", "publish"):
         steps = job(IMAGES, name)["steps"]
         setups = [i for i, s in enumerate(steps) if str(s.get("uses", "")).startswith("docker/setup-buildx-action@")]
         assert len(setups) == 2, f"{name} sets up buildx {len(setups)} time(s); expected a first try and one retry"
@@ -3492,140 +2606,6 @@ def test_the_publish_record_root_holds_only_the_record() -> None:
         f"publish record and nothing else; git tracks {entries}. Scan what was added, or remove "
         f"the exclusion."
     )
-
-
-# --- #1056: only a production deployment needs the owner ----------------------------
-# Owner instruction, 2026-10-06 (infra2#1035): production needs the owner's approval of
-# the exact SHA and the owner's presence. `deploy-release.yml` with `deploy_type=prod` is
-# the second path to production beside `tools/cut_release.sh --prod`, so it carries the
-# same gate. The tests run the step's own script text, not a copy of it: a workflow edit
-# that loosens the step changes what these tests execute.
-
-OWNER_GATE_STEP = "Require the owner's approval of the release SHA for production"
-RELEASE_TAG = "v1.2.3"
-SHA_THE_OWNER_DID_NOT_APPROVE = "fedcba9876543210fedcba9876543210fedcba98"
-
-
-def _repo_with_a_release_tag(tmp_path: Path) -> tuple[Path, str]:
-    """A throwaway checkout holding the gate script and one annotated release tag, which
-    is all the step reads: it resolves the tag to a commit with `git rev-list`."""
-    repo = tmp_path / "release_checkout"
-    (repo / "tools").mkdir(parents=True)
-    shutil.copy(REPO_ROOT / "tools" / "owner_approval_gate.sh", repo / "tools" / "owner_approval_gate.sh")
-    identity = ["-c", "user.name=release-test", "-c", "user.email=release-test@example.invalid"]
-    signing = ["-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"]
-    environment = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
-
-    def git(*arguments: str) -> str:
-        return subprocess.run(
-            ["git", *identity, *signing, *arguments],
-            cwd=repo,
-            capture_output=True,
-            text=True,
-            check=True,
-            env=environment,
-        ).stdout.strip()
-
-    git("init", "-q", "-b", "main")
-    git("commit", "-q", "--allow-empty", "-m", "release")
-    git("tag", "-a", RELEASE_TAG, "-m", RELEASE_TAG)
-    return repo, git("rev-parse", "HEAD")
-
-
-def _run_owner_gate_step(
-    repo: Path, *, deploy_type: str, approved: str, version_ref: str = RELEASE_TAG
-) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        ["bash", "-c", str(step(RELEASE, OWNER_GATE_STEP)["run"])],
-        cwd=repo,
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=60,
-        env={
-            "PATH": os.environ["PATH"],
-            "DEPLOY_TYPE": deploy_type,
-            "VERSION_REF": version_ref,
-            "OWNER_APPROVED_SHA": approved,
-        },
-    )
-
-
-def test_a_prod_dispatch_carrying_the_approved_sha_passes_the_owner_gate(tmp_path: Path) -> None:
-    repo, release_sha = _repo_with_a_release_tag(tmp_path)
-
-    result = _run_owner_gate_step(repo, deploy_type="prod", approved=release_sha)
-
-    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
-    assert f"owner approval covers {release_sha}" in result.stdout
-
-
-@pytest.mark.parametrize(
-    ("approved", "refusal"),
-    [
-        ("", "needs the owner's approval of the exact release SHA"),
-        (SHA_THE_OWNER_DID_NOT_APPROVE, "does not cover this commit"),
-        ("not-a-sha", "exactly 40 characters"),
-    ],
-)
-def test_a_prod_dispatch_without_a_matching_approval_stops_at_the_owner_gate(
-    tmp_path: Path, approved: str, refusal: str
-) -> None:
-    repo, _ = _repo_with_a_release_tag(tmp_path)
-
-    result = _run_owner_gate_step(repo, deploy_type="prod", approved=approved)
-
-    assert result.returncode != 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
-    assert refusal in result.stderr, result.stderr
-    assert "::error::production needs the owner's approval" in result.stdout, result.stdout
-
-
-def test_a_prod_dispatch_for_a_missing_tag_stops_at_the_owner_gate(tmp_path: Path) -> None:
-    repo, release_sha = _repo_with_a_release_tag(tmp_path)
-
-    result = _run_owner_gate_step(repo, deploy_type="prod", approved=release_sha, version_ref="v9.9.9")
-
-    assert result.returncode != 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
-    assert "release SHA is not a 40-character" in result.stderr, result.stderr
-
-
-@pytest.mark.parametrize("deploy_type", ["staging", "preview/tag"])
-def test_a_deploy_that_is_not_production_needs_no_owner_approval(tmp_path: Path, deploy_type: str) -> None:
-    """The other half of the owner's instruction: staging and preview are the agent's."""
-    repo, _ = _repo_with_a_release_tag(tmp_path)
-
-    result = _run_owner_gate_step(repo, deploy_type=deploy_type, approved="")
-
-    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
-    assert "no owner approval is needed" in result.stdout
-
-
-def test_the_owner_gate_runs_first_cannot_be_skipped_and_reads_the_input() -> None:
-    inputs = triggers(RELEASE)["workflow_dispatch"]["inputs"]
-    assert "owner_approved_sha" in inputs, "deploy-release.yml has no way to carry the owner's approval"
-    assert inputs["owner_approved_sha"]["required"] is False, (
-        "the input is required only for prod; a required input would force an approval onto staging"
-    )
-
-    gate = step(RELEASE, OWNER_GATE_STEP)
-    assert gate["env"]["OWNER_APPROVED_SHA"] == "${{ inputs.owner_approved_sha }}"
-    assert gate["env"]["DEPLOY_TYPE"] == "${{ inputs.deploy_type }}"
-    assert "if" not in gate, "an `if` on the gate step can skip it; the script decides by deploy_type itself"
-    assert "continue-on-error" not in gate, "a gate that may fail without failing the job is not a gate"
-    assert "continue-on-error" not in job(RELEASE, "request"), "the job must fail when the gate fails"
-
-    names = [spec.get("name") or spec.get("uses") for spec in job(RELEASE, "request")["steps"]]
-    gate_at = names.index(OWNER_GATE_STEP)
-    for later in (
-        "./.github/actions/setup-uv",
-        "Install the pinned SDK contract and the workspace",
-        "Verify release evidence and render request",
-        "Dispatch the validated request to infra2",
-    ):
-        assert gate_at < names.index(later), (
-            f"{later!r} runs before the owner gate: a prod dispatch must fail in seconds, before any "
-            f"install, evidence read or dispatch to infra2"
-        )
 
 
 def test_gates_runs_complexity_gate() -> None:
@@ -3764,5 +2744,5 @@ def test_a_job_that_installs_a_playwright_browser_does_not_ride_the_moving_runne
         for job_id, spec in yaml.safe_load(path.read_text())["jobs"].items():
             if any(installs.search(str(item.get("run", ""))) for item in spec.get("steps", [])):
                 found[f"{path.name}:{job_id}"] = spec.get("runs-on")
-    assert set(found) == {"ci-web.yml:browser", "walk-release.yml:walk"}, found
+    assert set(found) == {"ci-web.yml:browser"}, found
     assert {job: runner for job, runner in found.items() if runner != "ubuntu-24.04"} == {}, found

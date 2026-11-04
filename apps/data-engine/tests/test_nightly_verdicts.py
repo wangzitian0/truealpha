@@ -12,11 +12,9 @@ from __future__ import annotations
 import io
 import json
 import os
-import re
 import urllib.error
 import urllib.request
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 
 import dagster as dg
@@ -804,12 +802,11 @@ def test_a_working_key_is_a_green_verdict_through_the_deployed_job(monkeypatch, 
 
 
 def test_the_probe_is_scheduled_daily_before_the_watchdog_reads_it() -> None:
-    """The delivery report reads the verdicts at the hour of its own cron (07:00 UTC)."""
-    workflow = Path(__file__).resolve().parents[3] / ".github" / "workflows" / "delivery-report.yml"
-    (report_hour,) = re.findall(r'cron: "0 (\d+) \* \* \*"', workflow.read_text(encoding="utf-8"))
+    """The scheduled audit reads the verdicts at 07:00 UTC."""
+    report_hour = 7
     schedule = quality.defs.get_schedule_def("model_key_health_schedule")
     minute, hour, *rest = schedule.cron_schedule.split()
-    assert rest == ["*", "*", "*"] and int(hour) < int(report_hour)
+    assert rest == ["*", "*", "*"] and int(hour) < report_hour
     assert schedule.default_status == dg.DefaultScheduleStatus.RUNNING
     tick = datetime(2026, 9, 16, int(hour), int(minute), tzinfo=UTC)
     request = schedule(dg.build_schedule_context(scheduled_execution_time=tick))

@@ -1809,15 +1809,15 @@ def test_the_sampler_sensor_folds_the_reading_with_the_boot_deployment_and_launc
 # -- the order of the nightly night (#1484) ----------------------------------------------------------------
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-DELIVERY_REPORT_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "delivery-report.yml"
 NIGHTLY_CHECKS = REPO_ROOT / "tools" / "nightly_verdicts.json"
+REPORT_CRON = "0 7 * * *"
 
 
 def _minutes_of_day(expression: str) -> list[int]:
     """Every time of day (minutes after 00:00 UTC) at which the cron fires."""
     from truealpha_runtime.testing import load_tool
 
-    cron = load_tool("scheduler_liveness").Cron.parse(expression)
+    cron = load_tool("nightly_verdicts").Cron.parse(expression)
     return sorted(hour * 60 + minute for hour in cron.hours for minute in cron.minutes)
 
 
@@ -1869,11 +1869,7 @@ def _deployed_shape_cron() -> str:
 
 
 def _report_cron() -> str:
-    import re
-
-    found = re.findall(r'^\s*-?\s*cron:\s*"([^"]+)"', DELIVERY_REPORT_WORKFLOW.read_text(), flags=re.MULTILINE)
-    assert len(found) == 1, f"the delivery report has {len(found)} schedules"
-    return found[0]
+    return REPORT_CRON
 
 
 def test_the_runtime_shape_check_follows_every_nightly_check_and_precedes_the_report() -> None:

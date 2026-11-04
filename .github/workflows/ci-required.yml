@@ -1,12 +1,5 @@
 name: ci-required
 
-# A release-tag push must produce the deterministic display_title declared in
-# tools/production_evidence_policy.json ("Release Images {version_ref}") — infra2's
-# production-evidence verification matches on it (#464 / infra2#576). Non-tag runs
-# render an empty run-name, which GitHub replaces with the default title (the head
-# commit message / PR title), so day-to-day runs are unchanged.
-run-name: ${{ github.ref_type == 'tag' && format('Release Images {0}', github.ref_name) || '' }}
-
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
@@ -14,7 +7,6 @@ on:
     types: [checks_requested]
   push:
     branches: [main]
-    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
   workflow_dispatch:
     inputs:
       force_images:
@@ -27,35 +19,8 @@ permissions:
   contents: read
   pull-requests: read
 
-# #708 measured 2 of the last 14 main merges colliding inside the ~6 min a main
-# run takes, and turned `cancel-in-progress` on for every event so the newer
-# run collapses the older one instead of ~16 extra jobs queueing in front of
-# every open PR. Re-measured 2026-09-16 (#860): 6 of 27 main-push runs were
-# cancelled — d7fafd59, e1cda5fb, a35bc1a3, 2ea74035, fbf5eb48, 57d25316 — 22%,
-# five times #708's rate. One of the six, 57d25316, was a run `cut_release` was
-# WAITING ON: it died with "finished non-green: cancelled" and the release
-# ceremony restarted from scratch instead of resuming. #708's "re-attributed,
-# not lost" reasoning holds for the CODE — the newer run does cover the older
-# SHA — but not for a caller blocked on that exact run's own conclusion, which
-# is precisely what a release ceremony, and every open PR queued behind main,
-# does. finance_report's `ci.yml` keys its push group by `github.sha` for
-# exactly this reason: every commit gets its own group, so main pushes never
-# share one and never cancel each other, by construction — no
-# `cancel-in-progress` heuristic required. The key below does the same for a
-# non-tag push.
-#
-# A tag push still keys on `github.ref` (unchanged from #708): its SHA is
-# always one main already ran and published green — `cut_release` refuses to
-# tag otherwise — so a tag run never needs isolating from main, only from
-# another run on the SAME tag ref, which the ref already gives it. The event
-# stays in the key for the reason #708 added it, unchanged: without it, a
-# manual workflow_dispatch on the same ref as a tag push shares the group and
-# cancels the release run mid-publish. Two workflow_dispatch runs on the same
-# ref, or two tag pushes, still cancel each other — that is still what you
-# want. `pull_request` is untouched: PR runs still collapse to their newest
-# push under `cancel-in-progress: true`.
 concurrency:
-  group: ci-required-${{ (github.event_name == 'push' && github.ref_type != 'tag') && github.sha || github.event.pull_request.number || github.ref }}-${{ github.event_name }}
+  group: ci-required-${{ github.event_name == 'push' && github.sha || github.event.pull_request.number || github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 jobs:
@@ -77,7 +42,7 @@ jobs:
         with:
           fetch-depth: 0
       - id: filter
-        if: github.ref_type != 'tag' && github.event_name != 'merge_group'
+        if: github.event_name != 'merge_group'
         uses: dorny/paths-filter@v3
         with:
           filters: |
@@ -144,6 +109,7 @@ jobs:
               - 'docs/architecture-decisions/A3-source-governance.md'
               - 'docs/datahub-quality-report.md'
               - 'docs/release-protocol.md'
+              - 'runtime-hooks.manifest.json'
             # #855 A4: dagster-code-server-liveness (truealpha#454's daemon
             # self-termination class) sat on every PR's and every main push's
             # critical path — 151-160s of it, most of the job's own wall time —
@@ -232,39 +198,6 @@ jobs:
               - '.github/workflows/release-images.yml'
               - '.github/workflows/ci-required.yml'
 
-  # A4 D2 (#673): a tag names a SHA main already proved — ATTEST, do not re-run.
-  # Measured: 11 tags in the August sprint each re-ran the full suite on an
-  # identical, already-green SHA (~4-5 min apiece). The evidence contract is
-  # untouched — the tag run keeps its workflow path, push event, tag
-  # head_branch, "Release Images {tag}" title and success conclusion, so every
-  # clause deploy-release and production_evidence_policy.json pin still holds
-  # literally. What changes is the MEANING of this run's success: from "the
-  # tests ran again on this ref" to "an identical-SHA green main run was
-  # verified, and the images published". Strictly tighter in one case: a tag on
-  # a SHA that never reached main used to re-run tests and could go green — now
-  # it fails here, before any image is published. #860 took the second half
-  # further: "published" means re-tagged from what main already published at
-  # this SHA (release-images `retag`), with a build only for an image main did
-  # not publish there (#731 skips an image the merge left untouched).
-  tag_verified:
-    if: github.ref_type == 'tag'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      actions: read
-      contents: read
-    steps:
-      - name: Assert an identical-SHA green main run exists
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          COUNT=$(gh api "/repos/${{ github.repository }}/actions/workflows/ci-required.yml/runs?head_sha=${{ github.sha }}&branch=main&event=push&status=success&per_page=1" --jq '.total_count')
-          if [ "${COUNT:-0}" -lt 1 ]; then
-            echo "::error::tag ${{ github.ref_name }} points at ${{ github.sha }}, which has no green main-push ci-required run — either it never reached main or main was red at it. A tag attests to a verified SHA; this one cannot."
-            exit 1
-          fi
-          echo "attested: main verified ${{ github.sha }} — a green push run exists for this exact SHA"
-
   security:
     needs: changes
     permissions:
@@ -273,7 +206,7 @@ jobs:
     uses: ./.github/workflows/security-gate.yml
 
   db:
-    if: github.ref_type != 'tag' && needs.changes.outputs.db == 'true'
+    if: needs.changes.outputs.db == 'true'
     needs: changes
     permissions:
       contents: read
@@ -281,79 +214,44 @@ jobs:
     uses: ./.github/workflows/ci-db.yml
 
   python:
-    if: github.ref_type != 'tag' && needs.changes.outputs.python == 'true'
+    if: needs.changes.outputs.python == 'true'
     needs: changes
     uses: ./.github/workflows/ci-python.yml
     with:
-      # #855 A4: dagster-code-server-liveness runs unconditionally off `pull_request`
-      # (a push to main, `merge_group`, `workflow_dispatch`) and is gated by the
-      # narrow `dagster_liveness` filter on a PR — computed here, not read from
-      # `github.event_name` inside the called workflow, so the caller's real event
-      # is what decides it regardless of how that context behaves once called.
       dagster_liveness_required: ${{ github.event_name != 'pull_request' || needs.changes.outputs.dagster_liveness == 'true' }}
       data_engine_required: ${{ github.event_name != 'pull_request' || needs.changes.outputs.data_engine == 'true' }}
-    # ci-python/ci-runtime both use `setup-uv` with `enable-cache: true`,
-    # and a called workflow cannot exceed the caller's grant. Without `actions:
-    # write` the cache RESTORES and cannot SAVE: harmless while the key keeps
-    # hitting, and a hard job failure the first time the key changes. #645
-    # changed uv.lock, and `Post Run astral-sh/setup-uv` began failing on every
-    # run from that merge onward — every real step in the job green, the whole
-    # job red. Latent since caching was enabled; my lockfile change is what lit
-    # it (#616-adjacent, same shape: the step that reports the outcome broke
-    # while the work it reports on was fine).
     permissions:
       contents: read
       pull-requests: read
       actions: write
 
   runtime:
-    if: github.ref_type != 'tag' && needs.changes.outputs.runtime == 'true'
+    if: needs.changes.outputs.runtime == 'true'
     needs: changes
     uses: ./.github/workflows/ci-runtime.yml
-    # ci-python/ci-runtime both use `setup-uv` with `enable-cache: true`,
-    # and a called workflow cannot exceed the caller's grant. Without `actions:
-    # write` the cache RESTORES and cannot SAVE: harmless while the key keeps
-    # hitting, and a hard job failure the first time the key changes. #645
-    # changed uv.lock, and `Post Run astral-sh/setup-uv` began failing on every
-    # run from that merge onward — every real step in the job green, the whole
-    # job red. Latent since caching was enabled; my lockfile change is what lit
-    # it (#616-adjacent, same shape: the step that reports the outcome broke
-    # while the work it reports on was fine).
     permissions:
       contents: read
       pull-requests: read
       actions: write
 
   web:
-    if: github.ref_type != 'tag' && needs.changes.outputs.web == 'true'
+    if: needs.changes.outputs.web == 'true'
     needs: changes
     uses: ./.github/workflows/ci-web.yml
-    # ci-web caches the playwright chromium download (19 s/run), and a called
-    # workflow cannot exceed its caller's grant. Without `actions: write` the
-    # cache RESTORES and never SAVES — it reports success while doing nothing,
-    # which is the failure mode test_anything_that_caches_can_actually_save
-    # exists to catch, and which stayed invisible on the uv caches until #645
-    # changed a lockfile.
     permissions:
       contents: read
       pull-requests: read
       actions: write
 
-  # #860: this was `images_check`, PR/merge-queue only, while a main push built its
-  # images inside images_release AFTER every test lane -- measured on run 35051670287:
-  # tests 2.6 min, then build 89 s, then publish 60 s, 6.0 min end to end. A build
-  # depends on nothing the tests prove, so it now runs beside them on every event
-  # that can publish too (push and the manual force), with `publish: false`. Only
-  # images_release below waits for the lanes, because only publishing must: a red
-  # test never publishes, and a red build never reaches images_release either.
   images_build:
     if: >-
       always() &&
-      (((github.event_name == 'pull_request' || github.event_name == 'merge_group' || github.event_name == 'push') &&
+      (github.event_name == 'push' ||
+       github.event_name == 'merge_group' ||
+       (github.event_name == 'pull_request' &&
         (needs.changes.outputs.image_app_web == 'true' ||
          needs.changes.outputs.image_llm_service == 'true' ||
-         needs.changes.outputs.image_data_engine == 'true' ||
-         github.ref_type == 'tag')) ||
+         needs.changes.outputs.image_data_engine == 'true')) ||
        (github.event_name == 'workflow_dispatch' &&
         github.ref == 'refs/heads/main' &&
         inputs.force_images))
@@ -363,20 +261,14 @@ jobs:
     uses: ./.github/workflows/release-images.yml
     with:
       publish: false
-      # The same selection images_release publishes, plus the merge queue's "all three"
-      # (the queue proves the merged tree builds whatever the PR touched).
-      app_web: ${{ github.event_name == 'merge_group' || github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && inputs.force_images) || needs.changes.outputs.image_app_web == 'true' }}
-      llm_service: ${{ github.event_name == 'merge_group' || github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && inputs.force_images) || needs.changes.outputs.image_llm_service == 'true' }}
-      data_engine: ${{ github.event_name == 'merge_group' || github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && inputs.force_images) || needs.changes.outputs.image_data_engine == 'true' }}
+      app_web: ${{ github.event_name == 'push' || github.event_name == 'merge_group' || (github.event_name == 'workflow_dispatch' && inputs.force_images) || needs.changes.outputs.image_app_web == 'true' }}
+      llm_service: ${{ github.event_name == 'push' || github.event_name == 'merge_group' || (github.event_name == 'workflow_dispatch' && inputs.force_images) || needs.changes.outputs.image_llm_service == 'true' }}
+      data_engine: ${{ github.event_name == 'push' || github.event_name == 'merge_group' || (github.event_name == 'workflow_dispatch' && inputs.force_images) || needs.changes.outputs.image_data_engine == 'true' }}
 
   images_release:
     if: >-
       always() &&
-      ((github.event_name == 'push' &&
-        (needs.changes.outputs.image_app_web == 'true' ||
-         needs.changes.outputs.image_llm_service == 'true' ||
-         needs.changes.outputs.image_data_engine == 'true' ||
-         github.ref_type == 'tag')) ||
+      (github.event_name == 'push' ||
        (github.event_name == 'workflow_dispatch' &&
         github.ref == 'refs/heads/main' &&
         inputs.force_images)) &&
@@ -385,41 +277,23 @@ jobs:
       (needs.python.result == 'success' || needs.python.result == 'skipped') &&
       (needs.runtime.result == 'success' || needs.runtime.result == 'skipped') &&
       (needs.web.result == 'success' || needs.web.result == 'skipped') &&
-      (needs.tag_verified.result == 'success' || needs.tag_verified.result == 'skipped') &&
       needs.images_build.result == 'success'
-    # images_build is required to have SUCCEEDED, not merely not-failed: whenever this
-    # job's own trigger clause is true, images_build's is too (its clause is a superset),
-    # so "skipped" here can only mean the build never happened -- and nothing publishes
-    # what was not built at this SHA.
-    needs: [changes, security, db, python, runtime, web, tag_verified, images_build]
+    needs: [changes, security, db, python, runtime, web, images_build]
     permissions:
       contents: read
       packages: write
     uses: ./.github/workflows/release-images.yml
     with:
       publish: true
-      # #860: a tag re-tags the digests main published for this SHA instead of rebuilding
-      # them (2.2 min measured, all of it re-minting images the SHA already had). A main
-      # push and the manual force are the publisher, so they never reuse.
-      reuse_verified_sha: ${{ github.ref_type == 'tag' }}
-      # A tag publishes every image under its version (deploy-release.yml promotes all
-      # three by tag), and the manual force does the same by definition. A main push
-      # publishes only what changed: before #731 every uv.lock or common/** merge rebuilt
-      # and republished app-web too, one image every three days for a dependency it
-      # does not use.
-      app_web: ${{ github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && inputs.force_images) || needs.changes.outputs.image_app_web == 'true' }}
-      llm_service: ${{ github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && inputs.force_images) || needs.changes.outputs.image_llm_service == 'true' }}
-      data_engine: ${{ github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && inputs.force_images) || needs.changes.outputs.image_data_engine == 'true' }}
-      # images_build already proved every selected image builds at this SHA and left the
-      # GHA cache warm; the publish step builds from that cache and pushes. Without this
-      # the inner build job would run a second time (~25 s of cache hits) on the critical
-      # path, after the tests, which is the serialisation #860 removes.
+      app_web: true
+      llm_service: true
+      data_engine: true
       prebuilt: true
 
   required:
     name: ci-required
     if: always()
-    needs: [changes, security, db, python, runtime, web, images_build, images_release, tag_verified]
+    needs: [changes, security, db, python, runtime, web, images_build, images_release]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

@@ -383,7 +383,7 @@ def test_every_tools_script_is_a_thin_shim_to_truealpha_tools() -> None:
     tools_dir = REPO_ROOT / "tools"
     impl_dir = REPO_ROOT / "common" / "runtime" / "src" / "truealpha_tools"
     scripts = sorted(tools_dir.glob("*.py"))
-    assert len(scripts) >= 25
+    assert len(scripts) >= 15
     for script in scripts:
         text = script.read_text(encoding="utf-8")
         lines = text.splitlines()

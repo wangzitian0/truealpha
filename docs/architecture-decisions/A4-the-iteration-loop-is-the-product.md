@@ -110,7 +110,7 @@ against production daily; also run them against each environment **in the deploy
 run itself, right after the walk** (+~10 s) so a data-shape regression surfaces
 at deploy time, not next morning.
 
-**D5 — Script the release.** `tools/cut_release.sh`: assert the named PRs are
+**D5 — Script the release.** `tools/cut_release.sh`: assert the named PRs are <!-- doc-drift: history -->
 MERGED and their review threads resolved, assert main is green at HEAD, tag,
 push, dispatch staging, wait, probe, dispatch prod. This mechanizes exactly the
 two premature-tag mistakes made by hand that sprint, and turns ~15 min of

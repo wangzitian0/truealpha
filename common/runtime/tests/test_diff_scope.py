@@ -299,7 +299,7 @@ def worktree(tmp_path_factory: pytest.TempPathFactory) -> object:
     subprocess.run(
         ["git", "worktree", "add", "--detach", str(tree), "HEAD"], cwd=REPO_ROOT, capture_output=True, check=True
     )
-    with (tree / "common/runtime/src/truealpha_tools/walk_evidence.py").open("a", encoding="utf-8") as handle:
+    with (tree / "common/runtime/src/truealpha_tools/health_check.py").open("a", encoding="utf-8") as handle:
         handle.write("\n# diff-scope entry point probe\n")
     yield tree
     subprocess.run(["git", "worktree", "remove", "--force", str(tree)], cwd=REPO_ROOT, capture_output=True, check=False)
@@ -333,16 +333,14 @@ def test_every_make_entry_point_runs_only_what_the_diff_reaches(worktree: Path, 
     if target in ("test", "smoke", "check"):
         pytest_lines = [line for line in planned if "uv run pytest" in line]
         assert len(pytest_lines) == 1, planned
-        assert "common/runtime/tests/test_walk_evidence.py" in pytest_lines[0]
+        assert "common/runtime/tests/test_health_check.py" in pytest_lines[0]
         assert not pytest_lines[0].rstrip().endswith("uv run pytest"), "the default ran the whole suite"
     if target in ("lint", "smoke", "check"):
         lint_lines = [line for line in planned if "ruff check" in line]
-        assert lint_lines == ["== [lint] uv run ruff check common/runtime/src/truealpha_tools/walk_evidence.py"], (
-            planned
-        )
+        assert lint_lines == ["== [lint] uv run ruff check common/runtime/src/truealpha_tools/health_check.py"], planned
     if target in ("typecheck", "smoke", "check"):
         mypy_lines = [line for line in planned if "uv run mypy" in line]
-        assert len(mypy_lines) == 1 and "truealpha_tools/walk_evidence.py" in mypy_lines[0], planned
+        assert len(mypy_lines) == 1 and "truealpha_tools/health_check.py" in mypy_lines[0], planned
         assert not mypy_lines[0].rstrip().endswith("uv run mypy"), "the default type-checked every package"
     assert not any("bun run" in line for line in planned), "a Python change started bun work"
 
@@ -368,7 +366,7 @@ def test_prepush_runs_only_what_the_diff_reaches(worktree: Path) -> None:
     )
     planned = [line for line in result.stdout.splitlines() if line.startswith("== [")]
     pytest_lines = [line for line in planned if "uv run pytest" in line]
-    assert len(pytest_lines) == 1 and "common/runtime/tests/test_walk_evidence.py" in pytest_lines[0], result.stdout
+    assert len(pytest_lines) == 1 and "common/runtime/tests/test_health_check.py" in pytest_lines[0], result.stdout
     assert "uv run pytest common/runtime/tests " not in pytest_lines[0] + " ", "prepush ran the whole package"
 
 
@@ -411,7 +409,7 @@ def test_the_entry_points_ignore_an_outer_make_full_run(worktree: Path, monkeypa
     )
     planned = [line for line in result.stdout.splitlines() if line.startswith("== [")]
     assert "diff-scope: FULL=1" not in result.stdout, result.stdout
-    assert any("test_walk_evidence.py" in line for line in planned), planned
+    assert any("test_health_check.py" in line for line in planned), planned
 
 
 def test_a_dry_run_prints_every_selected_file(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:

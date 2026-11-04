@@ -248,7 +248,7 @@ def test_refreshing_the_stalest_half_each_weekday_keeps_every_symbol_valid_at_ev
     first two runs have stored each symbol. The span crosses the US clock change and the holidays of
     late 2026. It is red when a run refreshes fewer symbols or runs before the close.
     """
-    cron = load_tool("scheduler_liveness").Cron
+    cron = load_tool("nightly_verdicts").Cron
     start, end = datetime(2026, 10, 26, tzinfo=UTC), datetime(2027, 1, 9, tzinfo=UTC)
     runs = cron.parse(qqq_prices.QQQ_PRICE_REFRESH_CRON).fires_between(start, end)
     ticks = cron.parse(capture.tick_cron("qqq", "production")).fires_between(start, end)
@@ -298,7 +298,7 @@ def test_the_run_starts_after_the_market_data_refresh_and_ends_before_the_core_t
     refresh_takes = math.ceil(refresh.total_calls / per_minute) * window
     run_takes = math.ceil(qqq_prices.need_credits(len(targets)) / per_minute) * window
 
-    cron = load_tool("scheduler_liveness").Cron
+    cron = load_tool("nightly_verdicts").Cron
     week = (datetime(2026, 10, 12, tzinfo=UTC), datetime(2026, 10, 18, 23, 59, tzinfo=UTC))
     refreshes = cron.parse(market_data.MARKET_DATA_REFRESH_CRON).fires_between(*week)
     runs = cron.parse(qqq_prices.QQQ_PRICE_REFRESH_CRON).fires_between(*week)
