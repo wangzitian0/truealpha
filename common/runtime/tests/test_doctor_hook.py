@@ -62,8 +62,12 @@ def test_the_tracked_hook_checks_staged_files_through_the_pre_commit_config() ->
     )
 
 
-def test_doctor_fails_on_a_clone_without_the_hook(clone: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_doctor_fails_on_a_clone_without_the_hook(
+    clone: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     assert doctor.check_git_hook(clone) is False
+    out = capsys.readouterr().out
+    assert "Run: git config core.hooksPath tools (or ln -sf ../../tools/prepush.sh .git/hooks/pre-push)" in out
     # Through the entry point that `make doctor` runs: every other check passes here, so
     # the exit code depends on the hook alone.
     monkeypatch.setattr(doctor, "ROOT", clone)

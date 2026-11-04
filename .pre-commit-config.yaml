@@ -19,6 +19,12 @@ repos:
         entry: uv run ruff format
         language: system
         types: [python]
+      - id: complexity-gate
+        name: cyclomatic complexity gate
+        entry: python3 tools/complexity_gate.py --check
+        language: system
+        types: [python]
+        pass_filenames: false
       - id: no-trade-api
         name: forbid moomoo trading APIs (quote/read-only repo)
         language: pygrep

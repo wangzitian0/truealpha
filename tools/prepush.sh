@@ -72,6 +72,11 @@ echo "== changed vs $BASE (${#CHANGED[@]} files) =="
 git diff --stat "$BASE"...HEAD | tail -5
 echo
 
+# Non-blocking T0 hook check (#1412 F5): warn if core.hooksPath drifted or is unset.
+if ! PYTHONPATH="${ROOT}/common/runtime/src:${PYTHONPATH:-}" python3 -c "from pathlib import Path; from truealpha_tools import doctor; raise SystemExit(0 if doctor.check_git_hook(Path.cwd()) else 1)" >/dev/null 2>&1; then
+  echo "  WARN  git hook not installed (Run: git config core.hooksPath tools (or ln -sf ../../tools/prepush.sh .git/hooks/pre-push); or make install)"
+fi
+
 FAILED=0
 run() { # $1=label, rest=command
   local label="$1"; shift
