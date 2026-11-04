@@ -31,7 +31,7 @@ Audit runs **at most 3 Swarm rounds** (`swarm` skill). Each round dispatches 1 S
 
 ## Four gates
 
-1. **The auditor must read code.** Use a read-only native agent or Pi `intern` (`pi/agents/intern.md`) with direct disk read access to target files, diffs, and contracts. Never ask an auditor to judge code that the auditor cannot see.
+1. **The auditor must read code.** Run `invoke-intern` (`pi/agents/intern.md`) in parallel with direct disk read access to target files, diffs, and contracts. Never ask an auditor to judge code that the auditor cannot see.
 2. **See each new test fail first.** Run only the target test case on unfixed code and confirm RED (`pytest <file>::<test> -x`).
 3. **Re-review every fix independently.** The reviewer gets only the new code, not the defect story.
    For a security fix, ask for "the second chain from the same entry".

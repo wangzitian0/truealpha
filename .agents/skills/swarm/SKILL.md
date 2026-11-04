@@ -1,6 +1,6 @@
 ---
 name: swarm
-description: Atomic multi-agent batch execution engine. Executes a single concurrent batch of M Interns via native subagents or Pi and aggregates outputs.
+description: Atomic multi-agent batch execution engine. Executes a single concurrent batch of M Interns via invoke-intern and aggregates outputs.
 ---
 
 # swarm: atomic multi-agent batch engine
@@ -12,8 +12,8 @@ Swarm does not define multi-round state machines. Caller skills (`audit`, `init`
 ## Specifications and constraints
 
 - **Worker role**: Intern (`pi/agents/intern.md`, model `zai-coding-cn/glm-5.3-flash`).
-- **Batch size (M)**: Default 10 tasks per swarm batch. Pi's `subagent` extension (`MAX_PARALLEL_TASKS=8`, `MAX_CONCURRENCY=4`) or a native subagent running concurrent `pi --mode json -p --no-session` processes manages wave concurrency. Custom M specified by caller skill (e.g. M=4 in `init`/`ssot`, M=3 in `auto`).
-- **Tool profile**: Strictly read-only tools (`read`, `bash` read-only probes) via native read-only subagents or Pi `intern`.
+- **Batch size (M)**: Default 10 tasks per swarm batch. `invoke-intern` manages concurrent waves (`--concurrency 4`, maximum 10). Custom M specified by caller skill (e.g. M=4 in `init`/`ssot`, M=3 in `auto`).
+- **Tool profile**: Strictly read-only tools (`read`, `bash` read-only probes) enforced by `invoke-intern`.
 - **Output contract**:
   - Dense, structured ASD-STE100 technical findings.
   - Length: 500 to 1200 tokens per Intern.
@@ -25,9 +25,9 @@ Swarm does not define multi-round state machines. Caller skills (`audit`, `init`
 To execute 1 Swarm, the orchestrator dispatches M Intern tasks:
 
 1. Prepare M distinct task prompts with target file paths and line ranges.
-2. Dispatch via native read-only subagents or a subagent operating `pi --mode json -p --no-session --provider zai-coding-cn --model glm-5.3-flash --tools read,bash`.
+2. Execute the M tasks through `invoke-intern --task-id <id> --tasks-file <json>` (or `--tasks-json`).
 3. Wait for OS process completion (host background task wakeup; zero foreground polling).
-4. Reduce outputs: Persist full output to `.agents/runs/<task-id>/logs/`; fold evidence-free `holds` tasks (`unverified: []`) and expand `breaks`, `unknown`, non-empty `unverified`, or failed tasks into `SwarmResult`.
+4. Reduce outputs: `invoke-intern` persists full output to `.agents/runs/<task-id>/logs/`, folds evidence-free `holds` tasks (`unverified: []`), and expands `breaks`, `unknown`, non-empty `unverified`, or failed tasks into `SwarmResult`.
 5. Return `SwarmResult` to the calling skill for the next state transition.
 
 ## Execution discipline
