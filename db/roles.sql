@@ -188,8 +188,11 @@ begin
     end loop;
 end $$;
 
--- The two mart.entity_identity needs, named so a new definer routine is not granted by
--- accident. Guarded on the catalog: a partial chain has not created them yet.
+-- 20261015T0900_datahub_mart_entity_identity_set_based.sql (20261015T0900_inline_entity_identity_view.sql)
+-- made mart.entity_identity set-based, so the view no longer calls these helpers (#1344).
+-- Explicitly revoke EXECUTE from mart_readonly, app_ops_reader and app_runtime so replaying
+-- db/roles.sql on an already-provisioned database strips the legacy grants. Guarded on the
+-- catalog because a partial chain has not created them yet.
 do $$
 declare
     routine text;
@@ -199,7 +202,7 @@ begin
         'staging.entity_alias_valid_to(bigint, timestamptz)'
     ] loop
         if to_regprocedure(routine) is not null then
-            execute format('grant execute on function %s to mart_readonly, app_ops_reader',
+            execute format('revoke execute on function %s from mart_readonly, app_ops_reader, app_runtime',
                            to_regprocedure(routine)::text);
         end if;
     end loop;

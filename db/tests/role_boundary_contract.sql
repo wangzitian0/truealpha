@@ -41,10 +41,9 @@ begin
 end;
 $$;
 
--- The lockdown must not have cut off the reader it exists for: mart.entity_identity's view
--- body calls both helpers, and EXECUTE is checked against the calling role even inside a
--- view. A revoke with no matching grant would leave mart_readonly unable to read the view at
--- all -- the very failure #996 fixed -- so assert the grant, not only the revoke.
+-- #1344: 20261015T0900_datahub_mart_entity_identity_set_based.sql made mart.entity_identity
+-- set-based, so neither mart_readonly nor app_ops_reader may hold EXECUTE on the helpers,
+-- while both roles still select from mart.entity_identity.
 do $$
 declare
     routine text;
@@ -56,13 +55,34 @@ begin
         if to_regprocedure(routine) is null then
             raise exception 'mart.entity_identity helper % is missing from the chain', routine;
         end if;
-        if not has_function_privilege('mart_readonly', to_regprocedure(routine), 'EXECUTE') then
-            raise exception 'mart_readonly cannot execute %, so it cannot read mart.entity_identity', routine;
-        end if;
-        if not has_function_privilege('app_ops_reader', to_regprocedure(routine), 'EXECUTE') then
-            raise exception 'app_ops_reader cannot execute %, so it cannot read mart.entity_identity', routine;
-        end if;
     end loop;
+
+    if has_function_privilege('mart_readonly', 'staging.entity_survivor(uuid, timestamptz)', 'EXECUTE') then
+        raise exception 'mart_readonly must not execute staging.entity_survivor(uuid, timestamptz)';
+    end if;
+    if has_function_privilege('mart_readonly', 'staging.entity_alias_valid_to(bigint, timestamptz)', 'EXECUTE') then
+        raise exception 'mart_readonly must not execute staging.entity_alias_valid_to(bigint, timestamptz)';
+    end if;
+    if has_function_privilege('app_ops_reader', 'staging.entity_survivor(uuid, timestamptz)', 'EXECUTE') then
+        raise exception 'app_ops_reader must not execute staging.entity_survivor(uuid, timestamptz)';
+    end if;
+    if has_function_privilege('app_ops_reader', 'staging.entity_alias_valid_to(bigint, timestamptz)', 'EXECUTE') then
+        raise exception 'app_ops_reader must not execute staging.entity_alias_valid_to(bigint, timestamptz)';
+    end if;
+end;
+$$;
+
+do $$
+declare
+    row_count bigint;
+begin
+    set local role mart_readonly;
+    select count(*) into row_count from mart.entity_identity;
+    reset role;
+
+    set local role app_ops_reader;
+    select count(*) into row_count from mart.entity_identity;
+    reset role;
 end;
 $$;
 

@@ -28,7 +28,8 @@ export interface EntityDisplay {
 }
 
 // #1327: this statement evaluates mart.entity_identity once, not once for each display row.
-// The view calls staging.entity_survivor() for each alias row and for each identity row.
+// #1344: mart.entity_identity is set-based (20261015T0900_inline_entity_identity_view.sql /
+// 20261015T0900_datahub_mart_entity_identity_set_based.sql) and requires no staging.* helper grants.
 // A lateral lookup for each display row ran the view's final join again for every row.
 // On production, 234 display rows took 15.8 s to 30.7 s that way, against 2.7 s for one evaluation.
 // The cast entity_id::text blocks every index, so no lookup for each row can be cheap.
