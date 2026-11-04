@@ -289,6 +289,7 @@ def _data_engine_facts() -> tuple[str, str, str, list[dict[str, Any]] | str, lis
                             staleness_reason,
                             availability,
                         ) in rows
+                        if load_environment_contract().is_head_scheduled(str(universe_id), settings.app_env)
                     ]
             except psycopg.Error:
                 connection.rollback()

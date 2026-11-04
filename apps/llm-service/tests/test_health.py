@@ -305,6 +305,47 @@ def test_health_reports_each_pointer_with_its_label_limit_reason_and_availabilit
     ]
 
 
+def test_health_hides_the_pointer_rows_of_a_universe_that_the_environment_does_not_schedule(monkeypatch) -> None:
+    """#1416: staging runs TOPT only. Historical one-off rows like `universe:qqq-us-2026-09-30` stay in
+    `mart.served_head` and must be omitted in staging while reported in production."""
+    from llm_service.config import settings
+
+    rows = [
+        (
+            "universe:qqq-us-2026-09-30",
+            datetime(2026, 9, 23, 23, 20, tzinfo=UTC),
+            Decimal("366.0"),
+            "stale",
+            72,
+            "older_than_3d",
+            "available",
+        ),
+        (
+            "universe:topt-us-2026-03-31",
+            datetime(2026, 10, 6, 1, 0, tzinfo=UTC),
+            Decimal("5.0"),
+            "fresh",
+            72,
+            None,
+            "available",
+        ),
+    ]
+    monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: _PointersOnly(rows))
+
+    monkeypatch.setattr(settings, "app_env", "staging")
+    staging_resp = TestClient(app).get("/health")
+    assert staging_resp.status_code == 200
+    staging_pointers = staging_resp.json()["governed_pointers"]
+    assert [entry["universe_id"] for entry in staging_pointers] == ["universe:topt-us-2026-03-31"]
+
+    monkeypatch.setattr(settings, "app_env", "production")
+    production_pointers = TestClient(app).get("/health").json()["governed_pointers"]
+    assert [entry["universe_id"] for entry in production_pointers] == [
+        "universe:qqq-us-2026-09-30",
+        "universe:topt-us-2026-03-31",
+    ]
+
+
 def test_a_stale_or_withheld_head_does_not_turn_the_status_red(monkeypatch) -> None:
     """`status` is liveness: the deploy walk treats it as "the service is up". A frozen head is
     the freshness check's page, not a reason to take the service out of rotation."""
