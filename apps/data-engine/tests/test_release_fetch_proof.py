@@ -19,7 +19,9 @@ from data_engine.quality.release_fetch_proof import (
     capture_run_of,
     evaluate,
     expected_origins,
+    expected_universe_sources,
     fetched_by_origin,
+    fetched_by_universe_source,
     forced,
     origin_of,
 )
@@ -252,6 +254,11 @@ def test_evaluate_ok_when_all_origins_fetched(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(
         release_fetch_proof, "fetched_by_origin", lambda conn, cap_id: {"sec:v1": 10, "yahoo-chart:v1": 20}
     )
+    monkeypatch.setattr(
+        release_fetch_proof,
+        "fetched_by_universe_source",
+        lambda conn: dict.fromkeys(expected_universe_sources(), 10),
+    )
 
     proof = evaluate(connection, instance, digest=digest)
     assert proof.state == OK
@@ -465,6 +472,11 @@ def test_evaluate_recovers_when_later_forced_run_succeeds(monkeypatch: pytest.Mo
     monkeypatch.setattr(
         release_fetch_proof, "fetched_by_origin", lambda conn, cap_id: {"sec:v1": 10, "yahoo-chart:v1": 20}
     )
+    monkeypatch.setattr(
+        release_fetch_proof,
+        "fetched_by_universe_source",
+        lambda conn: dict.fromkeys(expected_universe_sources(), 10),
+    )
 
     proof = evaluate(connection, instance, digest=digest)
     assert proof.state == OK
@@ -559,11 +571,98 @@ def test_evaluate_recovers_when_earlier_run_had_missing_origins_but_later_run_su
         return {"sec:v1": 10, "yahoo-chart:v1": 20}
 
     monkeypatch.setattr(release_fetch_proof, "fetched_by_origin", mock_fetched_by_origin)
+    monkeypatch.setattr(
+        release_fetch_proof,
+        "fetched_by_universe_source",
+        lambda conn: dict.fromkeys(expected_universe_sources(), 10),
+    )
 
     proof = evaluate(connection, instance, digest=digest)
     assert proof.state == OK
     assert proof.ok is True
     assert "fetched" in proof.summary
+
+
+def test_expected_universe_sources_covers_every_universe_source() -> None:
+    from data_engine.datahub.production_topt.universe_plane import UNIVERSE_SOURCES
+
+    assert expected_universe_sources() == frozenset(UNIVERSE_SOURCES)
+    assert {"qqq", "sp500", "canary"} <= expected_universe_sources()
+
+
+def test_fetched_by_universe_source_queries_newest_refresh_counts() -> None:
+    class FakeCursor:
+        def __init__(self, rows: list[tuple[str, int]]) -> None:
+            self._rows = rows
+
+        def fetchall(self) -> list[tuple[str, int]]:
+            return self._rows
+
+    class FakeConnection:
+        def __init__(self, rows: list[tuple[str, int]]) -> None:
+            self._rows = rows
+            self.calls: list[tuple[str, tuple[Any, ...]]] = []
+
+        def execute(self, query: str, params: tuple[Any, ...] = ()) -> FakeCursor:
+            self.calls.append((query, params))
+            return FakeCursor(self._rows)
+
+    fake_conn = FakeConnection([("qqq", 102), ("sp500", 503), ("canary", 6)])
+    result = fetched_by_universe_source(fake_conn)  # type: ignore[arg-type]
+    assert result == {"qqq": 102, "sp500": 503, "canary": 6}
+    assert fake_conn.calls == [(release_fetch_proof.UNIVERSE_CONSTITUENTS_SQL, ())]
+
+
+def test_evaluate_red_when_universe_source_returns_zero_rows(monkeypatch: pytest.MonkeyPatch) -> None:
+    connection = MagicMock()
+    instance = MagicMock(spec=dg.DagsterInstance)
+    digest = "sha256:" + "a" * 64
+    now = datetime(2026, 9, 21, 12, 0, 0, tzinfo=UTC)
+
+    canary_record = MagicMock()
+    canary_record.create_timestamp = now
+
+    succ_run = MagicMock()
+    succ_run.job_name = "topt_live_pipeline"
+    succ_run.run_id = "run-succ-12345"
+    succ_run.tags = {SCHEDULE_TAG: "1"}
+    succ_run.run_config = {}
+    succ_run.status = dg.DagsterRunStatus.SUCCESS
+
+    succ_record = MagicMock()
+    succ_record.create_timestamp = now + timedelta(minutes=1)
+    succ_record.dagster_run = succ_run
+
+    instance.get_run_records.side_effect = lambda filters, **kwargs: (
+        [canary_record] if filters.tags and BOOT_CANARY_TAG in filters.tags else [succ_record]
+    )
+
+    step_output = MagicMock()
+    step_output.event_log_entry.dagster_event.step_output_data.metadata = {
+        release_fetch_proof.CAPTURE_RUN_METADATA: "capture-run-xyz"
+    }
+    step_record = MagicMock()
+    step_record.records = [step_output]
+    instance.get_records_for_run.return_value = step_record
+
+    connection.execute.return_value.fetchone.return_value = (digest,)
+
+    expected = frozenset({"sec:v1", "yahoo-chart:v1"})
+    monkeypatch.setattr(release_fetch_proof, "expected_origins", lambda: expected)
+    monkeypatch.setattr(
+        release_fetch_proof, "fetched_by_origin", lambda conn, cap_id: {"sec:v1": 10, "yahoo-chart:v1": 20}
+    )
+    monkeypatch.setattr(
+        release_fetch_proof,
+        "fetched_by_universe_source",
+        lambda conn: {"qqq": 102, "sp500": 0, "canary": 6},
+    )
+
+    proof = evaluate(connection, instance, digest=digest)
+    assert proof.state == RED
+    assert proof.ok is False
+    assert "universe:sp500" in proof.summary
+    assert "0 constituent rows" in proof.summary
 
 
 def test_evaluate_red_when_in_progress_run_exceeds_max_window() -> None:

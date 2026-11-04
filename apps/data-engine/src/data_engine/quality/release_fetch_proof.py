@@ -38,6 +38,7 @@ import psycopg
 
 from data_engine.config import settings
 from data_engine.datahub.production_topt.source_registrations import REGISTRATIONS, SourceRegistration
+from data_engine.datahub.production_topt.universe_plane import UNIVERSE_SOURCES
 from data_engine.lanes.capture import TICK_BY_JOB
 from data_engine.lanes.quality import UNFINISHED_RUN_STATUSES
 from data_engine.lanes.triggers import BOOT_CANARY_TAG
@@ -130,7 +131,36 @@ where obligation.run_id = %s
 group by observation.semantic_type, observation.parser_version
 """
 
+UNIVERSE_CONSTITUENTS_SQL = """
+select etf_symbol, count(*)
+from staging.etf_constituent_facts
+where (etf_symbol, as_of, knowable_at) in (
+    select etf_symbol, as_of, max(knowable_at)
+    from staging.etf_constituent_facts
+    where (etf_symbol, as_of) in (
+        select etf_symbol, max(as_of)
+        from staging.etf_constituent_facts
+        group by etf_symbol
+    )
+    group by etf_symbol, as_of
+)
+group by etf_symbol
+"""
+
 IDENTITY_SQL = "select image_digest from mart.data_engine_identity where run_id = %s"
+
+
+def expected_universe_sources() -> frozenset[str]:
+    """Every universe source in the constituent plane (`UNIVERSE_SOURCES`, #1441)."""
+    return frozenset(UNIVERSE_SOURCES)
+
+
+def fetched_by_universe_source(connection: psycopg.Connection[Any]) -> dict[str, int]:
+    """Row counts of the newest constituent refresh per universe source (#1441)."""
+    counts: dict[str, int] = {}
+    for etf_symbol, count in connection.execute(UNIVERSE_CONSTITUENTS_SQL, ()).fetchall():
+        counts[str(etf_symbol)] = int(count)
+    return counts
 
 
 def fetched_by_origin(connection: psycopg.Connection[Any], capture_run_id: str) -> dict[str, int]:
@@ -237,6 +267,17 @@ def _evaluate_run(
     missing = sorted(origin for origin in expected if fetched.get(origin, 0) <= 0)
     if missing:
         return Proof(RED, f"{label} fetched nothing from {', '.join(missing)} (reuse only or lost); fetched {counts}")
+    expected_universes = expected_universe_sources()
+    if expected_universes:
+        universe_counts = fetched_by_universe_source(connection)
+        missing_universes = sorted(f"universe:{etf}" for etf in expected_universes if universe_counts.get(etf, 0) <= 0)
+        if missing_universes:
+            u_counts = ", ".join(f"universe:{etf} {universe_counts.get(etf, 0)}" for etf in sorted(expected_universes))
+            return Proof(
+                RED,
+                f"{label} fetched nothing from {', '.join(missing_universes)} (0 constituent rows); "
+                f"fetched {counts}; universes {u_counts}",
+            )
     return Proof(OK, f"{label} on {short}… fetched {counts}")
 
 

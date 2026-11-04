@@ -111,7 +111,7 @@ export interface NightlyVerdictsContract {
 }
 
 export const ENVIRONMENT_CONTRACT_VERSION = "3.0.0" as const;
-export const ENVIRONMENT_CONTRACT_SHA256 = "992f7b3fc130fd9fedcd57239f663fc2d38f1797c0c6bc4416aa45a8a04323bb" as const;
+export const ENVIRONMENT_CONTRACT_SHA256 = "1396a19df7a118fca2bf9681897e910b6d5b90cf907cfed58b7fa4f152342fd7" as const;
 export const UTILIZATION_CEILING = 0.7 as const;
 export const DAY_SECONDS = 86400 as const;
 

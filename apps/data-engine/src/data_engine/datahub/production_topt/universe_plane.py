@@ -31,6 +31,7 @@ import urllib.request
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
+from decimal import Decimal
 from typing import Any, TypedDict
 
 from psycopg import Connection
@@ -84,7 +85,7 @@ class UniverseSource:
 
 
 def universe_sources() -> dict[str, UniverseSource]:
-    """The constituent plane of every universe record whose members an index API or a static list gives (#1522).
+    """The constituent plane of every universe record whose members an index API, N-PORT or a static list gives (#1522).
 
     A frozen corpus (TOPT) has no plane. The canary is a hand-picked list of five issuers, one per real code
     branch, all XNAS so the source-level MIC stays honest (#648): the post-deploy canary run drives the REAL
@@ -93,7 +94,7 @@ def universe_sources() -> dict[str, UniverseSource]:
     sources: dict[str, UniverseSource] = {}
     for key, universe in load_environment_contract().universes.items():
         membership = universe.membership
-        if membership.kind in ("index_api", "static"):
+        if membership.kind in ("index_api", "nport", "static"):
             sources[key] = UniverseSource(
                 etf=key,
                 index_api=membership.url or "",
@@ -131,6 +132,191 @@ class ConstituentRow(TypedDict):
     name: str
     market_cap: str | None
     last_sale_price: str | None
+
+
+def _resolve_nport_identifiers(
+    connection: Connection[Any],
+    jobs: list[tuple[str, str]],
+    *,
+    as_of: date,
+    api_key: str = "",
+) -> dict[tuple[str, str], tuple[str, str, str]]:
+    """Map N-PORT (id_type, id_value) pairs to (ticker, figi, name) via OpenFIGI, landing every batch in raw."""
+    resolved: dict[tuple[str, str], tuple[str, str, str]] = {}
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["X-OPENFIGI-APIKEY"] = api_key
+    batch_size = 100 if api_key else 10
+    for start in range(0, len(jobs), batch_size):
+        chunk = jobs[start : start + batch_size]
+        payload = [{"idType": id_type, "idValue": id_val, "exchCode": "US"} for id_type, id_val in chunk]
+        request = urllib.request.Request(
+            "https://api.openfigi.com/v3/mapping", data=json.dumps(payload).encode(), headers=headers
+        )
+        _status, body = gateway.urlopen(
+            DataSource.OPENFIGI.value,
+            "mapping",
+            request,
+            identity=FetchKey.for_batch(
+                DataSource.OPENFIGI.value,
+                "mapping",
+                [f"{t}:{v}" for t, v in chunk],
+                gateway.utc_day(),
+            ),
+            caller="universe_plane._resolve_nport_identifiers",
+            timeout=30,
+            raise_for_status=True,
+        )
+        fetched_at = datetime.now(UTC)
+        raw_store.insert_fetch(
+            connection,
+            source=DataSource.OPENFIGI,
+            source_record_id=f"figi-nport-mapping:{as_of.isoformat()}:{start}",
+            body=body,
+            content_type="application/json",
+            fetched_at=fetched_at,
+            recorded_at=fetched_at,
+            metadata={"request_jobs": payload},
+        )
+        for key, result in zip(chunk, json.loads(body)):
+            match = next(
+                (
+                    item
+                    for item in (result.get("data") or [])
+                    if item.get("ticker") and (item.get("shareClassFIGI") or item.get("figi"))
+                ),
+                None,
+            )
+            if match is not None:
+                ticker = str(match["ticker"]).strip().replace("/", ".").upper()
+                figi = str(match.get("shareClassFIGI") or match["figi"]).lower()
+                name = str(match.get("name") or "").strip()
+                resolved[key] = (ticker, figi, name)
+    return resolved
+
+
+def _aggregate_nport_holdings(
+    holdings: Sequence[Any],
+    resolved_ids: dict[tuple[str, str], tuple[str, str, str]],
+    *,
+    etf: str,
+) -> dict[str, tuple[str, Decimal | None, str]]:
+    """Collapse resolved N-PORT equity lines by ticker, summing weight across lines."""
+    by_ticker: dict[str, tuple[str, Decimal | None, str]] = {}
+    unresolved_holdings: list[str] = []
+    for h in holdings:
+        key = ("ID_ISIN", h.isin) if h.isin is not None else ("ID_CUSIP", str(h.cusip))
+        mapped = resolved_ids.get(key)
+        if mapped is None:
+            unresolved_holdings.append(h.isin or str(h.cusip))
+            continue
+        ticker, figi, figi_name = mapped
+        weight = None if h.pct_val is None else Decimal(str(h.pct_val))
+        display_name = (h.name or figi_name or ticker).strip()
+        if ticker in by_ticker:
+            prev_name, prev_weight, prev_figi = by_ticker[ticker]
+            merged = (
+                (prev_weight or Decimal(0)) + (weight or Decimal(0))
+                if (prev_weight is not None or weight is not None)
+                else None
+            )
+            by_ticker[ticker] = (prev_name, merged, prev_figi)
+        else:
+            by_ticker[ticker] = (display_name, weight, figi)
+    if unresolved_holdings:
+        raise LookupError(f"unresolved OpenFIGI holdings for {etf}: {', '.join(sorted(unresolved_holdings))}")
+    return by_ticker
+
+
+def _ensure_ciks_for_tickers(
+    tickers: Sequence[str],
+    cik_index: dict[str, int],
+    *,
+    etf: str,
+    user_agent: str,
+) -> None:
+    """Resolve missing CIKs via EDGAR fallback and raise if any constituent remains unresolved."""
+    for ticker in tickers:
+        normalized = ticker.replace(".", "-")
+        if normalized not in cik_index:
+            fallback = _resolve_cik_via_edgar(ticker, user_agent=user_agent)
+            if fallback is not None:
+                cik_index[normalized] = fallback
+    missing_ciks = [ticker for ticker in tickers if ticker.replace(".", "-") not in cik_index]
+    if missing_ciks:
+        raise LookupError(f"unresolved identifiers for {etf}: {', '.join(sorted(missing_ciks))}")
+
+
+def _refresh_nport_constituents(
+    connection: Connection[Any],
+    source: UniverseSource,
+    *,
+    as_of: date | None,
+    openfigi_api_key: str,
+    http: Any = None,
+) -> int:
+    """Build ETF constituents from its latest SEC N-PORT-P filing (#1441)."""
+    from data_engine.config import settings as _settings
+    from data_engine.sources import nport, sec
+
+    assert source.nport_ticker is not None
+    fetched_at = datetime.now(UTC)
+    client = http or sec.client()
+    cik, series_id = nport.fund_series(client, source.nport_ticker)
+    accession, filing_date = nport.latest_nport_accession(client, series_id)
+    xml = nport.fetch_nport_xml(client, cik, accession)
+    info, all_holdings = nport.parse_nport(xml)
+    filing_dt = datetime.fromisoformat(filing_date).replace(tzinfo=UTC)
+    report_period_str = info.get("report_period") or filing_date
+    effective_as_of = as_of or date.fromisoformat(report_period_str)
+
+    fetch_id = raw_store.insert_fetch(
+        connection,
+        source=DataSource.NPORT,
+        source_record_id=f"nport-constituents:{source.etf}:{accession}",
+        body=xml,
+        content_type="application/xml",
+        fetched_at=fetched_at,
+        recorded_at=fetched_at,
+        source_published_at=filing_dt,
+        metadata={"cik": cik, "series_id": series_id, "ticker": source.nport_ticker},
+    )
+
+    holdings = [h for h in all_holdings if h.asset_cat in (None, "EC") and (h.isin is not None or h.cusip is not None)]
+    if not holdings:
+        raise ValueError(f"{source.etf} N-PORT {accession} yielded 0 equity holdings")
+
+    job_keys = list(
+        dict.fromkeys(("ID_ISIN", h.isin) if h.isin is not None else ("ID_CUSIP", str(h.cusip)) for h in holdings)
+    )
+    resolved_ids = _resolve_nport_identifiers(connection, job_keys, as_of=effective_as_of, api_key=openfigi_api_key)
+    cik_index = sec.ticker_cik_index(http) if http is not None else sec.ticker_cik_index()
+    by_ticker = _aggregate_nport_holdings(holdings, resolved_ids, etf=source.etf)
+    _ensure_ciks_for_tickers(list(by_ticker), cik_index, etf=source.etf, user_agent=_settings.sec_user_agent)
+
+    for ticker in sorted(by_ticker):
+        name, weight, figi = by_ticker[ticker]
+        connection.execute(
+            """
+            insert into staging.etf_constituent_facts
+                (etf_symbol, as_of, source, raw_fetch_id, ticker, company_name, weight,
+                 cik, figi, knowable_at)
+            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                source.etf,
+                effective_as_of,
+                DataSource.NPORT.value,
+                fetch_id,
+                ticker,
+                name,
+                weight,
+                cik_index[ticker.replace(".", "-")],
+                figi,
+                filing_dt,
+            ),
+        )
+    return len(by_ticker)
 
 
 def _decimal_text(raw: object, *, prefix: str = "") -> str | None:
@@ -264,12 +450,17 @@ def refresh_etf_constituents(
     *,
     as_of: date | None = None,
     openfigi_api_key: str = "",
+    http: Any = None,
 ) -> int:
     """Fetch, land (bytes + rows), resolve identifiers. Returns rows landed.
 
-    `knowable_at`/`as_of` are the fetch's own clock: a constituents list is an
-    assertion about the index NOW; history accumulates as append-only rows.
+    `knowable_at`/`as_of` are the fetch's own clock for index-API and static sources;
+    for N-PORT-backed sources, `knowable_at` is the filing's own `filing_date` (#1441).
     """
+    if not source.index_api and not source.static_members and source.nport_ticker:
+        return _refresh_nport_constituents(
+            connection, source, as_of=as_of, openfigi_api_key=openfigi_api_key, http=http
+        )
     fetched_at = datetime.now(UTC)
     as_of = as_of or fetched_at.date()
     if source.static_members:
