@@ -356,3 +356,23 @@ def test_db_connect_passes_configured_database_connect_timeout(monkeypatch: pyte
     monkeypatch.setattr(llm_main.settings, "database_connect_timeout_seconds", 13)
     llm_main.health()
     assert observed[-1][1] == 13
+
+
+def test_runtime_hooks_manifest_is_valid_and_declares_all_four_slots(tmp_path: Path) -> None:
+    hooks = env_manifest.load_hooks()
+    assert hooks.schema_version == 1
+    assert hooks.service == "truealpha/app"
+    assert set(hooks.slots) == {"smoke", "preview_gate", "staging_gate", "scheduled_audit"}
+    assert "tools/health_check.py" in hooks.slots["smoke"].run
+    assert "tools/surface_contract.py" in hooks.slots["smoke"].run
+    assert "e2e/walk-tree.mjs" in hooks.slots["preview_gate"].run
+    assert "e2e/walk-tree.mjs" in hooks.slots["staging_gate"].run
+    assert "tools/nightly_verdicts.py" in hooks.slots["scheduled_audit"].run
+    assert env_manifest.main(["--check-hooks", "runtime-hooks.manifest.json"]) == 0
+
+    broken = tmp_path / "broken-hooks.manifest.json"
+    broken.write_text(
+        '{"schema_version": 1, "service": "truealpha/app", "slots": {"smoke": {"run": ""}}}\n', encoding="utf-8"
+    )
+    assert env_manifest.main(["--check-hooks", str(broken)]) == 1
+    assert env_manifest.main(["--check-hooks", str(tmp_path / "missing.json")]) == 1

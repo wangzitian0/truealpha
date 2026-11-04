@@ -7,17 +7,6 @@ on:
         description: Publish the exact caller SHA after every image builds.
         required: true
         type: boolean
-      # #860: a tag names a SHA main already published (#731's sha-<short> tags). With this
-      # on, `plan` asks the registry which of the selected images main published at this
-      # exact SHA; those are re-tagged at their digest by `retag` and never enter the
-      # build/publish matrix. Images main did not publish at this SHA (#731 skips an image
-      # the merge left untouched) still build and publish exactly as before. Off for a main
-      # push and the manual force, which ARE the publisher.
-      reuse_verified_sha:
-        description: Re-tag the digests main already published for this exact SHA instead of rebuilding them.
-        required: false
-        type: boolean
-        default: false
       app_web:
         description: Build the app-web image when its inputs changed.
         required: true
@@ -30,10 +19,6 @@ on:
         description: Build the data-engine image when its inputs changed.
         required: true
         type: boolean
-      # #860: the caller already ran this workflow with `publish: false` at the same SHA
-      # (ci-required's images_build, beside the test lanes), so every selected image is
-      # proven to build and the GHA cache is warm. `publish` then builds from that cache
-      # and pushes, without the build job running a second time on the critical path.
       prebuilt:
         description: The caller already proved every selected image builds at this SHA; skip the build job.
         required: false
@@ -43,46 +28,20 @@ on:
 jobs:
   plan:
     runs-on: ubuntu-latest
-    # 10, not 5: on a GitHub outage, the retry waits of setup-uv and uv add up to about
-    # 9 min (#1248, .github/actions/setup-uv). A 5 min cap would stop those retries early.
     timeout-minutes: 10
     permissions:
       contents: read
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
       has_images: ${{ steps.matrix.outputs.has_images }}
-      retag_matrix: ${{ steps.matrix.outputs.retag_matrix }}
-      has_retag: ${{ steps.matrix.outputs.has_retag }}
     steps:
       - uses: actions/checkout@v4
-      # #1369: since #1357, tools/verified_sha_images.py imports infra2_sdk at module level.
-      # This job installed nothing, so every tag run failed with ModuleNotFoundError.
-      # Only a reuse run calls the tool, so only a reuse run installs. A PR and a main
-      # push skip both steps. No uv cache: no caller of this workflow grants
-      # `actions: write`, and a cache needs it (#645, test_anything_that_caches_can_actually_save).
-      - name: Install uv for the verified-SHA split
-        if: inputs.reuse_verified_sha
-        uses: ./.github/actions/setup-uv
-        with:
-          enable-cache: false
-      # The `dev` group of the root pyproject.toml holds infra2-sdk[http], and uv.lock pins
-      # its hash. --frozen installs the lock as written. --only-group dev installs no
-      # workspace package. The PATH line makes `python3` in the next step the venv python.
-      - name: Install the pinned SDK for the verified-SHA split
-        if: inputs.reuse_verified_sha
-        run: |
-          set -euo pipefail
-          uv sync --frozen --only-group dev
-          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
       - id: matrix
         name: Select available images
         env:
           APP_WEB: ${{ inputs.app_web }}
           LLM_SERVICE: ${{ inputs.llm_service }}
           DATA_ENGINE: ${{ inputs.data_engine }}
-          REUSE_VERIFIED_SHA: ${{ inputs.reuse_verified_sha }}
-          OWNER: ${{ github.repository_owner }}
-          SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           images='[]'
@@ -96,28 +55,11 @@ jobs:
             images="$(jq -c '. + [{"image":"truealpha-data-engine","dockerfile":"apps/data-engine/Dockerfile","context":"."}]' <<< "$images")"
           fi
 
-          # #860: on a tag, what main already published at this SHA is re-tagged, not
-          # rebuilt. The tool's stderr says which way each image went and why; a registry
-          # answer other than "digest" or "no such tag" fails the run here rather than
-          # quietly rebuilding everything (a slower green nobody would notice).
-          retag='[]'
-          if [[ "$REUSE_VERIFIED_SHA" == "true" ]]; then
-            split="$(python3 tools/verified_sha_images.py --owner "$OWNER" --sha "$SHA" <<< "$images")"
-            images="$(jq -c '.build' <<< "$split")"
-            retag="$(jq -c '.retag' <<< "$split")"
-          fi
-
           echo "matrix=$(jq -cn --argjson include "$images" '{include: $include}')" >> "$GITHUB_OUTPUT"
           if [[ "$(jq 'length' <<< "$images")" -gt 0 ]]; then
             echo "has_images=true" >> "$GITHUB_OUTPUT"
           else
             echo "has_images=false" >> "$GITHUB_OUTPUT"
-          fi
-          echo "retag_matrix=$(jq -cn --argjson include "$retag" '{include: $include}')" >> "$GITHUB_OUTPUT"
-          if [[ "$(jq 'length' <<< "$retag")" -gt 0 ]]; then
-            echo "has_retag=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "has_retag=false" >> "$GITHUB_OUTPUT"
           fi
 
   build:
@@ -202,76 +144,3 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.image }}
           provenance: mode=max
           sbom: true
-
-  # #860: a tag run measured 2.2 min, all of it re-producing images its SHA already had --
-  # three builds from a warm cache (~3 s each) and three publishes (~1 min each) that minted
-  # a SECOND digest of the same bytes and moved main's own sha-<short> pointer onto it in
-  # passing. `plan` asked the registry which images main published at this exact SHA; this
-  # job points the release tag at those digests and touches nothing else. buildx re-pushes a
-  # single source's original manifest bytes unchanged (util/imagetools/create.go: "on single
-  # source, return original bytes"), so the tag names main's digest exactly -- asserted after
-  # the push, per tag, because a re-tag that resolved to anything else would be a different
-  # image wearing the release's name. Equivalent for every consumer: infra2 resolves the tag
-  # to a digest at deploy time (20.data_engine/deploy.py) or pulls by tag (10.app), and
-  # tools/health_check.py resolves the same tag the same way; nothing reads OCI labels.
-  retag:
-    if: inputs.publish && needs.plan.outputs.has_retag == 'true'
-    needs: plan
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJSON(needs.plan.outputs.retag_matrix) }}
-    steps:
-      # Docker Hub retry: see the build job.
-      - id: buildx
-        uses: docker/setup-buildx-action@v3
-        continue-on-error: true
-      - if: steps.buildx.outcome == 'failure'
-        run: sleep 20
-      - if: steps.buildx.outcome == 'failure'
-        uses: docker/setup-buildx-action@v3
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      # The same tag scheme as `publish`, from the same action, so the two paths cannot
-      # drift: on a tag this yields the vX.Y.Z tag and the sha-<short> tag (which already
-      # names this digest -- re-pushing it is a no-op that keeps main's pointer where main
-      # put it), never `latest`.
-      - id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}
-          tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=sha,format=short
-            type=semver,pattern=v{{version}}
-      - name: Re-tag ${{ matrix.image }} at the digest main published
-        env:
-          TAGS: ${{ steps.meta.outputs.tags }}
-          SOURCE: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}@${{ matrix.digest }}
-          DIGEST: ${{ matrix.digest }}
-          PUBLISHED_AS: ${{ matrix.source }}
-        run: |
-          set -euo pipefail
-          args=()
-          while IFS= read -r tag; do
-            [ -n "$tag" ] && args+=(--tag "$tag")
-          done <<< "$TAGS"
-          if [ "${#args[@]}" -eq 0 ]; then
-            echo "::error::metadata-action produced no tags for this ref — nothing to re-tag" >&2
-            exit 1
-          fi
-          docker buildx imagetools create "${args[@]}" "$SOURCE"
-          while IFS= read -r tag; do
-            [ -n "$tag" ] || continue
-            resolved="$(docker buildx imagetools inspect "$tag" --format '{{.Manifest.Digest}}')"
-            if [ "$resolved" != "$DIGEST" ]; then
-              echo "::error::$tag resolves to $resolved, not the verified $DIGEST main published as $PUBLISHED_AS" >&2
-              exit 1
-            fi
-            echo "$tag -> $resolved (main published it as $PUBLISHED_AS)"
-          done <<< "$TAGS"

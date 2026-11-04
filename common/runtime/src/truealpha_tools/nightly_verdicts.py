@@ -43,30 +43,182 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
-import functools
 import json
+import re
 import subprocess
 import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from truealpha_tools.release_runs import DEPLOY_WORKFLOW
-
-# The SDK is imported where the default HTTP client is built, not here (#1412). The delivery
-# report reuses this module on a bare `python3` without the SDK.
+# The SDK is imported where the default HTTP client is built, not here (#1412).
 if TYPE_CHECKING:
     from infra2_sdk.deploy import HttpGet
 
-GhApi = Callable[[str], str]
 GitRun = Callable[..., subprocess.CompletedProcess[str]]
 #: (check, deployed release) -> the check's first moment of being expected here, or None
 #: when that cannot be shown.
 FirstDeclared = Callable[[str, str], datetime | None]
-#: Successful deploy-release.yml runs, newest first: "Deploy <deploy_type> <tag>".
-DEPLOY_RUNS_PATH = f"/repos/wangzitian0/truealpha/actions/workflows/{DEPLOY_WORKFLOW}/runs?status=success&per_page=100"
+WINDOW = timedelta(days=14)
+HORIZON_DAYS = 5 * 366
+
+
+class CronError(ValueError):
+    """A cron expression this checker cannot read, or one that never fires."""
+
+
+_MONTHS = {name: number for number, name in enumerate(("JAN FEB MAR APR MAY JUN JUL AUG SEP OCT NOV DEC").split(), 1)}
+_WEEKDAYS = {name: number for number, name in enumerate(("SUN MON TUE WED THU FRI SAT").split())}
+_FIELDS: tuple[tuple[str, int, int, dict[str, int]], ...] = (
+    ("minute", 0, 59, {}),
+    ("hour", 0, 23, {}),
+    ("day of month", 1, 31, {}),
+    ("month", 1, 12, _MONTHS),
+    ("day of week", 0, 7, _WEEKDAYS),
+)
+_ELEMENT = re.compile(r"^(?P<range>\*|[0-9A-Za-z]+(?:-[0-9A-Za-z]+)?)(?:/(?P<step>[0-9]+))?$")
+
+
+def _cron_value(token: str, field: str, low: int, high: int, names: dict[str, int]) -> int:
+    if token.isdigit():
+        number = int(token)
+    elif token.upper() in names:
+        number = names[token.upper()]
+    else:
+        raise CronError(f"{field}: {token!r} is not a number{' or a name' if names else ''}")
+    if not low <= number <= high:
+        raise CronError(f"{field}: {number} is outside {low}-{high}")
+    return number
+
+
+def _cron_field(text: str, field: str, low: int, high: int, names: dict[str, int]) -> frozenset[int]:
+    values: set[int] = set()
+    for element in text.split(","):
+        match = _ELEMENT.match(element)
+        if not match:
+            raise CronError(f"{field}: cannot read {element!r}")
+        span, step_text = match.group("range"), match.group("step")
+        step = int(step_text) if step_text is not None else 1
+        if step < 1:
+            raise CronError(f"{field}: step {step} in {element!r} must be at least 1")
+        if span == "*":
+            first, last = low, high
+        elif "-" in span:
+            start, end = span.split("-", 1)
+            first, last = _cron_value(start, field, low, high, names), _cron_value(end, field, low, high, names)
+            if first > last:
+                raise CronError(f"{field}: range {element!r} runs backwards")
+        else:
+            first = _cron_value(span, field, low, high, names)
+            last = high if step_text is not None else first
+        values.update(range(first, last + 1, step))
+    return frozenset(values)
+
+
+@dataclass(frozen=True)
+class Cron:
+    expression: str
+    minutes: frozenset[int]
+    hours: frozenset[int]
+    days: frozenset[int]
+    months: frozenset[int]
+    weekdays: frozenset[int]  # 0 = Sunday
+    days_restricted: bool
+    weekdays_restricted: bool
+
+    @classmethod
+    def parse(cls, expression: str) -> Cron:
+        if not isinstance(expression, str):
+            raise CronError(f"cron {expression!r} is not a string")
+        parts = expression.split()
+        if len(parts) != len(_FIELDS):
+            raise CronError(f"cron {expression!r} has {len(parts)} fields, not {len(_FIELDS)}")
+        minutes, hours, days, months, weekdays = (
+            _cron_field(text, *spec) for text, spec in zip(parts, _FIELDS, strict=True)
+        )
+        return cls(
+            expression=expression,
+            minutes=minutes,
+            hours=hours,
+            days=days,
+            months=months,
+            weekdays=frozenset(day % 7 for day in weekdays),
+            days_restricted=not parts[2].startswith("*"),
+            weekdays_restricted=not parts[4].startswith("*"),
+        )
+
+    def fires_on(self, day: date) -> bool:
+        if day.month not in self.months:
+            return False
+        in_days = day.day in self.days
+        in_weekdays = day.isoweekday() % 7 in self.weekdays
+        if self.days_restricted and self.weekdays_restricted:
+            return in_days or in_weekdays
+        return in_days and in_weekdays
+
+    def _times(self, day: date) -> list[datetime]:
+        if not self.fires_on(day):
+            return []
+        return [
+            datetime(day.year, day.month, day.day, hour, minute, tzinfo=UTC)
+            for hour in sorted(self.hours)
+            for minute in sorted(self.minutes)
+        ]
+
+    def fires_between(self, start: datetime, end: datetime) -> list[datetime]:
+        fires: list[datetime] = []
+        day = start.date()
+        while day <= end.date():
+            fires += [moment for moment in self._times(day) if start <= moment <= end]
+            day += timedelta(days=1)
+        return fires
+
+    def previous_fire(self, before: datetime) -> datetime | None:
+        day = before.date()
+        for _ in range(HORIZON_DAYS):
+            earlier = [moment for moment in self._times(day) if moment < before]
+            if earlier:
+                return earlier[-1]
+            day -= timedelta(days=1)
+        return None
+
+    def next_fire(self, after: datetime) -> datetime | None:
+        day = after.date()
+        for _ in range(HORIZON_DAYS):
+            later = [moment for moment in self._times(day) if moment > after]
+            if later:
+                return later[0]
+            day += timedelta(days=1)
+        return None
+
+
+def largest_gap(crons: Sequence[Cron], now: datetime, window: timedelta = WINDOW) -> timedelta:
+    now = now.astimezone(UTC)
+    start = now - window
+    fires: set[datetime] = set()
+    before: list[datetime] = []
+    after: list[datetime] = []
+    for cron in crons:
+        previous, following = cron.previous_fire(start), cron.next_fire(now)
+        if previous is None and following is None:
+            raise CronError(f"cron {cron.expression!r} never fires")
+        fires.update(cron.fires_between(start, now))
+        if previous is not None:
+            before.append(previous)
+        if following is not None:
+            after.append(following)
+    if before:
+        fires.add(max(before))
+    if after:
+        fires.add(min(after))
+    ordered = sorted(fires)
+    if len(ordered) < 2:
+        listed = ", ".join(repr(cron.expression) for cron in crons)
+        raise CronError(f"the schedule {listed} fires fewer than twice in {HORIZON_DAYS} days")
+    return max(later - earlier for earlier, later in zip(ordered, ordered[1:]))
+
 
 EXPECTATIONS_PATH = Path(__file__).resolve().parents[4] / "tools" / "nightly_verdicts.json"
 CONTRACT_PATH = (
@@ -329,13 +481,6 @@ def expectations_for(
     return kept, f"{source}; the universes {environment} schedules: {', '.join(sorted(scheduled)) or 'none'}"
 
 
-def _gh_api(path: str) -> str:
-    result = subprocess.run(["gh", "api", path], capture_output=True, text=True, check=False)
-    if result.returncode != 0:
-        raise VerdictCheckFailure(f"gh api {path} failed: {result.stderr.strip()[:120]}")
-    return result.stdout
-
-
 def _utc(value: object) -> datetime:
     stamp = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
     return stamp if stamp.tzinfo else stamp.replace(tzinfo=UTC)
@@ -345,19 +490,13 @@ def first_declared_at(
     check: str,
     *,
     release: str,
-    deploy_type: str,
     repo: str = ".",
     run: GitRun = subprocess.run,
-    gh_api: GhApi = _gh_api,
 ) -> datetime | None:
-    """When this environment first served a release that declares `check`.
+    """When the deployed release lineage first introduced `check` into the expectations file.
 
-    The commit that first put the check's key into the expectations file (among the deployed
-    release's ancestors), the release tags that contain it, and the earliest successful
-    `Deploy <deploy_type> <tag>` among them. None — no grace — whenever any step cannot be
-    shown, including when the listed runs may not reach back far enough: the answer is only
-    trusted when the listing is complete or reaches past the introducing commit, since no
-    deploy of a tag containing a commit can precede that commit.
+    Returns the commit timestamp of the earliest ancestor of `release` that added the quoted
+    check key to `tools/nightly_verdicts.json`, or None when that cannot be shown.
     """
     try:
         log = run(
@@ -382,28 +521,8 @@ def first_declared_at(
         first = lines[0].split() if lines and lines[0].strip() else []
         if len(first) != 2:
             return None
-        introduced, introduced_at = first[0], _utc(first[1])
-        tags = run(
-            ["git", "-C", repo, "tag", "--contains", introduced, "--list", "v*"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if tags.returncode != 0:
-            return None
-        titles = {f"Deploy {deploy_type} {tag}" for tag in tags.stdout.split()}
-        runs = json.loads(gh_api(DEPLOY_RUNS_PATH)).get("workflow_runs", [])
-        served = [
-            _utc(entry["updated_at"])
-            for entry in runs
-            if entry.get("display_title") in titles and entry.get("conclusion") == "success"
-        ]
-        if not served:
-            return None
-        complete = len(runs) < 100 or min(_utc(entry["created_at"]) for entry in runs) <= introduced_at
-        return min(served) if complete else None
-    # OSError: a missing or unrunnable git/gh binary is "cannot be shown" too, never a crash.
-    except (VerdictCheckFailure, OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+        return _utc(first[1])
+    except (VerdictCheckFailure, OSError, KeyError, TypeError, ValueError):
         return None
 
 
@@ -534,21 +653,14 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("url")
     parser.add_argument("--environment", default="")
     parser.add_argument("--repo", default=".", help="checkout holding the release tags")
-    # deploy-release.yml's run-name word ("staging", "prod"); omitted, a missing check is never pending.
-    parser.add_argument("--deploy-type", default="")
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = _parser().parse_args(list(sys.argv[1:] if argv is None else argv))
-    first_declared: FirstDeclared | None = None
-    if arguments.deploy_type:
-        deploys = functools.cache(_gh_api)
 
-        def first_declared(check: str, release: str) -> datetime | None:
-            return first_declared_at(
-                check, release=release, deploy_type=arguments.deploy_type, repo=arguments.repo, gh_api=deploys
-            )
+    def first_declared(check: str, release: str) -> datetime | None:
+        return first_declared_at(check, release=release, repo=arguments.repo)
 
     return check_nightly_verdicts(
         arguments.url,

@@ -15,7 +15,6 @@ from __future__ import annotations
 import csv
 import json
 import re
-import sys
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -70,13 +69,18 @@ QUIET = runs_of("quiet_job", "s" * 40, end=NOW - timedelta(hours=1))
 FLEET = runs_of("fleet_job", "sssssssf" * 5, scheduled=False, end=NOW - timedelta(hours=1))
 
 
-def test_the_wilson_interval_matches_the_delivery_report() -> None:
-    """One formula: the delivery report's `wilson` is the reference for the verdict's."""
-    sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "common" / "runtime" / "src"))
-    from truealpha_tools.delivery_report import wilson as reference
+def test_the_wilson_interval_matches_the_reference_formula() -> None:
+    """One formula: the 95% Wilson score interval matches the reference calculation."""
+    import math
 
+    z = job_run_health.Z95
     for failures, n in [(0, 1), (1, 7), (3, 13), (2, 3), (15, 22), (5, 5), (0, 40)]:
-        assert job_run_health.wilson(failures, n) == pytest.approx(reference(failures, n))
+        p = failures / n
+        denom = 1 + z * z / n
+        centre = (p + z * z / (2 * n)) / denom
+        margin = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / denom
+        reference = (max(0.0, centre - margin), min(1.0, centre + margin))
+        assert job_run_health.wilson(failures, n) == pytest.approx(reference)
 
 
 def test_two_scheduled_failures_in_a_row_are_red() -> None:

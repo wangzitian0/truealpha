@@ -287,8 +287,8 @@ def test_every_job_that_runs_uv_installs_it_through_the_shared_action() -> None:
     # GREEN-WHILE-EMPTY guard: 11 jobs ran uv when #1248 was fixed. A detector that finds none
     # reports no problem for every workflow.
     jobs = jobs_that_run_uv(workflows)
-    assert ("ci-python.yml", "gates") in jobs and ("deploy-release.yml", "request") in jobs, jobs
-    assert len(jobs) >= 11, f"the scan found {len(jobs)} jobs that run uv; 11 ran uv when #1248 was fixed: {jobs}"
+    assert ("ci-python.yml", "gates") in jobs and ("ci-runtime.yml", "smoke") in jobs, jobs
+    assert len(jobs) >= 6, f"the scan found {len(jobs)} jobs that run uv: {jobs}"
 
 
 @pytest.mark.parametrize(

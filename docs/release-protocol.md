@@ -1,227 +1,32 @@
 # Release protocol
 
-Written after a release that took a day and four failed dispatches, and after a
-version number was claimed twice by two agents working in parallel.
+Release orchestration, staging auto-release, surface-walk gating, daily delivery
+reporting, and scheduler-liveness checks run centrally in wangzitian0/infra2
+(#1588). This repository publishes its container images on `main` pushes via
+ `.github/workflows/ci-required.yml` and `.github/workflows/release-images.yml`,
+ and declares its runtime verification hooks in `runtime-hooks.manifest.json`.
 
-## Claim the version first, push the tag immediately
+## Central release train and `runtime-hooks.manifest.json`
 
-Decide the version, create the annotated tag, and **push it before doing
-anything else**. Not after CI, not after staging, not after the deploy — the
-push is the first outward action of a release.
+`runtime-hooks.manifest.json` (`schema_version: 1`, `service: "truealpha/app"`)
+is the single contract between `truealpha` and the `infra2` release train.
+`common/runtime/src/truealpha_tools/env_manifest.py` validates it alongside
+`env.manifest.json` on every CI run.
 
-The tag push is the lock. `git push origin vX.Y.Z` fails when the ref already
-exists, so two agents cannot claim the same version: the loser sees
+It declares four verification slots that `infra2` invokes:
 
-```
-! [rejected]        v0.0.21 -> v0.0.21 (already exists)
-```
+- `smoke`: polls `tools/health_check.py` against `$APP_URL/api/health` for
+  `$APP_VERSION_REF` and checks the unauthenticated surface via
+  `tools/surface_contract.py`.
+- `preview_gate` and `staging_gate`: confirm health via `tools/health_check.py`,
+  warm the surface via `tools/warm_surface.sh`, walk the route tree via
+  `apps/app-web/e2e/walk-tree.mjs`, and verify the authenticated MCP contract
+  via `tools/surface_contract.py --authenticated`.
+- `scheduled_audit`: evaluates nightly verdicts via `tools/nightly_verdicts.py`
+  and checks the surface contract via `tools/surface_contract.py`.
 
-and takes the next number. That is exactly what happened on 2026-08-17 — a
-concurrent agent tagged v0.0.21 while this lane was preparing the same release,
-and the collision was visible immediately instead of producing two different
-artifacts under one name.
-
-**Never move a pushed tag.** `deploy-release.yml` calls its target an
-"Immutable release promotion target", and infra2 diffs production cumulatively
-from the marker it names. A tag that is deployed and later moved makes every
-subsequent promotion diff from a baseline that no longer exists. When a tag
-turns out to be short of what you wanted — v0.0.21 stopped seven commits before
-main — cut the next number, say so in its message, and leave the old one alone.
-
-## The lock is checked twice, but only one check is the lock
-
-v0.0.63/66/67 collided with another lane THREE times on 2026-09-16 (#860):
-`tools/cut_release.sh` checked `git ls-remote --tags origin` first, then spent
-minutes verifying named PRs and waiting for main's `ci-required` to go green,
-then tagged — long enough for another release to claim the same number in
-between, so the whole ceremony died on a race the first check could not see
-coming.
-
-The fix is not a bigger or earlier check; a check can never close the window
-between itself and the push that follows it. `cut_release.sh` re-verifies
-`git ls-remote --tags origin` immediately before the push that actually claims
-the number, and rolls forward to the next free `vX.Y.(Z+1)` — re-verifying
-that one too — on either signal: the immediate re-check finding the number
-taken, or the push itself failing with `already exists`. The push failure is
-authoritative; the re-check is only there to skip a doomed `git tag` when the
-collision is already obvious. Bounded at 5 attempts, each logged, so a runaway
-parallel-release storm fails loudly instead of retrying forever.
-
-The step-1 check from the section above stays exactly as it was: a fast, cheap
-fail for a number that is obviously already taken, before minutes of PR
-verification are spent on a release that cannot land under this name anyway.
-Neither check is ever allowed to become the actual lock — the push is, and
-that never changes.
-
-## An abandoned tag costs nothing
-
-v0.0.21 was tagged and never deployed. That is untidy and it is not a leak: a
-tag that no environment serves holds no resource, blocks no lane, and the
-freshness guard judges what production *serves*, never what tags exist.
-
-## Parallel releases do not deadlock
-
-`deploy-release.yml` sets
-
-```yaml
-concurrency:
-  group: truealpha-release-${{ inputs.deploy_type }}-${{ inputs.version_ref }}
-  cancel-in-progress: false
-```
-
-The version is part of the key, so two different releases never queue behind
-each other. Two dispatches of *the same* type and version do queue, and they
-wait rather than cancel — which is what you want when the second one is a
-retry of a deploy whose outcome is unknown.
-
-There is no lock held across the rest of the flow. If a release is abandoned
-after the tag is pushed — CI red, an evidence gate refuses, the agent stops —
-nothing is left held. The next release picks the next number and proceeds.
-
-## Cadence: one release per merge window, not one per PR
-
-Default cadence is batched (#855 A3, #860). `tools/cut_release.sh --prs` is
-optional: omitted, the PR list is derived from every squash-merge subject
-between the newest reachable release tag and main HEAD, printed for review,
-and recorded in the tag's own annotation (the infra2 `DeployRequest` wire
-contract has no field for a PR list, and changing a contract shared with other
-repositories is out of scope for a release-cadence change — the tag message
-and this ceremony's own log are the record instead). Explicit `--prs` keeps
-working exactly as before, so a break-glass single-PR release stays possible
-whenever one specific change needs to ship alone.
-
-The reason is the pipeline's own fixed cost, not the change size: v0.0.56
-through v0.0.60 on 2026-09-15 were five tags for five separate PRs, each
-paying tag `ci-required` plus the full staging deploy alone — the same ~10 min
-whether the tag describes one commit or ten. Batching a merge window's PRs
-into one release pays that cost once. The last-merged PR in the batch must
-still be the one whose merge commit is main HEAD (unchanged, see
-`test_release_script_reviews_the_pr_that_produced_the_release_sha`) — that is
-what `deploy-release.yml`'s prod gate reviews, and it is always the newest PR
-in the derived range by construction.
-
-A resumed ceremony (`--resume` / `--redeploy`, #811) derives the same batch as
-the attempt it resumes (#913). Its tag is already on origin at main HEAD, so
-the derived range starts at the release before that tag, not at the tag
-itself. Counting from the tag itself gave an empty range, and the v0.0.80 and
-v0.0.83 retries on 2026-09-17 both failed with "nothing to release". Only a
-tag that is already verified to sit at main HEAD is skipped this way. A new
-number cut at an already-released HEAD still has nothing to release.
-`common/runtime/tests/test_cut_release.py` runs the script end to end against a
-throwaway origin to check this.
-
-## Staging cuts itself; production still does not
-
-On 2026-09-17 green merges to main sat untagged for up to 16.5 minutes because
-nobody ran this ceremony by hand (#860). `auto-release-staging.yml` now runs
-`tools/cut_release.sh --auto` for you, on one condition the owner set that day:
-"先在 staging 做吧，prod 回头再说" — staging only, full stop. Production still
-moves only on a deliberate `--prod` run that carries the owner's approval of
-the exact SHA ("Production needs the owner" below); nothing about the automatic
-path changes that.
-
-The workflow triggers on every green `ci-required` push to main, then waits a
-quiet period before it does anything — not a courtesy delay, a debounce. The
-`Quiet period` step of `.github/workflows/auto-release-staging.yml` holds its
-length. A
-second merge landing in that window does not queue a second release behind
-the first: it lands on main, and the FIRST push's wait wakes up to find main
-has moved past the commit that started it. `tools/auto_release.py` (the
-decision, not the trigger) checks GitHub for the CURRENT main HEAD every time
-it runs, never trusts what triggered it, and stands down the moment the two
-disagree — that later push already started its own independent wait, and
-batching one release out of a burst of merges falls out of the same
-mechanism as the cadence rule above, not a separate scheduler.
-
-Six more reasons stand between "quiet" and "tagged", checked in this order,
-first match wins (`tools/auto_release.py`'s own docstring and constants are the
-source of truth): main HEAD is not green, main HEAD already carries a
-tag, staging is red (next section), a release would restart the data engine
-inside staging's nightly tick
-window (`TICK_WINDOW_LABEL`, `DEPLOY_LEAD` margin included), today's automatic-release
-count is already at the daily cap (`DEFAULT_DAILY_CAP` in
-`common/runtime/src/truealpha_tools/auto_release.py` — hand-cut releases
-never count against it, only tags carrying the `Release-Trigger: auto-staging`
-trailer `--auto` writes), or a release is already in flight (a deploy run, a
-surface walk, or a tag's own `ci-required`, any of them incomplete).
-
-### Staging red stops the train (#1468 F1)
-
-On 2026-10-19 and 2026-10-20 the train cut 16 automatic tags in 22 hours. Only one
-hand-cut tag walked green in that time. Each automatic tag failed where the tag
-before it had failed. The train now stops when both conditions hold:
-
-* the newest release has no passing walk, and
-* two releases in a row failed at the same stage and the same step, and both
-  failures are newer than the newest passing walk of any tag.
-
-A release is one tag push. A tag whose own `ci-required` run fails is deleted, and
-the next attempt reuses its number, so each push counts. The stage is `ci-required`,
-`deploy-release` or `walk-release`. The step is the step that failed first in the
-newest failed run of that stage. A step that runs after a failure, such as a probe,
-fails because of it, so the first failure in time is the cause. The summary job of
-`ci-required` and the `auto-release-staging` run itself only echo a failure, so they
-never name the step. Two failures of one stage that name no step count as the same
-step.
-
-A walk passes only when its walk step passed. A `walk-release` run can end `success`
-with the walk step skipped. That run walked nothing, so it lifts nothing.
-
-Three modules hold the rule, and each fact has one definition:
-
-* `staging_line.py`: the rule, with no read of the network.
-* `release_history.py`: the releases, read from the run lists. It starts at the newest
-  passing walk and reads forward, which costs about a dozen API calls. It reads every
-  tag from the lowest tag of that window up, because a release cut between two failing
-  releases breaks their run. A run that has moved on to a newer commit reads none. A
-  re-run keeps its run id, so the reader also reads the attempt that the re-run hides.
-* `release_runs.py`: the words that the delivery report and the train share (the run
-  titles, the tag name, the summary job).
-
-When the train stops it cuts no tag and exits green. The log shows `skip: staging is
-red since <tag> at <stage / job / step> ...`. The tool opens one issue, `[truealpha]
-Staging red since <tag>: <step>`, or comments on the open one (`staging_issue.py`).
-It never opens a second one. Every run prints a `staging line:` line, red or not.
-
-The stop holds until a walk passes. A later failure at another step does not lift it.
-A re-run that is still in flight does not lift it. To resume, fix the cause. Then cut
-a release by hand with `tools/cut_release.sh`, because the stop does not hold a
-hand-cut release. A walk of a deployed tag also lifts the stop, but it does not fix
-the cause: `gh workflow run walk-release.yml -f deploy_type=staging -f version_ref=<tag>`.
-The next run sees the passing walk, resumes the train and closes the issue.
-
-Manual replay of the decision, read-only (it writes no issue and no output file):
-
-```bash
-python3 tools/auto_release.py --repo wangzitian0/truealpha --trigger-sha "$(git rev-parse origin/main)"
-```
-
-Add `--report-staging-red` to also open, update or close the issue. Two standing
-checks hold the rule. The first is `common/runtime/tests/test_staging_line.py`, a
-replay of the real run history of 2026-10-13 to 2026-10-21 through the reader and
-`decide`. The second is the mutations `staging-line/*`, `release-history/*` and
-`staging-issue/*` in `tools/mutations.json`. A third check ties the run-names of the
-release workflows to the title patterns of the reader (`test_ci_workflows.py`).
-
-`--auto` is the one new flag on `cut_release.sh`, and it does exactly two
-things: it writes that trailer, and it refuses outright if `--prod` is also
-given. That refusal is the second, independent lock on "staging only" — the
-first is that `auto-release-staging.yml` never types `--prod` anywhere in the
-file at all (`common/runtime/tests/test_ci_workflows.py` greps the literal
-string). Promotion after an automatic release is unchanged: an agent reads
-staging's evidence and asks the owner to approve the exact release SHA. After
-the owner approves it, the agent runs
-`cut_release.sh vX.Y.Z --prod --owner-approved-sha <sha>`, same as after a
-hand-cut one. `common/runtime/tests/test_auto_release.py` and the
-`--auto`/`--prod` cases in `test_cut_release.py` hold all of this against the
-unfixed code, not just the fixed one.
-
-What counts as reaching production: only running `tools/cut_release.sh <tag> --prod`
-(which triggers `deploy-release.yml` with `deploy_type=prod` to deploy to
-production) counts as a production pipeline. Normal PR merges to `main` never
-reach production (they feed the staging release flow); once a PR is merge-ready
-under `AGENTS.md` rule 4, the agent that owns it merges it without waiting for
-owner approval.
+The `infra2` release train enforces its own daily automatic-release cap
+(`DEFAULT_DAILY_CAP` in the `infra2` release controller) and staging soak rules.
 
 ## Production needs the owner
 
@@ -230,63 +35,11 @@ Owner instruction, 2026-10-06:
 > 只有 prod 环境部署需要我批准和在场。其他的事情 agent 都可以自己干，但是需要满足每个 stage 的 checklist（部分是文字描述、部分是 skill、部分是门禁）。
 
 Production promotion needs two things from the owner: approval of the exact
-release SHA, and the owner's presence while the promotion runs. Every other
-action is the agent's task when the checklist of its stage passes. This covers
-merging any PR, including a CI or governance change, cutting a release, and a
-staging deploy. `.github/CODEOWNERS` asks the owner for a review of CI and
+release SHA, and the owner's presence while the promotion runs in `infra2`.
+Every other action is the agent's task when the checklist of its stage passes.
+This covers merging any PR, including a CI or governance change, and staging
+verification. `.github/CODEOWNERS` asks the owner for a review of CI and
 governance paths. It is not a merge condition.
-
-Two entry points reach production, and both refuse without the approval:
-
-| Entry point | Input | Refusal |
-|---|---|---|
-| `tools/cut_release.sh <tag> --prod` | `--owner-approved-sha <sha>` | Exit 2, before any `git` or `gh` call when the flag is missing. Exit 2, before the tag push, when the value is not main HEAD. `--dry-run` runs the same check. |
-| `deploy-release.yml` with `deploy_type=prod` | `owner_approved_sha` | The first step after checkout fails the run, before any install or dispatch to infra2. |
-
-Both run `tools/owner_approval_gate.sh`, the one implementation. It passes only
-when the value is exactly 40 lowercase hex characters and equals the commit
-being promoted. An abbreviated SHA, an uppercase SHA, and the SHA of an older
-commit are refusals. `--owner-approved-sha` without `--prod` is also a refusal.
-`common/runtime/tests/test_cut_release.py` and `test_ci_workflows.py` run both
-entry points, and `tools/mutations.json` holds a mutation that removes each check.
-
-The value proves that the caller named the exact commit. It does not prove who
-typed it, because the agent runs `gh` as the owner's account. The owner's
-presence stays a human fact: the agent passes the SHA only after the owner
-approved that SHA in the conversation. A required reviewer on a GitHub
-`production` environment would prove who approved. That environment does not
-exist in this repository today (infra2#1035 tracks it), so the check above is
-the only mechanical guard.
-
-## Production promotes the verified staging tag (#1412 R1)
-
-`tools/cut_release.sh <tag> --prod` promotes an existing tag that staging
-already verified. It does not deploy staging again. Before #1412 it did: each
-production attempt paid a second staging deploy, and a production attempt
-succeeded at the first try about 0.74 x 0.68 = 50% of the time.
-
-`tools/staging_evidence.py` reads three facts for the commit that the tag
-names now:
-
-1. The tag's own `ci-required` push run at that commit is green. Its creation
-   time is the anchor.
-2. A successful `Deploy staging <tag>` run started after the anchor.
-   `deploy-release.yml` runs from main, so the `head_sha` of the run never
-   names the tag's commit. A run that started before the anchor deployed what
-   the tag named then: `--auto` deletes a tag whose CI never went green, and a
-   later release can use the number again at another commit.
-3. The newest `Walk Deploy staging <tag>` run created after that deploy
-   completed has a successful walk step (the `walk_evidence.find_walk` rule).
-   No staging deploy of another tag ran between the end of the deploy and the
-   end of the walk, because the walk does not read which release staging
-   serves.
-
-When a fact is missing, `--prod` stops with no dispatch and names the command
-that produces the fact: a walk re-run, or `--redeploy` for a new staging
-deploy. A tag that does not exist is also a refusal. The owner approves a
-commit with its staging evidence in hand, so a new number goes to staging
-first. `--prod --dry-run` reads the same evidence, so an agent can show that
-a promotion will be accepted before it asks the owner.
 
 ## A release declares its data replays (#1412 R4)
 
@@ -296,70 +49,8 @@ that the old projector wrote. `apps/data-engine/release-replays.json` is the
 one declaration. Its `identities` list names each watched version identity.
 Its `replays` list holds one entry for each declared replay.
 
-Before a new tag is pushed, `tools/release_replays.py` compares each identity
-at the base release tag with main HEAD. A changed identity needs a replay
-entry that the base declaration does not hold. The PR that changes the
-identity adds that entry. Without it, the release stops before the tag push,
-on the `--auto` path too. The tag annotation records the declared replays
-(`Replay:` lines, or `Replay: none`) and the rollback tag (`Rollback-Tag:`,
-the base release tag).
-
-Not done yet: staging and production do not run the declared replays
-automatically, and a production promotion does not collect the replays of
-the staging tags that it skips.
-
-## Staging verification is two facts, not one
-
-Before #855/#860, a release's Playwright walk ran INSIDE `deploy-release.yml`'s
-own run, right after the health/data-engine confirmation — so "the staging
-deploy run is green" already meant "and it was walked". A walk flake (#811,
-about 1 in 5 runs until #853) failed that whole run for a reason unrelated to
-the deploy, and the only recovery was re-dispatching the entire ~5-6 min infra2
-deploy.
-
-The walk now lives in its own workflow, `walk-release.yml`, triggered by
-`deploy-release.yml`'s own `workflow_run` completion (`conclusion == success`)
-so a failed or cancelled deploy is never walked, plus `workflow_dispatch` for a
-manual re-run. This changes what `deploy-release.yml`'s own green means: it
-now asserts "deployed and healthy", and no longer "and the walk that happened
-to run alongside it also passed".
-
-Because of that, "staging is verified" is now two separate facts:
-`tools/cut_release.sh` waits for the staging deploy run to go green (as
-before), then separately polls `walk-release.yml` for a green walk run
-matching that exact tag, before it will print the `--prod` command. A red or
-missing walk prints the one-line recovery instead of re-dispatching the
-deploy:
-
-```
-gh workflow run walk-release.yml -f deploy_type=staging -f version_ref=$TAG
-```
-
-`tools/walk_evidence.py` (the walk evidence of the daily `delivery-report.yml`,
-#560, #1412) reads `walk-release.yml`'s runs the same way it used to read
-`deploy-release.yml`'s — the evidence question is unchanged, only which run
-answers it moved. `deploy-release.yml`'s own prod evidence gate (a green
-"Deploy staging `<tag>`" run) still proves the deploy; it additionally prints
-an `::warning::`, never a hard failure, when that tag's walk evidence is not
-yet confirmed — hard-blocking there would reopen the exact #560 deadlock this
-design exists to avoid, since the walk can legitimately still be in flight
-seconds after a staging deploy finishes. `tools/cut_release.sh`'s own two-fact
-wait is what actually stands between a release and `--prod` for the normal
-ceremony; the workflow-level warning is a second, best-effort signal for a
-direct dispatch that bypasses it.
-
-## What actually costs time
-
-Measured on the v0.0.22 and v0.0.23 releases, not estimated:
-
-| Step | Time | Compressible? |
-|---|---|---|
-| `ci-required` on the tag | ~5–6 min, then 2.2 min, now ~1 min | Used to duplicate the run that was already green on main for the same SHA. A4 D2 (#673) replaced the suite with an attestation that an identical-SHA green main run exists; #860 replaced the rebuild-and-republish with a re-tag of the digests main already published at that SHA (`release-images` `retag`), building only an image main did not publish there. The evidence contract is untouched either time. |
-| Dispatch to infra2 | ~350 s | This is infra2 performing the deploy. Not ours to compress. |
-| Surface walk | ~116 s | ~21 s of it was re-downloading Chromium every run; now cached. The rest is the walk itself, 12 routes across two identities. |
-| Everything else | 2–4 s each | Nothing to take. |
-
-Failed dispatches dominated the real cost: four consecutive attempts for
-v0.0.23 collided with another project's deploys, ~20 minutes lost and the lane
-shut, because the receiver run was correlated by a window in time rather than
-by the request id that was already in the run title. Fixed in infra2-sdk.
+`tools/release_replays.py` (tested by
+`common/runtime/tests/test_release_replays.py`) compares each watched identity
+at the base release tag with `HEAD`. A changed identity needs a replay entry
+that the base declaration does not hold. The PR that changes the identity adds
+that entry.

@@ -534,26 +534,6 @@ def _health_without_qqq(reference: datetime):
     return get
 
 
-def test_the_delivery_report_asks_each_environment_for_the_universes_its_release_schedules(tmp_path: Path) -> None:
-    """Through `delivery_report.verdict_section`, the call that the daily report makes: real git, the release's
-    own expectations file and contract. Without the wiring, staging is red on the three QQQ checks."""
-    delivery_report = load_tool("delivery_report")
-    repo = _release_repo(tmp_path)
-
-    def gh(path: str) -> str:
-        raise delivery_report.InputUnavailable(path)
-
-    lines = delivery_report.verdict_section(_health_without_qqq(NOW), gh, str(repo), NOW)
-
-    staging = [line for line in lines if line.startswith("- staging:")]
-    production = [line for line in lines if line.startswith("- production:")]
-    assert len(staging) == 1 and f"{len(EXPECTED) - 3} of {len(EXPECTED) - 3} expected checks are green" in staging[0]
-    assert len(production) == 1 and f"{len(EXPECTED) - 3} of {len(EXPECTED)} expected checks are green" in production[0]
-    red = [line for line in lines if "red, stale or missing" in line]
-    assert len(red) == 3 and all(any(name in line for line in red) for name in _qqq_checks())
-    assert all("production" not in line or "staging" not in line for line in red)
-
-
 def test_the_command_line_asks_each_environment_for_the_universes_its_release_schedules(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -695,157 +675,69 @@ def test_the_grace_never_excuses_a_red_or_stale_verdict() -> None:
     assert _run(stale, first_declared=recent) == 1
 
 
-def _git(log: str = "", *, log_code: int = 0, tags: str = "v0.0.74\nv0.0.75\n", tags_code: int = 0):
+def _git(log: str = "", *, log_code: int = 0):
     calls: list[list[str]] = []
 
     def run(args: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
         calls.append(args)
-        if "log" in args:
-            return subprocess.CompletedProcess(args, log_code, log, "")
-        return subprocess.CompletedProcess(args, tags_code, tags, "")
+        return subprocess.CompletedProcess(args, log_code, log, "")
 
     return run, calls
-
-
-def _deploys(*entries: tuple[str, str], filler: int = 0, filler_created: str = "2026-09-16T12:00:00Z"):
-    runs = [
-        {"display_title": title, "conclusion": "success", "created_at": at, "updated_at": at} for title, at in entries
-    ]
-    runs += [
-        {
-            "display_title": "Deploy staging v0.0.99",
-            "conclusion": "success",
-            "created_at": filler_created,
-            "updated_at": filler_created,
-        }
-    ] * filler
-
-    def gh_api(path: str) -> str:
-        assert "workflows/deploy-release.yml/runs" in path and "status=success" in path
-        return json.dumps({"workflow_runs": runs})
-
-    return gh_api
 
 
 INTRODUCED = "a" * 40 + " 2026-09-16T10:00:00+00:00\n" + "b" * 40 + " 2026-09-16T11:00:00+00:00\n"
 
 
-def test_first_declared_is_the_earliest_deploy_of_a_release_containing_the_introducing_commit() -> None:
+def test_first_declared_is_the_earliest_introducing_commit_in_the_release_lineage() -> None:
     run, calls = _git(INTRODUCED)
     since = _module.first_declared_at(
         "model_key_health",
         release="v0.0.75",
-        deploy_type="staging",
         run=run,
-        gh_api=_deploys(
-            ("Deploy staging v0.0.75", "2026-09-16T11:30:00Z"),
-            ("Deploy staging v0.0.74", "2026-09-16T10:20:00Z"),
-            ("Deploy prod v0.0.74", "2026-09-16T10:05:00Z"),
-            ("Deploy staging v0.0.73", "2026-09-16T09:55:00Z"),
-        ),
     )
-    assert since == datetime(2026, 9, 16, 10, 20, tzinfo=UTC), (
-        "prod's deploy and a tag without the commit must not count"
-    )
+    assert since == datetime(2026, 9, 16, 10, 0, tzinfo=UTC)
     log = calls[0]
     assert log[log.index("-S") + 1] == '"model_key_health"', "the pickaxe must match the quoted key, not a substring"
     assert "v0.0.75" in log and log[-1] == "tools/nightly_verdicts.json"
-    assert calls[1][calls[1].index("--contains") + 1] == "a" * 40, "the FIRST introducing commit decides"
-
-
-def test_first_declared_is_unknown_when_the_listing_may_not_reach_back_far_enough() -> None:
-    """100 runs all newer than the introducing commit: an older declaring deploy may exist
-    beyond the page, so the earliest one seen cannot be trusted as the first."""
-    run, _ = _git(INTRODUCED)
-    since = _module.first_declared_at(
-        "model_key_health",
-        release="v0.0.75",
-        deploy_type="staging",
-        run=run,
-        gh_api=_deploys(("Deploy staging v0.0.74", "2026-09-16T10:20:00Z"), filler=99),
-    )
-    assert since is None
-
-
-def test_a_full_listing_that_reaches_past_the_introducing_commit_is_trusted() -> None:
-    run, _ = _git(INTRODUCED)
-    since = _module.first_declared_at(
-        "model_key_health",
-        release="v0.0.75",
-        deploy_type="staging",
-        run=run,
-        gh_api=_deploys(
-            ("Deploy staging v0.0.74", "2026-09-16T10:20:00Z"),
-            filler=99,
-            filler_created="2026-09-15T12:00:00Z",
-        ),
-    )
-    assert since == datetime(2026, 9, 16, 10, 20, tzinfo=UTC)
 
 
 @pytest.mark.parametrize(
-    "run, gh_api",
+    "run",
     [
-        pytest.param(_git("")[0], _deploys(("Deploy staging v0.0.74", "2026-09-16T10:20:00Z")), id="never-introduced"),
-        pytest.param(
-            _git(INTRODUCED, log_code=128)[0],
-            _deploys(("Deploy staging v0.0.74", "2026-09-16T10:20:00Z")),
-            id="git-log-fails",
-        ),
-        pytest.param(
-            _git(INTRODUCED, tags_code=1)[0],
-            _deploys(("Deploy staging v0.0.74", "2026-09-16T10:20:00Z")),
-            id="git-tag-fails",
-        ),
-        pytest.param(
-            _git(INTRODUCED)[0], _deploys(("Deploy staging v0.0.73", "2026-09-16T09:55:00Z")), id="never-deployed"
-        ),
-        pytest.param(_git(INTRODUCED)[0], lambda _path: "not json", id="unreadable-listing"),
+        pytest.param(_git("")[0], id="never-introduced"),
+        pytest.param(_git(INTRODUCED, log_code=128)[0], id="git-log-fails"),
+        pytest.param(_git("malformed\n")[0], id="malformed-log"),
     ],
 )
-def test_first_declared_is_unknown_whenever_a_step_cannot_be_shown(run: object, gh_api: object) -> None:
-    def failing(path: str) -> str:
-        raise _module.VerdictCheckFailure("rate limited")
-
-    for api in (gh_api, failing):
-        assert (
-            _module.first_declared_at("model_key_health", release="v0.0.75", deploy_type="staging", run=run, gh_api=api)
-            is None
-        )
+def test_first_declared_is_unknown_whenever_a_step_cannot_be_shown(run: object) -> None:
+    assert _module.first_declared_at("model_key_health", release="v0.0.75", run=run) is None
 
 
 def test_every_declared_cadence_is_its_jobs_schedule_period() -> None:
     """The bound is twice the declared cadence, so a declared cadence that drifts from the
     Dagster cron makes the check either blind (too long) or noisy (too short). Measured from
-    the deployed root's own schedules with the scheduler-liveness cron reader."""
+    the deployed root's own schedules with the cron reader."""
     from data_engine.dagster_defs import defs
 
-    liveness = load_tool("scheduler_liveness")
     crons: dict[str, list[object]] = {}
     for schedule in defs.schedules or ():
         assert schedule.execution_timezone in (None, "UTC"), f"{schedule.name} is not on UTC"
         expressions = [schedule.cron_schedule] if isinstance(schedule.cron_schedule, str) else schedule.cron_schedule
-        crons.setdefault(schedule.job_name, []).extend(liveness.Cron.parse(e) for e in expressions)
+        crons.setdefault(schedule.job_name, []).extend(_module.Cron.parse(e) for e in expressions)
     for name, expectation in EXPECTED.items():
-        gap = liveness.largest_gap(crons[expectation.job], NOW)
+        gap = _module.largest_gap(crons[expectation.job], NOW)
         assert gap == timedelta(hours=expectation.cadence_hours), (
             f"{name}: declared cadence {expectation.cadence_hours} h, but job {expectation.job} fires every {gap}"
         )
 
 
 def test_a_missing_binary_is_no_grace_not_a_crash() -> None:
-    """Review on #901: an exec failure (no `git`, no `gh`) must fall back like any other step."""
+    """Review on #901: an exec failure (no `git`) must fall back like any other step."""
 
     def no_git(args: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
         raise FileNotFoundError("git")
 
-    def no_gh(path: str) -> str:
-        raise FileNotFoundError("gh")
-
-    deploys = _deploys(("Deploy staging v0.0.74", "2026-09-16T10:20:00Z"))
-    kwargs = {"release": "v0.0.75", "deploy_type": "staging"}
-    assert _module.first_declared_at("model_key_health", run=no_git, gh_api=deploys, **kwargs) is None
-    assert _module.first_declared_at("model_key_health", run=_git(INTRODUCED)[0], gh_api=no_gh, **kwargs) is None
+    assert _module.first_declared_at("model_key_health", release="v0.0.75", run=no_git) is None
 
 
 class _ProofConnection:

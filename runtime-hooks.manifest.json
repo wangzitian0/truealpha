@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "service": "truealpha/app",
+  "slots": {
+    "smoke": {
+      "run": "uv run python tools/health_check.py \"$APP_URL/api/health\" \"$APP_VERSION_REF\" 36 && uv run python tools/surface_contract.py \"$APP_URL\"",
+      "timeout_seconds": 300,
+      "required_env": [
+        "APP_URL",
+        "APP_VERSION_REF"
+      ]
+    },
+    "preview_gate": {
+      "bootstrap": "bun install --frozen-lockfile && bunx playwright install --with-deps chromium",
+      "run": "uv run python tools/health_check.py \"$APP_URL/api/health\" \"$APP_VERSION_REF\" 36 && bash tools/warm_surface.sh \"$APP_URL\" / /research/rankings && (cd apps/app-web && TA_BASE_URL=\"$APP_URL\" node e2e/walk-tree.mjs) && uv run python tools/surface_contract.py --authenticated \"$APP_URL\"",
+      "timeout_seconds": 900,
+      "required_env": [
+        "APP_URL",
+        "APP_VERSION_REF",
+        "TA_EMAIL",
+        "TA_MEMBER_EMAIL",
+        "TA_PASSWORD",
+        "TA_MCP_TOKEN"
+      ]
+    },
+    "staging_gate": {
+      "bootstrap": "bun install --frozen-lockfile && bunx playwright install --with-deps chromium",
+      "run": "uv run python tools/health_check.py \"$APP_URL/api/health\" \"$APP_VERSION_REF\" 36 && bash tools/warm_surface.sh \"$APP_URL\" / /research/rankings && (cd apps/app-web && TA_BASE_URL=\"$APP_URL\" node e2e/walk-tree.mjs) && uv run python tools/surface_contract.py --authenticated \"$APP_URL\"",
+      "timeout_seconds": 900,
+      "required_env": [
+        "APP_URL",
+        "APP_VERSION_REF",
+        "TA_EMAIL",
+        "TA_MEMBER_EMAIL",
+        "TA_PASSWORD",
+        "TA_MCP_TOKEN"
+      ]
+    },
+    "scheduled_audit": {
+      "bootstrap": "uv sync --frozen",
+      "run": "uv run python tools/nightly_verdicts.py \"$APP_URL/api/health\" --environment \"$ENVIRONMENT\" --repo . && uv run python tools/surface_contract.py \"$APP_URL\"",
+      "timeout_seconds": 600,
+      "required_env": [
+        "APP_URL",
+        "ENVIRONMENT"
+      ]
+    }
+  }
+}

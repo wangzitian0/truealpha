@@ -69,7 +69,7 @@ def _modules_that_read_the_rate() -> set[str]:
 def _minutes_of_day(expression: str) -> list[int]:
     from truealpha_runtime.testing import load_tool
 
-    cron = load_tool("scheduler_liveness").Cron.parse(expression)
+    cron = load_tool("nightly_verdicts").Cron.parse(expression)
     return sorted(hour * 60 + minute for hour in cron.hours for minute in cron.minutes)
 
 
