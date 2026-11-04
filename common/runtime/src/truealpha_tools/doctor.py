@@ -27,6 +27,7 @@ ROOT = Path(__file__).resolve().parents[4]
 #: The tracked hook directory. core.hooksPath is relative, so each worktree of a clone
 #: runs its own checked-out hook (#1412 T0).
 HOOKS_DIR = "tools/git-hooks"
+HOOK_REMEDIATION = "Run: git config core.hooksPath tools (or ln -sf ../../tools/prepush.sh .git/hooks/pre-push)"
 
 
 def check_python_version() -> bool:
@@ -116,6 +117,7 @@ def check_git_hook(root: Path | None = None) -> bool:
     print(f"[*] Per-commit hook: core.hooksPath = {configured or '<unset>'}")
     if configured != HOOKS_DIR:
         print(f"    [FAIL] the pre-commit hook is not installed (core.hooksPath must be {HOOKS_DIR}): run make install")
+        print(f"    {HOOK_REMEDIATION}")
         return False
     if not (hook.is_file() and os.access(hook, os.X_OK)):
         print(f"    [FAIL] {HOOKS_DIR}/pre-commit is missing or not executable")

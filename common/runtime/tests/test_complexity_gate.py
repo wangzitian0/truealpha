@@ -5,9 +5,11 @@ import json
 from pathlib import Path
 
 import pytest
+import yaml
 from truealpha_runtime.testing import load_tool
 
 complexity_gate = load_tool("complexity_gate")
+REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def test_measure_ast_complexity_accurately_counts_decision_points() -> None:
@@ -117,3 +119,49 @@ class ClassB:
     assert "module.py:ClassB.process" in results
     assert results["module.py:ClassA.process"] == 2
     assert results["module.py:ClassB.process"] == 4
+
+
+def test_only_flag_filters_by_metric_or_module_scope(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """`--only` scopes checks and baseline updates to the requested metric or module (#1412)."""
+    baseline_file = tmp_path / "baseline.json"
+    baseline_file.write_text(json.dumps({"apps/other.py:stale_fn": 25}), encoding="utf-8")
+
+    mock_scan = {
+        "apps/target.py:violating_fn": 26,
+        "apps/other.py:stale_fn": 15,
+    }
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(complexity_gate, "scan_functions", lambda *args, **kwargs: mock_scan)
+        # Filtering to `other.py` skips the violation in `target.py`.
+        assert complexity_gate.check_complexity(threshold=20, baseline_path=baseline_file, only=["other.py"]) == 0
+        # Filtering to `target.py` catches the violation in `target.py`.
+        assert complexity_gate.check_complexity(threshold=20, baseline_path=baseline_file, only=["target.py"]) == 1
+        # `--write-baseline --only target.py` updates only `target.py` and preserves `other.py`.
+        assert (
+            complexity_gate.check_complexity(
+                threshold=20, baseline_path=baseline_file, write_baseline=True, only=["target.py"]
+            )
+            == 0
+        )
+        updated = json.loads(baseline_file.read_text(encoding="utf-8"))
+        assert updated == {
+            "apps/other.py:stale_fn": 25,
+            "apps/target.py:violating_fn": 26,
+        }
+
+    # `--only file_lines` runs the file-lines metric check through CLI `main`.
+    capsys.readouterr()
+    assert complexity_gate.main(["--check", "--only", "file_lines"]) == 0
+    assert "file_lines" in capsys.readouterr().out
+
+
+def test_pre_commit_config_wires_complexity_gate() -> None:
+    """F8 (#1412): `.pre-commit-config.yaml` runs `python3 tools/complexity_gate.py --check`."""
+    config = yaml.safe_load((REPO_ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8"))
+    local_hooks = [hook for repo in config["repos"] if repo["repo"] == "local" for hook in repo["hooks"]]
+    entries = {hook["id"]: hook for hook in local_hooks}
+    assert "complexity-gate" in entries
+    hook = entries["complexity-gate"]
+    assert hook["entry"] == "python3 tools/complexity_gate.py --check"
+    assert hook["language"] == "system"
+    assert hook["pass_filenames"] is False

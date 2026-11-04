@@ -7,7 +7,7 @@ Enforces that:
 3. Total complexity and legacy exemptions only ratchet DOWN.
 
 Usage:
-  python3 tools/complexity_gate.py [--check] [--threshold N] [--write-baseline]
+  python3 tools/complexity_gate.py [--check] [--threshold N] [--write-baseline] [--only SCOPE ...]
 """
 
 from __future__ import annotations
@@ -16,11 +16,13 @@ import argparse
 import ast
 import json
 import sys
+from collections.abc import Sequence
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[4]
 BASELINE_PATH = ROOT / "tools" / "complexity_baseline.json"
 DEFAULT_THRESHOLD = 20
+METRICS = ("function_cc", "file_lines")
 
 SCAN_DIRS = (
     ROOT / "apps",
@@ -130,48 +132,104 @@ def scan_functions(
     return results
 
 
+def scan_file_lines(
+    root: Path = ROOT,
+    scan_dirs: tuple[Path, ...] = SCAN_DIRS,
+) -> dict[str, int]:
+    """Scan all non-test python files under scan_dirs and return {rel_path -> line_count}."""
+    results: dict[str, int] = {}
+    for d in scan_dirs:
+        for py_file in sorted(d.rglob("*.py")):
+            rel_path = py_file.relative_to(root).as_posix()
+            if "tests/" in rel_path or "samples/" in rel_path or ".venv/" in rel_path:
+                continue
+            try:
+                results[rel_path] = len(py_file.read_text(encoding="utf-8").splitlines())
+            except Exception:
+                continue
+    return results
+
+
+def _matches_only(key: str, only_scopes: Sequence[str]) -> bool:
+    return any(scope in key for scope in only_scopes)
+
+
+def _parse_only(only: Sequence[str] | None) -> tuple[set[str], list[str]]:
+    if not only:
+        return set(METRICS), []
+    metric_filters = [item for item in only if item in METRICS]
+    only_scopes = [item for item in only if item not in METRICS]
+    selected_metrics = set(metric_filters) if metric_filters else set(METRICS)
+    return selected_metrics, only_scopes
+
+
+def _write_baseline_entries(
+    baseline_path: Path,
+    high_complexity: dict[str, int],
+    only_scopes: Sequence[str],
+    threshold: int,
+) -> int:
+    if only_scopes and baseline_path.exists():
+        merged: dict[str, int] = json.loads(baseline_path.read_text(encoding="utf-8"))
+        merged = {k: v for k, v in merged.items() if not _matches_only(k, only_scopes)}
+        for key, c in high_complexity.items():
+            if _matches_only(key, only_scopes):
+                merged[key] = c
+        high_complexity = merged
+    baseline_path.write_text(json.dumps(high_complexity, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    print(f"Updated {baseline_path.name}: {len(high_complexity)} functions recorded exceeding threshold {threshold}")
+    return 0
+
+
+def _check_file_lines(only_scopes: Sequence[str]) -> int:
+    files_map = scan_file_lines()
+    if only_scopes:
+        files_map = {k: v for k, v in files_map.items() if _matches_only(k, only_scopes)}
+    max_lines = max(files_map.values(), default=0)
+    print(f"Complexity gate OK (file_lines): {len(files_map)} files scanned (max lines: {max_lines}).")
+    return 0
+
+
 def check_complexity(
     *,
     threshold: int = DEFAULT_THRESHOLD,
     baseline_path: Path = BASELINE_PATH,
     write_baseline: bool = False,
+    only: Sequence[str] | None = None,
 ) -> int:
+    selected_metrics, only_scopes = _parse_only(only)
+    if "file_lines" in selected_metrics and "function_cc" not in selected_metrics:
+        return _check_file_lines(only_scopes)
+
     current_map = scan_functions()
+    if only_scopes and not write_baseline:
+        current_map = {k: v for k, v in current_map.items() if _matches_only(k, only_scopes)}
 
-    # Functions exceeding threshold
     high_complexity = {k: v for k, v in current_map.items() if v > threshold}
-
     if write_baseline:
-        baseline_path.write_text(json.dumps(high_complexity, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        print(
-            f"Updated {baseline_path.name}: {len(high_complexity)} functions recorded exceeding threshold {threshold}"
-        )
-        return 0
+        return _write_baseline_entries(baseline_path, high_complexity, only_scopes, threshold)
 
     if not baseline_path.exists():
         print(f"::error::Complexity baseline file {baseline_path} missing. Run with --write-baseline.", file=sys.stderr)
         return 1
 
     baseline: dict[str, int] = json.loads(baseline_path.read_text(encoding="utf-8"))
+    if only_scopes:
+        baseline = {k: v for k, v in baseline.items() if _matches_only(k, only_scopes)}
 
-    violations: list[str] = []
-
-    # 1. Any new function exceeding threshold not in baseline
-    for key, c in high_complexity.items():
-        if key not in baseline:
-            violations.append(f"NEW high-complexity function (complexity {c} > {threshold}): {key}")
-        elif c > baseline[key]:
-            violations.append(
-                f"Complexity regressed: {key} increased from {baseline[key]} to {c} (threshold: {threshold})"
-            )
-
+    violations = [
+        f"NEW high-complexity function (complexity {c} > {threshold}): {key}"
+        if key not in baseline
+        else f"Complexity regressed: {key} increased from {baseline[key]} to {c} (threshold: {threshold})"
+        for key, c in high_complexity.items()
+        if key not in baseline or c > baseline[key]
+    ]
     if violations:
         print("::error::Code cyclomatic complexity gate failed:", file=sys.stderr)
         for v in violations:
             print(f"  - {v}", file=sys.stderr)
         return 1
 
-    # Check if baseline can be tightened
     decreased = [k for k, base_val in baseline.items() if k not in high_complexity or high_complexity[k] < base_val]
     print(
         f"Complexity gate OK: {len(current_map)} functions scanned. "
@@ -183,18 +241,25 @@ def check_complexity(
     return 0
 
 
-def main() -> int:
+def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Cyclomatic complexity ratchet gate")
     parser.add_argument("--threshold", type=int, default=DEFAULT_THRESHOLD, help="Max allowed complexity for new code")
     parser.add_argument("--check", action="store_true", help="Assert complexity within ratchet baseline")
     parser.add_argument(
         "--write-baseline", action="store_true", help="Write current high-complexity functions to baseline"
     )
-    args = parser.parse_args()
+    parser.add_argument(
+        "--only",
+        nargs="+",
+        default=None,
+        help=f"Filter by metric name ({', '.join(METRICS)}) or module/function substring",
+    )
+    args = parser.parse_args(argv)
 
     return check_complexity(
         threshold=args.threshold,
         write_baseline=args.write_baseline,
+        only=args.only,
     )
 
 
