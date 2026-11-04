@@ -6,7 +6,6 @@ from truealpha_runtime.checks import (
     GraphStoreCheck,
     ObjectStorageCheck,
     ProbeResult,
-    run_dependency_checks,
 )
 from truealpha_runtime.config import (
     CoreRuntimeSettings,
@@ -34,5 +33,4 @@ __all__ = [
     "StorageError",
     "database_url_field",
     "resolve_environment_tier",
-    "run_dependency_checks",
 ]

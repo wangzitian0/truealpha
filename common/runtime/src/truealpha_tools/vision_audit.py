@@ -18,9 +18,20 @@ from typing import Any
 
 from data_engine.environment_universes import scheduled_universe_names
 from infra2_sdk.deploy import default_http_get
+from infra2_sdk.routing import resolve_app_hostname
 from truealpha_contracts.environment_contract import load_environment_contract
 
 from truealpha_tools.nightly_verdicts import HealthReport, read_report
+
+
+def _health_url_for(env: str) -> str:
+    host = resolve_app_hostname(
+        "truealpha",
+        env,
+        base_domain="truealpha.club",
+        custom_prod_domain="truealpha.club",
+    )
+    return f"https://{host}/api/health"
 
 
 @dataclass(frozen=True)
@@ -159,11 +170,7 @@ def audit_vision(
     health_url: str | None = None,
     oracle_outcomes: Sequence[Mapping[str, Any]] | Mapping[str, Any] | None = None,
 ) -> VisionAuditReport:
-    resolved_url = health_url or (
-        "https://truealpha.club/api/health"
-        if env == "production"
-        else "https://truealpha-staging.truealpha.club/api/health"
-    )
+    resolved_url = health_url or _health_url_for(env)
 
     try:
         report: HealthReport = read_report(resolved_url, default_http_get())

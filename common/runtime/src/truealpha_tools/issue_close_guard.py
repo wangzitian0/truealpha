@@ -37,13 +37,14 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 from infra2_sdk.deploy import HttpGet, ReleaseIdentityError, default_http_get, read_deployed_release
+from infra2_sdk.routing import resolve_app_hostname
 
 REPO = "wangzitian0/truealpha"
 # Rule 6 asks whether a capability is deployed, so the question is what staging
 # SERVES, not what a tag contains. Staging deployment is the completion condition;
 # production releases are hoarded and batched separately.
-STAGING_HEALTH = "https://truealpha-staging.truealpha.club/api/health"
-PRODUCTION_HEALTH = "https://truealpha.club/api/health"
+STAGING_HEALTH = f"https://{resolve_app_hostname('truealpha', 'staging', base_domain='truealpha.club', custom_prod_domain='truealpha.club')}/api/health"
+PRODUCTION_HEALTH = f"https://{resolve_app_hostname('truealpha', 'production', base_domain='truealpha.club', custom_prod_domain='truealpha.club')}/api/health"
 DEFAULT_HEALTH = STAGING_HEALTH
 GhApi = Callable[[str], str]
 Git = Callable[[Sequence[str]], tuple[int, str]]
