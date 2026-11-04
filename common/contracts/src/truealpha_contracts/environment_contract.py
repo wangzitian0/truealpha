@@ -632,9 +632,9 @@ class EnvironmentContract(_StrictFrozenModel):
             if unknown:
                 raise ValueError(f"{env_name}: the environment names universes with no record: {unknown}")
             for refresh_key in spec.list_refresh:
-                if self.universes[refresh_key].membership.kind != "index_api":
+                if self.universes[refresh_key].membership.kind not in ("index_api", "nport"):
                     raise ValueError(
-                        f"{env_name}: list_refresh names {refresh_key!r}, whose membership is not index_api"
+                        f"{env_name}: list_refresh names {refresh_key!r}, whose membership is not index_api or nport"
                     )
             served_ticks = {key for key in spec.ticks if not self.universes[key].is_sentinel}
             if listed != served_ticks:

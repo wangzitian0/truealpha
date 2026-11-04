@@ -155,7 +155,7 @@ def build_universe_refresh_schedule(app_env: str = settings.app_env) -> dg.Sched
             if any(
                 is_universe_list_refresh_scheduled(key, app_env)
                 for key, universe in load_environment_contract().universes.items()
-                if universe.membership.kind == "index_api"
+                if universe.membership.kind in ("index_api", "nport")
             )
             else dg.DefaultScheduleStatus.STOPPED
         ),

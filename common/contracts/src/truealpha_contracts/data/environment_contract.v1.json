@@ -108,8 +108,7 @@
       "lane_name": "universe-list:sp500",
       "label": "S&P 500 constituents, from the index constituent plane",
       "membership": {
-        "kind": "index_api",
-        "url": "https://api.nasdaq.com/api/quote/list-type/sp500",
+        "kind": "nport",
         "nport_ticker": "IVV"
       },
       "roles": [],

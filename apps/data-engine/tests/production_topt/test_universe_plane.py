@@ -1080,3 +1080,260 @@ def test_the_refresh_op_reports_the_exclusion_in_its_output_metadata(
     assert metadata is not None and "constituents_excluded" in metadata, "the op reported no exclusion"
     reported = metadata["constituents_excluded"].value
     assert reported == {"sp500": {"count": 7, "tickers": _UNKNOWN_TICKERS, "reason": "unresolved_listing_exchange"}}
+
+
+# -- S&P 500 membership from IVV N-PORT holdings (#1441) ------------------------------------------
+
+_IVV_NPORT_XML = b"""<?xml version="1.0" encoding="UTF-8"?>
+<edgarSubmission xmlns="http://www.sec.gov/edgar/nport">
+  <formData>
+    <genInfo>
+      <regName>iShares Trust</regName>
+      <seriesName>iShares Core S&amp;P 500 ETF</seriesName>
+      <seriesId>S000004310</seriesId>
+      <repPdDate>2026-06-30</repPdDate>
+    </genInfo>
+    < fundInfo><totAssets>500000000000</totAssets><totLiabs>100000000</totLiabs><netAssets>499900000000</netAssets></fundInfo>
+    <invstOrSecs>
+      <invstOrSec>
+        <name>APPLE INC</name>
+        <lei>HWUPKR0MPOU8FGXBT394</lei>
+        <title>APPLE INC</title>
+        <cusip>037833100</cusip>
+        <identifiers><isin value="US0378331005"/></identifiers>
+        <balance>1000000</balance>
+        <units>NS</units>
+        <curCd>USD</curCd>
+        <valUSD>220000000</valUSD>
+        <pctVal>7.10</pctVal>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>US</invCountry>
+      </invstOrSec>
+      <invstOrSec>
+        <name>JPMORGAN CHASE &amp; CO</name>
+        <lei>8I5DZWZKVSZI1NUHU748</lei>
+        <title>JPMORGAN CHASE &amp; CO</title>
+        <cusip>46625H100</cusip>
+        <identifiers><isin value="US46625H1005"/></identifiers>
+        <balance>500000</balance>
+        <units>NS</units>
+        <curCd>USD</curCd>
+        <valUSD>105000000</valUSD>
+        <pctVal>1.35</pctVal>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>US</invCountry>
+      </invstOrSec>
+      <invstOrSec>
+        <name>BERKSHIRE HATHAWAY INC CL B</name>
+        <lei>5493000F4ZO33MV32P92</lei>
+        <title>BERKSHIRE HATHAWAY INC</title>
+        <cusip>084670702</cusip>
+        <identifiers><isin value="US0846707026"/></identifiers>
+        <balance>400000</balance>
+        <units>NS</units>
+        <curCd>USD</curCd>
+        <valUSD>165000000</valUSD>
+        <pctVal>1.72</pctVal>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>US</invCountry>
+      </invstOrSec>
+      <invstOrSec>
+        <name>BLACKROCK CASH CL INST SL AGENCY</name>
+        <cusip>09248U700</cusip>
+        <identifiers><isin value="US09248U7000"/></identifiers>
+        <balance>10000000</balance>
+        <units>NS</units>
+        <curCd>USD</curCd>
+        <valUSD>10000000</valUSD>
+        <pctVal>0.02</pctVal>
+        <assetCat>STIV</assetCat>
+        <issuerCat>RF</issuerCat>
+        <invCountry>US</invCountry>
+      </invstOrSec>
+    </invstOrSecs>
+  </formData>
+</edgarSubmission>""".replace(b"< fundInfo>", b"<fundInfo>")
+
+
+def test_sp500_contract_has_no_nasdaq_endpoint_and_uses_ivv_nport() -> None:
+    """#1441 Criterion 1: the dead Nasdaq sp500 URL is removed from the contract and universe source."""
+    from truealpha_contracts.environment_contract import load_environment_contract
+
+    contract = load_environment_contract()
+    sp500_record = contract.record("sp500")
+    assert sp500_record.membership.kind == "nport"
+    assert sp500_record.membership.url is None
+    assert sp500_record.membership.nport_ticker == "IVV"
+    assert "list-type/sp500" not in contract.model_dump_json()
+
+    source = UNIVERSE_SOURCES["sp500"]
+    assert source.index_api == ""
+    assert source.nport_ticker == "IVV"
+    assert source.mic is None
+
+
+def test_sp500_universe_builds_from_ivv_nport_with_filing_knowable_at(in_memory_objects, monkeypatch) -> None:
+    """#1441 Criterion 1: S&P 500 membership refreshes from IVV N-PORT holdings, stamps the filing's
+    knowable_at (never the fetch clock), and resolves CIK, FIGI and primary exchange MIC."""
+    import io
+    import json as _json
+    import urllib.request as _url
+
+    from data_engine.datahub.production_topt import universe_plane as up
+    from data_engine.sources import nport, sec
+
+    filing_date = "2026-08-25"
+    accession = "000110066326000099"
+    series_id = "S000004310"
+    cik = 1100663
+
+    atom = f"""<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry><content type="text/xml">
+    <accession-number>0001100663-26-000099</accession-number>
+    <filing-date>{filing_date}</filing-date>
+  </content></entry>
+</feed>""".encode()
+
+    class _FakeResp:
+        status_code = 200
+
+        def __init__(self, payload: bytes | dict) -> None:
+            self.content = payload if isinstance(payload, bytes) else _json.dumps(payload).encode()
+
+        @property
+        def text(self) -> str:
+            return self.content.decode()
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self):
+            return _json.loads(self.content)
+
+    class _FakeSecHttp:
+        def get(self, url: str) -> _FakeResp:
+            if url == nport.MF_TICKERS_URL:
+                return _FakeResp({"data": [[cik, series_id, "C000012345", "IVV"]]})
+            if url == nport.BROWSE_URL.format(series_id=series_id):
+                return _FakeResp(atom)
+            if url == nport.ARCHIVE_URL.format(cik=cik, accession=accession):
+                return _FakeResp(_IVV_NPORT_XML)
+            raise AssertionError(f"unexpected SEC URL: {url}")
+
+    openfigi_by_isin = {
+        "US0378331005": {"ticker": "AAPL", "shareClassFIGI": "BBG001S5N8V8", "name": "APPLE INC"},
+        "US46625H1005": {"ticker": "JPM", "shareClassFIGI": "BBG001S8CRC3", "name": "JPMORGAN CHASE & CO"},
+        "US0846707026": {"ticker": "BRK/B", "shareClassFIGI": "BBG001S5P000", "name": "BERKSHIRE HATHAWAY INC-CL B"},
+    }
+
+    def _fake_urlopen(req: _url.Request, timeout: float = 0):
+        jobs = _json.loads(req.data.decode())
+        body = _json.dumps([{"data": [openfigi_by_isin[job["idValue"]]]} for job in jobs]).encode()
+        return io.BytesIO(body)
+
+    monkeypatch.setattr(_url, "urlopen", _fake_urlopen)
+    monkeypatch.setattr(
+        sec,
+        "ticker_cik_index",
+        lambda *_a, **_k: {"AAPL": 320193, "JPM": 19617, "BRK-B": 1067983},
+    )
+
+    fetches: list[tuple[DataSource, str, datetime | None]] = []
+
+    def _fake_insert_fetch(
+        _conn,
+        *,
+        source: DataSource,
+        source_record_id: str,
+        body: bytes,
+        content_type: str,
+        fetched_at: datetime | None = None,
+        recorded_at: datetime | None = None,
+        source_published_at: datetime | None = None,
+        metadata: dict | None = None,
+    ) -> int:
+        fetches.append((source, source_record_id, source_published_at))
+        return len(fetches)
+
+    monkeypatch.setattr(up.raw_store, "insert_fetch", _fake_insert_fetch)
+
+    class _FakeCursor:
+        def __init__(self, rows: list[tuple]) -> None:
+            self._rows = rows
+
+        def fetchall(self) -> list[tuple]:
+            return self._rows
+
+    class _FakeConn:
+        def __init__(self) -> None:
+            self.constituents: list[tuple] = []
+
+        def transaction(self):
+            import contextlib
+
+            return contextlib.nullcontext()
+
+        def execute(self, sql: str, params: tuple = ()):
+            norm = " ".join(sql.split()).lower()
+            if norm.startswith("insert into staging.etf_constituent_facts"):
+                self.constituents.append(params)
+                return _FakeCursor([])
+            if "select ticker, cik, figi from staging.etf_constituent_facts" in norm:
+                return _FakeCursor([(r[4], r[7], r[8]) for r in sorted(self.constituents, key=lambda x: x[4])])
+            if "from staging.etf_constituent_facts where etf_symbol = 'qqq'" in norm:
+                return _FakeCursor([("AAPL",)])
+            if "from staging.entity_aliases alias" in norm:
+                return _FakeCursor([])
+            raise AssertionError(f"unexpected SQL: {sql}")
+
+    conn = _FakeConn()
+    source = up.UNIVERSE_SOURCES["sp500"]
+    landed = up.refresh_etf_constituents(
+        conn,  # type: ignore[arg-type]
+        source,
+        openfigi_api_key="test-key",
+        http=_FakeSecHttp(),
+    )
+    assert landed == 3
+    expected_knowable = datetime(2026, 8, 25, 0, 0, tzinfo=UTC)
+    assert fetches[0] == (DataSource.NPORT, f"nport-constituents:sp500:{accession}", expected_knowable)
+    assert fetches[1][0] == DataSource.OPENFIGI
+
+    rows = [(r[4], r[5], r[6], r[7], r[8], r[2], r[1], r[9]) for r in conn.constituents]
+    assert rows == [
+        ("AAPL", "APPLE INC", Decimal("7.1"), 320193, "bbg001s5n8v8", "nport", date(2026, 6, 30), expected_knowable),
+        (
+            "BRK.B",
+            "BERKSHIRE HATHAWAY INC CL B",
+            Decimal("1.72"),
+            1067983,
+            "bbg001s5p000",
+            "nport",
+            date(2026, 6, 30),
+            expected_knowable,
+        ),
+        (
+            "JPM",
+            "JPMORGAN CHASE & CO",
+            Decimal("1.35"),
+            19617,
+            "bbg001s8crc3",
+            "nport",
+            date(2026, 6, 30),
+            expected_knowable,
+        ),
+    ]
+
+    denominator = up.build_denominator(conn, source, report_date=date(2026, 6, 30))  # type: ignore[arg-type]
+    assert denominator["instrument_count"] == 3
+    assert denominator["issuer_count"] == 3
+    assert denominator["excluded"] == []
+    assert {row[3]: row[2] for row in denominator["instruments"]} == {
+        "AAPL": "listing:xnas:aapl",
+        "BRK.B": "listing:xnys:brk.b",
+        "JPM": "listing:xnys:jpm",
+    }
