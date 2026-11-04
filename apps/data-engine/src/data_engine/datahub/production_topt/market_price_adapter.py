@@ -54,7 +54,7 @@ from data_engine.datahub.production_topt.executor import (
 )
 from data_engine.datahub.production_topt.failover_drill import FailoverDrill
 from data_engine.datahub.production_topt.parser_identity import MAPPING_VERSION, PARSER_VERSION
-from data_engine.datahub.production_topt.source_registrations import SOURCE_BY_PARSER
+from data_engine.datahub.production_topt.source_registrations import SOURCE_BY_PARSER, uses_twelve_data
 from data_engine.sources.gateway import BudgetExhausted, CapacityExceeded
 
 if TYPE_CHECKING:
@@ -492,10 +492,14 @@ def build_route(
     # Priority order is the fusion policy's (`reconciliation_policies.RECONCILIATION_POLICY`); an
     # origin that is not configured for this environment is simply not asked. The same
     # origins serve, in that order, a cell the primary cannot (#862, `failover_order`).
-    try:
-        td_origin = twelve_data_origin(connection=context.connection)
-    except TypeError:
-        td_origin = twelve_data_origin()
+    # #1310 / #1411 K2: a universe without a stored price series (S&P 500) excludes Twelve Data
+    # so its tick does not spend the shared daily allowance.
+    td_origin: CorroboratingOrigin | None = None
+    if uses_twelve_data(getattr(context, "universe_id", None)):
+        try:
+            td_origin = twelve_data_origin(connection=context.connection)
+        except TypeError:
+            td_origin = twelve_data_origin()
     origins = [origin for origin in (td_origin, moomoo_kline_origin()) if origin is not None]
     fetcher: MarketPriceFetcher = yahoo_quote_fetcher
     effective_drill = drill or getattr(context, "drill", None)

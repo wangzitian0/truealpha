@@ -1261,3 +1261,134 @@ def test_the_production_alias_prod_is_production_for_the_universe_names() -> Non
 
     assert rule_environment("prod") == rule_environment(" Production ") == "production"
     assert scheduled_universe_names("prod") == ("topt", "universe-list:qqq")
+
+
+@pytest.mark.parametrize(("environment", "expected_share"), [("production", 480), ("staging", 320)])
+def test_issue_1310_registered_schedules_fit_within_twelve_data_daily_allowance_when_sp500_is_scheduled(
+    monkeypatch: pytest.MonkeyPatch,
+    environment: str,
+    expected_share: int,
+) -> None:
+    """#1310 acceptance: over the registered schedules, for each UTC day, the sum of
+    (issuers x Twelve Data calls per issuer) over all scheduled ticks in one environment
+    is at most the allowance left after the core path (the TOPT tick, the price refresh),
+    even when `sp500_live_schedule` is RUNNING in production."""
+    from datetime import date
+
+    from data_engine.config import settings
+    from data_engine.datahub.production_topt import (
+        market_price_adapter,
+        moomoo_origin,
+        twelve_data_origin,
+        universe_corpus,
+    )
+    from data_engine.datahub.production_topt.source_registrations import (
+        RouteCell,
+        RouteContext,
+        origin_per_key_cost,
+    )
+    from data_engine.datahub.production_topt.universe_plane import parse_nasdaq_index_rows
+    from data_engine.lanes import market_data, qqq_prices
+    from data_engine.sources import gateway
+    from truealpha_contracts.environment_contract import EnvironmentContract, load_environment_contract
+    from truealpha_runtime.testing import load_tool
+
+    raw = json.loads(load_environment_contract().model_dump_json())
+    raw["environments"]["production"]["universes"][2] = {"key": "sp500", "status": "scheduled"}
+    scheduled_contract = EnvironmentContract.model_validate_json(json.dumps(raw))
+    monkeypatch.setattr(capture, "load_environment_contract", lambda: scheduled_contract)
+
+    monkeypatch.setattr(settings, "twelve_data_api_key", "test-key")
+    monkeypatch.setattr(settings, "moomoo_kline_origin_enabled", True)
+    monkeypatch.setattr(moomoo_origin, "_require_opend", lambda: None)
+
+    built = dagster_defs.build_definitions(environment)
+    running_schedules = {
+        s.name: s for s in (built.schedules or ()) if s.default_status == dg.DefaultScheduleStatus.RUNNING
+    }
+    if environment == "production":
+        assert "sp500_live_schedule" in running_schedules
+
+    topt_corpus = universe_corpus.load_corpus(universe_corpus.TOPT_CORPUS_FILENAME)
+    topt_symbols = {str(row[3]) for row in topt_corpus["topt_denominator"]["instruments"]}
+    nasdaq100_path = Path(__file__).parent / "production_topt" / "cassettes" / "nasdaq100_index.bcc3fb15.json"
+    qqq_tickers = {row["ticker"] for row in parse_nasdaq_index_rows(nasdaq100_path.read_bytes())}
+    qqq_outside_topt = qqq_tickers - topt_symbols
+
+    # Issuers per universe: TOPT and canary from the contract/corpus; QQQ from its cassette; S&P 500 at full 503 scale.
+    universe_issuers = {
+        "topt": len(topt_symbols),
+        "qqq": len(qqq_outside_topt),
+        "sp500": 503,
+        "canary": len(scheduled_contract.universes["canary"].membership.members),
+    }
+
+    calls_per_symbol = origin_per_key_cost("twelve-data:v1")
+    assert calls_per_symbol == 2
+
+    def tick_twelve_data_calls_per_issuer(universe_key: str) -> int:
+        universe_id = f"{scheduled_contract.record(universe_key).id_prefix}2026-10-16"
+        ctx = RouteContext(
+            cutoff=datetime(2026, 10, 16, 22, 15, tzinfo=UTC),
+            cutoff_date=date(2026, 10, 16),
+            price_cutoff_date=date(2026, 10, 16),
+            partition_start=datetime(2026, 10, 16, tzinfo=UTC),
+            universe_published_at=None,
+            coordinates={},
+            connection=None,
+            universe_id=universe_id,
+        )
+        cells = [RouteCell("wi-1", "market-price", "issuer:cik:1", "inst:1", "listing:xnas:aapl", "AAPL")]
+        adapter = market_price_adapter.build_route(ctx, cells)
+        has_td = any(o.origin == twelve_data_origin.ORIGIN for o in adapter._corroborating_origins)
+        return calls_per_symbol if has_td else 0
+
+    assert tick_twelve_data_calls_per_issuer("sp500") == 0
+    assert tick_twelve_data_calls_per_issuer("topt") == calls_per_symbol
+
+    capacity = gateway.CAPACITIES["twelvedata"].in_environment(environment)
+    assert capacity is not None and capacity.daily_budget == expected_share
+
+    cron_tool = load_tool("nightly_verdicts").Cron
+    # Check every UTC day across a full week (Monday through Sunday).
+    for day_offset in range(7):
+        day_start = datetime(2026, 10, 12, tzinfo=UTC) + timedelta(days=day_offset)
+        day_end = day_start + timedelta(days=1) - timedelta(seconds=1)
+
+        core_calls = 0
+        if "market_data_refresh_schedule" in running_schedules:
+            fires = cron_tool.parse(market_data.MARKET_DATA_REFRESH_CRON).fires_between(day_start, day_end)
+            # Mid-month weekday refresh fetches the 2 daily series per TOPT symbol (#1411 K4 D2).
+            core_calls += len(fires) * len(topt_symbols) * calls_per_symbol
+        if "topt_live_schedule" in running_schedules:
+            fires = cron_tool.parse(str(running_schedules["topt_live_schedule"].cron_schedule)).fires_between(
+                day_start, day_end
+            )
+            # Worst-case TOPT tick without price-store hit (e.g. weekend or fresh session).
+            core_calls += len(fires) * universe_issuers["topt"] * tick_twelve_data_calls_per_issuer("topt")
+
+        allowance_after_core = capacity.daily_budget - core_calls
+        assert allowance_after_core > 0
+
+        non_core_calls = 0
+        if "qqq_price_refresh_schedule" in running_schedules:
+            fires = cron_tool.parse(qqq_prices.QQQ_PRICE_REFRESH_CRON).fires_between(day_start, day_end)
+            non_core_calls += len(fires) * qqq_prices.need_credits(len(qqq_outside_topt))
+        for tick in capture.TICKS:
+            if tick.key == "topt" or tick.schedule_name not in running_schedules:
+                continue
+            fires = cron_tool.parse(str(running_schedules[tick.schedule_name].cron_schedule)).fires_between(
+                day_start, day_end
+            )
+            # QQQ symbols refreshed by qqq_prices or overlapped with TOPT read from store/landed keys;
+            # worst-case unstored QQQ half is need_credits, while S&P 500 is 503 * tick_twelve_data_calls_per_issuer('sp500').
+            if tick.key == "qqq":
+                tick_demand = qqq_prices.need_credits(universe_issuers["qqq"])
+            else:
+                tick_demand = universe_issuers[tick.key] * tick_twelve_data_calls_per_issuer(tick.key)
+            non_core_calls += len(fires) * tick_demand
+
+        assert non_core_calls <= allowance_after_core, (
+            f"{environment} day {day_start.date()}: non-core Twelve Data demand {non_core_calls} "
+            f"exceeds allowance {allowance_after_core} left after core ({core_calls}/{capacity.daily_budget})"
+        )
