@@ -552,6 +552,78 @@ def test_mart_readonly_reads_the_view(conn: psycopg.Connection) -> None:
     assert len(as_owner) == len(ids) + 1
 
 
+def test_roles_sql_revokes_helper_grants_and_is_idempotent(conn: psycopg.Connection) -> None:
+    """#1344: replaying db/roles.sql revokes legacy helper grants and passes role_boundary_contract.sql."""
+    roles_sql = (REPO_ROOT / "db" / "roles.sql").read_text(encoding="utf-8")
+    roles_sql_clean = "\n".join(
+        line
+        for line in roles_sql.splitlines()
+        if not line.startswith(("\\if", "\\endif", "select format('alter role", "  where nullif("))
+    )
+    contract_sql = (REPO_ROOT / "db" / "tests" / "role_boundary_contract.sql").read_text(encoding="utf-8")
+    contract_body = contract_sql.replace("begin;", "").replace("rollback;", "")
+
+    signatures = (
+        "staging.entity_survivor(uuid, timestamptz)",
+        "staging.entity_alias_valid_to(bigint, timestamptz)",
+    )
+    restricted_roles = ("mart_readonly", "app_ops_reader", "app_runtime")
+
+    # Seed legacy EXECUTE grants as existed before #1344.
+    for sig in signatures:
+        conn.execute(f"grant execute on function {sig} to mart_readonly, app_ops_reader, app_runtime")  # noqa: S608
+        for role in ("mart_readonly", "app_ops_reader"):
+            has_exec = conn.execute("select has_function_privilege(%s, %s, 'EXECUTE')", (role, sig)).fetchone()
+            assert has_exec == (True,)
+
+    # Replay 1 strips the legacy grants.
+    conn.execute(roles_sql_clean)
+    # Replay 2 is idempotent and changes nothing.
+    conn.execute(roles_sql_clean)
+
+    for sig in signatures:
+        public_exec = conn.execute(
+            """
+            select exists (
+                select 1
+                from pg_proc p
+                cross join lateral aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) entry
+                where p.oid = to_regprocedure(%s)
+                  and entry.grantee = 0
+                  and entry.privilege_type = 'EXECUTE'
+            )
+            """,
+            (sig,),
+        ).fetchone()
+        assert public_exec == (False,), sig
+        for role in restricted_roles:
+            has_exec = conn.execute("select has_function_privilege(%s, %s, 'EXECUTE')", (role, sig)).fetchone()
+            assert has_exec == (False,), (role, sig)
+
+    # Execute the full role_boundary_contract.sql body (verifies both roles lack EXECUTE and can SELECT mart.entity_identity).
+    conn.execute(contract_body)
+
+
+def test_role_boundary_contract_and_roles_sql_text() -> None:
+    """#1344 static contract check: db/roles.sql revokes helper EXECUTE and role_boundary_contract.sql asserts it."""
+    roles_sql = (REPO_ROOT / "db" / "roles.sql").read_text(encoding="utf-8")
+    contract_sql = (REPO_ROOT / "db" / "tests" / "role_boundary_contract.sql").read_text(encoding="utf-8")
+
+    assert "20261015T0900_inline_entity_identity_view.sql" in roles_sql
+    assert "revoke all on function %s from public" in roles_sql
+    assert "revoke execute on function %s from mart_readonly, app_ops_reader" in roles_sql
+    assert "grant execute on function %s to mart_readonly, app_ops_reader" not in roles_sql
+
+    for role in ("mart_readonly", "app_ops_reader"):
+        for sig in (
+            "staging.entity_survivor(uuid, timestamptz)",
+            "staging.entity_alias_valid_to(bigint, timestamptz)",
+        ):
+            assert f"has_function_privilege('{role}', '{sig}', 'EXECUTE')" in contract_sql
+        assert f"set local role {role};" in contract_sql
+    assert "select count(*) into row_count from mart.entity_identity;" in contract_sql
+
+
 def view_state(conn: psycopg.Connection) -> tuple[str, str]:
     """The transaction that last wrote the rewrite rule of the view, and its definition."""
     row = conn.execute(
