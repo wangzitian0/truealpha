@@ -31,6 +31,65 @@ const PARALLEL_VISITS = 4;
 const firstLine = (error) => String(error?.message ?? error).split("\n")[0].slice(0, 200);
 
 /**
+ * Asserts the hydration-race requirement for walk-tree (#1483).
+ *
+ * @param {{ requireRace: boolean, raceSeen: number }} options
+ */
+export function assertRaceRequirement({ requireRace, raceSeen }) {
+  if (requireRace && (!Number.isInteger(raceSeen) || raceSeen <= 0)) {
+    throw new Error(
+      `[hydration-race] TA_REQUIRE_RACE=1 required at least 1 race visit, but raceSeen=${raceSeen} (the hydration-race block was skipped or ran 0 visits)`,
+    );
+  }
+}
+
+/**
+ * Evaluates the outcome of a hydration-race pass, ensuring held documents, static JS chunk fetches
+ * while held (`jsRequestedWhileHeld > 0`), and zero page or navigation errors (#1468, #1483).
+ *
+ * @param {{
+ *   routes: readonly string[],
+ *   visitsPerRoute: number,
+ *   heldPaths: readonly string[],
+ *   jsRequestedWhileHeld: number,
+ *   visitProblems?: readonly string[],
+ * }} options
+ * @returns {string[]}
+ */
+export function evaluateHydrationRaceOutcome({
+  routes,
+  visitsPerRoute,
+  heldPaths,
+  jsRequestedWhileHeld,
+  visitProblems = [],
+}) {
+  const problems = [...visitProblems];
+  const expectedVisits = routes.length * visitsPerRoute;
+  if (expectedVisits === 0) {
+    problems.push("[hydration-race] 0 visits configured; the hydration-race check cannot pass empty");
+    return problems;
+  }
+  for (const route of routes) {
+    const held = heldPaths.filter((path) => path === route).length;
+    if (held < visitsPerRoute) {
+      problems.push(
+        `[hydration-race] ${route}: the proxy held a late flight row for ${held} of ${visitsPerRoute} visits. ` +
+          (held === 0
+            ? "No document of this route has a lazy child under a host element, or the row parser no longer reads the flight format. " +
+              "If the first is true, the cause of #1468 is gone: delete this check."
+            : "Some visits reached the server without the proxy."),
+      );
+    }
+  }
+  if (heldPaths.length > 0 && jsRequestedWhileHeld <= 0) {
+    problems.push(
+      `[hydration-race] proxy held ${heldPaths.length} document(s), but observed 0 /_next/static/*.js requests while held (jsRequestedWhileHeld=${jsRequestedWhileHeld}); client hydration did not start before the held tail flushed`,
+    );
+  }
+  return problems;
+}
+
+/**
  * @param {{
  *   browser: any,
  *   base: string,
@@ -39,9 +98,10 @@ const firstLine = (error) => String(error?.message ?? error).split("\n")[0].slic
  *   routes?: readonly string[],
  *   visitsPerRoute?: number,
  *   holdMs?: number,
+ *   releaseOnStaticChunk?: boolean,
  *   navigate?: (page: any, url: string, options: { log: (line: string) => void }) => Promise<unknown>,
  * }} options `navigate` is `gotoStable`. A test replaces it.
- * @returns {Promise<{ problems: string[], visits: number, held: number }>}
+ * @returns {Promise<{ problems: string[], visits: number, held: number, jsRequestedWhileHeld: number }>}
  */
 export async function runHydrationRace({
   browser,
@@ -51,15 +111,21 @@ export async function runHydrationRace({
   routes = RACE_ROUTES,
   visitsPerRoute = RACE_VISITS_PER_ROUTE,
   holdMs = RACE_HOLD_MS,
+  releaseOnStaticChunk = true,
   navigate = gotoStable,
 }) {
-  const proxy = await startLateRowProxy({ origin: base, holdMs });
+  const proxy = await startLateRowProxy({ origin: base, holdMs, releaseOnStaticChunk });
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
-  const problems = [];
+  const visitProblems = [];
   try {
     const login = await context.request.post(`${proxy.url}/api/auth/login`, { data: { email, password } });
     if (login.status() !== 200) {
-      return { problems: [`[hydration-race] login answered HTTP ${login.status()}`], visits: 0, held: 0 };
+      return {
+        problems: [`[hydration-race] login answered HTTP ${login.status()}`],
+        visits: 0,
+        held: 0,
+        jsRequestedWhileHeld: 0,
+      };
     }
     const visitList = routes.flatMap((route) => Array.from({ length: visitsPerRoute }, (_, index) => ({ route, index })));
     for (let from = 0; from < visitList.length; from += PARALLEL_VISITS) {
@@ -78,24 +144,23 @@ export async function runHydrationRace({
           } finally {
             await page.close();
           }
-          for (const message of new Set(errors)) problems.push(`[hydration-race] ${route} visit ${index + 1}: ${message}`);
+          for (const message of new Set(errors)) visitProblems.push(`[hydration-race] ${route} visit ${index + 1}: ${message}`);
         }),
       );
     }
-    // A proxy that held nothing back tests nothing (GREEN-WHILE-EMPTY). Count per route.
-    for (const route of routes) {
-      const held = proxy.stats.held.filter((path) => path === route).length;
-      if (held < visitsPerRoute) {
-        problems.push(
-          `[hydration-race] ${route}: the proxy held a late flight row for ${held} of ${visitsPerRoute} visits. ` +
-            (held === 0
-              ? "No document of this route has a lazy child under a host element, or the row parser no longer reads the flight format. " +
-                "If the first is true, the cause of #1468 is gone: delete this check."
-              : "Some visits reached the server without the proxy."),
-        );
-      }
-    }
-    return { problems, visits: visitList.length, held: proxy.stats.held.length };
+    const problems = evaluateHydrationRaceOutcome({
+      routes,
+      visitsPerRoute,
+      heldPaths: proxy.stats.held,
+      jsRequestedWhileHeld: proxy.stats.jsRequestedWhileHeld,
+      visitProblems,
+    });
+    return {
+      problems,
+      visits: visitList.length,
+      held: proxy.stats.held.length,
+      jsRequestedWhileHeld: proxy.stats.jsRequestedWhileHeld,
+    };
   } finally {
     await context.close();
     await proxy.close();

@@ -14,6 +14,10 @@
 
 import { readFileSync } from "node:fs";
 import {
+  assertRaceRequirement,
+  evaluateHydrationRaceOutcome,
+} from "../e2e/hydration-race.mjs";
+import {
   SWEEP_RUN_SOURCE_PATTERN as CANONICAL_SWEEP_PATTERN,
   SWEEP_RUN_SOURCE_REGEX_SOURCE,
 } from "../src/contracts/serviceObjectives";
@@ -113,7 +117,73 @@ for (const registeredSource of ["moomoo", "twelvedata", "sec-edgar", "yfinance"]
   );
 }
 
+// #1483: walk-tree.mjs must invoke unexpectedStandaloneEntries, runHydrationRace, and assertRaceRequirement.
+assert(
+  source.includes("unexpectedStandaloneEntries("),
+  "walk-tree.mjs must call unexpectedStandaloneEntries to guard standalone build shape (#1483)",
+);
+assert(
+  source.includes("runHydrationRace("),
+  "walk-tree.mjs must call runHydrationRace to exercise the hydration race (#1483)",
+);
+assert(
+  source.includes("assertRaceRequirement(") && source.includes("TA_REQUIRE_RACE"),
+  "walk-tree.mjs must enforce TA_REQUIRE_RACE via assertRaceRequirement (#1483)",
+);
+
+// Direct unit checks of assertRaceRequirement (#1483):
+{
+  let threwOnSkippedRace = false;
+  try {
+    assertRaceRequirement({ requireRace: true, raceSeen: 0 });
+  } catch (err) {
+    threwOnSkippedRace = String((err as Error)?.message ?? err).includes("TA_REQUIRE_RACE=1");
+  }
+  assert(threwOnSkippedRace, "assertRaceRequirement({ requireRace: true, raceSeen: 0 }) must throw");
+  assertRaceRequirement({ requireRace: true, raceSeen: 1 });
+  assertRaceRequirement({ requireRace: false, raceSeen: 0 });
+}
+
+// Inverted control checks for evaluateHydrationRaceOutcome (#1483):
+{
+  const noJsProblems = evaluateHydrationRaceOutcome({
+    routes: ["/research/backtest"],
+    visitsPerRoute: 1,
+    heldPaths: ["/research/backtest"],
+    jsRequestedWhileHeld: 0,
+    visitProblems: [],
+  });
+  assert(
+    noJsProblems.length === 1 && noJsProblems[0].includes("jsRequestedWhileHeld=0"),
+    `expected failure when jsRequestedWhileHeld === 0, got: ${JSON.stringify(noJsProblems)}`,
+  );
+
+  const mismatchProblems = evaluateHydrationRaceOutcome({
+    routes: ["/research/backtest"],
+    visitsPerRoute: 1,
+    heldPaths: ["/research/backtest"],
+    jsRequestedWhileHeld: 1,
+    visitProblems: ["[hydration-race] /research/backtest visit 1: Minified React error #418"],
+  });
+  assert(
+    mismatchProblems.length === 1 && mismatchProblems[0].includes("Minified React error #418"),
+    `expected failure when hydration mismatch error occurs during held flush, got: ${JSON.stringify(mismatchProblems)}`,
+  );
+
+  const healthyProblems = evaluateHydrationRaceOutcome({
+    routes: ["/research/backtest"],
+    visitsPerRoute: 1,
+    heldPaths: ["/research/backtest"],
+    jsRequestedWhileHeld: 1,
+    visitProblems: [],
+  });
+  assert(
+    healthyProblems.length === 0,
+    `expected 0 problems when held and jsRequestedWhileHeld > 0, got: ${JSON.stringify(healthyProblems)}`,
+  );
+}
+
 console.log(
-  `walk-tree-id-pattern: ${RAW_IDS.length} id schemes caught, ${previewEntries.length} preview issuers verified, ${DISPLAYED.length} display strings pass, anti-empty & sweep-source checks verified`,
+  `walk-tree-id-pattern: ${RAW_IDS.length} id schemes caught, ${previewEntries.length} preview issuers verified, ${DISPLAYED.length} display strings pass, anti-empty, sweep-source & hydration-race checks verified`,
 );
 

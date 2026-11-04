@@ -12,7 +12,7 @@
  */
 
 import http from "node:http";
-import { runHydrationRace } from "../e2e/hydration-race.mjs";
+import { assertRaceRequirement, evaluateHydrationRaceOutcome, runHydrationRace } from "../e2e/hydration-race.mjs";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -26,7 +26,7 @@ const WITHOUT_LATE_ROW = page('0:["$","div",null,{"children":"done"}]\n');
 
 const ROUTES = ["/a", "/b"];
 const VISITS = 2;
-const HOLD_MS = 20;
+const HOLD_MS = 40;
 
 type Handler = (error: Error) => void;
 type Behaviour = (route: string, visit: number, emit: (message: string) => void, log: (line: string) => void) => void | Promise<void>;
@@ -40,22 +40,40 @@ class FakePage {
 	async close() {}
 }
 
-function get(url: string): Promise<string> {
+function get(url: string, onFirstChunk?: () => void): Promise<string> {
 	return new Promise((resolve, reject) => {
 		http
 			.get(url, (answer) => {
 				let body = "";
+				let sawFirst = false;
 				answer.setEncoding("utf8");
-				answer.on("data", (chunk) => (body += chunk));
+				answer.on("data", (chunk) => {
+					body += chunk;
+					if (!sawFirst) {
+						sawFirst = true;
+						onFirstChunk?.();
+					}
+				});
 				answer.on("end", () => resolve(body));
 			})
 			.on("error", reject);
 	});
 }
 
-async function run(options: { document?: string; loginStatus?: number; behaviour?: Behaviour; bypass?: (route: string, visit: number) => boolean }) {
+async function run(options: {
+	document?: string;
+	loginStatus?: number;
+	behaviour?: Behaviour;
+	bypass?: (route: string, visit: number) => boolean;
+	requestStaticChunk?: boolean;
+}) {
 	const document = options.document ?? WITH_LATE_ROW;
-	const origin = http.createServer((_request, response) => {
+	const requestStaticChunk = options.requestStaticChunk ?? true;
+	const origin = http.createServer((request, response) => {
+		if (request.url?.startsWith("/_next/static/")) {
+			response.writeHead(200, { "content-type": "application/javascript" }).end("/* chunk */");
+			return;
+		}
 		response.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(document);
 	});
 	await new Promise((resolve) => origin.listen(0, "127.0.0.1", () => resolve(undefined)));
@@ -69,11 +87,19 @@ async function run(options: { document?: string; loginStatus?: number; behaviour
 		}),
 	};
 	const navigate = async (fake: FakePage, url: string, { log }: { log: (line: string) => void }) => {
-		const route = new URL(url).pathname;
+		const parsed = new URL(url);
+		const route = parsed.pathname;
 		const visit = (seen.get(route) ?? 0) + 1;
 		seen.set(route, visit);
-		// A visit that skips the proxy reaches the server directly.
-		await get(options.bypass?.(route, visit) ? `${originUrl}${route}` : url);
+		const targetUrl = options.bypass?.(route, visit) ? `${originUrl}${route}` : url;
+		// While the proxy holds the HTML tail, a real browser fetches `/_next/static/*.js`.
+		let chunkPromise: Promise<string> | undefined;
+		await get(targetUrl, () => {
+			if (requestStaticChunk && !options.bypass?.(route, visit)) {
+				chunkPromise = get(`${parsed.origin}/_next/static/chunks/app.js`).catch(() => "");
+			}
+		});
+		if (chunkPromise) await chunkPromise;
 		await options.behaviour?.(route, visit, (message) => fake.handlers.forEach((handler) => handler(new Error(message))), log);
 	};
 	try {
@@ -168,6 +194,39 @@ async function run(options: { document?: string; loginStatus?: number; behaviour
 			result.problems[0].includes("reached the server without the proxy"),
 		`a route with a missing held document gets its own advice: ${result.problems[0]}`,
 	);
+}
+
+// ─── (h) #1483 inverted control: held documents with 0 static chunk requests while held fail ───
+{
+	const result = await run({ requestStaticChunk: false });
+	assert(result.jsRequestedWhileHeld === 0, `expected 0 static chunk requests while held: ${JSON.stringify(result)}`);
+	assert(
+		result.problems.length === 1 &&
+			result.problems[0].includes("jsRequestedWhileHeld=0") &&
+			result.problems[0].includes("/_next/static/*.js"),
+		`0 static chunk requests while held must fail the check: ${JSON.stringify(result.problems)}`,
+	);
+}
+
+// ─── (i) #1483 evaluateHydrationRaceOutcome & assertRaceRequirement unit checks ───
+{
+	const emptyVisits = evaluateHydrationRaceOutcome({
+		routes: [],
+		visitsPerRoute: 6,
+		heldPaths: [],
+		jsRequestedWhileHeld: 0,
+	});
+	assert(emptyVisits.length === 1 && emptyVisits[0].includes("0 visits configured"), `0 visits must fail: ${JSON.stringify(emptyVisits)}`);
+
+	let threw = false;
+	try {
+		assertRaceRequirement({ requireRace: true, raceSeen: 0 });
+	} catch {
+		threw = true;
+	}
+	assert(threw, "assertRaceRequirement must throw when requireRace=true and raceSeen=0");
+	assertRaceRequirement({ requireRace: true, raceSeen: 1 });
+	assertRaceRequirement({ requireRace: false, raceSeen: 0 });
 }
 
 console.log("#1468 hydration-race verdicts passed");

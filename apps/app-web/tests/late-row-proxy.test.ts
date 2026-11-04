@@ -202,6 +202,38 @@ function rowsOf(html: string): string[] {
 		const unheld = await get("/plain");
 		assert(unheld.body === plain, "a page without a late row is delivered unchanged");
 		assert(JSON.stringify(front.stats.unheld) === '["/plain"]', `the proxy must name the unheld page: ${JSON.stringify(front.stats.unheld)}`);
+
+		// #1483: a static JS chunk request while a document is held increments jsRequestedWhileHeld and can release the hold early.
+		const releaseProxy = await proxy.startLateRowProxy({ origin: originUrl, holdMs: 2000, releaseOnStaticChunk: true });
+		try {
+			const heldPromise = new Promise<{ body: string; elapsedMs: number }>((resolve, reject) => {
+				const started = Date.now();
+				http
+					.get(`${releaseProxy.url}/held`, (answer) => {
+						let body = "";
+						let chunkRequested = false;
+						answer.setEncoding("utf8");
+						answer.on("data", (chunk) => {
+							body += chunk;
+							if (!chunkRequested) {
+								chunkRequested = true;
+								http.get(`${releaseProxy.url}/_next/static/chunks/main.js`, (res) => res.resume()).on("error", reject);
+							}
+						});
+						answer.on("end", () => resolve({ body, elapsedMs: Date.now() - started }));
+					})
+					.on("error", reject);
+			});
+			const released = await heldPromise;
+			assert(released.body === expected.early + expected.late, "early release on static chunk still delivers full document");
+			assert(released.elapsedMs < 1500, `expected early release before 2000ms hold timeout, took ${released.elapsedMs}ms`);
+			assert(
+				releaseProxy.stats.jsRequestedWhileHeld === 1,
+				`expected jsRequestedWhileHeld === 1, got ${releaseProxy.stats.jsRequestedWhileHeld}`,
+			);
+		} finally {
+			await releaseProxy.close();
+		}
 	} finally {
 		await front.close();
 		await new Promise((resolve) => origin.close(() => resolve(undefined)));

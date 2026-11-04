@@ -35,7 +35,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
-import { runHydrationRace } from "./hydration-race.mjs";
+import { assertRaceRequirement, runHydrationRace } from "./hydration-race.mjs";
 import { createPageErrorLedger, gotoStable } from "./navigation.mjs";
 import { walkSignOutJourney } from "./sign-out-journey.mjs";
 import { unexpectedStandaloneEntries } from "./standalone-shape.mjs";
@@ -49,6 +49,7 @@ const PASSWORD = process.env.TA_PASSWORD;
 // administrator pass runs alone exactly as before.
 const MEMBER_EMAIL = process.env.TA_MEMBER_EMAIL;
 const DATA_STATE = process.env.TA_DATA_STATE || "populated";
+const REQUIRE_RACE = process.env.TA_REQUIRE_RACE === "1";
 if (!BASE || !EMAIL || !PASSWORD) {
   console.error("TA_BASE_URL, TA_EMAIL, TA_PASSWORD are required");
   process.exit(2);
@@ -647,6 +648,7 @@ try {
   // #540/#811: the sign-out journey lives in its own module so a test can drive it
   // against a fake browser. It logs in once more, for its own session.
   failures += await walkSignOutJourney(browser, { base: BASE, email: EMAIL, password: PASSWORD, gotoStable });
+  let raceSeen = 0;
   if (SEEDED_FIXTURE && DATA_STATE === "populated") {
     // #1468: the image copies .next/standalone. A traced project file there is a file in the image.
     const extra = unexpectedStandaloneEntries(fileURLToPath(new URL("../.next/standalone", import.meta.url)));
@@ -658,12 +660,21 @@ try {
     // that raised React #418 on the deployed surface. It runs on the seeded loopback fixture only.
     // The deployed surface has the window already, and the proxy cannot sit in front of it.
     const race = await runHydrationRace({ browser, base: BASE, email: EMAIL, password: PASSWORD });
+    raceSeen = race.visits;
     for (const problem of race.problems) console.log(`FAIL ${problem}`);
     if (race.problems.length > 0) {
       failures += 1;
     } else {
-      console.log(`ok   [hydration-race] ${race.visits} visits, each with a late flight row, raised no page error`);
+      console.log(
+        `ok   [hydration-race] ${race.visits} visits, each with a late flight row (${race.jsRequestedWhileHeld} static chunk request(s) while held), raised no page error`,
+      );
     }
+  }
+  try {
+    assertRaceRequirement({ requireRace: REQUIRE_RACE, raceSeen });
+  } catch (error) {
+    failures += 1;
+    console.log(`FAIL ${error?.message ?? error}`);
   }
 } finally {
   await browser.close();
