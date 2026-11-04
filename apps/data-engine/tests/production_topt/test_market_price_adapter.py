@@ -804,3 +804,64 @@ def test_build_route_defensively_ignores_drill_without_arm() -> None:
     ]
     adapter = module.build_route(context, cells, drill=object())
     assert adapter is not None
+
+
+def test_build_route_excludes_twelve_data_for_sp500_and_keeps_moomoo(monkeypatch) -> None:
+    """#1310 / #1411 K2: a universe with price_series=false (S&P 500) excludes Twelve Data
+    from its market-price origin set and configured_origin_sources so the tick spends 0
+    Twelve Data credits, while TOPT, QQQ, and the sentinel canary still include Twelve Data."""
+    from data_engine.config import settings
+    from data_engine.datahub.production_topt import market_price_adapter as module
+    from data_engine.datahub.production_topt import moomoo_origin, twelve_data_origin
+    from data_engine.datahub.production_topt.source_registrations import (
+        RouteCell,
+        RouteContext,
+        configured_origin_sources,
+        uses_twelve_data,
+    )
+
+    twelve_fetch = _CountingFetch(_vendor_quote("td", _CUTOFF, "150.30"))
+    moomoo_fetch = _CountingFetch(_vendor_quote("mm", _CUTOFF, "150.31"))
+    monkeypatch.setattr(settings, "twelve_data_api_key", "test-key")
+    monkeypatch.setattr(settings, "moomoo_kline_origin_enabled", True)
+    monkeypatch.setattr(twelve_data_origin, "twelve_data_origin", lambda **_k: _twelve_data(twelve_fetch))
+    monkeypatch.setattr(moomoo_origin, "moomoo_kline_origin", lambda: _moomoo_kline(moomoo_fetch))
+
+    item = _work_item("b" * 64)
+    cells = [
+        RouteCell(item.work_item_id, "market-price", "issuer:cik:1", "security:cusip:Y", "listing:xnas:aapl", "AAPL")
+    ]
+
+    def origins_for(universe_id: str | None) -> list[str]:
+        ctx = RouteContext(
+            cutoff=_RUN_CUTOFF,
+            cutoff_date=_CUTOFF,
+            price_cutoff_date=_CUTOFF,
+            partition_start=datetime(2026, 3, 31, tzinfo=UTC),
+            universe_published_at=None,
+            coordinates={},
+            connection=None,
+            universe_id=universe_id,
+        )
+        adapter = module.build_route(ctx, cells)
+        return [o.origin for o in adapter._corroborating_origins]
+
+    assert uses_twelve_data("universe:sp500-us-2026-09-30") is False
+    assert uses_twelve_data("universe:topt-us-2026-03-31") is True
+    assert uses_twelve_data("universe:qqq-us-2026-09-30") is True
+    assert uses_twelve_data("universe:canary-us-2026-09-30") is True
+
+    assert origins_for("universe:sp500-us-2026-09-30") == ["moomoo-kline"]
+    assert origins_for("universe:topt-us-2026-03-31") == ["twelve-data", "moomoo-kline"]
+    assert origins_for("universe:qqq-us-2026-09-30") == ["twelve-data", "moomoo-kline"]
+    assert origins_for("universe:canary-us-2026-09-30") == ["twelve-data", "moomoo-kline"]
+
+    assert configured_origin_sources("market-price", universe_id="universe:sp500-us-2026-09-30") == {
+        "primary",
+        "moomoo-kline:v1",
+    }
+    assert configured_origin_sources("market-price", universe_id="universe:topt-us-2026-03-31") == {
+        "primary",
+        "twelve-data:v1",
+        "moomoo-kline:v1",
+    }

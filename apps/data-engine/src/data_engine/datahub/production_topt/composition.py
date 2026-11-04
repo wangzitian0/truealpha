@@ -235,6 +235,7 @@ class PlannedRun:
     forced_fetch: bool = False
     drill: Any | None = None
     raw_coordinates: dict[str, tuple[str, str, str, str]] | None = None
+    universe_id: str | None = None
 
 
 def ensure_environment_identity(
@@ -498,6 +499,7 @@ def plan_and_persist(
         forced_fetch=force_fetch,
         drill=drill,
         raw_coordinates=raw_coordinates,
+        universe_id=list_version.universe.universe_id,
     )
 
 
@@ -521,6 +523,7 @@ def build_routes(plan: PlannedRun, connection: psycopg.Connection[Any] | None = 
         connection=connection,
         drill=plan.drill,
         raw_coordinates=plan.raw_coordinates,
+        universe_id=plan.universe_id,
     )
     cells_by_source: dict[str, list[RouteCell]] = {}
     for work_item_id, binding in plan.bindings.items():
@@ -865,7 +868,7 @@ def _satisfy_from_recent_observations(
     settled = last_settled_session_date(cutoff)
     by_target: dict[str, dict[str, Any]] = {}
     for target_id, semantic_type, anchor_vintage, knowable_at, observations, parser_versions in rows:
-        required_sources = configured_origin_sources(semantic_type)
+        required_sources = configured_origin_sources(semantic_type, universe_id=plan.universe_id)
         present_sources = set()
         disqualified = False
         for pv in parser_versions:

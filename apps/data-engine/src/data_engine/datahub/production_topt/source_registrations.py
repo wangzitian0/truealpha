@@ -80,6 +80,7 @@ class RouteContext:
     connection: psycopg.Connection[Any] | None
     drill: Any | None = None
     raw_coordinates: Mapping[str, tuple[str, str, str, str]] | None = None
+    universe_id: str | None = None
 
 
 class RouteBuilder(Protocol):
@@ -770,7 +771,27 @@ def origin_per_key_cost(origin_source: str, registrations: Sequence[SourceRegist
     raise LookupError(f"no registered origin named {origin_source!r} declares per_key_cost (#1411 K1)")
 
 
-def configured_origin_sources(semantic_type: str) -> set[str]:
+def uses_twelve_data(universe_id: str | None) -> bool:
+    """Return True if the universe of ``universe_id`` queries the Twelve Data price origin (#1310, #1411 K2).
+
+    A universe without a stored price series and outside the sentinel deploy probe skips Twelve Data so its tick
+    does not spend the environment's daily share of the shared API key. Unknown or omitted universe ids default
+    to True for unit-test harnesses.
+    """
+    if not universe_id:
+        return True
+    from truealpha_contracts.environment_contract import UnknownUniverse, load_environment_contract
+
+    contract = load_environment_contract()
+    try:
+        key = contract.universe_of_id(universe_id)
+    except UnknownUniverse:
+        return True
+    universe = contract.record(key)
+    return universe.price_series or universe.is_sentinel
+
+
+def configured_origin_sources(semantic_type: str, *, universe_id: str | None = None) -> set[str]:
     """The required source identifiers ('primary' sentinel plus configured origin:mapping strings) for reuse (#635).
 
     If the current environment has configured a corroborating origin (e.g. Twelve Data
@@ -783,7 +804,7 @@ def configured_origin_sources(semantic_type: str) -> set[str]:
     reg = registration_for(semantic_type)
     required = {"primary"}
     if reg.source_id == "yahoo-chart":
-        if settings.twelve_data_api_key:
+        if settings.twelve_data_api_key and uses_twelve_data(universe_id):
             required.add(f"{TWELVE_DATA_ORIGIN}:v1")
         if settings.moomoo_kline_origin_enabled:
             required.add(f"{MOOMOO_KLINE_ORIGIN}:v1")
