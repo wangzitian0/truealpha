@@ -88,6 +88,7 @@ from truealpha_contracts.universe import SubjectKind, SubjectRef
 from truealpha_contracts.universes import key_of_lane, record
 
 from data_engine.datahub.oracle_outcomes import (
+    canonical_metric,
     load_oracle_confidence_inputs,
     oracle_cell_agreement,
     oracle_outcome_mass_by_origin,
@@ -491,10 +492,22 @@ UNSERVED_REASONS = frozenset({"no_origin_value", "not_knowable_at_cutoff", "no_e
 def _lookup_outcome_mass(
     outcome_mass_by_origin: Mapping[str, tuple[Decimal, Decimal]] | None,
     origin: OriginValue,
+    family: str | None = None,
 ) -> tuple[Decimal, Decimal]:
     if not outcome_mass_by_origin:
         return Decimal("0"), Decimal("0")
-    for candidate in (origin.origin_id, f"origin:{origin.lineage}:v1", origin.source_id, origin.lineage):
+    base_candidates = (origin.origin_id, f"origin:{origin.lineage}:v1", origin.source_id, origin.lineage)
+    if family is not None:
+        canonical = canonical_metric(family)
+        field_keys = (family, canonical) if canonical != family else (family,)
+        for candidate in base_candidates:
+            for field_key in field_keys:
+                scoped = f"{candidate}:{field_key}"
+                if scoped in outcome_mass_by_origin:
+                    return outcome_mass_by_origin[scoped]
+        if any(key.startswith(f"{candidate}:") for candidate in base_candidates for key in outcome_mass_by_origin):
+            return Decimal("0"), Decimal("0")
+    for candidate in base_candidates:
         if candidate in outcome_mass_by_origin:
             return outcome_mass_by_origin[candidate]
     return Decimal("0"), Decimal("0")
@@ -515,7 +528,7 @@ def _evaluate_valued_cell(
     case_id = f"cell:{policy.family}:{subject_id}"
     sources: list[SourceConfidenceEvidence] = []
     for origin in valued:
-        succ, fail = _lookup_outcome_mass(outcome_mass_by_origin, origin)
+        succ, fail = _lookup_outcome_mass(outcome_mass_by_origin, origin, family=policy.family)
         prior = (
             source_reliability_prior(origin.origin_id)
             or source_reliability_prior(origin.source_id)

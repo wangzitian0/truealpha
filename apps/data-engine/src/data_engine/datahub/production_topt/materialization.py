@@ -997,7 +997,12 @@ class PostgresToptCoreRepository:
             financial.operating_branch.value, {**cells, **_shares_cell_at(shares_cell, shares_knowable_at)}
         ):
             financial_row = replace(financial_row, freshness=MetricFreshness.STALE)
-        xbrl_confs = [cell.confidence for key, cell in cells.items() if key != "headcount"]
+        deciding_keys = input_age.deciding.get(financial.operating_branch.value) if input_age is not None else None
+        xbrl_confs = [
+            cell.confidence
+            for key, cell in cells.items()
+            if key != "headcount" and (deciding_keys is None or key in deciding_keys)
+        ]
         cell_confs = (xbrl_confs or [cell.confidence for cell in cells.values()]) + (
             [financial_row.confidence] if financial_row.confidence is not None else []
         )

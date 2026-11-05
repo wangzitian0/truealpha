@@ -1162,3 +1162,71 @@ def test_add_headcount_producers_skips_uncited_legacy_and_curated_rows() -> None
     grade = classify_cell(family_policy("headcount"), "listing:xnas:avgo", origins, CUTOFF)
     assert grade.reason == "same_lineage"
     assert grade.relative_delta == "0.000000"
+
+
+def test_lookup_outcome_mass_scopes_by_family_so_revenue_failures_do_not_bleed_into_shares_or_banking_tce() -> None:
+    """Field-scoped oracle outcome mass prevents revenue/gross_profit/total_assets disagree mass
+    from degrading shares_outstanding or banking TCE metrics that have no recorded oracle failures."""
+    from data_engine.datahub.oracle_outcomes import oracle_outcome_mass_by_origin
+
+    sec_obs = OriginValue(
+        "origin:sec-company-facts:v1",
+        "sec-company-facts:v1",
+        "sec-company-facts",
+        "1000000",
+        observation_id="obs:jpm:sec",
+    )
+    disagree_rows = [
+        {
+            "observation_id": f"obs:rev:{idx}",
+            "subject_id": f"issuer:cik:{idx:010d}",
+            "field": "revenue",
+            "oracle_kind": "independent_parse",
+            "source": "sec",
+            "result": "disagree",
+            "compared_at": CUTOFF,
+        }
+        for idx in range(1, 21)
+    ]
+    mass = oracle_outcome_mass_by_origin(disagree_rows, cutoff=CUTOFF)
+    assert mass["origin:sec-company-facts:v1"] == (Decimal("0"), Decimal("20"))
+    assert mass["origin:sec-company-facts:v1:revenue"] == (Decimal("0"), Decimal("20"))
+
+    rev_grade = classify_cell(
+        family_policy("revenue"),
+        "listing:xnys:jpm",
+        (sec_obs,),
+        CUTOFF,
+        outcome_mass_by_origin=mass,
+    )
+    assert rev_grade.confidence < Decimal("0.50")
+
+    for unaffected_family in (
+        "shares_outstanding",
+        "pre_provision_profit",
+        "stockholders_equity",
+        "preferred_stock_value",
+        "goodwill",
+        "intangible_assets_net_excluding_goodwill",
+    ):
+        policy = (
+            family_policy(unaffected_family)
+            if unaffected_family in ("shares_outstanding", "pre_provision_profit")
+            else cr.FamilyPolicy(
+                family=unaffected_family,
+                semantic_type="financial-fact",
+                value_keys=(unaffected_family,),
+                reconciliation=None,
+                period_bound=False,
+            )
+        )
+        baseline = classify_cell(policy, "listing:xnys:jpm", (sec_obs,), CUTOFF)
+        scoped = classify_cell(
+            policy,
+            "listing:xnys:jpm",
+            (sec_obs,),
+            CUTOFF,
+            outcome_mass_by_origin=mass,
+        )
+        assert scoped.confidence == baseline.confidence
+        assert scoped.confidence >= Decimal("0.50")
