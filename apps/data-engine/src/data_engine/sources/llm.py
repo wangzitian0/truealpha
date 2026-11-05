@@ -38,6 +38,15 @@ from urllib.parse import urlparse
 
 from factors.shared import extraction as extraction_primitive
 from truealpha_contracts.common import canonical_sha256
+from truealpha_contracts.research_cards import (
+    XHS_CARD_INSTRUCTIONS,
+    XHS_CARD_PROMPT_VERSION,
+    ResearchCard,
+    build_card_prompt,
+    extract_html_document,
+    render_card_html,
+    verify_card_html,
+)
 
 from data_engine.config import settings
 from data_engine.datahub.fetch_key import FetchKey
@@ -1518,3 +1527,112 @@ def identify_supply_chain_partners(
             )
         )
     return SupplyChainExtraction(partners=tuple(partners), invocation=invocation)
+
+
+XHS_CARD_RESPONSE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "html": {"type": "string"},
+    },
+    "required": ["html"],
+}
+
+XHS_CARD_TASK = ModelTask(
+    prompt_version=XHS_CARD_PROMPT_VERSION,
+    instructions=(
+        f'{XHS_CARD_INSTRUCTIONS}\nRespond ONLY with a JSON object of shape `{{"html": "<!DOCTYPE html>...</html>"}}`.'
+    ),
+    response_schema=XHS_CARD_RESPONSE_SCHEMA,
+    max_tokens=8_192,
+    timeout_seconds=90,
+)
+
+
+@dataclass(frozen=True)
+class XhsCardGenerationResult:
+    """Verified Xiaohongshu 1080x1440 HTML card output and provenance."""
+
+    card_id: str
+    html: str
+    render_mode: str
+    prompt_sha256: str
+    model: str | None
+    invocation_id: str | None
+    replayed: bool
+
+
+def _parse_xhs_card_html(content: str) -> dict[str, Any]:
+    try:
+        parsed = json.loads(content)
+        if isinstance(parsed, dict) and isinstance(parsed.get("html"), str):
+            return {"html": extract_html_document(parsed["html"]), "reason": "ok"}
+    except json.JSONDecodeError:
+        pass
+    extracted = extract_html_document(content)
+    if "<html" in extracted.lower() and "</html>" in extracted.lower():
+        return {"html": extracted, "reason": "ok"}
+    return {"html": "", "reason": f"unparseable html output: {content[:120]!r}"}
+
+
+def generate_xhs_card_html(
+    connection: Any | None,
+    *,
+    card: ResearchCard,
+    caller: str = "xhs_card_html",
+    standard: str = "xhs_card",
+    persist: bool = True,
+    transport: Transport | None = None,
+    now: Callable[[], datetime] = lambda: datetime.now(UTC),
+) -> XhsCardGenerationResult:
+    """Generate a 1080x1440 Xiaohongshu HTML card via `glm-5.3-flash` under Rule 6 / §9,
+    verifying every fact with `verify_card_html` before returning. Falls back to the
+    deterministic Cold-Verdict Rubric HTML renderer when the provider is unconfigured or
+    if a model response fails fact-preservation verification.
+    """
+    user_prompt = build_card_prompt(card)
+    prompt_digest = XHS_CARD_TASK.prompt_sha256
+    try:
+        invocation = invoke(
+            connection,
+            task=XHS_CARD_TASK,
+            cik=0,
+            accession=card.card_id[:36],
+            user_content=user_prompt,
+            caller=caller,
+            standard=standard,
+            parse=_parse_xhs_card_html,
+            refusal=lambda detail: {"html": "", "reason": detail},
+            persist=persist,
+            transport=transport,
+            now=now,
+        )
+        candidate_html = str(invocation.decision.get("html") or "")
+        ok, violations = verify_card_html(card, candidate_html)
+        if ok:
+            return XhsCardGenerationResult(
+                card_id=card.card_id,
+                html=candidate_html,
+                render_mode="model_glm",
+                prompt_sha256=invocation.prompt_sha256,
+                model=invocation.served_model or invocation.model,
+                invocation_id=invocation.invocation_id,
+                replayed=invocation.replayed,
+            )
+        logger.warning(
+            "xhs_card_html model output failed fact-preservation verifier for %s (%s); using deterministic fallback",
+            card.card_id,
+            violations,
+        )
+    except (ModelNotConfigured, ModelHTTPError) as exc:
+        logger.info("xhs_card_html falling back to deterministic Cold-Verdict HTML for %s: %s", card.card_id, exc)
+
+    fallback_html = render_card_html(card)
+    return XhsCardGenerationResult(
+        card_id=card.card_id,
+        html=fallback_html,
+        render_mode="deterministic_fallback",
+        prompt_sha256=prompt_digest,
+        model=None,
+        invocation_id=None,
+        replayed=False,
+    )

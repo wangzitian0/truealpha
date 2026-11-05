@@ -366,7 +366,7 @@ const adapter = new StrategyRunReadAdapter(
 }
 
 // ─── AC4: 1080x1440 PNG Export Route + Library Persistence ───────────────────
-const savedDocs: Array<{ doc: ResearchDocument; rev: ResearchDocumentRevision }> = [];
+const savedDocs: Array<{ doc: ResearchDocument; rev: ResearchDocumentRevision; bytes: Buffer }> = [];
 const fakeDocumentsRepo: DocumentsRepository = {
   async listDocuments(): Promise<DocumentPage> {
     return { documents: savedDocs.map((d) => d.doc), nextBefore: null };
@@ -376,6 +376,10 @@ const fakeDocumentsRepo: DocumentsRepository = {
   },
   async listRevisions(_ctx, documentId) {
     return savedDocs.filter((d) => d.doc.documentId === documentId).map((d) => d.rev);
+  },
+  async getRevisionBytes(_ctx, documentId, revisionId) {
+    const found = savedDocs.find((d) => d.doc.documentId === documentId && d.rev.revisionId === revisionId);
+    return found?.bytes ?? null;
   },
   async createDocument(ctx, input: NewDocumentRevisionInput) {
     assertStableId(input.sourceArtifactId, "sourceArtifactId");
@@ -397,7 +401,7 @@ const fakeDocumentsRepo: DocumentsRepository = {
       artifactContentType: input.contentType,
       createdAt: doc.createdAt,
     };
-    savedDocs.push({ doc, rev });
+    savedDocs.push({ doc, rev, bytes: input.bytes });
     return { document: doc, revision: rev };
   },
   async appendRevision() {
@@ -415,7 +419,7 @@ const fakeDocumentsRepo: DocumentsRepository = {
 };
 
 {
-  // 1. Default format on /research/api/cards/export is PNG (1080x1440) and persists to Library
+  // 1. Default format on /research/api/cards/export is HTML (1080x1440) and persists to Library
   const rankingResponse = await handleCardExportGet(
     new Request("http://localhost:3000/research/api/cards/export?kind=ranking"),
     {
@@ -427,27 +431,29 @@ const fakeDocumentsRepo: DocumentsRepository = {
   );
   assert(rankingResponse.status === 200, `AC4: expected status 200, got ${rankingResponse.status}`);
   assert(
-    rankingResponse.headers.get("content-type") === "image/png",
-    `AC4: expected content-type image/png, got ${rankingResponse.headers.get("content-type")}`,
+    rankingResponse.headers.get("content-type") === "text/html; charset=utf-8",
+    `AC4: expected content-type text/html; charset=utf-8, got ${rankingResponse.headers.get("content-type")}`,
   );
   assert(
     rankingResponse.headers.get("x-research-document-id") === "document:00000000-0000-4000-8000-000000000136",
-    "AC4: exported PNG card must be persisted to Library and return X-Research-Document-Id header",
+    "AC4: exported HTML card must be persisted to Library and return X-Research-Document-Id header",
   );
-  const pngBytes = Buffer.from(await rankingResponse.arrayBuffer());
-  assert(pngBytes.subarray(0, 8).toString("hex") === "89504e470d0a1a0a", "AC4: response body must be valid PNG");
-  assert(pngBytes.readUInt32BE(16) === XHS_CARD_WIDTH, "AC4: response PNG width must be 1080");
-  assert(pngBytes.readUInt32BE(20) === XHS_CARD_HEIGHT, "AC4: response PNG height must be 1440");
-  assert((savedDocs.length as number) === 1, "AC4: Library repository must hold the saved card document");
-  assert(savedDocs[0].rev.artifactContentType === "image/png", "AC4: saved revision contentType must be image/png");
+  const rankingHtmlText = await rankingResponse.text();
+  assert(rankingHtmlText.startsWith("<!DOCTYPE html>"), "AC4: response body must be valid HTML document");
   assert(
-    savedDocs[0].rev.sourceArtifactId.endsWith(":topt:historical-cagr:png"),
+    rankingHtmlText.includes(`${XHS_CARD_WIDTH}px`) && rankingHtmlText.includes(`${XHS_CARD_HEIGHT}px`),
+    "AC4: response HTML must declare 1080x1440px dimensions",
+  );
+  assert((savedDocs.length as number) === 1, "AC4: Library repository must hold the saved card document");
+  assert(savedDocs[0].rev.artifactContentType === "text/html", "AC4: saved revision contentType must be text/html");
+  assert(
+    savedDocs[0].rev.sourceArtifactId.endsWith(":topt:historical-cagr:html"),
     `AC4: ranking sourceArtifactId must include universe, convention, and format, got ${savedDocs[0].rev.sourceArtifactId}`,
   );
 
-  // 2. Entity PNG export with convention=consensus
+  // 2. Entity HTML export with convention=consensus
   const entityResponse = await handleCardExportGet(
-    new Request("http://localhost:3000/research/api/cards/export?kind=entity&issuer=issuer:adm&convention=consensus&format=png"),
+    new Request("http://localhost:3000/research/api/cards/export?kind=entity&issuer=issuer:adm&convention=consensus&format=html"),
     {
       resolvePrincipal: async () => ({ context: TEST_CONTEXT }),
       adapter,
@@ -455,13 +461,19 @@ const fakeDocumentsRepo: DocumentsRepository = {
       displayNames: new Map(),
     },
   );
-  assert(entityResponse.status === 200, `AC4: expected entity PNG status 200, got ${entityResponse.status}`);
-  assert(entityResponse.headers.get("content-type") === "image/png", "AC4: entity card export must return image/png");
-  const entityPngBytes = Buffer.from(await entityResponse.arrayBuffer());
-  assert(entityPngBytes.readUInt32BE(16) === XHS_CARD_WIDTH && entityPngBytes.readUInt32BE(20) === XHS_CARD_HEIGHT, "AC4: entity PNG must be 1080x1440");
+  assert(entityResponse.status === 200, `AC4: expected entity HTML status 200, got ${entityResponse.status}`);
+  assert(
+    entityResponse.headers.get("content-type") === "text/html; charset=utf-8",
+    "AC4: entity card export must return text/html; charset=utf-8",
+  );
+  const entityHtmlText = await entityResponse.text();
+  assert(
+    entityHtmlText.includes(`${XHS_CARD_WIDTH}px`) && entityHtmlText.includes(`${XHS_CARD_HEIGHT}px`),
+    "AC4: entity HTML must be 1080x1440",
+  );
   assert((savedDocs.length as number) === 2, "AC4: Library repository must hold both ranking and entity card documents");
   assert(
-    savedDocs[1].rev.sourceArtifactId.endsWith(":consensus:png"),
+    savedDocs[1].rev.sourceArtifactId.endsWith(":consensus:html"),
     `AC4: entity sourceArtifactId must include convention and format, got ${savedDocs[1].rev.sourceArtifactId}`,
   );
 
@@ -530,12 +542,16 @@ const fakeDocumentsRepo: DocumentsRepository = {
     assertStableId,
     PostgresDocumentsRepository: class {
       listDocuments = fakeDocumentsRepo.listDocuments;
+      getDocument = fakeDocumentsRepo.getDocument;
+      listRevisions = fakeDocumentsRepo.listRevisions;
+      getRevisionBytes = fakeDocumentsRepo.getRevisionBytes;
     },
   }));
 
   const { default: RankingsPage } = await import("../src/app/research/rankings/page");
   const { default: EntityDetailPage } = await import("../src/app/research/entities/[id]/page");
   const { default: LibraryPage } = await import("../src/app/research/library/page");
+  const { default: DocumentDetailPage } = await import("../src/app/research/library/[id]/page");
 
   // 1. RankingsPage SSR: default (topt + historical_cagr)
   const rankingsDefaultHtml = renderToStaticMarkup(
@@ -560,10 +576,10 @@ const fakeDocumentsRepo: DocumentsRepository = {
     "AC3 SSR: RankingsPage (historical_cagr) must render materialized PEG 1.42 and PEG rank 2",
   );
   assert(
-    rankingsDefaultHtml.includes('data-export-format="png"') &&
+    rankingsDefaultHtml.includes('data-export-format="html"') &&
       rankingsDefaultHtml.includes('data-export-convention="historical_cagr"') &&
       rankingsDefaultHtml.includes('data-export-universe="topt"'),
-    "AC4 SSR: RankingsPage CardExportButton must default to format=png, convention=historical_cagr, universe=topt",
+    "AC4 SSR: RankingsPage CardExportButton must default to format=html, convention=historical_cagr, universe=topt",
   );
 
   // 2. RankingsPage SSR: consensus convention + qqq universe
@@ -648,10 +664,10 @@ const fakeDocumentsRepo: DocumentsRepository = {
     createElement(CardExportButton, { issuerId: "issuer:adm", convention: "consensus" }),
   );
   assert(
-    buttonHtml.includes('data-export-format="png"') &&
+    buttonHtml.includes('data-export-format="html"') &&
       buttonHtml.includes('data-export-kind="entity"') &&
       buttonHtml.includes('data-export-convention="consensus"'),
-    "AC4 SSR: CardExportButton must render data-export-* attributes with PNG default",
+    "AC4 SSR: CardExportButton must render data-export-* attributes with HTML default",
   );
 
   const libraryHtml = renderToStaticMarkup(await LibraryPage());
@@ -660,6 +676,19 @@ const fakeDocumentsRepo: DocumentsRepository = {
       libraryHtml.includes('data-evidence="document:00000000-0000-4000-8000-000000000137"') &&
       libraryHtml.includes("save a copy here automatically (#1360)"),
     `AC4 SSR: LibraryPage must render persisted card documents wrapped in data-evidence: ${libraryHtml}`,
+  );
+
+  const docDetailHtml = renderToStaticMarkup(
+    await DocumentDetailPage({
+      params: Promise.resolve({ id: "document%3A00000000-0000-4000-8000-000000000136" }),
+    }),
+  );
+  assert(
+    docDetailHtml.includes('data-testid="xhs-card-html-preview"') &&
+      docDetailHtml.includes('sandbox=""') &&
+      docDetailHtml.includes('width="1080"') &&
+      docDetailHtml.includes('height="1440"'),
+    `AC4 SSR: DocumentDetailPage must render sandboxed 1080x1440 HTML card preview for text/html revision: ${docDetailHtml}`,
   );
 }
 

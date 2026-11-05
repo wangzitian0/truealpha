@@ -111,6 +111,7 @@ SERVED = (
     "mart.backtest_trades",
     "mart.backtest_valuations",
     "mart.oracle_outcomes",
+    "mart.research_card_artifacts",
 )
 
 #: Relations with a run key that no consumer-reachable file reads. The reason is checkable:

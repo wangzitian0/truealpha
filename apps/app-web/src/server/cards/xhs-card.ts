@@ -1,15 +1,15 @@
 /**
  * Xiaohongshu card generation for research rankings and entity deep-dives (#372 / #44 / #1360).
  *
- * Outputs:
- * - PNG at 1080x1440 (3:4 portrait) via `next/og` (`ImageResponse`).
- * - Deterministic SVG (`image/svg+xml`) and JSON metadata payload.
- *
- * Persists exported binary cards to `/research/library` via `PostgresDocumentsRepository`.
+ * Single Source of Truth (`/ssot`):
+ * - Serves 1080x1440 (3:4 portrait) self-contained Xiaohongshu HTML cards (`text/html; charset=utf-8`),
+ *   reading pre-materialized `glm-5.3-flash` cards from `mart.research_card_artifacts` (joined to
+ *   `mart.served_head`) when available and verified, or rendering the canonical Cold-Verdict Rubric HTML
+ *   document verified by `verifyCardHtmlDocument`.
+ * - Serves canonical JSON metadata payloads (`application/json; charset=utf-8`).
+ * - Persists exported HTML cards to `/research/library` via `PostgresDocumentsRepository`.
  */
 
-import React from "react";
-import { ImageResponse } from "next/og";
 import { NextResponse } from "next/server";
 import {
   formatCell,
@@ -30,6 +30,7 @@ import {
 } from "@/contracts/strategyRun";
 import { loadEntityDetail, loadRanking, type MartAdapterLike } from "@/server/dashboard";
 import { PostgresDocumentsRepository, type DocumentsRepository } from "@/server/documents";
+import { withMartReadonly } from "@/server/mart/db";
 import { entityLabel, loadEntityDisplayMap } from "@/server/mart/entity-resolution";
 import type { AnalystRatingsDetail, SupplyChainExposureDetail } from "@/server/mart/research-read";
 
@@ -37,6 +38,7 @@ export const XHS_CARD_WIDTH = 1080;
 export const XHS_CARD_HEIGHT = 1440;
 export const CARD_TEMPLATE_VERSION = "card_template.v1";
 export const CARD_SCHEMA_VERSION = "research_card.v1";
+export const XHS_CARD_PROMPT_VERSION = "xhs-card-html:v1";
 export const CARD_EXPORT_CACHE_CONTROL = "public, max-age=300" as const;
 
 export interface RankingCardItem {
@@ -45,8 +47,7 @@ export interface RankingCardItem {
   displayName: string;
   tier: string | null;
   currentPriceToSales: string | null;
-  /** #1235: the multiple the gap divides (P/GP under definition 1.0.0) and its basis.
-   * Null basis: the decision carries no target, so the card names no multiple. */
+  /** #1235: the multiple the gap divides (P/GP under definition 1.0.0) and its basis. */
   currentMultiple: string | null;
   valuationBasis: ValuationBasis | null;
   valuationGap: string | null;
@@ -61,204 +62,6 @@ export interface RankingCardData {
   pegConvention?: PegGrowthConvention;
   /** The key of the universe the rows belong to. */
   universe: string;
-}
-
-function escapeXml(unsafe: string): string {
-  return unsafe
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&apos;");
-}
-
-function gapHexColor(valuationGap: string | null): string {
-  const gapVal = Number(valuationGap);
-  if (Number.isNaN(gapVal) || gapVal === 0) return "#94A3B8";
-  return gapVal > 0 ? "#10B981" : "#F43F5E";
-}
-
-interface FormattedRankingRow {
-  issuerId: string;
-  displayName: string;
-  rankStr: string;
-  tierStr: string;
-  gapColor: string;
-  formattedGap: string;
-  formattedMultiple: string;
-  formattedPeg: string;
-  formattedConf: string;
-}
-
-function prepareRankingCardViewModel(
-  data: RankingCardData,
-  fallbackGlyph: string,
-): { basisLabel: string; rows: FormattedRankingRow[] } {
-  const displayItems = data.items.slice(0, 7);
-  const basisLabel = valuationBasisLabel(
-    data.items.find((item) => item.valuationBasis)?.valuationBasis ?? null,
-  );
-  const rows = displayItems.map((item) => ({
-    issuerId: item.issuerId,
-    displayName: item.displayName,
-    rankStr: item.rank !== null ? `#${item.rank}` : fallbackGlyph,
-    tierStr: formatTierLabel(item.tier, fallbackGlyph),
-    gapColor: gapHexColor(item.valuationGap),
-    formattedGap: formatSignedRatio(item.valuationGap) ?? fallbackGlyph,
-    formattedMultiple: formatRatio(item.currentMultiple) ?? fallbackGlyph,
-    formattedPeg: formatRatio(item.peg) ?? fallbackGlyph,
-    formattedConf: formatRatio(item.confidence) ?? fallbackGlyph,
-  }));
-  return { basisLabel, rows };
-}
-
-export function buildRankingCardJson(data: RankingCardData) {
-  return {
-    schema_version: CARD_SCHEMA_VERSION,
-    card_kind: "ranking",
-    template_version: CARD_TEMPLATE_VERSION,
-    title: "Valuation Rankings",
-    cutoff_at: data.cutoffAt,
-    universe: data.universe,
-    peg_convention: data.pegConvention ?? "historical_cagr",
-    generated_at: new Date().toISOString(),
-    research_risk_note:
-      "Ranking reflects one versioned strategy run at one cutoff; historical rank is not a forward-looking guarantee.",
-    source_attribution:
-      "TrueAlpha research — traceable to a materialized factor output (mart.governed_strategy_run).",
-    subjects: data.items.map((item) => ({
-      subject_id: item.issuerId,
-      display_name: item.displayName,
-      rank: item.rank,
-      tier: formatCell(item.tier),
-      valuation_basis: item.valuationBasis,
-      metrics: [
-        { key: "current_price_to_sales", value: item.currentPriceToSales },
-        {
-          key: "current_price_to_gross_profit",
-          value: item.valuationBasis === "price_to_gross_profit" ? item.currentMultiple : null,
-        },
-        { key: "valuation_gap", value: item.valuationGap },
-        { key: "peg", value: item.peg },
-        { key: "confidence", value: item.confidence },
-      ],
-    })),
-  };
-}
-
-export function renderRankingCardSvg(data: RankingCardData): string {
-  const { basisLabel, rows } = prepareRankingCardViewModel(data, "—");
-  const startY = 360;
-  const rowHeight = 110;
-
-  const rowsSvg = rows
-    .map((row, idx) => {
-      const y = startY + idx * rowHeight;
-
-      return `
-    <!-- Row ${idx + 1} -->
-    <g transform="translate(60, ${y})">
-      <rect width="960" height="96" rx="16" fill="#131B2E" stroke="#1E293B" stroke-width="1.5"/>
-      <!-- Rank Badge -->
-      <circle cx="56" cy="48" r="28" fill="${idx < 3 ? "#1E293B" : "#0F172A"}" stroke="${idx === 0 ? "#F59E0B" : idx === 1 ? "#94A3B8" : idx === 2 ? "#D97706" : "#334155"}" stroke-width="2"/>
-      <text x="56" y="55" font-size="20" font-weight="700" fill="${idx === 0 ? "#F59E0B" : idx === 1 ? "#F1F5F9" : idx === 2 ? "#F59E0B" : "#94A3B8"}" text-anchor="middle">${escapeXml(row.rankStr)}</text>
-      
-      <!-- Issuer Name & ID -->
-      <text x="110" y="44" font-size="24" font-weight="600" fill="#F8FAFC">${escapeXml(row.displayName)}</text>
-      <text x="110" y="68" font-size="16" font-family="monospace" fill="#64748B">${escapeXml(row.issuerId)}</text>
-
-      <!-- Tier Badge -->
-      <rect x="360" y="32" width="70" height="32" rx="8" fill="#1E293B" />
-      <text x="395" y="53" font-size="14" font-weight="500" fill="#38BDF8" text-anchor="middle">${escapeXml(row.tierStr)}</text>
-
-      <!-- Current multiple of the valuation basis -->
-      <text x="500" y="55" font-size="20" font-family="monospace" fill="#E2E8F0" text-anchor="middle">${escapeXml(row.formattedMultiple)}</text>
-
-      <!-- Valuation Gap -->
-      <text x="660" y="55" font-size="22" font-family="monospace" font-weight="700" fill="${row.gapColor}" text-anchor="middle">${escapeXml(row.formattedGap)}</text>
-
-      <!-- PEG -->
-      <text x="800" y="55" font-size="18" font-family="monospace" fill="#CBD5E1" text-anchor="middle">${escapeXml(row.formattedPeg)}</text>
-
-      <!-- Confidence -->
-      <text x="900" y="55" font-size="18" font-family="monospace" fill="#94A3B8" text-anchor="middle">${escapeXml(row.formattedConf)}</text>
-    </g>`;
-    })
-    .join("\n");
-
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<svg width="${XHS_CARD_WIDTH}" height="${XHS_CARD_HEIGHT}" viewBox="0 0 ${XHS_CARD_WIDTH} ${XHS_CARD_HEIGHT}" fill="none" xmlns="http://www.w3.org/2000/svg" font-family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif">
-  <defs>
-    <linearGradient id="bgGradient" x1="0" y1="0" x2="1080" y2="1440" gradientUnits="userSpaceOnUse">
-      <stop offset="0%" stop-color="#080C14"/>
-      <stop offset="50%" stop-color="#0F172A"/>
-      <stop offset="100%" stop-color="#0B0F19"/>
-    </linearGradient>
-    <linearGradient id="brandLine" x1="60" y1="0" x2="1020" y2="0" gradientUnits="userSpaceOnUse">
-      <stop offset="0%" stop-color="#06B6D4"/>
-      <stop offset="50%" stop-color="#3B82F6"/>
-      <stop offset="100%" stop-color="#8B5CF6"/>
-    </linearGradient>
-  </defs>
-
-  <!-- Background Base -->
-  <rect width="${XHS_CARD_WIDTH}" height="${XHS_CARD_HEIGHT}" fill="url(#bgGradient)"/>
-  
-  <!-- Outer Border -->
-  <rect x="24" y="24" width="1032" height="1392" rx="32" stroke="#1E293B" stroke-width="2"/>
-
-  <!-- Top Decorative Accent Line -->
-  <rect x="60" y="48" width="960" height="4" rx="2" fill="url(#brandLine)"/>
-
-  <!-- Brand Header -->
-  <g transform="translate(60, 80)">
-    <text font-size="16" font-weight="700" fill="#06B6D4" letter-spacing="3">TRUEALPHA · QUANTITATIVE RESEARCH</text>
-    <rect x="830" y="-8" width="130" height="28" rx="6" fill="#1E293B"/>
-    <text x="895" y="11" font-size="12" font-weight="600" fill="#94A3B8" text-anchor="middle">1080 × 1440 · 3:4</text>
-  </g>
-
-  <!-- Title & Subtitle -->
-  <g transform="translate(60, 150)">
-    <text font-size="44" font-weight="800" fill="#FFFFFF" letter-spacing="-0.5">Valuation Rankings</text>
-    <text y="48" font-size="26" font-weight="500" fill="#94A3B8">大模型价值主题榜单 · 估值偏差排序</text>
-  </g>
-
-  <!-- Meta Info Banner -->
-  <g transform="translate(60, 246)">
-    <rect width="960" height="54" rx="12" fill="#131B2E" stroke="#1E293B"/>
-    <circle cx="28" cy="27" r="6" fill="#10B981"/>
-    <text x="46" y="33" font-size="16" font-weight="500" fill="#E2E8F0">Governed Execution · Cutoff: <tspan font-family="monospace" font-weight="700">${escapeXml(data.cutoffAt)}</tspan></text>
-    <text x="930" y="33" font-size="15" fill="#64748B" text-anchor="end">${data.totalMembers} total members</text>
-  </g>
-
-  <!-- Table Header -->
-  <g transform="translate(60, 332)">
-    <text x="56" y="0" font-size="14" font-weight="600" fill="#64748B" text-anchor="middle">RANK</text>
-    <text x="110" y="0" font-size="14" font-weight="600" fill="#64748B">ISSUER</text>
-    <text x="395" y="0" font-size="14" font-weight="600" fill="#64748B" text-anchor="middle">TIER</text>
-    <text x="500" y="0" font-size="14" font-weight="600" fill="#64748B" text-anchor="middle">${escapeXml(basisLabel)}</text>
-    <text x="660" y="0" font-size="14" font-weight="600" fill="#64748B" text-anchor="middle">VALUATION GAP (${escapeXml(basisLabel)})</text>
-    <text x="800" y="0" font-size="14" font-weight="600" fill="#64748B" text-anchor="middle">PEG</text>
-    <text x="900" y="0" font-size="14" font-weight="600" fill="#64748B" text-anchor="middle">CONF</text>
-  </g>
-
-  <!-- Table Rows -->
-  ${rowsSvg}
-
-  <!-- Footer & Governance Section -->
-  <g transform="translate(60, 1190)">
-    <rect width="960" height="175" rx="16" fill="#0C1322" stroke="#1E293B" stroke-dasharray="4 4"/>
-    
-    <text x="32" y="36" font-size="15" font-weight="700" fill="#F59E0B" letter-spacing="1">RESEARCH HYPOTHESIS · NOT INVESTMENT ADVICE</text>
-    <text x="32" y="66" font-size="15" fill="#94A3B8">Ranking reflects one versioned strategy run at one cutoff; historical rank is not a forward-looking guarantee.</text>
-    <text x="32" y="92" font-size="15" fill="#64748B">Traceable to materialized factor output (mart.governed_strategy_run, schema: ${CARD_SCHEMA_VERSION}).</text>
-    
-    <!-- Bottom Brand Marks -->
-    <line x1="32" y1="120" x2="928" y2="120" stroke="#1E293B" stroke-width="1"/>
-    <text x="32" y="148" font-size="14" font-weight="600" fill="#38BDF8">TrueAlpha Research Card Export</text>
-    <text x="928" y="148" font-size="13" font-family="monospace" fill="#475569" text-anchor="end">template: ${CARD_TEMPLATE_VERSION}</text>
-  </g>
-</svg>`;
 }
 
 export interface EntityCardData {
@@ -281,35 +84,19 @@ export interface EntityCardData {
   confidence: string | null;
 }
 
-interface FormattedEntityViewModel {
-  gapColor: string;
-  formattedGap: string;
-  formattedMultiple: string;
-  basisLabel: string;
-  formattedPeg: string;
-  pegConventionLabel: string;
-  formattedGppe: string;
-  formattedConf: string;
-  tierText: string;
-  displayThemes: Array<{ theme: string; themeShare: string | null }>;
+export function escapeHtml(unsafe: string): string {
+  return unsafe
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
-function prepareEntityCardViewModel(
-  data: EntityCardData,
-  fallbackGlyph: string,
-): FormattedEntityViewModel {
-  return {
-    gapColor: gapHexColor(data.valuationGap),
-    formattedGap: formatSignedRatio(data.valuationGap) ?? fallbackGlyph,
-    formattedMultiple: formatRatio(data.currentMultiple) ?? fallbackGlyph,
-    basisLabel: valuationBasisLabel(data.valuationBasis),
-    formattedPeg: formatRatio(data.peg) ?? fallbackGlyph,
-    pegConventionLabel: PEG_CONVENTION_LABELS[data.pegConvention ?? "historical_cagr"],
-    formattedGppe: formatUsdMagnitude(data.gppe) ?? (data.gppe ? `$${data.gppe}` : fallbackGlyph),
-    formattedConf: formatRatio(data.confidence) ?? fallbackGlyph,
-    tierText: formatTierLabel(data.tier, fallbackGlyph),
-    displayThemes: data.themes.slice(0, 4),
-  };
+function gapHexColor(valuationGap: string | null): string {
+  const gapVal = Number(valuationGap);
+  if (Number.isNaN(gapVal) || gapVal === 0) return "#475569";
+  return gapVal > 0 ? "#047857" : "#BE123C";
 }
 
 /**
@@ -324,11 +111,47 @@ export function entityCardThemes(
     .map((t) => ({ theme: t.theme, themeShare: t.themeShare }));
 }
 
+export function buildRankingCardJson(data: RankingCardData) {
+  return {
+    schema_version: CARD_SCHEMA_VERSION,
+    card_kind: "ranking",
+    template_version: CARD_TEMPLATE_VERSION,
+    prompt_version: XHS_CARD_PROMPT_VERSION,
+    title: "Valuation Rankings",
+    cutoff_at: data.cutoffAt,
+    universe: data.universe,
+    peg_convention: data.pegConvention ?? "historical_cagr",
+    generated_at: new Date().toISOString(),
+    research_risk_note:
+      "Ranking reflects one versioned strategy run at one cutoff; historical rank is not a forward-looking guarantee.",
+    source_attribution:
+      "TrueAlpha research — traceable to a materialized factor output (mart.served_head).",
+    subjects: data.items.map((item) => ({
+      subject_id: item.issuerId,
+      display_name: item.displayName,
+      rank: item.rank,
+      tier: formatCell(item.tier),
+      valuation_basis: item.valuationBasis,
+      metrics: [
+        { key: "current_price_to_sales", value: item.currentPriceToSales },
+        {
+          key: "current_price_to_gross_profit",
+          value: item.valuationBasis === "price_to_gross_profit" ? item.currentMultiple : null,
+        },
+        { key: "valuation_gap", value: item.valuationGap },
+        { key: "peg", value: item.peg },
+        { key: "confidence", value: item.confidence },
+      ],
+    })),
+  };
+}
+
 export function buildEntityCardJson(data: EntityCardData) {
   return {
     schema_version: CARD_SCHEMA_VERSION,
     card_kind: "entity",
     template_version: CARD_TEMPLATE_VERSION,
+    prompt_version: XHS_CARD_PROMPT_VERSION,
     title: "Entity Deep Dive",
     issuer_id: data.issuerId,
     display_name: data.displayName,
@@ -359,694 +182,686 @@ export function buildEntityCardJson(data: EntityCardData) {
   };
 }
 
-export function renderEntityDeepDiveCardSvg(data: EntityCardData): string {
-  const {
-    gapColor,
-    formattedGap,
-    formattedMultiple: formattedPs,
-    basisLabel,
-    formattedPeg,
-    pegConventionLabel,
-    formattedGppe,
-    formattedConf,
-    tierText,
-    displayThemes,
-  } = prepareEntityCardViewModel(data, "—");
-  const themesSvg =
+/**
+ * Deterministic fact-preservation verifier for 1080x1440 Xiaohongshu HTML cards (#44).
+ * Ensures the rendered HTML is self-contained, carries exact 1080x1440 dimensions,
+ * has zero `<script>` or external URLs, and preserves every required fact verbatim.
+ */
+export function verifyCardHtmlDocument(
+  html: string,
+  requiredFacts: ReadonlyArray<string>,
+): { ok: boolean; violations: string[] } {
+  const violations: string[] = [];
+  const lower = html.toLowerCase();
+  if ((!lower.includes("<!doctype html") && !lower.includes("<html")) || !lower.includes("</html>")) {
+    violations.push("missing_html_envelope");
+  }
+  if (!html.includes(String(XHS_CARD_WIDTH)) || !html.includes(String(XHS_CARD_HEIGHT))) {
+    violations.push("missing_1080x1440_dimensions");
+  }
+  if (
+    lower.includes("<script") ||
+    lower.includes("javascript:") ||
+    lower.includes("onerror=") ||
+    lower.includes("onload=")
+  ) {
+    violations.push("forbidden_script_or_event_handler");
+  }
+  if (lower.includes("http://") || lower.includes("https://")) {
+    violations.push("forbidden_external_url");
+  }
+  for (const fact of requiredFacts) {
+    if (!fact) continue;
+    const escaped = escapeHtml(fact);
+    const unicodeMinus = fact.startsWith("-") ? `−${fact.slice(1)}` : fact;
+    if (!html.includes(fact) && !html.includes(escaped) && !html.includes(unicodeMinus)) {
+      violations.push(`missing_fact:${fact}`);
+    }
+  }
+  return { ok: violations.length === 0, violations };
+}
+
+export function renderRankingCardHtml(data: RankingCardData): string {
+  const displayItems = data.items.slice(0, 7);
+  const basisLabel = valuationBasisLabel(
+    data.items.find((item) => item.valuationBasis)?.valuationBasis ?? null,
+  );
+  const conventionLabel = PEG_CONVENTION_LABELS[data.pegConvention ?? "historical_cagr"];
+
+  const rowsHtml = displayItems
+    .map((item, idx) => {
+      const rankStr = item.rank !== null ? `#${item.rank}` : formatCell(null);
+      const tierStr = formatTierLabel(item.tier);
+      const gapColor = gapHexColor(item.valuationGap);
+      const formattedGap = formatCell(formatSignedRatio(item.valuationGap));
+      const formattedMultiple = formatCell(formatRatio(item.currentMultiple));
+      const formattedPeg = formatCell(formatRatio(item.peg));
+      const formattedConf = formatCell(formatRatio(item.confidence));
+      const badgeBg = idx === 0 ? "#F59E0B" : idx === 1 ? "#334155" : idx === 2 ? "#B45309" : "#111315";
+
+      return `<tr class="ranking-row">
+        <td class="cell-rank"><span class="rank-pill" style="background:${badgeBg}">${escapeHtml(rankStr)}</span></td>
+        <td class="cell-issuer">
+          <div class="issuer-name">${escapeHtml(item.displayName)}</div>
+          <div class="issuer-id">${escapeHtml(item.issuerId)}</div>
+        </td>
+        <td class="cell-tier"><span class="tier-badge">${escapeHtml(tierStr)}</span></td>
+        <td class="cell-num">${escapeHtml(formattedMultiple)}</td>
+        <td class="cell-num cell-gap" style="color:${gapColor}">${escapeHtml(formattedGap)}</td>
+        <td class="cell-num">${escapeHtml(formattedPeg)}</td>
+        <td class="cell-num cell-conf">${escapeHtml(formattedConf)}</td>
+      </tr>`;
+    })
+    .join("\n");
+
+  return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>Valuation Rankings · ${escapeHtml(data.universe.toUpperCase())}</title>
+<style>
+  html, body {
+    width: ${XHS_CARD_WIDTH}px;
+    height: ${XHS_CARD_HEIGHT}px;
+    margin: 0;
+    padding: 0;
+    background: #F7F5F0;
+    color: #111315;
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    box-sizing: border-box;
+    overflow: hidden;
+  }
+  .card-canvas {
+    width: ${XHS_CARD_WIDTH}px;
+    height: ${XHS_CARD_HEIGHT}px;
+    padding: 44px 48px;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    border: 3px solid #111315;
+    background: #F7F5F0;
+  }
+  .header-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 2px solid #111315;
+    padding-bottom: 14px;
+    margin-bottom: 18px;
+  }
+  .brand-kicker {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 14px;
+    font-weight: 800;
+    letter-spacing: 0.12em;
+    color: #111315;
+  }
+  .dim-badge {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    font-weight: 700;
+    background: #111315;
+    color: #F7F5F0;
+    padding: 4px 10px;
+    border-radius: 6px;
+  }
+  .title-block h1 {
+    font-size: 42px;
+    font-weight: 900;
+    margin: 0 0 6px 0;
+    letter-spacing: -0.02em;
+  }
+  .title-block .subtitle {
+    font-size: 20px;
+    font-weight: 600;
+    color: #475569;
+    margin: 0 0 18px 0;
+  }
+  .meta-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: #FFFFFF;
+    border: 2px solid #111315;
+    border-radius: 12px;
+    padding: 12px 18px;
+    margin-bottom: 22px;
+    box-shadow: 4px 4px 0 #111315;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 13px;
+  }
+  .ranking-table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0 10px;
+  }
+  .ranking-table th {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    font-weight: 800;
+    color: #475569;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding: 0 12px 6px 12px;
+    text-align: left;
+  }
+  .ranking-table th.num-head {
+    text-align: right;
+  }
+  .ranking-row td {
+    background: #FFFFFF;
+    border-top: 1.5px solid #111315;
+    border-bottom: 1.5px solid #111315;
+    padding: 14px 12px;
+    vertical-align: middle;
+  }
+  .ranking-row td:first-child {
+    border-left: 1.5px solid #111315;
+    border-top-left-radius: 12px;
+    border-bottom-left-radius: 12px;
+    width: 64px;
+    text-align: center;
+  }
+  .ranking-row td:last-child {
+    border-right: 1.5px solid #111315;
+    border-top-right-radius: 12px;
+    border-bottom-right-radius: 12px;
+  }
+  .rank-pill {
+    display: inline-block;
+    color: #FFFFFF;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 15px;
+    font-weight: 800;
+    padding: 4px 10px;
+    border-radius: 999px;
+  }
+  .issuer-name {
+    font-size: 19px;
+    font-weight: 800;
+    color: #111315;
+  }
+  .issuer-id {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    color: #64748B;
+    margin-top: 2px;
+  }
+  .tier-badge {
+    display: inline-block;
+    background: #F1F5F9;
+    border: 1px solid #111315;
+    border-radius: 6px;
+    padding: 3px 8px;
+    font-size: 12px;
+    font-weight: 700;
+    color: #0F172A;
+  }
+  .cell-num {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-variant-numeric: tabular-nums;
+    font-size: 18px;
+    font-weight: 700;
+    text-align: right;
+  }
+  .cell-gap {
+    font-size: 20px;
+    font-weight: 900;
+  }
+  .cell-conf {
+    color: #475569;
+  }
+  .footer-box {
+    background: #FFFFFF;
+    border: 2px solid #111315;
+    border-radius: 12px;
+    padding: 16px 20px;
+    box-shadow: 4px 4px 0 #111315;
+  }
+  .footer-tag {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    font-weight: 800;
+    color: #B45309;
+    letter-spacing: 0.06em;
+    margin-bottom: 6px;
+  }
+  .footer-note {
+    font-size: 13px;
+    color: #334155;
+    margin: 0 0 4px 0;
+    line-height: 1.4;
+  }
+  .footer-meta {
+    display: flex;
+    justify-content: space-between;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px;
+    color: #64748B;
+    border-top: 1px solid #E2E8F0;
+    padding-top: 8px;
+    margin-top: 8px;
+  }
+</style>
+</head>
+<body>
+  <div class="card-canvas" data-card-kind="ranking" data-card-dimensions="1080x1440">
+    <div>
+      <div class="header-top">
+        <span class="brand-kicker">TRUEALPHA · COLD-VERDICT RESEARCH</span>
+        <span class="dim-badge">${XHS_CARD_WIDTH} × ${XHS_CARD_HEIGHT} · 3:4 HTML</span>
+      </div>
+      <div class="title-block">
+        <h1>Valuation Rankings</h1>
+        <p class="subtitle">大模型价值主题榜单 · ${escapeHtml(data.universe.toUpperCase())} · PEG (${escapeHtml(conventionLabel)})</p>
+      </div>
+      <div class="meta-bar">
+        <span>Governed Cutoff: <strong>${escapeHtml(data.cutoffAt)}</strong></span>
+        <span>Universe: <strong>${escapeHtml(data.universe)}</strong> (${data.totalMembers} total members)</span>
+      </div>
+      <table class="ranking-table">
+        <thead>
+          <tr>
+            <th>RANK</th>
+            <th>ISSUER</th>
+            <th>TIER</th>
+            <th class="num-head">${escapeHtml(basisLabel)}</th>
+            <th class="num-head">VALUATION GAP (${escapeHtml(basisLabel)})</th>
+            <th class="num-head">PEG</th>
+            <th class="num-head">CONF</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rowsHtml}
+        </tbody>
+      </table>
+    </div>
+    <div class="footer-box">
+      <div class="footer-tag">RESEARCH HYPOTHESIS · NOT INVESTMENT ADVICE</div>
+      <p class="footer-note">Ranking reflects one versioned strategy run at one cutoff; historical rank is not a forward-looking guarantee.</p>
+      <p class="footer-note">Traceable to materialized factor output (mart.served_head, schema: ${CARD_SCHEMA_VERSION}).</p>
+      <div class="footer-meta">
+        <span>TrueAlpha Research HTML Card Export</span>
+        <span>template: ${CARD_TEMPLATE_VERSION} · prompt: ${XHS_CARD_PROMPT_VERSION}</span>
+      </div>
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
+export function renderEntityDeepDiveCardHtml(data: EntityCardData): string {
+  const gapColor = gapHexColor(data.valuationGap);
+  const formattedGap = formatCell(formatSignedRatio(data.valuationGap));
+  const formattedMultiple = formatCell(formatRatio(data.currentMultiple));
+  const basisLabel = valuationBasisLabel(data.valuationBasis);
+  const formattedPeg = formatCell(formatRatio(data.peg));
+  const pegConventionLabel = PEG_CONVENTION_LABELS[data.pegConvention ?? "historical_cagr"];
+  const formattedGppe = formatCell(formatUsdMagnitude(data.gppe) ?? (data.gppe ? `$${data.gppe}` : null));
+  const formattedConf = formatCell(formatRatio(data.confidence));
+  const tierText = formatTierLabel(data.tier);
+  const displayThemes = data.themes.slice(0, 4);
+
+  const themesHtml =
     displayThemes.length > 0
       ? displayThemes
-          .map((t, idx) => {
-            const y = 85 + idx * 65;
+          .map((t) => {
             const pctStr = formatCell(formatPercentFromFraction(t.themeShare));
             const shareNum = Number(t.themeShare ?? 0);
-            const barWidth = isNaN(shareNum)
+            const pctWidth = Number.isNaN(shareNum)
               ? 0
-              : Math.min(896, Math.max(0, Math.round(shareNum * 896)));
-            return `
-      <!-- Theme ${idx + 1} -->
-      <g transform="translate(32, ${y})">
-        <text x="0" y="0" font-size="18" font-weight="600" fill="#E2E8F0">${escapeXml(t.theme)}</text>
-        <text x="896" y="0" font-size="18" font-family="monospace" font-weight="700" fill="#38BDF8" text-anchor="end">${escapeXml(pctStr)}</text>
-        <rect x="0" y="12" width="896" height="10" rx="5" fill="#1E293B"/>
-        <rect x="0" y="12" width="${barWidth}" height="10" rx="5" fill="#38BDF8"/>
-      </g>`;
+              : Math.min(100, Math.max(0, Math.round(shareNum * 100)));
+            return `<div class="theme-row">
+              <div class="theme-labels">
+                <span class="theme-name">${escapeHtml(t.theme)}</span>
+                <span class="theme-pct">${escapeHtml(pctStr)}</span>
+              </div>
+              <div class="theme-bar-bg"><div class="theme-bar-fill" style="width:${pctWidth}%"></div></div>
+            </div>`;
           })
           .join("\n")
-      : `
-      <g transform="translate(480, 200)">
-        <text font-size="16" fill="#64748B" text-anchor="middle">No theme purity materialization recorded for this issuer</text>
-      </g>`;
+      : `<div class="empty-note">No theme purity materialization recorded for this issuer</div>`;
 
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<svg width="${XHS_CARD_WIDTH}" height="${XHS_CARD_HEIGHT}" viewBox="0 0 ${XHS_CARD_WIDTH} ${XHS_CARD_HEIGHT}" fill="none" xmlns="http://www.w3.org/2000/svg" font-family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif">
-  <defs>
-    <linearGradient id="bgGradient" x1="0" y1="0" x2="1080" y2="1440" gradientUnits="userSpaceOnUse">
-      <stop offset="0%" stop-color="#080C14"/>
-      <stop offset="50%" stop-color="#0F172A"/>
-      <stop offset="100%" stop-color="#0B0F19"/>
-    </linearGradient>
-    <linearGradient id="brandLine" x1="60" y1="0" x2="1020" y2="0" gradientUnits="userSpaceOnUse">
-      <stop offset="0%" stop-color="#06B6D4"/>
-      <stop offset="50%" stop-color="#3B82F6"/>
-      <stop offset="100%" stop-color="#8B5CF6"/>
-    </linearGradient>
-  </defs>
+  const m4 = data.analystRatings;
+  const analystHtml = m4
+    ? `<div class="sub-panel">
+        <div class="panel-kicker">MODULE 4 · ANALYST CONSENSUS</div>
+        <div class="panel-metrics">
+          <span>Rating: <strong>${escapeHtml(formatCell(m4.consensusRating))}</strong></span>
+          <span>Target: <strong>${escapeHtml(formatCell(m4.targetPrice ? `$${m4.targetPrice}` : null))}</strong></span>
+          <span>Analysts: <strong>${formatCell(m4.analystsCount !== null && m4.analystsCount !== undefined ? String(m4.analystsCount) : null)}</strong> (B:${m4.buyCount ?? 0}/H:${m4.holdCount ?? 0}/S:${m4.sellCount ?? 0})</span>
+        </div>
+      </div>`
+    : "";
 
-  <!-- Background Base -->
-  <rect width="${XHS_CARD_WIDTH}" height="${XHS_CARD_HEIGHT}" fill="url(#bgGradient)"/>
-  
-  <!-- Outer Border -->
-  <rect x="24" y="24" width="1032" height="1392" rx="32" stroke="#1E293B" stroke-width="2"/>
+  const m3 = data.supplyChainExposure;
+  const supplyChainHtml = m3
+    ? `<div class="sub-panel">
+        <div class="panel-kicker">MODULE 3 · SUPPLY-CHAIN SCENARIO (scenario_only)</div>
+        <div class="panel-metrics">
+          <span>Exposure: <strong>${escapeHtml(formatCell(m3.exposureScore))}</strong></span>
+          <span>Partners: <strong>${formatCell(m3.directPartners !== null && m3.directPartners !== undefined ? String(m3.directPartners) : null)}</strong> (Sup:${m3.suppliersCount ?? 0}/Cust:${m3.customersCount ?? 0})</span>
+          <span>Max Share: <strong>${escapeHtml(formatCell(formatPercentFromFraction(m3.maxPartnerShare)))}</strong></span>
+        </div>
+      </div>`
+    : "";
 
-  <!-- Top Decorative Accent Line -->
-  <rect x="60" y="48" width="960" height="4" rx="2" fill="url(#brandLine)"/>
-
-  <!-- Brand Header -->
-  <g transform="translate(60, 80)">
-    <text font-size="16" font-weight="700" fill="#06B6D4" letter-spacing="3">TRUEALPHA · RESEARCH DEEP DIVE</text>
-    <rect x="830" y="-8" width="130" height="28" rx="6" fill="#1E293B"/>
-    <text x="895" y="11" font-size="12" font-weight="600" fill="#94A3B8" text-anchor="middle">1080 × 1440 · 3:4</text>
-  </g>
-
-  <!-- Title & Subtitle -->
-  <g transform="translate(60, 145)">
-    <text font-size="42" font-weight="800" fill="#FFFFFF" letter-spacing="-0.5">TrueAlpha Deep Dive</text>
-    <text y="42" font-size="22" font-weight="500" fill="#94A3B8">单票 360° 研究卡片 · 估值 / 效率 / 增速 / 主题纯度</text>
-  </g>
-
-  <!-- Meta Info Banner -->
-  <g transform="translate(60, 235)">
-    <rect width="960" height="48" rx="10" fill="#131B2E" stroke="#1E293B"/>
-    <circle cx="24" cy="24" r="5" fill="#10B981"/>
-    <text x="42" y="30" font-size="15" font-weight="500" fill="#E2E8F0">Governed Cutoff: <tspan font-family="monospace" font-weight="700">${escapeXml(data.cutoffAt)}</tspan></text>
-    <text x="936" y="30" font-size="14" fill="#64748B" text-anchor="end">Confidence: <tspan font-family="monospace" font-weight="600" fill="#94A3B8">${escapeXml(formattedConf)}</tspan></text>
-  </g>
-
-  <!-- Issuer Header Card -->
-  <g transform="translate(60, 305)">
-    <rect width="960" height="110" rx="16" fill="#131B2E" stroke="#1E293B" stroke-width="1.5"/>
-    <text x="32" y="48" font-size="30" font-weight="700" fill="#F8FAFC">${escapeXml(data.displayName)}</text>
-    <text x="32" y="82" font-size="16" font-family="monospace" fill="#64748B">${escapeXml(data.issuerId)}</text>
-
-    <!-- Tier Badge -->
-    <rect x="710" y="32" width="220" height="44" rx="10" fill="#1E293B" stroke="#38BDF8" stroke-width="1.5"/>
-    <text x="820" y="60" font-size="15" font-weight="600" fill="#38BDF8" text-anchor="middle">${escapeXml(tierText)}</text>
-  </g>
-
-  <!-- Module 7 Valuation & Module 1 Growth Row -->
-  <g transform="translate(60, 435)">
-    <!-- Valuation Block -->
-    <g transform="translate(0, 0)">
-      <rect width="465" height="155" rx="16" fill="#131B2E" stroke="#1E293B"/>
-      <text x="24" y="32" font-size="13" font-weight="700" fill="#64748B" letter-spacing="1">VALUATION · MODULE 7</text>
-      
-      <text x="24" y="70" font-size="15" fill="#94A3B8">Current ${escapeXml(basisLabel)}</text>
-      <text x="24" y="105" font-size="28" font-family="monospace" font-weight="700" fill="#E2E8F0">${escapeXml(formattedPs)}</text>
-
-      <text x="250" y="70" font-size="15" fill="#94A3B8">Valuation Gap (${escapeXml(basisLabel)})</text>
-      <text x="250" y="105" font-size="28" font-family="monospace" font-weight="700" fill="${gapColor}">${escapeXml(formattedGap)}</text>
-    </g>
-
-    <!-- Growth Block (PEG) -->
-    <g transform="translate(495, 0)">
-      <rect width="465" height="155" rx="16" fill="#131B2E" stroke="#1E293B"/>
-      <text x="24" y="32" font-size="13" font-weight="700" fill="#64748B" letter-spacing="1">GROWTH · MODULE 1</text>
-      
-      <text x="24" y="70" font-size="15" fill="#94A3B8">PEG</text>
-      <text x="24" y="112" font-size="34" font-family="monospace" font-weight="700" fill="#38BDF8">${escapeXml(formattedPeg)}</text>
-      <text x="440" y="110" font-size="13" fill="#64748B" text-anchor="end">${escapeXml(pegConventionLabel)}</text>
-    </g>
-  </g>
-
-  <!-- Module 2 Labor Efficiency / GPPE Block -->
-  <g transform="translate(60, 610)">
-    <rect width="960" height="145" rx="16" fill="#131B2E" stroke="#1E293B"/>
-    <text x="32" y="34" font-size="13" font-weight="700" fill="#64748B" letter-spacing="1">LABOR EFFICIENCY · MODULE 2</text>
-    
-    <text x="32" y="72" font-size="15" fill="#94A3B8">Gross Profit / Employee (GPPE)</text>
-    <text x="32" y="114" font-size="36" font-family="monospace" font-weight="700" fill="#F8FAFC">${escapeXml(formattedGppe)}</text>
-
-    <!-- Operating Branch Tag -->
-    <rect x="740" y="55" width="190" height="38" rx="8" fill="#1E293B" stroke="#334155"/>
-    <text x="835" y="79" font-size="14" font-weight="600" fill="#38BDF8" text-anchor="middle">${escapeXml(formatCell(data.operatingBranch))}</text>
-  </g>
-
-  <!-- Module 6 Theme Purity Block -->
-  <g transform="translate(60, 775)">
-    <rect width="960" height="385" rx="16" fill="#131B2E" stroke="#1E293B"/>
-    <text x="32" y="36" font-size="14" font-weight="700" fill="#64748B" letter-spacing="1">THEME PURITY &amp; BUSINESS EXPOSURE · MODULE 6</text>
-    <text x="32" y="60" font-size="13" fill="#475569">Revenue partition classified by traceable segment purity</text>
-    
-    ${themesSvg}
-  </g>
-
-  <!-- Footer & Governance Section -->
-  <g transform="translate(60, 1180)">
-    <rect width="960" height="185" rx="16" fill="#0C1322" stroke="#1E293B" stroke-dasharray="4 4"/>
-    
-    <text x="32" y="36" font-size="15" font-weight="700" fill="#F59E0B" letter-spacing="1">RESEARCH HYPOTHESIS · NOT INVESTMENT ADVICE</text>
-    <text x="32" y="66" font-size="15" fill="#94A3B8">Deep dive reflects one versioned strategy run at one cutoff; historical indicators are not forward-looking guarantees.</text>
-    <text x="32" y="92" font-size="15" fill="#64748B">Traceable to materialized factor outputs (mart.strategy_decisions, mart.topt_gppe_results, mart.issuer_theme_purity, schema: ${CARD_SCHEMA_VERSION}).</text>
-    
-    <!-- Bottom Brand Marks -->
-    <line x1="32" y1="126" x2="928" y2="126" stroke="#1E293B" stroke-width="1"/>
-    <text x="32" y="156" font-size="14" font-weight="600" fill="#38BDF8">TrueAlpha Research Card Export</text>
-    <text x="928" y="156" font-size="13" font-family="monospace" fill="#475569" text-anchor="end">template: ${CARD_TEMPLATE_VERSION}</text>
-  </g>
-</svg>`;
+  return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>TrueAlpha Deep Dive · ${escapeHtml(data.displayName)}</title>
+<style>
+  html, body {
+    width: ${XHS_CARD_WIDTH}px;
+    height: ${XHS_CARD_HEIGHT}px;
+    margin: 0;
+    padding: 0;
+    background: #F7F5F0;
+    color: #111315;
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    box-sizing: border-box;
+    overflow: hidden;
+  }
+  .card-canvas {
+    width: ${XHS_CARD_WIDTH}px;
+    height: ${XHS_CARD_HEIGHT}px;
+    padding: 44px 48px;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    border: 3px solid #111315;
+    background: #F7F5F0;
+  }
+  .header-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 2px solid #111315;
+    padding-bottom: 14px;
+    margin-bottom: 18px;
+  }
+  .brand-kicker {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 14px;
+    font-weight: 800;
+    letter-spacing: 0.1em;
+  }
+  .dim-badge {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    font-weight: 700;
+    background: #111315;
+    color: #F7F5F0;
+    padding: 4px 10px;
+    border-radius: 6px;
+  }
+  .hero-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 18px;
+  }
+  .hero-header h1 {
+    font-size: 38px;
+    font-weight: 900;
+    margin: 0 0 6px 0;
+  }
+  .hero-sub {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 14px;
+    color: #475569;
+  }
+  .tier-pill {
+    background: #111315;
+    color: #F7F5F0;
+    padding: 8px 16px;
+    border-radius: 10px;
+    font-size: 16px;
+    font-weight: 800;
+  }
+  .meta-bar {
+    display: flex;
+    justify-content: space-between;
+    background: #FFFFFF;
+    border: 2px solid #111315;
+    border-radius: 12px;
+    padding: 12px 18px;
+    margin-bottom: 20px;
+    box-shadow: 4px 4px 0 #111315;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 13px;
+  }
+  .bento-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px;
+    margin-bottom: 20px;
+  }
+  .bento-tile {
+    background: #FFFFFF;
+    border: 2px solid #111315;
+    border-radius: 14px;
+    padding: 18px 20px;
+    box-shadow: 4px 4px 0 #111315;
+  }
+  .tile-label {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 13px;
+    font-weight: 800;
+    color: #475569;
+    text-transform: uppercase;
+  }
+  .tile-value {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-variant-numeric: tabular-nums;
+    font-size: 34px;
+    font-weight: 900;
+    margin: 8px 0 4px 0;
+  }
+  .tile-sub {
+    font-size: 13px;
+    color: #64748B;
+  }
+  .themes-box {
+    background: #FFFFFF;
+    border: 2px solid #111315;
+    border-radius: 14px;
+    padding: 18px 20px;
+    margin-bottom: 16px;
+    box-shadow: 4px 4px 0 #111315;
+  }
+  .themes-title {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 13px;
+    font-weight: 800;
+    color: #111315;
+    margin-bottom: 12px;
+    text-transform: uppercase;
+  }
+  .theme-row {
+    margin-bottom: 10px;
+  }
+  .theme-labels {
+    display: flex;
+    justify-content: space-between;
+    font-size: 15px;
+    font-weight: 700;
+    margin-bottom: 4px;
+  }
+  .theme-pct {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .theme-bar-bg {
+    width: 100%;
+    height: 10px;
+    background: #E2E8F0;
+    border-radius: 999px;
+    overflow: hidden;
+  }
+  .theme-bar-fill {
+    height: 10px;
+    background: #111315;
+    border-radius: 999px;
+  }
+  .sub-panel {
+    background: #FFFFFF;
+    border: 1.5px solid #111315;
+    border-radius: 10px;
+    padding: 12px 16px;
+    margin-bottom: 12px;
+  }
+  .panel-kicker {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px;
+    font-weight: 800;
+    color: #475569;
+    margin-bottom: 6px;
+  }
+  .panel-metrics {
+    display: flex;
+    justify-content: space-between;
+    font-size: 14px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .footer-box {
+    background: #FFFFFF;
+    border: 2px solid #111315;
+    border-radius: 12px;
+    padding: 14px 18px;
+    box-shadow: 4px 4px 0 #111315;
+  }
+  .footer-tag {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    font-weight: 800;
+    color: #B45309;
+    margin-bottom: 4px;
+  }
+  .footer-note {
+    font-size: 12px;
+    color: #334155;
+    margin: 0 0 3px 0;
+  }
+  .footer-meta {
+    display: flex;
+    justify-content: space-between;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px;
+    color: #64748B;
+    border-top: 1px solid #E2E8F0;
+    padding-top: 6px;
+    margin-top: 6px;
+  }
+</style>
+</head>
+<body>
+  <div class="card-canvas" data-card-kind="entity" data-card-dimensions="1080x1440">
+    <div>
+      <div class="header-top">
+        <span class="brand-kicker">TRUEALPHA DEEP DIVE · ENTITY 360 CARD</span>
+        <span class="dim-badge">${XHS_CARD_WIDTH} × ${XHS_CARD_HEIGHT} · 3:4 HTML</span>
+      </div>
+      <div class="hero-header">
+        <div>
+          <h1>TrueAlpha Deep Dive: ${escapeHtml(data.displayName)}</h1>
+          <div class="hero-sub">${escapeHtml(data.issuerId)} · Branch: ${escapeHtml(formatCell(data.operatingBranch))}</div>
+        </div>
+        <div class="tier-pill">${escapeHtml(tierText)}</div>
+      </div>
+      <div class="meta-bar">
+        <span>Cutoff: <strong>${escapeHtml(data.cutoffAt)}</strong></span>
+        <span>Confidence: <strong>${escapeHtml(formattedConf)}</strong></span>
+      </div>
+      <div class="bento-grid">
+        <div class="bento-tile">
+          <div class="tile-label">Valuation Gap (${escapeHtml(basisLabel)})</div>
+          <div class="tile-value" style="color:${gapColor}">${escapeHtml(formattedGap)}</div>
+          <div class="tile-sub">Tier-implied relative gap</div>
+        </div>
+        <div class="bento-tile">
+          <div class="tile-label">Current ${escapeHtml(basisLabel)}</div>
+          <div class="tile-value">${escapeHtml(formattedMultiple)}</div>
+          <div class="tile-sub">Basis: ${escapeHtml(formatCell(data.valuationBasis))}</div>
+        </div>
+        <div class="bento-tile">
+          <div class="tile-label">PEG Ratio</div>
+          <div class="tile-value">${escapeHtml(formattedPeg)}</div>
+          <div class="tile-sub">${escapeHtml(pegConventionLabel)} (${escapeHtml(data.pegConvention ?? "historical_cagr")})</div>
+        </div>
+        <div class="bento-tile">
+          <div class="tile-label">GP / Employee (GPPE)</div>
+          <div class="tile-value">${escapeHtml(formattedGppe)}</div>
+          <div class="tile-sub">Operating branch: ${escapeHtml(formatCell(data.operatingBranch))}</div>
+        </div>
+      </div>
+      <div class="themes-box">
+        <div class="themes-title">Module 6 · Theme Purity Exposure</div>
+        ${themesHtml}
+      </div>
+      ${analystHtml}
+      ${supplyChainHtml}
+    </div>
+    <div class="footer-box">
+      <div class="footer-tag">RESEARCH HYPOTHESIS · NOT INVESTMENT ADVICE</div>
+      <p class="footer-note">Deep dive reflects one versioned strategy run at one cutoff; historical indicators are not forward-looking guarantees.</p>
+      <p class="footer-note">Traceable to materialized factor outputs (mart.served_head, schema: ${CARD_SCHEMA_VERSION}).</p>
+      <div class="footer-meta">
+        <span>TrueAlpha Research HTML Card Export</span>
+        <span>template: ${CARD_TEMPLATE_VERSION} · prompt: ${XHS_CARD_PROMPT_VERSION}</span>
+      </div>
+    </div>
+  </div>
+</body>
+</html>`;
 }
 
-const h = React.createElement;
+const SERVED_CARD_ARTIFACT_SQL = `
+  select a.html, a.render_mode, a.model
+  from mart.research_card_artifacts a
+  join mart.served_head sh on sh.head_run_id = a.run_id
+  where a.card_kind = $1
+    and a.subject_key = $2
+    and a.convention = $3
+    and a.universe = $4
+  order by a.recorded_at desc
+  limit 1
+`;
 
-export async function renderRankingCardPng(data: RankingCardData): Promise<Buffer> {
-  const { basisLabel, rows } = prepareRankingCardViewModel(data, "-");
-
-  const rowNodes = rows.map((row, idx) =>
-    h(
-      "div",
-      {
-        key: `${row.issuerId}-${idx}`,
-        style: {
-          display: "flex",
-          flexDirection: "row",
-          alignItems: "center",
-          justifyContent: "space-between",
-          width: "960px",
-          height: "92px",
-          borderRadius: "16px",
-          backgroundColor: "#131B2E",
-          border: "2px solid #1E293B",
-          paddingLeft: "24px",
-          paddingRight: "24px",
-          marginBottom: "14px",
-        },
-      },
-      h(
-        "div",
-        {
-          style: {
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            width: "56px",
-            height: "56px",
-            borderRadius: "28px",
-            backgroundColor: "#1E293B",
-            color: idx === 0 ? "#F59E0B" : "#F8FAFC",
-            fontSize: 20,
-            fontWeight: 700,
-          },
-        },
-        row.rankStr,
-      ),
-      h(
-        "div",
-        {
-          style: {
-            display: "flex",
-            flexDirection: "column",
-            width: "260px",
-            marginLeft: "16px",
-          },
-        },
-        h("div", { style: { fontSize: 22, fontWeight: 700, color: "#F8FAFC" } }, row.displayName),
-        h("div", { style: { fontSize: 14, color: "#64748B", marginTop: "4px" } }, row.issuerId),
-      ),
-      h(
-        "div",
-        {
-          style: {
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            width: "110px",
-            height: "34px",
-            borderRadius: "8px",
-            backgroundColor: "#1E293B",
-            color: "#38BDF8",
-            fontSize: 14,
-            fontWeight: 600,
-          },
-        },
-        row.tierStr,
-      ),
-      h(
-        "div",
-        { style: { width: "110px", textAlign: "center", fontSize: 20, color: "#E2E8F0" } },
-        row.formattedMultiple,
-      ),
-      h(
-        "div",
-        {
-          style: {
-            width: "140px",
-            textAlign: "center",
-            fontSize: 22,
-            fontWeight: 700,
-            color: row.gapColor,
-          },
-        },
-        row.formattedGap,
-      ),
-      h(
-        "div",
-        { style: { width: "90px", textAlign: "center", fontSize: 18, color: "#CBD5E1" } },
-        row.formattedPeg,
-      ),
-      h(
-        "div",
-        { style: { width: "90px", textAlign: "center", fontSize: 18, color: "#94A3B8" } },
-        row.formattedConf,
-      ),
-    ),
-  );
-
-  const tree = h(
-    "div",
-    {
-      style: {
-        display: "flex",
-        flexDirection: "column",
-        justifyContent: "space-between",
-        width: `${XHS_CARD_WIDTH}px`,
-        height: `${XHS_CARD_HEIGHT}px`,
-        backgroundColor: "#0B0F19",
-        color: "#F8FAFC",
-        padding: "56px",
-      },
-    },
-    h(
-      "div",
-      { style: { display: "flex", flexDirection: "column" } },
-      h(
-        "div",
-        {
-          style: {
-            display: "flex",
-            flexDirection: "row",
-            justifyContent: "space-between",
-            alignItems: "center",
-          },
-        },
-        h(
-          "div",
-          { style: { fontSize: 16, fontWeight: 700, color: "#06B6D4", letterSpacing: "2px" } },
-          "TRUEALPHA · QUANTITATIVE RESEARCH",
-        ),
-        h(
-          "div",
-          {
-            style: {
-              backgroundColor: "#1E293B",
-              color: "#94A3B8",
-              fontSize: 13,
-              fontWeight: 600,
-              padding: "6px 12px",
-              borderRadius: "6px",
-            },
-          },
-          `${XHS_CARD_WIDTH} x ${XHS_CARD_HEIGHT} · 3:4`,
-        ),
-      ),
-      h(
-        "div",
-        { style: { fontSize: 44, fontWeight: 700, color: "#FFFFFF", marginTop: "24px" } },
-        "Valuation Rankings",
-      ),
-      h(
-        "div",
-        { style: { fontSize: 22, color: "#94A3B8", marginTop: "8px" } },
-        `Large-Model Value Universe · Valuation Gap (${basisLabel})`,
-      ),
-      h(
-        "div",
-        {
-          style: {
-            display: "flex",
-            flexDirection: "row",
-            justifyContent: "space-between",
-            alignItems: "center",
-            backgroundColor: "#131B2E",
-            border: "1px solid #1E293B",
-            borderRadius: "12px",
-            padding: "14px 20px",
-            marginTop: "24px",
-          },
-        },
-        h(
-          "div",
-          { style: { fontSize: 16, color: "#E2E8F0" } },
-          `Governed Execution · Cutoff: ${data.cutoffAt}`,
-        ),
-        h(
-          "div",
-          { style: { fontSize: 15, color: "#64748B" } },
-          `${data.totalMembers} total members`,
-        ),
-      ),
-      h(
-        "div",
-        { style: { display: "flex", flexDirection: "column", marginTop: "28px" } },
-        ...rowNodes,
-      ),
-    ),
-    h(
-      "div",
-      {
-        style: {
-          display: "flex",
-          flexDirection: "column",
-          backgroundColor: "#0C1322",
-          border: "1px solid #1E293B",
-          borderRadius: "16px",
-          padding: "24px",
-        },
-      },
-      h(
-        "div",
-        { style: { fontSize: 15, fontWeight: 700, color: "#F59E0B" } },
-        "RESEARCH HYPOTHESIS · NOT INVESTMENT ADVICE",
-      ),
-      h(
-        "div",
-        { style: { fontSize: 14, color: "#94A3B8", marginTop: "8px" } },
-        "Ranking reflects one versioned strategy run at one cutoff; historical rank is not a forward-looking guarantee.",
-      ),
-      h(
-        "div",
-        {
-          style: {
-            display: "flex",
-            flexDirection: "row",
-            justifyContent: "space-between",
-            marginTop: "14px",
-            fontSize: 13,
-            color: "#38BDF8",
-          },
-        },
-        h("div", null, "TrueAlpha Research Card Export"),
-        h("div", { style: { color: "#64748B" } }, `template: ${CARD_TEMPLATE_VERSION}`),
-      ),
-    ),
-  );
-
-  const response = new ImageResponse(tree, {
-    width: XHS_CARD_WIDTH,
-    height: XHS_CARD_HEIGHT,
-  });
-  return Buffer.from(await response.arrayBuffer());
-}
-
-export async function renderEntityDeepDiveCardPng(data: EntityCardData): Promise<Buffer> {
-  const vm = prepareEntityCardViewModel(data, "-");
-  const themeNodes =
-    vm.displayThemes.length > 0
-      ? vm.displayThemes.map((t, idx) =>
-          h(
-            "div",
-            {
-              key: `${t.theme}-${idx}`,
-              style: {
-                display: "flex",
-                flexDirection: "row",
-                justifyContent: "space-between",
-                alignItems: "center",
-                backgroundColor: "#0F172A",
-                borderRadius: "10px",
-                padding: "14px 18px",
-                marginBottom: "10px",
-              },
-            },
-            h("div", { style: { fontSize: 18, fontWeight: 600, color: "#E2E8F0" } }, t.theme),
-            h(
-              "div",
-              { style: { fontSize: 18, fontWeight: 700, color: "#38BDF8" } },
-              formatPercentFromFraction(t.themeShare) ?? "-",
-            ),
-          ),
-        )
-      : [
-          h(
-            "div",
-            { key: "empty", style: { fontSize: 16, color: "#64748B", marginTop: "12px" } },
-            "No theme purity materialization recorded for this issuer",
-          ),
-        ];
-
-  const tree = h(
-    "div",
-    {
-      style: {
-        display: "flex",
-        flexDirection: "column",
-        justifyContent: "space-between",
-        width: `${XHS_CARD_WIDTH}px`,
-        height: `${XHS_CARD_HEIGHT}px`,
-        backgroundColor: "#0B0F19",
-        color: "#F8FAFC",
-        padding: "56px",
-      },
-    },
-    h(
-      "div",
-      { style: { display: "flex", flexDirection: "column" } },
-      h(
-        "div",
-        {
-          style: {
-            display: "flex",
-            flexDirection: "row",
-            justifyContent: "space-between",
-            alignItems: "center",
-          },
-        },
-        h(
-          "div",
-          { style: { fontSize: 16, fontWeight: 700, color: "#06B6D4", letterSpacing: "2px" } },
-          "TRUEALPHA · RESEARCH DEEP DIVE",
-        ),
-        h(
-          "div",
-          {
-            style: {
-              backgroundColor: "#1E293B",
-              color: "#94A3B8",
-              fontSize: 13,
-              fontWeight: 600,
-              padding: "6px 12px",
-              borderRadius: "6px",
-            },
-          },
-          `${XHS_CARD_WIDTH} x ${XHS_CARD_HEIGHT} · 3:4`,
-        ),
-      ),
-      h(
-        "div",
-        { style: { fontSize: 42, fontWeight: 700, color: "#FFFFFF", marginTop: "20px" } },
-        "TrueAlpha Deep Dive",
-      ),
-      h(
-        "div",
-        {
-          style: {
-            display: "flex",
-            flexDirection: "row",
-            justifyContent: "space-between",
-            alignItems: "center",
-            backgroundColor: "#131B2E",
-            border: "1px solid #1E293B",
-            borderRadius: "16px",
-            padding: "24px",
-            marginTop: "20px",
-          },
-        },
-        h(
-          "div",
-          { style: { display: "flex", flexDirection: "column" } },
-          h("div", { style: { fontSize: 30, fontWeight: 700, color: "#F8FAFC" } }, data.displayName),
-          h("div", { style: { fontSize: 16, color: "#64748B", marginTop: "6px" } }, data.issuerId),
-        ),
-        h(
-          "div",
-          {
-            style: {
-              backgroundColor: "#1E293B",
-              border: "1px solid #38BDF8",
-              borderRadius: "10px",
-              padding: "10px 20px",
-              color: "#38BDF8",
-              fontSize: 16,
-              fontWeight: 600,
-            },
-          },
-          vm.tierText,
-        ),
-      ),
-      h(
-        "div",
-        {
-          style: {
-            display: "flex",
-            flexDirection: "row",
-            justifyContent: "space-between",
-            marginTop: "20px",
-          },
-        },
-        h(
-          "div",
-          {
-            style: {
-              display: "flex",
-              flexDirection: "column",
-              width: "465px",
-              backgroundColor: "#131B2E",
-              border: "1px solid #1E293B",
-              borderRadius: "16px",
-              padding: "24px",
-            },
-          },
-          h("div", { style: { fontSize: 13, fontWeight: 700, color: "#64748B" } }, "VALUATION · MODULE 7"),
-          h(
-            "div",
-            { style: { fontSize: 16, color: "#94A3B8", marginTop: "12px" } },
-            `Current ${vm.basisLabel}: ${vm.formattedMultiple}`,
-          ),
-          h(
-            "div",
-            { style: { fontSize: 24, fontWeight: 700, color: vm.gapColor, marginTop: "8px" } },
-            `Valuation Gap (${vm.basisLabel}): ${vm.formattedGap}`,
-          ),
-        ),
-        h(
-          "div",
-          {
-            style: {
-              display: "flex",
-              flexDirection: "column",
-              width: "465px",
-              backgroundColor: "#131B2E",
-              border: "1px solid #1E293B",
-              borderRadius: "16px",
-              padding: "24px",
-            },
-          },
-          h("div", { style: { fontSize: 13, fontWeight: 700, color: "#64748B" } }, "GROWTH · MODULE 1"),
-          h(
-            "div",
-            { style: { fontSize: 28, fontWeight: 700, color: "#38BDF8", marginTop: "14px" } },
-            `PEG: ${vm.formattedPeg}`,
-          ),
-          h("div", { style: { fontSize: 14, color: "#64748B", marginTop: "6px" } }, vm.pegConventionLabel),
-        ),
-      ),
-      h(
-        "div",
-        {
-          style: {
-            display: "flex",
-            flexDirection: "row",
-            justifyContent: "space-between",
-            alignItems: "center",
-            backgroundColor: "#131B2E",
-            border: "1px solid #1E293B",
-            borderRadius: "16px",
-            padding: "24px",
-            marginTop: "20px",
-          },
-        },
-        h(
-          "div",
-          { style: { display: "flex", flexDirection: "column" } },
-          h("div", { style: { fontSize: 13, fontWeight: 700, color: "#64748B" } }, "LABOR EFFICIENCY · MODULE 2"),
-          h("div", { style: { fontSize: 30, fontWeight: 700, color: "#F8FAFC", marginTop: "10px" } }, vm.formattedGppe),
-        ),
-        h(
-          "div",
-          { style: { fontSize: 15, color: "#94A3B8" } },
-          `Branch: ${data.operatingBranch ?? "-"} · Conf: ${vm.formattedConf}`,
-        ),
-      ),
-      h(
-        "div",
-        {
-          style: {
-            display: "flex",
-            flexDirection: "column",
-            backgroundColor: "#131B2E",
-            border: "1px solid #1E293B",
-            borderRadius: "16px",
-            padding: "24px",
-            marginTop: "20px",
-          },
-        },
-        h(
-          "div",
-          { style: { fontSize: 14, fontWeight: 700, color: "#64748B", marginBottom: "14px" } },
-          "THEME PURITY & BUSINESS EXPOSURE · MODULE 6",
-        ),
-        ...themeNodes,
-      ),
-    ),
-    h(
-      "div",
-      {
-        style: {
-          display: "flex",
-          flexDirection: "column",
-          backgroundColor: "#0C1322",
-          border: "1px solid #1E293B",
-          borderRadius: "16px",
-          padding: "24px",
-        },
-      },
-      h(
-        "div",
-        { style: { fontSize: 15, fontWeight: 700, color: "#F59E0B" } },
-        "RESEARCH HYPOTHESIS · NOT INVESTMENT ADVICE",
-      ),
-      h(
-        "div",
-        { style: { fontSize: 14, color: "#94A3B8", marginTop: "8px" } },
-        `Cutoff: ${data.cutoffAt} · Traceable to materialized factor outputs (schema: ${CARD_SCHEMA_VERSION}).`,
-      ),
-      h(
-        "div",
-        {
-          style: {
-            display: "flex",
-            flexDirection: "row",
-            justifyContent: "space-between",
-            marginTop: "14px",
-            fontSize: 13,
-            color: "#38BDF8",
-          },
-        },
-        h("div", null, "TrueAlpha Research Card Export"),
-        h("div", { style: { color: "#64748B" } }, `template: ${CARD_TEMPLATE_VERSION}`),
-      ),
-    ),
-  );
-
-  const response = new ImageResponse(tree, {
-    width: XHS_CARD_WIDTH,
-    height: XHS_CARD_HEIGHT,
-  });
-  return Buffer.from(await response.arrayBuffer());
+async function queryPreMaterializedCardHtml(params: {
+  cardKind: string;
+  subjectKey: string;
+  convention: string;
+  universe: string;
+  requiredFacts: ReadonlyArray<string>;
+}): Promise<{ html: string; renderMode: string } | null> {
+  if (!process.env.DATABASE_URL) return null;
+  try {
+    const row = await withMartReadonly(async (client) => {
+      const res = await client.query<{ html: string; render_mode: string; model: string | null }>(
+        SERVED_CARD_ARTIFACT_SQL,
+        [params.cardKind, params.subjectKey, params.convention, params.universe],
+      );
+      return res.rows[0] ?? null;
+    });
+    if (!row?.html) return null;
+    const verification = verifyCardHtmlDocument(row.html, params.requiredFacts);
+    if (!verification.ok) return null;
+    return { html: row.html, renderMode: row.render_mode || "model_glm" };
+  } catch {
+    return null;
+  }
 }
 
 function toStableToken(raw: string): string {
   const cleaned = raw
-    .replace(/[^A-Za-z0-9._:@+-]/g, "-")
-    .replace(/^[._:@+-]+/, "v")
-    .split(/[._:/@+-]/)
-    .map((token) => {
-      const lower = token.toLowerCase();
-      if (lower === "latest" || lower === "current" || lower === "default" || lower === "head") {
-        return `v-${token}`;
-      }
-      return token;
-    })
-    .filter((token) => token.length > 0)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .split("-")
+    .filter((token) => token.length > 0 && !["latest", "current", "default", "head"].includes(token))
     .join("-");
   return cleaned.length > 0 ? cleaned : "v1";
 }
@@ -1071,33 +886,33 @@ async function persistCardDocument(
   }
 }
 
-async function buildBinaryCardResponse(options: {
-  body: BodyInit;
-  bytes: Buffer;
-  artifactContentType: "image/svg+xml" | "image/png";
-  headerContentType: "image/svg+xml; charset=utf-8" | "image/png";
+async function buildHtmlCardResponse(options: {
+  html: string;
+  renderMode: string;
   filename: string;
   persist: boolean;
   documents: DocumentsRepository;
   context: AccessContext;
   artifactId: string;
 }): Promise<Response> {
+  const bytes = Buffer.from(options.html, "utf8");
   const docId = options.persist
     ? await persistCardDocument(
         options.documents,
         options.context,
         options.artifactId,
-        options.bytes,
-        options.artifactContentType,
+        bytes,
+        "text/html",
       )
     : null;
   const headers: Record<string, string> = {
-    "Content-Type": options.headerContentType,
+    "Content-Type": "text/html; charset=utf-8",
     "Content-Disposition": `attachment; filename="${options.filename}"`,
     "Cache-Control": CARD_EXPORT_CACHE_CONTROL,
+    "X-Research-Card-Render-Mode": options.renderMode,
   };
   if (docId) headers["X-Research-Document-Id"] = docId;
-  return new Response(options.body, { status: 200, headers });
+  return new Response(options.html, { status: 200, headers });
 }
 
 export interface CardExportRouteDeps {
@@ -1121,9 +936,9 @@ export async function handleCardExportGet(
   const { searchParams } = new URL(request.url);
   const kind = searchParams.get("kind") ?? "ranking";
   const cutoff = searchParams.get("cutoff") ?? undefined;
-  const format = searchParams.get("format") ?? "png";
+  const rawFormat = searchParams.get("format") ?? "html";
+  const format = rawFormat === "json" ? "json" : "html";
   const convention = normalizePegConvention(searchParams.get("convention"));
-  // A universe outside the record has no rows, so loadRanking answers empty and the route answers 404 (#1522).
   const universeParam = searchParams.get("universe") ?? undefined;
   const persist = searchParams.get("persist") !== "0";
   const documents = deps.documents ?? new PostgresDocumentsRepository();
@@ -1176,31 +991,22 @@ export async function handleCardExportGet(
       });
     }
 
-    const artifactId = `card:entity:${toStableToken(state.data.issuerId)}:${toStableToken(cardData.cutoffAt)}:${toStableToken(convention)}:${toStableToken(format)}`;
+    const artifactId = `card:entity:${toStableToken(state.data.issuerId)}:${toStableToken(cardData.cutoffAt)}:${toStableToken(convention)}:html`;
     const fileStem = `truealpha-card-entity-${state.data.issuerId.replace(/[:]/g, "-")}`;
+    const preMaterialized = await queryPreMaterializedCardHtml({
+      cardKind: "company",
+      subjectKey: state.data.issuerId,
+      convention,
+      universe: universeParam ?? "topt",
+      requiredFacts: [state.data.issuerId, cardData.cutoffAt.slice(0, 10)],
+    });
+    const html = preMaterialized?.html ?? renderEntityDeepDiveCardHtml(cardData);
+    const renderMode = preMaterialized?.renderMode ?? "cold_verdict_html";
 
-    if (format === "svg") {
-      const svg = renderEntityDeepDiveCardSvg(cardData);
-      return buildBinaryCardResponse({
-        body: svg,
-        bytes: Buffer.from(svg, "utf8"),
-        artifactContentType: "image/svg+xml",
-        headerContentType: "image/svg+xml; charset=utf-8",
-        filename: `${fileStem}.svg`,
-        persist,
-        documents,
-        context: principal.context,
-        artifactId,
-      });
-    }
-
-    const png = await renderEntityDeepDiveCardPng(cardData);
-    return buildBinaryCardResponse({
-      body: new Uint8Array(png),
-      bytes: png,
-      artifactContentType: "image/png",
-      headerContentType: "image/png",
-      filename: `${fileStem}.png`,
+    return buildHtmlCardResponse({
+      html,
+      renderMode,
+      filename: `${fileStem}.html`,
       persist,
       documents,
       context: principal.context,
@@ -1250,31 +1056,22 @@ export async function handleCardExportGet(
     });
   }
 
-  const artifactId = `card:ranking:${toStableToken(state.data.cutoffAt)}:${toStableToken(state.data.universe)}:${toStableToken(convention)}:${toStableToken(format)}`;
+  const artifactId = `card:ranking:${toStableToken(state.data.cutoffAt)}:${toStableToken(state.data.universe)}:${toStableToken(convention)}:html`;
   const fileStem = `truealpha-card-ranking-${state.data.cutoffAt.replace(/[:T]/g, "-")}`;
+  const preMaterialized = await queryPreMaterializedCardHtml({
+    cardKind: "ranking",
+    subjectKey: "theme:large_model_value",
+    convention,
+    universe: state.data.universe,
+    requiredFacts: [state.data.cutoffAt.slice(0, 10)],
+  });
+  const html = preMaterialized?.html ?? renderRankingCardHtml(cardData);
+  const renderMode = preMaterialized?.renderMode ?? "cold_verdict_html";
 
-  if (format === "svg") {
-    const svg = renderRankingCardSvg(cardData);
-    return buildBinaryCardResponse({
-      body: svg,
-      bytes: Buffer.from(svg, "utf8"),
-      artifactContentType: "image/svg+xml",
-      headerContentType: "image/svg+xml; charset=utf-8",
-      filename: `${fileStem}.svg`,
-      persist,
-      documents,
-      context: principal.context,
-      artifactId,
-    });
-  }
-
-  const png = await renderRankingCardPng(cardData);
-  return buildBinaryCardResponse({
-    body: new Uint8Array(png),
-    bytes: png,
-    artifactContentType: "image/png",
-    headerContentType: "image/png",
-    filename: `${fileStem}.png`,
+  return buildHtmlCardResponse({
+    html,
+    renderMode,
+    filename: `${fileStem}.html`,
     persist,
     documents,
     context: principal.context,

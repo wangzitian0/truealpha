@@ -12,13 +12,17 @@ from truealpha_contracts import research_cards
 from truealpha_contracts.access import AccessContext, AuthenticationMethod, PrincipalKind
 from truealpha_contracts.execution import AvailabilityStatus, FactorValidationStatus
 from truealpha_contracts.research_cards import (
+    XHS_CARD_PROMPT_VERSION,
     CardKind,
     CardSubject,
     ClaimClass,
     ResearchCard,
     build_card,
+    build_card_prompt,
+    extract_html_document,
     render_card_html,
     render_card_json,
+    verify_card_html,
 )
 from truealpha_contracts.research_report import (
     EvidenceTrace,
@@ -143,10 +147,46 @@ def test_golden_json_matches(name: str) -> None:
 
 
 @pytest.mark.parametrize("name", sorted(GOLDEN_CARDS))
-def test_golden_html_matches(name: str) -> None:
+def test_golden_html_passes_fact_preservation_verifier(name: str) -> None:
     card = GOLDEN_CARDS[name]()
-    expected = (GOLDEN / f"{name}.html").read_text(encoding="utf-8")
-    assert render_card_html(card) == expected
+    prompt = build_card_prompt(card)
+    assert XHS_CARD_PROMPT_VERSION in prompt
+    assert card.card_id in prompt
+    html = render_card_html(card)
+    ok, violations = verify_card_html(card, html)
+    assert ok, f"verify_card_html failed for {name}: {violations}"
+
+
+def test_verify_card_html_rejects_fact_mutation_or_script_injection() -> None:
+    card = GOLDEN_CARDS["company"]()
+    valid_html = render_card_html(card)
+    ok, violations = verify_card_html(card, valid_html)
+    assert ok and violations == ()
+
+    # Mutating a metric value must fail verification
+    first_metric = card.subjects[0].metrics[0]
+    assert first_metric.value is not None
+    mutated_value_html = valid_html.replace(first_metric.value, "999999.99")
+    ok_val, violations_val = verify_card_html(card, mutated_value_html)
+    assert not ok_val
+    assert any("missing_metric_value" in v for v in violations_val)
+
+    # Injecting a script or external URL must fail verification
+    script_html = valid_html.replace("</body>", "<script>alert(1)</script></body>")
+    ok_scr, violations_scr = verify_card_html(card, script_html)
+    assert not ok_scr
+    assert "forbidden_script_or_event_handler" in violations_scr
+
+    external_html = valid_html.replace("</body>", '<link rel="stylesheet" href="https://evil.example/a.css"></body>')
+    ok_ext, violations_ext = verify_card_html(card, external_html)
+    assert not ok_ext
+    assert "forbidden_external_url" in violations_ext
+
+    # Extracting fenced HTML output strips markdown fences cleanly
+    fenced = f"```html\n{valid_html}\n```"
+    extracted = extract_html_document(fenced)
+    assert extracted.startswith("<!DOCTYPE html>")
+    assert extracted.endswith("</html>")
 
 
 @pytest.mark.parametrize("name", sorted(GOLDEN_CARDS))
