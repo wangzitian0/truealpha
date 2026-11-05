@@ -183,6 +183,25 @@ export function buildEntityCardJson(data: EntityCardData) {
 }
 
 const INLINE_EVENT_HANDLER_RE = /\bon[a-z]+\s*=/i;
+const HTML_TAG_RE = /<[^>]+>/g;
+const WHITESPACE_RE = /\s+/g;
+
+function normalizeHtmlText(html: string): string {
+  return html
+    .replace(HTML_TAG_RE, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&mdash;|&#8212;|&#x2014;/gi, "—")
+    .replace(/&ndash;|&#8211;|&#x2013;/gi, "–")
+    .replace(/&minus;|&#8722;|&#x2212;/gi, "−")
+    .replace(/&middot;|&#183;/gi, "·")
+    .replace(/&nbsp;|&#160;/gi, " ")
+    .replace(WHITESPACE_RE, " ")
+    .trim();
+}
 
 /**
  * Deterministic fact-preservation verifier for 1080x1440 Xiaohongshu HTML cards (#44).
@@ -211,11 +230,19 @@ export function verifyCardHtmlDocument(
   if (lower.includes("http://") || lower.includes("https://")) {
     violations.push("forbidden_external_url");
   }
+  const normalized = normalizeHtmlText(html);
   for (const fact of requiredFacts) {
     if (!fact) continue;
     const escaped = escapeHtml(fact);
     const unicodeMinus = fact.startsWith("-") ? `−${fact.slice(1)}` : fact;
-    if (!html.includes(fact) && !html.includes(escaped) && !html.includes(unicodeMinus)) {
+    const normFact = fact.replace(WHITESPACE_RE, " ").trim();
+    if (
+      !html.includes(fact) &&
+      !html.includes(escaped) &&
+      !html.includes(unicodeMinus) &&
+      !normalized.includes(normFact) &&
+      !normalized.includes(unicodeMinus)
+    ) {
       violations.push(`missing_fact:${fact}`);
     }
   }
