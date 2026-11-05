@@ -715,6 +715,20 @@ def run_question_coverage(context: dg.OpExecutionContext, config: StandardBackfi
             return json.dumps({"universe": config.universe, "report": None})
         report_id = persist(connection, report)
         connection.commit()
+        try:
+            from data_engine.datahub.research_card_artifacts import materialize_head_research_cards
+
+            card_counts = materialize_head_research_cards(
+                connection,
+                run_id=str(report["run_id"]),
+                cutoff=datetime.fromisoformat(str(report["cutoff"])),
+                universe=config.universe,
+            )
+            connection.commit()
+            context.log.info("research_card_artifacts materialized for %s: %s", config.universe, card_counts)
+        except Exception as exc:
+            connection.rollback()
+            context.log.warning("research_card_artifacts materialization skipped for %s: %s", config.universe, exc)
         q3_unavail = (report.get("questions", {}).get("q3", {}) or {}).get("unavailable") or {}
         exceeded_q3 = int(q3_unavail.get("context_window_exceeded", 0))
         if exceeded_q3 > 0:

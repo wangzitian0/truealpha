@@ -293,6 +293,147 @@ def render_card_json(card: ResearchCard) -> str:
     return json.dumps(payload, sort_keys=True, indent=2, ensure_ascii=True) + "\n"
 
 
+XHS_CARD_PROMPT_VERSION: Literal["xhs-card-html:v1"] = "xhs-card-html:v1"
+
+XHS_CARD_INSTRUCTIONS: str = (
+    "You are TrueAlpha's Xiaohongshu (RED) visual editorial card designer.\n"
+    "Generate a SINGLE self-contained HTML5 document (`<!DOCTYPE html><html>...</html>`) "
+    "rendered at exact `1080px` width by `1440px` height (3:4 portrait aspect ratio).\n"
+    "Follow the Cold-Verdict Editorial Rubric:\n"
+    "1. Canvas & Layout: Fixed 1080x1440px container (`overflow: hidden; box-sizing: border-box;`), "
+    "warm editorial paper background (`#F7F5F0`), high-contrast ink (`#111315`), structured Bento grid.\n"
+    "2. Zero External Dependencies: Inline CSS only. Do NOT include any `<script>` tag or any external "
+    "`http://` or `https://` font, stylesheet, or image URL.\n"
+    "3. Strict Fact Preservation (Zero Mutation): Every fact in the input `ResearchCard` JSON MUST appear "
+    "verbatim in the HTML:\n"
+    "   - Card cutoff date (`cutoff_at` YYYY-MM-DD), `card_id` prefix, `research_risk_note`, and `source_attribution`.\n"
+    "   - Every subject's `display_name`, `availability`, `claim_class`, and (when `causal_claim` is "
+    "`scenario_only`) a visible `scenario_only` badge.\n"
+    "   - Every metric's `label`, exact `value` string (preserving negative signs, decimals, and currency/unit), "
+    "`period`, `factor_version`, `confidence`, and compact `trace.reference_id` prefix.\n"
+    "4. Output ONLY the raw HTML document starting with `<!DOCTYPE html>` and ending with `</html>`."
+)
+
+
+def build_card_prompt(card: ResearchCard) -> str:
+    """Builds the deterministic Cold-Verdict Rubric prompt for LLM HTML card generation."""
+    card_json = render_card_json(card)
+    return (
+        f"{XHS_CARD_INSTRUCTIONS}\n\n"
+        f"PROMPT_VERSION: {XHS_CARD_PROMPT_VERSION}\n"
+        f"REQUIRED_DIMENSIONS: {XHS_CARD_WIDTH_PX}x{XHS_CARD_HEIGHT_PX}\n"
+        "INPUT_RESEARCH_CARD_JSON:\n"
+        f"{card_json}"
+    )
+
+
+def extract_html_document(raw_text: str) -> str:
+    """Extracts the raw HTML document from model output, stripping optional markdown fences."""
+    cleaned = raw_text.strip()
+    if cleaned.startswith("```"):
+        lines = cleaned.splitlines()
+        if lines:
+            lines = lines[1:]
+        if lines and lines[-1].strip().startswith("```"):
+            lines = lines[:-1]
+        cleaned = "\n".join(lines).strip()
+    lower = cleaned.lower()
+    doctype_idx = lower.find("<!doctype html")
+    html_idx = lower.find("<html")
+    start_idx = doctype_idx if doctype_idx != -1 else html_idx
+    end_idx = lower.rfind("</html>")
+    if start_idx != -1 and end_idx != -1 and end_idx >= start_idx:
+        return cleaned[start_idx : end_idx + len("</html>")]
+    return cleaned
+
+
+def _contains_text(html: str, raw: str) -> bool:
+    escaped = _html_escape(raw)
+    return raw in html or escaped in html
+
+
+def _verify_html_envelope(card: ResearchCard, html: str) -> list[str]:
+    violations: list[str] = []
+    lower = html.lower()
+    if ("<!doctype html" not in lower and "<html" not in lower) or "</html>" not in lower:
+        violations.append("missing_html_envelope")
+    if str(XHS_CARD_WIDTH_PX) not in html or str(XHS_CARD_HEIGHT_PX) not in html:
+        violations.append("missing_1080x1440_dimensions")
+    if any(token in lower for token in ("<script", "javascript:", "onerror=", "onload=")):
+        violations.append("forbidden_script_or_event_handler")
+    if "http://" in lower or "https://" in lower:
+        violations.append("forbidden_external_url")
+
+    cutoff_date = card.cutoff_at.date().isoformat()
+    if cutoff_date not in html and card.cutoff_at.isoformat() not in html:
+        violations.append(f"missing_cutoff:{cutoff_date}")
+    card_id_prefix = card.card_id[:20]
+    if card_id_prefix not in html:
+        violations.append(f"missing_card_id_prefix:{card_id_prefix}")
+    if not _contains_text(html, card.research_risk_note):
+        violations.append("missing_research_risk_note")
+    if not _contains_text(html, card.source_attribution):
+        violations.append("missing_source_attribution")
+    return violations
+
+
+def _verify_metric_html(subject_id: str, metric: ResultValue, html: str) -> list[str]:
+    checks: list[tuple[bool, str]] = [
+        (not _contains_text(html, metric.label), f"missing_metric_label:{subject_id}:{metric.label}"),
+        (
+            metric.value is not None and metric.value not in html,
+            f"missing_metric_value:{subject_id}:{metric.label}:{metric.value}",
+        ),
+        (
+            metric.value is not None and metric.currency is not None and metric.currency not in html,
+            f"missing_metric_currency:{subject_id}:{metric.label}:{metric.currency}",
+        ),
+        (
+            metric.value is not None and metric.unit is not None and not _contains_text(html, metric.unit),
+            f"missing_metric_unit:{subject_id}:{metric.label}:{metric.unit}",
+        ),
+        (
+            metric.period is not None and not _contains_text(html, metric.period),
+            f"missing_metric_period:{subject_id}:{metric.label}:{metric.period}",
+        ),
+        (
+            metric.confidence is not None and str(metric.confidence) not in html,
+            f"missing_metric_confidence:{subject_id}:{metric.label}:{metric.confidence}",
+        ),
+    ]
+    if metric.trace is not None:
+        trace_prefix = metric.trace.reference_id[:16]
+        checks.append(
+            (not _contains_text(html, trace_prefix), f"missing_metric_trace:{subject_id}:{metric.label}:{trace_prefix}")
+        )
+    return [reason for failed, reason in checks if failed]
+
+
+def _verify_subject_html(subject: CardSubject, html: str) -> list[str]:
+    violations: list[str] = []
+    if not _contains_text(html, subject.display_name) and subject.subject_id not in html:
+        violations.append(f"missing_subject:{subject.subject_id}")
+    if subject.availability.value not in html:
+        violations.append(f"missing_subject_availability:{subject.subject_id}:{subject.availability.value}")
+    if subject.claim_class.value not in html:
+        violations.append(f"missing_subject_claim_class:{subject.subject_id}:{subject.claim_class.value}")
+    if subject.causal_claim == "scenario_only" and "scenario_only" not in html:
+        violations.append(f"missing_scenario_only:{subject.subject_id}")
+    for metric in subject.metrics:
+        violations.extend(_verify_metric_html(subject.subject_id, metric, html))
+    return violations
+
+
+def verify_card_html(card: ResearchCard, html: str) -> tuple[bool, tuple[str, ...]]:
+    """Deterministically verifies that `html` is a self-contained 1080x1440 HTML document
+    that preserves every fact in `card` without script injection or external URLs.
+    """
+    violations = _verify_html_envelope(card, html)
+    for subject in card.subjects:
+        violations.extend(_verify_subject_html(subject, html))
+    return (len(violations) == 0, tuple(violations))
+
+
 def _html_escape(value: str) -> str:
     return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
 
@@ -300,6 +441,8 @@ def _html_escape(value: str) -> str:
 def _render_value(result: ResultValue) -> str:
     if result.value is None:
         return "—"
+    if result.currency is not None and result.unit is not None:
+        return _html_escape(f"{result.value} {result.currency} ({result.unit})")
     if result.currency is not None:
         return _html_escape(f"{result.value} {result.currency}")
     if result.unit is not None:
@@ -307,76 +450,134 @@ def _render_value(result: ResultValue) -> str:
     return _html_escape(result.value)
 
 
-def _render_metric_row(result: ResultValue) -> str:
+def _render_metric_card(result: ResultValue) -> str:
     trace = result.trace.reference_id if result.trace is not None else "—"
     confidence = "—" if result.confidence is None else str(result.confidence)
     period = "—" if result.period is None else result.period
     convention = "—" if result.factor_version is None else result.factor_version
     return (
-        "<tr>"
-        f'<td class="label">{_html_escape(result.label)}</td>'
-        f'<td class="value">{_render_value(result)}</td>'
-        f'<td class="period">{_html_escape(period)}</td>'
-        f'<td class="convention">{_html_escape(convention)}</td>'
-        f'<td class="availability availability-{result.availability.value}">{result.availability.value}</td>'
-        f'<td class="confidence">{_html_escape(confidence)}</td>'
-        f'<td class="trace">{_html_escape(trace)}</td>'
-        "</tr>"
+        '<div class="metric-tile">'
+        '<div class="metric-top">'
+        f'<span class="metric-label">{_html_escape(result.label)}</span>'
+        f'<span class="pill availability-{result.availability.value}">{result.availability.value}</span>'
+        "</div>"
+        f'<div class="metric-value">{_render_value(result)}</div>'
+        '<div class="metric-meta">'
+        f"<span>Period: {_html_escape(period)}</span>"
+        f"<span>Ver: {_html_escape(convention)}</span>"
+        f"<span>Conf: {_html_escape(confidence)}</span>"
+        "</div>"
+        f'<div class="metric-trace">Trace: {_html_escape(trace)}</div>'
+        "</div>"
     )
 
 
 def _render_subject(subject: CardSubject) -> str:
-    rank_html = f'<span class="rank">#{subject.rank}</span>' if subject.rank is not None else ""
+    rank_html = f'<span class="rank-badge">#{subject.rank}</span>' if subject.rank is not None else ""
     causal_html = (
-        '<p class="causal-disclaimer">Scenario propagation only — not causal evidence.</p>'
+        '<div class="causal-banner">scenario_only · Scenario propagation only — not causal evidence.</div>'
         if subject.causal_claim == "scenario_only"
         else ""
     )
-    rows = "".join(_render_metric_row(result) for result in subject.metrics) or (
-        '<tr><td colspan="7" class="empty">No materialized result for this card.</td></tr>'
+    tiles = "".join(_render_metric_card(result) for result in subject.metrics) or (
+        '<div class="empty-tile">No materialized result for this subject at the governed cutoff.</div>'
     )
     return (
-        '<section class="subject">'
-        f"<h2>{_html_escape(subject.display_name)} {rank_html}</h2>"
-        f'<p class="claim-class claim-class-{subject.claim_class.value}">{subject.claim_class.value}</p>'
-        f'<p class="availability availability-{subject.availability.value}">{subject.availability.value}</p>'
+        '<section class="subject-block">'
+        '<div class="subject-header">'
+        '<div class="subject-title-group">'
+        f"{rank_html}"
+        f"<h2>{_html_escape(subject.display_name)}</h2>"
+        f'<span class="subject-id">{_html_escape(subject.subject_id)}</span>'
+        "</div>"
+        '<div class="subject-badges">'
+        f'<span class="pill claim-class-{subject.claim_class.value}">{subject.claim_class.value}</span>'
+        f'<span class="pill availability-{subject.availability.value}">{subject.availability.value}</span>'
+        "</div>"
+        "</div>"
         f"{causal_html}"
-        "<table><thead><tr><th>Metric</th><th>Value</th><th>Period</th><th>Convention</th>"
-        "<th>Availability</th><th>Confidence</th><th>Trace</th></tr></thead>"
-        f"<tbody>{rows}</tbody></table>"
+        f'<div class="metrics-grid">{tiles}</div>'
         "</section>"
     )
 
 
 def render_card_html(card: ResearchCard) -> str:
-    """Renders a deterministic, self-contained HTML card at the provisional Xiaohongshu
-    portrait dimensions.
-
-    Pure transform: every printed value comes from `card`'s fields. This produces the
-    `HTML` artifact named in `#372`'s scope; rasterizing HTML to a PNG/JPEG image is a
-    mechanical downstream step (a headless renderer) with no computation of its own and is
-    explicit follow-up, not implemented here (no such renderer is currently a dependency of
-    this repository).
+    """Renders a self-contained 1080x1440 Cold-Verdict Rubric HTML card that satisfies
+    `verify_card_html(card, html)` when an LLM-generated card is not yet materialized or
+    as the deterministic reference fallback.
     """
     subjects_html = "".join(_render_subject(subject) for subject in card.subjects)
+    cutoff_date = card.cutoff_at.date().isoformat()
     return (
-        "<!doctype html>"
+        "<!DOCTYPE html>"
         '<html lang="en"><head><meta charset="utf-8">'
         f"<title>{_html_escape(card.title)}</title>"
         "<style>"
-        f"body{{width:{XHS_CARD_WIDTH_PX}px;min-height:{XHS_CARD_HEIGHT_PX}px;margin:0;"
-        "font-family:system-ui,sans-serif;background:#0d0e12;color:#f3f4f6;padding:32px;box-sizing:border-box;}"
-        "h1{font-size:28px;margin:0 0 8px;} h2{font-size:20px;margin:16px 0 4px;}"
-        "table{width:100%;border-collapse:collapse;font-size:14px;margin-top:8px;}"
-        "th,td{padding:6px 8px;text-align:left;border-bottom:1px solid #23262f;}"
-        ".meta{color:#9ca3af;font-size:13px;} .footer{margin-top:24px;color:#9ca3af;font-size:12px;}"
-        ".causal-disclaimer{color:#f59e0b;font-size:13px;}"
+        f"html,body{{width:{XHS_CARD_WIDTH_PX}px;min-height:{XHS_CARD_HEIGHT_PX}px;margin:0;padding:0;"
+        "background:#F7F5F0;color:#111315;font-family:-apple-system,BlinkMacSystemFont,'PingFang SC',"
+        "'Segoe UI',sans-serif;box-sizing:border-box;}}"
+        f".card-canvas{{width:{XHS_CARD_WIDTH_PX}px;min-height:{XHS_CARD_HEIGHT_PX}px;padding:44px;"
+        "box-sizing:border-box;display:flex;flex-direction:column;justify-content:space-between;"
+        "border:2px solid #111315;background:#F7F5F0;}"
+        ".card-header{border-bottom:2px solid #111315;padding-bottom:20px;margin-bottom:24px;}"
+        ".eyebrow{display:flex;justify-content:space-between;align-items:center;font-size:13px;"
+        "font-family:ui-monospace,SFMono-Regular,Menlo,monospace;text-transform:uppercase;"
+        "letter-spacing:0.08em;color:#4B5563;margin-bottom:10px;}"
+        "h1{font-size:34px;line-height:1.15;margin:0 0 10px;font-weight:800;letter-spacing:-0.02em;}"
+        ".meta-strip{display:flex;flex-wrap:wrap;gap:12px;font-size:13px;"
+        "font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:#374151;}"
+        ".subject-block{background:#FFFFFF;border:1.5px solid #111315;border-radius:14px;"
+        "padding:22px;margin-bottom:20px;box-shadow:4px 4px 0 #111315;}"
+        ".subject-header{display:flex;justify-content:space-between;align-items:flex-start;"
+        "gap:12px;border-bottom:1px solid #E5E7EB;padding-bottom:12px;margin-bottom:16px;}"
+        ".subject-title-group{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;}"
+        "h2{font-size:22px;margin:0;font-weight:700;}"
+        ".subject-id{font-size:12px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:#6B7280;}"
+        ".rank-badge{background:#111315;color:#F7F5F0;font-weight:700;padding:2px 8px;border-radius:6px;font-size:14px;}"
+        ".subject-badges{display:flex;gap:8px;flex-wrap:wrap;}"
+        ".pill{font-size:11px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;"
+        "padding:3px 8px;border-radius:999px;border:1px solid #111315;background:#F3F4F6;font-weight:600;}"
+        ".causal-banner{background:#FEF3C7;border:1px solid #D97706;color:#92400E;"
+        "padding:8px 12px;border-radius:8px;font-size:13px;font-weight:600;margin-bottom:14px;}"
+        ".metrics-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;}"
+        ".metric-tile{background:#F9FAFB;border:1px solid #D1D5DB;border-radius:10px;padding:14px;}"
+        ".metric-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;}"
+        ".metric-label{font-size:13px;font-weight:700;color:#374151;text-transform:uppercase;letter-spacing:0.03em;}"
+        ".metric-value{font-size:26px;font-weight:800;font-variant-numeric:tabular-nums;"
+        "font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:#111315;margin:4px 0 8px;}"
+        ".metric-meta{display:flex;flex-wrap:wrap;gap:10px;font-size:12px;color:#4B5563;"
+        "font-family:ui-monospace,SFMono-Regular,Menlo,monospace;margin-bottom:6px;}"
+        ".metric-trace{font-size:11px;color:#6B7280;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;"
+        "word-break:break-all;}"
+        ".empty-tile{grid-column:1/-1;padding:18px;text-align:center;color:#6B7280;font-size:14px;"
+        "background:#F9FAFB;border:1px dashed #D1D5DB;border-radius:8px;}"
+        ".card-footer{border-top:2px solid #111315;padding-top:16px;margin-top:auto;"
+        "display:flex;flex-direction:column;gap:6px;font-size:12px;color:#374151;}"
+        ".footer-ids{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;color:#6B7280;}"
         "</style></head><body>"
+        '<div class="card-canvas">'
+        "<div>"
+        '<header class="card-header">'
+        '<div class="eyebrow">'
+        f"<span>TRUEALPHA RESEARCH · {card.card_kind.value.upper()}</span>"
+        f"<span>CUTOFF {cutoff_date} · {XHS_CARD_WIDTH_PX}x{XHS_CARD_HEIGHT_PX}</span>"
+        "</div>"
         f"<h1>{_html_escape(card.title)}</h1>"
-        f'<p class="meta">Cutoff: {card.cutoff_at.isoformat()} · Schema {card.schema_version} · '
-        f"Template {card.template_version} · Report {_html_escape(card.generated_from_report_id)}</p>"
+        '<div class="meta-strip">'
+        f"<span>Cutoff: {card.cutoff_at.isoformat()}</span>"
+        f"<span>Schema: {card.schema_version}</span>"
+        f"<span>Template: {card.template_version}</span>"
+        f"<span>Prompt: {XHS_CARD_PROMPT_VERSION}</span>"
+        "</div>"
+        "</header>"
         f"{subjects_html}"
-        f'<p class="footer">{_html_escape(card.research_risk_note)}</p>'
-        f'<p class="footer">{_html_escape(card.source_attribution)}</p>'
+        "</div>"
+        '<footer class="card-footer">'
+        f"<div><strong>Risk Disclosure:</strong> {_html_escape(card.research_risk_note)}</div>"
+        f"<div><strong>Source Attribution:</strong> {_html_escape(card.source_attribution)}</div>"
+        f'<div class="footer-ids">Card ID: {_html_escape(card.card_id)} · '
+        f"Report ID: {_html_escape(card.generated_from_report_id)}</div>"
+        "</footer>"
+        "</div>"
         "</body></html>"
     )

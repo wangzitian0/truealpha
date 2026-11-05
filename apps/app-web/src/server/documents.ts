@@ -220,6 +220,7 @@ export interface DocumentsRepository {
   /** Returns `null` for a missing, already-redeemed, expired, cross-owner,
    * or tombstoned-document ticket — all indistinguishable, by design. */
   redeemDownloadTicket(context: AccessContext, ticketId: string): Promise<Buffer | null>;
+  getRevisionBytes?(context: AccessContext, documentId: string, revisionId: string): Promise<Buffer | null>;
 }
 
 export class PostgresDocumentsRepository implements DocumentsRepository {
@@ -513,6 +514,44 @@ export class PostgresDocumentsRepository implements DocumentsRepository {
         const revisionRow = revisionResult.rows[0];
         if (!revisionRow) return null;
 
+        return {
+          bucket: bucket(),
+          key: revisionRow.object_key,
+          sha256: revisionRow.artifact_sha256,
+          byteLength: parseByteLength(revisionRow.artifact_byte_length),
+          contentType: revisionRow.artifact_content_type,
+        };
+      },
+    );
+    if (!objectRef) return null;
+    return getDocumentArtifact(objectRef);
+  }
+
+  async getRevisionBytes(
+    context: AccessContext,
+    documentId: string,
+    revisionId: string,
+  ): Promise<Buffer | null> {
+    const objectRef = await withOwnerScopedRuntime(
+      { tenantId: context.tenantId, principalId: context.principalId },
+      async (client) => {
+        const revisionResult = await client.query<{
+          object_key: string;
+          artifact_sha256: string;
+          artifact_byte_length: string;
+          artifact_content_type: string;
+        }>(
+          `select r.object_key, r.artifact_sha256, r.artifact_byte_length, r.artifact_content_type
+           from app.research_document_revisions r
+           where r.document_id = $1
+             and r.revision_id = $2
+             and not exists (
+               select 1 from app.research_document_tombstones ts where ts.document_id = r.document_id
+             )`,
+          [documentId, revisionId],
+        );
+        const revisionRow = revisionResult.rows[0];
+        if (!revisionRow) return null;
         return {
           bucket: bucket(),
           key: revisionRow.object_key,

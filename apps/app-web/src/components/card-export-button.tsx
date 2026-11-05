@@ -1,11 +1,10 @@
 "use client";
 
 /**
- * Card export button (#1360).
+ * Card export button (#1360 / #44).
  *
- * Default: PNG export at 1080x1440 via `/research/api/cards/export`.
- * Optional: SVG export when `format="svg"` is specified.
- * Downloads the rendered card and disables the button while export is in progress.
+ * Default: 1080x1440 Xiaohongshu HTML card export via `/research/api/cards/export`.
+ * Downloads the rendered HTML (or JSON) card and disables the button while export is in progress.
  */
 
 import { useState } from "react";
@@ -16,7 +15,7 @@ interface CardExportButtonProps {
   cutoff?: string;
   issuerId?: string;
   kind?: "ranking" | "entity";
-  format?: "png" | "svg";
+  format?: "html" | "json";
   convention?: PegGrowthConvention;
   universe?: string;
 }
@@ -25,7 +24,7 @@ export function CardExportButton({
   cutoff,
   issuerId,
   kind,
-  format = "png",
+  format = "html",
   convention = "historical_cagr",
   universe = universeWithRole("strategy"),
 }: CardExportButtonProps) {
@@ -42,7 +41,7 @@ export function CardExportButton({
     if (!issuerId && universe !== universeWithRole("strategy")) query.set("universe", universe);
     query.set("format", format);
 
-    const ext = format === "svg" ? "svg" : "png";
+    const ext = format === "json" ? "json" : "html";
     const url = `/research/api/cards/export?${query.toString()}`;
     const a = document.createElement("a");
     a.href = url;
@@ -67,7 +66,7 @@ export function CardExportButton({
       data-export-convention={convention}
       data-export-universe={universe}
       className="inline-flex items-center gap-2 rounded-lg border border-accent/40 bg-accent/10 px-3.5 py-1.5 text-xs font-semibold text-accent transition hover:border-accent hover:bg-accent/20 focus:outline-none focus:ring-2 focus:ring-accent disabled:opacity-50"
-      title="Export 1080x1440 3:4 portrait card for Xiaohongshu"
+      title="Export 1080x1440 3:4 portrait HTML card for Xiaohongshu"
     >
       <svg
         className="h-3.5 w-3.5"
@@ -86,9 +85,8 @@ export function CardExportButton({
       {downloading
         ? "Exporting..."
         : issuerId
-          ? "Export Entity 360 Card (1080×1440)"
-          : "Export Xiaohongshu Card (1080×1440)"}
+          ? "Export Entity 360 HTML Card (1080×1440)"
+          : "Export Xiaohongshu HTML Card (1080×1440)"}
     </button>
   );
 }
-

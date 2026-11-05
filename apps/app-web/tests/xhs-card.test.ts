@@ -1,5 +1,5 @@
 /**
- * Unit tests for Xiaohongshu card rendering (1080x1440 3:4 portrait) — see #372 / #44.
+ * Unit tests for Xiaohongshu HTML card rendering & fact-preservation guard (1080x1440 3:4 portrait) — see #372 / #44.
  *
  * Run standalone: `bun run tests/xhs-card.test.ts`.
  */
@@ -9,12 +9,12 @@ import {
   XHS_CARD_HEIGHT,
   CARD_SCHEMA_VERSION,
   CARD_TEMPLATE_VERSION,
-  renderRankingCardSvg,
-  renderRankingCardPng,
+  XHS_CARD_PROMPT_VERSION,
+  renderRankingCardHtml,
   buildRankingCardJson,
-  renderEntityDeepDiveCardSvg,
-  renderEntityDeepDiveCardPng,
+  renderEntityDeepDiveCardHtml,
   buildEntityCardJson,
+  verifyCardHtmlDocument,
   entityCardThemes,
   type RankingCardData,
   type EntityCardData,
@@ -61,18 +61,40 @@ const mockData: RankingCardData = {
 assert(XHS_CARD_WIDTH === 1080, "width must be exact 1080 px (3:4 portrait)");
 assert(XHS_CARD_HEIGHT === 1440, "height must be exact 1440 px (3:4 portrait)");
 
-// 2. Ranking SVG rendering
-const svg = renderRankingCardSvg(mockData);
-assert(svg.startsWith("<?xml"), "must start with xml header");
-assert(svg.includes(`width="1080"`), "svg must declare width 1080");
-assert(svg.includes(`height="1440"`), "svg must declare height 1440");
-assert(svg.includes(`viewBox="0 0 1080 1440"`), "svg must declare viewBox 0 0 1080 1440");
-assert(svg.includes("Valuation Rankings"), "must include title");
-assert(svg.includes("Apple Inc."), "must include unescaped text");
-assert(svg.includes("Microsoft Corp &amp; Co &lt;Special&gt;"), "must escape XML entities");
-assert(svg.includes("2026-03-31T22:15:00Z"), "must include cutoff");
-assert(svg.includes("RESEARCH HYPOTHESIS"), "must include research-risk disclaimer");
-assert(svg.includes(CARD_TEMPLATE_VERSION), "must reference template version");
+// 2. Ranking HTML rendering & deterministic fact-preservation verification
+const rankingHtml = renderRankingCardHtml(mockData);
+assert(rankingHtml.startsWith("<!DOCTYPE html>"), "must start with DOCTYPE html");
+assert(rankingHtml.includes("1080px") && rankingHtml.includes("1440px"), "html must declare 1080x1440px canvas");
+assert(rankingHtml.includes("Valuation Rankings"), "must include title");
+assert(rankingHtml.includes("Apple Inc."), "must include unescaped text");
+assert(rankingHtml.includes("Microsoft Corp &amp; Co &lt;Special&gt;"), "must escape HTML entities");
+assert(rankingHtml.includes("2026-03-31T22:15:00Z"), "must include cutoff");
+assert(rankingHtml.includes("RESEARCH HYPOTHESIS"), "must include research-risk disclaimer");
+assert(rankingHtml.includes(CARD_TEMPLATE_VERSION), "must reference template version");
+assert(rankingHtml.includes(XHS_CARD_PROMPT_VERSION), "must reference prompt version");
+
+const rankingVerification = verifyCardHtmlDocument(rankingHtml, [
+  "2026-03-31T22:15:00Z",
+  "Apple Inc.",
+  "Microsoft Corp & Co <Special>",
+  "11.03",
+  "-0.24",
+  "1.45",
+  "0.92",
+]);
+assert(
+  rankingVerification.ok,
+  `ranking HTML must pass fact-preservation verifier: ${rankingVerification.violations.join(", ")}`,
+);
+
+// Mutation check: dropping a metric or injecting a script must fail verification
+const mutatedHtml = rankingHtml.replace("11.03", "99.99");
+const mutatedVerification = verifyCardHtmlDocument(mutatedHtml, ["11.03"]);
+assert(!mutatedVerification.ok && mutatedVerification.violations.includes("missing_fact:11.03"), "verifier must catch mutated metric value");
+
+const scriptInjectedHtml = rankingHtml.replace("</body>", "<script>alert(1)</script></body>");
+const scriptVerification = verifyCardHtmlDocument(scriptInjectedHtml, []);
+assert(!scriptVerification.ok && scriptVerification.violations.includes("forbidden_script_or_event_handler"), "verifier must reject script injection");
 
 // 3. Ranking JSON building
 const json = buildRankingCardJson(mockData);
@@ -84,10 +106,10 @@ assert(json.subjects.length === 2, "subjects count must match");
 assert(json.subjects[0].display_name === "Apple Inc.", "subject name must match");
 assert(json.subjects[0].metrics.some((m) => m.key === "valuation_gap" && m.value === "-0.24"), "valuation_gap metric must match");
 // #1235: the card names the multiple the gap divides. Under definition 1.0.0 that is P/GP, never P/S.
-assert(svg.includes(">P/GP</text>"), "ranking column must be headed by the valuation basis");
-assert(svg.includes("VALUATION GAP (P/GP)"), "ranking gap must name its basis");
-assert(svg.includes(">11.03</text>"), "ranking row must show the P/GP multiple");
-assert(!svg.includes(">7.85</text>"), "ranking row must not show P/S under a P/GP heading");
+assert(rankingHtml.includes(">P/GP</th>"), "ranking column must be headed by the valuation basis");
+assert(rankingHtml.includes("VALUATION GAP (P/GP)"), "ranking gap must name its basis");
+assert(rankingHtml.includes(">11.03</td>"), "ranking row must show the P/GP multiple");
+assert(!rankingHtml.includes(">7.85</td>"), "ranking row must not show P/S under a P/GP heading");
 assert(json.subjects[0].valuation_basis === "price_to_gross_profit", "subject must name its basis");
 assert(
   json.subjects[0].metrics.some((m) => m.key === "current_price_to_gross_profit" && m.value === "11.03"),
@@ -97,11 +119,15 @@ assert(
   json.subjects[0].metrics.some((m) => m.key === "current_price_to_sales" && m.value === "7.85"),
   "current_price_to_sales stays recorded",
 );
-const psCard = renderRankingCardSvg({
+const psCard = renderRankingCardHtml({
   ...mockData,
-  items: mockData.items.map((item) => ({ ...item, currentMultiple: item.currentPriceToSales, valuationBasis: "price_to_sales" as const })),
+  items: mockData.items.map((item) => ({
+    ...item,
+    currentMultiple: item.currentPriceToSales,
+    valuationBasis: "price_to_sales" as const,
+  })),
 });
-assert(psCard.includes(">P/S</text>") && psCard.includes("VALUATION GAP (P/S)"), "a 0.1.0 run keeps its P/S label");
+assert(psCard.includes(">P/S</th>") && psCard.includes("VALUATION GAP (P/S)"), "a 0.1.0 run keeps its P/S label");
 
 // 4. Entity Deep Dive mock data
 const mockEntityData: EntityCardData = {
@@ -123,24 +149,36 @@ const mockEntityData: EntityCardData = {
   confidence: "0.95",
 };
 
-// 5. Entity SVG rendering
-const entitySvg = renderEntityDeepDiveCardSvg(mockEntityData);
-assert(entitySvg.startsWith("<?xml"), "entity svg must start with xml header");
-assert(entitySvg.includes(`width="1080"`), "entity svg must declare width 1080");
-assert(entitySvg.includes(`height="1440"`), "entity svg must declare height 1440");
-assert(entitySvg.includes(`viewBox="0 0 1080 1440"`), "entity svg must declare viewBox 0 0 1080 1440");
-assert(entitySvg.includes("TrueAlpha Deep Dive"), "entity svg must include title");
-assert(entitySvg.includes("NVIDIA Corp &amp; Co &lt;Special&gt;"), "entity svg must escape XML entities in displayName");
-assert(entitySvg.includes("AI Compute &amp; Hardware &lt;Core&gt;"), "entity svg must escape XML entities in theme");
-assert(entitySvg.includes("2026-06-30T23:59:59Z"), "entity svg must include cutoff");
-assert(entitySvg.includes("Large Model Native"), "entity svg must format tier label");
-assert(entitySvg.includes("+0.42"), "entity svg must format signed valuation gap");
-assert(entitySvg.includes("1.85"), "entity svg must include formatted PEG");
-assert(entitySvg.includes("Historical CAGR"), "entity svg must include Historical CAGR note");
-assert(entitySvg.includes("non_financial"), "entity svg must include operating branch");
-assert(entitySvg.includes("85%"), "entity svg must include theme share percent");
-assert(entitySvg.includes("RESEARCH HYPOTHESIS"), "entity svg must include research-risk disclaimer");
-assert(entitySvg.includes(CARD_TEMPLATE_VERSION), "entity svg must reference template version");
+// 5. Entity HTML rendering & fact-preservation verification
+const entityHtml = renderEntityDeepDiveCardHtml(mockEntityData);
+assert(entityHtml.startsWith("<!DOCTYPE html>"), "entity html must start with DOCTYPE html");
+assert(entityHtml.includes("1080px") && entityHtml.includes("1440px"), "entity html must declare 1080x1440px");
+assert(entityHtml.includes("TrueAlpha Deep Dive"), "entity html must include title");
+assert(entityHtml.includes("NVIDIA Corp &amp; Co &lt;Special&gt;"), "entity html must escape HTML entities in displayName");
+assert(entityHtml.includes("AI Compute &amp; Hardware &lt;Core&gt;"), "entity html must escape HTML entities in theme");
+assert(entityHtml.includes("2026-06-30T23:59:59Z"), "entity html must include cutoff");
+assert(entityHtml.includes("Large Model Native"), "entity html must format tier label");
+assert(entityHtml.includes("+0.42"), "entity html must format signed valuation gap");
+assert(entityHtml.includes("1.85"), "entity html must include formatted PEG");
+assert(entityHtml.includes("Historical CAGR"), "entity html must include Historical CAGR note");
+assert(entityHtml.includes("non_financial"), "entity html must include operating branch");
+assert(entityHtml.includes("85%"), "entity html must include theme share percent");
+assert(entityHtml.includes("RESEARCH HYPOTHESIS"), "entity html must include research-risk disclaimer");
+assert(entityHtml.includes(CARD_TEMPLATE_VERSION), "entity html must reference template version");
+
+const entityVerification = verifyCardHtmlDocument(entityHtml, [
+  "issuer:lei:5493001KJTIIGC8Y1R12",
+  "NVIDIA Corp & Co <Special>",
+  "2026-06-30T23:59:59Z",
+  "36.20",
+  "+0.42",
+  "1.85",
+  "0.95",
+]);
+assert(
+  entityVerification.ok,
+  `entity HTML must pass fact-preservation verifier: ${entityVerification.violations.join(", ")}`,
+);
 
 // 6. Entity JSON building
 const entityJson = buildEntityCardJson(mockEntityData);
@@ -155,8 +193,8 @@ assert(entityJson.metrics.tier === "large_model_native", "metric tier must match
 assert(entityJson.metrics.valuation_gap === "0.42", "metric valuation_gap must match");
 assert(entityJson.metrics.current_price_to_gross_profit === "36.20", "entity P/GP metric must match");
 assert(entityJson.metrics.valuation_basis === "price_to_gross_profit", "entity card must name its basis");
-assert(entitySvg.includes("Current P/GP") && entitySvg.includes("Valuation Gap (P/GP)"), "entity svg must label P/GP");
-assert(!entitySvg.includes("Current P/S"), "entity svg must not label P/GP as P/S");
+assert(entityHtml.includes("Current P/GP") && entityHtml.includes("Valuation Gap (P/GP)"), "entity html must label P/GP");
+assert(!entityHtml.includes("Current P/S"), "entity html must not label P/GP as P/S");
 assert(entityJson.metrics.peg === "1.85", "metric peg must match");
 assert(entityJson.themes.length === 2, "themes count must match");
 assert(entityJson.themes[0].theme === "AI Compute & Hardware <Core>", "theme name must match");
@@ -172,24 +210,5 @@ assert(cardThemes.length === 2, "the card drops the fill and keeps a refused rea
 assert(cardThemes[0].theme === "AI Compute" && cardThemes[0].themeShare === "0.85", "a judged theme passes through");
 assert(cardThemes[1].theme === "Refused Theme" && cardThemes[1].themeShare === null, "a refused real row stays");
 assert(!("unvisitedReason" in cardThemes[0]), "the card data carries no reason field");
-
-// 8. 1080x1440 PNG rendering (#1360 AC4)
-const rankingPng = await renderRankingCardPng(mockData);
-assert(
-  rankingPng.subarray(0, 8).toString("hex") === "89504e470d0a1a0a",
-  "ranking PNG must start with PNG magic bytes",
-);
-assert(rankingPng.subarray(12, 16).toString("ascii") === "IHDR", "ranking PNG must contain IHDR chunk");
-assert(rankingPng.readUInt32BE(16) === XHS_CARD_WIDTH, "ranking PNG width must be 1080");
-assert(rankingPng.readUInt32BE(20) === XHS_CARD_HEIGHT, "ranking PNG height must be 1440");
-
-const entityPng = await renderEntityDeepDiveCardPng(mockEntityData);
-assert(
-  entityPng.subarray(0, 8).toString("hex") === "89504e470d0a1a0a",
-  "entity PNG must start with PNG magic bytes",
-);
-assert(entityPng.subarray(12, 16).toString("ascii") === "IHDR", "entity PNG must contain IHDR chunk");
-assert(entityPng.readUInt32BE(16) === XHS_CARD_WIDTH, "entity PNG width must be 1080");
-assert(entityPng.readUInt32BE(20) === XHS_CARD_HEIGHT, "entity PNG height must be 1440");
 
 console.log("xhs-card.test.ts: all assertions passed");
