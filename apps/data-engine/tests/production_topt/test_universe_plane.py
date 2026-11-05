@@ -1153,6 +1153,20 @@ _IVV_NPORT_XML = b"""<?xml version="1.0" encoding="UTF-8"?>
         <issuerCat>RF</issuerCat>
         <invCountry>US</invCountry>
       </invstOrSec>
+      <invstOrSec>
+        <name>Hologic, Inc., CVR</name>
+        <title>Hologic, Inc., CVR</title>
+        <cusip>436CVR021</cusip>
+        <identifiers><isin value="US436CVR0216"/></identifiers>
+        <balance>50000</balance>
+        <units>NS</units>
+        <curCd>USD</curCd>
+        <valUSD>12500</valUSD>
+        <pctVal>0.00</pctVal>
+        <assetConditional assetCat="OTHER" desc="Right"/>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>US</invCountry>
+      </invstOrSec>
     </invstOrSecs>
   </formData>
 </edgarSubmission>""".replace(b"< fundInfo>", b"<fundInfo>")
@@ -1232,6 +1246,8 @@ def test_sp500_universe_builds_from_ivv_nport_with_filing_knowable_at(in_memory_
 
     def _fake_urlopen(req: _url.Request, timeout: float = 0):
         jobs = _json.loads(req.data.decode())
+        assert all(job.get("includeUnlistedEquities") is True for job in jobs)
+        assert all(job["idValue"] != "US436CVR0216" for job in jobs)
         body = _json.dumps([{"data": [openfigi_by_isin[job["idValue"]]]} for job in jobs]).encode()
         return io.BytesIO(body)
 
@@ -1336,4 +1352,65 @@ def test_sp500_universe_builds_from_ivv_nport_with_filing_knowable_at(in_memory_
         "AAPL": "listing:xnas:aapl",
         "BRK.B": "listing:xnys:brk.b",
         "JPM": "listing:xnys:jpm",
+    }
+
+
+def test_nport_unlisted_openfigi_placeholder_ticker_falls_back_to_sec_company_tickers(monkeypatch) -> None:
+    """#1441: OpenFIGI's unlisted US record for Exxon Mobil and ONEOK carries a digit-leading
+    placeholder ticker ('9666655D', '9666690D') beside the valid shareClassFIGI; the refresh
+    resolves the US ticker through SEC's company_tickers normalized title index while preserving
+    OpenFIGI's shareClassFIGI."""
+    import json as _json
+
+    from data_engine.datahub.production_topt import universe_plane as up
+    from data_engine.sources import gateway, nport, sec
+
+    company_tickers_payload = _json.dumps(
+        {
+            "0": {"cik_str": 2115436, "ticker": "XOM", "title": "ExxonMobil Holdings Corp"},
+            "1": {"cik_str": 1039684, "ticker": "OKE", "title": "ONEOK INC /NEW/"},
+            "2": {"cik_str": 1039684, "ticker": "OKE-PA", "title": "ONEOK INC /NEW/"},
+        }
+    ).encode()
+    monkeypatch.setattr(gateway, "fetch_once", lambda _key, _fetch: company_tickers_payload)
+
+    title_map = sec.title_ticker_index()
+    assert title_map["EXXONMOBIL"] == "XOM"
+    assert title_map["ONEOK"] == "OKE"
+
+    match_xom = up._select_openfigi_match(
+        {"data": [{"ticker": "9666655D", "shareClassFIGI": "BBG001S69V32", "name": "EXXON MOBIL CORP"}]}
+    )
+    assert match_xom == ("", "bbg001s69v32", "EXXON MOBIL CORP")
+
+    holdings = [
+        nport.Holding(
+            name="EXXON MOBIL CORP",
+            cusip="30231G102",
+            isin="US30231G1022",
+            lei=None,
+            balance=100.0,
+            value_usd=10000.0,
+            pct_val=1.15,
+            asset_cat="EC",
+        ),
+        nport.Holding(
+            name="ONEOK INC",
+            cusip="682680103",
+            isin="US6826801036",
+            lei=None,
+            balance=50.0,
+            value_usd=5000.0,
+            pct_val=0.42,
+            asset_cat="EC",
+        ),
+    ]
+    resolved_ids = {
+        ("ID_ISIN", "US30231G1022"): ("", "bbg001s69v32", "EXXON MOBIL CORP"),
+        ("ID_ISIN", "US6826801036"): ("", "bbg001s5twk1", "ONEOK INC"),
+    }
+    by_ticker = up._aggregate_nport_holdings(holdings, resolved_ids, etf="sp500", title_tickers=title_map)
+    assert by_ticker == {
+        "XOM": ("EXXON MOBIL CORP", Decimal("1.15"), "bbg001s69v32"),
+        "OKE": ("ONEOK INC", Decimal("0.42"), "bbg001s5twk1"),
     }
