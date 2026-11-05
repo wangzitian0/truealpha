@@ -182,9 +182,9 @@ def test_verify_card_html_rejects_fact_mutation_or_script_injection() -> None:
     assert not ok_evt
     assert "forbidden_script_or_event_handler" in violations_evt
 
-    # HTML entities (&mdash;) and inline formatting tags (<strong>) produced by LLMs must pass verification
-    entity_and_tag_html = valid_html.replace("—", "&mdash;").replace(
-        "not investment advice.", "<strong>not investment advice.</strong>"
+    # HTML entities (&mdash;, double-escaped &amp;mdash;) and inline formatting tags (<strong>) must pass verification
+    entity_and_tag_html = valid_html.replace("—", "&amp;mdash;").replace(
+        "not investment advice.", "<strong>not&amp;nbsp;investment</strong> advice."
     )
     ok_ent, violations_ent = verify_card_html(card, entity_and_tag_html)
     assert ok_ent and violations_ent == ()
