@@ -137,19 +137,36 @@ def _count_oracle_agrees(oracle_outcomes: Any) -> int:
     return 0
 
 
-def _audit_gate_1(verdicts_by_check: Mapping[str, Any], oracle_outcomes: Any) -> GateAuditResult:
-    """Evaluate Gate 1 (#29) from surface proof, output invariants, and oracle agrees (#1523 G19)."""
+def _audit_gate_1(
+    verdicts_by_check: Mapping[str, Any],
+    oracle_outcomes: Any,
+    *,
+    env: str = "production",
+) -> GateAuditResult:
+    """Evaluate Gate 1 (#29) from surface proof, output invariants, and oracle agrees (#1523 G19, #1419)."""
     surface_proof = verdicts_by_check.get("report_surface_proof")
     invariants = verdicts_by_check.get("output_invariants")
-    agree_count = _count_oracle_agrees(oracle_outcomes)
+    if oracle_outcomes is not None:
+        agree_count = _count_oracle_agrees(oracle_outcomes)
+        oracle_ok = agree_count > 0
+        oracle_label = f"oracle_outcomes: {agree_count} agree" if oracle_ok else "no comparator"
+    else:
+        conf_verdicts = {
+            u: verdicts_by_check.get(f"datahub_confidence_report@{u}") for u in scheduled_universe_names(env)
+        }
+        oracle_ok = bool(conf_verdicts) and all(v is not None and v.ok is True for v in conf_verdicts.values())
+        oracle_label = (
+            "; ".join(f"datahub_confidence_report@{u}: {v.summary}" for u, v in conf_verdicts.items() if v is not None)
+            if oracle_ok
+            else "no comparator"
+        )
     verified = (
-        agree_count > 0
+        oracle_ok
         and surface_proof is not None
         and surface_proof.ok is True
         and invariants is not None
         and invariants.ok is True
     )
-    oracle_label = f"oracle_outcomes: {agree_count} agree" if agree_count > 0 else "no comparator"
     evidence = (
         f"{oracle_label}; "
         f"report_surface_proof: {surface_proof.summary if surface_proof else 'missing'}; "
@@ -205,7 +222,7 @@ def audit_vision(
         )
     )
 
-    gates.append(_audit_gate_1(verdicts_by_check, effective_outcomes))
+    gates.append(_audit_gate_1(verdicts_by_check, effective_outcomes, env=env))
 
     # Gate 2 (#30): Research Questions & Entity Coverage. The environment contract lists the universes
     # that the environment runs (staging runs TOPT only), and each of them needs a green coverage verdict.
