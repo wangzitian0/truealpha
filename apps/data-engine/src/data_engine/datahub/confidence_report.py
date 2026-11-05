@@ -102,6 +102,7 @@ from data_engine.datahub.oracle_outcomes import (
     wilson_95_upper_bound as wilson_95_upper_bound,
 )
 from data_engine.datahub.production_topt.executor import SERVED_BY_FAILOVER
+from data_engine.datahub.production_topt.headcount import is_eligible_headcount_row
 from data_engine.datahub.production_topt.parser_identity import PARSER_VERSION_HISTORY
 from data_engine.datahub.production_topt.source_registrations import (
     RELEASE_SEMANTICS,
@@ -1176,14 +1177,21 @@ def _add_headcount_producers(connection: Connection[Any], subjects: Mapping[str,
         return
     rows = connection.execute(
         """
-        select distinct on (cik, source) cik, source, headcount, knowable_at
+        select cik, source, headcount, knowable_at, evidence_ref, period_end
         from staging.issuer_headcount_facts
         where cik = any(%s) and knowable_at <= %s
         order by cik, source, knowable_at desc, id desc
         """,
         (list(ciks), cutoff),
     ).fetchall()
-    for cik, producer, headcount, knowable_at in rows:
+    for cik, producer, headcount, knowable_at, evidence_ref, period_end in rows:
+        if not is_eligible_headcount_row(
+            knowable_at=knowable_at,
+            source=str(producer),
+            evidence_ref=str(evidence_ref or ""),
+            period_end=period_end,
+        ):
+            continue
         subject = subjects[ciks[int(cik)]]
         present = subject.origins.get("headcount", [])
         if any(origin.source_id == producer for origin in present):

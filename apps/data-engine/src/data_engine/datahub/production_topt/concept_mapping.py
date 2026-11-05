@@ -31,7 +31,7 @@ _KIND = "concept-mapping"
 # contract's docstring for why merging the two produces a silently wrong number.
 DEFAULT_RULESET = ConceptMappingRuleset.model_validate(
     {
-        "version": "production-topt-concepts:v5",
+        "version": "production-topt-concepts:v6",
         "mappings": (
             {
                 # #1379: CRWD tags its revenue only under the Including form. Its companyfacts give
@@ -68,6 +68,11 @@ DEFAULT_RULESET = ConceptMappingRuleset.model_validate(
                     {"taxonomy": "us-gaap", "concept": "CostOfSales"},
                     {"taxonomy": "us-gaap", "concept": "DirectOperatingCosts"},
                     {"taxonomy": "us-gaap", "concept": "ProgrammingAndProductionCosts"},
+                    {
+                        "taxonomy": "us-gaap",
+                        "concept": "CostOfGoodsAndServiceExcludingDepreciationDepletionAndAmortization",
+                    },
+                    {"taxonomy": "us-gaap", "concept": "ProductionAndDistributionCosts"},
                 ),
             },
             {
