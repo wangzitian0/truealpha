@@ -74,16 +74,17 @@ _SCALE_MULTIPLIERS = {
     "million": Decimal(1_000_000),
 }
 _HEADCOUNT = re.compile(
-    r"(?:had|employed|have|of|total of)\s+"
-    r"(?:approximately\s+|about\s+|over\s+|more than\s+|nearly\s+)?"
-    r"([\d][\d,]*(?:\.\d+)?)\s+(?:(million|thousand)\s+)?"
-    r"(?:(?:full[- ]time|part[- ]time|regular|global|salaried|equivalent|permanent)(?:\s+(?:and|or)\s+|\s+)){0,3}"
-    r"(?:employees|persons|people|associates|team members|staff members|colleagues)"
+    r"(?:had|employed|have|includes?|of|total of|our|headcount(?:\s+increased)?(?:\s+(?:\d+(?:\.\d+)?%\s+)?(?:from\s+[\d,]+\s+)?)?to)\s+"
+    r"(?:approximately\s+|approxima\s+tely\s+|about\s+|over\s+|more than\s+|nearly\s+)?"
+    r"([\d][\d,]*(?:\.\d+)?)\s+(?:(?:[1-9]|\(\d\))\s+)?(?:(million|thousand)\s+)?"
+    r"(?:(?:full(?:[- ]time)?|part[- ]time|temporary|regular|global|total|salaried|equivalent|permanent)(?:,\s*|\s+(?:and|or)\s+|\s+)){0,4}"
+    r"(?:employees|employee-partners|persons|people|associates|a\s+ssociates|workers|team members|staff members|colleagues)"
     r"|(?:employee headcount(?:\s+worldwide)?|full[- ]time count for [a-z' ]{1,35}employees(?:\s+worldwide)?)\s+was\s+"
-    r"(?:approximately\s+|about\s+)?([\d][\d,]*(?:\.\d+)?)(?:\s+(million|thousand))?",
+    r"(?:approximately\s+|about\s+)?([\d][\d,]*(?:\.\d+)?)(?:\s+(million|thousand))?"
+    r"|(?:global\s+workforce\s+of|total\s+employees)\s+([\d][\d,]*(?:\.\d+)?)(?:\s+(million|thousand))?",
     re.I,
 )
-_AS_OF = re.compile(r"[Aa]s of ([A-Z][a-z]+ \d{1,2},? \d{4})")
+_AS_OF = re.compile(r"(?:[Aa]s of|[Aa]t) ([A-Z][a-z]+ \d{1,2},? \d{4})")
 # Inline XBRL leaks concept names into the text ("us-gaap:EmployeeSeveranceMember"); those
 # are tag soup, not prose.
 _TAG_SOUP = re.compile(r"us-gaap:|Member\b|xbrli:")
@@ -93,10 +94,15 @@ _TAG_SOUP = re.compile(r"us-gaap:|Member\b|xbrli:")
 # qualifies the 27,000, not the 50,000. The list is deliberately short and literal — a
 # false "partial" would silently drop the only candidate — so only phrases that
 # unambiguously name a subset are here.
-_CLAUSE_END = re.compile(r"[,;.]|\s(?:including|of which|of whom)\s", re.I)
+_CLAUSE_END = re.compile(
+    r"[,;.]|\s(?:including|of which|of whom)\s|\s+and\s+(?:approximately|approxima\s+tely|about|over|more than|nearly|\d)",
+    re.I,
+)
 _PARTIAL = re.compile(
     # "full-time and part-time employees" is the whole workforce, not the part-time subset.
-    r"\b((?<!full[- ]time and )(?<!full[- ]time or )part[- ]time|temporary|seasonal|contractors?|contingent|"
+    r"\b((?<!full[- ]time and )(?<!full[- ]time or )(?<!full and )(?<!full-time, )part[- ]time|"
+    r"(?<!part[- ]time and )(?<!part[- ]time or )temporary|seasonal|contractors?|contingent|"
+    r"(?:research and development|sales and marketing|general and administrative|engineering)\s+(?:staff|employees|headcount|personnel|team)|"
     r"in (?:our|the|its) [a-z ]{0,40}(?:segment|division|department|business|function|subsidiar)|"
     r"located in|based in|outside (?:of )?the united states)\b",
     re.I,
@@ -200,8 +206,8 @@ def candidates(text: str) -> list[FilingCandidate]:
         sentence = _sentence(text, match.start(), match.end())
         if _TAG_SOUP.search(sentence):
             continue
-        raw_digits = match.group(1) or match.group(3)
-        raw_scale = match.group(2) or match.group(4)
+        raw_digits = match.group(1) or match.group(3) or match.group(5)
+        raw_scale = match.group(2) or match.group(4) or match.group(6)
         value = _parse_headcount_value(raw_digits, raw_scale)
         if value is None or not _PLAUSIBLE[0] <= value <= _PLAUSIBLE[1]:
             continue
@@ -211,8 +217,9 @@ def candidates(text: str) -> list[FilingCandidate]:
         clause_tail = text[match.start() : match.end() + 120]
         clause_end = _CLAUSE_END.search(clause_tail, match.end() - match.start())
         clause = clause_tail[: clause_end.start()] if clause_end else clause_tail
+        sentence_prefix = _SENTENCE_END.split(text[max(0, match.start() - 60) : match.start()])[-1]
         key = (value, as_of.group(1) if as_of else None, sentence)
-        found.setdefault(key, FilingCandidate(value, key[1], sentence, bool(_PARTIAL.search(clause))))
+        found.setdefault(key, FilingCandidate(value, key[1], sentence, bool(_PARTIAL.search(sentence_prefix + clause))))
     return list(found.values())
 
 

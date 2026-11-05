@@ -1035,3 +1035,100 @@ def test_open_cells_reopens_for_newer_annual_filing_and_ignores_ineligible_rows(
         for cell in open_cells(connection, [_issuer(100), _issuer(200)], standard=STANDARD, cutoff=CUTOFF)
     }
     assert cells == {100: "stale", 200: "no_fact"}
+
+
+@pytest.mark.parametrize(
+    ("ticker", "sentence", "expected_value", "expected_as_of"),
+    [
+        (
+            "CPRT",
+            "As of July 31, 2026, we had approximately 11,900 full and part-time employees, of which approximately 62% were located in the U.S.",
+            11900,
+            "July 31, 2026",
+        ),
+        (
+            "CTAS",
+            "At May 31, 2026, Cintas employed approximately 48,100 employee-partners in our global workforce, of which approximately 800 were represented by labor unions.",
+            48100,
+            "May 31, 2026",
+        ),
+        (
+            "FTNT",
+            "Headcount increased 7% to 15,109 employees as of December 31, 2025, up from 14,138 as of December 31, 2024.",
+            15109,
+            "December 31, 2025",
+        ),
+        (
+            "INTC",
+            "We invest in our highly skilled workforce, which was comprised of 85,100 1 people as of December 27, 2025, by creating practices.",
+            85100,
+            "December 27, 2025",
+        ),
+        (
+            "KLAC",
+            "As of June 30, 2026, we had approximately 17,000 regular full-time employees and approximately 200 part-time and temporary employees in facilities located in 18 major regions.",
+            17000,
+            "June 30, 2026",
+        ),
+        (
+            "PANW_WORKFORCE",
+            "With a global workforce of 21,921 as of July 31, 2026, our People Strategy focuses on talent.",
+            21921,
+            "July 31, 2026",
+        ),
+        (
+            "PANW_INCREASED",
+            "As of July 31, 2026, our headcount increased from 16,068 to 21,921 employees.",
+            21921,
+            "July 31, 2026",
+        ),
+        (
+            "QCOM",
+            "At September 27, 2026, we had approxima tely 57,000 full-time, part-time and temporary workers, the overwhelming majority of which were full-time employees.",
+            57000,
+            "September 27, 2026",
+        ),
+        (
+            "ROST",
+            "As of January 31, 2026, we had approximately 111,000 total a ssociates, which includes both full- and part-time associates.",
+            111000,
+            "January 31, 2026",
+        ),
+        (
+            "SNDK",
+            "As of July 2026, our global team includes approximately 11,100 employees across 33 countries.",
+            11100,
+            None,
+        ),
+        (
+            "TTWO",
+            "Our headcount includes 12,909 full-time employees as of March 31, 2026, including 9,998 in development studios. We had research and development staff of 9,998 employees and sales and marketing staff of 1,456 employees.",
+            12909,
+            "March 31, 2026",
+        ),
+        (
+            "ARM_PROSE",
+            "As of March 31, 2026, approximately 84% of our 9,584 global employees were engaged in engineering activities.",
+            9584,
+            "March 31, 2026",
+        ),
+        (
+            "ARM_TABLE",
+            "Total Employees 9,584 8,330 7,096",
+            9584,
+            None,
+        ),
+    ],
+)
+def test_qqq_10k_human_capital_sentences_resolve_company_wide_headcount(
+    ticker: str,
+    sentence: str,
+    expected_value: int,
+    expected_as_of: str | None,
+) -> None:
+    """Recall and partial filtering on the 11 QQQ 10-K/20-F human-capital sentence patterns."""
+    found = candidates(filing_plain_text(_html(sentence)))
+    status, chosen = select_total(found)
+    assert status == "resolved" and chosen is not None, f"{ticker}: {found}"
+    assert chosen.value == expected_value
+    assert chosen.as_of == expected_as_of

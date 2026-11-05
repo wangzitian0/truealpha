@@ -1096,3 +1096,69 @@ def test_a_recompile_over_identical_content_is_the_same_row() -> None:
     finally:
         connection.rollback()
         connection.close()
+
+
+def test_add_headcount_producers_skips_uncited_legacy_and_curated_rows() -> None:
+    """_add_headcount_producers filters rows through is_eligible_headcount_row so uncited legacy
+    manual-review (#70 supersedes) and retired curated-10k-2025 rows never outrank cited 10-K rows."""
+    avgo_cik = 1730168
+    subject = cr._Subject(issuer_id=f"issuer:cik:{avgo_cik:010d}")
+    subjects = {"listing:xnas:avgo": subject}
+
+    class _FakeCursor:
+        def __init__(self, rows: list[tuple[object, ...]]) -> None:
+            self._rows = rows
+
+        def fetchall(self) -> list[tuple[object, ...]]:
+            return self._rows
+
+    class _FakeConn:
+        def execute(self, sql: str, params: tuple[object, ...] = ()) -> _FakeCursor:
+            assert "evidence_ref" in sql and "period_end" in sql
+            assert params == ([avgo_cik], CUTOFF)
+            return _FakeCursor(
+                [
+                    (
+                        avgo_cik,
+                        "10k-extraction",
+                        Decimal("33000"),
+                        datetime(2025, 12, 18, tzinfo=UTC),
+                        "accession=000173016825000121 form=10-K filed=2025-12-18 extractor=rule:single-candidate:v1",
+                        date(2025, 11, 2),
+                    ),
+                    (
+                        avgo_cik,
+                        "curated-10k-2025",
+                        Decimal("99999"),
+                        datetime(2026, 2, 1, tzinfo=UTC),
+                        "accession=000173016825000121 form=10-K filed=2026-02-01 source=curated-10k-2025",
+                        date(2025, 11, 2),
+                    ),
+                    (
+                        avgo_cik,
+                        "manual-review",
+                        Decimal("20000"),
+                        datetime(2026, 1, 1, tzinfo=UTC),
+                        "10-K human capital disclosure; manual entry, no verified accession (#70 supersedes)",
+                        None,
+                    ),
+                    (
+                        avgo_cik,
+                        "manual-review",
+                        Decimal("33000"),
+                        datetime(2025, 12, 18, tzinfo=UTC),
+                        "accession=000173016825000123 form=10-K filed=2025-12-18 source=manual-review",
+                        date(2025, 11, 2),
+                    ),
+                ]
+            )
+
+    cr._add_headcount_producers(_FakeConn(), subjects, CUTOFF)  # type: ignore[arg-type]
+    origins = subject.origins["headcount"]
+    assert [(o.source_id, o.value, o.knowable_at) for o in origins] == [
+        ("10k-extraction", "33000", datetime(2025, 12, 18, tzinfo=UTC)),
+        ("manual-review", "33000", datetime(2025, 12, 18, tzinfo=UTC)),
+    ]
+    grade = classify_cell(family_policy("headcount"), "listing:xnas:avgo", origins, CUTOFF)
+    assert grade.reason == "same_lineage"
+    assert grade.relative_delta == "0.000000"
