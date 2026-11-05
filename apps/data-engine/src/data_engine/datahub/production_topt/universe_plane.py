@@ -350,10 +350,10 @@ def _seed_sec_listing_mic_aliases(
                         (entity_id, scheme, value, valid_from, valid_to, transaction_time, source, raw_ref,
                          method, confidence, mapping_version)
                     values (%s, %s, %s, '-infinity', null, %s, %s, 'sec:company-tickers-exchange',
-                            'asserted', 1, 'sec-tickers-exchange:v1')
+                            'asserted', %s, 'sec-tickers-exchange:v1')
                     on conflict do nothing
                     """,
-                    (entity_id, scheme, value, transaction_time, DataSource.SEC.value),
+                    (entity_id, scheme, value, transaction_time, DataSource.SEC.value, Decimal(1)),
                 )
 
 
