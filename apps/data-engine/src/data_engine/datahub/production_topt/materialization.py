@@ -43,6 +43,7 @@ from pydantic import (
 )
 from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.concept_mapping import ConceptMappingRuleset
+from truealpha_contracts.environment_contract import UnknownUniverse, load_environment_contract
 from truealpha_contracts.execution import InputEvidenceStatus
 from truealpha_contracts.strategy import LargeModelValueV0Definition, load_live_strategy_definition
 from truealpha_runtime.storage import StorageError
@@ -64,6 +65,7 @@ from data_engine.datahub.production_topt.status_dimensions import (
 )
 from data_engine.datahub.share_basis import (
     MISSING_CLASS_RATIO,
+    NO_SPLIT_ADJUSTED_SERIES,
     SHARES_KEY,
     LiveShareCount,
     OnCloseBasis,
@@ -651,6 +653,19 @@ def _observation_documents(connection: Connection[Any], observation_id: str) -> 
     return documents
 
 
+def _universe_stores_price_series(universe_id: str) -> bool:
+    """False only when the contract record of the universe declares `price_series: false` (#1606).
+
+    A universe without a stored price series (the canary) has no daily bar for its listings, so no split
+    history. An id that starts with no universe prefix returns True: the loss then stays a WARNING.
+    """
+    contract = load_environment_contract()
+    try:
+        return contract.record(contract.universe_of_id(universe_id)).price_series
+    except UnknownUniverse:
+        return True
+
+
 class PostgresToptCoreRepository:
     def __init__(self, connection: Connection[Any]) -> None:
         self._connection = connection
@@ -715,6 +730,7 @@ class PostgresToptCoreRepository:
         from data_engine.datahub.confidence_report import evaluate_and_persist_run_cell_confidence
 
         cell_confidences = evaluate_and_persist_run_cell_confidence(self._connection, run_id, cutoff=cutoff)
+        stores_price_series = _universe_stores_price_series(universe_id)
         members = tuple(
             self._snapshot_member(
                 listing_id,
@@ -735,6 +751,7 @@ class PostgresToptCoreRepository:
                 listing_confidences={
                     metric: conf for (subj, metric), conf in cell_confidences.items() if subj == listing_id
                 },
+                stores_price_series=stores_price_series,
             )
             for listing_id, by_type in grouped.items()
         )
@@ -910,6 +927,7 @@ class PostgresToptCoreRepository:
         histories: Sequence[SplitHistory | Unavailable | None],
         documents: Callable[[], Sequence[Mapping[str, Any]]] | None,
         ruleset: Callable[[], ConceptMappingRuleset] | None,
+        stores_price_series: bool = True,
     ) -> tuple[Decimal | None, datetime, ToptCoreReasonCode | None]:
         shares_value = financial.shares_outstanding
         shares_knowable_at = financial_row.knowable_at if shares_cell is None else shares_cell.knowable_at
@@ -935,13 +953,24 @@ class PostgresToptCoreRepository:
             return outcome.value, outcome.knowable_at, None
         if price_value is None and financial.listing_units_per_share and financial.listing_units_per_share > 0:
             return shares_value / financial.listing_units_per_share, shares_knowable_at, None
-        log.warning(
-            "share basis: %s gets no share count beside the close %s: %s: %s",
-            listing_id,
-            price.close,
-            outcome.reason,
-            outcome.detail,
-        )
+        # #1606: a listing with a ticker and no stored bar, in a universe whose contract record declares no
+        # price series, has no split history by contract. That is no data lost. The member keeps the cause.
+        no_bar_stored = len(histories) > 0 and all(history is None for history in histories)
+        if not stores_price_series and outcome.reason == NO_SPLIT_ADJUSTED_SERIES and no_bar_stored:
+            log.info(
+                "share basis: %s has no stored daily bar and its universe declares price_series=false: %s; "
+                "the filed share count stays unproven and market_cap stays NULL",
+                listing_id,
+                outcome.reason,
+            )
+        else:
+            log.warning(
+                "share basis: %s gets no share count beside the close %s: %s: %s",
+                listing_id,
+                price.close,
+                outcome.reason,
+                outcome.detail,
+            )
         return None, shares_knowable_at, ToptCoreReasonCode(outcome.reason)
 
     @staticmethod
@@ -955,6 +984,7 @@ class PostgresToptCoreRepository:
         is_primary: bool = False,
         input_age: InputAgeLimit | None = None,
         listing_confidences: Mapping[str, Decimal] | None = None,
+        stores_price_series: bool = True,
     ) -> SnapshotMember:
         listing, financial, price = _validate_member_rows(listing_id, by_type)
         financial_row = by_type["financial-fact"]
@@ -991,6 +1021,7 @@ class PostgresToptCoreRepository:
             histories=histories,
             documents=documents,
             ruleset=ruleset,
+            stores_price_series=stores_price_series,
         )
 
         if input_age is not None and input_age.is_stale(
