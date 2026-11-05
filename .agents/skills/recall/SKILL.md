@@ -39,7 +39,7 @@ Level 4: Physical runtime verification (worker.log, live probes, exit codes)
 ### Level 4: Physical runtime verification
 - When a tool, worker, or command fails:
   - Check live subagent logs under `.agents/runs/<task-id>/logs/`.
-  - Check the Pi role definitions in `pi/agents/*.md` and verify connectivity with `pi -p --no-session --provider zai-coding-cn --model glm-5.3-flash "reply ok"`.
+  - Check the 4 Pi role definitions in `pi/agents/{director,senior,junior,intern}.md` and verify `invoke-intern` connectivity (`invoke-intern --prompt "reply ok"` or `pi -p --no-session --provider zai-coding-cn --model glm-5.3-flash "reply ok"`).
   - Check physical git status and branch locks: `git status -s`, `git worktree list`.
   - Never classify a transient network or rate-limit failure as an architectural conflict.
 
