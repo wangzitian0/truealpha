@@ -30,6 +30,7 @@ displayed value differently from the report it was built from.
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime
 from enum import StrEnum
 from typing import Literal
@@ -352,6 +353,9 @@ def _contains_text(html: str, raw: str) -> bool:
     return raw in html or escaped in html
 
 
+_INLINE_EVENT_HANDLER_RE = re.compile(r"\bon[a-z]+\s*=", re.IGNORECASE)
+
+
 def _verify_html_envelope(card: ResearchCard, html: str) -> list[str]:
     violations: list[str] = []
     lower = html.lower()
@@ -359,7 +363,7 @@ def _verify_html_envelope(card: ResearchCard, html: str) -> list[str]:
         violations.append("missing_html_envelope")
     if str(XHS_CARD_WIDTH_PX) not in html or str(XHS_CARD_HEIGHT_PX) not in html:
         violations.append("missing_1080x1440_dimensions")
-    if any(token in lower for token in ("<script", "javascript:", "onerror=", "onload=")):
+    if any(token in lower for token in ("<script", "javascript:")) or _INLINE_EVENT_HANDLER_RE.search(html):
         violations.append("forbidden_script_or_event_handler")
     if "http://" in lower or "https://" in lower:
         violations.append("forbidden_external_url")

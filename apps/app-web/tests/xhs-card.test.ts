@@ -96,6 +96,10 @@ const scriptInjectedHtml = rankingHtml.replace("</body>", "<script>alert(1)</scr
 const scriptVerification = verifyCardHtmlDocument(scriptInjectedHtml, []);
 assert(!scriptVerification.ok && scriptVerification.violations.includes("forbidden_script_or_event_handler"), "verifier must reject script injection");
 
+const onclickInjectedHtml = rankingHtml.replace("</body>", '<div onmouseover="alert(1)">x</div></body>');
+const onclickVerification = verifyCardHtmlDocument(onclickInjectedHtml, []);
+assert(!onclickVerification.ok && onclickVerification.violations.includes("forbidden_script_or_event_handler"), "verifier must reject arbitrary on*= event handler attributes");
+
 // 3. Ranking JSON building
 const json = buildRankingCardJson(mockData);
 assert(json.schema_version === CARD_SCHEMA_VERSION, "schema_version must match");
