@@ -394,8 +394,13 @@ _WHITESPACE_RE = re.compile(r"\s+")
 
 def _normalize_html_text(html_doc: str) -> str:
     stripped = _HTML_TAG_RE.sub(" ", html_doc)
-    unescaped = html_lib.unescape(stripped)
-    return _WHITESPACE_RE.sub(" ", unescaped)
+    unescaped = stripped
+    for _ in range(3):
+        next_val = html_lib.unescape(unescaped)
+        if next_val == unescaped:
+            break
+        unescaped = next_val
+    return _WHITESPACE_RE.sub(" ", _HTML_TAG_RE.sub(" ", unescaped))
 
 
 def _contains_text(html_doc: str, raw: str, normalized_text: str | None = None) -> bool:
