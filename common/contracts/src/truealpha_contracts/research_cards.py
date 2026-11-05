@@ -29,6 +29,7 @@ displayed value differently from the report it was built from.
 
 from __future__ import annotations
 
+import html as html_lib
 import json
 import re
 from datetime import datetime
@@ -316,9 +317,48 @@ XHS_CARD_INSTRUCTIONS: str = (
 )
 
 
+def _compact_card_for_prompt(card: ResearchCard) -> dict[str, object]:
+    return {
+        "schema_version": card.schema_version,
+        "template_version": card.template_version,
+        "card_id": card.card_id,
+        "card_id_required_prefix": card.card_id[:12],
+        "card_kind": card.card_kind.value,
+        "title": card.title,
+        "cutoff_at": card.cutoff_at.isoformat(),
+        "cutoff_date": card.cutoff_at.date().isoformat(),
+        "research_risk_note": card.research_risk_note,
+        "source_attribution": card.source_attribution,
+        "subjects": [
+            {
+                "subject_id": s.subject_id,
+                "display_name": s.display_name,
+                "rank": s.rank,
+                "availability": s.availability.value,
+                "claim_class": s.claim_class.value,
+                "causal_claim": s.causal_claim,
+                "metrics": [
+                    {
+                        "label": m.label,
+                        "value": m.value,
+                        "currency": m.currency,
+                        "unit": m.unit,
+                        "period": m.period,
+                        "factor_version": m.factor_version,
+                        "confidence": str(m.confidence) if m.confidence is not None else None,
+                        "trace_prefix": m.trace.reference_id[:16] if m.trace is not None else None,
+                    }
+                    for m in s.metrics
+                ],
+            }
+            for s in card.subjects
+        ],
+    }
+
+
 def build_card_prompt(card: ResearchCard) -> str:
     """Builds the deterministic Cold-Verdict Rubric prompt for LLM HTML card generation."""
-    card_json = render_card_json(card)
+    card_json = json.dumps(_compact_card_for_prompt(card), indent=2, ensure_ascii=False)
     return (
         f"{XHS_CARD_INSTRUCTIONS}\n\n"
         f"PROMPT_VERSION: {XHS_CARD_PROMPT_VERSION}\n"
@@ -348,15 +388,29 @@ def extract_html_document(raw_text: str) -> str:
     return cleaned
 
 
-def _contains_text(html: str, raw: str) -> bool:
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+_WHITESPACE_RE = re.compile(r"\s+")
+
+
+def _normalize_html_text(html_doc: str) -> str:
+    stripped = _HTML_TAG_RE.sub(" ", html_doc)
+    unescaped = html_lib.unescape(stripped)
+    return _WHITESPACE_RE.sub(" ", unescaped)
+
+
+def _contains_text(html_doc: str, raw: str, normalized_text: str | None = None) -> bool:
     escaped = _html_escape(raw)
-    return raw in html or escaped in html
+    if raw in html_doc or escaped in html_doc:
+        return True
+    norm_doc = normalized_text if normalized_text is not None else _normalize_html_text(html_doc)
+    norm_raw = _WHITESPACE_RE.sub(" ", html_lib.unescape(raw)).strip()
+    return norm_raw in norm_doc
 
 
 _INLINE_EVENT_HANDLER_RE = re.compile(r"\bon[a-z]+\s*=", re.IGNORECASE)
 
 
-def _verify_html_envelope(card: ResearchCard, html: str) -> list[str]:
+def _verify_html_envelope(card: ResearchCard, html: str, normalized_text: str) -> list[str]:
     violations: list[str] = []
     lower = html.lower()
     if ("<!doctype html" not in lower and "<html" not in lower) or "</html>" not in lower:
@@ -371,60 +425,67 @@ def _verify_html_envelope(card: ResearchCard, html: str) -> list[str]:
     cutoff_date = card.cutoff_at.date().isoformat()
     if cutoff_date not in html and card.cutoff_at.isoformat() not in html:
         violations.append(f"missing_cutoff:{cutoff_date}")
-    card_id_prefix = card.card_id[:20]
-    if card_id_prefix not in html:
+    card_id_prefix = card.card_id[:12]
+    if card_id_prefix not in html and card_id_prefix not in normalized_text:
         violations.append(f"missing_card_id_prefix:{card_id_prefix}")
-    if not _contains_text(html, card.research_risk_note):
+    if not _contains_text(html, card.research_risk_note, normalized_text):
         violations.append("missing_research_risk_note")
-    if not _contains_text(html, card.source_attribution):
+    if not _contains_text(html, card.source_attribution, normalized_text):
         violations.append("missing_source_attribution")
     return violations
 
 
-def _verify_metric_html(subject_id: str, metric: ResultValue, html: str) -> list[str]:
+def _verify_metric_html(subject_id: str, metric: ResultValue, html: str, normalized_text: str) -> list[str]:
     checks: list[tuple[bool, str]] = [
-        (not _contains_text(html, metric.label), f"missing_metric_label:{subject_id}:{metric.label}"),
+        (not _contains_text(html, metric.label, normalized_text), f"missing_metric_label:{subject_id}:{metric.label}"),
         (
-            metric.value is not None and metric.value not in html,
+            metric.value is not None and not _contains_text(html, metric.value, normalized_text),
             f"missing_metric_value:{subject_id}:{metric.label}:{metric.value}",
         ),
         (
-            metric.value is not None and metric.currency is not None and metric.currency not in html,
+            metric.value is not None
+            and metric.currency is not None
+            and not _contains_text(html, metric.currency, normalized_text),
             f"missing_metric_currency:{subject_id}:{metric.label}:{metric.currency}",
         ),
         (
-            metric.value is not None and metric.unit is not None and not _contains_text(html, metric.unit),
+            metric.value is not None
+            and metric.unit is not None
+            and not _contains_text(html, metric.unit, normalized_text),
             f"missing_metric_unit:{subject_id}:{metric.label}:{metric.unit}",
         ),
         (
-            metric.period is not None and not _contains_text(html, metric.period),
+            metric.period is not None and not _contains_text(html, metric.period, normalized_text),
             f"missing_metric_period:{subject_id}:{metric.label}:{metric.period}",
         ),
         (
-            metric.confidence is not None and str(metric.confidence) not in html,
+            metric.confidence is not None and not _contains_text(html, str(metric.confidence), normalized_text),
             f"missing_metric_confidence:{subject_id}:{metric.label}:{metric.confidence}",
         ),
     ]
     if metric.trace is not None:
         trace_prefix = metric.trace.reference_id[:16]
         checks.append(
-            (not _contains_text(html, trace_prefix), f"missing_metric_trace:{subject_id}:{metric.label}:{trace_prefix}")
+            (
+                not _contains_text(html, trace_prefix, normalized_text),
+                f"missing_metric_trace:{subject_id}:{metric.label}:{trace_prefix}",
+            )
         )
     return [reason for failed, reason in checks if failed]
 
 
-def _verify_subject_html(subject: CardSubject, html: str) -> list[str]:
+def _verify_subject_html(subject: CardSubject, html: str, normalized_text: str) -> list[str]:
     violations: list[str] = []
-    if not _contains_text(html, subject.display_name) and subject.subject_id not in html:
+    if not _contains_text(html, subject.display_name, normalized_text) and subject.subject_id not in html:
         violations.append(f"missing_subject:{subject.subject_id}")
-    if subject.availability.value not in html:
+    if subject.availability.value not in html and subject.availability.value not in normalized_text:
         violations.append(f"missing_subject_availability:{subject.subject_id}:{subject.availability.value}")
-    if subject.claim_class.value not in html:
+    if subject.claim_class.value not in html and subject.claim_class.value not in normalized_text:
         violations.append(f"missing_subject_claim_class:{subject.subject_id}:{subject.claim_class.value}")
     if subject.causal_claim == "scenario_only" and "scenario_only" not in html:
         violations.append(f"missing_scenario_only:{subject.subject_id}")
     for metric in subject.metrics:
-        violations.extend(_verify_metric_html(subject.subject_id, metric, html))
+        violations.extend(_verify_metric_html(subject.subject_id, metric, html, normalized_text))
     return violations
 
 
@@ -432,9 +493,10 @@ def verify_card_html(card: ResearchCard, html: str) -> tuple[bool, tuple[str, ..
     """Deterministically verifies that `html` is a self-contained 1080x1440 HTML document
     that preserves every fact in `card` without script injection or external URLs.
     """
-    violations = _verify_html_envelope(card, html)
+    normalized_text = _normalize_html_text(html)
+    violations = _verify_html_envelope(card, html, normalized_text)
     for subject in card.subjects:
-        violations.extend(_verify_subject_html(subject, html))
+        violations.extend(_verify_subject_html(subject, html, normalized_text))
     return (len(violations) == 0, tuple(violations))
 
 

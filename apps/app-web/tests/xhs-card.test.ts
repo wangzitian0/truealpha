@@ -100,6 +100,10 @@ const onclickInjectedHtml = rankingHtml.replace("</body>", '<div onmouseover="al
 const onclickVerification = verifyCardHtmlDocument(onclickInjectedHtml, []);
 assert(!onclickVerification.ok && onclickVerification.violations.includes("forbidden_script_or_event_handler"), "verifier must reject arbitrary on*= event handler attributes");
 
+const entityEncodedHtml = rankingHtml.replace("Apple Inc.", "<strong>Apple</strong>&nbsp;Inc.");
+const entityEncodedVerification = verifyCardHtmlDocument(entityEncodedHtml, ["Apple Inc."]);
+assert(entityEncodedVerification.ok, "verifier must accept facts formatted with inline HTML tags and HTML entities");
+
 // 3. Ranking JSON building
 const json = buildRankingCardJson(mockData);
 assert(json.schema_version === CARD_SCHEMA_VERSION, "schema_version must match");
