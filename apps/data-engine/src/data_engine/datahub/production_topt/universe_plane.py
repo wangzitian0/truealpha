@@ -134,6 +134,24 @@ class ConstituentRow(TypedDict):
     last_sale_price: str | None
 
 
+def _select_openfigi_match(result: dict[str, Any]) -> tuple[str, str, str] | None:
+    """Pick the US equity mapping from an OpenFIGI result, zeroing out digit-leading placeholder tickers."""
+    candidates = [
+        item
+        for item in (result.get("data") or [])
+        if item.get("ticker") and (item.get("shareClassFIGI") or item.get("figi"))
+    ]
+    if not candidates:
+        return None
+    preferred = next((item for item in candidates if not str(item["ticker"]).strip()[:1].isdigit()), None)
+    chosen = preferred or candidates[0]
+    raw_ticker = str(chosen["ticker"]).strip()
+    ticker = "" if raw_ticker[:1].isdigit() else raw_ticker.replace("/", ".").upper()
+    figi = str(chosen.get("shareClassFIGI") or chosen["figi"]).lower()
+    name = str(chosen.get("name") or "").strip()
+    return ticker, figi, name
+
+
 def _resolve_nport_identifiers(
     connection: Connection[Any],
     jobs: list[tuple[str, str]],
@@ -149,7 +167,10 @@ def _resolve_nport_identifiers(
     batch_size = 100 if api_key else 10
     for start in range(0, len(jobs), batch_size):
         chunk = jobs[start : start + batch_size]
-        payload = [{"idType": id_type, "idValue": id_val, "exchCode": "US"} for id_type, id_val in chunk]
+        payload = [
+            {"idType": id_type, "idValue": id_val, "exchCode": "US", "includeUnlistedEquities": True}
+            for id_type, id_val in chunk
+        ]
         request = urllib.request.Request(
             "https://api.openfigi.com/v3/mapping", data=json.dumps(payload).encode(), headers=headers
         )
@@ -179,20 +200,22 @@ def _resolve_nport_identifiers(
             metadata={"request_jobs": payload},
         )
         for key, result in zip(chunk, json.loads(body)):
-            match = next(
-                (
-                    item
-                    for item in (result.get("data") or [])
-                    if item.get("ticker") and (item.get("shareClassFIGI") or item.get("figi"))
-                ),
-                None,
-            )
-            if match is not None:
-                ticker = str(match["ticker"]).strip().replace("/", ".").upper()
-                figi = str(match.get("shareClassFIGI") or match["figi"]).lower()
-                name = str(match.get("name") or "").strip()
-                resolved[key] = (ticker, figi, name)
+            matched = _select_openfigi_match(result)
+            if matched is not None:
+                resolved[key] = matched
     return resolved
+
+
+def _resolve_placeholder_ticker(h: Any, figi_name: str, title_tickers: dict[str, str]) -> str:
+    """Resolve an unlisted OpenFIGI placeholder ticker against SEC's normalized title index."""
+    from data_engine.sources.sec import normalize_company_title
+
+    for candidate in (h.name, figi_name):
+        if candidate:
+            matched = title_tickers.get(normalize_company_title(str(candidate)))
+            if matched:
+                return matched.replace("-", ".")
+    return ""
 
 
 def _aggregate_nport_holdings(
@@ -200,6 +223,7 @@ def _aggregate_nport_holdings(
     resolved_ids: dict[tuple[str, str], tuple[str, str, str]],
     *,
     etf: str,
+    title_tickers: dict[str, str] | None = None,
 ) -> dict[str, tuple[str, Decimal | None, str]]:
     """Collapse resolved N-PORT equity lines by ticker, summing weight across lines."""
     by_ticker: dict[str, tuple[str, Decimal | None, str]] = {}
@@ -211,6 +235,11 @@ def _aggregate_nport_holdings(
             unresolved_holdings.append(h.isin or str(h.cusip))
             continue
         ticker, figi, figi_name = mapped
+        if not ticker and title_tickers:
+            ticker = _resolve_placeholder_ticker(h, figi_name, title_tickers)
+        if not ticker:
+            unresolved_holdings.append(h.isin or str(h.cusip))
+            continue
         weight = None if h.pct_val is None else Decimal(str(h.pct_val))
         display_name = (h.name or figi_name or ticker).strip()
         if ticker in by_ticker:
@@ -245,6 +274,20 @@ def _ensure_ciks_for_tickers(
     missing_ciks = [ticker for ticker in tickers if ticker.replace(".", "-") not in cik_index]
     if missing_ciks:
         raise LookupError(f"unresolved identifiers for {etf}: {', '.join(sorted(missing_ciks))}")
+
+
+def _load_sec_nport_indexes(
+    http: Any, resolved_ids: dict[tuple[str, str], tuple[str, str, str]]
+) -> tuple[dict[str, int], dict[str, str]]:
+    """Load SEC ticker-to-CIK crosswalk and, when OpenFIGI returned a placeholder ticker, title-to-ticker index."""
+    from data_engine.sources import sec
+
+    cik_index = sec.ticker_cik_index(http) if http is not None else sec.ticker_cik_index()
+    if any(not ticker for ticker, _figi, _name in resolved_ids.values()):
+        title_tickers = sec.title_ticker_index(http) if http is not None else sec.title_ticker_index()
+    else:
+        title_tickers = {}
+    return cik_index, title_tickers
 
 
 def _refresh_nport_constituents(
@@ -282,7 +325,7 @@ def _refresh_nport_constituents(
         metadata={"cik": cik, "series_id": series_id, "ticker": source.nport_ticker},
     )
 
-    holdings = [h for h in all_holdings if h.asset_cat in (None, "EC") and (h.isin is not None or h.cusip is not None)]
+    holdings = [h for h in all_holdings if h.asset_cat == "EC" and (h.isin is not None or h.cusip is not None)]
     if not holdings:
         raise ValueError(f"{source.etf} N-PORT {accession} yielded 0 equity holdings")
 
@@ -290,8 +333,8 @@ def _refresh_nport_constituents(
         dict.fromkeys(("ID_ISIN", h.isin) if h.isin is not None else ("ID_CUSIP", str(h.cusip)) for h in holdings)
     )
     resolved_ids = _resolve_nport_identifiers(connection, job_keys, as_of=effective_as_of, api_key=openfigi_api_key)
-    cik_index = sec.ticker_cik_index(http) if http is not None else sec.ticker_cik_index()
-    by_ticker = _aggregate_nport_holdings(holdings, resolved_ids, etf=source.etf)
+    cik_index, title_tickers = _load_sec_nport_indexes(http, resolved_ids)
+    by_ticker = _aggregate_nport_holdings(holdings, resolved_ids, etf=source.etf, title_tickers=title_tickers)
     _ensure_ciks_for_tickers(list(by_ticker), cik_index, etf=source.etf, user_agent=_settings.sec_user_agent)
 
     for ticker in sorted(by_ticker):

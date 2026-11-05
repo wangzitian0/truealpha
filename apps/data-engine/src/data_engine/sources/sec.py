@@ -6,6 +6,7 @@ Phase -1 samples are meant to surface.
 """
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,28 @@ from data_engine.sources.accept_rules import accept_rule
 TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 COMPANY_FACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik:010d}.json"
 SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik:010d}.json"
+_CORP_SUFFIXES = {
+    "INC",
+    "CORP",
+    "CORPORATION",
+    "CO",
+    "COMPANY",
+    "HOLDINGS",
+    "HOLDING",
+    "LTD",
+    "PLC",
+    "NEW",
+    "THE",
+    "DE",
+    "MD",
+}
+
+
+def normalize_company_title(title: str) -> str:
+    """Normalize an issuer name for crosswalk matching against SEC's company_tickers."""
+    cleaned = re.sub(r"/[A-Z]+/", " ", title.upper())
+    tokens = [tok for tok in re.split(r"[^A-Z0-9]+", cleaned) if tok and tok not in _CORP_SUFFIXES]
+    return "".join(tokens)
 
 
 def company_facts_key(cik: int) -> FetchKey:
@@ -67,6 +90,31 @@ def ticker_cik_index(http: httpx.Client | None = None, *, via: gateway.SourceGat
 
     rows = json.loads(gateway.fetch_once(company_tickers_key(), fetch).decode())
     return {str(row["ticker"]).upper(): int(row["cik_str"]) for row in rows.values()}
+
+
+def title_ticker_index(http: httpx.Client | None = None, *, via: gateway.SourceGateway | None = None) -> dict[str, str]:
+    """Map normalized SEC company_tickers titles to their primary equity ticker (#1441)."""
+
+    def fetch(identity: FetchKey) -> bytes:
+        def request() -> bytes:
+            if http is None:
+                with client() as c:
+                    return _get(c, "company_tickers", TICKERS_URL, "sec.title_ticker_index", identity)
+            return _get(http, "company_tickers", TICKERS_URL, "sec.title_ticker_index", identity)
+
+        return request() if via is None else via.call("sec", "company_tickers", request, identity=identity)
+
+    rows = json.loads(gateway.fetch_once(company_tickers_key(), fetch).decode())
+    index: dict[str, str] = {}
+    for row in rows.values():
+        ticker = str(row["ticker"]).upper()
+        norm = normalize_company_title(str(row.get("title") or ""))
+        if not norm:
+            continue
+        existing = index.get(norm)
+        if existing is None or ("-" in existing and "-" not in ticker):
+            index[norm] = ticker
+    return index
 
 
 def _get(http: httpx.Client, endpoint: str, url: str, caller: str, identity: FetchKey) -> bytes:
