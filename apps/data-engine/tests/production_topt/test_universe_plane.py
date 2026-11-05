@@ -1257,6 +1257,11 @@ def test_sp500_universe_builds_from_ivv_nport_with_filing_knowable_at(in_memory_
         "ticker_cik_index",
         lambda *_a, **_k: {"AAPL": 320193, "JPM": 19617, "BRK-B": 1067983},
     )
+    monkeypatch.setattr(
+        sec,
+        "ticker_mic_index",
+        lambda *_a, **_k: {"AAPL": "XNAS", "JPM": "XNYS", "BRK-B": "XNYS", "BRK.B": "XNYS"},
+    )
 
     fetches: list[tuple[DataSource, str, datetime | None]] = []
 
@@ -1284,9 +1289,13 @@ def test_sp500_universe_builds_from_ivv_nport_with_filing_knowable_at(in_memory_
         def fetchall(self) -> list[tuple]:
             return self._rows
 
+        def fetchone(self) -> tuple | None:
+            return self._rows[0] if self._rows else None
+
     class _FakeConn:
         def __init__(self) -> None:
             self.constituents: list[tuple] = []
+            self.aliases: list[tuple[str, str]] = []
 
         def transaction(self):
             import contextlib
@@ -1303,6 +1312,13 @@ def test_sp500_universe_builds_from_ivv_nport_with_filing_knowable_at(in_memory_
             if "from staging.etf_constituent_facts where etf_symbol = 'qqq'" in norm:
                 return _FakeCursor([("AAPL",)])
             if "from staging.entity_aliases alias" in norm:
+                return _FakeCursor([(val,) for scheme, val in self.aliases if scheme == "mic-ticker"])
+            if "select entity_id from staging.entity_aliases" in norm:
+                return _FakeCursor([])
+            if "select staging.entity_mint(" in norm:
+                return _FakeCursor([(f"uuid-{params[0]}",)])
+            if norm.startswith("insert into staging.entity_aliases"):
+                self.aliases.append((str(params[1]), str(params[2])))
                 return _FakeCursor([])
             raise AssertionError(f"unexpected SQL: {sql}")
 
@@ -1414,3 +1430,119 @@ def test_nport_unlisted_openfigi_placeholder_ticker_falls_back_to_sec_company_ti
         "XOM": ("EXXON MOBIL CORP", Decimal("1.15"), "bbg001s69v32"),
         "OKE": ("ONEOK INC", Decimal("0.42"), "bbg001s5twk1"),
     }
+
+
+def test_sec_ticker_mic_index_and_seed_listing_mic_aliases_resolve_multi_exchange_constituents(
+    corpus_rows, monkeypatch
+) -> None:
+    """#1418: SEC company_tickers_exchange.json maps NYSE/Nasdaq/CBOE tickers to XNYS/XNAS/BATS and
+    _seed_sec_listing_mic_aliases writes idempotent mic-ticker aliases so build_denominator resolves them."""
+    import contextlib
+    import json as _json
+
+    from data_engine.datahub.production_topt import universe_plane as up
+    from data_engine.sources import gateway, sec
+
+    exchange_payload = _json.dumps(
+        {
+            "fields": ["cik", "name", "ticker", "exchange"],
+            "data": [
+                [30231, "EXXON MOBIL CORP", "ZQXOM", "NYSE"],
+                [1039684, "NASDAQ TEST CO", "ZQNSD", "Nasdaq"],
+                [1234567, "CBOE TEST CO", "ZQCBO", "CBOE"],
+                [7654321, "SHARE CLASS CO", "ZQBRK-B", "NYSE"],
+                [9999999, "NULL EXCHANGE CO", "ZQNUL", None],
+            ],
+        }
+    ).encode()
+    monkeypatch.setattr(gateway, "fetch_once", lambda _key, _fetch: exchange_payload)
+
+    mic_map = sec.ticker_mic_index()
+    assert mic_map == {
+        "ZQXOM": "XNYS",
+        "ZQNSD": "XNAS",
+        "ZQCBO": "BATS",
+        "ZQBRK-B": "XNYS",
+        "ZQBRK.B": "XNYS",
+    }
+
+    class _FakeCursor:
+        def __init__(self, rows: list[tuple]) -> None:
+            self._rows = rows
+
+        def fetchall(self) -> list[tuple]:
+            return self._rows
+
+        def fetchone(self) -> tuple | None:
+            return self._rows[0] if self._rows else None
+
+    class _FakeConn:
+        def __init__(self) -> None:
+            self.constituents = [
+                ("ZQBRK.B", 7654321, "bbg0zqbrk001"),
+                ("ZQCBO", 1234567, "bbg0zqcbo001"),
+                ("ZQNSD", 1039684, "bbg0zqnsd001"),
+                ("ZQNUL", 9999999, "bbg0zqnul001"),
+                ("ZQXOM", 30231, "bbg0zqxom001"),
+            ]
+            self.aliases: list[tuple[str, str]] = []
+            self.minted_legacy: set[str] = set()
+
+        def transaction(self):
+            return contextlib.nullcontext()
+
+        def execute(self, sql: str, params: tuple = ()):
+            norm = " ".join(sql.split()).lower()
+            if "select ticker, cik, figi from staging.etf_constituent_facts" in norm:
+                return _FakeCursor(self.constituents)
+            if "from staging.etf_constituent_facts where etf_symbol = 'qqq'" in norm:
+                return _FakeCursor([])
+            if "from staging.entity_aliases alias" in norm:
+                return _FakeCursor([(val,) for scheme, val in self.aliases if scheme == "mic-ticker"])
+            if "select entity_id from staging.entity_aliases" in norm:
+                legacy_val = str(params[0])
+                if any(s == "legacy-id" and v == legacy_val for s, v in self.aliases):
+                    return _FakeCursor([(f"uuid-{legacy_val}",)])
+                return _FakeCursor([])
+            if "select staging.entity_mint(" in norm:
+                legacy_val = str(params[0])
+                assert legacy_val not in self.minted_legacy, f"minted twice: {legacy_val}"
+                self.minted_legacy.add(legacy_val)
+                return _FakeCursor([(f"uuid-{legacy_val}",)])
+            if norm.startswith("insert into staging.entity_aliases"):
+                pair = (str(params[1]), str(params[2]))
+                if pair not in self.aliases:
+                    self.aliases.append(pair)
+                return _FakeCursor([])
+            raise AssertionError(f"unexpected SQL: {sql}")
+
+    conn = _FakeConn()
+    tickers = ["ZQXOM", "ZQNSD", "ZQCBO", "ZQBRK.B", "ZQNUL"]
+    filing_dt = datetime(2026, 8, 25, tzinfo=UTC)
+    up._seed_sec_listing_mic_aliases(
+        conn,  # type: ignore[arg-type]
+        tickers,
+        mic_index=mic_map,
+        valid_from=date(2026, 6, 30),
+        transaction_time=filing_dt,
+    )
+    # Calling a second time is idempotent and does not duplicate aliases or re-mint
+    up._seed_sec_listing_mic_aliases(
+        conn,  # type: ignore[arg-type]
+        tickers,
+        mic_index=mic_map,
+        valid_from=date(2026, 6, 30),
+        transaction_time=filing_dt,
+    )
+    assert len(conn.minted_legacy) == 4
+
+    denominator = build_denominator(conn, UNIVERSE_SOURCES["sp500"], report_date=date(2026, 6, 30))  # type: ignore[arg-type]
+    assert {row[3]: row[2] for row in denominator["instruments"]} == {
+        "ZQBRK.B": "listing:xnys:zqbrk.b",
+        "ZQCBO": "listing:bats:zqcbo",
+        "ZQNSD": "listing:xnas:zqnsd",
+        "ZQXOM": "listing:xnys:zqxom",
+    }
+    assert denominator["excluded"] == [
+        {"ticker": "ZQNUL", "issuer_id": "issuer:cik:0009999999", "reason": _UNKNOWN_EXCHANGE}
+    ]

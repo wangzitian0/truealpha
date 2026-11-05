@@ -28,7 +28,7 @@ import json
 import logging
 import re
 import urllib.request
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -290,6 +290,73 @@ def _load_sec_nport_indexes(
     return cik_index, title_tickers
 
 
+def _seed_sec_listing_mic_aliases(
+    connection: Connection[Any],
+    tickers: Sequence[str],
+    *,
+    mic_index: Mapping[str, str],
+    valid_from: date,
+    transaction_time: datetime,
+) -> None:
+    """Seed missing `mic-ticker` aliases in `staging.entity_aliases` from SEC's exchange crosswalk (#1418)."""
+    if not tickers or not mic_index:
+        return
+    wanted = sorted({ticker.upper() for ticker in tickers})
+    with connection.transaction():
+        alias_rows = connection.execute(
+            """
+            select alias.value
+            from staging.entity_aliases alias
+            where alias.scheme = 'mic-ticker'
+              and split_part(upper(alias.value), ':', 2) = any(%s)
+              and alias.valid_from <= %s
+              and coalesce(%s < staging.entity_alias_valid_to(alias.alias_id, %s), true)
+              and alias.transaction_time <= %s
+            """,
+            (wanted, valid_from, valid_from, transaction_time, transaction_time),
+        ).fetchall()
+    existing_tickers = {str(val).partition(":")[2].upper() for (val,) in alias_rows if ":" in str(val)}
+    for ticker in wanted:
+        if ticker in existing_tickers:
+            continue
+        mic = (mic_index.get(ticker) or mic_index.get(ticker.replace(".", "-")) or "").strip().upper()
+        if not mic:
+            continue
+        mic_ticker = f"{mic}:{ticker}"
+        legacy_id = f"listing:{mic.lower()}:{ticker.lower()}"
+        with connection.transaction():
+            existing_entity = connection.execute(
+                """
+                select entity_id from staging.entity_aliases
+                where scheme = 'legacy-id' and value = %s
+                limit 1
+                """,
+                (legacy_id,),
+            ).fetchone()
+            if existing_entity and existing_entity[0]:
+                entity_id = existing_entity[0]
+            else:
+                minted = connection.execute(
+                    "select staging.entity_mint('listing', 'legacy-id', %s, 'sec.company_tickers_exchange')",
+                    (legacy_id,),
+                ).fetchone()
+                if not minted or not minted[0]:
+                    continue
+                entity_id = minted[0]
+            for scheme, value in (("legacy-id", legacy_id), ("mic-ticker", mic_ticker)):
+                connection.execute(
+                    """
+                    insert into staging.entity_aliases
+                        (entity_id, scheme, value, valid_from, valid_to, transaction_time, source, raw_ref,
+                         method, confidence, mapping_version)
+                    values (%s, %s, %s, '-infinity', null, %s, %s, 'sec:company-tickers-exchange',
+                            'asserted', %s, 'sec-tickers-exchange:v1')
+                    on conflict do nothing
+                    """,
+                    (entity_id, scheme, value, transaction_time, DataSource.SEC.value, Decimal(1)),
+                )
+
+
 def _refresh_nport_constituents(
     connection: Connection[Any],
     source: UniverseSource,
@@ -358,6 +425,15 @@ def _refresh_nport_constituents(
                 figi,
                 filing_dt,
             ),
+        )
+    if source.mic is None:
+        mic_index = sec.ticker_mic_index(http) if http is not None else sec.ticker_mic_index()
+        _seed_sec_listing_mic_aliases(
+            connection,
+            sorted(by_ticker),
+            mic_index=mic_index,
+            valid_from=effective_as_of,
+            transaction_time=filing_dt,
         )
     return len(by_ticker)
 

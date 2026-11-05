@@ -18,8 +18,10 @@ from data_engine.sources import gateway
 from data_engine.sources.accept_rules import accept_rule
 
 TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
+TICKERS_EXCHANGE_URL = "https://www.sec.gov/files/company_tickers_exchange.json"
 COMPANY_FACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik:010d}.json"
 SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik:010d}.json"
+EXCHANGE_MIC_MAP: dict[str, str] = {"NYSE": "XNYS", "NASDAQ": "XNAS", "CBOE": "BATS"}
 _CORP_SUFFIXES = {
     "INC",
     "CORP",
@@ -60,6 +62,11 @@ def submissions_key(cik: int, *, overflow: str | None = None) -> FetchKey:
 def company_tickers_key() -> FetchKey:
     """The one key of SEC's ticker-to-CIK crosswalk file."""
     return FetchKey("sec", "company_tickers", "sec:company-tickers", gateway.utc_day())
+
+
+def company_tickers_exchange_key() -> FetchKey:
+    """The one key of SEC's ticker-to-exchange crosswalk file."""
+    return FetchKey("sec", "company_tickers_exchange", "sec:company-tickers-exchange", gateway.utc_day())
 
 
 def client() -> httpx.Client:
@@ -114,6 +121,32 @@ def title_ticker_index(http: httpx.Client | None = None, *, via: gateway.SourceG
         existing = index.get(norm)
         if existing is None or ("-" in existing and "-" not in ticker):
             index[norm] = ticker
+    return index
+
+
+def ticker_mic_index(http: httpx.Client | None = None, *, via: gateway.SourceGateway | None = None) -> dict[str, str]:
+    """Map SEC company_tickers_exchange tickers to their primary listing MIC (`XNYS`, `XNAS`, `BATS`) (#1418)."""
+
+    def fetch(identity: FetchKey) -> bytes:
+        def request() -> bytes:
+            if http is None:
+                with client() as c:
+                    return _get(c, "company_tickers_exchange", TICKERS_EXCHANGE_URL, "sec.ticker_mic_index", identity)
+            return _get(http, "company_tickers_exchange", TICKERS_EXCHANGE_URL, "sec.ticker_mic_index", identity)
+
+        return request() if via is None else via.call("sec", "company_tickers_exchange", request, identity=identity)
+
+    payload = json.loads(gateway.fetch_once(company_tickers_exchange_key(), fetch).decode())
+    index: dict[str, str] = {}
+    for row in payload.get("data") or []:
+        if not isinstance(row, list) or len(row) < 4:
+            continue
+        ticker_upper = str(row[2] or "").strip().upper()
+        mic = EXCHANGE_MIC_MAP.get(str(row[3] or "").strip().upper())
+        if not ticker_upper or not mic:
+            continue
+        index[ticker_upper] = mic
+        index[ticker_upper.replace("-", ".")] = mic
     return index
 
 

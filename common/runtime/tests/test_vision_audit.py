@@ -280,3 +280,75 @@ def test_vision_audit_resolves_health_url_via_infra2_sdk_routing(monkeypatch: py
         "https://truealpha-production.truealpha.club/api/health",
         "https://truealpha-staging.truealpha.club/api/health",
     ]
+
+
+def test_gate_1_verifies_from_live_confidence_report_verdicts_when_health_report_has_no_oracle_outcomes_attr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1419 & #54: Live HealthReport from read_report has no oracle_outcomes attribute; Gate 1 verifies
+    via scheduled datahub_confidence_report@<universe> verdicts and fails closed when missing or non-green."""
+    from truealpha_tools.nightly_verdicts import HealthReport
+
+    governed_pointers = [
+        {"universe_id": "universe:topt-us-2026-03-31", "freshness": "fresh", "availability": "available"},
+        {"universe_id": "universe:qqq-us-2026-03-31", "freshness": "fresh", "availability": "available"},
+    ]
+    green_verdicts = [
+        _FakeVerdict("release_fetch_proof", True, "capture ok"),
+        _FakeVerdict("report_surface_proof", True, "5/5 surfaces ok"),
+        _FakeVerdict("output_invariants", True, "6 held, 0 empty"),
+        _FakeVerdict("datahub_confidence_report@topt", True, "report persisted for universe:topt-us-2026-03-31"),
+        _FakeVerdict(
+            "datahub_confidence_report@universe-list:qqq",
+            True,
+            "report persisted for universe:qqq-us-2026-03-31",
+        ),
+        _FakeVerdict("question_coverage@universe-list:qqq", True, "coverage ok"),
+        _FakeVerdict("question_coverage@topt", True, "coverage ok"),
+        _FakeVerdict("nightly_backtest", True, "backtest executed ok"),
+        _FakeVerdict("market_data_freshness", True, "freshness within 72h"),
+    ]
+    live_report = HealthReport(
+        verdicts=green_verdicts,  # type: ignore[arg-type]
+        release="v0.1.2",
+        governed_pointers=governed_pointers,
+    )
+    assert not hasattr(live_report, "oracle_outcomes")
+    monkeypatch.setattr(_module, "read_report", lambda _url, _http_get: live_report)
+
+    report = audit_vision(env="production")
+    gate_1 = next(g for g in report.gates if g.gate_id == "#29")
+    gate_4 = next(g for g in report.gates if g.gate_id == "#54")
+    assert gate_1.verified is True and gate_1.status == "VERIFIED"
+    assert "datahub_confidence_report@topt: report persisted" in gate_1.evidence
+    assert "datahub_confidence_report@universe-list:qqq: report persisted" in gate_1.evidence
+    assert gate_4.verified is True and gate_4.status == "VERIFIED"
+    assert report.all_passed is True
+
+    # Missing or non-green datahub_confidence_report@topt fails Gate 1 with 'no comparator'
+    for bad_verdicts in (
+        [v for v in green_verdicts if v.check != "datahub_confidence_report@topt"],
+        [
+            _FakeVerdict("datahub_confidence_report@topt", False, "0 rows compared")
+            if v.check == "datahub_confidence_report@topt"
+            else v
+            for v in green_verdicts
+        ],
+        [
+            _FakeVerdict("datahub_confidence_report@topt", None, "no comparator")
+            if v.check == "datahub_confidence_report@topt"
+            else v
+            for v in green_verdicts
+        ],
+    ):
+        bad_report = HealthReport(
+            verdicts=bad_verdicts,  # type: ignore[arg-type]
+            release="v0.1.2",
+            governed_pointers=governed_pointers,
+        )
+        monkeypatch.setattr(_module, "read_report", lambda _url, _http_get, r=bad_report: r)
+        failed = audit_vision(env="staging")
+        g1 = next(g for g in failed.gates if g.gate_id == "#29")
+        assert g1.verified is False and g1.status == "OPEN"
+        assert "no comparator" in g1.evidence
+        assert failed.all_passed is False
