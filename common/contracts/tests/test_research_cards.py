@@ -171,11 +171,16 @@ def test_verify_card_html_rejects_fact_mutation_or_script_injection() -> None:
     assert not ok_val
     assert any("missing_metric_value" in v for v in violations_val)
 
-    # Injecting a script or external URL must fail verification
+    # Injecting a script, inline event handler, or external URL must fail verification
     script_html = valid_html.replace("</body>", "<script>alert(1)</script></body>")
     ok_scr, violations_scr = verify_card_html(card, script_html)
     assert not ok_scr
     assert "forbidden_script_or_event_handler" in violations_scr
+
+    onclick_html = valid_html.replace("</body>", '<div onclick="alert(1)">x</div></body>')
+    ok_evt, violations_evt = verify_card_html(card, onclick_html)
+    assert not ok_evt
+    assert "forbidden_script_or_event_handler" in violations_evt
 
     external_html = valid_html.replace("</body>", '<link rel="stylesheet" href="https://evil.example/a.css"></body>')
     ok_ext, violations_ext = verify_card_html(card, external_html)

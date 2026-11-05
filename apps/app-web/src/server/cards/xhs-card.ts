@@ -182,6 +182,8 @@ export function buildEntityCardJson(data: EntityCardData) {
   };
 }
 
+const INLINE_EVENT_HANDLER_RE = /\bon[a-z]+\s*=/i;
+
 /**
  * Deterministic fact-preservation verifier for 1080x1440 Xiaohongshu HTML cards (#44).
  * Ensures the rendered HTML is self-contained, carries exact 1080x1440 dimensions,
@@ -202,8 +204,7 @@ export function verifyCardHtmlDocument(
   if (
     lower.includes("<script") ||
     lower.includes("javascript:") ||
-    lower.includes("onerror=") ||
-    lower.includes("onload=")
+    INLINE_EVENT_HANDLER_RE.test(html)
   ) {
     violations.push("forbidden_script_or_event_handler");
   }
