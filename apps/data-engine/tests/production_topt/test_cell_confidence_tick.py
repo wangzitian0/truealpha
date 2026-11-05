@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from datetime import date
+from datetime import UTC, date
 from decimal import Decimal
 
 import psycopg
@@ -57,6 +57,115 @@ def test_every_registered_source_declares_a_reliability_prior_in_order() -> None
         > SOURCE_RELIABILITY_PRIORS["yahoo"]
         > SOURCE_RELIABILITY_PRIORS["10k-extraction"]
     )
+
+
+def test_snapshot_member_financial_cell_confidence_bounds_by_deciding_keys_only() -> None:
+    """#1517 / #36: non-deciding optional fields (such as financial_assets, financial_returns, or net_income)
+    do not drag financial_cell_confidence down when input_age.deciding is present."""
+    from datetime import datetime, timedelta
+
+    from data_engine.datahub.production_topt.materialization import InputAgeLimit, _ObservationRow
+    from factors.production_topt import MetricFreshness
+
+    cutoff = datetime(2026, 4, 2, 12, 0, tzinfo=UTC)
+    obs_id = f"normalized-observation:{'1' * 64}"
+    obs_mem = f"normalized-observation:{'2' * 64}"
+    obs_fin = f"normalized-observation:{'3' * 64}"
+    obs_mkt = f"normalized-observation:{'4' * 64}"
+    by_type = {
+        "listing-identity": _ObservationRow(
+            obligation_id="ob:id",
+            listing_id="listing:xnas:aapl",
+            semantic_type="listing-identity",
+            observation_id=obs_id,
+            freshness=MetricFreshness.FRESH,
+            knowable_at=cutoff,
+            payload={
+                "issuer_id": "issuer:cik:0000320193",
+                "instrument_id": "instrument:xnas:aapl",
+                "listing_id": "listing:xnas:aapl",
+                "ticker": "AAPL",
+            },
+        ),
+        "universe-membership": _ObservationRow(
+            obligation_id="ob:mem",
+            listing_id="listing:xnas:aapl",
+            semantic_type="universe-membership",
+            observation_id=obs_mem,
+            freshness=MetricFreshness.FRESH,
+            knowable_at=cutoff,
+            payload={
+                "issuer_id": "issuer:cik:0000320193",
+                "instrument_id": "instrument:xnas:aapl",
+                "listing_id": "listing:xnas:aapl",
+                "ticker": "AAPL",
+            },
+        ),
+        "financial-fact": _ObservationRow(
+            obligation_id="ob:fin",
+            listing_id="listing:xnas:aapl",
+            semantic_type="financial-fact",
+            observation_id=obs_fin,
+            freshness=MetricFreshness.FRESH,
+            knowable_at=cutoff,
+            payload={
+                "issuer_id": "issuer:cik:0000320193",
+                "instrument_id": "instrument:xnas:aapl",
+                "listing_id": "listing:xnas:aapl",
+                "operating_branch": "non_financial",
+                "currency": "USD",
+                "gross_profit": "180000000000",
+                "total_assets": "350000000000",
+                "headcount": "164000",
+                "revenue": "390000000000",
+                "shares_outstanding": "15000000000",
+                "pre_provision_profit": None,
+                "financial_assets": "50000000000",
+                "financial_returns": "2000000000",
+            },
+        ),
+        "market-price": _ObservationRow(
+            obligation_id="ob:mkt",
+            listing_id="listing:xnas:aapl",
+            semantic_type="market-price",
+            observation_id=obs_mkt,
+            freshness=MetricFreshness.FRESH,
+            knowable_at=cutoff,
+            payload={
+                "issuer_id": "issuer:cik:0000320193",
+                "instrument_id": "instrument:xnas:aapl",
+                "listing_id": "listing:xnas:aapl",
+                "currency": "USD",
+                "close": "220.00",
+            },
+        ),
+    }
+    input_age = InputAgeLimit(
+        cutoff=cutoff,
+        maximum_age=timedelta(days=550),
+        deciding={
+            "non_financial": frozenset({"gross_profit", "total_assets", "revenue", "shares_outstanding", "headcount"})
+        },
+    )
+    listing_confidences = {
+        "gross_profit": Decimal("0.85"),
+        "total_assets": Decimal("0.82"),
+        "revenue": Decimal("0.88"),
+        "shares_outstanding": Decimal("0.625807"),
+        "headcount": Decimal("0.55"),
+        "financial_assets": Decimal("0.36"),
+        "financial_returns": Decimal("0.36"),
+        "close": Decimal("0.91"),
+    }
+    member = PostgresToptCoreRepository._snapshot_member(
+        "listing:xnas:aapl",
+        by_type,
+        histories=(),
+        input_age=input_age,
+        listing_confidences=listing_confidences,
+    )
+    fin_cell = next(c for c in member.cell_inputs if c.input_id == obs_fin)
+    assert fin_cell.confidence == Decimal("0.625807")
 
 
 def test_capture_leaves_observation_confidence_null_and_persists_cell_confidence_to_mart(
