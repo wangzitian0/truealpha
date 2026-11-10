@@ -203,6 +203,26 @@ def _load_financial_payloads_by_listing(
     return result
 
 
+def _snapshot_leaf_confidence(factor_input: ToptCoreSnapshotInput) -> Decimal:
+    leaf_confs = [
+        m.confidence
+        for m in (
+            factor_input.gross_profit,
+            factor_input.total_assets,
+            factor_input.headcount,
+            factor_input.revenue,
+            factor_input.pre_provision_profit,
+            *factor_input.inputs.values(),
+        )
+        if m is not None and m.availability is MetricAvailability.AVAILABLE and m.value is not None
+    ]
+    return (
+        min(leaf_confs)
+        if leaf_confs
+        else min((cell.confidence for cell in factor_input.cell_inputs), default=Decimal("0"))
+    )
+
+
 def materialize_metric_node_values(
     connection: Connection[Any],
     *,
@@ -232,7 +252,7 @@ def materialize_metric_node_values(
             continue
         issuer_class = IssuerClass(factor_input.operating_branch.value)
         freshness = _snapshot_freshness(factor_input)
-        base_confidence = min(cell.confidence for cell in factor_input.cell_inputs)
+        base_confidence = _snapshot_leaf_confidence(factor_input)
         financial_payload = financial_by_listing.get(factor_input.listing_id, {})
         periods = periods_by_listing.get(factor_input.listing_id, (None, None, None))
         source_evidence = evidence_by_listing.get(factor_input.listing_id, InputEvidenceStatus.DEGRADED)
@@ -295,7 +315,7 @@ def _materialize_extra_expressions(
             continue
         issuer_class = IssuerClass(factor_input.operating_branch.value)
         freshness = _snapshot_freshness(factor_input)
-        base_conf = float(min(cell.confidence for cell in factor_input.cell_inputs))
+        base_conf = float(_snapshot_leaf_confidence(factor_input))
         financial_payload = financial_by_listing.get(factor_input.listing_id, {})
         periods = periods_by_listing.get(factor_input.listing_id, (None, None, None))
         period_str = (periods[0] or periods[1] or factor_input.cutoff.date()).isoformat()

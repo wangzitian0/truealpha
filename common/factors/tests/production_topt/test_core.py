@@ -268,6 +268,22 @@ def test_topt_gppe_confidence_ignores_unconsumed_shares_outstanding_and_market_p
     )
     assert core_with_high_cells.confidence == Decimal("0.3")
 
+    # Under PRICE_TO_GROSS_PROFIT, a low revenue confidence does not drag ToptCoreResult.confidence (#1624).
+    high_mv_component = _component(price="40", shares="10000000")
+    low_rev_snapshot = high_cells_snapshot.model_copy(
+        update={
+            "market_value_components": (high_mv_component,),
+            "revenue": _metric("revenue", "100000000", confidence="0.35"),
+        }
+    )
+    core_low_rev = compute_topt_core(
+        low_rev_snapshot,
+        gppe_result,
+        invocation_id=f"topt-core-invocation:{'c' * 64}",
+        definition=definition,
+    )
+    assert core_low_rev.confidence == Decimal("0.85")
+
 
 def test_current_ps_values_company_total_shares_once_per_issuer() -> None:
     # #705: every listing's dei share count is the COMPANY total, so identical

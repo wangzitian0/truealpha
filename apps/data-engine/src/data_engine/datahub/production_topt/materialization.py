@@ -1032,7 +1032,9 @@ class PostgresToptCoreRepository:
         xbrl_confs = [
             cell.confidence
             for key, cell in cells.items()
-            if key != "headcount" and (deciding_keys is None or key in deciding_keys)
+            if key != "headcount"
+            and not (financial.operating_branch is OperatingBranch.FINANCIAL and key == "revenue")
+            and (deciding_keys is None or key in deciding_keys)
         ]
         cell_confs = (xbrl_confs or [cell.confidence for cell in cells.values()]) + (
             [financial_row.confidence] if financial_row.confidence is not None else []

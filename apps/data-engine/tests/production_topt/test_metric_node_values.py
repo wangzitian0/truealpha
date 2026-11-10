@@ -210,6 +210,15 @@ def test_f2_polars_expr_factor_iteration_materializes_node_values_without_ddl_or
     factor_2025 = _sample_factor_input().model_copy(
         update={
             "inputs": {"net_income": ni_2025},
+            "cell_inputs": (
+                *_sample_factor_input().cell_inputs[:-1],
+                ToptCellQualityInput(
+                    input_id=_sample_factor_input().observation_ids[-1],
+                    confidence=Decimal("0.36"),
+                    knowable_at=KNOWN,
+                    freshness=MetricFreshness.FRESH,
+                ),
+            ),
         }
     )
 
@@ -234,6 +243,7 @@ def test_f2_polars_expr_factor_iteration_materializes_node_values_without_ddl_or
     assert count == 20
     by_period_and_key = {(row[4], row[3]): row for row in conn.inserted_rows}
     assert ("2025-12-31", "gppe_uniform_charge_v0") in by_period_and_key
+    assert by_period_and_key[("2025-12-31", "gppe_uniform_charge_v0")][12] == Decimal("0.92")
     assert ("2025-12-31", "gppe_operating_financial_v1") in by_period_and_key
     raw_row = by_period_and_key[("2025-12-31", "gppe_raw")]
     assert raw_row[2] == node_id_for("gppe_raw")

@@ -1132,7 +1132,6 @@ def _dedupe_origin_mass_rows(
 _OUTCOME_MASS_DELTAS: dict[tuple[str, str], tuple[Decimal, Decimal]] = {
     (FILING_KIND, AGREE): (Decimal("1"), Decimal("0")),
     (FILING_KIND, DISAGREE): (Decimal("0"), Decimal("1")),
-    (INDEPENDENT_KIND, DISAGREE): (Decimal("0"), Decimal("1")),
 }
 
 
@@ -1165,7 +1164,7 @@ def oracle_outcome_mass_by_origin(
 
     Deduplicates per (oracle_kind, observation_id, subject_id, field) at or before `cutoff`:
     - `filing` `agree` -> +1 success; `filing` `disagree` -> +1 fail.
-    - `independent_parse` `disagree` -> +1 fail; `independent_parse` `agree` -> +0 success (init.md p.342).
+    - `independent_parse` -> 0 to global origin mass (`oracle_cell_agreement` grades it per cell).
     - `operator` / `gross_profit_per_employee` -> 0 to input origin mass.
     """
     totals: dict[str, tuple[Decimal, Decimal]] = {}

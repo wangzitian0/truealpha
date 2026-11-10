@@ -564,6 +564,7 @@ def invoke(
     """
     if not is_configured():
         raise ModelNotConfigured(f"{settings.llm_api_key_env} is not set; no provider seated (#70 scope 1)")
+    cik = cik if cik > 0 else ((int(hashlib.sha256(accession.encode()).hexdigest()[:8], 16) & 0x7FFFFFFF) or 1)
     model = settings.llm_model
     decoding = model_decoding.for_environment(gateway.capacity_environment())
     request_body = build_chat_request(task, user_content, model=model, decoding=decoding)
@@ -1595,7 +1596,7 @@ def generate_xhs_card_html(
         invocation = invoke(
             connection,
             task=XHS_CARD_TASK,
-            cik=0,
+            cik=(int(hashlib.sha256(card.card_id.encode()).hexdigest()[:8], 16) & 0x7FFFFFFF) or 1,
             accession=card.card_id[:36],
             user_content=user_prompt,
             caller=caller,

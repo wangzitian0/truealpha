@@ -576,6 +576,10 @@ class MartResearchReadRepository:
             allowed_ids = {m.issuer_id for _, m in matched_pairs if m is not None}
             if allowed_ids:
                 ordered = [d for d in ordered if d.issuer_id in allowed_ids]
+        if not ordered:
+            return tuple(
+                _missing_subject(entity_id, "strategy_run_unavailable") for entity_id in request.target_entity_ids
+            )
         return tuple(
             _ranking_subject(decision, report.source, report.corpus_sha256, display_map) for decision in ordered
         )

@@ -93,15 +93,6 @@ from data_engine.datahub.oracle_outcomes import (
     oracle_cell_agreement,
     oracle_outcome_mass_by_origin,
 )
-from data_engine.datahub.oracle_outcomes import (
-    load_oracle_outcomes_rollup as load_oracle_outcomes_rollup,
-)
-from data_engine.datahub.oracle_outcomes import (
-    rollup_oracle_outcomes as rollup_oracle_outcomes,
-)
-from data_engine.datahub.oracle_outcomes import (
-    wilson_95_upper_bound as wilson_95_upper_bound,
-)
 from data_engine.datahub.production_topt.executor import SERVED_BY_FAILOVER
 from data_engine.datahub.production_topt.headcount import is_eligible_headcount_row
 from data_engine.datahub.production_topt.parser_identity import PARSER_VERSION_HISTORY
@@ -526,8 +517,21 @@ def _evaluate_valued_cell(
     subject_aliases: Sequence[str],
 ):
     case_id = f"cell:{policy.family}:{subject_id}"
+    is_conflict = reason in ("cross_origin_conflict", "not_agreed_within_tolerance")
+    if is_conflict and valued:
+        priority = policy.reconciliation.source_priority if policy.reconciliation else ()
+        primary = min(
+            valued,
+            key=lambda origin: (
+                priority.index(origin.source_id) if origin.source_id in priority else len(priority),
+                origin.origin_id,
+            ),
+        )
+        active_origins: Sequence[OriginValue] = (primary,)
+    else:
+        active_origins = valued
     sources: list[SourceConfidenceEvidence] = []
-    for origin in valued:
+    for origin in active_origins:
         succ, fail = _lookup_outcome_mass(outcome_mass_by_origin, origin, family=policy.family)
         prior = (
             source_reliability_prior(origin.origin_id)
@@ -556,11 +560,8 @@ def _evaluate_valued_cell(
                 reason_codes=(f"reason:{reason}",),
             )
         )
-    if len(valued) == 1:
+    if len(valued) == 1 or is_conflict:
         multi_agreement = Decimal("1")
-    elif reason in ("cross_origin_conflict", "not_agreed_within_tolerance"):
-        rel = _decimal(relative) or Decimal("0")
-        multi_agreement = max(Decimal("0.05"), Decimal("0.20") * (Decimal("1") - min(Decimal("0.90"), rel)))
     else:
         rel = _decimal(relative) or Decimal("0")
         multi_agreement = max(Decimal("0.50"), Decimal("1") - min(Decimal("0.50"), rel))
@@ -1600,24 +1601,17 @@ def persist(connection: Connection[Any], report: Mapping[str, Any]) -> str:
                     str(code) for code in (cell.get("reason_codes") or [f"reason:{cell.get('reason', 'unknown')}"])
                 ]
                 obs_id = cell.get("observation_id")
-                connection.execute(
-                    """
-                    insert into mart.cell_confidence
-                        (run_id, subject_id, semantic_type, metric, observation_id, confidence, policy_hash, input_hash, reason_codes)
-                    values (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    on conflict on constraint cell_confidence_run_subject_metric_unique do nothing
-                    """,
-                    (
-                        run_id,
-                        str(subject_id),
-                        semantic_type,
-                        str(family_name),
-                        str(obs_id) if obs_id else None,
-                        conf_val,
-                        policy_hash,
-                        input_hash,
-                        reason_codes,
-                    ),
+                _insert_cell_confidence_row(
+                    connection,
+                    run_id=run_id,
+                    subject_id=str(subject_id),
+                    semantic_type=semantic_type,
+                    metric=str(family_name),
+                    observation_id=str(obs_id) if obs_id else None,
+                    confidence=conf_val,
+                    policy_hash=policy_hash,
+                    input_hash=input_hash,
+                    reason_codes=reason_codes,
                 )
     return report_id
 
@@ -1646,7 +1640,12 @@ def _insert_cell_confidence_row(
         insert into mart.cell_confidence
             (run_id, subject_id, semantic_type, metric, observation_id, confidence, policy_hash, input_hash, reason_codes)
         values (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-        on conflict on constraint cell_confidence_run_subject_metric_unique do nothing
+        on conflict on constraint cell_confidence_run_subject_metric_unique do update
+            set confidence = excluded.confidence,
+                policy_hash = excluded.policy_hash,
+                input_hash = excluded.input_hash,
+                reason_codes = excluded.reason_codes,
+                observation_id = excluded.observation_id
         """,
         (
             run_id,

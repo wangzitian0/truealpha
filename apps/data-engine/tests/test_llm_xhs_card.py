@@ -123,6 +123,7 @@ def test_generate_xhs_card_html_accepts_verified_glm_output(seated) -> None:
     ok, violations = verify_card_html(card, outcome.html)
     assert ok and violations == ()
     assert len(conn.inserts) == 1
+    assert conn.inserts[0][5] > 0
     assert len(seated) == 1
 
 
