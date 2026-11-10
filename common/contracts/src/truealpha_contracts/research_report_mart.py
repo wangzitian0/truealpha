@@ -40,7 +40,9 @@ from truealpha_contracts.issuer_modules_mart import (
     IssuerModuleReader,
     PostgresIssuerModuleReader,
     SupplyChainExposure,
+    load_entity_display_map,
     resolve_issuer_id_candidates_batch,
+    resolve_static_entity_display,
 )
 from truealpha_contracts.research_report import (
     EvidenceTrace,
@@ -233,7 +235,12 @@ def _peg_section(decision: StrategyRunDecision, source: str, corpus_sha256: str)
 
 def _strategy_summary_section(decision: StrategyRunDecision, source: str, corpus_sha256: str) -> ReportSection:
     status = _decision_availability(decision)
-    reason_codes = (decision.exclusion_reason,) if decision.exclusion_reason is not None else ()
+    if decision.exclusion_reason is not None:
+        reason_codes: tuple[str, ...] = (decision.exclusion_reason,)
+    elif decision.outcome is StrategyRunOutcome.EXCLUDED and source != "strategy_smoke_fixture":
+        reason_codes = ("missing_audited_gross_profit_or_coordinate_join",)
+    else:
+        reason_codes = ()
     results = (
         _result(
             label="outcome",
@@ -384,8 +391,27 @@ def _unavailable_section(section_kind: ReportSectionKind, title: str, reason: st
     )
 
 
+def _subject_display_name(
+    issuer_id: str,
+    source: str,
+    display_map: dict[str, tuple[str, str]] | None = None,
+) -> str:
+    if source == "strategy_smoke_fixture" and not display_map:
+        return issuer_id
+    if display_map:
+        entry = display_map.get(issuer_id) or display_map.get(issuer_id.upper())
+        if entry is not None:
+            return entry[1]
+    _, _, resolved_name = resolve_static_entity_display(issuer_id)
+    return resolved_name
+
+
 def _company_subject(
-    decision: StrategyRunDecision, source: str, corpus_sha256: str, modules: IssuerModuleReader
+    decision: StrategyRunDecision,
+    source: str,
+    corpus_sha256: str,
+    modules: IssuerModuleReader,
+    display_map: dict[str, tuple[str, str]] | None = None,
 ) -> ReportSubject:
     sections = (
         _operating_efficiency_section(decision, source, corpus_sha256),
@@ -395,13 +421,22 @@ def _company_subject(
         _analyst_section(decision.issuer_id, decision.cutoff_at, modules),
         _strategy_summary_section(decision, source, corpus_sha256),
     )
-    return ReportSubject(subject_id=decision.issuer_id, display_name=decision.issuer_id, sections=sections)
-
-
-def _ranking_subject(decision: StrategyRunDecision, source: str, corpus_sha256: str) -> ReportSubject:
     return ReportSubject(
         subject_id=decision.issuer_id,
-        display_name=decision.issuer_id,
+        display_name=_subject_display_name(decision.issuer_id, source, display_map),
+        sections=sections,
+    )
+
+
+def _ranking_subject(
+    decision: StrategyRunDecision,
+    source: str,
+    corpus_sha256: str,
+    display_map: dict[str, tuple[str, str]] | None = None,
+) -> ReportSubject:
+    return ReportSubject(
+        subject_id=decision.issuer_id,
+        display_name=_subject_display_name(decision.issuer_id, source, display_map),
         rank=decision.rank,
         sections=(
             _strategy_summary_section(decision, source, corpus_sha256),
@@ -454,6 +489,42 @@ def _ranking_sort_key(decision: StrategyRunDecision) -> tuple[int, int, str]:
     return (0, decision.rank, decision.issuer_id)
 
 
+def _build_decision_lookup(decisions: list[StrategyRunDecision]) -> dict[str, StrategyRunDecision]:
+    by_issuer: dict[str, StrategyRunDecision] = {}
+    for decision in decisions:
+        by_issuer[decision.issuer_id] = decision
+        by_issuer.setdefault(decision.issuer_id.upper(), decision)
+        _, ticker, _ = resolve_static_entity_display(decision.issuer_id)
+        if ticker is not None:
+            by_issuer.setdefault(ticker.upper(), decision)
+    return by_issuer
+
+
+def _match_target_decisions(
+    target_entity_ids: tuple[str, ...] | list[str],
+    by_issuer: dict[str, StrategyRunDecision],
+    database_url: str | None,
+) -> list[tuple[str, StrategyRunDecision | None]]:
+    unmatched = [
+        entity_id
+        for entity_id in target_entity_ids
+        if by_issuer.get(entity_id) is None and by_issuer.get(entity_id.upper()) is None
+    ]
+    resolved_batch = (
+        resolve_issuer_id_candidates_batch(database_url, unmatched) if unmatched and database_url is not None else {}
+    )
+    results: list[tuple[str, StrategyRunDecision | None]] = []
+    for entity_id in target_entity_ids:
+        matched = by_issuer.get(entity_id) or by_issuer.get(entity_id.upper())
+        if matched is None:
+            for candidate in resolved_batch.get(entity_id.strip(), ()):
+                matched = by_issuer.get(candidate) or by_issuer.get(candidate.upper())
+                if matched is not None:
+                    break
+        results.append((entity_id, matched))
+    return results
+
+
 class MartResearchReadRepository:
     """Reads already-materialized research sections from mart.
 
@@ -486,6 +557,29 @@ class MartResearchReadRepository:
         result = self._strategy_repository.get_latest(strategy_id=strategy_id, context=context)
         return result if isinstance(result, StrategyRunReport) else None
 
+    def _load_theme_ranking_subjects(
+        self,
+        decisions: list[StrategyRunDecision],
+        by_issuer: dict[str, StrategyRunDecision],
+        request: ResearchReportRequest,
+        report: StrategyRunReport,
+        display_map: dict[str, tuple[str, str]] | None,
+    ) -> tuple[ReportSubject, ...]:
+        ordered = sorted(decisions, key=_ranking_sort_key)
+        specific_targets = [
+            entity_id
+            for entity_id in request.target_entity_ids
+            if entity_id.strip() and not entity_id.strip().lower().startswith("theme:")
+        ]
+        if specific_targets:
+            matched_pairs = _match_target_decisions(specific_targets, by_issuer, self._database_url)
+            allowed_ids = {m.issuer_id for _, m in matched_pairs if m is not None}
+            if allowed_ids:
+                ordered = [d for d in ordered if d.issuer_id in allowed_ids]
+        return tuple(
+            _ranking_subject(decision, report.source, report.corpus_sha256, display_map) for decision in ordered
+        )
+
     def load_subjects(self, *, request: ResearchReportRequest, context: AccessContext) -> tuple[ReportSubject, ...]:
         if request.report_kind is ResearchReportKind.ETF:
             return tuple(_etf_subject(entity_id, request) for entity_id in request.target_entity_ids)
@@ -496,35 +590,22 @@ class MartResearchReadRepository:
                 _missing_subject(entity_id, "strategy_run_unavailable") for entity_id in request.target_entity_ids
             )
         decisions = [decision for decision in report.decisions if decision.cutoff_at == request.cutoff_at]
+        display_map = (
+            load_entity_display_map(self._database_url)
+            if (self._database_url is not None or report.source != "strategy_smoke_fixture")
+            else None
+        )
+        by_issuer = _build_decision_lookup(decisions)
 
         if request.report_kind is ResearchReportKind.THEME_RANKING:
-            ordered = sorted(decisions, key=_ranking_sort_key)
-            return tuple(_ranking_subject(decision, report.source, report.corpus_sha256) for decision in ordered)
+            return self._load_theme_ranking_subjects(decisions, by_issuer, request, report, display_map)
 
-        by_issuer: dict[str, StrategyRunDecision] = {}
-        for decision in decisions:
-            by_issuer[decision.issuer_id] = decision
-            by_issuer.setdefault(decision.issuer_id.upper(), decision)
-        unmatched = [
-            entity_id
-            for entity_id in request.target_entity_ids
-            if by_issuer.get(entity_id) is None and by_issuer.get(entity_id.upper()) is None
-        ]
-        resolved_batch: dict[str, tuple[str, ...]] = (
-            resolve_issuer_id_candidates_batch(self._database_url, unmatched)
-            if unmatched and self._database_url is not None
-            else {}
-        )
         subjects: list[ReportSubject] = []
-        for entity_id in request.target_entity_ids:
-            matched: StrategyRunDecision | None = by_issuer.get(entity_id) or by_issuer.get(entity_id.upper())
-            if matched is None:
-                for candidate in resolved_batch.get(entity_id.strip(), ()):
-                    matched = by_issuer.get(candidate) or by_issuer.get(candidate.upper())
-                    if matched is not None:
-                        break
+        for entity_id, matched in _match_target_decisions(request.target_entity_ids, by_issuer, self._database_url):
             if matched is None:
                 subjects.append(_missing_subject(entity_id, "subject_not_in_strategy_run"))
             else:
-                subjects.append(_company_subject(matched, report.source, report.corpus_sha256, self._issuer_modules))
+                subjects.append(
+                    _company_subject(matched, report.source, report.corpus_sha256, self._issuer_modules, display_map)
+                )
         return tuple(subjects)

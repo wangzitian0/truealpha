@@ -7,12 +7,14 @@ a 7-part identity tuple. Reads only `mart`; the `mart_readonly` role enforces th
 
 from __future__ import annotations
 
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any
 
 import psycopg
 from psycopg.rows import dict_row
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
 
+from truealpha_contracts.issuer_modules_mart import resolve_static_entity_display
 from truealpha_contracts.universes import id_prefix_like, universe_with_role
 
 # Any of these mean the query returned rows that no longer match the shape this
@@ -25,6 +27,15 @@ from truealpha_contracts.universes import id_prefix_like, universe_with_role
 _ROW_VALIDATION_ERRORS = (KeyError, ValueError, TypeError, ValidationError)
 
 
+def _round_gppe_display(gppe: str | None) -> str | None:
+    if gppe is None:
+        return None
+    try:
+        return str(Decimal(gppe).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+    except (InvalidOperation, ValueError):
+        return gppe
+
+
 class ToptGppeCell(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -32,6 +43,23 @@ class ToptGppeCell(BaseModel):
     availability: str
     gppe: str | None
     confidence: str | None
+    issuer_id: str | None = None
+    ticker: str | None = None
+    display_name: str | None = None
+    gppe_display: str | None = None
+
+    @model_validator(mode="after")
+    def _populate_display_fields(self) -> ToptGppeCell:
+        resolved_issuer, resolved_ticker, resolved_name = resolve_static_entity_display(self.listing_id)
+        if self.issuer_id is None and resolved_issuer is not None:
+            object.__setattr__(self, "issuer_id", resolved_issuer)
+        if self.ticker is None and resolved_ticker is not None:
+            object.__setattr__(self, "ticker", resolved_ticker)
+        if self.display_name is None:
+            object.__setattr__(self, "display_name", resolved_name)
+        if self.gppe_display is None and self.gppe is not None:
+            object.__setattr__(self, "gppe_display", _round_gppe_display(self.gppe))
+        return self
 
 
 class ToptGppeReport(BaseModel):

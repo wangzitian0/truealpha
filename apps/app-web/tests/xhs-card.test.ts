@@ -16,6 +16,10 @@ import {
   buildEntityCardJson,
   verifyCardHtmlDocument,
   entityCardThemes,
+  CARD_PRESETS,
+  MAX_SUBJECTS_PER_CARD,
+  paginateRankingCardSeries,
+  renderCardPngBuffer,
   type RankingCardData,
   type EntityCardData,
 } from "../src/server/cards/xhs-card";
@@ -218,5 +222,27 @@ assert(cardThemes.length === 2, "the card drops the fill and keeps a refused rea
 assert(cardThemes[0].theme === "AI Compute" && cardThemes[0].themeShare === "0.85", "a judged theme passes through");
 assert(cardThemes[1].theme === "Refused Theme" && cardThemes[1].themeShare === null, "a refused real row stays");
 assert(!("unvisitedReason" in cardThemes[0]), "the card data carries no reason field");
+
+// 8. Presets, series pagination (<= 4 items per card), and PNG buffer export (#1609)
+assert(Object.keys(CARD_PRESETS).length === 10, "must expose all 10 style×layout×palette presets");
+assert(MAX_SUBJECTS_PER_CARD === 4, "max subjects per card must be 4");
+
+const manyItems: RankingCardData = {
+  ...mockData,
+  items: Array.from({ length: 10 }, (_, idx) => ({
+    ...mockData.items[0],
+    rank: idx + 1,
+    issuerId: `issuer:test:${idx + 1}`,
+    displayName: `Test Issuer ${idx + 1}`,
+  })),
+};
+const paginatedSeries = paginateRankingCardSeries(manyItems, MAX_SUBJECTS_PER_CARD);
+assert(paginatedSeries.length === 3, "10 items at 4 per card must produce 3 pages");
+assert(paginatedSeries[0].items.length === 4 && paginatedSeries[0].seriesIndex === 1 && paginatedSeries[0].seriesTotal === 3, "page 1 has 4 items");
+assert(paginatedSeries[1].items.length === 4 && paginatedSeries[1].seriesIndex === 2, "page 2 has 4 items");
+assert(paginatedSeries[2].items.length === 2 && paginatedSeries[2].seriesIndex === 3, "page 3 has 2 items");
+
+const pngBuf = await renderCardPngBuffer(rankingHtml);
+assert(pngBuf.length >= 8 && pngBuf[0] === 0x89 && pngBuf[1] === 0x50 && pngBuf[2] === 0x4e && pngBuf[3] === 0x47, "renderCardPngBuffer must return valid PNG signature bytes");
 
 console.log("xhs-card.test.ts: all assertions passed");

@@ -542,3 +542,27 @@ def test_a_served_row_later_than_the_report_cutoff_is_not_shown() -> None:
         assert sections[kind].availability is AvailabilityStatus.UNAVAILABLE
         assert sections[kind].reason_codes == ("served_row_after_report_cutoff",)
         assert sections[kind].results == ()
+
+
+def test_theme_ranking_unmatched_target_retains_full_ranking_while_matched_target_filters() -> None:
+    """When THEME_RANKING receives an unmatched placeholder target id (e.g. issuer:ranking-scope-unused),
+    it retains the full universe ranking; when it receives matched target ids, it filters to those issuers."""
+    repository = MartResearchReadRepository(
+        strategy_repository=FixtureStrategyRunRepository(),
+        issuer_modules=_NoServedModuleRows(),
+    )
+    unmatched_req = ResearchReportRequest(
+        report_kind=ResearchReportKind.THEME_RANKING,
+        target_entity_ids=("issuer:ranking-scope-unused",),
+        cutoff_at=CUTOFF,
+    )
+    unmatched_report = build_research_report(unmatched_req, repository, context=_context())
+    assert len(unmatched_report.subjects) >= 4
+
+    matched_req = ResearchReportRequest(
+        report_kind=ResearchReportKind.THEME_RANKING,
+        target_entity_ids=("issuer:adm", "issuer:nice"),
+        cutoff_at=CUTOFF,
+    )
+    matched_report = build_research_report(matched_req, repository, context=_context())
+    assert [s.subject_id for s in matched_report.subjects] == ["issuer:nice", "issuer:adm"]

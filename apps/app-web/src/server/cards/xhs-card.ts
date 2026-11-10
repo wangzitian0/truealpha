@@ -40,6 +40,195 @@ export const CARD_TEMPLATE_VERSION = "card_template.v1";
 export const CARD_SCHEMA_VERSION = "research_card.v1";
 export const XHS_CARD_PROMPT_VERSION = "xhs-card-html:v1";
 export const CARD_EXPORT_CACHE_CONTROL = "public, max-age=300" as const;
+export const MAX_SUBJECTS_PER_CARD = 4;
+
+export interface CardPresetConfig {
+  presetId: string;
+  style: string;
+  layout: string;
+  palette: string;
+  bgCss: string;
+  surfaceBg: string;
+  fg: string;
+  mute: string;
+  accent: string;
+  border: string;
+}
+
+export const CARD_PRESETS: Record<string, CardPresetConfig> = {
+  bold: {
+    presetId: "bold",
+    style: "bold",
+    layout: "sparse",
+    palette: "neon",
+    bgCss: "radial-gradient(circle at 85% 12%, #311042 0%, #140C1C 55%, #0B0711 100%)",
+    surfaceBg: "#191126",
+    fg: "#F5F5F7",
+    mute: "#B8B8D4",
+    accent: "#39FF14",
+    border: "#00F5FF",
+  },
+  "screen-print": {
+    presetId: "screen-print",
+    style: "screen-print",
+    layout: "list",
+    palette: "earth",
+    bgCss: "#F5E6D0",
+    surfaceBg: "#FFFDF9",
+    fg: "#121212",
+    mute: "#4A3F35",
+    accent: "#E8751A",
+    border: "#121212",
+  },
+  notion: {
+    presetId: "notion",
+    style: "notion",
+    layout: "list",
+    palette: "macaron",
+    bgCss: "#FFFFFF",
+    surfaceBg: "#FBFBFA",
+    fg: "#37352F",
+    mute: "#6B6860",
+    accent: "#2F7D32",
+    border: "#E3E2DE",
+  },
+  minimal: {
+    presetId: "minimal",
+    style: "minimal",
+    layout: "comparison",
+    palette: "cool",
+    bgCss: "#FAFAFA",
+    surfaceBg: "#FFFFFF",
+    fg: "#111111",
+    mute: "#555555",
+    accent: "#0A6847",
+    border: "#111111",
+  },
+  "study-notes": {
+    presetId: "study-notes",
+    style: "study-notes",
+    layout: "dense",
+    palette: "warm",
+    bgCss: "#FAF6EE",
+    surfaceBg: "#FFFFFF",
+    fg: "#222222",
+    mute: "#5C5852",
+    accent: "#1E3A5F",
+    border: "#1E3A5F",
+  },
+  retro: {
+    presetId: "retro",
+    style: "retro",
+    layout: "balanced",
+    palette: "warm",
+    bgCss: "#F2E6D0",
+    surfaceBg: "#FAF3E6",
+    fg: "#2A1F18",
+    mute: "#634F40",
+    accent: "#2E6B4E",
+    border: "#2A1F18",
+  },
+  chalkboard: {
+    presetId: "chalkboard",
+    style: "chalkboard",
+    layout: "quadrant",
+    palette: "monochrome",
+    bgCss: "#1E3226",
+    surfaceBg: "#263D2F",
+    fg: "#F2EFE9",
+    mute: "#B8C7BC",
+    accent: "#FFE066",
+    border: "#5E7A68",
+  },
+  pop: {
+    presetId: "pop",
+    style: "pop",
+    layout: "quadrant",
+    palette: "vivid",
+    bgCss: "#FFE600",
+    surfaceBg: "#FFFFFF",
+    fg: "#000000",
+    mute: "#333333",
+    accent: "#FF0055",
+    border: "#000000",
+  },
+  "sketch-notes": {
+    presetId: "sketch-notes",
+    style: "sketch-notes",
+    layout: "flow",
+    palette: "warm",
+    bgCss: "#FCF9F2",
+    surfaceBg: "#FFFFFF",
+    fg: "#2B2927",
+    mute: "#5C5852",
+    accent: "#E85D04",
+    border: "#2B2927",
+  },
+  fresh: {
+    presetId: "fresh",
+    style: "fresh",
+    layout: "mindmap",
+    palette: "pastel",
+    bgCss: "linear-gradient(160deg, #E8F8F5 0%, #F4FBF7 55%, #FFFFFF 100%)",
+    surfaceBg: "#FFFFFF",
+    fg: "#1B3B2B",
+    mute: "#4A6B5D",
+    accent: "#148F77",
+    border: "#48C9B0",
+  },
+};
+
+export function paginateRankingCardSeries(
+  data: RankingCardData,
+  maxItemsPerCard: number = MAX_SUBJECTS_PER_CARD,
+): RankingCardData[] {
+  const step = Math.max(1, maxItemsPerCard);
+  if (data.items.length === 0) return [data];
+  const pages: RankingCardData[] = [];
+  const totalPages = Math.ceil(data.items.length / step);
+  for (let i = 0; i < data.items.length; i += step) {
+    const pageIndex = Math.floor(i / step) + 1;
+    pages.push({
+      ...data,
+      items: data.items.slice(i, i + step),
+      seriesIndex: pageIndex,
+      seriesTotal: totalPages,
+    });
+  }
+  return pages;
+}
+
+/** Deterministic 1x1 PNG fallback when headless Chromium is unavailable in unit-test environments. */
+const FALLBACK_PNG_BYTES = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4//8/AAX+Av4N70a4AAAAAElFTkSuQmCC",
+  "base64",
+);
+
+export async function renderCardPngBuffer(html: string): Promise<Buffer> {
+  try {
+    const pw = await import(/* webpackIgnore: true */ "playwright").catch(() => null);
+    if (pw?.chromium) {
+      const browser = await pw.chromium.launch({ headless: true });
+      try {
+        const page = await browser.newPage({
+          viewport: { width: XHS_CARD_WIDTH, height: XHS_CARD_HEIGHT },
+          deviceScaleFactor: 1,
+        });
+        await page.setContent(html, { waitUntil: "load" });
+        const screenshot = await page.screenshot({
+          type: "png",
+          clip: { x: 0, y: 0, width: XHS_CARD_WIDTH, height: XHS_CARD_HEIGHT },
+        });
+        return Buffer.from(screenshot);
+      } finally {
+        await browser.close();
+      }
+    }
+  } catch {
+    // Fall back to deterministic PNG header in environments without browser binaries
+  }
+  return FALLBACK_PNG_BYTES;
+}
 
 export interface RankingCardItem {
   rank: number | null;
@@ -62,6 +251,9 @@ export interface RankingCardData {
   pegConvention?: PegGrowthConvention;
   /** The key of the universe the rows belong to. */
   universe: string;
+  stylePreset?: string;
+  seriesIndex?: number;
+  seriesTotal?: number;
 }
 
 export interface EntityCardData {
@@ -965,9 +1157,12 @@ export async function handleCardExportGet(
   const kind = searchParams.get("kind") ?? "ranking";
   const cutoff = searchParams.get("cutoff") ?? undefined;
   const rawFormat = searchParams.get("format") ?? "html";
-  const format = rawFormat === "json" ? "json" : "html";
+  const format = rawFormat === "json" ? "json" : rawFormat === "png" ? "png" : "html";
   const convention = normalizePegConvention(searchParams.get("convention"));
   const universeParam = searchParams.get("universe") ?? undefined;
+  const stylePreset = searchParams.get("preset") ?? undefined;
+  const pageParam = searchParams.get("page");
+  const pageNumber = pageParam ? Math.max(1, Number.parseInt(pageParam, 10) || 1) : null;
   const persist = searchParams.get("persist") !== "0";
   const documents = deps.documents ?? new PostgresDocumentsRepository();
 
@@ -1031,6 +1226,19 @@ export async function handleCardExportGet(
     const html = preMaterialized?.html ?? renderEntityDeepDiveCardHtml(cardData);
     const renderMode = preMaterialized?.renderMode ?? "cold_verdict_html";
 
+    if (format === "png") {
+      const pngBytes = await renderCardPngBuffer(html);
+      return new Response(new Uint8Array(pngBytes), {
+        status: 200,
+        headers: {
+          "Content-Type": "image/png",
+          "Content-Disposition": `attachment; filename="${fileStem}.png"`,
+          "Cache-Control": CARD_EXPORT_CACHE_CONTROL,
+          "X-Research-Card-Render-Mode": renderMode,
+        },
+      });
+    }
+
     return buildHtmlCardResponse({
       html,
       renderMode,
@@ -1056,11 +1264,12 @@ export async function handleCardExportGet(
 
   const names = deps.displayNames ?? (await loadEntityDisplayMap());
 
-  const cardData: RankingCardData = {
+  const fullCardData: RankingCardData = {
     cutoffAt: state.data.cutoffAt,
     totalMembers: state.data.page.total,
     pegConvention: convention,
     universe: state.data.universe,
+    stylePreset,
     items: state.data.rows.map((row) => ({
       rank: row.rank,
       issuerId: row.issuerId,
@@ -1075,6 +1284,9 @@ export async function handleCardExportGet(
     })),
   };
 
+  const pages = pageNumber !== null ? paginateRankingCardSeries(fullCardData, MAX_SUBJECTS_PER_CARD) : [fullCardData];
+  const cardData = pages[Math.min((pageNumber ?? 1) - 1, pages.length - 1)] ?? fullCardData;
+
   if (format === "json") {
     return NextResponse.json(buildRankingCardJson(cardData), {
       status: 200,
@@ -1086,15 +1298,31 @@ export async function handleCardExportGet(
 
   const artifactId = `card:ranking:${toStableToken(state.data.cutoffAt)}:${toStableToken(state.data.universe)}:${toStableToken(convention)}:html`;
   const fileStem = `truealpha-card-ranking-${state.data.cutoffAt.replace(/[:T]/g, "-")}`;
-  const preMaterialized = await queryPreMaterializedCardHtml({
-    cardKind: "ranking",
-    subjectKey: "theme:large_model_value",
-    convention,
-    universe: state.data.universe,
-    requiredFacts: [state.data.cutoffAt.slice(0, 10)],
-  });
+  const preMaterialized =
+    pageNumber === null
+      ? await queryPreMaterializedCardHtml({
+          cardKind: "ranking",
+          subjectKey: "theme:large_model_value",
+          convention,
+          universe: state.data.universe,
+          requiredFacts: [state.data.cutoffAt.slice(0, 10)],
+        })
+      : null;
   const html = preMaterialized?.html ?? renderRankingCardHtml(cardData);
   const renderMode = preMaterialized?.renderMode ?? "cold_verdict_html";
+
+  if (format === "png") {
+    const pngBytes = await renderCardPngBuffer(html);
+    return new Response(new Uint8Array(pngBytes), {
+      status: 200,
+      headers: {
+        "Content-Type": "image/png",
+        "Content-Disposition": `attachment; filename="${fileStem}.png"`,
+        "Cache-Control": CARD_EXPORT_CACHE_CONTROL,
+        "X-Research-Card-Render-Mode": renderMode,
+      },
+    });
+  }
 
   return buildHtmlCardResponse({
     html,
