@@ -1457,9 +1457,9 @@ def _domestic_10k_vintage(bundle: FinancialFactsBundle) -> Mapping[str, Any] | N
         if isinstance(entry, Mapping) and entry.get("form") in _FOREIGN_ANNUAL_FORMS:
             return None
     for key in ("shares_outstanding", "revenue", "gross_profit", "net_income", "total_assets"):
-        entry = bundle.vintages.get(key)
-        if isinstance(entry, Mapping) and entry.get("form") in _DOMESTIC_10K_FORMS:
-            return entry
+        candidate = bundle.vintages.get(key)
+        if isinstance(candidate, Mapping) and candidate.get("form") in _DOMESTIC_10K_FORMS:
+            return candidate
     return None
 
 
