@@ -108,6 +108,58 @@ def _confirm(symbol: str, session: date, factor: Fraction, previous_close: Decim
         )
 
 
+#: Smallest denominator for a standard forward split ratio (`p/q > 1`); genuine stock splits have denominator 1, 2, or 3.
+MAX_FORWARD_SPLIT_DENOMINATOR = 3
+
+
+def _is_non_split_price_adjustment(step: Decimal, previous_close: Decimal | None, bar: SeriesBar) -> bool:
+    """True when `step` is a spin-off or special-distribution price adjustment rather than a share split (#1606).
+
+    On a spin-off ex-date (such as WDC spinning off SNDK on 2025-02-24), the unadjusted price drops
+    by the spin-off value (`first_price < previous_close`) while the vendor's `splits` series scales
+    pre-ex-date closes by a non-split adjustment factor, without changing `shares_outstanding`:
+    - When `step < 1` (the `splits` close stepped down by `step` on the ex-date), a true reverse
+      split (`factor < 1`) would multiply the unadjusted price by `1 / step > 1`; if the unadjusted
+      price instead dropped in the same direction as `step` (`first_price / previous_close ≈ step`),
+      it is a spin-off price adjustment.
+    - When `step > 1` is not a standard forward split ratio (`p/q` with `q <= 3`), if the unadjusted
+      price confirmed the overnight drop (`first_price * step / previous_close ≈ 1`), it is a spin-off
+      price adjustment rather than dividend drift (where `unadjusted` does not drop).
+    """
+    if previous_close is None or previous_close <= 0:
+        return False
+    first_price = bar.unadjusted_open if _positive(bar.unadjusted_open) else bar.unadjusted_close
+    if first_price is None or first_price <= 0 or first_price >= previous_close:
+        return False
+    if step < 1:
+        move = (first_price / (previous_close * step)).ln()
+        return abs(move) < abs(step.ln()) / 2
+    if step > 1:
+        forward_candidate = Fraction(step).limit_denominator(MAX_FORWARD_SPLIT_DENOMINATOR)
+        if forward_candidate > 1:
+            forward_error = abs(
+                Decimal(forward_candidate.numerator) / Decimal(forward_candidate.denominator) / step - 1
+            )
+            if forward_error <= RATIO_TOLERANCE:
+                return False
+        move = (first_price * step / previous_close).ln()
+        return abs(move) < abs(step.ln()) / 2
+    return False
+
+
+def _resolve_ratio_step(
+    symbol: str, session: date, step: Decimal, previous_close: Decimal | None, bar: SeriesBar
+) -> SplitEvent | None:
+    """Return a `SplitEvent` for `step`, or `None` when `step` is a confirmed non-split price adjustment."""
+    if _is_non_split_price_adjustment(step, previous_close, bar):
+        return None
+    factor = _snap(symbol, session, step)
+    if previous_close is None:
+        raise SplitDerivationError(f"{symbol} {session.isoformat()}: no unadjusted close before the split")
+    _confirm(symbol, session, factor, previous_close, bar)
+    return SplitEvent(symbol, session, factor.numerator, factor.denominator)
+
+
 def derive_split_events(symbol: str, bars: Sequence[SeriesBar]) -> tuple[SplitEvent, ...]:
     """The splits of one symbol, oldest first. Raise ``SplitDerivationError`` on ambiguity."""
     ordered = sorted(bars, key=lambda bar: bar.session)
@@ -126,13 +178,9 @@ def derive_split_events(symbol: str, bars: Sequence[SeriesBar]) -> tuple[SplitEv
             if anchor is not None:
                 step = anchor / ratio
                 if abs(step - 1) > RATIO_TOLERANCE:
-                    factor = _snap(symbol, bar.session, step)
-                    if previous_close is None:
-                        raise SplitDerivationError(
-                            f"{symbol} {bar.session.isoformat()}: no unadjusted close before the split"
-                        )
-                    _confirm(symbol, bar.session, factor, previous_close, bar)
-                    events.append(SplitEvent(symbol, bar.session, factor.numerator, factor.denominator))
+                    event = _resolve_ratio_step(symbol, bar.session, step, previous_close, bar)
+                    if event is not None:
+                        events.append(event)
                     anchor = ratio
             else:
                 anchor = ratio

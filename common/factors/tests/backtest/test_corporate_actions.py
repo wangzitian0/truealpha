@@ -128,3 +128,35 @@ def test_the_split_factor_counts_splits_after_the_filing_through_the_close() -> 
     assert split_factor_between(
         (SplitEvent("Y", date(2024, 3, 1), 1, 10),), after=date(2024, 1, 1), through=date(2024, 3, 1)
     ) == Fraction(1, 10)
+
+
+def test_spinoff_price_adjustment_is_not_treated_as_a_share_split_or_error() -> None:
+    """#1606: WDC spun off SanDisk (SNDK) on 2025-02-24.
+
+    The unadjusted price dropped by the spin-off value on the ex-date while `shares_outstanding`
+    remained unchanged. Whether the split-adjusted series scales pre-ex-date closes by the spin-off
+    retention factor (`~0.7634`) or steps by that factor without a simple split ratio, `derive_split_events`
+    absorbs the non-split price adjustment and returns `()` without raising `SplitDerivationError`.
+    """
+    ex_date = date(2025, 2, 24)
+    retention_factor = Decimal("0.763412")
+    wdc = {
+        date(2025, 2, 20): (Decimal("68.10"), Decimal("67.85")),
+        date(2025, 2, 21): (Decimal("67.90"), Decimal("65.50")),
+        date(2025, 2, 24): (Decimal("50.10"), Decimal("50.00")),
+        date(2025, 2, 25): (Decimal("50.05"), Decimal("51.20")),
+    }
+
+    # Shape 1: pre-ex-date split_adjusted closes are scaled down by `retention_factor < 1` (`step > 1` non-simple).
+    events_pre_scaled = derive_split_events(
+        "WDC",
+        _bars(wdc, lambda day, close: close * retention_factor if day < ex_date else close),
+    )
+    assert events_pre_scaled == ()
+
+    # Shape 2: `step < 1` (`~0.7634`) while unadjusted price also drops by `~0.7634` on the ex-date.
+    events_sub_unit_step = derive_split_events(
+        "WDC",
+        _bars(wdc, lambda day, close: close / retention_factor if day < ex_date else close),
+    )
+    assert events_sub_unit_step == ()

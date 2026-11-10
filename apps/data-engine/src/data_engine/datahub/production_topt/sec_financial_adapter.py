@@ -1370,7 +1370,7 @@ class SecFinancialFactAdapter:
                 }
             )
         _mark_unclassified(payload, target)
-        payload.update(self._listing_ratio_fields(target))
+        payload.update(self._listing_ratio_fields(target, bundle))
         if operating_period_stale:
             # Present only on a dropped metric, so the payload hash of a current row does not move.
             payload["operating_period_stale"] = True
@@ -1393,15 +1393,40 @@ class SecFinancialFactAdapter:
             corroborations=self._corroborate(target),
         )
 
-    def _listing_ratio_fields(self, target: SecTarget) -> dict[str, Any]:
-        """The payload keys of the cover read, or none when no reader ran (#1519).
+    def _listing_ratio_fields(self, target: SecTarget, bundle: FinancialFactsBundle) -> dict[str, Any]:
+        """The payload keys of the cover read, or none when no reader ran (#1519, #1606).
 
         An issuer that the registry could not read is excluded from the tick, so its cover is not read
-        and its payload says "not measured".
+        and its payload says "not measured". When a post-reorganization holdco CIK (such as XOM's
+        CIK 2115436) has not filed its first annual report yet (`reason == REASON_NO_ANNUAL_FILING`),
+        consult `target.predecessor_cik` next. When no annual cover document is stored for either CIK
+        (`reason == REASON_NO_ANNUAL_FILING`) but the bundle's `companyfacts` vintage proves a US
+        domestic annual 10-K filing (`form` in `{"10-K", "10-K/A", "10-KT", "10-KT/A"}` and no
+        foreign-private-issuer `20-F`/`40-F` vintage), resolve `listing_units_per_share = Decimal(1)`.
         """
+        from data_engine.datahub.standards.listing_unit_ratio import (
+            PATTERN_PLAIN_SHARE,
+            REASON_NO_ANNUAL_FILING,
+            ListingUnitRatio,
+        )
+
         if self._listing_ratio_reader is None or target.registry_unavailable:
             return {}
-        return self._listing_ratio_reader(target.cik, target.cutoff, target.ticker).payload_fields()
+        ratio = self._listing_ratio_reader(target.cik, target.cutoff, target.ticker)
+        if ratio.reason == REASON_NO_ANNUAL_FILING and target.predecessor_cik is not None:
+            ratio = self._listing_ratio_reader(target.predecessor_cik, target.cutoff, target.ticker)
+        if ratio.reason == REASON_NO_ANNUAL_FILING:
+            domestic_10k = _domestic_10k_vintage(bundle)
+            if domestic_10k is not None:
+                filed_str = domestic_10k.get("filed")
+                ratio = ListingUnitRatio(
+                    Decimal(1),
+                    PATTERN_PLAIN_SHARE,
+                    accession=domestic_10k.get("accession"),
+                    form=domestic_10k.get("form"),
+                    filed=date.fromisoformat(filed_str) if isinstance(filed_str, str) and filed_str else None,
+                )
+        return ratio.payload_fields()
 
     def _resolve_headcount_fact(
         self, target: SecTarget, knowable_at: datetime
@@ -1414,6 +1439,28 @@ class SecFinancialFactAdapter:
         if fact is None or fact.knowable_at.date() > target.cutoff:
             return None, None, knowable_at
         return fact.value, headcount_vintage(fact), max(knowable_at, fact.knowable_at)
+
+
+_DOMESTIC_10K_FORMS = frozenset({"10-K", "10-K/A", "10-KT", "10-KT/A"})
+_FOREIGN_ANNUAL_FORMS = frozenset({"20-F", "20-F/A", "40-F", "40-F/A"})
+
+
+def _domestic_10k_vintage(bundle: FinancialFactsBundle) -> Mapping[str, Any] | None:
+    """Return a US domestic 10-K vintage from `bundle` when the bundle proves a 10-K annual filing (#1606).
+
+    Requires `bundle.document` (a real `companyfacts` parse rather than a synthetic test fixture) and
+    no foreign-private-issuer (`20-F` / `40-F`) vintage in `bundle.vintages`.
+    """
+    if bundle.document is None:
+        return None
+    for entry in bundle.vintages.values():
+        if isinstance(entry, Mapping) and entry.get("form") in _FOREIGN_ANNUAL_FORMS:
+            return None
+    for key in ("shares_outstanding", "revenue", "gross_profit", "net_income", "total_assets"):
+        entry = bundle.vintages.get(key)
+        if isinstance(entry, Mapping) and entry.get("form") in _DOMESTIC_10K_FORMS:
+            return entry
+    return None
 
 
 def _operating_withheld(period_stale: bool, target: SecTarget) -> bool:

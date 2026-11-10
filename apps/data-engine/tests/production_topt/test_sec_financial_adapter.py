@@ -2009,6 +2009,23 @@ def test_xom_signed_predecessor_merges_revenue_and_net_income_while_refusing_rev
     assert payload["vintage"]["revenue"]["document"] == "companyfacts:CIK0000034088"
     assert payload["vintage"]["total_assets"]["document"] == "companyfacts:CIK0002115436"
 
+    from data_engine.datahub.standards.listing_unit_ratio import CoverRatioReader
+
+    no_html_adapter = SecFinancialFactAdapter(
+        {item.work_item_id: target},
+        fetcher,
+        listing_ratio_reader=CoverRatioReader(lambda _cik, _cutoff: None),
+    )
+    no_html_outcome = no_html_adapter.fetch(item)
+    assert isinstance(no_html_outcome, FetchSuccess)
+    no_html_payload = no_html_outcome.record.payload
+    assert no_html_payload["listing_units_per_share"] == "1"
+    assert no_html_payload["ratio_pattern"] == "plain_share_title"
+    assert no_html_payload["ratio_reason"] is None
+    assert no_html_payload["ratio_form"] == "10-K"
+    assert no_html_payload["ratio_accession"] == "0000034088-26-000017"
+    assert no_html_payload["ratio_filed"] == "2026-02-18"
+
 
 def test_per_class_segmented_share_counts_are_refused_without_conversion_rates_unless_unsegmented_total_exists() -> (
     None
