@@ -28,6 +28,8 @@ _ONE = Decimal(1)
 
 NO_SUPPLY_CHAIN_EXTRACTION = "no_supply_chain_extraction"
 NO_DISCLOSED_SUPPLIERS = "no_disclosed_suppliers"
+UNQUANTIFIED_PARTNER_SHARES = "unquantified_partner_shares"
+CUSTOMER_ONLY_GRAPH = "customer_only_graph"
 
 
 @dataclass(frozen=True)
@@ -116,6 +118,12 @@ def supply_chain_exposure(
         # If no explicit shares disclosed, exposure inversely scales with partner count
         exposure = min(_ONE, _ONE / Decimal(max(1, direct_partners)))
 
+    flags: list[str] = []
+    if not shares:
+        flags.append(UNQUANTIFIED_PARTNER_SHARES)
+    if len(suppliers) == 0:
+        flags.append(CUSTOMER_ONLY_GRAPH)
+
     confidences = [p.confidence for p in partners if p.confidence > _ZERO]
     avg_confidence = (sum(confidences, start=_ZERO) / Decimal(len(confidences))) if confidences else Decimal("0.8")
 
@@ -129,7 +137,7 @@ def supply_chain_exposure(
             confidence=avg_confidence,
             as_of=as_of,
             data_availability="unverified",
-            flags=[],
+            flags=flags,
         ),
         exposure_score=exposure,
         direct_partners=direct_partners,

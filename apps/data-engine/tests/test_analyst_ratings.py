@@ -1671,6 +1671,57 @@ def test_rating_summary_and_valuation_detail_enrich_consensus_with_pit_vendor_ti
     assert res.rows == 1
     assert res.failure is None
     _, params = conn.executed[0]
+    assert params[3] == Decimal("4.5"), "continuous track-record rating replaces coarse integer 4"
     assert "vendor_timestamp" in params[9]
     assert "valuation_profit_growth" in params[9]
     assert Decimal("0.40") < params[8] < Decimal("0.85")
+    assert any("insert into staging.analyst_rating_events" in sql for sql, _ in conn.executed)
+
+
+def test_ticker_row_prefers_track_record_rating_and_preserves_consensus_targets() -> None:
+    """#1642 Q4: when both `consensus_row` (`rating=4`) and `summary_items` are returned,
+    `_ticker_row` computes the continuous rating from `analyst_track_record(summary_items)`
+    instead of stamping integer `4`, while preserving price targets from `consensus_row`."""
+    from data_engine.datahub.analyst_ratings import _ticker_row
+
+    summary_payload = {
+        "analyst_rating_summary_list": [
+            {
+                "analyst_info": {"analyst_id": "a-1", "analyst_name": "Alice", "success_rate": 85.0},
+                "rating_item_list": [{"recommendation_date_str": "2026-09-10", "rating": 5}],
+            },
+            {
+                "analyst_info": {"analyst_id": "a-2", "analyst_name": "Bob", "success_rate": 75.0},
+                "rating_item_list": [{"recommendation_date_str": "2026-09-20", "rating": 5}],
+            },
+            {
+                "analyst_info": {"analyst_id": "a-3", "analyst_name": "Carol", "success_rate": 65.0},
+                "rating_item_list": [{"recommendation_date_str": "2026-09-25", "rating": 4}],
+            },
+        ]
+    }
+
+    class _BothCtx:
+        def get_research_analyst_consensus(self, code: str):
+            return 0, _sample("DDOG")
+
+        def get_research_rating_summary(self, code: str, **kwargs: Any):
+            return 0, summary_payload
+
+    cutoff = datetime(2026, 10, 6, tzinfo=UTC)
+    row, failure = _ticker_row(
+        _BothCtx(),
+        ticker="DDOG",
+        company_id=DDOG,
+        as_of=cutoff,
+        open_error=None,
+        log_traceback=False,
+    )
+    assert failure is None
+    assert isinstance(row, dict)
+    assert row["consensus_rating"] == Decimal("14") / Decimal("3")
+    assert row["consensus_rating"] != Decimal("4")
+    assert row["target_high"] == Decimal("330.0")
+    assert row["target_low"] == Decimal("139.0")
+    assert row["target_mean"] == Decimal("242.79")
+    assert len(row["rating_items"]) == 3

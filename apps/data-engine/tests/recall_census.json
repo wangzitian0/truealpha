@@ -7,12 +7,20 @@
         {
           "concept": "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
           "shape": "all",
+          "members": [],
+          "reconciling": [],
+          "sum": "0",
+          "refusal": "geographic_axis_members"
+        },
+        {
+          "concept": "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
+          "shape": "product-axis",
           "members": [
-            "aapl:AmericasSegmentMember",
-            "aapl:EuropeSegmentMember",
-            "aapl:GreaterChinaSegmentMember",
-            "aapl:JapanSegmentMember",
-            "aapl:RestOfAsiaPacificSegmentMember"
+            "aapl:IPadMember",
+            "aapl:IPhoneMember",
+            "aapl:MacMember",
+            "aapl:WearablesHomeandAccessoriesMember",
+            "us-gaap:ServiceMember"
           ],
           "reconciling": [],
           "sum": "416161000000",
@@ -20,11 +28,11 @@
         }
       ],
       "accepted_partition": [
-        "Americas",
-        "Europe",
-        "Greater China",
-        "Japan",
-        "Rest of Asia Pacific"
+        "I Pad",
+        "I Phone",
+        "Mac",
+        "Wearables Homeand Accessories",
+        "Service"
       ]
     },
     "ADM_10K_000000708426000011.html": {

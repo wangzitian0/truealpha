@@ -844,7 +844,7 @@ def materialize_supply_chain_exposure(
             confidence = item.result.confidence
             reason_codes = list(item.result.flags)
             extractor = "graph:kg-edges:v1"
-            avail = "available" if not item.result.flags and exposure_score is not None else "unavailable"
+            avail = "available" if exposure_score is not None else "unavailable"
         else:
             issuer_id = str(item["issuer_id"])
             if "partners" in item:
@@ -861,7 +861,7 @@ def materialize_supply_chain_exposure(
                 max_partner_share = rec.max_partner_share
                 confidence = rec.result.confidence
                 reason_codes = list(rec.result.flags)
-                avail = "available" if not rec.result.flags and exposure_score is not None else "unavailable"
+                avail = "available" if exposure_score is not None else "unavailable"
             else:
                 raw_exp = item.get("exposure_score")
                 exposure_score = Decimal(str(raw_exp)) if raw_exp is not None else None
@@ -900,6 +900,151 @@ def materialize_supply_chain_exposure(
     return count
 
 
+def _parse_revenue_share_pct(raw_pct: object) -> Decimal | None:
+    if raw_pct is None or isinstance(raw_pct, bool):
+        return None
+    text = str(raw_pct).strip()
+    if not text:
+        return None
+    try:
+        pct = Decimal(text)
+    except Exception:  # noqa: BLE001
+        return None
+    if not pct.is_finite() or pct <= Decimal("0") or pct > Decimal("100"):
+        return None
+    return pct / Decimal("100")
+
+
+def _register_partner_index(
+    seen_edges: dict[tuple[str, str], int],
+    *,
+    rel_type: str,
+    partner_id: str,
+    partner_name: str,
+    idx: int,
+) -> None:
+    seen_edges[(rel_type, partner_id)] = idx
+    if not is_uuid(partner_id):
+        seen_edges.setdefault((rel_type, _deterministic_partner_uuid(partner_id)), idx)
+    if partner_name and partner_name != partner_id:
+        slug_id = _slug_entity_id(partner_name)
+        seen_edges.setdefault((rel_type, slug_id), idx)
+        seen_edges.setdefault((rel_type, _deterministic_partner_uuid(slug_id)), idx)
+
+
+def _issuer_relation_aliases(issuer: CanonicalIssuer) -> list[str]:
+    det_uuid = (
+        _deterministic_partner_uuid(issuer.legacy_id) if issuer.legacy_id and not is_uuid(issuer.legacy_id) else ""
+    )
+    return [item for item in dict.fromkeys((issuer.issuer_id, issuer.legacy_id, det_uuid)) if item]
+
+
+def _resolve_relation_endpoint(row: Sequence[Any], alias_set: set[str]) -> tuple[str, str, str, object, object] | None:
+    if len(row) < 4:
+        return None
+    from_id, to_id, conf, raw_pct = str(row[0]), str(row[1]), row[2], row[3]
+    from_name = str(row[4]) if len(row) >= 5 and row[4] is not None else from_id
+    to_name = str(row[5]) if len(row) >= 6 and row[5] is not None else to_id
+    if from_id in alias_set and to_id not in alias_set:
+        return "customer", to_id, to_name, conf, raw_pct
+    if to_id in alias_set and from_id not in alias_set:
+        return "supplier", from_id, from_name, conf, raw_pct
+    return None
+
+
+def _lookup_existing_partner_index(
+    seen_edges: dict[tuple[str, str], int], *, rel_type: str, p_id: str, p_name: str
+) -> int | None:
+    idx = seen_edges.get((rel_type, p_id))
+    if idx is not None or not p_name or p_name == p_id:
+        return idx
+    slug_id = _slug_entity_id(p_name)
+    return seen_edges.get((rel_type, slug_id)) or seen_edges.get((rel_type, _deterministic_partner_uuid(slug_id)))
+
+
+def _apply_entity_relation_row(
+    row: Sequence[Any],
+    *,
+    alias_set: set[str],
+    partners: list[SupplyChainPartner],
+    seen_edges: dict[tuple[str, str], int],
+) -> None:
+    endpoint = _resolve_relation_endpoint(row, alias_set)
+    if endpoint is None:
+        return
+    rel_type, p_id, p_name, conf, raw_pct = endpoint
+    share = _parse_revenue_share_pct(raw_pct)
+    idx = _lookup_existing_partner_index(seen_edges, rel_type=rel_type, p_id=p_id, p_name=p_name)
+    if idx is not None:
+        existing = partners[idx]
+        merged_share = existing.revenue_share if existing.revenue_share is not None else share
+        merged_name = (
+            existing.partner_name if existing.partner_name and existing.partner_name != existing.partner_id else p_name
+        )
+        partners[idx] = SupplyChainPartner(
+            partner_id=existing.partner_id,
+            partner_name=merged_name,
+            relation_type=existing.relation_type,
+            revenue_share=merged_share,
+            confidence=existing.confidence,
+        )
+        _register_partner_index(seen_edges, rel_type=rel_type, partner_id=p_id, partner_name=merged_name, idx=idx)
+        return
+    new_idx = len(partners)
+    partners.append(
+        SupplyChainPartner(
+            partner_id=p_id,
+            partner_name=p_name,
+            relation_type=rel_type,
+            revenue_share=share,
+            confidence=Decimal(str(conf)) if conf is not None else Decimal("0"),
+        )
+    )
+    _register_partner_index(seen_edges, rel_type=rel_type, partner_id=p_id, partner_name=p_name, idx=new_idx)
+
+
+def _merge_entity_relation_partners(
+    connection: Connection[Any],
+    *,
+    issuer: CanonicalIssuer,
+    cutoff: datetime,
+    cutoff_date: Any,
+    partners: list[SupplyChainPartner],
+    seen_edges: dict[tuple[str, str], int],
+) -> None:
+    aliases = _issuer_relation_aliases(issuer)
+    if not aliases:
+        return
+    sql = """
+    select
+        r.from_entity_id::text,
+        r.to_entity_id::text,
+        r.confidence,
+        r.attributes->>'revenue_share_pct',
+        coalesce(ent_from.display_name, r.from_entity_id::text),
+        coalesce(ent_to.display_name, r.to_entity_id::text)
+    from staging.entity_relations r
+    left join staging.kg_entities ent_from on ent_from.id = r.from_entity_id::text
+    left join staging.kg_entities ent_to on ent_to.id = r.to_entity_id::text
+    where r.relation_type = 'supplies_to'
+      and (r.from_entity_id::text = any(%s) or r.to_entity_id::text = any(%s))
+      and r.transaction_time <= %s
+      and r.valid_from <= %s::date
+      and (r.valid_to is null or r.valid_to > %s::date)
+    order by r.transaction_time desc, r.relation_id desc
+    """
+    try:
+        with _optional_savepoint(connection):
+            rows = connection.execute(sql, (aliases, aliases, cutoff, cutoff_date, cutoff_date)).fetchall()
+    except Exception:  # noqa: BLE001
+        return
+
+    alias_set = set(aliases)
+    for row in rows:
+        if isinstance(row, tuple | list):
+            _apply_entity_relation_row(row, alias_set=alias_set, partners=partners, seen_edges=seen_edges)
+
+
 def _load_issuer_graph_partners(
     connection: Connection[Any],
     *,
@@ -908,7 +1053,7 @@ def _load_issuer_graph_partners(
     cutoff_date: Any,
 ) -> list[SupplyChainPartner]:
     partners: list[SupplyChainPartner] = []
-    seen_edges: set[tuple[str, str]] = set()
+    seen_edges: dict[tuple[str, str], int] = {}
     query_specs = (
         (
             "customer",
@@ -936,18 +1081,31 @@ def _load_issuer_graph_partners(
             continue
         for rel_type, sql in query_specs:
             for p_id, p_name, conf in connection.execute(sql, (endpoint_id, cutoff, cutoff_date)).fetchall():
-                key = (rel_type, str(p_id))
+                pid_str = str(p_id)
+                pname_str = str(p_name)
+                key = (rel_type, pid_str)
                 if key not in seen_edges:
-                    seen_edges.add(key)
+                    idx = len(partners)
                     partners.append(
                         SupplyChainPartner(
-                            partner_id=str(p_id),
-                            partner_name=str(p_name),
+                            partner_id=pid_str,
+                            partner_name=pname_str,
                             relation_type=rel_type,
                             revenue_share=None,
                             confidence=Decimal(str(conf)) if conf is not None else Decimal("0"),
                         )
                     )
+                    _register_partner_index(
+                        seen_edges, rel_type=rel_type, partner_id=pid_str, partner_name=pname_str, idx=idx
+                    )
+    _merge_entity_relation_partners(
+        connection,
+        issuer=issuer,
+        cutoff=cutoff,
+        cutoff_date=cutoff_date,
+        partners=partners,
+        seen_edges=seen_edges,
+    )
     return partners
 
 
@@ -1015,7 +1173,7 @@ def materialize_universe_supply_chain_exposure(
             partners, entity_id=issuer.issuer_id, as_of=cutoff, supplies_to_edges_exist=supplies_to_edges_exist
         )
         extractor = diag.issuer_extractors.get(issuer.issuer_id, "graph:kg-edges:v1")
-        avail = "available" if not record.result.flags and record.exposure_score is not None else "unavailable"
+        avail = "available" if record.exposure_score is not None else "unavailable"
         count += materialize_supply_chain_exposure(
             connection,
             run_id=run_id,
@@ -1054,4 +1212,14 @@ def _supplies_to_edges_exist(connection: Connection[Any], cutoff: datetime) -> b
         "select exists (select 1 from staging.kg_edges where relation_type = 'supplies_to' and transaction_time <= %s)",
         (cutoff,),
     ).fetchone()
-    return bool(row and row[0])
+    if row and row[0]:
+        return True
+    try:
+        with _optional_savepoint(connection):
+            rel_row = connection.execute(
+                "select exists (select 1 from staging.entity_relations where relation_type = 'supplies_to' and transaction_time <= %s)",
+                (cutoff,),
+            ).fetchone()
+            return bool(rel_row and rel_row[0])
+    except Exception:  # noqa: BLE001
+        return False

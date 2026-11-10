@@ -167,6 +167,19 @@ def _whole_number(payload: Mapping[str, Any], key: str) -> int:
     return int(float(value))
 
 
+def _optional_target(payload: Mapping[str, Any], *keys: str) -> Decimal | None:
+    for key in keys:
+        val = payload.get(key)
+        if val is not None and not isinstance(val, bool) and isinstance(val, Real):
+            try:
+                dec = Decimal(str(val))
+            except Exception:  # noqa: BLE001
+                continue
+            if dec.is_finite() and dec >= 0:
+                return dec
+    return None
+
+
 def _consensus_row(payload: object, company_id: str) -> dict[str, Any] | None:
     """Turn one `get_research_analyst_consensus` payload into a rating row.
 
@@ -209,6 +222,9 @@ def _consensus_row(payload: object, company_id: str) -> dict[str, Any] | None:
         "confidence": _consensus_confidence(company_id),
         "availability_status": "available",
         "reason_codes": [],
+        "target_high": _optional_target(payload, "target_high", "highest"),
+        "target_low": _optional_target(payload, "target_low", "lowest"),
+        "target_mean": _optional_target(payload, "target_mean", "average"),
     }
 
 
@@ -285,7 +301,7 @@ def _valid_rating_point(r_item: object, cutoff_iso: str) -> tuple[str, int] | No
     return rec_date[:10], rating_int
 
 
-def _latest_rating_before_cutoff(items: object, cutoff_iso: str) -> int | None:
+def _latest_rating_point_before_cutoff(items: object, cutoff_iso: str) -> tuple[str, int] | None:
     if not isinstance(items, list):
         return None
     latest_date: str | None = None
@@ -294,7 +310,14 @@ def _latest_rating_before_cutoff(items: object, cutoff_iso: str) -> int | None:
         point = _valid_rating_point(r_item, cutoff_iso)
         if point is not None and (latest_date is None or point[0] >= latest_date):
             latest_date, latest_rating = point
-    return latest_rating
+    if latest_date is None or latest_rating is None:
+        return None
+    return latest_date, latest_rating
+
+
+def _latest_rating_before_cutoff(items: object, cutoff_iso: str) -> int | None:
+    point = _latest_rating_point_before_cutoff(items, cutoff_iso)
+    return point[1] if point is not None else None
 
 
 def parse_rating_summary(payload: object, *, as_of: datetime) -> list[AnalystRatingItem]:
@@ -319,10 +342,17 @@ def parse_rating_summary(payload: object, *, as_of: datetime) -> list[AnalystRat
         analyst_id = str(analyst_info.get("analyst_id") or analyst_info.get("analyst_name") or "").strip()
         if not analyst_id:
             continue
-        latest_rating = _latest_rating_before_cutoff(entry.get("rating_item_list"), cutoff_iso)
-        if latest_rating is not None:
+        point = _latest_rating_point_before_cutoff(entry.get("rating_item_list"), cutoff_iso)
+        if point is not None:
+            latest_date, latest_rating = point
             item_conf = _analyst_confidence(analyst_id, analyst_info.get("success_rate"))
-            out.append(AnalystRatingItem(analyst_id=analyst_id, rating=latest_rating, confidence=item_conf))
+            rating_item = AnalystRatingItem(analyst_id=analyst_id, rating=latest_rating, confidence=item_conf)
+            try:
+                rec_dt = datetime.fromisoformat(latest_date).replace(tzinfo=UTC)
+                object.__setattr__(rating_item, "recommendation_at", rec_dt)
+            except ValueError:
+                pass
+            out.append(rating_item)
     return out
 
 
@@ -404,9 +434,26 @@ def _enrich_consensus_row(
     summary_items: list[AnalystRatingItem],
     has_valuation: bool,
     profit_growth: Mapping[date, Decimal],
+    as_of: datetime | None = None,
 ) -> None:
     if not (summary_items or has_valuation):
         return
+    if summary_items:
+        weighted = analyst_track_record(
+            summary_items,
+            entity_id=company_id,
+            as_of=as_of or datetime.now(tz=UTC),
+        )
+        if weighted.consensus_rating is not None:
+            consensus_row["consensus_rating"] = weighted.consensus_rating
+        targets = [item.target_price for item in summary_items if item.target_price is not None]
+        if consensus_row.get("target_high") is None and targets:
+            consensus_row["target_high"] = max(targets)
+        if consensus_row.get("target_low") is None and targets:
+            consensus_row["target_low"] = min(targets)
+        if consensus_row.get("target_mean") is None and targets:
+            consensus_row["target_mean"] = sum(targets, start=Decimal(0)) / Decimal(len(targets))
+        consensus_row["rating_items"] = list(summary_items)
     agreement = min(item.confidence for item in summary_items) if summary_items else Decimal("0.90")
     cont = evaluate_cell_confidence(
         case_id=f"consensus:{company_id}",
@@ -487,6 +534,7 @@ def _ticker_row(
     if consensus_row is None:
         if summary_items:
             rec = analyst_track_record(summary_items, entity_id=company_id, as_of=as_of)
+            targets = [item.target_price for item in summary_items if item.target_price is not None]
             return {
                 "issuer_id": company_id,
                 "consensus_rating": rec.consensus_rating,
@@ -497,6 +545,10 @@ def _ticker_row(
                 "confidence": rec.result.confidence,
                 "availability_status": "available" if rec.consensus_rating is not None else "unavailable",
                 "reason_codes": [*rec.result.flags, "vendor_timestamp"],
+                "target_high": max(targets) if targets else None,
+                "target_low": min(targets) if targets else None,
+                "target_mean": (sum(targets, start=Decimal(0)) / Decimal(len(targets))) if targets else None,
+                "rating_items": list(summary_items),
             }, None
         return analyst_track_record([], entity_id=company_id, as_of=as_of), None
     _enrich_consensus_row(
@@ -505,6 +557,7 @@ def _ticker_row(
         summary_items=summary_items,
         has_valuation=has_valuation,
         profit_growth=profit_growth,
+        as_of=as_of,
     )
     return consensus_row, None
 
@@ -548,6 +601,86 @@ def capture_ticker_analyst_ratings(
     return TickerCapture(rows=rows, failure=failure)
 
 
+def _persist_analyst_rating_events(
+    connection: Connection[Any],
+    *,
+    company_id: str,
+    as_of: datetime,
+    rating_items: Sequence[AnalystRatingItem],
+    run_id: str,
+) -> int:
+    """Persist individual analyst rating observations into `staging.analyst_rating_events` when present."""
+    valid_items = [item for item in rating_items if isinstance(item, AnalystRatingItem) and 1 <= item.rating <= 5]
+    if not valid_items:
+        return 0
+    inserted = 0
+    tx_fn = getattr(connection, "transaction", None)
+    try:
+        ctx_mgr = tx_fn() if callable(tx_fn) else None
+        if ctx_mgr is not None:
+            ctx_mgr.__enter__()
+        try:
+            for item in valid_items:
+                raw_rec = getattr(item, "recommendation_at", None) or getattr(item, "recommendation_date", None)
+                if isinstance(raw_rec, date) and not isinstance(raw_rec, datetime):
+                    rec_at = datetime(raw_rec.year, raw_rec.month, raw_rec.day, tzinfo=UTC)
+                elif isinstance(raw_rec, datetime):
+                    rec_at = raw_rec if raw_rec.tzinfo is not None else raw_rec.replace(tzinfo=UTC)
+                else:
+                    rec_at = as_of
+                connection.execute(
+                    """
+                    insert into staging.kg_entities (id, entity_type, display_name)
+                    values (%s, 'company', %s), (%s, 'analyst', %s)
+                    on conflict (id) do nothing
+                    """,
+                    (company_id, company_id, item.analyst_id, item.analyst_id),
+                )
+                connection.execute(
+                    """
+                    insert into staging.analyst_rating_events (
+                        analyst_id,
+                        company_id,
+                        recommendation_at,
+                        transaction_time,
+                        rating,
+                        target_price,
+                        confidence,
+                        raw_ref
+                    )
+                    select
+                        %s,
+                        %s,
+                        least(%s::timestamptz, %s::timestamptz, clock_timestamp()),
+                        least(%s::timestamptz, clock_timestamp()),
+                        %s,
+                        %s,
+                        %s,
+                        %s
+                    where to_regclass('staging.analyst_rating_events') is not null
+                    on conflict (analyst_id, company_id, recommendation_at, transaction_time) do nothing
+                    """,
+                    (
+                        item.analyst_id,
+                        company_id,
+                        rec_at,
+                        as_of,
+                        as_of,
+                        int(item.rating),
+                        item.target_price,
+                        item.confidence if Decimal("0") <= item.confidence <= Decimal("1") else Decimal("0.8"),
+                        f"moomoo:rating_summary:{run_id}:{company_id}:{item.analyst_id}",
+                    ),
+                )
+                inserted += 1
+        finally:
+            if ctx_mgr is not None:
+                ctx_mgr.__exit__(None, None, None)
+    except Exception:  # noqa: BLE001
+        return 0
+    return inserted
+
+
 def materialize_analyst_ratings(
     connection: Connection[Any],
     *,
@@ -565,6 +698,7 @@ def materialize_analyst_ratings(
     source_status, val_status = source_evidence.value, factor_validation.value
     count = 0
     for item in ratings_data:
+        rating_items: Sequence[AnalystRatingItem] = ()
         if isinstance(item, AnalystTrackRecord):
             issuer_id = item.entity_id
             consensus_rating = item.consensus_rating
@@ -579,6 +713,7 @@ def materialize_analyst_ratings(
         else:
             issuer_id = str(item["issuer_id"])
             if "ratings" in item:
+                rating_items = item["ratings"]
                 rec = analyst_track_record(item["ratings"], entity_id=issuer_id, as_of=as_of)
                 consensus_rating = rec.consensus_rating
                 analysts_count = rec.ratings_count
@@ -589,6 +724,8 @@ def materialize_analyst_ratings(
                 reason_codes = list(rec.result.flags)
                 avail = "available" if not rec.result.flags and consensus_rating is not None else "unavailable"
             else:
+                if isinstance(item.get("rating_items"), Sequence):
+                    rating_items = item["rating_items"]
                 raw_c = item.get("consensus_rating")
                 consensus_rating = Decimal(str(raw_c)) if raw_c is not None else None
                 analysts_count = int(item.get("analysts_count", 0))
@@ -606,11 +743,12 @@ def materialize_analyst_ratings(
                 )
             extractor = str(item.get("extractor", "origin:moomoo:v1"))
 
+        canonical_id = require_canonical_issuer_id(issuer_id)
         connection.execute(
             _INSERT_SQL,
             (
                 run_id,
-                require_canonical_issuer_id(issuer_id),
+                canonical_id,
                 as_of,
                 consensus_rating,
                 analysts_count,
@@ -625,6 +763,14 @@ def materialize_analyst_ratings(
                 val_status,
             ),
         )
+        if rating_items:
+            _persist_analyst_rating_events(
+                connection,
+                company_id=canonical_id,
+                as_of=as_of,
+                rating_items=rating_items,
+                run_id=run_id,
+            )
         count += 1
     return count
 
