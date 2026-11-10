@@ -100,9 +100,15 @@ _HOLDINGS_ROWS_SQL = "select count(*) from mart.fund_virtual_company where run_i
 #: `apps/app-web/src/server/admin/datahub-stats.ts` `QUESTION_COVERAGE_SQL`.
 _COVERAGE_HEAD_SQL = """
 select distinct on (universe_id) universe_id, run_id, payload
-from mart.question_coverage_report
+from mart.question_coverage_report r
 where universe_id in (select universe_id from mart.served_head)
-order by universe_id, created_at desc
+order by universe_id,
+         exists (
+           select 1 from mart.served_head h
+           where h.universe_id = r.universe_id
+             and coalesce(h.run_id, h.head_run_id) = r.run_id
+         ) desc,
+         created_at desc
 """
 #: What the theme lane had to work with, for a MISMATCH line on an empty table: the accepted
 #: segment partitions knowable at the head's cutoff (`theme_purity._PARTITION_SQL`'s vintage
