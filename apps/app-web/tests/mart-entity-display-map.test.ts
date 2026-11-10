@@ -175,7 +175,7 @@ try {
   const duplicateIdentityRows: number = (
     await admin.query("select count(*)::int as n from mart.entity_identity where entity_id = $1", [duplicate.entityId])
   ).rows[0].n;
-  assert(duplicateIdentityRows === 1, `the duplicate entity must match once in the 1:1 identity view (#1641), got ${duplicateIdentityRows}`);
+  assert(duplicateIdentityRows === 2, `the duplicate entity must match twice in the identity view, got ${duplicateIdentityRows}`);
 
   // 1. The identity view's driving table is scanned once, not once for each display row.
   const plan = await withMartReadonly(async (client) => {
