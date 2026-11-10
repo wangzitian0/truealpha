@@ -297,6 +297,24 @@
       "cwd": "."
     },
     {
+      "id": "workflow-contract/release-tag-must-be-on-main",
+      "guard": "common/runtime/tests/test_ci_workflows.py",
+      "file": ".github/workflows/ci-required.yml",
+      "find": "          git merge-base --is-ancestor \"$GITHUB_SHA\" origin/main\n",
+      "replace": "          true\n",
+      "command": [
+        "uv",
+        "run",
+        "--no-sync",
+        "pytest",
+        "common/runtime/tests/test_ci_workflows.py",
+        "-k",
+        "release_tags",
+        "-q"
+      ],
+      "cwd": "."
+    },
+    {
       "id": "nightly-verdicts/a-stale-verdict-is-red",
       "guard": "common/runtime/tests/test_nightly_verdicts.py",
       "file": "common/runtime/src/truealpha_tools/nightly_verdicts.py",

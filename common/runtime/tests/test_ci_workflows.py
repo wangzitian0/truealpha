@@ -189,6 +189,13 @@ def test_release_tags_trigger_ci_required_and_publish_semver_and_bare_sha_tags()
     assert push_trigger["tags"] == ["v[0-9]+.[0-9]+.[0-9]+"]
 
     changes = job(REQUIRED, "changes")
+    tag_guard = job_step(REQUIRED, "changes", "Verify release tag is on main")
+    assert tag_guard.get("if") == "github.ref_type == 'tag'"
+    assert "git fetch origin main" in str(tag_guard.get("run", ""))
+    assert 'git merge-base --is-ancestor "$GITHUB_SHA" origin/main' in str(tag_guard.get("run", ""))
+    assert "always()" not in str(job(REQUIRED, "images_build")["if"])
+    assert "needs.changes.result == 'success'" in str(job(REQUIRED, "images_release")["if"])
+
     filter_step = next(s for s in changes["steps"] if s.get("id") == "filter")
     assert "github.ref_type != 'tag'" in str(filter_step.get("if", "")), (
         "paths-filter must skip on tag pushes so test lanes do not re-run against 0000000000000000000000000000000000000000"
