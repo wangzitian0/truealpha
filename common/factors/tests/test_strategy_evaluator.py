@@ -19,7 +19,7 @@ from factors.composite.strategy_evaluator import (
     evaluate_cutoff,
     rank_and_select,
 )
-from factors.forest import IssuerClass, bound_tree, uniform_tree_pins
+from factors.panel import IssuerClass, bound_tree, uniform_tree_pins
 from truealpha_contracts.strategy import (
     LIVE_STRATEGY_DEFINITION_RESOURCE,
     ExclusionReason,

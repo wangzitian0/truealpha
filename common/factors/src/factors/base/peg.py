@@ -46,7 +46,6 @@ from collections.abc import Mapping, Sequence
 from datetime import date, datetime
 from decimal import ROUND_HALF_EVEN, Context, Decimal, localcontext
 
-from truealpha_contracts.ast import Div, Feature, Mul, Numeric
 from truealpha_contracts.fiscal_period import parse_annual
 
 from factors.measure import UnitMismatchError, times
@@ -58,37 +57,6 @@ _NET_INCOME = "net_income"
 _PRICE = "price"
 _SHARES = "shares_outstanding"
 _CONSENSUS_GROWTH = "consensus_profit_growth"
-
-# The `peg_from_rate` arithmetic as a matrix-compatible `truealpha_contracts.ast`
-# expression, built only from shared node types — the same shape modules 2 and 7 already
-# carry, and the one the test-time Polars oracle compiles (`common/factors/tests/support/expression_oracle`, #758;
-# "init.md Section 7 modules 1-6", module 1 is this one). init.md rule 25 makes that
-# oracle the reproducibility check of the Decimal path; module 1 shipped without its
-# expression, so a vectorised run could reproduce GPPE and P/S but had nothing to
-# reproduce here.
-#
-# As in module 2, the Decimal path below stays the source of truth — fast and exact — and
-# this definition is the reproducibility proof, cross-checked by test rather than invoked
-# per call. `growth_rate` binds as a feature exactly as `risk_free_rate` does for GPPE: a
-# declared input the caller supplies, not an observation the factor looks up.
-#
-# The literal 100 is the percentage-point convention, not a tuning constant: PEG divides
-# the multiple by the growth rate expressed in points (0.0821 -> 8.21), so it belongs in
-# the expression rather than in a caller that could pick a different scale.
-#
-# Nothing here reads a prior session: every input is one PIT-resolved value at the cutoff
-# and the growth rate arrives already reduced. The window this factor divides by spans
-# three years, but that reduction happens upstream, which is why the expression carries no
-# `Ref`/`Mean` lookback node.
-PEG_EXPRESSION_DEFINITION = Div(
-    # market capitalisation / net income — the multiple
-    left=Div(
-        left=Mul(left=Feature(name=_PRICE), right=Feature(name=_SHARES)),
-        right=Feature(name=_NET_INCOME),
-    ),
-    # the growth rate in percentage points
-    right=Mul(left=Feature(name="growth_rate"), right=Numeric(value=100)),
-)
 
 # Staging encodes a fiscal period as "FY2025:FY:2024-01-29:2025-01-26" —
 # "<filing fiscal year>:<period kind>:<period start>:<period end>".

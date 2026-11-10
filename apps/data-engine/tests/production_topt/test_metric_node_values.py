@@ -20,7 +20,7 @@ from factors.composite.strategy_evaluator import (
     LookAheadError,
     evaluate_cutoff,
 )
-from factors.forest import (
+from factors.panel import (
     FOREST,
     Forest,
     IssuerClass,
@@ -499,7 +499,7 @@ def test_financial_issuer_under_gppe_operating_financial_tree_only_materializes_
     """Under GPPE_OPERATING_FINANCIAL_TREE, a FINANCIAL issuer reaches capital_charge_tce rather than
     capital_charge; capital_charge (though globally _EVERY_CLASS) must not be materialized as unavailable."""
     from data_engine.datahub.production_topt.metric_node_values import _materialize_issuer_tree
-    from factors.forest import GPPE_OPERATING_FINANCIAL_TREE
+    from factors.panel import GPPE_OPERATING_FINANCIAL_TREE
     from truealpha_contracts.execution import FactorValidationStatus
 
     base = _sample_factor_input()

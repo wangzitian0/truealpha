@@ -32,7 +32,7 @@ from typing import Any
 
 import psycopg
 from factors.composite.strategy_evaluator import IssuerInput, Measure, evaluate_cutoff, required_input_keys
-from factors.forest import IssuerClass
+from factors.panel import IssuerClass
 from truealpha_contracts.fiscal_period import FiscalPeriod as AnnualFiscalPeriod
 from truealpha_contracts.metrics import is_registered_input_key
 from truealpha_contracts.strategy import ExclusionReason, LargeModelValueV0Definition, load_live_strategy_definition

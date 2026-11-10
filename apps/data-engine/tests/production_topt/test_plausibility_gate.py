@@ -19,7 +19,7 @@ from data_engine.config import settings
 from data_engine.datahub.production_topt import PostgresToptCoreRepository, plausibility_gate
 from factors.composite import plausibility_policy
 from factors.composite.plausibility_policy import RULE_EMPTY_ELIGIBLE, RULE_NODE_SIGN_POLICY
-from factors.forest import IssuerClass, SignPolicy, published_node
+from factors.panel import IssuerClass, SignPolicy, published_node
 from factors.production_topt import GppeV0Definition
 from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.strategy import ExclusionReason

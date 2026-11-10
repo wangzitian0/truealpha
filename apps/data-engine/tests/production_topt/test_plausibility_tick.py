@@ -18,7 +18,7 @@ import psycopg
 import pytest
 from data_engine.datahub.production_topt.sec_financial_adapter import FinancialFactsBundle
 from factors.composite import plausibility_policy
-from factors.forest import IssuerClass, SignPolicy, published_node
+from factors.panel import IssuerClass, SignPolicy, published_node
 from factors.production_topt import OperatingBranch
 from truealpha_contracts.strategy import ExclusionReason
 from truealpha_runtime.testing import isolated_test_database

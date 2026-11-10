@@ -55,7 +55,7 @@ from pathlib import Path
 from typing import Any
 
 import psycopg
-from factors.forest import FOREST, PUBLISHED_COLUMNS, IssuerClass, SignPolicy
+from factors.panel import FOREST, PUBLISHED_COLUMNS, IssuerClass, SignPolicy
 from truealpha_contracts import reconciliation_policies
 from truealpha_contracts.environment_contract import EnvironmentContract, load_environment_contract
 from truealpha_contracts.strategy import load_live_strategy_definition
@@ -113,7 +113,7 @@ def _expected_inputs() -> tuple[tuple[str, str], ...]:
     bank needs its four banking leaves, and an environment that holds no bank needs none (a preview of a few
     tickers). The tool needs `factors` and `truealpha_contracts` only, so it runs where `data_engine` is absent."""
     from factors.composite import strategy_evaluator
-    from factors.forest import definition_pins
+    from factors.panel import definition_pins
     from truealpha_contracts.strategy import load_live_strategy_definition
 
     definition = load_live_strategy_definition()

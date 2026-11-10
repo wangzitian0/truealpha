@@ -46,7 +46,8 @@ from truealpha_contracts.measure import Measure, PerUnit, Units
 from truealpha_contracts.research import ValuationTier
 from truealpha_contracts.strategy import LaborEfficiencyTreePin, LargeModelValueV0Definition, ValuationBasis
 
-from factors.forest import (
+from factors.measure import DEFAULT_REPORTING_CURRENCY, times
+from factors.panel import (
     FOREST,
     AliasKind,
     IssuerClass,
@@ -58,7 +59,6 @@ from factors.forest import (
     operating_numerator_node,
     required_inputs,
 )
-from factors.measure import DEFAULT_REPORTING_CURRENCY, times
 
 _DECIMAL_CONTEXT = Context(prec=34, rounding=ROUND_HALF_EVEN)
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"

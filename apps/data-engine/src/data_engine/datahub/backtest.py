@@ -71,7 +71,7 @@ from factors.backtest.engine import (
     simulate,
 )
 from factors.composite.strategy_evaluator import IssuerInput, evaluate_cutoff
-from factors.forest import IssuerClass
+from factors.panel import IssuerClass
 from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.strategy import (
     GoldenDecisionOutcome,

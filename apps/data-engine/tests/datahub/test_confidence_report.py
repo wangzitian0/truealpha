@@ -951,7 +951,7 @@ def test_close_origins_are_the_registrations_origins_and_the_deployed_policy() -
 def test_family_applicability_filters_pre_provision_profit_to_financial_and_gross_profit_to_non_bank() -> None:
     """#1518: FamilyPolicy applicability derives from FOREST.snapshot_field_nodes(), so pre_provision_profit
     grades only FINANCIAL subjects and gross_profit grades only NON_FINANCIAL and INSURANCE subjects."""
-    from factors.forest import IssuerClass
+    from factors.panel import IssuerClass
 
     assert family_policy("pre_provision_profit").applicability == frozenset({IssuerClass.FINANCIAL})
     assert family_policy("gross_profit").applicability == frozenset({IssuerClass.NON_FINANCIAL, IssuerClass.INSURANCE})

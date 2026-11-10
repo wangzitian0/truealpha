@@ -14,7 +14,7 @@ from decimal import Decimal
 import pytest
 from factors.composite import plausibility_policy as policy
 from factors.composite.plausibility_policy import Row, evaluate, sign_signals
-from factors.forest import IssuerClass, SignPolicy, published_node
+from factors.panel import IssuerClass, SignPolicy, published_node
 from truealpha_contracts.strategy import ExclusionReason
 
 D = Decimal

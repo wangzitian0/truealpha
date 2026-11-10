@@ -7,7 +7,7 @@ from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from factors.forest import (
+from factors.panel import (
     FOREST,
     AliasKind,
     Forest,

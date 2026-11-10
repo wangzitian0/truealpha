@@ -42,8 +42,8 @@ from factors.composite.strategy_evaluator import (
     IssuerInput,
     evaluate_cutoff,
 )
-from factors.forest import IssuerClass, uniform_tree_pins
 from factors.measure import measure_for_input_key
+from factors.panel import IssuerClass, uniform_tree_pins
 from truealpha_contracts.strategy import LargeModelValueV0Definition
 
 # CANONICAL_FIXTURE_PATH (the CLI script's *output* golden preview) is a

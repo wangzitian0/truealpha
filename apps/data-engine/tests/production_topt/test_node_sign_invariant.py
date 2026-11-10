@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from factors.forest import FOREST, Forest, IssuerClass, SignPolicy
+from factors.panel import FOREST, Forest, IssuerClass, SignPolicy
 from truealpha_runtime.testing import load_tool
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))

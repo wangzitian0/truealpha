@@ -6,18 +6,14 @@ form (`market cap / net income`, recency-weighted) and these tests never touched
 there is one function and this exercises it.
 """
 
-import sys
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 from decimal import Decimal
-from pathlib import Path
 
 import polars as pl
 import pytest
 from factors.base.peg import peg
+from factors.panel import EXPR_PEG
 from factors.types import Fact, GrowthConvention, UnitFamily
-
-# The Polars AST compiler is a test-time oracle under tests/support (init.md rule 25, #758).
-sys.path.insert(0, str(Path(__file__).resolve().parent / "support"))
 
 _AS_OF = datetime(2026, 6, 30, tzinfo=UTC)
 _ENTITY = "company:cik:1045810"
@@ -204,30 +200,21 @@ def test_a_window_shorter_than_one_year_is_a_programming_error() -> None:
 
 
 def test_the_polars_expression_reproduces_the_decimal_peg() -> None:
-    """init.md rule 25: the Polars AST is the factor-expression engine, and the Decimal
-    path is the source of truth it must agree with. Module 2 has carried this cross-check
-    since it landed; module 1 shipped without one, and until #969 both were skipped in
-    ci-python behind the previous engine's optional import. This one executes.
-    """
-    from expression_oracle.compiler import compile_expression
-    from factors.base.peg import PEG_EXPRESSION_DEFINITION
-
+    """Native Polars EXPR_PEG over the multi-period wide panel reproduces the Decimal PEG."""
     native = _call(_inputs(*_STEADY))
     assert native.value is not None, native.flags
 
     panel = pl.DataFrame(
         {
-            "symbol": [_ENTITY],
-            "date": [date(2026, 6, 30)],
-            "price": [100.0],
-            "shares_outstanding": [1000.0],
-            "net_income": [200.0],
-            # the rate the Decimal path derived, fed in as the declared input it is
-            "growth_rate": [float(Decimal("17") / Decimal(60))],
+            "issuer_id": [_ENTITY] * 4,
+            "period": ["2022-12-31", "2023-12-31", "2024-12-31", "2025-12-31"],
+            "price": [100.0] * 4,
+            "shares_outstanding": [1000.0] * 4,
+            "net_income": [100.0, 120.0, 150.0, 200.0],
         }
     )
-    compiled = panel.with_columns(factor_value=compile_expression(PEG_EXPRESSION_DEFINITION))
-    vectorised = compiled["factor_value"].to_list()[0]
+    compiled = panel.with_columns(factor_value=EXPR_PEG)
+    vectorised = compiled["factor_value"].to_list()[-1]
 
     assert vectorised == pytest.approx(float(native.value), rel=1e-9)
 

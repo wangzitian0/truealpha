@@ -13,7 +13,7 @@ from decimal import Decimal
 
 from data_engine.strategy_backtest_gateway import InputRow, issuer_inputs_from_rows, snapshot_id_from_rows
 from factors.composite.strategy_evaluator import evaluate_cutoff
-from factors.forest import IssuerClass
+from factors.panel import IssuerClass
 from truealpha_contracts.strategy import ExclusionReason, load_live_strategy_definition
 
 CUTOFF = datetime(2026, 6, 30, 23, 59, 59, tzinfo=UTC)

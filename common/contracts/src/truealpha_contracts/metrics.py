@@ -15,7 +15,9 @@ mistakable for a source restatement.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from enum import StrEnum
+from types import MappingProxyType
 
 from pydantic import BaseModel, Field
 
@@ -235,3 +237,63 @@ def input_key_for_metric(metric: str) -> str:
         if name == metric:
             return input_key
     return metric
+
+
+class IssuerClass(StrEnum):
+    """The classes a node or a decomposition may treat differently. The values are the
+    `operating_branch` values the TOPT snapshot and `mart.topt_*_results` already carry."""
+
+    NON_FINANCIAL = "non_financial"
+    FINANCIAL = "financial"
+    INSURANCE = "insurance"
+
+
+ALL_ISSUER_CLASSES: frozenset[IssuerClass] = frozenset(IssuerClass)
+
+
+class PeriodSemantics(StrEnum):
+    #: A flow over the fiscal year (income statement).
+    FISCAL_YEAR_FLOW = "fiscal-year-flow"
+    #: A stock at the fiscal year end (balance sheet, headcount).
+    FISCAL_YEAR_END_STOCK = "fiscal-year-end-stock"
+    #: As of the snapshot cutoff (price, market value).
+    CUTOFF_INSTANT = "cutoff-instant"
+    #: A definition parameter; describes no period.
+    DEFINITIONAL = "definitional"
+    #: A concept carries no value, so no period.
+    NONE = "none"
+
+
+class SignPolicy(StrEnum):
+    """What a negative value of a node means (init.md rule 17: recorded per component with the
+    versioned definition; the output invariants assert exactly this)."""
+
+    #: Arithmetic may make it negative and that says nothing by itself.
+    MAY_BE_NEGATIVE = "may-be-negative"
+    #: A negative value is a defect: the invariant suite and the tick's gate refuse it.
+    MUST_BE_NON_NEGATIVE = "must-be-non-negative"
+    #: A negative value is a valid, ranked low signal. It passes, and it is printed by name on
+    #: every check so it is never hidden.
+    SIGN_IS_SIGNAL = "sign-is-signal"
+
+
+#: Physical quantities that cannot be negative. Everything economic — profits, income, value added,
+#: efficiencies — may be negative, and a negative number is data, not a defect (#528 D1).
+PHYSICALLY_NON_NEGATIVE: Mapping[str, str] = MappingProxyType(
+    {
+        "total_assets": "a balance of assets; a negative total is a sign or unit defect in the filing parse",
+        "employees_total": "a count of people",
+        "risk_free_rate": "a definition parameter we set, not a captured fact",
+        "capital_charge": "total_assets × risk_free_rate, both non-negative by the entries above",
+        "goodwill": "a carrying amount of goodwill; a negative balance is a sign or unit defect in the filing parse",
+        "intangible_assets_net_excluding_goodwill": (
+            "a carrying amount of intangible assets; a negative balance is a sign or unit defect in the filing parse"
+        ),
+        "preferred_stock_value": (
+            "a carrying amount of preferred stock; a negative balance is a sign or unit defect in the filing parse"
+        ),
+        "tangible_deductions": "the sum of three non-negative balances (preferred stock, goodwill and intangibles)",
+        "charged_tangible_common_equity": "tangible common equity when it is not negative; undefined otherwise (#1518)",
+        "financial_assets": "a carrying balance of cash and marketable investments; a negative balance is a sign or unit defect",
+    }
+)

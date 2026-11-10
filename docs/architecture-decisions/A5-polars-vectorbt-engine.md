@@ -6,8 +6,8 @@ Status: Accepted. Owner decision 2026-09-23, carried out by #969. Supersedes `in
 selection of Qlib, which had been in force since 2026-07-17.
 Date: 2026-09-23
 Correction 2026-10-12 (#1239): the repository does not use VectorBT. See Decision 2.
-Amended 2026-10-13 (#758): the Polars AST compiler is a test-time oracle in
-`common/factors/tests/support/expression_oracle`. No deployed path imports it. The backtest engine is
+Amended 2026-10-13 (#758): the Polars expression definitions live in
+`common/factors/src/factors/panel.py`. The backtest engine is
 `factors.backtest.engine`. See Decisions 1 and 2.
 
 ## Context
@@ -40,13 +40,12 @@ The mandated reproducibility proof was nominally required and effectively dorman
 
 ## Decision
 
-1. **The Polars AST replaces Qlib as the factor-expression engine.** Factor expressions are versioned
-   `truealpha_contracts.ast` definitions compiled to `polars.Expr`. Amended 2026-10-13 (#758): the
-   native Decimal implementations in `common/factors` are the computation. The compiler is a test-time
-   reproducibility oracle in `common/factors/tests/support/expression_oracle`. The cross-check tests of
-   `gross_profit_per_employee`, `price_to_sales` and `peg` compile each expression through it and check
-   that it reproduces the Decimal value. After #758 deleted the top-k adapter, no deployed path called
-   the compiler, so it moved out of `common/factors/src`.
+1. **Native Polars `pl.Expr` replaces Qlib as the factor-expression engine.** Factor expressions are native
+   `polars.Expr` definitions over the standardized wide panel in `common/factors/src/factors/panel.py`.
+   Amended 2026-10-13 (#758): the native Decimal implementations in `common/factors` are the computation.
+   The panel evaluator in `common/factors/src/factors/panel.py` evaluates expressions over the standardized
+   wide panel. The cross-check tests of `gross_profit_per_employee`, `price_to_sales` and `peg` evaluate each
+   expression through `common/factors/src/factors/panel.py` and check that it reproduces the Decimal value.
 2. **VectorBT was selected as the backtest/portfolio-simulation engine and never adopted.** The
    `vectorbt` package was never in `uv.lock`. The backtest engine is `factors.backtest.engine` (#758).
    It is a Decimal simulation that reads its execution, transaction-cost, total-return and sizing rules

@@ -24,8 +24,8 @@ from factors.composite.strategy_evaluator import (
     LookAheadError,
     evaluate_cutoff,
 )
-from factors.forest import IssuerClass, uniform_tree_pins
 from factors.measure import measure_for_input_key
+from factors.panel import IssuerClass, uniform_tree_pins
 from psycopg import Connection
 from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.fiscal_period import parse_annual

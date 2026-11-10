@@ -147,11 +147,11 @@
       "cwd": "."
     },
     {
-      "id": "factor-contract/a-parameter-gaining-a-default-is-caught",
+      "id": "factor-contract/a-base-factor-cannot-claim-module-7",
       "guard": "tools/check_factor_contract.py",
       "file": "common/factors/src/factors/base/peg.py",
-      "find": "    cagr_years: int,",
-      "replace": "    cagr_years: int = 3,",
+      "find": "module=1,",
+      "replace": "module=7,",
       "command": [
         "python3",
         "tools/check_factor_contract.py"
@@ -159,11 +159,11 @@
       "cwd": "."
     },
     {
-      "id": "factor-contract/a-frozen-datahub-column-cannot-vanish",
+      "id": "factor-contract/a-question-column-must-exist-in-migrations",
       "guard": "tools/check_factor_contract.py",
-      "file": "db/migrations/0043_strategy_input_fiscal_period.sql",
-      "find": "add column if not exists fiscal_period text;",
-      "replace": "add column if not exists fiscal_period_renamed text;",
+      "file": "common/contracts/src/truealpha_contracts/question_requirements.py",
+      "find": "FactorColumn(\"mart.topt_gppe_results\", \"gppe\", \"gross_profit_per_employee\", 2)",
+      "replace": "FactorColumn(\"mart.topt_gppe_results\", \"gppe_nonexistent\", \"gross_profit_per_employee\", 2)",
       "command": [
         "python3",
         "tools/check_factor_contract.py"
@@ -538,9 +538,9 @@
       "cwd": "."
     },
     {
-      "id": "forest/gppe-tree-reproduces-v020",
-      "guard": "common/factors/tests/forest/test_gppe_tree.py",
-      "file": "common/factors/src/factors/forest/registry.py",
+      "id": "panel/gppe-tree-reproduces-v020",
+      "guard": "common/factors/tests/test_panel.py",
+      "file": "common/factors/src/factors/panel.py",
       "find": "                IssuerClass.FINANCIAL: (PRE_PROVISION_PROFIT.key,),\n",
       "replace": "                IssuerClass.FINANCIAL: (TOTAL_ASSETS.key,),\n",
       "command": [
@@ -548,7 +548,7 @@
         "run",
         "--no-sync",
         "pytest",
-        "common/factors/tests/forest/test_gppe_tree.py",
+        "common/factors/tests/test_panel.py",
         "-q"
       ],
       "cwd": "."
