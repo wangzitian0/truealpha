@@ -1,16 +1,9 @@
 #!/usr/bin/env python3
-"""Thin CLI shim delegating to ``truealpha_tools.issue_close_guard`` (#1340)."""
-
+# ruff: noqa: I001, E402, E701
+# fmt: off
 from __future__ import annotations
-
 import sys
 from pathlib import Path
-
-_RUNTIME_SRC = Path(__file__).resolve().parents[1] / "common" / "runtime" / "src"
-if str(_RUNTIME_SRC) not in sys.path:
-    sys.path.insert(0, str(_RUNTIME_SRC))
-
-from truealpha_tools.issue_close_guard import main  # noqa: E402
-
-if __name__ == "__main__":
-    raise SystemExit(main())
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "common/runtime/src"))
+from truealpha_tools.issue_close_guard import main
+if __name__ == "__main__": raise SystemExit(main())

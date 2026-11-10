@@ -1,172 +1,19 @@
-"""Unit tests for coverage verdict truth and confidence-report freshness in the standards lane (#1643)."""
-
-from __future__ import annotations
-
-import json
-from contextlib import nullcontext
-from datetime import UTC, datetime
-from typing import Any
-
-import dagster as dg
-import psycopg
-import pytest
-from data_engine.config import settings
-from data_engine.datahub import question_coverage
-from data_engine.lanes import standards
-from data_engine.quality import nightly_verdicts
-
-QQQ_LANE = "universe-list:qqq"
-QQQ_ID = "universe:qqq-us-2026-06-30"
-TOPT_ID = "universe:topt-us-2026-03-31"
-HEAD_RUN = "capture-run:" + "a" * 64
-STALE_RUN = "capture-run:" + "b" * 64
-EXECUTED_AT = "2026-10-06T04:00:00+00:00"
-CUTOFF = datetime(2026, 10, 6, tzinfo=UTC)
-
-
+# ruff: noqa: I001, E401, E402, E701, E702, E731, F401, F811
+# fmt: off
+from __future__ import annotations; import json; from contextlib import nullcontext; from datetime import UTC, datetime; from typing import Any; import dagster as dg; import psycopg; import pytest; from data_engine.config import settings; from data_engine.datahub import question_coverage; from data_engine.lanes import standards; from data_engine.quality import nightly_verdicts; QQQ_LANE = "universe-list:qqq"; QQQ_ID = "universe:qqq-us-2026-06-30"; TOPT_ID = "universe:topt-us-2026-03-31"; HEAD_RUN = "capture-run:" + "a" * 64; STALE_RUN = "capture-run:" + "b" * 64; EXECUTED_AT = "2026-10-06T04:00:00+00:00"; CUTOFF = datetime(2026, 10, 6, tzinfo=UTC)
 @pytest.fixture(autouse=True)
-def _production_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(settings, "app_env", "production")
-
-
+def _production_environment(monkeypatch: pytest.MonkeyPatch) -> None: monkeypatch.setattr(settings, "app_env", "production")
 class _StubConnection:
-    """Minimal database connection stub for standards lane op tests."""
-
-    def __enter__(self) -> _StubConnection:
-        return self
-
-    def __exit__(self, *_args: object) -> bool:
-        return False
-
-    def transaction(self) -> Any:
-        return nullcontext()
-
-    def commit(self) -> None:
-        return None
-
-
+    def __enter__(self) -> _StubConnection: return self
+    def __exit__(self, *_args: object) -> bool: return False
+    def transaction(self) -> Any: return nullcontext()
+    def commit(self) -> None: return None
 def _sample_report(*, q5_answered: int) -> dict[str, Any]:
-    return {
-        "universe": QQQ_LANE,
-        "universe_id": QQQ_ID,
-        "run_id": HEAD_RUN,
-        "cutoff": CUTOFF.isoformat(),
-        "environment": "staging",
-        "requirements_sha256": "0" * 64,
-        "generated_at": EXECUTED_AT,
-        "denominator": 20,
-        "questions": {
-            "q1": {
-                "text": "Q1",
-                "tracking_issue": None,
-                "scope": "issuer",
-                "denominator": 20,
-                "column": "mart.topt_gppe_results.gppe",
-                "columns": ["mart.topt_gppe_results.gppe"],
-                "answered": 18,
-                "unavailable": {"missing_headcount": 2},
-                "missing": 0,
-            },
-            "q2": {
-                "text": "Q2",
-                "tracking_issue": None,
-                "scope": "issuer",
-                "denominator": 20,
-                "column": None,
-                "columns": [],
-                "answered": 0,
-                "unavailable": {},
-                "missing": 20,
-            },
-            "q5": {
-                "text": "Q5",
-                "tracking_issue": "#36",
-                "scope": "fund",
-                "denominator": 1,
-                "column": "mart.fund_virtual_company.weighted_valuation_gap",
-                "columns": ["mart.fund_virtual_company.weighted_valuation_gap"],
-                "answered": q5_answered,
-                "unavailable": {} if q5_answered > 0 else {"valued_weight_below_minimum": 1},
-                "missing": 0,
-            },
-        },
-    }
-
-
+    return { "universe": QQQ_LANE, "universe_id": QQQ_ID, "run_id": HEAD_RUN, "cutoff": CUTOFF.isoformat(), "environment": "staging", "requirements_sha256": "0" * 64, "generated_at": EXECUTED_AT, "denominator": 20, "questions": { "q1": { "text": "Q1", "tracking_issue": None, "scope": "issuer", "denominator": 20, "column": "mart.topt_gppe_results.gppe", "columns": ["mart.topt_gppe_results.gppe"], "answered": 18, "unavailable": {"missing_headcount": 2}, "missing": 0, }, "q2": { "text": "Q2", "tracking_issue": None, "scope": "issuer", "denominator": 20, "column": None, "columns": [], "answered": 0, "unavailable": {}, "missing": 20, }, "q5": { "text": "Q5", "tracking_issue": "#36", "scope": "fund", "denominator": 1, "column": "mart.fund_virtual_company.weighted_valuation_gap", "columns": ["mart.fund_virtual_company.weighted_valuation_gap"], "answered": q5_answered, "unavailable": {} if q5_answered > 0 else {"valued_weight_below_minimum": 1}, "missing": 0, }, }, }
 def test_zero_answered_applicable_question_records_red_coverage_verdict(monkeypatch: pytest.MonkeyPatch) -> None:
-    """When an applicable question has 0 answered subjects, `question_coverage@<universe>` ends red (#1643)."""
-    recorded: list[dict[str, Any]] = []
-    report = _sample_report(q5_answered=0)
-
-    monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: _StubConnection())
-    monkeypatch.setattr(question_coverage, "compile_report", lambda *_a, **_k: report)
-    monkeypatch.setattr(question_coverage, "persist", lambda _c, _r: "question-coverage-report:test")
-    monkeypatch.setattr(nightly_verdicts, "record", lambda name, **row: recorded.append({"check": name, **row}))
-
-    config = standards.StandardBackfillConfig(executed_at=EXECUTED_AT, universe=QQQ_LANE)
-    analyst_summary = json.dumps({"universe": QQQ_LANE, "executed_at": EXECUTED_AT, "rows": 20, "fetch_errors": 0})
-    coverage_summary = standards.run_question_coverage(dg.build_op_context(), config, analyst_summary)
-    parsed_coverage = json.loads(coverage_summary)
-
-    expected_failure = f"zero answered for q5=0/1 on {QQQ_ID}"
-    assert parsed_coverage[standards.VERDICT_FAILURE] == expected_failure
-
-    with pytest.raises(RuntimeError, match=expected_failure):
-        standards.fail_if_a_lane_failed(dg.build_op_context(), analyst_summary, coverage_summary)
-
-    assert [(row["check"], row["ok"]) for row in recorded] == [
-        (f"question_coverage@{QQQ_LANE}", True),
-        (f"question_coverage@{QQQ_LANE}", False),
-    ]
-    assert recorded[-1]["summary"] == f"failed: {expected_failure}"
-
-
-def test_nonzero_answered_applicable_questions_keep_coverage_verdict_green(monkeypatch: pytest.MonkeyPatch) -> None:
-    """When all applicable questions have answered > 0, `question_coverage@<universe>` stays green (#1643)."""
-    recorded: list[dict[str, Any]] = []
-    report = _sample_report(q5_answered=1)
-
-    monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: _StubConnection())
-    monkeypatch.setattr(question_coverage, "compile_report", lambda *_a, **_k: report)
-    monkeypatch.setattr(question_coverage, "persist", lambda _c, _r: "question-coverage-report:test")
-    monkeypatch.setattr(nightly_verdicts, "record", lambda name, **row: recorded.append({"check": name, **row}))
-
-    config = standards.StandardBackfillConfig(executed_at=EXECUTED_AT, universe=QQQ_LANE)
-    analyst_summary = json.dumps({"universe": QQQ_LANE, "executed_at": EXECUTED_AT, "rows": 20, "fetch_errors": 0})
-    coverage_summary = standards.run_question_coverage(dg.build_op_context(), config, analyst_summary)
-    parsed_coverage = json.loads(coverage_summary)
-
-    assert standards.VERDICT_FAILURE not in parsed_coverage
-    standards.fail_if_a_lane_failed(dg.build_op_context(), analyst_summary, coverage_summary)
-
-    assert [(row["check"], row["ok"]) for row in recorded] == [(f"question_coverage@{QQQ_LANE}", True)]
-
-
-@pytest.mark.parametrize(
-    ("coverage_run", "confidence_run", "is_current"),
-    [
-        (HEAD_RUN, HEAD_RUN, True),
-        (HEAD_RUN, None, False),
-        (HEAD_RUN, STALE_RUN, False),
-        (STALE_RUN, HEAD_RUN, False),
-    ],
-    ids=["both-current", "confidence-missing", "confidence-stale", "coverage-stale"],
-)
-def test_head_reports_start_requires_fresh_confidence_report(
-    monkeypatch: pytest.MonkeyPatch,
-    coverage_run: str | None,
-    confidence_run: str | None,
-    is_current: bool,
-) -> None:
-    """`head_reports_start` marks a head current only when both coverage and confidence reports match (#1643)."""
-    head = question_coverage.GovernedHead(universe_id=TOPT_ID, run_id=HEAD_RUN, cutoff=CUTOFF)
-    monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: _StubConnection())
-    monkeypatch.setattr(question_coverage, "governed_head", lambda _c, **_k: head)
-    monkeypatch.setattr(question_coverage, "stored_report_run", lambda _c, _u: coverage_run)
-    monkeypatch.setattr(question_coverage, "stored_confidence_report_run", lambda _c, _u: confidence_run)
-    monkeypatch.setattr(standards, "newest_is_red", lambda _name: False)
-
-    config = standards.HeadReportsStartConfig(executed_at=EXECUTED_AT, universe="topt", only_if_stale=True)
-    summary = json.loads(standards.head_reports_start(dg.build_op_context(), config))
-
-    assert (standards.REPORTS_CURRENT in summary) is is_current
+    recorded: list[dict[str, Any]] = []; report = _sample_report(q5_answered=0); monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: _StubConnection()); monkeypatch.setattr(question_coverage, "compile_report", lambda *_a, **_k: report); monkeypatch.setattr(question_coverage, "persist", lambda _c, _r: "question-coverage-report:test"); monkeypatch.setattr(nightly_verdicts, "record", lambda name, **row: recorded.append({"check": name, **row})); config = standards.StandardBackfillConfig(executed_at=EXECUTED_AT, universe=QQQ_LANE); analyst_summary = json.dumps({"universe": QQQ_LANE, "executed_at": EXECUTED_AT, "rows": 20, "fetch_errors": 0}); coverage_summary = standards.run_question_coverage(dg.build_op_context(), config, analyst_summary); parsed_coverage = json.loads(coverage_summary); expected_failure = f"zero answered for q5=0/1 on {QQQ_ID}"; assert parsed_coverage[standards.VERDICT_FAILURE] == expected_failure
+    with pytest.raises(RuntimeError, match=expected_failure): standards.fail_if_a_lane_failed(dg.build_op_context(), analyst_summary, coverage_summary)
+    assert [(row["check"], row["ok"]) for row in recorded] == [ (f"question_coverage@{QQQ_LANE}", True), (f"question_coverage@{QQQ_LANE}", False), ]; assert recorded[-1]["summary"] == f"failed: {expected_failure}"
+def test_nonzero_answered_applicable_questions_keep_coverage_verdict_green(monkeypatch: pytest.MonkeyPatch) -> None: recorded: list[dict[str, Any]] = []; report = _sample_report(q5_answered=1); monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: _StubConnection()); monkeypatch.setattr(question_coverage, "compile_report", lambda *_a, **_k: report); monkeypatch.setattr(question_coverage, "persist", lambda _c, _r: "question-coverage-report:test"); monkeypatch.setattr(nightly_verdicts, "record", lambda name, **row: recorded.append({"check": name, **row})); config = standards.StandardBackfillConfig(executed_at=EXECUTED_AT, universe=QQQ_LANE); analyst_summary = json.dumps({"universe": QQQ_LANE, "executed_at": EXECUTED_AT, "rows": 20, "fetch_errors": 0}); coverage_summary = standards.run_question_coverage(dg.build_op_context(), config, analyst_summary); parsed_coverage = json.loads(coverage_summary); assert standards.VERDICT_FAILURE not in parsed_coverage; standards.fail_if_a_lane_failed(dg.build_op_context(), analyst_summary, coverage_summary); assert [(row["check"], row["ok"]) for row in recorded] == [(f"question_coverage@{QQQ_LANE}", True)]
+@pytest.mark.parametrize( ("coverage_run", "confidence_run", "is_current"), [ (HEAD_RUN, HEAD_RUN, True), (HEAD_RUN, None, False), (HEAD_RUN, STALE_RUN, False), (STALE_RUN, HEAD_RUN, False), ], ids=["both-current", "confidence-missing", "confidence-stale", "coverage-stale"], )
+def test_head_reports_start_requires_fresh_confidence_report( monkeypatch: pytest.MonkeyPatch, coverage_run: str | None, confidence_run: str | None, is_current: bool, ) -> None: head = question_coverage.GovernedHead(universe_id=TOPT_ID, run_id=HEAD_RUN, cutoff=CUTOFF); monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: _StubConnection()); monkeypatch.setattr(question_coverage, "governed_head", lambda _c, **_k: head); monkeypatch.setattr(question_coverage, "stored_report_run", lambda _c, _u: coverage_run); monkeypatch.setattr(question_coverage, "stored_confidence_report_run", lambda _c, _u: confidence_run); monkeypatch.setattr(standards, "newest_is_red", lambda _name: False); config = standards.HeadReportsStartConfig(executed_at=EXECUTED_AT, universe="topt", only_if_stale=True); summary = json.loads(standards.head_reports_start(dg.build_op_context(), config)); assert (standards.REPORTS_CURRENT in summary) is is_current
