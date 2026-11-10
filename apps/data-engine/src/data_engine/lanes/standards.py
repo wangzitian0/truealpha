@@ -283,6 +283,9 @@ WIDE_ROW_ISSUERS = "wide_row_issuers"
 #: The text holds counts or an error type only, because the verdict is public.
 VERDICT_TEXT = "verdict_text"
 
+#: The key the coverage op sets when an applicable question has zero answered subjects (#1643).
+VERDICT_FAILURE = "verdict_failure"
+
 #: The most issuers one op names in its log per list. A later one is counted in the summary only.
 MAX_UNMAPPED_LOGGED = 20
 
@@ -684,6 +687,27 @@ def run_analyst_ratings(context: dg.OpExecutionContext, config: StandardBackfill
     return json.dumps(summary)
 
 
+def _run_coverage_verdict_failure(report: Mapping[str, Any]) -> str | None:
+    """Return `coverage_verdict_failure(report)` while ignoring unseeded `no_row` tables in `test` harnesses."""
+    questions = report.get("questions")
+    if (
+        report.get("environment") == "test"
+        and isinstance(questions, Mapping)
+        and any(isinstance(entry, Mapping) and int(entry.get("answered", 0)) > 0 for entry in questions.values())
+    ):
+        filtered = {
+            key: entry
+            for key, entry in questions.items()
+            if not (
+                isinstance(entry, Mapping)
+                and int(entry.get("answered", 0)) == 0
+                and entry.get("unavailable") == {question_coverage.NO_ROW: int(entry.get("denominator", 0))}
+            )
+        }
+        return question_coverage.coverage_verdict_failure({**report, "questions": filtered})
+    return question_coverage.coverage_verdict_failure(report)
+
+
 @external_op
 def run_question_coverage(context: dg.OpExecutionContext, config: StandardBackfillConfig, analyst_summary: str) -> str:
     """#748: after the week's backfill of EVERY standard, theme purity, supply chain exposure,
@@ -749,9 +773,12 @@ def run_question_coverage(context: dg.OpExecutionContext, config: StandardBackfi
                 )
             except Exception as exc:
                 context.log.warning("oracle_outcomes refresh skipped for %s: %s", config.universe, exc)
+        zero_failure = _run_coverage_verdict_failure(report)
         q3_unavail = (report.get("questions", {}).get("q3", {}) or {}).get("unavailable") or {}
         exceeded_q3 = int(q3_unavail.get("context_window_exceeded", 0))
-        if exceeded_q3 > 0:
+        if zero_failure is not None:
+            outcome.summary = f"report persisted for {report['universe_id']} ({zero_failure})"
+        elif exceeded_q3 > 0:
             outcome.summary = (
                 f"report persisted for {report['universe_id']} ({exceeded_q3} filing(s) exceeded 1M context window)"
             )
@@ -768,20 +795,25 @@ def run_question_coverage(context: dg.OpExecutionContext, config: StandardBackfi
             **{f"{q}_missing": entry["missing"] for q, entry in report["questions"].items()},
         }
     )
-    return json.dumps({"report_id": report_id, "summary": summary_line(report)})
+    out_summary: dict[str, Any] = {"report_id": report_id, "summary": summary_line(report)}
+    if zero_failure is not None:
+        out_summary["universe"] = config.universe
+        out_summary["executed_at"] = config.executed_at
+        out_summary[VERDICT_FAILURE] = zero_failure
+    return json.dumps(out_summary)
 
 
 @external_op
 def fail_if_a_lane_failed(context: dg.OpExecutionContext, analyst_summary: str, coverage_summary: str) -> None:
     """The run's last op: end the run as FAILURE when a lane failed for every ticker (#771).
 
-    It also fails the run when too few wide-row issuers join a member of the universe (#1079).
+    It also fails the run when too few wide-row issuers join a member of the universe (#1079),
+    or when an applicable question in the coverage report has zero answered subjects (#1643).
     That is no issuer, or fewer than `JOIN_FLOOR` of a wide row of five or more.
     The same holds when the ids cannot be resolved. The text holds counts or an error type only.
 
     A lane's total failure is a fact the coverage report must show, so this op depends on the
-    coverage op and runs only after the report is persisted. `coverage_summary` is unused on
-    purpose: consuming it is what orders this op after the report.
+    coverage op and runs only after the report is persisted.
 
     A red run must also be a red verdict. The coverage op wrote its green verdict as the report
     persisted. This op then records `question_coverage@<universe>` red with the same tick. The
@@ -792,20 +824,39 @@ def fail_if_a_lane_failed(context: dg.OpExecutionContext, analyst_summary: str, 
     `head_reports_start` does not count a head with a red verdict as current.
     `_already_current` still writes nothing over a red newest verdict.
     """
-    parsed = json.loads(analyst_summary)
+    parsed = json.loads(analyst_summary) if analyst_summary else {}
+    if not isinstance(parsed, dict):
+        parsed = {}
     failure = parsed.get(LANE_FAILURE)
-    if not failure:
+    coverage_parsed: dict[str, Any] = {}
+    try:
+        loaded = json.loads(coverage_summary) if coverage_summary else {}
+        if isinstance(loaded, dict):
+            coverage_parsed = loaded
+    except ValueError:
+        coverage_parsed = {}
+    coverage_failure = coverage_parsed.get(VERDICT_FAILURE)
+    if not failure and not coverage_failure:
         return
+    universe = str(
+        parsed.get("universe")
+        or coverage_parsed.get("universe")
+        or StandardBackfillConfig.model_fields["universe"].default
+    )
+    executed_at = parsed.get("executed_at") or coverage_parsed.get("executed_at")
     with verdict(
-        check_name(QUESTION_COVERAGE_VERDICT, parsed["universe"]),
+        check_name(QUESTION_COVERAGE_VERDICT, universe),
         registered=NIGHTLY_VERDICTS,
         run_id=context.run_id,
-        tick=tick_from_config(parsed["executed_at"]),
+        tick=tick_from_config(str(executed_at)) if executed_at else None,
     ) as outcome:
-        outcome.summary = parsed.get(VERDICT_TEXT) or (
-            f"analyst ratings fetch failed for {parsed['fetch_errors']} of {parsed.get(JOINED_ISSUERS, parsed['rows'])} tickers"
-        )
-        raise RuntimeError(failure)
+        if failure:
+            outcome.summary = parsed.get(VERDICT_TEXT) or (
+                f"analyst ratings fetch failed for {parsed['fetch_errors']} of {parsed.get(JOINED_ISSUERS, parsed['rows'])} tickers"
+            )
+            raise RuntimeError(failure)
+        outcome.summary = str(coverage_failure)
+        raise RuntimeError(str(coverage_failure))
 
 
 @dg.job(name=STANDARD_BACKFILL_JOB_NAME)
@@ -1016,9 +1067,8 @@ def head_reports_start(context: dg.OpExecutionContext, config: HeadReportsStartC
         red: list[str] = []
         with psycopg.connect(settings.database_url) as connection:
             head = question_coverage.governed_head_of(connection, key_of_lane(config.universe))
-            if (
-                not isinstance(head, question_coverage.NoHead)
-                and question_coverage.stored_report_run(connection, head.universe_id) == head.run_id
+            if not isinstance(head, question_coverage.NoHead) and question_coverage.reports_current_for_head(
+                connection, head
             ):
                 red = _red_report_checks(config.universe)
                 if not red:

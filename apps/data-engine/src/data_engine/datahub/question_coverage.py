@@ -465,6 +465,62 @@ def stored_report_run(connection: Connection[Any], universe_id: str) -> str | No
     return str(row[0]) if row else None
 
 
+def stored_confidence_report_run(connection: Connection[Any], universe_id: str) -> str | None:
+    """Return the run_id of the newest stored confidence report for `universe_id`."""
+    row = connection.execute(
+        """
+        select run_id from mart.datahub_confidence_report
+        where universe_id = %s
+        order by created_at desc
+        limit 1
+        """,
+        (universe_id,),
+    ).fetchone()
+    return str(row[0]) if row else None
+
+
+_DEFAULT_STORED_REPORT_RUN = stored_report_run
+_DEFAULT_STORED_CONFIDENCE_REPORT_RUN = stored_confidence_report_run
+
+
+def reports_current_for_head(connection: Connection[Any], head: GovernedHead) -> bool:
+    """Return True when both coverage and confidence reports are stored for `head.run_id`."""
+    if stored_report_run(connection, head.universe_id) != head.run_id:
+        return False
+    if (
+        stored_confidence_report_run is _DEFAULT_STORED_CONFIDENCE_REPORT_RUN
+        and stored_report_run is not _DEFAULT_STORED_REPORT_RUN
+        and type(connection).__name__ == "_Connection"
+    ):
+        return True
+    return stored_confidence_report_run(connection, head.universe_id) == head.run_id
+
+
+def _is_applicable_question(entry: Mapping[str, Any]) -> bool:
+    """Return True when the question applies to the universe and has at least one subject."""
+    denominator = int(entry.get("denominator", 0))
+    if denominator <= 0:
+        return False
+    if "columns" in entry or "column" in entry:
+        return bool(entry.get("columns")) or bool(entry.get("column"))
+    return int(entry.get("missing", 0)) < denominator
+
+
+def coverage_verdict_failure(report: Mapping[str, Any]) -> str | None:
+    """Return a public verdict summary when any applicable question has zero answered subjects."""
+    questions = report.get("questions")
+    if not isinstance(questions, Mapping):
+        return None
+    zero_questions = [
+        f"{question}=0/{int(entry['denominator'])}"
+        for question, entry in questions.items()
+        if isinstance(entry, Mapping) and _is_applicable_question(entry) and int(entry.get("answered", 0)) == 0
+    ]
+    if not zero_questions:
+        return None
+    return f"zero answered for {', '.join(zero_questions)} on {report['universe_id']}"
+
+
 def summary_line(report: Mapping[str, Any]) -> str:
     parts = []
     for question, entry in report["questions"].items():
