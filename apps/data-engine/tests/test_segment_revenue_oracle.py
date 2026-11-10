@@ -551,9 +551,9 @@ def _extract(monkeypatch, document, oracle, *, write: bool = True):
 
 
 def test_tagged_segment_revenue_lands_before_any_table_is_read(monkeypatch) -> None:
-    """AAPL tags its five geographic reportable segments, and they sum to the consolidated
-    revenue the capture plane holds to the dollar. The row says the parts were TAGGED and names
-    each member, so every part can be found in the filing."""
+    """AAPL tags five geographic operating segments on StatementBusinessSegmentsAxis (refused as
+    geographic_axis_members) and five product/service lines on srt:ProductOrServiceAxis that sum
+    to consolidated revenue to the dollar."""
     from factors.shared.extraction import RULE_EXHAUSTIVE_PARTITION
 
     aapl = _packaged("AAPL_10K_000032019325000079.html", cik=320193, filed=date(2025, 10, 31))
@@ -561,16 +561,17 @@ def test_tagged_segment_revenue_lands_before_any_table_is_read(monkeypatch) -> N
 
     assert (outcome.status, outcome.extractor) == ("resolved", RULE_EXHAUSTIVE_PARTITION), outcome.detail
     assert {r["segment_name"]: r["segment_revenue"] for r in rows} == {
-        "Americas": Decimal("178353000000"),
-        "Europe": Decimal("111032000000"),
-        "Greater China": Decimal("64377000000"),
-        "Japan": Decimal("28703000000"),
-        "Rest of Asia Pacific": Decimal("33696000000"),
+        "I Pad": Decimal("28023000000"),
+        "I Phone": Decimal("209586000000"),
+        "Mac": Decimal("33708000000"),
+        "Wearables Homeand Accessories": Decimal("35686000000"),
+        "Service": Decimal("109158000000"),
     }
     assert {r["partition_residual"] for r in rows} == {Decimal(0)}
     evidence = rows[0]["evidence_ref"]
     assert "recall=xbrl concept=us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax" in evidence
-    assert "aapl:GreaterChinaSegmentMember" in evidence
+    assert "shape=product-axis " in evidence
+    assert "aapl:IPhoneMember" in evidence
 
 
 def test_a_tagged_set_that_does_not_balance_is_refused_with_each_sets_reason(monkeypatch) -> None:

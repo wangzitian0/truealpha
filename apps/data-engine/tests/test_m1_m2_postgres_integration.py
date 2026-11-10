@@ -189,7 +189,7 @@ def test_edges_for_one_issuer_leave_the_other_with_no_disclosed_suppliers(
     _seed_edge(connection, from_id="issuer:t772:a", to_id="customer:t772", relation_type="supplies_to")
     rows = _materialize_t772(connection, "run:t772:edges-for-a")
     assert rows == {
-        _T772_A: ("available", [], 1),
+        _T772_A: ("available", ["unquantified_partner_shares", "customer_only_graph"], 1),
         _T772_B: ("unavailable", ["no_disclosed_suppliers"], 0),
     }
 

@@ -21,6 +21,9 @@ from pathlib import Path
 
 from data_engine.datahub.standards.filing_extraction import filing_plain_text
 from data_engine.datahub.standards.segment_extraction import (
+    TaggedPartition,
+    _is_geographic_member,
+    accepted_tagged_partition,
     declared_segment_count,
     segment_name_for,
     single_segment_statement,
@@ -176,3 +179,54 @@ def test_a_segment_is_named_in_its_members_own_words() -> None:
     assert segment_name_for("msft:ProductivityAndBusinessProcessesMember") == "Productivity and Business Processes"
     assert segment_name_for("amzn:AWSSegmentMember") == "AWS"
     assert segment_name_for("avgo:SemiconductorSolutionsMember") == "Semiconductor Solutions"
+
+
+def test_geographic_business_segments_are_refused_and_product_axis_fallback_balances() -> None:
+    """#1642 Q6: When all members of `StatementBusinessSegmentsAxis` are geographic regions
+    (`Americas`, `Europe`, `Greater China`, `Japan`, `Rest of Asia Pacific`), that candidate set
+    is refused with `geographic_axis_members`, and `tagged_segment_revenues` /
+    `accepted_tagged_partition` selects the balancing `srt:ProductOrServiceAxis` breakdown."""
+    for geo_member in (
+        "aapl:AmericasSegmentMember",
+        "aapl:EuropeSegmentMember",
+        "aapl:GreaterChinaSegmentMember",
+        "aapl:JapanSegmentMember",
+        "country:JP",
+        "aapl:RestOfAsiaPacificSegmentMember",
+    ):
+        assert _is_geographic_member(geo_member) is True
+    assert _is_geographic_member("aapl:IPhoneMember") is False
+    assert _is_geographic_member("avgo:SemiconductorSolutionsMember") is False
+
+    aapl_tagged = tagged_segment_revenues((FILINGS / "AAPL_10K_000032019325000079.html").read_bytes())
+    assert len(aapl_tagged) == 2
+    geo_set, prod_set = aapl_tagged
+    assert geo_set.shape == "all"
+    assert geo_set.refusal == "geographic_axis_members"
+    assert geo_set.parts == ()
+
+    assert prod_set.shape == "product-axis"
+    assert prod_set.refusal is None
+    assert [m for m, _ in prod_set.parts] == [
+        "aapl:IPadMember",
+        "aapl:IPhoneMember",
+        "aapl:MacMember",
+        "aapl:WearablesHomeandAccessoriesMember",
+        "us-gaap:ServiceMember",
+    ]
+    assert sum((v for _, v in prod_set.parts), Decimal(0)) == Decimal("416161000000")
+
+    accepted = accepted_tagged_partition(
+        aapl_tagged,
+        total=Decimal("416161000000"),
+        period_end=prod_set.period_end,
+    )
+    assert isinstance(accepted, TaggedPartition)
+    assert accepted.segments.shape == "product-axis"
+    assert dict(accepted.parts) == {
+        "aapl:IPadMember": Decimal("28023000000"),
+        "aapl:IPhoneMember": Decimal("209586000000"),
+        "aapl:MacMember": Decimal("33708000000"),
+        "aapl:WearablesHomeandAccessoriesMember": Decimal("35686000000"),
+        "us-gaap:ServiceMember": Decimal("109158000000"),
+    }

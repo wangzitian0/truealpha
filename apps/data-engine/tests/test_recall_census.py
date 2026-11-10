@@ -115,7 +115,13 @@ def test_the_filings_with_a_known_oracle_still_balance(committed) -> None:
     assert avgo["accepted_partition"] == ["Infrastructure Software", "Semiconductor Solutions"]
 
     aapl = committed["AAPL_10K_000032019325000079.html"]
-    assert aapl["accepted_partition"] == ["Americas", "Europe", "Greater China", "Japan", "Rest of Asia Pacific"]
+    assert aapl["accepted_partition"] == [
+        "I Pad",
+        "I Phone",
+        "Mac",
+        "Wearables Homeand Accessories",
+        "Service",
+    ]
 
 
 def test_the_corpus_holds_filings_the_deployed_run_actually_meets(committed) -> None:
@@ -143,8 +149,10 @@ def test_the_tagged_segment_revenue_is_measured_per_filing(committed) -> None:
     packaged filing is pinned. AAPL and AVGO balance their oracles; ADM's three tagged segments
     are short of its revenue by the off-axis "Other Business"."""
     by_ticker = {name.split("_")[0]: entry["tagged_segments"] for name, entry in committed.items()}
-    (aapl,) = by_ticker["AAPL"]
-    assert aapl["sum"] == TOTALS["AAPL_10K_000032019325000079.html"]
+    aapl_geo, aapl_prod = by_ticker["AAPL"]
+    assert aapl_geo["refusal"] == "geographic_axis_members"
+    assert aapl_prod["shape"] == "product-axis"
+    assert aapl_prod["sum"] == TOTALS["AAPL_10K_000032019325000079.html"]
     (avgo,) = by_ticker["AVGO"]
     assert avgo["sum"] == TOTALS["AVGO_10K_000173016825000121.html"]
     assert {entry["concept"] for entry in by_ticker["ADM"]} == {

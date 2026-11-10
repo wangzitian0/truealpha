@@ -166,6 +166,7 @@ def _ruleset_concepts(*fields: str) -> tuple[str, ...]:
 #: order. Then it tries `bank_revenue`: a bank's top line (JPM) is what its segments report.
 _REVENUE_CONCEPTS = _ruleset_concepts("revenue", "bank_revenue")
 _SEGMENT_AXIS = "us-gaap:StatementBusinessSegmentsAxis"
+_PRODUCT_AXIS = "srt:ProductOrServiceAxis"
 #: The one second dimension a segment fact may carry and still be the segment's revenue: the
 #: filer marking the value as the operating segment's own.
 _CONSOLIDATION_AXIS = "srt:ConsolidationItemsAxis"
@@ -175,6 +176,71 @@ _ANNUAL_DAYS = range(340, 381)
 _CAMEL_CASE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
 #: CamelCase capitalizes every word; a printed segment name does not ("Rest of Asia Pacific").
 _MINOR_WORDS = frozenset({"And", "Of", "The", "For", "In", "To", "On"})
+_GEOGRAPHIC_REGION_NAMES = frozenset(
+    {
+        "americas",
+        "the americas",
+        "north america",
+        "latin america",
+        "south america",
+        "central america",
+        "united states",
+        "u s",
+        "us",
+        "usa",
+        "u s a",
+        "united kingdom",
+        "uk",
+        "u k",
+        "international",
+        "europe",
+        "emea",
+        "europe middle east and africa",
+        "europe middle east africa",
+        "greater china",
+        "china",
+        "mainland china",
+        "prc",
+        "japan",
+        "asia",
+        "asia pacific",
+        "apac",
+        "rest of asia pacific",
+        "other asia pacific",
+        "all other asia",
+        "rest of world",
+        "rest of the world",
+        "other countries",
+        "other regions",
+        "other international",
+        "other foreign",
+        "foreign",
+        "domestic",
+    }
+)
+
+
+def _is_geographic_member(member: str) -> bool:
+    """Return True when an axis member names a country or pure geographic region."""
+    clean = member.strip()
+    if clean.lower().startswith("country:"):
+        return True
+    normalized = re.sub(r"[^a-z0-9]+", " ", segment_name_for(clean).lower()).strip()
+    return normalized in _GEOGRAPHIC_REGION_NAMES
+
+
+def _prune_coarse_product_rollup(
+    members: dict[str, set[Decimal | None]],
+) -> dict[str, set[Decimal | None]]:
+    """Drop `us-gaap:ProductMember` when finer product members are tagged alongside it."""
+    if "us-gaap:ProductMember" not in members:
+        return members
+    specific = [m for m in members if m not in ("us-gaap:ProductMember", "us-gaap:ServiceMember")]
+    if not specific:
+        return members
+    filtered = dict(members)
+    filtered.pop("us-gaap:ProductMember", None)
+    return filtered
 
 
 #: The two shapes a segment fact's context takes (#835). Most filers use one, or split one
@@ -221,6 +287,76 @@ class TaggedSegments:
         return concept if self.shape == "all" else f"{concept} ({self.shape.replace('-', ' ')} only)"
 
 
+def _product_axis_candidate(
+    concept: str,
+    current: Sequence[TaggedFact],
+    period_end: date,
+    base_scale: int,
+    reconciling: tuple[tuple[str, Decimal], ...],
+) -> TaggedSegments | None:
+    prod_members: dict[str, set[Decimal | None]] = {}
+    prod_scale = base_scale
+    for fact in current:
+        dimensions = dict(fact.context.dimensions)
+        member = dimensions.pop(_PRODUCT_AXIS, "")
+        if not member or dimensions:
+            continue
+        prod_members.setdefault(member, set()).add(fact.value)
+        prod_scale = max(prod_scale, fact.scale)
+    prod_members = _prune_coarse_product_rollup(prod_members)
+    if not prod_members:
+        return None
+    prod_set = _tagged_set(
+        concept,
+        "product-axis",
+        period_end,
+        prod_members,
+        prod_scale,
+        reconciling,
+        check_geographic=False,
+    )
+    return prod_set if prod_set.refusal is None and prod_set.parts else None
+
+
+def _reconciling_items(current: Sequence[TaggedFact]) -> tuple[tuple[str, Decimal], ...]:
+    items: dict[str, set[Decimal]] = {}
+    for fact in current:
+        if len(fact.context.dimensions) != 1 or fact.value is None or fact.value <= 0:
+            continue
+        ((axis, member),) = fact.context.dimensions
+        if axis == _CONSOLIDATION_AXIS and member.split(":", 1)[-1] in _RECONCILING_LABELS:
+            items.setdefault(member, set()).add(fact.value)
+    return tuple(sorted((member, min(values)) for member, values in items.items() if len(values) == 1))
+
+
+def _segment_axis_candidates(
+    concept: str,
+    current: Sequence[TaggedFact],
+    period_end: date,
+    reconciling: tuple[tuple[str, Decimal], ...],
+) -> tuple[list[TaggedSegments], int]:
+    by_shape: dict[str, dict[str, set[Decimal | None]]] = {}
+    scale = 0
+    for shape, extra in _SHAPES:
+        for fact in current:
+            dimensions = dict(fact.context.dimensions)
+            member = dimensions.pop(_SEGMENT_AXIS, "")
+            if not member or tuple(dimensions.items()) != extra:
+                continue
+            by_shape.setdefault(shape, {}).setdefault(member, set()).add(fact.value)
+            scale = max(scale, fact.scale)
+    union: dict[str, set[Decimal | None]] = {}
+    for members in by_shape.values():
+        for member, values in members.items():
+            union.setdefault(member, set()).update(values)
+    candidates = [("all", union)] if union else []
+    candidates += [(shape, members) for shape, members in by_shape.items() if members != union]
+    concept_sets = [
+        _tagged_set(concept, shape, period_end, members, scale, reconciling) for shape, members in candidates
+    ]
+    return concept_sets, scale
+
+
 def tagged_segment_revenues(filing: bytes | InlineXbrl) -> tuple[TaggedSegments, ...]:
     """Every candidate segment set the filing tags for its latest year, in the order to try them.
 
@@ -239,36 +375,15 @@ def tagged_segment_revenues(filing: bytes | InlineXbrl) -> tuple[TaggedSegments,
     if not facts:
         return ()
     latest = max(fact.context.end for fact in facts)
-    found = []
+    found: list[TaggedSegments] = []
     for concept in _REVENUE_CONCEPTS:
         current = [fact for fact in facts if fact.concept == concept and fact.context.end == latest]
-        # Deduplicated, and a member tagged with two different values is no item at all.
-        items: dict[str, set[Decimal]] = {}
-        for fact in current:
-            if len(fact.context.dimensions) != 1 or fact.value is None or fact.value <= 0:
-                continue
-            ((axis, member),) = fact.context.dimensions
-            if axis == _CONSOLIDATION_AXIS and member.split(":", 1)[-1] in _RECONCILING_LABELS:
-                items.setdefault(member, set()).add(fact.value)
-        reconciling = tuple(sorted((member, min(values)) for member, values in items.items() if len(values) == 1))
-        by_shape: dict[str, dict[str, set[Decimal | None]]] = {}
-        scale = 0
-        for shape, extra in _SHAPES:
-            for fact in current:
-                dimensions = dict(fact.context.dimensions)
-                member = dimensions.pop(_SEGMENT_AXIS, "")
-                if not member or tuple(dimensions.items()) != extra:
-                    continue
-                by_shape.setdefault(shape, {}).setdefault(member, set()).add(fact.value)
-                scale = max(scale, fact.scale)
-        union: dict[str, set[Decimal | None]] = {}
-        for members in by_shape.values():
-            for member, values in members.items():
-                union.setdefault(member, set()).update(values)
-        candidates = [("all", union)] if union else []
-        candidates += [(shape, members) for shape, members in by_shape.items() if members != union]
-        for shape, members in candidates:
-            found.append(_tagged_set(concept, shape, latest, members, scale, reconciling))
+        reconciling = _reconciling_items(current)
+        concept_sets, scale = _segment_axis_candidates(concept, current, latest, reconciling)
+        found.extend(concept_sets)
+        if concept_sets and all(seg.refusal == "geographic_axis_members" for seg in concept_sets):
+            if (prod_set := _product_axis_candidate(concept, current, latest, scale, reconciling)) is not None:
+                found.append(prod_set)
     return tuple(found)
 
 
@@ -279,6 +394,8 @@ def _tagged_set(
     members: dict[str, set[Decimal | None]],
     scale: int,
     reconciling: tuple[tuple[str, Decimal], ...],
+    *,
+    check_geographic: bool = True,
 ) -> TaggedSegments:
     if any(None in tagged for tagged in members.values()):
         return TaggedSegments(concept, shape, period_end, (), scale, "unreadable_value")
@@ -287,6 +404,8 @@ def _tagged_set(
     parts = tuple(sorted((member, value) for member, (value,) in members.items() if value is not None))
     if any(value < 0 for _, value in parts):
         return TaggedSegments(concept, shape, period_end, (), scale, "negative_part")
+    if check_geographic and parts and all(_is_geographic_member(member) for member, _ in parts):
+        return TaggedSegments(concept, shape, period_end, (), scale, "geographic_axis_members")
     return TaggedSegments(concept, shape, period_end, parts, scale, None, reconciling)
 
 

@@ -763,3 +763,139 @@ def test_supply_chain_rejects_unanchored_quotes_computes_filing_age_freshness_an
     assert "UNANCHORED_MIDDLE_MARKER" not in captured["prompt"]
     assert "ANCHORED_MIDDLE_MARKER" in captured["prompt"]
     assert "TAIL_MARKER" in captured["prompt"]
+
+
+def test_load_issuer_graph_partners_reads_revenue_share_from_entity_relations_and_deduplicates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1642 Q3: `revenue_share_pct` persisted to `staging.entity_relations` is read back into
+    `SupplyChainPartner.revenue_share` as a fraction in `(0, 1]`, merged onto `staging.kg_edges`
+    partners without double-counting, and produces non-zero `max_partner_share`."""
+    import json
+
+    from data_engine import raw_store
+
+    filing_text = (
+        "Item 1. Business. "
+        "Taiwan Semiconductor Manufacturing Company Limited (TSMC) fabricates our wafers. "
+        "Customer A accounted for 18% of total revenue in fiscal 2025."
+    )
+    monkeypatch.setattr(raw_store, "get_payload", lambda _conn, _fid, **_kw: filing_text.encode("utf-8"))
+
+    nvda_uuid = _issuer_id("nvda")
+    gateway = _StubLLMGateway(
+        partners=(
+            llm.ExtractedSupplyChainPartner(
+                partner_name="TSMC",
+                ticker="TSM",
+                relation_type="supplier",
+                revenue_share_pct=None,
+                evidence_quote="Taiwan Semiconductor Manufacturing Company Limited (TSMC) fabricates our wafers.",
+            ),
+            llm.ExtractedSupplyChainPartner(
+                partner_name="Customer A",
+                ticker=None,
+                relation_type="customer",
+                revenue_share_pct=Decimal("18.0"),
+                evidence_quote="Customer A accounted for 18% of total revenue in fiscal 2025.",
+            ),
+        )
+    )
+
+    class _EntityRelationsGraphConn:
+        def __init__(self) -> None:
+            self.edges: list[tuple[str, str, str, float]] = []
+            self.entity_relations: list[tuple[str, str, Decimal, str | None]] = []
+            self.entities: dict[str, str] = {}
+            self.mart_rows: list[tuple[object, ...]] = []
+
+        def cursor(self):
+            class _RegCur(_MockCursor):
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *args: object):
+                    pass
+
+                def fetchone(self):
+                    return ("exists",)
+
+            return _RegCur()
+
+        def execute(self, sql: str, params: object = None):
+            cur = _MockCursor()
+            p = tuple(params) if isinstance(params, list | tuple) else ()
+            if "from raw.fetches" in sql:
+                cur.fetchall = lambda: [  # type: ignore[method-assign]
+                    (
+                        501,
+                        "filing-document:CIK0001045810:000104581026000010",
+                        "s3://truealpha-raw/raw/sec/nvda.htm",
+                        datetime(2026, 2, 26, tzinfo=UTC),
+                        {"cik": 1045810, "form": "10-K", "accession": "000104581026000010", "plain_text": filing_text},
+                    )
+                ]
+            elif "insert into staging.entity_relations" in sql:
+                attrs = json.loads(str(p[10]))
+                self.entity_relations.append((str(p[1]), str(p[2]), Decimal(str(p[8])), attrs.get("revenue_share_pct")))
+            elif "insert into staging.kg_entities" in sql:
+                self.entities[str(p[0])] = str(p[2])
+            elif "select source, confidence from staging.kg_edges" in sql:
+                cur.fetchone = lambda: None  # type: ignore[method-assign]
+            elif "insert into staging.kg_edges" in sql:
+                self.edges.append((str(p[0]), str(p[1]), str(p[2]), float(str(p[5]))))
+                cur.fetchone = lambda: (len(self.edges),)  # type: ignore[method-assign]
+            elif "select exists (select 1 from staging.kg_edges" in sql:
+                cur.fetchone = lambda: (bool(self.edges),)  # type: ignore[method-assign]
+            elif "from staging.kg_edges e" in sql and "where e.from_id = %s" in sql:
+                target = str(p[0])
+                cur.fetchall = lambda: [  # type: ignore[method-assign]
+                    (to_id, self.entities.get(to_id, to_id), Decimal(str(conf)))
+                    for from_id, to_id, rel, conf in self.edges
+                    if from_id == target and rel == "supplies_to"
+                ]
+            elif "from staging.kg_edges e" in sql and "where e.to_id = %s" in sql:
+                target = str(p[0])
+                cur.fetchall = lambda: [  # type: ignore[method-assign]
+                    (from_id, self.entities.get(from_id, from_id), Decimal(str(conf)))
+                    for from_id, to_id, rel, conf in self.edges
+                    if to_id == target and rel == "supplies_to"
+                ]
+            elif "from staging.entity_relations r" in sql:
+                aliases = set(p[0]) if p and isinstance(p[0], list | tuple) else set()
+                cur.fetchall = lambda: [  # type: ignore[method-assign]
+                    (
+                        from_id,
+                        to_id,
+                        conf,
+                        pct,
+                        self.entities.get(from_id, from_id),
+                        self.entities.get(to_id, to_id),
+                    )
+                    for from_id, to_id, conf, pct in self.entity_relations
+                    if from_id in aliases or to_id in aliases
+                ]
+            elif "insert into mart.issuer_supply_chain_exposure" in sql:
+                self.mart_rows.append(p)
+            return cur
+
+    conn = _EntityRelationsGraphConn()
+    issuers = [CanonicalIssuer(issuer_id=nvda_uuid, legacy_id="company:cik:0001045810", ticker="NVDA")]
+    report = materialize_universe_supply_chain_exposure(
+        conn,  # type: ignore[arg-type]
+        run_id="capture-run:q3-share",
+        cutoff=datetime(2026, 10, 20, tzinfo=UTC),
+        issuers=issuers,
+        llm_gateway=gateway,
+    )
+    assert report == 1
+    assert len(conn.mart_rows) == 1
+    row = conn.mart_rows[0]
+    assert row[1] == nvda_uuid
+    assert row[4] == 2  # direct_partners deduplicated across kg_edges and entity_relations
+    assert row[5] == 1  # suppliers_count
+    assert row[6] == 1  # customers_count
+    assert row[7] == Decimal("0.18")  # max_partner_share = 18.0 / 100
+    assert row[3] == Decimal("0.0324")  # 0.18^2 HHI
+    assert row[9] == []  # quantified share + supplier present -> no warning flags
+    assert row[11] == "available"
