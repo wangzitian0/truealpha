@@ -1,4 +1,4 @@
-<!-- WS_STATIC_START adapter=rules-v2 inputs=752efe7a8f8de60dbd8d2a680f9c6cff38894dc265043aa5c39ac5cfba842dc4 -->
+<!-- WS_STATIC_START adapter=rules-v2 inputs=ba1ac62876ee6b8b144126ad374d07e84546cdcefd65ffb133cb4dec20480f23 -->
 <!-- Generated file: do not edit by hand. These rules are maintained in the owner's rule source and re-rendered here. -->
 
 ## Engineering discipline
@@ -10,6 +10,7 @@
 - **One source of truth:** Keep one authoritative definition per core fact. Repeated hardcoding and scattered configuration invite drift.
 - **Clean up during migration:** After the new mechanism is live and equivalence is proved, remove its predecessor, obsolete files, and dead code in the same change. Define contracts first and derive CI from them.
 - **Deletion can leave guards green and empty:** A guard for an old structure can stop checking anything after deletion. Check each guard and remove it or redirect it to the new structure; green tests alone do not prove safe deletion.
+- **Fix an owner hold by deletion:** Delete the rule or gate branch that holds non-production work. Do not add logic that reads a command to permit it. Such logic lets unsafe commands through.
 - **Define guard scope from what it must govern, not from today's passing tree.** Let the guard fail on existing violations, then repair them. A guard never seen failing is not yet evidence of protection.
 - **Worktree self-sufficiency:** Every worktree must resolve its dependencies, toolchain, skills, and configuration internally. Tools and tests must not navigate upward with `../..` to locate files in parent checkouts.
 - **Physical context verification:** Static file existence does not prove host runtime context injection. Junior runs non-interactive probes (`-p` or headless exec) with low-cost models, asserting visible specification text across root and deep subdirectories.
