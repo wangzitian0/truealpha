@@ -11,6 +11,7 @@ from truealpha_runtime.checks import (
     DatabaseCheck,
     GraphStoreCheck,
     ObjectStorageCheck,
+    OrchestratorCheck,
 )
 from truealpha_runtime.cli import main as cli_main
 from truealpha_runtime.config import RuntimeSettings
@@ -235,3 +236,41 @@ def test_cli_check_live_runs_check_health_and_exits_nonzero_when_required_probe_
     assert "graph_store: present" in out
     assert "object_storage: absent" in out
     assert not hasattr(checks_module, "run_dependency_checks")
+
+
+def test_orchestrator_check_reports_present_when_probe_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+
+    from infra2_sdk.runtime.health import DependencyKind
+
+    check = OrchestratorCheck("http://127.0.0.1:3001/server_info")
+    assert check.name == "orchestrator"
+    assert check.kind == DependencyKind.ORCHESTRATOR
+
+    async def fake_probe_http(url, *, name="http", client=None, settings=None):
+        return ProbeResult(name, DependencyStatus.PRESENT, f"HTTP 200 from {url}", 2.5)
+
+    monkeypatch.setattr("infra2_sdk.runtime.http.probe_http", fake_probe_http)
+
+    result = asyncio.run(check.probe())
+    assert result.status is DependencyStatus.PRESENT
+    assert result.present is True
+    assert result.name == "orchestrator"
+    assert "HTTP 200" in result.detail
+
+
+def test_orchestrator_check_reports_absent_when_probe_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+
+    check = OrchestratorCheck("http://127.0.0.1:3001/server_info")
+
+    async def fake_probe_http(url, *, name="http", client=None, settings=None):
+        return ProbeResult(name, DependencyStatus.ABSENT, "connection refused", 1.0)
+
+    monkeypatch.setattr("infra2_sdk.runtime.http.probe_http", fake_probe_http)
+
+    result = asyncio.run(check.probe())
+    assert result.status is DependencyStatus.ABSENT
+    assert result.present is False
+    assert result.name == "orchestrator"
+    assert "connection refused" in result.detail

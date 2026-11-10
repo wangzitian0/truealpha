@@ -1,9 +1,15 @@
 from __future__ import annotations
 
 import time
+from typing import Any
 
 import psycopg
-from infra2_sdk.runtime.health import DependencyStatus, ProbeResult
+from infra2_sdk.runtime.health import (
+    DependencyKind,
+    DependencyStatus,
+    ProbeResult,
+    probe_orchestrator,
+)
 from infra2_sdk.runtime.postgres import PostgresSettings, probe_postgres, redact_postgres_error
 from infra2_sdk.runtime.s3 import probe_s3
 
@@ -111,10 +117,35 @@ class ObjectStorageCheck:
             )
 
 
+class OrchestratorCheck:
+    name = "orchestrator"
+    kind = DependencyKind.ORCHESTRATOR
+
+    def __init__(
+        self,
+        url: str = "http://127.0.0.1:3001/server_info",
+        *,
+        client: Any | None = None,
+        settings: Any | None = None,
+    ) -> None:
+        self.url = url
+        self._client = client
+        self._settings = settings
+
+    async def probe(self) -> ProbeResult:
+        return await probe_orchestrator(
+            self.url,
+            name=self.name,
+            client=self._client,
+            settings=self._settings,
+        )
+
+
 __all__ = [
     "DatabaseCheck",
     "DependencyStatus",
     "GraphStoreCheck",
     "ObjectStorageCheck",
+    "OrchestratorCheck",
     "ProbeResult",
 ]
