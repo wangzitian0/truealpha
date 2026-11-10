@@ -55,7 +55,7 @@ from pathlib import Path
 from typing import Any
 
 import psycopg
-from factors.panel import FOREST, PUBLISHED_COLUMNS, IssuerClass, SignPolicy
+from factors.panel import PANEL_METRICS, PUBLISHED_COLUMNS, IssuerClass, SignPolicy, ratio_operands_of
 from truealpha_contracts import reconciliation_policies
 from truealpha_contracts.environment_contract import EnvironmentContract, load_environment_contract
 from truealpha_contracts.strategy import load_live_strategy_definition
@@ -202,7 +202,7 @@ def _sign_policy_queries(table: str = SIGN_POLICY_TABLE) -> tuple[str, str | Non
     def select(column: str, node_key: str, predicate: str, why: str, *, published: bool = True) -> str:
         """One arm of the union. `published` scopes it to rows where `column` carries a value;
         an arm whose predicate is itself about NULLs passes False."""
-        node = FOREST.node(node_key)
+        node = PANEL_METRICS[node_key]
         scope = f" and {column} is not null" if published else ""
         return (
             f"select listing_id, operating_branch, '{column}' as published_column, "
@@ -224,7 +224,7 @@ def _sign_policy_queries(table: str = SIGN_POLICY_TABLE) -> tuple[str, str | Non
                 )
             )
             continue
-        node = FOREST.node(node_key)
+        node = PANEL_METRICS[node_key]
         by_policy = {
             policy: {c for c, declared in node.sign_policy.items() if declared is policy} for policy in SignPolicy
         }
@@ -256,28 +256,33 @@ def _sign_policy_queries(table: str = SIGN_POLICY_TABLE) -> tuple[str, str | Non
                     SignPolicy.SIGN_IS_SIGNAL.value,
                 )
             )
-    for tree in FOREST.trees:
-        for decomposition in tree.decompositions:
-            if decomposition.formula_id != "ratio" or decomposition.output not in judged:
-                continue
-            by_pair: dict[tuple[str, str], set[IssuerClass]] = {}
-            for issuer_class, (numerator, denominator) in decomposition.operands.items():
-                policy = FOREST.node(denominator).sign_policy.get(issuer_class)
-                if numerator in judged and policy is SignPolicy.MUST_BE_NON_NEGATIVE:
-                    by_pair.setdefault((numerator, denominator), set()).add(issuer_class)
-            for (numerator, denominator), classes in sorted(by_pair.items()):
-                output_column, numerator_column = judged[decomposition.output], judged[numerator]
-                violations.append(
-                    select(
-                        output_column,
-                        decomposition.output,
-                        # A published output whose numerator is absent is as wrong as a flipped
-                        # sign: `sign(NULL) <> …` is NULL, so the absence is named explicitly.
-                        f"operating_branch in ({_classes(classes)}) and ({numerator_column} is null "
-                        f"or sign({output_column}) <> sign({numerator_column}))",
-                        f"sign of {numerator_column} over non-negative {denominator}",
-                    )
+    for spec in PANEL_METRICS.values():
+        if spec.key not in judged:
+            continue
+        pair = ratio_operands_of(spec)
+        if pair is None:
+            continue
+        numerator, denominator = pair
+        if numerator not in judged or denominator not in PANEL_METRICS:
+            continue
+        classes = {
+            issuer_class
+            for issuer_class in spec.applicability
+            if PANEL_METRICS[denominator].sign_policy.get(issuer_class) is SignPolicy.MUST_BE_NON_NEGATIVE
+        }
+        if classes:
+            output_column, numerator_column = judged[spec.key], judged[numerator]
+            violations.append(
+                select(
+                    output_column,
+                    spec.key,
+                    # A published output whose numerator is absent is as wrong as a flipped
+                    # sign: `sign(NULL) <> …` is NULL, so the absence is named explicitly.
+                    f"operating_branch in ({_classes(classes)}) and ({numerator_column} is null "
+                    f"or sign({output_column}) <> sign({numerator_column}))",
+                    f"sign of {numerator_column} over non-negative {denominator}",
                 )
+            )
     return "\n union all\n".join(violations), ("\n union all\n".join(signals) if signals else None)
 
 

@@ -7,8 +7,8 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any
 from unittest.mock import MagicMock
-from uuid import UUID
 
+import polars as pl
 import pytest
 from data_engine.datahub import backtest as backtest_mod
 from data_engine.datahub.production_topt.metric_node_values import materialize_metric_node_values
@@ -21,11 +21,10 @@ from factors.composite.strategy_evaluator import (
     evaluate_cutoff,
 )
 from factors.panel import (
-    FOREST,
-    Forest,
+    GPPE_OPERATING_FINANCIAL_SPEC,
     IssuerClass,
-    MetricNode,
-    MetricTree,
+    node_id_for,
+    variant_sha256,
 )
 from factors.production_topt import (
     GppeV0Definition,
@@ -172,78 +171,96 @@ def _sample_factor_input() -> ToptCoreSnapshotInput:
     )
 
 
-def test_f2_json_loaded_tree_materializes_node_values_without_ddl_or_python_edit() -> None:
-    """F2 standing check: adding a new tree loaded from JSON into a Forest materializes
-    mart.metric_node_values rows with zero migration or Python code change."""
-    custom_node = MetricNode.model_validate(
-        {
-            "node_id": "11111111-2222-5333-8444-555555555555",
-            "key": "gppe_raw",
-            "kind": "derived",
-            "definition": "Uncharged gross profit per employee loaded from JSON.",
-            "unit": "per_employee",
-            "period": "fiscal-year-flow",
-            "applicability": ["non_financial"],
-            "sign_policy": {"non_financial": "sign-is-signal"},
-            "provenance": {"kind": "derived", "reference": "gppe_raw_json", "note": ""},
-            "aliases": [],
+def test_f2_polars_expr_factor_iteration_materializes_node_values_without_ddl_or_struct_edit() -> None:
+    """F2 standing check (#1610): registering a one-line Polars `pl.Expr` (both cross-sectional
+    and multi-period `.shift().over("issuer_id")`) materializes into `mart.metric_node_values`
+    with automatic `expr.meta.root_names()` input discovery and `pl.min_horizontal` confidence
+    propagation, with zero DDL or struct edits."""
+    custom_exprs = {
+        "gppe_raw": pl.col("gross_profit") / pl.col("employees_total"),
+        "net_income_yoy_growth": (pl.col("net_income") / pl.col("net_income").shift(1).over("issuer_id")) - 1.0,
+    }
+
+    factor_2024 = _sample_factor_input()
+    obs_id = factor_2024.observation_ids[0]
+    ni_2024 = ToptMetricInput(
+        input_id=obs_id,
+        metric="net_income",
+        value=Decimal("5000000000"),
+        confidence=Decimal("0.70"),
+        knowable_at=KNOWN,
+        freshness=MetricFreshness.FRESH,
+        availability=MetricAvailability.AVAILABLE,
+    )
+    ni_2025 = ToptMetricInput(
+        input_id=obs_id,
+        metric="net_income",
+        value=Decimal("7500000000"),
+        confidence=Decimal("0.90"),
+        knowable_at=KNOWN,
+        freshness=MetricFreshness.FRESH,
+        availability=MetricAvailability.AVAILABLE,
+    )
+    factor_2024 = factor_2024.model_copy(
+        update={
+            "listing_id": "listing:xnas:nvda:2024",
+            "inputs": {"net_income": ni_2024},
         }
     )
-    custom_tree = MetricTree.model_validate(
-        {
-            "tree_id": "66666666-7777-5888-9999-aaaaaaaaaaaa",
-            "key": "gppe_raw_json",
-            "version": "v1",
-            "realizes": "labor_efficiency",
-            "root": "gppe_raw",
-            "applicability": ["non_financial"],
-            "decompositions": [
-                {
-                    "output": "gppe_raw",
-                    "formula_id": "ratio",
-                    "formula_version": 1,
-                    "operands": {"non_financial": ["gross_profit", "employees_total"]},
-                }
-            ],
-            "decimal_precision": 34,
-            "rounding": "ROUND_HALF_EVEN",
+    factor_2025 = _sample_factor_input().model_copy(
+        update={
+            "inputs": {"net_income": ni_2025},
         }
     )
-    extended_forest = Forest(nodes=(*FOREST.nodes, custom_node), trees=(*FOREST.trees, custom_tree))
 
     conn = _FakeNodeConnection()
-    factor_input = _sample_factor_input()
     gppe_def = GppeV0Definition(risk_free_rate=Decimal("0.05"))
+    periods = {
+        "listing:xnas:nvda:2024": (date(2024, 12, 31), date(2024, 12, 31), date(2024, 12, 31)),
+        "listing:xnas:nvda": (date(2025, 12, 31), date(2025, 12, 31), date(2025, 12, 31)),
+    }
     count = materialize_metric_node_values(
         conn,  # type: ignore[arg-type]
-        factor_inputs=(factor_input,),
+        factor_inputs=(factor_2024, factor_2025),
         gppe_definition=gppe_def,
         tier_definition_id="strategy-definition:" + "e" * 64,
-        periods_by_listing={"listing:xnas:nvda": (date(2025, 12, 31), date(2025, 12, 31), date(2025, 12, 31))},
-        evidence_by_listing={"listing:xnas:nvda": InputEvidenceStatus.VERIFIED},
-        forest=extended_forest,
+        periods_by_listing=periods,
+        evidence_by_listing={
+            "listing:xnas:nvda:2024": InputEvidenceStatus.VERIFIED,
+            "listing:xnas:nvda": InputEvidenceStatus.VERIFIED,
+        },
+        extra_expressions=custom_exprs,
     )
-    # 4 derived nodes from GPPE_V0_TREE + 4 NON_FINANCIAL derived nodes from GPPE_OPERATING_FINANCIAL_TREE + 1 from custom_tree = 9 rows
-    assert count == 9
-    by_key = {row[3]: row for row in conn.inserted_rows}
-    assert "gppe_uniform_charge_v0" in by_key
-    assert "gppe_operating_financial_v1" in by_key
-    assert "gppe_raw" in by_key
-    raw_row = by_key["gppe_raw"]
-    assert raw_row[2] == UUID("11111111-2222-5333-8444-555555555555")
-    assert raw_row[6] == Decimal("10000000")  # 10B / 1000
+    assert count == 20
+    by_period_and_key = {(row[4], row[3]): row for row in conn.inserted_rows}
+    assert ("2025-12-31", "gppe_uniform_charge_v0") in by_period_and_key
+    assert ("2025-12-31", "gppe_operating_financial_v1") in by_period_and_key
+    raw_row = by_period_and_key[("2025-12-31", "gppe_raw")]
+    assert raw_row[2] == node_id_for("gppe_raw")
+    assert raw_row[6] == Decimal("10000000.0")  # 10B / 1000
     assert raw_row[8] == "available"
     assert raw_row[10] == "verified"
+    assert raw_row[12] == Decimal("0.92")
+
+    # Multi-period shift(1).over("issuer_id"): 2024 has no prior period -> unavailable;
+    # 2025 has 7.5B / 5.0B - 1 = 0.50 with min(0.90, 0.70) = 0.70 confidence!
+    growth_2024 = by_period_and_key[("2024-12-31", "net_income_yoy_growth")]
+    assert growth_2024[6] is None
+    assert growth_2024[8] != "available"
+    growth_2025 = by_period_and_key[("2025-12-31", "net_income_yoy_growth")]
+    assert growth_2025[6] == Decimal("0.5")
+    assert growth_2025[8] == "available"
+    assert growth_2025[12] == Decimal("0.7")
 
     unverified_conn = _FakeNodeConnection()
     materialize_metric_node_values(
         unverified_conn,  # type: ignore[arg-type]
-        factor_inputs=(factor_input,),
+        factor_inputs=(factor_2025,),
         gppe_definition=gppe_def,
         tier_definition_id="strategy-definition:" + "e" * 64,
-        periods_by_listing={"listing:xnas:nvda": (date(2025, 12, 31), date(2025, 12, 31), date(2025, 12, 31))},
+        periods_by_listing=periods,
         evidence_by_listing={},
-        forest=extended_forest,
+        extra_expressions={"gppe_raw": custom_exprs["gppe_raw"]},
     )
     assert all(row[10] == "degraded" and row[11] == "not_evaluated" for row in unverified_conn.inserted_rows)
 
@@ -496,10 +513,9 @@ def test_subtree_scoped_confidence_isolates_headcount_low_confidence_to_gppe_roo
 
 
 def test_financial_issuer_under_gppe_operating_financial_tree_only_materializes_reachable_derived_nodes() -> None:
-    """Under GPPE_OPERATING_FINANCIAL_TREE, a FINANCIAL issuer reaches capital_charge_tce rather than
+    """Under GPPE_OPERATING_FINANCIAL_SPEC, a FINANCIAL issuer reaches capital_charge_tce rather than
     capital_charge; capital_charge (though globally _EVERY_CLASS) must not be materialized as unavailable."""
     from data_engine.datahub.production_topt.metric_node_values import _materialize_issuer_tree
-    from factors.panel import GPPE_OPERATING_FINANCIAL_TREE
     from truealpha_contracts.execution import FactorValidationStatus
 
     base = _sample_factor_input()
@@ -534,9 +550,8 @@ def test_financial_issuer_under_gppe_operating_financial_tree_only_materializes_
     conn = _FakeNodeConnection()
     _materialize_issuer_tree(
         conn,  # type: ignore[arg-type]
-        forest=FOREST,
-        tree=GPPE_OPERATING_FINANCIAL_TREE,
-        tree_sha256=FOREST.tree_sha256(GPPE_OPERATING_FINANCIAL_TREE),
+        tree=GPPE_OPERATING_FINANCIAL_SPEC,
+        tree_sha256=variant_sha256(GPPE_OPERATING_FINANCIAL_SPEC),
         factor_input=bank_input,
         issuer_class=IssuerClass.FINANCIAL,
         gppe_definition=GppeV0Definition(risk_free_rate=Decimal("0.05")),

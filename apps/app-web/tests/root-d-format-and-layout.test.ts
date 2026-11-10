@@ -517,6 +517,7 @@ const { AppChrome } = await import("../src/components/app-chrome");
 const { default: ResearchOverviewPage } = await import("../src/app/research/page");
 const { default: ThemesPage } = await import("../src/app/research/themes/page");
 const { default: StrategyRunsPage } = await import("../src/app/research/strategy/page");
+const { default: CoveragePage } = await import("../src/app/research/coverage/page");
 const { default: HoldingsPage } = await import("../src/app/research/holdings/page");
 const { default: EntityDetailPage } = await import("../src/app/research/entities/[id]/page");
 const { default: BacktestListPage } = await import("../src/app/research/backtest/page");
@@ -781,6 +782,15 @@ const { default: DocumentDetailPage } = await import("../src/app/research/librar
     strategyText.includes("Corpus deadbeefcafe1234. 1 golden mismatch(es).") &&
       !strategyText.includes("deadbeefcafe1234.1"),
     `/research/strategy visibleText must separate corpus_sha256 period and golden_mismatches badge: ${strategyText}`,
+  );
+
+  const coverageHtml = renderToStaticMarkup(await CoveragePage());
+  assert(
+    coverageHtml.includes('data-testid="coverage-wide-panel-table"') &&
+      coverageHtml.includes("gross_profit") &&
+      coverageHtml.includes("employees_total") &&
+      coverageHtml.includes("shares_outstanding"),
+    `/research/coverage must render the standardized wide-panel table alongside coverage summary: ${coverageHtml}`,
   );
 
   const holdingsHtml = renderToStaticMarkup(await HoldingsPage());

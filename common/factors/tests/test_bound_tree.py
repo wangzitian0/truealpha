@@ -16,20 +16,19 @@ from typing import Any
 import pytest
 from factors.composite.strategy_evaluator import IssuerInput, evaluate_cutoff, required_input_keys
 from factors.panel import (
-    FOREST,
-    GPPE_BANKING_TCE_TREE,
-    GPPE_V0_TREE,
+    GPPE_BANKING_TCE_SPEC,
+    GPPE_V0_SPEC,
+    PANEL_METRICS,
     AliasKind,
-    Forest,
+    FactorVariantSpec,
     IssuerClass,
-    MetricTree,
-    NodeAlias,
     UnpinnedClassError,
     bound_tree,
     capital_adjusted_node,
     operating_numerator_node,
     published_node,
     uniform_tree_pins,
+    variant_sha256,
 )
 from truealpha_contracts.strategy import (
     LIVE_STRATEGY_DEFINITION_RESOURCE,
@@ -84,37 +83,25 @@ def test_each_live_pin_equals_the_hash_of_the_registered_tree(issuer_class: Issu
     pin = live.labor_efficiency_tree_keys[issuer_class.value]
     tree = bound_tree(live, issuer_class)
     assert (tree.key, tree.version) == (pin.tree_key, pin.tree_version)
-    assert FOREST.tree_sha256(tree) == pin.tree_sha256
+    assert variant_sha256(tree) == pin.tree_sha256
 
 
 def test_the_financial_class_binds_the_banking_tree_and_every_other_class_the_uniform_tree() -> None:
     live = load_live_strategy_definition()
-    assert bound_tree(live, IssuerClass.FINANCIAL) is GPPE_BANKING_TCE_TREE
-    assert bound_tree(live, IssuerClass.NON_FINANCIAL) is GPPE_V0_TREE
-    assert bound_tree(live, IssuerClass.INSURANCE) is GPPE_V0_TREE
+    assert bound_tree(live, IssuerClass.FINANCIAL) is GPPE_BANKING_TCE_SPEC
+    assert bound_tree(live, IssuerClass.NON_FINANCIAL) is GPPE_V0_SPEC
+    assert bound_tree(live, IssuerClass.INSURANCE) is GPPE_V0_SPEC
 
 
 def test_an_edited_alias_of_a_reached_node_raises() -> None:
-    # An alias is part of the tree identity. A forest whose banking leaf names another snapshot field
-    # is another tree, so the pin of the live definition no longer matches it.
-    edited_nodes = tuple(
-        node.model_copy(
-            update={
-                "aliases": tuple(
-                    NodeAlias(kind=AliasKind.TOPT_SNAPSHOT_FIELD, value="goodwill_edited")
-                    if alias.kind is AliasKind.TOPT_SNAPSHOT_FIELD
-                    else alias
-                    for alias in node.aliases
-                )
-            }
-        )
-        if node.key == "goodwill"
-        else node
-        for node in FOREST.nodes
-    )
-    edited = Forest(nodes=edited_nodes, trees=FOREST.trees)
+    # An alias is part of the variant identity. A panel whose banking leaf names another snapshot field
+    # is another variant, so the pin of the live definition no longer matches it.
+    edited = {
+        key: spec.with_updates(snapshot_field="goodwill_edited") if key == "goodwill" else spec
+        for key, spec in PANEL_METRICS.items()
+    }
     with pytest.raises(ValueError, match="registered tree has hash"):
-        bound_tree(load_live_strategy_definition(), IssuerClass.FINANCIAL, forest=edited)
+        bound_tree(load_live_strategy_definition(), IssuerClass.FINANCIAL, metrics=edited)
 
 
 def test_a_pin_of_an_unregistered_version_raises() -> None:
@@ -134,7 +121,7 @@ def test_a_class_without_a_pin_raises() -> None:
 def test_the_frozen_replay_pins_hold_the_registered_hash_of_the_uniform_tree() -> None:
     pins = uniform_tree_pins()
     assert set(pins) == {issuer_class.value for issuer_class in IssuerClass}
-    assert {pin.tree_sha256 for pin in pins.values()} == {FOREST.tree_sha256(GPPE_V0_TREE)}
+    assert {pin.tree_sha256 for pin in pins.values()} == {variant_sha256(GPPE_V0_SPEC)}
 
 
 def test_a_changed_pin_changes_the_decision() -> None:
@@ -185,14 +172,14 @@ def test_an_unpinned_class_is_an_exclusion_in_the_composite() -> None:
 @pytest.mark.parametrize(
     ("tree", "issuer_class", "field"),
     [
-        (GPPE_V0_TREE, IssuerClass.NON_FINANCIAL, "gross_profit"),
-        (GPPE_V0_TREE, IssuerClass.INSURANCE, "gross_profit"),
-        (GPPE_V0_TREE, IssuerClass.FINANCIAL, "pre_provision_profit"),
-        (GPPE_BANKING_TCE_TREE, IssuerClass.FINANCIAL, "pre_provision_profit"),
+        (GPPE_V0_SPEC, IssuerClass.NON_FINANCIAL, "gross_profit"),
+        (GPPE_V0_SPEC, IssuerClass.INSURANCE, "gross_profit"),
+        (GPPE_V0_SPEC, IssuerClass.FINANCIAL, "pre_provision_profit"),
+        (GPPE_BANKING_TCE_SPEC, IssuerClass.FINANCIAL, "pre_provision_profit"),
     ],
 )
 def test_the_numerator_of_p_over_gp_is_the_captured_input_of_the_pinned_tree(
-    tree: MetricTree, issuer_class: IssuerClass, field: str
+    tree: FactorVariantSpec, issuer_class: IssuerClass, field: str
 ) -> None:
     # Hand reading of the trees: the uniform tree binds `operating_gross_profit` to gross profit, or to a bank's
     # pre-provision profit. The banking tree subtracts its charge from the pre-provision profit.
@@ -210,7 +197,7 @@ def test_the_published_column_is_judged_by_a_node_that_has_the_sign_policy_of_th
     live = load_live_strategy_definition()
     tree = bound_tree(live, issuer_class)
     judged = published_node("mart.topt_gppe_results", "gppe")
-    assert FOREST.node(tree.root).sign_policy[issuer_class] == judged.sign_policy[issuer_class]
+    assert PANEL_METRICS[tree.root].sign_policy[issuer_class] == judged.sign_policy[issuer_class]
     judged_numerator = published_node("mart.topt_gppe_results", "capital_adjusted_gross_profit")
-    numerator = FOREST.node(capital_adjusted_node(tree, issuer_class))
+    numerator = PANEL_METRICS[capital_adjusted_node(tree, issuer_class)]
     assert numerator.sign_policy[issuer_class] == judged_numerator.sign_policy[issuer_class]

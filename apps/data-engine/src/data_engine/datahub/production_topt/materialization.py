@@ -392,7 +392,7 @@ class ToptCoreSnapshot(_FrozenModel):
             pre_provision_profit=common_metric("pre_provision_profit"),
             market_value_components=components,
             primary_listing_undeclared=undeclared,
-            **{name: common_metric(name) for name in OPTIONAL_SNAPSHOT_FIELDS},
+            inputs={name: val for name in OPTIONAL_SNAPSHOT_FIELDS if (val := common_metric(name)) is not None},
         )
 
 

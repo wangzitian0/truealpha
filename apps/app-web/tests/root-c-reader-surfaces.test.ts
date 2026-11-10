@@ -581,6 +581,14 @@ const fakeDocumentsRepo: DocumentsRepository = {
       rankingsDefaultHtml.includes('data-export-universe="topt"'),
     "AC4 SSR: RankingsPage CardExportButton must default to format=html, convention=historical_cagr, universe=topt",
   );
+  assert(
+    rankingsDefaultHtml.includes('data-testid="rankings-gppe-variants-table"') &&
+      rankingsDefaultHtml.includes("gppe_uniform_charge_v0") &&
+      rankingsDefaultHtml.includes("gppe_banking_tce_v1") &&
+      rankingsDefaultHtml.includes("gppe_operating_financial_v1") &&
+      rankingsDefaultHtml.includes("operating_gross_profit"),
+    "SSR: RankingsPage must render side-by-side GPPE factor variants and underlying wide-panel inputs table",
+  );
 
   // 2. RankingsPage SSR: consensus convention + qqq universe
   const rankingsQqqConsensusHtml = renderToStaticMarkup(

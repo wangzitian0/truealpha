@@ -541,8 +541,8 @@
       "id": "panel/gppe-tree-reproduces-v020",
       "guard": "common/factors/tests/test_panel.py",
       "file": "common/factors/src/factors/panel.py",
-      "find": "                IssuerClass.FINANCIAL: (PRE_PROVISION_PROFIT.key,),\n",
-      "replace": "                IssuerClass.FINANCIAL: (TOTAL_ASSETS.key,),\n",
+      "find": "    IssuerClass.FINANCIAL: pl.col(\"pre_provision_profit\"),\n",
+      "replace": "    IssuerClass.FINANCIAL: pl.col(\"total_assets\"),\n",
       "command": [
         "uv",
         "run",

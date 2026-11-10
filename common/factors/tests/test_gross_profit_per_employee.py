@@ -6,7 +6,7 @@ import pytest
 from factors.base.gross_profit_per_employee import (
     gross_profit_per_employee as _factor,
 )
-from factors.panel import FOREST, GPPE_V0_TREE, IssuerClass, evaluate_wide_panel
+from factors.panel import GPPE_V0_SPEC, IssuerClass, evaluate_wide_panel
 from factors.types import Fact, FactorResult, UnitFamily
 
 _AS_OF = datetime(2026, 6, 30, tzinfo=UTC)
@@ -48,8 +48,7 @@ def gross_profit_per_employee(
         entity_id=entity_id,
         as_of=as_of,
         risk_free_rate=risk_free_rate,
-        forest=FOREST,
-        tree=GPPE_V0_TREE,
+        tree=GPPE_V0_SPEC,
         issuer_class=issuer_class,
     )
 

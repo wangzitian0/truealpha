@@ -27,6 +27,7 @@ writes the `mart.topt_*` namespace (disjoint from the base replay's `mart.strate
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from decimal import ROUND_HALF_EVEN, Context, Decimal, localcontext
 from enum import StrEnum
@@ -48,16 +49,17 @@ from truealpha_contracts.strategy import LaborEfficiencyTreePin, LargeModelValue
 
 from factors.measure import DEFAULT_REPORTING_CURRENCY, times
 from factors.panel import (
-    FOREST,
+    PANEL_METRICS,
     AliasKind,
     IssuerClass,
     UnpinnedClassError,
     bound_tree,
     capital_adjusted_node,
     definition_pins,
-    evaluate,
+    evaluate_panel_variant,
     operating_numerator_node,
     required_inputs,
+    snapshot_field_specs,
 )
 
 _DECIMAL_CONTEXT = Context(prec=34, rounding=ROUND_HALF_EVEN)
@@ -198,10 +200,10 @@ TCE_SNAPSHOT_FIELDS = (
     "intangible_assets_net_excluding_goodwill",
 )
 
-#: All optional forest snapshot fields (banking TCE leaves + operating/financial decomposition leaves).
-#: Derived from `FOREST` input nodes whose `topt_snapshot_field` alias is outside `_BASE_SNAPSHOT_FIELDS`.
+#: All optional panel snapshot fields (banking TCE leaves + operating/financial decomposition leaves).
+#: Derived from `PANEL_METRICS` input specs whose `topt_snapshot_field` alias is outside `_BASE_SNAPSHOT_FIELDS`.
 OPTIONAL_SNAPSHOT_FIELDS: tuple[str, ...] = tuple(
-    field for field in FOREST.snapshot_field_nodes() if field not in _BASE_SNAPSHOT_FIELDS
+    field for field in snapshot_field_specs() if field not in _BASE_SNAPSHOT_FIELDS
 )
 
 
@@ -386,13 +388,31 @@ class ToptCoreSnapshotInput(_FrozenModel):
     financial_assets: ToptMetricInput | None = None
     financial_returns: ToptMetricInput | None = None
     bank_net_revenue: ToptMetricInput | None = None
+    #: #1610: generic metric input mapping (`metric -> ToptMetricInput`) so any registered `METRICS` key
+    #: flows into the standardized wide panel without adding a new struct attribute here.
+    inputs: Mapping[str, ToptMetricInput] = Field(default_factory=dict)
 
     @model_serializer(mode="wrap")
     def omit_absent_optional_fields(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
         data: dict[str, Any] = handler(self)
         if not self.primary_listing_undeclared:
             data.pop("primary_listing_undeclared", None)
+        known_fields = {*_BASE_SNAPSHOT_FIELDS, *OPTIONAL_SNAPSHOT_FIELDS}
+        extra_inputs = {k: v for k, v in (data.get("inputs") or {}).items() if k not in known_fields}
+        if extra_inputs:
+            data["inputs"] = extra_inputs
+        else:
+            data.pop("inputs", None)
         return drop_absent_banking_leaves(data)
+
+    def metric_input(self, key: str) -> ToptMetricInput | None:
+        """Resolve a `ToptMetricInput` by snapshot field or canonical `METRICS` key."""
+        if key == "employees_total" and self.headcount is not None:
+            return self.headcount
+        attr = getattr(self, key, None)
+        if isinstance(attr, ToptMetricInput):
+            return attr
+        return self.inputs.get(key)
 
     @field_validator("cutoff")
     @classmethod
@@ -415,7 +435,7 @@ class ToptCoreSnapshotInput(_FrozenModel):
 
     @model_validator(mode="after")
     def validate_inputs(self) -> Self:
-        expected_metrics = {
+        expected_metrics: dict[str, ToptMetricInput | None] = {
             "gross_profit": self.gross_profit,
             "total_assets": self.total_assets,
             "headcount": self.headcount,
@@ -423,6 +443,16 @@ class ToptCoreSnapshotInput(_FrozenModel):
             "pre_provision_profit": self.pre_provision_profit,
             **{name: getattr(self, name) for name in OPTIONAL_SNAPSHOT_FIELDS},
         }
+        merged_inputs = dict(self.inputs)
+        for key, metric in expected_metrics.items():
+            if metric is not None:
+                merged_inputs.setdefault(key, metric)
+            elif key in merged_inputs:
+                object.__setattr__(self, key, merged_inputs[key])
+                expected_metrics[key] = merged_inputs[key]
+        for key, metric in merged_inputs.items():
+            expected_metrics.setdefault(key, metric)
+        object.__setattr__(self, "inputs", merged_inputs)
         for expected_metric, metric in expected_metrics.items():
             if metric is None:
                 continue
@@ -662,7 +692,7 @@ def _operating_numerator(
     field = node.alias(AliasKind.TOPT_SNAPSHOT_FIELD)
     if field is None:
         raise AssertionError(f"GPPE numerator {node.key} names no snapshot field")
-    return field, getattr(snapshot, field)
+    return field, snapshot.metric_input(field)
 
 
 def _snapshot_freshness(snapshot: ToptCoreSnapshotInput) -> MetricFreshness:
@@ -721,7 +751,7 @@ def _collect_gppe_tree_inputs(
     inputs: dict[str, Decimal | None] = {}
     reasons_list: list[ToptCoreReasonCode] = []
     consumed_confidences: list[Decimal] = []
-    for node in required_inputs(FOREST, tree, issuer_class):
+    for node in required_inputs(tree, issuer_class, metrics=PANEL_METRICS):
         parameter = node.alias(AliasKind.DEFINITION_PARAMETER)
         if parameter is not None:
             inputs[node.key] = getattr(gppe_definition, parameter)
@@ -729,7 +759,7 @@ def _collect_gppe_tree_inputs(
         field = node.alias(AliasKind.TOPT_SNAPSHOT_FIELD)
         if field is None:
             raise AssertionError(f"GPPE tree input {node.key} names no snapshot field")
-        metric: ToptMetricInput | None = getattr(snapshot, field)
+        metric: ToptMetricInput | None = snapshot.metric_input(field) or snapshot.metric_input(node.key)
         if metric is None or metric.availability is MetricAvailability.UNAVAILABLE or metric.value is None:
             if node.default_when_missing is not None:
                 inputs[node.key] = None
@@ -815,8 +845,8 @@ def compute_topt_gppe(
     # One pinned tree per class: a bank's numerator is its pre-provision profit, everyone else's is
     # gross profit. The capital charge is the tree's: total assets for the uniform tree, measured
     # tangible common equity for the banking tree. The tree's decimal context is the one this kernel always used.
-    evaluation = evaluate(FOREST, tree, issuer_class=issuer_class, inputs=inputs)
-    capital_adjusted = evaluation.values.get(capital_adjusted_node(tree, issuer_class))
+    evaluation = evaluate_panel_variant(tree, issuer_class=issuer_class, inputs=inputs, metrics=PANEL_METRICS)
+    capital_adjusted = evaluation.values.get(capital_adjusted_node(tree, issuer_class, metrics=PANEL_METRICS))
     gppe = evaluation.values.get(tree.root)
     # Every input was checked present and headcount positive above. A tree can still refuse a value: the banking
     # tree gives none for a negative tangible common equity (#1518).

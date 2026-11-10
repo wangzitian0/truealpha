@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from factors.panel import FOREST, Forest, IssuerClass, SignPolicy
+from factors.panel import PANEL_METRICS, IssuerClass, SignPolicy
 from truealpha_runtime.testing import load_tool
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -124,15 +124,13 @@ def test_two_columns_carrying_one_node_must_agree(connection, head, capsys) -> N
 def test_a_negative_value_the_node_forbids_is_red(connection, head, capsys, monkeypatch) -> None:  # noqa: F811
     """Red-proof of the policy itself: the same JPM row, under a forest whose GPPE node forbids
     a negative financial value, fails the suite — and prints no signal for it."""
-    strict_nodes = tuple(
-        node.model_copy(
-            update={"sign_policy": {**node.sign_policy, IssuerClass.FINANCIAL: SignPolicy.MUST_BE_NON_NEGATIVE}}
-        )
-        if node.key == "gppe_uniform_charge_v0"
+    strict_metrics = {
+        key: node.with_updates(sign_policy={**node.sign_policy, IssuerClass.FINANCIAL: SignPolicy.MUST_BE_NON_NEGATIVE})
+        if key == "gppe_uniform_charge_v0"
         else node
-        for node in FOREST.nodes
-    )
-    monkeypatch.setattr(suite, "FOREST", Forest(nodes=strict_nodes, trees=FOREST.trees))
+        for key, node in PANEL_METRICS.items()
+    }
+    monkeypatch.setattr(suite, "PANEL_METRICS", strict_metrics)
     strict = _invariant(suite._sign_policy_queries())
     _set_jpm(connection, head, gppe="-514726.13", efficiency="-514726.13", adjusted="-163940000000")
     assert _check(connection, strict) == 1

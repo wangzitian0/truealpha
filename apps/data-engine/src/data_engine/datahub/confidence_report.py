@@ -61,7 +61,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Protocol
 
 from factors.confidence import evaluate_cell_confidence
-from factors.panel import ALL_ISSUER_CLASSES, FOREST, IssuerClass
+from factors.panel import ALL_ISSUER_CLASSES, IssuerClass, snapshot_field_specs
 from psycopg import Connection
 from psycopg.types.json import Jsonb
 from truealpha_contracts.common import canonical_sha256
@@ -328,7 +328,7 @@ def _market_price_families() -> tuple[FamilyPolicy, ...]:
 
 
 _FIELD_APPLICABILITY: Mapping[str, frozenset[IssuerClass]] = {
-    field_name: node.applicability for field_name, node in FOREST.snapshot_field_nodes().items()
+    field_name: node.applicability for field_name, node in snapshot_field_specs().items()
 }
 
 FAMILIES: tuple[FamilyPolicy, ...] = (
@@ -1623,7 +1623,7 @@ def persist(connection: Connection[Any], report: Mapping[str, Any]) -> str:
 
 
 _SINGLE_ORIGIN_FINANCIAL_FIELDS: tuple[str, ...] = tuple(
-    field_name for field_name in FOREST.snapshot_field_nodes() if field_name not in FINANCIAL_FIELDS
+    field_name for field_name in snapshot_field_specs() if field_name not in FINANCIAL_FIELDS
 )
 _TCE_FIELDS: tuple[str, ...] = _SINGLE_ORIGIN_FINANCIAL_FIELDS
 

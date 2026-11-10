@@ -30,11 +30,20 @@ Input metric names match the canonical registry (`truealpha_contracts.metrics.ME
 rejects a metric and unit family that do not match it, so this function does not re-check units.
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from decimal import Decimal
 
-from factors.panel import AliasKind, Forest, IssuerClass, MetricTree, evaluate, metric_of, required_inputs
+from factors.panel import (
+    PANEL_METRICS,
+    AliasKind,
+    FactorVariantSpec,
+    IssuerClass,
+    PanelMetricSpec,
+    evaluate_panel_variant,
+    metric_of,
+    required_inputs,
+)
 from factors.registry import factor
 from factors.types import Fact, FactorResult, UnitFamily
 
@@ -99,9 +108,9 @@ def gross_profit_per_employee(
     entity_id: str,
     as_of: datetime,
     risk_free_rate: Decimal,
-    forest: Forest,
-    tree: MetricTree,
+    tree: FactorVariantSpec,
     issuer_class: IssuerClass,
+    metrics: Mapping[str, PanelMetricSpec] = PANEL_METRICS,
 ) -> FactorResult:
     """The labor efficiency of one issuer on the pinned ``tree`` (`gppe_uniform_charge_v0`, `gppe_banking_tce_v1`).
 
@@ -110,9 +119,9 @@ def gross_profit_per_employee(
     fiscal periods give no value (`fiscal_period_mismatch`): one period answers for the whole tree.
     The confidence is the minimum over the consumed inputs.
     """
-    root = forest.node(tree.root)
+    root = metrics[tree.root]
     unit_family = root.unit or UnitFamily.PER_EMPLOYEE
-    nodes = required_inputs(forest, tree, issuer_class)
+    nodes = required_inputs(tree, issuer_class, metrics=metrics)
     tree_inputs: dict[str, Decimal | None] = {}
     flags: list[str] = []
     consumed: list[Fact] = []
@@ -151,7 +160,7 @@ def gross_profit_per_employee(
 
     if flags:
         return unavailable(flags)
-    evaluation = evaluate(forest, tree, issuer_class=issuer_class, inputs=tree_inputs)
+    evaluation = evaluate_panel_variant(tree, issuer_class=issuer_class, inputs=tree_inputs, metrics=metrics)
     value = evaluation.values.get(tree.root)
     if value is None:
         if "negative_operand" in evaluation.undefined.values():

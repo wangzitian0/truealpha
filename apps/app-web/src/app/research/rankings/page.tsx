@@ -5,7 +5,19 @@ import { AvailabilityBadge, ReadStateNotice } from "@/components/read-state";
 import { loadRanking } from "@/server/dashboard";
 import { entityLabel, loadEntityDisplayMap } from "@/server/mart/entity-resolution";
 import { ClaimCeilingBanner } from "@/components/claim-ceiling";
-import { formatCell, formatRatio, formatSignedRatio, formatTierLabel, signColor } from "@/client/format";
+import {
+  formatCell,
+  formatNumberMagnitude,
+  formatRatio,
+  formatSignedRatio,
+  formatTierLabel,
+  formatUsdMagnitude,
+  signColor,
+} from "@/client/format";
+import {
+  GPPE_FACTOR_VARIANT_KEYS,
+  RANKING_PANEL_INPUT_KEYS,
+} from "@/server/mart/research-read";
 import { getServerPrincipal } from "@/server/auth/request-context";
 import { CardExportButton } from "@/components/card-export-button";
 import {
@@ -246,6 +258,101 @@ export default async function RankingsPage({
               </tbody>
             </table>
           </div>
+
+          <div className="space-y-3" data-testid="rankings-gppe-variants-section">
+            <div>
+              <h2 className="text-lg font-semibold text-gray-200">
+                GPPE Factor Variants &amp; Standardized Wide-Panel Inputs (Module 2)
+              </h2>
+              <p className="mt-1 text-xs text-gray-400">
+                Side-by-side Polars <code className="font-mono text-gray-300">pl.Expr</code> factor variants (
+                <code className="font-mono text-gray-300">gppe_uniform_charge_v0</code>,{" "}
+                <code className="font-mono text-gray-300">gppe_banking_tce_v1</code>,{" "}
+                <code className="font-mono text-gray-300">gppe_operating_financial_v1</code>) and underlying wide-panel
+                columns read from <code className="font-mono text-gray-300">mart.metric_node_values</code>.
+              </p>
+            </div>
+            <div className="overflow-x-auto rounded-xl border border-border">
+              <table className="w-full text-left text-sm" data-testid="rankings-gppe-variants-table">
+                <caption className="sr-only">
+                  Side-by-side GPPE factor variants and wide-panel inputs at {state.data.cutoffAt}
+                </caption>
+                <thead className="bg-card text-xs uppercase text-gray-500">
+                  <tr>
+                    <th scope="col" className="px-4 py-3">Issuer</th>
+                    <th scope="col" className="px-4 py-3">Active Variant</th>
+                    {GPPE_FACTOR_VARIANT_KEYS.map((variantKey) => (
+                      <th key={variantKey} scope="col" className="px-4 py-3 font-mono">
+                        {variantKey}
+                      </th>
+                    ))}
+                    {RANKING_PANEL_INPUT_KEYS.map((inputKey) => (
+                      <th key={inputKey} scope="col" className="px-4 py-3 font-mono">
+                        {inputKey}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {state.data.rows.map((row) => (
+                    <tr key={row.issuerId} className="border-t border-border">
+                      <th scope="row" className="px-4 py-3 font-medium">
+                        <Link
+                          href={`/research/entities/${encodeURIComponent(row.issuerId)}`}
+                          className="text-accent hover:underline"
+                          title={row.issuerId}
+                        >
+                          {entityLabel(row.issuerId, names)}
+                        </Link>
+                      </th>
+                      <td className="px-4 py-3 font-mono text-xs text-sky-400">
+                        {formatCell(row.laborEfficiencyMetric ?? null)}
+                      </td>
+                      {GPPE_FACTOR_VARIANT_KEYS.map((variantKey) => {
+                        const nodeCell = row.gppeVariants?.[variantKey] ?? null;
+                        return (
+                          <td
+                            key={variantKey}
+                            className="px-4 py-3 font-mono tabular-nums"
+                            title={nodeCell?.value ?? undefined}
+                          >
+                            <div>{formatCell(formatUsdMagnitude(nodeCell?.value ?? null))}</div>
+                            {nodeCell?.confidence && (
+                              <div className="text-[11px] text-gray-500" title={nodeCell.confidence}>
+                                conf {formatCell(formatRatio(nodeCell.confidence))}
+                              </div>
+                            )}
+                          </td>
+                        );
+                      })}
+                      {RANKING_PANEL_INPUT_KEYS.map((inputKey) => {
+                        const nodeCell = row.panelInputs?.[inputKey] ?? null;
+                        const formatted =
+                          inputKey === "employees_total"
+                            ? formatNumberMagnitude(nodeCell?.value ?? null)
+                            : formatUsdMagnitude(nodeCell?.value ?? null);
+                        return (
+                          <td
+                            key={inputKey}
+                            className="px-4 py-3 font-mono tabular-nums"
+                            title={nodeCell?.value ?? undefined}
+                          >
+                            <div>{formatCell(formatted)}</div>
+                            {nodeCell?.confidence && (
+                              <div className="text-[11px] text-gray-500" title={nodeCell.confidence}>
+                                conf {formatCell(formatRatio(nodeCell.confidence))}
+                              </div>
+                            )}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
           {state.data.page.hasMore && state.data.page.nextCursor !== null && (
             <Link
               href={buildRankingsHref({

@@ -8,7 +8,6 @@ import {
   signColor,
 } from "@/client/format";
 import { AvailabilityBadge, ReadStateNotice } from "@/components/read-state";
-import { UNRECORDED_METRIC } from "@/contracts/laborEfficiency";
 import { valuationBasisLabel } from "@/contracts/strategyRun";
 import { loadComparison } from "@/server/dashboard";
 import { entityLabel, loadEntityDisplayMap } from "@/server/mart/entity-resolution";
@@ -80,7 +79,7 @@ export default async function ComparePage({
                     <td className="px-4 py-3 tabular-nums" title={row.capitalAdjustedLaborEfficiency ?? undefined}>
                       {formatCell(formatUsdMagnitude(row.capitalAdjustedLaborEfficiency))}
                       {row.capitalAdjustedLaborEfficiency !== null && (
-                        <div className="text-[11px] text-gray-500">{row.laborEfficiencyMetric ?? UNRECORDED_METRIC}</div>
+                        <div className="text-[11px] text-gray-500">{row.laborEfficiencyMetric ?? "metric not recorded"}</div>
                       )}
                     </td>
                     <td className="px-4 py-3 tabular-nums" title={row.currentPriceToSales ?? undefined}>

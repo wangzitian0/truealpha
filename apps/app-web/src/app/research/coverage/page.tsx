@@ -10,10 +10,18 @@
  */
 
 import Link from "next/link";
-import { formatCell } from "@/client/format";
+import {
+  formatCell,
+  formatNumberMagnitude,
+  formatRatio,
+  formatUsdMagnitude,
+} from "@/client/format";
 import { exclusionLabel } from "@/contracts/exclusion-reasons";
 import { entityLabel, loadEntityDisplayMap } from "@/server/mart/entity-resolution";
-import { DASHBOARD_STRATEGY_ID } from "@/server/mart/research-read";
+import {
+  DASHBOARD_STRATEGY_ID,
+  WIDE_PANEL_INPUT_COLUMNS,
+} from "@/server/mart/research-read";
 import { loadStrategyRunPage } from "@/server/strategy-page";
 import { getServerPrincipal } from "@/server/auth/request-context";
 
@@ -47,6 +55,7 @@ export default async function CoveragePage() {
     entityLabel(a.issuer_id, names).localeCompare(entityLabel(b.issuer_id, names)),
   );
   const covered = decisions.filter((d) => d.exclusion_reason === null).length;
+  const widePanel = outcome.widePanel ?? {};
 
   return (
     <section aria-labelledby="coverage-heading" className="space-y-6">
@@ -98,6 +107,100 @@ export default async function CoveragePage() {
             ))}
           </tbody>
         </table>
+      </div>
+
+      <div className="space-y-3" data-testid="coverage-wide-panel-section">
+        <div>
+          <h2 className="text-lg font-semibold text-gray-200">
+            Standardized Wide Input Panel (Company × Metric + Confidence)
+          </h2>
+          <p className="mt-1 text-xs text-gray-400">
+            Period-aligned, unit-normalized wide-panel cells and consumed cell confidence (
+            <code className="font-mono text-gray-300">conf__&lt;metric&gt;</code>) from{" "}
+            <code className="font-mono text-gray-300">mart.metric_node_values</code> alongside strategy decision outputs.
+          </p>
+        </div>
+
+        <div className="overflow-x-auto rounded-xl border border-border">
+          <table className="w-full text-left text-sm" data-testid="coverage-wide-panel-table">
+            <caption className="sr-only">Company by standardized wide-panel field and confidence</caption>
+            <thead className="bg-card text-xs uppercase text-gray-500">
+              <tr>
+                <th scope="col" className="px-4 py-3">Company</th>
+                <th scope="col" className="px-4 py-3">Run Confidence</th>
+                <th scope="col" className="px-4 py-3">Labor Efficiency</th>
+                <th scope="col" className="px-4 py-3">P/S</th>
+                <th scope="col" className="px-4 py-3">P/GP</th>
+                <th scope="col" className="px-4 py-3">PEG</th>
+                {WIDE_PANEL_INPUT_COLUMNS.map((col) => (
+                  <th key={col.key} scope="col" className="px-4 py-3 font-mono">
+                    {col.key}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {decisions.map((decision) => {
+                const issuerCells = widePanel[decision.issuer_id] ?? {};
+                return (
+                  <tr key={decision.issuer_id} className="border-t border-border">
+                    <th scope="row" className="px-4 py-3 font-medium">
+                      <Link
+                        href={`/research/entities/${encodeURIComponent(decision.issuer_id)}`}
+                        className="text-accent hover:underline"
+                        title={decision.issuer_id}
+                      >
+                        {entityLabel(decision.issuer_id, names)}
+                      </Link>
+                    </th>
+                    <td className="px-4 py-3 font-mono tabular-nums" title={decision.confidence ?? undefined}>
+                      {formatCell(formatRatio(decision.confidence))}
+                    </td>
+                    <td
+                      className="px-4 py-3 font-mono tabular-nums"
+                      title={decision.capital_adjusted_labor_efficiency ?? undefined}
+                    >
+                      <div>{formatCell(formatUsdMagnitude(decision.capital_adjusted_labor_efficiency))}</div>
+                      {decision.labor_efficiency_metric && (
+                        <div className="text-[11px] text-gray-500">{decision.labor_efficiency_metric}</div>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 font-mono tabular-nums" title={decision.current_price_to_sales ?? undefined}>
+                      {formatCell(formatRatio(decision.current_price_to_sales))}
+                    </td>
+                    <td
+                      className="px-4 py-3 font-mono tabular-nums"
+                      title={decision.current_price_to_gross_profit ?? undefined}
+                    >
+                      {formatCell(formatRatio(decision.current_price_to_gross_profit ?? null))}
+                    </td>
+                    <td className="px-4 py-3 font-mono tabular-nums" title={decision.peg ?? undefined}>
+                      {formatCell(formatRatio(decision.peg ?? null))}
+                    </td>
+                    {WIDE_PANEL_INPUT_COLUMNS.map((col) => {
+                      const nodeCell = issuerCells[col.key];
+                      const formattedVal = nodeCell?.value
+                        ? col.monetary
+                          ? formatUsdMagnitude(nodeCell.value)
+                          : formatNumberMagnitude(nodeCell.value)
+                        : null;
+                      return (
+                        <td key={col.key} className="px-4 py-3 font-mono tabular-nums" title={nodeCell?.value ?? undefined}>
+                          <div>{formatCell(formattedVal)}</div>
+                          {nodeCell?.confidence && (
+                            <div className="text-[11px] text-gray-500" title={nodeCell.confidence}>
+                              conf {formatCell(formatRatio(nodeCell.confidence))}
+                            </div>
+                          )}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       </div>
     </section>
   );

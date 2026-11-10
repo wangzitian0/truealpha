@@ -2,7 +2,6 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { AvailabilityBadge, ReadStateNotice } from "@/components/read-state";
 import { CardExportButton } from "@/components/card-export-button";
-import { laborEfficiencyLabels, UNRECORDED_METRIC } from "@/contracts/laborEfficiency";
 import {
   normalizePegConvention,
   PEG_CONVENTION_LABELS,
@@ -54,14 +53,8 @@ export default async function EntityDetailPage({
   const analystRatings = state.kind === "ready" ? state.data.analystRatings ?? null : null;
   const supplyChainExposure = state.kind === "ready" ? state.data.supplyChainExposure ?? null : null;
 
-  // #1176, #1518: the strategy value carries the name of the tree that the definition pins. The published
-  // `gppe` column takes that name when the two agree. Both are shown with a name, and neither is shown bare.
-  const laborLabels = laborEfficiencyLabels({
-    publishedGppe: gppeDetail?.gppe ?? null,
-    strategyValue: latestRow?.capitalAdjustedLaborEfficiency ?? null,
-    strategyMetric: latestRow?.laborEfficiencyMetric ?? null,
-    operatingBranch: gppeDetail?.operatingBranch ?? null,
-  });
+  const laborValue = latestRow?.capitalAdjustedLaborEfficiency ?? gppeDetail?.gppe ?? null;
+  const laborMetric = latestRow?.laborEfficiencyMetric ?? "metric not recorded";
   // #1235: the gap divides the multiple of the row's definition — P/GP under 1.0.0.
   const basisLabel = valuationBasisLabel(latestRow?.valuationBasis ?? null);
   const operatingBranch = gppeDetail?.operatingBranch ?? null;
@@ -181,19 +174,17 @@ export default async function EntityDetailPage({
                 )}
               </div>
               <div className="mt-4">
-                {laborLabels.length === 0 ? (
+                {laborValue === null ? (
                   <div className="font-mono text-2xl font-bold text-white">{formatCell(null)}</div>
                 ) : (
-                  laborLabels.map((label) => (
-                    <div key={`${label.metric}:${label.value}`} className="mt-2 first:mt-0">
-                      <div className="font-mono text-xs text-gray-400" data-testid="labor-metric-name">
-                        {label.metric}
-                      </div>
-                      <div className="mt-1 font-mono text-2xl font-bold text-white" title={label.value}>
-                        {formatUsdMagnitude(label.value) ?? formatCell(label.value)}
-                      </div>
+                  <div className="mt-2 first:mt-0">
+                    <div className="font-mono text-xs text-gray-400" data-testid="labor-metric-name">
+                      {laborMetric}
                     </div>
-                  ))
+                    <div className="mt-1 font-mono text-2xl font-bold text-white" title={laborValue}>
+                      {formatUsdMagnitude(laborValue) ?? formatCell(laborValue)}
+                    </div>
+                  </div>
                 )}
               </div>
               <div className="mt-4 border-t border-border/60 pt-3">
@@ -557,7 +548,7 @@ export default async function EntityDetailPage({
                           {formatUsdMagnitude(row.capitalAdjustedLaborEfficiency) ?? formatCell(row.capitalAdjustedLaborEfficiency)}
                           {row.capitalAdjustedLaborEfficiency !== null && (
                             <div className="font-sans text-[11px] text-gray-500" data-testid="labor-row-metric">
-                              {row.laborEfficiencyMetric ?? UNRECORDED_METRIC}
+                              {row.laborEfficiencyMetric ?? "metric not recorded"}
                             </div>
                           )}
                         </td>
