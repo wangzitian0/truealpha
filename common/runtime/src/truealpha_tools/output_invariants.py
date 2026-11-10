@@ -667,6 +667,38 @@ _TEMPLATES: tuple[Invariant, ...] = (
               and __HEAD_IS_SCHEDULED__
         """,
     ),
+    Invariant(
+        id="entity-identity-unique-per-entity",
+        claim="mart.entity_identity returns at most one row per entity_id — duplicate rows fan out every downstream join (#1641)",
+        violations="""
+            select entity_id::text, count(*)::text as row_count
+            from mart.entity_identity
+            group by entity_id
+            having count(*) > 1
+            order by 1
+        """,
+        population="""
+            select count(*) from mart.entity_identity
+        """,
+    ),
+    Invariant(
+        id="fund-virtual-company-weights-conserved",
+        claim="every mart.fund_virtual_company row conserves portfolio weight (0 <= valued_weight_pct <= resolved_weight_pct <= total_weight_pct <= 105) (#1641)",
+        violations="""
+            select run_id, fund_id, total_weight_pct::text, resolved_weight_pct::text, valued_weight_pct::text
+            from mart.fund_virtual_company
+            where total_weight_pct < 0
+               or total_weight_pct > 105
+               or resolved_weight_pct < 0
+               or resolved_weight_pct > total_weight_pct
+               or valued_weight_pct < 0
+               or valued_weight_pct > resolved_weight_pct
+            order by 1, 2
+        """,
+        population="""
+            select count(*) from mart.fund_virtual_company
+        """,
+    ),
 )
 
 

@@ -43,8 +43,10 @@ MIGRATIONS = REPO_ROOT / "db" / "migrations"
 LEGACY_ID_MIGRATION = MIGRATIONS / "20260923T1800_datahub_mart_entity_identity_legacy_id.sql"
 #: The definition of #1337. It creates the view only on a database that has none.
 SET_BASED_MIGRATION = MIGRATIONS / "20261015T0900_datahub_mart_entity_identity_set_based.sql"
-#: The definition of #1518. It reads the relation `primary_listing`. It is the last file that defines the view.
+#: The definition of #1518. It reads the relation `primary_listing`.
 PRIMARY_LISTING_MIGRATION = MIGRATIONS / "20261027T1100_datahub_primary_listing_relation.sql"
+#: The definition of #1641. It bounds the staging.kg_entities join to one row per entity.
+UNIQUE_IDENTITY_MIGRATION = MIGRATIONS / "20261110T1500_datahub_entity_identity_unique_and_fund_conservation.sql"
 #: Every file that defines the view. Each boot replays all of them.
 VIEW_MIGRATIONS = (
     MIGRATIONS / "20260921T2100_datahub_mart_entity_identity.sql",
@@ -52,6 +54,7 @@ VIEW_MIGRATIONS = (
     LEGACY_ID_MIGRATION,
     SET_BASED_MIGRATION,
     PRIMARY_LISTING_MIGRATION,
+    UNIQUE_IDENTITY_MIGRATION,
 )
 
 COLUMNS = ("entity_id", "kind", "current_ticker", "name", "cik", "lei", "listing_id", "legacy_id")
@@ -265,14 +268,13 @@ def seed_cases(conn: psycopg.Connection) -> tuple[dict[str, str], dict[str, list
     store.alias(ids["confidence_tie"], "name", "Low Name", confidence="0.3", at=T0 + 3 * HOUR)
     expected["confidence_tie"] = [("issuer", None, "Newer Name", None, lei(30), None, None)]
 
-    # Two staging.kg_entities rows match one entity: one by UUID and one by legacy id.
+    # Two staging.kg_entities rows match one entity: one by UUID and one by legacy id (#1641).
     ids["double_match"] = store.mint("issuer", "lei", lei(40))
     store.alias(ids["double_match"], "legacy-id", f"issuer:lei:{lei(40)}")
     store.kg(ids["double_match"], "KG by UUID")
     store.kg(f"issuer:lei:{lei(40)}", "KG by legacy id")
     expected["double_match"] = [
         ("issuer", None, "KG by UUID", None, lei(40), None, f"issuer:lei:{lei(40)}"),
-        ("issuer", None, "KG by legacy id", None, lei(40), None, f"issuer:lei:{lei(40)}"),
     ]
 
     # No alias: one entity has no alias row, one has only a withdrawn alias and a KG name.
@@ -394,11 +396,23 @@ def seed_production_size(conn: psycopg.Connection) -> tuple[int, int]:
 
 
 def old_definition() -> str:
-    """The view text of 20260923T1800, the definition before #1337."""
+    """The view text of 20260923T1800, the definition before #1337, with #1641 1:1 kg_entities join."""
     parts = LEGACY_ID_MIGRATION.read_text(encoding="utf-8").split("$view$")
     assert len(parts) == 3, f"{LEGACY_ID_MIGRATION.name} must hold exactly one $view$ body"
     assert "staging.entity_survivor(" in parts[1], "the reference text must be the definition that calls the helpers"
-    return parts[1]
+    return parts[1].replace(
+        "left join staging.kg_entities kg on (kg.id = e.entity_id::text or (la.legacy_id is not null and kg.id = la.legacy_id))",
+        """left join lateral (
+    select kg_row.display_name
+    from staging.kg_entities kg_row
+    where kg_row.id = e.entity_id::text
+       or (la.legacy_id is not null and kg_row.id = la.legacy_id)
+    order by (kg_row.id = e.entity_id::text) desc,
+             nullif(btrim(kg_row.display_name), '') is not null desc,
+             kg_row.id
+    limit 1
+) kg on true""",
+    )
 
 
 def create_old_view(conn: psycopg.Connection) -> None:
@@ -492,7 +506,7 @@ def test_the_small_seed_returns_the_rows_of_the_old_definition(conn: psycopg.Con
     """#1337 criterion 1: merge chains, a retracted merge, expired aliases, a double match, no alias."""
     ids, _ = seed_cases(conn)
     rows = assert_same_rows_as_the_old_definition(conn)
-    assert len(rows) == len(ids) + 1  # the double match adds one row
+    assert len(rows) == len(ids)
 
 
 def test_the_production_size_seed_returns_the_rows_of_the_old_definition(conn: psycopg.Connection) -> None:
@@ -500,7 +514,7 @@ def test_the_production_size_seed_returns_the_rows_of_the_old_definition(conn: p
     seed_cases(conn)
     identities, _ = seed_production_size(conn)
     rows = assert_same_rows_as_the_old_definition(conn)
-    assert len(rows) > identities  # each double match adds one row
+    assert len(rows) == identities
 
 
 def helper_calls(conn: psycopg.Connection) -> dict[str, int]:
@@ -549,7 +563,7 @@ def test_mart_readonly_reads_the_view(conn: psycopg.Connection) -> None:
     as_owner = all_rows(conn, "mart.entity_identity")
     conn.execute("set local role mart_readonly")
     assert all_rows(conn, "mart.entity_identity") == as_owner
-    assert len(as_owner) == len(ids) + 1
+    assert len(as_owner) == len(ids)
 
 
 def test_roles_sql_revokes_helper_grants_and_is_idempotent(conn: psycopg.Connection) -> None:
