@@ -820,10 +820,12 @@ def test_every_cell_carries_one_confidence_from_0_to_1_and_the_family_rolls_up_i
         high.confidence
         > medium.confidence
         > low_single.confidence
-        > low_conflict.confidence
+        == low_conflict.confidence
         > missing.confidence
         == Decimal("0")
     )
+    assert low_conflict.reason == "cross_origin_conflict"
+    assert "reason:cross_origin_conflict" in low_conflict.reason_codes
     assert high.confidence <= Decimal("1")
     payload = high.payload()
     assert payload["confidence"] == str(high.confidence)
@@ -1181,8 +1183,8 @@ def test_lookup_outcome_mass_scopes_by_family_so_revenue_failures_do_not_bleed_i
             "observation_id": f"obs:rev:{idx}",
             "subject_id": f"issuer:cik:{idx:010d}",
             "field": "revenue",
-            "oracle_kind": "independent_parse",
-            "source": "sec",
+            "oracle_kind": "filing",
+            "source": "sec-filing-10k",
             "result": "disagree",
             "compared_at": CUTOFF,
         }

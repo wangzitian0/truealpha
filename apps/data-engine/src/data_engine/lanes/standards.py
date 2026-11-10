@@ -727,7 +727,28 @@ def run_question_coverage(context: dg.OpExecutionContext, config: StandardBackfi
             context.log.info("research_card_artifacts materialized for %s: %s", config.universe, card_counts)
         except Exception as exc:
             context.log.warning("research_card_artifacts materialization skipped for %s: %s", config.universe, exc)
+        conf_report = None
+        try:
+            with connection.transaction():
+                from data_engine.datahub import confidence_report as _confidence_report
+
+                conf_report = _confidence_report.compile_report(
+                    connection, universe=config.universe, executed_at=executed_at
+                )
+                if conf_report is not None:
+                    _confidence_report.persist(connection, conf_report)
+        except Exception as exc:
+            context.log.warning("confidence_report refresh skipped for %s: %s", config.universe, exc)
         connection.commit()
+        if conf_report is not None:
+            try:
+                from data_engine.datahub.oracle_outcomes import record_oracle_outcomes_safely
+
+                record_oracle_outcomes_safely(
+                    connection, str(conf_report["run_id"]), compared_at=executed_at, log=context.log
+                )
+            except Exception as exc:
+                context.log.warning("oracle_outcomes refresh skipped for %s: %s", config.universe, exc)
         q3_unavail = (report.get("questions", {}).get("q3", {}) or {}).get("unavailable") or {}
         exceeded_q3 = int(q3_unavail.get("context_window_exceeded", 0))
         if exceeded_q3 > 0:

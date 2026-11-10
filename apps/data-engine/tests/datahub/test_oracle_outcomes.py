@@ -1018,8 +1018,9 @@ def test_ten_outcomes_roll_up_with_deduplication_and_wilson_bound() -> None:
 
 
 def test_oracle_outcome_mass_by_origin_distinguishes_filing_independent_parse_and_operator() -> None:
-    """#1517 B1, #1523 S4: filing agree/disagree add +1 success/fail; independent_parse agree adds 0
-    success while disagree adds +1 fail; operator/gppe adds 0 to input origin mass."""
+    """#1517 B1, #1523 S4, #1624: filing agree/disagree add +1 success/fail; independent_parse and
+    operator/gppe add 0 to global origin mass (independent_parse is applied at cell level via
+    oracle_cell_agreement)."""
     from data_engine.datahub.oracle_outcomes import oracle_outcome_mass_by_origin
 
     t_before = datetime(2026, 10, 27, 12, 0, tzinfo=UTC)
@@ -1107,8 +1108,8 @@ def test_oracle_outcome_mass_by_origin_distinguishes_filing_independent_parse_an
         },
     ]
     mass = oracle_outcome_mass_by_origin(rows, cutoff=datetime(2026, 10, 28, 0, 0, tzinfo=UTC))
-    assert mass["origin:sec-company-facts:v1"] == (Decimal("1"), Decimal("2"))
-    assert mass["origin:sec-company-facts:v1:revenue"] == (Decimal("1"), Decimal("1"))
+    assert mass["origin:sec-company-facts:v1"] == (Decimal("1"), Decimal("1"))
+    assert mass["origin:sec-company-facts:v1:revenue"] == (Decimal("1"), Decimal("0"))
     assert mass["origin:sec-company-facts:v1:gross_profit"] == (Decimal("0"), Decimal("1"))
 
 

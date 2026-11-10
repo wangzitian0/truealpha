@@ -167,6 +167,45 @@ def test_snapshot_member_financial_cell_confidence_bounds_by_deciding_keys_only(
     fin_cell = next(c for c in member.cell_inputs if c.input_id == obs_fin)
     assert fin_cell.confidence == Decimal("0.625807")
 
+    # For OperatingBranch.FINANCIAL (banks), revenue is not consumed by PPNR/TCE GPPE and must not
+    # drag financial_cell_confidence down (#1624).
+    bank_by_type = dict(by_type)
+    bank_by_type["financial-fact"] = _ObservationRow(
+        obligation_id="ob:fin",
+        listing_id="listing:xnas:aapl",
+        semantic_type="financial-fact",
+        observation_id=obs_fin,
+        freshness=MetricFreshness.FRESH,
+        knowable_at=cutoff,
+        payload={
+            **by_type["financial-fact"].payload,
+            "operating_branch": "financial",
+            "pre_provision_profit": "30000000000",
+        },
+    )
+    bank_age = InputAgeLimit(
+        cutoff=cutoff,
+        maximum_age=timedelta(days=550),
+        deciding={
+            "financial": frozenset(
+                {"pre_provision_profit", "total_assets", "revenue", "shares_outstanding", "headcount"}
+            )
+        },
+    )
+    bank_member = PostgresToptCoreRepository._snapshot_member(
+        "listing:xnas:aapl",
+        bank_by_type,
+        histories=(),
+        input_age=bank_age,
+        listing_confidences={
+            **listing_confidences,
+            "pre_provision_profit": Decimal("0.85"),
+            "revenue": Decimal("0.36"),
+        },
+    )
+    bank_fin_cell = next(c for c in bank_member.cell_inputs if c.input_id == obs_fin)
+    assert bank_fin_cell.confidence == Decimal("0.625807")
+
 
 def test_capture_leaves_observation_confidence_null_and_persists_cell_confidence_to_mart(
     connection,

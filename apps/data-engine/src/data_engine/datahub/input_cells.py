@@ -137,41 +137,50 @@ def live_knowable_at(payload: Mapping[str, Any], observed_at: datetime) -> Calla
     return knowable_at_of
 
 
-def _evaluate_sec_field_confidence(key: str, payload: Mapping[str, Any]) -> Decimal:
-    """Evaluate single-source SEC field confidence via `evaluate_cell_confidence` (#1517 B3)."""
-    if key == "headcount":
-        vintage = payload.get("vintage") or {}
-        producer = str((vintage.get("headcount") or {}).get("source") or "10k-extraction")
-        provider_id = f"origin:headcount:{producer}"
-        lineage = "sec-10k"
-    else:
-        provider_id = "origin:sec-company-facts:v1"
-        lineage = "sec-company-facts"
-    prior = source_reliability_prior(provider_id) or source_reliability_prior("origin:sec-company-facts:v1")
+def _evaluate_single_origin_confidence(
+    case_id: str,
+    provider_id: str,
+    lineage: str,
+    fallback_prior_id: str,
+    evidence_id: str,
+    *,
+    served_by_failover: bool = False,
+) -> Decimal:
+    reason = "reason:served_by_failover" if served_by_failover else "reason:single_origin"
+    source = SourceConfidenceEvidence(
+        provider_id=provider_id,
+        origin_group_id=f"lineage:{lineage}",
+        independence_weight=Decimal("1"),
+        reliability_prior=source_reliability_prior(provider_id) or source_reliability_prior(fallback_prior_id),
+        successful_outcome_mass=Decimal("0"),
+        failed_outcome_mass=Decimal("0"),
+        freshness=Decimal("1"),
+        sample_conformance=Decimal("0.90") if served_by_failover else Decimal("1"),
+        transport_integrity=Decimal("1"),
+        evidence_ids=(evidence_id,),
+        reason_codes=(reason,),
+    )
     return evaluate_cell_confidence(
-        case_id=f"cell:{key}:{payload.get('listing_id') or payload.get('issuer_id') or 'sec'}",
-        sources=(
-            SourceConfidenceEvidence(
-                provider_id=provider_id,
-                origin_group_id=f"lineage:{lineage}",
-                independence_weight=Decimal("1"),
-                reliability_prior=prior,
-                successful_outcome_mass=Decimal("0"),
-                failed_outcome_mass=Decimal("0"),
-                freshness=Decimal("1"),
-                sample_conformance=Decimal("1"),
-                transport_integrity=Decimal("1"),
-                evidence_ids=(f"obs:{key}",),
-                reason_codes=("reason:single_origin",),
-            ),
-        ),
+        case_id=case_id,
+        sources=(source,),
         agreement=Decimal("1"),
         semantic_mapping_quality=Decimal("1"),
         lineage_completeness=Decimal("1"),
         required_component_completeness=Decimal("1"),
-        extra_reason_codes=("reason:single_origin",),
+        extra_reason_codes=(reason,),
         policy=_CONFIDENCE_POLICY,
     ).confidence
+
+
+def _evaluate_sec_field_confidence(key: str, payload: Mapping[str, Any]) -> Decimal:
+    """Evaluate single-source SEC field confidence via `evaluate_cell_confidence` (#1517 B3)."""
+    producer = str(((payload.get("vintage") or {}).get("headcount") or {}).get("source") or "10k-extraction")
+    provider_id = f"origin:headcount:{producer}" if key == "headcount" else "origin:sec-company-facts:v1"
+    lineage = "sec-10k" if key == "headcount" else "sec-company-facts"
+    subject = payload.get("listing_id") or payload.get("issuer_id") or "sec"
+    return _evaluate_single_origin_confidence(
+        f"cell:{key}:{subject}", provider_id, lineage, "origin:sec-company-facts:v1", f"obs:{key}"
+    )
 
 
 def _evaluate_close_confidence(payload: Mapping[str, Any]) -> Decimal:
@@ -179,31 +188,14 @@ def _evaluate_close_confidence(payload: Mapping[str, Any]) -> Decimal:
     served_by = payload.get("served_by_failover")
     origin_id = str(served_by) if served_by else "origin:yahoo:v1"
     lineage = origin_id.split(":")[1] if origin_id.startswith("origin:") and origin_id.count(":") >= 2 else "yahoo"
-    prior = source_reliability_prior(origin_id) or source_reliability_prior("origin:yahoo:v1")
-    return evaluate_cell_confidence(
-        case_id=f"cell:close:{payload.get('listing_id') or 'listing'}",
-        sources=(
-            SourceConfidenceEvidence(
-                provider_id=origin_id,
-                origin_group_id=f"lineage:{lineage}",
-                independence_weight=Decimal("1"),
-                reliability_prior=prior,
-                successful_outcome_mass=Decimal("0"),
-                failed_outcome_mass=Decimal("0"),
-                freshness=Decimal("1"),
-                sample_conformance=Decimal("0.90") if served_by else Decimal("1"),
-                transport_integrity=Decimal("1"),
-                evidence_ids=("obs:close",),
-                reason_codes=("reason:served_by_failover" if served_by else "reason:single_origin",),
-            ),
-        ),
-        agreement=Decimal("1"),
-        semantic_mapping_quality=Decimal("1"),
-        lineage_completeness=Decimal("1"),
-        required_component_completeness=Decimal("1"),
-        extra_reason_codes=("reason:served_by_failover" if served_by else "reason:single_origin",),
-        policy=_CONFIDENCE_POLICY,
-    ).confidence
+    return _evaluate_single_origin_confidence(
+        f"cell:close:{payload.get('listing_id') or 'listing'}",
+        origin_id,
+        lineage,
+        "origin:yahoo:v1",
+        "obs:close",
+        served_by_failover=bool(served_by),
+    )
 
 
 def financial_input_rows(

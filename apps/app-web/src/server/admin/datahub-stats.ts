@@ -218,12 +218,18 @@ interface QuestionCoverageDbRow {
   };
 }
 
-/** #748 / #1359 / #1362: the newest weekly question-coverage report per active governed universe. */
+/** #748 / #1359 / #1362 / #1624: the active governed head's question-coverage report per universe. */
 const QUESTION_COVERAGE_SQL = `
   select distinct on (universe_id) universe_id, cutoff::text, created_at::text, payload
-  from mart.question_coverage_report
+  from mart.question_coverage_report r
   where universe_id in (select universe_id from mart.served_head)
-  order by universe_id, created_at desc
+  order by universe_id,
+           exists (
+             select 1 from mart.served_head h
+             where h.universe_id = r.universe_id
+               and coalesce(h.run_id, h.head_run_id) = r.run_id
+           ) desc,
+           created_at desc
 `;
 
 function questionCoverageRows(
@@ -531,12 +537,18 @@ interface ConfidenceReportDbRow {
   };
 }
 
-/** The newest nightly confidence & accuracy report per active governed universe (#1359 / #1362). */
+/** The active governed head's confidence & accuracy report per universe (#1359 / #1362 / #1624). */
 const CONFIDENCE_REPORT_SQL = `
   select distinct on (universe_id) universe_id, run_id, cutoff::text, created_at::text, payload
-  from mart.datahub_confidence_report
+  from mart.datahub_confidence_report r
   where universe_id in (select universe_id from mart.served_head)
-  order by universe_id, created_at desc
+  order by universe_id,
+           exists (
+             select 1 from mart.served_head h
+             where h.universe_id = r.universe_id
+               and coalesce(h.run_id, h.head_run_id) = r.run_id
+           ) desc,
+           created_at desc
 `;
 
 function originCounts(

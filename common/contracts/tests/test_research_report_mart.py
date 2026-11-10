@@ -187,6 +187,19 @@ def test_missing_subject_when_strategy_key_has_no_runs(connection) -> None:
     assert section.availability is AvailabilityStatus.UNAVAILABLE
     assert section.reason_codes == ("strategy_run_unavailable",)
 
+    # #1624: THEME_RANKING when no decisions match the requested cutoff must also return a
+    # missing subject rather than an empty tuple that fails ResearchReport.assemble(min_length=1).
+    theme_req = ResearchReportRequest(
+        report_kind=ResearchReportKind.THEME_RANKING,
+        target_entity_ids=("theme:qqq",),
+        cutoff_at=datetime(2099, 12, 31, 23, 59, 59, tzinfo=UTC),
+        strategy_id="large_model_value_v0",
+    )
+    theme_report = build_research_report(theme_req, repository, context=_context())
+    assert len(theme_report.subjects) == 1
+    assert theme_report.subjects[0].sections[0].availability is AvailabilityStatus.UNAVAILABLE
+    assert theme_report.subjects[0].sections[0].reason_codes == ("strategy_run_unavailable",)
+
 
 def test_requires_database_url_or_strategy_repository() -> None:
     with pytest.raises(TypeError):

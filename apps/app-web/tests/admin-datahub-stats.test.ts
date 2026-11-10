@@ -768,13 +768,15 @@ const nightlyVerdictRows = [
   );
   assert(
     coverageSql !== undefined &&
-      coverageSql.includes("select universe_id from mart.served_head"),
-    "QUESTION_COVERAGE_SQL scopes to active governed heads in mart.served_head (#1359, #1362)",
+      coverageSql.includes("select universe_id from mart.served_head") &&
+      coverageSql.includes("coalesce(h.run_id, h.head_run_id) = r.run_id"),
+    "QUESTION_COVERAGE_SQL scopes to active governed heads in mart.served_head and prioritizes head run_id (#1359, #1362, #1624)",
   );
   assert(
     confidenceSql !== undefined &&
-      confidenceSql.includes("select universe_id from mart.served_head"),
-    "CONFIDENCE_REPORT_SQL scopes to active governed heads in mart.served_head (#1359, #1362)",
+      confidenceSql.includes("select universe_id from mart.served_head") &&
+      confidenceSql.includes("coalesce(h.run_id, h.head_run_id) = r.run_id"),
+    "CONFIDENCE_REPORT_SQL scopes to active governed heads in mart.served_head and prioritizes head run_id (#1359, #1362, #1624)",
   );
   assert(
     sourcesSql !== undefined &&

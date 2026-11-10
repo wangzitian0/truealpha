@@ -1139,7 +1139,11 @@ def compute_topt_core(
         valuation_gap=valuation_gap,
         confidence=min(
             gppe_result.confidence,
-            snapshot.revenue.confidence,
+            *(
+                ()
+                if definition.valuation_basis is ValuationBasis.PRICE_TO_GROSS_PROFIT
+                else (snapshot.revenue.confidence,)
+            ),
             numerator.confidence,
             *(c.market_price.confidence for c in snapshot.market_value_components),
             *(c.shares_outstanding.confidence for c in snapshot.market_value_components),
