@@ -1640,12 +1640,7 @@ def _insert_cell_confidence_row(
         insert into mart.cell_confidence
             (run_id, subject_id, semantic_type, metric, observation_id, confidence, policy_hash, input_hash, reason_codes)
         values (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-        on conflict on constraint cell_confidence_run_subject_metric_unique do update
-            set confidence = excluded.confidence,
-                policy_hash = excluded.policy_hash,
-                input_hash = excluded.input_hash,
-                reason_codes = excluded.reason_codes,
-                observation_id = excluded.observation_id
+        on conflict on constraint cell_confidence_run_subject_metric_unique do nothing
         """,
         (
             run_id,
