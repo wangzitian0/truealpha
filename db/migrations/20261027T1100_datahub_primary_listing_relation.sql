@@ -210,14 +210,11 @@ left join issuer_listings ilist on ilist.issuer_id = survivor.id
 left join staging.kg_entities kg on (kg.id = e.entity_id::text or (la.legacy_id is not null and kg.id = la.legacy_id))
 $view$;
 begin
-    execute 'create temp view boot_guard_candidate as ' || wanted;
-    if to_regclass('mart.entity_identity') is null
-       or pg_get_viewdef(to_regclass('mart.entity_identity'))
-          is distinct from pg_get_viewdef(to_regclass('pg_temp.boot_guard_candidate'))
-    then
+    -- Superseded: 20261110T1500_datahub_entity_identity_unique_and_fund_conservation.sql
+    -- redefines mart.entity_identity later in the chain (#1641).
+    if to_regclass('mart.entity_identity') is null then
         execute 'create or replace view mart.entity_identity as ' || wanted;
     end if;
-    drop view pg_temp.boot_guard_candidate;
 end
 $$;
 

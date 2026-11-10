@@ -20,6 +20,7 @@ import psycopg
 import pytest
 from data_engine.config import settings
 from data_engine.datahub.production_topt.fund_consolidation import (
+    _LINES_SQL,
     load_fund_vintages,
     materialize_fund_consolidation,
 )
@@ -531,3 +532,133 @@ def test_mart_fund_holdings_deduplicates_reparsed_holding_lines(connection) -> N
         (fund_id,),
     ).fetchone()
     assert coverage == (1, 1, Decimal("16.01272878741"), Decimal("16.01272878741"))
+
+
+def _apply_issue_1641_migration(connection) -> None:
+    """Apply the #1641 migration inside the rolled-back test transaction."""
+    migration = (
+        Path(__file__).resolve().parents[4]
+        / "db/migrations/20261110T1500_datahub_entity_identity_unique_and_fund_conservation.sql"
+    )
+    connection.execute(migration.read_text(encoding="utf-8"))
+
+
+def test_lines_sql_bounds_core_and_entity_identity_joins_to_one_row() -> None:
+    """#1641: _LINES_SQL uses LATERAL LIMIT 1 joins so core results and entity_identity never fan out."""
+    normalized = " ".join(_LINES_SQL.split()).lower()
+    assert "left join lateral (" in normalized
+    assert ") core on true" in normalized
+    assert normalized.count("from mart.entity_identity ei_row") == 2
+    assert normalized.count("limit 1") == 3
+    assert "order by (coalesce(ei.listing_id, c.listing_id) = h.listing_id) desc" in normalized
+
+
+def test_dual_kg_entities_and_dual_listings_preserve_weight_conservation(connection) -> None:
+    """#1641: duplicate kg_entities rows and dual CIK core rows must not fan out holding weights."""
+    _apply_issue_1641_migration(connection)
+    _seed(connection, isin="US02079K3059", ticker="GOOGL", weight="40", filing=KNOWABLE_FILING, period="2026-06-30")
+    _seed(connection, isin="US02079K1079", ticker="GOOG", weight="35", filing=KNOWABLE_FILING, period="2026-06-30")
+    holding_company_cik = "company:cik:1652044"
+    connection.execute(
+        "insert into staging.kg_entities (id, entity_type, display_name) values (%s, 'company', 'Alphabet Inc.') "
+        "on conflict (id) do nothing",
+        (holding_company_cik,),
+    )
+    for isin in ("US02079K3059", "US02079K1079"):
+        connection.execute(
+            "insert into staging.kg_identifiers (entity_id, identifier_type, identifier_value, "
+            "valid_time, transaction_time, confidence, source, raw_ref) "
+            "values (%s, 'isin', %s, daterange(%s, null), %s, 0.95, 'openfigi', 'test:1641') "
+            "on conflict do nothing",
+            (
+                holding_company_cik,
+                isin,
+                (KNOWABLE_FILING + timedelta(seconds=1)).date(),
+                KNOWABLE_FILING + timedelta(seconds=1),
+            ),
+        )
+    issuer_uuid = resolve_entity(connection, "issuer:cik:0001652044", "issuer", as_of=CUTOFF.date(), known_at=CUTOFF)
+    listing_goog = resolve_entity(connection, "listing:xnas:goog", "listing", as_of=CUTOFF.date(), known_at=CUTOFF)
+    listing_googl = resolve_entity(connection, "listing:xnas:googl", "listing", as_of=CUTOFF.date(), known_at=CUTOFF)
+    for kg_id, name in (
+        (str(issuer_uuid), "Alphabet Inc. UUID"),
+        ("issuer:cik:0001652044", "Alphabet Inc. Legacy"),
+        (str(listing_goog), "Alphabet Class C UUID"),
+        ("listing:xnas:goog", "Alphabet Class C Legacy"),
+        (str(listing_googl), "Alphabet Class A UUID"),
+        ("listing:xnas:googl", "Alphabet Class A Legacy"),
+    ):
+        connection.execute(
+            "insert into staging.kg_entities (id, entity_type, display_name) values (%s, 'company', %s) "
+            "on conflict (id) do update set display_name = excluded.display_name",
+            (kg_id, name),
+        )
+
+    for entity_uuid in (issuer_uuid, listing_goog, listing_googl):
+        count = connection.execute(
+            "select count(*) from mart.entity_identity where entity_id = %s",
+            (entity_uuid,),
+        ).fetchone()[0]
+        assert count == 1
+
+    connection.execute("set local session_replication_role = replica")
+    for listing_uuid, gap in ((listing_goog, Decimal("0.20")), (listing_googl, Decimal("0.30"))):
+        res_sha = f"{abs(hash((RUN, str(issuer_uuid), str(listing_uuid)))):064x}"[:64]
+        connection.execute(
+            """
+            insert into mart.topt_core_results (
+                result_id, content_sha256, invocation_id, snapshot_id, run_id,
+                release_manifest_id, universe_id, universe_version, universe_sha256,
+                cutoff, issuer_id, instrument_id, listing_id, operating_branch,
+                operating_metric, availability, operating_efficiency,
+                capital_adjusted_gross_profit, gppe, tier, target_ps_lower,
+                target_ps_upper, target_ps_midpoint, current_ps, valuation_gap,
+                confidence, freshness, reason_codes, input_observation_ids,
+                gppe_invocation_id, gppe_result_id,
+                gppe_definition_id, gppe_definition_sha256,
+                tier_definition_id, tier_definition_sha256, payload, availability_status
+            ) values (
+                'topt-core-result:' || %s, %s,
+                'topt-core-invocation:' || %s,
+                'topt-core-snapshot:' || repeat('c', 64),
+                %s,
+                'release-manifest:' || repeat('d', 64),
+                'universe:test', '1', repeat('e', 64),
+                now(), %s, 'inst:test', %s,
+                'non_financial', 'capital_adjusted_gppe', 'available',
+                100, 100, 1.5, 'tech', 1.0, 2.0, 1.5, 1.2, %s,
+                0.85, 'fresh', '{}', array['obs1','obs2','obs3','obs4'],
+                'gppe-inv:' || repeat('f', 64), 'gppe-res:' || repeat('0', 64),
+                'gppe-def:v0', repeat('1', 64),
+                'tier-def:v0', repeat('2', 64),
+                '{}'::jsonb, 'available'
+            )
+            """,
+            (res_sha, res_sha, res_sha, RUN, str(issuer_uuid), str(listing_uuid), gap),
+        )
+
+    written = materialize_fund_consolidation(connection, run_id=RUN, cutoff=CUTOFF)
+    matched = [item for item in written if item.fund_id == FUND]
+    assert len(matched) == 1
+    fund = matched[0]
+    assert (fund.lines, fund.valued_lines) == (2, 2)
+    assert fund.total_weight == Decimal("75")
+    assert fund.resolved_weight == Decimal("75")
+    assert fund.valued_weight == Decimal("75")
+
+
+def test_the_table_refuses_total_weight_above_conservation_ceiling(connection) -> None:
+    """#1641: mart.fund_virtual_company rejects rows with total_weight_pct above 105."""
+    _apply_issue_1641_migration(connection)
+    with pytest.raises(psycopg.errors.CheckViolation, match="chk_fund_virtual_company_weight_conservation"):
+        connection.execute(
+            """
+            insert into mart.fund_virtual_company (run_id, fund_id, report_period, transaction_time, cutoff,
+                definition_version, definition_sha256, weighted_valuation_gap, valuation_basis,
+                total_weight_pct, resolved_weight_pct, valued_weight_pct, lines, valued_lines, confidence,
+                availability_status, source_evidence_status, factor_validation_status)
+            values (%s, %s, '2026-06-30', %s, %s, 'v0', %s, null, null,
+                198.2, 198.2, 0, 2, 0, 0, 'unavailable', 'degraded', 'not_evaluated')
+            """,
+            (RUN, FUND, KNOWABLE_FILING, CUTOFF, "a" * 64),
+        )

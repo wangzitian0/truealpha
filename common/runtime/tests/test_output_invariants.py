@@ -969,3 +969,144 @@ def test_governed_entities_resolve_display_name_passes_with_real_names_and_fails
     assert code_ok == 0, output_ok
     assert f"ok       {DISPLAY_NAME_INVARIANT}: 2 row(s) examined" in output_ok
     assert run_id is not None
+
+
+ENTITY_IDENTITY_UNIQUE_INVARIANT = "entity-identity-unique-per-entity"
+FUND_WEIGHTS_INVARIANT = "fund-virtual-company-weights-conserved"
+
+
+def test_entity_identity_unique_and_fund_weights_conserved_structure_and_behavior() -> None:
+    """#1641: verify structure and pass/fail behavior for entity_identity uniqueness and fund weight conservation."""
+    (unique_inv,) = [inv for inv in _module.INVARIANTS if inv.id == ENTITY_IDENTITY_UNIQUE_INVARIANT]
+    assert "from mart.entity_identity" in unique_inv.violations
+    assert "group by entity_id" in unique_inv.violations
+    assert "having count(*) > 1" in unique_inv.violations
+    assert "select count(*) from mart.entity_identity" in unique_inv.population
+
+    unique_answers = {
+        unique_inv.violations.strip(): [],
+        unique_inv.population.strip(): [(338,)],
+    }
+    assert (
+        check(
+            "postgresql://unused",
+            today=TODAY,
+            exemptions={},
+            invariants=(unique_inv,),
+            connect=lambda _url: _Connection(unique_answers),
+        )
+        == 0
+    )
+    unique_answers[unique_inv.violations.strip()] = [("00000000-0000-0000-0000-000000001641", "2")]
+    assert (
+        check(
+            "postgresql://unused",
+            today=TODAY,
+            exemptions={},
+            invariants=(unique_inv,),
+            connect=lambda _url: _Connection(unique_answers),
+        )
+        == 1
+    )
+
+    (weights_inv,) = [inv for inv in _module.INVARIANTS if inv.id == FUND_WEIGHTS_INVARIANT]
+    assert "from mart.fund_virtual_company" in weights_inv.violations
+    assert "total_weight_pct > 105" in weights_inv.violations
+    assert "resolved_weight_pct > total_weight_pct" in weights_inv.violations
+    assert "valued_weight_pct > resolved_weight_pct" in weights_inv.violations
+    assert "select count(*) from mart.fund_virtual_company" in weights_inv.population
+
+    weights_answers = {
+        weights_inv.violations.strip(): [],
+        weights_inv.population.strip(): [(4,)],
+    }
+    assert (
+        check(
+            "postgresql://unused",
+            today=TODAY,
+            exemptions={},
+            invariants=(weights_inv,),
+            connect=lambda _url: _Connection(weights_answers),
+        )
+        == 0
+    )
+    weights_answers[weights_inv.violations.strip()] = [
+        ("capture-run:1641", "etf:series:QQQ", "198.2", "198.2", "190.0")
+    ]
+    assert (
+        check(
+            "postgresql://unused",
+            today=TODAY,
+            exemptions={},
+            invariants=(weights_inv,),
+            connect=lambda _url: _Connection(weights_answers),
+        )
+        == 1
+    )
+
+
+def test_entity_identity_unique_per_entity_passes_with_dual_kg_rows_and_fails_on_duplicate(
+    conn: psycopg.Connection, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """#1641: mart.entity_identity emits one row per entity even when staging.kg_entities holds UUID and legacy rows."""
+    entity_uuid = _mint_listing(conn, "listing:xnas:goog")
+    for kg_id, name in ((entity_uuid, "Alphabet UUID"), ("listing:xnas:goog", "Alphabet Legacy")):
+        conn.execute(
+            "insert into staging.kg_entities (id, entity_type, display_name) values (%s, 'company', %s)",
+            (kg_id, name),
+        )
+    code, output = _parity_verdict(conn, capsys, ENTITY_IDENTITY_UNIQUE_INVARIANT)
+    assert code == 0, output
+    assert f"ok       {ENTITY_IDENTITY_UNIQUE_INVARIANT}: 1 row(s) examined" in output
+
+    (invariant,) = [inv for inv in _module.INVARIANTS if inv.id == ENTITY_IDENTITY_UNIQUE_INVARIANT]
+    answers = {
+        invariant.violations.strip(): [(entity_uuid, "2")],
+        invariant.population.strip(): [(2,)],
+    }
+    failing = check(
+        "postgresql://unused",
+        today=TODAY,
+        exemptions={},
+        invariants=(invariant,),
+        connect=lambda _url: _Connection(answers),
+    )
+    assert failing == 1
+
+
+def test_fund_virtual_company_weights_conserved_passes_valid_row_and_fails_on_fanout(
+    conn: psycopg.Connection, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """#1641: fund-virtual-company-weights-conserved passes conserved rows and rejects fanout weights."""
+    conn.execute(
+        """
+        insert into mart.fund_virtual_company (
+            run_id, fund_id, report_period, transaction_time, cutoff,
+            definition_version, definition_sha256, weighted_valuation_gap, valuation_basis,
+            total_weight_pct, resolved_weight_pct, valued_weight_pct, lines, valued_lines, confidence,
+            availability_status, source_evidence_status, factor_validation_status
+        ) values (
+            'capture-run:1641', 'etf:series:QQQ', '2026-06-30', '2026-06-30T00:00:00Z',
+            '2026-06-30T00:00:00Z', 'v0', repeat('a', 64), 0.12, 'price_to_gross_profit',
+            99.8, 98.5, 95.0, 100, 95, 0.90,
+            'available', 'verified', 'accepted'
+        )
+        """
+    )
+    code, output = _parity_verdict(conn, capsys, FUND_WEIGHTS_INVARIANT)
+    assert code == 0, output
+    assert f"ok       {FUND_WEIGHTS_INVARIANT}: 1 row(s) examined" in output
+
+    (invariant,) = [inv for inv in _module.INVARIANTS if inv.id == FUND_WEIGHTS_INVARIANT]
+    answers = {
+        invariant.violations.strip(): [("capture-run:1641", "etf:series:QQQ", "198.2", "198.2", "190.0")],
+        invariant.population.strip(): [(1,)],
+    }
+    failing = check(
+        "postgresql://unused",
+        today=TODAY,
+        exemptions={},
+        invariants=(invariant,),
+        connect=lambda _url: _Connection(answers),
+    )
+    assert failing == 1

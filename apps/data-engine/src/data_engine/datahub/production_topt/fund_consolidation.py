@@ -51,13 +51,8 @@ select h.fund_id,
        core.valuation_basis
 from mart.fund_holdings_resolved h
 join vintage using (fund_id, report_period, transaction_time)
-left join (
-    select coalesce(ei.listing_id, c.listing_id) as listing_id,
-           coalesce(
-               lpad(nullif(ltrim(ei_issuer.cik, '0'), ''), 10, '0'),
-               lpad(substring(c.issuer_id from '^(?:issuer|company):cik:0*([0-9]+)$'), 10, '0')
-           ) as issuer_cik,
-           c.valuation_gap,
+left join lateral (
+    select c.valuation_gap,
            c.availability,
            c.confidence,
            status.availability_status,
@@ -72,17 +67,37 @@ left join (
     -- lives on the table. A low-confidence row keeps `availability = 'available'` (#1114).
     left join mart.topt_core_results status
       on status.result_id = c.result_id
-    left join mart.entity_identity ei
-      on ei.entity_id::text = c.listing_id
-    left join mart.entity_identity ei_issuer
-      on ei_issuer.entity_id::text = c.issuer_id
+    left join lateral (
+        select ei_row.listing_id
+        from mart.entity_identity ei_row
+        where ei_row.entity_id::text = c.listing_id
+        limit 1
+    ) ei on true
+    left join lateral (
+        select ei_row.cik
+        from mart.entity_identity ei_row
+        where ei_row.entity_id::text = c.issuer_id
+        limit 1
+    ) ei_issuer on true
     where c.run_id = %(run_id)s
-) core
-  on core.listing_id = h.listing_id
-  or (
-      core.issuer_cik is not null
-      and core.issuer_cik = lpad(substring(h.issuer_entity from '^(?:issuer|company):cik:0*([0-9]+)$'), 10, '0')
-  )
+      and (
+          coalesce(ei.listing_id, c.listing_id) = h.listing_id
+          or (
+              coalesce(
+                  lpad(nullif(ltrim(ei_issuer.cik, '0'), ''), 10, '0'),
+                  lpad(substring(c.issuer_id from '^(?:issuer|company):cik:0*([0-9]+)$'), 10, '0')
+              ) is not null
+              and coalesce(
+                  lpad(nullif(ltrim(ei_issuer.cik, '0'), ''), 10, '0'),
+                  lpad(substring(c.issuer_id from '^(?:issuer|company):cik:0*([0-9]+)$'), 10, '0')
+              ) = lpad(substring(h.issuer_entity from '^(?:issuer|company):cik:0*([0-9]+)$'), 10, '0')
+          )
+      )
+    order by (coalesce(ei.listing_id, c.listing_id) = h.listing_id) desc,
+             c.valuation_gap is not null desc,
+             c.listing_id
+    limit 1
+) core on true
 order by h.fund_id, h.percent_of_net_assets desc nulls last, h.holding_name
 """
 
