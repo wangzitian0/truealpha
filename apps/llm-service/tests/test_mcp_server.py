@@ -305,6 +305,40 @@ async def test_claude_compatible_client_session_round_trip() -> None:
         assert report.governed is False
 
 
+@pytest.mark.anyio
+async def test_sequential_mcp_calls_and_ranking_card_coercion_succeed_without_empty_drops() -> None:
+    """#1609: 12 sequential back-to-back MCP calls on one session succeed without drops,
+    and research_card(card_kind='ranking') returns non-empty metrics and verified 1080x1440 HTML."""
+    from truealpha_contracts.research_cards import verify_card_html
+
+    server = build_mcp_server(repository=FixtureStrategyRunRepository(), research_repository=_research_repository())
+    async with create_connected_server_and_client_session(server._mcp_server) as client:
+        await client.initialize()
+        for idx in range(12):
+            res = await client.call_tool(
+                "research_card",
+                {
+                    "request": {
+                        "report_kind": "company" if idx % 2 == 0 else "theme_ranking",
+                        "target_entity_ids": ["theme:large_model_value"],
+                        "cutoff_at": "2026-06-30T23:59:59Z",
+                        "section_kinds": ["ranking"] if idx % 3 == 0 else [],
+                        "card_kind": "ranking",
+                        "style_preset": "screen-print",
+                        "page": 1,
+                    }
+                },
+            )
+            assert res.isError is not True
+            assert res.structuredContent is not None
+            card = ResearchCard.model_validate_json(json.dumps(res.structuredContent))
+            assert len(card.subjects) <= 4
+            assert any(len(s.metrics) > 0 for s in card.subjects)
+            assert card.rendered_html is not None
+            ok, violations = verify_card_html(card, card.rendered_html)
+            assert ok, f"verify_card_html failed on iteration {idx}: {violations}"
+
+
 @pytest.fixture
 def anyio_backend() -> str:
     return "asyncio"

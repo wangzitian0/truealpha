@@ -506,3 +506,48 @@ def test_card_module_performs_no_mart_query() -> None:
                 imported_names.add(alias.asname or alias.name)
     assert "ResearchReadPort" not in imported_names, "research_cards.py must not depend on a read port/repository"
     assert "MartResearchReadRepository" not in imported_names
+
+
+def test_card_presets_and_series_pagination_bound_subjects_to_four_per_card() -> None:
+    from truealpha_contracts.research_cards import (
+        CARD_PRESETS,
+        MAX_SUBJECTS_PER_CARD,
+        build_strategy_context_from_report,
+        enrich_card_metadata,
+        paginate_card_series,
+    )
+
+    assert len(CARD_PRESETS) == 10
+    assert MAX_SUBJECTS_PER_CARD == 4
+
+    report = _report(ResearchReportKind.THEME_RANKING, ("theme:large_model_value",))
+    base_card = build_card(report, CardKind.RANKING)
+    assert len(base_card.subjects) == 5
+
+    ctx = build_strategy_context_from_report(report)
+    assert ctx.total_universe_count == 5
+    assert ctx.selected_count == 2
+    assert ctx.valuation_basis == "price_to_gross_profit"
+
+    enriched = enrich_card_metadata(base_card, report, strategy_context=ctx, style_preset="bold")
+    pages = paginate_card_series(enriched, max_subjects_per_card=4)
+    assert len(pages) == 2
+    assert len(pages[0].subjects) == 4
+    assert len(pages[1].subjects) == 1
+    assert pages[0].series_index == 1 and pages[0].series_total == 2
+    assert pages[1].series_index == 2 and pages[1].series_total == 2
+
+    for page in pages:
+        for preset_id in CARD_PRESETS:
+            html_doc = render_card_html(page, preset=preset_id)
+            ok, violations = verify_card_html(page, html_doc)
+            assert ok, f"preset {preset_id} failed verify_card_html: {violations}"
+            assert "height:1440px;overflow:hidden;" in html_doc
+
+
+def test_theme_ranking_filters_by_target_entity_ids_when_specific_issuers_requested() -> None:
+    filtered_report = _report(ResearchReportKind.THEME_RANKING, ("issuer:adm", "issuer:nice"))
+    assert [s.subject_id for s in filtered_report.subjects] == ["issuer:nice", "issuer:adm"]
+    card = build_card(filtered_report, CardKind.RANKING)
+    assert [s.subject_id for s in card.subjects] == ["issuer:nice", "issuer:adm"]
+    assert all(len(s.metrics) > 0 for s in card.subjects)

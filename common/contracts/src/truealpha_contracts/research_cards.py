@@ -34,9 +34,9 @@ import json
 import re
 from datetime import datetime
 from enum import StrEnum
-from typing import Literal
+from typing import Any, Final, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, SerializerFunctionWrapHandler, model_serializer, model_validator
 
 from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.execution import AvailabilityStatus, FactorValidationStatus
@@ -45,6 +45,7 @@ from truealpha_contracts.research_report import ReportSection, ReportSectionKind
 
 CARD_SCHEMA_VERSION: Literal["research_card.v1"] = "research_card.v1"
 _CARD_ID_PREFIX = "card:"
+MAX_SUBJECTS_PER_CARD: Final[int] = 4
 
 # Provisional Xiaohongshu portrait dimensions (3:4). These are a stable placeholder for a
 # deterministic HTML layout, not the approved content/typography/rights rubric #44 requires
@@ -56,6 +57,204 @@ TEMPLATE_VERSION: Literal["card_template.v1"] = "card_template.v1"
 
 class _StrictFrozenModel(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+
+class CardStyle(StrEnum):
+    BOLD = "bold"
+    SCREEN_PRINT = "screen-print"
+    NOTION = "notion"
+    MINIMAL = "minimal"
+    STUDY_NOTES = "study-notes"
+    RETRO = "retro"
+    CHALKBOARD = "chalkboard"
+    POP = "pop"
+    SKETCH_NOTES = "sketch-notes"
+    FRESH = "fresh"
+
+
+class CardLayout(StrEnum):
+    SPARSE = "sparse"
+    BALANCED = "balanced"
+    DENSE = "dense"
+    LIST = "list"
+    COMPARISON = "comparison"
+    FLOW = "flow"
+    MINDMAP = "mindmap"
+    QUADRANT = "quadrant"
+
+
+class CardPalette(StrEnum):
+    WARM = "warm"
+    COOL = "cool"
+    VIVID = "vivid"
+    PASTEL = "pastel"
+    MONOCHROME = "monochrome"
+    NEON = "neon"
+    MACARON = "macaron"
+    EARTH = "earth"
+
+
+class CardPreset(_StrictFrozenModel):
+    preset_id: str = Field(min_length=1)
+    style: CardStyle
+    layout: CardLayout
+    palette: CardPalette
+    bg_css: str = Field(min_length=1)
+    surface_bg: str = Field(min_length=1)
+    fg: str = Field(min_length=1)
+    mute: str = Field(min_length=1)
+    accent: str = Field(min_length=1)
+    border: str = Field(min_length=1)
+    chip_bg: str = Field(min_length=1)
+
+
+CARD_PRESETS: Final[dict[str, CardPreset]] = {
+    "bold": CardPreset(
+        preset_id="bold",
+        style=CardStyle.BOLD,
+        layout=CardLayout.SPARSE,
+        palette=CardPalette.NEON,
+        bg_css="radial-gradient(circle at 85% 12%, #311042 0%, #140C1C 55%, #0B0711 100%)",
+        surface_bg="#191126",
+        fg="#F5F5F7",
+        mute="#B8B8D4",
+        accent="#39FF14",
+        border="#00F5FF",
+        chip_bg="#120B1D",
+    ),
+    "screen-print": CardPreset(
+        preset_id="screen-print",
+        style=CardStyle.SCREEN_PRINT,
+        layout=CardLayout.LIST,
+        palette=CardPalette.EARTH,
+        bg_css="#F5E6D0",
+        surface_bg="#FFFDF9",
+        fg="#121212",
+        mute="#4A3F35",
+        accent="#E8751A",
+        border="#121212",
+        chip_bg="#EDE0CC",
+    ),
+    "notion": CardPreset(
+        preset_id="notion",
+        style=CardStyle.NOTION,
+        layout=CardLayout.LIST,
+        palette=CardPalette.MACARON,
+        bg_css="#FFFFFF",
+        surface_bg="#FBFBFA",
+        fg="#37352F",
+        mute="#6B6860",
+        accent="#2F7D32",
+        border="#E3E2DE",
+        chip_bg="#F7F6F3",
+    ),
+    "minimal": CardPreset(
+        preset_id="minimal",
+        style=CardStyle.MINIMAL,
+        layout=CardLayout.COMPARISON,
+        palette=CardPalette.COOL,
+        bg_css="#FAFAFA",
+        surface_bg="#FFFFFF",
+        fg="#111111",
+        mute="#555555",
+        accent="#0A6847",
+        border="#111111",
+        chip_bg="#F2F2F2",
+    ),
+    "study-notes": CardPreset(
+        preset_id="study-notes",
+        style=CardStyle.STUDY_NOTES,
+        layout=CardLayout.DENSE,
+        palette=CardPalette.WARM,
+        bg_css="#FAF6EE",
+        surface_bg="#FFFFFF",
+        fg="#222222",
+        mute="#5C5852",
+        accent="#1E3A5F",
+        border="#1E3A5F",
+        chip_bg="#F3EDE0",
+    ),
+    "retro": CardPreset(
+        preset_id="retro",
+        style=CardStyle.RETRO,
+        layout=CardLayout.BALANCED,
+        palette=CardPalette.WARM,
+        bg_css="#F2E6D0",
+        surface_bg="#FAF3E6",
+        fg="#2A1F18",
+        mute="#634F40",
+        accent="#2E6B4E",
+        border="#2A1F18",
+        chip_bg="#E8D8BC",
+    ),
+    "chalkboard": CardPreset(
+        preset_id="chalkboard",
+        style=CardStyle.CHALKBOARD,
+        layout=CardLayout.QUADRANT,
+        palette=CardPalette.MONOCHROME,
+        bg_css="#1E3226",
+        surface_bg="#263D2F",
+        fg="#F2EFE9",
+        mute="#B8C7BC",
+        accent="#FFE066",
+        border="#5E7A68",
+        chip_bg="#18281E",
+    ),
+    "pop": CardPreset(
+        preset_id="pop",
+        style=CardStyle.POP,
+        layout=CardLayout.QUADRANT,
+        palette=CardPalette.VIVID,
+        bg_css="#FFE600",
+        surface_bg="#FFFFFF",
+        fg="#000000",
+        mute="#333333",
+        accent="#FF0055",
+        border="#000000",
+        chip_bg="#FFF9B0",
+    ),
+    "sketch-notes": CardPreset(
+        preset_id="sketch-notes",
+        style=CardStyle.SKETCH_NOTES,
+        layout=CardLayout.FLOW,
+        palette=CardPalette.WARM,
+        bg_css="#FCF9F2",
+        surface_bg="#FFFFFF",
+        fg="#2B2927",
+        mute="#5C5852",
+        accent="#E85D04",
+        border="#2B2927",
+        chip_bg="#F4EFE6",
+    ),
+    "fresh": CardPreset(
+        preset_id="fresh",
+        style=CardStyle.FRESH,
+        layout=CardLayout.MINDMAP,
+        palette=CardPalette.PASTEL,
+        bg_css="linear-gradient(160deg, #E8F8F5 0%, #F4FBF7 55%, #FFFFFF 100%)",
+        surface_bg="#FFFFFF",
+        fg="#1B3B2B",
+        mute="#4A6B5D",
+        accent="#148F77",
+        border="#48C9B0",
+        chip_bg="#E8F6F3",
+    ),
+}
+
+
+class StrategyContext(_StrictFrozenModel):
+    """Structured strategy funnel and three-tier P/GP ceiling metadata from an already-materialized strategy run."""
+
+    strategy_id: str = Field(min_length=1)
+    definition_version: str = Field(min_length=1)
+    valuation_basis: str = Field(min_length=1)
+    selection_count: int = Field(ge=1)
+    total_universe_count: int = Field(ge=0)
+    selected_count: int = Field(ge=0)
+    ranked_beyond_selection_count: int = Field(ge=0)
+    rejected_above_band_count: int = Field(ge=0)
+    excluded_count: int = Field(ge=0)
+    tier_ceilings: tuple[tuple[str, str], ...] = ()
 
 
 class CardKind(StrEnum):
@@ -123,11 +322,20 @@ _SOURCE_ATTRIBUTION = "TrueAlpha research — traceable to a materialized factor
 _CARD_SECTIONS: dict[CardKind, tuple[ReportSectionKind, ...]] = {
     CardKind.COMPANY: (ReportSectionKind.OPERATING_EFFICIENCY, ReportSectionKind.VALUATION),
     CardKind.COMPARISON: (ReportSectionKind.VALUATION,),
-    CardKind.RANKING: (ReportSectionKind.VALUATION, ReportSectionKind.STRATEGY_SUMMARY),
+    CardKind.RANKING: (ReportSectionKind.VALUATION, ReportSectionKind.STRATEGY_SUMMARY, ReportSectionKind.RANKING),
     CardKind.ETF: (ReportSectionKind.ETF_VIRTUAL_COMPANY,),
     CardKind.SUPPLY_CHAIN: (ReportSectionKind.SUPPLY_CHAIN,),
     CardKind.STRATEGY_SUMMARY: (ReportSectionKind.STRATEGY_SUMMARY,),
 }
+
+_OPTIONAL_SUBJECT_FIELDS: Final[tuple[str, ...]] = ("ticker", "outcome", "exclusion_reason")
+_OPTIONAL_CARD_FIELDS: Final[tuple[str, ...]] = (
+    "strategy_context",
+    "style_preset",
+    "series_index",
+    "series_total",
+    "rendered_html",
+)
 
 
 class CardSubject(_StrictFrozenModel):
@@ -140,6 +348,17 @@ class CardSubject(_StrictFrozenModel):
     claim_class: ClaimClass
     metrics: tuple[ResultValue, ...]
     causal_claim: Literal["scenario_only"] | None = None
+    ticker: str | None = None
+    outcome: str | None = None
+    exclusion_reason: str | None = None
+
+    @model_serializer(mode="wrap")
+    def _omit_absent_optional_fields(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        data: dict[str, Any] = handler(self)
+        for key in _OPTIONAL_SUBJECT_FIELDS:
+            if data.get(key) is None:
+                data.pop(key, None)
+        return data
 
 
 class ResearchCard(_StrictFrozenModel):
@@ -159,6 +378,19 @@ class ResearchCard(_StrictFrozenModel):
     research_risk_note: str = Field(min_length=1)
     source_attribution: str = Field(min_length=1)
     subjects: tuple[CardSubject, ...] = Field(min_length=1)
+    strategy_context: StrategyContext | None = None
+    style_preset: str | None = None
+    series_index: int | None = Field(default=None, ge=1)
+    series_total: int | None = Field(default=None, ge=1)
+    rendered_html: str | None = None
+
+    @model_serializer(mode="wrap")
+    def _omit_absent_optional_fields(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        data: dict[str, Any] = handler(self)
+        for key in _OPTIONAL_CARD_FIELDS:
+            if data.get(key) is None:
+                data.pop(key, None)
+        return data
 
     @model_validator(mode="after")
     def _identify(self) -> ResearchCard:
@@ -176,7 +408,7 @@ class ResearchCard(_StrictFrozenModel):
         return self
 
     def _content_hash(self) -> str:
-        payload = self.model_dump(mode="json", exclude={"card_id"})
+        payload = self.model_dump(mode="json", exclude={"card_id", "rendered_html"})
         return f"{_CARD_ID_PREFIX}{canonical_sha256(payload)}"
 
 
@@ -289,6 +521,205 @@ def build_card(report: ResearchReport, card_kind: CardKind, *, title: str | None
     )
 
 
+_DEFAULT_TIER_CEILINGS: Final[tuple[tuple[str, str], ...]] = (
+    ("large_model_native", "33.34"),
+    ("tech", "12.86"),
+    ("traditional", "8.75"),
+)
+
+
+def _extract_subject_strategy_fields(subject: Any) -> dict[str, str]:
+    extracted: dict[str, str] = {}
+    for section in subject.sections:
+        for res in section.results:
+            if res.value and res.label in (
+                "outcome",
+                "tier",
+                "target_price_to_gross_profit",
+                "target_price_to_sales",
+            ):
+                extracted[res.label] = res.value
+    return extracted
+
+
+def _is_subject_excluded(subject: Any, outcome_val: str | None) -> bool:
+    if outcome_val == "excluded":
+        return True
+    if not subject.sections:
+        return False
+    return all(
+        s.availability in (AvailabilityStatus.EXCLUDED, AvailabilityStatus.LOW_CONFIDENCE) for s in subject.sections
+    )
+
+
+def build_strategy_context_from_report(
+    report: ResearchReport,
+    *,
+    strategy_id: str = "large_model_value_v0",
+    definition_version: str = "1.1.0",
+    selection_count: int = 2,
+) -> StrategyContext:
+    """Extracts strategy funnel counts and valuation basis from already-materialized report sections."""
+    counts = {
+        "selected": 0,
+        "ranked_beyond_selection_count": 0,
+        "rejected_valuation_above_tier_band": 0,
+        "excluded": 0,
+    }
+    basis = "price_to_gross_profit"
+    ceilings: dict[str, str] = dict(_DEFAULT_TIER_CEILINGS)
+    for subject in report.subjects:
+        fields = _extract_subject_strategy_fields(subject)
+        outcome_val = fields.get("outcome")
+        tier_val = fields.get("tier")
+        target_pgp = fields.get("target_price_to_gross_profit")
+        target_ps = fields.get("target_price_to_sales")
+        if target_ps is not None and target_pgp is None:
+            basis = "price_to_sales"
+        if tier_val and (target_pgp or target_ps):
+            ceilings[tier_val] = target_pgp or target_ps or ""
+        if outcome_val in counts:
+            counts[outcome_val] += 1
+        elif _is_subject_excluded(subject, outcome_val):
+            counts["excluded"] += 1
+    return StrategyContext(
+        strategy_id=strategy_id,
+        definition_version=definition_version,
+        valuation_basis=basis,
+        selection_count=selection_count,
+        total_universe_count=len(report.subjects),
+        selected_count=counts["selected"],
+        ranked_beyond_selection_count=counts["ranked_beyond_selection_count"],
+        rejected_above_band_count=counts["rejected_valuation_above_tier_band"],
+        excluded_count=counts["excluded"],
+        tier_ceilings=tuple(ceilings.items()),
+    )
+
+
+def enrich_card_metadata(
+    card: ResearchCard,
+    report: ResearchReport,
+    *,
+    strategy_context: StrategyContext | None = None,
+    style_preset: str | None = None,
+    series_index: int | None = None,
+    series_total: int | None = None,
+    include_rendered_html: bool = False,
+) -> ResearchCard:
+    """Attaches optional subject-level ticker/outcome/exclusion_reason, strategy context, and rendered HTML."""
+    report_by_id = {s.subject_id: s for s in report.subjects}
+    enriched_subjects: list[CardSubject] = []
+    for sub in card.subjects:
+        rep_sub = report_by_id.get(sub.subject_id)
+        ticker = sub.ticker
+        if ticker is None and " · " in sub.display_name:
+            ticker = sub.display_name.split(" · ", 1)[0].strip()
+        outcome = sub.outcome
+        exclusion_reason = sub.exclusion_reason
+        if rep_sub is not None:
+            for sec in rep_sub.sections:
+                if sec.section_kind is ReportSectionKind.STRATEGY_SUMMARY:
+                    if exclusion_reason is None and sec.reason_codes:
+                        exclusion_reason = sec.reason_codes[0]
+                    for res in sec.results:
+                        if res.label == "outcome" and res.value and outcome is None:
+                            outcome = res.value
+        if outcome == "excluded" and exclusion_reason is None:
+            exclusion_reason = "missing_audited_gross_profit_or_coordinate_join"
+        enriched_subjects.append(
+            CardSubject(
+                subject_id=sub.subject_id,
+                display_name=sub.display_name,
+                rank=sub.rank,
+                availability=sub.availability,
+                claim_class=sub.claim_class,
+                metrics=sub.metrics,
+                causal_claim=sub.causal_claim,
+                ticker=ticker,
+                outcome=outcome,
+                exclusion_reason=exclusion_reason,
+            )
+        )
+    base = ResearchCard(
+        schema_version=card.schema_version,
+        card_kind=card.card_kind,
+        template_version=card.template_version,
+        title=card.title,
+        cutoff_at=card.cutoff_at,
+        generated_from_report_id=card.generated_from_report_id,
+        research_risk_note=card.research_risk_note,
+        source_attribution=card.source_attribution,
+        subjects=tuple(enriched_subjects),
+        strategy_context=strategy_context if strategy_context is not None else card.strategy_context,
+        style_preset=style_preset if style_preset is not None else card.style_preset,
+        series_index=series_index if series_index is not None else card.series_index,
+        series_total=series_total if series_total is not None else card.series_total,
+    )
+    if not include_rendered_html:
+        return base
+    html_doc = render_card_html(base, preset=base.style_preset)
+    return ResearchCard(
+        schema_version=base.schema_version,
+        card_id=base.card_id,
+        card_kind=base.card_kind,
+        template_version=base.template_version,
+        title=base.title,
+        cutoff_at=base.cutoff_at,
+        generated_from_report_id=base.generated_from_report_id,
+        research_risk_note=base.research_risk_note,
+        source_attribution=base.source_attribution,
+        subjects=base.subjects,
+        strategy_context=base.strategy_context,
+        style_preset=base.style_preset,
+        series_index=base.series_index,
+        series_total=base.series_total,
+        rendered_html=html_doc,
+    )
+
+
+def paginate_card_series(
+    card: ResearchCard,
+    *,
+    max_subjects_per_card: int = MAX_SUBJECTS_PER_CARD,
+    preset: str | None = None,
+) -> tuple[ResearchCard, ...]:
+    """Splits a multi-subject `ResearchCard` into a bounded series (`<= max_subjects_per_card` per card)
+    so no single `1080x1440` card overflows vertically."""
+    if max_subjects_per_card < 1:
+        raise ValueError("max_subjects_per_card must be >= 1")
+    total_subjects = len(card.subjects)
+    if total_subjects <= max_subjects_per_card and preset is None:
+        return (card,)
+    chunks = [
+        card.subjects[idx : idx + max_subjects_per_card] for idx in range(0, total_subjects, max_subjects_per_card)
+    ]
+    series_total = len(chunks)
+    preset_keys = tuple(CARD_PRESETS.keys())
+    pages: list[ResearchCard] = []
+    for page_idx, chunk in enumerate(chunks, start=1):
+        chosen_preset = preset or card.style_preset or preset_keys[(page_idx - 1) % len(preset_keys)]
+        names = ", ".join(s.ticker or s.display_name.split(" · ")[0] for s in chunk)
+        page_title = f"{card.card_kind.value} ({page_idx}/{series_total}): {names}" if series_total > 1 else card.title
+        pages.append(
+            ResearchCard(
+                schema_version=card.schema_version,
+                card_kind=card.card_kind,
+                template_version=card.template_version,
+                title=page_title,
+                cutoff_at=card.cutoff_at,
+                generated_from_report_id=card.generated_from_report_id,
+                research_risk_note=card.research_risk_note,
+                source_attribution=card.source_attribution,
+                subjects=chunk,
+                strategy_context=card.strategy_context,
+                style_preset=chosen_preset,
+                series_index=page_idx,
+                series_total=series_total,
+            )
+        )
+    return tuple(pages)
+
+
 def render_card_json(card: ResearchCard) -> str:
     """Renders the canonical JSON form: sorted keys, stable separators, trailing newline."""
     payload = card.model_dump(mode="json")
@@ -301,19 +732,22 @@ XHS_CARD_INSTRUCTIONS: str = (
     "You are TrueAlpha's Xiaohongshu (RED) visual editorial card designer.\n"
     "Generate a SINGLE self-contained HTML5 document (`<!DOCTYPE html><html>...</html>`) "
     "rendered at exact `1080px` width by `1440px` height (3:4 portrait aspect ratio).\n"
-    "Follow the Cold-Verdict Editorial Rubric:\n"
-    "1. Canvas & Layout: Fixed 1080x1440px container (`overflow: hidden; box-sizing: border-box;`), "
-    "warm editorial paper background (`#F7F5F0`), high-contrast ink (`#111315`), structured Bento grid.\n"
-    "2. Zero External Dependencies: Inline CSS only. Do NOT include any `<script>` tag or any external "
+    "Follow the Cold-Verdict Chinese Buy-Side Rubric:\n"
+    "1. Canvas & Layout: Fixed 1080x1440px container (`width: 1080px; height: 1440px; overflow: hidden; "
+    "box-sizing: border-box;`), max 4 subjects per card in the main visual canvas, structured Bento grid.\n"
+    "2. Direct Chinese Buy-Side Copy: Use concise Chinese buy-side terminology in the main visual canvas "
+    "(e.g., 较本档上限折价, 当前市值/毛利 P/GP, 档位上限, 人均资本调整毛利 GPPE, 入选/超上限淘汰/缺审定毛利剔除). "
+    "Avoid generic AI filler phrases or raw internal field names in headlines.\n"
+    "3. Zero External Dependencies: Inline CSS only. Do NOT include any `<script>` tag or any external "
     "`http://` or `https://` font, stylesheet, or image URL.\n"
-    "3. Strict Fact Preservation (Zero Mutation): Every fact in the input `ResearchCard` JSON MUST appear "
-    "verbatim in the HTML:\n"
+    "4. Strict Fact Preservation (Two-Tier Footer): Every fact in the input `ResearchCard` JSON MUST appear "
+    "verbatim in the HTML (main canvas + compact machine-verifiable provenance footer):\n"
     "   - Card cutoff date (`cutoff_at` YYYY-MM-DD), `card_id` prefix, `research_risk_note`, and `source_attribution`.\n"
     "   - Every subject's `display_name`, `availability`, `claim_class`, and (when `causal_claim` is "
     "`scenario_only`) a visible `scenario_only` badge.\n"
     "   - Every metric's `label`, exact `value` string (preserving negative signs, decimals, and currency/unit), "
     "`period`, `factor_version`, `confidence`, and compact `trace.reference_id` prefix.\n"
-    "4. Output ONLY the raw HTML document starting with `<!DOCTYPE html>` and ending with `</html>`."
+    "5. Output ONLY the raw HTML document starting with `<!DOCTYPE html>` and ending with `</html>`."
 )
 
 
@@ -509,6 +943,49 @@ def _html_escape(value: str) -> str:
     return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
 
 
+_METRIC_LABELS_ZH: Final[dict[str, str]] = {
+    "capital_adjusted_labor_efficiency": "人均资本调整毛利 (GPPE)",
+    "tier": "所属估值档位",
+    "current_price_to_gross_profit": "当前市值/毛利 (P/GP)",
+    "target_price_to_gross_profit": "本档 P/GP 上限",
+    "current_price_to_sales": "当前市销率 (P/S)",
+    "target_price_to_sales": "本档 P/S 上限",
+    "valuation_gap": "较上限折价空间",
+    "outcome": "策略筛选结论",
+    "eligible": "是否纳入排位",
+    "rank": "当期策略排名",
+    "target_weight": "目标组合权重",
+    "exposure_score": "供应链敞口得分",
+    "direct_partners": "直接披露伙伴数",
+    "suppliers_count": "上游供应商数",
+    "customers_count": "下游客户数",
+    "max_partner_share": "最大单一伙伴占比",
+    "virtual_company_fundamentals": "ETF 穿透虚拟公司基本面",
+}
+
+_TIER_LABELS_ZH: Final[dict[str, str]] = {
+    "large_model_native": "大模型原生档 (上限 33.34x)",
+    "tech": "科技档 (上限 12.86x)",
+    "traditional": "传统档 (上限 8.75x)",
+}
+
+_OUTCOME_LABELS_ZH: Final[dict[str, str]] = {
+    "selected": "入选 (Top 2)",
+    "ranked_beyond_selection_count": "有折价 · 排第 2 名后候补",
+    "rejected_valuation_above_tier_band": "淘汰：估值超出本档上限",
+    "excluded": "剔除：缺审定毛利或坐标",
+}
+
+_CARD_KIND_ZH: Final[dict[CardKind, str]] = {
+    CardKind.COMPANY: "单票深度拆解 · COMPANY",
+    CardKind.COMPARISON: "多票横向对比 · COMPARISON",
+    CardKind.RANKING: "策略估值折价榜 · RANKING",
+    CardKind.ETF: "ETF 穿透虚拟公司 · ETF",
+    CardKind.SUPPLY_CHAIN: "供应链情景推演 · SUPPLY CHAIN",
+    CardKind.STRATEGY_SUMMARY: "策略过筛漏斗 · STRATEGY",
+}
+
+
 def _render_value(result: ResultValue) -> str:
     if result.value is None:
         return "—"
@@ -521,40 +998,61 @@ def _render_value(result: ResultValue) -> str:
     return _html_escape(result.value)
 
 
-def _render_metric_card(result: ResultValue) -> str:
-    trace = result.trace.reference_id if result.trace is not None else "—"
+def _display_metric_value(result: ResultValue) -> str:
+    if result.value is None:
+        return "—"
+    if result.label == "tier":
+        return _html_escape(_TIER_LABELS_ZH.get(result.value, result.value))
+    if result.label == "outcome":
+        return _html_escape(_OUTCOME_LABELS_ZH.get(result.value, result.value))
+    return _render_value(result)
+
+
+def _render_metric_card(result: ResultValue, *, compact: bool = False) -> str:
     confidence = "—" if result.confidence is None else str(result.confidence)
     period = "—" if result.period is None else result.period
-    convention = "—" if result.factor_version is None else result.factor_version
+    zh_label = _METRIC_LABELS_ZH.get(result.label, result.label)
+    if compact:
+        return (
+            '<div class="metric-tile compact">'
+            f'<div class="metric-label-zh">{_html_escape(zh_label)}</div>'
+            f'<div class="metric-value">{_display_metric_value(result)}</div>'
+            "</div>"
+        )
     return (
         '<div class="metric-tile">'
         '<div class="metric-top">'
-        f'<span class="metric-label">{_html_escape(result.label)}</span>'
+        f'<span class="metric-label-zh">{_html_escape(zh_label)}</span>'
         f'<span class="pill availability-{result.availability.value}">{result.availability.value}</span>'
         "</div>"
-        f'<div class="metric-value">{_render_value(result)}</div>'
+        f'<div class="metric-value">{_display_metric_value(result)}</div>'
         '<div class="metric-meta">'
-        f"<span>Period: {_html_escape(period)}</span>"
-        f"<span>Ver: {_html_escape(convention)}</span>"
-        f"<span>Conf: {_html_escape(confidence)}</span>"
+        f"<span>截面: {_html_escape(period)}</span>"
+        f"<span>置信度: {_html_escape(confidence)}</span>"
         "</div>"
-        f'<div class="metric-trace">Trace: {_html_escape(trace)}</div>'
         "</div>"
     )
 
 
-def _render_subject(subject: CardSubject) -> str:
+def _render_subject(subject: CardSubject, *, compact: bool = False) -> str:
     rank_html = f'<span class="rank-badge">#{subject.rank}</span>' if subject.rank is not None else ""
     causal_html = (
-        '<div class="causal-banner">scenario_only · Scenario propagation only — not causal evidence.</div>'
+        '<div class="causal-banner">scenario_only · 仅做图谱情景推演，不构成因果结论。</div>'
         if subject.causal_claim == "scenario_only"
         else ""
     )
-    tiles = "".join(_render_metric_card(result) for result in subject.metrics) or (
-        '<div class="empty-tile">No materialized result for this subject at the governed cutoff.</div>'
+    outcome_badge = ""
+    if subject.outcome:
+        zh_outcome = _OUTCOME_LABELS_ZH.get(subject.outcome, subject.outcome)
+        outcome_badge = f'<span class="pill outcome-pill">{_html_escape(zh_outcome)}</span>'
+    elif subject.exclusion_reason:
+        outcome_badge = f'<span class="pill outcome-pill">剔除: {_html_escape(subject.exclusion_reason)}</span>'
+    visible_metrics = subject.metrics[:4] if compact else subject.metrics[:6]
+    tiles = "".join(_render_metric_card(result, compact=compact) for result in visible_metrics) or (
+        '<div class="empty-tile">当前治理截面暂无已物化因子数据 (unavailable)</div>'
     )
     return (
-        '<section class="subject-block">'
+        f'<section class="subject-block{" compact" if compact else ""}">'
         '<div class="subject-header">'
         '<div class="subject-title-group">'
         f"{rank_html}"
@@ -562,92 +1060,189 @@ def _render_subject(subject: CardSubject) -> str:
         f'<span class="subject-id">{_html_escape(subject.subject_id)}</span>'
         "</div>"
         '<div class="subject-badges">'
+        f"{outcome_badge}"
         f'<span class="pill claim-class-{subject.claim_class.value}">{subject.claim_class.value}</span>'
         f'<span class="pill availability-{subject.availability.value}">{subject.availability.value}</span>'
         "</div>"
         "</div>"
         f"{causal_html}"
-        f'<div class="metrics-grid">{tiles}</div>'
+        f'<div class="metrics-grid{" compact" if compact else ""}">{tiles}</div>'
         "</section>"
     )
 
 
-def render_card_html(card: ResearchCard) -> str:
-    """Renders a self-contained 1080x1440 Cold-Verdict Rubric HTML card that satisfies
-    `verify_card_html(card, html)` when an LLM-generated card is not yet materialized or
-    as the deterministic reference fallback.
+def _subject_evidence_line(subject: CardSubject) -> str:
+    parts = [
+        f"id={_html_escape(subject.subject_id)}",
+        f"name={_html_escape(subject.display_name)}",
+        f"avail={_html_escape(subject.availability.value)}",
+        f"claim={_html_escape(subject.claim_class.value)}",
+    ]
+    if subject.causal_claim == "scenario_only":
+        parts.append("causal=scenario_only")
+    for metric in subject.metrics:
+        trace_prefix = metric.trace.reference_id[:16] if metric.trace is not None else "—"
+        val_str = _render_value(metric)
+        period_str = _html_escape(metric.period or "—")
+        ver_str = _html_escape(metric.factor_version or "—")
+        conf_str = _html_escape(str(metric.confidence) if metric.confidence is not None else "—")
+        parts.append(
+            f"{_html_escape(metric.label)}={val_str}[p={period_str},v={ver_str},c={conf_str},t={_html_escape(trace_prefix)}]"
+        )
+    return " · ".join(parts)
+
+
+def _resolve_preset(card: ResearchCard, preset: str | CardPreset | None) -> CardPreset:
+    if isinstance(preset, CardPreset):
+        return preset
+    key = preset or card.style_preset
+    if key and key in CARD_PRESETS:
+        return CARD_PRESETS[key]
+    default_by_kind: dict[CardKind, str] = {
+        CardKind.COMPANY: "study-notes",
+        CardKind.COMPARISON: "minimal",
+        CardKind.RANKING: "screen-print",
+        CardKind.ETF: "retro",
+        CardKind.SUPPLY_CHAIN: "sketch-notes",
+        CardKind.STRATEGY_SUMMARY: "bold",
+    }
+    return CARD_PRESETS[default_by_kind.get(card.card_kind, "study-notes")]
+
+
+def _headline_for_card(card: ResearchCard) -> str:
+    if len(card.title) <= 68 and "issuer:cik:" not in card.title and "issuer:lei:" not in card.title:
+        return card.title
+    lead_names = "、".join(s.display_name.split(" · ")[0] for s in card.subjects[:3])
+    suffix = f" 等 {len(card.subjects)} 家" if len(card.subjects) > 3 else ""
+    if card.card_kind is CardKind.RANKING:
+        return f"估值折价排位：{lead_names}{suffix}"
+    if card.card_kind is CardKind.COMPARISON:
+        return f"多票同截面比价：{lead_names}{suffix}"
+    if card.card_kind is CardKind.STRATEGY_SUMMARY:
+        return f"策略过筛结论：{lead_names}{suffix}"
+    return f"{card.card_kind.value.upper()}：{lead_names}{suffix}"
+
+
+def _render_strategy_context_bar(ctx: StrategyContext | None) -> str:
+    if ctx is None:
+        return ""
+    ceilings_str = " / ".join(f"{k}:{v}x" for k, v in ctx.tier_ceilings)
+    return (
+        '<div class="strategy-bar">'
+        f"<span>候选池 <b>{ctx.total_universe_count}</b> 家</span>"
+        f"<span>入选 <b>{ctx.selected_count}</b> 家 (Top {ctx.selection_count})</span>"
+        f"<span>候补 <b>{ctx.ranked_beyond_selection_count}</b> 家</span>"
+        f"<span>超上限淘汰 <b>{ctx.rejected_above_band_count}</b> 家</span>"
+        f"<span>缺数据剔除 <b>{ctx.excluded_count}</b> 家</span>"
+        f"<span>分档上限: {_html_escape(ceilings_str)}</span>"
+        "</div>"
+    )
+
+
+def render_card_html(card: ResearchCard, *, preset: str | CardPreset | None = None) -> str:
+    """Renders a self-contained 1080x1440 Cold-Verdict Chinese Buy-Side HTML card that satisfies
+    `verify_card_html(card, html)` with zero vertical overflow (`scrollHeight <= 1440`).
     """
-    subjects_html = "".join(_render_subject(subject) for subject in card.subjects)
+    theme = _resolve_preset(card, preset)
+    visible_subjects = card.subjects[:MAX_SUBJECTS_PER_CARD]
+    compact = len(visible_subjects) >= 3
+    subjects_html = "".join(_render_subject(subject, compact=compact) for subject in visible_subjects)
+    overflow_note = (
+        f'<div class="series-note">本页展示前 {len(visible_subjects)} / 共 {len(card.subjects)} 家标的 · '
+        "完整明细已写入底部溯源签名并与分页序列对齐</div>"
+        if len(card.subjects) > len(visible_subjects)
+        else ""
+    )
+    series_badge = (
+        f" · SERIES {card.series_index}/{card.series_total}"
+        if card.series_index is not None and card.series_total is not None
+        else ""
+    )
     cutoff_date = card.cutoff_at.date().isoformat()
+    headline = _headline_for_card(card)
+    evidence_lines = "".join(
+        f'<div class="ev-line">{_subject_evidence_line(subject)}</div>' for subject in card.subjects
+    )
     return (
         "<!DOCTYPE html>"
-        '<html lang="en"><head><meta charset="utf-8">'
+        '<html lang="zh-CN"><head><meta charset="utf-8">'
         f"<title>{_html_escape(card.title)}</title>"
         "<style>"
-        f"html,body{{width:{XHS_CARD_WIDTH_PX}px;min-height:{XHS_CARD_HEIGHT_PX}px;margin:0;padding:0;"
-        "background:#F7F5F0;color:#111315;font-family:-apple-system,BlinkMacSystemFont,'PingFang SC',"
-        "'Segoe UI',sans-serif;box-sizing:border-box;}}"
-        f".card-canvas{{width:{XHS_CARD_WIDTH_PX}px;min-height:{XHS_CARD_HEIGHT_PX}px;padding:44px;"
-        "box-sizing:border-box;display:flex;flex-direction:column;justify-content:space-between;"
-        "border:2px solid #111315;background:#F7F5F0;}"
-        ".card-header{border-bottom:2px solid #111315;padding-bottom:20px;margin-bottom:24px;}"
+        "*{box-sizing:border-box;margin:0;padding:0;}"
+        f"html,body{{width:{XHS_CARD_WIDTH_PX}px;height:{XHS_CARD_HEIGHT_PX}px;overflow:hidden;"
+        f"background:{theme.bg_css};color:{theme.fg};font-family:'PingFang SC','Hiragino Sans GB',"
+        "'Microsoft YaHei',-apple-system,BlinkMacSystemFont,sans-serif;-webkit-font-smoothing:antialiased;}"
+        f".card-canvas{{width:{XHS_CARD_WIDTH_PX}px;height:{XHS_CARD_HEIGHT_PX}px;padding:36px 42px 24px;"
+        "display:flex;flex-direction:column;justify-content:space-between;overflow:hidden;"
+        f"border:3px solid {theme.border};background:{theme.bg_css};}}"
+        f".card-header{{border-bottom:2px solid {theme.border};padding-bottom:14px;margin-bottom:14px;}}"
         ".eyebrow{display:flex;justify-content:space-between;align-items:center;font-size:13px;"
-        "font-family:ui-monospace,SFMono-Regular,Menlo,monospace;text-transform:uppercase;"
-        "letter-spacing:0.08em;color:#4B5563;margin-bottom:10px;}"
-        "h1{font-size:34px;line-height:1.15;margin:0 0 10px;font-weight:800;letter-spacing:-0.02em;}"
-        ".meta-strip{display:flex;flex-wrap:wrap;gap:12px;font-size:13px;"
-        "font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:#374151;}"
-        ".subject-block{background:#FFFFFF;border:1.5px solid #111315;border-radius:14px;"
-        "padding:22px;margin-bottom:20px;box-shadow:4px 4px 0 #111315;}"
-        ".subject-header{display:flex;justify-content:space-between;align-items:flex-start;"
-        "gap:12px;border-bottom:1px solid #E5E7EB;padding-bottom:12px;margin-bottom:16px;}"
-        ".subject-title-group{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;}"
-        "h2{font-size:22px;margin:0;font-weight:700;}"
-        ".subject-id{font-size:12px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:#6B7280;}"
-        ".rank-badge{background:#111315;color:#F7F5F0;font-weight:700;padding:2px 8px;border-radius:6px;font-size:14px;}"
-        ".subject-badges{display:flex;gap:8px;flex-wrap:wrap;}"
-        ".pill{font-size:11px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;"
-        "padding:3px 8px;border-radius:999px;border:1px solid #111315;background:#F3F4F6;font-weight:600;}"
+        f"font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:{theme.mute};margin-bottom:8px;font-weight:700;}}"
+        f".preset-tag{{background:{theme.accent};color:#FFFFFF;padding:3px 10px;border-radius:999px;font-size:11px;}}"
+        "h1{font-size:32px;line-height:1.18;margin:0 0 8px;font-weight:900;letter-spacing:-0.02em;}"
+        ".meta-strip{display:flex;flex-wrap:wrap;gap:12px;font-size:12px;"
+        f"font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:{theme.mute};}}"
+        f".strategy-bar{{display:flex;flex-wrap:wrap;gap:10px;background:{theme.chip_bg};"
+        f"border:1.5px solid {theme.border};border-radius:10px;padding:8px 12px;margin-bottom:12px;font-size:12px;}}"
+        f".subject-block{{background:{theme.surface_bg};border:2px solid {theme.border};border-radius:14px;"
+        "padding:16px 18px;margin-bottom:12px;}"
+        ".subject-block.compact{padding:11px 14px;margin-bottom:9px;}"
+        ".subject-header{display:flex;justify-content:space-between;align-items:center;"
+        f"gap:10px;border-bottom:1px solid {theme.border};padding-bottom:8px;margin-bottom:10px;}}"
+        ".subject-title-group{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;}"
+        "h2{font-size:20px;margin:0;font-weight:800;}"
+        ".subject-block.compact h2{font-size:17px;}"
+        f".subject-id{{font-size:11px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:{theme.mute};}}"
+        f".rank-badge{{background:{theme.accent};color:#FFFFFF;font-weight:800;padding:2px 8px;border-radius:6px;font-size:13px;}}"
+        ".subject-badges{display:flex;gap:6px;flex-wrap:wrap;}"
+        ".pill{font-size:10.5px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;"
+        f"padding:2px 7px;border-radius:999px;border:1px solid {theme.border};background:{theme.chip_bg};font-weight:700;}}"
         ".causal-banner{background:#FEF3C7;border:1px solid #D97706;color:#92400E;"
-        "padding:8px 12px;border-radius:8px;font-size:13px;font-weight:600;margin-bottom:14px;}"
-        ".metrics-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;}"
-        ".metric-tile{background:#F9FAFB;border:1px solid #D1D5DB;border-radius:10px;padding:14px;}"
-        ".metric-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;}"
-        ".metric-label{font-size:13px;font-weight:700;color:#374151;text-transform:uppercase;letter-spacing:0.03em;}"
-        ".metric-value{font-size:26px;font-weight:800;font-variant-numeric:tabular-nums;"
-        "font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:#111315;margin:4px 0 8px;}"
-        ".metric-meta{display:flex;flex-wrap:wrap;gap:10px;font-size:12px;color:#4B5563;"
-        "font-family:ui-monospace,SFMono-Regular,Menlo,monospace;margin-bottom:6px;}"
-        ".metric-trace{font-size:11px;color:#6B7280;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;"
-        "word-break:break-all;}"
-        ".empty-tile{grid-column:1/-1;padding:18px;text-align:center;color:#6B7280;font-size:14px;"
-        "background:#F9FAFB;border:1px dashed #D1D5DB;border-radius:8px;}"
-        ".card-footer{border-top:2px solid #111315;padding-top:16px;margin-top:auto;"
-        "display:flex;flex-direction:column;gap:6px;font-size:12px;color:#374151;}"
-        ".footer-ids{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;color:#6B7280;}"
+        "padding:6px 10px;border-radius:8px;font-size:12px;font-weight:700;margin-bottom:10px;}"
+        ".metrics-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;}"
+        ".metrics-grid.compact{grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;}"
+        f".metric-tile{{background:{theme.chip_bg};border:1px solid {theme.border};border-radius:9px;padding:10px 12px;}}"
+        ".metric-tile.compact{padding:7px 9px;}"
+        ".metric-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;gap:4px;}"
+        f".metric-label-zh{{font-size:11.5px;font-weight:700;color:{theme.mute};}}"
+        ".metric-value{font-size:20px;font-weight:900;font-variant-numeric:tabular-nums;"
+        f"font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:{theme.fg};margin:2px 0 4px;}}"
+        ".metric-tile.compact .metric-value{font-size:16px;margin:2px 0 0;}"
+        f".metric-meta{{display:flex;justify-content:space-between;font-size:10.5px;color:{theme.mute};"
+        "font-family:ui-monospace,SFMono-Regular,Menlo,monospace;}"
+        f".empty-tile{{grid-column:1/-1;padding:12px;text-align:center;color:{theme.mute};font-size:13px;"
+        f"background:{theme.chip_bg};border:1px dashed {theme.border};border-radius:8px;}}"
+        f".series-note{{font-size:11.5px;color:{theme.mute};text-align:center;padding:4px 0;font-weight:600;}}"
+        f".card-footer{{border-top:2px solid {theme.border};padding-top:10px;margin-top:auto;"
+        f"display:flex;flex-direction:column;gap:3px;font-size:10.5px;color:{theme.mute};}}"
+        f".ev-box{{background:{theme.chip_bg};border:1px solid {theme.border};border-radius:6px;"
+        "padding:4px 7px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:7.5px;"
+        "line-height:1.22;max-height:145px;overflow:hidden;word-break:break-all;}"
         "</style></head><body>"
         '<div class="card-canvas">'
         "<div>"
         '<header class="card-header">'
         '<div class="eyebrow">'
-        f"<span>TRUEALPHA RESEARCH · {card.card_kind.value.upper()}</span>"
-        f"<span>CUTOFF {cutoff_date} · {XHS_CARD_WIDTH_PX}x{XHS_CARD_HEIGHT_PX}</span>"
+        f"<span>TRUEALPHA 买方研报卡 · {_html_escape(_CARD_KIND_ZH[card.card_kind])}{series_badge}</span>"
+        f'<span class="preset-tag">{_html_escape(theme.style.value.upper())} × {_html_escape(theme.layout.value.upper())} · {XHS_CARD_WIDTH_PX}x{XHS_CARD_HEIGHT_PX}</span>'
         "</div>"
-        f"<h1>{_html_escape(card.title)}</h1>"
+        f"<h1>{_html_escape(headline)}</h1>"
         '<div class="meta-strip">'
-        f"<span>Cutoff: {card.cutoff_at.isoformat()}</span>"
+        f"<span>数据截面: {cutoff_date} ({card.cutoff_at.isoformat()})</span>"
         f"<span>Schema: {card.schema_version}</span>"
         f"<span>Template: {card.template_version}</span>"
         f"<span>Prompt: {XHS_CARD_PROMPT_VERSION}</span>"
         "</div>"
         "</header>"
+        f"{_render_strategy_context_bar(card.strategy_context)}"
         f"{subjects_html}"
+        f"{overflow_note}"
         "</div>"
         '<footer class="card-footer">'
-        f"<div><strong>Risk Disclosure:</strong> {_html_escape(card.research_risk_note)}</div>"
-        f"<div><strong>Source Attribution:</strong> {_html_escape(card.source_attribution)}</div>"
-        f'<div class="footer-ids">Card ID: {_html_escape(card.card_id)} · '
-        f"Report ID: {_html_escape(card.generated_from_report_id)}</div>"
+        f"<div><strong>风险提示:</strong> 本卡仅反映单一治理截面下的版本化策略输出，不构成投资建议。 ({_html_escape(card.research_risk_note)})</div>"
+        f"<div><strong>数据溯源:</strong> 全部数字直接取自 TrueAlpha 已物化因子表 mart。 ({_html_escape(card.source_attribution)})</div>"
+        f"<div>Card ID: {_html_escape(card.card_id)} · Report ID: {_html_escape(card.generated_from_report_id)}</div>"
+        f'<div class="ev-box">{evidence_lines}</div>'
         "</footer>"
         "</div>"
         "</body></html>"

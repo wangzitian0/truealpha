@@ -320,6 +320,9 @@ def test_latest_joins_entity_identity_to_resolve_symbolic_listing_id(monkeypatch
     report = repo.latest()
 
     assert report.cells[0].listing_id == "listing:xnas:aapl"
+    assert report.cells[0].ticker == "AAPL"
+    assert report.cells[0].display_name == "AAPL · Apple (苹果)"
+    assert report.cells[0].gppe_display == "1500000.00"
     assert not re.fullmatch(
         r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
         report.cells[0].listing_id,
@@ -327,3 +330,19 @@ def test_latest_joins_entity_identity_to_resolve_symbolic_listing_id(monkeypatch
     )
     cells_query = next(sql for sql in calls if "topt_gppe_results" in sql)
     assert "mart.entity_identity ei" in cells_query
+
+
+def test_topt_gppe_cell_rounds_gppe_display_and_preserves_raw_gppe() -> None:
+    from truealpha_contracts.topt_read import ToptGppeCell
+
+    cell = ToptGppeCell(
+        listing_id="listing:xnas:nvda",
+        availability="available",
+        gppe="1872775.757575757575757575758",
+        confidence="0.8500",
+    )
+    assert cell.gppe == "1872775.757575757575757575758"
+    assert cell.gppe_display == "1872775.76"
+    assert cell.ticker == "NVDA"
+    assert cell.issuer_id == "issuer:cik:0001045810"
+    assert cell.display_name == "NVDA · NVIDIA (英伟达)"

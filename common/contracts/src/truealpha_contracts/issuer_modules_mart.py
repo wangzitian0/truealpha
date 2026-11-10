@@ -70,6 +70,139 @@ _RESOLVE_BATCH_CANDIDATES_SQL = (
     " join mart.entity_identity ei"
     f"   on ({_IDENTITY_MATCH_SQL})"
 )
+
+KNOWN_ENTITY_DISPLAY: Final[dict[str, tuple[str, str]]] = {
+    "issuer:cik:0000723125": ("MU", "Micron Technology (美光科技)"),
+    "issuer:cik:0000104169": ("WMT", "Walmart (沃尔玛)"),
+    "issuer:cik:0001326801": ("META", "Meta Platforms"),
+    "issuer:cik:0001018724": ("AMZN", "Amazon (亚马逊)"),
+    "issuer:cik:0001045810": ("NVDA", "NVIDIA (英伟达)"),
+    "issuer:cik:0001065280": ("NFLX", "Netflix (奈飞)"),
+    "issuer:cik:0000019617": ("JPM", "JPMorgan Chase (摩根大通)"),
+    "issuer:cik:0000059478": ("LLY", "Eli Lilly (礼来)"),
+    "issuer:cik:0000200406": ("JNJ", "Johnson & Johnson (强生)"),
+    "issuer:cik:0000320193": ("AAPL", "Apple (苹果)"),
+    "issuer:cik:0000789019": ("MSFT", "Microsoft (微软)"),
+    "issuer:cik:0000909832": ("COST", "Costco (好市多)"),
+    "issuer:cik:0001067983": ("BRK.B", "Berkshire Hathaway (伯克希尔)"),
+    "issuer:cik:0001141391": ("MA", "Mastercard (万事达)"),
+    "issuer:cik:0001318605": ("TSLA", "Tesla (特斯拉)"),
+    "issuer:cik:0001403161": ("V", "Visa"),
+    "issuer:cik:0001551152": ("ABBV", "AbbVie (艾伯维)"),
+    "issuer:cik:0001652044": ("GOOGL", "Alphabet (谷歌)"),
+    "issuer:cik:0001730168": ("AVGO", "Broadcom (博通)"),
+    "issuer:lei:J3WHBG0MTS7O8ZVMDC91": ("XOM", "Exxon Mobil (埃克森美孚)"),
+    "issuer:cik:0000034088": ("XOM", "Exxon Mobil (埃克森美孚)"),
+    "issuer:cik:0000354950": ("HD", "Home Depot (家得宝)"),
+    "issuer:cik:0001075531": ("BKNG", "Booking Holdings"),
+    "issuer:cik:0000937966": ("ASML", "ASML Holding (阿斯麦)"),
+    "issuer:cik:0000049196": ("HBAN", "Huntington Bancshares"),
+    "issuer:cik:0000020286": ("CINF", "Cincinnati Financial"),
+    "issuer:cik:0001535527": ("CRWD", "CrowdStrike"),
+    "issuer:cik:0000829224": ("SBUX", "Starbucks (星巴克)"),
+    "issuer:cik:0001327567": ("PANW", "Palo Alto Networks"),
+    "issuer:cik:0000896878": ("INTU", "Intuit"),
+    "issuer:adm": ("ADM", "Archer-Daniels-Midland"),
+    "issuer:nice": ("NICE", "NICE Ltd."),
+    "issuer:ddog": ("DDOG", "Datadog"),
+    "issuer:shop": ("SHOP", "Shopify"),
+}
+
+_TICKER_DISPLAY_INDEX: Final[dict[str, tuple[str, str, str]]] = {
+    ticker.upper(): (entity_id, ticker, name) for entity_id, (ticker, name) in KNOWN_ENTITY_DISPLAY.items()
+}
+
+_ENTITY_DISPLAY_SQL = """
+select r.issuer_id,
+       coalesce(nullif(btrim(r.ticker), ''), nullif(btrim(ei.current_ticker), '')) as ticker,
+       coalesce(nullif(btrim(r.display_name), ''), nullif(btrim(ei.name), '')) as display_name,
+       ei.legacy_id
+from mart.entity_display_resolution r
+left join (
+    select distinct on (e.entity_id::text)
+           e.entity_id::text as issuer_id,
+           e.current_ticker,
+           e.name,
+           e.legacy_id
+    from mart.entity_identity e
+    order by e.entity_id::text, e.legacy_id
+) ei on ei.issuer_id = r.issuer_id
+"""
+
+
+def resolve_static_entity_display(entity_id: str) -> tuple[str | None, str | None, str]:
+    """Return `(issuer_id, ticker, display_name)` from the canonical static map and identifier conventions."""
+    clean = entity_id.strip()
+    if not clean:
+        return None, None, entity_id
+    direct = KNOWN_ENTITY_DISPLAY.get(clean) or KNOWN_ENTITY_DISPLAY.get(clean.lower())
+    if direct is not None:
+        ticker, name = direct
+        return clean, ticker, f"{ticker} · {name}"
+    if clean.lower().startswith("listing:"):
+        parts = clean.split(":")
+        if len(parts) >= 3:
+            raw_ticker = parts[2].upper()
+            matched = _TICKER_DISPLAY_INDEX.get(raw_ticker)
+            if matched is not None:
+                iss_id, ticker, name = matched
+                return iss_id, ticker, f"{ticker} · {name}"
+            return None, raw_ticker, raw_ticker
+    upper = clean.upper()
+    if upper in _TICKER_DISPLAY_INDEX:
+        iss_id, ticker, name = _TICKER_DISPLAY_INDEX[upper]
+        return iss_id, ticker, f"{ticker} · {name}"
+    if clean.lower().startswith(("issuer:cik:", "company:cik:", "cik:")):
+        digits = clean.split(":")[-1].strip().zfill(10)
+        cand_key = f"issuer:cik:{digits}"
+        if cand_key in KNOWN_ENTITY_DISPLAY:
+            ticker, name = KNOWN_ENTITY_DISPLAY[cand_key]
+            return cand_key, ticker, f"{ticker} · {name}"
+    return clean if clean.startswith("issuer:") else None, None, clean
+
+
+def _format_display_label(ticker: str, raw_name: str) -> str:
+    if ticker and raw_name:
+        return raw_name if raw_name.startswith(f"{ticker} ·") else f"{ticker} · {raw_name}"
+    return ticker or raw_name
+
+
+def _merge_display_row(merged: dict[str, tuple[str, str]], row: dict[str, Any]) -> None:
+    issuer_id = str(row.get("issuer_id") or "").strip()
+    legacy_id = str(row.get("legacy_id") or "").strip()
+    fallback = KNOWN_ENTITY_DISPLAY.get(legacy_id) or KNOWN_ENTITY_DISPLAY.get(issuer_id)
+    ticker = str(row.get("ticker") or "").strip() or (fallback[0] if fallback else "")
+    raw_name = str(row.get("display_name") or "").strip() or (fallback[1] if fallback else "")
+    label = _format_display_label(ticker, raw_name)
+    if not label:
+        return
+    if issuer_id:
+        merged[issuer_id] = (ticker or issuer_id, label)
+    if legacy_id and legacy_id not in merged:
+        merged[legacy_id] = (ticker or legacy_id, label)
+
+
+def load_entity_display_map(database_url: str | None) -> dict[str, tuple[str, str]]:
+    """Load `(ticker, display_name)` keyed by both UUID and `legacy_id` from `mart.entity_display_resolution`,
+    merged with `KNOWN_ENTITY_DISPLAY` so no consumer surface renders a bare CIK or LEI."""
+    merged: dict[str, tuple[str, str]] = {}
+    for key, (ticker, name) in KNOWN_ENTITY_DISPLAY.items():
+        merged[key] = (ticker, f"{ticker} · {name}")
+        merged[ticker] = (ticker, f"{ticker} · {name}")
+    if not database_url:
+        return merged
+    try:
+        with psycopg.connect(database_url, connect_timeout=5, autocommit=True) as connection:
+            with connection.cursor(row_factory=dict_row) as cursor:
+                cursor.execute(_ENTITY_DISPLAY_SQL)
+                rows = cursor.fetchall()
+    except psycopg.Error:
+        return merged
+    for row in rows:
+        _merge_display_row(merged, row)
+    return merged
+
+
 #: Only a run that the served head names (the App's `servedRunPredicate`). A withheld head
 #: has a null `run_id`.
 _SERVED_RUN = "{alias}.run_id in (select h.run_id from mart.served_head h where h.run_id is not null)"

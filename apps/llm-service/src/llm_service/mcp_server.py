@@ -40,13 +40,22 @@ from truealpha_contracts.issuer_modules_mart import (
     PostgresIssuerModuleReader,
     SupplyChainExposure,
     issuer_identity_sql,
+    resolve_static_entity_display,
 )
 from truealpha_contracts.metric_node_read import (
     MetricNodeValueReport,
     MetricNodeValueUnavailable,
     PostgresMetricNodeValueRepository,
 )
-from truealpha_contracts.research_cards import CardKind, ResearchCard, build_card
+from truealpha_contracts.research_cards import (
+    CardKind,
+    ResearchCard,
+    build_card,
+    build_strategy_context_from_report,
+    enrich_card_metadata,
+    paginate_card_series,
+    render_card_html,
+)
 from truealpha_contracts.research_report import (
     ReportSectionKind,
     ResearchReadPort,
@@ -122,6 +131,8 @@ class ResearchCardToolRequest(ResearchReportToolRequest):
     it — never queries mart directly and computes no new metric of its own."""
 
     card_kind: CardKind
+    style_preset: str | None = None
+    page: int | None = None
 
 
 class IssuerModuleToolRequest(BaseModel):
@@ -253,6 +264,27 @@ def _report_request(request: ResearchReportToolRequest) -> ResearchReportRequest
         target_entity_ids=request.target_entity_ids,
         cutoff_at=request.cutoff_at,
         section_kinds=request.section_kinds,
+        strategy_id=request.strategy_id,
+        title=request.title,
+    )
+
+
+def _card_report_request(request: ResearchCardToolRequest) -> ResearchReportRequest:
+    report_kind = request.report_kind
+    if (
+        request.card_kind is CardKind.RANKING
+        and report_kind is ResearchReportKind.COMPANY
+        and all(t.strip().lower().startswith("theme:") for t in request.target_entity_ids if t.strip())
+    ):
+        report_kind = ResearchReportKind.THEME_RANKING
+    section_kinds = request.section_kinds
+    if section_kinds == (ReportSectionKind.RANKING,):
+        section_kinds = ()
+    return ResearchReportRequest(
+        report_kind=report_kind,
+        target_entity_ids=request.target_entity_ids,
+        cutoff_at=request.cutoff_at,
+        section_kinds=section_kinds,
         strategy_id=request.strategy_id,
         title=request.title,
     )
@@ -422,10 +454,15 @@ def _opt_list(row: Mapping[str, Any] | None, key: str) -> list[Any]:
 def _decision_reason_codes(decision_row: Mapping[str, Any] | None) -> list[str]:
     if not decision_row:
         return []
-    if decision_row.get("reason_codes") is not None:
-        return [str(code) for code in decision_row["reason_codes"]]
+    codes = decision_row.get("reason_codes")
+    if codes:
+        return [str(code) for code in codes]
     exclusion = _opt_str(decision_row, "exclusion_reason")
-    return [exclusion] if exclusion is not None else []
+    if exclusion is not None:
+        return [exclusion]
+    if _opt_str(decision_row, "outcome") == "excluded":
+        return ["missing_audited_gross_profit_or_coordinate_join"]
+    return []
 
 
 def _valuation_basis_name(target_pgp: str | None, target_ps: str | None) -> str | None:
@@ -466,9 +503,14 @@ def _format_company_profile(
 
     decision_confidence = _opt_str(decision_row, "confidence") or gppe_confidence
     decision_reason_codes = _decision_reason_codes(decision_row)
+    _, resolved_ticker, resolved_display_name = resolve_static_entity_display(resolved_issuer_id)
+    if resolved_ticker is None and issuer_id != resolved_issuer_id:
+        _, resolved_ticker, resolved_display_name = resolve_static_entity_display(issuer_id)
 
     return {
         "issuer_id": resolved_issuer_id,
+        "ticker": resolved_ticker,
+        "display_name": resolved_display_name,
         "tier": tier,
         "valuation_gap": valuation_gap,
         "valuation_basis": valuation_basis,
@@ -1098,8 +1140,43 @@ def build_mcp_server(
         ),
     )
     def research_card(request: ResearchCardToolRequest) -> ResearchCard:
-        report = build_research_report(_report_request(request), active_research, context=_owner_access_context())
-        return build_card(report, request.card_kind, title=request.title)
+        report = build_research_report(_card_report_request(request), active_research, context=_owner_access_context())
+        card = build_card(report, request.card_kind, title=request.title)
+        is_mart = getattr(active_research, "_database_url", None) is not None
+        strategy_ctx = (
+            build_strategy_context_from_report(report, strategy_id=request.strategy_id or "large_model_value_v0")
+            if is_mart and request.card_kind in (CardKind.RANKING, CardKind.COMPARISON, CardKind.STRATEGY_SUMMARY)
+            else None
+        )
+        card = enrich_card_metadata(
+            card,
+            report,
+            strategy_context=strategy_ctx,
+            style_preset=request.style_preset,
+            include_rendered_html=False,
+        )
+        if request.page is not None:
+            pages = paginate_card_series(card, preset=request.style_preset)
+            idx = max(0, min(request.page - 1, len(pages) - 1))
+            card = pages[idx]
+        html_doc = render_card_html(card, preset=request.style_preset)
+        return ResearchCard(
+            schema_version=card.schema_version,
+            card_id=card.card_id,
+            card_kind=card.card_kind,
+            template_version=card.template_version,
+            title=card.title,
+            cutoff_at=card.cutoff_at,
+            generated_from_report_id=card.generated_from_report_id,
+            research_risk_note=card.research_risk_note,
+            source_attribution=card.source_attribution,
+            subjects=card.subjects,
+            strategy_context=card.strategy_context,
+            style_preset=card.style_preset,
+            series_index=card.series_index,
+            series_total=card.series_total,
+            rendered_html=html_doc,
+        )
 
     @server.tool(
         name="company_360_profile",
