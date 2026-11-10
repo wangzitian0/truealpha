@@ -97,14 +97,14 @@ def test_a_factor_declares_its_inputs_as_registered_metrics_or_fails_at_import()
     an issuer silently `missing` its input on every run."""
     assert FACTOR_REGISTRY["peg"].inputs == ("price", "shares_outstanding", "net_income")
     # #1518: the factor evaluates the pinned tree, so it declares the captured inputs of every registered tree.
-    from factors.panel import FOREST, NodeKind, metric_of, required_inputs
+    from factors.panel import FACTOR_VARIANTS, metric_of, required_inputs
 
     leaves_of_the_forest = {
         metric_of(node)
-        for tree in FOREST.trees
+        for tree in FACTOR_VARIANTS
         for issuer_class in tree.applicability
-        for node in required_inputs(FOREST, tree, issuer_class)
-        if node.kind is NodeKind.INPUT
+        for node in required_inputs(tree, issuer_class)
+        if node.is_input
     }
     assert set(FACTOR_REGISTRY["gross_profit_per_employee"].inputs) == leaves_of_the_forest
     assert FACTOR_REGISTRY["three_tier_valuation"].inputs == (), "a composite consumes results, not metrics"

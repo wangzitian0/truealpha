@@ -1879,13 +1879,11 @@ def test_jpm_preferred_stock_resolves_on_the_balance_sheet_concept_and_banking_v
     # 10-K (accession 0001628280-26-008131). Verified against the repo 10-K sample, not against live EDGAR.
     # Headcount 318,512 is not in companyfacts. It is the 10-K "Employees" figure that #1108 cites.
     # The value is the one of the registered banking tree (#1518), the tree that definition 1.1.0 pins.
-    from factors.panel import FOREST as forest
-    from factors.panel import GPPE_BANKING_TCE_TREE, IssuerClass, evaluate
+    from factors.panel import GPPE_BANKING_TCE_SPEC, IssuerClass, evaluate_panel_variant
 
     bundle = build_bundle(_jpm_facts(), _JPM_CUTOFF, OperatingBranch.FINANCIAL)
-    evaluation = evaluate(
-        forest,
-        GPPE_BANKING_TCE_TREE,
+    evaluation = evaluate_panel_variant(
+        GPPE_BANKING_TCE_SPEC,
         issuer_class=IssuerClass.FINANCIAL,
         inputs={
             "pre_provision_profit": bundle.pre_provision_profit,

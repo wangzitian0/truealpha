@@ -56,7 +56,7 @@ from decimal import Decimal
 from typing import Any, Protocol
 
 import psycopg
-from factors.panel import FOREST, AliasKind, IssuerClass, bound_tree, operating_numerator_node, required_inputs
+from factors.panel import AliasKind, IssuerClass, bound_tree, operating_numerator_node, required_inputs
 from factors.production_topt import OperatingBranch
 from psycopg.types.json import Jsonb
 from pydantic import ValidationError
@@ -237,7 +237,7 @@ def _core_payload_fields(branch: OperatingBranch) -> tuple[str, ...]:
     """
     issuer_class = IssuerClass(branch.value)
     tree = bound_tree(load_live_strategy_definition(), issuer_class)
-    fields = (node.alias(AliasKind.TOPT_SNAPSHOT_FIELD) for node in required_inputs(FOREST, tree, issuer_class))
+    fields = (node.alias(AliasKind.TOPT_SNAPSHOT_FIELD) for node in required_inputs(tree, issuer_class))
     return tuple(field for field in fields if field is not None)
 
 

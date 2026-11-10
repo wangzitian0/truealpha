@@ -27,24 +27,26 @@ from factors.panel import (
     EXPR_TANGIBLE_DEDUCTIONS_FILL_NULL,
     EXPR_TOTAL_GROSS_RETURN,
     FACTOR_EXPRESSIONS,
-    FOREST,
-    GPPE_V0_TREE,
+    GPPE_V0_SPEC,
     INTERMEDIATE_EXPRESSIONS,
     MINTED_NODE_IDS,
     MINTED_TREE_IDS,
     PANEL_EXPRESSIONS,
+    PANEL_METRICS,
+    PANEL_VARIANTS,
     PHYSICALLY_NON_NEGATIVE,
     IssuerClass,
     SignPolicy,
     build_wide_panel,
     consumed_columns,
-    evaluate,
+    evaluate_panel_variant,
     evaluate_wide_panel,
     judge_sign,
     leaf_consumed_columns,
     node_id_for,
     published_node,
     tree_id_for,
+    variant_sha256,
 )
 from factors.production_topt import (
     GppeV0Definition,
@@ -374,13 +376,13 @@ def test_null_filling_and_positivity_conditions_in_polars_expressions() -> None:
 
 
 def test_deterministic_node_and_tree_uuids_preserve_minted_identities_and_use_uuid5_for_new_keys() -> None:
-    """Existing 26 nodes and 3 trees keep their minted UUIDs; new factor keys derive deterministic uuid5."""
+    """Existing 26 nodes and 3 variants keep their minted UUIDs; new factor keys derive deterministic uuid5."""
     for key, expected_uuid in MINTED_NODE_IDS.items():
         assert node_id_for(key) == expected_uuid
-        assert FOREST.node(key).node_id == expected_uuid
+        assert PANEL_METRICS[key].node_id == expected_uuid
     for (t_key, t_ver), expected_uuid in MINTED_TREE_IDS.items():
         assert tree_id_for(t_key, t_ver) == expected_uuid
-        assert FOREST.tree(t_key, t_ver).tree_id == expected_uuid
+        assert PANEL_VARIANTS[(t_key, t_ver)].tree_id == expected_uuid
 
     new_id_1 = node_id_for("price_to_sales")
     new_id_2 = node_id_for("price_to_sales")
@@ -392,10 +394,10 @@ def test_deterministic_node_and_tree_uuids_preserve_minted_identities_and_use_uu
 def test_registered_trees_match_frozen_uuids_and_content_hashes(
     coord: tuple[str, str], expected: tuple[UUID, str]
 ) -> None:
-    tree = FOREST.tree(*coord)
+    variant = PANEL_VARIANTS[coord]
     expected_id, expected_sha = expected
-    assert tree.tree_id == expected_id
-    assert FOREST.tree_sha256(tree) == expected_sha
+    assert variant.tree_id == expected_id
+    assert variant_sha256(variant) == expected_sha
 
 
 @pytest.mark.parametrize(
@@ -408,9 +410,8 @@ def test_gppe_v0_tree_reproduces_v020_golden_decimals(
     expected_cap_adj: D | None,
     expected_gppe: D | None,
 ) -> None:
-    ev = evaluate(
-        FOREST,
-        GPPE_V0_TREE,
+    ev = evaluate_panel_variant(
+        GPPE_V0_SPEC,
         issuer_class=issuer_class,
         inputs={**inputs, "risk_free_rate": D("0.05")},
     )
@@ -495,7 +496,9 @@ def test_compute_topt_gppe_reproduces_the_pre_forest_result_identity(case: str) 
 def test_must_be_non_negative_is_reserved_for_physical_quantities_and_judge_sign_enforces_it() -> None:
     """Every node with `must-be-non-negative` is in `PHYSICALLY_NON_NEGATIVE`, and `judge_sign` distinguishes
     violations from low signals."""
-    non_neg_nodes = {node.key for node in FOREST.nodes if SignPolicy.MUST_BE_NON_NEGATIVE in node.sign_policy.values()}
+    non_neg_nodes = {
+        node.key for node in PANEL_METRICS.values() if SignPolicy.MUST_BE_NON_NEGATIVE in node.sign_policy.values()
+    }
     assert non_neg_nodes == set(PHYSICALLY_NON_NEGATIVE)
 
     gppe_node = published_node("mart.topt_gppe_results", "gppe")
@@ -509,7 +512,7 @@ def test_must_be_non_negative_is_reserved_for_physical_quantities_and_judge_sign
     assert finding_signal.signal is True
     assert finding_signal.violation is False
 
-    assets_node = FOREST.node("total_assets")
+    assets_node = PANEL_METRICS["total_assets"]
     finding_violation = judge_sign(
         assets_node,
         issuer_class="non_financial",

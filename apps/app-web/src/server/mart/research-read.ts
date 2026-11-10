@@ -119,6 +119,62 @@ export interface ModuleOutputCount {
 	latestCutoff: string | null;
 }
 
+export const GPPE_FACTOR_VARIANT_KEYS = [
+	"gppe_uniform_charge_v0",
+	"gppe_banking_tce_v1",
+	"gppe_operating_financial_v1",
+] as const;
+export type GppeFactorVariantKey = (typeof GPPE_FACTOR_VARIANT_KEYS)[number];
+
+export const RANKING_PANEL_INPUT_KEYS = [
+	"operating_gross_profit",
+	"capital_adjusted_gross_profit",
+	"tangible_common_equity",
+	"total_gross_return",
+	"employees_total",
+] as const;
+export type RankingPanelInputKey = (typeof RANKING_PANEL_INPUT_KEYS)[number];
+
+export const WIDE_PANEL_INPUT_COLUMNS = [
+	{ key: "gross_profit", label: "Gross profit", monetary: true },
+	{ key: "pre_provision_profit", label: "Pre-provision profit", monetary: true },
+	{ key: "revenue_total", label: "Revenue", monetary: true },
+	{ key: "total_assets", label: "Total assets", monetary: true },
+	{ key: "stockholders_equity", label: "Stockholders equity", monetary: true },
+	{ key: "tangible_common_equity", label: "Tangible common equity", monetary: true },
+	{ key: "employees_total", label: "Employees", monetary: false },
+	{ key: "last_close", label: "Market close", monetary: true },
+	{ key: "shares_outstanding", label: "Shares outstanding", monetary: false },
+] as const;
+
+export interface WidePanelCell {
+	nodeKey: string;
+	period: string | null;
+	value: string | null;
+	confidence: string | null;
+	availability: Availability;
+}
+
+export const WIDE_PANEL_NODE_VALUES_SQL = `
+	select coalesce(ei.legacy_id, v.issuer_id) as issuer_id,
+	       v.node_key,
+	       v.period,
+	       v.value::text as value,
+	       v.confidence::text as confidence,
+	       coalesce(v.availability_status, 'unavailable') as availability_status
+	from mart.metric_node_values v
+	left join lateral (
+	    select ei.legacy_id
+	    from mart.entity_identity ei
+	    where ei.entity_id::text = v.issuer_id
+	    order by ei.legacy_id
+	    limit 1
+	) ei on true
+	where ${servedRunPredicate("v.run_id")}
+	  and v.node_key = any($1::text[])
+	order by coalesce(ei.legacy_id, v.issuer_id), v.node_key, v.period desc
+`;
+
 export interface RankingRow {
 	rank: number | null;
 	issuerId: string;
@@ -144,6 +200,10 @@ export interface RankingRow {
 	confidence: string | null;
 	availability: Availability;
 	traceId: string;
+	laborEfficiencyMetric?: string | null;
+	capitalAdjustedLaborEfficiency?: string | null;
+	gppeVariants?: Readonly<Record<GppeFactorVariantKey, WidePanelCell | null>>;
+	panelInputs?: Readonly<Record<RankingPanelInputKey, WidePanelCell | null>>;
 	// What the number was computed FROM, so drift is visible on the surface
 	// instead of found by audit. init.md states the reason for point-in-time is
 	// that "every step downstream has to be traceable back to the original raw
@@ -853,8 +913,37 @@ export class StrategyRunReadAdapter {
 		source: string,
 		corpusSha256: string,
 		inputs: DecisionProvenance | undefined,
+		issuerPanel?: Readonly<Record<string, WidePanelCell>>,
 	): RankingRow {
 		const status = decisionAvailability(decision);
+		const activeMetric = decision.labor_efficiency_metric ?? "gppe_uniform_charge_v0";
+		const gppeVariants: Record<GppeFactorVariantKey, WidePanelCell | null> = {
+			gppe_uniform_charge_v0: issuerPanel?.gppe_uniform_charge_v0 ?? null,
+			gppe_banking_tce_v1: issuerPanel?.gppe_banking_tce_v1 ?? null,
+			gppe_operating_financial_v1: issuerPanel?.gppe_operating_financial_v1 ?? null,
+		};
+		if (
+			(activeMetric === "gppe_uniform_charge_v0" ||
+				activeMetric === "gppe_banking_tce_v1" ||
+				activeMetric === "gppe_operating_financial_v1") &&
+			gppeVariants[activeMetric] === null &&
+			decision.capital_adjusted_labor_efficiency !== null
+		) {
+			gppeVariants[activeMetric] = {
+				nodeKey: activeMetric,
+				period: inputs?.operating_period_end ?? null,
+				value: decision.capital_adjusted_labor_efficiency,
+				confidence: decision.confidence,
+				availability: status,
+			};
+		}
+		const panelInputs: Record<RankingPanelInputKey, WidePanelCell | null> = {
+			operating_gross_profit: issuerPanel?.operating_gross_profit ?? null,
+			capital_adjusted_gross_profit: issuerPanel?.capital_adjusted_gross_profit ?? null,
+			tangible_common_equity: issuerPanel?.tangible_common_equity ?? null,
+			total_gross_return: issuerPanel?.total_gross_return ?? null,
+			employees_total: issuerPanel?.employees_total ?? null,
+		};
 		return {
 			rank: decision.rank,
 			issuerId: decision.issuer_id,
@@ -885,6 +974,10 @@ export class StrategyRunReadAdapter {
 				decision.cutoff_at,
 				corpusSha256,
 			),
+			laborEfficiencyMetric: decision.labor_efficiency_metric ?? null,
+			capitalAdjustedLaborEfficiency: decision.capital_adjusted_labor_efficiency,
+			gppeVariants,
+			panelInputs,
 			provenance: provenanceOf(inputs),
 		};
 	}
@@ -946,6 +1039,13 @@ export class StrategyRunReadAdapter {
 		);
 		const provenance =
 			report.provenance ?? new Map<string, DecisionProvenance>();
+		const widePanel =
+			report.source === "mart"
+				? await this.widePanelByIssuer([
+						...GPPE_FACTOR_VARIANT_KEYS,
+						...RANKING_PANEL_INPUT_KEYS,
+					])
+				: new Map<string, Record<string, WidePanelCell>>();
 		const ordered = decisions.slice().sort(rankingOrder);
 		return ordered.map((decision) =>
 			this.toRankingRow(
@@ -953,8 +1053,41 @@ export class StrategyRunReadAdapter {
 				report.source,
 				report.corpus_sha256,
 				provenance.get(decision.issuer_id),
+				widePanel.get(decision.issuer_id),
 			),
 		);
+	}
+
+	async widePanelByIssuer(
+		nodeKeys: readonly string[] = WIDE_PANEL_INPUT_COLUMNS.map((col) => col.key),
+	): Promise<Map<string, Record<string, WidePanelCell>>> {
+		const byIssuer = new Map<string, Record<string, WidePanelCell>>();
+		try {
+			await this.runWithClient(async (client) => {
+				const result = await client.query(WIDE_PANEL_NODE_VALUES_SQL, [nodeKeys]);
+				for (const row of result.rows) {
+					const issuerId = nullableString(row.issuer_id);
+					const nodeKey = nullableString(row.node_key);
+					if (issuerId === null || nodeKey === null) continue;
+					let record = byIssuer.get(issuerId);
+					if (record === undefined) {
+						record = {};
+						byIssuer.set(issuerId, record);
+					}
+					if (record[nodeKey] !== undefined) continue;
+					record[nodeKey] = {
+						nodeKey,
+						period: nullableString(row.period),
+						value: nullableString(row.value),
+						confidence: nullableString(row.confidence),
+						availability: toAvailabilityStatus(row.availability_status),
+					};
+				}
+			});
+		} catch {
+			return byIssuer;
+		}
+		return byIssuer;
 	}
 
 	async comparison(

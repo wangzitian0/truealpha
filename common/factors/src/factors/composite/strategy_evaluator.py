@@ -58,14 +58,15 @@ from factors.base.price_to_sales import price_to_sales
 from factors.composite.three_tier_valuation import three_tier_valuation, tier_band
 from factors.measure import UNIT_MISMATCH_REASON, measure_for_input_key
 from factors.panel import (
-    FOREST,
+    PANEL_METRICS,
     AliasKind,
-    Forest,
+    FactorVariantSpec,
     IssuerClass,
-    MetricTree,
+    PanelMetricSpec,
     bound_tree,
     definition_pins,
     input_key_of,
+    operating_numerator_node,
     required_inputs,
 )
 from factors.registry import FACTOR_REGISTRY
@@ -156,16 +157,23 @@ _MULTIPLE_FACTOR = {
 }
 
 
-def _labor_efficiency_keys(forest: Forest, tree: MetricTree, issuer_class: IssuerClass) -> list[str]:
+def _labor_efficiency_keys(
+    metrics: Mapping[str, PanelMetricSpec],
+    tree: FactorVariantSpec,
+    issuer_class: IssuerClass,
+) -> list[str]:
     """The strategy input keys of the captured leaves of ``tree`` for ``issuer_class`` (the rate is no leaf)."""
     return [
         input_key_of(node)
-        for node in required_inputs(forest, tree, issuer_class)
+        for node in required_inputs(tree, issuer_class, metrics=metrics)
         if node.alias(AliasKind.DEFINITION_PARAMETER) is None
     ]
 
 
-def _consumed_input_keys(forest: Forest, trees: Mapping[IssuerClass, MetricTree]) -> frozenset[str]:
+def _consumed_input_keys(
+    metrics: Mapping[str, PanelMetricSpec],
+    trees: Mapping[IssuerClass, FactorVariantSpec],
+) -> frozenset[str]:
     """The input keys that the given trees consume, plus the inputs of price-to-sales.
 
     The decision rules (missing input, age, confidence floor) and the coverage metric read this one
@@ -174,7 +182,7 @@ def _consumed_input_keys(forest: Forest, trees: Mapping[IssuerClass, MetricTree]
     """
     keys = set(_input_keys("price_to_sales"))
     for issuer_class, tree in trees.items():
-        keys.update(_labor_efficiency_keys(forest, tree, issuer_class))
+        keys.update(_labor_efficiency_keys(metrics, tree, issuer_class))
     return frozenset(keys)
 
 
@@ -182,7 +190,7 @@ def required_input_keys(
     definition: LargeModelValueV0Definition,
     issuer_class: IssuerClass | None = None,
     *,
-    forest: Forest = FOREST,
+    metrics: Mapping[str, PanelMetricSpec] = PANEL_METRICS,
     pins: Mapping[str, LaborEfficiencyTreePin] | None = None,
 ) -> frozenset[str]:
     """The per-issuer input keys that ``definition`` consumes (#496, #1518).
@@ -197,7 +205,7 @@ def required_input_keys(
     pinned = definition_pins(definition) if pins is None else pins
     classes = [IssuerClass(name) for name in pinned] if issuer_class is None else [issuer_class]
     return _consumed_input_keys(
-        forest, {each: bound_tree(definition, each, forest=forest, pins=pins) for each in classes}
+        metrics, {each: bound_tree(definition, each, metrics=metrics, pins=pins) for each in classes}
     )
 
 
@@ -205,7 +213,7 @@ def deciding_input_keys(
     definition: LargeModelValueV0Definition,
     issuer_class: IssuerClass,
     *,
-    forest: Forest = FOREST,
+    metrics: Mapping[str, PanelMetricSpec] = PANEL_METRICS,
     pins: Mapping[str, LaborEfficiencyTreePin] | None = None,
 ) -> frozenset[str]:
     """The input keys whose absence, age or confidence can exclude an issuer of ``issuer_class`` (#1518).
@@ -217,7 +225,7 @@ def deciding_input_keys(
     return frozenset(
         key
         for key, _reason in _required_inputs(
-            definition.valuation_basis, required_input_keys(definition, issuer_class, forest=forest, pins=pins)
+            definition.valuation_basis, required_input_keys(definition, issuer_class, metrics=metrics, pins=pins)
         )
     )
 
@@ -494,14 +502,12 @@ def _multiple_facts_for(
     basis: ValuationBasis,
     as_of: datetime,
     *,
-    tree: MetricTree | None = None,
-    forest: Forest = FOREST,
+    tree: FactorVariantSpec | None = None,
+    metrics: Mapping[str, PanelMetricSpec] = PANEL_METRICS,
 ) -> list[Fact]:
     keys = list(_input_keys(basis.value, issuer_class=issuer.issuer_class))
     if basis is ValuationBasis.PRICE_TO_GROSS_PROFIT and tree is not None and issuer.issuer_class is not None:
-        from factors.panel import operating_numerator_node
-
-        num_key = input_key_of(operating_numerator_node(tree, issuer.issuer_class, forest=forest))
+        num_key = input_key_of(operating_numerator_node(tree, issuer.issuer_class, metrics=metrics))
         keys = [num_key if k in ("gross_profit", "pre_provision_profit") else k for k in keys]
     facts = _facts_for(issuer, keys, as_of=as_of)
     if basis is ValuationBasis.PRICE_TO_GROSS_PROFIT and not any(f.metric == "gross_profit" for f in facts):
@@ -517,8 +523,8 @@ def _evaluate_issuer(
     definition: LargeModelValueV0Definition,
     risk_free_rate: Decimal,
     as_of: datetime,
-    trees: Mapping[IssuerClass, MetricTree],
-    forest: Forest,
+    trees: Mapping[IssuerClass, FactorVariantSpec],
+    metrics: Mapping[str, PanelMetricSpec],
 ) -> tuple[EvaluatedDecision, Decimal | None]:
     """Return this issuer's pre-ranking decision plus its valuation gap (or None
     when it is not a ranking candidate)."""
@@ -536,7 +542,7 @@ def _evaluate_issuer(
     if issuer.issuer_class is None or tree is None:
         return _excluded(issuer.issuer_id, ExclusionReason.MISSING_ISSUER_CLASS, confidence=None), None
     metric = tree.root
-    consumed = _consumed_input_keys(forest, {issuer.issuer_class: tree})
+    consumed = _consumed_input_keys(metrics, {issuer.issuer_class: tree})
     required = _required_inputs(basis, consumed)
     missing = _missing_required_reason(issuer, required)
     if missing is not None:
@@ -592,13 +598,13 @@ def _evaluate_issuer(
         )
 
     gppe_result = gross_profit_per_employee(
-        _facts_for(issuer, _labor_efficiency_keys(forest, tree, issuer.issuer_class), as_of=as_of),
+        _facts_for(issuer, _labor_efficiency_keys(metrics, tree, issuer.issuer_class), as_of=as_of),
         entity_id=issuer.issuer_id,
         as_of=as_of,
         risk_free_rate=risk_free_rate,
-        forest=forest,
         tree=tree,
         issuer_class=issuer.issuer_class,
+        metrics=metrics,
     )
     ps_result = price_to_sales(
         _facts_for(issuer, _input_keys("price_to_sales"), as_of=as_of), entity_id=issuer.issuer_id, as_of=as_of
@@ -607,7 +613,7 @@ def _evaluate_issuer(
         ps_result
         if basis is ValuationBasis.PRICE_TO_SALES
         else _MULTIPLE_FACTOR[basis](
-            _multiple_facts_for(issuer, basis, as_of, tree=tree, forest=forest),
+            _multiple_facts_for(issuer, basis, as_of, tree=tree, metrics=metrics),
             entity_id=issuer.issuer_id,
             as_of=as_of,
         )
@@ -763,18 +769,18 @@ def evaluate_cutoff(
     cutoff_at: datetime,
     risk_free_rate: Decimal,
     tree_pins: Mapping[str, LaborEfficiencyTreePin] | None = None,
-    forest: Forest = FOREST,
+    metrics: Mapping[str, PanelMetricSpec] = PANEL_METRICS,
     plausibility_refusals: Mapping[str, ExclusionReason] = MappingProxyType({}),
 ) -> list[EvaluatedDecision]:
     """Evaluate every issuer at one cutoff, then rank/select/weight the eligible,
     in-band candidates. Returns decisions sorted by issuer id.
 
     The labor-efficiency tree of each issuer class is the tree that ``definition`` pins
-    (`factors.forest.bound_tree`). A pin that differs from the registered tree raises before any
+    (`factors.panel.bound_tree`). A pin that differs from the registered tree raises before any
     issuer is evaluated. An issuer whose class has no pin, or no class, is excluded with
     `missing_issuer_class`. A definition that states a formula and pins no tree (1.0.0) raises,
     unless the caller passes ``tree_pins``. Only the replay of the frozen #21 golden does that,
-    with `factors.forest.uniform_tree_pins()`.
+    with `factors.panel.uniform_tree_pins()`.
 
     An issuer is excluded with `stale_required_input` when any required input became knowable more
     than `eligibility.maximum_input_age_days` before `cutoff_at` (#1255).
@@ -784,7 +790,7 @@ def evaluate_cutoff(
     issuers are ranked and weighted without it."""
     pins = definition_pins(definition) if tree_pins is None else tree_pins
     trees = {
-        IssuerClass(name): bound_tree(definition, IssuerClass(name), forest=forest, pins=tree_pins) for name in pins
+        IssuerClass(name): bound_tree(definition, IssuerClass(name), metrics=metrics, pins=tree_pins) for name in pins
     }
 
     decisions = [
@@ -796,7 +802,7 @@ def evaluate_cutoff(
             risk_free_rate=risk_free_rate,
             as_of=cutoff_at,
             trees=trees,
-            forest=forest,
+            metrics=metrics,
         )[0]
         for issuer in issuers
     ]
