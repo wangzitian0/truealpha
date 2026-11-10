@@ -13,11 +13,15 @@ from data_engine.datahub.question_coverage import (
     NO_ROW,
     UNRECORDED_REASON,
     Cell,
+    GovernedHead,
     analyst_rating_cells,
     classify_question,
+    coverage_verdict_failure,
     gppe_cells,
     peg_cells,
     persist,
+    reports_current_for_head,
+    stored_confidence_report_run,
     summary_line,
     supply_chain_cells,
     theme_purity_cells,
@@ -356,3 +360,85 @@ def test_q4_is_bound_to_the_materialized_column_rather_than_left_missing() -> No
     assert requirement.has_column
     assert [c.table for c in requirement.columns] == ["mart.issuer_analyst_ratings"]
     assert [c.column for c in requirement.columns] == ["consensus_rating"]
+
+
+def test_coverage_verdict_failure_flags_zero_answered_applicable_questions_only() -> None:
+    """An applicable question with zero answered subjects fails the coverage verdict (#1643)."""
+    healthy_report = {
+        "universe_id": QQQ,
+        "questions": {
+            "q1": classify_question(
+                REQ[Question.Q1_MODEL_LEVERAGE],
+                universe_id=QQQ,
+                issuers=["issuer:a"],
+                cells_by_column={"mart.topt_gppe_results.gppe": (Cell("issuer:a", True),)},
+            ),
+            # Q2 has no column on QQQ (missing == denominator), so it is not applicable.
+            "q2": classify_question(
+                REQ[Question.Q2_VALUATION_VS_GROWTH],
+                universe_id=QQQ,
+                issuers=["issuer:a"],
+                cells_by_column={},
+            ),
+            # Q5 with no fund subjects (denominator == 0) is not applicable.
+            "q5": classify_question(
+                REQ[Question.Q5_ETF_VIRTUAL_COMPANY],
+                universe_id=TOPT,
+                issuers=["issuer:a"],
+                funds=[],
+                cells_by_column={},
+            ),
+        },
+    }
+    assert coverage_verdict_failure(healthy_report) is None
+
+    zero_q5_report = {
+        "universe_id": QQQ,
+        "questions": {
+            **healthy_report["questions"],
+            "q5": classify_question(
+                REQ[Question.Q5_ETF_VIRTUAL_COMPANY],
+                universe_id=QQQ,
+                issuers=["issuer:a"],
+                funds=["etf:series:S000101292"],
+                cells_by_column={
+                    "mart.fund_virtual_company.weighted_valuation_gap": (
+                        Cell("etf:series:S000101292", False, "valued_weight_below_minimum"),
+                    )
+                },
+            ),
+        },
+    }
+    assert coverage_verdict_failure(zero_q5_report) == f"zero answered for q5=0/1 on {QQQ}"
+
+
+def test_reports_current_for_head_requires_both_coverage_and_confidence_reports() -> None:
+    """A head is current only when both coverage and confidence reports match its run_id (#1643)."""
+    head = GovernedHead(universe_id=TOPT, run_id="capture-run:new", cutoff=datetime(2026, 10, 6, tzinfo=UTC))
+
+    class _ReportConnection:
+        def __init__(self, coverage_run: str | None, confidence_run: str | None) -> None:
+            self.coverage_run = coverage_run
+            self.confidence_run = confidence_run
+            self._row: tuple[str] | None = None
+
+        def execute(self, sql: str, params=None):
+            if "mart.question_coverage_report" in sql:
+                self._row = (self.coverage_run,) if self.coverage_run is not None else None
+            elif "mart.datahub_confidence_report" in sql:
+                self._row = (self.confidence_run,) if self.confidence_run is not None else None
+            else:
+                self._row = None
+            return self
+
+        def fetchone(self):
+            return self._row
+
+    assert stored_confidence_report_run(_ReportConnection("capture-run:new", None), TOPT) is None
+    assert stored_confidence_report_run(_ReportConnection("capture-run:new", "capture-run:new"), TOPT) == (
+        "capture-run:new"
+    )
+    assert reports_current_for_head(_ReportConnection("capture-run:new", None), head) is False
+    assert reports_current_for_head(_ReportConnection("capture-run:new", "capture-run:old"), head) is False
+    assert reports_current_for_head(_ReportConnection("capture-run:old", "capture-run:new"), head) is False
+    assert reports_current_for_head(_ReportConnection("capture-run:new", "capture-run:new"), head) is True
