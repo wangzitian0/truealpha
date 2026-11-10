@@ -28,7 +28,7 @@ import pytest
 from data_engine.config import settings
 from data_engine.datahub.production_topt.sec_financial_adapter import build_bundle
 from factors.composite.strategy_evaluator import IssuerInput, evaluate_cutoff
-from factors.forest import IssuerClass
+from factors.panel import IssuerClass
 from factors.production_topt import OperatingBranch
 from truealpha_contracts.strategy import LargeModelValueV0Definition
 

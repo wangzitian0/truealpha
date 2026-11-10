@@ -10,7 +10,6 @@ from factors.base.peg import peg
 from factors.base.price_to_gross_profit import price_to_gross_profit
 from factors.base.price_to_sales import price_to_sales
 from factors.composite.strategy_evaluator import IssuerInput, evaluate_cutoff
-from factors.forest import IssuerClass
 from factors.measure import (
     UNIT_MISMATCH_REASON,
     Measure,
@@ -20,6 +19,7 @@ from factors.measure import (
     Units,
     times,
 )
+from factors.panel import IssuerClass
 from factors.types import Fact, GrowthConvention, UnitFamily
 from truealpha_contracts.strategy import ExclusionReason, load_live_strategy_definition
 

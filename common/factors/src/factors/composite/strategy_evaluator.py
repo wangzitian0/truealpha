@@ -56,7 +56,8 @@ from factors.base.peg import peg
 from factors.base.price_to_gross_profit import price_to_gross_profit
 from factors.base.price_to_sales import price_to_sales
 from factors.composite.three_tier_valuation import three_tier_valuation, tier_band
-from factors.forest import (
+from factors.measure import UNIT_MISMATCH_REASON, measure_for_input_key
+from factors.panel import (
     FOREST,
     AliasKind,
     Forest,
@@ -67,7 +68,6 @@ from factors.forest import (
     input_key_of,
     required_inputs,
 )
-from factors.measure import UNIT_MISMATCH_REASON, measure_for_input_key
 from factors.registry import FACTOR_REGISTRY
 from factors.types import Fact, FactorResult, GrowthConvention
 
@@ -499,7 +499,7 @@ def _multiple_facts_for(
 ) -> list[Fact]:
     keys = list(_input_keys(basis.value, issuer_class=issuer.issuer_class))
     if basis is ValuationBasis.PRICE_TO_GROSS_PROFIT and tree is not None and issuer.issuer_class is not None:
-        from factors.forest.binding import operating_numerator_node
+        from factors.panel import operating_numerator_node
 
         num_key = input_key_of(operating_numerator_node(tree, issuer.issuer_class, forest=forest))
         keys = [num_key if k in ("gross_profit", "pre_provision_profit") else k for k in keys]

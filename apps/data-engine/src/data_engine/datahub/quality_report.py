@@ -56,7 +56,7 @@ from decimal import Decimal
 from typing import Any, Protocol
 
 import psycopg
-from factors.forest import FOREST, AliasKind, IssuerClass, bound_tree, operating_numerator_node, required_inputs
+from factors.panel import FOREST, AliasKind, IssuerClass, bound_tree, operating_numerator_node, required_inputs
 from factors.production_topt import OperatingBranch
 from psycopg.types.json import Jsonb
 from pydantic import ValidationError

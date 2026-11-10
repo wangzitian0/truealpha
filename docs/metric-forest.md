@@ -2,7 +2,7 @@
 
 Design for #528, following the owner decision of 2026-09-17. Status: active.
 Step B (the registry, with GPPE v0.2.0 as its first tree) merged in #909 (§11),
-which adds `common/factors/src/factors/forest/`. `init.md` stays the authority.
+which adds `common/factors/src/factors/panel.py`. `init.md` stays the authority.
 This document describes how rule 17 and §7 module 2 are implemented without a
 hardcoded formula.
 
@@ -282,7 +282,7 @@ same situation headcount was in.
 | the required inputs per branch, and their `missing_*` reasons | `required_inputs(tree, class)`: each input names its `topt_snapshot_field` alias, and the reason is `missing_<field>` |
 
 In #909, `compute_topt_gppe` evaluates the tree. Three tests, added by #909 in
-`common/factors/tests/forest/test_gppe_tree.py`, show that nothing moves:
+`common/factors/tests/test_panel.py`, show that nothing moves:
 
 1. The tree equals the former kernel, kept verbatim in the test. The comparison uses the
    value and the string representation (exponent included), over a grid that crosses each
@@ -302,7 +302,7 @@ In #909, `compute_topt_gppe` evaluates the tree. Three tests, added by #909 in
 
 #909 also adds two `tools/mutations.json` entries:
 
-- Mutation id forest/gppe-tree-reproduces-v020 re-proves check 2 weekly by binding a bank's numerator to
+- Mutation id panel/gppe-tree-reproduces-v020 re-proves check 2 weekly by binding a bank's numerator to
   `total_assets`.
 - Mutation id invariants/a-declared-signal-is-printed re-proves weekly that the suite still prints the
   `sign-is-signal` rows (§6).

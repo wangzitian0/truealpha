@@ -1,17 +1,12 @@
-import sys
 from datetime import UTC, date, datetime
 from decimal import Decimal
-from pathlib import Path
 
 import polars as pl
 import pytest
 from factors import FACTOR_REGISTRY
-from factors.base.price_to_gross_profit import PRICE_TO_GROSS_PROFIT_EXPRESSION_DEFINITION, price_to_gross_profit
+from factors.base.price_to_gross_profit import price_to_gross_profit
+from factors.panel import EXPR_PRICE_TO_GROSS_PROFIT
 from factors.types import Fact, UnitFamily
-
-# The Polars AST compiler is a test-time oracle under tests/support (init.md rule 25, #758).
-sys.path.insert(0, str(Path(__file__).resolve().parent / "support"))
-from expression_oracle.compiler import compile_expression  # noqa: E402
 
 _AS_OF = datetime(2026, 10, 8, tzinfo=UTC)
 _UNIT_FAMILY = {
@@ -111,12 +106,12 @@ def test_polars_expression_reproduces_the_decimal_result() -> None:
 
     panel = pl.DataFrame(
         {
-            "symbol": ["e1"],
-            "date": [date(2026, 10, 8)],
+            "issuer_id": ["e1"],
+            "period": [str(date(2026, 10, 8))],
             "price": [50.0],
             "shares_outstanding": [1_000_000.0],
             "gross_profit": [4_000_000.0],
         }
     )
-    compiled = panel.with_columns(factor_value=compile_expression(PRICE_TO_GROSS_PROFIT_EXPRESSION_DEFINITION))
+    compiled = panel.with_columns(factor_value=EXPR_PRICE_TO_GROSS_PROFIT)
     assert compiled["factor_value"].to_list()[0] == pytest.approx(float(native.value), rel=1e-12)

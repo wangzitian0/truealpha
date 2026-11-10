@@ -12,7 +12,7 @@ from functools import cache, partial
 from typing import Any, Self
 
 from factors.composite.strategy_evaluator import deciding_input_keys
-from factors.forest import IssuerClass, definition_pins
+from factors.panel import IssuerClass, definition_pins
 from factors.production_topt import (
     OPTIONAL_SNAPSHOT_FIELDS,
     GppeV0Definition,

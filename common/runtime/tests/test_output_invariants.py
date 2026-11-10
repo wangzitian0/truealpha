@@ -112,7 +112,7 @@ def test_the_sign_invariant_is_generated_from_the_forest() -> None:
     ids = {invariant.id for invariant in _module.INVARIANTS}
     assert "node-sign-policy" in ids and "gppe-not-negative" not in ids
     (sign,) = [invariant for invariant in _module.INVARIANTS if invariant.id == "node-sign-policy"]
-    from factors.forest import FOREST, PUBLISHED_COLUMNS
+    from factors.panel import FOREST, PUBLISHED_COLUMNS
 
     for column, node_key in PUBLISHED_COLUMNS[_module.SIGN_POLICY_TABLE].items():
         assert f"'{column}' as published_column" in sign.violations

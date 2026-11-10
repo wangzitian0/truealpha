@@ -3,10 +3,10 @@
 The factor evaluates one tree of the metric forest. It holds no formula of its own (#1518).
 
 The strategy definition pins one tree for each issuer class (`labor_efficiency_tree_keys`,
-`factors.forest.bound_tree`): the uniform total-assets tree `gppe` (`gppe_uniform_charge_v0`) and the
+`factors.panel.bound_tree`): the uniform total-assets tree `gppe` (`gppe_uniform_charge_v0`) and the
 banking tree `gppe_banking_tce` (`gppe_banking_tce_v1`, measured tangible common equity, FINANCIAL
 issuers only). The caller passes the pinned tree and the issuer class. The factor reads each captured
-leaf of the tree from `facts` and evaluates the tree with `factors.forest.evaluate`. So the TOPT core and
+leaf of the tree from `facts` and evaluates the tree with `factors.panel.evaluate`. So the TOPT core and
 the strategy composite evaluate the same tree, and one issuer has one value.
 
 The uniform formula is frozen by issue #59 (2026-07-18 owner decision):
@@ -26,11 +26,6 @@ or `insurance_pre_claims_profit` mapped into the tree's declared leaf).
 parameter)"), not a live per-period market fact this factor looks up itself. The caller supplies it,
 exactly like `growth_convention` is an explicit parameter to the PEG factor.
 
-The uniform arithmetic is also expressed as a matrix-compatible AST expression
-(`GPPE_EXPRESSION_DEFINITION`), built only from shared `truealpha_contracts.ast` node types, so a compiled
-Polars execution reproduces the Decimal output of the uniform tree. The compiler is a test-time oracle
-(`common/factors/tests/support/expression_oracle`, #758). No deployed path runs it.
-
 Input metric names match the canonical registry (`truealpha_contracts.metrics.METRICS`), and `Fact`
 rejects a metric and unit family that do not match it, so this function does not re-check units.
 """
@@ -39,9 +34,7 @@ from collections.abc import Sequence
 from datetime import datetime
 from decimal import Decimal
 
-from truealpha_contracts.ast import Div, Feature, Mul, Sub
-
-from factors.forest import AliasKind, Forest, IssuerClass, MetricTree, evaluate, metric_of, required_inputs
+from factors.panel import AliasKind, Forest, IssuerClass, MetricTree, evaluate, metric_of, required_inputs
 from factors.registry import factor
 from factors.types import Fact, FactorResult, UnitFamily
 
@@ -63,18 +56,6 @@ _MISSING_LEAF_FLAGS = {
     "intangible_assets_net_excluding_goodwill": MISSING_TCE_FLAG,
     "preferred_stock_value": MISSING_PREFERRED_FLAG,
 }
-
-#: `(gross_profit - total_assets * risk_free_rate) / employees_total` as a
-#: `truealpha_contracts.ast` expression. Feature names are the panel column
-#: names the compiler resolves with `pl.col(...)`, so they match the canonical
-#: metric registry exactly as the Decimal path's inputs do.
-GPPE_EXPRESSION_DEFINITION = Div(
-    left=Sub(
-        left=Feature(name=_GROSS_PROFIT),
-        right=Mul(left=Feature(name=_TOTAL_ASSETS), right=Feature(name="risk_free_rate")),
-    ),
-    right=Feature(name=_EMPLOYEES_TOTAL),
-)
 
 
 def _find(facts: Sequence[Fact], entity_id: str, metric: str) -> Fact | None:

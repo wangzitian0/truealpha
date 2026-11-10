@@ -37,7 +37,7 @@ from decimal import Decimal
 
 from truealpha_contracts.strategy import ExclusionReason
 
-from factors.forest import SignFinding, judge_sign, published_node
+from factors.panel import SignFinding, judge_sign, published_node
 
 POLICY_VERSION = "v4"
 

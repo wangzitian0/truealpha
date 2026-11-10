@@ -15,7 +15,7 @@ from decimal import Decimal
 
 import pytest
 from factors.composite.strategy_evaluator import EvaluatedDecision, IssuerInput, evaluate_cutoff
-from factors.forest import IssuerClass
+from factors.panel import IssuerClass
 from truealpha_contracts.strategy import ExclusionReason, load_live_strategy_definition
 
 _CUTOFF = datetime(2026, 6, 30, 23, 59, 59, tzinfo=UTC)

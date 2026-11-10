@@ -25,36 +25,17 @@ which is real future work once factor inputs carry per-component structure
 `data_availability` is "unverified" even on success, matching
 `gross_profit_per_employee`'s deliberate choice: neither factor is fed by an
 accepted capture/snapshot pipeline yet in this preview round.
-
-The formula is also expressed as a matrix-compatible AST expression
-(`PRICE_TO_SALES_EXPRESSION_DEFINITION`), the same shape as
-`gross_profit_per_employee`'s: pure Mul/Div arithmetic over
-`truealpha_contracts.ast`, no new node types needed — closes #21 criterion 3's
-remaining gap for this factor. Unlike `three_tier_valuation` (module 7), whose
-band lookup is genuinely branching logic and stays native Decimal Python by
-the test-time Polars oracle's own documented design (`common/factors/tests/support/expression_oracle`), this factor
-was always pure arithmetic.
 """
 
 from collections.abc import Sequence
 from datetime import datetime
 from decimal import Decimal
 
-from truealpha_contracts.ast import Div, Feature, Mul
-
 from factors.measure import UnitMismatchError, times
 from factors.registry import factor
 from factors.types import Fact, FactorResult, UnitFamily
 
 _REQUIRED_METRICS = ("price", "shares_outstanding", "revenue")
-
-#: `(price * shares_outstanding) / revenue` as a `truealpha_contracts.ast`
-#: expression. Feature names are the panel column names the compiler resolves
-#: with `pl.col(...)`, matching the metrics the Decimal path consumes.
-PRICE_TO_SALES_EXPRESSION_DEFINITION = Div(
-    left=Mul(left=Feature(name="price"), right=Feature(name="shares_outstanding")),
-    right=Feature(name="revenue"),
-)
 
 _MISSING_REASON = {
     "price": "missing_market_value_input",

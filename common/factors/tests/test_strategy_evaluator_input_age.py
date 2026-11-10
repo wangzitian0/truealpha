@@ -20,7 +20,7 @@ from factors.composite.strategy_evaluator import (
     evaluate_cutoff,
     required_input_keys,
 )
-from factors.forest import IssuerClass
+from factors.panel import IssuerClass
 from truealpha_contracts.strategy import (
     ExclusionReason,
     GoldenDecisionOutcome,

@@ -15,7 +15,7 @@ from typing import Any
 
 import pytest
 from factors.composite.strategy_evaluator import IssuerInput, evaluate_cutoff, required_input_keys
-from factors.forest import (
+from factors.panel import (
     FOREST,
     GPPE_BANKING_TCE_TREE,
     GPPE_V0_TREE,

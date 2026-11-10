@@ -1,22 +1,13 @@
-import sys
 from datetime import UTC, date, datetime
 from decimal import ROUND_HALF_EVEN, Context, Decimal, localcontext
-from pathlib import Path
 
 import polars as pl
 import pytest
 from factors.base.gross_profit_per_employee import (
-    GPPE_EXPRESSION_DEFINITION,
-)
-from factors.base.gross_profit_per_employee import (
     gross_profit_per_employee as _factor,
 )
-from factors.forest import FOREST, GPPE_V0_TREE, IssuerClass
+from factors.panel import FOREST, GPPE_V0_TREE, IssuerClass, evaluate_wide_panel
 from factors.types import Fact, FactorResult, UnitFamily
-
-# The Polars AST compiler is a test-time oracle under tests/support (init.md rule 25, #758).
-sys.path.insert(0, str(Path(__file__).resolve().parent / "support"))
-from expression_oracle.compiler import compile_expression  # noqa: E402
 
 _AS_OF = datetime(2026, 6, 30, tzinfo=UTC)
 _RISK_FREE_RATE = Decimal("0.05")
@@ -191,20 +182,14 @@ def test_data_availability_never_overclaims_verified():
 
 
 def test_polars_expression_reproduces_the_decimal_result():
-    """Matrix-compatible cross-check: the compiled Polars execution of
-    GPPE_EXPRESSION_DEFINITION must reproduce the same value as the native Decimal
-    computation above (#26 acceptance style — independent oracle and vectorised
-    engine agree).
-
-    Not gated on an optional import. The previous engine's version of this test
-    skipped whenever its runtime was absent — 11 of the last 12 ci-python runs —
-    so the reproducibility proof was effectively unarmed (#956, #969). `polars`
-    is a first-class dependency, so this executes in ci-python every run.
+    """Matrix-compatible cross-check: native Polars evaluation over the wide panel
+    reproduces the same value as the Decimal computation above.
     """
     panel = pl.DataFrame(
         {
-            "symbol": ["issuer.acme"],
-            "date": [date(2026, 6, 30)],
+            "issuer_id": ["issuer.acme"],
+            "period": [str(date(2026, 6, 30))],
+            "issuer_class": [IssuerClass.NON_FINANCIAL.value],
             "gross_profit": [1_000_000.0],
             "total_assets": [4_000_000.0],
             "risk_free_rate": [0.05],
@@ -220,8 +205,8 @@ def test_polars_expression_reproduces_the_decimal_result():
     native = gross_profit_per_employee(facts, entity_id="issuer.acme", as_of=_AS_OF, risk_free_rate=_RISK_FREE_RATE)
     assert native.value is not None, native.flags
 
-    compiled = panel.with_columns(factor_value=compile_expression(GPPE_EXPRESSION_DEFINITION))
-    vectorised = compiled["factor_value"].to_list()[0]
+    compiled = evaluate_wide_panel(panel, targets=("gppe_uniform_charge_v0",), include_confidence=False)
+    vectorised = compiled["gppe_uniform_charge_v0"].to_list()[0]
 
     # real_profit = 1_000_000 - 4_000_000 * 0.05 = 800_000; / 100 headcount = 8_000
     assert native.value == Decimal("8000")

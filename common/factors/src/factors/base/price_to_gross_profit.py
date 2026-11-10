@@ -19,18 +19,9 @@ from collections.abc import Sequence
 from datetime import datetime
 from decimal import Decimal
 
-from truealpha_contracts.ast import Div, Feature, Mul
-
 from factors.measure import UnitMismatchError, times
 from factors.registry import factor
 from factors.types import Fact, FactorResult, UnitFamily
-
-#: `(price * shares_outstanding) / gross_profit` as a `truealpha_contracts.ast` expression,
-#: the same matrix-compatible shape as `PRICE_TO_SALES_EXPRESSION_DEFINITION`.
-PRICE_TO_GROSS_PROFIT_EXPRESSION_DEFINITION = Div(
-    left=Mul(left=Feature(name="price"), right=Feature(name="shares_outstanding")),
-    right=Feature(name="gross_profit"),
-)
 
 _MISSING_REASON = {
     "price": "missing_market_value_input",

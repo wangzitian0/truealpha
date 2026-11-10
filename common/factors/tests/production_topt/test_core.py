@@ -438,7 +438,7 @@ def test_the_core_equals_the_composite_for_identical_inputs() -> None:
     # tree that the definition pins for the class. Same inputs, same value, for a non-financial issuer
     # (gross-profit numerator, total-assets charge) and for a bank (pre-provision numerator, TCE charge).
     from factors.composite.strategy_evaluator import IssuerInput, evaluate_cutoff
-    from factors.forest import IssuerClass
+    from factors.panel import IssuerClass
 
     def decision_value(records: dict[str, str], issuer_class: IssuerClass) -> Decimal:
         full = {
@@ -634,7 +634,7 @@ def test_a_negative_tangible_common_equity_is_unavailable_in_the_core_and_in_the
     # #1518 review. TCE = 20M - 5M - (15M + 5M) = -5M. The capital charge is never a credit: the core gives
     # no value and names the reason, and the composite excludes the bank with the same reason.
     from factors.composite.strategy_evaluator import IssuerInput, evaluate_cutoff
-    from factors.forest import IssuerClass
+    from factors.panel import IssuerClass
 
     leaves = {
         "stockholders_equity": "20000000",

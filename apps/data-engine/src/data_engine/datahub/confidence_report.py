@@ -61,7 +61,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Protocol
 
 from factors.confidence import evaluate_cell_confidence
-from factors.forest import ALL_ISSUER_CLASSES, FOREST, IssuerClass
+from factors.panel import ALL_ISSUER_CLASSES, FOREST, IssuerClass
 from psycopg import Connection
 from psycopg.types.json import Jsonb
 from truealpha_contracts.common import canonical_sha256

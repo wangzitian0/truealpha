@@ -1879,8 +1879,7 @@ POLARS_CROSS_CHECK_SOURCES = {
     "common/factors/src/factors/base/gross_profit_per_employee.py",
     "common/factors/src/factors/base/peg.py",
     "common/factors/src/factors/base/price_to_sales.py",
-    "common/factors/tests/support/expression_oracle/compiler.py",
-    "common/contracts/src/truealpha_contracts/ast.py",
+    "common/factors/src/factors/panel.py",
 }
 
 
@@ -1984,8 +1983,8 @@ def test_the_polars_cross_check_proofs_are_armed_in_ci_python() -> None:
             f"passed, and the assertion never executes. That is exactly the state #969 migrated "
             f"off Qlib to escape (11 of 12 ci-python runs skipped it)."
         )
-        assert "compile_expression" in text or "compile_to_polars" in text, (
-            f"{relative} no longer compiles the migrated AST expression — the cross-check would "
+        assert "factors.panel" in text and "pl.DataFrame" in text, (
+            f"{relative} no longer evaluates the native Polars panel expression — the cross-check would "
             f"assert the Decimal path against itself"
         )
 

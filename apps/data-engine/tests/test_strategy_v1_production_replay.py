@@ -28,7 +28,7 @@ from decimal import Decimal
 
 from data_engine.datahub.strategy_bridge import load_strategy_definition
 from factors.composite.strategy_evaluator import IssuerInput, evaluate_cutoff
-from factors.forest import IssuerClass
+from factors.panel import IssuerClass
 from truealpha_contracts.strategy import (
     GoldenDecisionOutcome,
     LargeModelValueV0Definition,
