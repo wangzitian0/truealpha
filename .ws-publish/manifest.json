@@ -3,12 +3,12 @@
   "dirty_inputs": [],
   "inputs": {
     "repo": "514f042916dda04805cd5eb7615844a4a6ee7129fb00171c300b7fd945463aa0",
-    "root": "9d08d4cd97652b0c415665045b9581dfd7da2d40b8e24ded82c5bc565ede886b",
+    "root": "609c70a366279ff42d2045b92bb8476a64227ad50449a0bad331fd1ec6750d99",
     "skills": "a6c45558e35864ebe4b4c0797b8c7fa9fc50deaf9c85c821fb3c88c7c504b974"
   },
   "language": "en",
   "outputs": {
-    "AGENTS.md": "0661cbcfba410d446f4120476933112e07f94c26458c93ab693e830a35262686"
+    "AGENTS.md": "dac451a4538d1c50bb729fa312f6c76b12bfcceaa57a5c1e8206680941681d97"
   },
   "profiles": [
     "code",
@@ -29,7 +29,7 @@
     "links": {},
     "root": ".agents/skills"
   },
-  "source_revision": "187b118919f05f00ed76382f59d823601e9c735f",
+  "source_revision": "464b51da9ca3d4f98f47b070b630533197d7fe48",
   "target": {
     "remote": "github.com/wangzitian0/truealpha",
     "repo": "truealpha",
