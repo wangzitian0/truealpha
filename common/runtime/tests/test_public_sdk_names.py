@@ -96,7 +96,7 @@ def test_the_detector_accepts_public_names() -> None:
     public = (
         "from infra2_sdk.runtime.postgres import redact_postgres_error\n"
         "from infra2_sdk import __version__\n"
-        "from infra2_sdk.deploy import dispatch_and_wait as _sdk_dispatch_and_wait\n"
+        "from infra2_sdk.deploy import poll_until_healthy as _sdk_poll_until_healthy\n"
         "from other_package import _private_but_not_the_sdk\n"
     )
     assert private_sdk_names(public, "x.py") == []
