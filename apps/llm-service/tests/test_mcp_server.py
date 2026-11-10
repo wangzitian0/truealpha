@@ -1,36 +1,147 @@
-# ruff: noqa: I001, E401, E402, E701, E702, E731, F401, F811
-# fmt: off
-from __future__ import annotations; import json; from datetime import UTC, datetime, timedelta; from typing import Any; import pytest; from llm_service.mcp_server import _default_repository, build_mcp_server, mcp; from mcp.shared.memory import create_connected_server_and_client_session; from truealpha_contracts.access import AccessContext, AuthenticationMethod, PrincipalKind; from truealpha_contracts.research_cards import ResearchCard; from truealpha_contracts.research_report import ResearchReport; from truealpha_contracts.research_report_mart import MartResearchReadRepository; from truealpha_contracts.strategy_run import StrategyRunReport, StrategyRunUnavailable; from truealpha_contracts.strategy_run_fixture import FixtureStrategyRunRepository; from truealpha_contracts.strategy_run_postgres import PostgresStrategyRunRepository
+from __future__ import annotations
+
+import json
+from datetime import UTC, datetime, timedelta
+from typing import Any
+
+import pytest
+from llm_service.mcp_server import _default_repository, build_mcp_server, mcp
+from mcp.shared.memory import create_connected_server_and_client_session
+from truealpha_contracts.access import AccessContext, AuthenticationMethod, PrincipalKind
+from truealpha_contracts.research_cards import ResearchCard
+from truealpha_contracts.research_report import ResearchReport
+from truealpha_contracts.research_report_mart import MartResearchReadRepository
+from truealpha_contracts.strategy_run import StrategyRunReport, StrategyRunUnavailable
+from truealpha_contracts.strategy_run_fixture import FixtureStrategyRunRepository
+from truealpha_contracts.strategy_run_postgres import PostgresStrategyRunRepository
+
+
 class _NoServedModuleRows:
-    def supply_chain_exposure(self, issuer_id: str) -> None: return None
-    def analyst_ratings(self, issuer_id: str) -> None: return None
-def _research_repository() -> MartResearchReadRepository: return MartResearchReadRepository( strategy_repository=FixtureStrategyRunRepository(), issuer_modules=_NoServedModuleRows() )
+    """An issuer-module read with no served row for any issuer."""
+
+    def supply_chain_exposure(self, issuer_id: str) -> None:
+        return None
+
+    def analyst_ratings(self, issuer_id: str) -> None:
+        return None
+
+
+def _research_repository() -> MartResearchReadRepository:
+    """The deployed reader class over the checked-in strategy run and no module rows."""
+    return MartResearchReadRepository(
+        strategy_repository=FixtureStrategyRunRepository(), issuer_modules=_NoServedModuleRows()
+    )
+
+
 class _RecordingRepository:
-    def __init__(self) -> None: self.received_contexts: list[AccessContext] = []
-    def get_latest(self, *, strategy_id: str, context: AccessContext) -> StrategyRunUnavailable: self.received_contexts.append(context); return StrategyRunUnavailable(strategy_id=strategy_id, reason="unknown_strategy_id")
+    """Captures the AccessContext it was called with; returns a fixed unavailable result."""
+
+    def __init__(self) -> None:
+        self.received_contexts: list[AccessContext] = []
+
+    def get_latest(self, *, strategy_id: str, context: AccessContext) -> StrategyRunUnavailable:
+        self.received_contexts.append(context)
+        return StrategyRunUnavailable(strategy_id=strategy_id, reason="unknown_strategy_id")
+
+
 @pytest.mark.anyio
-async def test_advertises_the_expected_tools() -> None: tools = await mcp.list_tools(); assert sorted(tool.name for tool in tools) == [ "company_360_profile", "etf_virtual_company_profile", "governed_backtest", "issuer_analyst_ratings", "issuer_supply_chain_exposure", "metric_node_values", "research_card", "research_report", "research_report_markdown", "strategy_run", "theme_purity_leaderboard", "topt_gppe", ]; strategy_tool = next(t for t in tools if t.name == "strategy_run"); assert strategy_tool.inputSchema["required"] == ["request"]; assert strategy_tool.outputSchema is not None; assert "result" in strategy_tool.outputSchema["properties"]
+async def test_advertises_the_expected_tools() -> None:
+    tools = await mcp.list_tools()
+    assert sorted(tool.name for tool in tools) == [
+        "company_360_profile",
+        "etf_virtual_company_profile",
+        "governed_backtest",
+        "issuer_analyst_ratings",
+        "issuer_supply_chain_exposure",
+        "metric_node_values",
+        "research_card",
+        "research_report",
+        "research_report_markdown",
+        "strategy_run",
+        "theme_purity_leaderboard",
+        "topt_gppe",
+    ]
+    strategy_tool = next(t for t in tools if t.name == "strategy_run")
+    assert strategy_tool.inputSchema["required"] == ["request"]
+    assert strategy_tool.outputSchema is not None
+    assert "result" in strategy_tool.outputSchema["properties"]
+
+
 @pytest.mark.anyio
 async def test_governed_backtest_tool_reads_through_injected_reader() -> None:
     class _FakeBacktestReader:
-        def get_backtest_report( self, *, run_id: str | None = None, strategy_key: str | None = None, limit: int = 10 ) -> dict[str, Any]: return { "runs": [ { "run_id": "backtest:qqq_topk_rank:20261009_000000", "strategy_key": "qqq_topk_rank", "strategy_version": "v1.0.0", "universe_id": "universe:qqq", "status": "succeeded", "cagr_monthly": "0.152", "sharpe_daily": "1.34", "max_dd_daily": "-0.185", } ], "valuations": [], "trades": [], "count": 1, "availability_status": "available", }
+        def get_backtest_report(
+            self, *, run_id: str | None = None, strategy_key: str | None = None, limit: int = 10
+        ) -> dict[str, Any]:
+            return {
+                "runs": [
+                    {
+                        "run_id": "backtest:qqq_topk_rank:20261009_000000",
+                        "strategy_key": "qqq_topk_rank",
+                        "strategy_version": "v1.0.0",
+                        "universe_id": "universe:qqq",
+                        "status": "succeeded",
+                        "cagr_monthly": "0.152",
+                        "sharpe_daily": "1.34",
+                        "max_dd_daily": "-0.185",
+                    }
+                ],
+                "valuations": [],
+                "trades": [],
+                "count": 1,
+                "availability_status": "available",
+            }
+
     server = build_mcp_server(repository=FixtureStrategyRunRepository(), backtest_reader=_FakeBacktestReader())
     content_blocks, structured = await server.call_tool(  # type: ignore[misc]
         "governed_backtest",
         {"request": {"strategy_key": "qqq_topk_rank", "limit": 5}},
     )
-    assert structured["count"] == 1; assert structured["availability_status"] == "available"; assert structured["runs"][0]["strategy_key"] == "qqq_topk_rank"
+    assert structured["count"] == 1
+    assert structured["availability_status"] == "available"
+    assert structured["runs"][0]["strategy_key"] == "qqq_topk_rank"
+
+
 @pytest.mark.anyio
 async def test_topt_gppe_tool_serializes_whatever_repository_its_given() -> None:
+    """Proves the tool's wiring/serialization only -- an injected fake, not
+    PostgresToptGppeRepository's own SQL/row-materialization. That class has its
+    own real-Postgres coverage in common/contracts/tests/test_topt_read.py; a
+    previous version of this test's name (test_topt_gppe_reads_the_mart_repository
+    _not_a_fixture) implied it covered that class's DB logic, which it never did
+    -- see truealpha#462, where that misleading name was part of how #461's
+    KeyError bug shipped without a real regression test catching it."""
     from truealpha_contracts.topt_read import ToptGppeCell, ToptGppeReport
+
     class _FakeTopt:
-        def latest(self, *, limit: int = 100) -> ToptGppeReport: return ToptGppeReport( run_id="capture-run:" + "a" * 64, requested_count=84, available_count=1, cells=( ToptGppeCell( listing_id="listing:xnas:goog", availability="available", gppe="1153614.48", confidence="0.85", ), ), quality={"denominator_mean_confidence": "0.9171"}, )
+        def latest(self, *, limit: int = 100) -> ToptGppeReport:
+            return ToptGppeReport(
+                run_id="capture-run:" + "a" * 64,
+                requested_count=84,
+                available_count=1,
+                cells=(
+                    ToptGppeCell(
+                        listing_id="listing:xnas:goog",
+                        availability="available",
+                        gppe="1153614.48",
+                        confidence="0.85",
+                    ),
+                ),
+                quality={"denominator_mean_confidence": "0.9171"},
+            )
+
     server = build_mcp_server(repository=FixtureStrategyRunRepository(), topt_repository=_FakeTopt())
     content_blocks, structured = await server.call_tool("topt_gppe", {})  # type: ignore[misc]
     report = ToptGppeReport.model_validate_json(json.dumps(structured["result"]))  # type: ignore[index]
-    assert report.available_count == 1; assert report.cells[0].listing_id == "listing:xnas:goog"; assert report.cells[0].gppe == "1153614.48"
+    assert report.available_count == 1
+    assert report.cells[0].listing_id == "listing:xnas:goog"
+    assert report.cells[0].gppe == "1153614.48"
+
+
 @pytest.mark.anyio
 async def test_research_report_reads_through_the_injected_repository() -> None:
+    """#369: the tool assembles over whatever ResearchReadPort it's given — proving the
+    deployed path invokes build_research_report at all, independent of #26's writer."""
     server = build_mcp_server(repository=FixtureStrategyRunRepository(), research_repository=_research_repository())
     content_blocks, structured = await server.call_tool(  # type: ignore[misc]
         "research_report",
@@ -42,9 +153,22 @@ async def test_research_report_reads_through_the_injected_repository() -> None:
             }
         },
     )
-    assert content_blocks; report = ResearchReport.model_validate_json(json.dumps(structured)); assert report.report_id.startswith("report:"); assert report.generated_from == "mart:research_report.v1"; assert report.subjects[0].subject_id == "issuer:adm"
+    assert content_blocks
+    # Unlike strategy_run/topt_gppe (Report | Unavailable unions, wrapped under a
+    # top-level "result" key), a tool whose return type is a single concrete BaseModel
+    # gets its own fields flattened directly into `structured` — verified empirically.
+    # JSON-mode validation (not model_validate on the raw dict): ResearchReport is a
+    # strict model, and only JSON-mode coerces a wire string into datetime/enum/tuple.
+    report = ResearchReport.model_validate_json(json.dumps(structured))
+    assert report.report_id.startswith("report:")
+    assert report.generated_from == "mart:research_report.v1"
+    assert report.subjects[0].subject_id == "issuer:adm"
+
+
 @pytest.mark.anyio
 async def test_research_card_renders_from_a_freshly_built_report() -> None:
+    """#372/#434 track C: research_card is the renderer's first deployed consumer --
+    proves the deployed path invokes build_card at all over a real ResearchReport."""
     server = build_mcp_server(repository=FixtureStrategyRunRepository(), research_repository=_research_repository())
     content_blocks, structured = await server.call_tool(  # type: ignore[misc]
         "research_card",
@@ -57,16 +181,58 @@ async def test_research_card_renders_from_a_freshly_built_report() -> None:
             }
         },
     )
-    assert content_blocks; card = ResearchCard.model_validate_json(json.dumps(structured)); assert card.card_id.startswith("card:"); assert card.card_kind.value == "company"; assert card.generated_from_report_id.startswith("report:")
-def test_default_research_report_repository_is_mart_backed_with_fixture_opt_out( monkeypatch: pytest.MonkeyPatch, ) -> None: from llm_service import mcp_server; from llm_service.mcp_server import _default_research_report_repository; assert not hasattr(mcp_server.settings, "strategy_run_backend"); default = _default_research_report_repository(); assert isinstance(default, MartResearchReadRepository); assert not [cls.__name__ for cls in type(default).__mro__ if cls.__name__.startswith("Fixture")]
+    assert content_blocks
+    # Same flattened-fields shape as research_report (single concrete BaseModel return).
+    card = ResearchCard.model_validate_json(json.dumps(structured))
+    assert card.card_id.startswith("card:")
+    assert card.card_kind.value == "company"
+    assert card.generated_from_report_id.startswith("report:")
+
+
+def test_default_research_report_repository_is_mart_backed_with_fixture_opt_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#369 / #434 criterion 3: the research-report reader defaults to the mart reader,
+    exactly like the strategy-run reader, and there is no flag to select the fixture —
+    a fixture reader exists only by explicit injection in a test."""
+    from llm_service import mcp_server
+    from llm_service.mcp_server import _default_research_report_repository
+
+    # #434 exit criterion 3: there is no flag. The default is the mart reader, and the
+    # fixture reader is reachable only by explicit injection in a test.
+    assert not hasattr(mcp_server.settings, "strategy_run_backend")
+    default = _default_research_report_repository()
+    assert isinstance(default, MartResearchReadRepository)
+    # #42: the deployed reader inherits nothing from a fixture class.
+    assert not [cls.__name__ for cls in type(default).__mro__ if cls.__name__.startswith("Fixture")]
+
+
 @pytest.mark.anyio
 async def test_tool_reads_through_the_shared_repository_and_matches_the_fixture() -> None:
+    # The shipped default is now the mart read (#362); this test pins the fixture
+    # oracle explicitly, so build a fixture-backed server rather than the
+    # module-level `mcp`.
     server = build_mcp_server(repository=FixtureStrategyRunRepository())
+    # FastMCP.call_tool's declared return type doesn't reflect that it actually
+    # returns a (content_blocks, structured_dict) tuple when structured output
+    # is enabled (verified at runtime); silence the resulting stub mismatch.
     content_blocks, structured = await server.call_tool(  # type: ignore[misc]
         "strategy_run", {"request": {"strategy_id": "large_model_value_v0"}}
     )
     raw_result = structured["result"]  # type: ignore[index]
-    assert raw_result["strategy_run_id"] == "strategy_smoke_fixture"; assert "governed" in raw_result and raw_result["governed"] is False; report = StrategyRunReport.model_validate_json(json.dumps(raw_result)); assert report.strategy_id == "large_model_value_v0"; assert report.strategy_run_id == "strategy_smoke_fixture"; assert report.governed is False; selected = next(d for d in report.decisions if d.issuer_id == "issuer:adm" and d.cutoff_at.month == 3); assert selected.outcome.value == "selected"; assert str(selected.valuation_gap) == "0.2590"; assert selected.confidence is not None
+    assert raw_result["strategy_run_id"] == "strategy_smoke_fixture"
+    assert "governed" in raw_result and raw_result["governed"] is False
+    # JSON-mode validation: the wire payload is JSON-native (lists), not Python tuples.
+    report = StrategyRunReport.model_validate_json(json.dumps(raw_result))
+    assert report.strategy_id == "large_model_value_v0"
+    assert report.strategy_run_id == "strategy_smoke_fixture"
+    assert report.governed is False
+    selected = next(d for d in report.decisions if d.issuer_id == "issuer:adm" and d.cutoff_at.month == 3)
+    assert selected.outcome.value == "selected"
+    assert str(selected.valuation_gap) == "0.2590"
+    assert selected.confidence is not None
+
+
 @pytest.mark.anyio
 async def test_unknown_strategy_returns_structured_unavailable_not_a_crash() -> None:
     server = build_mcp_server(repository=FixtureStrategyRunRepository())
@@ -75,96 +241,692 @@ async def test_unknown_strategy_returns_structured_unavailable_not_a_crash() -> 
     )
     unavailable = StrategyRunUnavailable.model_validate(structured["result"])  # type: ignore[index]
     assert unavailable.reason == "unknown_strategy_id"
+
+
 @pytest.mark.anyio
-async def test_context_is_the_owner_delegated_through_the_adapter_and_not_client_supplied() -> None: repository = _RecordingRepository(); server = build_mcp_server(repository=repository); await server.call_tool("strategy_run", {"request": {"strategy_id": "large_model_value_v0"}}); assert len(repository.received_contexts) == 1; context = repository.received_contexts[0]; assert context.authentication_method is AuthenticationMethod.DELEGATED_MCP; assert context.principal_kind is PrincipalKind.ADMINISTRATOR; assert context.principal_id == "principal:owner"; assert context.delegated_by_service_principal_id == "principal:llm-service-mcp"; assert context.issued_at <= datetime.now(UTC); assert context.expires_at - context.issued_at <= timedelta(minutes=5); tools = await server.list_tools(); request_schema = tools[0].inputSchema["$defs"]["StrategyRunToolRequest"]; assert set(request_schema["properties"]) == {"strategy_id"}
+async def test_context_is_the_owner_delegated_through_the_adapter_and_not_client_supplied() -> None:
+    """#1437: the owner holds the bearer token, so a call maps to the owner principal. The
+    adapter builds the context; the client supplies no identity."""
+    repository = _RecordingRepository()
+    server = build_mcp_server(repository=repository)
+    await server.call_tool("strategy_run", {"request": {"strategy_id": "large_model_value_v0"}})
+
+    assert len(repository.received_contexts) == 1
+    context = repository.received_contexts[0]
+    assert context.authentication_method is AuthenticationMethod.DELEGATED_MCP
+    assert context.principal_kind is PrincipalKind.ADMINISTRATOR
+    assert context.principal_id == "principal:owner"
+    assert context.delegated_by_service_principal_id == "principal:llm-service-mcp"
+    assert context.issued_at <= datetime.now(UTC)
+    assert context.expires_at - context.issued_at <= timedelta(minutes=5)
+
+    # The tool's own input schema has no identity/role/tenant argument at all.
+    tools = await server.list_tools()
+    request_schema = tools[0].inputSchema["$defs"]["StrategyRunToolRequest"]
+    assert set(request_schema["properties"]) == {"strategy_id"}
+
+
 @pytest.mark.anyio
 async def test_claude_compatible_client_session_round_trip() -> None:
+    """A real mcp.ClientSession over in-memory transport — the same JSON-RPC
+    surface Claude Code / Claude Desktop / Codex speak, not a server-side
+    shortcut method."""
+    # Fixture-backed (the shipped default is now the mart read, #362) so the
+    # round-trip asserts against the 10 golden decisions.
     server = build_mcp_server(repository=FixtureStrategyRunRepository())
-    async with create_connected_server_and_client_session(server._mcp_server) as client: await client.initialize(); tools = await client.list_tools(); assert sorted(tool.name for tool in tools.tools) == [ "company_360_profile", "etf_virtual_company_profile", "governed_backtest", "issuer_analyst_ratings", "issuer_supply_chain_exposure", "metric_node_values", "research_card", "research_report", "research_report_markdown", "strategy_run", "theme_purity_leaderboard", "topt_gppe", ]; result = await client.call_tool("strategy_run", {"request": {"strategy_id": "large_model_value_v0"}}); assert result.isError is not True; assert result.structuredContent is not None; raw_result = result.structuredContent["result"]; assert raw_result["strategy_run_id"] == "strategy_smoke_fixture"; assert "governed" in raw_result and raw_result["governed"] is False; report = StrategyRunReport.model_validate_json(json.dumps(raw_result)); assert len(report.decisions) == 10; assert report.golden_mismatches == (); assert report.strategy_run_id == "strategy_smoke_fixture"; assert report.governed is False
-@pytest.mark.anyio
-async def test_sequential_mcp_calls_and_ranking_card_coercion_succeed_without_empty_drops() -> None:
-    from truealpha_contracts.research_cards import verify_card_html; server = build_mcp_server(repository=FixtureStrategyRunRepository(), research_repository=_research_repository())
     async with create_connected_server_and_client_session(server._mcp_server) as client:
         await client.initialize()
-        for idx in range(12): res = await client.call_tool( "research_card", { "request": { "report_kind": "company" if idx % 2 == 0 else "theme_ranking", "target_entity_ids": ["theme:large_model_value"], "cutoff_at": "2026-06-30T23:59:59Z", "section_kinds": ["ranking"] if idx % 3 == 0 else [], "card_kind": "ranking", "style_preset": "screen-print", "page": 1, } }, ); assert res.isError is not True; assert res.structuredContent is not None; card = ResearchCard.model_validate_json(json.dumps(res.structuredContent)); assert len(card.subjects) <= 4; assert any(len(s.metrics) > 0 for s in card.subjects); assert card.rendered_html is not None; ok, violations = verify_card_html(card, card.rendered_html); assert ok, f"verify_card_html failed on iteration {idx}: {violations}"
+        tools = await client.list_tools()
+        assert sorted(tool.name for tool in tools.tools) == [
+            "company_360_profile",
+            "etf_virtual_company_profile",
+            "governed_backtest",
+            "issuer_analyst_ratings",
+            "issuer_supply_chain_exposure",
+            "metric_node_values",
+            "research_card",
+            "research_report",
+            "research_report_markdown",
+            "strategy_run",
+            "theme_purity_leaderboard",
+            "topt_gppe",
+        ]
+
+        result = await client.call_tool("strategy_run", {"request": {"strategy_id": "large_model_value_v0"}})
+        assert result.isError is not True
+        assert result.structuredContent is not None
+        raw_result = result.structuredContent["result"]
+        assert raw_result["strategy_run_id"] == "strategy_smoke_fixture"
+        assert "governed" in raw_result and raw_result["governed"] is False
+        report = StrategyRunReport.model_validate_json(json.dumps(raw_result))
+        assert len(report.decisions) == 10
+        assert report.golden_mismatches == ()
+        assert report.strategy_run_id == "strategy_smoke_fixture"
+        assert report.governed is False
+
+
+@pytest.mark.anyio
+async def test_sequential_mcp_calls_and_ranking_card_coercion_succeed_without_empty_drops() -> None:
+    """#1609: 12 sequential back-to-back MCP calls on one session succeed without drops,
+    and research_card(card_kind='ranking') returns non-empty metrics and verified 1080x1440 HTML."""
+    from truealpha_contracts.research_cards import verify_card_html
+
+    server = build_mcp_server(repository=FixtureStrategyRunRepository(), research_repository=_research_repository())
+    async with create_connected_server_and_client_session(server._mcp_server) as client:
+        await client.initialize()
+        for idx in range(12):
+            res = await client.call_tool(
+                "research_card",
+                {
+                    "request": {
+                        "report_kind": "company" if idx % 2 == 0 else "theme_ranking",
+                        "target_entity_ids": ["theme:large_model_value"],
+                        "cutoff_at": "2026-06-30T23:59:59Z",
+                        "section_kinds": ["ranking"] if idx % 3 == 0 else [],
+                        "card_kind": "ranking",
+                        "style_preset": "screen-print",
+                        "page": 1,
+                    }
+                },
+            )
+            assert res.isError is not True
+            assert res.structuredContent is not None
+            card = ResearchCard.model_validate_json(json.dumps(res.structuredContent))
+            assert len(card.subjects) <= 4
+            assert any(len(s.metrics) > 0 for s in card.subjects)
+            assert card.rendered_html is not None
+            ok, violations = verify_card_html(card, card.rendered_html)
+            assert ok, f"verify_card_html failed on iteration {idx}: {violations}"
+
+
 @pytest.fixture
-def anyio_backend() -> str: return "asyncio"
-def test_streamable_transport_is_reachable_behind_a_proxy() -> None: server = build_mcp_server(repository=_RecordingRepository()); assert server.settings.streamable_http_path == "/"; assert server.settings.transport_security is not None; assert server.settings.transport_security.enable_dns_rebinding_protection is False
-def test_default_repository_is_mart_backed_with_fixture_opt_out(monkeypatch: pytest.MonkeyPatch) -> None: from llm_service import mcp_server; assert isinstance(_default_repository(), PostgresStrategyRunRepository); assert not hasattr(mcp_server.settings, "strategy_run_backend"); assert FixtureStrategyRunRepository is not None
-def test_default_company_and_theme_and_etf_readers_are_postgres_backed() -> None: from llm_service.mcp_server import ( PostgresBacktestReader, PostgresCompanyProfileReader, PostgresEtfProfileReader, PostgresThemePurityLeaderboardReader, _default_backtest_reader, _default_company_profile_reader, _default_etf_profile_reader, _default_theme_purity_reader, ); assert isinstance(_default_company_profile_reader(), PostgresCompanyProfileReader); assert isinstance(_default_theme_purity_reader(), PostgresThemePurityLeaderboardReader); assert isinstance(_default_etf_profile_reader(), PostgresEtfProfileReader); assert isinstance(_default_backtest_reader(), PostgresBacktestReader)
+def anyio_backend() -> str:
+    return "asyncio"
+
+
+def test_streamable_transport_is_reachable_behind_a_proxy() -> None:
+    """The MCP is mounted at /mcp and served behind Traefik. Regression guard:
+    (1) streamable path is the mount root '/' so the endpoint is a single '/mcp',
+    not the double-nested '/mcp/mcp'; (2) DNS-rebinding host pinning is off by
+    default so a non-localhost Host does not get rejected with 421 (see #405)."""
+    server = build_mcp_server(repository=_RecordingRepository())
+    assert server.settings.streamable_http_path == "/"
+    assert server.settings.transport_security is not None
+    assert server.settings.transport_security.enable_dns_rebinding_protection is False
+
+
+def test_default_repository_is_mart_backed_with_fixture_opt_out(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#362: the shipped default is now `mart` (a real writer populates it via #414/#417);
+    `fixture` remains selectable for tests/offline previews."""
+    from llm_service import mcp_server
+
+    # The shipped default, with no override, is the real mart read.
+    assert isinstance(_default_repository(), PostgresStrategyRunRepository)
+
+    # #434 exit criterion 3: no runtime flag can select the fixture any more.
+    assert not hasattr(mcp_server.settings, "strategy_run_backend")
+    assert FixtureStrategyRunRepository is not None  # injected by tests only
+
+
+def test_default_company_and_theme_and_etf_readers_are_postgres_backed() -> None:
+    from llm_service.mcp_server import (
+        PostgresBacktestReader,
+        PostgresCompanyProfileReader,
+        PostgresEtfProfileReader,
+        PostgresThemePurityLeaderboardReader,
+        _default_backtest_reader,
+        _default_company_profile_reader,
+        _default_etf_profile_reader,
+        _default_theme_purity_reader,
+    )
+
+    assert isinstance(_default_company_profile_reader(), PostgresCompanyProfileReader)
+    assert isinstance(_default_theme_purity_reader(), PostgresThemePurityLeaderboardReader)
+    assert isinstance(_default_etf_profile_reader(), PostgresEtfProfileReader)
+    assert isinstance(_default_backtest_reader(), PostgresBacktestReader)
+
+
 @pytest.mark.anyio
 async def test_company_360_profile_tool_reads_through_injected_reader() -> None:
     class _FakeCompanyProfileReader:
-        def get_company_profile(self, *, issuer_id: str) -> dict[str, Any]: return { "issuer_id": issuer_id, "tier": "Tier 1: Core Value", "valuation_gap": "1.6388", "current_price_to_sales": "10.5", "target_price_to_sales": "17.2", "confidence": "0.65", "reason_codes": [], "peg": "1.25", "peg_rank": 3, "peg_reason_codes": [], "gppe": "1153614.48", "gppe_detail": { "gppe": "1153614.48", "operating_branch": "tech", "capital_adjusted_gross_profit": "5000000.00", "confidence": "0.65", "availability_status": "available", "reason_codes": [], }, "strategy_decision": { "cutoff_at": "2026-03-31T23:59:59Z", "outcome": "selected", "tier": "Tier 1: Core Value", "valuation_gap": "1.6388", "current_price_to_sales": "10.5", "target_price_to_sales": "17.2", "confidence": "0.65", "reason_codes": [], "peg": "1.25", "peg_rank": 3, "peg_reason_codes": [], }, "theme_purity": [ { "theme_id": "ai-infrastructure", "theme": "AI infrastructure", "theme_share": "0.85", "in_theme_revenue": "850000000.00", "consolidated_revenue": "1000000000.00", "segments": 3, "confidence": "0.95", "availability_status": "available", } ], "availability_status": "available", }
-    server = build_mcp_server( repository=FixtureStrategyRunRepository(), company_profile_reader=_FakeCompanyProfileReader(), )
+        def get_company_profile(self, *, issuer_id: str) -> dict[str, Any]:
+            return {
+                "issuer_id": issuer_id,
+                "tier": "Tier 1: Core Value",
+                "valuation_gap": "1.6388",
+                "current_price_to_sales": "10.5",
+                "target_price_to_sales": "17.2",
+                "confidence": "0.65",
+                "reason_codes": [],
+                "peg": "1.25",
+                "peg_rank": 3,
+                "peg_reason_codes": [],
+                "gppe": "1153614.48",
+                "gppe_detail": {
+                    "gppe": "1153614.48",
+                    "operating_branch": "tech",
+                    "capital_adjusted_gross_profit": "5000000.00",
+                    "confidence": "0.65",
+                    "availability_status": "available",
+                    "reason_codes": [],
+                },
+                "strategy_decision": {
+                    "cutoff_at": "2026-03-31T23:59:59Z",
+                    "outcome": "selected",
+                    "tier": "Tier 1: Core Value",
+                    "valuation_gap": "1.6388",
+                    "current_price_to_sales": "10.5",
+                    "target_price_to_sales": "17.2",
+                    "confidence": "0.65",
+                    "reason_codes": [],
+                    "peg": "1.25",
+                    "peg_rank": 3,
+                    "peg_reason_codes": [],
+                },
+                "theme_purity": [
+                    {
+                        "theme_id": "ai-infrastructure",
+                        "theme": "AI infrastructure",
+                        "theme_share": "0.85",
+                        "in_theme_revenue": "850000000.00",
+                        "consolidated_revenue": "1000000000.00",
+                        "segments": 3,
+                        "confidence": "0.95",
+                        "availability_status": "available",
+                    }
+                ],
+                "availability_status": "available",
+            }
+
+    server = build_mcp_server(
+        repository=FixtureStrategyRunRepository(),
+        company_profile_reader=_FakeCompanyProfileReader(),
+    )
     content_blocks, structured = await server.call_tool(  # type: ignore[misc]
         "company_360_profile",
         {"request": {"issuer_id": "issuer:adm"}},
     )
-    assert content_blocks; assert structured["issuer_id"] == "issuer:adm"; assert structured["tier"] == "Tier 1: Core Value"; assert structured["valuation_gap"] == "1.6388"; assert structured["confidence"] == "0.65"; assert structured["reason_codes"] == []; assert structured["strategy_decision"]["confidence"] == "0.65"; assert structured["strategy_decision"]["reason_codes"] == []; assert structured["peg"] == "1.25"; assert structured["gppe"] == "1153614.48"; assert structured["theme_purity"][0]["theme_id"] == "ai-infrastructure"; assert structured["theme_purity"][0]["theme_share"] == "0.85"
+    assert content_blocks
+    assert structured["issuer_id"] == "issuer:adm"
+    assert structured["tier"] == "Tier 1: Core Value"
+    assert structured["valuation_gap"] == "1.6388"
+    assert structured["confidence"] == "0.65"
+    assert structured["reason_codes"] == []
+    assert structured["strategy_decision"]["confidence"] == "0.65"
+    assert structured["strategy_decision"]["reason_codes"] == []
+    assert structured["peg"] == "1.25"
+    assert structured["gppe"] == "1153614.48"
+    assert structured["theme_purity"][0]["theme_id"] == "ai-infrastructure"
+    assert structured["theme_purity"][0]["theme_share"] == "0.85"
+
+
 @pytest.mark.anyio
 async def test_theme_purity_leaderboard_tool_reads_through_injected_reader() -> None:
     class _FakeThemePurityLeaderboardReader:
-        def get_leaderboard(self, *, theme_id: str, limit: int = 10) -> dict[str, Any]: return { "theme_id": theme_id, "limit": limit, "count": 1, "issuers": [ { "issuer_id": "issuer:nvda", "cik": 1045810, "theme_id": theme_id, "theme": "AI infrastructure", "theme_share": "0.92", "in_theme_revenue": "26000000000.00", "consolidated_revenue": "28000000000.00", "segments": 2, "confidence": "0.98", "availability_status": "available", } ], }
-    server = build_mcp_server( repository=FixtureStrategyRunRepository(), theme_purity_reader=_FakeThemePurityLeaderboardReader(), )
+        def get_leaderboard(self, *, theme_id: str, limit: int = 10) -> dict[str, Any]:
+            return {
+                "theme_id": theme_id,
+                "limit": limit,
+                "count": 1,
+                "issuers": [
+                    {
+                        "issuer_id": "issuer:nvda",
+                        "cik": 1045810,
+                        "theme_id": theme_id,
+                        "theme": "AI infrastructure",
+                        "theme_share": "0.92",
+                        "in_theme_revenue": "26000000000.00",
+                        "consolidated_revenue": "28000000000.00",
+                        "segments": 2,
+                        "confidence": "0.98",
+                        "availability_status": "available",
+                    }
+                ],
+            }
+
+    server = build_mcp_server(
+        repository=FixtureStrategyRunRepository(),
+        theme_purity_reader=_FakeThemePurityLeaderboardReader(),
+    )
     content_blocks, structured = await server.call_tool(  # type: ignore[misc]
         "theme_purity_leaderboard",
         {"request": {"theme_id": "ai-infrastructure", "limit": 5}},
     )
-    assert content_blocks; assert structured["theme_id"] == "ai-infrastructure"; assert structured["limit"] == 5; assert structured["count"] == 1; assert structured["issuers"][0]["issuer_id"] == "issuer:nvda"; assert structured["issuers"][0]["theme_share"] == "0.92"
+    assert content_blocks
+    assert structured["theme_id"] == "ai-infrastructure"
+    assert structured["limit"] == 5
+    assert structured["count"] == 1
+    assert structured["issuers"][0]["issuer_id"] == "issuer:nvda"
+    assert structured["issuers"][0]["theme_share"] == "0.92"
+
+
 @pytest.mark.anyio
 async def test_etf_virtual_company_profile_tool_reads_through_injected_reader() -> None:
     class _FakeEtfProfileReader:
-        def get_etf_profile(self, *, fund_id: str) -> dict[str, Any]: return { "fund_id": fund_id, "fund_name": "Invesco QQQ Trust", "cutoff": "2026-03-31T23:59:59Z", "report_period": "2026-03-31", "weighted_valuation_gap": "1.4250", "total_weight_pct": "99.80", "resolved_weight_pct": "95.50", "valued_weight_pct": "88.20", "lines": 101, "valued_lines": 84, "confidence": "0.92", "availability_status": "available", "reason_codes": [], "holdings": [ { "holding_name": "Apple Inc.", "ticker": "AAPL", "isin": "US0378331005", "weight_pct": "8.85", "value_usd": "25000000000.00", "issuer_entity": "issuer:aapl", "listing_id": "listing:xnas:aapl", } ], }
-    server = build_mcp_server( repository=FixtureStrategyRunRepository(), etf_profile_reader=_FakeEtfProfileReader(), )
+        def get_etf_profile(self, *, fund_id: str) -> dict[str, Any]:
+            return {
+                "fund_id": fund_id,
+                "fund_name": "Invesco QQQ Trust",
+                "cutoff": "2026-03-31T23:59:59Z",
+                "report_period": "2026-03-31",
+                "weighted_valuation_gap": "1.4250",
+                "total_weight_pct": "99.80",
+                "resolved_weight_pct": "95.50",
+                "valued_weight_pct": "88.20",
+                "lines": 101,
+                "valued_lines": 84,
+                "confidence": "0.92",
+                "availability_status": "available",
+                "reason_codes": [],
+                "holdings": [
+                    {
+                        "holding_name": "Apple Inc.",
+                        "ticker": "AAPL",
+                        "isin": "US0378331005",
+                        "weight_pct": "8.85",
+                        "value_usd": "25000000000.00",
+                        "issuer_entity": "issuer:aapl",
+                        "listing_id": "listing:xnas:aapl",
+                    }
+                ],
+            }
+
+    server = build_mcp_server(
+        repository=FixtureStrategyRunRepository(),
+        etf_profile_reader=_FakeEtfProfileReader(),
+    )
     content_blocks, structured = await server.call_tool(  # type: ignore[misc]
         "etf_virtual_company_profile",
         {"request": {"fund_id": "etf:series:S000101292"}},
     )
-    assert content_blocks; assert structured["fund_id"] == "etf:series:S000101292"; assert structured["fund_name"] == "Invesco QQQ Trust"; assert structured["weighted_valuation_gap"] == "1.4250"; assert structured["valued_weight_pct"] == "88.20"; assert len(structured["holdings"]) == 1; assert structured["holdings"][0]["ticker"] == "AAPL"
+    assert content_blocks
+    assert structured["fund_id"] == "etf:series:S000101292"
+    assert structured["fund_name"] == "Invesco QQQ Trust"
+    assert structured["weighted_valuation_gap"] == "1.4250"
+    assert structured["valued_weight_pct"] == "88.20"
+    assert len(structured["holdings"]) == 1
+    assert structured["holdings"][0]["ticker"] == "AAPL"
+
+
 def _stub_connection_error(monkeypatch: pytest.MonkeyPatch) -> None:
     import psycopg
-    def _raise_operational_error(*_args: Any, **_kwargs: Any) -> Any: raise psycopg.OperationalError("connection refused")
+
+    def _raise_operational_error(*_args: Any, **_kwargs: Any) -> Any:
+        raise psycopg.OperationalError("connection refused")
+
     monkeypatch.setattr(psycopg, "connect", _raise_operational_error)
-def test_postgres_theme_purity_leaderboard_reader_normalizes_theme_slug( monkeypatch: pytest.MonkeyPatch, ) -> None: from llm_service.mcp_server import PostgresThemePurityLeaderboardReader; _stub_connection_error(monkeypatch); reader = PostgresThemePurityLeaderboardReader(database_url="postgresql://invalid:invalid@127.0.0.1:59999/none"); result = reader.get_leaderboard(theme_id="AI Infrastructure", limit=5); assert result["theme_id"] == "AI Infrastructure"; assert result["limit"] == 5; assert result["count"] == 0; assert result["issuers"] == []
-def test_normalize_theme_slug_falsifiable() -> None: from llm_service.mcp_server import normalize_theme_slug; assert normalize_theme_slug("AI Infrastructure") == "ai-infrastructure"; assert normalize_theme_slug("Cloud   Software--SaaS_Platform") == "cloud-software-saas-platform"; assert normalize_theme_slug("  semiconductors  ") == "semiconductors"; assert normalize_theme_slug("") == ""
-def test_resolve_fund_resolution_candidates_falsifiable() -> None: from llm_service.mcp_server import resolve_fund_resolution_candidates; qqq = resolve_fund_resolution_candidates("fund:nasdaq:qqq"); assert qqq["clean_id"] == "fund:nasdaq:qqq"; assert qqq["upper_token"] == "QQQ"; assert qqq["series_candidate"] == "etf:series:QQQ"; assert qqq["name_pattern"] == "%qqq%"; series = resolve_fund_resolution_candidates("etf:series:S000101292"); assert series["clean_id"] == "etf:series:S000101292"; assert series["upper_token"] == "S000101292"; assert series["series_candidate"] == "etf:series:S000101292"; assert series["name_pattern"] == "%s000101292%"; short = resolve_fund_resolution_candidates("q"); assert short["upper_token"] == "Q"; assert short["name_pattern"] == ""; empty = resolve_fund_resolution_candidates(""); assert empty["upper_token"] == ""; assert empty["name_pattern"] == ""
-def test_issuer_identity_sql_ssot_falsifiable() -> None: from truealpha_contracts.issuer_modules_mart import issuer_identity_sql; predicate = issuer_identity_sql("d.issuer_id", "%s"); assert predicate.count("%s") == 3; assert "mart.entity_identity" in predicate; assert "ei.current_ticker" in predicate; assert "ei.cik" in predicate; assert "ei.lei" in predicate; assert "ei.legacy_id" in predicate
-def test_postgres_company_profile_reader_handles_connection_error( monkeypatch: pytest.MonkeyPatch, ) -> None: from llm_service.mcp_server import PostgresCompanyProfileReader; _stub_connection_error(monkeypatch); reader = PostgresCompanyProfileReader(database_url="postgresql://invalid:invalid@127.0.0.1:59999/none"); result = reader.get_company_profile(issuer_id="NVDA"); assert result["issuer_id"] == "NVDA"; assert result["availability_status"] == "unavailable"; assert result["theme_purity"] == []
-def test_postgres_etf_profile_reader_handles_connection_error( monkeypatch: pytest.MonkeyPatch, ) -> None: from llm_service.mcp_server import PostgresEtfProfileReader; _stub_connection_error(monkeypatch); reader = PostgresEtfProfileReader(database_url="postgresql://invalid:invalid@127.0.0.1:59999/none"); result = reader.get_etf_profile(fund_id="fund:nasdaq:qqq"); assert result["fund_id"] == "fund:nasdaq:qqq"; assert result["availability_status"] == "unavailable"; assert result["reason_codes"] == ["no_virtual_company_consolidation_found"]; assert result["holdings"] == []
-_FILL_EXTRACTOR = "lane:unvisited:v1"; _OLD_CUTOFF = datetime(2026, 1, 1, tzinfo=UTC); _NEW_CUTOFF = datetime(2026, 2, 1, tzinfo=UTC)
+
+
+def test_postgres_theme_purity_leaderboard_reader_normalizes_theme_slug(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from llm_service.mcp_server import PostgresThemePurityLeaderboardReader
+
+    _stub_connection_error(monkeypatch)
+    # Disconnected DB should return empty list gracefully without unhandled exception
+    reader = PostgresThemePurityLeaderboardReader(database_url="postgresql://invalid:invalid@127.0.0.1:59999/none")
+    result = reader.get_leaderboard(theme_id="AI Infrastructure", limit=5)
+    assert result["theme_id"] == "AI Infrastructure"
+    assert result["limit"] == 5
+    assert result["count"] == 0
+    assert result["issuers"] == []
+
+
+def test_normalize_theme_slug_falsifiable() -> None:
+    from llm_service.mcp_server import normalize_theme_slug
+
+    assert normalize_theme_slug("AI Infrastructure") == "ai-infrastructure"
+    assert normalize_theme_slug("Cloud   Software--SaaS_Platform") == "cloud-software-saas-platform"
+    assert normalize_theme_slug("  semiconductors  ") == "semiconductors"
+    assert normalize_theme_slug("") == ""
+
+
+def test_resolve_fund_resolution_candidates_falsifiable() -> None:
+    from llm_service.mcp_server import resolve_fund_resolution_candidates
+
+    qqq = resolve_fund_resolution_candidates("fund:nasdaq:qqq")
+    assert qqq["clean_id"] == "fund:nasdaq:qqq"
+    assert qqq["upper_token"] == "QQQ"
+    assert qqq["series_candidate"] == "etf:series:QQQ"
+    assert qqq["name_pattern"] == "%qqq%"
+
+    series = resolve_fund_resolution_candidates("etf:series:S000101292")
+    assert series["clean_id"] == "etf:series:S000101292"
+    assert series["upper_token"] == "S000101292"
+    assert series["series_candidate"] == "etf:series:S000101292"
+    assert series["name_pattern"] == "%s000101292%"
+
+    # Short token guard prevents matching broad substrings
+    short = resolve_fund_resolution_candidates("q")
+    assert short["upper_token"] == "Q"
+    assert short["name_pattern"] == ""
+
+    empty = resolve_fund_resolution_candidates("")
+    assert empty["upper_token"] == ""
+    assert empty["name_pattern"] == ""
+
+
+def test_issuer_identity_sql_ssot_falsifiable() -> None:
+    from truealpha_contracts.issuer_modules_mart import issuer_identity_sql
+
+    predicate = issuer_identity_sql("d.issuer_id", "%s")
+    assert predicate.count("%s") == 3
+    assert "mart.entity_identity" in predicate
+    assert "ei.current_ticker" in predicate
+    assert "ei.cik" in predicate
+    assert "ei.lei" in predicate
+    assert "ei.legacy_id" in predicate
+
+
+def test_postgres_company_profile_reader_handles_connection_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from llm_service.mcp_server import PostgresCompanyProfileReader
+
+    _stub_connection_error(monkeypatch)
+    reader = PostgresCompanyProfileReader(database_url="postgresql://invalid:invalid@127.0.0.1:59999/none")
+    result = reader.get_company_profile(issuer_id="NVDA")
+    assert result["issuer_id"] == "NVDA"
+    assert result["availability_status"] == "unavailable"
+    assert result["theme_purity"] == []
+
+
+def test_postgres_etf_profile_reader_handles_connection_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from llm_service.mcp_server import PostgresEtfProfileReader
+
+    _stub_connection_error(monkeypatch)
+    reader = PostgresEtfProfileReader(database_url="postgresql://invalid:invalid@127.0.0.1:59999/none")
+    result = reader.get_etf_profile(fund_id="fund:nasdaq:qqq")
+    assert result["fund_id"] == "fund:nasdaq:qqq"
+    assert result["availability_status"] == "unavailable"
+    assert result["reason_codes"] == ["no_virtual_company_consolidation_found"]
+    assert result["holdings"] == []
+
+
+# --- #1117: the theme readers meet the unvisited fill rows of Q6 ---------------------------------
+#
+# An issuer without a segment partition has a fill row for each theme. The row holds NULL in
+# every partition column, `extractor` `lane:unvisited:v1` and the reason in `reason_codes`.
+# The real readers run here, against a real Postgres, inside a transaction that is rolled back.
+
+_FILL_EXTRACTOR = "lane:unvisited:v1"
+_OLD_CUTOFF = datetime(2026, 1, 1, tzinfo=UTC)
+_NEW_CUTOFF = datetime(2026, 2, 1, tzinfo=UTC)
+
+
 class _BorrowedConnection:
-    def __init__(self, real: Any, row_factory: Any) -> None: self._real = real; self._row_factory = row_factory
-    def __enter__(self) -> _BorrowedConnection: return self
-    def __exit__(self, *_exc: object) -> None: return None
-    def cursor(self, **kwargs: Any) -> Any: return self._real.cursor(row_factory=self._row_factory, **kwargs)
+    """Gives each reader the test's own connection, so it reads the uncommitted rows.
+
+    The readers pass their row factory to `psycopg.connect`, so the wrapper applies it to each cursor.
+    """
+
+    def __init__(self, real: Any, row_factory: Any) -> None:
+        self._real = real
+        self._row_factory = row_factory
+
+    def __enter__(self) -> _BorrowedConnection:
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        return None
+
+    def cursor(self, **kwargs: Any) -> Any:
+        return self._real.cursor(row_factory=self._row_factory, **kwargs)
+
+
 @pytest.fixture
 def theme_database(monkeypatch: pytest.MonkeyPatch) -> Any:
-    import os; import psycopg; url = os.environ.get("DATABASE_URL")
-    if not url: from truealpha_runtime.testing import skip_or_fail; skip_or_fail("DATABASE_URL must be explicitly provided for MCP tests (no default to port 5432)"); return
-    try: connection = psycopg.connect(url, connect_timeout=3, autocommit=False)
+    import os
+
+    import psycopg
+
+    url = os.environ.get("DATABASE_URL")
+    if not url:
+        from truealpha_runtime.testing import skip_or_fail
+
+        skip_or_fail("DATABASE_URL must be explicitly provided for MCP tests (no default to port 5432)")
+        return
+    try:
+        connection = psycopg.connect(url, connect_timeout=3, autocommit=False)
     except psycopg.OperationalError as error:
-        if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"): pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
+        if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
+            pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
         pytest.skip("no local Postgres; ci-python runs this against a real database")
-    monkeypatch.setattr( psycopg, "connect", lambda *_a, **kwargs: _BorrowedConnection(connection, kwargs.get("row_factory")) )
-    try: yield connection
-    finally: connection.rollback(); connection.close()
-def _theme_row( connection: Any, *, issuer_id: str, theme_id: str, cutoff: datetime, fill: bool, run: str = "run:mcp-1117" ) -> None: connection.execute( "\n        insert into mart.issuer_theme_purity\n            (run_id, issuer_id, cik, theme_id, theme, definition_version, definition_sha256, cutoff,\n             period_end, partition_id, theme_share, consolidated_revenue, in_theme_revenue,\n             out_of_theme_revenue, unclassified_revenue, partition_residual, segments, confidence,\n             reason_codes, extractor, availability_status, source_evidence_status, factor_validation_status)\n        values (%(run)s, %(issuer)s, %(cik)s, %(theme_id)s, %(theme)s, 'v0', %(sha)s, %(cutoff)s,\n                %(period)s, %(partition)s, %(share)s, %(total)s, %(inside)s, %(outside)s, %(rest)s, %(rest)s,\n                %(segments)s, %(confidence)s, %(reasons)s, %(extractor)s, %(status)s, %(evidence)s,\n                'not_evaluated')\n        ", { "run": f"{run}:{cutoff:%Y%m%d}", "issuer": issuer_id, "theme_id": theme_id, "theme": theme_id.upper(), "sha": "a" * 64, "cutoff": cutoff, "cik": None if fill else 4242, "period": None if fill else "2025-12-31", "partition": None if fill else "segment-partition:" + "b" * 64, "share": None if fill else "0.5", "total": None if fill else "100", "inside": None if fill else "50", "outside": None if fill else "50", "rest": None if fill else "0", "segments": 0 if fill else 2, "confidence": "0" if fill else "0.9", "reasons": ["no_segment_partition"] if fill else [], "extractor": _FILL_EXTRACTOR if fill else "rule:test", "status": "unavailable" if fill else "available", "evidence": "degraded" if fill else "verified", }, )
-def _profile_reader() -> Any: from llm_service.mcp_server import PostgresCompanyProfileReader; return PostgresCompanyProfileReader(database_url="postgresql://unused")
-def _leaderboard_reader() -> Any: from llm_service.mcp_server import PostgresThemePurityLeaderboardReader; return PostgresThemePurityLeaderboardReader(database_url="postgresql://unused")
+    monkeypatch.setattr(
+        psycopg, "connect", lambda *_a, **kwargs: _BorrowedConnection(connection, kwargs.get("row_factory"))
+    )
+    try:
+        yield connection
+    finally:
+        connection.rollback()
+        connection.close()
+
+
+def _theme_row(
+    connection: Any, *, issuer_id: str, theme_id: str, cutoff: datetime, fill: bool, run: str = "run:mcp-1117"
+) -> None:
+    """One `mart.issuer_theme_purity` row: a judged share of 0.5, or the fill of an issuer without a partition."""
+    connection.execute(
+        """
+        insert into mart.issuer_theme_purity
+            (run_id, issuer_id, cik, theme_id, theme, definition_version, definition_sha256, cutoff,
+             period_end, partition_id, theme_share, consolidated_revenue, in_theme_revenue,
+             out_of_theme_revenue, unclassified_revenue, partition_residual, segments, confidence,
+             reason_codes, extractor, availability_status, source_evidence_status, factor_validation_status)
+        values (%(run)s, %(issuer)s, %(cik)s, %(theme_id)s, %(theme)s, 'v0', %(sha)s, %(cutoff)s,
+                %(period)s, %(partition)s, %(share)s, %(total)s, %(inside)s, %(outside)s, %(rest)s, %(rest)s,
+                %(segments)s, %(confidence)s, %(reasons)s, %(extractor)s, %(status)s, %(evidence)s,
+                'not_evaluated')
+        """,
+        {
+            "run": f"{run}:{cutoff:%Y%m%d}",
+            "issuer": issuer_id,
+            "theme_id": theme_id,
+            "theme": theme_id.upper(),
+            "sha": "a" * 64,
+            "cutoff": cutoff,
+            "cik": None if fill else 4242,
+            "period": None if fill else "2025-12-31",
+            "partition": None if fill else "segment-partition:" + "b" * 64,
+            "share": None if fill else "0.5",
+            "total": None if fill else "100",
+            "inside": None if fill else "50",
+            "outside": None if fill else "50",
+            "rest": None if fill else "0",
+            "segments": 0 if fill else 2,
+            "confidence": "0" if fill else "0.9",
+            "reasons": ["no_segment_partition"] if fill else [],
+            "extractor": _FILL_EXTRACTOR if fill else "rule:test",
+            "status": "unavailable" if fill else "available",
+            "evidence": "degraded" if fill else "verified",
+        },
+    )
+
+
+def _profile_reader() -> Any:
+    from llm_service.mcp_server import PostgresCompanyProfileReader
+
+    return PostgresCompanyProfileReader(database_url="postgresql://unused")
+
+
+def _leaderboard_reader() -> Any:
+    from llm_service.mcp_server import PostgresThemePurityLeaderboardReader
+
+    return PostgresThemePurityLeaderboardReader(database_url="postgresql://unused")
+
+
 def test_company_profile_ignores_legacy_fill_rows_and_stays_unavailable(theme_database: Any) -> None:
-    import uuid; issuer = str(uuid.uuid4())
-    for theme_id in ("zz-theme-a", "zz-theme-b"): _theme_row(theme_database, issuer_id=issuer, theme_id=theme_id, cutoff=_NEW_CUTOFF, fill=True)
-    profile = _profile_reader().get_company_profile(issuer_id=issuer); assert profile["theme_purity"] == [], "fill rows are not data and are excluded from theme_purity"; assert profile["availability_status"] == "unavailable", "an issuer with only fill rows has no profile data"
-def test_company_profile_keeps_an_older_real_row_when_a_newer_run_holds_only_a_fill(theme_database: Any) -> None: import uuid; issuer = str(uuid.uuid4()); _theme_row(theme_database, issuer_id=issuer, theme_id="zz-theme-a", cutoff=_OLD_CUTOFF, fill=False); _theme_row(theme_database, issuer_id=issuer, theme_id="zz-theme-a", cutoff=_NEW_CUTOFF, fill=True); _theme_row(theme_database, issuer_id=issuer, theme_id="zz-theme-b", cutoff=_NEW_CUTOFF, fill=True); profile = _profile_reader().get_company_profile(issuer_id=issuer); themes = {t["theme_id"]: t for t in profile["theme_purity"]}; assert "zz-theme-a" in themes; assert themes["zz-theme-a"]["theme_share"] == "0.5", "the newer fill must not hide the real row"; assert "zz-theme-b" not in themes, "fill rows are ignored"; assert profile["availability_status"] == "available", "one real theme row is data"
-def test_theme_leaderboard_lists_real_rows_only_and_keeps_the_older_row_of_an_issuer_with_a_newer_fill( theme_database: Any, ) -> None: import uuid; judged, later_fill, never_judged = (str(uuid.uuid4()) for _ in range(3)); _theme_row(theme_database, issuer_id=judged, theme_id="zz-theme-a", cutoff=_NEW_CUTOFF, fill=False); _theme_row(theme_database, issuer_id=later_fill, theme_id="zz-theme-a", cutoff=_OLD_CUTOFF, fill=False); _theme_row(theme_database, issuer_id=later_fill, theme_id="zz-theme-a", cutoff=_NEW_CUTOFF, fill=True); _theme_row(theme_database, issuer_id=never_judged, theme_id="zz-theme-a", cutoff=_NEW_CUTOFF, fill=True); board = _leaderboard_reader().get_leaderboard(theme_id="zz-theme-a", limit=10); assert sorted(i["issuer_id"] for i in board["issuers"]) == sorted([judged, later_fill]); assert board["count"] == 2; assert all(i["theme_share"] == "0.5" and i["cik"] == 4242 for i in board["issuers"])
-def test_company_profile_names_the_pgp_basis_of_a_definition_1_0_0_decision(theme_database: Any) -> None: import uuid; issuer = str(uuid.uuid4()); run_id = "strategy-run:" + "7" * 64; theme_database.execute( "\n        insert into mart.strategy_runs (strategy_run_id, content_sha256, strategy_key, strategy_version,\n            definition_content_sha256, corpus_sha256, claim_ceiling, executed_at)\n        values (%s, %s, 'large_model_value_v0', '1.0.0', %s, %s, 'preview', %s)\n        ", (run_id, "7" * 64, "a" * 64, "b" * 64, _NEW_CUTOFF), ); theme_database.execute( "\n        insert into mart.strategy_decisions (strategy_decision_id, content_sha256, strategy_run_id, issuer_id,\n            cutoff_at, capital_adjusted_labor_efficiency, tier, current_price_to_sales, target_price_to_sales,\n            current_price_to_gross_profit, target_price_to_gross_profit, valuation_gap, eligible, outcome, rank,\n            target_weight)\n        values (%s, %s, %s, %s, %s, '74439', 'traditional', '1.2420', null, '5.1302', '8.7500', '0.7056', true,\n            'selected', 1, '0.5')\n        ", ("strategy-decision:" + "6" * 64, "6" * 64, run_id, issuer, _NEW_CUTOFF), ); profile = _profile_reader().get_company_profile(issuer_id=issuer); assert profile["valuation_basis"] == "price_to_gross_profit"; assert profile["current_price_to_gross_profit"] == "5.1302"; assert profile["target_price_to_gross_profit"] == "8.7500"; assert profile["target_price_to_sales"] is None; assert profile["current_price_to_sales"] == "1.2420"; assert profile["strategy_decision"]["valuation_basis"] == "price_to_gross_profit"; assert profile["strategy_decision"]["valuation_gap"] == "0.7056"; assert profile["confidence"] is None; assert profile["reason_codes"] == []; assert profile["strategy_decision"]["confidence"] is None; assert profile["strategy_decision"]["reason_codes"] == []
-def test_format_company_profile_surfaces_decision_confidence_and_reason_codes() -> None: from llm_service.mcp_server import _format_company_profile; profile = _format_company_profile( issuer_id="issuer:ddog", decision_row={ "issuer_id": "issuer:ddog", "cutoff_at": "2026-03-31T23:59:59Z", "tier": "traditional", "valuation_gap": "0.1000", "current_price_to_sales": "2.0000", "target_price_to_sales": None, "current_price_to_gross_profit": "7.9545", "target_price_to_gross_profit": "8.7500", "outcome": "selected", "exclusion_reason": None, "rank": 1, "peg": None, "peg_rank": None, "peg_reason_codes": ["missing_net_income"], "confidence": "0.6500", "reason_codes": [], }, gppe_row={ "gppe": "307127.77", "operating_branch": "non_financial", "capital_adjusted_gross_profit": "2487734928.00", "confidence": "0.6500", "availability_status": "available", "reason_codes": [], }, themes=[], ); assert profile["confidence"] == "0.6500"; assert profile["reason_codes"] == []; assert profile["strategy_decision"]["confidence"] == "0.6500"; assert profile["strategy_decision"]["reason_codes"] == []; assert profile["gppe_detail"]["confidence"] == "0.6500"
-def test_etf_profile_names_the_basis_of_the_weighted_gap(theme_database: Any) -> None: from llm_service.mcp_server import PostgresEtfProfileReader; theme_database.execute( "\n        insert into mart.fund_virtual_company (run_id, fund_id, fund_name, report_period, transaction_time,\n            cutoff, definition_version, definition_sha256, weighted_valuation_gap, valuation_basis,\n            total_weight_pct, resolved_weight_pct, valued_weight_pct, lines, valued_lines, confidence,\n            reason_codes, availability_status, source_evidence_status, factor_validation_status)\n        values ('capture-run:mcp-1235', 'etf:series:ZZPGP1235', 'PGP Test Fund', '2026-06-30', %s, %s, 'v0',\n            %s, '0.4200', 'price_to_gross_profit', '99', '99', '90', 2, 2, '0.9', '{}', 'available',\n            'verified', 'not_evaluated')\n        ", (_NEW_CUTOFF, _NEW_CUTOFF, "c" * 64), ); profile = PostgresEtfProfileReader(database_url="postgresql://unused").get_etf_profile( fund_id="etf:series:ZZPGP1235" ); assert profile["weighted_valuation_gap"] == "0.4200"; assert profile["weighted_valuation_gap_basis"] == "price_to_gross_profit"
+    import uuid
+
+    issuer = str(uuid.uuid4())
+    for theme_id in ("zz-theme-a", "zz-theme-b"):
+        _theme_row(theme_database, issuer_id=issuer, theme_id=theme_id, cutoff=_NEW_CUTOFF, fill=True)
+
+    profile = _profile_reader().get_company_profile(issuer_id=issuer)
+
+    assert profile["theme_purity"] == [], "fill rows are not data and are excluded from theme_purity"
+    assert profile["availability_status"] == "unavailable", "an issuer with only fill rows has no profile data"
+
+
+def test_company_profile_keeps_an_older_real_row_when_a_newer_run_holds_only_a_fill(theme_database: Any) -> None:
+    import uuid
+
+    issuer = str(uuid.uuid4())
+    _theme_row(theme_database, issuer_id=issuer, theme_id="zz-theme-a", cutoff=_OLD_CUTOFF, fill=False)
+    _theme_row(theme_database, issuer_id=issuer, theme_id="zz-theme-a", cutoff=_NEW_CUTOFF, fill=True)
+    _theme_row(theme_database, issuer_id=issuer, theme_id="zz-theme-b", cutoff=_NEW_CUTOFF, fill=True)
+
+    profile = _profile_reader().get_company_profile(issuer_id=issuer)
+
+    themes = {t["theme_id"]: t for t in profile["theme_purity"]}
+    assert "zz-theme-a" in themes
+    assert themes["zz-theme-a"]["theme_share"] == "0.5", "the newer fill must not hide the real row"
+    assert "zz-theme-b" not in themes, "fill rows are ignored"
+    assert profile["availability_status"] == "available", "one real theme row is data"
+
+
+def test_theme_leaderboard_lists_real_rows_only_and_keeps_the_older_row_of_an_issuer_with_a_newer_fill(
+    theme_database: Any,
+) -> None:
+    import uuid
+
+    judged, later_fill, never_judged = (str(uuid.uuid4()) for _ in range(3))
+    _theme_row(theme_database, issuer_id=judged, theme_id="zz-theme-a", cutoff=_NEW_CUTOFF, fill=False)
+    _theme_row(theme_database, issuer_id=later_fill, theme_id="zz-theme-a", cutoff=_OLD_CUTOFF, fill=False)
+    _theme_row(theme_database, issuer_id=later_fill, theme_id="zz-theme-a", cutoff=_NEW_CUTOFF, fill=True)
+    _theme_row(theme_database, issuer_id=never_judged, theme_id="zz-theme-a", cutoff=_NEW_CUTOFF, fill=True)
+
+    board = _leaderboard_reader().get_leaderboard(theme_id="zz-theme-a", limit=10)
+
+    assert sorted(i["issuer_id"] for i in board["issuers"]) == sorted([judged, later_fill])
+    assert board["count"] == 2
+    assert all(i["theme_share"] == "0.5" and i["cik"] == 4242 for i in board["issuers"])
+
+
+def test_company_profile_names_the_pgp_basis_of_a_definition_1_0_0_decision(theme_database: Any) -> None:
+    """#1235: a 1.0.0 decision's gap divides P/GP. The profile carries the P/GP pair and names
+    the basis, so a caller never reads that gap against the P/S figure beside it."""
+    import uuid
+
+    issuer = str(uuid.uuid4())
+    run_id = "strategy-run:" + "7" * 64
+    theme_database.execute(
+        """
+        insert into mart.strategy_runs (strategy_run_id, content_sha256, strategy_key, strategy_version,
+            definition_content_sha256, corpus_sha256, claim_ceiling, executed_at)
+        values (%s, %s, 'large_model_value_v0', '1.0.0', %s, %s, 'preview', %s)
+        """,
+        (run_id, "7" * 64, "a" * 64, "b" * 64, _NEW_CUTOFF),
+    )
+    theme_database.execute(
+        """
+        insert into mart.strategy_decisions (strategy_decision_id, content_sha256, strategy_run_id, issuer_id,
+            cutoff_at, capital_adjusted_labor_efficiency, tier, current_price_to_sales, target_price_to_sales,
+            current_price_to_gross_profit, target_price_to_gross_profit, valuation_gap, eligible, outcome, rank,
+            target_weight)
+        values (%s, %s, %s, %s, %s, '74439', 'traditional', '1.2420', null, '5.1302', '8.7500', '0.7056', true,
+            'selected', 1, '0.5')
+        """,
+        ("strategy-decision:" + "6" * 64, "6" * 64, run_id, issuer, _NEW_CUTOFF),
+    )
+
+    profile = _profile_reader().get_company_profile(issuer_id=issuer)
+
+    assert profile["valuation_basis"] == "price_to_gross_profit"
+    assert profile["current_price_to_gross_profit"] == "5.1302"
+    assert profile["target_price_to_gross_profit"] == "8.7500"
+    assert profile["target_price_to_sales"] is None
+    assert profile["current_price_to_sales"] == "1.2420"
+    assert profile["strategy_decision"]["valuation_basis"] == "price_to_gross_profit"
+    assert profile["strategy_decision"]["valuation_gap"] == "0.7056"
+    assert profile["confidence"] is None
+    assert profile["reason_codes"] == []
+    assert profile["strategy_decision"]["confidence"] is None
+    assert profile["strategy_decision"]["reason_codes"] == []
+
+
+def test_format_company_profile_surfaces_decision_confidence_and_reason_codes() -> None:
+    """#1517 stage A4: company_360_profile surfaces decision confidence and reason_codes from mart rows."""
+    from llm_service.mcp_server import _format_company_profile
+
+    profile = _format_company_profile(
+        issuer_id="issuer:ddog",
+        decision_row={
+            "issuer_id": "issuer:ddog",
+            "cutoff_at": "2026-03-31T23:59:59Z",
+            "tier": "traditional",
+            "valuation_gap": "0.1000",
+            "current_price_to_sales": "2.0000",
+            "target_price_to_sales": None,
+            "current_price_to_gross_profit": "7.9545",
+            "target_price_to_gross_profit": "8.7500",
+            "outcome": "selected",
+            "exclusion_reason": None,
+            "rank": 1,
+            "peg": None,
+            "peg_rank": None,
+            "peg_reason_codes": ["missing_net_income"],
+            "confidence": "0.6500",
+            "reason_codes": [],
+        },
+        gppe_row={
+            "gppe": "307127.77",
+            "operating_branch": "non_financial",
+            "capital_adjusted_gross_profit": "2487734928.00",
+            "confidence": "0.6500",
+            "availability_status": "available",
+            "reason_codes": [],
+        },
+        themes=[],
+    )
+    assert profile["confidence"] == "0.6500"
+    assert profile["reason_codes"] == []
+    assert profile["strategy_decision"]["confidence"] == "0.6500"
+    assert profile["strategy_decision"]["reason_codes"] == []
+    assert profile["gppe_detail"]["confidence"] == "0.6500"
+
+
+def test_etf_profile_names_the_basis_of_the_weighted_gap(theme_database: Any) -> None:
+    """#1235 audit: the fund-level gap averages core gaps of one run, so it divides that run's
+    multiple. The profile carries the producer's recorded basis next to the gap."""
+    from llm_service.mcp_server import PostgresEtfProfileReader
+
+    theme_database.execute(
+        """
+        insert into mart.fund_virtual_company (run_id, fund_id, fund_name, report_period, transaction_time,
+            cutoff, definition_version, definition_sha256, weighted_valuation_gap, valuation_basis,
+            total_weight_pct, resolved_weight_pct, valued_weight_pct, lines, valued_lines, confidence,
+            reason_codes, availability_status, source_evidence_status, factor_validation_status)
+        values ('capture-run:mcp-1235', 'etf:series:ZZPGP1235', 'PGP Test Fund', '2026-06-30', %s, %s, 'v0',
+            %s, '0.4200', 'price_to_gross_profit', '99', '99', '90', 2, 2, '0.9', '{}', 'available',
+            'verified', 'not_evaluated')
+        """,
+        (_NEW_CUTOFF, _NEW_CUTOFF, "c" * 64),
+    )
+
+    profile = PostgresEtfProfileReader(database_url="postgresql://unused").get_etf_profile(
+        fund_id="etf:series:ZZPGP1235"
+    )
+
+    assert profile["weighted_valuation_gap"] == "0.4200"
+    assert profile["weighted_valuation_gap_basis"] == "price_to_gross_profit"
+
+
 @pytest.mark.anyio
 async def test_every_tool_call_writes_one_content_free_audit_line(caplog: pytest.LogCaptureFixture) -> None:
-    server = build_mcp_server(repository=FixtureStrategyRunRepository()); secret_argument = "argument-value-that-must-not-be-logged"
+    """#1437: one audit line per call names the tool, the principal and the outcome. It
+    carries no argument value, so a request's content never reaches the log."""
+    server = build_mcp_server(repository=FixtureStrategyRunRepository())
+    secret_argument = "argument-value-that-must-not-be-logged"
     with caplog.at_level("INFO", logger="llm_service.mcp_server"):
         await server.call_tool("strategy_run", {"request": {"strategy_id": secret_argument}})
-        with pytest.raises(Exception): await server.call_tool("strategy_run", {"request": {"unknown_field": secret_argument}})
-    audit = [record.getMessage() for record in caplog.records if record.getMessage().startswith("mcp tool call:")]; assert len(audit) == 2, audit; assert "tool=strategy_run" in audit[0] and "principal=principal:owner" in audit[0]; assert "outcome=ok" in audit[0] and "outcome=error" in audit[1]; assert secret_argument not in caplog.text
+        with pytest.raises(Exception):  # noqa: B017 - any validation error; the outcome is what is audited
+            await server.call_tool("strategy_run", {"request": {"unknown_field": secret_argument}})
+
+    audit = [record.getMessage() for record in caplog.records if record.getMessage().startswith("mcp tool call:")]
+    assert len(audit) == 2, audit
+    assert "tool=strategy_run" in audit[0] and "principal=principal:owner" in audit[0]
+    assert "outcome=ok" in audit[0] and "outcome=error" in audit[1]
+    assert secret_argument not in caplog.text

@@ -1,19 +1,75 @@
-# ruff: noqa: I001, E401, E402, E701, E702, E731, F401, F811
-# fmt: off
-import time; from data_engine.datahub.fetch_key import FetchKey; from data_engine.sources import gateway; MAPPING_URL = "https://api.openfigi.com/v3/mapping"
-def map_isins(client, isins: list[str], *, api_key: str = "", on_batch=None, sleep=time.sleep) -> dict[str, list[dict]]:
-    headers = {"Content-Type": "application/json"}; chunk_size = 10
-    if api_key: headers["X-OPENFIGI-APIKEY"] = api_key; chunk_size = 100
+"""OpenFIGI mapping client: ISIN -> listing records (venue + local ticker).
+
+This is the ISIN/CUSIP resolution step AGENTS.md's N-PORT gotcha calls for —
+N-PORT identifies holdings by CUSIP/ISIN (foreign CUSIPs are placeholder zeros),
+and moomoo/SEC need market-local codes.
+
+Rate limits (docs, and observed 2026-07-11): without an API key 25 mapping
+requests/min with 10 jobs each; with a free key 250 requests per 60 s with 100 jobs each.
+429s are expected at the keyless tier — handled by sleep-and-retry, so a full
+~1,100-ISIN universe takes ~5 minutes keyless and seconds with a key."""
+
+import time
+
+from data_engine.datahub.fetch_key import FetchKey
+from data_engine.sources import gateway
+
+MAPPING_URL = "https://api.openfigi.com/v3/mapping"
+
+
+def map_isins(
+    client,
+    isins: list[str],
+    *,
+    api_key: str = "",
+    on_batch=None,
+    sleep=time.sleep,
+) -> dict[str, list[dict]]:
+    """{isin: [listing records]} for every input ISIN (missing/unmapped -> []).
+    on_batch(batch_isins, response_json) fires per successful request so the
+    caller can persist the verbatim response to raw.fetches."""
+    headers = {"Content-Type": "application/json"}
+    chunk_size = 10
+    if api_key:
+        headers["X-OPENFIGI-APIKEY"] = api_key
+        chunk_size = 100
+
     out: dict[str, list[dict]] = {}
     for start in range(0, len(isins), chunk_size):
-        batch = isins[start : start + chunk_size]; jobs = [{"idType": "ID_ISIN", "idValue": isin} for isin in batch]; identity = FetchKey.for_batch("openfigi", "mapping", batch, gateway.utc_day())
+        batch = isins[start : start + chunk_size]
+        jobs = [{"idType": "ID_ISIN", "idValue": isin} for isin in batch]
+        identity = FetchKey.for_batch("openfigi", "mapping", batch, gateway.utc_day())
+        # Keyless-tier 429s are routine (limit resets per minute); a flat wait
+        # beats parsing Retry-After (not always present). Bounded so a service
+        # incident / IP ban fails loudly instead of hanging the bootstrap
+        # forever: 30 attempts x 10s = 5 minutes of sustained 429 per batch.
         for attempt in range(30):
-            resp = gateway.http_post( client, "openfigi", "mapping", MAPPING_URL, identity=identity, caller="openfigi.map_isins", json=jobs, headers=headers, )
-            if resp.status_code != 429: resp.raise_for_status(); break
-            if attempt and attempt % 6 == 0: print(f"  openfigi: still rate-limited after {attempt * 10}s (batch at {start}/{len(isins)})")
+            # Every attempt is a ledger row (#729): a 429 is a failed request that still
+            # counted against the vendor window, so it is recorded as one.
+            resp = gateway.http_post(
+                client,
+                "openfigi",
+                "mapping",
+                MAPPING_URL,
+                identity=identity,
+                caller="openfigi.map_isins",
+                json=jobs,
+                headers=headers,
+            )
+            if resp.status_code != 429:
+                resp.raise_for_status()
+                break
+            if attempt and attempt % 6 == 0:
+                print(f"  openfigi: still rate-limited after {attempt * 10}s (batch at {start}/{len(isins)})")
             sleep(10.0)
-        else: raise RuntimeError( f"OpenFIGI kept returning 429 for 5 minutes (batch at {start}/{len(isins)}) — " "not a normal keyless-tier reset; check service status or set OPENFIGI_API_KEY" )
+        else:
+            raise RuntimeError(
+                f"OpenFIGI kept returning 429 for 5 minutes (batch at {start}/{len(isins)}) — "
+                "not a normal keyless-tier reset; check service status or set OPENFIGI_API_KEY"
+            )
         results = resp.json()
-        if on_batch is not None: on_batch(batch, results)
-        for isin, job in zip(batch, results): out[isin] = job.get("data", [])
+        if on_batch is not None:
+            on_batch(batch, results)
+        for isin, job in zip(batch, results):
+            out[isin] = job.get("data", [])
     return out

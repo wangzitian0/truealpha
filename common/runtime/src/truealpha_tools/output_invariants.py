@@ -1,12 +1,96 @@
-# ruff: noqa: I001, E401, E402, E701, E702, E731, F401, F811
-# fmt: off
-from __future__ import annotations; import argparse; import json; import sys; from collections.abc import Callable, Sequence; from dataclasses import dataclass; from datetime import date; from pathlib import Path; from typing import Any; import psycopg; from factors.panel import PANEL_METRICS, PUBLISHED_COLUMNS, IssuerClass, SignPolicy, ratio_operands_of; from truealpha_contracts import reconciliation_policies; from truealpha_contracts.environment_contract import EnvironmentContract, load_environment_contract; from truealpha_contracts.strategy import load_live_strategy_definition; from truealpha_contracts.universes import id_prefix_like, universe_with_role; EXEMPTIONS_PATH = Path(__file__).resolve().parents[4] / "tools" / "output_invariant_exemptions.json"; SERVED_UNIVERSE_LIKE = id_prefix_like(universe_with_role("strategy")); _MAX_INPUT_AGE_DAYS = load_live_strategy_definition().eligibility.maximum_input_age_days
+"""Ask whether a published number is possible at all.
+
+#581. Every gate in this repository compares the system against something the
+same process authored — schemas, contracts, twin canons, route freezes. None
+asks whether a value can be true. Production was publishing
+`listing:xnys:jpm` GPPE = -528,985.79, #528 carried that exact number in its
+title from 2026-07-30, and nothing was red about it.
+
+What a negative published number MEANS is not this file's to decide: the
+metric forest (`factors.forest`, #528) declares a sign policy per node and per
+issuer class, and `node-sign-policy` asserts exactly that (init.md rule 17). A
+value the node forbids fails; a negative value the node declares
+`sign-is-signal` passes and is printed by name (`SIGNAL`) on every run, so a
+declared low signal is never a silent pass.
+
+These need no vendor call and no external oracle: pure SQL over materialized
+`mart`. That is the point — an invariant that depends on the network becomes a
+check people mute.
+
+A new tool rather than a function in an existing one because it asks a different
+question of a different input at a different time: `delivery_report.py` and
+`walk_evidence.py` read an HTTP endpoint and the GitHub API, once per environment,
+about the release; this reads SQL, about the numbers, and runs in two places (ci-web
+against the seeded fixture and the daily gate against production). It also owns
+a file the others have no use for — the exemptions.
+
+Exemptions expire, and that is the load-bearing part. Invariant suites die by
+accumulating `# TODO: exclude JPM`; an exemption here carries an issue and a
+date, and an expired one FAILS. The check cannot be quietly turned off, only
+loudly deferred.
+
+Usage:
+  python tools/output_invariants.py --database-url postgresql://…
+  python tools/output_invariants.py --database-url … --require-coverage
+
+`--require-coverage` fails when an invariant examined zero rows. A guard that
+reports "ok" over an empty set is worse than no guard, and the CI fixture cannot
+populate every plane — so coverage is required where the data is real and merely
+reported where it is not.
+
+Exit codes:
+  0 - every invariant holds (or is exempted and unexpired)
+  1 - an invariant is violated, an exemption has expired, or coverage is missing
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
+from datetime import date
+from pathlib import Path
+from typing import Any
+
+import psycopg
+from factors.panel import PANEL_METRICS, PUBLISHED_COLUMNS, IssuerClass, SignPolicy, ratio_operands_of
+from truealpha_contracts import reconciliation_policies
+from truealpha_contracts.environment_contract import EnvironmentContract, load_environment_contract
+from truealpha_contracts.strategy import load_live_strategy_definition
+from truealpha_contracts.universes import id_prefix_like, universe_with_role
+
+EXEMPTIONS_PATH = Path(__file__).resolve().parents[4] / "tools" / "output_invariant_exemptions.json"
+
+# Resolve runs the way the CONSUMERS do, not a third way. Review caught all
+# three invariants inventing their own: `order by created_at desc` picked a GPPE
+# run nothing serves (production's pointer targets capture-run:8c49eec8… while
+# the newest row belongs to capture-run:49a1f57e…), and `max()` over
+# current_pointer_head mixed a table that is keyed per (environment,
+# universe_id, universe_version, factor_id). Both were correct only by accident
+# of today's data — one pointer row, one strategy key — and a second factor or
+# strategy would have made them compare across planes silently. That is #462's
+# defect class, which this file exists to guard against.
+#
+# Mirrors apps/app-web/src/server/mart/topt-gppe-repository.ts's GOVERNED_HEAD_SQL.
+# test_output_invariants.py asserts the two stay in step.
+# The universe belongs to the governed key. Without it these invariants measured whichever
+# pipeline advanced last -- after the canary universe landed, that is a 24-cell run, so
+# every invariant below silently changed population.
+SERVED_UNIVERSE_LIKE = id_prefix_like(universe_with_role("strategy"))
+#: The oldest period that a served revenue may end, in days before the cutoff of its run (#1457, #1519):
+#: read from the live strategy definition's `eligibility.maximum_input_age_days`.
+_MAX_INPUT_AGE_DAYS = load_live_strategy_definition().eligibility.maximum_input_age_days
 GOVERNED_HEAD = f"""
     select run_id from mart.served_head
     where factor_id = 'gross_profit_per_employee'
       and universe_id like '{SERVED_UNIVERSE_LIKE}'
     order by advanced_at desc limit 1
 """
+# Mirrors strategy-run-repository.ts (#575): the run the governed capture head resolves
+# to first, recency after — the same ORDER BY text, which test_output_invariants compares
+# to the consumer's. Wrapped so the subquery stays single-column.
 DASHBOARD_STRATEGY = "large_model_value_v0"
 LATEST_STRATEGY_RUN = f"""
     select strategy_run_id from (
@@ -18,47 +102,160 @@ LATEST_STRATEGY_RUN = f"""
         order by is_governed desc, r.executed_at desc, r.created_at desc, r.strategy_run_id desc limit 1
     ) served
 """
+
+
 def _expected_inputs() -> tuple[tuple[str, str], ...]:
-    from factors.composite import strategy_evaluator; from factors.panel import definition_pins; from truealpha_contracts.strategy import load_live_strategy_definition; definition = load_live_strategy_definition(); peg_keys = set(strategy_evaluator._input_keys("peg")); return tuple( sorted( (key, issuer_class.value) for issuer_class in (IssuerClass(name) for name in definition_pins(definition)) for key in strategy_evaluator.required_input_keys(definition, issuer_class) | peg_keys ) )
+    """(input key, issuer class) for every key the strategy consumes for a class: the keys of the tree that the
+    live definition pins for the class (`required_input_keys`, #1518), plus PEG's ranking inputs. Read from the
+    code that consumes them. Before 2026-09-07 this was a literal list that still named `earnings_cagr_3y`, which
+    parser v8 replaced with the per-period net-income series: the invariant failed on production for a key nothing
+    consumed, i.e. the check drifted, not the data (#725 item H). The class says which issuers need the key: a
+    bank needs its four banking leaves, and an environment that holds no bank needs none (a preview of a few
+    tickers). The tool needs `factors` and `truealpha_contracts` only, so it runs where `data_engine` is absent."""
+    from factors.composite import strategy_evaluator
+    from factors.panel import definition_pins
+    from truealpha_contracts.strategy import load_live_strategy_definition
+
+    definition = load_live_strategy_definition()
+    peg_keys = set(strategy_evaluator._input_keys("peg"))
+    return tuple(
+        sorted(
+            (key, issuer_class.value)
+            for issuer_class in (IssuerClass(name) for name in definition_pins(definition))
+            for key in strategy_evaluator.required_input_keys(definition, issuer_class) | peg_keys
+        )
+    )
+
+
 def _primary_market_price_parser() -> str:
+    """The declared primary origin's parser family for market-price (the registration's
+    first origin); a literal only where the registry is not importable."""
     try:
-        from data_engine.datahub.production_topt.source_registrations import registration_for; return registration_for("market-price").origins[0].parser_versions[-1].split(":")[0]
+        from data_engine.datahub.production_topt.source_registrations import registration_for
+
+        return registration_for("market-price").origins[0].parser_versions[-1].split(":")[0]
     except ImportError:
         return "production-topt-live-parser"
+
+
 def _market_price_parser_ranks() -> tuple[tuple[str, int], ...]:
+    """(parser family, fusion rank) for every registered market-price origin vintage, ranked
+    by the price policy's `source_priority` (#862: a cell the primary could not serve is
+    served by the next origin in that order). The parser families come from the registry.
+    Where the registry is not importable, no family has a rank: the failover invariant then
+    reports every substituted origin as unranked."""
     try:
         from data_engine.datahub.production_topt.source_registrations import SOURCE_BY_PARSER, registration_for
     except ImportError:
         return ()
-    market = {origin.origin_id for origin in registration_for("market-price").origins}; priority = reconciliation_policies.RECONCILIATION_POLICY.source_priority; ranks: dict[str, int] = {}
+    market = {origin.origin_id for origin in registration_for("market-price").origins}
+    priority = reconciliation_policies.RECONCILIATION_POLICY.source_priority
+    ranks: dict[str, int] = {}
     for vintage, (source_id, origin_id, _value_key) in SOURCE_BY_PARSER.items():
         if origin_id in market and source_id in priority:
-            family, rank = vintage.split(":")[0], priority.index(source_id); ranks[family] = min(rank, ranks.get(family, rank))
+            family, rank = vintage.split(":")[0], priority.index(source_id)
+            ranks[family] = min(rank, ranks.get(family, rank))
     return tuple(sorted(ranks.items(), key=lambda item: (item[1], item[0])))
-EXPECTED_INPUTS = _expected_inputs(); PRIMARY_MARKET_PRICE_PARSER = _primary_market_price_parser(); MARKET_PRICE_PARSER_RANKS = _market_price_parser_ranks()
+
+
+EXPECTED_INPUTS = _expected_inputs()
+PRIMARY_MARKET_PRICE_PARSER = _primary_market_price_parser()
+MARKET_PRICE_PARSER_RANKS = _market_price_parser_ranks()
+
+
 @dataclass(frozen=True)
 class Invariant:
-    id: str; claim: str; violations: str; population: str; signals: str | None = None
+    id: str
+    claim: str
+    #: Rows returned ARE the violations; the query must select enough to act on.
+    violations: str
+    #: How many rows the invariant looked at, so a vacuous pass is visible.
+    population: str
+    #: Rows that hold but must be seen: printed as `SIGNAL`, never a failure.
+    signals: str | None = None
+
+
+#: The published table whose columns the sign policies judge, scoped to the governed head.
 SIGN_POLICY_TABLE = "mart.topt_gppe_results"
+
+
 def _classes(values: set[IssuerClass]) -> str:
     return ", ".join(f"'{value}'" for value in sorted(member.value for member in values))
+
+
 def _sign_policy_queries(table: str = SIGN_POLICY_TABLE) -> tuple[str, str | None]:
-    columns = PUBLISHED_COLUMNS[table]; judged: dict[str, str] = {}
+    """(violations, signals) for the published columns of `table`, generated from the forest.
+
+    Violations: a value for an issuer class the column's node declares no policy for; a
+    negative value where the node is `must-be-non-negative` for the row's class; two columns
+    carrying one node with different values; and a sign a registered ratio cannot produce
+    (output and numerator both published, denominator non-negative by policy, so the two
+    signs agree). Signals: a negative value where the node declares `sign-is-signal`."""
+    columns = PUBLISHED_COLUMNS[table]
+    #: node key -> the column judged for it; any further column carrying the node must equal it.
+    judged: dict[str, str] = {}
     for column, node_key in sorted(columns.items()):
         judged.setdefault(node_key, column)
-    violations: list[str] = []; signals: list[str] = []
+    violations: list[str] = []
+    signals: list[str] = []
+
     def select(column: str, node_key: str, predicate: str, why: str, *, published: bool = True) -> str:
-        node = PANEL_METRICS[node_key]; scope = f" and {column} is not null" if published else ""; return ( f"select listing_id, operating_branch, '{column}' as published_column, " f"'{node.key}:{node.node_id}' as node, coalesce({column}::text, 'null') as value, '{why}' as policy " f"from {table} where run_id = ({GOVERNED_HEAD}){scope} and ({predicate})" )
+        """One arm of the union. `published` scopes it to rows where `column` carries a value;
+        an arm whose predicate is itself about NULLs passes False."""
+        node = PANEL_METRICS[node_key]
+        scope = f" and {column} is not null" if published else ""
+        return (
+            f"select listing_id, operating_branch, '{column}' as published_column, "
+            f"'{node.key}:{node.node_id}' as node, coalesce({column}::text, 'null') as value, '{why}' as policy "
+            f"from {table} where run_id = ({GOVERNED_HEAD}){scope} and ({predicate})"
+        )
+
     for column, node_key in sorted(columns.items()):
         first = judged[node_key]
         if column != first:
-            violations.append( select( column, node_key, f"{column} is distinct from {first}", f"same node as {first}, other value", published=False, ) ); continue
-        node = PANEL_METRICS[node_key]; by_policy = { policy: {c for c, declared in node.sign_policy.items() if declared is policy} for policy in SignPolicy }; violations.append( select( column, node_key, f"operating_branch not in ({_classes(set(node.sign_policy))})", "no policy for this class", ) ); forbidden = by_policy[SignPolicy.MUST_BE_NON_NEGATIVE]
+            # A NULL on one side and a value on the other is a disagreement too.
+            violations.append(
+                select(
+                    column,
+                    node_key,
+                    f"{column} is distinct from {first}",
+                    f"same node as {first}, other value",
+                    published=False,
+                )
+            )
+            continue
+        node = PANEL_METRICS[node_key]
+        by_policy = {
+            policy: {c for c, declared in node.sign_policy.items() if declared is policy} for policy in SignPolicy
+        }
+        violations.append(
+            select(
+                column,
+                node_key,
+                f"operating_branch not in ({_classes(set(node.sign_policy))})",
+                "no policy for this class",
+            )
+        )
+        forbidden = by_policy[SignPolicy.MUST_BE_NON_NEGATIVE]
         if forbidden:
-            violations.append( select( column, node_key, f"{column} < 0 and operating_branch in ({_classes(forbidden)})", SignPolicy.MUST_BE_NON_NEGATIVE.value, ) )
+            violations.append(
+                select(
+                    column,
+                    node_key,
+                    f"{column} < 0 and operating_branch in ({_classes(forbidden)})",
+                    SignPolicy.MUST_BE_NON_NEGATIVE.value,
+                )
+            )
         signalled = by_policy[SignPolicy.SIGN_IS_SIGNAL]
         if signalled:
-            signals.append( select( column, node_key, f"{column} < 0 and operating_branch in ({_classes(signalled)})", SignPolicy.SIGN_IS_SIGNAL.value, ) )
+            signals.append(
+                select(
+                    column,
+                    node_key,
+                    f"{column} < 0 and operating_branch in ({_classes(signalled)})",
+                    SignPolicy.SIGN_IS_SIGNAL.value,
+                )
+            )
     for spec in PANEL_METRICS.values():
         if spec.key not in judged:
             continue
@@ -68,16 +265,37 @@ def _sign_policy_queries(table: str = SIGN_POLICY_TABLE) -> tuple[str, str | Non
         numerator, denominator = pair
         if numerator not in judged or denominator not in PANEL_METRICS:
             continue
-        classes = { issuer_class for issuer_class in spec.applicability if PANEL_METRICS[denominator].sign_policy.get(issuer_class) is SignPolicy.MUST_BE_NON_NEGATIVE }
+        classes = {
+            issuer_class
+            for issuer_class in spec.applicability
+            if PANEL_METRICS[denominator].sign_policy.get(issuer_class) is SignPolicy.MUST_BE_NON_NEGATIVE
+        }
         if classes:
-            output_column, numerator_column = judged[spec.key], judged[numerator]; violations.append( select( output_column, spec.key, f"operating_branch in ({_classes(classes)}) and ({numerator_column} is null " f"or sign({output_column}) <> sign({numerator_column}))", f"sign of {numerator_column} over non-negative {denominator}", ) )
+            output_column, numerator_column = judged[spec.key], judged[numerator]
+            violations.append(
+                select(
+                    output_column,
+                    spec.key,
+                    # A published output whose numerator is absent is as wrong as a flipped
+                    # sign: `sign(NULL) <> …` is NULL, so the absence is named explicitly.
+                    f"operating_branch in ({_classes(classes)}) and ({numerator_column} is null "
+                    f"or sign({output_column}) <> sign({numerator_column}))",
+                    f"sign of {numerator_column} over non-negative {denominator}",
+                )
+            )
     return "\n union all\n".join(violations), ("\n union all\n".join(signals) if signals else None)
+
+
 _SIGN_VIOLATIONS, _SIGN_SIGNALS = _sign_policy_queries()
+
+
 _TEMPLATES: tuple[Invariant, ...] = (
     Invariant(
         id="node-sign-policy",
         claim=(
-            "a published value respects the sign policy its metric-forest node declares for the issuer's class — the definition says what a negative number means, and this asserts exactly that (init.md rule 17, #528)"
+            "a published value respects the sign policy its metric-forest node declares for the "
+            "issuer's class — the definition says what a negative number means, and this asserts "
+            "exactly that (init.md rule 17, #528)"
         ),
         violations=_SIGN_VIOLATIONS,
         population=f"""
@@ -89,7 +307,8 @@ _TEMPLATES: tuple[Invariant, ...] = (
     Invariant(
         id="available-means-a-value",
         claim=(
-            "a cell marked `available` carries a value and a non-zero confidence — 'available with nothing in it' is a contradiction, not a state"
+            "a cell marked `available` carries a value and a non-zero confidence — "
+            "'available with nothing in it' is a contradiction, not a state"
         ),
         violations=f"""
             select listing_id, availability, coalesce(gppe::text, 'null') as gppe, confidence::text
@@ -124,8 +343,26 @@ _TEMPLATES: tuple[Invariant, ...] = (
     Invariant(
         id="every-consumed-input-is-populated",
         claim=(
-            'an input key the strategy consumes must be written for at least one issuer at the latest cutoff — a key that is declared, permitted by the 0039 CHECK and written for NOBODY is a wiring gap, and it publishes as a missing factor rather than an error (#284)'
+            "an input key the strategy consumes must be written for at least one issuer at "
+            "the latest cutoff — a key that is declared, permitted by the 0039 CHECK and "
+            "written for NOBODY is a wiring gap, and it publishes as a missing factor rather "
+            "than an error (#284)"
         ),
+        # The check that would have caught #284's real defect. `net_income` and
+        # `earnings_cagr_3y` were absent from BOTH environments for as long as they
+        # existed, because the only deployed caller never asked the parser for them.
+        # Every gate stayed green: the keys were declared, the CHECK allowed them, the
+        # payload carried them as nulls, `mart...peg` was simply NULL for all 20 issuers
+        # and the runs reported SUCCESS. Nothing anywhere asked "is this key populated".
+        #
+        # Deliberately not "populated for every issuer": correct refusals are normal and
+        # common (declining earnings, a loss year inside the window, a refused share
+        # count). Zero issuers across a whole cutoff is not a data gap, it is nobody
+        # calling the code.
+        #
+        # The expected list restates migration 0039's CHECK on purpose. A single source
+        # would only prove the list agrees with itself; the value here is a second,
+        # independent statement of what the deployed run is supposed to produce.
         violations="""
             with expected(input_key, issuer_class) as (values __EXPECTED_VALUES__
             ), latest as (
@@ -148,7 +385,10 @@ _TEMPLATES: tuple[Invariant, ...] = (
                   and i.cutoff_at = (select cutoff_at from latest)
               )
         """,
-        population='\n            select count(distinct input_key) from staging.strategy_backtest_inputs\n            where cutoff_at = (select max(cutoff_at) from staging.strategy_backtest_inputs)\n        ',
+        population="""
+            select count(distinct input_key) from staging.strategy_backtest_inputs
+            where cutoff_at = (select max(cutoff_at) from staging.strategy_backtest_inputs)
+        """,
     ),
     Invariant(
         id="fusion-selects-by-priority-not-recency",
@@ -156,6 +396,28 @@ _TEMPLATES: tuple[Invariant, ...] = (
             "where two sources assert the same obligation, the snapshot selected the "
             "highest-priority source -- never whichever published later (init.md rule 12)"
         ),
+        # Population is deliberately the CONTESTED groups only, so this reports EMPTY for
+        # as long as every obligation resolves from a single source. That is the honest
+        # state of fusion today -- unexercised, not proven -- and `--require-coverage`
+        # turns the same query into a failure the moment real data is expected to contest.
+        # An invariant that examined every group would pass forever while proving nothing.
+        # Contested = one obligation carrying observations from more than one parser
+        # family, i.e. two sources asserting the same cell. EVERY contested group is a
+        # violation today, because the selection window ranks by recency alone and has no
+        # source-priority term to break the tie with (deferred on #530). Population is the
+        # contested groups themselves, so this reports EMPTY -- "examined 0 rows, so it
+        # proved nothing" -- for as long as fusion stays unexercised. That is the honest
+        # state; an invariant over ALL groups would pass forever while proving nothing.
+        # What the snapshot SELECTED, not merely what was contested: before 2026-09-07 this
+        # query listed every obligation with two parsers as a violation, which is every
+        # market-price cell once the second origin landed (3,102 on production) — while the
+        # snapshots had selected the primary parser for all of them. The population is the
+        # selected observations on contested obligations; a violation is one whose parser is
+        # not the declared primary for its semantic (the registration's first origin) —
+        # unless the primary could not serve the cell (#862): then the next origin in the
+        # fusion policy's order serves it, and that selection holds only when the payload
+        # declares it (`served_by_failover`), the origin is one the policy ranks, and no
+        # higher-ranked origin asserted the same session on the same obligation.
         violations="""
             with ranks(family, rank) as (
                 values __MARKET_PRICE_PARSER_RANKS__
@@ -234,10 +496,85 @@ _TEMPLATES: tuple[Invariant, ...] = (
     Invariant(
         id="extraction-citations-resolve",
         claim=(
-            'every issuer headcount fact must carry an 18-digit SEC accession and a filing knowable_at, and a 10k-extraction citation must resolve to captured bytes in raw.fetches (#1295, #735, #70)'
+            "every issuer headcount fact must carry an 18-digit SEC accession and a filing knowable_at, "
+            "and a 10k-extraction citation must resolve to captured bytes in raw.fetches (#1295, #735, #70)"
         ),
-        violations="\n            with eligible as (\n                select distinct g.cik\n                from staging.issuer_headcount_facts g\n                where g.source in ('10k-extraction', 'manual-review', 'manual-reviewed', 'sec-10k-regex-v1')\n                  and (\n                      substring(g.evidence_ref from 'accession=([0-9]{18}|[0-9]{10}-[0-9]{2}-[0-9]{6})') is not null\n                      or (\n                          g.source = '10k-extraction'\n                          and substring(g.evidence_ref from 'accession=([0-9]{4}-[0-9]{2}-[0-9]{6})') is not null\n                      )\n                  )\n                  and substring(g.evidence_ref from 'filed=([0-9]{4}-[0-9]{2}-[0-9]{2})') is not null\n                  and g.knowable_at <> '2026-01-01T00:00:00Z'::timestamptz\n                  and (g.knowable_at at time zone 'UTC')::date\n                      = substring(g.evidence_ref from 'filed=([0-9]{4}-[0-9]{2}-[0-9]{2})')::date\n                  and (\n                      g.source <> '10k-extraction'\n                      or (\n                          substring(g.evidence_ref from 'raw=raw\\.fetches:([0-9]+)') is not null\n                          and exists (\n                              select 1 from raw.fetches r\n                              where r.id = substring(g.evidence_ref from 'raw=raw\\.fetches:([0-9]+)')::bigint\n                          )\n                      )\n                  )\n            )\n            select\n                f.id::text,\n                f.cik::text,\n                f.source,\n                coalesce(\n                    substring(f.evidence_ref from 'accession=([0-9]{18}|[0-9]{10}-[0-9]{2}-[0-9]{6}|[0-9]{4}-[0-9]{2}-[0-9]{6})'),\n                    'missing-accession'\n                ) as cited_accession,\n                coalesce(\n                    substring(f.evidence_ref from 'raw=raw\\.fetches:([0-9]+)'),\n                    'none'\n                ) as cited_raw_id\n            from staging.issuer_headcount_facts f\n            where (\n                f.source = 'curated-10k-2025'\n                or (\n                    substring(f.evidence_ref from 'accession=([0-9]{18}|[0-9]{10}-[0-9]{2}-[0-9]{6})') is null\n                    and not (\n                        f.source = '10k-extraction'\n                        and substring(f.evidence_ref from 'accession=([0-9]{4}-[0-9]{2}-[0-9]{6})') is not null\n                    )\n                )\n                or substring(f.evidence_ref from 'filed=([0-9]{4}-[0-9]{2}-[0-9]{2})') is null\n                or f.knowable_at = '2026-01-01T00:00:00Z'::timestamptz\n                or (f.knowable_at at time zone 'UTC')::date\n                   <> substring(f.evidence_ref from 'filed=([0-9]{4}-[0-9]{2}-[0-9]{2})')::date\n                or (\n                    f.source = '10k-extraction'\n                    and (\n                        substring(f.evidence_ref from 'raw=raw\\.fetches:([0-9]+)') is null\n                        or not exists (\n                            select 1 from raw.fetches r\n                            where r.id = substring(f.evidence_ref from 'raw=raw\\.fetches:([0-9]+)')::bigint\n                        )\n                    )\n                )\n            )\n            and not (\n                (\n                    f.source = 'curated-10k-2025'\n                    or f.knowable_at = '2026-01-01T00:00:00Z'::timestamptz\n                    or f.evidence_ref like '%#70 supersedes%'\n                )\n                and exists (select 1 from eligible e where e.cik = f.cik)\n            )\n        ",
-        population='\n            select count(*) from staging.issuer_headcount_facts\n        ',
+        violations="""
+            with eligible as (
+                select distinct g.cik
+                from staging.issuer_headcount_facts g
+                where g.source in ('10k-extraction', 'manual-review', 'manual-reviewed', 'sec-10k-regex-v1')
+                  and (
+                      substring(g.evidence_ref from 'accession=([0-9]{18}|[0-9]{10}-[0-9]{2}-[0-9]{6})') is not null
+                      or (
+                          g.source = '10k-extraction'
+                          and substring(g.evidence_ref from 'accession=([0-9]{4}-[0-9]{2}-[0-9]{6})') is not null
+                      )
+                  )
+                  and substring(g.evidence_ref from 'filed=([0-9]{4}-[0-9]{2}-[0-9]{2})') is not null
+                  and g.knowable_at <> '2026-01-01T00:00:00Z'::timestamptz
+                  and (g.knowable_at at time zone 'UTC')::date
+                      = substring(g.evidence_ref from 'filed=([0-9]{4}-[0-9]{2}-[0-9]{2})')::date
+                  and (
+                      g.source <> '10k-extraction'
+                      or (
+                          substring(g.evidence_ref from 'raw=raw\\.fetches:([0-9]+)') is not null
+                          and exists (
+                              select 1 from raw.fetches r
+                              where r.id = substring(g.evidence_ref from 'raw=raw\\.fetches:([0-9]+)')::bigint
+                          )
+                      )
+                  )
+            )
+            select
+                f.id::text,
+                f.cik::text,
+                f.source,
+                coalesce(
+                    substring(f.evidence_ref from 'accession=([0-9]{18}|[0-9]{10}-[0-9]{2}-[0-9]{6}|[0-9]{4}-[0-9]{2}-[0-9]{6})'),
+                    'missing-accession'
+                ) as cited_accession,
+                coalesce(
+                    substring(f.evidence_ref from 'raw=raw\\.fetches:([0-9]+)'),
+                    'none'
+                ) as cited_raw_id
+            from staging.issuer_headcount_facts f
+            where (
+                f.source = 'curated-10k-2025'
+                or (
+                    substring(f.evidence_ref from 'accession=([0-9]{18}|[0-9]{10}-[0-9]{2}-[0-9]{6})') is null
+                    and not (
+                        f.source = '10k-extraction'
+                        and substring(f.evidence_ref from 'accession=([0-9]{4}-[0-9]{2}-[0-9]{6})') is not null
+                    )
+                )
+                or substring(f.evidence_ref from 'filed=([0-9]{4}-[0-9]{2}-[0-9]{2})') is null
+                or f.knowable_at = '2026-01-01T00:00:00Z'::timestamptz
+                or (f.knowable_at at time zone 'UTC')::date
+                   <> substring(f.evidence_ref from 'filed=([0-9]{4}-[0-9]{2}-[0-9]{2})')::date
+                or (
+                    f.source = '10k-extraction'
+                    and (
+                        substring(f.evidence_ref from 'raw=raw\\.fetches:([0-9]+)') is null
+                        or not exists (
+                            select 1 from raw.fetches r
+                            where r.id = substring(f.evidence_ref from 'raw=raw\\.fetches:([0-9]+)')::bigint
+                        )
+                    )
+                )
+            )
+            and not (
+                (
+                    f.source = 'curated-10k-2025'
+                    or f.knowable_at = '2026-01-01T00:00:00Z'::timestamptz
+                    or f.evidence_ref like '%#70 supersedes%'
+                )
+                and exists (select 1 from eligible e where e.cik = f.cik)
+            )
+        """,
+        population="""
+            select count(*) from staging.issuer_headcount_facts
+        """,
     ),
     Invariant(
         id="revenue-period-is-recent",
@@ -247,6 +584,19 @@ _TEMPLATES: tuple[Invariant, ...] = (
             "period in at least one of its results — an older period is a stale figure that the head serves as "
             "a current one, and a head with no stated period has an unknown age (#1457, #1519)"
         ),
+        # `mart.topt_core_results.revenue_period_end` is the period of the revenue that the result
+        # divided by. Only an available result is served. A result with a named reason is
+        # unavailable (its `reason_codes` are not empty), so it needs no exemption here.
+        # Two findings, each one row:
+        #   <issuer>                             the period of an available result is older than the limit.
+        #   no-result-states-a-revenue-period    a scheduled head serves available results and no one
+        #                                        of them states a period. Its age is unknown for the
+        #                                        whole head. Another head with dated results cannot
+        #                                        hide it. A snapshot from before #534 stores no period.
+        # A result with no period inside a head that has other dated results is not judged alone.
+        # Production QQQ served CPRT at 2018-07-31 and XEL at 2018-12-31 for a cutoff of 2026-10-19.
+        # The plausibility gate judged the value only. CPRT had a ratio above its limit. XEL did not.
+        # `select distinct` counts a result one time, also when two invocations wrote results for a run.
         violations=f"""
             with heads as (
                 select h.universe_id, coalesce(h.run_id, h.head_run_id) as run_id
@@ -273,85 +623,243 @@ _TEMPLATES: tuple[Invariant, ...] = (
             )
             order by 1, 2, 3
         """,
-        population="\n            select count(distinct (r.run_id, r.issuer_id))\n            from mart.served_head h\n            join mart.topt_core_results r on r.run_id = coalesce(h.run_id, h.head_run_id)\n            where h.factor_id = 'gross_profit_per_employee'\n              and __HEAD_IS_SCHEDULED__\n              and r.availability = 'available'\n              and r.revenue_period_end is not null\n        ",
+        population="""
+            select count(distinct (r.run_id, r.issuer_id))
+            from mart.served_head h
+            join mart.topt_core_results r on r.run_id = coalesce(h.run_id, h.head_run_id)
+            where h.factor_id = 'gross_profit_per_employee'
+              and __HEAD_IS_SCHEDULED__
+              and r.availability = 'available'
+              and r.revenue_period_end is not null
+        """,
     ),
     Invariant(
         id="governed-entities-resolve-display-name",
         claim=(
-            'every issuer in an active governed head resolves to a human-readable company name in mart.entity_display_resolution, never NULL, its raw issuer_id, or its bare ticker (#1517)'
+            "every issuer in an active governed head resolves to a human-readable company name in "
+            "mart.entity_display_resolution, never NULL, its raw issuer_id, or its bare ticker (#1517)"
         ),
-        violations="\n            with heads as (\n                select h.universe_id, coalesce(h.run_id, h.head_run_id) as run_id\n                from mart.served_head h\n                where h.factor_id = 'gross_profit_per_employee'\n                  and __HEAD_IS_SCHEDULED__\n            ),\n            members as (\n                select distinct heads.universe_id, r.run_id, r.issuer_id\n                from heads\n                join mart.topt_core_results r on r.run_id = heads.run_id\n            )\n            select m.universe_id, m.run_id, m.issuer_id, coalesce(d.display_name, 'NULL')\n            from members m\n            left join mart.entity_display_resolution d on d.issuer_id = m.issuer_id\n            where nullif(btrim(d.display_name), '') is null\n               or lower(btrim(d.display_name)) = lower(btrim(m.issuer_id))\n               or lower(btrim(d.display_name)) = lower(btrim(coalesce(d.ticker, '')))\n            order by 1, 2, 3\n        ",
-        population="\n            select count(distinct (r.run_id, r.issuer_id))\n            from mart.served_head h\n            join mart.topt_core_results r on r.run_id = coalesce(h.run_id, h.head_run_id)\n            where h.factor_id = 'gross_profit_per_employee'\n              and __HEAD_IS_SCHEDULED__\n        ",
+        violations="""
+            with heads as (
+                select h.universe_id, coalesce(h.run_id, h.head_run_id) as run_id
+                from mart.served_head h
+                where h.factor_id = 'gross_profit_per_employee'
+                  and __HEAD_IS_SCHEDULED__
+            ),
+            members as (
+                select distinct heads.universe_id, r.run_id, r.issuer_id
+                from heads
+                join mart.topt_core_results r on r.run_id = heads.run_id
+            )
+            select m.universe_id, m.run_id, m.issuer_id, coalesce(d.display_name, 'NULL')
+            from members m
+            left join mart.entity_display_resolution d on d.issuer_id = m.issuer_id
+            where nullif(btrim(d.display_name), '') is null
+               or lower(btrim(d.display_name)) = lower(btrim(m.issuer_id))
+               or lower(btrim(d.display_name)) = lower(btrim(coalesce(d.ticker, '')))
+            order by 1, 2, 3
+        """,
+        population="""
+            select count(distinct (r.run_id, r.issuer_id))
+            from mart.served_head h
+            join mart.topt_core_results r on r.run_id = coalesce(h.run_id, h.head_run_id)
+            where h.factor_id = 'gross_profit_per_employee'
+              and __HEAD_IS_SCHEDULED__
+        """,
     ),
     Invariant(
         id="entity-identity-unique-per-entity",
         claim="mart.entity_identity returns at most one row per entity_id — duplicate rows fan out every downstream join (#1641)",
-        violations='\n            select entity_id::text, count(*)::text as row_count\n            from mart.entity_identity\n            group by entity_id\n            having count(*) > 1\n            order by 1\n        ',
-        population='\n            select count(*) from mart.entity_identity\n        ',
+        violations="""
+            select entity_id::text, count(*)::text as row_count
+            from mart.entity_identity
+            group by entity_id
+            having count(*) > 1
+            order by 1
+        """,
+        population="""
+            select count(*) from mart.entity_identity
+        """,
     ),
     Invariant(
         id="fund-virtual-company-weights-conserved",
         claim="every mart.fund_virtual_company row conserves portfolio weight (0 <= valued_weight_pct <= resolved_weight_pct <= total_weight_pct <= 105) (#1641)",
-        violations='\n            select run_id, fund_id, total_weight_pct::text, resolved_weight_pct::text, valued_weight_pct::text\n            from mart.fund_virtual_company\n            where total_weight_pct < 0\n               or total_weight_pct > 105\n               or resolved_weight_pct < 0\n               or resolved_weight_pct > total_weight_pct\n               or valued_weight_pct < 0\n               or valued_weight_pct > resolved_weight_pct\n            order by 1, 2\n        ',
-        population='\n            select count(*) from mart.fund_virtual_company\n        ',
+        violations="""
+            select run_id, fund_id, total_weight_pct::text, resolved_weight_pct::text, valued_weight_pct::text
+            from mart.fund_virtual_company
+            where total_weight_pct < 0
+               or total_weight_pct > 105
+               or resolved_weight_pct < 0
+               or resolved_weight_pct > total_weight_pct
+               or valued_weight_pct < 0
+               or valued_weight_pct > resolved_weight_pct
+            order by 1, 2
+        """,
+        population="""
+            select count(*) from mart.fund_virtual_company
+        """,
     ),
 )
+
+
 def _rank_values(ranks: tuple[tuple[str, int], ...]) -> str:
+    """The rows of the `ranks` CTE. With no rank, one null row keeps the SQL valid and leaves
+    every parser family unranked."""
     return ", ".join(f"('{family}', {rank})" for family, rank in ranks) or "(null::text, null::integer)"
+
+
 def head_is_scheduled_sql(contract: EnvironmentContract) -> str:
+    """The SQL boolean over `h.universe_id` and `h.environment` that says whether a served head has a schedule (#1346).
+
+    Written from the contract: `contract.unscheduled_id_prefixes()` gives, for each environment, the id prefixes of the
+    universes that it does not tick. An environment that the contract does not name, and an id that starts with
+    no listed prefix, are scheduled. This predicate replaces the SQL function `mart.is_head_scheduled`, which the
+    old query called: that function was a copy of the schedule that a migration had to follow (#1522).
+    """
     unscheduled = []
     for environment, prefixes in contract.unscheduled_id_prefixes().items():
         if not prefixes:
             continue
-        names = ", ".join(f"'{name}'" for name in contract.environment_names(environment)); likes = ", ".join(f"'{prefix}%'" for prefix in prefixes); unscheduled.append( f"(lower(trim(coalesce(h.environment, ''))) in ({names})" f" and coalesce(h.universe_id, '') like any (array[{likes}]))" )
+        names = ", ".join(f"'{name}'" for name in contract.environment_names(environment))
+        likes = ", ".join(f"'{prefix}%'" for prefix in prefixes)
+        unscheduled.append(
+            f"(lower(trim(coalesce(h.environment, ''))) in ({names})"
+            f" and coalesce(h.universe_id, '') like any (array[{likes}]))"
+        )
     return f"not ({' or '.join(unscheduled)})" if unscheduled else "true"
+
+
 def _render(invariant: Invariant, scheduled: str) -> Invariant:
-    values = ", ".join(f"('{key}', '{issuer_class}')" for key, issuer_class in EXPECTED_INPUTS); ranks = _rank_values(MARKET_PRICE_PARSER_RANKS)
+    """The derived facts enter the SQL as literals, once, here — never at query time."""
+    values = ", ".join(f"('{key}', '{issuer_class}')" for key, issuer_class in EXPECTED_INPUTS)
+    ranks = _rank_values(MARKET_PRICE_PARSER_RANKS)
+
     def fill(sql: str) -> str:
-        return ( sql.replace("__EXPECTED_VALUES__", values) .replace("{PRIMARY_MARKET_PRICE_PARSER}", PRIMARY_MARKET_PRICE_PARSER) .replace("__MARKET_PRICE_PARSER_RANKS__", ranks) .replace("__HEAD_IS_SCHEDULED__", scheduled) )
-    return Invariant( id=invariant.id, claim=invariant.claim, violations=fill(invariant.violations), population=fill(invariant.population), signals=None if invariant.signals is None else fill(invariant.signals), )
+        return (
+            sql.replace("__EXPECTED_VALUES__", values)
+            .replace("{PRIMARY_MARKET_PRICE_PARSER}", PRIMARY_MARKET_PRICE_PARSER)
+            .replace("__MARKET_PRICE_PARSER_RANKS__", ranks)
+            .replace("__HEAD_IS_SCHEDULED__", scheduled)
+        )
+
+    return Invariant(
+        id=invariant.id,
+        claim=invariant.claim,
+        violations=fill(invariant.violations),
+        population=fill(invariant.population),
+        signals=None if invariant.signals is None else fill(invariant.signals),
+    )
+
+
 def render_invariants(contract: EnvironmentContract) -> tuple[Invariant, ...]:
-    scheduled = head_is_scheduled_sql(contract); return tuple(_render(template, scheduled) for template in _TEMPLATES)
+    """The shipped invariants, with the schedule predicate written from ``contract``."""
+    scheduled = head_is_scheduled_sql(contract)
+    return tuple(_render(template, scheduled) for template in _TEMPLATES)
+
+
 INVARIANTS: tuple[Invariant, ...] = render_invariants(load_environment_contract())
+
+
 @dataclass(frozen=True)
 class Exemption:
-    invariant: str; issue: str; expires: date; reason: str
+    invariant: str
+    issue: str
+    expires: date
+    reason: str
+
+
 def load_exemptions(path: Path = EXEMPTIONS_PATH) -> dict[str, Exemption]:
     if not path.exists():
         return {}
-    raw = json.loads(path.read_text(encoding="utf-8")); out: dict[str, Exemption] = {}
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    out: dict[str, Exemption] = {}
     for entry in raw["exemptions"]:
-        out[entry["invariant"]] = Exemption( invariant=entry["invariant"], issue=entry["issue"], expires=date.fromisoformat(entry["expires"]), reason=entry["reason"], )
+        out[entry["invariant"]] = Exemption(
+            invariant=entry["invariant"],
+            issue=entry["issue"],
+            expires=date.fromisoformat(entry["expires"]),
+            reason=entry["reason"],
+        )
     return out
+
+
 def _rows(connection: Any, sql: str) -> list[tuple]:
     with connection.cursor() as cursor:
-        cursor.execute(sql); return cursor.fetchall()
-def check( database_url: str, *, require_coverage: bool = False, today: date | None = None, exemptions: dict[str, Exemption] | None = None, invariants: Sequence[Invariant] = INVARIANTS, connect: Callable[[str], Any] = psycopg.connect, ) -> int:
-    today = today or date.today(); exemptions = load_exemptions() if exemptions is None else exemptions; failures: list[str] = []
+        cursor.execute(sql)
+        return cursor.fetchall()
+
+
+def check(
+    database_url: str,
+    *,
+    require_coverage: bool = False,
+    today: date | None = None,
+    exemptions: dict[str, Exemption] | None = None,
+    invariants: Sequence[Invariant] = INVARIANTS,
+    connect: Callable[[str], Any] = psycopg.connect,
+) -> int:
+    today = today or date.today()
+    exemptions = load_exemptions() if exemptions is None else exemptions
+    failures: list[str] = []
+
     with connect(database_url) as connection:
         for invariant in invariants:
-            population = _rows(connection, invariant.population)[0][0]; violations = _rows(connection, invariant.violations); exemption = exemptions.get(invariant.id)
+            population = _rows(connection, invariant.population)[0][0]
+            violations = _rows(connection, invariant.violations)
+            exemption = exemptions.get(invariant.id)
             if invariant.signals is not None:
+                # Printed whatever the verdict: a declared low signal is accepted, never unseen.
                 for row in _rows(connection, invariant.signals):
                     print(f"  SIGNAL   {invariant.id}: " + " ".join(str(field) for field in row))
+
             if violations and exemption and exemption.expires >= today:
-                print( f"  DEFERRED {invariant.id}: {len(violations)} violation(s), exempt until " f"{exemption.expires} under {exemption.issue} — {exemption.reason}" ); continue
+                print(
+                    f"  DEFERRED {invariant.id}: {len(violations)} violation(s), exempt until "
+                    f"{exemption.expires} under {exemption.issue} — {exemption.reason}"
+                )
+                continue
             if violations:
-                detail = "; ".join(" ".join(str(field) for field in row) for row in violations[:5]); expired = f" The exemption under {exemption.issue} expired {exemption.expires}." if exemption else ""; failures.append( f"{invariant.id}: {len(violations)} violation(s) — {invariant.claim}." f"{expired} Offending rows: {detail}" ); continue
+                detail = "; ".join(" ".join(str(field) for field in row) for row in violations[:5])
+                expired = f" The exemption under {exemption.issue} expired {exemption.expires}." if exemption else ""
+                failures.append(
+                    f"{invariant.id}: {len(violations)} violation(s) — {invariant.claim}."
+                    f"{expired} Offending rows: {detail}"
+                )
+                continue
             if population == 0:
+                # Nothing was examined, so nothing was proved — including about
+                # any exemption. Judging a waiver stale here would fail the CI
+                # fixture for not containing the production defect it exempts,
+                # which is the vacuity problem pointed the other way.
                 print(f"  EMPTY    {invariant.id}: examined 0 rows, so it proved nothing")
                 if require_coverage:
                     failures.append(f"{invariant.id}: examined 0 rows where real data was required")
                 continue
             if exemption:
-                failures.append( f"{invariant.id}: exempt under {exemption.issue} but no longer violated across " f"{population} row(s). Remove the exemption — a standing waiver for a fixed " f"defect hides the next one" ); continue
+                failures.append(
+                    f"{invariant.id}: exempt under {exemption.issue} but no longer violated across "
+                    f"{population} row(s). Remove the exemption — a standing waiver for a fixed "
+                    f"defect hides the next one"
+                )
+                continue
             print(f"  ok       {invariant.id}: {population} row(s) examined")
+
     for failure in failures:
         print(f"invariant failed: {failure}", file=sys.stderr)
     return 1 if failures else 0
+
+
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=""); parser.add_argument("--database-url", required=True); parser.add_argument("--require-coverage", action="store_true"); return parser
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--database-url", required=True)
+    parser.add_argument("--require-coverage", action="store_true")
+    return parser
+
+
 def main(argv: Sequence[str] | None = None) -> int:
-    args = _parser().parse_args(argv); return check(args.database_url, require_coverage=args.require_coverage)
+    args = _parser().parse_args(argv)
+    return check(args.database_url, require_coverage=args.require_coverage)
+
+
 if __name__ == "__main__":
     raise SystemExit(main())
