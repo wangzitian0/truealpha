@@ -1,48 +1,310 @@
-# ruff: noqa: I001, E401, E402, E701, E702, E731, F401, F811
-# fmt: off
-from __future__ import annotations; import uuid; from datetime import UTC, date, datetime; from decimal import Decimal; from typing import Any; import pytest; from data_engine.datahub.canonical_issuer import CanonicalIssuer; from data_engine.datahub.standards.supply_chain_extraction import ( SupplyChainRunReport, extract_supply_chain_relationships, materialize_supply_chain_exposure, materialize_universe_supply_chain_exposure, ); from data_engine.sources import llm; from factors.base.supply_chain_exposure import ( SupplyChainPartner, supply_chain_exposure, )
-def _issuer_id(name: str) -> str: return str(uuid.uuid5(uuid.NAMESPACE_URL, f"https://truealpha.invalid/test/issuer/{name}"))
+"""Unit tests for supply_chain_extraction module (#772, #1354)."""
+
+from __future__ import annotations
+
+import uuid
+from datetime import UTC, date, datetime
+from decimal import Decimal
+from typing import Any
+
+import pytest
+from data_engine.datahub.canonical_issuer import CanonicalIssuer
+from data_engine.datahub.standards.supply_chain_extraction import (
+    SupplyChainRunReport,
+    extract_supply_chain_relationships,
+    materialize_supply_chain_exposure,
+    materialize_universe_supply_chain_exposure,
+)
+from data_engine.sources import llm
+from factors.base.supply_chain_exposure import (
+    SupplyChainPartner,
+    supply_chain_exposure,
+)
+
+
+def _issuer_id(name: str) -> str:
+    """The wide row's issuer id for a test name: a lower-case UUID. A writer refuses any other (#1079)."""
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"https://truealpha.invalid/test/issuer/{name}"))
+
+
 class _StubLLMGateway:
-    def __init__( self, partners: tuple[llm.ExtractedSupplyChainPartner, ...] = (), *, replayed: bool = False, error: Exception | None = None, ) -> None: self._partners = partners; self._replayed = replayed; self._error = error
+    """Deterministic stub for `data_engine.sources.llm` in unit tests."""
+
+    def __init__(
+        self,
+        partners: tuple[llm.ExtractedSupplyChainPartner, ...] = (),
+        *,
+        replayed: bool = False,
+        error: Exception | None = None,
+    ) -> None:
+        self._partners = partners
+        self._replayed = replayed
+        self._error = error
+
     def identify_supply_chain_partners(self, _conn: Any, **kwargs: Any) -> llm.SupplyChainExtraction:
-        if self._error is not None: raise self._error
-        inv = llm.ModelInvocation( decision={"partners": []}, model="glm-5.3-flash", provider="zhipu-glm-coding-plan", prompt_sha256="a" * 64, request_sha256="b" * 64, response_sha256="c" * 64, prompt_tokens=1200, completion_tokens=80, invocation_id="model-invocation:" + "d" * 64, replayed=self._replayed, served_model="glm-5.3-flash", ); return llm.SupplyChainExtraction(partners=self._partners, invocation=inv)
+        if self._error is not None:
+            raise self._error
+        inv = llm.ModelInvocation(
+            decision={"partners": []},
+            model="glm-5.3-flash",
+            provider="zhipu-glm-coding-plan",
+            prompt_sha256="a" * 64,
+            request_sha256="b" * 64,
+            response_sha256="c" * 64,
+            prompt_tokens=1200,
+            completion_tokens=80,
+            invocation_id="model-invocation:" + "d" * 64,
+            replayed=self._replayed,
+            served_model="glm-5.3-flash",
+        )
+        return llm.SupplyChainExtraction(partners=self._partners, invocation=inv)
+
+
 class _MockCursor:
-    def __init__(self): self.executed = []
-    def execute(self, sql, params=None): self.executed.append((sql, params)); return self
-    def fetchone(self): return None
-    def fetchall(self): return []
+    def __init__(self):
+        self.executed = []
+
+    def execute(self, sql, params=None):
+        self.executed.append((sql, params))
+        return self
+
+    def fetchone(self):
+        return None
+
+    def fetchall(self):
+        return []
+
+
 class _MockConnection:
-    def __init__(self): self.executed = []
-    def execute(self, sql, params=None): self.executed.append((sql, params)); return _MockCursor()
-    def cursor(self): return _MockCursor()
-def test_materialize_supply_chain_exposure_handles_dict_and_factor_record() -> None: conn = _MockConnection(); now = datetime(2026, 9, 25, tzinfo=UTC); partners = [ SupplyChainPartner("p:tsmc", "TSMC", "supplier", revenue_share=Decimal("0.5"), confidence=Decimal("0.9")), ]; rec = supply_chain_exposure(partners, entity_id=_issuer_id("nvda"), as_of=now, supplies_to_edges_exist=True); count = materialize_supply_chain_exposure( conn, run_id="run:sc_both", cutoff=now, exposure_data=[ { "issuer_id": _issuer_id("aapl"), "exposure_score": Decimal("0.85"), "direct_partners": 12, "availability_status": "available", "reason_codes": [], }, rec, ], ); assert count == 2; assert len(conn.executed) == 2; sql1, params1 = conn.executed[0]; assert "insert into mart.issuer_supply_chain_exposure" in sql1; assert params1[1] == _issuer_id("aapl"); assert params1[3] == Decimal("0.85"); assert params1[11] == "available"; _, params2 = conn.executed[1]; assert params2[1] == _issuer_id("nvda"); assert params2[3] == Decimal("0.25"); assert params2[4] == 1; assert params2[11] == "available"
-def test_extract_supply_chain_relationships_via_llm_gateway() -> None: assert extract_supply_chain_relationships("", issuer_id="test", filing_date=date(2026, 1, 1), accession="000") == (); gateway = _StubLLMGateway( partners=( llm.ExtractedSupplyChainPartner( partner_name="Apple Inc.", ticker="AAPL", relation_type="customer", revenue_share_pct=Decimal("15.0"), evidence_quote="The company supplies to Apple Inc. as its primary distribution partner.", ), llm.ExtractedSupplyChainPartner( partner_name="Acme Corp", ticker=None, relation_type="supplier", revenue_share_pct=None, evidence_quote="We also purchase raw materials from Acme Corp for our semiconductor needs.", ), ) ); text = ( 'Item 1. Business\nThe company supplies to Apple Inc. as its primary distribution partner.\nWe also purchase raw materials from Acme Corp for our semiconductor needs.\n' ); edges = extract_supply_chain_relationships( text, issuer_id=_issuer_id("test"), filing_date=date(2026, 1, 1), accession="0001-00-00", llm_gateway=gateway, ); assert len(edges) == 2; assert edges[0].relation_type == "customer"; assert edges[0].target_entity_name == "Apple Inc."; assert edges[0].target_ticker == "AAPL"; assert edges[0].revenue_share_pct == Decimal("15.0"); assert edges[0].extractor.startswith("model:glm-5.3-flash:"); assert edges[1].relation_type == "supplier"; assert edges[1].target_entity_name == "Acme Corp"
-def test_extract_supply_chain_adversarial_negative_corpus() -> None:
-    import data_engine.datahub.standards.supply_chain_extraction as sc_mod
-    for removed_legacy_symbol in ( "_KNOWN_PARTNER_LEXICON", "_SENTENCE_RE", "_RELATION_RULES", "_ENTITY_MATCH_RE", "_STOPWORDS", ): assert not hasattr(sc_mod, removed_legacy_symbol), f"legacy regex symbol {removed_legacy_symbol} returned"
-    negative_text = ( 'Item 1. Business\nWe maintain customer service centers across the country to assist users.\nCustomer deposits are insured by the FDIC up to legal limits.\nWe emphasize customer experience and customer satisfaction metrics.\nVendor management programs are reviewed on an annual basis.\n' ); edges = extract_supply_chain_relationships( negative_text, issuer_id=_issuer_id("bank"), filing_date=date(2026, 1, 1), accession="0001-00-00", llm_gateway=_StubLLMGateway(partners=()), ); assert len(edges) == 0
-def test_materialize_universe_supply_chain_exposure_iterates_all_issuers() -> None: conn = _MockConnection(); issuers = [ CanonicalIssuer(issuer_id=_issuer_id("1"), legacy_id="issuer:lei:AAAAAAAAAAAAAAAAAA01", ticker="NVDA"), CanonicalIssuer(issuer_id=_issuer_id("2"), legacy_id="issuer:lei:BBBBBBBBBBBBBBBBBB02", ticker="AAPL"), ]; total = materialize_universe_supply_chain_exposure( conn, run_id="run:sc_uni", cutoff=datetime.now(tz=UTC), issuers=issuers, ); assert isinstance(total, SupplyChainRunReport); assert total == 2; assert len(conn.executed) == 2; reasons = [params[9] for _, params in conn.executed]; assert reasons == [["no_supply_chain_extraction"], ["no_supply_chain_extraction"]]
-def test_materialize_dict_with_partners_states_the_graph_measurement() -> None:
-    conn = _MockConnection(); now = datetime(2026, 9, 25, tzinfo=UTC); materialize_supply_chain_exposure( conn, run_id="run:sc_dict", cutoff=now, exposure_data=[ {"issuer_id": _issuer_id("a"), "partners": [], "supplies_to_edges_exist": True}, {"issuer_id": _issuer_id("b"), "partners": [], "supplies_to_edges_exist": False}, ], ); assert [params[9] for _, params in conn.executed] == [["no_disclosed_suppliers"], ["no_supply_chain_extraction"]]
-    with pytest.raises(KeyError, match="supplies_to_edges_exist"): materialize_supply_chain_exposure( conn, run_id="run:sc_dict", cutoff=now, exposure_data=[{"issuer_id": _issuer_id("c"), "partners": []}] )
-@pytest.mark.parametrize( "legacy_id", ["issuer:lei:AAAAAAAAAAAAAAAAAA01", "issuer:cik:0000320193", "", "NOT-A-UUID", str(uuid.uuid4()).upper()], ids=["lei", "cik", "empty", "not-a-uuid", "upper-case-uuid"], )
-def test_a_row_is_never_written_under_a_legacy_id(legacy_id: str) -> None:
+    def __init__(self):
+        self.executed = []
+
+    def execute(self, sql, params=None):
+        self.executed.append((sql, params))
+        return _MockCursor()
+
+    def cursor(self):
+        return _MockCursor()
+
+
+def test_materialize_supply_chain_exposure_handles_dict_and_factor_record() -> None:
+    """Consolidated: tests both raw dict rows and SupplyChainExposure factor results."""
     conn = _MockConnection()
-    with pytest.raises(ValueError, match="not the wide row's id"): materialize_supply_chain_exposure( conn, run_id="run:sc_legacy", cutoff=datetime(2026, 9, 25, tzinfo=UTC), exposure_data=[{"issuer_id": legacy_id, "partners": [], "supplies_to_edges_exist": True}], )
+    now = datetime(2026, 9, 25, tzinfo=UTC)
+    partners = [
+        SupplyChainPartner("p:tsmc", "TSMC", "supplier", revenue_share=Decimal("0.5"), confidence=Decimal("0.9")),
+    ]
+    rec = supply_chain_exposure(partners, entity_id=_issuer_id("nvda"), as_of=now, supplies_to_edges_exist=True)
+    count = materialize_supply_chain_exposure(
+        conn,
+        run_id="run:sc_both",
+        cutoff=now,
+        exposure_data=[
+            {
+                "issuer_id": _issuer_id("aapl"),
+                "exposure_score": Decimal("0.85"),
+                "direct_partners": 12,
+                "availability_status": "available",
+                "reason_codes": [],
+            },
+            rec,
+        ],
+    )
+    assert count == 2
+    assert len(conn.executed) == 2
+    sql1, params1 = conn.executed[0]
+    assert "insert into mart.issuer_supply_chain_exposure" in sql1
+    assert params1[1] == _issuer_id("aapl")
+    assert params1[3] == Decimal("0.85")
+    assert params1[11] == "available"
+    _, params2 = conn.executed[1]
+    assert params2[1] == _issuer_id("nvda")
+    assert params2[3] == Decimal("0.25")
+    assert params2[4] == 1
+    assert params2[11] == "available"
+
+
+def test_extract_supply_chain_relationships_via_llm_gateway() -> None:
+    """Tests full-10K LLM extraction, deduplication, and direction rules."""
+    assert extract_supply_chain_relationships("", issuer_id="test", filing_date=date(2026, 1, 1), accession="000") == ()
+
+    gateway = _StubLLMGateway(
+        partners=(
+            llm.ExtractedSupplyChainPartner(
+                partner_name="Apple Inc.",
+                ticker="AAPL",
+                relation_type="customer",
+                revenue_share_pct=Decimal("15.0"),
+                evidence_quote="The company supplies to Apple Inc. as its primary distribution partner.",
+            ),
+            llm.ExtractedSupplyChainPartner(
+                partner_name="Acme Corp",
+                ticker=None,
+                relation_type="supplier",
+                revenue_share_pct=None,
+                evidence_quote="We also purchase raw materials from Acme Corp for our semiconductor needs.",
+            ),
+        )
+    )
+    text = (
+        "Item 1. Business\n"
+        "The company supplies to Apple Inc. as its primary distribution partner.\n"
+        "We also purchase raw materials from Acme Corp for our semiconductor needs.\n"
+    )
+    edges = extract_supply_chain_relationships(
+        text,
+        issuer_id=_issuer_id("test"),
+        filing_date=date(2026, 1, 1),
+        accession="0001-00-00",
+        llm_gateway=gateway,
+    )
+    assert len(edges) == 2
+    assert edges[0].relation_type == "customer"
+    assert edges[0].target_entity_name == "Apple Inc."
+    assert edges[0].target_ticker == "AAPL"
+    assert edges[0].revenue_share_pct == Decimal("15.0")
+    assert edges[0].extractor.startswith("model:glm-5.3-flash:")
+    assert edges[1].relation_type == "supplier"
+    assert edges[1].target_entity_name == "Acme Corp"
+
+
+def test_extract_supply_chain_adversarial_negative_corpus() -> None:
+    """Adversarial Negative Corpus: legacy regex/dictionary patterns no longer exist on the module,
+    and when the LLM extracts no named partners from false-positive phrases, zero edges are returned."""
+    import data_engine.datahub.standards.supply_chain_extraction as sc_mod
+
+    for removed_legacy_symbol in (
+        "_KNOWN_PARTNER_LEXICON",
+        "_SENTENCE_RE",
+        "_RELATION_RULES",
+        "_ENTITY_MATCH_RE",
+        "_STOPWORDS",
+    ):
+        assert not hasattr(sc_mod, removed_legacy_symbol), f"legacy regex symbol {removed_legacy_symbol} returned"
+
+    negative_text = (
+        "Item 1. Business\n"
+        "We maintain customer service centers across the country to assist users.\n"
+        "Customer deposits are insured by the FDIC up to legal limits.\n"
+        "We emphasize customer experience and customer satisfaction metrics.\n"
+        "Vendor management programs are reviewed on an annual basis.\n"
+    )
+    edges = extract_supply_chain_relationships(
+        negative_text,
+        issuer_id=_issuer_id("bank"),
+        filing_date=date(2026, 1, 1),
+        accession="0001-00-00",
+        llm_gateway=_StubLLMGateway(partners=()),
+    )
+    assert len(edges) == 0
+
+
+def test_materialize_universe_supply_chain_exposure_iterates_all_issuers() -> None:
+    conn = _MockConnection()
+    issuers = [
+        CanonicalIssuer(issuer_id=_issuer_id("1"), legacy_id="issuer:lei:AAAAAAAAAAAAAAAAAA01", ticker="NVDA"),
+        CanonicalIssuer(issuer_id=_issuer_id("2"), legacy_id="issuer:lei:BBBBBBBBBBBBBBBBBB02", ticker="AAPL"),
+    ]
+    total = materialize_universe_supply_chain_exposure(
+        conn,
+        run_id="run:sc_uni",
+        cutoff=datetime.now(tz=UTC),
+        issuers=issuers,
+    )
+    assert isinstance(total, SupplyChainRunReport)
+    assert total == 2
+    assert len(conn.executed) == 2
+    reasons = [params[9] for _, params in conn.executed]
+    assert reasons == [["no_supply_chain_extraction"], ["no_supply_chain_extraction"]]
+
+
+def test_materialize_dict_with_partners_states_the_graph_measurement() -> None:
+    conn = _MockConnection()
+    now = datetime(2026, 9, 25, tzinfo=UTC)
+    materialize_supply_chain_exposure(
+        conn,
+        run_id="run:sc_dict",
+        cutoff=now,
+        exposure_data=[
+            {"issuer_id": _issuer_id("a"), "partners": [], "supplies_to_edges_exist": True},
+            {"issuer_id": _issuer_id("b"), "partners": [], "supplies_to_edges_exist": False},
+        ],
+    )
+    assert [params[9] for _, params in conn.executed] == [["no_disclosed_suppliers"], ["no_supply_chain_extraction"]]
+    with pytest.raises(KeyError, match="supplies_to_edges_exist"):
+        materialize_supply_chain_exposure(
+            conn, run_id="run:sc_dict", cutoff=now, exposure_data=[{"issuer_id": _issuer_id("c"), "partners": []}]
+        )
+
+
+@pytest.mark.parametrize(
+    "legacy_id",
+    ["issuer:lei:AAAAAAAAAAAAAAAAAA01", "issuer:cik:0000320193", "", "NOT-A-UUID", str(uuid.uuid4()).upper()],
+    ids=["lei", "cik", "empty", "not-a-uuid", "upper-case-uuid"],
+)
+def test_a_row_is_never_written_under_a_legacy_id(legacy_id: str) -> None:
+    """#1079: the legacy id of the corpus is not the wide row's id, so no row may carry it."""
+    conn = _MockConnection()
+    with pytest.raises(ValueError, match="not the wide row's id"):
+        materialize_supply_chain_exposure(
+            conn,
+            run_id="run:sc_legacy",
+            cutoff=datetime(2026, 9, 25, tzinfo=UTC),
+            exposure_data=[{"issuer_id": legacy_id, "partners": [], "supplies_to_edges_exist": True}],
+        )
     assert conn.executed == [], "nothing reached the table"
+
+
 def test_persist_extracted_supply_chain_edges_and_continuous_confidence() -> None:
-    from data_engine.datahub.standards.supply_chain_extraction import persist_extracted_supply_chain_edges; text = ( 'Item 1. Business\nThe company supplies to Apple Inc. as its primary distribution partner across North America.\n' ); gateway = _StubLLMGateway( partners=( llm.ExtractedSupplyChainPartner( partner_name="Apple Inc.", ticker="AAPL", relation_type="customer", revenue_share_pct=None, evidence_quote="The company supplies to Apple Inc. as its primary distribution partner across North America.", ), ) ); nvda_uuid = _issuer_id("nvda"); edges = extract_supply_chain_relationships( text, issuer_id=nvda_uuid, filing_date=date(2026, 2, 15), accession="0001045810-26-000001", llm_gateway=gateway, ); assert len(edges) == 1; assert Decimal("0.55") < edges[0].confidence < Decimal("0.70"); assert edges[0].confidence != Decimal("0.85")
+    from data_engine.datahub.standards.supply_chain_extraction import persist_extracted_supply_chain_edges
+
+    text = (
+        "Item 1. Business\n"
+        "The company supplies to Apple Inc. as its primary distribution partner across North America.\n"
+    )
+    gateway = _StubLLMGateway(
+        partners=(
+            llm.ExtractedSupplyChainPartner(
+                partner_name="Apple Inc.",
+                ticker="AAPL",
+                relation_type="customer",
+                revenue_share_pct=None,
+                evidence_quote="The company supplies to Apple Inc. as its primary distribution partner across North America.",
+            ),
+        )
+    )
+    nvda_uuid = _issuer_id("nvda")
+    edges = extract_supply_chain_relationships(
+        text,
+        issuer_id=nvda_uuid,
+        filing_date=date(2026, 2, 15),
+        accession="0001045810-26-000001",
+        llm_gateway=gateway,
+    )
+    assert len(edges) == 1
+    assert Decimal("0.55") < edges[0].confidence < Decimal("0.70")
+    assert edges[0].confidence != Decimal("0.85")
+
     class _FilingConn:
-        def __init__(self) -> None: self.queries: list[tuple[str, object]] = []
+        def __init__(self) -> None:
+            self.queries: list[tuple[str, object]] = []
+
         def cursor(self):
             class _RegCur(_MockCursor):
-                def __enter__(self): return self
-                def __exit__(self, *args: object): pass
-                def fetchone(self): return ("raw.fetches",)
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *args: object):
+                    pass
+
+                def fetchone(self):
+                    return ("raw.fetches",)
+
             return _RegCur()
+
         def execute(self, sql: str, params: object = None):
-            self.queries.append((sql, params)); cur = _MockCursor()
+            self.queries.append((sql, params))
+            cur = _MockCursor()
             if "from raw.fetches" in sql:
                 cur.fetchall = lambda: [  # type: ignore[method-assign]
                     (
@@ -56,26 +318,89 @@ def test_persist_extracted_supply_chain_edges_and_continuous_confidence() -> Non
             elif "insert into staging.kg_edges" in sql:
                 cur.fetchone = lambda: (1,)  # type: ignore[method-assign]
             return cur
-    conn = _FilingConn(); issuers = [CanonicalIssuer(issuer_id=nvda_uuid, legacy_id="company:cik:0001045810", ticker="NVDA")]
+
+    conn = _FilingConn()
+    issuers = [CanonicalIssuer(issuer_id=nvda_uuid, legacy_id="company:cik:0001045810", ticker="NVDA")]
     inserted = persist_extracted_supply_chain_edges(
         conn,  # type: ignore[arg-type]
         issuers=issuers,
         cutoff=datetime(2026, 10, 6, tzinfo=UTC),
         llm_gateway=gateway,
     )
-    assert inserted == 1; assert any("insert into staging.kg_edges" in q[0] for q in conn.queries)
-def test_real_10k_html_extraction_with_lei_issuer_and_supplier_customer_directions( monkeypatch: pytest.MonkeyPatch, ) -> None:
-    from data_engine import raw_store; from data_engine.datahub.standards.filing_extraction import filing_plain_text; html_10k = ( b"<html><body><p>Item 1. Business.</p>" b"<p>We maintain customer service centers worldwide to assist enterprise users.</p>" b"<p>We utilize foundries, such as Taiwan Semiconductor Manufacturing Company Limited, or TSMC, " b"and Samsung Electronics Co., Ltd., or Samsung, to produce our semiconductor wafers.</p>" b"<p>We purchase memory from SK Hynix Inc., Micron Technology, Inc., and Samsung.</p>" b"<p>In 2024, three wholesale distributors (McKesson Corporation, Cardinal Health, Inc. and Cencora, Inc.) " b"accounted for substantially all of our product sales in the United States.</p>" b"</body></html>" ); plain = filing_plain_text(html_10k); assert "\n" not in plain, "filing_plain_text collapses newlines into spaces"; nvda_uuid = _issuer_id("nvda"); nvda_legacy = "issuer:lei:549300S4KLFTLO7GSQ80"; monkeypatch.setattr(raw_store, "get_payload", lambda _conn, _fid, **_kw: html_10k); gateway = _StubLLMGateway( partners=( llm.ExtractedSupplyChainPartner( "TSMC", "TSM", "supplier", None, "We utilize foundries, such as Taiwan Semiconductor Manufacturing Company Limited, or TSMC", ), llm.ExtractedSupplyChainPartner( "Samsung Electronics", None, "supplier", None, "Samsung Electronics Co., Ltd." ), llm.ExtractedSupplyChainPartner( "SK Hynix", None, "supplier", None, "We purchase memory from SK Hynix Inc." ), llm.ExtractedSupplyChainPartner("Micron Technology", "MU", "supplier", None, "Micron Technology, Inc."), llm.ExtractedSupplyChainPartner("McKesson Corporation", "MCK", "customer", None, "McKesson Corporation"), llm.ExtractedSupplyChainPartner("Cardinal Health, Inc.", "CAH", "customer", None, "Cardinal Health, Inc."), llm.ExtractedSupplyChainPartner("Cencora, Inc.", "COR", "customer", None, "Cencora, Inc."), ) )
+    assert inserted == 1
+    assert any("insert into staging.kg_edges" in q[0] for q in conn.queries)
+
+
+def test_real_10k_html_extraction_with_lei_issuer_and_supplier_customer_directions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Standing check: `filing_plain_text` collapses whitespace to a single line, TOPT issuers
+    use `issuer:lei:...` resolved to CIK via `staging.entity_aliases`, and LLM-extracted supplier (`to_id`)
+    and customer (`from_id`) edges materialize onto `mart.issuer_supply_chain_exposure` keyed by Canonical UUID."""
+    from data_engine import raw_store
+    from data_engine.datahub.standards.filing_extraction import filing_plain_text
+
+    html_10k = (
+        b"<html><body><p>Item 1. Business.</p>"
+        b"<p>We maintain customer service centers worldwide to assist enterprise users.</p>"
+        b"<p>We utilize foundries, such as Taiwan Semiconductor Manufacturing Company Limited, or TSMC, "
+        b"and Samsung Electronics Co., Ltd., or Samsung, to produce our semiconductor wafers.</p>"
+        b"<p>We purchase memory from SK Hynix Inc., Micron Technology, Inc., and Samsung.</p>"
+        b"<p>In 2024, three wholesale distributors (McKesson Corporation, Cardinal Health, Inc. and Cencora, Inc.) "
+        b"accounted for substantially all of our product sales in the United States.</p>"
+        b"</body></html>"
+    )
+    plain = filing_plain_text(html_10k)
+    assert "\n" not in plain, "filing_plain_text collapses newlines into spaces"
+
+    nvda_uuid = _issuer_id("nvda")
+    nvda_legacy = "issuer:lei:549300S4KLFTLO7GSQ80"
+    monkeypatch.setattr(raw_store, "get_payload", lambda _conn, _fid, **_kw: html_10k)
+
+    gateway = _StubLLMGateway(
+        partners=(
+            llm.ExtractedSupplyChainPartner(
+                "TSMC",
+                "TSM",
+                "supplier",
+                None,
+                "We utilize foundries, such as Taiwan Semiconductor Manufacturing Company Limited, or TSMC",
+            ),
+            llm.ExtractedSupplyChainPartner(
+                "Samsung Electronics", None, "supplier", None, "Samsung Electronics Co., Ltd."
+            ),
+            llm.ExtractedSupplyChainPartner(
+                "SK Hynix", None, "supplier", None, "We purchase memory from SK Hynix Inc."
+            ),
+            llm.ExtractedSupplyChainPartner("Micron Technology", "MU", "supplier", None, "Micron Technology, Inc."),
+            llm.ExtractedSupplyChainPartner("McKesson Corporation", "MCK", "customer", None, "McKesson Corporation"),
+            llm.ExtractedSupplyChainPartner("Cardinal Health, Inc.", "CAH", "customer", None, "Cardinal Health, Inc."),
+            llm.ExtractedSupplyChainPartner("Cencora, Inc.", "COR", "customer", None, "Cencora, Inc."),
+        )
+    )
+
     class _StatefulGraphConn:
-        def __init__(self) -> None: self.edges: list[tuple[str, str, str, float]] = []; self.entities: dict[str, str] = {}; self.mart_rows: list[tuple[object, ...]] = []
+        def __init__(self) -> None:
+            self.edges: list[tuple[str, str, str, float]] = []
+            self.entities: dict[str, str] = {}
+            self.mart_rows: list[tuple[object, ...]] = []
+
         def cursor(self):
             class _RegCur(_MockCursor):
-                def __enter__(self): return self
-                def __exit__(self, *args: object): pass
-                def fetchone(self): return ("exists",)
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *args: object):
+                    pass
+
+                def fetchone(self):
+                    return ("exists",)
+
             return _RegCur()
+
         def execute(self, sql: str, params: object = None):
-            cur = _MockCursor(); p = tuple(params) if isinstance(params, list | tuple) else ()
+            cur = _MockCursor()
+            p = tuple(params) if isinstance(params, list | tuple) else ()
             if "from staging.entity_aliases" in sql and "and scheme = 'cik'" in sql:
                 cur.fetchall = lambda: [(nvda_uuid, "0001045810")]  # type: ignore[method-assign]
             elif "from raw.fetches" in sql:
@@ -88,7 +413,8 @@ def test_real_10k_html_extraction_with_lei_issuer_and_supplier_customer_directio
                         {"cik": 1045810, "form": "10-K", "accession": "000104581025000023"},
                     )
                 ]
-            elif "insert into staging.kg_entities" in sql: self.entities[str(p[0])] = str(p[2])
+            elif "insert into staging.kg_entities" in sql:
+                self.entities[str(p[0])] = str(p[2])
             elif "select source, confidence from staging.kg_edges" in sql:
                 cur.fetchone = lambda: None  # type: ignore[method-assign]
             elif "insert into staging.kg_edges" in sql:
@@ -110,9 +436,12 @@ def test_real_10k_html_extraction_with_lei_issuer_and_supplier_customer_directio
                     for from_id, to_id, rel, conf in self.edges
                     if to_id == target and rel == "supplies_to"
                 ]
-            elif "insert into mart.issuer_supply_chain_exposure" in sql: self.mart_rows.append(p)
+            elif "insert into mart.issuer_supply_chain_exposure" in sql:
+                self.mart_rows.append(p)
             return cur
-    conn = _StatefulGraphConn(); issuers = [CanonicalIssuer(issuer_id=nvda_uuid, legacy_id=nvda_legacy, ticker="NVDA")]
+
+    conn = _StatefulGraphConn()
+    issuers = [CanonicalIssuer(issuer_id=nvda_uuid, legacy_id=nvda_legacy, ticker="NVDA")]
     written = materialize_universe_supply_chain_exposure(
         conn,  # type: ignore[arg-type]
         run_id="capture-run:test",
@@ -120,19 +449,61 @@ def test_real_10k_html_extraction_with_lei_issuer_and_supplier_customer_directio
         issuers=issuers,
         llm_gateway=gateway,
     )
-    assert written == 1; assert written.model_extracted == 1; assert written.context_window_exceeded == 0; assert len(conn.mart_rows) == 1; row = conn.mart_rows[0]; assert row[1] == nvda_uuid; assert row[3] is not None and row[3] > Decimal("0"); assert row[4] == 7; assert row[5] == 4; assert row[6] == 3; assert str(row[10]).startswith("model:glm-5.3-flash:"); assert row[11] == "available"
-def test_context_window_exceeded_marks_mart_row_and_run_report_never_silent( monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture ) -> None:
-    from data_engine import raw_store; nvda_uuid = _issuer_id("nvda"); nvda_legacy = "issuer:cik:0001045810"; monkeypatch.setattr(raw_store, "get_payload", lambda _conn, _fid, **_kw: b"<html><body>Huge 10-K</body></html>"); gateway = _StubLLMGateway( error=llm.ModelContextLimitError( cik=1045810, accession="0001045810-26-999999", estimated_tokens=1_250_000, max_context_tokens=1_000_000, detail="filing-extraction-model: context_window_exceeded", ) )
+    assert written == 1
+    assert written.model_extracted == 1
+    assert written.context_window_exceeded == 0
+    assert len(conn.mart_rows) == 1
+    row = conn.mart_rows[0]
+    assert row[1] == nvda_uuid
+    assert row[3] is not None and row[3] > Decimal("0")
+    assert row[4] == 7
+    assert row[5] == 4
+    assert row[6] == 3
+    assert str(row[10]).startswith("model:glm-5.3-flash:")
+    assert row[11] == "available"
+
+
+def test_context_window_exceeded_marks_mart_row_and_run_report_never_silent(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """When a 10-K exceeds 1M tokens, never silently mark `no_disclosed_suppliers`:
+    log an ERROR, increment `context_window_exceeded`, and write `reason_codes=['context_window_exceeded']`."""
+    from data_engine import raw_store
+
+    nvda_uuid = _issuer_id("nvda")
+    nvda_legacy = "issuer:cik:0001045810"
+    monkeypatch.setattr(raw_store, "get_payload", lambda _conn, _fid, **_kw: b"<html><body>Huge 10-K</body></html>")
+
+    gateway = _StubLLMGateway(
+        error=llm.ModelContextLimitError(
+            cik=1045810,
+            accession="0001045810-26-999999",
+            estimated_tokens=1_250_000,
+            max_context_tokens=1_000_000,
+            detail="filing-extraction-model: context_window_exceeded",
+        )
+    )
+
     class _ExceedConn:
-        def __init__(self) -> None: self.mart_rows: list[tuple[object, ...]] = []
+        def __init__(self) -> None:
+            self.mart_rows: list[tuple[object, ...]] = []
+
         def cursor(self):
             class _RegCur(_MockCursor):
-                def __enter__(self): return self
-                def __exit__(self, *args: object): pass
-                def fetchone(self): return ("exists",)
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *args: object):
+                    pass
+
+                def fetchone(self):
+                    return ("exists",)
+
             return _RegCur()
+
         def execute(self, sql: str, params: object = None):
-            cur = _MockCursor(); p = tuple(params) if isinstance(params, list | tuple) else ()
+            cur = _MockCursor()
+            p = tuple(params) if isinstance(params, list | tuple) else ()
             if "from raw.fetches" in sql:
                 cur.fetchall = lambda: [  # type: ignore[method-assign]
                     (
@@ -143,8 +514,10 @@ def test_context_window_exceeded_marks_mart_row_and_run_report_never_silent( mon
                         {"cik": 1045810, "form": "10-K", "accession": "0001045810-26-999999", "plain_text": "X" * 200},
                     )
                 ]
-            elif "insert into mart.issuer_supply_chain_exposure" in sql: self.mart_rows.append(p)
+            elif "insert into mart.issuer_supply_chain_exposure" in sql:
+                self.mart_rows.append(p)
             return cur
+
     conn = _ExceedConn()
     with caplog.at_level("ERROR"):
         report = materialize_universe_supply_chain_exposure(
@@ -154,27 +527,66 @@ def test_context_window_exceeded_marks_mart_row_and_run_report_never_silent( mon
             issuers=[CanonicalIssuer(issuer_id=nvda_uuid, legacy_id=nvda_legacy, ticker="NVDA")],
             llm_gateway=gateway,
         )
-    assert report == 1; assert report.context_window_exceeded == 1; assert report.exceeded_filings == ("NVDA:0001045810-26-999999",); assert "exceeded 1M context window" in caplog.text; assert len(conn.mart_rows) == 1; row = conn.mart_rows[0]; assert row[1] == nvda_uuid; assert row[3] is None; assert row[9] == ["context_window_exceeded"]; assert row[11] == "unavailable"
+
+    assert report == 1
+    assert report.context_window_exceeded == 1
+    assert report.exceeded_filings == ("NVDA:0001045810-26-999999",)
+    assert "exceeded 1M context window" in caplog.text
+    assert len(conn.mart_rows) == 1
+    row = conn.mart_rows[0]
+    assert row[1] == nvda_uuid
+    assert row[3] is None  # exposure_score
+    assert row[9] == ["context_window_exceeded"]
+    assert row[11] == "unavailable"
+
+
 def test_resolve_or_mint_partner_entity_passes_8_params_and_uses_savepoint() -> None:
-    import contextlib; from data_engine.datahub.standards.supply_chain_extraction import _resolve_or_mint_partner_entity; minted_id = _issuer_id("partner-tsmc")
+    """Regression test: `_resolve_or_mint_partner_entity` passes all 8 parameters to the
+    2-row `staging.entity_aliases` INSERT (`%s` count == len(params) == 8), reuses existing
+    `legacy-id` aliases regardless of `tx_time` ordering so `staging.entity_mint` is never
+    called twice for the same partner, and wraps DB operations in a savepoint (`transaction()`)."""
+    import contextlib
+
+    from data_engine.datahub.standards.supply_chain_extraction import _resolve_or_mint_partner_entity
+
+    minted_id = _issuer_id("partner-tsmc")
+
     class _StrictParamConn:
-        def __init__(self) -> None: self.savepoints = 0; self.mint_calls = 0; self.alias_inserts: list[tuple[object, ...]] = []; self.minted_legacy: dict[str, str] = {}
+        def __init__(self) -> None:
+            self.savepoints = 0
+            self.mint_calls = 0
+            self.alias_inserts: list[tuple[object, ...]] = []
+            self.minted_legacy: dict[str, str] = {}
+
         @contextlib.contextmanager
-        def transaction(self): self.savepoints += 1; yield
+        def transaction(self):
+            self.savepoints += 1
+            yield
+
         def execute(self, sql: str, params: object = None):
-            cur = _MockCursor(); p = tuple(params) if isinstance(params, list | tuple) else (); placeholder_count = sql.count("%s"); assert placeholder_count == len(p), ( f"SQL placeholder mismatch: {placeholder_count} '%s' vs {len(p)} params in: {sql}" )
+            cur = _MockCursor()
+            p = tuple(params) if isinstance(params, list | tuple) else ()
+            placeholder_count = sql.count("%s")
+            assert placeholder_count == len(p), (
+                f"SQL placeholder mismatch: {placeholder_count} '%s' vs {len(p)} params in: {sql}"
+            )
             if "from staging.entity_aliases a" in sql and "a.scheme = 'legacy-id'" in sql:
                 legacy_val = str(p[1])
                 if legacy_val in self.minted_legacy:
                     cur.fetchone = lambda: (self.minted_legacy[legacy_val],)  # type: ignore[method-assign]
             elif "select staging.entity_mint" in sql:
-                self.mint_calls += 1; legacy_val = str(p[0])
-                if legacy_val in self.minted_legacy: raise AssertionError(f"entity_mint called a second time for {legacy_val}")
+                self.mint_calls += 1
+                legacy_val = str(p[0])
+                if legacy_val in self.minted_legacy:
+                    raise AssertionError(f"entity_mint called a second time for {legacy_val}")
                 self.minted_legacy[legacy_val] = minted_id
                 cur.fetchone = lambda: (minted_id,)  # type: ignore[method-assign]
-            elif "insert into staging.entity_aliases" in sql: self.alias_inserts.append(p)
+            elif "insert into staging.entity_aliases" in sql:
+                self.alias_inserts.append(p)
             return cur
+
     conn = _StrictParamConn()
+    # Filing 1 (newer tx_time: 2026-02-26) mints TSMC
     first_uuid = _resolve_or_mint_partner_entity(
         conn,  # type: ignore[arg-type]
         partner_name="TSMC",
@@ -182,7 +594,12 @@ def test_resolve_or_mint_partner_entity_passes_8_params_and_uses_savepoint() -> 
         tx_time=datetime(2026, 2, 26, tzinfo=UTC),
         raw_ref="raw.fetches:1",
     )
-    assert first_uuid == minted_id; assert conn.mint_calls == 1; assert len(conn.alias_inserts) == 1; assert len(conn.alias_inserts[0]) == 8
+    assert first_uuid == minted_id
+    assert conn.mint_calls == 1
+    assert len(conn.alias_inserts) == 1
+    assert len(conn.alias_inserts[0]) == 8
+
+    # Filing 2 (older tx_time: 2026-01-15) resolves existing legacy-id without re-minting
     second_uuid = _resolve_or_mint_partner_entity(
         conn,  # type: ignore[arg-type]
         partner_name="TSMC",
@@ -190,22 +607,95 @@ def test_resolve_or_mint_partner_entity_passes_8_params_and_uses_savepoint() -> 
         tx_time=datetime(2026, 1, 15, tzinfo=UTC),
         raw_ref="raw.fetches:2",
     )
-    assert second_uuid == minted_id; assert conn.mint_calls == 1; assert conn.savepoints == 2
+    assert second_uuid == minted_id
+    assert conn.mint_calls == 1
+    assert conn.savepoints == 2
+
+
 def test_build_issuer_lookup_resolves_ciks_via_governed_members(monkeypatch: pytest.MonkeyPatch) -> None:
-    from data_engine.datahub.production_topt import theme_purity; from data_engine.datahub.standards.supply_chain_extraction import _build_issuer_lookup; nvda_uuid = _issuer_id("nvda"); monkeypatch.setattr(theme_purity, "governed_members", lambda _conn, *, run_id: {1045810: nvda_uuid}); conn = _MockConnection(); issuers = [CanonicalIssuer(issuer_id=nvda_uuid, legacy_id="issuer:lei:549300S4KLFTLO7GSQ80", ticker="NVDA")]
+    """LEI-keyed wide-row issuers resolve to their SEC CIK via `governed_members(connection, run_id=...)`
+    even when `staging.entity_aliases` has no `scheme = 'cik'` row."""
+    from data_engine.datahub.production_topt import theme_purity
+    from data_engine.datahub.standards.supply_chain_extraction import _build_issuer_lookup
+
+    nvda_uuid = _issuer_id("nvda")
+    monkeypatch.setattr(theme_purity, "governed_members", lambda _conn, *, run_id: {1045810: nvda_uuid})
+
+    conn = _MockConnection()
+    issuers = [CanonicalIssuer(issuer_id=nvda_uuid, legacy_id="issuer:lei:549300S4KLFTLO7GSQ80", ticker="NVDA")]
     by_cik, _, _ = _build_issuer_lookup(issuers, conn, run_id="capture-run:topt")  # type: ignore[arg-type]
     assert by_cik.get("1045810") == issuers[0]
-def test_supply_chain_rejects_unanchored_quotes_computes_filing_age_freshness_and_bounds_prompt( monkeypatch: pytest.MonkeyPatch, ) -> None:
-    from data_engine.datahub.standards.supply_chain_extraction import persist_extracted_supply_chain_edges; text = ( 'Item 1. Business\nThe company supplies to Apple Inc. as its primary distribution partner across North America.\n' ); gateway = _StubLLMGateway( partners=( llm.ExtractedSupplyChainPartner( partner_name="Apple Inc.", ticker="AAPL", relation_type="customer", revenue_share_pct=None, evidence_quote="The company supplies to   Apple Inc. as its primary distribution partner across North America.", ), llm.ExtractedSupplyChainPartner( partner_name="Hallucinated Corp", ticker="HAL", relation_type="supplier", revenue_share_pct=None, evidence_quote="Hallucinated Corp fabricates all quantum chips on Mars.", ), ) ); nvda_uuid = _issuer_id("nvda"); fresh_edges = extract_supply_chain_relationships( text, issuer_id=nvda_uuid, filing_date=date(2026, 2, 15), accession="0001045810-26-000001", cutoff=datetime(2026, 3, 1, tzinfo=UTC), llm_gateway=gateway, ); stale_edges = extract_supply_chain_relationships( text, issuer_id=nvda_uuid, filing_date=date(2024, 1, 1), accession="0001045810-26-000001", cutoff=datetime(2026, 3, 1, tzinfo=UTC), llm_gateway=gateway, ); assert [e.target_entity_name for e in fresh_edges] == ["Apple Inc."]; assert fresh_edges[0].confidence > stale_edges[0].confidence; entities_written: dict[str, str] = {}
+
+
+def test_supply_chain_rejects_unanchored_quotes_computes_filing_age_freshness_and_bounds_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1517 Cause 1: unanchored evidence_quote is rejected, freshness is derived from filing_date,
+    issuer kg_entities display_name is never polluted with a bare ticker, and oversized filing_text is bounded."""
+    from data_engine.datahub.standards.supply_chain_extraction import persist_extracted_supply_chain_edges
+
+    text = (
+        "Item 1. Business\n"
+        "The company supplies to Apple Inc. as its primary distribution partner across North America.\n"
+    )
+    gateway = _StubLLMGateway(
+        partners=(
+            llm.ExtractedSupplyChainPartner(
+                partner_name="Apple Inc.",
+                ticker="AAPL",
+                relation_type="customer",
+                revenue_share_pct=None,
+                evidence_quote="The company supplies to   Apple Inc. as its primary distribution partner across North America.",
+            ),
+            llm.ExtractedSupplyChainPartner(
+                partner_name="Hallucinated Corp",
+                ticker="HAL",
+                relation_type="supplier",
+                revenue_share_pct=None,
+                evidence_quote="Hallucinated Corp fabricates all quantum chips on Mars.",
+            ),
+        )
+    )
+    nvda_uuid = _issuer_id("nvda")
+    fresh_edges = extract_supply_chain_relationships(
+        text,
+        issuer_id=nvda_uuid,
+        filing_date=date(2026, 2, 15),
+        accession="0001045810-26-000001",
+        cutoff=datetime(2026, 3, 1, tzinfo=UTC),
+        llm_gateway=gateway,
+    )
+    stale_edges = extract_supply_chain_relationships(
+        text,
+        issuer_id=nvda_uuid,
+        filing_date=date(2024, 1, 1),
+        accession="0001045810-26-000001",
+        cutoff=datetime(2026, 3, 1, tzinfo=UTC),
+        llm_gateway=gateway,
+    )
+    assert [e.target_entity_name for e in fresh_edges] == ["Apple Inc."]
+    assert fresh_edges[0].confidence > stale_edges[0].confidence
+
+    # Verify _persist_single_candidate_edge never writes bare ticker NVDA into kg_entities.display_name
+    entities_written: dict[str, str] = {}
+
     class _EntityCheckConn(_MockConnection):
         def cursor(self):
             class _RegCur(_MockCursor):
-                def __enter__(self): return self
-                def __exit__(self, *args: object): pass
-                def fetchone(self): return ("raw.fetches",)
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *args: object):
+                    pass
+
+                def fetchone(self):
+                    return ("raw.fetches",)
+
             return _RegCur()
+
         def execute(self, sql: str, params: object = None):
-            cur = _MockCursor(); p = tuple(params) if isinstance(params, list | tuple) else ()
+            cur = _MockCursor()
+            p = tuple(params) if isinstance(params, list | tuple) else ()
             if "from raw.fetches" in sql:
                 cur.fetchall = lambda: [  # type: ignore[method-assign]
                     (
@@ -216,10 +706,12 @@ def test_supply_chain_rejects_unanchored_quotes_computes_filing_age_freshness_an
                         {"plain_text": text, "accession": "0001045810-26-000001"},
                     )
                 ]
-            elif "insert into staging.kg_entities" in sql: entities_written[str(p[0])] = str(p[2])
+            elif "insert into staging.kg_entities" in sql:
+                entities_written[str(p[0])] = str(p[2])
             elif "insert into staging.kg_edges" in sql:
                 cur.fetchone = lambda: (1,)  # type: ignore[method-assign]
             return cur
+
     conn = _EntityCheckConn()
     persist_extracted_supply_chain_edges(
         conn,  # type: ignore[arg-type]
@@ -227,21 +719,112 @@ def test_supply_chain_rejects_unanchored_quotes_computes_filing_age_freshness_an
         cutoff=datetime(2026, 3, 1, tzinfo=UTC),
         llm_gateway=gateway,
     )
-    assert entities_written[nvda_uuid] != "NVDA"; captured: dict[str, str] = {}
-    def fake_invoke(_conn: Any, **kwargs: Any) -> llm.ModelInvocation: captured["prompt"] = str(kwargs["user_content"]); return llm.ModelInvocation( decision={"partners": []}, model="glm-5.3-flash", provider="zhipu-glm-coding-plan", prompt_sha256="a" * 64, request_sha256="b" * 64, response_sha256="c" * 64, prompt_tokens=100, completion_tokens=10, invocation_id="model-invocation:" + "e" * 64, replayed=False, served_model="glm-5.3-flash", )
-    monkeypatch.setattr(llm, "invoke", fake_invoke); oversized_filing = ( "HEAD_MARKER " + ("A" * 60_000) + " UNANCHORED_MIDDLE_MARKER " + ("B" * 40_000) + " Major customer concentration: Acme Corp accounted for 14% of revenue. ANCHORED_MIDDLE_MARKER " + ("C" * 60_000) + " TAIL_MARKER" ); llm.identify_supply_chain_partners( None, cik=1045810, accession="0001045810-26-000001", issuer_label="NVDA", filing_text=oversized_filing, persist=False, ); assert len(captured["prompt"]) <= 120_200; assert "HEAD_MARKER" in captured["prompt"]; assert "UNANCHORED_MIDDLE_MARKER" not in captured["prompt"]; assert "ANCHORED_MIDDLE_MARKER" in captured["prompt"]; assert "TAIL_MARKER" in captured["prompt"]
-def test_load_issuer_graph_partners_reads_revenue_share_from_entity_relations_and_deduplicates( monkeypatch: pytest.MonkeyPatch, ) -> None:
-    import json; from data_engine import raw_store; filing_text = ( 'Item 1. Business. Taiwan Semiconductor Manufacturing Company Limited (TSMC) fabricates our wafers. Customer A accounted for 18% of total revenue in fiscal 2025.' ); monkeypatch.setattr(raw_store, "get_payload", lambda _conn, _fid, **_kw: filing_text.encode("utf-8")); nvda_uuid = _issuer_id("nvda"); gateway = _StubLLMGateway( partners=( llm.ExtractedSupplyChainPartner( partner_name="TSMC", ticker="TSM", relation_type="supplier", revenue_share_pct=None, evidence_quote="Taiwan Semiconductor Manufacturing Company Limited (TSMC) fabricates our wafers.", ), llm.ExtractedSupplyChainPartner( partner_name="Customer A", ticker=None, relation_type="customer", revenue_share_pct=Decimal("18.0"), evidence_quote="Customer A accounted for 18% of total revenue in fiscal 2025.", ), ) )
+    assert entities_written[nvda_uuid] != "NVDA"
+
+    # Verify identify_supply_chain_partners bounds normal oversized 10-K text while keeping head, anchored middle, and tail
+    captured: dict[str, str] = {}
+
+    def fake_invoke(_conn: Any, **kwargs: Any) -> llm.ModelInvocation:
+        captured["prompt"] = str(kwargs["user_content"])
+        return llm.ModelInvocation(
+            decision={"partners": []},
+            model="glm-5.3-flash",
+            provider="zhipu-glm-coding-plan",
+            prompt_sha256="a" * 64,
+            request_sha256="b" * 64,
+            response_sha256="c" * 64,
+            prompt_tokens=100,
+            completion_tokens=10,
+            invocation_id="model-invocation:" + "e" * 64,
+            replayed=False,
+            served_model="glm-5.3-flash",
+        )
+
+    monkeypatch.setattr(llm, "invoke", fake_invoke)
+    oversized_filing = (
+        "HEAD_MARKER "
+        + ("A" * 60_000)
+        + " UNANCHORED_MIDDLE_MARKER "
+        + ("B" * 40_000)
+        + " Major customer concentration: Acme Corp accounted for 14% of revenue. ANCHORED_MIDDLE_MARKER "
+        + ("C" * 60_000)
+        + " TAIL_MARKER"
+    )
+    llm.identify_supply_chain_partners(
+        None,
+        cik=1045810,
+        accession="0001045810-26-000001",
+        issuer_label="NVDA",
+        filing_text=oversized_filing,
+        persist=False,
+    )
+    assert len(captured["prompt"]) <= 120_200
+    assert "HEAD_MARKER" in captured["prompt"]
+    assert "UNANCHORED_MIDDLE_MARKER" not in captured["prompt"]
+    assert "ANCHORED_MIDDLE_MARKER" in captured["prompt"]
+    assert "TAIL_MARKER" in captured["prompt"]
+
+
+def test_load_issuer_graph_partners_reads_revenue_share_from_entity_relations_and_deduplicates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1642 Q3: `revenue_share_pct` persisted to `staging.entity_relations` is read back into
+    `SupplyChainPartner.revenue_share` as a fraction in `(0, 1]`, merged onto `staging.kg_edges`
+    partners without double-counting, and produces non-zero `max_partner_share`."""
+    import json
+
+    from data_engine import raw_store
+
+    filing_text = (
+        "Item 1. Business. "
+        "Taiwan Semiconductor Manufacturing Company Limited (TSMC) fabricates our wafers. "
+        "Customer A accounted for 18% of total revenue in fiscal 2025."
+    )
+    monkeypatch.setattr(raw_store, "get_payload", lambda _conn, _fid, **_kw: filing_text.encode("utf-8"))
+
+    nvda_uuid = _issuer_id("nvda")
+    gateway = _StubLLMGateway(
+        partners=(
+            llm.ExtractedSupplyChainPartner(
+                partner_name="TSMC",
+                ticker="TSM",
+                relation_type="supplier",
+                revenue_share_pct=None,
+                evidence_quote="Taiwan Semiconductor Manufacturing Company Limited (TSMC) fabricates our wafers.",
+            ),
+            llm.ExtractedSupplyChainPartner(
+                partner_name="Customer A",
+                ticker=None,
+                relation_type="customer",
+                revenue_share_pct=Decimal("18.0"),
+                evidence_quote="Customer A accounted for 18% of total revenue in fiscal 2025.",
+            ),
+        )
+    )
+
     class _EntityRelationsGraphConn:
-        def __init__(self) -> None: self.edges: list[tuple[str, str, str, float]] = []; self.entity_relations: list[tuple[str, str, Decimal, str | None]] = []; self.entities: dict[str, str] = {}; self.mart_rows: list[tuple[object, ...]] = []
+        def __init__(self) -> None:
+            self.edges: list[tuple[str, str, str, float]] = []
+            self.entity_relations: list[tuple[str, str, Decimal, str | None]] = []
+            self.entities: dict[str, str] = {}
+            self.mart_rows: list[tuple[object, ...]] = []
+
         def cursor(self):
             class _RegCur(_MockCursor):
-                def __enter__(self): return self
-                def __exit__(self, *args: object): pass
-                def fetchone(self): return ("exists",)
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *args: object):
+                    pass
+
+                def fetchone(self):
+                    return ("exists",)
+
             return _RegCur()
+
         def execute(self, sql: str, params: object = None):
-            cur = _MockCursor(); p = tuple(params) if isinstance(params, list | tuple) else ()
+            cur = _MockCursor()
+            p = tuple(params) if isinstance(params, list | tuple) else ()
             if "from raw.fetches" in sql:
                 cur.fetchall = lambda: [  # type: ignore[method-assign]
                     (
@@ -252,8 +835,11 @@ def test_load_issuer_graph_partners_reads_revenue_share_from_entity_relations_an
                         {"cik": 1045810, "form": "10-K", "accession": "000104581026000010", "plain_text": filing_text},
                     )
                 ]
-            elif "insert into staging.entity_relations" in sql: attrs = json.loads(str(p[10])); self.entity_relations.append((str(p[1]), str(p[2]), Decimal(str(p[8])), attrs.get("revenue_share_pct")))
-            elif "insert into staging.kg_entities" in sql: self.entities[str(p[0])] = str(p[2])
+            elif "insert into staging.entity_relations" in sql:
+                attrs = json.loads(str(p[10]))
+                self.entity_relations.append((str(p[1]), str(p[2]), Decimal(str(p[8])), attrs.get("revenue_share_pct")))
+            elif "insert into staging.kg_entities" in sql:
+                self.entities[str(p[0])] = str(p[2])
             elif "select source, confidence from staging.kg_edges" in sql:
                 cur.fetchone = lambda: None  # type: ignore[method-assign]
             elif "insert into staging.kg_edges" in sql:
@@ -289,9 +875,12 @@ def test_load_issuer_graph_partners_reads_revenue_share_from_entity_relations_an
                     for from_id, to_id, conf, pct in self.entity_relations
                     if from_id in aliases or to_id in aliases
                 ]
-            elif "insert into mart.issuer_supply_chain_exposure" in sql: self.mart_rows.append(p)
+            elif "insert into mart.issuer_supply_chain_exposure" in sql:
+                self.mart_rows.append(p)
             return cur
-    conn = _EntityRelationsGraphConn(); issuers = [CanonicalIssuer(issuer_id=nvda_uuid, legacy_id="company:cik:0001045810", ticker="NVDA")]
+
+    conn = _EntityRelationsGraphConn()
+    issuers = [CanonicalIssuer(issuer_id=nvda_uuid, legacy_id="company:cik:0001045810", ticker="NVDA")]
     report = materialize_universe_supply_chain_exposure(
         conn,  # type: ignore[arg-type]
         run_id="capture-run:q3-share",
@@ -299,4 +888,14 @@ def test_load_issuer_graph_partners_reads_revenue_share_from_entity_relations_an
         issuers=issuers,
         llm_gateway=gateway,
     )
-    assert report == 1; assert len(conn.mart_rows) == 1; row = conn.mart_rows[0]; assert row[1] == nvda_uuid; assert row[4] == 2; assert row[5] == 1; assert row[6] == 1; assert row[7] == Decimal("0.18"); assert row[3] == Decimal("0.0324"); assert row[9] == []; assert row[11] == "available"
+    assert report == 1
+    assert len(conn.mart_rows) == 1
+    row = conn.mart_rows[0]
+    assert row[1] == nvda_uuid
+    assert row[4] == 2  # direct_partners deduplicated across kg_edges and entity_relations
+    assert row[5] == 1  # suppliers_count
+    assert row[6] == 1  # customers_count
+    assert row[7] == Decimal("0.18")  # max_partner_share = 18.0 / 100
+    assert row[3] == Decimal("0.0324")  # 0.18^2 HHI
+    assert row[9] == []  # quantified share + supplier present -> no warning flags
+    assert row[11] == "available"

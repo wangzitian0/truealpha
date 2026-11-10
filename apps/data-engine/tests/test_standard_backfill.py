@@ -1,114 +1,1134 @@
-# ruff: noqa: I001, E401, E402, E701, E702, E731, F401, F811
-# fmt: off
-from __future__ import annotations; import json; from datetime import UTC, date, datetime, timedelta; from decimal import Decimal; from typing import Any; import pytest; from data_engine.datahub.fetch_key import FetchKey; from data_engine.datahub.standards import backfill as backfill_module; from data_engine.datahub.standards.backfill import run_standard_backfill; from data_engine.datahub.standards.filing_extraction import ( EXTRACTION_SOURCE, RULE_SINGLE_CANDIDATE, FilingCandidate, candidates, extract_headcount, filing_plain_text, parse_as_of, select_total, ); from data_engine.datahub.standards.planner import UniverseIssuer, open_cells, resolve_missing_ciks; from data_engine.sources.gateway import SourceCapacity, SourceGateway; from truealpha_contracts.models import RawCapture, RawIngestionEnvelope, RawObjectRef; from truealpha_contracts.standards import STANDARDS; CUTOFF = datetime(2026, 9, 4, 22, 15, tzinfo=UTC); STANDARD = STANDARDS["employees_total"]
-def _key(source: str, endpoint: str) -> FetchKey: return FetchKey(source, endpoint, "symbol:TEST", "2026-10-27")
+"""The standard→wide-row loop, slices 1 and 3 (#735, #70, #733): planner, single-candidate
+rule, landing with evidence, and probe mode writing nothing."""
+
+from __future__ import annotations
+
+import json
+from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
+from typing import Any
+
+import pytest
+from data_engine.datahub.fetch_key import FetchKey
+from data_engine.datahub.standards import backfill as backfill_module
+from data_engine.datahub.standards.backfill import run_standard_backfill
+from data_engine.datahub.standards.filing_extraction import (
+    EXTRACTION_SOURCE,
+    RULE_SINGLE_CANDIDATE,
+    FilingCandidate,
+    candidates,
+    extract_headcount,
+    filing_plain_text,
+    parse_as_of,
+    select_total,
+)
+from data_engine.datahub.standards.planner import UniverseIssuer, open_cells, resolve_missing_ciks
+from data_engine.sources.gateway import SourceCapacity, SourceGateway
+from truealpha_contracts.models import RawCapture, RawIngestionEnvelope, RawObjectRef
+from truealpha_contracts.standards import STANDARDS
+
+CUTOFF = datetime(2026, 9, 4, 22, 15, tzinfo=UTC)
+STANDARD = STANDARDS["employees_total"]
+
+
+def _key(source: str, endpoint: str) -> FetchKey:
+    """The identity of a call that the test makes: the test names no resource of its own."""
+    return FetchKey(source, endpoint, "symbol:TEST", "2026-10-27")
+
+
+# --- fakes -----------------------------------------------------------------------------
+
+
 class _Result:
-    def __init__(self, rows): self._rows = rows
-    def fetchone(self): return self._rows[0] if self._rows else None
-    def fetchall(self): return list(self._rows)
+    def __init__(self, rows):
+        self._rows = rows
+
+    def fetchone(self):
+        return self._rows[0] if self._rows else None
+
+    def fetchall(self):
+        return list(self._rows)
+
+
 class FakeConnection:
-    def __init__(self, facts: dict[int, list[tuple[Any, ...]]] | None = None) -> None: self.facts = facts or {}; self.predecessors: dict[str, int] = {}; self.model_invocations: list[tuple] = []; self.headcount_rows: list[tuple] = []; self.raw_rows: list[tuple] = []; self.health_rows: list[tuple] = []; self.commits = 0
+    """Answers the exact statements the loop issues; records every write."""
+
+    def __init__(self, facts: dict[int, list[tuple[Any, ...]]] | None = None) -> None:
+        self.facts = facts or {}
+        self.predecessors: dict[str, int] = {}
+        self.model_invocations: list[tuple] = []
+        self.headcount_rows: list[tuple] = []
+        self.raw_rows: list[tuple] = []
+        self.health_rows: list[tuple] = []
+        self.commits = 0
+
     def execute(self, sql: str, params: tuple = ()):
         text = " ".join(sql.split())
-        if text.startswith("select source, knowable_at"): cik, cutoff, priority = params; eligible = [r for r in self.facts.get(cik, []) if r[1] <= cutoff and r[0] != "curated-10k-2025"]; rank = {source: index for index, source in enumerate(priority)}; rows = sorted(eligible, key=lambda r: (rank.get(r[0], len(priority)), -r[1].timestamp())); return _Result(rows[:1] if "limit 1" in text else rows)
-        if text.startswith("select 1 from raw.fetches"): prefix, after, before, _vf, _va, _vb = params; hits = [ r for r in self.raw_rows if str(r[1]).startswith(str(prefix).removesuffix("%")) and after < r[5] <= before ]; return _Result([(1,)] if hits else [])
-        if text.startswith("select 1 from staging.issuer_headcount_facts"): cik, _source, like = params; accession = like.removeprefix("accession=").split(" ")[0]; hits = [r for r in self.headcount_rows if r[0] == cik and f"accession={accession} " in r[5]]; return _Result([(1,)] if hits else [])
-        if text.startswith("select pg_advisory_xact_lock("): return _Result([(None,)])
-        if text.startswith("select invocation_id, decision"): return _Result([])
-        if text.startswith("insert into staging.model_invocations"): self.model_invocations.append(params); return _Result([])
-        if text.startswith("select issuer_id, predecessor_cik from staging.issuer_cik_predecessors"): (issuer_ids,) = params; return _Result([(i, c) for i, c in self.predecessors.items() if i in issuer_ids])
-        if text.startswith("select count(*) from staging.api_call_ledger"): return _Result([(0,)])
-        if text.startswith("insert into raw.fetches"): self.raw_rows.append(params); return _Result([(len(self.raw_rows),)])
-        if text.startswith("insert into staging.issuer_headcount_facts"): self.headcount_rows.append(params); return _Result([(len(self.headcount_rows),)])
-        if text.startswith("insert into staging.ingestion_health_log"): self.health_rows.append(params); return _Result([])
+        if text.startswith("select source, knowable_at"):
+            cik, cutoff, priority = params
+            eligible = [r for r in self.facts.get(cik, []) if r[1] <= cutoff and r[0] != "curated-10k-2025"]
+            rank = {source: index for index, source in enumerate(priority)}
+            rows = sorted(eligible, key=lambda r: (rank.get(r[0], len(priority)), -r[1].timestamp()))
+            return _Result(rows[:1] if "limit 1" in text else rows)
+        if text.startswith("select 1 from raw.fetches"):
+            prefix, after, before, _vf, _va, _vb = params
+            hits = [
+                r
+                for r in self.raw_rows
+                if str(r[1]).startswith(str(prefix).removesuffix("%")) and after < r[5] <= before
+            ]
+            return _Result([(1,)] if hits else [])
+        if text.startswith("select 1 from staging.issuer_headcount_facts"):
+            cik, _source, like = params
+            accession = like.removeprefix("accession=").split(" ")[0]
+            hits = [r for r in self.headcount_rows if r[0] == cik and f"accession={accession} " in r[5]]
+            return _Result([(1,)] if hits else [])
+        if text.startswith("select pg_advisory_xact_lock("):
+            return _Result([(None,)])
+        if text.startswith("select invocation_id, decision"):
+            return _Result([])
+        if text.startswith("insert into staging.model_invocations"):
+            self.model_invocations.append(params)
+            return _Result([])
+        if text.startswith("select issuer_id, predecessor_cik from staging.issuer_cik_predecessors"):
+            (issuer_ids,) = params
+            return _Result([(i, c) for i, c in self.predecessors.items() if i in issuer_ids])
+        if text.startswith("select count(*) from staging.api_call_ledger"):
+            return _Result([(0,)])
+        if text.startswith("insert into raw.fetches"):
+            self.raw_rows.append(params)
+            return _Result([(len(self.raw_rows),)])
+        if text.startswith("insert into staging.issuer_headcount_facts"):
+            self.headcount_rows.append(params)
+            return _Result([(len(self.headcount_rows),)])
+        if text.startswith("insert into staging.ingestion_health_log"):
+            self.health_rows.append(params)
+            return _Result([])
         raise AssertionError(f"unexpected statement: {text[:80]}")
-    def commit(self) -> None: self.commits += 1
+
+    def commit(self) -> None:
+        self.commits += 1
+
+
 class FakeStore:
-    def __init__(self) -> None: self.stored: list[RawCapture] = []
-    def store(self, capture: RawCapture) -> RawIngestionEnvelope: self.stored.append(capture); import hashlib; sha = hashlib.sha256(capture.body).hexdigest(); ref = RawObjectRef( bucket="raw", key=f"k/{sha}", sha256=sha, byte_length=len(capture.body), content_type=capture.content_type ); return RawIngestionEnvelope( source=capture.source, source_record_id=capture.source_record_id, object=ref, fetched_at=capture.fetched_at, source_published_at=capture.source_published_at, metadata=capture.metadata, )
+    def __init__(self) -> None:
+        self.stored: list[RawCapture] = []
+
+    def store(self, capture: RawCapture) -> RawIngestionEnvelope:
+        self.stored.append(capture)
+        import hashlib
+
+        sha = hashlib.sha256(capture.body).hexdigest()
+        ref = RawObjectRef(
+            bucket="raw", key=f"k/{sha}", sha256=sha, byte_length=len(capture.body), content_type=capture.content_type
+        )
+        return RawIngestionEnvelope(
+            source=capture.source,
+            source_record_id=capture.source_record_id,
+            object=ref,
+            fetched_at=capture.fetched_at,
+            source_published_at=capture.source_published_at,
+            metadata=capture.metadata,
+        )
+
     def get(self, ref: RawObjectRef) -> bytes:  # pragma: no cover - not exercised
         raise NotImplementedError
+
+
 class _Response:
-    def __init__(self, *, json_body=None, content: bytes = b"") -> None: assert isinstance(content, bytes), "an httpx response holds bytes"; self.status_code = 200; self._json = json_body; self.content = content if json_body is None else json.dumps(json_body).encode()
-    def raise_for_status(self) -> None: return None
-    def json(self): return self._json
+    def __init__(self, *, json_body=None, content: bytes = b"") -> None:
+        assert isinstance(content, bytes), "an httpx response holds bytes"
+        self.status_code = 200
+        self._json = json_body
+        # An httpx response carries the same document as bytes and as parsed JSON.
+        self.content = content if json_body is None else json.dumps(json_body).encode()
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self):
+        return self._json
+
+
 class FakeHttp:
-    def __init__(self, filings: dict[int, list[tuple[str, str, str, bytes]]]) -> None: self.filings = filings; self.urls: list[str] = []
+    """EDGAR as fixtures: submissions index per CIK, one primary document per accession."""
+
+    def __init__(self, filings: dict[int, list[tuple[str, str, str, bytes]]]) -> None:
+        # cik -> [(form, filing_date, accession_with_dashes, body)], newest first
+        self.filings = filings
+        self.urls: list[str] = []
+
     def get(self, url: str) -> _Response:
         self.urls.append(url)
-        if "/submissions/CIK" in url: cik = int(url.rsplit("CIK", 1)[1].removesuffix(".json")); rows = self.filings.get(cik, []); return _Response( json_body={ "filings": { "recent": { "form": [r[0] for r in rows], "filingDate": [r[1] for r in rows], "accessionNumber": [r[2] for r in rows], "primaryDocument": [f"doc-{i}.htm" for i in range(len(rows))], } } } )
+        if "/submissions/CIK" in url:
+            cik = int(url.rsplit("CIK", 1)[1].removesuffix(".json"))
+            rows = self.filings.get(cik, [])
+            return _Response(
+                json_body={
+                    "filings": {
+                        "recent": {
+                            "form": [r[0] for r in rows],
+                            "filingDate": [r[1] for r in rows],
+                            "accessionNumber": [r[2] for r in rows],
+                            "primaryDocument": [f"doc-{i}.htm" for i in range(len(rows))],
+                        }
+                    }
+                }
+            )
         for rows in self.filings.values():
             for form, _filed, accession, body in rows:
-                if accession.replace("-", "") in url: return _Response(content=body)
+                if accession.replace("-", "") in url:
+                    return _Response(content=body)
         raise AssertionError(f"unexpected url {url}")
-def _gateway(connection) -> SourceGateway: return SourceGateway( connection, caller="test", capacities={"sec": SourceCapacity("sec", 1.0, 100, 1000)}, clock=lambda: 0.0, sleep=lambda _s: None, now=lambda: CUTOFF, )
-def _html(*sentences: str) -> bytes: return ( "<html><ix:header>us-gaap:EmployeeMember 999,999 employees</ix:header><body><p>" + " ".join(sentences) + "</p></body></html>" ).encode()
-NVDA = "As of the end of fiscal year 2026, we had approximately 42,000 employees in 38 countries engaged in research and development, sales, marketing, and operations."; LLY_TOTAL = "As of December 31, 2025, we employed approximately 50,000 people, including approximately 27,000 employees outside the United States."; LLY_RD = "We employed approximately 12,000 people in pharmaceutical research and development activities."; BRK_TOTAL = ( "Berkshire and its operating subsidiaries employed approximately 392,400 people worldwide as of December 31, 2025." ); BRK_SEGMENT = "Our subsidiaries employed approximately 42,600 people in our insurance segment."
-def test_plain_text_drops_the_ix_header_and_tags() -> None: text = filing_plain_text(_html(NVDA)); assert "999,999" not in text and "<p>" not in text and "42,000 employees" in text
-def test_a_single_company_wide_statement_resolves_by_rule() -> None: found = candidates(filing_plain_text(_html(NVDA))); status, chosen = select_total(found); assert status == "resolved" and chosen is not None; assert chosen.value == 42000 and chosen.as_of is None
-def test_a_qualifier_after_including_belongs_to_the_subset_not_the_total() -> None: (candidate,) = [c for c in candidates(filing_plain_text(_html(LLY_TOTAL))) if c.value == 50000]; assert candidate.partial is False
-def test_a_qualifier_in_the_previous_sentence_does_not_mark_this_one_partial() -> None: text = filing_plain_text(_html("We also engage seasonal contractors. " + NVDA)); (candidate,) = candidates(text); assert candidate.partial is False and candidate.value == 42000
-def test_two_distinct_totals_defer_to_the_model_rather_than_guess() -> None: found = candidates(filing_plain_text(_html(LLY_TOTAL, LLY_RD))); status, chosen = select_total(found); assert status == "needs_model_selection" and chosen is None; assert {c.value for c in found} == {50000, 12000}
-def test_a_segment_qualified_count_is_marked_partial_and_does_not_block_the_total() -> None: found = candidates(filing_plain_text(_html(BRK_TOTAL, BRK_SEGMENT))); by_value = {c.value: c for c in found}; assert by_value[42600].partial is True; assert by_value[392400].partial is False; assert "392,400" in by_value[392400].sentence and "42,600" not in by_value[392400].sentence; assert by_value[392400].as_of == "December 31, 2025"; status, chosen = select_total(found); assert status == "resolved" and chosen is not None and chosen.value == 392400
-def test_stacked_workforce_qualifiers_from_the_first_real_probe_are_candidates() -> None: text = filing_plain_text( _html( "As of September 27, 2025, the Company had approximately 166,000 full-time equivalent employees.", "As of October 26, 2025, we employed approximately 36,500 regular full-time employees spanning 25 countries.", "As of December 31, 2025, we had approximately 28,000 staff members.", "As of December 31, 2025, we employed approximately 1,556,000 full-time and part-time employees.", ) ); assert sorted(c.value for c in candidates(text)) == [28000, 36500, 166000, 1556000]; assert all(not c.partial for c in candidates(text))
-def test_a_holding_company_total_and_a_subsidiary_count_defer_to_the_model() -> None: text = filing_plain_text( _html( "As of December 31, 2025, the subsidiaries of AEP had a total of 17,581 employees.", "As of December 31, 2025, AEPSC had 6,994 employees.", ) ); status, chosen = select_total(candidates(text)); assert status == "needs_model_selection" and chosen is None
-def test_a_filing_with_no_statement_is_no_candidate_never_a_number() -> None: assert select_total(candidates(filing_plain_text(_html("We make things.")))) == ("no_candidate", None)
-def test_only_subset_counts_is_no_candidate_not_a_model_question() -> None: found = candidates(filing_plain_text(_html(BRK_SEGMENT, "We employed approximately 300 part-time employees."))); assert found and all(c.partial for c in found); assert select_total(found) == ("no_candidate", None)
-def test_officer_counts_and_absurd_values_are_not_candidates() -> None: text = filing_plain_text(_html("Our board of 9 people oversees us.", "We had 7,000,000,000 people as customers.")); assert candidates(text) == []
-def test_as_of_dates_parse_in_both_comma_forms() -> None: assert parse_as_of("December 31, 2025") == date(2025, 12, 31); assert parse_as_of("November 2 2025") == date(2025, 11, 2); assert parse_as_of("fiscal 2025") is None; assert parse_as_of(None) is None
-def _issuer(cik: int | None, ticker: str = "T") -> UniverseIssuer: return UniverseIssuer( issuer_id=f"issuer:cik:{cik:010d}" if cik else "issuer:lei:X", ticker=ticker, listing_id="listing:xnas:t", cik=cik, )
-def test_open_cells_follow_the_three_rules() -> None: fresh_cited = [(EXTRACTION_SOURCE, CUTOFF - timedelta(days=30))]; stale_cited = [(EXTRACTION_SOURCE, CUTOFF - timedelta(days=STANDARD.max_age_days + 1))]; seed = [("manual-review", datetime(2026, 1, 1, tzinfo=UTC))]; future_only = [(EXTRACTION_SOURCE, CUTOFF + timedelta(days=1))]; connection = FakeConnection({1: fresh_cited, 2: stale_cited, 3: seed, 4: future_only}); issuers = [_issuer(1), _issuer(2), _issuer(3), _issuer(4), _issuer(5)]; cells = {cell.issuer.cik: cell.reason for cell in open_cells(connection, issuers, standard=STANDARD, cutoff=CUTOFF)}; assert cells == {2: "stale", 3: "seed_only", 4: "no_fact", 5: "no_fact"}
-def test_a_cited_fact_closes_the_cell_even_when_the_seed_is_stamped_later() -> None: cited_then_seed = [ (EXTRACTION_SOURCE, datetime(2025, 12, 18, tzinfo=UTC)), ("manual-review", datetime(2026, 1, 1, tzinfo=UTC)), ]; connection = FakeConnection({1730168: cited_then_seed}); assert open_cells(connection, [_issuer(1730168, "AVGO")], standard=STANDARD, cutoff=CUTOFF) == []
+
+
+def _gateway(connection) -> SourceGateway:
+    return SourceGateway(
+        connection,
+        caller="test",
+        capacities={"sec": SourceCapacity("sec", 1.0, 100, 1000)},
+        clock=lambda: 0.0,
+        sleep=lambda _s: None,
+        now=lambda: CUTOFF,
+    )
+
+
+def _html(*sentences: str) -> bytes:
+    return (
+        "<html><ix:header>us-gaap:EmployeeMember 999,999 employees</ix:header><body><p>"
+        + " ".join(sentences)
+        + "</p></body></html>"
+    ).encode()
+
+
+NVDA = "As of the end of fiscal year 2026, we had approximately 42,000 employees in 38 countries engaged in research and development, sales, marketing, and operations."
+LLY_TOTAL = "As of December 31, 2025, we employed approximately 50,000 people, including approximately 27,000 employees outside the United States."
+LLY_RD = "We employed approximately 12,000 people in pharmaceutical research and development activities."
+BRK_TOTAL = (
+    "Berkshire and its operating subsidiaries employed approximately 392,400 people worldwide as of December 31, 2025."
+)
+BRK_SEGMENT = "Our subsidiaries employed approximately 42,600 people in our insurance segment."
+
+
+# --- selection rule ----------------------------------------------------------------------
+
+
+def test_plain_text_drops_the_ix_header_and_tags() -> None:
+    text = filing_plain_text(_html(NVDA))
+    assert "999,999" not in text and "<p>" not in text and "42,000 employees" in text
+
+
+def test_a_single_company_wide_statement_resolves_by_rule() -> None:
+    found = candidates(filing_plain_text(_html(NVDA)))
+    status, chosen = select_total(found)
+    assert status == "resolved" and chosen is not None
+    assert chosen.value == 42000 and chosen.as_of is None
+
+
+def test_a_qualifier_after_including_belongs_to_the_subset_not_the_total() -> None:
+    (candidate,) = [c for c in candidates(filing_plain_text(_html(LLY_TOTAL))) if c.value == 50000]
+    assert candidate.partial is False
+
+
+def test_a_qualifier_in_the_previous_sentence_does_not_mark_this_one_partial() -> None:
+    text = filing_plain_text(_html("We also engage seasonal contractors. " + NVDA))
+    (candidate,) = candidates(text)
+    assert candidate.partial is False and candidate.value == 42000
+
+
+def test_two_distinct_totals_defer_to_the_model_rather_than_guess() -> None:
+    """LLY: 50,000 company-wide and 12,000 in R&D read as two totals to a pattern;
+    choosing is a judgement, so the rule refuses (#70: precision is the model's half)."""
+    found = candidates(filing_plain_text(_html(LLY_TOTAL, LLY_RD)))
+    status, chosen = select_total(found)
+    assert status == "needs_model_selection" and chosen is None
+    assert {c.value for c in found} == {50000, 12000}
+
+
+def test_a_segment_qualified_count_is_marked_partial_and_does_not_block_the_total() -> None:
+    found = candidates(filing_plain_text(_html(BRK_TOTAL, BRK_SEGMENT)))
+    by_value = {c.value: c for c in found}
+    assert by_value[42600].partial is True
+    assert by_value[392400].partial is False
+    # each candidate carries ITS sentence, not the neighbour's
+    assert "392,400" in by_value[392400].sentence and "42,600" not in by_value[392400].sentence
+    assert by_value[392400].as_of == "December 31, 2025"
+    status, chosen = select_total(found)
+    assert status == "resolved" and chosen is not None and chosen.value == 392400
+
+
+def test_stacked_workforce_qualifiers_from_the_first_real_probe_are_candidates() -> None:
+    """AAPL, AMAT and AMGN were no_candidate on the first real QQQ probe (2026-09-04)."""
+    text = filing_plain_text(
+        _html(
+            "As of September 27, 2025, the Company had approximately 166,000 full-time equivalent employees.",
+            "As of October 26, 2025, we employed approximately 36,500 regular full-time employees spanning 25 countries.",
+            "As of December 31, 2025, we had approximately 28,000 staff members.",
+            "As of December 31, 2025, we employed approximately 1,556,000 full-time and part-time employees.",
+        )
+    )
+    assert sorted(c.value for c in candidates(text)) == [28000, 36500, 166000, 1556000]
+    assert all(not c.partial for c in candidates(text))
+
+
+def test_a_holding_company_total_and_a_subsidiary_count_defer_to_the_model() -> None:
+    """AEP on the first real probe: 17,581 across subsidiaries vs 6,994 at the service
+    company — two company-wide-looking statements, one judgement."""
+    text = filing_plain_text(
+        _html(
+            "As of December 31, 2025, the subsidiaries of AEP had a total of 17,581 employees.",
+            "As of December 31, 2025, AEPSC had 6,994 employees.",
+        )
+    )
+    status, chosen = select_total(candidates(text))
+    assert status == "needs_model_selection" and chosen is None
+
+
+def test_a_filing_with_no_statement_is_no_candidate_never_a_number() -> None:
+    assert select_total(candidates(filing_plain_text(_html("We make things.")))) == ("no_candidate", None)
+
+
+def test_only_subset_counts_is_no_candidate_not_a_model_question() -> None:
+    """Review on #740: when every statement is partial there is no company-wide total
+    to choose; deferring to a model would imply the filing has one."""
+    found = candidates(filing_plain_text(_html(BRK_SEGMENT, "We employed approximately 300 part-time employees.")))
+    assert found and all(c.partial for c in found)
+    assert select_total(found) == ("no_candidate", None)
+
+
+def test_officer_counts_and_absurd_values_are_not_candidates() -> None:
+    text = filing_plain_text(_html("Our board of 9 people oversees us.", "We had 7,000,000,000 people as customers."))
+    assert candidates(text) == []
+
+
+def test_as_of_dates_parse_in_both_comma_forms() -> None:
+    assert parse_as_of("December 31, 2025") == date(2025, 12, 31)
+    assert parse_as_of("November 2 2025") == date(2025, 11, 2)
+    assert parse_as_of("fiscal 2025") is None
+    assert parse_as_of(None) is None
+
+
+# --- planner ----------------------------------------------------------------------------
+
+
+def _issuer(cik: int | None, ticker: str = "T") -> UniverseIssuer:
+    return UniverseIssuer(
+        issuer_id=f"issuer:cik:{cik:010d}" if cik else "issuer:lei:X",
+        ticker=ticker,
+        listing_id="listing:xnas:t",
+        cik=cik,
+    )
+
+
+def test_open_cells_follow_the_three_rules() -> None:
+    fresh_cited = [(EXTRACTION_SOURCE, CUTOFF - timedelta(days=30))]
+    stale_cited = [(EXTRACTION_SOURCE, CUTOFF - timedelta(days=STANDARD.max_age_days + 1))]
+    seed = [("manual-review", datetime(2026, 1, 1, tzinfo=UTC))]
+    future_only = [(EXTRACTION_SOURCE, CUTOFF + timedelta(days=1))]
+    connection = FakeConnection({1: fresh_cited, 2: stale_cited, 3: seed, 4: future_only})
+    issuers = [_issuer(1), _issuer(2), _issuer(3), _issuer(4), _issuer(5)]
+
+    cells = {cell.issuer.cik: cell.reason for cell in open_cells(connection, issuers, standard=STANDARD, cutoff=CUTOFF)}
+
+    assert cells == {2: "stale", 3: "seed_only", 4: "no_fact", 5: "no_fact"}
+
+
+def test_a_cited_fact_closes_the_cell_even_when_the_seed_is_stamped_later() -> None:
+    """Review on #740: the planner resolves the best fact the way the reader does —
+    declared source priority first — so a cited extraction filed before the seed's
+    declared 2026-01-01 stamp is not refetched every week as `seed_only`."""
+    cited_then_seed = [
+        (EXTRACTION_SOURCE, datetime(2025, 12, 18, tzinfo=UTC)),
+        ("manual-review", datetime(2026, 1, 1, tzinfo=UTC)),
+    ]
+    connection = FakeConnection({1730168: cited_then_seed})
+    assert open_cells(connection, [_issuer(1730168, "AVGO")], standard=STANDARD, cutoff=CUTOFF) == []
+
+
 def test_open_cells_refuses_a_naive_cutoff() -> None:
-    with pytest.raises(ValueError, match="timezone-aware"): open_cells(FakeConnection(), [_issuer(1)], standard=STANDARD, cutoff=datetime(2026, 9, 4))
-def test_lei_keyed_issuers_resolve_through_the_sec_crosswalk_in_hyphen_form() -> None: issuers = [UniverseIssuer("issuer:lei:A", "BRK.B", "listing:xnys:brk.b", None), _issuer(7, "X")]; resolved = resolve_missing_ciks(issuers, {"BRK-B": 1067983}); assert [i.cik for i in resolved] == [1067983, 7]
-def _fixture_edgar() -> FakeHttp: return FakeHttp( { 1045810: [("10-K", "2026-02-25", "0001045810-26-000021", _html(NVDA))], 59478: [("10-K", "2026-02-19", "0000059478-26-000010", _html(LLY_TOTAL, LLY_RD))], 1730168: [ ("10-Q", "2026-06-10", "0001730168-26-000050", b"<html>quarterly</html>"), ( "10-K", "2025-12-18", "0001730168-25-000121", _html("As of November 2, 2025, we had approximately 33,000 employees worldwide."), ), ], } )
-def test_backfill_lands_the_cited_fact_with_the_filing_date_as_knowable_at(call_ledger) -> None: connection, store = FakeConnection(), FakeStore(); outcome = extract_headcount( 1730168, connection=connection, http=_fixture_edgar(), gateway=_gateway(connection), standard=STANDARD, cutoff=CUTOFF, write=True, store=store, now=CUTOFF, ); assert outcome.status == "resolved" and outcome.value == 33000; assert outcome.form == "10-K" and outcome.accession == "000173016825000121"; assert outcome.as_of == date(2025, 11, 2); (row,) = connection.headcount_rows; cik, headcount, knowable_at, period_end, source, evidence_ref, confidence = row; assert (cik, headcount, source) == (1730168, Decimal(33000), EXTRACTION_SOURCE); from datetime import time; end_of_filing_day = datetime.combine(date(2025, 12, 18), time.max, tzinfo=UTC); assert knowable_at == end_of_filing_day; assert period_end == date(2025, 11, 2); assert confidence == Decimal("0.85"); assert "accession=000173016825000121" in evidence_ref and RULE_SINGLE_CANDIDATE in evidence_ref; assert "raw=raw.fetches:1" in evidence_ref and "33,000 employees" in evidence_ref; assert len(store.stored) == 1 and store.stored[0].source_published_at == end_of_filing_day; assert [r.source for r in call_ledger] == ["sec", "sec"]
-def test_a_second_backfill_of_the_same_filing_records_nothing_twice() -> None: connection, store, http = FakeConnection(), FakeStore(), _fixture_edgar(); first = extract_headcount( 1045810, connection=connection, http=http, gateway=_gateway(connection), standard=STANDARD, cutoff=CUTOFF, write=True, store=store, ); second = extract_headcount( 1045810, connection=connection, http=http, gateway=_gateway(connection), standard=STANDARD, cutoff=CUTOFF, write=True, store=store, ); assert first.status == "resolved" and second.status == "already_recorded"; assert len(connection.headcount_rows) == 1
-def test_probe_mode_enumerates_and_selects_but_writes_no_fact_and_no_raw_object(call_ledger) -> None: connection, store = FakeConnection(), FakeStore(); outcome = extract_headcount( 1045810, connection=connection, http=_fixture_edgar(), gateway=_gateway(connection), standard=STANDARD, cutoff=CUTOFF, write=False, store=store, ); assert outcome.status == "resolved" and outcome.value == 42000; assert connection.headcount_rows == [] and connection.raw_rows == [] and store.stored == []; assert len(call_ledger) == 2
-def test_a_filing_after_the_cutoff_is_not_knowable() -> None: connection = FakeConnection(); early = datetime(2025, 12, 1, tzinfo=UTC); outcome = extract_headcount( 1730168, connection=connection, http=_fixture_edgar(), gateway=_gateway(connection), standard=STANDARD, cutoff=early, write=True, store=FakeStore(), ); assert outcome.status == "no_annual_filing"
-def test_capacity_exhaustion_defers_the_cell_instead_of_failing_the_run() -> None: connection = FakeConnection(); gateway = SourceGateway( connection, caller="t", capacities={"sec": SourceCapacity("sec", 1.0, 100, 1)}, clock=lambda: 0.0, sleep=lambda _s: None, now=lambda: CUTOFF, ); gateway.call("sec", "warm", lambda: None, identity=_key("sec", "warm")); outcome = extract_headcount( 1045810, connection=connection, http=_fixture_edgar(), gateway=gateway, standard=STANDARD, cutoff=CUTOFF, write=True, store=FakeStore(), ); assert outcome.status == "deferred_capacity"
-def test_run_over_a_universe_plans_only_open_cells_and_persists_the_report(monkeypatch) -> None: connection = FakeConnection({1045810: [(EXTRACTION_SOURCE, CUTOFF - timedelta(days=10))]}); issuers = [_issuer(1045810, "NVDA"), _issuer(59478, "LLY"), _issuer(1730168, "AVGO")]; monkeypatch.setattr(backfill_module, "universe_issuers", lambda _c, _u, **_k: issuers); lines: list[str] = []; report = run_standard_backfill( connection, universe="universe-list:qqq", standard_name="employees_total", cutoff=CUTOFF, mode="backfill", http=_fixture_edgar(), gateway=_gateway(connection), store=FakeStore(), log=lines.append, ); assert report.issuers == 3 and report.open == 2 and dict(report.open_by_reason) == {"no_fact": 2}; assert dict(report.outcomes) == {"needs_model_selection": 1, "resolved": 1}; assert [r[0] for r in connection.headcount_rows] == [1730168]; assert connection.commits >= 3; metrics = {r[1]: r[2] for r in connection.health_rows}; assert metrics["employees_total:universe-list:qqq:backfill:resolved"] == 1; assert metrics["employees_total:universe-list:qqq:backfill:open_cells"] == 2; assert any("LLY" in line and "needs_model_selection" in line for line in lines)
-def test_a_holdco_with_no_filing_under_its_new_cik_falls_back_to_the_predecessor(monkeypatch) -> None: connection = FakeConnection(); connection.predecessors = {"issuer:lei:XOM": 34088}; http = FakeHttp( { 2115436: [("8-K", "2026-01-05", "0002115436-26-000001", b"<html>event</html>")], 34088: [ ( "10-K", "2026-02-25", "0000034088-26-000009", _html("At year-end 2025 we had approximately 61,000 employees."), ) ], } ); from data_engine.datahub.standards import planner as planner_module; monkeypatch.setattr( planner_module, "load_corpus", lambda _f: {"topt_denominator": {"instruments": [["issuer:lei:XOM", "security:x", "listing:xnys:xom", "XOM"]]}}, ); issuers = planner_module.universe_issuers(connection, "topt"); assert issuers[0].cik is None and issuers[0].predecessor_cik == 34088; issuers = planner_module.resolve_missing_ciks(issuers, {"XOM": 2115436}); monkeypatch.setattr(backfill_module, "universe_issuers", lambda _c, _u, **_k: issuers); report = run_standard_backfill( connection, universe="topt", standard_name="employees_total", cutoff=CUTOFF, mode="backfill", http=http, gateway=_gateway(connection), store=FakeStore(), log=lambda _l: None, ); assert dict(report.outcomes) == {"resolved": 1}; (row,) = connection.headcount_rows; assert row[0] == 2115436 and row[1] == Decimal(61000); assert "filing_cik=34088" in row[5] and "accession=000003408826000009" in row[5]
-def test_a_seated_model_resolves_a_multi_candidate_filing_with_its_invocation_on_the_evidence(monkeypatch) -> None: import json; from data_engine.config import settings; monkeypatch.setattr(settings, "llm_api_key", "test-key"); monkeypatch.setattr(settings, "llm_model", "glm-test"); answer = json.dumps( { "choices": [ {"message": {"content": json.dumps({"value": 50000, "candidate_index": 1, "reason": "company-wide"})}} ], "usage": {"prompt_tokens": 200, "completion_tokens": 40, "total_tokens": 240}, } ).encode(); connection, store = FakeConnection(), FakeStore(); outcome = extract_headcount( 59478, connection=connection, http=_fixture_edgar(), gateway=_gateway(connection), standard=STANDARD, cutoff=CUTOFF, write=True, store=store, now=CUTOFF, model_transport=lambda *_: (200, answer), issuer_label="LLY", ); assert outcome.status == "resolved" and outcome.value == 50000; assert outcome.extractor.startswith("model:glm-test:"); (row,) = connection.headcount_rows; assert row[1] == Decimal(50000) and row[6] == Decimal("0.90"); assert "extractor=model:glm-test:" in row[5] and "invocation=model-invocation:" in row[5]; assert len(connection.model_invocations) == 1
-def test_a_declining_model_leaves_the_cell_honestly_open(monkeypatch) -> None: import json; from data_engine.config import settings; monkeypatch.setattr(settings, "llm_api_key", "test-key"); answer = json.dumps( { "choices": [ { "message": { "content": json.dumps({"value": None, "candidate_index": None, "reason": "both are segments"}) } } ], "usage": {"total_tokens": 100}, } ).encode(); connection = FakeConnection(); outcome = extract_headcount( 59478, connection=connection, http=_fixture_edgar(), gateway=_gateway(connection), standard=STANDARD, cutoff=CUTOFF, write=True, store=FakeStore(), model_transport=lambda *_: (200, answer), ); assert outcome.status == "model_declined" and "both are segments" in outcome.detail; assert connection.headcount_rows == []
-def _spy_on_extract_metric(monkeypatch) -> list[tuple[list, object]]:
-    from factors.shared import extraction as primitive; calls: list[tuple[list, object]] = []; real = primitive.extract_metric
-    def spy(candidates, selector=None): calls.append((list(candidates), selector)); return real(candidates, selector)
-    monkeypatch.setattr(primitive, "extract_metric", spy); return calls
-def test_the_rule_path_selects_through_extract_metric(monkeypatch) -> None: from data_engine.config import settings; monkeypatch.setattr(settings, "llm_api_key", ""); calls = _spy_on_extract_metric(monkeypatch); connection = FakeConnection(); outcome = extract_headcount( 1045810, connection=connection, http=_fixture_edgar(), gateway=_gateway(connection), standard=STANDARD, cutoff=CUTOFF, write=False, ); assert outcome.status == "resolved" and outcome.value == 42000; assert outcome.extractor == RULE_SINGLE_CANDIDATE; assert len(calls) == 1, f"extract_metric was called {len(calls)} time(s); expected 1"; (shared_candidates, selector) = calls[0]; assert [c.value for c in shared_candidates] == [42000]; assert selector is None
-def test_the_model_path_passes_a_selector_to_extract_metric(monkeypatch) -> None: import json; from data_engine.config import settings; from factors.shared.extraction import Selector; monkeypatch.setattr(settings, "llm_api_key", "test-key"); monkeypatch.setattr(settings, "llm_model", "glm-test"); answer = json.dumps( { "choices": [ {"message": {"content": json.dumps({"value": 50000, "candidate_index": 0, "reason": "company-wide"})}} ], "usage": {"prompt_tokens": 200, "completion_tokens": 40, "total_tokens": 240}, } ).encode(); calls = _spy_on_extract_metric(monkeypatch); connection = FakeConnection(); outcome = extract_headcount( 59478, connection=connection, http=_fixture_edgar(), gateway=_gateway(connection), standard=STANDARD, cutoff=CUTOFF, write=True, store=FakeStore(), now=CUTOFF, model_transport=lambda *_: (200, answer), issuer_label="LLY", ); assert outcome.status == "resolved" and outcome.value == 50000; assert len(calls) == 1, f"extract_metric was called {len(calls)} time(s); expected 1"; (shared_candidates, selector) = calls[0]; assert sorted(c.value for c in shared_candidates) == [12000, 50000]; assert isinstance(selector, Selector); assert "model=glm-test" in outcome.detail and "(replayed)" not in outcome.detail
-def test_a_replayed_model_answer_is_marked_replayed_and_asks_the_provider_nothing(monkeypatch) -> None:
+    with pytest.raises(ValueError, match="timezone-aware"):
+        open_cells(FakeConnection(), [_issuer(1)], standard=STANDARD, cutoff=datetime(2026, 9, 4))
+
+
+def test_lei_keyed_issuers_resolve_through_the_sec_crosswalk_in_hyphen_form() -> None:
+    issuers = [UniverseIssuer("issuer:lei:A", "BRK.B", "listing:xnys:brk.b", None), _issuer(7, "X")]
+    resolved = resolve_missing_ciks(issuers, {"BRK-B": 1067983})
+    assert [i.cik for i in resolved] == [1067983, 7]
+
+
+# --- extraction landing ------------------------------------------------------------------
+
+
+def _fixture_edgar() -> FakeHttp:
+    return FakeHttp(
+        {
+            1045810: [("10-K", "2026-02-25", "0001045810-26-000021", _html(NVDA))],
+            59478: [("10-K", "2026-02-19", "0000059478-26-000010", _html(LLY_TOTAL, LLY_RD))],
+            1730168: [
+                ("10-Q", "2026-06-10", "0001730168-26-000050", b"<html>quarterly</html>"),
+                (
+                    "10-K",
+                    "2025-12-18",
+                    "0001730168-25-000121",
+                    _html("As of November 2, 2025, we had approximately 33,000 employees worldwide."),
+                ),
+            ],
+        }
+    )
+
+
+def test_backfill_lands_the_cited_fact_with_the_filing_date_as_knowable_at(call_ledger) -> None:
+    connection, store = FakeConnection(), FakeStore()
+    outcome = extract_headcount(
+        1730168,
+        connection=connection,
+        http=_fixture_edgar(),
+        gateway=_gateway(connection),
+        standard=STANDARD,
+        cutoff=CUTOFF,
+        write=True,
+        store=store,
+        now=CUTOFF,
+    )
+
+    assert outcome.status == "resolved" and outcome.value == 33000
+    assert outcome.form == "10-K" and outcome.accession == "000173016825000121"  # the 10-Q is skipped
+    assert outcome.as_of == date(2025, 11, 2)
+    (row,) = connection.headcount_rows
+    cik, headcount, knowable_at, period_end, source, evidence_ref, confidence = row
+    assert (cik, headcount, source) == (1730168, Decimal(33000), EXTRACTION_SOURCE)
+    from datetime import time
+
+    end_of_filing_day = datetime.combine(date(2025, 12, 18), time.max, tzinfo=UTC)
+    assert knowable_at == end_of_filing_day  # the end of the filing date (#1519), not the fetch clock
+    assert period_end == date(2025, 11, 2)
+    assert confidence == Decimal("0.85")
+    assert "accession=000173016825000121" in evidence_ref and RULE_SINGLE_CANDIDATE in evidence_ref
+    assert "raw=raw.fetches:1" in evidence_ref and "33,000 employees" in evidence_ref
+    assert len(store.stored) == 1 and store.stored[0].source_published_at == end_of_filing_day
+    assert [r.source for r in call_ledger] == ["sec", "sec"]  # submissions + archive, both recorded
+
+
+def test_a_second_backfill_of_the_same_filing_records_nothing_twice() -> None:
+    connection, store, http = FakeConnection(), FakeStore(), _fixture_edgar()
+    first = extract_headcount(
+        1045810,
+        connection=connection,
+        http=http,
+        gateway=_gateway(connection),
+        standard=STANDARD,
+        cutoff=CUTOFF,
+        write=True,
+        store=store,
+    )
+    second = extract_headcount(
+        1045810,
+        connection=connection,
+        http=http,
+        gateway=_gateway(connection),
+        standard=STANDARD,
+        cutoff=CUTOFF,
+        write=True,
+        store=store,
+    )
+    assert first.status == "resolved" and second.status == "already_recorded"
+    assert len(connection.headcount_rows) == 1
+
+
+def test_probe_mode_enumerates_and_selects_but_writes_no_fact_and_no_raw_object(call_ledger) -> None:
+    connection, store = FakeConnection(), FakeStore()
+    outcome = extract_headcount(
+        1045810,
+        connection=connection,
+        http=_fixture_edgar(),
+        gateway=_gateway(connection),
+        standard=STANDARD,
+        cutoff=CUTOFF,
+        write=False,
+        store=store,
+    )
+    assert outcome.status == "resolved" and outcome.value == 42000
+    assert connection.headcount_rows == [] and connection.raw_rows == [] and store.stored == []
+    assert len(call_ledger) == 2  # the vendor calls are still capacity spent
+
+
+def test_a_filing_after_the_cutoff_is_not_knowable() -> None:
+    connection = FakeConnection()
+    early = datetime(2025, 12, 1, tzinfo=UTC)
+    outcome = extract_headcount(
+        1730168,
+        connection=connection,
+        http=_fixture_edgar(),
+        gateway=_gateway(connection),
+        standard=STANDARD,
+        cutoff=early,
+        write=True,
+        store=FakeStore(),
+    )
+    assert outcome.status == "no_annual_filing"
+
+
+def test_capacity_exhaustion_defers_the_cell_instead_of_failing_the_run() -> None:
+    connection = FakeConnection()
+    gateway = SourceGateway(
+        connection,
+        caller="t",
+        capacities={"sec": SourceCapacity("sec", 1.0, 100, 1)},
+        clock=lambda: 0.0,
+        sleep=lambda _s: None,
+        now=lambda: CUTOFF,
+    )
+    gateway.call("sec", "warm", lambda: None, identity=_key("sec", "warm"))  # spends the whole daily budget
+    outcome = extract_headcount(
+        1045810,
+        connection=connection,
+        http=_fixture_edgar(),
+        gateway=gateway,
+        standard=STANDARD,
+        cutoff=CUTOFF,
+        write=True,
+        store=FakeStore(),
+    )
+    assert outcome.status == "deferred_capacity"
+
+
+# --- the run over a universe ----------------------------------------------------------------
+
+
+def test_run_over_a_universe_plans_only_open_cells_and_persists_the_report(monkeypatch) -> None:
+    connection = FakeConnection({1045810: [(EXTRACTION_SOURCE, CUTOFF - timedelta(days=10))]})  # NVDA already cited
+    issuers = [_issuer(1045810, "NVDA"), _issuer(59478, "LLY"), _issuer(1730168, "AVGO")]
+    monkeypatch.setattr(backfill_module, "universe_issuers", lambda _c, _u, **_k: issuers)
+    lines: list[str] = []
+
+    report = run_standard_backfill(
+        connection,
+        universe="universe-list:qqq",
+        standard_name="employees_total",
+        cutoff=CUTOFF,
+        mode="backfill",
+        http=_fixture_edgar(),
+        gateway=_gateway(connection),
+        store=FakeStore(),
+        log=lines.append,
+    )
+
+    assert report.issuers == 3 and report.open == 2 and dict(report.open_by_reason) == {"no_fact": 2}
+    assert dict(report.outcomes) == {"needs_model_selection": 1, "resolved": 1}
+    assert [r[0] for r in connection.headcount_rows] == [1730168]
+    assert connection.commits >= 3  # one per cell plus the report
+    metrics = {r[1]: r[2] for r in connection.health_rows}
+    assert metrics["employees_total:universe-list:qqq:backfill:resolved"] == 1
+    assert metrics["employees_total:universe-list:qqq:backfill:open_cells"] == 2
+    assert any("LLY" in line and "needs_model_selection" in line for line in lines)
+
+
+def test_a_holdco_with_no_filing_under_its_new_cik_falls_back_to_the_predecessor(monkeypatch) -> None:
+    """XOM on the first TOPT probe (2026-09-04): index CIK 2115436 has no 10-K yet; the
+    owner-signed registry names 34088. The fact lands under 2115436 — the CIK the daily
+    tick reads — with the filing CIK on the evidence."""
+    connection = FakeConnection()
+    connection.predecessors = {"issuer:lei:XOM": 34088}
+    http = FakeHttp(
+        {
+            2115436: [("8-K", "2026-01-05", "0002115436-26-000001", b"<html>event</html>")],
+            34088: [
+                (
+                    "10-K",
+                    "2026-02-25",
+                    "0000034088-26-000009",
+                    _html("At year-end 2025 we had approximately 61,000 employees."),
+                )
+            ],
+        }
+    )
+    from data_engine.datahub.standards import planner as planner_module
+
+    monkeypatch.setattr(
+        planner_module,
+        "load_corpus",
+        lambda _f: {"topt_denominator": {"instruments": [["issuer:lei:XOM", "security:x", "listing:xnys:xom", "XOM"]]}},
+    )
+    issuers = planner_module.universe_issuers(connection, "topt")
+    assert issuers[0].cik is None and issuers[0].predecessor_cik == 34088
+    issuers = planner_module.resolve_missing_ciks(issuers, {"XOM": 2115436})
+    monkeypatch.setattr(backfill_module, "universe_issuers", lambda _c, _u, **_k: issuers)
+
+    report = run_standard_backfill(
+        connection,
+        universe="topt",
+        standard_name="employees_total",
+        cutoff=CUTOFF,
+        mode="backfill",
+        http=http,
+        gateway=_gateway(connection),
+        store=FakeStore(),
+        log=lambda _l: None,
+    )
+
+    assert dict(report.outcomes) == {"resolved": 1}
+    (row,) = connection.headcount_rows
+    assert row[0] == 2115436 and row[1] == Decimal(61000)
+    assert "filing_cik=34088" in row[5] and "accession=000003408826000009" in row[5]
+
+
+def test_a_seated_model_resolves_a_multi_candidate_filing_with_its_invocation_on_the_evidence(monkeypatch) -> None:
+    """#70 scope 2: LLY's two totals go to the model; the chosen value must be a candidate,
+    the fact carries the model extractor id, the invocation id and the policy's confidence."""
+    import json
+
     from data_engine.config import settings
+
+    monkeypatch.setattr(settings, "llm_api_key", "test-key")
+    monkeypatch.setattr(settings, "llm_model", "glm-test")
+    answer = json.dumps(
+        {
+            "choices": [
+                {"message": {"content": json.dumps({"value": 50000, "candidate_index": 1, "reason": "company-wide"})}}
+            ],
+            "usage": {"prompt_tokens": 200, "completion_tokens": 40, "total_tokens": 240},
+        }
+    ).encode()
+    connection, store = FakeConnection(), FakeStore()
+    outcome = extract_headcount(
+        59478,
+        connection=connection,
+        http=_fixture_edgar(),
+        gateway=_gateway(connection),
+        standard=STANDARD,
+        cutoff=CUTOFF,
+        write=True,
+        store=store,
+        now=CUTOFF,
+        model_transport=lambda *_: (200, answer),
+        issuer_label="LLY",
+    )
+
+    assert outcome.status == "resolved" and outcome.value == 50000
+    assert outcome.extractor.startswith("model:glm-test:")
+    (row,) = connection.headcount_rows
+    assert row[1] == Decimal(50000) and row[6] == Decimal("0.90")
+    assert "extractor=model:glm-test:" in row[5] and "invocation=model-invocation:" in row[5]
+    assert len(connection.model_invocations) == 1
+
+
+def test_a_declining_model_leaves_the_cell_honestly_open(monkeypatch) -> None:
+    import json
+
+    from data_engine.config import settings
+
+    monkeypatch.setattr(settings, "llm_api_key", "test-key")
+    answer = json.dumps(
+        {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps({"value": None, "candidate_index": None, "reason": "both are segments"})
+                    }
+                }
+            ],
+            "usage": {"total_tokens": 100},
+        }
+    ).encode()
+    connection = FakeConnection()
+    outcome = extract_headcount(
+        59478,
+        connection=connection,
+        http=_fixture_edgar(),
+        gateway=_gateway(connection),
+        standard=STANDARD,
+        cutoff=CUTOFF,
+        write=True,
+        store=FakeStore(),
+        model_transport=lambda *_: (200, answer),
+    )
+    assert outcome.status == "model_declined" and "both are segments" in outcome.detail
+    assert connection.headcount_rows == []
+
+
+def _spy_on_extract_metric(monkeypatch) -> list[tuple[list, object]]:
+    """Wrap the shared primitive's `extract_metric`; return one (candidates, selector) per call."""
+    from factors.shared import extraction as primitive
+
+    calls: list[tuple[list, object]] = []
+    real = primitive.extract_metric
+
+    def spy(candidates, selector=None):
+        calls.append((list(candidates), selector))
+        return real(candidates, selector)
+
+    monkeypatch.setattr(primitive, "extract_metric", spy)
+    return calls
+
+
+def test_the_rule_path_selects_through_extract_metric(monkeypatch) -> None:
+    """#1130: the adapter calls the shared primitive for selection. It owns no copy of the rule."""
+    from data_engine.config import settings
+
+    monkeypatch.setattr(settings, "llm_api_key", "")
+    calls = _spy_on_extract_metric(monkeypatch)
+    connection = FakeConnection()
+    outcome = extract_headcount(
+        1045810,
+        connection=connection,
+        http=_fixture_edgar(),
+        gateway=_gateway(connection),
+        standard=STANDARD,
+        cutoff=CUTOFF,
+        write=False,
+    )
+    assert outcome.status == "resolved" and outcome.value == 42000
+    assert outcome.extractor == RULE_SINGLE_CANDIDATE
+    assert len(calls) == 1, f"extract_metric was called {len(calls)} time(s); expected 1"
+    (shared_candidates, selector) = calls[0]
+    assert [c.value for c in shared_candidates] == [42000]
+    assert selector is None
+
+
+def test_the_model_path_passes_a_selector_to_extract_metric(monkeypatch) -> None:
+    import json
+
+    from data_engine.config import settings
+    from factors.shared.extraction import Selector
+
+    monkeypatch.setattr(settings, "llm_api_key", "test-key")
+    monkeypatch.setattr(settings, "llm_model", "glm-test")
+    answer = json.dumps(
+        {
+            "choices": [
+                {"message": {"content": json.dumps({"value": 50000, "candidate_index": 0, "reason": "company-wide"})}}
+            ],
+            "usage": {"prompt_tokens": 200, "completion_tokens": 40, "total_tokens": 240},
+        }
+    ).encode()
+    calls = _spy_on_extract_metric(monkeypatch)
+    connection = FakeConnection()
+    outcome = extract_headcount(
+        59478,
+        connection=connection,
+        http=_fixture_edgar(),
+        gateway=_gateway(connection),
+        standard=STANDARD,
+        cutoff=CUTOFF,
+        write=True,
+        store=FakeStore(),
+        now=CUTOFF,
+        model_transport=lambda *_: (200, answer),
+        issuer_label="LLY",
+    )
+    assert outcome.status == "resolved" and outcome.value == 50000
+    assert len(calls) == 1, f"extract_metric was called {len(calls)} time(s); expected 1"
+    (shared_candidates, selector) = calls[0]
+    assert sorted(c.value for c in shared_candidates) == [12000, 50000]
+    assert isinstance(selector, Selector)
+    assert "model=glm-test" in outcome.detail and "(replayed)" not in outcome.detail
+
+
+def test_a_replayed_model_answer_is_marked_replayed_and_asks_the_provider_nothing(monkeypatch) -> None:
+    """The stored answer decides. The detail keeps the model name and the replayed mark."""
+    from data_engine.config import settings
+
     class ReplayConnection(FakeConnection):
         def execute(self, sql: str, params: tuple = ()):
-            if " ".join(sql.split()).startswith("select invocation_id, decision"): stored = {"value": 50000, "candidate_index": 0, "reason": "company-wide"}; return _Result( [("model-invocation:stored", stored, "r" * 64, 200, 40, "q" * 64, "zai", "glm-test", "glm-test")] )
+            if " ".join(sql.split()).startswith("select invocation_id, decision"):
+                stored = {"value": 50000, "candidate_index": 0, "reason": "company-wide"}
+                return _Result(
+                    [("model-invocation:stored", stored, "r" * 64, 200, 40, "q" * 64, "zai", "glm-test", "glm-test")]
+                )
             return super().execute(sql, params)
-    def refuse_to_ask(*_args): raise AssertionError("a replayed answer must not reach the provider")
-    monkeypatch.setattr(settings, "llm_api_key", "test-key"); monkeypatch.setattr(settings, "llm_model", "glm-test"); connection = ReplayConnection(); outcome = extract_headcount( 59478, connection=connection, http=_fixture_edgar(), gateway=_gateway(connection), standard=STANDARD, cutoff=CUTOFF, write=True, store=FakeStore(), now=CUTOFF, model_transport=refuse_to_ask, issuer_label="LLY", ); assert outcome.status == "resolved" and outcome.value == 50000; assert "model=glm-test invocation=model-invocation:stored (replayed)" in outcome.detail; assert connection.model_invocations == []
-def test_a_declining_model_reports_its_reason_and_the_primitive_returns_no_selection(monkeypatch) -> None: import json; from data_engine.config import settings; monkeypatch.setattr(settings, "llm_api_key", "test-key"); monkeypatch.setattr(settings, "llm_model", "glm-test"); answer = json.dumps( { "choices": [ { "message": { "content": json.dumps({"value": None, "candidate_index": None, "reason": "both are segments"}) } } ], "usage": {"total_tokens": 100}, } ).encode(); calls = _spy_on_extract_metric(monkeypatch); connection = FakeConnection(); outcome = extract_headcount( 59478, connection=connection, http=_fixture_edgar(), gateway=_gateway(connection), standard=STANDARD, cutoff=CUTOFF, write=True, store=FakeStore(), model_transport=lambda *_: (200, answer), ); assert len(calls) == 1; assert outcome.status == "model_declined" and outcome.value is None; assert outcome.extractor == RULE_SINGLE_CANDIDATE; assert "model=glm-test invocation=model-invocation:" in outcome.detail; assert outcome.detail.endswith("reason='both are segments'")
-def test_select_total_decides_through_extract_metric(monkeypatch) -> None: calls = _spy_on_extract_metric(monkeypatch); found = candidates(filing_plain_text(_html(NVDA))); status, chosen = select_total(found); assert (status, chosen is found[0]) == ("resolved", True); assert len(calls) == 1 and calls[0][1] is None
-def test_without_a_seated_model_the_cell_stays_needs_model_selection(monkeypatch) -> None: from data_engine.config import settings; monkeypatch.setattr(settings, "llm_api_key", ""); connection = FakeConnection(); outcome = extract_headcount( 59478, connection=connection, http=_fixture_edgar(), gateway=_gateway(connection), standard=STANDARD, cutoff=CUTOFF, write=True, store=FakeStore(), ); assert outcome.status == "needs_model_selection" and connection.headcount_rows == []
-def test_probe_run_writes_only_the_ledger_and_the_report(monkeypatch, call_ledger) -> None: connection = FakeConnection(); monkeypatch.setattr(backfill_module, "universe_issuers", lambda _c, _u, **_k: [_issuer(1045810, "NVDA")]); report = run_standard_backfill( connection, universe="topt", standard_name="employees_total", cutoff=CUTOFF, mode="probe", http=_fixture_edgar(), gateway=_gateway(connection), store=FakeStore(), log=lambda _l: None, ); assert dict(report.outcomes) == {"resolved": 1}; assert connection.headcount_rows == [] and connection.raw_rows == []; assert call_ledger and connection.health_rows
+
+    def refuse_to_ask(*_args):
+        raise AssertionError("a replayed answer must not reach the provider")
+
+    monkeypatch.setattr(settings, "llm_api_key", "test-key")
+    monkeypatch.setattr(settings, "llm_model", "glm-test")
+    connection = ReplayConnection()
+    outcome = extract_headcount(
+        59478,
+        connection=connection,
+        http=_fixture_edgar(),
+        gateway=_gateway(connection),
+        standard=STANDARD,
+        cutoff=CUTOFF,
+        write=True,
+        store=FakeStore(),
+        now=CUTOFF,
+        model_transport=refuse_to_ask,
+        issuer_label="LLY",
+    )
+    assert outcome.status == "resolved" and outcome.value == 50000
+    assert "model=glm-test invocation=model-invocation:stored (replayed)" in outcome.detail
+    assert connection.model_invocations == []
+
+
+def test_a_declining_model_reports_its_reason_and_the_primitive_returns_no_selection(monkeypatch) -> None:
+    import json
+
+    from data_engine.config import settings
+
+    monkeypatch.setattr(settings, "llm_api_key", "test-key")
+    monkeypatch.setattr(settings, "llm_model", "glm-test")
+    answer = json.dumps(
+        {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps({"value": None, "candidate_index": None, "reason": "both are segments"})
+                    }
+                }
+            ],
+            "usage": {"total_tokens": 100},
+        }
+    ).encode()
+    calls = _spy_on_extract_metric(monkeypatch)
+    connection = FakeConnection()
+    outcome = extract_headcount(
+        59478,
+        connection=connection,
+        http=_fixture_edgar(),
+        gateway=_gateway(connection),
+        standard=STANDARD,
+        cutoff=CUTOFF,
+        write=True,
+        store=FakeStore(),
+        model_transport=lambda *_: (200, answer),
+    )
+    assert len(calls) == 1
+    assert outcome.status == "model_declined" and outcome.value is None
+    assert outcome.extractor == RULE_SINGLE_CANDIDATE
+    assert "model=glm-test invocation=model-invocation:" in outcome.detail
+    assert outcome.detail.endswith("reason='both are segments'")
+
+
+def test_select_total_decides_through_extract_metric(monkeypatch) -> None:
+    """`select_total` stays as a thin wrapper, so a test or a caller gets the same rule."""
+    calls = _spy_on_extract_metric(monkeypatch)
+    found = candidates(filing_plain_text(_html(NVDA)))
+    status, chosen = select_total(found)
+    assert (status, chosen is found[0]) == ("resolved", True)
+    assert len(calls) == 1 and calls[0][1] is None
+
+
+def test_without_a_seated_model_the_cell_stays_needs_model_selection(monkeypatch) -> None:
+    from data_engine.config import settings
+
+    monkeypatch.setattr(settings, "llm_api_key", "")
+    connection = FakeConnection()
+    outcome = extract_headcount(
+        59478,
+        connection=connection,
+        http=_fixture_edgar(),
+        gateway=_gateway(connection),
+        standard=STANDARD,
+        cutoff=CUTOFF,
+        write=True,
+        store=FakeStore(),
+    )
+    assert outcome.status == "needs_model_selection" and connection.headcount_rows == []
+
+
+def test_probe_run_writes_only_the_ledger_and_the_report(monkeypatch, call_ledger) -> None:
+    connection = FakeConnection()
+    monkeypatch.setattr(backfill_module, "universe_issuers", lambda _c, _u, **_k: [_issuer(1045810, "NVDA")])
+    report = run_standard_backfill(
+        connection,
+        universe="topt",
+        standard_name="employees_total",
+        cutoff=CUTOFF,
+        mode="probe",
+        http=_fixture_edgar(),
+        gateway=_gateway(connection),
+        store=FakeStore(),
+        log=lambda _l: None,
+    )
+    assert dict(report.outcomes) == {"resolved": 1}
+    assert connection.headcount_rows == [] and connection.raw_rows == []
+    assert call_ledger and connection.health_rows
+
+
 def test_candidate_records_are_frozen_values() -> None:
     candidate = FilingCandidate(1, None, "s", False)
     with pytest.raises(Exception):
         candidate.value = 2  # type: ignore[misc]
+
+
 def test_latest_annual_filing_consults_submissions_overflow_files_when_recent_has_only_424b2() -> None:
+    """#1264: high-volume filers like JPM fill `filings.recent` (~1,000 rows) with 424B2
+    structured-note prospectuses within weeks, pushing historical 10-Ks into
+    `filings.files` (`CIK0000019617-submissions-001.json`)."""
+
     class OverflowHttp:
-        def __init__(self) -> None: self.urls: list[str] = []
+        def __init__(self) -> None:
+            self.urls: list[str] = []
+
         def get(self, url: str) -> _Response:
             self.urls.append(url)
-            if url.endswith("/submissions/CIK0000019617.json"): return _Response( json_body={ "filings": { "recent": { "form": ["424B2", "424B2"], "filingDate": ["2026-08-10", "2026-08-01"], "accessionNumber": ["0000019617-26-099999", "0000019617-26-099998"], "primaryDocument": ["note1.htm", "note2.htm"], }, "files": [ {"name": "CIK0000019617-submissions-001.json"}, ], } } )
-            if url.endswith("/submissions/CIK0000019617-submissions-001.json"): return _Response( json_body={ "form": ["424B2", "10-K"], "filingDate": ["2025-03-01", "2025-02-14"], "accessionNumber": ["0000019617-25-001000", "0000019617-25-000270"], "primaryDocument": ["note0.htm", "jpm-20241231.htm"], } )
-            if "000001961725000270/jpm-20241231.htm" in url: return _Response(content=_html("As of December 31, 2024, JPMorgan Chase had 317,233 employees."))
+            if url.endswith("/submissions/CIK0000019617.json"):
+                return _Response(
+                    json_body={
+                        "filings": {
+                            "recent": {
+                                "form": ["424B2", "424B2"],
+                                "filingDate": ["2026-08-10", "2026-08-01"],
+                                "accessionNumber": ["0000019617-26-099999", "0000019617-26-099998"],
+                                "primaryDocument": ["note1.htm", "note2.htm"],
+                            },
+                            "files": [
+                                {"name": "CIK0000019617-submissions-001.json"},
+                            ],
+                        }
+                    }
+                )
+            if url.endswith("/submissions/CIK0000019617-submissions-001.json"):
+                return _Response(
+                    json_body={
+                        "form": ["424B2", "10-K"],
+                        "filingDate": ["2025-03-01", "2025-02-14"],
+                        "accessionNumber": ["0000019617-25-001000", "0000019617-25-000270"],
+                        "primaryDocument": ["note0.htm", "jpm-20241231.htm"],
+                    }
+                )
+            if "000001961725000270/jpm-20241231.htm" in url:
+                return _Response(content=_html("As of December 31, 2024, JPMorgan Chase had 317,233 employees."))
             raise AssertionError(f"unexpected url: {url}")
-    connection = FakeConnection(); http = OverflowHttp(); outcome = extract_headcount( 19617, connection=connection, http=http, gateway=_gateway(connection), standard=STANDARD, cutoff=datetime(2025, 6, 30, 22, 15, tzinfo=UTC), write=True, store=FakeStore(), ); assert outcome.status == "resolved"; assert outcome.value == 317233; assert outcome.accession == "000001961725000270"; assert outcome.filing_date == date(2025, 2, 14); assert any("CIK0000019617-submissions-001.json" in u for u in http.urls)
-def test_tesla_post_positioned_employee_headcount_phrasing_is_recalled_and_selected() -> None: tsla_2024 = _html("As of December 31, 2024, our employee headcount worldwide was 125,665."); found_2024 = candidates(filing_plain_text(tsla_2024)); status_2024, chosen_2024 = select_total(found_2024); assert status_2024 == "resolved" and chosen_2024 is not None; assert chosen_2024.value == 125665; assert parse_as_of(chosen_2024.as_of) == date(2024, 12, 31); tsla_2021 = _html("As of December 31, 2021, the full-time count for Tesla's employees worldwide was 99,290."); found_2021 = candidates(filing_plain_text(tsla_2021)); status_2021, chosen_2021 = select_total(found_2021); assert status_2021 == "resolved" and chosen_2021 is not None; assert chosen_2021.value == 99290; assert parse_as_of(chosen_2021.as_of) == date(2021, 12, 31)
+
+    connection = FakeConnection()
+    http = OverflowHttp()
+    outcome = extract_headcount(
+        19617,
+        connection=connection,
+        http=http,
+        gateway=_gateway(connection),
+        standard=STANDARD,
+        cutoff=datetime(2025, 6, 30, 22, 15, tzinfo=UTC),
+        write=True,
+        store=FakeStore(),
+    )
+    assert outcome.status == "resolved"
+    assert outcome.value == 317233
+    assert outcome.accession == "000001961725000270"
+    assert outcome.filing_date == date(2025, 2, 14)
+    assert any("CIK0000019617-submissions-001.json" in u for u in http.urls)
+
+
+def test_tesla_post_positioned_employee_headcount_phrasing_is_recalled_and_selected() -> None:
+    """#1264: Tesla's 10-Ks state the number after the noun ('employee headcount worldwide
+    was 125,665' / 'full-time count for Tesla's employees worldwide was 99,290')."""
+    tsla_2024 = _html("As of December 31, 2024, our employee headcount worldwide was 125,665.")
+    found_2024 = candidates(filing_plain_text(tsla_2024))
+    status_2024, chosen_2024 = select_total(found_2024)
+    assert status_2024 == "resolved" and chosen_2024 is not None
+    assert chosen_2024.value == 125665
+    assert parse_as_of(chosen_2024.as_of) == date(2024, 12, 31)
+
+    tsla_2021 = _html("As of December 31, 2021, the full-time count for Tesla's employees worldwide was 99,290.")
+    found_2021 = candidates(filing_plain_text(tsla_2021))
+    status_2021, chosen_2021 = select_total(found_2021)
+    assert status_2021 == "resolved" and chosen_2021 is not None
+    assert chosen_2021.value == 99290
+    assert parse_as_of(chosen_2021.as_of) == date(2021, 12, 31)
+
+
 def test_decimal_and_scale_word_headcount_phrases_are_recalled_and_scaled() -> None:
-    for phrase, expected in ( ("As of January 31, 2026, we employed approximately 2.1 million associates worldwide.", 2_100_000), ("As of December 31, 2025, we had 61 thousand employees globally.", 61_000), ): status, chosen = select_total(candidates(filing_plain_text(_html(phrase)))); assert status == "resolved" and chosen is not None and chosen.value == expected
-def test_extract_headcount_catches_candidate_parse_exceptions_and_returns_error(monkeypatch) -> None: from data_engine.datahub.standards import filing_extraction as fe_module; connection = FakeConnection(); http = FakeHttp({1045810: [("10-K", "2026-02-25", "0001045810-26-000021", _html(NVDA))]}); monkeypatch.setattr(fe_module, "candidates", lambda _t: (_ for _ in ()).throw(RuntimeError("boom"))); outcome = extract_headcount( 1045810, connection=connection, http=http, gateway=_gateway(connection), standard=STANDARD, cutoff=CUTOFF, write=False, store=FakeStore(), ); assert outcome.status == "error" and "RuntimeError: boom" in outcome.detail
-def test_universe_issuers_passes_cutoff_instead_of_wall_clock(monkeypatch) -> None: from data_engine.datahub.standards import planner as planner_module; recorded_known_at: list[datetime] = []; recorded_as_of: list[date] = []; uuid_issuer = "11111111-2222-3333-4444-555555555555"; monkeypatch.setattr( planner_module, "load_corpus", lambda _f: { "topt_denominator": { "instruments": [ [uuid_issuer, "sec:1", "listing:xnas:aapl", "AAPL"], ["issuer:lei:TEST", "sec:2", "listing:xnys:msft", "MSFT"], ] } }, ); monkeypatch.setattr( planner_module, "choose_primary_listings", lambda _c, by_issuer, *, known_at: ( recorded_known_at.append(known_at) or {k: v[0] for k, v in by_issuer.items()} ), ); monkeypatch.setattr( planner_module, "lookup_entity", lambda _c, _id, _kind, *, as_of, known_at: ( recorded_as_of.append(as_of) or recorded_known_at.append(known_at) or "22222222-2222-2222-2222-222222222222" ), ); monkeypatch.setattr( planner_module, "alias_of", lambda _c, _eid, _ns, *, valid_at, known_at: ( recorded_as_of.append(valid_at) or recorded_known_at.append(known_at) or "320193" ), ); monkeypatch.setattr(planner_module, "signed_predecessor_ciks", lambda _c, _m: {}); historical_cutoff = datetime(2024, 6, 30, 23, 59, 59, tzinfo=UTC); issuers = planner_module.universe_issuers(FakeConnection(), "topt", cutoff=historical_cutoff); assert [i.cik for i in issuers] == [320193, 320193]; assert set(recorded_known_at) == {historical_cutoff} and set(recorded_as_of) == {date(2024, 6, 30)}
-def test_open_cells_reopens_for_newer_annual_filing_and_ignores_ineligible_rows() -> None: prior_filing = CUTOFF - timedelta(days=200); newer_filing = CUTOFF - timedelta(days=10); connection = FakeConnection( { 100: [ ( EXTRACTION_SOURCE, prior_filing, f"accession=000000010025000001 filed={prior_filing.date().isoformat()}", prior_filing.date(), ) ], 200: [ ("curated-10k-2025", CUTOFF - timedelta(days=5), "curated", CUTOFF.date()), (EXTRACTION_SOURCE, CUTOFF - timedelta(days=15), "uncited-no-accession", CUTOFF.date()), ], } ); connection.raw_rows.append( ("sec", "filing-document:CIK0000000100:000000010026000001:10k.htm", "s3://raw/k", "sha", 10, newer_filing) ); cells = { cell.issuer.cik: cell.reason for cell in open_cells(connection, [_issuer(100), _issuer(200)], standard=STANDARD, cutoff=CUTOFF) }; assert cells == {100: "stale", 200: "no_fact"}
-@pytest.mark.parametrize( ("ticker", "sentence", "expected_value", "expected_as_of"), [ ( "CPRT", "As of July 31, 2026, we had approximately 11,900 full and part-time employees, of which approximately 62% were located in the U.S.", 11900, "July 31, 2026", ), ( "CTAS", "At May 31, 2026, Cintas employed approximately 48,100 employee-partners in our global workforce, of which approximately 800 were represented by labor unions.", 48100, "May 31, 2026", ), ( "FTNT", "Headcount increased 7% to 15,109 employees as of December 31, 2025, up from 14,138 as of December 31, 2024.", 15109, "December 31, 2025", ), ( "INTC", "We invest in our highly skilled workforce, which was comprised of 85,100 1 people as of December 27, 2025, by creating practices.", 85100, "December 27, 2025", ), ( "KLAC", "As of June 30, 2026, we had approximately 17,000 regular full-time employees and approximately 200 part-time and temporary employees in facilities located in 18 major regions.", 17000, "June 30, 2026", ), ( "PANW_WORKFORCE", "With a global workforce of 21,921 as of July 31, 2026, our People Strategy focuses on talent.", 21921, "July 31, 2026", ), ( "PANW_INCREASED", "As of July 31, 2026, our headcount increased from 16,068 to 21,921 employees.", 21921, "July 31, 2026", ), ( "QCOM", "At September 27, 2026, we had approxima tely 57,000 full-time, part-time and temporary workers, the overwhelming majority of which were full-time employees.", 57000, "September 27, 2026", ), ( "ROST", "As of January 31, 2026, we had approximately 111,000 total a ssociates, which includes both full- and part-time associates.", 111000, "January 31, 2026", ), ( "SNDK", "As of July 2026, our global team includes approximately 11,100 employees across 33 countries.", 11100, None, ), ( "TTWO", "Our headcount includes 12,909 full-time employees as of March 31, 2026, including 9,998 in development studios. We had research and development staff of 9,998 employees and sales and marketing staff of 1,456 employees.", 12909, "March 31, 2026", ), ( "ARM_PROSE", "As of March 31, 2026, approximately 84% of our 9,584 global employees were engaged in engineering activities.", 9584, "March 31, 2026", ), ( "ARM_TABLE", "Total Employees 9,584 8,330 7,096", 9584, None, ), ], )
-def test_qqq_10k_human_capital_sentences_resolve_company_wide_headcount( ticker: str, sentence: str, expected_value: int, expected_as_of: str | None, ) -> None: found = candidates(filing_plain_text(_html(sentence))); status, chosen = select_total(found); assert status == "resolved" and chosen is not None, f"{ticker}: {found}"; assert chosen.value == expected_value; assert chosen.as_of == expected_as_of
+    """#1519: Walmart ('approximately 2.1 million associates') and thousand-scaled filings."""
+    for phrase, expected in (
+        ("As of January 31, 2026, we employed approximately 2.1 million associates worldwide.", 2_100_000),
+        ("As of December 31, 2025, we had 61 thousand employees globally.", 61_000),
+    ):
+        status, chosen = select_total(candidates(filing_plain_text(_html(phrase))))
+        assert status == "resolved" and chosen is not None and chosen.value == expected
+
+
+def test_extract_headcount_catches_candidate_parse_exceptions_and_returns_error(monkeypatch) -> None:
+    """#1519: an extraction parse exception turns into ExtractionOutcome(status='error')."""
+    from data_engine.datahub.standards import filing_extraction as fe_module
+
+    connection = FakeConnection()
+    http = FakeHttp({1045810: [("10-K", "2026-02-25", "0001045810-26-000021", _html(NVDA))]})
+    monkeypatch.setattr(fe_module, "candidates", lambda _t: (_ for _ in ()).throw(RuntimeError("boom")))
+    outcome = extract_headcount(
+        1045810,
+        connection=connection,
+        http=http,
+        gateway=_gateway(connection),
+        standard=STANDARD,
+        cutoff=CUTOFF,
+        write=False,
+        store=FakeStore(),
+    )
+    assert outcome.status == "error" and "RuntimeError: boom" in outcome.detail
+
+
+def test_universe_issuers_passes_cutoff_instead_of_wall_clock(monkeypatch) -> None:
+    """#1519: planner.universe_issuers forwards cutoff to primary-listing and KG lookups."""
+    from data_engine.datahub.standards import planner as planner_module
+
+    recorded_known_at: list[datetime] = []
+    recorded_as_of: list[date] = []
+    uuid_issuer = "11111111-2222-3333-4444-555555555555"
+    monkeypatch.setattr(
+        planner_module,
+        "load_corpus",
+        lambda _f: {
+            "topt_denominator": {
+                "instruments": [
+                    [uuid_issuer, "sec:1", "listing:xnas:aapl", "AAPL"],
+                    ["issuer:lei:TEST", "sec:2", "listing:xnys:msft", "MSFT"],
+                ]
+            }
+        },
+    )
+    monkeypatch.setattr(
+        planner_module,
+        "choose_primary_listings",
+        lambda _c, by_issuer, *, known_at: (
+            recorded_known_at.append(known_at) or {k: v[0] for k, v in by_issuer.items()}
+        ),
+    )
+    monkeypatch.setattr(
+        planner_module,
+        "lookup_entity",
+        lambda _c, _id, _kind, *, as_of, known_at: (
+            recorded_as_of.append(as_of) or recorded_known_at.append(known_at) or "22222222-2222-2222-2222-222222222222"
+        ),
+    )
+    monkeypatch.setattr(
+        planner_module,
+        "alias_of",
+        lambda _c, _eid, _ns, *, valid_at, known_at: (
+            recorded_as_of.append(valid_at) or recorded_known_at.append(known_at) or "320193"
+        ),
+    )
+    monkeypatch.setattr(planner_module, "signed_predecessor_ciks", lambda _c, _m: {})
+    historical_cutoff = datetime(2024, 6, 30, 23, 59, 59, tzinfo=UTC)
+    issuers = planner_module.universe_issuers(FakeConnection(), "topt", cutoff=historical_cutoff)
+    assert [i.cik for i in issuers] == [320193, 320193]
+    assert set(recorded_known_at) == {historical_cutoff} and set(recorded_as_of) == {date(2024, 6, 30)}
+
+
+def test_open_cells_reopens_for_newer_annual_filing_and_ignores_ineligible_rows() -> None:
+    """#1519: a newer annual filing knowable at cutoff reopens the cell before max_age_days,
+    and uncited or curated-10k-2025 rows do not close the cell."""
+    prior_filing = CUTOFF - timedelta(days=200)
+    newer_filing = CUTOFF - timedelta(days=10)
+    connection = FakeConnection(
+        {
+            100: [
+                (
+                    EXTRACTION_SOURCE,
+                    prior_filing,
+                    f"accession=000000010025000001 filed={prior_filing.date().isoformat()}",
+                    prior_filing.date(),
+                )
+            ],
+            200: [
+                ("curated-10k-2025", CUTOFF - timedelta(days=5), "curated", CUTOFF.date()),
+                (EXTRACTION_SOURCE, CUTOFF - timedelta(days=15), "uncited-no-accession", CUTOFF.date()),
+            ],
+        }
+    )
+    connection.raw_rows.append(
+        ("sec", "filing-document:CIK0000000100:000000010026000001:10k.htm", "s3://raw/k", "sha", 10, newer_filing)
+    )
+    cells = {
+        cell.issuer.cik: cell.reason
+        for cell in open_cells(connection, [_issuer(100), _issuer(200)], standard=STANDARD, cutoff=CUTOFF)
+    }
+    assert cells == {100: "stale", 200: "no_fact"}
+
+
+@pytest.mark.parametrize(
+    ("ticker", "sentence", "expected_value", "expected_as_of"),
+    [
+        (
+            "CPRT",
+            "As of July 31, 2026, we had approximately 11,900 full and part-time employees, of which approximately 62% were located in the U.S.",
+            11900,
+            "July 31, 2026",
+        ),
+        (
+            "CTAS",
+            "At May 31, 2026, Cintas employed approximately 48,100 employee-partners in our global workforce, of which approximately 800 were represented by labor unions.",
+            48100,
+            "May 31, 2026",
+        ),
+        (
+            "FTNT",
+            "Headcount increased 7% to 15,109 employees as of December 31, 2025, up from 14,138 as of December 31, 2024.",
+            15109,
+            "December 31, 2025",
+        ),
+        (
+            "INTC",
+            "We invest in our highly skilled workforce, which was comprised of 85,100 1 people as of December 27, 2025, by creating practices.",
+            85100,
+            "December 27, 2025",
+        ),
+        (
+            "KLAC",
+            "As of June 30, 2026, we had approximately 17,000 regular full-time employees and approximately 200 part-time and temporary employees in facilities located in 18 major regions.",
+            17000,
+            "June 30, 2026",
+        ),
+        (
+            "PANW_WORKFORCE",
+            "With a global workforce of 21,921 as of July 31, 2026, our People Strategy focuses on talent.",
+            21921,
+            "July 31, 2026",
+        ),
+        (
+            "PANW_INCREASED",
+            "As of July 31, 2026, our headcount increased from 16,068 to 21,921 employees.",
+            21921,
+            "July 31, 2026",
+        ),
+        (
+            "QCOM",
+            "At September 27, 2026, we had approxima tely 57,000 full-time, part-time and temporary workers, the overwhelming majority of which were full-time employees.",
+            57000,
+            "September 27, 2026",
+        ),
+        (
+            "ROST",
+            "As of January 31, 2026, we had approximately 111,000 total a ssociates, which includes both full- and part-time associates.",
+            111000,
+            "January 31, 2026",
+        ),
+        (
+            "SNDK",
+            "As of July 2026, our global team includes approximately 11,100 employees across 33 countries.",
+            11100,
+            None,
+        ),
+        (
+            "TTWO",
+            "Our headcount includes 12,909 full-time employees as of March 31, 2026, including 9,998 in development studios. We had research and development staff of 9,998 employees and sales and marketing staff of 1,456 employees.",
+            12909,
+            "March 31, 2026",
+        ),
+        (
+            "ARM_PROSE",
+            "As of March 31, 2026, approximately 84% of our 9,584 global employees were engaged in engineering activities.",
+            9584,
+            "March 31, 2026",
+        ),
+        (
+            "ARM_TABLE",
+            "Total Employees 9,584 8,330 7,096",
+            9584,
+            None,
+        ),
+    ],
+)
+def test_qqq_10k_human_capital_sentences_resolve_company_wide_headcount(
+    ticker: str,
+    sentence: str,
+    expected_value: int,
+    expected_as_of: str | None,
+) -> None:
+    """Recall and partial filtering on the 11 QQQ 10-K/20-F human-capital sentence patterns."""
+    found = candidates(filing_plain_text(_html(sentence)))
+    status, chosen = select_total(found)
+    assert status == "resolved" and chosen is not None, f"{ticker}: {found}"
+    assert chosen.value == expected_value
+    assert chosen.as_of == expected_as_of

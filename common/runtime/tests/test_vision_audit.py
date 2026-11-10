@@ -1,65 +1,354 @@
-# ruff: noqa: I001, E401, E402, E701, E702, E731, F401, F811
-# fmt: off
-from __future__ import annotations; from datetime import UTC, datetime; from typing import Any; import pytest; from truealpha_runtime.testing import load_tool; _module = load_tool("vision_audit"); audit_vision = _module.audit_vision; GateAuditResult = _module.GateAuditResult; VisionAuditReport = _module.VisionAuditReport
+"""Unit tests for tools/vision_audit.py (Issue #28 and Issue #54).
+
+Asserts that vision-audit accurately evaluates gate statuses against
+nightly verdicts and health endpoints.
+"""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from typing import Any
+
+import pytest
+from truealpha_runtime.testing import load_tool
+
+_module = load_tool("vision_audit")
+audit_vision = _module.audit_vision
+GateAuditResult = _module.GateAuditResult
+VisionAuditReport = _module.VisionAuditReport
+
+
 class _FakeVerdict:
-    def __init__(self, check: str, ok: bool | None, summary: str) -> None: self.check = check; self.ok = ok; self.summary = summary; self.ran_at = datetime(2026, 10, 9, 21, 30, tzinfo=UTC)
+    def __init__(self, check: str, ok: bool | None, summary: str) -> None:
+        self.check = check
+        self.ok = ok
+        self.summary = summary
+        self.ran_at = datetime(2026, 10, 9, 21, 30, tzinfo=UTC)
+
+
 class _FakeHealthReport:
-    def __init__( self, verdicts: list[Any], release: str | None = "v0.1.2", governed_pointers: list[dict[str, Any]] | str | None = None, oracle_outcomes: list[dict[str, Any]] | dict[str, Any] | None = None, ) -> None: self.verdicts = verdicts; self.release = release; self.governed_pointers = ( [ {"universe_id": "universe:topt-us-2026-03-31", "freshness": "fresh", "availability": "available"}, {"universe_id": "universe:qqq-us-2026-03-31", "freshness": "fresh", "availability": "available"}, ] if governed_pointers is None else governed_pointers ); self.oracle_outcomes = [{"result": "agree"}] if oracle_outcomes is None else oracle_outcomes
-def test_vision_audit_reports_all_gates_verified_when_all_verdicts_are_green( monkeypatch: pytest.MonkeyPatch, ) -> None:
-    fake_verdicts = [ _FakeVerdict("release_fetch_proof", True, "capture ok"), _FakeVerdict("report_surface_proof", True, "5/5 surfaces ok"), _FakeVerdict("output_invariants", True, "6 held, 0 empty"), _FakeVerdict("question_coverage@universe-list:qqq", True, "coverage ok"), _FakeVerdict("question_coverage@topt", True, "coverage ok"), _FakeVerdict("nightly_backtest", True, "backtest executed ok"), _FakeVerdict("market_data_freshness", True, "freshness within 72h"), ]; monkeypatch.setattr( _module, "read_report", lambda _url, _http_get: _FakeHealthReport(fake_verdicts, "v0.1.2"), ); report: VisionAuditReport = audit_vision(env="production"); assert report.all_passed is True; assert report.status == "pass"; assert all(gate.verified is True for gate in report.gates)
+    def __init__(
+        self,
+        verdicts: list[Any],
+        release: str | None = "v0.1.2",
+        governed_pointers: list[dict[str, Any]] | str | None = None,
+        oracle_outcomes: list[dict[str, Any]] | dict[str, Any] | None = None,
+    ) -> None:
+        self.verdicts = verdicts
+        self.release = release
+        self.governed_pointers = (
+            [
+                {"universe_id": "universe:topt-us-2026-03-31", "freshness": "fresh", "availability": "available"},
+                {"universe_id": "universe:qqq-us-2026-03-31", "freshness": "fresh", "availability": "available"},
+            ]
+            if governed_pointers is None
+            else governed_pointers
+        )
+        self.oracle_outcomes = [{"result": "agree"}] if oracle_outcomes is None else oracle_outcomes
+
+
+def test_vision_audit_reports_all_gates_verified_when_all_verdicts_are_green(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_verdicts = [
+        _FakeVerdict("release_fetch_proof", True, "capture ok"),
+        _FakeVerdict("report_surface_proof", True, "5/5 surfaces ok"),
+        _FakeVerdict("output_invariants", True, "6 held, 0 empty"),
+        _FakeVerdict("question_coverage@universe-list:qqq", True, "coverage ok"),
+        _FakeVerdict("question_coverage@topt", True, "coverage ok"),
+        _FakeVerdict("nightly_backtest", True, "backtest executed ok"),
+        _FakeVerdict("market_data_freshness", True, "freshness within 72h"),
+    ]
+
+    monkeypatch.setattr(
+        _module,
+        "read_report",
+        lambda _url, _http_get: _FakeHealthReport(fake_verdicts, "v0.1.2"),
+    )
+
+    report: VisionAuditReport = audit_vision(env="production")
+    assert report.all_passed is True
+    assert report.status == "pass"
+    assert all(gate.verified is True for gate in report.gates)
     assert {gate.gate_id for gate in report.gates} == {"#56", "#29", "#30", "#31", "#54"}
-def test_vision_audit_refuses_pass_when_served_head_freshness_is_stale_or_missing( monkeypatch: pytest.MonkeyPatch, ) -> None:
-    fake_verdicts = [ _FakeVerdict("release_fetch_proof", True, "capture ok"), _FakeVerdict("report_surface_proof", True, "5/5 surfaces ok"), _FakeVerdict("output_invariants", True, "6 held, 0 empty"), _FakeVerdict("question_coverage@universe-list:qqq", True, "coverage ok"), _FakeVerdict("question_coverage@topt", True, "coverage ok"), _FakeVerdict("nightly_backtest", True, "backtest executed ok"), _FakeVerdict("market_data_freshness", True, "freshness within 72h"), ]; stale_pointers = [ {"universe_id": "universe:topt-us-2026-03-31", "freshness": "stale", "availability": "available"}, ]; monkeypatch.setattr( _module, "read_report", lambda _url, _http_get: _FakeHealthReport(fake_verdicts, "v0.1.2", stale_pointers), ); report: VisionAuditReport = audit_vision(env="production"); assert report.all_passed is False; assert report.status == "fail"
+
+
+def test_vision_audit_refuses_pass_when_served_head_freshness_is_stale_or_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_verdicts = [
+        _FakeVerdict("release_fetch_proof", True, "capture ok"),
+        _FakeVerdict("report_surface_proof", True, "5/5 surfaces ok"),
+        _FakeVerdict("output_invariants", True, "6 held, 0 empty"),
+        _FakeVerdict("question_coverage@universe-list:qqq", True, "coverage ok"),
+        _FakeVerdict("question_coverage@topt", True, "coverage ok"),
+        _FakeVerdict("nightly_backtest", True, "backtest executed ok"),
+        _FakeVerdict("market_data_freshness", True, "freshness within 72h"),
+    ]
+    stale_pointers = [
+        {"universe_id": "universe:topt-us-2026-03-31", "freshness": "stale", "availability": "available"},
+    ]
+
+    monkeypatch.setattr(
+        _module,
+        "read_report",
+        lambda _url, _http_get: _FakeHealthReport(fake_verdicts, "v0.1.2", stale_pointers),
+    )
+
+    report: VisionAuditReport = audit_vision(env="production")
+    assert report.all_passed is False
+    assert report.status == "fail"
     g4 = next(g for g in report.gates if g.gate_id == "#54")
-    assert g4.verified is False; assert g4.status == "OPEN"; assert "mart.served_head.freshness!=fresh" in g4.evidence; missing_report = _FakeHealthReport(fake_verdicts, "v0.1.2"); missing_report.governed_pointers = None; monkeypatch.setattr( _module, "read_report", lambda _url, _http_get: missing_report, ); report_missing: VisionAuditReport = audit_vision(env="production"); assert report_missing.all_passed is False; assert report_missing.status == "fail"; staging_pointers = [ {"universe_id": "universe:topt-us-2026-03-31", "freshness": "fresh", "availability": "available"}, {"universe_id": "universe:qqq-us-2026-09-30", "freshness": "stale", "availability": "available"}, ]; monkeypatch.setattr( _module, "read_report", lambda _url, _http_get: _FakeHealthReport(fake_verdicts, "v0.1.2", staging_pointers), ); report_staging: VisionAuditReport = audit_vision(env="staging"); assert report_staging.all_passed is True; assert report_staging.status == "pass"
-def test_vision_audit_fails_gate_3_when_nightly_backtest_verdict_is_missing( monkeypatch: pytest.MonkeyPatch, ) -> None:
-    fake_verdicts = [ _FakeVerdict("release_fetch_proof", True, "capture ok"), _FakeVerdict("report_surface_proof", True, "5/5 surfaces ok"), _FakeVerdict("output_invariants", True, "6 held, 0 empty"), _FakeVerdict("question_coverage@universe-list:qqq", True, "coverage ok"), _FakeVerdict("question_coverage@topt", True, "coverage ok"), _FakeVerdict("market_data_freshness", True, "freshness within 72h"), ]; monkeypatch.setattr( _module, "read_report", lambda _url, _http_get: _FakeHealthReport(fake_verdicts, "v0.1.2"), ); report: VisionAuditReport = audit_vision(env="production"); assert report.all_passed is False; assert report.status == "fail"
+    assert g4.verified is False
+    assert g4.status == "OPEN"
+    assert "mart.served_head.freshness!=fresh" in g4.evidence
+
+    # Fail-closed when governed_pointers is absent (None)
+    missing_report = _FakeHealthReport(fake_verdicts, "v0.1.2")
+    missing_report.governed_pointers = None
+    monkeypatch.setattr(
+        _module,
+        "read_report",
+        lambda _url, _http_get: missing_report,
+    )
+    report_missing: VisionAuditReport = audit_vision(env="production")
+    assert report_missing.all_passed is False
+    assert report_missing.status == "fail"
+
+    # Manual-only unscheduled QQQ pointer in staging does not fail when TOPT is fresh (#1256)
+    staging_pointers = [
+        {"universe_id": "universe:topt-us-2026-03-31", "freshness": "fresh", "availability": "available"},
+        {"universe_id": "universe:qqq-us-2026-09-30", "freshness": "stale", "availability": "available"},
+    ]
+    monkeypatch.setattr(
+        _module,
+        "read_report",
+        lambda _url, _http_get: _FakeHealthReport(fake_verdicts, "v0.1.2", staging_pointers),
+    )
+    report_staging: VisionAuditReport = audit_vision(env="staging")
+    assert report_staging.all_passed is True
+    assert report_staging.status == "pass"
+
+
+def test_vision_audit_fails_gate_3_when_nightly_backtest_verdict_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_verdicts = [
+        _FakeVerdict("release_fetch_proof", True, "capture ok"),
+        _FakeVerdict("report_surface_proof", True, "5/5 surfaces ok"),
+        _FakeVerdict("output_invariants", True, "6 held, 0 empty"),
+        _FakeVerdict("question_coverage@universe-list:qqq", True, "coverage ok"),
+        _FakeVerdict("question_coverage@topt", True, "coverage ok"),
+        _FakeVerdict("market_data_freshness", True, "freshness within 72h"),
+    ]
+
+    monkeypatch.setattr(
+        _module,
+        "read_report",
+        lambda _url, _http_get: _FakeHealthReport(fake_verdicts, "v0.1.2"),
+    )
+
+    report: VisionAuditReport = audit_vision(env="production")
+    assert report.all_passed is False
+    assert report.status == "fail"
     g3 = next(g for g in report.gates if g.gate_id == "#31")
-    assert g3.verified is False; assert g3.status == "OPEN"; assert "nightly_backtest: no verdict recorded at all" in g3.evidence
-def test_vision_audit_fails_gate_1_when_report_surface_proof_fails( monkeypatch: pytest.MonkeyPatch, ) -> None:
-    fake_verdicts = [ _FakeVerdict("release_fetch_proof", True, "capture ok"), _FakeVerdict("report_surface_proof", False, "4/5 surfaces serve governed head"), _FakeVerdict("output_invariants", True, "6 held, 0 empty"), _FakeVerdict("question_coverage@universe-list:qqq", True, "coverage ok"), _FakeVerdict("question_coverage@topt", True, "coverage ok"), _FakeVerdict("nightly_backtest", True, "backtest executed ok"), _FakeVerdict("market_data_freshness", True, "freshness within 72h"), ]; monkeypatch.setattr( _module, "read_report", lambda _url, _http_get: _FakeHealthReport(fake_verdicts, "v0.1.2"), ); report: VisionAuditReport = audit_vision(env="staging"); assert report.all_passed is False; assert report.status == "fail"
+    assert g3.verified is False
+    assert g3.status == "OPEN"
+    assert "nightly_backtest: no verdict recorded at all" in g3.evidence
+
+
+def test_vision_audit_fails_gate_1_when_report_surface_proof_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_verdicts = [
+        _FakeVerdict("release_fetch_proof", True, "capture ok"),
+        _FakeVerdict("report_surface_proof", False, "4/5 surfaces serve governed head"),
+        _FakeVerdict("output_invariants", True, "6 held, 0 empty"),
+        _FakeVerdict("question_coverage@universe-list:qqq", True, "coverage ok"),
+        _FakeVerdict("question_coverage@topt", True, "coverage ok"),
+        _FakeVerdict("nightly_backtest", True, "backtest executed ok"),
+        _FakeVerdict("market_data_freshness", True, "freshness within 72h"),
+    ]
+
+    monkeypatch.setattr(
+        _module,
+        "read_report",
+        lambda _url, _http_get: _FakeHealthReport(fake_verdicts, "v0.1.2"),
+    )
+
+    report: VisionAuditReport = audit_vision(env="staging")
+    assert report.all_passed is False
+    assert report.status == "fail"
     g1 = next(g for g in report.gates if g.gate_id == "#29")
-    assert g1.verified is False; assert g1.status == "OPEN"
-def _verdicts_without(*dropped: str) -> list[Any]: everything = [ _FakeVerdict("release_fetch_proof", True, "capture ok"), _FakeVerdict("report_surface_proof", True, "5/5 surfaces ok"), _FakeVerdict("output_invariants", True, "6 held, 0 empty"), _FakeVerdict("question_coverage@universe-list:qqq", True, "coverage ok"), _FakeVerdict("question_coverage@topt", True, "coverage ok"), _FakeVerdict("nightly_backtest", True, "backtest executed ok"), _FakeVerdict("market_data_freshness", True, "freshness within 72h"), ]; return [verdict for verdict in everything if verdict.check not in dropped]
+    assert g1.verified is False
+    assert g1.status == "OPEN"
+
+
+def _verdicts_without(*dropped: str) -> list[Any]:
+    everything = [
+        _FakeVerdict("release_fetch_proof", True, "capture ok"),
+        _FakeVerdict("report_surface_proof", True, "5/5 surfaces ok"),
+        _FakeVerdict("output_invariants", True, "6 held, 0 empty"),
+        _FakeVerdict("question_coverage@universe-list:qqq", True, "coverage ok"),
+        _FakeVerdict("question_coverage@topt", True, "coverage ok"),
+        _FakeVerdict("nightly_backtest", True, "backtest executed ok"),
+        _FakeVerdict("market_data_freshness", True, "freshness within 72h"),
+    ]
+    return [verdict for verdict in everything if verdict.check not in dropped]
+
+
 def test_gate_2_asks_staging_for_the_topt_coverage_only(monkeypatch: pytest.MonkeyPatch) -> None:
-    verdicts = _verdicts_without("question_coverage@universe-list:qqq"); monkeypatch.setattr(_module, "read_report", lambda _url, _http_get: _FakeHealthReport(verdicts, "v0.1.2")); report: VisionAuditReport = audit_vision(env="staging")
+    """Staging runs TOPT only (owner decision of 2026-10-21): it records no QQQ coverage verdict."""
+    verdicts = _verdicts_without("question_coverage@universe-list:qqq")
+    monkeypatch.setattr(_module, "read_report", lambda _url, _http_get: _FakeHealthReport(verdicts, "v0.1.2"))
+
+    report: VisionAuditReport = audit_vision(env="staging")
+
     gate_2 = next(g for g in report.gates if g.gate_id == "#30")
-    assert gate_2.verified is True and gate_2.status == "VERIFIED"; assert "qqq" not in gate_2.evidence; assert report.all_passed is True
+    assert gate_2.verified is True and gate_2.status == "VERIFIED"
+    assert "qqq" not in gate_2.evidence
+    assert report.all_passed is True
+
+
 def test_gate_2_asks_production_for_the_qqq_coverage_too(monkeypatch: pytest.MonkeyPatch) -> None:
-    verdicts = _verdicts_without("question_coverage@universe-list:qqq"); monkeypatch.setattr(_module, "read_report", lambda _url, _http_get: _FakeHealthReport(verdicts, "v0.1.2")); report: VisionAuditReport = audit_vision(env="production")
+    verdicts = _verdicts_without("question_coverage@universe-list:qqq")
+    monkeypatch.setattr(_module, "read_report", lambda _url, _http_get: _FakeHealthReport(verdicts, "v0.1.2"))
+
+    report: VisionAuditReport = audit_vision(env="production")
+
     gate_2 = next(g for g in report.gates if g.gate_id == "#30")
-    assert gate_2.verified is False and gate_2.status == "OPEN"; assert "universe-list:qqq coverage: missing" in gate_2.evidence; assert report.all_passed is False
+    assert gate_2.verified is False and gate_2.status == "OPEN"
+    assert "universe-list:qqq coverage: missing" in gate_2.evidence
+    assert report.all_passed is False
+
+
 def test_gate_2_stays_open_when_the_topt_coverage_is_missing_in_staging(monkeypatch: pytest.MonkeyPatch) -> None:
-    verdicts = _verdicts_without("question_coverage@topt"); monkeypatch.setattr(_module, "read_report", lambda _url, _http_get: _FakeHealthReport(verdicts, "v0.1.2")); report: VisionAuditReport = audit_vision(env="staging")
+    verdicts = _verdicts_without("question_coverage@topt")
+    monkeypatch.setattr(_module, "read_report", lambda _url, _http_get: _FakeHealthReport(verdicts, "v0.1.2"))
+
+    report: VisionAuditReport = audit_vision(env="staging")
+
     gate_2 = next(g for g in report.gates if g.gate_id == "#30")
-    assert gate_2.verified is False; assert "topt coverage: missing" in gate_2.evidence
+    assert gate_2.verified is False
+    assert "topt coverage: missing" in gate_2.evidence
+
+
 def test_with_no_agree_row_gate_1_reads_open_no_comparator(monkeypatch: pytest.MonkeyPatch) -> None:
-    verdicts = _verdicts_without(); monkeypatch.setattr( _module, "read_report", lambda _url, _http_get: _FakeHealthReport(verdicts, "v0.1.2", oracle_outcomes=[]), ); report: VisionAuditReport = audit_vision(env="production")
+    """#1523 S6 (G19): With no agree row Gate 1 reads OPEN, 'no comparator', and Gate 4 stays OPEN."""
+    verdicts = _verdicts_without()
+    monkeypatch.setattr(
+        _module,
+        "read_report",
+        lambda _url, _http_get: _FakeHealthReport(verdicts, "v0.1.2", oracle_outcomes=[]),
+    )
+
+    report: VisionAuditReport = audit_vision(env="production")
+
     gate_1 = next(g for g in report.gates if g.gate_id == "#29")
-    assert gate_1.status == "OPEN"; assert gate_1.verified is False; assert "no comparator" in gate_1.evidence
+    assert gate_1.status == "OPEN"
+    assert gate_1.verified is False
+    assert "no comparator" in gate_1.evidence
+
     gate_4 = next(g for g in report.gates if g.gate_id == "#54")
-    assert gate_4.status == "OPEN"; assert gate_4.verified is False; assert report.all_passed is False
+    assert gate_4.status == "OPEN"
+    assert gate_4.verified is False
+    assert report.all_passed is False
+
+
 def test_vision_audit_resolves_health_url_via_infra2_sdk_routing(monkeypatch: pytest.MonkeyPatch) -> None:
-    verdicts = _verdicts_without(); seen_urls: list[str] = []
-    def fake_read_report(url: str, _http_get: Any) -> _FakeHealthReport: seen_urls.append(url); return _FakeHealthReport(verdicts, "v0.1.2")
-    monkeypatch.setattr(_module, "read_report", fake_read_report); monkeypatch.setattr( _module, "resolve_app_hostname", lambda slug, tier, *, base_domain, custom_prod_domain: f"{slug}-{tier}.{base_domain}", ); prod_report = audit_vision(env="production"); staging_report = audit_vision(env="staging"); assert prod_report.health_url == "https://truealpha-production.truealpha.club/api/health"; assert staging_report.health_url == "https://truealpha-staging.truealpha.club/api/health"; assert seen_urls == [ "https://truealpha-production.truealpha.club/api/health", "https://truealpha-staging.truealpha.club/api/health", ]
-def test_gate_1_verifies_from_live_confidence_report_verdicts_when_health_report_has_no_oracle_outcomes_attr( monkeypatch: pytest.MonkeyPatch, ) -> None:
-    from truealpha_tools.nightly_verdicts import HealthReport; governed_pointers = [ {"universe_id": "universe:topt-us-2026-03-31", "freshness": "fresh", "availability": "available"}, {"universe_id": "universe:qqq-us-2026-03-31", "freshness": "fresh", "availability": "available"}, ]; green_verdicts = [ _FakeVerdict("release_fetch_proof", True, "capture ok"), _FakeVerdict("report_surface_proof", True, "5/5 surfaces ok"), _FakeVerdict("output_invariants", True, "6 held, 0 empty"), _FakeVerdict("datahub_confidence_report@topt", True, "report persisted for universe:topt-us-2026-03-31"), _FakeVerdict( "datahub_confidence_report@universe-list:qqq", True, "report persisted for universe:qqq-us-2026-03-31", ), _FakeVerdict("question_coverage@universe-list:qqq", True, "coverage ok"), _FakeVerdict("question_coverage@topt", True, "coverage ok"), _FakeVerdict("nightly_backtest", True, "backtest executed ok"), _FakeVerdict("market_data_freshness", True, "freshness within 72h"), ]
+    """#1528: audit_vision derives environment health URLs from infra2_sdk.routing.resolve_app_hostname."""
+    verdicts = _verdicts_without()
+    seen_urls: list[str] = []
+
+    def fake_read_report(url: str, _http_get: Any) -> _FakeHealthReport:
+        seen_urls.append(url)
+        return _FakeHealthReport(verdicts, "v0.1.2")
+
+    monkeypatch.setattr(_module, "read_report", fake_read_report)
+    monkeypatch.setattr(
+        _module,
+        "resolve_app_hostname",
+        lambda slug, tier, *, base_domain, custom_prod_domain: f"{slug}-{tier}.{base_domain}",
+    )
+
+    prod_report = audit_vision(env="production")
+    staging_report = audit_vision(env="staging")
+
+    assert prod_report.health_url == "https://truealpha-production.truealpha.club/api/health"
+    assert staging_report.health_url == "https://truealpha-staging.truealpha.club/api/health"
+    assert seen_urls == [
+        "https://truealpha-production.truealpha.club/api/health",
+        "https://truealpha-staging.truealpha.club/api/health",
+    ]
+
+
+def test_gate_1_verifies_from_live_confidence_report_verdicts_when_health_report_has_no_oracle_outcomes_attr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1419 & #54: Live HealthReport from read_report has no oracle_outcomes attribute; Gate 1 verifies
+    via scheduled datahub_confidence_report@<universe> verdicts and fails closed when missing or non-green."""
+    from truealpha_tools.nightly_verdicts import HealthReport
+
+    governed_pointers = [
+        {"universe_id": "universe:topt-us-2026-03-31", "freshness": "fresh", "availability": "available"},
+        {"universe_id": "universe:qqq-us-2026-03-31", "freshness": "fresh", "availability": "available"},
+    ]
+    green_verdicts = [
+        _FakeVerdict("release_fetch_proof", True, "capture ok"),
+        _FakeVerdict("report_surface_proof", True, "5/5 surfaces ok"),
+        _FakeVerdict("output_invariants", True, "6 held, 0 empty"),
+        _FakeVerdict("datahub_confidence_report@topt", True, "report persisted for universe:topt-us-2026-03-31"),
+        _FakeVerdict(
+            "datahub_confidence_report@universe-list:qqq",
+            True,
+            "report persisted for universe:qqq-us-2026-03-31",
+        ),
+        _FakeVerdict("question_coverage@universe-list:qqq", True, "coverage ok"),
+        _FakeVerdict("question_coverage@topt", True, "coverage ok"),
+        _FakeVerdict("nightly_backtest", True, "backtest executed ok"),
+        _FakeVerdict("market_data_freshness", True, "freshness within 72h"),
+    ]
     live_report = HealthReport(
         verdicts=green_verdicts,  # type: ignore[arg-type]
         release="v0.1.2",
         governed_pointers=governed_pointers,
     )
-    assert not hasattr(live_report, "oracle_outcomes"); monkeypatch.setattr(_module, "read_report", lambda _url, _http_get: live_report); report = audit_vision(env="production")
+    assert not hasattr(live_report, "oracle_outcomes")
+    monkeypatch.setattr(_module, "read_report", lambda _url, _http_get: live_report)
+
+    report = audit_vision(env="production")
     gate_1 = next(g for g in report.gates if g.gate_id == "#29")
     gate_4 = next(g for g in report.gates if g.gate_id == "#54")
-    assert gate_1.verified is True and gate_1.status == "VERIFIED"; assert "datahub_confidence_report@topt: report persisted" in gate_1.evidence; assert "datahub_confidence_report@universe-list:qqq: report persisted" in gate_1.evidence; assert gate_4.verified is True and gate_4.status == "VERIFIED"; assert report.all_passed is True
-    for bad_verdicts in ( [v for v in green_verdicts if v.check != "datahub_confidence_report@topt"], [ _FakeVerdict("datahub_confidence_report@topt", False, "0 rows compared") if v.check == "datahub_confidence_report@topt" else v for v in green_verdicts ], [ _FakeVerdict("datahub_confidence_report@topt", None, "no comparator") if v.check == "datahub_confidence_report@topt" else v for v in green_verdicts ], ):
+    assert gate_1.verified is True and gate_1.status == "VERIFIED"
+    assert "datahub_confidence_report@topt: report persisted" in gate_1.evidence
+    assert "datahub_confidence_report@universe-list:qqq: report persisted" in gate_1.evidence
+    assert gate_4.verified is True and gate_4.status == "VERIFIED"
+    assert report.all_passed is True
+
+    # Missing or non-green datahub_confidence_report@topt fails Gate 1 with 'no comparator'
+    for bad_verdicts in (
+        [v for v in green_verdicts if v.check != "datahub_confidence_report@topt"],
+        [
+            _FakeVerdict("datahub_confidence_report@topt", False, "0 rows compared")
+            if v.check == "datahub_confidence_report@topt"
+            else v
+            for v in green_verdicts
+        ],
+        [
+            _FakeVerdict("datahub_confidence_report@topt", None, "no comparator")
+            if v.check == "datahub_confidence_report@topt"
+            else v
+            for v in green_verdicts
+        ],
+    ):
         bad_report = HealthReport(
             verdicts=bad_verdicts,  # type: ignore[arg-type]
             release="v0.1.2",
             governed_pointers=governed_pointers,
         )
-        monkeypatch.setattr(_module, "read_report", lambda _url, _http_get, r=bad_report: r); failed = audit_vision(env="staging")
+        monkeypatch.setattr(_module, "read_report", lambda _url, _http_get, r=bad_report: r)
+        failed = audit_vision(env="staging")
         g1 = next(g for g in failed.gates if g.gate_id == "#29")
-        assert g1.verified is False and g1.status == "OPEN"; assert "no comparator" in g1.evidence; assert failed.all_passed is False
+        assert g1.verified is False and g1.status == "OPEN"
+        assert "no comparator" in g1.evidence
+        assert failed.all_passed is False
