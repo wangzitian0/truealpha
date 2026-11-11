@@ -1,18 +1,4 @@
-"""Poll a deployed TrueAlpha URL until the target release is actually live.
-
-The generic polling algorithm (HTTP-200 + status-field check, the version/
-git_sha stable-mismatch budget) is infra2_sdk.deploy.poll_until_healthy's responsibility
-(#508); this wrapper only supplies TrueAlpha's own health endpoint and its
-{"status": "ok"} convention -- llm-service's /health, reached through
-Traefik's /api prefix route (tools/route_manifest.json).
-
-Usage:
-  python tools/health_check.py <url> [expected_version] [max_attempts]
-
-Exit codes:
-  0 - Health check passed
-  1 - Health check failed (connection error, HTTP error, or version never matched)
-"""
+"""Poll a deployed TrueAlpha URL until the target release is live (#508, #526, #712)."""
 
 from __future__ import annotations
 
@@ -39,29 +25,12 @@ DEFAULT_MAX_ATTEMPTS = 24
 INTERVAL_SECONDS = 10.0
 DATA_ENGINE_IMAGE = "wangzitian0/truealpha-data-engine"
 
-# #526: the two sides of this gate must speak the same kind of identifier.
-# `deploy-release.yml` passed `source_sha` (a 40-hex commit sha) while the
-# deployed service reports `GIT_COMMIT_SHA`, a release TAG in deployed tiers
-# (`RuntimeSettings.git_commit_sha`, common/runtime/.../config.py, states this once).
-# The SDK's version match is a two-way prefix match, so a tag and
-# a sha can never match and the gate burned its whole 24-attempt budget before
-# reporting "did not become healthy (last status: HTTP 200)" — the endpoint was
-# fine, the comparison was impossible. Every prod release recorded as FAILURE,
-# and the run history was believed over the runtime for two days (#429's exact
-# failure mode, manufactured on every release).
-#
-# A kind mismatch is never transitional: a service that reports tags will not
-# start reporting shas mid-rollout. So it fails IMMEDIATELY and says which side
-# reports what, instead of hiding behind a four-minute timeout. A same-kind
-# mismatch keeps the SDK's rollout tolerance untouched.
-
 
 class IdentifierKindMismatch(RuntimeError):
     """The expected and reported release identifiers can never compare equal."""
 
 
 def _guarding_kind(http_get: HttpGet, expected: str) -> HttpGet:
-    """Wrap `http_get` so the first usable response settles the kind question."""
     expected_kind = identifier_kind(expected)
 
     def guarded(url: str) -> tuple[int, str]:
@@ -71,16 +40,9 @@ def _guarding_kind(http_get: HttpGet, expected: str) -> HttpGet:
         try:
             reported = identity_from_body(body, url=url)
         except ReleaseIdentityError as exc:
-            # Same judgement as everywhere else now: a gate that cannot see the
-            # release identity must not go on polling as if it might (#585).
             raise IdentifierKindMismatch(str(exc)) from exc
         reported_kind = identifier_kind(reported)
         if reported_kind != expected_kind:
-            # Labelled pair rather than a sentence: `identifier_kind` returns
-            # "unset" and "unrecognised" too, and no single article reads for
-            # all four. This message is the whole point of the guard — an
-            # operator reading only the failed step must be able to act on it —
-            # so it must not degrade to "expected a unset" (review).
             raise IdentifierKindMismatch(
                 f"identifier kinds disagree — gate expects {expected_kind} ({expected!r}); "
                 f"{url} reports {reported_kind} ({reported!r}). These can never compare "
@@ -101,15 +63,6 @@ def check_health(
     sleep: Callable[[float], None] = time.sleep,
     expected_data_engine_digest: str = "",
 ) -> int:
-    """Poll url until healthy; print the outcome; return a shell exit code.
-
-    `expected_data_engine_digest` (#712) turns the data-engine identity from a report into
-    a verdict: after the app is healthy, the surface must report that exact
-    `data_engine_image_digest` — the build the release's registry tag names — before the
-    poll budget runs out. The promoted build stamps it with its boot canary
-    (`data_engine.boot_canary`), so "the newest run was produced by the old build" is
-    exactly the state this waits through, and "it never was" is the red.
-    """
     http_get = http_get or default_http_get()
     try:
         result = poll_until_healthy(
@@ -121,9 +74,6 @@ def check_health(
             interval_seconds=INTERVAL_SECONDS,
             sleep=sleep,
         )
-    except IdentifierKindMismatch as exc:
-        print(f"health check failed: {exc}", file=sys.stderr)
-        return 1
     except RuntimeError as exc:
         print(f"health check failed: {exc}", file=sys.stderr)
         return 1
@@ -140,19 +90,9 @@ def check_health(
         if verdict is not None:
             print(f"health check failed: {verdict}", file=sys.stderr)
             return 1
-    # Every line below reads the body the verdict was reached on, not the first poll: the
-    # first live run (staging v0.0.47) matched the release on attempt 11 and then reported
-    # the previous build from attempt 1 (review of the run log).
-    engine = _data_engine_parser(body)
-    if expected_version and engine == "unknown":
-        # Un-assertable, not a pass. Said out loud so a health check that silently stopped
-        # covering the data engine cannot look identical to one that covered it.
+    if expected_version and _data_engine_parser(body) == "unknown":
         print(f"health check: {url} reports no data_engine_parser — the data engine is UNVERIFIED")
     git_sha, digest = _data_engine_identity(body)
-    # #712: the identity is reported and compared out loud. It does not gate yet — the app
-    # lane and the data engine are still promoted separately, so a mismatch is the honest
-    # state of most days until one release promotes all three images; hiding it was the
-    # defect. The line is what the deploy log shows a reader who asks "which data engine".
     if git_sha == "unknown":
         print(f"health check: {url} reports no data-engine identity — the data engine build is UNKNOWN")
     elif (
@@ -165,10 +105,6 @@ def check_health(
             f"data-engine {git_sha} ({digest}); #712"
         )
     elif expected_version and identifier_kind(expected_version) != identifier_kind(git_sha):
-        # The app lane stamps the release TAG and the data-engine lane stamps the commit
-        # it was promoted from; the two are not comparable until one release promotes
-        # all three images. Said plainly instead of printing a build line that looks
-        # like agreement.
         print(
             f"health check: app reports {identifier_kind(expected_version)} {expected_version!r}, the data engine "
             f"that produced the newest run reports {identifier_kind(git_sha)} {git_sha!r} ({digest}) — not "
@@ -189,14 +125,6 @@ def _await_data_engine(
     max_attempts: int,
     first_body: str,
 ) -> tuple[str | None, str]:
-    """(None, body) when the surface reports `expected_digest`; else (the sentence for
-    the red, the last body that answered).
-
-    `attempts` is normalised once (at least one) and used for the loop, the stop and
-    the message, so they cannot disagree (review on #760). A poll that fails or answers
-    non-200 keeps the last body that did answer: the verdict names the last identity
-    actually seen, never a blank one.
-    """
     attempts = max(1, max_attempts)
     body = first_body
     for attempt in range(1, attempts + 1):
@@ -212,7 +140,7 @@ def _await_data_engine(
         sleep(INTERVAL_SECONDS)
         try:
             status_code, polled = http_get(url)
-        except Exception as exc:  # noqa: BLE001 - one bad poll is not a verdict
+        except Exception as exc:  # noqa: BLE001
             print(f"health check: poll {attempt + 1} failed ({exc.__class__.__name__}: {exc}); keeping the last answer")
             continue
         if status_code == 200:
@@ -226,16 +154,6 @@ def _await_data_engine(
 
 
 def resolve_data_engine_digest(tag: str, *, transport: HttpTransport | None = None) -> str:
-    """The registry digest of `ghcr.io/wangzitian0/truealpha-data-engine:<tag>`.
-
-    `infra2_sdk.refs.resolve_image_digest` reads it through the anonymous
-    Registry v2 manifest API with the OCI accept set -- the same digest `docker pull
-    image@…` and infra2's runner pin from the tag -- so the gate and the promotion agree by
-    construction, not by a copied string. Every way the registry can fail to name a digest
-    (no such tag, refused, a non-digest header, a reference that is not a tag) is the one
-    RuntimeError `main` prints as its red. `transport` is the SDK's injectable HTTP send,
-    for tests.
-    """
     try:
         return resolve_image_digest(image=DATA_ENGINE_IMAGE, reference=tag, transport=transport)
     except (ReleaseError, ValueError) as exc:
@@ -243,8 +161,6 @@ def resolve_data_engine_digest(tag: str, *, transport: HttpTransport | None = No
 
 
 def _same_commit(expected: str, reported: str) -> bool:
-    """Either side may carry the short form of the same commit (7 vs 40 chars), so the
-    match is a two-way prefix, the same rule the SDK applies to the app's own sha."""
     return bool(expected) and bool(reported) and (expected.startswith(reported) or reported.startswith(expected))
 
 
@@ -257,7 +173,6 @@ def _json_dict(body: str) -> dict[str, object]:
 
 
 def _data_engine_identity(body: str) -> tuple[str, str]:
-    """(git_sha, image_digest) the health surface reports for the data engine, or unknown."""
     parsed = _json_dict(body)
     return (
         str(parsed.get("data_engine_git_sha") or "unknown"),
@@ -266,7 +181,6 @@ def _data_engine_identity(body: str) -> tuple[str, str]:
 
 
 def _data_engine_parser(body: str) -> str:
-    """The data-engine vintage the health surface reports, or "unknown"."""
     value = _json_dict(body).get("data_engine_parser")
     return str(value) if value else "unknown"
 
@@ -277,16 +191,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("expected_version", nargs="?", default="")
     parser.add_argument("max_attempts", nargs="?", type=int, default=DEFAULT_MAX_ATTEMPTS)
     group = parser.add_mutually_exclusive_group()
-    group.add_argument(
-        "--expect-data-engine-digest",
-        default="",
-        help="#712: fail unless /health reports this data_engine_image_digest (sha256:…) within the budget",
-    )
-    group.add_argument(
-        "--expect-data-engine-tag",
-        default="",
-        help="#712: resolve this release tag's data-engine digest from ghcr.io and require it",
-    )
+    group.add_argument("--expect-data-engine-digest", default="")
+    group.add_argument("--expect-data-engine-tag", default="")
     return parser
 
 
@@ -296,7 +202,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.expect_data_engine_tag:
         try:
             expected_digest = resolve_data_engine_digest(args.expect_data_engine_tag)
-        except Exception as exc:  # noqa: BLE001 - an unresolvable tag is a red, not a pass
+        except Exception as exc:  # noqa: BLE001
             print(
                 f"health check failed: cannot resolve the data-engine digest for {args.expect_data_engine_tag}: {exc}",
                 file=sys.stderr,

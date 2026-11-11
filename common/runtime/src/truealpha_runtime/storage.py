@@ -4,14 +4,8 @@ import hashlib
 from typing import Any
 
 from botocore.exceptions import BotoCoreError, ClientError
-from infra2_sdk.runtime.s3 import (
-    create_s3_client,
-    is_not_found,
-    read_object_bytes,
-)
-from infra2_sdk.runtime.s3 import (
-    ensure_bucket as ensure_bucket_sdk,
-)
+from infra2_sdk.runtime.s3 import create_s3_client, is_not_found, read_object_bytes
+from infra2_sdk.runtime.s3 import ensure_bucket as ensure_bucket_sdk
 from truealpha_contracts.models import RawCapture, RawIngestionEnvelope, RawObjectRef
 
 from truealpha_runtime.config import RuntimeSettings
@@ -26,12 +20,6 @@ class StorageError(Exception):
 
 
 class S3RawObjectStore:
-    """Immutable raw payload storage over the S3 API.
-
-    MinIO is only a runtime backend. Callers use the same boto3 adapter in local,
-    CI, infra2, and production environments.
-    """
-
     def __init__(self, settings: RuntimeSettings | None = None, *, client: Any | None = None) -> None:
         self.settings = settings or RuntimeSettings()
         self.bucket = self.settings.s3_bucket
@@ -40,12 +28,6 @@ class S3RawObjectStore:
         self.client = client or create_s3_client(self.s3_settings)
 
     def _require_endpoint(self) -> str:
-        """The configured endpoint, or a named configuration error.
-
-        Never a default. An unconfigured object store used to dial `localhost:9000` with
-        placeholder credentials, so "nobody configured S3 here" arrived as a connection
-        failure against the container's own loopback (#531). Refusing names the cause.
-        """
         endpoint = (self.settings.s3_endpoint or "").strip()
         if not endpoint:
             raise _unconfigured("S3_ENDPOINT")
@@ -84,7 +66,6 @@ class S3RawObjectStore:
             if not is_not_found(exc):
                 raise StorageError(f"cannot inspect {key}") from exc
 
-        # Compare outside the try scope: the broad except must not replace this message.
         if existing_length is not None and existing_length != len(capture.body):
             raise StorageError(f"content-address collision for {key}")
 
@@ -95,10 +76,7 @@ class S3RawObjectStore:
                     Key=key,
                     Body=capture.body,
                     ContentType=capture.content_type,
-                    Metadata={
-                        "sha256": digest,
-                        "source": capture.source.value,
-                    },
+                    Metadata={"sha256": digest, "source": capture.source.value},
                 )
             except (BotoCoreError, ClientError) as exc:
                 raise StorageError(f"cannot store {key}") from exc

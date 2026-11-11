@@ -1,18 +1,4 @@
-"""Backend-neutral evidence-graph contracts (ADR A1).
-
-The evidence chain — provenance, lineage, and point-in-time validity — is modeled here as a
-storage-neutral graph of nodes and typed edges with bitemporal stamps. Postgres/RDS today
-and a future graph database are adapters over this contract; factors and consumers depend
-only on these DTOs and the ports below, never on a backend.
-
-Content hashes are integrity columns, not the reference key. A node is referenced by a
-typed surrogate identity (`kind` + the underlying artifact's content-addressed id), its
-`content_sha256` is the integrity column matching that id, and downstream discovery resolves
-a governed `CurrentPointer` rather than a hand-carried hash tuple. Restatements append a new
-node/edge with a `supersedes` link; history is never rewritten in place.
-
-See `docs/architecture-decisions/A1-evidence-chain-in-database.md`.
-"""
+"""Backend-neutral evidence-graph contracts (ADR A1)."""
 
 from __future__ import annotations
 
@@ -31,6 +17,10 @@ _SHA256 = r"^[0-9a-f]{64}$"
 _MUTABLE_VERSION_TOKENS = frozenset({"latest", "current", "default", "stable", "main", "head"})
 
 
+class _FrozenModel(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+
 def _reject_mutable_version(value: str, field_name: str) -> str:
     tokens = {token for token in re.split(r"[._:/@+-]", value.lower()) if token}
     if tokens & _MUTABLE_VERSION_TOKENS:
@@ -39,8 +29,6 @@ def _reject_mutable_version(value: str, field_name: str) -> str:
 
 
 class EvidenceNodeKind(StrEnum):
-    """The provenance-graph node kinds. Each maps to an existing content-addressed id."""
-
     RAW_FETCH = "raw_fetch"
     SOURCE_VINTAGE = "source_vintage"
     NORMALIZED_OBSERVATION = "normalized_observation"
@@ -54,8 +42,6 @@ class EvidenceNodeKind(StrEnum):
 
 
 class EvidenceRelation(StrEnum):
-    """Typed provenance edges between nodes."""
-
     DERIVED_FROM = "derived_from"
     SELECTED_FROM = "selected_from"
     MEMBER_OF = "member_of"
@@ -64,7 +50,6 @@ class EvidenceRelation(StrEnum):
     SUPERSEDES = "supersedes"
 
 
-# The content-addressed id prefix each node kind reuses from the existing #58 contracts.
 _KIND_PREFIX: dict[EvidenceNodeKind, str] = {
     EvidenceNodeKind.RAW_FETCH: "raw-fetch",
     EvidenceNodeKind.SOURCE_VINTAGE: "source-vintage",
@@ -79,11 +64,7 @@ _KIND_PREFIX: dict[EvidenceNodeKind, str] = {
 }
 
 
-class EvidenceNodeRef(BaseModel):
-    """A typed reference to an evidence node by its content-addressed identity."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
+class EvidenceNodeRef(_FrozenModel):
     kind: EvidenceNodeKind
     node_id: str = Field(min_length=1)
 
@@ -99,16 +80,10 @@ class EvidenceNodeRef(BaseModel):
         return self.node_id.split(":", 1)[1]
 
 
-class BitemporalStamp(BaseModel):
-    """Valid time (what the fact describes) versus transaction time (when it was knowable)."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
+class BitemporalStamp(_FrozenModel):
     valid_from: date
     valid_to: date | None = None
-    # Knowable-at, taken from a source property; never an insertion clock.
     transaction_time: datetime
-    # Ingestion audit only.
     recorded_at: datetime
 
     @model_validator(mode="after")
@@ -118,11 +93,7 @@ class BitemporalStamp(BaseModel):
         return self
 
 
-class EvidenceNode(BaseModel):
-    """One append-only node. `content_sha256` is the integrity column matching `ref`."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
+class EvidenceNode(_FrozenModel):
     ref: EvidenceNodeRef
     content_sha256: str = Field(pattern=_SHA256)
     stamp: BitemporalStamp
@@ -140,11 +111,7 @@ class EvidenceNode(BaseModel):
         return self
 
 
-class EvidenceEdge(BaseModel):
-    """One append-only typed provenance edge, content-identified by its endpoints."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
+class EvidenceEdge(_FrozenModel):
     edge_id: str = Field(default="", pattern=r"^(?:|evidence-edge:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
     from_ref: EvidenceNodeRef
@@ -162,11 +129,7 @@ class EvidenceEdge(BaseModel):
         return self
 
 
-class CurrentPointerKey(BaseModel):
-    """The governed head a consumer resolves: one pointer per environment/universe/factor."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
+class CurrentPointerKey(_FrozenModel):
     environment: CaptureEnvironment
     universe_id: str = Field(pattern=STABLE_ID_PATTERN)
     universe_version: str = Field(pattern=STABLE_ID_PATTERN)
@@ -178,17 +141,11 @@ class CurrentPointerKey(BaseModel):
         return _reject_mutable_version(value, "pointer scope identities")
 
 
-class CurrentPointer(BaseModel):
-    """A governed head that resolves to an immutable exact run; advances forward only."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
+class CurrentPointer(_FrozenModel):
     pointer_id: str = Field(default="", pattern=r"^(?:|current-pointer:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
     key: CurrentPointerKey
-    # The immutable exact run this head resolves to.
     target_run: EvidenceNodeRef
-    # Monotonic advance sequence; the registry rejects a non-increasing advance.
     sequence: int = Field(ge=0)
     previous_run: EvidenceNodeRef | None = None
     advanced_at: datetime
@@ -210,11 +167,7 @@ class CurrentPointer(BaseModel):
         return self
 
 
-class ProvenanceClosure(BaseModel):
-    """A bounded traversal from a root node to its provenance (or reverse)."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
+class ProvenanceClosure(_FrozenModel):
     root: EvidenceNodeRef
     reverse: bool = False
     nodes: tuple[EvidenceNode, ...]
@@ -226,38 +179,23 @@ class ProvenanceClosure(BaseModel):
         refs = {node.ref for node in self.nodes}
         if self.root not in refs:
             raise ValueError("the closure must contain its root node")
-        for edge in self.edges:
-            if edge.from_ref not in refs or edge.to_ref not in refs:
-                raise ValueError("every closure edge must connect nodes present in the closure")
+        if any(edge.from_ref not in refs or edge.to_ref not in refs for edge in self.edges):
+            raise ValueError("every closure edge must connect nodes present in the closure")
         return self
 
 
 @runtime_checkable
 class EvidenceGraphWriter(Protocol):
-    """Append-only, transactional writer. One call is one unit-of-work per run."""
-
-    def append(self, nodes: Sequence[EvidenceNode], edges: Sequence[EvidenceEdge]) -> None:
-        """Atomically append nodes and edges. Re-appending identical content is idempotent;
-        mutating or deleting existing rows is never permitted."""
-        ...
+    def append(self, nodes: Sequence[EvidenceNode], edges: Sequence[EvidenceEdge]) -> None: ...
 
 
 @runtime_checkable
 class EvidenceGraphReader(Protocol):
-    """Bounded, read-only provenance access."""
-
     def resolve_pointer(self, key: CurrentPointerKey) -> CurrentPointer | None: ...
-
     def closure(self, root: EvidenceNodeRef, *, reverse: bool = False, max_nodes: int = 1000) -> ProvenanceClosure: ...
 
 
 @runtime_checkable
 class CurrentPointerRegistry(Protocol):
-    """The governed head registry; advances are forward-only and append-only."""
-
     def head(self, key: CurrentPointerKey) -> CurrentPointer | None: ...
-
-    def advance(self, pointer: CurrentPointer) -> CurrentPointer:
-        """Record a forward advance. The adapter rejects a non-increasing sequence or a
-        pointer whose `previous_run` does not match the current head."""
-        ...
+    def advance(self, pointer: CurrentPointer) -> CurrentPointer: ...

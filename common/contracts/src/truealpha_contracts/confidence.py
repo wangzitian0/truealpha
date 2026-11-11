@@ -37,11 +37,11 @@ def _sorted_unique(values: tuple[str, ...], field_name: str, *, allow_empty: boo
     return tuple(sorted(values))
 
 
-class ContinuousConfidencePolicy(BaseModel):
-    """Content-addressed parameters for the continuous confidence formula."""
-
+class _ConfidenceModel(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+
+class ContinuousConfidencePolicy(_ConfidenceModel):
     policy_id: str = Field(default="", pattern=r"^(?:|confidence-policy:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
     reliability_prior_success: Decimal = Field(default=Decimal("8"), ge=0)
@@ -72,27 +72,20 @@ class ContinuousConfidencePolicy(BaseModel):
     def freeze_and_identify(self) -> Self:
         if self.reliability_prior_success + self.reliability_prior_failure <= 0:
             raise ValueError("reliability priors must have positive total mass")
-        exponent_total = (
+        exponents = (
             self.agreement_exponent
             + self.semantic_mapping_exponent
             + self.lineage_exponent
             + self.completeness_exponent
         )
-        if exponent_total != Decimal("1"):
+        if exponents != Decimal("1"):
             raise ValueError("quality exponents must sum exactly to one")
         _freeze_content_addressed(self, id_field="policy_id", prefix="confidence-policy")
         return self
 
 
-class SourceConfidenceEvidence(BaseModel):
-    """One provider's evidence without claiming provider independence by name alone."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    source_evidence_id: str = Field(
-        default="",
-        pattern=r"^(?:|source-confidence-evidence:[0-9a-f]{64})$",
-    )
+class SourceConfidenceEvidence(_ConfidenceModel):
+    source_evidence_id: str = Field(default="", pattern=r"^(?:|source-confidence-evidence:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
     provider_id: str = Field(pattern=STABLE_ID_PATTERN)
     origin_group_id: str = Field(pattern=STABLE_ID_PATTERN)
@@ -127,19 +120,11 @@ class SourceConfidenceEvidence(BaseModel):
 
     @model_validator(mode="after")
     def freeze_and_identify(self) -> Self:
-        _freeze_content_addressed(
-            self,
-            id_field="source_evidence_id",
-            prefix="source-confidence-evidence",
-        )
+        _freeze_content_addressed(self, id_field="source_evidence_id", prefix="source-confidence-evidence")
         return self
 
 
-class ContinuousConfidenceInput(BaseModel):
-    """All evidence dimensions required for one deterministic evaluation."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
+class ContinuousConfidenceInput(_ConfidenceModel):
     input_id: str = Field(default="", pattern=r"^(?:|confidence-input:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
     case_id: str = Field(pattern=STABLE_ID_PATTERN)
@@ -168,17 +153,17 @@ class ContinuousConfidenceInput(BaseModel):
             raise ValueError("confidence input source evidence must be unique")
         group_weights: dict[str, Decimal] = {}
         for source in sources:
-            existing = group_weights.setdefault(source.origin_group_id, source.independence_weight)
-            if existing != source.independence_weight:
+            if (
+                group_weights.setdefault(source.origin_group_id, source.independence_weight)
+                != source.independence_weight
+            ):
                 raise ValueError("one origin group must use one independence weight")
         object.__setattr__(self, "sources", sources)
         _freeze_content_addressed(self, id_field="input_id", prefix="confidence-input")
         return self
 
 
-class SourceConfidenceScore(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
+class SourceConfidenceScore(_ConfidenceModel):
     source_evidence_id: str = Field(pattern=r"^source-confidence-evidence:[0-9a-f]{64}$")
     provider_id: str = Field(pattern=STABLE_ID_PATTERN)
     origin_group_id: str = Field(pattern=STABLE_ID_PATTERN)
@@ -191,31 +176,20 @@ class SourceConfidenceScore(BaseModel):
         return _reject_binary_float(value)
 
 
-class OriginGroupContribution(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
+class OriginGroupContribution(_ConfidenceModel):
     origin_group_id: str = Field(pattern=STABLE_ID_PATTERN)
     independence_weight: Decimal = Field(ge=0, le=1)
     selected_source_evidence_id: str = Field(pattern=r"^source-confidence-evidence:[0-9a-f]{64}$")
     selected_source_quality: Decimal = Field(ge=0, le=1)
     effective_support: Decimal = Field(ge=0, le=1)
 
-    @field_validator(
-        "independence_weight",
-        "selected_source_quality",
-        "effective_support",
-        mode="before",
-    )
+    @field_validator("independence_weight", "selected_source_quality", "effective_support", mode="before")
     @classmethod
     def validate_decimals(cls, value: Any) -> Any:
         return _reject_binary_float(value)
 
 
-class ContinuousConfidenceEvaluation(BaseModel):
-    """Auditable decomposition of a continuous confidence score."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
+class ContinuousConfidenceEvaluation(_ConfidenceModel):
     evaluation_id: str = Field(default="", pattern=r"^(?:|confidence-evaluation:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
     policy_id: str = Field(pattern=r"^confidence-policy:[0-9a-f]{64}$")
@@ -256,11 +230,9 @@ class ContinuousConfidenceEvaluation(BaseModel):
     def freeze_and_identify(self) -> Self:
         source_scores = tuple(sorted(self.source_scores, key=lambda value: value.source_evidence_id))
         origin_groups = tuple(sorted(self.origin_groups, key=lambda value: value.origin_group_id))
-        source_ids = tuple(source.source_evidence_id for source in source_scores)
-        group_ids = tuple(group.origin_group_id for group in origin_groups)
-        if len(source_ids) != len(set(source_ids)):
+        if len({s.source_evidence_id for s in source_scores}) != len(source_scores):
             raise ValueError("evaluation source scores must be unique")
-        if len(group_ids) != len(set(group_ids)):
+        if len({g.origin_group_id for g in origin_groups}) != len(origin_groups):
             raise ValueError("evaluation origin groups must be unique")
         scores_by_id = {source.source_evidence_id: source for source in source_scores}
         if any(
@@ -275,17 +247,11 @@ class ContinuousConfidenceEvaluation(BaseModel):
             raise ValueError("input identity and hash must agree")
         object.__setattr__(self, "source_scores", source_scores)
         object.__setattr__(self, "origin_groups", origin_groups)
-        _freeze_content_addressed(
-            self,
-            id_field="evaluation_id",
-            prefix="confidence-evaluation",
-        )
+        _freeze_content_addressed(self, id_field="evaluation_id", prefix="confidence-evaluation")
         return self
 
 
-class ConfidenceCalibrationScenario(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
+class ConfidenceCalibrationScenario(_ConfidenceModel):
     scenario_id: str = Field(pattern=STABLE_ID_PATTERN)
     evidence_class: Literal["sensitivity", "empirical_anchor"]
     expected_effect: str = Field(min_length=1)
@@ -301,11 +267,7 @@ class ConfidenceCalibrationScenario(BaseModel):
         return self
 
 
-class ConfidenceCalibrationReport(BaseModel):
-    """Versioned report that cannot hide an incomplete calibration denominator."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
+class ConfidenceCalibrationReport(_ConfidenceModel):
     report_id: str = Field(default="", pattern=r"^(?:|confidence-calibration-report:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
     schema_version: Literal["truealpha.confidence-calibration@v1"] = "truealpha.confidence-calibration@v1"
@@ -332,18 +294,12 @@ class ConfidenceCalibrationReport(BaseModel):
     @model_validator(mode="after")
     def freeze_and_identify(self) -> Self:
         scenarios = tuple(sorted(self.scenarios, key=lambda value: value.scenario_id))
-        scenario_ids = tuple(scenario.scenario_id for scenario in scenarios)
-        if len(scenario_ids) != len(set(scenario_ids)):
+        if len({s.scenario_id for s in scenarios}) != len(scenarios):
             raise ValueError("calibration scenario IDs must be unique")
         if len(self.empirically_observed_subject_ids) > self.denominator_size:
             raise ValueError("empirical subjects cannot exceed the frozen denominator")
-        for scenario in scenarios:
-            if scenario.evaluation.policy_id != self.policy.policy_id:
-                raise ValueError("every calibration scenario must use the report policy")
+        if any(scenario.evaluation.policy_id != self.policy.policy_id for scenario in scenarios):
+            raise ValueError("every calibration scenario must use the report policy")
         object.__setattr__(self, "scenarios", scenarios)
-        _freeze_content_addressed(
-            self,
-            id_field="report_id",
-            prefix="confidence-calibration-report",
-        )
+        _freeze_content_addressed(self, id_field="report_id", prefix="confidence-calibration-report")
         return self

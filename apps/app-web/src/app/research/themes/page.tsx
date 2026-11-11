@@ -7,12 +7,10 @@ import { classifiedShare, loadThemePurity } from "@/server/mart/theme-purity";
 
 export const dynamic = "force-dynamic";
 
-/** Absolute currency as the plane holds it (63,887,000,000), printed the way a filing does. */
 function millions(value: string): string {
   if (!value || value.trim() === "") return "—";
   const amount = Number(value);
-  if (!Number.isFinite(amount)) return "—";
-  return `${(amount / 1_000_000).toLocaleString("en-US", { maximumFractionDigits: 0 })}`;
+  return Number.isFinite(amount) ? `${(amount / 1_000_000).toLocaleString("en-US", { maximumFractionDigits: 0 })}` : "—";
 }
 
 export default async function ThemesPage() {
@@ -20,13 +18,23 @@ export default async function ThemesPage() {
   if (!principal) redirect("/login?from=%2Fresearch%2Fthemes");
   const groups = await loadThemePurity();
   const names = await loadEntityDisplayMap();
+  const headers = [
+    "Rank",
+    "Issuer",
+    "Theme share",
+    "Classified",
+    "In theme (m)",
+    "Consolidated (m)",
+    "Segments",
+    "Period",
+    "Confidence",
+    "Status",
+  ];
 
   return (
     <section aria-labelledby="themes-heading" className="space-y-8">
       <div>
-        <h1 id="themes-heading" className="text-2xl font-bold tracking-tight">
-          Theme purity
-        </h1>
+        <h1 id="themes-heading" className="text-2xl font-bold tracking-tight">Theme purity</h1>
         <p className="mt-2 text-sm text-gray-400">
           What share of each issuer&apos;s revenue a theme accounts for (init.md §0 question 6), read from{" "}
           <code className="mx-1 rounded bg-card px-1">mart.issuer_theme_purity</code> and computed nowhere here. The
@@ -54,29 +62,18 @@ export default async function ThemesPage() {
               <h2 className="text-lg font-semibold">{group.theme}</h2>
               <p className="text-xs text-gray-500">
                 Definition {group.definitionVersion} (
-                <span className="font-mono" title={group.definitionSha256}>
-                  {formatShortSha(group.definitionSha256)}
-                </span>
+                <span className="font-mono" title={group.definitionSha256}>{formatShortSha(group.definitionSha256)}</span>
                 ) · run {group.runId} · cutoff {group.cutoff}
               </p>
             </div>
             <div className="overflow-x-auto rounded-xl border border-border">
               <table className="w-full text-left text-sm">
-                <caption className="sr-only">
-                  Issuers ranked by {group.theme} revenue share at {group.cutoff}
-                </caption>
+                <caption className="sr-only">Issuers ranked by {group.theme} revenue share at {group.cutoff}</caption>
                 <thead className="bg-card text-xs uppercase text-gray-500">
                   <tr>
-                    <th scope="col" className="px-4 py-3">Rank</th>
-                    <th scope="col" className="px-4 py-3">Issuer</th>
-                    <th scope="col" className="px-4 py-3">Theme share</th>
-                    <th scope="col" className="px-4 py-3">Classified</th>
-                    <th scope="col" className="px-4 py-3">In theme (m)</th>
-                    <th scope="col" className="px-4 py-3">Consolidated (m)</th>
-                    <th scope="col" className="px-4 py-3">Segments</th>
-                    <th scope="col" className="px-4 py-3">Period</th>
-                    <th scope="col" className="px-4 py-3">Confidence</th>
-                    <th scope="col" className="px-4 py-3">Status</th>
+                    {headers.map((h) => (
+                      <th key={h} scope="col" className="px-4 py-3">{h}</th>
+                    ))}
                   </tr>
                 </thead>
                 <tbody>
@@ -86,35 +83,21 @@ export default async function ThemesPage() {
                       <tr key={row.issuerId} className="border-t border-border">
                         <td className="px-4 py-3">{row.themeShare === null ? "—" : index + 1}</td>
                         <th scope="row" className="px-4 py-3 font-medium">
-                          <Link
-                            href={`/research/entities/${encodeURIComponent(row.issuerId)}`}
-                            className="text-accent hover:underline"
-                            title={row.issuerId}
-                          >
+                          <Link href={`/research/entities/${encodeURIComponent(row.issuerId)}`} className="text-accent hover:underline" title={row.issuerId}>
                             {entityLabel(row.issuerId, names)}
                           </Link>
                         </th>
                         <td className="px-4 py-3 tabular-nums" title={row.themeShare ?? undefined}>
-                          {row.themeShare === null ? (
-                            <span className="text-gray-500">refused</span>
-                          ) : (
-                            formatCell(formatPercentFromFraction(row.themeShare))
-                          )}
+                          {row.themeShare === null ? <span className="text-gray-500">refused</span> : formatCell(formatPercentFromFraction(row.themeShare))}
                         </td>
                         <td className="px-4 py-3 tabular-nums" title={classified ?? undefined}>
                           {formatCell(formatPercentFromFraction(classified))}
                         </td>
-                        <td className="px-4 py-3 tabular-nums" title={row.inThemeRevenue}>
-                          {millions(row.inThemeRevenue)}
-                        </td>
-                        <td className="px-4 py-3 tabular-nums" title={row.consolidatedRevenue}>
-                          {millions(row.consolidatedRevenue)}
-                        </td>
+                        <td className="px-4 py-3 tabular-nums" title={row.inThemeRevenue}>{millions(row.inThemeRevenue)}</td>
+                        <td className="px-4 py-3 tabular-nums" title={row.consolidatedRevenue}>{millions(row.consolidatedRevenue)}</td>
                         <td className="px-4 py-3 tabular-nums">{row.segments}</td>
                         <td className="px-4 py-3">{row.periodEnd}</td>
-                        <td className="px-4 py-3 tabular-nums" title={row.confidence}>
-                          {formatCell(formatRatio(row.confidence))}
-                        </td>
+                        <td className="px-4 py-3 tabular-nums" title={row.confidence}>{formatCell(formatRatio(row.confidence))}</td>
                         <td className="px-4 py-3 text-xs">
                           <span title={row.extractor}>{row.availabilityStatus}</span>
                           {row.reasonCodes.length > 0 && (

@@ -1,51 +1,4 @@
-"""Run only the checks that a diff reaches (#1412 T1).
-
-Every local entry point (`make lint`, `make typecheck`, `make test`, `make smoke`,
-`make check`, `tools/prepush.sh`) calls this module. The default scope is the diff
-against a base ref (default `origin/main`, override with BASE=<ref>): committed,
-staged, unstaged and untracked changes. `FULL=1` runs the whole repository, as CI does.
-
-Root cause that this removes: the default local command was whole-repo work (all
-pytest in one process, mypy over every package, every bun test), and the scoped path
-was opt-in. Local commits are frequent, so the default decides the laptop load.
-
-Selection rules:
-
-1. Python imports: a test is selected when it imports a changed module, directly or
-   through the first-party import graph (`import_graph.py`). A changed `__init__.py`
-   also reaches every importer of a module under it, because Python runs it on import.
-   A test that puts its directory on `sys.path` reaches its helpers by bare name. A
-   changed `conftest.py` selects every test under its directory.
-2. TypeScript imports: a bun test (`apps/app-web/tests/*.test.ts`) is selected when it
-   imports a changed file, directly or through relative and `@/` imports.
-3. Mentions: a file that names a changed file reaches it. Examples: a test that runs
-   `tools/cut_release.sh`, a module that loads a JSON contract, a TypeScript test that
-   reads `strategy.py`. A basename that more than one tracked file has also needs its
-   parent directory name in the same file. Only code counts: the string constants of a
-   Python file and the TypeScript text without comments. A change to a source module or
-   to a document reaches only tests this way.
-4. Directories: a test that names the directory of a change (two segments or more, not
-   a package root, for example `db/migrations`) reaches it. A guard test that walks a
-   whole tree (`rglob("*.py")`) is not selected by suffix: the 21 such tests cost 41 CPU
-   seconds, more than the pre-push budget, so they stay in CI (A4: cross-package checks).
-5. Explicit rules: workflows select the workflow gate test; files under `db/` select
-   the migration tests; the root `pyproject.toml`, `uv.lock` and root `conftest.py`
-   select every Python test; the web lockfile, `package.json` and TypeScript
-   configuration select every bun test.
-6. Fallback: a changed file inside a workspace member that no rule maps selects the
-   tests of that member (package scope). The run record names each fallback.
-
-mypy checks the changed modules and every module that reaches them. tsc has no file
-scope, so it runs once when a web code file changes.
-
-Each run appends one JSON line to `<git common dir>/truealpha-diff-scope/runs.jsonl`:
-the selected and the skipped tests, the fallbacks, wall time and child CPU time. The
-escape rate (#1412 S6) compares these records with the first CI failure of each PR.
-
-Usage:
-  python3 tools/diff_scope.py select [--base REF] [--root DIR]
-  python3 tools/diff_scope.py run lint typecheck test conformance [--full] [--base REF] [--dry-run]
-"""
+"""Select and run only the lint, typecheck, test, and conformance checks reached by a git diff (#1412)."""
 
 from __future__ import annotations
 
@@ -80,7 +33,6 @@ WORKFLOW_GATE_TEST = "common/runtime/tests/test_ci_workflows.py"
 MIGRATION_TEST_GLOB = "common/runtime/tests/test_migration*.py"
 CONTRACT_DIRS = ("common/contracts/", f"{WEB_ROOT}/src/contracts/")
 CONFORMANCE_CHECK = "common/contracts/conformance/export_issue58.py"
-#: Files with no unit-test consumer. A test that names one still reaches it (rule 3).
 NO_TEST_PREFIXES = ("docs/", "governance/", "skills/", ".claude/", ".agents/")
 NO_TEST_SUFFIXES = (".md", ".png", ".svg", ".css", ".txt")
 NO_TEST_NAMES = frozenset({"LICENSE", "Dockerfile", ".gitignore", ".dockerignore"})
@@ -92,13 +44,8 @@ RECORD_SCHEMA = "diff-scope-run.v1"
 CACHE_SCHEMA = "import-facts.v2"
 
 
-# --------------------------------------------------------------------------- layout
-
-
 @dataclass(frozen=True)
 class Layout:
-    """The repository facts that selection needs, read from the root `pyproject.toml`."""
-
     root: Path
     members: tuple[str, ...]
     src_roots: tuple[str, ...]
@@ -108,8 +55,7 @@ class Layout:
 
 
 def load_layout(root: Path) -> Layout:
-    config = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
-    tool = config.get("tool", {})
+    tool = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8")).get("tool", {})
     members = tuple(tool.get("uv", {}).get("workspace", {}).get("members", ()))
     src_roots = tuple(f"{m}/src" for m in members if (root / m / "src").is_dir())
     test_roots = tuple(tool.get("pytest", {}).get("ini_options", {}).get("testpaths", ()))
@@ -120,15 +66,11 @@ def load_layout(root: Path) -> Layout:
     return Layout(root, members, src_roots, test_roots, mypy_roots, prefixes)
 
 
-# --------------------------------------------------------------------------- git
-
-
 def git(root: Path, *args: str) -> str:
     return subprocess.run(["git", *args], cwd=root, capture_output=True, text=True, check=True).stdout
 
 
 def changed_files(root: Path, base: str) -> tuple[str, list[str]]:
-    """The merge-base with `base` and every path changed since then, deleted paths included."""
     merge_base = git(root, "merge-base", base, "HEAD").strip()
     names = set(git(root, "diff", "--name-only", "--no-renames", merge_base).splitlines())
     names |= set(git(root, "ls-files", "--others", "--exclude-standard").splitlines())
@@ -136,34 +78,22 @@ def changed_files(root: Path, base: str) -> tuple[str, list[str]]:
 
 
 def tracked_files(root: Path) -> list[str]:
-    files = set(git(root, "ls-files").splitlines())
-    files |= set(git(root, "ls-files", "--others", "--exclude-standard").splitlines())
+    files = set(git(root, "ls-files").splitlines()) | set(
+        git(root, "ls-files", "--others", "--exclude-standard").splitlines()
+    )
     return sorted(
         f for f in files if f and not SKIP_PARTS.intersection(PurePosixPath(f).parts) and (root / f).is_file()
     )
 
 
 def state_dir(root: Path) -> Path | None:
-    """`<git common dir>/truealpha-diff-scope`: one place for every worktree of a clone."""
     try:
-        common = git(root, "rev-parse", "--path-format=absolute", "--git-common-dir").strip()
+        return Path(git(root, "rev-parse", "--path-format=absolute", "--git-common-dir").strip()) / STATE_DIR
     except (subprocess.CalledProcessError, FileNotFoundError):
         return None
-    return Path(common) / STATE_DIR
-
-
-# --------------------------------------------------------------------------- import facts cache
 
 
 class FactsCache:
-    """Import facts keyed by the SHA-256 of the file text.
-
-    The key is the content, not the path, so every worktree of a clone shares the entries.
-    Another process can write the file at the same time: the write goes to a temporary
-    file and `os.replace` swaps it in, so a reader sees an old or a new file, never a
-    part of one. A file that does not load is ignored and rebuilt.
-    """
-
     def __init__(self, directory: Path | None) -> None:
         self.path = directory / "import-facts.json" if directory else None
         self.entries: dict[str, ImportFacts] = {}
@@ -178,14 +108,11 @@ class FactsCache:
 
     def facts(self, text: str) -> ImportFacts:
         key = hashlib.sha256(text.encode("utf-8")).hexdigest()
-        cached = self.entries.get(key)
-        if cached is not None:
+        if (cached := self.entries.get(key)) is not None:
             return cached
         try:
             facts = scan(ast.parse(text))
         except (SyntaxError, ValueError):
-            # A file that does not parse reaches nothing through imports. Its own lint
-            # and test step reports the syntax error.
             facts = ImportFacts((), (), (), ())
         self.entries[key] = facts
         self.dirty = True
@@ -205,9 +132,6 @@ class FactsCache:
             print(f"diff-scope: could not save the import cache: {error}", file=sys.stderr)
 
 
-# --------------------------------------------------------------------------- selection
-
-
 @dataclass
 class Selection:
     base: str
@@ -218,8 +142,6 @@ class Selection:
     bun: list[str] = field(default_factory=list)
     bun_all: list[str] = field(default_factory=list)
     mypy: list[str] = field(default_factory=list)
-    #: Every source root. mypy given a subset of files must resolve the other first-party
-    #: packages from source; from site-packages it reports them as untyped (#1412 L3).
     mypy_path: list[str] = field(default_factory=list)
     tsc: bool = False
     conformance: bool = False
@@ -254,10 +176,7 @@ def _is_web_test(path: str) -> bool:
 
 
 def _under(path: str, roots: Iterable[str]) -> str | None:
-    for root in roots:
-        if path == root or path.startswith(root.rstrip("/") + "/"):
-            return root
-    return None
+    return next((root for root in roots if path == root or path.startswith(root.rstrip("/") + "/")), None)
 
 
 def _no_test(path: str) -> bool:
@@ -281,12 +200,6 @@ class _PyGraph:
 
 
 def _python_graph(layout: Layout, py_files: Sequence[str], texts: dict[str, str], cache: FactsCache) -> _PyGraph:
-    """Names that each Python file provides and consumes.
-
-    A source module provides its dotted name. A file under a test root provides
-    `<test root>::<suffix>` for each dotted suffix of its path inside that root, so a
-    bare-name import of a helper resolves only inside its own test tree.
-    """
     modules = {module_name(Path(p), Path(src)) for p in py_files if (src := _under(p, layout.src_roots))}
     graph = _PyGraph({}, {}, {}, {})
     for path in py_files:
@@ -310,13 +223,6 @@ def _python_graph(layout: Layout, py_files: Sequence[str], texts: dict[str, str]
 
 
 def _reverse_closure(graph: _PyGraph, seeds: set[str], changed_names: set[str]) -> set[str]:
-    """Files that reach a seed file or a changed name through the import graph.
-
-    An affected name reaches every direct consumer. Only a name that the diff itself
-    changes reaches the implied consumers (importers of a module below it). A package
-    `__init__` that imports a changed sibling therefore does not pull in every importer of
-    the package: only the files that read a name from the package itself.
-    """
     by_direct: dict[str, set[str]] = defaultdict(set)
     by_implied: dict[str, set[str]] = defaultdict(set)
     for path, names in graph.direct.items():
@@ -351,7 +257,6 @@ _WEB_IMPORT = re.compile(
 
 
 def _web_edges(files: Sequence[str], texts: dict[str, str]) -> dict[str, set[str]]:
-    """Relative and `@/` imports of each web file, resolved to repository paths."""
     web_files = {f for f in files if f.startswith(WEB_ROOT + "/") and f.endswith(WEB_CODE_SUFFIXES)}
     result: dict[str, set[str]] = {}
     for path in web_files:
@@ -368,7 +273,6 @@ def _web_edges(files: Sequence[str], texts: dict[str, str]) -> dict[str, set[str
                 *(f"{base}{ext}" for ext in WEB_CODE_SUFFIXES),
                 *(f"{base}/index{ext}" for ext in WEB_CODE_SUFFIXES),
             )
-            # An import of a file that the diff deleted still names it: keep the bare path.
             targets.add(next((c for c in candidates if c in web_files), str(base)))
         result[path] = targets
     return result
@@ -391,11 +295,6 @@ def _web_reverse_closure(web_edges: dict[str, set[str]], seeds: set[str]) -> set
 
 
 def _dir_pattern(path: str, package_roots: set[str]) -> re.Pattern[str] | None:
-    """A pattern for the directory of `path`, or None when that directory is too broad.
-
-    `"db/migrations"`, `"db", "migrations"` and `Path("db") / "migrations"` all name the same
-    directory, so the separator between segments may be a slash, a comma or a path join.
-    """
     parent = PurePosixPath(path).parent
     if len(parent.parts) < 2 or str(parent) in package_roots:
         return None
@@ -405,8 +304,6 @@ def _dir_pattern(path: str, package_roots: set[str]) -> re.Pattern[str] | None:
 
 @dataclass
 class _Corpus:
-    """The text in which rule 3 and rule 4 look for a name."""
-
     texts: dict[str, str]
     raw: dict[str, str]
     test_side: set[str]
@@ -415,7 +312,6 @@ class _Corpus:
         pure = PurePosixPath(changed)
         needles = [pure.name]
         if basename_count.get(pure.name, 0) > 1:
-            # A shared basename (`page.tsx`, `__init__.py`) needs its parent directory too.
             if not pure.parent.name:
                 return set()
             needles.append(pure.parent.name)
@@ -423,27 +319,19 @@ class _Corpus:
         return {p for p in pool if p != changed and all(n in self.texts[p] for n in needles)}
 
     def directory(self, pattern: re.Pattern[str] | None) -> set[str]:
-        if pattern is None:
-            return set()
-        # Raw text: `ROOT / "db" / "migrations"` keeps its separators only there.
-        return {p for p in self.test_side if pattern.search(self.raw[p])}
+        return set() if pattern is None else {p for p in self.test_side if pattern.search(self.raw[p])}
 
 
 _JS_COMMENT = re.compile(r"/\*.*?\*/|(?<![:\w])//[^\n]*", re.DOTALL)
 
 
 def _code_text(path: str, text: str, strings: dict[str, str]) -> str:
-    """The part of a file that can read another file: no comments, no docstrings."""
     if path.endswith(".py"):
         return strings.get(path, "")
-    if path.endswith(WEB_CODE_SUFFIXES):
-        return _JS_COMMENT.sub("", text)
-    return text
+    return _JS_COMMENT.sub("", text) if path.endswith(WEB_CODE_SUFFIXES) else text
 
 
 class _Selector:
-    """Applies the selection rules to one change set. Each rule is one method."""
-
     def __init__(self, root: Path, selection: Selection) -> None:
         self.layout = load_layout(root)
         self.selection = selection
@@ -488,7 +376,6 @@ class _Selector:
         return {t for t in self.selection.pytest_all if t.startswith(directory.rstrip("/") + "/")}
 
     def python_rule(self, path: str) -> bool:
-        """Rule 1. A changed module seeds the graph; a deleted one still names its importers."""
         if not path.endswith(".py"):
             return False
         pure = PurePosixPath(path)
@@ -498,18 +385,14 @@ class _Selector:
             self.selection.lint.append(path)
             self.py_seeds.add(path)
         if src:
-            # A changed or deleted module is a changed name: a changed package `__init__`
-            # reaches importers below it, and a deleted module still has importers that fail.
             self.py_changed_names.add(module_name(Path(path), Path(src)))
         elif test_root and path not in self.existing:
-            relative = pure.relative_to(test_root)
-            self.py_changed_names |= {f"{test_root}::{n}" for n in _suffix_names(relative)}
+            self.py_changed_names |= {f"{test_root}::{n}" for n in _suffix_names(pure.relative_to(test_root))}
         if pure.name == "conftest.py" and path != "conftest.py":
             self.py_tests |= self.tests_under(str(pure.parent))
         return bool(src or test_root)
 
     def web_rule(self, path: str) -> bool:
-        """Rule 2 seeds, and the web half of rule 5."""
         pure = PurePosixPath(path)
         if str(pure.parent) == WEB_ROOT and pure.name in WEB_ALL_TESTS_FILES:
             self.all_web = self.selection.tsc = True
@@ -521,7 +404,6 @@ class _Selector:
         return False
 
     def explicit_rules(self, path: str) -> bool:
-        """Rule 5: files whose consumers no import or mention shows."""
         pure = PurePosixPath(path)
         reached = False
         if path in PY_ALL_TESTS_FILES:
@@ -541,10 +423,9 @@ class _Selector:
         return reached
 
     def mention_rules(self, path: str) -> bool:
-        """Rules 3 and 4: files that name the change or its directory."""
-        tests_only = _no_test(path) or bool(path.endswith(".py") and _under(path, self.layout.src_roots))
-        named = self.corpus.names(path, self.basename_count, tests_only)
-        if not (path.endswith(".py") and _under(path, self.layout.src_roots)):
+        is_src_py = bool(path.endswith(".py") and _under(path, self.layout.src_roots))
+        named = self.corpus.names(path, self.basename_count, _no_test(path) or is_src_py)
+        if not is_src_py:
             named |= self.corpus.directory(_dir_pattern(path, self.package_roots))
         for other in named:
             if other in self.selection.pytest_all:
@@ -556,7 +437,6 @@ class _Selector:
         return bool(named)
 
     def fallback(self, path: str) -> None:
-        """Rule 6: package scope for a file that no rule maps, and the record says so."""
         if _no_test(path):
             return
         member = _under(path, self.layout.members)
@@ -588,11 +468,7 @@ class _Selector:
 
 
 def select(root: Path, base: str = DEFAULT_BASE, changed: Sequence[str] | None = None) -> Selection:
-    """Compute the checks that the diff against `base` reaches."""
-    if changed is None:
-        merge_base, changed_list = changed_files(root, base)
-    else:
-        merge_base, changed_list = "", sorted(set(changed))
+    merge_base, changed_list = changed_files(root, base) if changed is None else ("", sorted(set(changed)))
     selector = _Selector(root, Selection(base=base, merge_base=merge_base, changed=changed_list))
     for path in changed_list:
         reached = selector.python_rule(path)
@@ -604,9 +480,6 @@ def select(root: Path, base: str = DEFAULT_BASE, changed: Sequence[str] | None =
     return selector.finish()
 
 
-# --------------------------------------------------------------------------- run
-
-
 @dataclass(frozen=True)
 class Command:
     step: str
@@ -615,9 +488,6 @@ class Command:
     env: tuple[tuple[str, str], ...] = ()
 
 
-#: Each CI job has one toolchain, so it calls one language half: `make typecheck-python`
-#: in the Python job, `make typecheck-web` in the web job (#1412 L1). The laptop calls the
-#: whole step. One definition serves both.
 STEP_PARTS: dict[str, tuple[str, ...]] = {
     "lint": ("lint",),
     "typecheck": ("typecheck-python", "typecheck-web"),
@@ -630,29 +500,8 @@ STEP_PARTS: dict[str, tuple[str, ...]] = {
 }
 
 
-def plan(
-    selection: Selection | None,
-    steps: Sequence[str],
-    *,
-    web_tests_all: Sequence[str] = (),
-    pytest_files: Sequence[str] = (),
-) -> list[Command]:
-    """The commands for each step. A `selection` of None means FULL=1: the whole repository.
-
-    `pytest_files` replaces the whole pytest tree in FULL mode: a CI shard runs its own part.
-    """
-    unknown = [step for step in steps if step not in STEP_PARTS]
-    if unknown:
-        raise ValueError(f"unknown step {unknown[0]!r}: expected one of {sorted(STEP_PARTS)}")
-    context = _Plan(selection, web_tests_all, pytest_files)
-    parts = dict.fromkeys(part for step in steps for part in STEP_PARTS[step])
-    return [command for part in parts for command in _PART_COMMANDS[part](context)]
-
-
 @dataclass(frozen=True)
 class _Plan:
-    """What one part needs to build its commands. `selection` is None in FULL mode."""
-
     selection: Selection | None
     web_tests_all: Sequence[str]
     pytest_files: Sequence[str]
@@ -671,11 +520,10 @@ def _lint(plan_: _Plan) -> list[Command]:
 def _typecheck_python(plan_: _Plan) -> list[Command]:
     if plan_.selection is None:
         return [Command("typecheck-python", ("uv", "run", "mypy"))]
-    mypy = plan_.selection.mypy
-    if not mypy:
+    if not plan_.selection.mypy:
         return []
     mypy_path = (("MYPYPATH", os.pathsep.join(plan_.selection.mypy_path)),)
-    return [Command("typecheck-python", ("uv", "run", "mypy", *mypy), env=mypy_path)]
+    return [Command("typecheck-python", ("uv", "run", "mypy", *plan_.selection.mypy), env=mypy_path)]
 
 
 def _typecheck_web(plan_: _Plan) -> list[Command]:
@@ -687,8 +535,7 @@ def _typecheck_web(plan_: _Plan) -> list[Command]:
 def _test_python(plan_: _Plan) -> list[Command]:
     if plan_.selection is None:
         return [Command("test-python", ("uv", "run", "pytest", *plan_.pytest_files))]
-    files = plan_.selection.pytest
-    return [Command("test-python", ("uv", "run", "pytest", *files))] if files else []
+    return [Command("test-python", ("uv", "run", "pytest", *plan_.selection.pytest))] if plan_.selection.pytest else []
 
 
 def _test_web(plan_: _Plan) -> list[Command]:
@@ -714,9 +561,22 @@ _PART_COMMANDS = {
 }
 
 
+def plan(
+    selection: Selection | None,
+    steps: Sequence[str],
+    *,
+    web_tests_all: Sequence[str] = (),
+    pytest_files: Sequence[str] = (),
+) -> list[Command]:
+    unknown = [step for step in steps if step not in STEP_PARTS]
+    if unknown:
+        raise ValueError(f"unknown step {unknown[0]!r}: expected one of {sorted(STEP_PARTS)}")
+    context = _Plan(selection, web_tests_all, pytest_files)
+    parts = dict.fromkeys(part for step in steps for part in STEP_PARTS[step])
+    return [command for part in parts for command in _PART_COMMANDS[part](context)]
+
+
 def _missing_toolchain(root: Path, commands: Sequence[Command]) -> str | None:
-    """A web command in a worktree without `bun install` fails with TS2307 on every import,
-    which names no cause. Name it before anything runs (#1412 L3)."""
     if any(c.argv[0] == "bun" for c in commands) and not (root / WEB_ROOT / "node_modules").is_dir():
         return f"{WEB_ROOT}/node_modules is missing in this worktree: run `make install` (bun install) first"
     return None
@@ -733,7 +593,6 @@ def _write_record(root: Path, record: dict[str, object]) -> None:
         return
     try:
         directory.mkdir(parents=True, exist_ok=True)
-        # One `write` of one line in append mode: concurrent runs do not interleave lines.
         with (directory / "runs.jsonl").open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(record, sort_keys=True) + "\n")
     except OSError as error:
@@ -781,15 +640,14 @@ def run(
         return 2
     exit_code = 0
     for command in commands:
-        # A dry run prints the whole command: it is the plan that a caller reads. A real run
-        # shortens a long file list, because the run itself names each file it checks.
         argv = command.argv
         shown = " ".join(argv) if dry_run or len(argv) <= 10 else " ".join(argv[:10]) + f" ... (+{len(argv) - 10})"
         print(f"== [{command.step}] {shown}" + (f"  (in {command.cwd})" if command.cwd != "." else ""), flush=True)
         if dry_run:
             continue
-        env = {**os.environ, **dict(command.env)}
-        result = subprocess.run(command.argv, cwd=root / command.cwd, env=env, check=False)
+        result = subprocess.run(
+            command.argv, cwd=root / command.cwd, env={**os.environ, **dict(command.env)}, check=False
+        )
         if result.returncode != 0:
             exit_code = result.returncode
             print(f"diff-scope: [{command.step}] failed with exit {result.returncode}", file=sys.stderr)

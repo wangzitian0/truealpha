@@ -59,13 +59,7 @@ def _exact_additive_context(left: Decimal, right: Decimal) -> Context:
     left_digits, left_exponent = _decimal_shape(left)
     right_digits, right_exponent = _decimal_shape(right)
     common_exponent = min(left_exponent, right_exponent)
-    precision = (
-        max(
-            left_digits + left_exponent - common_exponent,
-            right_digits + right_exponent - common_exponent,
-        )
-        + 1
-    )
+    precision = max(left_digits + left_exponent - common_exponent, right_digits + right_exponent - common_exponent) + 1
     return _exact_context(precision)
 
 
@@ -121,23 +115,14 @@ class _FrozenModel(BaseModel):
 
 
 class ConflictBehavior(StrEnum):
-    #: The superseded rule: the highest-priority representative is the anchor, every other
-    #: origin must agree with it, and any disagreement abstains. Kept so a policy persisted
-    #: under it (and every report that names its id) still resolves and replays exactly.
     REPORT_AND_ABSTAIN = "report_and_abstain"
-    #: The owner's rule of 2026-09-17 (`grade_consensus`): three agreeing independent
-    #: origins serve their median, two serve their mean, anything else serves the
-    #: highest-priority origin.
     MEDIAN_CONSENSUS = "median_consensus"
 
 
 class ReconciliationOutcome(StrEnum):
     AGREED = "agreed"
     INSUFFICIENT_INDEPENDENT_ORIGINS = "insufficient_independent_origins"
-    #: Written only under `REPORT_AND_ABSTAIN`; still readable on historical rows.
     CONFLICT_ABSTAINED = "conflict_abstained"
-    #: `MEDIAN_CONSENSUS`: two or more independent origins and no two agree. The
-    #: highest-priority origin's value is served and the disagreement recorded.
     CONFLICT_PRIORITY_SERVED = "conflict_priority_served"
     NOT_YET_KNOWABLE = "not_yet_knowable"
     UNAVAILABLE = "unavailable"
@@ -147,24 +132,13 @@ _CONFLICT_OUTCOMES = frozenset(
     {ReconciliationOutcome.CONFLICT_ABSTAINED, ReconciliationOutcome.CONFLICT_PRIORITY_SERVED}
 )
 
-
-#: The owner's tolerance, 千分之一, for every family: prices, volume, financial facts, counts.
 CONSENSUS_RELATIVE_TOLERANCE = Decimal("0.001")
-#: Independent origin groups an agreeing set needs for the median quorum (the median is
-#: served and an extra source is ignored), and for the pair quorum (the corroboration bar).
 MEDIAN_QUORUM_GROUPS = 3
 PAIR_QUORUM_GROUPS = 2
 
 
 @dataclass(frozen=True)
 class ConsensusVote:
-    """One independent origin group's value for a cell.
-
-    `rank` is the group's position in the policy's source priority (lower is preferred).
-    A Decimal is compared under the tolerance; a string is a categorical value that agrees
-    only with an equal string, never with a number.
-    """
-
     group_id: str
     rank: int
     value: Decimal | str
@@ -172,15 +146,6 @@ class ConsensusVote:
 
 @dataclass(frozen=True)
 class ConsensusGrade:
-    """What `grade_consensus` decided for one cell.
-
-    `agreeing_group_ids` is the set the served value comes from: the agreeing set when two
-    or more groups agree, the highest-priority group alone otherwise. `outlier_group_ids` is
-    every other group: the ignored extra source of a quorum cell, the disagreeing sources
-    of a pair or of a lone priority group. `served_group_id` is the highest-priority member
-    of the served set. A caller counts `agreeing_group_ids` against the quorums.
-    """
-
     served_value: Decimal | str | None
     served_group_id: str | None
     agreeing_group_ids: tuple[str, ...]
@@ -190,9 +155,7 @@ class ConsensusGrade:
 def _median(values: list[Decimal]) -> Decimal:
     ordered = sorted(values)
     middle = len(ordered) // 2
-    if len(ordered) % 2:
-        return ordered[middle]
-    if ordered[middle - 1] == ordered[middle]:
+    if len(ordered) % 2 or ordered[middle - 1] == ordered[middle]:
         return ordered[middle]
     return _exact_add(ordered[middle - 1], ordered[middle]) / Decimal(2)
 
@@ -200,12 +163,6 @@ def _median(values: list[Decimal]) -> Decimal:
 def _consensus_value(
     values: list[Decimal | str], relative_tolerance: Decimal, absolute_tolerance: Decimal
 ) -> tuple[Decimal | str, Decimal] | None:
-    """(served value, spread) of `values` when they agree as a set, else None.
-
-    Numbers agree when each lies within `absolute + relative * |m|` of the set's median m
-    (so a median of 0 demands exact equality); the spread is the largest distance from m.
-    Strings agree only when all are equal (spread 0); a string never agrees with a number.
-    """
     if all(isinstance(value, str) for value in values):
         return (values[0], Decimal(0)) if len(set(values)) == 1 else None
     numbers = [value for value in values if isinstance(value, Decimal)]
@@ -223,25 +180,6 @@ def grade_consensus(
     relative_tolerance: Decimal = CONSENSUS_RELATIVE_TOLERANCE,
     absolute_tolerance: Decimal = Decimal(0),
 ) -> ConsensusGrade:
-    """The owner's fusion rule of 2026-09-17, for one cell. Pure: no clock, no I/O.
-
-    Each vote is one independent origin group (the caller has already collapsed producers
-    of one lineage into one group and dropped other-period assertions). Confidence never
-    enters: the grade holds the served value and the groups, and a caller counts them.
-
-    * Median quorum: the largest agreeing set has at least three groups; its median is
-      served. A group outside it (the occasional fourth source) is ignored and reported as
-      an outlier.
-    * Pair quorum: no three groups agree but two do; their median (their mean) is served.
-    * Neither: one group, or no two groups agree; the highest-priority group's value is
-      served and `agreeing_group_ids` holds that group alone.
-    * No votes: nothing is served.
-
-    Among equally large agreeing sets the tightest (smallest largest distance from its
-    median) wins, then the one holding the higher-priority groups: two sources that agree
-    exactly are served over a pair that merely lies within tolerance. The grade never
-    depends on the order the votes arrive in.
-    """
     if not votes:
         return ConsensusGrade(None, None, (), ())
     group_ids = [vote.group_id for vote in votes]
@@ -250,22 +188,19 @@ def grade_consensus(
     ordered = sorted(votes, key=lambda vote: (vote.rank, vote.group_id))
     for size in range(len(ordered), PAIR_QUORUM_GROUPS - 1, -1):
         best: tuple[Decimal, Decimal | str, tuple[ConsensusVote, ...]] | None = None
-        # `combinations` of a priority-ordered list yields the higher-priority sets first,
-        # so a strictly tighter set is the only one that displaces an earlier find.
         for members in combinations(ordered, size):
             agreed = _consensus_value([vote.value for vote in members], relative_tolerance, absolute_tolerance)
             if agreed is not None and (best is None or agreed[1] < best[0]):
                 best = (agreed[1], agreed[0], members)
-        if best is None:
-            continue
-        _, served, members = best
-        chosen = {vote.group_id for vote in members}
-        return ConsensusGrade(
-            served_value=served,
-            served_group_id=members[0].group_id,
-            agreeing_group_ids=tuple(sorted(chosen)),
-            outlier_group_ids=tuple(sorted(set(group_ids) - chosen)),
-        )
+        if best is not None:
+            _, served, members = best
+            chosen = {vote.group_id for vote in members}
+            return ConsensusGrade(
+                served_value=served,
+                served_group_id=members[0].group_id,
+                agreeing_group_ids=tuple(sorted(chosen)),
+                outlier_group_ids=tuple(sorted(set(group_ids) - chosen)),
+            )
     priority = ordered[0]
     return ConsensusGrade(
         served_value=priority.value,
@@ -276,8 +211,6 @@ def grade_consensus(
 
 
 class ReconciliationCell(_FrozenModel):
-    """One exact semantic grain in the requested DataHub denominator."""
-
     cell_id: str = Field(default="", pattern=r"^(?:|reconciliation-cell:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
     requirement_id: str = Field(pattern=_CONTENT_ID)
@@ -310,8 +243,6 @@ class ReconciliationCell(_FrozenModel):
 
 
 class SourceAssertion(_FrozenModel):
-    """One normalized assertion plus its independent-origin evidence."""
-
     assertion_id: str = Field(default="", pattern=r"^(?:|source-assertion:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
     cell_id: str = Field(pattern=r"^reconciliation-cell:[0-9a-f]{64}$")
@@ -369,8 +300,6 @@ class SourceAssertion(_FrozenModel):
 
 
 class ReconciliationPolicy(_FrozenModel):
-    """Versioned winner selection and Decimal comparison semantics."""
-
     policy_id: str = Field(default="", pattern=r"^(?:|reconciliation-policy:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
     policy_version: str = Field(pattern=STABLE_ID_PATTERN)
@@ -405,7 +334,6 @@ class ReconciliationPolicy(_FrozenModel):
             self.conflict_behavior is ConflictBehavior.MEDIAN_CONSENSUS
             and self.minimum_independent_origin_groups != PAIR_QUORUM_GROUPS
         ):
-            # The rule fixes its own thresholds: two agreeing groups are the corroboration bar.
             raise ValueError("a median-consensus policy corroborates at exactly two agreeing origin groups")
         _freeze_content(
             self,
@@ -421,6 +349,22 @@ class ReconciliationPolicy(_FrozenModel):
             ),
         )
         return self
+
+
+_ABSTAIN_OR_UNAVAILABLE = frozenset(
+    {
+        ReconciliationOutcome.CONFLICT_ABSTAINED,
+        ReconciliationOutcome.NOT_YET_KNOWABLE,
+        ReconciliationOutcome.UNAVAILABLE,
+    }
+)
+_SELECTED_OUTCOMES = frozenset(
+    {
+        ReconciliationOutcome.AGREED,
+        ReconciliationOutcome.INSUFFICIENT_INDEPENDENT_ORIGINS,
+        ReconciliationOutcome.CONFLICT_PRIORITY_SERVED,
+    }
+)
 
 
 class ReconciliationResult(_FrozenModel):
@@ -439,10 +383,7 @@ class ReconciliationResult(_FrozenModel):
     agreeing_assertion_ids: tuple[str, ...]
     conflicting_assertion_ids: tuple[str, ...]
     origin_group_ids: tuple[str, ...]
-    comparison_anchor_assertion_id: str | None = Field(
-        default=None,
-        pattern=r"^source-assertion:[0-9a-f]{64}$",
-    )
+    comparison_anchor_assertion_id: str | None = Field(default=None, pattern=r"^source-assertion:[0-9a-f]{64}$")
     selected_assertion_id: str | None = Field(default=None, pattern=r"^source-assertion:[0-9a-f]{64}$")
     selected_value_sha256: str | None = Field(default=None, pattern=_SHA256)
     selected_numeric_value: Decimal | None = None
@@ -478,25 +419,68 @@ class ReconciliationResult(_FrozenModel):
     def normalize_reasons(cls, values: tuple[str, ...]) -> tuple[str, ...]:
         return _reason_codes(values)
 
-    def _validate_agreement(self, agreeing_ids: set[str], conflicting_ids: set[str]) -> None:
-        """The checks of an `agreed` outcome; any other outcome passes."""
-        if self.outcome is not ReconciliationOutcome.AGREED:
-            return
-        if len(self.origin_group_ids) < self.minimum_independent_origin_groups:
-            raise ValueError("agreement does not meet the bound independent-origin threshold")
-        # Under the median rule an agreeing set may leave outliers beside it (the ignorable fourth
-        # source); it is then a pair or a quorum. The abstaining rule never agrees past a conflict,
-        # so one agreeing group beside a conflict is no agreement.
-        if conflicting_ids and len(agreeing_ids) < PAIR_QUORUM_GROUPS:
-            raise ValueError("an agreed result with conflicting assertions needs at least two agreeing origin groups")
-
-    @model_validator(mode="after")
-    def identify(self) -> Self:
+    def _validate_selection(self, representative_ids: set[str], agreeing_ids: set[str]) -> None:
         selected = self.selected_assertion_id is not None
         if selected != (self.selected_value_sha256 is not None):
             raise ValueError("selected assertion and value hash must be present together")
         if self.selected_numeric_value is not None and not selected:
             raise ValueError("selected numeric value requires a selected assertion")
+        anchored = self.comparison_anchor_assertion_id is not None
+        if anchored != bool(representative_ids):
+            raise ValueError("comparison anchor must be present exactly when representatives exist")
+        if anchored and self.comparison_anchor_assertion_id not in agreeing_ids:
+            raise ValueError("comparison anchor must be an agreeing representative")
+        if selected and (
+            self.selected_assertion_id not in representative_ids or self.selected_assertion_id not in agreeing_ids
+        ):
+            raise ValueError("selected assertion must be an agreeing representative")
+        if selected and self.selected_assertion_id != self.comparison_anchor_assertion_id:
+            raise ValueError("selected assertion must equal the comparison anchor")
+        if self.outcome in _ABSTAIN_OR_UNAVAILABLE and selected:
+            raise ValueError("abstained or unavailable reconciliation cannot select a value")
+        if self.outcome in _SELECTED_OUTCOMES and not selected:
+            raise ValueError("an agreed, insufficient-origin, or priority-served result must select an assertion")
+
+    def _validate_empty_outcome(
+        self, eligible_ids: set[str], future_ids: set[str], representative_ids: set[str]
+    ) -> None:
+        if eligible_ids or representative_ids or self.origin_group_ids:
+            raise ValueError("an unavailable result cannot contain eligible representatives")
+        if self.outcome is ReconciliationOutcome.NOT_YET_KNOWABLE and not future_ids:
+            raise ValueError("a not-yet-knowable result requires future assertions")
+        if self.outcome is ReconciliationOutcome.UNAVAILABLE and future_ids:
+            raise ValueError("an unavailable result cannot contain future assertions")
+
+    def _validate_outcome_rules(
+        self,
+        eligible_ids: set[str],
+        future_ids: set[str],
+        representative_ids: set[str],
+        agreeing_ids: set[str],
+        conflicting_ids: set[str],
+    ) -> None:
+        if self.outcome is ReconciliationOutcome.AGREED:
+            if len(self.origin_group_ids) < self.minimum_independent_origin_groups:
+                raise ValueError("agreement does not meet the bound independent-origin threshold")
+            if conflicting_ids and len(agreeing_ids) < PAIR_QUORUM_GROUPS:
+                raise ValueError(
+                    "an agreed result with conflicting assertions needs at least two agreeing origin groups"
+                )
+        elif self.outcome is ReconciliationOutcome.INSUFFICIENT_INDEPENDENT_ORIGINS:
+            if len(self.origin_group_ids) >= self.minimum_independent_origin_groups:
+                raise ValueError("an insufficient-origin result meets its bound threshold")
+            if conflicting_ids:
+                raise ValueError("an insufficient-origin result cannot contain conflicting assertions")
+        elif self.outcome in _CONFLICT_OUTCOMES:
+            if not agreeing_ids or not conflicting_ids or len(self.origin_group_ids) < 2:
+                raise ValueError("a conflict requires an agreeing anchor and a disagreeing origin")
+            if self.outcome is ReconciliationOutcome.CONFLICT_PRIORITY_SERVED and len(agreeing_ids) != 1:
+                raise ValueError("a priority-served conflict serves one origin group")
+        else:
+            self._validate_empty_outcome(eligible_ids, future_ids, representative_ids)
+
+    @model_validator(mode="after")
+    def identify(self) -> Self:
         assertion_ids = set(self.assertion_ids)
         eligible_ids = set(self.eligible_assertion_ids)
         future_ids = set(self.future_assertion_ids)
@@ -514,52 +498,8 @@ class ReconciliationResult(_FrozenModel):
             raise ValueError("agreeing and conflicting assertions must partition representatives")
         if len(self.origin_group_ids) != len(self.representative_assertion_ids):
             raise ValueError("each representative must correspond to one independent origin group")
-        anchored = self.comparison_anchor_assertion_id is not None
-        if anchored != bool(representative_ids):
-            raise ValueError("comparison anchor must be present exactly when representatives exist")
-        if anchored and self.comparison_anchor_assertion_id not in agreeing_ids:
-            raise ValueError("comparison anchor must be an agreeing representative")
-        if selected and (
-            self.selected_assertion_id not in representative_ids or self.selected_assertion_id not in agreeing_ids
-        ):
-            raise ValueError("selected assertion must be an agreeing representative")
-        if selected and self.selected_assertion_id != self.comparison_anchor_assertion_id:
-            raise ValueError("selected assertion must equal the comparison anchor")
-        if (
-            self.outcome
-            in {
-                ReconciliationOutcome.CONFLICT_ABSTAINED,
-                ReconciliationOutcome.NOT_YET_KNOWABLE,
-                ReconciliationOutcome.UNAVAILABLE,
-            }
-            and selected
-        ):
-            raise ValueError("abstained or unavailable reconciliation cannot select a value")
-        selected_outcomes = {
-            ReconciliationOutcome.AGREED,
-            ReconciliationOutcome.INSUFFICIENT_INDEPENDENT_ORIGINS,
-            ReconciliationOutcome.CONFLICT_PRIORITY_SERVED,
-        }
-        if self.outcome in selected_outcomes and not selected:
-            raise ValueError("an agreed, insufficient-origin, or priority-served result must select an assertion")
-        self._validate_agreement(agreeing_ids, conflicting_ids)
-        if self.outcome is ReconciliationOutcome.INSUFFICIENT_INDEPENDENT_ORIGINS:
-            if len(self.origin_group_ids) >= self.minimum_independent_origin_groups:
-                raise ValueError("an insufficient-origin result meets its bound threshold")
-            if conflicting_ids:
-                raise ValueError("an insufficient-origin result cannot contain conflicting assertions")
-        if self.outcome in _CONFLICT_OUTCOMES:
-            if not agreeing_ids or not conflicting_ids or len(self.origin_group_ids) < 2:
-                raise ValueError("a conflict requires an agreeing anchor and a disagreeing origin")
-        if self.outcome is ReconciliationOutcome.CONFLICT_PRIORITY_SERVED and len(agreeing_ids) != 1:
-            raise ValueError("a priority-served conflict serves one origin group")
-        if self.outcome in {ReconciliationOutcome.NOT_YET_KNOWABLE, ReconciliationOutcome.UNAVAILABLE}:
-            if eligible_ids or representative_ids or self.origin_group_ids:
-                raise ValueError("an unavailable result cannot contain eligible representatives")
-        if self.outcome is ReconciliationOutcome.NOT_YET_KNOWABLE and not future_ids:
-            raise ValueError("a not-yet-knowable result requires future assertions")
-        if self.outcome is ReconciliationOutcome.UNAVAILABLE and future_ids:
-            raise ValueError("an unavailable result cannot contain future assertions")
+        self._validate_selection(representative_ids, agreeing_ids)
+        self._validate_outcome_rules(eligible_ids, future_ids, representative_ids, agreeing_ids, conflicting_ids)
         _freeze_content(
             self,
             id_field="result_id",
@@ -578,9 +518,51 @@ def _assertions_agree(left: SourceAssertion, right: SourceAssertion, policy: Rec
         )
     difference = _exact_subtract(left.numeric_value, right.numeric_value).copy_abs()
     scale = max(left.numeric_value.copy_abs(), right.numeric_value.copy_abs())
-    relative_bound = _exact_multiply(policy.relative_tolerance, scale)
-    tolerance_bound = _exact_add(policy.absolute_tolerance, relative_bound)
+    tolerance_bound = _exact_add(policy.absolute_tolerance, _exact_multiply(policy.relative_tolerance, scale))
     return difference <= tolerance_bound
+
+
+def _build_result(
+    *,
+    cell: ReconciliationCell,
+    policy: ReconciliationPolicy,
+    cutoff: datetime,
+    ordered: Sequence[SourceAssertion],
+    eligible: Sequence[SourceAssertion],
+    future: Sequence[SourceAssertion],
+    unregistered: Sequence[SourceAssertion],
+    representatives: Sequence[SourceAssertion],
+    origins: tuple[str, ...],
+    outcome: ReconciliationOutcome,
+    agreeing_ids: tuple[str, ...],
+    conflicting_ids: tuple[str, ...],
+    anchor_id: str | None,
+    selected_id: str | None,
+    selected_sha256: str | None,
+    selected_numeric: Decimal | None,
+    reasons: tuple[str, ...],
+) -> ReconciliationResult:
+    return ReconciliationResult(
+        cell_id=cell.cell_id,
+        policy_id=policy.policy_id,
+        minimum_independent_origin_groups=policy.minimum_independent_origin_groups,
+        cutoff=cutoff,
+        outcome=outcome,
+        assertion_ids=tuple(item.assertion_id for item in ordered),
+        eligible_assertion_ids=tuple(item.assertion_id for item in eligible),
+        future_assertion_ids=tuple(item.assertion_id for item in future),
+        unregistered_assertion_ids=tuple(item.assertion_id for item in unregistered),
+        representative_assertion_ids=tuple(item.assertion_id for item in representatives),
+        origin_group_ids=origins,
+        lineage_complete=bool(representatives) and all(item.lineage_complete for item in representatives),
+        agreeing_assertion_ids=agreeing_ids,
+        conflicting_assertion_ids=conflicting_ids,
+        comparison_anchor_assertion_id=anchor_id,
+        selected_assertion_id=selected_id,
+        selected_value_sha256=selected_sha256,
+        selected_numeric_value=selected_numeric,
+        reason_codes=reasons,
+    )
 
 
 def reconcile_source_assertions(
@@ -590,8 +572,6 @@ def reconcile_source_assertions(
     policy: ReconciliationPolicy,
     cutoff: datetime,
 ) -> ReconciliationResult:
-    """Reconcile assertions without allowing ingestion order or confidence to arbitrate."""
-
     cutoff = _require_aware(cutoff, "cutoff")
     if any(assertion.cell_id != cell.cell_id for assertion in assertions):
         raise ValueError("every assertion must belong to the reconciled cell")
@@ -608,42 +588,42 @@ def reconcile_source_assertions(
     representatives: list[SourceAssertion] = []
     for origin_group_id in sorted({item.origin_group_id for item in eligible}):
         candidates = [item for item in eligible if item.origin_group_id == origin_group_id]
-        best_source_rank = min(priority[item.source_id] for item in candidates)
-        candidates = [item for item in candidates if priority[item.source_id] == best_source_rank]
-        representatives.append(max(candidates, key=lambda item: (item.knowable_at, item.assertion_id)))
-
-    if not representatives:
-        outcome = ReconciliationOutcome.NOT_YET_KNOWABLE if future else ReconciliationOutcome.UNAVAILABLE
-        reasons = ["reconciliation.no_eligible_assertion"]
-        if future:
-            reasons.append("reconciliation.future_knowledge_excluded")
-        if unregistered:
-            reasons.append("reconciliation.unregistered_source_excluded")
-        return ReconciliationResult(
-            cell_id=cell.cell_id,
-            policy_id=policy.policy_id,
-            minimum_independent_origin_groups=policy.minimum_independent_origin_groups,
-            cutoff=cutoff,
-            outcome=outcome,
-            assertion_ids=tuple(item.assertion_id for item in ordered),
-            eligible_assertion_ids=(),
-            future_assertion_ids=tuple(item.assertion_id for item in future),
-            unregistered_assertion_ids=tuple(item.assertion_id for item in unregistered),
-            representative_assertion_ids=(),
-            agreeing_assertion_ids=(),
-            conflicting_assertion_ids=(),
-            origin_group_ids=(),
-            comparison_anchor_assertion_id=None,
-            lineage_complete=False,
-            reason_codes=tuple(reasons),
+        best_rank = min(priority[item.source_id] for item in candidates)
+        representatives.append(
+            max(
+                (c for c in candidates if priority[c.source_id] == best_rank),
+                key=lambda c: (c.knowable_at, c.assertion_id),
+            )
         )
 
-    origins = tuple(item.origin_group_id for item in representatives)
-    reasons = []
+    reasons: list[str] = []
     if future:
         reasons.append("reconciliation.future_knowledge_excluded")
     if unregistered:
         reasons.append("reconciliation.unregistered_source_excluded")
+
+    if not representatives:
+        return _build_result(
+            cell=cell,
+            policy=policy,
+            cutoff=cutoff,
+            ordered=ordered,
+            eligible=(),
+            future=future,
+            unregistered=unregistered,
+            representatives=(),
+            origins=(),
+            outcome=ReconciliationOutcome.NOT_YET_KNOWABLE if future else ReconciliationOutcome.UNAVAILABLE,
+            agreeing_ids=(),
+            conflicting_ids=(),
+            anchor_id=None,
+            selected_id=None,
+            selected_sha256=None,
+            selected_numeric=None,
+            reasons=("reconciliation.no_eligible_assertion", *reasons),
+        )
+
+    origins = tuple(item.origin_group_id for item in representatives)
     if len(eligible) > len(representatives):
         reasons.append("reconciliation.same_origin_deduplicated")
     if policy.conflict_behavior is ConflictBehavior.MEDIAN_CONSENSUS:
@@ -672,26 +652,24 @@ def reconcile_source_assertions(
         reasons.append("reconciliation.independent_origins_agree")
         selected_result = selected
 
-    return ReconciliationResult(
-        cell_id=cell.cell_id,
-        policy_id=policy.policy_id,
-        minimum_independent_origin_groups=policy.minimum_independent_origin_groups,
+    return _build_result(
+        cell=cell,
+        policy=policy,
         cutoff=cutoff,
-        assertion_ids=tuple(item.assertion_id for item in ordered),
-        eligible_assertion_ids=tuple(item.assertion_id for item in eligible),
-        future_assertion_ids=tuple(item.assertion_id for item in future),
-        unregistered_assertion_ids=tuple(item.assertion_id for item in unregistered),
-        representative_assertion_ids=tuple(item.assertion_id for item in representatives),
-        origin_group_ids=origins,
-        lineage_complete=all(item.lineage_complete for item in representatives),
+        ordered=ordered,
+        eligible=eligible,
+        future=future,
+        unregistered=unregistered,
+        representatives=representatives,
+        origins=origins,
         outcome=outcome,
-        agreeing_assertion_ids=tuple(item.assertion_id for item in agreeing),
-        conflicting_assertion_ids=tuple(item.assertion_id for item in conflicting),
-        comparison_anchor_assertion_id=selected.assertion_id,
-        selected_assertion_id=None if selected_result is None else selected_result.assertion_id,
-        selected_value_sha256=(None if selected_result is None else selected_result.normalized_value_sha256),
-        selected_numeric_value=None if selected_result is None else selected_result.numeric_value,
-        reason_codes=tuple(reasons or ("reconciliation.selected",)),
+        agreeing_ids=tuple(item.assertion_id for item in agreeing),
+        conflicting_ids=tuple(item.assertion_id for item in conflicting),
+        anchor_id=selected.assertion_id,
+        selected_id=None if selected_result is None else selected_result.assertion_id,
+        selected_sha256=None if selected_result is None else selected_result.normalized_value_sha256,
+        selected_numeric=None if selected_result is None else selected_result.numeric_value,
+        reasons=tuple(reasons or ("reconciliation.selected",)),
     )
 
 
@@ -708,14 +686,6 @@ def _median_consensus_result(
     origins: tuple[str, ...],
     reasons: list[str],
 ) -> ReconciliationResult:
-    """`reconcile_source_assertions` under the owner's rule: one vote per origin group.
-
-    A numeric assertion votes its Decimal; a non-numeric one votes its normalized value
-    hash, so categorical values agree only when equal. The served value is the grade's
-    (the agreeing set's median, or the priority group's own value when no two agree); the selected
-    assertion is the highest-priority member of the served set. The grade counts the
-    agreeing groups against the quorums; no confidence enters.
-    """
     by_group = {item.origin_group_id: item for item in representatives}
     grade = grade_consensus(
         [
@@ -729,7 +699,7 @@ def _median_consensus_result(
         relative_tolerance=policy.relative_tolerance,
         absolute_tolerance=policy.absolute_tolerance,
     )
-    assert grade.served_group_id is not None  # representatives is never empty here
+    assert grade.served_group_id is not None
     selected = by_group[grade.served_group_id]
     if len(grade.agreeing_group_ids) >= PAIR_QUORUM_GROUPS:
         outcome = ReconciliationOutcome.AGREED
@@ -746,32 +716,31 @@ def _median_consensus_result(
         reasons.append("reconciliation.cross_origin_conflict")
     if grade.outlier_group_ids and outcome is ReconciliationOutcome.AGREED:
         reasons.append("reconciliation.outlier_recorded")
-    return ReconciliationResult(
-        cell_id=cell.cell_id,
-        policy_id=policy.policy_id,
-        minimum_independent_origin_groups=policy.minimum_independent_origin_groups,
+    served_sha = (
+        grade.served_value
+        if isinstance(grade.served_value, str)
+        else (
+            selected.normalized_value_sha256
+            if selected.numeric_value is not None and grade.served_value == selected.numeric_value
+            else canonical_sha256(str(grade.served_value))
+        )
+    )
+    return _build_result(
+        cell=cell,
+        policy=policy,
         cutoff=cutoff,
-        assertion_ids=tuple(item.assertion_id for item in ordered),
-        eligible_assertion_ids=tuple(item.assertion_id for item in eligible),
-        future_assertion_ids=tuple(item.assertion_id for item in future),
-        unregistered_assertion_ids=tuple(item.assertion_id for item in unregistered),
-        representative_assertion_ids=tuple(item.assertion_id for item in representatives),
-        origin_group_ids=origins,
-        lineage_complete=all(item.lineage_complete for item in representatives),
+        ordered=ordered,
+        eligible=eligible,
+        future=future,
+        unregistered=unregistered,
+        representatives=representatives,
+        origins=origins,
         outcome=outcome,
-        agreeing_assertion_ids=tuple(by_group[group].assertion_id for group in grade.agreeing_group_ids),
-        conflicting_assertion_ids=tuple(by_group[group].assertion_id for group in grade.outlier_group_ids),
-        comparison_anchor_assertion_id=selected.assertion_id,
-        selected_assertion_id=selected.assertion_id,
-        selected_value_sha256=(
-            grade.served_value
-            if isinstance(grade.served_value, str)
-            else (
-                selected.normalized_value_sha256
-                if selected.numeric_value is not None and grade.served_value == selected.numeric_value
-                else canonical_sha256(str(grade.served_value))
-            )
-        ),
-        selected_numeric_value=grade.served_value if isinstance(grade.served_value, Decimal) else None,
-        reason_codes=tuple(reasons),
+        agreeing_ids=tuple(by_group[group].assertion_id for group in grade.agreeing_group_ids),
+        conflicting_ids=tuple(by_group[group].assertion_id for group in grade.outlier_group_ids),
+        anchor_id=selected.assertion_id,
+        selected_id=selected.assertion_id,
+        selected_sha256=served_sha,
+        selected_numeric=grade.served_value if isinstance(grade.served_value, Decimal) else None,
+        reasons=tuple(reasons),
     )

@@ -1,27 +1,5 @@
 /**
- * #362: Postgres-backed `StrategyRunReadRepositoryLike` for the App
- * `/admin/strategy-runs` page. Reads `mart.strategy_runs`/`strategy_decisions`
- * through the `mart_readonly` role (`./db.ts`), replacing the checked-in
- * `FixtureStrategyRunRepository` as the shipped consumer path.
- *
- * Parity with the Python `PostgresStrategyRunRepository` is not a comment —
- * it is EXECUTED: tests/strategy-run-parity-conformance.test.ts and its Python
- * half seed the same rows on one real schema and assert both serializations
- * equal the frozen canon in common/contracts/conformance/strategy_run_parity.json
- * (#469). The shared semantics:
- *  - the run the governed capture head resolves to per `strategy_key` (#575), else the
- *    newest by `executed_at desc, created_at desc, strategy_run_id desc`;
- *  - decisions ordered by `cutoff_at, issuer_id`;
- *  - `confidence` and the input vintages come from mart.topt_core_results of the
- *    capture run the strategy run was evaluated for (`mart.strategy_run_capture`,
- *    #877) — mart.strategy_decisions records the verdict and nothing about what it
- *    was reached from;
- *  - `definition` names the strategy definition of the run (#1235). The generated
- *    twin of the Python definition registry gives its review state;
- *  - a query error → `database_unavailable`; no run → `no_runs_recorded`;
- *    a row that no longer matches the DTO shape → `schema_mismatch`.
- *
- * Server-only; never import into a client component.
+ * Postgres-backed `StrategyRunReadRepositoryLike` over `mart.strategy_runs` and `mart.strategy_decisions`.
  */
 
 import type { PoolClient } from "pg";
@@ -45,31 +23,13 @@ import {
 
 import { withMartReadonly } from "./db";
 
-/** The shared contract report plus the mart row's run identity (#370 AC 3) and
- * the inputs each decision was reached from.
- *
- * `provenance` lives HERE and not on `StrategyRunDecision` on purpose. That type
- * is serialized byte-for-byte against the Python twin
- * (`strategy-run-parity-conformance`: "two languages, one schema, one expected
- * byte shape"), and the first cut of this change put display provenance inside
- * it and diverged from the frozen canon. The extension type is where mart-only
- * reads already belong. */
 export type MartStrategyRunReport = StrategyRunReport & {
 	strategy_run_id: string;
 	executed_at: string;
-	/** True when the governed capture head resolves this run (#575); false when the
-	 * page is showing the newest recorded run because no head resolves one. The
-	 * overview says which, instead of calling every run "the governed run". */
 	governed: boolean;
 	provenance: ReadonlyMap<string, DecisionProvenance>;
 };
 
-// The run the governed capture head resolves to comes first (#575, #1062); only when no
-// head resolves a run for this strategy does the newest recorded run stand in. The
-// join lives in mart.served_head and mart.strategy_run_capture; this statement
-// is the Python twin's LATEST_RUN_SQL modulo placeholder syntax, and common/contracts pins the two texts.
-// Python consumers read a row by position (is_governed is column 3), so a new column goes
-// at the end of the select list (#1235).
 export const LATEST_RUN_SQL = `
     select r.strategy_run_id, r.corpus_sha256, r.executed_at,
            exists (
@@ -86,13 +46,6 @@ export const LATEST_RUN_SQL = `
     limit 1
 `;
 
-// cutoff_at is formatted in SQL to Python's datetime.isoformat semantics
-// ("...:59Z" when microseconds are zero, "...:59.123456Z" otherwise) so the
-// serialized decision is byte-identical to the Python twin's pydantic output —
-// JS Date.toISOString() always emits milliseconds and silently truncates
-// microseconds, which broke trace-ID parity on exactly the mart path (#469).
-// ORDER BY names the source column, not the text alias: the two text formats
-// do not sort chronologically.
 export const DECISIONS_SQL = `
   select coalesce(ei.legacy_id, d.issuer_id) as issuer_id,
          case when to_char(d.cutoff_at at time zone 'UTC', 'US') = '000000'
@@ -105,41 +58,6 @@ export const DECISIONS_SQL = `
          d.eligible, d.outcome, d.exclusion_reason, d.rank, d.target_weight, d.peg, d.peg_rank,
          d.peg_reason_codes,
          d.labor_efficiency_metric,
-         -- #615-adjacent, and init.md's reason for point-in-time in the first
-         -- place: "every step downstream has to be traceable back to the
-         -- original raw material". The decision row records what was decided
-         -- and nothing about what it was decided FROM. The core result carries
-         -- all of it and was never joined, so the App declared a confidence
-         -- field that mart.strategy_decisions does not even have a column for
-         -- — always null, rendered as an em dash in every row of /research/rankings
-         -- since the column shipped.
-         --
-         -- Measured before joining, not assumed: 20 of 20 decisions in the
-         -- served run match a core result on (issuer_id, cutoff), and the
-         -- confidences line up with the exclusions — 0 for the two
-         -- missing_gross_profit_fact rows, 0.80 for missing_market_value_input,
-         -- 0.85 for everything available.
-         --
-         -- #877: the core result is the one of the capture run this strategy run
-         -- was evaluated for. A cutoff is not a run: a forced tick (#874) shares
-         -- its cutoff with the scheduled tick, and the cutoff-only join returned
-         -- every decision once per capture run. The FROM clause below is the
-         -- Python twin's DECISIONS_FROM_SQL modulo placeholder syntax, pinned by
-         -- test_strategy_run_selection_parity.
-         --
-         -- #953: issuer_id is TRANSLATED through mart.entity_identity, not echoed.
-         -- mart.strategy_decisions.issuer_id has held the opaque entity UUID since
-         -- #928, and the MCP strategy_run tool served it verbatim: staging v0.0.90
-         -- answered issuer:lei:29DX7H14B9S6O3FD6V18, v0.0.91 onward a bare UUID.
-         -- The Python twin carries the identical lateral join and the
-         -- identical coalesce, for the same reason #954/#967 added one to topt_gppe:
-         -- one projection translates every entity coordinate, never a second
-         -- translator per consumer. The topt_core_results join above deliberately
-         -- keeps comparing the RAW d.issuer_id -- both sides of it are entity
-         -- coordinates, and translating either would break the confidence join.
-         --
-         -- A join is a read, not a computation: init.md principle 2 keeps
-         -- metric computation in common/factors, and this adds no metric.
          t.confidence,
          t.operating_period_end, t.revenue_period_end, t.shares_period_end,
          t.universe_id, t.universe_version, t.universe_sha256,
@@ -160,18 +78,12 @@ export const DECISIONS_SQL = `
 
 class SchemaMismatchError extends Error {}
 
-/** `numeric` comes back from node-pg as a precision-preserving string; keep it
- * verbatim (never coerce through a JS number). timestamptz comes back as a Date. */
 function decimalString(value: unknown, field: string): string | null {
 	if (value === null || value === undefined) return null;
 	if (typeof value === "string") return value;
 	throw new SchemaMismatchError(`${field} is not a numeric string`);
 }
 
-/** A `date` column arrives from node-pg as a Date at UTC midnight. Rendered as
- * the calendar day it names, never as an instant: these are period ends —
- * "the quarter this figure describes" — and a timezone-shifted 2025-12-31 that
- * displays as 2025-12-30 would be a lie about the vintage. */
 function dateString(value: unknown): string | null {
 	if (value === null || value === undefined) return null;
 	if (value instanceof Date) return value.toISOString().slice(0, 10);
@@ -186,10 +98,7 @@ function textOrNull(value: unknown): string | null {
 }
 
 function outcomeOf(value: unknown): StrategyRunOutcome {
-	if (
-		typeof value === "string" &&
-		(STRATEGY_RUN_OUTCOMES as readonly string[]).includes(value)
-	) {
+	if (typeof value === "string" && (STRATEGY_RUN_OUTCOMES as readonly string[]).includes(value)) {
 		return value as StrategyRunOutcome;
 	}
 	throw new SchemaMismatchError(`unknown outcome ${String(value)}`);
@@ -197,43 +106,29 @@ function outcomeOf(value: unknown): StrategyRunOutcome {
 
 function tierOf(value: unknown): ValuationTier | null {
 	if (value === null || value === undefined) return null;
-	if (
-		typeof value === "string" &&
-		(VALUATION_TIERS as readonly string[]).includes(value)
-	) {
+	if (typeof value === "string" && (VALUATION_TIERS as readonly string[]).includes(value)) {
 		return value as ValuationTier;
 	}
 	throw new SchemaMismatchError(`unknown tier ${String(value)}`);
 }
 
 function cutoffIso(value: unknown): string {
-	// DECISIONS_SQL emits Python-isoformat text; a Date here means the SQL-side
-	// formatting was lost, which silently reintroduces the millisecond drift.
 	if (typeof value === "string") return value;
-	throw new SchemaMismatchError(
-		"cutoff_at did not arrive as SQL-formatted text",
-	);
+	throw new SchemaMismatchError("cutoff_at did not arrive as SQL-formatted text");
 }
 
-/** Exact [0, 1] membership test on a Postgres numeric string — string
- * arithmetic only, because coercing through a JS number reintroduces the
- * float rounding this module's own rule forbids (#482 review): an edge value
- * like "1.0000000000000000001" must be rejected exactly as the Python twin's
- * Decimal bound rejects it, not rounded into acceptance. */
 function outsideUnitInterval(text: string): boolean {
 	const negative = text.startsWith("-");
 	const magnitude = negative ? text.slice(1) : text;
 	const [whole = "", fraction = ""] = magnitude.split(".");
 	const wholeStripped = whole.replace(/^0+/, "");
 	const fractionHasValue = /[1-9]/.test(fraction);
-	if (negative) return wholeStripped !== "" || fractionHasValue; // any negative non-zero
-	if (wholeStripped === "") return false; // 0 <= value < 1
-	if (wholeStripped === "1") return fractionHasValue; // exactly 1 passes; 1.0…01 fails
-	return true; // integer part >= 2
+	if (negative) return wholeStripped !== "" || fractionHasValue;
+	if (wholeStripped === "") return false;
+	if (wholeStripped === "1") return fractionHasValue;
+	return true;
 }
 
-/** Mirrors the Python twin's pydantic Field bounds — a row the MCP side would
- * reject as `schema_mismatch` must not render in the App (#469). */
 function boundedDecimalString(value: unknown, field: string): string | null {
 	const text = decimalString(value, field);
 	if (text !== null && outsideUnitInterval(text)) {
@@ -246,15 +141,16 @@ export function decisionFromRow(row: Record<string, unknown>): StrategyRunDecisi
 	if (typeof row.issuer_id !== "string" || row.issuer_id.length === 0) {
 		throw new SchemaMismatchError("issuer_id is not a non-empty string");
 	}
-	if (typeof row.eligible !== "boolean")
+	if (typeof row.eligible !== "boolean") {
 		throw new SchemaMismatchError("eligible is not a boolean");
+	}
 	const rank = row.rank;
-	if (rank !== null && typeof rank !== "number")
+	if (rank !== null && typeof rank !== "number") {
 		throw new SchemaMismatchError("rank is not an integer");
+	}
 	if (typeof rank === "number" && (!Number.isInteger(rank) || rank < 1)) {
 		throw new SchemaMismatchError("rank is not an integer >= 1");
 	}
-	// #1235: mirrors the Python twin, which refuses a decision with two target bases.
 	if (row.target_price_to_sales != null && row.target_price_to_gross_profit != null) {
 		throw new SchemaMismatchError("a decision targets the multiple of one valuation basis, not two");
 	}
@@ -268,15 +164,8 @@ export function decisionFromRow(row: Record<string, unknown>): StrategyRunDecisi
 			row.capital_adjusted_labor_efficiency,
 			"capital_adjusted_labor_efficiency",
 		),
-		current_price_to_sales: decimalString(
-			row.current_price_to_sales,
-			"current_price_to_sales",
-		),
-		target_price_to_sales: decimalString(
-			row.target_price_to_sales,
-			"target_price_to_sales",
-		),
-		// #1235: the P/GP pair of definition 1.0.0, mirrored from the Python twin.
+		current_price_to_sales: decimalString(row.current_price_to_sales, "current_price_to_sales"),
+		target_price_to_sales: decimalString(row.target_price_to_sales, "target_price_to_sales"),
 		current_price_to_gross_profit: decimalString(
 			row.current_price_to_gross_profit,
 			"current_price_to_gross_profit",
@@ -286,45 +175,23 @@ export function decisionFromRow(row: Record<string, unknown>): StrategyRunDecisi
 			"target_price_to_gross_profit",
 		),
 		valuation_gap: decimalString(row.valuation_gap, "valuation_gap"),
-		// Joined from mart.topt_core_results, because mart.strategy_decisions
-		// still has no confidence column (#355). This mapper hard-coded null,
-		// so the first cut of this change selected the column and then threw it
-		// away: the SQL was right, the page still rendered an em dash, and the
-		// guard I added passed because it only checked the SELECT (review).
 		confidence: decimalString(row.confidence, "confidence"),
-		exclusion_reason:
-			typeof row.exclusion_reason === "string" ? row.exclusion_reason : null,
+		exclusion_reason: typeof row.exclusion_reason === "string" ? row.exclusion_reason : null,
 		rank: (rank as number | null) ?? null,
 		target_weight: boundedDecimalString(row.target_weight, "target_weight"),
-		// Module 1 (#284). Nullable by design: PEG is undefined for non-positive earnings or
-		// growth and the factor returns no value rather than a signed one, so the read model
-		// must carry the absence rather than coercing it to a number.
 		peg: decimalString(row.peg, "peg"),
-		// Module 1's own ordering (#284). Independent of `rank`: PEG does not select.
 		peg_rank: typeof row.peg_rank === "number" ? row.peg_rank : null,
-		// #1176: the metric name the strategy used for this value. Null for a row written before
-		// the column existed, or for an issuer with no metric (no class, or excluded before one was chosen).
 		labor_efficiency_metric:
 			typeof row.labor_efficiency_metric === "string" ? row.labor_efficiency_metric : null,
 	};
 }
 
-/** The inputs a decision was reached from, keyed by issuer.
- *
- * Deliberately NOT on `StrategyRunDecision`. That type is the frozen,
- * content-addressed contract the Python shipping consumer serializes
- * byte-for-byte — `strategy-run-parity-conformance` compares the two, and the
- * first cut of this change put display provenance inside it and diverged from
- * the canon. "Two languages, one schema, one expected byte shape" is the
- * contract; a read-model concern does not belong in it.
- *
- * The join stays in one query — this is the same rows, projected twice. */
+function provenanceMarker(): void {}
+
 export interface DecisionProvenance {
 	operating_period_end: string | null;
 	revenue_period_end: string | null;
 	shares_period_end: string | null;
-	/** The governed universe id (`universe:<key>-<region>-<date>`). `universe_version` is another coordinate
-	 * (`topt-candidate-2026-03-31-v1`) and starts with no id prefix (#1522). */
 	universe_id: string | null;
 	universe_version: string | null;
 	universe_sha256: string | null;
@@ -333,9 +200,8 @@ export interface DecisionProvenance {
 	peg_reason_codes?: readonly string[];
 }
 
-export function provenanceFromRow(
-	row: Record<string, unknown>,
-): DecisionProvenance {
+export function provenanceFromRow(row: Record<string, unknown>): DecisionProvenance {
+	void provenanceMarker;
 	return {
 		operating_period_end: dateString(row.operating_period_end),
 		revenue_period_end: dateString(row.revenue_period_end),
@@ -345,15 +211,11 @@ export function provenanceFromRow(
 		universe_sha256: textOrNull(row.universe_sha256),
 		gppe_definition_sha256: textOrNull(row.gppe_definition_sha256),
 		tier_definition_sha256: textOrNull(row.tier_definition_sha256),
-		peg_reason_codes: Array.isArray(row.peg_reason_codes)
-			? row.peg_reason_codes.map(String)
-			: [],
+		peg_reason_codes: Array.isArray(row.peg_reason_codes) ? row.peg_reason_codes.map(String) : [],
 	};
 }
 
 export class MartStrategyRunRepository {
-	/** `registry` gives each run its review state (#1235). The App uses the generated
-	 * registry; tests pass another one to add a synthetic provisional definition. */
 	constructor(
 		private readonly registry: readonly RegisteredStrategyDefinition[] = STRATEGY_DEFINITION_REGISTRY,
 	) {}
@@ -365,73 +227,45 @@ export class MartStrategyRunRepository {
 		let runRow: Record<string, unknown> | undefined;
 		let decisionRows: Record<string, unknown>[];
 		try {
-			[runRow, decisionRows] = await withMartReadonly(
-				async (client: PoolClient) => {
-					const run = await client.query(LATEST_RUN_SQL, [
-						idPrefixLikeOfRole("strategy"),
-						strategyId,
-					]);
-					if (run.rows.length === 0) return [undefined, []] as const;
-					const decisions = await client.query(DECISIONS_SQL, [
-						run.rows[0].strategy_run_id,
-					]);
-					return [
-						run.rows[0] as Record<string, unknown>,
-						decisions.rows as Record<string, unknown>[],
-					] as const;
-				},
-			);
+			[runRow, decisionRows] = await withMartReadonly(async (client: PoolClient) => {
+				const run = await client.query(LATEST_RUN_SQL, [idPrefixLikeOfRole("strategy"), strategyId]);
+				if (run.rows.length === 0) return [undefined, []] as const;
+				const decisions = await client.query(DECISIONS_SQL, [run.rows[0].strategy_run_id]);
+				return [
+					run.rows[0] as Record<string, unknown>,
+					decisions.rows as Record<string, unknown>[],
+				] as const;
+			});
 		} catch {
 			return { strategy_id: strategyId, reason: "database_unavailable" };
 		}
 
-		if (runRow === undefined) {
-			return { strategy_id: strategyId, reason: "no_runs_recorded" };
-		}
-
-		// The Python twin's report type pins strategy_id to the Literal
-		// "large_model_value_v0": a run recorded under any other key fails its
-		// validation and returns schema_mismatch. Mirror that instead of
-		// relabeling foreign rows as the default strategy (#469).
-		if (strategyId !== "large_model_value_v0") {
+		if (runRow === undefined) return { strategy_id: strategyId, reason: "no_runs_recorded" };
+		if (
+			strategyId !== "large_model_value_v0" ||
+			typeof runRow.corpus_sha256 !== "string" ||
+			typeof runRow.strategy_run_id !== "string"
+		) {
 			return { strategy_id: strategyId, reason: "schema_mismatch" };
 		}
 
-		const corpusSha256 = runRow.corpus_sha256;
-		if (typeof corpusSha256 !== "string") {
-			return { strategy_id: strategyId, reason: "schema_mismatch" };
-		}
-
-		if (typeof runRow.strategy_run_id !== "string") {
-			return { strategy_id: strategyId, reason: "schema_mismatch" };
-		}
-
-		// #1235: the definition the served run evaluated. The registry decides the review
-		// state from the content hash, exactly as the Python twin does.
 		const definition = strategyRunDefinitionOf(
 			runRow.strategy_version,
 			runRow.definition_content_sha256,
 			this.registry,
 		);
-		if (definition === null) {
-			return { strategy_id: strategyId, reason: "schema_mismatch" };
-		}
+		if (definition === null) return { strategy_id: strategyId, reason: "schema_mismatch" };
 
 		try {
 			return {
 				strategy_id: "large_model_value_v0",
 				source: "mart",
-				corpus_sha256: corpusSha256,
+				corpus_sha256: runRow.corpus_sha256,
 				decisions: decisionRows.map(decisionFromRow),
 				provenance: new Map(
-					decisionRows.map((row) => [
-						String(row.issuer_id),
-						provenanceFromRow(row),
-					]),
+					decisionRows.map((row) => [String(row.issuer_id), provenanceFromRow(row)]),
 				),
 				golden_mismatches: [],
-				// Run identity for the overview (#370 appended AC 3): lets the page prove it
-				// renders the same governed run the MCP strategy_run tool serves.
 				strategy_run_id: runRow.strategy_run_id,
 				executed_at:
 					runRow.executed_at instanceof Date

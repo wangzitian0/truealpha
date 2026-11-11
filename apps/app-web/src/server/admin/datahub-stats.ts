@@ -1,14 +1,5 @@
 /**
- * Datahub statistics for the Operate world (#641 D5).
- *
- * The init.md design gives datahub three consumption surfaces and usage views;
- * what existed were two detail pages and no statistics at all — the numbers
- * that say whether the plant is healthy (governed heads, per-factor
- * availability, source activity, capture history) lived only in psql sessions.
- * This loader is the read contract for the /admin/datahub dashboard: heads
- * with their quality grades (including the #644 factor-level availability),
- * per-source fetch activity, and recent capture runs. Read-only through
- * app_ops_reader, like every loader in this directory.
+ * Datahub statistics loader for `/admin/datahub` via `app_ops_reader`.
  */
 
 import {
@@ -40,11 +31,6 @@ export interface FactorAvailabilityRow {
   ratio: string;
 }
 
-/**
- * #1519 step 1a: how the cover of each issuer's latest annual filing read for its listing. `parsed` is a depositary
- * ratio, `ordinary` is a plain share (ratio 1), `unparsed` keeps the title text and a reason, and `not_measured` is
- * a payload that has no ratio key. The data engine writes the block into the quality report; the App only formats it.
- */
 export type ListingRatioOutcome = "parsed" | "ordinary" | "unparsed" | "not_measured";
 
 export interface ListingRatioCell {
@@ -52,7 +38,6 @@ export interface ListingRatioCell {
   issuer_id: string | null;
   ticker?: string | null;
   outcome: ListingRatioOutcome;
-  /** Ordinary shares that one listed unit stands for. */
   listing_units_per_share: string | null;
   pattern: string | null;
   title: string | null;
@@ -64,7 +49,6 @@ export interface ListingRatioCell {
 
 export interface ListingRatioReport {
   counts: Record<ListingRatioOutcome, number>;
-  /** The listings that need a look come first: `unparsed`, `not_measured`, `parsed`, `ordinary`. */
   cells: ListingRatioCell[];
 }
 
@@ -85,7 +69,6 @@ export interface HeadStatusRow {
   is_corroboration_degraded: boolean;
   degraded_reasons: string[];
   factors: FactorAvailabilityRow[];
-  /** null: the quality report of the target run was written before the ratio block existed. */
   listing_ratio: ListingRatioReport | null;
 }
 
@@ -112,19 +95,14 @@ export interface ValidationRow {
   detail: string;
 }
 
-/** #1346 / #1227: In-environment standing check verdicts from `mart.nightly_verdicts`. */
 export interface NightlyVerdictRow {
   check_name: string;
   ran_at: string;
-  /** null is a pending verdict: the check ran and could not judge yet. It is neither ok nor a failure. */
   ok: boolean | null;
   summary: string;
   dagster_run_id: string | null;
 }
 
-/** #729: one vendor, today (UTC), from the external call ledger — every request,
- * not only the ones that landed. `landed` counts the ok calls whose response bytes
- * exist in raw.fetches (payload_sha256 join): the traceability the owner asked for. */
 export interface TrafficSourceRow {
   source: string;
   calls: number;
@@ -135,8 +113,6 @@ export interface TrafficSourceRow {
   last_error: string | null;
 }
 
-/** #729: one external request. `landed_fetch_id` is the raw.fetches row its response
- * bytes became (null for a failed call, or for a call whose bytes were not landed). */
 export interface RecentCallRow {
   id: number;
   called_at: string;
@@ -151,26 +127,15 @@ export interface RecentCallRow {
   landed_fetch_id: number | null;
 }
 
-/**
- * #1521 step 6: what the ledger says about fetch keys and runs, per UTC day, vendor and endpoint. The table replaced
- * the nightly fetch-key verdict: the numbers are on the page and no check turns red on them. SQL computes every
- * count and ratio; the App formats them.
- */
 export interface LedgerCoverageRow {
-  /** The UTC day, `YYYY-MM-DD`. */
   day: string;
   source: string;
   endpoint: string;
   calls: number;
-  /** Rows whose `fetch_key` is null. Rows written before #1521 step 2 stay in this count. */
   no_key: number;
-  /** Rows per `repeat_reason`. The gateway derives the reason; a repeat with a reason is no duplicate fetch. */
   by_reason: Record<string, number>;
-  /** Keys with two or more successful rows and no reason on this day. A failed retry never counts. */
   keys_twice: number;
-  /** The share of rows that name a run, a fraction from 0 to 1 as text. */
   run_share: string;
-  /** The rows that name a run, divided by the distinct runs; null when no row names a run. */
   calls_per_run: string | null;
 }
 
@@ -218,7 +183,6 @@ interface QuestionCoverageDbRow {
   };
 }
 
-/** #748 / #1359 / #1362 / #1624: the active governed head's question-coverage report per universe. */
 const QUESTION_COVERAGE_SQL = `
   select distinct on (universe_id) universe_id, cutoff::text, created_at::text, payload
   from mart.question_coverage_report r
@@ -232,9 +196,7 @@ const QUESTION_COVERAGE_SQL = `
            created_at desc
 `;
 
-function questionCoverageRows(
-  rows: QuestionCoverageDbRow[],
-): QuestionCoverageRow[] {
+function questionCoverageRows(rows: QuestionCoverageDbRow[]): QuestionCoverageRow[] {
   return rows.map((row) => {
     const payload = row.payload ?? {};
     return {
@@ -242,46 +204,37 @@ function questionCoverageRows(
       cutoff: row.cutoff,
       generated_at: payload.generated_at ?? row.created_at,
       requirements_sha256: payload.requirements_sha256 ?? "",
-      questions: Object.entries(payload.questions ?? {}).map(
-        ([question, entry]) => {
-          const unavailable = entry.unavailable ?? {};
-          const total = Object.values(unavailable).reduce(
-            (sum, n) => sum + n,
-            0,
-          );
-          const topReasons = Object.entries(unavailable)
-            .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-            .slice(0, 3)
-            .map(([reason, n]) => `${reason}=${n}`)
-            .join(", ");
-          return {
-            question,
-            text: entry.text ?? "",
-            scope: entry.scope ?? (question === "q5" ? "fund" : "issuer"),
-            column: entry.column ?? null,
-            tracking_issue: entry.tracking_issue ?? "",
-            answered: entry.answered ?? 0,
-            unavailable_total: total,
-            top_reasons: topReasons,
-            missing: entry.missing ?? 0,
-            denominator: entry.denominator ?? 0,
-          };
-        },
-      ),
+      questions: Object.entries(payload.questions ?? {}).map(([question, entry]) => {
+        const unavailable = entry.unavailable ?? {};
+        const total = Object.values(unavailable).reduce((sum, n) => sum + n, 0);
+        const topReasons = Object.entries(unavailable)
+          .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+          .slice(0, 3)
+          .map(([reason, n]) => `${reason}=${n}`)
+          .join(", ");
+        return {
+          question,
+          text: entry.text ?? "",
+          scope: entry.scope ?? (question === "q5" ? "fund" : "issuer"),
+          column: entry.column ?? null,
+          tracking_issue: entry.tracking_issue ?? "",
+          answered: entry.answered ?? 0,
+          unavailable_total: total,
+          top_reasons: topReasons,
+          missing: entry.missing ?? 0,
+          denominator: entry.denominator ?? 0,
+        };
+      }),
     };
   });
 }
 
-/** One family's cross-check against the persisted quality report (`accuracy.<family>`). */
 export interface ConfidenceQualityMatch {
   family: string;
   matches: boolean | null;
   mismatches: number;
 }
 
-/** The bar's own order for the price families; every other cross-checked family follows
- *  alphabetically. The payload is `jsonb`, which does not keep key order, so the order is
- *  imposed here rather than read. */
 const QUALITY_MATCH_ORDER = ["open", "high", "low", "close", "volume"];
 
 function qualityMatchRank(family: string): number {
@@ -294,11 +247,6 @@ interface AccuracyEntryDb {
   quality_report_mismatches?: string[];
 }
 
-/**
- * #1523 S3: one `(metric, universe)` cell of the `mart.oracle_outcomes` rollup table on `/admin/datahub`.
- * SQL computes the deduplicated counts, the newest comparison timestamp, and the 95% Wilson upper bound on
- * the disagreement rate; the App only formats the cell or renders `no comparator` when null.
- */
 export interface OracleOutcomeCell {
   compared: number;
   agree: number;
@@ -343,11 +291,6 @@ export const ORACLE_OUTCOME_METRICS = [
   "last_close",
 ] as const;
 
-/**
- * #1523 S3: per-universe, per-metric rollup of `mart.oracle_outcomes` for the current governed heads in
- * `mart.served_head`. Deduplicates by `(universe_id, observation_id, subject_id, field)` with newest outcome
- * winning, matching `data_engine.datahub.oracle_outcomes.rollup_oracle_outcomes`.
- */
 export const ORACLE_OUTCOMES_SQL = `
   with deduped as (
     select distinct on (h.universe_id, o.observation_id, o.subject_id, o.field)
@@ -417,62 +360,47 @@ export function oracleOutcomesTable(
   confidenceUniverses: string[] = [],
 ): OracleOutcomesTable {
   const universeSet = new Set<string>();
-  for (const universeId of [...headUniverses, ...confidenceUniverses, ...outcomeRows.map((row) => row.universe_id)]) {
-    if (universeId && !isCanaryUniverse(universeId)) {
-      universeSet.add(universeId);
-    }
+  for (const id of [...headUniverses, ...confidenceUniverses, ...outcomeRows.map((r) => r.universe_id)]) {
+    if (id && !isCanaryUniverse(id)) universeSet.add(id);
   }
   if (universeSet.size === 0) {
-    for (const universe of UNIVERSES) {
-      if (universe.scheduled_somewhere && !isCanaryUniverse(universe.id_prefix)) {
-        universeSet.add(universe.id_prefix);
-      }
+    for (const u of UNIVERSES) {
+      if (u.scheduled_somewhere && !isCanaryUniverse(u.id_prefix)) universeSet.add(u.id_prefix);
     }
   }
   const universes = Array.from(universeSet).sort((a, b) => a.localeCompare(b));
 
   const extraMetrics = new Set<string>();
-  const byUniverseAndField = new Map<string, OracleOutcomeCell>();
+  const byKey = new Map<string, OracleOutcomeCell>();
   for (const row of outcomeRows) {
     if (!row.universe_id || isCanaryUniverse(row.universe_id) || !row.field) continue;
     const compared = Number(row.compared ?? 0);
-    const agree = Number(row.agree ?? 0);
-    const disagree = Number(row.disagree ?? 0);
     const notComparable = Number(row.not_comparable ?? 0);
-    const noServedValueCount = Number(row.no_served_value_count ?? 0);
     if (compared + notComparable <= 0) continue;
     if (!ORACLE_OUTCOME_METRICS.includes(row.field as (typeof ORACLE_OUTCOME_METRICS)[number])) {
       extraMetrics.add(row.field);
     }
-    byUniverseAndField.set(`${row.universe_id}\0${row.field}`, {
+    byKey.set(`${row.universe_id}\0${row.field}`, {
       compared,
-      agree,
-      disagree,
+      agree: Number(row.agree ?? 0),
+      disagree: Number(row.disagree ?? 0),
       not_comparable: notComparable,
-      no_served_value_count: noServedValueCount,
+      no_served_value_count: Number(row.no_served_value_count ?? 0),
       newest_compared_at: row.newest_compared_at ?? null,
       wilson_95_upper_bound: row.wilson_95_upper_bound ?? null,
     });
   }
 
-  const metrics = [
-    ...ORACLE_OUTCOME_METRICS,
-    ...Array.from(extraMetrics).sort((a, b) => a.localeCompare(b)),
-  ];
-
+  const metrics = [...ORACLE_OUTCOME_METRICS, ...Array.from(extraMetrics).sort((a, b) => a.localeCompare(b))];
   return {
     universes,
-    rows: metrics.map((metric) => {
-      const cells: Record<string, OracleOutcomeCell | null> = {};
-      for (const universeId of universes) {
-        cells[universeId] = byUniverseAndField.get(`${universeId}\0${metric}`) ?? null;
-      }
-      return { metric, cells };
-    }),
+    rows: metrics.map((metric) => ({
+      metric,
+      cells: Object.fromEntries(universes.map((u) => [u, byKey.get(`${u}\0${metric}`) ?? null])),
+    })),
   };
 }
 
-/** Cells of one family by the number of independent origins that asserted a value. */
 export interface ConfidenceOriginCounts {
   none: number;
   one: number;
@@ -480,12 +408,10 @@ export interface ConfidenceOriginCounts {
   three_or_more: number;
 }
 
-/** The nightly confidence & accuracy report: one family row per metric family. */
 export interface ConfidenceFamilyRow {
   family: string;
   semantic_type: string;
   cells: number;
-  /** null for a report written before #1517: it holds band words, which the App does not show. */
   origin_counts: ConfidenceOriginCounts | null;
   mean_confidence: string | null;
   compared: number;
@@ -502,9 +428,6 @@ export interface ConfidenceReportRow {
   sources_connected: string[];
   families: ConfidenceFamilyRow[];
   close_matches_quality_report: boolean | null;
-  /** Every family the report cross-checks against the persisted quality report: the bar
-   *  fields per field in bar order (#865), any other family after them alphabetically.
-   *  `matches` is null when the quality report graded nothing for the family. */
   quality_report_matches: ConfidenceQualityMatch[];
   stored_confidence_used_for_bands: boolean;
 }
@@ -530,14 +453,11 @@ interface ConfidenceReportDbRow {
         origins?: string[];
       }
     >;
-    accuracy?: {
-      [family: string]: AccuracyEntryDb | Record<string, unknown> | undefined;
-    };
+    accuracy?: Record<string, AccuracyEntryDb | Record<string, unknown> | undefined>;
     metadata?: { stored_confidence?: { used_for_bands?: boolean } };
   };
 }
 
-/** The active governed head's confidence & accuracy report per universe (#1359 / #1362 / #1624). */
 const CONFIDENCE_REPORT_SQL = `
   select distinct on (universe_id) universe_id, run_id, cutoff::text, created_at::text, payload
   from mart.datahub_confidence_report r
@@ -551,16 +471,9 @@ const CONFIDENCE_REPORT_SQL = `
            created_at desc
 `;
 
-function originCounts(
-  byOrigins: Record<string, number> | undefined,
-): ConfidenceOriginCounts | null {
+function originCounts(byOrigins: Record<string, number> | undefined): ConfidenceOriginCounts | null {
   if (byOrigins === undefined) return null;
-  const counts: ConfidenceOriginCounts = {
-    none: 0,
-    one: 0,
-    two: 0,
-    three_or_more: 0,
-  };
+  const counts: ConfidenceOriginCounts = { none: 0, one: 0, two: 0, three_or_more: 0 };
   for (const [origins, cells] of Object.entries(byOrigins)) {
     const n = Number(origins);
     if (n === 0) counts.none += cells;
@@ -571,28 +484,21 @@ function originCounts(
   return counts;
 }
 
-function confidenceReportRows(
-  rows: ConfidenceReportDbRow[],
-): ConfidenceReportRow[] {
+function confidenceReportRows(rows: ConfidenceReportDbRow[]): ConfidenceReportRow[] {
   return rows.map((row) => {
     const payload = row.payload ?? {};
     const accuracy = payload.accuracy ?? {};
     const qualityMatches: ConfidenceQualityMatch[] = [];
     for (const [family, entry] of Object.entries(accuracy)) {
-      if (family === "sec_oracle" || !entry || !("matches_quality_report" in entry))
-        continue;
-      const accuracyEntry = entry as AccuracyEntryDb;
+      if (family === "sec_oracle" || !entry || !("matches_quality_report" in entry)) continue;
+      const acc = entry as AccuracyEntryDb;
       qualityMatches.push({
         family,
-        matches: accuracyEntry.matches_quality_report ?? null,
-        mismatches: accuracyEntry.quality_report_mismatches?.length ?? 0,
+        matches: acc.matches_quality_report ?? null,
+        mismatches: acc.quality_report_mismatches?.length ?? 0,
       });
     }
-    qualityMatches.sort(
-      (a, b) =>
-        qualityMatchRank(a.family) - qualityMatchRank(b.family) ||
-        a.family.localeCompare(b.family),
-    );
+    qualityMatches.sort((a, b) => qualityMatchRank(a.family) - qualityMatchRank(b.family) || a.family.localeCompare(b.family));
     const close = accuracy.close as AccuracyEntryDb | undefined;
     return {
       universe_id: row.universe_id,
@@ -600,28 +506,20 @@ function confidenceReportRows(
       cutoff: row.cutoff,
       generated_at: payload.generated_at ?? row.created_at,
       sources_connected: payload.sources_connected ?? [],
-      families: Object.entries(payload.families ?? {}).map(
-        ([family, entry]) => ({
-          family,
-          semantic_type: entry.semantic_type ?? "",
-          cells: entry.cells ?? 0,
-          origin_counts: originCounts(entry.by_independent_origins),
-          mean_confidence: entry.mean_confidence ?? null,
-          compared: entry.compared ?? 0,
-          agreement_rate: entry.agreement_rate ?? null,
-          tolerance: entry.tolerance ?? null,
-          origins: entry.origins ?? [],
-        }),
-      ),
-      close_matches_quality_report:
-        close && "matches_quality_report" in close
-          ? (close.matches_quality_report ?? null)
-          : null,
+      families: Object.entries(payload.families ?? {}).map(([family, entry]) => ({
+        family,
+        semantic_type: entry.semantic_type ?? "",
+        cells: entry.cells ?? 0,
+        origin_counts: originCounts(entry.by_independent_origins),
+        mean_confidence: entry.mean_confidence ?? null,
+        compared: entry.compared ?? 0,
+        agreement_rate: entry.agreement_rate ?? null,
+        tolerance: entry.tolerance ?? null,
+        origins: entry.origins ?? [],
+      })),
+      close_matches_quality_report: close && "matches_quality_report" in close ? (close.matches_quality_report ?? null) : null,
       quality_report_matches: qualityMatches,
-      // Defaults to false on purpose: the column is a constant, and a report that does
-      // not say otherwise must not be read as having used it.
-      stored_confidence_used_for_bands:
-        payload.metadata?.stored_confidence?.used_for_bands ?? false,
+      stored_confidence_used_for_bands: payload.metadata?.stored_confidence?.used_for_bands ?? false,
     };
   });
 }
@@ -722,13 +620,6 @@ export interface DatahubStats {
   ledgerCoverage: LedgerCoverageRow[];
 }
 
-/**
- * The CURRENT verdict of each check: the newest row per `check_name`. The order is the health endpoint's
- * (`llm_service.main.NIGHTLY_VERDICTS_SQL`) and the data engine's (`nightly_verdicts.NEWEST_SQL`): `ran_at`,
- * then `recorded_at`. The table keeps every night, so a bare `order by check_name` listed the whole history,
- * and the page showed the same check once per night (#1466). The history of one check is one click away:
- * `NIGHTLY_VERDICT_HISTORY_SQL`.
- */
 export const NIGHTLY_VERDICTS_SQL = `
   select distinct on (check_name)
          check_name,
@@ -740,7 +631,6 @@ export const NIGHTLY_VERDICTS_SQL = `
   order by check_name, ran_at desc, recorded_at desc
 `;
 
-/** Every recorded verdict of one check, newest first. The bound keeps a year of nights on screen. */
 export const NIGHTLY_VERDICT_HISTORY_SQL = `
   select check_name,
          to_char(ran_at at time zone 'utc', 'YYYY-MM-DD HH24:MI:SS"Z"') as ran_at,
@@ -753,10 +643,8 @@ export const NIGHTLY_VERDICT_HISTORY_SQL = `
   limit 400
 `;
 
-/** The shape of a verdict name (`mart.nightly_verdicts.check_name`, `nightly_verdicts.is_valid_name`). */
 const CHECK_NAME = /^[a-z0-9_]+(@[a-z0-9_.:-]+)?$/;
 
-/** The history of one check, or null when `check` is not a verdict name (the page then shows no history). */
 export async function loadVerdictHistory(
   check: string,
   principal: { principalKind: "member" | "administrator" | "service" } | null,
@@ -809,9 +697,6 @@ const SOURCES_SQL = `
   limit 12
 `;
 
-// #648/#635/#578/#1523: capture-obligation completeness of the newest sentinel run,
-// yesterday's reuse savings (vendor fetches avoided), the plausibility sign-check
-// violation count in the newest quality report, and the corroborated share of the newest graded run.
 const VALIDATION_SQL = `
   select 'capture obligations complete' as check,
          case when s.complete and s.failed_count = 0 then 'pass' else 'fail' end as verdict,
@@ -852,9 +737,6 @@ const CORROBORATION_SQL = `
   ) newest
 `;
 
-// #1520 step 3 & step 5: per-seat ledger rows today (UTC), counting rows (`count(*)`),
-// never `sum(cost)`, plus peak calls in 1s, 30s and 60s windows, HTTP 429 answers and
-// provider code 1302 answers.
 export const VENDOR_LEDGER_TODAY_SQL = `
   with today as (
     select
@@ -891,7 +773,6 @@ export const VENDOR_LEDGER_TODAY_SQL = `
   order by t.source asc
 `;
 
-// #1520 step 5: model provider 1302 and HTTP 429 counts per UTC day in this environment's ledger.
 export const MODEL_1302_BY_DAY_SQL = `
   select
     ((called_at at time zone 'utc')::date)::text as day,
@@ -912,10 +793,12 @@ function normalizeDashboardEnvironment(environment?: string | null): string {
   return raw === "prod" ? "production" : raw;
 }
 
-/**
- * #1520 step 3: build one dashboard row per vendor account from today's ledger rows and the
- * generated vendor account shares. Verdict follows `UTILIZATION_CEILING` (0.70).
- */
+function shareRatio(used: number, limit: number | null): number | null {
+  if (limit === null) return null;
+  if (limit > 0) return used / limit;
+  return used > 0 ? Number.POSITIVE_INFINITY : 0;
+}
+
 export function vendorAccountRows(
   dbRows: readonly Partial<VendorAccountLedgerDbRow>[],
   environment?: string | null,
@@ -930,18 +813,22 @@ export function vendorAccountRows(
 
   return VENDOR_ACCOUNTS.map((account) => {
     const share = accountShare(account.name, env);
-    const sharesByEnvironment: Record<string, VendorAccountEnvironmentShareSummary> = {};
-    for (const envName of CONTRACT_ENVIRONMENTS) {
-      const envShare = accountShare(account.name, envName);
-      sharesByEnvironment[envName] = {
-        environment: envName,
-        percent: envShare.percent,
-        admits_a_call: envShare.admitsACall,
-        daily_share: envShare.dailyShare,
-        rate_window_seconds: envShare.rateWindowSeconds,
-        rate_window_share: envShare.rateWindowShare,
-      };
-    }
+    const sharesByEnvironment = Object.fromEntries(
+      CONTRACT_ENVIRONMENTS.map((envName) => {
+        const s = accountShare(account.name, envName);
+        return [
+          envName,
+          {
+            environment: envName,
+            percent: s.percent,
+            admits_a_call: s.admitsACall,
+            daily_share: s.dailyShare,
+            rate_window_seconds: s.rateWindowSeconds,
+            rate_window_share: s.rateWindowShare,
+          },
+        ];
+      }),
+    ) as Record<string, VendorAccountEnvironmentShareSummary>;
 
     let rowsToday = 0;
     let failedToday = 0;
@@ -969,40 +856,16 @@ export function vendorAccountRows(
     const rateWindowSeconds = share.rateWindowSeconds ?? (modelLimits ? 60 : null);
     const rateWindowShare = share.rateWindowShare ?? (modelLimits ? modelLimits.calls_per_minute : null);
     const peakWindowCalls =
-      rateWindowSeconds === 1
-        ? peak1s
-        : rateWindowSeconds === 30
-          ? peak30s
-          : rateWindowSeconds === 60
-            ? peak60s
-            : 0;
+      rateWindowSeconds === 1 ? peak1s : rateWindowSeconds === 30 ? peak30s : rateWindowSeconds === 60 ? peak60s : 0;
 
     const dailyShare = share.dailyShare;
-    const dailyRatio =
-      dailyShare !== null && dailyShare > 0
-        ? rowsToday / dailyShare
-        : dailyShare === 0
-          ? rowsToday > 0
-            ? Number.POSITIVE_INFINITY
-            : 0
-          : null;
+    const dailyRatio = shareRatio(rowsToday, dailyShare);
     const dailyRatioText =
-      dailyRatio === null
-        ? null
-        : Number.isFinite(dailyRatio)
-          ? dailyRatio.toFixed(2)
-          : "inf";
+      dailyRatio === null ? null : Number.isFinite(dailyRatio) ? dailyRatio.toFixed(2) : "inf";
     const dailyUsageText =
       dailyShare !== null ? `${rowsToday} of ${dailyShare}` : `${rowsToday} rows (no daily limit)`;
 
-    const windowRatio =
-      rateWindowShare !== null && rateWindowShare > 0
-        ? peakWindowCalls / rateWindowShare
-        : rateWindowShare === 0
-          ? peakWindowCalls > 0
-            ? Number.POSITIVE_INFINITY
-            : 0
-          : null;
+    const windowRatio = shareRatio(peakWindowCalls, rateWindowShare);
     const windowUsageText =
       rateWindowShare !== null && rateWindowSeconds !== null
         ? `${peakWindowCalls} of ${rateWindowShare} per ${rateWindowSeconds}s`
@@ -1027,14 +890,11 @@ export function vendorAccountRows(
     );
 
     const overDailyCeiling =
-      dailyShare !== null &&
-      (dailyShare === 0 ? rowsToday > 0 : rowsToday / dailyShare > UTILIZATION_CEILING);
+      dailyShare !== null && (dailyShare === 0 ? rowsToday > 0 : rowsToday / dailyShare > UTILIZATION_CEILING);
     const overWindowShare =
-      rateWindowShare !== null &&
-      (rateWindowShare === 0 ? peakWindowCalls > 0 : peakWindowCalls > rateWindowShare);
-    const hadRateLimitAnswer = http429Today > 0 || code1302Today > 0;
+      rateWindowShare !== null && (rateWindowShare === 0 ? peakWindowCalls > 0 : peakWindowCalls > rateWindowShare);
     const verdict: "ok" | "warn" =
-      overDailyCeiling || overWindowShare || hadRateLimitAnswer ? "warn" : "ok";
+      overDailyCeiling || overWindowShare || http429Today > 0 || code1302Today > 0 ? "warn" : "ok";
 
     const dailyDetail =
       dailyShare !== null
@@ -1105,10 +965,6 @@ export function model1302Rows(
     }));
 }
 
-// #729: traffic, per source, today (UTC). Timestamps are rendered in UTC explicitly —
-// `timestamptz::text` follows the session TimeZone (review on #741). One row per vendor; a request is counted
-// whether it succeeded, answered 4xx/5xx, or raised — and `landed` says how many of the
-// successful ones dereference to bytes in raw.fetches.
 const TRAFFIC_SQL = `
   select l.source,
          count(*)::int as calls,
@@ -1128,10 +984,6 @@ const TRAFFIC_SQL = `
   order by calls desc, l.source
 `;
 
-// #729: the last external requests, each traceable to the raw.fetches row its bytes
-// became — or carrying the error it failed with. Both joins match the source as well as
-// the digest: content addressing dedupes bytes, and two vendors could in principle
-// answer identical bytes (review on #741).
 const RECENT_CALLS_SQL = `
   select l.id, to_char(l.called_at at time zone 'utc', 'YYYY-MM-DD HH24:MI:SS"Z"') as called_at,
          l.source, l.endpoint, l.caller, l.ok,
@@ -1145,18 +997,8 @@ const RECENT_CALLS_SQL = `
   limit 40
 `;
 
-/**
- * #1521 step 6: the UTC days of the coverage table, today included. A weekly lane (the universe refresh) writes
- * rows on one day of seven, so a window of seven days could show none of them. Eight days always holds one.
- */
 export const LEDGER_COVERAGE_DAYS = 8;
 
-/**
- * #1521 step 6: key and run coverage of the call ledger, one row per UTC day, vendor and endpoint. `$1` is
- * `LEDGER_COVERAGE_DAYS`. A key counts as fetched twice when it has two successful rows with no repeat reason on
- * the day: the rule of the retired nightly verdict. The ledger is append-only, so rows written before
- * #1521 step 2 keep their null key and show on their own days. Shares and ratios are computed here, never in the App.
- */
 export const LEDGER_COVERAGE_SQL = `
   with ledger as (
     select (l.called_at at time zone 'utc')::date as day, l.source, l.endpoint,
@@ -1204,6 +1046,7 @@ export const LEDGER_COVERAGE_SQL = `
   left join twice w using (day, source, endpoint)
   order by t.day desc, t.source, t.endpoint
 `;
+
 const CAPACITY_REUSE_SQL = `
   select 'reuse ratio (24h)' as check,
          case when coalesce(sum(obligation_count), 0) = 0 then 'idle'
@@ -1261,16 +1104,12 @@ interface HeadDbRow extends Omit<HeadStatusRow, "factors" | "listing_ratio"> {
 }
 
 const RATIO_OUTCOMES: ListingRatioOutcome[] = ["unparsed", "not_measured", "parsed", "ordinary"];
+const text = (v: unknown): string | null => (typeof v === "string" ? v : null);
 
-function text(value: unknown): string | null {
-  return typeof value === "string" ? value : null;
-}
-
-/** The ratio block of a quality report, ordered for reading. null when the report has none. */
 export function listingRatioReport(block: unknown): ListingRatioReport | null {
   if (block === null || typeof block !== "object") return null;
   const { counts, cells } = block as { counts?: Record<string, unknown>; cells?: Record<string, unknown> };
-  if (counts === undefined || counts === null || cells === undefined || cells === null) return null;
+  if (counts == null || cells == null) return null;
   const rows: ListingRatioCell[] = [];
   for (const [key, raw] of Object.entries(cells)) {
     const entry = raw as Record<string, unknown>;
@@ -1305,9 +1144,80 @@ export function listingRatioReport(block: unknown): ListingRatioReport | null {
   };
 }
 
+function toHeadStatusRow(row: HeadDbRow): HeadStatusRow {
+  const parsedAvail = row.availability != null ? parseFloat(row.availability) : Number.NaN;
+  const availNum = Number.isNaN(parsedAvail) ? null : parsedAvail;
+  const headWithheld =
+    row.head_availability !== undefined
+      ? row.head_availability !== "available"
+      : availNum === null && row.availability !== "available";
+  const isAvailDegraded =
+    (availNum !== null && availNum < ACCEPTED_SERVICE_OBJECTIVES.minimum_availability) || headWithheld;
+  const corroborationRatio =
+    row.total_cells !== null && row.total_cells > 0 && row.agreed_cells !== null
+      ? row.agreed_cells / row.total_cells
+      : null;
+  const isCorroborationDegraded =
+    !isCanaryUniverse(row.universe_id) &&
+    corroborationRatio !== null &&
+    corroborationRatio < ACCEPTED_SERVICE_OBJECTIVES.minimum_corroborated_share;
+  const freshness = resolveHeadFreshness(row.freshness, row.universe_id, row.environment);
+  const isFreshnessDegraded = freshness !== "fresh" && freshness !== "manual";
+
+  const degraded_reasons: string[] = [];
+  if (isAvailDegraded) {
+    if (availNum !== null && availNum < ACCEPTED_SERVICE_OBJECTIVES.minimum_availability) {
+      degraded_reasons.push(
+        `availability (${(availNum * 100).toFixed(1)}% < ${(ACCEPTED_SERVICE_OBJECTIVES.minimum_availability * 100).toFixed(0)}%)`,
+      );
+    } else {
+      const withheldLabel =
+        row.head_availability && row.head_availability !== "available"
+          ? row.head_availability
+          : row.availability && row.availability !== "available"
+            ? row.availability
+            : "unavailable";
+      degraded_reasons.push(`availability (${withheldLabel})`);
+    }
+  }
+  if (isCorroborationDegraded && corroborationRatio !== null) {
+    degraded_reasons.push(
+      `corroboration (${(corroborationRatio * 100).toFixed(1)}% < ${(ACCEPTED_SERVICE_OBJECTIVES.minimum_corroborated_share * 100).toFixed(0)}%)`,
+    );
+  }
+  if (isFreshnessDegraded) {
+    degraded_reasons.push(`freshness (${row.staleness_reason ? `${freshness}: ${row.staleness_reason}` : freshness})`);
+  }
+
+  return {
+    universe_id: row.universe_id,
+    sequence: row.sequence,
+    advanced_at: row.advanced_at,
+    target_run_id: row.target_run_id,
+    availability: row.availability,
+    agreed_cells: row.agreed_cells,
+    total_cells: row.total_cells,
+    freshness,
+    age_hours: row.age_hours != null ? Number(row.age_hours) : null,
+    limit_hours: row.limit_hours != null ? Number(row.limit_hours) : null,
+    staleness_reason: row.staleness_reason ?? null,
+    is_degraded: degraded_reasons.length > 0,
+    is_avail_degraded: isAvailDegraded,
+    is_corroboration_degraded: isCorroborationDegraded,
+    degraded_reasons,
+    factors: Object.entries(row.factor_availability ?? {}).map(([factorId, grade]) => ({
+      factor_id: factorId,
+      required_semantics: grade.required_semantics,
+      complete_subjects: grade.complete_subjects,
+      universe_subjects: grade.universe_subjects,
+      ratio: grade.ratio,
+    })),
+    listing_ratio: listingRatioReport(row.listing_ratio),
+  };
+}
+
 export async function loadDatahubStats(): Promise<DatahubStats> {
   return withOpsReader(async (client) => {
-    // $1 of VALIDATION_SQL, PLAUSIBILITY_SQL and CORROBORATION_SQL: the id patterns of the sentinel universes (#1522).
     const sentinelLikes = idPrefixLikesOfRole("sentinel");
     const [
       heads,
@@ -1367,116 +1277,11 @@ export async function loadDatahubStats(): Promise<DatahubStats> {
       nightlyVerdicts: nightlyVerdicts.rows
         .filter((row) => expectsVerdictFromContract(row.check_name, activeEnv))
         .map(verdictRow),
-      heads: heads.rows.map((row: HeadDbRow) => {
-        const parsedAvail =
-          row.availability !== null && row.availability !== undefined
-            ? parseFloat(row.availability)
-            : Number.NaN;
-        const availNum = Number.isNaN(parsedAvail) ? null : parsedAvail;
-        const headWithheld =
-          row.head_availability !== undefined
-            ? row.head_availability !== "available"
-            : availNum === null && row.availability !== "available";
-        const isAvailDegraded =
-          (availNum !== null &&
-            availNum < ACCEPTED_SERVICE_OBJECTIVES.minimum_availability) ||
-          headWithheld;
-        const corroborationRatio =
-          row.total_cells !== null && row.total_cells > 0 && row.agreed_cells !== null
-            ? row.agreed_cells / row.total_cells
-            : null;
-        const isCorroborationDegraded =
-          !isCanaryUniverse(row.universe_id) &&
-          corroborationRatio !== null &&
-          corroborationRatio < ACCEPTED_SERVICE_OBJECTIVES.minimum_corroborated_share;
-        const freshness: HeadFreshness = resolveHeadFreshness(
-          row.freshness,
-          row.universe_id,
-          row.environment,
-        );
-        const isFreshnessDegraded =
-          freshness !== "fresh" && freshness !== "manual";
-
-        const degraded_reasons: string[] = [];
-        if (isAvailDegraded) {
-          if (
-            availNum !== null &&
-            availNum < ACCEPTED_SERVICE_OBJECTIVES.minimum_availability
-          ) {
-            degraded_reasons.push(
-              `availability (${(availNum * 100).toFixed(1)}% < ${(ACCEPTED_SERVICE_OBJECTIVES.minimum_availability * 100).toFixed(0)}%)`,
-            );
-          } else {
-            const withheldLabel =
-              row.head_availability && row.head_availability !== "available"
-                ? row.head_availability
-                : row.availability && row.availability !== "available"
-                  ? row.availability
-                  : "unavailable";
-            degraded_reasons.push(`availability (${withheldLabel})`);
-          }
-        }
-        if (isCorroborationDegraded && corroborationRatio !== null) {
-          degraded_reasons.push(
-            `corroboration (${(corroborationRatio * 100).toFixed(1)}% < ${(ACCEPTED_SERVICE_OBJECTIVES.minimum_corroborated_share * 100).toFixed(0)}%)`,
-          );
-        }
-        if (isFreshnessDegraded) {
-          const detail = row.staleness_reason
-            ? `${freshness}: ${row.staleness_reason}`
-            : freshness;
-          degraded_reasons.push(`freshness (${detail})`);
-        }
-        const is_degraded = degraded_reasons.length > 0;
-
-        return {
-          universe_id: row.universe_id,
-          sequence: row.sequence,
-          advanced_at: row.advanced_at,
-          target_run_id: row.target_run_id,
-          availability: row.availability,
-          agreed_cells: row.agreed_cells,
-          total_cells: row.total_cells,
-          freshness,
-          age_hours:
-            row.age_hours !== null && row.age_hours !== undefined
-              ? Number(row.age_hours)
-              : null,
-          limit_hours:
-            row.limit_hours !== null && row.limit_hours !== undefined
-              ? Number(row.limit_hours)
-              : null,
-          staleness_reason: row.staleness_reason ?? null,
-          is_degraded,
-          is_avail_degraded: isAvailDegraded,
-          is_corroboration_degraded: isCorroborationDegraded,
-          degraded_reasons,
-          factors: Object.entries(row.factor_availability ?? {}).map(
-            ([factorId, grade]) => ({
-              factor_id: factorId,
-              required_semantics: grade.required_semantics,
-              complete_subjects: grade.complete_subjects,
-              universe_subjects: grade.universe_subjects,
-              ratio: grade.ratio,
-            }),
-          ),
-          listing_ratio: listingRatioReport(row.listing_ratio),
-        };
-      }),
+      heads: heads.rows.map(toHeadStatusRow),
       sources: sources.rows,
       runs: runs.rows,
-      validation: [
-        ...canary.rows,
-        ...reuse.rows,
-        ...plausibility.rows,
-        ...corroboration.rows,
-      ],
-      capacity: [
-        ...vendorAccountCapacityRows(vendorAccounts),
-        ...reuseCap.rows,
-        ...dbSize.rows,
-        ...duration.rows,
-      ],
+      validation: [...canary.rows, ...reuse.rows, ...plausibility.rows, ...corroboration.rows],
+      capacity: [...vendorAccountCapacityRows(vendorAccounts), ...reuseCap.rows, ...dbSize.rows, ...duration.rows],
       vendorAccounts,
       model1302ByDay,
       traffic: traffic.rows,

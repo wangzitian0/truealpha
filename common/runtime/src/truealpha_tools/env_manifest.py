@@ -1,18 +1,5 @@
 #!/usr/bin/env python3
-"""Environment manifests: who produces every variable each app reads (#759).
-
-A manifest is generated from a settings model (infra2-sdk contract v2) or, for the
-TypeScript app, written by hand. infra2 derives Vault Agent templates, policies and the
-daily reconciliation from these files; this repository only has to keep them true.
-
-The driver -- rendering, the freshness check, the offline gate, boot-time validation -- is
-`infra2_sdk.manifests`. This file names the specs and nothing else, so a
-freshness rule or a gate fix lands in the SDK once instead of in every repository's copy.
-
-    uv run python tools/env_manifest.py --write         # regenerate
-    uv run python tools/env_manifest.py --check         # CI: fresh + offline gate
-    uv run python tools/env_manifest.py --validate-env apps/data-engine/required-env.generated.json
-"""
+"""Environment manifests via infra2_sdk.manifests (#759)."""
 
 from __future__ import annotations
 
@@ -50,7 +37,6 @@ def load_hooks(path: str = HOOKS_MANIFEST_PATH) -> RuntimeHooksManifest:
 
 
 def check() -> list[str]:
-    """Stale generated files, offline-gate violations, and runtime-hooks manifest problems."""
     problems = manifests.check(root=ROOT, specs=SPECS, hand_written=HAND_WRITTEN)
     try:
         hooks = load_hooks()

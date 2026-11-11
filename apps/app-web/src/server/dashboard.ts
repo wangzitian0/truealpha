@@ -1,24 +1,6 @@
-/**
- * Server-only route loaders for the research dashboard — see #370/#371.
- *
- * Each loader takes an already-resolved `AccessContext | null` as an explicit
- * parameter — it never derives identity itself. That keeps this module
- * environment-agnostic (testable with a bare fixture context, no Next.js
- * request/cookie/DB machinery) and lets the caller be whichever identity
- * source is correct for that route: #371's `getServerPrincipal()` (real
- * session) for production route groups, or a literal test context. A `null`
- * context is `denied`; the mart adapter is not touched before authorization.
- * Reads go straight to the mart adapter, never through FastAPI.
- *
- * These return fully-resolved typed states. `loading` exists in the union for a future
- * streaming/suspense boundary; the current mart read never returns it.
- */
+/** Server-only route loaders for the research dashboard (#370/#371). */
 
-import {
-  matchesRankingUniverse,
-  normalizeRankingUniverse,
-  type AccessContext,
-} from "@/contracts/strategyRun";
+import { matchesRankingUniverse, normalizeRankingUniverse, type AccessContext } from "@/contracts/strategyRun";
 import {
   StrategyRunReadAdapter,
   MartReadUnavailable,
@@ -31,9 +13,6 @@ import {
 } from "@/server/mart/research-read";
 import { paginate, type PageInfo } from "@/server/mart/pagination";
 
-// #495: the union moved to `@/server/read-state` so the administrator surfaces
-// share it — and its words — instead of growing a second one. Re-exported here
-// because every research loader and page imports it from this module.
 export type { ReadState } from "@/server/read-state";
 import type { ReadState } from "@/server/read-state";
 
@@ -45,7 +24,6 @@ export interface OverviewData {
 
 export interface RankingData {
   cutoffAt: string;
-  /** The key of the universe the rows belong to. */
   universe: string;
   rows: readonly RankingRow[];
   page: PageInfo;
@@ -57,8 +35,6 @@ export interface ComparisonData {
   page: PageInfo;
 }
 
-/** Adapter injection is for tests only; production callers omit it and get the real
- * mart-backed default (#370: never the fixture on a deployed route). */
 export interface MartAdapterLike {
   overview: StrategyRunReadAdapter["overview"];
   runIdentity: StrategyRunReadAdapter["runIdentity"];
@@ -92,9 +68,11 @@ export async function loadOverview(
   adapter: MartAdapterLike = new StrategyRunReadAdapter(),
 ): Promise<ReadState<OverviewData>> {
   return guard<OverviewData>(context, async (mart, ctx) => {
-    const modules = await mart.overview(ctx);
-    const latestCutoff = await mart.latestCutoff(ctx);
-    const run = await mart.runIdentity(ctx);
+    const [modules, latestCutoff, run] = await Promise.all([
+      mart.overview(ctx),
+      mart.latestCutoff(ctx),
+      mart.runIdentity(ctx),
+    ]);
     return { kind: "ready", data: { modules, latestCutoff, run } };
   }, adapter);
 }
@@ -105,7 +83,6 @@ export async function loadRanking(
   adapter: MartAdapterLike = new StrategyRunReadAdapter(),
 ): Promise<ReadState<RankingData>> {
   return guard<RankingData>(context, async (mart, ctx) => {
-    // A universe outside the record has no rows. It never falls back to another universe (#1522).
     const universe = normalizeRankingUniverse(params.universe);
     if (universe === null) return { kind: "empty" };
     const cutoffAt = params.cutoffAt ?? (await mart.latestCutoff(ctx));
@@ -147,16 +124,7 @@ export async function loadEntityDetail(
       mart.entityAnalystRatings(ctx, detail.issuerId),
       mart.entitySupplyChainExposure(ctx, detail.issuerId),
     ]);
-    return {
-      kind: "ready",
-      data: {
-        ...detail,
-        themes,
-        gppeDetail,
-        analystRatings,
-        supplyChainExposure,
-      },
-    };
+    return { kind: "ready", data: { ...detail, themes, gppeDetail, analystRatings, supplyChainExposure } };
   }, adapter);
 }
 
@@ -168,7 +136,6 @@ export async function loadTrace(
 ): Promise<ReadState<TraceView>> {
   return guard<TraceView>(context, async (mart, ctx) => {
     const trace = await mart.traceView(ctx, issuerId, cutoffAt);
-    if (trace === null) return { kind: "empty" };
-    return { kind: "ready", data: trace };
+    return trace === null ? { kind: "empty" } : { kind: "ready", data: trace };
   }, adapter);
 }

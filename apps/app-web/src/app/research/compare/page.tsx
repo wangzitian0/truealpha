@@ -1,12 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import {
-  formatCell,
-  formatRatio,
-  formatSignedRatio,
-  formatUsdMagnitude,
-  signColor,
-} from "@/client/format";
+import { formatCell, formatRatio, formatSignedRatio, formatUsdMagnitude, signColor } from "@/client/format";
 import { AvailabilityBadge, ReadStateNotice } from "@/components/read-state";
 import { valuationBasisLabel } from "@/contracts/strategyRun";
 import { loadComparison } from "@/server/dashboard";
@@ -25,17 +19,24 @@ export default async function ComparePage({
   const params = await searchParams;
   const state = await loadComparison(principal.context, { cutoffAt: params.cutoff, cursor: params.cursor ?? null });
   const names = await loadEntityDisplayMap();
-  // #1235: under definition 1.0.0 the gap divides P/GP; the column says which multiple.
   const basisLabel = valuationBasisLabel(
     state.kind === "ready" ? (state.data.rows.find((row) => row.valuationBasis)?.valuationBasis ?? null) : null,
   );
+  const headers = [
+    "Issuer",
+    "Capital-adjusted labor efficiency",
+    "Current P/S",
+    `Current ${basisLabel}`,
+    "Tier",
+    `Valuation gap (${basisLabel})`,
+    "Confidence",
+    "Availability",
+  ];
 
   return (
     <section aria-labelledby="compare-heading" className="space-y-6">
       <div>
-        <h1 id="compare-heading" className="text-2xl font-bold tracking-tight">
-          Issuer comparison
-        </h1>
+        <h1 id="compare-heading" className="text-2xl font-bold tracking-tight">Issuer comparison</h1>
         <p className="mt-2 text-sm text-gray-400">
           Side-by-side operating efficiency and valuation for the materialized universe at one cutoff. Read-only; no
           cross-issuer metric is computed here.
@@ -46,33 +47,22 @@ export default async function ComparePage({
 
       {state.kind === "ready" && (
         <>
-          <p className="text-sm text-gray-500">
-            Cutoff {state.data.cutoffAt} — {state.data.page.total} issuer(s).
-          </p>
+          <p className="text-sm text-gray-500">Cutoff {state.data.cutoffAt} — {state.data.page.total} issuer(s).</p>
           <div className="overflow-x-auto rounded-xl border border-border">
             <table className="w-full text-left text-sm">
               <caption className="sr-only">Issuer comparison at {state.data.cutoffAt}</caption>
               <thead className="bg-card text-xs uppercase text-gray-500">
                 <tr>
-                  <th scope="col" className="px-4 py-3">Issuer</th>
-                  <th scope="col" className="px-4 py-3">Capital-adjusted labor efficiency</th>
-                  <th scope="col" className="px-4 py-3">Current P/S</th>
-                  <th scope="col" className="px-4 py-3">Current {basisLabel}</th>
-                  <th scope="col" className="px-4 py-3">Tier</th>
-                  <th scope="col" className="px-4 py-3">Valuation gap ({basisLabel})</th>
-                  <th scope="col" className="px-4 py-3">Confidence</th>
-                  <th scope="col" className="px-4 py-3">Availability</th>
+                  {headers.map((h) => (
+                    <th key={h} scope="col" className="px-4 py-3">{h}</th>
+                  ))}
                 </tr>
               </thead>
               <tbody>
                 {state.data.rows.map((row) => (
                   <tr key={row.issuerId} className="border-t border-border">
                     <th scope="row" className="px-4 py-3 font-medium">
-                      <Link
-                        href={`/research/entities/${encodeURIComponent(row.issuerId)}`}
-                        className="text-accent hover:underline"
-                        title={row.issuerId}
-                      >
+                      <Link href={`/research/entities/${encodeURIComponent(row.issuerId)}`} className="text-accent hover:underline" title={row.issuerId}>
                         {entityLabel(row.issuerId, names)}
                       </Link>
                     </th>
@@ -89,18 +79,13 @@ export default async function ComparePage({
                       {formatCell(formatRatio(row.currentMultiple ?? null))}
                     </td>
                     <td className="px-4 py-3">{formatCell(row.tier)}</td>
-                    <td
-                      className={`px-4 py-3 tabular-nums ${signColor(row.valuationGap)}`}
-                      title={row.valuationGap ?? undefined}
-                    >
+                    <td className={`px-4 py-3 tabular-nums ${signColor(row.valuationGap)}`} title={row.valuationGap ?? undefined}>
                       {formatCell(formatSignedRatio(row.valuationGap))}
                     </td>
                     <td className="px-4 py-3 tabular-nums" title={row.confidence ?? undefined}>
                       {formatCell(formatRatio(row.confidence))}
                     </td>
-                    <td className="px-4 py-3">
-                      <AvailabilityBadge status={row.availability} />
-                    </td>
+                    <td className="px-4 py-3"><AvailabilityBadge status={row.availability} /></td>
                   </tr>
                 ))}
               </tbody>

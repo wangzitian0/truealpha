@@ -1,28 +1,4 @@
-"""Break each declared property and require its guard to notice.
-
-#582. `AGENTS.md` rule 7 asks for an acceptance criterion to be shown red once.
-That proves the assertion worked on the day it was written and says nothing
-about six months later — `assertFunnelSaysSomething` was red-proven and still
-used `node.parentElement`, which a later `<header>` wrapper would have made pass
-vacuously. Six defects of that shape shipped or nearly shipped in the 2026-08
-work, each an assertion that looked correct and checked nothing, and every
-file-reading test passed on all six.
-
-So: apply a declared edit, run the guard, require a NON-ZERO exit, restore. A
-guard whose mutation stops failing has gone inert, and naming it is the only
-output this exists to produce.
-
-The manifest is data, deliberately: adding a guard without adding its mutation
-shows up as a missing entry in review, which a convention would not.
-
-Usage:
-  python tools/mutation_reproof.py
-  python tools/mutation_reproof.py --only source-contracts/claim-ceiling-unconditional
-
-Exit codes:
-  0 - every declared mutation was caught
-  1 - a guard did not notice its own property being broken
-"""
+"""Break each declared property and require its guard to notice (#582)."""
 
 from __future__ import annotations
 
@@ -38,11 +14,8 @@ from truealpha_runtime.testing import DB_SKIP_GATE_MARKERS
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 MANIFEST = REPO_ROOT / "tools" / "mutations.json"
-# Per mutation, not per job. Without it a single hanging guard exhausts the
-# workflow's whole budget, nothing says which one, and every guard after it goes
-# unproven — the job that reports inertness, inert (review). Generous: the
-# slowest declared command is a bun test run measured in seconds.
 TIMEOUT_SECONDS = 300
+_SKIP_GATE_MARKERS = DB_SKIP_GATE_MARKERS
 
 
 @dataclass(frozen=True)
@@ -72,29 +45,17 @@ def load(path: Path = MANIFEST) -> list[Mutation]:
     ]
 
 
-_SKIP_GATE_MARKERS = DB_SKIP_GATE_MARKERS
-
-
 def _skipped_under_db_gate(output: str) -> bool:
     return any(marker in output for marker in _SKIP_GATE_MARKERS)
 
 
 def apply_and_run(mutation: Mutation) -> tuple[bool, str]:
-    """Returns (the guard noticed, why not)."""
     target = REPO_ROOT / mutation.file
     original = target.read_text(encoding="utf-8")
     matches = original.count(mutation.find)
     if matches == 0:
-        # The anchor is gone, so this mutation no longer describes the code. That
-        # is a finding, not a skip: the manifest and the source have drifted and
-        # nobody would have known.
         return False, f"anchor not found in {mutation.file} — the mutation no longer applies"
     if matches > 1:
-        # First-occurrence replacement on an ambiguous anchor breaks the WRONG
-        # occurrence and blames the guard: the 2026-08-24 maiden run reported the
-        # walk-skip guard inert when a new step had introduced a second identical
-        # `if:` line ahead of the one the mutation meant. Ambiguity is its own
-        # verdict, named at the cause.
         return False, f"anchor matches {matches} times in {mutation.file} — pin it to a unique context"
     target.write_text(original.replace(mutation.find, mutation.replace, 1), encoding="utf-8")
     try:
@@ -107,9 +68,6 @@ def apply_and_run(mutation: Mutation) -> tuple[bool, str]:
             timeout=TIMEOUT_SECONDS,
         )
     except subprocess.TimeoutExpired:
-        # Not caught and not passed: it never answered. Reported as a finding
-        # and the run continues, so one hanging guard cannot hide the state of
-        # every guard after it.
         return False, (
             f"the guard did not finish within {TIMEOUT_SECONDS}s — it neither passed nor "
             f"failed, so the property is unproven"
@@ -118,8 +76,7 @@ def apply_and_run(mutation: Mutation) -> tuple[bool, str]:
         target.write_text(original, encoding="utf-8")
     if result.returncode != 0:
         return True, ""
-    combined_output = f"{result.stdout}\n{result.stderr}"
-    if _skipped_under_db_gate(combined_output):
+    if _skipped_under_db_gate(f"{result.stdout}\n{result.stderr}"):
         return False, "the guard skipped under the DB write gate instead of proving the property"
     return False, "the guard passed with the property broken"
 
@@ -127,7 +84,7 @@ def apply_and_run(mutation: Mutation) -> tuple[bool, str]:
 def run(only: str = "", mutations: Sequence[Mutation] | None = None) -> int:
     declared = list(mutations if mutations is not None else load())
     if only:
-        declared = [mutation for mutation in declared if mutation.id == only]
+        declared = [m for m in declared if m.id == only]
         if not declared:
             print(f"no mutation named {only!r}", file=sys.stderr)
             return 1

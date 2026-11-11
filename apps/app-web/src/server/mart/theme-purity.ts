@@ -1,21 +1,5 @@
 /**
- * The reader for module 6 (#772, init.md §0 question 6): "who is the purest name under a
- * given theme".
- *
- * Every number here is a column. The share, the denominator it is over, and the three
- * revenue masses are `factors.base.theme_purity`'s outputs materialized into
- * `mart.issuer_theme_purity` by the weekly standards lane. init.md §1 rule 2 confines this
- * layer to deterministic within-row reformatting, and a purity is a ratio across a set of
- * segment rows — a metric, and metrics live in common/factors.
- *
- * The one thing this file must not do is rank on something it computed. It orders by the
- * stored `theme_share` and shows `unclassifiedRevenue` beside it, because a share of 0.60
- * with 0.35 unclassified and one with 0.00 unclassified are different claims and a page that
- * cannot tell them apart is ranking its own classifier coverage.
- *
- * Refused rows are rendered, not hidden. A `null` share with `below_minimum_classified_share`
- * is the honest state for an issuer whose segments the classifier could not read enough of,
- * and dropping it from the list would make the ranking look more complete than it is.
+ * Module 6 theme purity reader over `mart.issuer_theme_purity`.
  */
 
 import { withMartReadonly } from "./db";
@@ -23,8 +7,6 @@ import type { MartClientLike } from "./topt-gppe-repository";
 
 export type ThemePurityRow = {
   issuerId: string;
-  /** Null when the factor REFUSED the share — see reasonCodes. Never a zero, which would
-   * read as "none of this issuer is in the theme" rather than "we could not say". */
   themeShare: string | null;
   consolidatedRevenue: string;
   inThemeRevenue: string;
@@ -34,7 +16,6 @@ export type ThemePurityRow = {
   segments: number;
   confidence: string;
   reasonCodes: string[];
-  /** The served model and prompt digest that judged the segments, or a rule id. */
   extractor: string;
   availabilityStatus: string;
   sourceEvidenceStatus: string;
@@ -52,16 +33,6 @@ export type ThemePurityGroup = {
   rows: ThemePurityRow[];
 };
 
-/**
- * The newest run that materialized purity rows. Read from the rows themselves rather than
- * from the pointer: the weekly lane stamps each row with the governed head it computed
- * against, so "the newest run present here" IS a governed run — and asking the pointer
- * instead would name a run that may have no purity rows at all (the lane had not run yet),
- * leaving the page empty while rows existed.
- *
- * A purity row has a segment partition. An issuer without one gets a fill row that has none
- * (#1117), and a run that holds only fill rows is not populated. So the fill rows do not count.
- */
 const LATEST_RUN_SQL = `
   select p.run_id, max(p.cutoff) as cutoff
   from mart.issuer_theme_purity p
@@ -75,10 +46,6 @@ const LATEST_RUN_SQL = `
   limit 1
 `;
 
-/**
- * Ordered by the stored share, refusals last — the database's ordering, not this layer's.
- * The fill rows of issuers without a partition are not listed: the page lists judged issuers only.
- */
 const ROWS_SQL = `
   select theme_id,
          theme,
@@ -106,9 +73,7 @@ const ROWS_SQL = `
   order by theme_id, theme_share desc nulls last, issuer_id
 `;
 
-function text(value: unknown): string {
-  return typeof value === "string" ? value : "";
-}
+const text = (v: unknown): string => (typeof v === "string" ? v : "");
 
 export async function loadThemePurity(
   runWithClient: <T>(fn: (client: MartClientLike) => Promise<T>) => Promise<T> = withMartReadonly,
@@ -157,28 +122,14 @@ export async function loadThemePurity(
   });
 }
 
-/**
- * A reason code of a fill row, as plain text: "no_segment_partition" reads "No segment partition".
- *
- * An issuer without a segment partition has a fill row (#1117). A page shows the reason in
- * words where it would show a share. It never shows the fill as a refused share.
- */
 export function unvisitedReasonText(reason: string): string {
   const words = reason.replaceAll("_", " ").trim();
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
-/**
- * The share of the denominator that carries a judgement either way, as a 0-1 string.
- *
- * Deterministic within-row reformatting of columns the factor already wrote — rule 2's
- * permitted shape, and the reason it is computed here rather than stored: it is
- * `(in + out) / consolidated` on one row, with no other row involved.
- */
 export function classifiedShare(row: ThemePurityRow): string | null {
   const total = Number(row.consolidatedRevenue);
   if (!Number.isFinite(total) || total <= 0) return null;
   const judged = Number(row.inThemeRevenue) + Number(row.outOfThemeRevenue);
-  if (!Number.isFinite(judged)) return null;
-  return (judged / total).toFixed(4);
+  return Number.isFinite(judged) ? (judged / total).toFixed(4) : null;
 }

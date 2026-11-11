@@ -187,7 +187,6 @@
     "common/contracts/tests/test_deleted_modules_stay_deleted.py": 0.0,
     "common/contracts/tests/test_documents_db_contract.py": 0.09,
     "common/contracts/tests/test_environment_contract.py": 0.0,
-    "common/contracts/tests/test_evaluation_protocol.py": 0.0,
     "common/contracts/tests/test_evidence_graph.py": 0.0,
     "common/contracts/tests/test_execution.py": 0.0,
     "common/contracts/tests/test_fiscal_period.py": 0.0,

@@ -17,6 +17,7 @@ import {
 import {
   GPPE_FACTOR_VARIANT_KEYS,
   RANKING_PANEL_INPUT_KEYS,
+  type WidePanelCell,
 } from "@/server/mart/research-read";
 import { getServerPrincipal } from "@/server/auth/request-context";
 import { CardExportButton } from "@/components/card-export-button";
@@ -44,15 +45,29 @@ function buildRankingsHref(params: {
   const query = new URLSearchParams();
   if (params.cursor) query.set("cursor", params.cursor);
   if (params.cutoff) query.set("cutoff", params.cutoff);
-  if (params.convention && params.convention !== "historical_cagr") {
-    query.set("convention", params.convention);
-  }
-  if (params.universe && params.universe !== universeWithRole("strategy")) {
-    query.set("universe", params.universe);
-  }
+  if (params.convention && params.convention !== "historical_cagr") query.set("convention", params.convention);
+  if (params.universe && params.universe !== universeWithRole("strategy")) query.set("universe", params.universe);
   const qs = query.toString();
   return qs.length > 0 ? `/research/rankings?${qs}` : "/research/rankings";
 }
+
+function PanelNodeTd({ node, formatted }: { node: WidePanelCell | null; formatted: string | null }) {
+  return (
+    <td className="px-4 py-3 font-mono tabular-nums" title={node?.value ?? undefined}>
+      <div>{formatCell(formatted)}</div>
+      {node?.confidence && (
+        <div className="text-[11px] text-gray-500" title={node.confidence}>
+          conf {formatCell(formatRatio(node.confidence))}
+        </div>
+      )}
+    </td>
+  );
+}
+
+const pillClass = (active: boolean): string =>
+  active
+    ? "border border-sky-500 bg-sky-950/70 text-sky-300"
+    : "border border-border bg-slate-900 text-gray-400 hover:border-gray-600 hover:text-gray-200";
 
 export default async function RankingsPage({
   searchParams,
@@ -64,19 +79,31 @@ export default async function RankingsPage({
   const params = await searchParams;
   const convention = normalizePegConvention(params.convention);
   const selectedUniverse = normalizeRankingUniverse(params.universe);
-  // loadRanking reads the raw value: a universe outside the record has no rows (#1522).
   const state = await loadRanking(principal.context, {
     cutoffAt: params.cutoff,
     cursor: params.cursor ?? null,
     universe: params.universe,
   });
   const names = await loadEntityDisplayMap();
-  // #1235: one run, one definition, one basis. Under definition 1.0.0 the gap divides P/GP.
   const basisLabel = valuationBasisLabel(
     state.kind === "ready"
       ? (state.data.rows.find((row) => row.valuationBasis !== null)?.valuationBasis ?? null)
       : null,
   );
+  const headers = [
+    "Rank",
+    "Issuer",
+    "Tier",
+    "Current P/S",
+    `Current ${basisLabel}`,
+    `Target ${basisLabel}`,
+    `Valuation gap (${basisLabel})`,
+    `PEG (${PEG_CONVENTION_LABELS[convention]})`,
+    "PEG rank",
+    "Confidence",
+    "Availability",
+    "Inputs",
+  ];
 
   return (
     <section aria-labelledby="rankings-heading" className="space-y-6">
@@ -85,22 +112,15 @@ export default async function RankingsPage({
           Valuation rankings
         </h1>
         <p className="mt-2 text-sm text-gray-400">
-          The strategy&apos;s large-model-value universe ranked by valuation gap, read from the materialized strategy
-          run through the mart read adapter (#370), not recomputed here.
-        </p>
-        <p className="mt-2 text-sm text-gray-400">
-          Titled &ldquo;Theme rankings&mdash;purest large-model-value names&rdquo; until #772. It ranks a valuation
-          gap, and &ldquo;purest&rdquo; is init.md question 6&apos;s word for a revenue share, which now has its own
-          page:{" "}
+          Large-model-value universe ranked by valuation gap from the materialized strategy run. Revenue-share purity is on{" "}
           <Link href="/research/themes" className="text-accent hover:underline">
             Theme purity
           </Link>
-          . Same word, two measurements &mdash; and the one this page shows is the valuation.
+          .
         </p>
       </div>
 
       <ReadStateNotice state={state} />
-
       <ClaimCeilingBanner />
 
       <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-border bg-card p-4">
@@ -108,56 +128,32 @@ export default async function RankingsPage({
           <span className="text-xs font-semibold uppercase tracking-wider text-gray-400">
             Growth-Rate Convention (Module 1):
           </span>
-          {PEG_GROWTH_CONVENTIONS.map((item) => {
-            const active = item === convention;
-            return (
-              <Link
-                key={item}
-                href={buildRankingsHref({
-                  cutoff: params.cutoff,
-                  convention: item,
-                  universe: selectedUniverse,
-                })}
-                data-peg-convention={item}
-                aria-current={active ? "page" : undefined}
-                className={`rounded-md px-2.5 py-1 text-xs font-medium transition ${
-                  active
-                    ? "border border-sky-500 bg-sky-950/70 text-sky-300"
-                    : "border border-border bg-slate-900 text-gray-400 hover:border-gray-600 hover:text-gray-200"
-                }`}
-              >
-                {PEG_CONVENTION_LABELS[item]} ({item})
-              </Link>
-            );
-          })}
+          {PEG_GROWTH_CONVENTIONS.map((item) => (
+            <Link
+              key={item}
+              href={buildRankingsHref({ cutoff: params.cutoff, convention: item, universe: selectedUniverse })}
+              data-peg-convention={item}
+              aria-current={item === convention ? "page" : undefined}
+              className={`rounded-md px-2.5 py-1 text-xs font-medium transition ${pillClass(item === convention)}`}
+            >
+              {PEG_CONVENTION_LABELS[item]} ({item})
+            </Link>
+          ))}
         </div>
         <div className="flex flex-wrap items-center gap-2" data-testid="universe-selector">
-          <span className="text-xs font-semibold uppercase tracking-wider text-gray-400">
-            Universe Scope:
-          </span>
-          {RANKING_UNIVERSES.map((univ) => {
-            const active = univ === selectedUniverse;
-            return (
-              <Link
-                key={univ}
-                href={buildRankingsHref({
-                  cutoff: params.cutoff,
-                  convention,
-                  universe: univ,
-                })}
-                data-universe-selector={univ}
-                title={universeRecord(univ).label}
-                aria-current={active ? "page" : undefined}
-                className={`rounded-md px-2.5 py-1 font-mono text-xs font-medium uppercase transition ${
-                  active
-                    ? "border border-sky-500 bg-sky-950/70 text-sky-300"
-                    : "border border-border bg-slate-900 text-gray-400 hover:border-gray-600 hover:text-gray-200"
-                }`}
-              >
-                {univ.toUpperCase()}
-              </Link>
-            );
-          })}
+          <span className="text-xs font-semibold uppercase tracking-wider text-gray-400">Universe Scope:</span>
+          {RANKING_UNIVERSES.map((univ) => (
+            <Link
+              key={univ}
+              href={buildRankingsHref({ cutoff: params.cutoff, convention, universe: univ })}
+              data-universe-selector={univ}
+              title={universeRecord(univ).label}
+              aria-current={univ === selectedUniverse ? "page" : undefined}
+              className={`rounded-md px-2.5 py-1 font-mono text-xs font-medium uppercase transition ${pillClass(univ === selectedUniverse)}`}
+            >
+              {univ.toUpperCase()}
+            </Link>
+          ))}
         </div>
       </div>
 
@@ -169,41 +165,26 @@ export default async function RankingsPage({
               <span className="font-mono text-gray-300">{convention}</span> · Universe:{" "}
               <span className="font-mono uppercase text-gray-300">{state.data.universe}</span>
             </p>
-            <CardExportButton
-              cutoff={params.cutoff}
-              convention={convention}
-              universe={state.data.universe}
-            />
+            <CardExportButton cutoff={params.cutoff} convention={convention} universe={state.data.universe} />
           </div>
           <div className="overflow-x-auto rounded-xl border border-border">
             <table className="w-full text-left text-sm">
               <caption className="sr-only">Ranked issuers for the large-model-value theme at {state.data.cutoffAt}</caption>
               <thead className="bg-card text-xs uppercase text-gray-500">
                 <tr>
-                  <th scope="col" className="px-4 py-3">Rank</th>
-                  <th scope="col" className="px-4 py-3">Issuer</th>
-                  <th scope="col" className="px-4 py-3">Tier</th>
-                  <th scope="col" className="px-4 py-3">Current P/S</th>
-                  <th scope="col" className="px-4 py-3">Current {basisLabel}</th>
-                  <th scope="col" className="px-4 py-3">Target {basisLabel}</th>
-                  <th scope="col" className="px-4 py-3">Valuation gap ({basisLabel})</th>
-                  {/* Module 1 (#284). Headed "PEG rank" rather than "Rank" because it is a
-                      SEPARATE ordering: PEG does not participate in selection, and showing
-                      the two under one heading would imply it does. */}
-                  <th scope="col" className="px-4 py-3">PEG ({PEG_CONVENTION_LABELS[convention]})</th>
-                  <th scope="col" className="px-4 py-3">PEG rank</th>
-                  <th scope="col" className="px-4 py-3">Confidence</th>
-                  <th scope="col" className="px-4 py-3">Availability</th>
-                  <th scope="col" className="px-4 py-3">Inputs</th>
+                  {headers.map((h) => (
+                    <th key={h} scope="col" className="px-4 py-3">
+                      {h}
+                    </th>
+                  ))}
                 </tr>
               </thead>
               <tbody>
                 {state.data.rows.map((row) => {
-                  const {
-                    peg: rowPeg,
-                    pegRank: rowPegRank,
-                    pegReasonCodes: pegReasons,
-                  } = projectPegByConvention(row, convention);
+                  const { peg: rowPeg, pegRank: rowPegRank, pegReasonCodes: pegReasons } = projectPegByConvention(
+                    row,
+                    convention,
+                  );
                   return (
                     <tr key={row.issuerId} className="border-t border-border">
                       <td className="px-4 py-3">{formatCell(row.rank)}</td>
@@ -228,10 +209,7 @@ export default async function RankingsPage({
                       <td className="px-4 py-3 tabular-nums" title={row.targetMultiple ?? undefined}>
                         {formatCell(formatRatio(row.targetMultiple))}
                       </td>
-                      <td
-                        className={`px-4 py-3 tabular-nums ${signColor(row.valuationGap)}`}
-                        title={row.valuationGap ?? undefined}
-                      >
+                      <td className={`px-4 py-3 tabular-nums ${signColor(row.valuationGap)}`} title={row.valuationGap ?? undefined}>
                         {formatCell(formatSignedRatio(row.valuationGap))}
                       </td>
                       <td className="px-4 py-3 tabular-nums" title={rowPeg ?? undefined}>
@@ -265,11 +243,8 @@ export default async function RankingsPage({
                 GPPE Factor Variants &amp; Standardized Wide-Panel Inputs (Module 2)
               </h2>
               <p className="mt-1 text-xs text-gray-400">
-                Side-by-side Polars <code className="font-mono text-gray-300">pl.Expr</code> factor variants (
-                <code className="font-mono text-gray-300">gppe_uniform_charge_v0</code>,{" "}
-                <code className="font-mono text-gray-300">gppe_banking_tce_v1</code>,{" "}
-                <code className="font-mono text-gray-300">gppe_operating_financial_v1</code>) and underlying wide-panel
-                columns read from <code className="font-mono text-gray-300">mart.metric_node_values</code>.
+                Side-by-side GPPE factor variants and underlying wide-panel columns read from{" "}
+                <code className="font-mono text-gray-300">mart.metric_node_values</code>.
               </p>
             </div>
             <div className="overflow-x-auto rounded-xl border border-border">
@@ -281,14 +256,9 @@ export default async function RankingsPage({
                   <tr>
                     <th scope="col" className="px-4 py-3">Issuer</th>
                     <th scope="col" className="px-4 py-3">Active Variant</th>
-                    {GPPE_FACTOR_VARIANT_KEYS.map((variantKey) => (
-                      <th key={variantKey} scope="col" className="px-4 py-3 font-mono">
-                        {variantKey}
-                      </th>
-                    ))}
-                    {RANKING_PANEL_INPUT_KEYS.map((inputKey) => (
-                      <th key={inputKey} scope="col" className="px-4 py-3 font-mono">
-                        {inputKey}
+                    {[...GPPE_FACTOR_VARIANT_KEYS, ...RANKING_PANEL_INPUT_KEYS].map((k) => (
+                      <th key={k} scope="col" className="px-4 py-3 font-mono">
+                        {k}
                       </th>
                     ))}
                   </tr>
@@ -309,42 +279,16 @@ export default async function RankingsPage({
                         {formatCell(row.laborEfficiencyMetric ?? null)}
                       </td>
                       {GPPE_FACTOR_VARIANT_KEYS.map((variantKey) => {
-                        const nodeCell = row.gppeVariants?.[variantKey] ?? null;
-                        return (
-                          <td
-                            key={variantKey}
-                            className="px-4 py-3 font-mono tabular-nums"
-                            title={nodeCell?.value ?? undefined}
-                          >
-                            <div>{formatCell(formatUsdMagnitude(nodeCell?.value ?? null))}</div>
-                            {nodeCell?.confidence && (
-                              <div className="text-[11px] text-gray-500" title={nodeCell.confidence}>
-                                conf {formatCell(formatRatio(nodeCell.confidence))}
-                              </div>
-                            )}
-                          </td>
-                        );
+                        const node = row.gppeVariants?.[variantKey] ?? null;
+                        return <PanelNodeTd key={variantKey} node={node} formatted={formatUsdMagnitude(node?.value ?? null)} />;
                       })}
                       {RANKING_PANEL_INPUT_KEYS.map((inputKey) => {
-                        const nodeCell = row.panelInputs?.[inputKey] ?? null;
+                        const node = row.panelInputs?.[inputKey] ?? null;
                         const formatted =
                           inputKey === "employees_total"
-                            ? formatNumberMagnitude(nodeCell?.value ?? null)
-                            : formatUsdMagnitude(nodeCell?.value ?? null);
-                        return (
-                          <td
-                            key={inputKey}
-                            className="px-4 py-3 font-mono tabular-nums"
-                            title={nodeCell?.value ?? undefined}
-                          >
-                            <div>{formatCell(formatted)}</div>
-                            {nodeCell?.confidence && (
-                              <div className="text-[11px] text-gray-500" title={nodeCell.confidence}>
-                                conf {formatCell(formatRatio(nodeCell.confidence))}
-                              </div>
-                            )}
-                          </td>
-                        );
+                            ? formatNumberMagnitude(node?.value ?? null)
+                            : formatUsdMagnitude(node?.value ?? null);
+                        return <PanelNodeTd key={inputKey} node={node} formatted={formatted} />;
                       })}
                     </tr>
                   ))}

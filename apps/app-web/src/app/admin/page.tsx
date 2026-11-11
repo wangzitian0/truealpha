@@ -1,10 +1,3 @@
-/**
- * #495 (surface 2b): the Operate overview — "is the pipeline healthy today":
- * recent runs, pointer freshness, per-source quota burn, and the manual
- * trigger. The /admin layout already gates the administrator; the loader
- * re-checks anyway (re-authorization per request, house style).
- */
-
 import { formatShortSha } from "@/client/format";
 import { ReadStateNotice } from "@/components/read-state";
 import { TriggerRunButton } from "@/components/trigger-run-button";
@@ -17,33 +10,19 @@ function formatElapsedHours(hours: number): string {
   return hours < 1 ? `${Math.round(hours * 60)}m` : `${hours.toFixed(1)}h`;
 }
 
-function hoursSince(iso: string): string {
-  const hours = (Date.now() - new Date(iso).getTime()) / 3_600_000;
-  return formatElapsedHours(hours);
-}
-
 export default async function AdminOverviewPage() {
   const principal = await getServerPrincipal();
-  const outcome = await loadOpsOverview(
-    principal === null ? null : { principalKind: principal.principalKind },
-  );
+  const outcome = await loadOpsOverview(principal === null ? null : { principalKind: principal.principalKind });
 
   if (outcome.kind !== "ready") {
     return (
       <section aria-labelledby="ops-heading">
-        <h1 id="ops-heading" className="text-2xl font-bold tracking-tight">
-          Operate
-        </h1>
-        {/* #495: the shared renderer, not a hand-written branch per state. The
-            two overrides are the wording this world owns; every other state's
-            sentence comes from `readStateMessage`, which a unit test proves is
-            non-empty for all of them. */}
+        <h1 id="ops-heading" className="text-2xl font-bold tracking-tight">Operate</h1>
         <ReadStateNotice
           state={outcome}
           overrides={{
             denied: "Access denied. This area requires a verified administrator identity.",
-            error:
-              outcome.kind === "error" ? `Error loading the ops overview: ${outcome.message}` : undefined,
+            error: outcome.kind === "error" ? `Error loading the ops overview: ${outcome.message}` : undefined,
           }}
         />
       </section>
@@ -55,9 +34,7 @@ export default async function AdminOverviewPage() {
   return (
     <section aria-labelledby="ops-heading" className="space-y-8">
       <div>
-        <h1 id="ops-heading" className="text-2xl font-bold tracking-tight">
-          Operate
-        </h1>
+        <h1 id="ops-heading" className="text-2xl font-bold tracking-tight">Operate</h1>
         <p className="mt-2 text-sm text-gray-400">
           Pipeline health at a glance. Schedule: daily 22:15 UTC (after the US close); the button
           below launches the same job with an explicit timestamp. A scheduled tick reuses
@@ -77,9 +54,7 @@ export default async function AdminOverviewPage() {
         {pointers.map((pointer) => (
           <div key={pointer.universeId} className="rounded-lg border border-border bg-card px-4 py-3">
             <div className="flex items-center justify-between gap-2">
-              <dt className="text-xs uppercase tracking-wide text-gray-500">
-                Pointer · {pointer.universeId}
-              </dt>
+              <dt className="text-xs uppercase tracking-wide text-gray-500">Pointer · {pointer.universeId}</dt>
               {(pointer.freshness || pointer.availability === "unavailable") && (
                 <span
                   className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium border ${
@@ -95,9 +70,7 @@ export default async function AdminOverviewPage() {
               )}
             </div>
             <dd className="mt-1 text-lg font-semibold tabular-nums">
-              {pointer.ageHours !== null && pointer.ageHours !== undefined
-                ? `${formatElapsedHours(pointer.ageHours)} ago`
-                : "—"}
+              {pointer.ageHours !== null && pointer.ageHours !== undefined ? `${formatElapsedHours(pointer.ageHours)} ago` : "—"}
             </dd>
             <p className="mt-1 truncate text-xs text-gray-500" title={pointer.targetRunId}>
               seq {pointer.sequence} · {pointer.targetRunId}
@@ -113,14 +86,12 @@ export default async function AdminOverviewPage() {
           <p className="mt-1 truncate text-xs text-gray-500" title={dataEngine?.runId}>
             {dataEngine === null
               ? "no run has recorded its build yet"
-              : `newest run ${hoursSince(dataEngine.createdAt)} ago · app ${formatShortSha(appGitSha)}`}
+              : `newest run ${formatElapsedHours((Date.now() - new Date(dataEngine.createdAt).getTime()) / 3_600_000)} ago · app ${formatShortSha(appGitSha)}`}
           </p>
         </div>
         {quotaToday.map((entry) => (
           <div key={entry.source} className="rounded-lg border border-border bg-card px-4 py-3">
-            <dt className="text-xs uppercase tracking-wide text-gray-500">
-              {entry.source} · fetches today
-            </dt>
+            <dt className="text-xs uppercase tracking-wide text-gray-500">{entry.source} · fetches today</dt>
             <dd className="mt-1 text-lg font-semibold tabular-nums">{entry.fetches}</dd>
           </div>
         ))}
@@ -133,43 +104,26 @@ export default async function AdminOverviewPage() {
           <caption className="sr-only">Most recent Dagster runs</caption>
           <thead className="bg-card text-xs uppercase text-gray-500">
             <tr>
-              <th scope="col" className="px-4 py-3">Run</th>
-              <th scope="col" className="px-4 py-3">Job</th>
-              <th scope="col" className="px-4 py-3">Status</th>
-              <th scope="col" className="px-4 py-3">Created</th>
-              <th scope="col" className="px-4 py-3">Duration</th>
+              {["Run", "Job", "Status", "Created", "Duration"].map((h) => (
+                <th key={h} scope="col" className="px-4 py-3">{h}</th>
+              ))}
             </tr>
           </thead>
           <tbody>
-            {runs === "unavailable" ? (
+            {runs === "unavailable" || runs.length === 0 ? (
               <tr>
                 <td colSpan={5} className="px-4 py-3 text-gray-400">
-                  {RUNS_UNAVAILABLE_MESSAGE}
-                </td>
-              </tr>
-            ) : runs.length === 0 ? (
-              /* #495: an empty list used to fall through to `.map()` and draw a
-                 header with nothing under it, so "no runs yet" and "the query
-                 failed" looked identical — on the page whose job is telling an
-                 operator the pipeline is healthy. These two sentences must stay
-                 different; tests/read-state.test.ts asserts it. */
-              <tr>
-                <td colSpan={5} className="px-4 py-3 text-gray-400">
-                  {RUNS_EMPTY_MESSAGE}
+                  {runs === "unavailable" ? RUNS_UNAVAILABLE_MESSAGE : RUNS_EMPTY_MESSAGE}
                 </td>
               </tr>
             ) : (
               runs.map((run) => (
                 <tr key={run.runId} className="border-t border-border">
-                  <td className="px-4 py-3 font-mono text-xs" title={run.runId}>
-                    {formatShortSha(run.runId)}
-                  </td>
+                  <td className="px-4 py-3 font-mono text-xs" title={run.runId}>{formatShortSha(run.runId)}</td>
                   <td className="px-4 py-3">{run.jobName}</td>
                   <td className="px-4 py-3">{run.status}</td>
                   <td className="px-4 py-3 tabular-nums">{run.createdAt}</td>
-                  <td className="px-4 py-3 tabular-nums">
-                    {run.durationSeconds === null ? "—" : `${run.durationSeconds}s`}
-                  </td>
+                  <td className="px-4 py-3 tabular-nums">{run.durationSeconds === null ? "—" : `${run.durationSeconds}s`}</td>
                 </tr>
               ))
             )}

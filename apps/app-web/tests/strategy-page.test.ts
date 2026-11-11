@@ -14,11 +14,11 @@ import {
   type StrategyRunReadRepositoryLike,
 } from "../src/server/strategy-page";
 import {
-  FixtureStrategyRunRepository,
   type AccessContext,
   type StrategyRunReport,
   type StrategyRunUnavailable,
 } from "../src/contracts/strategyRun";
+import { FixtureStrategyRunRepository } from "./support/fixture-strategy-run";
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);

@@ -1,31 +1,4 @@
-"""Reopen an issue a merge closed while its capability is not yet released.
-
-#562. `AGENTS.md` rule 7 tells an author to reference an issue with a plain
-`#N` and close it by hand when a criterion needs a user journey, a
-role-dependent view, or a deployed-environment state. Authors did that. GitHub
-closed the issues anyway — #371 on 2026-07-18 and again on 2026-08-14, #494 on
-2026-08-14, each within seconds of a merge whose body said "Not `Closes`".
-
-Rule 7's own second half applies to itself: a convention is a run that happened,
-not a check that runs again.
-
-What this deliberately does NOT do: touch an issue a human closed. A hand
-close is exactly what rule 7 asks for, and the person doing it has seen more
-than this script can. It fires only on the auto-close case — an issue closed by
-a commit that STAGING IS NOT SERVING — which is the defect and nothing else.
-
-"Serving", not "a release tag contains": v0.0.20 contains the commits that
-closed #371, #494 and #495 while staging served v0.0.19, so a tag-existence
-test called all three released when nothing a user touches had them. Rule 6 is
-explicit that a tag is not the bar.
-
-Usage:
-  python tools/issue_close_guard.py --issue 494
-
-Exit codes:
-  0 - nothing to do, or the issue was reopened successfully
-  1 - the guard could not reach a verdict
-"""
+"""Reopen a product issue auto-closed by a merge commit that staging does not yet serve (#562)."""
 
 from __future__ import annotations
 
@@ -40,14 +13,32 @@ from infra2_sdk.deploy import HttpGet, ReleaseIdentityError, default_http_get, r
 from infra2_sdk.routing import resolve_app_hostname
 
 REPO = "wangzitian0/truealpha"
-# Rule 6 asks whether a capability is deployed, so the question is what staging
-# SERVES, not what a tag contains. Staging deployment is the completion condition;
-# production releases are hoarded and batched separately.
 STAGING_HEALTH = f"https://{resolve_app_hostname('truealpha', 'staging', base_domain='truealpha.club', custom_prod_domain='truealpha.club')}/api/health"
 PRODUCTION_HEALTH = f"https://{resolve_app_hostname('truealpha', 'production', base_domain='truealpha.club', custom_prod_domain='truealpha.club')}/api/health"
 DEFAULT_HEALTH = STAGING_HEALTH
 GhApi = Callable[[str], str]
 Git = Callable[[Sequence[str]], tuple[int, str]]
+
+NON_PRODUCT_PREFIXES = (
+    "docs/",
+    "governance/",
+    "skills/",
+    ".agents/",
+    ".claude/",
+    ".github/",
+    ".ws-publish/",
+    "tools/",
+)
+NON_PRODUCT_FILES = {
+    "AGENTS.md",
+    "init.md",
+    "README.md",
+    ".gitignore",
+    ".gitattributes",
+    ".env.example",
+    "LICENSE",
+    "Makefile",
+}
 
 
 class GuardError(RuntimeError):
@@ -73,22 +64,6 @@ def _git(args: Sequence[str]) -> tuple[int, str]:
 
 
 def closing_commit(issue: int, *, gh_api: GhApi = _gh_api) -> str | None:
-    """The commit that closed the issue, or None when a human closed it.
-
-    The `closed` event does NOT reliably carry `commit_id`. Verified against the
-    real #494 close, which is the event this guard exists for:
-
-        2026-08-14T10:45:28Z closed      commit=null
-        2026-08-14T10:45:28Z referenced  commit=3057e970…   <- PR #565's merge
-
-    A first version keyed on `commit_id` alone and would therefore have judged
-    every auto-close a hand close and shipped inert against its own defect. The
-    merge is identified by the commit-bearing event sharing the close's
-    timestamp.
-    """
-    # Paginated: a long-running issue accumulates hundreds of timeline events
-    # (#494 has been closed, reopened and closed again across three weeks), and
-    # reading only the first page would judge a stale close (review).
     events: list[dict] = []
     page = 1
     while True:
@@ -104,60 +79,20 @@ def closing_commit(issue: int, *, gh_api: GhApi = _gh_api) -> str | None:
     if last.get("commit_id"):
         return str(last["commit_id"])
     closed_at = last.get("created_at")
-    for event in events:
-        if event.get("created_at") == closed_at and event.get("commit_id"):
-            return str(event["commit_id"])
-    return None
+    return next((str(e["commit_id"]) for e in events if e.get("created_at") == closed_at and e.get("commit_id")), None)
 
 
 def deployed(
     commit: str, *, health_url: str = DEFAULT_HEALTH, http_get: HttpGet | None = None, git: Git = _git
 ) -> tuple[bool, str]:
-    """Is the commit in what the target environment is actually serving?
-
-    Not "does a release tag contain it". Staging is the required deployment target;
-    a tag-existence test would call commits released while nothing a user touches
-    has them. Rule 6 is explicit that a tag is not the bar.
-    """
-    http_get = http_get or default_http_get()
-    serving = read_deployed_release(health_url, http_get)
-    code, out = git(["merge-base", "--is-ancestor", commit, f"{serving}^{{commit}}"])
+    serving = read_deployed_release(health_url, http_get or default_http_get())
+    code, _ = git(["merge-base", "--is-ancestor", commit, f"{serving}^{{commit}}"])
     if code not in (0, 1):
         raise GuardError(f"cannot tell whether {serving} contains {commit[:8]}; fetch tags and full history")
     return code == 0, serving
 
 
-NON_PRODUCT_PREFIXES = (
-    "docs/",
-    "governance/",
-    "skills/",
-    ".agents/",
-    ".claude/",
-    ".github/",
-    ".ws-publish/",
-    "tools/",
-)
-NON_PRODUCT_FILES = {
-    "AGENTS.md",
-    "init.md",
-    "README.md",
-    ".gitignore",
-    ".gitattributes",
-    ".env.example",
-    "LICENSE",
-    "Makefile",
-}
-
-
 def is_non_product_commit(commit: str, *, git: Git = _git) -> bool:
-    """True when all files modified by commit belong to non-product paths.
-
-    Rule 6 states that product issues must be deployed, real, and evidenced.
-    Non-product changes (documentation, developer skills, harness rules,
-    governance records, tooling, test suites, and E2E verification scripts)
-    do not deliver code to runtime containers. Checking whether
-    staging serves them causes false reopenings.
-    """
     code, out = git(["diff-tree", "-m", "--no-commit-id", "--name-only", "-r", commit])
     if code != 0:
         return False
@@ -165,14 +100,13 @@ def is_non_product_commit(commit: str, *, git: Git = _git) -> bool:
     if not files:
         return False
     for path in files:
-        if path in NON_PRODUCT_FILES:
-            continue
-        if any(path.startswith(prefix) for prefix in NON_PRODUCT_PREFIXES):
-            continue
-        if path.endswith(".md") and "/" not in path:
-            continue
         parts = path.split("/")
-        if "tests" in parts or "test" in parts or "e2e" in parts:
+        if (
+            path in NON_PRODUCT_FILES
+            or any(path.startswith(prefix) for prefix in NON_PRODUCT_PREFIXES)
+            or (path.endswith(".md") and "/" not in path)
+            or bool({"tests", "test", "e2e"} & set(parts))
+        ):
             continue
         return False
     return True
@@ -188,11 +122,7 @@ def judge(
 ) -> Verdict:
     commit = closing_commit(issue, gh_api=gh_api)
     if commit is None:
-        return Verdict(
-            False,
-            f"#{issue} was closed by a person, not by a merge — rule 7 asks for exactly that, "
-            f"and they have seen more than this guard can",
-        )
+        return Verdict(False, f"#{issue} was closed by a person, not by a merge")
     is_deployed, serving = deployed(commit, health_url=health_url, http_get=http_get, git=git)
     env_name = "staging" if "staging" in health_url else "production"
     if is_deployed:
@@ -200,17 +130,13 @@ def judge(
     if is_non_product_commit(commit, git=git):
         return Verdict(
             False,
-            f"#{issue} was closed by {commit[:8]}, which only changes non-product paths "
-            f"(documentation, rules, skills, governance, or tooling); {env_name} serving "
-            f"check is not applicable under rule 6",
+            f"#{issue} was closed by {commit[:8]}, which only changes non-product paths; "
+            f"{env_name} serving check is not applicable under rule 6",
         )
     return Verdict(
         True,
         f"#{issue} was closed by merge commit {commit[:8]}, which {env_name} is NOT serving — it "
-        f"serves {serving}. The capability is on main and not deployed to {env_name}, which rule 6 does not "
-        f"call closed. Rule 7 asks for a plain `#N` reference and a hand close once the deployed "
-        f"evidence exists; a merge closed this regardless, which is #562. Reopened rather than "
-        f"left looking done.",
+        f"serves {serving}. Reopened under rule 6 (#562).",
     )
 
 
@@ -237,20 +163,13 @@ def run(
 
 
 def _reopen(issue: int, reason: str) -> None:
-    subprocess.run(
-        ["gh", "issue", "reopen", str(issue), "--repo", REPO, "--comment", reason],
-        check=True,
-    )
+    subprocess.run(["gh", "issue", "reopen", str(issue), "--repo", REPO, "--comment", reason], check=True)
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--issue", type=int, required=True)
-    parser.add_argument(
-        "--health-url",
-        default=DEFAULT_HEALTH,
-        help="Health check URL (default: %(default)s)",
-    )
+    parser.add_argument("--health-url", default=DEFAULT_HEALTH)
     return parser
 
 

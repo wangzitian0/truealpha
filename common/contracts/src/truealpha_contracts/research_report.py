@@ -1,22 +1,4 @@
-"""Canonical research-report model, deterministic assembler, and renderers — see #369.
-
-This is a provisional slice of `#43` (the full research-report vision). It lands the
-deterministic report builder that later card (`#372`/`#44`), document-persistence
-(`#235`), and chat (`#46`) work all consume. It does **not** claim `#43`'s full
-acceptance.
-
-The contract here is strict about one thing: `build_research_report` *selects*
-already-materialized sections and their trace links; it never computes a new metric,
-ranking, or classification. Any joint computation across factors or time belongs in
-`common/factors` and must be materialized into `mart` (init.md Section 1, rule 2). The read
-side (`ResearchReadPort`) supplies fully-formed, provenance-neutral sections whose values
-were materialized upstream; the builder only filters by the request, orders subjects, and
-binds a stable content hash.
-
-The shipped `ResearchReadPort` implementation is `research_report_mart.MartResearchReadRepository`
-(#369, #42), which reads every section from mart. A test injects its sources; no fixture
-reader ships.
-"""
+"""Canonical research-report model, deterministic assembler, and renderers (#369)."""
 
 from __future__ import annotations
 
@@ -42,36 +24,24 @@ class _StrictFrozenModel(BaseModel):
 
 
 class ResearchReportKind(StrEnum):
-    """The three report shapes named in `#369`'s acceptance criteria."""
-
     COMPANY = "company"
     ETF = "etf"
     THEME_RANKING = "theme_ranking"
 
 
 class ReportSectionKind(StrEnum):
-    """One materialized research surface. Maps to the seven modules (init.md Section 7)
-    plus the composite strategy summary and its ranking projection."""
-
-    OPERATING_EFFICIENCY = "operating_efficiency"  # module 2 (gross profit / employee)
-    VALUATION = "valuation"  # module 7 tier + price-to-sales
-    PEG_CONVENTIONS = "peg_conventions"  # module 1
-    SUPPLY_CHAIN = "supply_chain"  # module 3
-    ANALYST_HISTORY = "analyst_history"  # module 4
-    ETF_VIRTUAL_COMPANY = "etf_virtual_company"  # module 5
-    PURE_BLOOD = "pure_blood"  # module 6
-    STRATEGY_SUMMARY = "strategy_summary"  # large_model_value_v0 decision
-    RANKING = "ranking"  # theme/ranking projection
+    OPERATING_EFFICIENCY = "operating_efficiency"
+    VALUATION = "valuation"
+    PEG_CONVENTIONS = "peg_conventions"
+    SUPPLY_CHAIN = "supply_chain"
+    ANALYST_HISTORY = "analyst_history"
+    ETF_VIRTUAL_COMPANY = "etf_virtual_company"
+    PURE_BLOOD = "pure_blood"
+    STRATEGY_SUMMARY = "strategy_summary"
+    RANKING = "ranking"
 
 
 class EvidenceTrace(_StrictFrozenModel):
-    """A compact link back to the materialized output and its snapshot lineage.
-
-    It carries identifiers only — never raw bytes (init.md Section 6: traceability
-    resolves output -> snapshot -> normalized/raw references without returning raw
-    payloads by default).
-    """
-
     reference_id: str = Field(min_length=1)
     materialized_output_id: str | None = None
     snapshot_id: str | None = None
@@ -79,14 +49,6 @@ class EvidenceTrace(_StrictFrozenModel):
 
 
 class ResultValue(_StrictFrozenModel):
-    """One already-materialized displayed result.
-
-    Every displayed result retains confidence, availability, period/cutoff, factor
-    version, and an evidence trace (`#369` acceptance). `value` is kept as an exact
-    string token (or None) so the builder and renderers never coerce, round, or
-    recompute a numeric — the byte-exact materialized value flows straight through.
-    """
-
     label: str = Field(min_length=1)
     value: str | None = None
     unit: str | None = None
@@ -105,10 +67,6 @@ class ResultValue(_StrictFrozenModel):
 
 
 class ReportSection(_StrictFrozenModel):
-    """One research surface for a subject, with a section-level availability rollup and
-    a separate factor-validation status (init.md Section 8: consumers display source
-    evidence and formula validation as distinct dimensions)."""
-
     section_kind: ReportSectionKind
     title: str = Field(min_length=1)
     availability: AvailabilityStatus
@@ -119,8 +77,6 @@ class ReportSection(_StrictFrozenModel):
 
 
 class ReportSubject(_StrictFrozenModel):
-    """One report subject (an issuer, an ETF, or a ranked theme member)."""
-
     subject_id: str = Field(min_length=1)
     display_name: str = Field(min_length=1)
     rank: int | None = Field(default=None, ge=1)
@@ -128,13 +84,6 @@ class ReportSubject(_StrictFrozenModel):
 
 
 class ResearchReportRequest(_StrictFrozenModel):
-    """A request for a deterministic research report.
-
-    `cutoff_at` is the explicit point-in-time the report is anchored to; nothing is
-    inferred from the wall clock. An empty `section_kinds` means "every section the read
-    port can supply"; a non-empty tuple filters to exactly those sections.
-    """
-
     report_kind: ResearchReportKind
     target_entity_ids: tuple[str, ...] = Field(min_length=1)
     cutoff_at: datetime
@@ -149,13 +98,6 @@ class ResearchReportRequest(_StrictFrozenModel):
 
 
 class ResearchReport(_StrictFrozenModel):
-    """The canonical, content-addressed research report.
-
-    `report_id` is a pure function of the report's content: identical read models yield
-    an identical report ID and hash. Build one through :meth:`assemble` (which fills the
-    ID); constructing one directly requires a `report_id` that matches its content.
-    """
-
     schema_version: Literal["research_report.v1"] = SCHEMA_VERSION
     report_id: str = ""
     report_kind: ResearchReportKind
@@ -188,7 +130,6 @@ class ResearchReport(_StrictFrozenModel):
         generated_from: str,
         subjects: tuple[ReportSubject, ...],
     ) -> ResearchReport:
-        """Constructs a report and derives its stable `report_id` from the content."""
         return cls(
             report_kind=report_kind,
             title=title,
@@ -199,16 +140,8 @@ class ResearchReport(_StrictFrozenModel):
 
 
 class ResearchReadPort(Protocol):
-    """The read boundary the builder assembles over.
-
-    Implementations return fully-formed, already-materialized subjects and sections.
-    They own the mapping from materialized `mart` outputs to report sections; the builder
-    never computes across their values.
-    """
-
     @property
     def provenance_label(self) -> str: ...
-
     def load_subjects(self, *, request: ResearchReportRequest, context: AccessContext) -> tuple[ReportSubject, ...]: ...
 
 
@@ -216,8 +149,6 @@ def _select_sections(
     sections: tuple[ReportSection, ...],
     section_kinds: tuple[ReportSectionKind, ...],
 ) -> tuple[ReportSection, ...]:
-    """Filters to the requested section kinds, preserving read-port order. Selection
-    only — no value ever changes."""
     if not section_kinds:
         return sections
     wanted = set(section_kinds)
@@ -247,13 +178,6 @@ def build_research_report(
     *,
     context: AccessContext,
 ) -> ResearchReport:
-    """Deterministically assembles a :class:`ResearchReport` from already-materialized
-    reads.
-
-    Contract: this selects sections and trace links only. It performs no arithmetic and
-    computes no new metric, ranking, or classification — a boundary test asserts the
-    builder's source carries no arithmetic (see `tests/test_research_report.py`).
-    """
     subjects = repository.load_subjects(request=request, context=context)
     selected = tuple(_select_subject(subject, request.section_kinds) for subject in subjects)
     title = request.title if request.title is not None else _default_title(request)
@@ -267,49 +191,26 @@ def build_research_report(
 
 
 def render_report_json(report: ResearchReport) -> str:
-    """Renders the canonical, pretty-printed JSON form: sorted keys, 2-space indent,
-    trailing newline. Same field content as `report_id`'s hash input, but not the same
-    bytes — `report_id` hashes `canonical_sha256`'s compact, unindented serialization
-    (see `ResearchReport.assemble`), not this indented form. Two runs over equal read
-    models produce byte-identical output from this renderer either way, since both
-    serializations are deterministic functions of the same content.
-    """
-    payload = report.model_dump(mode="json")
-    return json.dumps(payload, sort_keys=True, indent=2, ensure_ascii=True) + "\n"
-
-
-def _render_confidence(value: Decimal | None) -> str:
-    return "—" if value is None else str(value)
-
-
-def _render_optional(value: str | None) -> str:
-    return "—" if value is None else value
-
-
-def _render_trace(trace: EvidenceTrace | None) -> str:
-    return "—" if trace is None else trace.reference_id
+    return json.dumps(report.model_dump(mode="json"), sort_keys=True, indent=2, ensure_ascii=True) + "\n"
 
 
 def _render_result_row(result: ResultValue) -> str:
     unit = result.currency if result.currency is not None else result.unit
-    value = _render_optional(result.value)
-    if unit is not None and result.value is not None:
-        value = f"{value} {unit}"
+    value = "—" if result.value is None else (f"{result.value} {unit}" if unit is not None else result.value)
     cells = [
         result.label,
         value,
-        _render_optional(result.period),
+        "—" if result.period is None else result.period,
         result.availability.value,
-        _render_confidence(result.confidence),
-        _render_optional(result.factor_version),
-        _render_trace(result.trace),
+        "—" if result.confidence is None else str(result.confidence),
+        "—" if result.factor_version is None else result.factor_version,
+        "—" if result.trace is None else result.trace.reference_id,
     ]
     return "| " + " | ".join(cells) + " |"
 
 
 def _render_section_markdown(section: ReportSection) -> list[str]:
-    lines = [f"### {section.title}", ""]
-    lines.append(f"- Availability: `{section.availability.value}`")
+    lines = [f"### {section.title}", "", f"- Availability: `{section.availability.value}`"]
     if section.validation_status is not None:
         lines.append(f"- Factor validation: `{section.validation_status.value}`")
     if section.reason_codes:
@@ -320,19 +221,13 @@ def _render_section_markdown(section: ReportSection) -> list[str]:
         lines.append("| --- | --- | --- | --- | --- | --- | --- |")
         lines.extend(_render_result_row(result) for result in section.results)
         lines.append("")
-    for note in section.notes:
-        lines.append(f"> {note}")
     if section.notes:
+        lines.extend(f"> {note}" for note in section.notes)
         lines.append("")
     return lines
 
 
 def render_report_markdown(report: ResearchReport) -> str:
-    """Renders a deterministic Markdown view.
-
-    Every printed value comes from a model field; the renderer introduces no computed
-    value absent from the model (`#369` acceptance).
-    """
     lines = [
         f"# {report.title}",
         "",
@@ -344,12 +239,8 @@ def render_report_markdown(report: ResearchReport) -> str:
         "",
     ]
     for subject in report.subjects:
-        heading = subject.display_name
         rank = f" (rank {subject.rank})" if subject.rank is not None else ""
-        lines.append(f"## {heading}{rank}")
-        lines.append("")
-        lines.append(f"- Subject: `{subject.subject_id}`")
-        lines.append("")
+        lines.extend([f"## {subject.display_name}{rank}", "", f"- Subject: `{subject.subject_id}`", ""])
         for section in subject.sections:
             lines.extend(_render_section_markdown(section))
     return "\n".join(lines).rstrip("\n") + "\n"

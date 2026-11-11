@@ -18,12 +18,12 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import {
-  FixtureStrategyRunRepository,
   type AccessContext,
   type StrategyRunDecision,
   type StrategyRunReport,
   type StrategyRunUnavailable,
 } from "../src/contracts/strategyRun";
+import { FixtureStrategyRunRepository } from "./support/fixture-strategy-run";
 import { loadComparison, loadOverview, loadRanking } from "../src/server/dashboard";
 import { decisionAvailability, StrategyRunReadAdapter, type StrategyRunRepositoryLike } from "../src/server/mart/research-read";
 import { paginate } from "../src/server/mart/pagination";

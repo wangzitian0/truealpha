@@ -1,48 +1,4 @@
-"""Assert the deployed surface's shape against the REAL proxy — A4 C1 (#673).
-
-One HTTP redirect cost four production releases (v0.0.26, 28, 30, 32) because
-every defect in it was observable only after a deploy:
-
-    v0.0.26  flags in the Dockerfile CMD     infra2's compose overrides CMD — never ran
-    v0.0.28  FastAPI root_path               Location fixed; routing broken; endpoint 404
-    v0.0.30  path-only Location, GET only    TLS and prefix right; slashless POST 405
-    v0.0.32  all methods                     four properties hold at once
-
-`apps/llm-service/tests/test_health.py` pins those properties — against a
-TestClient with a simulated `X-Forwarded-Proto` header. That is the whole gap:
-the failures were all in the difference between the simulated proxy and the
-real one. Traefik strips `/api` before forwarding, Compose clears the image's
-CMD, and neither is visible to a TestClient. So this asserts the same
-properties over real HTTPS against a deployed base URL, and nothing it checks
-can be satisfied by a local approximation.
-
-Read-only and side-effect free: no request carries a credential or a session,
-so the endpoint rejects each one — the assertion is about WHICH rejection (405
-means the method hole is back, anything but 401 on the endpoint means the
-credential check is gone), never about doing anything. The `tools/call` names
-a read-only tool.
-
-#42 (#728 closed without a deployed probe): init.md rule 21 requires
-authentication on every non-local MCP endpoint. An `initialize` and a
-`tools/call` without a credential must each answer 401 with a Bearer
-challenge. Measured 2026-10-20 on staging and production before the gate:
-`initialize` answered 200 and `tools/call` answered 400 (a missing session,
-past every authorization point).
-
-Measured baseline, production, 2026-09-01 (before #42):
-
-    GET  /api/mcp     307 -> https://truealpha.club/api/mcp/
-    POST /api/mcp     307 -> same (a 405 here is the v0.0.30 defect)
-    GET  /api/mcp/    406 (the MCP endpoint refusing a request with no Accept
-                           header — a 404 here means it landed on app-web,
-                           which is the v0.0.28 defect). 401 after #42.
-    GET  /api/health  200 (a precondition only — tools/health_check.py owns
-                           "is the EXPECTED release live", and this must not
-                           duplicate it)
-
-Usage:
-    python tools/surface_contract.py https://truealpha.club
-"""
+"""Assert deployed proxy routing and MCP authentication over HTTPS (#673, #42)."""
 
 from __future__ import annotations
 
@@ -57,113 +13,9 @@ from dataclasses import dataclass
 from urllib.parse import urlparse
 
 TIMEOUT = 25.0
-# The edge rejects urllib's default `Python-urllib/3.x` with 403 — measured
-# against production, where curl gets 200 for the same URL. Without this the
-# daily probe would report the surface down every single day, and a check that
-# cries wolf is worse than no check.
 USER_AGENT = "truealpha-surface-contract (+https://github.com/wangzitian0/truealpha)"
+TOKEN_ENV = "TA_MCP_TOKEN"
 
-
-@dataclass(frozen=True)
-class Response:
-    status: int
-    location: str
-    body: bytes
-    challenge: str = ""
-    session: str = ""
-
-
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    """The redirect IS the subject — following it would discard the evidence."""
-
-    def redirect_request(self, *arguments: object, **keywords: object) -> None:
-        return None
-
-
-def fetch(
-    url: str,
-    method: str = "GET",
-    payload: dict[str, object] | None = None,
-    extra_headers: dict[str, str] | None = None,
-) -> Response:
-    """One request. `payload` becomes a JSON body with the headers an MCP client sends, so
-    the endpoint judges the request on its credential, not on a missing Accept or
-    Content-Type header. Only the authenticated check passes `extra_headers`."""
-    opener = urllib.request.build_opener(_NoRedirect)
-    headers = {"User-Agent": USER_AGENT, **(extra_headers or {})}
-    data = None
-    if payload is not None:
-        headers["Accept"] = "application/json, text/event-stream"
-        headers["Content-Type"] = "application/json"
-        data = json.dumps(payload).encode("utf-8")
-    # noqa S310: the scheme is validated in main() to be http or https before
-    # anything is fetched. Both are supported on purpose — the stub-server
-    # tests speak http, and a preview target may too.
-    request = urllib.request.Request(  # noqa: S310
-        url, data=data, method=method, headers=headers
-    )
-    try:
-        with opener.open(request, timeout=TIMEOUT) as answer:
-            return Response(
-                answer.status,
-                answer.headers.get("Location", ""),
-                answer.read(),
-                answer.headers.get("WWW-Authenticate", ""),
-                answer.headers.get("Mcp-Session-Id", ""),
-            )
-    except urllib.error.HTTPError as error:
-        # 4xx/5xx are results here, not failures: which rejection arrives is
-        # exactly what distinguishes a healthy endpoint from a regressed one.
-        return Response(
-            error.code,
-            error.headers.get("Location", ""),
-            error.read(),
-            error.headers.get("WWW-Authenticate", ""),
-        )
-    except OSError as error:
-        # URLError, ConnectionRefusedError, RemoteDisconnected, socket timeouts: an
-        # endpoint that did not answer is a verdict about the surface, not a crash of
-        # the probe. On 2026-09-02 a production `HTTP 0` surfaced as a traceback here
-        # because only URLError was caught; the freshness run went red for the wrong
-        # reason (#725 category 2: a failure names its contract).
-        reason = getattr(error, "reason", None) or error
-        raise SurfaceUnreachable(f"{method} {url} did not answer: {reason}") from None
-
-
-class SurfaceUnreachable(Exception):
-    """The surface under test did not answer at all — reported as the first failed
-    property, never as a traceback."""
-
-
-def judge_redirect(source_url: str, base_scheme: str, status: int, location: str) -> list[str]:
-    """The redirect verdict, as pure logic.
-
-    Separated from the request so the TLS-downgrade branch is reachable by a
-    test: a stub server speaks http, and binding real TLS in a unit test would
-    prove nothing about Traefik anyway. Judging that branch by reading the
-    source for a substring — which is what the first draft did — leaves it
-    passing while an `if ... : pass` silently stops detecting the founding
-    defect (review).
-    """
-    if not 300 <= status < 400:
-        return [f"GET {source_url} answered {status}, not a redirect"]
-    target = urlparse(location)
-    failures: list[str] = []
-    if base_scheme == "https" and target.scheme == "http":
-        failures.append(
-            f"GET {source_url} redirects to {location} — the scheme is downgraded to "
-            f"http, and a client follows it (init.md principle 21; the v0.0.26 defect)"
-        )
-    if not target.path.startswith("/api/"):
-        failures.append(
-            f"GET {source_url} redirects to {location} — the /api prefix is dropped, "
-            f"so the client lands on app-web instead of the MCP endpoint (v0.0.26)"
-        )
-    return failures
-
-
-#: The two JSON-RPC requests an MCP client sends first. Neither carries a credential. The
-#: tool is read-only, and with no session the server must not reach it in any case.
 UNAUTHENTICATED_MCP_REQUESTS: dict[str, dict[str, object]] = {
     "initialize": {
         "jsonrpc": "2.0",
@@ -184,8 +36,78 @@ UNAUTHENTICATED_MCP_REQUESTS: dict[str, dict[str, object]] = {
 }
 
 
+@dataclass(frozen=True)
+class Response:
+    status: int
+    location: str
+    body: bytes
+    challenge: str = ""
+    session: str = ""
+
+
+class SurfaceUnreachable(Exception):
+    """The surface under test did not answer."""
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *arguments: object, **keywords: object) -> None:
+        return None
+
+
+def fetch(
+    url: str,
+    method: str = "GET",
+    payload: dict[str, object] | None = None,
+    extra_headers: dict[str, str] | None = None,
+) -> Response:
+    opener = urllib.request.build_opener(_NoRedirect)
+    headers = {"User-Agent": USER_AGENT, **(extra_headers or {})}
+    data = None
+    if payload is not None:
+        headers["Accept"] = "application/json, text/event-stream"
+        headers["Content-Type"] = "application/json"
+        data = json.dumps(payload).encode("utf-8")
+    request = urllib.request.Request(url, data=data, method=method, headers=headers)  # noqa: S310
+    try:
+        with opener.open(request, timeout=TIMEOUT) as answer:
+            return Response(
+                answer.status,
+                answer.headers.get("Location", ""),
+                answer.read(),
+                answer.headers.get("WWW-Authenticate", ""),
+                answer.headers.get("Mcp-Session-Id", ""),
+            )
+    except urllib.error.HTTPError as error:
+        return Response(
+            error.code,
+            error.headers.get("Location", ""),
+            error.read(),
+            error.headers.get("WWW-Authenticate", ""),
+        )
+    except OSError as error:
+        reason = getattr(error, "reason", None) or error
+        raise SurfaceUnreachable(f"{method} {url} did not answer: {reason}") from None
+
+
+def judge_redirect(source_url: str, base_scheme: str, status: int, location: str) -> list[str]:
+    if not 300 <= status < 400:
+        return [f"GET {source_url} answered {status}, not a redirect"]
+    target = urlparse(location)
+    failures: list[str] = []
+    if base_scheme == "https" and target.scheme == "http":
+        failures.append(
+            f"GET {source_url} redirects to {location} — the scheme is downgraded to "
+            f"http, and a client follows it (init.md principle 21; the v0.0.26 defect)"
+        )
+    if not target.path.startswith("/api/"):
+        failures.append(
+            f"GET {source_url} redirects to {location} — the /api prefix is dropped, "
+            f"so the client lands on app-web instead of the MCP endpoint (v0.0.26)"
+        )
+    return failures
+
+
 def judge_credential(endpoint: str, rpc_method: str, answer: Response) -> list[str]:
-    """The authentication verdict for one unauthenticated request (#42, init.md rule 21)."""
     if answer.status != 401:
         return [
             f"POST {endpoint} {rpc_method} without a credential answered {answer.status}, not 401 — "
@@ -202,13 +124,6 @@ def judge_credential(endpoint: str, rpc_method: str, answer: Response) -> list[s
 
 
 def check(base: str) -> list[str]:
-    """Every property, or the one verdict that makes the rest unaskable.
-
-    Any request the surface does not answer — refused, hung up, timed out — is the
-    first property violated, whichever request it was (review on #752: the health
-    call was guarded and the MCP calls after it were not, so an edge that answered
-    /api/health and then hung up on /api/mcp still died with a traceback).
-    """
     try:
         return _check(base)
     except SurfaceUnreachable as unreachable:
@@ -216,59 +131,34 @@ def check(base: str) -> list[str]:
 
 
 def _check(base: str) -> list[str]:
-    """Every violated property, named. Empty means the surface holds.
-
-    Deliberately NOT a version check. `tools/health_check.py` owns "is the
-    expected release live": it polls and it takes an expected version. The
-    daily delivery report runs this probe per environment. This owns a different
-    question that nothing else asks: does the proxy topology behave. The one
-    health call below is a precondition, not a duplicate assertion: if the app
-    is not serving at all, the three routing verdicts would be noise.
-    """
     base = base.rstrip("/")
     scheme = urlparse(base).scheme
-    failures: list[str] = []
-
     alive = fetch(f"{base}/api/health")
     if alive.status != 200:
         return [
             f"GET {base}/api/health answered {alive.status}, not 200 — the surface is not serving, "
             f"so its routing shape cannot be judged (is the deploy live? tools/health_check.py)"
         ]
-
     slashless = f"{base}/api/mcp"
     redirect = fetch(slashless)
-    failures.extend(judge_redirect(slashless, scheme, redirect.status, redirect.location))
-
-    post = fetch(slashless, method="POST")
-    if post.status == 405:
+    failures = judge_redirect(slashless, scheme, redirect.status, redirect.location)
+    if fetch(slashless, method="POST").status == 405:
         failures.append(
             f"POST {slashless} answered 405 — the redirect handler covers GET only again, which "
             f"is exactly the v0.0.30 defect (staging 405 while production stayed 200)"
         )
-
     endpoint = f"{base}/api/mcp/"
-    served = fetch(endpoint)
-    if served.status == 404:
+    if fetch(endpoint).status == 404:
         failures.append(
             f"GET {endpoint} answered 404 — the redirect points at nothing, which is worse than "
             f"the downgrade it replaced (the v0.0.28 root_path defect)"
         )
-
     for rpc_method, payload in UNAUTHENTICATED_MCP_REQUESTS.items():
         failures.extend(judge_credential(endpoint, rpc_method, fetch(endpoint, method="POST", payload=payload)))
-
     return failures
 
 
-#: The environment variable that holds the MCP token for the authenticated check. The walk
-#: sets it from the environment's GitHub secret; the value is never printed.
-TOKEN_ENV = "TA_MCP_TOKEN"
-
-
 def check_authenticated(base: str, token: str) -> list[str]:
-    """#1437 acceptance 3: with the environment's token, `initialize` opens a session and
-    `tools/list` answers 200 with the registered tools. Messages name statuses only."""
     try:
         endpoint = f"{base.rstrip('/')}/api/mcp/"
         bearer = {"Authorization": f"Bearer {token}"}
@@ -300,18 +190,12 @@ def check_authenticated(base: str, token: str) -> list[str]:
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Assert a deployed surface's shape over real HTTPS.")
-    parser.add_argument("base_url", help="e.g. https://truealpha.club")
-    parser.add_argument(
-        "--authenticated",
-        action="store_true",
-        help=f"call tools/list with the token in ${TOKEN_ENV} instead of the unauthenticated checks",
-    )
+    parser.add_argument("base_url")
+    parser.add_argument("--authenticated", action="store_true")
     arguments = parser.parse_args(list(sys.argv[1:] if argv is None else argv))
-
     if urlparse(arguments.base_url).scheme not in {"http", "https"}:
         print(f"surface_contract: {arguments.base_url} is not an http(s) URL", file=sys.stderr)
         return 2
-
     if arguments.authenticated:
         token = os.environ.get(TOKEN_ENV, "")
         if not token:

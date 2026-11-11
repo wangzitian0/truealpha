@@ -1,20 +1,4 @@
-/**
- * #373: private document artifact storage over the same S3-compatible
- * object storage (MinIO locally, per docker-compose.yml) that
- * `common/runtime/src/truealpha_runtime/storage.py`'s `S3RawObjectStore`
- * already uses for raw source capture — this is the first TypeScript-side
- * caller, mirroring that adapter's shape field-for-field (content-addressed
- * key, head-before-put dedup, checksum-verified read).
- *
- * This is NOT the raw-capture immutable pipeline AGENTS.md's "apps never
- * use object storage as a service-to-service data path" red line guards —
- * that line protects `raw.fetches`/the source-capture lineage from being
- * bypassed by a typed consumer reaching into raw bytes directly. Documents
- * here are content the app itself renders and owns; this store is reached
- * only from server-side repository code (never a browser or MCP response —
- * see documents.ts), using a distinct bucket prefix (`S3_DOCUMENTS_PREFIX`)
- * so it can never collide with or be mistaken for the raw-capture prefix.
- */
+/** Private content-addressed document artifact storage over S3/MinIO (#373). */
 
 import { createHash } from "node:crypto";
 import {
@@ -41,9 +25,6 @@ function env(name: string, fallback: string): string {
   return value === undefined || value === "" ? fallback : value;
 }
 
-/** A non-numeric S3_CONNECT_TIMEOUT_SECONDS must fall back to the default,
- * not silently produce a NaN timeout (which NodeHttpHandler would treat as
- * "no timeout" — the opposite of what this setting exists to guarantee). */
 export function envPositiveSeconds(name: string, fallbackSeconds: number): number {
   const raw = Number(env(name, String(fallbackSeconds)));
   return Number.isFinite(raw) && raw > 0 ? raw : fallbackSeconds;
@@ -52,10 +33,6 @@ export function envPositiveSeconds(name: string, fallbackSeconds: number): numbe
 let client: S3Client | null = null;
 let testClientOverride: Pick<S3Client, "send"> | null = null;
 
-/** Test-only injection point (documents-object-store.test.ts): lets a unit
- * test exercise the dedup/collision/checksum logic against a fake client
- * without a live MinIO, which this repo has no way to run in CI/sandboxed
- * environments today. Never called from production code. */
 export function __setTestClient(overrideClient: Pick<S3Client, "send"> | null): void {
   testClientOverride = overrideClient;
 }
@@ -73,25 +50,13 @@ function requireEnv(name: string): string {
 function getClient(): S3Client {
   if (testClientOverride) return testClientOverride as S3Client;
   if (!client) {
-    const endpoint = requireEnv("S3_ENDPOINT");
-    const accessKeyId = requireEnv("S3_ACCESS_KEY");
-    const secretAccessKey = requireEnv("S3_SECRET_KEY");
-    // Mirrors S3_CONNECT_TIMEOUT_SECONDS's role in the Python
-    // S3RawObjectStore adapter — without an explicit timeout here, a
-    // stalled S3/MinIO call could hang a server request indefinitely.
     const timeoutMs = envPositiveSeconds("S3_CONNECT_TIMEOUT_SECONDS", 5) * 1000;
     client = new S3Client({
-      endpoint,
+      endpoint: requireEnv("S3_ENDPOINT"),
       region: env("S3_REGION", "us-east-1"),
       forcePathStyle: true,
-      credentials: {
-        accessKeyId,
-        secretAccessKey,
-      },
-      requestHandler: new NodeHttpHandler({
-        connectionTimeout: timeoutMs,
-        socketTimeout: timeoutMs,
-      }),
+      credentials: { accessKeyId: requireEnv("S3_ACCESS_KEY"), secretAccessKey: requireEnv("S3_SECRET_KEY") },
+      requestHandler: new NodeHttpHandler({ connectionTimeout: timeoutMs, socketTimeout: timeoutMs }),
     });
   }
   return client;
@@ -108,12 +73,6 @@ function normalizedPrefix(raw: string): string {
 function documentsPrefix(): string {
   const prefix = normalizedPrefix(env("S3_DOCUMENTS_PREFIX", "documents"));
   const rawPrefix = normalizedPrefix(env("S3_RAW_PREFIX", "raw"));
-  // The prefix guard in getDocumentArtifact only isolates the raw-capture
-  // namespace if the two prefixes are genuinely distinct path segments —
-  // an exact-string check alone would miss e.g. "raw/" (leading/trailing
-  // slashes) or one prefix nesting inside the other ("raw/documents").
-  // Comparing with a trailing "/" catches both: equality AND nesting in
-  // either direction.
   if (prefix.length === 0 || `${prefix}/`.startsWith(`${rawPrefix}/`) || `${rawPrefix}/`.startsWith(`${prefix}/`)) {
     throw new DocumentStorageError(
       `S3_DOCUMENTS_PREFIX ("${prefix}") must be a distinct, non-empty path segment from S3_RAW_PREFIX ("${rawPrefix}")`,
@@ -130,12 +89,6 @@ async function bodyToBuffer(body: unknown): Promise<Buffer> {
   return Buffer.concat(chunks);
 }
 
-/** Content-addressed store, scoped per owner (the key includes
- * `ownerPrincipalId`, so this is per-owner dedup, not global — two owners
- * uploading byte-identical content each get their own key). A re-render
- * that produces byte-identical output for the *same* owner is a no-op
- * write — `head_object` before `put_object`, exactly like the Python
- * adapter. */
 export async function storeDocumentArtifact(
   ownerPrincipalId: string,
   bytes: Buffer,
@@ -149,19 +102,13 @@ export async function storeDocumentArtifact(
   try {
     const head = await s3.send(new HeadObjectCommand({ Bucket: bucket(), Key: key }));
     exists = true;
-    // Length alone doesn't rule out a same-length collision at this key —
-    // also compare the digest we stamped into Metadata on the original
-    // write, so a mismatch (corruption/tampering at rest) is caught here
-    // rather than silently treated as "already stored".
     if (head.ContentLength !== bytes.length || head.Metadata?.sha256 !== digest) {
       throw new DocumentStorageError(`content-address collision for ${key}`);
     }
   } catch (error) {
     if (error instanceof DocumentStorageError) throw error;
     const notFound = error instanceof S3ServiceException && error.$metadata.httpStatusCode === 404;
-    if (!notFound) {
-      throw new DocumentStorageError(`cannot inspect ${key}: ${String(error)}`);
-    }
+    if (!notFound) throw new DocumentStorageError(`cannot inspect ${key}: ${String(error)}`);
   }
 
   if (!exists) {
@@ -183,16 +130,10 @@ export async function storeDocumentArtifact(
   return { bucket: bucket(), key, sha256: digest, byteLength: bytes.length, contentType };
 }
 
-/** Reads back a stored artifact, re-verifying the checksum — a mismatch
- * means the bytes were corrupted or tampered with at rest, never silently
- * served. */
 export async function getDocumentArtifact(ref: DocumentObjectRef): Promise<Buffer> {
   if (ref.bucket !== bucket()) {
     throw new DocumentStorageError(`object belongs to unexpected bucket ${ref.bucket}`);
   }
-  // Same bucket also holds the raw-capture pipeline's objects under a
-  // different prefix (S3_RAW_PREFIX) — this exported function must never
-  // become a path to reading those, even given an otherwise well-formed ref.
   if (!ref.key.startsWith(`${documentsPrefix()}/`)) {
     throw new DocumentStorageError(`object key ${ref.key} is outside the documents prefix`);
   }
@@ -204,9 +145,7 @@ export async function getDocumentArtifact(ref: DocumentObjectRef): Promise<Buffe
   } catch (error) {
     throw new DocumentStorageError(`cannot read ${ref.key}: ${String(error)}`);
   }
-  if (!responseBody) {
-    throw new DocumentStorageError(`empty response body for ${ref.key}`);
-  }
+  if (!responseBody) throw new DocumentStorageError(`empty response body for ${ref.key}`);
   const bytes = await bodyToBuffer(responseBody);
   if (bytes.length !== ref.byteLength) {
     throw new DocumentStorageError(`byte length mismatch for ${ref.key}: expected ${ref.byteLength}, got ${bytes.length}`);

@@ -1,27 +1,11 @@
 /**
- * #433: TypeScript mirror of `truealpha_contracts.topt_read.PostgresToptGppeRepository`
- * (the class the deployed MCP `topt_gppe` tool calls, unconditionally — no fixture
- * gate). The SQL here is copied byte-for-byte from the Python source so the App and
- * MCP resolve the same governed head and return the same values; when that source
- * changes, mirror the change here too.
- *
- * #434 P4 follow-up: head resolution now mirrors the Python two-step resolver —
- * `mart.current_pointer_head` (the ADR-A1 governed head; #378 wires the evidence
- * graph that advances it) first, falling back to the acceptance-gated
- * `topt_capture_status`/`datahub_quality_report` join only when no pointer has
- * advanced yet for this (environment, factor_id). Previously this always used the
- * fallback query, so the App and MCP could silently resolve different governed
- * heads once the pointer started advancing.
- *
- * Server-only; never import into a client component.
+ * TypeScript mirror of `truealpha_contracts.topt_read.PostgresToptGppeRepository`.
  */
 
 import type { ToptGppeCell, ToptGppeReport, ToptGppeUnavailable } from "@/contracts/toptGppe";
 import { idPrefixLikeOfRole } from "@/contracts/universes";
 import { withMartReadonly } from "./db";
 
-/** The subset of `pg`'s `PoolClient` this repository needs — narrow enough that
- * tests can inject a fake without constructing a real connection. */
 export interface MartClientLike {
   query(sql: string, params?: readonly unknown[]): Promise<{ rows: Record<string, unknown>[] }>;
 }
@@ -30,10 +14,6 @@ const POINTER_HEAD_SQL = `
   select run_id, freshness, availability, staleness_reason
   from mart.served_head
   where factor_id = 'gross_profit_per_employee'
-    -- The universe is part of the governed key. Without it this served whichever pipeline
-    -- advanced last: the canary universe's 24-cell run displaced the 84-cell TOPT core,
-    -- which is how a module card came to read "available" at 4% coverage.
-    -- $1 is the id prefix of the universe with role "strategy" (#1522).
     and universe_id like $1
   order by advanced_at desc limit 1
 `;
@@ -70,28 +50,19 @@ const QUALITY_SQL = `
   select payload from mart.datahub_quality_report where run_id = $1 order by created_at desc limit 1
 `;
 
-// The requested-cell denominator comes from the capture plane —
-// mart.topt_capture_status.obligation_count IS the run's requested cells —
-// never a constant: the hardcoded 84 made any run over a different universe
-// self-contradict its own quality payload (#462 AC3; identical query in the
-// Python twin, truealpha_contracts.topt_read).
 const REQUESTED_COUNT_SQL = `
   select obligation_count from mart.topt_capture_status where run_id = $1
 `;
 
 class SchemaMismatchError extends Error {}
 
-/** Fails closed on an unexpected row shape instead of `String(...)` coercing it — a bare
- * `String(null)`/`String(undefined)` would silently produce the *string* "null"/"undefined"
- * rather than surfacing the mismatch (Copilot review on #437). */
 function requireString(value: unknown, field: string): string {
   if (typeof value !== "string") throw new SchemaMismatchError(`${field} is not a string`);
   return value;
 }
 
 function optionalString(value: unknown, field: string): string | null {
-  if (value === null) return null;
-  return requireString(value, field);
+  return value === null ? null : requireString(value, field);
 }
 
 function cellFromRow(row: Record<string, unknown>): ToptGppeCell {
@@ -113,9 +84,6 @@ function qualityFromRow(row: Record<string, unknown> | undefined): Record<string
 }
 
 export class MartToptGppeRepository {
-  /** `runWithClient` is an injection point for tests only (a fake `MartClientLike`,
-   * no real connection); production callers omit it and get the real `mart_readonly`
-   * session via `withMartReadonly`. */
   constructor(
     private readonly runWithClient: <T>(fn: (client: MartClientLike) => Promise<T>) => Promise<T> = withMartReadonly,
   ) {}
@@ -146,19 +114,14 @@ export class MartToptGppeRepository {
 
       try {
         const runId = requireString(head.rows[0].run_id, "run_id");
-
         const cellRows = await client.query(CELLS_SQL, [runId, limit]);
         const qualityRows = await client.query(QUALITY_SQL, [runId]);
         const statusRows = await client.query(REQUESTED_COUNT_SQL, [runId]);
-
-        if (statusRows.rows.length === 0) {
-          return { reason: "no capture status for the governed run" };
-        }
+        if (statusRows.rows.length === 0) return { reason: "no capture status for the governed run" };
         const requestedCount = statusRows.rows[0].obligation_count;
         if (typeof requestedCount !== "number" || !Number.isInteger(requestedCount)) {
           throw new SchemaMismatchError("obligation_count is not an integer");
         }
-
         const cells = cellRows.rows.map(cellFromRow);
         return {
           run_id: runId,

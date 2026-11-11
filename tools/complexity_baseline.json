@@ -7,7 +7,5 @@
   "apps/data-engine/src/data_engine/datahub/production_topt/holdings_enrichment.py:enrich_holding_identities": 22,
   "apps/data-engine/src/data_engine/datahub/production_topt/sec_financial_adapter.py:build_route": 25,
   "apps/data-engine/src/data_engine/datahub/standards/filing_extraction.py:extract_headcount": 23,
-  "apps/data-engine/src/data_engine/quality/surface_proof.py:prove": 23,
-  "common/contracts/src/truealpha_contracts/reconciliation.py:ReconciliationResult.identify": 41,
-  "common/contracts/src/truealpha_contracts/strategy.py:GoldenExpectation.validate_outcome_consistency": 22
+  "apps/data-engine/src/data_engine/quality/surface_proof.py:prove": 23
 }

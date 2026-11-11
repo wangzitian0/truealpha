@@ -1,9 +1,4 @@
-"""LLM-call orchestration only — the App reads Postgres directly, not through here
-(init.md Section 1, rule 5).
-
-Roadmap: the MCP endpoint comes first (reuses common/factors, nearly free to wire into
-Claude Desktop); the self-built /chat SSE endpoint is Tier 3 (Phase 7).
-"""
+"""LLM-call orchestration and MCP transport service (init.md Section 1, rule 5)."""
 
 from collections.abc import AsyncIterator, MutableMapping
 from contextlib import asynccontextmanager
@@ -22,50 +17,21 @@ from llm_service.config import settings
 from llm_service.mcp_auth import BearerTokenGate
 from llm_service.mcp_server import mcp
 
-#: The environment manifest this process boots against (#759). The Dockerfile ships it at
-#: the repository path under /app -- the working directory the entrypoint already relies
-#: on for ./db/apply_migrations.sh -- and `make llm` and pytest run from the repository
-#: root, so one relative path names it wherever the process starts.
 ENV_MANIFEST_PATH = Path("apps/llm-service/required-env.generated.json")
+ROUTED_PREFIX = "/api"
+PROBE_PATHS = frozenset({"/health", "/livez", "/readyz"})
+TRUSTED_PROXIES = ("127.0.0.1", "::1")
 
 
 def refuse_to_boot_on_a_missing_environment() -> None:
-    """Every name the manifest declares must be present before the service answers (#759).
-
-    Deployed tiers require what the deployment injects (APP_ENV, GIT_COMMIT_SHA,
-    S3_ENDPOINT -- infra2's compose states them); a laptop or CI has no deployer and is not
-    asked for them. Runs before the MCP session manager so a refused boot leaves nothing
-    half-started, and the error names variables only.
-    """
     assert_environment(ENV_MANIFEST_PATH, require_injected=settings.is_deployed)
 
 
 @asynccontextmanager
 async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
     refuse_to_boot_on_a_missing_environment()
-    # FastMCP's own Starlette sub-app lifespan is not invoked by FastAPI's Mount,
-    # so the session manager must run from the parent app's lifespan explicitly.
     async with mcp.session_manager.run():
         yield
-
-
-#: The prefix infra2's Traefik rule strips before forwarding here. Verified from
-#: behaviour: a POST to /api/mcp/ reaches an app mounted at /mcp, so the prefix
-#: is already gone on arrival. `tools/route_manifest.json` is the contract (#463).
-#:
-#: Used ONLY to rebuild outgoing URLs. It is deliberately NOT FastAPI's
-#: `root_path`: that makes Starlette strip the prefix during matching, and since
-#: Traefik has already stripped it the app then looks for /api/mcp in a request
-#: that says /mcp and answers 404. Measured — v0.0.28 fixed the redirect and
-#: killed the endpoint, staging POST /api/mcp/ went 200 -> 404 while production
-#: without the change stayed 200.
-ROUTED_PREFIX = "/api"
-
-#: The deploy gates, Traefik and the watchdog poll these paths every few seconds. They carry no
-#: information a request span or a latency sample would add, and they were about 31.5k spans a
-#: day, almost all of the traces of this service (infra2#1436). FastAPI's own telemetry skips a
-#: request when `exclude` returns True.
-PROBE_PATHS = frozenset({"/health", "/livez", "/readyz"})
 
 
 def _is_probe(scope: MutableMapping[str, Any]) -> bool:
@@ -73,81 +39,16 @@ def _is_probe(scope: MutableMapping[str, Any]) -> bool:
 
 
 app = FastAPI(title="truealpha-llm-service", lifespan=_lifespan, telemetry={"exclude": _is_probe})
-
-# OTLP telemetry for infra2's shared SigNoz (#1034): traces, metrics and ERROR logs under the
-# identity infra2's deploy renders into OTEL_SERVICE_NAME / OTEL_RESOURCE_ATTRIBUTES. Off unless
-# OTEL_EXPORTER_OTLP_ENDPOINT is set; once on, a missing identity refuses the import, so uvicorn
-# never starts serving untagged telemetry. At import, not in the lifespan: the global providers
-# must exist before the first request.
-#
-# No instrumentor is attached to `app` (#1660). FastAPI >= 0.162 exports the stable HTTP server
-# telemetry itself on the global providers that `init_telemetry` installs: server spans and
-# `http.server.request.duration` (unit "s"; labels `http.route`, `http.response.status_code`,
-# `http.request.method`). Attaching `FastAPIInstrumentor` turns that off and exports the legacy
-# `http.server.duration` (unit "ms") instead. `test_telemetry.py` fails when either side changes.
 _telemetry = init_telemetry()
-
-# TLS terminates at Traefik, so requests arrive over http. Without this, Starlette
-# builds redirect Locations from the request scheme and `GET /api/mcp` answered
-#     307 -> http://truealpha.club/mcp/
-# on production: TLS dropped and the prefix dropped in one hop, landing on
-# app-web's 404. init.md principle 21 requires TLS on every non-local MCP
-# endpoint, and a client follows a 307.
-#
-# In the APP, not in the Dockerfile CMD. A first attempt added --proxy-headers
-# and --root-path to that CMD, merged, deployed to staging, and changed nothing:
-# infra2's compose sets an inline entrypoint ending in `exec uvicorn ... --host
-# 0.0.0.0 --port 8000`, so the image's CMD has never run. Middleware ships with
-# the code and does not depend on how the process is launched.
-#
-# Trust the proxy network, not everyone. `trusted_hosts="*"` would let any peer
-# that can reach this port set the scheme and host used to build redirects, and
-# "it is not reachable from outside" is an assumption about networking rather
-# than something this process can check (review).
-TRUSTED_PROXIES = ("127.0.0.1", "::1")
-app.add_middleware(
-    ProxyHeadersMiddleware,
-    trusted_hosts=list(TRUSTED_PROXIES),
-)
+app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=list(TRUSTED_PROXIES))
 
 
-# Every method the MCP transport uses, not GET alone. Streamable-HTTP POSTs the
-# JSON-RPC body, GETs the SSE stream and DELETEs the session, and a client that
-# omits the trailing slash must reach all three.
-#
-# Measured on staging: with GET only, `POST /api/mcp` answered 405. The code
-# this replaced answered 307 — to http, which is the defect — so restricting the
-# handler to GET turned "works but downgrades" into "does not work". A narrower
-# fix than the bug.
 @app.api_route("/mcp", methods=["GET", "POST", "DELETE"], include_in_schema=False)
 def mcp_slash(request: Request) -> RedirectResponse:
-    """Send /mcp to /mcp/ ourselves, with the prefix and the scheme intact.
-
-    Starlette's own redirect_slashes keeps neither: its Location is built from
-    the request, which arrives over http with the prefix already stripped, so it
-    answered http://truealpha.club/mcp/ — TLS dropped and /api dropped in one
-    hop, landing on app-web's 404. init.md principle 21 requires TLS on every
-    non-local MCP endpoint and a client follows a 307.
-
-    Built by hand rather than through root_path, because root_path also changes
-    ROUTING and killed the endpoint it was meant to fix.
-
-    Path-only, so there is no host to get wrong. An absolute Location built from
-    `request.url.netloc` lets the Host header — or a forwarded one — choose where
-    the client is sent, and there is no allowlist here to stop it: a host-header
-    injection and an open redirect (review).
-
-    A relative Location also cannot drop TLS, since the client keeps the scheme
-    it already had. That is the property this whole change exists for, obtained
-    by not naming a scheme at all rather than by naming the right one.
-    """
-    del request  # the Location is fixed; nothing about the request may steer it
+    del request
     return RedirectResponse(f"{ROUTED_PREFIX}/mcp/", status_code=307)
 
 
-# Only the MCP mount is behind the credential. /health stays open for the deploy gates,
-# and the slashless redirect above names a fixed path and serves no data. The token is read
-# per request from `settings`, the one object that resolved MCP_BEARER_TOKEN.
 app.mount(
     "/mcp",
     BearerTokenGate(mcp.streamable_http_app(), expected_token=lambda: settings.mcp_bearer_token),
@@ -156,84 +57,32 @@ app.mount(
 
 @app.get("/health")
 def health() -> dict[str, Any]:
-    # git_sha lets tools/health_check.py confirm the deployed release tag is
-    # actually live post-deploy, not just that something answers (#508).
-    #
-    # data_engine_parser reports the vintage of the DATA ENGINE, which has no HTTP
-    # surface of its own and therefore had no deploy-time verification at all (#712).
-    # Every post-deploy check -- this endpoint, the surface walk, both canaries --
-    # exercised an HTTP surface, so a promotion could leave the app that computes every
-    # published number one release behind with every step green. That is exactly what
-    # v0.0.37 did: web and llm took the tag, the data engine kept an older digest.
-    #
-    # The identity is already in the database; nothing new is written. Reported here
-    # because this service already holds a mart-scoped connection, so the deploy lane can
-    # read it over a surface it already calls, with no new secret and no database access
-    # from the runner.
     parser, git_sha, image_digest, pointers, verdicts = _data_engine_facts()
     return {
         "status": "ok",
-        # Through `settings`, not the process environment (#784): the manifest this service
-        # boot-validates against declares GIT_COMMIT_SHA, and the value it reports must be
-        # the one that declaration resolved. `env_ignore_empty` also means an unrendered
-        # template line reads as "unknown" here instead of as an empty release identity,
-        # which `truealpha_runtime.deployed_release` would then refuse rather than explain.
         "git_sha": settings.git_commit_sha,
         "data_engine_parser": parser,
-        # #712: the build that produced the newest run, from mart.data_engine_identity —
-        # a deploy identity, not a parser vintage, so a stale data engine is visible.
         "data_engine_git_sha": git_sha,
         "data_engine_image_digest": image_digest,
-        # The governed pointer per universe and when it last advanced (#536's gate can
-        # withhold it for days with every deploy check green; the admin funnel showed
-        # the age but nothing paged). `tools/vision_audit.py` reads this field.
-        # Each entry also carries the freshness label, the limit, a reason code and the
-        # availability (#1062). `status` stays "ok" for a stale head, because it reports
-        # liveness. The nightly `report_surface_proof` fails on a stale scheduled head.
-        # "unknown" when the read failed. Also "unknown" when heads exist that this database
-        # does not serve, because the identity row is missing or names another environment.
-        # An empty list when no pointer has ever advanced.
         "governed_pointers": pointers,
-        # #876: the newest verdict of each nightly in-environment check (the Dagster quality
-        # and head-report jobs, the model-provider key probe), green or red. The runner that
-        # reports cannot reach the database; the delivery report reads this daily with the
-        # rules of `tools/nightly_verdicts.py` and names a red, stale or missing verdict.
-        # "unknown" when the read failed; an empty list when no check has ever recorded one.
         "nightly_verdicts": verdicts,
     }
 
 
-# Register /livez and /readyz via infra2_sdk.fastapi.init_service AFTER our own /health route
-# so FastAPI matches the TrueAlpha /health handler ("status": "ok" + git_sha) first (#1528).
 init_service(app, "truealpha-llm-service", enable_otel=False)
 
-
-#: The newest verdict per nightly check (`db/migrations/20260916T0848_factors_nightly_verdicts.sql`).
-#: One row per distinct check name, walked on the (check_name, ran_at, recorded_at) index; the
-#: table is append-only, so the read never returns its history. Deliberately no LIMIT: a cap
-#: would drop checks past it in name order, and the tool reads a dropped check as missing.
-#: The name set is small and closed (the lanes' declared NIGHTLY_VERDICTS).
 NIGHTLY_VERDICTS_SQL = """
 select distinct on (check_name) check_name, ran_at, ok, summary
 from mart.nightly_verdicts
 order by check_name, ran_at desc, recorded_at desc
 """
 
-
-#: The live governed head of each universe family, aged at read time (#1062, #1320).
-#: `mart.served_head` holds the one definition of age, limit, label and live version. A retired
-#: universe version is not a head. This query takes every row: it picks no row of its own and
-#: never subtracts a clock of its own.
 GOVERNED_POINTERS_SQL = """
 select universe_id, advanced_at, age_hours, freshness, limit_hours, staleness_reason, availability
 from mart.served_head
 order by universe_id
 """
 
-#: Runs only when the query above returns no row. `mart.served_head` shows the heads of this
-#: database's own environment. It is empty when the identity row is missing or names another
-#: environment, even though heads exist. This view lists the environments that hold heads. A row
-#: here with no served row means the heads exist and this database cannot serve them.
 HEAD_ENVIRONMENTS_SQL = "select 1 from mart.served_head_environments limit 1"
 
 
@@ -248,7 +97,6 @@ def _safe_query(connection: Any, fn: Any, default: Any) -> Any:
 
 
 def _data_engine_facts() -> tuple[str, str, str, list[dict[str, Any]] | str, list[dict[str, Any]] | str]:
-    """(parser vintage, git sha, image digest, governed pointers, newest nightly verdicts), each 'unknown' when unreadable."""
     parser, git_sha, image_digest = "unknown", "unknown", "unknown"
     pointers: list[dict[str, Any]] | str = "unknown"
     verdicts: list[dict[str, Any]] | str = "unknown"
@@ -256,10 +104,7 @@ def _data_engine_facts() -> tuple[str, str, str, list[dict[str, Any]] | str, lis
         import psycopg
 
         contract = load_environment_contract()
-        with psycopg.connect(
-            settings.database_url,
-            connect_timeout=settings.database_connect_timeout_seconds,
-        ) as conn:
+        with psycopg.connect(settings.database_url, connect_timeout=settings.database_connect_timeout_seconds) as conn:
 
             def _read_parser(c: Any) -> str:
                 row = c.execute(
@@ -307,6 +152,6 @@ def _data_engine_facts() -> tuple[str, str, str, list[dict[str, Any]] | str, lis
             git_sha, image_digest = _safe_query(conn, _read_identity, ("unknown", "unknown"))
             pointers = _safe_query(conn, _read_pointers, "unknown")
             verdicts = _safe_query(conn, _read_verdicts, "unknown")
-    except Exception:  # noqa: BLE001 - health must not fail on a read it only reports
+    except Exception:  # noqa: BLE001
         pass
     return parser, git_sha, image_digest, pointers, verdicts

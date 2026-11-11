@@ -1,47 +1,4 @@
-"""Ask whether a published number is possible at all.
-
-#581. Every gate in this repository compares the system against something the
-same process authored — schemas, contracts, twin canons, route freezes. None
-asks whether a value can be true. Production was publishing
-`listing:xnys:jpm` GPPE = -528,985.79, #528 carried that exact number in its
-title from 2026-07-30, and nothing was red about it.
-
-What a negative published number MEANS is not this file's to decide: the
-metric forest (`factors.forest`, #528) declares a sign policy per node and per
-issuer class, and `node-sign-policy` asserts exactly that (init.md rule 17). A
-value the node forbids fails; a negative value the node declares
-`sign-is-signal` passes and is printed by name (`SIGNAL`) on every run, so a
-declared low signal is never a silent pass.
-
-These need no vendor call and no external oracle: pure SQL over materialized
-`mart`. That is the point — an invariant that depends on the network becomes a
-check people mute.
-
-A new tool rather than a function in an existing one because it asks a different
-question of a different input at a different time: `delivery_report.py` and
-`walk_evidence.py` read an HTTP endpoint and the GitHub API, once per environment,
-about the release; this reads SQL, about the numbers, and runs in two places (ci-web
-against the seeded fixture and the daily gate against production). It also owns
-a file the others have no use for — the exemptions.
-
-Exemptions expire, and that is the load-bearing part. Invariant suites die by
-accumulating `# TODO: exclude JPM`; an exemption here carries an issue and a
-date, and an expired one FAILS. The check cannot be quietly turned off, only
-loudly deferred.
-
-Usage:
-  python tools/output_invariants.py --database-url postgresql://…
-  python tools/output_invariants.py --database-url … --require-coverage
-
-`--require-coverage` fails when an invariant examined zero rows. A guard that
-reports "ok" over an empty set is worse than no guard, and the CI fixture cannot
-populate every plane — so coverage is required where the data is real and merely
-reported where it is not.
-
-Exit codes:
-  0 - every invariant holds (or is exempted and unexpired)
-  1 - an invariant is violated, an exemption has expired, or coverage is missing
-"""
+"""Validate materialized mart output invariants against SQL predicates (#581)."""
 
 from __future__ import annotations
 
@@ -62,35 +19,16 @@ from truealpha_contracts.strategy import load_live_strategy_definition
 from truealpha_contracts.universes import id_prefix_like, universe_with_role
 
 EXEMPTIONS_PATH = Path(__file__).resolve().parents[4] / "tools" / "output_invariant_exemptions.json"
-
-# Resolve runs the way the CONSUMERS do, not a third way. Review caught all
-# three invariants inventing their own: `order by created_at desc` picked a GPPE
-# run nothing serves (production's pointer targets capture-run:8c49eec8… while
-# the newest row belongs to capture-run:49a1f57e…), and `max()` over
-# current_pointer_head mixed a table that is keyed per (environment,
-# universe_id, universe_version, factor_id). Both were correct only by accident
-# of today's data — one pointer row, one strategy key — and a second factor or
-# strategy would have made them compare across planes silently. That is #462's
-# defect class, which this file exists to guard against.
-#
-# Mirrors apps/app-web/src/server/mart/topt-gppe-repository.ts's GOVERNED_HEAD_SQL.
-# test_output_invariants.py asserts the two stay in step.
-# The universe belongs to the governed key. Without it these invariants measured whichever
-# pipeline advanced last -- after the canary universe landed, that is a 24-cell run, so
-# every invariant below silently changed population.
 SERVED_UNIVERSE_LIKE = id_prefix_like(universe_with_role("strategy"))
-#: The oldest period that a served revenue may end, in days before the cutoff of its run (#1457, #1519):
-#: read from the live strategy definition's `eligibility.maximum_input_age_days`.
 _MAX_INPUT_AGE_DAYS = load_live_strategy_definition().eligibility.maximum_input_age_days
+
 GOVERNED_HEAD = f"""
     select run_id from mart.served_head
     where factor_id = 'gross_profit_per_employee'
       and universe_id like '{SERVED_UNIVERSE_LIKE}'
     order by advanced_at desc limit 1
 """
-# Mirrors strategy-run-repository.ts (#575): the run the governed capture head resolves
-# to first, recency after — the same ORDER BY text, which test_output_invariants compares
-# to the consumer's. Wrapped so the subquery stays single-column.
+
 DASHBOARD_STRATEGY = "large_model_value_v0"
 LATEST_STRATEGY_RUN = f"""
     select strategy_run_id from (
@@ -105,16 +43,8 @@ LATEST_STRATEGY_RUN = f"""
 
 
 def _expected_inputs() -> tuple[tuple[str, str], ...]:
-    """(input key, issuer class) for every key the strategy consumes for a class: the keys of the tree that the
-    live definition pins for the class (`required_input_keys`, #1518), plus PEG's ranking inputs. Read from the
-    code that consumes them. Before 2026-09-07 this was a literal list that still named `earnings_cagr_3y`, which
-    parser v8 replaced with the per-period net-income series: the invariant failed on production for a key nothing
-    consumed, i.e. the check drifted, not the data (#725 item H). The class says which issuers need the key: a
-    bank needs its four banking leaves, and an environment that holds no bank needs none (a preview of a few
-    tickers). The tool needs `factors` and `truealpha_contracts` only, so it runs where `data_engine` is absent."""
     from factors.composite import strategy_evaluator
     from factors.panel import definition_pins
-    from truealpha_contracts.strategy import load_live_strategy_definition
 
     definition = load_live_strategy_definition()
     peg_keys = set(strategy_evaluator._input_keys("peg"))
@@ -128,8 +58,6 @@ def _expected_inputs() -> tuple[tuple[str, str], ...]:
 
 
 def _primary_market_price_parser() -> str:
-    """The declared primary origin's parser family for market-price (the registration's
-    first origin); a literal only where the registry is not importable."""
     try:
         from data_engine.datahub.production_topt.source_registrations import registration_for
 
@@ -139,11 +67,6 @@ def _primary_market_price_parser() -> str:
 
 
 def _market_price_parser_ranks() -> tuple[tuple[str, int], ...]:
-    """(parser family, fusion rank) for every registered market-price origin vintage, ranked
-    by the price policy's `source_priority` (#862: a cell the primary could not serve is
-    served by the next origin in that order). The parser families come from the registry.
-    Where the registry is not importable, no family has a rank: the failover invariant then
-    reports every substituted origin as unranked."""
     try:
         from data_engine.datahub.production_topt.source_registrations import SOURCE_BY_PARSER, registration_for
     except ImportError:
@@ -167,15 +90,11 @@ MARKET_PRICE_PARSER_RANKS = _market_price_parser_ranks()
 class Invariant:
     id: str
     claim: str
-    #: Rows returned ARE the violations; the query must select enough to act on.
     violations: str
-    #: How many rows the invariant looked at, so a vacuous pass is visible.
     population: str
-    #: Rows that hold but must be seen: printed as `SIGNAL`, never a failure.
     signals: str | None = None
 
 
-#: The published table whose columns the sign policies judge, scoped to the governed head.
 SIGN_POLICY_TABLE = "mart.topt_gppe_results"
 
 
@@ -184,15 +103,7 @@ def _classes(values: set[IssuerClass]) -> str:
 
 
 def _sign_policy_queries(table: str = SIGN_POLICY_TABLE) -> tuple[str, str | None]:
-    """(violations, signals) for the published columns of `table`, generated from the forest.
-
-    Violations: a value for an issuer class the column's node declares no policy for; a
-    negative value where the node is `must-be-non-negative` for the row's class; two columns
-    carrying one node with different values; and a sign a registered ratio cannot produce
-    (output and numerator both published, denominator non-negative by policy, so the two
-    signs agree). Signals: a negative value where the node declares `sign-is-signal`."""
     columns = PUBLISHED_COLUMNS[table]
-    #: node key -> the column judged for it; any further column carrying the node must equal it.
     judged: dict[str, str] = {}
     for column, node_key in sorted(columns.items()):
         judged.setdefault(node_key, column)
@@ -200,8 +111,6 @@ def _sign_policy_queries(table: str = SIGN_POLICY_TABLE) -> tuple[str, str | Non
     signals: list[str] = []
 
     def select(column: str, node_key: str, predicate: str, why: str, *, published: bool = True) -> str:
-        """One arm of the union. `published` scopes it to rows where `column` carries a value;
-        an arm whose predicate is itself about NULLs passes False."""
         node = PANEL_METRICS[node_key]
         scope = f" and {column} is not null" if published else ""
         return (
@@ -213,7 +122,6 @@ def _sign_policy_queries(table: str = SIGN_POLICY_TABLE) -> tuple[str, str | Non
     for column, node_key in sorted(columns.items()):
         first = judged[node_key]
         if column != first:
-            # A NULL on one side and a value on the other is a disagreement too.
             violations.append(
                 select(
                     column,
@@ -276,8 +184,6 @@ def _sign_policy_queries(table: str = SIGN_POLICY_TABLE) -> tuple[str, str | Non
                 select(
                     output_column,
                     spec.key,
-                    # A published output whose numerator is absent is as wrong as a flipped
-                    # sign: `sign(NULL) <> …` is NULL, so the absence is named explicitly.
                     f"operating_branch in ({_classes(classes)}) and ({numerator_column} is null "
                     f"or sign({output_column}) <> sign({numerator_column}))",
                     f"sign of {numerator_column} over non-negative {denominator}",
@@ -288,6 +194,33 @@ def _sign_policy_queries(table: str = SIGN_POLICY_TABLE) -> tuple[str, str | Non
 
 _SIGN_VIOLATIONS, _SIGN_SIGNALS = _sign_policy_queries()
 
+_FUSION_CTES = """
+    selected as (
+        select s.run_id, sel.observation_id
+        from mart.current_pointer_head head
+        join staging.topt_core_snapshots s
+          on s.run_id = head.target_run_id
+         and s.universe_id = head.universe_id
+         and s.universe_version = head.universe_version
+        cross join lateral jsonb_array_elements(s.payload->'members') member
+        cross join lateral jsonb_array_elements_text(member->'observation_ids') sel(observation_id)
+    ), contested as (
+        select uo.capture_obligation_id
+        from staging.capture_observation_obligations uo
+        join staging.capture_normalized_observations o on o.observation_id = uo.observation_id
+        group by uo.capture_obligation_id
+        having count(distinct split_part(o.parser_version, ':', 1)) > 1
+    )
+"""
+
+_SCHEDULED_HEADS_CTE = """
+    with heads as (
+        select h.universe_id, coalesce(h.run_id, h.head_run_id) as run_id
+        from mart.served_head h
+        where h.factor_id = 'gross_profit_per_employee'
+          and __HEAD_IS_SCHEDULED__
+    )
+"""
 
 _TEMPLATES: tuple[Invariant, ...] = (
     Invariant(
@@ -298,10 +231,7 @@ _TEMPLATES: tuple[Invariant, ...] = (
             "exactly that (init.md rule 17, #528)"
         ),
         violations=_SIGN_VIOLATIONS,
-        population=f"""
-            select count(*) from {SIGN_POLICY_TABLE}
-            where run_id = ({GOVERNED_HEAD})
-        """,
+        population=f"select count(*) from {SIGN_POLICY_TABLE} where run_id = ({GOVERNED_HEAD})",
         signals=_SIGN_SIGNALS,
     ),
     Invariant(
@@ -319,8 +249,7 @@ _TEMPLATES: tuple[Invariant, ...] = (
         """,
         population=f"""
             select count(*) from mart.topt_gppe_results
-            where run_id = ({GOVERNED_HEAD})
-              and availability = 'available'
+            where run_id = ({GOVERNED_HEAD}) and availability = 'available'
         """,
     ),
     Invariant(
@@ -329,15 +258,13 @@ _TEMPLATES: tuple[Invariant, ...] = (
         violations=f"""
             select strategy_run_id, round(sum(target_weight), 6)::text as total, count(*)::text as selected
             from mart.strategy_decisions
-            where strategy_run_id = ({LATEST_STRATEGY_RUN})
-              and outcome = 'selected'
+            where strategy_run_id = ({LATEST_STRATEGY_RUN}) and outcome = 'selected'
             group by strategy_run_id
             having abs(sum(target_weight) - 1) > 0.000001
         """,
         population=f"""
             select count(*) from mart.strategy_decisions
-            where strategy_run_id = ({LATEST_STRATEGY_RUN})
-              and outcome = 'selected'
+            where strategy_run_id = ({LATEST_STRATEGY_RUN}) and outcome = 'selected'
         """,
     ),
     Invariant(
@@ -348,29 +275,11 @@ _TEMPLATES: tuple[Invariant, ...] = (
             "written for NOBODY is a wiring gap, and it publishes as a missing factor rather "
             "than an error (#284)"
         ),
-        # The check that would have caught #284's real defect. `net_income` and
-        # `earnings_cagr_3y` were absent from BOTH environments for as long as they
-        # existed, because the only deployed caller never asked the parser for them.
-        # Every gate stayed green: the keys were declared, the CHECK allowed them, the
-        # payload carried them as nulls, `mart...peg` was simply NULL for all 20 issuers
-        # and the runs reported SUCCESS. Nothing anywhere asked "is this key populated".
-        #
-        # Deliberately not "populated for every issuer": correct refusals are normal and
-        # common (declining earnings, a loss year inside the window, a refused share
-        # count). Zero issuers across a whole cutoff is not a data gap, it is nobody
-        # calling the code.
-        #
-        # The expected list restates migration 0039's CHECK on purpose. A single source
-        # would only prove the list agrees with itself; the value here is a second,
-        # independent statement of what the deployed run is supposed to produce.
         violations="""
             with expected(input_key, issuer_class) as (values __EXPECTED_VALUES__
             ), latest as (
                 select max(cutoff_at) as cutoff_at from staging.strategy_backtest_inputs
             ), present as (
-                -- The classes of the issuers that the latest cutoff scored. A key is expected when one of them
-                -- needs it. No class found (no core row at that cutoff) expects every key: the check never goes
-                -- quiet because it could not tell which classes ran.
                 select distinct r.operating_branch as issuer_class from mart.topt_core_results r
                 where r.cutoff = (select cutoff_at from latest)
             )
@@ -396,51 +305,9 @@ _TEMPLATES: tuple[Invariant, ...] = (
             "where two sources assert the same obligation, the snapshot selected the "
             "highest-priority source -- never whichever published later (init.md rule 12)"
         ),
-        # Population is deliberately the CONTESTED groups only, so this reports EMPTY for
-        # as long as every obligation resolves from a single source. That is the honest
-        # state of fusion today -- unexercised, not proven -- and `--require-coverage`
-        # turns the same query into a failure the moment real data is expected to contest.
-        # An invariant that examined every group would pass forever while proving nothing.
-        # Contested = one obligation carrying observations from more than one parser
-        # family, i.e. two sources asserting the same cell. EVERY contested group is a
-        # violation today, because the selection window ranks by recency alone and has no
-        # source-priority term to break the tie with (deferred on #530). Population is the
-        # contested groups themselves, so this reports EMPTY -- "examined 0 rows, so it
-        # proved nothing" -- for as long as fusion stays unexercised. That is the honest
-        # state; an invariant over ALL groups would pass forever while proving nothing.
-        # What the snapshot SELECTED, not merely what was contested: before 2026-09-07 this
-        # query listed every obligation with two parsers as a violation, which is every
-        # market-price cell once the second origin landed (3,102 on production) — while the
-        # snapshots had selected the primary parser for all of them. The population is the
-        # selected observations on contested obligations; a violation is one whose parser is
-        # not the declared primary for its semantic (the registration's first origin) —
-        # unless the primary could not serve the cell (#862): then the next origin in the
-        # fusion policy's order serves it, and that selection holds only when the payload
-        # declares it (`served_by_failover`), the origin is one the policy ranks, and no
-        # higher-ranked origin asserted the same session on the same obligation.
-        violations="""
-            with ranks(family, rank) as (
-                values __MARKET_PRICE_PARSER_RANKS__
-            ), selected as (
-                -- what consumers see today: the snapshots of the governed heads only, not
-                -- every snapshot ever frozen (review on #750)
-                select s.run_id, sel.observation_id
-                from mart.current_pointer_head head
-                -- the head is keyed by universe (check_factor_contract); the snapshot must be
-                -- the one frozen for THAT universe, not merely the run the pointer names
-                join staging.topt_core_snapshots s
-                  on s.run_id = head.target_run_id
-                 and s.universe_id = head.universe_id
-                 and s.universe_version = head.universe_version
-                cross join lateral jsonb_array_elements(s.payload->'members') member
-                cross join lateral jsonb_array_elements_text(member->'observation_ids') sel(observation_id)
-            ), contested as (
-                select uo.capture_obligation_id
-                from staging.capture_observation_obligations uo
-                join staging.capture_normalized_observations o on o.observation_id = uo.observation_id
-                group by uo.capture_obligation_id
-                having count(distinct split_part(o.parser_version, ':', 1)) > 1
-            )
+        violations=f"""
+            with ranks(family, rank) as (values __MARKET_PRICE_PARSER_RANKS__),
+            {_FUSION_CTES}
             select selected.run_id, o.semantic_type, split_part(o.parser_version, ':', 1) as selected_parser
             from selected
             join staging.capture_normalized_observations o on o.observation_id = selected.observation_id
@@ -449,13 +316,10 @@ _TEMPLATES: tuple[Invariant, ...] = (
             join contested on contested.capture_obligation_id = uo.capture_obligation_id
             left join ranks selected_rank on selected_rank.family = split_part(o.parser_version, ':', 1)
             where o.semantic_type = 'market-price'
-              and split_part(o.parser_version, ':', 1) <> '{PRIMARY_MARKET_PRICE_PARSER}'
+              and split_part(o.parser_version, ':', 1) <> '{{PRIMARY_MARKET_PRICE_PARSER}}'
               and (
-                  -- an origin the fusion policy does not rank reached the snapshot
                   selected_rank.rank is null
-                  -- a substitute the payload does not declare is a silent one (#862)
                   or p.normalized_payload ->> 'served_by_failover' is null
-                  -- a higher-ranked origin asserted the same session and was passed over
                   or exists (
                       select 1
                       from staging.capture_observation_obligations peer_link
@@ -468,25 +332,8 @@ _TEMPLATES: tuple[Invariant, ...] = (
                   )
               )
         """,
-        population="""
-            with selected as (
-                select sel.observation_id
-                from mart.current_pointer_head head
-                -- the head is keyed by universe (check_factor_contract); the snapshot must be
-                -- the one frozen for THAT universe, not merely the run the pointer names
-                join staging.topt_core_snapshots s
-                  on s.run_id = head.target_run_id
-                 and s.universe_id = head.universe_id
-                 and s.universe_version = head.universe_version
-                cross join lateral jsonb_array_elements(s.payload->'members') member
-                cross join lateral jsonb_array_elements_text(member->'observation_ids') sel(observation_id)
-            ), contested as (
-                select uo.capture_obligation_id
-                from staging.capture_observation_obligations uo
-                join staging.capture_normalized_observations o on o.observation_id = uo.observation_id
-                group by uo.capture_obligation_id
-                having count(distinct split_part(o.parser_version, ':', 1)) > 1
-            )
+        population=f"""
+            with {_FUSION_CTES}
             select count(*)
             from selected
             join staging.capture_observation_obligations uo on uo.observation_id = selected.observation_id
@@ -534,10 +381,7 @@ _TEMPLATES: tuple[Invariant, ...] = (
                     substring(f.evidence_ref from 'accession=([0-9]{18}|[0-9]{10}-[0-9]{2}-[0-9]{6}|[0-9]{4}-[0-9]{2}-[0-9]{6})'),
                     'missing-accession'
                 ) as cited_accession,
-                coalesce(
-                    substring(f.evidence_ref from 'raw=raw\\.fetches:([0-9]+)'),
-                    'none'
-                ) as cited_raw_id
+                coalesce(substring(f.evidence_ref from 'raw=raw\\.fetches:([0-9]+)'), 'none') as cited_raw_id
             from staging.issuer_headcount_facts f
             where (
                 f.source = 'curated-10k-2025'
@@ -572,9 +416,7 @@ _TEMPLATES: tuple[Invariant, ...] = (
                 and exists (select 1 from eligible e where e.cik = f.cik)
             )
         """,
-        population="""
-            select count(*) from staging.issuer_headcount_facts
-        """,
+        population="select count(*) from staging.issuer_headcount_facts",
     ),
     Invariant(
         id="revenue-period-is-recent",
@@ -584,26 +426,8 @@ _TEMPLATES: tuple[Invariant, ...] = (
             "period in at least one of its results — an older period is a stale figure that the head serves as "
             "a current one, and a head with no stated period has an unknown age (#1457, #1519)"
         ),
-        # `mart.topt_core_results.revenue_period_end` is the period of the revenue that the result
-        # divided by. Only an available result is served. A result with a named reason is
-        # unavailable (its `reason_codes` are not empty), so it needs no exemption here.
-        # Two findings, each one row:
-        #   <issuer>                             the period of an available result is older than the limit.
-        #   no-result-states-a-revenue-period    a scheduled head serves available results and no one
-        #                                        of them states a period. Its age is unknown for the
-        #                                        whole head. Another head with dated results cannot
-        #                                        hide it. A snapshot from before #534 stores no period.
-        # A result with no period inside a head that has other dated results is not judged alone.
-        # Production QQQ served CPRT at 2018-07-31 and XEL at 2018-12-31 for a cutoff of 2026-10-19.
-        # The plausibility gate judged the value only. CPRT had a ratio above its limit. XEL did not.
-        # `select distinct` counts a result one time, also when two invocations wrote results for a run.
         violations=f"""
-            with heads as (
-                select h.universe_id, coalesce(h.run_id, h.head_run_id) as run_id
-                from mart.served_head h
-                where h.factor_id = 'gross_profit_per_employee'
-                  and __HEAD_IS_SCHEDULED__
-            ),
+            {_SCHEDULED_HEADS_CTE},
             served as (
                 select distinct heads.universe_id, r.run_id, r.issuer_id, r.revenue_period_end,
                        (r.cutoff at time zone 'UTC')::date as cutoff
@@ -639,13 +463,8 @@ _TEMPLATES: tuple[Invariant, ...] = (
             "every issuer in an active governed head resolves to a human-readable company name in "
             "mart.entity_display_resolution, never NULL, its raw issuer_id, or its bare ticker (#1517)"
         ),
-        violations="""
-            with heads as (
-                select h.universe_id, coalesce(h.run_id, h.head_run_id) as run_id
-                from mart.served_head h
-                where h.factor_id = 'gross_profit_per_employee'
-                  and __HEAD_IS_SCHEDULED__
-            ),
+        violations=f"""
+            {_SCHEDULED_HEADS_CTE},
             members as (
                 select distinct heads.universe_id, r.run_id, r.issuer_id
                 from heads
@@ -677,9 +496,7 @@ _TEMPLATES: tuple[Invariant, ...] = (
             having count(*) > 1
             order by 1
         """,
-        population="""
-            select count(*) from mart.entity_identity
-        """,
+        population="select count(*) from mart.entity_identity",
     ),
     Invariant(
         id="fund-virtual-company-weights-conserved",
@@ -695,27 +512,16 @@ _TEMPLATES: tuple[Invariant, ...] = (
                or valued_weight_pct > resolved_weight_pct
             order by 1, 2
         """,
-        population="""
-            select count(*) from mart.fund_virtual_company
-        """,
+        population="select count(*) from mart.fund_virtual_company",
     ),
 )
 
 
 def _rank_values(ranks: tuple[tuple[str, int], ...]) -> str:
-    """The rows of the `ranks` CTE. With no rank, one null row keeps the SQL valid and leaves
-    every parser family unranked."""
     return ", ".join(f"('{family}', {rank})" for family, rank in ranks) or "(null::text, null::integer)"
 
 
 def head_is_scheduled_sql(contract: EnvironmentContract) -> str:
-    """The SQL boolean over `h.universe_id` and `h.environment` that says whether a served head has a schedule (#1346).
-
-    Written from the contract: `contract.unscheduled_id_prefixes()` gives, for each environment, the id prefixes of the
-    universes that it does not tick. An environment that the contract does not name, and an id that starts with
-    no listed prefix, are scheduled. This predicate replaces the SQL function `mart.is_head_scheduled`, which the
-    old query called: that function was a copy of the schedule that a migration had to follow (#1522).
-    """
     unscheduled = []
     for environment, prefixes in contract.unscheduled_id_prefixes().items():
         if not prefixes:
@@ -730,7 +536,6 @@ def head_is_scheduled_sql(contract: EnvironmentContract) -> str:
 
 
 def _render(invariant: Invariant, scheduled: str) -> Invariant:
-    """The derived facts enter the SQL as literals, once, here — never at query time."""
     values = ", ".join(f"('{key}', '{issuer_class}')" for key, issuer_class in EXPECTED_INPUTS)
     ranks = _rank_values(MARKET_PRICE_PARSER_RANKS)
 
@@ -752,7 +557,6 @@ def _render(invariant: Invariant, scheduled: str) -> Invariant:
 
 
 def render_invariants(contract: EnvironmentContract) -> tuple[Invariant, ...]:
-    """The shipped invariants, with the schedule predicate written from ``contract``."""
     scheduled = head_is_scheduled_sql(contract)
     return tuple(_render(template, scheduled) for template in _TEMPLATES)
 
@@ -772,15 +576,15 @@ def load_exemptions(path: Path = EXEMPTIONS_PATH) -> dict[str, Exemption]:
     if not path.exists():
         return {}
     raw = json.loads(path.read_text(encoding="utf-8"))
-    out: dict[str, Exemption] = {}
-    for entry in raw["exemptions"]:
-        out[entry["invariant"]] = Exemption(
+    return {
+        entry["invariant"]: Exemption(
             invariant=entry["invariant"],
             issue=entry["issue"],
             expires=date.fromisoformat(entry["expires"]),
             reason=entry["reason"],
         )
-    return out
+        for entry in raw["exemptions"]
+    }
 
 
 def _rows(connection: Any, sql: str) -> list[tuple]:
@@ -808,7 +612,6 @@ def check(
             violations = _rows(connection, invariant.violations)
             exemption = exemptions.get(invariant.id)
             if invariant.signals is not None:
-                # Printed whatever the verdict: a declared low signal is accepted, never unseen.
                 for row in _rows(connection, invariant.signals):
                     print(f"  SIGNAL   {invariant.id}: " + " ".join(str(field) for field in row))
 
@@ -827,10 +630,6 @@ def check(
                 )
                 continue
             if population == 0:
-                # Nothing was examined, so nothing was proved — including about
-                # any exemption. Judging a waiver stale here would fail the CI
-                # fixture for not containing the production defect it exempts,
-                # which is the vacuity problem pointed the other way.
                 print(f"  EMPTY    {invariant.id}: examined 0 rows, so it proved nothing")
                 if require_coverage:
                     failures.append(f"{invariant.id}: examined 0 rows where real data was required")
@@ -849,15 +648,11 @@ def check(
     return 1 if failures else 0
 
 
-def _parser() -> argparse.ArgumentParser:
+def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--database-url", required=True)
     parser.add_argument("--require-coverage", action="store_true")
-    return parser
-
-
-def main(argv: Sequence[str] | None = None) -> int:
-    args = _parser().parse_args(argv)
+    args = parser.parse_args(argv)
     return check(args.database_url, require_coverage=args.require_coverage)
 
 

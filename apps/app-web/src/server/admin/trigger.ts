@@ -1,20 +1,4 @@
-/**
- * #495 (surface 2): administrator-only INSERT into
- * `staging.pipeline_trigger_requests` — the app half of the DB-mediated
- * manual trigger (init.md §2.2: services exchange data only through
- * Postgres; the data-engine sensor consumes and launches, migration 0034).
- *
- * Lives under `src/server/admin/` — the naming convention the #493 boundary
- * test enforces: research routes and shared layers cannot import this.
- * Assumes `app_runtime` for the write so the grant shape stays exactly the
- * roles.sql exception (insert/select on this one staging table).
- *
- * #874: `force_fetch` asks the tick to skip the #635 reuse window and fetch
- * every obligation again, under a capture identity of its own. It must be a
- * boolean. Only a forced request names the column. An ordinary request keeps
- * the pre-#874 statement and takes the column's `false` default, so it still
- * works while a deploy waits for the migration (applied when llm-service boots).
- */
+/** Administrator-only INSERT into `staging.pipeline_trigger_requests` (#495, #874). */
 
 import { randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
@@ -25,7 +9,6 @@ type TriggerRuntime = <T>(fn: (client: Pick<PoolClient, "query">) => Promise<T>)
 
 let runtimeOverride: TriggerRuntime | null = null;
 
-/** Test seam (same shape as `__setTestOpsClient`): replaces `withAppRuntime`. */
 export function __setTestTriggerRuntime(runtime: TriggerRuntime | null): void {
   runtimeOverride = runtime;
 }
@@ -63,16 +46,10 @@ export async function requestPipelineTrigger(
   forceFetchInput: unknown = undefined,
   jobNameInput: unknown = undefined,
 ): Promise<TriggerRequestOutcome> {
-  if (principal === null || principal.principalKind !== "administrator") {
-    return { kind: "denied" };
-  }
+  if (principal === null || principal.principalKind !== "administrator") return { kind: "denied" };
 
   const executedAt = executedAtInput === undefined ? new Date() : new Date(executedAtInput);
-  if (Number.isNaN(executedAt.getTime())) {
-    return { kind: "invalid", message: "executed_at must be an ISO 8601 timestamp" };
-  }
-  // Absent means an ordinary tick; anything but a real boolean is refused, so a
-  // stray "false" string can never launch a forced run (or the reverse).
+  if (Number.isNaN(executedAt.getTime())) return { kind: "invalid", message: "executed_at must be an ISO 8601 timestamp" };
   if (forceFetchInput !== undefined && typeof forceFetchInput !== "boolean") {
     return { kind: "invalid", message: "force_fetch must be a boolean" };
   }
@@ -80,45 +57,37 @@ export async function requestPipelineTrigger(
 
   let jobName: TriggerJobName = "topt_live_pipeline";
   if (jobNameInput !== undefined) {
-    if (typeof jobNameInput !== "string" || !ALLOWED_JOBS.has(jobNameInput.trim().toLowerCase())) {
-      const validNames = UNIVERSES.map((u) => `${u.key}_live_pipeline`).join(", ");
-      return { kind: "invalid", message: `job_name must be one of: ${validNames}` };
+    const key = typeof jobNameInput === "string" ? ALLOWED_JOBS.get(jobNameInput.trim().toLowerCase()) : undefined;
+    if (!key) {
+      return { kind: "invalid", message: `job_name must be one of: ${UNIVERSES.map((u) => `${u.key}_live_pipeline`).join(", ")}` };
     }
-    jobName = ALLOWED_JOBS.get(jobNameInput.trim().toLowerCase())!;
+    jobName = key;
   }
 
   const dedupeKey = `admin:${randomUUID()}`;
+  const iso = executedAt.toISOString();
   const runtime: TriggerRuntime = runtimeOverride ?? withAppRuntime;
   try {
     const requestId = await runtime(async (client) => {
-      if (jobName === "topt_live_pipeline") {
-        const inserted = forceFetch
-          ? await client.query(
-              "insert into staging.pipeline_trigger_requests (job_name, executed_at, requested_by, dedupe_key, force_fetch) " +
-                "values ('topt_live_pipeline', $1, $2, $3, $4) returning request_id",
-              [executedAt.toISOString(), principal.principalId, dedupeKey, true],
-            )
-          : await client.query(
-              "insert into staging.pipeline_trigger_requests (job_name, executed_at, requested_by, dedupe_key) " +
-                "values ('topt_live_pipeline', $1, $2, $3) returning request_id",
-              [executedAt.toISOString(), principal.principalId, dedupeKey],
-            );
-        return Number(inserted.rows[0].request_id);
-      }
-      const inserted = forceFetch
-        ? await client.query(
-            "insert into staging.pipeline_trigger_requests (job_name, executed_at, requested_by, dedupe_key, force_fetch) " +
-              "values ($1, $2, $3, $4, $5) returning request_id",
-            [jobName, executedAt.toISOString(), principal.principalId, dedupeKey, true],
-          )
-        : await client.query(
-            "insert into staging.pipeline_trigger_requests (job_name, executed_at, requested_by, dedupe_key) " +
-              "values ($1, $2, $3, $4) returning request_id",
-            [jobName, executedAt.toISOString(), principal.principalId, dedupeKey],
-          );
+      const isTopt = jobName === "topt_live_pipeline";
+      const cols = forceFetch
+        ? "(job_name, executed_at, requested_by, dedupe_key, force_fetch)"
+        : "(job_name, executed_at, requested_by, dedupe_key)";
+      const vals = isTopt
+        ? forceFetch
+          ? "('topt_live_pipeline', $1, $2, $3, $4)"
+          : "('topt_live_pipeline', $1, $2, $3)"
+        : forceFetch
+          ? "($1, $2, $3, $4, $5)"
+          : "($1, $2, $3, $4)";
+      const baseArgs = isTopt ? [iso, principal.principalId, dedupeKey] : [jobName, iso, principal.principalId, dedupeKey];
+      const inserted = await client.query(
+        `insert into staging.pipeline_trigger_requests ${cols} values ${vals} returning request_id`,
+        forceFetch ? [...baseArgs, true] : baseArgs,
+      );
       return Number(inserted.rows[0].request_id);
     });
-    return { kind: "accepted", requestId, dedupeKey, executedAt: executedAt.toISOString(), forceFetch, jobName };
+    return { kind: "accepted", requestId, dedupeKey, executedAt: iso, forceFetch, jobName };
   } catch (error) {
     return { kind: "error", message: error instanceof Error ? error.message : String(error) };
   }

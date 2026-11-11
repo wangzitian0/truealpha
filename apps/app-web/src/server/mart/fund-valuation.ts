@@ -1,22 +1,5 @@
 /**
- * The valuation face of the holdings reader (#63, B-phase step 2): each fund's
- * newest filed weights joined to the governed TOPT valuation run — a join over
- * two materialized planes, never a computation.
- *
- * Fund-level aggregates are NOT computed here, and since #727 that is true of the
- * code and not only of this comment. The weighted valuation gap and the three
- * coverage masses are module-5 factor outputs (`factors.base.etf_virtual_company`)
- * materialized into `mart.fund_virtual_company` by the tick that produced the core
- * rows they weight; this file reads those columns. init.md §1 rule 2: a weight-weighted
- * mean across a fund's holdings spans two tables and aggregates across rows, so it is a
- * metric and metrics live in common/factors. The previous version computed it in a window
- * function here, against this header — the drift #727 recorded.
- *
- * Head resolution mirrors topt-gppe-repository.ts / truealpha_contracts.topt_read
- * (pointer first, acceptance fallback), additionally scoped to the universe with role
- * `fund_consolidation` (QQQ today): this surface prices that fund's holdings, and the newest pointer across ALL
- * universes can belong to the canary. A fund->universe registry is the
- * multi-fund tranche's problem.
+ * Fund holdings valuation reader over `mart.fund_holdings_valuation` and `mart.fund_virtual_company`.
  */
 
 import { formatRatio } from "@/client/format";
@@ -30,12 +13,7 @@ export type ValuedHoldingRow = {
   ticker: string | null;
   weightPct: string | null;
   currentPs: string | null;
-  /** The band midpoint on a row of the former P/S bands. On a P/GP row (currentPgp set) it is
-   * IMPLIED: the P/S that the P/GP band gives at the issuer's own gross margin. Render the
-   * P/GP target for such a row, or label this one implied. */
   targetPsMidpoint: string | null;
-  /** #1235: the P/GP valuation of a core row tiered by strategy definition 1.0.0. Null on a
-   * row of the former P/S bands; then the gap divides P/S and targetPsMidpoint is its band. */
   currentPgp: string | null;
   targetPgpMidpoint: string | null;
   valuationGap: string | null;
@@ -48,20 +26,11 @@ export type FundValuation = {
   fundName: string;
   reportPeriod: string;
   runId: string | null;
-  /** Coverage masses as the module-5 factor measured them; "0.00" when the tick
-   * materialized no consolidation row for this fund and run. */
   valuedWeightPct: string;
   resolvedWeightPct: string;
   totalWeightPct: string;
-  /** Weighted mean valuation gap over the valued mass, read from
-   * mart.fund_virtual_company. Null when the factor REFUSED the aggregate on coverage
-   * (see availabilityStatus/reasonCodes) or when no consolidation row exists. */
   weightedGap: string | null;
-  /** #1235: the multiple the weighted gap divides, as the producer recorded it from the run's
-   * core rows. Null on a row written before #1235 and on a refused aggregate. */
   weightedGapBasis: ValuationBasis | null;
-  /** The three §8 status dimensions of the consolidation row (#747); null when the
-   * tick wrote no row for this fund — an absent aggregate, not a failed one. */
   availabilityStatus: string | null;
   sourceEvidenceStatus: string | null;
   factorValidationStatus: string | null;
@@ -117,12 +86,9 @@ const VALUED_LINES_SQL = `
            c.tier,
            c.availability
     from mart.topt_core_result_read c
-    -- #1235: the P/GP columns live on the table; the read view predates them.
     join mart.topt_core_results t on t.result_id = c.result_id
-    left join mart.entity_identity ei
-      on ei.entity_id::text = c.listing_id
-    left join mart.entity_identity ei_issuer
-      on ei_issuer.entity_id::text = c.issuer_id
+    left join mart.entity_identity ei on ei.entity_id::text = c.listing_id
+    left join mart.entity_identity ei_issuer on ei_issuer.entity_id::text = c.issuer_id
   ) r
     on r.run_id = $1
    and (
@@ -135,10 +101,6 @@ const VALUED_LINES_SQL = `
   order by v.fund_id, v.percent_of_net_assets desc nulls last, v.holding_name
 `;
 
-/** The fund-level row the tick materialized for this run (#727): the aggregate and
- * its coverage masses are read, never recomputed here. `availability_status` says
- * whether the consolidation was published or refused on coverage, and `reason_codes`
- * says which floor refused it — the same §8 dimensions every other factor row carries. */
 const FUND_CONSOLIDATION_SQL = `
   select fund_id,
          weighted_valuation_gap::text as weighted_gap,
@@ -152,10 +114,6 @@ const FUND_CONSOLIDATION_SQL = `
   where run_id = $1
 `;
 
-/** The filed and listing-resolved mass of each fund's newest vintage. Run-independent:
- * a fund filed its weights whether or not a governed run has valued it, so these render
- * even with no head. The aggregation lives in the view, not in this layer (init.md §1
- * rule 2 governs the App layer; a mart view is the database's own read model). */
 const FUND_COVERAGE_SQL = `
   select distinct on (fund_id)
          fund_id,
@@ -175,6 +133,9 @@ type ConsolidationRow = {
   reasonCodes: string[];
 };
 
+const optStr = (v: unknown): string | null => (v === null || v === undefined ? null : String(v));
+const fmtOrZero = (v: unknown): string => (typeof v === "string" ? formatRatio(v) : null) ?? "0.00";
+
 export async function loadFundValuation(
   runWithClient: <T>(fn: (client: MartClientLike) => Promise<T>) => Promise<T> = withMartReadonly,
 ): Promise<FundValuation[]> {
@@ -184,25 +145,15 @@ export async function loadFundValuation(
     let rawRunId: unknown = null;
     if (head.rows.length > 0) {
       const row = head.rows[0];
-      if (row.availability === "unavailable" || row.run_id === null) {
-        rawRunId = null;
-      } else {
-        rawRunId = row.run_id;
-      }
+      rawRunId = row.availability === "unavailable" || row.run_id === null ? null : row.run_id;
     } else {
       head = await client.query(QQQ_ACCEPTANCE_FALLBACK_HEAD_SQL, [fundUniverseLike]);
       rawRunId = head.rows.length > 0 ? head.rows[0].run_id : null;
     }
-    // Fail toward "no run" on a malformed head row: String(null) would forge
-    // the literal "null" into the join parameter (review on #699).
     const runId = typeof rawRunId === "string" && rawRunId.length > 0 ? rawRunId : null;
-    // No governed run yet: the join matches nothing and every valuation column
-    // renders as absent — the filed weights still show, honestly unvalued.
     const joinRunId = runId ?? "capture-run:none";
     const result = await client.query(VALUED_LINES_SQL, [joinRunId]);
-    // The fund-level aggregate the tick materialized for this run. A fund with no row
-    // (the tick predates #727, or it refused before writing) renders as an absent
-    // aggregate with zero masses, never as a zero-valued one.
+
     const consolidations = new Map<string, ConsolidationRow>();
     const consolidated = await client.query(FUND_CONSOLIDATION_SQL, [joinRunId]);
     for (const row of consolidated.rows) {
@@ -212,26 +163,23 @@ export async function loadFundValuation(
           row.valuation_basis === "price_to_gross_profit" || row.valuation_basis === "price_to_sales"
             ? row.valuation_basis
             : null,
-        valuedWeightPct:
-          (typeof row.valued_weight_pct === "string" ? formatRatio(row.valued_weight_pct) : null) ?? "0.00",
-        availabilityStatus: row.availability_status === null ? null : String(row.availability_status),
-        sourceEvidenceStatus: row.source_evidence_status === null ? null : String(row.source_evidence_status),
-        factorValidationStatus:
-          row.factor_validation_status === null ? null : String(row.factor_validation_status),
+        valuedWeightPct: fmtOrZero(row.valued_weight_pct),
+        availabilityStatus: optStr(row.availability_status),
+        sourceEvidenceStatus: optStr(row.source_evidence_status),
+        factorValidationStatus: optStr(row.factor_validation_status),
         reasonCodes: Array.isArray(row.reason_codes) ? row.reason_codes.map(String) : [],
       });
     }
-    // Filed/resolved mass: the filing's and the KG's, not the run's.
+
     const coverage = new Map<string, { totalWeightPct: string; resolvedWeightPct: string }>();
     const coverageRows = await client.query(FUND_COVERAGE_SQL);
     for (const row of coverageRows.rows) {
       coverage.set(String(row.fund_id), {
-        totalWeightPct:
-          (typeof row.total_weight_pct === "string" ? formatRatio(row.total_weight_pct) : null) ?? "0.00",
-        resolvedWeightPct:
-          (typeof row.resolved_weight_pct === "string" ? formatRatio(row.resolved_weight_pct) : null) ?? "0.00",
+        totalWeightPct: fmtOrZero(row.total_weight_pct),
+        resolvedWeightPct: fmtOrZero(row.resolved_weight_pct),
       });
     }
+
     const byFund = new Map<string, FundValuation>();
     for (const row of result.rows) {
       const fundId = String(row.fund_id);
@@ -258,15 +206,15 @@ export async function loadFundValuation(
       }
       fund.lines.push({
         holdingName: String(row.holding_name),
-        ticker: row.ticker === null ? null : String(row.ticker),
-        weightPct: row.weight_pct === null ? null : String(row.weight_pct),
-        currentPs: row.current_ps === null ? null : String(row.current_ps),
-        targetPsMidpoint: row.target_ps_midpoint === null ? null : String(row.target_ps_midpoint),
-        currentPgp: row.current_pgp === null ? null : String(row.current_pgp),
-        targetPgpMidpoint: row.target_pgp_midpoint === null ? null : String(row.target_pgp_midpoint),
-        valuationGap: row.valuation_gap === null ? null : String(row.valuation_gap),
-        tier: row.tier === null ? null : String(row.tier),
-        availability: row.availability === null ? null : String(row.availability),
+        ticker: optStr(row.ticker),
+        weightPct: optStr(row.weight_pct),
+        currentPs: optStr(row.current_ps),
+        targetPsMidpoint: optStr(row.target_ps_midpoint),
+        currentPgp: optStr(row.current_pgp),
+        targetPgpMidpoint: optStr(row.target_pgp_midpoint),
+        valuationGap: optStr(row.valuation_gap),
+        tier: optStr(row.tier),
+        availability: optStr(row.availability),
       });
     }
     return [...byFund.values()].sort((a, b) => a.fundName.localeCompare(b.fundName));

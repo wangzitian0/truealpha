@@ -1,29 +1,4 @@
-"""Mart-backed `ResearchReadPort`, the one research-report reader — see #369, #42.
-
-The reader selects already-materialized values and computes nothing. A company subject has
-seven sections, each from its own mart output:
-
-- operating efficiency, valuation, PEG and the strategy summary: the strategy decision of
-  the requested cutoff (`PostgresStrategyRunRepository`, the governed run first, #575);
-- supply chain (module 3) and analyst history (module 4): the served-head row of
-  `mart.issuer_supply_chain_exposure` and `mart.issuer_analyst_ratings`
-  (`issuer_modules_mart`), the rows the App shows on `/research/entities/<id>`.
-
-Until #42 this class subclassed `FixtureResearchReadRepository` and inherited its constant
-"not materialized" sections for PEG, supply chain and analyst history, although the App
-read all three from mart. AGENTS.md rule 6 keeps fixture code out of deployed paths;
-`common/runtime/tests/test_no_fixture_in_deployed_code.py` now fails when a module that a
-deployed entry point imports takes a name from a `*_fixture` module or subclasses a
-`Fixture*` class.
-
-Mapping a materialized outcome to a display availability status is a lookup over an
-already-computed result, not a new metric, and it lives here on the read side, never in
-the builder.
-
-`common/contracts` classes take their database URL as an explicit argument; resolving which
-`DATABASE_URL` applies is the caller's job (an MCP tool's `settings.database_url`, or a
-test's own database).
-"""
+"""Mart-backed `ResearchReadPort` implementation (#369, #42)."""
 
 from __future__ import annotations
 
@@ -63,14 +38,10 @@ from truealpha_contracts.strategy_run_postgres import PostgresStrategyRunReposit
 
 _DEFAULT_STRATEGY_ID = "large_model_value_v0"
 _STRATEGY_FACTOR_VERSION = "large_model_value_v0"
-
 _SUPPLY_CHAIN_TITLE = "Supply-chain exposure"
 _ANALYST_TITLE = "Analyst consensus"
-#: The module read failed; the section says so instead of reading as "no row".
 MART_READ_FAILED = "mart_read_failed"
-#: The served row is later than the report's cutoff: it was not knowable at the cutoff.
 ROW_AFTER_REPORT_CUTOFF = "served_row_after_report_cutoff"
-#: The strategy decision of the cutoff records no PEG value.
 PEG_NOT_RECORDED = "peg_not_recorded"
 
 _ETF_DISPLAY_NAMES: dict[str, str] = {
@@ -84,11 +55,12 @@ def _decimal_str(value: Decimal | None) -> str | None:
 
 
 def _decision_availability(decision: StrategyRunDecision) -> AvailabilityStatus:
-    """Maps an already-materialized decision to a display availability status."""
     if decision.outcome is StrategyRunOutcome.EXCLUDED:
-        if decision.exclusion_reason == "below_confidence_floor":
-            return AvailabilityStatus.LOW_CONFIDENCE
-        return AvailabilityStatus.EXCLUDED
+        return (
+            AvailabilityStatus.LOW_CONFIDENCE
+            if decision.exclusion_reason == "below_confidence_floor"
+            else AvailabilityStatus.EXCLUDED
+        )
     return AvailabilityStatus.AVAILABLE
 
 
@@ -97,192 +69,135 @@ def _value_availability(value: str | None, section_status: AvailabilityStatus) -
 
 
 def _trace(decision: StrategyRunDecision, source: str, corpus_sha256: str) -> EvidenceTrace:
-    # Full cutoff_at, not just its date: truncating to a bare date would collide across
-    # multiple same-day cutoffs (Copilot review on #387; mirrored here to keep this and
-    # research-read.ts's traceId() byte-identical, per #347's parity contract). `source`
-    # (the strategy report's own StrategyRunReport.source, not a hardcoded literal — #369)
-    # so a mart-backed report's trace does not misrepresent itself as fixture-derived.
     cutoff = decision.cutoff_at.isoformat().replace("+00:00", "Z")
-    return EvidenceTrace(
-        reference_id=f"{source}:{corpus_sha256[:12]}:{decision.issuer_id}:{cutoff}",
-    )
+    return EvidenceTrace(reference_id=f"{source}:{corpus_sha256[:12]}:{decision.issuer_id}:{cutoff}")
 
 
-def _result(
-    *,
-    label: str,
-    value: str | None,
+def _decision_section(
     decision: StrategyRunDecision,
-    section_status: AvailabilityStatus,
     source: str,
     corpus_sha256: str,
-    unit: str | None = None,
-) -> ResultValue:
-    return ResultValue(
-        label=label,
-        value=value,
-        unit=unit,
-        period=decision.cutoff_at.date().isoformat(),
-        cutoff_at=decision.cutoff_at,
-        availability=_value_availability(value, section_status),
-        confidence=decision.confidence,
-        factor_version=_STRATEGY_FACTOR_VERSION,
-        trace=_trace(decision, source, corpus_sha256),
+    section_kind: ReportSectionKind,
+    title: str,
+    labeled: tuple[tuple[str, str | None, str | None], ...],
+    *,
+    status_override: AvailabilityStatus | None = None,
+    reason_codes: tuple[str, ...] = (),
+) -> ReportSection:
+    status = status_override or _decision_availability(decision)
+    period = decision.cutoff_at.date().isoformat()
+    trace = _trace(decision, source, corpus_sha256)
+    results = tuple(
+        ResultValue(
+            label=label,
+            value=value,
+            unit=unit,
+            period=period,
+            cutoff_at=decision.cutoff_at,
+            availability=_value_availability(value, status),
+            confidence=decision.confidence,
+            factor_version=_STRATEGY_FACTOR_VERSION,
+            trace=trace,
+        )
+        for label, value, unit in labeled
+    )
+    return ReportSection(
+        section_kind=section_kind,
+        title=title,
+        availability=status,
+        validation_status=FactorValidationStatus.NOT_EVALUATED,
+        results=results,
+        reason_codes=reason_codes,
     )
 
 
 def _operating_efficiency_section(decision: StrategyRunDecision, source: str, corpus_sha256: str) -> ReportSection:
-    value = _decimal_str(decision.capital_adjusted_labor_efficiency)
-    status = _decision_availability(decision)
-    # The section's own availability mirrors the decision (LOW_CONFIDENCE/EXCLUDED must
-    # stay visible even when this one field is null) — matching every other section
-    # builder here. A null value's own downgrade to UNAVAILABLE happens per-result inside
-    # _result()/_value_availability, not at the section level (Copilot review on #383).
-    return ReportSection(
-        section_kind=ReportSectionKind.OPERATING_EFFICIENCY,
-        title="Operating efficiency (capital-adjusted labor efficiency)",
-        availability=status,
-        validation_status=FactorValidationStatus.NOT_EVALUATED,
-        results=(
-            _result(
-                label="capital_adjusted_labor_efficiency",
-                value=value,
-                decision=decision,
-                section_status=status,
-                source=source,
-                corpus_sha256=corpus_sha256,
-                unit="USD",
-            ),
-        ),
+    return _decision_section(
+        decision,
+        source,
+        corpus_sha256,
+        ReportSectionKind.OPERATING_EFFICIENCY,
+        "Operating efficiency (capital-adjusted labor efficiency)",
+        (("capital_adjusted_labor_efficiency", _decimal_str(decision.capital_adjusted_labor_efficiency), "USD"),),
     )
 
 
 def _valuation_section(decision: StrategyRunDecision, source: str, corpus_sha256: str) -> ReportSection:
-    status = _decision_availability(decision)
-    tier_value = decision.tier.value if decision.tier is not None else None
-    # #1235: the gap divides the multiple of the decision's definition. A 1.0.0 decision
-    # reports its P/GP pair and still records P/S; a 0.1.0 decision reports its P/S pair.
-    by_gross_profit = decision.valuation_basis == "price_to_gross_profit"
-    labeled: tuple[tuple[str, str | None], ...] = (("tier", tier_value),)
-    if by_gross_profit:
-        labeled += (
-            ("current_price_to_gross_profit", _decimal_str(decision.current_price_to_gross_profit)),
-            ("target_price_to_gross_profit", _decimal_str(decision.target_price_to_gross_profit)),
-            ("current_price_to_sales", _decimal_str(decision.current_price_to_sales)),
+    by_gp = decision.valuation_basis == "price_to_gross_profit"
+    middle: tuple[tuple[str, str | None, str | None], ...] = (
+        (
+            ("current_price_to_gross_profit", _decimal_str(decision.current_price_to_gross_profit), None),
+            ("target_price_to_gross_profit", _decimal_str(decision.target_price_to_gross_profit), None),
+            ("current_price_to_sales", _decimal_str(decision.current_price_to_sales), None),
         )
-    else:
-        labeled += (
-            ("current_price_to_sales", _decimal_str(decision.current_price_to_sales)),
-            ("target_price_to_sales", _decimal_str(decision.target_price_to_sales)),
+        if by_gp
+        else (
+            ("current_price_to_sales", _decimal_str(decision.current_price_to_sales), None),
+            ("target_price_to_sales", _decimal_str(decision.target_price_to_sales), None),
         )
-    labeled += (("valuation_gap", _decimal_str(decision.valuation_gap)),)
-    results = tuple(
-        _result(
-            label=label,
-            value=value,
-            decision=decision,
-            section_status=status,
-            source=source,
-            corpus_sha256=corpus_sha256,
-        )
-        for label, value in labeled
     )
-    return ReportSection(
-        section_kind=ReportSectionKind.VALUATION,
-        title="Valuation (three-tier P/GP)" if by_gross_profit else "Valuation (three-tier P/S)",
-        availability=status,
-        validation_status=FactorValidationStatus.NOT_EVALUATED,
-        results=results,
+    return _decision_section(
+        decision,
+        source,
+        corpus_sha256,
+        ReportSectionKind.VALUATION,
+        "Valuation (three-tier P/GP)" if by_gp else "Valuation (three-tier P/S)",
+        (
+            ("tier", decision.tier.value if decision.tier is not None else None, None),
+            *middle,
+            ("valuation_gap", _decimal_str(decision.valuation_gap), None),
+        ),
     )
 
 
 def _peg_section(decision: StrategyRunDecision, source: str, corpus_sha256: str) -> ReportSection:
-    """Module 1: the PEG and its own rank, as the strategy run recorded them (#284).
-
-    The PEG rank is separate from the strategy rank: PEG does not take part in selection.
-    A decision without a PEG makes the section unavailable, unless the decision itself is
-    excluded or low-confidence, which stays visible.
-    """
     status = _decision_availability(decision)
     reasons: tuple[str, ...] = ()
     if decision.peg is None:
         reasons = (PEG_NOT_RECORDED,)
         if status is AvailabilityStatus.AVAILABLE:
             status = AvailabilityStatus.UNAVAILABLE
-    results = tuple(
-        _result(
-            label=label,
-            value=value,
-            decision=decision,
-            section_status=status,
-            source=source,
-            corpus_sha256=corpus_sha256,
-        )
-        for label, value in (
-            ("peg", _decimal_str(decision.peg)),
-            ("peg_rank", None if decision.peg_rank is None else str(decision.peg_rank)),
-        )
-    )
-    return ReportSection(
-        section_kind=ReportSectionKind.PEG_CONVENTIONS,
-        title="PEG",
-        availability=status,
-        validation_status=FactorValidationStatus.NOT_EVALUATED,
-        results=results,
+    return _decision_section(
+        decision,
+        source,
+        corpus_sha256,
+        ReportSectionKind.PEG_CONVENTIONS,
+        "PEG",
+        (
+            ("peg", _decimal_str(decision.peg), None),
+            ("peg_rank", None if decision.peg_rank is None else str(decision.peg_rank), None),
+        ),
+        status_override=status,
         reason_codes=reasons,
     )
 
 
 def _strategy_summary_section(decision: StrategyRunDecision, source: str, corpus_sha256: str) -> ReportSection:
-    status = _decision_availability(decision)
     if decision.exclusion_reason is not None:
-        reason_codes: tuple[str, ...] = (decision.exclusion_reason,)
+        reasons: tuple[str, ...] = (decision.exclusion_reason,)
     elif decision.outcome is StrategyRunOutcome.EXCLUDED and source != "strategy_smoke_fixture":
-        reason_codes = ("missing_audited_gross_profit_or_coordinate_join",)
+        reasons = ("missing_audited_gross_profit_or_coordinate_join",)
     else:
-        reason_codes = ()
-    results = (
-        _result(
-            label="outcome",
-            value=decision.outcome.value,
-            decision=decision,
-            section_status=status,
-            source=source,
-            corpus_sha256=corpus_sha256,
+        reasons = ()
+    return _decision_section(
+        decision,
+        source,
+        corpus_sha256,
+        ReportSectionKind.STRATEGY_SUMMARY,
+        "Large-model-value strategy decision",
+        (
+            ("outcome", decision.outcome.value, None),
+            ("eligible", str(decision.eligible).lower(), None),
+            ("rank", None if decision.rank is None else str(decision.rank), None),
+            ("target_weight", _decimal_str(decision.target_weight), None),
         ),
-        _result(
-            label="eligible",
-            value=str(decision.eligible).lower(),
-            decision=decision,
-            section_status=status,
-            source=source,
-            corpus_sha256=corpus_sha256,
-        ),
-        _result(
-            label="rank",
-            value=None if decision.rank is None else str(decision.rank),
-            decision=decision,
-            section_status=status,
-            source=source,
-            corpus_sha256=corpus_sha256,
-        ),
-        _result(
-            label="target_weight",
-            value=_decimal_str(decision.target_weight),
-            decision=decision,
-            section_status=status,
-            source=source,
-            corpus_sha256=corpus_sha256,
-        ),
+        reason_codes=reasons,
     )
-    return ReportSection(
-        section_kind=ReportSectionKind.STRATEGY_SUMMARY,
-        title="Large-model-value strategy decision",
-        availability=status,
-        validation_status=FactorValidationStatus.NOT_EVALUATED,
-        results=results,
-        reason_codes=reason_codes,
-    )
+
+
+def _module_absent(section_kind: ReportSectionKind, title: str, reason: str) -> ReportSection:
+    status = AvailabilityStatus.ERROR if reason == MART_READ_FAILED else AvailabilityStatus.UNAVAILABLE
+    return ReportSection(section_kind=section_kind, title=title, availability=status, reason_codes=(reason,))
 
 
 def _module_section(
@@ -294,25 +209,21 @@ def _module_section(
     labeled: tuple[tuple[str, str | None], ...],
     report_cutoff: datetime,
 ) -> ReportSection:
-    """One served module row as a section. Every value keeps the row's own cutoff,
-    confidence, extractor and run, so a reader sees where it came from. A row later than
-    the report's cutoff is not shown: the report is anchored to what was knowable then."""
     cutoff_at = datetime.fromisoformat(row.cutoff.replace("Z", "+00:00"))
     if cutoff_at > report_cutoff:
         return _module_absent(section_kind, title, ROW_AFTER_REPORT_CUTOFF)
     status = row.availability_status
-    trace = EvidenceTrace(
-        reference_id=f"{table}:{row.run_id}:{issuer_id}",
-        materialized_output_id=row.run_id,
-    )
+    trace = EvidenceTrace(reference_id=f"{table}:{row.run_id}:{issuer_id}", materialized_output_id=row.run_id)
+    period = cutoff_at.date().isoformat()
+    conf = Decimal(row.confidence)
     results = tuple(
         ResultValue(
             label=label,
             value=value,
-            period=cutoff_at.date().isoformat(),
+            period=period,
             cutoff_at=cutoff_at,
             availability=_value_availability(value, status),
-            confidence=Decimal(row.confidence),
+            confidence=conf,
             factor_version=row.extractor,
             trace=trace,
         )
@@ -326,11 +237,6 @@ def _module_section(
         results=results,
         reason_codes=row.reason_codes,
     )
-
-
-def _module_absent(section_kind: ReportSectionKind, title: str, reason: str) -> ReportSection:
-    status = AvailabilityStatus.ERROR if reason == MART_READ_FAILED else AvailabilityStatus.UNAVAILABLE
-    return ReportSection(section_kind=section_kind, title=title, availability=status, reason_codes=(reason,))
 
 
 def _supply_chain_section(issuer_id: str, report_cutoff: datetime, modules: IssuerModuleReader) -> ReportSection:
@@ -382,28 +288,14 @@ def _analyst_section(issuer_id: str, report_cutoff: datetime, modules: IssuerMod
     )
 
 
-def _unavailable_section(section_kind: ReportSectionKind, title: str, reason: str) -> ReportSection:
-    return ReportSection(
-        section_kind=section_kind,
-        title=title,
-        availability=AvailabilityStatus.UNAVAILABLE,
-        reason_codes=(reason,),
-    )
-
-
-def _subject_display_name(
-    issuer_id: str,
-    source: str,
-    display_map: dict[str, tuple[str, str]] | None = None,
-) -> str:
+def _subject_display_name(issuer_id: str, source: str, display_map: dict[str, tuple[str, str]] | None = None) -> str:
     if source == "strategy_smoke_fixture" and not display_map:
         return issuer_id
     if display_map:
         entry = display_map.get(issuer_id) or display_map.get(issuer_id.upper())
         if entry is not None:
             return entry[1]
-    _, _, resolved_name = resolve_static_entity_display(issuer_id)
-    return resolved_name
+    return resolve_static_entity_display(issuer_id)[2]
 
 
 def _company_subject(
@@ -413,18 +305,17 @@ def _company_subject(
     modules: IssuerModuleReader,
     display_map: dict[str, tuple[str, str]] | None = None,
 ) -> ReportSubject:
-    sections = (
-        _operating_efficiency_section(decision, source, corpus_sha256),
-        _valuation_section(decision, source, corpus_sha256),
-        _peg_section(decision, source, corpus_sha256),
-        _supply_chain_section(decision.issuer_id, decision.cutoff_at, modules),
-        _analyst_section(decision.issuer_id, decision.cutoff_at, modules),
-        _strategy_summary_section(decision, source, corpus_sha256),
-    )
     return ReportSubject(
         subject_id=decision.issuer_id,
         display_name=_subject_display_name(decision.issuer_id, source, display_map),
-        sections=sections,
+        sections=(
+            _operating_efficiency_section(decision, source, corpus_sha256),
+            _valuation_section(decision, source, corpus_sha256),
+            _peg_section(decision, source, corpus_sha256),
+            _supply_chain_section(decision.issuer_id, decision.cutoff_at, modules),
+            _analyst_section(decision.issuer_id, decision.cutoff_at, modules),
+            _strategy_summary_section(decision, source, corpus_sha256),
+        ),
     )
 
 
@@ -449,9 +340,7 @@ def _missing_subject(entity_id: str, reason: str) -> ReportSubject:
     return ReportSubject(
         subject_id=entity_id,
         display_name=entity_id,
-        sections=(
-            _unavailable_section(ReportSectionKind.STRATEGY_SUMMARY, "Large-model-value strategy decision", reason),
-        ),
+        sections=(_module_absent(ReportSectionKind.STRATEGY_SUMMARY, "Large-model-value strategy decision", reason),),
     )
 
 
@@ -473,20 +362,13 @@ def _etf_subject(entity_id: str, request: ResearchReportRequest) -> ReportSubjec
                 results=(unavailable,),
                 reason_codes=("etf_virtual_company_module_not_materialized",),
             ),
-            _unavailable_section(
-                ReportSectionKind.VALUATION,
-                "Valuation (three-tier P/S)",
-                "etf_valuation_not_materialized",
-            ),
+            _module_absent(ReportSectionKind.VALUATION, "Valuation (three-tier P/S)", "etf_valuation_not_materialized"),
         ),
     )
 
 
 def _ranking_sort_key(decision: StrategyRunDecision) -> tuple[int, int, str]:
-    # Ranked members first (ascending rank), then unranked by issuer id.
-    if decision.rank is None:
-        return (1, 0, decision.issuer_id)
-    return (0, decision.rank, decision.issuer_id)
+    return (1, 0, decision.issuer_id) if decision.rank is None else (0, decision.rank, decision.issuer_id)
 
 
 def _build_decision_lookup(decisions: list[StrategyRunDecision]) -> dict[str, StrategyRunDecision]:
@@ -494,7 +376,7 @@ def _build_decision_lookup(decisions: list[StrategyRunDecision]) -> dict[str, St
     for decision in decisions:
         by_issuer[decision.issuer_id] = decision
         by_issuer.setdefault(decision.issuer_id.upper(), decision)
-        _, ticker, _ = resolve_static_entity_display(decision.issuer_id)
+        ticker = resolve_static_entity_display(decision.issuer_id)[1]
         if ticker is not None:
             by_issuer.setdefault(ticker.upper(), decision)
     return by_issuer
@@ -526,12 +408,6 @@ def _match_target_decisions(
 
 
 class MartResearchReadRepository:
-    """Reads already-materialized research sections from mart.
-
-    `database_url` builds both sources: `PostgresStrategyRunRepository` (#362) and
-    `PostgresIssuerModuleReader` (#42). A test injects both sources instead; there is no
-    default source and no fixture behind a flag."""
-
     provenance_label = "mart:research_report.v1"
 
     def __init__(
@@ -553,7 +429,7 @@ class MartResearchReadRepository:
         self._issuer_modules = issuer_modules
 
     def _strategy_report(self, request: ResearchReportRequest, context: AccessContext) -> StrategyRunReport | None:
-        strategy_id = request.strategy_id if request.strategy_id is not None else _DEFAULT_STRATEGY_ID
+        strategy_id = request.strategy_id or _DEFAULT_STRATEGY_ID
         result = self._strategy_repository.get_latest(strategy_id=strategy_id, context=context)
         return result if isinstance(result, StrategyRunReport) else None
 
@@ -567,9 +443,7 @@ class MartResearchReadRepository:
     ) -> tuple[ReportSubject, ...]:
         ordered = sorted(decisions, key=_ranking_sort_key)
         specific_targets = [
-            entity_id
-            for entity_id in request.target_entity_ids
-            if entity_id.strip() and not entity_id.strip().lower().startswith("theme:")
+            eid for eid in request.target_entity_ids if eid.strip() and not eid.strip().lower().startswith("theme:")
         ]
         if specific_targets:
             matched_pairs = _match_target_decisions(specific_targets, by_issuer, self._database_url)
@@ -577,39 +451,27 @@ class MartResearchReadRepository:
             if allowed_ids:
                 ordered = [d for d in ordered if d.issuer_id in allowed_ids]
         if not ordered:
-            return tuple(
-                _missing_subject(entity_id, "strategy_run_unavailable") for entity_id in request.target_entity_ids
-            )
-        return tuple(
-            _ranking_subject(decision, report.source, report.corpus_sha256, display_map) for decision in ordered
-        )
+            return tuple(_missing_subject(eid, "strategy_run_unavailable") for eid in request.target_entity_ids)
+        return tuple(_ranking_subject(d, report.source, report.corpus_sha256, display_map) for d in ordered)
 
     def load_subjects(self, *, request: ResearchReportRequest, context: AccessContext) -> tuple[ReportSubject, ...]:
         if request.report_kind is ResearchReportKind.ETF:
             return tuple(_etf_subject(entity_id, request) for entity_id in request.target_entity_ids)
-
         report = self._strategy_report(request, context)
         if report is None:
-            return tuple(
-                _missing_subject(entity_id, "strategy_run_unavailable") for entity_id in request.target_entity_ids
-            )
-        decisions = [decision for decision in report.decisions if decision.cutoff_at == request.cutoff_at]
+            return tuple(_missing_subject(eid, "strategy_run_unavailable") for eid in request.target_entity_ids)
+        decisions = [d for d in report.decisions if d.cutoff_at == request.cutoff_at]
         display_map = (
             load_entity_display_map(self._database_url)
             if (self._database_url is not None or report.source != "strategy_smoke_fixture")
             else None
         )
         by_issuer = _build_decision_lookup(decisions)
-
         if request.report_kind is ResearchReportKind.THEME_RANKING:
             return self._load_theme_ranking_subjects(decisions, by_issuer, request, report, display_map)
-
-        subjects: list[ReportSubject] = []
-        for entity_id, matched in _match_target_decisions(request.target_entity_ids, by_issuer, self._database_url):
-            if matched is None:
-                subjects.append(_missing_subject(entity_id, "subject_not_in_strategy_run"))
-            else:
-                subjects.append(
-                    _company_subject(matched, report.source, report.corpus_sha256, self._issuer_modules, display_map)
-                )
-        return tuple(subjects)
+        return tuple(
+            _missing_subject(eid, "subject_not_in_strategy_run")
+            if matched is None
+            else _company_subject(matched, report.source, report.corpus_sha256, self._issuer_modules, display_map)
+            for eid, matched in _match_target_decisions(request.target_entity_ids, by_issuer, self._database_url)
+        )

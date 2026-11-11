@@ -1,13 +1,3 @@
-/**
- * #1255: /admin/macro — the macro base data panel. Administrator only (the /admin layout gates it, and
- * the loader re-checks).
- *
- * Per series: the latest value and its date, the age against the cadence that the registration declares,
- * the source and the fetch time. Below the cards: the last 12 months, one row per observation date.
- * The page formats what the mart serves. It computes no age and no verdict: both come from
- * `mart.macro_series_status`, the view that the nightly verdict `macro_freshness` reads too.
- */
-
 import { formatCell, formatMacroValue, formatUtcMinute } from "@/client/format";
 import { ReadStateNotice } from "@/components/read-state";
 import { loadMacroPanel, type MacroSeries } from "@/server/admin/macro";
@@ -17,8 +7,7 @@ export const dynamic = "force-dynamic";
 
 function ageWords(series: MacroSeries): string {
   if (series.latest === null) return "no observation yet";
-  const unit = series.latest.ageDays === 1 ? "day" : "days";
-  return `${series.latest.ageDays} ${unit} old, limit ${series.maxAgeDays}`;
+  return `${series.latest.ageDays} ${series.latest.ageDays === 1 ? "day" : "days"} old, limit ${series.maxAgeDays}`;
 }
 
 export default async function MacroPage() {
@@ -28,9 +17,7 @@ export default async function MacroPage() {
   if (outcome.kind !== "ready") {
     return (
       <section aria-labelledby="macro-heading" className="space-y-4">
-        <h1 id="macro-heading" className="text-2xl font-bold tracking-tight">
-          Macro base data
-        </h1>
+        <h1 id="macro-heading" className="text-2xl font-bold tracking-tight">Macro base data</h1>
         <ReadStateNotice
           state={outcome}
           overrides={{
@@ -49,9 +36,7 @@ export default async function MacroPage() {
   return (
     <section aria-labelledby="macro-heading" className="space-y-8">
       <div>
-        <h1 id="macro-heading" className="text-2xl font-bold tracking-tight">
-          Macro base data
-        </h1>
+        <h1 id="macro-heading" className="text-2xl font-bold tracking-tight">Macro base data</h1>
         <p className="mt-2 text-gray-400">
           The U.S. Treasury par yield curve, loaded every day by the macro job and read through the{" "}
           <code className="text-accent">mart</code> read-only role. The 3-month yield is the risk-free rate of the core
@@ -68,13 +53,8 @@ export default async function MacroPage() {
             className="rounded-xl border border-border bg-card p-5"
           >
             <h2 className="font-semibold">{item.label}</h2>
-            <p className="mt-1 text-xs text-gray-500">
-              <code>{item.seriesId}</code>
-            </p>
-            <p
-              className="mt-3 text-3xl font-bold tracking-tight"
-              title={item.latest === null ? undefined : item.latest.value}
-            >
+            <p className="mt-1 text-xs text-gray-500"><code>{item.seriesId}</code></p>
+            <p className="mt-3 text-3xl font-bold tracking-tight" title={item.latest === null ? undefined : item.latest.value}>
               {formatCell(item.latest === null ? null : formatMacroValue(item.unit, item.latest.value))}
             </p>
             <p className="mt-1 text-sm text-gray-400">
@@ -113,9 +93,7 @@ export default async function MacroPage() {
                 <tr>
                   <th className="py-2 pr-4">Date</th>
                   {series.map((item) => (
-                    <th key={item.seriesId} className="py-2 pr-4 text-right">
-                      {item.label}
-                    </th>
+                    <th key={item.seriesId} className="py-2 pr-4 text-right">{item.label}</th>
                   ))}
                 </tr>
               </thead>

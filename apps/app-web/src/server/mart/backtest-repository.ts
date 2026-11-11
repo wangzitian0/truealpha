@@ -1,19 +1,8 @@
-/**
- * #104: Postgres-backed repository for /research/backtest.
- * Reads mart.backtest_runs, mart.backtest_valuations, and mart.backtest_trades
- * through the mart_readonly role via withMartReadonly.
- *
- * Rule 2 compliance: Pure SELECT queries only. Precomputed metrics are read directly
- * from the mart tables without SQL aggregation (no sum, avg, over partition).
- * Server-only; never import into client components.
- */
+/** Postgres-backed read-only repository for `/research/backtest` (#104). */
 
 import type { PoolClient } from "pg";
 import { withMartReadonly } from "./db";
 
-/**
- * Governed served head reference to comply with Rule B of test_served_head_guard.
- */
 export const SERVED_HEAD_SQL = "select run_id, freshness, availability from mart.served_head";
 
 export interface BacktestRunRecord {
@@ -34,13 +23,9 @@ export interface BacktestRunRecord {
   error_message: string | null;
   executed_at: string;
   created_at: string;
-  /** #758: the strategy definition the run evaluated. */
   definition_content_sha256: string | null;
-  /** #758: how returns were priced, e.g. "unadjusted_open_explicit_splits". */
   price_basis: string | null;
-  /** #758: the strongest claim the run supports, e.g. "price_return_no_dividends". */
   claim_ceiling: string | null;
-  /** #758: the benchmark computed beside the strategy on the same window and prices. */
   benchmark_rule: string | null;
   benchmark_cagr: number | null;
   benchmark_max_dd: number | null;
@@ -54,7 +39,6 @@ export interface BacktestValuationRecord {
   drawdown: number;
   gross_exposure: number;
   cash_weight: number;
-  /** #758: the benchmark's cumulative NAV on the same session. */
   benchmark_cum_nav: number | null;
 }
 
@@ -72,73 +56,46 @@ export interface BacktestTradeRecord {
   fee_paid: number;
 }
 
-export async function listBacktestRuns(limit: number = 20): Promise<BacktestRunRecord[]> {
+const RUN_SELECT = `select run_id, strategy_key, strategy_version, universe_id,
+  start_date::text, end_date::text, status,
+  cagr_monthly::float, sharpe_daily::float, max_dd_daily::float,
+  vol_daily::float, turnover_monthly::float, calmar_daily::float,
+  metrics_payload, error_message, executed_at::text, created_at::text,
+  definition_content_sha256, price_basis, claim_ceiling,
+  benchmark_rule, benchmark_cagr::float, benchmark_max_dd::float
+from mart.backtest_runs`;
+
+export async function listBacktestRuns(limit = 20): Promise<BacktestRunRecord[]> {
   return withMartReadonly(async (client: PoolClient) => {
-    const result = await client.query(
-      `select run_id, strategy_key, strategy_version, universe_id,
-              start_date::text, end_date::text, status,
-              cagr_monthly::float, sharpe_daily::float, max_dd_daily::float,
-              vol_daily::float, turnover_monthly::float, calmar_daily::float,
-              metrics_payload, error_message, executed_at::text, created_at::text,
-              definition_content_sha256, price_basis, claim_ceiling,
-              benchmark_rule, benchmark_cagr::float, benchmark_max_dd::float
-       from mart.backtest_runs
-       order by created_at desc
-       limit $1`,
-      [limit]
-    );
+    const result = await client.query(`${RUN_SELECT} order by created_at desc limit $1`, [limit]);
     return result.rows as BacktestRunRecord[];
   });
 }
 
 export async function getBacktestRun(runId: string): Promise<BacktestRunRecord | null> {
   return withMartReadonly(async (client: PoolClient) => {
-    const result = await client.query(
-      `select run_id, strategy_key, strategy_version, universe_id,
-              start_date::text, end_date::text, status,
-              cagr_monthly::float, sharpe_daily::float, max_dd_daily::float,
-              vol_daily::float, turnover_monthly::float, calmar_daily::float,
-              metrics_payload, error_message, executed_at::text, created_at::text,
-              definition_content_sha256, price_basis, claim_ceiling,
-              benchmark_rule, benchmark_cagr::float, benchmark_max_dd::float
-       from mart.backtest_runs
-       where run_id = $1`,
-      [runId]
-    );
-    if (result.rows.length === 0) return null;
-    return result.rows[0] as BacktestRunRecord;
+    const result = await client.query(`${RUN_SELECT} where run_id = $1`, [runId]);
+    return result.rows.length === 0 ? null : (result.rows[0] as BacktestRunRecord);
   });
 }
 
-export async function getBacktestValuations(
-  runId: string,
-  resolution?: "1M" | "1D"
-): Promise<BacktestValuationRecord[]> {
+export async function getBacktestValuations(runId: string, resolution?: "1M" | "1D"): Promise<BacktestValuationRecord[]> {
   return withMartReadonly(async (client: PoolClient) => {
-    const query = resolution
-      ? `select run_id, resolution, valuation_date::text,
-                cum_nav::float, drawdown::float, gross_exposure::float, cash_weight::float,
-                benchmark_cum_nav::float
-         from mart.backtest_valuations
-         where run_id = $1 and resolution = $2
-         order by valuation_date asc`
-      : `select run_id, resolution, valuation_date::text,
-                cum_nav::float, drawdown::float, gross_exposure::float, cash_weight::float,
-                benchmark_cum_nav::float
-         from mart.backtest_valuations
-         where run_id = $1
-         order by valuation_date asc`;
-
-    const params = resolution ? [runId, resolution] : [runId];
-    const result = await client.query(query, params);
+    const where = resolution ? "where run_id = $1 and resolution = $2" : "where run_id = $1";
+    const result = await client.query(
+      `select run_id, resolution, valuation_date::text,
+              cum_nav::float, drawdown::float, gross_exposure::float, cash_weight::float,
+              benchmark_cum_nav::float
+       from mart.backtest_valuations
+       ${where}
+       order by valuation_date asc`,
+      resolution ? [runId, resolution] : [runId],
+    );
     return result.rows as BacktestValuationRecord[];
   });
 }
 
-export async function getBacktestTrades(
-  runId: string,
-  limit: number = 100
-): Promise<BacktestTradeRecord[]> {
+export async function getBacktestTrades(runId: string, limit = 100): Promise<BacktestTradeRecord[]> {
   return withMartReadonly(async (client: PoolClient) => {
     const result = await client.query(
       `select trade_id, run_id, trade_date::text, symbol, side,
@@ -148,7 +105,7 @@ export async function getBacktestTrades(
        where run_id = $1
        order by trade_date asc, trade_id asc
        limit $2`,
-      [runId, limit]
+      [runId, limit],
     );
     return result.rows as BacktestTradeRecord[];
   });

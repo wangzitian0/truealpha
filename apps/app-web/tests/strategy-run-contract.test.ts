@@ -11,14 +11,13 @@
 
 import { readFileSync } from "node:fs";
 
+import type { AccessContext, StrategyRunReport } from "../src/contracts/strategyRun";
 import {
   asStrategyRunReport,
   FixtureStrategyRunRepository,
   parseStrategyRunReport,
   StrategyRunContractError,
-  type AccessContext,
-  type StrategyRunReport,
-} from "../src/contracts/strategyRun";
+} from "./support/fixture-strategy-run";
 
 const fixtureUrl = new URL(
   "../../../common/contracts/src/truealpha_contracts/data/strategy_run_preview.v1.json",
