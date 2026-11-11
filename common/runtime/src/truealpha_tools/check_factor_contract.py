@@ -125,11 +125,8 @@ def _check_module_and_question_invariants(
     # --- I5: a factor the coverage report cannot count is invisible, not unavailable ---
     question_columns = observed_question_columns()
     named = {str(column["factor"]) for column in question_columns}
-    # Feeders, the module-7 composite, and the Gate 0 governance probe (`registered_semantic_probe`)
-    # answer no standalone question column of their own (#855 B3, #772).
-    non_question_kinds = {
-        name for name, spec in actual_factors.items() if spec.get("kind") in ("feeder", "composite")
-    } | {"registered_semantic_probe"}
+    # Feeders and the module-7 composite answer no standalone question column of their own (#855 B3).
+    non_question_kinds = {name for name, spec in actual_factors.items() if spec.get("kind") in ("feeder", "composite")}
     for name in sorted(set(actual_factors) - named - non_question_kinds):
         failures.append(
             f"factor {name!r} lands nowhere the coverage report counts: add a FactorColumn to QUESTION_REQUIREMENTS"

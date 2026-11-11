@@ -364,4 +364,3 @@ def test_fusion_takes_no_confidence_and_returns_no_band() -> None:
     assert "confidence_score" not in SourceAssertion.model_fields
     assert {"band", "selected_confidence_score"}.isdisjoint(reconciliation.ReconciliationResult.model_fields)
     assert "band" not in {field.name for field in dataclasses.fields(reconciliation.ConsensusGrade)}
-    assert "denominator_mean_confidence_score" not in reconciliation.DataHubQualitySummary.model_fields

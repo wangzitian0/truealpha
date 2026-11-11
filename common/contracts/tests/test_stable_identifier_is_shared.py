@@ -221,12 +221,12 @@ def _stable_identifier_fields() -> dict[str, TypeAdapter[Any]]:
 
 
 def test_the_sweep_reaches_the_stable_identifier_fields() -> None:
-    """Named anchors, so the sweep cannot go quiet by selecting nothing: one field from `usage` and
-    one from `datahub` must both be in it."""
+    """Named anchors, so the sweep cannot go quiet by selecting nothing: one field from
+    `evidence_graph` and one from `datahub` must both be in it."""
     fields = _stable_identifier_fields()
     for anchor in (
         "truealpha_contracts.datahub.CaptureSchedulePolicy.policy_version",
-        "truealpha_contracts.usage.DataRequirement.valid_period_rule_id",
+        "truealpha_contracts.evidence_graph.CurrentPointerKey.universe_id",
     ):
         assert anchor in fields, f"the sweep did not select {anchor}; it selected {len(fields)} fields"
 

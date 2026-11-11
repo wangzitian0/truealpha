@@ -8,23 +8,128 @@ tests change one fact and assert the named finding, so each direction can fail.
 from __future__ import annotations
 
 import ast
+import functools
 import json
 import re
 import tomllib
 from collections import defaultdict
+from collections.abc import Mapping, Set
 from pathlib import Path
+from typing import Literal, Self
 
 import pytest
-from pydantic import ValidationError
-from truealpha_contracts.goal_criteria import (
-    ROOTS,
-    GoalCriteriaCatalog,
-    backing_findings,
-    load_goal_criteria,
-)
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from truealpha_runtime.testing import load_tool  # noqa: I001
 
 REPO = Path(__file__).resolve().parents[3]
+GOAL_CRITERIA_PATH = Path(__file__).resolve().parent / "fixtures" / "goal_criteria.v1.json"
+
+#: Root number -> its root issue and the letter its acceptance ids use (#28 "Chain").
+ROOTS: Mapping[int, tuple[str, str]] = {
+    1: ("#1417", "A"),
+    2: ("#1418", "B"),
+    3: ("#1419", "C"),
+    4: ("#1420", "D"),
+    5: ("#1421", "E"),
+}
+
+_ID = re.compile(r"^R(?P<root>[1-5])\.(?:(?P<letter>[A-E])(?P<number>[1-9][0-9]?)|M0)$")
+
+Tier = Literal["M0", "M1"]
+Oracle = Literal["repository", "filing", "second_vendor", "label", "platform", "owner"]
+Status = Literal["backed", "partial", "pending"]
+
+
+class _Frozen(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+
+class GoalCriterion(_Frozen):
+    id: str
+    root: str
+    tier: Tier
+    statement: str = Field(min_length=1)
+    threshold: str | None = Field(default=None, min_length=1)
+    window: str | None = Field(default=None, min_length=1)
+    oracle: Oracle
+    status: Status
+    verdict_keys: tuple[str, ...] = ()
+    pending_on: str | None = Field(default=None, min_length=1)
+
+    @model_validator(mode="after")
+    def _id_names_its_root_and_tier(self) -> Self:
+        match = _ID.match(self.id)
+        if match is None:
+            raise ValueError(f"{self.id!r} is not R<root>.<letter><number> or R<root>.M0")
+        issue, letter = ROOTS[int(match["root"])]
+        if self.root != issue:
+            raise ValueError(f"{self.id}: root {self.root} is not {issue}")
+        if match["letter"] is not None and match["letter"] != letter:
+            raise ValueError(f"{self.id}: root {issue} uses the letter {letter}")
+        expected_tier = "M0" if match["letter"] is None else "M1"
+        if self.tier != expected_tier:
+            raise ValueError(f"{self.id}: tier {self.tier} is not {expected_tier}")
+        if (self.status == "backed") == (self.pending_on is not None):
+            raise ValueError(
+                f"{self.id}: a {self.status} criterion {'must' if self.pending_on is None else 'must not'} name pending_on"
+            )
+        if len(set(self.verdict_keys)) != len(self.verdict_keys):
+            raise ValueError(f"{self.id}: a verdict key is named twice")
+        return self
+
+
+class GoalCriteriaCatalog(_Frozen):
+    schema_version: Literal[1]
+    catalog_version: str = Field(min_length=1)
+    description: str = Field(min_length=1)
+    criteria: tuple[GoalCriterion, ...] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _ids_are_unique_and_every_root_has_one_m0(self) -> Self:
+        ids = [criterion.id for criterion in self.criteria]
+        duplicates = sorted({item for item in ids if ids.count(item) > 1})
+        if duplicates:
+            raise ValueError(f"criterion ids named twice: {duplicates}")
+        for number in ROOTS:
+            if f"R{number}.M0" not in ids:
+                raise ValueError(f"root R{number} has no M0 criterion")
+        return self
+
+    def by_id(self) -> dict[str, GoalCriterion]:
+        return {criterion.id: criterion for criterion in self.criteria}
+
+
+@functools.cache
+def load_goal_criteria() -> GoalCriteriaCatalog:
+    payload = json.loads(GOAL_CRITERIA_PATH.read_bytes())
+    return GoalCriteriaCatalog.model_validate(payload)
+
+
+def backing_findings(
+    catalog: GoalCriteriaCatalog,
+    *,
+    verdict_keys: Set[str],
+    markers: Mapping[str, Set[str]],
+) -> list[str]:
+    findings: list[str] = []
+    criteria = catalog.by_id()
+    named_keys: set[str] = set()
+    for criterion in catalog.criteria:
+        named_keys.update(criterion.verdict_keys)
+        for key in criterion.verdict_keys:
+            if key not in verdict_keys:
+                findings.append(f"{criterion.id}: verdict key {key!r} is not in nightly_verdicts.json")
+        backed = bool(criterion.verdict_keys) or criterion.id in markers
+        if criterion.status == "pending" and backed:
+            findings.append(f"{criterion.id}: pending, but a check backs it; set the status to backed or partial")
+        if criterion.status != "pending" and not backed:
+            findings.append(f"{criterion.id}: {criterion.status}, but no verdict key or test marker backs it")
+    for key in sorted(verdict_keys - named_keys):
+        findings.append(f"verdict key {key!r} backs no catalog criterion")
+    for criterion_id in sorted(set(markers) - set(criteria)):
+        files = ", ".join(sorted(markers[criterion_id]))
+        findings.append(f"test marker criterion({criterion_id!r}) names no catalog criterion ({files})")
+    return findings
 
 
 def _verdict_keys() -> set[str]:
@@ -90,13 +195,10 @@ def test_every_root_lists_its_acceptance_ids_without_a_gap() -> None:
     for root in ROOTS:
         found = sorted(numbers[str(root)])
         assert found == list(range(1, len(found) + 1)), f"R{root}: {found}"
-    # The acceptance tables of #1417 to #1421 on 2026-10-20: A1-A8, B1-B10, C1-C7, D1-D6, E1-E10.
-    # B11 joined on 2026-10-20 with the runtime-shape verdict of the code server (#1467).
-    # B12 (the S&P 500 membership from the IVV holdings) and D7 (the backtest window) joined on 2026-10-21.
     assert {root: len(found) for root, found in numbers.items()} == {"1": 8, "2": 12, "3": 7, "4": 7, "5": 10}
 
 
-def _criterion(criterion_id: str):
+def _criterion(criterion_id: str) -> GoalCriterion:
     return load_goal_criteria().by_id()[criterion_id]
 
 
@@ -131,7 +233,7 @@ def test_the_backtest_window_is_a_pending_m1_criterion_and_the_history_floor_of_
 def test_the_seventy_percent_rule_is_not_restated_in_the_data_files() -> None:
     """#1484: the rule lives in `UTILIZATION_CEILING`. A data file points to it and states no number."""
     data = REPO / "common" / "contracts" / "src" / "truealpha_contracts" / "data"
-    criteria = (data / "goal_criteria.v1.json").read_text()
+    criteria = GOAL_CRITERIA_PATH.read_text()
     capacity = json.dumps(json.loads((data / "environment_contract.v1.json").read_text())["code_server_capacity"])
     rule = re.compile(r"\b70 ?%|\b0\.7\b|utilization_limit")
 

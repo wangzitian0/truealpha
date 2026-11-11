@@ -56,8 +56,8 @@ def test_every_public_pydantic_contract_has_a_closed_json_schema() -> None:
 #: dead metric-registry source order; the source order of a family is its `ReconciliationPolicy`).
 #: #1519 removed `IdentityLinkSet`, `IssuerSecurityLink`, `ListingRole`, `SecurityKind`, `SecurityListingLink`
 #: and `FinancialFact` (deleted with the unwired link types in `truealpha_contracts.universe` and dead `FinancialFact` in `models`).
-FROZEN_EXPORT_COUNT = 346
-FROZEN_EXPORT_SHA256 = "f79d6710373eb93d1bd144b3cf6188f9b314a6cc917c18143ad90e876ff08aa3"
+FROZEN_EXPORT_COUNT = 127
+FROZEN_EXPORT_SHA256 = "30a642868ef45403f81fe3de44eb1ec3558d8415f5c2a44badb95511dbf1ded9"
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 PACKAGE = REPO_ROOT / "common/contracts/src/truealpha_contracts"

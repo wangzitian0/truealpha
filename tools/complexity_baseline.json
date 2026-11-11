@@ -8,17 +8,6 @@
   "apps/data-engine/src/data_engine/datahub/production_topt/sec_financial_adapter.py:build_route": 25,
   "apps/data-engine/src/data_engine/datahub/standards/filing_extraction.py:extract_headcount": 23,
   "apps/data-engine/src/data_engine/quality/surface_proof.py:prove": 23,
-  "common/contracts/src/truealpha_contracts/access.py:authorize_access": 29,
-  "common/contracts/src/truealpha_contracts/catalog.py:ResearchCatalogManifest.validate_and_identify": 29,
-  "common/contracts/src/truealpha_contracts/datahub.py:DataHubInterfaceBundle.validate_closed_bundle": 84,
-  "common/contracts/src/truealpha_contracts/execution.py:SnapshotManifest.freeze_and_identify": 40,
-  "common/contracts/src/truealpha_contracts/execution.py:validate_extraction_replay": 24,
-  "common/contracts/src/truealpha_contracts/reconciliation.py:DataHubQualityCell.validate_and_identify": 27,
   "common/contracts/src/truealpha_contracts/reconciliation.py:ReconciliationResult.identify": 41,
-  "common/contracts/src/truealpha_contracts/research.py:ResearchSemanticsManifest.validate_and_identify": 23,
-  "common/contracts/src/truealpha_contracts/research.py:authorize_evaluation": 22,
-  "common/contracts/src/truealpha_contracts/service_demand.py:_validate_assertion_value": 23,
-  "common/contracts/src/truealpha_contracts/strategy.py:GoldenExpectation.validate_outcome_consistency": 22,
-  "common/contracts/src/truealpha_contracts/usage.py:StrategyUsageAudit.freeze_and_identify": 24,
-  "common/contracts/src/truealpha_contracts/usage.py:UsageFrequencySlice.freeze_and_identify": 24
+  "common/contracts/src/truealpha_contracts/strategy.py:GoldenExpectation.validate_outcome_consistency": 22
 }

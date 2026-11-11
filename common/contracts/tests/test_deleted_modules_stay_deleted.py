@@ -28,6 +28,12 @@ DELETED_CONTRACT_MODULES = (
     "conversations",
     "capture_contracts",
     "readiness",
+    "catalog",
+    "service_demand",
+    "usage",
+    "registries",
+    "data_quality",
+    "metric_node_read",
 )
 
 DELETED_DATA_ENGINE_QUALITY_MODULES = (
@@ -37,7 +43,10 @@ DELETED_DATA_ENGINE_QUALITY_MODULES = (
 
 # `factors.confidence` was restored in #1352 and wired into the deployed
 # `data_engine.datahub.confidence_report` (#1333).
-DELETED_FACTORS_MODULES = ("composite.registered_composite_probe",)
+DELETED_FACTORS_MODULES = (
+    "composite.registered_composite_probe",
+    "base.registered_semantic_probe",
+)
 
 DELETED_SCRIPTS = (
     "datahub_quality_report.py",
@@ -53,8 +62,10 @@ DELETED_APP_WEB_FILES = (
     "src/server/conversations-actions.ts",
     "src/server/conversations-answer.ts",
     "src/server/conversations.ts",
+    "src/contracts/issue58.ts",
     "tests/conversations-answer.test.ts",
     "tests/conversations-validation.test.ts",
+    "tests/issue58-conformance.test.ts",
 )
 
 
