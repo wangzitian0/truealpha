@@ -941,6 +941,25 @@ class PostgresToptCoreRepository:
             listing_confidences, "universe-membership", by_type["universe-membership"].confidence
         )
 
+        def _fin_metric(
+            name: str,
+            val: Decimal | None,
+            *,
+            cell: InputCell | None = None,
+            conf: Decimal | None = None,
+            knowable_at: datetime | None = None,
+            reason: ToptCoreReasonCode | None = None,
+        ) -> ToptMetricInput:
+            return _metric(
+                financial_row,
+                name=name,
+                value=val,
+                cell=cell if cell is not None else cells.get(name),
+                confidence=conf if conf is not None else financial_cell_confidence,
+                knowable_at=knowable_at,
+                unavailable_reason=reason,
+            )
+
         return SnapshotMember(
             issuer_id=listing.issuer_id,
             instrument_id=listing.instrument_id,
@@ -948,46 +967,15 @@ class PostgresToptCoreRepository:
             operating_branch=financial.operating_branch,
             observation_ids=(observation_ids[0], observation_ids[1], observation_ids[2], observation_ids[3]),
             cell_inputs=(
-                ToptCellQualityInput(
-                    input_id=financial_row.observation_id,
-                    confidence=financial_cell_confidence,
-                    knowable_at=financial_row.knowable_at,
-                    freshness=financial_row.freshness,
-                ),
+                _cell(financial_row, financial_cell_confidence),
                 _cell(by_type["listing-identity"], listing_id_conf),
                 _cell(by_type["market-price"], market_cell_conf),
                 _cell(by_type["universe-membership"], membership_conf),
             ),
-            gross_profit=_metric(
-                financial_row,
-                name="gross_profit",
-                value=gp_value,
-                cell=profit_cell,
-                confidence=financial_cell_confidence,
-                unavailable_reason=gp_reason,
-            ),
-            total_assets=_metric(
-                financial_row,
-                name="total_assets",
-                value=financial.total_assets,
-                cell=cells.get("total_assets"),
-                confidence=financial_cell_confidence,
-            ),
-            headcount=_metric(
-                financial_row,
-                name="headcount",
-                value=financial.headcount,
-                cell=cells.get("headcount"),
-                confidence=financial_cell_confidence,
-            ),
-            revenue=_metric(
-                financial_row,
-                name="revenue",
-                value=rev_value,
-                cell=cells.get("revenue"),
-                confidence=financial_cell_confidence,
-                unavailable_reason=rev_reason,
-            ),
+            gross_profit=_fin_metric("gross_profit", gp_value, cell=profit_cell, reason=gp_reason),
+            total_assets=_fin_metric("total_assets", financial.total_assets),
+            headcount=_fin_metric("headcount", financial.headcount),
+            revenue=_fin_metric("revenue", rev_value, reason=rev_reason),
             pre_provision_profit=_metric(
                 financial_row,
                 name="pre_provision_profit",
@@ -1016,12 +1004,10 @@ class PostgresToptCoreRepository:
             ),
             is_primary=is_primary,
             **{
-                name: _metric(
-                    financial_row,
-                    name=name,
-                    value=getattr(financial, name),
-                    cell=cells.get(name),
-                    confidence=_override_confidence(listing_confidences, name, financial_cell_confidence)
+                name: _fin_metric(
+                    name,
+                    getattr(financial, name),
+                    conf=_override_confidence(listing_confidences, name, financial_cell_confidence)
                     or financial_cell_confidence,
                 )
                 for name in OPTIONAL_SNAPSHOT_FIELDS
@@ -1160,20 +1146,21 @@ class PostgresToptCoreRepository:
             )
             evidence_by_listing = self._load_source_evidence(snapshot)
             gppe_validation = factor_validation_status_for((gppe_definition.definition_id,))
-            for gppe_result in gppe_results:
-                self._put_gppe_result(
-                    gppe_result,
-                    StatusDimensions(
-                        availability_status=availability_status_for(
-                            availability=gppe_result.availability.value,
-                            freshness=gppe_result.freshness.value,
-                            confidence=gppe_result.confidence,
-                            reason_codes=(item.value for item in gppe_result.reason_codes),
-                        ),
-                        source_evidence_status=evidence_by_listing[gppe_result.listing_id],
-                        factor_validation_status=gppe_validation,
+
+            def _status_dims(res: Any, validation: Any) -> StatusDimensions:
+                return StatusDimensions(
+                    availability_status=availability_status_for(
+                        availability=res.availability.value,
+                        freshness=res.freshness.value,
+                        confidence=res.confidence,
+                        reason_codes=(item.value for item in res.reason_codes),
                     ),
+                    source_evidence_status=evidence_by_listing[res.listing_id],
+                    factor_validation_status=validation,
                 )
+
+            for gppe_result in gppe_results:
+                self._put_gppe_result(gppe_result, _status_dims(gppe_result, gppe_validation))
             materialized_gppe_results = self._load_gppe_results(gppe_invocation_id)
             if len(materialized_gppe_results) != expected_issuers:
                 raise ValueError("GPPE materialization did not persist the complete denominator")
@@ -1224,20 +1211,7 @@ class PostgresToptCoreRepository:
             for result in results:
                 if result.listing_id not in periods_by_listing:
                     raise ValueError(f"no financial-fact observation for {result.listing_id} in its own snapshot")
-                self._put_result(
-                    result,
-                    periods_by_listing[result.listing_id],
-                    StatusDimensions(
-                        availability_status=availability_status_for(
-                            availability=result.availability.value,
-                            freshness=result.freshness.value,
-                            confidence=result.confidence,
-                            reason_codes=(item.value for item in result.reason_codes),
-                        ),
-                        source_evidence_status=evidence_by_listing[result.listing_id],
-                        factor_validation_status=core_validation,
-                    ),
-                )
+                self._put_result(result, periods_by_listing[result.listing_id], _status_dims(result, core_validation))
             materialize_metric_node_values(
                 self._connection,
                 factor_inputs=factor_inputs,

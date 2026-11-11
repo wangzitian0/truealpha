@@ -1,8 +1,4 @@
-"""#877 PR-3: entity coordinates resolution for capture pipelines (docs/entity-identity.md §5).
-
-Resolves legacy string coordinates (issuer, instrument, listing, ticker) to canonical
-entity UUIDs from staging.entities / staging.entity_aliases.
-"""
+"""Entity coordinates resolution for capture pipelines (docs/entity-identity.md §5)."""
 
 from __future__ import annotations
 
@@ -22,17 +18,26 @@ _UUID_REGEX = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9
 ONTOLOGY_ROOT_NAMESPACE = uuid.uuid5(
     uuid.NAMESPACE_URL, "https://github.com/wangzitian0/truealpha/blob/main/docs/entity-identity.md"
 )
+PRIMARY_LISTINGS_FILENAME = "primary_listings.v1.json"
+
+_LEI_RE = re.compile(r"^issuer:lei:([0-9A-Za-z]{18}[0-9]{2})$")
+_CIK_RE = re.compile(r"^issuer:cik:([0-9]{1,10})$")
+_CUSIP_RE = re.compile(r"^security:cusip:([0-9A-Za-z*@#]{8}[0-9])$")
+_FIGI_RE = re.compile(r"^security:figi:([B-DF-HJ-NP-TV-Z]{2}G[B-DF-HJ-NP-TV-Z0-9]{8}[0-9])$", re.IGNORECASE)
+_MIC_TICKER_RE = re.compile(r"^listing:([0-9a-z]{4}):([0-9a-z][0-9a-z.\-]*)$", re.IGNORECASE)
 
 
 def ontology_kind_namespace(kind: str) -> uuid.UUID:
-    """Return the deterministic UUIDv5 namespace for an ontology entity kind (`issuer`, `instrument`, `listing`, `fund`)."""
     return uuid.uuid5(ONTOLOGY_ROOT_NAMESPACE, f"kind:{kind}")
+
+
+def is_uuid(value: str) -> bool:
+    return bool(_UUID_REGEX.match(value))
 
 
 def lookup_minted_entity(
     connection: psycopg.Connection[Any], scheme: str, value: str, *, known_at: datetime
 ) -> uuid.UUID | None:
-    """Return the surviving entity UUID if `(scheme, value)` was already minted in `staging.entities` (generation 1)."""
     if existing_row := connection.execute(
         "select entity_id from staging.entities"
         " where birth_scheme = %s and birth_value = staging.entity_alias_normalize(%s, %s) and birth_generation = 1",
@@ -43,18 +48,8 @@ def lookup_minted_entity(
     return None
 
 
-def is_uuid(value: str) -> bool:
-    """Return True if value is a valid formatted UUID string."""
-    return bool(_UUID_REGEX.match(value))
-
-
-#: The classification file of primary listings (data/primary_listings.v1.json).
-PRIMARY_LISTINGS_FILENAME = "primary_listings.v1.json"
-
-
 @cache
 def _corpus_issuer_names() -> dict[str, str]:
-    """Return the ticker-to-name mapping from the packaged TOPT corpus."""
     from data_engine.datahub.production_topt.universe_corpus import TOPT_CORPUS_FILENAME, load_corpus
 
     names = load_corpus(TOPT_CORPUS_FILENAME)["topt_denominator"].get("issuer_names", {})
@@ -64,7 +59,6 @@ def _corpus_issuer_names() -> dict[str, str]:
 def _resolve_issuer_display_name(
     connection: psycopg.Connection[Any], ticker: str, *, issuer_raw: str = "", issuer_uuid: uuid.UUID | None = None
 ) -> str | None:
-    """Resolve the display name for an issuer from staging tables or packaged corpus metadata (#1518)."""
     if not (normalized := ticker.strip().upper()):
         return None
     if row := connection.execute(
@@ -87,30 +81,38 @@ def _resolve_issuer_display_name(
     return _corpus_issuer_names().get(normalized)
 
 
+def _insert_entity_alias(
+    connection: psycopg.Connection[Any],
+    entity_id: uuid.UUID,
+    scheme: str,
+    value: str,
+    *,
+    known_at: datetime,
+    raw_ref: str,
+) -> None:
+    connection.execute(
+        "insert into staging.entity_aliases (entity_id, scheme, value, valid_from, valid_to,"
+        " transaction_time, source, raw_ref, method, confidence, mapping_version)"
+        " values (%s, %s, %s, '-infinity'::date, null, least(%s, clock_timestamp()),"
+        " 'datahub.capture', %s, 'asserted', 1.0, 'datahub:v1') on conflict do nothing",
+        (entity_id, scheme, value, known_at, raw_ref),
+    )
+
+
 def _assert_issuer_name_alias(
     connection: psycopg.Connection[Any], issuer_uuid: uuid.UUID, display_name: str, *, known_at: datetime
 ) -> None:
-    """Write a `scheme = 'name'` alias on `issuer_uuid` when none exists yet (#1517)."""
     if not connection.execute(
         "select 1 from staging.entity_aliases where entity_id = %s and scheme = 'name' and value = %s",
         (issuer_uuid, display_name),
     ).fetchone():
-        connection.execute(
-            "insert into staging.entity_aliases (entity_id, scheme, value, valid_from, valid_to,"
-            " transaction_time, source, raw_ref, method, confidence, mapping_version)"
-            " values (%s, 'name', %s, '-infinity'::date, null, least(%s, clock_timestamp()),"
-            " 'datahub.capture', %s, 'asserted', 1.0, 'datahub:v1') on conflict do nothing",
-            (issuer_uuid, display_name, known_at, f"name:{issuer_uuid}"),
+        _insert_entity_alias(
+            connection, issuer_uuid, "name", display_name, known_at=known_at, raw_ref=f"name:{issuer_uuid}"
         )
 
 
 @cache
 def primary_listing_ids() -> frozenset[str]:
-    """The listing ids that the packaged classification declares as primary. The file is hash-pinned.
-
-    The file holds a classification, not a measurement. A listing id that is not in it is not primary.
-    The load refuses a file whose listings do not reproduce its own hash.
-    """
     raw = json.loads(resources.files("data_engine.datahub.data").joinpath(PRIMARY_LISTINGS_FILENAME).read_bytes())
     listings = sorted(str(item) for item in raw["listings"])
     if canonical_sha256(listings) != raw["listings_sha256"]:
@@ -118,37 +120,20 @@ def primary_listing_ids() -> frozenset[str]:
     return frozenset(listings)
 
 
-_LEI_RE = re.compile(r"^issuer:lei:([0-9A-Za-z]{18}[0-9]{2})$")
-_CIK_RE = re.compile(r"^issuer:cik:([0-9]{1,10})$")
-_CUSIP_RE = re.compile(r"^security:cusip:([0-9A-Za-z*@#]{8}[0-9])$")
-_FIGI_RE = re.compile(r"^security:figi:([B-DF-HJ-NP-TV-Z]{2}G[B-DF-HJ-NP-TV-Z0-9]{8}[0-9])$", re.IGNORECASE)
-_MIC_TICKER_RE = re.compile(r"^listing:([0-9a-z]{4}):([0-9a-z][0-9a-z.\-]*)$", re.IGNORECASE)
-
-
 def parse_alias(raw_id: str, role: str) -> tuple[str, str]:
-    """Parse raw identifier string into (scheme, canonical_value)."""
     raw = raw_id.strip()
     if role == "issuer":
-        m = _LEI_RE.match(raw)
-        if m:
+        if m := _LEI_RE.match(raw):
             return "lei", m.group(1).upper()
-        m = _CIK_RE.match(raw)
-        if m:
+        if m := _CIK_RE.match(raw):
             return "cik", m.group(1).zfill(10)
-        return "legacy-id", raw
-    if role == "instrument":
-        m = _CUSIP_RE.match(raw)
-        if m:
+    elif role == "instrument":
+        if m := _CUSIP_RE.match(raw):
             return "cusip", m.group(1).upper()
-        m = _FIGI_RE.match(raw)
-        if m:
+        if m := _FIGI_RE.match(raw):
             return "figi", m.group(1).upper()
-        return "legacy-id", raw
-    if role == "listing":
-        m = _MIC_TICKER_RE.match(raw)
-        if m:
-            return "mic-ticker", f"{m.group(1).upper()}:{m.group(2).upper()}"
-        return "legacy-id", raw
+    elif role == "listing" and (m := _MIC_TICKER_RE.match(raw)):
+        return "mic-ticker", f"{m.group(1).upper()}:{m.group(2).upper()}"
     return "legacy-id", raw
 
 
@@ -160,10 +145,6 @@ def lookup_entity(
     as_of: date,
     known_at: datetime,
 ) -> uuid.UUID | None:
-    """The entity `raw_id` names, or None when the store holds none. Never writes.
-
-    `resolve_entity` mints on None. A reader that must not mint calls this instead (#1079).
-    """
     raw = raw_id.strip()
     if is_uuid(raw):
         parsed = uuid.UUID(raw)
@@ -171,34 +152,18 @@ def lookup_entity(
         return survivor[0] if survivor and survivor[0] else parsed
 
     scheme, value = parse_alias(raw, role)
-
-    # 1. Try resolving by typed scheme/value
-    resolved = connection.execute(
-        "select staging.entity_resolve(%s, %s, %s, %s)",
-        (scheme, value, as_of, known_at),
-    ).fetchone()
-    if resolved and resolved[0]:
-        return resolved[0]
-
-    # 2. If typed resolution missed and scheme != legacy-id, try legacy-id
-    if scheme != "legacy-id":
-        resolved_legacy = connection.execute(
-            "select staging.entity_resolve('legacy-id', %s, %s, %s)",
-            (raw, as_of, known_at),
+    candidates = ((scheme, value), *((("legacy-id", raw),) if scheme != "legacy-id" else ()))
+    for cand_scheme, cand_val in candidates:
+        resolved = connection.execute(
+            "select staging.entity_resolve(%s, %s, %s, %s)",
+            (cand_scheme, cand_val, as_of, known_at),
         ).fetchone()
-        if resolved_legacy and resolved_legacy[0]:
-            return resolved_legacy[0]
-
-    # 2b. Check if entity was already minted in immutable registry staging.entities
-    found_typed = lookup_minted_entity(connection, scheme, value, known_at=known_at)
-    if found_typed is not None:
-        return found_typed
-
-    if scheme != "legacy-id":
-        found_legacy = lookup_minted_entity(connection, "legacy-id", raw, known_at=known_at)
-        if found_legacy is not None:
-            return found_legacy
-
+        if resolved and resolved[0]:
+            return resolved[0]
+    for cand_scheme, cand_val in candidates:
+        found = lookup_minted_entity(connection, cand_scheme, cand_val, known_at=known_at)
+        if found is not None:
+            return found
     return None
 
 
@@ -210,43 +175,23 @@ def resolve_entity(
     as_of: date,
     known_at: datetime,
 ) -> uuid.UUID:
-    """Resolve an entity string to its canonical UUIDv5 identity."""
     found = lookup_entity(connection, raw_id, role, as_of=as_of, known_at=known_at)
     if found is not None:
         return found
 
     raw = raw_id.strip()
     scheme, value = parse_alias(raw, role)
-
-    # 3. Mint entity on miss
-    kind = role  # 'issuer', 'instrument', 'listing'
     minted_row = connection.execute(
         "select staging.entity_mint(%s, %s, %s, 'datahub.capture')",
-        (kind, scheme, value),
+        (role, scheme, value),
     ).fetchone()
     if not minted_row or not minted_row[0]:
         raise RuntimeError(f"failed to mint entity for {role} {scheme}:{value}")
     minted_id: uuid.UUID = minted_row[0]
-
-    # Insert birth alias to satisfy require_birth_alias trigger
-    connection.execute(
-        "insert into staging.entity_aliases (entity_id, scheme, value, valid_from, valid_to, transaction_time, source,"
-        " raw_ref, method, confidence, mapping_version)"
-        " values (%s, %s, %s, '-infinity'::date, null, least(%s, clock_timestamp()), 'datahub.capture', %s, 'asserted', 1.0, 'datahub:v1')"
-        " on conflict do nothing",
-        (minted_id, scheme, value, known_at, f"mint:{minted_id}"),
-    )
-
-    # If scheme was not legacy-id, also record legacy-id alias
+    raw_ref = f"mint:{minted_id}"
+    _insert_entity_alias(connection, minted_id, scheme, value, known_at=known_at, raw_ref=raw_ref)
     if scheme != "legacy-id":
-        connection.execute(
-            "insert into staging.entity_aliases (entity_id, scheme, value, valid_from, valid_to, transaction_time, source,"
-            " raw_ref, method, confidence, mapping_version)"
-            " values (%s, 'legacy-id', %s, '-infinity'::date, null, least(%s, clock_timestamp()), 'datahub.capture', %s, 'asserted', 1.0, 'datahub:v1')"
-            " on conflict do nothing",
-            (minted_id, raw, known_at, f"mint:{minted_id}"),
-        )
-
+        _insert_entity_alias(connection, minted_id, "legacy-id", raw, known_at=known_at, raw_ref=raw_ref)
     return minted_id
 
 
@@ -258,7 +203,6 @@ def _assert_relation(
     *,
     known_at: datetime,
 ) -> None:
-    """Write one `datahub.capture` relation, unless the store already holds that claim."""
     if not connection.execute(
         "select 1 from staging.entity_relations where relation_type = %s and from_entity_id = %s and to_entity_id = %s and source = 'datahub.capture'",
         (relation_type, from_entity, to_entity),
@@ -279,7 +223,6 @@ def resolve_coordinates(
     as_of: date,
     known_at: datetime | None = None,
 ) -> dict[str, tuple[str, str, str, str]]:
-    """Resolve universe instruments to dictionary mapping listing_id -> (issuer_uuid, instrument_uuid, listing_uuid, ticker)."""
     if known_at is None:
         known_at = datetime.combine(as_of, datetime.min.time(), tzinfo=UTC)
     result: dict[str, tuple[str, str, str, str]] = {}
@@ -309,7 +252,6 @@ def alias_of(
     valid_at: date,
     known_at: datetime,
 ) -> str | None:
-    """Retrieve the authoritative alias for an entity at a given validity and known_at time."""
     entity_uuid = uuid.UUID(str(entity_id))
     row = connection.execute(
         "select alias.value from staging.entity_aliases alias"

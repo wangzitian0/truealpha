@@ -1,30 +1,4 @@
-"""Preview replay: run large_model_value_v0 against #335's golden fixture.
-
-This reproduces the ten hand-verified golden decisions (5 issuers x 2
-cutoffs) from `truealpha_contracts.data/large_model_value_v0_definition_1_0_0.json`
-by projecting the golden corpus into `factors.composite.strategy_evaluator`
-inputs and mapping its decisions onto the mart `Decision` dataclass. The whole
-decision algorithm -- factor orchestration, eligibility, the tier-band verdict,
-ranking, selection, weighting, and the definition-sourced quantization -- lives
-once in that evaluator, so this replay can no longer diverge from the #21 golden
-oracle the way it did before #393.
-
-This is explicitly a **preview**, not #26's full acceptance evidence:
-- Facts come from the hand-verified golden corpus, not a live capture/
-  snapshot pipeline (that's #171/#205/#271's DataHub chain, a separate,
-  unrelated dependency -- see the #24/#25/#26 coordination notes).
-- The nightly backtest (`data_engine.lanes.backtest`, #758) runs the same evaluator at each
-  quarter-end cutoff over the projected staging inputs, simulates the selections with
-  `factors.backtest.engine`, and writes `mart.backtest_runs`, `mart.backtest_valuations` and
-  `mart.backtest_trades`.
-
-`run()` is the pure, side-effect-free entry point the CLI script
-(`apps/data-engine/scripts/run_strategy_smoke.py`) calls (the retired Dagster
-asset that also called it went with the fixture generations, #731) -- this module has no
-Dagster import and no file I/O of its own beyond reading the checked-in
-golden corpus, so it stays trivially testable and reusable from either
-caller without one depending on the other's concerns.
-"""
+"""Preview replay: run large_model_value_v0 against #335's golden fixture."""
 
 from __future__ import annotations
 
@@ -37,28 +11,20 @@ from importlib import resources
 from pathlib import Path
 from typing import Any
 
-from factors.composite.strategy_evaluator import (
-    EvaluatedDecision,
-    IssuerInput,
-    evaluate_cutoff,
-)
+from factors.composite.strategy_evaluator import EvaluatedDecision, IssuerInput, evaluate_cutoff
 from factors.measure import measure_for_input_key
 from factors.panel import IssuerClass, uniform_tree_pins
 from truealpha_contracts.strategy import LargeModelValueV0Definition
 
-# CANONICAL_FIXTURE_PATH (the CLI script's *output* golden preview) is a
-# repo-write concern and stays repo-root-relative; the corpus this module
-# *reads* at runtime must not be, since data_engine ships as a wheel
-# (`packages = ["src/data_engine"]`) that won't have the monorepo checked
-# out beside it -- see #357's review. It is packaged inside
-# truealpha_contracts.data instead (that package is fully included in the
-# truealpha-contracts wheel) and read back with importlib.resources, the
-# same pattern truealpha_contracts.strategy_run_fixture already uses.
 REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
 _FIXTURE_PACKAGE = "truealpha_contracts.data"
 _FIXTURE_NAME = "large_model_value_v0_definition_1_0_0.json"
 CORPUS_SHA256 = "004e716a11f1a9604275d2da5b13160676411fbb8fc7846b25489b43aef31496"
 STRATEGY_ID = "large_model_value_v0"
+
+
+def _opt_str(val: Decimal | None) -> str | None:
+    return None if val is None else str(val)
 
 
 @dataclass(frozen=True)
@@ -76,53 +42,33 @@ class Decision:
     rank: int | None = None
     target_weight: Decimal | None = None
     confidence: Decimal | None = None
-    # Module 1 (#284), recorded but not selecting. Part of the content hash because it is
-    # part of what the decision asserts about the issuer; when a versioned definition bump
-    # lets PEG enter selection it is already covered.
     peg: Decimal | None = None
     peg_rank: int | None = None
-    # Why PEG is absent (#837). Deliberately NOT in `to_json` (the content hash): it annotates
-    # the asserted values the way the §8 status dimensions do, and adding it to the identity
-    # would make every run already persisted raise `strategy decision identity conflict` on
-    # its next replay.
     peg_reason_codes: tuple[str, ...] = ()
-    # #1176: the labor-efficiency metric name. Deliberately NOT in `to_json` (the content hash), for the
-    # same reason as peg_reason_codes: the name annotates the value, and adding it to the identity would
-    # make every run already persisted raise `strategy decision identity conflict` on replay.
     labor_efficiency_metric: str | None = None
-    # #1235: the P/GP valuation of definition 1.0.0. Part of the content hash when present,
-    # because it is what the decision asserts; omitted when absent, so a 0.1.0 decision keeps
-    # the identity it was persisted with and a replay never raises an identity conflict.
     current_price_to_gross_profit: Decimal | None = None
     target_price_to_gross_profit: Decimal | None = None
 
     def to_json(self) -> dict[str, Any]:
-        payload = {
+        payload: dict[str, Any] = {
             "issuer_id": self.issuer_id,
             "cutoff_at": self.cutoff_at,
-            "capital_adjusted_labor_efficiency": str(self.capital_adjusted_labor_efficiency)
-            if self.capital_adjusted_labor_efficiency is not None
-            else None,
+            "capital_adjusted_labor_efficiency": _opt_str(self.capital_adjusted_labor_efficiency),
             "tier": self.tier,
-            "current_price_to_sales": str(self.current_price_to_sales)
-            if self.current_price_to_sales is not None
-            else None,
-            "target_price_to_sales": str(self.target_price_to_sales)
-            if self.target_price_to_sales is not None
-            else None,
-            "valuation_gap": str(self.valuation_gap) if self.valuation_gap is not None else None,
+            "current_price_to_sales": _opt_str(self.current_price_to_sales),
+            "target_price_to_sales": _opt_str(self.target_price_to_sales),
+            "valuation_gap": _opt_str(self.valuation_gap),
             "eligible": self.eligible,
             "outcome": self.outcome,
             "exclusion_reason": self.exclusion_reason,
             "rank": self.rank,
-            "target_weight": str(self.target_weight) if self.target_weight is not None else None,
-            "confidence": str(self.confidence) if self.confidence is not None else None,
-            "peg": str(self.peg) if self.peg is not None else None,
+            "target_weight": _opt_str(self.target_weight),
+            "confidence": _opt_str(self.confidence),
+            "peg": _opt_str(self.peg),
             "peg_rank": self.peg_rank,
         }
         for name in ("current_price_to_gross_profit", "target_price_to_gross_profit"):
-            value = getattr(self, name)
-            if value is not None:
+            if (value := getattr(self, name)) is not None:
                 payload[name] = str(value)
         return payload
 
@@ -139,7 +85,6 @@ def _load_corpus() -> dict[str, Any]:
 
 
 def _instant(text: str) -> datetime:
-    """The instant of a corpus timestamp such as ``2026-03-31T23:59:59Z``."""
     return datetime.fromisoformat(text.replace("Z", "+00:00"))
 
 
@@ -183,14 +128,8 @@ def run() -> tuple[list[Decision], LargeModelValueV0Definition]:
     for golden in corpus["golden_decision_set"]["decisions"]:
         by_cutoff.setdefault(golden["cutoff_at"], []).append(golden)
 
-    # The per-issuer + ranking/selection algorithm lives once in
-    # factors.composite.strategy_evaluator; the replay only projects the golden
-    # corpus into its inputs and maps the evaluator's decisions onto the mart
-    # Decision dataclass (#393).
     decisions: list[Decision] = []
     for cutoff_at, group in by_cutoff.items():
-        as_of = _instant(cutoff_at)
-        risk_free_rate = _risk_free_rate(rates, cutoff_at)
         issuers = [
             IssuerInput(
                 issuer_id=item["issuer"]["id"],
@@ -214,8 +153,8 @@ def run() -> tuple[list[Decision], LargeModelValueV0Definition]:
         evaluated = evaluate_cutoff(
             issuers,
             definition=definition,
-            cutoff_at=as_of,
-            risk_free_rate=risk_free_rate,
+            cutoff_at=_instant(cutoff_at),
+            risk_free_rate=_risk_free_rate(rates, cutoff_at),
             tree_pins=uniform_tree_pins(),
         )
         decisions.extend(_to_decision(item, cutoff_at) for item in evaluated)
@@ -229,22 +168,20 @@ def _compare_against_golden(decisions: list[Decision], corpus: dict[str, Any]) -
     mismatches: list[str] = []
     for golden in corpus["golden_decision_set"]["decisions"]:
         key = (golden["issuer"]["id"], golden["cutoff_at"])
-        actual = by_key.get(key)
-        expected = golden["expected"]
+        actual, expected = by_key.get(key), golden["expected"]
         if actual is None:
             mismatches.append(f"{key}: no computed decision")
             continue
-        if actual.outcome != expected["outcome"]:
-            mismatches.append(f"{key}: outcome {actual.outcome!r} != golden {expected['outcome']!r}")
-        if actual.exclusion_reason != expected["exclusion_reason"]:
-            mismatches.append(
-                f"{key}: exclusion_reason {actual.exclusion_reason!r} != golden {expected['exclusion_reason']!r}"
-            )
-        if actual.rank != expected["rank"]:
-            mismatches.append(f"{key}: rank {actual.rank!r} != golden {expected['rank']!r}")
         expected_gap = Decimal(str(expected["valuation_gap"])) if expected["valuation_gap"] is not None else None
-        if actual.valuation_gap != expected_gap:
-            mismatches.append(f"{key}: valuation_gap {actual.valuation_gap!r} != golden {expected_gap!r}")
+        for attr, exp_val in (
+            ("outcome", expected["outcome"]),
+            ("exclusion_reason", expected["exclusion_reason"]),
+            ("rank", expected["rank"]),
+            ("valuation_gap", expected_gap),
+        ):
+            act_val = getattr(actual, attr)
+            if act_val != exp_val:
+                mismatches.append(f"{key}: {attr} {act_val!r} != golden {exp_val!r}")
     return mismatches
 
 
@@ -258,11 +195,11 @@ def render_markdown(decisions: list[Decision]) -> str:
         "| Issuer | Cutoff | Outcome | Tier | Valuation gap | Rank | Weight |",
         "|---|---|---|---|---|---|---|",
     ]
-    for decision in decisions:
+    for d in decisions:
         lines.append(
-            f"| {decision.issuer_id} | {decision.cutoff_at} | {decision.outcome} | {decision.tier or '-'} | "
-            f"{decision.valuation_gap if decision.valuation_gap is not None else '-'} | "
-            f"{decision.rank if decision.rank is not None else '-'} | "
-            f"{decision.target_weight if decision.target_weight is not None else '-'} |"
+            f"| {d.issuer_id} | {d.cutoff_at} | {d.outcome} | {d.tier or '-'} | "
+            f"{d.valuation_gap if d.valuation_gap is not None else '-'} | "
+            f"{d.rank if d.rank is not None else '-'} | "
+            f"{d.target_weight if d.target_weight is not None else '-'} |"
         )
     return "\n".join(lines) + "\n"

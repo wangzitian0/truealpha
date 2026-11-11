@@ -1,47 +1,3 @@
-"""The point-in-time projector for historical strategy inputs (#1139, M3 track H1, A6).
-
-``staging.strategy_backtest_inputs`` holds one forward snapshot per live tick. No code wrote a
-row for a past cutoff, so a backtest over 36 monthly cutoffs had no input history. This module
-builds those rows from bytes already stored: the SEC company-facts documents, the headcount
-fact table and the daily unadjusted bars. It makes zero vendor calls.
-
-Rules this module enforces:
-
-* Cutoffs are the first calendar day of each of the last N months at 00:00:00Z, plus each
-  calendar quarter end of the strategy schedule inside that window (#758). The tick time of the
-  run derives them. A quarter-end cutoff is the schedule cutoff the nightly backtest evaluates:
-  it closes its day at the schedule's time (23:59:59Z), and the trade fills at the open of the
-  next session.
-* Strict point in time. A fact is admitted only when its filed date is before the calendar date
-  of the cutoff. The row's ``knowable_at`` is the end of the filed day. A fact filed on the
-  cutoff date therefore has ``knowable_at > cutoff_at``, and the table CHECK
-  ``knowable_at <= cutoff_at`` rejects it. The same rule applies to a quarter-end cutoff at
-  23:59:59Z: the close of the quarter-end session itself is not admitted. That is one session
-  earlier than the definition's price rule permits. The deviation only removes information.
-* Each input carries its own filed date and its own fiscal period, exactly where the live
-  writer does. There is no blended value.
-* ``last_close`` is the unadjusted close (``adjust = 'none'``, #1131) of the last session
-  before the cutoff date. Shares are as filed (A6 decision 4), on the share basis of that close
-  (#1257): a split with an ex-date after the count's basis date and on or before the close's
-  session multiplies the filed count. The basis date of a cover-page count is its own date; the
-  basis date of a statement count is its filing date, because the filing restates it for an
-  earlier split. Without this rule, NVDA at 2024-06-30 multiplied a pre-split count by a
-  post-split close, its market value fell tenfold, and the strategy selected it. The split events
-  come from the two stored price series (``datahub.price_series``). The rule lives in
-  ``datahub.share_basis``, which the live strategy seed also uses (#1262).
-* Canonical issuers only (#1257). The table holds each issuer under a legacy ``issuer:lei:`` id
-  and under its entity UUID. The universe is the set of entities those ids name, and each history
-  is written under the entity UUID. No row is written under a legacy id.
-* The run is idempotent. The unique index of the table includes ``recorded_at``, so a second
-  insert of the same fact would duplicate the row. The projector skips a row that exists for
-  the same issuer, cutoff, input key and fiscal period with the same value and ``knowable_at``.
-
-The financial inputs come from ``SecFinancialFactAdapter`` over the stored bytes, evaluated for
-the day before the cutoff date. That is the same code the live tick runs, so the period gates
-(#1114), the revenue proxy gate (#533) and the share staleness bound (#529) apply unchanged. The
-rows come from ``strategy_bridge.financial_input_rows``, the function the live writer uses.
-"""
-
 from __future__ import annotations
 
 import calendar
@@ -107,15 +63,14 @@ from data_engine.datahub.strategy_bridge import load_strategy_definition
 
 DEFAULT_MONTHS = 36
 
-#: The ``adjust`` value of the unadjusted daily bars (#1131, ``market_prices.UNADJUSTED``).
-#: Market value is the unadjusted close times the as-filed share count (A6 decision 4).
+
 UNADJUSTED_BARS = "none"
-#: The ``adjust`` value of the split-adjusted daily bars (``market_prices.SPLIT_ADJUSTED``).
+
 SPLIT_ADJUSTED_BARS = "splits"
 
 _COMPANY_FACTS_PREFIX = "companyfacts:CIK"
 
-#: The input row this module writes beside the financial inputs.
+
 _LAST_CLOSE_KEY = "last_close"
 
 FactsLoader = Callable[[int], tuple[bytes, dict[str, Any]] | None]
@@ -126,22 +81,18 @@ class LookAheadError(ValueError):
 
 
 class LastClose(NamedTuple):
-    """The close of one session and the instant it became known."""
-
     close: Decimal
     confidence: Decimal
     knowable_at: datetime
 
 
 PriceReader = Callable[[str, datetime], LastClose | None]
-#: The split events of one symbol, oldest first.
+
 SplitReader = Callable[[str], tuple[SplitEvent, ...]]
 
 
 @dataclass(frozen=True)
 class HistoryIssuer:
-    """What the projector needs to project one issuer, read from stored lineage."""
-
     issuer_id: str
     instrument_id: str
     listing_id: str
@@ -154,8 +105,6 @@ class HistoryIssuer:
 
 @dataclass(frozen=True)
 class HistoryRow:
-    """One row of ``staging.strategy_backtest_inputs``, before insert."""
-
     issuer_id: str
     cutoff_at: datetime
     input_key: str
@@ -167,20 +116,18 @@ class HistoryRow:
 
 @dataclass(frozen=True)
 class Projection:
-    """The rows of one issuer over many cutoffs, with the cases that produced no row."""
-
     rows: tuple[HistoryRow, ...]
-    #: Cutoffs where the adapter returned no financial outcome (no stored document, or no fact).
+
     no_outcome: int = 0
-    #: Inputs dropped because the payload names no filing for them.
+
     undated: int = 0
-    #: Share rows put on the share basis of their close by a split after the count's basis date (#1257).
+
     split_adjusted: int = 0
-    #: Share counts classed as cover-page counts: their basis date is their own date.
+
     share_basis_cover: int = 0
-    #: Share counts classed as statement figures: their basis date is their filing date.
+
     share_basis_statement: int = 0
-    #: Share counts that match no stored entry: they fall back to their filing date, which can under-adjust.
+
     share_basis_unrecognised: int = 0
 
 
@@ -192,28 +139,21 @@ class HistorySummary:
     already_present: int
     no_outcome: int
     undated: int
-    #: Issuers of the strategy universe that stored lineage could not resolve.
+
     unresolved_issuers: tuple[str, ...] = ()
-    #: Old-generation ids that name a projected entity. Their history is written under the entity UUID.
+
     merged_ids: int = 0
-    #: Share rows put on the share basis of their close by a split after the count's basis date (#1257).
+
     split_adjusted: int = 0
-    #: Share counts classed as cover-page counts (basis date: their own date).
+
     share_basis_cover: int = 0
-    #: Share counts classed as statement figures (basis date: their filing date).
+
     share_basis_statement: int = 0
-    #: Share counts that match no stored entry (basis date: their filing date, which can under-adjust).
+
     share_basis_unrecognised: int = 0
 
 
-# -- cutoffs and the strict date rule ---------------------------------------------------
-
-
 def monthly_cutoffs(tick: datetime, months: int = DEFAULT_MONTHS) -> list[datetime]:
-    """The first day of each of the last ``months`` months, 00:00:00Z, oldest first.
-
-    The month of the tick counts as the newest one. Its first day never passes the tick.
-    """
     if tick.tzinfo is None or tick.utcoffset() is None:
         raise ValueError("tick must carry a time zone")
     if months < 1:
@@ -224,7 +164,6 @@ def monthly_cutoffs(tick: datetime, months: int = DEFAULT_MONTHS) -> list[dateti
 
 
 def history_cutoffs(tick: datetime, months: int, schedule: QuarterlyCutoffSchedule) -> list[datetime]:
-    """The monthly cutoffs of the tick and the schedule's quarter ends from the oldest of them to the tick."""
     monthly = monthly_cutoffs(tick, months)
     return sorted(set(monthly) | set(quarter_end_cutoffs(schedule, start=monthly[0], end=tick)))
 
@@ -233,13 +172,6 @@ _QUARTER_END_MONTHS = (3, 6, 9, 12)
 
 
 def quarter_end_cutoffs(schedule: QuarterlyCutoffSchedule, *, start: datetime, end: datetime) -> list[datetime]:
-    """The calendar quarter ends of the schedule in ``[start, end]``, oldest first.
-
-    Each cutoff is the last day of a quarter at the schedule's time of day (23:59:59Z, enforced
-    by ``QuarterlyCutoffSchedule``). ``first_cutoff_at`` anchors the LIVE schedule only: it says
-    when live quarterly decisions begin. It does not bound a historical window, so a backtest
-    can evaluate quarter ends before it.
-    """
     for name, value in (("start", start), ("end", end)):
         if value.tzinfo is None or value.utcoffset() is None:
             raise ValueError(f"{name} must carry a time zone")
@@ -256,7 +188,6 @@ def quarter_end_cutoffs(schedule: QuarterlyCutoffSchedule, *, start: datetime, e
 
 
 def is_schedule_cutoff(value: datetime, schedule: QuarterlyCutoffSchedule) -> bool:
-    """True when ``value`` is a calendar quarter end at the schedule's time of day."""
     if value.tzinfo is None or value.utcoffset() is None:
         return False
     utc = value.astimezone(UTC)
@@ -264,17 +195,11 @@ def is_schedule_cutoff(value: datetime, schedule: QuarterlyCutoffSchedule) -> bo
 
 
 def admit_input(cutoff_at: datetime, knowable_at: datetime) -> None:
-    """Raise ``LookAheadError`` unless the input is knowable before the cutoff's calendar date."""
     if knowable_at.astimezone(UTC).date() >= cutoff_at.astimezone(UTC).date():
         raise LookAheadError(
             f"input knowable at {knowable_at.isoformat()} is not before the cutoff date {cutoff_at.date().isoformat()}"
         )
 
-
-# -- per-key filing times ---------------------------------------------------------------
-
-
-# -- stored inputs ----------------------------------------------------------------------
 
 _LAST_CLOSE_SQL = """
 select close, transaction_time
@@ -317,11 +242,6 @@ def _twelve_data_bar_confidence(symbol: str) -> Decimal:
 
 
 def postgres_last_close(connection: psycopg.Connection[Any]) -> PriceReader:
-    """The close of the last session before the cutoff date, from the unadjusted daily bars.
-
-    A split-adjusted bar never answers: it is the wrong basis for market value (A6 decision 4).
-    When one session has several stored vintages, the latest one wins.
-    """
 
     def last_close(symbol: str, cutoff_at: datetime) -> LastClose | None:
         row = connection.execute(
@@ -333,11 +253,6 @@ def postgres_last_close(connection: psycopg.Connection[Any]) -> PriceReader:
 
 
 def postgres_split_events(connection: psycopg.Connection[Any], symbols: Sequence[str]) -> SplitReader:
-    """The split events of each symbol, derived from its two stored daily series, before any projection.
-
-    Raise ONE ``SplitDerivationError`` that names every symbol whose series disagree: a share count
-    cannot be put on the basis of a close when the splits between them are unknown.
-    """
     unadjusted = load_daily_series(connection, symbols, adjust=UNADJUSTED_BARS)
     split_adjusted = load_daily_series(connection, symbols, adjust=SPLIT_ADJUSTED_BARS)
     events = split_events_by_symbol(symbols, unadjusted, split_adjusted)
@@ -347,12 +262,6 @@ def postgres_split_events(connection: psycopg.Connection[Any], symbols: Sequence
 def load_stored_company_facts(
     connection: psycopg.Connection[Any], cik: int, *, store: Any | None = None
 ) -> tuple[bytes, dict[str, Any]] | None:
-    """The newest stored company-facts document of one CIK, as bytes and parsed JSON.
-
-    The document is cumulative and each datum carries its own filed date, so the newest
-    vintage holds every fact of an older one. The bytes come through ``raw_store.get_payload``,
-    which verifies their checksum.
-    """
     row = connection.execute(
         """
         select raw_fetch_id from raw.capture_source_vintages
@@ -368,9 +277,6 @@ def load_stored_company_facts(
     return body, json.loads(body)
 
 
-# -- stored issuer lineage --------------------------------------------------------------
-
-# The newest financial-fact observation of each listing of each entity, newest listing first.
 _LATEST_FINANCIAL_SQL = """
 select entity_id, normalized_payload, source_record_id
 from (
@@ -399,15 +305,6 @@ def latest_financial_observations(
     known_at: datetime,
     parser_version: str = PARSER_VERSION,
 ) -> dict[str, tuple[dict[str, Any], str]]:
-    """Per entity, the payload and source record id of the financial-fact observation of its primary listing.
-
-    The candidates are the observations recorded under any of the entity's ids (#1257: a legacy id and
-    the entity UUID name one issuer). `choose_primary_listings` selects the listing at ``known_at`` (#1518).
-    An entity with several listings and no declared primary listing is not in the answer: no listing
-    values it, so the caller reports it as unresolved. Inside the chosen listing the newest observation
-    wins. An observation id never selects between two listings. One tick writes every listing of an issuer
-    with one ``recorded_at`` and one ``knowable_at``, so that order changed from tick to tick.
-    """
     pairs = [(issuer_id, entity_id) for entity_id, ids in ids_by_entity.items() for issuer_id in ids]
     rows = connection.execute(
         _LATEST_FINANCIAL_SQL,
@@ -426,7 +323,7 @@ def latest_financial_observations(
         {entity_id: [str(item[0]["listing_id"]) for item in found] for entity_id, found in candidates.items()},
         known_at=known_at,
     )
-    # The rows of one entity come newest first, so `next` takes the newest observation of the chosen listing.
+
     return {
         entity_id: next(item for item in found if str(item[0]["listing_id"]) == chosen[entity_id])
         for entity_id, found in candidates.items()
@@ -435,7 +332,6 @@ def latest_financial_observations(
 
 
 def _ticker_of(listing_id: str, connection: psycopg.Connection[Any] | None, known_at: datetime | None) -> str | None:
-    """The listing's ticker. A legacy id spells it. A canonical id resolves through its alias."""
     if is_uuid(listing_id):
         if connection is None or known_at is None:
             return None
@@ -457,11 +353,6 @@ def issuer_from_observation(
     connection: psycopg.Connection[Any] | None,
     known_at: datetime | None = None,
 ) -> HistoryIssuer | None:
-    """The projection target one stored financial-fact observation describes, or None.
-
-    None means the lineage cannot name the CIK, the ticker or the operating branch. The caller
-    reports the issuer as unresolved. Nothing guesses a missing value.
-    """
     digits = source_record_id.removeprefix(_COMPANY_FACTS_PREFIX)
     if not source_record_id.startswith(_COMPANY_FACTS_PREFIX) or not digits.isdigit():
         return None
@@ -482,20 +373,12 @@ def issuer_from_observation(
 
 @dataclass(frozen=True)
 class CanonicalIssuers:
-    """Issuer ids resolved to their canonical entity (#1257).
-
-    ``staging.strategy_backtest_inputs`` holds each issuer under two id generations: the legacy
-    ``issuer:lei:`` id of the old live seeds and the entity UUID of the seeds since the identity
-    unification. Old rows never leave the append-only table. Readers use the canonical ids only.
-    """
-
-    #: One projection target per canonical entity, keyed by the entity UUID.
     issuers: tuple[HistoryIssuer, ...]
-    #: Every id that is itself a canonical entity id, with or without resolved lineage.
+
     canonical_ids: frozenset[str]
-    #: Each other id and the entity it names. Readers ignore its rows; the projector never writes it.
+
     merged: Mapping[str, str]
-    #: Ids that name no entity, and the ids of an entity whose lineage names no CIK, ticker or branch.
+
     unresolved: tuple[str, ...]
 
 
@@ -506,13 +389,6 @@ def canonical_history_issuers(
     known_at: datetime,
     parser_version: str = PARSER_VERSION,
 ) -> CanonicalIssuers:
-    """The canonical projection targets of the given ids, resolved from stored lineage only.
-
-    Each id resolves to its entity through ``stored_entity_of``: it reads the aliases, never
-    mints, and refuses a UUID that is not an entity of the store. The lineage of an entity is the
-    newest financial-fact observation recorded under any of its ids, so an issuer captured only
-    under its legacy id still resolves, under its UUID.
-    """
     if known_at.tzinfo is None or known_at.utcoffset() is None:
         raise ValueError("known_at must carry a time zone")
     as_of = known_at.astimezone(UTC).date()
@@ -550,12 +426,6 @@ def canonical_history_issuers(
 def _with_predecessors(
     connection: psycopg.Connection[Any], issuers: Sequence[HistoryIssuer], ids_by_entity: Mapping[str, Sequence[str]]
 ) -> list[HistoryIssuer]:
-    """Each issuer with the predecessor CIK that ``predecessor_ciks`` resolves for its listing (#1263).
-
-    The signed registry (``staging.issuer_cik_predecessors``) is keyed by the id it was written
-    under, and its rows predate the entity UUIDs: ExxonMobil's row names ``issuer:lei:``.
-    ``predecessor_ciks`` resolves across all candidate ids and legacy aliases in one call.
-    """
     if not issuers:
         return []
     listings = [issuer.listing_id for issuer in issuers]
@@ -576,11 +446,7 @@ def _with_predecessors(
     return resolved
 
 
-# -- projection -------------------------------------------------------------------------
-
-
 def _work_item(issuer: HistoryIssuer, cutoff_at: datetime) -> CaptureWorkItem:
-    """A work item whose identity is the pair (issuer, cutoff). The adapter looks its target up by it."""
     digest = canonical_sha256({"issuer": issuer.issuer_id, "cutoff": cutoff_at.isoformat(), "kind": "strategy-history"})
     return CaptureWorkItem(
         campaign_id=f"capture-campaign:{digest}",
@@ -600,12 +466,6 @@ def project_issuer_rows(
     ruleset: ConceptMappingRuleset,
     listing_ratio_reader: ListingRatioReader | None = None,
 ) -> Projection:
-    """The input rows of one issuer at each cutoff. Reads only. Writes nothing.
-
-    The adapter runs for the day before the cutoff date. ``build_bundle`` admits a fact filed on
-    or before that day, which is the same set as a fact filed before the cutoff date. The
-    headcount extractor admits a fact knowable through the end of that same day.
-    """
     documents: dict[int, tuple[bytes, dict[str, Any]] | None] = {}
     ratio_reader = listing_ratio_reader if listing_ratio_reader is not None else CoverRatioReader()
 
@@ -719,12 +579,6 @@ def _on_close_basis(
     as_of: date,
     listing_units_per_share: Decimal | None,
 ) -> tuple[HistoryRow, bool] | None:
-    """The share row on the share basis of ``bar``, with whether a split moved it, or None when unavailable.
-
-    The filed count is on the basis of ``as_of`` (``share_count_as_of``). ``on_close_basis`` converts
-    ordinary shares into listed units and applies every split after ``as_of`` and on or before the
-    close's session. When the listing unit ratio is unknown, the count is dropped.
-    """
     close_session = as_of if bar is None else bar.knowable_at.astimezone(UTC).date()
     close_knowable_at = shares.knowable_at if bar is None else bar.knowable_at
     basis = on_close_basis(
@@ -747,7 +601,6 @@ def _on_close_basis(
 
 
 def _checked(row: HistoryRow) -> HistoryRow:
-    """The row, after the registry check the live writer makes and the strict date check."""
     if not is_registered_input_key(row.input_key):
         raise ValueError(
             f"{row.input_key!r} is not a registered metric (truealpha_contracts.metrics.METRICS); "
@@ -763,9 +616,7 @@ from staging.strategy_backtest_inputs
 where issuer_id = %s and cutoff_at = any(%s)
 """
 
-# `recorded_at` is the clock reading of the insert, not the transaction start (`now()`). The
-# unique index holds `recorded_at`, so two runs in one transaction that write a changed value for
-# one key would otherwise collide on the same `now()`.
+
 _INSERT_SQL = """
 insert into staging.strategy_backtest_inputs
     (issuer_id, cutoff_at, input_key, value, confidence, knowable_at, fiscal_period, recorded_at)
@@ -774,7 +625,6 @@ values (%s, %s, %s, %s, %s, %s, %s, clock_timestamp())
 
 
 def _write_new_rows(connection: psycopg.Connection[Any], issuer: HistoryIssuer, rows: Sequence[HistoryRow]) -> int:
-    """Insert the rows that the table does not hold yet. Returns the count of skipped rows."""
     cutoffs = sorted({row.cutoff_at for row in rows})
     present = {
         (cutoff_at, input_key, period, Decimal(str(value)), knowable_at)
@@ -820,13 +670,6 @@ def run_strategy_history(
     schedule: QuarterlyCutoffSchedule | None = None,
     listing_ratio_reader: ListingRatioReader | None = None,
 ) -> HistorySummary:
-    """Project every issuer over the cutoffs of the tick and insert the new rows.
-
-    The cutoffs are the monthly cutoffs of the tick plus the quarter ends of the strategy
-    schedule from the oldest monthly cutoff to the tick. The caller owns the transaction.
-    ``tick`` is the run's tick time, never the wall clock, so a replay of one tick builds the
-    same cutoffs.
-    """
     cutoffs = history_cutoffs(tick, months, schedule if schedule is not None else load_strategy_definition().schedule)
     extractor = headcount_extractor if headcount_extractor is not None else PostgresHeadcountExtractor(connection)
     reader = last_close if last_close is not None else postgres_last_close(connection)
@@ -880,14 +723,6 @@ def project_deployed_history(
     months: int = DEFAULT_MONTHS,
     store: Any | None = None,
 ) -> HistorySummary:
-    """The deployed run: extend the history of every issuer the strategy already consumes.
-
-    The universe is the canonical entities of the ids that hold a row in
-    ``staging.strategy_backtest_inputs`` (#1257). The table holds each issuer under a legacy id
-    and under its entity UUID, so the run resolves every id to its entity and projects one
-    history per entity, under the UUID. It never writes a row under a legacy id. The run fails
-    when it resolves no issuer or projects no row, so an empty run cannot report success.
-    """
     issuer_ids = [
         row[0]
         for row in connection.execute("select distinct issuer_id from staging.strategy_backtest_inputs order by 1")

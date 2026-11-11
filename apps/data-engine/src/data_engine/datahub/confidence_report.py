@@ -1,60 +1,10 @@
-"""The datahub CONFIDENCE & ACCURACY report for a governed head (owner standard, 2026-09-15).
-
-The standard, verbatim: "HIGH confidence = multiple sources agree, MEDIUM = multiple sources
-present, LOW = covered by one source". This module grades every (metric family, subject)
-cell of the run the governed pointer heads and persists the result as one append-only,
-content-addressed `mart.datahub_confidence_report` row. A cell carries:
-
-* `confidence`          — one decimal from 0 to 1, evaluated from what the origins asserted;
-* `independent_origins` — the number of independent lineages that asserted a value;
-* `reason`              — why the cell holds the origins it holds: `independent_origins_agree`
-                          (three groups or more agreed under the family's content-addressed
-                          tolerance policy, or both routes of the index-membership plane
-                          listed the listing), `two_origins_agree`, `no_agreement_policy`,
-                          `same_lineage` (two readers of one 10-K are one source),
-                          `not_agreed_within_tolerance`, `cross_origin_conflict`,
-                          `single_origin` and its variants, or `no_origin_value`.
-
-The report holds no band word (#1517). A band is a display function of `confidence`
-(`truealpha_contracts.confidence_bands`). Rows written before that change keep their words.
-
-Independence is a property of LINEAGE, not of origin id: a mirror, a reseller, or a second
-parser of the same document never corroborates its original
-(docs/datahub-quality-report.md, reconciliation step 3). The cells are computed from what
-each origin actually asserted; the stored `confidence` column on
-`staging.capture_normalized_observations` is a per-semantic constant and takes no part in
-them — the report says so in its metadata, from a measurement rather than a remark.
-
-Every field of the session's bar is its own family (#865): open, high, low and close under
-the deployed market-price policy (`reconciliation_policies.RECONCILIATION_POLICY`), volume under its
-own (`VOLUME_RECONCILIATION_POLICY`), each read from the payload key the origin wrote it
-under — so a field's `two_origins_agree` is exactly what the quality report's `field_reconciliation`
-calls agreed (#850), and the close's agreement is what the pointer gate calls corroborated. An origin
-whose payload lacks a field (Twelve Data v2 carried the close alone) asserts nothing for
-that family: it is present with no value, never a conflict. Index membership gets the
-policy it never had (`INDEX_MEMBERSHIP_POLICY`): the index operator's constituent list
-against the fund's own N-PORT holdings, membership matched exactly, weights compared at a
-stated tolerance whenever both routes carry one. The fundamentals the quality report fuses
-(revenue, gross profit, net income, total assets; #854) reconcile here under the same
-`FINANCIAL_FACT_RECONCILIATION_POLICY` (#866): the primary's figure at its fiscal period
-end against a second origin's figure at that same period, in the primary's currency —
-agreed is `two_origins_agree`, beyond tolerance `not_agreed_within_tolerance`, a second
-origin that never published the primary's period `second_origin_other_period` (the financial
-analogue of #622). Headcount, pre-provision profit and shares outstanding have no policy and
-grade `no_agreement_policy` with two origins.
-
-The ACCURACY section holds the agreement the engine already computed for every bar field
-and every fused fundamental, cross-checked field by field against the persisted quality report.
-The outside comparisons are not in the report payload. `mart.oracle_outcomes` holds them, one
-row per comparison (`oracle_outcomes.py`, #1523): the independent parse of revenue and gross
-profit over the whole head, and the index operator's listed units.
-"""
+"""Datahub CONFIDENCE & ACCURACY report for a governed head (owner standard, 2026-09-15)."""
 
 from __future__ import annotations
 
 import re
 from collections import Counter
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
@@ -65,14 +15,10 @@ from factors.panel import ALL_ISSUER_CLASSES, IssuerClass, snapshot_field_specs
 from psycopg import Connection
 from psycopg.types.json import Jsonb
 from truealpha_contracts.common import canonical_sha256
-from truealpha_contracts.confidence import (
-    ContinuousConfidencePolicy,
-    SourceConfidenceEvidence,
-)
+from truealpha_contracts.confidence import ContinuousConfidencePolicy, SourceConfidenceEvidence
 from truealpha_contracts.reconciliation import (
     MEDIAN_QUORUM_GROUPS,
     ConflictBehavior,
-    ReconciliationCell,
     ReconciliationOutcome,
     ReconciliationPolicy,
     ReconciliationResult,
@@ -84,7 +30,6 @@ from truealpha_contracts.reconciliation_policies import (
     FINANCIAL_FACT_RECONCILIATION_POLICY,
     INDEX_MEMBERSHIP_POLICY,
 )
-from truealpha_contracts.universe import SubjectKind, SubjectRef
 from truealpha_contracts.universes import key_of_lane, record
 
 from data_engine.datahub.oracle_outcomes import (
@@ -108,6 +53,7 @@ from data_engine.datahub.quality_report import (
     FIELD_UNITS,
     FINANCIAL_FACT_FUSION_FIELDS,
     PRICE_BAR_FIELDS,
+    _reconciliation_cell,
     corroborating_financial_value,
     financial_fact_unit,
     primary_financial_fields,
@@ -123,25 +69,13 @@ from data_engine.datahub.resolve_coordinates import alias_of, is_uuid
 
 REPORT_VERSION = "datahub-confidence-report:v1"
 REPORT_ID_PREFIX = "datahub-confidence-report"
-
 MARKET_PRICE_SEMANTIC = "market-price"
-#: The served field of the bar. Every other bar field (`quality_report.PRICE_BAR_FIELDS`) is
-#: its own family under its own name, because one family cannot honestly be HIGH for the
-#: close and unknown for the volume (#865).
 CLOSE_FAMILY = "close"
 INDEX_MEMBERSHIP_FAMILY = "index_membership"
-#: The fund weight is its own family: membership can be corroborated by two routes today
-#: while the weight has one (the operator route carries none yet), and one family
-#: cannot honestly be HIGH and LOW at once.
 ETF_WEIGHT_FAMILY = "etf_weight"
-#: The membership plane is not a capture semantic (no registration owns it — it is
-#: published by the weekly universe refresh, #539/#63), so it carries its own name here.
 INDEX_MEMBERSHIP_SEMANTIC = "index-membership"
 MEMBER = "member"
 
-#: Every payload key of the financial-fact semantic that carries a measured figure the
-#: factor or the strategy consumes (`materialization.FinancialFactPayload`). Each is its own
-#: family because each can gain a second origin on its own schedule.
 FINANCIAL_FIELDS: tuple[str, ...] = (
     "revenue",
     "gross_profit",
@@ -151,20 +85,15 @@ FINANCIAL_FIELDS: tuple[str, ...] = (
     "net_income",
     "headcount",
 )
-#: The families whose cells are cross-checked against the persisted quality report's grade
-#: of the same field: every bar field (`reconciliation_cells[*].fields`, #850) and every
-#: fused fundamental (`financial_fact_reconciliation_cells[*].fields`, #854).
 CROSS_CHECKED_FAMILIES: tuple[str, ...] = (*PRICE_BAR_FIELDS, *FINANCIAL_FACT_FUSION_FIELDS)
 
 SEC_COMPANY_FACTS_ORIGIN = "origin:sec-company-facts:v1"
 SEC_COMPANY_FACTS_SOURCE = "sec-company-facts:v1"
-#: The headcount plane's producers all read the issuer's 10-K (the extractor's evidence span
-#: and the reviewed seed's citation are the same document), so they are one lineage. A
-#: producer not listed here — a vendor feed — keeps its own name and counts as independent.
 HEADCOUNT_LINEAGE: Mapping[str, str] = {"10k-extraction": "sec-10k", "manual-review": "sec-10k"}
 NASDAQ_INDEX_ORIGIN = "origin:nasdaq-index:v1"
 NPORT_ORIGIN = "origin:nport:v1"
 MEMBERSHIP_LINEAGE: Mapping[str, str] = {NASDAQ_INDEX_ORIGIN: "nasdaq-index", NPORT_ORIGIN: "sec-nport"}
+VENDOR_LINEAGE: Mapping[str, str] = {"origin:moomoo-kline:v1": "moomoo", "origin:moomoo-financials:v1": "moomoo"}
 
 INDEPENDENCE_RULE = (
     "two origins are independent when their lineages differ; a mirror, reseller or second "
@@ -174,56 +103,35 @@ INDEPENDENCE_RULE = (
 _CIK_ID = re.compile(r"^issuer:cik:(\d+)$")
 _RATIO_PLACES = Decimal("0.0001")
 _DELTA_PLACES = Decimal("0.000001")
+CONTINUOUS_CONFIDENCE_POLICY = ContinuousConfidencePolicy()
+UNSERVED_REASONS = frozenset({"no_origin_value", "not_knowable_at_cutoff", "no_eligible_origin"})
+COMPILE_STAMPS: tuple[str, ...] = ("generated_at",)
+_COMPARED_OUTCOMES = frozenset({ReconciliationOutcome.AGREED.value, ReconciliationOutcome.CONFLICT_ABSTAINED.value})
 
 
 @dataclass(frozen=True)
 class OriginValue:
-    """What one origin asserted for one cell. `value` is a base-10 string (never a float);
-    None means the origin was present but carried no value for the cell."""
-
     origin_id: str
     source_id: str
     lineage: str
     value: str | None
     knowable_at: datetime | None = None
     observation_id: str | None = None
-    #: The fiscal period end the value describes, for a period-bound family: the primary's
-    #: own, or the period a corroborating figure was read at (#866).
     period_end: date | None = None
-    #: The observation served its cell because the primary could not (#862): the payload
-    #: declared `served_by_failover`. A lone failover assertion grades LOW under that name.
     served_by_failover: bool = False
 
 
 @dataclass(frozen=True)
 class FamilyPolicy:
-    """One metric family: the registered semantic it reads, the payload keys carrying its
-    value, and the reconciliation policy (if any) that can grade two origins `agreed`."""
-
     family: str
     semantic_type: str
     value_keys: tuple[str, ...]
     reconciliation: ReconciliationPolicy | None
-    #: `numeric` compares Decimal values under the policy's tolerance; `membership` compares
-    #: presence exactly and falls through to a numeric weight comparison when both routes
-    #: carry a weight.
     comparison: str = "numeric"
-    #: A session close is comparable only across assertions of the same trading day (#622).
     session_bound: bool = False
-    #: A financial fact is comparable only across assertions of the same fiscal period end:
-    #: the second origin's figure is read at the primary's period (#866), and one it
-    #: published for other periods only is excluded, never a conflict.
     period_bound: bool = False
-    #: The unit the family's cell is declared in — part of the content-addressed cell
-    #: identity, so it must be the family's own (a fund weight is a percent of net assets,
-    #: never a dollar figure).
     unit: str = "USD"
-    #: The issuer classes for which this family carries an obligation (`FOREST` input node
-    #: applicability; #1518).
     applicability: frozenset[IssuerClass] = ALL_ISSUER_CLASSES
-
-
-CONTINUOUS_CONFIDENCE_POLICY = ContinuousConfidencePolicy()
 
 
 @dataclass(frozen=True)
@@ -265,10 +173,6 @@ class CellGrade:
 
 
 def _close_origins() -> dict[str, tuple[str, str, str]]:
-    """origin_id -> (origin_source, origin_id, value_key), the CURRENT coordinate of each
-    market-price origin (a historical vintage of the same origin never overrides it)."""
-    # Only origins registered under the market-price semantic: the parser map also
-    # carries the financial-fact corroborator (moomoo statements), which asserts no close.
     market = {origin.origin_id for origin in registration_for(MARKET_PRICE_SEMANTIC).origins}
     out: dict[str, tuple[str, str, str]] = {}
     for coordinate in SOURCE_BY_PARSER.values():
@@ -280,14 +184,7 @@ def _close_origins() -> dict[str, tuple[str, str, str]]:
 CLOSE_ORIGINS: Mapping[str, tuple[str, str, str]] = _close_origins()
 
 
-#: One vendor behind two origins: moomoo's K-line and its statements are the same source
-#: (independent of Yahoo/Twelve Data and of SEC respectively), so the lineage — and the
-#: `sources_connected` roll-up — names the vendor, not the endpoint.
-VENDOR_LINEAGE: Mapping[str, str] = {"origin:moomoo-kline:v1": "moomoo", "origin:moomoo-financials:v1": "moomoo"}
-
-
 def lineage_of(origin_id: str) -> str:
-    """The canonical original source behind an origin id: `origin:<lineage>:<version>`."""
     if origin_id in MEMBERSHIP_LINEAGE:
         return MEMBERSHIP_LINEAGE[origin_id]
     if origin_id in VENDOR_LINEAGE:
@@ -297,12 +194,6 @@ def lineage_of(origin_id: str) -> str:
 
 
 def _market_price_families() -> tuple[FamilyPolicy, ...]:
-    """One family per field of the session's bar, in the bar's order. The close is read
-    under the registered origins' value keys (the v1 second origin wrote `price`); every
-    other field under its own name, which is how every bar-carrying vintage writes it
-    (`market_price_adapter.bar_payload`). Each field reuses the quality report's policy
-    and unit for that field, so a HIGH here is exactly what `field_reconciliation[<field>]`
-    calls agreed; all are session-bound like the close (#622)."""
     registration = registration_for(MARKET_PRICE_SEMANTIC)
     close_keys = tuple(dict.fromkeys(origin.value_key for origin in registration.origins))
     return tuple(
@@ -324,9 +215,6 @@ _FIELD_APPLICABILITY: Mapping[str, frozenset[IssuerClass]] = {
 
 FAMILIES: tuple[FamilyPolicy, ...] = (
     *_market_price_families(),
-    # The fields the quality report fuses reconcile under its policy, aligned on the primary's
-    # fiscal period (#866); the others (headcount, pre-provision profit, shares outstanding)
-    # have no policy and stay MEDIUM at most with two origins.
     *(
         FamilyPolicy(
             family=name,
@@ -351,14 +239,11 @@ FAMILIES: tuple[FamilyPolicy, ...] = (
         semantic_type=INDEX_MEMBERSHIP_SEMANTIC,
         value_keys=("weight",),
         reconciliation=INDEX_MEMBERSHIP_POLICY,
-        # N-PORT `pctVal`: the holding as a percent of the fund's net assets.
         unit="percent_of_net_assets",
     ),
 )
 PLANE_FAMILIES: tuple[str, ...] = (INDEX_MEMBERSHIP_FAMILY, ETF_WEIGHT_FAMILY)
 _FAMILY_BY_NAME = {policy.family: policy for policy in FAMILIES}
-# Every registered value-bearing semantic must be graded by some family (identity
-# semantics carry scope, not a measurement). Refused at import, not discovered in a report.
 _ungraded = set(registered_semantic_types()) - RELEASE_SEMANTICS - {policy.semantic_type for policy in FAMILIES}
 if _ungraded:
     raise ValueError(f"registered semantics with no confidence family: {sorted(_ungraded)}")
@@ -382,70 +267,62 @@ def _decimal(value: str | None) -> Decimal | None:
 
 
 def _ratio(numerator: int, denominator: int) -> str | None:
-    if denominator == 0:
-        return None
-    return str((Decimal(numerator) / Decimal(denominator)).quantize(_RATIO_PLACES))
+    return None if denominator == 0 else str((Decimal(numerator) / Decimal(denominator)).quantize(_RATIO_PLACES))
 
 
 def _synthetic_observation_id(family: str, subject_id: str, origin: OriginValue) -> str:
-    """Membership rows carry no normalized observation; the assertion id is content-addressed
-    from the row's own facts so the engine's identity checks still hold."""
     return "normalized-observation:" + canonical_sha256(
         {"family": family, "subject": subject_id, "origin": origin.origin_id, "value": origin.value}
     )
 
 
-def _served_day(policy: FamilyPolicy, origins: Sequence[OriginValue]) -> tuple[list[OriginValue], list[OriginValue]]:
-    """Narrow a session-bound family to the served bar's day (#622): the primary's newest
-    day on which it asserted a value, else the newest day any origin asserted a value. A
-    dated row without a value (Yahoo's overnight null-close window) is not an assertion
-    and never moves the anchor away from the day the origins priced. Returns
-    (kept, excluded)."""
-    if not policy.session_bound or policy.reconciliation is None:
+def _narrow_to_anchor(
+    policy: FamilyPolicy,
+    origins: Sequence[OriginValue],
+    *,
+    bound: bool,
+    raw_anchor: Callable[[OriginValue], Any],
+    match_key: Callable[[Any], Any],
+    require_valued: bool,
+) -> tuple[list[OriginValue], list[OriginValue]]:
+    if not bound or policy.reconciliation is None:
         return list(origins), []
-    dated = [origin for origin in origins if origin.knowable_at is not None]
+    dated = [o for o in origins if raw_anchor(o) is not None and (not require_valued or o.value is not None)]
     if not dated:
         return list(origins), []
-    valued = [origin for origin in dated if origin.value is not None] or dated
+    valued = [o for o in dated if o.value is not None] or dated
     primary = policy.reconciliation.source_priority[0]
-    primary_days = [origin.knowable_at for origin in valued if origin.source_id == primary and origin.knowable_at]
-    anchor = max(primary_days) if primary_days else max(origin.knowable_at for origin in valued if origin.knowable_at)
-    # The instants' UTC days, never the session zone's (#885, `utc_day`).
-    kept = [
-        origin for origin in origins if origin.knowable_at is None or utc_day(origin.knowable_at) == utc_day(anchor)
-    ]
-    excluded = [origin for origin in origins if origin not in kept]
-    return kept, excluded
+    primary_keys = [raw_anchor(o) for o in valued if o.source_id == primary and raw_anchor(o) is not None]
+    anchor = match_key(max(primary_keys) if primary_keys else max(raw_anchor(o) for o in valued if raw_anchor(o)))
+    kept = [o for o in origins if raw_anchor(o) is None or match_key(raw_anchor(o)) == anchor]
+    return kept, [o for o in origins if o not in kept]
+
+
+def _served_day(policy: FamilyPolicy, origins: Sequence[OriginValue]) -> tuple[list[OriginValue], list[OriginValue]]:
+    return _narrow_to_anchor(
+        policy,
+        origins,
+        bound=policy.session_bound,
+        raw_anchor=lambda o: o.knowable_at,
+        match_key=utc_day,
+        require_valued=False,
+    )
 
 
 def _served_period(policy: FamilyPolicy, origins: Sequence[OriginValue]) -> tuple[list[OriginValue], list[OriginValue]]:
-    """Narrow a period-bound family to the primary's fiscal period (#866): the second
-    origin's figure is comparable only at the period end the primary's figure describes.
-    An origin that published the field for other periods only has not corroborated the
-    served figure — it is excluded, never a conflict (the quality report's alignment,
-    `reconcile_financial_fact_entries`). Anchor: the primary's newest asserted period,
-    else the newest period any origin asserted; an undated assertion is never excluded.
-    Returns (kept, excluded)."""
-    if not policy.period_bound or policy.reconciliation is None:
-        return list(origins), []
-    dated = [origin for origin in origins if origin.period_end is not None and origin.value is not None]
-    if not dated:
-        return list(origins), []
-    primary = policy.reconciliation.source_priority[0]
-    primary_periods = [origin.period_end for origin in dated if origin.source_id == primary and origin.period_end]
-    anchor = (
-        max(primary_periods) if primary_periods else max(origin.period_end for origin in dated if origin.period_end)
+    return _narrow_to_anchor(
+        policy,
+        origins,
+        bound=policy.period_bound,
+        raw_anchor=lambda o: o.period_end,
+        match_key=lambda d: d,
+        require_valued=True,
     )
-    kept = [origin for origin in origins if origin.period_end is None or origin.period_end == anchor]
-    excluded = [origin for origin in origins if origin not in kept]
-    return kept, excluded
 
 
 def _numeric_for_comparison(
     policy: FamilyPolicy, origins: Sequence[OriginValue]
 ) -> tuple[str, dict[str, Decimal | None]]:
-    """Which comparison the engine runs, and the numeric value per origin under it: presence
-    is compared by exact value, everything else as a Decimal under the policy's tolerance."""
     if policy.comparison == "membership":
         return "membership", {origin.origin_id: None for origin in origins}
     return "numeric", {origin.origin_id: _decimal(origin.value) for origin in origins}
@@ -454,7 +331,6 @@ def _numeric_for_comparison(
 def _deltas(
     policy: FamilyPolicy, numeric: Mapping[str, Decimal | None], origins: Sequence[OriginValue]
 ) -> tuple[str | None, str | None]:
-    """Largest absolute and relative distance from the anchor (the highest-priority origin)."""
     values = {origin_id: value for origin_id, value in numeric.items() if value is not None}
     if len(values) < 2:
         return None, None
@@ -470,14 +346,8 @@ def _deltas(
     )
     scale = max(abs(value) for value in values.values())
     relative = (worst / scale).quantize(_DELTA_PLACES) if scale else Decimal(0)
-    # An integral distance is rendered as the integer (3.00 -> 3), never in the exponent
-    # form `normalize()` gives a volume-sized figure (13686700 -> 1.36867E+7).
     integral = worst.to_integral_value()
     return str(integral if worst == integral else worst), str(relative)
-
-
-#: The reasons of a cell that serves no value: the confidence of such a cell is 0.
-UNSERVED_REASONS = frozenset({"no_origin_value", "not_knowable_at_cutoff", "no_eligible_origin"})
 
 
 def _lookup_outcome_mass(
@@ -538,7 +408,6 @@ def _evaluate_valued_cell(
             or source_reliability_prior(origin.source_id)
             or source_reliability_prior(origin.lineage)
         )
-        conformance = Decimal("0.90") if origin.served_by_failover else Decimal("1")
         freshness = Decimal("1")
         if policy.session_bound and origin.knowable_at is not None:
             lag_days = max(0, (utc_day(cutoff) - utc_day(origin.knowable_at)).days)
@@ -554,7 +423,7 @@ def _evaluate_valued_cell(
                 successful_outcome_mass=succ,
                 failed_outcome_mass=fail,
                 freshness=freshness,
-                sample_conformance=conformance,
+                sample_conformance=Decimal("0.90") if origin.served_by_failover else Decimal("1"),
                 transport_integrity=Decimal("1"),
                 evidence_ids=(evidence_id,),
                 reason_codes=(f"reason:{reason}",),
@@ -571,17 +440,14 @@ def _evaluate_valued_cell(
         field=policy.family,
         cutoff=cutoff,
     )
-    agreement = min(multi_agreement, oracle_agreement)
-    semantic_quality = Decimal("0.85") if reason == "no_agreement_policy" else Decimal("1")
-    extra_codes = (f"reason:{reason}", *oracle_reasons)
     return evaluate_cell_confidence(
         case_id=case_id,
         sources=tuple(sources),
-        agreement=agreement,
-        semantic_mapping_quality=semantic_quality,
+        agreement=min(multi_agreement, oracle_agreement),
+        semantic_mapping_quality=Decimal("0.85") if reason == "no_agreement_policy" else Decimal("1"),
         lineage_completeness=Decimal("1"),
         required_component_completeness=Decimal("1"),
-        extra_reason_codes=extra_codes,
+        extra_reason_codes=(f"reason:{reason}", *oracle_reasons),
         policy=CONTINUOUS_CONFIDENCE_POLICY,
     )
 
@@ -596,15 +462,7 @@ def classify_cell(
     oracle_outcomes: Sequence[Mapping[str, Any]] = (),
     subject_aliases: Sequence[str] = (),
 ) -> CellGrade:
-    """Grade one cell from what its origins asserted. Pure: no clock, no database.
-
-    An origin asserts once (#885 item 9): two rows of one origin — a retried capture and
-    a reused binding — are one origin, never `same_lineage` with itself. Of the rows the
-    served day and period kept, each origin asserts from its newest valued one
-    (`_newest_per_origin`), the representative the fusion engine itself would pick, so
-    the grade still matches the quality report's cell by cell. An origin that asserted
-    on the served day is not also "another day's" second origin.
-    """
+    """Grade one cell from what its origins asserted."""
     kept, other_day = _served_day(policy, origins)
     kept, other_period = _served_period(policy, kept)
     valued = _newest_per_origin([origin for origin in kept if origin.value is not None])
@@ -632,9 +490,7 @@ def classify_cell(
         observation_id = next((origin.observation_id for origin in valued if origin.observation_id), None)
         if policy.semantic_type in RELEASE_SEMANTICS and valued and reason not in UNSERVED_REASONS:
             cell_eval = evaluate_cell_confidence(
-                case_id=case_id,
-                definitional=True,
-                policy=CONTINUOUS_CONFIDENCE_POLICY,
+                case_id=case_id, definitional=True, policy=CONTINUOUS_CONFIDENCE_POLICY
             )
         elif not valued or reason in UNSERVED_REASONS:
             cell_eval = evaluate_cell_confidence(
@@ -681,8 +537,6 @@ def classify_cell(
     independent = len({origin.lineage for origin in valued})
     if len(valued) == 1:
         if valued[0].served_by_failover:
-            # The primary could not serve the cell and the origin that did stands alone
-            # (#862): named, so a gap in the primary never reads as ordinary single-origin.
             reason = SERVED_BY_FAILOVER
         elif other_day_ids:
             reason = "second_origin_other_day"
@@ -697,17 +551,10 @@ def classify_cell(
         return grade("same_lineage", asserted, independent, delta=delta, relative=relative, comparison=comparison)
     if policy.reconciliation is None:
         return grade(
-            "no_agreement_policy",
-            asserted,
-            independent,
-            delta=delta,
-            relative=relative,
-            comparison=comparison,
+            "no_agreement_policy", asserted, independent, delta=delta, relative=relative, comparison=comparison
         )
     result = _reconcile(policy, subject_id, valued, numeric, cutoff)
     if result.outcome is ReconciliationOutcome.AGREED:
-        # The median rule serves a pair's mean beside a quorum's median; any other policy
-        # (index membership) names every agreement the same way.
         pair = (
             policy.reconciliation.conflict_behavior is ConflictBehavior.MEDIAN_CONSENSUS
             and len(result.agreeing_assertion_ids) < MEDIAN_QUORUM_GROUPS
@@ -739,16 +586,10 @@ def _reconcile(
     numeric: Mapping[str, Decimal | None],
     cutoff: datetime,
 ) -> ReconciliationResult:
-    """Run the accepted fusion engine over the origins' assertions under the family policy."""
     assert policy.reconciliation is not None
-    cell = ReconciliationCell(
-        requirement_id=f"data-requirement:{canonical_sha256({'requirement': f'{policy.semantic_type}:v1'})}",
-        subject=SubjectRef(kind=SubjectKind.LISTING, id=subject_id),
-        field_name=policy.family,
-        field_semantics_id=f"field-semantics:{canonical_sha256({'field': f'{policy.semantic_type}-{policy.family}:v1'})}",
-        unit=policy.unit,
-        valid_from=utc_day(cutoff),
-        valid_to=utc_day(cutoff),
+    day = utc_day(cutoff)
+    cell = _reconciliation_cell(
+        f"{policy.semantic_type}:v1", subject_id, policy.family, policy.semantic_type, policy.unit, day, day
     )
     assertions = []
     for origin in origins:
@@ -763,7 +604,7 @@ def _reconcile(
                 origin_group_id=origin.origin_id,
                 knowable_at=origin.knowable_at or cutoff,
                 normalized_value_sha256=value_sha,
-                numeric_value=numeric[origin.origin_id],
+                numeric_value=compared,
                 confidence_assessment_id=f"confidence-assessment:{value_sha}",
                 lineage_node_ids=(observation_id,),
                 lineage_complete=True,
@@ -775,8 +616,6 @@ def _reconcile(
 
 
 def aggregate(policy: FamilyPolicy, grades: Iterable[CellGrade]) -> dict[str, Any]:
-    """Per-family cell counts by independent origins, the mean confidence, the agreement rate over
-    COMPARED cells (two independent origins under a policy), the tolerance used and the origins involved."""
     rows = list(grades)
     by_origins = Counter(grade.independent_origins for grade in rows)
     total = len(rows)
@@ -825,26 +664,9 @@ def _policy_payload(policy: ReconciliationPolicy | None) -> dict[str, Any] | Non
     }
 
 
-#: Stamps of the compile, not of what it graded. They travel in the payload and stay out of
-#: the content address, so a re-compile over identical content is the SAME row (#885).
-COMPILE_STAMPS: tuple[str, ...] = ("generated_at",)
-
-
 def content_address(payload: Mapping[str, Any]) -> tuple[str, str]:
-    """(report_id, content_sha256) over the canonical payload without its compile stamps.
-
-    The quality report's way, with one deliberate difference: this payload carries the
-    time it was compiled (`generated_at`), and hashing that made every nightly compile a
-    new row that `on conflict do nothing` could never collapse — the table grew one row
-    per night per universe over an unchanged head. The identity is the graded content
-    (the migration's promise: a replay over the same head is the same row, a changed
-    grade a new one); the stored `generated_at` is the compile that first produced it.
-    """
     digest = canonical_sha256({key: value for key, value in payload.items() if key not in COMPILE_STAMPS})
     return f"{REPORT_ID_PREFIX}:{digest}", digest
-
-
-# -- loaders: the persisted observations of one run --------------------------------------------
 
 
 @dataclass
@@ -870,13 +692,16 @@ def _cik_of(
 ) -> int | None:
     if not issuer_id:
         return None
-    match = _CIK_ID.match(issuer_id)
-    if match:
+    if match := _CIK_ID.match(issuer_id):
         return int(match.group(1))
     if is_uuid(issuer_id) and connection is not None:
-        valid_at = cutoff.date() if cutoff else date.today()
-        known_at = cutoff or datetime.now(UTC)
-        val = alias_of(connection, issuer_id, "cik", valid_at=valid_at, known_at=known_at)
+        val = alias_of(
+            connection,
+            issuer_id,
+            "cik",
+            valid_at=cutoff.date() if cutoff else date.today(),
+            known_at=cutoff or datetime.now(UTC),
+        )
         if val is not None:
             try:
                 return int(val)
@@ -892,40 +717,27 @@ def bar_origins(
     knowable_at: datetime | None = None,
     observation_id: str | None = None,
 ) -> dict[str, OriginValue]:
-    """What one market-price observation asserts, per bar family.
-
-    `coordinate` is the origin's registry entry, (origin_source, origin_id, value_key): the
-    close is read under the declared key (the v1 second origin wrote `price`), every other
-    field under its own name, which is how every bar-carrying vintage writes it
-    (`market_price_adapter.bar_payload`). A payload without a field — Twelve Data v2
-    carried the close alone — asserts nothing for that family: the origin is present with
-    no value, never a conflict. A payload without a close asserts no bar at all, the way
-    the quality report reads it (`_reconcile_market_price_cells` skips the observation),
-    so the two reports grade the same assertions field by field.
-    """
     origin_source, origin_id, value_key = coordinate
     close = payload.get(value_key)
     served_by_failover = payload.get(SERVED_BY_FAILOVER) is not None
-    origins: dict[str, OriginValue] = {}
-    for family in PRICE_BAR_FIELDS:
-        value = close if family == CLOSE_FAMILY or close is None else payload.get(family)
-        origins[family] = OriginValue(
+    return {
+        family: OriginValue(
             origin_id=origin_id,
             source_id=origin_source,
             lineage=lineage_of(origin_id),
-            value=None if value is None else str(value),
+            value=None
+            if (val := (close if family == CLOSE_FAMILY or close is None else payload.get(family))) is None
+            else str(val),
             knowable_at=knowable_at,
             observation_id=observation_id,
             served_by_failover=served_by_failover,
         )
-    return origins
+        for family in PRICE_BAR_FIELDS
+    }
 
 
 @dataclass(frozen=True)
 class FinancialObservation:
-    """One financial-fact observation of a subject, as the loader read it: the shared
-    primary vintage (`primary`) or a registered corroborating origin's."""
-
     primary: bool
     origin_source: str
     origin_id: str
@@ -939,9 +751,6 @@ def _text(value: Any) -> str | None:
 
 
 def _newest_period_value(payload: Mapping[str, Any], name: str) -> tuple[str | None, date | None]:
-    """A corroborating origin's newest figure for `name` across `by_period_end`, with the
-    period it describes — what the origin asserts when it never published the primary's
-    period, so the classifier can exclude it as another period rather than compare it."""
     periods = payload.get("by_period_end")
     if not isinstance(periods, Mapping):
         return None, None
@@ -957,8 +766,6 @@ def _newest_period_value(payload: Mapping[str, Any], name: str) -> tuple[str | N
 
 
 class _Observed(Protocol):
-    """What `_newest_per_origin` reads: a financial observation or a graded origin value."""
-
     @property
     def origin_id(self) -> str: ...
 
@@ -974,10 +781,6 @@ def _recency(observation: _Observed) -> tuple[datetime, str]:
 
 
 def _newest_per_origin[ObservedT: _Observed](observations: Sequence[ObservedT]) -> list[ObservedT]:
-    """One observation per origin — the newest by knowable_at, then observation id: the
-    quality report's selection of the primary, applied to every origin. An origin then
-    asserts once, whichever order its rows arrived in, and never counts as two. Serves
-    the financial loader (#875) and every family's grade (#885)."""
     newest: dict[str, ObservedT] = {}
     for observation in observations:
         current = newest.get(observation.origin_id)
@@ -998,35 +801,11 @@ def _corroborating_fused_value(
         return None, None
     if name in anchors:
         aligned = corroborating_financial_value(payload, name, anchors[name][1])
-        if aligned is not None:
-            return str(aligned), anchors[name][1]
-        return _newest_period_value(payload, name)
-    if primary_payload.get(name) is not None:
-        return None, None
-    return _text(payload.get(name)), None
+        return (str(aligned), anchors[name][1]) if aligned is not None else _newest_period_value(payload, name)
+    return (None, None) if primary_payload.get(name) is not None else (_text(payload.get(name)), None)
 
 
 def financial_origins(observations: Sequence[FinancialObservation]) -> dict[str, list[OriginValue]]:
-    """What each financial-fact origin asserts per family, aligned the way the quality
-    report's fusion aligns them (#866, `reconcile_financial_fact_entries`). Each origin
-    asserts from its newest observation alone (`_newest_per_origin`), so the grade cannot
-    depend on the order the rows were read in.
-
-    The primary asserts its own figure, dated with its own fiscal period end where the
-    payload dates it (`primary_financial_fields`). For a fused field, a corroborating
-    origin asserts its figure AT THE PRIMARY'S period end (`corroborating_financial_value`)
-    in the primary's reporting currency (`financial_fact_unit`): an origin reporting in
-    another currency is present with no comparable value; one that published the field
-    for other periods only asserts its newest such figure, dated with that period, which
-    the classifier excludes (`second_origin_other_period`) rather than compares; a primary
-    figure without a dated period cannot be aligned, so nothing corroborates it and the
-    cell is single-origin — the quality report compares it no more. A field the primary
-    does not assert, or a subject without a primary, has no period to align on: every
-    origin asserts its headline figure and the cell is single-origin at most.
-
-    Headcount asserts under its producer (the plane's other producers are added by
-    `_add_headcount_producers`); fields no policy fuses are read by name from every origin.
-    """
     selected = _newest_per_origin(observations)
     primaries = [observation for observation in selected if observation.primary]
     primary = max(primaries, key=_recency) if primaries else None
@@ -1039,8 +818,7 @@ def financial_origins(observations: Sequence[FinancialObservation]) -> dict[str,
             if name == "headcount":
                 if not observation.primary:
                     continue
-                vintage = payload.get("vintage") or {}
-                producer = str((vintage.get("headcount") or {}).get("source") or "unknown")
+                producer = str(((payload.get("vintage") or {}).get("headcount") or {}).get("source") or "unknown")
                 origins.setdefault(name, []).append(
                     OriginValue(
                         origin_id=f"origin:headcount:{producer}",
@@ -1057,11 +835,7 @@ def financial_origins(observations: Sequence[FinancialObservation]) -> dict[str,
                 period = anchors[name][1] if name in anchors else None
             elif name in FINANCIAL_FACT_FUSION_FIELDS and primary is not None:
                 value, period = _corroborating_fused_value(
-                    payload,
-                    name,
-                    primary_payload=primary.payload,
-                    anchors=anchors,
-                    unit=unit,
+                    payload, name, primary_payload=primary.payload, anchors=anchors, unit=unit
                 )
             origins.setdefault(name, []).append(
                 OriginValue(
@@ -1092,9 +866,11 @@ def _resolve_financial_observation(
             True, SEC_COMPANY_FACTS_SOURCE, SEC_COMPANY_FACTS_ORIGIN, payload, knowable_at, observation_id
         )
     coordinate = SOURCE_BY_PARSER.get(parser_version)
-    if coordinate is None:
-        return None
-    return FinancialObservation(False, coordinate[0], coordinate[1], payload, knowable_at, observation_id)
+    return (
+        None
+        if coordinate is None
+        else FinancialObservation(False, coordinate[0], coordinate[1], payload, knowable_at, observation_id)
+    )
 
 
 def _resolve_market_price_coordinate(
@@ -1116,7 +892,6 @@ def load_run_subjects(
     *,
     allow_integration_parser: bool = False,
 ) -> dict[str, _Subject]:
-    """Every subject the run requested, with what each origin asserted per family."""
     subjects: dict[str, _Subject] = {
         str(row[0]): _Subject()
         for row in connection.execute(
@@ -1179,9 +954,6 @@ def load_run_subjects(
 
 
 def _add_headcount_producers(connection: Connection[Any], subjects: Mapping[str, _Subject], cutoff: datetime) -> None:
-    """Every producer that wrote a headcount knowable at the cutoff for the run's issuers
-    (`staging.issuer_headcount_facts`, #70): the fused payload carries one winner, the plane
-    holds all of them, and the standard counts sources present."""
     ciks = {
         cik: subject_id
         for subject_id, subject in subjects.items()
@@ -1207,8 +979,7 @@ def _add_headcount_producers(connection: Connection[Any], subjects: Mapping[str,
         ):
             continue
         subject = subjects[ciks[int(cik)]]
-        present = subject.origins.get("headcount", [])
-        if any(origin.source_id == producer for origin in present):
+        if any(origin.source_id == producer for origin in subject.origins.get("headcount", [])):
             continue
         subject.add(
             "headcount",
@@ -1229,9 +1000,6 @@ def _universe_source(universe: str) -> UniverseSource | None:
 def load_index_membership(
     connection: Connection[Any], source: UniverseSource, cutoff: datetime
 ) -> tuple[dict[str, dict[str, list[OriginValue]]], dict[str, Any]]:
-    """Both membership routes at the cutoff: the operator's newest constituent refresh and
-    the fund's newest N-PORT vintage filed by then. Returns (origins by family by listing,
-    notes): the membership family asserts presence, the weight family a filed weight."""
     constituents = connection.execute(
         """
         select ticker, weight, knowable_at from staging.etf_constituent_facts
@@ -1289,8 +1057,6 @@ def load_index_membership(
                 )
             )
 
-    # The denominator leaves out a constituent whose exchange no source names (#1411 K6).
-    # So the membership route skips it as well, and the notes name it.
     mics = resolve_listing_mics(
         connection,
         source,
@@ -1326,29 +1092,18 @@ def load_index_membership(
     return origins, notes
 
 
-_COMPARED_OUTCOMES = frozenset({ReconciliationOutcome.AGREED.value, ReconciliationOutcome.CONFLICT_ABSTAINED.value})
-
-
 def quality_report_field_outcomes(payload: Mapping[str, Any]) -> dict[str, dict[str, str]]:
-    """family -> listing -> outcome, read from a persisted quality report payload: every bar
-    field's grade under `reconciliation_cells[*].fields` (#850) and every fused
-    fundamental's under `financial_fact_reconciliation_cells[*].fields` (#854; a field the
-    primary left undated is not graded there and is not compared here). A report written
-    before the bar was fused per field carries the close's grade alone, under the cell's
-    headline keys, and grades no other field."""
     outcomes: dict[str, dict[str, str]] = {name: {} for name in CROSS_CHECKED_FAMILIES}
     for listing, cell in (payload.get("reconciliation_cells") or {}).items():
         fields = cell.get("fields")
         graded = fields if isinstance(fields, Mapping) else {CLOSE_FAMILY: cell}
         for name in PRICE_BAR_FIELDS:
-            outcome = (graded.get(name) or {}).get("outcome")
-            if outcome is not None:
+            if (outcome := (graded.get(name) or {}).get("outcome")) is not None:
                 outcomes[name][str(listing)] = str(outcome)
     for listing, cell in (payload.get("financial_fact_reconciliation_cells") or {}).items():
         fields = cell.get("fields") or {}
         for name in FINANCIAL_FACT_FUSION_FIELDS:
-            outcome = (fields.get(name) or {}).get("outcome")
-            if outcome is not None:
+            if (outcome := (fields.get(name) or {}).get("outcome")) is not None:
                 outcomes[name][str(listing)] = str(outcome)
     return outcomes
 
@@ -1356,10 +1111,6 @@ def quality_report_field_outcomes(payload: Mapping[str, Any]) -> dict[str, dict[
 def load_quality_report_field_outcomes(
     connection: Connection[Any], run_id: str
 ) -> tuple[str | None, dict[str, dict[str, str]]]:
-    """The persisted quality report for this run and its per-listing outcome per bar field
-    and fused fundamental, so the report can prove it grades each field the same day, at
-    the same period, and the same way the pointer gate's report graded it."""
-    # Only the cells the cross-check reads, not the whole payload (Copilot on #872).
     row = connection.execute(
         """
         select report_id,
@@ -1372,17 +1123,11 @@ def load_quality_report_field_outcomes(
         """,
         (run_id,),
     ).fetchone()
-    if row is None:
-        return None, {}
-    return str(row[0]), quality_report_field_outcomes(row[1] or {})
+    return (None, {}) if row is None else (str(row[0]), quality_report_field_outcomes(row[1] or {}))
 
 
 def _disagrees(graded: str | None, persisted: str) -> bool:
-    # A cell this report never compared (one origin on the served day) disagrees with a
-    # persisted comparison: the quality report saw two origins this report did not.
-    if graded is None:
-        return persisted in _COMPARED_OUTCOMES
-    return graded != persisted
+    return persisted in _COMPARED_OUTCOMES if graded is None else graded != persisted
 
 
 def field_accuracy(
@@ -1393,10 +1138,6 @@ def field_accuracy(
     quality_report_id: str | None,
     persisted: Mapping[str, str],
 ) -> dict[str, Any]:
-    """One family's accuracy entry: the agreement the engine computed, and the cross-check
-    of every cell's outcome against the persisted quality report's grade of the same
-    field. `matches_quality_report` is None when there is no persisted report or it graded
-    no cell of this field (a report from before the bar was fused per field)."""
     mismatches = sorted(
         listing
         for listing, outcome in persisted.items()
@@ -1415,12 +1156,9 @@ def field_accuracy(
     }
 
 
-# -- the report ---------------------------------------------------------------------------------
-
-
 def _sample_entry(grade: CellGrade) -> dict[str, Any]:
     return {
-        "values": {origin: value for origin, value in sorted(grade.values.items())},
+        "values": dict(sorted(grade.values.items())),
         "delta": grade.delta,
         "relative_delta": grade.relative_delta,
         "comparison": grade.comparison,
@@ -1437,7 +1175,6 @@ def build_report(
     executed_at: datetime,
     environment: str,
 ) -> dict[str, Any]:
-    """Grade the head's cells, sample the subjects of the universe record, and cross-check the accuracy."""
     cutoff = head.cutoff
     subjects = load_run_subjects(connection, head.run_id, cutoff)
     source = _universe_source(universe)
@@ -1451,7 +1188,6 @@ def build_report(
 
     grades: dict[str, dict[str, CellGrade]] = {}
     for policy in FAMILIES:
-        origins_by_subject: dict[str, list[OriginValue]]
         if policy.family in PLANE_FAMILIES:
             if membership_notes is None:
                 continue
@@ -1493,9 +1229,6 @@ def build_report(
         sample[subject_id] = entry
 
     quality_report_id, persisted_outcomes = load_quality_report_field_outcomes(connection, head.run_id)
-    # Every bar field and fused fundamental is cross-checked against the quality report's
-    # grade of that field, so "how many metrics are HIGH" is answered by two reports that
-    # agree, not one.
     accuracy: dict[str, Any] = {
         name: field_accuracy(
             family_policy(name),
@@ -1539,9 +1272,7 @@ def build_report(
         },
         "sample": sample,
         "accuracy": accuracy,
-        "metadata": {
-            "quality_report_id": quality_report_id,
-        },
+        "metadata": {"quality_report_id": quality_report_id},
     }
 
 
@@ -1551,7 +1282,6 @@ def compile_report(
     universe: str,
     executed_at: datetime,
 ) -> dict[str, Any] | None:
-    """The report for one lane universe's governed head, or None when it has no head yet."""
     head = governed_head_of(connection, key_of_lane(universe))
     if isinstance(head, NoHead):
         return None
@@ -1562,64 +1292,6 @@ def compile_report(
         executed_at=executed_at,
         environment=declared_environment(connection),
     )
-
-
-def persist(connection: Connection[Any], report: Mapping[str, Any]) -> str:
-    report_id, content_sha256 = content_address(report)
-    connection.execute(
-        """
-        insert into mart.datahub_confidence_report
-            (report_id, content_sha256, universe_id, run_id, cutoff, payload)
-        values (%s, %s, %s, %s, %s, %s)
-        on conflict (report_id) do nothing
-        """,
-        (report_id, content_sha256, report["universe_id"], report["run_id"], report["cutoff"], Jsonb(dict(report))),
-    )
-    cells_by_family = report.get("cells")
-    if isinstance(cells_by_family, Mapping) and cells_by_family:
-        families_meta = report.get("families") if isinstance(report.get("families"), Mapping) else {}
-        run_id = str(report["run_id"])
-        for family_name, family_cells in sorted(cells_by_family.items()):
-            if not isinstance(family_cells, Mapping):
-                continue
-            fam_info = families_meta.get(family_name) if isinstance(families_meta, Mapping) else None
-            semantic_type = (
-                str(fam_info["semantic_type"])
-                if isinstance(fam_info, Mapping) and fam_info.get("semantic_type")
-                else (_FAMILY_BY_NAME[family_name].semantic_type if family_name in _FAMILY_BY_NAME else "unknown")
-            )
-            for subject_id, cell in sorted(family_cells.items()):
-                if not isinstance(cell, Mapping):
-                    continue
-                conf_val = Decimal(str(cell.get("confidence", "0")))
-                policy_hash = str(cell.get("policy_hash") or CONTINUOUS_CONFIDENCE_POLICY.content_sha256)
-                input_hash = str(
-                    cell.get("input_hash")
-                    or canonical_sha256({"family": family_name, "subject_id": subject_id, "confidence": str(conf_val)})
-                )
-                reason_codes = [
-                    str(code) for code in (cell.get("reason_codes") or [f"reason:{cell.get('reason', 'unknown')}"])
-                ]
-                obs_id = cell.get("observation_id")
-                _insert_cell_confidence_row(
-                    connection,
-                    run_id=run_id,
-                    subject_id=str(subject_id),
-                    semantic_type=semantic_type,
-                    metric=str(family_name),
-                    observation_id=str(obs_id) if obs_id else None,
-                    confidence=conf_val,
-                    policy_hash=policy_hash,
-                    input_hash=input_hash,
-                    reason_codes=reason_codes,
-                )
-    return report_id
-
-
-_SINGLE_ORIGIN_FINANCIAL_FIELDS: tuple[str, ...] = tuple(
-    field_name for field_name in snapshot_field_specs() if field_name not in FINANCIAL_FIELDS
-)
-_TCE_FIELDS: tuple[str, ...] = _SINGLE_ORIGIN_FINANCIAL_FIELDS
 
 
 def _insert_cell_confidence_row(
@@ -1656,6 +1328,91 @@ def _insert_cell_confidence_row(
     )
 
 
+def _record_cell_confidence(
+    connection: Connection[Any],
+    *,
+    run_id: str,
+    subject_id: str,
+    semantic_type: str,
+    metric: str,
+    observation_id: str | None,
+    confidence: Decimal,
+    policy_hash: str | None,
+    input_hash: str | None,
+    reason_codes: Sequence[str],
+    out: dict[tuple[str, str], Decimal] | None = None,
+    listing_alias: str | None = None,
+) -> None:
+    if out is not None:
+        out[(subject_id, metric)] = confidence
+        if listing_alias and listing_alias != subject_id:
+            out[(listing_alias, metric)] = confidence
+    _insert_cell_confidence_row(
+        connection,
+        run_id=run_id,
+        subject_id=subject_id,
+        semantic_type=semantic_type,
+        metric=metric,
+        observation_id=observation_id,
+        confidence=confidence,
+        policy_hash=policy_hash or CONTINUOUS_CONFIDENCE_POLICY.content_sha256,
+        input_hash=input_hash
+        or canonical_sha256({"family": metric, "subject_id": subject_id, "confidence": str(confidence)}),
+        reason_codes=reason_codes,
+    )
+
+
+def persist(connection: Connection[Any], report: Mapping[str, Any]) -> str:
+    report_id, content_sha256 = content_address(report)
+    connection.execute(
+        """
+        insert into mart.datahub_confidence_report
+            (report_id, content_sha256, universe_id, run_id, cutoff, payload)
+        values (%s, %s, %s, %s, %s, %s)
+        on conflict (report_id) do nothing
+        """,
+        (report_id, content_sha256, report["universe_id"], report["run_id"], report["cutoff"], Jsonb(dict(report))),
+    )
+    cells_by_family = report.get("cells")
+    if isinstance(cells_by_family, Mapping) and cells_by_family:
+        families_meta = report.get("families") if isinstance(report.get("families"), Mapping) else {}
+        run_id = str(report["run_id"])
+        for family_name, family_cells in sorted(cells_by_family.items()):
+            if not isinstance(family_cells, Mapping):
+                continue
+            fam_info = families_meta.get(family_name) if isinstance(families_meta, Mapping) else None
+            semantic_type = (
+                str(fam_info["semantic_type"])
+                if isinstance(fam_info, Mapping) and fam_info.get("semantic_type")
+                else (_FAMILY_BY_NAME[family_name].semantic_type if family_name in _FAMILY_BY_NAME else "unknown")
+            )
+            for subject_id, cell in sorted(family_cells.items()):
+                if not isinstance(cell, Mapping):
+                    continue
+                obs_id = cell.get("observation_id")
+                _record_cell_confidence(
+                    connection,
+                    run_id=run_id,
+                    subject_id=str(subject_id),
+                    semantic_type=semantic_type,
+                    metric=str(family_name),
+                    observation_id=str(obs_id) if obs_id else None,
+                    confidence=Decimal(str(cell.get("confidence", "0"))),
+                    policy_hash=str(cell.get("policy_hash") or ""),
+                    input_hash=str(cell.get("input_hash") or ""),
+                    reason_codes=[
+                        str(code) for code in (cell.get("reason_codes") or [f"reason:{cell.get('reason', 'unknown')}"])
+                    ],
+                )
+    return report_id
+
+
+_SINGLE_ORIGIN_FINANCIAL_FIELDS: tuple[str, ...] = tuple(
+    field_name for field_name in snapshot_field_specs() if field_name not in FINANCIAL_FIELDS
+)
+_TCE_FIELDS: tuple[str, ...] = _SINGLE_ORIGIN_FINANCIAL_FIELDS
+
+
 def _persist_release_and_tce_cell_confidences(
     connection: Connection[Any],
     run_id: str,
@@ -1678,9 +1435,7 @@ def _persist_release_and_tce_cell_confidences(
         (run_id,),
     ).fetchall()
     for subject_id_raw, semantic_type_raw, observation_id_raw, parser_version_raw, payload_raw in obs_rows:
-        subject_id = str(subject_id_raw)
-        semantic_type = str(semantic_type_raw)
-        observation_id = str(observation_id_raw)
+        subject_id, semantic_type, observation_id = str(subject_id_raw), str(semantic_type_raw), str(observation_id_raw)
         payload = payload_raw or {}
         listing_alias = str(payload["listing_id"]) if payload.get("listing_id") else None
         if semantic_type in RELEASE_SEMANTICS:
@@ -1689,10 +1444,7 @@ def _persist_release_and_tce_cell_confidences(
                 definitional=True,
                 policy=CONTINUOUS_CONFIDENCE_POLICY,
             )
-            out[(subject_id, semantic_type)] = cell_eval.confidence
-            if listing_alias:
-                out[(listing_alias, semantic_type)] = cell_eval.confidence
-            _insert_cell_confidence_row(
+            _record_cell_confidence(
                 connection,
                 run_id=run_id,
                 subject_id=subject_id,
@@ -1703,6 +1455,8 @@ def _persist_release_and_tce_cell_confidences(
                 policy_hash=cell_eval.policy_hash,
                 input_hash=cell_eval.input_hash,
                 reason_codes=cell_eval.reason_codes,
+                out=out,
+                listing_alias=listing_alias,
             )
         elif semantic_type == "financial-fact" and (
             parser_version_raw in PARSER_VERSION_HISTORY
@@ -1739,10 +1493,7 @@ def _persist_release_and_tce_cell_confidences(
                     oracle_outcomes=oracle_rows,
                     subject_aliases=aliases,
                 )
-                out[(subject_id, tce_field)] = grade.confidence
-                if listing_alias:
-                    out[(listing_alias, tce_field)] = grade.confidence
-                _insert_cell_confidence_row(
+                _record_cell_confidence(
                     connection,
                     run_id=run_id,
                     subject_id=subject_id,
@@ -1750,9 +1501,11 @@ def _persist_release_and_tce_cell_confidences(
                     metric=tce_field,
                     observation_id=observation_id,
                     confidence=grade.confidence,
-                    policy_hash=grade.policy_hash or CONTINUOUS_CONFIDENCE_POLICY.content_sha256,
+                    policy_hash=grade.policy_hash,
                     input_hash=grade.input_hash,
                     reason_codes=grade.reason_codes,
+                    out=out,
+                    listing_alias=listing_alias,
                 )
 
 
@@ -1762,14 +1515,10 @@ def evaluate_and_persist_run_cell_confidence(
     *,
     cutoff: datetime | None = None,
 ) -> dict[tuple[str, str], Decimal]:
-    """Evaluate every non-plane cell of `run_id` and persist to `mart.cell_confidence` (#1517 B3)."""
     if not hasattr(connection, "cursor"):
         return {}
     if cutoff is None:
-        row = connection.execute(
-            "select cutoff from mart.topt_capture_status where run_id = %s",
-            (run_id,),
-        ).fetchone()
+        row = connection.execute("select cutoff from mart.topt_capture_status where run_id = %s", (run_id,)).fetchone()
         cutoff = row[0] if row is not None and row[0] is not None else datetime.now(UTC)
 
     subjects = load_run_subjects(connection, run_id, cutoff, allow_integration_parser=True)
@@ -1792,10 +1541,7 @@ def evaluate_and_persist_run_cell_confidence(
                 oracle_outcomes=oracle_rows,
                 subject_aliases=tuple(alias for alias in (subject.issuer_id,) if alias is not None),
             )
-            out[(subject_id, policy.family)] = grade.confidence
-            if subject.listing_id and subject.listing_id != subject_id:
-                out[(subject.listing_id, policy.family)] = grade.confidence
-            _insert_cell_confidence_row(
+            _record_cell_confidence(
                 connection,
                 run_id=run_id,
                 subject_id=subject_id,
@@ -1803,23 +1549,21 @@ def evaluate_and_persist_run_cell_confidence(
                 metric=policy.family,
                 observation_id=grade.observation_id,
                 confidence=grade.confidence,
-                policy_hash=grade.policy_hash or CONTINUOUS_CONFIDENCE_POLICY.content_sha256,
-                input_hash=grade.input_hash
-                or canonical_sha256(
-                    {"family": policy.family, "subject_id": subject_id, "confidence": str(grade.confidence)}
-                ),
+                policy_hash=grade.policy_hash,
+                input_hash=grade.input_hash,
                 reason_codes=grade.reason_codes or (f"reason:{grade.reason}",),
+                out=out,
+                listing_alias=subject.listing_id,
             )
 
     _persist_release_and_tce_cell_confidences(
         connection, run_id, cutoff, subjects, outcome_mass_by_origin, oracle_rows, out
     )
 
-    persisted_rows = connection.execute(
+    for subject_id_raw, metric_raw, conf_raw in connection.execute(
         "select subject_id, metric, confidence from mart.cell_confidence where run_id = %s",
         (run_id,),
-    ).fetchall()
-    for subject_id_raw, metric_raw, conf_raw in persisted_rows:
+    ).fetchall():
         out[(str(subject_id_raw), str(metric_raw))] = Decimal(str(conf_raw))
     return out
 

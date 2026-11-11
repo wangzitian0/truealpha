@@ -1,21 +1,4 @@
-"""Post-deploy canary oracles (#648): judge the newest canary run by NAMED expectations.
-
-The deploy lane triggers `canary_live_pipeline` (a `staging.pipeline_trigger_requests`
-insert), waits for the run, then executes THIS script. Every gate this replaces
-verified a proxy (workflow conclusions, probe exit codes, model shapes); these oracles
-read what the deployed code actually produced from real sources in the real database.
-
-Exit 0 = every oracle holds; exit 1 = the failures, named, one per line.
-
-Packaged INSIDE the image (a docker-cp'd copy died with the first container
-replacement — the deploy lane runs `python -m data_engine.datahub.canary_oracles`
-so the verdict machinery ships with the code it judges). That is also why the oracles about
-the image itself live here (`image_content_failures`, #784): only a process inside the
-container can see what its image contains.
-
-Usage:
-    python -m data_engine.datahub.canary_oracles [--run-id capture-run:...]
-"""
+"""Post-deploy canary oracles (#648): judge the newest canary run by named expectations."""
 
 from __future__ import annotations
 
@@ -41,6 +24,14 @@ from data_engine.config import settings
 from data_engine.datahub.production_topt.source_registrations import registered_semantic_types
 from data_engine.datahub.production_topt.universe_plane import UNIVERSE_SOURCES
 
+_METRIC_ALIASES = {
+    "gross_profit_per_employee": "gppe",
+    "gppe": "gross_profit_per_employee",
+    "employees_total": "headcount",
+    "headcount": "employees_total",
+}
+_WHEEL_PIN = re.compile(r"/releases/download/v(?P<version>\d+\.\d+\.\d+)/infra2_sdk-(?P=version)-py3-none-any\.whl")
+
 
 def evaluate_known_answer(
     answer: SentinelKnownAnswer,
@@ -48,46 +39,32 @@ def evaluate_known_answer(
     *,
     actual_period_end: str | None = None,
 ) -> str | None:
-    """Evaluate one sentinel known answer against a stored value (#1416 E4).
-
-    Returns ``None`` when the answer holds (or when ``actual_period_end`` is newer than
-    ``answer.period_end``, which marks the known answer stale rather than a data failure).
-    Returns a human-readable failure string when the stored value violates the oracle.
-    """
     if actual_period_end is not None and actual_period_end > answer.period_end:
         return None
+    label = f"{answer.answer_id} ({answer.ticker} {answer.metric})"
     if actual_value is None:
-        return f"{answer.answer_id} ({answer.ticker} {answer.metric}): value is NULL (accession {answer.accession})"
+        return f"{label}: value is NULL (accession {answer.accession})"
     if answer.kind == "exact":
-        if str(actual_value) != str(answer.expected_value):
-            return (
-                f"{answer.answer_id} ({answer.ticker} {answer.metric}): "
-                f"{actual_value!r} != {answer.expected_value!r} (accession {answer.accession})"
-            )
-        return None
+        return (
+            None
+            if str(actual_value) == str(answer.expected_value)
+            else f"{label}: {actual_value!r} != {answer.expected_value!r} (accession {answer.accession})"
+        )
     numeric_actual = Decimal(str(actual_value))
     if answer.kind == "band":
-        lower = Decimal(str(answer.lower_bound))
-        upper = Decimal(str(answer.upper_bound))
-        if not (lower <= numeric_actual <= upper):
-            return (
-                f"{answer.answer_id} ({answer.ticker} {answer.metric}): "
-                f"{numeric_actual} outside [{lower}, {upper}] (accession {answer.accession})"
-            )
-        return None
+        lower, upper = Decimal(str(answer.lower_bound)), Decimal(str(answer.upper_bound))
+        return (
+            None
+            if lower <= numeric_actual <= upper
+            else f"{label}: {numeric_actual} outside [{lower}, {upper}] (accession {answer.accession})"
+        )
     expected = Decimal(str(answer.expected_value))
     tolerance = Decimal(str(answer.relative_tolerance))
     if expected == 0:
-        if numeric_actual != 0:
-            return f"{answer.answer_id} ({answer.ticker} {answer.metric}): {numeric_actual} != 0"
-        return None
+        return None if numeric_actual == 0 else f"{label}: {numeric_actual} != 0"
     relative_error = abs(numeric_actual - expected) / abs(expected)
     if relative_error > tolerance:
-        return (
-            f"{answer.answer_id} ({answer.ticker} {answer.metric}): "
-            f"{numeric_actual} differs from {expected} by {relative_error:.4f} > {tolerance} "
-            f"(accession {answer.accession})"
-        )
+        return f"{label}: {numeric_actual} differs from {expected} by {relative_error:.4f} > {tolerance} (accession {answer.accession})"
     return None
 
 
@@ -97,7 +74,6 @@ def evaluate_sentinel_known_answers(
     catalog: SentinelKnownAnswersCatalog | None = None,
     require_all_issuers: bool = False,
 ) -> list[str]:
-    """Evaluate all applicable sentinel known answers against a mapping of ``issuer_id -> metric dict``."""
     resolved_catalog = catalog or load_sentinel_known_answers()
     failures: list[str] = []
     for answer in resolved_catalog.answers:
@@ -106,21 +82,12 @@ def evaluate_sentinel_known_answers(
             if require_all_issuers:
                 failures.append(f"{answer.answer_id} ({answer.ticker}): issuer {answer.issuer_id} missing")
             continue
-        metric_key: str = answer.metric
-        if metric_key not in row:
-            alias = {"gross_profit_per_employee": "gppe", "employees_total": "headcount"}.get(metric_key)
-            if alias and alias in row:
-                metric_key = alias
-            elif metric_key == "gppe" and "gross_profit_per_employee" in row:
-                metric_key = "gross_profit_per_employee"
-            elif metric_key == "headcount" and "employees_total" in row:
-                metric_key = "employees_total"
-            else:
-                continue
+        metric_key = answer.metric if answer.metric in row else _METRIC_ALIASES.get(answer.metric, "")
+        if not metric_key or metric_key not in row:
+            continue
         period_key = f"{metric_key}_period_end"
         actual_period = str(row[period_key]) if row.get(period_key) is not None else None
-        verdict = evaluate_known_answer(answer, row.get(metric_key), actual_period_end=actual_period)
-        if verdict is not None:
+        if (verdict := evaluate_known_answer(answer, row.get(metric_key), actual_period_end=actual_period)) is not None:
             failures.append(verdict)
     return failures
 
@@ -130,7 +97,6 @@ def evaluate_negative_theme_classifications(
     *,
     catalog: SentinelKnownAnswersCatalog | None = None,
 ) -> list[str]:
-    """Evaluate negative theme classification known answers (#1416 E4)."""
     resolved_catalog = catalog or load_sentinel_known_answers()
     by_issuer_theme: dict[tuple[str, str], Decimal] = {}
     for entry in theme_shares:
@@ -146,10 +112,7 @@ def evaluate_negative_theme_classifications(
         actual = by_issuer_theme.get((neg.issuer_id, neg.theme_key))
         if actual is None:
             actual = by_issuer_theme.get((neg.cik, neg.theme_key))
-        if actual is None:
-            continue
-        max_share = Decimal(neg.max_theme_share)
-        if actual > max_share:
+        if actual is not None and actual > (max_share := Decimal(neg.max_theme_share)):
             failures.append(
                 f"{neg.answer_id} ({neg.ticker} {neg.theme_key}): "
                 f"theme_share {actual} > max {max_share} (accession {neg.accession})"
@@ -157,17 +120,7 @@ def evaluate_negative_theme_classifications(
     return failures
 
 
-_WHEEL_PIN = re.compile(r"/releases/download/v(?P<version>\d+\.\d+\.\d+)/infra2_sdk-(?P=version)-py3-none-any\.whl")
-
-
 def pinned_infra2_sdk() -> str:
-    """The infra2-sdk release the installed `truealpha-runtime` package declares.
-
-    The package metadata is the pin (the locked wheel URL), so nothing restates it. A
-    hand-kept copy once read 1.2.0 while the lock pinned 1.3.2. Asserted against what the
-    image actually loaded, because a pin only binds the resolver -- an image where the wheel
-    failed to install, or a stale layer, satisfies the pin on paper and loads something else.
-    """
     from importlib.metadata import requires
 
     for requirement in requires("truealpha-runtime") or []:
@@ -180,27 +133,16 @@ def pinned_infra2_sdk() -> str:
 
 
 def expected_canary_snapshot() -> tuple[int, int, int]:
-    """The expected (issuer_count, instrument_count, observation_count) of a canary run (#1523 S2c).
-
-    Dual-class listings (GOOGL and GOOG) share one issuer, yielding 5 issuers across 6 instruments.
-    """
     static_members = UNIVERSE_SOURCES["canary"].static_members
     expected_instruments = len(static_members)
     expected_observations = expected_instruments * len(registered_semantic_types())
-    contract = load_environment_contract()
-    issuers_by_ticker = {member.ticker: member.issuer_id for member in contract.sentinels}
+    issuers_by_ticker = {member.ticker: member.issuer_id for member in load_environment_contract().sentinels}
     expected_issuers = len({issuers_by_ticker.get(t, t) for t in static_members})
     return (expected_issuers, expected_instruments, expected_observations)
 
 
 def failures_for_run(connection: psycopg.Connection, run_id: str) -> list[str]:
-    bad: list[str] = []
-
-    # What the image IS, before anything about what it produced. These oracles do not depend
-    # on the run, and judging them first means a wrong image is still named when the run is
-    # missing entirely -- otherwise the early return below drops the cause and reports only
-    # the symptom ("no capture status for ...").
-    bad.extend(image_content_failures())
+    bad = image_content_failures()
 
     status = connection.execute(
         "select obligation_count, success_count + unchanged_count, failed_count, complete"
@@ -224,11 +166,6 @@ def failures_for_run(connection: psycopg.Connection, run_id: str) -> list[str]:
     elif snapshot != expected_snapshot:
         bad.append(f"snapshot counts {snapshot} != {expected_snapshot}")
 
-    # #705: a multi-listing issuer's P/S must equal the recomputation from any
-    # single listing's own captured payloads — every listing carries the
-    # company-total dei share count, so the old per-listing summation valued
-    # Alphabet twice and no plausibility band noticed. 1% tolerance covers
-    # numeric context differences, never a doubling.
     alphabet = connection.execute(
         """
         with payload as (
@@ -285,27 +222,7 @@ def failures_for_run(connection: psycopg.Connection, run_id: str) -> list[str]:
 
 
 def image_content_failures() -> list[str]:
-    """What the deployed image IS -- judged from inside it, because nothing outside can see it.
-
-    A gate that runs on a GitHub runner inspects the repository, not the artifact; a gate
-    that curls a health endpoint sees an answer, not a filesystem. These three facts are only
-    observable from a process running inside the container, which is why they live in the
-    canary and not in CI:
-
-    * the infra2 SDK the image actually LOADED. A pin only binds the resolver -- an image
-      built from a stale lock, or one where the wheel failed to install, satisfies the pin on
-      paper and loads something else.
-    * the environment contract the image SHIPS. Until #784 the data-engine image shipped no
-      `required-env.generated.json` at all, so infra2's entrypoint could not run
-      `truealpha_runtime.boot.assert_environment` for it -- and the absence read as a clean
-      deploy from every angle outside the container, because the validation simply never ran.
-      A dropped `COPY`, or a path that drifts from the one the entrypoint reads, must be red.
-    * whether the image can state what RELEASE it is (#784). `measure` reads the environment
-      contract and the migration set out of the image, so a missing or unreadable input is
-      named here instead of surfacing mid-tick as a failed run plan.
-    """
     bad: list[str] = []
-
     try:
         from importlib.metadata import version as _installed
 
@@ -324,27 +241,14 @@ def image_content_failures() -> list[str]:
         )
     try:
         release_identity.measure()
-    except Exception as error:  # noqa: BLE001 - any failure here is the finding
+    except Exception as error:  # noqa: BLE001
         bad.append(f"the deployed image cannot measure its release identity: {error}")
 
     return bad
 
 
 def _infra_failures(connection: psycopg.Connection, run_id: str) -> list[str]:
-    """Object-storage oracle: dereference the real bytes this run says it wrote.
-
-    Every other oracle here reads Postgres, so Postgres proves itself by their passing.
-    Object storage does not: a run can complete, write correctly-shaped `s3://` URIs, and
-    leave nothing behind them. #531 is exactly that -- production injects no `S3_*`
-    variables, the client fell back to a default pointing at its own loopback, and three runs
-    died with what looked like a network fault.
-
-    A TCP or HTTP probe cannot catch this class. Only DEREFERENCING an object can: it
-    exercises the endpoint, the credentials, the bucket and the write in one assertion, and
-    hashing what comes back proves the bytes are the ones the database claims.
-    """
     bad: list[str] = []
-
     row = connection.execute(
         """
         select f.object_uri, f.payload_sha256, f.byte_length, f.content_type
@@ -358,32 +262,30 @@ def _infra_failures(connection: psycopg.Connection, run_id: str) -> list[str]:
         (run_id,),
     ).fetchone()
     if row is None:
-        bad.append("no fetch with an object_uri in this run — nothing to dereference (#531)")
-    else:
-        object_uri, expected_sha, expected_len, content_type = row
-        try:
-            from truealpha_contracts.models import RawObjectRef
-            from truealpha_runtime.storage import S3RawObjectStore
+        return ["no fetch with an object_uri in this run — nothing to dereference (#531)"]
+    object_uri, expected_sha, expected_len, content_type = row
+    try:
+        from truealpha_contracts.models import RawObjectRef
+        from truealpha_runtime.storage import S3RawObjectStore
 
-            bucket, _, key = object_uri.removeprefix("s3://").partition("/")
-            payload = S3RawObjectStore().get(
-                RawObjectRef(
-                    bucket=bucket,
-                    key=key,
-                    sha256=expected_sha,
-                    byte_length=int(expected_len or 0),
-                    content_type=content_type or "application/octet-stream",
-                )
+        bucket, _, key = object_uri.removeprefix("s3://").partition("/")
+        payload = S3RawObjectStore().get(
+            RawObjectRef(
+                bucket=bucket,
+                key=key,
+                sha256=expected_sha,
+                byte_length=int(expected_len or 0),
+                content_type=content_type or "application/octet-stream",
             )
-        except Exception as error:  # noqa: BLE001 - any failure here is the finding
-            bad.append(f"object storage unreachable or misconfigured: {type(error).__name__} ({object_uri})")
-        else:
-            actual = sha256(payload).hexdigest()
-            if actual != expected_sha:
-                bad.append(f"object bytes do not match the recorded checksum for {object_uri}")
-            elif expected_len is not None and len(payload) != int(expected_len):
-                bad.append(f"object byte_length {len(payload)} != recorded {expected_len} for {object_uri}")
-
+        )
+    except Exception as error:  # noqa: BLE001
+        bad.append(f"object storage unreachable or misconfigured: {type(error).__name__} ({object_uri})")
+    else:
+        actual = sha256(payload).hexdigest()
+        if actual != expected_sha:
+            bad.append(f"object bytes do not match the recorded checksum for {object_uri}")
+        elif expected_len is not None and len(payload) != int(expected_len):
+            bad.append(f"object byte_length {len(payload)} != recorded {expected_len} for {object_uri}")
     return bad
 
 
