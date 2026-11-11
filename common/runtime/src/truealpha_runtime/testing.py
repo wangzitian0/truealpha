@@ -252,6 +252,29 @@ class OtlpCollectorStub:
             for span in scope_spans.spans
         ]
 
+    def metric_series(self) -> list[tuple[str, str, dict[str, str]]]:
+        """(name, unit, attributes) of every histogram, sum and gauge data point received.
+
+        Attribute values are strings (integers are written in decimal), so a test compares
+        `http.response.status_code` as "307"."""
+
+        def text(value: Any) -> str:
+            kind = value.WhichOneof("value")
+            return str(getattr(value, kind)) if kind else ""
+
+        series: list[tuple[str, str, dict[str, str]]] = []
+        for request in self._decoded("metrics"):
+            for resource_metrics in request.resource_metrics:
+                for scope_metrics in resource_metrics.scope_metrics:
+                    for metric in scope_metrics.metrics:
+                        kind = metric.WhichOneof("data")
+                        if kind is None:
+                            continue
+                        for point in getattr(metric, kind).data_points:
+                            attributes = {kv.key: text(kv.value) for kv in point.attributes}
+                            series.append((metric.name, metric.unit, attributes))
+        return series
+
     def log_bodies(self) -> list[str]:
         return [
             record.body.string_value
