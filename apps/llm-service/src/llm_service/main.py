@@ -5,7 +5,7 @@ Roadmap: the MCP endpoint comes first (reuses common/factors, nearly free to wir
 Claude Desktop); the self-built /chat SSE endpoint is Tier 3 (Phase 7).
 """
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, MutableMapping
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -13,7 +13,6 @@ from typing import Any
 from fastapi import FastAPI, Request
 from fastapi.responses import RedirectResponse
 from infra2_sdk.fastapi import init_service
-from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from truealpha_contracts.environment_contract import load_environment_contract
 from truealpha_runtime.boot import assert_environment
 from truealpha_runtime.telemetry import init_telemetry
@@ -62,18 +61,31 @@ async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
 #: without the change stayed 200.
 ROUTED_PREFIX = "/api"
 
-app = FastAPI(title="truealpha-llm-service", lifespan=_lifespan)
+#: The deploy gates, Traefik and the watchdog poll these paths every few seconds. They carry no
+#: information a request span or a latency sample would add, and they were about 31.5k spans a
+#: day, almost all of the traces of this service (infra2#1436). FastAPI's own telemetry skips a
+#: request when `exclude` returns True.
+PROBE_PATHS = frozenset({"/health", "/livez", "/readyz"})
+
+
+def _is_probe(scope: MutableMapping[str, Any]) -> bool:
+    return scope.get("path") in PROBE_PATHS
+
+
+app = FastAPI(title="truealpha-llm-service", lifespan=_lifespan, telemetry={"exclude": _is_probe})
 
 # OTLP telemetry for infra2's shared SigNoz (#1034): traces, metrics and ERROR logs under the
 # identity infra2's deploy renders into OTEL_SERVICE_NAME / OTEL_RESOURCE_ATTRIBUTES. Off unless
 # OTEL_EXPORTER_OTLP_ENDPOINT is set; once on, a missing identity refuses the import, so uvicorn
-# never starts serving untagged telemetry. At import, not in the lifespan: FastAPIInstrumentor wraps
-# the middleware stack, which Starlette builds before the first lifespan event.
+# never starts serving untagged telemetry. At import, not in the lifespan: the global providers
+# must exist before the first request.
+#
+# No instrumentor is attached to `app` (#1660). FastAPI >= 0.162 exports the stable HTTP server
+# telemetry itself on the global providers that `init_telemetry` installs: server spans and
+# `http.server.request.duration` (unit "s"; labels `http.route`, `http.response.status_code`,
+# `http.request.method`). Attaching `FastAPIInstrumentor` turns that off and exports the legacy
+# `http.server.duration` (unit "ms") instead. `test_telemetry.py` fails when either side changes.
 _telemetry = init_telemetry()
-if _telemetry is not None:
-    FastAPIInstrumentor.instrument_app(
-        app, tracer_provider=_telemetry.tracer_provider, meter_provider=_telemetry.meter_provider
-    )
 
 # TLS terminates at Traefik, so requests arrive over http. Without this, Starlette
 # builds redirect Locations from the request scheme and `GET /api/mcp` answered

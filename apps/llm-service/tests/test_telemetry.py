@@ -43,7 +43,7 @@ from opentelemetry import trace
 provider = trace.get_tracer_provider()
 resource = getattr(provider, "resource", None)
 print(json.dumps({
-    "instrumented": bool(getattr(main.app, "_is_instrumented_by_opentelemetry", False)),
+    "contrib_instrumented": bool(getattr(main.app, "_is_instrumented_by_opentelemetry", False)),
     "sdk_provider": hasattr(provider, "resource"),
     "service_name": resource.attributes.get("service.name") if resource else None,
     "otlp_log_handlers": sum(
@@ -61,7 +61,11 @@ from opentelemetry import _logs, metrics, trace
 
 # /mcp answers 307 from the app's own route: a real request through the instrumented stack that
 # needs no database.
-assert TestClient(main.app, follow_redirects=False).get("/mcp").status_code == 307
+client = TestClient(main.app, follow_redirects=False)
+assert client.get("/mcp").status_code == 307
+# The probe paths (#1660): answered, and absent from spans and metrics.
+assert client.get("/livez").status_code == 200
+assert client.get("/readyz").status_code in (200, 503)
 logging.getLogger("llm_service.probe").error("llm-service probe failure")
 trace.get_tracer_provider().force_flush()
 metrics.get_meter_provider().force_flush()
@@ -73,7 +77,7 @@ def test_without_an_endpoint_the_app_imports_with_telemetry_off() -> None:
     result = run_python_probe(STATE_PROBE, {})
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout.splitlines()[-1]) == {
-        "instrumented": False,
+        "contrib_instrumented": False,
         "sdk_provider": False,
         "service_name": None,
         "otlp_log_handlers": 0,
@@ -81,8 +85,11 @@ def test_without_an_endpoint_the_app_imports_with_telemetry_off() -> None:
 
 
 @pytest.mark.parametrize("deployment_environment", ["staging", "pr-12", "branch-main", "canary-preview"])
-def test_with_an_endpoint_and_the_rendered_identity_the_app_is_instrumented(deployment_environment: str) -> None:
-    """Preview stacks run with `APP_ENV=staging` and carry their own alias as the issued name."""
+def test_with_an_endpoint_and_the_rendered_identity_the_app_exports_without_the_contrib_instrumentor(
+    deployment_environment: str,
+) -> None:
+    """Preview stacks run with `APP_ENV=staging` and carry their own alias as the issued name.
+    No contrib instrumentor is attached (#1660): it would replace the stable HTTP metric."""
     environ = {
         **DEPLOYED,
         "APP_ENV": "staging",
@@ -93,7 +100,7 @@ def test_with_an_endpoint_and_the_rendered_identity_the_app_is_instrumented(depl
     assert result.returncode == 0, result.stderr
     state = json.loads(result.stdout.splitlines()[-1])
     assert state == {
-        "instrumented": True,
+        "contrib_instrumented": False,
         "sdk_provider": True,
         "service_name": "truealpha-app",
         "otlp_log_handlers": 1,
@@ -118,6 +125,26 @@ def test_a_request_and_an_error_log_reach_the_collector_under_the_rendered_ident
     assert result.returncode == 0, result.stderr
 
     assert any("/mcp" in name for name in collector.span_names()), collector.span_names()
+    # The stable HTTP server metric of FastAPI itself (#1660): seconds, with the route and the
+    # status code as labels. The legacy `http.server.duration` (milliseconds) of the contrib
+    # instrumentor must not appear: infra2's alert rules read one convention.
+    series = collector.metric_series()
+    durations = [(unit, attributes) for name, unit, attributes in series if name == "http.server.request.duration"]
+    assert durations, sorted({name for name, _unit, _attributes in series})
+    assert {unit for unit, _ in durations} == {"s"}
+    assert any(
+        attributes.get("http.route") == "/mcp" and attributes.get("http.response.status_code") == "307"
+        for _unit, attributes in durations
+    ), durations
+    legacy = sorted({name for name, _unit, _attributes in series if name.startswith("http.server.duration")})
+    assert legacy == [], legacy
+    # The heartbeat (#1660): a series that exists without a request, for the "no telemetry" alert.
+    uptime = [(unit, attributes) for name, unit, attributes in series if name == "process.uptime"]
+    assert uptime and {unit for unit, _ in uptime} == {"s"}, sorted({name for name, _u, _a in series})
+    # Probe paths are excluded from FastAPI's telemetry: no span and no latency sample for them.
+    probe_routes = {"/health", "/livez", "/readyz"}
+    assert not [name for name in collector.span_names() if any(route in name for route in probe_routes)]
+    assert not [attributes for _unit, attributes in durations if attributes.get("http.route") in probe_routes]
     assert "llm-service probe failure" in collector.log_bodies()
     expected = {**IDENTITY, "deployment.environment.name": "pr-12", "service.name": "truealpha-app"}
     for signal in ("traces", "metrics", "logs"):
@@ -126,3 +153,25 @@ def test_a_request_and_an_error_log_reach_the_collector_under_the_rendered_ident
         for attributes in resources:
             for key, value in expected.items():
                 assert attributes.get(key) == value, f"{signal}: {key} is {attributes.get(key)!r}"
+
+
+METRIC_PROBE = """
+from truealpha_runtime.telemetry import init_telemetry
+
+providers = init_telemetry()
+meter = providers.meter_provider.get_meter("probe")
+meter.create_histogram("demo.duration", unit="s").record(0.25, {"http.route": "/x", "http.response.status_code": 307})
+meter.create_counter("demo.count", unit="1").add(3, {"outcome": "ok"})
+providers.meter_provider.force_flush()
+"""
+
+
+def test_the_collector_stub_reads_the_name_unit_and_attributes_of_each_metric_point() -> None:
+    """`OtlpCollectorStub.metric_series` backs the HTTP metric assertion above (#1660): a name,
+    a unit or a label that it misreports would let a wrong metric pass."""
+    with OtlpCollectorStub() as collector:
+        result = run_python_probe(METRIC_PROBE, {**DEPLOYED, "OTEL_EXPORTER_OTLP_ENDPOINT": collector.endpoint})
+    assert result.returncode == 0, result.stderr
+    series = collector.metric_series()
+    assert ("demo.duration", "s", {"http.route": "/x", "http.response.status_code": "307"}) in series
+    assert ("demo.count", "1", {"outcome": "ok"}) in series

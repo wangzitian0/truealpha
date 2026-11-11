@@ -4,17 +4,16 @@ version = "0.1.0"
 description = "FastAPI: MCP endpoint (priority) + /chat SSE (Tier 3). Reads only the mart schema via the mart_readonly role."
 requires-python = ">=3.12"
 dependencies = [
-    "fastapi>=0.111.0",
+    # >=0.162: FastAPI exports the stable HTTP server telemetry itself (server spans and
+    # `http.server.request.duration`, unit "s") when a global provider exists (#1660). The contrib
+    # instrumentor is not used: it replaces these with the legacy `http.server.duration` (ms).
+    "fastapi>=0.162.0",
     "uvicorn[standard]>=0.30.0",
     "pydantic-settings>=2.2.0",
     "truealpha-factors",
     "mcp>=1.0.0",
     "truealpha-contracts",
     "truealpha-runtime",
-    # Server spans for every inbound request (#1034). truealpha_runtime.telemetry installs the
-    # global TracerProvider; this package only turns FastAPI requests into spans on it, and
-    # does nothing when telemetry is off (no global provider -> no-op tracer).
-    "opentelemetry-instrumentation-fastapi>=0.45b0",
 ]
 
 [dependency-groups]
