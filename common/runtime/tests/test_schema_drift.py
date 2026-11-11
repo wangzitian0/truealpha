@@ -311,3 +311,38 @@ def test_a_supplied_reference_is_the_other_way_forward(monkeypatch, clone: str) 
     with pytest.raises(psycopg.Error) as raised:
         drift.compare(REMOTE_URL, clone)
     assert "not a local server" not in str(raised.value)
+
+
+def test_a_caller_can_state_that_the_reference_sits_on_this_server(monkeypatch) -> None:
+    """The deployed check of an environment reads its own database. It passes `allow_remote`, so the guard that
+    refuses a remote server does not stand in its way: the failure is the missing server, not the refusal."""
+    monkeypatch.delenv(drift.REMOTE_REFERENCE_ENV, raising=False)
+    with pytest.raises(psycopg.OperationalError):
+        with drift.reference_database(REMOTE_URL, allow_remote=True):
+            raise AssertionError("no server answers on this URL")
+
+
+def test_the_chain_directory_reaches_the_applier(monkeypatch, clone: str) -> None:
+    seen: dict[str, object] = {}
+
+    def record(url: str, **kwargs: object) -> str:
+        seen.update(kwargs)
+        return apply_migration_chain(url)
+
+    monkeypatch.setattr(drift, "apply_migration_chain", record)
+    with drift.reference_database(clone, db_dir=Path("/does/not/matter")):
+        pass
+    assert seen == {"db_dir": Path("/does/not/matter")}
+
+
+def test_the_default_chain_directory_is_the_one_of_the_checkout(monkeypatch, clone: str) -> None:
+    seen: dict[str, object] = {}
+
+    def record(url: str, **kwargs: object) -> str:
+        seen.update(kwargs)
+        return apply_migration_chain(url)
+
+    monkeypatch.setattr(drift, "apply_migration_chain", record)
+    with drift.reference_database(clone):
+        pass
+    assert seen == {}

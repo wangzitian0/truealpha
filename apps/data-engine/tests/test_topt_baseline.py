@@ -14,6 +14,8 @@ from __future__ import annotations
 import hashlib
 import itertools
 import json
+import os
+import re
 from collections.abc import Iterator
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -166,16 +168,17 @@ def passing() -> dict[str, Row]:
         "gppe": Row("Q1", "pass", "Q1 ok"),
         "quota": Row("R1", "pass", "R1 ok"),
         "server": Row("C1", "pass", "C1 ok"),
+        "schema": Row("S", "pass", "S ok"),
     }
 
 
 def test_the_verdict_is_never_green_while_a_row_is_not_measured() -> None:
-    """Unknown is not OK. Q3 and S1 to S3 cannot run in one environment, so three passing rows stay red."""
+    """Unknown is not OK. Q3 compares two environments and cannot run in one, so four passing rows stay red."""
     judgement = topt_baseline.judge(**passing())
 
     assert judgement.ok is False
-    assert [row.key for row in judgement.unmeasured] == ["Q3", "S1", "S2", "S3"]
-    assert judgement.summary == "not measured: Q3, S1, S2, S3"
+    assert [row.key for row in judgement.unmeasured] == ["Q3"]
+    assert judgement.summary == "not measured: Q3"
 
 
 def test_the_verdict_is_green_when_every_row_passes(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -184,7 +187,7 @@ def test_the_verdict_is_green_when_every_row_passes(monkeypatch: pytest.MonkeyPa
     judgement = topt_baseline.judge(**passing())
 
     assert judgement.ok is True
-    assert judgement.summary == "ok: Q1 ok; R1 ok; C1 ok"
+    assert judgement.summary == "ok: Q1 ok; R1 ok; C1 ok; S ok"
 
 
 def test_one_failing_row_makes_the_verdict_red_even_with_nothing_unmeasured(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -202,11 +205,13 @@ def test_the_summary_of_today_fits_the_column_and_names_every_failure() -> None:
         gppe=topt_baseline.judge_gppe(available=16, total=20, reported=(16, 20)),
         quota=topt_baseline.judge_quota(source="twelvedata", daily_calls={date(2026, 11, 10): 408}, share=480),
         server=server(267.3),
+        schema=topt_baseline.judge_schema(differences=790),
     )
 
     assert judgement.summary == (
         "Q1 GPPE 16/20 (80.0%) against 95.0%; R1 twelvedata 408/480 on 11-10 (85.0%) against 70.0%;"
-        " C1 code server 267.3/260 MiB, age 14.0 h. not measured: Q3, S1, S2, S3"
+        " C1 code server 267.3/260 MiB, age 14.0 h; S schema differs from the chain in 790 places."
+        " not measured: Q3"
     )
     assert len(judgement.summary) <= SUMMARY_LIMIT
 
@@ -334,8 +339,9 @@ def test_the_deployed_job_records_a_red_verdict_and_ends_green(
     database_url: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """An empty warehouse has no TOPT head and no ledger row, and the test process is no code server. The row
-    that cannot be read is red, the empty ledger is within its share, and Q3 and S1 to S3 are named."""
+    that cannot be read is red, the empty ledger is within its share, and Q3 is named."""
     monkeypatch.setattr(settings, "database_url", database_url)
+    monkeypatch.setattr(topt_baseline, "IMAGE_DB_DIR", Path(__file__).resolve().parents[3] / "db")
     tick = datetime(2026, 11, 11, 6, 25, tzinfo=UTC)
 
     result = quality.topt_baseline_job.execute_in_process(tags={TICK_TAG: tick.isoformat()}, raise_on_error=False)
@@ -353,8 +359,36 @@ def test_the_deployed_job_records_a_red_verdict_and_ends_green(
     assert "failed: failed:" not in summary
     assert "C1 the size of the code server cannot be read" in summary
     assert "R1 twelvedata" not in summary.split("not measured")[0], "an empty ledger is inside its share"
-    assert summary.endswith("not measured: Q3, S1, S2, S3")
+    assert summary.endswith("not measured: Q3")
+    assert "S schema" not in summary, "a database that ran the chain has no drift: the row S is green"
+    assert json.loads(result.output_for_node("run_topt_baseline"))["failed"] == ["Q1", "C1"]
     assert len(summary) <= SUMMARY_LIMIT
+
+
+def test_the_deployed_job_shows_the_drift_of_its_own_database_in_the_stored_summary(
+    database_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "database_url", database_url)
+    monkeypatch.setattr(topt_baseline, "IMAGE_DB_DIR", Path(__file__).resolve().parents[3] / "db")
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        connection.execute("create table staging.drift_probe_job (id bigint primary key)")
+    try:
+        result = quality.topt_baseline_job.execute_in_process(
+            tags={TICK_TAG: datetime(2026, 11, 11, 6, 26, tzinfo=UTC).isoformat()}, raise_on_error=False
+        )
+    finally:
+        with psycopg.connect(database_url, autocommit=True) as connection:
+            connection.execute("drop table staging.drift_probe_job")
+
+    assert result.success
+    with psycopg.connect(database_url) as reader:
+        ok, summary = reader.execute(
+            "select ok, summary from mart.nightly_verdicts where check_name = 'topt_baseline' "
+            "order by recorded_at desc limit 1"
+        ).fetchone()
+    assert ok is False
+    assert re.search(r"S schema differs from the chain in \d+ places", summary)
+    assert "S" in json.loads(result.output_for_node("run_topt_baseline"))["failed"]
 
 
 # --- the head, the rounding, the boundaries the first review found ---------------------------------------------
@@ -651,3 +685,99 @@ def test_the_quota_reader_counts_utc_days_inside_the_window_and_nothing_outside_
         )
 
     assert row == Row("R1", "fail", "R1 twelvedata 340/480 on 11-10 (70.9%) against 70.0%")
+
+
+# --- S: the schema against the chain ---------------------------------------------------------------------------
+
+
+def test_s_is_green_only_at_zero_differences() -> None:
+    assert topt_baseline.judge_schema(differences=0) == Row("S", "pass", "S schema matches the chain")
+    assert topt_baseline.judge_schema(differences=1) == Row("S", "fail", "S schema differs from the chain in 1 places")
+
+
+def test_s_shows_the_numbers_of_staging_and_production_of_2026_11_11() -> None:
+    assert topt_baseline.judge_schema(differences=790).text == "S schema differs from the chain in 790 places"
+    assert topt_baseline.judge_schema(differences=5).text == "S schema differs from the chain in 5 places"
+
+
+def test_s_that_could_not_be_compared_is_red_and_names_the_failure_kind_only() -> None:
+    row = topt_baseline.judge_schema(differences=None, failure="OperationalError")
+
+    assert row == Row("S", "fail", "S the schema could not be compared (OperationalError)")
+
+
+def test_s_masks_the_password_variable_for_the_reference_build_and_puts_it_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`db/roles.sql` sets the app login password when the variable is set. The check changes no credential."""
+    monkeypatch.setenv("APP_SERVICE_DB_PASSWORD", "never-applied")
+    seen: dict[str, str | None] = {}
+
+    def build(*_args: object, **_kwargs: object):
+        seen["during"] = os.environ.get("APP_SERVICE_DB_PASSWORD")
+        raise RuntimeError("stop after the look")
+
+    from truealpha_tools import schema_drift
+
+    monkeypatch.setattr(schema_drift, "reference_database", build)
+
+    row = topt_baseline.read_schema("postgresql://unused")
+
+    assert seen["during"] is None
+    assert os.environ["APP_SERVICE_DB_PASSWORD"] == "never-applied"
+    assert row == Row("S", "fail", "S the schema could not be compared (RuntimeError)")
+
+
+def test_s_passes_the_chain_directory_of_the_image_and_states_that_the_reference_sits_on_the_server(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict[str, object] = {}
+
+    def build(url: str, **kwargs: object):
+        seen["url"], seen["kwargs"] = url, kwargs
+        raise RuntimeError("stop after the look")
+
+    from truealpha_tools import schema_drift
+
+    monkeypatch.setattr(schema_drift, "reference_database", build)
+
+    topt_baseline.read_schema("postgresql://unused")
+
+    assert seen["url"] == "postgresql://unused"
+    assert seen["kwargs"] == {"db_dir": Path("/app/db"), "allow_remote": True}
+
+
+def test_s_of_a_database_that_ran_the_chain_is_green_and_leaves_no_reference_behind(database_url: str) -> None:
+    repo_db = Path(__file__).resolve().parents[3] / "db"
+
+    row = topt_baseline.read_schema(database_url, db_dir=repo_db)
+
+    assert row == Row("S", "pass", "S schema matches the chain")
+    with psycopg.connect(database_url, autocommit=True) as admin:
+        left = admin.execute(
+            "select count(*) from pg_database where datname like 'truealpha_chain_reference_%'"
+        ).fetchone()
+    assert left == (0,), "the reference database is dropped at the end"
+
+
+def test_s_counts_the_places_of_a_drifted_database(database_url: str) -> None:
+    """A relation that the chain never declared: one extra relation, its columns, its constraints."""
+    repo_db = Path(__file__).resolve().parents[3] / "db"
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        connection.execute("create table staging.drift_probe (id bigint primary key, note text)")
+    try:
+        row = topt_baseline.read_schema(database_url, db_dir=repo_db)
+    finally:
+        with psycopg.connect(database_url, autocommit=True) as connection:
+            connection.execute("drop table staging.drift_probe")
+
+    assert row.state == "fail"
+    match = re.fullmatch(r"S schema differs from the chain in (\d+) places", row.text)
+    assert match is not None and int(match.group(1)) >= 3
+
+
+def test_s_of_a_missing_chain_directory_is_red(database_url: str, tmp_path: Path) -> None:
+    row = topt_baseline.read_schema(database_url, db_dir=tmp_path)
+
+    assert row.state == "fail"
+    assert row.text.startswith("S the schema could not be compared (")

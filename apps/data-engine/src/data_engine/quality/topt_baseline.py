@@ -21,10 +21,14 @@ What each row reads, and what makes it red:
   capacity contract. A server below the budget that started less than `MATURE_SERVER_HOURS` ago is not
   measured: the high-water mark only grows, and the contract states its reading at 13 hours after the start.
 
-Q3, S1, S2 and S3 of #1664 cannot run inside one environment today. Q3 compares two environments, and no
-database sees the other. S1 to S3 compare a catalog with the migration chain; the reference needs a second
-database next to the target, and `tools/schema_drift.py` refuses to build it on a remote server. Each is
-listed as not measured. A verdict with a row that is not measured is never green: unknown is not OK.
+* S (S1 to S3, schema). The live catalog of this environment's database against a reference database that ran the
+  chain (`truealpha_tools.schema_drift`). The reference sits on the same server, is built by the one applier
+  `db/apply_migrations.sh` from `/app/db`, and is dropped at the end. The number of differences is the row. Green
+  only at 0. A reference that cannot be built or compared is red, never green. Each environment runs its own
+  check, so the row is S1 in production and S2 in staging, and the scheduled verdict is S3.
+
+Q3 of #1664 cannot run inside one environment today. It compares two environments, and no database sees the other.
+It is listed as not measured. A verdict with a row that is not measured is never green: unknown is not OK.
 
 A shown percentage or size is rounded in the direction that keeps the text true: up for a red row, down for a
 row that passes. A text never says "70.0% against 70.0%" for a row that failed.
@@ -36,7 +40,8 @@ A summary is public (`/api/health`). It holds row names, counts and percentages.
 from __future__ import annotations
 
 import os
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
@@ -63,10 +68,13 @@ MATURE_SERVER_HOURS = 13
 #: Rows of #1664 that no environment can run alone, with the reason. The summary names them.
 NOT_MEASURED: Mapping[str, str] = {
     "Q3": "compares two environments; no database sees the other",
-    "S1": "schema_drift needs a second database next to the target",
-    "S2": "schema_drift needs a second database next to the target",
-    "S3": "schema_drift needs a second database next to the target",
 }
+
+#: Where the data-engine image holds the chain for the reference database (`apps/data-engine/Dockerfile`).
+IMAGE_DB_DIR = Path("/app/db")
+#: `db/roles.sql` sets the password of the app login when this variable is set. The reference build must never
+#: carry it: the check reads the schema and changes no credential.
+MASKED_ENVIRONMENT = ("APP_SERVICE_DB_PASSWORD",)
 
 State = Literal["pass", "fail", "unmeasured"]
 
@@ -176,10 +184,19 @@ def judge_server(*, hwm_bytes: int | None, age_seconds: float | None, budget_mib
     return Row("C1", "pass", text)
 
 
-def judge(*, gppe: Row, quota: Row, server: Row) -> Judgement:
+def judge_schema(*, differences: int | None, failure: str = "") -> Row:
+    """S: the places where the live catalog differs from the chain. None means that the comparison did not run."""
+    if differences is None:
+        return Row("S", "fail", f"S the schema could not be compared ({failure})")
+    if differences == 0:
+        return Row("S", "pass", "S schema matches the chain")
+    return Row("S", "fail", f"S schema differs from the chain in {differences} places")
+
+
+def judge(*, gppe: Row, quota: Row, server: Row, schema: Row) -> Judgement:
     """The rows in the order of #1664, then the rows that no environment can run alone."""
     waiting = tuple(Row(key, "unmeasured", f"{key} {reason}") for key, reason in NOT_MEASURED.items())
-    return Judgement((gppe, quota, server, *waiting))
+    return Judgement((gppe, quota, server, schema, *waiting))
 
 
 # --- readers ------------------------------------------------------------------------------------------------
@@ -286,3 +303,29 @@ def read_server(
     except (OSError, ValueError):
         hwm = None
     return judge_server(hwm_bytes=hwm, age_seconds=server_age_seconds(proc_root), budget_mib=budget_mib)
+
+
+@contextmanager
+def _without_environment(names: tuple[str, ...]) -> Iterator[None]:
+    """Mask variables of this process for the block, then put them back."""
+    held = {name: os.environ.pop(name) for name in names if name in os.environ}
+    try:
+        yield
+    finally:
+        os.environ.update(held)
+
+
+def read_schema(database_url: str, *, db_dir: Path | None = None) -> Row:
+    """S: build the reference on the server of `database_url`, compare, drop it.
+
+    Any failure is a red row that names the exception type and nothing else: a connection error names its host."""
+    from truealpha_tools import schema_drift
+
+    chain_dir = IMAGE_DB_DIR if db_dir is None else db_dir
+    try:
+        with _without_environment(MASKED_ENVIRONMENT):
+            with schema_drift.reference_database(database_url, db_dir=chain_dir, allow_remote=True) as reference_url:
+                report, _counts = schema_drift.compare(database_url, reference_url)
+    except Exception as failure:  # noqa: BLE001 - every failure is a red row, never a crash of the verdict
+        return judge_schema(differences=None, failure=type(failure).__name__)
+    return judge_schema(differences=len(report))

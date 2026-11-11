@@ -35,6 +35,11 @@ FROM python:3.12-slim-bookworm AS runtime
 WORKDIR /app
 COPY --from=build /app/.venv /app/.venv
 ENV PATH="/app/.venv/bin:$PATH"
+# psql: the schema check of the quality lane (`topt_baseline`, #1664) builds a reference database
+# with the one applier `db/apply_migrations.sh`, as the llm-service image does at every boot.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends postgresql-client \
+    && rm -rf /var/lib/apt/lists/*
 
 # Dagster run/event/schedule metadata lives in the environment's Postgres
 # `dagster` schema (README: "the dagster schema"), reached through
@@ -64,8 +69,12 @@ COPY apps/data-engine/required-env.generated.json ./apps/data-engine/required-en
 # The migration set the release identity measures (#784). DDL is applied by the llm-service
 # image's entrypoint, not here -- this image ships the files only so it can hash the schema
 # it was built against, and so the ordered ids in a run's identity are the ones the artifact
-# actually carries rather than a list written down somewhere.
+# actually carries rather than a list written down somewhere. The schema check of the quality
+# lane also applies the chain, to a scratch database that it drops, through the same applier
+# and roles file (#1664); it never applies them to the environment's own database.
 COPY db/migrations ./db/migrations
+COPY db/roles.sql ./db/roles.sql
+COPY db/apply_migrations.sh ./db/apply_migrations.sh
 
 # Default to the webserver role; the compose pins each role's command explicitly.
 EXPOSE 3001

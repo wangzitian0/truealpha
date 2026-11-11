@@ -192,23 +192,35 @@ def target_locality(database_url: str) -> tuple[str, str]:
 
 
 @contextmanager
-def reference_database(server_url: str, *, keep: bool = False) -> Iterator[str]:
-    locality, redacted = target_locality(server_url)
-    if locality != "local" and os.environ.get(REMOTE_REFERENCE_ENV) != "1":
-        raise RuntimeError(
-            f"{redacted} is not a local server, and building a reference there means CREATE "
-            f"DATABASE followed by DROP DATABASE ... WITH (FORCE) on it. Two ways forward: pass "
-            f"--reference-database-url naming a database that already ran the chain (nothing is "
-            f"created anywhere, and the target stays read-only), or set {REMOTE_REFERENCE_ENV}=1 "
-            f"to build the reference on that server anyway."
-        )
+def reference_database(
+    server_url: str, *, keep: bool = False, db_dir: Path | None = None, allow_remote: bool = False
+) -> Iterator[str]:
+    """A database of its own on `server_url` that ran the chain; dropped when the block ends.
+
+    `db_dir` names the directory that holds `migrations/`, `roles.sql` and `apply_migrations.sh` when it is not
+    the checkout of this file: the data-engine image bakes it at `/app/db`. `allow_remote` is the in-code form
+    of `REMOTE_REFERENCE_ENV`. The caller states that the reference has to sit on this server. The deployed check
+    of an environment passes it for the database that it runs against, never for a URL that a person supplied."""
+    if not allow_remote:
+        locality, redacted = target_locality(server_url)
+        if locality != "local" and os.environ.get(REMOTE_REFERENCE_ENV) != "1":
+            raise RuntimeError(
+                f"{redacted} is not a local server, and building a reference there means CREATE "
+                f"DATABASE followed by DROP DATABASE ... WITH (FORCE) on it. Two ways forward: pass "
+                f"--reference-database-url naming a database that already ran the chain (nothing is "
+                f"created anywhere, and the target stays read-only), or set {REMOTE_REFERENCE_ENV}=1 "
+                f"to build the reference on that server anyway."
+            )
     admin_url = _with_database(server_url, "postgres")
     name = f"truealpha_chain_reference_{os.getpid()}_{uuid.uuid4().hex[:8]}"
     with psycopg.connect(admin_url, connect_timeout=10, autocommit=True) as admin:
         admin.execute(sql.SQL("create database {}").format(sql.Identifier(name)))
     try:
         reference_url = _with_database(server_url, name)
-        apply_migration_chain(reference_url)
+        if db_dir is None:
+            apply_migration_chain(reference_url)
+        else:
+            apply_migration_chain(reference_url, db_dir=db_dir)
         yield reference_url
     finally:
         if keep:
