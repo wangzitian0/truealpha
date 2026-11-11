@@ -6,8 +6,8 @@ from typing import Any, Final, Literal, Protocol
 
 import psycopg
 from psycopg.rows import dict_row
-from pydantic import BaseModel, ConfigDict
 
+from truealpha_contracts.common import FrozenModel
 from truealpha_contracts.execution import AvailabilityStatus, FactorValidationStatus, InputEvidenceStatus
 
 _IDENTITY_MATCH_SQL = (
@@ -34,10 +34,8 @@ def issuer_identity_sql(column: str, placeholder: str = "%s") -> str:
 
 _RESOLVE_CANDIDATES_SQL = (
     "select ei.entity_id::text as entity_id, ei.legacy_id, ei.current_ticker, ei.cik, ei.lei"
-    " from mart.entity_identity ei cross join (select btrim(%s::text) as q) inp"
-    f" where {_IDENTITY_MATCH_SQL}"
+    f" from mart.entity_identity ei cross join (select btrim(%s::text) as q) inp where {_IDENTITY_MATCH_SQL}"
 )
-
 _RESOLVE_BATCH_CANDIDATES_SQL = (
     "select u.raw_q, ei.entity_id::text as entity_id, ei.legacy_id, ei.current_ticker, ei.cik, ei.lei"
     " from unnest(%s::text[]) as u(raw_q) cross join lateral (select btrim(u.raw_q) as q) inp"
@@ -82,7 +80,7 @@ KNOWN_ENTITY_DISPLAY: Final[dict[str, tuple[str, str]]] = {
 }
 
 _TICKER_DISPLAY_INDEX: Final[dict[str, tuple[str, str, str]]] = {
-    ticker.upper(): (entity_id, ticker, name) for entity_id, (ticker, name) in KNOWN_ENTITY_DISPLAY.items()
+    ticker.upper(): (eid, ticker, name) for eid, (ticker, name) in KNOWN_ENTITY_DISPLAY.items()
 }
 
 _ENTITY_DISPLAY_SQL = """
@@ -101,55 +99,32 @@ left join (
 
 
 def _query_rows(database_url: str, sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
-    with psycopg.connect(database_url, connect_timeout=5, autocommit=True) as connection:
-        with connection.cursor(row_factory=dict_row) as cursor:
-            cursor.execute(sql, params)
-            return cursor.fetchall()
+    with (
+        psycopg.connect(database_url, connect_timeout=5, autocommit=True) as conn,
+        conn.cursor(row_factory=dict_row) as cur,
+    ):
+        cur.execute(sql, params)
+        return cur.fetchall()
 
 
 def resolve_static_entity_display(entity_id: str) -> tuple[str | None, str | None, str]:
     clean = entity_id.strip()
     if not clean:
         return None, None, entity_id
-    direct = KNOWN_ENTITY_DISPLAY.get(clean) or KNOWN_ENTITY_DISPLAY.get(clean.lower())
-    if direct is not None:
+    if direct := KNOWN_ENTITY_DISPLAY.get(clean) or KNOWN_ENTITY_DISPLAY.get(clean.lower()):
         return clean, direct[0], f"{direct[0]} · {direct[1]}"
-    if clean.lower().startswith("listing:"):
-        parts = clean.split(":")
-        if len(parts) >= 3:
-            raw_ticker = parts[2].upper()
-            matched = _TICKER_DISPLAY_INDEX.get(raw_ticker)
-            if matched is not None:
-                return matched[0], matched[1], f"{matched[1]} · {matched[2]}"
-            return None, raw_ticker, raw_ticker
-    if clean.upper() in _TICKER_DISPLAY_INDEX:
-        iss_id, ticker, name = _TICKER_DISPLAY_INDEX[clean.upper()]
-        return iss_id, ticker, f"{ticker} · {name}"
+    if clean.lower().startswith("listing:") and len(parts := clean.split(":")) >= 3:
+        raw_ticker = parts[2].upper()
+        if matched := _TICKER_DISPLAY_INDEX.get(raw_ticker):
+            return matched[0], matched[1], f"{matched[1]} · {matched[2]}"
+        return None, raw_ticker, raw_ticker
+    if matched := _TICKER_DISPLAY_INDEX.get(clean.upper()):
+        return matched[0], matched[1], f"{matched[1]} · {matched[2]}"
     if clean.lower().startswith(("issuer:cik:", "company:cik:", "cik:")):
         cand_key = f"issuer:cik:{clean.split(':')[-1].strip().zfill(10)}"
-        if cand_key in KNOWN_ENTITY_DISPLAY:
-            ticker, name = KNOWN_ENTITY_DISPLAY[cand_key]
-            return cand_key, ticker, f"{ticker} · {name}"
-    return clean if clean.startswith("issuer:") else None, None, clean
-
-
-def _merge_display_row(merged: dict[str, tuple[str, str]], row: dict[str, Any]) -> None:
-    issuer_id = str(row.get("issuer_id") or "").strip()
-    legacy_id = str(row.get("legacy_id") or "").strip()
-    fallback = KNOWN_ENTITY_DISPLAY.get(legacy_id) or KNOWN_ENTITY_DISPLAY.get(issuer_id)
-    ticker = str(row.get("ticker") or "").strip() or (fallback[0] if fallback else "")
-    raw_name = str(row.get("display_name") or "").strip() or (fallback[1] if fallback else "")
-    label = (
-        (raw_name if raw_name.startswith(f"{ticker} ·") else f"{ticker} · {raw_name}")
-        if (ticker and raw_name)
-        else (ticker or raw_name)
-    )
-    if not label:
-        return
-    if issuer_id:
-        merged[issuer_id] = (ticker or issuer_id, label)
-    if legacy_id and legacy_id not in merged:
-        merged[legacy_id] = (ticker or legacy_id, label)
+        if entry := KNOWN_ENTITY_DISPLAY.get(cand_key):
+            return cand_key, entry[0], f"{entry[0]} · {entry[1]}"
+    return (clean if clean.startswith("issuer:") else None), None, clean
 
 
 def load_entity_display_map(database_url: str | None) -> dict[str, tuple[str, str]]:
@@ -163,54 +138,61 @@ def load_entity_display_map(database_url: str | None) -> dict[str, tuple[str, st
     except psycopg.Error:
         return merged
     for row in rows:
-        _merge_display_row(merged, row)
+        issuer_id = str(row.get("issuer_id") or "").strip()
+        legacy_id = str(row.get("legacy_id") or "").strip()
+        fallback = KNOWN_ENTITY_DISPLAY.get(legacy_id) or KNOWN_ENTITY_DISPLAY.get(issuer_id)
+        ticker = str(row.get("ticker") or "").strip() or (fallback[0] if fallback else "")
+        raw_name = str(row.get("display_name") or "").strip() or (fallback[1] if fallback else "")
+        label = (
+            (raw_name if raw_name.startswith(f"{ticker} ·") else f"{ticker} · {raw_name}")
+            if (ticker and raw_name)
+            else (ticker or raw_name)
+        )
+        if label:
+            if issuer_id:
+                merged[issuer_id] = (ticker or issuer_id, label)
+            if legacy_id and legacy_id not in merged:
+                merged[legacy_id] = (ticker or legacy_id, label)
     return merged
 
 
-_SERVED_RUN = "{alias}.run_id in (select h.run_id from mart.served_head h where h.run_id is not null)"
-
-SUPPLY_CHAIN_EXPOSURE_SQL = f"""
-select s.run_id,
-       to_char(s.cutoff at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as cutoff,
-       s.exposure_score::text as exposure_score,
-       s.direct_partners, s.suppliers_count, s.customers_count,
-       s.max_partner_share::text as max_partner_share,
-       s.confidence::text as confidence, s.reason_codes, s.extractor,
-       coalesce(s.availability_status, 'unavailable') as availability_status,
-       coalesce(s.source_evidence_status, 'degraded') as source_evidence_status,
-       coalesce(s.factor_validation_status, 'not_evaluated') as factor_validation_status
-from mart.issuer_supply_chain_exposure s
-where {issuer_identity_sql("s.issuer_id", "%s")}
-  and {_SERVED_RUN.format(alias="s")}
-order by (s.availability_status = 'available') desc, s.cutoff desc, s.created_at desc
+def _module_sql(table: str, alias: str, cols: str) -> str:
+    return f"""
+select {alias}.run_id,
+       to_char({alias}.cutoff at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as cutoff,
+       {cols},
+       {alias}.confidence::text as confidence, {alias}.reason_codes, {alias}.extractor,
+       coalesce({alias}.availability_status, 'unavailable') as availability_status,
+       coalesce({alias}.source_evidence_status, 'degraded') as source_evidence_status,
+       coalesce({alias}.factor_validation_status, 'not_evaluated') as factor_validation_status
+from {table} {alias}
+where {issuer_identity_sql(f"{alias}.issuer_id", "%s")}
+  and {alias}.run_id in (select h.run_id from mart.served_head h where h.run_id is not null)
+order by ({alias}.availability_status = 'available') desc, {alias}.cutoff desc, {alias}.created_at desc
 limit 1
 """
 
-ANALYST_RATINGS_SQL = f"""
-select r.run_id,
-       to_char(r.cutoff at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as cutoff,
-       r.consensus_rating::text as consensus_rating,
+
+SUPPLY_CHAIN_EXPOSURE_SQL = _module_sql(
+    "mart.issuer_supply_chain_exposure",
+    "s",
+    "s.exposure_score::text as exposure_score, s.direct_partners, s.suppliers_count, s.customers_count, s.max_partner_share::text as max_partner_share",
+)
+
+ANALYST_RATINGS_SQL = _module_sql(
+    "mart.issuer_analyst_ratings",
+    "r",
+    """r.consensus_rating::text as consensus_rating,
        coalesce(
            to_jsonb(r) ->> 'target_price',
            (select substring(rc from '^target_price:([0-9.]+)$')
             from unnest(r.reason_codes) as rc where rc like 'target_price:%%' limit 1)
        ) as target_price,
-       r.analysts_count, r.buy_count, r.hold_count, r.sell_count,
-       r.confidence::text as confidence, r.reason_codes, r.extractor,
-       coalesce(r.availability_status, 'unavailable') as availability_status,
-       coalesce(r.source_evidence_status, 'degraded') as source_evidence_status,
-       coalesce(r.factor_validation_status, 'not_evaluated') as factor_validation_status
-from mart.issuer_analyst_ratings r
-where {issuer_identity_sql("r.issuer_id", "%s")}
-  and {_SERVED_RUN.format(alias="r")}
-order by (r.availability_status = 'available') desc, r.cutoff desc, r.created_at desc
-limit 1
-"""
+       r.analysts_count, r.buy_count, r.hold_count, r.sell_count""",
+)
 
 
-class _ModuleRow(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
+class _ModuleRow(FrozenModel):
     run_id: str
     cutoff: str
     confidence: str
@@ -241,9 +223,7 @@ class AnalystRatings(_ModuleRow):
 NO_SERVED_ROW: Final = "no_row_in_served_head"
 
 
-class IssuerModuleUnavailable(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
+class IssuerModuleUnavailable(FrozenModel):
     issuer_id: str
     module: Literal["supply_chain_exposure", "analyst_ratings"]
     reason: Literal["no_row_in_served_head"] = NO_SERVED_ROW
@@ -255,34 +235,29 @@ class IssuerModuleReader(Protocol):
 
 
 def _append_row_aliases(candidates: list[str], row: dict[str, Any]) -> None:
-    for key in ("entity_id", "legacy_id", "current_ticker", "cik", "lei"):
-        val = row.get(key)
-        if isinstance(val, str) and val and val not in candidates:
-            candidates.append(val)
-    cik_val = row.get("cik")
-    if isinstance(cik_val, str) and cik_val:
-        for prefix in ("issuer:cik:", "company:cik:"):
-            prefixed = f"{prefix}{cik_val}"
-            if prefixed not in candidates:
-                candidates.append(prefixed)
-    lei_val = row.get("lei")
-    if isinstance(lei_val, str) and lei_val:
-        prefixed_lei = f"issuer:lei:{lei_val}"
-        if prefixed_lei not in candidates:
-            candidates.append(prefixed_lei)
+    def _add(v: Any) -> None:
+        if isinstance(v, str) and v and v not in candidates:
+            candidates.append(v)
+
+    for k in ("entity_id", "legacy_id", "current_ticker", "cik", "lei"):
+        _add(row.get(k))
+    if cik := row.get("cik"):
+        _add(f"issuer:cik:{cik}")
+        _add(f"company:cik:{cik}")
+    if lei := row.get("lei"):
+        _add(f"issuer:lei:{lei}")
 
 
 def resolve_issuer_id_candidates(database_url: str, issuer_id: str) -> tuple[str, ...]:
     clean = issuer_id.strip()
     if not clean:
         return ()
-    candidates: list[str] = [clean]
+    candidates = [clean]
     try:
-        rows = _query_rows(database_url, _RESOLVE_CANDIDATES_SQL, (clean,))
+        for row in _query_rows(database_url, _RESOLVE_CANDIDATES_SQL, (clean,)):
+            _append_row_aliases(candidates, row)
     except psycopg.Error:
-        return tuple(candidates)
-    for row in rows:
-        _append_row_aliases(candidates, row)
+        pass
     return tuple(candidates)
 
 
@@ -290,18 +265,15 @@ def resolve_issuer_id_candidates_batch(
     database_url: str,
     issuer_ids: tuple[str, ...] | list[str],
 ) -> dict[str, tuple[str, ...]]:
-    cleaned = [item.strip() for item in issuer_ids if item and item.strip()]
-    if not cleaned:
+    by_input: dict[str, list[str]] = {c: [c] for item in issuer_ids if item and (c := item.strip())}
+    if not by_input:
         return {}
-    by_input: dict[str, list[str]] = {raw: [raw] for raw in cleaned}
     try:
-        rows = _query_rows(database_url, _RESOLVE_BATCH_CANDIDATES_SQL, (list(by_input.keys()),))
+        for row in _query_rows(database_url, _RESOLVE_BATCH_CANDIDATES_SQL, (list(by_input),)):
+            if (target := by_input.get(str(row.get("raw_q") or ""))) is not None:
+                _append_row_aliases(target, row)
     except psycopg.Error:
-        return {raw: tuple(vals) for raw, vals in by_input.items()}
-    for row in rows:
-        target = by_input.get(str(row.get("raw_q") or ""))
-        if target is not None:
-            _append_row_aliases(target, row)
+        pass
     return {raw: tuple(vals) for raw, vals in by_input.items()}
 
 

@@ -8,22 +8,20 @@ from datetime import date, datetime
 from enum import StrEnum
 from typing import Protocol, runtime_checkable
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import Field, field_validator, model_validator
 
-from truealpha_contracts.common import STABLE_ID_PATTERN, CaptureEnvironment
-from truealpha_contracts.common import identify as _identify
-
-_SHA256 = r"^[0-9a-f]{64}$"
-_MUTABLE_VERSION_TOKENS = frozenset({"latest", "current", "default", "stable", "main", "head"})
-
-
-class _FrozenModel(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
+from truealpha_contracts.common import (
+    DEFAULT_MUTABLE_TOKENS,
+    SHA256_PATTERN,
+    STABLE_ID_PATTERN,
+    CaptureEnvironment,
+    FrozenModel,
+    identify,
+)
 
 
 def _reject_mutable_version(value: str, field_name: str) -> str:
-    tokens = {token for token in re.split(r"[._:/@+-]", value.lower()) if token}
-    if tokens & _MUTABLE_VERSION_TOKENS:
+    if {token for token in re.split(r"[._:/@+-]", value.lower()) if token} & DEFAULT_MUTABLE_TOKENS:
         raise ValueError(f"{field_name} must be immutable")
     return value
 
@@ -64,7 +62,7 @@ _KIND_PREFIX: dict[EvidenceNodeKind, str] = {
 }
 
 
-class EvidenceNodeRef(_FrozenModel):
+class EvidenceNodeRef(FrozenModel):
     kind: EvidenceNodeKind
     node_id: str = Field(min_length=1)
 
@@ -80,7 +78,7 @@ class EvidenceNodeRef(_FrozenModel):
         return self.node_id.split(":", 1)[1]
 
 
-class BitemporalStamp(_FrozenModel):
+class BitemporalStamp(FrozenModel):
     valid_from: date
     valid_to: date | None = None
     transaction_time: datetime
@@ -93,9 +91,9 @@ class BitemporalStamp(_FrozenModel):
         return self
 
 
-class EvidenceNode(_FrozenModel):
+class EvidenceNode(FrozenModel):
     ref: EvidenceNodeRef
-    content_sha256: str = Field(pattern=_SHA256)
+    content_sha256: str = Field(pattern=SHA256_PATTERN)
     stamp: BitemporalStamp
     supersedes: EvidenceNodeRef | None = None
 
@@ -111,7 +109,7 @@ class EvidenceNode(_FrozenModel):
         return self
 
 
-class EvidenceEdge(_FrozenModel):
+class EvidenceEdge(FrozenModel):
     edge_id: str = Field(default="", pattern=r"^(?:|evidence-edge:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
     from_ref: EvidenceNodeRef
@@ -125,11 +123,11 @@ class EvidenceEdge(_FrozenModel):
             raise ValueError("an evidence edge cannot connect a node to itself")
         if self.relation is EvidenceRelation.SUPERSEDES and self.from_ref.kind != self.to_ref.kind:
             raise ValueError("supersedes connects nodes of the same kind")
-        _identify(self, id_field="edge_id", hash_field="content_sha256", prefix="evidence-edge")
+        identify(self, id_field="edge_id", hash_field="content_sha256", prefix="evidence-edge")
         return self
 
 
-class CurrentPointerKey(_FrozenModel):
+class CurrentPointerKey(FrozenModel):
     environment: CaptureEnvironment
     universe_id: str = Field(pattern=STABLE_ID_PATTERN)
     universe_version: str = Field(pattern=STABLE_ID_PATTERN)
@@ -141,7 +139,7 @@ class CurrentPointerKey(_FrozenModel):
         return _reject_mutable_version(value, "pointer scope identities")
 
 
-class CurrentPointer(_FrozenModel):
+class CurrentPointer(FrozenModel):
     pointer_id: str = Field(default="", pattern=r"^(?:|current-pointer:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
     key: CurrentPointerKey
@@ -163,11 +161,11 @@ class CurrentPointer(_FrozenModel):
                 raise ValueError("the first pointer at sequence 0 has no previous run")
         elif self.sequence != 0:
             raise ValueError("a later advance must name the previous run it supersedes")
-        _identify(self, id_field="pointer_id", hash_field="content_sha256", prefix="current-pointer")
+        identify(self, id_field="pointer_id", hash_field="content_sha256", prefix="current-pointer")
         return self
 
 
-class ProvenanceClosure(_FrozenModel):
+class ProvenanceClosure(FrozenModel):
     root: EvidenceNodeRef
     reverse: bool = False
     nodes: tuple[EvidenceNode, ...]

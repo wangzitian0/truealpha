@@ -314,12 +314,7 @@ _BUILDER_ENTRY_POINT = "build_research_report"
 # _BUILDER_ENTRY_POINT and scans exactly that set, so a new helper invoked by the builder
 # is always covered even if this constant is never updated (Copilot review on #383: a
 # hard-coded scan list could be silently bypassed by a new unlisted helper).
-_EXPECTED_BUILDER_FUNCTIONS = {
-    "build_research_report",
-    "_select_subject",
-    "_select_sections",
-    "_default_title",
-}
+_EXPECTED_BUILDER_FUNCTIONS = {"build_research_report"}
 _FORBIDDEN_BINOPS = (ast.Add, ast.Sub, ast.Mult, ast.Div, ast.FloorDiv, ast.Mod, ast.Pow, ast.MatMult)
 _FORBIDDEN_CALLS = {"sum", "round", "abs", "pow", "min", "max", "Decimal", "float", "int", "quantize"}
 

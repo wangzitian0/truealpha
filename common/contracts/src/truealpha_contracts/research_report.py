@@ -8,19 +8,14 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Literal, Protocol
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import Field, model_validator
 
 from truealpha_contracts.access import AccessContext
-from truealpha_contracts.common import canonical_sha256
+from truealpha_contracts.common import StrictFrozenModel, canonical_sha256, require_aware
 from truealpha_contracts.execution import AvailabilityStatus, FactorValidationStatus
-from truealpha_contracts.models import _require_aware
 
 SCHEMA_VERSION: Literal["research_report.v1"] = "research_report.v1"
 _REPORT_ID_PREFIX = "report:"
-
-
-class _StrictFrozenModel(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
 
 class ResearchReportKind(StrEnum):
@@ -41,14 +36,14 @@ class ReportSectionKind(StrEnum):
     RANKING = "ranking"
 
 
-class EvidenceTrace(_StrictFrozenModel):
+class EvidenceTrace(StrictFrozenModel):
     reference_id: str = Field(min_length=1)
     materialized_output_id: str | None = None
     snapshot_id: str | None = None
     factor_execution_id: str | None = None
 
 
-class ResultValue(_StrictFrozenModel):
+class ResultValue(StrictFrozenModel):
     label: str = Field(min_length=1)
     value: str | None = None
     unit: str | None = None
@@ -62,11 +57,11 @@ class ResultValue(_StrictFrozenModel):
 
     @model_validator(mode="after")
     def _validate(self) -> ResultValue:
-        _require_aware(self.cutoff_at, "cutoff_at")
+        require_aware(self.cutoff_at, "cutoff_at")
         return self
 
 
-class ReportSection(_StrictFrozenModel):
+class ReportSection(StrictFrozenModel):
     section_kind: ReportSectionKind
     title: str = Field(min_length=1)
     availability: AvailabilityStatus
@@ -76,14 +71,14 @@ class ReportSection(_StrictFrozenModel):
     reason_codes: tuple[str, ...] = ()
 
 
-class ReportSubject(_StrictFrozenModel):
+class ReportSubject(StrictFrozenModel):
     subject_id: str = Field(min_length=1)
     display_name: str = Field(min_length=1)
     rank: int | None = Field(default=None, ge=1)
     sections: tuple[ReportSection, ...]
 
 
-class ResearchReportRequest(_StrictFrozenModel):
+class ResearchReportRequest(StrictFrozenModel):
     report_kind: ResearchReportKind
     target_entity_ids: tuple[str, ...] = Field(min_length=1)
     cutoff_at: datetime
@@ -93,11 +88,11 @@ class ResearchReportRequest(_StrictFrozenModel):
 
     @model_validator(mode="after")
     def _validate(self) -> ResearchReportRequest:
-        _require_aware(self.cutoff_at, "cutoff_at")
+        require_aware(self.cutoff_at, "cutoff_at")
         return self
 
 
-class ResearchReport(_StrictFrozenModel):
+class ResearchReport(StrictFrozenModel):
     schema_version: Literal["research_report.v1"] = SCHEMA_VERSION
     report_id: str = ""
     report_kind: ResearchReportKind
@@ -108,17 +103,12 @@ class ResearchReport(_StrictFrozenModel):
 
     @model_validator(mode="after")
     def _identify(self) -> ResearchReport:
-        _require_aware(self.cutoff_at, "cutoff_at")
-        computed = self._content_hash()
-        if self.report_id == "":
-            object.__setattr__(self, "report_id", computed)
-        elif self.report_id != computed:
+        require_aware(self.cutoff_at, "cutoff_at")
+        computed = f"{_REPORT_ID_PREFIX}{canonical_sha256(self.model_dump(mode='json', exclude={'report_id'}))}"
+        if self.report_id not in ("", computed):
             raise ValueError("report_id does not match report content")
+        object.__setattr__(self, "report_id", computed)
         return self
-
-    def _content_hash(self) -> str:
-        payload = self.model_dump(mode="json", exclude={"report_id"})
-        return f"{_REPORT_ID_PREFIX}{canonical_sha256(payload)}"
 
     @classmethod
     def assemble(
@@ -145,42 +135,27 @@ class ResearchReadPort(Protocol):
     def load_subjects(self, *, request: ResearchReportRequest, context: AccessContext) -> tuple[ReportSubject, ...]: ...
 
 
-def _select_sections(
-    sections: tuple[ReportSection, ...],
-    section_kinds: tuple[ReportSectionKind, ...],
-) -> tuple[ReportSection, ...]:
-    if not section_kinds:
-        return sections
-    wanted = set(section_kinds)
-    return tuple(section for section in sections if section.section_kind in wanted)
-
-
-def _select_subject(
-    subject: ReportSubject,
-    section_kinds: tuple[ReportSectionKind, ...],
-) -> ReportSubject:
-    return ReportSubject(
-        subject_id=subject.subject_id,
-        display_name=subject.display_name,
-        rank=subject.rank,
-        sections=_select_sections(subject.sections, section_kinds),
-    )
-
-
-def _default_title(request: ResearchReportRequest) -> str:
-    targets = ", ".join(request.target_entity_ids)
-    return f"{request.report_kind.value} research report: {targets}"
-
-
 def build_research_report(
     request: ResearchReportRequest,
     repository: ResearchReadPort,
     *,
     context: AccessContext,
 ) -> ResearchReport:
-    subjects = repository.load_subjects(request=request, context=context)
-    selected = tuple(_select_subject(subject, request.section_kinds) for subject in subjects)
-    title = request.title if request.title is not None else _default_title(request)
+    wanted = set(request.section_kinds)
+    selected = tuple(
+        ReportSubject(
+            subject_id=s.subject_id,
+            display_name=s.display_name,
+            rank=s.rank,
+            sections=tuple(sec for sec in s.sections if sec.section_kind in wanted) if wanted else s.sections,
+        )
+        for s in repository.load_subjects(request=request, context=context)
+    )
+    title = (
+        request.title
+        if request.title is not None
+        else f"{request.report_kind.value} research report: {', '.join(request.target_entity_ids)}"
+    )
     return ResearchReport.assemble(
         report_kind=request.report_kind,
         title=title,
@@ -194,18 +169,18 @@ def render_report_json(report: ResearchReport) -> str:
     return json.dumps(report.model_dump(mode="json"), sort_keys=True, indent=2, ensure_ascii=True) + "\n"
 
 
-def _render_result_row(result: ResultValue) -> str:
-    unit = result.currency if result.currency is not None else result.unit
-    value = "—" if result.value is None else (f"{result.value} {unit}" if unit is not None else result.value)
-    cells = [
-        result.label,
-        value,
-        "—" if result.period is None else result.period,
-        result.availability.value,
-        "—" if result.confidence is None else str(result.confidence),
-        "—" if result.factor_version is None else result.factor_version,
-        "—" if result.trace is None else result.trace.reference_id,
-    ]
+def _render_result_row(r: ResultValue) -> str:
+    unit = r.currency if r.currency is not None else r.unit
+    val = "—" if r.value is None else (f"{r.value} {unit}" if unit is not None else r.value)
+    cells = (
+        r.label,
+        val,
+        r.period or "—",
+        r.availability.value,
+        "—" if r.confidence is None else str(r.confidence),
+        r.factor_version or "—",
+        "—" if r.trace is None else r.trace.reference_id,
+    )
     return "| " + " | ".join(cells) + " |"
 
 
@@ -217,13 +192,16 @@ def _render_section_markdown(section: ReportSection) -> list[str]:
         lines.append(f"- Reasons: {', '.join(section.reason_codes)}")
     lines.append("")
     if section.results:
-        lines.append("| Result | Value | Period | Availability | Confidence | Factor version | Trace |")
-        lines.append("| --- | --- | --- | --- | --- | --- | --- |")
-        lines.extend(_render_result_row(result) for result in section.results)
-        lines.append("")
+        lines.extend(
+            [
+                "| Result | Value | Period | Availability | Confidence | Factor version | Trace |",
+                "| --- | --- | --- | --- | --- | --- | --- |",
+                *(_render_result_row(r) for r in section.results),
+                "",
+            ]
+        )
     if section.notes:
-        lines.extend(f"> {note}" for note in section.notes)
-        lines.append("")
+        lines.extend([*(f"> {note}" for note in section.notes), ""])
     return lines
 
 

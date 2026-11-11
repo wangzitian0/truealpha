@@ -9,11 +9,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-
-def _require_aware(value: datetime, field_name: str) -> datetime:
-    if value.tzinfo is None or value.utcoffset() is None:
-        raise ValueError(f"{field_name} must be timezone-aware")
-    return value
+from truealpha_contracts.common import SHA256_PATTERN
+from truealpha_contracts.common import require_aware as _require_aware
 
 
 class DataSource(StrEnum):
@@ -37,30 +34,36 @@ class _PitRecordBase(BaseModel):
     def validate_datetimes(cls, value: datetime, info) -> datetime:
         return _require_aware(value, info.field_name)
 
+    def _check_recorded_after_knowable(self) -> None:
+        if self.recorded_at < self.knowable_at:
+            raise ValueError("recorded_at must not precede knowable_at")
 
-class EntityIdentifier(_PitRecordBase):
+
+class _ValidPeriodRecordBase(_PitRecordBase):
+    valid_from: date
+    valid_to: date
+
+    @model_validator(mode="after")
+    def validate_time_order(self) -> _ValidPeriodRecordBase:
+        if self.valid_to < self.valid_from:
+            raise ValueError("valid_to must not precede valid_from")
+        self._check_recorded_after_knowable()
+        return self
+
+
+class EntityIdentifier(_ValidPeriodRecordBase):
     entity_id: str = Field(min_length=1)
     source: DataSource
     value: str = Field(min_length=1)
     identifier_type: str = Field(min_length=1)
-    valid_from: date
-    valid_to: date
     confidence: Decimal = Field(ge=0, le=1)
     raw_ref: str
-
-    @model_validator(mode="after")
-    def validate_time_order(self) -> EntityIdentifier:
-        if self.valid_to < self.valid_from:
-            raise ValueError("valid_to must not precede valid_from")
-        if self.recorded_at < self.knowable_at:
-            raise ValueError("recorded_at must not precede knowable_at")
-        return self
 
 
 class RawObjectRef(BaseModel):
     bucket: str = Field(min_length=3)
     key: str = Field(min_length=1)
-    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    sha256: str = Field(pattern=SHA256_PATTERN)
     byte_length: int = Field(ge=0)
     content_type: str = Field(min_length=1)
 
@@ -91,12 +94,10 @@ class RawIngestionEnvelope(_RawEnvelopeBase):
     object: RawObjectRef
 
 
-class AnalystRatingEvent(BaseModel):
+class AnalystRatingEvent(_PitRecordBase):
     analyst_id: str
     company_id: str
     recommendation_at: datetime
-    knowable_at: datetime
-    recorded_at: datetime
     vendor_updated_at: datetime | None = None
     rating: int = Field(ge=1, le=5)
     target_price: Decimal | None = Field(default=None, ge=0)
@@ -105,17 +106,16 @@ class AnalystRatingEvent(BaseModel):
     confidence: Decimal = Field(ge=0, le=1)
     raw_ref: str
 
-    @field_validator("recommendation_at", "knowable_at", "recorded_at", "vendor_updated_at")
+    @field_validator("recommendation_at", "vendor_updated_at")
     @classmethod
-    def validate_datetimes(cls, value: datetime | None, info) -> datetime | None:
+    def validate_extra_datetimes(cls, value: datetime | None, info) -> datetime | None:
         return None if value is None else _require_aware(value, info.field_name)
 
     @model_validator(mode="after")
     def validate_time_order(self) -> AnalystRatingEvent:
         if self.knowable_at < self.recommendation_at:
             raise ValueError("knowable_at must not precede recommendation_at")
-        if self.recorded_at < self.knowable_at:
-            raise ValueError("recorded_at must not precede knowable_at")
+        self._check_recorded_after_knowable()
         return self
 
 
@@ -135,8 +135,7 @@ class FundHolding(_PitRecordBase):
 
     @model_validator(mode="after")
     def validate_time_order(self) -> FundHolding:
-        if self.recorded_at < self.knowable_at:
-            raise ValueError("recorded_at must not precede knowable_at")
+        self._check_recorded_after_knowable()
         return self
 
 
@@ -159,27 +158,16 @@ class PriceBar(_PitRecordBase):
             raise ValueError("high is below another OHLC value")
         if self.low > min(self.open, self.close, self.high):
             raise ValueError("low is above another OHLC value")
-        if self.recorded_at < self.knowable_at:
-            raise ValueError("recorded_at must not precede knowable_at")
+        self._check_recorded_after_knowable()
         return self
 
 
-class GraphEdge(_PitRecordBase):
+class GraphEdge(_ValidPeriodRecordBase):
     from_id: str
     to_id: str
     relation_type: str
-    valid_from: date
-    valid_to: date
     confidence: Decimal = Field(ge=0, le=1)
     raw_ref: str
-
-    @model_validator(mode="after")
-    def validate_time_order(self) -> GraphEdge:
-        if self.valid_to < self.valid_from:
-            raise ValueError("valid_to must not precede valid_from")
-        if self.recorded_at < self.knowable_at:
-            raise ValueError("recorded_at must not precede knowable_at")
-        return self
 
 
 class AsOfQuery(BaseModel):

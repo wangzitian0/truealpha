@@ -7,17 +7,14 @@ from typing import Any
 
 import psycopg
 from psycopg.rows import dict_row
-from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
+from pydantic import ValidationError, model_validator
 
+from truealpha_contracts.common import FrozenModel
 from truealpha_contracts.confidence_bands import confidence_band
 from truealpha_contracts.issuer_modules_mart import resolve_static_entity_display
 from truealpha_contracts.universes import id_prefix_like, universe_with_role
 
 _ROW_VALIDATION_ERRORS = (KeyError, ValueError, TypeError, ValidationError)
-
-
-class _FrozenModel(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
 
 
 def _round_gppe_display(gppe: str | None) -> str | None:
@@ -29,7 +26,7 @@ def _round_gppe_display(gppe: str | None) -> str | None:
         return gppe
 
 
-class ToptGppeCell(_FrozenModel):
+class ToptGppeCell(FrozenModel):
     listing_id: str
     availability: str
     gppe: str | None
@@ -42,18 +39,18 @@ class ToptGppeCell(_FrozenModel):
     @model_validator(mode="after")
     def _populate_display_fields(self) -> ToptGppeCell:
         resolved_issuer, resolved_ticker, resolved_name = resolve_static_entity_display(self.listing_id)
-        if self.issuer_id is None and resolved_issuer is not None:
-            object.__setattr__(self, "issuer_id", resolved_issuer)
-        if self.ticker is None and resolved_ticker is not None:
-            object.__setattr__(self, "ticker", resolved_ticker)
-        if self.display_name is None:
-            object.__setattr__(self, "display_name", resolved_name)
-        if self.gppe_display is None and self.gppe is not None:
-            object.__setattr__(self, "gppe_display", _round_gppe_display(self.gppe))
+        for field, val in (
+            ("issuer_id", resolved_issuer),
+            ("ticker", resolved_ticker),
+            ("display_name", resolved_name),
+            ("gppe_display", _round_gppe_display(self.gppe) if self.gppe is not None else None),
+        ):
+            if getattr(self, field) is None and val is not None:
+                object.__setattr__(self, field, val)
         return self
 
 
-class ToptGppeReport(_FrozenModel):
+class ToptGppeReport(FrozenModel):
     run_id: str
     requested_count: int
     available_count: int
@@ -61,33 +58,54 @@ class ToptGppeReport(_FrozenModel):
     quality: dict[str, Any] | None = None
 
 
-class ToptGppeUnavailable(_FrozenModel):
+class ToptGppeUnavailable(FrozenModel):
+    reason: str
+
+
+class MetricNodeValueCell(FrozenModel):
+    issuer_id: str
+    node_id: str
+    node_key: str
+    period: str
+    period_tag: str | None = None
+    value: str | None
+    unit: str | None = None
+    availability_status: str
+    reason_codes: tuple[str, ...] = ()
+    source_evidence_status: str
+    factor_validation_status: str
+    confidence: str | None
+    confidence_band: str | None = None
+    tree_version: str | None = None
+    tree_sha256: str | None = None
+
+
+class MetricNodeValueReport(FrozenModel):
+    run_id: str
+    node_key: str
+    available_count: int
+    cells: tuple[MetricNodeValueCell, ...]
+
+
+class MetricNodeValueUnavailable(FrozenModel):
+    node_key: str
     reason: str
 
 
 def resolve_strategy_governed_run(conn: Any) -> tuple[str | None, str | None]:
     like_prefix = (id_prefix_like(universe_with_role("strategy")),)
     head = conn.execute(
-        """
-        select run_id, freshness, availability, staleness_reason
-        from mart.served_head
-        where factor_id = 'gross_profit_per_employee' and universe_id like %s
-        order by advanced_at desc limit 1
-        """,
+        "select run_id, freshness, availability, staleness_reason from mart.served_head"
+        " where factor_id = 'gross_profit_per_employee' and universe_id like %s order by advanced_at desc limit 1",
         like_prefix,
     ).fetchone()
     if head is not None and (head["availability"] == "unavailable" or head["run_id"] is None):
         return None, f"head_unavailable: {head['staleness_reason'] or 'older_than_30d'}"
     if head is None:
         head = conn.execute(
-            """
-            select s.run_id
-            from mart.topt_capture_status s
-            join mart.datahub_quality_report q on q.run_id = s.run_id
-            where s.environment = (select environment from mart.environment_identity)
-              and s.complete and s.universe_id like %s
-            order by q.created_at desc, q.report_id desc limit 1
-            """,
+            "select s.run_id from mart.topt_capture_status s join mart.datahub_quality_report q on q.run_id = s.run_id"
+            " where s.environment = (select environment from mart.environment_identity)"
+            " and s.complete and s.universe_id like %s order by q.created_at desc, q.report_id desc limit 1",
             like_prefix,
         ).fetchone()
     if head is None or head["run_id"] is None:
@@ -95,24 +113,27 @@ def resolve_strategy_governed_run(conn: Any) -> tuple[str | None, str | None]:
     return str(head["run_id"]), None
 
 
+def _require_limit(limit: int) -> None:
+    if not 1 <= limit <= 500:
+        raise ValueError("limit must be between 1 and 500")
+
+
 class PostgresToptGppeRepository:
     def __init__(self, *, database_url: str) -> None:
         self._database_url = database_url
 
     def latest(self, *, limit: int = 100) -> ToptGppeReport | ToptGppeUnavailable:
-        if not 1 <= limit <= 500:
-            raise ValueError("limit must be between 1 and 500")
+        _require_limit(limit)
         try:
             with psycopg.connect(self._database_url, row_factory=dict_row) as conn:
-                run_id, unavailable_reason = resolve_strategy_governed_run(conn)
-                if unavailable_reason is not None or run_id is None:
-                    return ToptGppeUnavailable(reason=unavailable_reason or "no_run")
+                run_id, err = resolve_strategy_governed_run(conn)
+                if err is not None or run_id is None:
+                    return ToptGppeUnavailable(reason=err or "no_run")
                 rows = conn.execute(
                     """
                     select coalesce(ei.listing_id, nullif(r.payload->>'listing_id', '')) as listing_id,
                            r.payload->>'availability' as availability,
-                           r.payload->>'gppe' as gppe,
-                           r.payload->>'confidence' as confidence
+                           r.payload->>'gppe' as gppe, r.payload->>'confidence' as confidence
                     from mart.topt_gppe_results r
                     left join lateral (
                         select ei.listing_id from mart.entity_identity ei
@@ -149,36 +170,6 @@ class PostgresToptGppeRepository:
             return ToptGppeUnavailable(reason="schema_mismatch")
 
 
-class MetricNodeValueCell(_FrozenModel):
-    issuer_id: str
-    node_id: str
-    node_key: str
-    period: str
-    period_tag: str | None = None
-    value: str | None
-    unit: str | None = None
-    availability_status: str
-    reason_codes: tuple[str, ...] = ()
-    source_evidence_status: str
-    factor_validation_status: str
-    confidence: str | None
-    confidence_band: str | None = None
-    tree_version: str | None = None
-    tree_sha256: str | None = None
-
-
-class MetricNodeValueReport(_FrozenModel):
-    run_id: str
-    node_key: str
-    available_count: int
-    cells: tuple[MetricNodeValueCell, ...]
-
-
-class MetricNodeValueUnavailable(_FrozenModel):
-    node_key: str
-    reason: str
-
-
 class PostgresMetricNodeValueRepository:
     def __init__(self, *, database_url: str) -> None:
         self._database_url = database_url
@@ -192,27 +183,24 @@ class PostgresMetricNodeValueRepository:
     ) -> MetricNodeValueReport | MetricNodeValueUnavailable:
         if not node_key or not node_key.strip():
             raise ValueError("node_key must be non-empty")
-        if not 1 <= limit <= 500:
-            raise ValueError("limit must be between 1 and 500")
+        _require_limit(limit)
         try:
             with psycopg.connect(self._database_url, row_factory=dict_row) as conn:
-                run_id, unavailable_reason = resolve_strategy_governed_run(conn)
-                if unavailable_reason is not None or run_id is None:
-                    return MetricNodeValueUnavailable(node_key=node_key, reason=unavailable_reason or "no_run")
-                query = """
+                run_id, err = resolve_strategy_governed_run(conn)
+                if err is not None or run_id is None:
+                    return MetricNodeValueUnavailable(node_key=node_key, reason=err or "no_run")
+                where = "v.run_id = %s and v.node_key = %s" + (" and v.issuer_id = %s" if issuer_id is not None else "")
+                params = (run_id, node_key, *((issuer_id,) if issuer_id is not None else ()), limit)
+                rows = conn.execute(
+                    f"""
                     select v.issuer_id, v.node_id::text as node_id, v.node_key, v.period, v.period_tag,
                            v.value::text as value, v.unit, v.availability_status, v.reason_codes,
                            v.source_evidence_status, v.factor_validation_status,
                            v.confidence::text as confidence, v.tree_version, v.tree_sha256
-                    from mart.metric_node_values v
-                    where v.run_id = %s and v.node_key = %s
-                """
-                params: list[object] = [run_id, node_key]
-                if issuer_id is not None:
-                    query += " and v.issuer_id = %s"
-                    params.append(issuer_id)
-                rows = conn.execute(
-                    query + " order by v.issuer_id, v.period desc limit %s", (*params, limit)
+                    from mart.metric_node_values v where {where}
+                    order by v.issuer_id, v.period desc limit %s
+                    """,
+                    params,
                 ).fetchall()
                 cells = tuple(
                     MetricNodeValueCell(

@@ -5,10 +5,9 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Self
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
-from truealpha_contracts.common import canonical_sha256
-from truealpha_contracts.common import identify_by_grain as _freeze_wrapped
+from truealpha_contracts.common import FrozenModel, canonical_sha256, identify_by_grain, require_aware
 from truealpha_contracts.datahub import ListObligation
 from truealpha_contracts.universe import SubjectRef, UniverseRef
 
@@ -16,8 +15,7 @@ from truealpha_contracts.universe import SubjectRef, UniverseRef
 def _freeze(model: BaseModel, *, id_field: str, prefix: str, identity_fields: tuple[str, ...]) -> None:
     identity = model.model_dump(mode="json", include=set(identity_fields))
     expected_id = f"{prefix}:{canonical_sha256(identity)}"
-    content = model.model_dump(mode="json", exclude={id_field, "content_sha256"})
-    expected_content = canonical_sha256(content)
+    expected_content = canonical_sha256(model.model_dump(mode="json", exclude={id_field, "content_sha256"}))
     if getattr(model, id_field) not in {"", expected_id}:
         raise ValueError(f"{id_field} does not match canonical identity")
     if getattr(model, "content_sha256") not in {"", expected_content}:
@@ -26,11 +24,7 @@ def _freeze(model: BaseModel, *, id_field: str, prefix: str, identity_fields: tu
     object.__setattr__(model, "content_sha256", expected_content)
 
 
-class CaptureListVersion(BaseModel):
-    """One content-addressed list version; mutable aliases are never accepted."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
+class CaptureListVersion(FrozenModel):
     list_version_id: str = Field(default="", pattern=r"^(?:|list-version:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
     universe: UniverseRef
@@ -40,9 +34,7 @@ class CaptureListVersion(BaseModel):
     @field_validator("effective_at")
     @classmethod
     def aware_effective_at(cls, value: datetime) -> datetime:
-        if value.tzinfo is None or value.utcoffset() is None:
-            raise ValueError("effective_at must be timezone-aware")
-        return value
+        return require_aware(value, "effective_at")
 
     @model_validator(mode="after")
     def identify(self) -> Self:
@@ -59,11 +51,7 @@ class CaptureListVersion(BaseModel):
         return self
 
 
-class CaptureListObligation(BaseModel):
-    """A D4 obligation bound to the exact list version that created it."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
+class CaptureListObligation(FrozenModel):
     obligation_id: str = Field(default="", pattern=r"^(?:|capture-list-obligation:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
     list_version_id: str = Field(pattern=r"^list-version:[0-9a-f]{64}$")
@@ -100,11 +88,7 @@ class CaptureListObligation(BaseModel):
         return self.obligation.partition
 
 
-class CaptureObligationWorkBinding(BaseModel):
-    """Bind one D5 list-bound obligation to one campaign work item."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
+class CaptureObligationWorkBinding(FrozenModel):
     binding_id: str = Field(default="", pattern=r"^(?:|capture-obligation-work-binding:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
     obligation_id: str = Field(pattern=r"^capture-list-obligation:[0-9a-f]{64}$")
@@ -112,7 +96,7 @@ class CaptureObligationWorkBinding(BaseModel):
 
     @model_validator(mode="after")
     def identify(self) -> Self:
-        _freeze_wrapped(
+        identify_by_grain(
             self,
             id_field="binding_id",
             prefix="capture-obligation-work-binding",
@@ -121,8 +105,4 @@ class CaptureObligationWorkBinding(BaseModel):
         return self
 
 
-__all__ = [
-    "CaptureListObligation",
-    "CaptureListVersion",
-    "CaptureObligationWorkBinding",
-]
+__all__ = ["CaptureListObligation", "CaptureListVersion", "CaptureObligationWorkBinding"]

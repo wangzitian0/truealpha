@@ -17,8 +17,6 @@ from itertools import pairwise
 from typing import Any, Literal, NamedTuple, Protocol, Self
 
 from pydantic import (
-    BaseModel,
-    ConfigDict,
     Field,
     SerializerFunctionWrapHandler,
     field_validator,
@@ -26,8 +24,13 @@ from pydantic import (
     model_validator,
 )
 
-from truealpha_contracts.common import identify as _identify
-from truealpha_contracts.models import _require_aware
+from truealpha_contracts.common import (
+    SHA256_PATTERN,
+    StrictFrozenModel,
+    drop_none_fields,
+    identify,
+    require_aware,
+)
 from truealpha_contracts.research import (
     StrategyExecutionPolicy,
     StrategyTotalReturnPolicy,
@@ -37,7 +40,6 @@ from truealpha_contracts.research import (
 )
 from truealpha_contracts.universe import SubjectKind, SubjectRef, UniverseRef
 
-_SHA256_PATTERN = r"^[0-9a-f]{64}$"
 _STABLE_KEY_PATTERN = r"^[a-z][a-z0-9]*(?:[._:/-][a-z0-9]+)*$"
 _VERSION_PATTERN = r"^[a-z0-9][a-z0-9]*(?:[._-][a-z0-9]+)*$"
 _MUTABLE_TOKENS = frozenset({"current", "default", "head", "latest", "main", "master", "stable"})
@@ -45,8 +47,7 @@ _QUARTER_END_MONTHS = frozenset({3, 6, 9, 12})
 
 
 def _reject_mutable_coordinate(value: str, field_name: str) -> str:
-    tokens = tuple(token for token in re.split(r"[._:/@-]", value.lower()) if token)
-    if set(tokens) & _MUTABLE_TOKENS:
+    if {t for t in re.split(r"[._:/@-]", value.lower()) if t} & _MUTABLE_TOKENS:
         raise ValueError(f"{field_name} cannot contain a mutable reference")
     return value
 
@@ -70,8 +71,10 @@ def _reject_binary_float(value: object) -> object:
     return value
 
 
-class _StrictFrozenModel(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+def _require_all_or_none(model: Any, fields: tuple[str, ...], group_label: str) -> None:
+    stated = {name: getattr(model, name) is not None for name in fields}
+    if len(set(stated.values())) != 1:
+        raise ValueError(f"the {group_label} fields {sorted(fields)} must be all present or all absent, got {stated}")
 
 
 class FactorDimension(StrEnum):
@@ -80,12 +83,12 @@ class FactorDimension(StrEnum):
     YEARS = "years"
 
 
-class FactorUnitSpec(_StrictFrozenModel):
+class FactorUnitSpec(StrictFrozenModel):
     dimension: FactorDimension
     unit_code: str = Field(pattern=_STABLE_KEY_PATTERN)
 
 
-class DecimalQuantization(_StrictFrozenModel):
+class DecimalQuantization(StrictFrozenModel):
     decimal_places: int = Field(ge=0, le=12)
     rounding: Literal["half_even"]
 
@@ -121,7 +124,7 @@ class RiskFreeInstrument(StrEnum):
     US_TREASURY_BILL_3_MONTH = "us_treasury_bill_3_month"
 
 
-class RiskFreeRatePolicy(_StrictFrozenModel):
+class RiskFreeRatePolicy(StrictFrozenModel):
     rule_id: Literal["per_cutoff_versioned_parameter"]
     instrument: RiskFreeInstrument
     rate_unit: Literal["annualized_decimal_fraction"]
@@ -134,7 +137,7 @@ class RiskFreeRatePolicy(_StrictFrozenModel):
         return self
 
 
-class CutoffRiskFreeRate(_StrictFrozenModel):
+class CutoffRiskFreeRate(StrictFrozenModel):
     cutoff_at: datetime
     annualized_rate: Decimal = Field(ge=0, le=1)
     provisional: Literal[True]
@@ -147,7 +150,7 @@ class CutoffRiskFreeRate(_StrictFrozenModel):
     @field_validator("cutoff_at")
     @classmethod
     def validate_cutoff_at(cls, value: datetime) -> datetime:
-        return _require_aware(value, "cutoff_at")
+        return require_aware(value, "cutoff_at")
 
 
 class LaborEfficiencyNumerator(StrEnum):
@@ -175,50 +178,44 @@ _FORMULA_FIELDS = (
 )
 
 
-class CapitalAdjustedLaborEfficiencyDefinition(_StrictFrozenModel):
+class _FactorDefinitionBase(StrictFrozenModel):
     factor_definition_id: str = Field(default="", pattern=r"^(?:|factor-definition:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
-    factor_key: Literal["capital_adjusted_labor_efficiency"]
     factor_version: str = Field(pattern=_VERSION_PATTERN)
-    numerator: LaborEfficiencyNumerator | None = None
-    capital_charge_base: CapitalChargeBase | None = None
-    denominator: LaborEfficiencyDenominator | None = None
-    risk_free: RiskFreeRatePolicy
-    formula: Literal["(numerator-capital_charge_base*risk_free_rate)/denominator"] | None = None
     unit: FactorUnitSpec
     quantization: DecimalQuantization
-    missing_numerator_reason: ExclusionReason | None = None
-    missing_capital_base_reason: ExclusionReason | None = None
-    missing_denominator_reason: ExclusionReason | None = None
-    nonpositive_denominator_reason: ExclusionReason | None = None
 
     @field_validator("factor_version")
     @classmethod
     def reject_mutable_version(cls, value: str) -> str:
         return _reject_mutable_coordinate(value, "factor_version")
 
+
+class CapitalAdjustedLaborEfficiencyDefinition(_FactorDefinitionBase):
+    factor_key: Literal["capital_adjusted_labor_efficiency"]
+    numerator: LaborEfficiencyNumerator | None = None
+    capital_charge_base: CapitalChargeBase | None = None
+    denominator: LaborEfficiencyDenominator | None = None
+    risk_free: RiskFreeRatePolicy
+    formula: Literal["(numerator-capital_charge_base*risk_free_rate)/denominator"] | None = None
+    missing_numerator_reason: ExclusionReason | None = None
+    missing_capital_base_reason: ExclusionReason | None = None
+    missing_denominator_reason: ExclusionReason | None = None
+    nonpositive_denominator_reason: ExclusionReason | None = None
+
     @model_serializer(mode="wrap")
     def omit_absent_formula(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
-        data: dict[str, Any] = handler(self)
-        for name in _FORMULA_FIELDS:
-            if getattr(self, name) is None:
-                data.pop(name, None)
-        return data
+        return drop_none_fields(handler(self), *_FORMULA_FIELDS)
 
     @model_validator(mode="after")
     def validate_and_identify(self) -> Self:
-        stated = {name: getattr(self, name) is not None for name in _FORMULA_FIELDS}
-        if len(set(stated.values())) != 1:
-            raise ValueError(
-                f"the formula fields {sorted(_FORMULA_FIELDS)} must be all present or all absent, got {stated}"
-            )
+        _require_all_or_none(self, _FORMULA_FIELDS, "formula")
         if self.formula is not None:
             self._validate_formula_semantics()
-        _identify(self, id_field="factor_definition_id", prefix="factor-definition")
+        identify(self, id_field="factor_definition_id", prefix="factor-definition")
         return self
 
     def _validate_formula_semantics(self) -> None:
-        assert self.capital_charge_base is not None
         if (
             self.numerator is LaborEfficiencyNumerator.GROSS_PROFIT
             and self.missing_numerator_reason is not ExclusionReason.MISSING_GROSS_PROFIT_FACT
@@ -247,10 +244,10 @@ class CapitalAdjustedLaborEfficiencyDefinition(_StrictFrozenModel):
             raise ValueError("denominator and its nonpositive reason code are inconsistent")
 
 
-class LaborEfficiencyTreePin(_StrictFrozenModel):
+class LaborEfficiencyTreePin(StrictFrozenModel):
     tree_key: str = Field(pattern=r"^[a-z][a-z0-9_.]*$")
     tree_version: str = Field(min_length=1)
-    tree_sha256: str = Field(pattern=_SHA256_PATTERN)
+    tree_sha256: str = Field(pattern=SHA256_PATTERN)
 
     @field_validator("tree_version")
     @classmethod
@@ -258,21 +255,11 @@ class LaborEfficiencyTreePin(_StrictFrozenModel):
         return _reject_mutable_coordinate(value, "tree_version")
 
 
-class _MarketMultipleDefinitionBase(_StrictFrozenModel):
-    factor_definition_id: str = Field(default="", pattern=r"^(?:|factor-definition:[0-9a-f]{64})$")
-    content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
-    factor_version: str = Field(pattern=_VERSION_PATTERN)
+class _MarketMultipleDefinitionBase(_FactorDefinitionBase):
     market_value_rule: Literal["shares_outstanding_times_last_unadjusted_close"]
     price_rule: Literal["last_unadjusted_close_at_or_before_cutoff"]
     shares_rule: Literal["latest_knowable_shares_outstanding_at_or_before_cutoff"]
-    unit: FactorUnitSpec
-    quantization: DecimalQuantization
     missing_market_value_reason: ExclusionReason
-
-    @field_validator("factor_version")
-    @classmethod
-    def reject_mutable_version(cls, value: str) -> str:
-        return _reject_mutable_coordinate(value, "factor_version")
 
     def _validate_multiple_base(self, label: str) -> None:
         if self.unit.dimension is not FactorDimension.DIMENSIONLESS:
@@ -294,7 +281,7 @@ class PriceToSalesDefinition(_MarketMultipleDefinitionBase):
             raise ValueError("missing revenue must use its exact reason code")
         if self.nonpositive_revenue_reason is not ExclusionReason.NONPOSITIVE_REVENUE:
             raise ValueError("nonpositive revenue must use its exact reason code")
-        _identify(self, id_field="factor_definition_id", prefix="factor-definition")
+        identify(self, id_field="factor_definition_id", prefix="factor-definition")
         return self
 
 
@@ -311,7 +298,7 @@ class PriceToGrossProfitDefinition(_MarketMultipleDefinitionBase):
             raise ValueError("missing gross profit must use its exact reason code")
         if self.nonpositive_gross_profit_reason is not ExclusionReason.NONPOSITIVE_GROSS_PROFIT:
             raise ValueError("nonpositive gross profit must use its exact reason code")
-        _identify(self, id_field="factor_definition_id", prefix="factor-definition")
+        identify(self, id_field="factor_definition_id", prefix="factor-definition")
         return self
 
 
@@ -320,11 +307,7 @@ class ValuationBasis(StrEnum):
     PRICE_TO_GROSS_PROFIT = "price_to_gross_profit"
 
 
-_TIER_ORDER = {
-    ValuationTier.TRADITIONAL: 0,
-    ValuationTier.TECH: 1,
-    ValuationTier.LARGE_MODEL_NATIVE: 2,
-}
+_TIER_ORDER = {ValuationTier.TRADITIONAL: 0, ValuationTier.TECH: 1, ValuationTier.LARGE_MODEL_NATIVE: 2}
 
 
 class _TierBand(Protocol):
@@ -350,14 +333,14 @@ def _ordered_tier_bands[BandT: _TierBand](bands: tuple[BandT, ...]) -> tuple[Ban
 
 def _band_for[BandT: _TierBand](bands: tuple[BandT, ...], labor_efficiency: Decimal) -> BandT:
     for band in bands:
-        lower_ok = band.labor_efficiency_lower_bound is None or labor_efficiency >= band.labor_efficiency_lower_bound
-        upper_ok = band.labor_efficiency_upper_bound is None or labor_efficiency < band.labor_efficiency_upper_bound
-        if lower_ok and upper_ok:
+        lo_ok = band.labor_efficiency_lower_bound is None or labor_efficiency >= band.labor_efficiency_lower_bound
+        hi_ok = band.labor_efficiency_upper_bound is None or labor_efficiency < band.labor_efficiency_upper_bound
+        if lo_ok and hi_ok:
             return band
     raise ValueError("tier bands do not cover the supplied labor efficiency")  # pragma: no cover
 
 
-class _TierBandBase(_StrictFrozenModel):
+class _TierBandBase(StrictFrozenModel):
     tier: ValuationTier
     labor_efficiency_lower_bound: Decimal | None
     labor_efficiency_upper_bound: Decimal | None
@@ -401,39 +384,6 @@ class ProvisionalTierBand(_TierBandBase):
         return self.target_ps_upper_bound
 
 
-class ThreeTierValuationDefinition(_StrictFrozenModel):
-    factor_definition_id: str = Field(default="", pattern=r"^(?:|factor-definition:[0-9a-f]{64})$")
-    content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
-    factor_key: Literal["three_tier_valuation"]
-    factor_version: str = Field(pattern=_VERSION_PATTERN)
-    bands: tuple[ProvisionalTierBand, ...] = Field(min_length=3, max_length=3)
-    boundary_rule: Literal["lower_inclusive_upper_exclusive"]
-    target_ps_selection: TargetPsSelection
-    provisional_thresholds: Literal[True]
-    unit: FactorUnitSpec
-    quantization: DecimalQuantization
-
-    @field_validator("factor_version")
-    @classmethod
-    def reject_mutable_version(cls, value: str) -> str:
-        return _reject_mutable_coordinate(value, "factor_version")
-
-    @model_validator(mode="after")
-    def validate_and_identify(self) -> Self:
-        if self.unit.dimension is not FactorDimension.DIMENSIONLESS:
-            raise ValueError("target P/S is a dimensionless ratio")
-        object.__setattr__(self, "bands", _ordered_tier_bands(self.bands))
-        _identify(self, id_field="factor_definition_id", prefix="factor-definition")
-        return self
-
-    @property
-    def valuation_basis(self) -> ValuationBasis:
-        return ValuationBasis.PRICE_TO_SALES
-
-    def band_for(self, labor_efficiency: Decimal) -> ProvisionalTierBand:
-        return _band_for(self.bands, labor_efficiency)
-
-
 class PriceToGrossProfitTierBand(_TierBandBase):
     target_pgp_lower_bound: Decimal = Field(gt=0)
     target_pgp_upper_bound: Decimal = Field(gt=0)
@@ -457,23 +407,40 @@ class PriceToGrossProfitTierBand(_TierBandBase):
         return self.target_pgp_upper_bound
 
 
-class ThreeTierPgpValuationDefinition(_StrictFrozenModel):
-    factor_definition_id: str = Field(default="", pattern=r"^(?:|factor-definition:[0-9a-f]{64})$")
-    content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
+class _ThreeTierValuationBase(_FactorDefinitionBase):
     factor_key: Literal["three_tier_valuation"]
-    factor_version: str = Field(pattern=_VERSION_PATTERN)
+    boundary_rule: Literal["lower_inclusive_upper_exclusive"]
+
+    def _validate_and_order_bands(self, label: str) -> None:
+        if self.unit.dimension is not FactorDimension.DIMENSIONLESS:
+            raise ValueError(f"target {label} is a dimensionless ratio")
+        object.__setattr__(self, "bands", _ordered_tier_bands(getattr(self, "bands")))
+        identify(self, id_field="factor_definition_id", prefix="factor-definition")
+
+
+class ThreeTierValuationDefinition(_ThreeTierValuationBase):
+    bands: tuple[ProvisionalTierBand, ...] = Field(min_length=3, max_length=3)
+    target_ps_selection: TargetPsSelection
+    provisional_thresholds: Literal[True]
+
+    @model_validator(mode="after")
+    def validate_and_identify(self) -> Self:
+        self._validate_and_order_bands("P/S")
+        return self
+
+    @property
+    def valuation_basis(self) -> ValuationBasis:
+        return ValuationBasis.PRICE_TO_SALES
+
+    def band_for(self, labor_efficiency: Decimal) -> ProvisionalTierBand:
+        return _band_for(self.bands, labor_efficiency)
+
+
+class ThreeTierPgpValuationDefinition(_ThreeTierValuationBase):
     valuation_basis: Literal[ValuationBasis.PRICE_TO_GROSS_PROFIT]
     bands: tuple[PriceToGrossProfitTierBand, ...] = Field(min_length=3, max_length=3)
-    boundary_rule: Literal["lower_inclusive_upper_exclusive"]
     target_pgp_selection: Literal["band_midpoint"]
     provisional_thresholds: bool
-    unit: FactorUnitSpec
-    quantization: DecimalQuantization
-
-    @field_validator("factor_version")
-    @classmethod
-    def reject_mutable_version(cls, value: str) -> str:
-        return _reject_mutable_coordinate(value, "factor_version")
 
     @field_validator("valuation_basis", mode="before")
     @classmethod
@@ -482,10 +449,7 @@ class ThreeTierPgpValuationDefinition(_StrictFrozenModel):
 
     @model_validator(mode="after")
     def validate_and_identify(self) -> Self:
-        if self.unit.dimension is not FactorDimension.DIMENSIONLESS:
-            raise ValueError("target P/GP is a dimensionless ratio")
-        object.__setattr__(self, "bands", _ordered_tier_bands(self.bands))
-        _identify(self, id_field="factor_definition_id", prefix="factor-definition")
+        self._validate_and_order_bands("P/GP")
         return self
 
     def band_for(self, labor_efficiency: Decimal) -> PriceToGrossProfitTierBand:
@@ -498,7 +462,7 @@ _GAP_RULES: dict[ValuationBasis, tuple[str, str]] = {
 }
 
 
-class ValuationGapRule(_StrictFrozenModel):
+class ValuationGapRule(StrictFrozenModel):
     rule_id: Literal["target_ps_over_current_ps_minus_one", "target_pgp_over_current_pgp_minus_one"]
     formula: Literal["target_ps/current_ps-1", "target_pgp/current_pgp-1"]
     quantization: DecimalQuantization
@@ -510,7 +474,7 @@ class ValuationGapRule(_StrictFrozenModel):
 _CONFIDENCE_FLOOR_FIELDS = ("rule_id", "minimum_confidence", "confidence_semantics", "below_floor_reason")
 
 
-class ConfidenceEligibilityRule(_StrictFrozenModel):
+class ConfidenceEligibilityRule(StrictFrozenModel):
     rule_id: Literal["minimum_consumed_confidence_floor"] | None = None
     minimum_confidence: Decimal | None = Field(default=None, ge=0, le=1)
     confidence_semantics: Literal["minimum_consumed_input_confidence"] | None = None
@@ -525,19 +489,11 @@ class ConfidenceEligibilityRule(_StrictFrozenModel):
 
     @model_serializer(mode="wrap")
     def omit_absent_confidence_floor(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
-        data: dict[str, Any] = handler(self)
-        for name in _CONFIDENCE_FLOOR_FIELDS:
-            if getattr(self, name) is None:
-                data.pop(name, None)
-        return data
+        return drop_none_fields(handler(self), *_CONFIDENCE_FLOOR_FIELDS)
 
     @model_validator(mode="after")
     def validate_reasons(self) -> Self:
-        stated = {name: getattr(self, name) is not None for name in _CONFIDENCE_FLOOR_FIELDS}
-        if len(set(stated.values())) != 1:
-            raise ValueError(
-                f"the confidence-floor fields {sorted(_CONFIDENCE_FLOOR_FIELDS)} must be all present or all absent, got {stated}"
-            )
+        _require_all_or_none(self, _CONFIDENCE_FLOOR_FIELDS, "confidence-floor")
         if (
             self.below_floor_reason is not None
             and self.below_floor_reason is not ExclusionReason.BELOW_CONFIDENCE_FLOOR
@@ -548,19 +504,19 @@ class ConfidenceEligibilityRule(_StrictFrozenModel):
         return self
 
 
-class SelectionRule(_StrictFrozenModel):
+class SelectionRule(StrictFrozenModel):
     rule_id: Literal["top_n_ranked_eligible"]
     selection_count: int = Field(ge=1, le=1000)
 
 
-class EqualWeightSizingRule(_StrictFrozenModel):
+class EqualWeightSizingRule(StrictFrozenModel):
     rule_id: Literal["equal_weight_selected"]
     weight_formula: Literal["1/selected_count"]
     quantization: DecimalQuantization
     empty_selection_behavior: Literal["retain_all_cash"]
 
 
-class QuarterlyCutoffSchedule(_StrictFrozenModel):
+class QuarterlyCutoffSchedule(StrictFrozenModel):
     rule_id: Literal["calendar_quarter_end_utc"]
     first_cutoff_at: datetime
     cutoff_inclusive: Literal[True]
@@ -568,7 +524,7 @@ class QuarterlyCutoffSchedule(_StrictFrozenModel):
     @field_validator("first_cutoff_at")
     @classmethod
     def validate_first_cutoff_at(cls, value: datetime) -> datetime:
-        canonical = _require_aware(value, "first_cutoff_at").astimezone(UTC)
+        canonical = require_aware(value, "first_cutoff_at").astimezone(UTC)
         if canonical.month not in _QUARTER_END_MONTHS:
             raise ValueError("quarterly cutoffs must land on calendar quarter ends")
         if (canonical + timedelta(days=1)).month == canonical.month:
@@ -578,7 +534,7 @@ class QuarterlyCutoffSchedule(_StrictFrozenModel):
         return canonical
 
 
-class LargeModelValueV0Definition(_StrictFrozenModel):
+class LargeModelValueV0Definition(StrictFrozenModel):
     strategy_definition_id: str = Field(default="", pattern=r"^(?:|strategy-definition:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
     strategy_id: Literal["large_model_value_v0"]
@@ -606,11 +562,7 @@ class LargeModelValueV0Definition(_StrictFrozenModel):
 
     @model_serializer(mode="wrap")
     def omit_absent_gross_profit_multiple(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
-        data: dict[str, Any] = handler(self)
-        for name in ("price_to_gross_profit", "universe", "labor_efficiency_tree_keys"):
-            if getattr(self, name) is None:
-                data.pop(name, None)
-        return data
+        return drop_none_fields(handler(self), "price_to_gross_profit", "universe", "labor_efficiency_tree_keys")
 
     @model_validator(mode="after")
     def validate_and_identify(self) -> Self:
@@ -633,7 +585,7 @@ class LargeModelValueV0Definition(_StrictFrozenModel):
             factor_keys.append(self.price_to_gross_profit.factor_key)
         if len(set(factor_keys)) != len(factor_keys):
             raise ValueError("the strategy requires distinct factor definitions")  # pragma: no cover
-        _identify(self, id_field="strategy_definition_id", prefix="strategy-definition")
+        identify(self, id_field="strategy_definition_id", prefix="strategy-definition")
         return self
 
     @property
@@ -642,9 +594,7 @@ class LargeModelValueV0Definition(_StrictFrozenModel):
 
     @property
     def valuation_quantization(self) -> DecimalQuantization:
-        if self.price_to_gross_profit is not None:
-            return self.price_to_gross_profit.quantization
-        return self.price_to_sales.quantization
+        return (self.price_to_gross_profit or self.price_to_sales).quantization
 
 
 LIVE_STRATEGY_DEFINITION_RESOURCE = "large_model_value_v0_definition_1_1_0.json"
@@ -688,24 +638,20 @@ class StrategyDefinitionIdentity(NamedTuple):
 DefinitionReviewState = Literal["reviewed", "provisional", "unknown"]
 
 
-def _identity_of(definition: LargeModelValueV0Definition) -> StrategyDefinitionIdentity:
-    return StrategyDefinitionIdentity(
-        version=definition.definition_version,
-        content_sha256=definition.content_sha256,
-        provisional_semantics=definition.provisional_semantics,
-    )
+def _identity_of(d: LargeModelValueV0Definition) -> StrategyDefinitionIdentity:
+    return StrategyDefinitionIdentity(d.definition_version, d.content_sha256, d.provisional_semantics)
 
 
 def strategy_definitions_in(directory: Traversable) -> tuple[StrategyDefinitionIdentity, ...]:
     entries: list[StrategyDefinitionIdentity] = []
-    for item in sorted(directory.iterdir(), key=lambda entry: entry.name):
+    for item in sorted(directory.iterdir(), key=lambda e: e.name):
         if not item.name.endswith(".json"):
             continue
         corpus = json.loads(item.read_bytes())
         if not isinstance(corpus, dict) or "strategy_definition" not in corpus:
             continue
         definition = _definition_of_corpus(item.name, corpus)
-        if any(entry.version == definition.definition_version for entry in entries):
+        if any(e.version == definition.definition_version for e in entries):
             raise ValueError(f"{item.name}: a second definition file has version {definition.definition_version}")
         entries.append(_identity_of(definition))
     return tuple(sorted(entries))
@@ -729,8 +675,8 @@ def strategy_definition_registry() -> tuple[StrategyDefinitionIdentity, ...]:
 def registered_strategy_definition(definition: LargeModelValueV0Definition) -> Iterator[StrategyDefinitionIdentity]:
     identity = _identity_of(LargeModelValueV0Definition.model_validate_json(definition.model_dump_json()))
     if any(
-        entry.version == identity.version or entry.content_sha256 == identity.content_sha256
-        for entry in strategy_definition_registry()
+        e.version == identity.version or e.content_sha256 == identity.content_sha256
+        for e in strategy_definition_registry()
     ):
         raise ValueError(f"the registry already holds version {identity.version} or its content hash")
     token = _REGISTERED_IN_CONTEXT.set(_REGISTERED_IN_CONTEXT.get() + (identity,))
@@ -747,34 +693,34 @@ def definition_review_state(version: str, content_sha256: str) -> DefinitionRevi
     return "unknown"
 
 
-class ExpressionEngineExecutionBinding(_StrictFrozenModel):
+class ExpressionEngineExecutionBinding(StrictFrozenModel):
     execution_binding_id: str = Field(default="", pattern=r"^(?:|expression-engine-execution-binding:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
     distribution: Literal["polars"] = "polars"
     version: str = Field(pattern=r"^[0-9]+\.[0-9]+\.[0-9]+$")
     release_commit: str = Field(pattern=r"^[0-9a-f]{40}$")
-    runtime_artifact_sha256: str = Field(pattern=_SHA256_PATTERN)
-    runtime_lock_sha256: str = Field(pattern=_SHA256_PATTERN)
+    runtime_artifact_sha256: str = Field(pattern=SHA256_PATTERN)
+    runtime_lock_sha256: str = Field(pattern=SHA256_PATTERN)
     adapter_id: str = Field(pattern=r"^[a-z][a-z0-9._-]{0,127}$")
-    adapter_implementation_sha256: str = Field(pattern=_SHA256_PATTERN)
+    adapter_implementation_sha256: str = Field(pattern=SHA256_PATTERN)
 
     @model_validator(mode="after")
     def identify(self) -> Self:
-        _identify(self, id_field="execution_binding_id", prefix="expression-engine-execution-binding")
+        identify(self, id_field="execution_binding_id", prefix="expression-engine-execution-binding")
         return self
 
 
-class StrategyEngineBinding(_StrictFrozenModel):
+class StrategyEngineBinding(StrictFrozenModel):
     engine_binding_id: str = Field(default="", pattern=r"^(?:|strategy-engine-binding:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
     strategy_definition_id: str = Field(pattern=r"^strategy-definition:[0-9a-f]{64}$")
-    strategy_definition_sha256: str = Field(pattern=_SHA256_PATTERN)
+    strategy_definition_sha256: str = Field(pattern=SHA256_PATTERN)
     execution_binding: ExpressionEngineExecutionBinding
 
     @model_validator(mode="after")
     def validate_and_identify(self) -> Self:
         _validate_ref_hash(self.strategy_definition_id, self.strategy_definition_sha256, "strategy definition")
-        _identify(self, id_field="engine_binding_id", prefix="strategy-engine-binding")
+        identify(self, id_field="engine_binding_id", prefix="strategy-engine-binding")
         return self
 
 
@@ -785,7 +731,7 @@ class GoldenDecisionOutcome(StrEnum):
     EXCLUDED = "excluded"
 
 
-class GoldenInputRecord(_StrictFrozenModel):
+class GoldenInputRecord(StrictFrozenModel):
     input_key: str = Field(pattern=_STABLE_KEY_PATTERN)
     value: Decimal
     unit_code: str = Field(pattern=_STABLE_KEY_PATTERN)
@@ -801,10 +747,10 @@ class GoldenInputRecord(_StrictFrozenModel):
     @field_validator("knowable_at")
     @classmethod
     def validate_knowable_at(cls, value: datetime) -> datetime:
-        return _require_aware(value, "knowable_at")
+        return require_aware(value, "knowable_at")
 
 
-class GoldenExpectation(_StrictFrozenModel):
+class GoldenExpectation(StrictFrozenModel):
     capital_adjusted_labor_efficiency: Decimal | None
     tier: ValuationTier | None
     current_price_to_sales: Decimal | None
@@ -834,21 +780,37 @@ class GoldenExpectation(_StrictFrozenModel):
 
     @model_serializer(mode="wrap")
     def omit_absent_gross_profit_multiple(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
-        data: dict[str, Any] = handler(self)
-        for name in ("current_price_to_gross_profit", "target_price_to_gross_profit"):
-            if getattr(self, name) is None:
-                data.pop(name, None)
-        return data
+        return drop_none_fields(handler(self), "current_price_to_gross_profit", "target_price_to_gross_profit")
 
-    def _validate_excluded(self, pgp_fields: tuple[Decimal | None, Decimal | None]) -> None:
-        if self.exclusion_reason is None:
-            raise ValueError("an excluded decision requires a machine-readable reason code")
-        if self.eligible or self.rank is not None or self.target_weight is not None:
-            raise ValueError("an excluded decision cannot be eligible, ranked, or weighted")
-        if any(value is not None for value in pgp_fields):
-            raise ValueError("an excluded decision carries no P/GP value")
-
-    def _validate_outcome_rank(self) -> None:
+    @model_validator(mode="after")
+    def validate_outcome_consistency(self) -> Self:
+        pgp_fields = (self.current_price_to_gross_profit, self.target_price_to_gross_profit)
+        if self.outcome is GoldenDecisionOutcome.EXCLUDED:
+            if self.exclusion_reason is None:
+                raise ValueError("an excluded decision requires a machine-readable reason code")
+            if self.eligible or self.rank is not None or self.target_weight is not None:
+                raise ValueError("an excluded decision cannot be eligible, ranked, or weighted")
+            if any(v is not None for v in pgp_fields):
+                raise ValueError("an excluded decision carries no P/GP value")
+            return self
+        if self.exclusion_reason is not None:
+            raise ValueError("only excluded decisions carry an exclusion reason")
+        if not self.eligible:
+            raise ValueError("non-excluded decisions passed eligibility")
+        if any(
+            v is None
+            for v in (
+                self.capital_adjusted_labor_efficiency,
+                self.tier,
+                self.current_price_to_sales,
+                self.valuation_gap,
+            )
+        ):
+            raise ValueError("eligible decisions require every expected factor value")
+        by_ps = self.target_price_to_sales is not None and all(v is None for v in pgp_fields)
+        by_pgp = self.target_price_to_sales is None and all(v is not None for v in pgp_fields)
+        if not (by_ps or by_pgp):
+            raise ValueError("eligible decisions require the target multiple of exactly one valuation basis")
         if self.outcome is GoldenDecisionOutcome.SELECTED:
             if self.rank is None or self.target_weight is None:
                 raise ValueError("a selected decision requires a rank and a target weight")
@@ -857,29 +819,10 @@ class GoldenExpectation(_StrictFrozenModel):
                 raise ValueError("a ranked-beyond decision carries a rank and no weight")
         elif self.rank is not None or self.target_weight is not None:
             raise ValueError("a valuation-rejected decision carries no rank or weight")
-
-    @model_validator(mode="after")
-    def validate_outcome_consistency(self) -> Self:
-        pgp_fields = (self.current_price_to_gross_profit, self.target_price_to_gross_profit)
-        if self.outcome is GoldenDecisionOutcome.EXCLUDED:
-            self._validate_excluded(pgp_fields)
-            return self
-        if self.exclusion_reason is not None:
-            raise ValueError("only excluded decisions carry an exclusion reason")
-        if not self.eligible:
-            raise ValueError("non-excluded decisions passed eligibility")
-        common = (self.capital_adjusted_labor_efficiency, self.tier, self.current_price_to_sales, self.valuation_gap)
-        if any(value is None for value in common):
-            raise ValueError("eligible decisions require every expected factor value")
-        valued_by_sales = self.target_price_to_sales is not None and all(value is None for value in pgp_fields)
-        valued_by_gross_profit = self.target_price_to_sales is None and all(value is not None for value in pgp_fields)
-        if not (valued_by_sales or valued_by_gross_profit):
-            raise ValueError("eligible decisions require the target multiple of exactly one valuation basis")
-        self._validate_outcome_rank()
         return self
 
 
-class GoldenDecision(_StrictFrozenModel):
+class GoldenDecision(StrictFrozenModel):
     decision_key: str = Field(pattern=_STABLE_KEY_PATTERN)
     issuer: SubjectRef
     issuer_branch: Literal["non_financial", "financial"]
@@ -896,16 +839,16 @@ class GoldenDecision(_StrictFrozenModel):
     @field_validator("cutoff_at")
     @classmethod
     def validate_cutoff_at(cls, value: datetime) -> datetime:
-        return _require_aware(value, "cutoff_at")
+        return require_aware(value, "cutoff_at")
 
     @model_validator(mode="after")
     def validate_and_canonicalize(self) -> Self:
         if self.issuer.kind is not SubjectKind.ISSUER:
             raise ValueError("golden decisions rank issuer subjects")
-        inputs = tuple(sorted(self.inputs, key=lambda item: item.input_key))
-        if len({item.input_key for item in inputs}) != len(inputs):
+        inputs = tuple(sorted(self.inputs, key=lambda i: i.input_key))
+        if len({i.input_key for i in inputs}) != len(inputs):
             raise ValueError("golden decision input keys must be unique")
-        if any(record.knowable_at > self.cutoff_at for record in inputs):
+        if any(r.knowable_at > self.cutoff_at for r in inputs):
             raise ValueError("golden inputs must be knowable at or before the decision cutoff")
         object.__setattr__(self, "inputs", inputs)
         return self
@@ -921,13 +864,10 @@ _REQUIRED_GOLDEN_OUTCOMES = frozenset(
 
 
 def _validate_cutoff_ranks(at_cutoff: list[GoldenDecision]) -> None:
-    ranked = sorted(
-        (decision for decision in at_cutoff if decision.expected.rank is not None),
-        key=lambda decision: decision.expected.rank or 0,
-    )
-    if [decision.expected.rank for decision in ranked] != list(range(1, len(ranked) + 1)):
+    ranked = sorted((d for d in at_cutoff if d.expected.rank is not None), key=lambda d: d.expected.rank or 0)
+    if [d.expected.rank for d in ranked] != list(range(1, len(ranked) + 1)):
         raise ValueError("golden ranks must be contiguous from one within each cutoff")
-    selected = [decision for decision in ranked if decision.expected.outcome is GoldenDecisionOutcome.SELECTED]
+    selected = [d for d in ranked if d.expected.outcome is GoldenDecisionOutcome.SELECTED]
     if selected != ranked[: len(selected)]:
         raise ValueError("selected golden ranks must precede ranked-beyond decisions")
     weights = [d.expected.target_weight for d in selected if d.expected.target_weight is not None]
@@ -937,40 +877,40 @@ def _validate_cutoff_ranks(at_cutoff: list[GoldenDecision]) -> None:
         raise ValueError("equal-weight golden selections must share one target weight")
 
 
-class GoldenDecisionSet(_StrictFrozenModel):
+class GoldenDecisionSet(StrictFrozenModel):
     golden_decision_set_id: str = Field(default="", pattern=r"^(?:|golden-decision-set:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
     strategy_definition_id: str = Field(pattern=r"^strategy-definition:[0-9a-f]{64}$")
-    strategy_definition_sha256: str = Field(pattern=_SHA256_PATTERN)
+    strategy_definition_sha256: str = Field(pattern=SHA256_PATTERN)
     risk_free_rates: tuple[CutoffRiskFreeRate, ...] = Field(min_length=2)
     decisions: tuple[GoldenDecision, ...] = Field(min_length=6)
 
     @model_validator(mode="after")
     def validate_and_identify(self) -> Self:
         _validate_ref_hash(self.strategy_definition_id, self.strategy_definition_sha256, "strategy definition")
-        rates = tuple(sorted(self.risk_free_rates, key=lambda item: item.cutoff_at))
-        rate_cutoffs = tuple(item.cutoff_at for item in rates)
+        rates = tuple(sorted(self.risk_free_rates, key=lambda i: i.cutoff_at))
+        rate_cutoffs = tuple(i.cutoff_at for i in rates)
         if len(rate_cutoffs) != len(set(rate_cutoffs)):
             raise ValueError("risk-free rate cutoffs must be unique")
-        decisions = tuple(sorted(self.decisions, key=lambda item: (item.cutoff_at, item.issuer.id)))
-        if len({decision.decision_key for decision in decisions}) != len(decisions):
+        decisions = tuple(sorted(self.decisions, key=lambda i: (i.cutoff_at, i.issuer.id)))
+        if len({d.decision_key for d in decisions}) != len(decisions):
             raise ValueError("golden decision keys must be unique")
-        if len({(decision.issuer.id, decision.cutoff_at) for decision in decisions}) != len(decisions):
+        if len({(d.issuer.id, d.cutoff_at) for d in decisions}) != len(decisions):
             raise ValueError("golden decisions must be unique per issuer and cutoff")
-        decision_cutoffs = {decision.cutoff_at for decision in decisions}
+        decision_cutoffs = {d.cutoff_at for d in decisions}
         if decision_cutoffs != set(rate_cutoffs):
             raise ValueError("every golden cutoff requires exactly one declared risk-free rate")
-        if len({decision.issuer.id for decision in decisions}) < 3:
+        if len({d.issuer.id for d in decisions}) < 3:
             raise ValueError("golden decisions require at least three materially different issuers")
         if len(decision_cutoffs) < 2:
             raise ValueError("golden decisions require at least two historical cutoffs")
-        if not _REQUIRED_GOLDEN_OUTCOMES <= {decision.expected.outcome for decision in decisions}:
+        if not _REQUIRED_GOLDEN_OUTCOMES <= {d.expected.outcome for d in decisions}:
             raise ValueError("golden decisions must cover selection, valuation rejection, and data exclusion")
         for cutoff in decision_cutoffs:
-            _validate_cutoff_ranks([decision for decision in decisions if decision.cutoff_at == cutoff])
+            _validate_cutoff_ranks([d for d in decisions if d.cutoff_at == cutoff])
         object.__setattr__(self, "risk_free_rates", rates)
         object.__setattr__(self, "decisions", decisions)
-        _identify(self, id_field="golden_decision_set_id", prefix="golden-decision-set")
+        identify(self, id_field="golden_decision_set_id", prefix="golden-decision-set")
         return self
 
 

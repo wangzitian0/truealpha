@@ -1,28 +1,16 @@
-"""Governed research access context contracts.
-
-Identity and authority in these DTOs are server-derived by trusted browser,
-MCP OAuth, or service middleware.
-"""
+"""Governed research access context contracts."""
 
 from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import Field, field_validator, model_validator
 
-from truealpha_contracts.common import require_stable_and_immutable
-from truealpha_contracts.models import _require_aware
+from truealpha_contracts.common import FrozenModel as StrictFrozenModel
+from truealpha_contracts.common import require_aware, require_stable_and_immutable
 
 _MUTABLE_TOKENS = frozenset({"latest", "current", "default", "head"})
-
-
-def _stable_coordinate(value: str, field_name: str) -> str:
-    return require_stable_and_immutable(value, field_name, mutable_tokens=_MUTABLE_TOKENS)
-
-
-class StrictFrozenModel(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
 
 
 class AuthenticationMethod(StrEnum):
@@ -39,8 +27,6 @@ class PrincipalKind(StrEnum):
 
 
 class ActiveEntitlementGrant(StrictFrozenModel):
-    """One active grant resolved by trusted middleware."""
-
     grant_id: str
     entitlement_id: str
     publication_policy_set_id: str
@@ -48,12 +34,10 @@ class ActiveEntitlementGrant(StrictFrozenModel):
     @field_validator("grant_id", "entitlement_id", "publication_policy_set_id")
     @classmethod
     def validate_coordinates(cls, value: str, info) -> str:
-        return _stable_coordinate(value, info.field_name)
+        return require_stable_and_immutable(value, info.field_name, mutable_tokens=_MUTABLE_TOKENS)
 
 
 class AccessContext(StrictFrozenModel):
-    """Verified context built by trusted browser, MCP OAuth, or service middleware."""
-
     context_id: str = Field(min_length=1)
     principal_id: str = Field(min_length=1)
     tenant_id: str = Field(min_length=1)
@@ -69,15 +53,14 @@ class AccessContext(StrictFrozenModel):
     @field_validator("issued_at", "expires_at")
     @classmethod
     def validate_datetimes(cls, value: datetime, info) -> datetime:
-        return _require_aware(value, info.field_name)
+        return require_aware(value, info.field_name)
 
     @field_validator("active_entitlement_grants")
     @classmethod
     def validate_grants(cls, value: tuple[ActiveEntitlementGrant, ...]) -> tuple[ActiveEntitlementGrant, ...]:
-        ids = [grant.grant_id for grant in value]
-        if len(ids) != len(set(ids)):
+        if len({g.grant_id for g in value}) != len(value):
             raise ValueError("active_entitlement_grants must not contain duplicate grant IDs")
-        return tuple(sorted(value, key=lambda grant: grant.grant_id))
+        return tuple(sorted(value, key=lambda g: g.grant_id))
 
     @model_validator(mode="after")
     def validate_context(self) -> AccessContext:
