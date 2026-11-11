@@ -8,21 +8,22 @@ reporting, and scheduler-liveness checks run centrally in wangzitian0/infra2
 
 ## Central release train and `runtime-hooks.manifest.json`
 
-`runtime-hooks.manifest.json` (`schema_version: 1`, `service: "truealpha/app"`)
+`runtime-hooks.manifest.json` (`schema_version: 2`, `service: "truealpha/app"`)
 is the single contract between `truealpha` and the `infra2` release train.
 `common/runtime/src/truealpha_tools/env_manifest.py` validates it alongside
 `env.manifest.json` on every CI run.
 
-It declares four verification slots that `infra2` invokes:
+It declares five `Pre -> Deploy -> Post` verification slots that `infra2` invokes:
 
-- `smoke`: polls `tools/health_check.py` against `$APP_URL/api/health` for
-  `$APP_VERSION_REF` and checks the unauthenticated surface via
-  `tools/surface_contract.py`.
-- `preview_gate` and `staging_gate`: confirm health via `tools/health_check.py`,
+- `smoke` (`deploy` phase, zero-bootstrap): polls `tools/health_check.py` against
+  `$APP_URL/api/health` for `$APP_VERSION_REF` within `120s` before releasing the deploy lock.
+- `preview_gate` and `staging_gate` (`post` phase): confirm health via `tools/health_check.py`,
   warm the surface via `tools/warm_surface.sh`, walk the route tree via
   `apps/app-web/e2e/walk-tree.mjs`, and verify the authenticated MCP contract
   via `tools/surface_contract.py --authenticated`.
-- `scheduled_audit`: evaluates nightly verdicts via `tools/nightly_verdicts.py`
+- `prod_gate` (`post` phase): checks the production unauthenticated surface via
+  `tools/surface_contract.py` after `smoke` succeeds.
+- `scheduled_audit` (`post` phase): evaluates nightly verdicts via `tools/nightly_verdicts.py`
   and checks the surface contract via `tools/surface_contract.py`.
 
 The `infra2` release train enforces its own daily automatic-release cap

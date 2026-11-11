@@ -358,14 +358,19 @@ def test_db_connect_passes_configured_database_connect_timeout(monkeypatch: pyte
     assert observed[-1][1] == 13
 
 
-def test_runtime_hooks_manifest_is_valid_and_declares_all_four_slots(tmp_path: Path) -> None:
+def test_runtime_hooks_manifest_is_valid_and_declares_all_five_v2_slots(tmp_path: Path) -> None:
+    from infra2_sdk.manifests import HOOK_SLOTS, SLOT_MAX_TIMEOUT_SECONDS
+
     hooks = env_manifest.load_hooks()
-    assert hooks.schema_version == 1
+    assert hooks.schema_version == 2
     assert hooks.service == "truealpha/app"
-    assert set(hooks.slots) == {"smoke", "preview_gate", "staging_gate", "scheduled_audit"}
+    assert set(hooks.slots) == set(HOOK_SLOTS)
+    for slot_name, spec in hooks.slots.items():
+        assert spec.timeout_seconds <= SLOT_MAX_TIMEOUT_SECONDS[slot_name]
+    assert hooks.slots["smoke"].bootstrap == ""
     assert "tools/health_check.py" in hooks.slots["smoke"].run
-    assert "tools/surface_contract.py" in hooks.slots["smoke"].run
-    assert hooks.slots["smoke"].timeout_seconds >= 420
+    assert hooks.slots["prod_gate"].bootstrap == ""
+    assert "tools/surface_contract.py" in hooks.slots["prod_gate"].run
     assert hooks.slots["preview_gate"].bootstrap is not None
     assert "cd apps/app-web && bun install" in hooks.slots["preview_gate"].bootstrap
     assert hooks.slots["staging_gate"].bootstrap is not None
@@ -377,7 +382,7 @@ def test_runtime_hooks_manifest_is_valid_and_declares_all_four_slots(tmp_path: P
 
     broken = tmp_path / "broken-hooks.manifest.json"
     broken.write_text(
-        '{"schema_version": 1, "service": "truealpha/app", "slots": {"smoke": {"run": ""}}}\n', encoding="utf-8"
+        '{"schema_version": 2, "service": "truealpha/app", "slots": {"smoke": {"run": ""}}}\n', encoding="utf-8"
     )
     assert env_manifest.main(["--check-hooks", str(broken)]) == 1
     assert env_manifest.main(["--check-hooks", str(tmp_path / "missing.json")]) == 1
