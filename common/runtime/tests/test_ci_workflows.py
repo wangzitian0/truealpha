@@ -483,6 +483,10 @@ def test_runtime_hooks_manifest_declares_the_four_verification_slots() -> None:
     assert hooks.service == "truealpha/app"
     assert set(hooks.slots) == {"smoke", "preview_gate", "staging_gate", "scheduled_audit"}
 
+    assert hooks.slots["scheduled_audit"].checkout_lineage is True
+    for non_lineage_slot in ("smoke", "preview_gate", "staging_gate"):
+        assert hooks.slots[non_lineage_slot].checkout_lineage is False
+
     for gate_slot in ("preview_gate", "staging_gate"):
         spec = hooks.slots[gate_slot]
         assert spec.run.index("tools/warm_surface.sh") < spec.run.index("node e2e/walk-tree.mjs"), (

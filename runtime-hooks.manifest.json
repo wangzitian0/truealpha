@@ -43,7 +43,8 @@
       "required_env": [
         "APP_URL",
         "ENVIRONMENT"
-      ]
+      ],
+      "checkout_lineage": true
     }
   }
 }
