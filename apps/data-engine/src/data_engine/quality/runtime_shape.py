@@ -1,68 +1,4 @@
-"""The runtime shape of the Dagster code server: did its memory cgroup hold the load? (#1467, #28 V5)
-
-Every Dagster run executes inside the code server container, in the same memory cgroup as the
-gRPC server. On 2026-10-20 the kernel killed processes of that cgroup five times. Each kill left
-a run `STARTED` for ever, and no check had read the cgroup. This module reads these facts from
-inside the container and judges them against the capacity that `code_server_capacity` declares in
-`environment_contract.v1.json`:
-
-* `memory.events` `oom_kill`: the kernel killed a process of the cgroup;
-* `memory.events` `max` and `memory.swap.peak`: the cgroup was at `memory.max` and moved anonymous memory
-  to swap (the demand of the processes was higher than the RAM ceiling);
-* `memory.peak`: the most memory the cgroup held since the container started;
-* `memory.max`: the ceiling that the container really has;
-* the identity of the container: the boot id of the host and the start ticks of its first process;
-* `VmHWM` of the code server and of the largest other process (a run), judged against `server_mib`
-  and the run budget `run_mib` of the contract.
-
-The kernel counters belong to the container. A deploy or a crash replaces the container, and the
-new cgroup starts at zero. A check that reads the counters once a night loses every kill and every
-peak that a replaced container held. So a sensor (`sample`, every `SAMPLE_INTERVAL_SECONDS`) folds
-each reading into a `Tracker`: the totals of kills, unplanned restarts and new peaks above the limit
-over the life of all containers. The nightly check judges the growth of the stored totals since the
-last scheduled check (`Baseline`). It does not fold its own reading in: the sensor and the check each
-write one key of the run storage, and the baseline never holds a count that the tracker lacks. A kill
-in the last minutes before a check shows at the next check.
-
-The check depends on the sensor, so a silent sensor is red: no tracker, or a last sample older than
-`STALE_AFTER_SECONDS`. A container that lives for less than one interval (a deploy followed at once by
-a crash) is not seen by any sample; this is the blind window of the design.
-
-The nightly verdict is red on any of these:
-
-* a fact is unreadable, the sensor is silent, or the stored state is unreadable or lower than the
-  last check saw. Unknown is red, never OK (#28 V3);
-* `memory.max` is `max` (no ceiling) or below the declared ceiling. The run limit of `dagster.yaml`
-  derives from the declared ceiling, so a lower real ceiling breaks the premise of the limit;
-* `oom_kill` rose in any container since the last check. The first check counts every kill of
-  the container that the sensor saw;
-* the peak of a container rose above `UTILIZATION_CEILING` of `memory.max` since the last check. A
-  peak that the last check already judged does not count again: `memory.peak` is a high-water mark
-  of the whole container life;
-* `memory.swap.peak` rose above the last peak while `memory.events` `max` rose in the same sample. Page cache
-  fills `memory.max` without a swap peak, and the kernel may swap the cold pages of an idle server under host
-  pressure without a rise of `max`. Both together show the processes needing more than `memory.max`. No limit
-  value is needed: the budget keeps the processes below the usable share, so any such swap means the budget
-  failed (production, 2026-10-22: swap peak 1103 MiB, `max` 11177, no kill);
-* a run process held more than the budget `run_mib`, or the code server more than `server_mib`. A
-  process counts once: when it first passes the limit, and again for each new process that does. The
-  budget is what is left inside `UTILIZATION_CEILING` of the ceiling when the queue is full, so a larger run
-  breaks the premise of the limit. A run that ends between two samples after its peak is not seen,
-  and the cgroup peak shows it only when the whole passes the limit. The count is by the largest
-  process at each sample, and each counted process keeps an event (the newest `MAX_OVER_EVENTS`). A
-  smaller over-size process beside a larger one is not seen until it is the largest. A process whose
-  event was dropped by `MAX_OVER_EVENTS` newer ones, and that is the largest again, counts again;
-* the container was replaced without a change of the deployment. The kernel may kill the server
-  process itself. The container then restarts with a new cgroup, and the counter of the new cgroup
-  does not show the kill. A deploy replaces the container too, but it changes the deployment.
-
-Only a tick-tagged run (the schedule) moves the baseline, and only forward. A manual run shows the
-growth since the last scheduled check and consumes nothing. A re-execution of the latest tick returns
-the verdict that the tick already has; a re-execution of an older tick judges and saves nothing.
-
-`memory.peak` counts page cache that the cgroup holds. The summary shows counts, sizes and job names
-(code identifiers) only, because the verdict is published on `/health`.
-"""
+"""Verify Dagster code server memory cgroup limits and track process memory usage."""
 
 from __future__ import annotations
 
@@ -132,10 +68,7 @@ def _count(value: object) -> int:
 
 @dataclass(frozen=True)
 class Reading:
-    """What the cgroup says now. A field is None when it could not be read.
-
-    `memory_max` is None with `unlimited` True when the file says `max` (no ceiling).
-    `container` names the container: the boot id of the host and the start ticks of its first process."""
+    """Current cgroup and process memory metrics."""
 
     memory_max: int | None = None
     unlimited: bool = False
@@ -186,10 +119,7 @@ MAX_OVER_EVENTS = 8
 
 @dataclass(frozen=True)
 class OverEvent:
-    """A run process that passed the run budget: its id (`pid:start ticks`), the job of its run and its size (bytes).
-
-    `container` names the container it ran in. A process id repeats only across containers (after a host
-    reboot), so the pair is the key of an event. State from before the container was recorded has ""."""
+    """Record a run process exceeding its budget limit."""
 
     process_id: str
     job: str
@@ -427,10 +357,7 @@ def read(cgroup_root: Path = CGROUP_ROOT, proc_root: Path = PROC_ROOT) -> Readin
 def _fold_sizes(
     tracker: Tracker, folded: Tracker, reading: Reading, *, fresh_container: bool, capacity: CodeServerCapacity
 ) -> Tracker:
-    """`folded` with the size fields of one reading.
-
-    A process counts when it first passes the run budget. While its event is kept (the newest `MAX_OVER_EVENTS`),
-    it does not count again, so two processes that overtake each other as the largest count once each."""
+    """Fold process and server memory sizes into the tracker state."""
     run_limit, server_limit = capacity.run_mib * MIB, capacity.server_mib * MIB
     size, server = reading.largest_process or 0, reading.server_process or 0
     before_id = "" if fresh_container else tracker.process_id
@@ -554,11 +481,7 @@ MAX_NAMED_JOBS = 3
 
 
 def _over_size_text(tracker: Tracker, count: int, capacity: CodeServerCapacity) -> str:
-    """The finding for `count` run processes over the budget since the last check.
-
-    The newest events name them. The count and the budget come first, the jobs follow grouped, so that a
-    night with many events still fits the published summary. State from before the jobs were recorded, or a
-    night with more counts than events, names fewer processes than it counts, and the text says so."""
+    """Format finding text for processes exceeding the run budget."""
     budget = capacity.run_mib
     events = tracker.over_events[-count:]
     unnamed = count - len(events)
@@ -679,13 +602,7 @@ _ENGINE_PID = re.compile(r"\(pid: (\d+)\)")
 
 
 def job_of_process(instance: dg.DagsterInstance, process_id: str) -> str:
-    """The job whose started run executes in the process `process_id` (`pid:start ticks`), or `UNKNOWN_JOB`.
-
-    The in-process executor logs `Executing steps in process (pid: N)` as an engine event of its run, so
-    the pid of a run process names its run (a run that is started or canceling). The run monitor fails a
-    run that a kill left started within about two minutes, so only a few runs are candidates. An event
-    whose job is unknown is looked up again at every sample (30 s) while its process is the largest.
-    A lookup that fails is logged and answers `UNKNOWN_JOB`: the sensor must not fail on it."""
+    """Find the started Dagster job name running inside the given process ID."""
     pid = process_id.split(":", 1)[0]
     if not pid.isdigit():
         return UNKNOWN_JOB
@@ -705,12 +622,7 @@ def job_of_process(instance: dg.DagsterInstance, process_id: str) -> str:
 
 
 def _name_over_events(instance: dg.DagsterInstance, before: Tracker, folded: Tracker, reading: Reading) -> Tracker:
-    """`folded` with the job of each run process that passed the budget (one event per count).
-
-    A new count adds an event with the job found now. The largest process, when it already has an event,
-    raises the size of that event as it grows. An event with an unknown job is looked up again while its
-    process is the largest, because the run may not have been started yet or the read may have failed once.
-    A known job is never looked up again."""
+    """Attach job names to run processes that exceeded the memory budget."""
     if folded is before or folded.container is None:
         return folded  # the fold took nothing from this reading, so the names must not change either
     events, process_id, size = folded.over_events, reading.largest_process_id, reading.largest_process or 0
@@ -746,11 +658,7 @@ def sample(
     reading: Reading | None = None,
     now: datetime | None = None,
 ) -> Tracker:
-    """Fold the current reading into the stored totals and stamp the time. The only writer of the tracker.
-
-    A stored value that is not a tracker restarts the totals; the next scheduled check sees totals below
-    its baseline and goes red, so the loss is not hidden. A reading with a missing fact adds nothing but
-    still stamps the time: the sensor ran."""
+    """Record current memory reading into persistent tracker cursor."""
     try:
         tracker = load_tracker(instance) or Tracker()
     except StateUnreadable:

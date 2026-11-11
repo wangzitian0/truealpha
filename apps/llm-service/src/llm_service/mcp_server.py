@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime, timedelta
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 import psycopg
 from mcp.server.fastmcp import FastMCP
@@ -183,6 +183,17 @@ def _module_row(
     except psycopg.Error:
         logger.exception("%s: the mart read failed", tool)
         raise ToolError(MART_READ_FAILED_MESSAGE) from None
+
+
+def _handle_issuer_module(
+    read_fn: Callable[[str], SupplyChainExposure | AnalystRatings | None],
+    expected_type: type[SupplyChainExposure | AnalystRatings],
+    module_name: Literal["supply_chain_exposure", "analyst_ratings"],
+    issuer_id: str,
+    tool_name: str,
+) -> Any:
+    row = _module_row(read_fn, issuer_id, tool_name)
+    return row if isinstance(row, expected_type) else IssuerModuleUnavailable(issuer_id=issuer_id, module=module_name)
 
 
 def _report_request(request: ResearchReportToolRequest) -> ResearchReportRequest:
@@ -804,11 +815,12 @@ def build_mcp_server(
         description="Read module 3 supply-chain exposure of an issuer from the governed head in mart.served_head.",
     )
     def issuer_supply_chain_exposure(request: IssuerModuleToolRequest) -> SupplyChainExposure | IssuerModuleUnavailable:
-        row = _module_row(active_modules.supply_chain_exposure, request.issuer_id, "issuer_supply_chain_exposure")
-        return (
-            row
-            if isinstance(row, SupplyChainExposure)
-            else IssuerModuleUnavailable(issuer_id=request.issuer_id, module="supply_chain_exposure")
+        return _handle_issuer_module(
+            active_modules.supply_chain_exposure,
+            SupplyChainExposure,
+            "supply_chain_exposure",
+            request.issuer_id,
+            "issuer_supply_chain_exposure",
         )
 
     @server.tool(
@@ -816,11 +828,12 @@ def build_mcp_server(
         description="Read module 4 analyst consensus of an issuer from the governed head in mart.served_head.",
     )
     def issuer_analyst_ratings(request: IssuerModuleToolRequest) -> AnalystRatings | IssuerModuleUnavailable:
-        row = _module_row(active_modules.analyst_ratings, request.issuer_id, "issuer_analyst_ratings")
-        return (
-            row
-            if isinstance(row, AnalystRatings)
-            else IssuerModuleUnavailable(issuer_id=request.issuer_id, module="analyst_ratings")
+        return _handle_issuer_module(
+            active_modules.analyst_ratings,
+            AnalystRatings,
+            "analyst_ratings",
+            request.issuer_id,
+            "issuer_analyst_ratings",
         )
 
     @server.tool(

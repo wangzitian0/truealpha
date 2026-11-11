@@ -1,30 +1,4 @@
-"""Did the deployed release fetch from every registered origin itself? (`release_fetch_proof`)
-
-Production's boot canary does not force a fetch (`lanes.triggers.boot_canary_forces_fetch`).
-It reuses the observations an earlier build committed in the last twelve hours (#635), so a
-production deploy never runs the new release's fetch path. A release could reach production
-with a broken adapter while every deploy check stayed green, and the first sign would be a
-frozen pointer days later.
-
-This check reads the first live-pipeline run the current deployment made that had to fetch:
-a scheduled tick (`dagster/schedule_name`) or a forced one (`force_fetch`, #874).
-
-* **ok**: that run succeeded, and its capture (`mart.data_engine_identity`, stamped with
-  this deployment's image digest) holds at least one freshly fetched observation from every
-  origin registered and enabled here. Reused observations do not count. A forced run is a probe
-  in the gateway (`gateway.probe_scope`, #1411): it asks the vendors itself and reads no landed key.
-  The Twelve Data origin is the exception: it reads a settled bar from the stored price series.
-* **pending** (`ok` is null): no such run exists yet, or it has not finished.
-* **red**: that run failed, or it fetched nothing from an origin (the origin was served only
-  by reuse, or it was lost), or its capture names another build.
-
-The deployment starts at its boot canary run. `boot_canary_sensor` launches exactly one per
-deployment (image digest plus configuration) and tags it with the digest. A rollback and a
-configuration change are new deployments, and each must prove itself again.
-
-`tools/nightly_verdicts.py` checks this check and bounds it by 48 hours (twice its 24h
-cadence).
-"""
+"""Verify that the deployed data-engine release fetched from every registered origin."""
 
 from __future__ import annotations
 
@@ -101,8 +75,7 @@ def origin_of(semantic_type: str, parser_version: str) -> str | None:
 
 
 def expected_origins() -> frozenset[str]:
-    """Every origin this deployment fetches from: each vendor registration's primary, and
-    each corroborating origin its switch turns on."""
+    """Return every primary and enabled corroborating vendor origin for this deployment."""
     expected: set[str] = set()
     for registration in _vendor_registrations():
         expected.add(_primary(registration))
@@ -177,8 +150,7 @@ def _as_utc(stamp: datetime | float | int) -> datetime:
 
 
 def deployment_started_at(instance: dg.DagsterInstance, digest: str) -> datetime | None:
-    """When the current deployment's boot canary run was created (the newest one for this
-    digest: a rollback or a configuration change launched a new one)."""
+    """Return creation timestamp of current deployment boot canary run."""
     records = instance.get_run_records(filters=dg.RunsFilter(tags={BOOT_CANARY_TAG: digest}), limit=1)
     return _as_utc(records[0].create_timestamp) if records else None
 
