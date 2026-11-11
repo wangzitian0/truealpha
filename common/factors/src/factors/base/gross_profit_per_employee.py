@@ -1,34 +1,4 @@
-"""Module 2: gross profit per employee (v0 capital-adjusted labor efficiency).
-
-The factor evaluates one tree of the metric forest. It holds no formula of its own (#1518).
-
-The strategy definition pins one tree for each issuer class (`labor_efficiency_tree_keys`,
-`factors.panel.bound_tree`): the uniform total-assets tree `gppe` (`gppe_uniform_charge_v0`) and the
-banking tree `gppe_banking_tce` (`gppe_banking_tce_v1`, measured tangible common equity, FINANCIAL
-issuers only). The caller passes the pinned tree and the issuer class. The factor reads each captured
-leaf of the tree from `facts` and evaluates the tree with `factors.panel.evaluate`. So the TOPT core and
-the strategy composite evaluate the same tree, and one issuer has one value.
-
-The uniform formula is frozen by issue #59 (2026-07-18 owner decision):
-
-    real_profit_v0 = gross_profit - total_assets * risk_free_rate
-    labor_efficiency_v0 = real_profit_v0 / employees_total
-
-A negative value is a valid low signal ("destroys value per employee at the risk-free hurdle"), ranked
-accordingly by the strategy, and not an exclusion. The banking tree charges the risk-free rate on
-measured tangible common equity (owner decision D2, 2026-10-26). A missing leaf gives an unavailable
-result with a flag that names it. No leaf is zero-filled and no capital base replaces another.
-
-Each operating branch consumes its own registered numerator (`gross_profit`, `pre_provision_profit`,
-or `insurance_pre_claims_profit` mapped into the tree's declared leaf).
-
-`risk_free_rate` is a versioned parameter (#59: "3-month US T-bill yield (v0 default; versioned
-parameter)"), not a live per-period market fact this factor looks up itself. The caller supplies it,
-exactly like `growth_convention` is an explicit parameter to the PEG factor.
-
-Input metric names match the canonical registry (`truealpha_contracts.metrics.METRICS`), and `Fact`
-rejects a metric and unit family that do not match it, so this function does not re-check units.
-"""
+"""Module 2: gross profit per employee (capital-adjusted labor efficiency over pinned panel variants)."""
 
 from collections.abc import Mapping, Sequence
 from datetime import datetime
@@ -45,19 +15,14 @@ from factors.panel import (
     required_inputs,
 )
 from factors.registry import factor
-from factors.types import Fact, FactorResult, UnitFamily
+from factors.types import Fact, FactorResult, UnitFamily, refused_factor_result, sole_fact
 
 _GROSS_PROFIT = "gross_profit"
-_TOTAL_ASSETS = "total_assets"
 _EMPLOYEES_TOTAL = "employees_total"
 
-#: The flags that a missing leaf of the banking tree raises (#1176). Equity, goodwill and intangibles
-#: share one flag. Preferred stock has its own. The strategy maps each flag to its exclusion reason.
 MISSING_TCE_FLAG = "missing_tangible_common_equity"
 MISSING_PREFERRED_FLAG = "missing_preferred_stock_value"
-#: The flag of a negative tangible common equity: the tree refuses it, so the charge is never a credit (#1518).
 NEGATIVE_TCE_FLAG = "negative_tangible_common_equity"
-#: The flag of a headcount that is zero or negative. The strategy maps it to `nonpositive_headcount`, as the core does.
 NONPOSITIVE_EMPLOYEES_FLAG = "non_positive_employees_total"
 _MISSING_LEAF_FLAGS = {
     "stockholders_equity": MISSING_TCE_FLAG,
@@ -67,21 +32,12 @@ _MISSING_LEAF_FLAGS = {
 }
 
 
-def _find(facts: Sequence[Fact], entity_id: str, metric: str) -> Fact | None:
-    # Facts already reflect one PIT-resolved vintage per metric; a factor never
-    # re-selects among candidates (init.md Section 6) — take the sole match.
-    matches = [f for f in facts if f.entity_id == entity_id and f.metric == metric]
-    if len(matches) > 1:
-        raise ValueError(f"{entity_id}: multiple PIT-resolved facts for metric {metric!r}")
-    return matches[0] if matches else None
-
-
 def _resolve_leaf_fact(facts: Sequence[Fact], entity_id: str, metric: str) -> Fact | None:
-    fact = _find(facts, entity_id, metric)
+    fact = sole_fact(facts, entity_id, metric)
     if fact is None and metric == "pre_provision_profit":
-        return _find(facts, entity_id, _GROSS_PROFIT)
+        return sole_fact(facts, entity_id, _GROSS_PROFIT)
     if fact is None and metric == "bank_net_revenue":
-        return _find(facts, entity_id, "pre_provision_profit") or _find(facts, entity_id, _GROSS_PROFIT)
+        return sole_fact(facts, entity_id, "pre_provision_profit") or sole_fact(facts, entity_id, _GROSS_PROFIT)
     return fact
 
 
@@ -112,20 +68,11 @@ def gross_profit_per_employee(
     issuer_class: IssuerClass,
     metrics: Mapping[str, PanelMetricSpec] = PANEL_METRICS,
 ) -> FactorResult:
-    """The labor efficiency of one issuer on the pinned ``tree`` (`gppe_uniform_charge_v0`, `gppe_banking_tce_v1`).
-
-    A missing captured input gives no value and a flag that names it (`missing_<metric>`; the banking
-    leaves have their own flags). A headcount that is not positive gives no value. Facts that carry two
-    fiscal periods give no value (`fiscal_period_mismatch`): one period answers for the whole tree.
-    The confidence is the minimum over the consumed inputs.
-    """
-    root = metrics[tree.root]
-    unit_family = root.unit or UnitFamily.PER_EMPLOYEE
-    nodes = required_inputs(tree, issuer_class, metrics=metrics)
+    unit_family = metrics[tree.root].unit or UnitFamily.PER_EMPLOYEE
     tree_inputs: dict[str, Decimal | None] = {}
     flags: list[str] = []
     consumed: list[Fact] = []
-    for node in nodes:
+    for node in required_inputs(tree, issuer_class, metrics=metrics):
         if node.alias(AliasKind.DEFINITION_PARAMETER) == "risk_free_rate":
             tree_inputs[node.key] = risk_free_rate
             continue
@@ -145,27 +92,18 @@ def gross_profit_per_employee(
             consumed.append(fact)
     if not flags and len({fact.fiscal_period for fact in consumed}) > 1:
         flags.append("fiscal_period_mismatch")
-
-    def unavailable(flag_list: list[str]) -> FactorResult:
-        return FactorResult(
-            factor=tree.root,
-            entity_id=entity_id,
-            value=None,
-            unit_family=unit_family,
-            confidence=Decimal("0"),
-            as_of=as_of,
-            data_availability="unverified",
-            flags=flag_list,
-        )
-
     if flags:
-        return unavailable(flags)
+        return refused_factor_result(tree.root, entity_id, as_of, flags, unit_family=unit_family)
+
     evaluation = evaluate_panel_variant(tree, issuer_class=issuer_class, inputs=tree_inputs, metrics=metrics)
     value = evaluation.values.get(tree.root)
     if value is None:
-        if "negative_operand" in evaluation.undefined.values():
-            return unavailable([NEGATIVE_TCE_FLAG])
-        return unavailable([evaluation.undefined.get(tree.root, "undefined_operand")])
+        reason = (
+            NEGATIVE_TCE_FLAG
+            if "negative_operand" in evaluation.undefined.values()
+            else evaluation.undefined.get(tree.root, "undefined_operand")
+        )
+        return refused_factor_result(tree.root, entity_id, as_of, [reason], unit_family=unit_family)
     return FactorResult(
         factor=tree.root,
         entity_id=entity_id,
