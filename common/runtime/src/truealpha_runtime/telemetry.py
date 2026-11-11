@@ -73,6 +73,9 @@ def _register_heartbeat(providers: TelemetryProviders) -> None:
     skips the probe paths (`llm_service.main.PROBE_PATHS`), and a quiet service has no other
     request (#1660). `process.uptime` is the OpenTelemetry name for this reading.
     """
+    meter_provider = providers.meter_provider
+    if meter_provider is None:  # the SDK builds none when metrics are off
+        return
     started = time.monotonic()
 
     def observe(_options: CallbackOptions) -> Iterable[Observation]:
@@ -80,7 +83,7 @@ def _register_heartbeat(providers: TelemetryProviders) -> None:
 
     # A second registration on the same installation returns the instrument that exists: the SDK
     # keys instruments by name, so `init_telemetry()` stays idempotent (tested).
-    providers.meter_provider.get_meter("truealpha_runtime").create_observable_gauge(
+    meter_provider.get_meter("truealpha_runtime").create_observable_gauge(
         "process.uptime",
         callbacks=[observe],
         unit="s",

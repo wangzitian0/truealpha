@@ -372,3 +372,12 @@ def test_the_process_exports_an_uptime_heartbeat_once_per_collection() -> None:
         if metric.name == "process.uptime"
     }
     assert units == {"s"}
+
+
+def test_the_heartbeat_needs_no_meter_provider() -> None:
+    """The SDK may hand back no meter provider; registering the heartbeat then does nothing."""
+    from types import SimpleNamespace
+
+    from truealpha_runtime.telemetry import _register_heartbeat
+
+    _register_heartbeat(SimpleNamespace(meter_provider=None))  # type: ignore[arg-type]
