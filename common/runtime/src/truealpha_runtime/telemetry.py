@@ -28,7 +28,8 @@ a Python service and is not covered here.
 from __future__ import annotations
 
 import os
-from collections.abc import Mapping
+import time
+from collections.abc import Iterable, Mapping
 
 from infra2_sdk.runtime.otel import (
     REQUIRED_IDENTITY_ATTRIBUTES,  # noqa: F401  (re-exported: the identity keys the SDK requires)
@@ -36,6 +37,7 @@ from infra2_sdk.runtime.otel import (
     TelemetryProviders,
     configure_telemetry,
 )
+from opentelemetry.metrics import CallbackOptions, Observation
 
 
 class TelemetryConfigError(RuntimeError):
@@ -63,14 +65,40 @@ def load_telemetry_settings(environ: Mapping[str, str] | None = None) -> OtelSet
     return settings if settings.enabled else None
 
 
+def _register_heartbeat(providers: TelemetryProviders) -> None:
+    """Export `process.uptime` (unit `s`) every collection interval, whatever the traffic.
+
+    The alert rule "this service exported no telemetry" (infra2 `TrueAlphaAppTelemetryAbsent`)
+    needs a series that exists without a request. The HTTP metrics do not: FastAPI's telemetry
+    skips the probe paths (`llm_service.main.PROBE_PATHS`), and a quiet service has no other
+    request (#1660). `process.uptime` is the OpenTelemetry name for this reading.
+    """
+    started = time.monotonic()
+
+    def observe(_options: CallbackOptions) -> Iterable[Observation]:
+        yield Observation(time.monotonic() - started)
+
+    # A second registration on the same installation returns the instrument that exists: the SDK
+    # keys instruments by name, so `init_telemetry()` stays idempotent (tested).
+    providers.meter_provider.get_meter("truealpha_runtime").create_observable_gauge(
+        "process.uptime",
+        callbacks=[observe],
+        unit="s",
+        description="Seconds since this process started telemetry; present whenever the process exports.",
+    )
+
+
 def init_telemetry(environ: Mapping[str, str] | None = None, *, set_global: bool = True) -> TelemetryProviders | None:
     """Configure OTLP traces, metrics and logs for this process; `None` when telemetry is off.
 
     Idempotent per process (the SDK returns the active installation on a second call), so a
-    module that two entrypoints both import cannot attach a second logging handler.
-    `set_global=False` builds the providers without touching process globals; it exists for tests.
+    module that two entrypoints both import cannot attach a second logging handler or a second
+    heartbeat. `set_global=False` builds the providers without touching process globals; it
+    exists for tests.
     """
     settings = load_telemetry_settings(environ)
     if settings is None:
         return None
-    return configure_telemetry(settings, set_global=set_global)
+    providers = configure_telemetry(settings, set_global=set_global)
+    _register_heartbeat(providers)
+    return providers

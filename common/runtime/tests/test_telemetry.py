@@ -326,3 +326,49 @@ def test_the_trace_sampler_follows_the_standard_environment_variable() -> None:
     assert exported(OTEL_TRACES_SAMPLER="always_off") == 0
     with pytest.raises(TelemetryConfigError, match="OTEL_TRACES_SAMPLER"):
         init_telemetry(_environ(OTEL_TRACES_SAMPLER="sometimes"))
+
+
+def _uptime_points_per_batch(batches: list[Any]) -> list[list[Any]]:
+    """The `process.uptime` data points of each exported batch (one batch per collection)."""
+    per_batch = []
+    for batch in batches:
+        points = [
+            point
+            for resource_metrics in batch.resource_metrics
+            for scope_metrics in resource_metrics.scope_metrics
+            for metric in scope_metrics.metrics
+            if metric.name == "process.uptime"
+            for point in metric.data.data_points
+        ]
+        per_batch.append(points)
+    return per_batch
+
+
+def test_the_process_exports_an_uptime_heartbeat_once_per_collection() -> None:
+    """#1660: the "no telemetry" alert needs a series that exists without a request. A second
+    registration on the same installation must not add a second observation: two points per
+    collection would double the series the alert reads. (`shutdown` collects once more, so the
+    sink holds several batches; each must hold exactly one point.)"""
+    from truealpha_runtime.telemetry import _register_heartbeat
+
+    providers = init_telemetry(_environ(), set_global=False)
+    assert providers is not None
+    try:
+        _register_heartbeat(providers)  # the repeat that an idempotent init_telemetry makes
+        providers.meter_provider.force_flush()
+    finally:
+        providers.shutdown()
+
+    per_batch = [points for points in _uptime_points_per_batch(_MetricSink.created[0].batches) if points]
+    assert per_batch, "no batch carried process.uptime"
+    assert [len(points) for points in per_batch] == [1] * len(per_batch)
+    assert all(point.value >= 0.0 for points in per_batch for point in points)
+    units = {
+        metric.unit
+        for batch in _MetricSink.created[0].batches
+        for resource_metrics in batch.resource_metrics
+        for scope_metrics in resource_metrics.scope_metrics
+        for metric in scope_metrics.metrics
+        if metric.name == "process.uptime"
+    }
+    assert units == {"s"}

@@ -138,6 +138,9 @@ def test_a_request_and_an_error_log_reach_the_collector_under_the_rendered_ident
     ), durations
     legacy = sorted({name for name, _unit, _attributes in series if name.startswith("http.server.duration")})
     assert legacy == [], legacy
+    # The heartbeat (#1660): a series that exists without a request, for the "no telemetry" alert.
+    uptime = [(unit, attributes) for name, unit, attributes in series if name == "process.uptime"]
+    assert uptime and {unit for unit, _ in uptime} == {"s"}, sorted({name for name, _u, _a in series})
     # Probe paths are excluded from FastAPI's telemetry: no span and no latency sample for them.
     probe_routes = {"/health", "/livez", "/readyz"}
     assert not [name for name in collector.span_names() if any(route in name for route in probe_routes)]
