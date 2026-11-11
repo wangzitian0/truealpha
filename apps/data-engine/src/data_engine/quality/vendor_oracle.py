@@ -1,39 +1,4 @@
-"""Re-derive what mart asserts, straight from the vendor, and compare (#429).
-
-An invariant (`quality/invariants.py`) catches a number that contradicts itself. It cannot
-catch a number that is perfectly self-consistent and simply not the current one — AAPL's
-FY2018 revenue satisfies every invariant there is. Only an independent re-derivation from
-the source catches that, so this module fetches SEC company-facts live at check time and
-compares.
-
-## Why this deliberately reimplements the extraction
-
-Nothing here imports `datahub.production_topt.sec_financial_adapter`, and that is the
-entire point: an oracle that calls the code under test inherits its bugs and reports green
-on exactly the data it exists to catch. The audit that motivated this found the adapter
-selecting the *first* concept variant carrying any value rather than the most recent one,
-which pinned AAPL to a tag abandoned in 2018. Re-deriving through the same function would
-have reproduced that answer and agreed with itself.
-
-So the rule for this file: **resolve values by an independent route, and let the two
-disagree.** It reads more concept variants than the adapter declares (a vendor's real
-tagging is wider than any mapping we froze), and it selects across all of them by latest
-period end rather than by declaration order.
-
-A checked-in expected value would not do either: a constant is authored by this repository
-too, so it drifts silently the moment the issuer files again. The right-hand side has to
-come from the vendor.
-
-The oracle reads the SEC document by the same fetch key as the tick (#1411 K5). A document
-that the tick landed on the same UTC day is read from the index, and SEC is asked once. The
-independence of the oracle is its parser. It cannot catch a defect of the fetch step, because
-it reads the same bytes. The sha256 of each landed document is in `raw.fetches` and in the
-ledger row of the call, so a wrong fetch is a lineage question (#1418 B7), not an oracle one.
-
-The parsers (`revenue`, `gross_profit`, `latest_across_variants`) are pure functions of a parsed
-document. `datahub.oracle_outcomes` runs them over the stored bytes that a capture run cited and
-writes one `mart.oracle_outcomes` row per comparison (#1523). That path makes no vendor call.
-"""
+"""Re-derive mart financial facts from SEC company-facts to detect reporting drift."""
 
 from __future__ import annotations
 
@@ -91,11 +56,7 @@ _ASSETS_CONCEPTS = _ruleset_us_gaap_concepts("total_assets")
 
 @dataclass(frozen=True)
 class VendorFact:
-    """One independently derived annual figure, the period it belongs to and the day it was filed.
-
-    `filed` is the day from which the figure is knowable. A figure derived from two facts (revenue minus
-    cost) is knowable from the later of their two filing days.
-    """
+    """One independently derived annual vendor figure with its period and filing dates."""
 
     value: Decimal
     period_end: date
@@ -105,13 +66,7 @@ class VendorFact:
 
 @dataclass(frozen=True)
 class Drift:
-    """What mart holds for one field versus what the vendor says today.
-
-    `mart_period_end` is recovered by finding which period the vendor reported mart's
-    exact value for. That indirection is necessary because the normalized payload does
-    not record the fiscal period a figure came from — so the warehouse alone cannot
-    answer "how old is this number", and the drift is invisible from inside.
-    """
+    """Compare mart values against vendor figures to detect reporting staleness."""
 
     ticker: str
     field: str
@@ -205,13 +160,7 @@ def _annual_entries(
 def latest_across_variants(
     facts: dict[str, Any], concepts: Sequence[str], unit: str, cutoff: date
 ) -> VendorFact | None:
-    """The most recent annual value across ALL variants, not the first variant with data.
-
-    This one line is the difference the audit turned on. Selecting per-variant and
-    returning the first non-empty result locks an issuer onto whichever tag it used to
-    file under; comparing period ends across every variant follows the issuer when it
-    switches tags (as nearly every large filer did at the ASC 606 transition).
-    """
+    """Select the most recent annual value across all concept variants."""
     best: VendorFact | None = None
     for concept in concepts:
         for period_end, value, filed in _annual_entries(facts, concept, unit, cutoff):
@@ -231,12 +180,7 @@ def total_assets(facts: dict[str, Any], cutoff: date) -> VendorFact | None:
 
 
 def gross_profit(facts: dict[str, Any], cutoff: date) -> VendorFact | None:
-    """Reported gross profit, or revenue minus cost of revenue — whichever is more recent.
-
-    The adapter prefers a directly reported `GrossProfit` unconditionally. Amazon last
-    tagged it for FY2009 while its FY2025 difference is computable from tags that are
-    present, so "reported wins" is not a safe rule; the later period wins here.
-    """
+    """Select reported gross profit or derived revenue minus cost for latest period."""
     direct = latest_across_variants(facts, ("GrossProfit",), "USD", cutoff)
     revenue_by_period = _all_periods(facts, _REVENUE_CONCEPTS, cutoff)
     cost_by_period = _all_periods(facts, _COGS_CONCEPTS, cutoff)

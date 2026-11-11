@@ -1,4 +1,4 @@
-"""Open or resolve the tracking issue owned by a scheduled watchdog (#876)."""
+"""Open or resolve a GitHub tracking issue for scheduled watchdogs."""
 
 from __future__ import annotations
 
@@ -18,13 +18,12 @@ class ListingFailed(RuntimeError):
     """The open issues could not be read."""
 
 
-def _gh(arguments: Sequence[str]) -> GhResult:
-    result = subprocess.run(["gh", *arguments], capture_output=True, text=True, check=False)
-    return result.returncode, result.stdout, result.stderr
+def _gh(args: Sequence[str]) -> GhResult:
+    r = subprocess.run(["gh", *args], capture_output=True, text=True, check=False)
+    return r.returncode, r.stdout, r.stderr
 
 
 def open_issues_titled(title: str, *, repo: str, gh: Gh) -> list[int]:
-    phrase = title.replace('"', "")
     code, out, err = gh(
         [
             "issue",
@@ -34,7 +33,7 @@ def open_issues_titled(title: str, *, repo: str, gh: Gh) -> list[int]:
             "--state",
             "open",
             "--search",
-            f'in:title "{phrase}"',
+            f'in:title "{title.replace(chr(34), "")}"',
             "--json",
             "number,title",
             "--limit",
@@ -45,21 +44,21 @@ def open_issues_titled(title: str, *, repo: str, gh: Gh) -> list[int]:
         raise ListingFailed(err.strip() or f"gh issue list exited {code}")
     try:
         listed = json.loads(out or "[]")
-    except json.JSONDecodeError as error:
-        raise ListingFailed(f"gh issue list returned something that is not JSON: {error}") from error
+    except json.JSONDecodeError as exc:
+        raise ListingFailed(f"gh issue list returned something that is not JSON: {exc}") from exc
     if not isinstance(listed, list):
         raise ListingFailed(f"gh issue list returned {type(listed).__name__}, not a list")
     matches = [issue for issue in listed if isinstance(issue, dict) and issue.get("title") == title]
     try:
-        return sorted(int(issue["number"]) for issue in matches)
-    except (KeyError, TypeError, ValueError) as error:
-        raise ListingFailed(f"gh issue list returned an issue without a usable number: {error!r}") from error
+        return sorted(int(m["number"]) for m in matches)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ListingFailed(f"gh issue list returned an issue without a usable number: {exc!r}") from exc
 
 
-def _write(arguments: Sequence[str], *, gh: Gh) -> bool:
-    code, _, err = gh(arguments)
+def _write(args: Sequence[str], *, gh: Gh) -> bool:
+    code, _, err = gh(args)
     if code != 0:
-        print(f"::error::gh {' '.join(arguments[:2])} failed: {err.strip()[:300]}", file=sys.stderr)
+        print(f"::error::gh {' '.join(args[:2])} failed: {err.strip()[:300]}", file=sys.stderr)
         return False
     return True
 
@@ -67,13 +66,13 @@ def _write(arguments: Sequence[str], *, gh: Gh) -> bool:
 def escalate(title: str, body_file: str, *, repo: str, gh: Gh = _gh) -> int:
     try:
         existing = open_issues_titled(title, repo=repo, gh=gh)
-    except ListingFailed as error:
-        print(f"::warning::issue listing failed ({error}); skipping escalation — the run is already red")
+    except ListingFailed as exc:
+        print(f"::warning::issue listing failed ({exc}); skipping escalation — the run is already red")
         return 0
     if existing:
-        number = existing[0]
-        ok = _write(["issue", "comment", str(number), "--repo", repo, "--body-file", body_file], gh=gh)
-        print(f"commented on #{number}" if ok else f"could not comment on #{number}")
+        n = existing[0]
+        ok = _write(["issue", "comment", str(n), "--repo", repo, "--body-file", body_file], gh=gh)
+        print(f"commented on #{n}" if ok else f"could not comment on #{n}")
         return 0 if ok else 1
     ok = _write(["issue", "create", "--repo", repo, "--title", title, "--body-file", body_file], gh=gh)
     print(f"filed {title!r}" if ok else f"could not file {title!r}")
@@ -83,18 +82,19 @@ def escalate(title: str, body_file: str, *, repo: str, gh: Gh = _gh) -> int:
 def resolve(title: str, body_file: str, *, repo: str, gh: Gh = _gh) -> int:
     try:
         existing = open_issues_titled(title, repo=repo, gh=gh)
-    except ListingFailed as error:
-        print(f"::warning::issue listing failed ({error}); nothing resolved — the next green run retries")
+    except ListingFailed as exc:
+        print(f"::warning::issue listing failed ({exc}); nothing resolved — the next green run retries")
         return 0
     if not existing:
         print(f"no open issue titled {title!r}; nothing to resolve")
         return 0
     failed = False
-    for number in existing:
-        commented = _write(["issue", "comment", str(number), "--repo", repo, "--body-file", body_file], gh=gh)
-        closed = commented and _write(["issue", "close", str(number), "--repo", repo, "--reason", "completed"], gh=gh)
-        print(f"resolved #{number}" if closed else f"could not resolve #{number}")
-        failed = failed or not closed
+    for n in existing:
+        ok = _write(["issue", "comment", str(n), "--repo", repo, "--body-file", body_file], gh=gh) and _write(
+            ["issue", "close", str(n), "--repo", repo, "--reason", "completed"], gh=gh
+        )
+        print(f"resolved #{n}" if ok else f"could not resolve #{n}")
+        failed = failed or not ok
     return 1 if failed else 0
 
 

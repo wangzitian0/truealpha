@@ -1,33 +1,4 @@
-"""Every report surface serves the governed head — proven against the environment's own
-database, nightly (#855 C1).
-
-The deploy's Playwright walk proves each route renders; nothing proved that the numbers on
-it belong to the run the governed pointer names. Each App reader picks its run with its own
-SQL, copied here verbatim so the proof asks exactly what the page asks, and the proof is
-that every answer is the head: a page serving an older run than its neighbours contradicts
-the App's own head with every gate green. "The head" is the one the reader itself would pick
-once every universe's reports are current: the theme reader is universe-blind, so its head is
-the newest governed head among the universes the theme lane covers, not TOPT's (#910). The
-coverage report is held to more than its run:
-it is recomputed from the same tables, and a stored report that no longer matches what the
-tables say is stale even when its run id is right.
-
-Not a fixture check. Like `quality.invariants`, this only means something against a database
-real ticks wrote, so it runs as an op of the nightly quality job and its verdict is a red or
-green Dagster run (init.md rule 9).
-
-Three states per surface, not two. MATCH and MISMATCH as above; IN-PROGRESS for a surface
-that does not match while its universe is demonstrably settling — a tick or a head-reports
-run for it has not finished, or its head advanced minutes ago and the reports that follow it
-are being written (`fresh_heads_without_reports`). The job waits for a universe to settle
-before proving (`lanes.quality`), so IN-PROGRESS is what is left when the wait ran out; it
-does not fail the run, and it is never granted to a surface whose universe is quiet.
-
-A surface whose lane is deliberately off here is `not-run-in-this-environment`, as holdings
-is on an environment with no QQQ tick: the theme lane is off where no model provider is
-seated (`llm.is_configured()`), because nothing can judge a segment there. A lane that is on
-and produced nothing is a MISMATCH, and the line says what the plane under it holds.
-"""
+"""Prove that every report surface serves the governed head in the environment database."""
 
 from __future__ import annotations
 
@@ -345,24 +316,7 @@ def _exists(connection: Connection[Any], sql: str, params: tuple[Any, ...]) -> b
 def themes_verdict(
     connection: Connection[Any], heads: Mapping[str, GovernedHead | None], served: str | None
 ) -> SurfaceVerdict:
-    """/research/themes against the head its own reader picks once every universe's reports
-    are current.
-
-    `LATEST_RUN_SQL` has no universe filter: it serves the run with the newest cutoff in the
-    table, and the head reports write purity rows for every universe's head. So the head it
-    must serve is the newest-cutoff head among the universes the theme lane covers here (any
-    run their pointer ever named has rows). In production that is the QQQ head, whose tick
-    cuts off after TOPT's every day; expecting TOPT's head failed every nightly proof there
-    (#910). Equal cutoffs leave the reader's order undefined, so either tied head is its head.
-
-    The verdict names that head's universe, so its settling state decides IN-PROGRESS. When
-    the newest head has no rows yet while an older run is served, the page changes when that
-    universe's head reports land, whichever universe's run is served meanwhile; a quiet one in
-    that state is a MISMATCH, because partitions only accumulate and a covered universe's new
-    head should have rows again. A universe the lane has never covered cannot be selected, so
-    its newer head is not expected. When no run any pointer named has rows, every head is a
-    candidate and the newest is named, with what the plane under it holds.
-    """
+    """Verify /research/themes against newest-cutoff head among covered universes."""
     environment = declared_environment(connection)
     present = {universe: head for universe, head in heads.items() if head is not None}
     covered = {
