@@ -207,13 +207,19 @@ _run_key: contextvars.ContextVar[str | None] = contextvars.ContextVar("external_
 
 
 @contextmanager
-def run_scope(run_key: str) -> Iterator[None]:
-    """Attribute every call made inside the block to ``run_key`` (the Dagster run id)."""
-    token = _run_key.set(run_key)
+def _bind_var[V](var: contextvars.ContextVar[V], value: V) -> Iterator[None]:
+    token = var.set(value)
     try:
         yield
     finally:
-        _run_key.reset(token)
+        var.reset(token)
+
+
+@contextmanager
+def run_scope(run_key: str) -> Iterator[None]:
+    """Attribute every call made inside the block to ``run_key`` (the Dagster run id)."""
+    with _bind_var(_run_key, run_key):
+        yield
 
 
 @contextmanager
@@ -562,11 +568,8 @@ _refusal_listeners: contextvars.ContextVar[tuple[Callable[[CapacityExceeded], No
 @contextmanager
 def on_capacity_refusal(listener: Callable[[CapacityExceeded], None]) -> Iterator[None]:
     """Hand every refusal a gate makes inside the block to ``listener`` (the tick's audit)."""
-    token = _refusal_listeners.set((*_refusal_listeners.get(), listener))
-    try:
+    with _bind_var(_refusal_listeners, (*_refusal_listeners.get(), listener)):
         yield
-    finally:
-        _refusal_listeners.reset(token)
 
 
 def _refuse(error: CapacityExceeded) -> NoReturn:
@@ -582,6 +585,20 @@ def _refuse(error: CapacityExceeded) -> NoReturn:
 # Budgets and windows count requests (rows), never `cost`: see `CapacityDeclaration.daily_budget`.
 _SPENT_SQL = "select count(*) from staging.api_call_ledger where source = %s and called_at >= %s"
 _WINDOW_SQL = "select count(*), min(called_at) from staging.api_call_ledger where source = %s and called_at > %s"
+_DAILY_SQL = (
+    "select caller, (called_at at time zone 'UTC')::date, count(*) from staging.api_call_ledger "
+    "where source = %s and called_at >= %s and called_at < %s group by 1, 2"
+)
+
+
+def _ledger_read(default: Any, sql: str, params: tuple[Any, ...], method: str, *args: Any, many: bool = False) -> Any:
+    if settings.external_call_ledger == "off":
+        return default
+    if _writer is postgres_writer:
+        cursor = _pg_execute(sql, params)
+        return cursor.fetchall() if many else cursor.fetchone()
+    reader = getattr(_writer, method, None)
+    return reader(*args) if reader is not None else default
 
 
 def ledger_calls_since(source: str, since: datetime) -> int:
@@ -590,30 +607,14 @@ def ledger_calls_since(source: str, since: datetime) -> int:
     Read from wherever `emit` writes: the warehouse (autocommit, so another process's
     committed calls are visible), a `MemoryLedger` in tests, and nothing when the ledger is
     off — the gate then has only its own admissions to count."""
-    if settings.external_call_ledger == "off":
-        return 0
-    if _writer is postgres_writer:
-        row = _pg_execute(_SPENT_SQL, (source, since)).fetchone()
-        return int(row[0]) if row else 0
-    reader = getattr(_writer, "calls_since", None)
-    return int(reader(source, since)) if reader is not None else 0
+    res = _ledger_read(0, _SPENT_SQL, (source, since), "calls_since", source, since)
+    return int(res[0]) if isinstance(res, tuple) else int(res or 0)
 
 
 def ledger_window(source: str, since: datetime) -> tuple[int, datetime | None]:
     """How many calls the ledger holds for ``source`` after ``since``, and the oldest."""
-    if settings.external_call_ledger == "off":
-        return 0, None
-    if _writer is postgres_writer:
-        row = _pg_execute(_WINDOW_SQL, (source, since)).fetchone()
-        return (int(row[0]), row[1]) if row else (0, None)
-    reader = getattr(_writer, "window", None)
-    return reader(source, since) if reader is not None else (0, None)
-
-
-_DAILY_SQL = (
-    "select caller, (called_at at time zone 'UTC')::date, count(*) from staging.api_call_ledger "
-    "where source = %s and called_at >= %s and called_at < %s group by 1, 2"
-)
+    res = _ledger_read((0, None), _WINDOW_SQL, (source, since), "window", source, since)
+    return (int(res[0]), res[1]) if res else (0, None)
 
 
 def ledger_daily_calls(source: str, since: datetime, until: datetime) -> dict[tuple[str, date], int]:
@@ -621,13 +622,10 @@ def ledger_daily_calls(source: str, since: datetime, until: datetime) -> dict[tu
 
     The rows the gate counts, read from the same place (`ledger_calls_since`). A lane that
     budgets its own share of a seat against the other callers reads them here (#1277)."""
-    if settings.external_call_ledger == "off":
-        return {}
-    if _writer is postgres_writer:
-        rows = _pg_execute(_DAILY_SQL, (source, since, until)).fetchall()
-        return {(str(caller), day): int(calls) for caller, day, calls in rows}
-    reader = getattr(_writer, "daily_calls", None)
-    return dict(reader(source, since, until)) if reader is not None else {}
+    res = _ledger_read({}, _DAILY_SQL, (source, since, until), "daily_calls", source, since, until, many=True)
+    if isinstance(res, list):
+        return {(str(caller), day): int(calls) for caller, day, calls in res}
+    return dict(res)
 
 
 def capacity_environment() -> str:
@@ -758,11 +756,8 @@ def capacity_scope(gate: CapacityGate | None = None) -> Iterator[CapacityGate]:
     default) before it is made. The Dagster ops that reach vendors bind this next to
     `run_scope`."""
     bound = gate if gate is not None else CapacityGate()
-    token = _bound_gate.set(bound)
-    try:
+    with _bind_var(_bound_gate, bound):
         yield bound
-    finally:
-        _bound_gate.reset(token)
 
 
 # --- the one path ---------------------------------------------------------------------
@@ -894,6 +889,31 @@ def _observe_http(call: CallRecord, response: Any) -> None:
         call.fail(message or f"HTTP {status}")
 
 
+def _http_request(
+    method: str,
+    client: Any,
+    source: str,
+    endpoint: str,
+    url: str,
+    *,
+    identity: FetchKey,
+    caller: str,
+    cost: Decimal | int = 1,
+    **kwargs: Any,
+) -> Any:
+    with record_call(
+        source,
+        endpoint,
+        identity=identity,
+        caller=caller,
+        request_uri=_requested_uri(url, kwargs.get("params")),
+        cost=cost,
+    ) as call:
+        response = getattr(client, method)(url, **kwargs)
+        _observe_http(call, response)
+        return response
+
+
 def http_get(
     client: Any,
     source: str,
@@ -906,17 +926,7 @@ def http_get(
     **kwargs: Any,
 ) -> Any:
     """``client.get(url, **kwargs)`` through the ledger (httpx-shaped clients)."""
-    with record_call(
-        source,
-        endpoint,
-        identity=identity,
-        caller=caller,
-        request_uri=_requested_uri(url, kwargs.get("params")),
-        cost=cost,
-    ) as call:
-        response = client.get(url, **kwargs)
-        _observe_http(call, response)
-        return response
+    return _http_request("get", client, source, endpoint, url, identity=identity, caller=caller, cost=cost, **kwargs)
 
 
 def http_post(
@@ -931,17 +941,7 @@ def http_post(
     **kwargs: Any,
 ) -> Any:
     """``client.post(url, **kwargs)`` through the ledger (httpx-shaped clients)."""
-    with record_call(
-        source,
-        endpoint,
-        identity=identity,
-        caller=caller,
-        request_uri=_requested_uri(url, kwargs.get("params")),
-        cost=cost,
-    ) as call:
-        response = client.post(url, **kwargs)
-        _observe_http(call, response)
-        return response
+    return _http_request("post", client, source, endpoint, url, identity=identity, caller=caller, cost=cost, **kwargs)
 
 
 class SourceHTTPError(Exception):
@@ -1024,11 +1024,8 @@ def probe_scope(active: bool = True) -> Iterator[None]:
     A forced tick (`force_fetch`, #874) exists to prove that the deployed release reaches its vendors
     (`quality.release_fetch_proof`). A probe therefore asks the vendor again and neither reads nor writes
     the index of landed keys. Its rows carry their key and the reason `probe`, so the verdict skips them."""
-    token = _probe.set(active)
-    try:
+    with _bind_var(_probe, active):
         yield
-    finally:
-        _probe.reset(token)
 
 
 _landed_keys: LandedKeys = PostgresLandedKeys(_pg, _pg_reset)
@@ -1095,11 +1092,8 @@ def fetch_once(
     if _probe.get():
         return fetch(key)
     if not keep:
-        token = _window_final.set(False)
-        try:
+        with _bind_var(_window_final, False):
             return fetch(key)
-        finally:
-            _window_final.reset(token)
     hit = landed(key)
     if hit is not None:
         return hit

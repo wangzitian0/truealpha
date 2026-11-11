@@ -248,14 +248,17 @@ def _same_commit(expected: str, reported: str) -> bool:
     return bool(expected) and bool(reported) and (expected.startswith(reported) or reported.startswith(expected))
 
 
-def _data_engine_identity(body: str) -> tuple[str, str]:
-    """(git_sha, image_digest) the health surface reports for the data engine, or unknown."""
+def _json_dict(body: str) -> dict[str, object]:
     try:
         parsed = json.loads(body)
     except (TypeError, ValueError):
-        return ("unknown", "unknown")
-    if not isinstance(parsed, dict):
-        return ("unknown", "unknown")
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _data_engine_identity(body: str) -> tuple[str, str]:
+    """(git_sha, image_digest) the health surface reports for the data engine, or unknown."""
+    parsed = _json_dict(body)
     return (
         str(parsed.get("data_engine_git_sha") or "unknown"),
         str(parsed.get("data_engine_image_digest") or "unknown"),
@@ -263,19 +266,8 @@ def _data_engine_identity(body: str) -> tuple[str, str]:
 
 
 def _data_engine_parser(body: str) -> str:
-    """The data-engine vintage the health surface reports, or "unknown".
-
-    The data engine has no HTTP surface, so until #712 every post-deploy check -- this
-    one, the surface walk, both canaries -- exercised app-web or llm-service. A promotion
-    could therefore leave the app that computes every published number one release behind
-    with every step green, which is what v0.0.37 did. llm-service now reports the vintage
-    from mart, so the lane can see it over a surface it already calls.
-    """
-    try:
-        parsed = json.loads(body)
-    except (TypeError, ValueError):
-        return "unknown"
-    value = parsed.get("data_engine_parser") if isinstance(parsed, dict) else None
+    """The data-engine vintage the health surface reports, or "unknown"."""
+    value = _json_dict(body).get("data_engine_parser")
     return str(value) if value else "unknown"
 
 

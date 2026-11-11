@@ -119,15 +119,13 @@ def _call(ctx, endpoint: str, caller: str, fn, *, identity: FetchKey, request_ur
     return rest[0] if len(rest) == 1 else rest
 
 
+def _call_method(ctx, method: str, *args, caller: str = "probe_moomoo_capabilities", identity: FetchKey, **kwargs):
+    return _call(ctx, method, caller, lambda c: getattr(c, method)(*args, **kwargs), identity=identity)
+
+
 def get_analyst_consensus(ctx, code: str, *, caller: str = "probe_moomoo_capabilities", identity: FetchKey):
     """Per-stock analyst consensus snapshot. code e.g. 'US.DDOG'."""
-    return _call(
-        ctx,
-        "get_research_analyst_consensus",
-        caller,
-        lambda c: c.get_research_analyst_consensus(code),
-        identity=identity,
-    )
+    return _call_method(ctx, "get_research_analyst_consensus", code, caller=caller, identity=identity)
 
 
 def get_rating_summary(
@@ -150,12 +148,15 @@ def get_rating_summary(
     rows carry enough history to reconstruct a track record. num paginates
     the summary list (moomoo caps it at 20/page); uid switches the response
     from a summary list to one analyst/institution's detail."""
-    dim = 2 if analyst_dimension else 1
-    return _call(
+    return _call_method(
         ctx,
         "get_research_rating_summary",
-        caller,
-        lambda c: c.get_research_rating_summary(code, rating_dimension_type=dim, uid=uid, num=num, next_key=next_key),
+        code,
+        rating_dimension_type=2 if analyst_dimension else 1,
+        uid=uid,
+        num=num,
+        next_key=next_key,
+        caller=caller,
         identity=identity,
     )
 
@@ -167,19 +168,15 @@ def get_market_rating_changes(
     not a per-ticker history. count is capped at 20/page by the API itself;
     page is the pagination cursor moomoo returns alongside next_page/all_count
     for reaching older pages."""
-    return _call(
-        ctx,
-        "get_rating_change",
-        caller,
-        lambda c: c.get_rating_change(moomoo.Market.US, count=count, page=page),
-        identity=identity,
+    return _call_method(
+        ctx, "get_rating_change", moomoo.Market.US, count=count, page=page, caller=caller, identity=identity
     )
 
 
 def get_company_profile(ctx, code: str, *, caller: str = "probe_moomoo_capabilities", identity: FetchKey):
     """Company profile — a key/value table (columns: name, value, field_type),
     not one row per company. Candidate ground-truth for company metadata."""
-    return _call(ctx, "get_company_profile", caller, lambda c: c.get_company_profile(code), identity=identity)
+    return _call_method(ctx, "get_company_profile", code, caller=caller, identity=identity)
 
 
 def get_financials_statements(
@@ -199,26 +196,22 @@ def get_financials_statements(
     moomoo's own field normalization may sidestep the raw SEC XBRL
     tag-inconsistency problem (see samples/README.md), needs cross-checking,
     not blind trust. Paginated (num 1-50/page, next_key cursor)."""
-    return _call(
+    return _call_method(
         ctx,
         "get_financials_statements",
-        caller,
-        lambda c: c.get_financials_statements(
-            code, statement_type=statement_type, financial_type=financial_type, num=num, next_key=next_key
-        ),
+        code,
+        statement_type=statement_type,
+        financial_type=financial_type,
+        num=num,
+        next_key=next_key,
+        caller=caller,
         identity=identity,
     )
 
 
 def get_financials_revenue_breakdown(ctx, code: str, *, caller: str = "probe_moomoo_capabilities", identity: FetchKey):
     """Revenue breakdown by product/industry/region for the latest reported period."""
-    return _call(
-        ctx,
-        "get_financials_revenue_breakdown",
-        caller,
-        lambda c: c.get_financials_revenue_breakdown(code),
-        identity=identity,
-    )
+    return _call_method(ctx, "get_financials_revenue_breakdown", code, caller=caller, identity=identity)
 
 
 def get_valuation_detail(
@@ -234,11 +227,13 @@ def get_valuation_detail(
     industry-peer distribution, and profit/revenue growth multiples —
     profit_growth_rate is the closest thing moomoo has to a ready-made PEG
     input (empty for valuation_type=PB)."""
-    return _call(
+    return _call_method(
         ctx,
         "get_valuation_detail",
-        caller,
-        lambda c: c.get_valuation_detail(code, valuation_type=valuation_type, interval_type=interval_type),
+        code,
+        valuation_type=valuation_type,
+        interval_type=interval_type,
+        caller=caller,
         identity=identity,
     )
 
@@ -248,54 +243,38 @@ def get_research_morningstar_report(ctx, code: str, *, caller: str = "probe_moom
     financial-health labels, bull/bear case text, full analyst narrative.
     Coverage isn't guaranteed for every ticker — Morningstar doesn't cover
     the whole market, expect gaps particularly for smaller/newer names."""
-    return _call(
-        ctx,
-        "get_research_morningstar_report",
-        caller,
-        lambda c: c.get_research_morningstar_report(code),
-        identity=identity,
-    )
+    return _call_method(ctx, "get_research_morningstar_report", code, caller=caller, identity=identity)
 
 
 def get_shareholders_overview(ctx, code: str, *, caller: str = "probe_moomoo_capabilities", identity: FetchKey):
     """Major holders + holder-type breakdown in one call (dict of 3 DataFrames:
     main_holder, holder_type, holding_period)."""
-    return _call(
-        ctx, "get_shareholders_overview", caller, lambda c: c.get_shareholders_overview(code), identity=identity
-    )
+    return _call_method(ctx, "get_shareholders_overview", code, caller=caller, identity=identity)
 
 
 def get_insider_trade_list(
     ctx, code: str, *, num: int = 20, caller: str = "probe_moomoo_capabilities", identity: FetchKey
 ):
     """Recent insider (officer/director) trades for this stock, paginated."""
-    return _call(
-        ctx, "get_insider_trade_list", caller, lambda c: c.get_insider_trade_list(code, num=num), identity=identity
-    )
+    return _call_method(ctx, "get_insider_trade_list", code, num=num, caller=caller, identity=identity)
 
 
 def get_corporate_actions_dividends(ctx, code: str, *, caller: str = "probe_moomoo_capabilities", identity: FetchKey):
     """Dividend/distribution history for this stock."""
-    return _call(
-        ctx,
-        "get_corporate_actions_dividends",
-        caller,
-        lambda c: c.get_corporate_actions_dividends(code),
-        identity=identity,
-    )
+    return _call_method(ctx, "get_corporate_actions_dividends", code, caller=caller, identity=identity)
 
 
 def get_short_interest(ctx, code: str, *, num: int = 20, caller: str = "probe_moomoo_capabilities", identity: FetchKey):
     """Short-interest history. Returns (us_df, hk_df) — moomoo always returns
     both market slots regardless of which market the ticker is actually in;
     the other one is expected to come back empty."""
-    return _call(ctx, "get_short_interest", caller, lambda c: c.get_short_interest(code, num=num), identity=identity)
+    return _call_method(ctx, "get_short_interest", code, num=num, caller=caller, identity=identity)
 
 
 def get_owner_plate(ctx, code_list: list[str], *, caller: str = "probe_moomoo_capabilities", identity: FetchKey):
     """Sector/industry-plate classification for one or more stocks in a single
     call — pass the whole universe at once rather than one call per ticker."""
-    return _call(ctx, "get_owner_plate", caller, lambda c: c.get_owner_plate(code_list), identity=identity)
+    return _call_method(ctx, "get_owner_plate", code_list, caller=caller, identity=identity)
 
 
 def get_history_kline(
@@ -376,53 +355,30 @@ FS_INCOME, FS_BALANCE_SHEET, FS_CASH_FLOW, FS_MAIN_INDEX = 1, 2, 3, 4  # Financi
 VALUATION_PE = 1  # ValuationType
 INTERVAL_YEAR10 = 7  # ValuationIntervalType
 
+
 # The per-ticker fundamental endpoint set, one registry shared by the capture/
 # probe scripts and the full-universe sweep so "which endpoints do we pull" is
 # defined exactly once. get_owner_plate isn't here — it batches many codes per
 # call and is handled separately by callers.
+def _ep(fn, **defaults):
+    return lambda ctx, code, caller, identity: fn(ctx, code, **defaults, caller=caller, identity=identity)
+
+
 FUNDAMENTAL_ENDPOINTS = {
-    "company_profile": lambda ctx, code, caller, identity: get_company_profile(
-        ctx, code, caller=caller, identity=identity
-    ),
-    "financials_income": lambda ctx, code, caller, identity: get_financials_statements(
-        ctx, code, statement_type=FS_INCOME, caller=caller, identity=identity
-    ),
-    "financials_balance_sheet": lambda ctx, code, caller, identity: get_financials_statements(
-        ctx, code, statement_type=FS_BALANCE_SHEET, caller=caller, identity=identity
-    ),
-    "financials_cash_flow": lambda ctx, code, caller, identity: get_financials_statements(
-        ctx, code, statement_type=FS_CASH_FLOW, caller=caller, identity=identity
-    ),
-    "financials_main_index": lambda ctx, code, caller, identity: get_financials_statements(
-        ctx, code, statement_type=FS_MAIN_INDEX, caller=caller, identity=identity
-    ),
-    "financials_revenue_breakdown": lambda ctx, code, caller, identity: get_financials_revenue_breakdown(
-        ctx, code, caller=caller, identity=identity
-    ),
-    "valuation_pe": lambda ctx, code, caller, identity: get_valuation_detail(
-        ctx, code, valuation_type=VALUATION_PE, interval_type=INTERVAL_YEAR10, caller=caller, identity=identity
-    ),
-    "analyst_consensus": lambda ctx, code, caller, identity: get_analyst_consensus(
-        ctx, code, caller=caller, identity=identity
-    ),
-    "rating_summary": lambda ctx, code, caller, identity: get_rating_summary(
-        ctx, code, analyst_dimension=True, num=20, caller=caller, identity=identity
-    ),
-    "morningstar_report": lambda ctx, code, caller, identity: get_research_morningstar_report(
-        ctx, code, caller=caller, identity=identity
-    ),
-    "shareholders_overview": lambda ctx, code, caller, identity: get_shareholders_overview(
-        ctx, code, caller=caller, identity=identity
-    ),
-    "insider_trades": lambda ctx, code, caller, identity: get_insider_trade_list(
-        ctx, code, num=20, caller=caller, identity=identity
-    ),
-    "dividends": lambda ctx, code, caller, identity: get_corporate_actions_dividends(
-        ctx, code, caller=caller, identity=identity
-    ),
-    "short_interest": lambda ctx, code, caller, identity: get_short_interest(
-        ctx, code, num=20, caller=caller, identity=identity
-    ),
+    "company_profile": _ep(get_company_profile),
+    "financials_income": _ep(get_financials_statements, statement_type=FS_INCOME),
+    "financials_balance_sheet": _ep(get_financials_statements, statement_type=FS_BALANCE_SHEET),
+    "financials_cash_flow": _ep(get_financials_statements, statement_type=FS_CASH_FLOW),
+    "financials_main_index": _ep(get_financials_statements, statement_type=FS_MAIN_INDEX),
+    "financials_revenue_breakdown": _ep(get_financials_revenue_breakdown),
+    "valuation_pe": _ep(get_valuation_detail, valuation_type=VALUATION_PE, interval_type=INTERVAL_YEAR10),
+    "analyst_consensus": _ep(get_analyst_consensus),
+    "rating_summary": _ep(get_rating_summary, analyst_dimension=True, num=20),
+    "morningstar_report": _ep(get_research_morningstar_report),
+    "shareholders_overview": _ep(get_shareholders_overview),
+    "insider_trades": _ep(get_insider_trade_list, num=20),
+    "dividends": _ep(get_corporate_actions_dividends),
+    "short_interest": _ep(get_short_interest, num=20),
 }
 
 # What the current factor modules actually read (init.md Section 7: PEG, gross

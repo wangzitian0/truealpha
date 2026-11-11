@@ -33,73 +33,52 @@ HOOK_REMEDIATION = "Run: git config core.hooksPath tools (or ln -sf ../../tools/
 
 
 def check_python_version() -> bool:
-    pv_file = ROOT / ".python-version"
-    tv_file = ROOT / ".tool-versions"
-
+    pv_file, tv_file = ROOT / ".python-version", ROOT / ".tool-versions"
     expected_pv = pv_file.read_text(encoding="utf-8").strip() if pv_file.exists() else None
     actual = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
-
     print(f"[*] Python runtime: {actual}")
     if expected_pv and actual != expected_pv:
         print(f"    [FAIL] Python mismatch: expected {expected_pv} (from .python-version), got {actual}")
         return False
-
     if tv_file.exists():
-        tv_content = tv_file.read_text(encoding="utf-8")
-        for line in tv_content.splitlines():
-            line = line.strip()
-            if line.startswith("python "):
-                expected_tv = line.split("python ", 1)[1].strip()
+        for line in tv_file.read_text(encoding="utf-8").splitlines():
+            if line.strip().startswith("python "):
+                expected_tv = line.strip().split("python ", 1)[1].strip()
                 if expected_tv != expected_pv:
                     print(
                         f"    [FAIL] Version file conflict: .tool-versions ({expected_tv}) != .python-version ({expected_pv})"
                     )
                     return False
-
     print("    [OK] Python version aligned across .python-version and .tool-versions")
     return True
 
 
 def check_uv() -> bool:
-    uv_bin = shutil.which("uv")
-    if not uv_bin:
+    if not shutil.which("uv"):
         print("    [FAIL] 'uv' binary not found in PATH")
         return False
-
-    lock = ROOT / "uv.lock"
-    if not lock.exists():
+    if not (ROOT / "uv.lock").exists():
         print("    [FAIL] uv.lock does not exist")
         return False
-
-    venv_py = ROOT / ".venv" / "bin" / "python"
-    if not venv_py.exists():
+    if not (ROOT / ".venv" / "bin" / "python").exists():
         print("    [WARN] .venv does not exist. Run 'make install' or 'uv sync'")
         return False
-
     print("    [OK] uv installed and virtual environment exists")
     return True
 
 
 def check_bun_and_web() -> bool:
-    bun_bin = shutil.which("bun")
-    if not bun_bin:
+    if not shutil.which("bun"):
         print("    [FAIL] 'bun' binary not found in PATH")
         return False
-
-    web_dir = ROOT / "apps" / "app-web"
-    node_modules = web_dir / "node_modules"
+    node_modules = ROOT / "apps" / "app-web" / "node_modules"
     if not node_modules.exists():
         print("    [FAIL] apps/app-web/node_modules missing. Run 'make install' or 'cd apps/app-web && bun install'")
         return False
-
-    # Check critical dependencies
-    critical_deps = ["pg", "bcryptjs", "@aws-sdk/client-s3", "next", "react"]
-    for dep in critical_deps:
-        dep_path = node_modules / dep
-        if not dep_path.exists():
+    for dep in ("pg", "bcryptjs", "@aws-sdk/client-s3", "next", "react"):
+        if not (node_modules / dep).exists():
             print(f"    [FAIL] Missing required dependency in node_modules: {dep}")
             return False
-
     print("    [OK] Bun runtime and apps/app-web/node_modules complete")
     return True
 
@@ -145,42 +124,30 @@ def probe_port(host: str, port: int, timeout: float = 0.5) -> bool:
 
 def check_local_services() -> None:
     print("[*] Checking local service availability (informational):")
-    # Docker
     docker_bin = shutil.which("docker")
     if docker_bin:
-        res = subprocess.run([docker_bin, "info"], capture_output=True)
-        if res.returncode == 0:
-            print("    [INFO] Docker daemon is RUNNING")
-        else:
-            print("    [INFO] Docker daemon is NOT responding")
+        running = subprocess.run([docker_bin, "info"], capture_output=True, check=False).returncode == 0
+        print(f"    [INFO] Docker daemon is {'RUNNING' if running else 'NOT responding'}")
     else:
         print("    [INFO] Docker binary not found")
-
-    # Local Postgres (5432), Staging loopback (15432), Prod loopback (15433)
-    if probe_port("127.0.0.1", 5432):
-        print("    [INFO] Local Postgres (5432): OPEN")
-    else:
-        print("    [INFO] Local Postgres (5432): closed (start with 'make runtime-up')")
-
+    print(
+        "    [INFO] Local Postgres (5432): OPEN"
+        if probe_port("127.0.0.1", 5432)
+        else "    [INFO] Local Postgres (5432): closed (start with 'make runtime-up')"
+    )
     if probe_port("127.0.0.1", 15432):
         print("    [INFO] Staging Postgres loopback (15432): REACHABLE")
-
-    # OpenD (11111)
-    if probe_port("127.0.0.1", 11111):
-        print("    [INFO] OpenD loopback (11111): OPEN")
-    else:
-        print("    [INFO] OpenD loopback (11111): closed (not running or host outside VPS)")
+    print(
+        "    [INFO] OpenD loopback (11111): OPEN"
+        if probe_port("127.0.0.1", 11111)
+        else "    [INFO] OpenD loopback (11111): closed (not running or host outside VPS)"
+    )
 
 
 def _remote_health_url(env: str) -> str | None:
     if env not in ("production", "staging"):
         return None
-    host = resolve_app_hostname(
-        "truealpha",
-        env,
-        base_domain="truealpha.club",
-        custom_prod_domain="truealpha.club",
-    )
+    host = resolve_app_hostname("truealpha", env, base_domain="truealpha.club", custom_prod_domain="truealpha.club")
     return f"https://{host}/api/health"
 
 
@@ -207,36 +174,26 @@ def check_remote(env: str) -> bool:
     print(f"\n[*] Governed Pointers ({len(pointers)}):")
     pointers_ok = True
     for p in pointers:
-        u_id = p.get("universe_id")
         age = p.get("age_hours", 0)
-        adv = p.get("advanced_at")
-        if age > 36:
-            print(f"    [STALE] {u_id:30} | age {age:5.1f}h (advanced at {adv})")
-            pointers_ok = False
-        else:
-            print(f"    [OK]    {u_id:30} | age {age:5.1f}h (advanced at {adv})")
+        tag = "[STALE]" if age > 36 else "[OK]   "
+        pointers_ok = pointers_ok and age <= 36
+        print(f"    {tag} {p.get('universe_id'):30} | age {age:5.1f}h (advanced at {p.get('advanced_at')})")
 
     verdicts = data.get("nightly_verdicts", [])
     print(f"\n[*] Nightly Verdicts ({len(verdicts)}):")
     verdicts_ok = True
     for v in verdicts:
-        chk = v.get("check")
         ok = v.get("ok")
-        summary = v.get("summary")
-        if ok is True:
-            status_str = "[PASS]"
-        elif ok is False:
-            status_str = "[FAIL]"
-            verdicts_ok = False
-        else:
-            status_str = "[SKIP]"
-        print(f"    {status_str:6} {chk:35} | {summary}")
+        status_str = "[PASS]" if ok is True else ("[FAIL]" if ok is False else "[SKIP]")
+        verdicts_ok = verdicts_ok and ok is not False
+        print(f"    {status_str:6} {v.get('check'):35} | {v.get('summary')}")
 
     overall = pointers_ok and verdicts_ok
-    if overall:
-        print(f"\n✅ Remote {env} environment is healthy.")
-    else:
-        print(f"\n⚠️ Remote {env} environment has alerts or stale pointers.")
+    print(
+        f"\n✅ Remote {env} environment is healthy."
+        if overall
+        else f"\n⚠️ Remote {env} environment has alerts or stale pointers."
+    )
     return overall
 
 
@@ -249,8 +206,7 @@ def check_vps(name_filter: str = "truealpha") -> bool:
     try:
         from truealpha_tools import runtime_truth
 
-        containers = runtime_truth.fetch_inspect(host, name_filter)
-        print(runtime_truth.render(containers))
+        print(runtime_truth.render(runtime_truth.fetch_inspect(host, name_filter)))
         return True
     except Exception as exc:
         print(f"❌ Failed to inspect VPS containers: {exc}")
@@ -258,70 +214,32 @@ def check_vps(name_filter: str = "truealpha") -> bool:
 
 
 def check_deploy_provenance(target_ref: str, cwd: str | Path | None = None) -> bool:
-    """Assert that the target release ref contains current HEAD commits.
-
-    Prevents deploying an outdated release or deploying from an unmerged branch.
-    """
+    """Assert that the target release ref contains current HEAD commits."""
     print(f"=== TrueAlpha Deploy Provenance Guard ({target_ref}) ===")
     try:
         head = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            check=True,
+            ["git", "rev-parse", "HEAD"], cwd=cwd, capture_output=True, text=True, check=True
         ).stdout.strip()
         target = subprocess.run(
-            ["git", "rev-parse", target_ref],
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            check=True,
+            ["git", "rev-parse", target_ref], cwd=cwd, capture_output=True, text=True, check=True
         ).stdout.strip()
     except subprocess.CalledProcessError as exc:
         print(f"❌ Failed to resolve git references: {exc}")
         return False
-
-    is_ancestor = (
-        subprocess.run(
-            ["git", "merge-base", "--is-ancestor", head, target],
-            cwd=cwd,
-            check=False,
-        ).returncode
-        == 0
-    )
-
-    if is_ancestor:
+    if subprocess.run(["git", "merge-base", "--is-ancestor", head, target], cwd=cwd, check=False).returncode == 0:
         print(f"✅ Target {target_ref} ({target[:8]}) contains current HEAD ({head[:8]}). Deploy authorized.")
         return True
-    else:
-        print(f"❌ REFUSAL: Target {target_ref} ({target[:8]}) does NOT contain current HEAD ({head[:8]}).")
-        print("   Current changes are unmerged or not included in the target release ref.")
-        return False
+    print(f"❌ REFUSAL: Target {target_ref} ({target[:8]}) does NOT contain current HEAD ({head[:8]}).")
+    print("   Current changes are unmerged or not included in the target release ref.")
+    return False
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="TrueAlpha Physical & Remote Doctor")
-    parser.add_argument(
-        "--remote",
-        choices=["production", "staging"],
-        help="Inspect deployed remote health, pointers, and nightly verdicts",
-    )
-    parser.add_argument(
-        "--vps",
-        action="store_true",
-        help="Inspect container reality on VPS via SSH",
-    )
-    parser.add_argument(
-        "--install-hooks",
-        action="store_true",
-        help="Set core.hooksPath to the tracked per-commit hook directory (T0)",
-    )
-    parser.add_argument(
-        "--verify-deploy-ref",
-        metavar="REF",
-        help="Verify that target release ref/tag contains current HEAD before deploy",
-    )
+    parser.add_argument("--remote", choices=["production", "staging"])
+    parser.add_argument("--vps", action="store_true")
+    parser.add_argument("--install-hooks", action="store_true")
+    parser.add_argument("--verify-deploy-ref", metavar="REF")
     args = parser.parse_args(argv)
 
     if args.install_hooks:
@@ -334,19 +252,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0 if check_vps() else 1
 
     print("=== TrueAlpha Dev Environment Doctor ===")
-    ok = True
-    ok = check_python_version() and ok
-    ok = check_uv() and ok
-    ok = check_bun_and_web() and ok
-    ok = check_git_hook() and ok
+    checks = [check_python_version(), check_uv(), check_bun_and_web(), check_git_hook()]
     check_local_services()
-
-    if ok:
+    if all(checks):
         print("\n✅ dev_env is healthy and all required dependencies are installed.")
         return 0
-    else:
-        print("\n❌ dev_env has errors. Run 'make bootstrap' or fix the issues above.")
-        return 1
+    print("\n❌ dev_env has errors. Run 'make bootstrap' or fix the issues above.")
+    return 1
 
 
 if __name__ == "__main__":

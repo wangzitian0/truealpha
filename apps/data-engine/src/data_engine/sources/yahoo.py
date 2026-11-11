@@ -58,21 +58,13 @@ class PriceBar:
         volume: int | None,
         currency: str | None = None,
     ):
-        self.date = day
-        self.open = open_
-        self.high = high
-        self.low = low
-        self.close = close
-        self.adj_close = adj_close
-        self.volume = volume
-        self.currency = currency
+        self.date, self.open, self.high, self.low = day, open_, high, low
+        self.close, self.adj_close, self.volume, self.currency = close, adj_close, volume, currency
 
 
 def recover_quoted_price(value: Decimal | None) -> Decimal | None:
     """Undo Yahoo's float32 serialization when the original is provably recoverable."""
-    if value is None:
-        return None
-    if abs(value) >= EXACT_CENT_RECOVERY_BELOW:
+    if value is None or abs(value) >= EXACT_CENT_RECOVERY_BELOW:
         return value
     return value.quantize(_CENT)
 
@@ -171,42 +163,35 @@ def _parse_chart_response(payload: dict[str, Any]) -> list[PriceBar]:
     if not result:
         return []
     r = result[0]
-    currency = _chart_currency(r.get("meta"))
     timestamps = r.get("timestamp") or []
-    if not timestamps:
-        return []
-    quotes = r.get("indicators", {}).get("quote", [])
-    if not quotes:
+    quotes = r.get("indicators", {}).get("quote") or []
+    if not timestamps or not quotes:
         return []
     quote = quotes[0]
     closes = quote.get("close")
     if not closes:
         return []
-    adjclose_list = r.get("indicators", {}).get("adjclose", [{}])
+    currency = _chart_currency(r.get("meta"))
+    adjclose_list = r.get("indicators", {}).get("adjclose") or [{}]
     adjclose = (adjclose_list[0].get("adjclose") if adjclose_list else None) or closes
 
+    def _at(seq: Any, idx: int) -> Any:
+        return seq[idx] if isinstance(seq, list) and idx < len(seq) else None
+
     bars = []
-    for i, ts in enumerate(timestamps):
-        if i >= len(closes):
-            break
-        c = closes[i]
-        close = recover_quoted_price(c)
+    for i, ts in enumerate(timestamps[: len(closes)]):
+        close = recover_quoted_price(closes[i])
         if close is None:  # non-trading gaps inside the range come back null
             continue
-        o = quote.get("open", [])[i] if "open" in quote and i < len(quote["open"]) else None
-        h = quote.get("high", [])[i] if "high" in quote and i < len(quote["high"]) else None
-        low = quote.get("low", [])[i] if "low" in quote and i < len(quote["low"]) else None
-        v = quote.get("volume", [])[i] if "volume" in quote and i < len(quote["volume"]) else None
-        ac = adjclose[i] if i < len(adjclose) else None
         bars.append(
             PriceBar(
                 day=datetime.fromtimestamp(ts, tz=UTC).date(),
-                open_=recover_quoted_price(o),
-                high=recover_quoted_price(h),
-                low=recover_quoted_price(low),
+                open_=recover_quoted_price(_at(quote.get("open"), i)),
+                high=recover_quoted_price(_at(quote.get("high"), i)),
+                low=recover_quoted_price(_at(quote.get("low"), i)),
                 close=close,
-                adj_close=recover_quoted_price(ac),
-                volume=v,
+                adj_close=recover_quoted_price(_at(adjclose, i)),
+                volume=_at(quote.get("volume"), i),
                 currency=currency,
             )
         )

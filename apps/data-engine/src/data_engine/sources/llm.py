@@ -533,6 +533,10 @@ def _replay(
     )
 
 
+def _synthetic_cik(text: str) -> int:
+    return (int(hashlib.sha256(text.encode()).hexdigest()[:8], 16) & 0x7FFFFFFF) or 1
+
+
 def invoke(
     connection: Any | None,
     *,
@@ -564,7 +568,7 @@ def invoke(
     """
     if not is_configured():
         raise ModelNotConfigured(f"{settings.llm_api_key_env} is not set; no provider seated (#70 scope 1)")
-    cik = cik if cik > 0 else ((int(hashlib.sha256(accession.encode()).hexdigest()[:8], 16) & 0x7FFFFFFF) or 1)
+    cik = cik if cik > 0 else _synthetic_cik(accession)
     model = settings.llm_model
     decoding = model_decoding.for_environment(gateway.capacity_environment())
     request_body = build_chat_request(task, user_content, model=model, decoding=decoding)
@@ -1009,20 +1013,12 @@ def select_headcount(
         now=now,
     )
     decision = invocation.decision
+    meta = {k: getattr(invocation, k) for k in ModelInvocation.__dataclass_fields__ if k != "decision"}
     return ModelSelection(
         value=decision.get("value"),
         candidate_index=decision.get("candidate_index"),
         reason=str(decision.get("reason", "")),
-        model=invocation.model,
-        provider=invocation.provider,
-        prompt_sha256=invocation.prompt_sha256,
-        request_sha256=invocation.request_sha256,
-        response_sha256=invocation.response_sha256,
-        prompt_tokens=invocation.prompt_tokens,
-        completion_tokens=invocation.completion_tokens,
-        invocation_id=invocation.invocation_id,
-        replayed=invocation.replayed,
-        served_model=invocation.served_model,
+        **meta,
     )
 
 
@@ -1123,6 +1119,18 @@ def _parse_theme_verdicts(content: str, segments: Sequence[str]) -> dict[str, An
     return {"verdicts": verdicts, "reasons": reasons}
 
 
+def _json_list_field(content: str, key: str) -> list[Any] | None:
+    """Extract a flattened list from `{"<key>": [...]}` or `[{"<key>": [...]}]` JSON responses."""
+    try:
+        parsed = json.loads(content)
+    except json.JSONDecodeError:
+        return None
+    objects = parsed if isinstance(parsed, list) else [parsed]
+    if not all(isinstance(entry, dict) for entry in objects):
+        return None
+    return [item for entry in objects if isinstance(found := entry.get(key), list) for item in found]
+
+
 def _verdict_items(content: str) -> list[Any] | None:
     """The verdict items in the model's answer, or None when the answer has no readable shape.
 
@@ -1134,19 +1142,7 @@ def _verdict_items(content: str) -> list[Any] | None:
     Any other top-level shape (a string, a number, null) is unreadable, never a crash — one
     off-schema reply must cost one refusal, not the run.
     """
-    try:
-        parsed = json.loads(content)
-    except json.JSONDecodeError:
-        return None
-    objects = parsed if isinstance(parsed, list) else [parsed]
-    if not all(isinstance(entry, dict) for entry in objects):
-        return None
-    items: list[Any] = []
-    for entry in objects:
-        found = entry.get("verdicts")
-        if isinstance(found, list):
-            items.extend(found)
-    return items
+    return _json_list_field(content, "verdicts")
 
 
 def classify_segments(
@@ -1414,27 +1410,19 @@ def _normalize_partner_entry(item: Any) -> dict[str, Any] | None:
 
 def _parse_supply_chain_partners(content: str) -> dict[str, Any]:
     """Parse and validate the model's extracted supply-chain partner list."""
-    try:
-        parsed = json.loads(content)
-    except json.JSONDecodeError:
-        return {"partners": [], "reason": f"unparseable model answer: {content[:120]!r}"}
-    objects = parsed if isinstance(parsed, list) else [parsed]
-    if not all(isinstance(entry, dict) for entry in objects):
+    items = _json_list_field(content, "partners")
+    if items is None:
         return {"partners": [], "reason": f"unparseable model answer: {content[:120]!r}"}
     partners: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
-    for entry in objects:
-        found = entry.get("partners")
-        if not isinstance(found, list):
+    for item in items:
+        normalized = _normalize_partner_entry(item)
+        if normalized is None:
             continue
-        for item in found:
-            normalized = _normalize_partner_entry(item)
-            if normalized is None:
-                continue
-            key = (normalized["relation_type"], normalized["partner_name"].lower())
-            if key not in seen:
-                seen.add(key)
-                partners.append(normalized)
+        key = (normalized["relation_type"], normalized["partner_name"].lower())
+        if key not in seen:
+            seen.add(key)
+            partners.append(normalized)
     return {"partners": partners, "reason": "ok"}
 
 
@@ -1596,7 +1584,7 @@ def generate_xhs_card_html(
         invocation = invoke(
             connection,
             task=XHS_CARD_TASK,
-            cik=(int(hashlib.sha256(card.card_id.encode()).hexdigest()[:8], 16) & 0x7FFFFFFF) or 1,
+            cik=_synthetic_cik(card.card_id),
             accession=card.card_id[:36],
             user_content=user_prompt,
             caller=caller,

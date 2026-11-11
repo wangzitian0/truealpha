@@ -96,6 +96,12 @@ def db_writes_allowed(environ: Mapping[str, str] = os.environ) -> bool:
     return can_write_test_database(environ) and bool(environ.get("DATABASE_URL", "").strip())
 
 
+def _deny_db_write(reason: str) -> None:
+    warnings.warn(reason, stacklevel=3)
+    skip_or_fail(reason)
+    raise AssertionError("unreachable: skip_or_fail always raises")
+
+
 def install_db_write_gate() -> None:
     """Gate every in-process psycopg.connect call unless db_writes_allowed() is True (#1197)."""
     if getattr(psycopg.connect, GATE_MARKER, False):
@@ -105,10 +111,7 @@ def install_db_write_gate() -> None:
     def gated_connect(*args: Any, **kwargs: Any) -> Any:
         if db_writes_allowed():
             return real_connect(*args, **kwargs)
-        reason = f"{DB_SKIP_GATE_MARKERS[0]} and DATABASE_URL to allow database access"
-        warnings.warn(reason, stacklevel=2)
-        skip_or_fail(reason)
-        raise AssertionError("unreachable: skip_or_fail always raises")
+        _deny_db_write(f"{DB_SKIP_GATE_MARKERS[0]} and DATABASE_URL to allow database access")
 
     setattr(gated_connect, GATE_MARKER, True)
     setattr(gated_connect, "_real_connect", real_connect)
@@ -116,22 +119,12 @@ def install_db_write_gate() -> None:
 
 
 def guard_db_write(database_url: str | None = None) -> str:
-    """Enforce runtime safety invariants for DB write tests (#1197).
-
-    Acceptance:
-    1. A DB-backed test writes only when CI=true or ALLOW_CLEAR_TEST=1.
-       Otherwise it skips with a visible warning.
-    2. A test never defaults DATABASE_URL to port 5432 for writes.
-    """
+    """Enforce runtime safety invariants for DB write tests (#1197)."""
     if not can_write_test_database():
-        reason = f"{DB_SKIP_GATE_MARKERS[1]} to protect ambient databases"
-        warnings.warn(reason, stacklevel=2)
-        skip_or_fail(reason)
+        _deny_db_write(f"{DB_SKIP_GATE_MARKERS[1]} to protect ambient databases")
     url = (database_url or os.environ.get("DATABASE_URL") or "").strip()
     if not url:
-        reason = f"{DB_SKIP_GATE_MARKERS[2]} (no default to port 5432)"
-        warnings.warn(reason, stacklevel=2)
-        skip_or_fail(reason)
+        _deny_db_write(f"{DB_SKIP_GATE_MARKERS[2]} (no default to port 5432)")
     return url
 
 
@@ -439,18 +432,37 @@ class IsolatedDatabase(str):
         return instance
 
 
-def _admin_url_for(database_url: str) -> str:
-    base = urlsplit(database_url)
-    return urlunsplit((base.scheme, base.netloc, "/postgres", base.query, ""))
-
-
 def _named_url_for(database_url: str, dbname: str) -> str:
     base = urlsplit(database_url)
     return urlunsplit((base.scheme, base.netloc, f"/{dbname}", base.query, ""))
 
 
+def _admin_url_for(database_url: str) -> str:
+    return _named_url_for(database_url, "postgres")
+
+
 def _dbname_for(database_url: str) -> str:
-    return urlsplit(database_url).path.lstrip("/")
+    return urlsplit(database_url).path.lstrip("/") if "://" in database_url else database_url
+
+
+_TERMINATE_BACKENDS_SQL = (
+    "select pg_terminate_backend(pid) from pg_stat_activity where datname = %s and pid != pg_backend_pid()"
+)
+
+
+def _clone_from_template(admin_conn: psycopg.Connection[Any], target_name: str, template_name: str) -> None:
+    admin_conn.execute(_TERMINATE_BACKENDS_SQL, (template_name,))
+    admin_conn.execute(
+        sql.SQL("create database {} template {}").format(sql.Identifier(target_name), sql.Identifier(template_name))
+    )
+
+
+def _drop_database_and_close(admin_conn: psycopg.Connection[Any], name: str) -> None:
+    try:
+        admin_conn.execute(_TERMINATE_BACKENDS_SQL, (name,))
+        admin_conn.execute(sql.SQL("drop database if exists {} with (force)").format(sql.Identifier(name)))
+    finally:
+        admin_conn.close()
 
 
 @contextmanager
@@ -461,28 +473,15 @@ def isolated_test_database(
     database_url: str | None = None,
     connect_timeout: int = 3,
 ) -> Iterator[IsolatedDatabase]:
-    """Provide a fresh, isolated PostgreSQL database for test execution.
-
-    When `template` is supplied and exists with migrated relations (e.g. CI or local
-    dev where `truealpha` is already initialized), the database is cloned via:
-        `CREATE DATABASE <name> TEMPLATE <template>`
-    which runs in <0.2s by copying data pages directly.
-
-    If `template` does not exist or lacks migrated tables, creates a new database
-    and applies `apply_migration_chain(target_url)` as a fallback.
-
-    On context exit, all connections to the database are terminated and the
-    database is dropped with FORCE.
-    """
+    """Provide a fresh, isolated PostgreSQL database for test execution."""
     import pytest
 
     base_url = guard_db_write(database_url)
-    admin_url = _admin_url_for(base_url)
     name = f"truealpha_{name_prefix}_{os.getpid()}_{uuid.uuid4().hex[:8]}"
     target_url = _named_url_for(base_url, name)
 
     try:
-        admin_conn = psycopg.connect(admin_url, connect_timeout=connect_timeout, autocommit=True)
+        admin_conn = psycopg.connect(_admin_url_for(base_url), connect_timeout=connect_timeout, autocommit=True)
     except psycopg.OperationalError as error:
         if os.environ.get("DATABASE_URL") or os.environ.get(REQUIRE_RUNTIME_ENV):
             pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
@@ -492,39 +491,19 @@ def isolated_test_database(
     try:
         cloned = False
         if template is not None:
-            template_name = _dbname_for(template) if "://" in template else template
-            # Verify template database exists
-            exists = admin_conn.execute("select 1 from pg_database where datname = %s", (template_name,)).fetchone()
-            if exists:
-                # Terminate any idle backends holding locks on template
-                admin_conn.execute(
-                    "select pg_terminate_backend(pid) from pg_stat_activity where datname = %s and pid != pg_backend_pid()",
-                    (template_name,),
-                )
+            template_name = _dbname_for(template)
+            if admin_conn.execute("select 1 from pg_database where datname = %s", (template_name,)).fetchone():
                 try:
-                    admin_conn.execute(
-                        sql.SQL("create database {} template {}").format(
-                            sql.Identifier(name), sql.Identifier(template_name)
-                        )
-                    )
+                    _clone_from_template(admin_conn, name, template_name)
                     cloned = True
                 except psycopg.Error:
                     cloned = False
-
         if not cloned:
             admin_conn.execute(sql.SQL("create database {}").format(sql.Identifier(name)))
         apply_migration_chain(target_url)
-
         yield IsolatedDatabase(target_url, name)
     finally:
-        try:
-            admin_conn.execute(
-                "select pg_terminate_backend(pid) from pg_stat_activity where datname = %s and pid != pg_backend_pid()",
-                (name,),
-            )
-            admin_conn.execute(sql.SQL("drop database if exists {} with (force)").format(sql.Identifier(name)))
-        finally:
-            admin_conn.close()
+        _drop_database_and_close(admin_conn, name)
 
 
 @contextmanager
@@ -534,36 +513,16 @@ def clone_test_database(
     *,
     connect_timeout: int = 3,
 ) -> Iterator[IsolatedDatabase]:
-    """Clone an existing database as a new isolated throwaway database.
-
-    Terminates active connections on source before cloning to prevent concurrency conflicts.
-    Drops the clone on context exit.
-    """
+    """Clone an existing database as a new isolated throwaway database."""
     base_url = guard_db_write(source_database if "://" in source_database else None)
-    source_name = _dbname_for(source_database) if "://" in source_database else source_database
-    admin_url = _admin_url_for(base_url)
+    source_name = _dbname_for(source_database)
     clone_name = f"truealpha_{name_prefix}_{os.getpid()}_{uuid.uuid4().hex[:8]}"
-    clone_url = _named_url_for(base_url, clone_name)
-
-    admin_conn = psycopg.connect(admin_url, connect_timeout=connect_timeout, autocommit=True)
+    admin_conn = psycopg.connect(_admin_url_for(base_url), connect_timeout=connect_timeout, autocommit=True)
     try:
-        admin_conn.execute(
-            "select pg_terminate_backend(pid) from pg_stat_activity where datname = %s and pid != pg_backend_pid()",
-            (source_name,),
-        )
-        admin_conn.execute(
-            sql.SQL("create database {} template {}").format(sql.Identifier(clone_name), sql.Identifier(source_name))
-        )
-        yield IsolatedDatabase(clone_url, clone_name)
+        _clone_from_template(admin_conn, clone_name, source_name)
+        yield IsolatedDatabase(_named_url_for(base_url, clone_name), clone_name)
     finally:
-        try:
-            admin_conn.execute(
-                "select pg_terminate_backend(pid) from pg_stat_activity where datname = %s and pid != pg_backend_pid()",
-                (clone_name,),
-            )
-            admin_conn.execute(sql.SQL("drop database if exists {} with (force)").format(sql.Identifier(clone_name)))
-        finally:
-            admin_conn.close()
+        _drop_database_and_close(admin_conn, clone_name)
 
 
 #: The version of the synthetic provisional definition. No packaged file uses it.

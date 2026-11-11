@@ -137,6 +137,16 @@ def _count_oracle_agrees(oracle_outcomes: Any) -> int:
     return 0
 
 
+def _gate(gate_id: str, title: str, verified: bool, evidence: str) -> GateAuditResult:
+    return GateAuditResult(
+        gate_id=gate_id,
+        title=title,
+        status="VERIFIED" if verified else "OPEN",
+        verified=verified,
+        evidence=evidence,
+    )
+
+
 def _audit_gate_1(
     verdicts_by_check: Mapping[str, Any],
     oracle_outcomes: Any,
@@ -160,25 +170,13 @@ def _audit_gate_1(
             if oracle_ok
             else "no comparator"
         )
-    verified = (
-        oracle_ok
-        and surface_proof is not None
-        and surface_proof.ok is True
-        and invariants is not None
-        and invariants.ok is True
-    )
+    verified = bool(oracle_ok and surface_proof and surface_proof.ok is True and invariants and invariants.ok is True)
     evidence = (
         f"{oracle_label}; "
         f"report_surface_proof: {surface_proof.summary if surface_proof else 'missing'}; "
         f"output_invariants: {invariants.summary if invariants else 'missing'}"
     )
-    return GateAuditResult(
-        gate_id="#29",
-        title="Gate 1: Wide Row and Output Invariants",
-        status="OPEN" if not verified else "VERIFIED",
-        verified=verified,
-        evidence=evidence,
-    )
+    return _gate("#29", "Gate 1: Wide Row and Output Invariants", verified, evidence)
 
 
 def audit_vision(
@@ -206,77 +204,50 @@ def audit_vision(
         heads_fresh, freshness_detail = False, "mart.served_head.freshness=unknown"
         effective_outcomes = oracle_outcomes
 
-    gates: list[GateAuditResult] = []
-
-    # Gate 0 (#56): Source capture & environment readiness
     fetch_proof = verdicts_by_check.get("release_fetch_proof")
-    g0_verified = fetch_proof is not None and fetch_proof.ok is True
-    g0_evidence = fetch_proof.summary if fetch_proof else "No release_fetch_proof recorded in nightly verdicts."
-    gates.append(
-        GateAuditResult(
-            gate_id="#56",
-            title="Gate 0: Capture & Environment Readiness",
-            status="OPEN" if not g0_verified else "VERIFIED",
-            verified=g0_verified,
-            evidence=g0_evidence,
-        )
-    )
-
-    gates.append(_audit_gate_1(verdicts_by_check, effective_outcomes, env=env))
+    gates = [
+        _gate(
+            "#56",
+            "Gate 0: Capture & Environment Readiness",
+            fetch_proof is not None and fetch_proof.ok is True,
+            fetch_proof.summary if fetch_proof else "No release_fetch_proof recorded in nightly verdicts.",
+        ),
+        _audit_gate_1(verdicts_by_check, effective_outcomes, env=env),
+    ]
 
     # Gate 2 (#30): Research Questions & Entity Coverage. The environment contract lists the universes
     # that the environment runs (staging runs TOPT only), and each of them needs a green coverage verdict.
     coverage = {
         universe: verdicts_by_check.get(f"question_coverage@{universe}") for universe in scheduled_universe_names(env)
     }
-    g2_verified = bool(coverage) and all(verdict is not None and verdict.ok is True for verdict in coverage.values())
-    g2_evidence = (
-        "; ".join(
-            f"{universe} coverage: {verdict.summary if verdict else 'missing'}"
-            for universe, verdict in coverage.items()
-        )
-        or f"the contract schedules no universe in {env}"
-    )
     gates.append(
-        GateAuditResult(
-            gate_id="#30",
-            title="Gate 2: Research Question Coverage",
-            status="OPEN" if not g2_verified else "VERIFIED",
-            verified=g2_verified,
-            evidence=g2_evidence,
+        _gate(
+            "#30",
+            "Gate 2: Research Question Coverage",
+            bool(coverage) and all(v is not None and v.ok is True for v in coverage.values()),
+            "; ".join(f"{u} coverage: {v.summary if v else 'missing'}" for u, v in coverage.items())
+            or f"the contract schedules no universe in {env}",
         )
     )
 
-    # Gate 3 (#31): Governed Strategy & Backtest Simulation
     bt_verdict = verdicts_by_check.get("nightly_backtest")
-    g3_verified = bt_verdict is not None and bt_verdict.ok is True
-    g3_evidence = (
-        bt_verdict.summary if bt_verdict else "nightly_backtest: no verdict recorded at all in target environment."
-    )
     gates.append(
-        GateAuditResult(
-            gate_id="#31",
-            title="Gate 3: Backtest Engine and Simulation Integrity",
-            status="OPEN" if not g3_verified else "VERIFIED",
-            verified=g3_verified,
-            evidence=g3_evidence,
+        _gate(
+            "#31",
+            "Gate 3: Backtest Engine and Simulation Integrity",
+            bt_verdict is not None and bt_verdict.ok is True,
+            bt_verdict.summary if bt_verdict else "nightly_backtest: no verdict recorded at all in target environment.",
         )
     )
 
-    # Gate 4 (#32 & #54): Production Graduation
     market_fresh = verdicts_by_check.get("market_data_freshness")
-    g4_verified = all(g.verified for g in gates) and market_fresh is not None and market_fresh.ok is True
-    g4_evidence = (
-        f"market_data_freshness: {market_fresh.summary if market_fresh else 'missing'}. "
-        "Production graduation requires all prior gates VERIFIED and human owner sign-off."
-    )
     gates.append(
-        GateAuditResult(
-            gate_id="#54",
-            title="Gate 4: Production Graduation & Vision Completion",
-            status="OPEN" if not g4_verified else "VERIFIED",
-            verified=g4_verified,
-            evidence=g4_evidence,
+        _gate(
+            "#54",
+            "Gate 4: Production Graduation & Vision Completion",
+            all(g.verified for g in gates) and market_fresh is not None and market_fresh.ok is True,
+            f"market_data_freshness: {market_fresh.summary if market_fresh else 'missing'}. "
+            "Production graduation requires all prior gates VERIFIED and human owner sign-off.",
         )
     )
 
@@ -293,62 +264,25 @@ def audit_vision(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Audit TrueAlpha Vision & Gate Epics")
-    parser.add_argument(
-        "--env",
-        choices=["production", "staging"],
-        default="production",
-        help="Target environment to audit (default: production)",
-    )
-    parser.add_argument(
-        "--health-url",
-        default=None,
-        help="Explicit health endpoint URL override",
-    )
-    parser.add_argument(
-        "--fail-closed",
-        action="store_true",
-        help="Exit with non-zero status if any gate criterion is not verified",
-    )
-    parser.add_argument(
-        "--json",
-        action="store_true",
-        help="Output JSON summary",
-    )
+    parser.add_argument("--env", choices=["production", "staging"], default="production")
+    parser.add_argument("--health-url", default=None)
+    parser.add_argument("--fail-closed", action="store_true")
+    parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
 
     report = audit_vision(env=args.env, health_url=args.health_url)
-
     if args.json:
-        print(
-            json.dumps(
-                {
-                    "status": report.status,
-                    "target_env": report.target_env,
-                    "health_url": report.health_url,
-                    "release": report.release,
-                    "all_passed": report.all_passed,
-                    "served_head_freshness": report.served_head_freshness,
-                    "gates": [asdict(g) for g in report.gates],
-                    "nightly_verdicts_summary": report.nightly_verdicts_summary,
-                },
-                indent=2,
-            )
-        )
-    else:
-        print(f"=== TrueAlpha Vision Audit [{report.target_env.upper()}] ===")
-        print(f"Health Endpoint: {report.health_url}")
-        print(f"Deployed Release: {report.release or 'unknown'}")
-        print("")
-        for g in report.gates:
-            badge = "PASS" if g.verified else "FAIL"
-            print(f"[{badge}] {g.gate_id} {g.title}: {g.status}")
-            print(f"       Evidence: {g.evidence}")
-        print("")
-        if report.all_passed:
-            print("Status: All Gate Epics physically verified.")
-        else:
-            print("Status: System contains open gates and unfulfilled physical criteria.")
-
+        print(json.dumps(asdict(report), indent=2))
+        return 0
+    print(f"=== TrueAlpha Vision Audit [{report.target_env.upper()}] ===")
+    print(f"Health Endpoint: {report.health_url}\nDeployed Release: {report.release or 'unknown'}\n")
+    for g in report.gates:
+        print(f"[{'PASS' if g.verified else 'FAIL'}] {g.gate_id} {g.title}: {g.status}\n       Evidence: {g.evidence}")
+    print(
+        "\nStatus: All Gate Epics physically verified."
+        if report.all_passed
+        else "\nStatus: System contains open gates and unfulfilled physical criteria."
+    )
     return 0
 
 

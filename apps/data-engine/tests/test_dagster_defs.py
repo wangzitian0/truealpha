@@ -1291,7 +1291,6 @@ def test_issue_1310_registered_schedules_fit_within_twelve_data_daily_allowance_
     from data_engine.lanes import market_data, qqq_prices
     from data_engine.sources import gateway
     from truealpha_contracts.environment_contract import EnvironmentContract, load_environment_contract
-    from truealpha_runtime.testing import load_tool
 
     raw = json.loads(load_environment_contract().model_dump_json())
     raw["environments"]["production"]["universes"][2] = {"key": "sp500", "status": "scheduled"}
@@ -1349,7 +1348,8 @@ def test_issue_1310_registered_schedules_fit_within_twelve_data_daily_allowance_
     capacity = gateway.CAPACITIES["twelvedata"].in_environment(environment)
     assert capacity is not None and capacity.daily_budget == expected_share
 
-    cron_tool = load_tool("nightly_verdicts").Cron
+    from cron_schedule import Cron as cron_tool
+
     # Check every UTC day across a full week (Monday through Sunday).
     for day_offset in range(7):
         day_start = datetime(2026, 10, 12, tzinfo=UTC) + timedelta(days=day_offset)

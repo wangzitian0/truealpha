@@ -277,9 +277,7 @@ def _card_report_request(request: ResearchCardToolRequest) -> ResearchReportRequ
         and all(t.strip().lower().startswith("theme:") for t in request.target_entity_ids if t.strip())
     ):
         report_kind = ResearchReportKind.THEME_RANKING
-    section_kinds = request.section_kinds
-    if section_kinds == (ReportSectionKind.RANKING,):
-        section_kinds = ()
+    section_kinds = () if request.section_kinds == (ReportSectionKind.RANKING,) else request.section_kinds
     return ResearchReportRequest(
         report_kind=report_kind,
         target_entity_ids=request.target_entity_ids,
@@ -308,137 +306,6 @@ class BacktestReader(Protocol):
     ) -> dict[str, Any]: ...
 
 
-class PostgresCompanyProfileReader:
-    """Reads issuer 360 profile from mart tables for MCP consumers."""
-
-    def __init__(self, *, database_url: str) -> None:
-        self._database_url = database_url
-
-    def get_company_profile(self, *, issuer_id: str) -> dict[str, Any]:
-        decision_row: dict[str, Any] | None = None
-        gppe_row: dict[str, Any] | None = None
-        themes: list[dict[str, Any]] = []
-
-        clean_issuer = issuer_id.strip()
-        issuer_params = (clean_issuer, clean_issuer, clean_issuer)
-
-        try:
-            with psycopg.connect(self._database_url, row_factory=dict_row) as conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        f"""
-                        select coalesce(ei.legacy_id, d.issuer_id) as issuer_id,
-                               to_char(d.cutoff_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as cutoff_at,
-                               d.tier,
-                               d.valuation_gap::text as valuation_gap,
-                               d.current_price_to_sales::text as current_price_to_sales,
-                               d.target_price_to_sales::text as target_price_to_sales,
-                               d.current_price_to_gross_profit::text as current_price_to_gross_profit,
-                               d.target_price_to_gross_profit::text as target_price_to_gross_profit,
-                               d.outcome,
-                               d.exclusion_reason,
-                               d.rank,
-                               d.peg::text as peg,
-                               d.peg_rank,
-                               d.peg_reason_codes,
-                               t.confidence::text as confidence,
-                               t.reason_codes as reason_codes
-                        from mart.strategy_decisions d
-                        left join mart.strategy_run_capture scope
-                          on scope.strategy_run_id = d.strategy_run_id
-                        left join mart.topt_core_results t
-                          on t.run_id = scope.capture_run_id
-                         and t.issuer_id = d.issuer_id
-                         and t.cutoff = d.cutoff_at
-                        left join lateral (
-                            select ei.legacy_id
-                            from mart.entity_identity ei
-                            where ei.entity_id::text = d.issuer_id
-                            limit 1
-                        ) ei on true
-                        where {issuer_identity_sql("d.issuer_id", "%s")}
-                        order by d.cutoff_at desc
-                        limit 1
-                        """,
-                        issuer_params,
-                    )
-                    decision_row = cur.fetchone()
-
-                    cur.execute(
-                        f"""
-                        select gppe::text as gppe,
-                               operating_branch,
-                               capital_adjusted_gross_profit::text as capital_adjusted_gross_profit,
-                               confidence::text as confidence,
-                               coalesce(availability_status, availability, 'unavailable') as availability_status,
-                               reason_codes
-                        from mart.topt_gppe_results g
-                        where {issuer_identity_sql("g.issuer_id", "%s")}
-                        order by g.cutoff desc, g.created_at desc
-                        limit 1
-                        """,
-                        issuer_params,
-                    )
-                    gppe_row = cur.fetchone()
-
-                    cur.execute(
-                        f"""
-                        select theme_id,
-                               theme,
-                               theme_share,
-                               in_theme_revenue,
-                               consolidated_revenue,
-                               segments,
-                               confidence,
-                               availability_status
-                        from (
-                            select distinct on (p.theme_id)
-                                   p.theme_id,
-                                   p.theme,
-                                   p.theme_share::text as theme_share,
-                                   p.theme_share as raw_share,
-                                   p.in_theme_revenue::text as in_theme_revenue,
-                                   p.consolidated_revenue::text as consolidated_revenue,
-                                   p.segments,
-                                   p.confidence::text as confidence,
-                                   coalesce(p.availability_status, 'unavailable') as availability_status
-                            from mart.issuer_theme_purity p
-                            where {issuer_identity_sql("p.issuer_id", "%s")}
-                              and p.partition_id is not null
-                            order by p.theme_id, p.cutoff desc, p.created_at desc
-                        ) latest_per_theme
-                        order by raw_share desc nulls last, theme asc
-                        """,
-                        issuer_params,
-                    )
-                    themes = [
-                        {
-                            "theme_id": str(r.get("theme_id", "")),
-                            "theme": str(r.get("theme", "")),
-                            "theme_share": str(r["theme_share"]) if r.get("theme_share") is not None else None,
-                            "in_theme_revenue": (
-                                str(r["in_theme_revenue"]) if r.get("in_theme_revenue") is not None else None
-                            ),
-                            "consolidated_revenue": (
-                                str(r["consolidated_revenue"]) if r.get("consolidated_revenue") is not None else None
-                            ),
-                            "segments": int(r["segments"]) if r.get("segments") is not None else None,
-                            "confidence": str(r["confidence"]) if r.get("confidence") is not None else None,
-                            "availability_status": str(r.get("availability_status", "unavailable")),
-                        }
-                        for r in cur.fetchall()
-                    ]
-        except psycopg.Error as exc:
-            logger.warning("get_company_profile failed to query database: %s", exc)
-
-        return _format_company_profile(
-            issuer_id=issuer_id,
-            decision_row=decision_row,
-            gppe_row=gppe_row,
-            themes=themes,
-        )
-
-
 def _opt_str(row: Mapping[str, Any] | None, key: str) -> str | None:
     return str(row[key]) if row and row.get(key) is not None else None
 
@@ -451,6 +318,120 @@ def _opt_list(row: Mapping[str, Any] | None, key: str) -> list[Any]:
     return list(row[key]) if row and row.get(key) is not None else []
 
 
+def _legacy_id_join(column: str) -> str:
+    return (
+        "left join lateral ("
+        f"select ei.legacy_id from mart.entity_identity ei where ei.entity_id::text = {column} limit 1"
+        ") ei on true"
+    )
+
+
+def _query_mart(
+    database_url: str,
+    label: str,
+    query_fn: Callable[[psycopg.Cursor[dict[str, Any]]], Any],
+    default: Any,
+) -> Any:
+    try:
+        with psycopg.connect(database_url, row_factory=dict_row) as conn:
+            with conn.cursor() as cur:
+                return query_fn(cur)
+    except psycopg.Error as exc:
+        logger.warning("%s failed to query database: %s", label, exc)
+        return default
+
+
+def _format_theme_row(row: Mapping[str, Any], *, include_issuer: bool = False) -> dict[str, Any]:
+    out: dict[str, Any] = {
+        "theme_id": str(row.get("theme_id", "")),
+        "theme": str(row.get("theme", "")),
+        "theme_share": _opt_str(row, "theme_share"),
+        "in_theme_revenue": _opt_str(row, "in_theme_revenue"),
+        "consolidated_revenue": _opt_str(row, "consolidated_revenue"),
+        "segments": _opt_int(row, "segments") if not include_issuer else (_opt_int(row, "segments") or 0),
+        "confidence": _opt_str(row, "confidence"),
+        "availability_status": str(row.get("availability_status", "unavailable")),
+    }
+    if include_issuer:
+        return {"issuer_id": str(row["issuer_id"]), "cik": _opt_int(row, "cik"), **out}
+    return out
+
+
+class PostgresCompanyProfileReader:
+    """Reads issuer 360 profile from mart tables for MCP consumers."""
+
+    def __init__(self, *, database_url: str) -> None:
+        self._database_url = database_url
+
+    def get_company_profile(self, *, issuer_id: str) -> dict[str, Any]:
+        clean_issuer = issuer_id.strip()
+        issuer_params = (clean_issuer, clean_issuer, clean_issuer)
+
+        def _load(cur: psycopg.Cursor[dict[str, Any]]) -> tuple[Any, Any, list[dict[str, Any]]]:
+            cur.execute(
+                f"""
+                select coalesce(ei.legacy_id, d.issuer_id) as issuer_id,
+                       to_char(d.cutoff_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as cutoff_at,
+                       d.tier, d.valuation_gap::text as valuation_gap,
+                       d.current_price_to_sales::text as current_price_to_sales,
+                       d.target_price_to_sales::text as target_price_to_sales,
+                       d.current_price_to_gross_profit::text as current_price_to_gross_profit,
+                       d.target_price_to_gross_profit::text as target_price_to_gross_profit,
+                       d.outcome, d.exclusion_reason, d.rank,
+                       d.peg::text as peg, d.peg_rank, d.peg_reason_codes,
+                       t.confidence::text as confidence, t.reason_codes as reason_codes
+                from mart.strategy_decisions d
+                left join mart.strategy_run_capture scope on scope.strategy_run_id = d.strategy_run_id
+                left join mart.topt_core_results t
+                  on t.run_id = scope.capture_run_id and t.issuer_id = d.issuer_id and t.cutoff = d.cutoff_at
+                {_legacy_id_join("d.issuer_id")}
+                where {issuer_identity_sql("d.issuer_id", "%s")}
+                order by d.cutoff_at desc limit 1
+                """,
+                issuer_params,
+            )
+            decision = cur.fetchone()
+
+            cur.execute(
+                f"""
+                select gppe::text as gppe, operating_branch,
+                       capital_adjusted_gross_profit::text as capital_adjusted_gross_profit,
+                       confidence::text as confidence,
+                       coalesce(availability_status, availability, 'unavailable') as availability_status,
+                       reason_codes
+                from mart.topt_gppe_results g
+                where {issuer_identity_sql("g.issuer_id", "%s")}
+                order by g.cutoff desc, g.created_at desc limit 1
+                """,
+                issuer_params,
+            )
+            gppe = cur.fetchone()
+
+            cur.execute(
+                f"""
+                select theme_id, theme, theme_share, in_theme_revenue, consolidated_revenue,
+                       segments, confidence, availability_status
+                from (
+                    select distinct on (p.theme_id)
+                           p.theme_id, p.theme, p.theme_share::text as theme_share,
+                           p.theme_share as raw_share, p.in_theme_revenue::text as in_theme_revenue,
+                           p.consolidated_revenue::text as consolidated_revenue, p.segments,
+                           p.confidence::text as confidence,
+                           coalesce(p.availability_status, 'unavailable') as availability_status
+                    from mart.issuer_theme_purity p
+                    where {issuer_identity_sql("p.issuer_id", "%s")} and p.partition_id is not null
+                    order by p.theme_id, p.cutoff desc, p.created_at desc
+                ) latest_per_theme
+                order by raw_share desc nulls last, theme asc
+                """,
+                issuer_params,
+            )
+            return decision, gppe, [_format_theme_row(r) for r in cur.fetchall()]
+
+        decision_row, gppe_row, themes = _query_mart(self._database_url, "get_company_profile", _load, (None, None, []))
+        return _format_company_profile(issuer_id=issuer_id, decision_row=decision_row, gppe_row=gppe_row, themes=themes)
+
+
 def _decision_reason_codes(decision_row: Mapping[str, Any] | None) -> list[str]:
     if not decision_row:
         return []
@@ -460,15 +441,9 @@ def _decision_reason_codes(decision_row: Mapping[str, Any] | None) -> list[str]:
     exclusion = _opt_str(decision_row, "exclusion_reason")
     if exclusion is not None:
         return [exclusion]
-    if _opt_str(decision_row, "outcome") == "excluded":
-        return ["missing_audited_gross_profit_or_coordinate_join"]
-    return []
-
-
-def _valuation_basis_name(target_pgp: str | None, target_ps: str | None) -> str | None:
-    if target_pgp is not None:
-        return "price_to_gross_profit"
-    return "price_to_sales" if target_ps is not None else None
+    return (
+        ["missing_audited_gross_profit_or_coordinate_join"] if _opt_str(decision_row, "outcome") == "excluded" else []
+    )
 
 
 def _format_company_profile(
@@ -478,77 +453,57 @@ def _format_company_profile(
     gppe_row: Mapping[str, Any] | None,
     themes: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    tier = _opt_str(decision_row, "tier")
-    valuation_gap = _opt_str(decision_row, "valuation_gap")
-    current_ps = _opt_str(decision_row, "current_price_to_sales")
-    target_ps = _opt_str(decision_row, "target_price_to_sales")
-    # #1235: definition 1.0.0 values by P/GP. The gap divides the multiple named by
-    # `valuation_basis`; a reader must not read a P/GP gap against a P/S figure.
-    current_pgp = _opt_str(decision_row, "current_price_to_gross_profit")
     target_pgp = _opt_str(decision_row, "target_price_to_gross_profit")
-    valuation_basis = _valuation_basis_name(target_pgp, target_ps)
-    peg = _opt_str(decision_row, "peg")
-    peg_rank = _opt_int(decision_row, "peg_rank")
-    peg_reason_codes = _opt_list(decision_row, "peg_reason_codes")
-    outcome = _opt_str(decision_row, "outcome")
-    cutoff_at = _opt_str(decision_row, "cutoff_at")
+    target_ps = _opt_str(decision_row, "target_price_to_sales")
+    valuation_basis = (
+        "price_to_gross_profit" if target_pgp is not None else ("price_to_sales" if target_ps is not None else None)
+    )
     resolved_issuer_id = _opt_str(decision_row, "issuer_id") or issuer_id
-
-    gppe_val = _opt_str(gppe_row, "gppe")
-    operating_branch = _opt_str(gppe_row, "operating_branch")
-    capital_adjusted_gross_profit = _opt_str(gppe_row, "capital_adjusted_gross_profit")
     gppe_confidence = _opt_str(gppe_row, "confidence")
-    gppe_availability = _opt_str(gppe_row, "availability_status") or "unavailable"
     gppe_reason_codes = _opt_list(gppe_row, "reason_codes")
-
     decision_confidence = _opt_str(decision_row, "confidence") or gppe_confidence
     decision_reason_codes = _decision_reason_codes(decision_row)
+
     _, resolved_ticker, resolved_display_name = resolve_static_entity_display(resolved_issuer_id)
     if resolved_ticker is None and issuer_id != resolved_issuer_id:
         _, resolved_ticker, resolved_display_name = resolve_static_entity_display(issuer_id)
 
+    shared_valuation = {
+        "tier": _opt_str(decision_row, "tier"),
+        "valuation_gap": _opt_str(decision_row, "valuation_gap"),
+        "valuation_basis": valuation_basis,
+        "current_price_to_sales": _opt_str(decision_row, "current_price_to_sales"),
+        "target_price_to_sales": target_ps,
+        "current_price_to_gross_profit": _opt_str(decision_row, "current_price_to_gross_profit"),
+        "target_price_to_gross_profit": target_pgp,
+        "confidence": decision_confidence,
+        "peg": _opt_str(decision_row, "peg"),
+        "peg_rank": _opt_int(decision_row, "peg_rank"),
+        "peg_reason_codes": _opt_list(decision_row, "peg_reason_codes"),
+    }
+    gppe_val = _opt_str(gppe_row, "gppe")
     return {
         "issuer_id": resolved_issuer_id,
         "ticker": resolved_ticker,
         "display_name": resolved_display_name,
-        "tier": tier,
-        "valuation_gap": valuation_gap,
-        "valuation_basis": valuation_basis,
-        "current_price_to_sales": current_ps,
-        "target_price_to_sales": target_ps,
-        "current_price_to_gross_profit": current_pgp,
-        "target_price_to_gross_profit": target_pgp,
-        "confidence": decision_confidence,
+        **shared_valuation,
         "reason_codes": decision_reason_codes if decision_row else gppe_reason_codes,
-        "peg": peg,
-        "peg_rank": peg_rank,
-        "peg_reason_codes": peg_reason_codes,
         "gppe": gppe_val,
         "gppe_detail": {
             "gppe": gppe_val,
-            "operating_branch": operating_branch,
-            "capital_adjusted_gross_profit": capital_adjusted_gross_profit,
+            "operating_branch": _opt_str(gppe_row, "operating_branch"),
+            "capital_adjusted_gross_profit": _opt_str(gppe_row, "capital_adjusted_gross_profit"),
             "confidence": gppe_confidence,
-            "availability_status": gppe_availability,
+            "availability_status": _opt_str(gppe_row, "availability_status") or "unavailable",
             "reason_codes": gppe_reason_codes,
         }
         if gppe_row
         else None,
         "strategy_decision": {
-            "cutoff_at": cutoff_at,
-            "outcome": outcome,
-            "tier": tier,
-            "valuation_gap": valuation_gap,
-            "valuation_basis": valuation_basis,
-            "current_price_to_sales": current_ps,
-            "target_price_to_sales": target_ps,
-            "current_price_to_gross_profit": current_pgp,
-            "target_price_to_gross_profit": target_pgp,
-            "confidence": decision_confidence,
+            "cutoff_at": _opt_str(decision_row, "cutoff_at"),
+            "outcome": _opt_str(decision_row, "outcome"),
+            **shared_valuation,
             "reason_codes": decision_reason_codes,
-            "peg": peg,
-            "peg_rank": peg_rank,
-            "peg_reason_codes": peg_reason_codes,
         }
         if decision_row
         else None,
@@ -559,29 +514,23 @@ def _format_company_profile(
 
 def normalize_theme_slug(theme_id: str) -> str:
     """Normalize a theme identifier or display name into a hyphenated slug."""
-    normalized_slug = theme_id.strip().lower().replace("_", "-").replace(" ", "-")
-    while "--" in normalized_slug:
-        normalized_slug = normalized_slug.replace("--", "-")
-    return normalized_slug
+    slug = theme_id.strip().lower().replace("_", "-").replace(" ", "-")
+    while "--" in slug:
+        slug = slug.replace("--", "-")
+    return slug
 
 
 def resolve_fund_resolution_candidates(fund_id: str) -> dict[str, Any]:
     """Resolve candidate identifiers and patterns for ETF profile queries."""
     clean_id = fund_id.strip()
     token = clean_id.split(":")[-1].split("/")[-1].strip()
-    upper_token = token.upper()
-    lower_token = token.lower()
-    clean_upper = clean_id.upper()
-    clean_lower = clean_id.lower()
-    series_candidate = f"etf:series:{upper_token}" if not clean_lower.startswith("etf:series:") else clean_id
-    enable_name_match = len(lower_token) >= 2
-    name_pattern = f"%{lower_token}%" if enable_name_match else ""
+    upper_token, lower_token = token.upper(), token.lower()
     return {
         "clean_id": clean_id,
-        "series_candidate": series_candidate,
+        "series_candidate": clean_id if clean_id.lower().startswith("etf:series:") else f"etf:series:{upper_token}",
         "upper_token": upper_token,
-        "clean_upper": clean_upper,
-        "name_pattern": name_pattern,
+        "clean_upper": clean_id.upper(),
+        "name_pattern": f"%{lower_token}%" if len(lower_token) >= 2 else "",
     }
 
 
@@ -592,86 +541,59 @@ class PostgresThemePurityLeaderboardReader:
         self._database_url = database_url
 
     def get_leaderboard(self, *, theme_id: str, limit: int = 10) -> dict[str, Any]:
-        issuers: list[dict[str, Any]] = []
         clamped_limit = max(1, min(limit, 100))
         normalized_slug = normalize_theme_slug(theme_id)
 
-        try:
-            with psycopg.connect(self._database_url, row_factory=dict_row) as conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        """
-                        with latest_per_issuer as (
-                            select distinct on (p.issuer_id)
-                                   p.issuer_id,
-                                   p.cik,
-                                   p.theme_id,
-                                   p.theme,
-                                   p.theme_share,
-                                   p.in_theme_revenue,
-                                   p.consolidated_revenue,
-                                   p.segments,
-                                   p.confidence,
-                                   coalesce(p.availability_status, 'unavailable') as availability_status,
-                                   p.cutoff,
-                                   p.created_at
-                            from mart.issuer_theme_purity p
-                            -- The board ranks judged issuers. A fill row (an issuer without a segment
-                            -- partition, #1117) is not ranked and must not hide an older real row.
-                            where (p.theme_id = %s or p.theme_id = %s or lower(p.theme) = lower(%s))
-                              and p.partition_id is not null
-                            order by p.issuer_id, p.cutoff desc, p.created_at desc
-                        )
-                        select coalesce(ei.legacy_id, l.issuer_id) as issuer_id,
-                               l.cik,
-                               l.theme_id,
-                               l.theme,
-                               l.theme_share::text as theme_share,
-                               l.in_theme_revenue::text as in_theme_revenue,
-                               l.consolidated_revenue::text as consolidated_revenue,
-                               l.segments,
-                               l.confidence::text as confidence,
-                               l.availability_status
-                        from latest_per_issuer l
-                        left join lateral (
-                            select ei.legacy_id
-                            from mart.entity_identity ei
-                            where ei.entity_id::text = l.issuer_id
-                            limit 1
-                        ) ei on true
-                        order by (l.theme_share) desc nulls last, (l.confidence) desc nulls last
-                        limit %s
-                        """,
-                        (theme_id, normalized_slug, theme_id.strip(), clamped_limit),
-                    )
-                    issuers = [
-                        {
-                            "issuer_id": str(r["issuer_id"]),
-                            "cik": int(r["cik"]) if r.get("cik") is not None else None,
-                            "theme_id": str(r["theme_id"]),
-                            "theme": str(r["theme"]),
-                            "theme_share": str(r["theme_share"]) if r.get("theme_share") is not None else None,
-                            "in_theme_revenue": (
-                                str(r["in_theme_revenue"]) if r.get("in_theme_revenue") is not None else None
-                            ),
-                            "consolidated_revenue": (
-                                str(r["consolidated_revenue"]) if r.get("consolidated_revenue") is not None else None
-                            ),
-                            "segments": int(r["segments"]) if r.get("segments") is not None else 0,
-                            "confidence": str(r["confidence"]) if r.get("confidence") is not None else None,
-                            "availability_status": str(r.get("availability_status", "unavailable")),
-                        }
-                        for r in cur.fetchall()
-                    ]
-        except psycopg.Error as exc:
-            logger.warning("get_leaderboard failed to query database: %s", exc)
+        def _load(cur: psycopg.Cursor[dict[str, Any]]) -> list[dict[str, Any]]:
+            cur.execute(
+                f"""
+                with latest_per_issuer as (
+                    select distinct on (p.issuer_id)
+                           p.issuer_id, p.cik, p.theme_id, p.theme, p.theme_share,
+                           p.in_theme_revenue, p.consolidated_revenue, p.segments, p.confidence,
+                           coalesce(p.availability_status, 'unavailable') as availability_status,
+                           p.cutoff, p.created_at
+                    from mart.issuer_theme_purity p
+                    where (p.theme_id = %s or p.theme_id = %s or lower(p.theme) = lower(%s))
+                      and p.partition_id is not null
+                    order by p.issuer_id, p.cutoff desc, p.created_at desc
+                )
+                select coalesce(ei.legacy_id, l.issuer_id) as issuer_id,
+                       l.cik, l.theme_id, l.theme,
+                       l.theme_share::text as theme_share,
+                       l.in_theme_revenue::text as in_theme_revenue,
+                       l.consolidated_revenue::text as consolidated_revenue,
+                       l.segments, l.confidence::text as confidence, l.availability_status
+                from latest_per_issuer l
+                {_legacy_id_join("l.issuer_id")}
+                order by (l.theme_share) desc nulls last, (l.confidence) desc nulls last
+                limit %s
+                """,
+                (theme_id, normalized_slug, theme_id.strip(), clamped_limit),
+            )
+            return [_format_theme_row(r, include_issuer=True) for r in cur.fetchall()]
 
-        return {
-            "theme_id": theme_id,
-            "limit": clamped_limit,
-            "count": len(issuers),
-            "issuers": issuers,
-        }
+        issuers = _query_mart(self._database_url, "get_leaderboard", _load, [])
+        return {"theme_id": theme_id, "limit": clamped_limit, "count": len(issuers), "issuers": issuers}
+
+
+def _etf_match_clauses(prefix: str, id_param: str) -> tuple[str, str]:
+    col_id, col_name = f"{prefix}fund_id", f"{prefix}fund_name"
+    identity_subquery = (
+        "select entity_id::text from mart.entity_identity "
+        "where upper(current_ticker) in (%(upper_token)s, %(clean_upper)s) "
+        "or upper(legacy_id) in (%(upper_token)s, %(clean_upper)s)"
+    )
+    where_sql = (
+        f"{col_id} = %({id_param})s or {col_id} = %(series_candidate)s "
+        f"or {col_id} in ({identity_subquery}) "
+        f"or (%(name_pattern)s <> '' and (lower({col_name}) like %(name_pattern)s or lower({col_id}) like %(name_pattern)s))"
+    )
+    rank_sql = (
+        f"case when {col_id} = %({id_param})s or {col_id} = %(series_candidate)s then 1 "
+        f"when {col_id} in ({identity_subquery}) then 2 else 3 end asc"
+    )
+    return where_sql, rank_sql
 
 
 class PostgresEtfProfileReader:
@@ -681,184 +603,78 @@ class PostgresEtfProfileReader:
         self._database_url = database_url
 
     def get_etf_profile(self, *, fund_id: str) -> dict[str, Any]:
-        fund_row: dict[str, Any] | None = None
-        holdings: list[dict[str, Any]] = []
-
         query_params = resolve_fund_resolution_candidates(fund_id)
+        fund_where, fund_rank = _etf_match_clauses("", "clean_id")
+        hold_where, hold_rank = _etf_match_clauses("v.", "target_fund_id")
 
-        try:
-            with psycopg.connect(self._database_url, row_factory=dict_row) as conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        """
-                        select fund_id,
-                               coalesce(fund_name, fund_id) as fund_name,
-                               to_char(cutoff, 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as cutoff,
-                               to_char(report_period, 'YYYY-MM-DD') as report_period,
-                               weighted_valuation_gap::text as weighted_valuation_gap,
-                               valuation_basis,
-                               total_weight_pct::text as total_weight_pct,
-                               resolved_weight_pct::text as resolved_weight_pct,
-                               valued_weight_pct::text as valued_weight_pct,
-                               lines,
-                               valued_lines,
-                               confidence::text as confidence,
-                               coalesce(availability_status, 'unavailable') as availability_status,
-                               reason_codes
-                        from mart.fund_virtual_company
-                        where fund_id = %(clean_id)s
-                           or fund_id = %(series_candidate)s
-                           or fund_id in (
-                               select entity_id::text
-                               from mart.entity_identity
-                               where upper(current_ticker) in (%(upper_token)s, %(clean_upper)s)
-                                  or upper(legacy_id) in (%(upper_token)s, %(clean_upper)s)
-                           )
-                           or (%(name_pattern)s <> '' and lower(fund_name) like %(name_pattern)s)
-                           or (%(name_pattern)s <> '' and lower(fund_id) like %(name_pattern)s)
-                        order by
-                            case
-                                when fund_id = %(clean_id)s or fund_id = %(series_candidate)s then 1
-                                when fund_id in (
-                                    select entity_id::text from mart.entity_identity
-                                    where upper(current_ticker) in (%(upper_token)s, %(clean_upper)s)
-                                       or upper(legacy_id) in (%(upper_token)s, %(clean_upper)s)
-                                ) then 2
-                                else 3
-                            end asc,
-                            cutoff desc,
-                            created_at desc
-                        limit 1
-                        """,
-                        query_params,
-                    )
-                    fund_row = cur.fetchone()
-                    target_fund_id = str(fund_row["fund_id"]) if fund_row else query_params["clean_id"]
-                    holdings_params = dict(query_params)
-                    holdings_params["target_fund_id"] = target_fund_id
+        def _load(cur: psycopg.Cursor[dict[str, Any]]) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+            cur.execute(
+                f"""
+                select fund_id, coalesce(fund_name, fund_id) as fund_name,
+                       to_char(cutoff, 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as cutoff,
+                       to_char(report_period, 'YYYY-MM-DD') as report_period,
+                       weighted_valuation_gap::text as weighted_valuation_gap, valuation_basis,
+                       total_weight_pct::text as total_weight_pct,
+                       resolved_weight_pct::text as resolved_weight_pct,
+                       valued_weight_pct::text as valued_weight_pct,
+                       lines, valued_lines, confidence::text as confidence,
+                       coalesce(availability_status, 'unavailable') as availability_status, reason_codes
+                from mart.fund_virtual_company
+                where {fund_where}
+                order by {fund_rank}, cutoff desc, created_at desc limit 1
+                """,
+                query_params,
+            )
+            f_row = cur.fetchone()
+            h_params = {**query_params, "target_fund_id": str(f_row["fund_id"]) if f_row else query_params["clean_id"]}
+            cur.execute(
+                f"""
+                select coalesce(fund_name, fund_id) as fund_name,
+                       to_char(report_period, 'YYYY-MM-DD') as report_period,
+                       holding_name, ticker, isin,
+                       percent_of_net_assets::text as weight_pct, value_usd::text as value_usd,
+                       coalesce(ei.legacy_id, v.issuer_entity) as issuer_entity, v.listing_id
+                from mart.fund_holdings_valuation v
+                {_legacy_id_join("v.issuer_entity")}
+                where {hold_where}
+                order by {hold_rank}, v.percent_of_net_assets desc nulls last, v.holding_name asc limit 100
+                """,
+                h_params,
+            )
+            return f_row, cur.fetchall()
 
-                    cur.execute(
-                        """
-                        select coalesce(fund_name, fund_id) as fund_name,
-                               to_char(report_period, 'YYYY-MM-DD') as report_period,
-                               holding_name,
-                               ticker,
-                               isin,
-                               percent_of_net_assets::text as weight_pct,
-                               value_usd::text as value_usd,
-                               coalesce(ei.legacy_id, v.issuer_entity) as issuer_entity,
-                               v.listing_id
-                        from mart.fund_holdings_valuation v
-                        left join lateral (
-                            select ei.legacy_id
-                            from mart.entity_identity ei
-                            where ei.entity_id::text = v.issuer_entity
-                            limit 1
-                        ) ei on true
-                        where v.fund_id = %(target_fund_id)s
-                           or v.fund_id = %(series_candidate)s
-                           or v.fund_id in (
-                               select entity_id::text
-                               from mart.entity_identity
-                               where upper(current_ticker) in (%(upper_token)s, %(clean_upper)s)
-                                  or upper(legacy_id) in (%(upper_token)s, %(clean_upper)s)
-                           )
-                           or (%(name_pattern)s <> '' and lower(v.fund_name) like %(name_pattern)s)
-                           or (%(name_pattern)s <> '' and lower(v.fund_id) like %(name_pattern)s)
-                        order by
-                            case
-                                when v.fund_id = %(target_fund_id)s or v.fund_id = %(series_candidate)s then 1
-                                when v.fund_id in (
-                                    select entity_id::text from mart.entity_identity
-                                    where upper(current_ticker) in (%(upper_token)s, %(clean_upper)s)
-                                       or upper(legacy_id) in (%(upper_token)s, %(clean_upper)s)
-                                ) then 2
-                                else 3
-                            end asc,
-                            v.percent_of_net_assets desc nulls last,
-                            v.holding_name asc
-                        limit 100
-                        """,
-                        holdings_params,
-                    )
-                    holdings = [
-                        {
-                            "holding_name": str(r.get("holding_name", "")),
-                            "ticker": str(r["ticker"]) if r.get("ticker") is not None else None,
-                            "isin": str(r["isin"]) if r.get("isin") is not None else None,
-                            "weight_pct": str(r["weight_pct"]) if r.get("weight_pct") is not None else None,
-                            "value_usd": str(r["value_usd"]) if r.get("value_usd") is not None else None,
-                            "issuer_entity": (str(r["issuer_entity"]) if r.get("issuer_entity") is not None else None),
-                            "listing_id": str(r["listing_id"]) if r.get("listing_id") is not None else None,
-                        }
-                        for r in cur.fetchall()
-                    ]
-        except psycopg.Error as exc:
-            logger.warning("get_etf_profile failed to query database: %s", exc)
-
-        fund_name = (
-            str(fund_row["fund_name"])
-            if fund_row and fund_row.get("fund_name") is not None
-            else (str(holdings[0]["fund_name"]) if holdings and "fund_name" in holdings[0] else fund_id)
-        )
-        cutoff = str(fund_row["cutoff"]) if fund_row and fund_row.get("cutoff") is not None else None
-        report_period = (
-            str(fund_row["report_period"])
-            if fund_row and fund_row.get("report_period") is not None
-            else (str(holdings[0]["report_period"]) if holdings and "report_period" in holdings[0] else None)
-        )
-        weighted_gap = (
-            str(fund_row["weighted_valuation_gap"])
-            if fund_row and fund_row.get("weighted_valuation_gap") is not None
-            else None
-        )
-        # #1235: the multiple the weighted gap divides, as the producer recorded it. None before
-        # #1235 and on a refused aggregate; a P/GP run and a P/S run never read the same.
-        weighted_gap_basis = (
-            str(fund_row["valuation_basis"]) if fund_row and fund_row.get("valuation_basis") is not None else None
-        )
-        total_weight = (
-            str(fund_row["total_weight_pct"]) if fund_row and fund_row.get("total_weight_pct") is not None else "0.00"
-        )
-        resolved_weight = (
-            str(fund_row["resolved_weight_pct"])
-            if fund_row and fund_row.get("resolved_weight_pct") is not None
-            else "0.00"
-        )
-        valued_weight = (
-            str(fund_row["valued_weight_pct"]) if fund_row and fund_row.get("valued_weight_pct") is not None else "0.00"
-        )
-        lines_count = int(fund_row["lines"]) if fund_row and fund_row.get("lines") is not None else len(holdings)
-        valued_lines_count = (
-            int(fund_row["valued_lines"]) if fund_row and fund_row.get("valued_lines") is not None else 0
-        )
-        confidence_val = str(fund_row["confidence"]) if fund_row and fund_row.get("confidence") is not None else None
-        availability_status = (
-            str(fund_row["availability_status"])
-            if fund_row and fund_row.get("availability_status") is not None
-            else ("available" if holdings else "unavailable")
-        )
-        reason_codes = (
-            list(fund_row["reason_codes"])
-            if fund_row and fund_row.get("reason_codes") is not None
-            else ([] if holdings else ["no_virtual_company_consolidation_found"])
-        )
-
+        fund_row, raw_holdings = _query_mart(self._database_url, "get_etf_profile", _load, (None, []))
+        first_holding = raw_holdings[0] if raw_holdings else None
+        holdings = [
+            {
+                "holding_name": str(r.get("holding_name", "")),
+                **{
+                    k: _opt_str(r, k)
+                    for k in ("ticker", "isin", "weight_pct", "value_usd", "issuer_entity", "listing_id")
+                },
+            }
+            for r in raw_holdings
+        ]
+        lines = _opt_int(fund_row, "lines")
+        codes = fund_row.get("reason_codes") if fund_row else None
         return {
             "fund_id": fund_id,
-            "fund_name": fund_name,
-            "cutoff": cutoff,
-            "report_period": report_period,
-            "weighted_valuation_gap": weighted_gap,
-            "weighted_valuation_gap_basis": weighted_gap_basis,
-            "total_weight_pct": total_weight,
-            "resolved_weight_pct": resolved_weight,
-            "valued_weight_pct": valued_weight,
-            "lines": lines_count,
-            "valued_lines": valued_lines_count,
-            "confidence": confidence_val,
-            "availability_status": availability_status,
-            "reason_codes": reason_codes,
+            "fund_name": _opt_str(fund_row, "fund_name") or _opt_str(first_holding, "fund_name") or fund_id,
+            "cutoff": _opt_str(fund_row, "cutoff"),
+            "report_period": _opt_str(fund_row, "report_period") or _opt_str(first_holding, "report_period"),
+            "weighted_valuation_gap": _opt_str(fund_row, "weighted_valuation_gap"),
+            "weighted_valuation_gap_basis": _opt_str(fund_row, "valuation_basis"),
+            "total_weight_pct": _opt_str(fund_row, "total_weight_pct") or "0.00",
+            "resolved_weight_pct": _opt_str(fund_row, "resolved_weight_pct") or "0.00",
+            "valued_weight_pct": _opt_str(fund_row, "valued_weight_pct") or "0.00",
+            "lines": lines if lines is not None else len(holdings),
+            "valued_lines": _opt_int(fund_row, "valued_lines") or 0,
+            "confidence": _opt_str(fund_row, "confidence"),
+            "availability_status": _opt_str(fund_row, "availability_status")
+            or ("available" if holdings else "unavailable"),
+            "reason_codes": list(codes)
+            if codes is not None
+            else ([] if holdings else ["no_virtual_company_consolidation_found"]),
             "holdings": holdings,
         }
 
@@ -876,13 +692,23 @@ def _default_etf_profile_reader() -> EtfProfileReader:
 
 
 def backtest_run_limitations(run: dict[str, Any]) -> list[str]:
-    """The limitations the nightly lane stored with a run (#758), as their own response field.
-
-    A run written before #758 stores none, and the field is then an empty list.
-    """
+    """The limitations the nightly lane stored with a run (#758), as their own response field."""
     payload = run.get("metrics_payload")
     stored = payload.get("limitations") if isinstance(payload, dict) else None
     return [str(item) for item in stored] if isinstance(stored, list) else []
+
+
+_BACKTEST_RUN_SELECT = """
+    select run_id, strategy_key, strategy_version, universe_id,
+           start_date::text, end_date::text, status,
+           cagr_monthly::text as cagr_monthly, sharpe_daily::text as sharpe_daily,
+           max_dd_daily::text as max_dd_daily, vol_daily::text as vol_daily,
+           turnover_monthly::text as turnover_monthly, calmar_daily::text as calmar_daily,
+           metrics_payload, error_message, executed_at::text, created_at::text,
+           definition_content_sha256, price_basis, claim_ceiling, benchmark_rule,
+           benchmark_cagr::text as benchmark_cagr, benchmark_max_dd::text as benchmark_max_dd
+    from mart.backtest_runs
+"""
 
 
 class PostgresBacktestReader:
@@ -902,90 +728,38 @@ class PostgresBacktestReader:
             with psycopg.connect(self._database_url, row_factory=dict_row) as conn:
                 with conn.cursor() as cur:
                     if run_id:
-                        cur.execute(
-                            """
-                            select run_id, strategy_key, strategy_version, universe_id,
-                                   start_date::text, end_date::text, status,
-                                   cagr_monthly::text as cagr_monthly,
-                                   sharpe_daily::text as sharpe_daily,
-                                   max_dd_daily::text as max_dd_daily,
-                                   vol_daily::text as vol_daily,
-                                   turnover_monthly::text as turnover_monthly,
-                                   calmar_daily::text as calmar_daily,
-                                   metrics_payload, error_message,
-                                   executed_at::text, created_at::text,
-                                   definition_content_sha256, price_basis, claim_ceiling,
-                                   benchmark_rule,
-                                   benchmark_cagr::text as benchmark_cagr,
-                                   benchmark_max_dd::text as benchmark_max_dd
-                            from mart.backtest_runs
-                            where run_id = %s
-                            limit 1
-                            """,
-                            (run_id,),
-                        )
+                        cur.execute(f"{_BACKTEST_RUN_SELECT} where run_id = %s limit 1", (run_id,))
                         run_row = cur.fetchone()
                         if run_row:
                             runs.append(dict(run_row))
                             cur.execute(
                                 """
                                 select run_id, resolution, valuation_date::text,
-                                       cum_nav::text as cum_nav,
-                                       drawdown::text as drawdown,
-                                       gross_exposure::text as gross_exposure,
-                                       cash_weight::text as cash_weight,
+                                       cum_nav::text as cum_nav, drawdown::text as drawdown,
+                                       gross_exposure::text as gross_exposure, cash_weight::text as cash_weight,
                                        benchmark_cum_nav::text as benchmark_cum_nav
                                 from mart.backtest_valuations
-                                where run_id = %s
-                                order by valuation_date desc
-                                limit 100
+                                where run_id = %s order by valuation_date desc limit 100
                                 """,
                                 (run_id,),
                             )
                             valuations = [dict(r) for r in cur.fetchall()]
-
                             cur.execute(
                                 """
-                                select trade_id, run_id, trade_date::text,
-                                       symbol, side, shares::text as shares,
-                                       execution_price::text as execution_price,
-                                       trade_value::text as trade_value,
-                                       weight_before::text as weight_before,
-                                       weight_after::text as weight_after,
-                                       fee_paid::text as fee_paid
+                                select trade_id, run_id, trade_date::text, symbol, side,
+                                       shares::text as shares, execution_price::text as execution_price,
+                                       trade_value::text as trade_value, weight_before::text as weight_before,
+                                       weight_after::text as weight_after, fee_paid::text as fee_paid
                                 from mart.backtest_trades
-                                where run_id = %s
-                                order by trade_date desc
-                                limit 100
+                                where run_id = %s order by trade_date desc limit 100
                                 """,
                                 (run_id,),
                             )
                             trades = [dict(r) for r in cur.fetchall()]
                     else:
-                        query = """
-                            select run_id, strategy_key, strategy_version, universe_id,
-                                   start_date::text, end_date::text, status,
-                                   cagr_monthly::text as cagr_monthly,
-                                   sharpe_daily::text as sharpe_daily,
-                                   max_dd_daily::text as max_dd_daily,
-                                   vol_daily::text as vol_daily,
-                                   turnover_monthly::text as turnover_monthly,
-                                   calmar_daily::text as calmar_daily,
-                                   metrics_payload, error_message,
-                                   executed_at::text, created_at::text,
-                                   definition_content_sha256, price_basis, claim_ceiling,
-                                   benchmark_rule,
-                                   benchmark_cagr::text as benchmark_cagr,
-                                   benchmark_max_dd::text as benchmark_max_dd
-                            from mart.backtest_runs
-                        """
-                        params: list[Any] = []
-                        if strategy_key:
-                            query += " where strategy_key = %s"
-                            params.append(strategy_key)
-                        query += " order by created_at desc limit %s"
-                        params.append(limit)
-                        cur.execute(query, tuple(params))
+                        where = " where strategy_key = %s" if strategy_key else ""
+                        params = (strategy_key, limit) if strategy_key else (limit,)
+                        cur.execute(f"{_BACKTEST_RUN_SELECT}{where} order by created_at desc limit %s", params)
                         runs = [dict(r) for r in cur.fetchall()]
         except Exception as e:
             logger.warning("Failed to read backtest from mart: %s", e)
@@ -1026,11 +800,6 @@ def build_mcp_server(
     issuer_module_reader: IssuerModuleReader | None = None,
 ) -> FastMCP:
     """Builds the MCP server. Caller-supplied repositories are for tests only."""
-    # `streamable_http_path="/"`: main.py mounts this app at "/mcp"; FastMCP's own
-    # default streamable path is also "/mcp", which double-nested the real endpoint at
-    # "/mcp/mcp". Serving at the mount root keeps it a single "/mcp".
-    # transport_security: see Settings.mcp_dns_rebinding_protection for why host pinning
-    # is off by default for this service-identity-only surface behind Traefik.
     server = _AuditedFastMCP(
         "truealpha-mcp",
         streamable_http_path="/",
@@ -1040,7 +809,7 @@ def build_mcp_server(
             allowed_origins=settings.mcp_allowed_origins,
         ),
     )
-    active_repository: StrategyRunReadRepository = repository if repository is not None else _default_repository()
+    active_repository = repository if repository is not None else _default_repository()
     active_topt = (
         topt_repository
         if topt_repository is not None
@@ -1051,22 +820,14 @@ def build_mcp_server(
         if metric_node_repository is not None
         else PostgresMetricNodeValueRepository(database_url=settings.database_url)
     )
-    active_research: ResearchReadPort = (
-        research_repository if research_repository is not None else _default_research_report_repository()
-    )
-    active_company_profile: CompanyProfileReader = (
+    active_research = research_repository if research_repository is not None else _default_research_report_repository()
+    active_company_profile = (
         company_profile_reader if company_profile_reader is not None else _default_company_profile_reader()
     )
-    active_theme_purity: ThemePurityLeaderboardReader = (
-        theme_purity_reader if theme_purity_reader is not None else _default_theme_purity_reader()
-    )
-    active_etf_profile: EtfProfileReader = (
-        etf_profile_reader if etf_profile_reader is not None else _default_etf_profile_reader()
-    )
-    active_backtest: BacktestReader = backtest_reader if backtest_reader is not None else _default_backtest_reader()
-    active_modules: IssuerModuleReader = (
-        issuer_module_reader if issuer_module_reader is not None else _default_issuer_module_reader()
-    )
+    active_theme_purity = theme_purity_reader if theme_purity_reader is not None else _default_theme_purity_reader()
+    active_etf_profile = etf_profile_reader if etf_profile_reader is not None else _default_etf_profile_reader()
+    active_backtest = backtest_reader if backtest_reader is not None else _default_backtest_reader()
+    active_modules = issuer_module_reader if issuer_module_reader is not None else _default_issuer_module_reader()
 
     @server.tool(
         name="strategy_run",
@@ -1160,23 +921,7 @@ def build_mcp_server(
             idx = max(0, min(request.page - 1, len(pages) - 1))
             card = pages[idx]
         html_doc = render_card_html(card, preset=request.style_preset)
-        return ResearchCard(
-            schema_version=card.schema_version,
-            card_id=card.card_id,
-            card_kind=card.card_kind,
-            template_version=card.template_version,
-            title=card.title,
-            cutoff_at=card.cutoff_at,
-            generated_from_report_id=card.generated_from_report_id,
-            research_risk_note=card.research_risk_note,
-            source_attribution=card.source_attribution,
-            subjects=card.subjects,
-            strategy_context=card.strategy_context,
-            style_preset=card.style_preset,
-            series_index=card.series_index,
-            series_total=card.series_total,
-            rendered_html=html_doc,
-        )
+        return card.model_copy(update={"rendered_html": html_doc})
 
     @server.tool(
         name="company_360_profile",

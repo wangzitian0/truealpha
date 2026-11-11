@@ -105,20 +105,21 @@ _MONTH_START_UTC = "date_trunc('month', now() at time zone 'utc') at time zone '
 _DAY_START_UTC = "date_trunc('day', now() at time zone 'utc') at time zone 'utc'"
 
 
-def calls_this_month() -> int:
-    """Return total moomoo calls recorded since the start of this UTC month."""
+def _calls_since_sql(since_expr: str) -> int:
     row = _pg_execute(
-        f"select count(*) from staging.api_call_ledger where source = 'moomoo' and called_at >= {_MONTH_START_UTC}"
+        f"select count(*) from staging.api_call_ledger where source = 'moomoo' and called_at >= {since_expr}"
     ).fetchone()
     return row[0]
+
+
+def calls_this_month() -> int:
+    """Return total moomoo calls recorded since the start of this UTC month."""
+    return _calls_since_sql(_MONTH_START_UTC)
 
 
 def calls_today() -> int:
     """Return total moomoo calls recorded since 00:00 UTC today."""
-    row = _pg_execute(
-        f"select count(*) from staging.api_call_ledger where source = 'moomoo' and called_at >= {_DAY_START_UTC}"
-    ).fetchone()
-    return row[0]
+    return _calls_since_sql(_DAY_START_UTC)
 
 
 def normalize_stock_uri(code_or_uri: str | None) -> str | None:

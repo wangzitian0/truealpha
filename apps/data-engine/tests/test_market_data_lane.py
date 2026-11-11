@@ -74,7 +74,6 @@ from data_engine.lanes import market_data
 from data_engine.lanes.market_data import _daily_cutoff, _monthly_cutoff, _refresh_market_data
 from data_engine.quality import nightly_verdicts
 from data_engine.sources import gateway
-from truealpha_runtime.testing import load_tool
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "support"))
 from topt_symbols import TOPT_SYMBOLS  # noqa: E402
@@ -604,7 +603,8 @@ def test_the_backtest_starts_after_the_refresh_has_ended_in_each_environment(con
     assert twelve.window_seconds is not None
     refresh_duration = timedelta(seconds=math.ceil(len(requests) / twelve.calls_per_window) * twelve.window_seconds)
 
-    cron = load_tool("nightly_verdicts").Cron
+    from cron_schedule import Cron as cron
+
     refresh, backtest = cron.parse(market_data.MARKET_DATA_REFRESH_CRON), cron.parse(backtest_lane.BACKTEST_CRON)
     monday = datetime(2026, 10, 12, tzinfo=UTC)
     refreshes = refresh.fires_between(monday, monday + timedelta(days=7))

@@ -225,97 +225,76 @@ order by universe_id
 HEAD_ENVIRONMENTS_SQL = "select 1 from mart.served_head_environments limit 1"
 
 
+def _safe_query(connection: Any, fn: Any, default: Any) -> Any:
+    import psycopg
+
+    try:
+        return fn(connection)
+    except psycopg.Error:
+        connection.rollback()
+        return default
+
+
 def _data_engine_facts() -> tuple[str, str, str, list[dict[str, Any]] | str, list[dict[str, Any]] | str]:
-    """(parser vintage behind the newest observation, git sha, image digest of the build
-    behind the newest run, governed pointers per universe, newest nightly verdict per check),
-    each "unknown" when unreadable.
-
-    One connection for both reads (review on #753: the endpoint is polled, and two
-    connections per poll is churn for nothing). Each read is guarded on its own, so a
-    database that predates `mart.data_engine_identity` still reports the parser.
-
-    Deliberately never raises and never fails the health check: this endpoint answers
-    "is the service up", and turning it into a database liveness probe would make an
-    unrelated outage look like a dead app. An unreadable identity reports "unknown",
-    which `tools/health_check.py` treats as un-assertable rather than as a pass.
-    """
+    """(parser vintage, git sha, image digest, governed pointers, newest nightly verdicts), each 'unknown' when unreadable."""
     parser, git_sha, image_digest = "unknown", "unknown", "unknown"
     pointers: list[dict[str, Any]] | str = "unknown"
     verdicts: list[dict[str, Any]] | str = "unknown"
     try:
         import psycopg
 
+        contract = load_environment_contract()
         with psycopg.connect(
             settings.database_url,
             connect_timeout=settings.database_connect_timeout_seconds,
-        ) as connection:
-            try:
-                row = connection.execute(
-                    "select parser_version from staging.capture_normalized_observations "
-                    "order by recorded_at desc limit 1"
+        ) as conn:
+
+            def _read_parser(c: Any) -> str:
+                row = c.execute(
+                    "select parser_version from staging.capture_normalized_observations order by recorded_at desc limit 1"
                 ).fetchone()
-                parser = str(row[0]) if row and row[0] else "unknown"
-            except psycopg.Error:
-                connection.rollback()
-            try:
-                row = connection.execute(
+                return str(row[0]) if row and row[0] else "unknown"
+
+            def _read_identity(c: Any) -> tuple[str, str]:
+                row = c.execute(
                     "select git_sha, image_digest from mart.data_engine_identity order by created_at desc limit 1"
                 ).fetchone()
-                if row is not None:
-                    git_sha, image_digest = str(row[0] or "unknown"), str(row[1] or "unknown")
-            except psycopg.Error:
-                connection.rollback()
-            try:
-                # Per universe family, never collapsed (the funnel's lesson): one universe's fresh
-                # pointer must not hide another's frozen one. The live head of each family is
-                # what "still advancing" means (#1320).
-                # The age, the limit, the label and the live version come from mart.served_head
-                # (#1062). That view is the one read point. This service computes no head age.
-                rows = connection.execute(GOVERNED_POINTERS_SQL).fetchall()
-                # An empty answer means "no head yet" only when no environment holds a head. When
-                # one does, the identity row hides every head. Then `pointers` stays "unknown".
-                # An empty list would read as a database that has never advanced.
-                if rows or connection.execute(HEAD_ENVIRONMENTS_SQL).fetchone() is None:
-                    pointers = [
-                        {
-                            "universe_id": str(universe_id),
-                            "advanced_at": advanced_at.isoformat(),
-                            "age_hours": round(float(age_hours), 1),
-                            "freshness": str(freshness),
-                            "limit_hours": int(limit_hours),
-                            "staleness_reason": None if staleness_reason is None else str(staleness_reason),
-                            "availability": str(availability),
-                        }
-                        for (
-                            universe_id,
-                            advanced_at,
-                            age_hours,
-                            freshness,
-                            limit_hours,
-                            staleness_reason,
-                            availability,
-                        ) in rows
-                        if load_environment_contract().is_head_scheduled(str(universe_id), settings.app_env)
-                    ]
-            except psycopg.Error:
-                connection.rollback()
-            try:
-                # `ok` is null for a pending verdict (release_fetch_proof before its first
-                # proving tick): reported as null, never coerced to a red false.
-                verdicts = [
+                return (str(row[0] or "unknown"), str(row[1] or "unknown")) if row else ("unknown", "unknown")
+
+            def _read_pointers(c: Any) -> list[dict[str, Any]] | str:
+                rows = c.execute(GOVERNED_POINTERS_SQL).fetchall()
+                if not rows and c.execute(HEAD_ENVIRONMENTS_SQL).fetchone() is not None:
+                    return "unknown"
+                return [
                     {
-                        "check": str(check),
+                        "universe_id": str(u_id),
+                        "advanced_at": adv.isoformat(),
+                        "age_hours": round(float(age), 1),
+                        "freshness": str(fresh),
+                        "limit_hours": int(lim),
+                        "staleness_reason": None if reason is None else str(reason),
+                        "availability": str(avail),
+                    }
+                    for u_id, adv, age, fresh, lim, reason, avail in rows
+                    if contract.is_head_scheduled(str(u_id), settings.app_env)
+                ]
+
+            def _read_verdicts(c: Any) -> list[dict[str, Any]]:
+                return [
+                    {
+                        "check": str(chk),
                         "ran_at": ran_at.isoformat(),
                         "ok": None if ok is None else bool(ok),
                         "summary": str(summary),
                     }
-                    for check, ran_at, ok, summary in connection.execute(NIGHTLY_VERDICTS_SQL).fetchall()
-                    # The table is append-only: the rows of a check that this environment no longer records
-                    # (staging runs TOPT only) stay in it, and a stale row must not read as a stopped check.
-                    if load_environment_contract().expects_verdict(str(check), settings.app_env)
+                    for chk, ran_at, ok, summary in c.execute(NIGHTLY_VERDICTS_SQL).fetchall()
+                    if contract.expects_verdict(str(chk), settings.app_env)
                 ]
-            except psycopg.Error:
-                connection.rollback()
+
+            parser = _safe_query(conn, _read_parser, "unknown")
+            git_sha, image_digest = _safe_query(conn, _read_identity, ("unknown", "unknown"))
+            pointers = _safe_query(conn, _read_pointers, "unknown")
+            verdicts = _safe_query(conn, _read_verdicts, "unknown")
     except Exception:  # noqa: BLE001 - health must not fail on a read it only reports
         pass
     return parser, git_sha, image_digest, pointers, verdicts

@@ -282,8 +282,12 @@ def check_authenticated(base: str, token: str) -> list[str]:
                 f"in the walk secret and the deployed MCP_BEARER_TOKEN differ, or the route is down"
             ]
         session = {**bearer, "Mcp-Session-Id": opened.session}
-        fetch(endpoint, method="POST", payload={"jsonrpc": "2.0", "method": "notifications/initialized"},
-              extra_headers=session)  # fmt: skip
+        fetch(
+            endpoint,
+            method="POST",
+            payload={"jsonrpc": "2.0", "method": "notifications/initialized"},
+            extra_headers=session,
+        )
         listed = fetch(
             endpoint, method="POST", payload={"jsonrpc": "2.0", "id": 3, "method": "tools/list"}, extra_headers=session
         )

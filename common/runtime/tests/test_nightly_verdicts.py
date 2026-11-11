@@ -718,14 +718,17 @@ def test_every_declared_cadence_is_its_jobs_schedule_period() -> None:
     Dagster cron makes the check either blind (too long) or noisy (too short). Measured from
     the deployed root's own schedules with the cron reader."""
     from data_engine.dagster_defs import defs
+    from infra2_sdk.ci import largest_gap
 
-    crons: dict[str, list[object]] = {}
+    crons: dict[str, list[str]] = {}
     for schedule in defs.schedules or ():
         assert schedule.execution_timezone in (None, "UTC"), f"{schedule.name} is not on UTC"
-        expressions = [schedule.cron_schedule] if isinstance(schedule.cron_schedule, str) else schedule.cron_schedule
-        crons.setdefault(schedule.job_name, []).extend(_module.Cron.parse(e) for e in expressions)
+        expressions = (
+            [schedule.cron_schedule] if isinstance(schedule.cron_schedule, str) else list(schedule.cron_schedule)
+        )
+        crons.setdefault(schedule.job_name, []).extend(expressions)
     for name, expectation in EXPECTED.items():
-        gap = _module.largest_gap(crons[expectation.job], NOW)
+        gap = largest_gap(crons[expectation.job])
         assert gap == timedelta(hours=expectation.cadence_hours), (
             f"{name}: declared cadence {expectation.cadence_hours} h, but job {expectation.job} fires every {gap}"
         )
@@ -733,16 +736,10 @@ def test_every_declared_cadence_is_its_jobs_schedule_period() -> None:
 
 def test_cron_treats_step_expressions_as_restricted_fields() -> None:
     """Only literal '*' is unrestricted in cron; step expressions like '*/2' restrict DOM/DOW."""
-    from datetime import date
+    from infra2_sdk.ci import largest_gap
 
-    cron = _module.Cron.parse("0 0 */2 * 1")
-    assert cron.days_restricted is True
-    assert cron.weekdays_restricted is True
-    # 2026-09-14 is a Monday (day=14, not in 1..31 step 2) -> fires via OR because both are restricted
-    assert cron.fires_on(date(2026, 9, 14)) is True
-    assert _module.Cron.parse("0 0 * * */2").weekdays_restricted is True
-    assert _module.Cron.parse("0 0 * * *").days_restricted is False
-    assert _module.Cron.parse("0 0 * * *").weekdays_restricted is False
+    # "0 0 */2 * 1" restricts both DOM (odd days) and DOW (Mondays), so even Mondays fire via OR -> max gap <= 2 days.
+    assert largest_gap(["0 0 */2 * 1"]) == timedelta(days=2)
 
 
 def test_a_missing_binary_is_no_grace_not_a_crash() -> None:

@@ -19,7 +19,6 @@ from data_engine.datahub.backtest import BacktestOutcome, BacktestPending
 from data_engine.lanes import backtest as lane
 from data_engine.quality.nightly_verdicts import TICK_TAG
 from factors.backtest.engine import Performance
-from truealpha_runtime.testing import load_tool
 
 TICK = "2026-10-12T21:45:00+00:00"
 
@@ -74,9 +73,9 @@ def test_the_projection_fires_at_least_15_minutes_before_the_backtest_on_every_b
     Both crons come from the deployed lanes. The estate's own cron reader (`tools/scheduler_liveness.py`)
     parses them. Red on `7 10 * * 0`: no projection fires on a weekday.
     """
+    from cron_schedule import Cron as cron
     from data_engine.lanes import strategy_history
 
-    cron = load_tool("nightly_verdicts").Cron
     projection, backtest = cron.parse(strategy_history.STRATEGY_HISTORY_CRON), cron.parse(lane.BACKTEST_CRON)
     monday = datetime(2026, 10, 12, tzinfo=UTC)
     backtests = backtest.fires_between(monday, monday + timedelta(days=7))
