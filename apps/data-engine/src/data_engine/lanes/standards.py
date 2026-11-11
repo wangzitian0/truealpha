@@ -359,7 +359,11 @@ def run_supply_chain_exposure(
         if isinstance(head, NoHead):
             return _no_head_response(context, config.universe, "supply chain exposure rows")
         universe, identity_failure = _canonical_universe_or_failure(
-            context, "supply chain exposure", connection, head, _universe_tickers(connection, config.universe)
+            context,
+            "supply chain exposure",
+            connection,
+            head,
+            _universe_tickers(connection, config.universe, use_planner=True),
         )
         if universe is None:
             return json.dumps(
