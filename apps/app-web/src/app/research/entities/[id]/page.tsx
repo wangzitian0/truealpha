@@ -1,8 +1,9 @@
-import type { ReactNode } from "react";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { AvailabilityBadge, ReadStateNotice } from "@/components/read-state";
 import { CardExportButton } from "@/components/card-export-button";
+import { ModuleMetaFooter, StatBox } from "@/components/entity-stat-card";
+import { ResearchTable } from "@/components/research-table";
 import {
   normalizePegConvention,
   PEG_CONVENTION_LABELS,
@@ -26,80 +27,6 @@ import {
 } from "@/client/format";
 
 export const dynamic = "force-dynamic";
-
-function StatBox({
-  label,
-  value,
-  title,
-  testId,
-  valueClass = "text-white",
-}: {
-  label: string;
-  value: ReactNode;
-  title?: string;
-  testId?: string;
-  valueClass?: string;
-}) {
-  return (
-    <div className="rounded-lg border border-border/60 bg-slate-900/50 p-3">
-      <div className="text-xs text-gray-400">{label}</div>
-      <div className={`mt-1 font-mono text-xl font-bold ${valueClass}`} data-testid={testId} title={title}>
-        {value}
-      </div>
-    </div>
-  );
-}
-
-function ModuleMetaFooter({
-  extractor,
-  extractorTestId,
-  confidence,
-  cutoff,
-  secondLabel,
-  secondValue,
-  reasonCodes,
-  reasonLabel,
-  reasonTestId,
-}: {
-  extractor: string;
-  extractorTestId: string;
-  confidence: string | null;
-  cutoff: string;
-  secondLabel: string;
-  secondValue: string;
-  reasonCodes: readonly string[];
-  reasonLabel: string;
-  reasonTestId: string;
-}) {
-  return (
-    <div className="border-t border-border/60 pt-3 text-xs text-gray-400 space-y-1">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <span>
-          Extractor: <span className="font-mono text-gray-300" data-testid={extractorTestId}>{extractor}</span>
-        </span>
-        <span>
-          Confidence:{" "}
-          <span className="font-mono text-gray-300" title={confidence ?? undefined}>
-            {formatCell(formatRatio(confidence))}
-          </span>
-        </span>
-      </div>
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <span>
-          Cutoff: <span className="font-mono text-gray-300">{cutoff}</span>
-        </span>
-        <span>
-          {secondLabel}: <span className="font-mono text-gray-300">{secondValue}</span>
-        </span>
-      </div>
-      {reasonCodes.length > 0 && (
-        <div className="font-mono text-[11px] text-gray-500" data-testid={reasonTestId}>
-          {reasonLabel}: {reasonCodes.join(", ")}
-        </div>
-      )}
-    </div>
-  );
-}
 
 export default async function EntityDetailPage({
   params,
@@ -498,67 +425,53 @@ export default async function EntityDetailPage({
 
           <div className="space-y-3">
             <h2 className="text-base font-semibold text-gray-200">Cutoff Timeline &amp; Decision History</h2>
-            <div className="overflow-x-auto rounded-xl border border-border">
-              <table className="w-full text-left text-sm">
-                <caption className="sr-only">{displayName} across cutoffs</caption>
-                <thead className="bg-card text-xs uppercase text-gray-500">
-                  <tr>
-                    {timelineHeaders.map((h) => (
-                      <th key={h} scope="col" className="px-4 py-3">
-                        {h}
-                      </th>
-                    ))}
+            <ResearchTable caption={`${displayName} across cutoffs`} headers={timelineHeaders}>
+              {sortedRows.map((row) => {
+                const rowProjectedPeg = projectPegByConvention(row, convention).peg;
+                return (
+                  <tr key={row.cutoffAt} className="border-t border-border">
+                    <th scope="row" className="px-4 py-3 font-medium text-white">
+                      {row.cutoffAt}
+                    </th>
+                    <td className="px-4 py-3 font-mono" title={row.capitalAdjustedLaborEfficiency ?? undefined}>
+                      {formatUsdMagnitude(row.capitalAdjustedLaborEfficiency) ?? formatCell(row.capitalAdjustedLaborEfficiency)}
+                      {row.capitalAdjustedLaborEfficiency !== null && (
+                        <div className="font-sans text-[11px] text-gray-500" data-testid="labor-row-metric">
+                          {row.laborEfficiencyMetric ?? "metric not recorded"}
+                        </div>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 font-mono" title={row.currentPriceToSales ?? undefined}>
+                      {formatRatio(row.currentPriceToSales) ?? formatCell(row.currentPriceToSales)}
+                    </td>
+                    <td className="px-4 py-3 font-mono" title={row.currentMultiple ?? undefined}>
+                      {row.currentMultiple
+                        ? `${formatRatio(row.currentMultiple)} ${valuationBasisLabel(row.valuationBasis ?? null)}`
+                        : formatCell(null)}
+                    </td>
+                    <td className="px-4 py-3">{formatTierLabel(row.tier)}</td>
+                    <td className={`px-4 py-3 font-mono font-medium ${signColor(row.valuationGap)}`} title={row.valuationGap ?? undefined}>
+                      {formatSignedRatio(row.valuationGap) ?? formatCell(row.valuationGap)}
+                    </td>
+                    <td className="px-4 py-3 font-mono" title={rowProjectedPeg ?? undefined}>
+                      {formatRatio(rowProjectedPeg) ?? formatCell(rowProjectedPeg)}
+                    </td>
+                    <td className="px-4 py-3">
+                      <AvailabilityBadge status={row.availability} />
+                    </td>
+                    <td className="px-4 py-3">
+                      <Link
+                        href={`/research/trace?issuer=${encodeURIComponent(row.issuerId)}&cutoff=${encodeURIComponent(row.cutoffAt)}`}
+                        className="font-mono text-xs text-gray-400 hover:text-accent"
+                        data-evidence={row.traceId}
+                      >
+                        {row.traceId}
+                      </Link>
+                    </td>
                   </tr>
-                </thead>
-                <tbody>
-                  {sortedRows.map((row) => {
-                    const rowProjectedPeg = projectPegByConvention(row, convention).peg;
-                    return (
-                      <tr key={row.cutoffAt} className="border-t border-border">
-                        <th scope="row" className="px-4 py-3 font-medium text-white">
-                          {row.cutoffAt}
-                        </th>
-                        <td className="px-4 py-3 font-mono" title={row.capitalAdjustedLaborEfficiency ?? undefined}>
-                          {formatUsdMagnitude(row.capitalAdjustedLaborEfficiency) ?? formatCell(row.capitalAdjustedLaborEfficiency)}
-                          {row.capitalAdjustedLaborEfficiency !== null && (
-                            <div className="font-sans text-[11px] text-gray-500" data-testid="labor-row-metric">
-                              {row.laborEfficiencyMetric ?? "metric not recorded"}
-                            </div>
-                          )}
-                        </td>
-                        <td className="px-4 py-3 font-mono" title={row.currentPriceToSales ?? undefined}>
-                          {formatRatio(row.currentPriceToSales) ?? formatCell(row.currentPriceToSales)}
-                        </td>
-                        <td className="px-4 py-3 font-mono" title={row.currentMultiple ?? undefined}>
-                          {row.currentMultiple
-                            ? `${formatRatio(row.currentMultiple)} ${valuationBasisLabel(row.valuationBasis ?? null)}`
-                            : formatCell(null)}
-                        </td>
-                        <td className="px-4 py-3">{formatTierLabel(row.tier)}</td>
-                        <td className={`px-4 py-3 font-mono font-medium ${signColor(row.valuationGap)}`} title={row.valuationGap ?? undefined}>
-                          {formatSignedRatio(row.valuationGap) ?? formatCell(row.valuationGap)}
-                        </td>
-                        <td className="px-4 py-3 font-mono" title={rowProjectedPeg ?? undefined}>
-                          {formatRatio(rowProjectedPeg) ?? formatCell(rowProjectedPeg)}
-                        </td>
-                        <td className="px-4 py-3">
-                          <AvailabilityBadge status={row.availability} />
-                        </td>
-                        <td className="px-4 py-3">
-                          <Link
-                            href={`/research/trace?issuer=${encodeURIComponent(row.issuerId)}&cutoff=${encodeURIComponent(row.cutoffAt)}`}
-                            className="font-mono text-xs text-gray-400 hover:text-accent"
-                            data-evidence={row.traceId}
-                          >
-                            {row.traceId}
-                          </Link>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+                );
+              })}
+            </ResearchTable>
           </div>
         </>
       )}

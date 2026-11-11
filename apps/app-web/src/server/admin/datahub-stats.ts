@@ -21,6 +21,7 @@ import {
   resolveHeadFreshness,
 } from "../../contracts/serviceObjectives";
 import { idPrefixLikesOfRole } from "../../contracts/universes";
+import { textOrNull } from "@/client/coerce";
 import { withOpsReader } from "./ops";
 
 export interface FactorAvailabilityRow {
@@ -183,9 +184,10 @@ interface QuestionCoverageDbRow {
   };
 }
 
-const QUESTION_COVERAGE_SQL = `
-  select distinct on (universe_id) universe_id, cutoff::text, created_at::text, payload
-  from mart.question_coverage_report r
+function governedLatestPerUniverseSql(table: string, extraCols: string = ""): string {
+  return `
+  select distinct on (universe_id) universe_id${extraCols}, cutoff::text, created_at::text, payload
+  from ${table} r
   where universe_id in (select universe_id from mart.served_head)
   order by universe_id,
            exists (
@@ -195,6 +197,9 @@ const QUESTION_COVERAGE_SQL = `
            ) desc,
            created_at desc
 `;
+}
+
+const QUESTION_COVERAGE_SQL = governedLatestPerUniverseSql("mart.question_coverage_report");
 
 function questionCoverageRows(rows: QuestionCoverageDbRow[]): QuestionCoverageRow[] {
   return rows.map((row) => {
@@ -318,40 +323,39 @@ export const ORACLE_OUTCOMES_SQL = `
     group by universe_id, field
   )
   select
-    universe_id,
-    field,
-    compared,
-    agree,
-    disagree,
-    not_comparable,
-    no_served_value_count,
-    newest_compared_at,
+    r.universe_id,
+    r.field,
+    r.compared,
+    r.agree,
+    r.disagree,
+    r.not_comparable,
+    r.no_served_value_count,
+    r.newest_compared_at,
     case
-      when compared <= 0 then null
+      when r.compared <= 0 then null
       else least(
         1.0::numeric,
         greatest(
           0.0::numeric,
           round(
             (
-              (
-                (disagree::numeric / compared::numeric)
-                + (1.959963984540054::numeric * 1.959963984540054::numeric) / (2.0::numeric * compared::numeric)
-                + 1.959963984540054::numeric * sqrt(
-                  (
-                    (disagree::numeric / compared::numeric) * (1.0::numeric - (disagree::numeric / compared::numeric))
-                    + (1.959963984540054::numeric * 1.959963984540054::numeric) / (4.0::numeric * compared::numeric)
-                  ) / compared::numeric
-                )
-              ) / (1.0::numeric + (1.959963984540054::numeric * 1.959963984540054::numeric) / compared::numeric)
+              (w.p + w.z2 / (2.0::numeric * r.compared::numeric)
+                + w.z * sqrt((w.p * (1.0::numeric - w.p) + w.z2 / (4.0::numeric * r.compared::numeric)) / r.compared::numeric)
+              ) / (1.0::numeric + w.z2 / r.compared::numeric)
             )::numeric,
             6
           )
         )
       )::text
     end as wilson_95_upper_bound
-  from rolled
-  order by universe_id, field
+  from rolled r
+  cross join lateral (
+    select
+      1.959963984540054::numeric as z,
+      (1.959963984540054::numeric * 1.959963984540054::numeric) as z2,
+      case when r.compared > 0 then r.disagree::numeric / r.compared::numeric else 0.0::numeric end as p
+  ) w
+  order by r.universe_id, r.field
 `;
 
 export function oracleOutcomesTable(
@@ -458,18 +462,7 @@ interface ConfidenceReportDbRow {
   };
 }
 
-const CONFIDENCE_REPORT_SQL = `
-  select distinct on (universe_id) universe_id, run_id, cutoff::text, created_at::text, payload
-  from mart.datahub_confidence_report r
-  where universe_id in (select universe_id from mart.served_head)
-  order by universe_id,
-           exists (
-             select 1 from mart.served_head h
-             where h.universe_id = r.universe_id
-               and coalesce(h.run_id, h.head_run_id) = r.run_id
-           ) desc,
-           created_at desc
-`;
+const CONFIDENCE_REPORT_SQL = governedLatestPerUniverseSql("mart.datahub_confidence_report", ", run_id");
 
 function originCounts(byOrigins: Record<string, number> | undefined): ConfidenceOriginCounts | null {
   if (byOrigins === undefined) return null;
@@ -830,24 +823,31 @@ export function vendorAccountRows(
       }),
     ) as Record<string, VendorAccountEnvironmentShareSummary>;
 
-    let rowsToday = 0;
-    let failedToday = 0;
-    let http429Today = 0;
-    let code1302Today = 0;
-    let peak1s = 0;
-    let peak30s = 0;
-    let peak60s = 0;
+    const sums = {
+      rows_today: 0,
+      failed_today: 0,
+      http_429_today: 0,
+      code_1302_today: 0,
+      peak_1s: 0,
+      peak_30s: 0,
+      peak_60s: 0,
+    };
     for (const seat of account.seats) {
       const seatRow = bySource.get(seat);
       if (!seatRow) continue;
-      rowsToday += Number(seatRow.rows_today ?? 0);
-      failedToday += Number(seatRow.failed_today ?? 0);
-      http429Today += Number(seatRow.http_429_today ?? 0);
-      code1302Today += Number(seatRow.code_1302_today ?? 0);
-      peak1s += Number(seatRow.peak_1s ?? 0);
-      peak30s += Number(seatRow.peak_30s ?? 0);
-      peak60s += Number(seatRow.peak_60s ?? 0);
+      for (const k of Object.keys(sums) as (keyof typeof sums)[]) {
+        sums[k] += Number(seatRow[k] ?? 0);
+      }
     }
+    const {
+      rows_today: rowsToday,
+      failed_today: failedToday,
+      http_429_today: http429Today,
+      code_1302_today: code1302Today,
+      peak_1s: peak1s,
+      peak_30s: peak30s,
+      peak_60s: peak60s,
+    } = sums;
 
     const modelLimits =
       account.name === "model_plan" && Object.prototype.hasOwnProperty.call(MODEL_SEAT.environments, env)
@@ -1104,7 +1104,6 @@ interface HeadDbRow extends Omit<HeadStatusRow, "factors" | "listing_ratio"> {
 }
 
 const RATIO_OUTCOMES: ListingRatioOutcome[] = ["unparsed", "not_measured", "parsed", "ordinary"];
-const text = (v: unknown): string | null => (typeof v === "string" ? v : null);
 
 export function listingRatioReport(block: unknown): ListingRatioReport | null {
   if (block === null || typeof block !== "object") return null;
@@ -1116,17 +1115,17 @@ export function listingRatioReport(block: unknown): ListingRatioReport | null {
     const outcome = RATIO_OUTCOMES.find((candidate) => candidate === entry.outcome);
     if (outcome === undefined) continue;
     rows.push({
-      listing_id: text(entry.listing_id) ?? key,
-      issuer_id: text(entry.issuer_id),
-      ticker: text(entry.ticker),
+      listing_id: textOrNull(entry.listing_id) ?? key,
+      issuer_id: textOrNull(entry.issuer_id),
+      ticker: textOrNull(entry.ticker),
       outcome,
-      listing_units_per_share: text(entry.listing_units_per_share),
-      pattern: text(entry.pattern),
-      title: text(entry.title),
-      reason: text(entry.reason),
-      accession: text(entry.accession),
-      form: text(entry.form),
-      filed: text(entry.filed),
+      listing_units_per_share: textOrNull(entry.listing_units_per_share),
+      pattern: textOrNull(entry.pattern),
+      title: textOrNull(entry.title),
+      reason: textOrNull(entry.reason),
+      accession: textOrNull(entry.accession),
+      form: textOrNull(entry.form),
+      filed: textOrNull(entry.filed),
     });
   }
   rows.sort(

@@ -1,14 +1,11 @@
 import { formatShortSha } from "@/client/format";
+import { formatAgeHours } from "@/client/coerce";
 import { ReadStateNotice } from "@/components/read-state";
 import { TriggerRunButton } from "@/components/trigger-run-button";
 import { loadOpsOverview, RUNS_EMPTY_MESSAGE, RUNS_UNAVAILABLE_MESSAGE } from "@/server/admin/ops";
 import { getServerPrincipal } from "@/server/auth/request-context";
 
 export const dynamic = "force-dynamic";
-
-function formatElapsedHours(hours: number): string {
-  return hours < 1 ? `${Math.round(hours * 60)}m` : `${hours.toFixed(1)}h`;
-}
 
 export default async function AdminOverviewPage() {
   const principal = await getServerPrincipal();
@@ -70,7 +67,7 @@ export default async function AdminOverviewPage() {
               )}
             </div>
             <dd className="mt-1 text-lg font-semibold tabular-nums">
-              {pointer.ageHours !== null && pointer.ageHours !== undefined ? `${formatElapsedHours(pointer.ageHours)} ago` : "—"}
+              {pointer.ageHours !== null && pointer.ageHours !== undefined ? `${formatAgeHours(pointer.ageHours)} ago` : "—"}
             </dd>
             <p className="mt-1 truncate text-xs text-gray-500" title={pointer.targetRunId}>
               seq {pointer.sequence} · {pointer.targetRunId}
@@ -86,7 +83,7 @@ export default async function AdminOverviewPage() {
           <p className="mt-1 truncate text-xs text-gray-500" title={dataEngine?.runId}>
             {dataEngine === null
               ? "no run has recorded its build yet"
-              : `newest run ${formatElapsedHours((Date.now() - new Date(dataEngine.createdAt).getTime()) / 3_600_000)} ago · app ${formatShortSha(appGitSha)}`}
+              : `newest run ${formatAgeHours((Date.now() - new Date(dataEngine.createdAt).getTime()) / 3_600_000)} ago · app ${formatShortSha(appGitSha)}`}
           </p>
         </div>
         {quotaToday.map((entry) => (

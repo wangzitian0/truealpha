@@ -20,7 +20,7 @@
  */
 
 import { formatIssuerLabel } from "@/client/format";
-import { withMartReadonly } from "@/server/mart/db";
+import { queryMartRows } from "@/server/mart/db";
 
 export interface EntityDisplay {
   ticker: string;
@@ -54,15 +54,12 @@ export const ENTITY_DISPLAY_SQL = `select r.issuer_id,
        ) ei on ei.issuer_id = r.issuer_id`;
 
 export async function loadEntityDisplayMap(): Promise<Map<string, EntityDisplay>> {
-  const rows = await withMartReadonly(async (client) => {
-    const result = await client.query(ENTITY_DISPLAY_SQL);
-    return result.rows as {
-      issuer_id: string;
-      ticker: string;
-      display_name: string | null;
-      legacy_id: string | null;
-    }[];
-  });
+  const rows = await queryMartRows<{
+    issuer_id: string;
+    ticker: string;
+    display_name: string | null;
+    legacy_id: string | null;
+  }>(ENTITY_DISPLAY_SQL);
   const map = new Map<string, EntityDisplay>();
   for (const row of rows) {
     const display: EntityDisplay = {

@@ -2,6 +2,8 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { formatCell, formatRatio, formatSignedRatio, formatUsdMagnitude, signColor } from "@/client/format";
 import { AvailabilityBadge, ReadStateNotice } from "@/components/read-state";
+import { NextPageLink } from "@/components/next-page-link";
+import { ResearchTable } from "@/components/research-table";
 import { valuationBasisLabel } from "@/contracts/strategyRun";
 import { loadComparison } from "@/server/dashboard";
 import { entityLabel, loadEntityDisplayMap } from "@/server/mart/entity-resolution";
@@ -48,59 +50,44 @@ export default async function ComparePage({
       {state.kind === "ready" && (
         <>
           <p className="text-sm text-gray-500">Cutoff {state.data.cutoffAt} — {state.data.page.total} issuer(s).</p>
-          <div className="overflow-x-auto rounded-xl border border-border">
-            <table className="w-full text-left text-sm">
-              <caption className="sr-only">Issuer comparison at {state.data.cutoffAt}</caption>
-              <thead className="bg-card text-xs uppercase text-gray-500">
-                <tr>
-                  {headers.map((h) => (
-                    <th key={h} scope="col" className="px-4 py-3">{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {state.data.rows.map((row) => (
-                  <tr key={row.issuerId} className="border-t border-border">
-                    <th scope="row" className="px-4 py-3 font-medium">
-                      <Link href={`/research/entities/${encodeURIComponent(row.issuerId)}`} className="text-accent hover:underline" title={row.issuerId}>
-                        {entityLabel(row.issuerId, names)}
-                      </Link>
-                    </th>
-                    <td className="px-4 py-3 tabular-nums" title={row.capitalAdjustedLaborEfficiency ?? undefined}>
-                      {formatCell(formatUsdMagnitude(row.capitalAdjustedLaborEfficiency))}
-                      {row.capitalAdjustedLaborEfficiency !== null && (
-                        <div className="text-[11px] text-gray-500">{row.laborEfficiencyMetric ?? "metric not recorded"}</div>
-                      )}
-                    </td>
-                    <td className="px-4 py-3 tabular-nums" title={row.currentPriceToSales ?? undefined}>
-                      {formatCell(formatRatio(row.currentPriceToSales))}
-                    </td>
-                    <td className="px-4 py-3 tabular-nums" title={row.currentMultiple ?? undefined}>
-                      {formatCell(formatRatio(row.currentMultiple ?? null))}
-                    </td>
-                    <td className="px-4 py-3">{formatCell(row.tier)}</td>
-                    <td className={`px-4 py-3 tabular-nums ${signColor(row.valuationGap)}`} title={row.valuationGap ?? undefined}>
-                      {formatCell(formatSignedRatio(row.valuationGap))}
-                    </td>
-                    <td className="px-4 py-3 tabular-nums" title={row.confidence ?? undefined}>
-                      {formatCell(formatRatio(row.confidence))}
-                    </td>
-                    <td className="px-4 py-3"><AvailabilityBadge status={row.availability} /></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          {state.data.page.hasMore && state.data.page.nextCursor !== null && (
-            <Link
-              href={`/research/compare?cursor=${encodeURIComponent(state.data.page.nextCursor)}${
-                params.cutoff ? `&cutoff=${encodeURIComponent(params.cutoff)}` : ""
-              }`}
-              className="inline-block rounded-lg border border-border bg-card px-4 py-2 text-sm text-gray-300 hover:border-accent"
-            >
-              Next page →
-            </Link>
-          )}
+          <ResearchTable caption={`Issuer comparison at ${state.data.cutoffAt}`} headers={headers}>
+            {state.data.rows.map((row) => (
+              <tr key={row.issuerId} className="border-t border-border">
+                <th scope="row" className="px-4 py-3 font-medium">
+                  <Link href={`/research/entities/${encodeURIComponent(row.issuerId)}`} className="text-accent hover:underline" title={row.issuerId}>
+                    {entityLabel(row.issuerId, names)}
+                  </Link>
+                </th>
+                <td className="px-4 py-3 tabular-nums" title={row.capitalAdjustedLaborEfficiency ?? undefined}>
+                  {formatCell(formatUsdMagnitude(row.capitalAdjustedLaborEfficiency))}
+                  {row.capitalAdjustedLaborEfficiency !== null && (
+                    <div className="text-[11px] text-gray-500">{row.laborEfficiencyMetric ?? "metric not recorded"}</div>
+                  )}
+                </td>
+                <td className="px-4 py-3 tabular-nums" title={row.currentPriceToSales ?? undefined}>
+                  {formatCell(formatRatio(row.currentPriceToSales))}
+                </td>
+                <td className="px-4 py-3 tabular-nums" title={row.currentMultiple ?? undefined}>
+                  {formatCell(formatRatio(row.currentMultiple ?? null))}
+                </td>
+                <td className="px-4 py-3">{formatCell(row.tier)}</td>
+                <td className={`px-4 py-3 tabular-nums ${signColor(row.valuationGap)}`} title={row.valuationGap ?? undefined}>
+                  {formatCell(formatSignedRatio(row.valuationGap))}
+                </td>
+                <td className="px-4 py-3 tabular-nums" title={row.confidence ?? undefined}>
+                  {formatCell(formatRatio(row.confidence))}
+                </td>
+                <td className="px-4 py-3"><AvailabilityBadge status={row.availability} /></td>
+              </tr>
+            ))}
+          </ResearchTable>
+          <NextPageLink
+            hasMore={state.data.page.hasMore}
+            nextCursor={state.data.page.nextCursor}
+            href={`/research/compare?cursor=${encodeURIComponent(state.data.page.nextCursor ?? "")}${
+              params.cutoff ? `&cutoff=${encodeURIComponent(params.cutoff)}` : ""
+            }`}
+          />
         </>
       )}
     </section>

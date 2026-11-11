@@ -48,12 +48,7 @@ export function ProvenanceCell({ row }: { row: RankingRow }) {
 			</summary>
 			<dl className="mt-2 space-y-1 font-mono text-[11px] leading-relaxed text-gray-400">
 				{vintages.map(([label, value]) => (
-					<div key={label} className="flex gap-2">
-						<dt className="w-20 shrink-0 text-gray-600">{label}</dt>
-						<dd className={value === null ? "text-amber-500" : ""}>
-							{value ?? "unknown"}
-						</dd>
-					</div>
+					<Field key={label} label={label} value={value} />
 				))}
 				<Field label="Universe" value={p.universeVersion} />
 				<Field

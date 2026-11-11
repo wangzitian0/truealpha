@@ -5,7 +5,8 @@
 import { formatRatio } from "@/client/format";
 import type { ValuationBasis } from "@/contracts/strategyRun";
 import { idPrefixLikeOfRole } from "@/contracts/universes";
-import { withMartReadonly } from "./db";
+import { nullableString, stringArray } from "@/client/coerce";
+import { resolveGovernedHeadRunId, withMartReadonly } from "./db";
 import type { MartClientLike } from "./topt-gppe-repository";
 
 export type ValuedHoldingRow = {
@@ -37,24 +38,6 @@ export type FundValuation = {
   reasonCodes: string[];
   lines: ValuedHoldingRow[];
 };
-
-const QQQ_POINTER_HEAD_SQL = `
-  select run_id, freshness, availability, staleness_reason
-  from mart.served_head
-  where factor_id = 'gross_profit_per_employee'
-    and universe_id like $1
-  order by advanced_at desc limit 1
-`;
-
-const QQQ_ACCEPTANCE_FALLBACK_HEAD_SQL = `
-  select s.run_id
-  from mart.topt_capture_status s
-  join mart.datahub_quality_report q on q.run_id = s.run_id
-  where s.environment = (select environment from mart.environment_identity)
-    and s.complete
-    and s.universe_id like $1
-  order by q.created_at desc, q.report_id desc limit 1
-`;
 
 const VALUED_LINES_SQL = `
   select v.fund_id,
@@ -133,24 +116,14 @@ type ConsolidationRow = {
   reasonCodes: string[];
 };
 
-const optStr = (v: unknown): string | null => (v === null || v === undefined ? null : String(v));
 const fmtOrZero = (v: unknown): string => (typeof v === "string" ? formatRatio(v) : null) ?? "0.00";
 
 export async function loadFundValuation(
   runWithClient: <T>(fn: (client: MartClientLike) => Promise<T>) => Promise<T> = withMartReadonly,
 ): Promise<FundValuation[]> {
   return runWithClient(async (client) => {
-    const fundUniverseLike = idPrefixLikeOfRole("fund_consolidation");
-    let head = await client.query(QQQ_POINTER_HEAD_SQL, [fundUniverseLike]);
-    let rawRunId: unknown = null;
-    if (head.rows.length > 0) {
-      const row = head.rows[0];
-      rawRunId = row.availability === "unavailable" || row.run_id === null ? null : row.run_id;
-    } else {
-      head = await client.query(QQQ_ACCEPTANCE_FALLBACK_HEAD_SQL, [fundUniverseLike]);
-      rawRunId = head.rows.length > 0 ? head.rows[0].run_id : null;
-    }
-    const runId = typeof rawRunId === "string" && rawRunId.length > 0 ? rawRunId : null;
+    const head = await resolveGovernedHeadRunId(client, idPrefixLikeOfRole("fund_consolidation"));
+    const runId = typeof head.runId === "string" && head.runId.length > 0 ? head.runId : null;
     const joinRunId = runId ?? "capture-run:none";
     const result = await client.query(VALUED_LINES_SQL, [joinRunId]);
 
@@ -164,10 +137,10 @@ export async function loadFundValuation(
             ? row.valuation_basis
             : null,
         valuedWeightPct: fmtOrZero(row.valued_weight_pct),
-        availabilityStatus: optStr(row.availability_status),
-        sourceEvidenceStatus: optStr(row.source_evidence_status),
-        factorValidationStatus: optStr(row.factor_validation_status),
-        reasonCodes: Array.isArray(row.reason_codes) ? row.reason_codes.map(String) : [],
+        availabilityStatus: nullableString(row.availability_status),
+        sourceEvidenceStatus: nullableString(row.source_evidence_status),
+        factorValidationStatus: nullableString(row.factor_validation_status),
+        reasonCodes: stringArray(row.reason_codes),
       });
     }
 
@@ -206,15 +179,15 @@ export async function loadFundValuation(
       }
       fund.lines.push({
         holdingName: String(row.holding_name),
-        ticker: optStr(row.ticker),
-        weightPct: optStr(row.weight_pct),
-        currentPs: optStr(row.current_ps),
-        targetPsMidpoint: optStr(row.target_ps_midpoint),
-        currentPgp: optStr(row.current_pgp),
-        targetPgpMidpoint: optStr(row.target_pgp_midpoint),
-        valuationGap: optStr(row.valuation_gap),
-        tier: optStr(row.tier),
-        availability: optStr(row.availability),
+        ticker: nullableString(row.ticker),
+        weightPct: nullableString(row.weight_pct),
+        currentPs: nullableString(row.current_ps),
+        targetPsMidpoint: nullableString(row.target_ps_midpoint),
+        currentPgp: nullableString(row.current_pgp),
+        targetPgpMidpoint: nullableString(row.target_pgp_midpoint),
+        valuationGap: nullableString(row.valuation_gap),
+        tier: nullableString(row.tier),
+        availability: nullableString(row.availability),
       });
     }
     return [...byFund.values()].sort((a, b) => a.fundName.localeCompare(b.fundName));

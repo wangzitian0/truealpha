@@ -13,6 +13,7 @@
  * in a `title` attribute.
  */
 
+import { timestampText } from "@/client/coerce";
 import { withMartReadonly } from "@/server/mart/db";
 import type { ReadState } from "@/server/read-state";
 
@@ -68,11 +69,6 @@ export const MONTHS_SQL =
 /** The SQLSTATE of "relation does not exist": the database predates the migration of #1255. */
 const UNDEFINED_TABLE = "42P01";
 
-function text(value: unknown): string {
-  if (value instanceof Date) return value.toISOString();
-  return String(value);
-}
-
 /** The SQL formats dates as text, so the driver never builds a Date in the server's time zone. */
 function day(value: unknown): string {
   return String(value).slice(0, 10);
@@ -100,9 +96,9 @@ export async function loadMacroPanel(principal: MacroPrincipal | null): Promise<
           ? null
           : {
               observationDate: day(row.observation_day),
-              value: text(row.value),
+              value: timestampText(row.value),
               source: String(row.source),
-              fetchedAt: text(row.fetched_at),
+              fetchedAt: timestampText(row.fetched_at),
               ageDays: Number(row.age_days),
             },
       isFresh: row.is_fresh === true,
@@ -110,7 +106,7 @@ export async function loadMacroPanel(principal: MacroPrincipal | null): Promise<
     const months: MacroObservationRow[] = monthRows.map((row) => ({
       seriesId: String(row.series_id),
       observationDate: day(row.observation_day),
-      value: text(row.value),
+      value: timestampText(row.value),
     }));
     return { kind: "ready", data: { series, months } };
   } catch (error) {

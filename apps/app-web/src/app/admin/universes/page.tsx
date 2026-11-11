@@ -5,6 +5,7 @@
  */
 
 import { formatCell, formatShortSha, formatUsdMagnitude } from "@/client/format";
+import { EmptyNotice } from "@/components/data-table";
 import { loadUniverses } from "@/server/admin/universes";
 import { getServerPrincipal } from "@/server/auth/request-context";
 
@@ -27,9 +28,9 @@ export default async function AdminUniversesPage() {
       </p>
 
       {overview.heads.length === 0 && (
-        <p className="rounded-lg border border-border bg-card p-4 text-gray-400">
+        <EmptyNotice>
           No governed universe heads published yet — run the constituent refresh with --publish.
-        </p>
+        </EmptyNotice>
       )}
 
       {overview.heads.map((head) => (

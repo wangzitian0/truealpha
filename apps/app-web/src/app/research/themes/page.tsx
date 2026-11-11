@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { formatCell, formatPercentFromFraction, formatRatio, formatShortSha } from "@/client/format";
+import { ResearchTable } from "@/components/research-table";
 import { getServerPrincipal } from "@/server/auth/request-context";
 import { entityLabel, loadEntityDisplayMap } from "@/server/mart/entity-resolution";
 import { classifiedShare, loadThemePurity } from "@/server/mart/theme-purity";
@@ -66,53 +67,44 @@ export default async function ThemesPage() {
                 ) · run {group.runId} · cutoff {group.cutoff}
               </p>
             </div>
-            <div className="overflow-x-auto rounded-xl border border-border">
-              <table className="w-full text-left text-sm">
-                <caption className="sr-only">Issuers ranked by {group.theme} revenue share at {group.cutoff}</caption>
-                <thead className="bg-card text-xs uppercase text-gray-500">
-                  <tr>
-                    {headers.map((h) => (
-                      <th key={h} scope="col" className="px-4 py-3">{h}</th>
-                    ))}
+            <ResearchTable
+              caption={`Issuers ranked by ${group.theme} revenue share at ${group.cutoff}`}
+              headers={headers}
+            >
+              {group.rows.map((row, index) => {
+                const classified = classifiedShare(row);
+                return (
+                  <tr key={row.issuerId} className="border-t border-border">
+                    <td className="px-4 py-3">{row.themeShare === null ? "—" : index + 1}</td>
+                    <th scope="row" className="px-4 py-3 font-medium">
+                      <Link href={`/research/entities/${encodeURIComponent(row.issuerId)}`} className="text-accent hover:underline" title={row.issuerId}>
+                        {entityLabel(row.issuerId, names)}
+                      </Link>
+                    </th>
+                    <td className="px-4 py-3 tabular-nums" title={row.themeShare ?? undefined}>
+                      {row.themeShare === null ? <span className="text-gray-500">refused</span> : formatCell(formatPercentFromFraction(row.themeShare))}
+                    </td>
+                    <td className="px-4 py-3 tabular-nums" title={classified ?? undefined}>
+                      {formatCell(formatPercentFromFraction(classified))}
+                    </td>
+                    <td className="px-4 py-3 tabular-nums" title={row.inThemeRevenue}>{millions(row.inThemeRevenue)}</td>
+                    <td className="px-4 py-3 tabular-nums" title={row.consolidatedRevenue}>{millions(row.consolidatedRevenue)}</td>
+                    <td className="px-4 py-3 tabular-nums">{row.segments}</td>
+                    <td className="px-4 py-3">{row.periodEnd}</td>
+                    <td className="px-4 py-3 tabular-nums" title={row.confidence}>{formatCell(formatRatio(row.confidence))}</td>
+                    <td className="px-4 py-3 text-xs">
+                      <span title={row.extractor}>{row.availabilityStatus}</span>
+                      {row.reasonCodes.length > 0 && (
+                        <>
+                          {" "}
+                          <span className="ml-1 text-gray-500">({row.reasonCodes.join(", ")})</span>
+                        </>
+                      )}
+                    </td>
                   </tr>
-                </thead>
-                <tbody>
-                  {group.rows.map((row, index) => {
-                    const classified = classifiedShare(row);
-                    return (
-                      <tr key={row.issuerId} className="border-t border-border">
-                        <td className="px-4 py-3">{row.themeShare === null ? "—" : index + 1}</td>
-                        <th scope="row" className="px-4 py-3 font-medium">
-                          <Link href={`/research/entities/${encodeURIComponent(row.issuerId)}`} className="text-accent hover:underline" title={row.issuerId}>
-                            {entityLabel(row.issuerId, names)}
-                          </Link>
-                        </th>
-                        <td className="px-4 py-3 tabular-nums" title={row.themeShare ?? undefined}>
-                          {row.themeShare === null ? <span className="text-gray-500">refused</span> : formatCell(formatPercentFromFraction(row.themeShare))}
-                        </td>
-                        <td className="px-4 py-3 tabular-nums" title={classified ?? undefined}>
-                          {formatCell(formatPercentFromFraction(classified))}
-                        </td>
-                        <td className="px-4 py-3 tabular-nums" title={row.inThemeRevenue}>{millions(row.inThemeRevenue)}</td>
-                        <td className="px-4 py-3 tabular-nums" title={row.consolidatedRevenue}>{millions(row.consolidatedRevenue)}</td>
-                        <td className="px-4 py-3 tabular-nums">{row.segments}</td>
-                        <td className="px-4 py-3">{row.periodEnd}</td>
-                        <td className="px-4 py-3 tabular-nums" title={row.confidence}>{formatCell(formatRatio(row.confidence))}</td>
-                        <td className="px-4 py-3 text-xs">
-                          <span title={row.extractor}>{row.availabilityStatus}</span>
-                          {row.reasonCodes.length > 0 && (
-                            <>
-                              {" "}
-                              <span className="ml-1 text-gray-500">({row.reasonCodes.join(", ")})</span>
-                            </>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+                );
+              })}
+            </ResearchTable>
           </div>
         ))
       )}

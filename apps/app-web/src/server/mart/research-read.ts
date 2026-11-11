@@ -14,7 +14,9 @@ import {
 	type ValuationBasis,
 	valuationBasisOf,
 } from "@/contracts/strategyRun";
-import { withMartReadonly } from "./db";
+import { nullableString, numberOrZero, recordOf, stringArray } from "@/client/coerce";
+import { servedRunPredicate, withMartReadonly } from "./db";
+export { servedRunPredicate } from "./db";
 import {
 	type DecisionProvenance,
 	MartStrategyRunRepository,
@@ -32,10 +34,6 @@ export type Availability =
 export const DASHBOARD_STRATEGY_ID = "large_model_value_v0";
 
 export const SERVED_HEAD_SQL = `select run_id, freshness, availability from mart.served_head`;
-
-export function servedRunPredicate(column: string): string {
-	return `${column} in (select h.run_id from mart.served_head h where h.run_id is not null)`;
-}
 
 export interface RunIdentity {
 	strategyRunId: string | null;
@@ -425,12 +423,6 @@ export const TRACE_LINEAGE_SQL = `
 	order by m.result_id
 	limit 1
 `;
-
-function recordOf(value: unknown): Record<string, unknown> | null {
-	return typeof value === "object" && value !== null && !Array.isArray(value)
-		? (value as Record<string, unknown>)
-		: null;
-}
 
 function lineageText(value: unknown, field: string): string | null {
 	if (value === null || value === undefined) return null;
@@ -1047,57 +1039,68 @@ export class StrategyRunReadAdapter {
 		});
 	}
 
+	private async queryIssuerServedRow(
+		label: string,
+		table: string,
+		alias: string,
+		predicate: string,
+		selectColumns: string,
+		issuerId: string,
+	): Promise<Record<string, unknown> | null> {
+		return this.safeQuery(label, null, async (client) => {
+			const result = await client.query(
+				`select ${selectColumns}
+				 from ${table} ${alias}
+				 where ${predicate}
+				   and ${servedRunPredicate(`${alias}.run_id`)}
+				 order by (${alias}.availability_status = 'available') desc, ${alias}.cutoff desc, ${alias}.created_at desc
+				 limit 1`,
+				[issuerId],
+			);
+			return result.rows[0] ?? null;
+		});
+	}
+
 	async entityAnalystRatings(
 		_context: AccessContext,
 		issuerId: string,
 	): Promise<AnalystRatingsDetail | null> {
 		const predicate = this.bidirectionalIssuerPredicate("r.issuer_id");
-		return this.safeQuery("entityAnalystRatings", null, async (client) => {
-			const result = await client.query(
-				`select r.run_id,
-				        to_char(r.cutoff at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as cutoff,
-				        r.consensus_rating::text as consensus_rating,
-				        coalesce(
-				            to_jsonb(r) ->> 'target_price',
-				            (select substring(rc from '^target_price:([0-9.]+)$')
-				             from unnest(r.reason_codes) as rc
-				             where rc like 'target_price:%' limit 1)
-				        ) as target_price,
-				        r.analysts_count, r.buy_count, r.hold_count, r.sell_count,
-				        r.confidence::text as confidence, r.reason_codes, r.extractor,
-				        coalesce(r.availability_status, 'unavailable') as availability_status,
-				        coalesce(r.source_evidence_status, 'degraded') as source_evidence_status,
-				        coalesce(r.factor_validation_status, 'not_evaluated') as factor_validation_status
-				 from mart.issuer_analyst_ratings r
-				 where ${predicate}
-				   and ${servedRunPredicate("r.run_id")}
-				 order by (r.availability_status = 'available') desc, r.cutoff desc, r.created_at desc
-				 limit 1`,
-				[issuerId],
-			);
-			const row = result.rows[0];
-			if (!row) return null;
-			const reasonCodes = stringArray(row.reason_codes);
-			const targetFromReason = reasonCodes
-				.find((code) => code.startsWith("target_price:"))
-				?.slice("target_price:".length);
-			return {
-				runId: String(row.run_id ?? ""),
-				cutoff: String(row.cutoff ?? ""),
-				consensusRating: nullableString(row.consensus_rating),
-				targetPrice: nullableString(row.target_price) ?? targetFromReason ?? null,
-				analystsCount: numberOrZero(row.analysts_count),
-				buyCount: numberOrZero(row.buy_count),
-				holdCount: numberOrZero(row.hold_count),
-				sellCount: numberOrZero(row.sell_count),
-				confidence: nullableString(row.confidence),
-				reasonCodes,
-				extractor: String(row.extractor ?? "origin:moomoo:v1"),
-				availabilityStatus: toAvailabilityStatus(row.availability_status),
-				sourceEvidenceStatus: String(row.source_evidence_status ?? "degraded"),
-				factorValidationStatus: String(row.factor_validation_status ?? "not_evaluated"),
-			};
-		});
+		const row = await this.queryIssuerServedRow(
+			"entityAnalystRatings",
+			"mart.issuer_analyst_ratings",
+			"r",
+			predicate,
+			`r.run_id,
+			 to_char(r.cutoff at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as cutoff,
+			 r.consensus_rating::text as consensus_rating,
+			 coalesce(
+			     to_jsonb(r) ->> 'target_price',
+			     (select substring(rc from '^target_price:([0-9.]+)$')
+			      from unnest(r.reason_codes) as rc
+			      where rc like 'target_price:%' limit 1)
+			 ) as target_price,
+			 r.analysts_count, r.buy_count, r.hold_count, r.sell_count,
+			 r.confidence::text as confidence, r.reason_codes, r.extractor,
+			 coalesce(r.availability_status, 'unavailable') as availability_status,
+			 coalesce(r.source_evidence_status, 'degraded') as source_evidence_status,
+			 coalesce(r.factor_validation_status, 'not_evaluated') as factor_validation_status`,
+			issuerId,
+		);
+		if (!row) return null;
+		const meta = moduleDetailMetadata(row, "origin:moomoo:v1");
+		const targetFromReason = meta.reasonCodes
+			.find((code) => code.startsWith("target_price:"))
+			?.slice("target_price:".length);
+		return {
+			...meta,
+			consensusRating: nullableString(row.consensus_rating),
+			targetPrice: nullableString(row.target_price) ?? targetFromReason ?? null,
+			analystsCount: numberOrZero(row.analysts_count),
+			buyCount: numberOrZero(row.buy_count),
+			holdCount: numberOrZero(row.hold_count),
+			sellCount: numberOrZero(row.sell_count),
+		};
 	}
 
 	async entitySupplyChainExposure(
@@ -1105,55 +1108,45 @@ export class StrategyRunReadAdapter {
 		issuerId: string,
 	): Promise<SupplyChainExposureDetail | null> {
 		const predicate = this.bidirectionalIssuerPredicate("s.issuer_id");
-		return this.safeQuery("entitySupplyChainExposure", null, async (client) => {
-			const result = await client.query(
-				`select s.run_id,
-				        to_char(s.cutoff at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as cutoff,
-				        s.exposure_score::text as exposure_score,
-				        s.direct_partners, s.suppliers_count, s.customers_count,
-				        s.max_partner_share::text as max_partner_share,
-				        s.confidence::text as confidence, s.reason_codes, s.extractor,
-				        coalesce(s.availability_status, 'unavailable') as availability_status,
-				        coalesce(s.source_evidence_status, 'degraded') as source_evidence_status,
-				        coalesce(s.factor_validation_status, 'not_evaluated') as factor_validation_status
-				 from mart.issuer_supply_chain_exposure s
-				 where ${predicate}
-				   and ${servedRunPredicate("s.run_id")}
-				 order by (s.availability_status = 'available') desc, s.cutoff desc, s.created_at desc
-				 limit 1`,
-				[issuerId],
-			);
-			const row = result.rows[0];
-			if (!row) return null;
-			return {
-				runId: String(row.run_id ?? ""),
-				cutoff: String(row.cutoff ?? ""),
-				exposureScore: nullableString(row.exposure_score),
-				directPartners: numberOrZero(row.direct_partners),
-				suppliersCount: numberOrZero(row.suppliers_count),
-				customersCount: numberOrZero(row.customers_count),
-				maxPartnerShare: nullableString(row.max_partner_share),
-				confidence: nullableString(row.confidence),
-				reasonCodes: stringArray(row.reason_codes),
-				extractor: String(row.extractor ?? "graph:kg-edges:v1"),
-				availabilityStatus: toAvailabilityStatus(row.availability_status),
-				sourceEvidenceStatus: String(row.source_evidence_status ?? "degraded"),
-				factorValidationStatus: String(row.factor_validation_status ?? "not_evaluated"),
-			};
-		});
+		const row = await this.queryIssuerServedRow(
+			"entitySupplyChainExposure",
+			"mart.issuer_supply_chain_exposure",
+			"s",
+			predicate,
+			`s.run_id,
+			 to_char(s.cutoff at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as cutoff,
+			 s.exposure_score::text as exposure_score,
+			 s.direct_partners, s.suppliers_count, s.customers_count,
+			 s.max_partner_share::text as max_partner_share,
+			 s.confidence::text as confidence, s.reason_codes, s.extractor,
+			 coalesce(s.availability_status, 'unavailable') as availability_status,
+			 coalesce(s.source_evidence_status, 'degraded') as source_evidence_status,
+			 coalesce(s.factor_validation_status, 'not_evaluated') as factor_validation_status`,
+			issuerId,
+		);
+		if (!row) return null;
+		return {
+			...moduleDetailMetadata(row, "graph:kg-edges:v1"),
+			exposureScore: nullableString(row.exposure_score),
+			directPartners: numberOrZero(row.direct_partners),
+			suppliersCount: numberOrZero(row.suppliers_count),
+			customersCount: numberOrZero(row.customers_count),
+			maxPartnerShare: nullableString(row.max_partner_share),
+		};
 	}
 }
 
-function nullableString(value: unknown): string | null {
-	return value !== null && value !== undefined ? String(value) : null;
-}
-
-function stringArray(value: unknown): string[] {
-	return Array.isArray(value) ? value.map(String) : [];
-}
-
-function numberOrZero(value: unknown): number {
-	return typeof value === "number" && Number.isFinite(value) ? value : 0;
+function moduleDetailMetadata(row: Record<string, unknown>, defaultExtractor: string) {
+	return {
+		runId: String(row.run_id ?? ""),
+		cutoff: String(row.cutoff ?? ""),
+		confidence: nullableString(row.confidence),
+		reasonCodes: stringArray(row.reason_codes),
+		extractor: String(row.extractor ?? defaultExtractor),
+		availabilityStatus: toAvailabilityStatus(row.availability_status),
+		sourceEvidenceStatus: String(row.source_evidence_status ?? "degraded"),
+		factorValidationStatus: String(row.factor_validation_status ?? "not_evaluated"),
+	};
 }
 
 const AVAILABILITY_VALUES: ReadonlySet<Availability> = new Set<Availability>([
