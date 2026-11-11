@@ -1,17 +1,4 @@
-"""What a filing tags for machines: numeric facts and their contexts, read from inline XBRL.
-
-An annual filing is read twice over: once as prose (`filing_plain_text`) and once as tagged
-facts, because the two carry different strength. A sentence can mention "one operating segment"
-about anything (#822); a tag asserts a value, for a period, about the whole filer or a named part
-of it. This module reads the tags and nothing else — which concepts matter, and what to conclude
-from them, is the adapter's.
-
-A regex reader rather than an XML parser, on purpose: an SEC primary document is HTML that embeds
-XBRL elements and is frequently not well-formed XML, while the few elements read here
-(`xbrli:context`, `ix:nonFraction`, `ix:nonNumeric` with its `ix:continuation` chain, `ix:header`)
-have a fixed, machine-generated shape. Anything it cannot read comes back as unreadable rather
-than guessed, so a reader failure costs a refusal.
-"""
+"""Inline XBRL context, numeric-fact, and text-block parser for SEC primary HTML filings."""
 
 from __future__ import annotations
 
@@ -39,16 +26,10 @@ _TYPED_MEMBER = re.compile(r"<xbrldi:typedMember\b", re.IGNORECASE)
 _NON_FRACTION = re.compile(r"<ix:nonFraction\b[^>]*>", re.IGNORECASE)
 _NON_FRACTION_END = re.compile(r"</ix:nonFraction\s*>", re.IGNORECASE)
 _NON_NUMERIC = re.compile(r"<ix:nonNumeric\b[^>]*>", re.IGNORECASE)
-#: A text block's body is not where its tag is. The `ix:nonNumeric` holds the heading (AVGO's
-#: segment note: "Segment Information", 20 bytes) and names, in `continuedAt`, the
-#: `ix:continuation` carrying the next part, which names the next. Both elements nest — a policy
-#: block inside a note, a fact inside either — so an element's close is found by depth over both.
 _TEXT_PART = re.compile(r"<(/?)ix:(?:nonNumeric|continuation)\b[^>]*>", re.IGNORECASE)
 _ATTRIBUTE = re.compile(r"([\w:.-]+)\s*=\s*(?:\"([^\"]*)\"|'([^']*)')")
-#: The hidden header: where the contexts live, and where a filer may tag a value it never prints.
 _HIDDEN_HEADER = re.compile(r"<ix:header\b.*?</ix:header\s*>", re.IGNORECASE | re.DOTALL)
 _MARKUP = re.compile(r"<[^>]+>")
-#: `ixt-sec:numwordsen` is how a filer tags a word ("one reportable segment").
 _NUMBER_WORDS = {
     "no": 0,
     "none": 0,
@@ -66,11 +47,7 @@ _NUMBER_WORDS = {
     "eleven": 11,
     "twelve": 12,
 }
-#: Marks the tag's position before markup is stripped: the printed value ("one", "36,858")
-#: occurs many times in a filing, and only the mark says which occurrence was tagged.
 _MARK = "⦃tagged-fact⦄"
-#: A typed dimension is not resolved here. It is recorded so the context can never be mistaken
-#: for one about the whole filer.
 TYPED_DIMENSION = ("typed", "")
 
 
@@ -78,12 +55,10 @@ TYPED_DIMENSION = ("typed", "")
 class Context:
     start: date | None
     end: date
-    #: (axis, member) pairs, sorted; empty for a fact about the whole filer.
     dimensions: tuple[tuple[str, str], ...]
 
     @property
     def days(self) -> int | None:
-        """The duration, or None for an instant."""
         return None if self.start is None else (self.end - self.start).days
 
 
@@ -91,8 +66,6 @@ class Context:
 class TaggedFact:
     concept: str
     context: Context
-    #: As tagged: the `scale` and `sign` attributes applied. None when the shown text cannot be
-    #: read as a number, so the caller refuses instead of reading a wrong one.
     value: Decimal | None
     scale: int
     offset: int
@@ -101,18 +74,13 @@ class TaggedFact:
 
 @dataclass(frozen=True)
 class TextFact:
-    """One `ix:nonNumeric` fact: the concept, the id of its context, and its printed text."""
-
     concept: str
-    #: The `contextRef` as written. The context itself is not resolved: a cover line of a
-    #: multi-class filer sits in a context with a class dimension, and the caller pairs facts by id.
     context_id: str
-    #: Markup stripped and whitespace collapsed.
     text: str
 
 
 class InlineXbrl:
-    """One filing's tagged numeric facts, parsed once and shared by every reader of it."""
+    """Parse contexts, `ix:nonFraction` numeric facts, and `ix:nonNumeric` text blocks from an iXBRL document."""
 
     def __init__(self, body: bytes) -> None:
         self._raw = body.decode("utf-8", "ignore")
@@ -140,7 +108,6 @@ class InlineXbrl:
         return parsed
 
     def facts(self, concepts: Collection[str]) -> list[TaggedFact]:
-        """Every `ix:nonFraction` tagged with one of `concepts`, in document order."""
         found = []
         for tag in _NON_FRACTION.finditer(self._raw):
             attributes = _attributes(tag.group(0))
@@ -148,8 +115,6 @@ class InlineXbrl:
             context = self.contexts.get(attributes.get("contextRef", ""))
             if concept not in concepts or context is None:
                 continue
-            # To the NEXT close, with markup stripped: a filer tagging one printed value with two
-            # concepts nests one tag inside the other (DUOL, SHOP), and both read the same value.
             end = _NON_FRACTION_END.search(self._raw, tag.end())
             shown = html.unescape(_MARKUP.sub(" ", self._raw[tag.end() : end.start() if end else tag.end()]))
             scale = _integer(attributes.get("scale", "0"))
@@ -166,12 +131,6 @@ class InlineXbrl:
         return found
 
     def text_facts(self, concepts: Collection[str], *, limit: int) -> list[TextFact]:
-        """Every `ix:nonNumeric` tagged with one of `concepts`, in document order, in any context.
-
-        Unlike `text_block`, a context with a dimension is read. The text is cut at `limit`
-        characters. An element that never closes is unreadable and is left out: it would otherwise
-        read as the rest of the document. A `continuedAt` chain is not followed.
-        """
         found = []
         for tag in _NON_NUMERIC.finditer(self._raw):
             attributes = _attributes(tag.group(0))
@@ -188,11 +147,6 @@ class InlineXbrl:
         return found
 
     def sentence_at(self, offset: int, *, lead: int, span: int) -> str | None:
-        """The printed text around the tag at `offset`: `lead` characters before it, `span` after.
-
-        The fragment starts and ends on a tag boundary so no half-tag reads as text, and never
-        reaches back into a hidden header.
-        """
         start = max([offset - 6000] + [stop for _, stop in self._hidden if stop <= offset])
         start = self._raw.find("<", max(0, start))
         stop = self._raw.rfind(">", offset, offset + 3000) + 1
@@ -205,15 +159,6 @@ class InlineXbrl:
         return " ".join((before + text[at + len(_MARK) : at + len(_MARK) + span]).split())
 
     def text_block(self, concept: str, *, limit: int) -> str | None:
-        """The printed text of the first block tagged `concept` about the whole filer — markup
-        stripped, whitespace collapsed, at most `limit` characters — or None when it tags none.
-
-        A block about a part of the filer (a subsidiary registrant's note in a combined filing)
-        is skipped for the same reason a dimensional count is. The continuation chain is
-        followed only as far as `limit` needs, and a malformed chain stops where it goes wrong:
-        a part that never closes is unreadable and ends the block with what was read before it,
-        and a chain that names a part already read ends there rather than being read again.
-        """
         for tag in _NON_NUMERIC.finditer(self._raw):
             attributes = _attributes(tag.group(0))
             context = self.contexts.get(attributes.get("contextRef", ""))
@@ -228,8 +173,8 @@ class InlineXbrl:
                 if body is None:
                     break
                 text = " ".join(html.unescape(_MARKUP.sub(" ", body)).split())
-                if text:  # a part holding only markup (a page break) is neither a word gap nor length
-                    length += len(text) + (1 if parts else 0)  # exactly len(" ".join(parts))
+                if text:
+                    length += len(text) + (1 if parts else 0)
                     parts.append(text)
                 following = _attributes(part.group(0)).get("continuedAt")
                 if not following or following in read:
@@ -240,8 +185,6 @@ class InlineXbrl:
         return None
 
     def _element_body(self, opening: re.Match[str]) -> str | None:
-        """The markup between an opening tag and its own close, or None when it never closes —
-        an unclosed element would otherwise read as the rest of the document."""
         depth = 1
         for tag in _TEXT_PART.finditer(self._raw, opening.end()):
             depth += -1 if tag.group(1) else 1
@@ -275,8 +218,6 @@ def _number(shown: str, format_name: str, scale: int | None, negative: bool) -> 
     elif text.lower() in _NUMBER_WORDS:
         value = Decimal(_NUMBER_WORDS[text.lower()])
     else:
-        # `ixt:num-comma-decimal` writes "1.234,5"; every other numeric format uses a comma, if
-        # anything, as the thousands separator.
         digits = text.replace(".", "").replace(",", ".") if "comma-decimal" in format_name else text.replace(",", "")
         try:
             value = Decimal(digits.replace(" ", ""))

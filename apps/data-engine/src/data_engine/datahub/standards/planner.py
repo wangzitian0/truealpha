@@ -1,15 +1,9 @@
-"""The missing-cell planner (#733): which (standard, issuer) cells are open at a cutoff.
-
-Start from the declared demand (every issuer in the universe for every standard) and
-left-join what exists. A cell is open when the issuer has no fact knowable at the cutoff,
-when its best fact does not carry the standard's evidence, or when its best fact is older
-than the standard's cadence or superseded by a newer annual filing (#1519).
-"""
+"""Missing-cell planner for `(standard, issuer)` cells at a point-in-time cutoff (#733, #1519)."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any, Literal
 
 from truealpha_contracts.standards import MetricStandard
@@ -55,8 +49,30 @@ class OpenCell:
     best_knowable_at: datetime | None
 
 
+def resolve_issuer_cik(connection: Any, issuer_id: str, *, as_of: date, known_at: datetime) -> int | None:
+    """Resolve an issuer identifier (`issuer:cik:...`, UUID, or legacy id) to its integer CIK."""
+    if issuer_id.startswith("issuer:cik:"):
+        return int(issuer_id.removeprefix("issuer:cik:"))
+    if connection is None:
+        return None
+    if is_uuid(issuer_id):
+        cik_val = alias_of(connection, issuer_id, "cik", valid_at=as_of, known_at=known_at)
+        try:
+            return int(cik_val) if cik_val is not None else None
+        except (ValueError, TypeError):
+            return None
+    try:
+        entity_uuid = lookup_entity(connection, issuer_id, "issuer", as_of=as_of, known_at=known_at)
+        if entity_uuid is not None:
+            cik_val = alias_of(connection, entity_uuid, "cik", valid_at=as_of, known_at=known_at)
+            if cik_val is not None:
+                return int(cik_val)
+    except Exception:  # noqa: BLE001
+        return None
+    return None
+
+
 def universe_issuers(connection: Any, universe: str, *, cutoff: datetime | None = None) -> list[UniverseIssuer]:
-    """One entry per issuer, CIK-resolved at `cutoff` where the universe plane resolved it."""
     known_at = cutoff.astimezone(UTC) if cutoff is not None else datetime.now(UTC)
     as_of = known_at.date()
     corpus = (
@@ -75,24 +91,7 @@ def universe_issuers(connection: Any, universe: str, *, cutoff: datetime | None 
     issuers: dict[str, UniverseIssuer] = {}
     for issuer_id, rows in rows_by_issuer.items():
         _issuer, _security_id, listing_id, ticker = next((row for row in rows if row[2] == primary[issuer_id]), rows[0])
-        cik: int | None = None
-        if issuer_id.startswith("issuer:cik:"):
-            cik = int(issuer_id.removeprefix("issuer:cik:"))
-        elif is_uuid(issuer_id):
-            _cik_val = alias_of(connection, issuer_id, "cik", valid_at=as_of, known_at=known_at)
-            try:
-                cik = int(_cik_val) if _cik_val is not None else None
-            except (ValueError, TypeError):
-                cik = None
-        else:
-            try:
-                entity_uuid = lookup_entity(connection, issuer_id, "issuer", as_of=as_of, known_at=known_at)
-                if entity_uuid is not None:
-                    _cik_val = alias_of(connection, entity_uuid, "cik", valid_at=as_of, known_at=known_at)
-                    if _cik_val is not None:
-                        cik = int(_cik_val)
-            except Exception:  # noqa: BLE001
-                cik = None
+        cik = resolve_issuer_cik(connection, issuer_id, as_of=as_of, known_at=known_at)
         issuers[issuer_id] = UniverseIssuer(issuer_id=issuer_id, ticker=ticker, listing_id=listing_id, cik=cik)
     predecessors = signed_predecessor_ciks(connection, {issuer_id: issuer_id for issuer_id in issuers})
     return [
@@ -104,7 +103,6 @@ def universe_issuers(connection: Any, universe: str, *, cutoff: datetime | None 
 
 
 def resolve_missing_ciks(issuers: list[UniverseIssuer], ticker_index: dict[str, int]) -> list[UniverseIssuer]:
-    """Resolve LEI-keyed issuers through SEC's ticker crosswalk (BRK.B -> BRK-B)."""
     return [
         issuer if issuer.cik is not None else replace(issuer, cik=ticker_index.get(issuer.ticker.replace(".", "-")))
         for issuer in issuers
@@ -112,7 +110,6 @@ def resolve_missing_ciks(issuers: list[UniverseIssuer], ticker_index: dict[str, 
 
 
 def _resolve_headcount_row(connection: Any, cik: int, cutoff: datetime, priority: list[str], first_row: Any) -> Any:
-    """Apply the same citation eligibility contract as `lookup_headcount` (#1519)."""
     if len(first_row) >= 4 and not is_eligible_headcount_row(
         knowable_at=first_row[1], source=str(first_row[0]), evidence_ref=str(first_row[2]), period_end=first_row[3]
     ):
@@ -140,7 +137,6 @@ def _resolve_headcount_row(connection: Any, cik: int, cutoff: datetime, priority
 
 
 def _has_newer_annual_filing(connection: Any, cik: int, fact_knowable_at: datetime, cutoff: datetime) -> bool:
-    """Return True when a newer 10-K/20-F is knowable at `cutoff` after `fact_knowable_at` (#1519)."""
     try:
         row = connection.execute(
             _NEWER_ANNUAL_FILING_SQL,
@@ -182,7 +178,7 @@ def open_cells(
             {"and extractor <> all(%s::text[])" if withdrawn else ""}
             order by array_position(%s::text[], source) nulls last, knowable_at desc, id desc
             limit 1
-            """,  # noqa: S608 - identifiers come from the standard's declared plane, not input
+            """,  # noqa: S608
             (issuer.cik, cutoff, *([withdrawn] if withdrawn else []), priority),
         ).fetchone()
         if row is not None and plane.table == _HEADCOUNT_TABLE:

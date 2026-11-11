@@ -1,26 +1,4 @@
-"""The depositary ratio of a listing, read from the cover of the issuer's annual filing (#1519).
-
-A price is per listed unit. An American depositary share (ADS) stands for several ordinary shares:
-one PDD ADS stands for four Class A ordinary shares. The share count of the filing is in ordinary
-shares. No ingested field carries the ratio. The cover of a 10-K or 20-F prints it as free text in
-the title of the security (`dei:Security12bTitle`). The same context holds the ticker
-(`dei:TradingSymbol`).
-
-This module reads that title with a CLOSED set of patterns:
-
-- A depositary title with a quantity ("each representing four Class A ordinary shares") gives that
-  quantity. The pattern is `depositary_each_representing`.
-- A plain share title without a depositary word ("Common Stock, par value $0.01") gives 1. The
-  pattern is `plain_share_title`.
-- Any other title gives no value. The result is `unparsed` and keeps the title text and a reason.
-
-A pattern never guesses. A fraction ("one-half of one ordinary share"), a preferred share, a note
-and every unfamiliar wording fall to `unparsed`. The measured result is a dashboard row. No code
-reads the value yet (#1519, step 1a).
-
-`listing_units_per_share` is the number of ordinary shares that ONE listed unit stands for. A plain
-share gives 1. One PDD ADS gives 4.
-"""
+"""Depositary share-to-listing unit ratio reader from annual filing iXBRL cover titles (#1519)."""
 
 from __future__ import annotations
 
@@ -44,8 +22,6 @@ PATTERN_DEPOSITARY = "depositary_each_representing"
 PATTERN_PLAIN_SHARE = "plain_share_title"
 PATTERN_UNPARSED = "unparsed"
 
-#: What the dashboard says about one listing. `not_measured` is a payload that has no ratio key: the
-#: observation is older than the reader, or no reader ran. It is not an `unparsed` title.
 OUTCOME_PARSED = "parsed"
 OUTCOME_ORDINARY = "ordinary"
 OUTCOME_UNPARSED = "unparsed"
@@ -64,13 +40,9 @@ REASON_UNFAMILIAR_TITLE = "unfamiliar_title"
 REASON_DEPOSITARY_WITHOUT_QUANTITY = "depositary_title_without_quantity"
 REASON_TITLES_DISAGREE = "titles_disagree"
 REASON_DEBT_SECURITY_ON_EQUITY_TICKER = "debt_security_on_equity_ticker"
-#: The reads of this run ended after `COVER_OUTAGE_AFTER` shared failures in a row.
 REASON_READ_SKIPPED = "read_skipped_after_outage"
-#: Followed by `:` and the class name of the error, for example `read_failed:HTTPStatusError`.
 REASON_READ_FAILED = "read_failed"
 
-#: The keys that a payload carries when the reader ran. One list: the adapter writes them, the
-#: payload model declares them and the quality report reads them.
 PAYLOAD_KEYS = (
     "listing_units_per_share",
     "ratio_pattern",
@@ -81,9 +53,7 @@ PAYLOAD_KEYS = (
     "ratio_filed",
 )
 
-#: The longest title text that the reader keeps. A real cover title is under 200 characters.
 _TITLE_LIMIT = 400
-
 _NUMBER_WORDS = {
     "one": 1,
     "two": 2,
@@ -111,27 +81,20 @@ _NUMBER_WORDS = {
     "fifty": 50,
     "one hundred": 100,
 }
-# The longest word first: "twenty five" and "one hundred" must win over "twenty" and "one". A hyphen
-# or a space joins the two words.
 _QUANTITY = (
     r"(?P<quantity>\d{1,4}|"
     + "|".join(w.replace(" ", "[- ]") for w in sorted(_NUMBER_WORDS, key=len, reverse=True))
     + ")"
 )
-
-# One class of share: an optional class mark, an optional kind, then the noun.
 _SHARE = (
     r"(?:(?:class|series) [a-z0-9]+ )?"
     r"(?:(?:ordinary|common|capital|subordinate voting|non[- ]voting|voting) )*"
     r"(?:shares?|stock)"
 )
-# What may follow the share noun. A tail that is not in this list (for example "of 5.75% preferred")
-# means the title is about another security, so the pattern does not match.
 _TAIL = (
     r"(?=\s*$|\s*(?:[,;()]|[-–—])\s*"
     r"|\s+(?:of )?(?:par|nominal|no par|without par)\b|\s+[$€£¥]\s*[\d.])"
 )
-
 _DEPOSITARY_WORD = re.compile(r"\b(?:depositary|adss?|adrs?)\b")
 _DEPOSITARY_EACH = re.compile(
     r"\b(?:each (?:(?:ads|adr|american depositary share|depositary share) )?"
@@ -148,21 +111,17 @@ _DEBT_NOTE = re.compile(
 
 
 def is_debt_security_title(title: str) -> bool:
-    """Whether a cover security title names a debt note, debenture or bond rather than equity."""
     return _DEBT_NOTE.search(" ".join(title.split())) is not None
 
 
 @dataclass(frozen=True)
 class TitleReading:
-    """What the closed patterns say about one title."""
-
     listing_units_per_share: Decimal | None
     pattern: str
     reason: str | None
 
 
 def read_title(title: str) -> TitleReading:
-    """Read one cover title. A title that no pattern matches gives no value and a reason."""
     text = " ".join(title.split()).lower()
     if _DEPOSITARY_WORD.search(text):
         match = _DEPOSITARY_EACH.search(text)
@@ -181,12 +140,6 @@ def read_title(title: str) -> TitleReading:
 
 @dataclass(frozen=True)
 class ListingUnitRatio:
-    """The outcome of the cover read for one listing, and the filing that it came from.
-
-    A value and a reason exclude each other: a parsed outcome has no reason, and an `unparsed`
-    outcome has no value. The title text stays on both, so a reader can see what was parsed.
-    """
-
     listing_units_per_share: Decimal | None
     pattern: str
     title: str | None = None
@@ -208,7 +161,6 @@ class ListingUnitRatio:
         return _OUTCOME_BY_PATTERN[self.pattern]
 
     def payload_fields(self) -> dict[str, Any]:
-        """The payload keys of the financial-fact observation. All seven are present, null where empty."""
         return {
             "listing_units_per_share": None
             if self.listing_units_per_share is None
@@ -223,12 +175,10 @@ class ListingUnitRatio:
 
 
 def unparsed(reason: str, *, title: str | None = None, **filing: Any) -> ListingUnitRatio:
-    """An outcome with no value. `filing` carries `accession`, `form` and `filed` when the filing is known."""
     return ListingUnitRatio(None, PATTERN_UNPARSED, title=title, reason=reason, **filing)
 
 
 def outcome_of_payload(payload: Mapping[str, Any]) -> str:
-    """The dashboard outcome of one financial-fact payload. A payload with no ratio key is `not_measured`."""
     if "ratio_pattern" not in payload:
         return OUTCOME_NOT_MEASURED
     return _OUTCOME_BY_PATTERN.get(str(payload["ratio_pattern"]), OUTCOME_UNPARSED)
@@ -236,20 +186,11 @@ def outcome_of_payload(payload: Mapping[str, Any]) -> str:
 
 @dataclass(frozen=True)
 class CoverSecurity:
-    """One line of the cover: the ticker and the title of the security that trades under it."""
-
     symbol: str
     title: str
 
 
 def cover_securities(body: bytes) -> tuple[CoverSecurity, ...]:
-    """The cover lines of an inline XBRL filing that pair one title with one ticker in one context.
-
-    A title with no ticker in its context (the notes of a bank, "Not for trading" lines) is left out.
-    A context with several titles or several tickers cannot be paired and is left out, except when
-    debt/note titles share a context with one equity title (as on 10-K covers that list Eurobonds under
-    Section 12(b)).
-    """
     from data_engine.datahub.standards.inline_xbrl import InlineXbrl
 
     titles: dict[str, list[str]] = {}
@@ -270,20 +211,12 @@ def cover_securities(body: bytes) -> tuple[CoverSecurity, ...]:
 
 
 def _symbol_key(symbol: str) -> str:
-    """The comparison form of a ticker: upper case, with the share-class dot (BRK-B and BRK.B are one)."""
     return symbol.strip().upper().replace("-", ".")
 
 
 def ratio_for_ticker(
     securities: Sequence[CoverSecurity], ticker: str, *, accession: str, form: str, filed: date
 ) -> ListingUnitRatio:
-    """The ratio of the cover line under `ticker`.
-
-    Two lines under one ticker must agree on the value. If they differ, or one does not parse, the
-    result has no value: the cover does not say which line the listing is (#1519, U7). Debt/note lines
-    that repeat the equity ticker on a 10-K cover (Eurobonds of `MSFT` or `PG`) are ignored when at
-    least one non-debt line matches `ticker`.
-    """
     filing: dict[str, Any] = {"accession": accession, "form": form, "filed": filed}
     wanted = _symbol_key(ticker)
     matches = [line for line in securities if _symbol_key(line.symbol) == wanted]
@@ -304,8 +237,6 @@ def ratio_for_ticker(
 
 @dataclass(frozen=True)
 class _Cover:
-    """The paired cover lines of one filing, kept in place of its bytes."""
-
     accession: str
     form: str
     filed: date
@@ -313,21 +244,10 @@ class _Cover:
 
 
 FilingFinder = Callable[[int, datetime], "FilingDocument | None"]
-
-#: Reads in a row that fail in a way the next issuer may share (a timeout, a reset, a block, a 5xx, a
-#: spent budget) end the reads of the run. Each failing read can wait for the 30 s timeout of the SEC
-#: client, so a host that is down would cost 30 s for each issuer. The ratio is a measurement: ending it
-#: costs a dashboard row, never a served value. The next run reads again.
 COVER_OUTAGE_AFTER = 3
 
 
 def latest_annual_filing_over_http(cik: int, cutoff: datetime) -> FilingDocument | None:
-    """The newest 10-K or 20-F filed at or before `cutoff`, through the source gateway.
-
-    The submissions index has one key per CIK per UTC day, and the issuer registry reads it first.
-    The primary document has one key per accession, held for ever, and the standards lane shares
-    it. A key that landed makes no SEC call (#1411 K3, K5).
-    """
     from data_engine.datahub.standards.filing_extraction import latest_annual_filing
     from data_engine.sources import sec
 
@@ -336,14 +256,6 @@ def latest_annual_filing_over_http(cik: int, cutoff: datetime) -> FilingDocument
 
 
 class CoverRatioReader:
-    """Reads the ratio of one listing from the cover of its issuer's latest annual filing.
-
-    One reader serves one run. It keeps the paired cover lines of each (CIK, cutoff), not the filing
-    bytes, so two listings of one issuer (GOOG and GOOGL) read one filing and parse it once. A call
-    never raises: a read that fails gives an `unparsed` outcome that names the error class. The
-    issuer's numbers are captured whatever this read does.
-    """
-
     def __init__(self, find_filing: FilingFinder | None = None) -> None:
         self._find_filing = find_filing or latest_annual_filing_over_http
         self._covers: dict[tuple[int, date], _Cover | ListingUnitRatio] = {}
@@ -365,7 +277,6 @@ class CoverRatioReader:
 
         if self._failed_in_a_row >= COVER_OUTAGE_AFTER:
             return unparsed(REASON_READ_SKIPPED)
-        # The end of the cutoff day: a filing filed on the cutoff date is knowable at the cutoff.
         cutoff_at = datetime.combine(cutoff, datetime.max.time(), tzinfo=UTC)
         try:
             document = self._find_filing(cik, cutoff_at)
@@ -378,17 +289,13 @@ class CoverRatioReader:
                 filed=document.filing_date,
                 securities=cover_securities(document.body),
             )
-        except Exception as error:  # noqa: BLE001 - the ratio is a measurement; its failure never aborts a capture
+        except Exception as error:  # noqa: BLE001
             self._failed_in_a_row = self._failed_in_a_row + 1 if _may_repeat(error) else 0
             log.warning("listing ratio read failed for CIK %s: %s: %s", cik, type(error).__name__, error)
             return unparsed(f"{REASON_READ_FAILED}:{type(error).__name__}")
 
 
 def _may_repeat(error: Exception) -> bool:
-    """Whether the next issuer may meet the same failure: a network error, a block, a 5xx, a spent budget.
-
-    A 404 is a missing document of one issuer. An error of the parse is a fault of one document.
-    """
     import httpx
 
     from data_engine.sources.gateway import CapacityExceeded

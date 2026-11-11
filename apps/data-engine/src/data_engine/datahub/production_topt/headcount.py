@@ -1,20 +1,4 @@
-"""Headcount behind the `HeadcountExtractor` port, read from the PIT fact table (#70).
-
-Employee headcount is the GPPE denominator and it is not an XBRL concept: SEC
-company-facts publishes no employee count for any issuer (every `Employee*` concept there
-belongs to share-based compensation), so the number exists only as prose in a 10-K. That
-makes it an extraction problem, not a mapping problem — and extraction needs judgement.
-
-Judgement runs on a slower plane than the daily tick. `staging.issuer_headcount_facts` is
-the seam: low-frequency producers write facts there (a reviewed manual entry today, #70's
-text extraction later, a vendor feed), each carrying its own source, evidence pointer and
-confidence; the high-frequency capture only reads. Adding issuers is an insert, never a
-deploy — which is what makes a larger universe a data change rather than a code change.
-
-This module used to hold the 21 figures as a dict literal. Those values now live in
-`scripts/seed_issuer_headcounts.py` as a reviewed, evidence-carrying seed, so the code no
-longer decides what any company's headcount is.
-"""
+"""Point-in-time issuer headcount fact lookups and writes."""
 
 from __future__ import annotations
 
@@ -28,12 +12,16 @@ from truealpha_contracts import reconciliation_policies
 
 from data_engine.datahub.production_topt.sec_financial_adapter import HeadcountFact
 
-# The source order of the headcount plane is `reconciliation_policies.HEADCOUNT_RECONCILIATION_POLICY`
-# (rule 12). Each function reads the policy through the module, so one edit there reaches this reader.
-
 _ACCESSION_RE = re.compile(r"(?:^|\s)accession=(?:\d{18}|\d{10}-\d{2}-\d{6}|\d{4}-\d{2}-\d{6})(?:\s|$)")
 _STRICT_18_ACCESSION_RE = re.compile(r"(?:^|\s)accession=(?:\d{18}|\d{10}-\d{2}-\d{6})(?:\s|$)")
 _FILED_RE = re.compile(r"(?:^|\s)filed=(\d{4}-\d{2}-\d{2})(?:\s|$)")
+
+_SELECT_HEADCOUNT_SQL = """
+select headcount, knowable_at, source, evidence_ref, period_end, confidence
+from staging.issuer_headcount_facts
+where cik = %s and knowable_at <= %s
+order by array_position(%s::text[], source) nulls last, knowable_at desc, id desc
+"""
 
 
 def validate_cited_headcount_fact(
@@ -44,16 +32,8 @@ def validate_cited_headcount_fact(
     require_period_end: bool = True,
     allow_short_cik_accession: bool = False,
 ) -> None:
-    """Reject uncited or misdated headcount facts (#1264).
-
-    Every headcount fact must cite an 18-digit SEC accession and filing date in
-    `evidence_ref`, carry a fiscal `period_end` on or before that filing date, and have
-    `knowable_at` anchored to the filing date (never earlier than the filing it cites, and
-    never stamped to a literal constant).
-    """
     accession_re = _ACCESSION_RE if allow_short_cik_accession else _STRICT_18_ACCESSION_RE
-    accession_match = accession_re.search(evidence_ref)
-    if accession_match is None:
+    if accession_re.search(evidence_ref) is None:
         raise ValueError(f"headcount evidence_ref does not cite an 18-digit SEC accession: {evidence_ref!r}")
     filed_match = _FILED_RE.search(evidence_ref)
     if filed_match is None:
@@ -83,12 +63,6 @@ def is_eligible_headcount_row(
     evidence_ref: str,
     period_end: date | None,
 ) -> bool:
-    """True when a stored row satisfies the active-source SEC accession contract (#1264).
-
-    Legacy uncited rows (`#70 supersedes` stamped at `2026-01-01` or retired
-    `curated-10k-2025` rows) remain in the append-only table by trigger design and are
-    excluded at read time so they never outrank cited 10-K filings.
-    """
     if source == "curated-10k-2025":
         return False
     if source in reconciliation_policies.HEADCOUNT_RECONCILIATION_POLICY.source_priority:
@@ -109,21 +83,7 @@ def is_eligible_headcount_row(
     return True
 
 
-_SELECT_HEADCOUNT_SQL = """
-select headcount, knowable_at, source, evidence_ref, period_end, confidence
-from staging.issuer_headcount_facts
-where cik = %s and knowable_at <= %s
-order by array_position(%s::text[], source) nulls last, knowable_at desc, id desc
-"""
-
-
 def lookup_headcount(connection: Connection[Any], cik: int, cutoff: date) -> HeadcountFact | None:
-    """Resolve the point-in-time headcount fact for `cik` at `cutoff` (#70, #1264).
-
-    Orders by the `source_priority` of `HEADCOUNT_RECONCILIATION_POLICY` first and `knowable_at desc` second,
-    filtering out retired `curated-10k-2025` rows and uncited legacy `manual-review` rows
-    that lack an 18-digit SEC accession.
-    """
     boundary = datetime.combine(cutoff, datetime.max.time(), tzinfo=UTC)
     params = (cik, boundary, list(reconciliation_policies.HEADCOUNT_RECONCILIATION_POLICY.source_priority))
     row = connection.execute(f"{_SELECT_HEADCOUNT_SQL} limit 1", params).fetchone()
@@ -162,18 +122,6 @@ def lookup_headcount(connection: Connection[Any], cik: int, cutoff: date) -> Hea
 
 
 class PostgresHeadcountExtractor:
-    """`HeadcountExtractor` over the PIT fact table.
-
-    Point-in-time by construction: only facts knowable at or before the cutoff are
-    eligible, and among those the latest knowable one wins. A correction landed today
-    therefore does not rewrite what a replay of last month's cutoff sees — the older run
-    still resolves the figure that was knowable then, which is the whole reason the table
-    is append-only rather than upserted.
-
-    An issuer with no eligible row returns None, so the factor reports `missing_headcount`
-    honestly rather than borrowing another issuer's figure or a stale default.
-    """
-
     def __init__(self, connection: Connection[Any]) -> None:
         self._connection = connection
 
@@ -192,11 +140,6 @@ def record_headcount(
     confidence: Decimal,
     period_end: date | None = None,
 ) -> int:
-    """Land one headcount fact. The only write path, shared by every producer.
-
-    Deliberately not an upsert: a corrected figure is a NEW row with a later
-    `knowable_at`, so history stays readable and a replay of an older cutoff is unaffected.
-    """
     if source == "curated-10k-2025":
         raise ValueError("headcount source 'curated-10k-2025' is retired; cite an 18-digit SEC accession (#1264)")
     if source in reconciliation_policies.HEADCOUNT_RECONCILIATION_POLICY.source_priority:

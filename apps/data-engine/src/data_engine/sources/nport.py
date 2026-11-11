@@ -1,17 +1,4 @@
-"""SEC N-PORT-P: the confirmed ETF holdings-weight source (init.md Section 5,
-2026-07-07). Filed per fund series; the public copy is the last month of each
-fiscal quarter, so report periods lag ~1-3 months — fine for defining a research
-universe, not a live holdings feed.
-
-Pitfalls encoded here (verified on QQQ/ARKK/IVV/AGIX/MCHI):
-- the raw XML is always primary_doc.xml (the filing's primaryDocument field
-  points at the XSL-rendered HTML instead);
-- multi-series trusts (iShares, Vanguard, ARK) must be queried by series id via
-  browse-edgar, not by trust CIK, or every series' filings interleave;
-- foreign holdings carry CUSIP '000000000' and some lines have literal 'N/A'
-  name/cusip — normalized to None here; ISIN is the identifier that actually
-  resolves (561/563 MCHI lines have one).
-"""
+"""SEC N-PORT-P ETF holdings-weight client and XML parser."""
 
 import json
 import xml.etree.ElementTree as ET
@@ -21,7 +8,6 @@ from data_engine.datahub.fetch_key import FetchKey
 from data_engine.sources import gateway
 
 MF_TICKERS_URL = "https://www.sec.gov/files/company_tickers_mf.json"
-# browse-edgar accepts a series ID as CIK — required for multi-series trusts.
 BROWSE_URL = (
     "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK={series_id}&type=NPORT-P&count=1&output=atom"
 )
@@ -29,8 +15,6 @@ ARCHIVE_URL = "https://www.sec.gov/Archives/edgar/data/{cik}/{accession}/primary
 
 NS = {"n": "http://www.sec.gov/edgar/nport"}
 _ATOM_NS = {"a": "http://www.w3.org/2005/Atom"}
-
-# SEC's own placeholders for "no such identifier", seen in real filings.
 _PLACEHOLDERS = {"", "N/A", "000000000"}
 
 
@@ -40,10 +24,10 @@ class Holding:
     cusip: str | None
     isin: str | None
     lei: str | None
-    balance: float | None  # share/contract count as filed
+    balance: float | None
     value_usd: float | None
-    pct_val: float | None  # percentage of net assets
-    asset_cat: str | None  # 'EC' = equity common; cash/derivative lines differ
+    pct_val: float | None
+    asset_cat: str | None
 
 
 def _fetch_nport(client, endpoint: str, url: str, caller: str, key: FetchKey, *, once: bool = True) -> bytes:
@@ -56,10 +40,6 @@ def _fetch_nport(client, endpoint: str, url: str, caller: str, key: FetchKey, *,
 
 
 def fund_series(client, ticker: str) -> tuple[int, str]:
-    """(trust CIK, series id) for a fund ticker via SEC's official mapping.
-    Raises KeyError if absent — notably SPY (a UIT) is not in this file; use an
-    equivalent management-company ETF (IVV/VOO) instead."""
-    # One mapping file for every fund of the day: the second ticker reads the landed bytes.
     body = _fetch_nport(
         client,
         "mf_tickers",
@@ -74,10 +54,6 @@ def fund_series(client, ticker: str) -> tuple[int, str]:
 
 
 def latest_nport_accession(client, series_id: str) -> tuple[str, str]:
-    """(accession number with dashes stripped, filing date 'YYYY-MM-DD') of the
-    series' most recent NPORT-P. The filing date is the transaction time of
-    everything derived from the filing — the moment its contents became publicly
-    knowable — which is NOT the ingestion time (runtime contract)."""
     body = _fetch_nport(
         client,
         "browse",
@@ -94,7 +70,6 @@ def latest_nport_accession(client, series_id: str) -> tuple[str, str]:
 
 
 def fetch_nport_xml(client, cik: int, accession: str) -> bytes:
-    # The caller lands these bytes itself, so the key names the request and the index is not read.
     return _fetch_nport(
         client,
         "archive",
@@ -112,9 +87,6 @@ def _clean(value: str | None) -> str | None:
 
 
 def _number(value: str | None) -> float | None:
-    """Numeric fields get the same placeholder tolerance as name/cusip: a
-    literal 'N/A' (or otherwise non-numeric) downgrades that one field to None
-    instead of aborting the whole filing's parse."""
     cleaned = _clean(value)
     if cleaned is None:
         return None
@@ -125,8 +97,6 @@ def _number(value: str | None) -> float | None:
 
 
 def parse_nport(xml_bytes: bytes) -> tuple[dict, list[Holding]]:
-    """(gen_info, holdings). gen_info carries series_name and report_period
-    (the 'as of' date every weight in this filing describes)."""
     root = ET.fromstring(xml_bytes)
     gen = root.find(".//n:genInfo", NS)
     info = {

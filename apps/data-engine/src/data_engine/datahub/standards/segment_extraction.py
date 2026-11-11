@@ -1,26 +1,4 @@
-"""Segment revenue from a filing's own tags (#772, q6).
-
-The SEC-filing adapter for `segment_revenue`, beside `filing_extraction` rather than inside it:
-it reuses that module's fetch contract and owns only what is different, which is how a filing
-states its segments and the shape of the answer.
-
-**What decides is what the filer tags, never what a pattern reads.** Two structured statements
-in the filing's inline XBRL carry the answer: the count of segments it declares, and the revenue
-it tags on the business-segment axis. A printed-table reader — heading, row and units regexes —
-answered this question until #833 and accepted 3 partitions across the 106 filings the lane
-walks, one of them a geography table taken for segments; the tags balance 54.
-
-**The identity owns correctness.** `factors.shared.extraction.select_exhaustive_partition`
-accepts a set only when its parts account for the issuer's consolidated revenue — a number this
-module never computes and cannot influence. A missed segment silently raises every remaining
-segment's share, so q6's "purest name under a theme" would invert while every number on the page
-still looked like a number; a set that does not balance is refused, with the reason on the
-outcome.
-
-What this module does NOT do: decide which parts are right (the partition rule decides), or
-plan (the standard's backfill does). It reads the filing's tags and lands what the identity
-accepts, with the evidence each part was read from.
-"""
+"""Inline-XBRL segment revenue extraction and consolidated-revenue balancing (#772, #830)."""
 
 from __future__ import annotations
 
@@ -53,39 +31,16 @@ from data_engine.datahub.standards.filing_extraction import (
 )
 from data_engine.datahub.standards.inline_xbrl import InlineXbrl, TaggedFact
 
-#: How many segments the issuer says it has, in the form it files for machines: the inline
-#: XBRL tag on the count in its own segment note. This — never a sentence — is what decides
-#: that an issuer has ONE segment.
-#:
-#: A single-segment issuer is a DETERMINATE answer, and for init.md question 6 the most
-#: interesting one: a pure-play is the purest name under its theme. But its one-part partition
-#: balances by construction, so nothing downstream can catch a wrong one, and the evidence it
-#: rests on has to be the strongest the filing offers. Prose decided until #822, and measured
-#: over the latest annual filing of every issuer the standards lane walks (106 filings,
-#: 2026-09-15), a pattern for "one/single operating/reportable segment" fired on 48 — at least
-#: five of them issuers with SEVERAL segments. Berkshire Hathaway was landed as one segment on
-#: "expenses considered significant for one operating segment may not be significant in
-#: others"; AMD on "we combined the Client and Gaming segments into one reportable segment";
-#: AEP and Exelon on sentences about a subsidiary registrant. 97 of the 106 filings tag the
-#: count, and each of those five tags two or more, or one only under a subsidiary's dimension.
 _SEGMENT_COUNT_CONCEPTS = ("us-gaap:NumberOfReportableSegments", "us-gaap:NumberOfOperatingSegments")
-#: How much of a statement is read back around the words that make it — enough for the filer to
-#: say what the one segment DOES ("one reportable segment, Payment Services"), which is the only
-#: description a classifier will get.
 _SINGLE_SEGMENT_SPAN = 240
 _STATEMENT_LEAD = 90
 
 
 @dataclass(frozen=True)
 class DeclaredSegmentCount:
-    """The filer's own count of its segments (one, two, seven …), at the latest period it tags a count for."""
-
     concept: str
-    #: None when the tags at that period disagree or cannot be read — which refuses the
-    #: single-segment path exactly as firmly as a count of several does.
     value: int | None
     period_end: date
-    #: The printed sentence the count is tagged in, when it is printed at all.
     statement: str | None
 
     @property
@@ -94,19 +49,7 @@ class DeclaredSegmentCount:
 
 
 def declared_segment_count(filing: bytes | InlineXbrl) -> DeclaredSegmentCount | None:
-    """The segment count the filing's inline XBRL states, or None when it tags none.
-
-    Three rules, each taken from a filing that breaks the simpler one:
-
-    - Only a fact about the whole filer counts. A dimensional context is about a part of it:
-      a subsidiary registrant in a combined filing (AEP, Exelon), or one segment (CSX's
-      railroad).
-    - The latest period decides. Western Digital tags `two` for the day before its Flash
-      separation and `one` for the fiscal year.
-    - The reportable count outranks the operating count. Ross and Booking aggregate several
-      operating segments into ONE reportable segment, and a reportable segment is what the
-      standard measures; the operating count answers only when no reportable count is tagged.
-    """
+    """Return the whole-filer segment count at the latest tagged period, preferring reportable over operating."""
     document = filing if isinstance(filing, InlineXbrl) else InlineXbrl(filing)
     stated: dict[str, list[TaggedFact]] = {}
     for fact in document.facts(_SEGMENT_COUNT_CONCEPTS):
@@ -135,11 +78,6 @@ def _whole(value: Decimal | None) -> int | None:
 
 
 def _ruleset_concepts(*fields: str) -> tuple[str, ...]:
-    """The shipped ruleset's concepts of `fields` as `taxonomy:concept`, in declared order, each once.
-
-    A field that the ruleset does not declare raises. An empty list would make the reader find no
-    segment for any issuer and report each one as a refusal.
-    """
     names: dict[str, None] = {}
     for field in fields:
         mapping = DEFAULT_RULESET.mapping_for(field)
@@ -150,31 +88,13 @@ def _ruleset_concepts(*fields: str) -> tuple[str, ...]:
     return tuple(names)
 
 
-#: Segment revenue as the filer TAGS it (#830): a revenue fact whose context names one member of
-#: the business-segment axis. Since ASU 2023-07 a 10-K tags its segment note, and this is the
-#: part of the filing that says, in a form nothing has to interpret, which segment earned what.
-#:
-#: Measured over the latest annual filing of every issuer the lane walks (106 filings,
-#: 2026-09-15): the tagged segments balance the filing's own consolidated revenue in 54, against
-#: 6 for the heading/row/units table reader this replaced (#833) — and one of that reader's six
-#: was Comcast's GEOGRAPHY table ("United States, United Kingdom, Other") taken for its segments.
-#:
-#: Tried in this order; the first concept whose members balance the oracle is the answer.
-#:
-#: The concepts come from the concept ruleset, not from a copy of it (#1379). The oracle is the
-#: capture's `revenue`, so the reader tries the concepts that figure resolves from, in the same
-#: order. Then it tries `bank_revenue`: a bank's top line (JPM) is what its segments report.
 _REVENUE_CONCEPTS = _ruleset_concepts("revenue", "bank_revenue")
 _SEGMENT_AXIS = "us-gaap:StatementBusinessSegmentsAxis"
 _PRODUCT_AXIS = "srt:ProductOrServiceAxis"
-#: The one second dimension a segment fact may carry and still be the segment's revenue: the
-#: filer marking the value as the operating segment's own.
 _CONSOLIDATION_AXIS = "srt:ConsolidationItemsAxis"
 _OPERATING_SEGMENTS = (_CONSOLIDATION_AXIS, "us-gaap:OperatingSegmentsMember")
-#: A fiscal year, including 52/53-week years (AAPL's runs 364 days, some run 371).
 _ANNUAL_DAYS = range(340, 381)
 _CAMEL_CASE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
-#: CamelCase capitalizes every word; a printed segment name does not ("Rest of Asia Pacific").
 _MINOR_WORDS = frozenset({"And", "Of", "The", "For", "In", "To", "On"})
 _GEOGRAPHIC_REGION_NAMES = frozenset(
     {
@@ -221,7 +141,6 @@ _GEOGRAPHIC_REGION_NAMES = frozenset(
 
 
 def _is_geographic_member(member: str) -> bool:
-    """Return True when an axis member names a country or pure geographic region."""
     clean = member.strip()
     if clean.lower().startswith("country:"):
         return True
@@ -232,7 +151,6 @@ def _is_geographic_member(member: str) -> bool:
 def _prune_coarse_product_rollup(
     members: dict[str, set[Decimal | None]],
 ) -> dict[str, set[Decimal | None]]:
-    """Drop `us-gaap:ProductMember` when finer product members are tagged alongside it."""
     if "us-gaap:ProductMember" not in members:
         return members
     specific = [m for m in members if m not in ("us-gaap:ProductMember", "us-gaap:ServiceMember")]
@@ -243,18 +161,7 @@ def _prune_coarse_product_rollup(
     return filtered
 
 
-#: The two shapes a segment fact's context takes (#835). Most filers use one, or split one
-#: consistent set across both — Kraft Heinz tags North America and International on the segment
-#: axis alone and Emerging Markets with `OperatingSegmentsMember`, and only the UNION is its
-#: revenue. Some tag both shapes with different members and values: Berkshire's segment-axis set
-#: is its consolidated revenue to the dollar, while its operating-segments set leaves corporate
-#: revenue off, and merged the two looked like one member making two claims. So the union is
-#: offered first, and each shape on its own after it.
 _SHAPES = (("segment-axis", ()), ("operating-segments", (_OPERATING_SEGMENTS,)))
-#: Revenue the filer earns outside any segment, tagged on the consolidation axis alone. Named
-#: here because the member's own words ("CorporateNonSegment") read badly as a part's name.
-#: Eliminations are not here: they are negative, and a negative part is not revenue anyone is
-#: the purest name under.
 _RECONCILING_LABELS = {
     "CorporateNonSegmentMember": "Corporate and other",
     "CorporateAndReconcilingItemsMember": "Corporate and reconciling items",
@@ -266,19 +173,12 @@ _RECONCILING_LABELS = {
 
 @dataclass(frozen=True)
 class TaggedSegments:
-    """One candidate set of a revenue concept's segment members for the filing's latest year: the
-    union of both context shapes (`all`), or one shape on its own."""
-
     concept: str
     shape: str
     period_end: date
-    #: (axis member, value), member-sorted. Empty when the set is refused before any sum.
     parts: tuple[tuple[str, Decimal], ...]
     scale: int
-    #: Why the set cannot be offered to the identity at all, or None.
     refusal: str | None = None
-    #: Positive off-axis corporate or reconciling items of the same concept and period, as
-    #: (member, value): what a set that falls short may be retried with, one at a time.
     reconciling: tuple[tuple[str, Decimal], ...] = ()
 
     @property
@@ -358,14 +258,7 @@ def _segment_axis_candidates(
 
 
 def tagged_segment_revenues(filing: bytes | InlineXbrl) -> tuple[TaggedSegments, ...]:
-    """Every candidate segment set the filing tags for its latest year, in the order to try them.
-
-    Per revenue concept: the union of both context shapes first, then each shape on its own when
-    it differs from the union. A set is refused rather than summed when a member carries two
-    different values (two claims about one segment), a value the reader cannot parse, or a
-    negative value: an elimination is a reconciling item, not a segment anyone is the purest name
-    under.
-    """
+    """Return candidate annual segment revenue sets ordered by concept and context shape."""
     document = filing if isinstance(filing, InlineXbrl) else InlineXbrl(filing)
     facts = [
         fact
@@ -411,10 +304,7 @@ def _tagged_set(
 
 @dataclass(frozen=True)
 class TaggedPartition:
-    """The tagged set the identity accepted, with the one reconciling item it needed, if any."""
-
     segments: TaggedSegments
-    #: (member, value) as accepted, the reconciling item last when one was used.
     parts: tuple[tuple[str, Decimal], ...]
     reconciling: str | None
     verdict: Partition
@@ -423,14 +313,7 @@ class TaggedPartition:
 def accepted_tagged_partition(
     tagged: Sequence[TaggedSegments], *, total: Decimal, period_end: date | None
 ) -> TaggedPartition | list[str]:
-    """Map the filing's tagged sets onto the shared selection, and its answer back onto them.
-
-    The DECISION — sets in order, each as found before any is completed, one completion never a
-    combination — is `factors.shared.extraction.select_first_balancing_set`'s. What is filing-
-    shaped stays here: which sets are eligible at all (read cleanly, for the oracle's period),
-    and saying per set why none was the answer. `period_end` None skips the period check (the
-    recall census has no period).
-    """
+    """Select the first balancing tagged segment set against consolidated `total`."""
     refusals: list[str] = []
     eligible: list[TaggedSegments] = []
     for segments in tagged:
@@ -443,7 +326,6 @@ def accepted_tagged_partition(
     result = select_first_balancing_set(
         [[Candidate(float(value), member) for member, value in segments.parts] for segments in eligible],
         total=total,
-        # In the units the facts were tagged in — five of whatever the filer rounds to.
         tolerances=[SEGMENT_TOLERANCE * Decimal(10) ** segments.scale for segments in eligible],
         completions=[
             [Candidate(float(value), member) for member, value in segments.reconciling] for segments in eligible
@@ -465,11 +347,6 @@ def accepted_tagged_partition(
 
 
 def segment_name_for(member: str) -> str:
-    """The segment's name from its axis member: `msft:IntelligentCloudMember` -> "Intelligent Cloud".
-
-    The filer's printed label lives in a separate label linkbase; the member's own words are the
-    same words, CamelCased, and they are enough for a reader and for the classifier.
-    """
     local = member.split(":", 1)[-1]
     if local in _RECONCILING_LABELS:
         return _RECONCILING_LABELS[local]
@@ -478,11 +355,6 @@ def segment_name_for(member: str) -> str:
     return " ".join([words[0], *(word.lower() if word in _MINOR_WORDS else word for word in words[1:])])
 
 
-#: The prose that USED to decide (see `_SEGMENT_COUNT_CONCEPTS` for why it no longer does).
-#: It survives to find the sentence a classifier is shown: in the filer's segment note first,
-#: and in the whole filing when the count was tagged only in the hidden header (DDOG, LLY, TMUS)
-#: and no note is tagged. Choosing a poor description costs a declined classification, never a
-#: partition.
 _SINGLE_SEGMENT = re.compile(
     r"\b(?:one|a\s+single|single)\s+(?:operating|reportable)"
     r"(?:\s+and\s+(?:operating|reportable))?\s+segment\b",
@@ -491,7 +363,6 @@ _SINGLE_SEGMENT = re.compile(
 
 
 def single_segment_statement(text: str) -> str | None:
-    """A sentence in `text` that talks about one segment, or None. Description only."""
     match = _SINGLE_SEGMENT.search(text)
     if match is None:
         return None
@@ -499,17 +370,8 @@ def single_segment_statement(text: str) -> str | None:
     return " ".join(text[start : match.end() + _SINGLE_SEGMENT_SPAN].split())
 
 
-#: The filer's own segment note, tagged as one text block (ASU 2023-07 made every filer write
-#: one, single-segment filers included): where a filer says what its segments ARE.
 _SEGMENT_NOTE = "us-gaap:SegmentReportingDisclosureTextBlock"
-#: How much of the note is read for a description. The declaration sits at its top.
 _SEGMENT_NOTE_LIMIT = 6000
-#: Where a filer says what its BUSINESS is, in the order the corpus tags them: the nature-of-
-#: operations block, or the organization/description-of-business note that opens the financial
-#: statements. A segment note can declare one segment without saying what the company does —
-#: Netflix's says "operates as one operating segment" and nothing else — and a classifier given
-#: that and no name answered as NVIDIA (#849). The business opening travels beside the
-#: declaration so there is nothing left to guess.
 _BUSINESS_CONCEPTS = (
     "us-gaap:NatureOfOperations",
     "us-gaap:BusinessDescriptionAndBasisOfPresentationTextBlock",
@@ -517,36 +379,16 @@ _BUSINESS_CONCEPTS = (
     "us-gaap:OrganizationConsolidationAndPresentationOfFinancialStatementsDisclosureAndSignificantAccountingPoliciesTextBlock",
     "us-gaap:OrganizationConsolidationBasisOfPresentationBusinessDescriptionAndAccountingPoliciesTextBlock",
 )
-#: Enough of the business opening to get past the incorporation boilerplate to the sentence
-#: that says what the company does ("Shopify provides essential internet infrastructure for
-#: commerce" arrives at character 180 of its block).
 _BUSINESS_SPAN = 320
 _BUSINESS_MARKER = " Business: "
-#: The declaration and the business opening together, as carried on the row.
 _DESCRIPTION_LIMIT = 720
 
 
 def single_segment_description(document: InlineXbrl, declared: DeclaredSegmentCount, body: bytes) -> str | None:
-    """What the filing says its one segment does, from the strongest statements it makes.
-
-    Two parts. The DECLARATION (#841): v2 used the sentence the count was tagged in; Visa tags
-    its count in a sentence about which expenses reach its CODM, and the classifier declined
-    every theme on it. The segment note is the filer's own statement of what its segments are,
-    so when the filer tags one it is read first — the sentence in it that declares the one
-    segment ("The Company has one reportable segment, Payment Services"), else its opening. A
-    filer that tags no note (DDOG, DUOL) is described by the tagged sentence, then by the prose
-    pattern over the filing.
-
-    The BUSINESS (#849): the opening of the filer's nature-of-operations or organization note,
-    when it tags one, appended after `Business:`. A declaration alone can say nothing about the
-    company (Netflix), and a classifier given nothing invents something.
-
-    Description only, on every path — the count decided before this is asked.
-    """
+    """Assemble the classifier description for a declared single-segment issuer."""
     note = document.text_block(_SEGMENT_NOTE, limit=_SEGMENT_NOTE_LIMIT)
-    declaration: str | None
     if note:
-        declaration = single_segment_statement(note) or note[: _STATEMENT_LEAD + _SINGLE_SEGMENT_SPAN]
+        declaration: str | None = single_segment_statement(note) or note[: _STATEMENT_LEAD + _SINGLE_SEGMENT_SPAN]
     else:
         declaration = declared.statement or single_segment_statement(filing_plain_text(body))
     business = next(
@@ -558,27 +400,8 @@ def single_segment_description(document: InlineXbrl, declared: DeclaredSegmentCo
     return f"{declaration or ''}{_BUSINESS_MARKER}{business}".strip()
 
 
-#: In the units the filer tagged, not in currency: parts each rounded to the tag's own last
-#: digit can miss their total by a few of them, and more than that is a missing or double-counted
-#: part rather than rounding. The caller multiplies by the tags' declared scale, so five means
-#: "five of whatever the filer counts in".
-#:
-#: Declared here rather than taken from the standard because it is a property of how filings
-#: round, and it moves with evidence rather than with a metric definition.
 SEGMENT_TOLERANCE = Decimal("5")
 
-
-#: The issuer's consolidated revenue as the capture plane holds it: the SEC company-facts
-#: observation the wide row is built from, addressed by the vintage's own source record id.
-#:
-#: Not `staging.financial_facts`, which the first version of this adapter read. init.md §3
-#: retires that table — "it holds 0 rows in Production", confirmed against prod on
-#: 2026-09-10 — so every extraction would have refused `no_total` forever while the query
-#: itself looked correct. The plane below holds 3,354 revenue observations, and AVGO's reads
-#: 63,887,000,000 for the filing that prints 63,887.
-#:
-#: The id is zero-padded to ten digits because that is how the capture layer writes it
-#: (`companyfacts:CIK0001730168`); an unpadded id matches nothing (review on #805).
 _CONSOLIDATED_REVENUE_SQL = """
 select p.normalized_payload->>'revenue',
        p.normalized_payload->>'revenue_period_end'
@@ -597,62 +420,21 @@ limit 1
 
 @dataclass(frozen=True)
 class ConsolidatedRevenue:
-    """The oracle, with the period it describes.
-
-    The period is not decoration and it is not read from the filing's own tags. The
-    identity's whole premise is that these parts and this total describe the SAME period, and
-    the only way to hold that without asserting it is to take the period from the number the
-    parts are checked against. A total whose period the source never stated cannot certify any
-    period's partition, so the query above requires it and this is never None.
-    """
-
     value: Decimal
     period_end: date
 
 
 def consolidated_revenue(connection: Any, cik: int, *, cutoff: datetime) -> ConsolidatedRevenue | None:
-    """The issuer's own consolidated revenue at this cutoff — the partition's oracle.
-
-    Read from the SAME plane the wide row is built from, so the number the parts are checked
-    against is the number a reader sees beside them. Point-in-time by construction: only
-    observations knowable at or before the cutoff are eligible, and the newest of those wins.
-
-    ABSOLUTE, in the issuer's reporting currency. The tagged parts carry their own `scale`
-    and are read absolute too, so the identity compares two numbers on the same scale rather
-    than one that is right and one that is off by 10^6.
-
-    Returns None when the issuer has no revenue observation — or has one whose period the
-    source never stated — which the caller turns into a `no_total` refusal rather than a
-    partition it cannot check or cannot file under a period.
-    """
     row = connection.execute(_CONSOLIDATED_REVENUE_SQL, (f"companyfacts:CIK{cik:010d}", cutoff)).fetchone()
     if row is None or row[0] is None or row[1] is None:
         return None
     return ConsolidatedRevenue(value=Decimal(str(row[0])), period_end=date.fromisoformat(str(row[1])))
 
 
-#: What the plane records as the origin of these rows. Matches the standard's
-#: `evidence_bearing_sources` and the source order of its plane's reconciliation policy.
-#: That match lets a later source supersede this one without a code change.
 SEGMENT_SOURCE = "10k-segment-extraction"
 
 
 def partition_id_for(cik: int, period_end: date, parts: Sequence[tuple[str, Decimal]], *, extractor: str) -> str:
-    """The identity of one accepted set, addressed by its content.
-
-    Same filing extracted twice lands the same id, so a re-run collapses onto the rows it
-    already wrote instead of duplicating a segment set — and a RESTATEMENT, which changes a
-    part, is a different set with a different id rather than an update to history.
-
-    `(cik, period_end, parts, extractor)` and nothing else: not the accession, because the same
-    segments restated in a later filing are the same claim about the same period; not the
-    residual, because a set is what its parts are.
-
-    The extractor IS part of it, because the rule that accepted a set is part of what the set
-    claims. Without it a withdrawn rule's rows would block their own replacement: the plane
-    stops admitting them, the cell reopens, the new rule accepts the same parts — and lands
-    nothing, because the id already exists (#822).
-    """
     canonical = json.dumps(
         {
             "cik": cik,
@@ -688,17 +470,6 @@ def record_segment_partition(
     extractor: str,
     confidence: Decimal,
 ) -> int:
-    """Land one accepted partition: one row per segment, all carrying the set's identity.
-
-    Deliberately not an upsert, like every other PIT plane here: a corrected breakdown is a
-    NEW partition with a later `knowable_at`, so history stays readable and a replay of an
-    older cutoff is unaffected.
-
-    The whole set is written or none of it is — the caller runs inside the backfill's
-    transaction, and a half-written partition is exactly the "missed segment" this design
-    refuses to produce from a filing. A partition landed with one row missing would pass
-    every check the plane makes and raise every remaining segment's share.
-    """
     for segment_name, revenue in parts:
         connection.execute(
             """
@@ -726,11 +497,6 @@ def record_segment_partition(
     return len(parts)
 
 
-#: What a one-part partition is named. Not the issuer's ticker and not a guess at its
-#: business: the classifier is handed `evidence_ref`'s statement as the description, and this
-#: is the row's label for a reader scanning the plane. REPORTABLE, not operating: Booking tags
-#: five operating segments aggregated into one reportable segment, and the reportable segment
-#: is what the standard measures.
 SINGLE_SEGMENT_NAME = "Single reportable segment"
 
 
@@ -749,9 +515,6 @@ def _land_partition(
     summary: str,
     note: str = "",
 ) -> ExtractionOutcome:
-    """Land — or, in a probe, report — one accepted set. Every path that accepts a partition
-    (a declared single segment, tagged segment revenue) ends here, so what a landed set
-    carries cannot depend on how it was found."""
     partition_id = partition_id_for(record_cik, oracle.period_end, parts, extractor=extractor)
     outcome = partial(
         ExtractionOutcome,
@@ -764,9 +527,6 @@ def _land_partition(
     if not write:
         return outcome("resolved", detail=f"would land {summary}{note}")
     if partition_already_recorded(connection, partition_id):
-        # The same filing re-extracted addresses the same set. Saying so is the point: a second
-        # identical run must be visible as a no-op rather than as a fresh landing, or an operator
-        # cannot tell a backfill that worked from one that ran twice.
         return outcome("already_recorded", detail=f"{partition_id} already holds {summary}")
     record_segment_partition(
         connection,
@@ -776,8 +536,6 @@ def _land_partition(
         parts=parts,
         partition_total=oracle.value,
         partition_residual=residual,
-        # WHEN the breakdown became knowable: the filing's own date, never now(). An insertion
-        # clock here is look-ahead for every historical cutoff.
         knowable_at=knowable_instant(AsOfAxis.ACCESSION, document.filing_date),
         evidence_ref=evidence_ref,
         extractor=extractor,
@@ -797,12 +555,6 @@ def _tagged_segments_outcome(
     standard: MetricStandard,
     write: bool,
 ) -> ExtractionOutcome:
-    """Land the first tagged set that balances the oracle; refuse with every set's reason otherwise.
-
-    A filer that tags its segments has said what they are; the retired table reader balanced a
-    table where Comcast's five tagged segments did not, and the table was its geography (#830,
-    #833).
-    """
     refused = partial(
         ExtractionOutcome,
         cik,
@@ -828,8 +580,6 @@ def _tagged_segments_outcome(
         parts=parts,
         residual=Decimal(str(verdict.residual)),
         extractor=verdict.extractor,
-        # `recall=xbrl`, the concept, the shape and the members: a reader can find every part's tag
-        # in the filing, including the one reconciling item a set needed.
         evidence_ref=" ".join(
             [
                 f"accession={document.accession}",
@@ -864,54 +614,20 @@ def extract_segment_revenue(
     issuer_label: str | None = None,
     **_unused: Any,
 ) -> ExtractionOutcome:
-    """The standard's adapter: fetch, read what the filer tags, and land what balances.
-
-    Same signature as `extract_headcount` because `backfill._resolve` calls whichever adapter
-    the standard declares (#800) — the loop no longer knows which is which.
-
-    Two statements answer, in order: a declared single segment (#822), then the revenue tagged
-    on the business-segment axis (#830). Anything else is a refusal that says which half is
-    missing. In write mode the accepted set is landed as one row per segment, all sharing a
-    content-addressed `partition_id`, inside the caller's transaction — the rows are admissible
-    only together, so they commit together or not at all.
-    """
-    del issuer_label  # accepted for signature parity; not used by this adapter
-    # #496, the same split `extract_headcount` makes: `cik` is where the FILING is fetched
-    # from, `record_cik` (default: the same) is the issuer the fact is RECORDED under. They
-    # differ for a post-reorganization holding company whose filings still sit under the
-    # predecessor CIK — and the backfill's fallback passes it, so discarding it would file
-    # XOM's segments under the CIK it no longer trades as.
+    """Fetch the latest annual filing, verify inline-XBRL segment counts/revenues against consolidated revenue, and land."""
+    del issuer_label, store
     record_cik = cik if record_cik is None else record_cik
-    # One fetch contract for every adapter (`fetch_annual_filing`): a backfill reports the
-    # failure per CELL and keeps going. This module shipped its own copy and #805's review
-    # caught what it had drifted from; there is one now.
     document = fetch_annual_filing(cik, http=http, gateway=gateway, cutoff=cutoff)
     if isinstance(document, ExtractionOutcome):
         return document
     if document is None:
         return ExtractionOutcome(cik, "no_annual_filing", detail="no 10-K/20-F at or before the cutoff")
 
-    # By `record_cik`, not `cik`: the total must be the ISSUER's, even when the filing the
-    # parts were read from sits under a predecessor. Checking a holdco's segments against the
-    # predecessor's revenue would balance two different entities against each other.
     oracle = consolidated_revenue(connection, record_cik, cutoff=cutoff)
-
-    # A single-segment issuer has no segment TABLE, and that is an answer rather than a
-    # miss: the one segment IS the company, so the partition is the consolidated revenue in
-    # one part. It satisfies the accounting identity by construction — which is exactly why
-    # it has to say so on the row: the identity gives these no independent check, and the
-    # filer's own declaration is the whole of the evidence.
-    #
-    # Checked FIRST: an issuer that declares one segment is answered by the declaration, and a
-    # geography or product breakdown it also tags must not be accepted as its reportable
-    # segments.
     xbrl = InlineXbrl(document.body)
     declared = declared_segment_count(xbrl)
     if declared is not None and declared.value == 1 and oracle is not None:
         if declared.period_end != oracle.period_end:
-            # The partition is filed under the ORACLE's period, so a count declared for a
-            # different one is not evidence about it: a filer that reorganized between the two
-            # would be landed as one segment for a year it had several.
             return ExtractionOutcome(
                 cik,
                 "no_candidate",
@@ -923,8 +639,6 @@ def extract_segment_revenue(
                     f"the consolidated revenue on file is for {oracle.period_end}"
                 ),
             )
-        # The description (#841): the filer's segment note, then the sentence the count is tagged
-        # in, then the prose. None of it decides anything; the count already has.
         statement = single_segment_description(xbrl, declared, document.body)
         return _land_partition(
             connection,
@@ -934,10 +648,6 @@ def extract_segment_revenue(
             parts=[(SINGLE_SEGMENT_NAME, oracle.value)],
             residual=Decimal(0),
             extractor=RULE_SINGLE_SEGMENT,
-            # The declaration travels ON the row, and so does the sentence. Everything else here
-            # balances by construction, so these are the only things a reader can check the claim
-            # against. The statement goes LAST: the theme-purity reader takes everything after
-            # its marker as the description.
             evidence_ref=" ".join(
                 [f"accession={document.accession}", f"form={document.form}", f"segment_count={declared.evidence}"]
                 + ([f"single_segment_statement={statement[:_DESCRIPTION_LIMIT]}"] if statement else [])
@@ -951,8 +661,6 @@ def extract_segment_revenue(
             note=f": {(statement or '')[:160]}",
         )
 
-    # Next, the revenue the filer tags on the segment axis (#830): answered from the tags, or
-    # refused with each concept's reason.
     tagged = tagged_segment_revenues(xbrl)
     if tagged:
         return _tagged_segments_outcome(
@@ -966,11 +674,6 @@ def extract_segment_revenue(
             write=write,
         )
 
-    # Neither statement: the filing does not say, in a form this adapter trusts, how its revenue
-    # divides. Two different things, with two different owners, can leave it there — a single
-    # segment declared where this environment has no revenue to file it against, and a filing
-    # that tags no segment revenue at all (an IFRS filer, a custom axis) — and the refusal says
-    # which.
     if declared is not None and declared.value == 1:
         detail = (
             f"declares a single segment ({declared.evidence}), but this environment holds no "

@@ -1,13 +1,4 @@
-"""OpenFIGI mapping client: ISIN -> listing records (venue + local ticker).
-
-This is the ISIN/CUSIP resolution step AGENTS.md's N-PORT gotcha calls for —
-N-PORT identifies holdings by CUSIP/ISIN (foreign CUSIPs are placeholder zeros),
-and moomoo/SEC need market-local codes.
-
-Rate limits (docs, and observed 2026-07-11): without an API key 25 mapping
-requests/min with 10 jobs each; with a free key 250 requests per 60 s with 100 jobs each.
-429s are expected at the keyless tier — handled by sleep-and-retry, so a full
-~1,100-ISIN universe takes ~5 minutes keyless and seconds with a key."""
+"""OpenFIGI ISIN -> listing records batch mapping client."""
 
 import time
 
@@ -25,9 +16,6 @@ def map_isins(
     on_batch=None,
     sleep=time.sleep,
 ) -> dict[str, list[dict]]:
-    """{isin: [listing records]} for every input ISIN (missing/unmapped -> []).
-    on_batch(batch_isins, response_json) fires per successful request so the
-    caller can persist the verbatim response to raw.fetches."""
     headers = {"Content-Type": "application/json"}
     chunk_size = 10
     if api_key:
@@ -39,13 +27,7 @@ def map_isins(
         batch = isins[start : start + chunk_size]
         jobs = [{"idType": "ID_ISIN", "idValue": isin} for isin in batch]
         identity = FetchKey.for_batch("openfigi", "mapping", batch, gateway.utc_day())
-        # Keyless-tier 429s are routine (limit resets per minute); a flat wait
-        # beats parsing Retry-After (not always present). Bounded so a service
-        # incident / IP ban fails loudly instead of hanging the bootstrap
-        # forever: 30 attempts x 10s = 5 minutes of sustained 429 per batch.
         for attempt in range(30):
-            # Every attempt is a ledger row (#729): a 429 is a failed request that still
-            # counted against the vendor window, so it is recorded as one.
             resp = gateway.http_post(
                 client,
                 "openfigi",
@@ -65,7 +47,7 @@ def map_isins(
         else:
             raise RuntimeError(
                 f"OpenFIGI kept returning 429 for 5 minutes (batch at {start}/{len(isins)}) — "
-                "not a normal keyless-tier reset; check service status or set OPENFIGI_API_KEY"
+                "check service status or set OPENFIGI_API_KEY"
             )
         results = resp.json()
         if on_batch is not None:

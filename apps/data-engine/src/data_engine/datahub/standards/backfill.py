@@ -1,14 +1,4 @@
-"""Run the loop for one standard over one universe (#733): plan the open cells, resolve
-each through the standard's evidence path, and report what happened per cell.
-
-Two modes, one code path. `backfill` lands cited facts; `probe` runs the same enumeration
-and selection without writing a fact or a raw object — the report is the answer to "which
-source can fill this field for this universe", the data-source research instrument.
-The ledger records the vendor calls in both modes: capacity spent is capacity spent.
-
-Each cell commits on its own. A backfill that dies on issuer 60 of 101 keeps the 59
-cited facts it landed; the next run's planner finds only the remaining cells.
-"""
+"""Generic standard backfill and probe loop over open universe cells (#733, #800)."""
 
 from __future__ import annotations
 
@@ -17,6 +7,7 @@ from collections import Counter
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
+from functools import partial
 from importlib import import_module
 from typing import Any, Literal
 
@@ -71,15 +62,13 @@ def resolve_issuers(
     http: Any = None,
     cutoff: datetime | None = None,
 ) -> list[UniverseIssuer]:
-    """The universe's issuers with a CIK each. One SEC crosswalk call when a CIK is missing."""
     issuers = (
         universe_issuers(connection, universe, cutoff=cutoff)
         if cutoff is not None
         else universe_issuers(connection, universe)
     )
     if any(issuer.cik is None for issuer in issuers):
-        index = sec.ticker_cik_index(http, via=gateway)
-        issuers = resolve_missing_ciks(issuers, index)
+        issuers = resolve_missing_ciks(issuers, sec.ticker_cik_index(http, via=gateway))
     return issuers
 
 
@@ -98,13 +87,6 @@ def run_standard_backfill(
     issuers: list[UniverseIssuer] | None = None,
     record_summary: bool = True,
 ) -> BackfillReport:
-    """Run one standard over one universe at one cutoff.
-
-    A caller that runs many cutoffs (the history run) resolves the issuers once and passes
-    them in. It also sets `record_summary` to False: the health-log rows of a backfill say
-    "this standard was backfilled over this universe" (`never_backfilled`). A run over a
-    past cutoff must not say that.
-    """
     standard = STANDARDS[standard_name]
     report = BackfillReport(universe=universe, standard=standard_name, mode=mode, cutoff=cutoff)
     gateway = gateway or SourceGateway(connection, caller=f"{HEALTH_LOG_SOURCE}:{universe}:{standard_name}")
@@ -153,14 +135,6 @@ def _resolve(
 ) -> ExtractionOutcome:
     if cell.issuer.cik is None:
         return ExtractionOutcome(0, "error", detail="issuer has no CIK in the universe plane or the SEC crosswalk")
-    # The adapter comes from the STANDARD (#799). This dispatched on `evidence` alone and
-    # then called `extract_headcount`, so EVERY `FILING_SPAN` standard extracted headcount
-    # whatever it declared — the loop was generic in signature and headcount-only in fact.
-    #
-    # Evidence is still gated because this backfill only knows how to drive a filing-span
-    # adapter (it opens an SEC client and passes a cutoff). The standard HAS an adapter; what
-    # is missing is this runner's support for the evidence class — the message says so rather
-    # than blaming the standard for a field it declared (review on #800).
     if standard.evidence is not EvidenceRequirement.FILING_SPAN:
         return ExtractionOutcome(
             cell.issuer.cik,
@@ -168,9 +142,8 @@ def _resolve(
             detail=f"standard backfill drives {EvidenceRequirement.FILING_SPAN.value} adapters only, "
             f"not {standard.evidence.value}",
         )
-    extract = _adapter(standard)
-    outcome = extract(
-        cell.issuer.cik,
+    call_extract = partial(
+        _adapter(standard),
         connection=connection,
         http=http,
         gateway=gateway,
@@ -180,31 +153,13 @@ def _resolve(
         store=store,
         issuer_label=f"{cell.issuer.ticker} ({cell.issuer.issuer_id})",
     )
+    outcome = call_extract(cell.issuer.cik)
     if outcome.status == "no_annual_filing" and cell.issuer.predecessor_cik is not None:
-        # #496: the same fallback the daily tick applies — the holdco's filings still
-        # live under the predecessor; the fact is recorded under the issuer's current CIK.
-        outcome = extract(
-            cell.issuer.predecessor_cik,
-            connection=connection,
-            http=http,
-            gateway=gateway,
-            standard=standard,
-            cutoff=cutoff,
-            write=mode == "backfill",
-            store=store,
-            record_cik=cell.issuer.cik,
-            issuer_label=f"{cell.issuer.ticker} ({cell.issuer.issuer_id})",
-        )
+        outcome = call_extract(cell.issuer.predecessor_cik, record_cik=cell.issuer.cik)
     return outcome
 
 
 def _adapter(standard: MetricStandard) -> Callable[..., ExtractionOutcome]:
-    """Resolve the standard's declared `module:function` adapter.
-
-    Resolved per call rather than cached: a standard is code, the module set is small, and
-    an import error must name the standard that asked for it rather than surfacing at
-    process start for a standard nobody ran.
-    """
     module_name, _, attribute = standard.adapter.partition(":")
     try:
         resolved = getattr(import_module(module_name), attribute)
@@ -212,9 +167,6 @@ def _adapter(standard: MetricStandard) -> Callable[..., ExtractionOutcome]:
         raise LookupError(
             f"standard {standard.metric!r} declares adapter {standard.adapter!r}, which does not resolve"
         ) from error
-    # A name that resolves to a constant or a class would otherwise crash at CALL time with
-    # a bare TypeError, losing the one piece of context worth having — which standard asked
-    # for it (review on #800).
     if not callable(resolved):
         raise LookupError(
             f"standard {standard.metric!r} declares adapter {standard.adapter!r}, "
@@ -257,42 +209,24 @@ def _cell_line(cell: OpenCell, outcome: ExtractionOutcome) -> str:
 
 
 def summary_metric(standard: str, universe: str, mode: Mode, status: str) -> str:
-    """The health-log metric one run's count is filed under."""
     return f"{standard}:{universe}:{mode}:{status}"
 
 
 def completed_metric(standard: str, universe: str) -> str:
-    """The row every backfill that reaches its end writes — zero open cells included — and so
-    the evidence that this standard has been backfilled over this universe here at all."""
     return summary_metric(standard, universe, "backfill", "open_cells")
 
 
 def _persist_summary(connection: Any, report: BackfillReport) -> None:
-    """The run's per-status counts, in the existing health log: a probe is an answer only
-    if it survives the run that produced it (init.md §6, `ingestion_health_log`)."""
     note = json.dumps(report.summary(), sort_keys=True)
-    for status, count in sorted(report.outcomes.items()):
+    rows = [*sorted(report.outcomes.items()), ("open_cells", report.open)]
+    for status, count in rows:
         connection.execute(
             "insert into staging.ingestion_health_log (source, metric, value, note) values (%s, %s, %s, %s)",
             (HEALTH_LOG_SOURCE, summary_metric(report.standard, report.universe, report.mode, status), count, note),
         )
-    connection.execute(
-        "insert into staging.ingestion_health_log (source, metric, value, note) values (%s, %s, %s, %s)",
-        (
-            HEALTH_LOG_SOURCE,
-            summary_metric(report.standard, report.universe, report.mode, "open_cells"),
-            report.open,
-            note,
-        ),
-    )
 
 
 def never_backfilled(connection: Any, *, universes: Sequence[str], standards: Sequence[str]) -> list[tuple[str, str]]:
-    """(universe, standard) pairs no backfill has ever completed over in this environment.
-
-    Read from the health log `_persist_summary` writes at the end of every backfill run, so a
-    run that died before its end does not count, and a probe does not either.
-    """
     expected = {
         completed_metric(standard, universe): (universe, standard) for universe in universes for standard in standards
     }

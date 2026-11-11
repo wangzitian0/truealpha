@@ -1,30 +1,4 @@
-"""Yahoo Finance daily price bars — the FALLBACK price source (no SLA, init.md
-Section 9; Twelve Data is the primary once an API key exists).
-
-Hits the chart endpoint directly with a plain httpx client, rather than the
-`yfinance` PyPI package: the VPS's IP is rate-limited by Yahoo (HTTP 429) when
-using yfinance's default session, but a plain request with a non-default
-User-Agent succeeds. Same approach finance_report runs in production from the
-same VPS (apps/backend/src/pricing/extension/market_data/_providers.py) —
-Yahoo's blocking appears to key off session/TLS fingerprinting, not the UA
-string's exact content, but a non-default UA is what's actually verified to work.
-
-## Prices are Decimal, and the vendor's float32 is undone here
-
-Yahoo serializes prices through float32 and sends the artifact on the wire —
-inspected directly, `close` arrives as `326.5899963378906`, not `326.59`. So this
-is not something Python's JSON parser introduces and not something a downstream
-`Decimal(...)` cast can avoid: by the time any consumer sees it the noise is
-already in the bytes. It has to be undone at the parse boundary or not at all,
-which is why the recovery lives here rather than in the adapter.
-
-Recovery is exact, not a rounding convenience. float32 spacing below 2**16 is at
-most 2**-8 = 0.0039, under half a cent, so exactly one 2-decimal price maps onto
-each float32 value and quantizing returns the original. Above that the spacing
-exceeds half a cent (at $700k it is 0.0625) and the original is genuinely
-unrecoverable — those values are left untouched rather than rounded to a figure
-we cannot justify.
-"""
+"""Yahoo Finance daily price bars with exact float32-to-Decimal cent recovery below 2**16."""
 
 import json
 from datetime import UTC, date, datetime, timedelta
@@ -39,9 +13,6 @@ from data_engine.sources.accept_rules import accept_rule
 
 CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
 USER_AGENT = "TrueAlpha research wangzitian.ai@icloud.com"
-
-# Below this magnitude, one 2-decimal price maps to exactly one float32, so quantizing
-# recovers the vendor's original figure. At or above it, do not pretend to know.
 EXACT_CENT_RECOVERY_BELOW = Decimal(2**16)
 _CENT = Decimal("0.01")
 
@@ -63,7 +34,6 @@ class PriceBar:
 
 
 def recover_quoted_price(value: Decimal | None) -> Decimal | None:
-    """Undo Yahoo's float32 serialization when the original is provably recoverable."""
     if value is None or abs(value) >= EXACT_CENT_RECOVERY_BELOW:
         return value
     return value.quantize(_CENT)
@@ -74,23 +44,10 @@ def _epoch(d: date) -> int:
 
 
 def fetch_daily_chart(symbol: str, *, end: date | None = None, period_days: int = 365) -> tuple[bytes, list[PriceBar]]:
-    """The verbatim response body and the bars parsed from it.
-
-    Callers that land evidence need the bytes Yahoo actually sent, not a rendering of
-    what we made of them: a digest over a summary string we composed ourselves proves
-    nothing about the vendor and cannot be reparsed under a corrected mapping.
-
-    `end` exists so a point-in-time caller gets a window around ITS cutoff. Defaulting
-    the window to the wall clock and filtering afterwards silently returns nothing for
-    any cutoff more than `period_days` in the past — a backfill would see every price
-    cell resolve `FIELD_UNAVAILABLE` rather than an error naming the cause.
-    """
-    settled_end = end is not None  # a window that ends today may still change; the index keeps only a fixed end
+    settled_end = end is not None
     end = end or date.today()
     start = end - timedelta(days=period_days)
     params = {"period1": str(_epoch(start)), "period2": str(_epoch(end + timedelta(days=1))), "interval": "1d"}
-    # One key per symbol, window and settled end date (#1411 K3): a second tick or universe that asks
-    # for the same window reads the landed bytes.
     key = FetchKey.for_request(
         "yahoo",
         "chart",
@@ -102,8 +59,6 @@ def fetch_daily_chart(symbol: str, *, end: date | None = None, period_days: int 
 
     def fetch(identity: FetchKey) -> bytes:
         with httpx.Client(headers={"User-Agent": USER_AGENT}, timeout=15.0) as client:
-            # Through the external call ledger (#729): the request, its status and the digest
-            # of the body it answered with are recorded before the bytes are parsed or landed.
             resp = gateway.http_get(
                 client,
                 "yahoo",
@@ -117,24 +72,16 @@ def fetch_daily_chart(symbol: str, *, end: date | None = None, period_days: int 
             return bytes(resp.content)
 
     body = gateway.fetch_once(key, fetch, keep=settled_end)
-    # Decoded with parse_float=Decimal so the response is never routed through a
-    # Python float — that would add a second rounding on top of the vendor's.
     payload = json.loads(body.decode(), parse_float=Decimal)
     return body, _parse_chart_response(payload)
 
 
 @accept_rule("yahoo", "chart")
 def _chart_settles_its_session(key: FetchKey, body: bytes) -> bool:
-    """The rule of every chart key: the as-of of the key is the session that the window ends on."""
     return _session_is_final(body, date.fromisoformat(key.as_of))
 
 
 def _session_is_final(body: bytes, end: date) -> bool:
-    """Whether a chart answer settles the session of ``end`` for good, so the index may keep it.
-
-    A session is final once its XNYS close has passed and the chart holds its bar. Before the close the
-    chart sends a bar that still moves (#637). After it, Yahoo can lag and omit the bar, and an older
-    bar would then stand in for the session. An ``end`` that is no XNYS session needs no bar."""
     from data_engine.datahub.market_prices import is_xnys_trading_day, xnys_session_close_utc
 
     if end > gateway._utcnow().date():
@@ -147,7 +94,6 @@ def _session_is_final(body: bytes, end: date) -> bool:
 
 
 def fetch_daily_bars(symbol: str, *, end: date | None = None, period_days: int = 365) -> list[PriceBar]:
-    """Bars only, for callers with nothing to land."""
     return fetch_daily_chart(symbol, end=end, period_days=period_days)[1]
 
 
@@ -181,7 +127,7 @@ def _parse_chart_response(payload: dict[str, Any]) -> list[PriceBar]:
     bars = []
     for i, ts in enumerate(timestamps[: len(closes)]):
         close = recover_quoted_price(closes[i])
-        if close is None:  # non-trading gaps inside the range come back null
+        if close is None:
             continue
         bars.append(
             PriceBar(

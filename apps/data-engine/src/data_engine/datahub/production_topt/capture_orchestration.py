@@ -1,12 +1,4 @@
-"""TOPT capture orchestration (Phase 3g, ADR A1 / #171).
-
-Wires the executor to the per-semantic source adapters. A `CompositeSourceFetchPort` routes
-each work item to the adapter that owns its semantic, and `run_topt_capture` runs the executor
-over the planned work items, writing the append-only evidence graph and returning the run
-report. The routing table is built from the plan by the caller (each adapter already holds its
-own per-work-item targets). The router forwards a failover request (#862) to the adapter that
-owns the work item when that adapter declares further origins, and answers None otherwise.
-"""
+"""TOPT capture orchestration across routed semantic source adapters."""
 
 from __future__ import annotations
 
@@ -30,8 +22,6 @@ from data_engine.datahub.production_topt.executor import (
 
 
 class CompositeSourceFetchPort:
-    """Routes each work item to the adapter that owns it; unmapped items fail closed."""
-
     def __init__(self, routes: Mapping[str, SourceFetchPort]) -> None:
         self._routes = dict(routes)
 
@@ -59,11 +49,6 @@ def run_topt_capture(
     recorded_at: datetime,
     max_attempts: int = 3,
 ) -> ToptCaptureRunReport:
-    """Execute the planned TOPT capture through the routed adapters and the evidence writer.
-
-    `sink` persists the capture-control tables the snapshot/mart path reads; on the
-    same connection as `writer`, so one run commits as one transaction.
-    """
     port = CompositeSourceFetchPort(routes)
     executor = ToptCaptureExecutor(writer, sink=sink, max_attempts=max_attempts)
     return executor.run(run_id, work_items, port, cutoff=cutoff, recorded_at=recorded_at)

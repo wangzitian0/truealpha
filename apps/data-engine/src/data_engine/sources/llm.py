@@ -1,23 +1,4 @@
-"""The filing-extraction model provider as a gated source (#70 scope 1–2, #735 B1).
-
-Precision is the model's half: recall enumerates every stated headcount with its sentence,
-and when a filing states several distinct company-wide figures a judgement is needed. The
-model gets the enumerated candidates — never the whole filing — and must answer with one
-of them or with null; a value that is not a candidate is refused, so the model can choose
-but cannot invent (init.md rule 3 in spirit: the fact stays anchored to a verbatim span).
-
-Every call is an append-only invocation record (init.md §9): provider, model, base URL host,
-the instruction/schema digests, request and response digests, token cost, and the decision.
-A second run for the same (subject, accession, instructions, model) REPLAYS the FIRST stored
-answer without calling the provider, and parallel runs asking the same question wait for
-each other rather than both asking. The call itself goes through the ledger
-(`record_call`, rule 6) with its token cost, under the `filing-extraction-model` seat.
-
-`as_selector()` at the bottom adapts `select_headcount` to the shared extraction
-primitive's `Selector` protocol (`common/factors/shared/extraction.py`, #769) for a caller
-that only needs "chosen value or None" in the primitive's own vocabulary; every ledger,
-replay, and persistence behaviour above is unchanged and still reached through it.
-"""
+"""Gated LLM extraction, classification, and card generation source (#70, #735, init.md §9)."""
 
 from __future__ import annotations
 
@@ -55,11 +36,10 @@ from data_engine.sources.gateway import record_call
 
 logger = logging.getLogger(__name__)
 
-SOURCE = model_policy.seat_contract().seat  # "filing-extraction-model": the contract names the seat
+SOURCE = model_policy.seat_contract().seat
 ENDPOINT = "chat.completions"
-PROMPT_VERSION = "headcount-select:v2"  # v1 named the schema without showing it; every answer came back null
+PROMPT_VERSION = "headcount-select:v2"
 MAX_CONTEXT_TOKENS = 1_000_000
-#: The `finish_reason` of an answer that the provider cut off at `max_tokens`.
 FINISH_REASON_CUT_OFF = "length"
 _CHARS_PER_TOKEN_FLOOR = 2.5
 _COMPACT_REQUEST_BYTE_THRESHOLD = 16_384
@@ -90,28 +70,14 @@ SCHEMA_SHA256 = canonical_sha256(RESPONSE_SCHEMA)
 
 @dataclass(frozen=True)
 class ModelTask:
-    """One bound decision: what is asked, in what shape, under whose identity.
-
-    The invocation table has always had `prompt_version`, `prompt_sha256` and
-    `schema_sha256` columns — the plane was generic while the module that wrote to it held
-    exactly one prompt at module scope. A second decision (segment-theme classification,
-    #772) is what turns that from tidy into wrong, so the prompt becomes a value.
-
-    Bound as a whole because §9's replay contract is over the whole ask: the instructions,
-    the schema, the decoding settings and the model together are the identity, and a task
-    that changed one of them silently would replay an answer to a different question.
-    """
+    """Bound prompt version, instructions, response schema, and token/timeout limits."""
 
     prompt_version: str
     instructions: str
     response_schema: dict[str, Any]
-    #: Enough for a short JSON answer. A classification over a handful of segments needs
-    #: more room than a single chosen integer, so it is per task rather than global.
     max_tokens: int = 300
     timeout_seconds: int = 60
     max_context_tokens: int = MAX_CONTEXT_TOKENS
-    #: False for a task that needs only proof that the provider answered (the key probe): an answer
-    #: cut off at `max_tokens` is then still an answer, and no failure.
     answer_required: bool = True
 
     @property
@@ -128,11 +94,7 @@ HEADCOUNT_TASK = ModelTask(prompt_version=PROMPT_VERSION, instructions=INSTRUCTI
 
 @dataclass(frozen=True)
 class ModelInvocation:
-    """What one ask produced, before any task-specific reading of it.
-
-    `decision` is the parsed answer in the task's own vocabulary; everything else is the
-    §9 identity that is the same for every task.
-    """
+    """Recorded or replayed model invocation metadata and parsed task decision."""
 
     decision: dict[str, Any]
     model: str
@@ -155,14 +117,11 @@ Transport = Callable[[str, dict[str, str], bytes], tuple[int, bytes]]
 
 
 class ModelNotConfigured(RuntimeError):
-    """No provider seated (the key setting is empty): the caller keeps the cell deferred."""
+    """Raised when the LLM provider API key is empty."""
 
 
 class ModelHTTPError(RuntimeError):
-    """The provider answered with an error status. A `RuntimeError`, as it always was, so
-    every existing caller is unchanged; the status is carried for a caller that must tell a
-    rejected credential (401/403) from an unavailable provider (#876 W2). The provider code
-    (for example "1302" for a rate limit) is carried for the same reason (#1444)."""
+    """Raised when the LLM provider returns an HTTP error status."""
 
     def __init__(self, status_code: int, message: str, provider_code: str | None = None) -> None:
         super().__init__(message)
@@ -171,20 +130,14 @@ class ModelHTTPError(RuntimeError):
 
 
 class ModelCapacityRefused(ModelHTTPError):
-    """The pacer found no concurrency slot or rate window before the deadline of the call. Nothing
-    was sent. It is a `ModelHTTPError` so that every caller that defers a cell on an unavailable
-    provider defers it on this too (#1444). The status is 429: the limit is ours, not the provider's."""
+    """Raised when the local model pacer finds no slot or rate window before deadline."""
 
     def __init__(self, detail: str) -> None:
         super().__init__(429, f"{SOURCE}: {detail}")
 
 
 class ModelOutputTruncated(ModelHTTPError):
-    """The provider cut its answer off at `max_tokens`, so the answer holds no complete JSON (#1444).
-
-    The invocation is recorded as a refusal and is never replayed. Raised so that every caller that
-    defers a cell on an unavailable provider counts it as a model error and leaves the cell open,
-    instead of reading the refusal as the decision of the model. The status is the provider's: 200."""
+    """Raised when the provider truncates output at `max_tokens` (`finish_reason=length`)."""
 
     def __init__(self, max_tokens: int) -> None:
         super().__init__(200, f"{SOURCE}: the answer was cut off at max_tokens {max_tokens}")
@@ -192,11 +145,7 @@ class ModelOutputTruncated(ModelHTTPError):
 
 
 class ModelContextLimitError(ModelHTTPError):
-    """Raised when a prompt exceeds the model's context ceiling (1M tokens for glm-5.3-flash).
-
-    Never swallowed as an empty extraction: the caller records `context_window_exceeded`
-    on the mart row, alerts in the logs, and marks the nightly verdict and daily report.
-    """
+    """Raised when a prompt exceeds the model context window ceiling."""
 
     def __init__(
         self,
@@ -235,10 +184,6 @@ class ModelSelection:
     completion_tokens: int | None
     invocation_id: str
     replayed: bool
-    # What the provider says it answered with (response.model). The coding plan routes
-    # legacy names to its current models — glm-4.7 was served by glm-5.3-flash — so the
-    # extractor names the served model, and `model` stays the requested name that is part
-    # of the request digest.
     served_model: str | None = None
 
     @property
@@ -257,13 +202,7 @@ def build_chat_request(
     model: str,
     decoding: model_decoding.DecodingVersion | None = None,
 ) -> dict[str, Any]:
-    """The provider request for any task. Its digest IS the replay key, so everything that
-    could change the answer has to be in here.
-
-    The decoding settings are part of the invocation identity (§9) and come from a named version
-    (`sources.model_decoding`). The default is the version that the environment contract names for
-    this environment. Another version builds the request of its time, so that the replay can find an
-    answer stored under it (#1444)."""
+    """Build the canonical chat-completions request payload whose digest forms the replay key."""
     version = decoding or model_decoding.for_environment(gateway.capacity_environment())
     return {
         "model": model,
@@ -275,18 +214,16 @@ def build_chat_request(
     }
 
 
-def build_request(issuer_label: str, form: str, candidates: Sequence[Candidate], *, model: str) -> dict[str, Any]:
-    """The headcount task's user content, wrapped by the generic builder above."""
+def _headcount_user_content(issuer_label: str, form: str, candidates: Sequence[Candidate]) -> str:
     lines = [f"[{i}] {c.value:,}: {c.sentence}" for i, c in enumerate(candidates)]
-    user = f"Issuer: {issuer_label}, form {form}.\nCandidates:\n" + "\n".join(lines)
-    return build_chat_request(HEADCOUNT_TASK, user, model=model)
+    return f"Issuer: {issuer_label}, form {form}.\nCandidates:\n" + "\n".join(lines)
+
+
+def build_request(issuer_label: str, form: str, candidates: Sequence[Candidate], *, model: str) -> dict[str, Any]:
+    return build_chat_request(HEADCOUNT_TASK, _headcount_user_content(issuer_label, form, candidates), model=model)
 
 
 def _request_params(request_body: dict[str, Any], decoding: model_decoding.DecodingVersion) -> dict[str, Any]:
-    """The request parameters that matter for the model plan, for the ledger row (#1444).
-
-    An allow-list: the headers, the messages and the key never enter it. ``thinking`` is the type
-    that was sent, or None when the request carries no thinking parameter."""
     thinking = request_body.get("thinking")
     response_format = request_body.get("response_format")
     return {
@@ -300,18 +237,13 @@ def _request_params(request_body: dict[str, Any], decoding: model_decoding.Decod
     }
 
 
-#: The timeout of one attempt, set by `_call_provider` for the code that runs inside it. A context
-#: variable, not a module global: calls on several threads each keep their own task timeout.
 _attempt_timeout: contextvars.ContextVar[int] = contextvars.ContextVar(
     "llm_attempt_timeout", default=ModelTask.timeout_seconds
 )
+_attempt_identity: contextvars.ContextVar[FetchKey] = contextvars.ContextVar("llm_attempt_identity")
 
 
 def _model_key(standard: str, cik: int, accession: str, request_sha256: str) -> FetchKey:
-    """The key of one model request: the standard, the filing and the digest of the request (#1521).
-
-    A call that names no filing (the key health probe) takes the seat as its entity and the UTC day
-    in front of the digest, because its request is the same every day."""
     if accession:
         return FetchKey(SOURCE, f"{ENDPOINT}?standard={standard}", f"filing:{cik:010d}:{accession}", request_sha256)
     return FetchKey(
@@ -319,15 +251,7 @@ def _model_key(standard: str, cik: int, accession: str, request_sha256: str) -> 
     )
 
 
-#: The key of the request that `_call_provider` is making, for the code that runs inside it. It has no
-#: default: a provider call outside `_call_provider` names no request and raises `LookupError`.
-_attempt_identity: contextvars.ContextVar[FetchKey] = contextvars.ContextVar("llm_attempt_identity")
-
-
 def _gateway_transport(url: str, headers: dict[str, str], body: bytes) -> tuple[int, bytes]:
-    """The provider call through the external call ledger (rule 6). Nested inside the
-    `record_call` block of `_attempt`, so it enriches that one row — status,
-    digest, URI — rather than emitting a second."""
     request = urllib.request.Request(url, data=body, headers=headers, method="POST")
     status, response = gateway.urlopen(
         SOURCE,
@@ -342,24 +266,15 @@ def _gateway_transport(url: str, headers: dict[str, str], body: bytes) -> tuple[
 
 
 def _stored_request(request_body: dict[str, Any]) -> dict[str, Any]:
-    """Return the request payload persisted in `staging.model_invocations.request`.
-
-    Full 10-K prompts are 150 KB to 800 KB; storing the raw filing text inside every Postgres
-    JSONB row bloats the table when the immutable filing already lives in `raw.fetches` / S3.
-    For user prompts over 16 KB, replace the user content with a deterministic SHA-256 + length
-    digest while keeping `request_sha256` and the compact `_without_model` replay key identical.
-    """
+    """Compact user messages larger than 16 KB into deterministic SHA-256 + length metadata."""
     messages = request_body.get("messages")
     if not isinstance(messages, list):
         return request_body
     compacted_messages: list[dict[str, Any]] = []
     changed = False
     for msg in messages:
-        if not isinstance(msg, dict):
-            compacted_messages.append(msg)
-            continue
-        content = msg.get("content")
-        if msg.get("role") == "user" and isinstance(content, str):
+        if isinstance(msg, dict) and msg.get("role") == "user" and isinstance(msg.get("content"), str):
+            content = msg["content"]
             raw_bytes = content.encode("utf-8")
             if len(raw_bytes) > _COMPACT_REQUEST_BYTE_THRESHOLD:
                 changed = True
@@ -373,30 +288,19 @@ def _stored_request(request_body: dict[str, Any]) -> dict[str, Any]:
                 )
                 continue
         compacted_messages.append(msg)
-    if not changed:
-        return request_body
-    return {**request_body, "messages": compacted_messages}
+    return {**request_body, "messages": compacted_messages} if changed else request_body
 
 
 def _without_model(request_body: dict[str, Any]) -> dict[str, Any]:
-    """The request minus the model name: what was asked, whoever was asked to answer it."""
-    stored = _stored_request(request_body)
-    return {key: value for key, value in stored.items() if key != "model"}
+    return {key: value for key, value in _stored_request(request_body).items() if key != "model"}
 
 
 def _estimate_prompt_tokens(task: ModelTask, user_content: str) -> int:
-    """Conservative token estimate (2.5 chars/token floor) to catch >1M token filings pre-flight."""
-    total_chars = len(task.instructions) + len(user_content)
-    return int(total_chars / _CHARS_PER_TOKEN_FLOOR)
+    return int((len(task.instructions) + len(user_content)) / _CHARS_PER_TOKEN_FLOOR)
 
 
 _CONTEXT_LIMIT_CODES = frozenset(
-    {
-        "context_length_exceeded",
-        "context_window_exceeded",
-        "tokens_limit_reached",
-        "prompt_too_long",
-    }
+    {"context_length_exceeded", "context_window_exceeded", "tokens_limit_reached", "prompt_too_long"}
 )
 _CONTEXT_LIMIT_PHRASES = (
     "context_length_exceeded",
@@ -410,7 +314,6 @@ _CONTEXT_LIMIT_PHRASES = (
 
 
 def _is_context_limit_response(status: int, body: bytes) -> bool:
-    """True when a provider 400/413 error indicates the prompt exceeded the model's context window."""
     if status == 413:
         return True
     if status != 400:
@@ -423,33 +326,12 @@ def _is_context_limit_response(status: int, body: bytes) -> bool:
     if isinstance(parsed, dict):
         nested = parsed.get("error")
         err = nested if isinstance(nested, dict) else parsed
-        code = str(err.get("code") or "").strip().lower()
-        if code in _CONTEXT_LIMIT_CODES:
+        if str(err.get("code") or "").strip().lower() in _CONTEXT_LIMIT_CODES:
             return True
     lower = text.lower()
     return any(phrase in lower for phrase in _CONTEXT_LIMIT_PHRASES)
 
 
-#: The FIRST answer is the answer (§9: replay reuses the stored result). Before this read
-#: was `order by id desc`, the newest answer won. Two heads that asked the same question
-#: in parallel each stored an answer, and the next run replayed whichever landed last.
-#: In prod, 5 of 269 answered digests disagreed. AAPL/Semiconductors and
-#: MU/AI-infrastructure purity changed between the TOPT and QQQ heads.
-#:
-#: A row matches in one of two ways:
-#: - the same request digest under the same requested model (the original key);
-#: - the same request under a different requested name, where the provider reports that
-#:   it served the model now configured. The coding plan serves the `glm-4.7` alias with
-#:   `glm-5.3-flash`. Pinning `LLM_MODEL=glm-5.3-flash` therefore changes the request
-#:   digest but not the model that answers, so the answers already stored for it replay.
-#:
-#: A row whose `served_model` is null matches only the first way, which was the whole key
-#: before, so existing rows replay as they did.
-#:
-#: Both ways are tried for the request of EVERY known decoding version (#1444, `model_decoding`),
-#: so an answer stored under an older version replays for an ask in the current one. The first
-#: answered ask still wins. An answer that the provider cut off (`finish_reason` is `FINISH_REASON_CUT_OFF`)
-#: is not an answer: it is read from the stored response and never replayed.
 def _replay_sql(versions: int) -> str:
     same_digest = " or ".join(["(request_sha256 = %s and model = %s)"] * versions)
     same_question = ", ".join(["%s::jsonb"] * versions)
@@ -467,27 +349,10 @@ limit 1
 """
 
 
-#: One asker per question at a time. The key is the request WITHOUT the model name, the
-#: same scope the replay read matches, so an alias ask and a pinned-name ask for one
-#: question also wait for each other. It uses the `hashtextextended('<table>:<key>', 0)`
-#: form the other advisory locks in `db/migrations` use.
 _LOCK_SQL = "select pg_advisory_xact_lock(hashtextextended(%s, 0))"
 
 
 def _lock_question(connection: Any, *, cik: int, accession: str, question: str) -> None:
-    """Wait until no other transaction is asking this question.
-
-    The lock is transaction-scoped. It is released when the holder's transaction ends,
-    which is also when that holder's invocation row becomes visible. A waiter that gets the
-    lock therefore sees the row in its next statement (READ COMMITTED takes a new snapshot
-    per statement) and replays it instead of asking again. The replay read must be a
-    separate statement: a statement that waited on the lock still uses the snapshot taken
-    before the wait.
-
-    The theme-purity producer holds its locks until its op commits, and takes them in
-    (cik, theme) order in every universe, so two heads cannot wait on each other in a
-    cycle. The standards backfill commits after every cell, so it holds at most one lock.
-    """
     digest = hashlib.sha256(question.encode()).hexdigest()
     connection.execute(_LOCK_SQL, (f"staging.model_invocations:{cik}:{accession}:{digest}",))
 
@@ -501,12 +366,6 @@ def _replay(
     model: str,
     requests: Sequence[dict[str, Any]],
 ) -> ModelInvocation | None:
-    """The first answer the provider gave (status < 400) to an identical prior ask. An
-    identical ask has the same subject, filing, instructions and candidates, asked of the same
-    model, in any known decoding version; ``requests`` holds the request of each version and
-    `_replay_sql` says how a row matches. A changed candidate set or schema is a different
-    request and is asked again. A vendor error is recorded but never replayed as an answer
-    (review on #754)."""
     params = (
         cik,
         accession,
@@ -552,20 +411,7 @@ def invoke(
     transport: Transport | None = None,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> ModelInvocation:
-    """Ask the seated model one task's question; record the invocation. Task-agnostic.
-
-    `persist=False` (probe mode) neither replays nor records an invocation — it only asks,
-    and the call still lands in the ledger. With a connection and `persist=True`:
-    - every ask is recorded, answers and vendor errors alike;
-    - the first ANSWERED identical ask is replayed instead of asked again (§9: replay never
-      silently calls the model again);
-    - identical asks from parallel runs are serialized on the question (`_lock_question`),
-      so only one of them reaches the provider.
-
-    `parse` reads the provider's content into the task's own decision shape; `refusal`
-    builds that same shape for a vendor error, so a failed ask is still a well-formed
-    recorded decision rather than a hole the caller has to special-case.
-    """
+    """Invoke the seated model with advisory-locked replay and append-only persistence."""
     if not is_configured():
         raise ModelNotConfigured(f"{settings.llm_api_key_env} is not set; no provider seated (#70 scope 1)")
     cik = cik if cik > 0 else _synthetic_cik(accession)
@@ -590,22 +436,10 @@ def invoke(
     if not persist or connection is None:
         invocation, error = ask(None)
     else:
-        # On an autocommit connection the lock's transaction would end with the lock
-        # statement. An explicit transaction holds the lock until the row is written, and
-        # commits the row, a recorded refusal included, before the error below is raised.
         with connection.transaction() if getattr(connection, "autocommit", False) else nullcontext():
             known = [build_chat_request(task, user_content, model=model, decoding=v) for v in model_decoding.KNOWN]
-            # The lock key is the question in the oldest version: it never changes, so a process
-            # that still asks in an older version and one that asks in the current one wait for each other.
             _lock_question(connection, cik=cik, accession=accession, question=_question(known[0]))
-            replayed = _replay(
-                connection,
-                task=task,
-                cik=cik,
-                accession=accession,
-                model=model,
-                requests=known,
-            )
+            replayed = _replay(connection, task=task, cik=cik, accession=accession, model=model, requests=known)
             if replayed is not None:
                 return replayed
             invocation, error = ask(connection)
@@ -615,7 +449,6 @@ def invoke(
 
 
 def _question(request_body: dict[str, Any]) -> str:
-    """The request without the model name, as the text the lock and the replay compare."""
     return json.dumps(_without_model(request_body), sort_keys=True, ensure_ascii=False)
 
 
@@ -629,8 +462,6 @@ def _request_bytes(request_body: dict[str, Any]) -> bytes:
 
 @dataclass(frozen=True)
 class _ProviderAnswer:
-    """The last answer of one logical provider call, after the retry policy has run."""
-
     status: int
     body: bytes
     payload: dict[str, Any]
@@ -651,13 +482,6 @@ def _call_provider(
     identity: FetchKey,
     transport: Transport | None,
 ) -> _ProviderAnswer:
-    """Ask the provider until it answers without a transient error (#1444).
-
-    Each attempt is one ledger row with its attempt number, provider code and request parameters.
-    The pacer admits each attempt, so `admit=False` keeps a bound capacity scope from admitting it a
-    second time under another seat figure. A transport error raises after its row is written. The
-    wait for the rate window counts against the deadline: when it ends the wait, the last answer
-    stands."""
     request_params = _request_params(request_body, decoding)
     budget = model_policy.RetryBudget()
     pacer = model_policy.pacer_for(gateway.capacity_environment())
@@ -665,68 +489,41 @@ def _call_provider(
     token = _attempt_timeout.set(timeout_seconds)
     identity_token = _attempt_identity.set(identity)
     try:
-        return _retry_loop(
-            budget=budget,
-            pacer=pacer,
-            send=send,
-            url=url,
-            headers=headers,
-            request_bytes=request_bytes,
-            request_params=request_params,
-            caller=caller,
-            identity=identity,
-            answer_required=answer_required,
-        )
+        last: _ProviderAnswer | None = None
+        while True:
+            attempt = budget.begin_attempt()
+            try:
+                last = _attempt(
+                    attempt=attempt,
+                    pacer=pacer,
+                    remaining_seconds=budget.remaining_seconds,
+                    send=send,
+                    url=url,
+                    headers=headers,
+                    request_bytes=request_bytes,
+                    request_params=request_params,
+                    caller=caller,
+                    identity=identity,
+                    answer_required=answer_required,
+                )
+            except gateway.CapacityExceeded as refusal:
+                if last is None:
+                    raise ModelCapacityRefused(refusal.reason) from refusal
+                return last
+            wait = None if last.status < 400 else budget.wait_before_next(last.status, last.provider_code)
+            if wait is None:
+                return last
+            logger.warning(
+                "model call answered HTTP %s (provider code %s) on attempt %s; waiting %.1f s",
+                last.status,
+                last.provider_code,
+                attempt,
+                wait,
+            )
+            model_policy.sleep(wait)
     finally:
         _attempt_identity.reset(identity_token)
         _attempt_timeout.reset(token)
-
-
-def _retry_loop(
-    *,
-    budget: model_policy.RetryBudget,
-    pacer: model_policy.ModelPacer | None,
-    send: Transport,
-    url: str,
-    headers: dict[str, str],
-    request_bytes: bytes,
-    request_params: dict[str, Any],
-    caller: str,
-    identity: FetchKey,
-    answer_required: bool,
-) -> _ProviderAnswer:
-    last: _ProviderAnswer | None = None
-    while True:
-        attempt = budget.begin_attempt()
-        try:
-            last = _attempt(
-                attempt=attempt,
-                pacer=pacer,
-                remaining_seconds=budget.remaining_seconds,
-                send=send,
-                url=url,
-                headers=headers,
-                request_bytes=request_bytes,
-                request_params=request_params,
-                caller=caller,
-                identity=identity,
-                answer_required=answer_required,
-            )
-        except gateway.CapacityExceeded as refusal:
-            if last is None:
-                raise ModelCapacityRefused(refusal.reason) from refusal
-            return last
-        wait = None if last.status < 400 else budget.wait_before_next(last.status, last.provider_code)
-        if wait is None:
-            return last
-        logger.warning(
-            "model call answered HTTP %s (provider code %s) on attempt %s; waiting %.1f s",
-            last.status,
-            last.provider_code,
-            attempt,
-            wait,
-        )
-        model_policy.sleep(wait)
 
 
 def _attempt(
@@ -743,7 +540,6 @@ def _attempt(
     identity: FetchKey,
     answer_required: bool,
 ) -> _ProviderAnswer:
-    """One attempt: admitted by the pacer, one ledger row, the answer read."""
     payload: dict[str, Any] = {}
     usage: dict[str, Any] = {}
     provider_code: str | None = None
@@ -781,9 +577,6 @@ def _answer_decision(
     parse: Callable[[str], dict[str, Any]],
     refusal: Callable[[str], dict[str, Any]],
 ) -> dict[str, Any]:
-    """The decision of an answered call. An answer that the provider cut off at ``max_tokens`` has
-    no complete JSON, and with thinking on the reasoning can use the whole limit (#1444). It is a
-    refusal, and the replay never reads it as an answer (`_replay_sql`)."""
     if answer_required and _cut_off(payload):
         return refusal(f"truncated: finish_reason={FINISH_REASON_CUT_OFF} at max_tokens {max_tokens}")
     return parse(((payload.get("choices") or [{}])[0].get("message") or {}).get("content") or "")
@@ -791,6 +584,59 @@ def _answer_decision(
 
 def _token_count(value: Any) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+
+def _persist_invocation(
+    connection: Any,
+    invocation: ModelInvocation,
+    *,
+    task: ModelTask,
+    url: str,
+    standard: str,
+    cik: int,
+    accession: str,
+    status: int,
+    usage: dict[str, Any],
+    stored_request: dict[str, Any],
+    body: bytes,
+    started_at: datetime,
+    completed_at: datetime,
+) -> None:
+    connection.execute(
+        """
+        insert into staging.model_invocations
+            (invocation_id, provider, model, base_url_host, standard, subject_cik, accession,
+             prompt_version, prompt_sha256, schema_sha256, request_sha256, response_sha256, status_code,
+             prompt_tokens, completion_tokens, cost, decision, request, response, started_at, completed_at,
+             served_model)
+        values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, %s, %s, %s)
+        on conflict (invocation_id) do nothing
+        """,
+        (
+            invocation.invocation_id,
+            settings.llm_provider,
+            invocation.model,
+            urlparse(url).hostname or "",
+            standard,
+            cik,
+            accession,
+            task.prompt_version,
+            task.prompt_sha256,
+            task.schema_sha256,
+            invocation.request_sha256,
+            invocation.response_sha256,
+            status,
+            invocation.prompt_tokens,
+            invocation.completion_tokens,
+            Decimal(int(usage.get("total_tokens") or 0)),
+            json.dumps(invocation.decision, sort_keys=True),
+            json.dumps(stored_request, sort_keys=True, ensure_ascii=False),
+            _jsonb_or_null(body),
+            started_at,
+            completed_at,
+            invocation.served_model,
+        ),
+    )
 
 
 def _ask(
@@ -809,9 +655,6 @@ def _ask(
     transport: Transport | None,
     now: Callable[[], datetime],
 ) -> tuple[ModelInvocation, ModelHTTPError | None]:
-    """One provider call, recorded on `connection` when there is one. A vendor error is
-    returned rather than raised, so the caller can end the recording transaction before
-    raising it."""
     request_bytes = _request_bytes(request_body)
     request_sha256 = hashlib.sha256(request_bytes).hexdigest()
     stored_request = _stored_request(request_body)
@@ -831,9 +674,6 @@ def _ask(
     estimated_tokens = _estimate_prompt_tokens(task, user_text)
     context_limit_exceeded = estimated_tokens > task.max_context_tokens
     provider_code: str | None = None
-    prompt_tokens: int | None
-    completion_tokens: int | None
-    served_model: str | None
     if context_limit_exceeded:
         status = 413
         limit_msg = (
@@ -852,9 +692,9 @@ def _ask(
                 }
             }
         ).encode("utf-8")
-        prompt_tokens = estimated_tokens
-        completion_tokens = 0
-        served_model = None
+        prompt_tokens: int | None = estimated_tokens
+        completion_tokens: int | None = 0
+        served_model: str | None = None
         decision = refusal(limit_msg)
     else:
         answer = _call_provider(
@@ -889,8 +729,6 @@ def _ask(
                 logger.error("LLM provider rejected prompt for exceeding context window: %s", limit_msg)
                 decision = refusal(limit_msg)
             else:
-                # A vendor error is still an invocation that happened: recorded with its status and
-                # body as a refusal, excluded from replay so the next run asks again.
                 decision = refusal(f"HTTP {status}: {body[:200]!r}")
         else:
             decision = _answer_decision(payload, request_body["max_tokens"], task.answer_required, parse, refusal)
@@ -904,8 +742,6 @@ def _ask(
             "request_sha256": request_sha256,
             "response_sha256": response_sha256,
             "started_at": started_at.isoformat(),
-            # The model that answered is part of the invocation's identity. The key is left
-            # out when the provider did not report a model, so the id is computed as before.
             **({"served_model": served_model} if served_model else {}),
         }
     )
@@ -923,41 +759,20 @@ def _ask(
         served_model=served_model,
     )
     if connection is not None:
-        connection.execute(
-            """
-            insert into staging.model_invocations
-                (invocation_id, provider, model, base_url_host, standard, subject_cik, accession,
-                 prompt_version, prompt_sha256, schema_sha256, request_sha256, response_sha256, status_code,
-                 prompt_tokens, completion_tokens, cost, decision, request, response, started_at, completed_at,
-                 served_model)
-            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, %s, %s,
-                    %s)
-            on conflict (invocation_id) do nothing
-            """,
-            (
-                invocation_id,
-                settings.llm_provider,
-                model,
-                urlparse(url).hostname or "",
-                standard,
-                cik,
-                accession,
-                task.prompt_version,
-                task.prompt_sha256,
-                task.schema_sha256,
-                request_sha256,
-                response_sha256,
-                status,
-                prompt_tokens,
-                completion_tokens,
-                Decimal(int(usage.get("total_tokens") or 0)),
-                json.dumps(decision, sort_keys=True),
-                json.dumps(stored_request, sort_keys=True, ensure_ascii=False),
-                _jsonb_or_null(body),
-                started_at,
-                completed_at,
-                served_model,
-            ),
+        _persist_invocation(
+            connection,
+            invocation,
+            task=task,
+            url=url,
+            standard=standard,
+            cik=cik,
+            accession=accession,
+            status=status,
+            usage=usage,
+            stored_request=stored_request,
+            body=body,
+            started_at=started_at,
+            completed_at=completed_at,
         )
     if context_limit_exceeded:
         return invocation, ModelContextLimitError(
@@ -989,21 +804,13 @@ def select_headcount(
     transport: Transport | None = None,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> ModelSelection:
-    """Ask the seated model to choose among enumerated candidates; record the invocation.
-
-    The ledger, replay and persistence behaviour is `invoke`'s (above), shared with every
-    other task. What is headcount's own is the two things a task owns: how the candidates
-    are written into the question, and how the answer is read back — here, the rule that
-    the model may CHOOSE but never invent.
-    """
-    lines = [f"[{i}] {c.value:,}: {c.sentence}" for i, c in enumerate(candidates)]
-    user = f"Issuer: {issuer_label}, form {form}.\nCandidates:\n" + "\n".join(lines)
+    """Select company-wide employee headcount from enumerated filing candidates."""
     invocation = invoke(
         connection,
         task=HEADCOUNT_TASK,
         cik=cik,
         accession=accession,
-        user_content=user,
+        user_content=_headcount_user_content(issuer_label, form, candidates),
         caller=caller,
         standard=standard,
         parse=lambda content: _parse_decision(content, candidates),
@@ -1022,15 +829,7 @@ def select_headcount(
     )
 
 
-#: #772 / init.md §7 module 6: "LLM-assisted semantic classification of segment revenue".
-#: The theme is NOT in these instructions — it travels in the user content, so one task
-#: identity covers "how to judge a segment against a stated theme" while the theme itself
-#: still enters `request_sha256` and therefore the replay key. A per-theme prompt would
-#: make every theme a new prompt version and every wording tweak a migration.
 SEGMENT_THEME_PROMPT_VERSION = "segment-theme:v2"
-# v2 (#849): the issuer is named, and the model is told to judge that issuer and no other. v1
-# labelled the issuer by id alone, and given a segment that said only "one operating segment"
-# the model answered for NVIDIA and for Verizon — neither of which was the issuer.
 SEGMENT_THEME_INSTRUCTIONS = (
     "You judge whether each of an issuer's reportable segments belongs to a stated investment "
     "theme. You are given the issuer's ticker and id, the theme, the definition of what counts "
@@ -1065,22 +864,13 @@ SEGMENT_THEME_TASK = ModelTask(
     prompt_version=SEGMENT_THEME_PROMPT_VERSION,
     instructions=SEGMENT_THEME_INSTRUCTIONS,
     response_schema=SEGMENT_THEME_SCHEMA,
-    # One verdict per segment plus a sentence each; issuers report two to six segments.
     max_tokens=900,
 )
 
 
 @dataclass(frozen=True)
 class ThemeClassification:
-    """One verdict per segment, in the order the segments were given.
-
-    `verdicts[i] is None` means the classifier declined or never answered for that segment.
-    That is deliberately NOT `False`: a declined segment is unclassified revenue that lowers
-    confidence in the share, while `False` is a judgement that lowers the share itself, and
-    `factors.base.theme_purity` counts them into different masses. Collapsing them would let
-    a silent model look like a confident "not in the theme" — and would make an issuer whose
-    segments the model could not read look purer or dirtier than the evidence supports.
-    """
+    """Per-segment boolean or None (`unclassified`) theme classification verdicts."""
 
     verdicts: tuple[bool | None, ...]
     reasons: tuple[str, ...]
@@ -1091,17 +881,22 @@ class ThemeClassification:
         return self.invocation.extractor
 
 
-def _parse_theme_verdicts(content: str, segments: Sequence[str]) -> dict[str, Any]:
-    """Read the model's verdicts, defaulting every unanswered segment to unclassified.
+def _json_list_field(content: str, key: str) -> list[Any] | None:
+    """Extract a flattened list from `{"<key>": [...]}` or `[{"<key>": [...]}]` JSON responses."""
+    try:
+        parsed = json.loads(content)
+    except json.JSONDecodeError:
+        return None
+    objects = parsed if isinstance(parsed, list) else [parsed]
+    if not all(isinstance(entry, dict) for entry in objects):
+        return None
+    return [item for entry in objects if isinstance(found := entry.get(key), list) for item in found]
 
-    The model may judge, never invent: an index outside the segment list is dropped rather
-    than shifted onto a neighbour, and a segment the answer skips stays `None`. A parser
-    that packed verdicts positionally would silently attribute one segment's judgement to
-    another whenever the model returned a short list.
-    """
+
+def _parse_theme_verdicts(content: str, segments: Sequence[str]) -> dict[str, Any]:
     verdicts: list[bool | None] = [None] * len(segments)
     reasons: list[str] = [""] * len(segments)
-    items = _verdict_items(content)
+    items = _json_list_field(content, "verdicts")
     if items is None:
         return {
             "verdicts": verdicts,
@@ -1119,32 +914,6 @@ def _parse_theme_verdicts(content: str, segments: Sequence[str]) -> dict[str, An
     return {"verdicts": verdicts, "reasons": reasons}
 
 
-def _json_list_field(content: str, key: str) -> list[Any] | None:
-    """Extract a flattened list from `{"<key>": [...]}` or `[{"<key>": [...]}]` JSON responses."""
-    try:
-        parsed = json.loads(content)
-    except json.JSONDecodeError:
-        return None
-    objects = parsed if isinstance(parsed, list) else [parsed]
-    if not all(isinstance(entry, dict) for entry in objects):
-        return None
-    return [item for entry in objects if isinstance(found := entry.get(key), list) for item in found]
-
-
-def _verdict_items(content: str) -> list[Any] | None:
-    """The verdict items in the model's answer, or None when the answer has no readable shape.
-
-    The prompt shows one object, `{"verdicts": [...]}`, and the seated model answers with it
-    13 times in 15 — and twice with a LIST of such objects, the first echoing the prompt's own
-    placeholder (`"index": "int>"`) and the second carrying the verdict (#845, NFLX and MA on
-    2026-09-15). Reading the items out of each object in the list invents nothing: every item
-    still has to name a real index and a boolean to count, and the placeholder fails both.
-    Any other top-level shape (a string, a number, null) is unreadable, never a crash — one
-    off-schema reply must cost one refusal, not the run.
-    """
-    return _json_list_field(content, "verdicts")
-
-
 def classify_segments(
     connection: Any | None,
     *,
@@ -1160,15 +929,7 @@ def classify_segments(
     transport: Transport | None = None,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> ThemeClassification:
-    """Ask the seated model which of an issuer's segments belong to a theme.
-
-    The model sees the segment NAMES and the theme definition — never the revenue. That is
-    not an economy: a classifier that can see which segment is the big one can be graded by
-    how flattering its answer is, and the whole point of q6 is that the share is computed
-    from a judgement made without knowing what it would produce.
-
-    Ledger, replay and the invocation record are `invoke`'s, shared with the headcount task.
-    """
+    """Classify reportable segment names against an investment theme without exposing revenue figures."""
     lines = [f"[{i}] {name}" for i, name in enumerate(segments)]
     user = f"Issuer: {issuer_label}.\nTheme: {theme}.\nIn-theme means: {inclusion}\nSegments:\n" + "\n".join(lines)
     invocation = invoke(
@@ -1194,8 +955,6 @@ def classify_segments(
 
 
 def _jsonb_or_null(body: bytes) -> str | None:
-    """The response column is jsonb: a non-JSON vendor body (an HTML error page) is kept
-    only through its digest and the ledger's error text, not forced into the column."""
     try:
         return json.dumps(json.loads(body.decode()), ensure_ascii=False)
     except (UnicodeDecodeError, json.JSONDecodeError):
@@ -1203,12 +962,11 @@ def _jsonb_or_null(body: bytes) -> str | None:
 
 
 def _parse_decision(content: str, candidates: Sequence[Candidate]) -> dict[str, Any]:
-    """The model may choose, never invent: a value that is not a candidate is a refusal."""
     try:
         parsed = json.loads(content)
     except json.JSONDecodeError:
         parsed = None
-    if not isinstance(parsed, dict):  # a list, a string, a number: not the shape asked for (#845)
+    if not isinstance(parsed, dict):
         return {"value": None, "candidate_index": None, "reason": f"unparseable model answer: {content[:120]!r}"}
     value = parsed.get("value")
     index = parsed.get("candidate_index")
@@ -1227,15 +985,6 @@ def _parse_decision(content: str, candidates: Sequence[Candidate]) -> dict[str, 
 
 
 def as_selection(selection: ModelSelection) -> extraction_primitive.Selection | None:
-    """Adapt this module's `ModelSelection` — its ledger/replay identity, token cost, and
-    the served-model quirk (a requested `model` alias may be served under a different
-    name; see `ModelSelection.extractor`) — to the shared primitive's minimal `Selection`.
-
-    `None` for a decline, exactly like the primitive's own `select_single_candidate`:
-    a caller that only wants "chosen value or nothing to choose" does not need to branch
-    on this module's richer refusal detail (`selection.reason` is still on `ModelSelection`
-    for a caller that does).
-    """
     if selection.value is None or selection.candidate_index is None:
         return None
     return extraction_primitive.Selection(
@@ -1248,11 +997,6 @@ def as_selection(selection: ModelSelection) -> extraction_primitive.Selection | 
 
 
 def _integral_value(value: int | float) -> int:
-    """`Candidate.value` on the shared primitive is `int | float` — headcount is always
-    integral, but a silent `int(...)` truncation would turn a hypothetical 42.7 into 42
-    without complaint (Copilot review on #782). This module's own `Candidate.value` is
-    `int`, so a non-integral value here means the caller handed this selector a candidate
-    it was never meant for; that is a caller bug, not a value to guess at."""
     if isinstance(value, int):
         return value
     if value.is_integer():
@@ -1274,19 +1018,7 @@ def as_selector(
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
     on_model_selection: Callable[[ModelSelection], None] | None = None,
 ) -> extraction_primitive.Selector:
-    """Bind this call's ledger/replay context and return a `Selector`-conformant callable
-    (`common/factors/shared/extraction.py`'s protocol) for a caller that only has the shared
-    primitive's `Candidate` sequence — this is the "model-backed selector plugs in without
-    the library importing data_engine" half of #769: the primitive depends only on the
-    protocol shape, and this factory is where a concrete implementation is bound to it.
-
-    `select_headcount`'s own ledger/replay/persistence behaviour (see above) is reached
-    unchanged through the returned closure; nothing about it is reimplemented here.
-
-    The shared `Selection` does not carry the model name, the replayed mark or the decline
-    reason. A caller that reports them passes `on_model_selection`. The closure calls it once
-    per ask, with the full `ModelSelection`, before it returns.
-    """
+    """Bind ledger/replay context into a `factors.shared.extraction.Selector` callable."""
 
     def select(candidates: Sequence[extraction_primitive.Candidate]) -> extraction_primitive.Selection | None:
         local_candidates = [Candidate(value=_integral_value(c.value), sentence=c.sentence) for c in candidates]
@@ -1365,7 +1097,7 @@ SUPPLY_CHAIN_TASK = ModelTask(
 class ExtractedSupplyChainPartner:
     partner_name: str
     ticker: str | None
-    relation_type: str  # "supplier" | "customer"
+    relation_type: str
     revenue_share_pct: Decimal | None
     evidence_quote: str
 
@@ -1409,7 +1141,6 @@ def _normalize_partner_entry(item: Any) -> dict[str, Any] | None:
 
 
 def _parse_supply_chain_partners(content: str) -> dict[str, Any]:
-    """Parse and validate the model's extracted supply-chain partner list."""
     items = _json_list_field(content, "partners")
     if items is None:
         return {"partners": [], "reason": f"unparseable model answer: {content[:120]!r}"}
@@ -1480,9 +1211,7 @@ def identify_supply_chain_partners(
     transport: Transport | None = None,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> SupplyChainExtraction:
-    """Ask the seated 1M-context model (`glm-5.3-flash`) to extract named suppliers and customers
-    from the full 10-K plain text. Raises `ModelContextLimitError` if the prompt exceeds 1M tokens.
-    """
+    """Extract named third-party suppliers and customers from 10-K filing text."""
     bounded_text = _bound_supply_chain_filing_text(filing_text)
     user = f"Issuer: {issuer_label} (CIK {cik:010d}), form 10-K, accession {accession}.\nFiling text:\n{bounded_text}"
     invocation = invoke(
@@ -1499,9 +1228,8 @@ def identify_supply_chain_partners(
         transport=transport,
         now=now,
     )
-    raw_partners = invocation.decision.get("partners") or []
     partners: list[ExtractedSupplyChainPartner] = []
-    for item in raw_partners:
+    for item in invocation.decision.get("partners") or []:
         normalized = _normalize_partner_entry(item)
         if normalized is None:
             continue
@@ -1520,9 +1248,7 @@ def identify_supply_chain_partners(
 
 XHS_CARD_RESPONSE_SCHEMA: dict[str, Any] = {
     "type": "object",
-    "properties": {
-        "html": {"type": "string"},
-    },
+    "properties": {"html": {"type": "string"}},
     "required": ["html"],
 }
 
@@ -1539,8 +1265,6 @@ XHS_CARD_TASK = ModelTask(
 
 @dataclass(frozen=True)
 class XhsCardGenerationResult:
-    """Verified Xiaohongshu 1080x1440 HTML card output and provenance."""
-
     card_id: str
     html: str
     render_mode: str
@@ -1573,11 +1297,7 @@ def generate_xhs_card_html(
     transport: Transport | None = None,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> XhsCardGenerationResult:
-    """Generate a 1080x1440 Xiaohongshu HTML card via `glm-5.3-flash` under Rule 6 / §9,
-    verifying every fact with `verify_card_html` before returning. Falls back to the
-    deterministic Cold-Verdict Rubric HTML renderer when the provider is unconfigured or
-    if a model response fails fact-preservation verification.
-    """
+    """Generate a verified 1080x1440 Xiaohongshu HTML card with deterministic fallback."""
     user_prompt = build_card_prompt(card)
     prompt_digest = XHS_CARD_TASK.prompt_sha256
     try:
@@ -1615,10 +1335,9 @@ def generate_xhs_card_html(
     except (ModelNotConfigured, ModelHTTPError) as exc:
         logger.info("xhs_card_html falling back to deterministic Cold-Verdict HTML for %s: %s", card.card_id, exc)
 
-    fallback_html = render_card_html(card)
     return XhsCardGenerationResult(
         card_id=card.card_id,
-        html=fallback_html,
+        html=render_card_html(card),
         render_mode="deterministic_fallback",
         prompt_sha256=prompt_digest,
         model=None,

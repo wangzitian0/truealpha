@@ -54,7 +54,10 @@ from data_engine.datahub.market_prices import SPLIT_ADJUSTED, UNADJUSTED
 from data_engine.datahub.price_series import load_daily_series
 from data_engine.datahub.primary_listing import choose_primary_listings
 from data_engine.datahub.production_topt.concept_mapping import DEFAULT_RULESET, resolve_ruleset
-from data_engine.datahub.production_topt.metric_node_values import materialize_metric_node_values
+from data_engine.datahub.production_topt.metric_node_values import (
+    load_financial_payloads_by_listing,
+    materialize_metric_node_values,
+)
 from data_engine.datahub.production_topt.source_registrations import SEMANTIC_TYPES
 from data_engine.datahub.production_topt.status_dimensions import (
     StatusDimensions,
@@ -78,13 +81,6 @@ from data_engine.datahub.share_count_entry import share_count_entry
 
 log = logging.getLogger(__name__)
 
-# Snapshot invariants are SELF-consistent, never universe literals: the frozen
-# TOPT 20 and a 102-listing plane universe freeze through the same checks
-# (#539 — the first QQQ run captured all 408 obligations in 39 minutes and
-# then died on a hardcoded 84 here).
-# Derived from the source registrations (#72): the required set is whatever the
-# registered sources own, so a registered fifth semantic is required here without an
-# edit, and an unregistered one cannot be demanded.
 _REQUIRED_TYPES = frozenset(SEMANTIC_TYPES)
 _SEMANTICS_PER_LISTING = len(_REQUIRED_TYPES)
 
@@ -97,6 +93,22 @@ def _reject_float(value: Any) -> Any:
     if isinstance(value, float):
         raise ValueError("binary float is forbidden; normalized numerics must use base-10 strings")
     return value
+
+
+def _insert_or_verify(
+    connection: Connection[Any],
+    *,
+    insert_sql: str,
+    insert_params: Sequence[Any],
+    check_sql: str,
+    check_params: Sequence[Any],
+    expected: tuple[Any, ...],
+    conflict_message: str,
+) -> None:
+    if connection.execute(insert_sql, insert_params).fetchone() is None:
+        existing = connection.execute(check_sql, check_params).fetchone()
+        if existing != expected:
+            raise ValueError(conflict_message)
 
 
 class FinancialFactPayload(_FrozenModel):
@@ -112,26 +124,12 @@ class FinancialFactPayload(_FrozenModel):
     shares_outstanding: Decimal | None
     shares_basis: str | None = None
     pre_provision_profit: Decimal | None
-    # The fiscal periods behind the two headline figures. Optional so a snapshot frozen
-    # before #496 still validates; new captures always carry them, which is what makes
-    # "this number is years out of date" answerable in SQL instead of only by re-deriving
-    # from the vendor.
     operating_period_end: date | None = None
     revenue_period_end: date | None = None
-    # #1114: written only when the adapter dropped an operating metric because its period
-    # differed from the revenue period. `stale_operating_period_end` is the dropped metric's
-    # period. Absent on a current row, so the payload hash of a current row does not move.
     operating_period_stale: bool | None = None
     stale_operating_period_end: date | None = None
-    # #1323: written only when the issuer registry gave no classification after its attempts. Both
-    # numerators are then null. The name is `issuer_registry.UNAVAILABLE_PAYLOAD_KEY`. Absent on a
-    # classified row, so the payload hash of a classified row does not move.
     registry_unavailable: bool | None = None
-    # The share count's measurement date (#529). Present even when `shares_outstanding` is
-    # None, because a count refused for staleness must be distinguishable from one the
-    # source never published — the first is a dated gap, the second an absence.
     shares_period_end: date | None = None
-    # #1176: banking tangible-common-equity inputs. Written on a FINANCIAL row only.
     bank_net_revenue: Decimal | None = None
     stockholders_equity: Decimal | None = None
     preferred_stock_value: Decimal | None = None
@@ -139,38 +137,15 @@ class FinancialFactPayload(_FrozenModel):
     intangible_assets_net_excluding_goodwill: Decimal | None = None
     intangible_basis: str | None = None
     tangible_equity_period_end: date | None = None
-    # Module 1's growth basis, derived from the annual net-income series the payload's own
-    # source already carries (#284). Both endpoints travel with it so the window is
-    # auditable and a consumer can confirm the rate was not built from a filing later than
-    # the cutoff — the PIT obligation that strategy participation adds.
     net_income: Decimal | None = None
-    # The annual net-income SERIES, period end (ISO date) -> value. This is the field that
-    # lets a multi-period factor exist in `common/factors` at all: the transport used to
-    # carry only the scalar below, so any factor needing history had to be pre-reduced in
-    # this adapter — computation in L0/L1, which init.md rule 2 and the AGENTS.md red line
-    # both forbid. The series travels; the factor reduces it.
     net_income_by_period: dict[str, Decimal] | None = None
-    # #530 item 4: per input name, the filing that asserted it ({accession, form, fy, fp,
-    # filed, period_end}); `net_income_periods` nests one per annual period end. Served
-    # through `mart.topt_core_meta_info` so a number names its document. Absent on
-    # observations written before parser v9's adapter.
     vintage: dict[str, Any] | None = None
-    # #528 decomposition inputs (parser v9): the financial side's balance and its return,
-    # plus which concept tier composed each and whether the return is the non-operating proxy.
     financial_assets: Decimal | None = None
     financial_returns: Decimal | None = None
     financial_basis: dict[str, Any] | None = None
-    # Superseded by `net_income_by_period` at parser v8 and no longer written. Kept on the
-    # contract because observations captured under v5-v7 carry them and must still
-    # validate — a point-in-time payload is never rewritten.
     earnings_cagr_3y: Decimal | None = None
     earnings_cagr_base_period_end: date | None = None
     earnings_cagr_latest_period_end: date | None = None
-    # #1519: what the cover of the latest annual filing says about the depositary ratio.
-    # The seven keys are `listing_unit_ratio.PAYLOAD_KEYS`. They are written together, null where
-    # empty, only when the cover reader ran. A payload without them is "not measured".
-    # `listing_units_per_share` is the number of ordinary shares that one listed unit stands for;
-    # `_snapshot_member` passes it to `live_on_close_basis`.
     listing_units_per_share: Decimal | None = None
     ratio_pattern: str | None = None
     ratio_title: str | None = None
@@ -205,9 +180,6 @@ class FinancialFactPayload(_FrozenModel):
     @field_validator("net_income_by_period", mode="before")
     @classmethod
     def reject_binary_float_in_series(cls, value: Any) -> Any:
-        """The scalar validator above cannot see inside a mapping, and a series is where a
-        float would be easiest to smuggle in — one per period, none of them individually
-        obvious in a payload diff."""
         if isinstance(value, dict):
             for entry in value.values():
                 _reject_float(entry)
@@ -220,19 +192,11 @@ class MarketPricePayload(_FrozenModel):
     listing_id: str = Field(min_length=1)
     currency: str = Field(pattern=r"^[A-Z]{3}$")
     close: Decimal | None
-    # The rest of the session's bar (parser v10 / twelve-data v3), each reconciled as its
-    # own cell in the quality report so more than one price metric can be graded HIGH.
-    # Optional because observations written before v10 carry no bar keys at all and a
-    # point-in-time payload is never rewritten; a v10 payload always carries all four,
-    # null where the source asserted nothing. The mart still serves `close` alone.
     open: Decimal | None = None
     high: Decimal | None = None
     low: Decimal | None = None
     volume: Decimal | None = None
     is_provisional: bool = False
-    # The registered origin that served this cell because the primary could not (#862);
-    # absent on every primary-served payload. The observation's parser vintage says the
-    # same thing — this is the declaration the reports and the fusion invariant read.
     served_by_failover: str | None = Field(default=None, min_length=1)
 
     @field_validator("close", "open", "high", "low", "volume", mode="before")
@@ -262,13 +226,7 @@ class SnapshotMember(_FrozenModel):
     pre_provision_profit: ToptMetricInput | None
     shares_outstanding: ToptMetricInput
     market_price: ToptMetricInput
-    #: #1518: True when a `primary_listing` row names this listing for an issuer with several listings.
-    #: `freeze_snapshot` records it, so a replay never reads the relation again. The key is absent from
-    #: the dump when False, so a snapshot stored before #1518 reloads with the same content hash.
     is_primary: bool = False
-    #: #1518: the four captured leaves of the banking tree `gppe_banking_tce` (`TCE_SNAPSHOT_FIELDS`).
-    #: A leaf is None when the capture holds no value for it. A None leaf is absent from the dump, so a
-    #: snapshot stored before #1518, and the snapshot of any issuer that is not a bank, keep their content hash.
     stockholders_equity: ToptMetricInput | None = None
     preferred_stock_value: ToptMetricInput | None = None
     goodwill: ToptMetricInput | None = None
@@ -287,7 +245,6 @@ class SnapshotMember(_FrozenModel):
     @field_validator("observation_ids")
     @classmethod
     def canonical_observations(cls, values: tuple[str, str, str, str]) -> tuple[str, str, str, str]:
-        # The snapshot model refuses a repeated observation. This check keeps the hash canonical.
         if tuple(sorted(values)) != values:
             raise ValueError("snapshot member requires sorted observations")
         return values
@@ -340,9 +297,6 @@ class ToptCoreSnapshot(_FrozenModel):
         return tuple(self._issuer_factor_input(grouped[issuer_id]) for issuer_id in sorted(grouped))
 
     def _issuer_factor_input(self, members: list[SnapshotMember]) -> ToptCoreSnapshotInput:
-        # The listing that a `primary_listing` row names comes first (`is_primary`). An issuer with
-        # several listings and no such listing is unavailable. Its identity names the first instrument
-        # only so that the row has coordinates: no value rests on it.
         ordered = sorted(members, key=lambda member: (not member.is_primary, member.instrument_id))
         execution = ordered[0]
         if sum(member.is_primary for member in ordered) > 1:
@@ -409,14 +363,7 @@ class ToptCoreIdentity:
 
 @dataclass(frozen=True)
 class ToptCoreReadResult:
-    """One `mart.topt_core_results` row as `results()` reads it.
-
-    #1235: a row tiered by strategy definition 1.0.0 values by P/GP. Its `current_pgp` and
-    `target_pgp_*` are set, its gap divides P/GP, and its `target_ps_*` are IMPLIED: the P/S
-    that the P/GP band gives at the issuer's own gross margin (migration 0030 keeps them NOT
-    NULL). A row of the former P/S bands has no P/GP values and its `target_ps_*` are the band.
-    `target_ps_is_implied` says which.
-    """
+    """One `mart.topt_core_results` row read through `results()`."""
 
     result_id: str
     invocation_id: str
@@ -459,7 +406,6 @@ class ToptCoreReadResult:
 
     @property
     def target_ps_is_implied(self) -> bool:
-        """True on a P/GP row: its target_ps_* are implied by the P/GP band, not a P/S band."""
         return self.target_pgp_midpoint is not None
 
 
@@ -512,12 +458,9 @@ def _metric(
     knowable_at: datetime | None = None,
     unavailable_reason: ToptCoreReasonCode | None = None,
 ) -> ToptMetricInput:
-    """One snapshot metric. The confidence and the `knowable_at` come from the input cell of the metric (#1518).
-
-    A metric without a cell has no value. It keeps the confidence and the time of its observation.
-    """
-    if knowable_at is None:
-        knowable_at = row.knowable_at if cell is None else cell.knowable_at
+    resolved_knowable = (
+        knowable_at if knowable_at is not None else (row.knowable_at if cell is None else cell.knowable_at)
+    )
     resolved_confidence = (
         cell.confidence
         if cell is not None
@@ -530,7 +473,7 @@ def _metric(
         metric=name,
         value=value,
         confidence=resolved_confidence,
-        knowable_at=knowable_at,
+        knowable_at=resolved_knowable,
         freshness=row.freshness,
         availability=MetricAvailability.AVAILABLE if value is not None else MetricAvailability.UNAVAILABLE,
         unavailable_reason=unavailable_reason,
@@ -540,10 +483,6 @@ def _metric(
 def _price_in_financial_currency(
     listing_id: str, financial_currency: str, price: Any
 ) -> tuple[Decimal | None, ToptCoreReasonCode | None]:
-    """The close of a listing, or no value with `currency_mismatch` when its currency is not the filing's.
-
-    A mismatch makes that one price cell unavailable. It never aborts the snapshot of the other listings (#1519).
-    """
     if financial_currency == price.currency:
         return price.close, None
     log.warning(
@@ -557,12 +496,7 @@ def _price_in_financial_currency(
 
 @dataclass(frozen=True)
 class InputAgeLimit:
-    """The one input age limit of the core snapshot (#1518): `eligibility.maximum_input_age_days` at one cutoff.
-
-    ``deciding`` maps an issuer class to the input keys that the decision of that class consumes
-    (`strategy_evaluator.deciding_input_keys`). A cell of those keys that is older than the limit at the
-    cutoff makes the financial cell of the member stale.
-    """
+    """Maximum input age limit for a core snapshot at one cutoff (#1518)."""
 
     cutoff: datetime
     maximum_age: timedelta
@@ -573,9 +507,7 @@ class InputAgeLimit:
         return any(self.cutoff - cell.knowable_at > self.maximum_age for key, cell in cells.items() if key in keys)
 
     def is_period_stale(self, period_end: date | None) -> bool:
-        if period_end is None:
-            return False
-        return (self.cutoff.astimezone(UTC).date() - period_end) > self.maximum_age
+        return period_end is not None and (self.cutoff.astimezone(UTC).date() - period_end) > self.maximum_age
 
 
 def _period_checked_value(
@@ -593,9 +525,7 @@ def _override_confidence(
     key: str,
     fallback: Decimal | None,
 ) -> Decimal | None:
-    if listing_confidences is not None and key in listing_confidences:
-        return listing_confidences[key]
-    return fallback
+    return listing_confidences[key] if listing_confidences is not None and key in listing_confidences else fallback
 
 
 def _validate_member_rows(
@@ -618,7 +548,6 @@ def _validate_member_rows(
 
 
 def _shares_cell_at(cell: InputCell | None, knowable_at: datetime) -> dict[str, InputCell]:
-    """The share cell with its final `knowable_at`: the share-basis rule can move it (`OnCloseBasis`)."""
     return {} if cell is None else {SHARES_KEY: cell._replace(knowable_at=knowable_at)}
 
 
@@ -634,7 +563,6 @@ def _cell(row: _ObservationRow, confidence: Decimal | None = None) -> ToptCellQu
 
 
 def _observation_documents(connection: Connection[Any], observation_id: str) -> list[dict[str, Any]]:
-    """The stored company-facts documents behind one financial-fact observation (#1277)."""
     rows = connection.execute(
         """
         select v.raw_fetch_id
@@ -654,11 +582,6 @@ def _observation_documents(connection: Connection[Any], observation_id: str) -> 
 
 
 def _universe_stores_price_series(universe_id: str) -> bool:
-    """False only when the contract record of the universe declares `price_series: false` (#1606).
-
-    A universe without a stored price series (the canary) has no daily bar for its listings, so no split
-    history. An id that starts with no universe prefix returns True: the loss then stays a WARNING.
-    """
     contract = load_environment_contract()
     try:
         return contract.record(contract.universe_of_id(universe_id)).price_series
@@ -682,11 +605,7 @@ class PostgresToptCoreRepository:
             if existing[2] != release_manifest_id:
                 raise ValueError("frozen TOPT snapshot is bound to a different release manifest")
             return ToptCoreSnapshot.model_validate(
-                {
-                    **existing[3],
-                    "snapshot_id": existing[0],
-                    "content_sha256": existing[1],
-                }
+                {**existing[3], "snapshot_id": existing[0], "content_sha256": existing[1]}
             )
         status = self._connection.execute(
             """
@@ -699,14 +618,10 @@ class PostgresToptCoreRepository:
         if status is None:
             raise LookupError(f"capture run not found: {run_id}")
         environment, cutoff, universe_id, universe_version, universe_sha256, obligations, success, unchanged = status
-        # The snapshot trigger compares the environment too. With an empty identity table the
-        # comparison is with NULL, and the trigger does not fire. This check covers that case.
         identity_row = self._connection.execute("select environment from mart.environment_identity").fetchone()
         governed_env = identity_row[0] if identity_row is not None else "production"
         if environment != governed_env:
             raise ValueError(f"core snapshot requires a {governed_env} run, found a {environment} run")
-        # At most one result exists per obligation, and each result has one terminal state.
-        # So success plus unchanged equal to the obligations leaves no gap and no other state.
         if success + unchanged != obligations:
             raise ValueError("core snapshot requires a completely successful run")
         rows = self._load_observations(run_id, cutoff=cutoff)
@@ -718,6 +633,7 @@ class PostgresToptCoreRepository:
             if row.semantic_type in by_type:
                 raise ValueError("Production run selected more than one observation for a listing semantic cell")
             by_type[row.semantic_type] = row
+
         histories_by_issuer = self._issuer_split_histories(grouped)
         ruleset = cache(partial(resolve_ruleset, self._connection))
         primary_by_listing = self._primary_listings(grouped, cutoff=cutoff)
@@ -735,7 +651,6 @@ class PostgresToptCoreRepository:
             self._snapshot_member(
                 listing_id,
                 by_type,
-                # An issuer without a listing ticker has no history. `live_on_close_basis` then names it.
                 histories=histories_by_issuer.get(
                     str((by_type.get("listing-identity") or next(iter(by_type.values()))).payload.get("issuer_id", "")),
                     (),
@@ -770,12 +685,6 @@ class PostgresToptCoreRepository:
     def _primary_listings(
         self, grouped: Mapping[str, Mapping[str, _ObservationRow]], *, cutoff: datetime
     ) -> dict[str, bool]:
-        """Each listing of an issuer with several listings: True when a `primary_listing` row names it.
-
-        `choose_primary_listings` is the one reader of the relation (#1518). The key of the answer is the
-        key of `grouped`. A listing of an issuer with one listing is not in the answer, and its member has
-        no `is_primary`.
-        """
         issuer_of: dict[str, str] = {}
         listing_of: dict[str, str] = {}
         for key, by_type in grouped.items():
@@ -794,14 +703,12 @@ class PostgresToptCoreRepository:
     def _issuer_split_histories(
         self, grouped: Mapping[str, Mapping[str, _ObservationRow]]
     ) -> dict[str, tuple[SplitHistory | Unavailable | None, ...]]:
-        """The split histories of each issuer's listings in the snapshot (#1277)."""
         tickers_by_issuer: dict[str, list[str]] = {}
         for by_type in grouped.values():
             listing_row = by_type.get("listing-identity")
             if listing_row is None:
                 continue
-            issuer_id = listing_row.payload.get("issuer_id")
-            ticker = listing_row.payload.get("ticker")
+            issuer_id, ticker = listing_row.payload.get("issuer_id"), listing_row.payload.get("ticker")
             if issuer_id and ticker:
                 tickers_by_issuer.setdefault(str(issuer_id), []).append(str(ticker))
         symbols = sorted({ticker for names in tickers_by_issuer.values() for ticker in names})
@@ -809,8 +716,6 @@ class PostgresToptCoreRepository:
             return {}
         unadjusted = load_daily_series(self._connection, symbols, adjust=UNADJUSTED)
         split_adjusted = load_daily_series(self._connection, symbols, adjust=SPLIT_ADJUSTED)
-        # A symbol without a stored bar maps to None, also when no symbol has one. The member
-        # build then names the missing series. It never keeps the filed count (#1277).
         by_symbol = {symbol: split_history(symbol, unadjusted, split_adjusted) for symbol in symbols}
         return {
             issuer_id: tuple(by_symbol[symbol] for symbol in sorted(set(names)))
@@ -832,13 +737,10 @@ class PostgresToptCoreRepository:
                     end as cutoff_freshness_state,
                     observation.knowable_at,
                     payload.normalized_payload,
-                    count(*) over (
-                        partition by obligation.obligation_id
-                    ) as selection_count,
+                    count(*) over (partition by obligation.obligation_id) as selection_count,
                     row_number() over (
                         partition by obligation.obligation_id
-                        order by observation.knowable_at desc,
-                                 observation.observation_id desc
+                        order by observation.knowable_at desc, observation.observation_id desc
                     ) as selection_rank
                 from raw.capture_obligations obligation
                 join raw.capture_obligation_results terminal
@@ -856,10 +758,6 @@ class PostgresToptCoreRepository:
                 join raw.capture_schedule_policies policy using (schedule_policy_id)
                 join raw.capture_source_vintages vintage
                   on vintage.source_vintage_id = observation.source_vintage_id
-                 -- The request-identity guard keeps foreign observations out. A
-                 -- cross-run REUSED observation (#635) legitimately carries the
-                 -- SOURCE run's request, so the reuse arm admits exactly the
-                 -- anchor the attempt result names — nothing else widens.
                  and (
                      vintage.source_request_id = work.source_request_id
                      or terminal_attempt.reused_source_vintage_id = observation.source_vintage_id
@@ -871,12 +769,7 @@ class PostgresToptCoreRepository:
                   )
                   and observation.subject_kind = obligation.subject_kind
                   and observation.subject_id = obligation.subject_id
-                  and observation.semantic_type = regexp_replace(
-                      obligation.capture_requirement_id, ':v1$', ''
-                  )
-                  -- Valid time is judged at the run's cutoff day, never at the partition.
-                  -- The partition_key is the universe anchor. An adapter writes valid_from
-                  -- as the date of the fact itself, which can follow the anchor (#1060).
+                  and observation.semantic_type = regexp_replace(obligation.capture_requirement_id, ':v1$', '')
                   and (observation.valid_from at time zone 'UTC')::date
                       <= (%(cutoff)s::timestamptz at time zone 'UTC')::date
                   and (
@@ -953,8 +846,6 @@ class PostgresToptCoreRepository:
             return outcome.value, outcome.knowable_at, None
         if price_value is None and financial.listing_units_per_share and financial.listing_units_per_share > 0:
             return shares_value / financial.listing_units_per_share, shares_knowable_at, None
-        # #1606: a listing with a ticker and no stored bar, in a universe whose contract record declares no
-        # price series, has no split history by contract. That is no data lost. The member keeps the cause.
         no_bar_stored = len(histories) > 0 and all(history is None for history in histories)
         if not stores_price_series and outcome.reason == NO_SPLIT_ADJUSTED_SERIES and no_bar_stored:
             log.info(
@@ -987,15 +878,10 @@ class PostgresToptCoreRepository:
         stores_price_series: bool = True,
     ) -> SnapshotMember:
         listing, financial, price = _validate_member_rows(listing_id, by_type)
-        financial_row = by_type["financial-fact"]
-        market_row = by_type["market-price"]
+        financial_row, market_row = by_type["financial-fact"], by_type["market-price"]
         observation_ids = sorted(row.observation_id for row in by_type.values())
-
         price_value, price_reason = _price_in_financial_currency(listing_id, financial.currency, price)
 
-        # #1518: the input cells of the payload. The strategy seed and the history projector build the same
-        # cells with the same function, so the confidence cap, the units and the per-key `knowable_at` have
-        # one definition. A periodic series is a decision input only. The snapshot reads the scalar cells.
         cells = {
             cell.input_key: cell
             for cell in financial_input_rows(
@@ -1060,12 +946,7 @@ class PostgresToptCoreRepository:
             instrument_id=listing.instrument_id,
             listing_id=listing.listing_id,
             operating_branch=financial.operating_branch,
-            observation_ids=(
-                observation_ids[0],
-                observation_ids[1],
-                observation_ids[2],
-                observation_ids[3],
-            ),
+            observation_ids=(observation_ids[0], observation_ids[1], observation_ids[2], observation_ids[3]),
             cell_inputs=(
                 ToptCellQualityInput(
                     input_id=financial_row.observation_id,
@@ -1134,7 +1015,6 @@ class PostgresToptCoreRepository:
                 unavailable_reason=price_reason,
             ),
             is_primary=is_primary,
-            # A leaf that the capture holds no value for stays None: the core names it `missing_<field>`.
             **{
                 name: _metric(
                     financial_row,
@@ -1152,16 +1032,17 @@ class PostgresToptCoreRepository:
     def _put_snapshot(self, snapshot: ToptCoreSnapshot) -> None:
         payload = snapshot.model_dump(mode="json", exclude={"snapshot_id", "content_sha256"})
         with self._connection.transaction():
-            inserted = self._connection.execute(
-                """
-                insert into staging.topt_core_snapshots (
-                    snapshot_id, content_sha256, run_id, release_manifest_id,
-                    universe_id, universe_version, universe_sha256, cutoff,
-                    issuer_count, instrument_count, observation_count, payload
-                ) values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                on conflict (snapshot_id) do nothing returning snapshot_id
+            _insert_or_verify(
+                self._connection,
+                insert_sql="""
+                    insert into staging.topt_core_snapshots (
+                        snapshot_id, content_sha256, run_id, release_manifest_id,
+                        universe_id, universe_version, universe_sha256, cutoff,
+                        issuer_count, instrument_count, observation_count, payload
+                    ) values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    on conflict (snapshot_id) do nothing returning snapshot_id
                 """,
-                (
+                insert_params=(
                     snapshot.snapshot_id,
                     snapshot.content_sha256,
                     snapshot.run_id,
@@ -1175,27 +1056,25 @@ class PostgresToptCoreRepository:
                     _SEMANTICS_PER_LISTING * len(snapshot.members),
                     Jsonb(payload),
                 ),
-            ).fetchone()
-            if inserted is None:
-                existing = self._connection.execute(
-                    "select content_sha256, payload from staging.topt_core_snapshots where snapshot_id = %s",
-                    (snapshot.snapshot_id,),
-                ).fetchone()
-                if existing is None or existing[0] != snapshot.content_sha256 or existing[1] != payload:
-                    raise ValueError("TOPT core snapshot identity conflict")
+                check_sql="select content_sha256, payload from staging.topt_core_snapshots where snapshot_id = %s",
+                check_params=(snapshot.snapshot_id,),
+                expected=(snapshot.content_sha256, payload),
+                conflict_message="TOPT core snapshot identity conflict",
+            )
             for factor_input in snapshot.factor_inputs():
                 factor_payload = factor_input.model_dump(mode="json")
                 member_sha256 = canonical_sha256(factor_payload)
-                inserted_member = self._connection.execute(
-                    """
-                    insert into staging.topt_core_snapshot_members (
-                        snapshot_id, instrument_id, issuer_id, listing_id,
-                        observation_ids, member_sha256, factor_input
-                    ) values (%s, %s, %s, %s, %s, %s, %s)
-                    on conflict (snapshot_id, issuer_id) do nothing
-                    returning instrument_id
+                _insert_or_verify(
+                    self._connection,
+                    insert_sql="""
+                        insert into staging.topt_core_snapshot_members (
+                            snapshot_id, instrument_id, issuer_id, listing_id,
+                            observation_ids, member_sha256, factor_input
+                        ) values (%s, %s, %s, %s, %s, %s, %s)
+                        on conflict (snapshot_id, issuer_id) do nothing
+                        returning instrument_id
                     """,
-                    (
+                    insert_params=(
                         snapshot.snapshot_id,
                         factor_input.instrument_id,
                         factor_input.issuer_id,
@@ -1204,25 +1083,21 @@ class PostgresToptCoreRepository:
                         member_sha256,
                         Jsonb(factor_payload),
                     ),
-                ).fetchone()
-                if inserted_member is None:
-                    existing_member = self._connection.execute(
-                        """
+                    check_sql="""
                         select issuer_id, listing_id, observation_ids, member_sha256, factor_input
                         from staging.topt_core_snapshot_members
                         where snapshot_id = %s and issuer_id = %s
-                        """,
-                        (snapshot.snapshot_id, factor_input.issuer_id),
-                    ).fetchone()
-                    expected_member = (
+                    """,
+                    check_params=(snapshot.snapshot_id, factor_input.issuer_id),
+                    expected=(
                         factor_input.issuer_id,
                         factor_input.listing_id,
                         list(factor_input.observation_ids),
                         member_sha256,
                         factor_payload,
-                    )
-                    if existing_member != expected_member:
-                        raise ValueError("TOPT core snapshot member identity conflict")
+                    ),
+                    conflict_message="TOPT core snapshot member identity conflict",
+                )
 
     def materialize(
         self,
@@ -1231,13 +1106,8 @@ class PostgresToptCoreRepository:
         gppe_definition: GppeV0Definition,
         definition: LargeModelValueV0Definition | None = None,
     ) -> tuple[ToptCoreResult, ...]:
-        # #1235: one band set. The default is the live strategy definition, the same one the
-        # strategy tick evaluates, so the deployed path cannot tier with a second band set.
         definition = definition or load_live_strategy_definition()
         factor_inputs = snapshot.factor_inputs()
-        # The pins of the labor-efficiency trees enter the GPPE definition (#1518). So a snapshot that was materialized
-        # before the pins, and is materialized again, gets another definition id and another invocation. The unique key
-        # (snapshot, definition id) of `mart.topt_gppe_invocations` then holds, and the old rows stay.
         gppe_definition = gppe_definition.pinned_by(definition)
         gppe_invocation_payload = {
             "snapshot_id": snapshot.snapshot_id,
@@ -1264,16 +1134,18 @@ class PostgresToptCoreRepository:
         expected_issuers = len({member.issuer_id for member in snapshot.members})
         if len(gppe_results) != expected_issuers:
             raise ValueError("GPPE materialization denominator drifted from the snapshot's issuers")
+
         with self._connection.transaction():
-            gppe_inserted = self._connection.execute(
-                """
-                insert into mart.topt_gppe_invocations (
-                    invocation_id, content_sha256, snapshot_id,
-                    gppe_definition_id, gppe_definition_sha256, payload
-                ) values (%s, %s, %s, %s, %s, %s)
-                on conflict (invocation_id) do nothing returning invocation_id
+            _insert_or_verify(
+                self._connection,
+                insert_sql="""
+                    insert into mart.topt_gppe_invocations (
+                        invocation_id, content_sha256, snapshot_id,
+                        gppe_definition_id, gppe_definition_sha256, payload
+                    ) values (%s, %s, %s, %s, %s, %s)
+                    on conflict (invocation_id) do nothing returning invocation_id
                 """,
-                (
+                insert_params=(
                     gppe_invocation_id,
                     gppe_invocation_sha256,
                     snapshot.snapshot_id,
@@ -1281,20 +1153,11 @@ class PostgresToptCoreRepository:
                     gppe_definition.content_sha256,
                     Jsonb(gppe_invocation_payload),
                 ),
-            ).fetchone()
-            if gppe_inserted is None:
-                existing_gppe = self._connection.execute(
-                    "select content_sha256, payload from mart.topt_gppe_invocations where invocation_id = %s",
-                    (gppe_invocation_id,),
-                ).fetchone()
-                if (
-                    existing_gppe is None
-                    or existing_gppe[0] != gppe_invocation_sha256
-                    or existing_gppe[1] != gppe_invocation_payload
-                ):
-                    raise ValueError("TOPT GPPE invocation identity conflict")
-            # #747: the three §8 dimensions, derived from what this materialization consumed.
-            # Not part of any content hash — they surface what the identity already binds.
+                check_sql="select content_sha256, payload from mart.topt_gppe_invocations where invocation_id = %s",
+                check_params=(gppe_invocation_id,),
+                expected=(gppe_invocation_sha256, gppe_invocation_payload),
+                conflict_message="TOPT GPPE invocation identity conflict",
+            )
             evidence_by_listing = self._load_source_evidence(snapshot)
             gppe_validation = factor_validation_status_for((gppe_definition.definition_id,))
             for gppe_result in gppe_results:
@@ -1326,17 +1189,19 @@ class PostgresToptCoreRepository:
             )
             if len(results) != expected_issuers or len({item.issuer_id for item in results}) != expected_issuers:
                 raise ValueError("core materialization denominator drifted from the snapshot's issuers")
-            inserted = self._connection.execute(
-                """
-                insert into mart.topt_core_invocations (
-                    invocation_id, content_sha256, snapshot_id,
-                    gppe_invocation_id,
-                    gppe_definition_id, gppe_definition_sha256,
-                    tier_definition_id, tier_definition_sha256, payload
-                ) values (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                on conflict (invocation_id) do nothing returning invocation_id
+
+            _insert_or_verify(
+                self._connection,
+                insert_sql="""
+                    insert into mart.topt_core_invocations (
+                        invocation_id, content_sha256, snapshot_id,
+                        gppe_invocation_id,
+                        gppe_definition_id, gppe_definition_sha256,
+                        tier_definition_id, tier_definition_sha256, payload
+                    ) values (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    on conflict (invocation_id) do nothing returning invocation_id
                 """,
-                (
+                insert_params=(
                     invocation_id,
                     invocation_sha256,
                     snapshot.snapshot_id,
@@ -1347,21 +1212,17 @@ class PostgresToptCoreRepository:
                     definition.content_sha256,
                     Jsonb(invocation_payload),
                 ),
-            ).fetchone()
-            if inserted is None:
-                existing = self._connection.execute(
-                    "select content_sha256, payload from mart.topt_core_invocations where invocation_id = %s",
-                    (invocation_id,),
-                ).fetchone()
-                if existing is None or existing[0] != invocation_sha256 or existing[1] != invocation_payload:
-                    raise ValueError("TOPT core invocation identity conflict")
+                check_sql="select content_sha256, payload from mart.topt_core_invocations where invocation_id = %s",
+                check_params=(invocation_id,),
+                expected=(invocation_sha256, invocation_payload),
+                conflict_message="TOPT core invocation identity conflict",
+            )
             periods_by_listing = self._load_result_periods(snapshot)
+            core_validation = factor_validation_status_for(
+                (gppe_definition.definition_id, definition.strategy_definition_id)
+            )
             for result in results:
                 if result.listing_id not in periods_by_listing:
-                    # Every result must trace to a member's financial-fact
-                    # observation; a missing listing is a wiring bug, and silently
-                    # persisting NULL periods would defeat this column's purpose
-                    # (Copilot Medium on #598).
                     raise ValueError(f"no financial-fact observation for {result.listing_id} in its own snapshot")
                 self._put_result(
                     result,
@@ -1374,9 +1235,7 @@ class PostgresToptCoreRepository:
                             reason_codes=(item.value for item in result.reason_codes),
                         ),
                         source_evidence_status=evidence_by_listing[result.listing_id],
-                        factor_validation_status=factor_validation_status_for(
-                            (gppe_definition.definition_id, definition.strategy_definition_id)
-                        ),
+                        factor_validation_status=core_validation,
                     ),
                 )
             materialize_metric_node_values(
@@ -1390,25 +1249,9 @@ class PostgresToptCoreRepository:
         return results
 
     def _load_source_evidence(self, snapshot: ToptCoreSnapshot) -> dict[str, InputEvidenceStatus]:
-        """§8 `source_evidence_status` per member, from the snapshot's OWN observations
-        (#747): the raw-pointer chain of every selected observation plus the evidence the
-        financial-fact payload carries for its side-plane inputs. Two queries for the whole
-        snapshot (pointers, financial payloads), then per-member classification — read at
-        persist time like `_load_result_periods`, never carried on the snapshot model."""
         all_ids = sorted({oid for member in snapshot.members for oid in member.observation_ids})
         resolved = resolve_raw_pointers(self._connection, all_ids)
-        payload_rows = self._connection.execute(
-            """
-            select coalesce(p.normalized_payload->>'listing_id', o.subject_id), p.normalized_payload
-            from staging.capture_normalized_observations o
-            join staging.capture_observation_payloads p using (observation_id)
-            where o.observation_id = any(%s) and o.semantic_type = 'financial-fact'
-            """,
-            (all_ids,),
-        ).fetchall()
-        payloads_by_listing: dict[str, list[dict[str, Any]]] = {}
-        for subject_id, payload in payload_rows:
-            payloads_by_listing.setdefault(str(subject_id), []).append(payload)
+        payloads_by_listing = load_financial_payloads_by_listing(self._connection, all_ids)
         return {
             member.listing_id: source_evidence_status_for(
                 self._connection,
@@ -1422,19 +1265,6 @@ class PostgresToptCoreRepository:
     def _load_result_periods(
         self, snapshot: ToptCoreSnapshot
     ) -> dict[str, tuple[date | None, date | None, date | None]]:
-        """The fiscal periods behind each member's financial-fact observation.
-
-        Read back from the snapshot's OWN observations at persist time, never
-        carried on the snapshot model: the snapshot's content address is its
-        selection of observations, and two snapshots selecting identical
-        observations must stay the same snapshot across code versions (Copilot
-        High on #598 — adding fields to SnapshotMember changed snapshot_id,
-        invocation_id and every result id for identical inputs, which a
-        cross-deploy tick retry would observe as a second materialization of the
-        same run). Periods derive from the selected observations, so this query
-        adds no information to the identity — it surfaces what the identity
-        already binds.
-        """
         observation_ids = sorted({oid for member in snapshot.members for oid in member.observation_ids})
         rows = self._connection.execute(
             """
@@ -1468,36 +1298,30 @@ class PostgresToptCoreRepository:
             (invocation_id,),
         ).fetchall()
         return tuple(
-            ToptGppeResult.model_validate(
-                {
-                    **row[2],
-                    "result_id": row[0],
-                    "content_sha256": row[1],
-                }
-            )
-            for row in rows
+            ToptGppeResult.model_validate({**row[2], "result_id": row[0], "content_sha256": row[1]}) for row in rows
         )
 
     def _put_gppe_result(self, result: ToptGppeResult, statuses: StatusDimensions) -> None:
         payload = result.model_dump(mode="json", exclude={"result_id", "content_sha256"})
-        inserted = self._connection.execute(
-            """
-            insert into mart.topt_gppe_results (
-                result_id, content_sha256, invocation_id, snapshot_id, run_id,
-                release_manifest_id, universe_id, universe_version, universe_sha256,
-                cutoff, issuer_id, instrument_id, listing_id, operating_branch,
-                operating_metric, availability, operating_efficiency,
-                capital_adjusted_gross_profit, gppe, confidence, freshness,
-                reason_codes, input_observation_ids,
-                gppe_definition_id, gppe_definition_sha256, payload,
-                availability_status, source_evidence_status, factor_validation_status
-            ) values (
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                %s, %s, %s
-            ) on conflict (result_id) do nothing returning result_id
+        _insert_or_verify(
+            self._connection,
+            insert_sql="""
+                insert into mart.topt_gppe_results (
+                    result_id, content_sha256, invocation_id, snapshot_id, run_id,
+                    release_manifest_id, universe_id, universe_version, universe_sha256,
+                    cutoff, issuer_id, instrument_id, listing_id, operating_branch,
+                    operating_metric, availability, operating_efficiency,
+                    capital_adjusted_gross_profit, gppe, confidence, freshness,
+                    reason_codes, input_observation_ids,
+                    gppe_definition_id, gppe_definition_sha256, payload,
+                    availability_status, source_evidence_status, factor_validation_status
+                ) values (
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s
+                ) on conflict (result_id) do nothing returning result_id
             """,
-            (
+            insert_params=(
                 result.result_id,
                 result.content_sha256,
                 result.invocation_id,
@@ -1526,14 +1350,11 @@ class PostgresToptCoreRepository:
                 Jsonb(payload),
                 *statuses.as_columns(),
             ),
-        ).fetchone()
-        if inserted is None:
-            existing = self._connection.execute(
-                "select content_sha256, payload from mart.topt_gppe_results where result_id = %s",
-                (result.result_id,),
-            ).fetchone()
-            if existing is None or existing[0] != result.content_sha256 or existing[1] != payload:
-                raise ValueError("TOPT GPPE result identity conflict")
+            check_sql="select content_sha256, payload from mart.topt_gppe_results where result_id = %s",
+            check_params=(result.result_id,),
+            expected=(result.content_sha256, payload),
+            conflict_message="TOPT GPPE result identity conflict",
+        )
 
     def _put_result(
         self,
@@ -1542,30 +1363,31 @@ class PostgresToptCoreRepository:
         statuses: StatusDimensions,
     ) -> None:
         payload = result.model_dump(mode="json", exclude={"result_id", "content_sha256"})
-        inserted = self._connection.execute(
-            """
-            insert into mart.topt_core_results (
-                result_id, content_sha256, invocation_id, snapshot_id, run_id,
-                release_manifest_id, universe_id, universe_version, universe_sha256,
-                cutoff, issuer_id, instrument_id, listing_id, operating_branch,
-                operating_metric, availability, operating_efficiency,
-                capital_adjusted_gross_profit, gppe, tier, target_ps_lower,
-                target_ps_upper, target_ps_midpoint, current_ps, valuation_gap,
-                current_pgp, target_pgp_lower, target_pgp_upper, target_pgp_midpoint,
-                operating_period_end, revenue_period_end, shares_period_end,
-                confidence, freshness, reason_codes, input_observation_ids,
-                gppe_invocation_id, gppe_result_id,
-                gppe_definition_id, gppe_definition_sha256,
-                tier_definition_id, tier_definition_sha256, payload,
-                availability_status, source_evidence_status, factor_validation_status
-            ) values (
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                %s, %s, %s, %s, %s, %s, %s
-            ) on conflict (result_id) do nothing returning result_id
+        _insert_or_verify(
+            self._connection,
+            insert_sql="""
+                insert into mart.topt_core_results (
+                    result_id, content_sha256, invocation_id, snapshot_id, run_id,
+                    release_manifest_id, universe_id, universe_version, universe_sha256,
+                    cutoff, issuer_id, instrument_id, listing_id, operating_branch,
+                    operating_metric, availability, operating_efficiency,
+                    capital_adjusted_gross_profit, gppe, tier, target_ps_lower,
+                    target_ps_upper, target_ps_midpoint, current_ps, valuation_gap,
+                    current_pgp, target_pgp_lower, target_pgp_upper, target_pgp_midpoint,
+                    operating_period_end, revenue_period_end, shares_period_end,
+                    confidence, freshness, reason_codes, input_observation_ids,
+                    gppe_invocation_id, gppe_result_id,
+                    gppe_definition_id, gppe_definition_sha256,
+                    tier_definition_id, tier_definition_sha256, payload,
+                    availability_status, source_evidence_status, factor_validation_status
+                ) values (
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s, %s
+                ) on conflict (result_id) do nothing returning result_id
             """,
-            (
+            insert_params=(
                 result.result_id,
                 result.content_sha256,
                 result.invocation_id,
@@ -1611,19 +1433,30 @@ class PostgresToptCoreRepository:
                 Jsonb(payload),
                 *statuses.as_columns(),
             ),
-        ).fetchone()
-        if inserted is None:
-            existing = self._connection.execute(
-                "select content_sha256, payload from mart.topt_core_results where result_id = %s",
-                (result.result_id,),
-            ).fetchone()
-            if existing is None or existing[0] != result.content_sha256 or existing[1] != payload:
-                raise ValueError("TOPT core result identity conflict")
+            check_sql="select content_sha256, payload from mart.topt_core_results where result_id = %s",
+            check_params=(result.result_id,),
+            expected=(result.content_sha256, payload),
+            conflict_message="TOPT core result identity conflict",
+        )
 
     @staticmethod
     def _validate_page(limit: int, offset: int) -> None:
         if not 1 <= limit <= 100 or offset < 0:
             raise ValueError("TOPT core query pagination is outside the bounded range")
+
+    @staticmethod
+    def _identity_query_params(identity: ToptCoreIdentity, limit: int, offset: int) -> tuple[Any, ...]:
+        return (
+            identity.run_id,
+            identity.release_manifest_id,
+            identity.universe_id,
+            identity.universe_version,
+            identity.universe_sha256,
+            identity.snapshot_id,
+            identity.invocation_id,
+            limit,
+            offset,
+        )
 
     def results(
         self,
@@ -1646,26 +1479,13 @@ class PostgresToptCoreRepository:
                    r.tier_definition_id, r.tier_definition_sha256, r.created_at,
                    t.current_pgp, t.target_pgp_lower, t.target_pgp_upper, t.target_pgp_midpoint
             from mart.topt_core_result_read r
-            -- #1235: the P/GP columns are read from the table. The read view keeps 0026's
-            -- columns: 0026 re-creates it at every boot with `create or replace view`, which
-            -- cannot drop a column, so a later migration that widened it would fail every boot.
             join mart.topt_core_results t on t.result_id = r.result_id
             where r.run_id = %s and r.release_manifest_id = %s and r.universe_id = %s
               and r.universe_version = %s and r.universe_sha256 = %s and r.snapshot_id = %s
               and r.invocation_id = %s
             order by r.issuer_id limit %s offset %s
             """,
-            (
-                identity.run_id,
-                identity.release_manifest_id,
-                identity.universe_id,
-                identity.universe_version,
-                identity.universe_sha256,
-                identity.snapshot_id,
-                identity.invocation_id,
-                limit,
-                offset,
-            ),
+            self._identity_query_params(identity, limit, offset),
         ).fetchall()
         return tuple(
             ToptCoreReadResult(
@@ -1734,17 +1554,7 @@ class PostgresToptCoreRepository:
               and invocation_id = %s
             order by issuer_id limit %s offset %s
             """,
-            (
-                identity.run_id,
-                identity.release_manifest_id,
-                identity.universe_id,
-                identity.universe_version,
-                identity.universe_sha256,
-                identity.snapshot_id,
-                identity.invocation_id,
-                limit,
-                offset,
-            ),
+            self._identity_query_params(identity, limit, offset),
         ).fetchall()
         return tuple(
             ToptCoreMetaInfo(
