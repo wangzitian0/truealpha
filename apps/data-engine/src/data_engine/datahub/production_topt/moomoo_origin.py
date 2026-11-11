@@ -1,54 +1,4 @@
-"""moomoo OpenD as a governed origin (init.md rule 15, A3 decision 1): the THIRD
-market-price origin and the SECOND financial-fact origin.
-
-Why this exists: OpenD has been live on the VPS since 2026-07 and the data engine's
-containers can reach it, yet `staging.api_call_ledger` holds zero moomoo rows and every
-financial-fact cell is single-origin (class B, falsified only by the plausibility oracle).
-The owner's standard needs three price origins and a second origin for fundamentals, so
-that revenue / net income can reach HIGH when two vendors agree. Both origins here are
-corroborators: the primary (Yahoo, SEC company-facts) still selects the served value, the
-fusion engine (#343) reconciles under a declared tolerance and abstains on conflict, and a
-moomoo outage leaves cells honestly single-origin rather than failing the tick. The one
-exception is a price cell neither Yahoo nor Twelve Data can serve: the K-line close then
-serves it as a failover (#862, `MarketPriceAdapter.failover`), under its own identity and
-one confidence grade down.
-
-## The client is injectable
-
-Every OpenD call goes through `data_engine.sources.moomoo._call` — gate, throttle, call,
-record — so the monthly backstop and `staging.api_call_ledger` see it (rule 6). The origin
-talks to that module through the `MoomooClient` protocol; the deployed `OpenDClient`
-dials OpenD, the tests use a cassette-backed double. No test needs OpenD.
-
-## What the bytes are
-
-The SDK speaks protobuf over TCP and hands back DataFrames and dicts, never a response
-body. The landed bytes are therefore the SDK's decoded answer in canonical JSON — the
-closest byte-for-byte artifact the vendor path exposes — and the parser identity names
-that rendering (`moomoo-kline-parser:v2` / `moomoo-financials-parser:v1`).
-
-## The quantity, per origin
-
-* K-line (`moomoo-kline`): the UNADJUSTED regular-session close of the settled session
-  at/before the price cutoff, requested as a bounded daily window ending on the cutoff.
-  The cutoff is already the last settled session (#637), so the in-progress bar is never
-  inside the window; a bar stamped with an instant rather than a session date, or a bar
-  after the cutoff, is refused (#535) instead of corroborating the wrong quantity.
-* Financials (`moomoo-financials`): the annual (`financial_type == 7`) income-statement
-  flows and the balance-sheet instants at every reported period end, keyed by period
-  end on the same axis the SEC adapter uses. moomoo stamps a period end as 00:00 Asia/Shanghai — its UTC rendering
-  (`date_time_str`) is the day BEFORE the calendar period end — so the epoch is converted
-  in that zone. Field ids are numeric and undocumented client-side (samples/README.md);
-  the mapping below was established by equality against the SEC XBRL facts for the four
-  captured issuers across FY2023-FY2025 (`tests/production_topt/test_moomoo_origin.py`
-  keeps measuring it).
-
-moomoo publishes no filing date, so a financials assertion is knowable when it is served:
-`knowable_at` is the cutoff, and only periods that ENDED at/before the cutoff are
-asserted. The fusion aligns on the primary's filed-and-knowable period, so a vendor
-restatement or an early earnings release can corroborate only a period the primary
-already has.
-"""
+"""moomoo OpenD price and financial-fact corroboration origins."""
 
 from __future__ import annotations
 
@@ -63,7 +13,7 @@ from truealpha_contracts.models import DataSource
 
 from data_engine.config import settings
 from data_engine.datahub.fetch_key import FetchKey
-from data_engine.datahub.production_topt.corroboration_audit import FETCH, record_lost_corroboration
+from data_engine.datahub.production_topt.corroboration_audit import cached_corroboration_fetch
 from data_engine.datahub.production_topt.market_price_adapter import CorroboratingOrigin, MarketPriceQuote
 from data_engine.datahub.production_topt.sec_financial_adapter import (
     FinancialFactAssertion,
@@ -91,21 +41,11 @@ FINANCIALS_PARSER_VERSION = MOOMOO_FINANCIALS_PARSER_VERSION
 FINANCIALS_MAPPING_VERSION = MOOMOO_FINANCIALS_MAPPING_VERSION
 
 CALLER = "moomoo_origin"
-# Two weeks of calendar days covers any holiday cluster before the cutoff so the settled
-# session is inside the window; `max_count` bounds the answer to the same span.
 _KLINE_LOOKBACK_DAYS = 14
 _KLINE_MAX_COUNT = 30
-# moomoo stamps a fiscal period end at midnight in this zone (OpenD's home time).
 _PERIOD_END_ZONE = ZoneInfo("Asia/Shanghai")
-# `FinancialType` values in a `report_list` row: 1-4 = single quarters, 7 = annual.
 _ANNUAL_FINANCIAL_TYPE = 7
-# `FinancialStatementsType` (proto enum ints; the SDK exposes no enum class).
 INCOME_STATEMENT, BALANCE_SHEET = 1, 2
-# Statement field ids -> payload keys. Established by equality against SEC company-facts
-# (DDOG, DUOL, NICE, SHOP; FY2023-FY2025): 8001 total revenue, 8004 gross profit, 8037 net
-# income (ProfitLoss — NICE FY2024 442,588,000 = us-gaap:ProfitLoss, 0.70% above
-# NetIncomeLoss after minority interest), 8047 basic EPS, 8048 diluted EPS; balance sheet
-# 8001 total assets. Every other id is left alone until it is calibrated the same way.
 INCOME_FIELDS: Mapping[str, int] = {
     "revenue": 8001,
     "gross_profit": 8004,
@@ -114,39 +54,21 @@ INCOME_FIELDS: Mapping[str, int] = {
     "eps_diluted": 8048,
 }
 BALANCE_SHEET_FIELDS: Mapping[str, int] = {"total_assets": 8001}
-# A settled daily bar is stamped with its session date at midnight; an intraday bar or a
-# quote carries a real instant.
 _SESSION_STAMP_LENGTH = len("2026-07-29 00:00:00")
 _MIDNIGHT = " 00:00:00"
 
 
 class NotASessionCloseError(ValueError):
-    """moomoo answered with a quantity that is not a settled regular-session close."""
+    pass
 
 
 class MoomooClient(Protocol):
-    """The two OpenD calls the origins need, as JSON-safe structures.
-
-    Implemented by `OpenDClient` for the deployed path and by a cassette double in tests.
-    Either way the answer is what the SDK decoded, already normalized to plain lists and
-    dicts, so the origin can land it as canonical bytes and parse it from those bytes —
-    the same bytes a replay would read back from `raw.fetches`.
-    """
-
     def history_kline(self, code: str, *, start: date, end: date, identity: FetchKey) -> list[dict[str, Any]]: ...
 
     def financial_statements(self, code: str, *, statement_type: int, identity: FetchKey) -> Mapping[str, Any]: ...
 
 
 class OpenDClient:
-    """`MoomooClient` over a live OpenD, one gated connection per call.
-
-    A connection per call is deliberate: `OpenQuoteContext` runs a socket thread that
-    nothing in the adapter's lifetime would otherwise close, and the ledger's 8-per-30 s
-    pacing dwarfs the handshake. Imported lazily so the origin module carries no SDK
-    dependency until an environment enables it.
-    """
-
     def history_kline(self, code: str, *, start: date, end: date, identity: FetchKey) -> list[dict[str, Any]]:
         from data_engine.jsonable import to_jsonable
         from data_engine.sources import moomoo
@@ -177,25 +99,16 @@ class OpenDClient:
 
 
 def moomoo_code(symbol: str) -> str:
-    """moomoo's code for a US listing: the canonical ticker under the `US.` market prefix."""
     return f"US.{symbol}"
 
 
 def canonical_bytes(payload: Any) -> bytes:
-    """The landed rendering of an SDK answer: canonical JSON, key-sorted, no whitespace."""
     from data_engine.sources.moomoo import canonical_moomoo_bytes
 
     return canonical_moomoo_bytes(payload)
 
 
-# --- market price: the settled daily close --------------------------------------------
-
-
 def _recovered_decimal(value: int | float | str) -> Decimal:
-    """The SDK decodes every figure as a binary float; `str()` is the shortest base-10
-    rendering that round-trips (the recovery the SEC parser applies to company-facts),
-    and an integral figure drops the float's `.0` so a dollar amount lands as `3427158000`
-    rather than `3427158000.0` — the same value, the rendering the primary writes."""
     recovered = Decimal(str(value))
     if recovered.is_finite() and recovered == recovered.to_integral_value():
         return recovered.quantize(Decimal(1))
@@ -221,12 +134,6 @@ def _session_date(stamp: object) -> date:
 
 
 def parse_settled_close(raw_bytes: bytes, *, partition: date) -> MarketPriceQuote | None:
-    """The newest daily regular-session close from a session at/before `partition`.
-
-    `partition` is the LAST SETTLED session (`last_settled_session_date`), so a bar dated
-    on it has closed; a bar after it is look-ahead and refused. Returns None when the
-    window holds no bar (a listing moomoo does not carry, an empty answer).
-    """
     try:
         bars = json.loads(raw_bytes.decode())
     except (UnicodeDecodeError, ValueError) as error:
@@ -245,11 +152,6 @@ def parse_settled_close(raw_bytes: bytes, *, partition: date) -> MarketPriceQuot
     if settled is None:
         return None
     as_of, bar = settled
-    # The whole regular-session bar, not only its close: the K-line is requested
-    # unadjusted and without extended hours, so its open/high/low/volume are the same
-    # quantities the primary's bar carries, and each fused field gains an independent
-    # origin (staging, 2026-09-16: bar fields graded single-origin with moomoo present).
-    # A field the bar lacks stays None — an absent assertion, never zero.
     return MarketPriceQuote(
         raw_bytes=raw_bytes,
         close=_decimal(bar.get("close"), "close"),
@@ -265,48 +167,26 @@ def parse_settled_close(raw_bytes: bytes, *, partition: date) -> MarketPriceQuot
 
 def _bar_currency(bar: Mapping[str, Any]) -> str:
     raw = bar.get("currency")
-    if isinstance(raw, str) and len(raw.strip()) == 3:
-        return raw.strip()
-    return "USD"
+    return raw.strip() if isinstance(raw, str) and len(raw.strip()) == 3 else "USD"
 
 
 def _optional_decimal(value: object, what: str) -> Decimal | None:
-    """A bar field moomoo may omit: absent (None/empty) stays absent; a present value is
-    read exactly like the close."""
     if value is None or value == "":
         return None
     return _decimal(value, what)
 
 
 class MoomooKlineFetcher:
-    """`MarketPriceFetcher` over moomoo's daily K-line, memoized per (symbol, cutoff).
-
-    Every failure — OpenD down, the monthly backstop, a refused quantity — is absorbed
-    into "absent": a third origin that errors must leave the cell where it was, never
-    fail the primary capture. The gate and the ledger row happen inside the client.
-    """
-
     def __init__(self, client: MoomooClient) -> None:
         self._client = client
         self._cache: dict[tuple[str, date], MarketPriceQuote | None] = {}
 
     def __call__(self, symbol: str, cutoff: date) -> MarketPriceQuote | None:
-        key = (symbol, cutoff)
-        if key in self._cache:
-            return self._cache[key]
-        try:
-            quote = self._fetch(symbol, cutoff)
-        except Exception as error:  # noqa: BLE001 - a corroborating origin that errors is simply absent
-            # Absent, but not silent (#885): OpenD down and a refused bar are logged with
-            # their type and counted in the tick's summary.
-            record_lost_corroboration(KLINE_ORIGIN, FETCH, symbol, error)
-            quote = None
-        self._cache[key] = quote
-        return quote
+        return cached_corroboration_fetch(
+            self._cache, (symbol, cutoff), KLINE_ORIGIN, symbol, lambda: self._fetch(symbol, cutoff)
+        )
 
     def _fetch(self, symbol: str, cutoff: date) -> MarketPriceQuote | None:
-        # One key per symbol and settled session (#1411 K3): the second tick, the second universe and
-        # the canary read the landed bars, so OpenD is asked once for them.
         key = FetchKey(
             "moomoo", f"history_kline?lookback={_KLINE_LOOKBACK_DAYS}", f"symbol:{symbol}", cutoff.isoformat()
         )
@@ -324,12 +204,6 @@ class MoomooKlineFetcher:
 
 
 def moomoo_kline_origin() -> CorroboratingOrigin | None:
-    """The configured third price origin, or None when this environment has not enabled it.
-
-    Enabled but unconfigured OpenD coordinates raise here, at route build, rather than
-    surfacing as a per-cell timeout: the flag says "use moomoo", and dialling a guess is
-    what `sources.moomoo.connect` refuses to do.
-    """
     if not settings.moomoo_kline_origin_enabled:
         return None
     _require_opend()
@@ -343,15 +217,7 @@ def moomoo_kline_origin() -> CorroboratingOrigin | None:
     )
 
 
-# --- financial facts: annual statements on the SEC period axis --------------------------
-
-
 def period_end_of(report: Mapping[str, Any]) -> date | None:
-    """The fiscal period end a `report_list` row describes, on the SEC `period_end` axis.
-
-    The epoch is midnight Asia/Shanghai on the period-end date; rendering it in UTC
-    (`date_time_str`) lands the day before, which is why the string is not used.
-    """
     stamp = report.get("date_time")
     if isinstance(stamp, bool) or not isinstance(stamp, int | float):
         return None
@@ -371,15 +237,6 @@ def _statement_value(value: object) -> Decimal | None:
 def annual_values_by_period_end(
     statement: Mapping[str, Any], fields: Mapping[str, int], *, annual_only: bool = True
 ) -> dict[date, dict[str, Decimal | None]]:
-    """Figures of one statement keyed by period end, one dict of named values each.
-
-    Income-statement figures are FLOWS: only `financial_type == 7` (annual) rows qualify,
-    because a Q4 row is a quarter, never a year. Balance-sheet figures are INSTANTS, so
-    with `annual_only=False` every reported period end qualifies — the primary's
-    `total_assets` is the newest instant company-facts carries, a 10-Q's as often as a
-    10-K's, and the same instant is what corroborates it. A period end that appears
-    twice (the FY row and the Q4 row share one date) keeps the row seen first.
-    """
     reports = statement.get("report_list")
     if not isinstance(reports, list):
         return {}
@@ -406,15 +263,6 @@ def annual_values_by_period_end(
 
 
 def parse_annual_financials(raw_bytes: bytes, *, cutoff: date) -> FinancialFactAssertion | None:
-    """What moomoo asserts for periods that ended at/before `cutoff`: annual income flows,
-    and balance-sheet instants at every reported period end.
-
-    `raw_bytes` is the canonical rendering of `{"income": <statement>, "balance_sheet":
-    <statement>}`; either statement may be absent (`None`), in which case its fields are
-    None for every period. The headline (`period_end`, `values`) is the newest ANNUAL
-    income period — a coherent fiscal-year snapshot — and falls back to the newest
-    instant when the income statement is absent. Returns None when nothing qualifies.
-    """
     try:
         payload = json.loads(raw_bytes.decode())
     except (UnicodeDecodeError, ValueError):
@@ -432,9 +280,8 @@ def parse_annual_financials(raw_bytes: bytes, *, cutoff: date) -> FinancialFactA
         (balance, BALANCE_SHEET_FIELDS, False),
     ):
         for end, values in annual_values_by_period_end(statement, fields, annual_only=annual_only).items():
-            if end > cutoff:
-                continue
-            by_period.setdefault(end, {}).update(values)
+            if end <= cutoff:
+                by_period.setdefault(end, {}).update(values)
     for end, growth_rate in parse_valuation_profit_growth(valuation, cutoff=cutoff).items():
         by_period.setdefault(end, {})["consensus_profit_growth"] = growth_rate
     if not by_period:
@@ -452,7 +299,6 @@ def parse_annual_financials(raw_bytes: bytes, *, cutoff: date) -> FinancialFactA
         period_end=newest,
         values=headline_values,
         by_period_end=by_period,
-        # Served now, asserted for periods that have ended: knowable at the cutoff session close.
         knowable_at=knowable_instant(AsOfAxis.SETTLED_SESSION, cutoff),
         currency=currency,
         accounting_standards=standards,
@@ -475,32 +321,17 @@ def _statement_meta(statement: Mapping[str, Any]) -> tuple[str | None, str | Non
 
 
 class MoomooFinancialsFetcher:
-    """`FinancialFactCorroborator` over moomoo's income statement + balance sheet.
-
-    Two gated calls per issuer per run (memoized), landed as ONE raw object so the
-    corroborating observation dereferences to everything it was parsed from.
-    """
-
     def __init__(self, client: MoomooClient) -> None:
         self._client = client
         self._cache: dict[tuple[str, date], FinancialFactAssertion | None] = {}
 
     def __call__(self, symbol: str, cutoff: date) -> FinancialFactAssertion | None:
-        key = (symbol, cutoff)
-        if key in self._cache:
-            return self._cache[key]
-        try:
-            assertion = self._fetch(symbol, cutoff)
-        except Exception as error:  # noqa: BLE001 - a corroborating origin that errors is simply absent
-            record_lost_corroboration(FINANCIALS_ORIGIN, FETCH, symbol, error)
-            assertion = None
-        self._cache[key] = assertion
-        return assertion
+        return cached_corroboration_fetch(
+            self._cache, (symbol, cutoff), FINANCIALS_ORIGIN, symbol, lambda: self._fetch(symbol, cutoff)
+        )
 
     def _fetch(self, symbol: str, cutoff: date) -> FinancialFactAssertion | None:
         code = moomoo_code(symbol)
-        # One key per statement: each is one OpenD request and one ledger row (#1411 K3). The statements
-        # have no version of their own, so the axis is the UTC day.
         income = self._statement(code, symbol, "income", INCOME_STATEMENT)
         balance = self._statement(code, symbol, "balance_sheet", BALANCE_SHEET)
         return parse_annual_financials(canonical_bytes({"income": income, "balance_sheet": balance}), cutoff=cutoff)
@@ -517,7 +348,6 @@ class MoomooFinancialsFetcher:
 
 
 def moomoo_financials_origin() -> FinancialFactCorroboratingOrigin | None:
-    """The configured second financial-fact origin, or None when not enabled here."""
     if not settings.moomoo_financials_origin_enabled:
         return None
     _require_opend()
@@ -531,11 +361,6 @@ def moomoo_financials_origin() -> FinancialFactCorroboratingOrigin | None:
 
 
 def parse_valuation_profit_growth(valuation: Mapping[str, Any], *, cutoff: date) -> dict[date, Decimal]:
-    """Parse annual profit growth rates from `get_valuation_detail` on or before `cutoff`.
-
-    Returns a mapping from fiscal period end (`report_date_str`) to `profit_growth_rate`.
-    Rows after `cutoff` or non-annual periods are excluded.
-    """
     pg = valuation.get("profit_growth_rate")
     if not isinstance(pg, Mapping):
         return {}
@@ -548,8 +373,7 @@ def parse_valuation_profit_growth(valuation: Mapping[str, Any], *, cutoff: date)
             continue
         period_str = row.get("period_str")
         fq = row.get("financial_quarter")
-        is_annual = (isinstance(period_str, str) and period_str.endswith("/FY")) or fq == 4
-        if not is_annual:
+        if not ((isinstance(period_str, str) and period_str.endswith("/FY")) or fq == 4):
             continue
         report_date_str = row.get("report_date_str")
         if not isinstance(report_date_str, str) or len(report_date_str) < 10:

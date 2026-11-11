@@ -38,12 +38,30 @@ from factors.production_topt import (
 )
 from psycopg import Connection
 from truealpha_contracts.common import canonical_sha256
-from truealpha_contracts.execution import AvailabilityStatus, FactorValidationStatus, InputEvidenceStatus
+from truealpha_contracts.execution import FactorValidationStatus, InputEvidenceStatus
 
 from data_engine.datahub.production_topt.status_dimensions import (
     availability_status_for,
     factor_validation_status_for,
 )
+
+_INSERT_NODE_VALUE_SQL = """
+    insert into mart.metric_node_values (
+        run_id, issuer_id, node_id, node_key, period, period_tag,
+        value, unit, availability_status, reason_codes,
+        source_evidence_status, factor_validation_status,
+        confidence, tree_id, tree_version, tree_sha256,
+        input_observation_ids
+    ) values (
+        %s, %s, %s, %s, %s, %s,
+        %s, %s, %s, %s,
+        %s, %s,
+        %s, %s, %s, %s,
+        %s
+    )
+    on conflict (run_id, issuer_id, node_id, period) do nothing
+    returning node_id
+"""
 
 
 def _snapshot_freshness(factor_input: ToptCoreSnapshotInput) -> MetricFreshness:
@@ -176,15 +194,14 @@ def _node_period(
     if isinstance(tce_end_raw, str) and tce_end_raw and "tce" in spec.key:
         return tce_end_raw, "FY"
     period_date = operating_end or revenue_end
-    if period_date is not None:
-        return period_date.isoformat(), "FY"
-    return cutoff_iso, "FY"
+    return (period_date.isoformat() if period_date is not None else cutoff_iso), "FY"
 
 
-def _load_financial_payloads_by_listing(
+def load_financial_payloads_by_listing(
     connection: Connection[Any],
-    observation_ids: list[str],
-) -> dict[str, dict[str, Any]]:
+    observation_ids: Sequence[str],
+) -> dict[str, list[dict[str, Any]]]:
+    """Load `financial-fact` normalized payloads grouped by listing subject."""
     if not observation_ids:
         return {}
     rows = connection.execute(
@@ -194,13 +211,13 @@ def _load_financial_payloads_by_listing(
         join staging.capture_observation_payloads p using (observation_id)
         where o.observation_id = any(%s) and o.semantic_type = 'financial-fact'
         """,
-        (observation_ids,),
+        (list(observation_ids),),
     ).fetchall()
-    result: dict[str, dict[str, Any]] = {}
+    grouped: dict[str, list[dict[str, Any]]] = {}
     for subject_id, payload in rows:
         if isinstance(payload, dict):
-            result[str(subject_id)] = payload
-    return result
+            grouped.setdefault(str(subject_id), []).append(payload)
+    return grouped
 
 
 def _snapshot_leaf_confidence(factor_input: ToptCoreSnapshotInput) -> Decimal:
@@ -223,6 +240,59 @@ def _snapshot_leaf_confidence(factor_input: ToptCoreSnapshotInput) -> Decimal:
     )
 
 
+def _insert_metric_node_value(
+    connection: Connection[Any],
+    *,
+    run_id: str,
+    issuer_id: str,
+    node_id: Any,
+    node_key: str,
+    period: str,
+    period_tag: str | None,
+    value: Decimal | None,
+    unit: str | None,
+    availability: str,
+    freshness: MetricFreshness,
+    confidence: Decimal,
+    reason_codes: list[str],
+    source_evidence: InputEvidenceStatus,
+    validation_status: FactorValidationStatus,
+    tree_id: Any,
+    tree_version: str,
+    tree_sha256: str,
+    observation_ids: Sequence[str],
+) -> int:
+    avail_status = availability_status_for(
+        availability=availability,
+        freshness=freshness.value,
+        confidence=confidence,
+        reason_codes=reason_codes,
+    )
+    row = connection.execute(
+        _INSERT_NODE_VALUE_SQL,
+        (
+            run_id,
+            issuer_id,
+            node_id,
+            node_key,
+            period,
+            period_tag,
+            value,
+            unit,
+            avail_status.value,
+            reason_codes,
+            source_evidence.value,
+            validation_status.value,
+            confidence,
+            tree_id,
+            tree_version,
+            tree_sha256,
+            list(observation_ids),
+        ),
+    ).fetchone()
+    return 1 if row is not None else 0
+
+
 def materialize_metric_node_values(
     connection: Connection[Any],
     *,
@@ -239,13 +309,15 @@ def materialize_metric_node_values(
     if not factor_inputs:
         return 0
     all_obs_ids = sorted({oid for item in factor_inputs for oid in item.observation_ids})
-    financial_by_listing = _load_financial_payloads_by_listing(connection, all_obs_ids)
+    financial_by_listing = {
+        listing_id: payloads[-1]
+        for listing_id, payloads in load_financial_payloads_by_listing(connection, all_obs_ids).items()
+        if payloads
+    }
     validation_status: FactorValidationStatus = factor_validation_status_for(
         (gppe_definition.definition_id, tier_definition_id)
     )
-    variant_hashes: dict[tuple[str, str], str] = {
-        (v.key, v.version): variant_sha256(v, metrics=metrics) for v in variants
-    }
+    variant_hashes = {(v.key, v.version): variant_sha256(v, metrics=metrics) for v in variants}
     inserted_count = 0
     for factor_input in factor_inputs:
         if factor_input.primary_listing_undeclared:
@@ -342,82 +414,51 @@ def _materialize_extra_expressions(
 
     if not panel_rows:
         return 0
-    wide = build_wide_panel(panel_rows)
     evaluated = evaluate_wide_panel(
-        wide,
+        build_wide_panel(panel_rows),
         targets=tuple(extra_expressions),
         expressions=all_expressions,
         include_confidence=True,
     )
     count = 0
     for eval_row in evaluated.iter_rows(named=True):
-        issuer_id = str(eval_row["issuer_id"])
-        period_str = str(eval_row["period"])
+        issuer_id, period_str = str(eval_row["issuer_id"]), str(eval_row["period"])
         factor_input, input_reasons, freshness = meta_by_row[(issuer_id, period_str)]
         source_evidence = evidence_by_listing.get(factor_input.listing_id, InputEvidenceStatus.DEGRADED)
         for name, expr in extra_expressions.items():
             spec = _spec_for_column(name, metrics, all_expressions)
-            raw_val = eval_row.get(name)
-            conf_val = eval_row.get(f"conf__{name}")
+            raw_val, conf_val = eval_row.get(name), eval_row.get(f"conf__{name}")
             leaves = leaf_consumed_columns(expr, metrics=metrics, expressions=all_expressions)
             node_reasons = [input_reasons[k] for k in leaves if k in input_reasons]
             if raw_val is None or node_reasons:
-                persisted_val: Decimal | None = None
-                avail_str = "unavailable"
-                node_conf = Decimal("0")
+                persisted_val, avail_str, node_conf = None, "unavailable", Decimal("0")
                 if not node_reasons:
                     node_reasons.append("undefined_operand")
             else:
                 persisted_val = Decimal(str(raw_val))
                 avail_str = "available"
                 node_conf = Decimal(str(conf_val if conf_val is not None else 0.0))
-            avail_status = availability_status_for(
+            count += _insert_metric_node_value(
+                connection,
+                run_id=factor_input.run_id,
+                issuer_id=issuer_id,
+                node_id=node_id_for(name),
+                node_key=name,
+                period=period_str,
+                period_tag="FY",
+                value=persisted_val,
+                unit=spec.unit.value if spec.unit is not None else "ratio",
                 availability=avail_str,
-                freshness=freshness.value,
+                freshness=freshness,
                 confidence=node_conf,
                 reason_codes=node_reasons,
+                source_evidence=source_evidence,
+                validation_status=validation_status,
+                tree_id=tree_id_for(name, "v1"),
+                tree_version="v1",
+                tree_sha256=canonical_sha256({"key": name, "expr": expr.meta.serialize(format="json")}),
+                observation_ids=factor_input.observation_ids,
             )
-            expr_sha = canonical_sha256({"key": name, "expr": expr.meta.serialize(format="json")})
-            inserted = connection.execute(
-                """
-                insert into mart.metric_node_values (
-                    run_id, issuer_id, node_id, node_key, period, period_tag,
-                    value, unit, availability_status, reason_codes,
-                    source_evidence_status, factor_validation_status,
-                    confidence, tree_id, tree_version, tree_sha256,
-                    input_observation_ids
-                ) values (
-                    %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s,
-                    %s, %s,
-                    %s, %s, %s, %s,
-                    %s
-                )
-                on conflict (run_id, issuer_id, node_id, period) do nothing
-                returning node_id
-                """,
-                (
-                    factor_input.run_id,
-                    issuer_id,
-                    node_id_for(name),
-                    name,
-                    period_str,
-                    "FY",
-                    persisted_val,
-                    spec.unit.value if spec.unit is not None else "ratio",
-                    avail_status.value,
-                    node_reasons,
-                    source_evidence.value,
-                    validation_status.value,
-                    node_conf,
-                    tree_id_for(name, "v1"),
-                    "v1",
-                    expr_sha,
-                    list(factor_input.observation_ids),
-                ),
-            ).fetchone()
-            if inserted is not None:
-                count += 1
     return count
 
 
@@ -453,84 +494,54 @@ def _materialize_issuer_tree(
         if conf is not None:
             input_confidences[spec.key] = conf
 
-    freshness_reasons: list[str] = []
-    if freshness is MetricFreshness.STALE:
-        freshness_reasons.append("stale_input")
-    elif freshness is MetricFreshness.UNKNOWN:
-        freshness_reasons.append("unknown_freshness")
-
+    freshness_reasons = (
+        ["stale_input"]
+        if freshness is MetricFreshness.STALE
+        else ["unknown_freshness"]
+        if freshness is MetricFreshness.UNKNOWN
+        else []
+    )
     evaluation = evaluate_panel_variant(tree, issuer_class=issuer_class, inputs=inputs, metrics=metrics)
-    derived_keys = sorted(reachable_derived_columns(tree.root, issuer_class=issuer_class, metrics=metrics))
     count = 0
-    for node_key in derived_keys:
+    for node_key in sorted(reachable_derived_columns(tree.root, issuer_class=issuer_class, metrics=metrics)):
         node = metrics[node_key]
         raw_val = evaluation.values.get(node_key)
         consumed_keys = leaf_consumed_columns(node_key, issuer_class=issuer_class, metrics=metrics)
         subtree_reasons = [input_reasons[k] for k in consumed_keys if k in input_reasons]
         node_reasons = list(dict.fromkeys([*subtree_reasons, *freshness_reasons]))
         if raw_val is None and not node_reasons:
-            undef_reason = evaluation.undefined.get(node_key, "undefined_operand")
-            node_reasons.append(undef_reason)
+            node_reasons.append(evaluation.undefined.get(node_key, "undefined_operand"))
         if freshness_reasons or raw_val is None or subtree_reasons:
-            persisted_value: Decimal | None = None
-            availability_str = "unavailable"
-            node_confidence = Decimal("0")
+            persisted_value, availability_str, node_confidence = None, "unavailable", Decimal("0")
         else:
-            persisted_value = raw_val
-            availability_str = "available"
+            persisted_value, availability_str = raw_val, "available"
             consumed_confs = [input_confidences[k] for k in consumed_keys if k in input_confidences]
             node_confidence = min(consumed_confs) if consumed_confs else base_confidence
-        avail_status: AvailabilityStatus = availability_status_for(
-            availability=availability_str,
-            freshness=freshness.value,
-            confidence=node_confidence,
-            reason_codes=node_reasons,
-        )
         period_str, period_tag = _node_period(
             node,
             factor_input=factor_input,
             periods=periods,
             financial_payload=financial_payload,
         )
-        unit_str = node.unit.value if node.unit is not None else None
-        row = connection.execute(
-            """
-            insert into mart.metric_node_values (
-                run_id, issuer_id, node_id, node_key, period, period_tag,
-                value, unit, availability_status, reason_codes,
-                source_evidence_status, factor_validation_status,
-                confidence, tree_id, tree_version, tree_sha256,
-                input_observation_ids
-            ) values (
-                %s, %s, %s, %s, %s, %s,
-                %s, %s, %s, %s,
-                %s, %s,
-                %s, %s, %s, %s,
-                %s
-            )
-            on conflict (run_id, issuer_id, node_id, period) do nothing
-            returning node_id
-            """,
-            (
-                factor_input.run_id,
-                factor_input.issuer_id,
-                node.node_id,
-                node.key,
-                period_str,
-                period_tag,
-                persisted_value,
-                unit_str,
-                avail_status.value,
-                node_reasons,
-                source_evidence.value,
-                validation_status.value,
-                node_confidence,
-                tree.tree_id,
-                tree.version,
-                tree_sha256,
-                list(factor_input.observation_ids),
-            ),
-        ).fetchone()
-        if row is not None:
-            count += 1
+        count += _insert_metric_node_value(
+            connection,
+            run_id=factor_input.run_id,
+            issuer_id=factor_input.issuer_id,
+            node_id=node.node_id,
+            node_key=node.key,
+            period=period_str,
+            period_tag=period_tag,
+            value=persisted_value,
+            unit=node.unit.value if node.unit is not None else None,
+            availability=availability_str,
+            freshness=freshness,
+            confidence=node_confidence,
+            reason_codes=node_reasons,
+            source_evidence=source_evidence,
+            validation_status=validation_status,
+            tree_id=tree.tree_id,
+            tree_version=tree.version,
+            tree_sha256=tree_sha256,
+            observation_ids=factor_input.observation_ids,
+        )
     return count

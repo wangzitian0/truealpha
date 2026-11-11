@@ -1,19 +1,4 @@
-"""Resolve the concept mapping a run must use, and the default it falls back to (#496).
-
-Two sources, in order:
-
-1. The governed pointer, `staging.accepted_ruleset_head`. Publishing a corrected mapping is
-   an insert plus a pointer advance — no image rebuild, no deploy. This is the whole point:
-   the plane that changes most often should not be the plane that requires a release.
-2. `DEFAULT_RULESET`, shipped with the image. Not a silent fallback so much as the declared
-   starting state, the same way the frozen universe corpus is versioned configuration
-   rather than input data. A fresh database resolves it and behaves identically to the
-   image it came from.
-
-Either way the resolved ruleset is content-addressed, and the hash it resolves to is what
-`mapping_version` records — so an observation always names the exact rules behind it, and a
-pointer advance is visible in the data rather than only in a changelog.
-"""
+"""Governed concept-mapping ruleset resolution, default ruleset, and publication (#496)."""
 
 from __future__ import annotations
 
@@ -25,27 +10,11 @@ from truealpha_contracts.concept_mapping import ConceptMappingRuleset
 
 _KIND = "concept-mapping"
 
-
-# The mapping the image ships with — the state #501/#507 arrived at, now expressed as data.
-# Synonym vs fallback is declared per field and is the load-bearing distinction; see the
-# contract's docstring for why merging the two produces a silently wrong number.
 DEFAULT_RULESET = ConceptMappingRuleset.model_validate(
     {
         "version": "production-topt-concepts:v6",
         "mappings": (
             {
-                # #1379: CRWD tags its revenue only under the Including form. Its companyfacts give
-                # 4,812,005,000 USD for the year that ends 2026-01-31 and no other revenue concept.
-                # The Including form is last. For a period that two concepts report, the earlier
-                # concept wins. So an issuer that reports both forms keeps the Excluding value.
-                # `SalesRevenueNet` is not here. The NICE and PLUG samples tag it last for FY2017 and
-                # tag `Revenues` for each later year. There it can add only stale figures.
-                # `segment_extraction` reads this list. The vendor oracle keeps a wider list on purpose.
-                # `apps/data-engine/tests/test_revenue_concepts.py` states each difference and its reason.
-                # #1457: XEL tags its revenue as `Revenues` and as the Excluding form up to FY2018. From
-                # FY2019 on it tags only `RegulatedAndUnregulatedOperatingRevenue`, the utility total. Without
-                # that concept the latest annual period of XEL was FY2018, seven years old. It is last, so it
-                # never replaces a figure of an earlier concept for the same period.
                 "field": "revenue",
                 "unit": "USD",
                 "kind": "synonym",
@@ -82,26 +51,6 @@ DEFAULT_RULESET = ConceptMappingRuleset.model_validate(
                 "concepts": ({"taxonomy": "us-gaap", "concept": "GrossProfit"},),
             },
             {
-                # Module 1's growth basis. NOT per-share: a diluted-EPS series is
-                # incomparable across a stock split and nothing here adjusts for one
-                # (no corporate-action table exists). Netflix's stored EPS reads
-                # 11.24, 9.95, 1.20, 1.98, 2.53 for 2021-2025 because the 10-for-1 split
-                # restated the recent years and left older filings on the pre-split
-                # basis, so an EPS CAGR shows a 37%/yr DECLINE for an issuer whose net
-                # income went $4.49B -> $10.98B. Net income is company-level and a split
-                # cannot touch it. `NetIncomeLoss` is present for all 20 TOPT issuers.
-                # `ProfitLoss` is the second variant because a single tag does not reliably
-                # identify net income either — the same lesson `samples/README.md` recorded
-                # for revenue. AVGO filed its FY2025 10-K on 2025-12-18 and company-facts
-                # carries that year ONLY under `ProfitLoss` (23.13B, period ending
-                # 2025-11-02); `NetIncomeLoss` stops at 2024-11-03. Without the variant the
-                # growth window has no recent endpoint and PEG is unavailable for an issuer
-                # whose earnings are plainly on file.
-                #
-                # They are not equal: `ProfitLoss` includes noncontrolling interests and
-                # `NetIncomeLoss` excludes them. Declaration order therefore matters — for
-                # any period both report, the preferred tag wins, and the merged series only
-                # reaches for `ProfitLoss` where the preferred one is silent.
                 "field": "net_income",
                 "unit": "USD",
                 "kind": "synonym",
@@ -117,8 +66,6 @@ DEFAULT_RULESET = ConceptMappingRuleset.model_validate(
                 "concepts": ({"taxonomy": "us-gaap", "concept": "Assets"},),
             },
             {
-                # #1176: banking tangible common equity (`gppe_banking_tce_v1`). The adapter reads
-                # these four fields for the FINANCIAL branch only, at one period end.
                 "field": "stockholders_equity",
                 "unit": "USD",
                 "kind": "synonym",
@@ -131,10 +78,6 @@ DEFAULT_RULESET = ConceptMappingRuleset.model_validate(
                 "concepts": ({"taxonomy": "us-gaap", "concept": "Goodwill"},),
             },
             {
-                # #1176: deducted from equity. Synonyms merge into one period series, so the latest
-                # period wins. JPM reports its balance-sheet preferred line under the second concept
-                # (companyfacts: 20,045,000,000 at 2025-12-31). A filer that reports neither concept
-                # gives no value. The adapter never zero-fills it.
                 "field": "preferred_stock_value",
                 "unit": "USD",
                 "kind": "synonym",
@@ -153,8 +96,6 @@ DEFAULT_RULESET = ConceptMappingRuleset.model_validate(
                 "concepts": ({"taxonomy": "us-gaap", "concept": "IntangibleAssetsNetExcludingGoodwill"},),
             },
             {
-                # Lifetime-class components of the same total. A filer that reports the classes and
-                # not the total (JPM) is measured from these two, summed at one period end.
                 "field": "finite_lived_intangibles_net",
                 "unit": "USD",
                 "kind": "synonym",
@@ -167,10 +108,6 @@ DEFAULT_RULESET = ConceptMappingRuleset.model_validate(
                 "concepts": ({"taxonomy": "us-gaap", "concept": "IndefiniteLivedIntangibleAssetsExcludingGoodwill"},),
             },
             {
-                # True synonyms: both are point-in-time shares OUTSTANDING, one on the cover
-                # page and one in the statements. `CommonStockSharesIssued` is deliberately
-                # absent — issued includes treasury stock (JNJ: 3.12bn issued against 2.41bn
-                # outstanding) and is a different quantity, not a later-dated synonym.
                 "field": "shares_outstanding",
                 "unit": "shares",
                 "kind": "synonym",
@@ -180,21 +117,12 @@ DEFAULT_RULESET = ConceptMappingRuleset.model_validate(
                 ),
             },
             {
-                # Consulted only when the field above yields NOTHING (#496, owner-approved
-                # 2026-07-28 for dual-class filers whose per-class point-in-time tags the
-                # company-facts API drops entirely). A period average is a different quantity
-                # from a point-in-time count, so it is a separate field rather than a trailing
-                # entry in the synonym list: inside that list it could win on recency whenever
-                # the cover-page figure predates the latest fiscal year end, which is exactly
-                # the substitution this ruleset exists to make impossible.
                 "field": "shares_outstanding_last_resort",
                 "unit": "shares",
                 "kind": "fallback",
                 "concepts": ({"taxonomy": "us-gaap", "concept": "WeightedAverageNumberOfSharesOutstandingBasic"},),
             },
             {
-                # FALLBACK: for a bank, plain `Revenues` is gross of interest expense, so it is
-                # a stand-in reached only when no net-of-interest total is published.
                 "field": "bank_revenue",
                 "unit": "USD",
                 "kind": "fallback",
@@ -222,8 +150,6 @@ DEFAULT_RULESET = ConceptMappingRuleset.model_validate(
                 "concepts": ({"taxonomy": "us-gaap", "concept": "NoninterestIncome"},),
             },
             {
-                # Stand-ins: the entries measure different nettings, so recency must not
-                # promote one over another (#496).
                 "field": "insurance_claims",
                 "unit": "USD",
                 "kind": "fallback",
@@ -239,10 +165,6 @@ DEFAULT_RULESET = ConceptMappingRuleset.model_validate(
                 "kind": "synonym",
                 "concepts": ({"taxonomy": "us-gaap", "concept": "NoninterestExpense"},),
             },
-            # --- #528 decomposition inputs (2026-09-08 coverage probe on 111 companyfacts bodies) ---
-            # Balance-sheet instants for `financial_assets`. Cash is its own field; the
-            # investment tiers are composed in `sec_financial_adapter.financial_components`
-            # in a fixed preference order so no concept is counted twice.
             {
                 "field": "cash_and_equivalents",
                 "unit": "USD",
@@ -253,7 +175,6 @@ DEFAULT_RULESET = ConceptMappingRuleset.model_validate(
                 ),
             },
             {
-                # A combined tag some filers use instead of cash + short-term investments.
                 "field": "cash_and_short_term_investments",
                 "unit": "USD",
                 "kind": "fallback",
@@ -315,10 +236,6 @@ DEFAULT_RULESET = ConceptMappingRuleset.model_validate(
                     {"taxonomy": "us-gaap", "concept": "FederalFundsSoldAndSecuritiesPurchasedUnderAgreementsToResell"},
                 ),
             },
-            # Flows for `financial_returns`: investment income by preference (a FALLBACK list —
-            # the three tags are different quantities, not synonyms), dividends and gains
-            # added when reported for the same period, and the non-operating line as a
-            # flagged proxy of last resort.
             {
                 "field": "investment_income",
                 "unit": "USD",
@@ -355,13 +272,36 @@ DEFAULT_RULESET = ConceptMappingRuleset.model_validate(
 )
 
 
-def resolve_ruleset(connection: Connection[Any] | None) -> ConceptMappingRuleset:
-    """The in-force mapping: the governed head when one is published, else the default.
+def publish_governed_object(
+    connection: Connection[Any],
+    *,
+    kind: str,
+    contract_id: str,
+    content_sha256: str,
+    payload: Any,
+    note: str,
+) -> tuple[str, int]:
+    """Store a content-addressed contract object and advance `staging.accepted_rulesets`."""
+    connection.execute(
+        "insert into staging.contract_objects (contract_id, contract_kind, content_sha256, payload) "
+        "values (%s, %s, %s, %s) on conflict (contract_id) do nothing",
+        (contract_id, kind, content_sha256, payload),
+    )
+    row = connection.execute(
+        "select coalesce(max(sequence), 0) + 1 from staging.accepted_rulesets where kind = %s",
+        (kind,),
+    ).fetchone()
+    assert row is not None
+    sequence = int(row[0])
+    connection.execute(
+        "insert into staging.accepted_rulesets (kind, contract_id, sequence, note) values (%s, %s, %s, %s)",
+        (kind, contract_id, sequence, note),
+    )
+    return contract_id, sequence
 
-    Resolution goes through `staging.accepted_ruleset_head`, never through the newest row
-    of `contract_objects` — a bare mutable latest is not a read path, and it would make a
-    half-published ruleset take effect the moment its object landed.
-    """
+
+def resolve_ruleset(connection: Connection[Any] | None) -> ConceptMappingRuleset:
+    """Resolve the governed `staging.accepted_ruleset_head` ruleset, or `DEFAULT_RULESET` when absent."""
     if connection is None:
         return DEFAULT_RULESET
     row = connection.execute(
@@ -373,36 +313,16 @@ def resolve_ruleset(connection: Connection[Any] | None) -> ConceptMappingRuleset
         """,
         (_KIND,),
     ).fetchone()
-    if row is None:
-        return DEFAULT_RULESET
-    return ConceptMappingRuleset.model_validate(row[0])
+    return DEFAULT_RULESET if row is None else ConceptMappingRuleset.model_validate(row[0])
 
 
 def publish_ruleset(connection: Connection[Any], ruleset: ConceptMappingRuleset, *, note: str) -> tuple[str, int]:
-    """Land a ruleset and advance the pointer to it; returns (contract_id, sequence).
-
-    Both halves in one call because a published object nothing points at is inert, and a
-    pointer to an object that is not stored resolves to nothing — the pair is the unit of
-    change.
-    """
-    connection.execute(
-        "insert into staging.contract_objects (contract_id, contract_kind, content_sha256, payload) "
-        "values (%s, %s, %s, %s) on conflict (contract_id) do nothing",
-        (
-            ruleset.ruleset_id,
-            _KIND,
-            ruleset.content_sha256,
-            json.dumps(ruleset.model_dump(mode="json")),
-        ),
+    """Store `ruleset` in `staging.contract_objects` and advance the governed pointer."""
+    return publish_governed_object(
+        connection,
+        kind=_KIND,
+        contract_id=ruleset.ruleset_id,
+        content_sha256=ruleset.content_sha256,
+        payload=json.dumps(ruleset.model_dump(mode="json")),
+        note=note,
     )
-    row = connection.execute(
-        "select coalesce(max(sequence), 0) + 1 from staging.accepted_rulesets where kind = %s",
-        (_KIND,),
-    ).fetchone()
-    assert row is not None
-    sequence = int(row[0])
-    connection.execute(
-        "insert into staging.accepted_rulesets (kind, contract_id, sequence, note) values (%s, %s, %s, %s)",
-        (_KIND, ruleset.ruleset_id, sequence, note),
-    )
-    return ruleset.ruleset_id, sequence

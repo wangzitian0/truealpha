@@ -1,24 +1,4 @@
-"""#63 second tranche: re-point minted holding identities onto the plane's keying.
-
-Tranche 1 (nport_holdings) mints `company:isin:<isin>` for every ISIN the KG has
-never seen — durable, honest, and joinable to nothing. This module closes the
-loop the way bootstrap_universe always has: OpenFIGI maps the ISIN to its US
-listing, the SEC ticker file maps the listing to a CIK, and a NEWER identifier
-vintage re-points `resolve("isin", ...)` at the plane-keyed issuer entity. No
-row is ever rewritten; the historical fund_holding_facts rows keep their minted
-`holding_id` and resolve forward through the one `same_as` edge written here —
-the only reason this codebase ever writes one (append-only facts cannot be
-re-keyed in place).
-
-Identity shape: the target is `issuer:cik:{cik:010d}` — the id the deployed
-plane (universe heads, mart.topt_core_results) actually keys by — NOT
-bootstrap's bare `company:cik:{cik}`. The two shapes coexist historically;
-new enrichment aligns with what production joins against (#63 issue note).
-
-Offline-first: OpenFIGI batches land in raw with `metadata={"isins": batch}`,
-so every later run (and every KG rebuild) resolves from the landing zone
-without re-spending the rate limit. Only never-seen ISINs reach the vendor.
-"""
+"""Enrich minted N-PORT holding identities onto plane-keyed issuer entities."""
 
 from __future__ import annotations
 
@@ -33,22 +13,17 @@ from data_engine import raw_store
 from data_engine.sources import openfigi, sec
 from data_engine.universe import pick_listing, sec_ticker
 
-# OpenFIGI's mapping is authoritative but not a filing; same confidence
-# bootstrap_universe assigns its openfigi-sourced identifiers.
 CONF_OPENFIGI = 0.98
-
 _MINTED_PREFIX = "company:isin:"
 
 
 @dataclass(frozen=True)
 class EnrichmentOutcome:
-    """One enrichment sweep, sized for the op log."""
-
-    unresolved: int  # minted identities considered this sweep
-    reused_from_raw: int  # ISINs answered from landed OpenFIGI batches
-    fetched: int  # ISINs sent to the vendor this sweep
-    repointed: int  # identities re-keyed onto issuer:cik entities
-    unmapped: int  # no US listing / no CIK — stay minted, retried next sweep
+    unresolved: int
+    reused_from_raw: int
+    fetched: int
+    repointed: int
+    unmapped: int
 
     def __str__(self) -> str:
         return (
@@ -60,19 +35,12 @@ class EnrichmentOutcome:
 
 @dataclass(frozen=True)
 class _RawMapping:
-    """One ISIN's records plus the batch that supplied them — the batch's own
-    clock and pointer, so nothing downstream borrows a newer batch's time."""
-
     records: list[dict]
     raw_ref: str
     fetched_at: datetime
 
 
 def _scan_isin_batches(connection, isins: list[str], *, store=None) -> dict[str, _RawMapping]:
-    """Newest-batch-wins ISIN->records from the landing zone. Filtered in SQL:
-    only ISIN-keyed batches (the universe plane's ticker-keyed ones carry no
-    `isins` metadata) and only batches intersecting the requested set are read
-    and decoded (review on #695 — the scan must not grow with unrelated raw)."""
     if not isins:
         return {}
     rows = connection.execute(
@@ -99,14 +67,11 @@ def _scan_isin_batches(connection, isins: list[str], *, store=None) -> dict[str,
 
 
 def figi_from_raw(connection, isins: list[str], *, store=None) -> tuple[dict[str, list[dict]], list[str]]:
-    """Rebuild the ISIN->records mapping from OpenFIGI batches already landed in
-    raw — newest batch wins per ISIN. Returns (mapping, still-missing ISINs)."""
     found = _scan_isin_batches(connection, isins, store=store)
     return {i: found[i].records for i in isins if i in found}, [i for i in isins if i not in found]
 
 
 def _holding_display_name(connection, *, isin: str, ticker: str, listing_name: str | None) -> str | None:
-    """Resolve the display name for an enriched holding without falling back to a bare ticker or ISIN (#1518)."""
     if name := (listing_name or "").strip():
         return name
     row = connection.execute(
@@ -129,44 +94,27 @@ def enrich_holding_identities(
     store=None,
     isins: list[str] | None = None,
 ) -> EnrichmentOutcome:
-    """One idempotent sweep over every still-minted holding identity.
-
-    `ticker_cik`, `http` and `isins` are seams: deployed callers pass none of
-    them (the SEC index and client are built lazily, and the sweep covers every
-    holding ISIN); tests scope `isins` to their own seeds so a shared database
-    cannot leak foreign rows into their counters.
-    """
     at = now or datetime.now(UTC)
-    if isins is None:
-        rows = connection.execute(
+    rows = (
+        connection.execute(
             "select distinct isin from staging.fund_holding_facts where isin is not null order by isin"
         ).fetchall()
-    else:
-        rows = [(isin,) for isin in sorted(isins)]
-    # Two reasons an ISIN needs the sweep: its identity still resolves to the
-    # mint (repoint work), or its per-ISIN ticker association is missing — the
-    # share-class crosswalk (#706): the issuer's newest ticker vintage collapses
-    # GOOG onto GOOGL, so each ISIN keeps ITS OWN ticker on the minted per-ISIN
-    # entity, which the valuation view reads first. Already-landed OpenFIGI
-    # batches make the backfill offline.
-    minted = []
-    for (isin,) in rows:
-        needs_repoint = (er.resolve(connection, "isin", isin, as_of=at) or "").startswith(_MINTED_PREFIX)
-        has_own_ticker = (
-            connection.execute(
-                "select 1 from staging.kg_identifiers where entity_id = %s and identifier_type = 'ticker' limit 1",
-                (f"{_MINTED_PREFIX}{isin}",),
-            ).fetchone()
-            is not None
-        )
-        if needs_repoint or not has_own_ticker:
-            minted.append(isin)
+        if isins is None
+        else [(isin,) for isin in sorted(isins)]
+    )
+    minted = [
+        isin
+        for (isin,) in rows
+        if (er.resolve(connection, "isin", isin, as_of=at) or "").startswith(_MINTED_PREFIX)
+        or connection.execute(
+            "select 1 from staging.kg_identifiers where entity_id = %s and identifier_type = 'ticker' limit 1",
+            (f"{_MINTED_PREFIX}{isin}",),
+        ).fetchone()
+        is None
+    ]
     if not minted:
         return EnrichmentOutcome(0, 0, 0, 0, 0)
 
-    # Each ISIN keeps ITS OWN batch's clock and pointer — the vintage's
-    # transaction time is when THAT mapping became knowable, never a newer
-    # batch's (review on #695).
     found = _scan_isin_batches(connection, minted, store=store)
     mapping = {isin: entry.records for isin, entry in found.items()}
     provenance = {isin: (entry.raw_ref, entry.fetched_at) for isin, entry in found.items()}
@@ -201,19 +149,7 @@ def enrich_holding_identities(
             continue
         minted_id = f"{_MINTED_PREFIX}{isin}"
         raw_ref, transaction_time = provenance[isin]
-        # The per-ISIN ticker rides the minted entity — THIS ISIN's own listing
-        # (#706): the issuer-level ticker below stays newest-wins and collapses
-        # share classes by design; readers that must not collapse resolve here.
-        # Asserted before the SEC ticker_cik gate so US-listed holdings omitted
-        # from company_tickers.json (such as EA or HON) still resolve their
-        # listing_id in mart.fund_holdings_resolved.
-        # Its OWN source name, because kg_identifiers is unique on
-        # (source, type, value, transaction_time): under source="openfigi" this
-        # row and the issuer-level row are the same tuple whenever both derive
-        # from the same landed batch, and whichever asserts second is silently
-        # swallowed — on prod that was this one, 0 rows landed while the sweep
-        # reported success. A listing-association claim is a different claim;
-        # it gets a different source.
+        valid_from = transaction_time.date().isoformat()
         er.ensure_entity(connection, minted_id, "company", listing.name or isin)
         er.assert_identifier(
             connection,
@@ -223,7 +159,7 @@ def enrich_holding_identities(
             identifier_value=ticker,
             confidence=CONF_OPENFIGI,
             transaction_time=transaction_time,
-            valid_from=transaction_time.date().isoformat(),
+            valid_from=valid_from,
             raw_ref=raw_ref,
         )
         if index is None:
@@ -249,11 +185,9 @@ def enrich_holding_identities(
                     identifier_value=id_value,
                     confidence=CONF_OPENFIGI,
                     transaction_time=transaction_time,
-                    valid_from=transaction_time.date().isoformat(),
+                    valid_from=valid_from,
                     raw_ref=raw_ref,
                 )
-            # Forward resolution for the immutable history: fund_holding_facts
-            # rows keep the minted holding_id; the merge hop joins the plane.
             er.add_edge(
                 connection,
                 from_id=minted_id,
@@ -262,7 +196,7 @@ def enrich_holding_identities(
                 confidence=CONF_OPENFIGI,
                 source="openfigi",
                 transaction_time=transaction_time,
-                valid_from=transaction_time.date().isoformat(),
+                valid_from=valid_from,
                 raw_ref=raw_ref,
             )
             repointed += 1

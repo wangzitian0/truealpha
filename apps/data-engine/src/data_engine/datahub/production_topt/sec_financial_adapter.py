@@ -1,32 +1,4 @@
-"""SEC company-facts financial-fact source adapter (Phase 3d, ADR A1 / #171).
-
-Implements `SourceFetchPort` for the `financial-fact` semantic. It resolves each work item
-to (CIK, cutoff, identity, operating branch), pulls the SEC XBRL company-facts through an
-injected fetcher (the real SEC client by default; a fake in tests), and extracts the
-point-in-time annual figures the TOPT core consumes — only facts *filed on or before the
-cutoff*, most recent annual period, parsed as Decimal.
-
-SEC XBRL tags and units vary across issuers, so each field is resolved through a declared
-concept-variant list and a missing concept resolves to `None` — the factor decides
-availability and names the gap. "The source publishes no such fact" is a captured record
-with null fields, not a failure; only a source that could not be *reached* fails, and it
-fails with a retryable reason code rather than a null-filled fact.
-
-The operating branch (#59/#420/#451) is *not* decided here from a ticker allowlist: it is
-resolved from issuer registry metadata by the composition root and arrives on the target.
-A depository-institution issuer reports no gross profit, so its operating numerator is the
-pre-provision net revenue proxy; without that, every bank lands with `gross_profit=None`
-and the evaluator silently excludes it as `missing_gross_profit` instead of scoring it.
-
-`headcount` is not a reliable XBRL concept; it arrives through the `HeadcountExtractor`
-port (#70), never as a branch in generic capture code.
-
-A financial-fact cell reaches a second independent origin here, exactly as a price cell
-does in `market_price_adapter` (init.md rules 15 and 22): the adapter also queries each
-configured `FinancialFactCorroboratingOrigin` and attaches its assertion to the success.
-The second origin is best-effort — if it does not answer, the cell is honestly
-single-origin and the fusion engine reports `insufficient_independent_origins`.
-"""
+"""SEC company-facts financial-fact source adapter (ADR A1 / #171)."""
 
 from __future__ import annotations
 
@@ -72,30 +44,43 @@ if TYPE_CHECKING:
     from data_engine.datahub.production_topt.source_registrations import RouteCell, RouteContext
     from data_engine.datahub.standards.listing_unit_ratio import ListingUnitRatio
 
-
-# Concept lists are NOT here any more: they are a published, content-addressed ruleset
-# (`concept_mapping.DEFAULT_RULESET`, superseded at runtime by the governed pointer), so
-# a corrected mapping is an insert rather than a deploy. Keeping a second copy in code
-# would recreate exactly the drift the ruleset removes.
-# An annual period: shorter spans are quarterly facts that must not be compared with
-# annual ones. 350 days absorbs 52/53-week fiscal calendars.
 _ANNUAL_MINIMUM_DAYS = 350
-
-# The key a merged company-facts entry carries naming the document it came from (see
-# `merge_company_facts`). Not an SEC key; SEC's own keys are all lower-case words.
 _DOCUMENT_KEY = "_document"
-
-# Which inputs describe a balance-sheet instant (compared with the newest filed statement
-# period) and which a fiscal year (compared with the newest filed annual period). A share
-# count is an instant even when its last resort is a period average: the question is
-# whether a newer count was filed, and one was whenever a newer statement was.
 _INSTANT_INPUTS = frozenset({"total_assets", "shares_outstanding", "financial_assets"})
 _ANNUAL_INPUTS = frozenset({"gross_profit", "revenue", "net_income", "financial_returns"})
+SHARES_POINT_IN_TIME = "point_in_time"
+SHARES_WEIGHTED_AVERAGE_BASIC = "weighted_average_basic"
+
+CORROBORATED_FINANCIAL_FIELDS: tuple[str, ...] = (
+    "revenue",
+    "net_income",
+    "gross_profit",
+    "total_assets",
+    "eps_basic",
+    "eps_diluted",
+)
+_EVIDENCE_TOKENS = ("accession", "form", "filed", "raw")
+_DOMESTIC_10K_FORMS = frozenset({"10-K", "10-K/A", "10-KT", "10-KT/A"})
+_FOREIGN_ANNUAL_FORMS = frozenset({"20-F", "20-F/A", "40-F", "40-F/A"})
+
+_INVESTMENT_TIERS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("short_term_investments+long_term_investments", ("short_term_investments", "long_term_investments")),
+    ("marketable_securities", ("marketable_securities_current", "marketable_securities_noncurrent")),
+    ("securities", ("afs_debt_securities", "htm_securities", "equity_securities_fvni")),
+    ("investments_total", ("investments_total",)),
+)
+_BANK_PORTFOLIO_TIERS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (
+        "securities+fed_funds_sold",
+        ("afs_debt_securities", "htm_securities", "equity_securities_fvni", "fed_funds_sold"),
+    ),
+    ("investments_total", ("investments_total",)),
+)
 
 
 @dataclass(frozen=True)
 class FinancialFactsBundle:
-    """The PIT annual figures one company-facts payload yields at a cutoff."""
+    """Point-in-time annual figures yielded by one company-facts payload at a cutoff."""
 
     gross_profit: Decimal | None
     total_assets: Decimal | None
@@ -103,70 +88,23 @@ class FinancialFactsBundle:
     revenue: Decimal | None
     pre_provision_profit: Decimal | None
     raw_bytes: bytes
-    # None when the payload yielded no eligible fact at all — the issuer's company-facts
-    # document exists but asserts nothing this cutoff can use (a real state: XOM's
-    # post-reorganization CIK publishes no us-gaap taxonomy yet).
     knowable_at: datetime | None
-    # The fiscal periods the two headline figures describe. Carried into the normalized
-    # payload because without them the warehouse cannot answer how old its own numbers
-    # are: the seven-year-stale AAPL revenue was only detectable by re-deriving from the
-    # vendor. With them, staleness is a plain SQL invariant (#429).
     operating_period_end: date | None = None
     revenue_period_end: date | None = None
-    # The share count's own measurement date, carried for the same reason and additionally
-    # enforced: `shares_outstanding` is None whenever this is staler than
-    # `eligibility.maximum_input_age_days`, so a market capitalisation can never be built from a
-    # figure the warehouse cannot date.
     shares_period_end: date | None = None
     period_start: date | None = None
-    # The latest annual net income, which module 1's multiple divides the market cap by.
     net_income: Decimal | None = None
-    # Every annual net-income period knowable at the cutoff, period end -> value.
-    #
-    # This adapter used to reduce that series to a single compound rate and ship the
-    # scalar, because `staging.strategy_backtest_inputs` was keyed (issuer, cutoff,
-    # input_key) with no period axis and a series simply could not cross. The reduction is
-    # factor arithmetic, so it was computation in L0 -- exactly what init.md rule 2 and the
-    # AGENTS.md red line forbid, and it was only there because the transport was too narrow
-    # to express the alternative. The period axis (0043) removes that excuse: the series
-    # crosses whole and `factors.base.peg` reduces it.
-    #
-    # `annual_values_by_period_end` has already applied the point-in-time filter and the
-    # `_ANNUAL_MINIMUM_DAYS` duration floor, so what travels is annual periods that were
-    # knowable at the cutoff -- the factor never re-selects a vintage (init.md rule 3).
     net_income_by_period: Mapping[date, Decimal] = field(default_factory=dict)
-    # Per input, the filing that asserted it — period end, filed date, accession, form,
-    # fiscal year/period (#530 item 4). Keys are the payload's input names; a missing key
-    # means the input resolved to nothing. `net_income_periods` maps each annual period
-    # end (ISO) to its vintage so PEG's series is evidenced per period, not per bundle.
     vintages: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
-    # #528 decomposition inputs. `financial_assets` = cash and equivalents + the first
-    # investment tier with ANY value at the cash period end, summing only the fields that
-    # tier reports (see `financial_components`); `financial_returns` =
-    # investment income (+ dividends, + gains at the same period) or, flagged, the
-    # non-operating line. Each carries the basis that resolved it so the row can say
-    # which tags composed the number; None with a None basis means the source asserts
-    # nothing usable.
     financial_assets: Decimal | None = None
     financial_assets_basis: str | None = None
     financial_returns: Decimal | None = None
     financial_returns_basis: str | None = None
     financial_returns_is_proxy: bool = False
-    # Which share-count quantity resolved: the point-in-time count, or the owner-approved
-    # weighted-average last resort (#496/#514). The two are different quantities, so a
-    # market capitalisation built on the second must say so (None when neither resolved).
     shares_basis: str | None = None
-    # The newest balance-sheet date this document proves was filed in a periodic statement,
-    # and the newest such date filed in an annual report. An input dated before the
-    # matching one is a figure the issuer has already superseded (carried for downstream auditing).
     latest_statement_period_end: date | None = None
     latest_annual_period_end: date | None = None
-    # The parsed company-facts document, kept so two documents of one issuer can be merged
-    # and parsed again as one filing history. Never part of the payload or the bundle's
-    # identity.
     document: Mapping[str, Any] | None = field(default=None, repr=False, compare=False)
-    # #1176: the banking tangible-common-equity inputs. Set for the FINANCIAL branch only, all at
-    # `tangible_equity_period_end`, or absent together. Nothing is substituted for a missing input.
     stockholders_equity: Decimal | None = None
     preferred_stock_value: Decimal | None = None
     goodwill: Decimal | None = None
@@ -177,14 +115,9 @@ class FinancialFactsBundle:
     currency: str | None = None
 
 
-SHARES_POINT_IN_TIME = "point_in_time"
-SHARES_WEIGHTED_AVERAGE_BASIC = "weighted_average_basic"
-
-
 @dataclass(frozen=True)
 class FinancialComponents:
-    """The decomposition's financial side, resolved from balance-sheet instants and
-    income flows by declared preference — never by which tag happens to be newest."""
+    """Financial assets and returns resolved by declared preference."""
 
     assets: _Datum | None
     assets_basis: str | None
@@ -195,7 +128,7 @@ class FinancialComponents:
 
 @dataclass(frozen=True)
 class SecTarget:
-    """The resolved fetch coordinates for one financial-fact work item."""
+    """Resolved fetch coordinates for one financial-fact work item."""
 
     cik: int
     cutoff: date
@@ -203,58 +136,19 @@ class SecTarget:
     instrument_id: str
     listing_id: str
     operating_branch: OperatingBranch
-    # #496: the issuer's most recent successfully-parsed CIK from OUR OWN
-    # capture lineage (raw.capture_source_vintages), resolved at planning.
-    # Used ONLY when the index-mapped CIK's payload yields no eligible fact at
-    # all (a real state: XOM's post-reorganization holdco CIK publishes no
-    # us-gaap taxonomy). Registry/lineage-driven — never a ticker allowlist.
     predecessor_cik: int | None = None
-    # True when `predecessor_cik` comes from the owner-signed registry
-    # (`staging.issuer_cik_predecessors`) rather than the capture lineage. Only a signed row
-    # proves the two CIKs are one issuer, so only a signed row merges the two documents per
-    # field; a lineage-resolved CIK keeps the whole-document fallback.
     predecessor_signed: bool = False
-    # The issuer's periodic-statement filings from its EDGAR index (see
-    # `issuer_registry.StatementFiling`), for telling a figure the issuer has superseded
-    # from a current one.
     statement_filings: tuple[StatementFiling, ...] = ()
-    # True when the issuer registry gave no classification after its attempts (#1323). The
-    # operating branch above is then a placeholder. The payload withholds both numerators and
-    # carries `UNAVAILABLE_PAYLOAD_KEY`, so the tick excludes the issuer with the reason
-    # `registry_unavailable` and publishes the others.
     registry_unavailable: bool = False
-    # The listing's canonical ticker, for a corroborating origin that is keyed by symbol
-    # rather than by CIK (moomoo). Empty means no such origin can be asked; the primary
-    # capture never needs it.
     ticker: str = ""
 
 
 FinancialFactsFetcher = Callable[[int, date, OperatingBranch], FinancialFactsBundle | None]
 
-# The financial fields a second origin may corroborate, in payload-key order. A key here
-# is what `quality_report.FINANCIAL_FACT_FUSION_FIELDS` reconciles by name; an origin
-# that does not carry one leaves it None, and the cell is honestly single-origin for it.
-CORROBORATED_FINANCIAL_FIELDS: tuple[str, ...] = (
-    "revenue",
-    "net_income",
-    "gross_profit",
-    "total_assets",
-    "eps_basic",
-    "eps_diluted",
-)
-
 
 @dataclass(frozen=True)
 class FinancialFactAssertion:
-    """What a second origin asserts about one issuer's annual figures at a cutoff.
-
-    `by_period_end` carries EVERY period the origin publishes with a period end at/before
-    the cutoff — annual flows, balance-sheet instants at any reported date — so the
-    fusion engine can align on the PRIMARY's period for each field rather than on
-    whichever period the vendor happens to show first; the top-level fields are the
-    newest fiscal year (`period_end`). Values are Decimal; a field the origin does not
-    publish is None.
-    """
+    """Annual figures asserted by a corroborating second origin at a cutoff."""
 
     raw_bytes: bytes
     period_end: date
@@ -265,13 +159,12 @@ class FinancialFactAssertion:
     accounting_standards: str | None = None
 
 
-# (ticker, cutoff) -> the origin's assertion, or None when it has nothing for the issuer.
 FinancialFactCorroborator = Callable[[str, date], FinancialFactAssertion | None]
 
 
 @dataclass(frozen=True)
 class FinancialFactCorroboratingOrigin:
-    """An independent second financial-fact origin, with the parser identity it asserts under."""
+    """Independent second financial-fact origin with its parser identity."""
 
     origin: str
     parser_version: str
@@ -283,36 +176,18 @@ class FinancialFactCorroboratingOrigin:
 
 @dataclass(frozen=True)
 class HeadcountFact:
-    """A point-in-time employee headcount extracted from filing text (#70).
-
-    Employee headcount is not a reliable XBRL concept, so it comes from the #70 extraction
-    plane (append-only, evidence-spanned) rather than company-facts. Here it enriches the
-    financial-fact record; SEC company-facts remains the primary raw source.
-    """
+    """Point-in-time employee headcount extracted from filing text (#70)."""
 
     value: Decimal
     knowable_at: datetime
-    # The fact's own evidence (#747 / #530): which plane asserted it, the pointer string
-    # the loop recorded (`accession=… form=… filed=… raw=raw.fetches:N extractor=… span=…`
-    # for an extraction; a reviewer note for a seed), its period and confidence. Optional so
-    # fixture extractors stay terse; a row without them is `degraded`, never `verified`.
     source: str | None = None
     evidence_ref: str | None = None
     period_end: date | None = None
     confidence: Decimal | None = None
 
 
-_EVIDENCE_TOKENS = ("accession", "form", "filed", "raw")
-
-
 def headcount_vintage(fact: HeadcountFact) -> dict[str, Any]:
-    """The headcount's evidence as it travels on the row, JSON-ready and key-sorted.
-
-    `raw` is the dereferenceable pointer (`raw.fetches:N`) the loop wrote; `accession`,
-    `form` and `filed` are parsed from the same `key=value` tokens. A seed's free-text
-    evidence_ref yields none of them, which is exactly what makes a seed-backed row
-    `degraded` in `source_evidence_status` (#747).
-    """
+    """Serialize headcount evidence tokens (`accession`, `form`, `filed`, `raw`) as JSON-ready metadata."""
     parsed: dict[str, str | None] = dict.fromkeys(_EVIDENCE_TOKENS)
     for token in (fact.evidence_ref or "").split():
         key, separator, value = token.partition("=")
@@ -331,50 +206,37 @@ def headcount_vintage(fact: HeadcountFact) -> dict[str, Any]:
     }
 
 
-# (cik, cutoff) -> the extracted headcount fact, or None when no filing yields one.
 HeadcountExtractor = Callable[[int, date], HeadcountFact | None]
-
-# (cik, cutoff, ticker) -> what the cover of the issuer's latest annual filing says about the ratio
-# of the listed unit to the ordinary share (#1519, step 1a). The reader never raises: a read that
-# fails is an `unparsed` outcome with a reason, so the capture of the issuer's numbers goes on.
 ListingRatioReader = Callable[[int, date, str], "ListingUnitRatio"]
 
 
 class SourceUnavailableError(Exception):
-    """A transient SEC failure the executor should retry."""
+    """Transient SEC failure that the executor retries."""
 
 
 @dataclass(frozen=True)
 class _Datum:
-    """One eligible XBRL fact: its value, the filing that made it knowable, and the
-    fiscal period it describes.
-
-    `period_end` is what distinguishes a current figure from an abandoned tag's last
-    gasp, so it travels with the value rather than only being the key of the dict it
-    came out of — a datum that has left that dict must still be comparable.
-    """
+    """One eligible XBRL fact with its filing metadata and fiscal period."""
 
     value: Decimal
     filed: date
     period_end: date
     period_start: date | None = None
-    # The filing that asserted this figure (company-facts `accn`/`form`/`fy`/`fp`): the
-    # vintage #530 item 4 wants on the row, so `source_evidence_status` (#747) can name
-    # the document instead of inferring it from a date. None only for synthetic fixtures.
     accession: str | None = None
     form: str | None = None
     fy: int | None = None
     fp: str | None = None
-    # Whether `form` is a periodic financial statement (`issuer_registry.STATEMENT_FORMS`);
-    # None when the entry named no form (synthetic fixtures), which is never demoted.
     statement_form: bool | None = None
-    # The company-facts document the figure was read from, when several were merged.
     document: str | None = None
 
     @property
     def rank(self) -> int:
-        """0 for a statement figure, 1 for one from any other form: lower wins."""
         return 1 if self.statement_form is False else 0
+
+
+def _text_or_none(value: object) -> str | None:
+    text = str(value).strip() if value is not None else ""
+    return text or None
 
 
 def _statement_form(form: str | None) -> bool | None:
@@ -394,7 +256,6 @@ def _combined_document(datums: Sequence[_Datum]) -> str | None:
 
 
 def _segment_key(entry: Mapping[str, Any], unit: str) -> str | None:
-    """Return the dimensional segment key on a share entry when present."""
     if unit != "shares":
         return None
     segment = entry.get("segment")
@@ -411,28 +272,42 @@ def _record_better_datum(values: dict[date, _Datum], end: date, datum: _Datum) -
         values[end] = datum
 
 
+def _parse_entry_datum(entry: Mapping[str, Any], *, cutoff: date, allow_duration: bool) -> _Datum | None:
+    filed_raw, end_raw, start_raw, val = entry.get("filed"), entry.get("end"), entry.get("start"), entry.get("val")
+    if filed_raw is None or end_raw is None or val is None:
+        return None
+    if not allow_duration and start_raw is not None:
+        return None
+    form = _text_or_none(entry.get("form"))
+    try:
+        filed, end = date.fromisoformat(filed_raw), date.fromisoformat(end_raw)
+        start = date.fromisoformat(start_raw) if start_raw is not None else None
+        if start is not None and (form in INTERIM_STATEMENT_FORMS or (end - start).days < _ANNUAL_MINIMUM_DAYS):
+            return None
+        value = Decimal(str(val))
+    except (InvalidOperation, ValueError):
+        return None
+    if filed > cutoff:
+        return None
+    fy_raw = entry.get("fy")
+    return _Datum(
+        value=value,
+        filed=filed,
+        period_end=end,
+        period_start=start,
+        accession=_text_or_none(entry.get("accn")),
+        form=form,
+        fy=int(fy_raw) if isinstance(fy_raw, int) or (isinstance(fy_raw, str) and fy_raw.isdigit()) else None,
+        fp=_text_or_none(entry.get("fp")),
+        statement_form=_statement_form(form),
+        document=_text_or_none(entry.get(_DOCUMENT_KEY)),
+    )
+
+
 def annual_values_by_period_end(
     facts: dict[str, Any], taxonomy: str, concept: str, unit: str, cutoff: date
 ) -> dict[date, _Datum]:
-    """Annual values of one XBRL concept knowable at the cutoff, keyed by period end.
-
-    Only facts *filed* on or before the cutoff are eligible — a later filing is not
-    knowable and would be look-ahead. Instant facts (no `start`) are kept as reported;
-    shorter spans are quarterly and must never be compared with annual figures.
-
-    One period end appears many times in company-facts — the original filing plus every
-    later document that restated or simply re-reported it. A periodic statement (10-K, 10-Q,
-    20-F, 40-F and their amendments) outranks every other form for the same period, and a
-    figure from another form is used only when no statement asserts that period; its datum
-    says so (`statement_form=False`). Within a rank the latest *filing* wins, never the
-    entry that happens to sit last in the JSON array: selecting by array position makes
-    restatement handling depend on the vendor's serialization order, which is the
-    "never select the most recently inserted row" rule read backwards.
-
-    A span reported in a quarterly statement is never a fiscal year, however long: AMZN's
-    10-Q for Q2 2026 reports trailing-twelve-month net income (2025-07-01..2026-06-30,
-    $135,281M), which the duration floor alone admitted as the newest annual figure.
-    """
+    """Annual or instant values of one XBRL concept knowable at `cutoff`, keyed by period end."""
     entries = facts.get("facts", {}).get(taxonomy, {}).get(concept, {}).get("units", {}).get(unit)
     if not entries:
         return {}
@@ -440,67 +315,24 @@ def annual_values_by_period_end(
     for entry in entries:
         if _segment_key(entry, unit) is not None:
             continue
-        filed_raw, end_raw, start_raw, val = (
-            entry.get("filed"),
-            entry.get("end"),
-            entry.get("start"),
-            entry.get("val"),
-        )
-        if filed_raw is None or end_raw is None or val is None:
-            continue
-        form = _text_or_none(entry.get("form"))
-        try:
-            filed, end = date.fromisoformat(filed_raw), date.fromisoformat(end_raw)
-            start = date.fromisoformat(start_raw) if start_raw is not None else None
-            if start is not None and (form in INTERIM_STATEMENT_FORMS or (end - start).days < _ANNUAL_MINIMUM_DAYS):
-                continue
-            value = Decimal(str(val))
-        except (InvalidOperation, ValueError):
-            continue
-        if filed > cutoff:
-            continue
-        fy_raw = entry.get("fy")
-        datum = _Datum(
-            value=value,
-            filed=filed,
-            period_end=end,
-            period_start=start,
-            accession=_text_or_none(entry.get("accn")),
-            form=form,
-            fy=int(fy_raw) if isinstance(fy_raw, int) or (isinstance(fy_raw, str) and fy_raw.isdigit()) else None,
-            fp=_text_or_none(entry.get("fp")),
-            statement_form=_statement_form(form),
-            document=_text_or_none(entry.get(_DOCUMENT_KEY)),
-        )
-        _record_better_datum(values, end, datum)
+        datum = _parse_entry_datum(entry, cutoff=cutoff, allow_duration=True)
+        if datum is not None:
+            _record_better_datum(values, datum.period_end, datum)
     return values
-
-
-def _text_or_none(value: object) -> str | None:
-    text = str(value).strip() if value is not None else ""
-    return text or None
 
 
 def _latest(values: dict[date, _Datum]) -> _Datum | None:
     return values[max(values)] if values else None
 
 
+def _best_candidate(*candidates: _Datum | None) -> _Datum | None:
+    present = [datum for datum in candidates if datum is not None]
+    return max(present, key=lambda datum: (datum.period_end, -datum.rank)) if present else None
+
+
 def _merge_variants(
     facts: dict[str, Any], concepts: Sequence[tuple[str, str]], unit: str, cutoff: date
 ) -> dict[date, _Datum]:
-    """Every annual period any declared variant reports, as one series.
-
-    An issuer's tagging is not stable across time: nearly every large filer moved off
-    `Revenues` at the ASC 606 transition, and company-facts keeps the abandoned tag's
-    history forever. Merging the variants into one period-keyed series before selecting
-    is what lets the series follow the issuer across that switch. Earlier variants win a
-    period they share, so declaration order still expresses preference — it just can no
-    longer decide *recency*.
-
-    A statement figure outranks declaration order: MA tags `NetIncomeLoss` only in its
-    proxy statements and reports the 10-K figure under `ProfitLoss`, so the preferred tag
-    alone would serve the proxy statement's number for every year.
-    """
     merged: dict[date, _Datum] = {}
     for taxonomy, concept in concepts:
         for end, datum in annual_values_by_period_end(facts, taxonomy, concept, unit, cutoff).items():
@@ -513,15 +345,6 @@ def _merge_variants(
 def _preferred_variant(
     facts: dict[str, Any], concepts: Sequence[tuple[str, str]], unit: str, cutoff: date
 ) -> dict[date, _Datum]:
-    """The first concept the issuer reports at all — for lists whose entries differ in meaning.
-
-    The counterpart to `_merge_variants`. Where variants are stand-ins rather than synonyms,
-    recency must not promote one: a more recent number for a different quantity is still a
-    different quantity. Falling back only when the preferred concept is entirely absent keeps
-    the substitution rare, deliberate, and driven by availability rather than by dates.
-    A concept the issuer asserts only outside its periodic statements is reached only when
-    no concept is asserted in one.
-    """
     series = [annual_values_by_period_end(facts, taxonomy, concept, unit, cutoff) for taxonomy, concept in concepts]
     for values in series:
         if any(datum.rank == 0 for datum in values.values()):
@@ -530,21 +353,10 @@ def _preferred_variant(
 
 
 def _difference_at_shared_period(base: dict[date, _Datum], subtracted: dict[date, _Datum]) -> _Datum | None:
-    """`base - subtracted` at their latest *shared* annual period end.
-
-    Two concepts reported for different periods are not comparable, so only a shared
-    period end resolves; the difference is knowable once both filings are.
-
-    Both sides arrive already resolved, because how each side resolves is a property of
-    what its concepts MEAN — synonyms merge, stand-ins do not — and that decision belongs
-    to the caller that knows the semantics, not to the arithmetic here.
-    """
     shared = set(base) & set(subtracted)
     if not shared:
         return None
     end = max(shared)
-    # The difference is knowable once BOTH filings are; it is attributed to the later one,
-    # which is the document a reader has to open to see the newer side.
     later = base[end] if base[end].filed >= subtracted[end].filed else subtracted[end]
     return _Datum(
         value=base[end].value - subtracted[end].value,
@@ -561,16 +373,10 @@ def _difference_at_shared_period(base: dict[date, _Datum], subtracted: dict[date
 
 
 def resolve_field(
-    facts: dict[str, Any], ruleset: ConceptMappingRuleset, field: str, cutoff: date
+    facts: dict[str, Any], ruleset: ConceptMappingRuleset, field_name: str, cutoff: date
 ) -> dict[date, _Datum]:
-    """The annual series for one declared field, resolved by its DECLARED kind.
-
-    Synonyms merge into one period-keyed series so the latest period wins across a tag
-    switch; stand-ins stop at the first concept the issuer reports, so a different quantity
-    can never be promoted by carrying a later date. Which one applies is data, not a
-    decision this function makes.
-    """
-    mapping = ruleset.mapping_for(field)
+    """Resolve the annual series for one declared field by its `ResolutionKind`."""
+    mapping = ruleset.mapping_for(field_name)
     if mapping is None:
         return {}
     concepts = tuple((item.taxonomy, item.concept) for item in mapping.concepts)
@@ -579,68 +385,50 @@ def resolve_field(
     return _merge_variants(facts, concepts, mapping.unit, cutoff)
 
 
+def _field_series_memo(
+    facts: dict[str, Any], ruleset: ConceptMappingRuleset, cutoff: date
+) -> Callable[[str], dict[date, _Datum]]:
+    memo: dict[str, dict[date, _Datum]] = {}
+
+    def series(field_name: str) -> dict[date, _Datum]:
+        if field_name not in memo:
+            memo[field_name] = resolve_field(facts, ruleset, field_name, cutoff)
+        return memo[field_name]
+
+    return series
+
+
 def gross_profit(
     facts: dict[str, Any], cutoff: date, ruleset: ConceptMappingRuleset = DEFAULT_RULESET
 ) -> _Datum | None:
-    """Reported `GrossProfit` or revenue minus cost of revenue — whichever covers the later period.
-
-    "Reported wins unconditionally" is not safe: Amazon last tagged `GrossProfit` for
-    FY2009 and mart carried that figure against FY2025 headcount, which is what made its
-    reported GPPE negative (#496). A directly reported figure is still preferred when the
-    two cover the *same* period — it is the issuer's own assertion rather than our
-    arithmetic — but it cannot outrank a more recent one.
-    """
+    """Reported `GrossProfit` or `revenue - cost_of_revenue`, whichever covers the later period."""
     direct = _latest(resolve_field(facts, ruleset, "gross_profit", cutoff))
     derived = _difference_at_shared_period(
         resolve_field(facts, ruleset, "revenue", cutoff),
         resolve_field(facts, ruleset, "cost_of_revenue", cutoff),
     )
-    candidates = [datum for datum in (direct, derived) if datum is not None]
-    if candidates:
-        # The later period wins; for the same period a statement figure outranks another
-        # form, and the reported figure outranks the derived one.
-        return max(candidates, key=lambda datum: (datum.period_end, -datum.rank))
-    return None
+    return _best_candidate(direct, derived)
 
 
-def _declared_concepts(ruleset: ConceptMappingRuleset, field: str) -> tuple[ConceptRef, ...]:
-    mapping = ruleset.mapping_for(field)
+def _declared_concepts(ruleset: ConceptMappingRuleset, field_name: str) -> tuple[ConceptRef, ...]:
+    mapping = ruleset.mapping_for(field_name)
     return () if mapping is None else mapping.concepts
 
 
 def insurance_pre_claims_profit(
     facts: dict[str, Any], cutoff: date, ruleset: ConceptMappingRuleset = DEFAULT_RULESET
 ) -> _Datum | None:
-    """Insurance operating numerator: revenue minus policyholder benefits/claims (#496).
-
-    Mirrors `pre_provision_profit` in shape, with one extra guard: the shared
-    period must be the revenue series' LATEST period. Berkshire's only
-    API-visible claims concept stops in 2016 (segment-dimension facts are
-    dropped by company-facts); a 2016 difference silently paired with 2025
-    headcount is the Amazon-2009 GrossProfit lesson all over again, so a
-    stale claims series resolves to None and the factor surfaces
-    `missing_gross_profit` honestly — never a silent revenue proxy: for an
-    insurer, claims ARE the cost of revenue.
-    """
+    """Insurance operating numerator: revenue minus policyholder benefits/claims at the latest revenue period."""
     revenue = resolve_field(facts, ruleset, "revenue", cutoff)
     claims = resolve_field(facts, ruleset, "insurance_claims", cutoff)
     datum = _difference_at_shared_period(revenue, claims)
-    if datum is None or datum.period_end != max(revenue):
-        return None
-    return datum
+    return None if datum is None or datum.period_end != max(revenue) else datum
 
 
 def pre_provision_profit(
     facts: dict[str, Any], cutoff: date, ruleset: ConceptMappingRuleset = DEFAULT_RULESET
 ) -> _Datum | None:
-    """Bank pre-provision net revenue: net revenue minus noninterest expense (#59).
-
-    The revenue side is a FALLBACK list, so it resolves by preference rather than by
-    recency: `Revenues` for a bank is gross of interest expense, and subtracting
-    noninterest expense from it yields something that is not pre-provision net revenue at
-    all. It is reached only when the issuer publishes no net-of-interest total — never
-    because it carries a later period end.
-    """
+    """Bank pre-provision net revenue: net revenue minus noninterest expense."""
     return _difference_at_shared_period(
         resolve_field(facts, ruleset, "bank_revenue", cutoff),
         resolve_field(facts, ruleset, "noninterest_expense", cutoff),
@@ -650,41 +438,16 @@ def pre_provision_profit(
 def bank_net_revenue(
     facts: dict[str, Any], cutoff: date, ruleset: ConceptMappingRuleset = DEFAULT_RULESET
 ) -> _Datum | None:
-    """Bank net revenue (`RevenuesNetOfInterestExpense` or `InterestIncomeExpenseNet + NoninterestIncome`).
-
-    Directly reported `RevenuesNetOfInterestExpense` is preferred at the same period end; a later
-    period where both `InterestIncomeExpenseNet` and `NoninterestIncome` are reported outranks an
-    older direct figure. Falls back to `bank_revenue` when neither is reported.
-    """
+    """Bank net revenue (`RevenuesNetOfInterestExpense` or `InterestIncomeExpenseNet + NoninterestIncome`)."""
     direct = _latest(resolve_field(facts, ruleset, "bank_net_revenue", cutoff))
     nii = resolve_field(facts, ruleset, "interest_income_expense_net", cutoff)
     nonii = resolve_field(facts, ruleset, "noninterest_income", cutoff)
     shared = sorted(set(nii) & set(nonii))
     derived = _sum_at(shared[-1], [nii[shared[-1]], nonii[shared[-1]]]) if shared else None
-    candidates = [datum for datum in (direct, derived) if datum is not None]
-    if candidates:
-        return max(candidates, key=lambda datum: (datum.period_end, -datum.rank))
-    return _latest(resolve_field(facts, ruleset, "bank_revenue", cutoff))
-
-
-_INVESTMENT_TIERS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("short_term_investments+long_term_investments", ("short_term_investments", "long_term_investments")),
-    ("marketable_securities", ("marketable_securities_current", "marketable_securities_noncurrent")),
-    ("securities", ("afs_debt_securities", "htm_securities", "equity_securities_fvni")),
-    ("investments_total", ("investments_total",)),
-)
-_BANK_PORTFOLIO_TIERS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    (
-        "securities+fed_funds_sold",
-        ("afs_debt_securities", "htm_securities", "equity_securities_fvni", "fed_funds_sold"),
-    ),
-    ("investments_total", ("investments_total",)),
-)
+    return _best_candidate(direct, derived) or _latest(resolve_field(facts, ruleset, "bank_revenue", cutoff))
 
 
 def _sum_at(end: date, datums: Sequence[_Datum]) -> _Datum:
-    """Several instants or flows for the same period end, as one figure attributed to the
-    later filing among them."""
     later = max(datums, key=lambda datum: datum.filed)
     return _Datum(
         value=sum((datum.value for datum in datums), Decimal(0)),
@@ -715,82 +478,58 @@ def _tier_at(
 def financial_components(
     facts: dict[str, Any], cutoff: date, branch: OperatingBranch, ruleset: ConceptMappingRuleset = DEFAULT_RULESET
 ) -> FinancialComponents:
-    """#528: `financial_assets` and `financial_returns`, composed by declared preference.
-
-    Assets anchor on the latest cash period end (or the combined cash-and-short-term tag when
-    that is all the issuer reports) and add the FIRST investment tier with any value at that
-    end — `ShortTermInvestments + LongTermInvestments`, else the marketable-securities pair,
-    else AFS + HTM + equity securities, else `Investments` — so a filer that tags both the
-    pair and the components is never counted twice. A bank (FINANCIAL branch) holds its
-    securities portfolio as the financial side and never its cash (deposits in mirror).
-    Returns take investment income by preference, add dividends and gains reported for the
-    same period, and fall back to the non-operating line marked as a proxy. A bank's
-    returns are not resolved here: the bank-specific mapping is pending review (#528), so
-    the component is honestly absent rather than a wrong number.
-    """
-    memo: dict[str, dict[date, _Datum]] = {}
-
-    def series(field_name: str) -> dict[date, _Datum]:
-        # Each field's series is resolved once per call: the tiers below ask for the same
-        # fields more than once and `resolve_field` re-scans company-facts every time.
-        if field_name not in memo:
-            memo[field_name] = resolve_field(facts, ruleset, field_name, cutoff)
-        return memo[field_name]
-
+    """Resolve `financial_assets` and `financial_returns` by declared tier preference (#528)."""
+    series = _field_series_memo(facts, ruleset, cutoff)
     assets: _Datum | None = None
     assets_basis: str | None = None
     if branch is OperatingBranch.FINANCIAL:
-        for basis, fields in _BANK_PORTFOLIO_TIERS:
+        for _basis, fields in _BANK_PORTFOLIO_TIERS:
             ends = {end for field_name in fields for end in series(field_name)}
-            if not ends:
-                continue
-            end = max(ends)
-            datums, named = _tier_at(series, end, fields)
-            assets, assets_basis = _sum_at(end, datums), "+".join(named)
-            break
-    else:
-        cash = _latest(series("cash_and_equivalents"))
-        combined = _latest(series("cash_and_short_term_investments"))
-        if cash is not None:
-            end = cash.period_end
-            for basis, fields in _INVESTMENT_TIERS:
+            if ends:
+                end = max(ends)
                 datums, named = _tier_at(series, end, fields)
-                if datums:
-                    assets, assets_basis = _sum_at(end, [cash, *datums]), "cash_and_equivalents+" + "+".join(named)
-                    break
-            else:
-                assets, assets_basis = cash, "cash_and_equivalents"
-        elif combined is not None:
-            end = combined.period_end
-            datums, named = _tier_at(series, end, ("long_term_investments",))
-            assets = _sum_at(end, [combined, *datums]) if datums else combined
-            assets_basis = "cash_and_short_term_investments" + ("+" + "+".join(named) if named else "")
+                assets, assets_basis = _sum_at(end, datums), "+".join(named)
+                break
+        return FinancialComponents(assets, assets_basis, None, None, False)
+
+    cash = _latest(series("cash_and_equivalents"))
+    combined = _latest(series("cash_and_short_term_investments"))
+    if cash is not None:
+        end = cash.period_end
+        for _basis, fields in _INVESTMENT_TIERS:
+            datums, named = _tier_at(series, end, fields)
+            if datums:
+                assets, assets_basis = _sum_at(end, [cash, *datums]), "cash_and_equivalents+" + "+".join(named)
+                break
+        else:
+            assets, assets_basis = cash, "cash_and_equivalents"
+    elif combined is not None:
+        end = combined.period_end
+        datums, named = _tier_at(series, end, ("long_term_investments",))
+        assets = _sum_at(end, [combined, *datums]) if datums else combined
+        assets_basis = "cash_and_short_term_investments" + ("+" + "+".join(named) if named else "")
+
     returns: _Datum | None = None
     returns_basis: str | None = None
     proxy = False
-    if branch is not OperatingBranch.FINANCIAL:
-        income = _latest(series("investment_income"))
-        if income is not None:
-            parts, named = [income], ["investment_income"]
-            for field_name in ("investment_income_dividend", "investment_gains"):
-                extra = series(field_name).get(income.period_end)
-                if extra is not None:
-                    parts.append(extra)
-                    named.append(field_name)
-            returns, returns_basis = _sum_at(income.period_end, parts), "+".join(named)
-        else:
-            nonoperating = _latest(series("nonoperating_income"))
-            if nonoperating is not None:
-                returns, returns_basis, proxy = nonoperating, "nonoperating_income", True
+    income = _latest(series("investment_income"))
+    if income is not None:
+        parts, named = [income], ["investment_income"]
+        for field_name in ("investment_income_dividend", "investment_gains"):
+            extra = series(field_name).get(income.period_end)
+            if extra is not None:
+                parts.append(extra)
+                named.append(field_name)
+        returns, returns_basis = _sum_at(income.period_end, parts), "+".join(named)
+    else:
+        nonoperating = _latest(series("nonoperating_income"))
+        if nonoperating is not None:
+            returns, returns_basis, proxy = nonoperating, "nonoperating_income", True
     return FinancialComponents(assets, assets_basis, returns, returns_basis, proxy)
 
 
 def _segmented_shares_datum(facts: dict[str, Any], ruleset: ConceptMappingRuleset, cutoff: date) -> _Datum | None:
-    """Newest fresh per-class segmented share entry on ``shares_outstanding`` (#1519).
-
-    Used only when no unsegmented share count resolves, so ``build_bundle`` can record
-    ``shares_basis = MISSING_CLASS_RATIO`` and ``shares_period_end`` instead of summing 1:1.
-    """
+    """Newest fresh per-class segmented share entry on `shares_outstanding` (#1519)."""
     mapping = ruleset.mapping_for("shares_outstanding")
     if mapping is None:
         return None
@@ -800,30 +539,9 @@ def _segmented_shares_datum(facts: dict[str, Any], ruleset: ConceptMappingRulese
         for entry in entries or ():
             if _segment_key(entry, mapping.unit) is None:
                 continue
-            filed_raw, end_raw, val = entry.get("filed"), entry.get("end"), entry.get("val")
-            if filed_raw is None or end_raw is None or val is None or entry.get("start") is not None:
-                continue
-            try:
-                filed, end = date.fromisoformat(filed_raw), date.fromisoformat(end_raw)
-                value = Decimal(str(val))
-            except (InvalidOperation, ValueError):
-                continue
-            if filed > cutoff:
-                continue
-            form = _text_or_none(entry.get("form"))
-            fy_raw = entry.get("fy")
-            datum = _Datum(
-                value=value,
-                filed=filed,
-                period_end=end,
-                accession=_text_or_none(entry.get("accn")),
-                form=form,
-                fy=int(fy_raw) if isinstance(fy_raw, int) or (isinstance(fy_raw, str) and fy_raw.isdigit()) else None,
-                fp=_text_or_none(entry.get("fp")),
-                statement_form=_statement_form(form),
-                document=_text_or_none(entry.get(_DOCUMENT_KEY)),
-            )
-            _record_better_datum(candidates, end, datum)
+            datum = _parse_entry_datum(entry, cutoff=cutoff, allow_duration=False)
+            if datum is not None:
+                _record_better_datum(candidates, datum.period_end, datum)
     return _fresh_shares(_latest(candidates), cutoff)
 
 
@@ -842,7 +560,6 @@ def _shares_basis(
 
 
 def _ruleset_currency(ruleset: ConceptMappingRuleset) -> str | None:
-    """The reporting currency read from the ruleset unit (`SEC#L476`; `USD` today)."""
     mapping = ruleset.mapping_for("revenue") or ruleset.mapping_for("total_assets")
     return None if mapping is None else mapping.unit
 
@@ -855,54 +572,23 @@ def build_bundle(
     raw_bytes: bytes | None = None,
     ruleset: ConceptMappingRuleset = DEFAULT_RULESET,
 ) -> FinancialFactsBundle:
-    """Extract the PIT financial-fact bundle from a company-facts payload.
-
-    A payload with no eligible fact is not a failure: the source honestly asserts
-    nothing for this issuer at this cutoff, so every field resolves to `None` and the
-    factor surfaces the gap (`missing_gross_profit`, …) instead of the capture
-    inventing one. A source that could not be *reached* raises instead — that is a
-    retryable failure, never a null-filled fact.
-    """
+    """Extract the PIT financial-fact bundle from a company-facts payload."""
     assets = _latest(resolve_field(facts, ruleset, "total_assets", cutoff))
-    # The last-resort share count is consulted only when the point-in-time series is
-    # EMPTY. Kept as a separate lookup rather than a trailing synonym so a period average
-    # can never win on recency over a real point-in-time figure (#496).
-    # A share count too old to describe today's company is refused, and refusing the
-    # point-in-time series lets the period-average last resort answer instead of nothing —
-    # which is the difference between MA (whose 2010 cover-page fact is the only `dei` one,
-    # but whose weighted-average series is current) and V (where both are stale or absent).
-    # Staleness is applied per candidate rather than to the winner, because `primary or
-    # fallback` would otherwise let a sixteen-year-old primary block a usable fallback.
-    shares_primary = _fresh_shares(_latest(resolve_field(facts, ruleset, "shares_outstanding", cutoff)), cutoff)
-    shares_fallback = _fresh_shares(
-        _latest(resolve_field(facts, ruleset, "shares_outstanding_last_resort", cutoff)), cutoff
-    )
+    raw_shares_primary = _latest(resolve_field(facts, ruleset, "shares_outstanding", cutoff))
+    raw_shares_fallback = _latest(resolve_field(facts, ruleset, "shares_outstanding_last_resort", cutoff))
+    shares_primary = _fresh_shares(raw_shares_primary, cutoff)
+    shares_fallback = _fresh_shares(raw_shares_fallback, cutoff)
     segmented_shares = (
         _segmented_shares_datum(facts, ruleset, cutoff) if shares_primary is None and shares_fallback is None else None
     )
     shares = shares_primary or shares_fallback
     shares_basis = _shares_basis(shares_primary, shares_fallback, segmented_shares)
-    # When every candidate is refused the newest measurement date is still recorded, so the
-    # warehouse says HOW stale the best candidate was rather than leaving an
-    # indistinguishable null. Fail-closed is deliberate: the factor then reports
-    # `missing_shares_outstanding` exactly as for an issuer that never filed one, and an
-    # honest gap outranks a market capitalisation wrong by three orders of magnitude.
-    shares_period_end = _newest_period_end(
-        shares,
-        segmented_shares,
-        _latest(resolve_field(facts, ruleset, "shares_outstanding", cutoff)),
-        _latest(resolve_field(facts, ruleset, "shares_outstanding_last_resort", cutoff)),
-    )
+    shares_period_end = _newest_period_end(shares, segmented_shares, raw_shares_primary, raw_shares_fallback)
+
     revenue = _latest(resolve_field(facts, ruleset, "revenue", cutoff))
-    # The growth basis for module 1. `resolve_field` already returns EVERY annual period
-    # knowable at the cutoff, filed-date-resolved and duration-filtered, so the whole
-    # series is here and the bundle simply stops discarding it.
     earnings_periods = resolve_field(facts, ruleset, "net_income", cutoff)
     net_income = _latest(earnings_periods) if earnings_periods else None
-    # large_model_value_v0 applies one uniform capital-adjusted formula to every issuer;
-    # the branch only decides WHICH versioned extraction asserts the operating numerator:
-    # banks use the pre-provision proxy, insurers revenue-minus-claims (#496), everyone
-    # else reported/derived gross profit.
+
     pre_provision: _Datum | None = None
     bank_net_rev: _Datum | None = None
     insurer_profit: _Datum | None = None
@@ -918,10 +604,7 @@ def build_bundle(
     else:
         gp_datum = gross_profit(facts, cutoff, ruleset)
         profit = gp_datum
-    # EVERY earnings period the series carries, not just the window's two ends. The rate
-    # downstream rests on all of them, so the payload is knowable only once the latest of
-    # them was filed — the PIT obligation #284 named and could not satisfy while only the
-    # endpoints travelled.
+
     financial = financial_components(facts, cutoff, branch, ruleset)
     tangible = tangible_common_equity_components(facts, cutoff, branch, ruleset)
     resolved = [
@@ -978,12 +661,9 @@ def build_bundle(
         shares_outstanding=_v(shares),
         revenue=_v(revenue),
         pre_provision_profit=_v(pre_provision),
-        # The vendor's own document when the caller has it. The fallback re-serialization
-        # is for callers that only ever hold a parsed dict (tests); its digest describes our
-        # rendering, not SEC's, so it must never be what a live capture lands.
-        raw_bytes=raw_bytes
-        if raw_bytes is not None
-        else json.dumps(facts, sort_keys=True, separators=(",", ":")).encode(),
+        raw_bytes=(
+            raw_bytes if raw_bytes is not None else json.dumps(facts, sort_keys=True, separators=(",", ":")).encode()
+        ),
         knowable_at=None if knowable is None else knowable_instant(AsOfAxis.ACCESSION, knowable),
         operating_period_end=None if profit is None else profit.period_end,
         revenue_period_end=None if revenue is None else revenue.period_end,
@@ -1015,13 +695,7 @@ def build_bundle(
 def _statement_period_ends(
     facts: Mapping[str, Any], ruleset: ConceptMappingRuleset, cutoff: date
 ) -> tuple[date | None, date | None]:
-    """The newest balance-sheet date filed in any periodic statement, and in an annual one.
-
-    Every 10-K and 10-Q carries total assets at its own period end, so the balance-sheet
-    concept dates the newest statement the document holds. Read off the raw entries rather
-    than the resolved series, whose winner for a period is the LATEST filing and so names a
-    10-Q for a fiscal year end the next quarter re-reported.
-    """
+    """Newest balance-sheet date filed in any periodic statement and in an annual statement."""
     latest: date | None = None
     latest_annual: date | None = None
     for item in _declared_concepts(ruleset, "total_assets"):
@@ -1044,24 +718,13 @@ def _statement_period_ends(
 
 
 def company_facts_record_id(cik: int) -> str:
-    """The vendor identity of one company-facts document in raw storage."""
     return f"companyfacts:CIK{cik:010d}"
 
 
 def merge_company_facts(
     documents: Sequence[tuple[str, Mapping[str, Any]]], ruleset: ConceptMappingRuleset
 ) -> dict[str, Any]:
-    """One filing history from one issuer's company-facts documents under several CIKs.
-
-    XOM's 2026 reorganization split its filings: the predecessor CIK 34088 holds the annual
-    history, and the holdco CIK 2115436 holds the 10-Q for Q2 2026 (total assets $464,482M at
-    2026-06-30). Parsing either document alone serves a number the issuer has superseded, so
-    the declared concepts of every document are pooled and parsed once: each field then
-    resolves by the usual rules (statement forms first, the latest period, the latest filing
-    within a period), whichever document asserted it. Each entry is tagged with its
-    document's record id, so every resolved figure names the bytes it was read from. On an
-    exact tie the earlier document wins, so callers list the current CIK first.
-    """
+    """Pool declared concepts across an issuer's company-facts documents under multiple CIKs."""
     declared = {(item.taxonomy, item.concept) for mapping in ruleset.mappings for item in mapping.concepts}
     merged: dict[str, Any] = {"facts": {}}
     for record_id, document in documents:
@@ -1077,7 +740,7 @@ def merge_company_facts(
 
 @dataclass(frozen=True)
 class TangibleCommonEquityComponents:
-    """The three balance-sheet facts a banking tangible-common-equity measurement needs (#1176)."""
+    """Balance-sheet facts required for banking tangible common equity (#1176)."""
 
     stockholders_equity: _Datum | None = None
     preferred_stock_value: _Datum | None = None
@@ -1088,8 +751,6 @@ class TangibleCommonEquityComponents:
 
 
 def _intangibles_at(series: Callable[[str], dict[date, _Datum]], end: date) -> tuple[_Datum | None, str | None]:
-    """Intangible assets excluding goodwill at one period end: the total concept when the filer
-    reports it, else the two lifetime classes summed. Both classes must exist; none is assumed."""
     total = series("intangible_assets_net_excluding_goodwill").get(end)
     if total is not None:
         return total, "IntangibleAssetsNetExcludingGoodwill"
@@ -1106,42 +767,27 @@ def _intangibles_at(series: Callable[[str], dict[date, _Datum]], end: date) -> t
 def tangible_common_equity_components(
     facts: dict[str, Any], cutoff: date, branch: OperatingBranch, ruleset: ConceptMappingRuleset = DEFAULT_RULESET
 ) -> TangibleCommonEquityComponents:
-    """#1176: stockholders' equity, goodwill and intangibles, at the latest period where all three
-    are filed. A non-FINANCIAL branch captures none of them.
-
-    The period is the latest one that carries equity, goodwill and intangibles together. A later
-    balance sheet that omits an intangible component is skipped, never mixed with an older
-    component. Nothing is zero-filled: a period without all three yields no measurement.
-    """
+    """Resolve banking tangible-common-equity components at the latest period carrying all three."""
     if branch is not OperatingBranch.FINANCIAL:
         return TangibleCommonEquityComponents()
-    memo: dict[str, dict[date, _Datum]] = {}
-
-    def series(field_name: str) -> dict[date, _Datum]:
-        if field_name not in memo:
-            memo[field_name] = resolve_field(facts, ruleset, field_name, cutoff)
-        return memo[field_name]
-
+    series = _field_series_memo(facts, ruleset, cutoff)
     equity = series("stockholders_equity")
     goodwill = series("goodwill")
     for end in sorted(set(equity) & set(goodwill), reverse=True):
         intangibles, basis = _intangibles_at(series, end)
-        if intangibles is None:
-            continue
-        return TangibleCommonEquityComponents(
-            stockholders_equity=equity[end],
-            # Not required for the period: a missing preferred value stays None, never zero.
-            preferred_stock_value=series("preferred_stock_value").get(end),
-            goodwill=goodwill[end],
-            intangible_assets=intangibles,
-            intangible_basis=basis,
-            period_end=end,
-        )
+        if intangibles is not None:
+            return TangibleCommonEquityComponents(
+                stockholders_equity=equity[end],
+                preferred_stock_value=series("preferred_stock_value").get(end),
+                goodwill=goodwill[end],
+                intangible_assets=intangibles,
+                intangible_basis=basis,
+                period_end=end,
+            )
     return TangibleCommonEquityComponents()
 
 
 def _vintage(datum: _Datum) -> dict[str, Any]:
-    """The filing identity of one resolved figure, JSON-ready and key-sorted."""
     return {
         "accession": datum.accession,
         "document": datum.document,
@@ -1159,10 +805,6 @@ def _v(datum: _Datum | None) -> Decimal | None:
 
 
 def _asserts_income(bundle: FinancialFactsBundle) -> bool:
-    """A document that carries any income-statement fact. The gross-profit-per-employee
-    numerator and the price-to-sales denominator both come from here; a document without
-    one leaves every published number for the issuer unavailable, which is the state the
-    predecessor fallback exists to end."""
     return any(value is not None for value in (bundle.revenue, bundle.gross_profit, bundle.pre_provision_profit))
 
 
@@ -1179,13 +821,12 @@ def _payload_vintage(
         and not (key == "bank_net_revenue" and bank_net_revenue_value is None)
     }
     if headcount_evidence is not None:
-        # #747: the side-plane input names its evidence next to the XBRL inputs.
         vintage["headcount"] = headcount_evidence
     return {key: vintage[key] for key in sorted(vintage)}
 
 
 class SecFinancialFactAdapter:
-    """`SourceFetchPort` for financial-fact, backed by an injected company-facts fetcher."""
+    """`SourceFetchPort` for `financial-fact`, backed by an injected company-facts fetcher."""
 
     def __init__(
         self,
@@ -1201,27 +842,19 @@ class SecFinancialFactAdapter:
         self._targets = targets
         self._fetcher = fetcher
         self._headcount_extractor = headcount_extractor
-        # None means no reader ran: the payload then carries no ratio key, so a dashboard reads
-        # "not measured" and the payload hash of a row without a reader does not move.
         self._listing_ratio_reader = listing_ratio_reader
-        # Carries the resolved ruleset's hash, so an observation names the exact concept
-        # rules behind it. Without that, advancing the pointer silently changes what
-        # numbers mean while every row still claims the same mapping identity.
         self._mapping_version = mapping_version
         self._corroborating_origins = tuple(corroborating_origins)
         self._ruleset = ruleset
 
     def _corroborate(self, target: SecTarget) -> tuple[Corroboration, ...]:
-        """Ask every configured second origin about this issuer; an origin that errors,
-        has nothing, or answers with a period knowable only after the cutoff is absent."""
         if not target.ticker:
             return ()
         found: list[Corroboration] = []
         for origin in self._corroborating_origins:
             try:
                 assertion = origin.fetch(target.ticker, target.cutoff)
-            except Exception as error:  # noqa: BLE001 - a second origin never fails the primary capture
-                # ...but it is never silent either (#885): logged with its type, counted.
+            except Exception as error:  # noqa: BLE001
                 record_lost_corroboration(origin.origin, FETCH, target.ticker, error)
                 continue
             if assertion is None or assertion.knowable_at.date() > target.cutoff:
@@ -1234,7 +867,6 @@ class SecFinancialFactAdapter:
                 "origin": origin.origin,
                 "period_end": assertion.period_end.isoformat(),
                 "accounting_standards": assertion.accounting_standards,
-                # Sorted so the payload hash depends on the series, not on dict order.
                 "by_period_end": {
                     end.isoformat(): {name: _s(values.get(name)) for name in CORROBORATED_FINANCIAL_FIELDS}
                     for end, values in sorted(assertion.by_period_end.items())
@@ -1303,22 +935,13 @@ class SecFinancialFactAdapter:
             return FetchFailure(ObligationReasonCode.FIELD_UNAVAILABLE)
         if bundle.knowable_at is not None and bundle.knowable_at.date() > target.cutoff:
             return FetchFailure(ObligationReasonCode.LOOK_AHEAD_VIOLATION)
-        gross_profit_value = bundle.gross_profit
-        # #1114: an operating metric from another period than the revenue is dropped. BKNG's
-        # last GrossProfit ends 2017-12-31, so GPPE paired it with 2025 assets and headcount.
-        # The factor then reports `missing_gross_profit` instead of a number from mixed
-        # periods. The marker below records why the metric is absent.
+
         operating_period_stale = _periods_differ(bundle.operating_period_end, bundle.revenue_period_end)
-        pre_provision_value = bundle.pre_provision_profit
-        bank_net_revenue_value = bundle.bank_net_revenue
-        withheld = _operating_withheld(operating_period_stale, target)
-        if withheld:
-            gross_profit_value = None
-            pre_provision_value = None
-            bank_net_revenue_value = None
-        # Enrich with the #70 headcount extraction, if any, respecting point-in-time.
-        # A payload that resolved nothing is knowable at the end of the cutoff day: what it
-        # asserts is "this source has no such fact yet", not a dated figure.
+        withheld = operating_period_stale or target.registry_unavailable
+        gross_profit_value = None if withheld else bundle.gross_profit
+        pre_provision_value = None if withheld else bundle.pre_provision_profit
+        bank_net_revenue_value = None if withheld else bundle.bank_net_revenue
+
         knowable_at = bundle.knowable_at or knowable_instant(AsOfAxis.ACCESSION, target.cutoff)
         headcount, headcount_evidence, knowable_at = self._resolve_headcount_fact(target, knowable_at)
         payload: dict[str, Any] = {
@@ -1338,7 +961,6 @@ class SecFinancialFactAdapter:
             "revenue_period_end": _d(bundle.revenue_period_end),
             "shares_period_end": _d(bundle.shares_period_end),
             "net_income": _s(bundle.net_income),
-            # #528: the decomposition's financial side, with the basis that composed it.
             "financial_assets": _s(bundle.financial_assets),
             "financial_returns": _s(bundle.financial_returns),
             "financial_basis": {
@@ -1346,18 +968,12 @@ class SecFinancialFactAdapter:
                 "returns": bundle.financial_returns_basis,
                 "returns_is_proxy": bundle.financial_returns_is_proxy,
             },
-            # Sorted so the payload hash depends on the series, not on dict insertion order.
             "net_income_by_period": {
                 end.isoformat(): _s(value) for end, value in sorted(bundle.net_income_by_period.items())
             },
-            # #530 item 4: the filing behind each input, on the row. `mart.topt_core_meta_info`
-            # surfaces it per observation, so a served number names its document. A key is
-            # present only for an input the payload actually asserts.
             "vintage": _payload_vintage(bundle, gross_profit_value, headcount_evidence, bank_net_revenue_value),
         }
         if target.operating_branch is OperatingBranch.FINANCIAL:
-            # #1176: the banking tangible-common-equity inputs. Written for a bank only, so the
-            # payload hash of a non-financial row does not move.
             payload.update(
                 {
                     "bank_net_revenue": _s(bank_net_revenue_value),
@@ -1369,10 +985,10 @@ class SecFinancialFactAdapter:
                     "tangible_equity_period_end": _d(bundle.tangible_equity_period_end),
                 }
             )
-        _mark_unclassified(payload, target)
+        if target.registry_unavailable:
+            payload[UNAVAILABLE_PAYLOAD_KEY] = True
         payload.update(self._listing_ratio_fields(target, bundle))
         if operating_period_stale:
-            # Present only on a dropped metric, so the payload hash of a current row does not move.
             payload["operating_period_stale"] = True
             payload["stale_operating_period_end"] = _d(bundle.operating_period_end)
         valid_from = (
@@ -1382,7 +998,7 @@ class SecFinancialFactAdapter:
             raw=RawResponse(
                 body=bundle.raw_bytes,
                 source=DataSource.SEC,
-                record_id=f"companyfacts:CIK{target.cik:010d}",
+                record_id=company_facts_record_id(target.cik),
             ),
             normalized_sha256=canonical_sha256(payload),
             valid_from=valid_from,
@@ -1394,16 +1010,6 @@ class SecFinancialFactAdapter:
         )
 
     def _listing_ratio_fields(self, target: SecTarget, bundle: FinancialFactsBundle) -> dict[str, Any]:
-        """The payload keys of the cover read, or none when no reader ran (#1519, #1606).
-
-        An issuer that the registry could not read is excluded from the tick, so its cover is not read
-        and its payload says "not measured". When a post-reorganization holdco CIK (such as XOM's
-        CIK 2115436) has not filed its first annual report yet (`reason == REASON_NO_ANNUAL_FILING`),
-        consult `target.predecessor_cik` next. When no annual cover document is stored for either CIK
-        (`reason == REASON_NO_ANNUAL_FILING`) but the bundle's `companyfacts` vintage proves a US
-        domestic annual 10-K filing (`form` in `{"10-K", "10-K/A", "10-KT", "10-KT/A"}` and no
-        foreign-private-issuer `20-F`/`40-F` vintage), resolve `listing_units_per_share = Decimal(1)`.
-        """
         from data_engine.datahub.standards.listing_unit_ratio import (
             PATTERN_PLAIN_SHARE,
             REASON_NO_ANNUAL_FILING,
@@ -1441,16 +1047,7 @@ class SecFinancialFactAdapter:
         return fact.value, headcount_vintage(fact), max(knowable_at, fact.knowable_at)
 
 
-_DOMESTIC_10K_FORMS = frozenset({"10-K", "10-K/A", "10-KT", "10-KT/A"})
-_FOREIGN_ANNUAL_FORMS = frozenset({"20-F", "20-F/A", "40-F", "40-F/A"})
-
-
 def _domestic_10k_vintage(bundle: FinancialFactsBundle) -> Mapping[str, Any] | None:
-    """Return a US domestic 10-K vintage from `bundle` when the bundle proves a 10-K annual filing (#1606).
-
-    Requires `bundle.document` (a real `companyfacts` parse rather than a synthetic test fixture) and
-    no foreign-private-issuer (`20-F` / `40-F`) vintage in `bundle.vintages`.
-    """
     if bundle.document is None:
         return None
     for entry in bundle.vintages.values():
@@ -1463,31 +1060,11 @@ def _domestic_10k_vintage(bundle: FinancialFactsBundle) -> Mapping[str, Any] | N
     return None
 
 
-def _operating_withheld(period_stale: bool, target: SecTarget) -> bool:
-    """Whether the payload drops both operating numerators.
-
-    The period of the metric is stale (#1114), or the registry gave no classification (#1323): without
-    it the run cannot say which numerator describes this issuer.
-    """
-    return period_stale or target.registry_unavailable
-
-
-def _mark_unclassified(payload: dict[str, Any], target: SecTarget) -> None:
-    """Flag the payload of an issuer that the registry could not classify.
-
-    The key is present only then, so the payload hash of a classified row does not move.
-    """
-    if target.registry_unavailable:
-        payload[UNAVAILABLE_PAYLOAD_KEY] = True
-
-
 def _periods_differ(operating_end: object | None, revenue_end: object | None) -> bool:
-    """True when both period ends exist and differ: the operating metric describes another period."""
     return operating_end is not None and revenue_end is not None and operating_end != revenue_end
 
 
 def _fresh_shares(datum: _Datum | None, cutoff: date) -> _Datum | None:
-    """The datum, or None when it was measured too long before the cutoff (#529, #1519)."""
     max_age_days = load_live_strategy_definition().eligibility.maximum_input_age_days
     if datum is None or (cutoff - datum.period_end).days > max_age_days:
         return None
@@ -1495,7 +1072,6 @@ def _fresh_shares(datum: _Datum | None, cutoff: date) -> _Datum | None:
 
 
 def _newest_period_end(*candidates: _Datum | None) -> date | None:
-    """The latest measurement date among the candidates, refused ones included."""
     ends = [datum.period_end for datum in candidates if datum is not None]
     return max(ends) if ends else None
 
@@ -1516,7 +1092,6 @@ def _enrich_multi_class_shares(
     *,
     ruleset: ConceptMappingRuleset = DEFAULT_RULESET,
 ) -> FinancialFactsBundle | None:
-    """Enrich company-facts with multi-class cover-page iXBRL share facts when company-facts drops them (#1265)."""
     from data_engine.datahub.standards.filing_extraction import latest_periodic_filing, multi_class_share_entries
     from data_engine.sources import sec
 
@@ -1527,7 +1102,7 @@ def _enrich_multi_class_shares(
         if document is None:
             return None
         entries = multi_class_share_entries(document)
-    except Exception:  # noqa: BLE001 - best-effort enrichment; preserve primary company-facts result on error
+    except Exception:  # noqa: BLE001
         return None
     if not entries:
         return None
@@ -1545,14 +1120,7 @@ def sec_financial_fetcher(
     *,
     ruleset: ConceptMappingRuleset = DEFAULT_RULESET,
 ) -> FinancialFactsBundle:
-    """Default fetcher: the real SEC company-facts client, parsed point-in-time.
-
-    The source gateway fetches ``companyfacts`` once per CIK per UTC day: a second call for the
-    same CIK (GOOG and GOOGL, a second tick, a second universe) reads the landed bytes and makes
-    no SEC request (#1411 K3, K5). Imported lazily so the adapter and its tests carry no network
-    dependency.
-    """
-
+    """Default fetcher backed by the source-gateway SEC company-facts client."""
     import httpx
 
     from data_engine.sources import sec
@@ -1569,16 +1137,12 @@ def sec_financial_fetcher(
     return bundle
 
 
-# -- registry route (#72) -----------------------------------------------------------------
-
-
 def _sec_ticker(ticker: str) -> str:
-    # SEC's company_tickers file uses a hyphen for share-class tickers (BRK.B -> BRK-B).
     return ticker.replace(".", "-")
 
 
 class PredecessorResolution(int):
-    """An int CIK that also carries whether the resolution was signed."""
+    """Integer CIK carrying whether the predecessor resolution was owner-signed."""
 
     signed: bool = False
 
@@ -1595,17 +1159,7 @@ def predecessor_ciks(
     *,
     candidate_ids_by_listing: Mapping[str, Sequence[str]] | None = None,
 ) -> dict[str, PredecessorResolution]:
-    """#496 / #1263: each listing's predecessor company-facts CIK, consulted only when
-    the index-mapped CIK's taxonomy is empty (post-reorganization holdco).
-
-    Two registry sources, both our own versioned data, owner-signed rows first:
-    1. `staging.issuer_cik_predecessors` — the explicit registry (migration
-       0037; every row carries reason + approved_by), resolved across canonical
-       UUIDs and their legacy aliases via `canonical_issuer.signed_predecessor_ciks`;
-    2. the capture lineage — the most recent vintage whose observation carried
-       a revenue value (generic, self-maintaining once the A1 spine has seen
-       an issuer parse successfully; empty for issuers that never did).
-    """
+    """Resolve each listing's predecessor company-facts CIK from signed registry or capture lineage."""
     from data_engine.datahub.canonical_issuer import signed_predecessor_ciks
 
     resolved: dict[str, PredecessorResolution] = {}
@@ -1649,40 +1203,24 @@ def _candidate_ids_by_listing(context: RouteContext) -> dict[str, list[str]]:
 
 
 def build_route(context: RouteContext, cells: Sequence[RouteCell]) -> SecFinancialFactAdapter:
-    """The SEC company-facts source's own routing (#72). Source-facing resolution —
-    CIKs, issuer classification, predecessor CIKs, the governed concept ruleset — is
-    done once here, so no cell re-derives it and the composition root never sees it.
-
-    A plane-published universe already RESOLVED its identities: issuer:cik ids carry
-    the CIK the refresh verified (with the EDGAR fallback for the SEC crosswalk's own
-    holes — AEP is in neither crosswalk file). Trust the governed head first; only
-    LEI-style issuers (the hand-curated TOPT corpus) still consult the crosswalk. The
-    first QQQ run failed HERE, on the same AEP hole the refresh had already worked
-    around — one identity resolution, one place.
-    """
+    """Resolve CIKs, issuer branches, predecessor CIKs, and concept ruleset for one run."""
     from functools import partial
 
     from data_engine.datahub.production_topt.concept_mapping import resolve_ruleset
     from data_engine.datahub.production_topt.headcount import PostgresHeadcountExtractor
     from data_engine.datahub.production_topt.issuer_registry import resolve_issuer_classifications
     from data_engine.datahub.production_topt.moomoo_origin import moomoo_financials_origin
-    from data_engine.datahub.production_topt.parser_identity import MAPPING_VERSION
     from data_engine.datahub.standards.listing_unit_ratio import CoverRatioReader
+    from data_engine.datahub.standards.planner import resolve_issuer_cik
     from data_engine.sources import sec
 
     connection = context.connection
     tickers = {coordinate[3] for coordinate in context.coordinates.values()}
     cik_by_ticker: dict[str, int] = {}
     for issuer_id, _, _, ticker in context.coordinates.values():
-        if issuer_id.startswith("issuer:cik:"):
-            cik_by_ticker[ticker] = int(issuer_id.removeprefix("issuer:cik:"))
-        elif connection is not None:
-            from data_engine.datahub.resolve_coordinates import alias_of, is_uuid
-
-            if is_uuid(issuer_id):
-                cik_str = alias_of(connection, issuer_id, "cik", valid_at=context.cutoff_date, known_at=context.cutoff)
-                if cik_str is not None:
-                    cik_by_ticker[ticker] = int(cik_str)
+        cik = resolve_issuer_cik(connection, issuer_id, as_of=context.cutoff_date, known_at=context.cutoff)
+        if cik is not None:
+            cik_by_ticker[ticker] = cik
     if context.raw_coordinates:
         for raw_issuer_id, _, _, ticker in context.raw_coordinates.values():
             if ticker not in cik_by_ticker and raw_issuer_id.startswith("issuer:cik:"):
@@ -1696,6 +1234,7 @@ def build_route(context: RouteContext, cells: Sequence[RouteCell]) -> SecFinanci
     missing = sorted(tickers - set(cik_by_ticker))
     if missing:
         raise LookupError(f"SEC ticker mapping does not cover: {', '.join(missing)}")
+
     registry = resolve_issuer_classifications(cik_by_ticker)
     classifications = registry.classifications
     listing_ids = [coordinate[2] for coordinate in context.coordinates.values()]
@@ -1710,7 +1249,6 @@ def build_route(context: RouteContext, cells: Sequence[RouteCell]) -> SecFinanci
         if connection is not None
         else {}
     )
-
     targets: dict[str, SecTarget] = {}
     for cell in cells:
         cik = cik_by_ticker[cell.ticker]
@@ -1726,28 +1264,19 @@ def build_route(context: RouteContext, cells: Sequence[RouteCell]) -> SecFinanci
                 classifications[cik].operating_branch if cik in classifications else OperatingBranch.NON_FINANCIAL
             ),
             registry_unavailable=cik in registry.unavailable,
-            # only meaningful when it differs from the mapped CIK — the fallback would
-            # otherwise refetch the same empty document.
             predecessor_cik=int(pred) if pred is not None and has_pred else None,
             predecessor_signed=getattr(pred, "signed", False) if pred is not None and has_pred else False,
             statement_filings=classifications[cik].statement_filings if cik in classifications else (),
             ticker=cell.ticker,
         )
-    # Resolved once per run through the governed pointer, so every cell in the run is
-    # parsed by ONE ruleset and the observations can name it.
     ruleset = resolve_ruleset(connection)
     second_origin = moomoo_financials_origin()
     return SecFinancialFactAdapter(
         targets,
         partial(sec_financial_fetcher, ruleset=ruleset),
-        # No connection means no headcount plane to read, so every issuer resolves
-        # `missing_headcount` — an honest gap. Silently substituting a built-in table
-        # would put the deployed denominator back in the code, which is what the fact
-        # table exists to end (#70).
         headcount_extractor=None if connection is None else PostgresHeadcountExtractor(connection),
         mapping_version=f"{MAPPING_VERSION}+{ruleset.content_sha256[:12]}",
         corroborating_origins=() if second_origin is None else (second_origin,),
         ruleset=ruleset,
-        # One reader per run: two listings of one issuer read one filing.
         listing_ratio_reader=CoverRatioReader(),
     )

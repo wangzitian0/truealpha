@@ -1,22 +1,4 @@
-"""The persisted index of landed fetch keys (#1411 K3).
-
-``staging.landed_fetch_keys`` holds one row per `FetchKey` that landed. The bytes sit in
-``raw.fetches`` and object storage, so a key that landed is served with no external call, in
-the same process, in a later process and in a later run. `sources.gateway` reads this index
-before every keyed vendor or SEC call (`gateway.fetch_once`). A probe (`gateway.probe_scope`) does not read it.
-
-Two implementations share one shape (``lookup``, ``land``):
-
-- `PostgresLandedKeys` is the deployed index. It writes on the gateway's autocommit connection,
-  so a rolled-back tick keeps the keys its calls landed (the ledger rows survive the same way).
-- `MemoryLandedKeys` is the test double. It keeps the same contract in a dict.
-
-To fetch a landed key again (a vendor answer found wrong), an operator deletes its row from
-``staging.landed_fetch_keys``. The bytes stay in ``raw.fetches``, and the next fetch lands a new row.
-
-An index never decides whether a caller may fetch. A lookup that fails reads as a miss, and the
-failure is logged by the gateway. A miss costs one external call, which the ledger records.
-"""
+"""Persisted and in-memory landed fetch-key index (`staging.landed_fetch_keys`, #1411 K3)."""
 
 from __future__ import annotations
 
@@ -31,18 +13,13 @@ log = logging.getLogger(__name__)
 
 
 class LandedKeys(Protocol):
-    def lookup(self, key: FetchKey) -> bytes | None:
-        """The bytes landed under ``key``, or None. A hit counts as one reuse."""
-        ...
-
-    def land(self, key: FetchKey, body: bytes, *, content_type: str, fetched_at: datetime, run_key: str | None) -> None:
-        """Record ``body`` as the landing of ``key``."""
-        ...
+    def lookup(self, key: FetchKey) -> bytes | None: ...
+    def land(
+        self, key: FetchKey, body: bytes, *, content_type: str, fetched_at: datetime, run_key: str | None
+    ) -> None: ...
 
 
 class MemoryLandedKeys:
-    """The in-memory index of the tests. It counts reuses per key like the table does."""
-
     def __init__(self) -> None:
         self.bodies: dict[FetchKey, bytes] = {}
         self.reuses: dict[FetchKey, int] = {}
@@ -84,12 +61,6 @@ set raw_fetch_id = excluded.raw_fetch_id,
 
 
 class PostgresLandedKeys:
-    """The deployed index over ``staging.landed_fetch_keys`` and ``raw.fetches``.
-
-    ``connect`` returns an autocommit connection; ``reset`` drops it after a database error so
-    the next call opens a fresh one. The gateway passes its ledger connection, so one process
-    holds one warehouse connection for both."""
-
     def __init__(self, connect: Callable[[], Any], reset: Callable[[], None], *, store: Any | None = None) -> None:
         self._connect = connect
         self._reset = reset
@@ -101,7 +72,6 @@ class PostgresLandedKeys:
         try:
             return work(self._connect())
         except psycopg.Error:
-            # A connection that dropped silently is marked closed only after a statement fails on it.
             self._reset()
             return work(self._connect())
 
@@ -116,7 +86,7 @@ class PostgresLandedKeys:
                 return None
             try:
                 body = raw_store.get_payload(connection, int(row[0]), store=self._store)
-            except Exception:  # noqa: BLE001 - lost or corrupt bytes read as a miss; the refetch lands them again
+            except Exception:  # noqa: BLE001
                 log.exception("landed key %s points at unreadable bytes; it will be fetched again", key.ledger_key)
                 return None
             connection.execute(_REUSE_SQL, params)

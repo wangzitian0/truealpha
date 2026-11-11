@@ -1,9 +1,4 @@
-"""SEC EDGAR company-facts client (Phase -1 sampling; becomes a dlt source in Phase 0).
-
-Known pitfalls (init.md Section 9): XBRL tags are inconsistent across industries —
-never assume field names/units are uniform. That inconsistency is exactly what the
-Phase -1 samples are meant to surface.
-"""
+"""SEC EDGAR company-facts, submissions, and ticker crosswalk client."""
 
 import json
 import re
@@ -40,46 +35,34 @@ _CORP_SUFFIXES = {
 
 
 def normalize_company_title(title: str) -> str:
-    """Normalize an issuer name for crosswalk matching against SEC's company_tickers."""
     cleaned = re.sub(r"/[A-Z]+/", " ", title.upper())
-    tokens = [tok for tok in re.split(r"[^A-Z0-9]+", cleaned) if tok and tok not in _CORP_SUFFIXES]
-    return "".join(tokens)
+    return "".join(tok for tok in re.split(r"[^A-Z0-9]+", cleaned) if tok and tok not in _CORP_SUFFIXES)
 
 
 def company_facts_key(cik: int) -> FetchKey:
-    """The one key of a company-facts document (#1411 K5). The adapter and the vendor oracle share it."""
     return FetchKey("sec", "companyfacts", f"issuer:cik:{cik:010d}", gateway.utc_day())
 
 
 def submissions_key(cik: int, *, overflow: str | None = None) -> FetchKey:
-    """The one key of an issuer's submissions index, or of one overflow file of it.
-
-    The filing readers and `fetch_company_submissions` share it."""
     entity = f"issuer:cik:{cik:010d}" if overflow is None else f"issuer:cik:{cik:010d}:{overflow}"
     return FetchKey("sec", "submissions", entity, gateway.utc_day())
 
 
 def company_tickers_key() -> FetchKey:
-    """The one key of SEC's ticker-to-CIK crosswalk file."""
     return FetchKey("sec", "company_tickers", "sec:company-tickers", gateway.utc_day())
 
 
 def company_tickers_exchange_key() -> FetchKey:
-    """The one key of SEC's ticker-to-exchange crosswalk file."""
     return FetchKey("sec", "company_tickers_exchange", "sec:company-tickers-exchange", gateway.utc_day())
 
 
 def client() -> httpx.Client:
-    """The shared SEC-facing HTTP client (correct User-Agent per SEC fair-use
-    policy) — also reused for other keyless public APIs (OpenFIGI). Public API:
-    nport/bootstrap/sweep modules all construct their client here."""
     if not settings.sec_user_agent:
         raise RuntimeError("Set SEC_USER_AGENT (must include a contact email) — see .env.example")
     return httpx.Client(headers={"User-Agent": settings.sec_user_agent}, timeout=30.0, follow_redirects=True)
 
 
 def _get(http: httpx.Client, endpoint: str, url: str, caller: str, identity: FetchKey) -> bytes:
-    """One SEC request through the gateway and ledger; the verbatim body of a successful answer."""
     resp = gateway.http_get(http, "sec", endpoint, url, identity=identity, caller=caller)
     resp.raise_for_status()
     return bytes(resp.content)
@@ -94,8 +77,6 @@ def _fetch_sec(
     *,
     via: gateway.SourceGateway | None = None,
 ) -> bytes:
-    """Fetch ``url`` once per ``key`` through an explicit or temporary SEC client (and optional ``via`` gateway)."""
-
     def fetch(identity: FetchKey) -> bytes:
         def request() -> bytes:
             if http is None:
@@ -103,27 +84,32 @@ def _fetch_sec(
                     return _get(c, endpoint, url, caller, identity)
             return _get(http, endpoint, url, caller, identity)
 
-        # A standards-lane gateway admits and records the request itself. It runs only on a miss.
         return request() if via is None else via.call("sec", endpoint, request, identity=identity)
 
     return gateway.fetch_once(key, fetch)
 
 
-def ticker_cik_index(http: httpx.Client | None = None, *, via: gateway.SourceGateway | None = None) -> dict[str, int]:
-    """The whole ticker -> CIK crosswalk from SEC's official mapping file, once.
+def _fetch_sec_json(
+    key: FetchKey,
+    endpoint: str,
+    url: str,
+    caller: str,
+    http: httpx.Client | None = None,
+    *,
+    via: gateway.SourceGateway | None = None,
+) -> Any:
+    return json.loads(_fetch_sec(key, endpoint, url, caller, http, via=via).decode())
 
-    Resolving a universe one ticker at a time re-downloads this file per lookup; a
-    capture run reads it once and indexes.
-    """
-    body = _fetch_sec(company_tickers_key(), "company_tickers", TICKERS_URL, "sec.ticker_cik_index", http, via=via)
-    rows = json.loads(body.decode())
+
+def ticker_cik_index(http: httpx.Client | None = None, *, via: gateway.SourceGateway | None = None) -> dict[str, int]:
+    rows = _fetch_sec_json(company_tickers_key(), "company_tickers", TICKERS_URL, "sec.ticker_cik_index", http, via=via)
     return {str(row["ticker"]).upper(): int(row["cik_str"]) for row in rows.values()}
 
 
 def title_ticker_index(http: httpx.Client | None = None, *, via: gateway.SourceGateway | None = None) -> dict[str, str]:
-    """Map normalized SEC company_tickers titles to their primary equity ticker (#1441)."""
-    body = _fetch_sec(company_tickers_key(), "company_tickers", TICKERS_URL, "sec.title_ticker_index", http, via=via)
-    rows = json.loads(body.decode())
+    rows = _fetch_sec_json(
+        company_tickers_key(), "company_tickers", TICKERS_URL, "sec.title_ticker_index", http, via=via
+    )
     index: dict[str, str] = {}
     for row in rows.values():
         ticker = str(row["ticker"]).upper()
@@ -137,8 +123,7 @@ def title_ticker_index(http: httpx.Client | None = None, *, via: gateway.SourceG
 
 
 def ticker_mic_index(http: httpx.Client | None = None, *, via: gateway.SourceGateway | None = None) -> dict[str, str]:
-    """Map SEC company_tickers_exchange tickers to their primary listing MIC (`XNYS`, `XNAS`, `BATS`) (#1418)."""
-    body = _fetch_sec(
+    payload = _fetch_sec_json(
         company_tickers_exchange_key(),
         "company_tickers_exchange",
         TICKERS_EXCHANGE_URL,
@@ -146,26 +131,19 @@ def ticker_mic_index(http: httpx.Client | None = None, *, via: gateway.SourceGat
         http,
         via=via,
     )
-    payload = json.loads(body.decode())
     index: dict[str, str] = {}
     for row in payload.get("data") or []:
         if not isinstance(row, list) or len(row) < 4:
             continue
         ticker_upper = str(row[2] or "").strip().upper()
         mic = EXCHANGE_MIC_MAP.get(str(row[3] or "").strip().upper())
-        if not ticker_upper or not mic:
-            continue
-        index[ticker_upper] = mic
-        index[ticker_upper.replace("-", ".")] = mic
+        if ticker_upper and mic:
+            index[ticker_upper] = mic
+            index[ticker_upper.replace("-", ".")] = mic
     return index
 
 
 def ticker_to_cik(ticker: str) -> int:
-    """Resolve ticker -> CIK via SEC's official mapping file.
-
-    NOTE: this per-source lookup is temporary. From Phase 0 on, the crosswalk lives
-    in the KG as same_as edges (factors.shared.entity_resolution).
-    """
     cik = ticker_cik_index().get(ticker.upper())
     if cik is None:
         raise KeyError(f"ticker not found in SEC mapping: {ticker}")
@@ -174,10 +152,6 @@ def ticker_to_cik(ticker: str) -> int:
 
 @accept_rule("sec", "submissions")
 def _is_json_object(_key: FetchKey, body: bytes) -> bool:
-    """Whether ``body`` is a JSON object. Text that is not JSON is not one.
-
-    A 200 answer that is not a JSON object is not the submissions of the issuer (#1323). The rule is the one
-    of every reader of that key, the filing readers included (#1502)."""
     try:
         return isinstance(json.loads(body.decode()), dict)
     except ValueError:
@@ -185,30 +159,15 @@ def _is_json_object(_key: FetchKey, body: bytes) -> bool:
 
 
 def fetch_company_submissions(cik: int, http: httpx.Client | None = None) -> dict[str, Any]:
-    """The issuer's EDGAR submissions metadata (name, SIC classification, filing index).
-
-    This is issuer *registry* metadata, not reported financial data: it is what says
-    an issuer is a depository institution rather than a manufacturer.
-    """
-    # The registered rule of the key keeps an answer that is no JSON object out of the index, so the retry of
-    # the registry and the next caller ask SEC again (#1323).
-    body = _fetch_sec(
+    payload = _fetch_sec_json(
         submissions_key(cik), "submissions", SUBMISSIONS_URL.format(cik=cik), "sec.fetch_company_submissions", http
     )
-    payload = json.loads(body.decode())
     if not isinstance(payload, dict):
         raise ValueError(f"the submissions of CIK {cik} are not a JSON object")
     return payload
 
 
 def fetch_company_facts_response(cik: int, http: httpx.Client | None = None) -> tuple[bytes, dict[str, Any]]:
-    """The verbatim response body and the facts parsed from it.
-
-    Callers that land evidence need the bytes SEC actually sent. Re-serializing the
-    parsed dict is not the same thing — key order and separators differ, so its digest
-    describes our rendering rather than the vendor's document, and a reparse under a
-    corrected mapping would be replaying our own output.
-    """
     body = _fetch_sec(
         company_facts_key(cik),
         "companyfacts",
@@ -220,16 +179,10 @@ def fetch_company_facts_response(cik: int, http: httpx.Client | None = None) -> 
 
 
 def fetch_company_facts(cik: int, http: httpx.Client | None = None) -> dict[str, Any]:
-    """Parsed facts only, for callers with nothing to land.
-
-    Pass a client to reuse one connection across a sweep; without one, a throwaway
-    client is opened per call (fine for single fetches).
-    """
     return fetch_company_facts_response(cik, http)[1]
 
 
 def save_sample(ticker: str, out_dir: Path) -> Path:
-    """Pull company facts for one ticker and save the raw JSON verbatim."""
     cik = ticker_to_cik(ticker)
     facts = fetch_company_facts(cik)
     out_dir.mkdir(parents=True, exist_ok=True)

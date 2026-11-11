@@ -1,31 +1,4 @@
-"""Per-source registrations: the one place a source declares what it owns (#72).
-
-`init.md` rule 22 asks that adding a source for an existing semantic type changes only
-source-owned code, registrations, policies and tests — never generic capture,
-manifest, snapshot or quality code. Until #72 the deployed composition root enumerated
-the four semantics in five places (`SEMANTIC_TYPES`, the freshness dict, an
-`if/elif` over semantic types in `build_routes`, `materialization._REQUIRED_TYPES`,
-`quality_report._SOURCE_BY_PARSER`) and fabricated the registry ids it wrote on every
-observation from the run label. This module replaces those enumerations with
-derivations over `REGISTRATIONS`, and every source request now carries the content
-hash of the registration that owns it.
-
-A registration is data. The route builder it names is resolved by dotted path at
-plan time (the `adapter_id` idea from `truealpha_contracts.registries`), so this module
-imports no adapter and no adapter needs to import the composition root: the adapter
-module owns its `build_route`, this module owns the list, the composition root owns
-neither.
-
-Ordering matters: obligations are expanded in `registered_semantic_types()` order and
-their ordinals feed content-addressed identities, so the order below is the order the
-deployed runs have always used.
-
-Capacity (init.md rule 6, #729, #1520) is read here, once per ledger seat, in
-`LEDGER_CAPACITIES`: a registration or origin names its seat and receives that
-declaration, and `sources.gateway` derives the capacities it enforces from the same table.
-No number is written in this file. Every figure comes from the vendor account row of the seat in
-`environment_contract.v1.json`, and the share of an environment comes from `account_share`.
-"""
+"""Per-source registrations and ledger seat capacities."""
 
 from __future__ import annotations
 
@@ -52,8 +25,6 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class RouteCell:
-    """One planned work item, as the owning source's route builder sees it."""
-
     work_item_id: str
     semantic_type: str
     issuer_id: str
@@ -64,17 +35,10 @@ class RouteCell:
 
 @dataclass(frozen=True)
 class RouteContext:
-    """What every route builder may know about the run: the cutoffs, the resolved
-    coordinates, and a connection for the source's own registries (or None in a
-    plan-only build)."""
-
     cutoff: datetime
     cutoff_date: date
     price_cutoff_date: date
     partition_start: datetime
-    # The governed universe head's publication time (#530 item 2): set only when the
-    # run's universe was resolved from a governed head (`resolve_universe_corpus`);
-    # None for the hand-curated TOPT corpus, which has no publication event of its own.
     universe_published_at: datetime | None
     coordinates: Mapping[str, tuple[str, str, str, str]]
     connection: psycopg.Connection[Any] | None
@@ -89,24 +53,6 @@ class RouteBuilder(Protocol):
 
 @dataclass(frozen=True)
 class CapacityDeclaration:
-    """What one ledger seat may spend: the pace and the daily budget of its vendor account (#729, #1520).
-
-    Read from the vendor account row of the seat in `environment_contract.v1.json` and nowhere else:
-    `sources.gateway` derives its `CAPACITIES` from `LEDGER_CAPACITIES`, and enforces it before every gated call.
-    The figures are the WHOLE account figures. The share of one environment is `account_share` of the
-    contract; `SourceCapacity.in_environment` applies it.
-
-    - ``calls_per_window`` / ``window_seconds``: the rate window of the account that the gateway queues calls to,
-      or None when the vendor states no request figure (`none_published`).
-    - ``daily_budget``: calls per UTC day, checked against the environment's own
-      ``staging.api_call_ledger`` before the call. None where the account has no daily limit: the seat is
-      then paced, not budgeted. The unit is the request (a ledger row), not the row's ``cost``.
-    - ``concurrency``: declared, not enforced: every lane calls its vendors sequentially.
-    - ``account``: the vendor account of the seat. None for a declaration built directly in a test.
-    - ``documented``: the limits of the account with their evidence kind. Derived, so it is not part of
-      the content-addressed payload.
-    """
-
     calls_per_window: int | None
     window_seconds: int | None
     daily_budget: int | None = None
@@ -127,9 +73,6 @@ class CapacityDeclaration:
             raise ValueError("a daily budget must be positive; declare None for an unbudgeted seat")
 
 
-#: One reliability prior per source in the registry (init.md rule 3, #1517).
-#: Order: release-derived (1) > SEC filings / Treasury / index (0.98) > moomoo (0.96)
-#: > Twelve Data (0.95) > yfinance (0.90) > single-source prose extraction (0.88).
 SOURCE_RELIABILITY_PRIORS: Mapping[str, Decimal] = MappingProxyType(
     {
         "release-derived": Decimal("1"),
@@ -165,7 +108,6 @@ SOURCE_RELIABILITY_PRIORS: Mapping[str, Decimal] = MappingProxyType(
 
 
 def source_reliability_prior(identifier: str) -> Decimal | None:
-    """Return the declared reliability prior for a registered source, origin, or seat (#1517)."""
     return SOURCE_RELIABILITY_PRIORS.get(identifier)
 
 
@@ -192,8 +134,6 @@ def _assign_reliability_prior(
 
 
 class AsOfAxis(StrEnum):
-    """The axis on which a registered source dates when its observation becomes knowable (#1519)."""
-
     SETTLED_SESSION = "settled_session"
     ACCESSION = "accession"
     RELEASE = "release"
@@ -201,13 +141,6 @@ class AsOfAxis(StrEnum):
 
 
 def knowable_instant(axis: AsOfAxis | str, day: date) -> datetime:
-    """The single knowable UTC instant of ``day`` on ``axis`` (#1519).
-
-    - ``settled_session``: the exchange close (`xnys_session_close_utc(day)`).
-    - ``accession``: the end of the filed UTC day (`23:59:59.999999Z`).
-    - ``business_day``: `00:00:00Z` of the next day (`day + 1d`).
-    - ``release``: `00:00:00Z` of `day`.
-    """
     resolved = AsOfAxis(axis)
     if resolved is AsOfAxis.SETTLED_SESSION:
         from data_engine.datahub.market_prices import xnys_session_close_utc
@@ -221,7 +154,6 @@ def knowable_instant(axis: AsOfAxis | str, day: date) -> datetime:
 
 
 def last_settled_accession_date(cutoff: datetime) -> date:
-    """The latest calendar day whose `AsOfAxis.ACCESSION` instant is knowable at `cutoff` (#1519)."""
     instant = cutoff.astimezone(UTC)
     day = instant.date()
     return day if knowable_instant(AsOfAxis.ACCESSION, day) <= instant else day - timedelta(days=1)
@@ -240,12 +172,6 @@ def _validate_as_of_axis(raw: AsOfAxis | str | None, owner_name: str, *, allow_n
 
 @dataclass(frozen=True)
 class OriginRegistration:
-    """One vendor origin behind a semantic: how its observations are recognised in the
-    warehouse (parser vintages) and which payload key carries the value.
-
-    ``ledger_seat`` names the `LEDGER_CAPACITIES` entry the origin's calls are charged
-    to; ``capacity`` is filled from it (and refused when it says something else)."""
-
     origin_source: str
     origin_id: str
     value_key: str
@@ -269,7 +195,6 @@ class OriginRegistration:
 
 
 def _seat_capacity(owner: OriginRegistration | SourceRegistration, name: str) -> None:
-    """Fill ``owner.capacity`` from its ledger seat, the only place a number is written."""
     if owner.ledger_seat is None:
         return
     declared = LEDGER_CAPACITIES.get(owner.ledger_seat)
@@ -292,7 +217,6 @@ def _capacity_payload(capacity: CapacityDeclaration | None) -> dict[str, Any] | 
         "concurrency": capacity.concurrency,
     }
     if capacity.account is not None:
-        # The shares of every named environment sign the registration, so a percent that moves makes a new id.
         contract = load_environment_contract()
         payload["account"] = capacity.account
         payload["shares"] = {
@@ -310,20 +234,13 @@ class SourceRegistration:
     version: str
     semantic_types: tuple[str, ...]
     freshness_max_age: Mapping[str, timedelta]
-    #: "package.module:function" resolving to a `RouteBuilder`; resolved lazily so this
-    #: module stays a leaf every adapter may import.
     route_builder: str
     origins: tuple[OriginRegistration, ...] = ()
-    #: #579 corroboration class: A = second independent origin value-reconciled;
-    #: B = single origin with domain falsifiers; release = release-frozen configuration.
     corroboration_class: str = "B"
     capacity: CapacityDeclaration | None = None
     ledger_seat: str | None = None
     per_key_cost: int = 0
     as_of_axis: AsOfAxis | str = AsOfAxis.RELEASE
-    #: The observation is a session close: it is knowable only once its session has
-    #: settled, so a mid-session bar is not a close (#637) and a reused observation must
-    #: be THE settled session's (#635). Declared by the source, applied by generic code.
     session_bound: bool = False
     reliability_prior: Decimal | None = None
     notes: tuple[str, ...] = field(default=(), compare=False)
@@ -340,7 +257,6 @@ class SourceRegistration:
         )
 
     def entry_payload(self) -> dict[str, Any]:
-        """The declared facts, in a canonical shape, so the registration is content-addressed."""
         return {
             "source_id": self.source_id,
             "version": self.version,
@@ -387,19 +303,11 @@ class SourceRegistration:
         return getattr(import_module(module_name), attribute)
 
 
-#: The as-of axes that a macro source may declare. A macro observation is dated by a business day.
 MACRO_AS_OF_AXES: tuple[AsOfAxis, ...] = (AsOfAxis.BUSINESS_DAY,)
 
 
 @dataclass(frozen=True)
 class MacroSeries:
-    """One macro series that a source file carries (#1255).
-
-    ``series_id`` is the id that rows of ``mart.macro_series_daily`` carry and that a strategy
-    definition names. ``source_column`` is the column of the source file. ``unit`` is the unit of the
-    stored value.
-    """
-
     series_id: str
     label: str
     source_column: str
@@ -413,19 +321,6 @@ class MacroSeries:
 
 @dataclass(frozen=True)
 class MacroSourceRegistration:
-    """A source of macro base data (#1255). It owns no capture cell, so it is not in ``REGISTRATIONS``.
-
-    ``REGISTRATIONS`` expands into capture obligations for every issuer. A macro series belongs to no
-    issuer. Its own list therefore keeps the capture plan unchanged. It follows the rules of
-    ``SourceRegistration`` for the ledger seat, the per-key cost and the as-of axis (#1411 K1).
-
-    ``per_key_cost`` is the cost of one request. One request returns one calendar year of the file.
-    The file carries every series of this registration, so a night costs one request for all series.
-    ``max_age_days`` is the longest age that the newest observation may have. The age counts calendar
-    days from the observation date. It is the cadence of the series: the source publishes on business
-    days, and the longest normal gap between two observation dates is four days.
-    """
-
     source_id: str
     version: str
     series: tuple[MacroSeries, ...]
@@ -433,7 +328,6 @@ class MacroSourceRegistration:
     per_key_cost: int
     as_of_axis: AsOfAxis | str
     max_age_days: int
-    #: The first calendar year that the first run loads. The ideal backtest window is 20 years.
     first_year: int
     capacity: CapacityDeclaration | None = None
     reliability_prior: Decimal | None = None
@@ -459,23 +353,12 @@ class MacroSourceRegistration:
             raise ValueError(f"{self.source_id}: max_age_days must be positive, got {self.max_age_days}")
 
 
-# Twelve Data is the second origin behind market-price: its identity lives here (not
-# in the adapter) so the quality report can recognise its vintages from the registry.
 TWELVE_DATA_ORIGIN = "twelve-data"
-# Every second-origin vintage that writes its close under `close`, oldest first; the
-# current one is the LAST entry, so a bump and the record of it are one edit (the same
-# rule `PARSER_VERSION_HISTORY` follows, for the same #543 reason). v1 wrote `price` and
-# is registered separately below.
 TWELVE_DATA_PARSER_VERSION_HISTORY = ("twelve-data-parser:v2", "twelve-data-parser:v3")
 TWELVE_DATA_PARSER_VERSION = TWELVE_DATA_PARSER_VERSION_HISTORY[-1]
 TWELVE_DATA_MAPPING_VERSION = "twelve-data-map:v3"
 TWELVE_DATA_VALUE_KEY = "close"
 
-# moomoo OpenD is the THIRD origin behind market-price (a daily regular-session close
-# from `request_history_kline`) and the SECOND origin behind financial-fact (annual
-# income-statement and balance-sheet figures from `get_financials_statements`). Both
-# identities live here, next to Twelve Data's, for the same reason: the quality report
-# recognises a vintage from the registry, never from the adapter that wrote it.
 MOOMOO_KLINE_ORIGIN = "moomoo-kline"
 MOOMOO_KLINE_PARSER_VERSION = "moomoo-kline-parser:v2"
 MOOMOO_KLINE_MAPPING_VERSION = "moomoo-kline-map:v1"
@@ -483,20 +366,10 @@ MOOMOO_KLINE_VALUE_KEY = "close"
 MOOMOO_FINANCIALS_ORIGIN = "moomoo-financials"
 MOOMOO_FINANCIALS_PARSER_VERSION = "moomoo-financials-parser:v1"
 MOOMOO_FINANCIALS_MAPPING_VERSION = "moomoo-financials-map:v1"
-# The headline key the registry reads back; the financial-fact fusion reads every
-# corroborated field by name (`quality_report.FINANCIAL_FACT_FUSION_FIELDS`).
 MOOMOO_FINANCIALS_VALUE_KEY = "revenue"
-# -- rule 6: every ledger seat's capacity, read once from its vendor account (#729, #1520) ---
-#
-# The keys are the `source` a call is recorded under in `staging.api_call_ledger`. Each seat draws
-# from one vendor account row of `environment_contract.v1.json`. The row holds the limits of the vendor
-# with their evidence, and the percent of each environment. The rate window and the daily budget of
-# a seat are the request limits of its account: the limit with a window of one UTC day is the daily
-# budget, and the one other request limit is the rate window.
 
 
 def _declaration(seat: str) -> CapacityDeclaration:
-    """The whole-account pace and budget of ``seat``, read from its vendor account row."""
     contract = load_environment_contract()
     name = contract.account_of_seat(seat)
     row = contract.vendor_accounts.accounts[name]
@@ -545,9 +418,6 @@ REGISTRATIONS: tuple[SourceRegistration, ...] = (
         source_id="yahoo-chart",
         version="v1",
         semantic_types=("market-price",),
-        # A Friday bar is the freshest close at a Sunday or Monday-holiday 22:15 tick
-        # (Fri 00:00 -> Tue 22:15 after a Monday holiday is ~4.9 days); 5 days admits
-        # that and still fails a vendor serving week-old bars (#530 slice 2).
         freshness_max_age={"market-price": timedelta(days=5)},
         route_builder="data_engine.datahub.production_topt.market_price_adapter:build_route",
         origins=(
@@ -555,8 +425,6 @@ REGISTRATIONS: tuple[SourceRegistration, ...] = (
                 origin_source="yahoo-chart:v1",
                 origin_id="origin:yahoo:v1",
                 value_key="close",
-                # Every primary vintage ever written maps to Yahoo (#543: a bump
-                # orphaned the warehouse's history once).
                 parser_versions=PARSER_VERSION_HISTORY,
                 ledger_seat="yahoo",
                 per_key_cost=1,
@@ -567,7 +435,6 @@ REGISTRATIONS: tuple[SourceRegistration, ...] = (
                 origin_id="origin:twelve-data:v1",
                 value_key=TWELVE_DATA_VALUE_KEY,
                 parser_versions=TWELVE_DATA_PARSER_VERSION_HISTORY,
-                # One key shared by both environments: the seat's split is declared above.
                 ledger_seat="twelvedata",
                 per_key_cost=2,
                 as_of_axis="settled_session",
@@ -575,16 +442,12 @@ REGISTRATIONS: tuple[SourceRegistration, ...] = (
             OriginRegistration(
                 origin_source="twelve-data:v1",
                 origin_id="origin:twelve-data:v1",
-                # The v1 parser wrote the value under `price` (#545's historical entry).
                 value_key="price",
                 parser_versions=("twelve-data-parser:v1",),
                 ledger_seat="twelvedata",
                 per_key_cost=2,
                 as_of_axis="settled_session",
             ),
-            # Third origin: moomoo OpenD's daily regular-session close, session-bound like
-            # Twelve Data (the settled session at/before the price cutoff, never the
-            # in-progress bar). Enabled per environment by MOOMOO_KLINE_ORIGIN_ENABLED.
             OriginRegistration(
                 origin_source=f"{MOOMOO_KLINE_ORIGIN}:v1",
                 origin_id=f"origin:{MOOMOO_KLINE_ORIGIN}:v1",
@@ -610,8 +473,6 @@ REGISTRATIONS: tuple[SourceRegistration, ...] = (
         source_id="release-derived",
         version="v1",
         semantic_types=("listing-identity", "universe-membership"),
-        # Release-frozen configuration; a year covers the universe's own refresh
-        # cadence (#67), and the release manifest is the staleness authority.
         freshness_max_age={"listing-identity": timedelta(days=365), "universe-membership": timedelta(days=365)},
         route_builder="data_engine.datahub.production_topt.release_derived_adapter:build_route",
         corroboration_class="release",
@@ -622,18 +483,11 @@ REGISTRATIONS: tuple[SourceRegistration, ...] = (
         source_id="sec-company-facts",
         version="v1",
         semantic_types=("financial-fact",),
-        # knowable_at is the filed date, months old by nature. The window is the input age limit of the live
-        # strategy definition (#1518): the capture, the TOPT core and the decision grade age with one number.
         freshness_max_age={
             "financial-fact": timedelta(days=load_live_strategy_definition().eligibility.maximum_input_age_days)
         },
         route_builder="data_engine.datahub.production_topt.sec_financial_adapter:build_route",
         origins=(
-            # Second origin: moomoo's vendor-normalized annual income statement and balance
-            # sheet, value-reconciled per field against the XBRL facts under
-            # `reconciliation_policies.FINANCIAL_FACT_RECONCILIATION_POLICY`. Enabled per environment
-            # by MOOMOO_FINANCIALS_ORIGIN_ENABLED. The primary (company-facts) writes the
-            # shared primary vintage, so it is identified by the registration itself.
             OriginRegistration(
                 origin_source=f"{MOOMOO_FINANCIALS_ORIGIN}:v1",
                 origin_id=f"origin:{MOOMOO_FINANCIALS_ORIGIN}:v1",
@@ -644,10 +498,7 @@ REGISTRATIONS: tuple[SourceRegistration, ...] = (
                 as_of_axis="settled_session",
             ),
         ),
-        # Stays B until a scheduled staging tick shows the moomoo origin reconciling; the
-        # plausibility oracle keeps grading every cell regardless of the second origin.
         corroboration_class="B",
-        # SEC fair access; the seat's numbers are in `LEDGER_CAPACITIES`.
         ledger_seat="sec",
         per_key_cost=1,
         as_of_axis="accession",
@@ -658,13 +509,10 @@ REGISTRATIONS: tuple[SourceRegistration, ...] = (
     ),
 )
 
-#: Macro base data (#1255). Its own list keeps the capture plan unchanged: see `MacroSourceRegistration`.
 MACRO_REGISTRATIONS: tuple[MacroSourceRegistration, ...] = (
     MacroSourceRegistration(
         source_id="us-treasury-par-yield",
         version="v1",
-        # The first series is the instrument that the core strategy definition names for its
-        # risk-free rate (`labor_efficiency.risk_free.instrument`). The id has one definition: the enum.
         series=(
             MacroSeries(
                 series_id=RiskFreeInstrument.US_TREASURY_BILL_3_MONTH.value,
@@ -685,12 +533,7 @@ MACRO_REGISTRATIONS: tuple[MacroSourceRegistration, ...] = (
         ledger_seat="us-treasury",
         per_key_cost=1,
         as_of_axis="business_day",
-        # The Treasury publishes on business days. The longest gap between two observation dates in the
-        # files of 2023 to 2026 is four days (a Friday and the Tuesday after a Monday holiday). One day
-        # more admits the run that comes before the Treasury publishes.
         max_age_days=5,
-        # 20 years is the ideal backtest window (owner decision, 2026-10-21). The seat has a pace of one
-        # request per second and no daily budget, and this load needs one request per year.
         first_year=2000,
         notes=(
             "The Treasury obtains its input quotes at about 3:30 PM New York time on each business day. "
@@ -709,7 +552,6 @@ def macro_registration_for(series_id: str) -> MacroSourceRegistration:
 
 
 def registered_semantic_types() -> tuple[str, ...]:
-    """Every semantic a registered source owns, in registration order (identity-bearing)."""
     return tuple(semantic for registration in REGISTRATIONS for semantic in registration.semantic_types)
 
 
@@ -736,12 +578,6 @@ def freshness_windows() -> dict[str, timedelta]:
 
 
 def source_by_parser(registrations: Sequence[SourceRegistration] = REGISTRATIONS) -> dict[str, tuple[str, str, str]]:
-    """parser_version -> (origin_source, origin_id, value_key), over every registered
-    origin's history, so the quality report recognises every vintage ever written.
-
-    A vintage claimed by two origins with different coordinates would mis-attribute
-    every historical observation written under it, silently; that is refused here,
-    at import, rather than discovered in a quality report (review on #743)."""
     mapping: dict[str, tuple[str, str, str]] = {}
     for registration in registrations:
         for origin in registration.origins:
@@ -763,7 +599,6 @@ SOURCE_BY_PARSER: dict[str, tuple[str, str, str]] = source_by_parser()
 
 
 def origin_per_key_cost(origin_source: str, registrations: Sequence[SourceRegistration] = REGISTRATIONS) -> int:
-    """Return the declared ``per_key_cost`` for ``origin_source`` (#1411 K1)."""
     for registration in registrations:
         for origin in registration.origins:
             if origin.origin_source == origin_source and origin.per_key_cost is not None:
@@ -772,12 +607,6 @@ def origin_per_key_cost(origin_source: str, registrations: Sequence[SourceRegist
 
 
 def uses_twelve_data(universe_id: str | None) -> bool:
-    """Return True if the universe of ``universe_id`` queries the Twelve Data price origin (#1310, #1411 K2).
-
-    A universe without a stored price series and outside the sentinel deploy probe skips Twelve Data so its tick
-    does not spend the environment's daily share of the shared API key. Unknown or omitted universe ids default
-    to True for unit-test harnesses.
-    """
     if not universe_id:
         return True
     from truealpha_contracts.environment_contract import UnknownUniverse, load_environment_contract
@@ -792,13 +621,6 @@ def uses_twelve_data(universe_id: str | None) -> bool:
 
 
 def configured_origin_sources(semantic_type: str, *, universe_id: str | None = None) -> set[str]:
-    """The required source identifiers ('primary' sentinel plus configured origin:mapping strings) for reuse (#635).
-
-    If the current environment has configured a corroborating origin (e.g. Twelve Data
-    or moomoo), an older anchor that was captured with a narrower source set must not be
-    reused; conversely, if an origin is unconfigured or disabled, a set that carries it
-    must not be reused into this environment.
-    """
     from data_engine.config import settings
 
     reg = registration_for(semantic_type)

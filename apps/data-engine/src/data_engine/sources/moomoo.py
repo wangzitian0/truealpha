@@ -1,19 +1,4 @@
-"""moomoo OpenAPI client — Phase -1 capability audit only (init.md Section 5:
-"whether it has analyst ratings... all unverified, don't assume it does").
-
-Prerequisite this module cannot satisfy itself: the moomoo OpenD gateway must
-already be running and logged into a real moomoo account (2FA/app
-confirmation — download from https://www.moomoo.com/download/OpenAPI). This
-module only talks to OpenD over localhost/TCP; it never touches moomoo
-credentials directly.
-
-Every call goes through moomoo_ledger.gate() first (init.md Section 1 rule 6:
-no module decides for itself whether to call). The gate is a defensive
-throttle/audit trail, not enforcement of a real moomoo-side monthly quota —
-moomoo's own docs only rate-limit these endpoints (bursts per 30s); see
-init.md Section 5's 2026-07-10 correction. The call is recorded by the one
-ledger writer, `gateway.record_call` (#1521).
-"""
+"""Moomoo OpenD Quote API read-only client gated through `moomoo_ledger.gate` and `gateway.record_call`."""
 
 import json
 import logging
@@ -36,30 +21,18 @@ class MoomooConnectionError(Exception):
 
 
 def _preflight_check(host: str, port: int, timeout: float = 3.0) -> None:
-    """Raise immediately if nothing is listening at (host, port).
-
-    Required because moomoo.OpenQuoteContext's constructor has no connect
-    timeout of its own: on failure it retries internally every 6s forever
-    (_auto_reconnect=True, no bounded retry count) rather than raising — so
-    without this check, constructing it against a down/not-yet-logged-in
-    OpenD hangs indefinitely instead of failing fast.
-    """
     try:
         with socket.create_connection((host, port), timeout=timeout):
             return
     except OSError as e:
         raise MoomooConnectionError(
-            f"OpenD not reachable at {host}:{port} ({e}). OpenD must already be running and "
-            "logged into a real moomoo account before this module can connect — see "
-            "https://www.moomoo.com/download/OpenAPI. This module cannot start or log into it."
+            f"OpenD not reachable at {host}:{port} ({e}). OpenD must already be running and logged in."
         ) from e
 
 
 @contextmanager
 def connect() -> Iterator["moomoo.OpenQuoteContext"]:
     if not settings.moomoo_opend_host or not settings.moomoo_opend_port:
-        # Refuse rather than dial a guess: an unconfigured gateway is a configuration
-        # error, and it must not present as a network timeout against some default host.
         raise RuntimeError("MOOMOO_OPEND_HOST / MOOMOO_OPEND_PORT are not configured")
     _preflight_check(settings.moomoo_opend_host, settings.moomoo_opend_port)
     ctx = moomoo.OpenQuoteContext(host=settings.moomoo_opend_host, port=settings.moomoo_opend_port)
@@ -70,30 +43,13 @@ def connect() -> Iterator["moomoo.OpenQuoteContext"]:
 
 
 def canonical_moomoo_bytes(payload) -> bytes:
-    """Canonical JSON byte rendering shared between the API call ledger and raw.fetches (#1358)."""
+    """Canonical JSON byte rendering shared between the API call ledger and `raw.fetches`."""
     from data_engine.jsonable import to_jsonable
 
     return json.dumps(to_jsonable(payload), sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
 
 def _call(ctx, endpoint: str, caller: str, fn, *, identity: FetchKey, request_uri: str | None = None):
-    """Gate, call, record — the one path every moomoo call must go through.
-
-    moomoo's SDK return shape isn't uniform: most calls return (ret, data),
-    but get_rating_change returns (ret, data, next_page, all_count). ret is
-    always first; everything after it is returned to the caller as-is (a
-    single value for a 2-tuple, a tuple of the rest otherwise).
-
-    The row is written when the `record_call` block ends, even if fn(ctx) raises: a
-    request can reach moomoo's server (spending real quota) and still raise locally
-    (timeout, a malformed/unexpected response) — if we skip recording on exception, the
-    ledger undercounts and the gate stops protecting the real budget. The exception is
-    re-raised as MoomooConnectionError (chained, original still inspectable via
-    __cause__) so every caller-facing failure mode is one exception type.
-
-    A row the ledger rejects never reaches this function: `emit` logs it and the answer
-    stays with the caller (#1521, the same rule as every other source).
-    """
     gate(endpoint, caller, request_uri=request_uri)
     with record_call(
         "moomoo", endpoint, identity=identity, caller=caller, request_uri=normalize_stock_uri(request_uri)
@@ -124,7 +80,6 @@ def _call_method(ctx, method: str, *args, caller: str = "probe_moomoo_capabiliti
 
 
 def get_analyst_consensus(ctx, code: str, *, caller: str = "probe_moomoo_capabilities", identity: FetchKey):
-    """Per-stock analyst consensus snapshot. code e.g. 'US.DDOG'."""
     return _call_method(ctx, "get_research_analyst_consensus", code, caller=caller, identity=identity)
 
 
@@ -139,15 +94,6 @@ def get_rating_summary(
     caller: str = "probe_moomoo_capabilities",
     identity: FetchKey,
 ):
-    """Per-stock rating list, or (with uid set) one analyst/institution's own
-    detail row(s) for this stock — per moomoo's docs this is the only way to
-    reach an analyst's history rather than just who currently covers the
-    stock. analyst_dimension=True asks for individual-analyst rows
-    (rating_dimension_type=2) rather than institution-aggregated ones — this
-    is the candidate for module 4's per-analyst backtesting, if the detail
-    rows carry enough history to reconstruct a track record. num paginates
-    the summary list (moomoo caps it at 20/page); uid switches the response
-    from a summary list to one analyst/institution's detail."""
     return _call_method(
         ctx,
         "get_research_rating_summary",
@@ -164,18 +110,12 @@ def get_rating_summary(
 def get_market_rating_changes(
     ctx, *, count: int = 10, page: str | None = None, caller: str = "probe_moomoo_capabilities", identity: FetchKey
 ):
-    """US-market-wide rating changes (upgrade/downgrade/new) — a live feed,
-    not a per-ticker history. count is capped at 20/page by the API itself;
-    page is the pagination cursor moomoo returns alongside next_page/all_count
-    for reaching older pages."""
     return _call_method(
         ctx, "get_rating_change", moomoo.Market.US, count=count, page=page, caller=caller, identity=identity
     )
 
 
 def get_company_profile(ctx, code: str, *, caller: str = "probe_moomoo_capabilities", identity: FetchKey):
-    """Company profile — a key/value table (columns: name, value, field_type),
-    not one row per company. Candidate ground-truth for company metadata."""
     return _call_method(ctx, "get_company_profile", code, caller=caller, identity=identity)
 
 
@@ -190,12 +130,6 @@ def get_financials_statements(
     caller: str = "probe_moomoo_capabilities",
     identity: FetchKey,
 ):
-    """One of income/balance-sheet/cash-flow/key-metrics (statement_type),
-    quarterly+annual history in one call (financial_type default
-    QuarterlyAnnual). Candidate for PEG / gross-profit-per-employee —
-    moomoo's own field normalization may sidestep the raw SEC XBRL
-    tag-inconsistency problem (see samples/README.md), needs cross-checking,
-    not blind trust. Paginated (num 1-50/page, next_key cursor)."""
     return _call_method(
         ctx,
         "get_financials_statements",
@@ -210,7 +144,6 @@ def get_financials_statements(
 
 
 def get_financials_revenue_breakdown(ctx, code: str, *, caller: str = "probe_moomoo_capabilities", identity: FetchKey):
-    """Revenue breakdown by product/industry/region for the latest reported period."""
     return _call_method(ctx, "get_financials_revenue_breakdown", code, caller=caller, identity=identity)
 
 
@@ -223,10 +156,6 @@ def get_valuation_detail(
     caller: str = "probe_moomoo_capabilities",
     identity: FetchKey,
 ):
-    """PE/PB/PS historical trend (with sector-average overlay), market and
-    industry-peer distribution, and profit/revenue growth multiples —
-    profit_growth_rate is the closest thing moomoo has to a ready-made PEG
-    input (empty for valuation_type=PB)."""
     return _call_method(
         ctx,
         "get_valuation_detail",
@@ -239,41 +168,28 @@ def get_valuation_detail(
 
 
 def get_research_morningstar_report(ctx, code: str, *, caller: str = "probe_moomoo_capabilities", identity: FetchKey):
-    """Morningstar star rating, fair value, economic moat / uncertainty /
-    financial-health labels, bull/bear case text, full analyst narrative.
-    Coverage isn't guaranteed for every ticker — Morningstar doesn't cover
-    the whole market, expect gaps particularly for smaller/newer names."""
     return _call_method(ctx, "get_research_morningstar_report", code, caller=caller, identity=identity)
 
 
 def get_shareholders_overview(ctx, code: str, *, caller: str = "probe_moomoo_capabilities", identity: FetchKey):
-    """Major holders + holder-type breakdown in one call (dict of 3 DataFrames:
-    main_holder, holder_type, holding_period)."""
     return _call_method(ctx, "get_shareholders_overview", code, caller=caller, identity=identity)
 
 
 def get_insider_trade_list(
     ctx, code: str, *, num: int = 20, caller: str = "probe_moomoo_capabilities", identity: FetchKey
 ):
-    """Recent insider (officer/director) trades for this stock, paginated."""
     return _call_method(ctx, "get_insider_trade_list", code, num=num, caller=caller, identity=identity)
 
 
 def get_corporate_actions_dividends(ctx, code: str, *, caller: str = "probe_moomoo_capabilities", identity: FetchKey):
-    """Dividend/distribution history for this stock."""
     return _call_method(ctx, "get_corporate_actions_dividends", code, caller=caller, identity=identity)
 
 
 def get_short_interest(ctx, code: str, *, num: int = 20, caller: str = "probe_moomoo_capabilities", identity: FetchKey):
-    """Short-interest history. Returns (us_df, hk_df) — moomoo always returns
-    both market slots regardless of which market the ticker is actually in;
-    the other one is expected to come back empty."""
     return _call_method(ctx, "get_short_interest", code, num=num, caller=caller, identity=identity)
 
 
 def get_owner_plate(ctx, code_list: list[str], *, caller: str = "probe_moomoo_capabilities", identity: FetchKey):
-    """Sector/industry-plate classification for one or more stocks in a single
-    call — pass the whole universe at once rather than one call per ticker."""
     return _call_method(ctx, "get_owner_plate", code_list, caller=caller, identity=identity)
 
 
@@ -287,20 +203,7 @@ def get_history_kline(
     caller: str = "moomoo_origin",
     identity: FetchKey,
 ):
-    """Daily regular-session bars for `code` between `start` and `end` (inclusive,
-    'YYYY-MM-DD'), UNADJUSTED — the quantity the market-price primary asserts is the
-    session's raw close, and a forward-adjusted (`AuType.QFQ`, the SDK default) series
-    would silently disagree with it after every split or dividend.
-
-    `extended_time=False` keeps the bar to the regular session, so the close is the
-    16:00 ET close and not a post-market last trade (the #535 quantity). Returns
-    `(bars, page_req_key)`: the SDK answers (ret, DataFrame, page_req_key), so `_call`
-    hands back the two-tuple after `ret`.
-
-    Quota: moomoo's historical-candlestick quota counts DISTINCT stocks per rolling
-    30-day window, not calls (init.md Section 5); the governed universes (TOPT 20 +
-    QQQ ~100) fit a 2,000-stock window with an order of magnitude to spare. Every call
-    still goes through the gate and the ledger like any other moomoo request."""
+    """Fetch unadjusted regular-session daily bars `(bars, page_req_key)` for `code` in `[start, end]`."""
     page_req_key: list = [None]
 
     def _invoke(c):
@@ -334,8 +237,6 @@ def get_history_kline(
 
 
 def get_history_kl_quota(ctx, *, caller: str = "moomoo_origin", identity: FetchKey):
-    """The historical-candlestick quota already spent this window: `(used, remaining,
-    detail_list)`. Read-only and cheap; stores the reading in moomoo_ledger (#1520)."""
     res = _call(
         ctx, "get_history_kl_quota", caller, lambda c: c.get_history_kl_quota(get_detail=False), identity=identity
     )
@@ -349,17 +250,11 @@ def get_history_kl_quota(ctx, *, caller: str = "moomoo_origin", identity: FetchK
     return res
 
 
-# moomoo's Python SDK doesn't expose these as enum classes (unlike e.g.
-# moomoo.Market) — it takes the raw Qot_Common.proto enum ints directly.
-FS_INCOME, FS_BALANCE_SHEET, FS_CASH_FLOW, FS_MAIN_INDEX = 1, 2, 3, 4  # FinancialStatementsType
-VALUATION_PE = 1  # ValuationType
-INTERVAL_YEAR10 = 7  # ValuationIntervalType
+FS_INCOME, FS_BALANCE_SHEET, FS_CASH_FLOW, FS_MAIN_INDEX = 1, 2, 3, 4
+VALUATION_PE = 1
+INTERVAL_YEAR10 = 7
 
 
-# The per-ticker fundamental endpoint set, one registry shared by the capture/
-# probe scripts and the full-universe sweep so "which endpoints do we pull" is
-# defined exactly once. get_owner_plate isn't here — it batches many codes per
-# call and is handled separately by callers.
 def _ep(fn, **defaults):
     return lambda ctx, code, caller, identity: fn(ctx, code, **defaults, caller=caller, identity=identity)
 
@@ -381,9 +276,6 @@ FUNDAMENTAL_ENDPOINTS = {
     "short_interest": _ep(get_short_interest, num=20),
 }
 
-# What the current factor modules actually read (init.md Section 7: PEG, gross
-# profit/employee, analyst backtesting, revenue-share screening) — the default
-# sweep set. The rest of FUNDAMENTAL_ENDPOINTS is opt-in (--all-endpoints).
 CORE_ENDPOINTS = (
     "company_profile",
     "financials_income",

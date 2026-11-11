@@ -1,25 +1,4 @@
-"""Filing extraction: one field from the issuer's latest annual filing (#70 slice 1, #735).
-
-This is the SEC-filing ADAPTER for the shared structured-extraction primitive
-(`common/factors/shared/extraction.py`, #769): recall (this module's regex, sentence
-window, and partial/total classification) is filing-specific and stays here; selecting
-among what recall found is not, and is delegated to the primitive.
-
-Recall is a pattern, precision is a judgement. The pattern enumerates every stated
-headcount in the filing with its sentence and as-of date; it never missed the right
-answer in any multi-candidate case measured (#70). Choosing between candidates is the
-model's job when there is a choice — and there is none when the filing states exactly
-one company-wide figure. That case is `rule:single-candidate:v1`, a deterministic
-extractor with its own identity and its own confidence, so a value landed by it is
-distinguishable forever from one a model selected (init.md §9). A filing with several
-distinct company-wide statements is `needs_model_selection` until a provider is seated
-through the gateway; it is never guessed.
-
-Every vendor request goes through the source gateway (rule 6). The filing's bytes land in
-object storage with a `raw.fetches` pointer before any value is read from them, so the
-evidence outlives the extractor. `knowable_at` is the filing date — the day the figure
-became public — never the fetch clock (rule 12 corollary).
-"""
+"""SEC filing fetcher, multi-class share cover reader, and headcount adapter (rule:single-candidate:v1)."""
 
 from __future__ import annotations
 
@@ -27,7 +6,7 @@ import html
 import json
 import re
 from collections.abc import Collection, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any, Literal
@@ -48,31 +27,13 @@ from data_engine.sources.sec import SUBMISSIONS_URL, submissions_key
 
 ANNUAL_FORMS = ("10-K", "20-F")
 ARCHIVE_URL = "https://www.sec.gov/Archives/edgar/data/{cik}/{accession}/{document}"
-#: The ``as_of`` of a document that a filed accession fixes for ever.
 ACCESSION_AS_OF = "accession"
 SUBMISSIONS_OVERFLOW_URL = "https://data.sec.gov/submissions/{name}"
 EXTRACTION_SOURCE = "10k-extraction"
-# Re-exported, not redefined: the rule's identity is minted exactly once, by the shared
-# primitive (common/factors/shared/extraction.py, #769) — this module owns only the
-# filing-specific recall and the mapping back onto `FilingCandidate`.
 RULE_SINGLE_CANDIDATE = extraction_primitive.RULE_SINGLE_CANDIDATE
 
-# A figure below this is an officer count or a sentence fragment; above it, nothing any
-# issuer employs (Walmart's 2.1M is the ceiling in the universe).
 _PLAUSIBLE = (10, 5_000_000)
-
-# "we had approximately 33,000 employees", "employed 341,000 employees worldwide",
-# "approximately 166,000 full-time equivalent employees" (AAPL), "employed approximately
-# 36,500 regular full-time employees" (AMAT), "had approximately 28,000 staff members"
-# (AMGN), "employed approximately 1,556,000 full-time and part-time employees" (AMZN),
-# "employee headcount worldwide was 125,665" (TSLA) —
-# all misses on the first real QQQ probe (2026-09-04), so the workforce qualifier may
-# stack up to three words joined by "and"/"or". Deliberately loose: a missed candidate
-# is unrecoverable downstream, whereas a spurious one is discarded by selection.
-_SCALE_MULTIPLIERS = {
-    "thousand": Decimal(1_000),
-    "million": Decimal(1_000_000),
-}
+_SCALE_MULTIPLIERS = {"thousand": Decimal(1_000), "million": Decimal(1_000_000)}
 _HEADCOUNT = re.compile(
     r"(?:had|employed|have|includes?|of|total of|our|headcount(?:\s+increased)?(?:\s+(?:\d+(?:\.\d+)?%\s+)?(?:from\s+[\d,]+\s+)?)?to)\s+"
     r"(?:approximately\s+|approxima\s+tely\s+|about\s+|over\s+|more than\s+|nearly\s+)?"
@@ -85,21 +46,12 @@ _HEADCOUNT = re.compile(
     re.I,
 )
 _AS_OF = re.compile(r"(?:[Aa]s of|[Aa]t) ([A-Z][a-z]+ \d{1,2},? \d{4})")
-# Inline XBRL leaks concept names into the text ("us-gaap:EmployeeSeveranceMember"); those
-# are tag soup, not prose.
 _TAG_SOUP = re.compile(r"us-gaap:|Member\b|xbrli:")
-# A count qualified as a part of the workforce is not the total. The qualifier is read
-# from the count's own CLAUSE (up to the next comma, semicolon or "including"), never
-# from the whole sentence: "50,000 people, including 27,000 outside the United States"
-# qualifies the 27,000, not the 50,000. The list is deliberately short and literal — a
-# false "partial" would silently drop the only candidate — so only phrases that
-# unambiguously name a subset are here.
 _CLAUSE_END = re.compile(
     r"[,;.]|\s(?:including|of which|of whom)\s|\s+and\s+(?:approximately|approxima\s+tely|about|over|more than|nearly|\d)",
     re.I,
 )
 _PARTIAL = re.compile(
-    # "full-time and part-time employees" is the whole workforce, not the part-time subset.
     r"\b((?<!full[- ]time and )(?<!full[- ]time or )(?<!full and )(?<!full-time, )part[- ]time|"
     r"(?<!part[- ]time and )(?<!part[- ]time or )temporary|seasonal|contractors?|contingent|"
     r"(?:research and development|sales and marketing|general and administrative|engineering)\s+(?:staff|employees|headcount|personnel|team)|"
@@ -154,15 +106,11 @@ class ExtractionOutcome:
     raw_fetch_id: int | None = None
     fact_id: int | None = None
     detail: str = ""
-    #: None: no model was asked. False: the provider answered a new question. True: a stored
-    #: answer was replayed. The history run counts asks and replays from this field.
     model_replayed: bool | None = None
 
 
 def filing_plain_text(body: bytes) -> str:
     text = body.decode("utf-8", "ignore")
-    # The ix:header block is a machine-readable duplicate of the whole filing; leaving it
-    # in both doubles the text and pollutes it with concept names.
     text = re.sub(r"(?is)<ix:header.*?</ix:header>", " ", text)
     text = re.sub(r"(?is)<(script|style).*?</\1>", " ", text)
     text = html.unescape(re.sub(r"(?s)<[^>]+>", " ", text))
@@ -173,13 +121,9 @@ _SENTENCE_END = re.compile(r"(?<=[.;])\s+(?=[A-Z])")
 
 
 def _sentence(text: str, start: int, end: int) -> str:
-    """The sentence containing [start, end): bounded by sentence terminators inside a
-    window, so a qualifier in the PREVIOUS sentence never marks this one partial."""
     lo, hi = max(0, start - 220), min(len(text), end + 120)
-    head = text[lo:start]
-    tail = text[end:hi]
-    head_parts = _SENTENCE_END.split(head)
-    tail_parts = _SENTENCE_END.split(tail)
+    head_parts = _SENTENCE_END.split(text[lo:start])
+    tail_parts = _SENTENCE_END.split(text[end:hi])
     return (head_parts[-1] + text[start:end] + tail_parts[0]).strip()
 
 
@@ -194,13 +138,11 @@ def _parse_headcount_value(raw_number: str | None, raw_scale: str | None) -> int
         scaled = Decimal(cleaned) * (scale if scale is not None else Decimal(1))
     except InvalidOperation:
         return None
-    if scaled != int(scaled):
-        return None
-    return int(scaled)
+    return int(scaled) if scaled == int(scaled) else None
 
 
 def candidates(text: str) -> list[FilingCandidate]:
-    """Every stated headcount with its sentence, as-of date and a partial/total mark."""
+    """Enumerate all stated headcount figures in `text` with sentence span, as-of date, and partial mark."""
     found: dict[tuple[int, str | None, str], FilingCandidate] = {}
     for match in _HEADCOUNT.finditer(text):
         sentence = _sentence(text, match.start(), match.end())
@@ -211,8 +153,6 @@ def candidates(text: str) -> list[FilingCandidate]:
         value = _parse_headcount_value(raw_digits, raw_scale)
         if value is None or not _PLAUSIBLE[0] <= value <= _PLAUSIBLE[1]:
             continue
-        # The as-of date usually sits in the sentence; a cover-page figure may state it
-        # one sentence earlier, so fall back to the surrounding window.
         as_of = _AS_OF.search(sentence) or _AS_OF.search(text[max(0, match.start() - 220) : match.end() + 80])
         clause_tail = text[match.start() : match.end() + 120]
         clause_end = _CLAUSE_END.search(clause_tail, match.end() - match.start())
@@ -224,33 +164,17 @@ def candidates(text: str) -> list[FilingCandidate]:
 
 
 def _shared_candidates(totals: Sequence[FilingCandidate]) -> list[extraction_primitive.Candidate]:
-    """Map this module's candidates onto the shared `Candidate`, which has no `partial` mark."""
     return [extraction_primitive.Candidate(value=c.value, sentence=c.sentence, as_of=c.as_of) for c in totals]
 
 
 def _chosen_total(totals: Sequence[FilingCandidate], selection: extraction_primitive.Selection) -> FilingCandidate:
-    """The first company-wide candidate that states the selected value.
-
-    The rule and the model both select a value that is among the candidates. The first
-    candidate with that value carries the sentence and the as-of date of the outcome.
-    """
     return next(c for c in totals if c.value == selection.value)
 
 
 def select_total(found: list[FilingCandidate]) -> tuple[ExtractionStatus, FilingCandidate | None]:
-    """The deterministic half of selection: one company-wide statement, or defer.
-
-    The domain-specific half stays here: filtering to non-partial ("company-wide")
-    candidates, and mapping the primitive's selection back onto this module's own
-    `FilingCandidate`. The rule itself is `extract_metric` without a selector
-    (common/factors/shared/extraction.py, #769). This function does not decide the rule.
-    `common/factors/tests/test_extraction_ownership.py` fails CI if a filing-shaped copy of
-    the rule appears in this module or in any other module.
-    """
+    """Delegate deterministic single-candidate selection to `factors.shared.extraction.extract_metric`."""
     totals = [candidate for candidate in found if not candidate.partial]
     if not totals:
-        # Nothing, or only subset counts (a segment, a region, contractors): the filing
-        # states no company-wide total, so there is nothing for a model to choose either.
         return "no_candidate", None
     selection = extraction_primitive.extract_metric(_shared_candidates(totals)).selection
     if selection is None:
@@ -272,9 +196,6 @@ def parse_as_of(text: str | None) -> date | None:
 def _fetch_bytes_via_gateway(
     http: Any, gateway_instance: SourceGateway | None, endpoint: str, url: str, *, key: FetchKey
 ) -> bytes:
-    """One SEC document as bytes, fetched once per key (#1411 K3, K5).
-
-    A second caller for the same key, in this run or a later one, reads the landed bytes."""
     from data_engine.sources import gateway as gw_mod
 
     def fetch(identity: FetchKey) -> bytes:
@@ -304,7 +225,6 @@ def _annual_filing_from_index(
     gateway: SourceGateway | None = None,
     allowed_forms: Collection[str] = ANNUAL_FORMS,
 ) -> FilingDocument | None:
-    """Return the first filing in allowed_forms at or before cutoff_date from one submissions index block."""
     forms = index_block.get("form") or ()
     for index, form in enumerate(forms):
         if form not in allowed_forms:
@@ -315,7 +235,6 @@ def _annual_filing_from_index(
         accession = index_block["accessionNumber"][index].replace("-", "")
         document = index_block["primaryDocument"][index]
         url = ARCHIVE_URL.format(cik=cik, accession=accession, document=document)
-        # A filed accession never changes (an amendment is a new accession): the key holds for ever.
         body = _fetch_bytes_via_gateway(
             http,
             gateway,
@@ -340,9 +259,13 @@ def _latest_filing_for_forms(
         http, gateway, "submissions", SUBMISSIONS_URL.format(cik=cik), key=submissions_key(cik)
     )
     filings = submissions.get("filings") or {}
-    recent = filings.get("recent") or {}
     found = _annual_filing_from_index(
-        cik, recent, cutoff_date=cutoff_date, http=http, gateway=gateway, allowed_forms=allowed_forms
+        cik,
+        filings.get("recent") or {},
+        cutoff_date=cutoff_date,
+        http=http,
+        gateway=gateway,
+        allowed_forms=allowed_forms,
     )
     if found is not None:
         return found
@@ -357,9 +280,12 @@ def _latest_filing_for_forms(
                     continue
             except ValueError:
                 pass
-        overflow_url = SUBMISSIONS_OVERFLOW_URL.format(name=name)
         overflow = _fetch_json_via_gateway(
-            http, gateway, "submissions", overflow_url, key=submissions_key(cik, overflow=name)
+            http,
+            gateway,
+            "submissions",
+            SUBMISSIONS_OVERFLOW_URL.format(name=name),
+            key=submissions_key(cik, overflow=name),
         )
         found = _annual_filing_from_index(
             cik, overflow, cutoff_date=cutoff_date, http=http, gateway=gateway, allowed_forms=allowed_forms
@@ -372,14 +298,18 @@ def _latest_filing_for_forms(
 def latest_annual_filing(
     cik: int, *, http: Any, gateway: SourceGateway | None = None, cutoff: datetime
 ) -> FilingDocument | None:
-    """The newest 10-K/20-F filed at or before the cutoff, with its primary document (#1264).
-
-    High-volume filers (such as JPM, which files thousands of 424B2 notes per year) push
-    historical 10-K filings out of `filings.recent` into `filings.files` overflow JSONs.
-    When `recent` holds no eligible annual filing, overflow files whose `filingFrom` is on
-    or before `cutoff_date` are searched in order.
-    """
     return _latest_filing_for_forms(cik, http=http, gateway=gateway, cutoff=cutoff, allowed_forms=ANNUAL_FORMS)
+
+
+def latest_periodic_filing(
+    cik: int, *, http: Any, gateway: SourceGateway | None = None, cutoff: datetime
+) -> FilingDocument | None:
+    return _latest_filing_for_forms(cik, http=http, gateway=gateway, cutoff=cutoff, allowed_forms=STATEMENT_FORMS)
+
+
+def format_accession(accession: str) -> str:
+    digits = accession.replace("-", "")
+    return f"{digits[:10]}-{digits[10:12]}-{digits[12:]}" if len(digits) == 18 and digits.isdigit() else accession
 
 
 _CLASS_OF_STOCK_AXIS = "us-gaap:StatementClassOfStockAxis"
@@ -392,27 +322,12 @@ _CONVERSION_RATE_CONCEPT = re.compile(
 )
 
 
-def latest_periodic_filing(
-    cik: int, *, http: Any, gateway: SourceGateway | None = None, cutoff: datetime
-) -> FilingDocument | None:
-    """Return the newest periodic statement (10-K/10-Q/20-F/40-F) filed at or before cutoff (#1265)."""
-    return _latest_filing_for_forms(cik, http=http, gateway=gateway, cutoff=cutoff, allowed_forms=STATEMENT_FORMS)
-
-
-def format_accession(accession: str) -> str:
-    digits = accession.replace("-", "")
-    if len(digits) == 18 and digits.isdigit():
-        return f"{digits[:10]}-{digits[10:12]}-{digits[12:]}"
-    return accession
-
-
 def _uniform_class_par_values(ix: Any, members: Sequence[str]) -> bool:
     par_by_member: dict[str, Decimal] = {}
     for fact in ix.facts((_PAR_VALUE_CONCEPT,)):
         if fact.value is None or fact.context.start is not None:
             continue
-        dims = dict(fact.context.dimensions)
-        member = dims.get(_CLASS_OF_STOCK_AXIS)
+        member = dict(fact.context.dimensions).get(_CLASS_OF_STOCK_AXIS)
         if isinstance(member, str) and member in members:
             par_by_member[member] = fact.value
     return len(set(par_by_member.values())) <= 1
@@ -422,21 +337,14 @@ def _listed_stock_members(ix: Any, members: Sequence[str]) -> set[str]:
     listed: set[str] = set()
     for text_fact in ix.text_facts((_DEI_TRADING_SYMBOL_CONCEPT,), limit=40):
         context = ix.contexts.get(text_fact.context_id)
-        if context is None:
-            continue
-        member = dict(context.dimensions).get(_CLASS_OF_STOCK_AXIS)
-        if isinstance(member, str) and member in members:
-            listed.add(member)
+        if context is not None:
+            member = dict(context.dimensions).get(_CLASS_OF_STOCK_AXIS)
+            if isinstance(member, str) and member in members:
+                listed.add(member)
     return listed
 
 
 def _class_conversion_rates(ix: Any, body: bytes, members: Sequence[str], *, as_of: date) -> dict[str, Decimal] | None:
-    """Per-class conversion rates to the listed common class from tagged note facts (#1519).
-
-    Returns ``member -> rate`` when the listed base class (ratio 1) is identified and every
-    other share class in ``members`` carries a positive ``*:CommonStockConversionRate`` tag
-    at or before ``as_of``. Returns ``None`` when any class lacks a proven conversion ratio.
-    """
     concepts = set(_CONVERSION_RATE_CONCEPT.findall(body.decode("utf-8", "ignore")))
     latest_by_member: dict[str, tuple[date, Decimal]] = {}
     for fact in ix.facts(concepts) if concepts else ():
@@ -469,16 +377,25 @@ def _class_conversion_rates(ix: Any, body: bytes, members: Sequence[str], *, as_
     return rates
 
 
-def multi_class_share_entries(document: FilingDocument) -> list[dict[str, Any]]:
-    """Extract dimensional cover-page share entries from an iXBRL filing document (#1265, #1519).
+def _share_entry(
+    *, end: str, val: Decimal, accn: str, fy: int, fp: str, form: str, filed: str, segment: str | None = None
+) -> dict[str, Any]:
+    entry: dict[str, Any] = {
+        "end": end,
+        "val": int(val) if val == int(val) else str(val),
+        "accn": accn,
+        "fy": fy,
+        "fp": fp,
+        "form": form,
+        "filed": filed,
+    }
+    if segment is not None:
+        entry["segment"] = segment
+    return entry
 
-    Multi-class issuers such as Visa tag cover-page ``dei:EntityCommonStockSharesOutstanding``
-    on ``us-gaap:StatementClassOfStockAxis``, which SEC's ``companyfacts`` aggregation strips.
-    When every non-listed class tags its conversion rate (``*:CommonStockConversionRate``) and
-    par values are uniform, returns one unsegmented entry carrying the as-converted share total
-    ``sum(count * rate)``. When any class lacks a tagged conversion rate, returns the segmented
-    entries so ``build_bundle`` marks the share count unavailable with ``missing_class_ratio``.
-    """
+
+def multi_class_share_entries(document: FilingDocument) -> list[dict[str, Any]]:
+    """Extract dimensional cover-page share entries from an iXBRL filing document (#1265, #1519)."""
     from data_engine.datahub.standards.inline_xbrl import InlineXbrl
 
     ix = InlineXbrl(document.body)
@@ -487,46 +404,27 @@ def multi_class_share_entries(document: FilingDocument) -> list[dict[str, Any]]:
         if fact.value is None or fact.context.start is not None:
             continue
         dims = dict(fact.context.dimensions)
-        if len(dims) != 1 or _CLASS_OF_STOCK_AXIS not in dims:
-            continue
-        by_end.setdefault(fact.context.end, {})[dims[_CLASS_OF_STOCK_AXIS]] = fact.value
+        if len(dims) == 1 and _CLASS_OF_STOCK_AXIS in dims:
+            by_end.setdefault(fact.context.end, {})[dims[_CLASS_OF_STOCK_AXIS]] = fact.value
     if not by_end:
         return []
     latest_end = max(by_end)
     by_member = by_end[latest_end]
     if len(by_member) < 2 or not _uniform_class_par_values(ix, tuple(by_member)):
         return []
-    formatted_accn = format_accession(document.accession)
-    filed_iso = document.filing_date.isoformat()
-    end_iso = latest_end.isoformat()
-    fp = "FY" if document.form in ANNUAL_STATEMENT_FORMS else "Q"
+    base_kwargs: dict[str, Any] = {
+        "end": latest_end.isoformat(),
+        "accn": format_accession(document.accession),
+        "fy": latest_end.year,
+        "fp": "FY" if document.form in ANNUAL_STATEMENT_FORMS else "Q",
+        "form": document.form,
+        "filed": document.filing_date.isoformat(),
+    }
     rates = _class_conversion_rates(ix, document.body, tuple(by_member), as_of=latest_end)
     if rates is not None:
         total = sum((count * rates[member] for member, count in by_member.items()), Decimal(0))
-        return [
-            {
-                "end": end_iso,
-                "val": int(total) if total == int(total) else str(total),
-                "accn": formatted_accn,
-                "fy": latest_end.year,
-                "fp": fp,
-                "form": document.form,
-                "filed": filed_iso,
-            }
-        ]
-    return [
-        {
-            "end": end_iso,
-            "val": int(val) if val == int(val) else str(val),
-            "accn": formatted_accn,
-            "fy": latest_end.year,
-            "fp": fp,
-            "form": document.form,
-            "filed": filed_iso,
-            "segment": member,
-        }
-        for member, val in sorted(by_member.items())
-    ]
+        return [_share_entry(val=total, **base_kwargs)]
+    return [_share_entry(val=val, segment=member, **base_kwargs) for member, val in sorted(by_member.items())]
 
 
 def _get_bytes(http: Any, url: str) -> bytes:
@@ -538,27 +436,11 @@ def _get_bytes(http: Any, url: str) -> bytes:
 def fetch_annual_filing(
     cik: int, *, http: Any, gateway: SourceGateway, cutoff: datetime
 ) -> FilingDocument | None | ExtractionOutcome:
-    """Fetch the filing, or the OUTCOME that says why the cell could not be TRIED.
-
-    `None` stays a third answer rather than being folded into the outcome: "this issuer has
-    no annual filing at the cutoff" is a fact about the issuer, while a capacity refusal or a
-    vendor error is a fact about the attempt, and each adapter words the first for itself.
-
-    Every adapter the standards backfill drives needs the same three-way answer, and the
-    reason it is one function rather than a convention is what happens when the convention is
-    forgotten: a `CapacityExceeded` escaping one adapter abandons every issuer after the first
-    throttled one, which is the opposite of what a capacity signal means. `segment_extraction`
-    shipped without it and #805's review caught it; a third adapter should not get the chance
-    to be the third.
-
-    Returns the document, or an `ExtractionOutcome` the caller returns unchanged — so the
-    call site reads `if isinstance(result, ExtractionOutcome): return result`.
-    """
     try:
         return latest_annual_filing(cik, http=http, gateway=gateway, cutoff=cutoff)
     except CapacityExceeded as error:
         return ExtractionOutcome(cik, "deferred_capacity", detail=str(error))
-    except Exception as error:  # noqa: BLE001 - a backfill reports the failure per cell and continues
+    except Exception as error:  # noqa: BLE001
         return ExtractionOutcome(cik, "error", detail=f"{type(error).__name__}: {error}")
 
 
@@ -567,7 +449,6 @@ def _model_selection_summary(
 ) -> tuple[str, bool | None]:
     if not model_runs:
         return "", None
-    # The primitive asks the selector at most once, so the list holds one run.
     (model_run,) = model_runs
     detail = f" model={model_run.model} invocation={model_run.invocation_id}" + (
         " (replayed)" if model_run.replayed else ""
@@ -593,12 +474,7 @@ def extract_headcount(
     model_transport: llm.Transport | None = None,
     issuer_label: str | None = None,
 ) -> ExtractionOutcome:
-    """Enumerate, select by rule or by the seated model, and — in write mode — land the fact.
-
-    `cik` is where the filing is fetched from; `record_cik` (default: the same) is the
-    issuer the fact is recorded under — they differ for a post-reorganization holding
-    company whose filings still sit under the predecessor CIK (#496).
-    """
+    """Enumerate filing headcount candidates, select by deterministic rule or model, and persist."""
     record_cik = cik if record_cik is None else record_cik
     document = fetch_annual_filing(cik, http=http, gateway=gateway, cutoff=cutoff)
     if isinstance(document, ExtractionOutcome):
@@ -608,13 +484,9 @@ def extract_headcount(
 
     try:
         found = candidates(filing_plain_text(document.body))
-    except Exception as error:  # noqa: BLE001 - malformed filing body/token must not crash the backfill loop
+    except Exception as error:  # noqa: BLE001
         return ExtractionOutcome(cik, "error", detail=f"{type(error).__name__}: {error}")
     totals = [c for c in found if not c.partial]
-    # Precision is the model's half (#70 scope 2): it chooses among the enumerated
-    # company-wide statements, or declines. A declined or non-candidate answer stays
-    # an honest refusal on the cell. In write mode the invocation is recorded (answer
-    # or refusal); in probe mode only the ledger row is — probe writes nothing else.
     model_runs: list[llm.ModelSelection] = []
     selector: extraction_primitive.Selector | None = None
     if select_with_model and llm.is_configured():
@@ -692,27 +564,12 @@ def extract_headcount(
         cik=record_cik,
         headcount=Decimal(chosen.value),
         knowable_at=knowable_instant(AsOfAxis.ACCESSION, document.filing_date),
-        period_end=parse_as_of(chosen.as_of),
+        period_end=outcome.as_of,
         source=EXTRACTION_SOURCE,
         evidence_ref=evidence_ref,
         confidence=confidence_for(standard.confidence_policy_id, extractor),
     )
-    return ExtractionOutcome(
-        record_cik,
-        "resolved",
-        extractor=extractor,
-        value=chosen.value,
-        as_of=parse_as_of(chosen.as_of),
-        sentence=chosen.sentence,
-        candidates=tuple(found),
-        accession=document.accession,
-        form=document.form,
-        filing_date=document.filing_date,
-        raw_fetch_id=raw_id,
-        fact_id=fact_id,
-        detail=outcome.detail,
-        model_replayed=model_replayed,
-    )
+    return replace(outcome, cik=record_cik, raw_fetch_id=raw_id, fact_id=fact_id)
 
 
 def _already_recorded(connection: Any, cik: int, accession: str) -> bool:

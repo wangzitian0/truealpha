@@ -1,28 +1,4 @@
-"""Capture-control persistence for the TOPT executor path (#171 A1, ADR A1).
-
-The generic executor owns the loop and the reason-code governance; it must never
-learn how a capture is stored (init.md rule 22). This module supplies the
-`ObligationSink` it writes through: one terminally resolved obligation becomes an
-attempt ledger, an immutable `raw.fetches` landing, a source vintage, a normalized
-observation with its payload, and the terminal `raw.capture_obligation_results`
-row — the exact tables `freeze_snapshot` → `materialize` → `mart.topt_*` reads.
-
-Everything lands on the caller's connection, so the capture-control writes and the
-executor's evidence-graph append commit as one transaction per run.
-
-A cell the primary could not serve and a further registered origin did (#862) lands on the
-same tables through the same path: its vintage sits under the cell's planned request — the
-one the snapshot's request-identity guard admits — with the serving origin's own bytes and
-record id, the terminal attempt names that vintage while still carrying the primary's
-failure reason, and the obligation result adds `served_by_failover` to the primary's codes.
-
-Content-addressed identities derive from the run's `cutoff`, so a retried tick
-reproduces the same rows and the conflict-tolerant inserts make the replay
-idempotent. Audit stamps are the opposite by design (#530): `raw.fetches`
-`fetched_at`/`recorded_at` carry the real ingestion clock — identity-safe, the
-table's uniqueness ignores them — and `source_published_at` carries the adapter's
-own `transaction_time` rather than arithmetic on the cutoff.
-"""
+"""Capture-control persistence for the TOPT executor path (#171 A1, ADR A1)."""
 
 from __future__ import annotations
 
@@ -62,8 +38,6 @@ from data_engine.datahub.production_topt.source_registrations import registratio
 from data_engine.datahub.repository import PostgresCaptureControlRepository
 from data_engine.datahub.resolve_coordinates import parse_alias
 
-# How a classified reason code lands in the attempt ledger. The reason code stays
-# the record of *why*; the outcome is what the retry policy classifies.
 _ATTEMPT_OUTCOMES: Mapping[ObligationReasonCode, FetchAttemptOutcome] = {
     ObligationReasonCode.AUTH_FAILED: FetchAttemptOutcome.FAILED,
     ObligationReasonCode.CONTRACT_VIOLATION: FetchAttemptOutcome.FAILED,
@@ -86,22 +60,40 @@ _TERMINAL_OUTCOMES: Mapping[ObligationTerminalState, FetchAttemptOutcome] = {
     ObligationTerminalState.SKIPPED_BY_POLICY: FetchAttemptOutcome.UNAVAILABLE,
     ObligationTerminalState.FAILED: FetchAttemptOutcome.FAILED,
 }
-# Spacing between the recorded retries of one work item. Small enough that every
-# permitted attempt still precedes the terminal completion stamp below.
 _RETRY_SPACING = timedelta(seconds=2)
+
+
+def build_source_request(
+    obligation: CaptureListObligation,
+    *,
+    ordinal: int,
+    source: str,
+    origin: str | None = None,
+) -> SourceRequest:
+    """Build a content-addressed `SourceRequest` signed by the owning semantic registration."""
+    coordinate: dict[str, Any] = {
+        "ordinal": ordinal,
+        "subject": obligation.subject.model_dump(mode="json"),
+        "requirement": obligation.capture_requirement_id,
+        "partition": obligation.partition,
+    }
+    if origin is not None:
+        coordinate["origin"] = origin
+    registration = registration_for(obligation.capture_requirement_id.removesuffix(":v1"))
+    return SourceRequest(
+        source_registry_entry_id=registration.entry_id,
+        source_policy_id=registration.policy_id,
+        request_fingerprint_version=f"{source}:v1",
+        canonical_request_sha256=canonical_sha256(coordinate),
+        subject_refs=(obligation.subject,),
+        capture_requirement_ids=(obligation.capture_requirement_id,),
+        partition=obligation.partition,
+    )
 
 
 @dataclass(frozen=True)
 class CaptureTimeline:
-    """The run's persistence stamps, all derived from its cutoff.
-
-    `partition_start` is the start of the frozen universe partition the run asserts
-    values for. It is the knowable time of a release-derived cell when the universe has
-    no publication time. It is not an observation's `valid_from`: that is the date of the
-    fact itself (#1016), and the materializer judges it at the cutoff day (#1060).
-    `knowable_at` is the capture's own knowable time — inside the schedule policy's freshness
-    window, which is what makes a captured cell `fresh` at the mart.
-    """
+    """Persistence timestamps for one capture run derived from its cutoff."""
 
     cutoff: datetime
     partition_start: datetime
@@ -113,9 +105,10 @@ class CaptureTimeline:
 
     @classmethod
     def for_partition(cls, cutoff: datetime, partition: str) -> CaptureTimeline:
-        """Build the timeline for a run whose obligations carry `partition` (a date)."""
-        start = datetime.combine(date.fromisoformat(partition), datetime.min.time(), tzinfo=UTC)
-        return cls(cutoff=cutoff, partition_start=start)
+        return cls(
+            cutoff=cutoff,
+            partition_start=datetime.combine(date.fromisoformat(partition), datetime.min.time(), tzinfo=UTC),
+        )
 
     @property
     def source_published_at(self) -> datetime:
@@ -139,8 +132,6 @@ class CaptureTimeline:
 
 
 def _require_aware(stamp: datetime | None) -> datetime | None:
-    """A naive adapter timestamp would land as a silently shifted instant; refuse it
-    loudly, the same stance CaptureTimeline takes on its own stamps (Copilot on #587)."""
     if stamp is not None and (stamp.tzinfo is None or stamp.utcoffset() is None):
         raise ValueError("adapter transaction_time must be timezone-aware")
     return stamp
@@ -148,7 +139,7 @@ def _require_aware(stamp: datetime | None) -> datetime | None:
 
 @dataclass(frozen=True)
 class ObligationBinding:
-    """The planned coordinates the sink needs to persist one work item's outcome."""
+    """Planned coordinates needed to persist one work item's outcome."""
 
     ordinal: int
     obligation: CaptureListObligation
@@ -156,11 +147,7 @@ class ObligationBinding:
 
 
 class PostgresCaptureControlSink:
-    """`ObligationSink` writing the capture-control tables the mart reads.
-
-    Constructed from the same plan the executor's routing table was built from, so
-    a work item the plan never declared fails closed rather than inventing rows.
-    """
+    """`ObligationSink` persisting capture-control and observation rows on the caller's connection."""
 
     def __init__(
         self,
@@ -182,13 +169,8 @@ class PostgresCaptureControlSink:
         self._source_label = source_label
         self._timeline = timeline
         self._retry = retry
-        # The per-semantic freshness windows the policy declared (#530 slice 2);
-        # the sink grades each observation against ITS semantic's window at write
-        # time, so `freshness_state` is a computation, not a stamped literal.
         self._freshness_windows = dict(freshness_windows or {})
         self._default_freshness_max_age = default_freshness_max_age
-        # Injected so tests can land bytes without MinIO; production leaves it None and
-        # `raw_store` resolves the configured S3 store.
         self._object_store = object_store
         self._coordinates = dict(coordinates) if coordinates else None
         self._raw_coordinates = dict(raw_coordinates) if raw_coordinates else None
@@ -212,15 +194,8 @@ class PostgresCaptureControlSink:
                 f"beyond the {self._retry.max_attempts} its retry policy permits"
             )
         if success is not None and success.record is None:
-            # A success the sink cannot persist would leave the obligation terminally
-            # resolved with no observation behind it, and `freeze_snapshot` would then
-            # refuse the run for a reason far from its cause.
             raise ValueError(f"{work_item.work_item_id} succeeded without a normalized record to persist")
         if success is not None:
-            # The ledger and the served value must tell one story (#862): a failover is a
-            # success whose terminal attempt still names the primary's failure, and a
-            # primary success is one whose terminal attempt failed nothing. Anything else
-            # is a substitution the ledger would hide, or a failure it would invent.
             served_by_failover = success.served_by_failover is not None
             if terminal_state is not ObligationTerminalState.SUCCESS:
                 raise ValueError(f"{work_item.work_item_id} handed over a success under {terminal_state.value}")
@@ -231,10 +206,9 @@ class PostgresCaptureControlSink:
                 )
 
         ledger = AttemptLedger(work_item_id=work_item.work_item_id, retry_policy=self._retry)
-        vintage_id: str | None = None
-        if success is not None and success.record is not None:
-            vintage_id = self._persist_content(binding, success)
-
+        vintage_id = (
+            self._persist_content(binding, success) if success is not None and success.record is not None else None
+        )
         final_attempt_id = self._replay_attempts(
             ledger,
             attempt_reasons,
@@ -261,8 +235,6 @@ class PostgresCaptureControlSink:
             ),
         )
 
-    # -- attempts ---------------------------------------------------------------------
-
     def _replay_attempts(
         self,
         ledger: AttemptLedger,
@@ -271,7 +243,6 @@ class PostgresCaptureControlSink:
         terminal_state: ObligationTerminalState,
         source_vintage_id: str | None,
     ) -> str:
-        """Persist one attempt per executed fetch; the last one carries the terminal outcome."""
         last_attempt_id = ""
         for index, reason in enumerate(attempt_reasons):
             terminal = index == len(attempt_reasons) - 1
@@ -281,8 +252,6 @@ class PostgresCaptureControlSink:
                 outcome = _TERMINAL_OUTCOMES[terminal_state]
                 completed_at = self._timeline.terminal_attempt_at
             else:
-                # A non-terminal attempt is a bounded retry by construction: the
-                # executor only loops on RETRY dispositions.
                 outcome = _ATTEMPT_OUTCOMES[reason] if reason is not None else FetchAttemptOutcome.SUCCESS
                 completed_at = started_at + _RETRY_SPACING / 2
             result = ledger.finish(
@@ -298,10 +267,7 @@ class PostgresCaptureControlSink:
             last_attempt_id = attempt.attempt_id
         return last_attempt_id
 
-    # -- content ----------------------------------------------------------------------
-
     def _persist_content(self, binding: ObligationBinding, success: FetchSuccess) -> str:
-        """Land the immutable raw bytes and the source vintage; returns the vintage id."""
         return self._put_vintage(
             source_request_id=binding.source_request.source_request_id,
             raw=success.raw,
@@ -311,52 +277,25 @@ class PostgresCaptureControlSink:
     def _put_vintage(
         self, *, source_request_id: str, raw: RawResponse, source_published_at: datetime | None = None
     ) -> SourceVintage:
-        raw_fetch_id = self._insert_fetch(raw)
-        vintage = SourceVintage(
-            source_request_id=source_request_id,
-            source_record_id=raw.record_id,
-            # The adapter's own transaction_time — the source property (SEC filed
-            # date, price-bar date, release manifest time) — not arithmetic on the
-            # tick's cutoff (#530). The timeline fallback remains only for callers
-            # that genuinely have no adapter assertion to carry.
-            source_published_at=_require_aware(source_published_at) or self._timeline.source_published_at,
-            raw_object_id=f"raw-object:{raw.sha256}",
-        )
-        self._repository.put_source_vintage(vintage, raw_fetch_id=raw_fetch_id)
-        return vintage
-
-    def _insert_fetch(self, raw: RawResponse) -> int:
-        """Store the bytes in object storage and record the pointer row.
-
-        This goes through `raw_store.insert_fetch` — the one path that actually uploads —
-        rather than writing `raw.fetches` directly. Writing the row alone is what left
-        production with 1016 pointers into buckets that never existed and a single stored
-        object; a pointer nobody can dereference is not evidence.
-
-        Keying on the VENDOR's source and record id (not the per-run label) is what makes
-        the table's (source, source_record_id, payload_sha256) uniqueness do its job: an
-        unchanged re-fetch collapses onto the existing row and the existing object, while
-        changed bytes land a new append-only vintage. With the run version in the key,
-        every tick re-landed identical bytes under a new identity forever.
-        """
         ingested_at = datetime.now(UTC)
-        return raw_store.insert_fetch(
+        raw_fetch_id = raw_store.insert_fetch(
             self._connection,
             source=raw.source,
             source_record_id=raw.record_id,
             body=raw.body,
             content_type=raw.content_type,
-            # Honest audit clocks (#530). These are "ingestion audit time only"
-            # (AGENTS.md) and are identity-safe: the table's uniqueness is
-            # (source, source_record_id, payload_sha256), so a retried tick still
-            # collapses onto the existing row — the fabricated cutoff-derived
-            # stamps bought no determinism and produced a false diagnosis in #531
-            # (rows read as pre-deploy output because recorded_at sat an hour
-            # before the tick that wrote them).
             fetched_at=ingested_at,
             recorded_at=ingested_at,
             store=self._object_store,
         )
+        vintage = SourceVintage(
+            source_request_id=source_request_id,
+            source_record_id=raw.record_id,
+            source_published_at=_require_aware(source_published_at) or self._timeline.source_published_at,
+            raw_object_id=f"raw-object:{raw.sha256}",
+        )
+        self._repository.put_source_vintage(vintage, raw_fetch_id=raw_fetch_id)
+        return vintage
 
     def _persist_observation(
         self,
@@ -374,40 +313,17 @@ class PostgresCaptureControlSink:
             confidence=success.confidence,
             source_vintage_id=source_vintage_id,
             knowable_at=success.transaction_time,
-            # NormalizedObservation.valid_from is an aware datetime; FetchSuccess.valid_from
-            # is a bare date (every adapter's own concept of "the fact's day"). Midnight UTC,
-            # matching the same date->datetime idiom already used throughout this module
-            # (persistence.py:116) and the adapters (#530 item 1).
             valid_from=datetime.combine(success.valid_from, datetime.min.time(), tzinfo=UTC),
         )
 
     def _persist_corroboration_or_record_loss(self, binding: ObligationBinding, corroboration: Corroboration) -> None:
-        """Persist one corroboration without letting it fail the primary capture (#885).
-
-        The adapters promise that a second origin never fails the primary; this is the
-        half of that promise that lives here. An object-store blip under the second
-        origin's bytes, or a row it cannot write, used to raise out of `record_outcome`
-        and take the whole tick with it. Each corroboration now runs inside its own
-        savepoint: a failure rolls back exactly that corroboration's request, vintage and
-        observation — never the primary's rows written before it on the same
-        transaction — is logged with its type and counted, and the cell stays
-        single-origin. The obligation's result depends on the primary vintage alone.
-        """
         try:
             with self._connection.transaction():
                 self._persist_corroboration(binding, corroboration)
-        except Exception as error:  # noqa: BLE001 - a second origin never fails the primary capture
+        except Exception as error:  # noqa: BLE001
             record_lost_corroboration(corroboration.origin, PERSIST, binding.obligation.subject.id, error)
 
     def _persist_corroboration(self, binding: ObligationBinding, corroboration: Corroboration) -> None:
-        """Persist a second origin as its own request/vintage/observation for the same cell.
-
-        The fusion engine then reconciles two real assertions (#343); the materializer
-        ignores it, because a snapshot binds only the terminal attempt's vintage. That is
-        also why a failover (#862) is NOT persisted here: the origin that serves a cell
-        must be the terminal attempt's vintage, under the planned request, or the served
-        number would never reach the snapshot.
-        """
         source = f"{corroboration.origin}-{self._source_label}"
         request = self._corroborating_request(binding, origin=corroboration.origin, source=source)
         self._repository.put_source_request(request)
@@ -424,33 +340,11 @@ class PostgresCaptureControlSink:
             confidence=corroboration.confidence,
             source_vintage_id=vintage.source_vintage_id,
             knowable_at=corroboration.transaction_time,
-            # Corroboration carries no valid_from of its own (unlike FetchSuccess); its own
-            # source time is the best available real date and is already an aware datetime,
-            # unlike success.valid_from above (#530 item 1).
             valid_from=corroboration.transaction_time,
         )
 
     def _corroborating_request(self, binding: ObligationBinding, *, origin: str, source: str) -> SourceRequest:
-        obligation = binding.obligation
-        coordinate: dict[str, Any] = {
-            "ordinal": binding.ordinal,
-            "subject": obligation.subject.model_dump(mode="json"),
-            "requirement": obligation.capture_requirement_id,
-            "partition": obligation.partition,
-            "origin": origin,
-        }
-        # The registration that owns the cell's semantic signs the corroborating request
-        # too (#72): a second origin is part of the same source's declaration.
-        registration = registration_for(obligation.capture_requirement_id.removesuffix(":v1"))
-        return SourceRequest(
-            source_registry_entry_id=registration.entry_id,
-            source_policy_id=registration.policy_id,
-            request_fingerprint_version=f"{source}:v1",
-            canonical_request_sha256=canonical_sha256(coordinate),
-            subject_refs=(obligation.subject,),
-            capture_requirement_ids=(obligation.capture_requirement_id,),
-            partition=obligation.partition,
-        )
+        return build_source_request(binding.obligation, ordinal=binding.ordinal, source=source, origin=origin)
 
     def _put_observation(
         self,
@@ -466,31 +360,14 @@ class PostgresCaptureControlSink:
     ) -> None:
         obligation = binding.obligation
         semantic_type = obligation.capture_requirement_id.removesuffix(":v1")
-        # Validate once, use everywhere: the freshness arithmetic below must see
-        # the same aware value the observation persists (Copilot on #596). Inline
-        # rather than through _require_aware, whose Optional signature serves the
-        # vintage path; this parameter is never None.
         if knowable_at.tzinfo is None or knowable_at.utcoffset() is None:
             raise ValueError("adapter transaction_time must be timezone-aware")
         observation = NormalizedObservation(
             semantic_type=semantic_type,
             semantic_version=obligation.capture_requirement_id,
             subject=obligation.subject,
-            # The caller's own real date (#530 item 1) -- a bar's as_of, a filing's
-            # knowable_at, a report_period -- never the partition anchor. Every
-            # adapter already computes this on FetchSuccess/Corroboration; it used
-            # to be discarded here in favor of self._timeline.partition_start, which
-            # made every observation eligible for its capturing partition only by
-            # accident (partition_start happens to be <= any later partition_key)
-            # and would silently exclude a genuinely-valid-since fact from an
-            # earlier historical replay. The materializer's selection predicate
-            # (`valid_from` on or before the run's cutoff day) still gates look-ahead
-            # correctly here: a fact only becomes eligible once it is real-world true,
-            # not once it happened to be captured.
             valid_from=valid_from,
             valid_to=None,
-            # The adapter's transaction_time — filed date, bar date, manifest
-            # time — never arithmetic on the cutoff (#530 slice 3).
             knowable_at=knowable_at,
             source_vintage_id=source_vintage_id,
             parser_version=parser_version,
@@ -502,10 +379,6 @@ class PostgresCaptureControlSink:
             observation,
             normalized_payload=payload,
             confidence=confidence,
-            # Graded against THIS semantic's declared window (#530): the same
-            # expression the materializer and the 0039 views use, applied at
-            # write time. A literal here is how the metric stayed pinned at
-            # 1.0000 for a month.
             freshness_state=(
                 "fresh"
                 if self._timeline.cutoff - knowable_at
@@ -530,12 +403,11 @@ class PostgresCaptureControlSink:
         if not raw_trio or not resolved_trio:
             return
 
-        roles = [
+        for role, entity_id_str, raw_id in (
             ("issuer", resolved_trio[0], raw_trio[0]),
             ("instrument", resolved_trio[1], raw_trio[1]),
             ("listing", resolved_trio[2], raw_trio[2]),
-        ]
-        for role, entity_id_str, raw_id in roles:
+        ):
             try:
                 entity_uuid = uuid.UUID(entity_id_str)
             except (ValueError, TypeError):

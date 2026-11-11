@@ -1,13 +1,4 @@
-"""The three §8 status dimensions, computed by the producer at persist time (#747).
-
-init.md §8: every factor output carries an `availability_status`, a `source_evidence_status`
-for the selected semantic records, and a separate `factor_validation_status` for the factor
-version's independent holdout gate. Consumers display all three; they never derive them.
-Everything here is derived from what the materialization actually consumed — the result's
-own availability/freshness/confidence, the observations it selected, and the definitions it
-ran — so the columns add no information to a row's identity (they are not part of the
-content hash), they surface what the identity already binds.
-"""
+"""Producer-computed §8 availability, evidence, and validation status dimensions."""
 
 from __future__ import annotations
 
@@ -20,9 +11,6 @@ from factors.validation_records import validation_status_for
 from psycopg import Connection
 from truealpha_contracts.execution import AvailabilityStatus, FactorValidationStatus, InputEvidenceStatus
 
-# Below this the number is asserted but the producer does not stand behind it. The same
-# floor the research cards use to demote a cell; a policy constant, named so a change is a
-# reviewed edit rather than a drifting literal.
 LOW_CONFIDENCE_FLOOR = Decimal("0.50")
 
 
@@ -47,14 +35,6 @@ def availability_status_for(
     confidence: Decimal,
     reason_codes: Iterable[str] = (),
 ) -> AvailabilityStatus:
-    """Map a result's availability / freshness / confidence onto the §8 enum.
-
-    Order matters and is deliberate: an unavailable value is unavailable whatever its
-    freshness; a stale value is stale even at full confidence; an ungradeable freshness is
-    an `error` (the pipeline could not say how old the number is, which is a defect, not a
-    property of the issuer); low confidence is reported before `available` so a cell that
-    exists but is not stood behind never reads as clean.
-    """
     reasons = set(reason_codes)
     if availability == "unavailable":
         return AvailabilityStatus.UNAVAILABLE
@@ -70,8 +50,6 @@ def availability_status_for(
 def decision_availability_status(
     *, eligible: bool, exclusion_reason: str | None, value_present: bool
 ) -> AvailabilityStatus:
-    """A strategy decision's availability: excluded by the strategy's own rule, unavailable
-    when the factor it ranks on is missing, otherwise available."""
     if not eligible and exclusion_reason:
         return AvailabilityStatus.EXCLUDED
     if not value_present:
@@ -79,10 +57,22 @@ def decision_availability_status(
     return AvailabilityStatus.AVAILABLE
 
 
+def coverage_status_dimensions(
+    *,
+    value_present: bool,
+    confidence: Decimal,
+    fully_evidenced: bool,
+) -> tuple[AvailabilityStatus, InputEvidenceStatus, FactorValidationStatus]:
+    if not value_present:
+        return (AvailabilityStatus.UNAVAILABLE, InputEvidenceStatus.DEGRADED, FactorValidationStatus.NOT_EVALUATED)
+    availability = (
+        AvailabilityStatus.LOW_CONFIDENCE if confidence < LOW_CONFIDENCE_FLOOR else AvailabilityStatus.AVAILABLE
+    )
+    evidence = InputEvidenceStatus.VERIFIED if fully_evidenced else InputEvidenceStatus.DEGRADED
+    return (availability, evidence, FactorValidationStatus.NOT_EVALUATED)
+
+
 def resolve_raw_pointers(connection: Connection[Any], observation_ids: Iterable[str]) -> dict[str, int | None]:
-    """observation_id → the landed `raw.fetches.id` its source vintage points at (None when the
-    chain breaks). One query for any number of observations, so callers batch a whole
-    snapshot instead of one round-trip per member (Copilot on #776)."""
     wanted = tuple(dict.fromkeys(observation_ids))
     if not wanted:
         return {}
@@ -106,17 +96,6 @@ def source_evidence_status_for(
     financial_payloads: Iterable[Mapping[str, Any]] = (),
     resolved: Mapping[str, int | None] | None = None,
 ) -> InputEvidenceStatus:
-    """`verified` when every consumed observation dereferences to a landed raw fetch and every
-    asserted input names its evidence; `degraded` when an asserted input has no evidence on
-    the row; `rejected` when a pointer does not resolve.
-
-    The observation → `raw.capture_source_vintages` → `raw.fetches` chain is what "the raw
-    pointer dereferences" means. The headcount rule is the one input that enters the
-    financial-fact payload from a side plane (`issuer_headcount_facts`, #70): until its
-    evidence travels on the row (`vintage.headcount`, #530/#747 follow-up) a non-null
-    headcount is asserted without evidence — `degraded`, honestly, not `verified` by
-    omission.
-    """
     wanted = tuple(dict.fromkeys(observation_ids))
     if not wanted:
         return InputEvidenceStatus.REJECTED
@@ -140,11 +119,4 @@ def factor_validation_status_for(definition_ids: Iterable[str]) -> FactorValidat
 def statuses_without_raw_pointer(
     definition_ids: Iterable[str] = (),
 ) -> tuple[InputEvidenceStatus, FactorValidationStatus]:
-    """The evidence and validation statuses of a mart row whose input has no raw pointer chain (#1116).
-
-    Such a row cannot show that a raw fetch backs it. Its evidence is `degraded`, never `verified`.
-    Its validation status comes from the registry through `factor_validation_status_for`.
-    A factor with no registered definition passes no definition id. The registry then gives `not_evaluated`.
-    Replace this call with `source_evidence_status_for` when the row carries observation ids.
-    """
     return InputEvidenceStatus.DEGRADED, factor_validation_status_for(definition_ids)

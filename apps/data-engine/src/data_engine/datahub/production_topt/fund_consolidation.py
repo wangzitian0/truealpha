@@ -1,17 +1,4 @@
-"""Materialize the module-5 ETF virtual-company row for a governed run (#727, #36).
-
-The producer half of #727's first acceptance option: the fund-level weighted valuation
-gap is computed by `factors.base.etf_virtual_company` and written to
-`mart.fund_virtual_company` by the tick that produced the core rows it consumed, so the
-App can read a column instead of aggregating in its own SQL (init.md §1 rule 2).
-
-Vintage selection is explicit and PIT: the fund's newest holdings filing whose
-`transaction_time` (the filing date — when the weights became publicly knowable) is at or
-before the run's cutoff. `mart.fund_holdings_valuation` selects newest-per-fund
-unconditionally, which is right for a live page and wrong for a replay, so this reads the
-vintage-bearing `mart.fund_holdings` and picks the vintage itself (#36: "never applies a
-later filing retroactively").
-"""
+"""Materialize module-5 ETF virtual-company rows for a governed run."""
 
 from __future__ import annotations
 
@@ -24,12 +11,8 @@ from psycopg import Connection
 from truealpha_contracts.etf_virtual_company import ETF_CONSOLIDATION_V0, EtfConsolidationDefinition
 from truealpha_contracts.execution import AvailabilityStatus, FactorValidationStatus, InputEvidenceStatus
 
-from data_engine.datahub.production_topt.status_dimensions import LOW_CONFIDENCE_FLOOR
+from data_engine.datahub.production_topt.status_dimensions import coverage_status_dimensions
 
-#: One fund's lines at the vintage KNOWABLE AT THE CUTOFF, joined to this run's core rows.
-#: The vintage is chosen per fund (funds file on their own quarterly cycles), and it is
-#: chosen here rather than taken from `mart.fund_holdings_valuation`, which pins the newest
-#: vintage unconditionally — correct for a live page, a look-ahead for a replay (#36).
 _LINES_SQL = """
 with vintage as (
     select distinct on (fund_id) fund_id, report_period, transaction_time
@@ -56,15 +39,11 @@ left join lateral (
            c.availability,
            c.confidence,
            status.availability_status,
-           -- #1235: the multiple this row's gap divides. A row with a P/GP valuation stored it;
-           -- a valued row without one is of the former P/S bands.
            case
                when status.current_pgp is not null then 'price_to_gross_profit'
                when c.valuation_gap is not null then 'price_to_sales'
            end as valuation_basis
     from mart.topt_core_result_read c
-    -- The read view exposes the factor column `availability` only. The section 8 status
-    -- lives on the table. A low-confidence row keeps `availability = 'available'` (#1114).
     left join mart.topt_core_results status
       on status.result_id = c.result_id
     left join lateral (
@@ -109,13 +88,10 @@ class FundVintage:
     report_period: Any
     transaction_time: datetime
     lines: tuple[HoldingLine, ...]
-    #: #1235: the multiple the valued lines' gaps divide, read from the core rows; None when no
-    #: line is valued. One run tiers with one definition, so the lines share one basis.
     valuation_basis: str | None = None
 
 
 def load_fund_vintages(connection: Connection[Any], *, run_id: str, cutoff: datetime) -> tuple[FundVintage, ...]:
-    """Every fund with a holdings vintage knowable at `cutoff`, joined to `run_id`'s rows."""
     rows = connection.execute(_LINES_SQL, {"run_id": run_id, "cutoff": cutoff}).fetchall()
     by_fund: dict[str, list[Any]] = {}
     meta: dict[str, tuple[str, Any, datetime]] = {}
@@ -165,29 +141,11 @@ def load_fund_vintages(connection: Connection[Any], *, run_id: str, cutoff: date
 def _status_dimensions(
     consolidation: FundConsolidation,
 ) -> tuple[AvailabilityStatus, InputEvidenceStatus, FactorValidationStatus]:
-    """The three §8 dimensions, derived from what this aggregate actually consumed.
-
-    A refused aggregate is `unavailable` — the reason travels in `reason_codes`, which is
-    the flag the factor refused on. A published aggregate whose valued mass is partial is
-    `degraded` source evidence: every line it used carries evidence, but the fund it
-    claims to describe is only partly represented, and that is exactly the "an asserted
-    input has no evidence on the row" shape #747 grades down.
-    """
-    if consolidation.result.value is None:
-        return (AvailabilityStatus.UNAVAILABLE, InputEvidenceStatus.DEGRADED, FactorValidationStatus.NOT_EVALUATED)
-    availability = (
-        AvailabilityStatus.LOW_CONFIDENCE
-        if consolidation.result.confidence < LOW_CONFIDENCE_FLOOR
-        else AvailabilityStatus.AVAILABLE
+    return coverage_status_dimensions(
+        value_present=consolidation.result.value is not None,
+        confidence=consolidation.result.confidence,
+        fully_evidenced=consolidation.valued_weight >= consolidation.total_weight,
     )
-    evidence = (
-        InputEvidenceStatus.VERIFIED
-        if consolidation.valued_weight >= consolidation.total_weight
-        else InputEvidenceStatus.DEGRADED
-    )
-    # #65 owns the holdout verdict; module 5 has no sealed record, so it is not_evaluated
-    # rather than a claim this factor is not entitled to make.
-    return (availability, evidence, FactorValidationStatus.NOT_EVALUATED)
 
 
 def materialize_fund_consolidation(
@@ -197,11 +155,6 @@ def materialize_fund_consolidation(
     cutoff: datetime,
     definition: EtfConsolidationDefinition = ETF_CONSOLIDATION_V0,
 ) -> tuple[FundConsolidation, ...]:
-    """Write one `mart.fund_virtual_company` row per fund with a vintage at `cutoff`.
-
-    Idempotent per (run_id, fund_id): a re-run of the same tick replaces its own row
-    rather than accumulating, since the row is a function of the run and the definition.
-    """
     written: list[FundConsolidation] = []
     for vintage in load_fund_vintages(connection, run_id=run_id, cutoff=cutoff):
         consolidation = consolidate_fund(vintage.lines, fund_id=vintage.fund_id, as_of=cutoff, definition=definition)
@@ -255,7 +208,6 @@ def materialize_fund_consolidation(
                 availability.value,
                 evidence.value,
                 validation.value,
-                # A refused aggregate has no gap, so it names no basis.
                 None if consolidation.result.value is None else vintage.valuation_basis,
             ),
         )

@@ -1,44 +1,4 @@
-"""The deployed TOPT capture composition root (#171 A3, ADR A1).
-
-One schedulable unit: plan the run, dispatch every obligation through the generic
-executor and its per-semantic adapters, persist the capture-control tables and the
-evidence graph in one transaction, then freeze → materialize → grade.
-
-This is the shape init.md rule 22 requires and the retired single-class capture monolith
-violated: nothing here branches on source or record type. The executor iterates work
-items; `CompositeSourceFetchPort` routes each to the adapter that owns its semantic; the
-adapters own their vendors; `PostgresCaptureControlSink` owns persistence.
-
-The universe (21 listings / 84 cells) comes from the frozen capture-control corpus — that
-is versioned scope configuration (init.md rule 13), not input data.
-
-`cutoff` and `version` come from the schedule tick, never the wall clock, so two
-consecutive ticks produce two distinct content-addressed runs and a retried tick
-reproduces the same identities (conflict-tolerant inserts make the replay idempotent).
-
-Degradation is recorded, not erased (#538). `mart.topt_capture_status` is a view over
-`raw.capture_*`, and the whole tick is one transaction (`dagster_defs.py`), so the bare
-raise this replaced took the run's own evidence down with it: 210 recorded runs across
-both environments, every one `84/84`, `failed_count` never once non-zero — not because
-capture never degraded but because a degraded run was rolled back. A degraded run now
-commits its record, its per-obligation terminal states and a quality report that states
-the shortfall, and only then fails the tick. Removing that fail is deliberately NOT part
-of this change and waits on the pointer gate (#536): until the pointer refuses to advance
-on a shortfall, a partial run reaching `freeze_snapshot` would silently change the
-denominator Production serves.
-
-Committing settles the tick's identity, which is the price of recording it: capture-control
-rows are append-only and one obligation holds at most one terminal result, so re-running the
-same `(cutoff, version)` cannot overwrite a recorded outcome with a better one. A replay of a
-recorded degraded tick therefore fails with the reason already on file rather than
-re-capturing; recovery is the next tick (or an explicit new `executed_at`), not a rewrite.
-
-A forced tick (#874) is an operator's explicit "fetch again": it skips #635's reuse window
-for every obligation and runs under its own capture identity (`forced_capture_version`),
-so a tick whose unforced run is already settled can still be captured afresh at the same
-`executed_at`, while a retry of the forced launch itself resolves to the forced run and is
-as idempotent as any other.
-"""
+"""Deployed TOPT capture composition root (#171 A3, ADR A1)."""
 
 from __future__ import annotations
 
@@ -90,9 +50,10 @@ from data_engine.datahub.production_topt.persistence import (
     CaptureTimeline,
     ObligationBinding,
     PostgresCaptureControlSink,
+    build_source_request,
 )
 from data_engine.datahub.production_topt.sec_financial_adapter import (
-    predecessor_ciks,  # noqa: F401 — re-exported for its callers
+    predecessor_ciks,  # noqa: F401 — re-exported for callers
 )
 from data_engine.datahub.production_topt.source_registrations import (
     FRESHNESS_WINDOWS,
@@ -115,34 +76,18 @@ from data_engine.datahub.repository import PostgresCaptureControlRepository, Top
 from data_engine.datahub.risk_free import RiskFreeRate, risk_free_rate_at
 from data_engine.release_identity import measure as measure_release_identity
 
-# The four semantics, their owners, freshness windows and routes are declared once in
-# source_registrations.py (#72); this module derives, never enumerates.
 SEMANTIC_TYPES = registered_semantic_types()
 _RELEASE_SEMANTICS = RELEASE_SEMANTICS
 _MAX_ATTEMPTS = 3
+FORCED_VERSION_SUFFIX = "-forced"
+_REUSE_MAX_AGE = timedelta(hours=12)
 
 
 def live_version_for(cutoff: datetime) -> str:
-    """The per-tick capture version: distinct per scheduled tick, stable on retry."""
     return f"live-{cutoff.astimezone(UTC):%Y%m%dT%H%M}"
 
 
-#: Marks a forced capture's version (#874). One marker, not a counter: the launch's own
-#: config (`executed_at`, `force_fetch`) is its identity, exactly as for a scheduled tick.
-FORCED_VERSION_SUFFIX = "-forced"
-
-
 def forced_capture_version(version: str) -> str:
-    """The capture version of a forced launch of the tick `version` names.
-
-    A forced run needs an identity of its own. The run id is content-addressed over the
-    version and the cutoff, so a forced launch that kept the tick's version would be the
-    unforced run already on file: resumed if it completed (no fetch at all), refused if
-    it degraded (#538). The marker keeps the two apart; applying it is idempotent, so a
-    retried forced launch names the same forced run and resumes or refuses like any
-    other retry. Another forced fetch of the same tick is another launch, with its own
-    `executed_at`.
-    """
     return version if version.endswith(FORCED_VERSION_SUFFIX) else f"{version}{FORCED_VERSION_SUFFIX}"
 
 
@@ -153,25 +98,12 @@ class ToptPipelineResult:
     core_result_count: int
     quality_report_id: str
     quality: dict[str, Any]
-    #: The risk-free rate that the core materialization used (#1255). The tick hands the same
-    #: rate to the strategy replay, so one tick reads one rate.
     risk_free_rate: RiskFreeRate
-    #: Whether this run skipped #635 reuse and fetched every obligation (#874).
     forced_fetch: bool = False
 
 
 class CaptureNotPublishableError(RuntimeError):
-    """A run that degraded: durably recorded, then deliberately not published (#538).
-
-    Raised only AFTER the run, its per-obligation terminal states and its quality
-    report have been committed, so the tick still fails exactly as it did before —
-    nothing is frozen, nothing is materialized, and `dagster_defs` never reaches the
-    pointer advance — while the warehouse keeps the evidence of what went wrong.
-
-    A `RuntimeError` subclass so existing handlers keep catching it, and distinct from
-    the bare `RuntimeError` that plan/persistence corruption still raises: this one
-    means "some cells did not resolve, and here is the run that says so".
-    """
+    """Raised after committing a degraded capture run and its quality report (#538)."""
 
     def __init__(self, *, run_id: str, quality_report_id: str, shortfall: str) -> None:
         super().__init__(f"capture run {run_id} {shortfall}; recorded as {quality_report_id}, not published")
@@ -181,40 +113,17 @@ class CaptureNotPublishableError(RuntimeError):
 
 
 def _load_capture_corpus(corpus_filename: str = TOPT_CORPUS_FILENAME) -> dict[str, Any]:
-    """The frozen capture-control universe corpus, loaded from PACKAGE data so the
-    deployed image (site-packages only, no repo tree) can read it. Lazy: importing
-    this module must never touch the filesystem (Definitions load hermetically)."""
     from importlib import resources
 
-    raw = resources.files("data_engine.datahub.data").joinpath(corpus_filename).read_bytes()
-    return json.loads(raw)
+    return json.loads(resources.files("data_engine.datahub.data").joinpath(corpus_filename).read_bytes())
 
 
 def _source_request(obligation: CaptureListObligation, *, ordinal: int, source: str) -> SourceRequest:
-    coordinate: dict[str, Any] = {
-        "ordinal": ordinal,
-        "subject": obligation.subject.model_dump(mode="json"),
-        "requirement": obligation.capture_requirement_id,
-        "partition": obligation.partition,
-    }
-    # The registration that owns the cell's semantic signs the request (#72): the
-    # entry id is the content hash of what that source declared, not of the run label.
-    registration = registration_for(obligation.capture_requirement_id.removesuffix(":v1"))
-    return SourceRequest(
-        source_registry_entry_id=registration.entry_id,
-        source_policy_id=registration.policy_id,
-        request_fingerprint_version=f"{source}:v1",
-        canonical_request_sha256=canonical_sha256(coordinate),
-        subject_refs=(obligation.subject,),
-        capture_requirement_ids=(obligation.capture_requirement_id,),
-        partition=obligation.partition,
-    )
+    return build_source_request(obligation, ordinal=ordinal, source=source)
 
 
 @dataclass(frozen=True)
 class PlannedRun:
-    """One planned run: its identities, its work items and everything keyed off them."""
-
     run_id: str
     release_manifest_id: str
     cutoff: datetime
@@ -226,12 +135,7 @@ class PlannedRun:
     retry: RetryPolicy
     freshness_windows: Mapping[str, timedelta]
     default_freshness_max_age: timedelta
-    # The governed universe head's own publication time (#530 item 2): set for a
-    # governed universe (QQQ, canary — resolved via `universe_head_kind`), None for
-    # the hand-curated TOPT corpus, whose only freshness signal is its report_date.
     universe_published_at: datetime | None
-    #: An operator-forced run (#874): recorded in the run plan; none of its obligations
-    #: is satisfied from #635 reuse.
     forced_fetch: bool = False
     drill: Any | None = None
     raw_coordinates: dict[str, tuple[str, str, str, str]] | None = None
@@ -242,16 +146,7 @@ def ensure_environment_identity(
     connection: psycopg.Connection[Any],
     environment: str | CaptureEnvironment,
 ) -> None:
-    """Declare the single authoritative environment identity in mart.environment_identity (#756).
-
-    The statement writes the row only when it is missing or names another environment (#1412).
-    A tick runs this first and commits much later, so a write here holds the row until that
-    commit. Any other statement that writes or locks the row waits for it: a second tick, and
-    before #1412 the boot replay of the migration chain (on 2026-10-15 the staging llm
-    container restarted 7 times). When the row already names this environment, the statement
-    reads it and writes nothing. `declared_at` keeps the time the current value was declared.
-    No reader uses it as a per-tick time.
-    """
+    """Declare the authoritative environment identity in `mart.environment_identity` (#756, #1412)."""
     env_str = environment.value if isinstance(environment, CaptureEnvironment) else str(environment)
     connection.execute(
         """
@@ -267,16 +162,7 @@ def ensure_environment_identity(
 
 
 def ensure_served_head_artifacts(connection: psycopg.Connection[Any]) -> int:
-    """Register the head of every universe of the record in `mart.served_artifact` (#1522). Returns the rows written.
-
-    `mart.served_head` grades a head by the cadence of its registry row, and a head with no row gets the
-    strictest limit. The seed of `20261006T1020` holds the rows of the four universes of its day: history, and
-    they stay. A universe that the record adds needs a row, and the record is the one place that says so.
-
-    The statement reads first and writes only a missing row, with `on conflict do nothing`. A row that exists is
-    never touched: not rewritten, not locked. The steady state of a tick holds a read lock on the table and no
-    write lock, so a boot replay of the chain does not wait on a tick (#1412).
-    """
+    """Register every contract universe head in `mart.served_artifact` (#1522)."""
     contract = load_environment_contract()
     wanted = {
         f"head:{key}": (
@@ -317,22 +203,13 @@ def plan_and_persist(
     drill: Any | None = None,
     environment: CaptureEnvironment | None = None,
 ) -> PlannedRun:
-    """Freeze the run's scope and persist the dispatch intent; performs no source calls.
+    """Freeze scope and persist capture-control dispatch intent without calling external vendors."""
+    from data_engine.config import settings
 
-    A `universe_head_kind` resolves the universe from the GOVERNED head published
-    off the constituent data plane (#539 data-driven universes); the package
-    corpus file remains only for the hand-curated TOPT 20.
-
-    `force_fetch` is recorded in the run plan (#874) and changes nothing else here:
-    the caller gives a forced run its own `version` (`forced_capture_version`).
-    """
     if environment is None:
-        from data_engine.config import settings
-
         environment = settings.capture_environment
 
     ensure_environment_identity(connection, environment)
-
     if universe_head_kind is not None:
         from data_engine.datahub.production_topt.universe_plane import resolve_universe_corpus
 
@@ -340,9 +217,6 @@ def plan_and_persist(
     else:
         corpus = _load_capture_corpus(corpus_filename)
     denominator = corpus["topt_denominator"]
-    # Governed universes carry the head's own publication time; the hand-curated
-    # corpus has none, and release-derived rows fall back to the partition start
-    # (#530 item 2).
     published_at_raw = corpus.get("published_at")
     universe_published_at = datetime.fromisoformat(published_at_raw) if published_at_raw else None
     raw_coordinates = {
@@ -356,38 +230,17 @@ def plan_and_persist(
     from data_engine.datahub.resolve_coordinates import resolve_coordinates
 
     with connection.transaction():
-        coordinates = resolve_coordinates(
-            connection,
-            denominator["instruments"],
-            as_of=as_of,
-            known_at=cutoff,
-        )
+        coordinates = resolve_coordinates(connection, denominator["instruments"], as_of=as_of, known_at=cutoff)
     partition = str(denominator["report_date"])
-    # The hand-curated TOPT corpus keeps its literal-pinned loader; every
-    # self-pinned universe built by scripts/build_universe_corpus.py loads
-    # through the generic one (#539 QQQ expansion).
-    if "instrument_mapping_sha256" in denominator:
-        list_version = corpus_list_version(corpus)
-    else:
-        list_version = frozen_topt_list_version(corpus)
+    list_version = (
+        corpus_list_version(corpus) if "instrument_mapping_sha256" in denominator else frozen_topt_list_version(corpus)
+    )
     source_label = f"{label_prefix}-{version}"
 
     policy = CaptureSchedulePolicy(
         policy_version=source_label,
         demanded_cadence=timedelta(days=1),
         freshness_max_age=timedelta(days=2),
-        # Per-semantic windows (#530 slice 2): the freshest POSSIBLE observation
-        # must grade fresh at every scheduled tick.
-        # - market-price: a Friday bar is the freshest close at a Sunday or
-        #   Monday-holiday 22:15 tick (Fri 00:00 -> Tue 22:15 after a Monday
-        #   holiday is ~4.9 days); 5 days admits that and still fails a vendor
-        #   serving week-old bars.
-        # - financial-fact: knowable_at is the filed date, months old by nature;
-        #   the window is the input age limit of the strategy definition (#1518),
-        #   so capture freshness, the core and the decision agree on the axis.
-        # - identity/universe: release-frozen configuration; a year covers the
-        #   universe's own refresh cadence (#67), and the release manifest is the
-        #   staleness authority, not the capture.
         semantic_freshness_max_age=FRESHNESS_WINDOWS,
         provider_availability_cadence="scheduled:v1",
         retry=replay_retry_policy(_MAX_ATTEMPTS),
@@ -418,43 +271,20 @@ def plan_and_persist(
     repository.bind_campaign_list(campaign.campaign_id, list_version.list_version_id)
     repository.put_run(run)
 
-    # The release identity is MEASURED from the artifact (#784): the release ref the
-    # deployment injected, the migration set this image ships, and the fingerprint of the
-    # environment contract it declares. It used to be the hash of a literal, so every run
-    # in both environments carried one 64-hex value that bound nothing (#712). The payload
-    # is persisted whole, so a run's identity can be explained and not merely compared.
     identity = measure_release_identity()
-    release_sha256 = identity.content_sha256
     release_manifest_id = identity.manifest_id
     connection.execute(
         "insert into staging.contract_objects (contract_id, contract_kind, content_sha256, payload) "
         "values (%s, 'release_manifest', %s, %s) on conflict (contract_id) do nothing",
-        (release_manifest_id, release_sha256, psycopg.types.json.Jsonb(identity.payload)),
+        (release_manifest_id, identity.content_sha256, psycopg.types.json.Jsonb(identity.payload)),
     )
-    # The run records which data-engine build produced it (#712): the compose injects the
-    # image digest and the git sha into every data-engine process. `mart.data_engine_identity`
-    # projects this for llm-service's /health and the admin page, so "which data engine is
-    # running" is a fact the UI can show and the deploy lane can compare, instead of a parser
-    # vintage that happened to match.
-    #
-    # Read through `settings` (#784) rather than the process environment, so the manifest that
-    # declares these names is the same object that resolves them -- a direct environment read
-    # bypassed the declaration entirely, which is why nothing reconciled these values and
-    # nothing could require them at boot.
     run_plan = {
         "run_id": run.run_id,
         "release_manifest_id": release_manifest_id,
         "data_engine_git_sha": settings.git_commit_sha or "unknown",
         "data_engine_image_digest": settings.data_engine_image_digest or "unknown",
-        # What the DEPLOYMENT says this release is, beside what the artifact measures.
-        # infra2 still injects a hand-written Vault value here, so the two differ today;
-        # recording both makes the hand-off observable (they become equal once infra2
-        # sources it from `tools/release_identity.py`) instead of a claim in a PR body.
         "declared_release_manifest_id": settings.release_manifest_id or "unknown",
         "capture_approved_by": settings.capture_approved_by or "unknown",
-        # #874: an operator-forced run fetched every obligation instead of reusing the
-        # night's committed observations. Evidence readers must be able to tell the
-        # two apart; `quality_report.build_report` reads it from here.
         "forced_fetch": force_fetch,
     }
     connection.execute(
@@ -504,18 +334,10 @@ def plan_and_persist(
 
 
 def build_routes(plan: PlannedRun, connection: psycopg.Connection[Any] | None = None) -> dict[str, SourceFetchPort]:
-    """Resolve every planned work item to the adapter that owns its semantic (#72).
-
-    Generic: group the cells by the registration that owns their semantic and let
-    each source's own `build_route` construct its targets and adapter. Source-facing
-    resolution (CIKs, classifications, rulesets, second origins) lives in the source's
-    module; this root sees only cells and ports.
-    """
+    """Resolve planned work items to the registered `SourceFetchPort` adapters."""
     context = RouteContext(
         cutoff=plan.cutoff,
         cutoff_date=last_settled_accession_date(plan.cutoff),
-        # Price targets get the last SETTLED session, not the calendar date: a
-        # mid-session run must not treat the in-progress bar as a close (#637).
         price_cutoff_date=last_settled_session_date(plan.cutoff),
         partition_start=plan.timeline.partition_start,
         universe_published_at=plan.universe_published_at,
@@ -543,20 +365,13 @@ def build_routes(plan: PlannedRun, connection: psycopg.Connection[Any] | None = 
     routes: dict[str, SourceFetchPort] = {}
     for registration in REGISTRATIONS:
         cells = cells_by_source.pop(registration.source_id, [])
-        if not cells:
-            continue
-        adapter = registration.resolve_route_builder()(context, cells)
-        routes.update(dict.fromkeys((cell.work_item_id for cell in cells), adapter))
+        if cells:
+            adapter = registration.resolve_route_builder()(context, cells)
+            routes.update(dict.fromkeys((cell.work_item_id for cell in cells), adapter))
     return routes
 
 
 def _unresolved_obligations(connection: psycopg.Connection[Any], run_id: str) -> list[dict[str, Any]]:
-    """Every planned cell of this run that did not terminally succeed, with its reason.
-
-    A planned obligation the run never reached (the executor halted before it) has no
-    terminal state at all; `unreached` keeps that distinguishable from one that did
-    resolve and resolved `unavailable`.
-    """
     rows = connection.execute(
         """
         select obligation.subject_id, obligation.capture_requirement_id,
@@ -582,12 +397,6 @@ def _unresolved_obligations(connection: psycopg.Connection[Any], run_id: str) ->
 
 
 def _shortfall_text(status: ToptCaptureStatus) -> str:
-    """The run's shortfall, derived from the status alone.
-
-    Derived rather than composed from the live run report on purpose: the same status
-    must produce the same words, so re-deriving the record for an already-recorded run
-    rebuilds a byte-identical report and collapses onto the report row already there.
-    """
     return (
         f"terminally resolved {status.success_count} of {status.obligation_count} obligations "
         f"(unchanged {status.unchanged_count}, unavailable {status.unavailable_count}, "
@@ -602,29 +411,10 @@ def _record_and_refuse(
     *,
     halt_reason: ObligationReasonCode | None = None,
 ) -> NoReturn:
-    """Commit the degraded run's record and report, then fail the tick (#538).
-
-    The commit IS the deliverable. `mart.topt_capture_status` is a view over
-    `raw.capture_*`, so the run's true counts exist only as long as those rows do, and
-    the tick is one transaction — which is why the raise this replaced left every one of
-    210 recorded runs reading a perfect 84/84. Committing here puts the run, its
-    per-obligation terminal states and its quality report beyond the reach of the abort
-    that follows.
-
-    It deliberately does not let the run through. `freeze_snapshot` must never
-    materialize a partial universe, and the governed pointer must not advance to one;
-    this raise prevents reaching `freeze_snapshot`, while pointer advancement is protected
-    downstream by the pointer gate (#536).
-
-    `halt_reason` colours the raised message only. The persisted report stays purely
-    status-derived so that re-deriving it produces the same content hash; the halting
-    cell's own reason code is already in `unresolved`.
-    """
     shortfall = _shortfall_text(status)
     graded = quality_report.build_report(connection, plan.run_id)
     graded["capture_shortfall"] = {
         "reason": shortfall,
-        # The two properties the raise protects, asserted in the record itself.
         "materialized": False,
         "published": False,
         "obligation_count": status.obligation_count,
@@ -646,76 +436,14 @@ def _record_and_refuse(
     )
 
 
-# #635: how far back a committed observation may satisfy a new obligation without
-# consulting the vendor. Deliberately much narrower than the semantic freshness
-# windows: those govern "still fresh to SERVE"; this governs "do not even CHECK the
-# vendor", and a change-detecting semantic (a new 10-Q, a replaced constituent)
-# must keep its daily look. Twelve hours covers the whole intra-day duplication
-# problem (TOPT 22:15 -> QQQ 23:20 -> canary at any hour) with zero staleness risk.
-_REUSE_MAX_AGE = timedelta(hours=12)
-
-
 def _is_settled_session(knowable_at: datetime, settled: date) -> bool:
-    """Whether a session-bound observation IS the settled session's.
-
-    In UTC, always (#885 item 2): psycopg returns a timestamptz in the connection's
-    TimeZone, and a price bar is knowable at 00:00Z — the previous evening anywhere west
-    of Greenwich — so a bare `.date()` named the wrong session and silently turned
-    reuse off for every price cell on a connection not pinned to UTC.
-    """
     return knowable_at.astimezone(UTC).date() == settled
 
 
 def _satisfy_from_recent_observations(
     connection: psycopg.Connection[Any], plan: PlannedRun, *, cutoff: datetime
 ) -> frozenset[str]:
-    """Satisfy obligations from observations another run committed within the last
-    twelve hours (#635): same subject, same semantic, same vendor bytes. A satisfied
-    obligation gets the source obligation's FULL observation set bound to it (both
-    price origins ride along, so reconciliation is unaffected), a ledger attempt
-    finished UNCHANGED with the reused primary vintage, and its work item never
-    reaches a vendor. Only #628-committed evidence qualifies by construction —
-    an uncommitted capture is invisible to this query.
-
-    Reuse additionally requires PARSER-VINTAGE EQUALITY (#788): the anchor must carry
-    the `PARSER_VERSION` this run declares. The bound set is deliberately NOT filtered —
-    a market-price obligation binds both origins, and the second origin has its own
-    parser identity (`twelve-data-parser:v*`) — but an anchor from a different primary
-    vintage cannot qualify, because the run would then hold observations it cannot
-    consume: `seed_strategy_inputs_from_capture` selects by the deployed PARSER_VERSION.
-    Without this, the first ad-hoc tick after a parser bump captured nothing, graded
-    COMPLETE, seeded nothing, and was refused as `empty-eligible-set` — read as a data
-    outage. Re-capturing is the correct cost, and it is what keeps every job runnable on
-    demand rather than only on the schedule that happened to precede the release.
-
-    Reuse additionally requires IDENTITY-COORDINATE EQUALITY (#684, both halves):
-    every normalized payload embeds the (issuer_id, instrument_id, listing_id) of
-    the run that captured it, keyed by that run's corpus. TOPT keys issuers by LEI;
-    the plane-published universes key by CIK. Cross-keying reuse first smuggled
-    TOPT's LEI issuers into QQQ/canary mart rows (release semantics, fixed by
-    exclusion below), then — once identity derived fresh — tripped the snapshot's
-    payload-agreement check via reused VENDOR observations carrying the foreign
-    trio. An anchor now qualifies only when its payload trio equals THIS run's
-    plan coordinates for the subject, so equally-keyed universes still share
-    vendor bytes and differently-keyed ones capture fresh.
-
-    Reuse additionally requires VALIDITY AT THE CUTOFF (#877 H1, #1060).
-    The anchor must be valid on THIS run's cutoff day.
-    Its `valid_from` is on or before that day, and its `valid_to` is open or on or after it.
-    This is exactly the window that `freeze_snapshot` reads.
-    An observation's `valid_from` is the date of the fact itself, not the partition anchor.
-    Reuse of a fact that starts after the cutoff day would resolve the cell UNCHANGED.
-    The freeze would then refuse that cell.
-    The partition is the universe anchor. It does not bound validity.
-
-    The bound set is taken WHOLE OR NOT AT ALL (#885 item 4).
-    Every member must carry this run's trio and be knowable by this run's cutoff.
-    Every member must also be valid on this run's cutoff day. Otherwise the obligation fetches.
-    Dropping the members that fail would reuse a cell one origin short and still resolve it UNCHANGED.
-
-    A forced run (#874) never calls this, and is the preferred anchor when it ties
-    with the unforced run of the same tick.
-    """
+    """Satisfy obligations from committed observations within `_REUSE_MAX_AGE` (#635, #788, #885)."""
     coordinates_param = json.dumps(
         [
             {"subject_id": subject_id, "issuer_id": issuer_id, "instrument_id": instrument_id, "listing_id": listing_id}
@@ -733,9 +461,6 @@ def _satisfy_from_recent_observations(
                  as coordinate(subject_id text, issuer_id text, instrument_id text, listing_id text)
               on coordinate.subject_id = ob.subject_id
              and ob.run_id = %(run_id)s
-              -- Release-derived semantics never ride reuse: their payload IS the
-              -- run's identity and must come from THIS run's own governed corpus
-              -- (#684). Deriving them fresh costs no vendor call.
              and not (regexp_replace(ob.capture_requirement_id, ':v1$', '') = any(%(release_semantics)s::text[]))
         ), anchors as (
             select m.obligation_id as target_obligation_id,
@@ -748,9 +473,6 @@ def _satisfy_from_recent_observations(
                        partition by m.obligation_id
                        order by orig_done.completed_at desc,
                                 done.completed_at desc,
-                                -- #874: completion stamps derive from the cutoff, so a
-                                -- forced re-run of a tick ties with the run it corrects;
-                                -- the forced capture is the newer look at the vendor.
                                 coalesce((src_plan.payload->>'forced_fetch')::boolean, false) desc,
                                 o.knowable_at desc, o.observation_id desc
                    ) as rn
@@ -771,62 +493,26 @@ def _satisfy_from_recent_observations(
              and o.subject_id = m.subject_id
              and o.semantic_type = m.semantic_type
              and o.knowable_at <= %(cutoff)s
-             -- The anchor must have been parsed by the vintage THIS run declares.
-             -- Reuse across a parser bump binds observations the run cannot consume:
-             -- `seed_strategy_inputs_from_capture` selects by the deployed
-             -- PARSER_VERSION, so a v8 anchor in a v9 run seeds nothing, every issuer
-             -- misses every input, and the plausibility gate refuses with
-             -- `empty-eligible-set` — a message about data coverage for what is
-             -- actually a vintage mismatch. Same shape as #684's identity-coordinate
-             -- rule: an anchor that "qualifies" while making the run unusable must not
-             -- qualify. Re-capturing costs vendor calls; that is the correct price for
-             -- the first tick after a parser bump, and it is what makes an ad-hoc
-             -- re-run of ANY tick work right after a release (#788).
              and o.parser_version = %(parser_version)s
-             -- #877 H1, #1060: valid on THIS run's cutoff day, by the same predicate
-             -- `freeze_snapshot` applies. `valid_from` is the date of the fact itself.
-             -- An observation that starts after the cutoff day would resolve the cell
-             -- UNCHANGED here. The freeze would then refuse it.
-             -- The partition is the universe anchor and does not bound validity.
-             -- Filtered before ranking, so an older anchor that IS valid still qualifies.
              and (o.valid_from at time zone 'UTC')::date <= (%(cutoff)s::timestamptz at time zone 'UTC')::date
              and (o.valid_to is null
                   or (o.valid_to at time zone 'UTC')::date >= (%(cutoff)s::timestamptz at time zone 'UTC')::date)
-            -- Bounding the age of the original observation (#635):
-            -- `done.completed_at` is reset to `cutoff` on an `unchanged` run, creating
-            -- an infinite renewal chain across 26.8h. Bounding the age requires checking
-            -- `orig_done.completed_at` for the original `success` obligation that actually
-            -- fetched the observation.
             join raw.capture_obligation_results orig_done
               on orig_done.capture_obligation_id = o.capture_obligation_id
              and orig_done.terminal_state = 'success'
              and orig_done.completed_at > %(cutoff)s - %(max_age)s::interval
              and orig_done.completed_at <= %(cutoff)s
-            -- #684 / #1333 / #1352 / #1517: market-price and financial-fact reuse
-            -- keys on listing_id so overlapping universes (TOPT, QQQ, canary) share
-            -- captured observations even when their corpora identify the issuer via
-            -- different schemes (e.g., LEI vs CIK).
             join staging.capture_observation_payloads anchor_payload
               on anchor_payload.observation_id = o.observation_id
              and anchor_payload.normalized_payload->>'listing_id' = m.listing_id
-             -- #1323: an observation of an issuer the registry could not classify never satisfies
-             -- another run. The next unforced run asks the registry again.
              and anchor_payload.normalized_payload->>%(unavailable_key)s is distinct from 'true'
         ), bound_set as (
             select a.target_obligation_id, a.semantic_type, a.anchor_vintage_id, a.knowable_at,
                    bound.observation_id,
                    bound.parser_version,
-                   -- Judged per member, decided per set (below). NULL (no payload row,
-                   -- a missing key) is a disqualification, not an abstention.
                    coalesce(
-                       -- The whole BOUND set must match listing_id (#1333, #1352, #1517).
                        bound_payload.normalized_payload->>'listing_id' = m.listing_id
-                       -- Look-ahead guard on the whole bound set, not just the anchor:
-                       -- nothing knowable after THIS run's cutoff may ride into it
-                       -- (review on #664).
                        and bound.knowable_at <= %(cutoff)s
-                       -- #877 H1, #1060 on the whole set too: every member valid on THIS
-                       -- run's cutoff day.
                        and (bound.valid_from at time zone 'UTC')::date
                            <= (%(cutoff)s::timestamptz at time zone 'UTC')::date
                        and (bound.valid_to is null
@@ -843,10 +529,6 @@ def _satisfy_from_recent_observations(
               on bound_payload.observation_id = bound.observation_id
             where a.rn = 1
         )
-        -- All or nothing (#885 item 4): one disqualified member refuses the whole
-        -- set, so the obligation fetches instead of binding the rest. Filtering row
-        -- by row reused a partial set: a cell that lost an origin to the guard
-        -- still resolved UNCHANGED, one corroboration short.
         select target_obligation_id, semantic_type, anchor_vintage_id, knowable_at,
                array_agg(observation_id order by observation_id) as observations,
                array_agg(parser_version order by observation_id) as parser_versions
@@ -891,13 +573,9 @@ def _satisfy_from_recent_observations(
     repository = PostgresCaptureControlRepository(connection)
     satisfied: set[str] = set()
     for work_item_id, binding in plan.bindings.items():
-        candidate = by_target.get(binding.obligation.obligation_id)
-        if candidate is None:
+        entry = by_target.get(binding.obligation.obligation_id)
+        if entry is None:
             continue
-        entry = candidate
-        # A reused session-bound observation must BE the settled session's — anything
-        # older is a fetch, not a reuse (the vendor may simply have published since).
-        # Which semantics are session-bound is the source's declaration (#72).
         if registration_for(entry["semantic"]).session_bound and not _is_settled_session(entry["knowable_at"], settled):
             continue
         ledger = AttemptLedger(work_item_id=work_item_id, retry_policy=plan.retry)
@@ -917,9 +595,6 @@ def _satisfy_from_recent_observations(
         repository.put_obligation_result(
             binding.obligation.obligation_id,
             ListObligationResult(
-                # The result model carries the INNER list-obligation identity; the
-                # repository keys on the outer capture-list identity (same split the
-                # capture executor makes).
                 obligation_id=binding.obligation.obligation.obligation_id,
                 terminal_state=ObligationTerminalState.UNCHANGED,
                 completed_at=cutoff,
@@ -943,21 +618,7 @@ def run_topt_pipeline(
     force_fetch: bool = False,
     drill: Any | None = None,
 ) -> ToptPipelineResult:
-    """Capture, then commit; freeze → materialize → report in the caller's transaction.
-
-    Two deliberate commits of our own (#538, #628), one principle: evidence outlives
-    failures. A run that DEGRADES commits its record before raising (#538). A run that
-    captures COMPLETELY commits the capture before freezing (#628) — a publish-side
-    failure then costs a retry of the cheap half, not the 39-minute vendor half, and
-    the retry RESUMES (re-freezing an existing run is idempotent). Consumers never see
-    a half-published run either way: reads resolve through the governed pointer, which
-    only advances in the caller's publish transaction.
-
-    `force_fetch` (#874) is the manual re-run that must reach the vendors: no obligation
-    is satisfied from #635's reuse window, and the run takes `forced_capture_version`
-    so it never resolves to the unforced run of the same tick. Everything after the
-    capture — the resume/refuse rules, freeze, materialize, report — is unchanged.
-    """
+    """Capture, commit durable evidence, then freeze, materialize, and grade in the caller's transaction."""
     if cutoff.tzinfo is None or cutoff.utcoffset() is None:
         raise ValueError("cutoff must be timezone-aware")
     if force_fetch:
@@ -974,17 +635,6 @@ def run_topt_pipeline(
         drill=drill,
     )
     status = PostgresCaptureControlRepository(connection).status(plan.run_id)
-    # #628: a COMPLETE, fully successful capture that already sits committed is the
-    # resume case — the tick died (or was killed) between the capture commit below
-    # and the publish transaction. Resuming skips the vendor half entirely and
-    # re-freezes the existing run, which is idempotent end to end (freeze_snapshot
-    # early-returns on its own snapshot; materialize and the report persist
-    # conflict-tolerantly). This strengthens the idempotent-retry property the
-    # composition always claimed for complete replays: same identities, zero new
-    # vendor calls. Refusal stays for every OTHER recorded shape — those are
-    # #538's degraded histories, and their outcomes are append-only. A forced
-    # launch (#874) meets these rules under its own identity, so its retry resumes
-    # or refuses the forced run, never the unforced one.
     resumed = (
         status.terminal_count > 0
         and status.complete
@@ -1005,12 +655,9 @@ def run_topt_pipeline(
         raw_coordinates=plan.raw_coordinates,
     )
     if not resumed:
-        # #874: a forced run consults every vendor; reuse is the scheduled ticks' economy.
         satisfied = frozenset() if force_fetch else _satisfy_from_recent_observations(connection, plan, cutoff=cutoff)
         live_items = [item for item in plan.work_items if item.work_item_id not in satisfied]
         if live_items:
-            # Route construction is itself vendor work (live CIK resolution); a run
-            # fully satisfied by reuse never builds routes at all.
             report = run_topt_capture(
                 plan.run_id,
                 live_items,
@@ -1025,10 +672,6 @@ def run_topt_pipeline(
                 status = PostgresCaptureControlRepository(connection).status(plan.run_id)
                 _record_and_refuse(connection, plan, status, halt_reason=report.halt_reason)
         else:
-            # The capture executor is what appends the run's evidence node; a FULLY
-            # reused run skips the executor, and the publish transaction later binds
-            # the release manifest to that node — which must exist (the first live
-            # full-reuse canary failed exactly here: FK on the bound_to edge).
             run_ref = EvidenceNodeRef(kind=EvidenceNodeKind.CAPTURE_RUN, node_id=plan.run_id)
             run_stamp = BitemporalStamp(valid_from=cutoff.date(), transaction_time=cutoff, recorded_at=cutoff)
             (writer or PostgresEvidenceGraphRepository(connection)).append(
@@ -1037,22 +680,9 @@ def run_topt_pipeline(
             )
         status = PostgresCaptureControlRepository(connection).status(plan.run_id)
         if not status.complete or status.success_count + status.unchanged_count != status.obligation_count:
-            # UNCHANGED is a resolution, not a shortfall — the freeze gate and the
-            # 0042 trigger have always accepted success+unchanged; #635's cross-run
-            # reuse terminals made composition's stricter predicate visible.
             _record_and_refuse(connection, plan, status)
-        # #628: the capture is durable the moment it is complete and successful. A
-        # freeze/materialize/report failure after this line loses NOTHING — the
-        # 39-minute QQQ captures that vanished with their transactions (take-2,
-        # take-3, the first scheduled run) are the incident class this closes.
-        # Consumer atomicity is unaffected: reads resolve through the governed
-        # pointer, which only advances in the caller's publish transaction.
         connection.commit()
 
-    # #1255: the risk-free rate of this cutoff is read from the stored macro series. The capture is
-    # durable by now. A cutoff with no usable rate raises `MissingRiskFreeRate` here: after the
-    # evidence is kept, and before anything is frozen, materialized or published. The pointer stays on
-    # the previous accepted run, and the retry of the same tick resumes at this line.
     rate = risk_free_rate_at(connection, cutoff)
     core = PostgresToptCoreRepository(connection)
     snapshot = core.freeze_snapshot(run_id=plan.run_id, release_manifest_id=plan.release_manifest_id)
@@ -1072,9 +702,9 @@ def run_topt_pipeline(
 
 __all__ = [
     "CaptureNotPublishableError",
+    "FORCED_VERSION_SUFFIX",
     "PlannedRun",
     "ToptPipelineResult",
-    "FORCED_VERSION_SUFFIX",
     "build_routes",
     "ensure_environment_identity",
     "ensure_served_head_artifacts",

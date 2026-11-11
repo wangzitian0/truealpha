@@ -1,17 +1,4 @@
-"""Generic frozen-universe corpus loading (#539 QQQ expansion).
-
-The TOPT 20 corpus predates this module. It keeps its hand-pinned loader,
-`frozen_topt_list_version`, below. Its mapping sha is a literal pin.
-
-That loader lived in `medium_replay` until #795, because it was first needed there. The
-deployed tick then imported a replay harness to mint one list version.
-
-Every universe after it loads through here. The corpus file is SELF-pinned. Its denominator
-carries the sha256 of its own instrument mapping. The builder script
-(`scripts/build_universe_corpus.py`) computes that sha, and the loader re-verifies it. An
-edited or truncated corpus refuses to load, so a denominator never shrinks silently. This
-is the #543/#569 identity-anchor pattern applied to scope configuration.
-"""
+"""Frozen-universe corpus loading and denominator verification."""
 
 from __future__ import annotations
 
@@ -26,16 +13,15 @@ from truealpha_contracts.universe import SubjectKind, SubjectRef, UniverseRef
 
 from data_engine.datahub.control_plane import frozen_topt_universe
 
-#: The hand-curated TOPT corpus. A capture and the standards lane both default to it.
 TOPT_CORPUS_FILENAME = "corpus.v1.json"
+_FROZEN_TOPT_EFFECTIVE_AT = datetime(2026, 4, 1, tzinfo=UTC)
+_EXPECTED_INSTRUMENT_MAPPING_SHA256 = "e240ebf2239b94f2eb6463ad73aba89525787b52e6614b382428e8135a1a0c2e"
 
 
 def load_corpus(filename: str) -> dict[str, Any]:
-    """Package-data corpus by filename; lazy so Definitions load hermetically."""
     from importlib import resources
 
-    raw = resources.files("data_engine.datahub.data").joinpath(filename).read_bytes()
-    return json.loads(raw)
+    return json.loads(resources.files("data_engine.datahub.data").joinpath(filename).read_bytes())
 
 
 def corpus_universe(corpus: dict[str, Any]) -> UniverseRef:
@@ -48,15 +34,10 @@ def corpus_universe(corpus: dict[str, Any]) -> UniverseRef:
 
 
 def _check_denominator(denominator: Mapping[str, Any], *, subject: str) -> None:
-    """The counts and identities a denominator declares must match its instrument rows.
-
-    Both loaders run this one check. Each then compares `_mapping_sha256` with its own pin.
-    """
     instruments = denominator["instruments"]
     if int(denominator["instrument_count"]) != len(instruments):
         raise ValueError(f"{subject} instrument denominator shrink")
-    issuer_ids = {str(row[0]) for row in instruments}
-    if int(denominator["issuer_count"]) != len(issuer_ids):
+    if int(denominator["issuer_count"]) != len({str(row[0]) for row in instruments}):
         raise ValueError(f"{subject} issuer denominator drift")
     for column, label in ((1, "security"), (2, "listing")):
         values = [str(row[column]) for row in instruments]
@@ -70,47 +51,50 @@ def _mapping_sha256(denominator: Mapping[str, Any]) -> str:
     )
 
 
-def corpus_list_version(corpus: dict[str, Any]) -> CaptureListVersion:
-    """A self-pinned corpus becomes the content-addressed list version.
-
-    The shared denominator check runs first. The pin comes from the corpus, not from a
-    module literal. The mapping sha must reproduce. Any drift refuses the load.
-    """
-    denominator = corpus["topt_denominator"]
-    instruments = denominator["instruments"]
-    _check_denominator(denominator, subject="universe corpus")
-    if _mapping_sha256(denominator) != denominator["instrument_mapping_sha256"]:
-        raise ValueError("universe corpus instrument mapping drift")
+def _build_list_version(
+    denominator: Mapping[str, Any],
+    *,
+    subject: str,
+    expected_sha: str,
+    sha_error: str,
+    universe: UniverseRef,
+    effective_at: datetime,
+) -> CaptureListVersion:
+    _check_denominator(denominator, subject=subject)
+    if _mapping_sha256(denominator) != expected_sha:
+        raise ValueError(sha_error)
     return CaptureListVersion(
-        universe=corpus_universe(corpus),
-        members=tuple(SubjectRef(kind=SubjectKind.LISTING, id=str(row[2])) for row in instruments),
-        effective_at=datetime.combine(
-            datetime.strptime(denominator["report_date"], "%Y-%m-%d").date(),
-            datetime.min.time(),
-            tzinfo=UTC,
-        ),
+        universe=universe,
+        members=tuple(SubjectRef(kind=SubjectKind.LISTING, id=str(row[2])) for row in denominator["instruments"]),
+        effective_at=effective_at,
     )
 
 
-#: The frozen TOPT list's `effective_at`. Part of the corpus's own pinned identity, not a
-#: clock: `frozen_topt_list_version` asserts the minted `list_version_id` equals the one the
-#: corpus carries, so a wrong value here fails loudly on the next tick rather than minting a
-#: second identity for the same 21 listings. Was `medium_replay._CUTOFFS[0]` before #795,
-#: where it was shared with that module's replay cutoffs by coincidence of value.
-_FROZEN_TOPT_EFFECTIVE_AT = datetime(2026, 4, 1, tzinfo=UTC)
-_EXPECTED_INSTRUMENT_MAPPING_SHA256 = "e240ebf2239b94f2eb6463ad73aba89525787b52e6614b382428e8135a1a0c2e"
+def corpus_list_version(corpus: dict[str, Any]) -> CaptureListVersion:
+    denominator = corpus["topt_denominator"]
+    effective_at = datetime.combine(
+        datetime.strptime(denominator["report_date"], "%Y-%m-%d").date(),
+        datetime.min.time(),
+        tzinfo=UTC,
+    )
+    return _build_list_version(
+        denominator,
+        subject="universe corpus",
+        expected_sha=denominator["instrument_mapping_sha256"],
+        sha_error="universe corpus instrument mapping drift",
+        universe=corpus_universe(corpus),
+        effective_at=effective_at,
+    )
 
 
 def frozen_topt_list_version(corpus: Mapping[str, Any]) -> CaptureListVersion:
-    """The frozen TOPT list. The mapping sha pin fixes the 21 listings and 20 issuers."""
     denominator = corpus["topt_denominator"]
-    _check_denominator(denominator, subject="TOPT")
-    if _mapping_sha256(denominator) != _EXPECTED_INSTRUMENT_MAPPING_SHA256:
-        raise ValueError("frozen TOPT instrument mapping drift")
-    listings = tuple(str(row[2]) for row in denominator["instruments"])
-    version = CaptureListVersion(
+    version = _build_list_version(
+        denominator,
+        subject="TOPT",
+        expected_sha=_EXPECTED_INSTRUMENT_MAPPING_SHA256,
+        sha_error="frozen TOPT instrument mapping drift",
         universe=frozen_topt_universe(corpus),
-        members=tuple(SubjectRef(kind=SubjectKind.LISTING, id=listing) for listing in listings),
         effective_at=_FROZEN_TOPT_EFFECTIVE_AT,
     )
     if version.list_version_id != denominator["list_version_id"]:
