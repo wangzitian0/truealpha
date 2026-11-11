@@ -1,17 +1,4 @@
-"""Module 3: Supply-chain relationship graph and exposure (#772, init.md §7 item 3).
-
-init.md §0 question 3: *"What is this company exposed to, up and down its supply chain?"*
-Module 3 computes supply chain concentration, dependency exposure, and partner counts
-over verified `staging.kg_edges` relationships (`relation_type='supplies_to'`).
-
-When an issuer has no supply chain edge, the factor refuses and names the reason. The reason
-states what the system knows (#772):
-
-- `no_supply_chain_extraction`: the graph holds no `supplies_to` edge for any issuer at the
-  cutoff. No extraction has run, so the system cannot say what the company disclosed.
-- `no_disclosed_suppliers`: the graph holds `supplies_to` edges for other issuers and none
-  for this issuer.
-"""
+"""Module 3: Supply-chain relationship graph and exposure (#772)."""
 
 from __future__ import annotations
 
@@ -21,7 +8,7 @@ from datetime import datetime
 from decimal import Decimal
 
 from factors.registry import factor
-from factors.types import FactorResult, UnitFamily
+from factors.types import FactorResult, UnitFamily, refused_factor_result
 
 _ZERO = Decimal(0)
 _ONE = Decimal(1)
@@ -34,22 +21,18 @@ CUSTOMER_ONLY_GRAPH = "customer_only_graph"
 
 @dataclass(frozen=True)
 class SupplyChainPartner:
-    """One verified supply-chain relationship edge."""
-
     partner_id: str
     partner_name: str
-    relation_type: str  # 'supplier' | 'customer'
-    revenue_share: Decimal | None = None  # Fraction of revenue (e.g. 0.15 for 15%)
+    relation_type: str
+    revenue_share: Decimal | None = None
     confidence: Decimal = _ZERO
 
 
 @dataclass(frozen=True)
 class SupplyChainExposure:
-    """The supply chain exposure index and partner breakdown."""
-
     entity_id: str
     result: FactorResult
-    exposure_score: Decimal | None  # 0.0 (fully diversified) to 1.0 (single-source / maximum concentration)
+    exposure_score: Decimal | None
     direct_partners: int
     suppliers_count: int
     customers_count: int
@@ -68,34 +51,16 @@ def supply_chain_exposure(
     as_of: datetime,
     supplies_to_edges_exist: bool,
 ) -> SupplyChainExposure:
-    """Compute supply chain exposure and partner concentration.
-
-    `supplies_to_edges_exist` is a measurement. It is true when the graph holds at least one
-    `supplies_to` edge for any issuer at the cutoff. The caller derives it from the graph.
-
-    If partners is empty, returns an unavailable result. The reason is `no_disclosed_suppliers`
-    when `supplies_to_edges_exist` is true, and `no_supply_chain_extraction` otherwise.
-    If partners exist and `supplies_to_edges_exist` is false, the inputs contradict each other.
-    The call raises ValueError.
-    """
     if partners and not supplies_to_edges_exist:
         raise ValueError(
             f"{entity_id} has {len(partners)} partners but supplies_to_edges_exist is false: "
             "the graph cannot hold a partner without a supplies_to edge"
         )
     if not partners:
+        flag = NO_DISCLOSED_SUPPLIERS if supplies_to_edges_exist else NO_SUPPLY_CHAIN_EXTRACTION
         return SupplyChainExposure(
             entity_id=entity_id,
-            result=FactorResult(
-                factor="supply_chain_exposure",
-                entity_id=entity_id,
-                value=None,
-                unit_family=UnitFamily.RATIO,
-                confidence=_ZERO,
-                as_of=as_of,
-                data_availability="unverified",
-                flags=[NO_DISCLOSED_SUPPLIERS if supplies_to_edges_exist else NO_SUPPLY_CHAIN_EXTRACTION],
-            ),
+            result=refused_factor_result("supply_chain_exposure", entity_id, as_of, [flag]),
             exposure_score=None,
             direct_partners=0,
             suppliers_count=0,
@@ -106,27 +71,19 @@ def supply_chain_exposure(
     suppliers = [p for p in partners if p.relation_type == "supplier"]
     customers = [p for p in partners if p.relation_type == "customer"]
     direct_partners = len(partners)
-
-    # Compute concentration score based on disclosed shares (or equal-weight proxy)
     shares = [p.revenue_share for p in partners if p.revenue_share is not None and p.revenue_share > _ZERO]
     max_share = max(shares) if shares else _ZERO
-
-    if shares:
-        # Herfindahl-Hirschman Index normalized to [0, 1]
-        exposure = min(_ONE, sum((s * s for s in shares), start=_ZERO))
-    else:
-        # If no explicit shares disclosed, exposure inversely scales with partner count
-        exposure = min(_ONE, _ONE / Decimal(max(1, direct_partners)))
-
-    flags: list[str] = []
-    if not shares:
-        flags.append(UNQUANTIFIED_PARTNER_SHARES)
-    if len(suppliers) == 0:
-        flags.append(CUSTOMER_ONLY_GRAPH)
-
+    exposure = (
+        min(_ONE, sum((s * s for s in shares), start=_ZERO))
+        if shares
+        else min(_ONE, _ONE / Decimal(max(1, direct_partners)))
+    )
+    flags = [
+        *([UNQUANTIFIED_PARTNER_SHARES] if not shares else []),
+        *([CUSTOMER_ONLY_GRAPH] if not suppliers else []),
+    ]
     confidences = [p.confidence for p in partners if p.confidence > _ZERO]
     avg_confidence = (sum(confidences, start=_ZERO) / Decimal(len(confidences))) if confidences else Decimal("0.8")
-
     return SupplyChainExposure(
         entity_id=entity_id,
         result=FactorResult(

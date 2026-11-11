@@ -23,8 +23,6 @@ DEFAULT_CONFIDENCE_POLICY = ContinuousConfidencePolicy()
 
 @dataclass(frozen=True)
 class CellConfidence:
-    """Single-entry cell confidence result with policy, input, and reason-code audit."""
-
     confidence: Decimal
     policy_id: str
     policy_hash: str
@@ -39,9 +37,7 @@ def _quantize(value: Decimal, decimal_places: int) -> Decimal:
 
 
 def _power(value: Decimal, exponent: Decimal) -> Decimal:
-    if value == 0:
-        return Decimal(0)
-    return (value.ln() * exponent).exp()
+    return Decimal(0) if value == 0 else (value.ln() * exponent).exp()
 
 
 def _evaluation_context(precision: int) -> Context:
@@ -57,12 +53,34 @@ def _evaluation_context(precision: int) -> Context:
     )
 
 
+def _confidence_reason_codes(
+    evidence: ContinuousConfidenceInput,
+    grouped_count: int,
+) -> tuple[str, ...]:
+    reasons = {"confidence.evaluated"}
+    checks = (
+        (grouped_count == 1, "support.single-origin-ceiling"),
+        (len(evidence.sources) > grouped_count, "support.same-origin-deduplicated"),
+        (
+            any(s.successful_outcome_mass + s.failed_outcome_mass == 0 for s in evidence.sources),
+            "reliability.provisional-unobserved-ceiling",
+        ),
+        (evidence.agreement < 1, "quality.source-disagreement"),
+        (evidence.semantic_mapping_quality < 1, "quality.semantic-mapping-penalty"),
+        (evidence.lineage_completeness < 1, "quality.lineage-penalty"),
+        (evidence.required_component_completeness < 1, "quality.required-component-penalty"),
+        (any(s.transport_integrity == 0 for s in evidence.sources), "evidence.raw-transport-missing"),
+    )
+    for triggered, code in checks:
+        if triggered:
+            reasons.add(code)
+    return tuple(reasons)
+
+
 def evaluate_continuous_confidence(
     policy: ContinuousConfidencePolicy,
     evidence: ContinuousConfidenceInput,
 ) -> ContinuousConfidenceEvaluation:
-    """Evaluate the versioned formula without binary floating point or provider branching."""
-
     with localcontext(_evaluation_context(policy.calculation_precision)):
         prior_total = policy.reliability_prior_success + policy.reliability_prior_failure
         source_scores: list[SourceConfidenceScore] = []
@@ -92,10 +110,7 @@ def evaluate_continuous_confidence(
         origin_groups: list[OriginGroupContribution] = []
         evidence_mass = Decimal(0)
         for origin_group_id, candidates in grouped.items():
-            selected, selected_quality = sorted(
-                candidates,
-                key=lambda item: (-item[1], item[0].source_evidence_id),
-            )[0]
+            selected, selected_quality = min(candidates, key=lambda item: (-item[1], item[0].source_evidence_id))
             effective_support = selected.independence_weight * selected_quality
             evidence_mass += effective_support
             origin_groups.append(
@@ -108,35 +123,16 @@ def evaluate_continuous_confidence(
                 )
             )
 
-        source_support = Decimal(1) - (-evidence_mass).exp()
         quantized_evidence_mass = _quantize(evidence_mass, policy.output_decimal_places)
-        quantized_source_support = _quantize(source_support, policy.output_decimal_places)
-        confidence = (
+        quantized_source_support = _quantize(Decimal(1) - (-evidence_mass).exp(), policy.output_decimal_places)
+        confidence = _quantize(
             quantized_source_support
             * _power(evidence.agreement, policy.agreement_exponent)
             * _power(evidence.semantic_mapping_quality, policy.semantic_mapping_exponent)
             * _power(evidence.lineage_completeness, policy.lineage_exponent)
-            * _power(evidence.required_component_completeness, policy.completeness_exponent)
+            * _power(evidence.required_component_completeness, policy.completeness_exponent),
+            policy.output_decimal_places,
         )
-        confidence = _quantize(confidence, policy.output_decimal_places)
-
-    reason_codes = {"confidence.evaluated"}
-    if len(grouped) == 1:
-        reason_codes.add("support.single-origin-ceiling")
-    if len(evidence.sources) > len(grouped):
-        reason_codes.add("support.same-origin-deduplicated")
-    if any(source.successful_outcome_mass + source.failed_outcome_mass == 0 for source in evidence.sources):
-        reason_codes.add("reliability.provisional-unobserved-ceiling")
-    if evidence.agreement < 1:
-        reason_codes.add("quality.source-disagreement")
-    if evidence.semantic_mapping_quality < 1:
-        reason_codes.add("quality.semantic-mapping-penalty")
-    if evidence.lineage_completeness < 1:
-        reason_codes.add("quality.lineage-penalty")
-    if evidence.required_component_completeness < 1:
-        reason_codes.add("quality.required-component-penalty")
-    if any(source.transport_integrity == 0 for source in evidence.sources):
-        reason_codes.add("evidence.raw-transport-missing")
 
     return ContinuousConfidenceEvaluation(
         policy_id=policy.policy_id,
@@ -152,7 +148,28 @@ def evaluate_continuous_confidence(
         lineage_completeness=evidence.lineage_completeness,
         required_component_completeness=evidence.required_component_completeness,
         confidence=confidence,
-        reason_codes=tuple(reason_codes),
+        reason_codes=_confidence_reason_codes(evidence, len(grouped)),
+    )
+
+
+def _static_cell_confidence(
+    *,
+    confidence: Decimal,
+    policy: ContinuousConfidencePolicy,
+    base_reason: str,
+    extra_reason_codes: Sequence[str],
+    payload: dict[str, object],
+) -> CellConfidence:
+    reasons = tuple(sorted({base_reason, *extra_reason_codes}))
+    input_hash = canonical_sha256({**payload, "reason_codes": list(reasons)})
+    return CellConfidence(
+        confidence=confidence,
+        policy_id=policy.policy_id,
+        policy_hash=policy.content_sha256,
+        input_id=f"confidence-input:{input_hash}",
+        input_hash=input_hash,
+        reason_codes=reasons,
+        evaluation=None,
     )
 
 
@@ -169,44 +186,21 @@ def evaluate_cell_confidence(
     extra_reason_codes: Sequence[str] = (),
     policy: ContinuousConfidencePolicy = DEFAULT_CONFIDENCE_POLICY,
 ) -> CellConfidence:
-    """Evaluate cell confidence from source evidence, definitional status, or missing value."""
-
     if definitional:
-        reasons = tuple(sorted({"confidence.definitional", *extra_reason_codes}))
-        input_hash = canonical_sha256(
-            {
-                "case_id": case_id,
-                "definitional": True,
-                "reason_codes": list(reasons),
-            }
-        )
-        return CellConfidence(
+        return _static_cell_confidence(
             confidence=Decimal("1"),
-            policy_id=policy.policy_id,
-            policy_hash=policy.content_sha256,
-            input_id=f"confidence-input:{input_hash}",
-            input_hash=input_hash,
-            reason_codes=reasons,
-            evaluation=None,
+            policy=policy,
+            base_reason="confidence.definitional",
+            extra_reason_codes=extra_reason_codes,
+            payload={"case_id": case_id, "definitional": True},
         )
     if not has_value or not sources:
-        reasons = tuple(sorted({"confidence.no-origin-value", *extra_reason_codes}))
-        input_hash = canonical_sha256(
-            {
-                "case_id": case_id,
-                "definitional": False,
-                "has_value": False,
-                "reason_codes": list(reasons),
-            }
-        )
-        return CellConfidence(
+        return _static_cell_confidence(
             confidence=Decimal("0"),
-            policy_id=policy.policy_id,
-            policy_hash=policy.content_sha256,
-            input_id=f"confidence-input:{input_hash}",
-            input_hash=input_hash,
-            reason_codes=reasons,
-            evaluation=None,
+            policy=policy,
+            base_reason="confidence.no-origin-value",
+            extra_reason_codes=extra_reason_codes,
+            payload={"case_id": case_id, "definitional": False, "has_value": False},
         )
     evidence = ContinuousConfidenceInput(
         case_id=case_id,
@@ -217,23 +211,19 @@ def evaluate_cell_confidence(
         required_component_completeness=required_component_completeness,
     )
     evaluation = evaluate_continuous_confidence(policy, evidence)
-    reasons = tuple(sorted({*evaluation.reason_codes, *extra_reason_codes}))
     return CellConfidence(
         confidence=evaluation.confidence,
         policy_id=evaluation.policy_id,
         policy_hash=evaluation.policy_sha256,
         input_id=evaluation.input_id,
         input_hash=evaluation.input_sha256,
-        reason_codes=reasons,
+        reason_codes=tuple(sorted({*evaluation.reason_codes, *extra_reason_codes})),
         evaluation=evaluation,
     )
 
 
 def verify_confidence_calibration_report(report: ConfidenceCalibrationReport) -> ConfidenceCalibrationReport:
-    """Fail closed unless every embedded evaluation exactly matches the factor."""
-
     for scenario in report.scenarios:
-        expected = evaluate_continuous_confidence(report.policy, scenario.input)
-        if scenario.evaluation != expected:
+        if scenario.evaluation != evaluate_continuous_confidence(report.policy, scenario.input):
             raise ValueError("every calibration evaluation must exactly reproduce from policy and input")
     return report

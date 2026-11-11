@@ -1,31 +1,4 @@
-"""Split events derived from two stored price series (#758, M3).
-
-No corporate-action source exists. The daily price store holds two series for each
-symbol: unadjusted bars (``adjust = 'none'``) and split-adjusted bars (``adjust = 'splits'``).
-The split-adjusted series is expressed on the share basis of its fetch. So on each session,
-the ratio ``unadjusted close / split-adjusted close`` is the product of the factors of every
-split with a later ex-date. The ratio is constant between two splits. It steps down on each
-ex-date. A step from ``r0`` to ``r1`` is one split with the factor ``r0 / r1``: ``r0 / r1``
-new shares for each old share.
-
-Rules this module enforces:
-
-* A step is a split only when its factor is a simple ratio ``p/q`` with ``q <= 20``. A step
-  that does not round to such a ratio stops the run. A slow drift of the ratio (for example a
-  series that is also adjusted for dividends) has no simple ratio, so it also stops the run.
-* The unadjusted series must confirm each split. On the ex-date, the unadjusted price drops by
-  the factor. Multiplied by the factor, the move from the previous close to the ex-date open
-  must be smaller than half the factor in log terms. A step that the unadjusted series does
-  not show (for example two vintages of the split-adjusted series fetched before and after a
-  split) stops the run. Nothing guesses a corporate action.
-* The ratio on the latest session must be 1. The split-adjusted series is on the share basis
-  of its fetch, so a latest ratio other than 1 means the two series disagree.
-* Both series must cover the same span. A split outside the span of the split-adjusted series
-  leaves no step in the ratio, so an unadjusted session before the first or after the last
-  session of both series stops the run.
-
-Dividends have no source. A return computed with these events is a price return only.
-"""
+"""Split events derived from unadjusted and split-adjusted price series (#758, M3)."""
 
 from __future__ import annotations
 
@@ -35,10 +8,9 @@ from datetime import date
 from decimal import Decimal
 from fractions import Fraction
 
-#: The largest relative difference between two ratios that is rounding noise, not a split.
 RATIO_TOLERANCE = Decimal("0.005")
-#: The largest denominator of a split factor (a 3:2 split has the denominator 2).
 MAX_FACTOR_DENOMINATOR = 20
+MAX_FORWARD_SPLIT_DENOMINATOR = 3
 
 
 class SplitDerivationError(ValueError):
@@ -47,8 +19,6 @@ class SplitDerivationError(ValueError):
 
 @dataclass(frozen=True)
 class SeriesBar:
-    """One session of one symbol, read from both stored series."""
-
     session: date
     unadjusted_open: Decimal | None
     unadjusted_close: Decimal | None
@@ -57,8 +27,6 @@ class SeriesBar:
 
 @dataclass(frozen=True)
 class SplitEvent:
-    """One split: ``numerator`` new shares for each ``denominator`` old shares from ``ex_date``."""
-
     symbol: str
     ex_date: date
     numerator: int
@@ -73,13 +41,18 @@ def _positive(value: Decimal | None) -> bool:
     return value is not None and value > 0
 
 
+def _first_unadjusted(bar: SeriesBar) -> Decimal | None:
+    price = bar.unadjusted_open if _positive(bar.unadjusted_open) else bar.unadjusted_close
+    return price if _positive(price) else None
+
+
 def _snap(symbol: str, session: date, step: Decimal) -> Fraction:
-    """The simple ratio ``p/q`` a ratio step rounds to. Raise when there is none."""
     exact = Fraction(step)
-    if exact >= 1:
-        candidate = exact.limit_denominator(MAX_FACTOR_DENOMINATOR)
-    else:
-        candidate = 1 / (1 / exact).limit_denominator(MAX_FACTOR_DENOMINATOR)
+    candidate = (
+        exact.limit_denominator(MAX_FACTOR_DENOMINATOR)
+        if exact >= 1
+        else 1 / (1 / exact).limit_denominator(MAX_FACTOR_DENOMINATOR)
+    )
     if candidate == 1:
         raise SplitDerivationError(
             f"{symbol} {session.isoformat()}: the price ratio moved by {step} without a split factor; "
@@ -94,13 +67,11 @@ def _snap(symbol: str, session: date, step: Decimal) -> Fraction:
 
 
 def _confirm(symbol: str, session: date, factor: Fraction, previous_close: Decimal, bar: SeriesBar) -> None:
-    """Raise unless the unadjusted series shows the split on its ex-date."""
-    first_price = bar.unadjusted_open if _positive(bar.unadjusted_open) else bar.unadjusted_close
-    if first_price is None or first_price <= 0:
+    first_price = _first_unadjusted(bar)
+    if first_price is None:
         raise SplitDerivationError(f"{symbol} {session.isoformat()}: no unadjusted price confirms the split")
     factor_decimal = Decimal(factor.numerator) / Decimal(factor.denominator)
-    adjusted_move = (first_price * factor_decimal / previous_close).ln()
-    if abs(adjusted_move) >= abs(factor_decimal.ln()) / 2:
+    if abs((first_price * factor_decimal / previous_close).ln()) >= abs(factor_decimal.ln()) / 2:
         raise SplitDerivationError(
             f"{symbol} {session.isoformat()}: the price ratio shows a {factor} split, "
             f"but the unadjusted series does not drop by that factor "
@@ -108,49 +79,25 @@ def _confirm(symbol: str, session: date, factor: Fraction, previous_close: Decim
         )
 
 
-#: Smallest denominator for a standard forward split ratio (`p/q > 1`); genuine stock splits have denominator 1, 2, or 3.
-MAX_FORWARD_SPLIT_DENOMINATOR = 3
-
-
 def _is_non_split_price_adjustment(step: Decimal, previous_close: Decimal | None, bar: SeriesBar) -> bool:
-    """True when `step` is a spin-off or special-distribution price adjustment rather than a share split (#1606).
-
-    On a spin-off ex-date (such as WDC spinning off SNDK on 2025-02-24), the unadjusted price drops
-    by the spin-off value (`first_price < previous_close`) while the vendor's `splits` series scales
-    pre-ex-date closes by a non-split adjustment factor, without changing `shares_outstanding`:
-    - When `step < 1` (the `splits` close stepped down by `step` on the ex-date), a true reverse
-      split (`factor < 1`) would multiply the unadjusted price by `1 / step > 1`; if the unadjusted
-      price instead dropped in the same direction as `step` (`first_price / previous_close ≈ step`),
-      it is a spin-off price adjustment.
-    - When `step > 1` is not a standard forward split ratio (`p/q` with `q <= 3`), if the unadjusted
-      price confirmed the overnight drop (`first_price * step / previous_close ≈ 1`), it is a spin-off
-      price adjustment rather than dividend drift (where `unadjusted` does not drop).
-    """
     if previous_close is None or previous_close <= 0:
         return False
-    first_price = bar.unadjusted_open if _positive(bar.unadjusted_open) else bar.unadjusted_close
-    if first_price is None or first_price <= 0 or first_price >= previous_close:
+    first_price = _first_unadjusted(bar)
+    if first_price is None or first_price >= previous_close:
         return False
     if step < 1:
-        move = (first_price / (previous_close * step)).ln()
-        return abs(move) < abs(step.ln()) / 2
+        return abs((first_price / (previous_close * step)).ln()) < abs(step.ln()) / 2
     if step > 1:
-        forward_candidate = Fraction(step).limit_denominator(MAX_FORWARD_SPLIT_DENOMINATOR)
-        if forward_candidate > 1:
-            forward_error = abs(
-                Decimal(forward_candidate.numerator) / Decimal(forward_candidate.denominator) / step - 1
-            )
-            if forward_error <= RATIO_TOLERANCE:
-                return False
-        move = (first_price * step / previous_close).ln()
-        return abs(move) < abs(step.ln()) / 2
+        fwd = Fraction(step).limit_denominator(MAX_FORWARD_SPLIT_DENOMINATOR)
+        if fwd > 1 and abs(Decimal(fwd.numerator) / Decimal(fwd.denominator) / step - 1) <= RATIO_TOLERANCE:
+            return False
+        return abs((first_price * step / previous_close).ln()) < abs(step.ln()) / 2
     return False
 
 
 def _resolve_ratio_step(
     symbol: str, session: date, step: Decimal, previous_close: Decimal | None, bar: SeriesBar
 ) -> SplitEvent | None:
-    """Return a `SplitEvent` for `step`, or `None` when `step` is a confirmed non-split price adjustment."""
     if _is_non_split_price_adjustment(step, previous_close, bar):
         return None
     factor = _snap(symbol, session, step)
@@ -161,7 +108,6 @@ def _resolve_ratio_step(
 
 
 def derive_split_events(symbol: str, bars: Sequence[SeriesBar]) -> tuple[SplitEvent, ...]:
-    """The splits of one symbol, oldest first. Raise ``SplitDerivationError`` on ambiguity."""
     ordered = sorted(bars, key=lambda bar: bar.session)
     if len({bar.session for bar in ordered}) != len(ordered):
         raise SplitDerivationError(f"{symbol}: two bars for one session")
@@ -175,14 +121,11 @@ def derive_split_events(symbol: str, bars: Sequence[SeriesBar]) -> tuple[SplitEv
         if _positive(bar.unadjusted_close) and _positive(bar.split_adjusted_close):
             assert bar.unadjusted_close is not None and bar.split_adjusted_close is not None
             ratio = bar.unadjusted_close / bar.split_adjusted_close
-            if anchor is not None:
-                step = anchor / ratio
-                if abs(step - 1) > RATIO_TOLERANCE:
-                    event = _resolve_ratio_step(symbol, bar.session, step, previous_close, bar)
-                    if event is not None:
-                        events.append(event)
-                    anchor = ratio
-            else:
+            if anchor is not None and abs(anchor / ratio - 1) > RATIO_TOLERANCE:
+                if (event := _resolve_ratio_step(symbol, bar.session, anchor / ratio, previous_close, bar)) is not None:
+                    events.append(event)
+                anchor = ratio
+            elif anchor is None:
                 anchor = ratio
             latest_ratio = ratio
             first_paired = first_paired or bar.session
@@ -207,13 +150,6 @@ def derive_split_events(symbol: str, bars: Sequence[SeriesBar]) -> tuple[SplitEv
 
 
 def split_factor_between(events: Sequence[SplitEvent], *, after: date, through: date) -> Fraction:
-    """The product of the factors of the splits with an ex-date in ``(after, through]``; 1 when none.
-
-    #1257: a share count on the share basis of the date ``after`` (its basis date) meets a close of
-    the session ``through``. Multiplying the count by this factor puts both on one basis, so their
-    product is the market value. A split with its ex-date on ``after`` itself is taken as already
-    in the count: a count dated on the ex-date, or a filing issued on it, reflects the split.
-    """
     factor = Fraction(1)
     for event in events:
         if after < event.ex_date <= through:
