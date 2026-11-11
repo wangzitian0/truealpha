@@ -37,14 +37,14 @@ from factors.production_topt import (
     ToptMetricInput,
 )
 from truealpha_contracts.execution import InputEvidenceStatus
-from truealpha_contracts.metric_node_read import (
-    MetricNodeValueReport,
-    PostgresMetricNodeValueRepository,
-)
 from truealpha_contracts.strategy import (
     LargeModelValueV0Definition,
     load_live_strategy_corpus,
     load_live_strategy_definition,
+)
+from truealpha_contracts.topt_read import (
+    MetricNodeValueReport,
+    PostgresMetricNodeValueRepository,
 )
 
 CUTOFF = datetime(2026, 6, 30, 23, 59, 59, tzinfo=UTC)

@@ -1,420 +1,49 @@
-"""Generate and verify Issue #58 Python/TypeScript conformance artifacts."""
+"""Export shared stable-identifier conformance metadata for Python/TypeScript parity."""
 
 from __future__ import annotations
 
 import argparse
 import json
-from datetime import UTC, date, datetime, timedelta
-from decimal import Decimal
 from pathlib import Path
-from typing import Any
 
-from pydantic import BaseModel
-from truealpha_contracts.common import STABLE_ID_PATTERN, canonical_sha256
-from truealpha_contracts.data_quality import DataDomain
-from truealpha_contracts.execution import (
-    ExtractionInvocation,
-    ExtractionTemplate,
-    ModelRevisionRef,
-    NormalizedRecordRef,
-    PolicyBinding,
-    PolicyRole,
-    SemanticDraft,
-    SemanticProducerKind,
-    SnapshotCellSelection,
-    SnapshotDemandCell,
-    SnapshotManifest,
-    SnapshotRequest,
-    validate_extraction_replay,
-)
-from truealpha_contracts.registries import (
-    IdentifierNamespaceKind,
-    IdentifierTypeRegistryEntry,
-    RegistrySnapshot,
-    SemanticTypeRegistryEntry,
-    SourceRegistryEntry,
-)
-from truealpha_contracts.release import ArtifactRole, ReleaseArtifact, ReleaseManifest
-from truealpha_contracts.universe import (
-    SubjectKind,
-    SubjectRef,
-    UniverseDefinitionKind,
-    UniverseManifest,
-    UniverseMembership,
-)
-from truealpha_contracts.usage import RequirementLevel
+from truealpha_contracts.common import STABLE_ID_PATTERN
 
-CONTRACT_SET = "truealpha.issue-58.exact-contracts.v1"
 OUTPUT_DIR = Path(__file__).resolve().parent
 SCHEMA_PATH = OUTPUT_DIR / "issue58.schemas.json"
-FIXTURE_PATH = OUTPUT_DIR / "issue58.fixtures.json"
-NOW = datetime(2026, 7, 12, 12, 0, tzinfo=UTC)
-SUBJECT = SubjectRef(kind=SubjectKind.ISSUER, id="issuer.example")
 
 
-def _hash(character: str) -> str:
-    return character * 64
+def _render_json(payload: object) -> str:
+    return json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=True) + "\n"
 
 
-# The snapshot and release contracts name catalogs, the capture scope and the capture requirement
-# by identifier and hash only. These fixed values stand in for the objects they would identify.
-RESEARCH_CATALOG_SHA256 = _hash("a")
-APPLICABILITY_CATALOG_SHA256 = _hash("b")
-CAPTURE_SCOPE_SHA256 = _hash("c")
-SOURCE_COVERAGE_CATALOG_SHA256 = _hash("d")
-CAPTURE_REQUIREMENT_ID = "capture-requirement:" + _hash("e")
-SLO_CATALOG_SHA256 = _hash("f")
-
-
-def _registry() -> RegistrySnapshot:
-    semantic_type = SemanticTypeRegistryEntry(
-        semantic_type_id="semantic.financial-fact",
-        version="1.0.0",
-        domain=DataDomain.FINANCIAL_FACTS,
-        schema_version="1.0.0",
-        schema_fingerprint_sha256=_hash("a"),
-        normalized_model_key="contracts:FinancialFact",
-        input_model_key="factors:FinancialFactInput",
-        repository_key="repositories:FinancialFact",
-        projector_key="projectors:FinancialFact",
-        compatibility_sha256=_hash("b"),
-        model_implementation_sha256=_hash("c"),
-        repository_implementation_sha256=_hash("d"),
-        projector_implementation_sha256=_hash("e"),
-    )
-    source = SourceRegistryEntry(
-        source_id="source.sec",
-        version="1.0.0",
-        adapter_id="adapter.sec",
-        adapter_version="1.0.0",
-        normalizer_id="normalizer.sec",
-        normalizer_version="1.0.0",
-        supported_domains=(DataDomain.FINANCIAL_FACTS,),
-        supported_type_ids=(semantic_type.semantic_type_id,),
-        configuration_schema_sha256=_hash("1"),
-        mapping_schema_sha256=_hash("2"),
-        adapter_implementation_sha256=_hash("3"),
-        normalizer_implementation_sha256=_hash("4"),
-    )
-    identifier_type = IdentifierTypeRegistryEntry(
-        identifier_type_id="identifier.entity.legal-entity-id",
-        version="1.0.0",
-        namespace_kind=IdentifierNamespaceKind.ENTITY,
-        semantic_definition_sha256=_hash("5"),
-        schema_version="1.0.0",
-        schema_fingerprint_sha256=_hash("6"),
-        compatibility_sha256=_hash("7"),
-        validator_implementation_sha256=_hash("8"),
-        canonicalizer_implementation_sha256=_hash("9"),
-    )
-    return RegistrySnapshot(
-        sources=(source,),
-        semantic_types=(semantic_type,),
-        identifier_types=(identifier_type,),
-        required_type_ids=(semantic_type.semantic_type_id,),
-        required_identifier_type_ids=(identifier_type.identifier_type_id,),
-    )
-
-
-def _universe() -> UniverseManifest:
-    return UniverseManifest.create(
-        universe_id="universe.topt-core",
-        universe_version="2026-07-12",
-        definition_kind=UniverseDefinitionKind.FIXED_COHORT,
-        effective_at=NOW - timedelta(days=30),
-        owner="research-owner",
-        membership_ids=("membership:issuer.example",),
-    )
-
-
-def _extraction_chain() -> tuple[ModelRevisionRef, ExtractionTemplate, ExtractionInvocation]:
-    model_revision = ModelRevisionRef(
-        provider="provider.example",
-        model_id="extractor.financial-fact",
-        immutable_revision="2026-07-01",
-        endpoint_or_artifact_sha256=_hash("1"),
-        decoding_parameters_sha256=_hash("2"),
-    )
-    template = ExtractionTemplate(
-        template_name="financial-fact",
-        template_version="1.0.0",
-        semantic_type_id="semantic.financial-fact",
-        semantic_type_version="1.0.0",
-        payload_model_key="contracts:FinancialFact",
-        output_schema_sha256=_hash("a"),
-        instructions_sha256=_hash("3"),
-        extractor_implementation_sha256=_hash("4"),
-        model_revision_id=model_revision.model_revision_id,
-        model_revision_sha256=model_revision.content_sha256,
-    )
-    invocation = ExtractionInvocation(
-        model_revision_id=model_revision.model_revision_id,
-        model_revision_sha256=model_revision.content_sha256,
-        extraction_template_id=template.extraction_template_id,
-        extraction_template_sha256=template.content_sha256,
-        input_sha256=_hash("5"),
-        response_sha256=_hash("6"),
-        semantic_payload_sha256=_hash("7"),
-        attempt_number=1,
-        started_at=NOW - timedelta(days=4, minutes=1),
-        completed_at=NOW - timedelta(days=4),
-        invoker_id="extractor.runner",
-        invoker_version="1.0.0",
-        invoker_implementation_sha256=template.extractor_implementation_sha256,
-    )
-    return model_revision, template, invocation
-
-
-def _membership(universe: UniverseManifest) -> UniverseMembership:
-    return UniverseMembership(
-        membership_id=universe.membership_ids[0],
-        universe_id=universe.ref.universe_id,
-        subject=SUBJECT,
-        valid_from=date(2025, 1, 1),
-        knowable_at=NOW - timedelta(days=20),
-        recorded_at=NOW - timedelta(days=19),
-        confidence=Decimal("1"),
-        raw_ref="raw:universe-membership",
-    )
-
-
-def _snapshot(
-    registry: RegistrySnapshot,
-    universe: UniverseManifest,
-    model_revision: ModelRevisionRef,
-    template: ExtractionTemplate,
-    invocation: ExtractionInvocation,
-) -> SnapshotManifest:
-    policies = tuple(
-        PolicyBinding(
-            role=role,
-            policy_id=f"policy.{role.value}",
-            policy_version="1.0.0",
-            implementation_sha256=_hash("4"),
-        )
-        for role in PolicyRole
-    )
-    demand = SnapshotDemandCell(
-        requirement_id="data-requirement:" + _hash("6"),
-        capture_requirement_id=CAPTURE_REQUIREMENT_ID,
-        semantic_type_id=registry.semantic_types[0].semantic_type_id,
-        semantic_type_version=registry.semantic_types[0].version,
-        domain=DataDomain.FINANCIAL_FACTS,
-        subject=SUBJECT,
-        partition_key="FY2025",
-        level=RequirementLevel.REQUIRED,
-    )
-    request = SnapshotRequest(
-        universe=universe.ref,
-        as_of=NOW,
-        valid_on=date(2025, 12, 31),
-        registry_snapshot_id=registry.registry_snapshot_id,
-        registry_snapshot_sha256=registry.content_sha256,
-        source_registry_id=registry.source_registry_snapshot_id,
-        source_registry_sha256=registry.source_registry_sha256,
-        semantic_type_registry_id=registry.semantic_type_registry_snapshot_id,
-        semantic_type_registry_sha256=registry.semantic_type_registry_sha256,
-        policy_bindings=policies,
-        demand_cells=(demand,),
-    )
-    draft = SemanticDraft(
-        semantic_type_id=registry.semantic_types[0].semantic_type_id,
-        semantic_type_version=registry.semantic_types[0].version,
-        payload_model_key=template.payload_model_key,
-        payload_schema_sha256=template.output_schema_sha256,
-        payload_sha256=invocation.semantic_payload_sha256,
-        subject=SUBJECT,
-        valid_from=date(2025, 1, 1),
-        valid_to=date(2025, 12, 31),
-        knowable_at=NOW - timedelta(days=5),
-        produced_at=invocation.completed_at,
-        producer_kind=SemanticProducerKind.VERSIONED_EXTRACTION,
-        producer_id=invocation.invoker_id,
-        producer_version=invocation.invoker_version,
-        producer_implementation_sha256=invocation.invoker_implementation_sha256,
-        model_revision_id=model_revision.model_revision_id,
-        model_revision_sha256=model_revision.content_sha256,
-        extraction_template_id=template.extraction_template_id,
-        extraction_template_sha256=template.content_sha256,
-        extraction_invocation_id=invocation.extraction_invocation_id,
-        extraction_invocation_sha256=invocation.content_sha256,
-    )
-    validate_extraction_replay(
-        draft=draft,
-        invocation=invocation,
-        template=template,
-        model_revision=model_revision,
-    )
-    record = NormalizedRecordRef(
-        draft=draft,
-        document_id="document:sec-10k-2025",
-        raw_object_id="raw-object:sec-10k-2025",
-        raw_object_sha256=_hash("7"),
-        source_registry_entry_id=registry.sources[0].source_registry_entry_id,
-        source_registry_entry_sha256=registry.sources[0].content_sha256,
-        mapping_version="1.0.0",
-        mapping_implementation_sha256=_hash("8"),
-        recorded_at=NOW - timedelta(days=3),
-        confidence=Decimal("0.9"),
-    )
-    return SnapshotManifest(
-        request=request,
-        registry_snapshot=registry,
-        resolved_subjects=(SUBJECT,),
-        universe_manifest=universe,
-        universe_memberships=(_membership(universe),),
-        normalized_records=(record,),
-        selections=(
-            SnapshotCellSelection(
-                demand=demand,
-                normalized_record_ids=(record.normalized_record_id,),
-            ),
-        ),
-        resolved_at=NOW + timedelta(seconds=1),
-        resolver_id="snapshot-resolver",
-        resolver_version="1.0.0",
-        resolver_implementation_sha256=_hash("9"),
-    )
-
-
-def _release(
-    registry: RegistrySnapshot,
-    universe: UniverseManifest,
-    model_revision: ModelRevisionRef,
-    template: ExtractionTemplate,
-) -> ReleaseManifest:
-    migration_ids = ("0001_core.sql", "0002_capture.sql")
-    artifacts = tuple(
-        ReleaseArtifact(
-            role=role,
-            image_or_bundle=f"ghcr.io/truealpha/{role.value}@sha256:{_hash('1')}",
-            digest="sha256:" + _hash("1"),
-            git_sha="2" * 40,
-            sbom_sha256=_hash("3"),
-            signature_ref=f"sigstore:{role.value}:sha256:{_hash('4')}",
-        )
-        for role in ArtifactRole
-    )
-    return ReleaseManifest(
-        contract_version="contracts:v1",
-        mart_schema_version="mart:v1",
-        research_catalog_id="research-catalog:" + RESEARCH_CATALOG_SHA256,
-        research_catalog_sha256=RESEARCH_CATALOG_SHA256,
-        universe=universe.ref,
-        capture_scope_id="capture-scope:" + CAPTURE_SCOPE_SHA256,
-        capture_scope_sha256=CAPTURE_SCOPE_SHA256,
-        applicability_catalog_id="applicability:" + APPLICABILITY_CATALOG_SHA256,
-        applicability_catalog_sha256=APPLICABILITY_CATALOG_SHA256,
-        source_coverage_catalog_id="source-coverage:" + SOURCE_COVERAGE_CATALOG_SHA256,
-        source_coverage_catalog_sha256=SOURCE_COVERAGE_CATALOG_SHA256,
-        source_readiness_report_id="source-readiness:" + _hash("5"),
-        source_readiness_report_sha256=_hash("5"),
-        slo_catalog_id="module-slo:" + SLO_CATALOG_SHA256,
-        slo_catalog_sha256=SLO_CATALOG_SHA256,
-        consumer_slo_catalog_id="consumer-slo:" + _hash("6"),
-        consumer_slo_catalog_sha256=_hash("6"),
-        usage_telemetry_slo_catalog_id="usage-telemetry-slo:" + _hash("7"),
-        usage_telemetry_slo_catalog_sha256=_hash("7"),
-        registry_snapshot_id=registry.registry_snapshot_id,
-        registry_snapshot_sha256=registry.content_sha256,
-        source_registry_id=registry.source_registry_snapshot_id,
-        source_registry_sha256=registry.source_registry_sha256,
-        semantic_type_registry_id=registry.semantic_type_registry_snapshot_id,
-        semantic_type_registry_sha256=registry.semantic_type_registry_sha256,
-        identifier_type_registry_id=registry.identifier_type_registry_snapshot_id,
-        identifier_type_registry_sha256=registry.identifier_type_registry_sha256,
-        configuration_sha256={"app-web": _hash("8"), "data-engine": _hash("9")},
-        migration_ids=migration_ids,
-        migration_set_sha256=canonical_sha256(migration_ids),
-        artifacts=artifacts,
-        natural_refresh_requirement_ids=("natural-refresh:" + _hash("a"),),
-        approved_model_revisions=(model_revision,),
-        approved_extraction_templates=(template,),
-        created_at=NOW - timedelta(days=10),
-        manifest_signature_ref="sigstore:release:sha256:" + _hash("b"),
-    )
-
-
-def _contracts() -> dict[str, BaseModel]:
-    registry = _registry()
-    universe = _universe()
-    model_revision, template, invocation = _extraction_chain()
+def schema_bundle() -> dict[str, object]:
     return {
-        "SnapshotManifest": _snapshot(registry, universe, model_revision, template, invocation),
-        "ReleaseManifest": _release(registry, universe, model_revision, template),
-    }
-
-
-def _render(value: Any) -> str:
-    return json.dumps(value, sort_keys=True, indent=2, ensure_ascii=True) + "\n"
-
-
-def _portable_json(value: Any) -> Any:
-    """Normalize JSON numbers after parsing, matching JavaScript's number model."""
-
-    if isinstance(value, float) and value.is_integer():
-        return int(value)
-    if isinstance(value, list):
-        return [_portable_json(item) for item in value]
-    if isinstance(value, dict):
-        return {key: _portable_json(item) for key, item in value.items()}
-    return value
-
-
-def build_artifacts() -> tuple[str, str]:
-    model_types: dict[str, type[BaseModel]] = {
-        "SnapshotManifest": SnapshotManifest,
-        "ReleaseManifest": ReleaseManifest,
-    }
-    contracts = _contracts()
-    schemas = {name: model_type.model_json_schema(mode="validation") for name, model_type in model_types.items()}
-    schema_hashes = {name: canonical_sha256(_portable_json(schema)) for name, schema in schemas.items()}
-    fixture_values = {name: model.model_dump(mode="json") for name, model in contracts.items()}
-
-    for name, model_type in model_types.items():
-        restored = model_type.model_validate(fixture_values[name])
-        if restored.model_dump(mode="json") != fixture_values[name]:
-            raise RuntimeError(f"{name} fixture does not round-trip through its Python DTO")
-
-    schema_bundle = {
-        "contract_set": CONTRACT_SET,
-        "schema_sha256": schema_hashes,
-        "schemas": schemas,
-        # The one Python grammar for a stable identifier. apps/app-web/tests/stable-identifier-parity.test.ts
-        # compares it with the TypeScript copy in apps/app-web/src/server/documents.ts.
+        "contract_set": "truealpha.issue-58.exact-contracts.v1",
         "stable_id_pattern": STABLE_ID_PATTERN,
     }
-    fixture_bundle = {
-        "contract_set": CONTRACT_SET,
-        "schema_sha256": schema_hashes,
-        "contracts": fixture_values,
-    }
-    return _render(schema_bundle), _render(fixture_bundle)
 
 
-def _check(path: Path, expected: str) -> bool:
-    if not path.exists():
-        print(f"missing generated conformance artifact: {path}")
-        return False
-    if path.read_text() != expected:
-        print(f"stale generated conformance artifact: {path}")
-        return False
-    return True
+def write_artifacts() -> None:
+    SCHEMA_PATH.write_text(_render_json(schema_bundle()), encoding="utf-8")
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser()
-    mode = parser.add_mutually_exclusive_group()
-    mode.add_argument("--write", action="store_true")
-    mode.add_argument("--check", action="store_true")
+def check_artifacts() -> None:
+    expected = _render_json(schema_bundle())
+    if not SCHEMA_PATH.exists() or SCHEMA_PATH.read_text(encoding="utf-8") != expected:
+        raise SystemExit(f"{SCHEMA_PATH} is out of date; run export_issue58.py --write")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--write", action="store_true", help="write conformance JSON artifacts")
+    mode.add_argument("--check", action="store_true", help="verify committed conformance JSON artifacts")
     args = parser.parse_args()
-    schema_text, fixture_text = build_artifacts()
     if args.write:
-        SCHEMA_PATH.write_text(schema_text)
-        FIXTURE_PATH.write_text(fixture_text)
-        return 0
-    return 0 if _check(SCHEMA_PATH, schema_text) and _check(FIXTURE_PATH, fixture_text) else 1
+        write_artifacts()
+    else:
+        check_artifacts()
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    main()

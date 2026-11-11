@@ -33,12 +33,22 @@ def seed_module_rows(connection: Any) -> None:
                 source_evidence_status, factor_validation_status)
                values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
             (
-                _run_id(row["run"]), issuer, row["cutoff"], row["exposure_score"], row["direct_partners"],
-                row["suppliers_count"], row["customers_count"], row["max_partner_share"], row["confidence"],
-                row["reason_codes"], row["extractor"], row["availability_status"],
-                row["source_evidence_status"], row["factor_validation_status"],
+                _run_id(row["run"]),
+                issuer,
+                row["cutoff"],
+                row["exposure_score"],
+                row["direct_partners"],
+                row["suppliers_count"],
+                row["customers_count"],
+                row["max_partner_share"],
+                row["confidence"],
+                row["reason_codes"],
+                row["extractor"],
+                row["availability_status"],
+                row["source_evidence_status"],
+                row["factor_validation_status"],
             ),
-        )  # fmt: skip
+        )
     for row in CANON["analyst_ratings"]["rows"]:
         connection.execute(
             """insert into mart.issuer_analyst_ratings
@@ -47,12 +57,22 @@ def seed_module_rows(connection: Any) -> None:
                 factor_validation_status)
                values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
             (
-                _run_id(row["run"]), issuer, row["cutoff"], row["consensus_rating"], row["analysts_count"],
-                row["buy_count"], row["hold_count"], row["sell_count"], row["confidence"], row["reason_codes"],
-                row["extractor"], row["availability_status"], row["source_evidence_status"],
+                _run_id(row["run"]),
+                issuer,
+                row["cutoff"],
+                row["consensus_rating"],
+                row["analysts_count"],
+                row["buy_count"],
+                row["hold_count"],
+                row["sell_count"],
+                row["confidence"],
+                row["reason_codes"],
+                row["extractor"],
+                row["availability_status"],
+                row["source_evidence_status"],
                 row["factor_validation_status"],
             ),
-        )  # fmt: skip
+        )
 
 
 def seed_served_head(connection: Any) -> None:

@@ -1,9 +1,8 @@
-"""Point-in-time multi-source reconciliation and DataHub quality reports."""
+"""Point-in-time multi-source reconciliation contracts."""
 
 from __future__ import annotations
 
 import re
-from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -28,26 +27,12 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from truealpha_contracts.common import STABLE_ID_PATTERN, canonical_sha256, require_stable_and_immutable
 from truealpha_contracts.common import identify_by_grain as _freeze_content
-from truealpha_contracts.datahub import AssessmentFreshness, ObligationTerminalState
 from truealpha_contracts.models import _require_aware
 from truealpha_contracts.universe import SubjectRef
 
 _SHA256 = r"^[0-9a-f]{64}$"
 _CONTENT_ID = r"^[a-z][a-z0-9-]*:[0-9a-f]{64}$"
 _MUTABLE_TOKENS = frozenset({"latest", "current", "default", "stable", "main", "head"})
-
-
-def _reconciliation_context() -> Context:
-    return Context(
-        prec=50,
-        rounding=ROUND_HALF_EVEN,
-        Emin=-999999,
-        Emax=999999,
-        capitals=1,
-        clamp=0,
-        flags=[],
-        traps=[InvalidOperation, DivisionByZero, Overflow],
-    )
 
 
 def _decimal_shape(value: Decimal) -> tuple[int, int]:
@@ -320,33 +305,6 @@ class ReconciliationCell(_FrozenModel):
                 "valid_from",
                 "valid_to",
             ),
-        )
-        return self
-
-
-class DataHubQualityDenominator(_FrozenModel):
-    """The exact requested-cell set compiled from one accepted service demand."""
-
-    denominator_id: str = Field(default="", pattern=r"^(?:|datahub-quality-denominator:[0-9a-f]{64})$")
-    content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
-    service_demand_id: str = Field(pattern=_CONTENT_ID)
-    requested_cell_ids: tuple[str, ...] = Field(min_length=1)
-
-    @field_validator("requested_cell_ids")
-    @classmethod
-    def normalize_cell_ids(cls, values: tuple[str, ...]) -> tuple[str, ...]:
-        values = _sorted_unique(values, "requested_cell_ids")
-        if any(re.fullmatch(r"^reconciliation-cell:[0-9a-f]{64}$", value) is None for value in values):
-            raise ValueError("requested_cell_ids must contain reconciliation cell addresses")
-        return values
-
-    @model_validator(mode="after")
-    def identify(self) -> Self:
-        _freeze_content(
-            self,
-            id_field="denominator_id",
-            prefix="datahub-quality-denominator",
-            identity_fields=("service_demand_id", "requested_cell_ids"),
         )
         return self
 
@@ -817,236 +775,3 @@ def _median_consensus_result(
         selected_numeric_value=grade.served_value if isinstance(grade.served_value, Decimal) else None,
         reason_codes=tuple(reasons),
     )
-
-
-class OriginGroupCount(_FrozenModel):
-    origin_group_id: str = Field(pattern=STABLE_ID_PATTERN)
-    cell_count: int = Field(ge=1)
-
-    @field_validator("origin_group_id")
-    @classmethod
-    def validate_origin_group_id(cls, value: str) -> str:
-        return _immutable_coordinate(value, "origin_group_id")
-
-
-class DataHubQualitySummary(_FrozenModel):
-    requested_count: int = Field(ge=1)
-    planned_count: int = Field(ge=0)
-    terminal_count: int = Field(ge=0)
-    available_count: int = Field(ge=0)
-    fresh_count: int = Field(ge=0)
-    independently_reconciled_count: int = Field(ge=0)
-    conflicted_count: int = Field(ge=0)
-    complete_lineage_count: int = Field(ge=0)
-    planned_coverage: Decimal = Field(ge=0, le=1)
-    terminal_coverage: Decimal = Field(ge=0, le=1)
-    availability: Decimal = Field(ge=0, le=1)
-    freshness: Decimal = Field(ge=0, le=1)
-    independent_reconciliation: Decimal = Field(ge=0, le=1)
-    lineage_completeness: Decimal = Field(ge=0, le=1)
-    origin_composition: tuple[OriginGroupCount, ...]
-
-    @field_validator(
-        "planned_coverage",
-        "terminal_coverage",
-        "availability",
-        "freshness",
-        "independent_reconciliation",
-        "lineage_completeness",
-        mode="before",
-    )
-    @classmethod
-    def reject_binary_float(cls, value: Any) -> Any:
-        return _decimal_input(value)
-
-
-class DataHubQualityCell(_FrozenModel):
-    quality_cell_id: str = Field(default="", pattern=r"^(?:|datahub-quality-cell:[0-9a-f]{64})$")
-    content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
-    cell: ReconciliationCell
-    reconciliation_policy_id: str = Field(pattern=r"^reconciliation-policy:[0-9a-f]{64}$")
-    planned: bool
-    terminal_state: ObligationTerminalState | None = None
-    reconciliation: ReconciliationResult | None = None
-    freshness: AssessmentFreshness = AssessmentFreshness.UNKNOWN
-    lineage_complete: bool
-    attempt_count: int = Field(default=0, ge=0)
-    retry_count: int = Field(default=0, ge=0)
-    unchanged_response_count: int = Field(default=0, ge=0)
-    reason_codes: tuple[str, ...] = Field(min_length=1)
-
-    @field_validator("reason_codes")
-    @classmethod
-    def normalize_reasons(cls, values: tuple[str, ...]) -> tuple[str, ...]:
-        return _reason_codes(values)
-
-    @model_validator(mode="after")
-    def validate_and_identify(self) -> Self:
-        if not self.planned and (
-            self.terminal_state is not None
-            or self.reconciliation is not None
-            or self.lineage_complete
-            or self.attempt_count
-            or self.retry_count
-            or self.unchanged_response_count
-        ):
-            raise ValueError("an unplanned requested cell cannot have execution evidence")
-        if self.retry_count > self.attempt_count or self.unchanged_response_count > self.attempt_count:
-            raise ValueError("retry and unchanged counts cannot exceed attempts")
-        if self.reconciliation is not None and self.reconciliation.cell_id != self.cell.cell_id:
-            raise ValueError("reconciliation must target the report cell")
-        if self.reconciliation is not None and self.reconciliation.policy_id != self.reconciliation_policy_id:
-            raise ValueError("reconciliation must use the cell-level field policy")
-        if self.reconciliation is not None and self.lineage_complete != self.reconciliation.lineage_complete:
-            raise ValueError("cell lineage completeness must match its reconciliation evidence")
-        selected = self.reconciliation is not None and self.reconciliation.selected_assertion_id is not None
-        if not selected and self.freshness is not AssessmentFreshness.UNKNOWN:
-            raise ValueError("freshness is unknown when no assertion is selected")
-        if self.terminal_state in {ObligationTerminalState.SUCCESS, ObligationTerminalState.UNCHANGED}:
-            if self.reconciliation is None:
-                raise ValueError("successful and unchanged cells require reconciliation evidence")
-        attempted_terminal_states = {
-            ObligationTerminalState.SUCCESS,
-            ObligationTerminalState.UNCHANGED,
-            ObligationTerminalState.UNAVAILABLE,
-            ObligationTerminalState.FAILED,
-        }
-        if self.terminal_state in attempted_terminal_states and self.attempt_count == 0:
-            raise ValueError("an attempted terminal outcome requires at least one attempt")
-        if self.terminal_state is ObligationTerminalState.UNCHANGED and self.unchanged_response_count == 0:
-            raise ValueError("an unchanged terminal outcome requires an unchanged response")
-        if (
-            self.terminal_state
-            in {
-                ObligationTerminalState.UNAVAILABLE,
-                ObligationTerminalState.FAILED,
-                ObligationTerminalState.SKIPPED_BY_POLICY,
-            }
-            and selected
-        ):
-            raise ValueError("unavailable, failed, or skipped cells cannot select an assertion")
-        _freeze_content(
-            self,
-            id_field="quality_cell_id",
-            prefix="datahub-quality-cell",
-            identity_fields=("cell",),
-        )
-        return self
-
-
-def _ratio(numerator: int, denominator: int) -> Decimal:
-    with localcontext(_reconciliation_context()):
-        return Decimal(numerator) / Decimal(denominator)
-
-
-def _summarize(cells: tuple[DataHubQualityCell, ...]) -> DataHubQualitySummary:
-    denominator = len(cells)
-    planned = sum(cell.planned for cell in cells)
-    terminal = sum(cell.terminal_state is not None for cell in cells)
-    selected = tuple(
-        cell
-        for cell in cells
-        if cell.reconciliation is not None and cell.reconciliation.selected_assertion_id is not None
-    )
-    fresh = sum(cell.freshness is AssessmentFreshness.FRESH for cell in selected)
-    independently_reconciled = sum(
-        cell.reconciliation is not None and cell.reconciliation.outcome is ReconciliationOutcome.AGREED
-        for cell in cells
-    )
-    conflicted = sum(
-        cell.reconciliation is not None and cell.reconciliation.outcome in _CONFLICT_OUTCOMES for cell in cells
-    )
-    lineage_complete = sum(cell.lineage_complete for cell in cells)
-    origin_counts: Counter[str] = Counter()
-    for cell in cells:
-        if cell.reconciliation is not None:
-            origin_counts.update(set(cell.reconciliation.origin_group_ids))
-    return DataHubQualitySummary(
-        requested_count=denominator,
-        planned_count=planned,
-        terminal_count=terminal,
-        available_count=len(selected),
-        fresh_count=fresh,
-        independently_reconciled_count=independently_reconciled,
-        conflicted_count=conflicted,
-        complete_lineage_count=lineage_complete,
-        planned_coverage=_ratio(planned, denominator),
-        terminal_coverage=_ratio(terminal, denominator),
-        availability=_ratio(len(selected), denominator),
-        freshness=_ratio(fresh, denominator),
-        independent_reconciliation=_ratio(independently_reconciled, denominator),
-        lineage_completeness=_ratio(lineage_complete, denominator),
-        origin_composition=tuple(
-            OriginGroupCount(origin_group_id=origin_group_id, cell_count=count)
-            for origin_group_id, count in sorted(origin_counts.items())
-        ),
-    )
-
-
-class VersionedDataHubQualityReport(_FrozenModel):
-    """Row-complete service report; all ratios use the requested-cell denominator."""
-
-    report_id: str = Field(default="", pattern=r"^(?:|datahub-quality-report:[0-9a-f]{64})$")
-    content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
-    report_schema_version: str = Field(pattern=STABLE_ID_PATTERN)
-    denominator: DataHubQualityDenominator
-    reconciliation_policies: tuple[ReconciliationPolicy, ...] = Field(min_length=1)
-    cutoff: datetime
-    generated_at: datetime
-    cells: tuple[DataHubQualityCell, ...] = Field(min_length=1)
-    summary: DataHubQualitySummary | None = None
-
-    @field_validator("report_schema_version")
-    @classmethod
-    def validate_schema_version(cls, value: str) -> str:
-        return _immutable_coordinate(value, "report_schema_version")
-
-    @field_validator("cutoff", "generated_at")
-    @classmethod
-    def validate_datetimes(cls, value: datetime, info: Any) -> datetime:
-        return _require_aware(value, info.field_name)
-
-    @model_validator(mode="after")
-    def validate_and_identify(self) -> Self:
-        cells = tuple(sorted(self.cells, key=lambda item: item.cell.cell_id))
-        if len({cell.cell.cell_id for cell in cells}) != len(cells):
-            raise ValueError("quality report must contain exactly one row per requested cell")
-        cell_ids = tuple(cell.cell.cell_id for cell in cells)
-        if cell_ids != self.denominator.requested_cell_ids:
-            raise ValueError("quality report rows must exactly match the demand denominator")
-        policies = tuple(sorted(self.reconciliation_policies, key=lambda item: item.policy_id))
-        if len({policy.policy_id for policy in policies}) != len(policies):
-            raise ValueError("reconciliation policies must not contain duplicate identities")
-        policy_by_id = {policy.policy_id: policy for policy in policies}
-        if set(policy_by_id) != {cell.reconciliation_policy_id for cell in cells}:
-            raise ValueError("report policies must exactly cover the cell-level field policies")
-        if any(cell.reconciliation is not None and cell.reconciliation.cutoff != self.cutoff for cell in cells):
-            raise ValueError("every reconciliation must use the report cutoff")
-        if any(
-            cell.reconciliation is not None
-            and cell.reconciliation.minimum_independent_origin_groups
-            != policy_by_id[cell.reconciliation_policy_id].minimum_independent_origin_groups
-            for cell in cells
-        ):
-            raise ValueError("reconciliation threshold must match the bundled field policy")
-        if self.generated_at < self.cutoff:
-            raise ValueError("quality report cannot be generated before its cutoff")
-        expected_summary = _summarize(cells)
-        if self.summary is not None and self.summary != expected_summary:
-            raise ValueError("summary does not match the fixed report denominator")
-        object.__setattr__(self, "cells", cells)
-        object.__setattr__(self, "reconciliation_policies", policies)
-        object.__setattr__(self, "summary", expected_summary)
-        _freeze_content(
-            self,
-            id_field="report_id",
-            prefix="datahub-quality-report",
-            identity_fields=(
-                "report_schema_version",
-                "denominator",
-                "reconciliation_policies",
-                "cutoff",
-                "cells",
-            ),
-        )
-        return self

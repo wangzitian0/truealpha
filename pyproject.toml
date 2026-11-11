@@ -63,5 +63,5 @@ testpaths = [
     "common/runtime/tests",
 ]
 markers = [
-    "criterion(id): the test backs this goal-criteria catalog id (common/contracts/src/truealpha_contracts/data/goal_criteria.v1.json, #28 D1)",
+    "criterion(id): the test backs this goal-criteria catalog id (common/contracts/tests/fixtures/goal_criteria.v1.json, #28 D1)",
 ]

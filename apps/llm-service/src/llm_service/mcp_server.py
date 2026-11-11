@@ -42,11 +42,6 @@ from truealpha_contracts.issuer_modules_mart import (
     issuer_identity_sql,
     resolve_static_entity_display,
 )
-from truealpha_contracts.metric_node_read import (
-    MetricNodeValueReport,
-    MetricNodeValueUnavailable,
-    PostgresMetricNodeValueRepository,
-)
 from truealpha_contracts.research_cards import (
     CardKind,
     ResearchCard,
@@ -69,6 +64,9 @@ from truealpha_contracts.research_report_mart import MartResearchReadRepository
 from truealpha_contracts.strategy_run import StrategyRunReadRepository, StrategyRunReport, StrategyRunUnavailable
 from truealpha_contracts.strategy_run_postgres import PostgresStrategyRunRepository
 from truealpha_contracts.topt_read import (
+    MetricNodeValueReport,
+    MetricNodeValueUnavailable,
+    PostgresMetricNodeValueRepository,
     PostgresToptGppeRepository,
     ToptGppeReport,
     ToptGppeUnavailable,

@@ -17,7 +17,7 @@ import psycopg
 import pytest
 from data_engine.datahub import quality_report
 from truealpha_contracts.confidence_bands import confidence_band
-from truealpha_contracts.metric_node_read import MetricNodeValueReport, PostgresMetricNodeValueRepository
+from truealpha_contracts.topt_read import MetricNodeValueReport, PostgresMetricNodeValueRepository
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from datahub.test_topt_read import _materialized_run, connection  # noqa: E402, F401
