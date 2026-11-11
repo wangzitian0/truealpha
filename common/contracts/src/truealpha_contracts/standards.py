@@ -8,7 +8,7 @@ from types import MappingProxyType
 
 from pydantic import Field, model_validator
 
-from truealpha_contracts.common import FrozenModel, canonical_sha256
+from truealpha_contracts.common import CanonicalHash, FrozenModel
 from truealpha_contracts.metrics import METRICS
 from truealpha_contracts.reconciliation import ReconciliationPolicy
 from truealpha_contracts.reconciliation_policies import (
@@ -36,7 +36,7 @@ class EvidenceRequirement(StrEnum):
     RUBRIC_JUDGEMENT = "rubric_judgement"
 
 
-class MetricStandard(FrozenModel):
+class MetricStandard(CanonicalHash, FrozenModel):
     metric: str = Field(min_length=1)
     definition: str = Field(min_length=1)
     acceptance_rule: str = Field(min_length=1)
@@ -53,10 +53,6 @@ class MetricStandard(FrozenModel):
         if self.metric not in METRICS:
             raise ValueError(f"standard {self.metric!r} names a metric the registry does not declare")
         return self
-
-    @property
-    def content_sha256(self) -> str:
-        return canonical_sha256(self.model_dump(mode="json"))
 
 
 CONFIDENCE_POLICIES: MappingProxyType[str, MappingProxyType[str, Decimal]] = MappingProxyType(

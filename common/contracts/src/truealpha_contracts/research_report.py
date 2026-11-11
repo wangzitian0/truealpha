@@ -11,7 +11,7 @@ from typing import Literal, Protocol
 from pydantic import Field, model_validator
 
 from truealpha_contracts.access import AccessContext
-from truealpha_contracts.common import StrictFrozenModel, canonical_sha256, require_aware
+from truealpha_contracts.common import AwareDatetime, StrictFrozenModel, canonical_sha256
 from truealpha_contracts.execution import AvailabilityStatus, FactorValidationStatus
 
 SCHEMA_VERSION: Literal["research_report.v1"] = "research_report.v1"
@@ -49,16 +49,11 @@ class ResultValue(StrictFrozenModel):
     unit: str | None = None
     currency: str | None = None
     period: str | None = None
-    cutoff_at: datetime
+    cutoff_at: AwareDatetime
     availability: AvailabilityStatus
     confidence: Decimal | None = Field(default=None, ge=0, le=1)
     factor_version: str | None = None
     trace: EvidenceTrace | None = None
-
-    @model_validator(mode="after")
-    def _validate(self) -> ResultValue:
-        require_aware(self.cutoff_at, "cutoff_at")
-        return self
 
 
 class ReportSection(StrictFrozenModel):
@@ -81,15 +76,10 @@ class ReportSubject(StrictFrozenModel):
 class ResearchReportRequest(StrictFrozenModel):
     report_kind: ResearchReportKind
     target_entity_ids: tuple[str, ...] = Field(min_length=1)
-    cutoff_at: datetime
+    cutoff_at: AwareDatetime
     section_kinds: tuple[ReportSectionKind, ...] = ()
     strategy_id: str | None = None
     title: str | None = None
-
-    @model_validator(mode="after")
-    def _validate(self) -> ResearchReportRequest:
-        require_aware(self.cutoff_at, "cutoff_at")
-        return self
 
 
 class ResearchReport(StrictFrozenModel):
@@ -97,13 +87,12 @@ class ResearchReport(StrictFrozenModel):
     report_id: str = ""
     report_kind: ResearchReportKind
     title: str = Field(min_length=1)
-    cutoff_at: datetime
+    cutoff_at: AwareDatetime
     generated_from: str = Field(min_length=1)
     subjects: tuple[ReportSubject, ...]
 
     @model_validator(mode="after")
     def _identify(self) -> ResearchReport:
-        require_aware(self.cutoff_at, "cutoff_at")
         computed = f"{_REPORT_ID_PREFIX}{canonical_sha256(self.model_dump(mode='json', exclude={'report_id'}))}"
         if self.report_id not in ("", computed):
             raise ValueError("report_id does not match report content")

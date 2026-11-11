@@ -7,18 +7,28 @@ from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from decimal import ROUND_HALF_EVEN, Context, Decimal, localcontext
 from enum import StrEnum
-from typing import Any, Literal, Self
+from typing import Annotated, Any, ClassVar, Literal, Self
 
 from pydantic import (
-    BaseModel,
-    ConfigDict,
+    AfterValidator,
+    BeforeValidator,
     Field,
     SerializerFunctionWrapHandler,
+    ValidationInfo,
     field_validator,
     model_serializer,
     model_validator,
 )
-from truealpha_contracts.common import identify as _identify
+from truealpha_contracts.common import (
+    ContentHash,
+    FrozenModel,
+    IdentifiedFrozenModel,
+    OmitNoneFields,
+    Sha256,
+    content_id,
+    content_ref,
+    require_aware,
+)
 from truealpha_contracts.measure import Measure, PerUnit, Units
 from truealpha_contracts.research import ValuationTier
 from truealpha_contracts.strategy import LaborEfficiencyTreePin, LargeModelValueV0Definition, ValuationBasis
@@ -39,7 +49,6 @@ from factors.panel import (
 )
 
 _DECIMAL_CONTEXT = Context(prec=34, rounding=ROUND_HALF_EVEN)
-_SHA256_PATTERN = r"^[0-9a-f]{64}$"
 _CONTENT_ID_PATTERN = r"^[a-z][a-z0-9-]*:[0-9a-f]{64}$"
 _OBSERVATION_ID_PATTERN = re.compile(r"^normalized-observation:[0-9a-f]{64}$")
 _SNAPSHOT_ENVELOPE_KEYS = (
@@ -56,14 +65,8 @@ _SNAPSHOT_ENVELOPE_KEYS = (
 )
 
 
-class _FrozenModel(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-
-def _aware_utc(value: datetime, field_name: str) -> datetime:
-    if value.tzinfo is None or value.utcoffset() is None:
-        raise ValueError(f"{field_name} must be timezone-aware")
-    return value.astimezone(UTC)
+def _aware_utc(value: datetime, info: ValidationInfo) -> datetime:
+    return require_aware(value, info.field_name or "datetime").astimezone(UTC)
 
 
 def _decimal_input(value: Any) -> Any:
@@ -77,6 +80,12 @@ def _normalize_decimal(value: Decimal) -> Decimal:
         return Decimal("0")
     with localcontext(Context(prec=max(_DECIMAL_CONTEXT.prec, len(value.as_tuple().digits)))):
         return value.normalize()
+
+
+#: A timezone-aware datetime, normalized to UTC.
+_UtcDatetime = Annotated[datetime, AfterValidator(_aware_utc)]
+#: A Decimal that refuses binary float input; finiteness is checked where the value is normalized.
+_FloatFreeDecimal = Annotated[Decimal, BeforeValidator(_decimal_input)]
 
 
 def _normalize_decimal_fields(model: Any, field_names: Sequence[str], error_label: str) -> None:
@@ -188,32 +197,16 @@ def drop_absent_banking_leaves(data: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in data.items() if key not in OPTIONAL_SNAPSHOT_FIELDS or value is not None}
 
 
-class ToptMetricInput(_FrozenModel):
-    input_id: str = Field(pattern=r"^normalized-observation:[0-9a-f]{64}$")
+class ToptMetricInput(OmitNoneFields, FrozenModel):
+    omit_none_fields = ("unavailable_reason",)
+    input_id: str = content_ref("normalized-observation")
     metric: str = Field(min_length=1)
-    value: Decimal | None = None
-    confidence: Decimal = Field(ge=0, le=1)
-    knowable_at: datetime
+    value: _FloatFreeDecimal | None = None
+    confidence: _FloatFreeDecimal = Field(ge=0, le=1)
+    knowable_at: _UtcDatetime
     freshness: MetricFreshness
     availability: MetricAvailability
     unavailable_reason: ToptCoreReasonCode | None = None
-
-    @model_serializer(mode="wrap")
-    def omit_absent_reason(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
-        data = handler(self)
-        if data.get("unavailable_reason") is None:
-            data.pop("unavailable_reason", None)
-        return data
-
-    @field_validator("value", "confidence", mode="before")
-    @classmethod
-    def reject_binary_float(cls, value: Any) -> Any:
-        return _decimal_input(value)
-
-    @field_validator("knowable_at")
-    @classmethod
-    def normalize_knowable_at(cls, value: datetime) -> datetime:
-        return _aware_utc(value, "knowable_at")
 
     @model_validator(mode="after")
     def validate_value(self) -> Self:
@@ -225,24 +218,14 @@ class ToptMetricInput(_FrozenModel):
         return self
 
 
-class ToptCellQualityInput(_FrozenModel):
-    input_id: str = Field(pattern=r"^normalized-observation:[0-9a-f]{64}$")
-    confidence: Decimal = Field(ge=0, le=1)
-    knowable_at: datetime
+class ToptCellQualityInput(FrozenModel):
+    input_id: str = content_ref("normalized-observation")
+    confidence: _FloatFreeDecimal = Field(ge=0, le=1)
+    knowable_at: _UtcDatetime
     freshness: MetricFreshness
 
-    @field_validator("confidence", mode="before")
-    @classmethod
-    def reject_binary_float(cls, value: Any) -> Any:
-        return _decimal_input(value)
 
-    @field_validator("knowable_at")
-    @classmethod
-    def normalize_knowable_at(cls, value: datetime) -> datetime:
-        return _aware_utc(value, "knowable_at")
-
-
-class ToptMarketValueComponent(_FrozenModel):
+class ToptMarketValueComponent(FrozenModel):
     instrument_id: str = Field(min_length=1)
     listing_id: str = Field(min_length=1)
     market_price: ToptMetricInput
@@ -257,55 +240,36 @@ class ToptMarketValueComponent(_FrozenModel):
         return self
 
 
-class GppeV0Definition(_FrozenModel):
-    definition_id: str = Field(default="", pattern=r"^(?:|gppe-definition:[0-9a-f]{64})$")
-    content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
+class GppeV0Definition(OmitNoneFields, IdentifiedFrozenModel):
+    id_field = "definition_id"
+    id_prefix = "gppe-definition"
+    omit_none_fields = ("labor_efficiency_trees",)
+    definition_id: str = content_id("gppe-definition")
+    content_sha256: ContentHash = ""
     factor_id: Literal["gross_profit_per_employee"] = "gross_profit_per_employee"
     factor_version: Literal["production-topt-v0.2.0"] = "production-topt-v0.2.0"
     formula: Literal["(numerator-total_assets*risk_free_rate)/headcount"] = (
         "(numerator-total_assets*risk_free_rate)/headcount"
     )
     risk_free_benchmark: Literal["3m-us-tbill"] = "3m-us-tbill"
-    risk_free_rate: Decimal = Field(ge=0, le=1)
+    risk_free_rate: Annotated[_FloatFreeDecimal, AfterValidator(_normalize_decimal)] = Field(ge=0, le=1)
     output_unit: Literal["reporting_currency_per_employee"] = "reporting_currency_per_employee"
     confidence_rule: Literal["minimum_consumed_confidence"] = "minimum_consumed_confidence"
     stale_input_behavior: Literal["unavailable"] = "unavailable"
     labor_efficiency_trees: dict[str, LaborEfficiencyTreePin] | None = None
 
-    @model_serializer(mode="wrap")
-    def omit_absent_trees(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
-        data: dict[str, Any] = handler(self)
-        if self.labor_efficiency_trees is None:
-            data.pop("labor_efficiency_trees", None)
-        return data
-
     def pinned_by(self, definition: LargeModelValueV0Definition) -> Self:
         return type(self)(risk_free_rate=self.risk_free_rate, labor_efficiency_trees=dict(definition_pins(definition)))
 
-    @field_validator("risk_free_rate", mode="before")
-    @classmethod
-    def reject_binary_float(cls, value: Any) -> Any:
-        return _decimal_input(value)
 
-    @field_validator("risk_free_rate")
-    @classmethod
-    def normalize_risk_free_rate(cls, value: Decimal) -> Decimal:
-        return _normalize_decimal(value)
-
-    @model_validator(mode="after")
-    def identify(self) -> Self:
-        _identify(self, id_field="definition_id", prefix="gppe-definition")
-        return self
-
-
-class ToptCoreSnapshotInput(_FrozenModel):
-    snapshot_id: str = Field(pattern=r"^topt-core-snapshot:[0-9a-f]{64}$")
-    run_id: str = Field(pattern=r"^capture-run:[0-9a-f]{64}$")
+class ToptCoreSnapshotInput(FrozenModel):
+    snapshot_id: str = content_ref("topt-core-snapshot")
+    run_id: str = content_ref("capture-run")
     release_manifest_id: str = Field(pattern=_CONTENT_ID_PATTERN)
     universe_id: str = Field(min_length=1)
     universe_version: str = Field(min_length=1)
-    universe_sha256: str = Field(pattern=_SHA256_PATTERN)
-    cutoff: datetime
+    universe_sha256: Sha256
+    cutoff: _UtcDatetime
     issuer_id: str = Field(min_length=1)
     instrument_id: str = Field(min_length=1)
     listing_id: str = Field(min_length=1)
@@ -346,11 +310,6 @@ class ToptCoreSnapshotInput(_FrozenModel):
             return self.headcount
         attr = getattr(self, key, None)
         return attr if isinstance(attr, ToptMetricInput) else self.inputs.get(key)
-
-    @field_validator("cutoff")
-    @classmethod
-    def normalize_cutoff(cls, value: datetime) -> datetime:
-        return _aware_utc(value, "cutoff")
 
     @field_validator("observation_ids")
     @classmethod
@@ -433,129 +392,114 @@ _CORE_NUMERIC_FIELDS = (
 )
 
 
-class ToptGppeResult(_FrozenModel):
-    result_id: str = Field(default="", pattern=r"^(?:|topt-gppe-result:[0-9a-f]{64})$")
-    content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
-    invocation_id: str = Field(pattern=r"^topt-gppe-invocation:[0-9a-f]{64}$")
-    snapshot_id: str = Field(pattern=r"^topt-core-snapshot:[0-9a-f]{64}$")
-    run_id: str = Field(pattern=r"^capture-run:[0-9a-f]{64}$")
+class _ToptResultBase(IdentifiedFrozenModel):
+    """Shared checks of GPPE and TOPT core results: the availability decides the computed values."""
+
+    #: The fields that are all present when available and all absent when unavailable.
+    computed_fields: ClassVar[tuple[str, ...]]
+    decimal_fields: ClassVar[tuple[str, ...]]
+    result_label: ClassVar[str]
+    available_error: ClassVar[str]
+    unavailable_error: ClassVar[str]
+
+    def _canonicalize(self) -> None:
+        vals = tuple(getattr(self, name) for name in self.computed_fields)
+        reasons = getattr(self, "reason_codes")
+        if getattr(self, "availability") is ToptCoreAvailability.AVAILABLE:
+            if (
+                getattr(self, "operating_metric") is not OperatingEfficiencyMetric.CAPITAL_ADJUSTED_GPPE
+                or any(v is None for v in vals)
+                or reasons
+            ):
+                raise ValueError(self.available_error)
+        elif any(v is not None for v in vals) or not reasons:
+            raise ValueError(self.unavailable_error)
+        _normalize_decimal_fields(self, self.decimal_fields, self.result_label)
+        object.__setattr__(self, "reason_codes", tuple(sorted(set(reasons), key=str)))
+
+
+class ToptGppeResult(_ToptResultBase):
+    id_field = "result_id"
+    id_prefix = "topt-gppe-result"
+    computed_fields = _GPPE_NUMERIC_FIELDS
+    decimal_fields = _GPPE_NUMERIC_FIELDS
+    result_label = "GPPE result"
+    available_error = "available GPPE result carries invalid values"
+    unavailable_error = "unavailable GPPE result carries computed values"
+    result_id: str = content_id("topt-gppe-result")
+    content_sha256: ContentHash = ""
+    invocation_id: str = content_ref("topt-gppe-invocation")
+    snapshot_id: str = content_ref("topt-core-snapshot")
+    run_id: str = content_ref("capture-run")
     release_manifest_id: str = Field(pattern=_CONTENT_ID_PATTERN)
     universe_id: str
     universe_version: str
-    universe_sha256: str = Field(pattern=_SHA256_PATTERN)
-    cutoff: datetime
+    universe_sha256: Sha256
+    cutoff: _UtcDatetime
     issuer_id: str
     instrument_id: str
     listing_id: str
     operating_branch: OperatingBranch
     operating_metric: OperatingEfficiencyMetric
     availability: ToptCoreAvailability
-    operating_efficiency: Decimal | None = None
-    capital_adjusted_gross_profit: Decimal | None = None
-    gppe: Decimal | None = None
-    confidence: Decimal = Field(ge=0, le=1)
+    operating_efficiency: _FloatFreeDecimal | None = None
+    capital_adjusted_gross_profit: _FloatFreeDecimal | None = None
+    gppe: _FloatFreeDecimal | None = None
+    confidence: _FloatFreeDecimal = Field(ge=0, le=1)
     freshness: MetricFreshness
     reason_codes: tuple[ToptCoreReasonCode, ...] = ()
     input_observation_ids: tuple[str, ...]
-    gppe_definition_id: str = Field(pattern=r"^gppe-definition:[0-9a-f]{64}$")
-    gppe_definition_sha256: str = Field(pattern=_SHA256_PATTERN)
-
-    @field_validator("cutoff")
-    @classmethod
-    def normalize_cutoff(cls, value: datetime) -> datetime:
-        return _aware_utc(value, "cutoff")
-
-    @field_validator(*_GPPE_NUMERIC_FIELDS, "confidence", mode="before")
-    @classmethod
-    def reject_binary_float(cls, value: Any) -> Any:
-        return _decimal_input(value)
-
-    @model_validator(mode="after")
-    def validate_and_identify(self) -> Self:
-        vals = tuple(getattr(self, name) for name in _GPPE_NUMERIC_FIELDS)
-        if self.availability is ToptCoreAvailability.AVAILABLE:
-            if (
-                self.operating_metric is not OperatingEfficiencyMetric.CAPITAL_ADJUSTED_GPPE
-                or any(v is None for v in vals)
-                or self.reason_codes
-            ):
-                raise ValueError("available GPPE result carries invalid values")
-        elif any(v is not None for v in vals) or not self.reason_codes:
-            raise ValueError("unavailable GPPE result carries computed values")
-        _normalize_decimal_fields(self, _GPPE_NUMERIC_FIELDS, "GPPE result")
-        object.__setattr__(self, "reason_codes", tuple(sorted(set(self.reason_codes), key=str)))
-        _identify(self, id_field="result_id", prefix="topt-gppe-result")
-        return self
+    gppe_definition_id: str = content_ref("gppe-definition")
+    gppe_definition_sha256: Sha256
 
 
-class ToptCoreResult(_FrozenModel):
-    result_id: str = Field(default="", pattern=r"^(?:|topt-core-result:[0-9a-f]{64})$")
-    content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
-    invocation_id: str = Field(pattern=r"^topt-core-invocation:[0-9a-f]{64}$")
-    snapshot_id: str = Field(pattern=r"^topt-core-snapshot:[0-9a-f]{64}$")
-    run_id: str = Field(pattern=r"^capture-run:[0-9a-f]{64}$")
+class ToptCoreResult(_ToptResultBase):
+    id_field = "result_id"
+    id_prefix = "topt-core-result"
+    computed_fields = (*_CORE_NUMERIC_FIELDS, "tier")
+    decimal_fields = _CORE_NUMERIC_FIELDS
+    result_label = "TOPT core result"
+    available_error = "available TOPT core result requires all values and no reason codes"
+    unavailable_error = "unavailable TOPT core result carries invalid computed values"
+    result_id: str = content_id("topt-core-result")
+    content_sha256: ContentHash = ""
+    invocation_id: str = content_ref("topt-core-invocation")
+    snapshot_id: str = content_ref("topt-core-snapshot")
+    run_id: str = content_ref("capture-run")
     release_manifest_id: str = Field(pattern=_CONTENT_ID_PATTERN)
     universe_id: str
     universe_version: str
-    universe_sha256: str = Field(pattern=_SHA256_PATTERN)
-    cutoff: datetime
+    universe_sha256: Sha256
+    cutoff: _UtcDatetime
     issuer_id: str
     instrument_id: str
     listing_id: str
     operating_branch: OperatingBranch
     operating_metric: OperatingEfficiencyMetric
     availability: ToptCoreAvailability
-    operating_efficiency: Decimal | None = None
-    capital_adjusted_gross_profit: Decimal | None = None
-    gppe: Decimal | None = None
+    operating_efficiency: _FloatFreeDecimal | None = None
+    capital_adjusted_gross_profit: _FloatFreeDecimal | None = None
+    gppe: _FloatFreeDecimal | None = None
     tier: ValuationTier | None = None
-    target_ps_lower: Decimal | None = None
-    target_ps_upper: Decimal | None = None
-    target_ps_midpoint: Decimal | None = None
-    current_ps: Decimal | None = None
-    current_pgp: Decimal | None = None
-    target_pgp_lower: Decimal | None = None
-    target_pgp_upper: Decimal | None = None
-    target_pgp_midpoint: Decimal | None = None
-    valuation_gap: Decimal | None = None
-    confidence: Decimal = Field(ge=0, le=1)
+    target_ps_lower: _FloatFreeDecimal | None = None
+    target_ps_upper: _FloatFreeDecimal | None = None
+    target_ps_midpoint: _FloatFreeDecimal | None = None
+    current_ps: _FloatFreeDecimal | None = None
+    current_pgp: _FloatFreeDecimal | None = None
+    target_pgp_lower: _FloatFreeDecimal | None = None
+    target_pgp_upper: _FloatFreeDecimal | None = None
+    target_pgp_midpoint: _FloatFreeDecimal | None = None
+    valuation_gap: _FloatFreeDecimal | None = None
+    confidence: _FloatFreeDecimal = Field(ge=0, le=1)
     freshness: MetricFreshness
     reason_codes: tuple[ToptCoreReasonCode, ...] = ()
     input_observation_ids: tuple[str, ...]
-    gppe_invocation_id: str = Field(pattern=r"^topt-gppe-invocation:[0-9a-f]{64}$")
-    gppe_result_id: str = Field(pattern=r"^topt-gppe-result:[0-9a-f]{64}$")
-    gppe_definition_id: str = Field(pattern=r"^gppe-definition:[0-9a-f]{64}$")
-    gppe_definition_sha256: str = Field(pattern=_SHA256_PATTERN)
-    tier_definition_id: str = Field(pattern=r"^strategy-definition:[0-9a-f]{64}$")
-    tier_definition_sha256: str = Field(pattern=_SHA256_PATTERN)
-
-    @field_validator("cutoff")
-    @classmethod
-    def normalize_cutoff(cls, value: datetime) -> datetime:
-        return _aware_utc(value, "cutoff")
-
-    @field_validator(*_CORE_NUMERIC_FIELDS, "confidence", mode="before")
-    @classmethod
-    def reject_binary_float(cls, value: Any) -> Any:
-        return _decimal_input(value)
-
-    @model_validator(mode="after")
-    def validate_and_identify(self) -> Self:
-        vals = tuple(getattr(self, name) for name in _CORE_NUMERIC_FIELDS)
-        if self.availability is ToptCoreAvailability.AVAILABLE:
-            if (
-                self.operating_metric is not OperatingEfficiencyMetric.CAPITAL_ADJUSTED_GPPE
-                or any(v is None for v in vals)
-                or self.tier is None
-                or self.reason_codes
-            ):
-                raise ValueError("available TOPT core result requires all values and no reason codes")
-        elif any(v is not None for v in vals) or self.tier is not None or not self.reason_codes:
-            raise ValueError("unavailable TOPT core result carries invalid computed values")
-        _normalize_decimal_fields(self, _CORE_NUMERIC_FIELDS, "TOPT core result")
-        object.__setattr__(self, "reason_codes", tuple(sorted(set(self.reason_codes), key=str)))
-        _identify(self, id_field="result_id", prefix="topt-core-result")
-        return self
+    gppe_invocation_id: str = content_ref("topt-gppe-invocation")
+    gppe_result_id: str = content_ref("topt-gppe-result")
+    gppe_definition_id: str = content_ref("gppe-definition")
+    gppe_definition_sha256: Sha256
+    tier_definition_id: str = content_ref("strategy-definition")
+    tier_definition_sha256: Sha256
 
 
 def _operating_numerator(

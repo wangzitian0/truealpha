@@ -9,9 +9,19 @@ from collections.abc import Sequence
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
-from typing import Any
+from typing import Annotated, Any, ClassVar, Self
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    ValidationInfo,
+    model_serializer,
+    model_validator,
+)
 
 STABLE_ID_BODY = r"[A-Za-z0-9][A-Za-z0-9._:/@+\-]*"
 STABLE_ID_PATTERN = rf"^{STABLE_ID_BODY}$"
@@ -130,3 +140,82 @@ def identify_by_grain(model: BaseModel, *, id_field: str, prefix: str, identity_
         raise ValueError("content_sha256 does not match the canonical record")
     object.__setattr__(model, id_field, expected_id)
     object.__setattr__(model, "content_sha256", expected_hash)
+
+
+def _aware_field(value: datetime, info: ValidationInfo) -> datetime:
+    return require_aware(value, info.field_name or "datetime")
+
+
+def _immutable_field(value: str, info: ValidationInfo) -> str:
+    return require_stable_and_immutable(value, info.field_name or "coordinate")
+
+
+def _sorted_unique_field(values: tuple[str, ...], info: ValidationInfo) -> tuple[str, ...]:
+    return sorted_unique_coordinates(values, info.field_name or "coordinates")
+
+
+#: Field types that replace one-line `@field_validator` hooks. Each error names its field.
+SafeDecimal = Annotated[Decimal, BeforeValidator(finite_decimal_input)]
+AwareDatetime = Annotated[datetime, AfterValidator(_aware_field)]
+ImmutableId = Annotated[str, Field(pattern=STABLE_ID_PATTERN), AfterValidator(_immutable_field)]
+SortedUniqueIds = Annotated[tuple[str, ...], AfterValidator(_sorted_unique_field)]
+StableId = Annotated[str, Field(pattern=STABLE_ID_PATTERN)]
+Sha256 = Annotated[str, Field(pattern=SHA256_PATTERN)]
+ContentHash = Annotated[str, Field(pattern=r"^(?:|[0-9a-f]{64})$")]
+
+
+def content_id(prefix: str) -> Any:
+    """An id field that is empty on input, or `{prefix}:{sha256}`."""
+    return Field(default="", pattern=rf"^(?:|{prefix}:[0-9a-f]{{64}})$")
+
+
+def content_ref(prefix: str, **kwargs: Any) -> Any:
+    """A field that references a content address `{prefix}:{sha256}`."""
+    return Field(pattern=rf"^{prefix}:[0-9a-f]{{64}}$", **kwargs)
+
+
+class IdentifiedFrozenModel(FrozenModel):
+    """A frozen model that stamps `content_sha256` and `{id_prefix}:{digest}` on `id_field`.
+
+    An empty `identity_fields` hashes the whole payload for the id (`identify`). A non-empty
+    `identity_fields` hashes only that grain for the id (`identify_by_grain`). Override
+    `_canonicalize` to check and normalize content before the identity is derived.
+    """
+
+    id_field: ClassVar[str]
+    id_prefix: ClassVar[str]
+    identity_fields: ClassVar[tuple[str, ...]] = ()
+
+    def _canonicalize(self) -> None:
+        """Check and normalize content before the identity is derived."""
+
+    @model_validator(mode="after")
+    def freeze_and_identify(self) -> Self:
+        self._canonicalize()
+        if self.identity_fields:
+            identify_by_grain(self, id_field=self.id_field, prefix=self.id_prefix, identity_fields=self.identity_fields)
+        else:
+            identify(self, id_field=self.id_field, prefix=self.id_prefix)
+        return self
+
+
+class StrictIdentifiedFrozenModel(IdentifiedFrozenModel):
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+
+class CanonicalHash(BaseModel):
+    """Mixin: `content_sha256` is the canonical hash of the full JSON payload."""
+
+    @property
+    def content_sha256(self) -> str:
+        return canonical_sha256(self.model_dump(mode="json"))
+
+
+class OmitNoneFields(BaseModel):
+    """Serialize without the keys in `omit_none_fields` whose value is None."""
+
+    omit_none_fields: ClassVar[tuple[str, ...]]
+
+    @model_serializer(mode="wrap")
+    def omit_absent_fields(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        return drop_none_fields(handler(self), *self.omit_none_fields)

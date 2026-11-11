@@ -14,21 +14,19 @@ from enum import StrEnum
 from importlib import resources
 from importlib.resources.abc import Traversable
 from itertools import pairwise
-from typing import Any, Literal, NamedTuple, Protocol, Self
+from typing import Annotated, Any, ClassVar, Literal, NamedTuple, Protocol, Self
 
-from pydantic import (
-    Field,
-    SerializerFunctionWrapHandler,
-    field_validator,
-    model_serializer,
-    model_validator,
-)
+from pydantic import AfterValidator, BeforeValidator, Field, ValidationInfo, field_validator, model_validator
 
 from truealpha_contracts.common import (
-    SHA256_PATTERN,
+    AwareDatetime,
+    ContentHash,
+    OmitNoneFields,
+    Sha256,
     StrictFrozenModel,
-    drop_none_fields,
-    identify,
+    StrictIdentifiedFrozenModel,
+    content_id,
+    content_ref,
     require_aware,
 )
 from truealpha_contracts.research import (
@@ -69,6 +67,16 @@ def _reject_binary_float(value: object) -> object:
             raise ValueError("decimal parameters must be finite")
         return parsed
     return value
+
+
+def _immutable_field(value: str, info: ValidationInfo) -> str:
+    return _reject_mutable_coordinate(value, info.field_name or "coordinate")
+
+
+#: Decimal parameters accept decimal text or integers and are parsed to a finite Decimal.
+_DecimalParameter = Annotated[Decimal, BeforeValidator(_reject_binary_float)]
+#: A version or key that names no mutable reference such as ``latest``.
+_ImmutableKey = Annotated[str, AfterValidator(_immutable_field)]
 
 
 def _require_all_or_none(model: Any, fields: tuple[str, ...], group_label: str) -> None:
@@ -138,19 +146,9 @@ class RiskFreeRatePolicy(StrictFrozenModel):
 
 
 class CutoffRiskFreeRate(StrictFrozenModel):
-    cutoff_at: datetime
-    annualized_rate: Decimal = Field(ge=0, le=1)
+    cutoff_at: AwareDatetime
+    annualized_rate: _DecimalParameter = Field(ge=0, le=1)
     provisional: Literal[True]
-
-    @field_validator("annualized_rate", mode="before")
-    @classmethod
-    def reject_float_rate(cls, value: object) -> object:
-        return _reject_binary_float(value)
-
-    @field_validator("cutoff_at")
-    @classmethod
-    def validate_cutoff_at(cls, value: datetime) -> datetime:
-        return require_aware(value, "cutoff_at")
 
 
 class LaborEfficiencyNumerator(StrEnum):
@@ -178,20 +176,18 @@ _FORMULA_FIELDS = (
 )
 
 
-class _FactorDefinitionBase(StrictFrozenModel):
-    factor_definition_id: str = Field(default="", pattern=r"^(?:|factor-definition:[0-9a-f]{64})$")
-    content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
-    factor_version: str = Field(pattern=_VERSION_PATTERN)
+class _FactorDefinitionBase(StrictIdentifiedFrozenModel):
+    id_field = "factor_definition_id"
+    id_prefix = "factor-definition"
+    factor_definition_id: str = content_id("factor-definition")
+    content_sha256: ContentHash = ""
+    factor_version: _ImmutableKey = Field(pattern=_VERSION_PATTERN)
     unit: FactorUnitSpec
     quantization: DecimalQuantization
 
-    @field_validator("factor_version")
-    @classmethod
-    def reject_mutable_version(cls, value: str) -> str:
-        return _reject_mutable_coordinate(value, "factor_version")
 
-
-class CapitalAdjustedLaborEfficiencyDefinition(_FactorDefinitionBase):
+class CapitalAdjustedLaborEfficiencyDefinition(OmitNoneFields, _FactorDefinitionBase):
+    omit_none_fields = _FORMULA_FIELDS
     factor_key: Literal["capital_adjusted_labor_efficiency"]
     numerator: LaborEfficiencyNumerator | None = None
     capital_charge_base: CapitalChargeBase | None = None
@@ -203,17 +199,10 @@ class CapitalAdjustedLaborEfficiencyDefinition(_FactorDefinitionBase):
     missing_denominator_reason: ExclusionReason | None = None
     nonpositive_denominator_reason: ExclusionReason | None = None
 
-    @model_serializer(mode="wrap")
-    def omit_absent_formula(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
-        return drop_none_fields(handler(self), *_FORMULA_FIELDS)
-
-    @model_validator(mode="after")
-    def validate_and_identify(self) -> Self:
+    def _canonicalize(self) -> None:
         _require_all_or_none(self, _FORMULA_FIELDS, "formula")
         if self.formula is not None:
             self._validate_formula_semantics()
-        identify(self, id_field="factor_definition_id", prefix="factor-definition")
-        return self
 
     def _validate_formula_semantics(self) -> None:
         if (
@@ -246,13 +235,8 @@ class CapitalAdjustedLaborEfficiencyDefinition(_FactorDefinitionBase):
 
 class LaborEfficiencyTreePin(StrictFrozenModel):
     tree_key: str = Field(pattern=r"^[a-z][a-z0-9_.]*$")
-    tree_version: str = Field(min_length=1)
-    tree_sha256: str = Field(pattern=SHA256_PATTERN)
-
-    @field_validator("tree_version")
-    @classmethod
-    def reject_mutable_version(cls, value: str) -> str:
-        return _reject_mutable_coordinate(value, "tree_version")
+    tree_version: _ImmutableKey = Field(min_length=1)
+    tree_sha256: Sha256
 
 
 class _MarketMultipleDefinitionBase(_FactorDefinitionBase):
@@ -274,15 +258,12 @@ class PriceToSalesDefinition(_MarketMultipleDefinitionBase):
     missing_revenue_reason: ExclusionReason
     nonpositive_revenue_reason: ExclusionReason
 
-    @model_validator(mode="after")
-    def validate_and_identify(self) -> Self:
+    def _canonicalize(self) -> None:
         self._validate_multiple_base("price-to-sales")
         if self.missing_revenue_reason is not ExclusionReason.MISSING_REVENUE_FACT:
             raise ValueError("missing revenue must use its exact reason code")
         if self.nonpositive_revenue_reason is not ExclusionReason.NONPOSITIVE_REVENUE:
             raise ValueError("nonpositive revenue must use its exact reason code")
-        identify(self, id_field="factor_definition_id", prefix="factor-definition")
-        return self
 
 
 class PriceToGrossProfitDefinition(_MarketMultipleDefinitionBase):
@@ -291,15 +272,12 @@ class PriceToGrossProfitDefinition(_MarketMultipleDefinitionBase):
     missing_gross_profit_reason: ExclusionReason
     nonpositive_gross_profit_reason: ExclusionReason
 
-    @model_validator(mode="after")
-    def validate_and_identify(self) -> Self:
+    def _canonicalize(self) -> None:
         self._validate_multiple_base("price-to-gross-profit")
         if self.missing_gross_profit_reason is not ExclusionReason.MISSING_GROSS_PROFIT_FACT:
             raise ValueError("missing gross profit must use its exact reason code")
         if self.nonpositive_gross_profit_reason is not ExclusionReason.NONPOSITIVE_GROSS_PROFIT:
             raise ValueError("nonpositive gross profit must use its exact reason code")
-        identify(self, id_field="factor_definition_id", prefix="factor-definition")
-        return self
 
 
 class ValuationBasis(StrEnum):
@@ -341,92 +319,64 @@ def _band_for[BandT: _TierBand](bands: tuple[BandT, ...], labor_efficiency: Deci
 
 
 class _TierBandBase(StrictFrozenModel):
+    #: The field-name stem of the target multiple bounds and its label in error messages.
+    target_stem: ClassVar[str]
+    target_label: ClassVar[str]
     tier: ValuationTier
-    labor_efficiency_lower_bound: Decimal | None
-    labor_efficiency_upper_bound: Decimal | None
+    labor_efficiency_lower_bound: _DecimalParameter | None
+    labor_efficiency_upper_bound: _DecimalParameter | None
 
-    @field_validator("labor_efficiency_lower_bound", "labor_efficiency_upper_bound", mode="before")
-    @classmethod
-    def reject_float_labor_bounds(cls, value: object) -> object:
-        return None if value is None else _reject_binary_float(value)
+    @property
+    def target_lower_bound(self) -> Decimal:
+        return getattr(self, f"{self.target_stem}_lower_bound")
 
-    def _validate_range(self, target_low: Decimal, target_high: Decimal, label: str) -> None:
+    @property
+    def target_upper_bound(self) -> Decimal:
+        return getattr(self, f"{self.target_stem}_upper_bound")
+
+    @model_validator(mode="after")
+    def validate_bounds(self) -> Self:
         if (
             self.labor_efficiency_lower_bound is not None
             and self.labor_efficiency_upper_bound is not None
             and self.labor_efficiency_lower_bound >= self.labor_efficiency_upper_bound
         ):
             raise ValueError("tier labor-efficiency lower bound must be below its upper bound")
-        if target_low >= target_high:
-            raise ValueError(f"tier target {label} lower bound must be below its upper bound")
+        if self.target_lower_bound >= self.target_upper_bound:
+            raise ValueError(f"tier target {self.target_label} lower bound must be below its upper bound")
+        return self
 
 
 class ProvisionalTierBand(_TierBandBase):
-    target_ps_lower_bound: Decimal = Field(gt=0)
-    target_ps_upper_bound: Decimal = Field(gt=0)
-
-    @field_validator("target_ps_lower_bound", "target_ps_upper_bound", mode="before")
-    @classmethod
-    def reject_float_target_bounds(cls, value: object) -> object:
-        return _reject_binary_float(value)
-
-    @model_validator(mode="after")
-    def validate_bounds(self) -> Self:
-        self._validate_range(self.target_ps_lower_bound, self.target_ps_upper_bound, "P/S")
-        return self
-
-    @property
-    def target_lower_bound(self) -> Decimal:
-        return self.target_ps_lower_bound
-
-    @property
-    def target_upper_bound(self) -> Decimal:
-        return self.target_ps_upper_bound
+    target_stem = "target_ps"
+    target_label = "P/S"
+    target_ps_lower_bound: _DecimalParameter = Field(gt=0)
+    target_ps_upper_bound: _DecimalParameter = Field(gt=0)
 
 
 class PriceToGrossProfitTierBand(_TierBandBase):
-    target_pgp_lower_bound: Decimal = Field(gt=0)
-    target_pgp_upper_bound: Decimal = Field(gt=0)
-
-    @field_validator("target_pgp_lower_bound", "target_pgp_upper_bound", mode="before")
-    @classmethod
-    def reject_float_target_bounds(cls, value: object) -> object:
-        return _reject_binary_float(value)
-
-    @model_validator(mode="after")
-    def validate_bounds(self) -> Self:
-        self._validate_range(self.target_pgp_lower_bound, self.target_pgp_upper_bound, "P/GP")
-        return self
-
-    @property
-    def target_lower_bound(self) -> Decimal:
-        return self.target_pgp_lower_bound
-
-    @property
-    def target_upper_bound(self) -> Decimal:
-        return self.target_pgp_upper_bound
+    target_stem = "target_pgp"
+    target_label = "P/GP"
+    target_pgp_lower_bound: _DecimalParameter = Field(gt=0)
+    target_pgp_upper_bound: _DecimalParameter = Field(gt=0)
 
 
 class _ThreeTierValuationBase(_FactorDefinitionBase):
+    target_label: ClassVar[str]
     factor_key: Literal["three_tier_valuation"]
     boundary_rule: Literal["lower_inclusive_upper_exclusive"]
 
-    def _validate_and_order_bands(self, label: str) -> None:
+    def _canonicalize(self) -> None:
         if self.unit.dimension is not FactorDimension.DIMENSIONLESS:
-            raise ValueError(f"target {label} is a dimensionless ratio")
+            raise ValueError(f"target {self.target_label} is a dimensionless ratio")
         object.__setattr__(self, "bands", _ordered_tier_bands(getattr(self, "bands")))
-        identify(self, id_field="factor_definition_id", prefix="factor-definition")
 
 
 class ThreeTierValuationDefinition(_ThreeTierValuationBase):
+    target_label = "P/S"
     bands: tuple[ProvisionalTierBand, ...] = Field(min_length=3, max_length=3)
     target_ps_selection: TargetPsSelection
     provisional_thresholds: Literal[True]
-
-    @model_validator(mode="after")
-    def validate_and_identify(self) -> Self:
-        self._validate_and_order_bands("P/S")
-        return self
 
     @property
     def valuation_basis(self) -> ValuationBasis:
@@ -437,6 +387,7 @@ class ThreeTierValuationDefinition(_ThreeTierValuationBase):
 
 
 class ThreeTierPgpValuationDefinition(_ThreeTierValuationBase):
+    target_label = "P/GP"
     valuation_basis: Literal[ValuationBasis.PRICE_TO_GROSS_PROFIT]
     bands: tuple[PriceToGrossProfitTierBand, ...] = Field(min_length=3, max_length=3)
     target_pgp_selection: Literal["band_midpoint"]
@@ -446,11 +397,6 @@ class ThreeTierPgpValuationDefinition(_ThreeTierValuationBase):
     @classmethod
     def parse_basis(cls, value: object) -> object:
         return ValuationBasis(value) if isinstance(value, str) else value
-
-    @model_validator(mode="after")
-    def validate_and_identify(self) -> Self:
-        self._validate_and_order_bands("P/GP")
-        return self
 
     def band_for(self, labor_efficiency: Decimal) -> PriceToGrossProfitTierBand:
         return _band_for(self.bands, labor_efficiency)
@@ -474,22 +420,14 @@ class ValuationGapRule(StrictFrozenModel):
 _CONFIDENCE_FLOOR_FIELDS = ("rule_id", "minimum_confidence", "confidence_semantics", "below_floor_reason")
 
 
-class ConfidenceEligibilityRule(StrictFrozenModel):
+class ConfidenceEligibilityRule(OmitNoneFields, StrictFrozenModel):
+    omit_none_fields = _CONFIDENCE_FLOOR_FIELDS
     rule_id: Literal["minimum_consumed_confidence_floor"] | None = None
-    minimum_confidence: Decimal | None = Field(default=None, ge=0, le=1)
+    minimum_confidence: _DecimalParameter | None = Field(default=None, ge=0, le=1)
     confidence_semantics: Literal["minimum_consumed_input_confidence"] | None = None
     maximum_input_age_days: int = Field(ge=1, le=730)
     below_floor_reason: ExclusionReason | None = None
     stale_input_reason: ExclusionReason
-
-    @field_validator("minimum_confidence", mode="before")
-    @classmethod
-    def reject_float_confidence(cls, value: object) -> object:
-        return None if value is None else _reject_binary_float(value)
-
-    @model_serializer(mode="wrap")
-    def omit_absent_confidence_floor(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
-        return drop_none_fields(handler(self), *_CONFIDENCE_FLOOR_FIELDS)
 
     @model_validator(mode="after")
     def validate_reasons(self) -> Self:
@@ -534,11 +472,14 @@ class QuarterlyCutoffSchedule(StrictFrozenModel):
         return canonical
 
 
-class LargeModelValueV0Definition(StrictFrozenModel):
-    strategy_definition_id: str = Field(default="", pattern=r"^(?:|strategy-definition:[0-9a-f]{64})$")
-    content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
+class LargeModelValueV0Definition(OmitNoneFields, StrictIdentifiedFrozenModel):
+    id_field = "strategy_definition_id"
+    id_prefix = "strategy-definition"
+    omit_none_fields = ("price_to_gross_profit", "universe", "labor_efficiency_tree_keys")
+    strategy_definition_id: str = content_id("strategy-definition")
+    content_sha256: ContentHash = ""
     strategy_id: Literal["large_model_value_v0"]
-    definition_version: str = Field(pattern=_VERSION_PATTERN)
+    definition_version: _ImmutableKey = Field(pattern=_VERSION_PATTERN)
     provisional_semantics: bool
     universe: UniverseRef | None = None
     schedule: QuarterlyCutoffSchedule
@@ -555,17 +496,7 @@ class LargeModelValueV0Definition(StrictFrozenModel):
     transaction_cost: StrategyTransactionCostPolicy
     total_return: StrategyTotalReturnPolicy
 
-    @field_validator("definition_version")
-    @classmethod
-    def reject_mutable_version(cls, value: str) -> str:
-        return _reject_mutable_coordinate(value, "definition_version")
-
-    @model_serializer(mode="wrap")
-    def omit_absent_gross_profit_multiple(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
-        return drop_none_fields(handler(self), "price_to_gross_profit", "universe", "labor_efficiency_tree_keys")
-
-    @model_validator(mode="after")
-    def validate_and_identify(self) -> Self:
+    def _canonicalize(self) -> None:
         basis = self.tier_valuation.valuation_basis
         if (basis is ValuationBasis.PRICE_TO_GROSS_PROFIT) != (self.price_to_gross_profit is not None):
             raise ValueError("a P/GP tier valuation requires exactly the price_to_gross_profit factor definition")
@@ -585,8 +516,6 @@ class LargeModelValueV0Definition(StrictFrozenModel):
             factor_keys.append(self.price_to_gross_profit.factor_key)
         if len(set(factor_keys)) != len(factor_keys):
             raise ValueError("the strategy requires distinct factor definitions")  # pragma: no cover
-        identify(self, id_field="strategy_definition_id", prefix="strategy-definition")
-        return self
 
     @property
     def valuation_basis(self) -> ValuationBasis:
@@ -693,35 +622,31 @@ def definition_review_state(version: str, content_sha256: str) -> DefinitionRevi
     return "unknown"
 
 
-class ExpressionEngineExecutionBinding(StrictFrozenModel):
-    execution_binding_id: str = Field(default="", pattern=r"^(?:|expression-engine-execution-binding:[0-9a-f]{64})$")
-    content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
+class ExpressionEngineExecutionBinding(StrictIdentifiedFrozenModel):
+    id_field = "execution_binding_id"
+    id_prefix = "expression-engine-execution-binding"
+    execution_binding_id: str = content_id("expression-engine-execution-binding")
+    content_sha256: ContentHash = ""
     distribution: Literal["polars"] = "polars"
     version: str = Field(pattern=r"^[0-9]+\.[0-9]+\.[0-9]+$")
     release_commit: str = Field(pattern=r"^[0-9a-f]{40}$")
-    runtime_artifact_sha256: str = Field(pattern=SHA256_PATTERN)
-    runtime_lock_sha256: str = Field(pattern=SHA256_PATTERN)
+    runtime_artifact_sha256: Sha256
+    runtime_lock_sha256: Sha256
     adapter_id: str = Field(pattern=r"^[a-z][a-z0-9._-]{0,127}$")
-    adapter_implementation_sha256: str = Field(pattern=SHA256_PATTERN)
-
-    @model_validator(mode="after")
-    def identify(self) -> Self:
-        identify(self, id_field="execution_binding_id", prefix="expression-engine-execution-binding")
-        return self
+    adapter_implementation_sha256: Sha256
 
 
-class StrategyEngineBinding(StrictFrozenModel):
-    engine_binding_id: str = Field(default="", pattern=r"^(?:|strategy-engine-binding:[0-9a-f]{64})$")
-    content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
-    strategy_definition_id: str = Field(pattern=r"^strategy-definition:[0-9a-f]{64}$")
-    strategy_definition_sha256: str = Field(pattern=SHA256_PATTERN)
+class StrategyEngineBinding(StrictIdentifiedFrozenModel):
+    id_field = "engine_binding_id"
+    id_prefix = "strategy-engine-binding"
+    engine_binding_id: str = content_id("strategy-engine-binding")
+    content_sha256: ContentHash = ""
+    strategy_definition_id: str = content_ref("strategy-definition")
+    strategy_definition_sha256: Sha256
     execution_binding: ExpressionEngineExecutionBinding
 
-    @model_validator(mode="after")
-    def validate_and_identify(self) -> Self:
+    def _canonicalize(self) -> None:
         _validate_ref_hash(self.strategy_definition_id, self.strategy_definition_sha256, "strategy definition")
-        identify(self, id_field="engine_binding_id", prefix="strategy-engine-binding")
-        return self
 
 
 class GoldenDecisionOutcome(StrEnum):
@@ -733,54 +658,27 @@ class GoldenDecisionOutcome(StrEnum):
 
 class GoldenInputRecord(StrictFrozenModel):
     input_key: str = Field(pattern=_STABLE_KEY_PATTERN)
-    value: Decimal
+    value: _DecimalParameter
     unit_code: str = Field(pattern=_STABLE_KEY_PATTERN)
-    confidence: Decimal = Field(gt=0, le=1)
-    knowable_at: datetime
+    confidence: _DecimalParameter = Field(gt=0, le=1)
+    knowable_at: AwareDatetime
     grounding: str = Field(min_length=1)
 
-    @field_validator("value", "confidence", mode="before")
-    @classmethod
-    def reject_float_values(cls, value: object) -> object:
-        return _reject_binary_float(value)
 
-    @field_validator("knowable_at")
-    @classmethod
-    def validate_knowable_at(cls, value: datetime) -> datetime:
-        return require_aware(value, "knowable_at")
-
-
-class GoldenExpectation(StrictFrozenModel):
-    capital_adjusted_labor_efficiency: Decimal | None
+class GoldenExpectation(OmitNoneFields, StrictFrozenModel):
+    omit_none_fields = ("current_price_to_gross_profit", "target_price_to_gross_profit")
+    capital_adjusted_labor_efficiency: _DecimalParameter | None
     tier: ValuationTier | None
-    current_price_to_sales: Decimal | None
-    target_price_to_sales: Decimal | None
-    valuation_gap: Decimal | None
+    current_price_to_sales: _DecimalParameter | None
+    target_price_to_sales: _DecimalParameter | None
+    valuation_gap: _DecimalParameter | None
     eligible: bool
     outcome: GoldenDecisionOutcome
     exclusion_reason: ExclusionReason | None
     rank: int | None = Field(ge=1)
-    target_weight: Decimal | None = Field(ge=0, le=1)
-    current_price_to_gross_profit: Decimal | None = None
-    target_price_to_gross_profit: Decimal | None = None
-
-    @field_validator(
-        "capital_adjusted_labor_efficiency",
-        "current_price_to_sales",
-        "target_price_to_sales",
-        "valuation_gap",
-        "target_weight",
-        "current_price_to_gross_profit",
-        "target_price_to_gross_profit",
-        mode="before",
-    )
-    @classmethod
-    def reject_float_values(cls, value: object) -> object:
-        return None if value is None else _reject_binary_float(value)
-
-    @model_serializer(mode="wrap")
-    def omit_absent_gross_profit_multiple(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
-        return drop_none_fields(handler(self), "current_price_to_gross_profit", "target_price_to_gross_profit")
+    target_weight: _DecimalParameter | None = Field(ge=0, le=1)
+    current_price_to_gross_profit: _DecimalParameter | None = None
+    target_price_to_gross_profit: _DecimalParameter | None = None
 
     @model_validator(mode="after")
     def validate_outcome_consistency(self) -> Self:
@@ -823,23 +721,13 @@ class GoldenExpectation(StrictFrozenModel):
 
 
 class GoldenDecision(StrictFrozenModel):
-    decision_key: str = Field(pattern=_STABLE_KEY_PATTERN)
+    decision_key: _ImmutableKey = Field(pattern=_STABLE_KEY_PATTERN)
     issuer: SubjectRef
     issuer_branch: Literal["non_financial", "financial"]
-    cutoff_at: datetime
+    cutoff_at: AwareDatetime
     inputs: tuple[GoldenInputRecord, ...] = Field(min_length=1)
     derivation: str = Field(min_length=1)
     expected: GoldenExpectation
-
-    @field_validator("decision_key")
-    @classmethod
-    def reject_mutable_key(cls, value: str) -> str:
-        return _reject_mutable_coordinate(value, "decision_key")
-
-    @field_validator("cutoff_at")
-    @classmethod
-    def validate_cutoff_at(cls, value: datetime) -> datetime:
-        return require_aware(value, "cutoff_at")
 
     @model_validator(mode="after")
     def validate_and_canonicalize(self) -> Self:
@@ -877,16 +765,17 @@ def _validate_cutoff_ranks(at_cutoff: list[GoldenDecision]) -> None:
         raise ValueError("equal-weight golden selections must share one target weight")
 
 
-class GoldenDecisionSet(StrictFrozenModel):
-    golden_decision_set_id: str = Field(default="", pattern=r"^(?:|golden-decision-set:[0-9a-f]{64})$")
-    content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
-    strategy_definition_id: str = Field(pattern=r"^strategy-definition:[0-9a-f]{64}$")
-    strategy_definition_sha256: str = Field(pattern=SHA256_PATTERN)
+class GoldenDecisionSet(StrictIdentifiedFrozenModel):
+    id_field = "golden_decision_set_id"
+    id_prefix = "golden-decision-set"
+    golden_decision_set_id: str = content_id("golden-decision-set")
+    content_sha256: ContentHash = ""
+    strategy_definition_id: str = content_ref("strategy-definition")
+    strategy_definition_sha256: Sha256
     risk_free_rates: tuple[CutoffRiskFreeRate, ...] = Field(min_length=2)
     decisions: tuple[GoldenDecision, ...] = Field(min_length=6)
 
-    @model_validator(mode="after")
-    def validate_and_identify(self) -> Self:
+    def _canonicalize(self) -> None:
         _validate_ref_hash(self.strategy_definition_id, self.strategy_definition_sha256, "strategy definition")
         rates = tuple(sorted(self.risk_free_rates, key=lambda i: i.cutoff_at))
         rate_cutoffs = tuple(i.cutoff_at for i in rates)
@@ -910,8 +799,6 @@ class GoldenDecisionSet(StrictFrozenModel):
             _validate_cutoff_ranks([d for d in decisions if d.cutoff_at == cutoff])
         object.__setattr__(self, "risk_free_rates", rates)
         object.__setattr__(self, "decisions", decisions)
-        identify(self, id_field="golden_decision_set_id", prefix="golden-decision-set")
-        return self
 
 
 __all__ = [

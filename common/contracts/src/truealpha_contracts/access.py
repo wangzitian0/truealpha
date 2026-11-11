@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 from enum import StrEnum
 
 from pydantic import Field, field_validator, model_validator
 
+from truealpha_contracts.common import AwareDatetime, require_stable_and_immutable
 from truealpha_contracts.common import FrozenModel as StrictFrozenModel
-from truealpha_contracts.common import require_aware, require_stable_and_immutable
 
 _MUTABLE_TOKENS = frozenset({"latest", "current", "default", "head"})
 
@@ -44,16 +43,11 @@ class AccessContext(StrictFrozenModel):
     session_id: str = Field(min_length=1)
     authentication_method: AuthenticationMethod
     principal_kind: PrincipalKind
-    issued_at: datetime
-    expires_at: datetime
+    issued_at: AwareDatetime
+    expires_at: AwareDatetime
     active_entitlement_grants: tuple[ActiveEntitlementGrant, ...] = ()
     delegated_by_service_principal_id: str | None = None
     delegation_id: str | None = None
-
-    @field_validator("issued_at", "expires_at")
-    @classmethod
-    def validate_datetimes(cls, value: datetime, info) -> datetime:
-        return require_aware(value, info.field_name)
 
     @field_validator("active_entitlement_grants")
     @classmethod

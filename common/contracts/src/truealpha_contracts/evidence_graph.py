@@ -12,11 +12,13 @@ from pydantic import Field, field_validator, model_validator
 
 from truealpha_contracts.common import (
     DEFAULT_MUTABLE_TOKENS,
-    SHA256_PATTERN,
-    STABLE_ID_PATTERN,
     CaptureEnvironment,
+    ContentHash,
     FrozenModel,
-    identify,
+    IdentifiedFrozenModel,
+    Sha256,
+    StableId,
+    content_id,
 )
 
 
@@ -93,7 +95,7 @@ class BitemporalStamp(FrozenModel):
 
 class EvidenceNode(FrozenModel):
     ref: EvidenceNodeRef
-    content_sha256: str = Field(pattern=SHA256_PATTERN)
+    content_sha256: Sha256
     stamp: BitemporalStamp
     supersedes: EvidenceNodeRef | None = None
 
@@ -109,29 +111,28 @@ class EvidenceNode(FrozenModel):
         return self
 
 
-class EvidenceEdge(FrozenModel):
-    edge_id: str = Field(default="", pattern=r"^(?:|evidence-edge:[0-9a-f]{64})$")
-    content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
+class EvidenceEdge(IdentifiedFrozenModel):
+    id_field = "edge_id"
+    id_prefix = "evidence-edge"
+    edge_id: str = content_id("evidence-edge")
+    content_sha256: ContentHash = ""
     from_ref: EvidenceNodeRef
     to_ref: EvidenceNodeRef
     relation: EvidenceRelation
     stamp: BitemporalStamp
 
-    @model_validator(mode="after")
-    def freeze_and_identify(self) -> EvidenceEdge:
+    def _canonicalize(self) -> None:
         if self.from_ref == self.to_ref:
             raise ValueError("an evidence edge cannot connect a node to itself")
         if self.relation is EvidenceRelation.SUPERSEDES and self.from_ref.kind != self.to_ref.kind:
             raise ValueError("supersedes connects nodes of the same kind")
-        identify(self, id_field="edge_id", hash_field="content_sha256", prefix="evidence-edge")
-        return self
 
 
 class CurrentPointerKey(FrozenModel):
     environment: CaptureEnvironment
-    universe_id: str = Field(pattern=STABLE_ID_PATTERN)
-    universe_version: str = Field(pattern=STABLE_ID_PATTERN)
-    factor_id: str = Field(pattern=STABLE_ID_PATTERN)
+    universe_id: StableId
+    universe_version: StableId
+    factor_id: StableId
 
     @field_validator("universe_version", "factor_id")
     @classmethod
@@ -139,17 +140,18 @@ class CurrentPointerKey(FrozenModel):
         return _reject_mutable_version(value, "pointer scope identities")
 
 
-class CurrentPointer(FrozenModel):
-    pointer_id: str = Field(default="", pattern=r"^(?:|current-pointer:[0-9a-f]{64})$")
-    content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
+class CurrentPointer(IdentifiedFrozenModel):
+    id_field = "pointer_id"
+    id_prefix = "current-pointer"
+    pointer_id: str = content_id("current-pointer")
+    content_sha256: ContentHash = ""
     key: CurrentPointerKey
     target_run: EvidenceNodeRef
     sequence: int = Field(ge=0)
     previous_run: EvidenceNodeRef | None = None
     advanced_at: datetime
 
-    @model_validator(mode="after")
-    def freeze_and_identify(self) -> CurrentPointer:
+    def _canonicalize(self) -> None:
         if self.target_run.kind is not EvidenceNodeKind.CAPTURE_RUN:
             raise ValueError("a current pointer resolves to a capture-run node")
         if self.previous_run is not None:
@@ -161,8 +163,6 @@ class CurrentPointer(FrozenModel):
                 raise ValueError("the first pointer at sequence 0 has no previous run")
         elif self.sequence != 0:
             raise ValueError("a later advance must name the previous run it supersedes")
-        identify(self, id_field="pointer_id", hash_field="content_sha256", prefix="current-pointer")
-        return self
 
 
 class ProvenanceClosure(FrozenModel):
