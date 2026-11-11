@@ -33,6 +33,11 @@ The sixth is the run health of every job (`quality.job_run_health`, #1466): whet
 7 days in `dagster.runs` succeeded, job by job. It is a dashboard row and not a gate: a red verdict leaves
 the run that records it green. `/admin/pipeline` shows the counts and the error line beside it.
 
+The seventh is the TOPT baseline (`quality.topt_baseline`, #1664): whether the served TOPT head meets the
+accepted availability, whether the Twelve Data seat stayed inside its share, and whether the code server stayed
+inside its memory budget. It reads the primary tables, and it names the rows of #1664 that no environment can
+run alone. It is a dashboard row and not a gate, like the run health.
+
 Every check here records its verdict — green and red — in `mart.nightly_verdicts`
 (`quality.nightly_verdicts`, #876 W1); `/health` publishes the newest per check and the
 daily delivery report shows a red, stale or missing one. The names a run
@@ -56,13 +61,13 @@ from truealpha_contracts.universes import key_of_lane, lane_name, record, served
 
 from data_engine.config import settings
 from data_engine.datahub.oracle_outcomes import load_oracle_outcomes_rollup, record_oracle_outcomes_safely
-from data_engine.datahub.question_coverage import NO_HEAD_SUMMARY, declared_environment
-from data_engine.environment_universes import any_environment_universe_names, scheduled_universe_names
+from data_engine.datahub.question_coverage import NO_HEAD_SUMMARY, NoHead, declared_environment, governed_head_of
+from data_engine.environment_universes import any_environment_universe_names, rule_environment, scheduled_universe_names
 from data_engine.external_op import external_op
 from data_engine.lanes.capture import TICKS
 from data_engine.lanes.standards import HEAD_REPORTS_JOB_NAME, STANDARD_BACKFILL_JOB_NAME, run_universe
 from data_engine.lanes.triggers import boot_deployment
-from data_engine.quality import job_run_health, runtime_shape, surface_proof
+from data_engine.quality import job_run_health, runtime_shape, surface_proof, topt_baseline
 from data_engine.quality.nightly_verdicts import (
     TICK_TAG,
     check_name,
@@ -136,6 +141,12 @@ JOB_RUN_HEALTH_JOB_NAME = "job_run_health_check"
 # shape check of this night counts from the next night.
 JOB_RUN_HEALTH_CRON = "20 6 * * *"
 
+TOPT_BASELINE_JOB_NAME = "topt_baseline_check"
+# 06:25 UTC: after the run health (06:20) and before the shape check (06:30). No nightly check may fire from the
+# shape check to the delivery report (07:00) (#1484). The check reads the primary tables and the live code server,
+# so no other check has to finish first.
+TOPT_BASELINE_CRON = "25 6 * * *"
+
 #: Verdict names (`mart.nightly_verdicts.check_name`) this lane records.
 OUTPUT_INVARIANTS_VERDICT = "output_invariants"
 REPORT_SURFACE_VERDICT = "report_surface_proof"
@@ -144,6 +155,7 @@ MODEL_KEY_HEALTH_VERDICT = "model_key_health"
 RELEASE_FETCH_PROOF_VERDICT = "release_fetch_proof"
 RUNTIME_SHAPE_VERDICT = "runtime_shape"
 JOB_RUN_HEALTH_VERDICT = "job_run_health"
+TOPT_BASELINE_VERDICT = "topt_baseline"
 NIGHTLY_VERDICTS: tuple[str, ...] = (
     OUTPUT_INVARIANTS_VERDICT,
     REPORT_SURFACE_VERDICT,
@@ -151,6 +163,7 @@ NIGHTLY_VERDICTS: tuple[str, ...] = (
     MODEL_KEY_HEALTH_VERDICT,
     RELEASE_FETCH_PROOF_VERDICT,
     JOB_RUN_HEALTH_VERDICT,
+    TOPT_BASELINE_VERDICT,
     RUNTIME_SHAPE_VERDICT,
 )
 
@@ -722,6 +735,60 @@ def job_run_health_schedule(context: dg.ScheduleEvaluationContext) -> dg.RunRequ
     return dg.RunRequest(run_key=tick, tags={TICK_TAG: tick})
 
 
+class _RedToptBaseline(dg.Failure):
+    """The verdict is red. `verdict()` records it and re-raises; the op catches this and ends green."""
+
+
+@external_op
+def run_topt_baseline(context: dg.OpExecutionContext) -> str:
+    """Judge the served TOPT head, the Twelve Data share and the code server against the baseline (#1664).
+
+    A red verdict is a dashboard row, not a gate: the op records it and ends green, so this job does not add
+    its own failure to the run history that `job_run_health` judges. A row that cannot be measured keeps the
+    verdict red: unknown is not OK."""
+    tick = tick_of(context)
+    now = tick or datetime.now(UTC)
+    contract = load_environment_contract()
+    judgement = None
+    try:
+        with verdict(TOPT_BASELINE_VERDICT, registered=NIGHTLY_VERDICTS, run_id=context.run_id, tick=tick) as outcome:
+            with psycopg.connect(settings.database_url, autocommit=True) as connection:
+                head = governed_head_of(connection, "topt")
+                gppe = (
+                    topt_baseline.Row("Q1", "fail", "Q1 no governed TOPT head")
+                    if isinstance(head, NoHead)
+                    else topt_baseline.read_gppe(connection, head.run_id)
+                )
+                quota = topt_baseline.read_quota(connection, now=now, environment=rule_environment(), contract=contract)
+            server = topt_baseline.read_server(budget_mib=contract.code_server_capacity.server_mib)
+            judgement = topt_baseline.judge(gppe=gppe, quota=quota, server=server)
+            context.log.info(f"topt baseline: {judgement.summary}")
+            context.add_output_metadata({"failed": len(judgement.failed), "not_measured": len(judgement.unmeasured)})
+            outcome.summary = judgement.summary
+            if not judgement.ok:
+                raise _RedToptBaseline(f"topt baseline: {judgement.summary} (#1664)")
+    except _RedToptBaseline as red:
+        context.log.warning(str(red))
+    assert judgement is not None
+    return json.dumps({"failed": [row.key for row in judgement.failed], "summary": judgement.summary})
+
+
+@dg.job(name=TOPT_BASELINE_JOB_NAME)
+def topt_baseline_job() -> None:
+    run_topt_baseline()
+
+
+@dg.schedule(
+    job=topt_baseline_job,
+    cron_schedule=TOPT_BASELINE_CRON,
+    execution_timezone="UTC",
+    default_status=dg.DefaultScheduleStatus.RUNNING,
+)
+def topt_baseline_schedule(context: dg.ScheduleEvaluationContext) -> dg.RunRequest:
+    tick = context.scheduled_execution_time.isoformat()
+    return dg.RunRequest(run_key=tick, tags={TICK_TAG: tick})
+
+
 OUTPUT_INVARIANTS_SENSOR_NAME = "output_invariants_on_advance"
 OUTPUT_INVARIANTS_SENSOR_INTERVAL_SECONDS = 60
 
@@ -774,6 +841,7 @@ defs = dg.Definitions(
         release_fetch_proof_job,
         runtime_shape_job,
         job_run_health_job,
+        topt_baseline_job,
     ],
     schedules=[
         output_invariants_schedule,
@@ -782,6 +850,7 @@ defs = dg.Definitions(
         release_fetch_proof_schedule,
         runtime_shape_schedule,
         job_run_health_schedule,
+        topt_baseline_schedule,
     ],
     sensors=[output_invariants_on_advance_sensor, runtime_shape_sampler_sensor],
 )
