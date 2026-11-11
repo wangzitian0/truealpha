@@ -142,9 +142,11 @@
       "threshold": "0 days over the share; 0 core-path keys deferred",
       "window": "30 days",
       "oracle": "repository",
-      "status": "pending",
-      "verdict_keys": [],
-      "pending_on": "#1520, #1418"
+      "status": "partial",
+      "verdict_keys": [
+        "topt_baseline"
+      ],
+      "pending_on": "#1664 (topt_baseline reads the Twelve Data seat over 7 days, not every seat over 30 days), #1520, #1418"
     },
     {
       "id": "R2.B4",

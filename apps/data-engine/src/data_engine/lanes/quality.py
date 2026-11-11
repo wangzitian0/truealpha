@@ -61,8 +61,8 @@ from truealpha_contracts.universes import key_of_lane, lane_name, record, served
 
 from data_engine.config import settings
 from data_engine.datahub.oracle_outcomes import load_oracle_outcomes_rollup, record_oracle_outcomes_safely
-from data_engine.datahub.question_coverage import NO_HEAD_SUMMARY, NoHead, declared_environment, governed_head_of
-from data_engine.environment_universes import any_environment_universe_names, rule_environment, scheduled_universe_names
+from data_engine.datahub.question_coverage import NO_HEAD_SUMMARY, declared_environment
+from data_engine.environment_universes import any_environment_universe_names, scheduled_universe_names
 from data_engine.external_op import external_op
 from data_engine.lanes.capture import TICKS
 from data_engine.lanes.standards import HEAD_REPORTS_JOB_NAME, STANDARD_BACKFILL_JOB_NAME, run_universe
@@ -131,7 +131,7 @@ RELEASE_FETCH_PROOF_CRON = "15 6 * * *"
 
 RUNTIME_SHAPE_JOB_NAME = "runtime_shape_check"
 # 06:30 UTC: after every scheduled tick and nightly check of the night has finished (the last one,
-# the job run health, runs at 06:20), and before the delivery report (07:00) reads the verdict.
+# the TOPT baseline, runs at 06:25), and before the delivery report (07:00) reads the verdict.
 RUNTIME_SHAPE_CRON = "30 6 * * *"
 
 JOB_RUN_HEALTH_JOB_NAME = "job_run_health_check"
@@ -753,13 +753,10 @@ def run_topt_baseline(context: dg.OpExecutionContext) -> str:
     try:
         with verdict(TOPT_BASELINE_VERDICT, registered=NIGHTLY_VERDICTS, run_id=context.run_id, tick=tick) as outcome:
             with psycopg.connect(settings.database_url, autocommit=True) as connection:
-                head = governed_head_of(connection, "topt")
-                gppe = (
-                    topt_baseline.Row("Q1", "fail", "Q1 no governed TOPT head")
-                    if isinstance(head, NoHead)
-                    else topt_baseline.read_gppe(connection, head.run_id)
+                gppe = topt_baseline.read_q1(connection)
+                quota = topt_baseline.read_quota(
+                    connection, now=now, environment=gateway.capacity_environment(), contract=contract
                 )
-                quota = topt_baseline.read_quota(connection, now=now, environment=rule_environment(), contract=contract)
             server = topt_baseline.read_server(budget_mib=contract.code_server_capacity.server_mib)
             judgement = topt_baseline.judge(gppe=gppe, quota=quota, server=server)
             context.log.info(f"topt baseline: {judgement.summary}")
