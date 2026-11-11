@@ -5,7 +5,7 @@ Roadmap: the MCP endpoint comes first (reuses common/factors, nearly free to wir
 Claude Desktop); the self-built /chat SSE endpoint is Tier 3 (Phase 7).
 """
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, MutableMapping
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -61,7 +61,18 @@ async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
 #: without the change stayed 200.
 ROUTED_PREFIX = "/api"
 
-app = FastAPI(title="truealpha-llm-service", lifespan=_lifespan)
+#: The deploy gates, Traefik and the watchdog poll these paths every few seconds. They carry no
+#: information a request span or a latency sample would add, and they were about 31.5k spans a
+#: day, almost all of the traces of this service (infra2#1436). FastAPI's own telemetry skips a
+#: request when `exclude` returns True.
+PROBE_PATHS = frozenset({"/health", "/livez", "/readyz"})
+
+
+def _is_probe(scope: MutableMapping[str, Any]) -> bool:
+    return scope.get("path") in PROBE_PATHS
+
+
+app = FastAPI(title="truealpha-llm-service", lifespan=_lifespan, telemetry={"exclude": _is_probe})
 
 # OTLP telemetry for infra2's shared SigNoz (#1034): traces, metrics and ERROR logs under the
 # identity infra2's deploy renders into OTEL_SERVICE_NAME / OTEL_RESOURCE_ATTRIBUTES. Off unless

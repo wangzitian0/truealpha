@@ -61,7 +61,11 @@ from opentelemetry import _logs, metrics, trace
 
 # /mcp answers 307 from the app's own route: a real request through the instrumented stack that
 # needs no database.
-assert TestClient(main.app, follow_redirects=False).get("/mcp").status_code == 307
+client = TestClient(main.app, follow_redirects=False)
+assert client.get("/mcp").status_code == 307
+# The probe paths (#1660): answered, and absent from spans and metrics.
+assert client.get("/livez").status_code == 200
+assert client.get("/readyz").status_code in (200, 503)
 logging.getLogger("llm_service.probe").error("llm-service probe failure")
 trace.get_tracer_provider().force_flush()
 metrics.get_meter_provider().force_flush()
@@ -134,6 +138,10 @@ def test_a_request_and_an_error_log_reach_the_collector_under_the_rendered_ident
     ), durations
     legacy = sorted({name for name, _unit, _attributes in series if name.startswith("http.server.duration")})
     assert legacy == [], legacy
+    # Probe paths are excluded from FastAPI's telemetry: no span and no latency sample for them.
+    probe_routes = {"/health", "/livez", "/readyz"}
+    assert not [name for name in collector.span_names() if any(route in name for route in probe_routes)]
+    assert not [attributes for _unit, attributes in durations if attributes.get("http.route") in probe_routes]
     assert "llm-service probe failure" in collector.log_bodies()
     expected = {**IDENTITY, "deployment.environment.name": "pr-12", "service.name": "truealpha-app"}
     for signal in ("traces", "metrics", "logs"):
