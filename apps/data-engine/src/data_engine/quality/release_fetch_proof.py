@@ -157,17 +157,13 @@ def expected_universe_sources() -> frozenset[str]:
 
 def fetched_by_universe_source(connection: psycopg.Connection[Any]) -> dict[str, int]:
     """Row counts of the newest constituent refresh per universe source (#1441)."""
-    counts: dict[str, int] = {}
-    for etf_symbol, count in connection.execute(UNIVERSE_CONSTITUENTS_SQL, ()).fetchall():
-        counts[str(etf_symbol)] = int(count)
-    return counts
+    return {str(sym): int(cnt) for sym, cnt in connection.execute(UNIVERSE_CONSTITUENTS_SQL, ()).fetchall()}
 
 
 def fetched_by_origin(connection: psycopg.Connection[Any], capture_run_id: str) -> dict[str, int]:
     counts: dict[str, int] = {}
     for semantic_type, parser_version, count in connection.execute(FETCHED_SQL, (capture_run_id,)).fetchall():
-        origin = origin_of(str(semantic_type), str(parser_version))
-        if origin is not None:
+        if (origin := origin_of(str(semantic_type), str(parser_version))) is not None:
             counts[origin] = counts.get(origin, 0) + int(count)
     return counts
 
@@ -248,8 +244,6 @@ def _evaluate_run(
     status = record.dagster_run.status
     if status in _FINISHED_RED:
         return Proof(RED, f"{label} ended {status.value.lower()} on {short}…")
-    if status in UNFINISHED_RUN_STATUSES:
-        return Proof(PENDING, f"{label} is {status.value.lower().replace('_', ' ')}")
     if status != dg.DagsterRunStatus.SUCCESS:
         return Proof(PENDING, f"{label} is {status.value.lower().replace('_', ' ')}")
     capture_run_id = capture_run_of(instance, record.dagster_run.run_id)

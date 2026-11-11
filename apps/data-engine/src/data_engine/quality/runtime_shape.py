@@ -388,62 +388,39 @@ def _server_process(proc_root: Path) -> int:
     return size
 
 
+def _safe_try(fn, *exc_types: type[BaseException], default=None):
+    try:
+        return fn()
+    except exc_types:
+        return default
+
+
 def read(cgroup_root: Path = CGROUP_ROOT, proc_root: Path = PROC_ROOT) -> Reading:
     """Read the cgroup and the process table. A file that fails to read leaves its field None."""
-    memory_max: int | None = None
-    unlimited = False
-    memory_peak: int | None = None
-    swap_peak: int | None = None
-    oom_kill: int | None = None
-    max_events: int | None = None
-    container: str | None = None
-    largest_process: int | None = None
-    largest_process_id = ""
-    server_process: int | None = None
-
-    try:
-        raw_max = _read_text(cgroup_root / "memory.max")
-        unlimited = raw_max == "max"
-        memory_max = None if unlimited else int(raw_max)
-    except (OSError, ValueError):
-        pass
-    try:
-        memory_peak = int(_read_text(cgroup_root / "memory.peak"))
-    except (OSError, ValueError):
-        pass
-    try:
-        swap_peak = int(_read_text(cgroup_root / "memory.swap.peak"))
-    except (OSError, ValueError):
-        pass
-    try:
-        events = _events(_read_text(cgroup_root / "memory.events"))
-        oom_kill, max_events = events["oom_kill"], events["max"]  # both or neither: one lookup fails the pair
-    except (OSError, ValueError, KeyError):
-        pass
-    try:
-        container = _container_id(proc_root)
-    except (OSError, ValueError, IndexError):
-        pass
-    try:
-        largest_process, largest_process_id = _largest_process(proc_root)
-    except (OSError, ValueError, IndexError):
-        pass
-    try:
-        server_process = _server_process(proc_root)
-    except (OSError, ValueError):
-        pass
+    raw_max = _safe_try(lambda: _read_text(cgroup_root / "memory.max"), OSError, ValueError)
+    unlimited = raw_max == "max"
+    memory_max = None if raw_max is None or unlimited else _safe_try(lambda: int(raw_max), ValueError)
+    events_pair = _safe_try(
+        lambda: (lambda e: (e["oom_kill"], e["max"]))(_events(_read_text(cgroup_root / "memory.events"))),
+        OSError,
+        ValueError,
+        KeyError,
+    )
+    oom_kill, max_events = events_pair if events_pair is not None else (None, None)
+    largest_pair = _safe_try(lambda: _largest_process(proc_root), OSError, ValueError, IndexError)
+    largest_process, largest_process_id = largest_pair if largest_pair is not None else (None, "")
 
     return Reading(
         memory_max=memory_max,
         unlimited=unlimited,
-        memory_peak=memory_peak,
-        swap_peak=swap_peak,
+        memory_peak=_safe_try(lambda: int(_read_text(cgroup_root / "memory.peak")), OSError, ValueError),
+        swap_peak=_safe_try(lambda: int(_read_text(cgroup_root / "memory.swap.peak")), OSError, ValueError),
         oom_kill=oom_kill,
         max_events=max_events,
-        container=container,
+        container=_safe_try(lambda: _container_id(proc_root), OSError, ValueError, IndexError),
         largest_process=largest_process,
         largest_process_id=largest_process_id,
-        server_process=server_process,
+        server_process=_safe_try(lambda: _server_process(proc_root), OSError, ValueError),
     )
 
 
@@ -554,20 +531,20 @@ def _ceiling_findings(reading: Reading, capacity: CodeServerCapacity) -> list[st
     return []
 
 
+_MONOTONIC_TOTALS = (
+    "kills",
+    "restarts_same_deployment",
+    "restarts_new_deployment",
+    "peaks_over_limit",
+    "swap_peaks",
+    "processes_over_size",
+    "servers_over_size",
+)
+
+
 def _state_findings(tracker: Tracker, baseline: Baseline | None) -> list[str]:
     """Totals only grow. A total below the last check's means the state was lost or reset."""
-    if baseline is None:
-        return []
-    shrunk = (
-        tracker.kills < baseline.kills
-        or tracker.restarts_same_deployment < baseline.restarts_same_deployment
-        or tracker.restarts_new_deployment < baseline.restarts_new_deployment
-        or tracker.peaks_over_limit < baseline.peaks_over_limit
-        or tracker.swap_peaks < baseline.swap_peaks
-        or tracker.processes_over_size < baseline.processes_over_size
-        or tracker.servers_over_size < baseline.servers_over_size
-    )
-    if shrunk:
+    if baseline is not None and any(getattr(tracker, f) < getattr(baseline, f) for f in _MONOTONIC_TOTALS):
         return ["the runtime shape state is lower than at the last check: it was reset, so kills may be unseen"]
     return []
 
@@ -625,25 +602,22 @@ def judge(
     red += _state_findings(tracker, baseline)
 
     before = baseline or _NO_CHECK_YET
-    kills = max(tracker.kills - before.kills, 0)
-    same = max(tracker.restarts_same_deployment - before.restarts_same_deployment, 0)
-    new = max(tracker.restarts_new_deployment - before.restarts_new_deployment, 0)
-    peaks = max(tracker.peaks_over_limit - before.peaks_over_limit, 0)
-    swaps = max(tracker.swap_peaks - before.swap_peaks, 0)
-    too_big = max(tracker.processes_over_size - before.processes_over_size, 0)
-    server_big = max(tracker.servers_over_size - before.servers_over_size, 0)
+    deltas = {f: max(getattr(tracker, f) - getattr(before, f), 0) for f in _MONOTONIC_TOTALS}
+    kills, same, new = deltas["kills"], deltas["restarts_same_deployment"], deltas["restarts_new_deployment"]
+    peaks, swaps = deltas["peaks_over_limit"], deltas["swap_peaks"]
+    too_big, server_big = deltas["processes_over_size"], deltas["servers_over_size"]
     facts: dict[str, int | float] = {
         "oom_kills": kills,
         "unplanned_restarts": same,
         "peaks_over_limit": peaks,
         "swap_peaks": swaps,
-        "worst_swap_mib": round(tracker.worst_swap / MIB),
+        "worst_swap_mib": _mib(tracker.worst_swap),
         "processes_over_size": too_big,
         "servers_over_size": server_big,
-        "largest_process_mib": round(tracker.largest_process / MIB),
-        "worst_process_mib": round(tracker.worst_process / MIB),
-        "server_size_mib": round(tracker.server_size / MIB),
-        "worst_server_mib": round(tracker.worst_server / MIB),
+        "largest_process_mib": _mib(tracker.largest_process),
+        "worst_process_mib": _mib(tracker.worst_process),
+        "server_size_mib": _mib(tracker.server_size),
+        "worst_server_mib": _mib(tracker.worst_server),
     }
 
     peak = ""
@@ -845,13 +819,7 @@ def check(
     judgement = judge(reading, tracker=totals, baseline=baseline, capacity=capacity, problems=tuple(problems))
     if tick is not None and (baseline is None or _later_than(tick, baseline.tick)):
         saved = Baseline(
-            kills=totals.kills,
-            restarts_same_deployment=totals.restarts_same_deployment,
-            restarts_new_deployment=totals.restarts_new_deployment,
-            peaks_over_limit=totals.peaks_over_limit,
-            swap_peaks=totals.swap_peaks,
-            processes_over_size=totals.processes_over_size,
-            servers_over_size=totals.servers_over_size,
+            **{f: getattr(totals, f) for f in _MONOTONIC_TOTALS},
             tick=tick,
             red=judgement.red,
             summary=judgement.summary,

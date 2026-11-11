@@ -1815,9 +1815,9 @@ REPORT_CRON = "0 7 * * *"
 
 def _minutes_of_day(expression: str) -> list[int]:
     """Every time of day (minutes after 00:00 UTC) at which the cron fires."""
-    from truealpha_runtime.testing import load_tool
+    from cron_schedule import Cron
 
-    cron = load_tool("nightly_verdicts").Cron.parse(expression)
+    cron = Cron.parse(expression)
     return sorted(hour * 60 + minute for hour in cron.hours for minute in cron.minutes)
 
 

@@ -202,6 +202,12 @@ def fresh_heads_without_reports(connection: Connection[Any], *, now: datetime, g
     return settling
 
 
+def _off_verdict(surface: str, reader: str, detail: str, universe: str, marker: str = _NOT_RUN_HERE) -> SurfaceVerdict:
+    return SurfaceVerdict(
+        surface=surface, reader=reader, expected_run=marker, served_run=marker, detail=detail, universe=universe
+    )
+
+
 def prove(
     connection: Connection[Any], *, executed_at: datetime, settling: Mapping[str, str] | None = None
 ) -> tuple[SurfaceVerdict, ...]:
@@ -236,13 +242,11 @@ def prove(
         # and nothing to serve wrongly. An unseated key where one belongs is the model-key
         # probe's red verdict (#876 W2), not this surface's.
         verdicts.append(
-            SurfaceVerdict(
-                surface=_THEMES_SURFACE,
-                reader=_THEMES_READER,
-                expected_run=_NOT_RUN_HERE,
-                served_run=_NOT_RUN_HERE,
-                detail="no model provider seated in this environment; the theme lane is off",
-                universe=topt,
+            _off_verdict(
+                _THEMES_SURFACE,
+                _THEMES_READER,
+                "no model provider seated in this environment; the theme lane is off",
+                topt,
             )
         )
     else:
@@ -257,13 +261,11 @@ def prove(
         # serve and none to serve wrongly; the page renders its filed weights unvalued. Not
         # a mismatch — a surface with no run behind it in a place that runs no such tick.
         verdicts.append(
-            SurfaceVerdict(
-                surface="/research/holdings",
-                reader="fund-valuation.ts QQQ_POINTER_HEAD_SQL",
-                expected_run=_NOT_RUN_HERE,
-                served_run=_NOT_RUN_HERE,
-                detail=f"no {fund_key} head in this environment; the page renders filed weights unvalued",
-                universe=qqq,
+            _off_verdict(
+                "/research/holdings",
+                "fund-valuation.ts QQQ_POINTER_HEAD_SQL",
+                f"no {fund_key} head in this environment; the page renders filed weights unvalued",
+                qqq,
             )
         )
     else:
@@ -283,37 +285,28 @@ def prove(
         str(universe_id): (str(run_id), payload)
         for universe_id, run_id, payload in connection.execute(_COVERAGE_HEAD_SQL).fetchall()
     }
+    cov_reader = "datahub-stats.ts QUESTION_COVERAGE_SQL"
     for universe in heads:
+        cov_surface = f"/admin/datahub coverage [{universe}]"
         prefix = record(key_of_lane(universe)).id_prefix
         if not is_universe_scheduled(key_of_lane(universe), environment) and universe not in (settling or {}):
             verdicts.append(
-                SurfaceVerdict(
-                    surface=f"/admin/datahub coverage [{universe}]",
-                    reader="datahub-stats.ts QUESTION_COVERAGE_SQL",
-                    expected_run=_NOT_SCHEDULED,
-                    served_run=_NOT_SCHEDULED,
-                    detail="not_scheduled in this environment",
-                    universe=universe,
-                )
+                _off_verdict(cov_surface, cov_reader, "not_scheduled in this environment", universe, _NOT_SCHEDULED)
             )
             continue
         head = heads[universe]
         # The report for the head's OWN universe id when there is a head (two TOPT partitions
         # would share a prefix; review on #859); by prefix only to say "nothing stored" for a
         # universe with no head.
-        if head is not None:
-            match = stored.get(head.universe_id)
-        else:
-            match = next((entry for universe_id, entry in stored.items() if universe_id.startswith(prefix)), None)
+        match = (
+            stored.get(head.universe_id)
+            if head is not None
+            else next((entry for universe_id, entry in stored.items() if universe_id.startswith(prefix)), None)
+        )
         if head is None and match is None:
             verdicts.append(
-                SurfaceVerdict(
-                    surface=f"/admin/datahub coverage [{universe}]",
-                    reader="datahub-stats.ts QUESTION_COVERAGE_SQL",
-                    expected_run=_NOT_RUN_HERE,
-                    served_run=_NOT_RUN_HERE,
-                    detail="no head and no report for this universe in this environment",
-                    universe=universe,
+                _off_verdict(
+                    cov_surface, cov_reader, "no head and no report for this universe in this environment", universe
                 )
             )
             continue
@@ -321,8 +314,8 @@ def prove(
         drift = _drift(match[1] if match else None, fresh)
         verdicts.append(
             SurfaceVerdict(
-                surface=f"/admin/datahub coverage [{universe}]",
-                reader="datahub-stats.ts QUESTION_COVERAGE_SQL",
+                surface=cov_surface,
+                reader=cov_reader,
                 expected_run=_run(head),
                 served_run=match[0] if match else None,
                 detail=drift or "recomputed report agrees",

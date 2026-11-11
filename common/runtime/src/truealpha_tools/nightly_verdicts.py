@@ -44,12 +44,11 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import subprocess
 import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -61,163 +60,6 @@ GitRun = Callable[..., subprocess.CompletedProcess[str]]
 #: (check, deployed release) -> the check's first moment of being expected here, or None
 #: when that cannot be shown.
 FirstDeclared = Callable[[str, str], datetime | None]
-WINDOW = timedelta(days=14)
-HORIZON_DAYS = 5 * 366
-
-
-class CronError(ValueError):
-    """A cron expression this checker cannot read, or one that never fires."""
-
-
-_MONTHS = {name: number for number, name in enumerate(("JAN FEB MAR APR MAY JUN JUL AUG SEP OCT NOV DEC").split(), 1)}
-_WEEKDAYS = {name: number for number, name in enumerate(("SUN MON TUE WED THU FRI SAT").split())}
-_FIELDS: tuple[tuple[str, int, int, dict[str, int]], ...] = (
-    ("minute", 0, 59, {}),
-    ("hour", 0, 23, {}),
-    ("day of month", 1, 31, {}),
-    ("month", 1, 12, _MONTHS),
-    ("day of week", 0, 7, _WEEKDAYS),
-)
-_ELEMENT = re.compile(r"^(?P<range>\*|[0-9A-Za-z]+(?:-[0-9A-Za-z]+)?)(?:/(?P<step>[0-9]+))?$")
-
-
-def _cron_value(token: str, field: str, low: int, high: int, names: dict[str, int]) -> int:
-    if token.isdigit():
-        number = int(token)
-    elif token.upper() in names:
-        number = names[token.upper()]
-    else:
-        raise CronError(f"{field}: {token!r} is not a number{' or a name' if names else ''}")
-    if not low <= number <= high:
-        raise CronError(f"{field}: {number} is outside {low}-{high}")
-    return number
-
-
-def _cron_field(text: str, field: str, low: int, high: int, names: dict[str, int]) -> frozenset[int]:
-    values: set[int] = set()
-    for element in text.split(","):
-        match = _ELEMENT.match(element)
-        if not match:
-            raise CronError(f"{field}: cannot read {element!r}")
-        span, step_text = match.group("range"), match.group("step")
-        step = int(step_text) if step_text is not None else 1
-        if step < 1:
-            raise CronError(f"{field}: step {step} in {element!r} must be at least 1")
-        if span == "*":
-            first, last = low, high
-        elif "-" in span:
-            start, end = span.split("-", 1)
-            first, last = _cron_value(start, field, low, high, names), _cron_value(end, field, low, high, names)
-            if first > last:
-                raise CronError(f"{field}: range {element!r} runs backwards")
-        else:
-            first = _cron_value(span, field, low, high, names)
-            last = high if step_text is not None else first
-        values.update(range(first, last + 1, step))
-    return frozenset(values)
-
-
-@dataclass(frozen=True)
-class Cron:
-    expression: str
-    minutes: frozenset[int]
-    hours: frozenset[int]
-    days: frozenset[int]
-    months: frozenset[int]
-    weekdays: frozenset[int]  # 0 = Sunday
-    days_restricted: bool
-    weekdays_restricted: bool
-
-    @classmethod
-    def parse(cls, expression: str) -> Cron:
-        if not isinstance(expression, str):
-            raise CronError(f"cron {expression!r} is not a string")
-        parts = expression.split()
-        if len(parts) != len(_FIELDS):
-            raise CronError(f"cron {expression!r} has {len(parts)} fields, not {len(_FIELDS)}")
-        minutes, hours, days, months, weekdays = (
-            _cron_field(text, *spec) for text, spec in zip(parts, _FIELDS, strict=True)
-        )
-        return cls(
-            expression=expression,
-            minutes=minutes,
-            hours=hours,
-            days=days,
-            months=months,
-            weekdays=frozenset(day % 7 for day in weekdays),
-            days_restricted=parts[2] != "*",
-            weekdays_restricted=parts[4] != "*",
-        )
-
-    def fires_on(self, day: date) -> bool:
-        if day.month not in self.months:
-            return False
-        in_days = day.day in self.days
-        in_weekdays = day.isoweekday() % 7 in self.weekdays
-        if self.days_restricted and self.weekdays_restricted:
-            return in_days or in_weekdays
-        return in_days and in_weekdays
-
-    def _times(self, day: date) -> list[datetime]:
-        if not self.fires_on(day):
-            return []
-        return [
-            datetime(day.year, day.month, day.day, hour, minute, tzinfo=UTC)
-            for hour in sorted(self.hours)
-            for minute in sorted(self.minutes)
-        ]
-
-    def fires_between(self, start: datetime, end: datetime) -> list[datetime]:
-        fires: list[datetime] = []
-        day = start.date()
-        while day <= end.date():
-            fires += [moment for moment in self._times(day) if start <= moment <= end]
-            day += timedelta(days=1)
-        return fires
-
-    def previous_fire(self, before: datetime) -> datetime | None:
-        day = before.date()
-        for _ in range(HORIZON_DAYS):
-            earlier = [moment for moment in self._times(day) if moment < before]
-            if earlier:
-                return earlier[-1]
-            day -= timedelta(days=1)
-        return None
-
-    def next_fire(self, after: datetime) -> datetime | None:
-        day = after.date()
-        for _ in range(HORIZON_DAYS):
-            later = [moment for moment in self._times(day) if moment > after]
-            if later:
-                return later[0]
-            day += timedelta(days=1)
-        return None
-
-
-def largest_gap(crons: Sequence[Cron], now: datetime, window: timedelta = WINDOW) -> timedelta:
-    now = now.astimezone(UTC)
-    start = now - window
-    fires: set[datetime] = set()
-    before: list[datetime] = []
-    after: list[datetime] = []
-    for cron in crons:
-        previous, following = cron.previous_fire(start), cron.next_fire(now)
-        if previous is None and following is None:
-            raise CronError(f"cron {cron.expression!r} never fires")
-        fires.update(cron.fires_between(start, now))
-        if previous is not None:
-            before.append(previous)
-        if following is not None:
-            after.append(following)
-    if before:
-        fires.add(max(before))
-    if after:
-        fires.add(min(after))
-    ordered = sorted(fires)
-    if len(ordered) < 2:
-        listed = ", ".join(repr(cron.expression) for cron in crons)
-        raise CronError(f"the schedule {listed} fires fewer than twice in {HORIZON_DAYS} days")
-    return max(later - earlier for earlier, later in zip(ordered, ordered[1:]))
 
 
 EXPECTATIONS_PATH = Path(__file__).resolve().parents[4] / "tools" / "nightly_verdicts.json"
@@ -397,6 +239,10 @@ def read_report(url: str, http_get: HttpGet) -> HealthReport:
 ReleaseReader = Callable[[str], str | None]
 
 
+def _git_cmd(run: GitRun, repo: str, *args: str) -> subprocess.CompletedProcess[str]:
+    return run(["git", "-C", repo, *args], capture_output=True, text=True, check=False)
+
+
 def git_release_reader(
     repo: str = ".",
     run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
@@ -407,33 +253,16 @@ def git_release_reader(
     def read(ref: str) -> str | None:
         if ref.startswith("-"):
             raise VerdictCheckFailure(f"{ref!r} is not a release ref")
-        resolved = run(
-            ["git", "-C", repo, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        resolved = _git_cmd(run, repo, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}")
         commit = resolved.stdout.strip()
         if resolved.returncode != 0 or not commit:
             raise VerdictCheckFailure(f"{ref!r} is not a commit in this checkout (fetch tags)")
-        # "The release predates the file" passes the check, so it must be a positive answer
-        # (the tree lists no such path), never whatever a failed `git show` happens to mean.
-        listed = run(
-            ["git", "-C", repo, "ls-tree", "--name-only", commit, "--", path],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        listed = _git_cmd(run, repo, "ls-tree", "--name-only", commit, "--", path)
         if listed.returncode != 0:
             raise VerdictCheckFailure(f"cannot list {ref}'s tree: {listed.stderr.strip()[:120]}")
         if not listed.stdout.strip():
             return None
-        shown = run(
-            ["git", "-C", repo, "show", f"{commit}:{path}"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        shown = _git_cmd(run, repo, "show", f"{commit}:{path}")
         if shown.returncode != 0:
             raise VerdictCheckFailure(f"cannot read {path} at {ref}: {shown.stderr.strip()[:120]}")
         return shown.stdout

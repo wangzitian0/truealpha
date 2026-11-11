@@ -78,40 +78,52 @@ def client() -> httpx.Client:
     return httpx.Client(headers={"User-Agent": settings.sec_user_agent}, timeout=30.0, follow_redirects=True)
 
 
+def _get(http: httpx.Client, endpoint: str, url: str, caller: str, identity: FetchKey) -> bytes:
+    """One SEC request through the gateway and ledger; the verbatim body of a successful answer."""
+    resp = gateway.http_get(http, "sec", endpoint, url, identity=identity, caller=caller)
+    resp.raise_for_status()
+    return bytes(resp.content)
+
+
+def _fetch_sec(
+    key: FetchKey,
+    endpoint: str,
+    url: str,
+    caller: str,
+    http: httpx.Client | None = None,
+    *,
+    via: gateway.SourceGateway | None = None,
+) -> bytes:
+    """Fetch ``url`` once per ``key`` through an explicit or temporary SEC client (and optional ``via`` gateway)."""
+
+    def fetch(identity: FetchKey) -> bytes:
+        def request() -> bytes:
+            if http is None:
+                with client() as c:
+                    return _get(c, endpoint, url, caller, identity)
+            return _get(http, endpoint, url, caller, identity)
+
+        # A standards-lane gateway admits and records the request itself. It runs only on a miss.
+        return request() if via is None else via.call("sec", endpoint, request, identity=identity)
+
+    return gateway.fetch_once(key, fetch)
+
+
 def ticker_cik_index(http: httpx.Client | None = None, *, via: gateway.SourceGateway | None = None) -> dict[str, int]:
     """The whole ticker -> CIK crosswalk from SEC's official mapping file, once.
 
     Resolving a universe one ticker at a time re-downloads this file per lookup; a
     capture run reads it once and indexes.
     """
-
-    def fetch(identity: FetchKey) -> bytes:
-        def request() -> bytes:
-            if http is None:
-                with client() as c:
-                    return _get(c, "company_tickers", TICKERS_URL, "sec.ticker_cik_index", identity)
-            return _get(http, "company_tickers", TICKERS_URL, "sec.ticker_cik_index", identity)
-
-        # A standards-lane gateway admits and records the request itself. It runs only on a miss.
-        return request() if via is None else via.call("sec", "company_tickers", request, identity=identity)
-
-    rows = json.loads(gateway.fetch_once(company_tickers_key(), fetch).decode())
+    body = _fetch_sec(company_tickers_key(), "company_tickers", TICKERS_URL, "sec.ticker_cik_index", http, via=via)
+    rows = json.loads(body.decode())
     return {str(row["ticker"]).upper(): int(row["cik_str"]) for row in rows.values()}
 
 
 def title_ticker_index(http: httpx.Client | None = None, *, via: gateway.SourceGateway | None = None) -> dict[str, str]:
     """Map normalized SEC company_tickers titles to their primary equity ticker (#1441)."""
-
-    def fetch(identity: FetchKey) -> bytes:
-        def request() -> bytes:
-            if http is None:
-                with client() as c:
-                    return _get(c, "company_tickers", TICKERS_URL, "sec.title_ticker_index", identity)
-            return _get(http, "company_tickers", TICKERS_URL, "sec.title_ticker_index", identity)
-
-        return request() if via is None else via.call("sec", "company_tickers", request, identity=identity)
-
-    rows = json.loads(gateway.fetch_once(company_tickers_key(), fetch).decode())
+    body = _fetch_sec(company_tickers_key(), "company_tickers", TICKERS_URL, "sec.title_ticker_index", http, via=via)
+    rows = json.loads(body.decode())
     index: dict[str, str] = {}
     for row in rows.values():
         ticker = str(row["ticker"]).upper()
@@ -126,17 +138,15 @@ def title_ticker_index(http: httpx.Client | None = None, *, via: gateway.SourceG
 
 def ticker_mic_index(http: httpx.Client | None = None, *, via: gateway.SourceGateway | None = None) -> dict[str, str]:
     """Map SEC company_tickers_exchange tickers to their primary listing MIC (`XNYS`, `XNAS`, `BATS`) (#1418)."""
-
-    def fetch(identity: FetchKey) -> bytes:
-        def request() -> bytes:
-            if http is None:
-                with client() as c:
-                    return _get(c, "company_tickers_exchange", TICKERS_EXCHANGE_URL, "sec.ticker_mic_index", identity)
-            return _get(http, "company_tickers_exchange", TICKERS_EXCHANGE_URL, "sec.ticker_mic_index", identity)
-
-        return request() if via is None else via.call("sec", "company_tickers_exchange", request, identity=identity)
-
-    payload = json.loads(gateway.fetch_once(company_tickers_exchange_key(), fetch).decode())
+    body = _fetch_sec(
+        company_tickers_exchange_key(),
+        "company_tickers_exchange",
+        TICKERS_EXCHANGE_URL,
+        "sec.ticker_mic_index",
+        http,
+        via=via,
+    )
+    payload = json.loads(body.decode())
     index: dict[str, str] = {}
     for row in payload.get("data") or []:
         if not isinstance(row, list) or len(row) < 4:
@@ -148,13 +158,6 @@ def ticker_mic_index(http: httpx.Client | None = None, *, via: gateway.SourceGat
         index[ticker_upper] = mic
         index[ticker_upper.replace("-", ".")] = mic
     return index
-
-
-def _get(http: httpx.Client, endpoint: str, url: str, caller: str, identity: FetchKey) -> bytes:
-    """One SEC request through the gateway and ledger; the verbatim body of a successful answer."""
-    resp = gateway.http_get(http, "sec", endpoint, url, identity=identity, caller=caller)
-    resp.raise_for_status()
-    return bytes(resp.content)
 
 
 def ticker_to_cik(ticker: str) -> int:
@@ -187,17 +190,11 @@ def fetch_company_submissions(cik: int, http: httpx.Client | None = None) -> dic
     This is issuer *registry* metadata, not reported financial data: it is what says
     an issuer is a depository institution rather than a manufacturer.
     """
-
-    def fetch(identity: FetchKey) -> bytes:
-        url = SUBMISSIONS_URL.format(cik=cik)
-        if http is None:
-            with client() as c:
-                return _get(c, "submissions", url, "sec.fetch_company_submissions", identity)
-        return _get(http, "submissions", url, "sec.fetch_company_submissions", identity)
-
     # The registered rule of the key keeps an answer that is no JSON object out of the index, so the retry of
     # the registry and the next caller ask SEC again (#1323).
-    body = gateway.fetch_once(submissions_key(cik), fetch)
+    body = _fetch_sec(
+        submissions_key(cik), "submissions", SUBMISSIONS_URL.format(cik=cik), "sec.fetch_company_submissions", http
+    )
     payload = json.loads(body.decode())
     if not isinstance(payload, dict):
         raise ValueError(f"the submissions of CIK {cik} are not a JSON object")
@@ -212,15 +209,13 @@ def fetch_company_facts_response(cik: int, http: httpx.Client | None = None) -> 
     describes our rendering rather than the vendor's document, and a reparse under a
     corrected mapping would be replaying our own output.
     """
-
-    def fetch(identity: FetchKey) -> bytes:
-        url = COMPANY_FACTS_URL.format(cik=cik)
-        if http is None:
-            with client() as c:
-                return _get(c, "companyfacts", url, "sec.fetch_company_facts_response", identity)
-        return _get(http, "companyfacts", url, "sec.fetch_company_facts_response", identity)
-
-    body = gateway.fetch_once(company_facts_key(cik), fetch)
+    body = _fetch_sec(
+        company_facts_key(cik),
+        "companyfacts",
+        COMPANY_FACTS_URL.format(cik=cik),
+        "sec.fetch_company_facts_response",
+        http,
+    )
     return body, json.loads(body.decode())
 
 

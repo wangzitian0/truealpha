@@ -5,10 +5,9 @@
   "apps/data-engine/scripts/capture_factor_matrix_samples.py:validate_capture": 28,
   "apps/data-engine/scripts/sweep_moomoo_fundamentals.py:main": 21,
   "apps/data-engine/src/data_engine/datahub/production_topt/holdings_enrichment.py:enrich_holding_identities": 22,
-  "apps/data-engine/src/data_engine/datahub/production_topt/sec_financial_adapter.py:build_route": 26,
-  "apps/data-engine/src/data_engine/datahub/standards/filing_extraction.py:extract_headcount": 25,
+  "apps/data-engine/src/data_engine/datahub/production_topt/sec_financial_adapter.py:build_route": 25,
+  "apps/data-engine/src/data_engine/datahub/standards/filing_extraction.py:extract_headcount": 23,
   "apps/data-engine/src/data_engine/quality/surface_proof.py:prove": 23,
-  "apps/llm-service/src/llm_service/mcp_server.py:PostgresEtfProfileReader.get_etf_profile": 43,
   "common/contracts/src/truealpha_contracts/access.py:authorize_access": 29,
   "common/contracts/src/truealpha_contracts/catalog.py:ResearchCatalogManifest.validate_and_identify": 29,
   "common/contracts/src/truealpha_contracts/datahub.py:DataHubInterfaceBundle.validate_closed_bundle": 84,
@@ -21,6 +20,5 @@
   "common/contracts/src/truealpha_contracts/service_demand.py:_validate_assertion_value": 23,
   "common/contracts/src/truealpha_contracts/strategy.py:GoldenExpectation.validate_outcome_consistency": 22,
   "common/contracts/src/truealpha_contracts/usage.py:StrategyUsageAudit.freeze_and_identify": 24,
-  "common/contracts/src/truealpha_contracts/usage.py:UsageFrequencySlice.freeze_and_identify": 24,
-  "common/runtime/src/truealpha_tools/vision_audit.py:audit_vision": 21
+  "common/contracts/src/truealpha_contracts/usage.py:UsageFrequencySlice.freeze_and_identify": 24
 }

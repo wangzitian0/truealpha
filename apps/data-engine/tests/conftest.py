@@ -10,10 +10,16 @@ rows request the `call_ledger` fixture by name.
 """
 
 import os
+import sys
+from pathlib import Path
 
 import pytest
 from data_engine.sources import gateway
 from data_engine.sources.landed_keys import MemoryLandedKeys
+
+_SUPPORT = str(Path(__file__).resolve().parent / "support")
+if _SUPPORT not in sys.path:
+    sys.path.insert(0, _SUPPORT)
 
 
 @pytest.fixture(autouse=True)
