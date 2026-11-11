@@ -31,7 +31,6 @@ const { mock } = (await import(bunTestModuleId)) as {
 };
 import { CardExportButton } from "../src/components/card-export-button";
 import {
-  FixtureStrategyRunRepository,
   GROWTH_CONVENTION_UNSOURCED_PREFIX,
   matchesRankingUniverse,
   normalizePegConvention,
@@ -44,6 +43,7 @@ import {
   type StrategyRunDecision,
   type StrategyRunReport,
 } from "../src/contracts/strategyRun";
+import { FixtureStrategyRunRepository } from "./support/fixture-strategy-run";
 import { UNIVERSES } from "../src/contracts/environmentContract.generated";
 import { universeWithRole } from "../src/contracts/universes";
 import { handleCardExportGet, XHS_CARD_HEIGHT, XHS_CARD_WIDTH } from "../src/server/cards/xhs-card";

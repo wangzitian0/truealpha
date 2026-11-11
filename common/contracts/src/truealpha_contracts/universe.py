@@ -1,8 +1,4 @@
-"""Immutable universe and point-in-time membership contracts.
-
-Universe references identify exact manifest content. Membership rows preserve both
-valid time and the transaction-time evidence needed for replay.
-"""
+"""Immutable universe and point-in-time membership contracts."""
 
 from __future__ import annotations
 
@@ -20,6 +16,10 @@ _SHA256_PATTERN = r"^[0-9a-f]{64}$"
 _MUTABLE_REFERENCE_MARKERS = frozenset({"current", "head", "latest"})
 
 
+class _FrozenModel(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+
 def _canonical_datetime(value: datetime) -> str:
     return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
@@ -27,8 +27,7 @@ def _canonical_datetime(value: datetime) -> str:
 def _require_stable_reference(value: str, field_name: str) -> str:
     if value != value.strip() or not re.fullmatch(STABLE_ID_PATTERN, value):
         raise ValueError(f"{field_name} must be a non-empty stable identifier")
-    tokens = {token for token in re.split(r"[^a-z0-9]+", value.lower()) if token}
-    mutable_markers = tokens & _MUTABLE_REFERENCE_MARKERS
+    mutable_markers = {token for token in re.split(r"[^a-z0-9]+", value.lower()) if token} & _MUTABLE_REFERENCE_MARKERS
     if mutable_markers:
         raise ValueError(f"{field_name} cannot use a mutable reference marker: {sorted(mutable_markers)}")
     return value
@@ -44,9 +43,7 @@ class SubjectKind(StrEnum):
     THEME = "theme"
 
 
-class SubjectRef(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
+class SubjectRef(_FrozenModel):
     kind: SubjectKind
     id: str
 
@@ -67,11 +64,7 @@ class UniverseClaimKind(StrEnum):
     SURVIVORSHIP_SAFE_REPLAY = "survivorship_safe_replay"
 
 
-class UniverseRef(BaseModel):
-    """Exact immutable reference to one universe manifest."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
+class UniverseRef(_FrozenModel):
     universe_id: str
     universe_version: str
     content_sha256: str = Field(pattern=_SHA256_PATTERN)
@@ -82,11 +75,7 @@ class UniverseRef(BaseModel):
         return _require_stable_reference(value, info.field_name)
 
 
-class UniverseManifest(BaseModel):
-    """Content-hashed definition of a fixed cohort or a PIT resolver."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
+class UniverseManifest(_FrozenModel):
     ref: UniverseRef
     definition_kind: UniverseDefinitionKind
     supported_claims: tuple[UniverseClaimKind, ...]
@@ -134,21 +123,20 @@ class UniverseManifest(BaseModel):
         effective_at: datetime,
         owner: str,
     ) -> str:
-        """Hash the complete semantic manifest payload in canonical order."""
-
         _require_aware(effective_at, "effective_at")
-        payload = {
-            "schema": "truealpha.universe-manifest.v1",
-            "universe_id": universe_id,
-            "universe_version": universe_version,
-            "definition_kind": UniverseDefinitionKind(definition_kind).value,
-            "supported_claims": sorted(UniverseClaimKind(item).value for item in supported_claims),
-            "membership_ids": sorted(membership_ids),
-            "resolver_version": resolver_version,
-            "effective_at": _canonical_datetime(effective_at),
-            "owner": owner,
-        }
-        return canonical_sha256(payload)
+        return canonical_sha256(
+            {
+                "schema": "truealpha.universe-manifest.v1",
+                "universe_id": universe_id,
+                "universe_version": universe_version,
+                "definition_kind": UniverseDefinitionKind(definition_kind).value,
+                "supported_claims": sorted(UniverseClaimKind(item).value for item in supported_claims),
+                "membership_ids": sorted(membership_ids),
+                "resolver_version": resolver_version,
+                "effective_at": _canonical_datetime(effective_at),
+                "owner": owner,
+            }
+        )
 
     @classmethod
     def create(
@@ -163,16 +151,11 @@ class UniverseManifest(BaseModel):
         resolver_version: str | None = None,
         supported_claims: tuple[UniverseClaimKind, ...] | None = None,
     ) -> UniverseManifest:
-        """Create a manifest and its exact content-addressed reference."""
-
         if supported_claims is None:
             supported_claims = (
                 (UniverseClaimKind.FIXED_COHORT_DESCRIPTION,)
                 if definition_kind is UniverseDefinitionKind.FIXED_COHORT
-                else (
-                    UniverseClaimKind.POINT_IN_TIME_MEMBERSHIP,
-                    UniverseClaimKind.SURVIVORSHIP_SAFE_REPLAY,
-                )
+                else (UniverseClaimKind.POINT_IN_TIME_MEMBERSHIP, UniverseClaimKind.SURVIVORSHIP_SAFE_REPLAY)
             )
         content_sha256 = cls.compute_content_sha256(
             universe_id=universe_id,
@@ -185,11 +168,7 @@ class UniverseManifest(BaseModel):
             owner=owner,
         )
         return cls(
-            ref=UniverseRef(
-                universe_id=universe_id,
-                universe_version=universe_version,
-                content_sha256=content_sha256,
-            ),
+            ref=UniverseRef(universe_id=universe_id, universe_version=universe_version, content_sha256=content_sha256),
             definition_kind=definition_kind,
             supported_claims=supported_claims,
             membership_ids=membership_ids,
@@ -216,13 +195,8 @@ class UniverseManifest(BaseModel):
                 raise ValueError("PIT universes cannot freeze membership_ids")
             if self.resolver_version is None:
                 raise ValueError("PIT universes require a resolver_version")
-            required_claims = {
-                UniverseClaimKind.POINT_IN_TIME_MEMBERSHIP,
-                UniverseClaimKind.SURVIVORSHIP_SAFE_REPLAY,
-            }
-            if set(claims) != required_claims:
+            if set(claims) != {UniverseClaimKind.POINT_IN_TIME_MEMBERSHIP, UniverseClaimKind.SURVIVORSHIP_SAFE_REPLAY}:
                 raise ValueError("PIT universes must explicitly support PIT and survivorship-safe claims")
-
         expected = self.compute_content_sha256(
             universe_id=self.ref.universe_id,
             universe_version=self.ref.universe_version,
@@ -238,11 +212,7 @@ class UniverseManifest(BaseModel):
         return self
 
 
-class UniverseMembership(BaseModel):
-    """Append-only membership evidence selected by a fixed cohort or PIT resolver."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
+class UniverseMembership(_FrozenModel):
     membership_id: str
     universe_id: str
     subject: SubjectRef

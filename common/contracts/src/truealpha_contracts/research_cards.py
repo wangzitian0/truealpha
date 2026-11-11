@@ -1,8 +1,4 @@
-"""Versioned card schemas and deterministic renderer from `ResearchReport` (#372, #44).
-
-`build_card` is a pure transform from an in-memory `ResearchReport` to a `ResearchCard`:
-it performs no mart query and no factor or cross-row computation.
-"""
+"""Versioned card schemas and deterministic renderer from `ResearchReport` (#372, #44)."""
 
 from __future__ import annotations
 
@@ -82,12 +78,11 @@ class CardPreset(_StrictFrozenModel):
     chip_bg: str = Field(min_length=1)
 
 
-_PRESET_SPECS: Final[tuple[tuple[str, CardStyle, CardLayout, CardPalette, str, str, str, str, str, str, str], ...]] = (
+_PRESET_ROWS: Final[tuple[tuple[str, str, str, str, str, str, str, str, str, str], ...]] = (
     (
         "bold",
-        CardStyle.BOLD,
-        CardLayout.SPARSE,
-        CardPalette.NEON,
+        "sparse",
+        "neon",
         "radial-gradient(circle at 85% 12%, #311042 0%, #140C1C 55%, #0B0711 100%)",
         "#191126",
         "#F5F5F7",
@@ -96,76 +91,15 @@ _PRESET_SPECS: Final[tuple[tuple[str, CardStyle, CardLayout, CardPalette, str, s
         "#00F5FF",
         "#120B1D",
     ),
-    (
-        "screen-print",
-        CardStyle.SCREEN_PRINT,
-        CardLayout.LIST,
-        CardPalette.EARTH,
-        "#F5E6D0",
-        "#FFFDF9",
-        "#121212",
-        "#4A3F35",
-        "#E8751A",
-        "#121212",
-        "#EDE0CC",
-    ),
-    (
-        "notion",
-        CardStyle.NOTION,
-        CardLayout.LIST,
-        CardPalette.MACARON,
-        "#FFFFFF",
-        "#FBFBFA",
-        "#37352F",
-        "#6B6860",
-        "#2F7D32",
-        "#E3E2DE",
-        "#F7F6F3",
-    ),
-    (
-        "minimal",
-        CardStyle.MINIMAL,
-        CardLayout.COMPARISON,
-        CardPalette.COOL,
-        "#FAFAFA",
-        "#FFFFFF",
-        "#111111",
-        "#555555",
-        "#0A6847",
-        "#111111",
-        "#F2F2F2",
-    ),
-    (
-        "study-notes",
-        CardStyle.STUDY_NOTES,
-        CardLayout.DENSE,
-        CardPalette.WARM,
-        "#FAF6EE",
-        "#FFFFFF",
-        "#222222",
-        "#5C5852",
-        "#1E3A5F",
-        "#1E3A5F",
-        "#F3EDE0",
-    ),
-    (
-        "retro",
-        CardStyle.RETRO,
-        CardLayout.BALANCED,
-        CardPalette.WARM,
-        "#F2E6D0",
-        "#FAF3E6",
-        "#2A1F18",
-        "#634F40",
-        "#2E6B4E",
-        "#2A1F18",
-        "#E8D8BC",
-    ),
+    ("screen-print", "list", "earth", "#F5E6D0", "#FFFDF9", "#121212", "#4A3F35", "#E8751A", "#121212", "#EDE0CC"),
+    ("notion", "list", "macaron", "#FFFFFF", "#FBFBFA", "#37352F", "#6B6860", "#2F7D32", "#E3E2DE", "#F7F6F3"),
+    ("minimal", "comparison", "cool", "#FAFAFA", "#FFFFFF", "#111111", "#555555", "#0A6847", "#111111", "#F2F2F2"),
+    ("study-notes", "dense", "warm", "#FAF6EE", "#FFFFFF", "#222222", "#5C5852", "#1E3A5F", "#1E3A5F", "#F3EDE0"),
+    ("retro", "balanced", "warm", "#F2E6D0", "#FAF3E6", "#2A1F18", "#634F40", "#2E6B4E", "#2A1F18", "#E8D8BC"),
     (
         "chalkboard",
-        CardStyle.CHALKBOARD,
-        CardLayout.QUADRANT,
-        CardPalette.MONOCHROME,
+        "quadrant",
+        "monochrome",
         "#1E3226",
         "#263D2F",
         "#F2EFE9",
@@ -174,37 +108,12 @@ _PRESET_SPECS: Final[tuple[tuple[str, CardStyle, CardLayout, CardPalette, str, s
         "#5E7A68",
         "#18281E",
     ),
-    (
-        "pop",
-        CardStyle.POP,
-        CardLayout.QUADRANT,
-        CardPalette.VIVID,
-        "#FFE600",
-        "#FFFFFF",
-        "#000000",
-        "#333333",
-        "#FF0055",
-        "#000000",
-        "#FFF9B0",
-    ),
-    (
-        "sketch-notes",
-        CardStyle.SKETCH_NOTES,
-        CardLayout.FLOW,
-        CardPalette.WARM,
-        "#FCF9F2",
-        "#FFFFFF",
-        "#2B2927",
-        "#5C5852",
-        "#E85D04",
-        "#2B2927",
-        "#F4EFE6",
-    ),
+    ("pop", "quadrant", "vivid", "#FFE600", "#FFFFFF", "#000000", "#333333", "#FF0055", "#000000", "#FFF9B0"),
+    ("sketch-notes", "flow", "warm", "#FCF9F2", "#FFFFFF", "#2B2927", "#5C5852", "#E85D04", "#2B2927", "#F4EFE6"),
     (
         "fresh",
-        CardStyle.FRESH,
-        CardLayout.MINDMAP,
-        CardPalette.PASTEL,
+        "mindmap",
+        "pastel",
         "linear-gradient(160deg, #E8F8F5 0%, #F4FBF7 55%, #FFFFFF 100%)",
         "#FFFFFF",
         "#1B3B2B",
@@ -218,9 +127,9 @@ _PRESET_SPECS: Final[tuple[tuple[str, CardStyle, CardLayout, CardPalette, str, s
 CARD_PRESETS: Final[dict[str, CardPreset]] = {
     pid: CardPreset(
         preset_id=pid,
-        style=style,
-        layout=layout,
-        palette=palette,
+        style=CardStyle(pid),
+        layout=CardLayout(layout),
+        palette=CardPalette(palette),
         bg_css=bg,
         surface_bg=sbg,
         fg=fg,
@@ -229,7 +138,7 @@ CARD_PRESETS: Final[dict[str, CardPreset]] = {
         border=border,
         chip_bg=chip,
     )
-    for pid, style, layout, palette, bg, sbg, fg, mute, accent, border, chip in _PRESET_SPECS
+    for pid, layout, palette, bg, sbg, fg, mute, accent, border, chip in _PRESET_ROWS
 }
 
 
@@ -318,6 +227,13 @@ _OPTIONAL_CARD_FIELDS: Final[tuple[str, ...]] = (
 )
 
 
+def _drop_none_keys(data: dict[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
+    for key in keys:
+        if data.get(key) is None:
+            data.pop(key, None)
+    return data
+
+
 class CardSubject(_StrictFrozenModel):
     subject_id: str = Field(min_length=1)
     display_name: str = Field(min_length=1)
@@ -332,11 +248,7 @@ class CardSubject(_StrictFrozenModel):
 
     @model_serializer(mode="wrap")
     def _omit_absent_optional_fields(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
-        data: dict[str, Any] = handler(self)
-        for key in _OPTIONAL_SUBJECT_FIELDS:
-            if data.get(key) is None:
-                data.pop(key, None)
-        return data
+        return _drop_none_keys(handler(self), _OPTIONAL_SUBJECT_FIELDS)
 
 
 class ResearchCard(_StrictFrozenModel):
@@ -358,11 +270,7 @@ class ResearchCard(_StrictFrozenModel):
 
     @model_serializer(mode="wrap")
     def _omit_absent_optional_fields(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
-        data: dict[str, Any] = handler(self)
-        for key in _OPTIONAL_CARD_FIELDS:
-            if data.get(key) is None:
-                data.pop(key, None)
-        return data
+        return _drop_none_keys(handler(self), _OPTIONAL_CARD_FIELDS)
 
     @model_validator(mode="after")
     def _identify(self) -> ResearchCard:
@@ -482,24 +390,9 @@ def _extract_subject_strategy_fields(subject: Any) -> dict[str, str]:
     extracted: dict[str, str] = {}
     for section in subject.sections:
         for res in section.results:
-            if res.value and res.label in (
-                "outcome",
-                "tier",
-                "target_price_to_gross_profit",
-                "target_price_to_sales",
-            ):
+            if res.value and res.label in ("outcome", "tier", "target_price_to_gross_profit", "target_price_to_sales"):
                 extracted[res.label] = res.value
     return extracted
-
-
-def _is_subject_excluded(subject: Any, outcome_val: str | None) -> bool:
-    if outcome_val == "excluded":
-        return True
-    if not subject.sections:
-        return False
-    return all(
-        s.availability in (AvailabilityStatus.EXCLUDED, AvailabilityStatus.LOW_CONFIDENCE) for s in subject.sections
-    )
 
 
 def build_strategy_context_from_report(
@@ -529,7 +422,9 @@ def build_strategy_context_from_report(
             ceilings[tier_val] = target_pgp or target_ps or ""
         if outcome_val in counts:
             counts[outcome_val] += 1
-        elif _is_subject_excluded(subject, outcome_val):
+        elif subject.sections and all(
+            s.availability in (AvailabilityStatus.EXCLUDED, AvailabilityStatus.LOW_CONFIDENCE) for s in subject.sections
+        ):
             counts["excluded"] += 1
     return StrategyContext(
         strategy_id=strategy_id,
@@ -560,8 +455,7 @@ def enrich_card_metadata(
     for sub in card.subjects:
         rep_sub = report_by_id.get(sub.subject_id)
         ticker = sub.ticker or (sub.display_name.split(" · ", 1)[0].strip() if " · " in sub.display_name else None)
-        outcome = sub.outcome
-        exclusion_reason = sub.exclusion_reason
+        outcome, exclusion_reason = sub.outcome, sub.exclusion_reason
         if rep_sub is not None:
             for sec in rep_sub.sections:
                 if sec.section_kind is ReportSectionKind.STRATEGY_SUMMARY:
@@ -653,12 +547,10 @@ def paginate_card_series(
 
 
 def render_card_json(card: ResearchCard) -> str:
-    payload = card.model_dump(mode="json")
-    return json.dumps(payload, sort_keys=True, indent=2, ensure_ascii=True) + "\n"
+    return json.dumps(card.model_dump(mode="json"), sort_keys=True, indent=2, ensure_ascii=True) + "\n"
 
 
 XHS_CARD_PROMPT_VERSION: Literal["xhs-card-html:v1"] = "xhs-card-html:v1"
-
 XHS_CARD_INSTRUCTIONS: str = (
     "You are TrueAlpha's Xiaohongshu (RED) visual editorial card designer.\n"
     "Generate a SINGLE self-contained HTML5 document (`<!DOCTYPE html><html>...</html>`) "
@@ -715,10 +607,8 @@ def _compact_card_for_prompt(card: ResearchCard) -> dict[str, object]:
 def build_card_prompt(card: ResearchCard) -> str:
     card_json = json.dumps(_compact_card_for_prompt(card), indent=2, ensure_ascii=False)
     return (
-        f"{XHS_CARD_INSTRUCTIONS}\n\n"
-        f"PROMPT_VERSION: {XHS_CARD_PROMPT_VERSION}\n"
-        f"REQUIRED_DIMENSIONS: {XHS_CARD_WIDTH_PX}x{XHS_CARD_HEIGHT_PX}\n"
-        f"INPUT_RESEARCH_CARD_JSON:\n{card_json}"
+        f"{XHS_CARD_INSTRUCTIONS}\n\nPROMPT_VERSION: {XHS_CARD_PROMPT_VERSION}\n"
+        f"REQUIRED_DIMENSIONS: {XHS_CARD_WIDTH_PX}x{XHS_CARD_HEIGHT_PX}\nINPUT_RESEARCH_CARD_JSON:\n{card_json}"
     )
 
 
@@ -775,7 +665,6 @@ def _verify_html_envelope(card: ResearchCard, html: str, normalized_text: str) -
         violations.append("forbidden_script_or_event_handler")
     if "http://" in lower or "https://" in lower:
         violations.append("forbidden_external_url")
-
     cutoff_date = card.cutoff_at.date().isoformat()
     if cutoff_date not in html and card.cutoff_at.isoformat() not in html:
         violations.append(f"missing_cutoff:{cutoff_date}")
@@ -802,8 +691,9 @@ def _verify_metric_html(subject_id: str, metric: ResultValue, html: str, normali
     violations: list[str] = []
     for text, kind in required_pairs:
         if text is not None and not _contains_text(html, text, normalized_text):
-            suffix = f":{text}" if kind != "label" else ""
-            violations.append(f"missing_metric_{kind}:{subject_id}:{metric.label}{suffix}")
+            violations.append(
+                f"missing_metric_{kind}:{subject_id}:{metric.label}{f':{text}' if kind != 'label' else ''}"
+            )
     return violations
 
 
@@ -878,10 +768,8 @@ def _render_value(result: ResultValue) -> str:
         return "—"
     if result.currency is not None and result.unit is not None:
         return _html_escape(f"{result.value} {result.currency} ({result.unit})")
-    if result.currency is not None:
-        return _html_escape(f"{result.value} {result.currency}")
-    if result.unit is not None:
-        return _html_escape(f"{result.value} {result.unit}")
+    if result.currency is not None or result.unit is not None:
+        return _html_escape(f"{result.value} {result.currency or result.unit}")
     return _html_escape(result.value)
 
 
@@ -901,13 +789,11 @@ def _render_metric_card(result: ResultValue, *, compact: bool = False) -> str:
     if compact:
         return f'<div class="metric-tile compact"><div class="metric-label-zh">{zh_label}</div><div class="metric-value">{val}</div></div>'
     conf = _html_escape("—" if result.confidence is None else str(result.confidence))
-    period = _html_escape(result.period or "—")
     avail = result.availability.value
     return (
         f'<div class="metric-tile"><div class="metric-top"><span class="metric-label-zh">{zh_label}</span>'
-        f'<span class="pill availability-{avail}">{avail}</span></div>'
-        f'<div class="metric-value">{val}</div>'
-        f'<div class="metric-meta"><span>截面: {period}</span><span>置信度: {conf}</span></div></div>'
+        f'<span class="pill availability-{avail}">{avail}</span></div><div class="metric-value">{val}</div>'
+        f'<div class="metric-meta"><span>截面: {_html_escape(result.period or "—")}</span><span>置信度: {conf}</span></div></div>'
     )
 
 
@@ -920,8 +806,7 @@ def _render_subject(subject: CardSubject, *, compact: bool = False) -> str:
     )
     outcome_badge = ""
     if subject.outcome:
-        zh_outcome = _OUTCOME_LABELS_ZH.get(subject.outcome, subject.outcome)
-        outcome_badge = f'<span class="pill outcome-pill">{_html_escape(zh_outcome)}</span>'
+        outcome_badge = f'<span class="pill outcome-pill">{_html_escape(_OUTCOME_LABELS_ZH.get(subject.outcome, subject.outcome))}</span>'
     elif subject.exclusion_reason:
         outcome_badge = f'<span class="pill outcome-pill">剔除: {_html_escape(subject.exclusion_reason)}</span>'
     visible_metrics = subject.metrics[:4] if compact else subject.metrics[:6]
@@ -936,8 +821,7 @@ def _render_subject(subject: CardSubject, *, compact: bool = False) -> str:
         f'<div class="subject-badges">{outcome_badge}'
         f'<span class="pill claim-class-{subject.claim_class.value}">{subject.claim_class.value}</span>'
         f'<span class="pill availability-{subject.availability.value}">{subject.availability.value}</span>'
-        f"</div></div>{causal_html}"
-        f'<div class="metrics-grid{cls_suffix}">{tiles}</div></section>'
+        f"</div></div>{causal_html}<div class='metrics-grid{cls_suffix}'>{tiles}</div></section>"
     )
 
 
@@ -952,11 +836,10 @@ def _subject_evidence_line(subject: CardSubject) -> str:
         parts.append("causal=scenario_only")
     for metric in subject.metrics:
         trace_prefix = metric.trace.reference_id[:16] if metric.trace is not None else "—"
-        period_str = _html_escape(metric.period or "—")
-        ver_str = _html_escape(metric.factor_version or "—")
-        conf_str = _html_escape(str(metric.confidence) if metric.confidence is not None else "—")
         parts.append(
-            f"{_html_escape(metric.label)}={_render_value(metric)}[p={period_str},v={ver_str},c={conf_str},t={_html_escape(trace_prefix)}]"
+            f"{_html_escape(metric.label)}={_render_value(metric)}"
+            f"[p={_html_escape(metric.period or '—')},v={_html_escape(metric.factor_version or '—')},"
+            f"c={_html_escape(str(metric.confidence) if metric.confidence is not None else '—')},t={_html_escape(trace_prefix)}]"
         )
     return " · ".join(parts)
 
@@ -967,7 +850,7 @@ def _resolve_preset(card: ResearchCard, preset: str | CardPreset | None) -> Card
     key = preset or card.style_preset
     if key and key in CARD_PRESETS:
         return CARD_PRESETS[key]
-    default_by_kind: dict[CardKind, str] = {
+    default_by_kind = {
         CardKind.COMPANY: "study-notes",
         CardKind.COMPARISON: "minimal",
         CardKind.RANKING: "screen-print",
@@ -983,12 +866,11 @@ def _headline_for_card(card: ResearchCard) -> str:
         return card.title
     lead_names = "、".join(s.display_name.split(" · ")[0] for s in card.subjects[:3])
     suffix = f" 等 {len(card.subjects)} 家" if len(card.subjects) > 3 else ""
-    prefix_map = {
+    prefix = {
         CardKind.RANKING: "估值折价排位",
         CardKind.COMPARISON: "多票同截面比价",
         CardKind.STRATEGY_SUMMARY: "策略过筛结论",
-    }
-    prefix = prefix_map.get(card.card_kind, card.card_kind.value.upper())
+    }.get(card.card_kind, card.card_kind.value.upper())
     return f"{prefix}：{lead_names}{suffix}"
 
 
@@ -997,13 +879,11 @@ def _render_strategy_context_bar(ctx: StrategyContext | None) -> str:
         return ""
     ceilings_str = _html_escape(" / ".join(f"{k}:{v}x" for k, v in ctx.tier_ceilings))
     return (
-        '<div class="strategy-bar">'
-        f"<span>候选池 <b>{ctx.total_universe_count}</b> 家</span>"
+        f'<div class="strategy-bar"><span>候选池 <b>{ctx.total_universe_count}</b> 家</span>'
         f"<span>入选 <b>{ctx.selected_count}</b> 家 (Top {ctx.selection_count})</span>"
         f"<span>候补 <b>{ctx.ranked_beyond_selection_count}</b> 家</span>"
         f"<span>超上限淘汰 <b>{ctx.rejected_above_band_count}</b> 家</span>"
-        f"<span>缺数据剔除 <b>{ctx.excluded_count}</b> 家</span>"
-        f"<span>分档上限: {ceilings_str}</span></div>"
+        f"<span>缺数据剔除 <b>{ctx.excluded_count}</b> 家</span><span>分档上限: {ceilings_str}</span></div>"
     )
 
 
@@ -1053,8 +933,7 @@ def render_card_html(card: ResearchCard, *, preset: str | CardPreset | None = No
     compact = len(visible_subjects) >= 3
     subjects_html = "".join(_render_subject(subject, compact=compact) for subject in visible_subjects)
     overflow_note = (
-        f'<div class="series-note">本页展示前 {len(visible_subjects)} / 共 {len(card.subjects)} 家标的 · '
-        "完整明细已写入底部溯源签名并与分页序列对齐</div>"
+        f'<div class="series-note">本页展示前 {len(visible_subjects)} / 共 {len(card.subjects)} 家标的 · 完整明细已写入底部溯源签名并与分页序列对齐</div>'
         if len(card.subjects) > len(visible_subjects)
         else ""
     )

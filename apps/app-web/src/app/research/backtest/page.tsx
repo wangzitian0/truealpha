@@ -17,16 +17,12 @@ export default async function BacktestListPage() {
 
   return (
     <section aria-labelledby="backtest-list-heading" className="space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <h1 id="backtest-list-heading" className="text-2xl font-bold tracking-tight">
-            Portfolio Backtests
-          </h1>
-          <p className="mt-1 text-sm text-gray-400">
-            Quarter-end backtests of the core strategy on point-in-time inputs. Each run states its price basis
-            and its claim ceiling.
-          </p>
-        </div>
+      <div>
+        <h1 id="backtest-list-heading" className="text-2xl font-bold tracking-tight">Portfolio Backtests</h1>
+        <p className="mt-1 text-sm text-gray-400">
+          Quarter-end backtests of the core strategy on point-in-time inputs. Each run states its price basis
+          and its claim ceiling.
+        </p>
       </div>
 
       {errorMsg && (
@@ -47,15 +43,12 @@ export default async function BacktestListPage() {
           <table className="w-full text-left text-sm">
             <thead className="border-b border-border bg-muted/40 text-xs font-semibold uppercase text-gray-400">
               <tr>
-                <th className="px-4 py-3">Strategy</th>
-                <th className="px-4 py-3">Universe</th>
-                <th className="px-4 py-3">Time Horizon</th>
-                <th className="px-4 py-3">Basis</th>
-                <th className="px-4 py-3 text-right">CAGR</th>
-                <th className="px-4 py-3 text-right">Benchmark CAGR</th>
-                <th className="px-4 py-3 text-right">Sharpe (rf 0)</th>
-                <th className="px-4 py-3 text-right">Max DD</th>
-                <th className="px-4 py-3 text-right">Turnover</th>
+                {["Strategy", "Universe", "Time Horizon", "Basis"].map((h) => (
+                  <th key={h} className="px-4 py-3">{h}</th>
+                ))}
+                {["CAGR", "Benchmark CAGR", "Sharpe (rf 0)", "Max DD", "Turnover"].map((h) => (
+                  <th key={h} className="px-4 py-3 text-right">{h}</th>
+                ))}
                 <th className="px-4 py-3 text-center">Status</th>
                 <th className="px-4 py-3 text-right">Action</th>
               </tr>
@@ -68,9 +61,7 @@ export default async function BacktestListPage() {
                     <div className="text-xs text-gray-500">{r.strategy_version}</div>
                   </td>
                   <td className="px-4 py-3 font-mono text-xs text-gray-400">{r.universe_id}</td>
-                  <td className="px-4 py-3 text-xs text-gray-400">
-                    {r.start_date} ~ {r.end_date}
-                  </td>
+                  <td className="px-4 py-3 text-xs text-gray-400">{r.start_date} ~ {r.end_date}</td>
                   <td className="px-4 py-3 font-mono text-xs text-gray-400">
                     <div data-price-basis={r.price_basis ?? ""}>{r.price_basis ?? "not recorded"}</div>
                     <div className="text-amber-400" data-claim-ceiling={r.claim_ceiling ?? ""}>
@@ -81,34 +72,19 @@ export default async function BacktestListPage() {
                       <BacktestLimitations run={r} />
                     </details>
                   </td>
-                  <td
-                    className="px-4 py-3 text-right font-mono font-medium text-emerald-400"
-                    title={r.cagr_monthly !== null ? String(r.cagr_monthly) : undefined}
-                  >
+                  <td className="px-4 py-3 text-right font-mono font-medium text-emerald-400" title={r.cagr_monthly !== null ? String(r.cagr_monthly) : undefined}>
                     {formatCell(formatPercentFromFraction(r.cagr_monthly))}
                   </td>
-                  <td
-                    className="px-4 py-3 text-right font-mono text-gray-300"
-                    title={r.benchmark_cagr !== null ? String(r.benchmark_cagr) : undefined}
-                  >
+                  <td className="px-4 py-3 text-right font-mono text-gray-300" title={r.benchmark_cagr !== null ? String(r.benchmark_cagr) : undefined}>
                     {formatCell(formatPercentFromFraction(r.benchmark_cagr))}
                   </td>
-                  <td
-                    className="px-4 py-3 text-right font-mono"
-                    title={r.sharpe_daily !== null ? String(r.sharpe_daily) : undefined}
-                  >
+                  <td className="px-4 py-3 text-right font-mono" title={r.sharpe_daily !== null ? String(r.sharpe_daily) : undefined}>
                     {formatCell(formatRatio(r.sharpe_daily))}
                   </td>
-                  <td
-                    className="px-4 py-3 text-right font-mono text-rose-400"
-                    title={r.max_dd_daily !== null ? String(r.max_dd_daily) : undefined}
-                  >
+                  <td className="px-4 py-3 text-right font-mono text-rose-400" title={r.max_dd_daily !== null ? String(r.max_dd_daily) : undefined}>
                     {formatCell(formatPercentFromFraction(r.max_dd_daily))}
                   </td>
-                  <td
-                    className="px-4 py-3 text-right font-mono text-gray-400"
-                    title={r.turnover_monthly !== null ? String(r.turnover_monthly) : undefined}
-                  >
+                  <td className="px-4 py-3 text-right font-mono text-gray-400" title={r.turnover_monthly !== null ? String(r.turnover_monthly) : undefined}>
                     {formatCell(formatRatio(r.turnover_monthly))}
                   </td>
                   <td className="px-4 py-3 text-center">
@@ -117,8 +93,8 @@ export default async function BacktestListPage() {
                         r.status === "succeeded"
                           ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
                           : r.status === "failed"
-                          ? "bg-rose-500/10 text-rose-400 border border-rose-500/20"
-                          : "bg-amber-500/10 text-amber-400 border border-amber-500/20"
+                            ? "bg-rose-500/10 text-rose-400 border border-rose-500/20"
+                            : "bg-amber-500/10 text-amber-400 border border-amber-500/20"
                       }`}
                     >
                       {r.status}

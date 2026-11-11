@@ -1,15 +1,5 @@
 /**
- * #494: the L0–L5 quality funnel loader (init.md §2.1's layers as one
- * diagnostic). Administrator-only. Each layer reports ONE governing metric
- * and a status; the funnel's SHAPE is the diagnosis — the layer where the
- * bar narrows is where data is dying. Sources:
- *
- *   L0 sources   — per-source fetches today (raw.fetches via app_ops_reader)
- *   L1 capture   — persisted quality report (availability/freshness)
- *   L2 facts     — mart.strategy_input_coverage (#496 metric)
- *   L3 factors   — GPPE availability per listing (mart read)
- *   L4 strategy  — decision waterfall from the latest run
- *   L5 consume   — governed pointer age (mart.served_head)
+ * Administrator L1–L5 quality funnel loader.
  */
 
 import { withMartReadonly } from "@/server/mart/db";
@@ -17,7 +7,7 @@ import { MartStrategyRunRepository } from "@/server/mart/strategy-run-repository
 import { MartToptGppeRepository, type MartClientLike } from "@/server/mart/topt-gppe-repository";
 import type { ToptGppeRepositoryLike } from "@/server/topt-quality";
 import type { AccessContext } from "@/contracts/strategyRun";
-import { resolveHeadFreshness, type HeadFreshness } from "@/contracts/serviceObjectives";
+import { resolveHeadFreshness } from "@/contracts/serviceObjectives";
 import { idPrefixLikeOfRole } from "@/contracts/universes";
 import type { ReadState } from "@/server/read-state";
 
@@ -25,7 +15,7 @@ export interface FunnelLayer {
   key: string;
   title: string;
   headline: string;
-  ratio: number | null; // 0..1 drives the bar width; null renders full-width muted
+  ratio: number | null;
   status: "ok" | "warn" | "crit" | "muted";
   detail: string;
 }
@@ -35,8 +25,7 @@ export interface FunnelPrincipal {
   principalKind: "member" | "administrator" | "service";
 }
 
-export type FunnelOutcome =
-  ReadState<{ runId: string; layers: FunnelLayer[] }>;
+export type FunnelOutcome = ReadState<{ runId: string; layers: FunnelLayer[] }>;
 
 export interface FunnelDeps {
   gppeRepo?: ToptGppeRepositoryLike;
@@ -50,6 +39,12 @@ const MIN_BAR_RATIO = 0.04;
 function num(value: unknown): number | null {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function completenessStatus(done: number, total: number): FunnelLayer["status"] {
+  if (total === 0) return "muted";
+  if (done === total) return "ok";
+  return done / total >= 0.75 ? "warn" : "crit";
 }
 
 export async function loadQualityFunnel(
@@ -77,8 +72,6 @@ export async function loadQualityFunnel(
       );
       const ptr = await client.query(
         "select environment, universe_id, age_hours as age, freshness, limit_hours, availability " +
-          // Scope L5 to the governed TOPT head (matching MartToptGppeRepository.POINTER_HEAD_SQL).
-          // Without a WHERE filter, `order by universe_id` picked `canary-topt3` first (#1363).
           "from mart.served_head " +
           "where coalesce(run_id, head_run_id) = $1 or universe_id like $2 " +
           "order by (coalesce(run_id, head_run_id) = $1) desc, advanced_at desc limit 1",
@@ -102,10 +95,7 @@ export async function loadQualityFunnel(
       ] as const;
     });
 
-    const strategy = await strategyRepo.getLatest(
-      "large_model_value_v0",
-      principal.context,
-    );
+    const strategy = await strategyRepo.getLatest("large_model_value_v0", principal.context);
     const decisions = "decisions" in strategy ? strategy.decisions : [];
     const selected = decisions.filter((d) => d.outcome === "selected").length;
     const ranked = decisions.filter((d) => d.rank !== null).length;
@@ -116,9 +106,7 @@ export async function loadQualityFunnel(
 
     const pointerAgeHours = pointerHead?.ageHours ?? null;
     const pointerLimitHours =
-      pointerHead?.limitHours && pointerHead.limitHours > 0
-        ? pointerHead.limitHours
-        : DEFAULT_POINTER_LIMIT_HOURS;
+      pointerHead?.limitHours && pointerHead.limitHours > 0 ? pointerHead.limitHours : DEFAULT_POINTER_LIMIT_HOURS;
     const pointerStatus: FunnelLayer["status"] =
       pointerHead === null || pointerAgeHours === null || pointerHead.availability === "unavailable"
         ? "crit"
@@ -147,14 +135,7 @@ export async function loadQualityFunnel(
             ? "no coverage rows yet"
             : `${coverage.complete} / ${coverage.total} issuers input-complete`,
         ratio: coverage.total === 0 ? null : coverage.complete / coverage.total,
-        status:
-          coverage.total === 0
-            ? "muted"
-            : coverage.complete === coverage.total
-              ? "ok"
-              : coverage.complete / coverage.total >= 0.75
-                ? "warn"
-                : "crit",
+        status: completenessStatus(coverage.complete, coverage.total),
         detail: "missing_keys per issuer in mart.strategy_input_coverage (#496 fix-list)",
       },
       {
@@ -162,14 +143,7 @@ export async function loadQualityFunnel(
         title: "Factors",
         headline: `GPPE ${gppeAvailable} / ${gppe.cells.length} listings`,
         ratio: gppe.cells.length === 0 ? null : gppeAvailable / gppe.cells.length,
-        status:
-          gppe.cells.length === 0
-            ? "muted"
-            : gppeAvailable === gppe.cells.length
-              ? "ok"
-              : gppeAvailable / gppe.cells.length >= 0.75
-                ? "warn"
-                : "crit",
+        status: completenessStatus(gppeAvailable, gppe.cells.length),
         detail: "bounded by L2 — per-listing table below",
       },
       {

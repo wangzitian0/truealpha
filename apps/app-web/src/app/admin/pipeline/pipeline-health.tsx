@@ -1,9 +1,3 @@
-/**
- * #1466: the /admin/pipeline view. A pure function of the loader outcome and the clock, so a test renders
- * every state, and the route walk (e2e/walk-tree.mjs) is held to the markers and sentences that this file
- * prints (tests/admin-pipeline-page.test.ts).
- */
-
 import { formatShortSha } from "@/client/format";
 import { ReadStateNotice } from "@/components/read-state";
 import type { PipelineOutcome, PipelineVerdict } from "@/server/admin/pipeline";
@@ -24,10 +18,6 @@ function formatDuration(seconds: number | null): string {
   return minutes < 60 ? `${minutes.toFixed(1)}m` : `${(minutes / 60).toFixed(1)}h`;
 }
 
-function rate(value: number | null): string {
-  return value === null ? "no run" : `${Math.round(value * 100)}%`;
-}
-
 function verdictLabel(verdict: PipelineVerdict | null): "ok" | "red" | "pending" | "none" {
   if (verdict === null) return "none";
   if (verdict.ok === null) return "pending";
@@ -41,17 +31,7 @@ const VERDICT_STYLE = {
   none: "text-gray-400",
 } as const;
 
-function VerdictCard({
-  title,
-  check,
-  verdict,
-  unreadable,
-}: {
-  title: string;
-  check: string;
-  verdict: PipelineVerdict | null;
-  unreadable: boolean;
-}) {
+function VerdictCard({ title, check, verdict, unreadable }: { title: string; check: string; verdict: PipelineVerdict | null; unreadable: boolean }) {
   const label = verdictLabel(verdict);
   return (
     <div className="rounded-lg border border-border bg-card px-4 py-3">
@@ -70,9 +50,7 @@ export function PipelineHealth({ outcome, now }: { outcome: PipelineOutcome; now
   if (outcome.kind !== "ready") {
     return (
       <section aria-labelledby="pipeline-heading" className="space-y-4">
-        <h1 id="pipeline-heading" className="text-2xl font-bold tracking-tight">
-          Pipeline
-        </h1>
+        <h1 id="pipeline-heading" className="text-2xl font-bold tracking-tight">Pipeline</h1>
         <ReadStateNotice
           state={outcome}
           overrides={{
@@ -86,13 +64,22 @@ export function PipelineHealth({ outcome, now }: { outcome: PipelineOutcome; now
   }
 
   const { windowDays, unreadable, jobs, jobRunHealth, runtimeShape, release, appGitSha } = outcome.data;
+  const headers = [
+    "Job",
+    "Success rate",
+    "Runs",
+    "Derived bound",
+    "Longest success",
+    "Ended by bound",
+    "Last success",
+    "Last failure",
+    "First error line of the last failure",
+  ];
 
   return (
     <section aria-labelledby="pipeline-heading" className="space-y-6">
       <div>
-        <h1 id="pipeline-heading" className="text-2xl font-bold tracking-tight">
-          Pipeline
-        </h1>
+        <h1 id="pipeline-heading" className="text-2xl font-bold tracking-tight">Pipeline</h1>
         <p className="mt-2 text-sm text-gray-500">
           Finished runs (success or failure) of every Dagster job in the last {windowDays} days, from{" "}
           <span className="font-mono">dagster.runs</span>. The nightly verdict{" "}
@@ -129,12 +116,7 @@ export function PipelineHealth({ outcome, now }: { outcome: PipelineOutcome; now
       ).map(
         ([part, words, reason]) =>
           reason !== null && (
-            <p
-              key={part}
-              role="status"
-              className="rounded-lg border border-amber-500/40 bg-card p-3 text-sm text-amber-300"
-              data-unreadable={part}
-            >
+            <p key={part} role="status" className="rounded-lg border border-amber-500/40 bg-card p-3 text-sm text-amber-300" data-unreadable={part}>
               {words}: {reason}
             </p>
           ),
@@ -145,15 +127,9 @@ export function PipelineHealth({ outcome, now }: { outcome: PipelineOutcome; now
           <caption className="sr-only">Run health per Dagster job, last {windowDays} days</caption>
           <thead className="bg-card text-xs uppercase text-gray-500">
             <tr>
-              <th scope="col" className="px-4 py-3">Job</th>
-              <th scope="col" className="px-4 py-3">Success rate</th>
-              <th scope="col" className="px-4 py-3">Runs</th>
-              <th scope="col" className="px-4 py-3">Derived bound</th>
-              <th scope="col" className="px-4 py-3">Longest success</th>
-              <th scope="col" className="px-4 py-3">Ended by bound</th>
-              <th scope="col" className="px-4 py-3">Last success</th>
-              <th scope="col" className="px-4 py-3">Last failure</th>
-              <th scope="col" className="px-4 py-3">First error line of the last failure</th>
+              {headers.map((h) => (
+                <th key={h} scope="col" className="px-4 py-3">{h}</th>
+              ))}
             </tr>
           </thead>
           <tbody>
@@ -161,11 +137,9 @@ export function PipelineHealth({ outcome, now }: { outcome: PipelineOutcome; now
               <tr key={job.job} className="border-t border-border/60" data-job={job.job}>
                 <td className="px-4 py-2 font-mono">{job.job}</td>
                 <td className={`px-4 py-2 tabular-nums ${job.failures > 0 ? "text-amber-400" : ""}`}>
-                  {rate(job.successRate)}
+                  {job.successRate === null ? "no run" : `${Math.round(job.successRate * 100)}%`}
                 </td>
-                <td className="px-4 py-2 tabular-nums">
-                  {job.successes} ok · {job.failures} failed
-                </td>
+                <td className="px-4 py-2 tabular-nums">{job.successes} ok · {job.failures} failed</td>
                 <td className="px-4 py-2 font-mono text-xs tabular-nums text-gray-300">
                   {job.derivedBoundSeconds === null ? "instance limit (3h)" : formatDuration(job.derivedBoundSeconds)}
                 </td>

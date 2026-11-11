@@ -15,11 +15,6 @@ const LAYER_BAR: Record<FunnelLayer["status"], string> = {
 
 export const dynamic = "force-dynamic";
 
-/**
- * #494 P0a: headline metrics lifted out of the raw report. Reads
- * defensively — the payload is the persisted, content-addressed report
- * (append-only); a missing key renders as an absent card, never a crash.
- */
 function qualityHeadline(quality: unknown): { label: string; value: string }[] {
   if (typeof quality !== "object" || quality === null) return [];
   const q = quality as Record<string, unknown>;
@@ -41,10 +36,7 @@ export default async function ToptQualityPage() {
   const principal = await getServerPrincipal();
   if (!principal) redirect("/login?from=%2Fadmin%2Fquality");
   const state = await loadToptQuality(principal.context);
-  const funnel = await loadQualityFunnel({
-    context: principal.context,
-    principalKind: principal.principalKind,
-  });
+  const funnel = await loadQualityFunnel({ context: principal.context, principalKind: principal.principalKind });
   const ops = await loadOpsOverview({ principalKind: principal.principalKind });
   const quotaHeadline =
     ops.kind === "ready" && ops.data.quotaToday.length > 0
@@ -54,9 +46,7 @@ export default async function ToptQualityPage() {
   return (
     <section aria-labelledby="quality-heading" className="space-y-8">
       <div>
-        <h1 id="quality-heading" className="text-3xl font-bold tracking-tight">
-          TOPT data quality
-        </h1>
+        <h1 id="quality-heading" className="text-3xl font-bold tracking-tight">TOPT data quality</h1>
         <p className="mt-2 text-gray-400">
           Reads the governed production TOPT run through the <code className="text-accent">mart</code> read-only
           role — the same run the MCP <code className="text-accent">topt_gppe</code> tool serves (#433).
@@ -65,23 +55,14 @@ export default async function ToptQualityPage() {
 
       <ReadStateNotice state={state} />
 
-      {/* #495: an `&&` with no else made the headline diagnostic vanish without
-          comment whenever it could not be computed, which reads as "nothing is
-          wrong" rather than "not computed". Every state of this block now says
-          something. */}
-      {funnel.kind !== "ready" && (
+      {funnel.kind !== "ready" ? (
         <div className="rounded-xl border border-border bg-card p-5">
           <h2 className="font-semibold">L0–L5 funnel</h2>
-          {/* The same renderer and the same words as everything else — the
-              funnel is a ReadState now, so its absence states do not get their
-              own prose. `unavailable` carries an operationally useful reason,
-              so it is surfaced rather than flattened into "not computed". */}
           <ReadStateNotice
             state={funnel}
             overrides={{
               denied: "Not computed: this view requires a verified administrator identity.",
-              empty:
-                "Not computed yet — no accepted run has reported the layer metrics this funnel reads.",
+              empty: "Not computed yet — no accepted run has reported the layer metrics this funnel reads.",
               unavailable:
                 funnel.kind === "unavailable"
                   ? `Not computed yet: ${funnel.reason}. No accepted run has reported the layer metrics this funnel reads.`
@@ -89,29 +70,21 @@ export default async function ToptQualityPage() {
             }}
           />
         </div>
-      )}
-
-      {funnel.kind === "ready" && (
+      ) : (
         <div className="rounded-xl border border-border bg-card p-5">
           <h2 className="font-semibold">L0–L5 funnel — where the data narrows is where the problem is</h2>
           <div className="mt-4 space-y-2">
             <div className="grid grid-cols-[7rem_1fr] items-center gap-3">
-              <div className="text-right">
-                <span className="font-mono text-xs text-gray-400">L0 Sources</span>
-              </div>
+              <div className="text-right"><span className="font-mono text-xs text-gray-400">L0 Sources</span></div>
               <div>
-                <div className="flex h-8 items-center rounded bg-gray-600/40 px-3 font-mono text-xs">
-                  {quotaHeadline}
-                </div>
+                <div className="flex h-8 items-center rounded bg-gray-600/40 px-3 font-mono text-xs">{quotaHeadline}</div>
                 <p className="mt-0.5 text-xs text-gray-500">raw.fetches today, per source</p>
               </div>
             </div>
             {funnel.data.layers.map((layer) => (
               <div key={layer.key} className="grid grid-cols-[7rem_1fr] items-center gap-3">
                 <div className="text-right">
-                  <span className="font-mono text-xs text-gray-400">
-                    {layer.key} {layer.title}
-                  </span>
+                  <span className="font-mono text-xs text-gray-400">{layer.key} {layer.title}</span>
                 </div>
                 <div>
                   <div
@@ -132,16 +105,10 @@ export default async function ToptQualityPage() {
         <>
           <p className="text-sm text-gray-500">
             Run <code className="text-accent">{state.data.run_id}</code> — GPPE available for{" "}
-            {state.data.cells.filter((row) => row.availability === "available").length} / {state.data.cells.length}{" "}
-            listings
-            {/* The capture-plane numerator is the quality report's own cell-level count —
-                NOT `available_count`, which is the mart's listing-level figure (scale /20)
-                and produced "18 / 84 cells" here while the funnel said 82/84 (#539). */}
+            {state.data.cells.filter((row) => row.availability === "available").length} / {state.data.cells.length} listings
             {((captureAvailable) =>
               captureAvailable !== null && (
-                <>
-                  ; capture plane {captureAvailable} / {state.data.requested_count} cells available
-                </>
+                <>; capture plane {captureAvailable} / {state.data.requested_count} cells available</>
               ))(captureAvailableCount(state.data))}
             .
           </p>
@@ -151,18 +118,9 @@ export default async function ToptQualityPage() {
               <caption className="sr-only">GPPE results by listing for the governed production run</caption>
               <thead className="bg-card text-xs uppercase text-gray-500">
                 <tr>
-                  <th scope="col" className="px-4 py-3">
-                    Listing
-                  </th>
-                  <th scope="col" className="px-4 py-3">
-                    Availability
-                  </th>
-                  <th scope="col" className="px-4 py-3">
-                    GPPE
-                  </th>
-                  <th scope="col" className="px-4 py-3">
-                    Confidence
-                  </th>
+                  {["Listing", "Availability", "GPPE", "Confidence"].map((h) => (
+                    <th key={h} scope="col" className="px-4 py-3">{h}</th>
+                  ))}
                 </tr>
               </thead>
               <tbody>
@@ -170,10 +128,7 @@ export default async function ToptQualityPage() {
                   <tr key={row.listing_id} className="border-t border-border">
                     <th scope="row" className="px-4 py-3 font-medium" title={row.listing_id}>
                       <span>{formatListingLabel(row.listing_id) ?? row.listing_id}</span>{" "}
-                      <code
-                        data-evidence="true"
-                        className="ml-1.5 rounded bg-gray-500/15 px-1.5 py-0.5 font-mono text-xs text-gray-400"
-                      >
+                      <code data-evidence="true" className="ml-1.5 rounded bg-gray-500/15 px-1.5 py-0.5 font-mono text-xs text-gray-400">
                         {row.listing_id}
                       </code>
                     </th>
@@ -205,9 +160,7 @@ export default async function ToptQualityPage() {
               </dl>
               <details className="mt-4">
                 <summary className="cursor-pointer text-sm text-gray-400">Raw report (exact, content-addressed)</summary>
-                <pre className="mt-2 overflow-x-auto text-xs text-gray-400">
-                  {JSON.stringify(state.data.quality, null, 2)}
-                </pre>
+                <pre className="mt-2 overflow-x-auto text-xs text-gray-400">{JSON.stringify(state.data.quality, null, 2)}</pre>
               </details>
             </div>
           )}

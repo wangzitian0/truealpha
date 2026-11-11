@@ -19,10 +19,7 @@ import { StrategyDefinitionLine } from "@/components/strategy-definition";
 import { AvailabilityBadge, ReadStateNotice } from "@/components/read-state";
 import { getServerPrincipal } from "@/server/auth/request-context";
 import { loadOverview } from "@/server/dashboard";
-import {
-	entityLabel,
-	loadEntityDisplayMap,
-} from "@/server/mart/entity-resolution";
+import { entityLabel, loadEntityDisplayMap } from "@/server/mart/entity-resolution";
 import { DASHBOARD_STRATEGY_ID } from "@/server/mart/research-read";
 import { loadStrategyRunPage } from "@/server/strategy-page";
 import { describeServedRunAge } from "./served-run-age";
@@ -38,24 +35,23 @@ export default async function ResearchOverviewPage() {
 	const usability = summarizeUniverseUsability(
 		strategy.kind === "ready" ? strategy.report.decisions : [],
 	);
-	const selections = usability.selections;
-	const evaluated = usability.evaluatedCount;
-	// #1235: the gap divides the multiple of the run's definition — P/GP under 1.0.0.
+	const { selections, evaluatedCount: evaluated } = usability;
 	const basisLabel = valuationBasisLabel(reportValuationBasis(selections));
 	const latestCutoff =
 		selections[0]?.cutoff_at ??
-		(strategy.kind === "ready"
-			? (strategy.report.decisions[0]?.cutoff_at ?? null)
-			: null);
-	// #575: say which run this is. The mart repository ranks the run the governed capture
-	// head resolves to first and falls back to the newest recorded run; the sentence must
-	// not call the fallback "governed".
+		(strategy.kind === "ready" ? (strategy.report.decisions[0]?.cutoff_at ?? null) : null);
 	const governed =
-		strategy.kind === "ready" &&
-		"governed" in strategy.report &&
-		strategy.report.governed === true;
-	// #575 scope 2: the age of what is served, rendered — on the invariant's threshold.
+		strategy.kind === "ready" && "governed" in strategy.report && strategy.report.governed === true;
 	const age = latestCutoff ? describeServedRunAge(latestCutoff) : null;
+	const selectionHeaders = [
+		"Selected",
+		"Tier",
+		`Current ${basisLabel}`,
+		`Target ${basisLabel}`,
+		`Valuation gap (${basisLabel})`,
+		"Weight",
+		"Trace",
+	];
 
 	return (
 		<section aria-labelledby="overview-heading" className="space-y-8">
@@ -77,11 +73,9 @@ export default async function ResearchOverviewPage() {
 							<span
 								data-testid="served-run-age"
 								data-stale={age.stale ? "true" : "false"}
-								className={
-									age.stale
-										? "ml-2 rounded px-2 py-0.5 text-xs font-medium bg-amber-500/15 text-amber-300"
-										: "ml-2 rounded px-2 py-0.5 text-xs font-medium bg-gray-500/15 text-gray-300"
-								}
+								className={`ml-2 rounded px-2 py-0.5 text-xs font-medium ${
+									age.stale ? "bg-amber-500/15 text-amber-300" : "bg-gray-500/15 text-gray-300"
+								}`}
 								title={
 									age.stale
 										? "Older than one scheduled cycle plus slack (36 h) — the same threshold the nightly pointer invariant raises."
@@ -93,10 +87,7 @@ export default async function ResearchOverviewPage() {
 						</>
 					)}
 				</p>
-				{/* #1235: which definition produced this run, and whether its bands were reviewed. */}
-				{strategy.kind === "ready" && (
-					<StrategyDefinitionLine definition={strategy.report.definition} />
-				)}
+				{strategy.kind === "ready" && <StrategyDefinitionLine definition={strategy.report.definition} />}
 			</div>
 
 			<ReadStateNotice state={state} />
@@ -108,39 +99,17 @@ export default async function ResearchOverviewPage() {
 							<caption className="sr-only">Current strategy selections</caption>
 							<thead className="bg-card text-xs uppercase text-gray-500">
 								<tr>
-									<th scope="col" className="px-4 py-3">
-										Selected
-									</th>
-									<th scope="col" className="px-4 py-3">
-										Tier
-									</th>
-									<th scope="col" className="px-4 py-3">
-										Current {basisLabel}
-									</th>
-									<th scope="col" className="px-4 py-3">
-										Target {basisLabel}
-									</th>
-									<th scope="col" className="px-4 py-3">
-										Valuation gap ({basisLabel})
-									</th>
-									<th scope="col" className="px-4 py-3">
-										Weight
-									</th>
-									<th scope="col" className="px-4 py-3">
-										Trace
-									</th>
+									{selectionHeaders.map((h) => (
+										<th key={h} scope="col" className="px-4 py-3">
+											{h}
+										</th>
+									))}
 								</tr>
 							</thead>
 							<tbody>
 								{selections.map((decision) => (
-									<tr
-										key={decision.issuer_id}
-										className="border-t border-border"
-									>
-										<th
-											scope="row"
-											className="px-4 py-3 font-medium"
-										>
+									<tr key={decision.issuer_id} className="border-t border-border">
+										<th scope="row" className="px-4 py-3 font-medium">
 											<Link
 												href={`/research/entities/${encodeURIComponent(decision.issuer_id)}`}
 												className="text-accent hover:underline"
@@ -150,16 +119,10 @@ export default async function ResearchOverviewPage() {
 											</Link>
 										</th>
 										<td className="px-4 py-3">{formatCell(decision.tier)}</td>
-										<td
-											className="px-4 py-3 tabular-nums"
-											title={currentMultipleOf(decision) ?? undefined}
-										>
+										<td className="px-4 py-3 tabular-nums" title={currentMultipleOf(decision) ?? undefined}>
 											{formatCell(formatRatio(currentMultipleOf(decision)))}
 										</td>
-										<td
-											className="px-4 py-3 tabular-nums"
-											title={targetMultipleOf(decision) ?? undefined}
-										>
+										<td className="px-4 py-3 tabular-nums" title={targetMultipleOf(decision) ?? undefined}>
 											{formatCell(formatRatio(targetMultipleOf(decision)))}
 										</td>
 										<td
@@ -168,10 +131,7 @@ export default async function ResearchOverviewPage() {
 										>
 											{formatCell(formatSignedRatio(decision.valuation_gap))}
 										</td>
-										<td
-											className="px-4 py-3 tabular-nums"
-											title={decision.target_weight ?? undefined}
-										>
+										<td className="px-4 py-3 tabular-nums" title={decision.target_weight ?? undefined}>
 											{formatCell(formatPercentFromFraction(decision.target_weight))}
 										</td>
 										<td className="px-4 py-3">
@@ -187,27 +147,14 @@ export default async function ResearchOverviewPage() {
 							</tbody>
 						</table>
 					</div>
-					<p
-						className="text-sm text-gray-500"
-						data-testid="universe-usability-summary"
-					>
-						{selections.length} selected · {usability.usableCount} usable of{" "}
-						{evaluated} evaluated
-						{usability.excludedCount > 0
-							? ` (${usability.excludedCount} excluded)`
-							: ""}{" "}
-						—{" "}
-						<Link
-							href="/research/strategy"
-							className="text-accent hover:underline"
-						>
+					<p className="text-sm text-gray-500" data-testid="universe-usability-summary">
+						{selections.length} selected · {usability.usableCount} usable of {evaluated} evaluated
+						{usability.excludedCount > 0 ? ` (${usability.excludedCount} excluded)` : ""} —{" "}
+						<Link href="/research/strategy" className="text-accent hover:underline">
 							full decisions
 						</Link>{" "}
 						·{" "}
-						<Link
-							href="/research/coverage"
-							className="text-accent hover:underline"
-						>
+						<Link href="/research/coverage" className="text-accent hover:underline">
 							why some companies are missing
 						</Link>
 					</p>
@@ -217,8 +164,7 @@ export default async function ResearchOverviewPage() {
 							data-testid="excluded-issuers-disclosure"
 						>
 							<p className="font-medium text-gray-300">
-								Excluded from the {evaluated}-issuer universe (
-								{usability.usableCount} usable):
+								Excluded from the {evaluated}-issuer universe ({usability.usableCount} usable):
 							</p>
 							<ul className="mt-2 space-y-1">
 								{usability.excluded.map((item) => (
@@ -256,14 +202,9 @@ export default async function ResearchOverviewPage() {
 					</p>
 					<ul className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
 						{state.data.modules.map((module) => (
-							<li
-								key={module.module}
-								className="rounded-xl border border-border bg-card p-5"
-							>
+							<li key={module.module} className="rounded-xl border border-border bg-card p-5">
 								<div className="flex items-center justify-between">
-									<span className="text-sm text-gray-500">
-										Module {module.module}
-									</span>
+									<span className="text-sm text-gray-500">Module {module.module}</span>
 									<span className="rounded-full border border-border px-2 py-0.5 text-xs text-gray-400">
 										{module.gate}
 									</span>
@@ -274,26 +215,19 @@ export default async function ResearchOverviewPage() {
 									Source <code className="font-mono">{module.source}</code>
 								</p>
 								{module.output !== null && (
-									<p
-										className="mt-1 text-xs text-gray-500 tabular-nums"
-										data-testid="module-output"
-									>
-										{module.output.rows} rows · {module.output.availableRows}{" "}
-										available · latest cutoff{" "}
+									<p className="mt-1 text-xs text-gray-500 tabular-nums" data-testid="module-output">
+										{module.output.rows} rows · {module.output.availableRows} available · latest cutoff{" "}
 										{formatCell(module.output.latestCutoff)}
 									</p>
 								)}
 								<div className="mt-3 flex items-center gap-2">
 									<AvailabilityBadge status={module.availability} />
-									{/* A status word cannot tell 4% from 100%. The badge was
-									    decided by whether ANY decision carried a value, so PEG
-									    read "available" on 28 of 660 rows. */}
 									{module.coverage !== null && module.coverage.total > 0 && (
 										<span
 											className="text-xs text-gray-500 tabular-nums"
 											title={`${module.coverage.withValue} of ${module.coverage.total} decisions in this run carry a value`}
 										>
-											{coveragePercent(module.coverage)}% ·{" "}
+											{Math.round((module.coverage.withValue / module.coverage.total) * 100)}% ·{" "}
 											{module.coverage.withValue}/{module.coverage.total}
 										</span>
 									)}
@@ -303,17 +237,11 @@ export default async function ResearchOverviewPage() {
 					</ul>
 					<p className="text-sm text-gray-500">
 						Explore the{" "}
-						<Link
-							href="/research/rankings"
-							className="text-accent hover:underline"
-						>
+						<Link href="/research/rankings" className="text-accent hover:underline">
 							theme rankings
 						</Link>{" "}
 						or{" "}
-						<Link
-							href="/research/compare"
-							className="text-accent hover:underline"
-						>
+						<Link href="/research/compare" className="text-accent hover:underline">
 							issuer comparison
 						</Link>
 						.
@@ -322,14 +250,4 @@ export default async function ResearchOverviewPage() {
 			)}
 		</section>
 	);
-}
-
-/** Rounded for the label; the exact counts stay in the title and beside it.
- *  Percent OF the run's own decisions — no metric is computed, this is the
- *  filtered count the read model already returned (init.md principle 2). */
-function coveragePercent(coverage: {
-	withValue: number;
-	total: number;
-}): number {
-	return Math.round((coverage.withValue / coverage.total) * 100);
 }

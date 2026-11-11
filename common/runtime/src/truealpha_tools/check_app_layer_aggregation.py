@@ -1,22 +1,5 @@
 #!/usr/bin/env python3
-"""init.md §1 rule 2, armed: the App layer must not compute a metric across rows (#727, #1272).
-
-Rule 2 confines `apps/app-web` to deterministic reformatting — "simple within-row
-arithmetic that doesn't span tables"; anything that "jointly computes a new metric across
-factors or time points must go back into `common/factors` and be materialized into mart".
-init.md §10 recorded that no code-level check enforced this, and #723 is what that costs:
-`fund-valuation.ts` grew a window-function weighted mean that contradicted its own file
-header, and nothing went red. This is that check.
-
-Scope: `apps/app-web/src/server/mart`, `apps/app-web/src/app/research`, and
-`apps/app-web/src/components`. An aggregate in a *database view* is fine —
-that is the database's own read model, not the App layer.
-
-Allow-list: a reader that genuinely needs an aggregate names itself in ALLOWED with the
-issue that decided it. Adding a name is the reviewable act; the default is refusal.
-
-Stdlib-only, like tools/check_route_manifest.py, so it runs before any toolchain setup.
-"""
+"""Enforce init.md §1 rule 2: the App layer must not compute a metric across rows (#727, #1272)."""
 
 from __future__ import annotations
 
@@ -30,8 +13,6 @@ RESEARCH_ROUTES = REPO_ROOT / "apps" / "app-web" / "src" / "app" / "research"
 COMPONENTS = REPO_ROOT / "apps" / "app-web" / "src" / "components"
 SCAN_ROOTS = (MART_READERS, RESEARCH_ROUTES, COMPONENTS)
 
-#: Aggregation the App may not perform. `count(` is deliberately absent: counting rows a
-#: reader already holds is presentation, not a new metric.
 FORBIDDEN = (
     re.compile(r"\bsum\s*\(", re.IGNORECASE),
     re.compile(r"\bavg\s*\(", re.IGNORECASE),
@@ -39,12 +20,8 @@ FORBIDDEN = (
     re.compile(r"\bvariance\s*\(", re.IGNORECASE),
     re.compile(r"\bover\s*\(", re.IGNORECASE),
 )
-
 _BLOCK_COMMENT_RE = re.compile(r"/\*.*?\*/", re.DOTALL)
 _INLINE_COMMENT_RE = re.compile(r"(?<!:)//.*$")
-
-#: file name or repo-relative path -> the issue that authorized the aggregate.
-#: Empty on purpose: every fund-level aggregate moved to `factors.base.etf_virtual_company` in #727.
 ALLOWED: dict[str, str] = {}
 
 
@@ -57,10 +34,9 @@ def _is_allowed(path: Path) -> bool:
     if path.name in ALLOWED:
         return True
     try:
-        rel = path.relative_to(REPO_ROOT).as_posix()
+        return path.relative_to(REPO_ROOT).as_posix() in ALLOWED
     except ValueError:
         return False
-    return rel in ALLOWED
 
 
 def _scan_file(path: Path) -> list[tuple[Path, int, str]]:
@@ -99,9 +75,7 @@ def main() -> int:
         print(f"::error file={path.relative_to(REPO_ROOT)},line={number}::{location}: {line}", file=sys.stderr)
     print(
         f"\n{len(found)} aggregate(s) in the App's mart readers (init.md §1 rule 2, #727).\n"
-        "A metric computed across rows belongs in common/factors and is materialized into mart;\n"
-        "the reader then reads a column. If this aggregate is genuinely presentation, add the\n"
-        "file to ALLOWED in this script with the issue that decided it.",
+        "A metric computed across rows belongs in common/factors and is materialized into mart.",
         file=sys.stderr,
     )
     return 1

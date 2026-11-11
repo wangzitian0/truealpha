@@ -1,15 +1,4 @@
-"""Harness helpers for the suites and the repository tools that reach real infrastructure.
-
-`skip_or_fail` is the gate for integration suites that need the live runtime: CI
-provisions real Postgres + MinIO precisely so those tests RUN there — a silently-skipped
-suite reads as green while covering nothing — so CI sets TRUEALPHA_REQUIRE_RUNTIME=1,
-turning an unreachable runtime into a hard failure; locally (no env var) the same call
-skips cleanly.
-
-`load_tool` and `apply_migration_chain` reach repository paths (`tools/`, `db/`) rather
-than installed packages, which is why they live here and not behind the runtime
-boundary in `truealpha_runtime.__init__`.
-"""
+"""Test harness helpers for repository tools, isolated databases, and OTLP verification."""
 
 import copy
 import hashlib
@@ -36,7 +25,6 @@ from psycopg import sql
 from truealpha_contracts.models import RawCapture, RawIngestionEnvelope, RawObjectRef
 from truealpha_contracts.strategy import LargeModelValueV0Definition, load_live_strategy_corpus
 
-#: One SQL literal that a seed row may hold: a quoted string, a whole number, null, true or false.
 SeedValue = str | int | bool | None
 
 REQUIRE_RUNTIME_ENV = "TRUEALPHA_REQUIRE_RUNTIME"
@@ -46,12 +34,6 @@ DB_DIR = REPO_ROOT / "db"
 
 
 def load_tool(name: str) -> ModuleType:
-    """Import a `tools/<name>.py` tool module from `truealpha_tools.<name>`.
-
-    Checks `tools/<name>.py` exists first, then imports the canonical module
-    from `truealpha_tools.<name>` (or falls back to `spec_from_file_location`
-    for synthetic test fixtures).
-    """
     path = TOOLS / f"{name}.py"
     if not path.exists():
         raise FileNotFoundError(f"no tool named {name!r} in {TOOLS}")
@@ -84,7 +66,6 @@ DB_SKIP_GATE_MARKERS: tuple[str, ...] = (
 
 
 def can_write_test_database(environ: Mapping[str, str] = os.environ) -> bool:
-    """True when tests are authorized to write or mutate databases (CI or explicit opt-in)."""
     return (
         environ.get("CI", "").strip().lower() in {"1", "true", "yes", "on"}
         or environ.get("ALLOW_CLEAR_TEST", "").strip() == "1"
@@ -92,7 +73,6 @@ def can_write_test_database(environ: Mapping[str, str] = os.environ) -> bool:
 
 
 def db_writes_allowed(environ: Mapping[str, str] = os.environ) -> bool:
-    """True when CI=true or ALLOW_CLEAR_TEST=1 and DATABASE_URL is explicitly configured (#1197)."""
     return can_write_test_database(environ) and bool(environ.get("DATABASE_URL", "").strip())
 
 
@@ -103,7 +83,6 @@ def _deny_db_write(reason: str) -> None:
 
 
 def install_db_write_gate() -> None:
-    """Gate every in-process psycopg.connect call unless db_writes_allowed() is True (#1197)."""
     if getattr(psycopg.connect, GATE_MARKER, False):
         return
     real_connect = psycopg.connect
@@ -119,7 +98,6 @@ def install_db_write_gate() -> None:
 
 
 def guard_db_write(database_url: str | None = None) -> str:
-    """Enforce runtime safety invariants for DB write tests (#1197)."""
     if not can_write_test_database():
         _deny_db_write(f"{DB_SKIP_GATE_MARKERS[1]} to protect ambient databases")
     url = (database_url or os.environ.get("DATABASE_URL") or "").strip()
@@ -136,30 +114,9 @@ def apply_migration_chain(
     check: bool = True,
     psql_command: str | None = None,
 ) -> str:
-    """Bring `database_url` to the declared schema, through THE applier (#984).
-
-    `db/apply_migrations.sh` is the single implementation of "apply db/migrations/*.sql
-    in glob order, then db/roles.sql, stopping on the first error". A test that needs a
-    migrated database of its own calls this instead of writing the loop again. Four of
-    them used to carry their own copy, and the copies had already diverged: three ran
-    one `psql -f` per file, and the fourth pushed each file through psycopg and never
-    applied roles.sql at all -- so a fixture whose docstring said "migrated from
-    scratch" produced a schema no other environment has.
-
-    Raises AssertionError carrying psql's own output, which is what a caller wants to
-    read when a migration fails: the file, the line and the SQLSTATE. `check=False`
-    returns that output instead of raising, for the one caller that replays the chain
-    over a database it has deliberately broken and is asking what replay does to it.
-    """
     runner = db_dir / "apply_migrations.sh"
-    environment = dict(os.environ)
-    # The caller named a target; an inherited admin DSN or a psql-runs-elsewhere command
-    # from the surrounding shell must not redirect it somewhere else.
-    environment.pop("MIGRATIONS_DATABASE_URL", None)
-    environment.pop("TRUEALPHA_PSQL", None)
+    environment = {k: v for k, v in os.environ.items() if k not in {"MIGRATIONS_DATABASE_URL", "TRUEALPHA_PSQL"}}
     environment |= {"DATABASE_URL": database_url, "TRUEALPHA_DB_DIR": str(db_dir)}
-    # `psql_command` selects the applier's other transport: psql running somewhere the
-    # repository path does not exist (a container), so each file arrives on stdin.
     if psql_command is not None:
         environment["TRUEALPHA_PSQL"] = psql_command
     completed = subprocess.run(
@@ -178,17 +135,6 @@ def apply_migration_chain(
 
 
 class OtlpCollectorStub:
-    """A localhost OTLP/HTTP receiver that records what a service really exports (#1034).
-
-    Faking the exporter proves the settings, not the wiring: a service entrypoint that never
-    calls `init_telemetry`, or calls it and exports under the wrong identity, would still pass.
-    This stub is the other end of the wire. A subprocess that imports the real entrypoint is
-    pointed at `endpoint`, does some work, flushes, and the test reads back the decoded
-    resource identity of every span, metric point and log record the stub received.
-
-    Binds `127.0.0.1` on an ephemeral port, so it never collides with an ambient collector.
-    """
-
     SIGNALS = {"traces": "/v1/traces", "metrics": "/v1/metrics", "logs": "/v1/logs"}
 
     def __init__(self) -> None:
@@ -196,7 +142,7 @@ class OtlpCollectorStub:
         stub = self
 
         class _Handler(BaseHTTPRequestHandler):
-            def do_POST(self) -> None:  # noqa: N802 - the http.server hook name
+            def do_POST(self) -> None:  # noqa: N802
                 body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
                 stub.requests.append((self.path, body))
                 self.send_response(200)
@@ -236,12 +182,11 @@ class OtlpCollectorStub:
         return [message.FromString(body) for path, body in self.requests if path == self.SIGNALS[signal]]
 
     def resources(self, signal: str) -> list[dict[str, str]]:
-        """The resource attributes of every resource batch received for `signal`."""
-        batches = []
-        for request in self._decoded(signal):
-            for resource_group in getattr(request, f"resource_{'spans' if signal == 'traces' else signal}"):
-                batches.append({kv.key: kv.value.string_value for kv in resource_group.resource.attributes})
-        return batches
+        return [
+            {kv.key: kv.value.string_value for kv in resource_group.resource.attributes}
+            for request in self._decoded(signal)
+            for resource_group in getattr(request, f"resource_{'spans' if signal == 'traces' else signal}")
+        ]
 
     def span_names(self) -> list[str]:
         return [
@@ -253,11 +198,6 @@ class OtlpCollectorStub:
         ]
 
     def metric_series(self) -> list[tuple[str, str, dict[str, str]]]:
-        """(name, unit, attributes) of every histogram, sum and gauge data point received.
-
-        Attribute values are strings (integers are written in decimal), so a test compares
-        `http.response.status_code` as "307"."""
-
         def text(value: Any) -> str:
             kind = value.WhichOneof("value")
             return str(getattr(value, kind)) if kind else ""
@@ -267,12 +207,11 @@ class OtlpCollectorStub:
             for resource_metrics in request.resource_metrics:
                 for scope_metrics in resource_metrics.scope_metrics:
                     for metric in scope_metrics.metrics:
-                        kind = metric.WhichOneof("data")
-                        if kind is None:
-                            continue
-                        for point in getattr(metric, kind).data_points:
-                            attributes = {kv.key: text(kv.value) for kv in point.attributes}
-                            series.append((metric.name, metric.unit, attributes))
+                        if (kind := metric.WhichOneof("data")) is not None:
+                            for point in getattr(metric, kind).data_points:
+                                series.append(
+                                    (metric.name, metric.unit, {kv.key: text(kv.value) for kv in point.attributes})
+                                )
         return series
 
     def log_bodies(self) -> list[str]:
@@ -288,19 +227,9 @@ class OtlpCollectorStub:
 def run_python_probe(
     code: str, environ: Mapping[str, str], *, timeout: float = 120
 ) -> subprocess.CompletedProcess[str]:
-    """Run `code` in a fresh interpreter whose environment is exactly the ambient one without any
-    OpenTelemetry/service-identity variable, plus `environ`.
-
-    A fresh process is the only honest way to test an entrypoint that installs process-global
-    providers and a root-logger handler on import, and the scrub keeps a developer's shell (or a
-    CI job that sets `OTEL_*`) from deciding the outcome. The working directory is the repository
-    root, where the services' relative manifest paths resolve.
-    """
     variables: Any = runtime_env_contract()["variables"]
     declared = {key for item in variables for key in (item["name"], *item["aliases"])}
-    scrubbed = {
-        name: value for name, value in os.environ.items() if not name.startswith("OTEL_") and name not in declared
-    }
+    scrubbed = {k: v for k, v in os.environ.items() if not k.startswith("OTEL_") and k not in declared}
     return subprocess.run(
         [sys.executable, "-c", code],
         env={**scrubbed, **environ},
@@ -333,11 +262,6 @@ def _seed_literal(kind: str, value: str) -> SeedValue:
 
 
 def _read_seed_list(where: str, columns: list[str], body: str) -> tuple[list[dict[str, SeedValue]], int]:
-    """The rows of a `values` list, read up to the parenthesis that closes the list.
-
-    Returns the rows and the position in `body` after that parenthesis. `where` names the
-    seed in each error.
-    """
     rows: list[dict[str, SeedValue]] = []
     current: list[SeedValue] | None = None
     position = 0
@@ -362,7 +286,7 @@ def _read_seed_list(where: str, columns: list[str], body: str) -> tuple[list[dic
             rows.append(dict(zip(columns, current, strict=True)))
             current = None
         elif value == ")":
-            break  # the parenthesis that closes `seed`
+            break
         else:
             raise ValueError(f"{where}: unexpected {value!r}")
     if current is not None:
@@ -371,23 +295,6 @@ def _read_seed_list(where: str, columns: list[str], body: str) -> tuple[list[dic
 
 
 def read_seed_rows(migration: Path, table: str) -> list[dict[str, SeedValue]]:
-    """The rows one migration seeds into `table`, read from the file text without a database.
-
-    It reads the single statement of this shape (#1412):
-
-        with seed (<columns>) as (
-            values (<row>), ...
-        ),
-        <other common table expressions, for example the update of rows that differ>
-        insert into <table> (<columns>) ... on conflict ...
-
-    The `seed` list is the only copy of the rows, and the insert names the same columns in
-    the same order. A row holds only quoted strings, whole numbers, null, true and false. Any
-    other token raises ValueError, so a seed the reader cannot parse never reads as fewer
-    rows. Two statements for the same table raise too: a seed lives in one place. The old
-    shape `insert into <table> (...) values ... on conflict` is not read: replayed on every
-    boot, it waits for an open transaction that wrote a seeded row.
-    """
     text = migration.read_text(encoding="utf-8")
     statement = re.compile(
         r"\bwith\s+seed\s*\((?P<columns>[^)]*)\)\s*as\s*\(\s*values\b(?P<body>.*?)\bon\s+conflict",
@@ -410,11 +317,6 @@ def read_seed_rows(migration: Path, table: str) -> list[dict[str, SeedValue]]:
 
 
 class InMemoryRawObjectStore:
-    """In-memory implementation of RawObjectStore for unit and integration tests.
-
-    Stores payloads in an in-memory dictionary rather than transmitting to S3/MinIO.
-    """
-
     def __init__(self, bucket: str = "truealpha-raw") -> None:
         self.bucket = bucket
         self.objects: dict[str, bytes] = {}
@@ -445,8 +347,6 @@ class InMemoryRawObjectStore:
 
 
 class IsolatedDatabase(str):
-    """Database URL string with `.name` attribute identifying the database."""
-
     name: str
 
     def __new__(cls, url: str, name: str) -> "IsolatedDatabase":
@@ -496,13 +396,11 @@ def isolated_test_database(
     database_url: str | None = None,
     connect_timeout: int = 3,
 ) -> Iterator[IsolatedDatabase]:
-    """Provide a fresh, isolated PostgreSQL database for test execution."""
     import pytest
 
     base_url = guard_db_write(database_url)
     name = f"truealpha_{name_prefix}_{os.getpid()}_{uuid.uuid4().hex[:8]}"
     target_url = _named_url_for(base_url, name)
-
     try:
         admin_conn = psycopg.connect(_admin_url_for(base_url), connect_timeout=connect_timeout, autocommit=True)
     except psycopg.OperationalError as error:
@@ -510,7 +408,6 @@ def isolated_test_database(
             pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
         skip_or_fail(f"no local Postgres; CI runs the required integration coverage ({error})")
         return
-
     try:
         cloned = False
         if template is not None:
@@ -536,7 +433,6 @@ def clone_test_database(
     *,
     connect_timeout: int = 3,
 ) -> Iterator[IsolatedDatabase]:
-    """Clone an existing database as a new isolated throwaway database."""
     base_url = guard_db_write(source_database if "://" in source_database else None)
     source_name = _dbname_for(source_database)
     clone_name = f"truealpha_{name_prefix}_{os.getpid()}_{uuid.uuid4().hex[:8]}"
@@ -548,17 +444,10 @@ def clone_test_database(
         _drop_database_and_close(admin_conn, clone_name)
 
 
-#: The version of the synthetic provisional definition. No packaged file uses it.
 SYNTHETIC_PROVISIONAL_DEFINITION_VERSION = "0.0.1-synthetic-provisional"
 
 
 def synthetic_provisional_strategy_definition() -> LargeModelValueV0Definition:
-    """A provisional strategy definition that no packaged file holds (#1235).
-
-    No packaged definition is provisional, so tests use this one to keep the provisional
-    marker armed. It copies the live definition, gives it a test version, and marks its
-    bands provisional in both fields that the model validation compares.
-    """
     payload = copy.deepcopy(load_live_strategy_corpus()["strategy_definition"])
     payload["definition_version"] = SYNTHETIC_PROVISIONAL_DEFINITION_VERSION
     payload["provisional_semantics"] = True

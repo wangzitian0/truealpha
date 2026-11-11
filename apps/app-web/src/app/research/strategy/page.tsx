@@ -27,9 +27,6 @@ function decisionLabel(decision: StrategyRunDecision): string {
   return decision.exclusion_reason ? `${base}: ${decision.exclusion_reason}` : base;
 }
 
-/** The non-`ready` states, rendered as one notice line. Kept beside the
- * claim ceiling rather than in an early return: see the banner placement
- * note on the component below. */
 const NOTICE_STYLE = {
   denied: "text-amber-400",
   empty: "text-gray-400",
@@ -40,20 +37,26 @@ const NOTICE_STYLE = {
 export default async function StrategyRunsPage() {
   const principal = await getServerPrincipal();
   const outcome = await loadStrategyRunPage(principal, DASHBOARD_STRATEGY_ID);
-  // Authorization first: a denied request must not reach a mart read (the
-  // guard pattern `dashboard.ts` documents), so this stays conditional.
-  const names: Map<string, EntityDisplay> =
-    outcome.kind === "ready" ? await loadEntityDisplayMap() : new Map();
-  // #1235: the gap divides the multiple of the run's definition — P/GP under 1.0.0.
+  const names: Map<string, EntityDisplay> = outcome.kind === "ready" ? await loadEntityDisplayMap() : new Map();
   const basisLabel = valuationBasisLabel(
     outcome.kind === "ready" ? reportValuationBasis(outcome.report.decisions) : null,
   );
+  const headers = [
+    "Issuer",
+    "Cutoff",
+    "Status",
+    "Tier",
+    `Current ${basisLabel}`,
+    `Target ${basisLabel}`,
+    `Valuation gap (${basisLabel})`,
+    "Confidence",
+    "Rank",
+    "Weight",
+  ];
 
   return (
     <section aria-labelledby="strategy-runs-heading">
-      <h1 id="strategy-runs-heading" className="text-2xl font-bold tracking-tight">
-        Strategy runs
-      </h1>
+      <h1 id="strategy-runs-heading" className="text-2xl font-bold tracking-tight">Strategy runs</h1>
 
       {outcome.kind === "ready" ? (
         <p className="mt-2 text-sm text-gray-400">
@@ -69,10 +72,7 @@ export default async function StrategyRunsPage() {
           )}
         </p>
       ) : (
-        <p
-          role="status"
-          className={`mt-4 rounded-lg border border-border bg-card p-4 ${NOTICE_STYLE[outcome.kind]}`}
-        >
+        <p role="status" className={`mt-4 rounded-lg border border-border bg-card p-4 ${NOTICE_STYLE[outcome.kind]}`}>
           {outcome.kind === "denied"
             ? "Access denied. No verified session for this request."
             : outcome.kind === "empty"
@@ -82,17 +82,8 @@ export default async function StrategyRunsPage() {
                 : `Unavailable: ${outcome.detail.reason} (${outcome.detail.strategy_id})`}
         </p>
       )}
-      {/* #1235: which definition produced this run, and whether its bands were reviewed. */}
       {outcome.kind === "ready" && <StrategyDefinitionLine definition={outcome.report.definition} />}
 
-      {/* #494 assertion (b): the claim ceiling is a property of the PAGE, not
-          of its data state — `/research/rankings` has always rendered it
-          unconditionally, and `claim-ceiling.tsx` says so in its own docstring.
-          It used to sit after three early returns here, so a cutoff with no
-          recorded run dropped it. That divergence is invisible on any database
-          holding a strategy run and fails on every one that does not, which is
-          what a fresh CI database is. tests/claim-ceiling-placement.test.ts
-          fails if an early return is reintroduced above this line. */}
       <ClaimCeilingBanner />
 
       {outcome.kind === "ready" && (
@@ -101,71 +92,37 @@ export default async function StrategyRunsPage() {
             <caption className="sr-only">Decisions for {outcome.report.strategy_id}, by issuer and cutoff</caption>
             <thead className="bg-card text-xs uppercase text-gray-500">
               <tr>
-                <th scope="col" className="px-4 py-3">
-                  Issuer
-                </th>
-                <th scope="col" className="px-4 py-3">
-                  Cutoff
-                </th>
-                <th scope="col" className="px-4 py-3">
-                  Status
-                </th>
-                <th scope="col" className="px-4 py-3">
-                  Tier
-                </th>
-                <th scope="col" className="px-4 py-3">
-                  Current {basisLabel}
-                </th>
-                <th scope="col" className="px-4 py-3">
-                  Target {basisLabel}
-                </th>
-                <th scope="col" className="px-4 py-3">
-                  Valuation gap ({basisLabel})
-                </th>
-                <th scope="col" className="px-4 py-3">
-                  Confidence
-                </th>
-                <th scope="col" className="px-4 py-3">
-                  Rank
-                </th>
-                <th scope="col" className="px-4 py-3">
-                  Weight
-                </th>
+                {headers.map((h) => (
+                  <th key={h} scope="col" className="px-4 py-3">{h}</th>
+                ))}
               </tr>
             </thead>
             <tbody>
-              {outcome.report.decisions.map((decision) => (
-                <tr key={`${decision.issuer_id}:${decision.cutoff_at}`} className="border-t border-border">
+              {outcome.report.decisions.map((d) => (
+                <tr key={`${d.issuer_id}:${d.cutoff_at}`} className="border-t border-border">
                   <th scope="row" className="px-4 py-3 font-medium">
-                    <Link
-                      href={`/research/entities/${encodeURIComponent(decision.issuer_id)}`}
-                      className="text-accent hover:underline"
-                      title={decision.issuer_id}
-                    >
-                      {entityLabel(decision.issuer_id, names)}
+                    <Link href={`/research/entities/${encodeURIComponent(d.issuer_id)}`} className="text-accent hover:underline" title={d.issuer_id}>
+                      {entityLabel(d.issuer_id, names)}
                     </Link>
                   </th>
-                  <td className="px-4 py-3">{decision.cutoff_at}</td>
-                  <td className="px-4 py-3">{decisionLabel(decision)}</td>
-                  <td className="px-4 py-3">{formatCell(decision.tier)}</td>
-                  <td className="px-4 py-3 tabular-nums" title={currentMultipleOf(decision) ?? undefined}>
-                    {formatCell(formatRatio(currentMultipleOf(decision)))}
+                  <td className="px-4 py-3">{d.cutoff_at}</td>
+                  <td className="px-4 py-3">{decisionLabel(d)}</td>
+                  <td className="px-4 py-3">{formatCell(d.tier)}</td>
+                  <td className="px-4 py-3 tabular-nums" title={currentMultipleOf(d) ?? undefined}>
+                    {formatCell(formatRatio(currentMultipleOf(d)))}
                   </td>
-                  <td className="px-4 py-3 tabular-nums" title={targetMultipleOf(decision) ?? undefined}>
-                    {formatCell(formatRatio(targetMultipleOf(decision)))}
+                  <td className="px-4 py-3 tabular-nums" title={targetMultipleOf(d) ?? undefined}>
+                    {formatCell(formatRatio(targetMultipleOf(d)))}
                   </td>
-                  <td
-                    className={`px-4 py-3 tabular-nums ${signColor(decision.valuation_gap)}`}
-                    title={decision.valuation_gap ?? undefined}
-                  >
-                    {formatCell(formatSignedRatio(decision.valuation_gap))}
+                  <td className={`px-4 py-3 tabular-nums ${signColor(d.valuation_gap)}`} title={d.valuation_gap ?? undefined}>
+                    {formatCell(formatSignedRatio(d.valuation_gap))}
                   </td>
-                  <td className="px-4 py-3 tabular-nums" title={decision.confidence ?? undefined}>
-                    {formatCell(formatRatio(decision.confidence))}
+                  <td className="px-4 py-3 tabular-nums" title={d.confidence ?? undefined}>
+                    {formatCell(formatRatio(d.confidence))}
                   </td>
-                  <td className="px-4 py-3 tabular-nums">{formatCell(decision.rank)}</td>
-                  <td className="px-4 py-3 tabular-nums" title={decision.target_weight ?? undefined}>
-                    {formatCell(formatPercentFromFraction(decision.target_weight))}
+                  <td className="px-4 py-3 tabular-nums">{formatCell(d.rank)}</td>
+                  <td className="px-4 py-3 tabular-nums" title={d.target_weight ?? undefined}>
+                    {formatCell(formatPercentFromFraction(d.target_weight))}
                   </td>
                 </tr>
               ))}

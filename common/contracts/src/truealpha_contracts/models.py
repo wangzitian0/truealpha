@@ -1,8 +1,4 @@
-"""Point-in-time DTOs derived from the Phase -1 sample payloads.
-
-`valid_*` describes the real-world period. `knowable_at` is the transaction-time
-cutoff used by backtests. `recorded_at` is merely when TrueAlpha ingested it.
-"""
+"""Point-in-time DTOs separating valid time, knowable-at transaction time, and ingestion recorded time."""
 
 from __future__ import annotations
 
@@ -26,40 +22,31 @@ class DataSource(StrEnum):
     NPORT = "nport"
     YAHOO = "yahoo"
     TWELVE_DATA = "twelvedata"
-    # Identifier-resolution vendor (ISIN -> listings), not a fundamental-data
-    # source — its responses land in raw like any other so KG assertions can
-    # carry a raw_ref.
     OPENFIGI = "openfigi"
-    # Index-operator constituent lists (Nasdaq for NDX/QQQ): the authority on
-    # membership itself, landed like any vendor so universe list versions carry
-    # raw lineage (#539 data-driven universes).
     NASDAQ_INDEX = "nasdaq-index"
-    # U.S. Treasury "Daily Treasury Par Yield Curve Rates" (#1255): the macro base data and the
-    # measured risk-free rate of the core strategy. The value is also the ledger seat name.
     US_TREASURY = "us-treasury"
-    # Not a vendor at all: a projection of the accepted release manifest, for cells
-    # (listing identity, universe membership) whose value IS the frozen scope rather
-    # than something fetched. Named explicitly so those bytes land under their own
-    # prefix instead of borrowing a vendor's and claiming a provenance they lack.
     RELEASE = "release"
 
 
-class EntityIdentifier(BaseModel):
+class _PitRecordBase(BaseModel):
+    knowable_at: datetime
+    recorded_at: datetime
+
+    @field_validator("knowable_at", "recorded_at")
+    @classmethod
+    def validate_datetimes(cls, value: datetime, info) -> datetime:
+        return _require_aware(value, info.field_name)
+
+
+class EntityIdentifier(_PitRecordBase):
     entity_id: str = Field(min_length=1)
     source: DataSource
     value: str = Field(min_length=1)
     identifier_type: str = Field(min_length=1)
     valid_from: date
     valid_to: date
-    knowable_at: datetime
-    recorded_at: datetime
     confidence: Decimal = Field(ge=0, le=1)
     raw_ref: str
-
-    @field_validator("knowable_at", "recorded_at")
-    @classmethod
-    def validate_datetimes(cls, value: datetime, info) -> datetime:
-        return _require_aware(value, info.field_name)
 
     @model_validator(mode="after")
     def validate_time_order(self) -> EntityIdentifier:
@@ -82,45 +69,29 @@ class RawObjectRef(BaseModel):
         return f"s3://{self.bucket}/{self.key}"
 
 
-class RawCapture(BaseModel):
-    """Bytes returned by a source before runtime persists them immutably."""
-
+class _RawEnvelopeBase(BaseModel):
     source: DataSource
     source_record_id: str = Field(min_length=1)
+    fetched_at: datetime
+    source_published_at: datetime | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("fetched_at", "source_published_at")
+    @classmethod
+    def validate_datetimes(cls, value: datetime | None, info) -> datetime | None:
+        return None if value is None else _require_aware(value, info.field_name)
+
+
+class RawCapture(_RawEnvelopeBase):
     body: bytes
     content_type: str = Field(min_length=1)
-    fetched_at: datetime
-    source_published_at: datetime | None = None
-    metadata: dict[str, Any] = Field(default_factory=dict)
-
-    @field_validator("fetched_at", "source_published_at")
-    @classmethod
-    def validate_datetimes(cls, value: datetime | None, info) -> datetime | None:
-        return None if value is None else _require_aware(value, info.field_name)
 
 
-class RawIngestionEnvelope(BaseModel):
-    source: DataSource
-    source_record_id: str = Field(min_length=1)
+class RawIngestionEnvelope(_RawEnvelopeBase):
     object: RawObjectRef
-    fetched_at: datetime
-    source_published_at: datetime | None = None
-    metadata: dict[str, Any] = Field(default_factory=dict)
-
-    @field_validator("fetched_at", "source_published_at")
-    @classmethod
-    def validate_datetimes(cls, value: datetime | None, info) -> datetime | None:
-        return None if value is None else _require_aware(value, info.field_name)
 
 
 class AnalystRatingEvent(BaseModel):
-    """A rating event with recommendation time separated from knowability.
-
-    The sample contains both recommendation_date and vendor update_time. A
-    backtest must supply a corroborated `knowable_at`; it may not silently use
-    the recommendation date for a record obtained through a later backfill.
-    """
-
     analyst_id: str
     company_id: str
     recommendation_at: datetime
@@ -148,13 +119,11 @@ class AnalystRatingEvent(BaseModel):
         return self
 
 
-class FundHolding(BaseModel):
+class FundHolding(_PitRecordBase):
     fund_id: str
     holding_id: str | None = None
     holding_name: str
     report_period: date
-    knowable_at: datetime
-    recorded_at: datetime
     cusip: str | None = None
     isin: str | None = None
     lei: str | None = None
@@ -164,11 +133,6 @@ class FundHolding(BaseModel):
     confidence: Decimal = Field(ge=0, le=1)
     raw_ref: str
 
-    @field_validator("knowable_at", "recorded_at")
-    @classmethod
-    def validate_datetimes(cls, value: datetime, info) -> datetime:
-        return _require_aware(value, info.field_name)
-
     @model_validator(mode="after")
     def validate_time_order(self) -> FundHolding:
         if self.recorded_at < self.knowable_at:
@@ -176,7 +140,7 @@ class FundHolding(BaseModel):
         return self
 
 
-class PriceBar(BaseModel):
+class PriceBar(_PitRecordBase):
     entity_id: str
     symbol: str
     trading_date: date
@@ -186,15 +150,8 @@ class PriceBar(BaseModel):
     close: Decimal
     adjusted_close: Decimal
     volume: int = Field(ge=0)
-    knowable_at: datetime
-    recorded_at: datetime
     source: DataSource
     raw_ref: str
-
-    @field_validator("knowable_at", "recorded_at")
-    @classmethod
-    def validate_datetimes(cls, value: datetime, info) -> datetime:
-        return _require_aware(value, info.field_name)
 
     @model_validator(mode="after")
     def validate_bar(self) -> PriceBar:
@@ -207,21 +164,14 @@ class PriceBar(BaseModel):
         return self
 
 
-class GraphEdge(BaseModel):
+class GraphEdge(_PitRecordBase):
     from_id: str
     to_id: str
     relation_type: str
     valid_from: date
     valid_to: date
-    knowable_at: datetime
-    recorded_at: datetime
     confidence: Decimal = Field(ge=0, le=1)
     raw_ref: str
-
-    @field_validator("knowable_at", "recorded_at")
-    @classmethod
-    def validate_datetimes(cls, value: datetime, info) -> datetime:
-        return _require_aware(value, info.field_name)
 
     @model_validator(mode="after")
     def validate_time_order(self) -> GraphEdge:
@@ -233,8 +183,6 @@ class GraphEdge(BaseModel):
 
 
 class AsOfQuery(BaseModel):
-    """Mandatory replay boundary for every factor/backtest repository read."""
-
     entity_ids: tuple[str, ...] = Field(min_length=1)
     as_of: datetime
     valid_on: date | None = None
@@ -246,8 +194,6 @@ class AsOfQuery(BaseModel):
 
 
 class BacktestDataset(BaseModel):
-    """One immutable dataset resolved at a single transaction-time cutoff."""
-
     query: AsOfQuery
     graph_edges: tuple[GraphEdge, ...] = ()
     analyst_ratings: tuple[AnalystRatingEvent, ...] = ()
@@ -256,12 +202,7 @@ class BacktestDataset(BaseModel):
 
     @model_validator(mode="after")
     def reject_lookahead(self) -> BacktestDataset:
-        collections = (
-            self.graph_edges,
-            self.analyst_ratings,
-            self.fund_holdings,
-            self.price_bars,
-        )
+        collections = (self.graph_edges, self.analyst_ratings, self.fund_holdings, self.price_bars)
         if any(item.knowable_at > self.query.as_of for items in collections for item in items):
             raise ValueError("dataset contains a record that was not knowable at query.as_of")
         return self

@@ -1,9 +1,4 @@
-"""DataHub capture control-plane and append-only observation contracts.
-
-The contracts separate logical identity from append-only record content. A
-logical ID is derived only from its declared unique-key grain, while
-``content_sha256`` covers the complete record.
-"""
+"""DataHub capture control-plane and append-only observation contracts."""
 
 from __future__ import annotations
 
@@ -22,6 +17,10 @@ from truealpha_contracts.universe import SubjectRef, UniverseRef
 
 _SHA256 = r"^[0-9a-f]{64}$"
 _MUTABLE_TOKENS = frozenset({"latest", "current", "default", "stable", "main", "head"})
+
+
+class _FrozenModel(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
 
 def _reject_mutable_coordinate(value: str, field_name: str) -> str:
@@ -75,9 +74,7 @@ class AssessmentFreshness(StrEnum):
     UNKNOWN = "unknown"
 
 
-class RetryPolicy(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
+class RetryPolicy(_FrozenModel):
     max_attempts: int = Field(ge=1, le=20)
     retryable_outcomes: tuple[FetchAttemptOutcome, ...] = Field(min_length=1)
     terminal_outcomes: tuple[FetchAttemptOutcome, ...] = Field(min_length=1)
@@ -105,11 +102,7 @@ class RetryPolicy(BaseModel):
         return self
 
 
-class CaptureSchedulePolicy(BaseModel):
-    """Versioned demand, provider, freshness, and retry cadence."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
+class CaptureSchedulePolicy(_FrozenModel):
     schedule_policy_id: str = Field(default="", pattern=r"^(?:|schedule-policy:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
     policy_version: str = Field(pattern=STABLE_ID_PATTERN)
@@ -146,11 +139,7 @@ class CaptureSchedulePolicy(BaseModel):
         return self
 
 
-class CaptureCampaign(BaseModel):
-    """One deduplicated provider-work campaign over exact list versions."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
+class CaptureCampaign(_FrozenModel):
     campaign_id: str = Field(default="", pattern=r"^(?:|capture-campaign:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
     campaign_policy_id: str = Field(pattern=STABLE_ID_PATTERN)
@@ -171,10 +160,7 @@ class CaptureCampaign(BaseModel):
     @model_validator(mode="after")
     def freeze_and_identify(self) -> Self:
         refs = tuple(
-            sorted(
-                self.universe_refs,
-                key=lambda ref: (ref.universe_id, ref.universe_version, ref.content_sha256),
-            )
+            sorted(self.universe_refs, key=lambda ref: (ref.universe_id, ref.universe_version, ref.content_sha256))
         )
         identities = [(ref.universe_id, ref.universe_version, ref.content_sha256) for ref in refs]
         if len(identities) != len(set(identities)):
@@ -189,9 +175,7 @@ class CaptureCampaign(BaseModel):
         return self
 
 
-class CaptureRun(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
+class CaptureRun(_FrozenModel):
     run_id: str = Field(default="", pattern=r"^(?:|capture-run:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
     campaign_id: str = Field(pattern=r"^capture-campaign:[0-9a-f]{64}$")
@@ -210,11 +194,7 @@ class CaptureRun(BaseModel):
         return self
 
 
-class ListObligation(BaseModel):
-    """One exact list cell, retained even when provider work is shared."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
+class ListObligation(_FrozenModel):
     obligation_id: str = Field(default="", pattern=r"^(?:|list-obligation:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
     run_id: str = Field(pattern=r"^capture-run:[0-9a-f]{64}$")
@@ -239,11 +219,7 @@ class ListObligation(BaseModel):
         return self
 
 
-class SourceRequest(BaseModel):
-    """Pinned source request coordinates and its explicit obligation coverage."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
+class SourceRequest(_FrozenModel):
     source_request_id: str = Field(default="", pattern=r"^(?:|source-request:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
     source_registry_entry_id: str = Field(pattern=r"^source-registry-entry:[0-9a-f]{64}$")
@@ -287,11 +263,7 @@ class SourceRequest(BaseModel):
         return self
 
 
-class CaptureWorkItem(BaseModel):
-    """One campaign-scoped provider request shared by compatible list runs."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
+class CaptureWorkItem(_FrozenModel):
     work_item_id: str = Field(default="", pattern=r"^(?:|capture-work-item:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
     campaign_id: str = Field(pattern=r"^capture-campaign:[0-9a-f]{64}$")
@@ -309,11 +281,7 @@ class CaptureWorkItem(BaseModel):
         return self
 
 
-class FetchAttempt(BaseModel):
-    """Persisted dispatch intent before a source request can be issued."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
+class FetchAttempt(_FrozenModel):
     attempt_id: str = Field(default="", pattern=r"^(?:|fetch-attempt:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
     work_item_id: str = Field(pattern=r"^capture-work-item:[0-9a-f]{64}$")
@@ -336,11 +304,7 @@ class FetchAttempt(BaseModel):
         return self
 
 
-class FetchAttemptResult(BaseModel):
-    """One append-only result for a previously persisted dispatch intent."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
+class FetchAttemptResult(_FrozenModel):
     attempt_result_id: str = Field(default="", pattern=r"^(?:|fetch-attempt-result:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
     attempt_id: str = Field(pattern=r"^fetch-attempt:[0-9a-f]{64}$")
@@ -380,11 +344,7 @@ class FetchAttemptResult(BaseModel):
         return self
 
 
-class SourceVintage(BaseModel):
-    """A source-publication identity that preserves request and raw-byte lineage."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
+class SourceVintage(_FrozenModel):
     source_vintage_id: str = Field(default="", pattern=r"^(?:|source-vintage:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
     source_request_id: str = Field(pattern=r"^source-request:[0-9a-f]{64}$")
@@ -408,11 +368,7 @@ class SourceVintage(BaseModel):
         return self
 
 
-class ListObligationResult(BaseModel):
-    """Persisted terminal result for one obligation, never inferred from missing rows."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
+class ListObligationResult(_FrozenModel):
     result_id: str = Field(default="", pattern=r"^(?:|list-obligation-result:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
     obligation_id: str = Field(pattern=r"^list-obligation:[0-9a-f]{64}$")
@@ -447,11 +403,7 @@ class ListObligationResult(BaseModel):
         return self
 
 
-class NormalizedObservation(BaseModel):
-    """Append-only PIT observation identity; restatements supersede instead of update."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
+class NormalizedObservation(_FrozenModel):
     observation_id: str = Field(default="", pattern=r"^(?:|normalized-observation:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
     semantic_type: str = Field(pattern=STABLE_ID_PATTERN)
@@ -464,13 +416,8 @@ class NormalizedObservation(BaseModel):
     parser_version: str = Field(pattern=STABLE_ID_PATTERN)
     mapping_version: str = Field(pattern=STABLE_ID_PATTERN)
     normalized_payload_sha256: str = Field(pattern=_SHA256)
-    # #530: The next two fields stay declared and unused by the capture path.
-    # `test_restatement_fields_stay_unwired.py` fails when a data-engine module writes them.
     is_restatement: bool = False
-    supersedes_observation_id: str | None = Field(
-        default=None,
-        pattern=r"^normalized-observation:[0-9a-f]{64}$",
-    )
+    supersedes_observation_id: str | None = Field(default=None, pattern=r"^normalized-observation:[0-9a-f]{64}$")
 
     @field_validator("semantic_version", "parser_version", "mapping_version")
     @classmethod

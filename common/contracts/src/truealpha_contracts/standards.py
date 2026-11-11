@@ -1,20 +1,4 @@
-"""Metric standards: the unit the standard→wide-row loop maps onto every issuer (#735, #733).
-
-A `MetricStandard` says what a field MEANS and what counts as its value, on top of the
-metric registry entry (`metrics.METRICS`: unit family, period kind). The plane's
-reconciliation policy answers "which source wins"; the standard answers "what is the value
-at all" — the acceptance rule a candidate must satisfy, the evidence a landed value must
-carry, whether the column is a hard (deterministic, corroborated) or an evaluative
-(model-judged) factor, and how old a value may be before the planner reopens the cell.
-
-Two kinds, one row (owner decision 2026-09-04):
-- `HARD`: a deterministic acceptance rule; may gate strategy selection.
-- `EVALUATIVE`: a model judges a rubric; carries `factor_validation_status` and never
-  gates selection until a sealed holdout has calibrated it (init.md §8, #734).
-
-The first standard is `employees_total` — the GPPE denominator, prose-only in every
-filing (SEC company-facts publishes no employee count), which is why the loop exists.
-"""
+"""Metric standards: what a field means, what counts as its value, and where its facts live (#735, #733)."""
 
 from __future__ import annotations
 
@@ -39,37 +23,15 @@ class StandardKind(StrEnum):
 
 
 class FactPlane(BaseModel):
-    """WHERE a standard's facts live, and which source wins among them.
-
-    The reconciliation policy answers "which source wins"; this answers "wins among what".
-    The planner took both from its own source code until #799: `open_cells` took a
-    `MetricStandard` and queried `staging.issuer_headcount_facts` regardless, so a second
-    standard would have planned against headcount facts under its own name.
-
-    `table` and `issuer_column` are identifiers the planner interpolates, never user input —
-    a standard is code, declared in `STANDARDS` below and reviewed as code.
-    """
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     table: str = Field(pattern=r"^[a-z_]+\.[a-z_]+$")
-    #: The column holding the issuer key the planner joins on (a CIK today).
     issuer_column: str = Field(pattern=r"^[a-z_]+$")
-    #: The policy whose `source_priority` orders the sources of this plane: source first and
-    #: recency second (init.md rule 12). `reconciliation_policies` holds every instance. A
-    #: source absent from the order sorts last.
     reconciliation_policy: ReconciliationPolicy
-    #: Extractor revisions whose rows are no longer admissible, because the rule was MEASURED
-    #: to land wrong values. The plane is append-only, so the rows stay — as history of what
-    #: was believed — and every reader treats them as absent: they close no planner cell, so
-    #: the next run re-extracts the issuer under the current rule, and they reach no factor.
-    #: A plane that declares any must carry an `extractor` column.
     withdrawn_extractors: tuple[str, ...] = ()
 
 
 class EvidenceRequirement(StrEnum):
-    """What a landed value must point at before it is a value rather than a guess."""
-
     XBRL_FACT = "xbrl_fact"
     FILING_SPAN = "filing_span"
     DOCUMENT_CITATION = "document_citation"
@@ -85,18 +47,9 @@ class MetricStandard(BaseModel):
     kind: StandardKind
     evidence: EvidenceRequirement
     confidence_policy_id: str = Field(pattern=r"^[a-z0-9-]+:v[0-9]+$")
-    # A value older than this, measured from the cutoff, reopens the cell. Annual
-    # disclosures refresh every ~365 days; 400 tolerates a late filer without treating a
-    # two-year-old figure as current.
     max_age_days: int = Field(gt=0)
-    # Source labels (as written in the fact table's `source`) that satisfy `evidence`. A
-    # cell whose best fact comes from any other source is open: the loop may supersede a
-    # reviewed seed with a cited extraction, never the reverse.
     evidence_bearing_sources: tuple[str, ...] = Field(min_length=1)
-    #: The plane the planner reads to decide whether a cell is already closed (#799).
     plane: FactPlane
-    #: The adapter that resolves an open cell, as `module:function`. `backfill` dispatched on
-    #: `evidence` alone until #799, which made every FILING_SPAN standard extract headcount.
     adapter: str = Field(pattern=r"^[a-z0-9_.]+:[a-z0-9_]+$")
 
     @model_validator(mode="after")
@@ -110,47 +63,24 @@ class MetricStandard(BaseModel):
         return canonical_sha256(self.model_dump(mode="json"))
 
 
-#: Confidence a landed value carries, by policy id and extractor identity. The
-#: extractor identity is the rule or model revision that CHOSE the value; the number is
-#: the policy's statement about that chooser, not the chooser's opinion of itself
-#: (init.md §9: self-reported confidence is a signal, not ground truth).
 CONFIDENCE_POLICIES: MappingProxyType[str, MappingProxyType[str, Decimal]] = MappingProxyType(
     {
-        # A partition's confidence is about the SET, not about any one part: the parts were
-        # accepted together because they balanced, and no part is more or less believed than
-        # its siblings. The deterministic rule scores higher than the headcount rule's
-        # single-candidate case because it is checked against an independently computed
-        # total rather than merely being unambiguous.
         "segment-revenue-confidence:v1": MappingProxyType(
             {
                 "rule:exhaustive-partition:v1": Decimal("0.90"),
-                # The issuer declares one segment, so the "partition" is the whole company in
-                # one part. Lower than the rule above and deliberately so: that one is accepted
-                # because independently measured parts ADD UP to an independently measured
-                # total, and this one cannot fail its own check. What it rests on is the
-                # filer's own tagged count, one source's say-so, which is weaker evidence than an
-                # arithmetic agreement between two sources — and a policy that priced them the
-                # same would be paying for a tautology (#772). v1–v3 are not priced: they are
-                # withdrawn (#822, #841, #849), and a withdrawn rule has nothing left to land.
                 "rule:single-segment:v4": Decimal("0.75"),
-                # Reserved for a model-proposed partition (#772). The proposal still has to
-                # balance, so the floor is the rule's minus a margin for the proposing step.
                 "model-selection": Decimal("0.85"),
             }
         ),
         "headcount-confidence:v1": MappingProxyType(
             {
-                # Exactly one company-wide statement in the filing: nothing to choose.
                 "rule:single-candidate:v1": Decimal("0.85"),
-                # Reserved for the model-selection path (#70 scope item 2).
                 "model-selection": Decimal("0.90"),
-                # The reviewed seed, as it was recorded (#521).
                 "manual-review": Decimal("0.70"),
             }
         ),
     }
 )
-
 
 STANDARDS: MappingProxyType[str, MetricStandard] = MappingProxyType(
     {
@@ -192,25 +122,12 @@ STANDARDS: MappingProxyType[str, MetricStandard] = MappingProxyType(
             kind=StandardKind.HARD,
             evidence=EvidenceRequirement.FILING_SPAN,
             confidence_policy_id="segment-revenue-confidence:v1",
-            # A segment table is restated once a year like the headcount it sits beside; 400
-            # tolerates a late filer without treating a two-year-old breakdown as current.
             max_age_days=400,
             evidence_bearing_sources=("10k-segment-extraction",),
             plane=FactPlane(
                 table="staging.issuer_segment_revenue_facts",
                 issuer_column="cik",
                 reconciliation_policy=SEGMENT_REVENUE_RECONCILIATION_POLICY,
-                # v1 read "one segment" from a sentence. Landed Berkshire Hathaway as one
-                # segment on "expenses considered significant for one operating segment may not
-                # be significant in others"; over 106 filings it fired on 48 issuers, at least
-                # five of which report several (#822).
-                # v2 decided from the tagged count and described the issuer by the sentence the
-                # count was tagged in — for Visa a sentence about expenses, on which the
-                # classifier declined every theme (#841). Withdrawn so the row is re-landed with
-                # the filer's segment note as its description.
-                # v3's description was the note alone; Netflix's note declares one segment and
-                # says nothing about the business, and the classifier answered as NVIDIA (#849).
-                # Withdrawn so the row is re-landed with the nature-of-business opening beside it.
                 withdrawn_extractors=("rule:single-segment:v1", "rule:single-segment:v2", "rule:single-segment:v3"),
             ),
             adapter="data_engine.datahub.standards.segment_extraction:extract_segment_revenue",
@@ -220,9 +137,6 @@ STANDARDS: MappingProxyType[str, MetricStandard] = MappingProxyType(
 
 
 def confidence_for(policy_id: str, extractor: str) -> Decimal:
-    """Every model-selected value shares one policy entry: the confidence is the policy's
-    statement about the *class* of chooser (a model choosing among enumerated spans), not
-    about a particular model revision — that identity travels in the invocation record."""
     key = "model-selection" if extractor.startswith("model:") else extractor
     try:
         return CONFIDENCE_POLICIES[policy_id][key]

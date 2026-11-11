@@ -1,75 +1,35 @@
-"""Deterministic test-tree sharding for parallel CI lanes — A4 B1 (#673).
-
-`apps/data-engine/tests` was a single 168 s pytest step and the pole of every
-PR's CI wall (measured on run 33361977933: 207 s job, 168 s of it pytest, the
-next-slowest job 163 s). The tree has no `conftest.py` and defines every
-fixture inside the file that uses it, so it splits without fixture coupling.
-
-What a split does NOT tolerate is silently dropping files. A shard scheme that
-stops covering a renamed directory reports success over nothing — the
-green-while-empty shape (#527), and the most expensive kind of green there is.
-So the partition lives here, in one place, and its covering property is
-asserted by `common/runtime/tests/test_pytest_shard.py` rather than trusted:
-every collectable file lands in exactly one shard, for any shard count.
-
-Assignment is by index over the sorted file list, so a new test file joins a
-shard automatically and a new subdirectory needs no workflow edit — an
-explicit per-directory list is exactly the kind that rots (#472).
-
-Usage:
-    python tools/pytest_shard.py apps/data-engine/tests --shard 0 --of 3
-"""
+"""Deterministic duration-weighted test sharding for parallel CI lanes (#673)."""
 
 from __future__ import annotations
 
 import argparse
 import ast
+import json
 import sys
 from collections.abc import Sequence
 from pathlib import Path
 from typing import NamedTuple
 
-# pytest's default `python_files`. Both patterns are collected so that a future
-# `foo_test.py` is sharded rather than silently skipped; pyproject does not
-# override `python_files`, and if it ever does, the standing test comparing
-# this collection against files containing test functions fails first.
 PATTERNS = ("test_*.py", "*_test.py")
 
 
 def collect(root: Path | Sequence[Path]) -> list[Path]:
-    """Every file under ``root`` (or ``roots``) pytest would collect, sorted for determinism."""
     roots = [root] if isinstance(root, Path) else list(root)
-    found: set[Path] = set()
-    for r in roots:
-        for pattern in PATTERNS:
-            found.update(r.rglob(pattern))
-    return sorted(found)
+    return sorted({p for r in roots for pattern in PATTERNS for p in r.rglob(pattern)})
 
 
 def test_functions(path: Path) -> int:
-    """How many test functions a file defines, parsed rather than grepped.
-
-    A substring count of ``def test_`` misses what pytest collects (methods on
-    ``Test*`` classes) and hits what it does not (the string inside a docstring
-    or an f-string) — review on #700. Parametrised cases still count as one,
-    which is the known imprecision of this weight; it is a balancing hint, not
-    a schedule.
-
-    A file that does not parse weighs 1 and is still assigned: pytest reports
-    the syntax error far better than this tool could, and refusing to shard
-    would turn one broken file into a CI job that runs nothing.
-    """
     try:
         tree = ast.parse(path.read_text(encoding="utf-8"))
     except SyntaxError:
         return 1
-    count = 0
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ClassDef) and not node.name.startswith("Test"):
-            continue
-        for child in ast.iter_child_nodes(node) if isinstance(node, ast.ClassDef) else []:
-            if isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef) and child.name.startswith("test"):
-                count += 1
+    count = sum(
+        1
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ClassDef) and node.name.startswith("Test")
+        for child in ast.iter_child_nodes(node)
+        if isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef) and child.name.startswith("test")
+    )
     count += sum(
         1
         for node in tree.body
@@ -79,74 +39,35 @@ def test_functions(path: Path) -> int:
 
 
 def load_weights() -> dict[str, float]:
-    """Measured seconds per file, if a harvest exists beside this tool.
-
-    Two proxies have already been refuted by measurement: file position gave
-    57/107/137 s across three lanes, and test count gave 74/155/84 s while the
-    counts were 177/177/176 — a Dagster materialisation test costs 9 s and a
-    pure-function test costs a millisecond. Measured time is the only weight
-    that has not lied, so it is used when present.
-
-    Missing file -> empty mapping, and `weight_of` falls back to the test
-    count. A missing harvest must not be an error: the tool has to work in a
-    fresh clone, and a shard scheme that refuses to run is worse than one that
-    balances imprecisely.
-    """
-    # Beside this file, deliberately: the harvest travels with the tool, and a
-    # caller-supplied root would let two callers disagree about which weights
-    # apply. The parameter this used to take was never read (review).
     path = Path(__file__).resolve().parents[4] / "tools" / "pytest_shard_weights.json"
     if not path.exists():
         return {}
-    import json
-
-    raw = json.loads(path.read_text(encoding="utf-8"))
-    measured = raw.get("seconds_by_file", {})
+    measured = json.loads(path.read_text(encoding="utf-8")).get("seconds_by_file", {})
     if not isinstance(measured, dict):
         raise ValueError(f"{path} has no seconds_by_file mapping")
     return {str(key): float(value) for key, value in measured.items()}
 
 
 def weight_of(path: Path, weights: dict[str, float], repo_root: Path, rate: float) -> float:
-    """The packing weight for one file, in SECONDS either way.
-
-    Measured seconds when the harvest has them. Otherwise the file is new since
-    the harvest, and its test count is converted at `rate` — the measured
-    average seconds per test — rather than used raw. Mixing the two units is
-    not a rounding error: a 43-test file would outweigh a genuinely 41.8 s file
-    and the packing would be sorting by nothing meaningful.
-
-    Never zero for an unknown file: zero-weighting piles every newly added test
-    into one lane, which is the imbalance this whole mechanism replaced.
-    """
     key = str(path.relative_to(repo_root)) if path.is_absolute() else str(path)
     if key in weights:
         return weights[key]
     return float(test_functions(path)) * rate
 
 
-# The smallest share of test files that must carry a harvested weight.
-# Below this share, the packing estimates most files from test counts. The harvest is then broken.
-# At or above this share, the packing still works: `weight_of` converts the test count of each
-# unweighted file at the measured rate. A share between this floor and 100% is a speed statistic.
-# It goes to the CI step summary and never blocks a merge (#1503; it blocked #1083, #1490, #1540).
 WEIGHT_COVERAGE_FLOOR = 0.5
 
 
 class WeightCoverage(NamedTuple):
-    """How many test files of one root have a harvested weight."""
-
     label: str
     known: int
     total: int
 
     @property
     def share(self) -> float:
-        """Known files divided by all files. An empty root has share 0.0, so it fails the floor."""
         return self.known / self.total if self.total else 0.0
 
     def line(self) -> str:
-        """One markdown list item for the CI step summary."""
         return (
             f"- {self.label}: {self.share:.1%} of test files have a harvested weight "
             f"({self.known}/{self.total}); floor {WEIGHT_COVERAGE_FLOOR:.0%}"
@@ -154,16 +75,11 @@ class WeightCoverage(NamedTuple):
 
 
 def weight_coverage(label: str, files: Sequence[Path], weights: dict[str, float], repo_root: Path) -> WeightCoverage:
-    """Count the files of one root whose repo-relative path has a harvested weight."""
     known = sum(1 for path in files if str(path.relative_to(repo_root)) in weights)
     return WeightCoverage(label=label, known=known, total=len(files))
 
 
 def require_coverage_floor(coverages: Sequence[WeightCoverage]) -> None:
-    """Raise ValueError that names every root whose coverage is below the floor.
-
-    The floor means the harvest is broken. It does not mean the harvest is old.
-    """
     broken = [coverage for coverage in coverages if coverage.share < WEIGHT_COVERAGE_FLOOR]
     if broken:
         details = "; ".join(f"{c.label} {c.share:.1%} ({c.known}/{c.total})" for c in broken)
@@ -174,7 +90,6 @@ def require_coverage_floor(coverages: Sequence[WeightCoverage]) -> None:
 
 
 def write_step_summary(coverages: Sequence[WeightCoverage], summary_path: str | None) -> None:
-    """Append one line per root to the file that GITHUB_STEP_SUMMARY names. No path: write nothing."""
     if not summary_path:
         return
     with Path(summary_path).open("a", encoding="utf-8") as handle:
@@ -183,33 +98,12 @@ def write_step_summary(coverages: Sequence[WeightCoverage], summary_path: str | 
 
 
 def shard(files: Sequence[Path], index: int, total: int) -> list[Path]:
-    """The files belonging to shard ``index`` (0-based) of ``total``.
-
-    Greedy bin-packing weighted by test count, not round-robin by position.
-    Measured on run 33365311320, where round-robin gave three equal FILE counts
-    and wildly unequal work: 24/24/24 files carrying 127/177/226 tests, which
-    took 57 s / 107 s / 137 s. The wall is the slowest lane, so a balanced
-    split is the entire point of splitting. Packing by test count predicts
-    177/177/176 — within 1%.
-
-    Deterministic: files are placed heaviest-first with ties broken by path,
-    into the least-loaded bin with ties broken by index. The same tree always
-    produces the same assignment, so a lane's content does not churn between
-    runs of the same commit.
-
-    Raises rather than returning an empty list on a bad index: a silently empty
-    shard makes pytest exit 5 ("no tests collected") in a job whose name says it
-    ran the suite.
-    """
     if total < 1:
         raise ValueError(f"total shards must be >= 1, got {total}")
     if not 0 <= index < total:
         raise ValueError(f"shard index {index} is out of range for {total} shards")
-
     repo_root = Path(__file__).resolve().parents[4]
     weights = load_weights()
-    # Seconds per test, from the harvest itself, so an unmeasured file is
-    # estimated in the same unit as a measured one.
     measured_tests = sum(test_functions(repo_root / key) for key in weights if (repo_root / key).exists())
     rate = (sum(weights.values()) / measured_tests) if measured_tests else 1.0
     weight = {path: weight_of(path, weights, repo_root, rate) for path in files}
@@ -225,9 +119,9 @@ def shard(files: Sequence[Path], index: int, total: int) -> list[Path]:
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("roots", nargs="+", type=Path, help="test tree(s) to shard")
-    parser.add_argument("--shard", type=int, required=True, help="0-based shard index")
-    parser.add_argument("--of", type=int, required=True, dest="total", help="total shard count")
+    parser.add_argument("roots", nargs="+", type=Path)
+    parser.add_argument("--shard", type=int, required=True)
+    parser.add_argument("--of", type=int, required=True, dest="total")
     arguments = parser.parse_args(list(sys.argv[1:] if argv is None else argv))
 
     for root in arguments.roots:
@@ -235,8 +129,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"pytest_shard: {root} is not a directory", file=sys.stderr)
             return 2
     files = collect(arguments.roots)
+    roots_str = ", ".join(str(r) for r in arguments.roots)
     if not files:
-        roots_str = ", ".join(str(r) for r in arguments.roots)
         print(f"pytest_shard: {roots_str} contains no test files", file=sys.stderr)
         return 2
     try:
@@ -245,10 +139,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"pytest_shard: {error}", file=sys.stderr)
         return 2
     if not selected:
-        # More shards than files: the caller asked for a lane with nothing in
-        # it, which would run pytest over an empty argument list — i.e. the
-        # whole suite, or nothing, depending on the invocation.
-        roots_str = ", ".join(str(r) for r in arguments.roots)
         print(
             f"pytest_shard: shard {arguments.shard} of {arguments.total} is empty "
             f"({len(files)} files under {roots_str}) — use fewer shards",

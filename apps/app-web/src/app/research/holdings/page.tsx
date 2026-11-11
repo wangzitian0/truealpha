@@ -14,9 +14,7 @@ export default async function HoldingsPage() {
   return (
     <section aria-labelledby="holdings-heading" className="space-y-6">
       <div>
-        <h1 id="holdings-heading" className="text-2xl font-bold tracking-tight">
-          Fund holdings &amp; valuation
-        </h1>
+        <h1 id="holdings-heading" className="text-2xl font-bold tracking-tight">Fund holdings &amp; valuation</h1>
         <p className="mt-2 text-sm text-gray-400">
           The fund&apos;s own filed N-PORT weights (newest vintage, captured weekly from SEC EDGAR), joined to the
           governed TOPT valuation run per listing — a join over two materialized planes, computed nowhere. Coverage is
@@ -57,11 +55,9 @@ export default async function HoldingsPage() {
                   <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-gray-400">
                     <th className="px-3 py-2">Holding</th>
                     <th className="px-3 py-2">Ticker</th>
-                    <th className="px-3 py-2 text-right">Weight</th>
-                    <th className="px-3 py-2 text-right">P/S</th>
-                    <th className="px-3 py-2 text-right">P/GP</th>
-                    <th className="px-3 py-2 text-right">Target mid</th>
-                    <th className="px-3 py-2 text-right">Gap</th>
+                    {["Weight", "P/S", "P/GP", "Target mid", "Gap"].map((h) => (
+                      <th key={h} className="px-3 py-2 text-right">{h}</th>
+                    ))}
                     <th className="px-3 py-2">GPPE tier</th>
                   </tr>
                 </thead>
@@ -84,11 +80,7 @@ export default async function HoldingsPage() {
                         <td className="px-3 py-1.5 text-right tabular-nums" title={line.currentPgp ?? undefined}>
                           {formatCell(formatRatio(line.currentPgp))}
                         </td>
-                        {/* #1235: a P/GP row's band and gap are P/GP; a former-band row's are P/S. */}
-                        <td
-                          className="px-3 py-1.5 text-right tabular-nums"
-                          title={line.targetPgpMidpoint ?? line.targetPsMidpoint ?? undefined}
-                        >
+                        <td className="px-3 py-1.5 text-right tabular-nums" title={line.targetPgpMidpoint ?? line.targetPsMidpoint ?? undefined}>
                           {targetPgpFormatted !== null
                             ? `${targetPgpFormatted} P/GP`
                             : targetPsFormatted !== null
@@ -96,9 +88,7 @@ export default async function HoldingsPage() {
                               : "—"}
                         </td>
                         <td className="px-3 py-1.5 text-right tabular-nums" title={line.valuationGap ?? undefined}>
-                          {gapFormatted === null
-                            ? "—"
-                            : `${gapFormatted} ${line.currentPgp !== null ? "P/GP" : "P/S"}`}
+                          {gapFormatted === null ? "—" : `${gapFormatted} ${line.currentPgp !== null ? "P/GP" : "P/S"}`}
                         </td>
                         <td className="px-3 py-1.5 text-xs">{formatCell(line.tier)}</td>
                       </tr>

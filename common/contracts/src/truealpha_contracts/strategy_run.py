@@ -1,23 +1,4 @@
-"""Provisional, read-only Core Strategy run reports shared by MCP and the App.
-
-This module intentionally does **not** implement `#41`'s full seven-module
-`ResearchReadRepository`. It defines the smallest typed slice needed to let a
-Python (MCP) adapter and a TypeScript (App) adapter agree on one strategy's
-run result while the real `mart` projection (`#26`) and the seven-module
-read-contract freeze (`#41`, gated on `#40`) are still in progress. See `#347`
-for the full rationale.
-
-`StrategyRunReport` mirrors exactly the fields `apps/data-engine/scripts/
-run_strategy_smoke.py` already produces (issuer/cutoff-keyed decisions with
-outcome, tier, valuation gap, rank, target weight, and now confidence); it
-performs no new computation. `outcome` and `exclusion_reason` remain loosely
-typed (`StrategyRunOutcome` enum, but a free-form `str` for exclusion reason)
-because the preview script does not yet bind every reason to the formal
-`truealpha_contracts.strategy.ExclusionReason` enum (for example
-``"unavailable_required_input"`` has no corresponding member there); widening
-this to the frozen enum is follow-up work once the real #24/#25 candidates
-close.
-"""
+"""Read-only Core Strategy run reports shared by MCP and the App (#347, #361)."""
 
 from __future__ import annotations
 
@@ -48,8 +29,6 @@ class StrategyRunOutcome(StrEnum):
 
 
 class StrategyRunDecision(_StrictFrozenModel):
-    """One issuer's decision at one cutoff, verbatim from the strategy-smoke artifact."""
-
     issuer_id: str = Field(min_length=1)
     cutoff_at: datetime
     outcome: StrategyRunOutcome
@@ -58,19 +37,11 @@ class StrategyRunDecision(_StrictFrozenModel):
     capital_adjusted_labor_efficiency: Decimal | None = None
     current_price_to_sales: Decimal | None = None
     target_price_to_sales: Decimal | None = None
-    # #1235: the P/GP valuation of strategy definition 1.0.0. When the P/GP target is set,
-    # `valuation_gap` is target P/GP / current P/GP - 1 and `target_price_to_sales` is None.
-    # None on a decision of definition 0.1.0, whose gap divides P/S.
     current_price_to_gross_profit: Decimal | None = None
     target_price_to_gross_profit: Decimal | None = None
     valuation_gap: Decimal | None = None
-    # Module 1 PEG (#284). Recorded but not selecting; None when any input is absent or
-    # growth is non-positive, so the absence is meaningful rather than a default.
     peg: Decimal | None = None
-    # Module 1 ordering (#284). Independent of `rank`; PEG does not select.
     peg_rank: int | None = None
-    # #1176: the metric name the strategy used for capital_adjusted_labor_efficiency. None when no metric
-    # was recorded (a row written before the column, or an issuer with no metric).
     labor_efficiency_metric: str | None = None
     confidence: Decimal | None = Field(default=None, ge=0, le=1)
     exclusion_reason: str | None = None
@@ -80,9 +51,7 @@ class StrategyRunDecision(_StrictFrozenModel):
     @field_validator("cutoff_at", mode="before")
     @classmethod
     def parse_cutoff_at(cls, value: object) -> object:
-        if isinstance(value, str):
-            return datetime.fromisoformat(value.replace("Z", "+00:00"))
-        return value
+        return datetime.fromisoformat(value.replace("Z", "+00:00")) if isinstance(value, str) else value
 
     @field_validator("cutoff_at")
     @classmethod
@@ -97,7 +66,6 @@ class StrategyRunDecision(_StrictFrozenModel):
 
     @property
     def valuation_basis(self) -> Literal["price_to_sales", "price_to_gross_profit"] | None:
-        """The multiple the valuation gap divides; None when the decision has no target."""
         if self.target_price_to_gross_profit is not None:
             return "price_to_gross_profit"
         if self.target_price_to_sales is not None:
@@ -106,19 +74,12 @@ class StrategyRunDecision(_StrictFrozenModel):
 
 
 class StrategyRunDefinition(_StrictFrozenModel):
-    """The strategy definition that a run evaluated, and the review state of its bands (#1235).
-
-    ``review_state`` must equal ``definition_review_state`` of the version and the content
-    hash. The validator rejects any other value, so no report shows an unknown definition as reviewed.
-    """
-
     version: str
     content_sha256: str = Field(pattern=_SHA256_PATTERN)
     review_state: DefinitionReviewState
 
     @classmethod
     def resolve(cls, *, version: str, content_sha256: str) -> Self:
-        """The marker of a recorded run. The definition registry supplies the review state."""
         return cls(
             version=version,
             content_sha256=content_sha256,
@@ -133,8 +94,6 @@ class StrategyRunDefinition(_StrictFrozenModel):
 
 
 class StrategyRunReport(_StrictFrozenModel):
-    """A provisional strategy-run result, sourced from a checked-in fixture or `mart` (#361)."""
-
     strategy_id: Literal["large_model_value_v0"]
     source: Literal["strategy_smoke_fixture", "mart"] = "strategy_smoke_fixture"
     corpus_sha256: str = Field(pattern=_SHA256_PATTERN)
@@ -142,8 +101,6 @@ class StrategyRunReport(_StrictFrozenModel):
     golden_mismatches: tuple[str, ...] = ()
     strategy_run_id: str | None = None
     governed: bool = False
-    # #1235: the definition the run evaluated. None on a report that records no definition:
-    # the preview fixture, or a report built before this field existed.
     definition: StrategyRunDefinition | None = None
 
 
@@ -155,7 +112,6 @@ class StrategyRunUnavailable(_StrictFrozenModel):
         "fixture_hash_mismatch",
         "fixture_not_found",
         "fixture_corrupted",
-        # #361: the Postgres-backed repository's fail-closed outcomes.
         "no_runs_recorded",
         "database_unavailable",
         "schema_mismatch",
@@ -164,11 +120,4 @@ class StrategyRunUnavailable(_StrictFrozenModel):
 
 
 class StrategyRunReadRepository(Protocol):
-    """Read boundary shared by the MCP tool (`#348`) and the admin page (`#349`).
-
-    ``context`` is accepted so callers never need a later signature break once
-    a real authorization decision is wired in, but no implementation of this
-    protocol shipped by `#347` evaluates it — it performs no policy decision.
-    """
-
     def get_latest(self, *, strategy_id: str, context: AccessContext) -> StrategyRunReport | StrategyRunUnavailable: ...

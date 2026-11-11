@@ -1,28 +1,4 @@
-"""Single source of truth for environment scope, sentinels, known answers, and vendor accounts (#1416, #1520).
-
-Loads ``environment_contract.v1.json`` and ``sentinel_known_answers.v1.json`` from
-``truealpha_contracts.data``. Both Python lanes and the generated TypeScript module
-(``apps/app-web/src/contracts/environmentContract.generated.ts``) derive their rules
-from this contract so no environment schedule or vendor share is hand-mirrored.
-
-Every vendor account that more than one environment calls has one row in ``vendor_accounts`` (#1520).
-The row holds each limit of the vendor with its evidence, and one percent per environment.
-``account_share`` is the one function that turns a limit and a percent into a number of calls.
-The share is ``amount * percent // 100``, an integer floor, in the window of the limit.
-No other file keeps a vendor figure, a percent or a demand estimate.
-
-Every universe has one record in ``universes`` (#1522): its key, id prefix, lane name, membership, roles,
-price series flag, report sample and tick cron per environment. No other file keeps its own copy or list of
-a universe key, an id prefix, a lane name, a member list or a tick time.
-Each environment holds a list of universes it runs. A universe is ``scheduled`` or ``stopped``.
-The status is the only gate of a universe tick. No other field, verdict or count of nights holds it
-back (owner decision D5 of 2026-10-26). No other file says that a universe is stopped.
-
-The contract also holds the maximum runtime policy (margin, floor and window). The data-engine
-run launcher derives each run's maximum runtime from successful runs in dagster.runs (#1442, #1522). It holds the memory capacity
-of the Dagster code server, and the data-engine run queue limit derives from it (#1467).
-It holds the retry policy, the per-environment pacing and the probe slots of the model seat (#1444).
-"""
+"""Single source of truth for environment scope, sentinels, known answers, and vendor accounts (#1416, #1520)."""
 
 from __future__ import annotations
 
@@ -41,11 +17,8 @@ ENVIRONMENT_CONTRACT_RESOURCE = "environment_contract.v1.json"
 SENTINEL_KNOWN_ANSWERS_RESOURCE = "sentinel_known_answers.v1.json"
 
 EnvironmentKey = Literal["preview", "staging", "production"]
-#: The other names that a process or a stored row gives an environment: alias -> environment.
 ENVIRONMENT_ALIASES: Mapping[str, str] = {"prod": "production"}
 UniverseStatus = Literal["scheduled", "stopped"]
-#: ``strategy``: the tick seeds the strategy inputs and runs the frozen strategy. ``fund_consolidation``: the
-#: tick values the fund whose holdings are the members. ``sentinel``: a deploy check, no served universe.
 UniverseRole = Literal["strategy", "fund_consolidation", "sentinel"]
 MembershipKind = Literal["frozen_corpus", "index_api", "nport", "static"]
 
@@ -67,16 +40,10 @@ class SentinelMember(_StrictFrozenModel):
 
 
 class UniverseMembership(_StrictFrozenModel):
-    """Where the members of a universe come from. A field that the kind does not use must stay empty."""
-
     kind: MembershipKind
-    #: ``index_api``: the endpoint of the index operator.
     url: str | None = Field(default=None, min_length=1)
-    #: The one exchange that lists every member, or None for a multi-exchange universe (#1411 K6).
     mic: str | None = Field(default=None, min_length=1)
-    #: The fund whose N-PORT holdings give or check the members.
     nport_ticker: str | None = Field(default=None, min_length=1)
-    #: ``static``: the tickers of a hand-picked list.
     members: tuple[str, ...] = ()
 
     @model_validator(mode="after")
@@ -99,14 +66,6 @@ class UniverseMembership(_StrictFrozenModel):
 
 
 class UniverseRecord(_StrictFrozenModel):
-    """The one record of a universe (#1522). Every reader of the universe reads this record.
-
-    The key of the record is its key in ``EnvironmentContract.universes``. ``lane_name`` is the name that
-    the lanes, the run tags and the stored verdicts give the universe: it stays as stored. ``id_prefix``
-    starts every governed universe id of the universe. ``cron`` holds the tick time of each environment
-    that ticks the universe.
-    """
-
     region: str = Field(pattern=r"^[a-z]{2}$")
     id_prefix: str = Field(pattern=r"^universe:[a-z0-9]+-[a-z]{2}-$")
     lane_name: str = Field(min_length=1)
@@ -118,12 +77,10 @@ class UniverseRecord(_StrictFrozenModel):
     cron: Mapping[EnvironmentKey, str] = Field(min_length=1)
 
     def cron_for(self, environment: str) -> str | None:
-        """The tick cron of ``environment``, or None when the record does not time it there."""
         return next((cron for name, cron in self.cron.items() if name == environment), None)
 
     @property
     def is_sentinel(self) -> bool:
-        """A sentinel is a deploy check. It has no served head and no status in an environment list."""
         return "sentinel" in self.roles
 
     @property
@@ -136,12 +93,10 @@ class UniverseRecord(_StrictFrozenModel):
 
 
 class EnvironmentTickContract(_StrictFrozenModel):
-    """The tick declaration of one environment (#1416, #1522). The tick time is in the universe record."""
+    pass
 
 
 class EnvironmentUniverse(_StrictFrozenModel):
-    """One universe of an environment and its status. The status is the only gate of its tick."""
-
     key: str = Field(min_length=1)
     status: UniverseStatus
 
@@ -151,7 +106,6 @@ class EnvironmentSpec(_StrictFrozenModel):
     trigger: str = Field(min_length=1)
     live_vendor_calls: bool
     universes: tuple[EnvironmentUniverse, ...]
-    #: Universes whose constituent list this environment refreshes weekly without running a capture tick (#1523 D2).
     list_refresh: tuple[str, ...] = ()
     ticks: Mapping[str, EnvironmentTickContract]
 
@@ -165,18 +119,11 @@ class EnvironmentSpec(_StrictFrozenModel):
         return self
 
 
-#: The window of a request limit that the gate reads as a daily budget. The gate counts from 00:00 UTC.
 DAY_SECONDS = 86_400
 _ENVIRONMENT_KEYS: tuple[str, ...] = get_args(EnvironmentKey)
-#: Who holds the credential of the account. An environment that the percent table does not name (local, CI)
-#: gets the whole figure of a ``host_ip`` account (another host has another address) and no call to any other.
 AccountHolder = Literal["api_key", "host_ip", "account"]
-#: What the vendor counts a limit per. ``not_stated``: the vendor page does not say. The contract then reads
-#: one counter for all endpoints, processes and environments, at the smallest published figure.
 CountsPer = Literal["api_key", "host_ip", "account", "endpoint", "connection", "not_stated"]
 LimitUnit = Literal["request", "distinct_stock"]
-#: ``published``: a vendor page states the figure. ``measured``: we measured it. ``none_published``: the vendor
-#: states no figure. ``not_known``: no figure is known. ``self_imposed``: our own pace, never divided.
 EvidenceKind = Literal["published", "measured", "none_published", "not_known", "self_imposed"]
 _ISO_DATE = r"^\d{4}-\d{2}-\d{2}$"
 
@@ -195,8 +142,6 @@ def _check_percents(owner: str, percent: Mapping[EnvironmentKey, int]) -> None:
 
 
 class LimitEvidence(_StrictFrozenModel):
-    """Where the figure of a limit comes from. The kind fixes which fields hold a value and which stay empty."""
-
     kind: EvidenceKind
     source: tuple[str, ...] = ()
     checked_at: str | None = Field(default=None, pattern=_ISO_DATE)
@@ -206,7 +151,6 @@ class LimitEvidence(_StrictFrozenModel):
     @field_validator("source", mode="before")
     @classmethod
     def _one_source_may_be_a_bare_string(cls, value: object) -> object:
-        """A JSON list is a tuple here (strict mode takes no list). A bare string is one source."""
         if isinstance(value, str):
             return (value,)
         return tuple(value) if isinstance(value, list) else value
@@ -233,8 +177,6 @@ class LimitEvidence(_StrictFrozenModel):
 
 
 class VendorLimit(_StrictFrozenModel):
-    """One limit of a vendor account. A limit with no amount is shown and never invented."""
-
     id: str = Field(pattern=r"^[a-z0-9_]+$")
     unit: LimitUnit
     amount: int | None = Field(default=None, gt=0)
@@ -257,18 +199,10 @@ class VendorLimit(_StrictFrozenModel):
 
     @property
     def divided(self) -> bool:
-        """Whether the environments split the amount. Our own pace (``self_imposed``) is whole for each."""
         return self.amount is not None and self.evidence.kind != "self_imposed"
 
 
 class VendorAccount(_StrictFrozenModel):
-    """The one row of a vendor account that several environments call (#1520).
-
-    ``seats`` are the ledger seats that draw from the account: the gate counts the calls of all of them
-    against each limit. ``percent`` replaces the default percent of the table, and ``percent_reason`` says why.
-    ``outside_consumers``: other users spend the same account, so no percent describes it.
-    """
-
     holder: AccountHolder
     seats: tuple[str, ...] = Field(min_length=1)
     outside_consumers: bool
@@ -299,8 +233,6 @@ class VendorAccount(_StrictFrozenModel):
 
 
 class VendorAccounts(_StrictFrozenModel):
-    """Every vendor account, and the default percent of each environment (owner decision D4, 2026-10-26)."""
-
     description: str = Field(min_length=1)
     default_percent: Mapping[EnvironmentKey, int]
     accounts: Mapping[str, VendorAccount] = Field(min_length=1)
@@ -314,22 +246,18 @@ class VendorAccounts(_StrictFrozenModel):
         return self
 
     def account_of_seat(self, seat: str) -> str:
-        """The name of the one account that the ledger seat ``seat`` draws from."""
         for name, row in self.accounts.items():
             if seat in row.seats:
                 return name
         raise UnknownVendorAccount(f"{seat!r} is the seat of no vendor account: {sorted(self.accounts)}")
 
     def percent_of(self, account: str, environment: str) -> int | None:
-        """The percent of ``environment`` in ``account``, or None when the table does not name the environment."""
         row = self.accounts[account]
         table = row.percent if row.percent is not None else self.default_percent
         return next((value for key, value in table.items() if key == environment), None)
 
 
 class LimitShare(_StrictFrozenModel):
-    """What one environment may spend of one limit. ``share`` is None when the limit has no amount."""
-
     limit_id: str
     unit: LimitUnit
     window_seconds: int | None
@@ -339,15 +267,12 @@ class LimitShare(_StrictFrozenModel):
 
 
 class AccountShare(_StrictFrozenModel):
-    """What one environment may spend of one vendor account, limit by limit (`account_share`)."""
-
     account: str
     environment: str
     percent: int
     limits: tuple[LimitShare, ...]
 
     def share_in_window(self, window_seconds: int) -> int | None:
-        """The calls that the environment may make in a window of ``window_seconds``, or None when no limit has one."""
         return next(
             (
                 limit.share
@@ -359,34 +284,20 @@ class AccountShare(_StrictFrozenModel):
 
     @property
     def admits_a_call(self) -> bool:
-        """False when the share of any request limit is below one call: the environment may not call the account.
-
-        True when no request limit has an amount: there is no share to refuse."""
         return all(limit.share >= 1 for limit in self.limits if limit.unit == "request" and limit.share is not None)
 
 
 class RunTimeBounds(_StrictFrozenModel):
-    """The policy parameters for job runtime bounds (#1442, #1522)."""
-
     description: str = Field(min_length=1)
     margin: float = Field(gt=1)
     floor_minutes: float = Field(gt=0)
     window_days: int = Field(ge=1)
 
 
-#: The owner rule of #1418: planned demand stays at or below 70% of capacity.
 UTILIZATION_CEILING = 0.7
 
 
 class MeasuredProcessMemory(_StrictFrozenModel):
-    """What the code server container held, read once (#1467).
-
-    ``grpc_server_hwm_mib`` is the ``VmHWM`` of the first process. ``fresh_import_hwm_mib`` is the
-    ``VmHWM`` of a fresh interpreter that imports ``data_engine.dagster_defs``: no run is smaller.
-    ``working_run_hwm_mib`` is the largest ``VmHWM`` of any process except the code server that the
-    sensor sampled: the size of a working run, read directly. The ``memory.peak`` of the container
-    is no field here: it counts page cache and splits into no size per run."""
-
     at: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
     environment: EnvironmentKey
     method: str = Field(min_length=1)
@@ -406,18 +317,6 @@ class MeasuredProcessMemory(_StrictFrozenModel):
 
 
 class CodeServerCapacity(_StrictFrozenModel):
-    """The memory of the Dagster code server container and the run limit that follows from it (#1467).
-
-    The gRPC server and every run process share one cgroup. The processes may hold the share
-    ``UTILIZATION_CEILING`` of the ceiling (``usable_mib``). The server holds ``server_mib``: its
-    measured ``VmHWM`` plus ``server_margin``. The queue admits ``concurrent_runs`` runs; at least 2,
-    because a run that waits for other runs holds a slot while it waits. Each run executes in
-    ``processes_per_run`` processes (1 when its job uses the in-process executor). The memory left
-    inside ``usable_mib``, divided over the slots, is the budget of one run (``run_mib``). The budget
-    is a decision, not a measurement. It must cover the measured working run, and the nightly verdict
-    compares every run process with it.
-    """
-
     description: str = Field(min_length=1)
     ceiling_mib: int = Field(ge=1)
     ceiling_source: str = Field(min_length=1)
@@ -440,41 +339,28 @@ class CodeServerCapacity(_StrictFrozenModel):
 
     @property
     def usable_mib(self) -> int:
-        """The memory that the processes may hold: ``UTILIZATION_CEILING`` of the ceiling, rounded down."""
         return math.floor(Decimal(self.ceiling_mib) * Decimal(str(UTILIZATION_CEILING)))
 
     @property
     def server_mib(self) -> int:
-        """The memory of the gRPC server: its measured ``VmHWM`` plus ``server_margin``, rounded up."""
         grown = Decimal(str(self.measured.grpc_server_hwm_mib)) * (1 + Decimal(str(self.server_margin)))
         return math.ceil(grown)
 
     @property
     def run_mib(self) -> int:
-        """The budget of one run process: what is left beside the server, divided over the slots."""
         free = self.usable_mib - self.server_processes * self.server_mib
         return max(free // (self.concurrent_runs * self.processes_per_run), 0)
 
     @property
     def max_concurrent_runs(self) -> int:
-        """The queue limit of ``dagster.yaml``."""
         return self.concurrent_runs
 
     @property
     def max_waiting_runs(self) -> int:
-        """The most runs that may wait for other runs at one time. One slot stays free for the run waited for."""
         return self.concurrent_runs - 1
 
 
 class ModelRetrySpec(_StrictFrozenModel):
-    """The one retry policy of every model call (#1444).
-
-    A transient answer is HTTP 429 without a terminal provider code, or any answer with a transient
-    provider code. The wait before retry ``n`` (1-based) is ``min(initial x factor^(n-1), max)``
-    seconds. A random extra of at most ``jitter_percent`` is added to it and never taken away, so the
-    waits of a full run always sum to at least ``min_total_wait_seconds``.
-    """
-
     transient_http_statuses: tuple[int, ...] = Field(min_length=1)
     transient_provider_codes: tuple[str, ...]
     terminal_provider_codes: tuple[str, ...]
@@ -487,14 +373,12 @@ class ModelRetrySpec(_StrictFrozenModel):
     deadline_seconds: int = Field(ge=1)
 
     def base_backoff_seconds(self, retry: int) -> int:
-        """The wait before retry ``retry`` (1-based) without the random extra."""
         if retry < 1:
             raise ValueError(f"retry is 1-based, got {retry}")
         return min(self.initial_backoff_seconds * self.backoff_factor ** (retry - 1), self.max_backoff_seconds)
 
     @property
     def base_total_wait_seconds(self) -> int:
-        """The waits of a call that uses every attempt, without the random extra."""
         return sum(self.base_backoff_seconds(retry) for retry in range(1, self.max_attempts))
 
     @model_validator(mode="after")
@@ -515,32 +399,23 @@ class ModelRetrySpec(_StrictFrozenModel):
 
 
 class ModelProbeSlots(_StrictFrozenModel):
-    """The UTC hour of the nightly key probe and the width of one environment's slot (#1444)."""
-
     hour_utc: int = Field(ge=0, le=23)
     slot_minutes: int = Field(ge=1)
     attempt_timeout_seconds: int = Field(ge=1)
     launch_margin_seconds: int = Field(ge=0)
 
 
-#: The decoding version of the model request that an environment uses unless the contract names
-#: another one (#1444). The versions themselves are defined in `data_engine.sources.model_decoding`.
 DEFAULT_DECODING_VERSION = "v1"
 
 
 class ModelSeatEnvironmentLimits(_StrictFrozenModel):
-    """What one environment may spend of the shared model account (#1444)."""
-
     max_concurrent_calls: int = Field(ge=1)
     calls_per_minute: int = Field(ge=1)
     probe_offset_minutes: int = Field(ge=0, le=59)
-    #: The decoding version of the model request in this environment.
     decoding_version: str = Field(default=DEFAULT_DECODING_VERSION, pattern=r"^v[0-9]+$")
 
 
 class ModelSeatContract(_StrictFrozenModel):
-    """Retry, pacing and probe slots of the model seat. All environments share one account (#1444)."""
-
     description: str = Field(min_length=1)
     seat: str = Field(min_length=1)
     shared_credential: str = Field(min_length=1)
@@ -570,11 +445,9 @@ class ModelSeatContract(_StrictFrozenModel):
         return self.probe.launch_margin_seconds + self.retry.deadline_seconds
 
     def limits_for(self, environment: str) -> ModelSeatEnvironmentLimits | None:
-        """The limits of ``environment``, or None when the environment is not listed (dev, ci)."""
         return self.environments.get(environment)
 
     def decoding_version_for(self, environment: str) -> str:
-        """The decoding version of ``environment``; an environment that is not listed uses the default."""
         limits = self.limits_for(environment)
         return DEFAULT_DECODING_VERSION if limits is None else limits.decoding_version
 
@@ -583,20 +456,15 @@ class ModelSeatContract(_StrictFrozenModel):
         return 0 if limits is None else limits.probe_offset_minutes
 
     def probe_cron(self, environment: str) -> str:
-        """The daily cron of the key probe of ``environment``, derived from the slot table."""
         return f"{self.probe_offset_minutes(environment)} {self.probe.hour_utc} * * *"
 
 
 class NightlyVerdictExpectationSpec(_StrictFrozenModel):
-    """One nightly in-environment check declaration (#876, #1521, #1522)."""
-
     cadence_hours: int = Field(gt=0)
     job: str = Field(min_length=1)
 
 
 class NightlyVerdictsContract(_StrictFrozenModel):
-    """The nightly in-environment checks that ``mart.nightly_verdicts`` records (#876, #1521, #1522)."""
-
     description: str = Field(min_length=1)
     checks: Mapping[str, NightlyVerdictExpectationSpec] = Field(min_length=1)
     per_universe: Mapping[str, NightlyVerdictExpectationSpec] = Field(min_length=1)
@@ -668,7 +536,6 @@ class EnvironmentContract(_StrictFrozenModel):
         return self.run_time_bounds
 
     def derive_max_runtime_seconds(self, longest_seconds: float) -> int:
-        """Derive the maximum runtime bound in seconds from the longest successful run (#1442, #1522)."""
         minutes = max(
             Decimal(str(self.run_time_bounds.margin)) * Decimal(str(longest_seconds)) / Decimal("60"),
             Decimal(str(self.run_time_bounds.floor_minutes)),
@@ -684,11 +551,9 @@ class EnvironmentContract(_StrictFrozenModel):
         return ENVIRONMENT_ALIASES.get(env, env)
 
     def environment_names(self, environment: str) -> tuple[str, ...]:
-        """Every name that ``environment`` goes by: its own and its aliases."""
         return (environment, *(alias for alias, target in ENVIRONMENT_ALIASES.items() if target == environment))
 
     def record(self, key: str) -> UniverseRecord:
-        """The record of the universe ``key``. A key outside the record raises (#1522)."""
         try:
             return self.universes[key]
         except KeyError:
@@ -697,7 +562,6 @@ class EnvironmentContract(_StrictFrozenModel):
             ) from None
 
     def universe_of_id(self, universe_id: str) -> str:
-        """The key of the universe whose ``id_prefix`` is the longest prefix of ``universe_id``. The id is not split."""
         matches = [key for key, record in self.universes.items() if universe_id.startswith(record.id_prefix)]
         if not matches:
             raise UnknownUniverse(
@@ -706,7 +570,6 @@ class EnvironmentContract(_StrictFrozenModel):
         return max(matches, key=lambda key: len(self.universes[key].id_prefix))
 
     def universe_of_lane(self, lane_name: str) -> str:
-        """The key of the universe that the lanes call ``lane_name``. A name outside the records raises."""
         for key, record in self.universes.items():
             if record.lane_name == lane_name:
                 return key
@@ -715,29 +578,15 @@ class EnvironmentContract(_StrictFrozenModel):
         )
 
     def universe_status(self, universe: str, environment: str | None) -> UniverseStatus | None:
-        """The status of the universe ``universe`` (a key) in ``environment``, or None when it is not listed there."""
         self.record(universe)
         spec = self.environments.get(self.normalize_environment(environment))
-        if spec is None:
-            return None
-        return next((entry.status for entry in spec.universes if entry.key == universe), None)
+        return None if spec is None else next((entry.status for entry in spec.universes if entry.key == universe), None)
 
     def scheduled_universes(self, environment: str | None) -> tuple[str, ...]:
-        """The keys of the universes that ``environment`` runs on a schedule, in contract order."""
         spec = self.environments.get(self.normalize_environment(environment))
-        if spec is None:
-            return ()
-        return tuple(entry.key for entry in spec.universes if entry.status == "scheduled")
+        return () if spec is None else tuple(entry.key for entry in spec.universes if entry.status == "scheduled")
 
     def expects_verdict(self, check: str, environment: str | None) -> bool:
-        """Whether ``environment`` records the nightly verdict ``check``.
-
-        A non-universe check must be declared in ``nightly_verdicts.checks``; a per-universe name
-        (``check@lane_name``) must name a prefix in ``nightly_verdicts.per_universe`` and a universe that
-        the environment schedules: staging runs TOPT only, so it records no QQQ verdict. No environment
-        records a retired check or a name whose lane is in no record: the stored row stays in the
-        append-only table and is no check (#1521, #1522).
-        """
         prefix, at, lane_name = check.partition("@")
         if not at:
             return prefix in self.nightly_verdicts.checks
@@ -752,11 +601,6 @@ class EnvironmentContract(_StrictFrozenModel):
         return self.universe_status(key, environment) == "scheduled"
 
     def is_universe_scheduled(self, universe: str, environment: str) -> bool:
-        """Whether the universe ``universe`` (a key) has an active schedule in ``environment`` (#1416 E1).
-
-        A universe tick is active when the environment lists the universe as ``scheduled``. A sentinel
-        tick (the canary) is active when the record holds its cron for the environment.
-        """
         record = self.record(universe)
         spec = self.environments.get(self.normalize_environment(environment))
         if spec is None or universe not in spec.ticks:
@@ -764,11 +608,6 @@ class EnvironmentContract(_StrictFrozenModel):
         return record.is_sentinel or self.universe_status(universe, environment) == "scheduled"
 
     def is_universe_list_refresh_scheduled(self, universe: str, environment: str) -> bool:
-        """Whether ``environment`` refreshes the constituent plane of ``universe`` weekly (#1523 D2).
-
-        True when the environment runs the universe tick on a schedule or lists ``universe`` in
-        ``list_refresh`` (refresh-only operator witness in staging).
-        """
         self.record(universe)
         if self.is_universe_scheduled(universe, environment):
             return True
@@ -776,12 +615,6 @@ class EnvironmentContract(_StrictFrozenModel):
         return spec is not None and universe in spec.list_refresh
 
     def unscheduled_id_prefixes(self) -> Mapping[str, tuple[str, ...]]:
-        """For each environment that gates its heads: the id prefixes of the universes it does not tick (#1522).
-
-        ``preview`` gates nothing and is absent. The Python rule ``is_head_scheduled`` and the SQL predicate of
-        the output invariants (`truealpha_tools.output_invariants.head_is_scheduled_sql`) both read this one
-        mapping, so a status that changes in the records changes both.
-        """
         return {
             env: tuple(
                 record.id_prefix for key, record in self.universes.items() if not self.is_universe_scheduled(key, env)
@@ -791,37 +624,17 @@ class EnvironmentContract(_StrictFrozenModel):
         }
 
     def is_head_scheduled(self, universe_id: str, environment: str | None) -> bool:
-        """Whether ``universe_id`` has a running schedule in ``environment`` (#1416 E1).
-
-        Fails closed (returns True) when ``environment`` is omitted or unrecognised, and for an id that starts
-        with no id prefix of the records. A head is not scheduled where its universe's prefix is in
-        ``unscheduled_id_prefixes()`` for the environment.
-        """
         prefixes = self.unscheduled_id_prefixes().get(self.normalize_environment(environment))
         return prefixes is None or not universe_id.startswith(prefixes)
 
     @property
     def vendor_seats(self) -> tuple[str, ...]:
-        """Every ledger seat that draws from a vendor account, in contract order."""
         return tuple(seat for row in self.vendor_accounts.accounts.values() for seat in row.seats)
 
     def account_of_seat(self, seat: str) -> str:
-        """The name of the one vendor account that the ledger seat ``seat`` draws from (#1520)."""
         return self.vendor_accounts.account_of_seat(seat)
 
     def account_share(self, account: str, environment: str | None) -> AccountShare:
-        """What ``environment`` may spend of each limit of ``account`` (#1520).
-
-        The share of a limit is ``amount * percent // 100``, an integer floor, in the window of the limit.
-        The shares of the environments sum to at most the amount. The function never rounds up and never
-        stretches a window. A share of 0 (percent 0, or a floor of 0) is no error: ``admits_a_call`` is False.
-        A limit with the evidence kind ``self_imposed`` is whole for every environment. A limit with no amount
-        has no share. An environment that the percent table does not name (local, CI) gets 100 percent of a
-        ``host_ip`` account and 0 percent of any other account (Twelve Data, OpenFIGI and moomoo today: a local run
-        draws no call from a key or an account that the environments share). An account with no limit that has an amount
-        has nothing to refuse, so ``admits_a_call`` stays True for it in every environment: the model plan.
-        The pace of the model seat is in ``model_seat.environments``, and it gives an unlisted environment no limit.
-        """
         row = self.vendor_accounts.accounts.get(account)
         if row is None:
             raise UnknownVendorAccount(f"{account!r} is no vendor account: {sorted(self.vendor_accounts.accounts)}")
@@ -901,7 +714,6 @@ class SentinelKnownAnswersCatalog(_StrictFrozenModel):
 
 @functools.cache
 def load_environment_contract() -> EnvironmentContract:
-    """Load and validate the packaged ``environment_contract.v1.json`` SSOT."""
     raw = (
         resources.files("truealpha_contracts.data").joinpath(ENVIRONMENT_CONTRACT_RESOURCE).read_text(encoding="utf-8")
     )
@@ -910,7 +722,6 @@ def load_environment_contract() -> EnvironmentContract:
 
 @functools.cache
 def load_sentinel_known_answers() -> SentinelKnownAnswersCatalog:
-    """Load and validate the packaged ``sentinel_known_answers.v1.json`` SSOT."""
     raw = (
         resources.files("truealpha_contracts.data")
         .joinpath(SENTINEL_KNOWN_ANSWERS_RESOURCE)

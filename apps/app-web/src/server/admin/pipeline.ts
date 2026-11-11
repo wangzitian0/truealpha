@@ -1,17 +1,5 @@
 /**
- * #1466: the /admin/pipeline loader — per job, did the runs of the last 7 days succeed?
- *
- * Staging, 2026-10-20 and 2026-10-21: `topt_live_pipeline` failed on one SEC timeout and
- * `head_reports_pipeline` failed three times on one defect. The /admin overview showed the last
- * 10 runs of all jobs, which is less than one night. This loader reads `dagster.runs` once, grouped
- * by job, and then the event log of the newest failed run of each job for its first error line.
- *
- * Administrator-only, read-only SQL through the `app_ops_reader` role (db/roles.sql). The error
- * text of a Dagster event may name a host or a value. It is allowed on this page because the whole
- * /admin prefix is administrator-gated, and it never reaches `mart.nightly_verdicts` or /api/health.
- *
- * The page does not judge. The nightly verdict `job_run_health` judges (data engine,
- * `quality/job_run_health.py`) and this loader shows that verdict beside the counts.
+ * Administrator `/admin/pipeline` loader via `app_ops_reader`.
  */
 
 import type { PoolClient } from "pg";
@@ -19,33 +7,25 @@ import { RUN_TIME_BOUNDS } from "@/contracts/environmentContract.generated";
 import type { ReadState } from "@/server/read-state";
 import { loadDataEngineBuild, loadReleaseStart, RUNS_UNAVAILABLE_MESSAGE, UNDEFINED_TABLE, withOpsReader } from "./ops";
 
-/** The window of the counts. The verdict `job_run_health` judges the same 7 days. */
 export const PIPELINE_WINDOW_DAYS = 7;
-/** A job whose newest finished run is older than this has left the deployment. A quarterly job runs every 91 days. */
 export const PIPELINE_LISTED_DAYS = 100;
 
 export interface PipelineFailure {
   runId: string;
   at: string;
-  /** First line of the error of the run, or null when its event log holds none. */
   firstError: string | null;
 }
 
 export interface PipelineJobRow {
   job: string;
-  /** Finished runs (SUCCESS or FAILURE) in the window. */
   runs: number;
   successes: number;
   failures: number;
-  /** successes / runs, or null when the job finished no run in the window. */
   successRate: number | null;
   lastSuccessAt: string | null;
   lastFailure: PipelineFailure | null;
-  /** Longest successful run duration in seconds in the window, or null if no SUCCESS run. */
   longestSuccessSeconds: number | null;
-  /** Derived runtime bound in seconds (margin * longest, >= floor), or null if no SUCCESS run. */
   derivedBoundSeconds: number | null;
-  /** Count of runs ended by runtime bound in the window. */
   runsEndedByBound: number;
 }
 
@@ -57,23 +37,18 @@ export interface PipelineVerdict {
 
 export interface PipelineRelease {
   gitSha: string;
-  /** When the current stretch of this build began: its first run after the newest run of another build. */
   since: string;
   ageHours: number;
 }
 
 export interface PipelineUnreadable {
-  /** The event log: the first error lines are missing. */
   eventLog: string | null;
-  /** `mart.nightly_verdicts`: both verdict cards are missing. */
   verdicts: string | null;
-  /** The run plans behind the release age. */
   release: string | null;
 }
 
 export interface PipelineOverview {
   windowDays: number;
-  /** Why a part of the page is missing, or null when it was read. The counts stand when a part fails. */
   unreadable: PipelineUnreadable;
   jobs: PipelineJobRow[];
   jobRunHealth: PipelineVerdict | null;
@@ -88,7 +63,6 @@ export interface PipelinePrincipal {
   principalKind: "member" | "administrator" | "service";
 }
 
-/** One scan of `dagster.runs`: counts of the window, and the newest SUCCESS and FAILURE of all time. */
 export const JOBS_SQL = `
   select r.pipeline_name as job,
          count(*) filter (where r.status = 'SUCCESS' and r.create_timestamp >= w.since)::int as successes,
@@ -107,9 +81,6 @@ export const JOBS_SQL = `
   order by r.pipeline_name
 `;
 
-/**
- * Runs ended by the runtime bound in the window. Dagster writes PIPELINE_FAILURE with timeout message.
- */
 export const TIMEOUTS_SQL = `
   select r.pipeline_name as job, count(*)::int as count
   from dagster.runs r
@@ -121,12 +92,6 @@ export const TIMEOUTS_SQL = `
   group by r.pipeline_name
 `;
 
-/**
- * The first failure event of each run. Dagster writes the step failure before the run failure, so a run whose op
- * raised gives its step failure, and a run killed by the run monitor gives its run failure. Dagster stores the run
- * failure as `PIPELINE_FAILURE`: `DagsterEventType.RUN_FAILURE` has that value.
- * `tests/test_pipeline_event_log_sql.py` runs this text against real Dagster run storage.
- */
 export const FAILURE_EVENTS_SQL = `
   select distinct on (run_id) run_id, dagster_event_type, event
   from dagster.event_logs
@@ -160,11 +125,6 @@ function firstLine(text: unknown): string | null {
   return line === undefined ? null : line.trim();
 }
 
-/**
- * The first error line of a serialized Dagster event: the message of the innermost `cause` of the
- * error (the exception the op raised), else the message of the error, else the message of the event.
- * Returns null for text that is not a Dagster event, never throws.
- */
 export function firstErrorLine(eventJson: string): string | null {
   let payload: EventPayload;
   try {
@@ -182,9 +142,8 @@ export function firstErrorLine(eventJson: string): string | null {
   return firstLine(innermost?.message) ?? firstLine(event?.message);
 }
 
-function iso(value: unknown): string {
-  return new Date(value as string | number | Date).toISOString();
-}
+const iso = (v: unknown): string => new Date(v as string | number | Date).toISOString();
+const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
 async function readVerdict(client: Pick<PoolClient, "query">, check: string): Promise<PipelineVerdict | null> {
   const result = await client.query(VERDICT_SQL, [check]);
@@ -197,17 +156,7 @@ async function readVerdict(client: Pick<PoolClient, "query">, check: string): Pr
   };
 }
 
-function message(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-interface Verdicts {
-  jobRunHealth: PipelineVerdict | null;
-  runtimeShape: PipelineVerdict | null;
-  unreadable: string | null;
-}
-
-async function readVerdicts(client: Pick<PoolClient, "query">): Promise<Verdicts> {
+async function readVerdicts(client: Pick<PoolClient, "query">) {
   try {
     return {
       jobRunHealth: await readVerdict(client, "job_run_health"),
@@ -215,56 +164,37 @@ async function readVerdicts(client: Pick<PoolClient, "query">): Promise<Verdicts
       unreadable: null,
     };
   } catch (error) {
-    return { jobRunHealth: null, runtimeShape: null, unreadable: message(error) };
+    return { jobRunHealth: null, runtimeShape: null, unreadable: errMsg(error) };
   }
 }
 
-/** The sha of a run plan that records no build (a run before 2026-09-07), as `mart.data_engine_identity` spells it. */
-const UNKNOWN_BUILD = "unknown";
-
-interface Release {
-  release: PipelineRelease | null;
-  unreadable: string | null;
-}
-
-/**
- * The release is the build of the newest run and the start of its current stretch. No row, or no view, is no
- * release and no notice: no run has recorded its build yet. Every other reason that the age is missing gets a
- * notice with its cause, because "no run has recorded its build" would be false.
- */
-async function readRelease(client: Pick<PoolClient, "query">, now: number): Promise<Release> {
+async function readRelease(client: Pick<PoolClient, "query">, now: number) {
   try {
     const build = await loadDataEngineBuild(client);
     if (build === null) return { release: null, unreadable: null };
-    if (build.gitSha === UNKNOWN_BUILD) {
+    if (build.gitSha === "unknown") {
       return { release: null, unreadable: "the newest run plan records no build sha" };
     }
     const since = await loadReleaseStart(client, build.gitSha);
     if (since === null) return { release: null, unreadable: `the run plans hold no start for the build ${build.gitSha}` };
-    return { release: { gitSha: build.gitSha, since, ageHours: (now - new Date(since).getTime()) / 3_600_000 }, unreadable: null };
+    return {
+      release: { gitSha: build.gitSha, since, ageHours: (now - new Date(since).getTime()) / 3_600_000 },
+      unreadable: null,
+    };
   } catch (error) {
-    return { release: null, unreadable: message(error) };
+    return { release: null, unreadable: errMsg(error) };
   }
 }
 
-interface FailureLines {
-  lines: Map<string, string | null>;
-  /** The reason the event log could not be read. The counts of the page stand; the error lines are missing. */
-  unreadable: string | null;
-}
-
-async function readFailureLines(client: Pick<PoolClient, "query">, runIds: string[]): Promise<FailureLines> {
+async function readFailureLines(client: Pick<PoolClient, "query">, runIds: string[]) {
   const lines = new Map<string, string | null>();
   if (runIds.length === 0) return { lines, unreadable: null };
   try {
     const result = await client.query(FAILURE_EVENTS_SQL, [runIds]);
-    for (const row of result.rows) {
-      lines.set(String(row.run_id), firstErrorLine(String(row.event)));
-    }
+    for (const row of result.rows) lines.set(String(row.run_id), firstErrorLine(String(row.event)));
     return { lines, unreadable: null };
   } catch (error) {
-    // A missing grant or a timeout on the event log must not hide the counts. The page says why the lines are missing.
-    return { lines, unreadable: message(error) };
+    return { lines, unreadable: errMsg(error) };
   }
 }
 
@@ -272,11 +202,9 @@ async function readTimeouts(client: Pick<PoolClient, "query">, windowDays: numbe
   const counts = new Map<string, number>();
   try {
     const result = await client.query(TIMEOUTS_SQL, [windowDays]);
-    for (const row of result.rows) {
-      counts.set(String(row.job), Number(row.count));
-    }
+    for (const row of result.rows) counts.set(String(row.job), Number(row.count));
   } catch {
-    // If event_logs cannot be read, timeout counts default to 0.
+    // Default to 0 when event_logs is unreadable.
   }
   return counts;
 }
@@ -289,35 +217,27 @@ function jobRow(
   const successes = Number(row.successes);
   const failures = Number(row.failures);
   const runs = successes + failures;
-  const runId = row.last_failure_run_id === null || row.last_failure_run_id === undefined
-    ? null
-    : String(row.last_failure_run_id);
+  const runId = row.last_failure_run_id == null ? null : String(row.last_failure_run_id);
   const longestSuccessSeconds =
-    row.longest_success_seconds === null || row.longest_success_seconds === undefined
-      ? null
-      : Math.round(Number(row.longest_success_seconds));
+    row.longest_success_seconds == null ? null : Math.round(Number(row.longest_success_seconds));
   const derivedBoundSeconds =
     longestSuccessSeconds === null
       ? null
-      : Math.max(
-          Math.ceil(RUN_TIME_BOUNDS.margin * longestSuccessSeconds),
-          RUN_TIME_BOUNDS.floorMinutes * 60,
-        );
-  const runsEndedByBound = timeouts.get(String(row.job)) ?? 0;
+      : Math.max(Math.ceil(RUN_TIME_BOUNDS.margin * longestSuccessSeconds), RUN_TIME_BOUNDS.floorMinutes * 60);
   return {
     job: String(row.job),
     runs,
     successes,
     failures,
     successRate: runs === 0 ? null : successes / runs,
-    lastSuccessAt: row.last_success === null || row.last_success === undefined ? null : iso(row.last_success),
+    lastSuccessAt: row.last_success == null ? null : iso(row.last_success),
     lastFailure:
-      runId === null || row.last_failure === null || row.last_failure === undefined
+      runId === null || row.last_failure == null
         ? null
         : { runId, at: iso(row.last_failure), firstError: lines.get(runId) ?? null },
     longestSuccessSeconds,
     derivedBoundSeconds,
-    runsEndedByBound,
+    runsEndedByBound: timeouts.get(String(row.job)) ?? 0,
   };
 }
 
@@ -331,8 +251,6 @@ export async function loadPipelineOverview(principal: PipelinePrincipal | null):
       try {
         grouped = await client.query(JOBS_SQL, [PIPELINE_WINDOW_DAYS, PIPELINE_LISTED_DAYS, RUN_TIME_BOUNDS.windowDays]);
       } catch (error) {
-        // Dagster bootstraps its own tables at runtime; a database without them reports so.
-        // Any other failure (a missing grant, a timeout) is an error, never "not bootstrapped".
         if ((error as { code?: string }).code === UNDEFINED_TABLE) {
           return { kind: "unavailable", reason: RUNS_UNAVAILABLE_MESSAGE };
         }
@@ -361,6 +279,6 @@ export async function loadPipelineOverview(principal: PipelinePrincipal | null):
       };
     });
   } catch (error) {
-    return { kind: "error", message: error instanceof Error ? error.message : String(error) };
+    return { kind: "error", message: errMsg(error) };
   }
 }

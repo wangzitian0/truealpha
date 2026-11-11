@@ -1,13 +1,4 @@
-/**
- * #641 D5: the datahub statistics dashboard — governed heads with their quality
- * grades (capture-level AND factor-level availability, #644), source fetch
- * activity, and recent capture runs. The numbers that used to live only in
- * psql sessions, on one page.
- *
- * Upgraded in #1219 to provide an Executive Plant Health Overview and a
- * Penetrating Physical Matrix for question coverage, enforcing "Strong Dashboard, Weak Gates".
- */
-
+import type { ReactNode } from "react";
 import Link from "next/link";
 
 import { formatCell } from "@/client/format";
@@ -17,7 +8,9 @@ import {
   loadVerdictHistory,
   type ListingRatioCell,
   type ListingRatioReport,
+  type NightlyVerdictRow,
   type QuestionCoverageQuestion,
+  type ValidationRow,
 } from "@/server/admin/datahub-stats";
 import { getServerPrincipal } from "@/server/auth/request-context";
 
@@ -25,67 +18,30 @@ import { LedgerCoverageTable } from "./ledger-coverage";
 
 export const dynamic = "force-dynamic";
 
-/** A pending verdict (`ok = null`) is neither green nor red. */
-function verdictLabel(ok: boolean | null): string {
-  return ok === null ? "pending" : ok ? "ok" : "fail";
-}
+const verdictLabel = (ok: boolean | null): string => (ok === null ? "pending" : ok ? "ok" : "fail");
+const verdictStyle = (ok: boolean | null): string =>
+  ok === null ? "text-gray-400" : ok ? "text-emerald-400" : "text-rose-400";
+const shortRun = (id: string): string => (id.length > 24 ? `${id.slice(0, 24)}…` : id);
 
-function verdictStyle(ok: boolean | null): string {
-  return ok === null ? "text-gray-400" : ok ? "text-emerald-400" : "text-rose-400";
-}
+const BADGE_TONES = {
+  ok: "bg-emerald-950/60 text-emerald-400 border border-emerald-800",
+  warn: "bg-amber-950/60 text-amber-400 border border-amber-800",
+  crit: "bg-rose-950/80 text-rose-400 border border-rose-800",
+  muted: "bg-zinc-800 text-zinc-300 border border-zinc-700",
+} as const;
 
-function shortRun(id: string): string {
-  return id.length > 24 ? `${id.slice(0, 24)}…` : id;
-}
-
-type PhysicalStatus =
-  | "connected"
-  | "partial"
-  | "disconnected"
-  | "not_integrated"
-  | "not_applicable";
-
-function getPhysicalStatus(q: QuestionCoverageQuestion): {
-  status: PhysicalStatus;
-  label: string;
-  badgeClass: string;
-} {
-  if (q.denominator === 0) {
-    return {
-      status: "not_applicable",
-      label: "N/A (out of scope)",
-      badgeClass: "bg-zinc-800/80 text-zinc-400 border border-zinc-700",
-    };
-  }
+function getPhysicalStatus(q: QuestionCoverageQuestion): { label: string; badgeClass: string } {
+  if (q.denominator === 0) return { label: "N/A (out of scope)", badgeClass: BADGE_TONES.muted };
   if (!q.column || q.missing === q.denominator) {
-    return {
-      status: "not_integrated",
-      label: "Not Integrated",
-      badgeClass: "bg-rose-950/60 text-rose-300 border border-rose-800",
-    };
+    return { label: "Not Integrated", badgeClass: "bg-rose-950/60 text-rose-300 border border-rose-800" };
   }
-  if (q.answered === q.denominator) {
-    return {
-      status: "connected",
-      label: "Connected (100%)",
-      badgeClass: "bg-emerald-950/60 text-emerald-400 border border-emerald-800",
-    };
-  }
+  if (q.answered === q.denominator) return { label: "Connected (100%)", badgeClass: BADGE_TONES.ok };
   if (q.answered > 0) {
-    return {
-      status: "partial",
-      label: `Partial (${Math.round((q.answered / q.denominator) * 100)}%)`,
-      badgeClass: "bg-amber-950/60 text-amber-400 border border-amber-800",
-    };
+    return { label: `Partial (${Math.round((q.answered / q.denominator) * 100)}%)`, badgeClass: BADGE_TONES.warn };
   }
-  return {
-    status: "disconnected",
-    label: "Disconnected (0%)",
-    badgeClass: "bg-rose-950/80 text-rose-400 border border-rose-800",
-  };
+  return { label: "Disconnected (0%)", badgeClass: BADGE_TONES.crit };
 }
 
-/** What one listing's cover read says, in words. The reason and the title text stay visible for `unparsed`. */
 function listingRatioText(cell: ListingRatioCell): string {
   if (cell.outcome === "parsed") return `1 unit = ${cell.listing_units_per_share} ordinary shares`;
   if (cell.outcome === "ordinary") return "ordinary share (1)";
@@ -93,16 +49,10 @@ function listingRatioText(cell: ListingRatioCell): string {
   return `unparsed: ${formatCell(cell.reason)}`;
 }
 
-/** The filing that a cover read came from: form, accession and filing date, or null when no filing was read. */
 function listingRatioFiling(cell: ListingRatioCell): string | null {
-  if (cell.accession === null) return null;
-  return [cell.form, cell.accession, cell.filed].filter((part) => part !== null).join(" ");
+  return cell.accession === null ? null : [cell.form, cell.accession, cell.filed].filter(Boolean).join(" ");
 }
 
-/**
- * #1519 step 1a: the depositary ratio that the cover of each issuer's latest annual filing gave. A measurement for the
- * owner to read before the ratio is enforced: no grade, no gate. The counts come from the data engine.
- */
 function ListingRatioBlock({ report }: { report: ListingRatioReport | null }) {
   if (report === null) return null;
   const { counts } = report;
@@ -117,28 +67,16 @@ function ListingRatioBlock({ report }: { report: ListingRatioReport | null }) {
       {report.cells.length > 0 && (
         <details open={counts.unparsed > 0} className="mt-1">
           <summary className="cursor-pointer text-gray-500">{report.cells.length} listings, unparsed first</summary>
-          <table className="mt-2 w-full text-left">
-            <thead>
-              <tr className="text-gray-500">
-                <th className="pr-4 font-normal">listing</th>
-                <th className="pr-4 font-normal">outcome</th>
-                <th className="pr-4 font-normal">cover title</th>
-                <th className="font-normal">filing</th>
+          <DataTable headers={["listing", "outcome", "cover title", "filing"]} className="mt-2 w-full text-left">
+            {report.cells.map((cell) => (
+              <tr key={cell.listing_id} className={cell.outcome === "unparsed" ? "text-amber-400" : ""}>
+                <td className="pr-4 font-mono">{cell.ticker ? `${cell.ticker} (${cell.listing_id})` : cell.listing_id}</td>
+                <td className="pr-4">{listingRatioText(cell)}</td>
+                <td className="pr-4">{formatCell(cell.title)}</td>
+                <td className="font-mono">{formatCell(listingRatioFiling(cell))}</td>
               </tr>
-            </thead>
-            <tbody>
-              {report.cells.map((cell) => (
-                <tr key={cell.listing_id} className={cell.outcome === "unparsed" ? "text-amber-400" : ""}>
-                  <td className="pr-4 font-mono">
-                    {cell.ticker ? `${cell.ticker} (${cell.listing_id})` : cell.listing_id}
-                  </td>
-                  <td className="pr-4">{listingRatioText(cell)}</td>
-                  <td className="pr-4">{formatCell(cell.title)}</td>
-                  <td className="font-mono">{formatCell(listingRatioFiling(cell))}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+            ))}
+          </DataTable>
         </details>
       )}
     </div>
@@ -146,23 +84,132 @@ function ListingRatioBlock({ report }: { report: ListingRatioReport | null }) {
 }
 
 function renderTrackingIssue(issue: string) {
-  if (!issue) return <span className="text-gray-500">—</span>;
+  if (!issue) return <span className="text-gray-500">{formatCell(null)}</span>;
   const match = issue.match(/#?(\d+)/);
-  if (match) {
-    const issueNum = match[1];
-    return (
-      <a
-        href={`https://github.com/wangzitian0/truealpha/issues/${issueNum}`}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="font-mono text-accent hover:underline inline-flex items-center gap-1"
-      >
-        <span>#{issueNum}</span>
-        <span className="text-xs text-gray-500">↗</span>
-      </a>
-    );
-  }
-  return <span className="font-mono text-gray-400">{issue}</span>;
+  if (!match) return <span className="font-mono text-gray-400">{issue}</span>;
+  return (
+    <a
+      href={`https://github.com/wangzitian0/truealpha/issues/${match[1]}`}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="font-mono text-accent hover:underline inline-flex items-center gap-1"
+    >
+      <span>#{match[1]}</span>
+      <span className="text-xs text-gray-500">↗</span>
+    </a>
+  );
+}
+
+function OverviewCard({
+  title,
+  badge,
+  badgeTone,
+  metric,
+  unit,
+  foot,
+}: {
+  title: string;
+  badge: string;
+  badgeTone: keyof typeof BADGE_TONES;
+  metric: ReactNode;
+  unit?: string;
+  foot: ReactNode;
+}) {
+  return (
+    <div className="rounded-xl border border-border bg-card p-4 flex flex-col justify-between">
+      <div>
+        <div className="flex items-center justify-between text-xs text-gray-400">
+          <span className="uppercase tracking-wider font-semibold">{title}</span>
+          <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium border ${BADGE_TONES[badgeTone]}`}>
+            {badge}
+          </span>
+        </div>
+        <div className="mt-3 text-2xl font-bold tracking-tight">
+          {metric}
+          {unit && <span className="ml-1 text-sm font-normal text-gray-400">{unit}</span>}
+        </div>
+      </div>
+      <p className="mt-2 text-xs text-gray-400">{foot}</p>
+    </div>
+  );
+}
+
+function DataTable({
+  headers,
+  children,
+  className = "w-full text-left text-sm",
+}: {
+  headers: readonly string[];
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <table className={className}>
+      <thead>
+        <tr className="text-gray-500">
+          {headers.map((h, i) => (
+            <th key={h} className={i < headers.length - 1 ? "pr-4 font-normal" : "font-normal"}>
+              {h}
+            </th>
+          ))}
+        </tr>
+      </thead>
+      <tbody>{children}</tbody>
+    </table>
+  );
+}
+
+function CheckVerdictTable({
+  headers,
+  rows,
+  okVerdicts,
+}: {
+  headers: readonly [string, string, string];
+  rows: readonly ValidationRow[];
+  okVerdicts: readonly string[];
+}) {
+  return (
+    <DataTable headers={headers}>
+      {rows.map((row) => (
+        <tr key={row.check} className="border-t border-border">
+          <td className="pr-4 font-mono">{row.check}</td>
+          <td className={`pr-4 ${okVerdicts.includes(row.verdict) ? "" : "text-amber-400"}`}>{row.verdict}</td>
+          <td className="text-gray-400">{row.detail}</td>
+        </tr>
+      ))}
+    </DataTable>
+  );
+}
+
+function VerdictRows({ rows, showCheckLink }: { rows: readonly NightlyVerdictRow[]; showCheckLink?: boolean }) {
+  return (
+    <>
+      {rows.map((v) => (
+        <tr
+          key={showCheckLink ? v.check_name : `${v.ran_at}-${v.dagster_run_id ?? ""}`}
+          className="border-t border-border"
+          data-history-row={showCheckLink ? undefined : "true"}
+        >
+          {showCheckLink && (
+            <td className="pr-4 font-mono">
+              <Link
+                href={`/admin/datahub?history=${encodeURIComponent(v.check_name)}#verdict-history`}
+                className="underline decoration-dotted hover:text-accent"
+              >
+                {v.check_name}
+              </Link>
+            </td>
+          )}
+          <td className={`pr-4 font-medium ${verdictStyle(v.ok)}`}>{verdictLabel(v.ok)}</td>
+          <td className="pr-4 text-gray-400">{v.ran_at}</td>
+          <td className="pr-4 font-mono text-gray-400" title={v.dagster_run_id ?? undefined}>
+            {v.dagster_run_id ? shortRun(v.dagster_run_id) : formatCell(null)}
+          </td>
+          <td className="font-mono text-xs text-gray-300">{v.summary}</td>
+        </tr>
+      ))}
+    </>
+  );
 }
 
 export default async function AdminDatahubPage({
@@ -175,55 +222,37 @@ export default async function AdminDatahubPage({
     return <p className="text-amber-400">Access denied.</p>;
   }
   const stats = await loadDatahubStats();
-  // #1466: `?history=<check>` lists every recorded verdict of one check under the table of current verdicts.
   const requested = (await searchParams).history;
   const historyCheck = typeof requested === "string" ? requested : null;
   const history = historyCheck === null ? null : await loadVerdictHistory(historyCheck, principal);
 
-  // 1. Governed Heads Metrics
   const totalHeads = stats.heads.length;
-  const freshHeads = stats.heads.filter(
-    (h) => h.freshness === "fresh" || h.freshness === "manual",
-  ).length;
+  const freshHeads = stats.heads.filter((h) => h.freshness === "fresh" || h.freshness === "manual").length;
   const staleHeads = stats.heads.filter((h) => h.freshness === "stale").length;
   const anyHeadDegraded = stats.heads.some((head) => head.is_degraded);
 
-  // 2. Question Matrix Connectivity Metrics
   let totalQuestionsEvaluated = 0;
   let totalAnsweredCells = 0;
   let totalDenominatorCells = 0;
   let connectedQuestionsCount = 0;
   let notIntegratedQuestionsCount = 0;
-
-  stats.questionCoverage.forEach((report) => {
-    report.questions.forEach((q) => {
-      if (q.denominator > 0) {
-        totalQuestionsEvaluated += 1;
-        totalAnsweredCells += q.answered;
-        totalDenominatorCells += q.denominator;
-        if (q.answered === q.denominator) {
-          connectedQuestionsCount += 1;
-        }
-        if (!q.column || q.missing === q.denominator) {
-          notIntegratedQuestionsCount += 1;
-        }
-      }
-    });
-  });
-
+  for (const report of stats.questionCoverage) {
+    for (const q of report.questions) {
+      if (q.denominator <= 0) continue;
+      totalQuestionsEvaluated += 1;
+      totalAnsweredCells += q.answered;
+      totalDenominatorCells += q.denominator;
+      if (q.answered === q.denominator) connectedQuestionsCount += 1;
+      if (!q.column || q.missing === q.denominator) notIntegratedQuestionsCount += 1;
+    }
+  }
   const matrixConnectivityRatio =
-    totalDenominatorCells > 0
-      ? ((totalAnsweredCells / totalDenominatorCells) * 100).toFixed(1)
-      : null;
+    totalDenominatorCells > 0 ? ((totalAnsweredCells / totalDenominatorCells) * 100).toFixed(1) : null;
 
-  // 3. Gateway Traffic Metrics (Today UTC)
   const totalCalls = stats.traffic.reduce((acc, t) => acc + t.calls, 0);
   const totalFailedCalls = stats.traffic.reduce((acc, t) => acc + t.failed, 0);
   const totalLandedFetches = stats.traffic.reduce((acc, t) => acc + t.landed, 0);
-
-  // 4. Ingestion & Runs Footprint Metrics
   const totalFetches24h = stats.sources.reduce((acc, s) => acc + s.fetches_24h, 0);
-  const totalSources = stats.sources.length;
   const recentResolved = stats.runs.reduce((acc, r) => acc + r.resolved, 0);
   const recentObligations = stats.runs.reduce((acc, r) => acc + r.obligations, 0);
 
@@ -232,128 +261,65 @@ export default async function AdminDatahubPage({
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Datahub</h1>
         <p className="mt-1 text-sm text-gray-500">
-          Governed heads, what they serve, and where the bytes came from. Availability is shown twice on
-          purpose: the capture-level headline, and the per-factor share of subjects whose required inputs are
-          all usable — the number a consumer actually feels.
+          Governed heads, what they serve, and where the bytes came from, including capture-level and per-factor availability.
         </p>
       </div>
 
-      {/* Executive Plant Health Overview */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {/* Card 1: Governed Heads Freshness */}
-        <div className="rounded-xl border border-border bg-card p-4 flex flex-col justify-between">
-          <div>
-            <div className="flex items-center justify-between text-xs text-gray-400">
-              <span className="uppercase tracking-wider font-semibold">Governed Heads</span>
-              <span
-                className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium border ${
-                  totalHeads === 0
-                    ? "bg-zinc-800 text-zinc-400 border-zinc-700"
-                    : anyHeadDegraded
-                      ? "bg-amber-950/60 text-amber-400 border-amber-800"
-                      : "bg-emerald-950/60 text-emerald-400 border-emerald-800"
-                }`}
-              >
-                {totalHeads === 0
-                  ? "empty"
-                  : staleHeads > 0
-                    ? `${staleHeads} stale`
-                    : anyHeadDegraded
-                      ? "degraded"
-                      : "all fresh"}
-              </span>
-            </div>
-            <div className="mt-3 text-2xl font-bold tracking-tight">
-              {totalHeads === 0 ? "—" : `${freshHeads}/${totalHeads}`}
-              <span className="ml-1 text-sm font-normal text-gray-400">fresh pointers</span>
-            </div>
-          </div>
-          <p className="mt-2 text-xs text-gray-400">
-            Served heads from <span className="font-mono text-zinc-300">mart.served_head</span>.
-          </p>
-        </div>
-
-        {/* Card 2: Question Matrix Connectivity */}
-        <div className="rounded-xl border border-border bg-card p-4 flex flex-col justify-between">
-          <div>
-            <div className="flex items-center justify-between text-xs text-gray-400">
-              <span className="uppercase tracking-wider font-semibold">Question Connectivity</span>
-              <span
-                className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium border ${
-                  totalDenominatorCells === 0
-                    ? "bg-zinc-800 text-zinc-400 border-zinc-700"
-                    : notIntegratedQuestionsCount > 0
-                      ? "bg-amber-950/60 text-amber-400 border-amber-800"
-                      : "bg-emerald-950/60 text-emerald-400 border-emerald-800"
-                }`}
-              >
-                {totalDenominatorCells === 0
-                  ? "no report"
-                  : `${connectedQuestionsCount}/${totalQuestionsEvaluated} connected`}
-              </span>
-            </div>
-            <div className="mt-3 text-2xl font-bold tracking-tight">
-              {matrixConnectivityRatio ? `${matrixConnectivityRatio}%` : "—"}
-              <span className="ml-1 text-sm font-normal text-gray-400">
-                ({totalAnsweredCells}/{totalDenominatorCells} cells)
-              </span>
-            </div>
-          </div>
-          <p className="mt-2 text-xs text-gray-400">
-            {notIntegratedQuestionsCount > 0
+        <OverviewCard
+          title="Governed Heads"
+          badge={
+            totalHeads === 0
+              ? "empty"
+              : staleHeads > 0
+                ? `${staleHeads} stale`
+                : anyHeadDegraded
+                  ? "degraded"
+                  : "all fresh"
+          }
+          badgeTone={totalHeads === 0 ? "muted" : anyHeadDegraded ? "warn" : "ok"}
+          metric={totalHeads === 0 ? formatCell(null) : `${freshHeads}/${totalHeads}`}
+          unit="fresh pointers"
+          foot={<>Served heads from <span className="font-mono text-zinc-300">mart.served_head</span>.</>}
+        />
+        <OverviewCard
+          title="Question Connectivity"
+          badge={
+            totalDenominatorCells === 0
+              ? "no report"
+              : `${connectedQuestionsCount}/${totalQuestionsEvaluated} connected`
+          }
+          badgeTone={totalDenominatorCells === 0 ? "muted" : notIntegratedQuestionsCount > 0 ? "warn" : "ok"}
+          metric={matrixConnectivityRatio ? `${matrixConnectivityRatio}%` : formatCell(null)}
+          unit={`(${totalAnsweredCells}/${totalDenominatorCells} cells)`}
+          foot={
+            notIntegratedQuestionsCount > 0
               ? `${notIntegratedQuestionsCount} questions missing underlying mart column`
-              : "All evaluated questions integrated"}
-          </p>
-        </div>
-
-        {/* Card 3: External Gateway Traffic */}
-        <div className="rounded-xl border border-border bg-card p-4 flex flex-col justify-between">
-          <div>
-            <div className="flex items-center justify-between text-xs text-gray-400">
-              <span className="uppercase tracking-wider font-semibold">Gateway Traffic</span>
-              <span
-                className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium border ${
-                  totalFailedCalls > 0
-                    ? "bg-amber-950/60 text-amber-400 border-amber-800"
-                    : "bg-emerald-950/60 text-emerald-400 border-emerald-800"
-                }`}
-              >
-                {totalCalls === 0 ? "idle" : totalFailedCalls > 0 ? `${totalFailedCalls} failed` : "healthy"}
-              </span>
-            </div>
-            <div className="mt-3 text-2xl font-bold tracking-tight">
-              {totalCalls}
-              <span className="ml-1 text-sm font-normal text-gray-400">calls today</span>
-            </div>
-          </div>
-          <p className="mt-2 text-xs text-gray-400">
-            {totalLandedFetches} landed into <span className="font-mono text-zinc-300">raw.fetches</span>.
-          </p>
-        </div>
-
-        {/* Card 4: Ingestion & Runs Footprint */}
-        <div className="rounded-xl border border-border bg-card p-4 flex flex-col justify-between">
-          <div>
-            <div className="flex items-center justify-between text-xs text-gray-400">
-              <span className="uppercase tracking-wider font-semibold">Capture Footprint</span>
-              <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-zinc-800 text-zinc-300 border border-zinc-700">
-                {totalSources} sources
-              </span>
-            </div>
-            <div className="mt-3 text-2xl font-bold tracking-tight">
-              {totalFetches24h}
-              <span className="ml-1 text-sm font-normal text-gray-400">fetches (24h)</span>
-            </div>
-          </div>
-          <p className="mt-2 text-xs text-gray-400">
-            {recentObligations > 0
+              : "All evaluated questions integrated"
+          }
+        />
+        <OverviewCard
+          title="Gateway Traffic"
+          badge={totalCalls === 0 ? "idle" : totalFailedCalls > 0 ? `${totalFailedCalls} failed` : "healthy"}
+          badgeTone={totalFailedCalls > 0 ? "warn" : "ok"}
+          metric={totalCalls}
+          unit="calls today"
+          foot={<>{totalLandedFetches} landed into <span className="font-mono text-zinc-300">raw.fetches</span>.</>}
+        />
+        <OverviewCard
+          title="Capture Footprint"
+          badge={`${stats.sources.length} sources`}
+          badgeTone="muted"
+          metric={totalFetches24h}
+          unit="fetches (24h)"
+          foot={
+            recentObligations > 0
               ? `${recentResolved}/${recentObligations} recent obligations resolved`
-              : "No capture obligations logged"}
-          </p>
-        </div>
+              : "No capture obligations logged"
+          }
+        />
       </div>
 
-      {/* Upgraded Question Coverage Section: Penetrating Physical Matrix */}
       <div className="space-y-4">
         <div>
           <div className="flex items-center gap-3">
@@ -364,8 +330,6 @@ export default async function AdminDatahubPage({
           </div>
           <p className="mt-1 text-sm text-gray-500">
             Expected from the question registry, observed from the governed head&apos;s status dimensions.
-            No cosmetic green masking: missing columns are classified as <span className="text-rose-400">Not Integrated</span> and
-            linked directly to tracking issues.
           </p>
         </div>
 
@@ -390,10 +354,8 @@ export default async function AdminDatahubPage({
                 <div className="flex items-center gap-2">
                   <span className="text-xs text-gray-400">Universe coverage:</span>
                   <span
-                    className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium border ${
-                      isFullConnected
-                        ? "bg-emerald-950/60 text-emerald-400 border-emerald-800"
-                        : "bg-amber-950/60 text-amber-400 border-amber-800"
+                    className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
+                      isFullConnected ? BADGE_TONES.ok : BADGE_TONES.warn
                     }`}
                   >
                     {universeAnswered}/{universeDenominator} cells ({universeRatio.toFixed(1)}%)
@@ -415,12 +377,9 @@ export default async function AdminDatahubPage({
                   <tbody className="divide-y divide-border/40">
                     {report.questions.map((q) => {
                       const status = getPhysicalStatus(q);
-                      const percent =
-                        q.denominator > 0 ? Math.round((q.answered / q.denominator) * 100) : 0;
-
+                      const percent = q.denominator > 0 ? Math.round((q.answered / q.denominator) * 100) : 0;
                       return (
                         <tr key={q.question} className="hover:bg-card/40 transition-colors">
-                          {/* Question */}
                           <td className="py-3 pr-4 align-top">
                             <div className="flex items-center gap-2">
                               <span className="font-mono font-bold text-accent">{q.question.toUpperCase()}</span>
@@ -430,17 +389,11 @@ export default async function AdminDatahubPage({
                             </div>
                             <div className="mt-1 text-xs text-gray-300 max-w-xs">{q.text}</div>
                           </td>
-
-                          {/* Physical Status */}
                           <td className="py-3 pr-4 align-top">
-                            <span
-                              className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${status.badgeClass}`}
-                            >
+                            <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${status.badgeClass}`}>
                               {status.label}
                             </span>
                           </td>
-
-                          {/* Wiring / Mart Column */}
                           <td className="py-3 pr-4 align-top">
                             {q.column ? (
                               <code className="text-xs font-mono text-emerald-400 bg-emerald-950/30 px-1.5 py-0.5 rounded border border-emerald-900/50">
@@ -453,75 +406,42 @@ export default async function AdminDatahubPage({
                               </div>
                             )}
                           </td>
-
-                          {/* Coverage Progress */}
                           <td className="py-3 pr-4 align-top min-w-[180px]">
                             {q.denominator > 0 ? (
                               <div className="space-y-1">
                                 <div className="flex items-center justify-between text-xs">
-                                  <span className="font-mono text-gray-200">
-                                    {q.answered}/{q.denominator}
-                                  </span>
+                                  <span className="font-mono text-gray-200">{q.answered}/{q.denominator}</span>
                                   <span className="text-gray-400 font-mono">{percent}%</span>
                                 </div>
                                 <div className="flex h-2 w-full overflow-hidden rounded bg-zinc-800">
                                   {q.answered > 0 && (
-                                    <div
-                                      style={{ width: `${(q.answered / q.denominator) * 100}%` }}
-                                      className="bg-emerald-500"
-                                      title={`Answered: ${q.answered}`}
-                                    />
+                                    <div style={{ width: `${(q.answered / q.denominator) * 100}%` }} className="bg-emerald-500" title={`Answered: ${q.answered}`} />
                                   )}
                                   {q.unavailable_total > 0 && (
-                                    <div
-                                      style={{ width: `${(q.unavailable_total / q.denominator) * 100}%` }}
-                                      className="bg-amber-500"
-                                      title={`Unavailable: ${q.unavailable_total}`}
-                                    />
+                                    <div style={{ width: `${(q.unavailable_total / q.denominator) * 100}%` }} className="bg-amber-500" title={`Unavailable: ${q.unavailable_total}`} />
                                   )}
                                   {q.missing > 0 && (
-                                    <div
-                                      style={{ width: `${(q.missing / q.denominator) * 100}%` }}
-                                      className="bg-rose-500/80"
-                                      title={`Missing: ${q.missing}`}
-                                    />
+                                    <div style={{ width: `${(q.missing / q.denominator) * 100}%` }} className="bg-rose-500/80" title={`Missing: ${q.missing}`} />
                                   )}
                                 </div>
                               </div>
                             ) : (
-                              <span className="text-xs text-gray-500">—</span>
+                              <span className="text-xs text-gray-500">{formatCell(null)}</span>
                             )}
                           </td>
-
-                          {/* Failure Breakdown & Diagnostics */}
                           <td className="py-3 align-top">
                             {q.denominator === 0 ? (
                               <span className="text-xs text-gray-500">Not applicable to this universe</span>
                             ) : q.answered === q.denominator ? (
-                              <span className="text-xs text-emerald-400/90 flex items-center gap-1 font-mono">
-                                <span>✓</span>
-                                <span>Zero defects</span>
-                              </span>
+                              <span className="text-xs text-emerald-400/90 flex items-center gap-1 font-mono">✓ Zero defects</span>
                             ) : (
                               <div className="flex flex-wrap gap-1.5 items-center">
-                                {q.unavailable_total > 0 && (
-                                  <>
-                                    {q.top_reasons ? (
-                                      q.top_reasons.split(", ").map((reason, idx) => (
-                                        <span
-                                          key={idx}
-                                          className="inline-flex items-center rounded bg-amber-950/50 px-1.5 py-0.5 text-xs font-mono text-amber-300 border border-amber-800/60"
-                                        >
-                                          {reason}
-                                        </span>
-                                      ))
-                                    ) : (
-                                      <span className="inline-flex items-center rounded bg-amber-950/50 px-1.5 py-0.5 text-xs font-mono text-amber-300 border border-amber-800/60">
-                                        unavailable={q.unavailable_total}
-                                      </span>
-                                    )}
-                                  </>
-                                )}
+                                {q.unavailable_total > 0 &&
+                                  (q.top_reasons ? q.top_reasons.split(", ") : [`unavailable=${q.unavailable_total}`]).map((reason, idx) => (
+                                    <span key={idx} className="inline-flex items-center rounded bg-amber-950/50 px-1.5 py-0.5 text-xs font-mono text-amber-300 border border-amber-800/60">
+                                      {reason}
+                                    </span>
+                                  ))}
                                 {q.missing > 0 && (
                                   <span className="inline-flex items-center rounded bg-rose-950/50 px-1.5 py-0.5 text-xs font-mono text-rose-300 border border-rose-800/60">
                                     missing={q.missing}
@@ -543,12 +463,6 @@ export default async function AdminDatahubPage({
 
       <div className="space-y-3">
         <h2 className="text-lg font-semibold">Confidence &amp; accuracy (nightly)</h2>
-        <p className="text-sm text-gray-500">
-          Every (metric family, subject) cell of the governed head, counted by the independent origins
-          that asserted a value, with the mean confidence from 0 to 1 evaluated from what they asserted.
-          The stored observation confidence column is a constant and is not read. Agreement is judged only
-          over compared cells. A report written before #1517 shows a dash in the origin columns.
-        </p>
         {stats.confidence.length === 0 && (
           <p className="rounded-lg border border-border bg-card p-4 text-gray-400">No confidence report yet.</p>
         )}
@@ -562,44 +476,32 @@ export default async function AdminDatahubPage({
                 sources connected: {report.sources_connected.length} ({report.sources_connected.join(", ")})
               </span>
             </div>
-            <table className="mt-3 w-full text-left text-sm">
-              <thead>
-                <tr className="text-gray-500">
-                  <th className="pr-4 font-normal">family</th>
-                  <th className="pr-4 font-normal">0 origins</th>
-                  <th className="pr-4 font-normal">1 origin</th>
-                  <th className="pr-4 font-normal">2 origins</th>
-                  <th className="pr-4 font-normal">3+ origins</th>
-                  <th className="pr-4 font-normal">mean confidence</th>
-                  <th className="pr-4 font-normal">agreement (compared)</th>
-                  <th className="font-normal">origins</th>
+            <DataTable
+              headers={["family", "0 origins", "1 origin", "2 origins", "3+ origins", "mean confidence", "agreement (compared)", "origins"]}
+              className="mt-3 w-full text-left text-sm"
+            >
+              {report.families.map((family) => (
+                <tr key={family.family} className="border-t border-border">
+                  <td className="pr-4 font-mono">{family.family}</td>
+                  <td className="pr-4">{formatCell(family.origin_counts?.none ?? null)}</td>
+                  <td className="pr-4">{formatCell(family.origin_counts?.one ?? null)}</td>
+                  <td className="pr-4">{formatCell(family.origin_counts?.two ?? null)}</td>
+                  <td className="pr-4">{formatCell(family.origin_counts?.three_or_more ?? null)}</td>
+                  <td className="pr-4">{formatCell(family.mean_confidence)}</td>
+                  <td className="pr-4">
+                    {formatCell(family.agreement_rate)} ({family.compared}/{family.cells})
+                  </td>
+                  <td className="font-mono text-gray-400">{family.origins.join(", ")}</td>
                 </tr>
-              </thead>
-              <tbody>
-                {report.families.map((family) => (
-                  <tr key={family.family} className="border-t border-border">
-                    <td className="pr-4 font-mono">{family.family}</td>
-                    <td className="pr-4">{formatCell(family.origin_counts?.none ?? null)}</td>
-                    <td className="pr-4">{formatCell(family.origin_counts?.one ?? null)}</td>
-                    <td className="pr-4">{formatCell(family.origin_counts?.two ?? null)}</td>
-                    <td className="pr-4">{formatCell(family.origin_counts?.three_or_more ?? null)}</td>
-                    <td className="pr-4">{formatCell(family.mean_confidence)}</td>
-                    <td className="pr-4">
-                      {formatCell(family.agreement_rate)} ({family.compared}/{family.cells})
-                    </td>
-                    <td className="font-mono text-gray-400">{family.origins.join(", ")}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+              ))}
+            </DataTable>
             <p className="mt-2 text-sm text-gray-400">
               matches the quality report per family:
-              {report.quality_report_matches.length === 0 && " —"}
+              {report.quality_report_matches.length === 0 && ` ${formatCell(null)}`}
               {report.quality_report_matches.map((match) => (
                 <span key={match.family}>
                   {" "}
-                  <span className="font-mono">{match.family}</span>{" "}
-                  {formatCell(match.matches)}
+                  <span className="font-mono">{match.family}</span> {formatCell(match.matches)}
                   {match.mismatches > 0 ? ` (${match.mismatches} cells)` : ""}
                 </span>
               ))}
@@ -613,11 +515,7 @@ export default async function AdminDatahubPage({
         <div>
           <h2 className="text-lg font-semibold">Oracle outcomes (mart.oracle_outcomes)</h2>
           <p className="text-sm text-gray-400">
-            Outside comparisons for each metric across active governed universes. Each cell shows{" "}
-            <span className="font-mono">compared</span>, <span className="font-mono">agree</span>,{" "}
-            <span className="font-mono">disagree</span>, <span className="font-mono">not_comparable</span>,{" "}
-            <span className="font-mono">newest_compared_at</span> and{" "}
-            <span className="font-mono">wilson_95_upper_bound</span>; a metric with no outcome rows shows{" "}
+            Outside comparisons per metric across active governed universes; metrics without outcome rows show{" "}
             <span className="font-mono">no comparator</span>.
           </p>
         </div>
@@ -638,39 +536,30 @@ export default async function AdminDatahubPage({
                 <tr key={row.metric}>
                   <td className="py-2 pr-4 font-mono align-top">{row.metric}</td>
                   {stats.oracleOutcomes.universes.map((universeId) => {
-                    const outcomeCell = row.cells[universeId] ?? null;
+                    const c = row.cells[universeId] ?? null;
                     return (
                       <td key={universeId} className="py-2 pr-4 align-top">
-                        {outcomeCell === null ? (
+                        {c === null ? (
                           <span className="font-mono text-gray-500">no comparator</span>
                         ) : (
                           <div className="space-y-0.5 text-xs">
                             <div>
-                              compared <span className="font-mono">{outcomeCell.compared}</span> · agree{" "}
-                              <span className="font-mono text-emerald-400">{outcomeCell.agree}</span> · disagree{" "}
-                              <span
-                                className={
-                                  outcomeCell.disagree > 0 ? "font-mono text-rose-400 font-medium" : "font-mono"
-                                }
-                              >
-                                {outcomeCell.disagree}
+                              compared <span className="font-mono">{c.compared}</span> · agree{" "}
+                              <span className="font-mono text-emerald-400">{c.agree}</span> · disagree{" "}
+                              <span className={c.disagree > 0 ? "font-mono text-rose-400 font-medium" : "font-mono"}>
+                                {c.disagree}
                               </span>{" "}
-                              · not_comparable <span className="font-mono">{outcomeCell.not_comparable}</span>
-                              {outcomeCell.no_served_value_count > 0 && (
+                              · not_comparable <span className="font-mono">{c.not_comparable}</span>
+                              {c.no_served_value_count > 0 && (
                                 <>
-                                  {" "}
-                                  · no_served_value{" "}
-                                  <span className="font-mono text-amber-400 font-medium">
-                                    {outcomeCell.no_served_value_count}
-                                  </span>
+                                  {" "}· no_served_value{" "}
+                                  <span className="font-mono text-amber-400 font-medium">{c.no_served_value_count}</span>
                                 </>
                               )}
                             </div>
                             <div className="text-gray-400">
-                              wilson_95_upper_bound{" "}
-                              <span className="font-mono">{formatCell(outcomeCell.wilson_95_upper_bound)}</span> ·
-                              newest_compared_at{" "}
-                              <span className="font-mono">{formatCell(outcomeCell.newest_compared_at)}</span>
+                              wilson_95_upper_bound <span className="font-mono">{formatCell(c.wilson_95_upper_bound)}</span> ·
+                              newest_compared_at <span className="font-mono">{formatCell(c.newest_compared_at)}</span>
                             </div>
                           </div>
                         )}
@@ -689,106 +578,86 @@ export default async function AdminDatahubPage({
         {stats.heads.length === 0 && (
           <p className="rounded-lg border border-border bg-card p-4 text-gray-400">No pointer heads yet.</p>
         )}
-        {stats.heads.map((head) => (
-          <div key={head.universe_id} className="rounded-lg border border-border bg-card p-4">
-            <div className="flex flex-wrap items-baseline gap-3">
-              <span className="font-mono text-accent">{head.universe_id}</span>
-              <span className="text-sm text-gray-400">seq {head.sequence}</span>
-              <span className="text-sm text-gray-500">{head.advanced_at}</span>
-
-              {head.freshness === "fresh" ? (
-                <span className="inline-flex items-center rounded-full bg-emerald-950/60 px-2.5 py-0.5 text-xs font-medium text-emerald-400 border border-emerald-800">
-                  fresh{head.age_hours !== null ? ` (${head.age_hours.toFixed(1)}h)` : ""}
+        {stats.heads.map((head) => {
+          const ageLabel = head.age_hours !== null ? `${head.age_hours.toFixed(1)}h` : null;
+          const staleDetails = [ageLabel, head.staleness_reason ?? null].filter(Boolean).join(" — ");
+          return (
+            <div key={head.universe_id} className="rounded-lg border border-border bg-card p-4">
+              <div className="flex flex-wrap items-baseline gap-3">
+                <span className="font-mono text-accent">{head.universe_id}</span>
+                <span className="text-sm text-gray-400">seq {head.sequence}</span>
+                <span className="text-sm text-gray-500">{head.advanced_at}</span>
+                <span
+                  className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
+                    head.freshness === "fresh"
+                      ? BADGE_TONES.ok
+                      : head.freshness === "manual"
+                        ? BADGE_TONES.muted
+                        : head.freshness === "stale"
+                          ? BADGE_TONES.crit
+                          : "bg-gray-800 text-gray-400 border border-gray-700"
+                  }`}
+                >
+                  {head.freshness === "fresh" || head.freshness === "manual"
+                    ? `${head.freshness}${ageLabel ? ` (${ageLabel})` : ""}`
+                    : head.freshness === "stale"
+                      ? `stale${staleDetails ? ` (${staleDetails})` : ""}`
+                      : "freshness unknown"}
                 </span>
-              ) : head.freshness === "manual" ? (
-                <span className="inline-flex items-center rounded-full bg-zinc-800 px-2.5 py-0.5 text-xs font-medium text-zinc-300 border border-zinc-700">
-                  manual{head.age_hours !== null ? ` (${head.age_hours.toFixed(1)}h)` : ""}
+                <span
+                  className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
+                    head.is_degraded
+                      ? BADGE_TONES.warn
+                      : "bg-emerald-950/30 text-emerald-500/80 border border-emerald-900/50"
+                  }`}
+                >
+                  {head.is_degraded ? `degraded ${head.degraded_reasons.join(" · ")}` : "objectives met"}
                 </span>
-              ) : head.freshness === "stale" ? (
-                <span className="inline-flex items-center rounded-full bg-rose-950/60 px-2.5 py-0.5 text-xs font-medium text-rose-400 border border-rose-800">
-                  stale{(() => {
-                    const details = [
-                      head.age_hours !== null ? `${head.age_hours.toFixed(1)}h` : null,
-                      head.staleness_reason ?? null,
-                    ].filter(Boolean).join(" — ");
-                    return details ? ` (${details})` : "";
-                  })()}
-                </span>
-              ) : (
-                <span className="inline-flex items-center rounded-full bg-gray-800 px-2.5 py-0.5 text-xs font-medium text-gray-400 border border-gray-700">
-                  freshness unknown
-                </span>
-              )}
-
-              {head.is_degraded ? (
-                <span className="inline-flex items-center rounded-full bg-amber-950/60 px-2.5 py-0.5 text-xs font-medium text-amber-400 border border-amber-800">
-                  degraded {head.degraded_reasons.join(" · ")}
-                </span>
-              ) : (
-                <span className="inline-flex items-center rounded-full bg-emerald-950/30 px-2.5 py-0.5 text-xs font-medium text-emerald-500/80 border border-emerald-900/50">
-                  objectives met
-                </span>
-              )}
-            </div>
-            <dl className="mt-2 grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
-              <div>
-                <dt className="text-gray-500">target run</dt>
-                <dd className="font-mono" title={head.target_run_id}>{shortRun(head.target_run_id)}</dd>
               </div>
-              <div>
-                <dt className="text-gray-500">capture availability</dt>
-                <dd className={head.is_avail_degraded ? "text-amber-400 font-medium" : ""}>
-                  {formatCell(head.availability)}
-                </dd>
-              </div>
-              <div>
-                <dt className="text-gray-500">corroborated cells</dt>
-                <dd className={head.is_corroboration_degraded ? "text-amber-400 font-medium" : ""}>
-                  {formatCell(head.agreed_cells)}/{formatCell(head.total_cells)}
-                </dd>
-              </div>
+              <dl className="mt-2 grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
+                <div>
+                  <dt className="text-gray-500">target run</dt>
+                  <dd className="font-mono" title={head.target_run_id}>{shortRun(head.target_run_id)}</dd>
+                </div>
+                <div>
+                  <dt className="text-gray-500">capture availability</dt>
+                  <dd className={head.is_avail_degraded ? "text-amber-400 font-medium" : ""}>{formatCell(head.availability)}</dd>
+                </div>
+                <div>
+                  <dt className="text-gray-500">corroborated cells</dt>
+                  <dd className={head.is_corroboration_degraded ? "text-amber-400 font-medium" : ""}>
+                    {formatCell(head.agreed_cells)}/{formatCell(head.total_cells)}
+                  </dd>
+                </div>
                 <div>
                   <dt className="text-gray-500">freshness status</dt>
                   <dd className={head.freshness === "stale" ? "text-rose-400 font-medium" : ""}>
-                    {head.freshness}{head.age_hours !== null ? ` (${head.age_hours.toFixed(1)}h)` : ""}
+                    {head.freshness}{ageLabel ? ` (${ageLabel})` : ""}
                   </dd>
                 </div>
               </dl>
               {head.factors.length > 0 && (
-                <table className="mt-3 w-full text-left text-sm">
-                  <thead>
-                    <tr className="text-gray-500">
-                      <th className="pr-4 font-normal">factor</th>
-                      <th className="pr-4 font-normal">complete / universe</th>
-                      <th className="font-normal">factor availability</th>
+                <DataTable headers={["factor", "complete / universe", "factor availability"]} className="mt-3 w-full text-left text-sm">
+                  {head.factors.map((factor) => (
+                    <tr key={factor.factor_id}>
+                      <td className="pr-4 font-mono">{factor.factor_id}</td>
+                      <td className="pr-4">{factor.complete_subjects}/{factor.universe_subjects}</td>
+                      <td>{factor.ratio}</td>
                     </tr>
-                  </thead>
-                  <tbody>
-                    {head.factors.map((factor) => (
-                      <tr key={factor.factor_id}>
-                        <td className="pr-4 font-mono">{factor.factor_id}</td>
-                        <td className="pr-4">
-                          {factor.complete_subjects}/{factor.universe_subjects}
-                        </td>
-                        <td>{factor.ratio}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                  ))}
+                </DataTable>
               )}
               <ListingRatioBlock report={head.listing_ratio} />
-          </div>
-        ))}
+            </div>
+          );
+        })}
       </div>
 
       <div className="space-y-3">
         <div>
           <h2 className="text-lg font-semibold">Standing check verdicts (mart.nightly_verdicts)</h2>
           <p className="text-sm text-gray-500">
-            One row per check: its current verdict, the newest recorded. Select a check to list its history.{" "}
-            In-environment invariants evaluated by Dagster (<span className="font-mono">output_invariants</span> and{" "}
-            <span className="font-mono">report_surface_proof</span>) and surfaced through <span className="font-mono">/api/health</span>.
-            Re-evaluated automatically within 60s when a governed head advances or a new release boots (#1346).
+            Current verdict per check, newest recorded. Select a check to list its history.
           </p>
         </div>
         {stats.nightlyVerdicts.length === 0 ? (
@@ -796,39 +665,9 @@ export default async function AdminDatahubPage({
             No standing check verdicts recorded in <span className="font-mono">mart.nightly_verdicts</span> yet.
           </p>
         ) : (
-          <table className="w-full text-left text-sm">
-            <thead>
-              <tr className="text-gray-500">
-                <th className="pr-4 font-normal">check</th>
-                <th className="pr-4 font-normal">verdict</th>
-                <th className="pr-4 font-normal">ran at (UTC)</th>
-                <th className="pr-4 font-normal">dagster run</th>
-                <th className="font-normal">summary</th>
-              </tr>
-            </thead>
-            <tbody>
-              {stats.nightlyVerdicts.map((v) => (
-                <tr key={v.check_name} className="border-t border-border">
-                  <td className="pr-4 font-mono">
-                    <Link
-                      href={`/admin/datahub?history=${encodeURIComponent(v.check_name)}#verdict-history`}
-                      className="underline decoration-dotted hover:text-accent"
-                    >
-                      {v.check_name}
-                    </Link>
-                  </td>
-                  <td className={`pr-4 font-medium ${verdictStyle(v.ok)}`}>{verdictLabel(v.ok)}</td>
-                  <td className="pr-4 text-gray-400">
-                    {v.ran_at}
-                  </td>
-                  <td className="pr-4 font-mono text-gray-400" title={v.dagster_run_id ?? undefined}>
-                    {v.dagster_run_id ? shortRun(v.dagster_run_id) : formatCell(null)}
-                  </td>
-                  <td className="font-mono text-xs text-gray-300">{v.summary}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <DataTable headers={["check", "verdict", "ran at (UTC)", "dagster run", "summary"]}>
+            <VerdictRows rows={stats.nightlyVerdicts} showCheckLink />
+          </DataTable>
         )}
       </div>
 
@@ -846,273 +685,145 @@ export default async function AdminDatahubPage({
               No verdict is recorded for this check.
             </p>
           ) : (
-            <table className="w-full text-left text-sm">
-              <thead>
-                <tr className="text-gray-500">
-                  <th className="pr-4 font-normal">verdict</th>
-                  <th className="pr-4 font-normal">ran at (UTC)</th>
-                  <th className="pr-4 font-normal">dagster run</th>
-                  <th className="font-normal">summary</th>
-                </tr>
-              </thead>
-              <tbody>
-                {history.map((v) => (
-                  <tr key={`${v.ran_at}-${v.dagster_run_id ?? ""}`} className="border-t border-border" data-history-row="true">
-                    <td className={`pr-4 font-medium ${verdictStyle(v.ok)}`}>{verdictLabel(v.ok)}</td>
-                    <td className="pr-4 text-gray-400">{v.ran_at}</td>
-                    <td className="pr-4 font-mono text-gray-400" title={v.dagster_run_id ?? undefined}>
-                      {v.dagster_run_id ? shortRun(v.dagster_run_id) : formatCell(null)}
-                    </td>
-                    <td className="font-mono text-xs text-gray-300">{v.summary}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <DataTable headers={["verdict", "ran at (UTC)", "dagster run", "summary"]}>
+              <VerdictRows rows={history} />
+            </DataTable>
           )}
         </div>
       )}
 
       <div className="space-y-3">
         <h2 className="text-lg font-semibold">Validation</h2>
-        <table className="w-full text-left text-sm">
-          <thead>
-            <tr className="text-gray-500">
-              <th className="pr-4 font-normal">check</th>
-              <th className="pr-4 font-normal">verdict</th>
-              <th className="font-normal">detail</th>
-            </tr>
-          </thead>
-          <tbody>
-            {stats.validation.map((row) => (
-              <tr key={row.check} className="border-t border-border">
-                <td className="pr-4 font-mono">{row.check}</td>
-                <td className={`pr-4 ${row.verdict === "fail" ? "text-amber-400" : ""}`}>{row.verdict}</td>
-                <td className="text-gray-400">{row.detail}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <CheckVerdictTable headers={["check", "verdict", "detail"]} rows={stats.validation} okVerdicts={["pass", "active", "idle", "ok"]} />
       </div>
 
       <div className="space-y-3" id="vendor-account-shares">
         <h2 className="text-lg font-semibold">Vendor account shares (#1520)</h2>
-        <p className="text-sm text-gray-500">
-          One row per vendor account in <span className="font-mono">environment_contract.v1.json</span>. Counts ledger
-          rows today (UTC), never <span className="font-mono">sum(cost)</span>. Verdict follows{" "}
-          <span className="font-mono">UTILIZATION_CEILING</span> (0.70).
-        </p>
         <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm">
-            <thead>
-              <tr className="text-gray-500">
-                <th className="pr-4 font-normal">account / seats</th>
-                <th className="pr-4 font-normal">env share (%)</th>
-                <th className="pr-4 font-normal">rows today / daily share</th>
-                <th className="pr-4 font-normal">peak window / share</th>
-                <th className="pr-4 font-normal">429 / 1302</th>
-                <th className="pr-4 font-normal">evidence.kind &amp; unmeasured</th>
-                <th className="font-normal">verdict</th>
+          <DataTable
+            headers={[
+              "account / seats",
+              "env share (%)",
+              "rows today / daily share",
+              "peak window / share",
+              "429 / 1302",
+              "evidence.kind & unmeasured",
+              "verdict",
+            ]}
+          >
+            {stats.vendorAccounts.map((row) => (
+              <tr key={row.account} className="border-t border-border">
+                <td className="pr-4 font-mono">
+                  {row.account} <span className="text-xs text-gray-500">({row.seats.join(", ")}; {row.holder})</span>
+                </td>
+                <td className="pr-4 font-mono text-gray-300">
+                  {row.environment} {row.percent}%{" "}
+                  <span className="text-xs text-gray-500">
+                    ({Object.values(row.shares_by_environment).map((s) => `${s.environment}:${s.percent}%`).join(" / ")})
+                  </span>
+                </td>
+                <td className="pr-4 font-mono">
+                  {row.daily_usage_text}
+                  {row.daily_ratio_text !== null ? ` (ratio ${row.daily_ratio_text})` : ""}
+                </td>
+                <td className="pr-4 font-mono">{row.window_usage_text}</td>
+                <td className={`pr-4 font-mono ${row.http_429_today > 0 || row.code_1302_today > 0 ? "text-amber-400" : ""}`}>
+                  429={row.http_429_today} / 1302={row.code_1302_today}
+                </td>
+                <td className="pr-4 font-mono text-gray-400">
+                  {row.evidence_kinds.join(", ")}
+                  {row.not_known_limits.length > 0
+                    ? ` (${row.not_known_limits.map((l) => `${l.id}:${l.evidence_kind}`).join(", ")})`
+                    : ""}
+                </td>
+                <td className={row.verdict === "ok" ? "" : "text-amber-400"}>{row.verdict}</td>
               </tr>
-            </thead>
-            <tbody>
-              {stats.vendorAccounts.map((row) => (
-                <tr key={row.account} className="border-t border-border">
-                  <td className="pr-4 font-mono">
-                    {row.account}{" "}
-                    <span className="text-xs text-gray-500">
-                      ({row.seats.join(", ")}; {row.holder})
-                    </span>
-                  </td>
-                  <td className="pr-4 font-mono text-gray-300">
-                    {row.environment} {row.percent}%{" "}
-                    <span className="text-xs text-gray-500">
-                      (
-                      {Object.values(row.shares_by_environment)
-                        .map((s) => `${s.environment}:${s.percent}%`)
-                        .join(" / ")}
-                      )
-                    </span>
-                  </td>
-                  <td className="pr-4 font-mono">
-                    {row.daily_usage_text}
-                    {row.daily_ratio_text !== null ? ` (ratio ${row.daily_ratio_text})` : ""}
-                  </td>
-                  <td className="pr-4 font-mono">{row.window_usage_text}</td>
-                  <td className={`pr-4 font-mono ${row.http_429_today > 0 || row.code_1302_today > 0 ? "text-amber-400" : ""}`}>
-                    429={row.http_429_today} / 1302={row.code_1302_today}
-                  </td>
-                  <td className="pr-4 font-mono text-gray-400">
-                    {row.evidence_kinds.join(", ")}
-                    {row.not_known_limits.length > 0
-                      ? ` (${row.not_known_limits.map((l) => `${l.id}:${l.evidence_kind}`).join(", ")})`
-                      : ""}
-                  </td>
-                  <td className={row.verdict === "ok" ? "" : "text-amber-400"}>{row.verdict}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+            ))}
+          </DataTable>
         </div>
       </div>
 
       <div className="space-y-3" id="model-seat-1302">
         <h2 className="text-lg font-semibold">Model seat 1302 answers per environment and day (#1520)</h2>
-        <p className="text-sm text-gray-500">
-          Provider code <span className="font-mono">1302</span> and HTTP <span className="font-mono">429</span> answers
-          for <span className="font-mono">filing-extraction-model</span> per environment and UTC day. Whole-account rate
-          is <span className="font-mono">none_published</span>; per-environment pace stays in{" "}
-          <span className="font-mono">model_seat.environments</span>.
-        </p>
         {stats.model1302ByDay.length === 0 ? (
-          <p className="rounded-lg border border-border bg-card p-4 text-gray-400">
-            No model seat calls recorded in the window.
-          </p>
+          <p className="rounded-lg border border-border bg-card p-4 text-gray-400">No model seat calls recorded in the window.</p>
         ) : (
-          <table className="w-full text-left text-sm">
-            <thead>
-              <tr className="text-gray-500">
-                <th className="pr-4 font-normal">environment</th>
-                <th className="pr-4 font-normal">UTC day</th>
-                <th className="pr-4 font-normal">1302 answers</th>
-                <th className="pr-4 font-normal">HTTP 429</th>
-                <th className="pr-4 font-normal">total calls</th>
-                <th className="font-normal">sampled pace</th>
+          <DataTable headers={["environment", "UTC day", "1302 answers", "HTTP 429", "total calls", "sampled pace"]}>
+            {stats.model1302ByDay.map((row) => (
+              <tr key={`${row.environment}:${row.day}`} className="border-t border-border">
+                <td className="pr-4 font-mono">{row.environment}</td>
+                <td className="pr-4 font-mono">{row.day}</td>
+                <td className={`pr-4 font-mono ${row.code_1302 > 0 ? "text-amber-400" : ""}`}>{row.code_1302}</td>
+                <td className={`pr-4 font-mono ${row.http_429 > 0 ? "text-amber-400" : ""}`}>{row.http_429}</td>
+                <td className="pr-4 font-mono">{row.total_calls}</td>
+                <td className="font-mono text-gray-400">
+                  {row.calls_per_minute_limit !== null
+                    ? `${row.calls_per_minute_limit}/min, ${row.max_concurrent_calls} concurrent`
+                    : "unpaced"}
+                </td>
               </tr>
-            </thead>
-            <tbody>
-              {stats.model1302ByDay.map((row) => (
-                <tr key={`${row.environment}:${row.day}`} className="border-t border-border">
-                  <td className="pr-4 font-mono">{row.environment}</td>
-                  <td className="pr-4 font-mono">{row.day}</td>
-                  <td className={`pr-4 font-mono ${row.code_1302 > 0 ? "text-amber-400" : ""}`}>{row.code_1302}</td>
-                  <td className={`pr-4 font-mono ${row.http_429 > 0 ? "text-amber-400" : ""}`}>{row.http_429}</td>
-                  <td className="pr-4 font-mono">{row.total_calls}</td>
-                  <td className="font-mono text-gray-400">
-                    {row.calls_per_minute_limit !== null
-                      ? `${row.calls_per_minute_limit}/min, ${row.max_concurrent_calls} concurrent`
-                      : "unpaced"}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+            ))}
+          </DataTable>
         )}
       </div>
 
       <div className="space-y-3">
         <h2 className="text-lg font-semibold">Capacity</h2>
-        <table className="w-full text-left text-sm">
-          <thead>
-            <tr className="text-gray-500">
-              <th className="pr-4 font-normal">limit</th>
-              <th className="pr-4 font-normal">state</th>
-              <th className="font-normal">detail</th>
-            </tr>
-          </thead>
-          <tbody>
-            {stats.capacity.map((row) => (
-              <tr key={row.check} className="border-t border-border">
-                <td className="pr-4 font-mono">{row.check}</td>
-                <td className={`pr-4 ${["ok", "pass", "active"].includes(row.verdict) ? "" : "text-amber-400"}`}>
-                  {row.verdict}
-                </td>
-                <td className="text-gray-400">{row.detail}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <CheckVerdictTable headers={["limit", "state", "detail"]} rows={stats.capacity} okVerdicts={["ok", "pass", "active"]} />
       </div>
 
       <div className="space-y-3">
         <h2 className="text-lg font-semibold">Traffic (external calls, today UTC)</h2>
-        <p className="text-sm text-gray-500">
-          One row per vendor from the external call ledger (#729). A request counts whether it succeeded,
-          answered an error status, or raised; <span className="font-mono">landed</span> is how many successful
-          answers dereference to bytes in raw.fetches. Failed requests carry the vendor&apos;s own error.
-        </p>
-        {stats.traffic.length === 0 && (
+        {stats.traffic.length === 0 ? (
           <p className="rounded-lg border border-border bg-card p-4 text-gray-400">No external calls recorded today.</p>
-        )}
-        {stats.traffic.length > 0 && (
-          <table className="w-full text-left text-sm">
-            <thead>
-              <tr className="text-gray-500">
-                <th className="pr-4 font-normal">source</th>
-                <th className="pr-4 font-normal">calls</th>
-                <th className="pr-4 font-normal">failed</th>
-                <th className="pr-4 font-normal">landed</th>
-                <th className="pr-4 font-normal">avg ms</th>
-                <th className="pr-4 font-normal">last call</th>
-                <th className="font-normal">last error</th>
+        ) : (
+          <DataTable headers={["source", "calls", "failed", "landed", "avg ms", "last call", "last error"]}>
+            {stats.traffic.map((row) => (
+              <tr key={row.source} className="border-t border-border">
+                <td className="pr-4 font-mono">{row.source}</td>
+                <td className="pr-4">{row.calls}</td>
+                <td className={`pr-4 ${row.failed > 0 ? "text-amber-400" : ""}`}>{row.failed}</td>
+                <td className="pr-4">
+                  {row.calls - row.failed > 0 ? `${row.landed}/${row.calls - row.failed}` : formatCell(null)}
+                </td>
+                <td className="pr-4">{formatCell(row.avg_ms)}</td>
+                <td className="pr-4 text-gray-400">{row.last_call}</td>
+                <td className="text-gray-400">{formatCell(row.last_error)}</td>
               </tr>
-            </thead>
-            <tbody className="divide-y divide-border/40">
-              {stats.traffic.map((row) => (
-                <tr key={row.source} className="border-t border-border">
-                  <td className="pr-4 font-mono">{row.source}</td>
-                  <td className="pr-4">{row.calls}</td>
-                  <td className={`pr-4 ${row.failed > 0 ? "text-amber-400" : ""}`}>{row.failed}</td>
-                  <td className="pr-4">
-                    {row.calls - row.failed > 0 ? `${row.landed}/${row.calls - row.failed}` : formatCell(null)}
-                  </td>
-                  <td className="pr-4">{formatCell(row.avg_ms)}</td>
-                  <td className="pr-4 text-gray-400">{row.last_call}</td>
-                  <td className="text-gray-400">{formatCell(row.last_error)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+            ))}
+          </DataTable>
         )}
       </div>
 
       <div className="space-y-3">
         <h2 className="text-lg font-semibold">Recent external calls</h2>
-        <p className="text-sm text-gray-500">
-          The last 40 requests. <span className="font-mono">landed</span> names the raw.fetches row whose bytes this
-          answer became; a failed request shows its status and error instead.
-        </p>
-        {stats.recentCalls.length === 0 && (
+        {stats.recentCalls.length === 0 ? (
           <p className="rounded-lg border border-border bg-card p-4 text-gray-400">
             No ledger rows yet — the first tick after this deploy writes them.
           </p>
-        )}
-        {stats.recentCalls.length > 0 && (
+        ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead>
-                <tr className="text-gray-500">
-                  <th className="pr-4 font-normal">at</th>
-                  <th className="pr-4 font-normal">source</th>
-                  <th className="pr-4 font-normal">endpoint</th>
-                  <th className="pr-4 font-normal">status</th>
-                  <th className="pr-4 font-normal">ms</th>
-                  <th className="pr-4 font-normal">landed</th>
-                  <th className="pr-4 font-normal">run</th>
-                  <th className="font-normal">error</th>
+            <DataTable headers={["at", "source", "endpoint", "status", "ms", "landed", "run", "error"]}>
+              {stats.recentCalls.map((call) => (
+                <tr key={call.id} className="border-t border-border">
+                  <td className="pr-4 text-gray-400">{call.called_at}</td>
+                  <td className="pr-4 font-mono">{call.source}</td>
+                  <td className="pr-4 font-mono">{call.endpoint}</td>
+                  <td className={`pr-4 ${call.ok ? "" : "text-amber-400"}`}>
+                    {call.ok ? "ok" : "failed"}
+                    {call.status_code !== null ? ` ${call.status_code}` : ""}
+                  </td>
+                  <td className="pr-4">{formatCell(call.duration_ms)}</td>
+                  <td className="pr-4 font-mono">
+                    {call.landed_fetch_id !== null ? `raw.fetches#${call.landed_fetch_id}` : formatCell(null)}
+                  </td>
+                  <td className="pr-4 font-mono text-gray-400" title={call.run_key ?? undefined}>
+                    {call.run_key ? shortRun(call.run_key) : formatCell(null)}
+                  </td>
+                  <td className="text-gray-400">{formatCell(call.error)}</td>
                 </tr>
-              </thead>
-              <tbody>
-                {stats.recentCalls.map((call) => (
-                  <tr key={call.id} className="border-t border-border">
-                    <td className="pr-4 text-gray-400">{call.called_at}</td>
-                    <td className="pr-4 font-mono">{call.source}</td>
-                    <td className="pr-4 font-mono">{call.endpoint}</td>
-                    <td className={`pr-4 ${call.ok ? "" : "text-amber-400"}`}>
-                      {call.ok ? "ok" : "failed"}
-                      {call.status_code !== null ? ` ${call.status_code}` : ""}
-                    </td>
-                    <td className="pr-4">{formatCell(call.duration_ms)}</td>
-                    <td className="pr-4 font-mono">
-                      {call.landed_fetch_id !== null ? `raw.fetches#${call.landed_fetch_id}` : formatCell(null)}
-                    </td>
-                    <td className="pr-4 font-mono text-gray-400" title={call.run_key ?? undefined}>
-                      {call.run_key ? shortRun(call.run_key) : formatCell(null)}
-                    </td>
-                    <td className="text-gray-400">{formatCell(call.error)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+              ))}
+            </DataTable>
           </div>
         )}
       </div>
@@ -1120,69 +831,40 @@ export default async function AdminDatahubPage({
       <div className="space-y-3" id="ledger-coverage">
         <div>
           <h2 className="text-lg font-semibold">Fetch key and run coverage (call ledger, last {LEDGER_COVERAGE_DAYS} UTC days)</h2>
-          <p className="text-sm text-gray-500">
-            One row per UTC day, vendor and endpoint (#1521). <span className="font-mono">no key</span> counts rows
-            with no fetch key; rows written before the key was required stay there on their own days.{" "}
-            <span className="font-mono">repeat reasons</span> counts the rows that the gateway marks as an intended
-            repeat. <span className="font-mono">keys twice</span> counts the keys with two successful rows and no
-            reason on the day; a failed retry does not count. <span className="font-mono">with run</span> is the share
-            of rows that name a run. This table replaces the nightly fetch-key verdict and gates nothing.
-          </p>
         </div>
         <LedgerCoverageTable rows={stats.ledgerCoverage} />
       </div>
 
       <div className="space-y-3">
         <h2 className="text-lg font-semibold">Sources</h2>
-        <table className="w-full text-left text-sm">
-          <thead>
-            <tr className="text-gray-500">
-              <th className="pr-4 font-normal">source</th>
-              <th className="pr-4 font-normal">total</th>
-              <th className="pr-4 font-normal">last 24h</th>
-              <th className="font-normal">last fetch</th>
+        <DataTable headers={["source", "total", "last 24h", "last fetch"]}>
+          {stats.sources.map((source) => (
+            <tr key={source.source} className="border-t border-border">
+              <td className="pr-4 font-mono">{source.source}</td>
+              <td className="pr-4">{source.fetches_total}</td>
+              <td className="pr-4">{source.fetches_24h}</td>
+              <td className="text-gray-400">{source.last_fetch}</td>
             </tr>
-          </thead>
-          <tbody>
-            {stats.sources.map((source) => (
-              <tr key={source.source} className="border-t border-border">
-                <td className="pr-4 font-mono">{source.source}</td>
-                <td className="pr-4">{source.fetches_total}</td>
-                <td className="pr-4">{source.fetches_24h}</td>
-                <td className="text-gray-400">{source.last_fetch}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+          ))}
+        </DataTable>
       </div>
 
       <div className="space-y-3">
         <h2 className="text-lg font-semibold">Recent capture runs</h2>
-        <table className="w-full text-left text-sm">
-          <thead>
-            <tr className="text-gray-500">
-              <th className="pr-4 font-normal">run</th>
-              <th className="pr-4 font-normal">universe</th>
-              <th className="pr-4 font-normal">cutoff</th>
-              <th className="pr-4 font-normal">resolved</th>
-              <th className="font-normal">complete</th>
+        <DataTable headers={["run", "universe", "cutoff", "resolved", "complete"]}>
+          {stats.runs.map((run) => (
+            <tr key={run.run_id} className="border-t border-border">
+              <td className="pr-4 font-mono" title={run.run_id}>{shortRun(run.run_id)}</td>
+              <td className="pr-4 font-mono">{run.universe_id}</td>
+              <td className="pr-4 text-gray-400">{run.cutoff}</td>
+              <td className="pr-4">
+                {run.resolved}/{run.obligations}
+                {run.failed > 0 ? ` (${run.failed} failed)` : ""}
+              </td>
+              <td>{run.complete ? "yes" : "no"}</td>
             </tr>
-          </thead>
-          <tbody>
-            {stats.runs.map((run) => (
-              <tr key={run.run_id} className="border-t border-border">
-                <td className="pr-4 font-mono" title={run.run_id}>{shortRun(run.run_id)}</td>
-                <td className="pr-4 font-mono">{run.universe_id}</td>
-                <td className="pr-4 text-gray-400">{run.cutoff}</td>
-                <td className="pr-4">
-                  {run.resolved}/{run.obligations}
-                  {run.failed > 0 ? ` (${run.failed} failed)` : ""}
-                </td>
-                <td>{run.complete ? "yes" : "no"}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+          ))}
+        </DataTable>
       </div>
     </section>
   );

@@ -1,11 +1,4 @@
-"""TrueAlpha Vision Audit tool (Issue #28 and Issue #54).
-
-Evaluates the physical state of the TrueAlpha system against the root acceptance
-criteria in init.md section 0 and Gate Epics (#56, #29, #30, #31, #32, #54).
-
-Usage:
-    python tools/vision_audit.py [--env production|staging] [--fail-closed] [--json]
-"""
+"""Audit physical Gate Epics (#28, #54) against /api/health verdicts and pointers."""
 
 from __future__ import annotations
 
@@ -25,12 +18,7 @@ from truealpha_tools.nightly_verdicts import HealthReport, read_report
 
 
 def _health_url_for(env: str) -> str:
-    host = resolve_app_hostname(
-        "truealpha",
-        env,
-        base_domain="truealpha.club",
-        custom_prod_domain="truealpha.club",
-    )
+    host = resolve_app_hostname("truealpha", env, base_domain="truealpha.club", custom_prod_domain="truealpha.club")
     return f"https://{host}/api/health"
 
 
@@ -55,28 +43,19 @@ class VisionAuditReport:
     served_head_freshness: str = "fresh"
 
 
-def _assess_served_head_freshness(
-    report: Any,
-    *,
-    environment: str = "production",
-) -> tuple[bool, str]:
-    """Verify that mart.served_head.freshness == 'fresh' across scheduled governed pointers (#54, #1299).
-
-    Every scheduled pointer in `report.governed_pointers` must carry `freshness == 'fresh'` and
-    `availability == 'available'`. Manual-only lanes in an environment (#1256) do not fail the
-    check. An empty list, missing `governed_pointers`, or 'unknown' pointer state fails closed.
-    """
+def _assess_served_head_freshness(report: Any, *, environment: str = "production") -> tuple[bool, str]:
     pointers = getattr(report, "governed_pointers", None)
     if pointers is None or pointers == "unknown" or not isinstance(pointers, list) or not pointers:
         return False, "mart.served_head.freshness=unknown (no governed pointers)"
     stale: list[str] = []
     scheduled_seen = 0
+    contract = load_environment_contract()
     for entry in pointers:
         if not isinstance(entry, dict):
             stale.append(str(entry))
             continue
         universe = str(entry.get("universe_id", "?"))
-        if not load_environment_contract().is_head_scheduled(universe, environment):
+        if not contract.is_head_scheduled(universe, environment):
             continue
         scheduled_seen += 1
         freshness = str(entry.get("freshness", "fresh"))
@@ -90,40 +69,7 @@ def _assess_served_head_freshness(
     return True, "mart.served_head.freshness == 'fresh'"
 
 
-def _finalize_vision_report(
-    *,
-    env: str,
-    resolved_url: str,
-    release_sha: str | None,
-    gates: list[GateAuditResult],
-    verdicts_summary: dict[str, Any],
-    heads_fresh: bool,
-    freshness_detail: str,
-) -> VisionAuditReport:
-    if not heads_fresh and gates:
-        last = gates[-1]
-        gates[-1] = GateAuditResult(
-            gate_id=last.gate_id,
-            title=last.title,
-            status="OPEN",
-            verified=False,
-            evidence=f"{last.evidence} [{freshness_detail}]",
-        )
-    all_passed = all(g.verified for g in gates) and heads_fresh
-    return VisionAuditReport(
-        target_env=env,
-        health_url=resolved_url,
-        release=release_sha,
-        all_passed=all_passed,
-        gates=gates,
-        nightly_verdicts_summary=verdicts_summary,
-        status="pass" if all_passed else "fail",
-        served_head_freshness="fresh" if heads_fresh else freshness_detail,
-    )
-
-
 def _count_oracle_agrees(oracle_outcomes: Any) -> int:
-    """Return the count of `agree` rows from an oracle outcomes rollup or sequence (#1523 G19)."""
     if oracle_outcomes is None:
         return 0
     if isinstance(oracle_outcomes, Mapping):
@@ -138,22 +84,12 @@ def _count_oracle_agrees(oracle_outcomes: Any) -> int:
 
 
 def _gate(gate_id: str, title: str, verified: bool, evidence: str) -> GateAuditResult:
-    return GateAuditResult(
-        gate_id=gate_id,
-        title=title,
-        status="VERIFIED" if verified else "OPEN",
-        verified=verified,
-        evidence=evidence,
-    )
+    return GateAuditResult(gate_id, title, "VERIFIED" if verified else "OPEN", verified, evidence)
 
 
 def _audit_gate_1(
-    verdicts_by_check: Mapping[str, Any],
-    oracle_outcomes: Any,
-    *,
-    env: str = "production",
+    verdicts_by_check: Mapping[str, Any], oracle_outcomes: Any, *, env: str = "production"
 ) -> GateAuditResult:
-    """Evaluate Gate 1 (#29) from surface proof, output invariants, and oracle agrees (#1523 G19, #1419)."""
     surface_proof = verdicts_by_check.get("report_surface_proof")
     invariants = verdicts_by_check.get("output_invariants")
     if oracle_outcomes is not None:
@@ -179,6 +115,19 @@ def _audit_gate_1(
     return _gate("#29", "Gate 1: Wide Row and Output Invariants", verified, evidence)
 
 
+def _verdict_gate(gate_id: str, title: str, verdict: Any, missing: str) -> GateAuditResult:
+    return _gate(gate_id, title, verdict is not None and verdict.ok is True, verdict.summary if verdict else missing)
+
+
+def _coverage_gate(verdicts_by_check: Mapping[str, Any], env: str) -> GateAuditResult:
+    coverage = {u: verdicts_by_check.get(f"question_coverage@{u}") for u in scheduled_universe_names(env)}
+    ok = bool(coverage) and all(v is not None and v.ok is True for v in coverage.values())
+    detail = "; ".join(f"{u} coverage: {v.summary if v else 'missing'}" for u, v in coverage.items())
+    return _gate(
+        "#30", "Gate 2: Research Question Coverage", ok, detail or f"the contract schedules no universe in {env}"
+    )
+
+
 def audit_vision(
     *,
     env: str = "production",
@@ -186,7 +135,6 @@ def audit_vision(
     oracle_outcomes: Sequence[Mapping[str, Any]] | Mapping[str, Any] | None = None,
 ) -> VisionAuditReport:
     resolved_url = health_url or _health_url_for(env)
-
     try:
         report: HealthReport = read_report(resolved_url, default_http_get())
         verdicts_list = report.verdicts or []
@@ -198,49 +146,27 @@ def audit_vision(
         heads_fresh, freshness_detail = _assess_served_head_freshness(report, environment=env)
         effective_outcomes = getattr(report, "oracle_outcomes", None) if oracle_outcomes is None else oracle_outcomes
     except Exception as exc:  # noqa: BLE001
-        verdicts_by_check = {}
-        verdicts_summary = {"error": str(exc)}
-        release_sha = None
+        verdicts_by_check, verdicts_summary, release_sha = {}, {"error": str(exc)}, None
         heads_fresh, freshness_detail = False, "mart.served_head.freshness=unknown"
         effective_outcomes = oracle_outcomes
 
-    fetch_proof = verdicts_by_check.get("release_fetch_proof")
+    market_fresh = verdicts_by_check.get("market_data_freshness")
     gates = [
-        _gate(
+        _verdict_gate(
             "#56",
             "Gate 0: Capture & Environment Readiness",
-            fetch_proof is not None and fetch_proof.ok is True,
-            fetch_proof.summary if fetch_proof else "No release_fetch_proof recorded in nightly verdicts.",
+            verdicts_by_check.get("release_fetch_proof"),
+            "No release_fetch_proof recorded in nightly verdicts.",
         ),
         _audit_gate_1(verdicts_by_check, effective_outcomes, env=env),
-    ]
-
-    # Gate 2 (#30): Research Questions & Entity Coverage. The environment contract lists the universes
-    # that the environment runs (staging runs TOPT only), and each of them needs a green coverage verdict.
-    coverage = {
-        universe: verdicts_by_check.get(f"question_coverage@{universe}") for universe in scheduled_universe_names(env)
-    }
-    gates.append(
-        _gate(
-            "#30",
-            "Gate 2: Research Question Coverage",
-            bool(coverage) and all(v is not None and v.ok is True for v in coverage.values()),
-            "; ".join(f"{u} coverage: {v.summary if v else 'missing'}" for u, v in coverage.items())
-            or f"the contract schedules no universe in {env}",
-        )
-    )
-
-    bt_verdict = verdicts_by_check.get("nightly_backtest")
-    gates.append(
-        _gate(
+        _coverage_gate(verdicts_by_check, env),
+        _verdict_gate(
             "#31",
             "Gate 3: Backtest Engine and Simulation Integrity",
-            bt_verdict is not None and bt_verdict.ok is True,
-            bt_verdict.summary if bt_verdict else "nightly_backtest: no verdict recorded at all in target environment.",
-        )
-    )
-
-    market_fresh = verdicts_by_check.get("market_data_freshness")
+            verdicts_by_check.get("nightly_backtest"),
+            "nightly_backtest: no verdict recorded at all in target environment.",
+        ),
+    ]
     gates.append(
         _gate(
             "#54",
@@ -250,15 +176,19 @@ def audit_vision(
             "Production graduation requires all prior gates VERIFIED and human owner sign-off.",
         )
     )
-
-    return _finalize_vision_report(
-        env=env,
-        resolved_url=resolved_url,
-        release_sha=release_sha,
+    if not heads_fresh and gates:
+        last = gates[-1]
+        gates[-1] = GateAuditResult(last.gate_id, last.title, "OPEN", False, f"{last.evidence} [{freshness_detail}]")
+    all_passed = all(g.verified for g in gates) and heads_fresh
+    return VisionAuditReport(
+        target_env=env,
+        health_url=resolved_url,
+        release=release_sha,
+        all_passed=all_passed,
         gates=gates,
-        verdicts_summary=verdicts_summary,
-        heads_fresh=heads_fresh,
-        freshness_detail=freshness_detail,
+        nightly_verdicts_summary=verdicts_summary,
+        status="pass" if all_passed else "fail",
+        served_head_freshness="fresh" if heads_fresh else freshness_detail,
     )
 
 

@@ -1,23 +1,4 @@
-"""The MCP endpoint — see #348, #758, #1104 and #42.
-
-Registers eleven read-only tools: `strategy_run` (#347's provisional
-`StrategyRunReadRepository`), `topt_gppe` (#405/#433's TOPT GPPE + quality
-read), `research_report` (#369's deterministic report assembler),
-`research_report_markdown` (#42: the same report rendered by `render_report_markdown`),
-`research_card` (#372's deterministic card renderer), `company_360_profile`
-(#1104's issuer 360 profile), `theme_purity_leaderboard` (#1104's theme purity
-leaderboard), `etf_virtual_company_profile` (#1104's virtual company profile),
-`issuer_supply_chain_exposure` and `issuer_analyst_ratings` (#42: modules 3 and 4,
-the served-head rows the App shows), and `governed_backtest` (#758's backtest
-execution runs and valuations).
-
-A tool runs only after `mcp_auth.BearerTokenGate` (mounted in `main.py`) accepted the
-caller's bearer token (#42, #1437). The owner holds that token and configures it once in
-Claude Code or Claude Desktop, so an authenticated call maps to the owner principal: this
-trusted adapter builds the `AccessContext` as a delegated MCP context (init.md rules 4 and
-26). Nothing is accepted from the client — the tool schema has no role/tenant/tier
-argument. Each tool call writes one content-free audit log line (`_AuditedFastMCP`).
-"""
+"""The MCP endpoint registering read-only mart tools behind BearerTokenGate (#348, #758, #1104, #42)."""
 
 from __future__ import annotations
 
@@ -76,33 +57,26 @@ from llm_service.config import settings
 
 logger = logging.getLogger(__name__)
 
-#: The MCP adapter, which acts for the owner on the bearer token (#1437).
 _SERVICE_PRINCIPAL_ID = "principal:llm-service-mcp"
-#: The one principal that holds the bearer token: the owner (single-user, #1437).
 _OWNER_PRINCIPAL_ID = "principal:owner"
 _SERVICE_TENANT_ID = "tenant:truealpha"
 _DELEGATION_ID = "delegation:mcp-bearer-token"
 _CONTEXT_LIFETIME = timedelta(minutes=5)
 
-#: #1062 / Rule B: consumer queries on run-addressed mart relations read
-#: through the governed head exposed by mart.served_head.
 SERVED_HEAD_SQL = "select run_id, freshness, availability from mart.served_head"
+MART_READ_FAILED_MESSAGE = "the mart read failed; the detail is in the service log"
+
+
+class _ToolModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
 
 
 class StrategyRunToolRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
-
     strategy_id: str
 
 
-class ResearchReportToolRequest(BaseModel):
-    # No strict=True (unlike StrategyRunToolRequest, whose sole field is already a bare
-    # str): this model's enum/tuple/datetime fields need normal Pydantic coercion from the
-    # JSON-shaped tool-call arguments (a JSON string into ResearchReportKind/datetime, a
-    # JSON array into a tuple) — strict mode rejects those as wrong-type instances outright
-    # rather than coercing them, verified empirically against a real MCP tool call.
-    model_config = ConfigDict(extra="forbid")
-
+class ResearchReportToolRequest(_ToolModel):
     report_kind: ResearchReportKind
     target_entity_ids: tuple[str, ...]
     cutoff_at: datetime
@@ -111,23 +85,13 @@ class ResearchReportToolRequest(BaseModel):
     title: str | None = None
 
 
-class ResearchReportMarkdown(BaseModel):
-    """A research report rendered as Markdown (#42). `report_id` is the content address of
-    the report the text renders, the same id `research_report` returns for the request."""
-
-    model_config = ConfigDict(extra="forbid")
-
+class ResearchReportMarkdown(_ToolModel):
     report_id: str
     schema_version: str
     markdown: str
 
 
 class ResearchCardToolRequest(ResearchReportToolRequest):
-    """The report request this card is built from, plus the card's own kind. `build_card`
-    (#372) takes an already-assembled `ResearchReport` and nothing else, so this tool
-    assembles one internally via the exact same path `research_report` uses, then renders
-    it — never queries mart directly and computes no new metric of its own."""
-
     card_kind: CardKind
     style_preset: str | None = None
     page: int | None = None
@@ -135,58 +99,42 @@ class ResearchCardToolRequest(ResearchReportToolRequest):
 
 class IssuerModuleToolRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
-
     issuer_id: str
 
 
-class CompanyProfileToolRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
+class CompanyProfileToolRequest(_ToolModel):
     issuer_id: str
 
 
-class ThemePurityToolRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
+class ThemePurityToolRequest(_ToolModel):
     theme_id: str
     limit: int = 10
 
 
-class EtfProfileToolRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
+class EtfProfileToolRequest(_ToolModel):
     fund_id: str = "etf:series:S000101292"
 
 
-class BacktestToolRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
+class BacktestToolRequest(_ToolModel):
     run_id: str | None = None
     strategy_key: str | None = None
     limit: int = 10
 
 
-class MetricNodeValueToolRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
+class MetricNodeValueToolRequest(_ToolModel):
     node_key: str
     issuer_id: str | None = None
     limit: int = 100
 
 
 def _owner_access_context() -> AccessContext:
-    """A fresh, short-lived context for the owner, delegated through the MCP adapter.
-
-    Built here, never from client input. The bearer gate admitted the call, and the owner
-    is the only holder of the token (#1437), so the principal is the owner and the adapter
-    is the delegating service.
-    """
     issued_at = datetime.now(UTC)
+    stamp = issued_at.timestamp()
     return AccessContext(
-        context_id=f"ctx:mcp-owner:{issued_at.timestamp()}",
+        context_id=f"ctx:mcp-owner:{stamp}",
         principal_id=_OWNER_PRINCIPAL_ID,
         tenant_id=_SERVICE_TENANT_ID,
-        session_id=f"session:mcp-owner:{issued_at.timestamp()}",
+        session_id=f"session:mcp-owner:{stamp}",
         authentication_method=AuthenticationMethod.DELEGATED_MCP,
         principal_kind=PrincipalKind.ADMINISTRATOR,
         issued_at=issued_at,
@@ -197,13 +145,6 @@ def _owner_access_context() -> AccessContext:
 
 
 class _AuditedFastMCP(FastMCP):
-    """FastMCP that writes one content-free audit line per tool call (#1437).
-
-    The line names the tool, the principal, the outcome and the duration. It never holds
-    the arguments, the result or the token. FastMCP registers `self.call_tool` as the
-    `tools/call` handler when it is built, so this override is the one entry for every call.
-    """
-
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> Any:
         started = datetime.now(UTC)
         outcome = "error"
@@ -223,32 +164,20 @@ class _AuditedFastMCP(FastMCP):
 
 
 def _default_repository() -> StrategyRunReadRepository:
-    """The real mart read, always (#362 made it the default; #434 exit criterion 3
-    removed the `strategy_run_backend` flag that could still select the fixture in a
-    deployed process). Tests inject a repository through `build_mcp_server`."""
     return PostgresStrategyRunRepository(database_url=settings.database_url)
 
 
 def _default_research_report_repository() -> ResearchReadPort:
-    """#369: the research-report reader wraps the same strategy-run source as
-    `_default_repository`, so it is the mart reader, always."""
     return MartResearchReadRepository(database_url=settings.database_url)
 
 
 def _default_issuer_module_reader() -> IssuerModuleReader:
-    """#42: modules 3 and 4, the served-head row only (`issuer_modules_mart`)."""
     return PostgresIssuerModuleReader(database_url=settings.database_url)
-
-
-#: The text of a failed module read. The database detail (host, port, role) goes to the
-#: service log only, never to the caller.
-MART_READ_FAILED_MESSAGE = "the mart read failed; the detail is in the service log"
 
 
 def _module_row(
     read: Callable[[str], SupplyChainExposure | AnalystRatings | None], issuer_id: str, tool: str
 ) -> SupplyChainExposure | AnalystRatings | None:
-    """One module read for a tool. A failed read is a tool error with a fixed text."""
     try:
         return read(issuer_id)
     except psycopg.Error:
@@ -317,11 +246,7 @@ def _opt_list(row: Mapping[str, Any] | None, key: str) -> list[Any]:
 
 
 def _legacy_id_join(column: str) -> str:
-    return (
-        "left join lateral ("
-        f"select ei.legacy_id from mart.entity_identity ei where ei.entity_id::text = {column} limit 1"
-        ") ei on true"
-    )
+    return f"left join lateral (select ei.legacy_id from mart.entity_identity ei where ei.entity_id::text = {column} limit 1) ei on true"
 
 
 def _query_mart(
@@ -350,20 +275,16 @@ def _format_theme_row(row: Mapping[str, Any], *, include_issuer: bool = False) -
         "confidence": _opt_str(row, "confidence"),
         "availability_status": str(row.get("availability_status", "unavailable")),
     }
-    if include_issuer:
-        return {"issuer_id": str(row["issuer_id"]), "cik": _opt_int(row, "cik"), **out}
-    return out
+    return {"issuer_id": str(row["issuer_id"]), "cik": _opt_int(row, "cik"), **out} if include_issuer else out
 
 
 class PostgresCompanyProfileReader:
-    """Reads issuer 360 profile from mart tables for MCP consumers."""
-
     def __init__(self, *, database_url: str) -> None:
         self._database_url = database_url
 
     def get_company_profile(self, *, issuer_id: str) -> dict[str, Any]:
-        clean_issuer = issuer_id.strip()
-        issuer_params = (clean_issuer, clean_issuer, clean_issuer)
+        clean = issuer_id.strip()
+        params = (clean, clean, clean)
 
         def _load(cur: psycopg.Cursor[dict[str, Any]]) -> tuple[Any, Any, list[dict[str, Any]]]:
             cur.execute(
@@ -386,10 +307,9 @@ class PostgresCompanyProfileReader:
                 where {issuer_identity_sql("d.issuer_id", "%s")}
                 order by d.cutoff_at desc limit 1
                 """,
-                issuer_params,
+                params,
             )
             decision = cur.fetchone()
-
             cur.execute(
                 f"""
                 select gppe::text as gppe, operating_branch,
@@ -401,10 +321,9 @@ class PostgresCompanyProfileReader:
                 where {issuer_identity_sql("g.issuer_id", "%s")}
                 order by g.cutoff desc, g.created_at desc limit 1
                 """,
-                issuer_params,
+                params,
             )
             gppe = cur.fetchone()
-
             cur.execute(
                 f"""
                 select theme_id, theme, theme_share, in_theme_revenue, consolidated_revenue,
@@ -422,7 +341,7 @@ class PostgresCompanyProfileReader:
                 ) latest_per_theme
                 order by raw_share desc nulls last, theme asc
                 """,
-                issuer_params,
+                params,
             )
             return decision, gppe, [_format_theme_row(r) for r in cur.fetchall()]
 
@@ -433,11 +352,9 @@ class PostgresCompanyProfileReader:
 def _decision_reason_codes(decision_row: Mapping[str, Any] | None) -> list[str]:
     if not decision_row:
         return []
-    codes = decision_row.get("reason_codes")
-    if codes:
+    if codes := decision_row.get("reason_codes"):
         return [str(code) for code in codes]
-    exclusion = _opt_str(decision_row, "exclusion_reason")
-    if exclusion is not None:
+    if exclusion := _opt_str(decision_row, "exclusion_reason"):
         return [exclusion]
     return (
         ["missing_audited_gross_profit_or_coordinate_join"] if _opt_str(decision_row, "outcome") == "excluded" else []
@@ -459,14 +376,13 @@ def _format_company_profile(
     resolved_issuer_id = _opt_str(decision_row, "issuer_id") or issuer_id
     gppe_confidence = _opt_str(gppe_row, "confidence")
     gppe_reason_codes = _opt_list(gppe_row, "reason_codes")
-    decision_confidence = _opt_str(decision_row, "confidence") or gppe_confidence
     decision_reason_codes = _decision_reason_codes(decision_row)
 
     _, resolved_ticker, resolved_display_name = resolve_static_entity_display(resolved_issuer_id)
     if resolved_ticker is None and issuer_id != resolved_issuer_id:
         _, resolved_ticker, resolved_display_name = resolve_static_entity_display(issuer_id)
 
-    shared_valuation = {
+    shared = {
         "tier": _opt_str(decision_row, "tier"),
         "valuation_gap": _opt_str(decision_row, "valuation_gap"),
         "valuation_basis": valuation_basis,
@@ -474,7 +390,7 @@ def _format_company_profile(
         "target_price_to_sales": target_ps,
         "current_price_to_gross_profit": _opt_str(decision_row, "current_price_to_gross_profit"),
         "target_price_to_gross_profit": target_pgp,
-        "confidence": decision_confidence,
+        "confidence": _opt_str(decision_row, "confidence") or gppe_confidence,
         "peg": _opt_str(decision_row, "peg"),
         "peg_rank": _opt_int(decision_row, "peg_rank"),
         "peg_reason_codes": _opt_list(decision_row, "peg_reason_codes"),
@@ -484,7 +400,7 @@ def _format_company_profile(
         "issuer_id": resolved_issuer_id,
         "ticker": resolved_ticker,
         "display_name": resolved_display_name,
-        **shared_valuation,
+        **shared,
         "reason_codes": decision_reason_codes if decision_row else gppe_reason_codes,
         "gppe": gppe_val,
         "gppe_detail": {
@@ -500,7 +416,7 @@ def _format_company_profile(
         "strategy_decision": {
             "cutoff_at": _opt_str(decision_row, "cutoff_at"),
             "outcome": _opt_str(decision_row, "outcome"),
-            **shared_valuation,
+            **shared,
             "reason_codes": decision_reason_codes,
         }
         if decision_row
@@ -511,7 +427,6 @@ def _format_company_profile(
 
 
 def normalize_theme_slug(theme_id: str) -> str:
-    """Normalize a theme identifier or display name into a hyphenated slug."""
     slug = theme_id.strip().lower().replace("_", "-").replace(" ", "-")
     while "--" in slug:
         slug = slug.replace("--", "-")
@@ -519,7 +434,6 @@ def normalize_theme_slug(theme_id: str) -> str:
 
 
 def resolve_fund_resolution_candidates(fund_id: str) -> dict[str, Any]:
-    """Resolve candidate identifiers and patterns for ETF profile queries."""
     clean_id = fund_id.strip()
     token = clean_id.split(":")[-1].split("/")[-1].strip()
     upper_token, lower_token = token.upper(), token.lower()
@@ -533,8 +447,6 @@ def resolve_fund_resolution_candidates(fund_id: str) -> dict[str, Any]:
 
 
 class PostgresThemePurityLeaderboardReader:
-    """Reads theme purity leaderboard from mart tables for MCP consumers."""
-
     def __init__(self, *, database_url: str) -> None:
         self._database_url = database_url
 
@@ -557,15 +469,13 @@ class PostgresThemePurityLeaderboardReader:
                     order by p.issuer_id, p.cutoff desc, p.created_at desc
                 )
                 select coalesce(ei.legacy_id, l.issuer_id) as issuer_id,
-                       l.cik, l.theme_id, l.theme,
-                       l.theme_share::text as theme_share,
+                       l.cik, l.theme_id, l.theme, l.theme_share::text as theme_share,
                        l.in_theme_revenue::text as in_theme_revenue,
                        l.consolidated_revenue::text as consolidated_revenue,
                        l.segments, l.confidence::text as confidence, l.availability_status
                 from latest_per_issuer l
                 {_legacy_id_join("l.issuer_id")}
-                order by (l.theme_share) desc nulls last, (l.confidence) desc nulls last
-                limit %s
+                order by (l.theme_share) desc nulls last, (l.confidence) desc nulls last limit %s
                 """,
                 (theme_id, normalized_slug, theme_id.strip(), clamped_limit),
             )
@@ -577,26 +487,23 @@ class PostgresThemePurityLeaderboardReader:
 
 def _etf_match_clauses(prefix: str, id_param: str) -> tuple[str, str]:
     col_id, col_name = f"{prefix}fund_id", f"{prefix}fund_name"
-    identity_subquery = (
+    identity_sub = (
         "select entity_id::text from mart.entity_identity "
         "where upper(current_ticker) in (%(upper_token)s, %(clean_upper)s) "
         "or upper(legacy_id) in (%(upper_token)s, %(clean_upper)s)"
     )
     where_sql = (
-        f"{col_id} = %({id_param})s or {col_id} = %(series_candidate)s "
-        f"or {col_id} in ({identity_subquery}) "
+        f"{col_id} = %({id_param})s or {col_id} = %(series_candidate)s or {col_id} in ({identity_sub}) "
         f"or (%(name_pattern)s <> '' and (lower({col_name}) like %(name_pattern)s or lower({col_id}) like %(name_pattern)s))"
     )
     rank_sql = (
         f"case when {col_id} = %({id_param})s or {col_id} = %(series_candidate)s then 1 "
-        f"when {col_id} in ({identity_subquery}) then 2 else 3 end asc"
+        f"when {col_id} in ({identity_sub}) then 2 else 3 end asc"
     )
     return where_sql, rank_sql
 
 
 class PostgresEtfProfileReader:
-    """Reads ETF virtual-company consolidation profile from mart tables for MCP consumers."""
-
     def __init__(self, *, database_url: str) -> None:
         self._database_url = database_url
 
@@ -612,10 +519,8 @@ class PostgresEtfProfileReader:
                        to_char(cutoff, 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as cutoff,
                        to_char(report_period, 'YYYY-MM-DD') as report_period,
                        weighted_valuation_gap::text as weighted_valuation_gap, valuation_basis,
-                       total_weight_pct::text as total_weight_pct,
-                       resolved_weight_pct::text as resolved_weight_pct,
-                       valued_weight_pct::text as valued_weight_pct,
-                       lines, valued_lines, confidence::text as confidence,
+                       total_weight_pct::text as total_weight_pct, resolved_weight_pct::text as resolved_weight_pct,
+                       valued_weight_pct::text as valued_weight_pct, lines, valued_lines, confidence::text as confidence,
                        coalesce(availability_status, 'unavailable') as availability_status, reason_codes
                 from mart.fund_virtual_company
                 where {fund_where}
@@ -627,10 +532,8 @@ class PostgresEtfProfileReader:
             h_params = {**query_params, "target_fund_id": str(f_row["fund_id"]) if f_row else query_params["clean_id"]}
             cur.execute(
                 f"""
-                select coalesce(fund_name, fund_id) as fund_name,
-                       to_char(report_period, 'YYYY-MM-DD') as report_period,
-                       holding_name, ticker, isin,
-                       percent_of_net_assets::text as weight_pct, value_usd::text as value_usd,
+                select coalesce(fund_name, fund_id) as fund_name, to_char(report_period, 'YYYY-MM-DD') as report_period,
+                       holding_name, ticker, isin, percent_of_net_assets::text as weight_pct, value_usd::text as value_usd,
                        coalesce(ei.legacy_id, v.issuer_entity) as issuer_entity, v.listing_id
                 from mart.fund_holdings_valuation v
                 {_legacy_id_join("v.issuer_entity")}
@@ -690,7 +593,6 @@ def _default_etf_profile_reader() -> EtfProfileReader:
 
 
 def backtest_run_limitations(run: dict[str, Any]) -> list[str]:
-    """The limitations the nightly lane stored with a run (#758), as their own response field."""
     payload = run.get("metrics_payload")
     stored = payload.get("limitations") if isinstance(payload, dict) else None
     return [str(item) for item in stored] if isinstance(stored, list) else []
@@ -710,8 +612,6 @@ _BACKTEST_RUN_SELECT = """
 
 
 class PostgresBacktestReader:
-    """Reads backtest runs, valuations, and trades from mart for MCP consumers."""
-
     def __init__(self, *, database_url: str) -> None:
         self._database_url = database_url
 
@@ -721,14 +621,12 @@ class PostgresBacktestReader:
         runs: list[dict[str, Any]] = []
         valuations: list[dict[str, Any]] = []
         trades: list[dict[str, Any]] = []
-
         try:
             with psycopg.connect(self._database_url, row_factory=dict_row) as conn:
                 with conn.cursor() as cur:
                     if run_id:
                         cur.execute(f"{_BACKTEST_RUN_SELECT} where run_id = %s limit 1", (run_id,))
-                        run_row = cur.fetchone()
-                        if run_row:
+                        if run_row := cur.fetchone():
                             runs.append(dict(run_row))
                             cur.execute(
                                 """
@@ -736,8 +634,7 @@ class PostgresBacktestReader:
                                        cum_nav::text as cum_nav, drawdown::text as drawdown,
                                        gross_exposure::text as gross_exposure, cash_weight::text as cash_weight,
                                        benchmark_cum_nav::text as benchmark_cum_nav
-                                from mart.backtest_valuations
-                                where run_id = %s order by valuation_date desc limit 100
+                                from mart.backtest_valuations where run_id = %s order by valuation_date desc limit 100
                                 """,
                                 (run_id,),
                             )
@@ -748,8 +645,7 @@ class PostgresBacktestReader:
                                        shares::text as shares, execution_price::text as execution_price,
                                        trade_value::text as trade_value, weight_before::text as weight_before,
                                        weight_after::text as weight_after, fee_paid::text as fee_paid
-                                from mart.backtest_trades
-                                where run_id = %s order by trade_date desc limit 100
+                                from mart.backtest_trades where run_id = %s order by trade_date desc limit 100
                                 """,
                                 (run_id,),
                             )
@@ -797,7 +693,6 @@ def build_mcp_server(
     backtest_reader: BacktestReader | None = None,
     issuer_module_reader: IssuerModuleReader | None = None,
 ) -> FastMCP:
-    """Builds the MCP server. Caller-supplied repositories are for tests only."""
     server = _AuditedFastMCP(
         "truealpha-mcp",
         streamable_http_path="/",
@@ -807,34 +702,20 @@ def build_mcp_server(
             allowed_origins=settings.mcp_allowed_origins,
         ),
     )
-    active_repository = repository if repository is not None else _default_repository()
-    active_topt = (
-        topt_repository
-        if topt_repository is not None
-        else PostgresToptGppeRepository(database_url=settings.database_url)
-    )
-    active_metric_node = (
-        metric_node_repository
-        if metric_node_repository is not None
-        else PostgresMetricNodeValueRepository(database_url=settings.database_url)
-    )
-    active_research = research_repository if research_repository is not None else _default_research_report_repository()
-    active_company_profile = (
-        company_profile_reader if company_profile_reader is not None else _default_company_profile_reader()
-    )
-    active_theme_purity = theme_purity_reader if theme_purity_reader is not None else _default_theme_purity_reader()
-    active_etf_profile = etf_profile_reader if etf_profile_reader is not None else _default_etf_profile_reader()
-    active_backtest = backtest_reader if backtest_reader is not None else _default_backtest_reader()
-    active_modules = issuer_module_reader if issuer_module_reader is not None else _default_issuer_module_reader()
+    url = settings.database_url
+    active_repository = repository or _default_repository()
+    active_topt = topt_repository or PostgresToptGppeRepository(database_url=url)
+    active_metric_node = metric_node_repository or PostgresMetricNodeValueRepository(database_url=url)
+    active_research = research_repository or _default_research_report_repository()
+    active_company_profile = company_profile_reader or _default_company_profile_reader()
+    active_theme_purity = theme_purity_reader or _default_theme_purity_reader()
+    active_etf_profile = etf_profile_reader or _default_etf_profile_reader()
+    active_backtest = backtest_reader or _default_backtest_reader()
+    active_modules = issuer_module_reader or _default_issuer_module_reader()
 
     @server.tool(
         name="strategy_run",
-        description=(
-            "Read the latest large_model_value_v0 Core Strategy run. Under definition 1.0.0 each decision's "
-            "valuation_gap divides P/GP (current/target_price_to_gross_profit) and target_price_to_sales is null. "
-            "The definition field names the strategy definition of the run and its review_state: reviewed, "
-            "provisional (the tier bands are not reviewed) or unknown (not reviewed)."
-        ),
+        description="Read the latest large_model_value_v0 Core Strategy run and its definition review_state from mart.",
     )
     def strategy_run(request: StrategyRunToolRequest) -> StrategyRunReport | StrategyRunUnavailable:
         return active_repository.get_latest(strategy_id=request.strategy_id, context=_owner_access_context())
@@ -848,38 +729,21 @@ def build_mcp_server(
 
     @server.tool(
         name="metric_node_values",
-        description=(
-            "Read materialized metric-forest node outputs from mart.metric_node_values by node_key "
-            "(e.g. gppe_uniform_charge_v0, gppe_banking_tce_v1, capital_adjusted_gross_profit) at the governed head."
-        ),
+        description="Read materialized metric-forest node outputs from mart.metric_node_values by node_key at the governed head.",
     )
-    def metric_node_values(
-        request: MetricNodeValueToolRequest,
-    ) -> MetricNodeValueReport | MetricNodeValueUnavailable:
-        return active_metric_node.latest(
-            node_key=request.node_key,
-            issuer_id=request.issuer_id,
-            limit=request.limit,
-        )
+    def metric_node_values(request: MetricNodeValueToolRequest) -> MetricNodeValueReport | MetricNodeValueUnavailable:
+        return active_metric_node.latest(node_key=request.node_key, issuer_id=request.issuer_id, limit=request.limit)
 
     @server.tool(
         name="research_report",
-        description=(
-            "Assemble a deterministic research report (company, ETF, or theme ranking) by selecting "
-            "already-materialized sections and trace links over mart outputs. Computes no new metric."
-        ),
+        description="Assemble a deterministic research report (company, ETF, or theme ranking) over mart outputs.",
     )
     def research_report(request: ResearchReportToolRequest) -> ResearchReport:
         return build_research_report(_report_request(request), active_research, context=_owner_access_context())
 
     @server.tool(
         name="research_report_markdown",
-        description=(
-            "Render the research report of a request (the same request as research_report) as "
-            "deterministic Markdown: one table per section with value, period, availability, "
-            "confidence, factor version and trace. Every printed value comes from the report; "
-            "the renderer computes nothing. report_id is the id research_report returns."
-        ),
+        description="Render the deterministic research report of a request as Markdown with value, period, confidence and trace.",
     )
     def research_report_markdown(request: ResearchReportToolRequest) -> ResearchReportMarkdown:
         report = build_research_report(_report_request(request), active_research, context=_owner_access_context())
@@ -891,12 +755,7 @@ def build_mcp_server(
 
     @server.tool(
         name="research_card",
-        description=(
-            "Render a versioned research card (company, comparison, ranking, ETF, "
-            "supply-chain, or strategy-summary) from a freshly-assembled research report. "
-            "Pure transform over the report: computes no new metric, ranking, or "
-            "classification, and queries nothing beyond the report it builds first."
-        ),
+        description="Render a versioned research card from a freshly-assembled research report over mart outputs.",
     )
     def research_card(request: ResearchCardToolRequest) -> ResearchCard:
         report = build_research_report(_card_report_request(request), active_research, context=_owner_access_context())
@@ -916,74 +775,57 @@ def build_mcp_server(
         )
         if request.page is not None:
             pages = paginate_card_series(card, preset=request.style_preset)
-            idx = max(0, min(request.page - 1, len(pages) - 1))
-            card = pages[idx]
-        html_doc = render_card_html(card, preset=request.style_preset)
-        return card.model_copy(update={"rendered_html": html_doc})
+            card = pages[max(0, min(request.page - 1, len(pages) - 1))]
+        return card.model_copy(update={"rendered_html": render_card_html(card, preset=request.style_preset)})
 
     @server.tool(
         name="company_360_profile",
-        description=(
-            "Read an issuer's comprehensive 360 profile across gross-profit-per-employee (GPPE), "
-            "three-tier valuation tag, valuation gap, historical CAGR PEG, and theme purity. "
-            "valuation_basis names the multiple the gap divides: P/GP (market value / gross profit) "
-            "under strategy definition 1.0.0, P/S under 0.1.0."
-        ),
+        description="Read an issuer's 360 profile across GPPE, valuation tier, valuation gap, PEG, and theme purity.",
     )
     def company_360_profile(request: CompanyProfileToolRequest) -> dict[str, Any]:
         return active_company_profile.get_company_profile(issuer_id=request.issuer_id)
 
     @server.tool(
         name="theme_purity_leaderboard",
-        description=("Read the theme purity leaderboard ranking the purest issuers under a given thematic definition."),
+        description="Read the theme purity leaderboard ranking the purest issuers under a thematic definition.",
     )
     def theme_purity_leaderboard(request: ThemePurityToolRequest) -> dict[str, Any]:
         return active_theme_purity.get_leaderboard(theme_id=request.theme_id, limit=request.limit)
 
     @server.tool(
         name="etf_virtual_company_profile",
-        description=("Read an ETF virtual-company consolidation profile and holdings valuation from mart."),
+        description="Read an ETF virtual-company consolidation profile and holdings valuation from mart.",
     )
     def etf_virtual_company_profile(request: EtfProfileToolRequest) -> dict[str, Any]:
         return active_etf_profile.get_etf_profile(fund_id=request.fund_id)
 
     @server.tool(
         name="issuer_supply_chain_exposure",
-        description=(
-            "Read module 3, the supply-chain exposure of an issuer: exposure score, direct partners, "
-            "supplier and customer counts and the largest partner share, with cutoff, confidence, "
-            "extractor, run_id and reason codes. Only a run that mart.served_head serves is read; the "
-            "App shows the same row. No served row gives a typed unavailable answer."
-        ),
+        description="Read module 3 supply-chain exposure of an issuer from the governed head in mart.served_head.",
     )
     def issuer_supply_chain_exposure(request: IssuerModuleToolRequest) -> SupplyChainExposure | IssuerModuleUnavailable:
         row = _module_row(active_modules.supply_chain_exposure, request.issuer_id, "issuer_supply_chain_exposure")
-        if not isinstance(row, SupplyChainExposure):
-            return IssuerModuleUnavailable(issuer_id=request.issuer_id, module="supply_chain_exposure")
-        return row
+        return (
+            row
+            if isinstance(row, SupplyChainExposure)
+            else IssuerModuleUnavailable(issuer_id=request.issuer_id, module="supply_chain_exposure")
+        )
 
     @server.tool(
         name="issuer_analyst_ratings",
-        description=(
-            "Read module 4, the analyst consensus of an issuer: consensus rating (1 to 5), analyst count "
-            "and buy, hold and sell counts, with cutoff, confidence, extractor, run_id and reason codes. "
-            "Only a run that mart.served_head serves is read; the App shows the same row. No served row "
-            "gives a typed unavailable answer."
-        ),
+        description="Read module 4 analyst consensus of an issuer from the governed head in mart.served_head.",
     )
     def issuer_analyst_ratings(request: IssuerModuleToolRequest) -> AnalystRatings | IssuerModuleUnavailable:
         row = _module_row(active_modules.analyst_ratings, request.issuer_id, "issuer_analyst_ratings")
-        if not isinstance(row, AnalystRatings):
-            return IssuerModuleUnavailable(issuer_id=request.issuer_id, module="analyst_ratings")
-        return row
+        return (
+            row
+            if isinstance(row, AnalystRatings)
+            else IssuerModuleUnavailable(issuer_id=request.issuer_id, module="analyst_ratings")
+        )
 
     @server.tool(
         name="governed_backtest",
-        description=(
-            "Read governed backtest execution runs, performance metrics (CAGR, Sharpe, MaxDD), "
-            "valuations and simulated trades from mart. Each run states its price basis, its claim "
-            "ceiling (for example price return only, no dividends) and its benchmark."
-        ),
+        description="Read governed backtest execution runs, performance metrics, valuations and simulated trades from mart.",
     )
     def governed_backtest(request: BacktestToolRequest) -> dict[str, Any]:
         return active_backtest.get_backtest_report(

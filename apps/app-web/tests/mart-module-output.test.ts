@@ -11,10 +11,8 @@
  *  - a failed count query fails the read. It never turns into a zero.
  */
 
-import {
-	FixtureStrategyRunRepository,
-	type AccessContext,
-} from "../src/contracts/strategyRun";
+import type { AccessContext } from "../src/contracts/strategyRun";
+import { FixtureStrategyRunRepository } from "./support/fixture-strategy-run";
 import {
 	StrategyRunReadAdapter,
 	type ModuleOverviewRow,

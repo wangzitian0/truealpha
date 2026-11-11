@@ -1,13 +1,5 @@
 #!/usr/bin/env python3
-"""TrueAlpha Physical Dev Environment Doctor (dev_env SSOT).
-
-Inspects the physical developer environment against the repository contracts:
-1. Python version matches .python-version and .tool-versions
-2. uv lockfile and virtual environment consistency
-3. Bun runtime and apps/app-web/node_modules completeness
-4. The per-commit hook (T0, #1412): core.hooksPath names the tracked hook directory
-5. Local runtime services (Docker, Postgres, MinIO, OpenD) probe
-"""
+"""Physical and remote environment doctor for TrueAlpha."""
 
 from __future__ import annotations
 
@@ -18,7 +10,6 @@ import shutil
 import socket
 import subprocess
 import sys
-import urllib.error
 import urllib.request
 from collections.abc import Sequence
 from pathlib import Path
@@ -26,8 +17,6 @@ from pathlib import Path
 from infra2_sdk.routing import resolve_app_hostname
 
 ROOT = Path(__file__).resolve().parents[4]
-#: The tracked hook directory. core.hooksPath is relative, so each worktree of a clone
-#: runs its own checked-out hook (#1412 T0).
 HOOKS_DIR = "tools/git-hooks"
 HOOK_REMEDIATION = "Run: git config core.hooksPath tools (or ln -sf ../../tools/prepush.sh .git/hooks/pre-push)"
 
@@ -84,14 +73,12 @@ def check_bun_and_web() -> bool:
 
 
 def _hooks_path(root: Path) -> str:
-    result = subprocess.run(
+    return subprocess.run(
         ["git", "config", "--get", "core.hooksPath"], cwd=root, capture_output=True, text=True, check=False
-    )
-    return result.stdout.strip()
+    ).stdout.strip()
 
 
 def check_git_hook(root: Path | None = None) -> bool:
-    """T0 (#1412): a clone without the hook runs no per-commit check at all."""
     root = root or ROOT
     hook = root / HOOKS_DIR / "pre-commit"
     configured = _hooks_path(root)
@@ -108,7 +95,6 @@ def check_git_hook(root: Path | None = None) -> bool:
 
 
 def install_git_hook(root: Path | None = None) -> bool:
-    """Point core.hooksPath at the tracked hook directory. Idempotent; the setting is per clone."""
     root = root or ROOT
     subprocess.run(["git", "config", "core.hooksPath", HOOKS_DIR], cwd=root, check=True)
     return check_git_hook(root)
@@ -156,7 +142,6 @@ def check_remote(env: str) -> bool:
     if not url:
         print(f"[FAIL] Unknown remote environment: {env}")
         return False
-
     print(f"=== TrueAlpha Remote Health: {env.upper()} ({url}) ===")
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "TrueAlpha-Doctor/1.0"})
@@ -175,9 +160,10 @@ def check_remote(env: str) -> bool:
     pointers_ok = True
     for p in pointers:
         age = p.get("age_hours", 0)
-        tag = "[STALE]" if age > 36 else "[OK]   "
         pointers_ok = pointers_ok and age <= 36
-        print(f"    {tag} {p.get('universe_id'):30} | age {age:5.1f}h (advanced at {p.get('advanced_at')})")
+        print(
+            f"    {'[STALE]' if age > 36 else '[OK]   '} {p.get('universe_id'):30} | age {age:5.1f}h ({p.get('advanced_at')})"
+        )
 
     verdicts = data.get("nightly_verdicts", [])
     print(f"\n[*] Nightly Verdicts ({len(verdicts)}):")
@@ -189,11 +175,7 @@ def check_remote(env: str) -> bool:
         print(f"    {status_str:6} {v.get('check'):35} | {v.get('summary')}")
 
     overall = pointers_ok and verdicts_ok
-    print(
-        f"\n✅ Remote {env} environment is healthy."
-        if overall
-        else f"\n⚠️ Remote {env} environment has alerts or stale pointers."
-    )
+    print(f"\n✅ Remote {env} environment is healthy." if overall else f"\n⚠️ Remote {env} environment has alerts.")
     return overall
 
 
@@ -214,7 +196,6 @@ def check_vps(name_filter: str = "truealpha") -> bool:
 
 
 def check_deploy_provenance(target_ref: str, cwd: str | Path | None = None) -> bool:
-    """Assert that the target release ref contains current HEAD commits."""
     print(f"=== TrueAlpha Deploy Provenance Guard ({target_ref}) ===")
     try:
         head = subprocess.run(
@@ -230,7 +211,6 @@ def check_deploy_provenance(target_ref: str, cwd: str | Path | None = None) -> b
         print(f"✅ Target {target_ref} ({target[:8]}) contains current HEAD ({head[:8]}). Deploy authorized.")
         return True
     print(f"❌ REFUSAL: Target {target_ref} ({target[:8]}) does NOT contain current HEAD ({head[:8]}).")
-    print("   Current changes are unmerged or not included in the target release ref.")
     return False
 
 

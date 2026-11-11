@@ -1,15 +1,5 @@
 /**
- * #495 (surface 2b): the /admin ops overview loader — administrator-only,
- * read-only SQL through the dedicated `app_ops_reader` role (db/roles.sql):
- * run history from `dagster.runs`, pointer freshness per universe from
- * `mart.served_head`, the data-engine build behind the newest run from
- * `mart.data_engine_identity` (#712), per-source quota burn from `raw.fetches`.
- * Lives under `src/server/admin/` so the #493 boundary test keeps it
- * un-importable from research routes.
- *
- * Degrades honestly: on a database where Dagster has not bootstrapped its
- * own tables yet, the runs section reports `unavailable` instead of lying
- * with an empty list.
+ * Administrator ops overview loader via `app_ops_reader`.
  */
 
 import type { PoolClient } from "pg";
@@ -41,10 +31,6 @@ export async function withOpsReader<T>(fn: (client: Pick<PoolClient, "query">) =
   return withRoleClient("app_ops_reader", fn);
 }
 
-/** #495: the run table's two absent states, owned by the loader that produces
- * them so a test can assert they stay different sentences. "Dagster has no
- * tables here" and "Dagster has tables but no runs" are different operational
- * facts; the page used to render the second one as a bare header. */
 export const RUNS_UNAVAILABLE_MESSAGE: string =
   "Run history unavailable — Dagster has not bootstrapped its tables on this database.";
 export const RUNS_EMPTY_MESSAGE: string =
@@ -62,9 +48,6 @@ export interface OpsRunRow {
   durationSeconds: number | null;
 }
 
-/** One governed head per universe. The page renders every row: the ops question is
- * "did EACH pipeline advance", and a single collapsed row answered it for whichever
- * universe happened to sort first (the canary, alphabetically) while the core stalled. */
 export interface OpsPointerRow {
   universeId: string;
   targetRunId: string;
@@ -76,11 +59,6 @@ export interface OpsPointerRow {
   stalenessReason?: string | null;
 }
 
-/** #712: which data-engine build produced the newest run, from
- * `mart.data_engine_identity`. `null` when the view has no rows (no run recorded
- * yet), when the database predates the view (the 2026-09-07 migration), or, on `/admin`,
- * when the read failed (a missing grant, a timeout); a run recorded before the identity
- * was stamped reads "unknown"/"unknown", not null. */
 export interface OpsDataEngineBuild {
   gitSha: string;
   imageDigest: string;
@@ -92,33 +70,18 @@ export interface OpsOverview {
   runs: OpsRunRow[] | "unavailable";
   pointers: OpsPointerRow[];
   dataEngine: OpsDataEngineBuild | null;
-  /** The app's own build, from the deployer-set GIT_COMMIT_SHA; "unknown" when unset. */
   appGitSha: string;
   quotaToday: { source: string; fetches: number }[];
 }
 
-/** #495: the SAME `ReadState` union the research surfaces use, so the shared
- * `ReadStateNotice` renders this page's absence states and every one of them
- * is proven to have words by `tests/read-state.test.ts`. The three cases this
- * loader can actually produce are `ready`, `denied` and `error`; the union is
- * wider because it is shared, and the renderer covers the rest. */
 export type OpsOverviewOutcome = ReadState<OpsOverview>;
-
-/**
- * The data-engine build behind the newest run. The one reader of `mart.data_engine_identity` for the Operate
- * world: `/admin` and `/admin/pipeline` both call it (#1466). `null` when the view has no row or does not exist
- * (a database that predates the 2026-09-07 migration). Any other failure, a missing grant or a timeout, propagates:
- * each caller says what it does with it.
- */
-/** PostgreSQL error code of a relation that does not exist. */
 export const UNDEFINED_TABLE = "42P01";
 
 export async function loadDataEngineBuild(client: Pick<PoolClient, "query">): Promise<OpsDataEngineBuild | null> {
   let identityResult;
   try {
     identityResult = await client.query(
-      "select run_id, git_sha, image_digest, created_at from mart.data_engine_identity " +
-        "order by created_at desc limit 1",
+      "select run_id, git_sha, image_digest, created_at from mart.data_engine_identity order by created_at desc limit 1",
     );
   } catch (error) {
     if ((error as { code?: string }).code === UNDEFINED_TABLE) return null;
@@ -135,13 +98,6 @@ export async function loadDataEngineBuild(client: Pick<PoolClient, "query">): Pr
       };
 }
 
-/**
- * When the current stretch of a build began: the first run of `$1` after the newest run of any other build.
- * A revert (A, B, A) starts a new stretch at the second A, and a rebuild of the same sha extends the stretch.
- * A run with no recorded sha ("unknown") is not another build.
- * The release age of `/admin/pipeline` is the time since then (#1466). `tests/test_pipeline_event_log_sql.py`
- * runs this text on the view over real run plans.
- */
 export const RELEASE_START_SQL = `
   select min(i.created_at) as since
   from mart.data_engine_identity i
@@ -152,7 +108,6 @@ export const RELEASE_START_SQL = `
     )
 `;
 
-/** The start of the current stretch of `gitSha`, ISO 8601, or null when the view has no run of it. Errors propagate. */
 export async function loadReleaseStart(client: Pick<PoolClient, "query">, gitSha: string): Promise<string | null> {
   const result = await client.query(RELEASE_START_SQL, [gitSha]);
   const since = result.rows[0]?.since;
@@ -182,42 +137,30 @@ export async function loadOpsOverview(principal: OpsPrincipal | null): Promise<O
               : null,
         }));
       } catch {
-        // Dagster bootstraps its own tables at runtime; a database without
-        // them (fresh local/CI) reports the section as unavailable.
         runs = "unavailable";
       }
 
       const pointerResult = await client.query(
-        // An ops overview reports pointer freshness PER UNIVERSE. Collapsing with
-        // `order by sequence desc limit 1` showed one universe and hid the rest, so a
-        // canary that stopped advancing looked identical to one that never ran.
         "select environment, universe_id, coalesce(run_id, head_run_id) as target_run_id, sequence, " +
           "advanced_at, age_hours, freshness, availability, staleness_reason " +
           "from mart.served_head order by universe_id",
       );
       const pointers: OpsPointerRow[] = pointerResult.rows.map((row) => {
         const universeId = String(row.universe_id);
-        const environment =
-          row.environment !== null && row.environment !== undefined
-            ? String(row.environment)
-            : null;
+        const environment = row.environment !== null && row.environment !== undefined ? String(row.environment) : null;
         return {
           universeId,
           targetRunId: String(row.target_run_id),
           sequence: Number(row.sequence),
           advancedAt: new Date(row.advanced_at).toISOString(),
           ageHours: row.age_hours !== null && row.age_hours !== undefined ? Number(row.age_hours) : null,
-          freshness: row.freshness
-            ? resolveHeadFreshness(String(row.freshness), universeId, environment)
-            : undefined,
+          freshness: row.freshness ? resolveHeadFreshness(String(row.freshness), universeId, environment) : undefined,
           availability: row.availability ? (String(row.availability) as "available" | "unavailable") : undefined,
           stalenessReason: row.staleness_reason ? String(row.staleness_reason) : null,
         };
       });
 
-      // The overview reports an unreadable build as unknown rather than failing the whole page (#712).
       const dataEngine = await loadDataEngineBuild(client).catch(() => null);
-
       const quotaResult = await client.query(
         "select source, count(*)::int as fetches from raw.fetches " +
           `where fetched_at >= ${UTC_DAY_START_SQL} and ${REGISTERED_RAW_SOURCE_FILTER} group by source order by fetches desc`,
