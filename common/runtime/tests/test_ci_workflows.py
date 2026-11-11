@@ -472,20 +472,25 @@ def test_legacy_cd_and_sre_workflows_and_scripts_remain_deleted() -> None:
         assert not target.exists(), f"{rel_path} was removed in #1588 and must not be restored"
 
 
-def test_runtime_hooks_manifest_declares_the_four_verification_slots() -> None:
-    """#1588: runtime-hooks.manifest.json is the single contract for infra2 release-train hooks."""
-    from infra2_sdk.manifests import load_hooks_manifest
+def test_runtime_hooks_manifest_declares_the_five_v2_verification_slots() -> None:
+    """#1588, #1675: runtime-hooks.manifest.json v2 is the single contract for infra2 release-train hooks."""
+    from infra2_sdk.manifests import HOOK_SLOTS, load_hooks_manifest
 
     manifest_path = REPO_ROOT / "runtime-hooks.manifest.json"
     assert manifest_path.is_file(), "runtime-hooks.manifest.json must exist at repository root"
     hooks = load_hooks_manifest(manifest_path)
-    assert hooks.schema_version == 1
+    assert hooks.schema_version == 2
     assert hooks.service == "truealpha/app"
-    assert set(hooks.slots) == {"smoke", "preview_gate", "staging_gate", "scheduled_audit"}
+    assert set(hooks.slots) == set(HOOK_SLOTS)
 
     assert hooks.slots["scheduled_audit"].checkout_lineage is True
-    for non_lineage_slot in ("smoke", "preview_gate", "staging_gate"):
+    for non_lineage_slot in ("smoke", "preview_gate", "staging_gate", "prod_gate"):
         assert hooks.slots[non_lineage_slot].checkout_lineage is False
+
+    assert hooks.slots["smoke"].bootstrap == ""
+    assert "tools/health_check.py" in hooks.slots["smoke"].run
+    assert hooks.slots["prod_gate"].bootstrap == ""
+    assert "tools/surface_contract.py" in hooks.slots["prod_gate"].run
 
     for gate_slot in ("preview_gate", "staging_gate"):
         spec = hooks.slots[gate_slot]

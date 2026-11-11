@@ -1,10 +1,10 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "service": "truealpha/app",
   "slots": {
     "smoke": {
-      "run": "uv run python tools/health_check.py \"$APP_URL/api/health\" \"$APP_VERSION_REF\" 36 && uv run python tools/surface_contract.py \"$APP_URL\"",
-      "timeout_seconds": 420,
+      "run": "uv run python tools/health_check.py \"$APP_URL/api/health\" \"$APP_VERSION_REF\" 36",
+      "timeout_seconds": 120,
       "required_env": [
         "APP_URL",
         "APP_VERSION_REF"
@@ -13,7 +13,7 @@
     "preview_gate": {
       "bootstrap": "cd apps/app-web && bun install --frozen-lockfile && bunx playwright install --with-deps chromium",
       "run": "uv run python tools/health_check.py \"$APP_URL/api/health\" \"$APP_VERSION_REF\" 36 && bash tools/warm_surface.sh \"$APP_URL\" / /research/rankings && (cd apps/app-web && TA_BASE_URL=\"$APP_URL\" node e2e/walk-tree.mjs) && uv run python tools/surface_contract.py --authenticated \"$APP_URL\"",
-      "timeout_seconds": 900,
+      "timeout_seconds": 360,
       "required_env": [
         "APP_URL",
         "APP_VERSION_REF",
@@ -26,7 +26,7 @@
     "staging_gate": {
       "bootstrap": "cd apps/app-web && bun install --frozen-lockfile && bunx playwright install --with-deps chromium",
       "run": "uv run python tools/health_check.py \"$APP_URL/api/health\" \"$APP_VERSION_REF\" 36 && bash tools/warm_surface.sh \"$APP_URL\" / /research/rankings && (cd apps/app-web && TA_BASE_URL=\"$APP_URL\" node e2e/walk-tree.mjs) && uv run python tools/surface_contract.py --authenticated \"$APP_URL\"",
-      "timeout_seconds": 900,
+      "timeout_seconds": 420,
       "required_env": [
         "APP_URL",
         "APP_VERSION_REF",
@@ -34,6 +34,13 @@
         "TA_MEMBER_EMAIL",
         "TA_PASSWORD",
         "TA_MCP_TOKEN"
+      ]
+    },
+    "prod_gate": {
+      "run": "uv run python tools/surface_contract.py \"$APP_URL\"",
+      "timeout_seconds": 240,
+      "required_env": [
+        "APP_URL"
       ]
     },
     "scheduled_audit": {
