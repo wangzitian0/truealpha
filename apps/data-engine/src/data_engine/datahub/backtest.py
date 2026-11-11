@@ -1,47 +1,9 @@
-"""The nightly backtest of the core strategy, ``large_model_value_v0`` (#758, M3).
-
-One path, from staging to mart:
-
-1. Cutoffs. The definition's schedule is calendar quarter ends at 23:59:59Z. The run evaluates
-   every schedule cutoff that ``staging.strategy_backtest_inputs`` holds, from the first to the
-   latest. The projector (``datahub.strategy_history``) writes those inputs as of each quarter
-   end. A quarter missing between the first and the latest stops the run. The schedule's
-   ``first_cutoff_at`` anchors the LIVE schedule only. It does not bound this historical window.
-2. Decisions. At each cutoff, ``factors.composite.strategy_evaluator.evaluate_cutoff`` evaluates
-   the inputs of that cutoff only. The gateway reads ``where cutoff_at = <cutoff>``, and the
-   table CHECK holds ``knowable_at <= cutoff_at`` for each row. The labor-efficiency binding is the
-   one the live replay uses. The risk-free rate of each cutoff is the Treasury observation that was
-   knowable at that cutoff (``datahub.risk_free``, #1255). The run resolves all of them before it
-   decides anything. A cutoff without a rate stops the run with ``MissingRiskFreeRate``, so no
-   headline rests on a cutoff that was approximated.
-3. Prices. Unadjusted daily bars (``adjust = 'none'``) and split-adjusted daily bars
-   (``adjust = 'splits'``), the latest vintage of each session. The ratio of the two closes
-   gives the split events (``factors.backtest.corporate_actions``). Before the simulation, a
-   share-basis check (#1270) stops the run when a winning share count predates a split that the
-   close of its cutoff follows. History rows are append-only, so only a new run of
-   ``strategy_history_projection_pipeline`` corrects that count.
-4. Simulation. ``factors.backtest.engine`` with the definition's execution, transaction-cost,
-   total-return and sizing rules as its only parameters. The benchmark is an equal weight of the
-   issuers with inputs at the first cutoff, bought at the first fill session open and held, on the
-   same prices and costs. A benchmark symbol without an open on that session is bought at its next
-   open. A symbol that never opens stays cash, and the run's limitations name it. A strategy
-   symbol without an open on its fill session also stays cash, and the limitations name it with
-   the dates of its cutoffs (#1265). A selected symbol without any stored bar stops the run before
-   the simulation, and the error names it with the dates of its cutoffs (#1347).
-5. Persistence. ``run_id`` is the content hash of the engine label, the deployed code identity
-   (``GIT_COMMIT_SHA``), the definition hash, the input snapshot, the issuer mapping, the benchmark
-   universe, the price snapshot and the run parameters. A rerun of one release on the same data
-   writes nothing. The same ``run_id`` with a different result stops the run. In staging and
-   production, a run without a code identity stops before it writes.
-
-No dividend source exists, so each run is a price return. The run records that on
-``mart.backtest_runs.claim_ceiling``.
-"""
+"""Nightly backtest of the core strategy ``large_model_value_v0`` (#758, M3)."""
 
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -98,17 +60,12 @@ from data_engine.strategy_backtest_gateway import (
     snapshot_id_from_rows,
 )
 
-#: The notional scale of a run. Shares are fractional, so a result depends on it only through the
-#: orders below one cent (``factors.backtest.engine.MIN_ORDER_NOTIONAL``).
 NOTIONAL_CAPITAL = Decimal("1000000")
 
 
 @dataclass(frozen=True)
 class NamedRateParameter:
-    """A rate that a run declares by name, with the series it comes from and its value (#1255)."""
-
     name: str
-    #: The id of the macro series that supplies the value, or None when the value is declared and no series supplies it.
     series_id: str | None
     value: Decimal
     basis: str
@@ -117,11 +74,6 @@ class NamedRateParameter:
         return {"name": self.name, "series_id": self.series_id, "value": str(self.value), "basis": self.basis}
 
 
-#: The risk-free rate that the Sharpe ratio subtracts. Every run states it by name, series and value.
-#: `factors.backtest.engine.performance` computes the ratio as the mean daily return over its standard
-#: deviation, which is an excess return over a rate of 0. `test_core_strategy_backtest` holds the engine
-#: and this value equal, so a change of one without the other turns a test red. The labor-efficiency rate is
-#: a different parameter: it comes from the measured Treasury series, per cutoff.
 SHARPE_RISK_FREE = NamedRateParameter(
     name="sharpe_risk_free_rate",
     series_id=None,
@@ -129,7 +81,6 @@ SHARPE_RISK_FREE = NamedRateParameter(
     basis="declared zero rate: the Sharpe ratio is the mean daily return over its standard deviation",
 )
 
-#: What a reader of a run must know about its limits. Stored on every run.
 LIMITATIONS = (
     "Price return only. No dividend source exists, so dividends are not included.",
     "The labor-efficiency factor uses the 3-month U.S. Treasury par yield of the last business day before each cutoff date.",
@@ -140,21 +91,11 @@ LIMITATIONS = (
     "An input is admitted only when it is knowable before the cutoff's calendar date.",
 )
 
-
-#: The environments whose nightly schedule runs by default (`lanes.backtest` reads this tuple).
-#: A run there must carry the deployed code identity.
 DEPLOYED_ENVIRONMENTS = ("production", "prod", "staging")
-#: The value `GIT_COMMIT_SHA` takes when the deployment injected none (truealpha_runtime config).
 _NO_CODE_IDENTITY = ("", "unknown")
 
 
 def deployed_code_identity(app_env: str, git_commit_sha: str) -> str:
-    """The code identity a run binds. Raise in staging or production when the deployment set none.
-
-    `GIT_COMMIT_SHA` defaults to "unknown". Two releases on the same data would then share one
-    run_id, and the second would be refused as a non-deterministic result or hide the first.
-    Local and test environments keep "unknown": they publish nothing.
-    """
     sha = (git_commit_sha or "").strip()
     if app_env.strip().lower() in DEPLOYED_ENVIRONMENTS and sha.lower() in _NO_CODE_IDENTITY:
         raise RuntimeError(
@@ -165,28 +106,20 @@ def deployed_code_identity(app_env: str, git_commit_sha: str) -> str:
 
 
 class BacktestPending(RuntimeError):
-    """The run cannot judge yet: data it needs is not in this environment."""
+    """Data needed by the backtest is not yet present in this environment."""
 
 
 class ShareBasisError(RuntimeError):
-    """A winning share count predates a split that its close follows, so the market value is wrong (#1270).
-
-    The run raises it and nothing catches it. A failed Dagster run is the visible signal.
-    """
-
-
-# -- cutoffs ----------------------------------------------------------------------------
+    """A winning share count predates a split that its close follows (#1270)."""
 
 
 def schedule_cutoffs(connection: psycopg.Connection[Any], schedule: QuarterlyCutoffSchedule) -> list[datetime]:
-    """The schedule cutoffs that hold inputs, oldest first. Raise when a quarter is missing between them."""
     rows = connection.execute("select distinct cutoff_at from staging.strategy_backtest_inputs").fetchall()
     found = sorted({row[0].astimezone(UTC) for row in rows if is_schedule_cutoff(row[0], schedule)})
     return require_contiguous_quarters(found, schedule)
 
 
 def require_contiguous_quarters(cutoffs: Sequence[datetime], schedule: QuarterlyCutoffSchedule) -> list[datetime]:
-    """The cutoffs, oldest first. Raise when a quarter is missing between the first and the latest."""
     found = sorted(cutoffs)
     if not found:
         return []
@@ -200,13 +133,8 @@ def require_contiguous_quarters(cutoffs: Sequence[datetime], schedule: Quarterly
     return found
 
 
-# -- decisions --------------------------------------------------------------------------
-
-
 @dataclass(frozen=True)
 class CutoffDecision:
-    """The target of one cutoff: symbol weights and why the other issuers were not selected."""
-
     cutoff_at: datetime
     weights: Mapping[str, Decimal]
     selected: tuple[str, ...]
@@ -215,8 +143,11 @@ class CutoffDecision:
 
 
 InputsAt = Callable[[datetime], Sequence[IssuerInput]]
-#: The risk-free rate of one cutoff, as a decimal fraction. The caller measured it (#1255).
 RateAt = Callable[[datetime], Decimal]
+
+
+def _issuer_class(issuer: HistoryIssuer | None) -> IssuerClass | None:
+    return None if issuer is None else IssuerClass(issuer.operating_branch.value)
 
 
 def decide(
@@ -227,7 +158,6 @@ def decide(
     *,
     rate_at: RateAt,
 ) -> list[CutoffDecision]:
-    """Evaluate the strategy at each cutoff over the inputs and the rate of that cutoff only."""
     decisions: list[CutoffDecision] = []
     for cutoff in cutoffs:
         rate = rate_at(cutoff)
@@ -248,9 +178,6 @@ def decide(
             tickers.append(issuer.ticker)
             selected.append(decision.issuer_id)
             evaluator_weights.add(decision.target_weight)
-        # The evaluator gives each selected issuer 1/N at the sizing quantization, and N such
-        # weights can sum above 1 (6 at six places sum to 1.000002). The engine's equal_weights
-        # gives the same weight to all but the last symbol, which takes the remainder.
         weights = equal_weights(tickers, definition.sizing.quantization)
         if tickers and evaluator_weights != {weights[sorted(tickers)[0]]}:
             raise ValueError(f"the evaluator weights {evaluator_weights} at {cutoff.isoformat()} are not 1/N")
@@ -266,15 +193,7 @@ def decide(
     return decisions
 
 
-def _issuer_class(issuer: HistoryIssuer | None) -> IssuerClass | None:
-    return None if issuer is None else IssuerClass(issuer.operating_branch.value)
-
-
-# -- prices -----------------------------------------------------------------------------
-
-
 def price_book(unadjusted: DailySeries, split_adjusted: DailySeries) -> PriceBook:
-    """Unadjusted bars and the split events the two series show. Raise on an ambiguous split."""
     bars = {
         symbol: {day: Bar(open_, close) for day, (open_, close) in unadjusted[symbol].items()}
         for symbol in sorted(unadjusted)
@@ -283,21 +202,31 @@ def price_book(unadjusted: DailySeries, split_adjusted: DailySeries) -> PriceBoo
     return PriceBook(bars=bars, splits=tuple(event for symbol in sorted(events) for event in events[symbol]))
 
 
-def selected_without_bars(decisions: Sequence[CutoffDecision], unadjusted: DailySeries) -> dict[str, tuple[date, ...]]:
-    """Each symbol that a cutoff selected and that has no unadjusted bar at all, with those cutoff dates.
-
-    Such a symbol can never fill. Its weight would stay cash at every cutoff that selects it, and the
-    run would report success. #1347: the store held no GOOG bar, and 47% of the portfolio stayed cash.
-    """
+def _cutoff_symbol_dates(
+    decisions: Sequence[CutoffDecision], symbols_fn: Callable[[CutoffDecision], Iterable[str]]
+) -> dict[str, tuple[date, ...]]:
     found: dict[str, list[date]] = {}
     for decision in decisions:
-        for symbol in sorted(set(decision.weights) - set(unadjusted)):
-            found.setdefault(symbol, []).append(decision.cutoff_at.astimezone(UTC).date())
+        cutoff_day = decision.cutoff_at.astimezone(UTC).date()
+        for symbol in sorted(symbols_fn(decision)):
+            found.setdefault(symbol, []).append(cutoff_day)
     return {symbol: tuple(days) for symbol, days in sorted(found.items())}
 
 
+def selected_without_bars(decisions: Sequence[CutoffDecision], unadjusted: DailySeries) -> dict[str, tuple[date, ...]]:
+    priced = set(unadjusted)
+    return _cutoff_symbol_dates(decisions, lambda d: set(d.weights) - priced)
+
+
+def selected_without_open(decisions: Sequence[CutoffDecision], strategy: Simulation) -> dict[str, tuple[date, ...]]:
+    fills = {fill.cutoff_at: fill for fill in strategy.fills}
+    return _cutoff_symbol_dates(
+        decisions,
+        lambda d: (set(d.weights) & set(fills[d.cutoff_at].unfilled_symbols)) if d.cutoff_at in fills else (),
+    )
+
+
 def price_snapshot_sha256(unadjusted: DailySeries, split_adjusted: DailySeries) -> str:
-    """The content hash of every bar the run read."""
     rows = [
         [adjust, symbol, day.isoformat(), str(open_), str(close)]
         for adjust, series in ((UNADJUSTED, unadjusted), (SPLIT_ADJUSTED, split_adjusted))
@@ -305,9 +234,6 @@ def price_snapshot_sha256(unadjusted: DailySeries, split_adjusted: DailySeries) 
         for day, (open_, close) in bars.items()
     ]
     return canonical_sha256(sorted(rows))
-
-
-# -- share basis ------------------------------------------------------------------------
 
 
 def _stale_share_basis(
@@ -327,22 +253,6 @@ def require_current_share_basis(
     tickers: Mapping[str, str],
     splits: Sequence[SplitEvent],
 ) -> None:
-    """Raise ``ShareBasisError`` when a winning share count predates a split that its close follows.
-
-    The projector puts a share count on the share basis of its close (A6 decision 4). It multiplies
-    the count by each split between the two. It appends that row with the ``knowable_at`` of the
-    close, so the row wins. A winning count may be knowable before a split while its close is
-    knowable after it. Then the projector has not corrected that row. The table is append-only, so
-    only a new projector run corrects it.
-
-    ``vintages`` holds the winning ``knowable_at`` pair of each issuer at each cutoff. ``tickers``
-    names the canonical issuers. Rows of any other id are ignored, because the projector never
-    corrects them. ``splits`` are the events of the price book. One error names every failing
-    symbol and cutoff.
-
-    Known limit: the inputs table keeps no share basis date. A cover count that is dated before a
-    split and filed after it is not visible here. The projector handles that case.
-    """
     events: dict[str, list[SplitEvent]] = {}
     for event in splits:
         events.setdefault(event.symbol, []).append(event)
@@ -368,9 +278,6 @@ def require_current_share_basis(
             f"bases ({len(stale)} found): {'; '.join(stale)}. Run strategy_history_projection_pipeline, "
             "then run the backtest again."
         )
-
-
-# -- the run ----------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
@@ -418,11 +325,6 @@ def apply_definition_overrides(
     definition: LargeModelValueV0Definition,
     overrides: Mapping[str, Any],
 ) -> LargeModelValueV0Definition:
-    """Return a validated `LargeModelValueV0Definition` with `overrides` merged into its payload (#1413 B1).
-
-    Supports nested dicts or dotted keys (e.g. `selection.selection_count`, `eligibility.maximum_input_age_days`).
-    Recomputes `strategy_definition_id` and `content_sha256` from the overridden semantics.
-    """
     if not overrides:
         return definition
     payload: dict[str, Any] = json.loads(
@@ -458,12 +360,6 @@ def run_core_strategy_backtest(
     start_cutoff: datetime | None = None,
     end_cutoff: datetime | None = None,
 ) -> BacktestOutcome:
-    """Backtest ``large_model_value_v0`` over the stored quarter-end history and persist the run.
-
-    Raise ``BacktestPending`` when this environment holds no data to judge yet. The caller owns
-    the transaction. Optional `definition`, `overrides`, `start_cutoff` and `end_cutoff` run
-    parameterized or windowed backtests bound to their own `definition_content_sha256` (#1413 B1).
-    """
     if tick.tzinfo is None or tick.utcoffset() is None:
         raise ValueError("tick must carry a time zone")
     code_identity = deployed_code_identity(settings.app_env, settings.git_commit_sha)
@@ -479,22 +375,14 @@ def run_core_strategy_backtest(
     if not cutoffs:
         raise BacktestPending("no quarter-end strategy inputs; run strategy_history_projection_pipeline")
 
-    # ONE read of the values per cutoff, before any decision. The issuer list, the inputs and the
-    # snapshot id all derive from it. So run_id describes exactly the inputs the decisions used.
-    # The vintages carry dates only, for the share-basis check. They are read BEFORE the values.
-    # A projector commit between the two reads then gives the decisions rows at least as new as the
-    # vintages. So the check never passes on a row that the decisions did not use.
     gateway = StrategyBacktestGateway(connection)
     vintages_by_cutoff = {cutoff: gateway.market_value_vintages_at(cutoff) for cutoff in cutoffs}
     rows_by_cutoff = {cutoff: gateway.rows_at(cutoff) for cutoff in cutoffs}
     issuer_ids = sorted({row[0] for rows in rows_by_cutoff.values() for row in rows})
-    # #1257: the table holds each issuer under a legacy id and under its entity UUID. The run
-    # reads the canonical rows only. Old-generation rows stay in the append-only table, unread.
     canonical = canonical_history_issuers(connection, issuer_ids, known_at=tick)
     if not canonical.issuers:
         raise RuntimeError(f"no stored lineage resolves any of the {len(issuer_ids)} issuers with quarter-end inputs")
     issuers = {issuer.issuer_id: issuer for issuer in canonical.issuers}
-    # The fail-closed check stays AFTER canonicalization: two entities on one ticker is a lineage defect.
     tickers = [issuer.ticker for issuer in canonical.issuers]
     if len(set(tickers)) != len(tickers):
         raise RuntimeError(f"two issuers resolve to one ticker: {sorted(tickers)}")
@@ -510,9 +398,6 @@ def run_core_strategy_backtest(
         )
     inputs_by_cutoff = {cutoff: issuer_inputs_from_rows(canonical_rows[cutoff], cutoff_at=cutoff) for cutoff in cutoffs}
     snapshot_ids = [snapshot_id_from_rows(canonical_rows[cutoff]) for cutoff in cutoffs]
-
-    # #1255: one measured rate per cutoff, resolved before any decision. A cutoff with no usable rate
-    # raises `MissingRiskFreeRate` and the run writes nothing. The rates enter the binding below.
     rates: dict[datetime, RiskFreeRate] = {cutoff: risk_free_rate_at(connection, cutoff) for cutoff in cutoffs}
 
     decisions = decide(
@@ -540,8 +425,6 @@ def run_core_strategy_backtest(
     if missing_adjusted:
         raise RuntimeError(f"no split-adjusted daily bars, so no split events, for {missing_adjusted}")
     book = price_book(unadjusted, split_adjusted)
-    # History rows are append-only, so a projector fix reaches a stale share count only through a new
-    # projector run (#1270). Stop before the simulation: a green run on that count has wrong picks.
     require_current_share_basis(
         {cutoff: vintages_by_cutoff[cutoff] for cutoff in cutoffs},
         {issuer.issuer_id: issuer.ticker for issuer in canonical.issuers},
@@ -558,7 +441,6 @@ def run_core_strategy_backtest(
         raise BacktestPending(f"no session after the first cutoff {cutoffs[0].isoformat()} in the daily bars")
     if not strategy.trades:
         raise RuntimeError("the strategy selected issuers but no order filled: no open on any fill session")
-    # The benchmark universe: the issuers with inputs at the first cutoff, as the strategy saw them.
     first_universe = sorted(
         issuers[item.issuer_id].ticker for item in inputs_by_cutoff[cutoffs[0]] if item.issuer_id in issuers
     )
@@ -573,8 +455,6 @@ def run_core_strategy_backtest(
 
     binding = {
         "engine_id": ENGINE_ID,
-        # The deployed code identity: the release ref the deployment injects (GIT_COMMIT_SHA),
-        # the value /api/health reports as data_engine_git_sha. ENGINE_ID is only a label.
         "code_git_commit_sha": code_identity,
         "strategy_key": definition.strategy_id,
         "definition_content_sha256": definition.content_sha256,
@@ -585,8 +465,6 @@ def run_core_strategy_backtest(
             [issuer.issuer_id, issuer.ticker, issuer.operating_branch.value] for issuer in canonical.issuers
         ),
         "price_snapshot_sha256": price_snapshot_sha256(unadjusted, split_adjusted),
-        # Each rate with its series, its observation date and its source. Two headline numbers differ
-        # by their rates when these lists differ (#1255).
         "risk_free_rates": [
             {
                 "cutoff_at": cutoff.isoformat(),
@@ -627,9 +505,6 @@ def run_core_strategy_backtest(
     )
 
 
-# -- the mart record --------------------------------------------------------------------
-
-
 @dataclass(frozen=True)
 class BacktestRecord:
     run_id: str
@@ -644,40 +519,19 @@ class BacktestRecord:
     benchmark_performance: Performance
     turnover_monthly: Decimal
     metrics_payload: dict[str, Any]
-    #: (resolution, session, cum_nav, drawdown, gross_exposure, cash_weight, benchmark_cum_nav)
     valuations: tuple[tuple[str, date, Decimal, Decimal, Decimal, Decimal, Decimal], ...]
-    #: (session, symbol, side, shares, price, notional, weight_before, weight_after, fee)
     trades: tuple[tuple[date, str, str, Decimal, Decimal, Decimal, Decimal, Decimal, Decimal], ...]
     result_sha256: str
 
 
 def benchmark_never_filled(benchmark: Simulation) -> tuple[str, ...]:
-    """Benchmark symbols ordered at the first fill that no later open bought."""
     if not benchmark.fills:
         return ()
     late = {item.symbol for item in benchmark.deferred_fills}
     return tuple(sorted(set(benchmark.fills[0].unfilled_symbols) - late))
 
 
-def selected_without_open(decisions: Sequence[CutoffDecision], strategy: Simulation) -> dict[str, tuple[date, ...]]:
-    """Each symbol that a cutoff selected and that had no open on its fill session, with those cutoff dates."""
-    fills = {fill.cutoff_at: fill for fill in strategy.fills}
-    found: dict[str, list[date]] = {}
-    for decision in decisions:
-        fill = fills.get(decision.cutoff_at)
-        if fill is None:
-            continue
-        for symbol in sorted(set(decision.weights) & set(fill.unfilled_symbols)):
-            found.setdefault(symbol, []).append(decision.cutoff_at.astimezone(UTC).date())
-    return {symbol: tuple(days) for symbol, days in sorted(found.items())}
-
-
 def run_limitations(never_filled: Sequence[str], unfilled_selections: Mapping[str, Sequence[date]]) -> tuple[str, ...]:
-    """The limitations stored with one run: the standing ones and those of this run's data.
-
-    An unfilled selection does not stop the run (#1265). The engine keeps the weight that it could
-    not buy in cash, and one line per symbol says so with the dates of its cutoffs.
-    """
     lines = list(LIMITATIONS)
     if never_filled:
         lines.append(
@@ -694,7 +548,6 @@ def run_limitations(never_filled: Sequence[str], unfilled_selections: Mapping[st
 
 
 def _splits_applied(simulation: Simulation) -> list[dict[str, str]]:
-    """Each split the simulation applied to held shares, as stored evidence."""
     return [
         {
             "symbol": item.symbol,
@@ -764,8 +617,9 @@ def _record(
     never_filled = benchmark_never_filled(benchmark)
     unfilled_selections = selected_without_open(decisions, strategy)
     benchmark_by_session = {item.session: item for item in benchmark.valuations}
-    valuations = _valuation_rows(month_end_valuations(strategy.valuations), benchmark_by_session, "1M")
-    valuations += _valuation_rows(strategy.valuations, benchmark_by_session, "1D")
+    valuations = _valuation_rows(
+        month_end_valuations(strategy.valuations), benchmark_by_session, "1M"
+    ) + _valuation_rows(strategy.valuations, benchmark_by_session, "1D")
     trades = tuple(
         (
             trade.session,
@@ -785,14 +639,15 @@ def _record(
     first, last = strategy.valuations[0].session, strategy.valuations[-1].session
     turnover_monthly = monthly_turnover(strategy)
     fills = {fill.cutoff_at: fill for fill in strategy.fills}
-    result = {
-        "valuations": [[str(cell) for cell in row] for row in valuations],
-        "trades": [[str(cell) for cell in row] for row in trades],
-        "strategy": _decimal_map(strategy_performance),
-        "benchmark": _decimal_map(benchmark_performance),
-        "turnover_monthly": str(turnover_monthly),
-    }
-    result_sha256 = canonical_sha256(result)
+    result_sha256 = canonical_sha256(
+        {
+            "valuations": [[str(cell) for cell in row] for row in valuations],
+            "trades": [[str(cell) for cell in row] for row in trades],
+            "strategy": _decimal_map(strategy_performance),
+            "benchmark": _decimal_map(benchmark_performance),
+            "turnover_monthly": str(turnover_monthly),
+        }
+    )
     payload: dict[str, Any] = {
         "binding": binding,
         "result_sha256": result_sha256,
@@ -873,11 +728,6 @@ insert into mart.backtest_runs (
 
 
 def persist_backtest_run(connection: psycopg.Connection[Any], record: BacktestRecord) -> bool:
-    """Insert the run, its valuations and its trades. Return False when the run already exists.
-
-    The mart is append-only: an existing run is never updated. A run with the same ``run_id``
-    and a different result means the engine changed without a new ``ENGINE_ID``; that raises.
-    """
     existing = connection.execute(
         "select metrics_payload ->> 'result_sha256' from mart.backtest_runs where run_id = %s", (record.run_id,)
     ).fetchone()
@@ -945,25 +795,18 @@ def sweep_core_strategy_backtest(
     start_cutoff: datetime | None = None,
     end_cutoff: datetime | None = None,
 ) -> list[BacktestOutcome]:
-    """Run N parameter-override combinations and persist N distinct `mart.backtest_runs` rows (#1413 B2).
-
-    Each combination produces its own `definition_content_sha256` and `run_id`, so none overwrites
-    the live strategy backtest run.
-    """
     base_def = definition or load_strategy_definition()
-    outcomes: list[BacktestOutcome] = []
-    for overrides in overrides_list:
-        outcomes.append(
-            run_core_strategy_backtest(
-                connection,
-                tick=tick,
-                definition=base_def,
-                overrides=overrides,
-                start_cutoff=start_cutoff,
-                end_cutoff=end_cutoff,
-            )
+    return [
+        run_core_strategy_backtest(
+            connection,
+            tick=tick,
+            definition=base_def,
+            overrides=overrides,
+            start_cutoff=start_cutoff,
+            end_cutoff=end_cutoff,
         )
-    return outcomes
+        for overrides in overrides_list
+    ]
 
 
 __all__ = [

@@ -1,9 +1,7 @@
 {
-  "apps/data-engine/scripts/assert_data_invariants.py:main": 21,
-  "apps/data-engine/scripts/bootstrap_universe.py:main": 46,
-  "apps/data-engine/scripts/capture_factor_matrix_samples.py:load_plan": 25,
+  "apps/data-engine/scripts/bootstrap_universe.py:main": 43,
+  "apps/data-engine/scripts/capture_factor_matrix_samples.py:load_plan": 24,
   "apps/data-engine/scripts/capture_factor_matrix_samples.py:validate_capture": 28,
-  "apps/data-engine/scripts/sweep_moomoo_fundamentals.py:main": 21,
   "apps/data-engine/src/data_engine/datahub/production_topt/sec_financial_adapter.py:build_route": 22,
   "apps/data-engine/src/data_engine/datahub/standards/filing_extraction.py:extract_headcount": 23,
   "apps/data-engine/src/data_engine/quality/surface_proof.py:prove": 23,

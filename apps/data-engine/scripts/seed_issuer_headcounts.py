@@ -1,13 +1,4 @@
-"""Seed reviewed 10-K headcount facts with real SEC filing dates and accessions (#70, #1264).
-
-Every entry in `REVIEWED_HEADCOUNT_FACTS` cites the exact 18-digit SEC accession, the
-10-K filing date (`knowable_at` at `00:00:00Z` on `filing_date`), and the fiscal
-`period_end` from the issuer's Item 1 Human Capital disclosure across the 2022-2026
-backtest window. No constant `knowable_at` default is permitted.
-
-Usage:
-    uv run --package truealpha-data-engine python apps/data-engine/scripts/seed_issuer_headcounts.py [--dry-run]
-"""
+"""Seed reviewed 10-K headcount facts with real SEC filing dates and accessions."""
 
 from __future__ import annotations
 
@@ -18,10 +9,7 @@ from decimal import Decimal
 
 import psycopg
 from data_engine.config import settings
-from data_engine.datahub.production_topt.headcount import (
-    record_headcount,
-    validate_cited_headcount_fact,
-)
+from data_engine.datahub.production_topt.headcount import record_headcount, validate_cited_headcount_fact
 from data_engine.datahub.production_topt.source_registrations import AsOfAxis, knowable_instant
 from data_engine.sources import gateway, sec
 
@@ -31,8 +19,6 @@ _CONFIDENCE = Decimal("0.70")
 
 @dataclass(frozen=True)
 class ReviewedHeadcountFact:
-    """One reviewed annual headcount figure cited to its SEC 10-K filing (#1264)."""
-
     ticker: str
     period_end: date
     filing_date: date
@@ -49,127 +35,173 @@ class ReviewedHeadcountFact:
         return f"accession={self.accession} form=10-K filed={self.filing_date.isoformat()} source={_SOURCE}"
 
 
-def _xom_facts() -> tuple[ReviewedHeadcountFact, ...]:
-    base = (
-        (date(2022, 12, 31), date(2023, 2, 22), "000003408823000020", "62000"),
-        (date(2023, 12, 31), date(2024, 2, 28), "000003408824000018", "62000"),
-        (date(2024, 12, 31), date(2025, 2, 19), "000003408825000010", "61000"),
-        (date(2025, 12, 31), date(2026, 2, 18), "000003408826000017", "58000"),
-    )
-    rows: list[ReviewedHeadcountFact] = []
-    for period_end, filing_date, accession, value in base:
-        rows.append(ReviewedHeadcountFact("XOM", period_end, filing_date, accession, value))
-        rows.append(ReviewedHeadcountFact("XOM", period_end, filing_date, accession, value, cik_override=34088))
-    return tuple(rows)
+def _rows(ticker: str, *items: tuple[str, str, str, str], dual_cik: int | None = None) -> list[ReviewedHeadcountFact]:
+    out: list[ReviewedHeadcountFact] = []
+    for p_end, f_date, accn, hc in items:
+        pe, fd = date.fromisoformat(p_end), date.fromisoformat(f_date)
+        out.append(ReviewedHeadcountFact(ticker, pe, fd, accn, hc))
+        if dual_cik is not None:
+            out.append(ReviewedHeadcountFact(ticker, pe, fd, accn, hc, cik_override=dual_cik))
+    return out
 
 
-REVIEWED_HEADCOUNT_FACTS: tuple[ReviewedHeadcountFact, ...] = (
-    # AAPL (CIK 0000320193)
-    ReviewedHeadcountFact("AAPL", date(2022, 9, 24), date(2022, 10, 28), "000032019322000108", "164000"),
-    ReviewedHeadcountFact("AAPL", date(2023, 9, 30), date(2023, 11, 3), "000032019323000106", "161000"),
-    ReviewedHeadcountFact("AAPL", date(2024, 9, 28), date(2024, 11, 1), "000032019324000123", "164000"),
-    ReviewedHeadcountFact("AAPL", date(2025, 9, 27), date(2025, 10, 31), "000032019325000079", "166000"),
-    # MSFT (CIK 0000789019)
-    ReviewedHeadcountFact("MSFT", date(2022, 6, 30), date(2022, 7, 28), "000156459022026876", "221000"),
-    ReviewedHeadcountFact("MSFT", date(2023, 6, 30), date(2023, 7, 27), "000095017023035122", "221000"),
-    ReviewedHeadcountFact("MSFT", date(2024, 6, 30), date(2024, 7, 30), "000095017024087843", "228000"),
-    ReviewedHeadcountFact("MSFT", date(2025, 6, 30), date(2025, 7, 30), "000095017025100235", "228000"),
-    # GOOGL (CIK 0001652044)
-    ReviewedHeadcountFact("GOOGL", date(2022, 12, 31), date(2023, 2, 3), "000165204423000016", "190234"),
-    ReviewedHeadcountFact("GOOGL", date(2023, 12, 31), date(2024, 1, 31), "000165204424000022", "182502"),
-    ReviewedHeadcountFact("GOOGL", date(2024, 12, 31), date(2025, 2, 5), "000165204425000014", "183323"),
-    ReviewedHeadcountFact("GOOGL", date(2025, 12, 31), date(2026, 2, 5), "000165204426000018", "190820"),
-    # NVDA (CIK 0001045810)
-    ReviewedHeadcountFact("NVDA", date(2023, 1, 29), date(2023, 2, 24), "000104581023000017", "26196"),
-    ReviewedHeadcountFact("NVDA", date(2024, 1, 28), date(2024, 2, 21), "000104581024000029", "29600"),
-    ReviewedHeadcountFact("NVDA", date(2025, 1, 26), date(2025, 2, 26), "000104581025000023", "36000"),
-    ReviewedHeadcountFact("NVDA", date(2026, 1, 25), date(2026, 2, 25), "000104581026000021", "42000"),
-    # META (CIK 0001326801)
-    ReviewedHeadcountFact("META", date(2022, 12, 31), date(2023, 2, 2), "000132680123000013", "86482"),
-    ReviewedHeadcountFact("META", date(2023, 12, 31), date(2024, 2, 2), "000132680124000012", "67317"),
-    ReviewedHeadcountFact("META", date(2024, 12, 31), date(2025, 1, 30), "000132680125000017", "74067"),
-    ReviewedHeadcountFact("META", date(2025, 12, 31), date(2026, 1, 29), "000132680126000011", "78865"),
-    # AMZN (CIK 0001018724)
-    ReviewedHeadcountFact("AMZN", date(2022, 12, 31), date(2023, 2, 3), "000101872423000004", "1541000"),
-    ReviewedHeadcountFact("AMZN", date(2023, 12, 31), date(2024, 2, 2), "000101872424000008", "1525000"),
-    ReviewedHeadcountFact("AMZN", date(2024, 12, 31), date(2025, 2, 7), "000101872425000004", "1556000"),
-    ReviewedHeadcountFact("AMZN", date(2025, 12, 31), date(2026, 2, 6), "000101872426000004", "1576000"),
-    # TSLA (CIK 0001318605)
-    ReviewedHeadcountFact("TSLA", date(2022, 12, 31), date(2023, 1, 31), "000095017023001409", "127855"),
-    ReviewedHeadcountFact("TSLA", date(2023, 12, 31), date(2024, 1, 29), "000162828124002390", "140473"),
-    ReviewedHeadcountFact("TSLA", date(2024, 12, 31), date(2025, 1, 30), "000162828125003063", "125665"),
-    ReviewedHeadcountFact("TSLA", date(2025, 12, 31), date(2026, 1, 29), "000162828126003952", "134785"),
-    # AVGO (CIK 0001730168)
-    ReviewedHeadcountFact("AVGO", date(2022, 10, 30), date(2022, 12, 16), "000173016822000116", "20000"),
-    ReviewedHeadcountFact("AVGO", date(2023, 10, 29), date(2023, 12, 14), "000173016823000096", "20000"),
-    ReviewedHeadcountFact("AVGO", date(2024, 11, 3), date(2024, 12, 20), "000173016824000130", "37000"),
-    ReviewedHeadcountFact("AVGO", date(2025, 11, 2), date(2025, 12, 18), "000173016825000123", "33000"),
-    # COST (CIK 0000909832)
-    ReviewedHeadcountFact("COST", date(2022, 8, 28), date(2022, 10, 5), "000090983222000021", "304000"),
-    ReviewedHeadcountFact("COST", date(2023, 9, 3), date(2023, 10, 11), "000090983223000042", "316000"),
-    ReviewedHeadcountFact("COST", date(2024, 9, 1), date(2024, 10, 9), "000090983224000049", "333000"),
-    ReviewedHeadcountFact("COST", date(2025, 8, 31), date(2025, 10, 8), "000090983225000044", "341000"),
-    # NFLX (CIK 0001065280)
-    ReviewedHeadcountFact("NFLX", date(2022, 12, 31), date(2023, 1, 26), "000106528023000035", "12800"),
-    ReviewedHeadcountFact("NFLX", date(2023, 12, 31), date(2024, 1, 26), "000106528024000030", "13000"),
-    ReviewedHeadcountFact("NFLX", date(2024, 12, 31), date(2025, 1, 27), "000106528025000044", "14000"),
-    # MU (CIK 0000723125)
-    ReviewedHeadcountFact("MU", date(2022, 9, 1), date(2022, 10, 7), "000072312522000090", "48000"),
-    ReviewedHeadcountFact("MU", date(2023, 8, 31), date(2023, 10, 6), "000072312523000083", "43000"),
-    ReviewedHeadcountFact("MU", date(2024, 8, 29), date(2024, 10, 4), "000072312524000060", "48000"),
-    ReviewedHeadcountFact("MU", date(2025, 8, 28), date(2025, 10, 3), "000072312525000036", "53000"),
-    # WMT (CIK 0000104169)
-    ReviewedHeadcountFact("WMT", date(2023, 1, 31), date(2023, 3, 17), "000010416923000020", "2100000"),
-    ReviewedHeadcountFact("WMT", date(2024, 1, 31), date(2024, 3, 15), "000010416924000056", "2100000"),
-    ReviewedHeadcountFact("WMT", date(2025, 1, 31), date(2025, 3, 14), "000010416925000021", "2100000"),
-    ReviewedHeadcountFact("WMT", date(2026, 1, 31), date(2026, 3, 13), "000010416926000038", "2100000"),
-    # LLY (CIK 0000059478)
-    ReviewedHeadcountFact("LLY", date(2022, 12, 31), date(2023, 2, 22), "000005947823000082", "39000"),
-    ReviewedHeadcountFact("LLY", date(2023, 12, 31), date(2024, 2, 21), "000005947824000065", "43000"),
-    ReviewedHeadcountFact("LLY", date(2024, 12, 31), date(2025, 2, 19), "000005947825000067", "47000"),
-    ReviewedHeadcountFact("LLY", date(2025, 12, 31), date(2026, 2, 12), "000005947826000070", "50000"),
-    # ABBV (CIK 0001551152)
-    ReviewedHeadcountFact("ABBV", date(2022, 12, 31), date(2023, 2, 17), "000155115223000011", "50000"),
-    ReviewedHeadcountFact("ABBV", date(2023, 12, 31), date(2024, 2, 20), "000155115224000011", "50000"),
-    ReviewedHeadcountFact("ABBV", date(2024, 12, 31), date(2025, 2, 14), "000155115225000020", "55000"),
-    ReviewedHeadcountFact("ABBV", date(2025, 12, 31), date(2026, 2, 18), "000155115226000014", "55000"),
-    # JNJ (CIK 0000200406)
-    ReviewedHeadcountFact("JNJ", date(2023, 1, 1), date(2023, 2, 16), "000020040623000016", "152700"),
-    ReviewedHeadcountFact("JNJ", date(2023, 12, 31), date(2024, 2, 16), "000020040624000013", "131900"),
-    ReviewedHeadcountFact("JNJ", date(2024, 12, 29), date(2025, 2, 13), "000020040625000038", "138100"),
-    ReviewedHeadcountFact("JNJ", date(2025, 12, 28), date(2026, 2, 11), "000020040626000016", "138000"),
-    # XOM (holdco CIK 0002115436 + predecessor CIK 0000034088)
-    *_xom_facts(),
-    # JPM (CIK 0000019617)
-    ReviewedHeadcountFact("JPM", date(2022, 12, 31), date(2023, 2, 21), "000001961723000231", "293723"),
-    ReviewedHeadcountFact("JPM", date(2023, 12, 31), date(2024, 2, 16), "000001961724000225", "309926"),
-    ReviewedHeadcountFact("JPM", date(2024, 12, 31), date(2025, 2, 14), "000001961725000270", "317233"),
-    ReviewedHeadcountFact("JPM", date(2025, 12, 31), date(2026, 2, 13), "000001961726000289", "318512"),
-    # MA (CIK 0001141391)
-    ReviewedHeadcountFact("MA", date(2022, 12, 31), date(2023, 2, 14), "000114139123000017", "29900"),
-    ReviewedHeadcountFact("MA", date(2023, 12, 31), date(2024, 2, 13), "000114139124000022", "33400"),
-    ReviewedHeadcountFact("MA", date(2024, 12, 31), date(2025, 2, 12), "000114139125000011", "35300"),
-    ReviewedHeadcountFact("MA", date(2025, 12, 31), date(2026, 2, 12), "000114139126000018", "38700"),
-    # V (CIK 0001403161)
-    ReviewedHeadcountFact("V", date(2022, 9, 30), date(2022, 11, 16), "000140316122000081", "26500"),
-    ReviewedHeadcountFact("V", date(2023, 9, 30), date(2023, 11, 15), "000140316123000099", "28800"),
-    ReviewedHeadcountFact("V", date(2024, 9, 30), date(2024, 11, 13), "000140316124000058", "31600"),
-    ReviewedHeadcountFact("V", date(2025, 9, 30), date(2025, 11, 6), "000140316125000089", "34100"),
-    # BRK.B (CIK 0001067983)
-    ReviewedHeadcountFact("BRK.B", date(2022, 12, 31), date(2023, 2, 27), "000095017023004451", "383000"),
-    ReviewedHeadcountFact("BRK.B", date(2023, 12, 31), date(2024, 2, 26), "000095017024019719", "396500"),
-    ReviewedHeadcountFact("BRK.B", date(2024, 12, 31), date(2025, 2, 24), "000095017025025210", "392400"),
-    ReviewedHeadcountFact("BRK.B", date(2025, 12, 31), date(2026, 3, 2), "000095017026030306", "385500"),
-    # HD (CIK 0000354950)
-    ReviewedHeadcountFact("HD", date(2023, 1, 29), date(2023, 3, 15), "000035495023000059", "471600"),
-    ReviewedHeadcountFact("HD", date(2024, 1, 28), date(2024, 3, 13), "000035495024000057", "463100"),
-    ReviewedHeadcountFact("HD", date(2025, 2, 2), date(2025, 3, 21), "000035495025000085", "470100"),
-    ReviewedHeadcountFact("HD", date(2026, 2, 1), date(2026, 3, 18), "000035495026000052", "470000"),
-    # BKNG (CIK 0001075531)
-    ReviewedHeadcountFact("BKNG", date(2022, 12, 31), date(2023, 2, 23), "000107553123000009", "21600"),
-    ReviewedHeadcountFact("BKNG", date(2023, 12, 31), date(2024, 2, 22), "000107553124000016", "23600"),
-    ReviewedHeadcountFact("BKNG", date(2024, 12, 31), date(2025, 2, 20), "000107553125000011", "24300"),
-    ReviewedHeadcountFact("BKNG", date(2025, 12, 31), date(2026, 2, 18), "000107553126000009", "23572"),
+REVIEWED_HEADCOUNT_FACTS: tuple[ReviewedHeadcountFact, ...] = tuple(
+    [
+        *_rows(
+            "AAPL",
+            ("2022-09-24", "2022-10-28", "000032019322000108", "164000"),
+            ("2023-09-30", "2023-11-03", "000032019323000106", "161000"),
+            ("2024-09-28", "2024-11-01", "000032019324000123", "164000"),
+            ("2025-09-27", "2025-10-31", "000032019325000079", "166000"),
+        ),
+        *_rows(
+            "MSFT",
+            ("2022-06-30", "2022-07-28", "000156459022026876", "221000"),
+            ("2023-06-30", "2023-07-27", "000095017023035122", "221000"),
+            ("2024-06-30", "2024-07-30", "000095017024087843", "228000"),
+            ("2025-06-30", "2025-07-30", "000095017025100235", "228000"),
+        ),
+        *_rows(
+            "GOOGL",
+            ("2022-12-31", "2023-02-03", "000165204423000016", "190234"),
+            ("2023-12-31", "2024-01-31", "000165204424000022", "182502"),
+            ("2024-12-31", "2025-02-05", "000165204425000014", "183323"),
+            ("2025-12-31", "2026-02-05", "000165204426000018", "190820"),
+        ),
+        *_rows(
+            "NVDA",
+            ("2023-01-29", "2023-02-24", "000104581023000017", "26196"),
+            ("2024-01-28", "2024-02-21", "000104581024000029", "29600"),
+            ("2025-01-26", "2025-02-26", "000104581025000023", "36000"),
+            ("2026-01-25", "2026-02-25", "000104581026000021", "42000"),
+        ),
+        *_rows(
+            "META",
+            ("2022-12-31", "2023-02-02", "000132680123000013", "86482"),
+            ("2023-12-31", "2024-02-02", "000132680124000012", "67317"),
+            ("2024-12-31", "2025-01-30", "000132680125000017", "74067"),
+            ("2025-12-31", "2026-01-29", "000132680126000011", "78865"),
+        ),
+        *_rows(
+            "AMZN",
+            ("2022-12-31", "2023-02-03", "000101872423000004", "1541000"),
+            ("2023-12-31", "2024-02-02", "000101872424000008", "1525000"),
+            ("2024-12-31", "2025-02-07", "000101872425000004", "1556000"),
+            ("2025-12-31", "2026-02-06", "000101872426000004", "1576000"),
+        ),
+        *_rows(
+            "TSLA",
+            ("2022-12-31", "2023-01-31", "000095017023001409", "127855"),
+            ("2023-12-31", "2024-01-29", "000162828124002390", "140473"),
+            ("2024-12-31", "2025-01-30", "000162828125003063", "125665"),
+            ("2025-12-31", "2026-01-29", "000162828126003952", "134785"),
+        ),
+        *_rows(
+            "AVGO",
+            ("2022-10-30", "2022-12-16", "000173016822000116", "20000"),
+            ("2023-10-29", "2023-12-14", "000173016823000096", "20000"),
+            ("2024-11-03", "2024-12-20", "000173016824000130", "37000"),
+            ("2025-11-02", "2025-12-18", "000173016825000123", "33000"),
+        ),
+        *_rows(
+            "COST",
+            ("2022-08-28", "2022-10-05", "000090983222000021", "304000"),
+            ("2023-09-03", "2023-10-11", "000090983223000042", "316000"),
+            ("2024-09-01", "2024-10-09", "000090983224000049", "333000"),
+            ("2025-08-31", "2025-10-08", "000090983225000044", "341000"),
+        ),
+        *_rows(
+            "NFLX",
+            ("2022-12-31", "2023-01-26", "000106528023000035", "12800"),
+            ("2023-12-31", "2024-01-26", "000106528024000030", "13000"),
+            ("2024-12-31", "2025-01-27", "000106528025000044", "14000"),
+        ),
+        *_rows(
+            "MU",
+            ("2022-09-01", "2022-10-07", "000072312522000090", "48000"),
+            ("2023-08-31", "2023-10-06", "000072312523000083", "43000"),
+            ("2024-08-29", "2024-10-04", "000072312524000060", "48000"),
+            ("2025-08-28", "2025-10-03", "000072312525000036", "53000"),
+        ),
+        *_rows(
+            "WMT",
+            ("2023-01-31", "2023-03-17", "000010416923000020", "2100000"),
+            ("2024-01-31", "2024-03-15", "000010416924000056", "2100000"),
+            ("2025-01-31", "2025-03-14", "000010416925000021", "2100000"),
+            ("2026-01-31", "2026-03-13", "000010416926000038", "2100000"),
+        ),
+        *_rows(
+            "LLY",
+            ("2022-12-31", "2023-02-22", "000005947823000082", "39000"),
+            ("2023-12-31", "2024-02-21", "000005947824000065", "43000"),
+            ("2024-12-31", "2025-02-19", "000005947825000067", "47000"),
+            ("2025-12-31", "2026-02-12", "000005947826000070", "50000"),
+        ),
+        *_rows(
+            "ABBV",
+            ("2022-12-31", "2023-02-17", "000155115223000011", "50000"),
+            ("2023-12-31", "2024-02-20", "000155115224000011", "50000"),
+            ("2024-12-31", "2025-02-14", "000155115225000020", "55000"),
+            ("2025-12-31", "2026-02-18", "000155115226000014", "55000"),
+        ),
+        *_rows(
+            "JNJ",
+            ("2023-01-01", "2023-02-16", "000020040623000016", "152700"),
+            ("2023-12-31", "2024-02-16", "000020040624000013", "131900"),
+            ("2024-12-29", "2025-02-13", "000020040625000038", "138100"),
+            ("2025-12-28", "2026-02-11", "000020040626000016", "138000"),
+        ),
+        *_rows(
+            "XOM",
+            ("2022-12-31", "2023-02-22", "000003408823000020", "62000"),
+            ("2023-12-31", "2024-02-28", "000003408824000018", "62000"),
+            ("2024-12-31", "2025-02-19", "000003408825000010", "61000"),
+            ("2025-12-31", "2026-02-18", "000003408826000017", "58000"),
+            dual_cik=34088,
+        ),
+        *_rows(
+            "JPM",
+            ("2022-12-31", "2023-02-21", "000001961723000231", "293723"),
+            ("2023-12-31", "2024-02-16", "000001961724000225", "309926"),
+            ("2024-12-31", "2025-02-14", "000001961725000270", "317233"),
+            ("2025-12-31", "2026-02-13", "000001961726000289", "318512"),
+        ),
+        *_rows(
+            "MA",
+            ("2022-12-31", "2023-02-14", "000114139123000017", "29900"),
+            ("2023-12-31", "2024-02-13", "000114139124000022", "33400"),
+            ("2024-12-31", "2025-02-12", "000114139125000011", "35300"),
+            ("2025-12-31", "2026-02-12", "000114139126000018", "38700"),
+        ),
+        *_rows(
+            "V",
+            ("2022-09-30", "2022-11-16", "000140316122000081", "26500"),
+            ("2023-09-30", "2023-11-15", "000140316123000099", "28800"),
+            ("2024-09-30", "2024-11-13", "000140316124000058", "31600"),
+            ("2025-09-30", "2025-11-06", "000140316125000089", "34100"),
+        ),
+        *_rows(
+            "BRK.B",
+            ("2022-12-31", "2023-02-27", "000095017023004451", "383000"),
+            ("2023-12-31", "2024-02-26", "000095017024019719", "396500"),
+            ("2024-12-31", "2025-02-24", "000095017025025210", "392400"),
+            ("2025-12-31", "2026-03-02", "000095017026030306", "385500"),
+        ),
+        *_rows(
+            "HD",
+            ("2023-01-29", "2023-03-15", "000035495023000059", "471600"),
+            ("2024-01-28", "2024-03-13", "000035495024000057", "463100"),
+            ("2025-02-02", "2025-03-21", "000035495025000085", "470100"),
+            ("2026-02-01", "2026-03-18", "000035495026000052", "470000"),
+        ),
+        *_rows(
+            "BKNG",
+            ("2022-12-31", "2023-02-23", "000107553123000009", "21600"),
+            ("2023-12-31", "2024-02-22", "000107553124000016", "23600"),
+            ("2024-12-31", "2025-02-20", "000107553125000011", "24300"),
+            ("2025-12-31", "2026-02-18", "000107553126000009", "23572"),
+        ),
+    ]
 )
 
 
@@ -178,17 +210,13 @@ def _sec_ticker(ticker: str) -> str:
 
 
 def _resolve_reviewed_facts(
-    ciks_by_ticker: dict[str, int] | None = None,
-    *,
-    log_skipped: bool = False,
+    ciks_by_ticker: dict[str, int] | None = None, *, log_skipped: bool = False
 ) -> list[tuple[ReviewedHeadcountFact, int]]:
     index = ciks_by_ticker if ciks_by_ticker is not None else sec.ticker_cik_index()
     resolved: list[tuple[ReviewedHeadcountFact, int]] = []
     for fact in REVIEWED_HEADCOUNT_FACTS:
         validate_cited_headcount_fact(
-            knowable_at=fact.knowable_at,
-            period_end=fact.period_end,
-            evidence_ref=fact.evidence_ref,
+            knowable_at=fact.knowable_at, period_end=fact.period_end, evidence_ref=fact.evidence_ref
         )
         cik = fact.cik_override if fact.cik_override is not None else index.get(_sec_ticker(fact.ticker))
         if cik is None:
@@ -201,26 +229,15 @@ def _resolve_reviewed_facts(
 
 def _already_seeded(connection: psycopg.Connection, cik: int, accession: str) -> bool:
     row = connection.execute(
-        """
-        select 1
-        from staging.issuer_headcount_facts
-        where cik = %s
-          and source = %s
-          and evidence_ref like %s
-        limit 1
-        """,
+        "select 1 from staging.issuer_headcount_facts where cik = %s and source = %s and evidence_ref like %s limit 1",
         (cik, _SOURCE, f"accession={accession} %"),
     ).fetchone()
     return row is not None
 
 
 def seed_reviewed_headcounts(
-    connection: psycopg.Connection,
-    *,
-    ciks_by_ticker: dict[str, int] | None = None,
-    verbose: bool = False,
+    connection: psycopg.Connection, *, ciks_by_ticker: dict[str, int] | None = None, verbose: bool = False
 ) -> int:
-    """Seed all reviewed 10-K headcount facts idempotently (#1264)."""
     written = 0
     for fact, cik in _resolve_reviewed_facts(ciks_by_ticker, log_skipped=verbose):
         if _already_seeded(connection, cik, fact.accession):
@@ -237,28 +254,18 @@ def seed_reviewed_headcounts(
         )
         written += 1
         if verbose:
-            print(
-                f"  {fact.ticker:<6} CIK{cik:010d}  {fact.filing_date.isoformat()}  {fact.headcount}"
-                f"  -> staging.issuer_headcount_facts:{fact_id}"
-            )
+            print(f"  {fact.ticker:<6} CIK{cik:010d}  {fact.filing_date.isoformat()}  {fact.headcount}  -> {fact_id}")
     return written
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--dry-run", action="store_true", help="resolve CIKs and print, write nothing")
+    parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
-
     if args.dry_run:
         resolved = _resolve_reviewed_facts(log_skipped=True)
-        for fact, cik in resolved:
-            print(
-                f"  {fact.ticker:<6} CIK{cik:010d}  period_end={fact.period_end.isoformat()}"
-                f"  filed={fact.filing_date.isoformat()}  accession={fact.accession}  {fact.headcount}"
-            )
         print(f"{len(resolved)} facts would be written")
         return 0
-
     with psycopg.connect(settings.database_url) as connection:
         written = seed_reviewed_headcounts(connection, verbose=True)
         connection.commit()
@@ -268,5 +275,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     with gateway.script_run("seed_issuer_headcounts"):
-        exit_code = main()
-    raise SystemExit(exit_code)
+        raise SystemExit(main())

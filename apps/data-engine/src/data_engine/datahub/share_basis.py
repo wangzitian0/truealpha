@@ -1,32 +1,3 @@
-"""The share basis of a filed share count, and the close it multiplies (#1257, #1262).
-
-A filed share count is on the share basis of one date, its basis date. A close after a stock
-split is on the post-split basis. Their product is a market value only when both are on one
-basis. Two writers multiply a filed count by a close: the history projector
-(``datahub.strategy_history``) and the live strategy seed (``datahub.strategy_bridge``). Both
-use this module, so the two cannot disagree on what a basis date is or how a split applies.
-
-* ``share_count_as_of`` classes a count by the stored entry that carries it. The basis date of
-  a cover-page count is its own date. The basis date of a statement count is its filing date,
-  because the filing restates it for an earlier split (SAB Topic 4C).
-* ``on_close_basis`` multiplies a count by every split with an ex-date after its basis date
-  and on or before the close's session. The product is knowable once both the count and the
-  close are.
-
-The projector reads its close from the stored unadjusted series, so the series always hold its
-session. The live close comes from the capture. ``live_on_close_basis`` therefore checks what
-the stored series can prove, and it fails closed. An issuer whose splits are unknown between
-the basis date and the close's session gets no market value, with a named reason. The live
-path never falls back to the filed count.
-
-The stored series may end one session before the close's session (``MAX_BAR_LAG_SESSIONS``):
-the market-data refresh can run before the vendor lists that day's bar. Then the live close must
-stay within a factor of ``CLOSE_JUMP_LIMIT`` (1.5) of the last stored unadjusted close. The
-smallest common split, 3-for-2, moves a close by 1.5. A one-day move to x1.5 or more, or to x0.667
-or less, is a split or an event, and the stored series cannot tell which. Then the seed excludes
-the issuer for that night.
-"""
-
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
@@ -42,24 +13,19 @@ from truealpha_contracts.concept_mapping import ConceptMappingRuleset, ConceptRe
 from data_engine.datahub.market_prices import oldest_session_within_lag
 from data_engine.datahub.price_series import DailySeries, split_events_of
 
-#: The input key of the share count that multiplies a close into a market value.
 SHARES_KEY = "shares_outstanding"
-#: The ruleset fields whose concepts can produce the share count (``build_bundle``).
+
 _SHARE_COUNT_FIELDS = (SHARES_KEY, "shares_outstanding_last_resort")
-#: How a share count was classed (``ShareBasis.kind``).
+
 COVER, STATEMENT, UNRECOGNISED = "cover", "statement", "unrecognised"
 
 
 class ShareBasis(NamedTuple):
-    """The date whose share basis a filed share count is on, and how the count was classed."""
-
     as_of: date
     kind: str
 
 
 def share_count_concepts(ruleset: ConceptMappingRuleset) -> tuple[tuple[ConceptRef, ...], tuple[ConceptRef, ...]]:
-    """(cover concepts, statement concepts) of the share count. Cover is the ``dei`` (Document and
-    Entity Information) taxonomy; every other concept of the share-count fields is a statement figure."""
     concepts = [
         concept
         for field in _SHARE_COUNT_FIELDS
@@ -80,7 +46,6 @@ def _carries(
     period_end: str,
     value: Decimal,
 ) -> bool:
-    """True when a stored entry of one of ``concepts`` has this accession, period end and value."""
     for facts in documents:
         for concept in concepts:
             units = facts.get("facts", {}).get(concept.taxonomy, {}).get(concept.concept, {}).get("units", {})
@@ -105,18 +70,6 @@ def share_count_as_of(
     statement_concepts: Sequence[ConceptRef],
     filed_fallback: date,
 ) -> ShareBasis:
-    """The share basis of a filed share count, from the stored entry that carries it.
-
-    A cover-page count is a count as of its own date, its ``period_end``. A statement count is a
-    balance-sheet count or a weighted average. Its filing restates it for an earlier split (SAB
-    Topic 4C), so it is on the basis of the filing date. The vintage names the filing and the
-    period end, not the concept, so the stored document decides. Only an entry with the same
-    accession, the same period end AND the same value classifies the count. A 20-F can hold a
-    cover count and a restated balance-sheet count of one date under one accession.
-
-    A count that no stored entry carries is UNRECOGNISED. It falls back to its filing date, which
-    under-adjusts a cover count; the projector counts each case, so the summary shows how often.
-    """
     if not isinstance(entry, Mapping) or not entry.get("filed"):
         return ShareBasis(filed_fallback, UNRECOGNISED)
     filed = date.fromisoformat(str(entry["filed"]))
@@ -131,11 +84,9 @@ def share_count_as_of(
 
 
 class OnCloseBasis(NamedTuple):
-    """A share count on the share basis of a close, and the factor that put it there."""
-
     value: Decimal
     knowable_at: datetime
-    #: The product of the split factors applied. 1 means the count is unchanged.
+
     factor: Fraction
 
 
@@ -150,18 +101,6 @@ def on_close_basis(
     listing_units_per_share: Decimal | int | None,
     shares_basis: str | None = None,
 ) -> OnCloseBasis | Unavailable:
-    """The count on the share basis of the close of ``close_session``.
-
-    ``listing_units_per_share`` is the number of ordinary shares that one listed unit stands for
-    (#1519): 1 for a plain share, 4 for PDD's ADS. When it is None or non-positive, the count is
-    unavailable with ``missing_listing_unit_ratio``. Otherwise ``value`` is divided by the ratio
-    before applying splits.
-
-    The filed count is on the basis of ``basis_date`` (``share_count_as_of``). A split with an
-    ex-date after that date and on or before the close's session multiplies it. The product is
-    knowable once both the count and the close are. Without such a split, the converted count and
-    its knowable time are returned unchanged.
-    """
     if shares_basis == MISSING_CLASS_RATIO:
         return Unavailable(
             MISSING_CLASS_RATIO,
@@ -187,7 +126,6 @@ def on_close_basis(
 
 
 def listing_units_per_share_of(payload: Mapping[str, Any]) -> Decimal | None:
-    """The positive listing-unit ratio in ``payload``, or None when absent or unparseable."""
     raw = payload.get("listing_units_per_share")
     if raw is None or isinstance(raw, bool):
         return None
@@ -198,9 +136,6 @@ def listing_units_per_share_of(payload: Mapping[str, Any]) -> Decimal | None:
     return ratio if ratio > 0 else None
 
 
-# -- the live path: a close that the stored series did not supply ------------------------------
-
-#: The reasons the live path names when it cannot put a share count on the basis of its close.
 NO_SPLIT_ADJUSTED_SERIES = "no_split_adjusted_series"
 NO_UNADJUSTED_SERIES = "no_unadjusted_series"
 SPLIT_DERIVATION_FAILED = "split_derivation_failed"
@@ -212,32 +147,22 @@ CLOSE_JUMP_BEYOND_SERIES = "close_jump_beyond_series"
 MISSING_LISTING_UNIT_RATIO = "missing_listing_unit_ratio"
 MISSING_CLASS_RATIO = "missing_class_ratio"
 
-#: The smallest common split, 3-for-2, moves a close by the factor 1.5. When the stored series end
-#: before the close's session, a close at x1.5 or more, or at x0.667 or less, of the last stored
-#: close can follow a split that the series do not show yet. Both limits exclude the issuer.
+
 CLOSE_JUMP_LIMIT = Decimal("1.5")
 
 
 class Unavailable(NamedTuple):
-    """Why a share count cannot be put on the basis of its close. The issuer gets no market value."""
-
     reason: str
     detail: str
 
 
 @dataclass(frozen=True)
 class SplitHistory:
-    """The splits that one symbol's two stored daily series show.
-
-    A split with an ex-date in ``(after, through]`` shows as a step of the price ratio. It shows
-    only when both series hold a session at or before ``after`` and one at or after ``through``.
-    """
-
     symbol: str
     events: tuple[SplitEvent, ...]
     first_session: date
     last_session: date
-    #: The unadjusted close of ``last_session``: the last close the stored series know.
+
     last_unadjusted_close: Decimal
 
 
@@ -248,12 +173,6 @@ def _positive_close(bar: tuple[Decimal | None, Decimal | None] | None) -> bool:
 def split_history(
     symbol: str, unadjusted: DailySeries, split_adjusted: DailySeries
 ) -> SplitHistory | Unavailable | None:
-    """The split history of one symbol, an ``Unavailable`` when its series cannot prove one, or None.
-
-    None means the store holds no bar of the symbol in either series: the symbol adds nothing.
-    A symbol with only one series cannot show its splits. A ``SplitDerivationError`` (an
-    ambiguous ratio step) makes this symbol unavailable and leaves every other symbol alone.
-    """
     raw, adjusted = unadjusted.get(symbol, {}), split_adjusted.get(symbol, {})
     if not raw and not adjusted:
         return None
@@ -269,26 +188,23 @@ def split_history(
     if not paired:
         return Unavailable(SPLIT_DERIVATION_FAILED, f"{symbol}: no session holds a close in both series")
     last_close = raw[paired[-1]][1]
-    assert last_close is not None  # `_positive_close` admitted the session
+    assert last_close is not None
     return SplitHistory(symbol, events, paired[0], paired[-1], last_close)
 
 
 @dataclass(frozen=True)
 class LiveShareCount:
-    """One issuer's filed share count and the captured close it multiplies."""
-
     shares: Decimal
     knowable_at: datetime
-    #: The payload's vintage entry of the count: its filing date, its own date and its accession.
+
     entry: object
     close_session: date
     close_knowable_at: datetime
-    #: The captured close the count multiplies.
+
     close: Decimal
 
 
 def _entry_date(entry: object, key: str) -> date | None:
-    """The ISO date that one key of the vintage entry holds, or None when it holds no valid date."""
     if not isinstance(entry, Mapping) or not entry.get(key):
         return None
     try:
@@ -298,13 +214,6 @@ def _entry_date(entry: object, key: str) -> date | None:
 
 
 def _close_side_gap(history: SplitHistory, count: LiveShareCount) -> Unavailable | None:
-    """None when the series of one listing speak for the close's session, else the named reason.
-
-    Series that hold the close's session speak for it. Series that end at most
-    ``MAX_BAR_LAG_SESSIONS`` sessions before it speak for it only when the live close stayed
-    within a factor of ``CLOSE_JUMP_LIMIT`` of the last stored close. A close on either limit is
-    excluded: a 3-for-2 split lands on it exactly.
-    """
     close = count.close_session
     if history.last_session >= close:
         return None
@@ -334,18 +243,6 @@ def live_on_close_basis(
     documents: Callable[[], Sequence[Mapping[str, Any]]],
     ruleset: Callable[[], ConceptMappingRuleset],
 ) -> OnCloseBasis | Unavailable:
-    """The live count on the basis of its close, or the named reason why the issuer has no market value.
-
-    ``listing_units_per_share`` is checked before the stored price series (#1519): an issuer whose
-    annual-filing cover gives no proven unit ratio is unavailable with ``missing_listing_unit_ratio``
-    even when it holds no stored daily series.
-
-    ``histories`` holds one entry per listing of the issuer. A listing without stored bars adds
-    nothing, and the listings with stored bars must agree. The basis date is the count's own
-    date for a cover count and its filing date for a statement count. Only a split between those
-    two dates makes the class matter. Then the stored document classes the count
-    (``share_count_as_of``); ``documents`` and ``ruleset`` are read only in that case.
-    """
     if shares_basis == MISSING_CLASS_RATIO:
         return Unavailable(
             MISSING_CLASS_RATIO,

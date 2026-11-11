@@ -5,10 +5,6 @@ from pydantic import AliasChoices, Field
 from truealpha_contracts.common import CaptureEnvironment
 from truealpha_runtime import RuntimeSettings, database_url_field
 
-#: The environment variable that holds the model provider key. Declared once: the field below
-#: reads it, the manifest lists it, and the "no provider seated" message names it. A key per
-#: environment (#1444) is a different value of this variable in each environment, so no code
-#: names a key.
 LLM_API_KEY_ENV = "LLM_API_KEY"
 
 
@@ -17,48 +13,12 @@ class Settings(RuntimeSettings):
 
     @property
     def llm_api_key_env(self) -> str:
-        """The name of the environment variable that holds the model provider key."""
         return LLM_API_KEY_ENV
 
     @property
     def capture_environment(self) -> CaptureEnvironment:
-        """The environment every capture campaign is stamped with (#72).
-
-        Derived from the resolved runtime tier, never a literal: until #72 the
-        composition root wrote `PRODUCTION` on every campaign, so staging ticks recorded
-        production lineage. The tier vocabulary and the capture vocabulary are the same
-        six names by design (init.md §3.1), so an unknown tier raises here instead of
-        being stamped as something it is not.
-        """
         return CaptureEnvironment(self.environment_tier.value)
 
-    # --- release identity injected by infra2's compose (#784, #712) --------------------
-    #
-    # Every data-engine process receives these four through
-    # `truealpha/truealpha/20.data_engine/compose.yaml`, and until #784 no manifest declared
-    # any of them and no code read them through `settings`: `os.environ.get(...)` at two
-    # call sites was the whole contract, so nothing reconciled them, nothing could require
-    # them at boot, and an environment that silently stopped injecting one read as "unknown"
-    # rather than as a fault.
-    #
-    # The canonical env names are aligned with infra2-sdk v3.6.0 (`RELEASE_ID`,
-    # `IMAGE_DIGEST`, `CONFIGURATION_SHA256`) and `TRUEALPHA_CAPTURE_APPROVED_BY`.
-    #
-    # Where each comes from on the infra2 side, and hence its source class:
-    #
-    #   RELEASE_ID                          Vault RELEASE_MANIFEST_ID. Determined by the
-    #                                       release (`tools/release_identity.py`).
-    #   IMAGE_DIGEST                        Vault DATA_ENGINE_IMAGE_DIGEST, which
-    #                                       `DataEngineDeployer.pin_release` resolves from the
-    #                                       registry for the release tag.
-    #   CONFIGURATION_SHA256                `DataEngineDeployer._configuration_sha256` over the
-    #                                       compose artifacts and public env of that deploy.
-    #   TRUEALPHA_CAPTURE_APPROVED_BY       Vault CAPTURE_APPROVED_BY, the reviewed human
-    #                                       decision in `governance/approvals/<env>.yaml` --
-    #                                       hence `decision`, not `release`.
-    #
-    # Both classes are injected by the deployment rather than held as an application secret,
-    # which infra2-sdk's offline gate enforces (`COMPOSE_SOURCES`).
     release_manifest_id: str = Field(
         default="",
         validation_alias=AliasChoices(RuntimeEnvKey.RELEASE_ID.value, "RELEASE_MANIFEST_ID"),
@@ -79,47 +39,20 @@ class Settings(RuntimeSettings):
         validation_alias=AliasChoices("TRUEALPHA_CAPTURE_APPROVED_BY", "CAPTURE_APPROVED_BY"),
         json_schema_extra={"source": "decision", "group": "release"},
     )
-
-    # The shared runtime contract owns DATABASE_URL; this service composes it for the
-    # host-network topology (host loopback port), which is why the override lives here.
     database_url: str = database_url_field(
-        # host-network service: dials the host loopback port infra2 publishes
         composed_from="postgresql://postgres:{POSTGRES_PASSWORD}@127.0.0.1:{env:TA_POSTGRES_PORT}/truealpha",
     )
-    # SEC requires a descriptive User-Agent including a contact email.
     sec_user_agent: str = Field(
         default="", json_schema_extra={"source": "human", "injected": True, "scope": "project", "group": "sec"}
     )
-    # moomoo OpenD gateway coordinates. Supplied by the environment ONLY — never a
-    # default here, for two reasons that happen to agree:
-    #
-    # 1. Owner directive: OpenD's location is managed as a secret. Its host, its port and
-    #    the fact of where it runs are deployment facts, not source. A tracked default is
-    #    a tracked disclosure however innocuous the value looks.
-    # 2. The old default was `127.0.0.1`, which is WRONG in every deployed context: inside
-    #    a container that is the container's own loopback, not the host's. A default that
-    #    cannot be correct anywhere it actually runs is worse than no default -- it turns
-    #    "nobody configured this" into a connection attempt against the wrong machine,
-    #    which surfaces as a timeout rather than as a missing configuration.
-    #
-    # Empty means unconfigured, and callers must refuse rather than dial a guess.
     moomoo_opend_host: str = Field(
         default="", json_schema_extra={"source": "code", "empty_ok": True, "group": "moomoo"}
     )
     moomoo_opend_port: int = Field(default=0, json_schema_extra={"source": "code", "group": "moomoo"})
-    # The two governed moomoo origins (`datahub.production_topt.moomoo_origin`): a third
-    # market-price origin from the daily K-line and a second financial-fact origin from
-    # the annual statements. Off by default so an environment opts in deliberately —
-    # staging first, production after a scheduled tick has shown the ledger rows and the
-    # reconciliation cells. Enabling either with no OpenD coordinates fails at route
-    # build rather than dialling a guess.
     moomoo_kline_origin_enabled: bool = Field(default=False, json_schema_extra={"source": "code", "group": "moomoo"})
     moomoo_financials_origin_enabled: bool = Field(
         default=False, json_schema_extra={"source": "code", "group": "moomoo"}
     )
-    # Optional; raises OpenFIGI mapping limits from 25 req/min x 10 jobs to
-    # 250 req/min x 100 jobs (the vendor_accounts row of the environment contract holds the figure).
-    # Free key: https://www.openfigi.com/api
     openfigi_api_key: str = Field(
         default="",
         json_schema_extra={
@@ -130,10 +63,6 @@ class Settings(RuntimeSettings):
             "group": "vendors",
         },
     )
-    # Optional independent second price origin (#344, init.md rule 15). Rendered
-    # from Vault by infra2's truealpha/20.data_engine/secrets.ctmpl. Without it
-    # every market-price cell is honestly single-origin and reconciliation
-    # reports insufficient_independent_origins rather than silently agreeing.
     twelve_data_api_key: str = Field(
         default="",
         json_schema_extra={
@@ -144,21 +73,9 @@ class Settings(RuntimeSettings):
             "group": "vendors",
         },
     )
-    # Where `sources.gateway` writes the external call ledger (#729): 'postgres'
-    # (staging.api_call_ledger, autocommit, the only value a deployed process may
-    # run with) or 'off' for a local probe with no warehouse at all. There is no
-    # silent fallback between the two: a deployed tick that cannot record its
-    # vendor calls logs every unrecorded row at ERROR rather than pretending.
-    # `Literal` so a misspelt value fails at startup instead of behaving like 'postgres'.
     external_call_ledger: Literal["postgres", "off"] = Field(
         default="postgres", json_schema_extra={"source": "code", "group": "runtime"}
     )
-
-    # The filing-extraction model provider (#70 scope 1, owner decision 2026-09-07: the
-    # Zhipu GLM coding plan). Empty key = no provider seated: the loop keeps every
-    # multi-candidate filing as `needs_model_selection`, never guesses. The base URL is an
-    # OpenAI-compatible chat-completions root; the model is a versioned parameter that
-    # travels into every invocation record.
     llm_api_key: str = Field(
         default="",
         validation_alias=LLM_API_KEY_ENV,
@@ -167,16 +84,10 @@ class Settings(RuntimeSettings):
     llm_base_url: str = Field(
         default="https://open.bigmodel.cn/api/coding/paas/v4", json_schema_extra={"source": "code", "group": "llm"}
     )
-    # Filing-extraction model default (#1365). Kept in code so Vault /secrets/.env does not
-    # shadow non-secret model configuration, matching llm-service.
     llm_model: str = Field(default="glm-5.3-flash", json_schema_extra={"source": "code", "group": "llm"})
     llm_provider: str = Field(default="zhipu-glm-coding-plan", json_schema_extra={"source": "code", "group": "llm"})
 
 
 settings = Settings()
 
-__all__ = [
-    "RuntimeEnvKey",
-    "Settings",
-    "settings",
-]
+__all__ = ["RuntimeEnvKey", "Settings", "settings"]

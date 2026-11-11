@@ -1,13 +1,4 @@
-"""The input cells of one captured payload (#1518, step 4): one builder for every engine.
-
-A cell is one input of one issuer: key, value, unit, confidence, the time it became knowable and
-its fiscal period. The strategy seed, the history projector and the TOPT core snapshot build their
-inputs from these cells. So the three engines share the unit and the per-key `knowable_at`. No
-engine keeps its own copy of these rules.
-
-The input age limit is `eligibility.maximum_input_age_days` of the strategy definition. It applies
-to the `knowable_at` of each cell.
-"""
+"""Input cells of one captured payload (#1518, step 4): one builder for every engine."""
 
 from __future__ import annotations
 
@@ -27,26 +18,11 @@ from data_engine.datahub.production_topt.source_registrations import (
     source_reliability_prior,
 )
 
-#: The input key of the captured close. It travels in the market-price payload, not in the financial one.
 LAST_CLOSE_KEY = "last_close"
-
 _CONFIDENCE_POLICY = ContinuousConfidencePolicy()
-
-# Every registered metric except `price` surfaces as the scalar half of its financial-fact input: one
-# cell with `fiscal_period` None, under the registry's own spelling (init.md rule 22, #770 finding 2).
-# Adding metric N+1 to `truealpha_contracts.metrics.METRICS` needs no edit here. A periodic metric such
-# as `net_income` is in this tuple too: that lands its latest value as a scalar, while
-# `_STRATEGY_PERIODIC_KEYS` lands its whole annual series. `price` has its own payload and its own cell.
-# A metric with no field on the payload yet (`cost_of_revenue`, `eps_diluted`) reads back None and is skipped.
 _STRATEGY_FINANCIAL_KEYS = tuple(sorted(input_key_for_metric(name) for name in METRICS if name != "price"))
-
-# Which metrics are period-shaped comes from the registry, never from a list here (init.md rule 22).
 _STRATEGY_PERIODIC_KEYS = {name: f"{name}_by_period" for name, spec in METRICS.items() if spec.periodic}
-
-#: The key of the per-period filing entries in the payload vintage: `<input key>_periods`.
 _PERIOD_SERIES_SUFFIX = "_periods"
-
-#: The unit of a count metric. A count has two meanings here, so the family alone cannot name it.
 _COUNT_UNITS = {
     "employees_total": "employees",
     "shares_outstanding": "shares",
@@ -55,25 +31,18 @@ _COUNT_UNITS = {
 
 
 class InputCell(NamedTuple):
-    """One input of one issuer, as every engine reads it."""
-
     input_key: str
     value: Decimal
     unit: str
     confidence: Decimal
-    #: When this input became knowable. Per key: the filing of this input, not of the newest input.
     knowable_at: datetime
-    #: The fiscal period tag of a periodic input. None for a scalar input.
     fiscal_period: str | None
 
 
-#: `(input_key, period_end)` -> when that input became knowable. `period_end` is None for a scalar input.
-#: None means the payload names no filing for the input.
 KnowableAtOf = Callable[[str, str | None], datetime | None]
 
 
 def unit_of(input_key: str, currency: str) -> str:
-    """The unit of an input: the currency, a count noun, or the currency per share."""
     metric = INPUT_KEY_ALIASES.get(input_key, input_key)
     spec = METRICS.get(metric)
     if spec is None:
@@ -81,26 +50,19 @@ def unit_of(input_key: str, currency: str) -> str:
             f"{input_key!r} is not a registered metric (truealpha_contracts.metrics.METRICS); "
             "register it there before using it as a strategy input"
         )
-    family = spec.unit_family
-    if family is UnitFamily.CURRENCY:
+    if spec.unit_family is UnitFamily.CURRENCY:
         return currency
-    if family is UnitFamily.COUNT:
+    if spec.unit_family is UnitFamily.COUNT:
         return _COUNT_UNITS[metric]
-    if family is UnitFamily.PER_SHARE:
+    if spec.unit_family is UnitFamily.PER_SHARE:
         return f"{currency}_per_share"
-    return family.value
+    return spec.unit_family.value
 
 
 def _entry_knowable_at(entry: object) -> datetime | None:
-    """The instant one vintage entry became known, or None when it names none.
-
-    A headcount entry carries the ``knowable_at`` its extractor stamped. An XBRL entry carries
-    the ``filed`` date of its filing, which is knowable at the end of that day.
-    """
     if not isinstance(entry, Mapping):
         return None
-    stamp = entry.get("knowable_at")
-    if stamp:
+    if stamp := entry.get("knowable_at"):
         parsed = datetime.fromisoformat(str(stamp))
         if parsed.tzinfo is None:
             raise ValueError(f"vintage knowable_at {stamp!r} carries no time zone")
@@ -110,7 +72,6 @@ def _entry_knowable_at(entry: object) -> datetime | None:
 
 
 def vintage_knowable_at(payload: Mapping[str, Any]) -> KnowableAtOf:
-    """The ``knowable_at_of`` callback that reads the filing time of each input from the payload vintage."""
     vintage = payload.get("vintage") or {}
 
     def knowable_at_of(input_key: str, period_end: str | None) -> datetime | None:
@@ -122,19 +83,8 @@ def vintage_knowable_at(payload: Mapping[str, Any]) -> KnowableAtOf:
 
 
 def live_knowable_at(payload: Mapping[str, Any], observed_at: datetime) -> Callable[[str, str | None], datetime]:
-    """The per-key filing time of a live observation, with the time of the observation as the last resort.
-
-    The deployed adapter names a filing for every input that it fills. A payload without a filing for
-    one input (an old payload, or a test fixture) gives that input the ``knowable_at`` of its
-    observation, which is the newest filing of the payload and so never later than the cutoff.
-    """
     named = vintage_knowable_at(payload)
-
-    def knowable_at_of(input_key: str, period_end: str | None) -> datetime:
-        stamp = named(input_key, period_end)
-        return observed_at if stamp is None else stamp
-
-    return knowable_at_of
+    return lambda input_key, period_end: stamp if (stamp := named(input_key, period_end)) is not None else observed_at
 
 
 def _evaluate_single_origin_confidence(
@@ -173,7 +123,6 @@ def _evaluate_single_origin_confidence(
 
 
 def _evaluate_sec_field_confidence(key: str, payload: Mapping[str, Any]) -> Decimal:
-    """Evaluate single-source SEC field confidence via `evaluate_cell_confidence` (#1517 B3)."""
     producer = str(((payload.get("vintage") or {}).get("headcount") or {}).get("source") or "10k-extraction")
     provider_id = f"origin:headcount:{producer}" if key == "headcount" else "origin:sec-company-facts:v1"
     lineage = "sec-10k" if key == "headcount" else "sec-company-facts"
@@ -184,7 +133,6 @@ def _evaluate_sec_field_confidence(key: str, payload: Mapping[str, Any]) -> Deci
 
 
 def _evaluate_close_confidence(payload: Mapping[str, Any]) -> Decimal:
-    """Evaluate single-source close confidence via `evaluate_cell_confidence` (#1517 B3)."""
     served_by = payload.get("served_by_failover")
     origin_id = str(served_by) if served_by else "origin:yahoo:v1"
     lineage = origin_id.split(":")[1] if origin_id.startswith("origin:") and origin_id.count(":") >= 2 else "yahoo"
@@ -206,12 +154,6 @@ def financial_input_rows(
     knowable_at_of: KnowableAtOf | None = None,
     confidence_by_key: Mapping[str, Decimal] | None = None,
 ) -> list[InputCell]:
-    """The input cells that one financial-fact payload yields.
-
-    The seed of the live tick, the historical projector (``datahub.strategy_history``) and the TOPT core
-    snapshot (``production_topt.materialization``) call this function. All three get the same keys, the same
-    period tags, the same units and the same confidence rule (#1517 B3).
-    """
     if observed_at is None and knowable_at_of is None:
         raise ValueError("financial_input_rows requires observed_at or knowable_at_of (no wall-clock default)")
     stamp_of = (
@@ -223,24 +165,13 @@ def financial_input_rows(
     def _conf_for(key: str) -> Decimal:
         if confidence_by_key is not None and key in confidence_by_key:
             return confidence_by_key[key]
-        if confidence is not None:
-            return confidence
-        return _evaluate_sec_field_confidence(key, payload)
+        return confidence if confidence is not None else _evaluate_sec_field_confidence(key, payload)
 
     cells: list[InputCell] = []
     for key in _STRATEGY_FINANCIAL_KEYS:
         value = payload.get(key)
         if value is not None and (stamp := stamp_of(key, None)) is not None:
-            cells.append(
-                InputCell(
-                    key,
-                    Decimal(str(value)),
-                    unit_of(key, currency),
-                    _conf_for(key),
-                    stamp,
-                    None,
-                )
-            )
+            cells.append(InputCell(key, Decimal(str(value)), unit_of(key, currency), _conf_for(key), stamp, None))
     for key, payload_key in _STRATEGY_PERIODIC_KEYS.items():
         key_conf = _conf_for(key)
         for period_end, value in sorted((payload.get(payload_key) or {}).items()):
@@ -256,7 +187,6 @@ def last_close_cell(
     confidence: Decimal | None,
     observed_at: datetime,
 ) -> InputCell | None:
-    """The cell of the captured close of one market-price payload, or None when the payload holds none."""
     close = payload.get("close")
     if close is None:
         return None

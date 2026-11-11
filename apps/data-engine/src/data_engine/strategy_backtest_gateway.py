@@ -1,15 +1,4 @@
-"""#395: run the base large_model_value_v0 strategy on captured data through a real
-data boundary, not the checked-in golden JSON.
-
-`seed_strategy_backtest_inputs` lands the strategy's provenance-neutral factor inputs
-(grounded in the checked-in samples the #21 golden is built from) into
-`staging.strategy_backtest_inputs`. `StrategyBacktestGateway` reads them back per
-cutoff into the `strategy_evaluator` input shape and derives a content-addressed
-PIT `snapshot_id`. `run_backtest_from_staging` then drives the single-source
-evaluator over that gateway and maps the decisions onto the mart `Decision`
-dataclass -- so the replay consumes staging, not the fixture, and each run binds the
-exact snapshot it was computed from.
-"""
+"""Strategy backtest data boundary over captured staging inputs (#395)."""
 
 from __future__ import annotations
 
@@ -19,11 +8,7 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any, NamedTuple
 
-from factors.composite.strategy_evaluator import (
-    IssuerInput,
-    LookAheadError,
-    evaluate_cutoff,
-)
+from factors.composite.strategy_evaluator import IssuerInput, LookAheadError, evaluate_cutoff
 from factors.measure import measure_for_input_key
 from factors.panel import IssuerClass, uniform_tree_pins
 from psycopg import Connection
@@ -35,13 +20,9 @@ from data_engine.core_strategy_replay import Decision, _risk_free_rate, _to_deci
 
 
 def seed_strategy_backtest_inputs(connection: Connection[Any], corpus: dict[str, Any]) -> int:
-    """Land each golden decision's provenance-neutral inputs into
-    staging.strategy_backtest_inputs. Returns the number of input rows written."""
-
     written = 0
     for decision in corpus["golden_decision_set"]["decisions"]:
-        issuer_id = decision["issuer"]["id"]
-        cutoff_at = decision["cutoff_at"]
+        issuer_id, cutoff_at = decision["issuer"]["id"], decision["cutoff_at"]
         for record in decision["inputs"]:
             connection.execute(
                 """
@@ -63,16 +44,8 @@ def seed_strategy_backtest_inputs(connection: Connection[Any], corpus: dict[str,
 
 
 def _period_end_key(tag: str) -> tuple[date, str]:
-    """Comparable key for fiscal period tags: (period_end_date, tag).
-
-    Guarantees uniform tuple[date, str] return type so max() never raises TypeError
-    even when tags have mixed shapes. Unparseable tags map to date.min so valid dates
-    always win. On equal dates, string comparison breaks ties in favor of higher
-    filing FY.
-    """
     try:
-        parsed = parse_annual(tag)
-        if parsed is not None:
+        if (parsed := parse_annual(tag)) is not None:
             return parsed.end, tag
     except ValueError:
         pass
@@ -90,55 +63,26 @@ def _period_end_key(tag: str) -> tuple[date, str]:
     return date.min, tag
 
 
-#: One row of ``rows_at``: (issuer_id, input_key, value, confidence, fiscal_period, knowable_at).
 InputRow = tuple[str, str, Any, Any, str | None, datetime]
 
 
 class _Observed(NamedTuple):
-    """The winning observation of one input: the value, its confidence and the instant it became knowable."""
-
     value: Decimal
     confidence: Decimal
     knowable_at: datetime
 
 
 class MarketValueVintage(NamedTuple):
-    """When the two inputs of one issuer's market value became knowable at one cutoff (#1270)."""
-
     issuer_id: str
-    #: The ``knowable_at`` of the winning ``shares_outstanding`` row.
     shares_knowable_at: datetime
-    #: The ``knowable_at`` of the winning ``last_close`` row.
     close_knowable_at: datetime
 
 
 class StrategyBacktestGateway:
-    """The strategy's data boundary: it reads captured factor inputs from
-    staging.strategy_backtest_inputs and never sees the fixture or any provenance."""
-
     def __init__(self, connection: Connection[Any]) -> None:
         self._connection = connection
 
     def rows_at(self, cutoff_at: str | datetime) -> list[InputRow]:
-        """The latest vintage of each input at one cutoff, in ONE read. Every other read derives from it.
-
-        Each row ends with the ``knowable_at`` of its winning vintage (#1255).
-        """
-        # Latest vintage per (issuer, input_key, fiscal_period) at the cutoff -- a
-        # restatement lands a new row and supersedes, never overwriting the prior one. The
-        # period is part of the identity since 0043: a metric legitimately appears once per
-        # period, and collapsing them would hand a factor one arbitrary year of a series it
-        # asked for whole.
-        #
-        # #530: supersession is ordered by `knowable_at` (init.md §6: "within the winning
-        # source, the latest transaction_time -- restatement -- wins"), not `recorded_at`.
-        # `recorded_at` is ingestion audit time only -- init.md §6 says explicitly
-        # "as-of resolution never reads it" -- and this IS an as-of resolution
-        # (`where cutoff_at = %s`). `knowable_at` carries a real, enforced PIT guarantee
-        # here (`strategy_backtest_inputs_pit check (knowable_at <= cutoff_at)`,
-        # migration 0032); `recorded_at` carries none. `recorded_at desc` stays only as
-        # the final tie-break for two rows with genuinely identical `knowable_at` (e.g. a
-        # byte-for-byte rerun), never as the primary rule.
         return self._connection.execute(
             """
             select distinct on (issuer_id, input_key, fiscal_period)
@@ -151,13 +95,6 @@ class StrategyBacktestGateway:
         ).fetchall()
 
     def market_value_vintages_at(self, cutoff_at: str | datetime) -> list[MarketValueVintage]:
-        """When the winning share count and the winning last close of each issuer became knowable.
-
-        The winner of ``rows_at`` has the latest ``knowable_at`` of its key. So that instant is the
-        maximum over the rows of the key, and ``recorded_at`` only breaks a tie between rows of one
-        instant. Only rows without a fiscal period count, as in the market value. An issuer that
-        lacks either row is absent. ``rows_at`` stays the only source of values and of the snapshot id.
-        """
         rows = self._connection.execute(
             """
             select issuer_id,
@@ -189,14 +126,18 @@ class StrategyBacktestGateway:
         return snapshot_id_from_rows(self.rows_at(cutoff_at))
 
     def run_snapshot_id(self, cutoff_ats: list[str]) -> str:
-        """One PIT identity for a multi-cutoff run: the content hash of the per-cutoff
-        snapshot ids."""
         return combine_snapshot_ids([self.snapshot_id(cutoff) for cutoff in sorted(cutoff_ats)])
 
 
 def combine_snapshot_ids(snapshot_ids: list[str]) -> str:
-    """The run-level snapshot id of per-cutoff snapshot ids given in cutoff order."""
     return f"strategy-snapshot:{canonical_sha256(snapshot_ids)}"
+
+
+def _measure_pair(key: str, seen: _Observed, subject: str, *, period: str | None = None) -> tuple[Any, Decimal]:
+    kwargs: dict[str, Any] = {"subject": subject, "knowable_at": seen.knowable_at}
+    if period is not None:
+        kwargs["period"] = period
+    return measure_for_input_key(key, seen.value, **kwargs), seen.confidence
 
 
 def issuer_inputs_from_rows(
@@ -204,12 +145,6 @@ def issuer_inputs_from_rows(
     *,
     cutoff_at: datetime | None = None,
 ) -> list[IssuerInput]:
-    """The evaluator inputs of the given rows of one cutoff.
-
-    Each key also gets the ``knowable_at`` of the row that answers for it (#1255). A scalar row
-    answers for itself. For a periodic key, the row of the latest period answers.
-    When ``cutoff_at`` is supplied, any row with ``knowable_at > cutoff_at`` raises ``LookAheadError`` (#1413 D6).
-    """
     scalars: dict[str, dict[str, _Observed]] = {}
     periods: dict[str, dict[str, dict[str, _Observed]]] = {}
     for issuer_id, input_key, value, confidence, fiscal_period, knowable_at in rows:
@@ -223,39 +158,14 @@ def issuer_inputs_from_rows(
             continue
         series = periods.setdefault(issuer_id, {}).setdefault(input_key, {})
         series[fiscal_period] = observed
-        # The latest period also answers as the scalar, so `net_income` stays a
-        # required-input the coverage check and the multiple can both see.
         scalars.setdefault(issuer_id, {})[input_key] = series[max(series, key=_period_end_key)]
     return [
         IssuerInput(
             issuer_id=issuer_id,
-            records={
-                key: (
-                    measure_for_input_key(
-                        key,
-                        seen.value,
-                        subject=issuer_id,
-                        knowable_at=seen.knowable_at,
-                    ),
-                    seen.confidence,
-                )
-                for key, seen in answers.items()
-            },
+            records={key: _measure_pair(key, seen, issuer_id) for key, seen in answers.items()},
             knowable_at={key: seen.knowable_at for key, seen in answers.items()},
             periodic_records={
-                key: {
-                    period: (
-                        measure_for_input_key(
-                            key,
-                            seen.value,
-                            subject=issuer_id,
-                            period=period,
-                            knowable_at=seen.knowable_at,
-                        ),
-                        seen.confidence,
-                    )
-                    for period, seen in by_period.items()
-                }
+                key: {period: _measure_pair(key, seen, issuer_id, period=period) for period, seen in by_period.items()}
                 for key, by_period in periods.get(issuer_id, {}).items()
             },
         )
@@ -264,14 +174,6 @@ def issuer_inputs_from_rows(
 
 
 def snapshot_id_from_rows(rows: Sequence[InputRow]) -> str:
-    """The content identity of the given rows of one cutoff.
-
-    The period is part of the snapshot identity: two runs that consumed different years of the
-    same series are not the same snapshot, and before 0043 there was no way to say so.
-
-    The ``knowable_at`` of a row is not part of the identity. Stored runs hold this hash.
-    A changed hash would break their identity (#1255).
-    """
     payload = sorted(
         (issuer_id, input_key, str(value), str(confidence), fiscal_period or "")
         for issuer_id, input_key, value, confidence, fiscal_period, _knowable_at in rows
@@ -282,31 +184,23 @@ def snapshot_id_from_rows(rows: Sequence[InputRow]) -> str:
 def run_backtest_from_staging(
     connection: Connection[Any], corpus: dict[str, Any], definition: LargeModelValueV0Definition
 ) -> tuple[list[Decision], str]:
-    """Evaluate the strategy for every cutoff over the captured staging inputs and map
-    the decisions onto the mart Decision dataclass. Returns the decisions plus the
-    run-level snapshot id binding the exact captured inputs."""
-
     gateway = StrategyBacktestGateway(connection)
     rates = corpus["golden_decision_set"]["risk_free_rates"]
     cutoff_ats = sorted({decision["cutoff_at"] for decision in corpus["golden_decision_set"]["decisions"]})
-    # The staging rows carry no class. The golden decision of each issuer names its branch.
     classes = {
         decision["issuer"]["id"]: IssuerClass(decision["issuer_branch"])
         for decision in corpus["golden_decision_set"]["decisions"]
     }
-
     decisions: list[Decision] = []
     for cutoff_at in cutoff_ats:
         as_of = datetime.fromisoformat(cutoff_at.replace("Z", "+00:00"))
-        risk_free_rate = _risk_free_rate(rates, cutoff_at)
         evaluated = evaluate_cutoff(
             [replace(item, issuer_class=classes.get(item.issuer_id)) for item in gateway.issuer_inputs(cutoff_at)],
             definition=definition,
             cutoff_at=as_of,
-            risk_free_rate=risk_free_rate,
+            risk_free_rate=_risk_free_rate(rates, cutoff_at),
             tree_pins=uniform_tree_pins(),
         )
         decisions.extend(_to_decision(item, cutoff_at) for item in evaluated)
-
     decisions.sort(key=lambda item: (item.cutoff_at, item.issuer_id))
     return decisions, gateway.run_snapshot_id(cutoff_ats)

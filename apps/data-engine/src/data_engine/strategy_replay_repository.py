@@ -1,34 +1,4 @@
-"""Writer for the Core Strategy replay's `mart.strategy_runs`/
-`mart.strategy_decisions` tables (`db/migrations/0027_core_strategy_replay_mart.sql`, #26).
-
-The migration's own comment already scoped this precisely: "this only
-creates somewhere real for a future writer to land rows... Table shape
-mirrors the `Decision` dataclass `run_strategy_smoke.py` already computes, so
-a future writer has no reshaping to do." This module is that writer.
-
-`mart.strategy_decisions` has no `confidence` column (the migration's first
-cut omitted it) -- `Decision.confidence` is still included in the content
-hash (the row's identity should reflect the full reproduced output, the same
-way `strategy_run_id` references a definition hash without storing the whole
-definition), it just isn't a persisted column. Adding one is a schema change,
-not something this writer can retrofit silently.
-
-Content-addressed IDs follow the same convention as
-`datahub.production_topt.materialization`'s mart writers: `canonical_sha256`
-of a payload dict, prefixed, insert with on-conflict-do-nothing, verify an
-existing row matches rather than trusting it blindly -- append-only rows are
-immutable evidence, so a genuine identity collision with different content is
-a bug to raise on, not paper over.
-
-`CLAIM_CEILING = "preview"` is the default for fixture-sourced replays
-(`core_strategy_replay.py`); callers bound to a governed PIT snapshot pass
-their own `claim_ceiling` so this writer persists the exact ceiling claimed.
-
-A run that evaluated a measured risk-free rate carries its lineage (#1255): the series id, the value,
-the observation date, the source and the `raw.fetches` row. The first four are part of the run
-identity, so two rates make two runs. The fetch id is a row pointer of one database and is not.
-A fixture or preview replay uses the explicit rates of its corpus and passes none.
-"""
+"""Writer for Core Strategy replay `mart.strategy_runs` and `mart.strategy_decisions` (#26)."""
 
 from __future__ import annotations
 
@@ -50,6 +20,27 @@ from data_engine.datahub.risk_free import RiskFreeRate
 CLAIM_CEILING = "preview"
 
 
+def _insert_or_verify_sha(
+    connection: Connection[Any],
+    table: str,
+    id_column: str,
+    row_id: str,
+    content_sha256: str,
+    sql: str,
+    params: tuple[Any, ...],
+    conflict_msg: str,
+) -> str:
+    if connection.execute(sql, params).fetchone() is not None:
+        return row_id
+    existing = connection.execute(
+        f"select content_sha256 from {table} where {id_column} = %s",  # noqa: S608
+        (row_id,),
+    ).fetchone()
+    if existing is None or existing[0] != content_sha256:
+        raise ValueError(conflict_msg)
+    return row_id
+
+
 def _run_payload(
     definition: LargeModelValueV0Definition,
     *,
@@ -58,8 +49,6 @@ def _run_payload(
     claim_ceiling: str = CLAIM_CEILING,
     risk_free_rate: RiskFreeRate | None = None,
 ) -> dict[str, Any]:
-    # #955: when bound to a PIT snapshot, corpus_sha256 reflects the actual inputs
-    # consumed by that cutoff's replay rather than the static fixture constant.
     corpus_sha = snapshot_id.split(":", 1)[1] if snapshot_id and ":" in snapshot_id else CORPUS_SHA256
     payload: dict[str, Any] = {
         "strategy_key": definition.strategy_id,
@@ -69,14 +58,8 @@ def _run_payload(
         "claim_ceiling": claim_ceiling,
         "executed_at": executed_at.isoformat(),
     }
-    # Included only when set so existing fixture/preview runs keep their identity;
-    # a run bound to a PIT snapshot gets a distinct run id (#395).
     if snapshot_id is not None:
         payload["snapshot_id"] = snapshot_id
-    # The rate of a cutoff is a measurement. It can differ between two runs of one tick, because a
-    # forced tick can see a newer Treasury observation than the scheduled tick did (#1255). Two rates
-    # must be two runs. Otherwise the second run meets the unique key of the first run's decisions.
-    # The member is included only when set, so fixture and preview runs keep their identity.
     if risk_free_rate is not None:
         payload["risk_free"] = {
             "series_id": risk_free_rate.series_id,
@@ -88,7 +71,6 @@ def _run_payload(
 
 
 def _risk_free_columns(rate: RiskFreeRate | None) -> tuple[Any, ...]:
-    """The five lineage columns of `mart.strategy_runs`, all null when the run used no measured rate."""
     if rate is None:
         return (None, None, None, None, None)
     return (rate.series_id, rate.value, rate.observation_date, rate.source, rate.fetch_id)
@@ -112,7 +94,12 @@ def write_strategy_run(
     )
     content_sha256 = canonical_sha256(payload)
     run_id = f"strategy-run:{content_sha256}"
-    inserted = connection.execute(
+    return _insert_or_verify_sha(
+        connection,
+        "mart.strategy_runs",
+        "strategy_run_id",
+        run_id,
+        content_sha256,
         """
         insert into mart.strategy_runs (
             strategy_run_id, content_sha256, strategy_key, strategy_version,
@@ -135,15 +122,8 @@ def write_strategy_run(
             snapshot_id,
             *_risk_free_columns(risk_free_rate),
         ),
-    ).fetchone()
-    if inserted is not None:
-        return run_id
-    existing = connection.execute(
-        "select content_sha256 from mart.strategy_runs where strategy_run_id = %s", (run_id,)
-    ).fetchone()
-    if existing is None or existing[0] != content_sha256:
-        raise ValueError("strategy run identity conflict")
-    return run_id
+        "strategy run identity conflict",
+    )
 
 
 def write_strategy_decision(
@@ -155,9 +135,6 @@ def write_strategy_decision(
     source_evidence_status: InputEvidenceStatus | None = None,
 ) -> str:
     payload = {"strategy_run_id": strategy_run_id, **decision.to_json()}
-    # #747 (§8): the three dimensions, written by this producer and not part of the identity.
-    # When no raw pointer chain is supplied, statuses_without_raw_pointer resolves the
-    # honest evidence and validation statuses (#1116, #434).
     availability_status = decision_availability_status(
         eligible=decision.eligible,
         exclusion_reason=decision.exclusion_reason,
@@ -169,7 +146,12 @@ def write_strategy_decision(
     content_sha256 = canonical_sha256(payload)
     decision_id = f"strategy-decision:{content_sha256}"
     cutoff_at = datetime.fromisoformat(decision.cutoff_at.replace("Z", "+00:00"))
-    inserted = connection.execute(
+    return _insert_or_verify_sha(
+        connection,
+        "mart.strategy_decisions",
+        "strategy_decision_id",
+        decision_id,
+        content_sha256,
         """
         insert into mart.strategy_decisions (
             strategy_decision_id, content_sha256, strategy_run_id, issuer_id, cutoff_at,
@@ -209,24 +191,11 @@ def write_strategy_decision(
             decision.current_price_to_gross_profit,
             decision.target_price_to_gross_profit,
         ),
-    ).fetchone()
-    if inserted is not None:
-        return decision_id
-    existing = connection.execute(
-        "select content_sha256 from mart.strategy_decisions where strategy_decision_id = %s", (decision_id,)
-    ).fetchone()
-    if existing is None or existing[0] != content_sha256:
-        raise ValueError(f"strategy decision identity conflict: {decision.issuer_id}/{decision.cutoff_at}")
-    return decision_id
+        f"strategy decision identity conflict: {decision.issuer_id}/{decision.cutoff_at}",
+    )
 
 
 def bind_strategy_run_to_capture(connection: Connection[Any], *, strategy_run_id: str, capture_run_id: str) -> None:
-    """Record which capture run the strategy was evaluated for (#877).
-
-    The cutoff used to be the only link, and since a forced tick (#874) shares its cutoff
-    with the scheduled tick it corrects, a cutoff can name two capture runs. Readers
-    (`mart.governed_strategy_run`, `mart.strategy_run_capture`) resolve through this row.
-    Idempotent: a retried tick re-binds the same pair and changes nothing."""
     connection.execute(
         """
         insert into mart.strategy_run_capture_bindings (capture_run_id, strategy_run_id, bound_by)
@@ -248,12 +217,6 @@ def write_replay(
     source_evidence_status: InputEvidenceStatus | None = None,
     risk_free_rate: RiskFreeRate | None = None,
 ) -> tuple[str, tuple[str, ...]]:
-    """Persist one full replay: one `strategy_runs` row, one `strategy_decisions`
-    row per decision. Idempotent -- replaying identical decisions against the
-    same definition and executed_at reproduces the same run/decision IDs.
-    ``snapshot_id`` binds the run to the exact captured PIT inputs (#395).
-    ``risk_free_rate`` binds the run to the measured rate that its decisions used (#1255)."""
-
     run_id = write_strategy_run(
         connection,
         definition,

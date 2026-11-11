@@ -1,11 +1,4 @@
-"""Postgres (RDS) adapter for the ADR A1 evidence graph.
-
-Implements the three backend-neutral ports from `truealpha_contracts.evidence_graph`:
-append-only `EvidenceGraphWriter` (one call is one atomic unit-of-work), `EvidenceGraphReader`
-(governed-pointer resolution + bounded provenance closure over indexed edge keys), and the
-forward-only `CurrentPointerRegistry`. A future graph-database adapter implements the same
-ports without touching factors or consumers.
-"""
+"""Postgres adapter for the ADR A1 evidence graph."""
 
 from __future__ import annotations
 
@@ -26,71 +19,69 @@ from truealpha_contracts.evidence_graph import (
 )
 
 
+def _stamp_from_row(row: tuple[Any, ...], start: int) -> BitemporalStamp:
+    return BitemporalStamp(
+        valid_from=row[start],
+        valid_to=row[start + 1],
+        transaction_time=row[start + 2],
+        recorded_at=row[start + 3],
+    )
+
+
+def _stamp_params(stamp: BitemporalStamp) -> tuple[Any, Any, Any, Any]:
+    return (stamp.valid_from, stamp.valid_to, stamp.transaction_time, stamp.recorded_at)
+
+
 class PostgresEvidenceGraphRepository:
-    """One repository implementing all three evidence-graph ports over Postgres."""
+    """Implements EvidenceGraphWriter, EvidenceGraphReader, and CurrentPointerRegistry over Postgres."""
 
     def __init__(self, connection: Connection[Any]) -> None:
         self._connection = connection
 
-    # -- EvidenceGraphWriter ---------------------------------------------------------------
-
     def append(self, nodes: Sequence[EvidenceNode], edges: Sequence[EvidenceEdge]) -> None:
-        """Atomically append nodes then edges. Re-appending identical content is idempotent;
-        the append-only triggers reject any update/delete."""
         with self._connection.transaction():
             for node in nodes:
-                self._append_node(node)
+                self._connection.execute(
+                    """
+                    insert into staging.evidence_nodes (
+                        node_id, kind, content_sha256, valid_from, valid_to,
+                        transaction_time, recorded_at, supersedes_node_id
+                    ) values (%s, %s, %s, %s, %s, %s, %s, %s)
+                    on conflict (node_id) do nothing
+                    """,
+                    (
+                        node.ref.node_id,
+                        node.ref.kind.value,
+                        node.content_sha256,
+                        *_stamp_params(node.stamp),
+                        node.supersedes.node_id if node.supersedes is not None else None,
+                    ),
+                )
             for edge in edges:
-                self._append_edge(edge)
-
-    def _append_node(self, node: EvidenceNode) -> None:
-        self._connection.execute(
-            """
-            insert into staging.evidence_nodes (
-                node_id, kind, content_sha256, valid_from, valid_to,
-                transaction_time, recorded_at, supersedes_node_id
-            ) values (%s, %s, %s, %s, %s, %s, %s, %s)
-            on conflict (node_id) do nothing
-            """,
-            (
-                node.ref.node_id,
-                node.ref.kind.value,
-                node.content_sha256,
-                node.stamp.valid_from,
-                node.stamp.valid_to,
-                node.stamp.transaction_time,
-                node.stamp.recorded_at,
-                node.supersedes.node_id if node.supersedes is not None else None,
-            ),
-        )
-
-    def _append_edge(self, edge: EvidenceEdge) -> None:
-        self._connection.execute(
-            """
-            insert into staging.evidence_edges (
-                edge_id, content_sha256, from_kind, from_id, to_kind, to_id,
-                relation, valid_from, valid_to, transaction_time, recorded_at
-            ) values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            on conflict (edge_id) do nothing
-            """,
-            (
-                edge.edge_id,
-                edge.content_sha256,
-                edge.from_ref.kind.value,
-                edge.from_ref.node_id,
-                edge.to_ref.kind.value,
-                edge.to_ref.node_id,
-                edge.relation.value,
-                edge.stamp.valid_from,
-                edge.stamp.valid_to,
-                edge.stamp.transaction_time,
-                edge.stamp.recorded_at,
-            ),
-        )
-
-    # -- EvidenceGraphReader ---------------------------------------------------------------
+                self._connection.execute(
+                    """
+                    insert into staging.evidence_edges (
+                        edge_id, content_sha256, from_kind, from_id, to_kind, to_id,
+                        relation, valid_from, valid_to, transaction_time, recorded_at
+                    ) values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    on conflict (edge_id) do nothing
+                    """,
+                    (
+                        edge.edge_id,
+                        edge.content_sha256,
+                        edge.from_ref.kind.value,
+                        edge.from_ref.node_id,
+                        edge.to_ref.kind.value,
+                        edge.to_ref.node_id,
+                        edge.relation.value,
+                        *_stamp_params(edge.stamp),
+                    ),
+                )
 
     def resolve_pointer(self, key: CurrentPointerKey) -> CurrentPointer | None:
+        return self._head(key)
+
+    def head(self, key: CurrentPointerKey) -> CurrentPointer | None:
         return self._head(key)
 
     def closure(self, root: EvidenceNodeRef, *, reverse: bool = False, max_nodes: int = 1000) -> ProvenanceClosure:
@@ -98,16 +89,12 @@ class PostgresEvidenceGraphRepository:
             raise ValueError("max_nodes must be positive")
         join = "e.to_id = w.node_id" if reverse else "e.from_id = w.node_id"
         select_next = "e.from_id" if reverse else "e.to_id"
-        # Reachable node ids from the root over indexed edge keys, bounded to max_nodes + 1
-        # so we can detect and report truncation.
         rows = self._connection.execute(
             f"""
             with recursive walk(node_id) as (
                 select %s
                 union
-                select {select_next}
-                from staging.evidence_edges e
-                join walk w on {join}
+                select {select_next} from staging.evidence_edges e join walk w on {join}
             )
             select node_id from walk limit %s
             """,
@@ -129,7 +116,15 @@ class PostgresEvidenceGraphRepository:
             """,
             (node_ids, node_ids),
         ).fetchall()
-        edges = tuple(self._edge_from_row(row) for row in edge_rows)
+        edges = tuple(
+            EvidenceEdge(
+                from_ref=EvidenceNodeRef(kind=EvidenceNodeKind(r[1]), node_id=r[2]),
+                to_ref=EvidenceNodeRef(kind=EvidenceNodeKind(r[3]), node_id=r[4]),
+                relation=EvidenceRelation(r[5]),
+                stamp=_stamp_from_row(r, 6),
+            )
+            for r in edge_rows
+        )
         return ProvenanceClosure(root=root, reverse=reverse, nodes=nodes, edges=edges, truncated=truncated)
 
     def _load_node(self, node_id: str) -> EvidenceNode:
@@ -144,56 +139,25 @@ class PostgresEvidenceGraphRepository:
         if row is None:
             raise LookupError(f"evidence node not found: {node_id}")
         kind = EvidenceNodeKind(row[1])
-        supersedes = EvidenceNodeRef(kind=kind, node_id=row[7]) if row[7] is not None else None
         return EvidenceNode(
             ref=EvidenceNodeRef(kind=kind, node_id=row[0]),
             content_sha256=row[2],
-            stamp=BitemporalStamp(
-                valid_from=row[3],
-                valid_to=row[4],
-                transaction_time=row[5],
-                recorded_at=row[6],
-            ),
-            supersedes=supersedes,
+            stamp=_stamp_from_row(row, 3),
+            supersedes=EvidenceNodeRef(kind=kind, node_id=row[7]) if row[7] is not None else None,
         )
-
-    @staticmethod
-    def _edge_from_row(row: tuple[Any, ...]) -> EvidenceEdge:
-        return EvidenceEdge(
-            from_ref=EvidenceNodeRef(kind=EvidenceNodeKind(row[1]), node_id=row[2]),
-            to_ref=EvidenceNodeRef(kind=EvidenceNodeKind(row[3]), node_id=row[4]),
-            relation=EvidenceRelation(row[5]),
-            stamp=BitemporalStamp(
-                valid_from=row[6],
-                valid_to=row[7],
-                transaction_time=row[8],
-                recorded_at=row[9],
-            ),
-        )
-
-    # -- CurrentPointerRegistry ------------------------------------------------------------
-
-    def head(self, key: CurrentPointerKey) -> CurrentPointer | None:
-        return self._head(key)
 
     def advance(self, pointer: CurrentPointer) -> CurrentPointer:
-        """Record a forward advance. Rejects a non-increasing sequence or a pointer whose
-        `previous_run` does not match the current head."""
+        k = pointer.key
+        key_params = (k.environment.value, k.universe_id, k.universe_version, k.factor_id)
         with self._connection.transaction():
             head_row = self._connection.execute(
                 """
                 select target_run_id, sequence from mart.current_pointer
                 where environment = %s and universe_id = %s
                   and universe_version = %s and factor_id = %s
-                order by sequence desc limit 1
-                for update
+                order by sequence desc limit 1 for update
                 """,
-                (
-                    pointer.key.environment.value,
-                    pointer.key.universe_id,
-                    pointer.key.universe_version,
-                    pointer.key.factor_id,
-                ),
+                key_params,
             ).fetchone()
             if head_row is None:
                 if pointer.sequence != 0 or pointer.previous_run is not None:
@@ -214,10 +178,7 @@ class PostgresEvidenceGraphRepository:
                 (
                     pointer.pointer_id,
                     pointer.content_sha256,
-                    pointer.key.environment.value,
-                    pointer.key.universe_id,
-                    pointer.key.universe_version,
-                    pointer.key.factor_id,
+                    *key_params,
                     pointer.target_run.node_id,
                     pointer.sequence,
                     pointer.previous_run.node_id if pointer.previous_run is not None else None,
@@ -238,11 +199,12 @@ class PostgresEvidenceGraphRepository:
         ).fetchone()
         if row is None:
             return None
-        previous = EvidenceNodeRef(kind=EvidenceNodeKind.CAPTURE_RUN, node_id=row[2]) if row[2] is not None else None
         return CurrentPointer(
             key=key,
             target_run=EvidenceNodeRef(kind=EvidenceNodeKind.CAPTURE_RUN, node_id=row[0]),
             sequence=row[1],
-            previous_run=previous,
+            previous_run=EvidenceNodeRef(kind=EvidenceNodeKind.CAPTURE_RUN, node_id=row[2])
+            if row[2] is not None
+            else None,
             advanced_at=row[3],
         )

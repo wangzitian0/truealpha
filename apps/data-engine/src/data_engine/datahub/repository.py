@@ -92,7 +92,7 @@ class PostgresCaptureControlRepository:
 
     def _check_existing(self, table: str, id_column: str, identity: str, content_sha256: str) -> bool:
         row = self._connection.execute(
-            f"select content_sha256 from {table} where {id_column} = %s",  # noqa: S608 - identifiers are constants
+            f"select content_sha256 from {table} where {id_column} = %s",  # noqa: S608
             (identity,),
         ).fetchone()
         if row is None:
@@ -103,7 +103,7 @@ class PostgresCaptureControlRepository:
 
     def _existing_matches(self, table: str, id_column: str, identity: str, content_sha256: str) -> bool:
         row = self._connection.execute(
-            f"select content_sha256 from {table} where {id_column} = %s",  # noqa: S608 - identifiers are constants
+            f"select content_sha256 from {table} where {id_column} = %s",  # noqa: S608
             (identity,),
         ).fetchone()
         if row is None:
@@ -112,9 +112,19 @@ class PostgresCaptureControlRepository:
             raise CaptureRepositoryConflictError(f"{identity} is already bound to different content")
         return True
 
+    def _insert_idempotent(
+        self, table: str, id_column: str, identity: str, content_sha256: str, sql: str, params: tuple[Any, ...]
+    ) -> bool:
+        inserted = self._connection.execute(sql, params).fetchone()
+        return True if inserted else self._check_existing(table, id_column, identity, content_sha256)
+
     def put_schedule_policy(self, policy: CaptureSchedulePolicy) -> bool:
         payload = self._payload(policy)
-        inserted = self._connection.execute(
+        return self._insert_idempotent(
+            "raw.capture_schedule_policies",
+            "schedule_policy_id",
+            policy.schedule_policy_id,
+            policy.content_sha256,
             """
             insert into raw.capture_schedule_policies (
                 schedule_policy_id, content_sha256, policy_version, demanded_cadence,
@@ -130,24 +140,19 @@ class PostgresCaptureControlRepository:
                 policy.demanded_cadence,
                 policy.provider_availability_cadence,
                 policy.freshness_max_age,
-                # Text intervals ('432000 seconds') so the views' ::interval cast
-                # reads them without an ISO8601 dependency.
                 Jsonb({k: f"{v.total_seconds()} seconds" for k, v in policy.semantic_freshness_max_age.items()}),
                 Jsonb(policy.retry.model_dump(mode="json")),
                 Jsonb(payload),
             ),
-        ).fetchone()
-        return (
-            True
-            if inserted
-            else self._check_existing(
-                "raw.capture_schedule_policies", "schedule_policy_id", policy.schedule_policy_id, policy.content_sha256
-            )
         )
 
     def put_campaign(self, campaign: CaptureCampaign) -> bool:
         payload = self._payload(campaign)
-        inserted = self._connection.execute(
+        return self._insert_idempotent(
+            "raw.capture_campaigns",
+            "campaign_id",
+            campaign.campaign_id,
+            campaign.content_sha256,
             """
             insert into raw.capture_campaigns (
                 campaign_id, content_sha256, policy_id, environment, cutoff,
@@ -164,17 +169,14 @@ class PostgresCaptureControlRepository:
                 payload["cutoff"],
                 Jsonb(payload["universe_refs"]),
             ),
-        ).fetchone()
-        return (
-            True
-            if inserted
-            else self._check_existing(
-                "raw.capture_campaigns", "campaign_id", campaign.campaign_id, campaign.content_sha256
-            )
         )
 
     def put_run(self, run: CaptureRun) -> bool:
-        inserted = self._connection.execute(
+        return self._insert_idempotent(
+            "raw.capture_runs",
+            "run_id",
+            run.run_id,
+            run.content_sha256,
             """
             insert into raw.capture_runs (
                 run_id, campaign_id, run_sequence, schedule_policy_id,
@@ -190,12 +192,15 @@ class PostgresCaptureControlRepository:
                 run.capture_scope_id,
                 run.content_sha256,
             ),
-        ).fetchone()
-        return True if inserted else self._check_existing("raw.capture_runs", "run_id", run.run_id, run.content_sha256)
+        )
 
     def put_list_version(self, version: CaptureListVersion) -> bool:
         payload = self._payload(version)
-        inserted = self._connection.execute(
+        created = self._insert_idempotent(
+            "raw.capture_list_versions",
+            "list_version_id",
+            version.list_version_id,
+            version.content_sha256,
             """
             insert into raw.capture_list_versions (
                 list_version_id, universe_id, universe_version, universe_sha256,
@@ -214,13 +219,6 @@ class PostgresCaptureControlRepository:
                 Jsonb(payload["members"]),
                 version.content_sha256,
             ),
-        ).fetchone()
-        created = (
-            True
-            if inserted
-            else self._check_existing(
-                "raw.capture_list_versions", "list_version_id", version.list_version_id, version.content_sha256
-            )
         )
         for ordinal, member in enumerate(version.members, start=1):
             self._connection.execute(
@@ -235,15 +233,16 @@ class PostgresCaptureControlRepository:
 
     def bind_campaign_list(self, campaign_id: str, list_version_id: str) -> None:
         self._connection.execute(
-            """
-            insert into raw.capture_campaign_list_versions (campaign_id, list_version_id)
-            values (%s, %s) on conflict do nothing
-            """,
+            "insert into raw.capture_campaign_list_versions (campaign_id, list_version_id) values (%s, %s) on conflict do nothing",
             (campaign_id, list_version_id),
         )
 
     def put_obligation(self, campaign_id: str, obligation: CaptureListObligation) -> bool:
-        inserted = self._connection.execute(
+        return self._insert_idempotent(
+            "raw.capture_obligations",
+            "obligation_id",
+            obligation.obligation_id,
+            obligation.content_sha256,
             """
             insert into raw.capture_obligations (
                 obligation_id, campaign_id, run_id, list_version_id, subject_kind,
@@ -262,18 +261,15 @@ class PostgresCaptureControlRepository:
                 obligation.partition,
                 obligation.content_sha256,
             ),
-        ).fetchone()
-        return (
-            True
-            if inserted
-            else self._check_existing(
-                "raw.capture_obligations", "obligation_id", obligation.obligation_id, obligation.content_sha256
-            )
         )
 
     def put_source_request(self, request: SourceRequest) -> bool:
         payload = self._payload(request)
-        inserted = self._connection.execute(
+        return self._insert_idempotent(
+            "raw.capture_source_requests",
+            "source_request_id",
+            request.source_request_id,
+            request.content_sha256,
             """
             insert into raw.capture_source_requests (
                 source_request_id, content_sha256, source_registry_entry_id, source_policy_id,
@@ -294,18 +290,11 @@ class PostgresCaptureControlRepository:
                 request.partition,
                 Jsonb(payload),
             ),
-        ).fetchone()
-        return (
-            True
-            if inserted
-            else self._check_existing(
-                "raw.capture_source_requests", "source_request_id", request.source_request_id, request.content_sha256
-            )
         )
 
     def put_work_item(self, item: CaptureWorkItem, retry: RetryPolicy) -> bool:
-        retryable = [value.value for value in retry.retryable_outcomes]
-        terminal = [value.value for value in retry.terminal_outcomes]
+        retryable = [v.value for v in retry.retryable_outcomes]
+        terminal = [v.value for v in retry.terminal_outcomes]
         envelope_sha256 = canonical_sha256(
             {
                 "work_item_id": item.work_item_id,
@@ -315,7 +304,11 @@ class PostgresCaptureControlRepository:
                 "terminal_outcomes": terminal,
             }
         )
-        inserted = self._connection.execute(
+        return self._insert_idempotent(
+            "raw.capture_work_items",
+            "work_item_id",
+            item.work_item_id,
+            item.content_sha256,
             """
             insert into raw.capture_work_items (
                 work_item_id, campaign_id, source_request_id, schedule_policy_id,
@@ -335,15 +328,14 @@ class PostgresCaptureControlRepository:
                 item.content_sha256,
                 envelope_sha256,
             ),
-        ).fetchone()
-        return (
-            True
-            if inserted
-            else self._check_existing("raw.capture_work_items", "work_item_id", item.work_item_id, item.content_sha256)
         )
 
     def put_binding(self, binding: CaptureObligationWorkBinding) -> bool:
-        inserted = self._connection.execute(
+        return self._insert_idempotent(
+            "raw.capture_obligation_work_bindings",
+            "binding_id",
+            binding.binding_id,
+            binding.content_sha256,
             """
             insert into raw.capture_obligation_work_bindings (
                 binding_id, obligation_id, work_item_id, content_sha256
@@ -351,20 +343,17 @@ class PostgresCaptureControlRepository:
             on conflict (binding_id) do nothing returning binding_id
             """,
             (binding.binding_id, binding.obligation_id, binding.work_item_id, binding.content_sha256),
-        ).fetchone()
-        return (
-            True
-            if inserted
-            else self._check_existing(
-                "raw.capture_obligation_work_bindings", "binding_id", binding.binding_id, binding.content_sha256
-            )
         )
 
     def put_attempt(self, attempt: FetchAttempt) -> bool:
         if self._existing_matches("raw.capture_attempts", "attempt_id", attempt.attempt_id, attempt.content_sha256):
             return False
         payload = self._payload(attempt)
-        inserted = self._connection.execute(
+        return self._insert_idempotent(
+            "raw.capture_attempts",
+            "attempt_id",
+            attempt.attempt_id,
+            attempt.content_sha256,
             """
             insert into raw.capture_attempts (
                 attempt_id, work_item_id, attempt_number, started_at,
@@ -380,16 +369,15 @@ class PostgresCaptureControlRepository:
                 payload["started_at"],
                 attempt.content_sha256,
             ),
-        ).fetchone()
-        return (
-            True
-            if inserted
-            else self._check_existing("raw.capture_attempts", "attempt_id", attempt.attempt_id, attempt.content_sha256)
         )
 
     def put_attempt_result(self, result: FetchAttemptResult) -> bool:
         payload = self._payload(result)
-        inserted = self._connection.execute(
+        return self._insert_idempotent(
+            "raw.capture_attempt_results",
+            "attempt_result_id",
+            result.attempt_result_id,
+            result.content_sha256,
             """
             insert into raw.capture_attempt_results (
                 attempt_result_id, attempt_id, completed_at, completed_at_canonical,
@@ -410,18 +398,15 @@ class PostgresCaptureControlRepository:
                 result.reused_source_vintage_id,
                 result.content_sha256,
             ),
-        ).fetchone()
-        return (
-            True
-            if inserted
-            else self._check_existing(
-                "raw.capture_attempt_results", "attempt_result_id", result.attempt_result_id, result.content_sha256
-            )
         )
 
     def put_source_vintage(self, vintage: SourceVintage, *, raw_fetch_id: int) -> bool:
         payload = self._payload(vintage)
-        inserted = self._connection.execute(
+        return self._insert_idempotent(
+            "raw.capture_source_vintages",
+            "source_vintage_id",
+            vintage.source_vintage_id,
+            vintage.content_sha256,
             """
             insert into raw.capture_source_vintages (
                 source_vintage_id, content_sha256, source_request_id, source_record_id,
@@ -439,13 +424,6 @@ class PostgresCaptureControlRepository:
                 raw_fetch_id,
                 Jsonb(payload),
             ),
-        ).fetchone()
-        return (
-            True
-            if inserted
-            else self._check_existing(
-                "raw.capture_source_vintages", "source_vintage_id", vintage.source_vintage_id, vintage.content_sha256
-            )
         )
 
     def put_observation(
@@ -462,7 +440,11 @@ class PostgresCaptureControlRepository:
         if canonical_sha256(normalized_payload) != observation.normalized_payload_sha256:
             raise ValueError("normalized payload does not match the observation hash")
         payload = self._payload(observation)
-        inserted = self._connection.execute(
+        created = self._insert_idempotent(
+            "staging.capture_normalized_observations",
+            "observation_id",
+            observation.observation_id,
+            observation.content_sha256,
             """
             insert into staging.capture_normalized_observations (
                 observation_id, content_sha256, capture_obligation_id, source_vintage_id,
@@ -494,33 +476,12 @@ class PostgresCaptureControlRepository:
                 freshness_state,
                 Jsonb(payload),
             ),
-        ).fetchone()
-        created = (
-            True
-            if inserted
-            else self._check_existing(
-                "staging.capture_normalized_observations",
-                "observation_id",
-                observation.observation_id,
-                observation.content_sha256,
-            )
         )
-        self._connection.execute(
-            """
-            insert into staging.capture_observation_obligations (
-                capture_obligation_id, observation_id
-            ) values (%s, %s) on conflict do nothing
-            """,
-            (capture_obligation_id, observation.observation_id),
-        )
+        self.bind_observation(capture_obligation_id, observation.observation_id)
         self._put_observation_payload(observation, normalized_payload)
         return created
 
-    def _put_observation_payload(
-        self,
-        observation: NormalizedObservation,
-        normalized_payload: dict[str, Any],
-    ) -> bool:
+    def _put_observation_payload(self, observation: NormalizedObservation, normalized_payload: dict[str, Any]) -> bool:
         payload_sha256 = canonical_sha256(normalized_payload)
         if payload_sha256 != observation.normalized_payload_sha256:
             raise ValueError("normalized payload does not match the observation hash")
@@ -536,10 +497,7 @@ class PostgresCaptureControlRepository:
         if inserted:
             return True
         row = self._connection.execute(
-            """
-            select normalized_payload_sha256, normalized_payload
-            from staging.capture_observation_payloads where observation_id = %s
-            """,
+            "select normalized_payload_sha256, normalized_payload from staging.capture_observation_payloads where observation_id = %s",
             (observation.observation_id,),
         ).fetchone()
         if row is None or row[0] != payload_sha256 or row[1] != normalized_payload:
@@ -549,15 +507,8 @@ class PostgresCaptureControlRepository:
         return False
 
     def bind_observation(self, capture_obligation_id: str, observation_id: str) -> None:
-        """Bind an EXISTING observation to an obligation (#635 cross-run reuse): the
-        observation, its payload and its vintage already sit committed under the run
-        that fetched them; reuse adds only the usage edge."""
         self._connection.execute(
-            """
-            insert into staging.capture_observation_obligations (
-                capture_obligation_id, observation_id
-            ) values (%s, %s) on conflict do nothing
-            """,
+            "insert into staging.capture_observation_obligations (capture_obligation_id, observation_id) values (%s, %s) on conflict do nothing",
             (capture_obligation_id, observation_id),
         )
 
@@ -573,10 +524,7 @@ class PostgresCaptureControlRepository:
                         'universe_version', version.universe_version,
                         'content_sha256', version.universe_sha256
                     ),
-                    'subject', jsonb_build_object(
-                        'kind', obligation.subject_kind,
-                        'id', obligation.subject_id
-                    ),
+                    'subject', jsonb_build_object('kind', obligation.subject_kind, 'id', obligation.subject_id),
                     'capture_requirement_id', obligation.capture_requirement_id,
                     'partition', obligation.partition_key
                 )
@@ -592,7 +540,11 @@ class PostgresCaptureControlRepository:
         if expected[0] != result.obligation_id:
             raise ValueError("terminal result logical obligation does not match capture obligation")
         payload = self._payload(result)
-        inserted = self._connection.execute(
+        return self._insert_idempotent(
+            "raw.capture_obligation_results",
+            "result_id",
+            result.result_id,
+            result.content_sha256,
             """
             insert into raw.capture_obligation_results (
                 result_id, content_sha256, capture_obligation_id, logical_obligation_id,
@@ -611,13 +563,6 @@ class PostgresCaptureControlRepository:
                 list(result.reason_codes),
                 Jsonb(payload),
             ),
-        ).fetchone()
-        return (
-            True
-            if inserted
-            else self._check_existing(
-                "raw.capture_obligation_results", "result_id", result.result_id, result.content_sha256
-            )
         )
 
     def status(self, run_id: str) -> ToptCaptureStatus:
@@ -653,31 +598,7 @@ class PostgresCaptureControlRepository:
         ).fetchall()
         return tuple(
             ToptCaptureMetaInfo(
-                run_id=row[0],
-                obligation_id=row[1],
-                logical_obligation_id=row[2],
-                subject_kind=row[3],
-                subject_id=row[4],
-                capture_requirement_id=row[5],
-                partition_key=row[6],
-                work_item_id=row[7],
-                source_request_id=row[8],
-                source_registry_entry_id=row[9],
-                source_policy_id=row[10],
-                request_fingerprint_version=row[11],
-                terminal_state=row[12],
-                reason_codes=tuple(row[13]) if row[13] is not None else None,
-                completed_at=row[14],
-                attempt_count=row[15],
-                final_status_code=row[16],
-                observation_id=row[17],
-                semantic_version=row[18],
-                parser_version=row[19],
-                mapping_version=row[20],
-                confidence=row[21],
-                freshness_state=row[22],
-                knowable_at=row[23],
-                recorded_at=row[24],
+                *(list(row[:13]) + [tuple(row[13]) if row[13] is not None else None] + list(row[14:]))  # type: ignore[arg-type]
             )
             for row in rows
         )

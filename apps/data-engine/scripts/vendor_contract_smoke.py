@@ -1,26 +1,4 @@
-"""Live vendor contract smoke: assert the properties the parsers RELY on, against
-the real vendors, for a few API credits (#539: shrink the test-reality gap).
-
-The cassette suite (`tests/production_topt/test_real_vendor_bytes.py`) pins the
-parsers to bytes the vendors really sent; this script checks the other direction —
-that the vendors still send bytes of that shape. Both exist because two premise
-bugs shipped green on 2026-08-14: #557 (the live `/eod` answers a no-data date
-with an HTTP 400 *status*, not an error body on 200 — and `urlopen` raises) and
-#535 (a `time_series` bar for the partition date is still forming during a
-session). Every check below is one of those load-bearing assumptions, named.
-
-Cost: 1 Yahoo request + 3 Twelve Data credits (of the 800/day budget) + 2 moomoo
-calls (gated and ledgered like any other; AAPL is already inside the K-line quota
-window once the governed universe has been captured) + 1 U.S. Treasury request (a public
-CSV, no key; one request at the pace of 1 per second that its ledger seat allows).
-Exit 0 = contract holds; exit 1 = a named assumption drifted. Intended for a
-cron/scheduled run and after any vendor incident. A missing TWELVE_DATA_API_KEY is
-recorded as a FAILED check (a monitor with no credentials is a monitoring gap, not
-a skip).
-
-Usage:
-    uv run --package truealpha-data-engine python apps/data-engine/scripts/vendor_contract_smoke.py
-"""
+"""Live vendor contract smoke against Yahoo, Twelve Data, U.S. Treasury, and moomoo."""
 
 from __future__ import annotations
 
@@ -43,15 +21,10 @@ def _check(name: str, ok: bool, detail: str = "") -> None:
 
 
 def _twelve(path: str, params: dict[str, str], api_key: str) -> tuple[int, bytes]:
-    """Status + body, treating an HTTP error status as an answer, exactly as the
-    origin's `_get` does post-#557 — the body IS the vendor's reply.
-    Through the external call gateway (#729, init.md §1 rule 6)."""
     from data_engine.datahub.fetch_key import FetchKey
-    from data_engine.sources import gateway
 
     query = urllib.parse.urlencode({**params, "apikey": api_key})
     url = f"https://api.twelvedata.com/{path}?{query}"
-    # A monitor asks the vendor on purpose: its endpoint label keeps its rows off the production key of the same session.
     identity = FetchKey.for_request(
         "twelvedata",
         f"contract_smoke:{path}",
@@ -66,9 +39,6 @@ def _twelve(path: str, params: dict[str, str], api_key: str) -> tuple[int, bytes
         )
         return status or 0, body
     except OSError as error:
-        # DNS, timeout, refused, TLS — transport failure is itself a drifted
-        # assumption for a monitor: report it as a failed check, never crash past
-        # the summary (Copilot review on #569).
         return 0, f'{{"transport_error": "{type(error).__name__}"}}'.encode()
 
 
@@ -77,8 +47,8 @@ def check_yahoo() -> None:
 
     today = datetime.now(UTC).date()
     try:
-        body, bars = fetch_daily_chart("AAPL", end=today)
-    except Exception as error:  # noqa: BLE001 - a monitor reports, it does not crash
+        _body, bars = fetch_daily_chart("AAPL", end=today)
+    except Exception as error:  # noqa: BLE001
         _check("yahoo: chart endpoint reachable", False, f"{type(error).__name__}: {error}")
         return
     _check("yahoo: chart endpoint reachable", True)
@@ -86,18 +56,13 @@ def check_yahoo() -> None:
     if bars:
         newest = max(bars, key=lambda b: b.date)
         _check(
-            "yahoo: closes decode as Decimal (never binary float)",
-            isinstance(newest.close, Decimal),
-            f"{newest.date} close {newest.close}",
+            "yahoo: closes decode as Decimal (never binary float)", isinstance(newest.close, Decimal), f"{newest.close}"
         )
         _check("yahoo: newest bar is recent", today - newest.date <= timedelta(days=7), str(newest.date))
-        # Parser v10 asserts the whole bar; a chart that stopped carrying one of these
-        # would land four honest nulls per cell and every bar field single-origin.
         _check(
             "yahoo: newest bar carries open/high/low as Decimal and an integer volume",
-            all(isinstance(value, Decimal) for value in (newest.open, newest.high, newest.low))
+            all(isinstance(v, Decimal) for v in (newest.open, newest.high, newest.low))
             and isinstance(newest.volume, int),
-            f"open {newest.open} high {newest.high} low {newest.low} volume {newest.volume}",
         )
 
 
@@ -109,9 +74,6 @@ def check_twelve_data() -> None:
 
     tomorrow = datetime.now(UTC).date() + timedelta(days=1)
     status, body = _twelve("eod", {"symbol": "AAPL", "date": str(tomorrow)}, key)
-    # The #557 assumption: a no-data date answers with an HTTP error status AND a
-    # JSON body. If the vendor ever switches to 200-with-error-body, the origin
-    # still works — but this check tells us the contract moved.
     _check("twelvedata: /eod no-data date returns an HTTP error status", status >= 400, f"status {status}")
     try:
         payload = json.loads(body)
@@ -125,32 +87,24 @@ def check_twelve_data() -> None:
         {"symbol": "AAPL", "interval": "1day", "start_date": str(start), "end_date": str(tomorrow), "outputsize": "12"},
         key,
     )
-    ok_rows = False
-    ok_bar = False
-    detail = f"status {status}"
-    bar_detail = detail
+    ok_rows = ok_bar = False
+    detail = bar_detail = f"status {status}"
     if status == 200:
         try:
             rows = json.loads(body).get("values", [])
             ok_rows = bool(rows) and all("datetime" in r and isinstance(r.get("close"), str) for r in rows)
-            detail = f"{len(rows)} rows, close is a string"
-            # The twelve-data v3 assumption: the bar the origin attaches to a settled
-            # close lives on these rows as strings. `volume` is documented optional and
-            # `twelve_data_origin._decimal_or_absent` reads an absent or empty volume as
-            # an absent assertion, so only its type is checked here, never its presence.
             ok_bar = (
                 bool(rows)
-                and all(isinstance(r.get(key), str) for r in rows for key in ("open", "high", "low"))
+                and all(isinstance(r.get(k), str) for r in rows for k in ("open", "high", "low"))
                 and all(r.get("volume") in (None, "") or isinstance(r.get("volume"), str) for r in rows)
             )
-            with_volume = sum(1 for r in rows if isinstance(r.get("volume"), str) and r.get("volume") != "")
-            bar_detail = f"{len(rows)} rows carry open/high/low as strings, volume on {with_volume}"
+            detail = f"{len(rows)} rows"
+            bar_detail = detail
         except json.JSONDecodeError:
             detail = bar_detail = "body not JSON"
     _check("twelvedata: time_series rows carry datetime + string close", ok_rows, detail)
     _check("twelvedata: time_series rows carry the open/high/low bar as strings (volume optional)", ok_bar, bar_detail)
 
-    # A settled session must resolve through /eod directly (the primary path).
     weekday = datetime.now(UTC).date() - timedelta(days=1)
     while weekday.weekday() >= 5:
         weekday -= timedelta(days=1)
@@ -168,14 +122,6 @@ def check_twelve_data() -> None:
 
 
 def check_us_treasury() -> None:
-    """The shape of the Treasury file that `datahub.treasury_rates` relies on (#1255, A3 admission item 3).
-
-    The risk-free rate of every tick and every backtest comes from this file, with two more yields for
-    the macro panel. The parser reads the "Date" column and one column per registered series by name.
-    It takes dates as MM/DD/YYYY and values as percent. A header that lost a column, a date format
-    change or an error page fails here by name, before a tick does. In the first days of a year the
-    current file can hold no row yet, so the check then reads the year before.
-    """
     from data_engine.datahub import treasury_rates
     from data_engine.datahub.risk_free import MAX_RATE_LAG_DAYS
 
@@ -185,7 +131,7 @@ def check_us_treasury() -> None:
             monitor_key = dataclasses.replace(treasury_rates.fetch_key_of(year, on=today), endpoint="contract_smoke")
             body = treasury_rates.fetch_year(year, monitor_key)
             parsed = treasury_rates.parse_par_yield_csv(body, year=year)
-        except Exception as error:  # noqa: BLE001 - a monitor reports, it does not crash
+        except Exception as error:  # noqa: BLE001
             _check(f"us-treasury: the {year} file is reachable and parses", False, f"{type(error).__name__}: {error}")
             return
         rows = sum(len(items) for items in parsed.values())
@@ -197,28 +143,22 @@ def check_us_treasury() -> None:
         return
     for series_id, observations in parsed.items():
         if not observations:
-            _check(f"us-treasury: {series_id} has an observation", False, f"no row in the {year} file")
+            _check(f"us-treasury: {series_id} has an observation", False)
             continue
         newest = max(observations, key=lambda item: item.observation_date)
         age = (today - newest.observation_date).days
         _check(
             f"us-treasury: the newest {series_id} observation is within the lag limit of the resolver",
             age <= MAX_RATE_LAG_DAYS,
-            f"{newest.observation_date} is {age} days old",
+            f"{age} days old",
         )
         _check(
             f"us-treasury: {series_id} values decode as Decimal fractions between 0 and 1",
             all(isinstance(item.value, Decimal) and 0 <= item.value < 1 for item in observations),
-            f"newest {newest.value}",
         )
 
 
 def check_moomoo() -> None:
-    """The two shapes the moomoo origins rely on (`datahub.production_topt.moomoo_origin`):
-    a daily K-line bar stamped with a midnight session date and a float close, and an
-    annual statement row (`financial_type == 7`) carrying the calibrated field ids with
-    an epoch period end. Needs the OpenD coordinates; unconfigured is a FAILED check,
-    as for a missing Twelve Data key — a monitor without access is a gap, not a skip."""
     from data_engine.datahub.fetch_key import FetchKey
     from data_engine.datahub.production_topt.moomoo_origin import (
         BALANCE_SHEET_FIELDS,
@@ -229,7 +169,6 @@ def check_moomoo() -> None:
         parse_settled_close,
         period_end_of,
     )
-    from data_engine.sources import gateway
 
     if not settings.moomoo_opend_host or not settings.moomoo_opend_port:
         _check("moomoo: OPEND coordinates configured", False, "checks skipped — set MOOMOO_OPEND_HOST/PORT")
@@ -243,7 +182,7 @@ def check_moomoo() -> None:
             end=today - timedelta(days=1),
             identity=FetchKey("moomoo", "history_kline", "symbol:US.AAPL", gateway.utc_day()),
         )
-    except Exception as error:  # noqa: BLE001 - a monitor reports, it does not crash
+    except Exception as error:  # noqa: BLE001
         _check("moomoo: OpenD reachable and K-line answers", False, f"{type(error).__name__}: {error}")
         return
     _check("moomoo: OpenD reachable and K-line answers", True, f"{len(bars)} bars")
@@ -251,15 +190,10 @@ def check_moomoo() -> None:
         "moomoo: daily bars are stamped with a midnight session date and a float close",
         bool(bars)
         and all(str(b.get("time_key", "")).endswith(" 00:00:00") and isinstance(b.get("close"), float) for b in bars),
-        str(bars[-1].get("time_key")) if bars else "no bars",
     )
     try:
         quote = parse_settled_close(canonical_bytes(bars), partition=today - timedelta(days=1))
-        _check(
-            "moomoo: the window parses to a settled close",
-            quote is not None,
-            f"{quote.as_of} {quote.close}" if quote else "",
-        )
+        _check("moomoo: the window parses to a settled close", quote is not None)
     except Exception as error:  # noqa: BLE001
         _check("moomoo: the window parses to a settled close", False, f"{type(error).__name__}: {error}")
     try:
@@ -282,7 +216,6 @@ def check_moomoo() -> None:
         _check(
             "moomoo: period end is an epoch that lands on a month end in Asia/Shanghai",
             end is not None and (end + timedelta(days=1)).day == 1,
-            f"{newest.get('date_time_str')} -> {end}",
         )
     _check("moomoo: balance-sheet field map declared", "total_assets" in BALANCE_SHEET_FIELDS)
 
@@ -301,5 +234,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     with gateway.script_run("vendor_contract_smoke"):
-        exit_code = main()
-    raise SystemExit(exit_code)
+        raise SystemExit(main())

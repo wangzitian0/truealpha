@@ -1,18 +1,4 @@
-"""The wide row's issuer id for a universe member (#1079, docs/entity-identity.md §5).
-
-The universe corpus names an issuer by a legacy id such as `issuer:lei:...`. The capture tick
-resolves that id to an entity UUID, and the UUID is the `issuer_id` of `mart.topt_gppe_results`.
-A mart row that the coverage report must join to the wide row stores that same UUID.
-
-`canonicalize_universe` is the one resolver for those rows. It calls `lookup_entity`, which is
-what `resolve_entity` calls first at capture time. It never mints.
-
-The wide row stays the authority. A lookup repeats capture's question later, and evidence
-recorded since can change its answer. A member whose answer is not a wide-row id gets no row.
-
-Every wide-row issuer ends with one row. `account_for_head_members` lists each one that no
-member joined, with the reason. The lane writes it an unavailable row, so the report shows why.
-"""
+"""Wide-row issuer id resolution for universe members (#1079, docs/entity-identity.md §5)."""
 
 from __future__ import annotations
 
@@ -51,36 +37,22 @@ __all__ = (
     "stored_entity_of",
 )
 
-#: Why an issuer got no row: the store holds no entity for its legacy id.
 NO_CANONICAL_ISSUER_ID = "no_canonical_issuer_id"
-#: Why an issuer got no row: its entity is not an `issuer_id` of the head's wide row.
 NOT_IN_WIDE_ROW = "not_in_wide_row"
-#: Why a wide-row issuer got no row from a member: no member of the current universe names it.
 HEAD_MEMBER_NOT_IN_UNIVERSE = "head_member_not_in_universe"
-#: Why a member got no row: another member of the universe names the same issuer.
 DUPLICATE_CORPUS_ID = "duplicate_corpus_id"
-#: Why a wide-row issuer got an unavailable row: its member resolves to an entity outside the wide row.
-#: The issuer is in the wide row, so the reason is not `not_in_wide_row`, which names the member.
 MEMBER_RESOLVES_ELSEWHERE = "member_resolves_elsewhere"
 
-#: The share of the wide row that members must join. Below it, the lane fails like a total drop.
 JOIN_FLOOR = 0.5
-#: The floor applies from this size of wide row. A smaller one fails only when nothing joins.
 JOIN_FLOOR_MIN_ISSUERS = 5
 
 
 def reason_counts(reasons: Iterable[str]) -> dict[str, int]:
-    """How many times each reason occurs, in the order of the reasons. The one count of the lane."""
     return dict(sorted(Counter(reasons).items()))
 
 
 @dataclass(frozen=True)
 class CanonicalIssuer:
-    """One universe member. `issuer_id` is the wide row's id and the only id a mart row stores.
-
-    `legacy_id` is the id the corpus and the knowledge graph use. A read of the graph takes it.
-    """
-
     issuer_id: str
     legacy_id: str
     ticker: str
@@ -88,8 +60,6 @@ class CanonicalIssuer:
 
 @dataclass(frozen=True)
 class UnmappedIssuer:
-    """A member of the current universe that gets no row, with the reason."""
-
     legacy_id: str
     ticker: str
     reason: str = NO_CANONICAL_ISSUER_ID
@@ -98,8 +68,6 @@ class UnmappedIssuer:
 
 @dataclass(frozen=True)
 class UnvisitedIssuer:
-    """A wide-row issuer that no member joined. The lane writes it an unavailable row."""
-
     issuer_id: str
     legacy_id: str
     ticker: str
@@ -108,30 +76,18 @@ class UnvisitedIssuer:
 
 @dataclass(frozen=True)
 class CanonicalUniverse:
-    """The wide-row issuers that members joined, the members that got no row, and the issuers left over.
-
-    `issuers` joined a member. `unvisited` is every other wide-row issuer.
-    So `len(issuers) + len(unvisited)` equals `wide_row_issuers`. `unmapped` counts members only.
-    """
-
     issuers: tuple[CanonicalIssuer, ...]
     unmapped: tuple[UnmappedIssuer, ...] = ()
     unvisited: tuple[UnvisitedIssuer, ...] = ()
     wide_row_issuers: int = 0
 
     def tickers(self) -> dict[str, str]:
-        """Canonical issuer id to ticker, for a writer that never reads the graph."""
         return {issuer.issuer_id: issuer.ticker for issuer in self.issuers}
 
     def unmapped_by_reason(self) -> dict[str, int]:
         return reason_counts(member.reason for member in self.unmapped)
 
     def lane_failure(self) -> str | None:
-        """The message when too few wide-row issuers join a member, else None.
-
-        Nothing joins, or fewer than `JOIN_FLOOR` of a wide row of `JOIN_FLOOR_MIN_ISSUERS` or more.
-        The report would then say `no_row` or the reason for most issuers. The text holds counts only.
-        """
         joined, wide = len(self.issuers), self.wide_row_issuers
         if joined == 0 and (wide or self.unmapped):
             return f"{joined} of {wide} wide-row issuers join"
@@ -141,7 +97,6 @@ class CanonicalUniverse:
 
 
 def is_canonical_issuer_id(value: str) -> bool:
-    """True for the lower-case hyphenated UUID text that the wide row stores."""
     try:
         return str(uuid.UUID(value)) == value
     except (ValueError, AttributeError, TypeError):
@@ -149,7 +104,6 @@ def is_canonical_issuer_id(value: str) -> bool:
 
 
 def require_canonical_issuer_id(value: str) -> str:
-    """`value` unchanged, or ValueError. The last check before a mart row is written."""
     if not is_canonical_issuer_id(value):
         raise ValueError(
             f"issuer id {value!r} is not the wide row's id (a lower-case UUID); resolve it with canonicalize_universe"
@@ -160,11 +114,6 @@ def require_canonical_issuer_id(value: str) -> str:
 def stored_entity_of(
     connection: psycopg.Connection[Any], legacy_id: str, *, as_of: date, known_at: datetime
 ) -> uuid.UUID | None:
-    """The entity `legacy_id` names, or None. A UUID-form id must also be an entity of the store.
-
-    `lookup_entity` answers a UUID with the UUID itself when the store holds no such entity. This
-    guard is the one place that refuses it, for every resolver of issuer ids (#1079, #1257).
-    """
     entity = lookup_entity(connection, legacy_id, "issuer", as_of=as_of, known_at=known_at)
     if entity is not None and is_uuid(legacy_id):
         held = connection.execute("select 1 from staging.entities where entity_id = %s", (entity,)).fetchone()
@@ -180,15 +129,6 @@ def canonicalize_universe(
     as_of: date,
     wide_row_ids: Collection[str],
 ) -> CanonicalUniverse:
-    """Map each legacy id of `tickers` to its wide-row issuer id, or to a reason it has none.
-
-    `as_of` is the date capture resolved with, the corpus report date. A claim that ended or
-    began between that date and the cutoff names another entity under a later date.
-    `known_at` is the head's cutoff, as at capture, so evidence knowable later stays unseen.
-    Two legacy ids of one entity give one issuer: the first one keeps its place.
-    The second is unmapped as `duplicate_corpus_id`.
-    Raises when the store matches one id to two entities.
-    """
     pairs = tickers.items() if isinstance(tickers, Mapping) else tickers
     issuers: dict[str, CanonicalIssuer] = {}
     unmapped: list[UnmappedIssuer] = []
@@ -198,29 +138,19 @@ def canonicalize_universe(
             unmapped.append(UnmappedIssuer(legacy_id=legacy_id, ticker=ticker))
         elif str(entity) not in wide_row_ids:
             unmapped.append(UnmappedIssuer(legacy_id=legacy_id, ticker=ticker, reason=NOT_IN_WIDE_ROW))
-        elif str(entity) in issuers:
-            current = issuers[str(entity)]
-            # The primary listing keeps its place (#1518). With none declared, the first member stays.
-            primary = choose_primary_listings(connection, {str(entity): [current.ticker, ticker]}, known_at=cutoff)
-            if primary[str(entity)] == ticker != current.ticker:
-                issuers[str(entity)] = CanonicalIssuer(issuer_id=str(entity), legacy_id=legacy_id, ticker=ticker)
-                unmapped.append(
-                    UnmappedIssuer(
-                        current.legacy_id,
-                        current.ticker,
-                        reason=DUPLICATE_CORPUS_ID,
-                        detail=f"same issuer as {legacy_id}",
-                    )
-                )
+        elif (eid := str(entity)) in issuers:
+            current = issuers[eid]
+            primary = choose_primary_listings(connection, {eid: [current.ticker, ticker]}, known_at=cutoff)
+            if primary[eid] == ticker != current.ticker:
+                issuers[eid] = CanonicalIssuer(issuer_id=eid, legacy_id=legacy_id, ticker=ticker)
+                dropped_id, dropped_ticker, kept_id = current.legacy_id, current.ticker, legacy_id
             else:
-                unmapped.append(
-                    UnmappedIssuer(
-                        legacy_id,
-                        ticker,
-                        reason=DUPLICATE_CORPUS_ID,
-                        detail=f"same issuer as {current.legacy_id}",
-                    )
+                dropped_id, dropped_ticker, kept_id = legacy_id, ticker, current.legacy_id
+            unmapped.append(
+                UnmappedIssuer(
+                    dropped_id, dropped_ticker, reason=DUPLICATE_CORPUS_ID, detail=f"same issuer as {kept_id}"
                 )
+            )
         else:
             issuers[str(entity)] = CanonicalIssuer(issuer_id=str(entity), legacy_id=legacy_id, ticker=ticker)
     return CanonicalUniverse(issuers=tuple(issuers.values()), unmapped=tuple(unmapped))
@@ -229,12 +159,6 @@ def canonicalize_universe(
 def _named_entities(
     connection: psycopg.Connection[Any], members: Iterable[UnmappedIssuer], *, known_at: datetime
 ) -> dict[str, str]:
-    """The entities, and their survivors, that any alias of any dropped member ever named.
-
-    Each maps to the reason its member was dropped. This is the claim a member makes, whatever
-    date or evidence decides its lookup. It finds the wide-row issuer that a member names but
-    resolves away from.
-    """
     named: dict[str, str] = {}
     claimed: dict[tuple[str, str], list[str]] = {}
     for member in members:
@@ -261,12 +185,9 @@ def _named_entities(
 
 
 def _fill_reason(member_reason: str | None) -> str:
-    """The reason on the row of a wide-row issuer, from the reason its member was dropped for."""
     if member_reason is None:
         return HEAD_MEMBER_NOT_IN_UNIVERSE
-    if member_reason == NOT_IN_WIDE_ROW:
-        return MEMBER_RESOLVES_ELSEWHERE
-    return member_reason
+    return MEMBER_RESOLVES_ELSEWHERE if member_reason == NOT_IN_WIDE_ROW else member_reason
 
 
 def account_for_head_members(
@@ -276,13 +197,6 @@ def account_for_head_members(
     cutoff: datetime,
     wide_row_ids: Collection[str],
 ) -> CanonicalUniverse:
-    """List each wide-row issuer that no member joined, with the reason (#1079).
-
-    The universe the lane lists is the current one, so the head can hold an issuer it lacks.
-    Such an issuer gets reason `head_member_not_in_universe`. A member dropped for another
-    reason names its own issuer, and that reason follows the issuer. A member that resolves
-    outside the wide row gives `member_resolves_elsewhere`. The names come from the identity view.
-    """
     written = {issuer.issuer_id for issuer in universe.issuers}
     missing = sorted(set(wide_row_ids) - written)
     if not missing:
@@ -315,42 +229,31 @@ def expand_issuer_alias_ids(
     *,
     candidate_ids_by_key: Mapping[str, Sequence[str]] | None = None,
 ) -> dict[str, tuple[str, ...]]:
-    """Return every candidate issuer identifier for each key, including legacy aliases of UUIDs (#1263).
-
-    `staging.issuer_cik_predecessors` stores legacy identifiers such as `issuer:lei:...`.
-    When a caller passes canonical entity UUIDs, this helper expands each UUID with its
-    `legacy-id` and `lei` aliases from `staging.entity_aliases`.
-    """
-    candidates: dict[str, set[str]] = {}
-    for key, issuer_id in issuer_by_key.items():
-        initial = set(candidate_ids_by_key.get(key, ()) if candidate_ids_by_key is not None else ())
-        initial.add(issuer_id)
-        candidates[key] = initial
-
+    candidates: dict[str, set[str]] = {
+        key: {*(candidate_ids_by_key.get(key, ()) if candidate_ids_by_key is not None else ()), issuer_id}
+        for key, issuer_id in issuer_by_key.items()
+    }
     uuid_ids = sorted({cid.lower() for cids in candidates.values() for cid in cids if is_uuid(cid)})
     if uuid_ids:
         alias_rows = connection.execute(
             """
             select entity_id::text, scheme, value
             from staging.entity_aliases
-            where entity_id = any(%s::uuid[])
-              and scheme in ('legacy-id', 'lei')
+            where entity_id = any(%s::uuid[]) and scheme in ('legacy-id', 'lei')
             """,
             (uuid_ids,),
         ).fetchall()
         aliases_by_uuid: dict[str, set[str]] = {}
         for entity_id, scheme, value in alias_rows:
-            if not value:
-                continue
-            legacy_id = str(value) if scheme == "legacy-id" else f"issuer:lei:{value}"
-            aliases_by_uuid.setdefault(str(entity_id).lower(), set()).add(legacy_id)
+            if value:
+                legacy_id = str(value) if scheme == "legacy-id" else f"issuer:lei:{value}"
+                aliases_by_uuid.setdefault(str(entity_id).lower(), set()).add(legacy_id)
         for key, cids in candidates.items():
             expanded = set(cids)
-            for cid in list(cids):
+            for cid in cids:
                 if is_uuid(cid):
                     expanded.update(aliases_by_uuid.get(cid.lower(), ()))
             candidates[key] = expanded
-
     return {key: tuple(sorted(cids)) for key, cids in candidates.items()}
 
 
@@ -360,10 +263,6 @@ def signed_predecessor_ciks(
     *,
     candidate_ids_by_key: Mapping[str, Sequence[str]] | None = None,
 ) -> dict[str, int]:
-    """Resolve owner-signed predecessor CIKs across canonical UUIDs and their legacy aliases (#1263).
-
-    Raises `ConflictingPredecessorError` when two signed rows for the same issuer disagree.
-    """
     if not issuer_by_key:
         return {}
     candidates = expand_issuer_alias_ids(connection, issuer_by_key, candidate_ids_by_key=candidate_ids_by_key)

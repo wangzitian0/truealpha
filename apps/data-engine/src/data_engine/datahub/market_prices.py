@@ -1,29 +1,4 @@
-"""Twelve Data market prices ingestion and multi-resolution staging (#938 layer 1).
-
-Ingests the 20 TOPT symbols for:
-- 3 years daily (interval='1day'), split-adjusted (`adjust = 'splits'`)
-- 3 years daily (interval='1day'), unadjusted (`adjust = 'none'`, #1131)
-- 10 years monthly (interval='1month'), split-adjusted
-via Twelve Data /time_series with outputsize=5000 (1 call per symbol per series,
-60 calls total).
-
-Provides:
-- Built-in token bucket rate limiter (8 calls/min compliant)
-- Exponential backoff on HTTP 429
-- Snapping monthly dates to the month's last valid trading day (XNYS holidays)
-- Append-only persistence to staging.market_prices_daily and staging.market_prices_monthly
-  (`db/migrations/20260922T0700_datahub_market_prices_and_universe_mask.sql`): every
-  insert is a new row, `transaction_time`/`confidence`/`raw_ref` are written explicitly
-  from source properties, and the append-only trigger rejects any in-place UPDATE.
-
-This is the narrow TOPT-backtest OHLCV feed, not the general KG-identity-keyed price
-path (the sealed `staging.market_prices`, #0004/#0021). A future
-`BacktestDataGateway.price_bars()` reader turns a row here into a
-`truealpha_contracts.models.PriceBar`: this module's `transaction_time` IS that
-`PriceBar.knowable_at` (the XNYS session close for the bar's own date, not an
-insertion-clock default), and `recorded_at` is its `recorded_at` -- so
-`BacktestDataset.reject_lookahead` has a real domain to check against (#938).
-"""
+"""Twelve Data market prices ingestion and multi-resolution staging (#938 layer 1)."""
 
 from __future__ import annotations
 
@@ -56,13 +31,7 @@ _CONFIDENCE_POLICY = ContinuousConfidencePolicy()
 
 
 def stored_symbols(connection: psycopg.Connection, *, known_at: datetime) -> tuple[str, ...]:
-    """The symbols that the market-data lane stores (#1522): the primary listing of each issuer of every
-    universe that holds a price series, has a frozen corpus and is scheduled in this environment.
-
-    The universe record says which universes those are, and the corpus of each says its issuers. A universe
-    whose members come from a published head (the QQQ) has its own lane (`lanes.qqq_prices`).
-    """
-    # Imported here: the `production_topt` package imports this module, so a top-level import is a cycle.
+    """Return primary listing symbols for scheduled frozen-corpus price universes (#1522)."""
     from data_engine.datahub.primary_listing import primary_symbols
     from data_engine.datahub.production_topt import universe_corpus
     from data_engine.environment_universes import rule_environment
@@ -82,60 +51,31 @@ def stored_symbols(connection: psycopg.Connection, *, known_at: datetime) -> tup
 
 
 TWELVE_DATA_BASE_URL = "https://api.twelvedata.com"
-#: The ledger seat (`source`) of every Twelve Data request (`source_registrations.LEDGER_CAPACITIES`).
 TWELVE_DATA_SEAT = "twelvedata"
-#: The ledger `caller` of a `TwelveDataClient` that does not name another one.
 TIME_SERIES_CALLER = "market_prices.fetch_time_series"
-
-# Twelve Data's `/time_series` `adjust` parameter is sent explicitly on every call
-# (#938 contract item 4). Left unset, the vendor's own default governs the returned
-# OHLC, and a silent change to that default would restate every historical bar with no
-# way to tell a real market restatement from a vendor policy change. "splits" mirrors
-# `open`/`high`/`low`/`close` staying comparable to the adjusted_close consumers expect
-# (dividends are handled at the return-calculation layer, not the price series). The
-# value actually sent travels with every row (`adjust` column) so a future change to
-# this constant does not make old and new rows indistinguishable either.
-#
-# Since #1131 a (symbol, trading_date) holds two daily series. Every reader of the price
-# tables names the series it wants (`adjust = %s`). A reader that omits the filter would
-# flip between the two series from one run to the next.
 SPLIT_ADJUSTED = "splits"
-# Raw bars (A6, #1131): market value is the unadjusted close times the as-filed share count.
-# Daily only. Returns and the universe mask read the split-adjusted series.
 UNADJUSTED = "none"
 DEFAULT_ADJUST = SPLIT_ADJUSTED
-#: The two daily series of one symbol, in the order a refresh fetches them (#1131).
 DAILY_SERIES: tuple[str, ...] = (SPLIT_ADJUSTED, UNADJUSTED)
-#: The years of daily bars a refresh keeps (`ingest_twelve_data_market_prices`, `ingest_daily_series`).
 DAILY_LOOKBACK_YEARS = 3
-
-#: How many XNYS sessions the newest bar of a series may trail the latest closed session.
-#: One: in winter the market-data tick runs 15 minutes after the 21:00 UTC close, and the vendor
-#: may not list that day's bar yet. Monday's tick then finds Friday's bar and stays green. A series
-#: two sessions behind has missed a whole night, and the freshness verdict goes red. The live
-#: strategy seed accepts the same lag for its split series (`share_basis`, #1262).
 MAX_BAR_LAG_SESSIONS = 1
 
 _RAW_REF_PREFIX = "twelvedata:time_series"
-
-
-# -----------------------------------------------------------------------------
-# Exchange Calendar & Snapping (XNYS / NYSE)
-# -----------------------------------------------------------------------------
+_DAILY_TABLE = "staging.market_prices_daily"
+_MONTHLY_TABLE = "staging.market_prices_monthly"
+_XNYS_TZ = ZoneInfo("America/New_York")
+_XNYS_CLOSE_HOUR = 16
+_XNYS_EARLY_CLOSE_HOUR = 13
 
 
 def easter_sunday(year: int) -> date:
     """Compute Easter Sunday using the Meeus/Jones/Butcher Gregorian algorithm."""
-    a = year % 19
-    b = year // 100
-    c = year % 100
-    d = b // 4
-    e = b % 4
+    a, b, c = year % 19, year // 100, year % 100
+    d, e = b // 4, b % 4
     f = (b + 8) // 25
     g = (b - f + 1) // 3
     h = (19 * a + b - d - g + 15) % 30
-    i = c // 4
-    k = c % 4
+    i, k = c // 4, c % 4
     l_val = (32 + 2 * e + 2 * i - h - k) % 7
     m = (a + 11 * h + 22 * l_val) // 451
     month = (h + l_val - 7 * m + 114) // 31
@@ -143,182 +83,86 @@ def easter_sunday(year: int) -> date:
     return date(year, month, day)
 
 
+def _nth_weekday(year: int, month: int, weekday: int, n: int) -> date:
+    first = 1 + (weekday - date(year, month, 1).weekday()) % 7
+    return date(year, month, first + 7 * (n - 1))
+
+
+def _observed_holiday(d: date, *, observe_saturday: bool = True) -> date | None:
+    if d.weekday() == 5:
+        return d - timedelta(days=1) if observe_saturday else None
+    if d.weekday() == 6:
+        return d + timedelta(days=1)
+    return d
+
+
 def xnys_holidays(year: int) -> set[date]:
-    """Compute observed New York Stock Exchange (XNYS) market holidays for a given year."""
-    holidays: set[date] = set()
-
-    # 1. New Year's Day (Jan 1)
-    ny = date(year, 1, 1)
-    if ny.weekday() == 6:  # Sunday -> Monday Jan 2 observed
-        holidays.add(date(year, 1, 2))
-    elif ny.weekday() != 5:  # Saturday -> per NYSE rule 7.2, not observed on Friday Dec 31
-        holidays.add(ny)
-
-    # 2. Martin Luther King, Jr. Day: 3rd Monday in January
-    first_mon_jan = 1 + (0 - date(year, 1, 1).weekday()) % 7
-    holidays.add(date(year, 1, first_mon_jan + 14))
-
-    # 3. Washington's Birthday (Presidents' Day): 3rd Monday in February
-    first_mon_feb = 1 + (0 - date(year, 2, 1).weekday()) % 7
-    holidays.add(date(year, 2, first_mon_feb + 14))
-
-    # 4. Good Friday: Friday before Easter Sunday
-    easter = easter_sunday(year)
-    holidays.add(easter - timedelta(days=2))
-
-    # 5. Memorial Day: last Monday in May
+    """Compute observed XNYS market holidays for ``year``."""
     last_may = date(year, 5, 31)
-    holidays.add(last_may - timedelta(days=last_may.weekday()))
-
-    # 6. Juneteenth National Independence Day (June 19, observed since 2021)
-    if year >= 2021:
-        june19 = date(year, 6, 19)
-        if june19.weekday() == 5:  # Saturday -> Friday June 18
-            holidays.add(date(year, 6, 18))
-        elif june19.weekday() == 6:  # Sunday -> Monday June 20
-            holidays.add(date(year, 6, 20))
-        else:
-            holidays.add(june19)
-
-    # 7. Independence Day (July 4)
-    july4 = date(year, 7, 4)
-    if july4.weekday() == 5:
-        holidays.add(date(year, 7, 3))
-    elif july4.weekday() == 6:
-        holidays.add(date(year, 7, 5))
-    else:
-        holidays.add(july4)
-
-    # 8. Labor Day: 1st Monday in September
-    first_mon_sep = 1 + (0 - date(year, 9, 1).weekday()) % 7
-    holidays.add(date(year, 9, first_mon_sep))
-
-    # 9. Thanksgiving Day: 4th Thursday in November
-    first_thu_nov = 1 + (3 - date(year, 11, 1).weekday()) % 7
-    holidays.add(date(year, 11, first_thu_nov + 21))
-
-    # 10. Christmas Day (Dec 25)
-    xmas = date(year, 12, 25)
-    if xmas.weekday() == 5:
-        holidays.add(date(year, 12, 24))
-    elif xmas.weekday() == 6:
-        holidays.add(date(year, 12, 26))
-    else:
-        holidays.add(xmas)
-
-    # 11. Special NYSE closures (National Day of Mourning for President Jimmy Carter, #1265)
-    if year == 2025:
-        holidays.add(date(2025, 1, 9))
-
-    return holidays
+    candidates: list[date | None] = [
+        _observed_holiday(date(year, 1, 1), observe_saturday=False),
+        _nth_weekday(year, 1, 0, 3),
+        _nth_weekday(year, 2, 0, 3),
+        easter_sunday(year) - timedelta(days=2),
+        last_may - timedelta(days=last_may.weekday()),
+        _observed_holiday(date(year, 6, 19)) if year >= 2021 else None,
+        _observed_holiday(date(year, 7, 4)),
+        _nth_weekday(year, 9, 0, 1),
+        _nth_weekday(year, 11, 3, 4),
+        _observed_holiday(date(year, 12, 25)),
+        date(2025, 1, 9) if year == 2025 else None,
+    ]
+    return {d for d in candidates if d is not None}
 
 
 def is_xnys_trading_day(d: date) -> bool:
-    """Check if date `d` is a regular trading session on XNYS."""
-    if d.weekday() >= 5:
-        return False
-    return d not in xnys_holidays(d.year)
-
-
-def last_xnys_session_of_month(year: int, month: int) -> date:
-    """Return the date of the last valid XNYS trading day of the specified month."""
-    _, last_day = calendar.monthrange(year, month)
-    curr = date(year, month, last_day)
-    while not is_xnys_trading_day(curr):
-        curr -= timedelta(days=1)
-    return curr
-
-
-def snap_to_last_xnys_session_of_month(d: date) -> date:
-    """Snap any date to the last valid XNYS trading session of its month."""
-    return last_xnys_session_of_month(d.year, d.month)
+    return d.weekday() < 5 and d not in xnys_holidays(d.year)
 
 
 def most_recent_xnys_session(d: date) -> date:
-    """The most recent XNYS trading session at or before `d`.
-
-    Every 1D cutoff and confidence-window computation reads this instead of a raw wall
-    clock date: a weekend or a market holiday has no daily bar, and comparing a raw
-    `d` against a bar history the same way `evaluate_symbol_pit` does for 1M would misread
-    the whole universe as `suspended` on that date for the same reason #938 contract 1
-    documents for the monthly cutoff.
-    """
+    """Return the most recent XNYS trading session at or before ``d``."""
     curr = d
     while not is_xnys_trading_day(curr):
         curr -= timedelta(days=1)
     return curr
 
 
-def oldest_session_within_lag(latest: date) -> date:
-    """The oldest session a series may end on: `MAX_BAR_LAG_SESSIONS` XNYS sessions before `latest`.
+def last_xnys_session_of_month(year: int, month: int) -> date:
+    _, last_day = calendar.monthrange(year, month)
+    return most_recent_xnys_session(date(year, month, last_day))
 
-    A weekend or a holiday holds no session, so a long weekend costs one session, not three
-    days. The freshness verdict of the market data lane and the split series check of the live
-    strategy seed (`share_basis`, #1262) both read this, so they cannot disagree on the lag.
-    """
+
+def snap_to_last_xnys_session_of_month(d: date) -> date:
+    return last_xnys_session_of_month(d.year, d.month)
+
+
+def oldest_session_within_lag(latest: date) -> date:
     oldest = latest
     for _ in range(MAX_BAR_LAG_SESSIONS):
         oldest = most_recent_xnys_session(oldest - timedelta(days=1))
     return oldest
 
 
-_XNYS_TZ = ZoneInfo("America/New_York")
-_XNYS_CLOSE_HOUR = 16
-_XNYS_EARLY_CLOSE_HOUR = 13
-
-
 @lru_cache(maxsize=32)
 def xnys_early_close_days(year: int) -> set[date]:
-    """Compute scheduled New York Stock Exchange (XNYS) 13:00 ET early-close days for a given year.
-
-    XNYS observes three scheduled early closes a year at 13:00 ET:
-    1. Day after Thanksgiving (always the 4th Friday in November).
-    2. December 24 (Christmas Eve), when it is an XNYS trading day.
-    3. July 3 (day before Independence Day), when it is an XNYS trading day (i.e. when July 4
-       falls on Tue, Wed, Thu, Fri; note that when July 4 is Saturday, July 3 is the observed
-       full holiday; when July 4 is Sunday, July 3 is Friday and regular hours, so early
-       close is when July 4 is Tue-Fri).
-    """
-    early_closes: set[date] = set()
-
-    # 1. Day after Thanksgiving (always the 4th Friday in November)
-    first_thu_nov = 1 + (3 - date(year, 11, 1).weekday()) % 7
-    thanksgiving = date(year, 11, first_thu_nov + 21)
-    early_closes.add(thanksgiving + timedelta(days=1))
-
-    # 2. December 24 (Christmas Eve), when it is an XNYS trading day
+    """Compute scheduled XNYS 13:00 ET early-close days for ``year``."""
+    early_closes = {_nth_weekday(year, 11, 3, 4) + timedelta(days=1)}
     xmas_eve = date(year, 12, 24)
     if is_xnys_trading_day(xmas_eve):
         early_closes.add(xmas_eve)
-
-    # 3. July 3 (day before Independence Day), when it is an XNYS trading day
-    # (i.e. when July 4 falls on Tue, Wed, Thu, Fri)
-    july4 = date(year, 7, 4)
-    if july4.weekday() in (1, 2, 3, 4) and is_xnys_trading_day(date(year, 7, 3)):
+    if date(year, 7, 4).weekday() in (1, 2, 3, 4) and is_xnys_trading_day(date(year, 7, 3)):
         early_closes.add(date(year, 7, 3))
-
     return early_closes
 
 
 def xnys_session_close_utc(trading_date: date) -> datetime:
-    """The XNYS session close instant for `trading_date`, in UTC.
-
-    This is `transaction_time` for a settled bar: the earliest instant its price was
-    publicly knowable, independent of when this pipeline happened to fetch or backfill
-    it (`recorded_at` carries that separately). A deterministic function of the calendar
-    date alone -- never `datetime.now()` (AGENTS.md: "Write transaction_time explicitly
-    from a source property, never an insertion-clock default").
-    """
+    """Return the XNYS session close instant for ``trading_date`` in UTC."""
     close_hour = (
         _XNYS_EARLY_CLOSE_HOUR if trading_date in xnys_early_close_days(trading_date.year) else _XNYS_CLOSE_HOUR
     )
-    local_close = datetime(trading_date.year, trading_date.month, trading_date.day, close_hour, 0, tzinfo=_XNYS_TZ)
-    return local_close.astimezone(UTC)
-
-
-# -----------------------------------------------------------------------------
-# Twelve Data Client
-# -----------------------------------------------------------------------------
+    return datetime(trading_date.year, trading_date.month, trading_date.day, close_hour, 0, tzinfo=_XNYS_TZ).astimezone(
+        UTC
+    )
 
 
 class TwelveDataRateLimitError(Exception):
@@ -339,11 +183,10 @@ class PriceBarRecord:
     close: Decimal | None
     volume: Decimal | None
     source: str = "twelvedata"
-    resolution: str = "1D"  # '1D' or '1M'
+    resolution: str = "1D"
 
 
 def parse_decimal(value: Any) -> Decimal | None:
-    """Parse numeric fields to Decimal safely."""
     if value is None:
         return None
     val_str = str(value).strip()
@@ -374,20 +217,11 @@ class TwelveDataClient:
         self.sleep_fn = sleep_fn
         self.max_retries = max_retries
         self.backoff_base = backoff_base
-        #: The ledger `caller` of every request this client makes. A lane that budgets its own
-        #: calls (`lanes.qqq_prices`, #1277) names itself here, so the ledger can tell it apart.
         self.caller = caller
         self.call_count = 0
 
     def _default_transport(self, url: str) -> tuple[int, bytes]:
-        """Through the external call ledger (#729): every Twelve Data request this
-        client makes is one row in `staging.api_call_ledger`, status-honest (a 4xx/5xx
-        body is the vendor's answer, not an exception) like `twelve_data_origin`'s. The
-        row is attributed to the run of the op that made it (`external_op`) and admitted only when the caller
-        has bound `gateway.capacity_scope()` around it -- `lanes.market_data` does (#938 contract item 3); a
-        caller that does not is only ledgered, not gated."""
         req = urllib.request.Request(url, headers={"User-Agent": "TrueAlpha-DataEngine/1.0"})
-        # The request names its own resource: the query holds the symbol, the interval and the window.
         params = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(url).query))
         identity = FetchKey.for_request(
             TWELVE_DATA_SEAT,
@@ -411,35 +245,24 @@ class TwelveDataClient:
         adjust: str = DEFAULT_ADJUST,
         extra_params: Mapping[str, str] | None = None,
     ) -> dict[str, Any]:
-        """Fetch /time_series for symbol and interval with rate limiting and retry on 429.
-
-        `adjust` is always sent explicitly (#938 contract item 4): see `DEFAULT_ADJUST`.
-        """
-        # The canonical ticker is the Twelve Data symbol (`BRK.B`), as in the TOPT capture
-        # (`twelve_data_origin`). A "/" reads as a currency pair and answers 404 (#1060).
         params: dict[str, str] = {
             "symbol": symbol,
             "interval": interval,
             "outputsize": str(outputsize),
             "adjust": adjust,
             "apikey": self.api_key,
+            **(extra_params or {}),
         }
-        if extra_params:
-            params.update(extra_params)
-
-        query = urllib.parse.urlencode(params)
-        url = f"{self.base_url}/time_series?{query}"
+        url = f"{self.base_url}/time_series?{urllib.parse.urlencode(params)}"
 
         for attempt in range(self.max_retries + 1):
             self.call_count += 1
-
             status, body = self.transport_fn(url)
             try:
                 data = json.loads(body.decode("utf-8"))
             except (UnicodeDecodeError, ValueError):
                 data = {}
 
-            # Handle 429
             is_429 = status == 429 or data.get("code") == 429 or "api credits" in str(data.get("message", "")).lower()
             if is_429:
                 if attempt < self.max_retries:
@@ -459,64 +282,38 @@ class TwelveDataClient:
                 )
 
             if status >= 400 or data.get("status") == "error":
-                code = data.get("code", status)
-                msg = data.get("message", "API error")
-                raise TwelveDataApiError(f"Twelve Data error {code}: {msg}")
+                raise TwelveDataApiError(
+                    f"Twelve Data error {data.get('code', status)}: {data.get('message', 'API error')}"
+                )
 
             return data
 
         raise TwelveDataRateLimitError(f"Rate limit retries exhausted for {symbol}")
 
 
-# -----------------------------------------------------------------------------
-# Transformation & Ingestion Pipeline
-# -----------------------------------------------------------------------------
-
-
-def parse_daily_bars(
+def _parse_bars(
     symbol: str,
     payload: dict[str, Any],
-    min_date: date | None = None,
+    min_date: date | None,
     *,
     now: datetime,
+    resolution: str,
+    snap_month: bool = False,
 ) -> list[PriceBarRecord]:
-    """Parse daily bars from Twelve Data /time_series payload into PriceBarRecord list.
-
-    A daily bar is asserted only once its own XNYS session has actually CLOSED as of
-    `now` -- instant precision, symmetric with `parse_monthly_bars` (#939 third-round
-    High 2: this function had NO closed-vs-still-open gate at all through two rounds of
-    fixing the identical defect in the monthly parser. `staging.market_prices_daily`
-    carries the exact same `check (recorded_at >= transaction_time)` as the monthly
-    table, and Twelve Data's `interval=1day` response, while today's session is still
-    open, also includes a running "today so far" row. The production cron happens to
-    always run after close (75 min buffer in EDT, 15 min in EST) so scheduled runs
-    never hit this, but any manual Materialize/backfill/retry during market hours did,
-    and rolled back the whole op -- daily AND monthly AND the mask backfill, on the
-    same uncommitted connection -- exactly the failure mode `lanes.market_data`'s
-    `_refresh_market_data` docstring itself names as the risk of a fix applied to only
-    one of two structurally identical call sites.
-    """
-    records: list[PriceBarRecord] = []
     values = payload.get("values", [])
     if not isinstance(values, list):
-        return records
-
+        return []
+    records: list[PriceBarRecord] = []
     for item in values:
         if not isinstance(item, dict):
             continue
-        dt_str = item.get("datetime", "")
         try:
-            bar_date = date.fromisoformat(dt_str[:10])
+            raw_date = date.fromisoformat(str(item.get("datetime", ""))[:10])
         except (ValueError, TypeError):
             continue
-
-        if now < xnys_session_close_utc(bar_date):
-            # This session has not closed yet as of `now` -- the vendor's
-            # still-in-progress "today" row, not a settled daily bar.
+        bar_date = snap_to_last_xnys_session_of_month(raw_date) if snap_month else raw_date
+        if now < xnys_session_close_utc(bar_date) or (min_date is not None and bar_date < min_date):
             continue
-        if min_date is not None and bar_date < min_date:
-            continue
-
         records.append(
             PriceBarRecord(
                 symbol=symbol,
@@ -527,10 +324,20 @@ def parse_daily_bars(
                 close=parse_decimal(item.get("close")),
                 volume=parse_decimal(item.get("volume")),
                 source="twelvedata",
-                resolution="1D",
+                resolution=resolution,
             )
         )
     return records
+
+
+def parse_daily_bars(
+    symbol: str,
+    payload: dict[str, Any],
+    min_date: date | None = None,
+    *,
+    now: datetime,
+) -> list[PriceBarRecord]:
+    return _parse_bars(symbol, payload, min_date, now=now, resolution="1D")
 
 
 def parse_monthly_bars(
@@ -540,69 +347,7 @@ def parse_monthly_bars(
     *,
     now: datetime,
 ) -> list[PriceBarRecord]:
-    """Parse monthly bars from Twelve Data /time_series payload, snapping dates to last XNYS session.
-
-    A monthly bar is asserted only once its month's own XNYS session has actually
-    CLOSED as of `now` -- compared at INSTANT precision, never by date (#939 follow-up
-    finding: a first version of this fix compared `snapped_date > as_of_date`, two
-    `date`s. On the current month's own last XNYS session, BEFORE that session's own
-    16:00 ET close, `snapped_date == as_of_date` -- not `>` -- so the row was NOT
-    skipped, its `transaction_time` (that day's own close, still in the future) was
-    still ahead of the real `recorded_at`, and `staging.market_prices_monthly`'s
-    `check (recorded_at >= transaction_time)` fired anyway: the crash this function
-    exists to prevent shrank from "~20/21 trading days a month" to "the one day a
-    month before its own close", but a manual Materialize/backfill/debug run in that
-    window -- or any scheduler retiming that erodes the 15-75 minute buffer the
-    production cron's post-close time happens to leave -- still hits it).
-
-    `now` is a required instant, not a `date` with a silent real-clock fallback: the
-    previous `as_of: date | None = None` signature let a caller (or a test) supply a
-    calendar day while the actual close-or-not determination silently needed
-    time-of-day precision that no `date` can carry, and every caller had to
-    independently know to pass one that was already past its own close. Requiring the
-    caller's own instant here removes that guesswork -- the only sound way to answer
-    "has this month closed" is to compare against the moment being asked from, not a
-    day snapped off it.
-    """
-    records: list[PriceBarRecord] = []
-    values = payload.get("values", [])
-    if not isinstance(values, list):
-        return records
-
-    for item in values:
-        if not isinstance(item, dict):
-            continue
-        dt_str = item.get("datetime", "")
-        try:
-            raw_date = date.fromisoformat(dt_str[:10])
-        except (ValueError, TypeError):
-            continue
-
-        snapped_date = snap_to_last_xnys_session_of_month(raw_date)
-        if now < xnys_session_close_utc(snapped_date):
-            # This bar's month has not closed as of `now` -- this is the vendor's
-            # in-progress month-to-date row, not a settled monthly bar. Instant
-            # precision, not `snapped_date > now.date()`: on the month's own last
-            # session, before its own close, the two dates are EQUAL, and a
-            # date-only comparison would let it through.
-            continue
-        if min_date is not None and snapped_date < min_date:
-            continue
-
-        records.append(
-            PriceBarRecord(
-                symbol=symbol,
-                date=snapped_date,
-                open=parse_decimal(item.get("open")),
-                high=parse_decimal(item.get("high")),
-                low=parse_decimal(item.get("low")),
-                close=parse_decimal(item.get("close")),
-                volume=parse_decimal(item.get("volume")),
-                source="twelvedata",
-                resolution="1M",
-            )
-        )
-    return records
+    return _parse_bars(symbol, payload, min_date, now=now, resolution="1M", snap_month=True)
 
 
 def _latest_vintages(
@@ -610,22 +355,6 @@ def _latest_vintages(
     table: str,
     records: Sequence[PriceBarRecord],
 ) -> dict[tuple[str, date, str], tuple[Any, Any, Any, Any, Any]]:
-    """The latest known (open, high, low, close, volume) per (symbol, trading_date, adjust)
-    already in `table`, for exactly the (symbol, date) pairs `records` is about to write.
-
-    Append-only means every GENUINE change gets its own row -- it does not mean every
-    re-fetch of unchanged history piles up an identical row. This pipeline refetches the
-    full 3y/10y lookback on every scheduled run (#938's lane), so without this check an
-    append-only insert would grow each table by ~5000 rows per symbol per run forever.
-
-    `adjust` is part of the KEY (#1131), not just of the compared values. Until #1131 it
-    was a compared value (#939 review Medium): a re-ingest under a NEW adjust policy was
-    never swallowed as "unchanged". That held while one series existed. With two series per
-    (symbol, date) it breaks the other way: the newest row belongs to whichever series wrote
-    last, so an unchanged bar of the other series looked new and was appended on every run.
-    Keyed on `adjust`, each series is compared with its own latest vintage, and a bar under a
-    NEW adjust policy has no vintage to match, so it is still appended.
-    """
     if not records:
         return {}
     symbols = sorted({r.symbol for r in records})
@@ -644,19 +373,6 @@ def _latest_vintages(
 
 
 def _provenance(record: PriceBarRecord, *, adjust: str) -> tuple[datetime, Decimal, str]:
-    """The (transaction_time, confidence, raw_ref) triple every appended row carries.
-
-    See the module docstring and `xnys_session_close_utc` for what each one means and why.
-    `raw_ref` documents provenance without claiming a
-    `raw.fetches` object pointer this pipeline does not write -- it never persists to
-    `raw.fetches`/object storage (unlike `production_topt`'s adapters), which stays a
-    known gap, not a pretended one.
-
-    `raw_ref` includes `adjust` (#939 review Low): without it, two rows for the same
-    (symbol, date) persisted under different adjust policies got an IDENTICAL raw_ref,
-    so the provenance reference alone could not tell which policy a given vintage came
-    from.
-    """
     raw_ref = (
         f"{_RAW_REF_PREFIX}:{record.source}:{record.symbol}:{record.resolution}:{record.date.isoformat()}:{adjust}"
     )
@@ -687,56 +403,40 @@ def _provenance(record: PriceBarRecord, *, adjust: str) -> tuple[datetime, Decim
     return xnys_session_close_utc(record.date), confidence, raw_ref
 
 
+def _insert_market_prices(
+    connection: psycopg.Connection,
+    table: str,
+    records: Sequence[PriceBarRecord],
+    *,
+    adjust: str,
+) -> int:
+    if not records:
+        return 0
+    existing = _latest_vintages(connection, table, records)
+    rows = [
+        (r.symbol, r.date, r.open, r.high, r.low, r.close, r.volume, r.source, adjust, *_provenance(r, adjust=adjust))
+        for r in records
+        if existing.get((r.symbol, r.date, adjust)) != (r.open, r.high, r.low, r.close, r.volume)
+    ]
+    if not rows:
+        return 0
+    query = (
+        f"insert into {table} (symbol, trading_date, open, high, low, close, volume, "
+        "source, adjust, transaction_time, confidence, raw_ref) "
+        "values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);"
+    )
+    with connection.cursor() as cur:
+        cur.executemany(query, rows)
+    return len(rows)
+
+
 def insert_market_prices_daily(
     connection: psycopg.Connection,
     records: Sequence[PriceBarRecord],
     *,
     adjust: str = DEFAULT_ADJUST,
 ) -> int:
-    """Append daily bars to staging.market_prices_daily.
-
-    Never upserts (#938 contract item 1): there is no unique constraint on
-    (symbol, trading_date) to conflict on, so a genuinely changed date is always a new
-    vintage row, and `trg_market_prices_daily_append_only` rejects any UPDATE/DELETE
-    outright. A record identical to the latest known vintage for its (symbol, date, adjust)
-    is skipped (`_latest_vintages`) rather than appended again.
-    """
-    if not records:
-        return 0
-
-    existing = _latest_vintages(connection, "staging.market_prices_daily", records)
-    query = """
-        insert into staging.market_prices_daily (
-            symbol, trading_date, open, high, low, close, volume,
-            source, adjust, transaction_time, confidence, raw_ref
-        ) values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
-    """
-    rows = []
-    for r in records:
-        if existing.get((r.symbol, r.date, adjust)) == (r.open, r.high, r.low, r.close, r.volume):
-            continue
-        transaction_time, confidence, raw_ref = _provenance(r, adjust=adjust)
-        rows.append(
-            (
-                r.symbol,
-                r.date,
-                r.open,
-                r.high,
-                r.low,
-                r.close,
-                r.volume,
-                r.source,
-                adjust,
-                transaction_time,
-                confidence,
-                raw_ref,
-            )
-        )
-    if not rows:
-        return 0
-    with connection.cursor() as cur:
-        cur.executemany(query, rows)
-    return len(rows)
+    return _insert_market_prices(connection, _DAILY_TABLE, records, adjust=adjust)
 
 
 def insert_market_prices_monthly(
@@ -745,43 +445,7 @@ def insert_market_prices_monthly(
     *,
     adjust: str = DEFAULT_ADJUST,
 ) -> int:
-    """Append monthly bars to staging.market_prices_monthly. See `insert_market_prices_daily`."""
-    if not records:
-        return 0
-
-    existing = _latest_vintages(connection, "staging.market_prices_monthly", records)
-    query = """
-        insert into staging.market_prices_monthly (
-            symbol, trading_date, open, high, low, close, volume,
-            source, adjust, transaction_time, confidence, raw_ref
-        ) values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
-    """
-    rows = []
-    for r in records:
-        if existing.get((r.symbol, r.date, adjust)) == (r.open, r.high, r.low, r.close, r.volume):
-            continue
-        transaction_time, confidence, raw_ref = _provenance(r, adjust=adjust)
-        rows.append(
-            (
-                r.symbol,
-                r.date,
-                r.open,
-                r.high,
-                r.low,
-                r.close,
-                r.volume,
-                r.source,
-                adjust,
-                transaction_time,
-                confidence,
-                raw_ref,
-            )
-        )
-    if not rows:
-        return 0
-    with connection.cursor() as cur:
-        cur.executemany(query, rows)
-    return len(rows)
+    return _insert_market_prices(connection, _MONTHLY_TABLE, records, adjust=adjust)
 
 
 @dataclass(frozen=True)
@@ -794,7 +458,6 @@ class IngestionSummary:
     monthly_inserted: int
     daily_records: list[PriceBarRecord]
     monthly_records: list[PriceBarRecord]
-    #: The unadjusted daily series (#1131). Empty when the caller's own series is unadjusted.
     unadjusted_daily_records_count: int = 0
     unadjusted_daily_inserted: int = 0
     unadjusted_daily_records: list[PriceBarRecord] = field(default_factory=list)
@@ -816,28 +479,17 @@ def should_fetch_monthly_series(
     now: datetime,
     adjust: str = DEFAULT_ADJUST,
 ) -> bool:
-    """Return True when the monthly series for ``symbol`` needs a Twelve Data ``1month`` fetch (#1411 K4 D2).
-
-    Monthly bars only change when a month closes. Once ``staging.market_prices_monthly`` already
-    holds a bar for ``(symbol, latest_closed_monthly_session(now), adjust)``, mid-month runs
-    skip the ``1month`` request altogether (0 monthly calls).
-    """
     if connection is None:
         return True
     target_month_end = latest_closed_monthly_session(now)
     try:
         with connection.cursor() as cur:
             cur.execute(
-                """
-                select 1
-                from staging.market_prices_monthly
-                where symbol = %s and trading_date = %s and adjust = %s
-                limit 1
-                """,
+                f"select 1 from {_MONTHLY_TABLE} where symbol = %s and trading_date = %s and adjust = %s limit 1",
                 (symbol, target_month_end, adjust),
             )
             return cur.fetchone() is None
-    except Exception:  # noqa: BLE001 - fall back to fetching when connection is a test stub
+    except Exception:  # noqa: BLE001
         return True
 
 
@@ -850,27 +502,9 @@ def ingest_twelve_data_market_prices(
     now: datetime | None = None,
     adjust: str = DEFAULT_ADJUST,
 ) -> IngestionSummary:
-    """Ingest `symbols` for 3 years daily and 10 years monthly via Twelve Data /time_series.
-
-    Issues 1 call per symbol per series: daily and monthly under `adjust`, plus the daily
-    unadjusted series (`UNADJUSTED`, #1131). That is 3 calls per symbol, 60 for 20 symbols.
-    The unadjusted call is skipped when `adjust` already is `UNADJUSTED`. Every call
-    passes `adjust` explicitly (#938 contract item 4).
-
-    `now` (an instant, not a date) is the single source of truth for "as of when":
-    the lookback-window floor (`min_daily_date`/`min_monthly_date`) and the
-    closed-vs-still-open determination `parse_monthly_bars` makes both derive from it,
-    so they cannot silently disagree about what day it is (#939 follow-up finding: a
-    prior version took a `date` here for the lookback floor and separately let
-    `parse_monthly_bars` default to its own independent `datetime.now(UTC)` call for
-    the closed/open check -- two clocks that only happened to agree because nothing
-    forced them to run microseconds apart).
-    """
     now_instant = now or datetime.now(UTC)
-    as_of_date = now_instant.date()
     min_daily_date = daily_lookback_floor(now_instant, daily_lookback_years)
-    min_monthly_date = as_of_date - timedelta(days=monthly_lookback_years * 365 + 60)
-
+    min_monthly_date = now_instant.date() - timedelta(days=monthly_lookback_years * 365 + 60)
     td_client = client or TwelveDataClient()
 
     all_daily_records: list[PriceBarRecord] = []
@@ -880,32 +514,25 @@ def ingest_twelve_data_market_prices(
     fetch_unadjusted = adjust != UNADJUSTED
 
     for symbol in symbols:
-        # 1 call for daily
         daily_payload = td_client.fetch_time_series(symbol, interval="1day", outputsize=5000, adjust=adjust)
         calls_made += 1
-        daily_bars = parse_daily_bars(symbol, daily_payload, min_date=min_daily_date, now=now_instant)
-        all_daily_records.extend(daily_bars)
+        all_daily_records.extend(parse_daily_bars(symbol, daily_payload, min_date=min_daily_date, now=now_instant))
 
-        # 1 call for the unadjusted daily series (market value, A6)
         if fetch_unadjusted:
-            unadjusted_payload = td_client.fetch_time_series(
-                symbol, interval="1day", outputsize=5000, adjust=UNADJUSTED
-            )
+            unadj_payload = td_client.fetch_time_series(symbol, interval="1day", outputsize=5000, adjust=UNADJUSTED)
             calls_made += 1
             all_unadjusted_daily_records.extend(
-                parse_daily_bars(symbol, unadjusted_payload, min_date=min_daily_date, now=now_instant)
+                parse_daily_bars(symbol, unadj_payload, min_date=min_daily_date, now=now_instant)
             )
 
-        # 1 call for monthly (skipped when the latest closed month is already stored: #1411 K4 D2)
         if should_fetch_monthly_series(connection, symbol, now=now_instant, adjust=adjust):
             monthly_payload = td_client.fetch_time_series(symbol, interval="1month", outputsize=5000, adjust=adjust)
             calls_made += 1
-            monthly_bars = parse_monthly_bars(symbol, monthly_payload, min_date=min_monthly_date, now=now_instant)
-            all_monthly_records.extend(monthly_bars)
+            all_monthly_records.extend(
+                parse_monthly_bars(symbol, monthly_payload, min_date=min_monthly_date, now=now_instant)
+            )
 
-    daily_inserted = 0
-    unadjusted_daily_inserted = 0
-    monthly_inserted = 0
+    daily_inserted = unadjusted_daily_inserted = monthly_inserted = 0
     if connection is not None:
         daily_inserted = insert_market_prices_daily(connection, all_daily_records, adjust=adjust)
         unadjusted_daily_inserted = insert_market_prices_daily(
@@ -929,7 +556,6 @@ def ingest_twelve_data_market_prices(
 
 
 def daily_lookback_floor(now: datetime, years: int = DAILY_LOOKBACK_YEARS) -> date:
-    """The oldest session a daily refresh keeps: `years` years and 30 days before the date of `now`."""
     return now.date() - timedelta(days=years * 365 + 30)
 
 
@@ -940,13 +566,6 @@ def ingest_daily_series(
     connection: psycopg.Connection,
     now: datetime,
 ) -> dict[str, int]:
-    """Fetch both daily series of one symbol and append them (#1277). Return the rows appended per series.
-
-    One request per series in `DAILY_SERIES`, so one credit per series. The function parses both
-    answers before it writes. A vendor error, or a series without a closed bar, writes nothing:
-    one stored series without the other makes the issuer unavailable (`share_basis.split_history`).
-    The rows carry the provenance of every daily bar (`insert_market_prices_daily`).
-    """
     floor = daily_lookback_floor(now)
     bars: dict[str, list[PriceBarRecord]] = {}
     for adjust in DAILY_SERIES:

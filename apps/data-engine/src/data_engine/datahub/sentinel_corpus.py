@@ -1,37 +1,4 @@
-"""Sentinel replay corpus: the recorded staging bytes of every sentinel key (#1416 E7).
-
-Staging fetches the sentinel keys live. CI fetches nothing: it replays the bytes that a staging
-run recorded. This module holds the three parts of that contract:
-
-- the key kinds. One kind is a seat, an endpoint and the entity axis it keys on. The kinds
-  follow the source registrations; a test fails when a registered origin has no kind, and a
-  test drives the deployed adapters to prove each kind's record id;
-- the recorder. It runs inside the staging code server. For each sentinel key it selects the
-  `raw.fetches` row that staging used last, in a read-only transaction, reads the bytes through
-  the object store and checks the digest that `raw.fetches` recorded. It refuses to write a
-  corpus that the validator rejects;
-- the validator. It rejects a corpus that lacks a sentinel key of any registered origin, holds
-  a key that is not a sentinel key, holds bytes that differ from the recorded digest, or holds
-  a key that staging last used more than `MAX_KEY_AGE` ago.
-
-The last use of a row is the newest of three facts: the time its bytes first landed
-(`raw.fetches.fetched_at`), the newest capture vintage that points at it
-(`raw.capture_source_vintages.created_at`), and the newest successful vendor call that returned
-the same bytes (`staging.api_call_ledger`, joined on `payload_sha256` as the gateway documents).
-An unchanged re-fetch collapses onto the existing `raw.fetches` row and its vintage, so only
-the ledger dates it.
-
-Every registered origin is required, whatever the recording environment enables: staging reads
-every source, and CI cannot replay an origin that staging does not fetch.
-
-The sentinel set is not defined here. The recorder reads it from the environment contract, and
-the standing corpus test passes the same set to `validate_corpus`.
-
-Usage. Inside the staging code server (the image ships this module, not the scripts directory):
-    /app/.venv/bin/python -m data_engine.datahub.sentinel_corpus record --tar > corpus.tar
-In a checkout:
-    uv run --package truealpha-data-engine python apps/data-engine/scripts/record_sentinel_corpus.py check <dir>
-"""
+"""Sentinel replay corpus: the recorded staging bytes of every sentinel key (#1416 E7)."""
 
 from __future__ import annotations
 
@@ -63,21 +30,15 @@ from data_engine.datahub.production_topt.source_registrations import (
 )
 
 MANIFEST_NAME = "manifest.v1.json"
-#: The owner's bound (#1416 E7): a recorded staging run refreshes the corpus at least once per quarter.
 MAX_KEY_AGE = timedelta(days=90)
-#: The configured-origin id of a registration's own primary fetch (`configured_origin_sources`).
 PRIMARY = "primary"
-#: The corpus is a recording of this environment, never of production or a laptop.
 RECORDED_ENVIRONMENT = CaptureEnvironment.STAGING.value
 
 EntityAxis = Literal["listing", "issuer"]
-
 _CIK = re.compile(r"^issuer:cik:(\d{10})$")
 
 
 class SentinelRef(Protocol):
-    """The two sentinel facts a key needs. The environment contract's sentinel members have both."""
-
     @property
     def ticker(self) -> str: ...
 
@@ -87,13 +48,6 @@ class SentinelRef(Protocol):
 
 @dataclass(frozen=True)
 class KeyKind:
-    """One family of sentinel fetch keys: the seat, the endpoint and the entity it keys on.
-
-    ``record_prefix`` is the first segment of the `raw.fetches.source_record_id` that the
-    adapter writes: ``chart:<ticker>:<session>`` (Yahoo), ``<origin>:<ticker>:<date>`` (the
-    corroborating origins) and ``companyfacts:CIK<cik>`` (SEC company facts).
-    """
-
     semantic_type: str
     origin: str
     source: DataSource
@@ -109,11 +63,8 @@ class KeyKind:
         return match.group(1)
 
     def record_pattern(self, entity: str) -> str:
-        """The SQL LIKE pattern (escape character ``\\``) of this kind's record ids for ``entity``."""
         escaped = entity.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-        if self.axis == "issuer":
-            return f"{self.record_prefix}:CIK{escaped}"
-        return f"{self.record_prefix}:{escaped}:%"
+        return f"{self.record_prefix}:CIK{escaped}" if self.axis == "issuer" else f"{self.record_prefix}:{escaped}:%"
 
     def matches(self, entity: str, source_record_id: str) -> bool:
         if self.axis == "issuer":
@@ -122,15 +73,11 @@ class KeyKind:
         return source_record_id.startswith(prefix) and len(source_record_id) > len(prefix)
 
 
-#: Every key kind the governed capture fetches per sentinel. `test_sentinel_corpus` proves that
-#: this table and the vendor-seated origins of `REGISTRATIONS` name the same set, and that the
-#: deployed adapters write record ids of these shapes.
 KEY_KINDS: tuple[KeyKind, ...] = (
     KeyKind("market-price", PRIMARY, DataSource.YAHOO, "chart", "listing"),
     KeyKind("market-price", f"{TWELVE_DATA_ORIGIN}:v1", DataSource.TWELVE_DATA, TWELVE_DATA_ORIGIN, "listing"),
     KeyKind("market-price", f"{MOOMOO_KLINE_ORIGIN}:v1", DataSource.MOOMOO, MOOMOO_KLINE_ORIGIN, "listing"),
     KeyKind("financial-fact", PRIMARY, DataSource.SEC, "companyfacts", "issuer"),
-    # moomoo financials key on the symbol, not the issuer (#1411 D5): GOOG and GOOGL are two keys.
     KeyKind("financial-fact", f"{MOOMOO_FINANCIALS_ORIGIN}:v1", DataSource.MOOMOO, MOOMOO_FINANCIALS_ORIGIN, "listing"),
 )
 
@@ -138,11 +85,6 @@ KEY_KINDS: tuple[KeyKind, ...] = (
 def registered_key_origins(
     registrations: Sequence[SourceRegistration] = REGISTRATIONS,
 ) -> frozenset[tuple[str, str]]:
-    """The ``(semantic_type, configured origin)`` pairs that vendor-seated registrations fetch.
-
-    The origin on the registration's own seat is its primary fetch; every other origin is
-    named as `configured_origin_sources` names it (``<origin source>``).
-    """
     pairs: set[tuple[str, str]] = set()
     for registration in registrations:
         if registration.ledger_seat is None:
@@ -156,7 +98,6 @@ def registered_key_origins(
 
 
 def required_origins() -> dict[str, tuple[str, ...]]:
-    """Every registered origin per vendor semantic type: the origins the corpus must hold."""
     origins: dict[str, list[str]] = {}
     for semantic_type, origin in sorted(registered_key_origins()):
         origins.setdefault(semantic_type, []).append(origin)
@@ -164,14 +105,10 @@ def required_origins() -> dict[str, tuple[str, ...]]:
 
 
 def kind_for(semantic_type: str, origin: str) -> KeyKind | None:
-    for kind in KEY_KINDS:
-        if kind.semantic_type == semantic_type and kind.origin == origin:
-            return kind
-    return None
+    return next((k for k in KEY_KINDS if k.semantic_type == semantic_type and k.origin == origin), None)
 
 
 def configured_origins() -> dict[str, tuple[str, ...]]:
-    """The origins this process's environment fetches, per vendor semantic type."""
     return {semantic: tuple(sorted(configured_origin_sources(semantic))) for semantic in required_origins()}
 
 
@@ -188,10 +125,6 @@ class RequiredKey:
 def required_keys(
     sentinels: Sequence[SentinelRef], origins: Mapping[str, Sequence[str]] | None = None
 ) -> tuple[tuple[RequiredKey, KeyKind], ...]:
-    """Every sentinel key of ``origins`` (default: every registered origin), once each.
-
-    GOOG and GOOGL share one CIK, so they share one company-facts key.
-    """
     found: dict[RequiredKey, KeyKind] = {}
     for semantic_type, names in sorted((required_origins() if origins is None else origins).items()):
         for origin in sorted(names):
@@ -201,9 +134,6 @@ def required_keys(
             for sentinel in sentinels:
                 found.setdefault(RequiredKey(semantic_type, origin, kind.entity(sentinel)), kind)
     return tuple(sorted(found.items()))
-
-
-# -- manifest ---------------------------------------------------------------------------------
 
 
 class _Frozen(BaseModel):
@@ -234,7 +164,6 @@ class CorpusManifest(_Frozen):
     environment: str
     release: str = Field(min_length=1)
     recorded_at: AwareDatetime
-    #: What the recording environment enabled, as evidence; the required origins do not come from here.
     configured_origins: dict[str, tuple[str, ...]]
     entries: tuple[CorpusEntry, ...]
 
@@ -247,7 +176,6 @@ def object_path(source: str, payload_sha256: str) -> str:
 
 
 def compress(body: bytes) -> bytes:
-    """Gzip with a zero timestamp, so one body always gives the same file bytes."""
     return gzip.compress(body, compresslevel=9, mtime=0)
 
 
@@ -255,14 +183,7 @@ def _utc_date(moment: datetime) -> date:
     return moment.astimezone(UTC).date()
 
 
-# -- validator --------------------------------------------------------------------------------
-
-
 def validate_corpus(files: Mapping[str, bytes], sentinels: Sequence[SentinelRef], *, today: date) -> list[str]:
-    """Return every reason the corpus fails; an empty list means it passes.
-
-    ``files`` maps a corpus-relative path to its bytes (`read_corpus_dir` gives it for a directory).
-    """
     if not sentinels:
         return ["the sentinel set is empty"]
     if MANIFEST_NAME not in files:
@@ -289,8 +210,9 @@ def validate_corpus(files: Mapping[str, bytes], sentinels: Sequence[SentinelRef]
 
     oldest = today - MAX_KEY_AGE
     for key in sorted(set(by_key) & set(required)):
-        entry, kind = by_key[key], required[key]
-        findings.extend(_entry_findings(entry, kind, files, oldest=oldest, recorded_at=manifest.recorded_at))
+        findings.extend(
+            _entry_findings(by_key[key], required[key], files, oldest=oldest, recorded_at=manifest.recorded_at)
+        )
     return findings
 
 
@@ -329,14 +251,9 @@ def read_corpus_dir(directory: Path) -> dict[str, bytes]:
 
 
 def read_entry_body(files: Mapping[str, bytes], entry: CorpusEntry) -> bytes:
-    """The exact bytes staging fetched for ``entry`` (what a replay test parses)."""
     return gzip.decompress(files[entry.object_path])
 
 
-# -- recorder ---------------------------------------------------------------------------------
-
-# One query per key. The candidates are every row of the key; each gets its last use, and the
-# row staging used last wins. The ledger join is the gateway's documented join key.
 _LAST_USED_FETCH_SQL = """
 with candidates as (
     select id, source, source_record_id, payload_sha256, byte_length, content_type, fetched_at
@@ -382,12 +299,6 @@ def record_corpus(
     release: str,
     recorded_at: datetime,
 ) -> dict[str, bytes]:
-    """Read the bytes staging used last for every sentinel key; return the corpus files.
-
-    ``origins`` is what the recording environment enables (`configured_origins`), kept in the
-    manifest as evidence. Raises `RecordingRefused` when a key has no row, its bytes cannot be
-    read back, or the result fails `validate_corpus`. Nothing is written here.
-    """
     from data_engine import raw_store
 
     if recorded_at.tzinfo is None:
@@ -405,7 +316,7 @@ def record_corpus(
         fetch_id, source, record_id, sha256, byte_length, content_type, fetched_at, last_used_at = row
         try:
             body = raw_store.get_payload(conn, fetch_id, store=store)
-        except Exception as error:  # noqa: BLE001 - every read failure is a named refusal, never a partial corpus
+        except Exception as error:  # noqa: BLE001
             missing.append(f"{key.describe()}: cannot read raw.fetches:{fetch_id} back: {error}")
             continue
         if len(body) != byte_length or hashlib.sha256(body).hexdigest() != sha256:
@@ -446,7 +357,6 @@ def record_corpus(
 
 
 def write_corpus_dir(files: Mapping[str, bytes], directory: Path) -> None:
-    """Write ``files`` into an empty or absent ``directory``; refuse to mix two recordings."""
     if directory.exists() and any(directory.iterdir()):
         raise FileExistsError(f"{directory} is not empty; remove the old recording first")
     for name, content in sorted(files.items()):
@@ -456,7 +366,6 @@ def write_corpus_dir(files: Mapping[str, bytes], directory: Path) -> None:
 
 
 def write_corpus_tar(files: Mapping[str, bytes], stream: io.BufferedIOBase | Any) -> None:
-    """Write ``files`` as an uncompressed tar (the objects are gzip files already)."""
     with tarfile.open(fileobj=stream, mode="w|", format=tarfile.PAX_FORMAT) as archive:
         for name, content in sorted(files.items()):
             info = tarfile.TarInfo(name)
@@ -486,11 +395,9 @@ def _record(args: argparse.Namespace) -> int:
         return 2
     with psycopg.connect(settings.database_url, options="-c default_transaction_read_only=on") as conn:
         conn.execute("set statement_timeout = '60s'")
-        # The database clock: vintage and landing times come from it, so the recording time does too.
         clock = conn.execute("select now()").fetchone()
         if clock is None:
             raise RuntimeError("select now() returned no row")
-        recorded_at = clock[0]
         try:
             files = record_corpus(
                 conn,
@@ -499,7 +406,7 @@ def _record(args: argparse.Namespace) -> int:
                 origins=configured_origins(),
                 environment=environment,
                 release=settings.git_commit_sha,
-                recorded_at=recorded_at,
+                recorded_at=clock[0],
             )
         except RecordingRefused as refused:
             for finding in refused.findings:
@@ -522,7 +429,7 @@ def _check(args: argparse.Namespace) -> int:
 
 
 def main(argv: Iterable[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
     commands = parser.add_subparsers(dest="command", required=True)
     record = commands.add_parser("record", help="record the bytes staging used last for every sentinel key")
     target = record.add_mutually_exclusive_group(required=True)

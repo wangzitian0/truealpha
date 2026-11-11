@@ -1,11 +1,4 @@
-"""Weekly question-coverage report (#748, init.md rule 24).
-
-Expected side: `truealpha_contracts.question_requirements` — per §0 question, the wide-row
-columns that answer it. Observed side: the governed head's factor rows with their §8 status
-dimensions (#747). The report left-joins the two per (question, issuer) and counts
-`answered` / `unavailable:<reason>` / `missing`, where `missing` means no column exists for
-this universe yet — a gap owned by an issue, never folded into "unavailable".
-"""
+"""Weekly question-coverage report (#748, init.md rule 24)."""
 
 from __future__ import annotations
 
@@ -30,21 +23,13 @@ from truealpha_contracts.question_requirements import (
 from truealpha_contracts.universes import key_of_lane, record
 
 GOVERNING_FACTOR = "gross_profit_per_employee"
-#: A column that exists but whose row carries no reason yet (#747 scope 3 pending).
 UNRECORDED_REASON = "unrecorded_reason"
 NO_ROW = "no_row"
+NO_HEAD_SUMMARY = "no governed head"
 
 
 @dataclass(frozen=True)
 class Cell:
-    """One observed (subject, column) value: answered, or unavailable with a reason.
-
-    `subject_id` is an issuer for an `ISSUER`-scoped question and a fund for a `FUND`-scoped
-    one. The field kept its `issuer_id` name until #748 met a question whose subject is not
-    an issuer; the name is now the general one, because a lookup keyed by "issuer" that is
-    handed funds is the mis-join that makes a registry gap look like a data outage.
-    """
-
     subject_id: str
     answered: bool
     reason: str | None = None
@@ -57,30 +42,13 @@ class GovernedHead:
     cutoff: datetime
 
 
-#: What every lane records when a universe of the record has no governed head: a pending verdict with this summary.
-NO_HEAD_SUMMARY = "no governed head"
-
-
 @dataclass(frozen=True)
 class NoHead:
-    """The answer for a known universe whose pointer has not advanced yet. It is no error."""
-
     key: str
     summary: str = NO_HEAD_SUMMARY
 
 
 def declared_environment(connection: Connection[Any]) -> str:
-    """The environment this database declares for itself.
-
-    #756 made `mart.environment_identity` the one authority, written by data-engine at boot
-    from `settings.capture_environment`. Every reader that needs the value by name -- rather
-    than filtering on it in SQL -- takes it from here, so there is one place that knows and
-    no caller can name a literal that disagrees with the rows it is about to read.
-
-    No fallback. A database that has not declared itself cannot be read against an assumed
-    environment; that is how the literal `"production"` came to be written down in six places
-    in the first place, and a silent default would put it back.
-    """
     row = connection.execute("select environment from mart.environment_identity").fetchone()
     if row is None:
         raise RuntimeError(
@@ -91,22 +59,6 @@ def declared_environment(connection: Connection[Any]) -> str:
 
 
 def governed_head(connection: Connection[Any], *, universe_prefix: str) -> GovernedHead | None:
-    """The head this DATABASE governs, for `universe_prefix`.
-
-    #756: the environment is read from `mart.environment_identity`, which data-engine writes
-    at boot from `settings.capture_environment`, and is not a parameter. It used to be one,
-    defaulting to the literal `"production"`, and three callers named that literal explicitly
-    so a change to the default could not reach them. Both readings of the column were then
-    live at once: the migration converted every VIEW to the identity, and these Python readers
-    stayed on the literal.
-
-    On staging that fork was observable. Two lineages sat in `mart.current_pointer_head` for
-    the same universe -- one stamped `production` by the pre-#756 capture and frozen since
-    2026-09-21, one stamped by the identity and advancing. The identity-filtered readers (MCP,
-    the web pages) served the live run while `question_coverage` and `theme_purity` reported
-    `ok: true` on the frozen one, and the head-following sensor never saw an advance, so no
-    head reports were produced for any head this environment now registers.
-    """
     row = connection.execute(
         """
         select h.universe_id, h.target_run_id, min(r.cutoff)
@@ -120,28 +72,15 @@ def governed_head(connection: Connection[Any], *, universe_prefix: str) -> Gover
         """,
         (GOVERNING_FACTOR, universe_prefix + "%"),
     ).fetchone()
-    if row is None:
-        return None
-    return GovernedHead(universe_id=str(row[0]), run_id=str(row[1]), cutoff=row[2])
+    return None if row is None else GovernedHead(universe_id=str(row[0]), run_id=str(row[1]), cutoff=row[2])
 
 
 def governed_head_of(connection: Connection[Any], key: str) -> GovernedHead | NoHead:
-    """The governed head of the universe ``key``, or `NoHead` when its pointer has not advanced.
-
-    A key outside the record raises `UnknownUniverse`: there is no default universe.
-    """
     head = governed_head(connection, universe_prefix=record(key).id_prefix)
     return NoHead(key) if head is None else head
 
 
 def head_report_date(connection: Connection[Any], head: GovernedHead) -> date:
-    """The report date the head's capture resolved its entity ids as of (#1079).
-
-    The capture writes `str(report_date)` as the partition key of every obligation of its run.
-    A lane that resolves the head's ids later takes the date from the head. The current universe
-    may be a later publication, with another date, and a claim can pass between the two dates.
-    Raises when the run has no obligation, several dates, or a key that is not a date.
-    """
     keys = [
         str(key)
         for (key,) in connection.execute(
@@ -159,7 +98,6 @@ def head_report_date(connection: Connection[Any], head: GovernedHead) -> date:
 
 
 def _classify_cell(subject_id: Any, status: Any, reason_codes: Any, value: Any) -> Cell:
-    """Classify one observed cell as answered or unavailable with a deterministic reason."""
     if status == "available" and value is not None:
         return Cell(str(subject_id), True)
     if status == "available" and value is None:
@@ -168,31 +106,20 @@ def _classify_cell(subject_id: Any, status: Any, reason_codes: Any, value: Any) 
     return Cell(str(subject_id), False, str(reason))
 
 
+def _query_standard_cells(connection: Connection[Any], sql: str, run_id: str) -> tuple[Cell, ...]:
+    rows = connection.execute(sql, (run_id,)).fetchall()
+    return tuple(_classify_cell(r[0], r[1], r[2], r[3] if len(r) > 3 else Decimal("1")) for r in rows)
+
+
 def gppe_cells(connection: Connection[Any], run_id: str) -> tuple[Cell, ...]:
     rows = connection.execute(
-        """
-        select issuer_id, availability_status, availability, reason_codes, gppe
-        from mart.topt_gppe_results where run_id = %s order by issuer_id
-        """,
+        "select issuer_id, availability_status, availability, reason_codes, gppe from mart.topt_gppe_results where run_id = %s order by issuer_id",
         (run_id,),
     ).fetchall()
-    cells = []
-    for row in rows:
-        subject_id, availability_status, availability, reason_codes = row[:4]
-        gppe_val = row[4] if len(row) > 4 else Decimal("1")
-        status = availability_status or availability  # rows written before #747 carry only `availability`
-        cells.append(_classify_cell(subject_id, status, reason_codes, gppe_val))
-    return tuple(cells)
+    return tuple(_classify_cell(r[0], r[1] or r[2], r[3], r[4] if len(r) > 4 else Decimal("1")) for r in rows)
 
 
 def peg_cells(connection: Connection[Any], *, run_id: str) -> tuple[Cell, ...]:
-    """PEG from the strategy run the governed head's capture run was evaluated with — never
-    simply the newest run, which could carry a different vintage (Copilot on #779), and
-    never "the run at the head's cutoff" either (#877): a forced tick (#874) shares its
-    cutoff with the scheduled one, so a cutoff can name two strategy runs and the old
-    `order by max(cutoff), executed_at` tied between them. The tick binds its strategy run
-    to its capture run (`mart.strategy_run_capture_bindings`); a head with no binding has
-    no PEG cells, which the report grades `no_row` rather than borrowing another run's."""
     rows = connection.execute(
         """
         with chosen as (
@@ -216,7 +143,6 @@ def peg_cells(connection: Connection[Any], *, run_id: str) -> tuple[Cell, ...]:
         elif availability_status == "excluded" and exclusion_reason:
             cells.append(Cell(str(subject_id), False, f"excluded:{exclusion_reason}"))
         elif peg_reason_codes:
-            # The PEG factor's own refusal name (#837), for an issuer that was evaluated.
             cells.append(Cell(str(subject_id), False, str(peg_reason_codes[0])))
         else:
             cells.append(Cell(str(subject_id), False, UNRECORDED_REASON))
@@ -224,54 +150,24 @@ def peg_cells(connection: Connection[Any], *, run_id: str) -> tuple[Cell, ...]:
 
 
 def fund_cells(connection: Connection[Any], run_id: str) -> tuple[Cell, ...]:
-    """Module 5's consolidation rows for this run — one per FUND, not per issuer (#36).
-
-    The subject is the fund because the question is about the fund. A refused consolidation
-    (coverage below the definition's floors) is `unavailable` with the refusing floor as its
-    reason, which is the same shape every issuer-scoped cell uses.
-    """
-    rows = connection.execute(
-        """
-        select fund_id, availability_status, reason_codes, weighted_valuation_gap
-        from mart.fund_virtual_company where run_id = %s order by fund_id
-        """,
-        (run_id,),
-    ).fetchall()
-    cells = []
-    for row in rows:
-        fund_id, availability_status, reason_codes = row[:3]
-        gap_val = row[3] if len(row) > 3 else Decimal("1")
-        cells.append(_classify_cell(fund_id, availability_status, reason_codes, gap_val))
-    return tuple(cells)
+    return _query_standard_cells(
+        connection,
+        "select fund_id, availability_status, reason_codes, weighted_valuation_gap from mart.fund_virtual_company where run_id = %s order by fund_id",
+        run_id,
+    )
 
 
 def theme_purity_cells(connection: Connection[Any], run_id: str) -> tuple[Cell, ...]:
-    """Module 6's purity rows for this run, collapsed to one cell per ISSUER (#772).
-
-    An issuer has one row per governed theme, and q6 asks whether the issuer's purity is
-    answerable at all — so it is answered when ANY theme produced a share for it. The
-    alternative, counting an issuer unavailable because one of three themes refused, would
-    make adding a theme look like a regression in coverage.
-
-    A refused share reports the refusing reason, the same shape every other cell uses;
-    `below_minimum_classified_share` is the common one and it is the honest answer: the
-    classifier could not judge enough of the issuer's revenue to rank it.
-    """
     rows = connection.execute(
-        """
-        select issuer_id, availability_status, reason_codes, theme_share
-        from mart.issuer_theme_purity where run_id = %s order by issuer_id, theme_id
-        """,
+        "select issuer_id, availability_status, reason_codes, theme_share from mart.issuer_theme_purity where run_id = %s order by issuer_id, theme_id",
         (run_id,),
     ).fetchall()
     answered: dict[str, Cell] = {}
     for row in rows:
-        issuer_id, availability_status, reason_codes = row[:3]
-        share_val = row[3] if len(row) > 3 else Decimal("1")
-        subject = str(issuer_id)
+        subject = str(row[0])
         if answered.get(subject) and answered[subject].answered:
             continue
-        cell = _classify_cell(subject, availability_status, reason_codes, share_val)
+        cell = _classify_cell(subject, row[1], row[2], row[3] if len(row) > 3 else Decimal("1"))
         if cell.answered:
             answered[subject] = cell
         else:
@@ -280,33 +176,23 @@ def theme_purity_cells(connection: Connection[Any], run_id: str) -> tuple[Cell, 
 
 
 def supply_chain_cells(connection: Connection[Any], run_id: str) -> tuple[Cell, ...]:
-    """Module 3's supply-chain exposure rows for this run (#772)."""
-    rows = connection.execute(
-        """
-        select issuer_id, availability_status, reason_codes, exposure_score
-        from mart.issuer_supply_chain_exposure where run_id = %s order by issuer_id
-        """,
-        (run_id,),
-    ).fetchall()
-    return tuple(
-        _classify_cell(issuer_id, availability_status, reason_codes, score)
-        for issuer_id, availability_status, reason_codes, score in rows
+    return _query_standard_cells(
+        connection,
+        "select issuer_id, availability_status, reason_codes, exposure_score from mart.issuer_supply_chain_exposure where run_id = %s order by issuer_id",
+        run_id,
     )
 
 
 def analyst_rating_cells(connection: Connection[Any], run_id: str) -> tuple[Cell, ...]:
-    """Module 4's analyst ratings rows for this run (#771)."""
-    rows = connection.execute(
-        """
-        select issuer_id, availability_status, reason_codes, consensus_rating
-        from mart.issuer_analyst_ratings where run_id = %s order by issuer_id
-        """,
-        (run_id,),
-    ).fetchall()
-    return tuple(
-        _classify_cell(issuer_id, availability_status, reason_codes, rating)
-        for issuer_id, availability_status, reason_codes, rating in rows
+    return _query_standard_cells(
+        connection,
+        "select issuer_id, availability_status, reason_codes, consensus_rating from mart.issuer_analyst_ratings where run_id = %s order by issuer_id",
+        run_id,
     )
+
+
+def _column_key(column: FactorColumn) -> str:
+    return f"{column.table}.{column.column}"
 
 
 def classify_question(
@@ -317,27 +203,12 @@ def classify_question(
     cells_by_column: Mapping[str, Iterable[Cell]],
     funds: Iterable[str] = (),
 ) -> dict[str, Any]:
-    """Left-join the expected SUBJECTS with the observed cells of the question's columns.
-
-    The subject set comes from the requirement's scope: issuers for an `ISSUER` question,
-    funds for a `FUND` one. Before #748 met a fund-scoped question this was always the
-    issuer list, which is why q5 could not be registered at all — its one row would have
-    been looked up under twenty issuer ids and graded `unavailable:no_row` twenty times, a
-    red describing the registry rather than the data.
-
-    `missing` when no column applies to this universe; a subject is `answered` when ANY
-    applicable column answers it; otherwise the first column with a row supplies the
-    reason; `unavailable:no_row` when no column has a row for the subject at all (the join
-    produced nothing — the red-proof case).
-    """
     subjects = funds if requirement.scope is QuestionScope.FUND else issuers
     expected = tuple(dict.fromkeys(subjects))
     columns = [column for column in requirement.columns if column.applies_to(universe_id)]
     entry: dict[str, Any] = {
         "text": QUESTION_TEXT[requirement.question],
         "tracking_issue": requirement.tracking_issue,
-        # Named on the row so a reader never has to infer why q5's denominator is 1 while
-        # q1's is 20 — two different subjects, not a truncated count.
         "scope": requirement.scope.value,
         "denominator": len(expected),
         "column": None,
@@ -364,29 +235,13 @@ def classify_question(
     return entry
 
 
-def _column_key(column: FactorColumn) -> str:
-    return f"{column.table}.{column.column}"
-
-
-def compile_report(
-    connection: Connection[Any],
-    *,
-    universe: str,
-    executed_at: datetime,
-) -> dict[str, Any] | None:
-    """The report for one lane universe, or None when it has no governed head yet."""
+def compile_report(connection: Connection[Any], *, universe: str, executed_at: datetime) -> dict[str, Any] | None:
     key = key_of_lane(universe)
     head = governed_head_of(connection, key)
     if isinstance(head, NoHead):
         return None
     gppe = gppe_cells(connection, head.run_id)
     issuers = [cell.subject_id for cell in gppe]
-    # The fund subjects are whatever module 5 consolidated for THIS run — an empty tuple on
-    # a universe whose tick does not consolidate. q5 is then NOT APPLICABLE there, not
-    # missing: `denominator == 0` with nothing answered, unavailable or missing. `missing`
-    # means "a subject exists and no column covers it", which is a different claim with a
-    # different owner (review on #797). What matters either way is that it does not borrow
-    # another universe's funds to look answered.
     funds_observed = fund_cells(connection, head.run_id)
     funds = [cell.subject_id for cell in funds_observed]
     cells_by_column = {
@@ -400,14 +255,10 @@ def compile_report(
         "mart.issuer_theme_purity.theme_share": theme_purity_cells(connection, head.run_id),
     }
     questions = {
-        requirement.question.value: classify_question(
-            requirement,
-            universe_id=head.universe_id,
-            issuers=issuers,
-            funds=funds,
-            cells_by_column=cells_by_column,
+        req.question.value: classify_question(
+            req, universe_id=head.universe_id, issuers=issuers, funds=funds, cells_by_column=cells_by_column
         )
-        for requirement in QUESTION_REQUIREMENTS
+        for req in QUESTION_REQUIREMENTS
     }
     return {
         "universe": universe,
@@ -445,38 +296,20 @@ def persist(connection: Connection[Any], report: Mapping[str, Any]) -> str:
     return report_id
 
 
-def stored_report_run(connection: Connection[Any], universe_id: str) -> str | None:
-    """The run the newest stored report for `universe_id` describes: what `/admin/datahub`
-    serves for that universe (`datahub-stats.ts` `QUESTION_COVERAGE_SQL` picks the newest row
-    per universe id by `created_at`).
-
-    A head whose run this names has its reports: the coverage op runs after the purity op in
-    every job that writes either, so a stored report for the head means purity ran for it too.
-    """
+def _newest_run_in(connection: Connection[Any], table: str, universe_id: str) -> str | None:
     row = connection.execute(
-        """
-        select run_id from mart.question_coverage_report
-        where universe_id = %s
-        order by created_at desc
-        limit 1
-        """,
+        f"select run_id from {table} where universe_id = %s order by created_at desc limit 1",  # noqa: S608
         (universe_id,),
     ).fetchone()
     return str(row[0]) if row else None
+
+
+def stored_report_run(connection: Connection[Any], universe_id: str) -> str | None:
+    return _newest_run_in(connection, "mart.question_coverage_report", universe_id)
 
 
 def stored_confidence_report_run(connection: Connection[Any], universe_id: str) -> str | None:
-    """Return the run_id of the newest stored confidence report for `universe_id`."""
-    row = connection.execute(
-        """
-        select run_id from mart.datahub_confidence_report
-        where universe_id = %s
-        order by created_at desc
-        limit 1
-        """,
-        (universe_id,),
-    ).fetchone()
-    return str(row[0]) if row else None
+    return _newest_run_in(connection, "mart.datahub_confidence_report", universe_id)
 
 
 _DEFAULT_STORED_REPORT_RUN = stored_report_run
@@ -484,7 +317,6 @@ _DEFAULT_STORED_CONFIDENCE_REPORT_RUN = stored_confidence_report_run
 
 
 def reports_current_for_head(connection: Connection[Any], head: GovernedHead) -> bool:
-    """Return True when both coverage and confidence reports are stored for `head.run_id`."""
     if stored_report_run(connection, head.universe_id) != head.run_id:
         return False
     if (
@@ -497,7 +329,6 @@ def reports_current_for_head(connection: Connection[Any], head: GovernedHead) ->
 
 
 def _is_applicable_question(entry: Mapping[str, Any]) -> bool:
-    """Return True when the question applies to the universe and has at least one subject."""
     denominator = int(entry.get("denominator", 0))
     if denominator <= 0:
         return False
@@ -507,7 +338,6 @@ def _is_applicable_question(entry: Mapping[str, Any]) -> bool:
 
 
 def coverage_verdict_failure(report: Mapping[str, Any]) -> str | None:
-    """Return a public verdict summary when any applicable question has zero answered subjects."""
     questions = report.get("questions")
     if not isinstance(questions, Mapping):
         return None
@@ -516,9 +346,7 @@ def coverage_verdict_failure(report: Mapping[str, Any]) -> str | None:
         for question, entry in questions.items()
         if isinstance(entry, Mapping) and _is_applicable_question(entry) and int(entry.get("answered", 0)) == 0
     ]
-    if not zero_questions:
-        return None
-    return f"zero answered for {', '.join(zero_questions)} on {report['universe_id']}"
+    return f"zero answered for {', '.join(zero_questions)} on {report['universe_id']}" if zero_questions else None
 
 
 def summary_line(report: Mapping[str, Any]) -> str:

@@ -1,35 +1,4 @@
-"""The standard→wide-row loop's slow plane (#735 / #733): a weekly backfill of each
-registered standard's open cells over each universe, and the same run in probe mode as
-the data-source research instrument — and the head reports (module 6 and the coverage
-report for the governed head, #855), which follow the pointer rather than the clock.
-
-Two sensors close the gaps a fixed schedule leaves:
-
-- `head_reports_on_pointer_advance` launches the head reports for a universe when its
-  governed pointer advances. The 23:30 schedule it replaces read the previous QQQ head on
-  2026-09-16, because that night's QQQ tick ran until 23:55 (the moomoo origins had made it
-  ~20 minutes slower), and the 00:15 proof went red on a report one head behind.
-- `standard_backfill_catchup` backfills a registered standard that has never been backfilled
-  over a universe in this environment, instead of leaving it to the next Sunday. Production
-  had no segment facts on 2026-09-17 for exactly this reason: both of its Sunday runs
-  predated the release that made the weekly run cover every standard (#806), and the release
-  that did reached production on a Tuesday.
-
-The history run (#1137, `standard_history_backfill_pipeline`) runs the `employees_total`
-backfill at each month-end cutoff of the last N months, so the backtest finds headcount at
-a historical cutoff. Its schedule fires on Monday 09:07 UTC. A manual replay is a Dagster
-launch of the same job (launchpad or GraphQL) with an explicit config::
-
-    {"ops": {"run_standard_history": {"config": {
-        "executed_at": "2026-10-12T09:07:00+00:00", "universe": "topt",
-        "standard": "employees_total", "months": 36}}}}
-
-`staging.pipeline_trigger_requests` cannot carry it: its CHECK admits three capture job names.
-
-Theme purity and the coverage report record their verdict per universe in
-`mart.nightly_verdicts` (#876 W1) from whichever job ran them; the daily fallback keeps both
-fresh, and the delivery report shows a red, stale or missing one. `NIGHTLY_VERDICTS` below
-names what this lane records."""
+"""Standards slow plane, weekly backfill, history backfill, and pointer-following head reports (#735 / #855)."""
 
 import json
 from collections.abc import Mapping
@@ -50,7 +19,7 @@ from data_engine.datahub.canonical_issuer import (
     canonicalize_universe,
     is_canonical_issuer_id,
 )
-from data_engine.datahub.standards import supply_chain_extraction
+from data_engine.datahub.standards import planner, supply_chain_extraction
 from data_engine.datahub.standards.backfill import never_backfilled
 from data_engine.datahub.standards.backfill import run_standard_backfill as _run_standard_backfill
 from data_engine.datahub.standards.history import raise_if_every_attempt_failed
@@ -62,23 +31,13 @@ from data_engine.quality.nightly_verdicts import check_name, is_registered, newe
 from data_engine.sources import gateway
 
 STANDARD_BACKFILL_JOB_NAME = "standard_backfill_pipeline"
-# Sunday 09:07 UTC: after Saturday's universe refresh has published any membership
-# change, well clear of every capture window. Weekly matches the cadence of the
-# disclosures it fills (annual filings); the planner makes a quiet week cost nothing
-# because a closed cell is never re-fetched.
 STANDARD_BACKFILL_CRON = "7 9 * * 0"
-#: The backfill and the head reports run for the universes that the process environment schedules. The
-#: contract lists them (staging runs TOPT only): `scheduled_universe_names()` gives them at the tick.
 
 STANDARD_HISTORY_JOB_NAME = "standard_history_backfill_pipeline"
-# Monday 09:07 UTC: the day after the weekly backfill. The two runs never share one SEC rate window.
 STANDARD_HISTORY_CRON = "7 9 * * 1"
-# The backtest reads the universe that holds the strategy role (A6, decision 6).
 STANDARD_HISTORY_MONTHS = 36
-# The standards whose history the backtest reads. A standard joins after its own review.
 STANDARDS_WITH_HISTORY: tuple[str, ...] = ("employees_total",)
 
-#: Verdict names (`mart.nightly_verdicts.check_name`) this lane records, per universe.
 THEME_PURITY_VERDICT = "theme_purity"
 QUESTION_COVERAGE_VERDICT = "question_coverage"
 NIGHTLY_VERDICTS: tuple[str, ...] = tuple(
@@ -88,19 +47,12 @@ NIGHTLY_VERDICTS: tuple[str, ...] = tuple(
 )
 
 NPORT_MONTHLY_SCHEDULE_NAME = "nport_monthly_schedule"
-# Monthly 1st at 11:07 UTC: staggered outside all weekend and daily capture windows (#67).
 NPORT_MONTHLY_CRON = "7 11 1 * *"
-
 THIRTEENF_QUARTERLY_SCHEDULE_NAME = "13f_quarterly_schedule"
-# Quarterly (Jan/Apr/Jul/Oct 15th at 12:07 UTC): staggered after 45-day 13F filing deadlines (#67).
 THIRTEENF_QUARTERLY_CRON = "7 12 15 1,4,7,10 *"
-
 FORM4_DAILY_SCHEDULE_NAME = "form4_daily_schedule"
-# Daily at 13:07 UTC: staggered midday UTC window, clear of market-close capture and 09:07 backfills (#67).
 FORM4_DAILY_CRON = "7 13 * * *"
-
 TENK_ANNUAL_SCHEDULE_NAME = "10k_annual_schedule"
-# Weekly Sunday at 14:07 UTC: staggered 5 hours after the 09:07 UTC weekly backfill (#67).
 TENK_ANNUAL_CRON = "7 14 * * 0"
 
 STANDARDS_PLANE_CRONS: Mapping[str, str] = {
@@ -109,11 +61,30 @@ STANDARDS_PLANE_CRONS: Mapping[str, str] = {
     FORM4_DAILY_SCHEDULE_NAME: FORM4_DAILY_CRON,
     TENK_ANNUAL_SCHEDULE_NAME: TENK_ANNUAL_CRON,
 }
-# The 4 staggered Standards Plane schedules stay STOPPED until dedicated per-form standard
-# implementations exist in ALL_STANDARDS (otherwise form4_daily_schedule re-runs the weekly
-# 10-K backfill and LLM extraction every day, and nport_monthly_schedule duplicates
-# universe_refresh_schedule). Operators can still launch the underlying jobs manually.
 STANDARDS_PLANE_SCHEDULE_STATUS = dg.DefaultScheduleStatus.STOPPED
+
+UNIVERSE_TAG = "truealpha/universe"
+HEAD_RUN_TAG = "truealpha/head_run"
+
+REPORTS_CURRENT = "reports_current"
+LANE_FAILURE = "lane_failure"
+UNMAPPED_ISSUERS = "unmapped_issuers"
+UNMAPPED_BY_REASON = "unmapped_by_reason"
+JOINED_ISSUERS = "joined_issuers"
+WIDE_ROW_ISSUERS = "wide_row_issuers"
+VERDICT_TEXT = "verdict_text"
+VERDICT_FAILURE = "verdict_failure"
+MAX_UNMAPPED_LOGGED = 20
+
+STANDARD_BACKFILL_CATCHUP_SENSOR_NAME = "standard_backfill_catchup"
+STANDARD_BACKFILL_CATCHUP_INTERVAL_SECONDS = 900
+
+HEAD_REPORTS_JOB_NAME = "head_reports_pipeline"
+HEAD_REPORTS_SENSOR_NAME = "head_reports_on_pointer_advance"
+HEAD_REPORTS_SENSOR_INTERVAL_SECONDS = 30
+HEAD_REPORTS_CRON = "0 4 * * *"
+
+_DOWNSTREAM_OPS = ("run_theme_purity", "run_supply_chain_exposure", "run_analyst_ratings", "run_question_coverage")
 
 __all__ = (
     "FORM4_DAILY_CRON",
@@ -153,52 +124,25 @@ __all__ = (
 
 
 class StandardBackfillConfig(dg.Config):
-    """`executed_at` is the cutoff (tick time, ISO 8601), never the wall clock. `mode`
-    is `backfill` (land cited facts) or `probe` (report only — the source-research
-    instrument). `max_issuers` bounds a manual run; 0 means every open cell."""
-
     executed_at: str
     universe: str = lane_name(universe_with_role("fund_consolidation"))
-    #: Empty runs EVERY registered standard, which is what the schedule does. A name here
-    #: bounds a manual run to one metric.
-    #:
-    #: This used to default to `"employees_total"`, so the weekly schedule — which passes no
-    #: standard — ran exactly one metric. `segment_revenue` was registered with a plane and an
-    #: adapter (#804/#805) and was never invoked by anything deployed: the loop was
-    #: generalized (#799/#800) while the last enumerated metric list in the repository sat
-    #: here, one name long. init.md rule 22 is that the registry is the list; a default that
-    #: names a metric is that list wearing a different hat.
     standard: str = ""
     mode: str = "backfill"
     max_issuers: int = 0
 
 
 class StandardHistoryConfig(dg.Config):
-    """`executed_at` is the tick (ISO 8601, timezone-aware), never the wall clock. The month-end
-    cutoffs derive from it. `standard` empty runs every standard in `STANDARDS_WITH_HISTORY`.
-    The history run has no probe mode: a probe records no model answer, so each cutoff would
-    ask the provider again."""
-
     executed_at: str
     universe: str = lane_name(universe_with_role("strategy"))
     standard: str = ""
     months: int = STANDARD_HISTORY_MONTHS
 
 
-#: Tags on the runs this lane's schedules and sensors launch: the universe the run writes
-#: reports for, and — for a run launched on a pointer advance — the head it follows. What the
-#: nightly surface proof waits on is read from the run's CONFIG (`run_universe`), so a run an
-#: operator launched by hand, untagged, is waited on too.
-UNIVERSE_TAG = "truealpha/universe"
-HEAD_RUN_TAG = "truealpha/head_run"
+class HeadReportsStartConfig(StandardBackfillConfig):
+    only_if_stale: bool = False
 
 
 def run_universe(run_config: Mapping[str, Any]) -> str:
-    """The universe a run of this lane's jobs writes reports for, from its run config.
-
-    Every op of a run is configured with the same universe (the schedules and sensors build
-    them so); an op left unconfigured takes the config's own default, as the run itself does.
-    """
     for op in (run_config.get("ops") or {}).values():
         universe = ((op or {}).get("config") or {}).get("universe")
         if universe:
@@ -207,11 +151,6 @@ def run_universe(run_config: Mapping[str, Any]) -> str:
 
 
 def standards_to_run(selected: str) -> tuple[str, ...]:
-    """Which standards one run covers: the named one, or every registered one.
-
-    Sorted so a run's order is a property of the registry rather than of dict insertion —
-    two runs of the same week do the same thing in the same order.
-    """
     if selected:
         if selected not in STANDARDS:
             raise ValueError(f"unknown standard {selected!r}; registered: {sorted(STANDARDS)}")
@@ -220,10 +159,121 @@ def standards_to_run(selected: str) -> tuple[str, ...]:
 
 
 def history_standards(selected: str) -> tuple[str, ...]:
-    """Which standards one history run covers: the named one, or every standard with a history run."""
-    if selected:
-        return standards_to_run(selected)
-    return STANDARDS_WITH_HISTORY
+    return standards_to_run(selected) if selected else STANDARDS_WITH_HISTORY
+
+
+def _downstream_ops_config(executed_at: str, universe: str) -> dict[str, StandardBackfillConfig]:
+    cfg = StandardBackfillConfig(executed_at=executed_at, universe=universe)
+    return dict.fromkeys(_DOWNSTREAM_OPS, cfg)
+
+
+def _universe_tickers(connection: Any, universe: str, *, use_planner: bool = False) -> dict[str, str]:
+    fn = planner.universe_issuers if use_planner else universe_issuers
+    return {issuer.issuer_id: issuer.ticker for issuer in fn(connection, universe)}
+
+
+def _json_dict(raw: str) -> dict[str, Any]:
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _upstream_failure(summary: str) -> tuple[str | None, str | None]:
+    parsed = _json_dict(summary)
+    return parsed.get(LANE_FAILURE), parsed.get(VERDICT_TEXT)
+
+
+def reports_current(upstream_summary: str) -> str | None:
+    val = _json_dict(upstream_summary).get(REPORTS_CURRENT)
+    return str(val) if val else None
+
+
+def _current_passthrough(universe: str, run_id: str) -> str:
+    return json.dumps({"universe": universe, "run_id": run_id, REPORTS_CURRENT: run_id})
+
+
+def _no_head_response(context: dg.OpExecutionContext, universe: str, label: str) -> str:
+    context.log.warning("no governed head for %s; no %s", universe, label)
+    return json.dumps({"universe": universe, "rows": 0, "reason": "no_governed_head"})
+
+
+def _already_current(context: dg.OpExecutionContext, check: str, config: StandardBackfillConfig, run_id: str) -> str:
+    name = check_name(check, config.universe)
+    if is_registered(name, NIGHTLY_VERDICTS) and newest_is_red(name):
+        context.log.info("%s: the newest verdict is red; no green row written over it", name)
+    else:
+        with verdict(
+            name, registered=NIGHTLY_VERDICTS, run_id=context.run_id, tick=tick_from_config(config.executed_at)
+        ) as outcome:
+            outcome.summary = f"reports already current on {run_id[:24]}; nothing recomputed"
+        context.log.info("%s for %s: %s", check, config.universe, outcome.summary)
+    return _current_passthrough(config.universe, run_id)
+
+
+def _report_unmapped(context: dg.OpExecutionContext, lane: str, universe: CanonicalUniverse) -> None:
+    for member in universe.unmapped[:MAX_UNMAPPED_LOGGED]:
+        detail = f" ({member.detail})" if member.detail else ""
+        context.log.warning(
+            "%s: no row for %s (%s): %s%s", lane, member.ticker, member.legacy_id, member.reason, detail
+        )
+    if len(universe.unmapped) > MAX_UNMAPPED_LOGGED:
+        context.log.warning(
+            "%s: %s more issuers get no row, not named here", lane, len(universe.unmapped) - MAX_UNMAPPED_LOGGED
+        )
+    for issuer in universe.unvisited[:MAX_UNMAPPED_LOGGED]:
+        context.log.warning("%s: unavailable row for %s (%s): %s", lane, issuer.ticker, issuer.legacy_id, issuer.reason)
+    if len(universe.unvisited) > MAX_UNMAPPED_LOGGED:
+        context.log.warning(
+            "%s: %s more issuers get an unavailable row, not named here",
+            lane,
+            len(universe.unvisited) - MAX_UNMAPPED_LOGGED,
+        )
+    failure = universe.lane_failure()
+    if failure is not None:
+        context.log.error("%s: %s", lane, failure)
+
+
+def _canonical_universe(
+    context: dg.OpExecutionContext,
+    lane: str,
+    connection: Any,
+    head: question_coverage.GovernedHead,
+    tickers: Mapping[str, str],
+) -> CanonicalUniverse:
+    wide = {cell.subject_id for cell in question_coverage.gppe_cells(connection, head.run_id)}
+    if not all(is_canonical_issuer_id(issuer_id) for issuer_id in wide):
+        raise ValueError(f"the wide row of {head.run_id} holds an issuer id that is not a canonical UUID")
+    resolved = CanonicalUniverse(issuers=())
+    if tickers:
+        resolved = canonicalize_universe(
+            connection,
+            tickers,
+            cutoff=head.cutoff,
+            as_of=question_coverage.head_report_date(connection, head),
+            wide_row_ids=wide,
+        )
+    resolved = account_for_head_members(connection, resolved, cutoff=head.cutoff, wide_row_ids=wide)
+    _report_unmapped(context, lane, resolved)
+    return resolved
+
+
+def _canonical_universe_or_failure(
+    context: dg.OpExecutionContext,
+    lane: str,
+    connection: Any,
+    head: question_coverage.GovernedHead,
+    tickers: Mapping[str, str],
+) -> tuple[CanonicalUniverse | None, str | None]:
+    try:
+        return _canonical_universe(context, lane, connection, head, tickers), None
+    except (ValueError, psycopg.Error) as error:
+        connection.rollback()
+        context.log.error("%s: canonicalization failed: %s: %s", lane, type(error).__name__, error)
+        return None, f"canonicalization failed: {type(error).__name__}"
 
 
 @external_op
@@ -257,194 +307,15 @@ def run_standard_backfill(context: dg.OpExecutionContext, config: StandardBackfi
     return json.dumps(summaries, sort_keys=True)
 
 
-#: The key a head-reports start op sets, to the head's run id, when the fallback finds that
-#: head's reports already written; the ops after it pass it on and recompute nothing.
-REPORTS_CURRENT = "reports_current"
-
-#: The key the analyst ratings op sets, to the failure message, when every ticker of the run
-#: ended in a fetch error. `fail_if_a_lane_failed` raises it after the coverage report.
-LANE_FAILURE = "lane_failure"
-
-#: The key the supply chain and analyst ops set, to the count of members with no row (#1079).
-#: A member has no row when it has no entity or its entity is not in the wide row.
-#: It has none either when another member names the same issuer.
-UNMAPPED_ISSUERS = "unmapped_issuers"
-
-#: The key those ops set, to the count of unmapped members per reason.
-UNMAPPED_BY_REASON = "unmapped_by_reason"
-
-#: The key those ops set, to the wide-row issuers that joined a member.
-JOINED_ISSUERS = "joined_issuers"
-
-#: The key those ops set, to the count of issuers in the head's wide row.
-WIDE_ROW_ISSUERS = "wide_row_issuers"
-
-#: The key those ops set, to the verdict text of a failure that is not a fetch failure.
-#: The text holds counts or an error type only, because the verdict is public.
-VERDICT_TEXT = "verdict_text"
-
-#: The key the coverage op sets when an applicable question has zero answered subjects (#1643).
-VERDICT_FAILURE = "verdict_failure"
-
-#: The most issuers one op names in its log per list. A later one is counted in the summary only.
-MAX_UNMAPPED_LOGGED = 20
-
-
-def _report_unmapped(context: dg.OpExecutionContext, lane: str, universe: CanonicalUniverse) -> None:
-    """Log each member that gets no row and each wide-row issuer that gets an unavailable row (#1079).
-
-    A row needs the wide row's issuer id, and a legacy id is not that. A member without one is
-    named here and counted by the caller. It is not written under its legacy id.
-    """
-    for member in universe.unmapped[:MAX_UNMAPPED_LOGGED]:
-        detail = f" ({member.detail})" if member.detail else ""
-        context.log.warning(
-            "%s: no row for %s (%s): %s%s", lane, member.ticker, member.legacy_id, member.reason, detail
-        )
-    if len(universe.unmapped) > MAX_UNMAPPED_LOGGED:
-        context.log.warning(
-            "%s: %s more issuers get no row, not named here", lane, len(universe.unmapped) - MAX_UNMAPPED_LOGGED
-        )
-    for issuer in universe.unvisited[:MAX_UNMAPPED_LOGGED]:
-        context.log.warning("%s: unavailable row for %s (%s): %s", lane, issuer.ticker, issuer.legacy_id, issuer.reason)
-    if len(universe.unvisited) > MAX_UNMAPPED_LOGGED:
-        context.log.warning(
-            "%s: %s more issuers get an unavailable row, not named here",
-            lane,
-            len(universe.unvisited) - MAX_UNMAPPED_LOGGED,
-        )
-    failure = universe.lane_failure()
-    if failure is not None:
-        context.log.error("%s: %s", lane, failure)
-
-
-def _canonical_universe(
-    context: dg.OpExecutionContext,
-    lane: str,
-    connection: Any,
-    head: question_coverage.GovernedHead,
-    tickers: Mapping[str, str],
-) -> CanonicalUniverse:
-    """The members that get a row under their wide-row ids, and every issuer that does not (#1079).
-
-    `gppe_cells` is the subject set the coverage reader joins to. Every issuer of it is
-    accounted for: written, or unmapped with a reason.
-    The ids resolve as capture resolved them. The date is the report date of the head's own run.
-    `known_at` is the head's cutoff. The current universe supplies the members.
-    It may be a later publication with another date.
-    """
-    wide = {cell.subject_id for cell in question_coverage.gppe_cells(connection, head.run_id)}
-    # `issuer_id` of the wide row is plain text. A row is written under it, so it must be canonical.
-    if not all(is_canonical_issuer_id(issuer_id) for issuer_id in wide):
-        raise ValueError(f"the wide row of {head.run_id} holds an issuer id that is not a canonical UUID")
-    resolved = CanonicalUniverse(issuers=())
-    if tickers:
-        resolved = canonicalize_universe(
-            connection,
-            tickers,
-            cutoff=head.cutoff,
-            as_of=question_coverage.head_report_date(connection, head),
-            wide_row_ids=wide,
-        )
-    resolved = account_for_head_members(connection, resolved, cutoff=head.cutoff, wide_row_ids=wide)
-    _report_unmapped(context, lane, resolved)
-    return resolved
-
-
-def _canonical_universe_or_failure(
-    context: dg.OpExecutionContext,
-    lane: str,
-    connection: Any,
-    head: question_coverage.GovernedHead,
-    tickers: Mapping[str, str],
-) -> tuple[CanonicalUniverse | None, str | None]:
-    """The canonical universe, or None and a failure text when the ids cannot be resolved.
-
-    An identity error must not stop the coverage op that measures the lane. The error type goes
-    to the summary and the verdict. The message goes to the log only, because it can name a host.
-    A failed statement leaves the transaction aborted, so the connection rolls back first.
-    """
-    try:
-        return _canonical_universe(context, lane, connection, head, tickers), None
-    except (ValueError, psycopg.Error) as error:
-        connection.rollback()
-        context.log.error("%s: canonicalization failed: %s: %s", lane, type(error).__name__, error)
-        return None, f"canonicalization failed: {type(error).__name__}"
-
-
-def _upstream_failure(summary: str) -> tuple[str | None, str | None]:
-    """The lane failure and the verdict text that an upstream op put in its summary."""
-    try:
-        parsed = json.loads(summary)
-    except ValueError:
-        return None, None
-    if not isinstance(parsed, dict):
-        return None, None
-    return parsed.get(LANE_FAILURE), parsed.get(VERDICT_TEXT)
-
-
-def reports_current(upstream_summary: str) -> str | None:
-    """The head an upstream op found already reported, or None. The weekly backfill's summary
-    is a JSON list and never says so; only the head-reports start op's object can."""
-    try:
-        parsed = json.loads(upstream_summary)
-    except ValueError:
-        return None
-    if isinstance(parsed, dict) and parsed.get(REPORTS_CURRENT):
-        return str(parsed[REPORTS_CURRENT])
-    return None
-
-
-def _already_current(context: dg.OpExecutionContext, check: str, config: StandardBackfillConfig, run_id: str) -> str:
-    """A fallback run over a head whose reports exist: a green verdict that says so, and
-    nothing recomputed or appended. The verdict is still written, because the fallback is what
-    keeps the check fresh on a day the pointer does not move.
-
-    A red newest verdict stays red. The health endpoint reads the newest row, so a green row
-    here would hide a failed run. Only a run that does the work writes green again."""
-    name = check_name(check, config.universe)
-    if is_registered(name, NIGHTLY_VERDICTS) and newest_is_red(name):
-        context.log.info("%s: the newest verdict is red; no green row written over it", name)
-    else:
-        with verdict(
-            name,
-            registered=NIGHTLY_VERDICTS,
-            run_id=context.run_id,
-            tick=tick_from_config(config.executed_at),
-        ) as outcome:
-            outcome.summary = f"reports already current on {run_id[:24]}; nothing recomputed"
-        context.log.info("%s for %s: %s", check, config.universe, outcome.summary)
-    return json.dumps({"universe": config.universe, "run_id": run_id, REPORTS_CURRENT: run_id})
-
-
 @external_op
 def run_theme_purity(context: dg.OpExecutionContext, config: StandardBackfillConfig, backfill_summary: str) -> str:
-    """#772 (init.md §7 module 6): the theme-purity rows for this week's governed head.
-
-    Sequenced after the backfill because it consumes what the backfill landed — the accepted
-    segment partitions — and before the coverage report, which counts the column this writes.
-    A run with no governed head writes nothing and says so; that is the honest state for a
-    universe whose pointer has not advanced yet, not an error.
-
-    Model spend is bounded by replay, not by a limit: the classification is keyed on
-    (issuer, filing, theme), so the first week asks and every later week that sees the same
-    filings replays (§9). A restated segment set is a new filing and is asked afresh, which
-    is the behaviour you want.
-    """
-    from data_engine.datahub.production_topt.theme_purity import (
-        materialize_theme_purity,
-        summary_line,
-    )
+    from data_engine.datahub.production_topt.theme_purity import materialize_theme_purity, summary_line
     from data_engine.datahub.question_coverage import NoHead, governed_head_of
 
     context.log.info("theme purity follows backfill: %s", backfill_summary[:200])
     current = reports_current(backfill_summary)
     if current is not None:
         return _already_current(context, THEME_PURITY_VERDICT, config, current)
-    # The cutoff is the governed HEAD's, not `config.executed_at`: these rows describe the
-    # run the App serves, so the partitions they consume must be the ones knowable at that
-    # run's cutoff. Selecting at the schedule time instead would let a filing that landed
-    # after the head was published change a row attributed to it.
     with (
         verdict(
             check_name(THEME_PURITY_VERDICT, config.universe),
@@ -454,34 +325,19 @@ def run_theme_purity(context: dg.OpExecutionContext, config: StandardBackfillCon
         ) as outcome,
         psycopg.connect(settings.database_url) as connection,
     ):
-        # #826 pinned the literal here because `settings.app_env` found no head on staging:
-        # the column held the capture TIER, which staging's real-vendor capture stamps
-        # `production`. #756 then made the column the DATABASE's declared identity and
-        # converted every view, leaving this literal reading a lineage that stopped advancing
-        # the day that migration landed. `governed_head` now resolves the identity itself, so
-        # there is no environment to name and no second reading to drift back to.
         head = governed_head_of(connection, key_of_lane(config.universe))
         if isinstance(head, NoHead):
-            context.log.warning("no governed head for %s; no theme purity rows", config.universe)
             outcome.pending = True
             outcome.summary = head.summary
-            return json.dumps({"universe": config.universe, "rows": 0, "reason": "no_governed_head"})
-        # The classifier is told which issuer it is judging (#849): the ticker, from the same
-        # universe corpus the backfill labels its own asks with.
-        tickers = {issuer.issuer_id: issuer.ticker for issuer in universe_issuers(connection, config.universe)}
-        rows = materialize_theme_purity(connection, run_id=head.run_id, cutoff=head.cutoff, tickers=tickers)
+            return _no_head_response(context, config.universe, "theme purity rows")
+        rows = materialize_theme_purity(
+            connection, run_id=head.run_id, cutoff=head.cutoff, tickers=_universe_tickers(connection, config.universe)
+        )
         connection.commit()
         published = sum(1 for row in rows if row.result.value is not None)
-        # Counts only: the purity values themselves are research output, and this line is public.
-        # A row is one (issuer, theme) judgement, so the count is of rows, not issuers.
         outcome.summary = f"{published}/{len(rows)} theme-purity rows published on {head.run_id[:24]}"
     context.log.info(summary_line(rows))
-    summary: dict[str, Any] = {
-        "universe": config.universe,
-        "run_id": head.run_id,
-        "rows": len(rows),
-        "published": published,
-    }
+    summary = {"universe": config.universe, "run_id": head.run_id, "rows": len(rows), "published": published}
     context.add_output_metadata(summary)
     return json.dumps(summary)
 
@@ -490,30 +346,24 @@ def run_theme_purity(context: dg.OpExecutionContext, config: StandardBackfillCon
 def run_supply_chain_exposure(
     context: dg.OpExecutionContext, config: StandardBackfillConfig, purity_summary: str
 ) -> str:
-    """#772 (init.md §7 module 3): supply-chain exposure rows for this week's governed head.
-
-    Sequenced after theme purity and before analyst ratings and question coverage.
-    """
     from data_engine.datahub.question_coverage import NoHead, governed_head_of
-    from data_engine.datahub.standards.planner import universe_issuers
-    from data_engine.datahub.standards.supply_chain_extraction import (
-        materialize_universe_supply_chain_exposure,
-    )
+    from data_engine.datahub.standards.supply_chain_extraction import materialize_universe_supply_chain_exposure
 
     context.log.info("supply chain exposure follows theme purity: %s", purity_summary[:200])
     current = reports_current(purity_summary)
     if current is not None:
-        return json.dumps({"universe": config.universe, "run_id": current, REPORTS_CURRENT: current})
+        return _current_passthrough(config.universe, current)
 
     with gateway.capacity_scope(), psycopg.connect(settings.database_url) as connection:
         head = governed_head_of(connection, key_of_lane(config.universe))
         if isinstance(head, NoHead):
-            context.log.warning("no governed head for %s; no supply chain exposure rows", config.universe)
-            return json.dumps({"universe": config.universe, "rows": 0, "reason": "no_governed_head"})
-
-        tickers = {issuer.issuer_id: issuer.ticker for issuer in universe_issuers(connection, config.universe)}
+            return _no_head_response(context, config.universe, "supply chain exposure rows")
         universe, identity_failure = _canonical_universe_or_failure(
-            context, "supply chain exposure", connection, head, tickers
+            context,
+            "supply chain exposure",
+            connection,
+            head,
+            _universe_tickers(connection, config.universe, use_planner=True),
         )
         if universe is None:
             return json.dumps(
@@ -526,10 +376,7 @@ def run_supply_chain_exposure(
                 }
             )
         floor_failure = universe.lane_failure()
-        joined = 0
-        model_extracted = 0
-        replayed = 0
-        context_window_exceeded = 0
+        joined = model_extracted = replayed = context_window_exceeded = 0
         exceeded_filings: tuple[str, ...] = ()
         if floor_failure is None:
             sc_report = materialize_universe_supply_chain_exposure(
@@ -573,38 +420,33 @@ def run_supply_chain_exposure(
         summary[LANE_FAILURE] = floor_failure
         summary[VERDICT_TEXT] = f"supply chain: {floor_failure}"
     elif context_window_exceeded > 0:
-        limit_failure = f"{context_window_exceeded} of {joined} filings exceeded 1M context window"
-        summary[LANE_FAILURE] = f"supply chain: {limit_failure}"
-        summary[VERDICT_TEXT] = f"supply chain: {limit_failure}"
+        limit_msg = f"supply chain: {context_window_exceeded} of {joined} filings exceeded 1M context window"
+        summary[LANE_FAILURE] = limit_msg
+        summary[VERDICT_TEXT] = limit_msg
     context.add_output_metadata(summary)
     return json.dumps(summary)
 
 
 @external_op
 def run_analyst_ratings(context: dg.OpExecutionContext, config: StandardBackfillConfig, sc_summary: str) -> str:
-    """#771 (init.md §7 module 4): analyst consensus ratings rows for this week's governed head.
-
-    Sequenced after supply chain exposure and before question coverage.
-    A moomoo context that does not open fails every ticker, like a fetch error.
-    """
     from data_engine.datahub.analyst_ratings import materialize_universe_analyst_ratings
     from data_engine.datahub.question_coverage import NoHead, governed_head_of
-    from data_engine.datahub.standards.planner import universe_issuers
 
     context.log.info("analyst ratings follows supply chain exposure: %s", sc_summary[:200])
     current = reports_current(sc_summary)
     if current is not None:
-        return json.dumps({"universe": config.universe, "run_id": current, REPORTS_CURRENT: current})
+        return _current_passthrough(config.universe, current)
 
     with gateway.capacity_scope(), psycopg.connect(settings.database_url) as connection:
         head = governed_head_of(connection, key_of_lane(config.universe))
         if isinstance(head, NoHead):
-            context.log.warning("no governed head for %s; no analyst ratings rows", config.universe)
-            return json.dumps({"universe": config.universe, "rows": 0, "reason": "no_governed_head"})
-
-        tickers = {issuer.issuer_id: issuer.ticker for issuer in universe_issuers(connection, config.universe)}
+            return _no_head_response(context, config.universe, "analyst ratings rows")
         universe, identity_failure = _canonical_universe_or_failure(
-            context, "analyst ratings", connection, head, tickers
+            context,
+            "analyst ratings",
+            connection,
+            head,
+            _universe_tickers(connection, config.universe, use_planner=True),
         )
         if universe is None:
             context.log.error("analyst ratings lane failed for %s: %s", config.universe, identity_failure)
@@ -619,8 +461,6 @@ def run_analyst_ratings(context: dg.OpExecutionContext, config: StandardBackfill
                     VERDICT_TEXT: f"analyst ratings: {identity_failure}",
                 }
             )
-        # The ids are resolved. End the reads now, so no transaction stays open across the vendor
-        # calls. The rows are written after the last fetch, in one transaction.
         connection.rollback()
         floor_failure = universe.lane_failure()
         captured = analyst_ratings.UniverseCapture(rows=0)
@@ -656,9 +496,6 @@ def run_analyst_ratings(context: dg.OpExecutionContext, config: StandardBackfill
         UNMAPPED_BY_REASON: universe.unmapped_by_reason(),
         WIDE_ROW_ISSUERS: universe.wide_row_issuers,
     }
-    # A total failure must not stop the coverage op that measures it (#771, the #1016 coupling
-    # pattern). This op commits and returns; `fail_if_a_lane_failed` raises after the report.
-    # A fetch failure is first. Else the join floor, else the failure of the supply chain op.
     lane_failure = captured.lane_failure()
     if lane_failure is None:
         lane_failure = floor_failure
@@ -688,7 +525,6 @@ def run_analyst_ratings(context: dg.OpExecutionContext, config: StandardBackfill
 
 
 def _run_coverage_verdict_failure(report: Mapping[str, Any]) -> str | None:
-    """Return `coverage_verdict_failure(report)` while ignoring unseeded `no_row` tables in `test` harnesses."""
     questions = report.get("questions")
     if (
         report.get("environment") == "test"
@@ -710,13 +546,8 @@ def _run_coverage_verdict_failure(report: Mapping[str, Any]) -> str | None:
 
 @external_op
 def run_question_coverage(context: dg.OpExecutionContext, config: StandardBackfillConfig, analyst_summary: str) -> str:
-    """#748: after the week's backfill of EVERY standard, theme purity, supply chain exposure,
-    and analyst ratings, count the six questions on the governed head — answered / unavailable-by-reason / missing — and
-    append the report."""
     from data_engine.datahub.question_coverage import NO_HEAD_SUMMARY, compile_report, persist, summary_line
 
-    # The analyst ratings' summary is this op's only upstream: consuming it is what sequences the
-    # report after all upstream factors have landed, and logging it keeps the chain legible.
     context.log.info("coverage follows analyst ratings: %s", analyst_summary[:400])
     current = reports_current(analyst_summary)
     if current is not None:
@@ -776,14 +607,12 @@ def run_question_coverage(context: dg.OpExecutionContext, config: StandardBackfi
         zero_failure = _run_coverage_verdict_failure(report)
         q3_unavail = (report.get("questions", {}).get("q3", {}) or {}).get("unavailable") or {}
         exceeded_q3 = int(q3_unavail.get("context_window_exceeded", 0))
-        if zero_failure is not None:
-            outcome.summary = f"report persisted for {report['universe_id']} ({zero_failure})"
-        elif exceeded_q3 > 0:
-            outcome.summary = (
-                f"report persisted for {report['universe_id']} ({exceeded_q3} filing(s) exceeded 1M context window)"
-            )
-        else:
-            outcome.summary = f"report persisted for {report['universe_id']}"
+        suffix = (
+            f" ({zero_failure})"
+            if zero_failure is not None
+            else (f" ({exceeded_q3} filing(s) exceeded 1M context window)" if exceeded_q3 > 0 else "")
+        )
+        outcome.summary = f"report persisted for {report['universe_id']}{suffix}"
     context.log.info("question coverage %s: %s", report_id, summary_line(report))
     context.add_output_metadata(
         {
@@ -797,44 +626,17 @@ def run_question_coverage(context: dg.OpExecutionContext, config: StandardBackfi
     )
     out_summary: dict[str, Any] = {"report_id": report_id, "summary": summary_line(report)}
     if zero_failure is not None:
-        out_summary["universe"] = config.universe
-        out_summary["executed_at"] = config.executed_at
-        out_summary[VERDICT_FAILURE] = zero_failure
+        out_summary.update(
+            {"universe": config.universe, "executed_at": config.executed_at, VERDICT_FAILURE: zero_failure}
+        )
     return json.dumps(out_summary)
 
 
 @external_op
 def fail_if_a_lane_failed(context: dg.OpExecutionContext, analyst_summary: str, coverage_summary: str) -> None:
-    """The run's last op: end the run as FAILURE when a lane failed for every ticker (#771).
-
-    It also fails the run when too few wide-row issuers join a member of the universe (#1079),
-    or when an applicable question in the coverage report has zero answered subjects (#1643).
-    That is no issuer, or fewer than `JOIN_FLOOR` of a wide row of five or more.
-    The same holds when the ids cannot be resolved. The text holds counts or an error type only.
-
-    A lane's total failure is a fact the coverage report must show, so this op depends on the
-    coverage op and runs only after the report is persisted.
-
-    A red run must also be a red verdict. The coverage op wrote its green verdict as the report
-    persisted. This op then records `question_coverage@<universe>` red with the same tick. The
-    health endpoint reads the newest row per check, so it reads the red one. The text carries
-    counts only, because the verdict is public.
-
-    The red stays until a run writes green. The next 04:00 fallback retries the lanes.
-    `head_reports_start` does not count a head with a red verdict as current.
-    `_already_current` still writes nothing over a red newest verdict.
-    """
-    parsed = json.loads(analyst_summary) if analyst_summary else {}
-    if not isinstance(parsed, dict):
-        parsed = {}
+    parsed = _json_dict(analyst_summary)
+    coverage_parsed = _json_dict(coverage_summary)
     failure = parsed.get(LANE_FAILURE)
-    coverage_parsed: dict[str, Any] = {}
-    try:
-        loaded = json.loads(coverage_summary) if coverage_summary else {}
-        if isinstance(loaded, dict):
-            coverage_parsed = loaded
-    except ValueError:
-        coverage_parsed = {}
     coverage_failure = coverage_parsed.get(VERDICT_FAILURE)
     if not failure and not coverage_failure:
         return
@@ -866,23 +668,12 @@ def standard_backfill_pipeline_job() -> None:
 
 
 def backfill_run_config(executed_at: str, universe: str, standard: str = "") -> dg.RunConfig:
-    """One universe's backfill, purity, supply chain, analyst ratings and coverage ops, configured alike.
-
-    The terminal op `fail_if_a_lane_failed` takes no config. `standard` bounds the backfill
-    to one registered standard; empty runs them all."""
     return dg.RunConfig(
         ops={
             "run_standard_backfill": StandardBackfillConfig(
                 executed_at=executed_at, universe=universe, standard=standard
             ),
-            # #772: module 6 consumes the partitions the backfill just landed.
-            "run_theme_purity": StandardBackfillConfig(executed_at=executed_at, universe=universe),
-            # #772: module 3 supply-chain exposure
-            "run_supply_chain_exposure": StandardBackfillConfig(executed_at=executed_at, universe=universe),
-            # #771: module 4 analyst ratings
-            "run_analyst_ratings": StandardBackfillConfig(executed_at=executed_at, universe=universe),
-            # #748: the coverage report follows, for the same universe and tick.
-            "run_question_coverage": StandardBackfillConfig(executed_at=executed_at, universe=universe),
+            **_downstream_ops_config(executed_at, universe),
         }
     )
 
@@ -905,11 +696,6 @@ def standard_backfill_schedule(context: dg.ScheduleEvaluationContext):
 
 @external_op
 def run_standard_history(context: dg.OpExecutionContext, config: StandardHistoryConfig) -> str:
-    """#1137: the month-end history of each standard in `STANDARDS_WITH_HISTORY` over one universe.
-
-    The summary holds counts only. A run whose every open cell failed ends as a failed run,
-    so a vendor outage cannot pass as a green run with zero rows.
-    """
     tick = datetime.fromisoformat(config.executed_at)
     names = history_standards(config.standard)
     reports = []
@@ -946,7 +732,6 @@ def standard_history_backfill_pipeline_job() -> None:
 
 
 def history_run_config(executed_at: str, universe: str) -> dg.RunConfig:
-    """One universe's history run. The month count and the standards take their defaults."""
     return dg.RunConfig(ops={"run_standard_history": StandardHistoryConfig(executed_at=executed_at, universe=universe)})
 
 
@@ -960,16 +745,8 @@ def standard_history_schedule(context: dg.ScheduleEvaluationContext):
     executed_at = context.scheduled_execution_time.isoformat()
     universe = lane_name(universe_with_role("strategy"))
     yield dg.RunRequest(
-        run_key=f"history:{executed_at}:{universe}",
-        run_config=history_run_config(executed_at, universe),
+        run_key=f"history:{executed_at}:{universe}", run_config=history_run_config(executed_at, universe)
     )
-
-
-STANDARD_BACKFILL_CATCHUP_SENSOR_NAME = "standard_backfill_catchup"
-#: Fifteen minutes between looks. The first look on a build only arms the sensor (see below),
-#: so a catch-up never starts inside the deploy walk that follows a promotion (#855 A5: a
-#: backfill sharing the database timed a walk out on v0.0.60).
-STANDARD_BACKFILL_CATCHUP_INTERVAL_SECONDS = 900
 
 
 @dg.sensor(
@@ -979,25 +756,6 @@ STANDARD_BACKFILL_CATCHUP_INTERVAL_SECONDS = 900
     default_status=dg.DefaultSensorStatus.RUNNING,
 )
 def standard_backfill_catchup_sensor(context: dg.SensorEvaluationContext):
-    """A registered standard is backfilled over every universe as soon as a build that
-    registers it is up, not at the next Sunday 09:07.
-
-    The weekly schedule is the cadence the filings need; it is not a delivery path. Production
-    on 2026-09-17 had no segment facts and no theme-purity row at all, while staging had 195:
-    production's two Sunday runs (09-06, 09-13) ran releases whose schedule still backfilled
-    `employees_total` only (the default #806 removed, in v0.0.52), and v0.0.56 reached
-    production on Tuesday 09-15, so nothing would have backfilled segments there before Sunday
-    09-20 while the nightly surface proof went red on `/research/themes` every night.
-
-    What counts as backfilled is the health-log row every backfill writes at its END
-    (`backfill.completed_metric`), so a run that died does not count. One run per universe,
-    bounded to the one missing standard when only one is missing; `run_key` names what was
-    missing, so Dagster launches it once per sensor — a run that fails is retried by the weekly
-    schedule, never by a loop here.
-
-    The cursor holds the build this sensor last armed on: the first look on a new build only
-    arms, and the launch waits for the next look, fifteen minutes on.
-    """
     build = (settings.data_engine_image_digest or "").strip() or "unversioned"
     if context.cursor != build:
         context.update_cursor(build)
@@ -1027,41 +785,13 @@ def standard_backfill_catchup_sensor(context: dg.SensorEvaluationContext):
         )
 
 
-HEAD_REPORTS_JOB_NAME = "head_reports_pipeline"
-HEAD_REPORTS_SENSOR_NAME = "head_reports_on_pointer_advance"
-HEAD_REPORTS_SENSOR_INTERVAL_SECONDS = 30
-#: The daily FALLBACK, 04:00 UTC: after the nightly proof's longest wait for a settling
-#: universe (00:15 + 3 h, `lanes.quality`), so a fallback run is never what the proof waits
-#: on, and before the delivery report (07:00) reads the verdicts it keeps fresh. The sensor below
-#: is what follows the head; this only heals an advance the sensor missed, and on every other
-#: day finds the reports current and recomputes nothing.
-HEAD_REPORTS_CRON = "0 4 * * *"
-
-
-class HeadReportsStartConfig(StandardBackfillConfig):
-    """`only_if_stale` is the fallback's mode: when the newest stored report for the governed
-    head already names that head, and no report verdict is red, the run recomputes nothing and
-    says so. A run launched on a pointer advance, or by hand, always recomputes."""
-
-    only_if_stale: bool = False
-
-
 def _red_report_checks(universe: str) -> list[str]:
-    """The report verdicts of `universe` whose newest row is red: coverage and theme purity."""
     names = (check_name(check, universe) for check in (QUESTION_COVERAGE_VERDICT, THEME_PURITY_VERDICT))
     return [name for name in names if newest_is_red(name)]
 
 
 @external_op
 def head_reports_start(context: dg.OpExecutionContext, config: HeadReportsStartConfig) -> str:
-    """The daily job's stand-in for the backfill summary the purity op sequences after: no
-    cells are extracted here, only the head's own reports are refreshed — or, in the
-    fallback's mode, found current and left alone.
-
-    A stored report does not make a head current while the newest coverage or theme purity
-    verdict is red. The fallback then recomputes the lanes, which retries a failed fetch.
-    A green run makes the head current again, so the retry stops by itself.
-    """
     summary: dict[str, Any] = {"universe": config.universe, "mode": "head-reports", "executed_at": config.executed_at}
     if config.only_if_stale:
         red: list[str] = []
@@ -1074,26 +804,21 @@ def head_reports_start(context: dg.OpExecutionContext, config: HeadReportsStartC
                 if not red:
                     summary[REPORTS_CURRENT] = head.run_id
         current = summary.get(REPORTS_CURRENT)
-        if current:
-            outcome = f"reports already current on {current[:24]}"
-        elif red:
-            outcome = f"newest verdict is red for {', '.join(red)}; recomputing to retry"
-        else:
-            outcome = "no current reports; recomputing"
+        outcome = (
+            f"reports already current on {current[:24]}"
+            if current
+            else (
+                f"newest verdict is red for {', '.join(red)}; recomputing to retry"
+                if red
+                else "no current reports; recomputing"
+            )
+        )
         context.log.info("fallback for %s: %s", config.universe, outcome)
     return json.dumps(summary)
 
 
 @dg.job(name=HEAD_REPORTS_JOB_NAME)
 def head_reports_pipeline_job() -> None:
-    """Modules 3, 4, 6 and the coverage report for the governed head, whenever it moves (#855, #771, #772).
-
-    The weekly backfill wrote all three, so on every other day the head advanced and
-    the coverage report served no_row for the new head — contradicting its own pointer.
-
-    The terminal op `fail_if_a_lane_failed` runs last. It fails the run when analyst ratings failed for every ticker.
-    It also fails the run when too few wide-row issuers join a member, or the ids cannot be resolved (#1079).
-    """
     analyst_summary = run_analyst_ratings(run_supply_chain_exposure(run_theme_purity(head_reports_start())))
     fail_if_a_lane_failed(analyst_summary, run_question_coverage(analyst_summary))
 
@@ -1101,10 +826,7 @@ def head_reports_pipeline_job() -> None:
 def head_reports_request(
     universe: str, executed_at: str, *, run_key: str, only_if_stale: bool, head_run_id: str | None = None
 ) -> dg.RunRequest:
-    """One universe's head-reports run: every op that takes config gets the same universe and tick."""
-    tags = {UNIVERSE_TAG: universe}
-    if head_run_id:
-        tags[HEAD_RUN_TAG] = head_run_id
+    tags = {UNIVERSE_TAG: universe, **({HEAD_RUN_TAG: head_run_id} if head_run_id else {})}
     return dg.RunRequest(
         run_key=run_key,
         run_config=dg.RunConfig(
@@ -1112,10 +834,7 @@ def head_reports_request(
                 "head_reports_start": HeadReportsStartConfig(
                     executed_at=executed_at, universe=universe, only_if_stale=only_if_stale
                 ),
-                "run_theme_purity": StandardBackfillConfig(executed_at=executed_at, universe=universe),
-                "run_supply_chain_exposure": StandardBackfillConfig(executed_at=executed_at, universe=universe),
-                "run_analyst_ratings": StandardBackfillConfig(executed_at=executed_at, universe=universe),
-                "run_question_coverage": StandardBackfillConfig(executed_at=executed_at, universe=universe),
+                **_downstream_ops_config(executed_at, universe),
             }
         ),
         tags=tags,
@@ -1135,13 +854,7 @@ def head_reports_schedule(context: dg.ScheduleEvaluationContext):
 
 
 def _followed(cursor: str | None) -> dict[str, str]:
-    """universe -> the head run the sensor last acted on. A cursor that does not parse is
-    treated as none: the first-sight rule below then keeps it from relaunching current heads."""
-    try:
-        parsed = json.loads(cursor or "{}")
-    except ValueError:
-        return {}
-    return {str(key): str(value) for key, value in parsed.items()} if isinstance(parsed, dict) else {}
+    return {str(k): str(v) for k, v in _json_dict(cursor or "{}").items()}
 
 
 @dg.sensor(
@@ -1151,20 +864,6 @@ def _followed(cursor: str | None) -> dict[str, str]:
     default_status=dg.DefaultSensorStatus.RUNNING,
 )
 def head_reports_sensor(context: dg.SensorEvaluationContext):
-    """Head reports follow the pointer, not the clock: one run per advance, per universe.
-
-    Reads `mart.current_pointer_head` through `governed_head` — the same resolution the
-    purity and coverage ops and the nightly proof use, under the capture tier the ticks
-    register with (#826). The cursor remembers the head each universe was last reported on;
-    `run_key = head:<universe>:<run id>` makes Dagster launch one run per head even across a
-    restart that lost the cursor.
-
-    A universe the cursor has never seen (a fresh sensor, a reset cursor) is launched only when
-    the head's reports are missing: the schedule or an operator may already have written them.
-    An advance the sensor sees happen is launched unconditionally — an earlier run that
-    resolved the head late may have written this head's coverage report without its purity
-    rows, and only this run writes both.
-    """
     followed = _followed(context.cursor)
     executed_at = datetime.now(UTC).replace(microsecond=0).isoformat()
     requests: list[dg.RunRequest] = []
@@ -1196,10 +895,7 @@ def head_reports_sensor(context: dg.SensorEvaluationContext):
 
 
 def _build_standards_plane_schedule(
-    schedule_name: str,
-    cron_schedule: str,
-    *,
-    job: dg.JobDefinition,
+    schedule_name: str, cron_schedule: str, *, job: dg.JobDefinition
 ) -> dg.ScheduleDefinition:
     @dg.schedule(
         name=schedule_name,
@@ -1224,7 +920,6 @@ def _build_standards_plane_schedule(
 
 
 def build_standards_plane_schedules() -> tuple[dg.ScheduleDefinition, ...]:
-    """Build the 4 staggered Standards Plane Cron schedules (#67)."""
     from data_engine.lanes.universe_refresh import universe_refresh_pipeline_job
 
     return tuple(
@@ -1250,20 +945,16 @@ def build_standards_plane_schedules() -> tuple[dg.ScheduleDefinition, ...]:
 
 
 def build_definitions(app_env: str = settings.app_env) -> dg.Definitions:
-    """Build all standards lane jobs, schedules, and sensors for `app_env` (#67)."""
-    plane_schedules = (
-        nport_monthly_schedule,
-        thirteenf_quarterly_schedule,
-        form4_daily_schedule,
-        tenk_annual_schedule,
-    )
     return dg.Definitions(
         jobs=[standard_backfill_pipeline_job, standard_history_backfill_pipeline_job, head_reports_pipeline_job],
         schedules=[
             standard_backfill_schedule,
             standard_history_schedule,
             head_reports_schedule,
-            *plane_schedules,
+            nport_monthly_schedule,
+            thirteenf_quarterly_schedule,
+            form4_daily_schedule,
+            tenk_annual_schedule,
         ],
         sensors=[head_reports_sensor, standard_backfill_catchup_sensor],
     )
