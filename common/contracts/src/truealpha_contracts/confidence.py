@@ -2,46 +2,22 @@
 
 from __future__ import annotations
 
-import re
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from typing import Any, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import Field, field_validator, model_validator
 
-from truealpha_contracts.common import STABLE_ID_PATTERN
-from truealpha_contracts.common import identify as _freeze_content_addressed
-
-_SHA256 = r"^[0-9a-f]{64}$"
-
-
-def _reject_binary_float(value: Any) -> Any:
-    if isinstance(value, float):
-        raise ValueError("binary float is forbidden; use Decimal or a base-10 string")
-    if value is not None:
-        try:
-            decimal_value = value if isinstance(value, Decimal) else Decimal(value)
-        except (InvalidOperation, TypeError, ValueError):
-            return value
-        if not decimal_value.is_finite():
-            raise ValueError("non-finite Decimal values are forbidden")
-    return value
+from truealpha_contracts.common import (
+    SHA256_PATTERN,
+    STABLE_ID_PATTERN,
+    FrozenModel,
+    finite_decimal_input,
+    identify,
+    sorted_unique_coordinates,
+)
 
 
-def _sorted_unique(values: tuple[str, ...], field_name: str, *, allow_empty: bool = False) -> tuple[str, ...]:
-    if not allow_empty and not values:
-        raise ValueError(f"{field_name} must not be empty")
-    if len(values) != len(set(values)):
-        raise ValueError(f"{field_name} must not contain duplicates")
-    if any(re.fullmatch(STABLE_ID_PATTERN, value) is None for value in values):
-        raise ValueError(f"{field_name} must contain stable coordinates")
-    return tuple(sorted(values))
-
-
-class _ConfidenceModel(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-
-class ContinuousConfidencePolicy(_ConfidenceModel):
+class ContinuousConfidencePolicy(FrozenModel):
     policy_id: str = Field(default="", pattern=r"^(?:|confidence-policy:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
     reliability_prior_success: Decimal = Field(default=Decimal("8"), ge=0)
@@ -66,7 +42,7 @@ class ContinuousConfidencePolicy(_ConfidenceModel):
     )
     @classmethod
     def validate_decimals(cls, value: Any) -> Any:
-        return _reject_binary_float(value)
+        return finite_decimal_input(value)
 
     @model_validator(mode="after")
     def freeze_and_identify(self) -> Self:
@@ -80,11 +56,11 @@ class ContinuousConfidencePolicy(_ConfidenceModel):
         )
         if exponents != Decimal("1"):
             raise ValueError("quality exponents must sum exactly to one")
-        _freeze_content_addressed(self, id_field="policy_id", prefix="confidence-policy")
+        identify(self, id_field="policy_id", prefix="confidence-policy")
         return self
 
 
-class SourceConfidenceEvidence(_ConfidenceModel):
+class SourceConfidenceEvidence(FrozenModel):
     source_evidence_id: str = Field(default="", pattern=r"^(?:|source-confidence-evidence:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
     provider_id: str = Field(pattern=STABLE_ID_PATTERN)
@@ -111,20 +87,20 @@ class SourceConfidenceEvidence(_ConfidenceModel):
     )
     @classmethod
     def validate_decimals(cls, value: Any) -> Any:
-        return _reject_binary_float(value)
+        return finite_decimal_input(value)
 
     @field_validator("evidence_ids", "reason_codes")
     @classmethod
     def validate_coordinates(cls, values: tuple[str, ...], info: Any) -> tuple[str, ...]:
-        return _sorted_unique(values, info.field_name)
+        return sorted_unique_coordinates(values, info.field_name, allow_empty=False)
 
     @model_validator(mode="after")
     def freeze_and_identify(self) -> Self:
-        _freeze_content_addressed(self, id_field="source_evidence_id", prefix="source-confidence-evidence")
+        identify(self, id_field="source_evidence_id", prefix="source-confidence-evidence")
         return self
 
 
-class ContinuousConfidenceInput(_ConfidenceModel):
+class ContinuousConfidenceInput(FrozenModel):
     input_id: str = Field(default="", pattern=r"^(?:|confidence-input:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
     case_id: str = Field(pattern=STABLE_ID_PATTERN)
@@ -143,27 +119,23 @@ class ContinuousConfidenceInput(_ConfidenceModel):
     )
     @classmethod
     def validate_decimals(cls, value: Any) -> Any:
-        return _reject_binary_float(value)
+        return finite_decimal_input(value)
 
     @model_validator(mode="after")
     def freeze_and_identify(self) -> Self:
-        sources = tuple(sorted(self.sources, key=lambda value: value.source_evidence_id))
-        source_ids = tuple(source.source_evidence_id for source in sources)
-        if len(source_ids) != len(set(source_ids)):
+        sources = tuple(sorted(self.sources, key=lambda v: v.source_evidence_id))
+        if len({s.source_evidence_id for s in sources}) != len(sources):
             raise ValueError("confidence input source evidence must be unique")
         group_weights: dict[str, Decimal] = {}
-        for source in sources:
-            if (
-                group_weights.setdefault(source.origin_group_id, source.independence_weight)
-                != source.independence_weight
-            ):
+        for s in sources:
+            if group_weights.setdefault(s.origin_group_id, s.independence_weight) != s.independence_weight:
                 raise ValueError("one origin group must use one independence weight")
         object.__setattr__(self, "sources", sources)
-        _freeze_content_addressed(self, id_field="input_id", prefix="confidence-input")
+        identify(self, id_field="input_id", prefix="confidence-input")
         return self
 
 
-class SourceConfidenceScore(_ConfidenceModel):
+class SourceConfidenceScore(FrozenModel):
     source_evidence_id: str = Field(pattern=r"^source-confidence-evidence:[0-9a-f]{64}$")
     provider_id: str = Field(pattern=STABLE_ID_PATTERN)
     origin_group_id: str = Field(pattern=STABLE_ID_PATTERN)
@@ -173,10 +145,10 @@ class SourceConfidenceScore(_ConfidenceModel):
     @field_validator("reliability", "source_quality", mode="before")
     @classmethod
     def validate_decimals(cls, value: Any) -> Any:
-        return _reject_binary_float(value)
+        return finite_decimal_input(value)
 
 
-class OriginGroupContribution(_ConfidenceModel):
+class OriginGroupContribution(FrozenModel):
     origin_group_id: str = Field(pattern=STABLE_ID_PATTERN)
     independence_weight: Decimal = Field(ge=0, le=1)
     selected_source_evidence_id: str = Field(pattern=r"^source-confidence-evidence:[0-9a-f]{64}$")
@@ -186,16 +158,16 @@ class OriginGroupContribution(_ConfidenceModel):
     @field_validator("independence_weight", "selected_source_quality", "effective_support", mode="before")
     @classmethod
     def validate_decimals(cls, value: Any) -> Any:
-        return _reject_binary_float(value)
+        return finite_decimal_input(value)
 
 
-class ContinuousConfidenceEvaluation(_ConfidenceModel):
+class ContinuousConfidenceEvaluation(FrozenModel):
     evaluation_id: str = Field(default="", pattern=r"^(?:|confidence-evaluation:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
     policy_id: str = Field(pattern=r"^confidence-policy:[0-9a-f]{64}$")
-    policy_sha256: str = Field(pattern=_SHA256)
+    policy_sha256: str = Field(pattern=SHA256_PATTERN)
     input_id: str = Field(pattern=r"^confidence-input:[0-9a-f]{64}$")
-    input_sha256: str = Field(pattern=_SHA256)
+    input_sha256: str = Field(pattern=SHA256_PATTERN)
     source_scores: tuple[SourceConfidenceScore, ...] = Field(min_length=1)
     origin_groups: tuple[OriginGroupContribution, ...] = Field(min_length=1)
     evidence_mass: Decimal = Field(ge=0)
@@ -219,26 +191,26 @@ class ContinuousConfidenceEvaluation(_ConfidenceModel):
     )
     @classmethod
     def validate_decimals(cls, value: Any) -> Any:
-        return _reject_binary_float(value)
+        return finite_decimal_input(value)
 
     @field_validator("reason_codes")
     @classmethod
     def validate_reasons(cls, values: tuple[str, ...]) -> tuple[str, ...]:
-        return _sorted_unique(values, "reason_codes")
+        return sorted_unique_coordinates(values, "reason_codes", allow_empty=False)
 
     @model_validator(mode="after")
     def freeze_and_identify(self) -> Self:
-        source_scores = tuple(sorted(self.source_scores, key=lambda value: value.source_evidence_id))
-        origin_groups = tuple(sorted(self.origin_groups, key=lambda value: value.origin_group_id))
+        source_scores = tuple(sorted(self.source_scores, key=lambda v: v.source_evidence_id))
+        origin_groups = tuple(sorted(self.origin_groups, key=lambda v: v.origin_group_id))
         if len({s.source_evidence_id for s in source_scores}) != len(source_scores):
             raise ValueError("evaluation source scores must be unique")
         if len({g.origin_group_id for g in origin_groups}) != len(origin_groups):
             raise ValueError("evaluation origin groups must be unique")
-        scores_by_id = {source.source_evidence_id: source for source in source_scores}
+        scores_by_id = {s.source_evidence_id: s for s in source_scores}
         if any(
-            group.selected_source_evidence_id not in scores_by_id
-            or scores_by_id[group.selected_source_evidence_id].origin_group_id != group.origin_group_id
-            for group in origin_groups
+            g.selected_source_evidence_id not in scores_by_id
+            or scores_by_id[g.selected_source_evidence_id].origin_group_id != g.origin_group_id
+            for g in origin_groups
         ):
             raise ValueError("origin groups must select a scored source from the same group")
         if self.policy_id != f"confidence-policy:{self.policy_sha256}":
@@ -247,11 +219,11 @@ class ContinuousConfidenceEvaluation(_ConfidenceModel):
             raise ValueError("input identity and hash must agree")
         object.__setattr__(self, "source_scores", source_scores)
         object.__setattr__(self, "origin_groups", origin_groups)
-        _freeze_content_addressed(self, id_field="evaluation_id", prefix="confidence-evaluation")
+        identify(self, id_field="evaluation_id", prefix="confidence-evaluation")
         return self
 
 
-class ConfidenceCalibrationScenario(_ConfidenceModel):
+class ConfidenceCalibrationScenario(FrozenModel):
     scenario_id: str = Field(pattern=STABLE_ID_PATTERN)
     evidence_class: Literal["sensitivity", "empirical_anchor"]
     expected_effect: str = Field(min_length=1)
@@ -267,7 +239,7 @@ class ConfidenceCalibrationScenario(_ConfidenceModel):
         return self
 
 
-class ConfidenceCalibrationReport(_ConfidenceModel):
+class ConfidenceCalibrationReport(FrozenModel):
     report_id: str = Field(default="", pattern=r"^(?:|confidence-calibration-report:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
     schema_version: Literal["truealpha.confidence-calibration@v1"] = "truealpha.confidence-calibration@v1"
@@ -282,7 +254,7 @@ class ConfidenceCalibrationReport(_ConfidenceModel):
     @field_validator("empirically_observed_subject_ids")
     @classmethod
     def validate_subjects(cls, values: tuple[str, ...]) -> tuple[str, ...]:
-        return _sorted_unique(values, "empirically_observed_subject_ids", allow_empty=True)
+        return sorted_unique_coordinates(values, "empirically_observed_subject_ids", allow_empty=True)
 
     @field_validator("limitations")
     @classmethod
@@ -293,13 +265,13 @@ class ConfidenceCalibrationReport(_ConfidenceModel):
 
     @model_validator(mode="after")
     def freeze_and_identify(self) -> Self:
-        scenarios = tuple(sorted(self.scenarios, key=lambda value: value.scenario_id))
+        scenarios = tuple(sorted(self.scenarios, key=lambda v: v.scenario_id))
         if len({s.scenario_id for s in scenarios}) != len(scenarios):
             raise ValueError("calibration scenario IDs must be unique")
         if len(self.empirically_observed_subject_ids) > self.denominator_size:
             raise ValueError("empirical subjects cannot exceed the frozen denominator")
-        if any(scenario.evaluation.policy_id != self.policy.policy_id for scenario in scenarios):
+        if any(s.evaluation.policy_id != self.policy.policy_id for s in scenarios):
             raise ValueError("every calibration scenario must use the report policy")
         object.__setattr__(self, "scenarios", scenarios)
-        _freeze_content_addressed(self, id_field="report_id", prefix="confidence-calibration-report")
+        identify(self, id_field="report_id", prefix="confidence-calibration-report")
         return self

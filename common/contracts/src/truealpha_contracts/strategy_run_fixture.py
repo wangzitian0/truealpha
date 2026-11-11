@@ -1,11 +1,4 @@
-"""Fixture-backed `StrategyRunReadRepository` — see `#347`.
-
-Reads the checked-in, deterministic mirror of `make strategy-smoke`'s output
-(`data/strategy_run_preview.v1.json`) rather than a Postgres `mart` row. This
-is explicitly the provisional data source named in `#347`'s acceptance
-criteria; a Postgres-backed sibling implementing the same protocol is
-follow-up work gated on `#26` landing real mart persistence.
-"""
+"""Fixture-backed `StrategyRunReadRepository` (#347)."""
 
 from __future__ import annotations
 
@@ -25,56 +18,43 @@ from truealpha_contracts.strategy_run import (
     StrategyRunUnavailable,
 )
 
-# Any of these mean the packaged fixture is missing, unparsable, or no longer
-# matches the DTO shape (schema drift) — a caller-facing crash here would make
-# this provisional read boundary brittle for MCP/App callers, so get_latest()
-# maps them to a structured StrategyRunUnavailable instead. See #351's review.
 _FIXTURE_CORRUPTION_ERRORS = (json.JSONDecodeError, KeyError, ValueError, TypeError, InvalidOperation, ValidationError)
-
-_FIXTURE_PACKAGE = "truealpha_contracts.data"
-_FIXTURE_NAME = "strategy_run_preview.v1.json"
-
-
-def _decimal_or_none(value: Any) -> Decimal | None:
-    return Decimal(value) if value is not None else None
+_DEC_KEYS = (
+    "capital_adjusted_labor_efficiency",
+    "current_price_to_sales",
+    "target_price_to_sales",
+    "current_price_to_gross_profit",
+    "target_price_to_gross_profit",
+    "valuation_gap",
+    "peg",
+    "confidence",
+    "target_weight",
+)
 
 
 def _decision_from_json(payload: dict[str, Any]) -> StrategyRunDecision:
+    dec = {k: (Decimal(payload[k]) if payload.get(k) is not None else None) for k in _DEC_KEYS}
     return StrategyRunDecision(
         issuer_id=payload["issuer_id"],
         cutoff_at=payload["cutoff_at"],
         outcome=StrategyRunOutcome(payload["outcome"]),
         eligible=payload["eligible"],
         tier=ValuationTier(payload["tier"]) if payload["tier"] is not None else None,
-        capital_adjusted_labor_efficiency=_decimal_or_none(payload["capital_adjusted_labor_efficiency"]),
-        current_price_to_sales=_decimal_or_none(payload["current_price_to_sales"]),
-        target_price_to_sales=_decimal_or_none(payload["target_price_to_sales"]),
-        current_price_to_gross_profit=_decimal_or_none(payload.get("current_price_to_gross_profit")),
-        target_price_to_gross_profit=_decimal_or_none(payload.get("target_price_to_gross_profit")),
-        valuation_gap=_decimal_or_none(payload["valuation_gap"]),
-        peg=_decimal_or_none(payload.get("peg")),
         peg_rank=payload.get("peg_rank"),
         labor_efficiency_metric=payload.get("labor_efficiency_metric"),
-        confidence=_decimal_or_none(payload["confidence"]),
         exclusion_reason=payload["exclusion_reason"],
         rank=payload["rank"],
-        target_weight=_decimal_or_none(payload["target_weight"]),
+        **dec,
     )
 
 
 class FixtureStrategyRunRepository:
-    """Loads the one checked-in `large_model_value_v0` preview fixture."""
-
     def get_latest(self, *, strategy_id: str, context: AccessContext) -> StrategyRunReport | StrategyRunUnavailable:
-        del context  # reserved for a future authorization decision; unused today
+        del context
         try:
-            raw = resources.files(_FIXTURE_PACKAGE).joinpath(_FIXTURE_NAME).read_bytes()
+            raw = resources.files("truealpha_contracts.data").joinpath("strategy_run_preview.v1.json").read_bytes()
         except (FileNotFoundError, ModuleNotFoundError):
-            # ModuleNotFoundError covers a mis-packaged install where the
-            # truealpha_contracts.data package itself is absent, not just
-            # the fixture file inside it.
             return StrategyRunUnavailable(strategy_id=strategy_id, reason="fixture_missing")
-
         try:
             payload = json.loads(raw)
             if strategy_id != payload["strategy_id"]:

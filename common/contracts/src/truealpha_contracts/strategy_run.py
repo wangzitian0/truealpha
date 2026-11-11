@@ -7,18 +7,12 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Literal, Protocol, Self
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import Field, field_validator, model_validator
 
 from truealpha_contracts.access import AccessContext
-from truealpha_contracts.models import _require_aware
+from truealpha_contracts.common import SHA256_PATTERN, StrictFrozenModel, require_aware
 from truealpha_contracts.research import ValuationTier
 from truealpha_contracts.strategy import DefinitionReviewState, definition_review_state
-
-_SHA256_PATTERN = r"^[0-9a-f]{64}$"
-
-
-class _StrictFrozenModel(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
 
 class StrategyRunOutcome(StrEnum):
@@ -28,7 +22,7 @@ class StrategyRunOutcome(StrEnum):
     EXCLUDED = "excluded"
 
 
-class StrategyRunDecision(_StrictFrozenModel):
+class StrategyRunDecision(StrictFrozenModel):
     issuer_id: str = Field(min_length=1)
     cutoff_at: datetime
     outcome: StrategyRunOutcome
@@ -56,7 +50,7 @@ class StrategyRunDecision(_StrictFrozenModel):
     @field_validator("cutoff_at")
     @classmethod
     def validate_cutoff_at(cls, value: datetime) -> datetime:
-        return _require_aware(value, "cutoff_at")
+        return require_aware(value, "cutoff_at")
 
     @model_validator(mode="after")
     def validate_one_valuation_basis(self) -> Self:
@@ -68,14 +62,12 @@ class StrategyRunDecision(_StrictFrozenModel):
     def valuation_basis(self) -> Literal["price_to_sales", "price_to_gross_profit"] | None:
         if self.target_price_to_gross_profit is not None:
             return "price_to_gross_profit"
-        if self.target_price_to_sales is not None:
-            return "price_to_sales"
-        return None
+        return "price_to_sales" if self.target_price_to_sales is not None else None
 
 
-class StrategyRunDefinition(_StrictFrozenModel):
+class StrategyRunDefinition(StrictFrozenModel):
     version: str
-    content_sha256: str = Field(pattern=_SHA256_PATTERN)
+    content_sha256: str = Field(pattern=SHA256_PATTERN)
     review_state: DefinitionReviewState
 
     @classmethod
@@ -93,10 +85,10 @@ class StrategyRunDefinition(_StrictFrozenModel):
         return self
 
 
-class StrategyRunReport(_StrictFrozenModel):
+class StrategyRunReport(StrictFrozenModel):
     strategy_id: Literal["large_model_value_v0"]
     source: Literal["strategy_smoke_fixture", "mart"] = "strategy_smoke_fixture"
-    corpus_sha256: str = Field(pattern=_SHA256_PATTERN)
+    corpus_sha256: str = Field(pattern=SHA256_PATTERN)
     decisions: tuple[StrategyRunDecision, ...]
     golden_mismatches: tuple[str, ...] = ()
     strategy_run_id: str | None = None
@@ -104,7 +96,7 @@ class StrategyRunReport(_StrictFrozenModel):
     definition: StrategyRunDefinition | None = None
 
 
-class StrategyRunUnavailable(_StrictFrozenModel):
+class StrategyRunUnavailable(StrictFrozenModel):
     strategy_id: str = Field(min_length=1)
     reason: Literal[
         "unknown_strategy_id",

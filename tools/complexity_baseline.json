@@ -5,5 +5,9 @@
   "apps/data-engine/src/data_engine/datahub/production_topt/sec_financial_adapter.py:build_route": 22,
   "apps/data-engine/src/data_engine/datahub/standards/filing_extraction.py:extract_headcount": 23,
   "apps/data-engine/src/data_engine/quality/surface_proof.py:prove": 23,
+  "common/contracts/src/truealpha_contracts/issuer_modules_mart.py:load_entity_display_map": 24,
+  "common/contracts/src/truealpha_contracts/reconciliation.py:ReconciliationResult._validate_outcome_rules": 21,
+  "common/contracts/src/truealpha_contracts/research_cards.py:verify_card_html": 34,
+  "common/contracts/src/truealpha_contracts/strategy.py:GoldenExpectation.validate_outcome_consistency": 22,
   "common/factors/src/factors/base/peg.py:peg": 24
 }

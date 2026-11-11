@@ -1,13 +1,5 @@
-/**
- * GENERATED FILE. DO NOT EDIT.
- *
- * Source: truealpha_contracts.strategy.strategy_definition_registry() (#1235). It loads
- * every packaged definition file in common/contracts/src/truealpha_contracts/data/.
- * Regenerate: uv run python common/contracts/conformance/export_strategy_definitions.py --write
- * Guard: common/contracts/tests/test_strategy_definition_registry.py fails when this file differs.
- */
+/** GENERATED FILE. DO NOT EDIT. Regenerate: uv run python common/contracts/conformance/export_strategy_definitions.py --write */
 
-/** One packaged strategy definition, by the identity that a strategy run records. */
 export interface RegisteredStrategyDefinition {
   readonly version: string;
   readonly content_sha256: string;

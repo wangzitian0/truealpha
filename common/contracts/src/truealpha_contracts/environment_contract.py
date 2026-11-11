@@ -9,9 +9,9 @@ from decimal import Decimal
 from importlib import resources
 from typing import Literal, Self, get_args
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import Field, field_validator, model_validator
 
-from truealpha_contracts.common import canonical_sha256
+from truealpha_contracts.common import StrictFrozenModel, canonical_sha256
 
 ENVIRONMENT_CONTRACT_RESOURCE = "environment_contract.v1.json"
 SENTINEL_KNOWN_ANSWERS_RESOURCE = "sentinel_known_answers.v1.json"
@@ -21,17 +21,40 @@ ENVIRONMENT_ALIASES: Mapping[str, str] = {"prod": "production"}
 UniverseStatus = Literal["scheduled", "stopped"]
 UniverseRole = Literal["strategy", "fund_consolidation", "sentinel"]
 MembershipKind = Literal["frozen_corpus", "index_api", "nport", "static"]
+DAY_SECONDS = 86_400
+UTILIZATION_CEILING = 0.7
+DEFAULT_DECODING_VERSION = "v1"
+_ENVIRONMENT_KEYS: tuple[str, ...] = get_args(EnvironmentKey)
+AccountHolder = Literal["api_key", "host_ip", "account"]
+CountsPer = Literal["api_key", "host_ip", "account", "endpoint", "connection", "not_stated"]
+LimitUnit = Literal["request", "distinct_stock"]
+EvidenceKind = Literal["published", "measured", "none_published", "not_known", "self_imposed"]
+_ISO_DATE = r"^\d{4}-\d{2}-\d{2}$"
 
 
 class UnknownUniverse(LookupError):
     """A key, id or lane name that no record of the environment contract holds."""
 
 
-class _StrictFrozenModel(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+class UnknownVendorAccount(LookupError):
+    """An account or seat name that no row of ``vendor_accounts`` holds."""
 
 
-class SentinelMember(_StrictFrozenModel):
+def _require_unique(items: tuple[object, ...] | list[object], message: str) -> None:
+    if len(set(items)) != len(items):
+        raise ValueError(f"{message}: {items}")
+
+
+def _check_percents(owner: str, percent: Mapping[EnvironmentKey, int]) -> None:
+    if set(percent) != set(_ENVIRONMENT_KEYS):
+        raise ValueError(f"{owner}: the percent table names {sorted(percent)}, not {sorted(_ENVIRONMENT_KEYS)}")
+    if any(not 0 <= v <= 100 for v in percent.values()):
+        raise ValueError(f"{owner}: a percent is an integer from 0 to 100: {dict(percent)}")
+    if sum(percent.values()) > 100:
+        raise ValueError(f"{owner}: the percents sum past 100: {dict(percent)}")
+
+
+class SentinelMember(StrictFrozenModel):
     ticker: str = Field(min_length=1)
     issuer_id: str = Field(pattern=r"^issuer:cik:\d{10}$")
     listing_id: str = Field(pattern=r"^listing:x(?:nas|nys):[a-z0-9.]+$")
@@ -39,7 +62,7 @@ class SentinelMember(_StrictFrozenModel):
     defect_refs: tuple[str, ...] = Field(min_length=1)
 
 
-class UniverseMembership(_StrictFrozenModel):
+class UniverseMembership(StrictFrozenModel):
     kind: MembershipKind
     url: str | None = Field(default=None, min_length=1)
     mic: str | None = Field(default=None, min_length=1)
@@ -55,9 +78,7 @@ class UniverseMembership(_StrictFrozenModel):
             "static": {"members", "mic"},
         }[self.kind]
         required = {"index_api": "url", "nport": "nport_ticker", "static": "members"}.get(self.kind)
-        stray = sorted(
-            name for name in ("url", "mic", "nport_ticker", "members") if getattr(self, name) and name not in used
-        )
+        stray = sorted(n for n in ("url", "mic", "nport_ticker", "members") if getattr(self, n) and n not in used)
         if stray or (required is not None and not getattr(self, required)):
             raise ValueError(
                 f"a {self.kind} membership needs {required or 'no field'} and holds {stray or 'nothing else'}"
@@ -65,7 +86,7 @@ class UniverseMembership(_StrictFrozenModel):
         return self
 
 
-class UniverseRecord(_StrictFrozenModel):
+class UniverseRecord(StrictFrozenModel):
     region: str = Field(pattern=r"^[a-z]{2}$")
     id_prefix: str = Field(pattern=r"^universe:[a-z0-9]+-[a-z]{2}-$")
     lane_name: str = Field(min_length=1)
@@ -92,16 +113,16 @@ class UniverseRecord(_StrictFrozenModel):
         return "fund_consolidation" in self.roles
 
 
-class EnvironmentTickContract(_StrictFrozenModel):
+class EnvironmentTickContract(StrictFrozenModel):
     pass
 
 
-class EnvironmentUniverse(_StrictFrozenModel):
+class EnvironmentUniverse(StrictFrozenModel):
     key: str = Field(min_length=1)
     status: UniverseStatus
 
 
-class EnvironmentSpec(_StrictFrozenModel):
+class EnvironmentSpec(StrictFrozenModel):
     environment: EnvironmentKey
     trigger: str = Field(min_length=1)
     live_vendor_calls: bool
@@ -111,37 +132,12 @@ class EnvironmentSpec(_StrictFrozenModel):
 
     @model_validator(mode="after")
     def _a_universe_is_listed_once(self) -> Self:
-        keys = [universe.key for universe in self.universes]
-        if len(set(keys)) != len(keys):
-            raise ValueError(f"{self.environment}: a universe is listed twice: {keys}")
-        if len(set(self.list_refresh)) != len(self.list_refresh):
-            raise ValueError(f"{self.environment}: a list_refresh universe is listed twice: {self.list_refresh}")
+        _require_unique([u.key for u in self.universes], f"{self.environment}: a universe is listed twice")
+        _require_unique(self.list_refresh, f"{self.environment}: a list_refresh universe is listed twice")
         return self
 
 
-DAY_SECONDS = 86_400
-_ENVIRONMENT_KEYS: tuple[str, ...] = get_args(EnvironmentKey)
-AccountHolder = Literal["api_key", "host_ip", "account"]
-CountsPer = Literal["api_key", "host_ip", "account", "endpoint", "connection", "not_stated"]
-LimitUnit = Literal["request", "distinct_stock"]
-EvidenceKind = Literal["published", "measured", "none_published", "not_known", "self_imposed"]
-_ISO_DATE = r"^\d{4}-\d{2}-\d{2}$"
-
-
-class UnknownVendorAccount(LookupError):
-    """An account or seat name that no row of ``vendor_accounts`` holds."""
-
-
-def _check_percents(owner: str, percent: Mapping[EnvironmentKey, int]) -> None:
-    if set(percent) != set(_ENVIRONMENT_KEYS):
-        raise ValueError(f"{owner}: the percent table names {sorted(percent)}, not {sorted(_ENVIRONMENT_KEYS)}")
-    if any(not 0 <= value <= 100 for value in percent.values()):
-        raise ValueError(f"{owner}: a percent is an integer from 0 to 100: {dict(percent)}")
-    if sum(percent.values()) > 100:
-        raise ValueError(f"{owner}: the percents sum past 100: {dict(percent)}")
-
-
-class LimitEvidence(_StrictFrozenModel):
+class LimitEvidence(StrictFrozenModel):
     kind: EvidenceKind
     source: tuple[str, ...] = ()
     checked_at: str | None = Field(default=None, pattern=_ISO_DATE)
@@ -151,9 +147,7 @@ class LimitEvidence(_StrictFrozenModel):
     @field_validator("source", mode="before")
     @classmethod
     def _one_source_may_be_a_bare_string(cls, value: object) -> object:
-        if isinstance(value, str):
-            return (value,)
-        return tuple(value) if isinstance(value, list) else value
+        return (value,) if isinstance(value, str) else (tuple(value) if isinstance(value, list) else value)
 
     @model_validator(mode="after")
     def _the_kind_fixes_the_fields(self) -> Self:
@@ -176,7 +170,7 @@ class LimitEvidence(_StrictFrozenModel):
         return self
 
 
-class VendorLimit(_StrictFrozenModel):
+class VendorLimit(StrictFrozenModel):
     id: str = Field(pattern=r"^[a-z0-9_]+$")
     unit: LimitUnit
     amount: int | None = Field(default=None, gt=0)
@@ -202,7 +196,7 @@ class VendorLimit(_StrictFrozenModel):
         return self.amount is not None and self.evidence.kind != "self_imposed"
 
 
-class VendorAccount(_StrictFrozenModel):
+class VendorAccount(StrictFrozenModel):
     holder: AccountHolder
     seats: tuple[str, ...] = Field(min_length=1)
     outside_consumers: bool
@@ -213,16 +207,12 @@ class VendorAccount(_StrictFrozenModel):
 
     @model_validator(mode="after")
     def _the_row_is_consistent(self) -> Self:
-        if len(set(self.seats)) != len(self.seats):
-            raise ValueError(f"a seat is listed twice: {self.seats}")
-        ids = [limit.id for limit in self.limits]
-        if len(set(ids)) != len(ids):
-            raise ValueError(f"a limit id is listed twice: {ids}")
-        windows = [
-            limit.window_seconds for limit in self.limits if limit.unit == "request" and limit.amount is not None
-        ]
-        if len(set(windows)) != len(windows):
-            raise ValueError(f"two request limits share one window: {windows}")
+        _require_unique(self.seats, "a seat is listed twice")
+        _require_unique([lim.id for lim in self.limits], "a limit id is listed twice")
+        _require_unique(
+            [lim.window_seconds for lim in self.limits if lim.unit == "request" and lim.amount is not None],
+            "two request limits share one window",
+        )
         if (self.percent is None) != (self.percent_reason is None):
             raise ValueError("a percent override and its percent_reason go together")
         if self.percent is not None:
@@ -232,7 +222,7 @@ class VendorAccount(_StrictFrozenModel):
         return self
 
 
-class VendorAccounts(_StrictFrozenModel):
+class VendorAccounts(StrictFrozenModel):
     description: str = Field(min_length=1)
     default_percent: Mapping[EnvironmentKey, int]
     accounts: Mapping[str, VendorAccount] = Field(min_length=1)
@@ -254,10 +244,10 @@ class VendorAccounts(_StrictFrozenModel):
     def percent_of(self, account: str, environment: str) -> int | None:
         row = self.accounts[account]
         table = row.percent if row.percent is not None else self.default_percent
-        return next((value for key, value in table.items() if key == environment), None)
+        return next((v for k, v in table.items() if k == environment), None)
 
 
-class LimitShare(_StrictFrozenModel):
+class LimitShare(StrictFrozenModel):
     limit_id: str
     unit: LimitUnit
     window_seconds: int | None
@@ -266,7 +256,7 @@ class LimitShare(_StrictFrozenModel):
     divided: bool
 
 
-class AccountShare(_StrictFrozenModel):
+class AccountShare(StrictFrozenModel):
     account: str
     environment: str
     percent: int
@@ -275,30 +265,27 @@ class AccountShare(_StrictFrozenModel):
     def share_in_window(self, window_seconds: int) -> int | None:
         return next(
             (
-                limit.share
-                for limit in self.limits
-                if limit.unit == "request" and limit.window_seconds == window_seconds and limit.share is not None
+                lim.share
+                for lim in self.limits
+                if lim.unit == "request" and lim.window_seconds == window_seconds and lim.share is not None
             ),
             None,
         )
 
     @property
     def admits_a_call(self) -> bool:
-        return all(limit.share >= 1 for limit in self.limits if limit.unit == "request" and limit.share is not None)
+        return all(lim.share >= 1 for lim in self.limits if lim.unit == "request" and lim.share is not None)
 
 
-class RunTimeBounds(_StrictFrozenModel):
+class RunTimeBounds(StrictFrozenModel):
     description: str = Field(min_length=1)
     margin: float = Field(gt=1)
     floor_minutes: float = Field(gt=0)
     window_days: int = Field(ge=1)
 
 
-UTILIZATION_CEILING = 0.7
-
-
-class MeasuredProcessMemory(_StrictFrozenModel):
-    at: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+class MeasuredProcessMemory(StrictFrozenModel):
+    at: str = Field(pattern=_ISO_DATE)
     environment: EnvironmentKey
     method: str = Field(min_length=1)
     grpc_server_hwm_mib: float = Field(gt=0)
@@ -316,7 +303,7 @@ class MeasuredProcessMemory(_StrictFrozenModel):
         return self
 
 
-class CodeServerCapacity(_StrictFrozenModel):
+class CodeServerCapacity(StrictFrozenModel):
     description: str = Field(min_length=1)
     ceiling_mib: int = Field(ge=1)
     ceiling_source: str = Field(min_length=1)
@@ -343,8 +330,7 @@ class CodeServerCapacity(_StrictFrozenModel):
 
     @property
     def server_mib(self) -> int:
-        grown = Decimal(str(self.measured.grpc_server_hwm_mib)) * (1 + Decimal(str(self.server_margin)))
-        return math.ceil(grown)
+        return math.ceil(Decimal(str(self.measured.grpc_server_hwm_mib)) * (1 + Decimal(str(self.server_margin))))
 
     @property
     def run_mib(self) -> int:
@@ -360,7 +346,7 @@ class CodeServerCapacity(_StrictFrozenModel):
         return self.concurrent_runs - 1
 
 
-class ModelRetrySpec(_StrictFrozenModel):
+class ModelRetrySpec(StrictFrozenModel):
     transient_http_statuses: tuple[int, ...] = Field(min_length=1)
     transient_provider_codes: tuple[str, ...]
     terminal_provider_codes: tuple[str, ...]
@@ -379,7 +365,7 @@ class ModelRetrySpec(_StrictFrozenModel):
 
     @property
     def base_total_wait_seconds(self) -> int:
-        return sum(self.base_backoff_seconds(retry) for retry in range(1, self.max_attempts))
+        return sum(self.base_backoff_seconds(r) for r in range(1, self.max_attempts))
 
     @model_validator(mode="after")
     def _the_policy_outlasts_one_rate_window(self) -> Self:
@@ -388,8 +374,7 @@ class ModelRetrySpec(_StrictFrozenModel):
             raise ValueError(f"a provider code cannot be transient and terminal: {sorted(overlap)}")
         if self.base_total_wait_seconds < self.min_total_wait_seconds:
             raise ValueError(
-                f"the waits sum to {self.base_total_wait_seconds} s, below min_total_wait_seconds "
-                f"{self.min_total_wait_seconds}"
+                f"the waits sum to {self.base_total_wait_seconds} s, below min_total_wait_seconds {self.min_total_wait_seconds}"
             )
         if self.deadline_seconds < self.min_total_wait_seconds:
             raise ValueError(
@@ -398,28 +383,25 @@ class ModelRetrySpec(_StrictFrozenModel):
         return self
 
 
-class ModelProbeSlots(_StrictFrozenModel):
+class ModelProbeSlots(StrictFrozenModel):
     hour_utc: int = Field(ge=0, le=23)
     slot_minutes: int = Field(ge=1)
     attempt_timeout_seconds: int = Field(ge=1)
     launch_margin_seconds: int = Field(ge=0)
 
 
-DEFAULT_DECODING_VERSION = "v1"
-
-
-class ModelSeatEnvironmentLimits(_StrictFrozenModel):
+class ModelSeatEnvironmentLimits(StrictFrozenModel):
     max_concurrent_calls: int = Field(ge=1)
     calls_per_minute: int = Field(ge=1)
     probe_offset_minutes: int = Field(ge=0, le=59)
     decoding_version: str = Field(default=DEFAULT_DECODING_VERSION, pattern=r"^v[0-9]+$")
 
 
-class ModelSeatContract(_StrictFrozenModel):
+class ModelSeatContract(StrictFrozenModel):
     description: str = Field(min_length=1)
     seat: str = Field(min_length=1)
     shared_credential: str = Field(min_length=1)
-    measured_at: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    measured_at: str = Field(pattern=_ISO_DATE)
     source: str = Field(min_length=1)
     retry: ModelRetrySpec
     probe: ModelProbeSlots
@@ -427,17 +409,15 @@ class ModelSeatContract(_StrictFrozenModel):
 
     @model_validator(mode="after")
     def _probe_slots_hold_the_whole_retry_deadline(self) -> Self:
-        longest_probe_seconds = self.launch_margin_and_deadline_seconds + self.probe.attempt_timeout_seconds
-        slot_floor = math.ceil(longest_probe_seconds / 60)
+        slot_floor = math.ceil((self.launch_margin_and_deadline_seconds + self.probe.attempt_timeout_seconds) / 60)
         if self.probe.slot_minutes < slot_floor:
             raise ValueError(
                 f"slot_minutes {self.probe.slot_minutes} is below the longest probe of {slot_floor} minutes "
                 "(launch margin, retry deadline and one attempt)"
             )
-        offsets = sorted(limits.probe_offset_minutes for limits in self.environments.values())
-        for earlier, later in zip(offsets, offsets[1:], strict=False):
-            if later - earlier < self.probe.slot_minutes:
-                raise ValueError(f"probe offsets {offsets} are closer than slot_minutes {self.probe.slot_minutes}")
+        offsets = sorted(lim.probe_offset_minutes for lim in self.environments.values())
+        if any(later - earlier < self.probe.slot_minutes for earlier, later in zip(offsets, offsets[1:], strict=False)):
+            raise ValueError(f"probe offsets {offsets} are closer than slot_minutes {self.probe.slot_minutes}")
         return self
 
     @property
@@ -459,18 +439,18 @@ class ModelSeatContract(_StrictFrozenModel):
         return f"{self.probe_offset_minutes(environment)} {self.probe.hour_utc} * * *"
 
 
-class NightlyVerdictExpectationSpec(_StrictFrozenModel):
+class NightlyVerdictExpectationSpec(StrictFrozenModel):
     cadence_hours: int = Field(gt=0)
     job: str = Field(min_length=1)
 
 
-class NightlyVerdictsContract(_StrictFrozenModel):
+class NightlyVerdictsContract(StrictFrozenModel):
     description: str = Field(min_length=1)
     checks: Mapping[str, NightlyVerdictExpectationSpec] = Field(min_length=1)
     per_universe: Mapping[str, NightlyVerdictExpectationSpec] = Field(min_length=1)
 
 
-class EnvironmentContract(_StrictFrozenModel):
+class EnvironmentContract(StrictFrozenModel):
     schema_version: Literal[1]
     contract_version: str = Field(min_length=1)
     description: str = Field(min_length=1)
@@ -486,25 +466,25 @@ class EnvironmentContract(_StrictFrozenModel):
     @model_validator(mode="after")
     def _the_records_agree_with_the_environments(self) -> Self:
         for field in ("id_prefix", "lane_name"):
-            values = [getattr(record, field) for record in self.universes.values()]
+            values = [getattr(r, field) for r in self.universes.values()]
             if len(set(values)) != len(values):
                 raise ValueError(f"two universe records share a {field}: {sorted(values)}")
         for env_name, spec in self.environments.items():
-            ticking = {key for key, record in self.universes.items() if env_name in record.cron}
+            ticking = {k for k, r in self.universes.items() if env_name in r.cron}
             if set(spec.ticks) != ticking:
                 raise ValueError(
                     f"{env_name}: the ticks {sorted(spec.ticks)} and the universe records with a cron {sorted(ticking)} differ"
                 )
-            listed = {entry.key for entry in spec.universes}
+            listed = {e.key for e in spec.universes}
             unknown = sorted((listed | set(spec.list_refresh)) - set(self.universes))
             if unknown:
                 raise ValueError(f"{env_name}: the environment names universes with no record: {unknown}")
-            for refresh_key in spec.list_refresh:
-                if self.universes[refresh_key].membership.kind not in ("index_api", "nport"):
+            for rk in spec.list_refresh:
+                if self.universes[rk].membership.kind not in ("index_api", "nport"):
                     raise ValueError(
-                        f"{env_name}: list_refresh names {refresh_key!r}, whose membership is not index_api or nport"
+                        f"{env_name}: list_refresh names {rk!r}, whose membership is not index_api or nport"
                     )
-            served_ticks = {key for key in spec.ticks if not self.universes[key].is_sentinel}
+            served_ticks = {k for k in spec.ticks if not self.universes[k].is_sentinel}
             if listed != served_ticks:
                 raise ValueError(
                     f"{env_name}: the universes {sorted(listed)} and the universe ticks {sorted(served_ticks)} differ"
@@ -515,12 +495,13 @@ class EnvironmentContract(_StrictFrozenModel):
     def _validate_sentinels_and_environments(self) -> Self:
         if len(self.sentinels) != 10:
             raise ValueError(f"sentinel set must hold 10 listings across 9 issuers, got {len(self.sentinels)}")
-        distinct_issuers = {member.issuer_id for member in self.sentinels}
-        if len(distinct_issuers) != 9:
-            raise ValueError(f"sentinel set must span 9 distinct issuers, got {len(distinct_issuers)}")
-        for required_env in ("preview", "staging", "production"):
-            if required_env not in self.environments:
-                raise ValueError(f"environment contract is missing {required_env!r}")
+        if len({m.issuer_id for m in self.sentinels}) != 9:
+            raise ValueError(
+                f"sentinel set must span 9 distinct issuers, got {len({m.issuer_id for m in self.sentinels})}"
+            )
+        for req_env in ("preview", "staging", "production"):
+            if req_env not in self.environments:
+                raise ValueError(f"environment contract is missing {req_env!r}")
         for env_name, spec in self.environments.items():
             if spec.live_vendor_calls and self.model_seat.limits_for(env_name) is None:
                 raise ValueError(f"{env_name} calls live vendors and declares no model seat limits")
@@ -554,25 +535,22 @@ class EnvironmentContract(_StrictFrozenModel):
         return (environment, *(alias for alias, target in ENVIRONMENT_ALIASES.items() if target == environment))
 
     def record(self, key: str) -> UniverseRecord:
-        try:
-            return self.universes[key]
-        except KeyError:
-            raise UnknownUniverse(
-                f"{key!r} is no universe of the environment contract: {sorted(self.universes)}"
-            ) from None
+        if key not in self.universes:
+            raise UnknownUniverse(f"{key!r} is no universe of the environment contract: {sorted(self.universes)}")
+        return self.universes[key]
 
     def universe_of_id(self, universe_id: str) -> str:
-        matches = [key for key, record in self.universes.items() if universe_id.startswith(record.id_prefix)]
+        matches = [k for k, r in self.universes.items() if universe_id.startswith(r.id_prefix)]
         if not matches:
             raise UnknownUniverse(
                 f"{universe_id!r} starts with no universe id prefix: {sorted(r.id_prefix for r in self.universes.values())}"
             )
-        return max(matches, key=lambda key: len(self.universes[key].id_prefix))
+        return max(matches, key=lambda k: len(self.universes[k].id_prefix))
 
     def universe_of_lane(self, lane_name: str) -> str:
-        for key, record in self.universes.items():
-            if record.lane_name == lane_name:
-                return key
+        for k, r in self.universes.items():
+            if r.lane_name == lane_name:
+                return k
         raise UnknownUniverse(
             f"{lane_name!r} is the lane name of no universe: {sorted(r.lane_name for r in self.universes.values())}"
         )
@@ -580,11 +558,11 @@ class EnvironmentContract(_StrictFrozenModel):
     def universe_status(self, universe: str, environment: str | None) -> UniverseStatus | None:
         self.record(universe)
         spec = self.environments.get(self.normalize_environment(environment))
-        return None if spec is None else next((entry.status for entry in spec.universes if entry.key == universe), None)
+        return None if spec is None else next((e.status for e in spec.universes if e.key == universe), None)
 
     def scheduled_universes(self, environment: str | None) -> tuple[str, ...]:
         spec = self.environments.get(self.normalize_environment(environment))
-        return () if spec is None else tuple(entry.key for entry in spec.universes if entry.status == "scheduled")
+        return () if spec is None else tuple(e.key for e in spec.universes if e.status == "scheduled")
 
     def expects_verdict(self, check: str, environment: str | None) -> bool:
         prefix, at, lane_name = check.partition("@")
@@ -596,29 +574,29 @@ class EnvironmentContract(_StrictFrozenModel):
             key = self.universe_of_lane(lane_name)
         except UnknownUniverse:
             return False
-        if self.normalize_environment(environment) not in self.environments:
-            return True
-        return self.universe_status(key, environment) == "scheduled"
+        return (
+            True
+            if self.normalize_environment(environment) not in self.environments
+            else self.universe_status(key, environment) == "scheduled"
+        )
 
     def is_universe_scheduled(self, universe: str, environment: str) -> bool:
         record = self.record(universe)
         spec = self.environments.get(self.normalize_environment(environment))
-        if spec is None or universe not in spec.ticks:
-            return False
-        return record.is_sentinel or self.universe_status(universe, environment) == "scheduled"
+        return (
+            spec is not None
+            and universe in spec.ticks
+            and (record.is_sentinel or self.universe_status(universe, environment) == "scheduled")
+        )
 
     def is_universe_list_refresh_scheduled(self, universe: str, environment: str) -> bool:
         self.record(universe)
-        if self.is_universe_scheduled(universe, environment):
-            return True
         spec = self.environments.get(self.normalize_environment(environment))
-        return spec is not None and universe in spec.list_refresh
+        return self.is_universe_scheduled(universe, environment) or (spec is not None and universe in spec.list_refresh)
 
     def unscheduled_id_prefixes(self) -> Mapping[str, tuple[str, ...]]:
         return {
-            env: tuple(
-                record.id_prefix for key, record in self.universes.items() if not self.is_universe_scheduled(key, env)
-            )
+            env: tuple(r.id_prefix for k, r in self.universes.items() if not self.is_universe_scheduled(k, env))
             for env in self.environments
             if env != "preview"
         }
@@ -648,25 +626,25 @@ class EnvironmentContract(_StrictFrozenModel):
             percent=percent,
             limits=tuple(
                 LimitShare(
-                    limit_id=limit.id,
-                    unit=limit.unit,
-                    window_seconds=limit.window_seconds,
-                    amount=limit.amount,
-                    share=limit.amount * percent // 100 if limit.amount is not None and limit.divided else limit.amount,
-                    divided=limit.divided,
+                    limit_id=lim.id,
+                    unit=lim.unit,
+                    window_seconds=lim.window_seconds,
+                    amount=lim.amount,
+                    share=lim.amount * percent // 100 if lim.amount is not None and lim.divided else lim.amount,
+                    divided=lim.divided,
                 )
-                for limit in row.limits
+                for lim in row.limits
             ),
         )
 
 
-class SentinelKnownAnswer(_StrictFrozenModel):
+class SentinelKnownAnswer(StrictFrozenModel):
     answer_id: str = Field(min_length=1)
     ticker: str = Field(min_length=1)
     issuer_id: str = Field(pattern=r"^issuer:cik:\d{10}$")
     cik: str = Field(pattern=r"^\d{10}$")
     metric: Literal["operating_branch", "gppe", "headcount", "revenue"]
-    period_end: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    period_end: str = Field(pattern=_ISO_DATE)
     accession: str = Field(pattern=r"^\d{10}-\d{2}-\d{6}$")
     kind: Literal["exact", "band", "numeric"]
     expected_value: str | None = None
@@ -692,19 +670,19 @@ class SentinelKnownAnswer(_StrictFrozenModel):
         return self
 
 
-class NegativeThemeClassificationAnswer(_StrictFrozenModel):
+class NegativeThemeClassificationAnswer(StrictFrozenModel):
     answer_id: str = Field(min_length=1)
     ticker: str = Field(min_length=1)
     issuer_id: str = Field(pattern=r"^issuer:cik:\d{10}$")
     cik: str = Field(pattern=r"^\d{10}$")
     theme_key: str = Field(min_length=1)
-    period_end: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    period_end: str = Field(pattern=_ISO_DATE)
     accession: str = Field(pattern=r"^\d{10}-\d{2}-\d{6}$")
     max_theme_share: str = Field(min_length=1)
     source_citation: str = Field(min_length=1)
 
 
-class SentinelKnownAnswersCatalog(_StrictFrozenModel):
+class SentinelKnownAnswersCatalog(StrictFrozenModel):
     schema_version: Literal[1]
     contract_version: str = Field(min_length=1)
     description: str = Field(min_length=1)
@@ -712,19 +690,15 @@ class SentinelKnownAnswersCatalog(_StrictFrozenModel):
     negative_theme_classifications: tuple[NegativeThemeClassificationAnswer, ...] = Field(min_length=1)
 
 
+def _read_data(resource_name: str) -> str:
+    return resources.files("truealpha_contracts.data").joinpath(resource_name).read_text(encoding="utf-8")
+
+
 @functools.cache
 def load_environment_contract() -> EnvironmentContract:
-    raw = (
-        resources.files("truealpha_contracts.data").joinpath(ENVIRONMENT_CONTRACT_RESOURCE).read_text(encoding="utf-8")
-    )
-    return EnvironmentContract.model_validate_json(raw)
+    return EnvironmentContract.model_validate_json(_read_data(ENVIRONMENT_CONTRACT_RESOURCE))
 
 
 @functools.cache
 def load_sentinel_known_answers() -> SentinelKnownAnswersCatalog:
-    raw = (
-        resources.files("truealpha_contracts.data")
-        .joinpath(SENTINEL_KNOWN_ANSWERS_RESOURCE)
-        .read_text(encoding="utf-8")
-    )
-    return SentinelKnownAnswersCatalog.model_validate_json(raw)
+    return SentinelKnownAnswersCatalog.model_validate_json(_read_data(SENTINEL_KNOWN_ANSWERS_RESOURCE))

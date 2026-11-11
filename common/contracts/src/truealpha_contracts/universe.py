@@ -7,21 +7,11 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import Field, field_validator, model_validator
 
-from truealpha_contracts.common import STABLE_ID_PATTERN, canonical_sha256
-from truealpha_contracts.models import _require_aware
+from truealpha_contracts.common import SHA256_PATTERN, STABLE_ID_PATTERN, FrozenModel, canonical_sha256, require_aware
 
-_SHA256_PATTERN = r"^[0-9a-f]{64}$"
 _MUTABLE_REFERENCE_MARKERS = frozenset({"current", "head", "latest"})
-
-
-class _FrozenModel(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-
-def _canonical_datetime(value: datetime) -> str:
-    return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
 
 def _require_stable_reference(value: str, field_name: str) -> str:
@@ -43,7 +33,7 @@ class SubjectKind(StrEnum):
     THEME = "theme"
 
 
-class SubjectRef(_FrozenModel):
+class SubjectRef(FrozenModel):
     kind: SubjectKind
     id: str
 
@@ -64,10 +54,10 @@ class UniverseClaimKind(StrEnum):
     SURVIVORSHIP_SAFE_REPLAY = "survivorship_safe_replay"
 
 
-class UniverseRef(_FrozenModel):
+class UniverseRef(FrozenModel):
     universe_id: str
     universe_version: str
-    content_sha256: str = Field(pattern=_SHA256_PATTERN)
+    content_sha256: str = Field(pattern=SHA256_PATTERN)
 
     @field_validator("universe_id", "universe_version")
     @classmethod
@@ -75,7 +65,7 @@ class UniverseRef(_FrozenModel):
         return _require_stable_reference(value, info.field_name)
 
 
-class UniverseManifest(_FrozenModel):
+class UniverseManifest(FrozenModel):
     ref: UniverseRef
     definition_kind: UniverseDefinitionKind
     supported_claims: tuple[UniverseClaimKind, ...]
@@ -87,7 +77,7 @@ class UniverseManifest(_FrozenModel):
     @field_validator("effective_at")
     @classmethod
     def validate_effective_at(cls, value: datetime) -> datetime:
-        return _require_aware(value, "effective_at")
+        return require_aware(value, "effective_at")
 
     @field_validator("owner")
     @classmethod
@@ -123,7 +113,7 @@ class UniverseManifest(_FrozenModel):
         effective_at: datetime,
         owner: str,
     ) -> str:
-        _require_aware(effective_at, "effective_at")
+        require_aware(effective_at, "effective_at")
         return canonical_sha256(
             {
                 "schema": "truealpha.universe-manifest.v1",
@@ -133,7 +123,7 @@ class UniverseManifest(_FrozenModel):
                 "supported_claims": sorted(UniverseClaimKind(item).value for item in supported_claims),
                 "membership_ids": sorted(membership_ids),
                 "resolver_version": resolver_version,
-                "effective_at": _canonical_datetime(effective_at),
+                "effective_at": effective_at.astimezone(UTC).isoformat().replace("+00:00", "Z"),
                 "owner": owner,
             }
         )
@@ -151,26 +141,25 @@ class UniverseManifest(_FrozenModel):
         resolver_version: str | None = None,
         supported_claims: tuple[UniverseClaimKind, ...] | None = None,
     ) -> UniverseManifest:
-        if supported_claims is None:
-            supported_claims = (
-                (UniverseClaimKind.FIXED_COHORT_DESCRIPTION,)
-                if definition_kind is UniverseDefinitionKind.FIXED_COHORT
-                else (UniverseClaimKind.POINT_IN_TIME_MEMBERSHIP, UniverseClaimKind.SURVIVORSHIP_SAFE_REPLAY)
-            )
-        content_sha256 = cls.compute_content_sha256(
+        claims = supported_claims or (
+            (UniverseClaimKind.FIXED_COHORT_DESCRIPTION,)
+            if definition_kind is UniverseDefinitionKind.FIXED_COHORT
+            else (UniverseClaimKind.POINT_IN_TIME_MEMBERSHIP, UniverseClaimKind.SURVIVORSHIP_SAFE_REPLAY)
+        )
+        digest = cls.compute_content_sha256(
             universe_id=universe_id,
             universe_version=universe_version,
             definition_kind=definition_kind,
-            supported_claims=supported_claims,
+            supported_claims=claims,
             membership_ids=membership_ids,
             resolver_version=resolver_version,
             effective_at=effective_at,
             owner=owner,
         )
         return cls(
-            ref=UniverseRef(universe_id=universe_id, universe_version=universe_version, content_sha256=content_sha256),
+            ref=UniverseRef(universe_id=universe_id, universe_version=universe_version, content_sha256=digest),
             definition_kind=definition_kind,
-            supported_claims=supported_claims,
+            supported_claims=claims,
             membership_ids=membership_ids,
             resolver_version=resolver_version,
             effective_at=effective_at,
@@ -212,7 +201,7 @@ class UniverseManifest(_FrozenModel):
         return self
 
 
-class UniverseMembership(_FrozenModel):
+class UniverseMembership(FrozenModel):
     membership_id: str
     universe_id: str
     subject: SubjectRef
@@ -231,7 +220,7 @@ class UniverseMembership(_FrozenModel):
     @field_validator("knowable_at", "recorded_at")
     @classmethod
     def validate_datetimes(cls, value: datetime, info) -> datetime:
-        return _require_aware(value, info.field_name)
+        return require_aware(value, info.field_name)
 
     @model_validator(mode="after")
     def validate_membership(self) -> UniverseMembership:

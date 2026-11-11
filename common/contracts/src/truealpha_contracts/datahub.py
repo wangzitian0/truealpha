@@ -2,51 +2,24 @@
 
 from __future__ import annotations
 
-import re
 from collections.abc import Mapping
 from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Any, Self
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import Field, field_validator, model_validator
 
-from truealpha_contracts.common import STABLE_ID_PATTERN, CaptureEnvironment
-from truealpha_contracts.common import identify_by_grain as _freeze_identity
-from truealpha_contracts.models import _require_aware
+from truealpha_contracts.common import (
+    SHA256_PATTERN,
+    STABLE_ID_PATTERN,
+    CaptureEnvironment,
+    FrozenModel,
+    identify_by_grain,
+    require_aware,
+    require_stable_and_immutable,
+    sorted_unique_coordinates,
+)
 from truealpha_contracts.universe import SubjectRef, UniverseRef
-
-_SHA256 = r"^[0-9a-f]{64}$"
-_MUTABLE_TOKENS = frozenset({"latest", "current", "default", "stable", "main", "head"})
-
-
-class _FrozenModel(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-
-def _reject_mutable_coordinate(value: str, field_name: str) -> str:
-    tokens = {token for token in re.split(r"[._:/@+\-]", value.lower()) if token}
-    if tokens & _MUTABLE_TOKENS:
-        raise ValueError(f"{field_name} must name an immutable version")
-    return value
-
-
-def _sorted_unique_strings(
-    values: tuple[str, ...],
-    field_name: str,
-    *,
-    allow_empty: bool = True,
-    immutable: bool = False,
-) -> tuple[str, ...]:
-    if not allow_empty and not values:
-        raise ValueError(f"{field_name} must not be empty")
-    if len(values) != len(set(values)):
-        raise ValueError(f"{field_name} must not contain duplicates")
-    for value in values:
-        if re.fullmatch(STABLE_ID_PATTERN, value) is None:
-            raise ValueError(f"{field_name} must contain stable coordinates")
-        if immutable:
-            _reject_mutable_coordinate(value, field_name)
-    return tuple(sorted(values))
 
 
 class FetchAttemptOutcome(StrEnum):
@@ -74,35 +47,35 @@ class AssessmentFreshness(StrEnum):
     UNKNOWN = "unknown"
 
 
-class RetryPolicy(_FrozenModel):
+class RetryPolicy(FrozenModel):
     max_attempts: int = Field(ge=1, le=20)
     retryable_outcomes: tuple[FetchAttemptOutcome, ...] = Field(min_length=1)
     terminal_outcomes: tuple[FetchAttemptOutcome, ...] = Field(min_length=1)
 
     @model_validator(mode="after")
     def validate_outcome_partition(self) -> Self:
-        retryable = tuple(sorted(set(self.retryable_outcomes), key=lambda value: value.value))
-        terminal = tuple(sorted(set(self.terminal_outcomes), key=lambda value: value.value))
+        retryable = tuple(sorted(set(self.retryable_outcomes), key=lambda v: v.value))
+        terminal = tuple(sorted(set(self.terminal_outcomes), key=lambda v: v.value))
         if len(retryable) != len(self.retryable_outcomes):
             raise ValueError("retryable_outcomes must not contain duplicates")
         if len(terminal) != len(self.terminal_outcomes):
             raise ValueError("terminal_outcomes must not contain duplicates")
         if set(retryable) & set(terminal):
             raise ValueError("retryable and terminal outcomes must be disjoint")
-        required_terminal = {
+        required = {
             FetchAttemptOutcome.SUCCESS,
             FetchAttemptOutcome.UNCHANGED,
             FetchAttemptOutcome.UNAVAILABLE,
             FetchAttemptOutcome.FAILED,
         }
-        if not required_terminal.issubset(terminal):
+        if not required.issubset(terminal):
             raise ValueError("terminal_outcomes must classify every terminal DataHub outcome")
         object.__setattr__(self, "retryable_outcomes", retryable)
         object.__setattr__(self, "terminal_outcomes", terminal)
         return self
 
 
-class CaptureSchedulePolicy(_FrozenModel):
+class CaptureSchedulePolicy(FrozenModel):
     schedule_policy_id: str = Field(default="", pattern=r"^(?:|schedule-policy:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
     policy_version: str = Field(pattern=STABLE_ID_PATTERN)
@@ -115,15 +88,15 @@ class CaptureSchedulePolicy(_FrozenModel):
     @field_validator("policy_version", "provider_availability_cadence")
     @classmethod
     def validate_immutable_coordinates(cls, value: str, info: Any) -> str:
-        return _reject_mutable_coordinate(value, info.field_name)
+        return require_stable_and_immutable(value, info.field_name)
 
     @model_validator(mode="after")
     def freeze_and_identify(self) -> Self:
         if self.demanded_cadence <= timedelta(0) or self.freshness_max_age <= timedelta(0):
             raise ValueError("cadence and freshness_max_age must be positive")
-        if any(window <= timedelta(0) for window in self.semantic_freshness_max_age.values()):
+        if any(w <= timedelta(0) for w in self.semantic_freshness_max_age.values()):
             raise ValueError("semantic freshness windows must be positive")
-        _freeze_identity(
+        identify_by_grain(
             self,
             id_field="schedule_policy_id",
             prefix="schedule-policy",
@@ -139,7 +112,7 @@ class CaptureSchedulePolicy(_FrozenModel):
         return self
 
 
-class CaptureCampaign(_FrozenModel):
+class CaptureCampaign(FrozenModel):
     campaign_id: str = Field(default="", pattern=r"^(?:|capture-campaign:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
     campaign_policy_id: str = Field(pattern=STABLE_ID_PATTERN)
@@ -150,23 +123,20 @@ class CaptureCampaign(_FrozenModel):
     @field_validator("campaign_policy_id")
     @classmethod
     def validate_policy(cls, value: str) -> str:
-        return _reject_mutable_coordinate(value, "campaign_policy_id")
+        return require_stable_and_immutable(value, "campaign_policy_id")
 
     @field_validator("cutoff")
     @classmethod
     def validate_cutoff(cls, value: datetime) -> datetime:
-        return _require_aware(value, "cutoff")
+        return require_aware(value, "cutoff")
 
     @model_validator(mode="after")
     def freeze_and_identify(self) -> Self:
-        refs = tuple(
-            sorted(self.universe_refs, key=lambda ref: (ref.universe_id, ref.universe_version, ref.content_sha256))
-        )
-        identities = [(ref.universe_id, ref.universe_version, ref.content_sha256) for ref in refs]
-        if len(identities) != len(set(identities)):
+        refs = tuple(sorted(self.universe_refs, key=lambda r: (r.universe_id, r.universe_version, r.content_sha256)))
+        if len(refs) != len(set(refs)):
             raise ValueError("universe_refs must not contain duplicates")
         object.__setattr__(self, "universe_refs", refs)
-        _freeze_identity(
+        identify_by_grain(
             self,
             id_field="campaign_id",
             prefix="capture-campaign",
@@ -175,7 +145,7 @@ class CaptureCampaign(_FrozenModel):
         return self
 
 
-class CaptureRun(_FrozenModel):
+class CaptureRun(FrozenModel):
     run_id: str = Field(default="", pattern=r"^(?:|capture-run:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
     campaign_id: str = Field(pattern=r"^capture-campaign:[0-9a-f]{64}$")
@@ -185,7 +155,7 @@ class CaptureRun(_FrozenModel):
 
     @model_validator(mode="after")
     def freeze_and_identify(self) -> Self:
-        _freeze_identity(
+        identify_by_grain(
             self,
             id_field="run_id",
             prefix="capture-run",
@@ -194,7 +164,7 @@ class CaptureRun(_FrozenModel):
         return self
 
 
-class ListObligation(_FrozenModel):
+class ListObligation(FrozenModel):
     obligation_id: str = Field(default="", pattern=r"^(?:|list-obligation:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
     run_id: str = Field(pattern=r"^capture-run:[0-9a-f]{64}$")
@@ -206,11 +176,11 @@ class ListObligation(_FrozenModel):
     @field_validator("capture_requirement_id")
     @classmethod
     def validate_requirement(cls, value: str) -> str:
-        return _reject_mutable_coordinate(value, "capture_requirement_id")
+        return require_stable_and_immutable(value, "capture_requirement_id")
 
     @model_validator(mode="after")
     def freeze_and_identify(self) -> Self:
-        _freeze_identity(
+        identify_by_grain(
             self,
             id_field="obligation_id",
             prefix="list-obligation",
@@ -219,13 +189,13 @@ class ListObligation(_FrozenModel):
         return self
 
 
-class SourceRequest(_FrozenModel):
+class SourceRequest(FrozenModel):
     source_request_id: str = Field(default="", pattern=r"^(?:|source-request:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
     source_registry_entry_id: str = Field(pattern=r"^source-registry-entry:[0-9a-f]{64}$")
     source_policy_id: str = Field(pattern=STABLE_ID_PATTERN)
     request_fingerprint_version: str = Field(pattern=STABLE_ID_PATTERN)
-    canonical_request_sha256: str = Field(pattern=_SHA256)
+    canonical_request_sha256: str = Field(pattern=SHA256_PATTERN)
     subject_refs: tuple[SubjectRef, ...] = Field(min_length=1)
     capture_requirement_ids: tuple[str, ...] = Field(min_length=1)
     partition: str = Field(pattern=STABLE_ID_PATTERN)
@@ -233,20 +203,20 @@ class SourceRequest(_FrozenModel):
     @field_validator("source_policy_id", "request_fingerprint_version")
     @classmethod
     def validate_immutable_coordinates(cls, value: str, info: Any) -> str:
-        return _reject_mutable_coordinate(value, info.field_name)
+        return require_stable_and_immutable(value, info.field_name)
 
     @field_validator("capture_requirement_ids")
     @classmethod
     def validate_requirements(cls, values: tuple[str, ...]) -> tuple[str, ...]:
-        return _sorted_unique_strings(values, "capture_requirement_ids", allow_empty=False, immutable=True)
+        return sorted_unique_coordinates(values, "capture_requirement_ids", allow_empty=False, immutable=True)
 
     @model_validator(mode="after")
     def freeze_and_identify(self) -> Self:
-        subjects = tuple(sorted(self.subject_refs, key=lambda subject: (subject.kind.value, subject.id)))
+        subjects = tuple(sorted(self.subject_refs, key=lambda s: (s.kind.value, s.id)))
         if len(subjects) != len(set(subjects)):
             raise ValueError("subject_refs must not contain duplicates")
         object.__setattr__(self, "subject_refs", subjects)
-        _freeze_identity(
+        identify_by_grain(
             self,
             id_field="source_request_id",
             prefix="source-request",
@@ -263,7 +233,7 @@ class SourceRequest(_FrozenModel):
         return self
 
 
-class CaptureWorkItem(_FrozenModel):
+class CaptureWorkItem(FrozenModel):
     work_item_id: str = Field(default="", pattern=r"^(?:|capture-work-item:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
     campaign_id: str = Field(pattern=r"^capture-campaign:[0-9a-f]{64}$")
@@ -272,7 +242,7 @@ class CaptureWorkItem(_FrozenModel):
 
     @model_validator(mode="after")
     def freeze_and_identify(self) -> Self:
-        _freeze_identity(
+        identify_by_grain(
             self,
             id_field="work_item_id",
             prefix="capture-work-item",
@@ -281,7 +251,7 @@ class CaptureWorkItem(_FrozenModel):
         return self
 
 
-class FetchAttempt(_FrozenModel):
+class FetchAttempt(FrozenModel):
     attempt_id: str = Field(default="", pattern=r"^(?:|fetch-attempt:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
     work_item_id: str = Field(pattern=r"^capture-work-item:[0-9a-f]{64}$")
@@ -291,20 +261,17 @@ class FetchAttempt(_FrozenModel):
     @field_validator("started_at")
     @classmethod
     def validate_started_at(cls, value: datetime) -> datetime:
-        return _require_aware(value, "started_at")
+        return require_aware(value, "started_at")
 
     @model_validator(mode="after")
     def freeze_and_identify(self) -> Self:
-        _freeze_identity(
-            self,
-            id_field="attempt_id",
-            prefix="fetch-attempt",
-            identity_fields=("work_item_id", "attempt_number"),
+        identify_by_grain(
+            self, id_field="attempt_id", prefix="fetch-attempt", identity_fields=("work_item_id", "attempt_number")
         )
         return self
 
 
-class FetchAttemptResult(_FrozenModel):
+class FetchAttemptResult(FrozenModel):
     attempt_result_id: str = Field(default="", pattern=r"^(?:|fetch-attempt-result:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
     attempt_id: str = Field(pattern=r"^fetch-attempt:[0-9a-f]{64}$")
@@ -318,12 +285,12 @@ class FetchAttemptResult(_FrozenModel):
     @field_validator("completed_at")
     @classmethod
     def validate_completed_at(cls, value: datetime) -> datetime:
-        return _require_aware(value, "completed_at")
+        return require_aware(value, "completed_at")
 
     @field_validator("reason_codes")
     @classmethod
     def validate_reasons(cls, values: tuple[str, ...]) -> tuple[str, ...]:
-        return _sorted_unique_strings(values, "reason_codes", allow_empty=False)
+        return sorted_unique_coordinates(values, "reason_codes", allow_empty=False)
 
     @model_validator(mode="after")
     def freeze_and_identify(self) -> Self:
@@ -335,16 +302,13 @@ class FetchAttemptResult(_FrozenModel):
                 raise ValueError("an unchanged attempt result must reuse exactly one source vintage")
         elif self.source_vintage_id is not None or self.reused_source_vintage_id is not None:
             raise ValueError("a non-content attempt result cannot name a source vintage")
-        _freeze_identity(
-            self,
-            id_field="attempt_result_id",
-            prefix="fetch-attempt-result",
-            identity_fields=("attempt_id",),
+        identify_by_grain(
+            self, id_field="attempt_result_id", prefix="fetch-attempt-result", identity_fields=("attempt_id",)
         )
         return self
 
 
-class SourceVintage(_FrozenModel):
+class SourceVintage(FrozenModel):
     source_vintage_id: str = Field(default="", pattern=r"^(?:|source-vintage:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
     source_request_id: str = Field(pattern=r"^source-request:[0-9a-f]{64}$")
@@ -355,11 +319,11 @@ class SourceVintage(_FrozenModel):
     @field_validator("source_published_at")
     @classmethod
     def validate_source_published_at(cls, value: datetime | None) -> datetime | None:
-        return None if value is None else _require_aware(value, "source_published_at")
+        return None if value is None else require_aware(value, "source_published_at")
 
     @model_validator(mode="after")
     def freeze_and_identify(self) -> Self:
-        _freeze_identity(
+        identify_by_grain(
             self,
             id_field="source_vintage_id",
             prefix="source-vintage",
@@ -368,7 +332,7 @@ class SourceVintage(_FrozenModel):
         return self
 
 
-class ListObligationResult(_FrozenModel):
+class ListObligationResult(FrozenModel):
     result_id: str = Field(default="", pattern=r"^(?:|list-obligation-result:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
     obligation_id: str = Field(pattern=r"^list-obligation:[0-9a-f]{64}$")
@@ -380,12 +344,12 @@ class ListObligationResult(_FrozenModel):
     @field_validator("completed_at")
     @classmethod
     def validate_completed_at(cls, value: datetime) -> datetime:
-        return _require_aware(value, "completed_at")
+        return require_aware(value, "completed_at")
 
     @field_validator("reason_codes")
     @classmethod
     def validate_reasons(cls, values: tuple[str, ...]) -> tuple[str, ...]:
-        return _sorted_unique_strings(values, "reason_codes", allow_empty=False)
+        return sorted_unique_coordinates(values, "reason_codes", allow_empty=False)
 
     @model_validator(mode="after")
     def freeze_and_identify(self) -> Self:
@@ -394,7 +358,7 @@ class ListObligationResult(_FrozenModel):
                 raise ValueError("a policy-skipped obligation cannot name a source attempt")
         elif self.final_attempt_id is None:
             raise ValueError("a non-skipped obligation must name its terminal source attempt")
-        _freeze_identity(
+        identify_by_grain(
             self,
             id_field="result_id",
             prefix="list-obligation-result",
@@ -403,7 +367,7 @@ class ListObligationResult(_FrozenModel):
         return self
 
 
-class NormalizedObservation(_FrozenModel):
+class NormalizedObservation(FrozenModel):
     observation_id: str = Field(default="", pattern=r"^(?:|normalized-observation:[0-9a-f]{64})$")
     content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
     semantic_type: str = Field(pattern=STABLE_ID_PATTERN)
@@ -415,19 +379,19 @@ class NormalizedObservation(_FrozenModel):
     source_vintage_id: str = Field(pattern=r"^source-vintage:[0-9a-f]{64}$")
     parser_version: str = Field(pattern=STABLE_ID_PATTERN)
     mapping_version: str = Field(pattern=STABLE_ID_PATTERN)
-    normalized_payload_sha256: str = Field(pattern=_SHA256)
+    normalized_payload_sha256: str = Field(pattern=SHA256_PATTERN)
     is_restatement: bool = False
     supersedes_observation_id: str | None = Field(default=None, pattern=r"^normalized-observation:[0-9a-f]{64}$")
 
     @field_validator("semantic_version", "parser_version", "mapping_version")
     @classmethod
     def validate_versioned_coordinates(cls, value: str, info: Any) -> str:
-        return _reject_mutable_coordinate(value, info.field_name)
+        return require_stable_and_immutable(value, info.field_name)
 
     @field_validator("valid_from", "valid_to", "knowable_at")
     @classmethod
     def validate_datetimes(cls, value: datetime | None, info: Any) -> datetime | None:
-        return None if value is None else _require_aware(value, info.field_name)
+        return None if value is None else require_aware(value, info.field_name)
 
     @model_validator(mode="after")
     def freeze_and_identify(self) -> Self:
@@ -435,7 +399,7 @@ class NormalizedObservation(_FrozenModel):
             raise ValueError("valid_to cannot precede valid_from")
         if self.is_restatement != (self.supersedes_observation_id is not None):
             raise ValueError("only a restatement may name, and every restatement must name, its predecessor")
-        _freeze_identity(
+        identify_by_grain(
             self,
             id_field="observation_id",
             prefix="normalized-observation",

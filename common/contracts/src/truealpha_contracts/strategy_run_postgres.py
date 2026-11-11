@@ -38,12 +38,6 @@ LATEST_RUN_SQL = """
     order by is_governed desc, r.executed_at desc, r.created_at desc, r.strategy_run_id desc
     limit 1
 """
-_LATEST_RUN_SQL = LATEST_RUN_SQL
-
-
-def latest_run_params(strategy_key: str) -> tuple[str, str]:
-    return (id_prefix_like(universe_with_role("strategy")), strategy_key)
-
 
 DECISIONS_FROM_SQL = """
     from mart.strategy_decisions d
@@ -51,47 +45,34 @@ DECISIONS_FROM_SQL = """
     left join mart.topt_core_results t
       on t.run_id = scope.capture_run_id and t.issuer_id = d.issuer_id and t.cutoff = d.cutoff_at
     left join lateral (
-        select ei.legacy_id
-        from mart.entity_identity ei
-        where ei.entity_id::text = d.issuer_id
-        limit 1
+        select ei.legacy_id from mart.entity_identity ei where ei.entity_id::text = d.issuer_id limit 1
     ) ei on true
     where d.strategy_run_id = %s
     order by d.cutoff_at, coalesce(ei.legacy_id, d.issuer_id)
 """
 _DECISIONS_SQL = (
-    """
-    select coalesce(ei.legacy_id, d.issuer_id) as issuer_id,
-           d.cutoff_at, d.capital_adjusted_labor_efficiency, d.tier,
-           d.current_price_to_sales, d.target_price_to_sales,
-           d.current_price_to_gross_profit, d.target_price_to_gross_profit, d.valuation_gap,
-           d.eligible, d.outcome, d.exclusion_reason, d.rank, d.target_weight, d.peg, d.peg_rank,
-           d.labor_efficiency_metric, t.confidence
-"""
-    + DECISIONS_FROM_SQL
+    "select coalesce(ei.legacy_id, d.issuer_id) as issuer_id, d.cutoff_at,"
+    " d.capital_adjusted_labor_efficiency, d.tier, d.current_price_to_sales, d.target_price_to_sales,"
+    " d.current_price_to_gross_profit, d.target_price_to_gross_profit, d.valuation_gap,"
+    " d.eligible, d.outcome, d.exclusion_reason, d.rank, d.target_weight, d.peg, d.peg_rank,"
+    " d.labor_efficiency_metric, t.confidence " + DECISIONS_FROM_SQL
 )
+
+
+def latest_run_params(strategy_key: str) -> tuple[str, str]:
+    return (id_prefix_like(universe_with_role("strategy")), strategy_key)
 
 
 def _decision_from_row(row: dict[str, Any]) -> StrategyRunDecision:
     return StrategyRunDecision(
-        issuer_id=row["issuer_id"],
-        cutoff_at=row["cutoff_at"].astimezone(UTC),
-        outcome=StrategyRunOutcome(row["outcome"]),
-        eligible=row["eligible"],
-        tier=ValuationTier(row["tier"]) if row["tier"] is not None else None,
-        capital_adjusted_labor_efficiency=row["capital_adjusted_labor_efficiency"],
-        current_price_to_sales=row["current_price_to_sales"],
-        target_price_to_sales=row["target_price_to_sales"],
-        current_price_to_gross_profit=row["current_price_to_gross_profit"],
-        target_price_to_gross_profit=row["target_price_to_gross_profit"],
-        valuation_gap=row["valuation_gap"],
-        confidence=row["confidence"],
-        exclusion_reason=row["exclusion_reason"],
-        rank=row["rank"],
-        target_weight=row["target_weight"],
-        peg=row["peg"],
-        peg_rank=row["peg_rank"],
-        labor_efficiency_metric=row["labor_efficiency_metric"],
+        **(
+            row
+            | {
+                "cutoff_at": row["cutoff_at"].astimezone(UTC),
+                "outcome": StrategyRunOutcome(row["outcome"]),
+                "tier": ValuationTier(row["tier"]) if row["tier"] is not None else None,
+            }
+        )
     )
 
 
@@ -104,7 +85,7 @@ class PostgresStrategyRunRepository:
         try:
             with psycopg.connect(self._database_url, connect_timeout=5, autocommit=True) as connection:
                 with connection.cursor(row_factory=dict_row) as cursor:
-                    cursor.execute(_LATEST_RUN_SQL, latest_run_params(strategy_id))
+                    cursor.execute(LATEST_RUN_SQL, latest_run_params(strategy_id))
                     run_row = cursor.fetchone()
                     if run_row is None:
                         return StrategyRunUnavailable(strategy_id=strategy_id, reason="no_runs_recorded")
@@ -116,7 +97,6 @@ class PostgresStrategyRunRepository:
                         return StrategyRunUnavailable(strategy_id=strategy_id, reason="empty_decisions")
         except psycopg.Error:
             return StrategyRunUnavailable(strategy_id=strategy_id, reason="database_unavailable")
-
         try:
             return StrategyRunReport(
                 strategy_id=strategy_id,  # type: ignore[arg-type]

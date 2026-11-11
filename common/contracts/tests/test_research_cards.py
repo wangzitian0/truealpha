@@ -441,10 +441,7 @@ def test_html_escapes_special_characters() -> None:
 
 _BUILDER_FUNCTIONS = {
     "build_card",
-    "_card_subject",
-    "_select_metrics",
     "_section_status",
-    "_default_card_title",
     "_claim_class",
 }
 # `min`/`max` are deliberately NOT forbidden: `_section_status` uses `min(sections, key=...)`

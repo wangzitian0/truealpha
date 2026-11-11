@@ -1,4 +1,4 @@
-"""Metric standards: what a field means, what counts as its value, and where its facts live (#735, #733)."""
+"""Metric standards: field meaning, acceptance rule, and fact plane (#735, #733)."""
 
 from __future__ import annotations
 
@@ -6,9 +6,9 @@ from decimal import Decimal
 from enum import StrEnum
 from types import MappingProxyType
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import Field, model_validator
 
-from truealpha_contracts.common import canonical_sha256
+from truealpha_contracts.common import FrozenModel, canonical_sha256
 from truealpha_contracts.metrics import METRICS
 from truealpha_contracts.reconciliation import ReconciliationPolicy
 from truealpha_contracts.reconciliation_policies import (
@@ -22,9 +22,7 @@ class StandardKind(StrEnum):
     EVALUATIVE = "evaluative"
 
 
-class FactPlane(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
+class FactPlane(FrozenModel):
     table: str = Field(pattern=r"^[a-z_]+\.[a-z_]+$")
     issuer_column: str = Field(pattern=r"^[a-z_]+$")
     reconciliation_policy: ReconciliationPolicy
@@ -38,9 +36,7 @@ class EvidenceRequirement(StrEnum):
     RUBRIC_JUDGEMENT = "rubric_judgement"
 
 
-class MetricStandard(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
+class MetricStandard(FrozenModel):
     metric: str = Field(min_length=1)
     definition: str = Field(min_length=1)
     acceptance_rule: str = Field(min_length=1)
