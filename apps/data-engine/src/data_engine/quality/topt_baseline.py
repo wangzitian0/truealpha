@@ -21,22 +21,36 @@ What each row reads, and what makes it red:
   capacity contract. A server below the budget that started less than `MATURE_SERVER_HOURS` ago is not
   measured: the high-water mark only grows, and the contract states its reading at 13 hours after the start.
 
-Q3, S1, S2 and S3 of #1664 cannot run inside one environment today. Q3 compares two environments, and no
-database sees the other. S1 to S3 compare a catalog with the migration chain; the reference needs a second
-database next to the target, and `tools/schema_drift.py` refuses to build it on a remote server. Each is
-listed as not measured. A verdict with a row that is not measured is never green: unknown is not OK.
+* S (S1 to S3, schema). The live catalog of this environment's database against a reference database that ran the
+  chain (`truealpha_tools.schema_drift`). The reference sits on the same server, is built by the one applier
+  `db/apply_migrations.sh` from `/app/db`, and is dropped at the end. The number of differences is the row. Green
+  only at 0. The comparison covers relations, columns, constraints, indexes, triggers, functions, views and
+  sequences. It does not cover row-level security policies, grants, function settings, index validity, trigger
+  state, enum types or comments: a green S does not prove those. A reference that cannot be built or compared is
+  red, never green. A scratch database that a killed process left behind is dropped by the next run (older than
+  1 h). Each environment runs its own check, so the row is S1 in production and S2 in staging, and the scheduled
+  verdict is S3.
+
+Q3 of #1664 cannot run inside one environment today. It compares two environments, and no database sees the other.
+It is listed as not measured. A verdict with a row that is not measured is never green: unknown is not OK.
 
 A shown percentage or size is rounded in the direction that keeps the text true: up for a red row, down for a
 row that passes. A text never says "70.0% against 70.0%" for a row that failed.
 
+A summary starts with the texts of the rows that keep the verdict red: the failed rows or, when no row failed,
+the rows that are not measured. Then it lists the rows that passed (their names), and, after a failed row, the rows
+that are not measured (their names). A green row is visible and differs from a row that did not run.
+
 A summary is public (`/api/health`). It holds row names, counts and percentages. Never a research value.
-`verdict()` puts "failed: " before a red summary, so a red summary here starts with the first row.
+`verdict()` puts "failed: " before a red summary, so the first text of a summary says why the verdict is red.
 """
 
 from __future__ import annotations
 
+import logging
 import os
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
@@ -48,6 +62,8 @@ from truealpha_contracts.universes import record
 
 from data_engine.datahub.a1_evidence import ACCEPTED_SERVICE_OBJECTIVES
 from data_engine.datahub.market_prices import TWELVE_DATA_SEAT
+
+log = logging.getLogger(__name__)
 
 MIB = 1024 * 1024
 PROC_ROOT = Path("/proc")
@@ -63,10 +79,13 @@ MATURE_SERVER_HOURS = 13
 #: Rows of #1664 that no environment can run alone, with the reason. The summary names them.
 NOT_MEASURED: Mapping[str, str] = {
     "Q3": "compares two environments; no database sees the other",
-    "S1": "schema_drift needs a second database next to the target",
-    "S2": "schema_drift needs a second database next to the target",
-    "S3": "schema_drift needs a second database next to the target",
 }
+
+#: Where the data-engine image holds the chain for the reference database (`apps/data-engine/Dockerfile`).
+IMAGE_DB_DIR = Path("/app/db")
+#: `db/roles.sql` sets the password of the app login when this variable is set. The reference build must never
+#: carry it: the check reads the schema and changes no credential.
+MASKED_ENVIRONMENT = ("APP_SERVICE_DB_PASSWORD",)
 
 State = Literal["pass", "fail", "unmeasured"]
 
@@ -99,13 +118,17 @@ class Judgement:
 
     @property
     def summary(self) -> str:
-        parts: list[str] = []
-        if self.failed:
-            parts.append("; ".join(row.text for row in self.failed))
-        if self.unmeasured:
-            parts.append("not measured: " + ", ".join(row.key for row in self.unmeasured))
-        if not parts:
+        """The rows that keep the verdict red come first: the failed rows, or, when none failed, the rows that are
+        not measured. `verdict()` puts "failed: " before a red summary, so that first part must say why."""
+        lead = self.failed or self.unmeasured
+        if not lead:
             return "ok: " + "; ".join(row.text for row in self.rows)
+        parts = ["; ".join(row.text for row in lead)]
+        passed = [row.key for row in self.rows if row.state == "pass"]
+        if passed:
+            parts.append("passed: " + ", ".join(passed))
+        if self.failed and self.unmeasured:
+            parts.append("not measured: " + ", ".join(row.key for row in self.unmeasured))
         return ". ".join(parts)
 
 
@@ -176,10 +199,19 @@ def judge_server(*, hwm_bytes: int | None, age_seconds: float | None, budget_mib
     return Row("C1", "pass", text)
 
 
-def judge(*, gppe: Row, quota: Row, server: Row) -> Judgement:
+def judge_schema(*, differences: int | None, failure: str = "") -> Row:
+    """S: the places where the live catalog differs from the chain. None means that the comparison did not run."""
+    if differences is None:
+        return Row("S", "fail", f"S the schema could not be compared ({failure})")
+    if differences == 0:
+        return Row("S", "pass", "S catalog matches the chain")
+    return Row("S", "fail", f"S schema differs from the chain in {differences} places")
+
+
+def judge(*, gppe: Row, quota: Row, server: Row, schema: Row) -> Judgement:
     """The rows in the order of #1664, then the rows that no environment can run alone."""
-    waiting = tuple(Row(key, "unmeasured", f"{key} {reason}") for key, reason in NOT_MEASURED.items())
-    return Judgement((gppe, quota, server, *waiting))
+    waiting = tuple(Row(key, "unmeasured", f"{key} not measured: {reason}") for key, reason in NOT_MEASURED.items())
+    return Judgement((gppe, quota, server, schema, *waiting))
 
 
 # --- readers ------------------------------------------------------------------------------------------------
@@ -286,3 +318,35 @@ def read_server(
     except (OSError, ValueError):
         hwm = None
     return judge_server(hwm_bytes=hwm, age_seconds=server_age_seconds(proc_root), budget_mib=budget_mib)
+
+
+@contextmanager
+def _without_environment(names: tuple[str, ...]) -> Iterator[None]:
+    """Mask variables of this process for the block, then put them back."""
+    held = {name: os.environ.pop(name) for name in names if name in os.environ}
+    try:
+        yield
+    finally:
+        os.environ.update(held)
+
+
+def read_schema(database_url: str, *, db_dir: Path | None = None) -> Row:
+    """S: build the reference on the server of `database_url`, compare, drop it.
+
+    Any failure is a red row. The row names the exception type and nothing else, because a connection error names its
+    host and the row is public. The log of the run keeps the full error."""
+    chain_dir = IMAGE_DB_DIR if db_dir is None else db_dir
+    try:
+        from truealpha_tools import schema_drift
+
+        try:
+            schema_drift.drop_stale_references(database_url)  # logs each database that it drops
+        except Exception:  # noqa: BLE001 - a failed sweep never hides the measurement
+            log.warning("could not sweep stale scratch reference databases", exc_info=True)
+        with _without_environment(MASKED_ENVIRONMENT):
+            with schema_drift.reference_database(database_url, db_dir=chain_dir, allow_remote=True) as reference_url:
+                report, _counts = schema_drift.compare(database_url, reference_url)
+    except Exception as failure:  # noqa: BLE001 - every failure is a red row, never a crash of the verdict
+        log.warning("the schema comparison failed", exc_info=True)
+        return judge_schema(differences=None, failure=type(failure).__name__)
+    return judge_schema(differences=len(report))

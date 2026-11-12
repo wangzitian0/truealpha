@@ -34,8 +34,8 @@ The sixth is the run health of every job (`quality.job_run_health`, #1466): whet
 the run that records it green. `/admin/pipeline` shows the counts and the error line beside it.
 
 The seventh is the TOPT baseline (`quality.topt_baseline`, #1664): whether the served TOPT head meets the
-accepted availability, whether the Twelve Data seat stayed inside its share, and whether the code server stayed
-inside its memory budget. It reads the primary tables, and it names the rows of #1664 that no environment can
+accepted availability, whether the Twelve Data seat stayed inside its share, whether the code server stayed
+inside its memory budget, and whether the schema of the database equals the migration chain. It reads the primary tables, and it names the rows of #1664 that no environment can
 run alone. It is a dashboard row and not a gate, like the run health.
 
 Every check here records its verdict — green and red — in `mart.nightly_verdicts`
@@ -758,7 +758,8 @@ def run_topt_baseline(context: dg.OpExecutionContext) -> str:
                     connection, now=now, environment=gateway.capacity_environment(), contract=contract
                 )
             server = topt_baseline.read_server(budget_mib=contract.code_server_capacity.server_mib)
-            judgement = topt_baseline.judge(gppe=gppe, quota=quota, server=server)
+            schema = topt_baseline.read_schema(settings.database_url)
+            judgement = topt_baseline.judge(gppe=gppe, quota=quota, server=server, schema=schema)
             context.log.info(f"topt baseline: {judgement.summary}")
             context.add_output_metadata({"failed": len(judgement.failed), "not_measured": len(judgement.unmeasured)})
             outcome.summary = judgement.summary
