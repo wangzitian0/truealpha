@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
-from psycopg import Connection
+from psycopg import Connection, sql
 from psycopg.types.json import Jsonb
 from truealpha_contracts.capture_control import (
     CaptureListObligation,
@@ -32,6 +33,50 @@ from truealpha_contracts.datahub import (
 
 class CaptureRepositoryConflictError(RuntimeError):
     """A content-addressed identity is already bound to different content."""
+
+
+def persist_run_report(
+    connection: Connection[Any],
+    report: Mapping[str, Any],
+    *,
+    table: str,
+    report_id_prefix: str,
+    columns: tuple[str, ...],
+    exclude_from_hash: tuple[str, ...] = (),
+) -> str:
+    """Insert one content-addressed run report; a repeated report stays one row."""
+    digest = canonical_sha256({key: value for key, value in report.items() if key not in exclude_from_hash})
+    report_id = f"{report_id_prefix}:{digest}"
+    insert_columns = ("report_id", "content_sha256", *columns, "payload")
+    statement = sql.SQL(
+        "insert into {table} ({columns}) values ({placeholders}) on conflict (report_id) do nothing"
+    ).format(
+        table=sql.Identifier(*table.split(".")),
+        columns=sql.SQL(", ").join(sql.Identifier(column) for column in insert_columns),
+        placeholders=sql.SQL(", ").join(sql.Placeholder() for _ in insert_columns),
+    )
+    connection.execute(
+        statement,
+        (report_id, digest, *(report[column] for column in columns), Jsonb(dict(report))),
+    )
+    return report_id
+
+
+def latest_report_row(
+    connection: Connection[Any],
+    table: str,
+    *,
+    universe_id: str | None = None,
+) -> Any:
+    """The newest report row of `table`, optionally narrowed to one universe."""
+    table_identifier = sql.Identifier(*table.split("."))
+    if universe_id is None:
+        statement = sql.SQL("select * from {table} order by created_at desc limit 1").format(table=table_identifier)
+        return connection.execute(statement).fetchone()
+    statement = sql.SQL("select * from {table} where universe_id = %s order by created_at desc limit 1").format(
+        table=table_identifier
+    )
+    return connection.execute(statement, (universe_id,)).fetchone()
 
 
 @dataclass(frozen=True)

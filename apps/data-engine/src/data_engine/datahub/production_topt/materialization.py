@@ -9,7 +9,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from functools import cache, partial
-from typing import Any, Self
+from typing import Any, ClassVar
 
 from factors.composite.strategy_evaluator import deciding_input_keys
 from factors.panel import IssuerClass, definition_pins
@@ -31,17 +31,23 @@ from factors.production_topt import (
     drop_absent_banking_leaves,
 )
 from psycopg import Connection
+from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from pydantic import (
-    BaseModel,
-    ConfigDict,
     Field,
     SerializerFunctionWrapHandler,
     field_validator,
     model_serializer,
-    model_validator,
 )
-from truealpha_contracts.common import canonical_sha256
+from truealpha_contracts.common import (
+    ContentHash,
+    FrozenModel,
+    IdentifiedFrozenModel,
+    canonical_sha256,
+    content_id,
+    reject_binary_float,
+    require_aware,
+)
 from truealpha_contracts.concept_mapping import ConceptMappingRuleset
 from truealpha_contracts.environment_contract import UnknownUniverse, load_environment_contract
 from truealpha_contracts.execution import InputEvidenceStatus
@@ -85,14 +91,18 @@ _REQUIRED_TYPES = frozenset(SEMANTIC_TYPES)
 _SEMANTICS_PER_LISTING = len(_REQUIRED_TYPES)
 
 
-class _FrozenModel(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
+def _insert_sql(table: str, columns: Sequence[str], *, conflict: str, returning: str) -> str:
+    """One `insert ... on conflict do nothing returning` statement for the given columns."""
+    placeholders = ", ".join(["%s"] * len(columns))
+    return (
+        f"insert into {table} ({', '.join(columns)}) values ({placeholders}) "
+        f"on conflict ({conflict}) do nothing returning {returning}"
+    )
 
 
-def _reject_float(value: Any) -> Any:
-    if isinstance(value, float):
-        raise ValueError("binary float is forbidden; normalized numerics must use base-10 strings")
-    return value
+def _content_check_sql(table: str, id_column: str) -> str:
+    """Read back the stored content hash and payload for one row identity."""
+    return f"select content_sha256, payload from {table} where {id_column} = %s"
 
 
 def _insert_or_verify(
@@ -111,7 +121,7 @@ def _insert_or_verify(
             raise ValueError(conflict_message)
 
 
-class FinancialFactPayload(_FrozenModel):
+class FinancialFactPayload(FrozenModel):
     issuer_id: str = Field(min_length=1)
     instrument_id: str = Field(min_length=1)
     listing_id: str = Field(min_length=1)
@@ -175,18 +185,18 @@ class FinancialFactPayload(_FrozenModel):
     )
     @classmethod
     def reject_binary_float(cls, value: Any) -> Any:
-        return _reject_float(value)
+        return reject_binary_float(value)
 
     @field_validator("net_income_by_period", mode="before")
     @classmethod
     def reject_binary_float_in_series(cls, value: Any) -> Any:
         if isinstance(value, dict):
             for entry in value.values():
-                _reject_float(entry)
+                reject_binary_float(entry)
         return value
 
 
-class MarketPricePayload(_FrozenModel):
+class MarketPricePayload(FrozenModel):
     issuer_id: str = Field(min_length=1)
     instrument_id: str = Field(min_length=1)
     listing_id: str = Field(min_length=1)
@@ -202,17 +212,17 @@ class MarketPricePayload(_FrozenModel):
     @field_validator("close", "open", "high", "low", "volume", mode="before")
     @classmethod
     def reject_binary_float(cls, value: Any) -> Any:
-        return _reject_float(value)
+        return reject_binary_float(value)
 
 
-class IdentityPayload(_FrozenModel):
+class IdentityPayload(FrozenModel):
     issuer_id: str = Field(min_length=1)
     instrument_id: str = Field(min_length=1)
     listing_id: str = Field(min_length=1)
     ticker: str = Field(min_length=1)
 
 
-class SnapshotMember(_FrozenModel):
+class SnapshotMember(FrozenModel):
     issuer_id: str
     instrument_id: str
     listing_id: str
@@ -250,9 +260,12 @@ class SnapshotMember(_FrozenModel):
         return values
 
 
-class ToptCoreSnapshot(_FrozenModel):
-    snapshot_id: str = Field(default="", pattern=r"^(?:|topt-core-snapshot:[0-9a-f]{64})$")
-    content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
+class ToptCoreSnapshot(IdentifiedFrozenModel):
+    id_field: ClassVar[str] = "snapshot_id"
+    id_prefix: ClassVar[str] = "topt-core-snapshot"
+
+    snapshot_id: str = content_id("topt-core-snapshot")
+    content_sha256: ContentHash = ""
     run_id: str = Field(pattern=r"^capture-run:[0-9a-f]{64}$")
     release_manifest_id: str = Field(pattern=r"^release-manifest:[0-9a-f]{64}$")
     universe_id: str
@@ -264,12 +277,9 @@ class ToptCoreSnapshot(_FrozenModel):
     @field_validator("cutoff")
     @classmethod
     def normalize_cutoff(cls, value: datetime) -> datetime:
-        if value.tzinfo is None or value.utcoffset() is None:
-            raise ValueError("snapshot cutoff must be timezone-aware")
-        return value.astimezone(UTC)
+        return require_aware(value, "snapshot cutoff").astimezone(UTC)
 
-    @model_validator(mode="after")
-    def validate_and_identify(self) -> Self:
+    def _canonicalize(self) -> None:
         members = tuple(sorted(self.members, key=lambda member: member.instrument_id))
         if not members:
             raise ValueError("a core snapshot must contain at least one member")
@@ -281,14 +291,6 @@ class ToptCoreSnapshot(_FrozenModel):
         if len(observations) != _SEMANTICS_PER_LISTING * len(members):
             raise ValueError("core snapshot must bind exactly four distinct observations per member")
         object.__setattr__(self, "members", members)
-        payload = self.model_dump(mode="json", exclude={"snapshot_id", "content_sha256"})
-        digest = canonical_sha256(payload)
-        expected_id = f"topt-core-snapshot:{digest}"
-        if self.snapshot_id not in {"", expected_id} or self.content_sha256 not in {"", digest}:
-            raise ValueError("TOPT snapshot identity does not match its canonical content")
-        object.__setattr__(self, "snapshot_id", expected_id)
-        object.__setattr__(self, "content_sha256", digest)
-        return self
 
     def factor_inputs(self) -> tuple[ToptCoreSnapshotInput, ...]:
         grouped: dict[str, list[SnapshotMember]] = {}
@@ -1020,14 +1022,25 @@ class PostgresToptCoreRepository:
         with self._connection.transaction():
             _insert_or_verify(
                 self._connection,
-                insert_sql="""
-                    insert into staging.topt_core_snapshots (
-                        snapshot_id, content_sha256, run_id, release_manifest_id,
-                        universe_id, universe_version, universe_sha256, cutoff,
-                        issuer_count, instrument_count, observation_count, payload
-                    ) values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    on conflict (snapshot_id) do nothing returning snapshot_id
-                """,
+                insert_sql=_insert_sql(
+                    "staging.topt_core_snapshots",
+                    (
+                        "snapshot_id",
+                        "content_sha256",
+                        "run_id",
+                        "release_manifest_id",
+                        "universe_id",
+                        "universe_version",
+                        "universe_sha256",
+                        "cutoff",
+                        "issuer_count",
+                        "instrument_count",
+                        "observation_count",
+                        "payload",
+                    ),
+                    conflict="snapshot_id",
+                    returning="snapshot_id",
+                ),
                 insert_params=(
                     snapshot.snapshot_id,
                     snapshot.content_sha256,
@@ -1042,7 +1055,7 @@ class PostgresToptCoreRepository:
                     _SEMANTICS_PER_LISTING * len(snapshot.members),
                     Jsonb(payload),
                 ),
-                check_sql="select content_sha256, payload from staging.topt_core_snapshots where snapshot_id = %s",
+                check_sql=_content_check_sql("staging.topt_core_snapshots", "snapshot_id"),
                 check_params=(snapshot.snapshot_id,),
                 expected=(snapshot.content_sha256, payload),
                 conflict_message="TOPT core snapshot identity conflict",
@@ -1052,14 +1065,20 @@ class PostgresToptCoreRepository:
                 member_sha256 = canonical_sha256(factor_payload)
                 _insert_or_verify(
                     self._connection,
-                    insert_sql="""
-                        insert into staging.topt_core_snapshot_members (
-                            snapshot_id, instrument_id, issuer_id, listing_id,
-                            observation_ids, member_sha256, factor_input
-                        ) values (%s, %s, %s, %s, %s, %s, %s)
-                        on conflict (snapshot_id, issuer_id) do nothing
-                        returning instrument_id
-                    """,
+                    insert_sql=_insert_sql(
+                        "staging.topt_core_snapshot_members",
+                        (
+                            "snapshot_id",
+                            "instrument_id",
+                            "issuer_id",
+                            "listing_id",
+                            "observation_ids",
+                            "member_sha256",
+                            "factor_input",
+                        ),
+                        conflict="snapshot_id, issuer_id",
+                        returning="instrument_id",
+                    ),
                     insert_params=(
                         snapshot.snapshot_id,
                         factor_input.instrument_id,
@@ -1279,22 +1298,42 @@ class PostgresToptCoreRepository:
         payload = result.model_dump(mode="json", exclude={"result_id", "content_sha256"})
         _insert_or_verify(
             self._connection,
-            insert_sql="""
-                insert into mart.topt_gppe_results (
-                    result_id, content_sha256, invocation_id, snapshot_id, run_id,
-                    release_manifest_id, universe_id, universe_version, universe_sha256,
-                    cutoff, issuer_id, instrument_id, listing_id, operating_branch,
-                    operating_metric, availability, operating_efficiency,
-                    capital_adjusted_gross_profit, gppe, confidence, freshness,
-                    reason_codes, input_observation_ids,
-                    gppe_definition_id, gppe_definition_sha256, payload,
-                    availability_status, source_evidence_status, factor_validation_status
-                ) values (
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s
-                ) on conflict (result_id) do nothing returning result_id
-            """,
+            insert_sql=_insert_sql(
+                "mart.topt_gppe_results",
+                (
+                    "result_id",
+                    "content_sha256",
+                    "invocation_id",
+                    "snapshot_id",
+                    "run_id",
+                    "release_manifest_id",
+                    "universe_id",
+                    "universe_version",
+                    "universe_sha256",
+                    "cutoff",
+                    "issuer_id",
+                    "instrument_id",
+                    "listing_id",
+                    "operating_branch",
+                    "operating_metric",
+                    "availability",
+                    "operating_efficiency",
+                    "capital_adjusted_gross_profit",
+                    "gppe",
+                    "confidence",
+                    "freshness",
+                    "reason_codes",
+                    "input_observation_ids",
+                    "gppe_definition_id",
+                    "gppe_definition_sha256",
+                    "payload",
+                    "availability_status",
+                    "source_evidence_status",
+                    "factor_validation_status",
+                ),
+                conflict="result_id",
+                returning="result_id",
+            ),
             insert_params=(
                 result.result_id,
                 result.content_sha256,
@@ -1324,7 +1363,7 @@ class PostgresToptCoreRepository:
                 Jsonb(payload),
                 *statuses.as_columns(),
             ),
-            check_sql="select content_sha256, payload from mart.topt_gppe_results where result_id = %s",
+            check_sql=_content_check_sql("mart.topt_gppe_results", "result_id"),
             check_params=(result.result_id,),
             expected=(result.content_sha256, payload),
             conflict_message="TOPT GPPE result identity conflict",
@@ -1339,28 +1378,59 @@ class PostgresToptCoreRepository:
         payload = result.model_dump(mode="json", exclude={"result_id", "content_sha256"})
         _insert_or_verify(
             self._connection,
-            insert_sql="""
-                insert into mart.topt_core_results (
-                    result_id, content_sha256, invocation_id, snapshot_id, run_id,
-                    release_manifest_id, universe_id, universe_version, universe_sha256,
-                    cutoff, issuer_id, instrument_id, listing_id, operating_branch,
-                    operating_metric, availability, operating_efficiency,
-                    capital_adjusted_gross_profit, gppe, tier, target_ps_lower,
-                    target_ps_upper, target_ps_midpoint, current_ps, valuation_gap,
-                    current_pgp, target_pgp_lower, target_pgp_upper, target_pgp_midpoint,
-                    operating_period_end, revenue_period_end, shares_period_end,
-                    confidence, freshness, reason_codes, input_observation_ids,
-                    gppe_invocation_id, gppe_result_id,
-                    gppe_definition_id, gppe_definition_sha256,
-                    tier_definition_id, tier_definition_sha256, payload,
-                    availability_status, source_evidence_status, factor_validation_status
-                ) values (
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s, %s, %s
-                ) on conflict (result_id) do nothing returning result_id
-            """,
+            insert_sql=_insert_sql(
+                "mart.topt_core_results",
+                (
+                    "result_id",
+                    "content_sha256",
+                    "invocation_id",
+                    "snapshot_id",
+                    "run_id",
+                    "release_manifest_id",
+                    "universe_id",
+                    "universe_version",
+                    "universe_sha256",
+                    "cutoff",
+                    "issuer_id",
+                    "instrument_id",
+                    "listing_id",
+                    "operating_branch",
+                    "operating_metric",
+                    "availability",
+                    "operating_efficiency",
+                    "capital_adjusted_gross_profit",
+                    "gppe",
+                    "tier",
+                    "target_ps_lower",
+                    "target_ps_upper",
+                    "target_ps_midpoint",
+                    "current_ps",
+                    "valuation_gap",
+                    "current_pgp",
+                    "target_pgp_lower",
+                    "target_pgp_upper",
+                    "target_pgp_midpoint",
+                    "operating_period_end",
+                    "revenue_period_end",
+                    "shares_period_end",
+                    "confidence",
+                    "freshness",
+                    "reason_codes",
+                    "input_observation_ids",
+                    "gppe_invocation_id",
+                    "gppe_result_id",
+                    "gppe_definition_id",
+                    "gppe_definition_sha256",
+                    "tier_definition_id",
+                    "tier_definition_sha256",
+                    "payload",
+                    "availability_status",
+                    "source_evidence_status",
+                    "factor_validation_status",
+                ),
+                conflict="result_id",
+                returning="result_id",
+            ),
             insert_params=(
                 result.result_id,
                 result.content_sha256,
@@ -1407,7 +1477,7 @@ class PostgresToptCoreRepository:
                 Jsonb(payload),
                 *statuses.as_columns(),
             ),
-            check_sql="select content_sha256, payload from mart.topt_core_results where result_id = %s",
+            check_sql=_content_check_sql("mart.topt_core_results", "result_id"),
             check_params=(result.result_id,),
             expected=(result.content_sha256, payload),
             conflict_message="TOPT core result identity conflict",
@@ -1440,70 +1510,30 @@ class PostgresToptCoreRepository:
         offset: int = 0,
     ) -> tuple[ToptCoreReadResult, ...]:
         self._validate_page(limit, offset)
-        rows = self._connection.execute(
-            """
-            select r.result_id, r.invocation_id, r.snapshot_id, r.run_id, r.release_manifest_id,
-                   r.universe_id, r.universe_version, r.universe_sha256, r.cutoff, r.issuer_id,
-                   r.instrument_id, r.listing_id, r.operating_branch, r.operating_metric,
-                   r.availability, r.operating_efficiency, r.capital_adjusted_gross_profit,
-                   r.gppe, r.tier, r.target_ps_lower, r.target_ps_upper, r.target_ps_midpoint,
-                   r.current_ps, r.valuation_gap, r.confidence, r.freshness, r.reason_codes,
-                   r.gppe_invocation_id, r.gppe_result_id,
-                   r.gppe_definition_id, r.gppe_definition_sha256,
-                   r.tier_definition_id, r.tier_definition_sha256, r.created_at,
-                   t.current_pgp, t.target_pgp_lower, t.target_pgp_upper, t.target_pgp_midpoint
-            from mart.topt_core_result_read r
-            join mart.topt_core_results t on t.result_id = r.result_id
-            where r.run_id = %s and r.release_manifest_id = %s and r.universe_id = %s
-              and r.universe_version = %s and r.universe_sha256 = %s and r.snapshot_id = %s
-              and r.invocation_id = %s
-            order by r.issuer_id limit %s offset %s
-            """,
-            self._identity_query_params(identity, limit, offset),
-        ).fetchall()
-        return tuple(
-            ToptCoreReadResult(
-                result_id=row[0],
-                invocation_id=row[1],
-                snapshot_id=row[2],
-                run_id=row[3],
-                release_manifest_id=row[4],
-                universe_id=row[5],
-                universe_version=row[6],
-                universe_sha256=row[7],
-                cutoff=row[8],
-                issuer_id=row[9],
-                instrument_id=row[10],
-                listing_id=row[11],
-                operating_branch=row[12],
-                operating_metric=row[13],
-                availability=row[14],
-                operating_efficiency=row[15],
-                capital_adjusted_gross_profit=row[16],
-                gppe=row[17],
-                tier=row[18],
-                target_ps_lower=row[19],
-                target_ps_upper=row[20],
-                target_ps_midpoint=row[21],
-                current_ps=row[22],
-                current_pgp=row[34],
-                target_pgp_lower=row[35],
-                target_pgp_upper=row[36],
-                target_pgp_midpoint=row[37],
-                valuation_gap=row[23],
-                confidence=row[24],
-                freshness=row[25],
-                reason_codes=tuple(row[26]),
-                gppe_invocation_id=row[27],
-                gppe_result_id=row[28],
-                gppe_definition_id=row[29],
-                gppe_definition_sha256=row[30],
-                tier_definition_id=row[31],
-                tier_definition_sha256=row[32],
-                created_at=row[33],
+        with self._connection.cursor(row_factory=dict_row) as cursor:
+            cursor.execute(
+                """
+                select r.result_id, r.invocation_id, r.snapshot_id, r.run_id, r.release_manifest_id,
+                       r.universe_id, r.universe_version, r.universe_sha256, r.cutoff, r.issuer_id,
+                       r.instrument_id, r.listing_id, r.operating_branch, r.operating_metric,
+                       r.availability, r.operating_efficiency, r.capital_adjusted_gross_profit,
+                       r.gppe, r.tier, r.target_ps_lower, r.target_ps_upper, r.target_ps_midpoint,
+                       r.current_ps, r.valuation_gap, r.confidence, r.freshness, r.reason_codes,
+                       r.gppe_invocation_id, r.gppe_result_id,
+                       r.gppe_definition_id, r.gppe_definition_sha256,
+                       r.tier_definition_id, r.tier_definition_sha256, r.created_at,
+                       t.current_pgp, t.target_pgp_lower, t.target_pgp_upper, t.target_pgp_midpoint
+                from mart.topt_core_result_read r
+                join mart.topt_core_results t on t.result_id = r.result_id
+                where r.run_id = %s and r.release_manifest_id = %s and r.universe_id = %s
+                  and r.universe_version = %s and r.universe_sha256 = %s and r.snapshot_id = %s
+                  and r.invocation_id = %s
+                order by r.issuer_id limit %s offset %s
+                """,
+                self._identity_query_params(identity, limit, offset),
             )
-            for row in rows
-        )
+            rows = cursor.fetchall()
+        return tuple(ToptCoreReadResult(**{**row, "reason_codes": tuple(row["reason_codes"])}) for row in rows)
 
     def meta_info(
         self,
@@ -1513,48 +1543,32 @@ class PostgresToptCoreRepository:
         offset: int = 0,
     ) -> tuple[ToptCoreMetaInfo, ...]:
         self._validate_page(limit, offset)
-        rows = self._connection.execute(
-            """
-            select result_id, invocation_id, snapshot_id, run_id, release_manifest_id,
-                   universe_id, universe_version, universe_sha256, cutoff, issuer_id,
-                   instrument_id, listing_id, input_observation_ids,
-                   gppe_invocation_id, gppe_result_id,
-                   gppe_definition_id, gppe_definition_sha256,
-                   tier_definition_id, tier_definition_sha256,
-                   confidence, freshness, created_at, lineage
-            from mart.topt_core_meta_info
-            where run_id = %s and release_manifest_id = %s and universe_id = %s
-              and universe_version = %s and universe_sha256 = %s and snapshot_id = %s
-              and invocation_id = %s
-            order by issuer_id limit %s offset %s
-            """,
-            self._identity_query_params(identity, limit, offset),
-        ).fetchall()
+        with self._connection.cursor(row_factory=dict_row) as cursor:
+            cursor.execute(
+                """
+                select result_id, invocation_id, snapshot_id, run_id, release_manifest_id,
+                       universe_id, universe_version, universe_sha256, cutoff, issuer_id,
+                       instrument_id, listing_id, input_observation_ids,
+                       gppe_invocation_id, gppe_result_id,
+                       gppe_definition_id, gppe_definition_sha256,
+                       tier_definition_id, tier_definition_sha256,
+                       confidence, freshness, created_at, lineage
+                from mart.topt_core_meta_info
+                where run_id = %s and release_manifest_id = %s and universe_id = %s
+                  and universe_version = %s and universe_sha256 = %s and snapshot_id = %s
+                  and invocation_id = %s
+                order by issuer_id limit %s offset %s
+                """,
+                self._identity_query_params(identity, limit, offset),
+            )
+            rows = cursor.fetchall()
         return tuple(
             ToptCoreMetaInfo(
-                result_id=row[0],
-                invocation_id=row[1],
-                snapshot_id=row[2],
-                run_id=row[3],
-                release_manifest_id=row[4],
-                universe_id=row[5],
-                universe_version=row[6],
-                universe_sha256=row[7],
-                cutoff=row[8],
-                issuer_id=row[9],
-                instrument_id=row[10],
-                listing_id=row[11],
-                input_observation_ids=tuple(row[12]),
-                gppe_invocation_id=row[13],
-                gppe_result_id=row[14],
-                gppe_definition_id=row[15],
-                gppe_definition_sha256=row[16],
-                tier_definition_id=row[17],
-                tier_definition_sha256=row[18],
-                confidence=row[19],
-                freshness=row[20],
-                created_at=row[21],
-                lineage=tuple(row[22]),
+                **{
+                    **row,
+                    "input_observation_ids": tuple(row["input_observation_ids"]),
+                    "lineage": tuple(row["lineage"]),
+                }
             )
             for row in rows
         )
