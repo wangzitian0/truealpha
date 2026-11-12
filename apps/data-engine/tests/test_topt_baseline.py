@@ -704,7 +704,8 @@ def test_the_quota_reader_counts_utc_days_inside_the_window_and_nothing_outside_
 
 def test_s_is_green_only_at_zero_differences() -> None:
     assert topt_baseline.judge_schema(differences=0) == Row("S", "pass", "S catalog matches the chain")
-    assert topt_baseline.judge_schema(differences=1) == Row("S", "fail", "S schema differs from the chain in 1 places")
+    assert topt_baseline.judge_schema(differences=1) == Row("S", "fail", "S schema differs from the chain in 1 place")
+    assert topt_baseline.judge_schema(differences=2) == Row("S", "fail", "S schema differs from the chain in 2 places")
 
 
 def test_s_that_could_not_be_compared_is_red_and_names_the_failure_kind_only() -> None:
@@ -753,7 +754,7 @@ def test_s_passes_the_chain_directory_of_the_image_and_states_that_the_reference
     topt_baseline.read_schema("postgresql://unused")
 
     assert seen["url"] == "postgresql://unused"
-    assert seen["kwargs"] == {"db_dir": Path("/app/db"), "allow_remote": True}
+    assert seen["kwargs"] == {"db_dir": Path("/app/db"), "allow_remote": True, "skip_roles": True}
 
 
 def reference_names(url: str) -> set[str]:
@@ -774,6 +775,30 @@ def test_s_of_a_database_that_ran_the_chain_is_green_and_leaves_no_reference_beh
 
     assert row == Row("S", "pass", "S catalog matches the chain")
     assert reference_names(database_url) - before == set(), "the reference database is dropped at the end"
+
+
+def test_s_writes_no_role_state_of_the_server(database_url: str) -> None:
+    """`roles.sql` is state of the whole server. The row builds its scratch database without it, so a role setting
+    or a role membership that a person changed stays as it is, and two appliers cannot race on the same role."""
+    repo_db = Path(__file__).resolve().parents[3] / "db"
+    with psycopg.connect(database_url, autocommit=True) as admin:
+        admin.execute("alter role app_ops_reader set statement_timeout = '7s'")
+        admin.execute("revoke app_ops_reader from app_service_login")
+    try:
+        topt_baseline.read_schema(database_url, db_dir=repo_db)
+        with psycopg.connect(database_url) as reader:
+            setting = reader.execute(
+                "select s from pg_db_role_setting d join pg_roles r on r.oid = d.setrole, unnest(d.setconfig) s "
+                "where r.rolname = 'app_ops_reader' and s like 'statement_timeout=%'"
+            ).fetchone()
+            member = reader.execute("select pg_has_role('app_service_login', 'app_ops_reader', 'member')").fetchone()
+    finally:
+        with psycopg.connect(database_url, autocommit=True) as admin:
+            admin.execute("alter role app_ops_reader set statement_timeout = '5s'")
+            admin.execute("grant app_ops_reader to app_service_login")
+
+    assert setting == ("statement_timeout=7s",), "the check did not reset the role setting"
+    assert member == (False,), "the check did not grant the role membership again"
 
 
 def test_s_counts_the_places_of_a_drifted_database(database_url: str) -> None:
