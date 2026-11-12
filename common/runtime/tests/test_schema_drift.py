@@ -489,6 +489,79 @@ def test_a_kept_reference_says_when_the_deployed_check_drops_it(capsys, clone: s
         _drop_all(admin_url, [name])
 
 
+def test_the_chain_without_roles_keeps_the_migrations_and_the_applier_and_empties_roles(tmp_path: Path) -> None:
+    source = tmp_path / "db"
+    (source / "migrations").mkdir(parents=True)
+    (source / "migrations" / "0001.sql").write_text("select 1;\n")
+    (source / "apply_migrations.sh").write_text("#!/bin/sh\n")
+    (source / "roles.sql").write_text("alter role x set statement_timeout = '1s';\n")
+
+    with drift._chain_without_roles(source) as root:
+        assert (root / "migrations").resolve() == (source / "migrations").resolve()
+        assert (root / "apply_migrations.sh").resolve() == (source / "apply_migrations.sh").resolve()
+        assert (root / "roles.sql").read_text() == drift.ROLES_STUB
+        assert "alter role" not in (root / "roles.sql").read_text()
+        kept = root
+    assert not kept.exists(), "the scratch directory is removed"
+    assert (source / "roles.sql").read_text().startswith("alter role"), "the real roles.sql is untouched"
+
+
+def test_a_reference_without_roles_equals_one_with_roles(clone: str) -> None:
+    """`clone` ran the whole chain, `roles.sql` included. If `roles.sql` ever creates a relation, a function, a view
+    or any other object that `compare()` reads, the reference without it differs and this test fails."""
+    with drift.reference_database(clone, skip_roles=True) as reference_url:
+        report, _counts = drift.compare(clone, reference_url)
+
+    assert report == []
+
+
+def test_a_reference_without_roles_writes_no_role_state(clone: str) -> None:
+    admin_url = drift._with_database(clone, "postgres")
+    with psycopg.connect(admin_url, autocommit=True) as admin:
+        admin.execute("alter role app_ops_reader set statement_timeout = '7s'")
+        admin.execute("revoke app_ops_reader from app_service_login")
+    try:
+        with drift.reference_database(clone, skip_roles=True):
+            pass
+        with psycopg.connect(admin_url) as reader:
+            setting = reader.execute(
+                "select s from pg_db_role_setting d join pg_roles r on r.oid = d.setrole, unnest(d.setconfig) s "
+                "where r.rolname = 'app_ops_reader' and s like 'statement_timeout=%'"
+            ).fetchone()
+            member = reader.execute("select pg_has_role('app_service_login', 'app_ops_reader', 'member')").fetchone()
+    finally:
+        with psycopg.connect(admin_url, autocommit=True) as admin:
+            admin.execute("alter role app_ops_reader set statement_timeout = '5s'")
+            admin.execute("grant app_ops_reader to app_service_login")
+
+    assert setting == ("statement_timeout=7s",)
+    assert member == (False,)
+
+
+def test_a_reference_with_roles_resets_role_state(clone: str) -> None:
+    """The control of the test above: without `skip_roles` the chain replays `roles.sql` and resets both."""
+    admin_url = drift._with_database(clone, "postgres")
+    with psycopg.connect(admin_url, autocommit=True) as admin:
+        admin.execute("alter role app_ops_reader set statement_timeout = '7s'")
+        admin.execute("revoke app_ops_reader from app_service_login")
+    try:
+        with drift.reference_database(clone):
+            pass
+        with psycopg.connect(admin_url) as reader:
+            setting = reader.execute(
+                "select s from pg_db_role_setting d join pg_roles r on r.oid = d.setrole, unnest(d.setconfig) s "
+                "where r.rolname = 'app_ops_reader' and s like 'statement_timeout=%'"
+            ).fetchone()
+            member = reader.execute("select pg_has_role('app_service_login', 'app_ops_reader', 'member')").fetchone()
+    finally:
+        with psycopg.connect(admin_url, autocommit=True) as admin:
+            admin.execute("alter role app_ops_reader set statement_timeout = '5s'")
+            admin.execute("grant app_ops_reader to app_service_login")
+
+    assert setting == ("statement_timeout=5s",)
+    assert member == (True,)
+
+
 def test_allow_remote_is_passed_by_one_module_only() -> None:
     """`allow_remote=True` lifts the guard against building a reference beside a remote or tunnelled server. Only
     the deployed check of an environment passes it, for the database it runs against. A second caller must come

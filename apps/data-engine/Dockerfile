@@ -70,8 +70,10 @@ COPY apps/data-engine/required-env.generated.json ./apps/data-engine/required-en
 # image's entrypoint, not here -- this image ships the files only so it can hash the schema
 # it was built against, and so the ordered ids in a run's identity are the ones the artifact
 # actually carries rather than a list written down somewhere. The schema check of the quality
-# lane also applies the chain, to a scratch database that it drops, through the same applier
-# and roles file (#1664); it never applies them to the environment's own database.
+# lane also applies the migrations, to a scratch database that it drops, through the same applier
+# (#1664). It never applies them to the environment's own database. The applier refuses a chain
+# without `roles.sql`, so the file stays in the image; the check swaps in an empty one, because
+# roles are state of the whole server and the check writes nothing outside its scratch database.
 COPY db/migrations ./db/migrations
 COPY db/roles.sql ./db/roles.sql
 COPY db/apply_migrations.sh ./db/apply_migrations.sh

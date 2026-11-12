@@ -10,6 +10,7 @@ import re
 import shlex
 import subprocess
 import sys
+import tempfile
 import time
 import uuid
 from collections.abc import Iterator, Sequence
@@ -22,7 +23,7 @@ from typing import Any
 import psycopg
 from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
-from truealpha_runtime.testing import apply_migration_chain
+from truealpha_runtime.testing import DB_DIR, apply_migration_chain
 
 log = logging.getLogger(__name__)
 
@@ -206,16 +207,44 @@ def target_locality(database_url: str) -> tuple[str, str]:
     return parsed["ta_locality"], parsed["ta_redacted"]
 
 
+#: What `roles.sql` is replaced with when a reference is built without it.
+ROLES_STUB = "-- Left out on purpose: roles are state of the whole server, not of the scratch database.\n"
+
+
+@contextmanager
+def _chain_without_roles(db_dir: Path) -> Iterator[Path]:
+    """A chain directory with the migrations and the applier of `db_dir` and an empty `roles.sql`.
+
+    `roles.sql` writes state of the whole server: `ALTER ROLE ... SET`, `GRANT <role> TO <role>`, and the app login
+    password when one is set. A check that builds a scratch database has no reason to write any of it, and two
+    appliers that write the same role at the same moment fail with `tuple concurrently updated`. `roles.sql` creates
+    no relation, column, constraint, index, trigger, function, view or sequence, so `compare()` cannot see its work.
+    The test `test_a_reference_without_roles_equals_one_with_roles` fails when that stops being true."""
+    with tempfile.TemporaryDirectory(prefix="truealpha_chain_without_roles_") as scratch:
+        root = Path(scratch)
+        for name in ("migrations", "apply_migrations.sh"):
+            (root / name).symlink_to(db_dir / name)
+        (root / "roles.sql").write_text(ROLES_STUB)
+        yield root
+
+
 @contextmanager
 def reference_database(
-    server_url: str, *, keep: bool = False, db_dir: Path | None = None, allow_remote: bool = False
+    server_url: str,
+    *,
+    keep: bool = False,
+    db_dir: Path | None = None,
+    allow_remote: bool = False,
+    skip_roles: bool = False,
 ) -> Iterator[str]:
     """A database of its own on `server_url` that ran the chain; dropped when the block ends.
 
     `db_dir` names the directory that holds `migrations/`, `roles.sql` and `apply_migrations.sh` when it is not
     the checkout of this file: the data-engine image bakes it at `/app/db`. `allow_remote` is the in-code form
     of `REMOTE_REFERENCE_ENV`. The caller states that the reference has to sit on this server. The deployed check
-    of an environment passes it for the database that it runs against, never for a URL that a person supplied."""
+    of an environment passes it for the database that it runs against, never for a URL that a person supplied.
+    `skip_roles` builds the reference without `roles.sql` (see `_chain_without_roles`): the build then writes nothing
+    outside its own scratch database."""
     if not allow_remote:
         locality, redacted = target_locality(server_url)
         if locality != "local" and os.environ.get(REMOTE_REFERENCE_ENV) != "1":
@@ -232,7 +261,11 @@ def reference_database(
         admin.execute(sql.SQL("create database {}").format(sql.Identifier(name)))
     try:
         reference_url = _with_database(server_url, name)
-        if db_dir is None:
+        chain_dir = DB_DIR if db_dir is None else db_dir
+        if skip_roles:
+            with _chain_without_roles(chain_dir) as chain_without_roles:
+                apply_migration_chain(reference_url, db_dir=chain_without_roles)
+        elif db_dir is None:
             apply_migration_chain(reference_url)
         else:
             apply_migration_chain(reference_url, db_dir=db_dir)

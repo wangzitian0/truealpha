@@ -23,13 +23,18 @@ What each row reads, and what makes it red:
 
 * S (S1 to S3, schema). The live catalog of this environment's database against a reference database that ran the
   chain (`truealpha_tools.schema_drift`). The reference sits on the same server, is built by the one applier
-  `db/apply_migrations.sh` from `/app/db`, and is dropped at the end. The number of differences is the row. Green
-  only at 0. The comparison covers relations, columns, constraints, indexes, triggers, functions, views and
-  sequences. It does not cover row-level security policies, grants, function settings, index validity, trigger
-  state, enum types or comments: a green S does not prove those. A reference that cannot be built or compared is
-  red, never green. A scratch database that a killed process left behind is dropped by the next run (older than
-  1 h). Each environment runs its own check, so the row is S1 in production and S2 in staging, and the scheduled
-  verdict is S3.
+  `db/apply_migrations.sh` from `/app/db`, and is dropped at the end. The build leaves `db/roles.sql` out: that file
+  writes state of the whole server (role settings, role membership, the app login password), and it creates no
+  object that the comparison reads. The check creates and drops its own scratch database and writes nothing else.
+  The number is the count of differences in places, not of objects: an extra schema counts once. Green only at 0.
+  The comparison covers these properties of the schemas that the chain declares: relations, columns, constraints,
+  indexes, triggers, the source text of functions, the definition text of views, and sequences. A green S does NOT
+  prove any of these: function attributes (SECURITY DEFINER, STRICT, volatility, cost, return type, settings), view
+  options (security_barrier), row-level security flags and policies, grants, disabled triggers, invalid indexes,
+  enum types, comments, and the `dagster` schema, which the Dagster runtime owns. A reference that cannot be built or
+  compared is red, never green. A scratch database that a killed process left behind is dropped by the next run
+  (older than 1 h). Each environment runs its own check, so the row is S1 in production and S2 in staging, and the
+  scheduled verdict is S3.
 
 Q3 of #1664 cannot run inside one environment today. It compares two environments, and no database sees the other.
 It is listed as not measured. A verdict with a row that is not measured is never green: unknown is not OK.
@@ -83,8 +88,8 @@ NOT_MEASURED: Mapping[str, str] = {
 
 #: Where the data-engine image holds the chain for the reference database (`apps/data-engine/Dockerfile`).
 IMAGE_DB_DIR = Path("/app/db")
-#: `db/roles.sql` sets the password of the app login when this variable is set. The reference build must never
-#: carry it: the check reads the schema and changes no credential.
+#: `db/roles.sql` sets the password of the app login when this variable is set. The reference build leaves
+#: `roles.sql` out (`skip_roles`); this mask is the second guard: the check changes no credential.
 MASKED_ENVIRONMENT = ("APP_SERVICE_DB_PASSWORD",)
 
 State = Literal["pass", "fail", "unmeasured"]
@@ -205,7 +210,8 @@ def judge_schema(*, differences: int | None, failure: str = "") -> Row:
         return Row("S", "fail", f"S the schema could not be compared ({failure})")
     if differences == 0:
         return Row("S", "pass", "S catalog matches the chain")
-    return Row("S", "fail", f"S schema differs from the chain in {differences} places")
+    places = "place" if differences == 1 else "places"
+    return Row("S", "fail", f"S schema differs from the chain in {differences} {places}")
 
 
 def judge(*, gppe: Row, quota: Row, server: Row, schema: Row) -> Judgement:
@@ -344,7 +350,9 @@ def read_schema(database_url: str, *, db_dir: Path | None = None) -> Row:
         except Exception:  # noqa: BLE001 - a failed sweep never hides the measurement
             log.warning("could not sweep stale scratch reference databases", exc_info=True)
         with _without_environment(MASKED_ENVIRONMENT):
-            with schema_drift.reference_database(database_url, db_dir=chain_dir, allow_remote=True) as reference_url:
+            with schema_drift.reference_database(
+                database_url, db_dir=chain_dir, allow_remote=True, skip_roles=True
+            ) as reference_url:
                 report, _counts = schema_drift.compare(database_url, reference_url)
     except Exception as failure:  # noqa: BLE001 - every failure is a red row, never a crash of the verdict
         log.warning("the schema comparison failed", exc_info=True)
