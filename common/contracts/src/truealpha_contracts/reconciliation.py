@@ -21,17 +21,21 @@ from decimal import (
 )
 from enum import StrEnum
 from itertools import combinations
-from typing import Any, Self
+from typing import Any
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, field_validator
 
 from truealpha_contracts.common import (
     SHA256_PATTERN,
-    STABLE_ID_PATTERN,
-    FrozenModel,
+    AwareDatetime,
+    ContentHash,
+    IdentifiedFrozenModel,
+    ImmutableId,
+    SafeDecimal,
+    Sha256,
     canonical_sha256,
-    finite_decimal_input,
-    identify_by_grain,
+    content_id,
+    content_ref,
     require_aware,
     require_stable_and_immutable,
 )
@@ -189,9 +193,20 @@ def grade_consensus(
     return ConsensusGrade(p.value, p.group_id, (p.group_id,), tuple(sorted(set(group_ids) - {p.group_id})))
 
 
-class ReconciliationCell(FrozenModel):
-    cell_id: str = Field(default="", pattern=r"^(?:|reconciliation-cell:[0-9a-f]{64})$")
-    content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
+class ReconciliationCell(IdentifiedFrozenModel):
+    id_field = "cell_id"
+    id_prefix = "reconciliation-cell"
+    identity_fields = (
+        "requirement_id",
+        "subject",
+        "field_name",
+        "field_semantics_id",
+        "unit",
+        "valid_from",
+        "valid_to",
+    )
+    cell_id: str = content_id("reconciliation-cell")
+    content_sha256: ContentHash = ""
     requirement_id: str = Field(pattern=_CONTENT_ID)
     subject: SubjectRef
     field_name: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
@@ -200,55 +215,36 @@ class ReconciliationCell(FrozenModel):
     valid_from: date
     valid_to: date
 
-    @model_validator(mode="after")
-    def identify(self) -> Self:
+    def _canonicalize(self) -> None:
         if self.valid_to < self.valid_from:
             raise ValueError("valid_to cannot precede valid_from")
-        identify_by_grain(
-            self,
-            id_field="cell_id",
-            prefix="reconciliation-cell",
-            identity_fields=(
-                "requirement_id",
-                "subject",
-                "field_name",
-                "field_semantics_id",
-                "unit",
-                "valid_from",
-                "valid_to",
-            ),
-        )
-        return self
 
 
-class SourceAssertion(FrozenModel):
-    assertion_id: str = Field(default="", pattern=r"^(?:|source-assertion:[0-9a-f]{64})$")
-    content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
-    cell_id: str = Field(pattern=r"^reconciliation-cell:[0-9a-f]{64}$")
-    observation_id: str = Field(pattern=r"^normalized-observation:[0-9a-f]{64}$")
-    source_id: str = Field(pattern=STABLE_ID_PATTERN)
-    origin_group_id: str = Field(pattern=STABLE_ID_PATTERN)
-    knowable_at: datetime
-    normalized_value_sha256: str = Field(pattern=SHA256_PATTERN)
-    numeric_value: Decimal | None = None
-    confidence_assessment_id: str = Field(pattern=r"^confidence-assessment:[0-9a-f]{64}$")
+class SourceAssertion(IdentifiedFrozenModel):
+    id_field = "assertion_id"
+    id_prefix = "source-assertion"
+    identity_fields = (
+        "cell_id",
+        "observation_id",
+        "source_id",
+        "origin_group_id",
+        "knowable_at",
+        "normalized_value_sha256",
+        "numeric_value",
+        "confidence_assessment_id",
+    )
+    assertion_id: str = content_id("source-assertion")
+    content_sha256: ContentHash = ""
+    cell_id: str = content_ref("reconciliation-cell")
+    observation_id: str = content_ref("normalized-observation")
+    source_id: ImmutableId
+    origin_group_id: ImmutableId
+    knowable_at: AwareDatetime
+    normalized_value_sha256: Sha256
+    numeric_value: SafeDecimal | None = None
+    confidence_assessment_id: str = content_ref("confidence-assessment")
     lineage_node_ids: tuple[str, ...] = Field(min_length=1)
     lineage_complete: bool
-
-    @field_validator("source_id", "origin_group_id")
-    @classmethod
-    def validate_coordinates(cls, value: str, info: Any) -> str:
-        return require_stable_and_immutable(value, info.field_name)
-
-    @field_validator("knowable_at")
-    @classmethod
-    def validate_knowable_at(cls, value: datetime) -> datetime:
-        return require_aware(value, "knowable_at")
-
-    @field_validator("numeric_value", mode="before")
-    @classmethod
-    def reject_binary_float(cls, value: Any) -> Any:
-        return finite_decimal_input(value)
 
     @field_validator("lineage_node_ids")
     @classmethod
@@ -258,40 +254,26 @@ class SourceAssertion(FrozenModel):
             require_stable_and_immutable(v, "lineage_node_ids")
         return values
 
-    @model_validator(mode="after")
-    def identify(self) -> Self:
-        identify_by_grain(
-            self,
-            id_field="assertion_id",
-            prefix="source-assertion",
-            identity_fields=(
-                "cell_id",
-                "observation_id",
-                "source_id",
-                "origin_group_id",
-                "knowable_at",
-                "normalized_value_sha256",
-                "numeric_value",
-                "confidence_assessment_id",
-            ),
-        )
-        return self
 
-
-class ReconciliationPolicy(FrozenModel):
-    policy_id: str = Field(default="", pattern=r"^(?:|reconciliation-policy:[0-9a-f]{64})$")
-    content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
-    policy_version: str = Field(pattern=STABLE_ID_PATTERN)
+class ReconciliationPolicy(IdentifiedFrozenModel):
+    id_field = "policy_id"
+    id_prefix = "reconciliation-policy"
+    identity_fields = (
+        "policy_version",
+        "source_priority",
+        "absolute_tolerance",
+        "relative_tolerance",
+        "minimum_independent_origin_groups",
+        "conflict_behavior",
+    )
+    policy_id: str = content_id("reconciliation-policy")
+    content_sha256: ContentHash = ""
+    policy_version: ImmutableId
     source_priority: tuple[str, ...] = Field(min_length=1)
-    absolute_tolerance: Decimal = Field(ge=0)
-    relative_tolerance: Decimal = Field(ge=0)
+    absolute_tolerance: SafeDecimal = Field(ge=0)
+    relative_tolerance: SafeDecimal = Field(ge=0)
     minimum_independent_origin_groups: int = Field(default=2, ge=1)
     conflict_behavior: ConflictBehavior = ConflictBehavior.REPORT_AND_ABSTAIN
-
-    @field_validator("policy_version")
-    @classmethod
-    def validate_policy_version(cls, value: str) -> str:
-        return require_stable_and_immutable(value, "policy_version")
 
     @field_validator("source_priority")
     @classmethod
@@ -302,41 +284,24 @@ class ReconciliationPolicy(FrozenModel):
             require_stable_and_immutable(v, "source_priority")
         return values
 
-    @field_validator("absolute_tolerance", "relative_tolerance", mode="before")
-    @classmethod
-    def reject_binary_float(cls, value: Any) -> Any:
-        return finite_decimal_input(value)
-
-    @model_validator(mode="after")
-    def identify(self) -> Self:
+    def _canonicalize(self) -> None:
         if (
             self.conflict_behavior is ConflictBehavior.MEDIAN_CONSENSUS
             and self.minimum_independent_origin_groups != PAIR_QUORUM_GROUPS
         ):
             raise ValueError("a median-consensus policy corroborates at exactly two agreeing origin groups")
-        identify_by_grain(
-            self,
-            id_field="policy_id",
-            prefix="reconciliation-policy",
-            identity_fields=(
-                "policy_version",
-                "source_priority",
-                "absolute_tolerance",
-                "relative_tolerance",
-                "minimum_independent_origin_groups",
-                "conflict_behavior",
-            ),
-        )
-        return self
 
 
-class ReconciliationResult(FrozenModel):
-    result_id: str = Field(default="", pattern=r"^(?:|reconciliation-result:[0-9a-f]{64})$")
-    content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
-    cell_id: str = Field(pattern=r"^reconciliation-cell:[0-9a-f]{64}$")
-    policy_id: str = Field(pattern=r"^reconciliation-policy:[0-9a-f]{64}$")
+class ReconciliationResult(IdentifiedFrozenModel):
+    id_field = "result_id"
+    id_prefix = "reconciliation-result"
+    identity_fields = ("cell_id", "policy_id", "cutoff", "assertion_ids")
+    result_id: str = content_id("reconciliation-result")
+    content_sha256: ContentHash = ""
+    cell_id: str = content_ref("reconciliation-cell")
+    policy_id: str = content_ref("reconciliation-policy")
     minimum_independent_origin_groups: int = Field(ge=1)
-    cutoff: datetime
+    cutoff: AwareDatetime
     outcome: ReconciliationOutcome
     assertion_ids: tuple[str, ...]
     eligible_assertion_ids: tuple[str, ...]
@@ -346,22 +311,12 @@ class ReconciliationResult(FrozenModel):
     agreeing_assertion_ids: tuple[str, ...]
     conflicting_assertion_ids: tuple[str, ...]
     origin_group_ids: tuple[str, ...]
-    comparison_anchor_assertion_id: str | None = Field(default=None, pattern=r"^source-assertion:[0-9a-f]{64}$")
-    selected_assertion_id: str | None = Field(default=None, pattern=r"^source-assertion:[0-9a-f]{64}$")
+    comparison_anchor_assertion_id: str | None = content_ref("source-assertion", default=None)
+    selected_assertion_id: str | None = content_ref("source-assertion", default=None)
     selected_value_sha256: str | None = Field(default=None, pattern=SHA256_PATTERN)
-    selected_numeric_value: Decimal | None = None
+    selected_numeric_value: SafeDecimal | None = None
     lineage_complete: bool
     reason_codes: tuple[str, ...] = Field(min_length=1)
-
-    @field_validator("cutoff")
-    @classmethod
-    def validate_cutoff(cls, value: datetime) -> datetime:
-        return require_aware(value, "cutoff")
-
-    @field_validator("selected_numeric_value", mode="before")
-    @classmethod
-    def reject_binary_float(cls, value: Any) -> Any:
-        return finite_decimal_input(value)
 
     @field_validator(
         "assertion_ids",
@@ -440,8 +395,7 @@ class ReconciliationResult(FrozenModel):
             if self.outcome is ReconciliationOutcome.UNAVAILABLE and future_ids:
                 raise ValueError("an unavailable result cannot contain future assertions")
 
-    @model_validator(mode="after")
-    def identify(self) -> Self:
+    def _canonicalize(self) -> None:
         assertion_ids = set(self.assertion_ids)
         eligible_ids, future_ids, unregistered_ids = (
             set(self.eligible_assertion_ids),
@@ -465,13 +419,6 @@ class ReconciliationResult(FrozenModel):
             raise ValueError("each representative must correspond to one independent origin group")
         self._validate_selection(representative_ids, agreeing_ids)
         self._validate_outcome_rules(eligible_ids, future_ids, representative_ids, agreeing_ids, conflicting_ids)
-        identify_by_grain(
-            self,
-            id_field="result_id",
-            prefix="reconciliation-result",
-            identity_fields=("cell_id", "policy_id", "cutoff", "assertion_ids"),
-        )
-        return self
 
 
 def _assertions_agree(left: SourceAssertion, right: SourceAssertion, policy: ReconciliationPolicy) -> bool:

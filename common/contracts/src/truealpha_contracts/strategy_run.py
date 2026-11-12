@@ -10,7 +10,11 @@ from typing import Literal, Protocol, Self
 from pydantic import Field, field_validator, model_validator
 
 from truealpha_contracts.access import AccessContext
-from truealpha_contracts.common import SHA256_PATTERN, StrictFrozenModel, require_aware
+from truealpha_contracts.common import (
+    AwareDatetime,
+    Sha256,
+    StrictFrozenModel,
+)
 from truealpha_contracts.research import ValuationTier
 from truealpha_contracts.strategy import DefinitionReviewState, definition_review_state
 
@@ -24,7 +28,7 @@ class StrategyRunOutcome(StrEnum):
 
 class StrategyRunDecision(StrictFrozenModel):
     issuer_id: str = Field(min_length=1)
-    cutoff_at: datetime
+    cutoff_at: AwareDatetime
     outcome: StrategyRunOutcome
     eligible: bool
     tier: ValuationTier | None = None
@@ -47,11 +51,6 @@ class StrategyRunDecision(StrictFrozenModel):
     def parse_cutoff_at(cls, value: object) -> object:
         return datetime.fromisoformat(value.replace("Z", "+00:00")) if isinstance(value, str) else value
 
-    @field_validator("cutoff_at")
-    @classmethod
-    def validate_cutoff_at(cls, value: datetime) -> datetime:
-        return require_aware(value, "cutoff_at")
-
     @model_validator(mode="after")
     def validate_one_valuation_basis(self) -> Self:
         if self.target_price_to_sales is not None and self.target_price_to_gross_profit is not None:
@@ -67,7 +66,7 @@ class StrategyRunDecision(StrictFrozenModel):
 
 class StrategyRunDefinition(StrictFrozenModel):
     version: str
-    content_sha256: str = Field(pattern=SHA256_PATTERN)
+    content_sha256: Sha256
     review_state: DefinitionReviewState
 
     @classmethod
@@ -88,7 +87,7 @@ class StrategyRunDefinition(StrictFrozenModel):
 class StrategyRunReport(StrictFrozenModel):
     strategy_id: Literal["large_model_value_v0"]
     source: Literal["strategy_smoke_fixture", "mart"] = "strategy_smoke_fixture"
-    corpus_sha256: str = Field(pattern=SHA256_PATTERN)
+    corpus_sha256: Sha256
     decisions: tuple[StrategyRunDecision, ...]
     golden_mismatches: tuple[str, ...] = ()
     strategy_run_id: str | None = None

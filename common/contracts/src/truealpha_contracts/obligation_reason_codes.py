@@ -4,9 +4,12 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-from pydantic import Field, model_validator
-
-from truealpha_contracts.common import FrozenModel, identify
+from truealpha_contracts.common import (
+    ContentHash,
+    FrozenModel,
+    IdentifiedFrozenModel,
+    content_id,
+)
 
 
 class ObligationDisposition(StrEnum):
@@ -57,21 +60,20 @@ class ReasonCodeEntry(FrozenModel):
     disposition: ObligationDisposition
 
 
-class ObligationReasonCodeRegistry(FrozenModel):
-    registry_id: str = Field(default="", pattern=r"^(?:|obligation-reason-registry:[0-9a-f]{64})$")
-    content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
+class ObligationReasonCodeRegistry(IdentifiedFrozenModel):
+    id_field = "registry_id"
+    id_prefix = "obligation-reason-registry"
+    registry_id: str = content_id("obligation-reason-registry")
+    content_sha256: ContentHash = ""
     registry_version: str
     entries: tuple[ReasonCodeEntry, ...]
 
-    @model_validator(mode="after")
-    def freeze_and_identify(self) -> ObligationReasonCodeRegistry:
+    def _canonicalize(self) -> None:
         codes = [entry.code for entry in self.entries]
         if len(codes) != len(set(codes)):
             raise ValueError("a reason code cannot appear twice in the registry")
         if set(codes) != set(ObligationReasonCode):
             raise ValueError("the registry must bind every reason code exactly once")
-        identify(self, id_field="registry_id", prefix="obligation-reason-registry")
-        return self
 
     def disposition_for(self, code: ObligationReasonCode) -> ObligationDisposition:
         for entry in self.entries:

@@ -2,12 +2,19 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Self
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, model_validator
 
-from truealpha_contracts.common import FrozenModel, canonical_sha256, identify_by_grain, require_aware
+from truealpha_contracts.common import (
+    AwareDatetime,
+    ContentHash,
+    FrozenModel,
+    IdentifiedFrozenModel,
+    canonical_sha256,
+    content_id,
+    content_ref,
+)
 from truealpha_contracts.datahub import ListObligation
 from truealpha_contracts.universe import SubjectRef, UniverseRef
 
@@ -25,16 +32,11 @@ def _freeze(model: BaseModel, *, id_field: str, prefix: str, identity_fields: tu
 
 
 class CaptureListVersion(FrozenModel):
-    list_version_id: str = Field(default="", pattern=r"^(?:|list-version:[0-9a-f]{64})$")
-    content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
+    list_version_id: str = content_id("list-version")
+    content_sha256: ContentHash = ""
     universe: UniverseRef
     members: tuple[SubjectRef, ...] = Field(min_length=1)
-    effective_at: datetime
-
-    @field_validator("effective_at")
-    @classmethod
-    def aware_effective_at(cls, value: datetime) -> datetime:
-        return require_aware(value, "effective_at")
+    effective_at: AwareDatetime
 
     @model_validator(mode="after")
     def identify(self) -> Self:
@@ -52,9 +54,9 @@ class CaptureListVersion(FrozenModel):
 
 
 class CaptureListObligation(FrozenModel):
-    obligation_id: str = Field(default="", pattern=r"^(?:|capture-list-obligation:[0-9a-f]{64})$")
-    content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
-    list_version_id: str = Field(pattern=r"^list-version:[0-9a-f]{64}$")
+    obligation_id: str = content_id("capture-list-obligation")
+    content_sha256: ContentHash = ""
+    list_version_id: str = content_ref("list-version")
     obligation: ListObligation
 
     @model_validator(mode="after")
@@ -88,21 +90,14 @@ class CaptureListObligation(FrozenModel):
         return self.obligation.partition
 
 
-class CaptureObligationWorkBinding(FrozenModel):
-    binding_id: str = Field(default="", pattern=r"^(?:|capture-obligation-work-binding:[0-9a-f]{64})$")
-    content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
-    obligation_id: str = Field(pattern=r"^capture-list-obligation:[0-9a-f]{64}$")
-    work_item_id: str = Field(pattern=r"^capture-work-item:[0-9a-f]{64}$")
-
-    @model_validator(mode="after")
-    def identify(self) -> Self:
-        identify_by_grain(
-            self,
-            id_field="binding_id",
-            prefix="capture-obligation-work-binding",
-            identity_fields=("obligation_id", "work_item_id"),
-        )
-        return self
+class CaptureObligationWorkBinding(IdentifiedFrozenModel):
+    id_field = "binding_id"
+    id_prefix = "capture-obligation-work-binding"
+    identity_fields = ("obligation_id", "work_item_id")
+    binding_id: str = content_id("capture-obligation-work-binding")
+    content_sha256: ContentHash = ""
+    obligation_id: str = content_ref("capture-list-obligation")
+    work_item_id: str = content_ref("capture-work-item")
 
 
 __all__ = ["CaptureListObligation", "CaptureListVersion", "CaptureObligationWorkBinding"]

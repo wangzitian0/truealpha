@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date
 from decimal import Decimal
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, model_validator
 
-from truealpha_contracts.common import SHA256_PATTERN
-from truealpha_contracts.common import require_aware as _require_aware
+from truealpha_contracts.common import (
+    AwareDatetime,
+    Sha256,
+)
 
 
 class DataSource(StrEnum):
@@ -26,13 +28,8 @@ class DataSource(StrEnum):
 
 
 class _PitRecordBase(BaseModel):
-    knowable_at: datetime
-    recorded_at: datetime
-
-    @field_validator("knowable_at", "recorded_at")
-    @classmethod
-    def validate_datetimes(cls, value: datetime, info) -> datetime:
-        return _require_aware(value, info.field_name)
+    knowable_at: AwareDatetime
+    recorded_at: AwareDatetime
 
     def _check_recorded_after_knowable(self) -> None:
         if self.recorded_at < self.knowable_at:
@@ -63,7 +60,7 @@ class EntityIdentifier(_ValidPeriodRecordBase):
 class RawObjectRef(BaseModel):
     bucket: str = Field(min_length=3)
     key: str = Field(min_length=1)
-    sha256: str = Field(pattern=SHA256_PATTERN)
+    sha256: Sha256
     byte_length: int = Field(ge=0)
     content_type: str = Field(min_length=1)
 
@@ -75,14 +72,9 @@ class RawObjectRef(BaseModel):
 class _RawEnvelopeBase(BaseModel):
     source: DataSource
     source_record_id: str = Field(min_length=1)
-    fetched_at: datetime
-    source_published_at: datetime | None = None
+    fetched_at: AwareDatetime
+    source_published_at: AwareDatetime | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
-
-    @field_validator("fetched_at", "source_published_at")
-    @classmethod
-    def validate_datetimes(cls, value: datetime | None, info) -> datetime | None:
-        return None if value is None else _require_aware(value, info.field_name)
 
 
 class RawCapture(_RawEnvelopeBase):
@@ -97,19 +89,14 @@ class RawIngestionEnvelope(_RawEnvelopeBase):
 class AnalystRatingEvent(_PitRecordBase):
     analyst_id: str
     company_id: str
-    recommendation_at: datetime
-    vendor_updated_at: datetime | None = None
+    recommendation_at: AwareDatetime
+    vendor_updated_at: AwareDatetime | None = None
     rating: int = Field(ge=1, le=5)
     target_price: Decimal | None = Field(default=None, ge=0)
     currency: str | None = Field(default=None, min_length=3, max_length=3)
     source_url: str | None = None
     confidence: Decimal = Field(ge=0, le=1)
     raw_ref: str
-
-    @field_validator("recommendation_at", "vendor_updated_at")
-    @classmethod
-    def validate_extra_datetimes(cls, value: datetime | None, info) -> datetime | None:
-        return None if value is None else _require_aware(value, info.field_name)
 
     @model_validator(mode="after")
     def validate_time_order(self) -> AnalystRatingEvent:
@@ -172,13 +159,8 @@ class GraphEdge(_ValidPeriodRecordBase):
 
 class AsOfQuery(BaseModel):
     entity_ids: tuple[str, ...] = Field(min_length=1)
-    as_of: datetime
+    as_of: AwareDatetime
     valid_on: date | None = None
-
-    @field_validator("as_of")
-    @classmethod
-    def validate_as_of(cls, value: datetime) -> datetime:
-        return _require_aware(value, "as_of")
 
 
 class BacktestDataset(BaseModel):

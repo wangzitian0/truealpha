@@ -3,20 +3,24 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import datetime, timedelta
+from datetime import timedelta
 from enum import StrEnum
-from typing import Any, Self
+from typing import Self
 
 from pydantic import Field, field_validator, model_validator
 
 from truealpha_contracts.common import (
-    SHA256_PATTERN,
-    STABLE_ID_PATTERN,
+    AwareDatetime,
     CaptureEnvironment,
+    ContentHash,
     FrozenModel,
-    identify_by_grain,
-    require_aware,
-    require_stable_and_immutable,
+    IdentifiedFrozenModel,
+    ImmutableId,
+    Sha256,
+    SortedUniqueIds,
+    StableId,
+    content_id,
+    content_ref,
     sorted_unique_coordinates,
 )
 from truealpha_contracts.universe import SubjectRef, UniverseRef
@@ -75,225 +79,147 @@ class RetryPolicy(FrozenModel):
         return self
 
 
-class CaptureSchedulePolicy(FrozenModel):
-    schedule_policy_id: str = Field(default="", pattern=r"^(?:|schedule-policy:[0-9a-f]{64})$")
-    content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
-    policy_version: str = Field(pattern=STABLE_ID_PATTERN)
+class CaptureSchedulePolicy(IdentifiedFrozenModel):
+    id_field = "schedule_policy_id"
+    id_prefix = "schedule-policy"
+    identity_fields = (
+        "policy_version",
+        "demanded_cadence",
+        "provider_availability_cadence",
+        "freshness_max_age",
+        "semantic_freshness_max_age",
+        "retry",
+    )
+    schedule_policy_id: str = content_id("schedule-policy")
+    content_sha256: ContentHash = ""
+    policy_version: ImmutableId
     demanded_cadence: timedelta
-    provider_availability_cadence: str = Field(pattern=STABLE_ID_PATTERN)
+    provider_availability_cadence: ImmutableId
     freshness_max_age: timedelta
     semantic_freshness_max_age: Mapping[str, timedelta] = Field(default_factory=dict)
     retry: RetryPolicy
 
-    @field_validator("policy_version", "provider_availability_cadence")
-    @classmethod
-    def validate_immutable_coordinates(cls, value: str, info: Any) -> str:
-        return require_stable_and_immutable(value, info.field_name)
-
-    @model_validator(mode="after")
-    def freeze_and_identify(self) -> Self:
+    def _canonicalize(self) -> None:
         if self.demanded_cadence <= timedelta(0) or self.freshness_max_age <= timedelta(0):
             raise ValueError("cadence and freshness_max_age must be positive")
         if any(w <= timedelta(0) for w in self.semantic_freshness_max_age.values()):
             raise ValueError("semantic freshness windows must be positive")
-        identify_by_grain(
-            self,
-            id_field="schedule_policy_id",
-            prefix="schedule-policy",
-            identity_fields=(
-                "policy_version",
-                "demanded_cadence",
-                "provider_availability_cadence",
-                "freshness_max_age",
-                "semantic_freshness_max_age",
-                "retry",
-            ),
-        )
-        return self
 
 
-class CaptureCampaign(FrozenModel):
-    campaign_id: str = Field(default="", pattern=r"^(?:|capture-campaign:[0-9a-f]{64})$")
-    content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
-    campaign_policy_id: str = Field(pattern=STABLE_ID_PATTERN)
+class CaptureCampaign(IdentifiedFrozenModel):
+    id_field = "campaign_id"
+    id_prefix = "capture-campaign"
+    identity_fields = ("campaign_policy_id", "environment", "cutoff", "universe_refs")
+    campaign_id: str = content_id("capture-campaign")
+    content_sha256: ContentHash = ""
+    campaign_policy_id: ImmutableId
     environment: CaptureEnvironment
-    cutoff: datetime
+    cutoff: AwareDatetime
     universe_refs: tuple[UniverseRef, ...] = Field(min_length=1)
 
-    @field_validator("campaign_policy_id")
-    @classmethod
-    def validate_policy(cls, value: str) -> str:
-        return require_stable_and_immutable(value, "campaign_policy_id")
-
-    @field_validator("cutoff")
-    @classmethod
-    def validate_cutoff(cls, value: datetime) -> datetime:
-        return require_aware(value, "cutoff")
-
-    @model_validator(mode="after")
-    def freeze_and_identify(self) -> Self:
+    def _canonicalize(self) -> None:
         refs = tuple(sorted(self.universe_refs, key=lambda r: (r.universe_id, r.universe_version, r.content_sha256)))
         if len(refs) != len(set(refs)):
             raise ValueError("universe_refs must not contain duplicates")
         object.__setattr__(self, "universe_refs", refs)
-        identify_by_grain(
-            self,
-            id_field="campaign_id",
-            prefix="capture-campaign",
-            identity_fields=("campaign_policy_id", "environment", "cutoff", "universe_refs"),
-        )
-        return self
 
 
-class CaptureRun(FrozenModel):
-    run_id: str = Field(default="", pattern=r"^(?:|capture-run:[0-9a-f]{64})$")
-    content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
-    campaign_id: str = Field(pattern=r"^capture-campaign:[0-9a-f]{64}$")
+class CaptureRun(IdentifiedFrozenModel):
+    id_field = "run_id"
+    id_prefix = "capture-run"
+    identity_fields = ("campaign_id", "run_sequence", "schedule_policy_id", "capture_scope_id")
+    run_id: str = content_id("capture-run")
+    content_sha256: ContentHash = ""
+    campaign_id: str = content_ref("capture-campaign")
     run_sequence: int = Field(ge=1)
-    schedule_policy_id: str = Field(pattern=r"^schedule-policy:[0-9a-f]{64}$")
-    capture_scope_id: str = Field(pattern=r"^capture-scope:[0-9a-f]{64}$")
-
-    @model_validator(mode="after")
-    def freeze_and_identify(self) -> Self:
-        identify_by_grain(
-            self,
-            id_field="run_id",
-            prefix="capture-run",
-            identity_fields=("campaign_id", "run_sequence", "schedule_policy_id", "capture_scope_id"),
-        )
-        return self
+    schedule_policy_id: str = content_ref("schedule-policy")
+    capture_scope_id: str = content_ref("capture-scope")
 
 
-class ListObligation(FrozenModel):
-    obligation_id: str = Field(default="", pattern=r"^(?:|list-obligation:[0-9a-f]{64})$")
-    content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
-    run_id: str = Field(pattern=r"^capture-run:[0-9a-f]{64}$")
+class ListObligation(IdentifiedFrozenModel):
+    id_field = "obligation_id"
+    id_prefix = "list-obligation"
+    identity_fields = ("run_id", "universe_ref", "subject", "capture_requirement_id", "partition")
+    obligation_id: str = content_id("list-obligation")
+    content_sha256: ContentHash = ""
+    run_id: str = content_ref("capture-run")
     universe_ref: UniverseRef
     subject: SubjectRef
-    capture_requirement_id: str = Field(pattern=STABLE_ID_PATTERN)
-    partition: str = Field(pattern=STABLE_ID_PATTERN)
-
-    @field_validator("capture_requirement_id")
-    @classmethod
-    def validate_requirement(cls, value: str) -> str:
-        return require_stable_and_immutable(value, "capture_requirement_id")
-
-    @model_validator(mode="after")
-    def freeze_and_identify(self) -> Self:
-        identify_by_grain(
-            self,
-            id_field="obligation_id",
-            prefix="list-obligation",
-            identity_fields=("run_id", "universe_ref", "subject", "capture_requirement_id", "partition"),
-        )
-        return self
+    capture_requirement_id: ImmutableId
+    partition: StableId
 
 
-class SourceRequest(FrozenModel):
-    source_request_id: str = Field(default="", pattern=r"^(?:|source-request:[0-9a-f]{64})$")
-    content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
-    source_registry_entry_id: str = Field(pattern=r"^source-registry-entry:[0-9a-f]{64}$")
-    source_policy_id: str = Field(pattern=STABLE_ID_PATTERN)
-    request_fingerprint_version: str = Field(pattern=STABLE_ID_PATTERN)
-    canonical_request_sha256: str = Field(pattern=SHA256_PATTERN)
+class SourceRequest(IdentifiedFrozenModel):
+    id_field = "source_request_id"
+    id_prefix = "source-request"
+    identity_fields = (
+        "source_registry_entry_id",
+        "source_policy_id",
+        "request_fingerprint_version",
+        "canonical_request_sha256",
+        "subject_refs",
+        "capture_requirement_ids",
+        "partition",
+    )
+    source_request_id: str = content_id("source-request")
+    content_sha256: ContentHash = ""
+    source_registry_entry_id: str = content_ref("source-registry-entry")
+    source_policy_id: ImmutableId
+    request_fingerprint_version: ImmutableId
+    canonical_request_sha256: Sha256
     subject_refs: tuple[SubjectRef, ...] = Field(min_length=1)
     capture_requirement_ids: tuple[str, ...] = Field(min_length=1)
-    partition: str = Field(pattern=STABLE_ID_PATTERN)
-
-    @field_validator("source_policy_id", "request_fingerprint_version")
-    @classmethod
-    def validate_immutable_coordinates(cls, value: str, info: Any) -> str:
-        return require_stable_and_immutable(value, info.field_name)
+    partition: StableId
 
     @field_validator("capture_requirement_ids")
     @classmethod
     def validate_requirements(cls, values: tuple[str, ...]) -> tuple[str, ...]:
         return sorted_unique_coordinates(values, "capture_requirement_ids", allow_empty=False, immutable=True)
 
-    @model_validator(mode="after")
-    def freeze_and_identify(self) -> Self:
+    def _canonicalize(self) -> None:
         subjects = tuple(sorted(self.subject_refs, key=lambda s: (s.kind.value, s.id)))
         if len(subjects) != len(set(subjects)):
             raise ValueError("subject_refs must not contain duplicates")
         object.__setattr__(self, "subject_refs", subjects)
-        identify_by_grain(
-            self,
-            id_field="source_request_id",
-            prefix="source-request",
-            identity_fields=(
-                "source_registry_entry_id",
-                "source_policy_id",
-                "request_fingerprint_version",
-                "canonical_request_sha256",
-                "subject_refs",
-                "capture_requirement_ids",
-                "partition",
-            ),
-        )
-        return self
 
 
-class CaptureWorkItem(FrozenModel):
-    work_item_id: str = Field(default="", pattern=r"^(?:|capture-work-item:[0-9a-f]{64})$")
-    content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
-    campaign_id: str = Field(pattern=r"^capture-campaign:[0-9a-f]{64}$")
-    source_request_id: str = Field(pattern=r"^source-request:[0-9a-f]{64}$")
-    schedule_policy_id: str = Field(pattern=r"^schedule-policy:[0-9a-f]{64}$")
-
-    @model_validator(mode="after")
-    def freeze_and_identify(self) -> Self:
-        identify_by_grain(
-            self,
-            id_field="work_item_id",
-            prefix="capture-work-item",
-            identity_fields=("campaign_id", "source_request_id", "schedule_policy_id"),
-        )
-        return self
+class CaptureWorkItem(IdentifiedFrozenModel):
+    id_field = "work_item_id"
+    id_prefix = "capture-work-item"
+    identity_fields = ("campaign_id", "source_request_id", "schedule_policy_id")
+    work_item_id: str = content_id("capture-work-item")
+    content_sha256: ContentHash = ""
+    campaign_id: str = content_ref("capture-campaign")
+    source_request_id: str = content_ref("source-request")
+    schedule_policy_id: str = content_ref("schedule-policy")
 
 
-class FetchAttempt(FrozenModel):
-    attempt_id: str = Field(default="", pattern=r"^(?:|fetch-attempt:[0-9a-f]{64})$")
-    content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
-    work_item_id: str = Field(pattern=r"^capture-work-item:[0-9a-f]{64}$")
+class FetchAttempt(IdentifiedFrozenModel):
+    id_field = "attempt_id"
+    id_prefix = "fetch-attempt"
+    identity_fields = ("work_item_id", "attempt_number")
+    attempt_id: str = content_id("fetch-attempt")
+    content_sha256: ContentHash = ""
+    work_item_id: str = content_ref("capture-work-item")
     attempt_number: int = Field(ge=1)
-    started_at: datetime
-
-    @field_validator("started_at")
-    @classmethod
-    def validate_started_at(cls, value: datetime) -> datetime:
-        return require_aware(value, "started_at")
-
-    @model_validator(mode="after")
-    def freeze_and_identify(self) -> Self:
-        identify_by_grain(
-            self, id_field="attempt_id", prefix="fetch-attempt", identity_fields=("work_item_id", "attempt_number")
-        )
-        return self
+    started_at: AwareDatetime
 
 
-class FetchAttemptResult(FrozenModel):
-    attempt_result_id: str = Field(default="", pattern=r"^(?:|fetch-attempt-result:[0-9a-f]{64})$")
-    content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
-    attempt_id: str = Field(pattern=r"^fetch-attempt:[0-9a-f]{64}$")
-    completed_at: datetime
+class FetchAttemptResult(IdentifiedFrozenModel):
+    id_field = "attempt_result_id"
+    id_prefix = "fetch-attempt-result"
+    identity_fields = ("attempt_id",)
+    attempt_result_id: str = content_id("fetch-attempt-result")
+    content_sha256: ContentHash = ""
+    attempt_id: str = content_ref("fetch-attempt")
+    completed_at: AwareDatetime
     outcome: FetchAttemptOutcome
     status_code: int | None = Field(default=None, ge=100, le=599)
-    source_vintage_id: str | None = Field(default=None, pattern=r"^source-vintage:[0-9a-f]{64}$")
-    reused_source_vintage_id: str | None = Field(default=None, pattern=r"^source-vintage:[0-9a-f]{64}$")
-    reason_codes: tuple[str, ...] = Field(min_length=1)
+    source_vintage_id: str | None = content_ref("source-vintage", default=None)
+    reused_source_vintage_id: str | None = content_ref("source-vintage", default=None)
+    reason_codes: SortedUniqueIds = Field(min_length=1)
 
-    @field_validator("completed_at")
-    @classmethod
-    def validate_completed_at(cls, value: datetime) -> datetime:
-        return require_aware(value, "completed_at")
-
-    @field_validator("reason_codes")
-    @classmethod
-    def validate_reasons(cls, values: tuple[str, ...]) -> tuple[str, ...]:
-        return sorted_unique_coordinates(values, "reason_codes", allow_empty=False)
-
-    @model_validator(mode="after")
-    def freeze_and_identify(self) -> Self:
+    def _canonicalize(self) -> None:
         if self.outcome is FetchAttemptOutcome.SUCCESS:
             if self.source_vintage_id is None or self.reused_source_vintage_id is not None:
                 raise ValueError("a successful attempt result must create exactly one source vintage")
@@ -302,120 +228,78 @@ class FetchAttemptResult(FrozenModel):
                 raise ValueError("an unchanged attempt result must reuse exactly one source vintage")
         elif self.source_vintage_id is not None or self.reused_source_vintage_id is not None:
             raise ValueError("a non-content attempt result cannot name a source vintage")
-        identify_by_grain(
-            self, id_field="attempt_result_id", prefix="fetch-attempt-result", identity_fields=("attempt_id",)
-        )
-        return self
 
 
-class SourceVintage(FrozenModel):
-    source_vintage_id: str = Field(default="", pattern=r"^(?:|source-vintage:[0-9a-f]{64})$")
-    content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
-    source_request_id: str = Field(pattern=r"^source-request:[0-9a-f]{64}$")
-    source_record_id: str = Field(pattern=STABLE_ID_PATTERN)
-    source_published_at: datetime | None = None
-    raw_object_id: str = Field(pattern=r"^raw-object:[0-9a-f]{64}$")
-
-    @field_validator("source_published_at")
-    @classmethod
-    def validate_source_published_at(cls, value: datetime | None) -> datetime | None:
-        return None if value is None else require_aware(value, "source_published_at")
-
-    @model_validator(mode="after")
-    def freeze_and_identify(self) -> Self:
-        identify_by_grain(
-            self,
-            id_field="source_vintage_id",
-            prefix="source-vintage",
-            identity_fields=("source_request_id", "source_record_id", "source_published_at", "raw_object_id"),
-        )
-        return self
+class SourceVintage(IdentifiedFrozenModel):
+    id_field = "source_vintage_id"
+    id_prefix = "source-vintage"
+    identity_fields = ("source_request_id", "source_record_id", "source_published_at", "raw_object_id")
+    source_vintage_id: str = content_id("source-vintage")
+    content_sha256: ContentHash = ""
+    source_request_id: str = content_ref("source-request")
+    source_record_id: StableId
+    source_published_at: AwareDatetime | None = None
+    raw_object_id: str = content_ref("raw-object")
 
 
-class ListObligationResult(FrozenModel):
-    result_id: str = Field(default="", pattern=r"^(?:|list-obligation-result:[0-9a-f]{64})$")
-    content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
-    obligation_id: str = Field(pattern=r"^list-obligation:[0-9a-f]{64}$")
+class ListObligationResult(IdentifiedFrozenModel):
+    id_field = "result_id"
+    id_prefix = "list-obligation-result"
+    identity_fields = ("obligation_id", "terminal_state", "final_attempt_id")
+    result_id: str = content_id("list-obligation-result")
+    content_sha256: ContentHash = ""
+    obligation_id: str = content_ref("list-obligation")
     terminal_state: ObligationTerminalState
-    completed_at: datetime
-    final_attempt_id: str | None = Field(default=None, pattern=r"^fetch-attempt:[0-9a-f]{64}$")
-    reason_codes: tuple[str, ...] = Field(min_length=1)
+    completed_at: AwareDatetime
+    final_attempt_id: str | None = content_ref("fetch-attempt", default=None)
+    reason_codes: SortedUniqueIds = Field(min_length=1)
 
-    @field_validator("completed_at")
-    @classmethod
-    def validate_completed_at(cls, value: datetime) -> datetime:
-        return require_aware(value, "completed_at")
-
-    @field_validator("reason_codes")
-    @classmethod
-    def validate_reasons(cls, values: tuple[str, ...]) -> tuple[str, ...]:
-        return sorted_unique_coordinates(values, "reason_codes", allow_empty=False)
-
-    @model_validator(mode="after")
-    def freeze_and_identify(self) -> Self:
+    def _canonicalize(self) -> None:
         if self.terminal_state is ObligationTerminalState.SKIPPED_BY_POLICY:
             if self.final_attempt_id is not None:
                 raise ValueError("a policy-skipped obligation cannot name a source attempt")
         elif self.final_attempt_id is None:
             raise ValueError("a non-skipped obligation must name its terminal source attempt")
-        identify_by_grain(
-            self,
-            id_field="result_id",
-            prefix="list-obligation-result",
-            identity_fields=("obligation_id", "terminal_state", "final_attempt_id"),
-        )
-        return self
 
 
-class NormalizedObservation(FrozenModel):
-    observation_id: str = Field(default="", pattern=r"^(?:|normalized-observation:[0-9a-f]{64})$")
-    content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
-    semantic_type: str = Field(pattern=STABLE_ID_PATTERN)
-    semantic_version: str = Field(pattern=STABLE_ID_PATTERN)
+class NormalizedObservation(IdentifiedFrozenModel):
+    id_field = "observation_id"
+    id_prefix = "normalized-observation"
+    identity_fields = (
+        "semantic_type",
+        "semantic_version",
+        "subject",
+        "valid_from",
+        "valid_to",
+        "knowable_at",
+        "source_vintage_id",
+        "parser_version",
+        "mapping_version",
+        "normalized_payload_sha256",
+    )
+    observation_id: str = content_id("normalized-observation")
+    content_sha256: ContentHash = ""
+    semantic_type: StableId
+    semantic_version: ImmutableId
     subject: SubjectRef
-    valid_from: datetime
-    valid_to: datetime | None = None
-    knowable_at: datetime
-    source_vintage_id: str = Field(pattern=r"^source-vintage:[0-9a-f]{64}$")
-    parser_version: str = Field(pattern=STABLE_ID_PATTERN)
-    mapping_version: str = Field(pattern=STABLE_ID_PATTERN)
-    normalized_payload_sha256: str = Field(pattern=SHA256_PATTERN)
+    valid_from: AwareDatetime
+    valid_to: AwareDatetime | None = None
+    knowable_at: AwareDatetime
+    source_vintage_id: str = content_ref("source-vintage")
+    parser_version: ImmutableId
+    mapping_version: ImmutableId
+    normalized_payload_sha256: Sha256
     is_restatement: bool = False
-    supersedes_observation_id: str | None = Field(default=None, pattern=r"^normalized-observation:[0-9a-f]{64}$")
+    supersedes_observation_id: str | None = content_ref("normalized-observation", default=None)
 
-    @field_validator("semantic_version", "parser_version", "mapping_version")
-    @classmethod
-    def validate_versioned_coordinates(cls, value: str, info: Any) -> str:
-        return require_stable_and_immutable(value, info.field_name)
-
-    @field_validator("valid_from", "valid_to", "knowable_at")
-    @classmethod
-    def validate_datetimes(cls, value: datetime | None, info: Any) -> datetime | None:
-        return None if value is None else require_aware(value, info.field_name)
-
-    @model_validator(mode="after")
-    def freeze_and_identify(self) -> Self:
+    def _canonicalize(self) -> None:
         if self.valid_to is not None and self.valid_to < self.valid_from:
             raise ValueError("valid_to cannot precede valid_from")
         if self.is_restatement != (self.supersedes_observation_id is not None):
             raise ValueError("only a restatement may name, and every restatement must name, its predecessor")
-        identify_by_grain(
-            self,
-            id_field="observation_id",
-            prefix="normalized-observation",
-            identity_fields=(
-                "semantic_type",
-                "semantic_version",
-                "subject",
-                "valid_from",
-                "valid_to",
-                "knowable_at",
-                "source_vintage_id",
-                "parser_version",
-                "mapping_version",
-                "normalized_payload_sha256",
-            ),
-        )
+
+    @model_validator(mode="after")
+    def reject_self_supersession(self) -> Self:
         if self.supersedes_observation_id == self.observation_id:
             raise ValueError("a restatement cannot supersede itself")
         return self

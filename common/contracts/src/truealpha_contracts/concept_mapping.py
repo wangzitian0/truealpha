@@ -7,7 +7,12 @@ from typing import Self
 
 from pydantic import Field, model_validator
 
-from truealpha_contracts.common import FrozenModel, identify
+from truealpha_contracts.common import (
+    ContentHash,
+    FrozenModel,
+    content_id,
+    identify,
+)
 
 
 class ResolutionKind(StrEnum):
@@ -35,8 +40,8 @@ class FieldMapping(FrozenModel):
 
 
 class ConceptMappingRuleset(FrozenModel):
-    ruleset_id: str = Field(default="", pattern=r"^(?:|concept-mapping:[0-9a-f]{64})$")
-    content_sha256: str = Field(default="", pattern=r"^(?:|[0-9a-f]{64})$")
+    ruleset_id: str = content_id("concept-mapping")
+    content_sha256: ContentHash = ""
     version: str = Field(min_length=1)
     mappings: tuple[FieldMapping, ...] = Field(min_length=1)
 

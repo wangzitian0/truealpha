@@ -11,7 +11,7 @@ from typing import Literal, Self, get_args
 
 from pydantic import Field, field_validator, model_validator
 
-from truealpha_contracts.common import StrictFrozenModel, canonical_sha256
+from truealpha_contracts.common import CanonicalHash, StrictFrozenModel
 
 ENVIRONMENT_CONTRACT_RESOURCE = "environment_contract.v1.json"
 SENTINEL_KNOWN_ANSWERS_RESOURCE = "sentinel_known_answers.v1.json"
@@ -450,7 +450,7 @@ class NightlyVerdictsContract(StrictFrozenModel):
     per_universe: Mapping[str, NightlyVerdictExpectationSpec] = Field(min_length=1)
 
 
-class EnvironmentContract(StrictFrozenModel):
+class EnvironmentContract(CanonicalHash, StrictFrozenModel):
     schema_version: Literal[1]
     contract_version: str = Field(min_length=1)
     description: str = Field(min_length=1)
@@ -522,10 +522,6 @@ class EnvironmentContract(StrictFrozenModel):
             Decimal(str(self.run_time_bounds.floor_minutes)),
         )
         return math.ceil(minutes * 60)
-
-    @property
-    def content_sha256(self) -> str:
-        return canonical_sha256(self.model_dump(mode="json"))
 
     def normalize_environment(self, environment: str | None) -> str:
         env = (environment or "").strip().lower()

@@ -8,20 +8,16 @@ from typing import Literal
 
 from pydantic import Field
 
-from truealpha_contracts.common import FrozenModel, canonical_sha256
+from truealpha_contracts.common import CanonicalHash, FrozenModel
 
 
-class ThemeDefinition(FrozenModel):
+class ThemeDefinition(CanonicalHash, FrozenModel):
     factor_key: Literal["theme_purity"] = "theme_purity"
     factor_version: str = Field(pattern=r"^v[0-9]+$")
     theme_id: str = Field(pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
     theme: str = Field(min_length=1)
     inclusion: str = Field(min_length=1)
     minimum_classified_share: Decimal = Field(ge=0, le=1)
-
-    @property
-    def content_sha256(self) -> str:
-        return canonical_sha256(self.model_dump(mode="json"))
 
 
 THEMES: MappingProxyType[str, ThemeDefinition] = MappingProxyType(

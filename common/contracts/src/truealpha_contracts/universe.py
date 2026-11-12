@@ -6,10 +6,18 @@ import re
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from enum import StrEnum
+from typing import Annotated
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import AfterValidator, Field, ValidationInfo, field_validator, model_validator
 
-from truealpha_contracts.common import SHA256_PATTERN, STABLE_ID_PATTERN, FrozenModel, canonical_sha256, require_aware
+from truealpha_contracts.common import (
+    STABLE_ID_PATTERN,
+    AwareDatetime,
+    FrozenModel,
+    Sha256,
+    canonical_sha256,
+    require_aware,
+)
 
 _MUTABLE_REFERENCE_MARKERS = frozenset({"current", "head", "latest"})
 
@@ -21,6 +29,13 @@ def _require_stable_reference(value: str, field_name: str) -> str:
     if mutable_markers:
         raise ValueError(f"{field_name} cannot use a mutable reference marker: {sorted(mutable_markers)}")
     return value
+
+
+def _stable_reference_field(value: str, info: ValidationInfo) -> str:
+    return _require_stable_reference(value, info.field_name or "reference")
+
+
+_StableReference = Annotated[str, AfterValidator(_stable_reference_field)]
 
 
 class SubjectKind(StrEnum):
@@ -35,12 +50,7 @@ class SubjectKind(StrEnum):
 
 class SubjectRef(FrozenModel):
     kind: SubjectKind
-    id: str
-
-    @field_validator("id")
-    @classmethod
-    def validate_id(cls, value: str) -> str:
-        return _require_stable_reference(value, "id")
+    id: _StableReference
 
 
 class UniverseDefinitionKind(StrEnum):
@@ -55,14 +65,9 @@ class UniverseClaimKind(StrEnum):
 
 
 class UniverseRef(FrozenModel):
-    universe_id: str
-    universe_version: str
-    content_sha256: str = Field(pattern=SHA256_PATTERN)
-
-    @field_validator("universe_id", "universe_version")
-    @classmethod
-    def validate_stable_identity(cls, value: str, info) -> str:
-        return _require_stable_reference(value, info.field_name)
+    universe_id: _StableReference
+    universe_version: _StableReference
+    content_sha256: Sha256
 
 
 class UniverseManifest(FrozenModel):
@@ -70,14 +75,9 @@ class UniverseManifest(FrozenModel):
     definition_kind: UniverseDefinitionKind
     supported_claims: tuple[UniverseClaimKind, ...]
     membership_ids: tuple[str, ...] = ()
-    resolver_version: str | None = None
-    effective_at: datetime
+    resolver_version: _StableReference | None = None
+    effective_at: AwareDatetime
     owner: str = Field(min_length=1)
-
-    @field_validator("effective_at")
-    @classmethod
-    def validate_effective_at(cls, value: datetime) -> datetime:
-        return require_aware(value, "effective_at")
 
     @field_validator("owner")
     @classmethod
@@ -94,11 +94,6 @@ class UniverseManifest(FrozenModel):
         for value in values:
             _require_stable_reference(value, "membership_id")
         return tuple(sorted(values))
-
-    @field_validator("resolver_version")
-    @classmethod
-    def validate_resolver_version(cls, value: str | None) -> str | None:
-        return None if value is None else _require_stable_reference(value, "resolver_version")
 
     @classmethod
     def compute_content_sha256(
@@ -202,25 +197,15 @@ class UniverseManifest(FrozenModel):
 
 
 class UniverseMembership(FrozenModel):
-    membership_id: str
-    universe_id: str
+    membership_id: _StableReference
+    universe_id: _StableReference
     subject: SubjectRef
     valid_from: date
     valid_to: date | None = None
-    knowable_at: datetime
-    recorded_at: datetime
+    knowable_at: AwareDatetime
+    recorded_at: AwareDatetime
     confidence: Decimal = Field(ge=0, le=1)
     raw_ref: str = Field(min_length=1)
-
-    @field_validator("membership_id", "universe_id")
-    @classmethod
-    def validate_stable_identity(cls, value: str, info) -> str:
-        return _require_stable_reference(value, info.field_name)
-
-    @field_validator("knowable_at", "recorded_at")
-    @classmethod
-    def validate_datetimes(cls, value: datetime, info) -> datetime:
-        return require_aware(value, info.field_name)
 
     @model_validator(mode="after")
     def validate_membership(self) -> UniverseMembership:
