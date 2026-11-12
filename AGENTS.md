@@ -1,4 +1,4 @@
-<!-- WS_STATIC_START adapter=rules-v2 inputs=da65c541785339f13eae93a6ec79404a4d9669724e09a228cca1819f6623c068 -->
+<!-- WS_STATIC_START adapter=rules-v2 inputs=c3490028543c0d160bddcacf5fad0edafba957c64b039647c02f32d906faba68 -->
 <!-- Generated file: do not edit by hand. These rules are maintained in the owner's rule source and re-rendered here. -->
 
 ## Engineering discipline
@@ -83,9 +83,9 @@ The single definition of the production reservation. Other tiers, skills and gat
    observability, not regexes on PR descriptions or issue comments. Once a PR is merge-ready,
    the agent that owns it merges it. That covers gate code, workflows and release code once
    the review that the Root section `Production reservation` requires is on the PR. That review
-   is part of class 1. Production here (`docs/release-protocol.md`):
-   `tools/cut_release.sh <tag> --prod` and `deploy-release.yml` with `deploy_type=prod`. The
-   checks of `--owner-approved-sha` and `owner_approved_sha` in those paths are part of the
+   is part of class 1. Production here (`docs/release-protocol.md`): the infra2 workflow
+   `reconcile-iac-inputs.yml` with `promote_prod=true` and the infra2 workflow `deploy.yml`
+   with `type=prod`. The owner-approval checks of those infra2 paths are part of the
    reservation itself.
 5. **Data and evidence stay verifiable.** Captured corpora, snapshots, handoff records,
    and evaluation evidence carry content hashes so a replay provably uses the same bytes.
