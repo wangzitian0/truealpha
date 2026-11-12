@@ -27,8 +27,9 @@ What each row reads, and what makes it red:
   only at 0. The comparison covers relations, columns, constraints, indexes, triggers, functions, views and
   sequences. It does not cover row-level security policies, grants, function settings, index validity, trigger
   state, enum types or comments: a green S does not prove those. A reference that cannot be built or compared is
-  red, never green. A scratch database that a killed process left behind is dropped by the next run (older than 1 h). Each environment runs its own
-  check, so the row is S1 in production and S2 in staging, and the scheduled verdict is S3.
+  red, never green. A scratch database that a killed process left behind is dropped by the next run (older than
+  1 h). Each environment runs its own check, so the row is S1 in production and S2 in staging, and the scheduled
+  verdict is S3.
 
 Q3 of #1664 cannot run inside one environment today. It compares two environments, and no database sees the other.
 It is listed as not measured. A verdict with a row that is not measured is never green: unknown is not OK.
@@ -36,11 +37,12 @@ It is listed as not measured. A verdict with a row that is not measured is never
 A shown percentage or size is rounded in the direction that keeps the text true: up for a red row, down for a
 row that passes. A text never says "70.0% against 70.0%" for a row that failed.
 
-A summary lists the rows that failed (their texts), the rows that passed (their names) and the rows that are not
-measured (their names), so a green row is visible and differs from a row that did not run.
+A summary starts with the texts of the rows that keep the verdict red: the failed rows or, when no row failed,
+the rows that are not measured. Then it lists the rows that passed (their names), and, after a failed row, the rows
+that are not measured (their names). A green row is visible and differs from a row that did not run.
 
 A summary is public (`/api/health`). It holds row names, counts and percentages. Never a research value.
-`verdict()` puts "failed: " before a red summary, so a red summary here starts with the first row.
+`verdict()` puts "failed: " before a red summary, so the first text of a summary says why the verdict is red.
 """
 
 from __future__ import annotations
@@ -116,16 +118,17 @@ class Judgement:
 
     @property
     def summary(self) -> str:
-        parts: list[str] = []
-        if self.failed:
-            parts.append("; ".join(row.text for row in self.failed))
-        passed = [row.key for row in self.rows if row.state == "pass"]
-        if passed and (self.failed or self.unmeasured):
-            parts.append("passed: " + ", ".join(passed))
-        if self.unmeasured:
-            parts.append("not measured: " + ", ".join(row.key for row in self.unmeasured))
-        if not parts:
+        """The rows that keep the verdict red come first: the failed rows, or, when none failed, the rows that are
+        not measured. `verdict()` puts "failed: " before a red summary, so that first part must say why."""
+        lead = self.failed or self.unmeasured
+        if not lead:
             return "ok: " + "; ".join(row.text for row in self.rows)
+        parts = ["; ".join(row.text for row in lead)]
+        passed = [row.key for row in self.rows if row.state == "pass"]
+        if passed:
+            parts.append("passed: " + ", ".join(passed))
+        if self.failed and self.unmeasured:
+            parts.append("not measured: " + ", ".join(row.key for row in self.unmeasured))
         return ". ".join(parts)
 
 
@@ -207,7 +210,7 @@ def judge_schema(*, differences: int | None, failure: str = "") -> Row:
 
 def judge(*, gppe: Row, quota: Row, server: Row, schema: Row) -> Judgement:
     """The rows in the order of #1664, then the rows that no environment can run alone."""
-    waiting = tuple(Row(key, "unmeasured", f"{key} {reason}") for key, reason in NOT_MEASURED.items())
+    waiting = tuple(Row(key, "unmeasured", f"{key} not measured: {reason}") for key, reason in NOT_MEASURED.items())
     return Judgement((gppe, quota, server, schema, *waiting))
 
 
@@ -330,15 +333,14 @@ def _without_environment(names: tuple[str, ...]) -> Iterator[None]:
 def read_schema(database_url: str, *, db_dir: Path | None = None) -> Row:
     """S: build the reference on the server of `database_url`, compare, drop it.
 
-    Any failure is a red row that names the exception type and nothing else: a connection error names its host."""
+    Any failure is a red row. The row names the exception type and nothing else, because a connection error names its
+    host and the row is public. The log of the run keeps the full error."""
     chain_dir = IMAGE_DB_DIR if db_dir is None else db_dir
     try:
         from truealpha_tools import schema_drift
 
         try:
-            dropped = schema_drift.drop_stale_references(database_url)
-            if dropped:
-                log.warning("dropped %d stale scratch reference database(s): %s", len(dropped), ", ".join(dropped))
+            schema_drift.drop_stale_references(database_url)  # logs each database that it drops
         except Exception:  # noqa: BLE001 - a failed sweep never hides the measurement
             log.warning("could not sweep stale scratch reference databases", exc_info=True)
         with _without_environment(MASKED_ENVIRONMENT):

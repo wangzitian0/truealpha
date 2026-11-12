@@ -179,7 +179,18 @@ def test_the_verdict_is_never_green_while_a_row_is_not_measured() -> None:
 
     assert judgement.ok is False
     assert [row.key for row in judgement.unmeasured] == ["Q3"]
-    assert judgement.summary == "passed: Q1, R1, C1, S. not measured: Q3"
+    assert judgement.summary == (
+        "Q3 not measured: compares two environments; no database sees the other. passed: Q1, R1, C1, S"
+    )
+
+
+def test_a_red_summary_with_no_failed_row_leads_with_the_reason_and_not_with_the_passed_rows() -> None:
+    """`verdict()` writes "failed: " before it. A text that starts with the passed rows would read "failed: passed:"."""
+    summary = topt_baseline.judge(**passing()).summary
+
+    assert summary.startswith("Q3 not measured: "), summary
+    assert "failed: passed" not in f"failed: {summary}"
+    assert "not measured: Q3" not in summary, "the keys of the rows that are not measured are named once"
 
 
 def test_the_verdict_is_green_when_every_row_passes(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -716,6 +727,7 @@ def test_s_masks_the_password_variable_for_the_reference_build_and_puts_it_back(
     from truealpha_tools import schema_drift
 
     monkeypatch.setattr(schema_drift, "reference_database", build)
+    monkeypatch.setattr(schema_drift, "drop_stale_references", lambda *_args, **_kwargs: [])
 
     row = topt_baseline.read_schema("postgresql://unused")
 
@@ -736,6 +748,7 @@ def test_s_passes_the_chain_directory_of_the_image_and_states_that_the_reference
     from truealpha_tools import schema_drift
 
     monkeypatch.setattr(schema_drift, "reference_database", build)
+    monkeypatch.setattr(schema_drift, "drop_stale_references", lambda *_args, **_kwargs: [])
 
     topt_baseline.read_schema("postgresql://unused")
 
@@ -824,7 +837,7 @@ def test_s_sweeps_the_references_that_a_killed_run_left_behind(
     assert schema_drift.REFERENCE_PREFIX == "truealpha_chain_reference_"
 
 
-def test_the_summary_lists_failed_texts_passed_names_and_not_measured_names(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_summary_lists_failed_texts_passed_names_and_not_measured_names() -> None:
     """A green row must be visible: without the list, a row that passed looks like a row that did not run."""
     rows = passing() | {"quota": Row("R1", "fail", "R1 over")}
 

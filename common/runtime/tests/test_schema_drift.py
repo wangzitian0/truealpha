@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import time
 import uuid
 from collections.abc import Iterator
 from pathlib import Path
@@ -353,9 +354,18 @@ def _create_database(admin_url: str, name: str) -> None:
         admin.execute(sql.SQL("create database {}").format(sql.Identifier(name)))
 
 
-def test_the_sweep_drops_only_stale_references_of_the_known_shape(clone: str) -> None:
-    import time
+def _left(admin_url: str) -> set[str]:
+    with psycopg.connect(admin_url, autocommit=True) as admin:
+        return {r[0] for r in admin.execute("select datname from pg_database").fetchall()}
 
+
+def _drop_all(admin_url: str, names: list[str]) -> None:
+    with psycopg.connect(admin_url, autocommit=True) as admin:
+        for name in names:
+            admin.execute(sql.SQL("drop database if exists {} with (force)").format(sql.Identifier(name)))
+
+
+def test_the_sweep_drops_only_stale_references_of_the_known_shape(clone: str) -> None:
     admin_url = drift._with_database(clone, "postgres")
     now = int(time.time())
     stale = f"{drift.REFERENCE_PREFIX}{now - 7200}_111_abcdef01"
@@ -367,31 +377,116 @@ def test_the_sweep_drops_only_stale_references_of_the_known_shape(clone: str) ->
         _create_database(admin_url, name)
     try:
         dropped = drift.drop_stale_references(clone, now=now)
-        with psycopg.connect(admin_url, autocommit=True) as admin:
-            left = {r[0] for r in admin.execute("select datname from pg_database").fetchall()}
+        left = _left(admin_url)
         assert dropped == [stale]
         assert stale not in left and {fresh, other_shape, old_format} <= left
     finally:
+        _drop_all(admin_url, names)
+
+
+def test_the_sweep_keeps_a_database_whose_name_only_starts_like_a_stale_reference(clone: str) -> None:
+    """A person's copy `<shape>_backup` is not a scratch reference. `match` would drop it, `fullmatch` keeps it. A
+    name that fits the `LIKE` prefilter (its `_` is a wildcard) but not the prefix is kept too."""
+    admin_url = drift._with_database(clone, "postgres")
+    old = int(time.time()) - 7200
+    backup = f"{drift.REFERENCE_PREFIX}{old}_111_abcdef01_backup"
+    wildcard_only = f"truealpha{'x'}chain{'x'}reference{'x'}{old}_111_abcdef02"
+    names = [backup, wildcard_only]
+    for name in names:
+        _create_database(admin_url, name)
+    try:
+        dropped = drift.drop_stale_references(clone)
+        assert dropped == []
+        assert set(names) <= _left(admin_url)
+    finally:
+        _drop_all(admin_url, names)
+
+
+def test_the_sweep_does_not_read_a_digit_of_another_script_as_an_age(clone: str) -> None:
+    """Ten Arabic-Indic zeros fit `\\d{10}`, and `int()` reads them as 0, the year 1970: a stale age for a name that
+    no run of this code ever wrote."""
+    admin_url = drift._with_database(clone, "postgres")
+    foreign = f"{drift.REFERENCE_PREFIX}{chr(0x660) * 10}_111_abcdef01"
+    _create_database(admin_url, foreign)
+    try:
+        assert drift.drop_stale_references(clone) == []
+        assert foreign in _left(admin_url)
+    finally:
+        _drop_all(admin_url, [foreign])
+
+
+def test_the_sweep_leaves_the_target_and_an_unrelated_database_alone(clone: str) -> None:
+    admin_url = drift._with_database(clone, "postgres")
+    now = int(time.time())
+    unrelated = f"ta_unrelated_{uuid.uuid4().hex[:8]}"
+    stale = f"{drift.REFERENCE_PREFIX}{now - 7200}_111_abcdef01"
+    for name in (unrelated, stale):
+        _create_database(admin_url, name)
+    try:
+        assert drift.drop_stale_references(clone, now=now) == [stale]
+        left = _left(admin_url)
+        assert unrelated in left, "a database without the prefix is not a candidate"
+        assert {"postgres", psycopg.conninfo.conninfo_to_dict(clone)["dbname"]} <= left, "the target stays"
+    finally:
+        _drop_all(admin_url, [unrelated, stale])
+
+
+def test_the_sweep_goes_on_after_a_drop_that_fails_and_returns_only_what_it_dropped(clone: str) -> None:
+    """A template database cannot be dropped. It sorts first; the stale reference after it is still dropped."""
+    admin_url = drift._with_database(clone, "postgres")
+    now = int(time.time())
+    undroppable = f"{drift.REFERENCE_PREFIX}{now - 7300}_111_abcdef01"
+    droppable = f"{drift.REFERENCE_PREFIX}{now - 7200}_222_abcdef02"
+    for name in (undroppable, droppable):
+        _create_database(admin_url, name)
+    with psycopg.connect(admin_url, autocommit=True) as admin:
+        admin.execute(sql.SQL("alter database {} is_template true").format(sql.Identifier(undroppable)))
+    try:
+        dropped = drift.drop_stale_references(clone, now=now)
+        left = _left(admin_url)
+        assert dropped == [droppable]
+        assert undroppable in left and droppable not in left
+    finally:
         with psycopg.connect(admin_url, autocommit=True) as admin:
-            for name in names:
-                admin.execute(sql.SQL("drop database if exists {} with (force)").format(sql.Identifier(name)))
+            admin.execute(sql.SQL("alter database {} is_template false").format(sql.Identifier(undroppable)))
+        _drop_all(admin_url, [undroppable, droppable])
 
 
-def test_the_sweep_never_touches_the_target_or_a_database_without_the_prefix(clone: str) -> None:
-    import time
+def test_the_sweep_connection_stops_a_statement_after_the_timeout(monkeypatch, clone: str) -> None:
+    seen: dict[str, object] = {}
+    real = psycopg.connect
 
-    dropped = drift.drop_stale_references(clone, older_than=drift.timedelta(0), now=time.time() + 10**9)
+    def record(*args: object, **kwargs: object):
+        seen.update(kwargs)
+        return real(*args, **kwargs)
 
-    assert dropped == [] or all(name.startswith(drift.REFERENCE_PREFIX) for name in dropped)
-    with psycopg.connect(clone) as connection:
-        assert connection.execute("select 1").fetchone() == (1,), "the target is still there"
+    monkeypatch.setattr(drift.psycopg, "connect", record)
+    drift.drop_stale_references(clone)
+    assert seen["options"] == f"-c statement_timeout={drift.SWEEP_STATEMENT_TIMEOUT}"
+    assert drift.SWEEP_STATEMENT_TIMEOUT == "60s"
 
 
 def test_the_name_of_a_new_reference_carries_its_age(clone: str) -> None:
+    before = int(time.time())
     seen: list[str] = []
     with drift.reference_database(clone) as reference_url:
         seen.append(psycopg.conninfo.conninfo_to_dict(reference_url)["dbname"])
-    assert drift.REFERENCE_NAME.fullmatch(seen[0]), seen[0]
+    match = drift.REFERENCE_NAME.fullmatch(seen[0])
+    assert match, seen[0]
+    assert before <= int(match.group(1)) <= int(time.time()), "the number in the name is the second of its creation"
+
+
+def test_a_kept_reference_says_when_the_deployed_check_drops_it(capsys, clone: str) -> None:
+    admin_url = drift._with_database(clone, "postgres")
+    with drift.reference_database(clone, keep=True) as reference_url:
+        name = psycopg.conninfo.conninfo_to_dict(reference_url)["dbname"]
+    try:
+        err = capsys.readouterr().err
+        assert f"kept the reference database {name}" in err
+        assert "older than 1 h" in err
+        assert name in _left(admin_url)
+    finally:
+        _drop_all(admin_url, [name])
 
 
 def test_allow_remote_is_passed_by_one_module_only() -> None:

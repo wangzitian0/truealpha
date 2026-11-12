@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import re
 import shlex
@@ -23,12 +24,17 @@ from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from truealpha_runtime.testing import apply_migration_chain
 
+log = logging.getLogger(__name__)
+
 #: A scratch reference database is `<prefix><unix seconds>_<pid>_<8 hex>`. The seconds let a later run drop one that a
 #: killed process left behind (a SIGKILL skips the `finally`). A name of another shape is never dropped.
 REFERENCE_PREFIX = "truealpha_chain_reference_"
-REFERENCE_NAME = re.compile(rf"{REFERENCE_PREFIX}(\d{{10}})_\d+_[0-9a-f]{{8}}")
+#: `re.ASCII`: `\d` alone accepts digits of other scripts, and `int()` reads them as other numbers.
+REFERENCE_NAME = re.compile(rf"{re.escape(REFERENCE_PREFIX)}(\d{{10}})_\d+_[0-9a-f]{{8}}", re.ASCII)
 #: A reference builds in about 15 s. One hour is far past any live build.
 STALE_REFERENCE_AGE = timedelta(hours=1)
+#: A drop of a database waits for its sessions to end. It never holds the verdict for more than this.
+SWEEP_STATEMENT_TIMEOUT = "60s"
 LOCAL_TARGET = Path(__file__).resolve().parents[4] / "db" / "local_target.sh"
 REMOTE_REFERENCE_ENV = "TRUEALPHA_ALLOW_REMOTE_REFERENCE"
 RUNTIME_OWNED_SCHEMAS = ("dagster",)
@@ -233,7 +239,11 @@ def reference_database(
         yield reference_url
     finally:
         if keep:
-            print(f"schema_drift: kept the reference database {name}", file=sys.stderr)
+            print(
+                f"schema_drift: kept the reference database {name}. The deployed check of that server drops "
+                f"a scratch reference that is older than {STALE_REFERENCE_AGE.total_seconds() / 3600:g} h.",
+                file=sys.stderr,
+            )
         else:
             with psycopg.connect(admin_url, connect_timeout=10, autocommit=True) as admin:
                 admin.execute(sql.SQL("drop database if exists {} with (force)").format(sql.Identifier(name)))
@@ -244,10 +254,16 @@ def drop_stale_references(
 ) -> list[str]:
     """Drop the scratch reference databases on `server_url` that are older than `older_than`; return their names.
 
-    Only a name that matches `REFERENCE_NAME` is a candidate: no other database is ever dropped."""
+    Only a name that matches `REFERENCE_NAME` is a candidate: no other database is ever dropped. A drop that
+    fails is logged, and the next candidate is still tried. Each statement stops after `SWEEP_STATEMENT_TIMEOUT`."""
     moment = time.time() if now is None else now
     dropped: list[str] = []
-    with psycopg.connect(_with_database(server_url, "postgres"), connect_timeout=10, autocommit=True) as admin:
+    with psycopg.connect(
+        _with_database(server_url, "postgres"),
+        connect_timeout=10,
+        autocommit=True,
+        options=f"-c statement_timeout={SWEEP_STATEMENT_TIMEOUT}",
+    ) as admin:
         rows = admin.execute(
             "select datname from pg_database where datname like %s order by datname", (f"{REFERENCE_PREFIX}%",)
         ).fetchall()
@@ -255,7 +271,12 @@ def drop_stale_references(
             match = REFERENCE_NAME.fullmatch(name)
             if match is None or moment - int(match.group(1)) < older_than.total_seconds():
                 continue
-            admin.execute(sql.SQL("drop database if exists {} with (force)").format(sql.Identifier(name)))
+            try:
+                admin.execute(sql.SQL("drop database if exists {} with (force)").format(sql.Identifier(name)))
+            except psycopg.Error:
+                log.warning("could not drop the stale reference database %s", name, exc_info=True)
+                continue
+            log.warning("dropped the stale reference database %s", name)
             dropped.append(name)
     return dropped
 
