@@ -14,7 +14,6 @@ from typing import Any, Protocol
 import psycopg
 from factors.panel import AliasKind, IssuerClass, bound_tree, operating_numerator_node, required_inputs
 from factors.production_topt import OperatingBranch
-from psycopg.types.json import Jsonb
 from pydantic import ValidationError
 from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.models import RawObjectRef
@@ -46,6 +45,7 @@ from data_engine.datahub.production_topt.source_registrations import (
     SOURCE_BY_PARSER,
     registration_for,
 )
+from data_engine.datahub.repository import persist_run_report
 from data_engine.datahub.standards.listing_unit_ratio import OUTCOME_NOT_MEASURED, OUTCOMES, outcome_of_payload
 
 _HEADLINE_FIELD = "close"
@@ -812,13 +812,10 @@ def _reconcile_financial_fact_cells(conn: psycopg.Connection[Any], run_id: str) 
 
 
 def persist(conn: psycopg.Connection[Any], report: dict[str, Any]) -> str:
-    content_sha256 = canonical_sha256(report)
-    report_id = f"datahub-quality-report:{content_sha256}"
-    conn.execute(
-        """
-        insert into mart.datahub_quality_report (report_id, content_sha256, run_id, requested_count, payload)
-        values (%s, %s, %s, %s, %s) on conflict (report_id) do nothing
-        """,
-        (report_id, content_sha256, report["run_id"], report["requested_count"], Jsonb(report)),
+    return persist_run_report(
+        conn,
+        report,
+        table="mart.datahub_quality_report",
+        report_id_prefix="datahub-quality-report",
+        columns=("run_id", "requested_count"),
     )
-    return report_id

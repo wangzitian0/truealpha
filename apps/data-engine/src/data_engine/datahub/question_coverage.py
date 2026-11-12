@@ -10,8 +10,6 @@ from decimal import Decimal
 from typing import Any
 
 from psycopg import Connection
-from psycopg.types.json import Jsonb
-from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.question_requirements import (
     QUESTION_REQUIREMENTS,
     QUESTION_REQUIREMENTS_SHA256,
@@ -21,6 +19,8 @@ from truealpha_contracts.question_requirements import (
     QuestionScope,
 )
 from truealpha_contracts.universes import key_of_lane, record
+
+from data_engine.datahub.repository import persist_run_report
 
 GOVERNING_FACTOR = "gross_profit_per_employee"
 UNRECORDED_REASON = "unrecorded_reason"
@@ -274,26 +274,13 @@ def compile_report(connection: Connection[Any], *, universe: str, executed_at: d
 
 
 def persist(connection: Connection[Any], report: Mapping[str, Any]) -> str:
-    content_sha256 = canonical_sha256(dict(report))
-    report_id = f"question-coverage-report:{content_sha256}"
-    connection.execute(
-        """
-        insert into mart.question_coverage_report
-            (report_id, content_sha256, universe_id, run_id, cutoff, requirements_sha256, payload)
-        values (%s, %s, %s, %s, %s, %s, %s)
-        on conflict (report_id) do nothing
-        """,
-        (
-            report_id,
-            content_sha256,
-            report["universe_id"],
-            report["run_id"],
-            report["cutoff"],
-            report["requirements_sha256"],
-            Jsonb(dict(report)),
-        ),
+    return persist_run_report(
+        connection,
+        report,
+        table="mart.question_coverage_report",
+        report_id_prefix="question-coverage-report",
+        columns=("universe_id", "run_id", "cutoff", "requirements_sha256"),
     )
-    return report_id
 
 
 def _newest_run_in(connection: Connection[Any], table: str, universe_id: str) -> str | None:

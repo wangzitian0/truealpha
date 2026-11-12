@@ -100,8 +100,7 @@ class CaptureTimeline:
 
     def __post_init__(self) -> None:
         for stamp in (self.cutoff, self.partition_start):
-            if stamp.tzinfo is None or stamp.utcoffset() is None:
-                raise ValueError("capture timeline stamps must be timezone-aware")
+            _require_aware(stamp)
 
     @classmethod
     def for_partition(cls, cutoff: datetime, partition: str) -> CaptureTimeline:
@@ -360,8 +359,7 @@ class PostgresCaptureControlSink:
     ) -> None:
         obligation = binding.obligation
         semantic_type = obligation.capture_requirement_id.removesuffix(":v1")
-        if knowable_at.tzinfo is None or knowable_at.utcoffset() is None:
-            raise ValueError("adapter transaction_time must be timezone-aware")
+        _require_aware(knowable_at)
         observation = NormalizedObservation(
             semantic_type=semantic_type,
             semantic_version=obligation.capture_requirement_id,
