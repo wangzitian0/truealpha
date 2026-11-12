@@ -18,9 +18,9 @@ description: TrueAlpha Deploy Evidence & Issue Closure Guard. Automates AGENTS.m
 ### Step 1: Release Workflow, Health & Image Digest Check
 Verify that the target release tag (`vX.Y.Z`) and commit SHA are promoted and served on the target environment:
 ```bash
-# 1. Verify remote release deploy and surface walk workflows succeeded for vX.Y.Z
-gh run list --workflow deploy-release.yml --limit 5
-gh run list --workflow walk-release.yml --limit 5
+# 1. Verify the infra2 staging reconcile and deploy workflows succeeded for vX.Y.Z
+gh run list -R wangzitian0/infra2 --workflow reconcile-iac-inputs.yml --branch vX.Y.Z --limit 5
+gh run list -R wangzitian0/infra2 --workflow deploy.yml --limit 5
 
 # 2. If running directly on the VPS host via SSH, verify container image digests:
 docker inspect -f '{{.Config.Image}}' truealpha-dagster-webserver-staging
