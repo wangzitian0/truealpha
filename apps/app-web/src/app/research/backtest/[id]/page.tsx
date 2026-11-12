@@ -2,7 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getBacktestRun, getBacktestValuations, getBacktestTrades } from "@/server/mart/backtest-repository";
 import { decodeRouteParam, formatCell, formatPercentFromFraction, formatRatio, formatUsdMagnitude } from "@/client/format";
-import { BacktestBasis } from "@/components/backtest-basis";
+import { BacktestBasis, backtestStatusStyle } from "@/components/backtest-basis";
 import { BacktestChart } from "@/components/backtest-chart";
 
 export const dynamic = "force-dynamic";
@@ -63,13 +63,7 @@ export default async function BacktestDetailPage({ params }: { params: Promise<{
             Universe: <span className="font-mono text-gray-300">{run.universe_id}</span> • Period: {run.start_date} to {run.end_date}
           </p>
         </div>
-        <span
-          className={`rounded-full px-3 py-1 text-xs font-semibold uppercase ${
-            run.status === "succeeded"
-              ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
-              : "bg-rose-500/10 text-rose-400 border border-rose-500/20"
-          }`}
-        >
+        <span className={`rounded-full px-3 py-1 text-xs font-semibold uppercase ${backtestStatusStyle(run.status)}`}>
           {run.status}
         </span>
       </div>

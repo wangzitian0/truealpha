@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { formatCell, formatNumberMagnitude, formatRatio, formatUsdMagnitude } from "@/client/format";
 import { exclusionLabel } from "@/contracts/exclusion-reasons";
+import { PanelNodeTd } from "@/components/panel-node-cell";
+import { ResearchTable } from "@/components/research-table";
 import { entityLabel, loadEntityDisplayMap } from "@/server/mart/entity-resolution";
 import { DASHBOARD_STRATEGY_ID, WIDE_PANEL_INPUT_COLUMNS } from "@/server/mart/research-read";
 import { loadStrategyRunPage } from "@/server/strategy-page";
@@ -46,39 +48,30 @@ export default async function CoveragePage() {
         </p>
       </div>
 
-      <div className="overflow-x-auto rounded-xl border border-border">
-        <table className="w-full text-left text-sm">
-          <caption className="sr-only">Per-company input coverage for the latest strategy run</caption>
-          <thead className="bg-card text-xs uppercase text-gray-500">
-            <tr>
-              {["Company", "Inputs", "What is missing"].map((h) => (
-                <th key={h} scope="col" className="px-4 py-3">{h}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {decisions.map((d) => (
-              <tr key={d.issuer_id} className="border-t border-border">
-                <th scope="row" className="px-4 py-3 font-medium">
-                  <Link href={`/research/entities/${encodeURIComponent(d.issuer_id)}`} className="text-accent hover:underline" title={d.issuer_id}>
-                    {entityLabel(d.issuer_id, names)}
-                  </Link>
-                </th>
-                <td className="px-4 py-3">
-                  <span
-                    className={`rounded-full px-2.5 py-0.5 text-xs ${
-                      d.exclusion_reason === null ? "bg-emerald-400/10 text-emerald-400" : "bg-red-400/10 text-red-400"
-                    }`}
-                  >
-                    {d.exclusion_reason === null ? "complete" : "incomplete"}
-                  </span>
-                </td>
-                <td className="px-4 py-3 text-gray-400">{formatCell(exclusionLabel(d.exclusion_reason))}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <ResearchTable
+        caption="Per-company input coverage for the latest strategy run"
+        headers={["Company", "Inputs", "What is missing"]}
+      >
+        {decisions.map((d) => (
+          <tr key={d.issuer_id} className="border-t border-border">
+            <th scope="row" className="px-4 py-3 font-medium">
+              <Link href={`/research/entities/${encodeURIComponent(d.issuer_id)}`} className="text-accent hover:underline" title={d.issuer_id}>
+                {entityLabel(d.issuer_id, names)}
+              </Link>
+            </th>
+            <td className="px-4 py-3">
+              <span
+                className={`rounded-full px-2.5 py-0.5 text-xs ${
+                  d.exclusion_reason === null ? "bg-emerald-400/10 text-emerald-400" : "bg-red-400/10 text-red-400"
+                }`}
+              >
+                {d.exclusion_reason === null ? "complete" : "incomplete"}
+              </span>
+            </td>
+            <td className="px-4 py-3 text-gray-400">{formatCell(exclusionLabel(d.exclusion_reason))}</td>
+          </tr>
+        ))}
+      </ResearchTable>
 
       <div className="space-y-3" data-testid="coverage-wide-panel-section">
         <div>
@@ -139,14 +132,7 @@ export default async function CoveragePage() {
                           : formatNumberMagnitude(node.value)
                         : null;
                       return (
-                        <td key={col.key} className="px-4 py-3 font-mono tabular-nums" title={node?.value ?? undefined}>
-                          <div>{formatCell(formattedVal)}</div>
-                          {node?.confidence && (
-                            <div className="text-[11px] text-gray-500" title={node.confidence}>
-                              conf {formatCell(formatRatio(node.confidence))}
-                            </div>
-                          )}
-                        </td>
+                        <PanelNodeTd key={col.key} node={node} formatted={formattedVal} />
                       );
                     })}
                   </tr>

@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { listBacktestRuns } from "@/server/mart/backtest-repository";
 import { formatCell, formatPercentFromFraction, formatRatio } from "@/client/format";
-import { BacktestLimitations, runLimitations } from "@/components/backtest-basis";
+import { BacktestLimitations, backtestStatusStyle, runLimitations } from "@/components/backtest-basis";
 
 export const dynamic = "force-dynamic";
 
@@ -88,15 +88,7 @@ export default async function BacktestListPage() {
                     {formatCell(formatRatio(r.turnover_monthly))}
                   </td>
                   <td className="px-4 py-3 text-center">
-                    <span
-                      className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${
-                        r.status === "succeeded"
-                          ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
-                          : r.status === "failed"
-                            ? "bg-rose-500/10 text-rose-400 border border-rose-500/20"
-                            : "bg-amber-500/10 text-amber-400 border border-amber-500/20"
-                      }`}
-                    >
+                    <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${backtestStatusStyle(r.status)}`}>
                       {r.status}
                     </span>
                   </td>

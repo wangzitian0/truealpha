@@ -15,6 +15,7 @@ import {
 	valuationBasisLabel,
 } from "@/contracts/strategyRun";
 import { ClaimCeilingBanner } from "@/components/claim-ceiling";
+import { ResearchTable } from "@/components/research-table";
 import { StrategyDefinitionLine } from "@/components/strategy-definition";
 import { AvailabilityBadge, ReadStateNotice } from "@/components/read-state";
 import { getServerPrincipal } from "@/server/auth/request-context";
@@ -94,59 +95,45 @@ export default async function ResearchOverviewPage() {
 
 			{selections.length > 0 && (
 				<>
-					<div className="overflow-x-auto rounded-xl border border-border">
-						<table className="w-full text-left text-sm">
-							<caption className="sr-only">Current strategy selections</caption>
-							<thead className="bg-card text-xs uppercase text-gray-500">
-								<tr>
-									{selectionHeaders.map((h) => (
-										<th key={h} scope="col" className="px-4 py-3">
-											{h}
-										</th>
-									))}
-								</tr>
-							</thead>
-							<tbody>
-								{selections.map((decision) => (
-									<tr key={decision.issuer_id} className="border-t border-border">
-										<th scope="row" className="px-4 py-3 font-medium">
-											<Link
-												href={`/research/entities/${encodeURIComponent(decision.issuer_id)}`}
-												className="text-accent hover:underline"
-												title={decision.issuer_id}
-											>
-												{entityLabel(decision.issuer_id, names)}
-											</Link>
-										</th>
-										<td className="px-4 py-3">{formatCell(decision.tier)}</td>
-										<td className="px-4 py-3 tabular-nums" title={currentMultipleOf(decision) ?? undefined}>
-											{formatCell(formatRatio(currentMultipleOf(decision)))}
-										</td>
-										<td className="px-4 py-3 tabular-nums" title={targetMultipleOf(decision) ?? undefined}>
-											{formatCell(formatRatio(targetMultipleOf(decision)))}
-										</td>
-										<td
-											className={`px-4 py-3 tabular-nums ${signColor(decision.valuation_gap)}`}
-											title={decision.valuation_gap ?? undefined}
-										>
-											{formatCell(formatSignedRatio(decision.valuation_gap))}
-										</td>
-										<td className="px-4 py-3 tabular-nums" title={decision.target_weight ?? undefined}>
-											{formatCell(formatPercentFromFraction(decision.target_weight))}
-										</td>
-										<td className="px-4 py-3">
-											<Link
-												className="text-accent hover:underline"
-												href={`/research/trace?issuer=${encodeURIComponent(decision.issuer_id)}&cutoff=${encodeURIComponent(decision.cutoff_at)}`}
-											>
-												trace
-											</Link>
-										</td>
-									</tr>
-								))}
-							</tbody>
-						</table>
-					</div>
+					<ResearchTable caption="Current strategy selections" headers={selectionHeaders}>
+						{selections.map((decision) => (
+							<tr key={decision.issuer_id} className="border-t border-border">
+								<th scope="row" className="px-4 py-3 font-medium">
+									<Link
+										href={`/research/entities/${encodeURIComponent(decision.issuer_id)}`}
+										className="text-accent hover:underline"
+										title={decision.issuer_id}
+									>
+										{entityLabel(decision.issuer_id, names)}
+									</Link>
+								</th>
+								<td className="px-4 py-3">{formatCell(decision.tier)}</td>
+								<td className="px-4 py-3 tabular-nums" title={currentMultipleOf(decision) ?? undefined}>
+									{formatCell(formatRatio(currentMultipleOf(decision)))}
+								</td>
+								<td className="px-4 py-3 tabular-nums" title={targetMultipleOf(decision) ?? undefined}>
+									{formatCell(formatRatio(targetMultipleOf(decision)))}
+								</td>
+								<td
+									className={`px-4 py-3 tabular-nums ${signColor(decision.valuation_gap)}`}
+									title={decision.valuation_gap ?? undefined}
+								>
+									{formatCell(formatSignedRatio(decision.valuation_gap))}
+								</td>
+								<td className="px-4 py-3 tabular-nums" title={decision.target_weight ?? undefined}>
+									{formatCell(formatPercentFromFraction(decision.target_weight))}
+								</td>
+								<td className="px-4 py-3">
+									<Link
+										className="text-accent hover:underline"
+										href={`/research/trace?issuer=${encodeURIComponent(decision.issuer_id)}&cutoff=${encodeURIComponent(decision.cutoff_at)}`}
+									>
+										trace
+									</Link>
+								</td>
+							</tr>
+						))}
+					</ResearchTable>
 					<p className="text-sm text-gray-500" data-testid="universe-usability-summary">
 						{selections.length} selected · {usability.usableCount} usable of {evaluated} evaluated
 						{usability.excludedCount > 0 ? ` (${usability.excludedCount} excluded)` : ""} —{" "}

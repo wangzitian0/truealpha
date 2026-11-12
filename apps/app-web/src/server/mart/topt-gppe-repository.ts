@@ -4,29 +4,9 @@
 
 import type { ToptGppeCell, ToptGppeReport, ToptGppeUnavailable } from "@/contracts/toptGppe";
 import { idPrefixLikeOfRole } from "@/contracts/universes";
-import { withMartReadonly } from "./db";
+import { resolveGovernedHeadRunId, withMartReadonly, type QueryClientLike } from "./db";
 
-export interface MartClientLike {
-  query(sql: string, params?: readonly unknown[]): Promise<{ rows: Record<string, unknown>[] }>;
-}
-
-const POINTER_HEAD_SQL = `
-  select run_id, freshness, availability, staleness_reason
-  from mart.served_head
-  where factor_id = 'gross_profit_per_employee'
-    and universe_id like $1
-  order by advanced_at desc limit 1
-`;
-
-const ACCEPTANCE_FALLBACK_HEAD_SQL = `
-  select s.run_id
-  from mart.topt_capture_status s
-  join mart.datahub_quality_report q on q.run_id = s.run_id
-  where s.environment = (select environment from mart.environment_identity)
-    and s.complete
-    and s.universe_id like $1
-  order by q.created_at desc, q.report_id desc limit 1
-`;
+export type MartClientLike = QueryClientLike;
 
 const CELLS_SQL = `
   select coalesce(ei.listing_id, nullif(r.payload->>'listing_id', '')) as listing_id,
@@ -94,26 +74,11 @@ export class MartToptGppeRepository {
     }
 
     return this.runWithClient(async (client) => {
-      const servedUniverseLike = idPrefixLikeOfRole("strategy");
-      let head = await client.query(POINTER_HEAD_SQL, [servedUniverseLike]);
-      if (head.rows.length > 0) {
-        const row = head.rows[0];
-        if (row.availability === "unavailable" || row.run_id === null) {
-          const reason =
-            typeof row.staleness_reason === "string" && row.staleness_reason.length > 0
-              ? row.staleness_reason
-              : "older_than_30d";
-          return { reason: `head_unavailable: ${reason}` };
-        }
-      } else {
-        head = await client.query(ACCEPTANCE_FALLBACK_HEAD_SQL, [servedUniverseLike]);
-      }
-      if (head.rows.length === 0 || head.rows[0].run_id === null) {
-        return { reason: "no accepted (quality-reported) production TOPT run" };
-      }
+      const head = await resolveGovernedHeadRunId(client, idPrefixLikeOfRole("strategy"));
+      if (head.reason !== null) return { reason: head.reason };
 
       try {
-        const runId = requireString(head.rows[0].run_id, "run_id");
+        const runId = requireString(head.runId, "run_id");
         const cellRows = await client.query(CELLS_SQL, [runId, limit]);
         const qualityRows = await client.query(QUALITY_SQL, [runId]);
         const statusRows = await client.query(REQUESTED_COUNT_SQL, [runId]);

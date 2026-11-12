@@ -1,14 +1,10 @@
 import { formatShortSha } from "@/client/format";
+import { formatAgeHours } from "@/client/coerce";
 import { ReadStateNotice } from "@/components/read-state";
 import type { PipelineOutcome, PipelineVerdict } from "@/server/admin/pipeline";
 
-function formatAge(hours: number): string {
-  if (hours < 1) return `${Math.round(hours * 60)}m`;
-  return hours < 48 ? `${hours.toFixed(1)}h` : `${(hours / 24).toFixed(1)}d`;
-}
-
 function ago(iso: string, now: number): string {
-  return `${formatAge((now - new Date(iso).getTime()) / 3_600_000)} ago`;
+  return `${formatAgeHours((now - new Date(iso).getTime()) / 3_600_000, 48)} ago`;
 }
 
 function formatDuration(seconds: number | null): string {
@@ -95,7 +91,7 @@ export function PipelineHealth({ outcome, now }: { outcome: PipelineOutcome; now
         <div className="rounded-lg border border-border bg-card px-4 py-3">
           <dt className="text-xs uppercase tracking-wide text-gray-500">Release</dt>
           <dd className="mt-1 text-lg font-semibold tabular-nums" data-release-age="true">
-            {release === null ? (unreadable.release === null ? "unknown" : "not read") : formatAge(release.ageHours)}
+            {release === null ? (unreadable.release === null ? "unknown" : "not read") : formatAgeHours(release.ageHours, 48)}
           </dd>
           <p className="mt-1 break-words text-xs text-gray-500">
             {release === null

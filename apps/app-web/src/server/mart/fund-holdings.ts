@@ -9,7 +9,7 @@
  */
 
 import { formatRatio } from "@/client/format";
-import { withMartReadonly } from "./db";
+import { queryMartRows } from "./db";
 
 export type FundHoldingRow = {
   holdingName: string;
@@ -50,19 +50,16 @@ const NEWEST_VINTAGE_SQL = `
 `;
 
 export async function loadFundHoldings(): Promise<FundHoldingsVintage[]> {
-  const rows = await withMartReadonly(async (client) => {
-    const result = await client.query<{
-      fund_id: string;
-      fund_name: string;
-      report_period: string;
-      filed_on: string;
-      holding_name: string;
-      isin: string | null;
-      weight_pct: string | null;
-      value_usd: string | null;
-    }>(NEWEST_VINTAGE_SQL);
-    return result.rows;
-  });
+  const rows = await queryMartRows<{
+    fund_id: string;
+    fund_name: string;
+    report_period: string;
+    filed_on: string;
+    holding_name: string;
+    isin: string | null;
+    weight_pct: string | null;
+    value_usd: string | null;
+  }>(NEWEST_VINTAGE_SQL);
 
   const byFund = new Map<string, FundHoldingsVintage>();
   for (const row of rows) {

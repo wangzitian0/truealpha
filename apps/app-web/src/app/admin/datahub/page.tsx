@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import Link from "next/link";
 
 import { formatCell } from "@/client/format";
+import { DataTable, EmptyNotice } from "@/components/data-table";
 import {
   LEDGER_COVERAGE_DAYS,
   loadDatahubStats,
@@ -134,28 +135,22 @@ function OverviewCard({
   );
 }
 
-function DataTable({
-  headers,
+function Badge({
+  className = "",
   children,
-  className = "w-full text-left text-sm",
+  title,
 }: {
-  headers: readonly string[];
-  children: ReactNode;
   className?: string;
+  children: ReactNode;
+  title?: string;
 }) {
   return (
-    <table className={className}>
-      <thead>
-        <tr className="text-gray-500">
-          {headers.map((h, i) => (
-            <th key={h} className={i < headers.length - 1 ? "pr-4 font-normal" : "font-normal"}>
-              {h}
-            </th>
-          ))}
-        </tr>
-      </thead>
-      <tbody>{children}</tbody>
-    </table>
+    <span
+      className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${className}`}
+      title={title}
+    >
+      {children}
+    </span>
   );
 }
 
@@ -334,7 +329,7 @@ export default async function AdminDatahubPage({
         </div>
 
         {stats.questionCoverage.length === 0 && (
-          <p className="rounded-lg border border-border bg-card p-4 text-gray-400">No coverage report yet.</p>
+          <EmptyNotice>No coverage report yet.</EmptyNotice>
         )}
 
         {stats.questionCoverage.map((report) => {
@@ -353,13 +348,9 @@ export default async function AdminDatahubPage({
                 </div>
                 <div className="flex items-center gap-2">
                   <span className="text-xs text-gray-400">Universe coverage:</span>
-                  <span
-                    className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
-                      isFullConnected ? BADGE_TONES.ok : BADGE_TONES.warn
-                    }`}
-                  >
+                  <Badge className={isFullConnected ? BADGE_TONES.ok : BADGE_TONES.warn}>
                     {universeAnswered}/{universeDenominator} cells ({universeRatio.toFixed(1)}%)
-                  </span>
+                  </Badge>
                 </div>
               </div>
 
@@ -390,9 +381,9 @@ export default async function AdminDatahubPage({
                             <div className="mt-1 text-xs text-gray-300 max-w-xs">{q.text}</div>
                           </td>
                           <td className="py-3 pr-4 align-top">
-                            <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${status.badgeClass}`}>
+                            <Badge className={status.badgeClass}>
                               {status.label}
-                            </span>
+                            </Badge>
                           </td>
                           <td className="py-3 pr-4 align-top">
                             {q.column ? (
@@ -464,7 +455,7 @@ export default async function AdminDatahubPage({
       <div className="space-y-3">
         <h2 className="text-lg font-semibold">Confidence &amp; accuracy (nightly)</h2>
         {stats.confidence.length === 0 && (
-          <p className="rounded-lg border border-border bg-card p-4 text-gray-400">No confidence report yet.</p>
+          <EmptyNotice>No confidence report yet.</EmptyNotice>
         )}
         {stats.confidence.map((report) => (
           <div key={report.universe_id} className="rounded-lg border border-border bg-card p-4">
@@ -483,10 +474,9 @@ export default async function AdminDatahubPage({
               {report.families.map((family) => (
                 <tr key={family.family} className="border-t border-border">
                   <td className="pr-4 font-mono">{family.family}</td>
-                  <td className="pr-4">{formatCell(family.origin_counts?.none ?? null)}</td>
-                  <td className="pr-4">{formatCell(family.origin_counts?.one ?? null)}</td>
-                  <td className="pr-4">{formatCell(family.origin_counts?.two ?? null)}</td>
-                  <td className="pr-4">{formatCell(family.origin_counts?.three_or_more ?? null)}</td>
+                  {(["none", "one", "two", "three_or_more"] as const).map((k) => (
+                    <td key={k} className="pr-4">{formatCell(family.origin_counts?.[k] ?? null)}</td>
+                  ))}
                   <td className="pr-4">{formatCell(family.mean_confidence)}</td>
                   <td className="pr-4">
                     {formatCell(family.agreement_rate)} ({family.compared}/{family.cells})
@@ -576,7 +566,7 @@ export default async function AdminDatahubPage({
       <div className="space-y-3">
         <h2 className="text-lg font-semibold">Governed heads</h2>
         {stats.heads.length === 0 && (
-          <p className="rounded-lg border border-border bg-card p-4 text-gray-400">No pointer heads yet.</p>
+          <EmptyNotice>No pointer heads yet.</EmptyNotice>
         )}
         {stats.heads.map((head) => {
           const ageLabel = head.age_hours !== null ? `${head.age_hours.toFixed(1)}h` : null;
@@ -587,8 +577,8 @@ export default async function AdminDatahubPage({
                 <span className="font-mono text-accent">{head.universe_id}</span>
                 <span className="text-sm text-gray-400">seq {head.sequence}</span>
                 <span className="text-sm text-gray-500">{head.advanced_at}</span>
-                <span
-                  className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
+                <Badge
+                  className={
                     head.freshness === "fresh"
                       ? BADGE_TONES.ok
                       : head.freshness === "manual"
@@ -596,23 +586,23 @@ export default async function AdminDatahubPage({
                         : head.freshness === "stale"
                           ? BADGE_TONES.crit
                           : "bg-gray-800 text-gray-400 border border-gray-700"
-                  }`}
+                  }
                 >
                   {head.freshness === "fresh" || head.freshness === "manual"
                     ? `${head.freshness}${ageLabel ? ` (${ageLabel})` : ""}`
                     : head.freshness === "stale"
                       ? `stale${staleDetails ? ` (${staleDetails})` : ""}`
                       : "freshness unknown"}
-                </span>
-                <span
-                  className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
+                </Badge>
+                <Badge
+                  className={
                     head.is_degraded
                       ? BADGE_TONES.warn
                       : "bg-emerald-950/30 text-emerald-500/80 border border-emerald-900/50"
-                  }`}
+                  }
                 >
                   {head.is_degraded ? `degraded ${head.degraded_reasons.join(" · ")}` : "objectives met"}
-                </span>
+                </Badge>
               </div>
               <dl className="mt-2 grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
                 <div>
@@ -661,9 +651,9 @@ export default async function AdminDatahubPage({
           </p>
         </div>
         {stats.nightlyVerdicts.length === 0 ? (
-          <p className="rounded-lg border border-border bg-card p-4 text-gray-400">
+          <EmptyNotice>
             No standing check verdicts recorded in <span className="font-mono">mart.nightly_verdicts</span> yet.
-          </p>
+          </EmptyNotice>
         ) : (
           <DataTable headers={["check", "verdict", "ran at (UTC)", "dagster run", "summary"]}>
             <VerdictRows rows={stats.nightlyVerdicts} showCheckLink />
@@ -677,13 +667,13 @@ export default async function AdminDatahubPage({
             History of <span className="font-mono">{historyCheck}</span>
           </h2>
           {history === null ? (
-            <p className="rounded-lg border border-border bg-card p-4 text-gray-400">
+            <EmptyNotice>
               That is not the name of a check, so there is no history to list.
-            </p>
+            </EmptyNotice>
           ) : history.length === 0 ? (
-            <p className="rounded-lg border border-border bg-card p-4 text-gray-400">
+            <EmptyNotice>
               No verdict is recorded for this check.
-            </p>
+            </EmptyNotice>
           ) : (
             <DataTable headers={["verdict", "ran at (UTC)", "dagster run", "summary"]}>
               <VerdictRows rows={history} />
@@ -746,7 +736,7 @@ export default async function AdminDatahubPage({
       <div className="space-y-3" id="model-seat-1302">
         <h2 className="text-lg font-semibold">Model seat 1302 answers per environment and day (#1520)</h2>
         {stats.model1302ByDay.length === 0 ? (
-          <p className="rounded-lg border border-border bg-card p-4 text-gray-400">No model seat calls recorded in the window.</p>
+          <EmptyNotice>No model seat calls recorded in the window.</EmptyNotice>
         ) : (
           <DataTable headers={["environment", "UTC day", "1302 answers", "HTTP 429", "total calls", "sampled pace"]}>
             {stats.model1302ByDay.map((row) => (
@@ -775,7 +765,7 @@ export default async function AdminDatahubPage({
       <div className="space-y-3">
         <h2 className="text-lg font-semibold">Traffic (external calls, today UTC)</h2>
         {stats.traffic.length === 0 ? (
-          <p className="rounded-lg border border-border bg-card p-4 text-gray-400">No external calls recorded today.</p>
+          <EmptyNotice>No external calls recorded today.</EmptyNotice>
         ) : (
           <DataTable headers={["source", "calls", "failed", "landed", "avg ms", "last call", "last error"]}>
             {stats.traffic.map((row) => (
@@ -798,9 +788,9 @@ export default async function AdminDatahubPage({
       <div className="space-y-3">
         <h2 className="text-lg font-semibold">Recent external calls</h2>
         {stats.recentCalls.length === 0 ? (
-          <p className="rounded-lg border border-border bg-card p-4 text-gray-400">
+          <EmptyNotice>
             No ledger rows yet — the first tick after this deploy writes them.
-          </p>
+          </EmptyNotice>
         ) : (
           <div className="overflow-x-auto">
             <DataTable headers={["at", "source", "endpoint", "status", "ms", "landed", "run", "error"]}>

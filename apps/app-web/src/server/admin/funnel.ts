@@ -2,6 +2,7 @@
  * Administrator L1–L5 quality funnel loader.
  */
 
+import { finiteOrNull, textOrNull } from "@/client/coerce";
 import { withMartReadonly } from "@/server/mart/db";
 import { MartStrategyRunRepository } from "@/server/mart/strategy-run-repository";
 import { MartToptGppeRepository, type MartClientLike } from "@/server/mart/topt-gppe-repository";
@@ -35,11 +36,6 @@ export interface FunnelDeps {
 
 const DEFAULT_POINTER_LIMIT_HOURS = 48;
 const MIN_BAR_RATIO = 0.04;
-
-function num(value: unknown): number | null {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
-}
 
 function completenessStatus(done: number, total: number): FunnelLayer["status"] {
   if (total === 0) return "muted";
@@ -83,14 +79,14 @@ export async function loadQualityFunnel(
         ptrRow === undefined
           ? null
           : {
-              ageHours: num(ptrRow.age),
+              ageHours: finiteOrNull(ptrRow.age),
               freshness: resolveHeadFreshness(
-                typeof ptrRow.freshness === "string" ? ptrRow.freshness : null,
+                textOrNull(ptrRow.freshness),
                 typeof ptrRow.universe_id === "string" ? ptrRow.universe_id : "",
-                typeof ptrRow.environment === "string" ? ptrRow.environment : null,
+                textOrNull(ptrRow.environment),
               ),
-              limitHours: num(ptrRow.limit_hours),
-              availability: typeof ptrRow.availability === "string" ? ptrRow.availability : null,
+              limitHours: finiteOrNull(ptrRow.limit_hours),
+              availability: textOrNull(ptrRow.availability),
             },
       ] as const;
     });
@@ -100,8 +96,8 @@ export async function loadQualityFunnel(
     const selected = decisions.filter((d) => d.outcome === "selected").length;
     const ranked = decisions.filter((d) => d.rank !== null).length;
 
-    const availability = num(quality.availability);
-    const freshness = num(quality.freshness);
+    const availability = finiteOrNull(quality.availability);
+    const freshness = finiteOrNull(quality.freshness);
     const gppeAvailable = gppe.cells.filter((cell) => cell.availability === "available").length;
 
     const pointerAgeHours = pointerHead?.ageHours ?? null;
@@ -122,10 +118,10 @@ export async function loadQualityFunnel(
       {
         key: "L1",
         title: "Capture",
-        headline: `${num(quality.available_count) ?? "?"} / ${num(quality.requested_count) ?? gppe.requested_count ?? "?"} cells`,
+        headline: `${finiteOrNull(quality.available_count) ?? "?"} / ${finiteOrNull(quality.requested_count) ?? gppe.requested_count ?? "?"} cells`,
         ratio: availability,
         status: availability === null ? "muted" : availability >= 1 ? "ok" : availability >= 0.9 ? "warn" : "crit",
-        detail: `freshness ${freshness ?? "?"} · reconciliation ${num(quality.independent_reconciliation) ?? "?"}`,
+        detail: `freshness ${freshness ?? "?"} · reconciliation ${finiteOrNull(quality.independent_reconciliation) ?? "?"}`,
       },
       {
         key: "L2",

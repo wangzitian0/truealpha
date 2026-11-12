@@ -26,6 +26,12 @@ export function describe(labels: Record<string, string>, value: string | null): 
   return labels[value] ?? value;
 }
 
+export function backtestStatusStyle(status: string): string {
+  if (status === "succeeded") return "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20";
+  if (status === "failed") return "bg-rose-500/10 text-rose-400 border border-rose-500/20";
+  return "bg-amber-500/10 text-amber-400 border border-amber-500/20";
+}
+
 /** The limitations the nightly lane stored with the run (#758). A run before #758 has none. */
 export function runLimitations(run: BacktestRunRecord): string[] {
   const stored = (run.metrics_payload ?? {})["limitations"];

@@ -2,6 +2,9 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { ProvenanceCell } from "@/components/provenance-cell";
 import { AvailabilityBadge, ReadStateNotice } from "@/components/read-state";
+import { NextPageLink } from "@/components/next-page-link";
+import { PanelNodeTd } from "@/components/panel-node-cell";
+import { ResearchTable } from "@/components/research-table";
 import { loadRanking } from "@/server/dashboard";
 import { entityLabel, loadEntityDisplayMap } from "@/server/mart/entity-resolution";
 import { ClaimCeilingBanner } from "@/components/claim-ceiling";
@@ -17,7 +20,6 @@ import {
 import {
   GPPE_FACTOR_VARIANT_KEYS,
   RANKING_PANEL_INPUT_KEYS,
-  type WidePanelCell,
 } from "@/server/mart/research-read";
 import { getServerPrincipal } from "@/server/auth/request-context";
 import { CardExportButton } from "@/components/card-export-button";
@@ -49,19 +51,6 @@ function buildRankingsHref(params: {
   if (params.universe && params.universe !== universeWithRole("strategy")) query.set("universe", params.universe);
   const qs = query.toString();
   return qs.length > 0 ? `/research/rankings?${qs}` : "/research/rankings";
-}
-
-function PanelNodeTd({ node, formatted }: { node: WidePanelCell | null; formatted: string | null }) {
-  return (
-    <td className="px-4 py-3 font-mono tabular-nums" title={node?.value ?? undefined}>
-      <div>{formatCell(formatted)}</div>
-      {node?.confidence && (
-        <div className="text-[11px] text-gray-500" title={node.confidence}>
-          conf {formatCell(formatRatio(node.confidence))}
-        </div>
-      )}
-    </td>
-  );
 }
 
 const pillClass = (active: boolean): string =>
@@ -167,75 +156,64 @@ export default async function RankingsPage({
             </p>
             <CardExportButton cutoff={params.cutoff} convention={convention} universe={state.data.universe} />
           </div>
-          <div className="overflow-x-auto rounded-xl border border-border">
-            <table className="w-full text-left text-sm">
-              <caption className="sr-only">Ranked issuers for the large-model-value theme at {state.data.cutoffAt}</caption>
-              <thead className="bg-card text-xs uppercase text-gray-500">
-                <tr>
-                  {headers.map((h) => (
-                    <th key={h} scope="col" className="px-4 py-3">
-                      {h}
-                    </th>
-                  ))}
+          <ResearchTable
+            caption={`Ranked issuers for the large-model-value theme at ${state.data.cutoffAt}`}
+            headers={headers}
+          >
+            {state.data.rows.map((row) => {
+              const { peg: rowPeg, pegRank: rowPegRank, pegReasonCodes: pegReasons } = projectPegByConvention(
+                row,
+                convention,
+              );
+              return (
+                <tr key={row.issuerId} className="border-t border-border">
+                  <td className="px-4 py-3">{formatCell(row.rank)}</td>
+                  <th scope="row" className="px-4 py-3 font-medium">
+                    <Link
+                      href={`/research/entities/${encodeURIComponent(row.issuerId)}${
+                        convention !== "historical_cagr" ? `?convention=${encodeURIComponent(convention)}` : ""
+                      }`}
+                      className="text-accent hover:underline"
+                      title={row.issuerId}
+                    >
+                      {entityLabel(row.issuerId, names)}
+                    </Link>
+                  </th>
+                  <td className="px-4 py-3">{formatTierLabel(row.tier)}</td>
+                  <td className="px-4 py-3 tabular-nums" title={row.currentPriceToSales ?? undefined}>
+                    {formatCell(formatRatio(row.currentPriceToSales))}
+                  </td>
+                  <td className="px-4 py-3 tabular-nums" title={row.currentMultiple ?? undefined}>
+                    {formatCell(formatRatio(row.currentMultiple))}
+                  </td>
+                  <td className="px-4 py-3 tabular-nums" title={row.targetMultiple ?? undefined}>
+                    {formatCell(formatRatio(row.targetMultiple))}
+                  </td>
+                  <td className={`px-4 py-3 tabular-nums ${signColor(row.valuationGap)}`} title={row.valuationGap ?? undefined}>
+                    {formatCell(formatSignedRatio(row.valuationGap))}
+                  </td>
+                  <td className="px-4 py-3 tabular-nums" title={rowPeg ?? undefined}>
+                    <div>{formatCell(formatRatio(rowPeg))}</div>
+                    {rowPeg === null && pegReasons.length > 0 && (
+                      <div className="mt-0.5 font-mono text-[11px] text-amber-400" data-testid="peg-reason-codes">
+                        {pegReasons.join(", ")}
+                      </div>
+                    )}
+                  </td>
+                  <td className="px-4 py-3 tabular-nums">{formatCell(rowPegRank?.toString() ?? null)}</td>
+                  <td className="px-4 py-3 tabular-nums" title={row.confidence ?? undefined}>
+                    {formatCell(formatRatio(row.confidence))}
+                  </td>
+                  <td className="px-4 py-3">
+                    <AvailabilityBadge status={row.availability} />
+                  </td>
+                  <td className="px-4 py-3">
+                    <ProvenanceCell row={row} />
+                  </td>
                 </tr>
-              </thead>
-              <tbody>
-                {state.data.rows.map((row) => {
-                  const { peg: rowPeg, pegRank: rowPegRank, pegReasonCodes: pegReasons } = projectPegByConvention(
-                    row,
-                    convention,
-                  );
-                  return (
-                    <tr key={row.issuerId} className="border-t border-border">
-                      <td className="px-4 py-3">{formatCell(row.rank)}</td>
-                      <th scope="row" className="px-4 py-3 font-medium">
-                        <Link
-                          href={`/research/entities/${encodeURIComponent(row.issuerId)}${
-                            convention !== "historical_cagr" ? `?convention=${encodeURIComponent(convention)}` : ""
-                          }`}
-                          className="text-accent hover:underline"
-                          title={row.issuerId}
-                        >
-                          {entityLabel(row.issuerId, names)}
-                        </Link>
-                      </th>
-                      <td className="px-4 py-3">{formatTierLabel(row.tier)}</td>
-                      <td className="px-4 py-3 tabular-nums" title={row.currentPriceToSales ?? undefined}>
-                        {formatCell(formatRatio(row.currentPriceToSales))}
-                      </td>
-                      <td className="px-4 py-3 tabular-nums" title={row.currentMultiple ?? undefined}>
-                        {formatCell(formatRatio(row.currentMultiple))}
-                      </td>
-                      <td className="px-4 py-3 tabular-nums" title={row.targetMultiple ?? undefined}>
-                        {formatCell(formatRatio(row.targetMultiple))}
-                      </td>
-                      <td className={`px-4 py-3 tabular-nums ${signColor(row.valuationGap)}`} title={row.valuationGap ?? undefined}>
-                        {formatCell(formatSignedRatio(row.valuationGap))}
-                      </td>
-                      <td className="px-4 py-3 tabular-nums" title={rowPeg ?? undefined}>
-                        <div>{formatCell(formatRatio(rowPeg))}</div>
-                        {rowPeg === null && pegReasons.length > 0 && (
-                          <div className="mt-0.5 font-mono text-[11px] text-amber-400" data-testid="peg-reason-codes">
-                            {pegReasons.join(", ")}
-                          </div>
-                        )}
-                      </td>
-                      <td className="px-4 py-3 tabular-nums">{formatCell(rowPegRank?.toString() ?? null)}</td>
-                      <td className="px-4 py-3 tabular-nums" title={row.confidence ?? undefined}>
-                        {formatCell(formatRatio(row.confidence))}
-                      </td>
-                      <td className="px-4 py-3">
-                        <AvailabilityBadge status={row.availability} />
-                      </td>
-                      <td className="px-4 py-3">
-                        <ProvenanceCell row={row} />
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+              );
+            })}
+          </ResearchTable>
 
           <div className="space-y-3" data-testid="rankings-gppe-variants-section">
             <div>
@@ -297,19 +275,16 @@ export default async function RankingsPage({
             </div>
           </div>
 
-          {state.data.page.hasMore && state.data.page.nextCursor !== null && (
-            <Link
-              href={buildRankingsHref({
-                cursor: state.data.page.nextCursor,
-                cutoff: params.cutoff,
-                convention,
-                universe: selectedUniverse,
-              })}
-              className="inline-block rounded-lg border border-border bg-card px-4 py-2 text-sm text-gray-300 hover:border-accent"
-            >
-              Next page →
-            </Link>
-          )}
+          <NextPageLink
+            hasMore={state.data.page.hasMore}
+            nextCursor={state.data.page.nextCursor}
+            href={buildRankingsHref({
+              cursor: state.data.page.nextCursor,
+              cutoff: params.cutoff,
+              convention,
+              universe: selectedUniverse,
+            })}
+          />
         </>
       )}
     </section>
