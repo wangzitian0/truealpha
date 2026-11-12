@@ -198,9 +198,12 @@ def test_the_governed_head_matches_the_consumer_that_serves_it() -> None:
     So this asserts the Python and the TypeScript scope the head identically. The
     duplication is deliberate (a Python tool cannot call a TS repository) and
     therefore needs a guard — #462's defect is exactly this read reimplemented
-    without one."""
-    ts = (REPO_ROOT / "apps/app-web/src/server/mart/topt-gppe-repository.ts").read_text()
-    head = ts.split("POINTER_HEAD_SQL", 1)[1].split("`", 2)[1]
+    without one. PR #1686 moved the inline consumer SQL into the shared
+    `POINTER_HEAD_SQL` of `mart/db.ts`, reached through `resolveGovernedHeadRunId`."""
+    consumer = (REPO_ROOT / "apps/app-web/src/server/mart/topt-gppe-repository.ts").read_text()
+    assert "resolveGovernedHeadRunId" in consumer, "consumer no longer resolves the governed head"
+    shared = (REPO_ROOT / "apps/app-web/src/server/mart/db.ts").read_text()
+    head = shared.split("POINTER_HEAD_SQL", 1)[1].split("`", 2)[1]
     for predicate in (
         "served_head",
         "factor_id = 'gross_profit_per_employee'",

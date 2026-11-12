@@ -71,6 +71,10 @@ POINTER_RELATIONS = ("mart.current_pointer_head", "mart.current_pointer", "mart.
 #: The one read point. `mart.served_head_environments` is a different view and is not a head.
 SERVED_HEAD = "mart.served_head"
 
+#: The shared TypeScript resolver that reads `mart.served_head` for a consumer (#1686 moved
+#: the inline head reads of `fund-valuation.ts` and `topt-gppe-repository.ts` into it).
+SHARED_HEAD_RESOLVER = re.compile(r"\bresolveGovernedHeadRunId\b")
+
 #: Columns that address a run, or the artifacts of one run. A mart relation with one of them
 #: holds results that a head must select.
 RUN_KEY_COLUMNS = ("run_id", "target_run_id", "capture_run_id", "strategy_run_id", "snapshot_id", "invocation_id")
@@ -634,8 +638,10 @@ def violations_of(relative: str, source: Source) -> list[Violation]:
         bare = _bare_relation(literal.text, POINTER_RELATIONS)
         if bare:
             found.append(Violation("A", relative, bare, literal.line))
-    # Rule B. File level: see the module docstring for what it cannot prove.
-    if not any(relation_references(literal.text, SERVED_HEAD) for literal in source.literals):
+    # Rule B. File level: see the module docstring for what it cannot prove. A file that
+    # calls the shared TypeScript head resolver reads `mart.served_head` through it.
+    reads_head = any(relation_references(literal.text, SERVED_HEAD) for literal in source.literals)
+    if not reads_head and not SHARED_HEAD_RESOLVER.search(source.code):
         for relation in SERVED:
             lines = [literal.line for literal in source.literals if relation_references(literal.text, relation)]
             if lines:
