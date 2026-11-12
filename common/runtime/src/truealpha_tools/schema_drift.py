@@ -5,13 +5,16 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import shlex
 import subprocess
 import sys
+import time
 import uuid
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +23,12 @@ from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from truealpha_runtime.testing import apply_migration_chain
 
+#: A scratch reference database is `<prefix><unix seconds>_<pid>_<8 hex>`. The seconds let a later run drop one that a
+#: killed process left behind (a SIGKILL skips the `finally`). A name of another shape is never dropped.
+REFERENCE_PREFIX = "truealpha_chain_reference_"
+REFERENCE_NAME = re.compile(rf"{REFERENCE_PREFIX}(\d{{10}})_\d+_[0-9a-f]{{8}}")
+#: A reference builds in about 15 s. One hour is far past any live build.
+STALE_REFERENCE_AGE = timedelta(hours=1)
 LOCAL_TARGET = Path(__file__).resolve().parents[4] / "db" / "local_target.sh"
 REMOTE_REFERENCE_ENV = "TRUEALPHA_ALLOW_REMOTE_REFERENCE"
 RUNTIME_OWNED_SCHEMAS = ("dagster",)
@@ -212,7 +221,7 @@ def reference_database(
                 f"to build the reference on that server anyway."
             )
     admin_url = _with_database(server_url, "postgres")
-    name = f"truealpha_chain_reference_{os.getpid()}_{uuid.uuid4().hex[:8]}"
+    name = f"{REFERENCE_PREFIX}{int(time.time())}_{os.getpid()}_{uuid.uuid4().hex[:8]}"
     with psycopg.connect(admin_url, connect_timeout=10, autocommit=True) as admin:
         admin.execute(sql.SQL("create database {}").format(sql.Identifier(name)))
     try:
@@ -228,6 +237,27 @@ def reference_database(
         else:
             with psycopg.connect(admin_url, connect_timeout=10, autocommit=True) as admin:
                 admin.execute(sql.SQL("drop database if exists {} with (force)").format(sql.Identifier(name)))
+
+
+def drop_stale_references(
+    server_url: str, *, older_than: timedelta = STALE_REFERENCE_AGE, now: float | None = None
+) -> list[str]:
+    """Drop the scratch reference databases on `server_url` that are older than `older_than`; return their names.
+
+    Only a name that matches `REFERENCE_NAME` is a candidate: no other database is ever dropped."""
+    moment = time.time() if now is None else now
+    dropped: list[str] = []
+    with psycopg.connect(_with_database(server_url, "postgres"), connect_timeout=10, autocommit=True) as admin:
+        rows = admin.execute(
+            "select datname from pg_database where datname like %s order by datname", (f"{REFERENCE_PREFIX}%",)
+        ).fetchall()
+        for (name,) in rows:
+            match = REFERENCE_NAME.fullmatch(name)
+            if match is None or moment - int(match.group(1)) < older_than.total_seconds():
+                continue
+            admin.execute(sql.SQL("drop database if exists {} with (force)").format(sql.Identifier(name)))
+            dropped.append(name)
+    return dropped
 
 
 def compare(database_url: str, reference_url: str) -> tuple[list[str], dict[str, int]]:

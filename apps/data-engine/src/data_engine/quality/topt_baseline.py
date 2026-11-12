@@ -24,7 +24,10 @@ What each row reads, and what makes it red:
 * S (S1 to S3, schema). The live catalog of this environment's database against a reference database that ran the
   chain (`truealpha_tools.schema_drift`). The reference sits on the same server, is built by the one applier
   `db/apply_migrations.sh` from `/app/db`, and is dropped at the end. The number of differences is the row. Green
-  only at 0. A reference that cannot be built or compared is red, never green. Each environment runs its own
+  only at 0. The comparison covers relations, columns, constraints, indexes, triggers, functions, views and
+  sequences. It does not cover row-level security policies, grants, function settings, index validity, trigger
+  state, enum types or comments: a green S does not prove those. A reference that cannot be built or compared is
+  red, never green. A scratch database that a killed process left behind is dropped by the next run (older than 1 h). Each environment runs its own
   check, so the row is S1 in production and S2 in staging, and the scheduled verdict is S3.
 
 Q3 of #1664 cannot run inside one environment today. It compares two environments, and no database sees the other.
@@ -33,12 +36,16 @@ It is listed as not measured. A verdict with a row that is not measured is never
 A shown percentage or size is rounded in the direction that keeps the text true: up for a red row, down for a
 row that passes. A text never says "70.0% against 70.0%" for a row that failed.
 
+A summary lists the rows that failed (their texts), the rows that passed (their names) and the rows that are not
+measured (their names), so a green row is visible and differs from a row that did not run.
+
 A summary is public (`/api/health`). It holds row names, counts and percentages. Never a research value.
 `verdict()` puts "failed: " before a red summary, so a red summary here starts with the first row.
 """
 
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
@@ -53,6 +60,8 @@ from truealpha_contracts.universes import record
 
 from data_engine.datahub.a1_evidence import ACCEPTED_SERVICE_OBJECTIVES
 from data_engine.datahub.market_prices import TWELVE_DATA_SEAT
+
+log = logging.getLogger(__name__)
 
 MIB = 1024 * 1024
 PROC_ROOT = Path("/proc")
@@ -110,6 +119,9 @@ class Judgement:
         parts: list[str] = []
         if self.failed:
             parts.append("; ".join(row.text for row in self.failed))
+        passed = [row.key for row in self.rows if row.state == "pass"]
+        if passed and (self.failed or self.unmeasured):
+            parts.append("passed: " + ", ".join(passed))
         if self.unmeasured:
             parts.append("not measured: " + ", ".join(row.key for row in self.unmeasured))
         if not parts:
@@ -189,7 +201,7 @@ def judge_schema(*, differences: int | None, failure: str = "") -> Row:
     if differences is None:
         return Row("S", "fail", f"S the schema could not be compared ({failure})")
     if differences == 0:
-        return Row("S", "pass", "S schema matches the chain")
+        return Row("S", "pass", "S catalog matches the chain")
     return Row("S", "fail", f"S schema differs from the chain in {differences} places")
 
 
@@ -319,13 +331,20 @@ def read_schema(database_url: str, *, db_dir: Path | None = None) -> Row:
     """S: build the reference on the server of `database_url`, compare, drop it.
 
     Any failure is a red row that names the exception type and nothing else: a connection error names its host."""
-    from truealpha_tools import schema_drift
-
     chain_dir = IMAGE_DB_DIR if db_dir is None else db_dir
     try:
+        from truealpha_tools import schema_drift
+
+        try:
+            dropped = schema_drift.drop_stale_references(database_url)
+            if dropped:
+                log.warning("dropped %d stale scratch reference database(s): %s", len(dropped), ", ".join(dropped))
+        except Exception:  # noqa: BLE001 - a failed sweep never hides the measurement
+            log.warning("could not sweep stale scratch reference databases", exc_info=True)
         with _without_environment(MASKED_ENVIRONMENT):
             with schema_drift.reference_database(database_url, db_dir=chain_dir, allow_remote=True) as reference_url:
                 report, _counts = schema_drift.compare(database_url, reference_url)
     except Exception as failure:  # noqa: BLE001 - every failure is a red row, never a crash of the verdict
+        log.warning("the schema comparison failed", exc_info=True)
         return judge_schema(differences=None, failure=type(failure).__name__)
     return judge_schema(differences=len(report))

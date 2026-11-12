@@ -33,13 +33,13 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 FROM python:3.12-slim-bookworm AS runtime
 WORKDIR /app
-COPY --from=build /app/.venv /app/.venv
-ENV PATH="/app/.venv/bin:$PATH"
 # psql: the schema check of the quality lane (`topt_baseline`, #1664) builds a reference database
 # with the one applier `db/apply_migrations.sh`, as the llm-service image does at every boot.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends postgresql-client \
     && rm -rf /var/lib/apt/lists/*
+COPY --from=build /app/.venv /app/.venv
+ENV PATH="/app/.venv/bin:$PATH"
 
 # Dagster run/event/schedule metadata lives in the environment's Postgres
 # `dagster` schema (README: "the dagster schema"), reached through

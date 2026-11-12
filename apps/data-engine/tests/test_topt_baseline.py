@@ -16,6 +16,7 @@ import itertools
 import json
 import os
 import re
+import time
 from collections.abc import Iterator
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -178,7 +179,7 @@ def test_the_verdict_is_never_green_while_a_row_is_not_measured() -> None:
 
     assert judgement.ok is False
     assert [row.key for row in judgement.unmeasured] == ["Q3"]
-    assert judgement.summary == "not measured: Q3"
+    assert judgement.summary == "passed: Q1, R1, C1, S. not measured: Q3"
 
 
 def test_the_verdict_is_green_when_every_row_passes(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -197,7 +198,7 @@ def test_one_failing_row_makes_the_verdict_red_even_with_nothing_unmeasured(monk
     judgement = topt_baseline.judge(**rows)
 
     assert judgement.ok is False
-    assert judgement.summary == "R1 over"
+    assert judgement.summary == "R1 over. passed: Q1, C1, S"
 
 
 def test_the_summary_of_today_fits_the_column_and_names_every_failure() -> None:
@@ -691,13 +692,8 @@ def test_the_quota_reader_counts_utc_days_inside_the_window_and_nothing_outside_
 
 
 def test_s_is_green_only_at_zero_differences() -> None:
-    assert topt_baseline.judge_schema(differences=0) == Row("S", "pass", "S schema matches the chain")
+    assert topt_baseline.judge_schema(differences=0) == Row("S", "pass", "S catalog matches the chain")
     assert topt_baseline.judge_schema(differences=1) == Row("S", "fail", "S schema differs from the chain in 1 places")
-
-
-def test_s_shows_the_numbers_of_staging_and_production_of_2026_11_11() -> None:
-    assert topt_baseline.judge_schema(differences=790).text == "S schema differs from the chain in 790 places"
-    assert topt_baseline.judge_schema(differences=5).text == "S schema differs from the chain in 5 places"
 
 
 def test_s_that_could_not_be_compared_is_red_and_names_the_failure_kind_only() -> None:
@@ -747,17 +743,24 @@ def test_s_passes_the_chain_directory_of_the_image_and_states_that_the_reference
     assert seen["kwargs"] == {"db_dir": Path("/app/db"), "allow_remote": True}
 
 
+def reference_names(url: str) -> set[str]:
+    with psycopg.connect(url, autocommit=True) as admin:
+        return {
+            name
+            for (name,) in admin.execute(
+                "select datname from pg_database where datname like 'truealpha_chain_reference_%'"
+            ).fetchall()
+        }
+
+
 def test_s_of_a_database_that_ran_the_chain_is_green_and_leaves_no_reference_behind(database_url: str) -> None:
     repo_db = Path(__file__).resolve().parents[3] / "db"
+    before = reference_names(database_url)
 
     row = topt_baseline.read_schema(database_url, db_dir=repo_db)
 
-    assert row == Row("S", "pass", "S schema matches the chain")
-    with psycopg.connect(database_url, autocommit=True) as admin:
-        left = admin.execute(
-            "select count(*) from pg_database where datname like 'truealpha_chain_reference_%'"
-        ).fetchone()
-    assert left == (0,), "the reference database is dropped at the end"
+    assert row == Row("S", "pass", "S catalog matches the chain")
+    assert reference_names(database_url) - before == set(), "the reference database is dropped at the end"
 
 
 def test_s_counts_the_places_of_a_drifted_database(database_url: str) -> None:
@@ -776,8 +779,72 @@ def test_s_counts_the_places_of_a_drifted_database(database_url: str) -> None:
     assert match is not None and int(match.group(1)) >= 3
 
 
-def test_s_of_a_missing_chain_directory_is_red(database_url: str, tmp_path: Path) -> None:
+def test_s_of_a_missing_chain_directory_is_red_and_leaves_no_reference_behind(
+    database_url: str, tmp_path: Path
+) -> None:
+    before = reference_names(database_url)
+
     row = topt_baseline.read_schema(database_url, db_dir=tmp_path)
 
     assert row.state == "fail"
     assert row.text.startswith("S the schema could not be compared (")
+    assert reference_names(database_url) - before == set(), "a failed build drops its reference database too"
+
+
+def test_s_is_still_measured_when_the_sweep_of_stale_references_fails(
+    database_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from truealpha_tools import schema_drift
+
+    def broken(*_args: object, **_kwargs: object) -> list[str]:
+        raise RuntimeError("the sweep cannot connect")
+
+    monkeypatch.setattr(schema_drift, "drop_stale_references", broken)
+
+    row = topt_baseline.read_schema(database_url, db_dir=Path(__file__).resolve().parents[3] / "db")
+
+    assert row == Row("S", "pass", "S catalog matches the chain")
+
+
+def test_s_sweeps_the_references_that_a_killed_run_left_behind(
+    database_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A SIGKILL skips the `finally` of the reference build. The next run drops the leftover that is older than 1 h."""
+    from truealpha_tools import schema_drift
+
+    old = f"truealpha_chain_reference_{int(time.time()) - 7200}_1234_deadbeef"
+    with psycopg.connect(database_url, autocommit=True) as admin:
+        admin.execute(f'create database "{old}"')
+    try:
+        topt_baseline.read_schema(database_url, db_dir=Path(__file__).resolve().parents[3] / "db")
+        assert old not in reference_names(database_url)
+    finally:
+        with psycopg.connect(database_url, autocommit=True) as admin:
+            admin.execute(f'drop database if exists "{old}" with (force)')
+    assert schema_drift.REFERENCE_PREFIX == "truealpha_chain_reference_"
+
+
+def test_the_summary_lists_failed_texts_passed_names_and_not_measured_names(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A green row must be visible: without the list, a row that passed looks like a row that did not run."""
+    rows = passing() | {"quota": Row("R1", "fail", "R1 over")}
+
+    judgement = topt_baseline.judge(**rows)
+
+    assert judgement.summary == "R1 over. passed: Q1, C1, S. not measured: Q3"
+
+
+def test_the_image_carries_what_the_schema_row_needs() -> None:
+    """The row builds its reference with `psql` and the one applier from the chain directory of the image. If a line
+    leaves the Dockerfile, the row goes red on the first deploy and no test of the module shows it."""
+    dockerfile = (Path(__file__).resolve().parents[1] / "Dockerfile").read_text()
+    runtime = dockerfile[dockerfile.index("AS runtime") :]
+
+    assert "postgresql-client" in runtime
+    assert runtime.index("postgresql-client") < runtime.index("COPY --from=build /app/.venv"), (
+        "the apt layer comes first"
+    )
+    assert "COPY db/migrations ./db/migrations" in runtime
+    assert "COPY db/roles.sql ./db/roles.sql" in runtime
+    assert "COPY db/apply_migrations.sh ./db/apply_migrations.sh" in runtime
+    assert "WORKDIR /app\n" in runtime
+    assert topt_baseline.IMAGE_DB_DIR == Path("/app/db"), "WORKDIR /app plus ./db"

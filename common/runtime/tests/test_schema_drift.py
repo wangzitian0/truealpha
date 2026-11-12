@@ -346,3 +346,63 @@ def test_the_default_chain_directory_is_the_one_of_the_checkout(monkeypatch, clo
     with drift.reference_database(clone):
         pass
     assert seen == {}
+
+
+def _create_database(admin_url: str, name: str) -> None:
+    with psycopg.connect(admin_url, autocommit=True) as admin:
+        admin.execute(sql.SQL("create database {}").format(sql.Identifier(name)))
+
+
+def test_the_sweep_drops_only_stale_references_of_the_known_shape(clone: str) -> None:
+    import time
+
+    admin_url = drift._with_database(clone, "postgres")
+    now = int(time.time())
+    stale = f"{drift.REFERENCE_PREFIX}{now - 7200}_111_abcdef01"
+    fresh = f"{drift.REFERENCE_PREFIX}{now - 60}_222_abcdef02"
+    other_shape = f"{drift.REFERENCE_PREFIX}manual_copy"
+    old_format = f"{drift.REFERENCE_PREFIX}333_abcdef03"
+    names = [stale, fresh, other_shape, old_format]
+    for name in names:
+        _create_database(admin_url, name)
+    try:
+        dropped = drift.drop_stale_references(clone, now=now)
+        with psycopg.connect(admin_url, autocommit=True) as admin:
+            left = {r[0] for r in admin.execute("select datname from pg_database").fetchall()}
+        assert dropped == [stale]
+        assert stale not in left and {fresh, other_shape, old_format} <= left
+    finally:
+        with psycopg.connect(admin_url, autocommit=True) as admin:
+            for name in names:
+                admin.execute(sql.SQL("drop database if exists {} with (force)").format(sql.Identifier(name)))
+
+
+def test_the_sweep_never_touches_the_target_or_a_database_without_the_prefix(clone: str) -> None:
+    import time
+
+    dropped = drift.drop_stale_references(clone, older_than=drift.timedelta(0), now=time.time() + 10**9)
+
+    assert dropped == [] or all(name.startswith(drift.REFERENCE_PREFIX) for name in dropped)
+    with psycopg.connect(clone) as connection:
+        assert connection.execute("select 1").fetchone() == (1,), "the target is still there"
+
+
+def test_the_name_of_a_new_reference_carries_its_age(clone: str) -> None:
+    seen: list[str] = []
+    with drift.reference_database(clone) as reference_url:
+        seen.append(psycopg.conninfo.conninfo_to_dict(reference_url)["dbname"])
+    assert drift.REFERENCE_NAME.fullmatch(seen[0]), seen[0]
+
+
+def test_allow_remote_is_passed_by_one_module_only() -> None:
+    """`allow_remote=True` lifts the guard against building a reference beside a remote or tunnelled server. Only
+    the deployed check of an environment passes it, for the database it runs against. A second caller must come
+    through this test."""
+    root = Path(__file__).resolve().parents[3]
+    callers = sorted(
+        str(path.relative_to(root))
+        for base in ("apps", "common", "tools")
+        for path in (root / base).rglob("*.py")
+        if "tests" not in path.parts and ".venv" not in path.parts and "allow_remote=True" in path.read_text()
+    )
+    assert callers == ["apps/data-engine/src/data_engine/quality/topt_baseline.py"]
