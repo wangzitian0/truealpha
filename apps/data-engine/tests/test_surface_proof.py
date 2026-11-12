@@ -701,21 +701,30 @@ def test_the_proof_and_the_theme_reader_select_the_same_run() -> None:
 
 
 def test_the_proof_and_the_holdings_and_coverage_readers_select_the_same_rows() -> None:
-    """`surface_proof` mirrors `fund-valuation.ts` `QQQ_POINTER_HEAD_SQL` and `datahub-stats.ts`
-    `QUESTION_COVERAGE_SQL`; guard both so a filter added on one side cannot drift from the other."""
-    holdings_ts = " ".join(
-        _typescript_query("QQQ_POINTER_HEAD_SQL", "apps/app-web/src/server/mart/fund-valuation.ts").split()
-    )
+    """`surface_proof` mirrors `mart/db.ts` `POINTER_HEAD_SQL` (moved from `fund-valuation.ts`
+    by #1686) and `datahub-stats.ts` `QUESTION_COVERAGE_SQL`; guard both so a filter added
+    on one side cannot drift from the other."""
+    holdings_ts = " ".join(_typescript_query("POINTER_HEAD_SQL", "apps/app-web/src/server/mart/db.ts").split())
     holdings_py = " ".join(surface_proof._HOLDINGS_HEAD_SQL.replace("%%", "%").split())
     assert holdings_ts == holdings_py
 
-    coverage_ts = " ".join(
-        _typescript_query("QUESTION_COVERAGE_SQL", "apps/app-web/src/server/admin/datahub-stats.ts").split()
-    )
+    coverage_ts = " ".join(_governed_latest_per_universe_sql().split())
     coverage_py = " ".join(surface_proof._COVERAGE_HEAD_SQL.split())
     assert coverage_ts.startswith("select distinct on (universe_id) ")
     assert coverage_py.startswith("select distinct on (universe_id) ")
     assert coverage_ts.split(" from ", 1)[1] == coverage_py.split(" from ", 1)[1]
+
+
+def _governed_latest_per_universe_sql() -> str:
+    """The `QUESTION_COVERAGE_SQL` text that `datahub-stats.ts` builds for coverage reports."""
+    import re
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[3] / "apps/app-web/src/server/admin/datahub-stats.ts").read_text()
+    assert 'QUESTION_COVERAGE_SQL = governedLatestPerUniverseSql("mart.question_coverage_report")' in source
+    match = re.search(r"function governedLatestPerUniverseSql\(.*?`(?P<sql>.*?)`;", source, re.S)
+    assert match is not None, "datahub-stats.ts no longer declares governedLatestPerUniverseSql"
+    return match.group("sql").replace("${table}", "mart.question_coverage_report").replace("${extraCols}", "")
 
 
 def test_a_run_with_only_fill_rows_is_not_populated_for_the_proof_and_the_theme_reader() -> None:
