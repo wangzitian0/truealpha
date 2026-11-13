@@ -492,12 +492,13 @@ def test_runtime_hooks_manifest_declares_the_five_v2_verification_slots() -> Non
     assert hooks.slots["prod_gate"].bootstrap == ""
     assert "tools/surface_contract.py" in hooks.slots["prod_gate"].run
 
+    for slot_name, spec in hooks.slots.items():
+        assert "&&" not in spec.run, f"{slot_name} must list its steps in checks, not chain them with &&"
+    assert [c.id for c in hooks.slots["scheduled_audit"].checks] == ["nightly_verdicts", "surface_contract"]
+
     for gate_slot in ("preview_gate", "staging_gate"):
         spec = hooks.slots[gate_slot]
-        assert spec.run.index("tools/warm_surface.sh") < spec.run.index("node e2e/walk-tree.mjs"), (
-            f"{gate_slot} must warm the surface before running walk-tree.mjs"
-        )
-        assert "tools/surface_contract.py --authenticated" in spec.run
+        assert [c.id for c in spec.checks] == ["health", "warm_surface", "walk_tree", "surface_contract"]
         assert set(spec.required_env) == {
             "APP_URL",
             "APP_VERSION_REF",
@@ -2815,3 +2816,12 @@ def test_a_job_that_installs_a_playwright_browser_does_not_ride_the_moving_runne
                 found[f"{path.name}:{job_id}"] = spec.get("runs-on")
     assert set(found) == {"ci-web.yml:browser"}, found
     assert {job: runner for job, runner in found.items() if runner != "ubuntu-24.04"} == {}, found
+
+
+def test_preview_and_staging_gate_share_one_check_list() -> None:
+    """#1692: preview_gate and staging_gate run the same checks in the same order."""
+    from infra2_sdk.manifests import load_hooks_manifest
+
+    hooks = load_hooks_manifest(REPO_ROOT / "runtime-hooks.manifest.json")
+    assert hooks.slots["preview_gate"].checks, "preview_gate must list its checks"
+    assert hooks.slots["preview_gate"].checks == hooks.slots["staging_gate"].checks

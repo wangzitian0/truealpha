@@ -13,18 +13,8 @@ is the single contract between `truealpha` and the `infra2` release train.
 `common/runtime/src/truealpha_tools/env_manifest.py` validates it alongside
 `env.manifest.json` on every CI run.
 
-It declares five `Pre -> Deploy -> Post` verification slots that `infra2` invokes:
-
-- `smoke` (`deploy` phase, zero-bootstrap): polls `tools/health_check.py` against
-  `$APP_URL/api/health` for `$APP_VERSION_REF` within `120s` before releasing the deploy lock.
-- `preview_gate` and `staging_gate` (`post` phase): confirm health via `tools/health_check.py`,
-  warm the surface via `tools/warm_surface.sh`, walk the route tree via
-  `apps/app-web/e2e/walk-tree.mjs`, and verify the authenticated MCP contract
-  via `tools/surface_contract.py --authenticated`.
-- `prod_gate` (`post` phase): checks the production unauthenticated surface via
-  `tools/surface_contract.py` after `smoke` succeeds.
-- `scheduled_audit` (`post` phase): evaluates nightly verdicts via `tools/nightly_verdicts.py`
-  and checks the surface contract via `tools/surface_contract.py`.
+It declares five `Pre -> Deploy -> Post` verification slots that `infra2` invokes. Each slot lists
+its checks in the manifest; the SDK runner runs them in order and writes `checks.jsonl`.
 
 The `infra2` release train enforces its own daily automatic-release cap
 (`DEFAULT_DAILY_CAP` in the `infra2` release controller) and staging soak rules.
