@@ -20,6 +20,10 @@ What each row reads, and what makes it red:
 * C1 (server memory). `VmHWM` of the first process of the code server container against `server_mib` of the
   capacity contract. A server below the budget that started less than `MATURE_SERVER_HOURS` ago is not
   measured: the high-water mark only grows, and the contract states its reading at 13 hours after the start.
+  The size is shown in whole MiB, up for a red row and down otherwise. One read of `VmHWM` is not exact to 0.1 MiB:
+  on production on 2026-11-13 the same process read 260.15 MiB at 06:31 UTC and 260.31 MiB ten minutes later, and
+  the row of 06:25 UTC showed 260.4 (rounded up). A digit after the point would claim a precision that the read
+  does not have. The verdict (above or below the budget) held in every read.
 
 * S (S1 to S3, schema). The live catalog of this environment's database against a reference database that ran the
   chain (`truealpha_tools.schema_drift`). The reference sits on the same server, is built by the one applier
@@ -141,6 +145,11 @@ def _one_decimal(value: Decimal, *, up: bool) -> Decimal:
     return value.quantize(Decimal("0.1"), rounding=ROUND_CEILING if up else ROUND_FLOOR)
 
 
+def _whole_mib(value: Decimal, *, up: bool) -> Decimal:
+    """Whole MiB, up for a red row and down for a row that passes. The reading has no digit after the point to give."""
+    return value.quantize(Decimal("1"), rounding=ROUND_CEILING if up else ROUND_FLOOR)
+
+
 def _percent(ratio: Decimal, *, up: bool) -> str:
     return f"{_one_decimal(ratio * 100, up=up)}%"
 
@@ -196,7 +205,7 @@ def judge_server(*, hwm_bytes: int | None, age_seconds: float | None, budget_mib
     size = Decimal(hwm_bytes) / MIB
     over = hwm_bytes > budget_mib * MIB
     age = "age unknown" if age_seconds is None else f"age {_one_decimal(Decimal(str(age_seconds)) / 3600, up=False)} h"
-    text = f"C1 code server {_one_decimal(size, up=over)}/{budget_mib} MiB, {age}"
+    text = f"C1 code server {_whole_mib(size, up=over)}/{budget_mib} MiB, {age}"
     if over:
         return Row("C1", "fail", text)
     if age_seconds is None or age_seconds < MATURE_SERVER_HOURS * 3600:
