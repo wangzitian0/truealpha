@@ -1,7 +1,7 @@
-# Check each new or edited issue against the account issue forms.
+# Check each issue against the account issue forms when it is opened, edited or reopened.
 # The check and the forms are in wangzitian0/.github (single source).
-# Manual replay: gh workflow run issue-form.yml -R wangzitian0/.github is for
-# that repository only; here, edit the issue body to run the check again.
+# The check skips an issue of a bot and an issue created before its SINCE date.
+# Replay: edit the issue body. This file has no manual trigger.
 name: issue-form
 
 on:
