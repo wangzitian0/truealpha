@@ -12,7 +12,6 @@
     },
     "preview_gate": {
       "bootstrap": "cd apps/app-web && bun install --frozen-lockfile && bunx playwright install --with-deps chromium",
-      "run": "uv run python tools/health_check.py \"$APP_URL/api/health\" \"$APP_VERSION_REF\" 36 && bash tools/warm_surface.sh \"$APP_URL\" / /research/rankings && (cd apps/app-web && TA_BASE_URL=\"$APP_URL\" node e2e/walk-tree.mjs) && uv run python tools/surface_contract.py --authenticated \"$APP_URL\"",
       "timeout_seconds": 360,
       "required_env": [
         "APP_URL",
@@ -21,11 +20,44 @@
         "TA_MEMBER_EMAIL",
         "TA_PASSWORD",
         "TA_MCP_TOKEN"
+      ],
+      "checks": [
+        {
+          "id": "health",
+          "argv": [
+            "sh",
+            "-c",
+            "uv run python -m truealpha_tools.health_check \"$APP_URL/api/health\" \"$APP_VERSION_REF\" 36"
+          ]
+        },
+        {
+          "id": "warm_surface",
+          "argv": [
+            "sh",
+            "-c",
+            "bash tools/warm_surface.sh \"$APP_URL\" / /research/rankings"
+          ]
+        },
+        {
+          "id": "walk_tree",
+          "argv": [
+            "sh",
+            "-c",
+            "cd apps/app-web && TA_BASE_URL=\"$APP_URL\" node e2e/walk-tree.mjs"
+          ]
+        },
+        {
+          "id": "surface_contract",
+          "argv": [
+            "sh",
+            "-c",
+            "uv run python -m truealpha_tools.surface_contract --authenticated \"$APP_URL\""
+          ]
+        }
       ]
     },
     "staging_gate": {
       "bootstrap": "cd apps/app-web && bun install --frozen-lockfile && bunx playwright install --with-deps chromium",
-      "run": "uv run python tools/health_check.py \"$APP_URL/api/health\" \"$APP_VERSION_REF\" 36 && bash tools/warm_surface.sh \"$APP_URL\" / /research/rankings && (cd apps/app-web && TA_BASE_URL=\"$APP_URL\" node e2e/walk-tree.mjs) && uv run python tools/surface_contract.py --authenticated \"$APP_URL\"",
       "timeout_seconds": 420,
       "required_env": [
         "APP_URL",
@@ -34,6 +66,40 @@
         "TA_MEMBER_EMAIL",
         "TA_PASSWORD",
         "TA_MCP_TOKEN"
+      ],
+      "checks": [
+        {
+          "id": "health",
+          "argv": [
+            "sh",
+            "-c",
+            "uv run python -m truealpha_tools.health_check \"$APP_URL/api/health\" \"$APP_VERSION_REF\" 36"
+          ]
+        },
+        {
+          "id": "warm_surface",
+          "argv": [
+            "sh",
+            "-c",
+            "bash tools/warm_surface.sh \"$APP_URL\" / /research/rankings"
+          ]
+        },
+        {
+          "id": "walk_tree",
+          "argv": [
+            "sh",
+            "-c",
+            "cd apps/app-web && TA_BASE_URL=\"$APP_URL\" node e2e/walk-tree.mjs"
+          ]
+        },
+        {
+          "id": "surface_contract",
+          "argv": [
+            "sh",
+            "-c",
+            "uv run python -m truealpha_tools.surface_contract --authenticated \"$APP_URL\""
+          ]
+        }
       ]
     },
     "prod_gate": {
@@ -45,13 +111,30 @@
     },
     "scheduled_audit": {
       "bootstrap": "uv sync --frozen",
-      "run": "uv run python tools/nightly_verdicts.py \"$APP_URL/api/health\" --environment \"$ENVIRONMENT\" --repo . && uv run python tools/surface_contract.py \"$APP_URL\"",
       "timeout_seconds": 600,
       "required_env": [
         "APP_URL",
         "ENVIRONMENT"
       ],
-      "checkout_lineage": true
+      "checkout_lineage": true,
+      "checks": [
+        {
+          "id": "nightly_verdicts",
+          "argv": [
+            "sh",
+            "-c",
+            "uv run python -m truealpha_tools.nightly_verdicts \"$APP_URL/api/health\" --environment \"$ENVIRONMENT\" --repo ."
+          ]
+        },
+        {
+          "id": "surface_contract",
+          "argv": [
+            "sh",
+            "-c",
+            "uv run python -m truealpha_tools.surface_contract \"$APP_URL\""
+          ]
+        }
+      ]
     }
   }
 }
