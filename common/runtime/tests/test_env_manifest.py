@@ -375,9 +375,9 @@ def test_runtime_hooks_manifest_is_valid_and_declares_all_five_v2_slots(tmp_path
     assert "cd apps/app-web && bun install" in hooks.slots["preview_gate"].bootstrap
     assert hooks.slots["staging_gate"].bootstrap is not None
     assert "cd apps/app-web && bun install" in hooks.slots["staging_gate"].bootstrap
-    assert "e2e/walk-tree.mjs" in hooks.slots["preview_gate"].run
-    assert "e2e/walk-tree.mjs" in hooks.slots["staging_gate"].run
-    assert "tools/nightly_verdicts.py" in hooks.slots["scheduled_audit"].run
+    for gate_slot in ("preview_gate", "staging_gate"):
+        assert "walk_tree" in [c.id for c in hooks.slots[gate_slot].checks]
+    assert "nightly_verdicts" in [c.id for c in hooks.slots["scheduled_audit"].checks]
     assert env_manifest.main(["--check-hooks", "runtime-hooks.manifest.json"]) == 0
 
     broken = tmp_path / "broken-hooks.manifest.json"
