@@ -2,13 +2,13 @@
   "adapter": "rules-v2",
   "dirty_inputs": [],
   "inputs": {
-    "repo": "514f042916dda04805cd5eb7615844a4a6ee7129fb00171c300b7fd945463aa0",
-    "root": "29af9406b00c0fbac0a88feb4a0d4a399b39725373dfb801f40fecb64cf52cff",
-    "skills": "a6c45558e35864ebe4b4c0797b8c7fa9fc50deaf9c85c821fb3c88c7c504b974"
+    "repo": "f0adc42ef112168aa61604e73b67f48dfc98505728ee005d871365432f6d5728",
+    "root": "a98a5103952bbb04364d5fe2ef6ba166ac0cb434bb22a61f53ab7fe2efe29720",
+    "skills": "9597f73725a907f2efe901e2a45dbad06ecf1f384884b39001906618cb240b47"
   },
   "language": "en",
   "outputs": {
-    "AGENTS.md": "75e599e93f13956d5f79b187f0703c539d75eb0a72df87af6d6e4fb2eb8dc5b0"
+    "AGENTS.md": "21671fe81f2baef0ef8564df1a5831ef09e2d5aba0a99f371c5c0949b6cb0ca8"
   },
   "profiles": [
     "code",
@@ -18,9 +18,9 @@
   "schema": 2,
   "skills": {
     "files": {
-      ".agents/skills/deploy-evidence/SKILL.md": "bb2fbc1bafea4a3a6821e37e5623298d9138f633594df04532549643336eb20b",
+      ".agents/skills/deploy-evidence/SKILL.md": "14daa093a044925e1d9441d43308b4774081855ddd4588e5b4156d115c2844ec",
       ".agents/skills/factor-acceptance/SKILL.md": "02281bd37f406ea9b46bbba67220e3bc49cd13ffb9325f8d315d42b9b4b078ea",
-      ".claude/skills/deploy-evidence/SKILL.md": "bb2fbc1bafea4a3a6821e37e5623298d9138f633594df04532549643336eb20b",
+      ".claude/skills/deploy-evidence/SKILL.md": "14daa093a044925e1d9441d43308b4774081855ddd4588e5b4156d115c2844ec",
       ".claude/skills/factor-acceptance/SKILL.md": "02281bd37f406ea9b46bbba67220e3bc49cd13ffb9325f8d315d42b9b4b078ea"
     },
     "link_dirs": [
@@ -29,7 +29,7 @@
     "links": {},
     "root": ".agents/skills"
   },
-  "source_revision": "c96907314ca9034e49e170da3559f71f1d8f22c4",
+  "source_revision": "bda76ae93aa87bfcdff257e68ccbdf8bcd773cdb",
   "target": {
     "remote": "github.com/wangzitian0/truealpha",
     "repo": "truealpha",
