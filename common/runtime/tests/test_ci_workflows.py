@@ -548,8 +548,8 @@ def test_shard_weight_refresh_has_read_grants_only_and_pushes_with_the_pat() -> 
     holders = [spec.get("name") or spec.get("uses") for spec in refresh_steps if "INFRA2_PAT" in spec_text(spec)]
     assert holders == [REFRESH_PAT_GUARD, "actions/checkout@v4", REFRESH_OPEN], holders
     assert step(SHARD_REFRESH, REFRESH_OPEN)["env"]["GH_TOKEN"] == "${{ secrets.INFRA2_PAT }}"
-    for reader in (REFRESH_HARVEST, REFRESH_DECIDE):
-        assert step(SHARD_REFRESH, reader)["env"]["GH_TOKEN"] == "${{ github.token }}"
+    assert step(SHARD_REFRESH, REFRESH_HARVEST)["env"]["GH_TOKEN"] == "${{ github.token }}"
+    assert "env" not in step(SHARD_REFRESH, REFRESH_DECIDE), "the decision step calls no gh and holds no token"
     for spec in refresh_steps:
         assert "${{" not in str(spec.get("run", "")), f"{spec.get('name')} interpolates an expression into the shell"
 
@@ -557,12 +557,17 @@ def test_shard_weight_refresh_has_read_grants_only_and_pushes_with_the_pat() -> 
 def test_shard_weight_refresh_opens_at_most_one_pull_request_and_only_when_the_tool_says_so() -> None:
     decide = step(SHARD_REFRESH, REFRESH_DECIDE)
     run = str(decide["run"])
-    assert 'gh pr list --head "$REFRESH_BRANCH" --state open' in run, "the count must cover the refresh branch"
-    assert "tools/shard_weight_refresh.py" in run and '--open-prs "$open_prs"' in run
+    assert "tools/shard_weight_refresh.py" in run and "--open-prs" not in run, "the open-PR veto is back"
     opener = step(SHARD_REFRESH, REFRESH_OPEN)
     assert opener["if"] == "steps.decide.outputs.open_pr == 'true'"
     script = str(opener["run"])
     assert 'git push --force origin "$REFRESH_BRANCH"' in script
+    assert 'gh pr list --repo "$GITHUB_REPOSITORY" --head "$REFRESH_BRANCH" --state open' in script
+    assert script.index("gh pr list") < script.index("gh pr create") < script.index("gh pr merge"), (
+        "the open-PR check must guard the create, and auto-merge must follow both"
+    )
+    assert 'if [ "$open_prs" = "0" ]; then' in script, "gh pr create must run only when no pull request is open"
+    assert "gh pr merge" in script and "--auto" in script, "the pull request must enable auto-merge"
     assert "git add tools/pytest_shard_weights.json" in script, "the pull request holds the weights file only"
     assert "Refs #1503" in script and "Closes #1503" not in script
     assert yaml.safe_load(source(SHARD_REFRESH))["env"]["REFRESH_BRANCH"] == "ci/refresh-shard-weights"
@@ -588,7 +593,9 @@ case "$1 $2" in
       *"--workflow ci-required.yml"*"--branch main"*"--event push"*"--status success"*) printf '%s' "$STUB_RUN_IDS" ;;
       *) echo "unexpected run list arguments: $*" >&2; exit 9 ;;
     esac ;;
+  "pr list") printf '%s' "${STUB_OPEN_PRS:-0}" ;;
   "pr create") ;;
+  "pr merge") ;;
   *) echo "unexpected gh call: $*" >&2; exit 9 ;;
 esac
 """
@@ -703,8 +710,9 @@ def _repo_with_a_weights_change(tmp_path: Path) -> tuple[Path, Path]:
     return origin, work
 
 
-def _run_refresh_open_step(tmp_path: Path, work: Path) -> subprocess.CompletedProcess[str]:
+def _run_refresh_open_step(tmp_path: Path, work: Path, open_prs: int = 0) -> subprocess.CompletedProcess[str]:
     environment = _stub_environment(tmp_path) | {
+        "STUB_OPEN_PRS": str(open_prs),
         "REFRESH_BRANCH": yaml.safe_load(source(SHARD_REFRESH))["env"]["REFRESH_BRANCH"],
         "HARVEST_RUN_ID": "77",
         "REASON": "the harvest gives weights to 1 test files that lack one",
@@ -748,11 +756,35 @@ def test_the_refresh_pushes_one_commit_of_the_weights_file_and_opens_the_pull_re
 
     gh_calls = (tmp_path / "stub.log").read_text(encoding="utf-8").splitlines()
     assert gh_calls == [
-        f"pr create --repo owner/repo --base main --head ci/refresh-shard-weights --title {title} --body-file {tmp_path}/runner/pr_body.md"
+        "pr list --repo owner/repo --head ci/refresh-shard-weights --state open --json number --jq length",
+        f"pr create --repo owner/repo --base main --head ci/refresh-shard-weights --title {title} --body-file {tmp_path}/runner/pr_body.md",
+        "pr merge ci/refresh-shard-weights --repo owner/repo --auto --squash",
     ]
     body = (tmp_path / "runner" / "pr_body.md").read_text(encoding="utf-8")
     assert "Decision: the harvest gives weights to 1 test files that lack one." in body
     assert "Refs #1503" in body and "Closes" not in body
+
+
+def test_the_refresh_pushes_to_an_open_pull_request_without_opening_a_second_one(tmp_path: Path) -> None:
+    """An open refresh pull request takes the new head. No second pull request is created."""
+    origin, work = _repo_with_a_weights_change(tmp_path)
+    result = _run_refresh_open_step(tmp_path, work, open_prs=1)
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    gh_calls = (tmp_path / "stub.log").read_text(encoding="utf-8").splitlines()
+    assert [call.split(" --")[0] for call in gh_calls] == ["pr list", "pr merge ci/refresh-shard-weights"]
+    changed = _origin_git(tmp_path, origin, "diff", "--name-only", "main", "ci/refresh-shard-weights")
+    assert changed == "tools/pytest_shard_weights.json"
+
+
+def test_no_document_restates_the_pr_ci_budget() -> None:
+    """The PR CI budget lives in the Workspace tier only. A document that restates it drifts."""
+    restated = re.compile(r"PR CI\W{0,40}(?:≤|<=)\s*3\s*min")
+    holders = [
+        path
+        for path in _tracked_files()
+        if path.endswith(".md") and restated.search((REPO_ROOT / path).read_text(encoding="utf-8"))
+    ]
+    assert holders == [], f"these documents restate the PR CI budget; name the Workspace tier instead: {holders}"
 
 
 def test_the_refresh_replaces_a_stale_branch_left_by_an_earlier_pull_request(tmp_path: Path) -> None:

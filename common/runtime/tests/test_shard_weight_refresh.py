@@ -7,6 +7,7 @@ temporary tree.
 
 from __future__ import annotations
 
+import inspect
 import json
 import subprocess
 import sys
@@ -31,7 +32,7 @@ def _weights(path: Path, run_id: str, seconds: dict[str, float]) -> Path:
     return path
 
 
-def _cli(tmp_path: Path, weights: Path, harvest: Path, open_prs: int) -> subprocess.CompletedProcess[str]:
+def _cli(tmp_path: Path, weights: Path, harvest: Path) -> subprocess.CompletedProcess[str]:
     """Run the tool as the workflow runs it: `python3 tools/shard_weight_refresh.py ...`."""
     return subprocess.run(
         [
@@ -39,8 +40,6 @@ def _cli(tmp_path: Path, weights: Path, harvest: Path, open_prs: int) -> subproc
             str(REPO_ROOT / "tools" / "shard_weight_refresh.py"),
             "--harvest",
             str(harvest),
-            "--open-prs",
-            str(open_prs),
             "--weights",
             str(weights),
             "--repo-root",
@@ -52,11 +51,11 @@ def _cli(tmp_path: Path, weights: Path, harvest: Path, open_prs: int) -> subproc
     )
 
 
-def _run(tmp_path: Path, *, old: dict[str, float], harvest: dict[str, float], open_prs: int) -> tuple[str, Path]:
+def _run(tmp_path: Path, *, old: dict[str, float], harvest: dict[str, float]) -> tuple[str, Path]:
     """Run the CLI over a weights file and a harvest file. Return its stdout and the weights path."""
     weights = _weights(tmp_path / "tools" / "pytest_shard_weights.json", "100", old)
     harvest_file = _weights(tmp_path / "harvest.json", "200", harvest)
-    result = _cli(tmp_path, weights, harvest_file, open_prs)
+    result = _cli(tmp_path, weights, harvest_file)
     assert result.returncode == 0, result.stderr
     return result.stdout, weights
 
@@ -67,7 +66,6 @@ def test_a_new_weighted_file_with_no_open_pr_opens_a_pr_and_writes_the_merge(tmp
         tmp_path,
         old={"tests/test_old.py": 1.0},
         harvest={"tests/test_old.py": 2.0, "tests/test_new.py": 3.0},
-        open_prs=0,
     )
     assert "open_pr=true" in stdout
     written = json.loads(weights.read_text(encoding="utf-8"))
@@ -76,19 +74,30 @@ def test_a_new_weighted_file_with_no_open_pr_opens_a_pr_and_writes_the_merge(tmp
     assert written["files"] == 2
 
 
-def test_an_open_refresh_pr_blocks_another_even_when_files_are_new(tmp_path: Path) -> None:
+def test_an_open_refresh_pr_does_not_block_a_refresh(tmp_path: Path) -> None:
+    """No open-PR count is an input. A harvest that adds a weight decides yes, with no flag."""
     _tree(tmp_path, ["tests/test_new.py"])
-    stdout, weights = _run(tmp_path, old={}, harvest={"tests/test_new.py": 3.0}, open_prs=1)
-    assert "open_pr=false" in stdout
-    assert "open refresh pull request exists" in stdout
-    assert json.loads(weights.read_text(encoding="utf-8"))["seconds_by_file"] == {}, "a skip must not write"
+    weights = _weights(tmp_path / "tools" / "pytest_shard_weights.json", "100", {})
+    harvest = _weights(tmp_path / "harvest.json", "200", {"tests/test_new.py": 3.0})
+    result = _cli(tmp_path, weights, harvest)
+    assert result.returncode == 0, result.stderr
+    assert "open_pr=true" in result.stdout
+    assert "open" not in inspect.signature(refresh.decide).parameters
+    assert "open refresh pull request" not in result.stdout
 
 
-def test_a_harvest_that_adds_no_file_opens_no_pr_and_writes_nothing(tmp_path: Path) -> None:
+def test_a_harvest_that_changes_no_weight_opens_no_pr_and_writes_nothing(tmp_path: Path) -> None:
     _tree(tmp_path, ["tests/test_old.py"])
-    stdout, weights = _run(tmp_path, old={"tests/test_old.py": 1.0}, harvest={"tests/test_old.py": 9.0}, open_prs=0)
+    stdout, weights = _run(tmp_path, old={"tests/test_old.py": 1.0}, harvest={"tests/test_old.py": 1.0})
     assert "open_pr=false" in stdout
     assert json.loads(weights.read_text(encoding="utf-8"))["seconds_by_file"] == {"tests/test_old.py": 1.0}
+
+
+def test_a_changed_weight_of_an_existing_file_opens_a_pr_and_writes_the_new_weight(tmp_path: Path) -> None:
+    _tree(tmp_path, ["tests/test_old.py"])
+    stdout, weights = _run(tmp_path, old={"tests/test_old.py": 1.0}, harvest={"tests/test_old.py": 9.0})
+    assert "open_pr=true" in stdout
+    assert json.loads(weights.read_text(encoding="utf-8"))["seconds_by_file"] == {"tests/test_old.py": 9.0}
 
 
 def test_a_harvested_file_that_no_longer_exists_does_not_count_as_a_gain(tmp_path: Path) -> None:
@@ -97,7 +106,6 @@ def test_a_harvested_file_that_no_longer_exists_does_not_count_as_a_gain(tmp_pat
         tmp_path,
         old={"tests/test_old.py": 1.0},
         harvest={"tests/test_old.py": 1.0, "tests/test_deleted.py": 5.0},
-        open_prs=0,
     )
     assert "open_pr=false" in stdout
 
@@ -110,7 +118,6 @@ def test_a_partial_harvest_keeps_the_old_weight_and_drops_only_the_deleted_file(
         tmp_path,
         old={"tests/test_kept.py": 4.0, "tests/test_deleted.py": 8.0},
         harvest={"tests/test_new.py": 1.0},
-        open_prs=0,
     )
     written = json.loads(weights.read_text(encoding="utf-8"))["seconds_by_file"]
     assert written == {"tests/test_kept.py": 4.0, "tests/test_new.py": 1.0}
@@ -119,7 +126,7 @@ def test_a_partial_harvest_keeps_the_old_weight_and_drops_only_the_deleted_file(
 def test_an_empty_harvest_fails_closed_instead_of_reading_as_nothing_to_refresh(tmp_path: Path) -> None:
     weights = _weights(tmp_path / "tools" / "pytest_shard_weights.json", "100", {"tests/test_old.py": 1.0})
     harvest = _weights(tmp_path / "harvest.json", "200", {})
-    result = _cli(tmp_path, weights, harvest, open_prs=0)
+    result = _cli(tmp_path, weights, harvest)
     assert result.returncode != 0
     assert "holds no weights" in result.stderr
 
@@ -134,8 +141,6 @@ def test_the_decision_is_written_to_github_output(tmp_path: Path, monkeypatch: p
         [
             "--harvest",
             str(harvest),
-            "--open-prs",
-            "0",
             "--weights",
             str(weights),
             "--repo-root",
@@ -149,15 +154,14 @@ def test_the_decision_is_written_to_github_output(tmp_path: Path, monkeypatch: p
 
 
 @pytest.mark.parametrize(
-    ("old", "merged", "open_prs", "expected"),
+    ("old", "merged", "expected"),
     [
-        ({}, {"a": 1.0}, 0, True),
-        ({"a": 1.0}, {"a": 1.0, "b": 2.0}, 0, True),
-        ({"a": 1.0}, {"a": 5.0}, 0, False),
-        ({"a": 1.0, "b": 2.0}, {"a": 1.0}, 0, False),
-        ({}, {"a": 1.0}, 1, False),
-        ({}, {"a": 1.0}, 3, False),
+        ({}, {"a": 1.0}, True),
+        ({"a": 1.0}, {"a": 1.0, "b": 2.0}, True),
+        ({"a": 1.0}, {"a": 5.0}, True),
+        ({"a": 1.0, "b": 2.0}, {"a": 1.0}, False),
+        ({"a": 1.0}, {"a": 1.0}, False),
     ],
 )
-def test_the_decision_table(old: dict[str, float], merged: dict[str, float], open_prs: int, expected: bool) -> None:
-    assert refresh.decide(old, merged, open_prs).open_pr is expected
+def test_the_decision_table(old: dict[str, float], merged: dict[str, float], expected: bool) -> None:
+    assert refresh.decide(old, merged).open_pr is expected

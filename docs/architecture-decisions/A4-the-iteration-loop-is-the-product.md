@@ -58,7 +58,7 @@ red-case sessions run on a branch that lacked the source change under test, and
 |---|---|---|
 | pre-push (laptop, scoped) | ≤ 60 s | unit tests of the **changed module only**, plus instant static checks (ruff on touched files, YAML parse). Nothing heavier runs on the laptop — it is measurably slower than the runners and thermally limited; full pytest sweeps, data-engine, browser suites, docker and mypy-wide all belong to the tiers below. |
 | remote inner loop | ≤ 2 min | **runtime-shape**: proxy topology, effective entrypoint, migration replay over seeded rows, page-renders-field — as a CI job and as a VPS-side target (`make parity-remote`, executing over SSH where docker already lives), never on the laptop |
-| PR CI | ≤ 3 min wall | everything the inner loops catch, plus cross-package and the browser walk |
+| PR CI | budget: Workspace tier, `Pipeline time contract` | everything the inner loops catch, plus cross-package and the browser walk |
 | merge → prod | ≤ 20 min | only environment-exclusive truths: real data, infra2 dispatch, deployed walk |
 | standing probes | ≤ 24 h | drift between repo assumptions and runtime truth |
 
