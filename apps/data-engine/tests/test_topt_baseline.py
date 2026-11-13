@@ -128,7 +128,7 @@ def test_r1_with_no_call_in_the_window_passes_and_says_so() -> None:
 def test_c1_is_red_on_the_reading_of_today() -> None:
     row = server(267.3)
 
-    assert row == Row("C1", "fail", "C1 code server 267.3/260 MiB, age 14.0 h")
+    assert row == Row("C1", "fail", "C1 code server 268/260 MiB, age 14.0 h")
 
 
 def test_c1_passes_at_the_budget_and_fails_one_byte_above_it() -> None:
@@ -137,6 +137,22 @@ def test_c1_passes_at_the_budget_and_fails_one_byte_above_it() -> None:
 
     assert at.state == "pass"
     assert above.state == "fail"
+
+
+def test_c1_shows_whole_mib_so_that_reads_of_the_same_server_show_the_same_text() -> None:
+    """On 2026-11-13 production read 260.15 and 260.31 MiB minutes apart, and the row showed 260.4. The three reads
+    are one finding: above the budget. A digit after the point would make them look like three."""
+    texts = {server(mib).text for mib in (260.15, 260.31, 260.4)}
+
+    assert texts == {"C1 code server 261/260 MiB, age 14.0 h"}
+
+
+def test_c1_rounds_down_for_a_row_that_passes_and_never_shows_the_budget_as_the_size_of_a_red_row() -> None:
+    below = server(259.9)
+    over = server(260.01)
+
+    assert (below.state, below.text) == ("pass", "C1 code server 259/260 MiB, age 14.0 h")
+    assert (over.state, over.text) == ("fail", "C1 code server 261/260 MiB, age 14.0 h")
 
 
 def test_c1_of_a_young_server_below_the_budget_is_not_measured() -> None:
@@ -222,7 +238,7 @@ def test_the_summary_of_today_fits_the_column_and_names_every_failure() -> None:
 
     assert judgement.summary == (
         "Q1 GPPE 16/20 (80.0%) against 95.0%; R1 twelvedata 408/480 on 11-10 (85.0%) against 70.0%;"
-        " C1 code server 267.3/260 MiB, age 14.0 h; S schema differs from the chain in 790 places."
+        " C1 code server 268/260 MiB, age 14.0 h; S schema differs from the chain in 790 places."
         " not measured: Q3"
     )
     assert len(judgement.summary) <= SUMMARY_LIMIT
@@ -312,7 +328,7 @@ def test_the_server_reader_reports_the_hwm_that_its_reader_gives(tmp_path: Path)
     row = topt_baseline.read_server(budget_mib=BUDGET, proc_root=tmp_path, reader=lambda _root: 267 * MIB)
 
     assert row.state == "fail"
-    assert row.text.startswith("C1 code server 267.0/260 MiB")
+    assert row.text.startswith("C1 code server 267/260 MiB")
 
 
 # --- registration ---------------------------------------------------------------------------------------------
@@ -439,7 +455,7 @@ def test_c1_text_just_above_the_budget_does_not_round_down_to_it() -> None:
     row = topt_baseline.judge_server(hwm_bytes=int(260.04 * MIB), age_seconds=OLD, budget_mib=BUDGET)
 
     assert row.state == "fail"
-    assert row.text.startswith("C1 code server 260.1/260 MiB")
+    assert row.text.startswith("C1 code server 261/260 MiB")
 
 
 @pytest.mark.parametrize(("hours", "state"), [(12.99, "unmeasured"), (13.0, "pass"), (13.01, "pass")])
