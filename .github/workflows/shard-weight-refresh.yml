@@ -7,9 +7,9 @@ name: shard-weight-refresh
 # Two triggers: a weekly schedule, and `workflow_dispatch` for a manual replay.
 #
 # The job harvests the newest green `main` run that carries pytest durations. It asks
-# `tools/shard_weight_refresh.py` whether to open a pull request. That tool skips when a refresh
-# pull request is already open, and when the harvest adds a weight to no existing test file. The
-# job opens one pull request at most, on one fixed branch.
+# `tools/shard_weight_refresh.py` whether the harvest adds or changes a weight. On a yes, the job
+# force-pushes the one fixed refresh branch. It opens a pull request only when none is open on that
+# branch, then enables auto-merge on it.
 #
 # The pull request is opened with INFRA2_PAT. GitHub gives the default token two limits here.
 # A push made with it starts no workflow run, so the pull request would never run its checks.
@@ -28,7 +28,7 @@ permissions:
   contents: read
   # `gh run list` and `gh run view --log` read the main runs.
   actions: read
-  # `gh pr list` counts the open refresh pull requests.
+  # `gh pr list` finds an open refresh pull request before one is opened.
   pull-requests: read
 
 concurrency:
@@ -93,13 +93,10 @@ jobs:
 
       - name: Decide whether one refresh pull request is worth opening
         id: decide
-        env:
-          GH_TOKEN: ${{ github.token }}
-        # The tool writes the merged weights file only when it decides to open the pull request.
+        # The tool writes the merged weights file only when a weight changes.
         run: |
           set -euo pipefail
-          open_prs=$(gh pr list --head "$REFRESH_BRANCH" --state open --json number --jq length)
-          python3 tools/shard_weight_refresh.py --harvest "$RUNNER_TEMP/harvest.json" --open-prs "$open_prs" \
+          python3 tools/shard_weight_refresh.py --harvest "$RUNNER_TEMP/harvest.json" \
             | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Open one refresh pull request
@@ -109,8 +106,8 @@ jobs:
           HARVEST_RUN_ID: ${{ steps.harvest.outputs.run_id }}
           REASON: ${{ steps.decide.outputs.reason }}
           JOB_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        # `--force` is safe on this branch. The decision step skips when a pull request is open
-        # on it, so nothing live is overwritten. A branch left by a merged pull request is stale.
+        # `--force` replaces the one refresh branch. An open pull request on it follows the new
+        # head, so nothing is lost. A branch left by a merged pull request is stale.
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
@@ -119,6 +116,7 @@ jobs:
           git add tools/pytest_shard_weights.json
           git commit -m "[truealpha-ci] Refresh the shard weights from run $HARVEST_RUN_ID (#1503)"
           git push --force origin "$REFRESH_BRANCH"
+          open_prs=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$REFRESH_BRANCH" --state open --json number --jq length)
           {
             echo "The scheduled job harvested main run $HARVEST_RUN_ID."
             echo
@@ -133,6 +131,9 @@ jobs:
             echo
             echo "Refs #1503"
           } > "$RUNNER_TEMP/pr_body.md"
-          gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$REFRESH_BRANCH" \
-            --title "[truealpha-ci] Refresh the shard weights from run $HARVEST_RUN_ID (#1503)" \
-            --body-file "$RUNNER_TEMP/pr_body.md"
+          if [ "$open_prs" = "0" ]; then
+            gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$REFRESH_BRANCH" \
+              --title "[truealpha-ci] Refresh the shard weights from run $HARVEST_RUN_ID (#1503)" \
+              --body-file "$RUNNER_TEMP/pr_body.md"
+          fi
+          gh pr merge "$REFRESH_BRANCH" --repo "$GITHUB_REPOSITORY" --auto --squash

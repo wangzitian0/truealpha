@@ -23,13 +23,16 @@ def merge_weights(old: Mapping[str, float], harvested: Mapping[str, float], repo
     return {key: value for key, value in sorted(merged.items()) if (repo_root / key).is_file()}
 
 
-def decide(old: Mapping[str, float], merged: Mapping[str, float], open_prs: int) -> Decision:
-    if open_prs > 0:
-        return Decision(False, f"an open refresh pull request exists ({open_prs}); the job opens at most one")
+def decide(old: Mapping[str, float], merged: Mapping[str, float]) -> Decision:
     gained = sorted(set(merged) - set(old))
-    if not gained:
-        return Decision(False, "the harvest gives a weight to no existing test file that lacks one")
-    return Decision(True, f"the harvest gives weights to {len(gained)} test files that lack one")
+    changed = sorted(key for key in merged if key in old and merged[key] != old[key])
+    if not gained and not changed:
+        return Decision(False, "the harvest changes no shard weight")
+    return Decision(
+        True,
+        f"the harvest gives weights to {len(gained)} test files that lack one "
+        f"and changes {len(changed)} existing weights",
+    )
 
 
 def _read_weights(path: Path, *, must_exist: bool) -> tuple[str, dict[str, float]]:
@@ -47,7 +50,6 @@ def _read_weights(path: Path, *, must_exist: bool) -> tuple[str, dict[str, float
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--harvest", type=Path, required=True)
-    parser.add_argument("--open-prs", type=int, required=True)
     parser.add_argument("--weights", type=Path, default=Path("tools/pytest_shard_weights.json"))
     parser.add_argument("--repo-root", type=Path, default=Path("."))
     arguments = parser.parse_args(list(sys.argv[1:] if argv is None else argv))
@@ -58,7 +60,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise SystemExit(f"shard_weight_refresh: {arguments.harvest} holds no weights; refusing to decide")
 
     merged = merge_weights(old, harvested, arguments.repo_root)
-    decision = decide(old, merged, arguments.open_prs)
+    decision = decide(old, merged)
     if decision.open_pr:
         write_weights(arguments.weights, run_id, "all", merged)
 
