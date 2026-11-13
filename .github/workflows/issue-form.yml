@@ -1,0 +1,16 @@
+# Check each new or edited issue against the account issue forms.
+# The check and the forms are in wangzitian0/.github (single source).
+# Manual replay: gh workflow run issue-form.yml -R wangzitian0/.github is for
+# that repository only; here, edit the issue body to run the check again.
+name: issue-form
+
+on:
+  issues:
+    types: [opened, edited, reopened]
+
+jobs:
+  form:
+    permissions:
+      contents: read
+      issues: write
+    uses: wangzitian0/.github/.github/workflows/issue-form.yml@main
