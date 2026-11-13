@@ -48,7 +48,7 @@ FIXTURE: dict[str, str] = {
 members = ["pkg/alpha", "pkg/beta", "common/runtime"]
 
 [tool.pytest.ini_options]
-testpaths = ["pkg/alpha/tests", "pkg/beta/tests", "common/runtime/tests"]
+testpaths = ["pkg/alpha/tests", "pkg/beta/tests", "common/runtime/tests", "apps/data-engine/tests"]
 
 [tool.mypy]
 files = ["pkg/alpha/src", "pkg/beta/src", "common/runtime/src"]
@@ -83,6 +83,12 @@ files = ["pkg/alpha/src", "pkg/beta/src", "common/runtime/src"]
         "def test_probe():\n    assert probe.ANSWER == 42\n"
     ),
     "common/runtime/tests/test_ci_workflows.py": "TOOLS_DIR = 'common/runtime/src/truealpha_tools'\n\ndef test_workflows():\n    pass\n",
+    # The mirror-guard tests under their real paths: the web-server rule selects these
+    # exact files, so the fixture must carry them at the names the rule names (#1688).
+    "apps/data-engine/tests/test_surface_proof.py": "def test_mirror():\n    pass\n",
+    "common/runtime/tests/test_output_invariants.py": "def test_mirror():\n    pass\n",
+    "common/runtime/tests/test_served_head_guard.py": "def test_mirror():\n    pass\n",
+    "apps/app-web/src/server/mart/widget.ts": "export const WIDGET_SQL = `select 1`;\n",
     "common/runtime/tests/test_migration_chain.py": "def test_chain():\n    pass\n",
     "common/runtime/tests/test_reads_migrations.py": (
         "from pathlib import Path\n\nMIGRATIONS = Path('db') / 'migrations'\n\ndef test_reads():\n    pass\n"
@@ -226,7 +232,32 @@ def test_an_unmapped_file_inside_a_package_falls_back_to_the_package_and_says_so
 def test_the_lockfile_selects_every_python_test(repo: Path) -> None:
     (repo / "uv.lock").write_text("version = 1\n", encoding="utf-8")
     selection = select(repo, "base")
-    assert selection.pytest == selection.pytest_all and len(selection.pytest_all) == 11
+    assert selection.pytest == selection.pytest_all and len(selection.pytest_all) == 14
+
+
+def test_a_web_server_change_selects_the_mirror_guards_without_a_mention(repo: Path) -> None:
+    """#1686 escaped every mirror guard by moving the head SQL into `db.ts`, a file no guard
+    text then named. The web-server rule must select the guards by tree, not by mention."""
+    _edit(repo, "apps/app-web/src/server/mart/widget.ts", "export const WIDGET_SQL = `select 2`;\n")
+    selection = select(repo, "base")
+    guards = {
+        "apps/data-engine/tests/test_surface_proof.py",
+        "common/runtime/tests/test_output_invariants.py",
+        "common/runtime/tests/test_served_head_guard.py",
+    }
+    assert guards <= set(selection.pytest)
+    assert selection.fallbacks == []
+
+
+def test_a_web_server_change_selects_only_the_guards_that_exist(repo: Path) -> None:
+    """The rule filters by the existing pytest pool, so a repo without a guard file is not broken."""
+    (repo / "common/runtime/tests/test_output_invariants.py").unlink()
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "drop one guard")
+    _edit(repo, "apps/app-web/src/server/mart/widget.ts", "export const WIDGET_SQL = `select 3`;\n")
+    selected = set(select(repo, "base").pytest)
+    assert "common/runtime/tests/test_output_invariants.py" not in selected
+    assert "apps/data-engine/tests/test_surface_proof.py" in selected
 
 
 def test_a_web_change_selects_the_bun_tests_that_import_it(repo: Path) -> None:
@@ -252,7 +283,7 @@ def test_each_run_records_the_selected_and_the_skipped_tests(repo: Path) -> None
     record = records[0]
     assert record["schema"] == "diff-scope-run.v1" and record["entry"] == "unit test"
     assert record["pytest"]["selected"] == ["pkg/alpha/tests/test_o.py"]
-    assert len(record["pytest"]["skipped"]) == 10 and "pkg/alpha/tests/test_m.py" in record["pytest"]["skipped"]
+    assert len(record["pytest"]["skipped"]) == 13 and "pkg/alpha/tests/test_m.py" in record["pytest"]["skipped"]
     assert record["changed"] == ["pkg/alpha/src/alpha/o.py"]
     assert record["head"] == _git(repo, "rev-parse", "HEAD").strip()
     assert {"wall_seconds", "child_cpu_seconds", "exit"} <= record.keys()
