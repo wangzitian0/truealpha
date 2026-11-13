@@ -2825,3 +2825,50 @@ def test_preview_and_staging_gate_share_one_check_list() -> None:
     hooks = load_hooks_manifest(REPO_ROOT / "runtime-hooks.manifest.json")
     assert hooks.slots["preview_gate"].checks, "preview_gate must list its checks"
     assert hooks.slots["preview_gate"].checks == hooks.slots["staging_gate"].checks
+
+
+def _run_slots_with_fake_runner(tmp_path: Path, fail_argv: tuple[str, ...] | None) -> dict[str, tuple[dict, list[str]]]:
+    """Run each manifest slot with a fake runner; return the last checks.jsonl record and the argv log."""
+    import json
+    import subprocess
+
+    from infra2_sdk.manifests import load_hooks_manifest, run_hook_slot
+
+    hooks = load_hooks_manifest(REPO_ROOT / "runtime-hooks.manifest.json")
+    env = {key: "x" for spec in hooks.slots.values() for key in spec.required_env}
+    out: dict[str, tuple[dict, list[str]]] = {}
+    for slot, spec in hooks.slots.items():
+        ran: list[str] = []
+
+        def fake(argv, **_kw):  # type: ignore[no-untyped-def]
+            ran.append(argv[-1])
+            if fail_argv is not None and tuple(argv) == fail_argv:
+                return subprocess.CompletedProcess(argv, 1, "", "boom: first line\nsecond line")
+            return subprocess.CompletedProcess(argv, 0, "", "")
+
+        cwd = tmp_path / slot
+        cwd.mkdir()
+        run_hook_slot(hooks, slot, app_url="https://fake.invalid", cwd=cwd, ambient_env=env, runner=fake)
+        lines = (cwd / spec.artifacts_dir / "checks.jsonl").read_text().splitlines()
+        out[slot] = (json.loads(lines[-1]), ran)
+    return out
+
+
+def test_every_hook_slot_writes_per_check_results_with_seconds(tmp_path: Path) -> None:
+    """#1692 AC2: each slot reports at least one check id with seconds."""
+    for slot, (record, _ran) in _run_slots_with_fake_runner(tmp_path, None).items():
+        assert record["source"] == slot
+        assert record["checks"], f"{slot} wrote no check"
+        assert all(c["ok"] is True and isinstance(c["seconds"], float) for c in record["checks"]), slot
+
+
+def test_a_failing_check_is_reported_and_stops_the_slot(tmp_path: Path) -> None:
+    """#1692 AC2, AC3: the second check of staging_gate fails; the third does not run."""
+    from infra2_sdk.manifests import load_hooks_manifest
+
+    checks = load_hooks_manifest(REPO_ROOT / "runtime-hooks.manifest.json").slots["staging_gate"].checks
+    assert len(checks) >= 3, "staging_gate needs three checks to show the stop"
+    record, ran = _run_slots_with_fake_runner(tmp_path, tuple(checks[1].argv))["staging_gate"]
+    assert [(c["name"], c["ok"]) for c in record["checks"]] == [(checks[0].id, True), (checks[1].id, False)]
+    assert record["checks"][1]["detail"] == "boom: first line"
+    assert checks[2].argv[-1] not in ran
