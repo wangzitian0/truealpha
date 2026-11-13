@@ -31,6 +31,15 @@ PY_ALL_TESTS_FILES = frozenset({"pyproject.toml", "uv.lock", "conftest.py"})
 WORKFLOW_DIR = ".github/workflows/"
 WORKFLOW_GATE_TEST = "common/runtime/tests/test_ci_workflows.py"
 MIGRATION_TEST_GLOB = "common/runtime/tests/test_migration*.py"
+#: The mirror-guard tests read Web App server SQL by plain text, so a query that moves to a
+#: file no guard names yet escapes the mention rule (#1686 escaped that way, #1688). A change
+#: under the server trees always selects them.
+WEB_MIRROR_SOURCE_DIRS = (f"{WEB_ROOT}/src/server/",)
+WEB_MIRROR_GUARD_TESTS = (
+    "apps/data-engine/tests/test_surface_proof.py",
+    "common/runtime/tests/test_output_invariants.py",
+    "common/runtime/tests/test_served_head_guard.py",
+)
 CONTRACT_DIRS = ("common/contracts/", f"{WEB_ROOT}/src/contracts/")
 CONFORMANCE_CHECK = "common/contracts/conformance/export_issue58.py"
 NO_TEST_PREFIXES = ("docs/", "governance/", "skills/", ".claude/", ".agents/")
@@ -413,6 +422,9 @@ class _Selector:
             reached = True
         if path.startswith("db/"):
             self.py_tests |= {t for t in self.selection.pytest_all if PurePosixPath(t).match(MIGRATION_TEST_GLOB)}
+            reached = True
+        if path.startswith(WEB_MIRROR_SOURCE_DIRS):
+            self.py_tests |= {t for t in WEB_MIRROR_GUARD_TESTS if t in self.selection.pytest_all}
             reached = True
         member = _under(path, self.layout.members)
         if member and pure.name == "pyproject.toml" and str(pure.parent) == member:
