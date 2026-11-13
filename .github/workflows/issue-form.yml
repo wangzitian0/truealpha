@@ -1,0 +1,16 @@
+# Check each issue against the account issue forms when it is opened, edited or reopened.
+# The check and the forms are in wangzitian0/.github (single source).
+# The check skips an issue of a bot and an issue created before its SINCE date.
+# Replay: edit the issue body. This file has no manual trigger.
+name: issue-form
+
+on:
+  issues:
+    types: [opened, edited, reopened]
+
+jobs:
+  form:
+    permissions:
+      contents: read
+      issues: write
+    uses: wangzitian0/.github/.github/workflows/issue-form.yml@main
