@@ -1,4 +1,4 @@
-<!-- WS_STATIC_START adapter=rules-v2 inputs=da65c541785339f13eae93a6ec79404a4d9669724e09a228cca1819f6623c068 -->
+<!-- WS_STATIC_START adapter=rules-v2 inputs=ccec1bc0f991b989b287e7a2e6cb43ab5519801d9c4b65ac2d42527babf43b28 -->
 <!-- Generated file: do not edit by hand. These rules are maintained in the owner's rule source and re-rendered here. -->
 
 ## Engineering discipline
@@ -19,7 +19,7 @@
 ## Delivery and merge
 
 - **ASD-STE100 specification for all artifacts:** Write committed artifacts, rules, code, comments, commits, and docs in ASD-STE100 English. Keep instructions `<= 20` words and descriptions `<= 25` words in active voice without vague qualifiers. Operational skills (`skills/**/SKILL.md`) follow the target repository's language policy.
-- **Deliverable format:** Deliver a mergeable PR or a traceable issue, rather than a process-only report. Use issues and PRs as the collaboration bus. Search for an existing similar issue before creating one; update it if it exists.
+- **Deliverable format:** Deliver a mergeable PR or a traceable issue, rather than a process-only report. Use issues and PRs as the collaboration bus. Search for an existing similar issue before creating one; update it if it exists. Write a new issue to the issue form of its type in `.github/ISSUE_TEMPLATE/` of the repository, else of its owner's `.github` repository.
 - **Fail fast left to right:** Put the cheapest and likeliest failure checks first.
 - **Review standing authorization:** Resolve a review thread after verifying in source code (not redacted diffs) that it is fixed or obsolete. Never resolve actionable or unverified feedback. Turn false reports into falsifiable invariant tests.
 - **Weighted review gates:** Each repository defines its own severity weights and blocking thresholds. Read literal `severity: <level>` tags; do not infer severity from prose.
@@ -83,9 +83,9 @@ The single definition of the production reservation. Other tiers, skills and gat
    observability, not regexes on PR descriptions or issue comments. Once a PR is merge-ready,
    the agent that owns it merges it. That covers gate code, workflows and release code once
    the review that the Root section `Production reservation` requires is on the PR. That review
-   is part of class 1. Production here (`docs/release-protocol.md`):
-   `tools/cut_release.sh <tag> --prod` and `deploy-release.yml` with `deploy_type=prod`. The
-   checks of `--owner-approved-sha` and `owner_approved_sha` in those paths are part of the
+   is part of class 1. Production here (`docs/release-protocol.md`): the infra2 workflow
+   `reconcile-iac-inputs.yml` with `promote_prod=true` and the infra2 workflow `deploy.yml`
+   with `type=prod`. The owner-approval checks of those infra2 paths are part of the
    reservation itself.
 5. **Data and evidence stay verifiable.** Captured corpora, snapshots, handoff records,
    and evaluation evidence carry content hashes so a replay provably uses the same bytes.
