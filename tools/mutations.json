@@ -508,11 +508,11 @@
       "cwd": "."
     },
     {
-      "id": "shard-weight-refresh/an-open-pr-blocks-another",
+      "id": "shard-weight-refresh/an-open-pr-does-not-block-a-refresh",
       "guard": "common/runtime/tests/test_shard_weight_refresh.py",
       "file": "common/runtime/src/truealpha_tools/shard_weight_refresh.py",
-      "find": "    if open_prs > 0:\n",
-      "replace": "    if False:\n",
+      "find": "    parser.add_argument(\"--repo-root\", type=Path, default=Path(\".\"))\n",
+      "replace": "    parser.add_argument(\"--repo-root\", type=Path, default=Path(\".\"))\n    parser.add_argument(\"--open-prs\", type=int, required=True)\n",
       "command": [
         "uv",
         "run",
@@ -524,10 +524,10 @@
       "cwd": "."
     },
     {
-      "id": "shard-weight-refresh/a-refresh-must-add-a-weight",
+      "id": "shard-weight-refresh/a-refresh-must-add-or-change-a-weight",
       "guard": "common/runtime/tests/test_shard_weight_refresh.py",
       "file": "common/runtime/src/truealpha_tools/shard_weight_refresh.py",
-      "find": "    if not gained:\n",
+      "find": "    if not gained and not changed:\n",
       "replace": "    if False:\n",
       "command": [
         "uv",
