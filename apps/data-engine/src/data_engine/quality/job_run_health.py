@@ -101,7 +101,7 @@ def _rate_of(runs: Iterable[Run]) -> float | None:
 def _red_reasons(window: list[Run], in_a_row: int, newest_failed: bool, others_rate: float | None) -> tuple[str, ...]:
     failures = sum(run.failed for run in window)
     low, high = wilson(failures, len(window))
-    recovered = len(window) >= MIN_RUNS and not any(run.failed for run in window[:MIN_RUNS])
+    recovered = len(window) >= MIN_RUNS and all(run.scheduled and not run.failed for run in window[:MIN_RUNS])
     reasons: list[str] = []
     if in_a_row >= 2 and newest_failed:
         reasons.append(f"last {in_a_row} scheduled runs failed")
