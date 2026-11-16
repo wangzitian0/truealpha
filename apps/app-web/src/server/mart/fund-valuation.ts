@@ -39,22 +39,23 @@ export type FundValuation = {
   lines: ValuedHoldingRow[];
 };
 
+// #1708: both sides materialize once. Inside mart.fund_holdings_valuation the
+// issuer_entity lookup is a correlated kg_identifiers subquery; referenced in the
+// join filter it was re-evaluated per join pair (13.7 s measured). Materialized
+// CTEs pin it to one evaluation per holdings row, and both join keys (listing_id,
+// issuer CIK) are computed before the join instead of per pair.
 const VALUED_LINES_SQL = `
-  select v.fund_id,
-         coalesce(v.fund_name, v.fund_id) as fund_name,
-         to_char(v.report_period, 'YYYY-MM-DD') as report_period,
-         v.holding_name,
-         v.ticker,
-         v.percent_of_net_assets::text as weight_pct,
-         r.current_ps::text as current_ps,
-         r.target_ps_midpoint::text as target_ps_midpoint,
-         r.current_pgp::text as current_pgp,
-         r.target_pgp_midpoint::text as target_pgp_midpoint,
-         r.valuation_gap::text as valuation_gap,
-         r.tier,
-         r.availability
-  from mart.fund_holdings_valuation v
-  left join (
+  with vintage as materialized (
+    select v.fund_id,
+           coalesce(v.fund_name, v.fund_id) as fund_name,
+           to_char(v.report_period, 'YYYY-MM-DD') as report_period,
+           v.holding_name,
+           v.ticker,
+           v.percent_of_net_assets,
+           v.listing_id,
+           lpad(substring(v.issuer_entity from '^(?:issuer|company):cik:0*([0-9]+)$'), 10, '0') as issuer_cik
+    from mart.fund_holdings_valuation v
+  ), core as materialized (
     select coalesce(ei.listing_id, c.listing_id) as listing_id,
            coalesce(
              lpad(nullif(ltrim(ei_issuer.cik, '0'), ''), 10, '0'),
@@ -72,14 +73,28 @@ const VALUED_LINES_SQL = `
     join mart.topt_core_results t on t.result_id = c.result_id
     left join mart.entity_identity ei on ei.entity_id::text = c.listing_id
     left join mart.entity_identity ei_issuer on ei_issuer.entity_id::text = c.issuer_id
-  ) r
-    on r.run_id = $1
-   and (
+    -- filter before materializing: a materialized CTE blocks predicate pushdown,
+    -- so the run filter must live inside (5 of 9334 rows for the served head).
+    where c.run_id = $1
+  )
+  select v.fund_id,
+         v.fund_name,
+         v.report_period,
+         v.holding_name,
+         v.ticker,
+         v.percent_of_net_assets::text as weight_pct,
+         r.current_ps::text as current_ps,
+         r.target_ps_midpoint::text as target_ps_midpoint,
+         r.current_pgp::text as current_pgp,
+         r.target_pgp_midpoint::text as target_pgp_midpoint,
+         r.valuation_gap::text as valuation_gap,
+         r.tier,
+         r.availability
+  from vintage v
+  left join core r
+    on (
      r.listing_id = v.listing_id
-     or (
-       r.issuer_cik is not null
-       and r.issuer_cik = lpad(substring(v.issuer_entity from '^(?:issuer|company):cik:0*([0-9]+)$'), 10, '0')
-     )
+     or (r.issuer_cik is not null and r.issuer_cik = v.issuer_cik)
    )
   order by v.fund_id, v.percent_of_net_assets desc nulls last, v.holding_name
 `;
