@@ -3,7 +3,6 @@ from zoneinfo import ZoneInfo
 
 from truealpha_contracts.calendar import (
     XNYS_HOLIDAYS,
-    count_market_sessions_between,
     is_market_session,
     previous_market_session,
     settled_session_for_cutoff,
@@ -40,15 +39,6 @@ def test_previous_market_session_on_holiday():
     # Friday after Thanksgiving (active session)
     assert previous_market_session(date(2026, 11, 27), strictly_before=False) == date(2026, 11, 27)
     assert previous_market_session(date(2026, 11, 27), strictly_before=True) == date(2026, 11, 25)
-
-
-def test_count_market_sessions_does_not_penalize_holiday():
-    # Between Wednesday 2026-11-25 and Friday 2026-11-27:
-    # Only Friday counts (Thursday Thanksgiving is skipped).
-    assert count_market_sessions_between(date(2026, 11, 25), date(2026, 11, 27)) == 1
-
-    # Over a normal weekend: Friday to Monday = 1 session
-    assert count_market_sessions_between(date(2026, 11, 20), date(2026, 11, 23)) == 1
 
 
 def test_settled_session_for_cutoff_on_holiday():

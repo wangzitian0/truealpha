@@ -17,7 +17,6 @@ from factors.confidence import (
     CellConfidence,
     evaluate_cell_confidence,
     evaluate_continuous_confidence,
-    verify_confidence_calibration_report,
 )
 from factors.registry import FACTOR_REGISTRY, factor
 from factors.types import (
@@ -44,5 +43,4 @@ __all__ = [
     "UnitFamily",
     "evaluate_cell_confidence",
     "evaluate_continuous_confidence",
-    "verify_confidence_calibration_report",
 ]

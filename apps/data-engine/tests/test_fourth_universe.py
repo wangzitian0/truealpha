@@ -62,11 +62,13 @@ class _Sink:
 
 
 def _child_build() -> None:
+    from importlib import import_module
+
     import dagster as dg
     import psycopg
     from data_engine import dagster_defs
     from data_engine.datahub import question_coverage
-    from data_engine.lanes import capture, nightly_verdict_names, quality, standards
+    from data_engine.lanes import LANE_MODULES, capture, quality, standards
     from data_engine.quality import surface_proof
 
     # build_definitions: both universes get a job, and both schedules run, because the variant schedules them.
@@ -80,7 +82,7 @@ def _child_build() -> None:
     assert [tick.key for tick in capture.TICKS] == ["topt", "qqq", "sp500", "canary", NEW_KEY]
 
     # verdict names: every lane that records a per-universe verdict names all four universes.
-    names = nightly_verdict_names()
+    names = frozenset().union(*(getattr(import_module(m), "NIGHTLY_VERDICTS", ()) for m in LANE_MODULES))
     for lane in VARIANT_LANES:
         for check in ("theme_purity", "question_coverage", "datahub_confidence_report"):
             assert f"{check}@{lane}" in names, f"{check}@{lane} is no verdict name"

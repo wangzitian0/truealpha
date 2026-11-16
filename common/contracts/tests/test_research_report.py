@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import inspect
+import json
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -21,7 +22,6 @@ from truealpha_contracts.research_report import (
     ResearchReportRequest,
     ResultValue,
     build_research_report,
-    render_report_json,
     render_report_markdown,
 )
 from truealpha_contracts.research_report_mart import (
@@ -91,7 +91,7 @@ def _build(name: str) -> ResearchReport:
 def test_golden_json_matches(name: str) -> None:
     report = _build(name)
     expected = (GOLDEN / f"{name}.json").read_text(encoding="utf-8")
-    assert render_report_json(report) == expected
+    assert json.dumps(report.model_dump(mode="json"), sort_keys=True, indent=2, ensure_ascii=True) + "\n" == expected
 
 
 @pytest.mark.parametrize("name", sorted(GOLDEN_CASES))

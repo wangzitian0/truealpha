@@ -6,7 +6,6 @@ import json
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any
-from unittest.mock import MagicMock
 
 import polars as pl
 import pytest
@@ -14,7 +13,6 @@ from data_engine.datahub import backtest as backtest_mod
 from data_engine.datahub.production_topt.metric_node_values import materialize_metric_node_values
 from data_engine.lanes import backtest as backtest_lane
 from data_engine.strategy_backtest_gateway import issuer_inputs_from_rows
-from factors.backtest.engine import Performance
 from factors.composite.strategy_evaluator import (
     IssuerInput,
     LookAheadError,
@@ -383,9 +381,9 @@ def test_f4_postgres_metric_node_value_repository_reads_any_node_key(monkeypatch
     assert report.cells[0].confidence_band == "high"
 
 
-def test_b1_b2_backtest_overrides_and_parameter_sweep(monkeypatch: pytest.MonkeyPatch) -> None:
-    """B1 & B2 standing check: apply_definition_overrides and sweep_core_strategy_backtest run N
-    parameter combinations and produce distinct definition_content_sha256 values without overwriting."""
+def test_b1_b2_backtest_overrides_produce_distinct_hashes() -> None:
+    """B1 & B2 standing check: apply_definition_overrides produces distinct
+    definition_content_sha256 values without overwriting."""
     live = load_live_strategy_definition()
     overridden_1 = backtest_mod.apply_definition_overrides(
         live,
@@ -399,44 +397,6 @@ def test_b1_b2_backtest_overrides_and_parameter_sweep(monkeypatch: pytest.Monkey
     assert overridden_1.eligibility.maximum_input_age_days == 365
     assert overridden_2.selection.selection_count == 3
     assert len({live.content_sha256, overridden_1.content_sha256, overridden_2.content_sha256}) == 3
-
-    seen_hashes: list[str] = []
-
-    def _fake_run(
-        _connection: Any,
-        *,
-        tick: datetime,
-        definition: LargeModelValueV0Definition | None = None,
-        overrides: Any = None,
-        start_cutoff: datetime | None = None,
-        end_cutoff: datetime | None = None,
-    ) -> backtest_mod.BacktestOutcome:
-        effective = backtest_mod.apply_definition_overrides(definition or live, overrides or {})
-        seen_hashes.append(effective.content_sha256)
-        stats = Performance(Decimal("0.1"), Decimal("0.1"), Decimal("0.1"), Decimal("0.1"), Decimal("0.1"), None, None)
-        return backtest_mod.BacktestOutcome(
-            run_id=f"backtest-run:{effective.content_sha256}",
-            inserted=True,
-            strategy_key=effective.strategy_id,
-            cutoffs=4,
-            trades=8,
-            strategy=stats,
-            benchmark=stats,
-        )
-
-    monkeypatch.setattr(backtest_mod, "run_core_strategy_backtest", _fake_run)
-    outcomes = backtest_mod.sweep_core_strategy_backtest(
-        MagicMock(),
-        tick=CUTOFF,
-        overrides_list=[
-            {"selection.selection_count": 1},
-            {"selection.selection_count": 3},
-            {"eligibility.maximum_input_age_days": 500},
-        ],
-    )
-    assert len(outcomes) == 3
-    assert len(set(seen_hashes)) == 3
-    assert live.content_sha256 not in seen_hashes
 
     # Verify NightlyBacktestConfig passes overrides and cutoff window through _backtest_kwargs_from_config
     cfg = backtest_lane.NightlyBacktestConfig(

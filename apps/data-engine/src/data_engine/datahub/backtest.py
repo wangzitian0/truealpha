@@ -786,29 +786,6 @@ def persist_backtest_run(connection: psycopg.Connection[Any], record: BacktestRe
     return True
 
 
-def sweep_core_strategy_backtest(
-    connection: psycopg.Connection[Any],
-    *,
-    tick: datetime,
-    overrides_list: Sequence[Mapping[str, Any]],
-    definition: LargeModelValueV0Definition | None = None,
-    start_cutoff: datetime | None = None,
-    end_cutoff: datetime | None = None,
-) -> list[BacktestOutcome]:
-    base_def = definition or load_strategy_definition()
-    return [
-        run_core_strategy_backtest(
-            connection,
-            tick=tick,
-            definition=base_def,
-            overrides=overrides,
-            start_cutoff=start_cutoff,
-            end_cutoff=end_cutoff,
-        )
-        for overrides in overrides_list
-    ]
-
-
 __all__ = [
     "LIMITATIONS",
     "NOTIONAL_CAPITAL",
@@ -829,5 +806,4 @@ __all__ = [
     "schedule_cutoffs",
     "selected_without_bars",
     "selected_without_open",
-    "sweep_core_strategy_backtest",
 ]

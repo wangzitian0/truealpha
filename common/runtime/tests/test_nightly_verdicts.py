@@ -307,9 +307,11 @@ def test_the_lanes_record_exactly_the_checks_the_tool_watches() -> None:
     """A check a lane records and the tool does not know about is un-watched; a check the
     tool expects and no lane records is red forever. Both directions, from the lanes'
     own declarations (`NIGHTLY_VERDICTS`), not from a copy of them."""
-    from data_engine.lanes import nightly_verdict_names
+    from importlib import import_module
 
-    recorded = nightly_verdict_names()
+    from data_engine.lanes import LANE_MODULES
+
+    recorded = frozenset().union(*(getattr(import_module(m), "NIGHTLY_VERDICTS", ()) for m in LANE_MODULES))
     assert recorded, "no lane declares a nightly verdict"
     assert set(EXPECTED) == set(recorded), (
         f"tools/nightly_verdicts.json {sorted(set(EXPECTED) - recorded)} not recorded by any lane; "
@@ -570,11 +572,13 @@ def test_the_lanes_record_in_each_environment_exactly_the_checks_the_tool_expect
     """The standing check of owner decision 2026-10-21 (staging runs TOPT only). Both sides read the contract:
     the lanes through `is_registered`, the tool through `expectations_for`. A check that a lane records and
     the tool does not expect is un-watched; a check that the tool expects and no lane records is red forever."""
+    from importlib import import_module
+
     from data_engine.config import settings
-    from data_engine.lanes import nightly_verdict_names
+    from data_engine.lanes import LANE_MODULES
     from data_engine.quality.nightly_verdicts import is_registered
 
-    declared = nightly_verdict_names()
+    declared = frozenset().union(*(getattr(import_module(m), "NIGHTLY_VERDICTS", ()) for m in LANE_MODULES))
     for environment in ("staging", "production"):
         monkeypatch.setattr(settings, "app_env", environment)
         recorded = {name for name in declared if is_registered(name, declared)}

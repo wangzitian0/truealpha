@@ -30,7 +30,9 @@ from truealpha_contracts.research_report import (
 from truealpha_contracts.research_report_mart import MartResearchReadRepository
 from truealpha_contracts.strategy_run_fixture import FixtureStrategyRunRepository
 
-_SEED_PATH = Path(__file__).resolve().parents[3] / "common" / "contracts" / "conformance" / "issuer_modules_parity.py"
+_SEED_PATH = (
+    Path(__file__).resolve().parents[3] / "common" / "contracts" / "tests" / "fixtures" / "issuer_modules_parity.py"
+)
 _SPEC = importlib.util.spec_from_file_location("issuer_modules_parity_seed", _SEED_PATH)
 assert _SPEC is not None and _SPEC.loader is not None
 _SEED = importlib.util.module_from_spec(_SPEC)

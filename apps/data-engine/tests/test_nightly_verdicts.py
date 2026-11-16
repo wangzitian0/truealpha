@@ -814,9 +814,12 @@ def test_the_probe_is_scheduled_daily_before_the_watchdog_reads_it() -> None:
 
 
 def test_every_declared_verdict_name_fits_the_column() -> None:
-    from data_engine.lanes import nightly_verdict_names
+    from importlib import import_module
 
-    assert all(nightly_verdicts.is_valid_name(name) for name in nightly_verdict_names())
+    from data_engine.lanes import LANE_MODULES
+
+    declared = frozenset().union(*(getattr(import_module(m), "NIGHTLY_VERDICTS", ()) for m in LANE_MODULES))
+    assert all(nightly_verdicts.is_valid_name(name) for name in declared)
 
 
 def test_output_invariants_on_advance_sensor_heals_a_red_verdict_once_per_state(

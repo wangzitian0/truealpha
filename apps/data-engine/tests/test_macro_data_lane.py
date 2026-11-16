@@ -29,7 +29,7 @@ from data_engine import raw_store
 from data_engine.config import settings
 from data_engine.datahub.risk_free import INSTRUMENT
 from data_engine.datahub.treasury_rates import REGISTRATION
-from data_engine.lanes import LANE_MODULES, macro_data, nightly_verdict_names
+from data_engine.lanes import LANE_MODULES, macro_data
 from data_engine.quality import nightly_verdicts
 from data_engine.sources import gateway
 from truealpha_runtime.testing import InMemoryRawObjectStore, isolated_test_database, load_tool
@@ -164,7 +164,6 @@ def _ledger_years(call_ledger: gateway.MemoryLedger) -> list[int]:
 def test_the_lane_is_registered_and_declares_the_verdict_it_records() -> None:
     assert "data_engine.lanes.macro_data" in LANE_MODULES
     assert macro_data.NIGHTLY_VERDICTS == ("macro_freshness",)
-    assert "macro_freshness" in nightly_verdict_names()
     assert nightly_verdicts.is_valid_name("macro_freshness")
 
 

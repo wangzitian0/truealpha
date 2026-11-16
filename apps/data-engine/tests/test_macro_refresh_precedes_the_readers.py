@@ -6,9 +6,9 @@ after the refresh of its night is safe. A reader that fires before the refresh o
 series that is a day old, and on the first night after a deploy it reads an empty series.
 
 The test finds the readers in the code. It does not list them from memory. A module that calls
-`risk_free_rate_at`, or a function that reaches it (`run_topt_pipeline`, `run_core_strategy_backtest`,
-`sweep_core_strategy_backtest`), is a reader, and the test names the job that runs it. A new reader module
-turns the test red until its job is named here.
+`risk_free_rate_at`, or a function that reaches it (`run_topt_pipeline`, `run_core_strategy_backtest`),
+is a reader, and the test names the job that runs it. A new reader module turns the test red until
+its job is named here.
 
 The order is measured on the clock of one night: the number of hours from the refresh to the reader,
 modulo one day. A reader later than `MAX_HOURS_AFTER_THE_REFRESH` has fired before the refresh of its
@@ -33,7 +33,6 @@ READER_FUNCTIONS = {
     "risk_free_rate_at",
     "run_topt_pipeline",
     "run_core_strategy_backtest",
-    "sweep_core_strategy_backtest",
 }
 
 

@@ -2,7 +2,7 @@
  * #42: module 3 / module 4 parity, TypeScript half (against a real Postgres; skips without
  * one, throws when armed — ci-web provides the database and TRUEALPHA_REQUIRE_RUNTIME=1).
  *
- * Seeds common/contracts/conformance/issuer_modules_parity.json and asserts that the App's
+ * Seeds common/contracts/tests/fixtures/issuer_modules_parity.json and asserts that the App's
  * `entitySupplyChainExposure` and `entityAnalystRatings` return the canon's expected rows.
  * The Python half (common/contracts/tests/test_issuer_modules_mart.py) asserts the same rows
  * for the reader behind the MCP tools and the research report: two languages, one served
@@ -47,7 +47,7 @@ interface Canon {
 }
 
 const CANON = JSON.parse(
-  readFileSync(new URL("../../../common/contracts/conformance/issuer_modules_parity.json", import.meta.url), "utf8"),
+  readFileSync(new URL("../../../common/contracts/tests/fixtures/issuer_modules_parity.json", import.meta.url), "utf8"),
 ) as Canon;
 
 const CONTEXT: AccessContext = {

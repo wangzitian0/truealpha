@@ -390,7 +390,6 @@ _IDENTITY_FUNCTIONS = frozenset(
             "_call",
             "get_analyst_consensus",
             "get_rating_summary",
-            "get_market_rating_changes",
             "get_company_profile",
             "get_financials_statements",
             "get_financials_revenue_breakdown",

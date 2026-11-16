@@ -31,7 +31,6 @@ from typing import Any
 import pytest
 from data_engine.core_strategy_replay import run as run_strategy_replay
 from data_engine.datahub.analyst_ratings import (
-    capture_ticker_analyst_ratings,
     materialize_analyst_ratings,
     materialize_universe_analyst_ratings,
 )
@@ -268,16 +267,19 @@ def _drive_q4_factor_records(connection: _RecordingConnection) -> tuple[str, ...
 
 
 def _drive_q4_capture(connection: _RecordingConnection) -> tuple[str, ...]:
-    capture_ticker_analyst_ratings(
-        object(), ticker="AAPL", company_id=_issuer_id("g"), connection=connection, run_id="run:honesty", cutoff=_CUTOFF
-    )
-    capture_ticker_analyst_ratings(
-        None,
-        ticker="MSFT",
-        company_id=_issuer_id("h"),
-        connection=connection,
+    materialize_universe_analyst_ratings(
+        connection,
         run_id="run:honesty",
         cutoff=_CUTOFF,
+        tickers={_issuer_id("g"): "AAPL"},
+        ctx=object(),
+    )
+    materialize_universe_analyst_ratings(
+        connection,
+        run_id="run:honesty",
+        cutoff=_CUTOFF,
+        tickers={_issuer_id("h"): "MSFT"},
+        ctx=None,
         open_error=RuntimeError("OpenD is down"),
     )
     return ()

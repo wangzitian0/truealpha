@@ -118,16 +118,6 @@ def edges(
     return found
 
 
-def import_edges(
-    tree: ast.AST,
-    prefixes: tuple[str, ...],
-    modules: Collection[str],
-    *,
-    submodule_only: bool = False,
-) -> set[str]:
-    return edges(scan(tree), prefixes, modules, submodule_only=submodule_only)
-
-
 def absolute_import_names(facts: ImportFacts) -> set[str]:
     names = set(facts.imports)
     for module, aliases in facts.from_imports:

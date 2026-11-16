@@ -100,7 +100,7 @@ def _exemptions(tmp_path: Path, expires: str) -> Path:
 def test_a_plausible_run_passes(connection, tmp_path) -> None:
     run_id, snapshot = _materialized_run(connection)
     _point_head_at(connection, run_id, snapshot)
-    verdict = plausibility_gate.judge_run(
+    verdict = plausibility_gate.judge_issuers(
         connection, run_id=run_id, exemptions_path=_exemptions(tmp_path, "2000-01-01"), today=date(2026, 9, 8)
     )
     # nothing negative, nothing refused
@@ -124,7 +124,7 @@ def test_a_negative_bank_metric_is_a_declared_signal_shown_on_the_tick(connectio
     run_id, snapshot = _materialized_run(connection)
     _point_head_at(connection, run_id, snapshot)
     _jpm_negative(connection, run_id)
-    verdict = plausibility_gate.judge_run(
+    verdict = plausibility_gate.judge_issuers(
         connection, run_id=run_id, exemptions_path=_exemptions(tmp_path, "2000-01-01"), today=date(2026, 9, 24)
     )
     assert not verdict.refused and verdict.deferred == ()
@@ -146,13 +146,13 @@ def test_a_sign_the_node_forbids_is_refused_unless_an_unexpired_exemption_defers
     run_id, snapshot = _materialized_run(connection)
     _point_head_at(connection, run_id, snapshot)
     _jpm_negative(connection, run_id)
-    live = plausibility_gate.judge_run(
+    live = plausibility_gate.judge_issuers(
         connection, run_id=run_id, exemptions_path=_exemptions(tmp_path, "2026-09-16"), today=date(2026, 9, 8)
     )
     assert not live.refused and [v.rule for v, _ in live.deferred] == [RULE_NODE_SIGN_POLICY]
     assert "exempt until 2026-09-16 under #528" in live.deferred[0][1]
     assert live.signals == ()
-    expired = plausibility_gate.judge_run(
+    expired = plausibility_gate.judge_issuers(
         connection, run_id=run_id, exemptions_path=_exemptions(tmp_path, "2026-09-16"), today=date(2026, 9, 17)
     )
     # #1323: the refusal names JPM and excludes its issuer; it does not refuse the run
@@ -169,22 +169,20 @@ def test_a_sign_the_node_forbids_is_refused_unless_an_unexpired_exemption_defers
 def test_an_empty_eligible_set_is_judged_here_not_on_a_second_issue(connection, tmp_path) -> None:
     run_id, snapshot = _materialized_run(connection)
     _point_head_at(connection, run_id, snapshot)
-    verdict = plausibility_gate.judge_run(
+    issuers_verdict = plausibility_gate.judge_issuers(
         connection,
         run_id=run_id,
-        l2_complete=0,
         exemptions_path=_exemptions(tmp_path, "2000-01-01"),
         today=date(2026, 9, 8),
     )
+    verdict = plausibility_gate.judge_strategy(connection, issuers_verdict, strategy_run_id=None, l2_complete=0)
     assert verdict.refused and [v.rule for v in verdict.run_refusals] == [RULE_EMPTY_ELIGIBLE]
     # #544: a strategy run with zero published decisions must also be refused
-    empty_strategy_verdict = plausibility_gate.judge_run(
+    empty_strategy_verdict = plausibility_gate.judge_strategy(
         connection,
-        run_id=run_id,
+        issuers_verdict,
         strategy_run_id="run:empty-strategy-0-decisions",
         l2_complete=5,
-        exemptions_path=_exemptions(tmp_path, "2000-01-01"),
-        today=date(2026, 9, 8),
     )
     assert empty_strategy_verdict.refused and [v.rule for v in empty_strategy_verdict.run_refusals] == [
         RULE_EMPTY_ELIGIBLE

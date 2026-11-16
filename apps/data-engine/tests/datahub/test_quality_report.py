@@ -10,8 +10,7 @@ Postgres-free half: the two predicates those metrics are built on, pinned direct
 `persist` is the one function in this module genuinely testable standalone: it
 inserts a caller-supplied report dict straight into `mart.datahub_quality_report`,
 an append-only table with no foreign-key dependency on the capture-control tables.
-`latest_run`/`build_report`/`_reconcile_market_price_cells` all read from
-`mart.topt_capture_status`, a view over the full capture-control pipeline (campaigns,
+`build_report`/`_reconcile_market_price_cells` read from `mart.topt_capture_status`, a view over the full capture-control pipeline (campaigns,
 obligations, attempts) -- exercising those against a real Postgres needs that whole
 chain seeded first, which is out of scope here; this file closes the narrower,
 achievable slice of the coverage gap #462 found (this module had zero tests

@@ -209,8 +209,8 @@ def test_the_token_columns_are_a_group_of_their_own_written_only_by_a_record_tha
     answered = gateway.CallRecord(
         source=llm.SOURCE, endpoint="e", caller="t", called_at=called_at, attempt=2, completion_tokens=9
     )
-    failed_sql, _ = gateway._insert_statement(failed)
-    answered_sql, answered_params = gateway._insert_statement(answered)
+    failed_sql, _ = gateway._insert_ladder(failed)[0]
+    answered_sql, answered_params = gateway._insert_ladder(answered)[0]
     assert failed_sql == gateway._INSERT_ATTEMPT_SQL
     assert "completion_tokens" in answered_sql and "reasoning_tokens" in answered_sql
     assert answered_params[-2:] == (9, None)

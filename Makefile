@@ -1,4 +1,4 @@
-.PHONY: help install bootstrap doctor runtime-up runtime-down runtime-check stack-up db-up db-migrate db-reset db-check db-down web llm sample sample-evidence strategy-smoke lint format typecheck typecheck-python typecheck-web test test-python test-web smoke prepush contract-conformance check clean vision-audit
+.PHONY: help install bootstrap doctor runtime-up runtime-down runtime-check stack-up db-up db-migrate db-reset db-check db-down web llm strategy-smoke lint format typecheck typecheck-python typecheck-web test test-python test-web smoke prepush contract-conformance check clean vision-audit
 
 help:
 	@echo "TrueAlpha — Development Commands"
@@ -18,8 +18,6 @@ help:
 	@echo "Run:"
 	@echo "  make web          Next.js dev server (apps/app-web)"
 	@echo "  make llm          FastAPI dev server  (apps/llm-service, :8000)"
-	@echo "  make sample       Phase -1: pull SEC company-facts samples"
-	@echo "  make sample-evidence Capture the bounded issue #14 public evidence set"
 	@echo "  make strategy-smoke Preview replay of large_model_value_v0 against #335's golden fixture"
 	@echo "  make vision-audit Standing audit of Vision & Gate epics (#28/#54)"
 	@echo ""
@@ -123,12 +121,6 @@ web:
 
 llm:
 	uv run --package truealpha-llm-service uvicorn llm_service.main:app --reload --port 8000
-
-sample:
-	uv run --package truealpha-data-engine python apps/data-engine/scripts/pull_sec_samples.py
-
-sample-evidence:
-	uv run --package truealpha-data-engine python apps/data-engine/scripts/capture_strategy_evidence.py --resume
 
 strategy-smoke:
 	uv run --package truealpha-data-engine python apps/data-engine/scripts/run_strategy_smoke.py --output-dir .local/strategy-smoke

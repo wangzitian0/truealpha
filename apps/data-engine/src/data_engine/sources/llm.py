@@ -219,10 +219,6 @@ def _headcount_user_content(issuer_label: str, form: str, candidates: Sequence[C
     return f"Issuer: {issuer_label}, form {form}.\nCandidates:\n" + "\n".join(lines)
 
 
-def build_request(issuer_label: str, form: str, candidates: Sequence[Candidate], *, model: str) -> dict[str, Any]:
-    return build_chat_request(HEADCOUNT_TASK, _headcount_user_content(issuer_label, form, candidates), model=model)
-
-
 def _request_params(request_body: dict[str, Any], decoding: model_decoding.DecodingVersion) -> dict[str, Any]:
     thinking = request_body.get("thinking")
     response_format = request_body.get("response_format")

@@ -10,8 +10,8 @@ Registering a lane is one line here. A module under this package that is not lis
 is a defect the same test turns red on, so a lane cannot exist half-wired.
 
 A lane that records nightly verdicts (#876) also declares their names in a module-level
-`NIGHTLY_VERDICTS`; `nightly_verdict_names()` is the union, and
-`common/runtime/tests/test_nightly_verdicts.py` holds it equal to the set
+`NIGHTLY_VERDICTS`, and
+`common/runtime/tests/test_nightly_verdicts.py` holds their union equal to the set
 `tools/nightly_verdicts.py` watches.
 """
 
@@ -57,11 +57,3 @@ def lane_definitions(app_env: str | None = None) -> dict[str, dg.Definitions]:
         else:
             definitions[name] = module.defs
     return definitions
-
-
-def nightly_verdict_names() -> frozenset[str]:
-    """Every verdict name a registered lane can record in `mart.nightly_verdicts`."""
-    names: set[str] = set()
-    for name in LANE_MODULES:
-        names.update(getattr(import_module(name), "NIGHTLY_VERDICTS", ()))
-    return frozenset(names)

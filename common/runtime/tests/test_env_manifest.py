@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 
 import pytest
+from infra2_sdk import manifests
 from infra2_sdk.ci import validate_manifest_offline
 from infra2_sdk.runtime.config_schema import EnvironmentManifest
 from pydantic_core import PydanticUndefined
@@ -29,7 +30,8 @@ def test_generated_manifests_are_fresh_and_all_pass_the_offline_gate() -> None:
 
 
 def test_every_secret_declares_a_producer() -> None:
-    for path, manifest in env_manifest.all_manifests().items():
+    loaded = manifests.all_manifests(root=ROOT, specs=env_manifest.SPECS, hand_written=env_manifest.HAND_WRITTEN)
+    for path, manifest in loaded.items():
         for field in manifest.fields:
             if field.sensitive:
                 assert field.source in {"human", "runtime"}, f"{path}: {field.env} is sensitive but {field.source}"
@@ -313,11 +315,9 @@ def test_app_web_s3_contract_matches_python_runtime_settings() -> None:
 
 def test_env_example_contains_no_undeclared_variables() -> None:
     """#1367: .env.example must not advertise dead variables that no service manifest or compose file uses."""
+    loaded = manifests.all_manifests(root=ROOT, specs=env_manifest.SPECS, hand_written=env_manifest.HAND_WRITTEN)
     declared = {
-        name
-        for manifest in env_manifest.all_manifests().values()
-        for field in manifest.fields
-        for name in (field.env, *field.aliases)
+        name for manifest in loaded.values() for field in manifest.fields for name in (field.env, *field.aliases)
     }
     compose_text = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
     compose_interpolated = set(re.findall(r"\$\{([A-Z0-9_]+)", compose_text))

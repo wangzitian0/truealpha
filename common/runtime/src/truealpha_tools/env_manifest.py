@@ -28,10 +28,6 @@ def load(path: str) -> EnvironmentManifest:
     return manifests.load(path, root=ROOT)
 
 
-def all_manifests() -> dict[str, EnvironmentManifest]:
-    return manifests.all_manifests(root=ROOT, specs=SPECS, hand_written=HAND_WRITTEN)
-
-
 def load_hooks(path: str = HOOKS_MANIFEST_PATH) -> RuntimeHooksManifest:
     return manifests.load_hooks_manifest(path, root=ROOT)
 

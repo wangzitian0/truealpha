@@ -32,10 +32,6 @@ def issuer_identity_sql(column: str, placeholder: str = "%s") -> str:
     )
 
 
-_RESOLVE_CANDIDATES_SQL = (
-    "select ei.entity_id::text as entity_id, ei.legacy_id, ei.current_ticker, ei.cik, ei.lei"
-    f" from mart.entity_identity ei cross join (select btrim(%s::text) as q) inp where {_IDENTITY_MATCH_SQL}"
-)
 _RESOLVE_BATCH_CANDIDATES_SQL = (
     "select u.raw_q, ei.entity_id::text as entity_id, ei.legacy_id, ei.current_ticker, ei.cik, ei.lei"
     " from unnest(%s::text[]) as u(raw_q) cross join lateral (select btrim(u.raw_q) as q) inp"
@@ -246,19 +242,6 @@ def _append_row_aliases(candidates: list[str], row: dict[str, Any]) -> None:
         _add(f"company:cik:{cik}")
     if lei := row.get("lei"):
         _add(f"issuer:lei:{lei}")
-
-
-def resolve_issuer_id_candidates(database_url: str, issuer_id: str) -> tuple[str, ...]:
-    clean = issuer_id.strip()
-    if not clean:
-        return ()
-    candidates = [clean]
-    try:
-        for row in _query_rows(database_url, _RESOLVE_CANDIDATES_SQL, (clean,)):
-            _append_row_aliases(candidates, row)
-    except psycopg.Error:
-        pass
-    return tuple(candidates)
 
 
 def resolve_issuer_id_candidates_batch(

@@ -1,6 +1,6 @@
 """Module 3 and module 4 reads against a real Postgres (#42).
 
-The seed comes from `conformance/issuer_modules_parity.json`, the canon the App twin also
+The seed comes from `tests/fixtures/issuer_modules_parity.json`, the canon the App twin also
 reads. One served run holds the expected rows; one unserved run holds a newer, available
 decoy. A read that drops the `mart.served_head` pin returns the decoy and fails here.
 
@@ -32,7 +32,7 @@ from truealpha_contracts.research_report import (
 )
 from truealpha_contracts.research_report_mart import MartResearchReadRepository
 
-_SEED_PATH = Path(__file__).parents[1] / "conformance" / "issuer_modules_parity.py"
+_SEED_PATH = Path(__file__).parent / "fixtures" / "issuer_modules_parity.py"
 _SPEC = importlib.util.spec_from_file_location("issuer_modules_parity_seed", _SEED_PATH)
 assert _SPEC is not None and _SPEC.loader is not None
 _SEED = importlib.util.module_from_spec(_SPEC)
@@ -186,53 +186,6 @@ def test_the_deployed_reader_fills_peg_supply_chain_and_analyst_sections_from_ma
     assert analyst.availability is AvailabilityStatus.AVAILABLE
     assert {result.label: result.value for result in analyst.results}["consensus_rating"] == "4.3500"
     assert all(str(result.cutoff_at.date()) == "2026-06-30" for result in analyst.results)
-
-
-def test_resolve_issuer_id_candidates_expands_uuid_legacy_ticker_cik_and_lei(monkeypatch: pytest.MonkeyPatch) -> None:
-    import psycopg
-    from truealpha_contracts.issuer_modules_mart import resolve_issuer_id_candidates
-
-    class _FakeCursor:
-        def execute(self, sql: str, params: tuple[str, ...]) -> None:
-            assert "from mart.entity_identity ei" in sql
-            assert params == ("NVDA",)
-
-        def fetchall(self) -> list[dict[str, str]]:
-            return [
-                {
-                    "entity_id": "11111111-2222-5333-8444-555555555555",
-                    "legacy_id": "issuer:lei:549300S4KLFTLO7GSQ80",
-                    "current_ticker": "NVDA",
-                    "cik": "0001045810",
-                    "lei": "549300S4KLFTLO7GSQ80",
-                }
-            ]
-
-        def __enter__(self) -> _FakeCursor:
-            return self
-
-        def __exit__(self, *_exc: object) -> None:
-            return None
-
-    class _FakeConn:
-        def cursor(self, **_kw: Any) -> _FakeCursor:
-            return _FakeCursor()
-
-        def __enter__(self) -> _FakeConn:
-            return self
-
-        def __exit__(self, *_exc: object) -> None:
-            return None
-
-    monkeypatch.setattr(psycopg, "connect", lambda *_a, **_kw: _FakeConn())
-    candidates = resolve_issuer_id_candidates("postgresql://fake", "NVDA")
-    assert "NVDA" in candidates
-    assert "11111111-2222-5333-8444-555555555555" in candidates
-    assert "issuer:lei:549300S4KLFTLO7GSQ80" in candidates
-    assert "issuer:cik:0001045810" in candidates
-    assert "company:cik:0001045810" in candidates
-    assert "0001045810" in candidates
-    assert "549300S4KLFTLO7GSQ80" in candidates
 
 
 def test_resolve_issuer_id_candidates_batch_executes_against_live_entity_identity(database: psycopg.Connection) -> None:

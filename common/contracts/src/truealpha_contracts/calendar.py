@@ -27,12 +27,6 @@ def previous_market_session(d: date, *, strictly_before: bool = False) -> date:
     return candidate
 
 
-def count_market_sessions_between(start: date, end: date) -> int:
-    if end <= start:
-        return 0
-    return sum(is_market_session(start + timedelta(days=offset)) for offset in range(1, (end - start).days + 1))
-
-
 def settled_session_for_cutoff(cutoff: datetime) -> date:
     at_market = cutoff.astimezone(NY_TZ)
     d = at_market.date()

@@ -14,7 +14,6 @@ from typing import Any
 DECLARATION = "apps/data-engine/release-replays.json"
 _KEY = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
-_TAG_PATTERN = re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+$")
 
 Reader = Callable[[str, str], str | None]
 
@@ -26,28 +25,6 @@ class ReplayError(RuntimeError):
 def git_show(rev: str, path: str) -> str | None:
     result = subprocess.run(["git", "show", f"{rev}:{path}"], capture_output=True, text=True, check=False)
     return result.stdout if result.returncode == 0 else None
-
-
-def newest_release_tag(target: str = "HEAD") -> tuple[str, str] | None:
-    listed = subprocess.run(
-        ["git", "tag", "--list", "v[0-9]*.[0-9]*.[0-9]*"], capture_output=True, text=True, check=False
-    )
-    candidates = [line.strip() for line in listed.stdout.splitlines() if _TAG_PATTERN.match(line.strip())]
-    for name in sorted(candidates, key=lambda n: tuple(int(p) for p in n[1:].split(".")), reverse=True):
-        peeled = subprocess.run(
-            ["git", "rev-parse", "--verify", "--quiet", f"refs/tags/{name}^{{commit}}"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        sha = peeled.stdout.strip()
-        if peeled.returncode == 0 and sha:
-            ancestor = subprocess.run(
-                ["git", "merge-base", "--is-ancestor", sha, target], capture_output=True, text=True, check=False
-            )
-            if ancestor.returncode == 0:
-                return name, sha
-    return None
 
 
 def _without_docstrings(tree: ast.Module) -> ast.Module:
