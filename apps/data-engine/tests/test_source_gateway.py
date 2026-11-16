@@ -1209,3 +1209,24 @@ def test_a_gateway_call_row_survives_the_rollback_of_the_callers_transaction(war
 
     row = gateway._pg_execute("select count(*) from staging.api_call_ledger where source = %s", (seat,)).fetchone()
     assert row == (1,), "the vendor was called; the caller's rollback does not undo the audit row"
+
+
+def test_capacity_gate_delegates_local_sliding_window_to_sdk_rate_limit_window() -> None:
+    from infra2_sdk.capacity import RateLimitWindow
+
+    clock = [0.0]
+    slept: list[float] = []
+    gate = gateway.CapacityGate(
+        capacities={"sec": gateway.SourceCapacity("sec", 1.0, 2, 100)},
+        environment="production",
+        spent_since=lambda _s, _since: 0,
+        recent_calls=None,
+        clock=lambda: clock[0],
+        sleep=lambda seconds: (slept.append(seconds), clock.__setitem__(0, clock[0] + seconds)),
+        now=lambda: _NOW,
+    )
+    gate.admit("sec")
+    gate.admit("sec")
+    gate.admit("sec")
+    assert slept == [pytest.approx(1.0)]
+    assert all(isinstance(tracker, RateLimitWindow) for tracker in gate._windows.values())

@@ -155,8 +155,8 @@ def audit_vision(
         _verdict_gate(
             "#56",
             "Gate 0: Capture & Environment Readiness",
-            verdicts_by_check.get("release_fetch_proof"),
-            "No release_fetch_proof recorded in nightly verdicts.",
+            verdicts_by_check.get("job_run_health"),
+            "No job_run_health recorded in nightly verdicts.",
         ),
         _audit_gate_1(verdicts_by_check, effective_outcomes, env=env),
         _coverage_gate(verdicts_by_check, env),

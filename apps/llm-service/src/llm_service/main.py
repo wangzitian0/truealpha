@@ -8,6 +8,7 @@ from typing import Any
 from fastapi import FastAPI, Request
 from fastapi.responses import RedirectResponse
 from infra2_sdk.fastapi import init_service
+from infra2_sdk.runtime.otel import PROBE_PATHS
 from truealpha_contracts.environment_contract import load_environment_contract
 from truealpha_runtime.boot import assert_environment
 from truealpha_runtime.telemetry import init_telemetry
@@ -19,7 +20,6 @@ from llm_service.mcp_server import mcp
 
 ENV_MANIFEST_PATH = Path("apps/llm-service/required-env.generated.json")
 ROUTED_PREFIX = "/api"
-PROBE_PATHS = frozenset({"/health", "/livez", "/readyz"})
 TRUSTED_PROXIES = ("127.0.0.1", "::1")
 NIGHTLY_VERDICTS_SQL = (
     "select distinct on (check_name) check_name, ran_at, ok, summary "
@@ -74,6 +74,48 @@ def _safe_query(conn: Any, query: str, transform: Any, default: Any) -> Any:
         return default
 
 
+def _first_str(cursor: Any) -> str:
+    row = cursor.fetchone()
+    return str(row[0]) if row and row[0] else "unknown"
+
+
+def _identity(cursor: Any) -> tuple[str, str]:
+    row = cursor.fetchone()
+    return (str(row[0] or "unknown"), str(row[1] or "unknown")) if row else ("unknown", "unknown")
+
+
+def _served_pointers(conn: Any, cursor: Any, contract: Any) -> list[dict[str, Any]] | str:
+    rows = cursor.fetchall()
+    if not rows and conn.execute(HEAD_ENVIRONMENTS_SQL).fetchone() is not None:
+        return "unknown"
+    return [
+        {
+            "universe_id": str(universe_id),
+            "advanced_at": advanced_at.isoformat(),
+            "age_hours": round(float(age_hours), 1),
+            "freshness": str(freshness),
+            "limit_hours": int(limit_hours),
+            "staleness_reason": None if reason is None else str(reason),
+            "availability": str(availability),
+        }
+        for universe_id, advanced_at, age_hours, freshness, limit_hours, reason, availability in rows
+        if contract.is_head_scheduled(str(universe_id), settings.app_env)
+    ]
+
+
+def _nightly_verdicts(cursor: Any, contract: Any) -> list[dict[str, Any]]:
+    return [
+        {
+            "check": str(check),
+            "ran_at": ran_at.isoformat(),
+            "ok": None if ok is None else bool(ok),
+            "summary": str(summary),
+        }
+        for check, ran_at, ok, summary in cursor.fetchall()
+        if contract.expects_verdict(str(check), settings.app_env)
+    ]
+
+
 def _data_engine_facts() -> tuple[str, str, str, list[dict[str, Any]] | str, list[dict[str, Any]] | str]:
     parser, git_sha, image_digest = "unknown", "unknown", "unknown"
     pointers: list[dict[str, Any]] | str = "unknown"
@@ -83,15 +125,6 @@ def _data_engine_facts() -> tuple[str, str, str, list[dict[str, Any]] | str, lis
 
         contract = load_environment_contract()
         with psycopg.connect(settings.database_url, connect_timeout=settings.database_connect_timeout_seconds) as conn:
-
-            def _first_str(cur: Any) -> str:
-                r = cur.fetchone()
-                return str(r[0]) if r and r[0] else "unknown"
-
-            def _identity(cur: Any) -> tuple[str, str]:
-                r = cur.fetchone()
-                return (str(r[0] or "unknown"), str(r[1] or "unknown")) if r else ("unknown", "unknown")
-
             parser = _safe_query(
                 conn,
                 "select parser_version from staging.capture_normalized_observations order by recorded_at desc limit 1",
@@ -104,39 +137,10 @@ def _data_engine_facts() -> tuple[str, str, str, list[dict[str, Any]] | str, lis
                 _identity,
                 ("unknown", "unknown"),
             )
-
-            def _pointers(cur: Any) -> list[dict[str, Any]] | str:
-                rows = cur.fetchall()
-                if not rows and conn.execute(HEAD_ENVIRONMENTS_SQL).fetchone() is not None:
-                    return "unknown"
-                return [
-                    {
-                        "universe_id": str(u),
-                        "advanced_at": a.isoformat(),
-                        "age_hours": round(float(age), 1),
-                        "freshness": str(f),
-                        "limit_hours": int(lim),
-                        "staleness_reason": None if reason is None else str(reason),
-                        "availability": str(avail),
-                    }
-                    for u, a, age, f, lim, reason, avail in rows
-                    if contract.is_head_scheduled(str(u), settings.app_env)
-                ]
-
-            def _verdicts(cur: Any) -> list[dict[str, Any]]:
-                return [
-                    {
-                        "check": str(c),
-                        "ran_at": r.isoformat(),
-                        "ok": None if ok is None else bool(ok),
-                        "summary": str(s),
-                    }
-                    for c, r, ok, s in cur.fetchall()
-                    if contract.expects_verdict(str(c), settings.app_env)
-                ]
-
-            pointers = _safe_query(conn, GOVERNED_POINTERS_SQL, _pointers, "unknown")
-            verdicts = _safe_query(conn, NIGHTLY_VERDICTS_SQL, _verdicts, "unknown")
+            pointers = _safe_query(
+                conn, GOVERNED_POINTERS_SQL, lambda cur: _served_pointers(conn, cur, contract), "unknown"
+            )
+            verdicts = _safe_query(conn, NIGHTLY_VERDICTS_SQL, lambda cur: _nightly_verdicts(cur, contract), "unknown")
     except Exception:  # noqa: BLE001
         pass
     return parser, git_sha, image_digest, pointers, verdicts

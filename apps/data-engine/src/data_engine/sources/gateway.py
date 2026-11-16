@@ -11,7 +11,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections import Counter, deque
+from collections import Counter
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, replace
@@ -21,6 +21,7 @@ from decimal import Decimal
 from types import MappingProxyType
 from typing import Any, NoReturn, TypeVar
 
+from infra2_sdk.capacity import RateLimitWindow
 from truealpha_contracts.environment_contract import DAY_SECONDS, load_environment_contract
 
 from data_engine.config import settings
@@ -468,7 +469,7 @@ class CapacityGate:
     sleep: Callable[[float], None] = time.sleep
     now: Callable[[], datetime] = _utcnow
     max_wait_seconds: float = 900.0
-    _windows: dict[str, deque[float]] = field(default_factory=dict, repr=False)
+    _windows: dict[tuple[str, int, float], RateLimitWindow] = field(default_factory=dict, repr=False)
     _admitted: dict[str, tuple[date, int]] = field(default_factory=dict, repr=False)
 
     def admit(self, source: str) -> None:
@@ -503,35 +504,49 @@ class CapacityGate:
         if spent >= budget:
             _refuse(BudgetExhausted(source, environment=self._environment(), budget=budget, spent=spent))
 
+    def _shared_window_wait(self, seats: tuple[str, ...], window: float, calls: int) -> float:
+        if self.recent_calls is None:
+            return 0.0
+        at = self.now()
+        since = at - timedelta(seconds=window)
+        windows = [self.recent_calls(seat, since) for seat in seats]
+        recorded = sum(count for count, _ in windows)
+        oldest = min((first for _, first in windows if first is not None), default=None)
+        if recorded >= calls and oldest is not None:
+            return max(0.0, window - (at - oldest).total_seconds() + _EXPIRY_MARGIN_SECONDS)
+        return 0.0
+
+    def _refuse_full_window(self, source: str, window: float, calls: int, waited: float, wait: float) -> None:
+        if waited + wait > self.max_wait_seconds:
+            _refuse(
+                CapacityExceeded(
+                    source,
+                    f"rate window ({calls} per {window:g} s) stayed full for {self.max_wait_seconds:g} s",
+                )
+            )
+
     def _queue(self, source: str, seats: tuple[str, ...], window: float, calls: int) -> float:
-        local = self._windows.setdefault(seats[0], deque())
+        key = (seats[0], calls, float(window))
+        if key not in self._windows:
+            self._windows[key] = RateLimitWindow(calls, window, clock=lambda: self.clock())
+        tracker = self._windows[key]
         waited = 0.0
         while True:
-            tick = self.clock()
-            while local and tick - local[0] >= window:
-                local.popleft()
-            wait = window - (tick - local[0]) if len(local) >= calls else 0.0
-            if self.recent_calls is not None:
-                at = self.now()
-                since = at - timedelta(seconds=window)
-                windows = [self.recent_calls(seat, since) for seat in seats]
-                recorded = sum(count for count, _ in windows)
-                oldest = min((first for _, first in windows if first is not None), default=None)
-                if recorded >= calls and oldest is not None:
-                    wait = max(wait, window - (at - oldest).total_seconds() + _EXPIRY_MARGIN_SECONDS)
-            if wait <= 0:
-                break
-            if waited + wait > self.max_wait_seconds:
-                _refuse(
-                    CapacityExceeded(
-                        source,
-                        f"rate window ({calls} per {window:g} s) stayed full for {self.max_wait_seconds:g} s",
-                    )
-                )
+            shared_wait = self._shared_window_wait(seats, window, calls)
+            if shared_wait > 0 and tracker.used < calls:
+                wait = shared_wait
+            else:
+                allowed, local_wait = tracker.acquire()
+                if allowed and shared_wait <= 0:
+                    return waited
+                wait = max(0.0 if allowed else local_wait, shared_wait)
+                if allowed:
+                    self._refuse_full_window(source, window, calls, waited, wait)
+                    self.sleep(wait)
+                    return waited + wait
+            self._refuse_full_window(source, window, calls, waited, wait)
             self.sleep(wait)
             waited += wait
-        local.append(self.clock())
-        return waited
 
 
 _bound_gate: contextvars.ContextVar[CapacityGate | None] = contextvars.ContextVar("capacity_gate", default=None)
@@ -631,13 +646,17 @@ def _requested_uri(url: str, params: Any) -> str:
     return f"{url}&{query}" if "?" in url else f"{url}?{query}"
 
 
+def _fail_http(call: CallRecord, status: int, body: bytes | Any) -> None:
+    message = _vendor_message(body) if isinstance(body, bytes) else None
+    call.fail(message or f"HTTP {status}")
+
+
 def _observe_http(call: CallRecord, response: Any) -> None:
     status = getattr(response, "status_code", None)
     body = getattr(response, "content", None)
     call.observe(status_code=status, body=body)
     if status is not None and int(status) >= 400:
-        message = _vendor_message(body) if isinstance(body, bytes) else None
-        call.fail(message or f"HTTP {status}")
+        _fail_http(call, int(status), body)
 
 
 def _http_request(
@@ -743,13 +762,13 @@ def urlopen(
                 body = bytes(error.read())
             status = int(error.code)
             call.observe(status_code=status, body=body)
-            call.fail(_vendor_message(body) or f"HTTP {status}")
+            _fail_http(call, status, body)
             if raise_for_status:
                 raise SourceHTTPError(status, body) from error
             return status, body
         call.observe(status_code=status, body=body)
         if raise_for_status and status is not None and status >= 400:
-            call.fail(_vendor_message(body) or f"HTTP {status}")
+            _fail_http(call, status, body)
             raise SourceHTTPError(status, body)
         return status, body
 

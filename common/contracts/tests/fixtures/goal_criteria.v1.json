@@ -242,8 +242,9 @@
       "threshold": "0 OOM kills; peak within UTILIZATION_CEILING of memory.max",
       "window": "7 consecutive nights",
       "oracle": "platform",
-      "status": "backed",
-      "verdict_keys": ["runtime_shape"]
+      "status": "pending",
+      "verdict_keys": [],
+      "pending_on": "#1652 (infra2 runtime capacity monitoring)"
     },
     {
       "id": "R2.B12",
@@ -560,7 +561,6 @@
       "oracle": "repository",
       "status": "partial",
       "verdict_keys": [
-        "release_fetch_proof",
         "question_coverage@topt",
         "question_coverage@universe-list:qqq",
         "report_surface_proof",

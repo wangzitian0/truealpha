@@ -1,12 +1,11 @@
-.PHONY: help install bootstrap doctor runtime-up runtime-down runtime-check stack-up db-up db-migrate db-reset db-check db-down web llm strategy-smoke lint format typecheck typecheck-python typecheck-web test test-python test-web smoke prepush contract-conformance check clean vision-audit
+.PHONY: help install bootstrap runtime-up runtime-down runtime-check stack-up db-up db-migrate db-reset db-check db-down web llm strategy-smoke lint format typecheck typecheck-python typecheck-web test test-python test-web smoke prepush contract-conformance check clean vision-audit
 
 help:
 	@echo "TrueAlpha — Development Commands"
 	@echo ""
 	@echo "Setup:"
-	@echo "  make bootstrap    Full physical bootstrap: uv sync + bun install + doctor"
-	@echo "  make doctor       Verify physical dev_env contracts and dependencies"
-	@echo "  make install      uv sync + bun install + the per-commit hook (once per clone)"
+	@echo "  make bootstrap    Full physical bootstrap: uv sync + bun install"
+	@echo "  make install      uv sync + bun install + per-commit hook"
 	@echo "  make runtime-up   Start Postgres/KG + MinIO and create the raw bucket"
 	@echo "  make stack-up     Build/start runtime + web + llm-service"
 	@echo "  make runtime-check Probe Postgres, KG tables, and object storage"
@@ -21,32 +20,24 @@ help:
 	@echo "  make strategy-smoke Preview replay of large_model_value_v0 against #335's golden fixture"
 	@echo "  make vision-audit Standing audit of Vision & Gate epics (#28/#54)"
 	@echo ""
-	@echo "Quality (diff scope by default: only what the diff against BASE reaches; FULL=1 runs everything):"
-	@echo "  make lint         ruff on the changed Python files"
-	@echo "  make typecheck    mypy on the changed modules and their importers; tsc when web code changed"
-	@echo "  make test         pytest files and bun tests that import a changed file"
+	@echo "Quality:"
+	@echo "  make lint         ruff on apps, common, and tools"
+	@echo "  make typecheck    mypy + tsc"
+	@echo "  make test         pytest + bun web tests"
 	@echo "  make smoke        lint + typecheck + test"
 	@echo "  make check        lint + typecheck + test + contract-conformance"
 	@echo "  make contract-conformance Verify Python/TypeScript contract parity"
-	@echo "  BASE=<ref>        diff base (default origin/main); FULL=1 whole repository, as CI"
-	@echo "  make typecheck-python|typecheck-web|test-python|test-web  one language half (CI calls these)"
+	@echo "  make typecheck-python|typecheck-web|test-python|test-web  one language half"
 
 bootstrap:
 	uv sync --all-packages
 	cd apps/app-web && bun install --frozen-lockfile
-	uv run python tools/doctor.py --install-hooks
-	uv run python tools/doctor.py
+	git config core.hooksPath tools/git-hooks
 
-doctor:
-	uv run python tools/doctor.py
-
-# The per-commit hook (T0, #1412): tools/doctor.py owns the hook path. It sets
-# core.hooksPath once per clone, so every worktree runs its own tracked copy, and
-# `make doctor` fails while it is missing.
 install:
 	uv sync --all-packages
 	cd apps/app-web && bun install
-	uv run python tools/doctor.py --install-hooks
+	git config core.hooksPath tools/git-hooks
 
 runtime-up:
 	docker compose up -d --wait postgres minio
@@ -128,53 +119,40 @@ strategy-smoke:
 vision-audit:
 	uv run python tools/vision_audit.py $(ARGS)
 
-# #1412 T1: every local check runs only what the diff against BASE (default origin/main)
-# reaches: committed, staged, unstaged and untracked changes. Local commits are frequent,
-# so the default command decides the laptop load; whole-repository work is opt-in with
-# FULL=1, which is what CI runs. tools/diff_scope.py owns the selection rules and records
-# each run (selected and skipped tests) for the escape-rate metric.
-# Web tests: bun runs every selected apps/app-web/tests/*.test.ts file. DB-backed tests skip
-# without a local Postgres; TRUEALPHA_REQUIRE_RUNTIME=1 forbids skips, as ci-web runs them (#468).
-DIFF_SCOPE = python3 tools/diff_scope.py run $(if $(BASE),--base $(BASE),) $(if $(filter-out 0,$(FULL)),--full,)
-
 lint:
-	@$(DIFF_SCOPE) --entry "make lint" lint
+	uv run ruff check apps common tools
 
 format:
 	uv run ruff check apps common tools --fix
 	uv run ruff format apps common tools
 
-typecheck:
-	@$(DIFF_SCOPE) --entry "make typecheck" typecheck
+typecheck: typecheck-python typecheck-web
 
-# CI calls these halves, one per toolchain (#1412 L1): a broken target fails ci-required.
 typecheck-python:
-	@$(DIFF_SCOPE) --entry "make typecheck-python" typecheck-python
+	uv run mypy
 
 typecheck-web:
-	@$(DIFF_SCOPE) --entry "make typecheck-web" typecheck-web
+	cd apps/app-web && bun run typecheck
 
 prepush:
 	@tools/prepush.sh $(BASE)
 
-test:
-	@$(DIFF_SCOPE) --entry "make test" test
+test: test-python test-web
 
-# FILES=<paths> runs one CI shard (FULL=1 only); tools/pytest_shard.py owns the partition.
 test-python:
-	@$(DIFF_SCOPE) --entry "make test-python" test-python $(if $(FILES),--files $(FILES),)
+	uv run pytest $(FILES)
 
 test-web:
-	@$(DIFF_SCOPE) --entry "make test-web" test-web
+	cd apps/app-web && for f in tests/*.test.ts; do bun run "$$f" || exit $$?; done
 
-smoke:
-	@$(DIFF_SCOPE) --entry "make smoke" lint typecheck test
+smoke: lint typecheck test
 
 contract-conformance:
-	@$(DIFF_SCOPE) --entry "make contract-conformance" conformance
+	uv run python common/contracts/conformance/export_issue58.py --check
+	uv run python common/contracts/conformance/export_environment_contract.py --check
+	uv run python common/contracts/conformance/export_strategy_definitions.py --check
 
-check:
-	@$(DIFF_SCOPE) --entry "make check" lint typecheck test conformance
+check: lint typecheck test contract-conformance
 
 clean:
 	find . -type d \( -name __pycache__ -o -name .pytest_cache -o -name .ruff_cache \) -exec rm -rf {} + 2>/dev/null || true

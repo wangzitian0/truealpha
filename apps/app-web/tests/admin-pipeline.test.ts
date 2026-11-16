@@ -169,7 +169,7 @@ type QueryCall = { sql: string; params?: unknown[] };
 
   const outcome = await loadPipelineOverview({ principalKind: "administrator" });
   assert(outcome.kind === "ready", `administrator reads the overview, got ${outcome.kind}`);
-  const { jobs, jobRunHealth, runtimeShape, release, windowDays } = outcome.data;
+  const { jobs, jobRunHealth, release, windowDays } = outcome.data;
   assert(windowDays === WINDOW_DAYS_FOR_TEST, "the window is 7 days, like the verdict");
   assert(calls[0].sql === JOBS_SQL, "the loader sends the exported text that the real-database test runs");
   assert(calls[0].params?.[0] === WINDOW_DAYS_FOR_TEST, "the runs query is bound to the window");
@@ -217,7 +217,6 @@ type QueryCall = { sql: string; params?: unknown[] };
   assert(idle?.runsEndedByBound === 0, "idle job has 0 runs ended by bound");
 
   assert(jobRunHealth?.ok === false && jobRunHealth.summary.startsWith("red: head_reports_pipeline"), "the verdict is shown");
-  assert(runtimeShape?.ok === null, "a pending verdict stays pending, not red");
   assert(release?.gitSha.startsWith("0123456789ab") === true, "the release names the newest build");
   assert(Math.abs((release?.ageHours ?? 0) - 50) < 0.1, "the release age is the time since the start of the stretch");
 }

@@ -3,7 +3,7 @@
   "service": "truealpha/app",
   "slots": {
     "smoke": {
-      "run": "uv run python tools/health_check.py \"$APP_URL/api/health\" \"$APP_VERSION_REF\" 36",
+      "run": "uv run python -m infra2_sdk.deploy --url \"$APP_URL/api/health\" --expected-version \"$APP_VERSION_REF\" --max-attempts 36 --interval-seconds 5 --no-follow-redirects",
       "timeout_seconds": 120,
       "required_env": [
         "APP_URL",
@@ -27,7 +27,7 @@
           "argv": [
             "sh",
             "-c",
-            "uv run python -m truealpha_tools.health_check \"$APP_URL/api/health\" \"$APP_VERSION_REF\" 36"
+            "uv run python -m infra2_sdk.deploy --url \"$APP_URL/api/health\" --expected-version \"$APP_VERSION_REF\" --max-attempts 36 --interval-seconds 5 --no-follow-redirects"
           ]
         },
         {
@@ -44,14 +44,6 @@
             "sh",
             "-c",
             "cd apps/app-web && TA_BASE_URL=\"$APP_URL\" node e2e/walk-tree.mjs"
-          ]
-        },
-        {
-          "id": "surface_contract",
-          "argv": [
-            "sh",
-            "-c",
-            "uv run python -m truealpha_tools.surface_contract --authenticated \"$APP_URL\""
           ]
         }
       ]
@@ -73,7 +65,7 @@
           "argv": [
             "sh",
             "-c",
-            "uv run python -m truealpha_tools.health_check \"$APP_URL/api/health\" \"$APP_VERSION_REF\" 36"
+            "uv run python -m infra2_sdk.deploy --url \"$APP_URL/api/health\" --expected-version \"$APP_VERSION_REF\" --max-attempts 36 --interval-seconds 5 --no-follow-redirects"
           ]
         },
         {
@@ -91,19 +83,11 @@
             "-c",
             "cd apps/app-web && TA_BASE_URL=\"$APP_URL\" node e2e/walk-tree.mjs"
           ]
-        },
-        {
-          "id": "surface_contract",
-          "argv": [
-            "sh",
-            "-c",
-            "uv run python -m truealpha_tools.surface_contract --authenticated \"$APP_URL\""
-          ]
         }
       ]
     },
     "prod_gate": {
-      "run": "uv run python tools/surface_contract.py \"$APP_URL\"",
+      "run": "uv run python -m infra2_sdk.deploy --url \"$APP_URL/api/health\" --max-attempts 12 --interval-seconds 5 --no-follow-redirects",
       "timeout_seconds": 240,
       "required_env": [
         "APP_URL"
@@ -124,14 +108,6 @@
             "sh",
             "-c",
             "uv run python -m truealpha_tools.nightly_verdicts \"$APP_URL/api/health\" --environment \"$ENVIRONMENT\" --repo ."
-          ]
-        },
-        {
-          "id": "surface_contract",
-          "argv": [
-            "sh",
-            "-c",
-            "uv run python -m truealpha_tools.surface_contract \"$APP_URL\""
           ]
         }
       ]

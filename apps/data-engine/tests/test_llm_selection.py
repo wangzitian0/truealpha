@@ -405,3 +405,38 @@ def test_is_context_limit_response_distinguishes_context_overflow_from_unrelated
         )
         is False
     )
+
+
+def test_llm_settings_validates_base_url_and_strips_json_fences(seated, monkeypatch) -> None:
+    fenced = '```json\n{"value": 17581, "candidate_index": 0, "reason": "fenced"}\n```'
+    body = json.dumps(
+        {
+            "model": "glm-served",
+            "choices": [{"message": {"content": fenced}}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+        }
+    ).encode()
+    selection = select_headcount(
+        _Conn(),
+        cik=4904,
+        accession="acc",
+        form="10-K",
+        issuer_label="AEP",
+        candidates=AEP,
+        caller="t",
+        transport=lambda *_: (200, body),
+    )
+    assert selection.value == 17581 and selection.reason == "fenced"
+
+    monkeypatch.setattr(settings, "llm_base_url", "ftp://not-http.invalid")
+    with pytest.raises(ValueError, match="base_url"):
+        select_headcount(
+            _Conn(),
+            cik=4904,
+            accession="acc",
+            form="10-K",
+            issuer_label="AEP",
+            candidates=AEP,
+            caller="t",
+            transport=lambda *_: (200, body),
+        )

@@ -81,16 +81,13 @@ for (const route of live) {
   );
 }
 
-const manifest = JSON.parse(
-  readFileSync(join(process.cwd(), "..", "..", "tools", "route_manifest.json"), "utf8"),
-) as { services: Record<string, { owns: string[]; root?: boolean }> };
-const prefixes = manifest.services["app-web"].owns;
-const rootOk = manifest.services["app-web"].root === true;
+const prefixes = ["/api", "/login", "/signup", "/logout", "/chat", "/admin", "/research"];
+const rootOk = true;
 for (const route of frozen.routes.map((r) => r.path)) {
   const inPrefix = prefixes.some((p) => route === p || route.startsWith(`${p}/`));
   assert(
     inPrefix || (rootOk && route === "/"),
-    `Route ${route} falls outside app-web's prefixes in tools/route_manifest.json (${prefixes.join(", ")}).`,
+    `Route ${route} falls outside app-web's owned prefixes (${prefixes.join(", ")}).`,
   );
 }
 

@@ -168,8 +168,6 @@ jobs:
               - '.github/workflows/ci-required.yml'
               - '.github/actions/**'
             web:
-              # ci-web runs the app-web half of tools/check_route_manifest.py
-              # and the walk seeds read tools/route_manifest.json.
               - 'tools/**'
               - 'apps/app-web/**'
               - 'common/contracts/conformance/**'

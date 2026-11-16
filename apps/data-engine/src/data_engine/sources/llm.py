@@ -18,6 +18,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from factors.shared import extraction as extraction_primitive
+from infra2_sdk.runtime.llm import LlmSettings
 from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.research_cards import (
     XHS_CARD_INSTRUCTIONS,
@@ -64,8 +65,6 @@ RESPONSE_SCHEMA: dict[str, Any] = {
     },
     "required": ["value", "candidate_index", "reason"],
 }
-PROMPT_SHA256 = hashlib.sha256((PROMPT_VERSION + "\n" + INSTRUCTIONS).encode()).hexdigest()
-SCHEMA_SHA256 = canonical_sha256(RESPONSE_SCHEMA)
 
 
 @dataclass(frozen=True)
@@ -90,6 +89,8 @@ class ModelTask:
 
 
 HEADCOUNT_TASK = ModelTask(prompt_version=PROMPT_VERSION, instructions=INSTRUCTIONS, response_schema=RESPONSE_SCHEMA)
+PROMPT_SHA256 = HEADCOUNT_TASK.prompt_sha256
+SCHEMA_SHA256 = HEADCOUNT_TASK.schema_sha256
 
 
 @dataclass(frozen=True)
@@ -315,10 +316,7 @@ def _is_context_limit_response(status: int, body: bytes) -> bool:
     if status != 400:
         return False
     text = body.decode("utf-8", errors="ignore")
-    try:
-        parsed = json.loads(text)
-    except json.JSONDecodeError:
-        parsed = None
+    parsed = _parse_json_payload(text)
     if isinstance(parsed, dict):
         nested = parsed.get("error")
         err = nested if isinstance(nested, dict) else parsed
@@ -557,9 +555,30 @@ def _attempt(
             call.cost = Decimal(int(usage.get("total_tokens") or 0))
             call.completion_tokens = _token_count(usage.get("completion_tokens"))
             call.reasoning_tokens = _token_count((usage.get("completion_tokens_details") or {}).get("reasoning_tokens"))
+            _record_gen_ai_span(str(payload.get("model") or request_params.get("model") or ""), usage)
             if answer_required and _cut_off(payload):
                 call.fail(f"finish_reason={FINISH_REASON_CUT_OFF}: the answer was cut at max_tokens")
     return _ProviderAnswer(status, body, payload, usage, provider_code)
+
+
+def _record_gen_ai_span(model: str, usage: dict[str, Any]) -> None:
+    """Attach standard OpenTelemetry GenAI attributes when an active recording span exists."""
+    try:
+        from opentelemetry import trace
+    except ImportError:
+        return
+    span = trace.get_current_span()
+    if span is None or not span.is_recording():
+        return
+    in_tokens = _token_count(usage.get("prompt_tokens")) or 0
+    out_tokens = _token_count(usage.get("completion_tokens")) or 0
+    for key, value in (
+        ("gen_ai.system", settings.llm_provider),
+        ("gen_ai.request.model", model),
+        ("gen_ai.usage.input_tokens", in_tokens),
+        ("gen_ai.usage.output_tokens", out_tokens),
+    ):
+        span.set_attribute(key, value)
 
 
 def _cut_off(payload: dict[str, Any]) -> bool:
@@ -651,19 +670,29 @@ def _ask(
     transport: Transport | None,
     now: Callable[[], datetime],
 ) -> tuple[ModelInvocation, ModelHTTPError | None]:
+    llm_cfg = LlmSettings(
+        provider=settings.llm_provider,
+        base_url=settings.llm_base_url,
+        api_key=settings.llm_api_key,
+        small_model=model,
+        large_model=model,
+        multimodal_model=model,
+        json_timeout_seconds=float(task.timeout_seconds),
+        json_max_tokens=task.max_tokens,
+    )
     request_bytes = _request_bytes(request_body)
     request_sha256 = hashlib.sha256(request_bytes).hexdigest()
     stored_request = _stored_request(request_body)
-    url = settings.llm_base_url.rstrip("/") + "/chat/completions"
-    headers = {"Authorization": f"Bearer {settings.llm_api_key}", "Content-Type": "application/json"}
+    url = f"{llm_cfg.base_url.rstrip('/')}{llm_cfg.chat_completions_path}"
+    headers = {"Authorization": f"Bearer {llm_cfg.api_key}", "Content-Type": "application/json"}
     started_at = now()
     usage: dict[str, Any] = {}
     payload: dict[str, Any] = {}
     user_text = next(
         (
-            str(m.get("content", ""))
-            for m in request_body.get("messages", [])
-            if isinstance(m, dict) and m.get("role") == "user"
+            str(msg.get("content", ""))
+            for msg in request_body.get("messages", [])
+            if isinstance(msg, dict) and msg.get("role") == "user"
         ),
         "",
     )
@@ -732,7 +761,7 @@ def _ask(
     response_sha256 = hashlib.sha256(body).hexdigest()
     invocation_id = "model-invocation:" + canonical_sha256(
         {
-            "provider": settings.llm_provider,
+            "provider": llm_cfg.provider,
             "model": model,
             "prompt_sha256": task.prompt_sha256,
             "request_sha256": request_sha256,
@@ -744,7 +773,7 @@ def _ask(
     invocation = ModelInvocation(
         decision=decision,
         model=model,
-        provider=settings.llm_provider,
+        provider=llm_cfg.provider,
         prompt_sha256=task.prompt_sha256,
         request_sha256=request_sha256,
         response_sha256=response_sha256,
@@ -877,11 +906,24 @@ class ThemeClassification:
         return self.invocation.extractor
 
 
+_JSON_FENCE_RE = re.compile(r"\A```(?:json)?\s*(.*?)\s*```\Z", re.S | re.I)
+
+
+def _parse_json_payload(content: str) -> Any:
+    """Decode JSON content after stripping optional markdown code fences."""
+    cleaned = content.strip()
+    if match := _JSON_FENCE_RE.match(cleaned):
+        cleaned = match.group(1).strip()
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        return None
+
+
 def _json_list_field(content: str, key: str) -> list[Any] | None:
     """Extract a flattened list from `{"<key>": [...]}` or `[{"<key>": [...]}]` JSON responses."""
-    try:
-        parsed = json.loads(content)
-    except json.JSONDecodeError:
+    parsed = _parse_json_payload(content)
+    if parsed is None:
         return None
     objects = parsed if isinstance(parsed, list) else [parsed]
     if not all(isinstance(entry, dict) for entry in objects):
@@ -958,10 +1000,7 @@ def _jsonb_or_null(body: bytes) -> str | None:
 
 
 def _parse_decision(content: str, candidates: Sequence[Candidate]) -> dict[str, Any]:
-    try:
-        parsed = json.loads(content)
-    except json.JSONDecodeError:
-        parsed = None
+    parsed = _parse_json_payload(content)
     if not isinstance(parsed, dict):
         return {"value": None, "candidate_index": None, "reason": f"unparseable model answer: {content[:120]!r}"}
     value = parsed.get("value")
@@ -1194,6 +1233,20 @@ def _bound_supply_chain_filing_text(filing_text: str) -> str:
     return "\n...\n".join(parts)
 
 
+def _as_partner(item: Any) -> ExtractedSupplyChainPartner | None:
+    normalized = _normalize_partner_entry(item)
+    if normalized is None:
+        return None
+    raw_share = normalized["revenue_share_pct"]
+    return ExtractedSupplyChainPartner(
+        partner_name=normalized["partner_name"],
+        ticker=normalized["ticker"],
+        relation_type=normalized["relation_type"],
+        revenue_share_pct=Decimal(raw_share) if raw_share is not None else None,
+        evidence_quote=normalized["evidence_quote"],
+    )
+
+
 def identify_supply_chain_partners(
     connection: Any | None,
     *,
@@ -1224,22 +1277,10 @@ def identify_supply_chain_partners(
         transport=transport,
         now=now,
     )
-    partners: list[ExtractedSupplyChainPartner] = []
-    for item in invocation.decision.get("partners") or []:
-        normalized = _normalize_partner_entry(item)
-        if normalized is None:
-            continue
-        raw_share = normalized["revenue_share_pct"]
-        partners.append(
-            ExtractedSupplyChainPartner(
-                partner_name=normalized["partner_name"],
-                ticker=normalized["ticker"],
-                relation_type=normalized["relation_type"],
-                revenue_share_pct=Decimal(raw_share) if raw_share is not None else None,
-                evidence_quote=normalized["evidence_quote"],
-            )
-        )
-    return SupplyChainExtraction(partners=tuple(partners), invocation=invocation)
+    partners = tuple(
+        partner for item in invocation.decision.get("partners") or [] if (partner := _as_partner(item)) is not None
+    )
+    return SupplyChainExtraction(partners=partners, invocation=invocation)
 
 
 XHS_CARD_RESPONSE_SCHEMA: dict[str, Any] = {
@@ -1271,12 +1312,9 @@ class XhsCardGenerationResult:
 
 
 def _parse_xhs_card_html(content: str) -> dict[str, Any]:
-    try:
-        parsed = json.loads(content)
-        if isinstance(parsed, dict) and isinstance(parsed.get("html"), str):
-            return {"html": extract_html_document(parsed["html"]), "reason": "ok"}
-    except json.JSONDecodeError:
-        pass
+    parsed = _parse_json_payload(content)
+    if isinstance(parsed, dict) and isinstance(parsed.get("html"), str):
+        return {"html": extract_html_document(parsed["html"]), "reason": "ok"}
     extracted = extract_html_document(content)
     if "<html" in extracted.lower() and "</html>" in extracted.lower():
         return {"html": extracted, "reason": "ok"}

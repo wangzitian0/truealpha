@@ -334,7 +334,7 @@ def test_the_server_reader_reports_the_hwm_that_its_reader_gives(tmp_path: Path)
 # --- registration ---------------------------------------------------------------------------------------------
 
 
-def test_the_verdict_is_registered_once_and_the_schedule_runs_between_job_run_health_and_runtime_shape() -> None:
+def test_the_verdict_is_registered_once_and_the_schedule_runs_after_job_run_health() -> None:
     assert quality.NIGHTLY_VERDICTS.count("topt_baseline") == 1
     assert quality.topt_baseline_schedule.job_name == quality.TOPT_BASELINE_JOB_NAME == "topt_baseline_check"
     request = quality.topt_baseline_schedule(
@@ -343,14 +343,13 @@ def test_the_verdict_is_registered_once_and_the_schedule_runs_between_job_run_he
     assert request.tags[TICK_TAG] == "2026-11-12T06:25:00+00:00"
     assert quality.topt_baseline_schedule.cron_schedule == quality.TOPT_BASELINE_CRON == "25 6 * * *"
     minute = {name: int(cron.split()[0]) for name, cron in _crons().items()}
-    assert minute["job_run_health"] < minute["topt_baseline"] < minute["runtime_shape"]
+    assert minute["job_run_health"] < minute["topt_baseline"]
 
 
 def _crons() -> dict[str, str]:
     return {
         "job_run_health": quality.JOB_RUN_HEALTH_CRON,
         "topt_baseline": quality.TOPT_BASELINE_CRON,
-        "runtime_shape": quality.RUNTIME_SHAPE_CRON,
     }
 
 

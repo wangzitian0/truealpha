@@ -107,7 +107,7 @@ def test_the_scan_is_not_vacuous() -> None:
     for expected in (
         "common/runtime/src/truealpha_runtime/checks.py",
         "common/runtime/tests/test_public_sdk_names.py",
-        "tools/health_check.py",
+        "tools/vision_audit.py",
     ):
         assert expected in labels, f"the scan misses {expected}"
     importers = [

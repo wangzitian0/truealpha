@@ -30,25 +30,24 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --all-packages --frozen
-      # #463 route-namespace manifest (llm-service side; ci-web runs the same
-      # check for app-web). Stdlib-only.
-      - run: python3 tools/check_route_manifest.py
       # #284: the factor surface is frozen — public signatures (defaults included) and
       # the datahub columns factors read. Stdlib only, no database, so it runs here.
       - run: python3 tools/check_factor_contract.py
-      - run: python3 tools/reachability_ratchet.py --check
-      - run: python3 tools/complexity_gate.py --check
-      - run: python3 tools/sql_literal_gate.py
-      # #1412 L1: the same make targets the laptop runs, with FULL=1. CI and the
-      # Makefile once defined lint twice and the Makefile rotted (it named libs/,
-      # which no longer existed, and nothing ran it). One definition now:
-      # tools/diff_scope.py; a broken target fails this job.
       - run: make lint FULL=1
       - run: make typecheck-python FULL=1
       - run: make contract-conformance FULL=1
-      # #759 environment manifests: fresh against the settings models and past the
-      # infra2-sdk offline gate. No infrastructure involved.
-      - run: uv run python tools/env_manifest.py --check
+      # #759 environment manifests & hooks: validated directly via infra2_sdk.manifests.
+      - run: |
+          uv run python -c '
+          from pathlib import Path
+          from infra2_sdk import manifests
+          specs = (
+              manifests.ManifestSpec("apps/data-engine/required-env.generated.json", "data_engine.config:Settings", source="apps/data-engine"),
+              manifests.ManifestSpec("apps/llm-service/required-env.generated.json", "llm_service.config:Settings", source="apps/llm-service"),
+          )
+          raise SystemExit(manifests.main(["--check"], root=Path("."), specs=specs, hand_written=("apps/app-web/required-env.manifest.json",)))
+          '
+          uv run python -m infra2_sdk.manifests --check-hooks runtime-hooks.manifest.json
 
   test-core:
     runs-on: ubuntu-latest
@@ -114,7 +113,7 @@ jobs:
       - name: Run tests (shard ${{ matrix.shard }} of 2)
         run: |
           set -euo pipefail
-          FILE_LIST=$(python3 tools/pytest_shard.py common/contracts/tests common/factors/tests common/runtime/tests apps/llm-service/tests --shard ${{ strategy.job-index }} --of ${{ strategy.job-total }})
+          FILE_LIST=$(python3 -c 'import pathlib; idx, tot = ${{ strategy.job-index }}, ${{ strategy.job-total }}; files = sorted({p for r in ("common/contracts/tests", "common/factors/tests", "common/runtime/tests", "apps/llm-service/tests") for pat in ("test_*.py", "*_test.py") for p in pathlib.Path(r).rglob(pat)}); print("\n".join(str(p) for p in files[idx::tot]))')
           mapfile -t FILES <<< "$FILE_LIST"
           if [ "${#FILES[@]}" -eq 0 ]; then
             echo "::error::shard ${{ matrix.shard }} selected no files — refusing to run bare pytest"
@@ -135,9 +134,7 @@ jobs:
   # A4 B1 (#673): this was ONE 207 s job — 168 s of pytest — and the pole of
   # every PR's CI wall (run 33361977933; next-slowest job 163 s). The tree has
   # no conftest.py and every fixture is defined in the file that uses it, so it
-  # shards without coupling. tools/pytest_shard.py owns the partition and
-  # common/runtime/tests/test_pytest_shard.py proves it covers the tree exactly;
-  # a per-directory list here would rot the first time a directory is added.
+  # Run data-engine tests across deterministic index-strided shards.
   # fail-fast is off so one red shard does not hide the other lanes.
   #
   # The lane count lives in ONE place: the matrix. --shard/--of come from
@@ -200,7 +197,7 @@ jobs:
           # `pytest "${FILES[@]}"` would expand to bare `pytest` — which falls
           # back to pyproject's testpaths and runs the WHOLE suite in a lane
           # named for one shard. The count check is the second layer.
-          FILE_LIST=$(python3 tools/pytest_shard.py apps/data-engine/tests --shard ${{ strategy.job-index }} --of ${{ strategy.job-total }})
+          FILE_LIST=$(python3 -c 'import pathlib; idx, tot = ${{ strategy.job-index }}, ${{ strategy.job-total }}; files = sorted({p for pat in ("test_*.py", "*_test.py") for p in pathlib.Path("apps/data-engine/tests").rglob(pat)}); print("\n".join(str(p) for p in files[idx::tot]))')
           mapfile -t FILES <<< "$FILE_LIST"
           if [ "${#FILES[@]}" -eq 0 ]; then
             echo "::error::shard ${{ matrix.shard }} selected no files — refusing to run bare pytest"

@@ -397,7 +397,7 @@ async function assertPipelineHealth(page, path, problems, role) {
   if (leak) problems.push(`/admin/pipeline shows "${leak[0]}"`);
   const jobRows = await page.locator("tr[data-job]").count();
   if (jobRows > 0) {
-    for (const marker of ['[data-verdict="job_run_health"]', '[data-verdict="runtime_shape"]', "[data-release-age]"]) {
+    for (const marker of ['[data-verdict="job_run_health"]', "[data-release-age]"]) {
       if ((await page.locator(marker).count()) === 0) problems.push(`/admin/pipeline lists jobs but has no ${marker}`);
     }
   } else if (!/Run history unavailable|No finished run/.test(mainText)) {

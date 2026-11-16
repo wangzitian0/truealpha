@@ -168,7 +168,7 @@ def test_health_hides_the_verdict_rows_of_a_universe_that_the_environment_does_n
         ("theme_purity@universe-list:qqq", ran, True, "ok"),
         ("question_coverage@universe-list:qqq", ran, True, "ok"),
         ("datahub_confidence_report@universe-list:qqq", ran, True, "ok"),
-        ("runtime_shape", ran, True, "ok"),
+        ("job_run_health", ran, True, "ok"),
         ("fetch_keys_once", ran, True, "ok: retired check row in append-only table"),
     ]
     monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: _VerdictsOnly(rows))
@@ -178,24 +178,23 @@ def test_health_hides_the_verdict_rows_of_a_universe_that_the_environment_does_n
     monkeypatch.setattr(settings, "app_env", "production")
     production = [entry["check"] for entry in TestClient(app).get("/health").json()["nightly_verdicts"]]
 
-    assert staging == ["theme_purity@topt", "runtime_shape"]
+    assert staging == ["theme_purity@topt", "job_run_health"]
     assert production == [row[0] for row in rows if row[0] != "fetch_keys_once"]
 
 
 def test_a_pending_verdict_is_reported_as_null_not_as_red(monkeypatch) -> None:
-    """release_fetch_proof records `ok = null` until the deployment's first fetching tick has
-    run. Coerced by `bool()`, the pending proof read as a failed check and paged every deploy."""
+    """A pending verdict records `ok = null`. Coerced by `bool()`, a pending row would read as red."""
     from datetime import UTC, datetime
 
     import psycopg
 
     ran = datetime(2026, 9, 17, 6, 15, tzinfo=UTC)
-    connection = _VerdictsOnly([("release_fetch_proof", ran, None, "no scheduled or forced run yet")])
+    connection = _VerdictsOnly([("topt_baseline", ran, None, "no scheduled or forced run yet")])
     monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: connection)
     payload = TestClient(app).get("/health").json()
     assert payload["nightly_verdicts"] == [
         {
-            "check": "release_fetch_proof",
+            "check": "topt_baseline",
             "ran_at": "2026-09-17T06:15:00+00:00",
             "ok": None,
             "summary": "no scheduled or forced run yet",

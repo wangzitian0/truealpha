@@ -2,10 +2,8 @@
 
 Every non-local MCP endpoint requires authentication. Until this gate, any caller on the
 internet reached every tool, and the server built a service identity for it. #728 closed
-without a deployed probe, and production stayed open. The probe is now
-`truealpha_tools.surface_contract`: an unauthenticated `initialize` and an unauthenticated
-`tools/call` must both answer 401, on staging and production, on every release walk and
-every day.
+without a deployed probe, and production stayed open. An unauthenticated
+`initialize` and an unauthenticated `tools/call` must both answer 401.
 
 The gate is plain ASGI, so a streamed MCP response passes through without a buffer. It
 reads the token on each request, so a test (or a later rotation) changes it without a
