@@ -450,6 +450,32 @@ class NightlyVerdictsContract(StrictFrozenModel):
     per_universe: Mapping[str, NightlyVerdictExpectationSpec] = Field(min_length=1)
 
 
+class MetricApplicabilityExclusion(StrictFrozenModel):
+    metric: Literal["gppe"]
+    universe: str = Field(min_length=1)
+    ticker: str = Field(min_length=1)
+    cik: str = Field(pattern=r"^\d{10}$")
+    lei: str = Field(pattern=r"^[0-9A-Z]{20}$")
+    legacy_ids: tuple[str, ...] = Field(min_length=1)
+    status: Literal["not_applicable"] = "not_applicable"
+    reason: str = Field(min_length=1)
+    approved_by: Literal["owner"]
+    approved_at: str = Field(min_length=1)
+    tracking_issue: str = Field(pattern=r"^#\d+$")
+
+    @field_validator("legacy_ids")
+    @classmethod
+    def _validate_legacy_ids(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        import re
+
+        pattern = re.compile(r"^issuer:(?:cik:\d{10}|lei:[0-9A-Z]{20})$")
+        for item in value:
+            if not pattern.match(item):
+                raise ValueError(f"legacy_id {item!r} must match issuer:cik:<10d> or issuer:lei:<20c>")
+        _require_unique(value, "duplicate legacy_ids")
+        return value
+
+
 class EnvironmentContract(CanonicalHash, StrictFrozenModel):
     schema_version: Literal[1]
     contract_version: str = Field(min_length=1)
@@ -462,6 +488,37 @@ class EnvironmentContract(CanonicalHash, StrictFrozenModel):
     code_server_capacity: CodeServerCapacity
     model_seat: ModelSeatContract
     nightly_verdicts: NightlyVerdictsContract
+    metric_applicability: tuple[MetricApplicabilityExclusion, ...] = ()
+
+    @model_validator(mode="after")
+    def _validate_metric_applicability(self) -> Self:
+        seen: set[tuple[str, str, str]] = set()
+        for entry in self.metric_applicability:
+            if entry.universe not in self.universes:
+                raise ValueError(f"metric_applicability names unknown universe {entry.universe!r}")
+            key = (entry.metric, entry.universe, entry.ticker)
+            if key in seen:
+                raise ValueError(f"duplicate metric_applicability entry {key!r}")
+            seen.add(key)
+        return self
+
+    def not_applicable_identities(
+        self, metric: str, universe: str = "topt"
+    ) -> tuple[MetricApplicabilityExclusion, ...]:
+        return tuple(
+            entry for entry in self.metric_applicability if entry.metric == metric and entry.universe == universe
+        )
+
+    def not_applicable_for_universe_id(
+        self, metric: str, universe_id: str | None
+    ) -> tuple[MetricApplicabilityExclusion, ...]:
+        if universe_id is None:
+            return self.not_applicable_identities(metric, "topt")
+        matches = [k for k, r in self.universes.items() if universe_id.startswith(r.id_prefix)]
+        if not matches:
+            return ()
+        key = max(matches, key=lambda k: len(self.universes[k].id_prefix))
+        return self.not_applicable_identities(metric, key)
 
     @model_validator(mode="after")
     def _the_records_agree_with_the_environments(self) -> Self:

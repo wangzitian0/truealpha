@@ -66,7 +66,12 @@ from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 from pathlib import Path
 from typing import Any, Literal
 
-from truealpha_contracts.environment_contract import DAY_SECONDS, UTILIZATION_CEILING, EnvironmentContract
+from truealpha_contracts.environment_contract import (
+    DAY_SECONDS,
+    UTILIZATION_CEILING,
+    EnvironmentContract,
+    load_environment_contract,
+)
 from truealpha_contracts.universes import record
 
 from data_engine.datahub.a1_evidence import ACCEPTED_SERVICE_OBJECTIVES
@@ -243,12 +248,26 @@ limit 1
 
 #: The issuers of the run, and those that the coverage report counts as answered
 #: (`question_coverage._classify_cell`: an available status with a value).
+#: Excludes owner-approved `not_applicable` GPPE issuers declared in `environment_contract.v1.json`.
 GPPE_SQL = """
-select count(distinct issuer_id)::int,
-       (count(distinct issuer_id)
-          filter (where coalesce(availability_status, availability) = 'available' and gppe is not null))::int
-from mart.topt_gppe_results
-where run_id = %s
+select count(distinct r.issuer_id)::int,
+       (count(distinct r.issuer_id)
+          filter (where coalesce(r.availability_status, r.availability) = 'available' and r.gppe is not null))::int
+from mart.topt_gppe_results r
+where r.run_id = %s
+  and not (
+      r.issuer_id = any(%s::text[])
+      or exists (
+          select 1
+          from mart.entity_identity ei
+          where (ei.entity_id::text = r.issuer_id or ei.legacy_id = r.issuer_id)
+            and (
+                ei.cik = any(%s::text[])
+                or upper(coalesce(ei.lei, '')) = any(%s::text[])
+                or ei.legacy_id = any(%s::text[])
+            )
+      )
+  )
 """
 
 #: The numbers of q1 in the newest stored coverage report of the run. The dashboard shows the same report.
@@ -273,8 +292,16 @@ def topt_universe_like() -> str:
     return f"{record('topt').id_prefix}%"
 
 
+def _gppe_not_applicable_params() -> tuple[list[str], list[str], list[str], list[str]]:
+    entries = load_environment_contract().not_applicable_identities("gppe", "topt")
+    legacy_ids = list(dict.fromkeys(legacy_id for entry in entries for legacy_id in entry.legacy_ids))
+    ciks = list(dict.fromkeys(entry.cik for entry in entries))
+    leis = list(dict.fromkeys(entry.lei.upper() for entry in entries))
+    return legacy_ids, ciks, leis, legacy_ids
+
+
 def read_gppe(connection: Any, run_id: str) -> Row:
-    counts = connection.execute(GPPE_SQL, (run_id,)).fetchone()
+    counts = connection.execute(GPPE_SQL, (run_id, *_gppe_not_applicable_params())).fetchone()
     total, available = (0, 0) if counts is None else (int(counts[0]), int(counts[1]))
     reported_row = connection.execute(REPORTED_Q1_SQL, (run_id,)).fetchone()
     reported = None

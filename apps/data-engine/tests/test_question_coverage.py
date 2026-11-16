@@ -442,3 +442,47 @@ def test_reports_current_for_head_requires_both_coverage_and_confidence_reports(
     assert reports_current_for_head(_ReportConnection("capture-run:new", "capture-run:old"), head) is False
     assert reports_current_for_head(_ReportConnection("capture-run:old", "capture-run:new"), head) is False
     assert reports_current_for_head(_ReportConnection("capture-run:new", "capture-run:new"), head) is True
+
+
+def test_gppe_cells_and_classify_question_exclude_contract_not_applicable_issuers() -> None:
+    """Owner Decision 2 (#1664): XOM, V, MA, BRK.B leave Q1 denominator at 16 without masking applicable failures."""
+    applicable = [f"issuer:applicable:{i}" for i in range(16)]
+    exempt = [
+        "issuer:lei:J3WHBG0MTS7O8ZVMDC91",  # XOM
+        "issuer:cik:0001403161",  # V
+        "issuer:cik:0001141391",  # MA
+        "issuer:cik:0001067983",  # BRK.B
+    ]
+    rows = [(issuer, "available", "available", [], Decimal("100"), False) for issuer in applicable] + [
+        (issuer, "unavailable", "unavailable", ["missing_gross_profit"], None, True) for issuer in exempt
+    ]
+    cells = gppe_cells(_Rows(rows), "capture-run:topt", universe_id=TOPT)
+    assert len(cells) == 20
+    assert sum(1 for c in cells if c.not_applicable) == 4
+
+    q1 = classify_question(
+        REQ[Question.Q1_MODEL_LEVERAGE],
+        universe_id=TOPT,
+        issuers=[c.subject_id for c in cells],
+        cells_by_column={"mart.topt_gppe_results.gppe": cells},
+    )
+    assert q1["answered"] == 16
+    assert q1["denominator"] == 16
+    assert q1["unavailable"] == {}
+    assert q1["missing"] == 0
+    assert q1["not_applicable"] == 4
+
+    degraded_rows = [
+        (applicable[0], "unavailable", "unavailable", ["missing_headcount"], None, False),
+        *rows[1:],
+    ]
+    degraded_cells = gppe_cells(_Rows(degraded_rows), "capture-run:topt", universe_id=TOPT)
+    degraded_q1 = classify_question(
+        REQ[Question.Q1_MODEL_LEVERAGE],
+        universe_id=TOPT,
+        issuers=[c.subject_id for c in degraded_cells],
+        cells_by_column={"mart.topt_gppe_results.gppe": degraded_cells},
+    )
+    assert degraded_q1["answered"] == 15
+    assert degraded_q1["denominator"] == 16
+    assert degraded_q1["unavailable"] == {"missing_headcount": 1}
