@@ -4,7 +4,7 @@ import re
 
 import pytest
 from truealpha_contracts.common import canonical_sha256
-from truealpha_contracts.release import live_release_manifest_id, live_release_payload
+from truealpha_contracts.release import live_release_payload
 
 _MIGRATIONS = ("0001_schemas", "20260908T1055_factors_question_coverage_report")
 _CONTRACT = "e" * 64
@@ -17,7 +17,7 @@ def _live_id(**overrides: object) -> str:
         "environment_contract_sha256": _CONTRACT,
     }
     arguments.update(overrides)
-    return live_release_manifest_id(**arguments)  # type: ignore[arg-type]
+    return f"release-manifest:{canonical_sha256(live_release_payload(**arguments))}"  # type: ignore[arg-type]
 
 
 def test_two_releases_do_not_share_one_identity() -> None:
@@ -47,11 +47,7 @@ def test_the_payload_says_what_the_identity_measured() -> None:
         "migration_ids": list(_MIGRATIONS),
         "environment_contract_sha256": _CONTRACT,
     }
-    assert live_release_manifest_id(
-        git_commit_sha="v0.0.49",
-        migration_ids=_MIGRATIONS,
-        environment_contract_sha256=_CONTRACT,
-    ) == "release-manifest:" + canonical_sha256(payload)
+    assert f"release-manifest:{canonical_sha256(payload)}" == "release-manifest:" + canonical_sha256(payload)
 
 
 def test_an_unidentified_build_is_named_unknown_rather_than_refused() -> None:

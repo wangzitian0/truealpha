@@ -274,15 +274,6 @@ class _Cell:
     confidence: Decimal | None = None
 
 
-def latest_run(conn: psycopg.Connection[Any]) -> str:
-    row = conn.execute(
-        "select run_id from mart.topt_capture_status order by cutoff desc, run_id desc limit 1"
-    ).fetchone()
-    if row is None:
-        raise ValueError("no capture run found")
-    return row[0]
-
-
 def _obligation_cell_confidence(
     cell_confidences: Mapping[tuple[str, str], Decimal], obligation_subject: str, semantic_type: str
 ) -> Decimal | None:

@@ -5,18 +5,11 @@ from __future__ import annotations
 import argparse
 import re
 import sys
-from collections.abc import Mapping, Sequence
 from decimal import Decimal
 from hashlib import sha256
-from typing import Any
 
 import psycopg
-from truealpha_contracts.environment_contract import (
-    SentinelKnownAnswer,
-    SentinelKnownAnswersCatalog,
-    load_environment_contract,
-    load_sentinel_known_answers,
-)
+from truealpha_contracts.environment_contract import load_environment_contract
 from truealpha_contracts.universes import id_prefix_like, universe_with_role
 
 from data_engine import release_identity
@@ -24,100 +17,7 @@ from data_engine.config import settings
 from data_engine.datahub.production_topt.source_registrations import registered_semantic_types
 from data_engine.datahub.production_topt.universe_plane import UNIVERSE_SOURCES
 
-_METRIC_ALIASES = {
-    "gross_profit_per_employee": "gppe",
-    "gppe": "gross_profit_per_employee",
-    "employees_total": "headcount",
-    "headcount": "employees_total",
-}
 _WHEEL_PIN = re.compile(r"/releases/download/v(?P<version>\d+\.\d+\.\d+)/infra2_sdk-(?P=version)-py3-none-any\.whl")
-
-
-def evaluate_known_answer(
-    answer: SentinelKnownAnswer,
-    actual_value: Any,
-    *,
-    actual_period_end: str | None = None,
-) -> str | None:
-    if actual_period_end is not None and actual_period_end > answer.period_end:
-        return None
-    label = f"{answer.answer_id} ({answer.ticker} {answer.metric})"
-    if actual_value is None:
-        return f"{label}: value is NULL (accession {answer.accession})"
-    if answer.kind == "exact":
-        return (
-            None
-            if str(actual_value) == str(answer.expected_value)
-            else f"{label}: {actual_value!r} != {answer.expected_value!r} (accession {answer.accession})"
-        )
-    numeric_actual = Decimal(str(actual_value))
-    if answer.kind == "band":
-        lower, upper = Decimal(str(answer.lower_bound)), Decimal(str(answer.upper_bound))
-        return (
-            None
-            if lower <= numeric_actual <= upper
-            else f"{label}: {numeric_actual} outside [{lower}, {upper}] (accession {answer.accession})"
-        )
-    expected = Decimal(str(answer.expected_value))
-    tolerance = Decimal(str(answer.relative_tolerance))
-    if expected == 0:
-        return None if numeric_actual == 0 else f"{label}: {numeric_actual} != 0"
-    relative_error = abs(numeric_actual - expected) / abs(expected)
-    if relative_error > tolerance:
-        return f"{label}: {numeric_actual} differs from {expected} by {relative_error:.4f} > {tolerance} (accession {answer.accession})"
-    return None
-
-
-def evaluate_sentinel_known_answers(
-    rows_by_issuer: Mapping[str, Mapping[str, Any]],
-    *,
-    catalog: SentinelKnownAnswersCatalog | None = None,
-    require_all_issuers: bool = False,
-) -> list[str]:
-    resolved_catalog = catalog or load_sentinel_known_answers()
-    failures: list[str] = []
-    for answer in resolved_catalog.answers:
-        row = rows_by_issuer.get(answer.issuer_id) or rows_by_issuer.get(answer.cik)
-        if row is None:
-            if require_all_issuers:
-                failures.append(f"{answer.answer_id} ({answer.ticker}): issuer {answer.issuer_id} missing")
-            continue
-        metric_key = answer.metric if answer.metric in row else _METRIC_ALIASES.get(answer.metric, "")
-        if not metric_key or metric_key not in row:
-            continue
-        period_key = f"{metric_key}_period_end"
-        actual_period = str(row[period_key]) if row.get(period_key) is not None else None
-        if (verdict := evaluate_known_answer(answer, row.get(metric_key), actual_period_end=actual_period)) is not None:
-            failures.append(verdict)
-    return failures
-
-
-def evaluate_negative_theme_classifications(
-    theme_shares: Sequence[Mapping[str, Any]],
-    *,
-    catalog: SentinelKnownAnswersCatalog | None = None,
-) -> list[str]:
-    resolved_catalog = catalog or load_sentinel_known_answers()
-    by_issuer_theme: dict[tuple[str, str], Decimal] = {}
-    for entry in theme_shares:
-        issuer = str(entry.get("issuer_id") or entry.get("cik") or "")
-        theme = str(entry.get("theme_key") or "")
-        share = Decimal(str(entry.get("theme_share") or "0"))
-        if issuer and theme:
-            by_issuer_theme[(issuer, theme)] = share
-            if issuer.startswith("issuer:cik:"):
-                by_issuer_theme[(issuer.removeprefix("issuer:cik:"), theme)] = share
-    failures: list[str] = []
-    for neg in resolved_catalog.negative_theme_classifications:
-        actual = by_issuer_theme.get((neg.issuer_id, neg.theme_key))
-        if actual is None:
-            actual = by_issuer_theme.get((neg.cik, neg.theme_key))
-        if actual is not None and actual > (max_share := Decimal(neg.max_theme_share)):
-            failures.append(
-                f"{neg.answer_id} ({neg.ticker} {neg.theme_key}): "
-                f"theme_share {actual} > max {max_share} (accession {neg.accession})"
-            )
-    return failures
 
 
 def pinned_infra2_sdk() -> str:

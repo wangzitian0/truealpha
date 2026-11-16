@@ -152,16 +152,3 @@ def judge_strategy(
         else None
     )
     return replace(verdict, run_refusals=(*verdict.run_refusals, *empty_eligible_set(outcomes, l2_complete)))
-
-
-def judge_run(
-    connection: Any,
-    *,
-    run_id: str,
-    strategy_run_id: str | None = None,
-    l2_complete: int | None = None,
-    exemptions_path: Path | None = None,
-    today: date | None = None,
-) -> Verdict:
-    verdict = judge_issuers(connection, run_id=run_id, exemptions_path=exemptions_path, today=today)
-    return judge_strategy(connection, verdict, strategy_run_id=strategy_run_id, l2_complete=l2_complete)

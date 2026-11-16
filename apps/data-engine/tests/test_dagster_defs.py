@@ -28,10 +28,8 @@ import pytest
 from data_engine import dagster_defs
 from data_engine.config import settings
 from data_engine.dagster_defs import (
-    CORE_STRATEGY_FIXTURE_CANARY_JOB_NAME,
     ToptLiveTickConfig,
     defs,
-    fixture_canary_definitions,
     run_topt_live_tick,
     topt_live_schedule,
 )
@@ -67,7 +65,6 @@ def test_defs_is_exactly_the_union_of_the_registered_lanes() -> None:
         declared = set().union(*(names(lane, attribute) for lane in lanes.values()))
         assert names(defs, attribute) == declared, f"root {attribute} != union of lane {attribute}"
     assert names(defs, "jobs"), "the lanes declare no job at all"
-    assert CORE_STRATEGY_FIXTURE_CANARY_JOB_NAME not in names(defs, "jobs")
     # Sensors target jobs from another lane (triggers -> capture); the merged
     # repository must resolve them, which only the repository build proves.
     defs.get_repository_def()
@@ -110,13 +107,9 @@ def test_every_definition_a_lane_module_declares_is_in_its_defs() -> None:
 
 
 def test_deployed_module_contains_no_fixture_seeding() -> None:
-    # The deployed op must never seed golden-fixture inputs. The retired fixture
-    # seeder is only reachable inside the explicitly named tests-only factory.
     op_source = inspect.getsource(dagster_defs.run_topt_live_tick)
     assert "seed_strategy_backtest_inputs" not in op_source
     assert "_load_corpus" not in op_source
-    # Module-level imports carry no fixture seeder either — it is imported lazily
-    # inside fixture_canary_definitions() alone.
     assert not hasattr(dagster_defs, "seed_strategy_backtest_inputs")
 
 
@@ -157,14 +150,6 @@ def test_live_version_is_tick_deterministic() -> None:
     assert live_version_for(tick) == "live-20260720T0615"
     assert live_version_for(tick) == live_version_for(tick)  # retry-stable
     assert live_version_for(datetime(2026, 7, 20, 7, 15, 0, tzinfo=UTC)) != live_version_for(tick)
-
-
-def test_fixture_canary_stays_buildable_and_explicitly_named() -> None:
-    # The retired fixture path remains provable in tests, under a name that cannot
-    # be mistaken for a real-source run.
-    fixture_defs = fixture_canary_definitions()
-    assert fixture_defs.get_job_def(CORE_STRATEGY_FIXTURE_CANARY_JOB_NAME) is not None
-    assert "fixture" in CORE_STRATEGY_FIXTURE_CANARY_JOB_NAME
 
 
 def test_packaged_corpus_matches_the_tests_fixture_byte_for_byte() -> None:

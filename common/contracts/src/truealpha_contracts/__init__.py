@@ -101,7 +101,6 @@ from truealpha_contracts.research_report import (
     ResearchReportRequest,
     ResultValue,
     build_research_report,
-    render_report_json,
     render_report_markdown,
 )
 from truealpha_contracts.research_report_mart import MartResearchReadRepository
@@ -277,6 +276,5 @@ __all__ = [
     "reconcile_source_assertions",
     "render_card_html",
     "render_card_json",
-    "render_report_json",
     "render_report_markdown",
 ]

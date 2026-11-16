@@ -62,23 +62,6 @@ def persist_run_report(
     return report_id
 
 
-def latest_report_row(
-    connection: Connection[Any],
-    table: str,
-    *,
-    universe_id: str | None = None,
-) -> Any:
-    """The newest report row of `table`, optionally narrowed to one universe."""
-    table_identifier = sql.Identifier(*table.split("."))
-    if universe_id is None:
-        statement = sql.SQL("select * from {table} order by created_at desc limit 1").format(table=table_identifier)
-        return connection.execute(statement).fetchone()
-    statement = sql.SQL("select * from {table} where universe_id = %s order by created_at desc limit 1").format(
-        table=table_identifier
-    )
-    return connection.execute(statement, (universe_id,)).fetchone()
-
-
 @dataclass(frozen=True)
 class ToptCaptureStatus:
     run_id: str

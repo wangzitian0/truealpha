@@ -6,12 +6,9 @@ import pytest
 from factors.confidence import (
     evaluate_cell_confidence,
     evaluate_continuous_confidence,
-    verify_confidence_calibration_report,
 )
 from pydantic import ValidationError
 from truealpha_contracts.confidence import (
-    ConfidenceCalibrationReport,
-    ConfidenceCalibrationScenario,
     ContinuousConfidenceInput,
     ContinuousConfidencePolicy,
     SourceConfidenceEvidence,
@@ -40,37 +37,6 @@ def _input(case_id: str) -> ContinuousConfidenceInput:
         lineage_completeness="1",
         required_component_completeness="1",
     )
-
-
-def test_report_verifier_recomputes_each_evaluation_from_its_exact_input() -> None:
-    policy = ContinuousConfidencePolicy()
-    confidence_input = _input("case:recomputed")
-    evaluation = evaluate_continuous_confidence(policy, confidence_input)
-    forged = type(evaluation)(
-        **{
-            **evaluation.model_dump(mode="python", exclude={"evaluation_id", "content_sha256", "source_support"}),
-            "source_support": evaluation.source_support - Decimal("0.000001"),
-        }
-    )
-    report = ConfidenceCalibrationReport(
-        policy=policy,
-        denominator_id="universe:test",
-        denominator_size=1,
-        empirically_observed_subject_ids=(),
-        scenarios=(
-            ConfidenceCalibrationScenario(
-                scenario_id=confidence_input.case_id,
-                evidence_class="sensitivity",
-                expected_effect="The verifier must reject a denormalized decomposition.",
-                input=confidence_input,
-                evaluation=forged,
-            ),
-        ),
-        limitations=("test-only",),
-    )
-
-    with pytest.raises(ValueError, match="exactly reproduce"):
-        verify_confidence_calibration_report(report)
 
 
 def test_the_evaluation_has_one_scale_and_no_score_100() -> None:

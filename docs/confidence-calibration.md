@@ -6,7 +6,7 @@ freshness, semantic quality, lineage, completeness, and conflict. It is not a
 Production threshold or a claim that the full TOPT universe is calibrated.
 
 Implementation (#1333, #1352): `common/factors/src/factors/confidence.py`
-(`evaluate_continuous_confidence` and `verify_confidence_calibration_report`) is
+(`evaluate_continuous_confidence`) is
 called by `apps/data-engine/src/data_engine/datahub/confidence_report.py` on
 every governed head to compute one deterministic `confidence` from 0 to 1 for each
 cell. The DTOs live in `common/contracts/src/truealpha_contracts/confidence.py`.
@@ -50,8 +50,7 @@ confidence = S * agreement^0.35
 
 The policy, exact evidence inputs, origin-group selection, decomposition, and
 report are content-addressed in the DTOs of `common/contracts`. The formula
-implementation (`evaluate_continuous_confidence`) and the report verifier
-(`verify_confidence_calibration_report`) live in `common/factors/src/factors/confidence.py`,
+implementation (`evaluate_continuous_confidence`) lives in `common/factors/src/factors/confidence.py`,
 so computation stays out of the contracts and application layers. It uses `Decimal`
 and rejects binary floats.
 Freshness, availability, applicability, quality state, and reason codes remain

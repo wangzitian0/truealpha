@@ -577,7 +577,7 @@ def test_the_ledger_insert_maps_each_value_to_its_own_column(world, call_ledger,
     ask(Transport([(429, rate_limited("1302")), (200, OK_BODY)], world))
     rows = []
     for record in call_ledger:
-        sql, params = gateway._insert_statement(record)
+        sql, params = gateway._insert_ladder(record)[0]
         columns = _columns(sql)
         assert len(columns) == len(params), "one value for each column"
         rows.append(dict(zip(columns, params, strict=True)))
@@ -617,8 +617,8 @@ def test_an_unknown_column_is_a_statement_error_and_is_not_asked_again(monkeypat
 
 def test_a_row_of_another_source_does_not_depend_on_a_migrated_column() -> None:
     record = gateway.CallRecord(source="sec", endpoint="submissions", caller="t", called_at=datetime.now(UTC))
-    sql, params = gateway._insert_statement(record)
-    assert sql == gateway._INSERT_SQL and params == gateway._insert_params(record)
+    sql, params = gateway._insert_ladder(record)[0]
+    assert sql == gateway._INSERT_SQL and params == tuple(gateway._value(record, c) for c in gateway._BASE_COLUMNS)
     assert len(params) == len(_columns(gateway._INSERT_SQL))
 
 
@@ -628,9 +628,9 @@ def test_each_group_of_migrated_columns_is_written_only_by_a_record_that_sets_on
     attempt = gateway.CallRecord(source=llm.SOURCE, endpoint="e", caller="t", called_at=called_at, attempt=1)
     keyed = gateway.CallRecord(source="sec", endpoint="e", caller="t", called_at=called_at, fetch_key="k")
     both = gateway.CallRecord(source="x", endpoint="e", caller="t", called_at=called_at, attempt=2, fetch_key="k")
-    assert gateway._insert_statement(attempt)[0] == gateway._INSERT_ATTEMPT_SQL
-    assert gateway._insert_statement(keyed)[0] == gateway._INSERT_KEYED_SQL
-    sql, params = gateway._insert_statement(both)
+    assert gateway._insert_ladder(attempt)[0][0] == gateway._INSERT_ATTEMPT_SQL
+    assert gateway._insert_ladder(keyed)[0][0] == gateway._INSERT_KEYED_SQL
+    sql, params = gateway._insert_ladder(both)[0]
     assert _columns(sql) == [*gateway._BASE_COLUMNS, *gateway._ATTEMPT_COLUMNS, *gateway._KEY_COLUMNS]
     assert len(params) == len(_columns(sql)) and params[-1] == "k" and params[len(gateway._BASE_COLUMNS)] == 2
 

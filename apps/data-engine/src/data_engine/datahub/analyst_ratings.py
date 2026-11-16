@@ -30,10 +30,8 @@ __all__ = (
     "AnalystRatingItem",
     "AnalystTrackRecord",
     "FetchFailure",
-    "TickerCapture",
     "UniverseCapture",
     "analyst_track_record",
-    "capture_ticker_analyst_ratings",
     "materialize_analyst_ratings",
     "materialize_universe_analyst_ratings",
     "parse_rating_summary",
@@ -76,12 +74,6 @@ MAX_FAILURES_LOGGED = 20
 class FetchFailure:
     ticker: str
     error: str
-
-
-@dataclass(frozen=True)
-class TickerCapture:
-    rows: int
-    failure: FetchFailure | None = None
 
 
 @dataclass(frozen=True)
@@ -253,11 +245,6 @@ def _latest_rating_point_before_cutoff(items: object, cutoff_iso: str) -> tuple[
         if point is not None and (latest is None or point[0] >= latest[0]):
             latest = point
     return latest
-
-
-def _latest_rating_before_cutoff(items: object, cutoff_iso: str) -> int | None:
-    point = _latest_rating_point_before_cutoff(items, cutoff_iso)
-    return point[1] if point is not None else None
 
 
 def parse_rating_summary(payload: object, *, as_of: datetime) -> list[AnalystRatingItem]:
@@ -453,26 +440,6 @@ def _ticker_row(
         as_of=as_of,
     )
     return consensus_row, None
-
-
-def capture_ticker_analyst_ratings(
-    ctx: Any,
-    *,
-    ticker: str,
-    company_id: str,
-    connection: Connection[Any],
-    run_id: str,
-    cutoff: datetime | None = None,
-    raw_store: Any | None = None,
-    open_error: Exception | None = None,
-    log_traceback: bool = True,
-) -> TickerCapture:
-    as_of = cutoff or datetime.now(tz=UTC)
-    row, failure = _ticker_row(
-        ctx, ticker=ticker, company_id=company_id, as_of=as_of, open_error=open_error, log_traceback=log_traceback
-    )
-    rows = materialize_analyst_ratings(connection, run_id=run_id, cutoff=as_of, ratings_data=[row])
-    return TickerCapture(rows=rows, failure=failure)
 
 
 def _persist_analyst_rating_events(

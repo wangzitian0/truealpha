@@ -107,14 +107,6 @@ def get_rating_summary(
     )
 
 
-def get_market_rating_changes(
-    ctx, *, count: int = 10, page: str | None = None, caller: str = "probe_moomoo_capabilities", identity: FetchKey
-):
-    return _call_method(
-        ctx, "get_rating_change", moomoo.Market.US, count=count, page=page, caller=caller, identity=identity
-    )
-
-
 def get_company_profile(ctx, code: str, *, caller: str = "probe_moomoo_capabilities", identity: FetchKey):
     return _call_method(ctx, "get_company_profile", code, caller=caller, identity=identity)
 

@@ -9,8 +9,6 @@ from __future__ import annotations
 import re
 from collections.abc import Sequence
 
-from truealpha_contracts.common import canonical_sha256
-
 LIVE_RELEASE_KIND = "production-topt-live-release"
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -42,23 +40,7 @@ def live_release_payload(
     }
 
 
-def live_release_manifest_id(
-    *,
-    git_commit_sha: str,
-    migration_ids: Sequence[str],
-    environment_contract_sha256: str,
-) -> str:
-    """Return ``release-manifest:<sha256>`` over the measured payload."""
-    payload = live_release_payload(
-        git_commit_sha=git_commit_sha,
-        migration_ids=migration_ids,
-        environment_contract_sha256=environment_contract_sha256,
-    )
-    return f"release-manifest:{canonical_sha256(payload)}"
-
-
 __all__ = [
     "LIVE_RELEASE_KIND",
-    "live_release_manifest_id",
     "live_release_payload",
 ]

@@ -289,10 +289,6 @@ def _value(record: CallRecord, column: str) -> Any:
     return getattr(record, column)
 
 
-def _insert_params(record: CallRecord) -> tuple:
-    return tuple(_value(record, column) for column in _BASE_COLUMNS)
-
-
 def _insert_ladder(record: CallRecord) -> list[tuple[str, tuple]]:
     groups = [group for group in _OPTIONAL_GROUPS if any(getattr(record, column) is not None for column in group)]
     ladder: list[tuple[str, tuple]] = []
@@ -300,10 +296,6 @@ def _insert_ladder(record: CallRecord) -> list[tuple[str, tuple]]:
         columns: tuple[str, ...] = _BASE_COLUMNS + tuple(column for group in groups[:kept] for column in group)
         ladder.append((_statement(columns), tuple(_value(record, column) for column in columns)))
     return ladder
-
-
-def _insert_statement(record: CallRecord) -> tuple[str, tuple]:
-    return _insert_ladder(record)[0]
 
 
 def postgres_writer(record: CallRecord) -> None:

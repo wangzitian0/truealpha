@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass
 from datetime import date, timedelta
 
-__all__ = ["ANNUAL_MINIMUM_DAYS", "FiscalPeriod", "encode_annual", "format_pattern", "parse_annual"]
+__all__ = ["ANNUAL_MINIMUM_DAYS", "FiscalPeriod", "encode_annual", "parse_annual"]
 
 ANNUAL_MINIMUM_DAYS = 350
 _TAG = re.compile(
@@ -51,7 +51,3 @@ def parse_annual(tag: str) -> FiscalPeriod | None:
         end=date.fromisoformat(matched["end"]),
     )
     return period if period.is_annual else None
-
-
-def format_pattern() -> str:
-    return _TAG.pattern

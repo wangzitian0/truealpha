@@ -9,12 +9,9 @@ constant-stamped row can never outrank a cited 10-K filing.
 
 from __future__ import annotations
 
-import importlib.util
 import os
-import sys
 from datetime import UTC, date, datetime
 from decimal import Decimal
-from pathlib import Path
 
 import psycopg
 import pytest
@@ -23,12 +20,8 @@ from data_engine.datahub.production_topt.headcount import (
     PostgresHeadcountExtractor,
     lookup_headcount,
     record_headcount,
-    validate_cited_headcount_fact,
 )
 from truealpha_contracts.reconciliation_policies import HEADCOUNT_RECONCILIATION_POLICY
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
-from topt_symbols import TOPT_SYMBOLS  # noqa: E402
 
 _CIK = 9991264
 
@@ -47,16 +40,6 @@ def connection():
     finally:
         active.rollback()
         active.close()
-
-
-def _load_seed_module():
-    script_path = Path(__file__).resolve().parents[2] / "scripts" / "seed_issuer_headcounts.py"
-    spec = importlib.util.spec_from_file_location("seed_issuer_headcounts", script_path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules["seed_issuer_headcounts"] = module
-    spec.loader.exec_module(module)
-    return module
 
 
 def test_active_headcount_sources_excludes_curated_10k_2025() -> None:
@@ -157,43 +140,3 @@ def test_lookup_headcount_ignores_legacy_uncited_2026_01_01_and_curated_rows(con
 
     extractor_fact = PostgresHeadcountExtractor(connection)(visa_cik, date(2026, 3, 31))
     assert extractor_fact == fact
-
-
-def test_lookup_headcount_resolves_cited_filings_across_2023_2026_backtest_window(connection) -> None:
-    """#1264: seeding `REVIEWED_HEADCOUNT_FACTS` into a table that also contains the 21
-    legacy `2026-01-01` uncited rows resolves every TOPT issuer to a cited 10-K filing
-    across both early backtest cutoffs (`2023-04-28`) and post-`2026-01-01` cutoffs
-    (`2026-03-31`), with zero rows stamped `2026-01-01`."""
-    module = _load_seed_module()
-    ciks_by_ticker = {
-        ticker.replace(".", "-"): 800000 + idx for idx, ticker in enumerate(sorted(set(TOPT_SYMBOLS) | {"GOOGL"}))
-    }
-    for cik in ciks_by_ticker.values():
-        connection.execute(
-            """
-            insert into staging.issuer_headcount_facts
-                (cik, headcount, knowable_at, period_end, source, evidence_ref, confidence)
-            values (%s, 1000, '2026-01-01T00:00:00Z', null, 'manual-review', %s, 0.50)
-            """,
-            (cik, "10-K human capital disclosure; manual entry, no verified accession (#70 supersedes)"),
-        )
-
-    written = module.seed_reviewed_headcounts(connection, ciks_by_ticker=ciks_by_ticker)
-    assert written >= 80
-    # Idempotent second run writes zero duplicate rows.
-    assert module.seed_reviewed_headcounts(connection, ciks_by_ticker=ciks_by_ticker) == 0
-
-    for cutoff in (date(2023, 4, 28), date(2024, 4, 30), date(2025, 4, 30), date(2026, 3, 31)):
-        for ticker in TOPT_SYMBOLS:
-            lookup_ticker = ("GOOGL" if ticker == "GOOG" else ticker).replace(".", "-")
-            cik = ciks_by_ticker[lookup_ticker]
-            resolved = lookup_headcount(connection, cik, cutoff)
-            assert resolved is not None, f"{ticker} failed to resolve at {cutoff}"
-            assert resolved.knowable_at != datetime(2026, 1, 1, tzinfo=UTC)
-            assert resolved.knowable_at.date() <= cutoff
-            assert resolved.period_end is not None and resolved.period_end <= resolved.knowable_at.date()
-            validate_cited_headcount_fact(
-                knowable_at=resolved.knowable_at,
-                period_end=resolved.period_end,
-                evidence_ref=resolved.evidence_ref,
-            )

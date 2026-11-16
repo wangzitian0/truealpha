@@ -26,7 +26,6 @@ from data_engine.config import settings
 from data_engine.datahub.analyst_ratings import (
     FetchFailure,
     UniverseCapture,
-    capture_ticker_analyst_ratings,
     materialize_analyst_ratings,
     materialize_universe_analyst_ratings,
 )
@@ -232,15 +231,15 @@ def test_a_real_consensus_response_becomes_an_available_row(
 ) -> None:
     conn = _MockConnection()
     ctx = _FakeQuoteContext({f"US.{ticker}": _sample(ticker)})
-    res = capture_ticker_analyst_ratings(
-        ctx=ctx,
-        ticker=ticker,
-        company_id=_issuer_id(ticker.lower()),
-        connection=conn,
+    res = materialize_universe_analyst_ratings(
+        conn,
         run_id="run:test",
+        cutoff=CUTOFF,
+        tickers={_issuer_id(ticker.lower()): ticker},
+        ctx=ctx,
     )
     assert res.rows == 1
-    assert res.failure is None
+    assert not res.failures
     assert ctx.codes == [f"US.{ticker}"]
     assert len(call_ledger) == 1
     assert len(conn.executed) == 1
@@ -291,15 +290,15 @@ def test_a_response_without_a_consensus_becomes_an_unavailable_row_with_a_reason
     no coverage. A non-empty payload that lacks a field is a contract error, tested below."""
     conn = _MockConnection()
     ctx = _FakeQuoteContext({"US.XYZ": payload})
-    res = capture_ticker_analyst_ratings(
-        ctx=ctx,
-        ticker="XYZ",
-        company_id=_issuer_id("xyz"),
-        connection=conn,
+    res = materialize_universe_analyst_ratings(
+        conn,
         run_id="run:test",
+        cutoff=CUTOFF,
+        tickers={_issuer_id("xyz"): "XYZ"},
+        ctx=ctx,
     )
     assert res.rows == 1
-    assert res.failure is None, "no coverage is not a fetch error"
+    assert not res.failures, "no coverage is not a fetch error"
     _, params = conn.executed[0]
     assert params[1] == _issuer_id("xyz")
     assert params[3] is None, "Fabricated rating without a consensus!"
@@ -310,14 +309,14 @@ def test_a_response_without_a_consensus_becomes_an_unavailable_row_with_a_reason
 
 def _capture(payload: Any):
     conn = _MockConnection()
-    res = capture_ticker_analyst_ratings(
-        ctx=_FakeQuoteContext({"US.XYZ": payload}),
-        ticker="XYZ",
-        company_id=_issuer_id("xyz"),
-        connection=conn,
+    res = materialize_universe_analyst_ratings(
+        conn,
         run_id="run:test",
+        cutoff=CUTOFF,
+        tickers={_issuer_id("xyz"): "XYZ"},
+        ctx=_FakeQuoteContext({"US.XYZ": payload}),
     )
-    return res, conn.executed[0][1]
+    return SimpleNamespace(rows=res.rows, failure=res.failures[0] if res.failures else None), conn.executed[0][1]
 
 
 @pytest.mark.parametrize(
@@ -598,10 +597,6 @@ class _FailingWrite(_MockConnection):
 )
 def test_a_write_error_is_not_a_fetch_error_and_is_not_swallowed(payload) -> None:
     ctx = _FakeQuoteContext({"US.DDOG": payload})
-    with pytest.raises(psycopg.OperationalError, match="write failed"):
-        capture_ticker_analyst_ratings(
-            ctx=ctx, ticker="DDOG", company_id=DDOG, connection=_FailingWrite(), run_id="run:test"
-        )
     with pytest.raises(psycopg.OperationalError, match="write failed"):
         materialize_universe_analyst_ratings(
             _FailingWrite(), run_id="run:test", cutoff=CUTOFF, tickers={DDOG: "DDOG"}, ctx=ctx
@@ -1660,16 +1655,15 @@ def test_rating_summary_and_valuation_detail_enrich_consensus_with_pit_vendor_ti
             )
 
     conn = _MockConnection()
-    res = capture_ticker_analyst_ratings(
-        ctx=_FullQuoteContext(),
-        ticker="DDOG",
-        company_id=DDOG,
-        connection=conn,
+    res = materialize_universe_analyst_ratings(
+        conn,
         run_id="run:rich",
         cutoff=cutoff,
+        tickers={DDOG: "DDOG"},
+        ctx=_FullQuoteContext(),
     )
     assert res.rows == 1
-    assert res.failure is None
+    assert not res.failures
     _, params = conn.executed[0]
     assert params[3] == Decimal("4.5"), "continuous track-record rating replaces coarse integer 4"
     assert "vendor_timestamp" in params[9]

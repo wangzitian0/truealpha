@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
@@ -152,10 +151,6 @@ def build_research_report(
         generated_from=repository.provenance_label,
         subjects=selected,
     )
-
-
-def render_report_json(report: ResearchReport) -> str:
-    return json.dumps(report.model_dump(mode="json"), sort_keys=True, indent=2, ensure_ascii=True) + "\n"
 
 
 def _render_result_row(r: ResultValue) -> str:

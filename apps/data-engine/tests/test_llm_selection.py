@@ -10,7 +10,15 @@ from decimal import Decimal
 import pytest
 from data_engine.config import settings
 from data_engine.sources import gateway
-from data_engine.sources.llm import PROMPT_SHA256, Candidate, ModelNotConfigured, build_request, select_headcount
+from data_engine.sources.llm import (
+    HEADCOUNT_TASK,
+    PROMPT_SHA256,
+    Candidate,
+    ModelNotConfigured,
+    _headcount_user_content,
+    build_chat_request,
+    select_headcount,
+)
 
 AEP = [
     Candidate(17581, "As of December 31, 2025, the subsidiaries of AEP had a total of 17,581 employees."),
@@ -70,7 +78,7 @@ def test_no_provider_seated_is_an_explicit_refusal(monkeypatch):
 
 
 def test_the_request_binds_decoding_settings_and_the_instructions_are_content_addressed():
-    request = build_request("AEP", "10-K", AEP, model="glm-test")
+    request = build_chat_request(HEADCOUNT_TASK, _headcount_user_content("AEP", "10-K", AEP), model="glm-test")
     assert request["temperature"] == 0 and request["thinking"] == {"type": "disabled"}
     assert request["response_format"] == {"type": "json_object"}
     assert "17,581" in request["messages"][1]["content"] and "[1] 6,994" in request["messages"][1]["content"]

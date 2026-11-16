@@ -49,18 +49,20 @@ class SurfaceUnreachable(Exception):
     """The surface under test did not answer."""
 
 
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, *arguments: object, **keywords: object) -> None:
-        return None
-
-
 def fetch(
     url: str,
     method: str = "GET",
     payload: dict[str, object] | None = None,
     extra_headers: dict[str, str] | None = None,
 ) -> Response:
-    opener = urllib.request.build_opener(_NoRedirect)
+    opener = urllib.request.OpenerDirector()
+    for handler in (
+        urllib.request.UnknownHandler(),
+        urllib.request.HTTPHandler(),
+        urllib.request.HTTPSHandler(),
+        urllib.request.HTTPDefaultErrorHandler(),
+    ):
+        opener.add_handler(handler)
     headers = {"User-Agent": USER_AGENT, **(extra_headers or {})}
     data = None
     if payload is not None:

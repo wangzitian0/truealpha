@@ -26,15 +26,10 @@ steps wait for the same condition and work for seconds, so one after the other c
 `MonitoredRunLauncher` below makes that module statically reachable too, and
 `test_dagster_instance_config.py` holds the name in `dagster.yaml` equal to this class.
 
-No fixture data is seeded anywhere in the deployed composition (#429 invariant I2);
-the retired fixture-seeded canary lives in `fixture_canary_definitions()` — an
-explicitly named, tests-only composition that is NOT part of the deployed `defs`.
+No fixture data is seeded anywhere in the deployed composition (#429 invariant I2).
 """
 
-from datetime import datetime
-
 import dagster as dg
-import psycopg
 from truealpha_runtime.telemetry import init_telemetry
 
 from data_engine.config import settings
@@ -82,7 +77,6 @@ from data_engine.run_launcher import MonitoredRunLauncher
 
 __all__ = [
     "CANARY_JOB_NAME",
-    "CORE_STRATEGY_FIXTURE_CANARY_JOB_NAME",
     "ENTITY_BACKFILL_JOB_NAME",
     "FORM4_DAILY_CRON",
     "FORM4_DAILY_SCHEDULE_NAME",
@@ -108,7 +102,6 @@ __all__ = [
     "canary_daily_schedule",
     "defs",
     "entity_identity_backfill_sensor",
-    "fixture_canary_definitions",
     "form4_daily_schedule",
     "nport_monthly_schedule",
     "pipeline_trigger_sensor",
@@ -142,48 +135,3 @@ def build_definitions(app_env: str = settings.app_env) -> dg.Definitions:
 
 
 defs = with_in_process_executor(dg.Definitions.merge(*lane_definitions().values()))
-
-
-# -- retired fixture canary (tests only; never deployed) -------------------------------
-
-CORE_STRATEGY_FIXTURE_CANARY_JOB_NAME = "core_strategy_fixture_canary"
-
-
-def fixture_canary_definitions() -> dg.Definitions:
-    """The retired golden-fixture canary, explicitly named as a fixture (#429 I2).
-
-    Kept ONLY so tests can prove the fixture path still replays deterministically;
-    it is deliberately excluded from the deployed `defs` above — the deployed job
-    graph contains no fixture seeding.
-    """
-    import json
-
-    from truealpha_contracts.strategy import LargeModelValueV0Definition
-
-    from data_engine.core_strategy_replay import _load_corpus
-    from data_engine.strategy_backtest_gateway import run_backtest_from_staging, seed_strategy_backtest_inputs
-    from data_engine.strategy_replay_repository import write_replay
-
-    class FixtureCanaryConfig(dg.Config):
-        executed_at: str
-
-    @dg.op
-    def run_core_strategy_fixture_canary(context: dg.OpExecutionContext, config: FixtureCanaryConfig) -> str:
-        executed_at = datetime.fromisoformat(config.executed_at)
-        corpus = _load_corpus()
-        definition = LargeModelValueV0Definition.model_validate_json(json.dumps(corpus["strategy_definition"]))
-        with psycopg.connect(settings.database_url) as connection:
-            seed_strategy_backtest_inputs(connection, corpus)
-            decisions, snapshot_id = run_backtest_from_staging(connection, corpus, definition)
-            run_id, decision_ids = write_replay(
-                connection, decisions, definition, executed_at=executed_at, snapshot_id=snapshot_id
-            )
-            connection.commit()
-        context.log.info(f"fixture canary: run {run_id}, {len(decision_ids)} decisions")
-        return run_id
-
-    @dg.job(name=CORE_STRATEGY_FIXTURE_CANARY_JOB_NAME)
-    def core_strategy_fixture_canary_job() -> None:
-        run_core_strategy_fixture_canary()
-
-    return dg.Definitions(jobs=[core_strategy_fixture_canary_job])

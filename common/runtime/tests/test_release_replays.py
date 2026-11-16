@@ -75,10 +75,36 @@ def test_the_projector_identity_watches_the_history_projector() -> None:
     assert "apps/data-engine/src/data_engine/datahub/strategy_history.py" in projector["paths"]
 
 
+def _newest_release_tag(target: str = "HEAD") -> tuple[str, str] | None:
+    import re
+    import subprocess
+
+    tag_pattern = re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+$")
+    listed = subprocess.run(
+        ["git", "tag", "--list", "v[0-9]*.[0-9]*.[0-9]*"], capture_output=True, text=True, check=False
+    )
+    candidates = [line.strip() for line in listed.stdout.splitlines() if tag_pattern.match(line.strip())]
+    for name in sorted(candidates, key=lambda n: tuple(int(p) for p in n[1:].split(".")), reverse=True):
+        peeled = subprocess.run(
+            ["git", "rev-parse", "--verify", "--quiet", f"refs/tags/{name}^{{commit}}"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        sha = peeled.stdout.strip()
+        if peeled.returncode == 0 and sha:
+            ancestor = subprocess.run(
+                ["git", "merge-base", "--is-ancestor", sha, target], capture_output=True, text=True, check=False
+            )
+            if ancestor.returncode == 0:
+                return name, sha
+    return None
+
+
 def test_the_working_tree_declares_replays_since_the_newest_release_tag() -> None:
     """#1412 R4: a PR or commit that changes a watched identity without adding a replay entry
     fails here before merge, instead of breaking `auto-release-staging` after merge."""
-    resolved = _module.newest_release_tag("HEAD")
+    resolved = _newest_release_tag("HEAD")
     assert resolved is not None, "no vX.Y.Z release tag is reachable from HEAD"
     base_tag, base_sha = resolved
 
@@ -92,7 +118,7 @@ def test_the_working_tree_declares_replays_since_the_newest_release_tag() -> Non
 def test_removing_the_replay_entry_for_a_changed_identity_since_the_newest_tag_fails() -> None:
     """Falsifiability proof for the PR-time replay check (#1412): when an identity changed
     since the newest release tag, dropping its new replay entry raises `ReplayError`."""
-    resolved = _module.newest_release_tag("HEAD")
+    resolved = _newest_release_tag("HEAD")
     assert resolved is not None, "no vX.Y.Z release tag is reachable from HEAD"
     base_tag, base_sha = resolved
     base_decl = _module.parse_declaration(_module.git_show(base_sha, _module.DECLARATION), base_sha)

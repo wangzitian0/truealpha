@@ -152,24 +152,6 @@ class FailoverDrill:
 
         return drilled_fetch
 
-    def plan_stamp(self, coordinates: Mapping[str, tuple[str, str, str, str]], cells: int) -> dict[str, Any]:
-        listings = {coordinate[3]: subject_id for subject_id, coordinate in coordinates.items()}
-        missing = sorted(set(self.tickers) - set(listings))
-        if missing:
-            raise DrillRefused(f"drill tickers not in this run's universe: {', '.join(missing)}")
-        return {
-            "kind": self.kind.value,
-            "tickers": list(self.tickers),
-            "listing_ids": sorted(listings[ticker] for ticker in self.tickers),
-            "origins_down": list(self.origins_down),
-            "cells": cells,
-        }
-
-
-def drill_capture_version(version: str, drill: FailoverDrill) -> str:
-    suffix = f"-drill-{drill.identity[:12]}"
-    return version if version.endswith(suffix) else f"{version}{suffix}"
-
 
 def verdict(
     stamp: Mapping[str, Any], cells: Mapping[str, Mapping[str, Any]], served_by_failover: int

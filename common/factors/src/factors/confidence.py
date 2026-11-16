@@ -9,7 +9,6 @@ from decimal import ROUND_HALF_EVEN, Context, Decimal, DivisionByZero, InvalidOp
 
 from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.confidence import (
-    ConfidenceCalibrationReport,
     ContinuousConfidenceEvaluation,
     ContinuousConfidenceInput,
     ContinuousConfidencePolicy,
@@ -220,10 +219,3 @@ def evaluate_cell_confidence(
         reason_codes=tuple(sorted({*evaluation.reason_codes, *extra_reason_codes})),
         evaluation=evaluation,
     )
-
-
-def verify_confidence_calibration_report(report: ConfidenceCalibrationReport) -> ConfidenceCalibrationReport:
-    for scenario in report.scenarios:
-        if scenario.evaluation != evaluate_continuous_confidence(report.policy, scenario.input):
-            raise ValueError("every calibration evaluation must exactly reproduce from policy and input")
-    return report
