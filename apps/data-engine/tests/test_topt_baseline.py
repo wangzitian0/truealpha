@@ -271,12 +271,16 @@ class Recording:
 
 
 def test_the_gppe_reader_asks_for_the_run_of_the_head_and_compares_with_its_report() -> None:
-    connection = Recording([(20, 16)], [(16, 20)])
+    connection = Recording([(16, 16)], [(16, 16)])
 
     row = topt_baseline.read_gppe(connection, "capture-run:abc")
 
-    assert row == Row("Q1", "fail", "Q1 GPPE 16/20 (80.0%) against 95.0%")
-    assert [params for _sql, params in connection.asked] == [("capture-run:abc",), ("capture-run:abc",)]
+    assert row == Row("Q1", "pass", "Q1 GPPE 16/16 (100.0%) against 95.0%")
+    assert connection.asked[0][1][0] == "universe:topt-us-%"
+    assert connection.asked[0][1][5] == "capture-run:abc"
+    assert connection.asked[1][1] == ("capture-run:abc",)
+    assert "0001067983" in connection.asked[0][1][2]  # BRK.B CIK passed via contract exclusion
+    assert "J3WHBG0MTS7O8ZVMDC91" in connection.asked[0][1][3]  # XOM LEI passed via contract exclusion
     assert "mart.topt_gppe_results" in connection.asked[0][0]
     assert "mart.question_coverage_report" in connection.asked[1][0]
 
@@ -653,6 +657,57 @@ def test_q1_counts_an_issuer_as_the_report_does_not_as_the_availability_column_d
         row = topt_baseline.read_q1(connection)
 
     assert row == Row("Q1", "fail", "Q1 GPPE 18/20 (90.0%) against 95.0%")
+
+
+def test_q1_excludes_owner_approved_not_applicable_issuers_via_entity_identity_and_catches_applicable_failure(
+    seeded_url: str,
+) -> None:
+    """Owner Decision 2 (#1664): XOM, V, MA, and BRK.B are excluded from Q1 GPPE denominator via mart.entity_identity,
+    making 16/16 pass (100.0%), while any failure among the 16 applicable issuers still fails (15/16 = 93.8%)."""
+    from data_engine.datahub.resolve_coordinates import resolve_entity
+
+    exempt_specs = [
+        ("issuer:lei:J3WHBG0MTS7O8ZVMDC91", "lei", "J3WHBG0MTS7O8ZVMDC91", None),  # XOM
+        ("issuer:cik:0001403161", "cik", "0001403161", "549300JZ4OKEHW3DPJ59"),  # V
+        ("issuer:cik:0001141391", "cik", "0001141391", "AR5L2ODV9HN37376R084"),  # MA
+        ("issuer:cik:0001067983", "cik", "0001067983", "5493000C01ZX7D35SD85"),  # BRK.B
+    ]
+    as_of = datetime(2026, 3, 31, tzinfo=UTC).date()
+    known_at = datetime(2026, 3, 31, tzinfo=UTC)
+    with psycopg.connect(seeded_url) as connection:
+        exempt_uuids: list[str] = []
+        for raw_legacy_id, extra_scheme, extra_value, lei_value in exempt_specs:
+            issuer_uuid = resolve_entity(connection, raw_legacy_id, "issuer", as_of=as_of, known_at=known_at)
+            connection.execute(
+                "insert into staging.entity_aliases (entity_id, scheme, value, valid_from, valid_to,"
+                " transaction_time, source, raw_ref, method, confidence, mapping_version)"
+                " values (%s, %s, %s, '-infinity'::date, null, now(), 'test', %s, 'asserted', 1.0, 'test:v1')"
+                " on conflict do nothing",
+                (issuer_uuid, extra_scheme, extra_value, f"test:{extra_scheme}:{extra_value}"),
+            )
+            if lei_value is not None:
+                connection.execute(
+                    "insert into staging.entity_aliases (entity_id, scheme, value, valid_from, valid_to,"
+                    " transaction_time, source, raw_ref, method, confidence, mapping_version)"
+                    " values (%s, 'lei', %s, '-infinity'::date, null, now(), 'test', %s, 'asserted', 1.0, 'test:v1')"
+                    " on conflict do nothing",
+                    (issuer_uuid, lei_value, f"test:lei:{lei_value}"),
+                )
+            exempt_uuids.append(str(issuer_uuid))
+        connection.commit()
+
+        pass_rows = issuers(16, 16) + [(eid, "unavailable", "unavailable", None) for eid in exempt_uuids]
+        seed_head(connection, "capture-run:decision2-pass")
+        seed_gppe(connection, "capture-run:decision2-pass", pass_rows)
+        seed_report(connection, "capture-run:decision2-pass", 16, 16)
+        assert topt_baseline.read_q1(connection) == Row("Q1", "pass", "Q1 GPPE 16/16 (100.0%) against 95.0%")
+
+        fail_rows = issuers(15, 16) + [(eid, "unavailable", "unavailable", None) for eid in exempt_uuids]
+        seed_head(connection, "capture-run:decision2-fail")
+        seed_gppe(connection, "capture-run:decision2-fail", fail_rows)
+        seed_report(connection, "capture-run:decision2-fail", 15, 16)
+        assert topt_baseline.read_q1(connection) == Row("Q1", "fail", "Q1 GPPE 15/16 (93.8%) against 95.0%")
+        connection.commit()
 
 
 def test_q1_is_red_when_the_report_of_the_head_says_other_numbers(seeded_url: str) -> None:

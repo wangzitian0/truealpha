@@ -10,6 +10,7 @@ from decimal import Decimal
 from typing import Any
 
 from psycopg import Connection
+from truealpha_contracts.environment_contract import MetricApplicabilityExclusion, load_environment_contract
 from truealpha_contracts.question_requirements import (
     QUESTION_REQUIREMENTS,
     QUESTION_REQUIREMENTS_SHA256,
@@ -26,6 +27,7 @@ GOVERNING_FACTOR = "gross_profit_per_employee"
 UNRECORDED_REASON = "unrecorded_reason"
 NO_ROW = "no_row"
 NO_HEAD_SUMMARY = "no governed head"
+NOT_APPLICABLE_REASON = "not_applicable"
 
 
 @dataclass(frozen=True)
@@ -33,6 +35,7 @@ class Cell:
     subject_id: str
     answered: bool
     reason: str | None = None
+    not_applicable: bool = False
 
 
 @dataclass(frozen=True)
@@ -111,12 +114,66 @@ def _query_standard_cells(connection: Connection[Any], sql: str, run_id: str) ->
     return tuple(_classify_cell(r[0], r[1], r[2], r[3] if len(r) > 3 else Decimal("1")) for r in rows)
 
 
+def _gppe_not_applicable_tokens(
+    universe: str = "topt",
+) -> tuple[str, tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+    entries: tuple[MetricApplicabilityExclusion, ...] = load_environment_contract().not_applicable_identities(
+        "gppe", universe
+    )
+    universe_prefix = f"{record(universe).id_prefix}%"
+    legacy_ids = tuple(dict.fromkeys(legacy_id for entry in entries for legacy_id in entry.legacy_ids))
+    ciks = tuple(dict.fromkeys(entry.cik for entry in entries))
+    leis = tuple(dict.fromkeys(entry.lei.upper() for entry in entries))
+    return universe_prefix, legacy_ids, ciks, leis
+
+
 def gppe_cells(connection: Connection[Any], run_id: str) -> tuple[Cell, ...]:
-    rows = connection.execute(
-        "select issuer_id, availability_status, availability, reason_codes, gppe from mart.topt_gppe_results where run_id = %s order by issuer_id",
-        (run_id,),
-    ).fetchall()
-    return tuple(_classify_cell(r[0], r[1] or r[2], r[3], r[4] if len(r) > 4 else Decimal("1")) for r in rows)
+    universe_prefix, legacy_ids, ciks, leis = _gppe_not_applicable_tokens("topt")
+    if legacy_ids or ciks or leis:
+        rows = connection.execute(
+            """
+            select r.issuer_id,
+                   r.availability_status,
+                   r.availability,
+                   r.reason_codes,
+                   r.gppe,
+                   (
+                       r.universe_id like %s
+                       and (
+                           r.issuer_id = any(%s::text[])
+                           or exists (
+                               select 1
+                               from mart.entity_identity ei
+                               where (ei.entity_id::text = r.issuer_id or ei.legacy_id = r.issuer_id)
+                                 and (
+                                     ei.cik = any(%s::text[])
+                                     or upper(coalesce(ei.lei, '')) = any(%s::text[])
+                                     or ei.legacy_id = any(%s::text[])
+                                 )
+                           )
+                       )
+                   ) as contract_not_applicable
+            from mart.topt_gppe_results r
+            where r.run_id = %s
+            order by r.issuer_id
+            """,
+            (universe_prefix, list(legacy_ids), list(ciks), list(leis), list(legacy_ids), run_id),
+        ).fetchall()
+    else:
+        rows = connection.execute(
+            "select issuer_id, availability_status, availability, reason_codes, gppe from mart.topt_gppe_results where run_id = %s order by issuer_id",
+            (run_id,),
+        ).fetchall()
+    legacy_set = set(legacy_ids)
+    cells: list[Cell] = []
+    for r in rows:
+        cell = _classify_cell(r[0], r[1] or r[2], r[3], r[4] if len(r) > 4 else Decimal("1"))
+        in_contract = bool(r[5]) if len(r) > 5 else (cell.subject_id in legacy_set)
+        if in_contract and not cell.answered and cell.reason == "missing_gross_profit":
+            cells.append(Cell(cell.subject_id, False, cell.reason, not_applicable=True))
+        else:
+            cells.append(cell)
+    return tuple(cells)
 
 
 def peg_cells(connection: Connection[Any], *, run_id: str) -> tuple[Cell, ...]:
@@ -223,15 +280,27 @@ def classify_question(
     entry["column"] = entry["columns"][0]
     observed = [{cell.subject_id: cell for cell in cells_by_column.get(_column_key(column), ())} for column in columns]
     unavailable: Counter[str] = Counter()
+    answered = 0
+    applicable = 0
+    not_applicable_count = 0
     for subject_id in expected:
         cells = [lookup[subject_id] for lookup in observed if subject_id in lookup]
         if not cells:
             unavailable[NO_ROW] += 1
+            applicable += 1
+        elif all(cell.not_applicable for cell in cells):
+            not_applicable_count += 1
         elif any(cell.answered for cell in cells):
-            entry["answered"] += 1
+            answered += 1
+            applicable += 1
         else:
             unavailable[cells[0].reason or UNRECORDED_REASON] += 1
+            applicable += 1
+    entry["denominator"] = applicable
+    entry["answered"] = answered
     entry["unavailable"] = dict(sorted(unavailable.items(), key=lambda item: (-item[1], item[0])))
+    if not_applicable_count:
+        entry["not_applicable"] = not_applicable_count
     return entry
 
 
