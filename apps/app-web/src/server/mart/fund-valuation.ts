@@ -44,7 +44,7 @@ export type FundValuation = {
 // join filter it was re-evaluated per join pair (13.7 s measured). Materialized
 // CTEs pin it to one evaluation per holdings row, and both join keys (listing_id,
 // issuer CIK) are computed before the join instead of per pair.
-const VALUED_LINES_SQL = `
+export const VALUED_LINES_SQL = `
   with vintage as materialized (
     select v.fund_id,
            coalesce(v.fund_name, v.fund_id) as fund_name,
