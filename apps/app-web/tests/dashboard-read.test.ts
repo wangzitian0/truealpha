@@ -426,6 +426,25 @@ function EMPTY_MART<T>(fn: (client: MartClientLike) => Promise<T>): Promise<T> {
   const traceFromLegacy = await loadTrace(TEST_CONTEXT, legacyCoord, cutoff, reverseCoordAdapter);
   assert(traceFromLegacy.kind === "ready", `expected ready trace for legacy coordinate, got ${traceFromLegacy.kind}`);
   assert(traceFromLegacy.data.issuerId === uuidCoord, `expected trace issuerId ${uuidCoord}`);
+
+  // Postgres statement_timeout (57014) in entity detail loaders must surface as error rather than silent empty fallback
+  const timeoutAdapter = new StrategyRunReadAdapter(
+    repositoryReturning({ ...emptyReport(), decisions: [decisionRow] }),
+    async (fn) =>
+      fn({
+        query: async (sql: string) => {
+          if (sql.includes("from mart.issuer_theme_purity")) {
+            throw Object.assign(new Error("canceling statement due to statement timeout"), { code: "57014" });
+          }
+          return { rows: [] };
+        },
+      }),
+  );
+  const timeoutDetail = await loadEntityDetail(TEST_CONTEXT, legacyCoord, timeoutAdapter);
+  assert(
+    timeoutDetail.kind === "error",
+    `expected error when entity detail query hits statement_timeout (57014), got ${timeoutDetail.kind}`,
+  );
 }
 
 console.log("#370/#371 dashboard read loaders + adapter states passed");

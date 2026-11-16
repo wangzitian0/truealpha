@@ -225,8 +225,8 @@ const adapter = new StrategyRunReadAdapter(
   assert(executedSqls.length === 4, `expected 4 entity detail queries, got ${executedSqls.length}`);
   for (const sql of executedSqls) {
     assert(
-      sql.includes("select ei.entity_id::text from mart.entity_identity ei") &&
-        sql.includes("select ei.legacy_id from mart.entity_identity ei") &&
+      sql.includes("select ei.entity_id::text as entity_id, ei.legacy_id from mart.entity_identity ei") &&
+        sql.includes("offset 0") &&
         sql.includes("ei.current_ticker") &&
         sql.includes("ei.cik") &&
         sql.includes("ei.lei"),

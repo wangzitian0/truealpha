@@ -953,7 +953,7 @@ export class StrategyRunReadAdapter {
 
 	private bidirectionalIssuerPredicate(column: string): string {
 		const match = this.identityMatchSql();
-		return `(${column} = $1 or ${column} in (select ei.entity_id::text from mart.entity_identity ei cross join (select btrim($1::text) as q) inp where ${match}) or ${column} in (select ei.legacy_id from mart.entity_identity ei cross join (select btrim($1::text) as q) inp where ei.legacy_id is not null and ${match}))`;
+		return `(${column} = $1 or ${column} = any (array(select id_val from (select ei.entity_id::text as entity_id, ei.legacy_id from mart.entity_identity ei cross join (select btrim($1::text) as q) inp where ${match} offset 0) matched cross join lateral (values (matched.entity_id), (matched.legacy_id)) as v(id_val) where id_val is not null)))`;
 	}
 
 	private async safeQuery<T>(
@@ -965,6 +965,9 @@ export class StrategyRunReadAdapter {
 			return await this.runWithClient(fn);
 		} catch (error) {
 			console.error(`${label} error:`, error);
+			if ((error as { code?: unknown })?.code === "57014") {
+				throw error;
+			}
 			return fallback;
 		}
 	}
