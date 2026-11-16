@@ -187,6 +187,14 @@ def test_a_failure_rate_above_the_other_jobs_is_red() -> None:
     assert red.red == ("3 of 8 runs failed, 14% to 69% against 0%",)
 
 
+def test_a_job_whose_last_three_runs_succeeded_is_recovered_and_green() -> None:
+    """Two older failures followed by five consecutive successes: the job recovered."""
+    recovered = runs_of("runtime_shape_check", "sffsssss")
+    judgement = job_run_health.judge(newest_first(QUIET, recovered), now=NOW)
+
+    assert judgement.red == ()
+
+
 def test_the_bound_is_the_rate_of_the_other_jobs() -> None:
     """The same 3 of 8 is green when the other jobs fail as often: the bound moves with the data."""
     noisy = runs_of("noisy", "sf" * 20, scheduled=False, end=NOW - timedelta(hours=1))
