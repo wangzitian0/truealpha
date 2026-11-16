@@ -25,7 +25,7 @@ export function getPool(): Pick<Pool, "connect"> {
     if (!connectionString) {
       throw new Error("DATABASE_URL is not set");
     }
-    pool = new Pool({ connectionString, connectionTimeoutMillis: 5000 });
+    pool = new Pool({ connectionString, connectionTimeoutMillis: 5000, statement_timeout: 10000 });
   }
   return pool;
 }

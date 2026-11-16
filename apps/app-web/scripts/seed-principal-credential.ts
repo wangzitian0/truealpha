@@ -49,6 +49,10 @@ async function main() {
     console.error("Refusing a password shorter than 12 characters.");
     process.exit(1);
   }
+  if (password.includes("[use 'op item get") || password.includes("--reveal")) {
+    console.error("Refusing an unrevealed 1Password CLI placeholder.");
+    process.exit(1);
+  }
 
   const connectionString = process.env.DATABASE_URL;
   if (!connectionString) {
