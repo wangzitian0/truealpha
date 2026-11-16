@@ -318,16 +318,32 @@ def server_age_seconds(proc_root: Path = PROC_ROOT, ticks_per_second: int | None
     return uptime - started_ticks / hertz
 
 
+def _hwm_bytes(status: str) -> int | None:
+    """`VmHWM` of a `/proc/<pid>/status` text in bytes, or None when absent."""
+    for line in status.splitlines():
+        if line.startswith("VmHWM:"):
+            return int(line.split()[1]) * 1024
+    return None
+
+
+def _server_process(proc_root: Path) -> int:
+    """`VmHWM` in bytes of PID 1 when it is the Dagster code server."""
+    if b"dagster" not in (proc_root / "1" / "cmdline").read_bytes():
+        raise ValueError("the first process is not the code server")
+    size = _hwm_bytes((proc_root / "1" / "status").read_bytes().decode("utf-8", errors="replace"))
+    if size is None:
+        raise ValueError("the first process has no VmHWM")
+    return size
+
+
 def read_server(
     *,
     budget_mib: int,
     proc_root: Path = PROC_ROOT,
     reader: Callable[[Path], int] | None = None,
 ) -> Row:
-    """The code server of this container. `reader` is the `VmHWM` reader of `runtime_shape` unless a test gives one."""
-    from data_engine.quality import runtime_shape
-
-    read_hwm = reader or runtime_shape._server_process
+    """The code server of this container."""
+    read_hwm = reader or _server_process
     try:
         hwm: int | None = read_hwm(proc_root)
     except (OSError, ValueError):

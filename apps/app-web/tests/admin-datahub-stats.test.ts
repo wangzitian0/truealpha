@@ -321,7 +321,7 @@ const nightlyVerdictRows = [
   },
   // A pending verdict: the check ran and could not judge yet (#1466). It is neither ok nor a failure.
   {
-    check_name: "release_fetch_proof",
+    check_name: "job_run_health",
     ran_at: "2026-10-20 06:15:00Z",
     ok: null,
     summary: "pending",

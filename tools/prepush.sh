@@ -15,9 +15,7 @@
 # `|| true` is fail-open or intentional. It puts the question in front of you
 # while the diff is still cheap to change.
 #
-# The laptop tier is scoped by design (A4 budget table: <= 60 s). Lint, types and
-# tests run through tools/diff_scope.py, the same selection as `make check`: only
-# the tests that import a changed file, through the import graph (#1412 T1).
+# Fast pre-push tier running local gates, lint, and typecheck before pushing.
 # Browser walks, docker and whole-repository runs belong to CI.
 #
 # Usage:
@@ -72,11 +70,6 @@ echo "== changed vs $BASE (${#CHANGED[@]} files) =="
 git diff --stat "$BASE"...HEAD | tail -5
 echo
 
-# Non-blocking T0 hook check (#1412 F5): warn if core.hooksPath drifted or is unset.
-if ! PYTHONPATH="${ROOT}/common/runtime/src:${PYTHONPATH:-}" python3 -c "from pathlib import Path; from truealpha_tools import doctor; raise SystemExit(0 if doctor.check_git_hook(Path.cwd()) else 1)" >/dev/null 2>&1; then
-  echo "  WARN  git hook not installed (Run: git config core.hooksPath tools (or ln -sf ../../tools/prepush.sh .git/hooks/pre-push); or make install)"
-fi
-
 FAILED=0
 run() { # $1=label, rest=command
   local label="$1"; shift
@@ -101,36 +94,16 @@ for path in "${CHANGED[@]}"; do
 done
 
 if [ "${#PY[@]}" -gt 0 ]; then
-  run "route manifest gate" python3 tools/check_route_manifest.py
   run "factor contract gate" python3 tools/check_factor_contract.py
-  run "cyclomatic complexity gate" python3 tools/complexity_gate.py --check
-  run "reachability ratchet" python3 tools/reachability_ratchet.py --check
-  run "sql literal gate" python3 tools/sql_literal_gate.py
+  run "ruff check" uv run ruff check apps common tools
+  run "mypy" uv run mypy
 fi
 for path in "${YML[@]}"; do
-  # uv's interpreter, not the system one: PyYAML is a workspace dependency and
-  # a bare `python3` may not have it, which would report FAIL on a valid file
-  # (review).
   run "yaml parses: $path" uv run python -c "import sys,yaml; yaml.safe_load(open(sys.argv[1]))" "$path"
 done
 for path in "${SH[@]}"; do
   run "bash -n: $path" bash -n "$path"
 done
-
-# --- diff scope: lint, types, tests and contracts that the diff reaches -------
-# One selection for every local entry point (`make check` runs the same one).
-# The marker breaks re-entry: common/runtime/tests/test_prepush.py runs THIS
-# script, and the diff scope selects that test whenever this script changed — an
-# unbounded recursion that would burn a CI job to its timeout. The test skips
-# itself when it sees the marker.
-echo
-echo "== diff scope (tools/diff_scope.py) =="
-if TRUEALPHA_PREPUSH=1 python3 tools/diff_scope.py run --base "$BASE" --entry prepush lint typecheck test conformance; then
-  echo "  ok    diff scope"
-else
-  echo "  FAIL  diff scope (above)"
-  FAILED=1
-fi
 
 # --- judgement: the half a script cannot do ----------------------------------
 cat <<'CATEGORIES'

@@ -11,9 +11,7 @@ registered in `data_engine.lanes.LANE_MODULES` (capture ticks + schedules, the w
 universe refresh, the manual-trigger sensor, the entity identity backfill). A lane adds
 or retires a job in its own module; nothing here lists a job by name, and `test_dagster_defs.py` asserts the root
 is exactly the union of what the lanes declare. The names re-exported below keep the
-operator commands and tests that address `data_engine.dagster_defs` working, and they
-are also what makes each lane statically reachable for `tools/reachability_ratchet.py`
-(`LANE_MODULES` is resolved by `import_module`, which an AST walk cannot follow).
+operator commands and tests that address `data_engine.dagster_defs` working.
 
 Every job runs in the in-process executor (#1467). The code server container holds the gRPC server
 and every run process in one memory cgroup. The default executor starts one more process per step,

@@ -220,7 +220,7 @@ def test_a_universe_list_that_breaks_a_rule_is_refused(mutate, message: str) -> 
         ("theme_purity@topt", "staging", True),
         ("theme_purity@topt", "production", True),
         ("theme_purity@universe-list:sp500", "production", False),
-        ("runtime_shape", "staging", True),
+        ("job_run_health", "staging", True),
         ("fetch_keys_once", "staging", False),
         ("fetch_keys_once", "production", False),
         ("retired_check@topt", "production", False),

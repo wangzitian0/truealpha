@@ -780,12 +780,12 @@ def test_a_process_of_each_environment_deploys_the_schedule_of_its_own_slot(envi
     assert done.stdout.strip().splitlines()[-1] == SEAT.probe_cron(environment)
 
 
-def test_every_probe_slot_ends_before_the_release_fetch_proof_starts() -> None:
-    proof_minute, proof_hour, *_ = quality.RELEASE_FETCH_PROOF_CRON.split()
+def test_every_probe_slot_ends_before_the_nightly_checks_start() -> None:
+    check_minute, check_hour, *_ = quality.JOB_RUN_HEALTH_CRON.split()
     longest = RETRY.deadline_seconds + model_key_health.PROBE_TASK.timeout_seconds + SEAT.probe.launch_margin_seconds
     for environment in SEAT.environments:
         minute, hour, *_ = quality.model_key_health_cron(environment).split()
-        assert hour == proof_hour and int(minute) + ceil(longest / 60) <= int(proof_minute), environment
+        assert hour == check_hour and int(minute) + ceil(longest / 60) <= int(check_minute), environment
 
 
 def test_the_probe_deadline_fits_inside_the_run_time_bound_of_its_job() -> None:

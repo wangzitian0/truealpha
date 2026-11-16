@@ -51,7 +51,7 @@ def test_vision_audit_reports_all_gates_verified_when_all_verdicts_are_green(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fake_verdicts = [
-        _FakeVerdict("release_fetch_proof", True, "capture ok"),
+        _FakeVerdict("job_run_health", True, "capture ok"),
         _FakeVerdict("report_surface_proof", True, "5/5 surfaces ok"),
         _FakeVerdict("output_invariants", True, "6 held, 0 empty"),
         _FakeVerdict("question_coverage@universe-list:qqq", True, "coverage ok"),
@@ -77,7 +77,7 @@ def test_vision_audit_refuses_pass_when_served_head_freshness_is_stale_or_missin
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fake_verdicts = [
-        _FakeVerdict("release_fetch_proof", True, "capture ok"),
+        _FakeVerdict("job_run_health", True, "capture ok"),
         _FakeVerdict("report_surface_proof", True, "5/5 surfaces ok"),
         _FakeVerdict("output_invariants", True, "6 held, 0 empty"),
         _FakeVerdict("question_coverage@universe-list:qqq", True, "coverage ok"),
@@ -134,7 +134,7 @@ def test_vision_audit_fails_gate_3_when_nightly_backtest_verdict_is_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fake_verdicts = [
-        _FakeVerdict("release_fetch_proof", True, "capture ok"),
+        _FakeVerdict("job_run_health", True, "capture ok"),
         _FakeVerdict("report_surface_proof", True, "5/5 surfaces ok"),
         _FakeVerdict("output_invariants", True, "6 held, 0 empty"),
         _FakeVerdict("question_coverage@universe-list:qqq", True, "coverage ok"),
@@ -161,7 +161,7 @@ def test_vision_audit_fails_gate_1_when_report_surface_proof_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fake_verdicts = [
-        _FakeVerdict("release_fetch_proof", True, "capture ok"),
+        _FakeVerdict("job_run_health", True, "capture ok"),
         _FakeVerdict("report_surface_proof", False, "4/5 surfaces serve governed head"),
         _FakeVerdict("output_invariants", True, "6 held, 0 empty"),
         _FakeVerdict("question_coverage@universe-list:qqq", True, "coverage ok"),
@@ -186,7 +186,7 @@ def test_vision_audit_fails_gate_1_when_report_surface_proof_fails(
 
 def _verdicts_without(*dropped: str) -> list[Any]:
     everything = [
-        _FakeVerdict("release_fetch_proof", True, "capture ok"),
+        _FakeVerdict("job_run_health", True, "capture ok"),
         _FakeVerdict("report_surface_proof", True, "5/5 surfaces ok"),
         _FakeVerdict("output_invariants", True, "6 held, 0 empty"),
         _FakeVerdict("question_coverage@universe-list:qqq", True, "coverage ok"),
@@ -294,7 +294,7 @@ def test_gate_1_verifies_from_live_confidence_report_verdicts_when_health_report
         {"universe_id": "universe:qqq-us-2026-03-31", "freshness": "fresh", "availability": "available"},
     ]
     green_verdicts = [
-        _FakeVerdict("release_fetch_proof", True, "capture ok"),
+        _FakeVerdict("job_run_health", True, "capture ok"),
         _FakeVerdict("report_surface_proof", True, "5/5 surfaces ok"),
         _FakeVerdict("output_invariants", True, "6 held, 0 empty"),
         _FakeVerdict("datahub_confidence_report@topt", True, "report persisted for universe:topt-us-2026-03-31"),

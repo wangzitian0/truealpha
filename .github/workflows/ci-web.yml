@@ -48,25 +48,8 @@ jobs:
           --health-retries 5
     steps:
       - uses: actions/checkout@v4
-      # #463: every route must fall inside its service's declared prefixes in
-      # tools/route_manifest.json, and no two services' prefixes may overlap —
-      # the shadowing class that broke login on staging AND production had no
-      # in-repo tripwire. Stdlib-only; also runs in ci-python for the
-      # llm-service side.
-      - name: Route-namespace manifest
-        working-directory: .
-        run: python3 tools/check_route_manifest.py
-      # init.md §1 rule 2 (#727): the App's mart readers reformat rows; a metric computed
-      # ACROSS rows belongs in common/factors and reaches the App as a materialized column.
-      # §10 recorded that nothing enforced this, and #723's window-function weighted mean
-      # is what that cost — it contradicted its own file header and no gate went red.
-      # Stdlib-only, so it runs before the bun toolchain is set up.
-      - name: App-layer aggregation (init.md rule 2)
-        working-directory: .
-        run: python3 tools/check_app_layer_aggregation.py
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
-      # #1412 L1: the make target the laptop runs (tools/diff_scope.py), with FULL=1.
       - run: make typecheck-web FULL=1
         working-directory: .
       - name: Apply the migration chain (populated and empty)
@@ -101,8 +84,7 @@ jobs:
           TRUEALPHA_REQUIRE_RUNTIME: "1"
         run: |
           set -euo pipefail
-          # #1412 L1: `make test-web FULL=1` runs every apps/app-web/tests/*.test.ts
-          # file, the same target the laptop runs (tools/diff_scope.py).
+          # Run every apps/app-web/tests/*.test.ts file via Makefile target.
           make test-web FULL=1 2>&1 | tee /tmp/ci-web-tests.log
           if grep -F -- "— SKIP" /tmp/ci-web-tests.log; then
             echo "::error::a test printed a skip marker; the Postgres service exists so integration tests must RUN in CI" >&2

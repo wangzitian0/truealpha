@@ -59,7 +59,7 @@ export function PipelineHealth({ outcome, now }: { outcome: PipelineOutcome; now
     );
   }
 
-  const { windowDays, unreadable, jobs, jobRunHealth, runtimeShape, release, appGitSha } = outcome.data;
+  const { windowDays, unreadable, jobs, jobRunHealth, release, appGitSha } = outcome.data;
   const headers = [
     "Job",
     "Success rate",
@@ -85,9 +85,8 @@ export function PipelineHealth({ outcome, now }: { outcome: PipelineOutcome; now
         </p>
       </div>
 
-      <dl className="grid grid-cols-1 gap-3 md:grid-cols-3">
+      <dl className="grid grid-cols-1 gap-3 md:grid-cols-2">
         <VerdictCard title="Verdict · job run health" check="job_run_health" verdict={jobRunHealth} unreadable={unreadable.verdicts !== null} />
-        <VerdictCard title="Verdict · runtime shape (memory)" check="runtime_shape" verdict={runtimeShape} unreadable={unreadable.verdicts !== null} />
         <div className="rounded-lg border border-border bg-card px-4 py-3">
           <dt className="text-xs uppercase tracking-wide text-gray-500">Release</dt>
           <dd className="mt-1 text-lg font-semibold tabular-nums" data-release-age="true">

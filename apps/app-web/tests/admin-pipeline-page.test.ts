@@ -33,7 +33,6 @@ const ready: PipelineOutcome = {
     unreadable: { eventLog: null, verdicts: null, release: null },
     appGitSha: "fedcba9876543210fedcba9876543210fedcba98",
     jobRunHealth: { ok: false, ranAt: "2026-10-21T06:20:00.000Z", summary: "head_reports_pipeline (3 of 13 runs failed)" },
-    runtimeShape: { ok: null, ranAt: "2026-10-21T06:30:00.000Z", summary: "pending" },
     release: { gitSha: "0123456789abcdef0123456789abcdef01234567", since: "2026-10-19T08:00:00.000Z", ageHours: 50 },
     jobs: [
       {
@@ -92,9 +91,8 @@ const ready: PipelineOutcome = {
   );
   assert(words.includes("no run"), "a job with no run in the window reads no run, never 100%");
   assert(words.includes("never"), "a job without a failure reads never");
-  assert(html.includes('data-verdict="job_run_health"') && html.includes('data-verdict="runtime_shape"'), "both verdict cards");
+  assert(html.includes('data-verdict="job_run_health"'), "job_run_health verdict card");
   assert(/data-verdict="job_run_health">red</.test(html), "a red verdict reads red in its card");
-  assert(/data-verdict="runtime_shape">pending</.test(html), "a pending verdict reads pending in its card");
   assert(html.includes('data-release-age="true"') && words.includes("2.1d"), "the release age is printed");
   assert(!/undefined|NaN|\[object Object\]/.test(words), "the view leaks no undefined, NaN or [object Object]");
 }
@@ -107,7 +105,6 @@ const ready: PipelineOutcome = {
       ...ready.data,
       unreadable: { eventLog: "permission denied for table event_logs", verdicts: "statement timeout", release: null },
       jobRunHealth: null,
-      runtimeShape: null,
     },
   };
   const html = render(unreadable);

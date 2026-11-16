@@ -52,7 +52,6 @@ export interface PipelineOverview {
   unreadable: PipelineUnreadable;
   jobs: PipelineJobRow[];
   jobRunHealth: PipelineVerdict | null;
-  runtimeShape: PipelineVerdict | null;
   release: PipelineRelease | null;
   appGitSha: string;
 }
@@ -160,11 +159,10 @@ async function readVerdicts(client: Pick<PoolClient, "query">) {
   try {
     return {
       jobRunHealth: await readVerdict(client, "job_run_health"),
-      runtimeShape: await readVerdict(client, "runtime_shape"),
       unreadable: null,
     };
   } catch (error) {
-    return { jobRunHealth: null, runtimeShape: null, unreadable: errMsg(error) };
+    return { jobRunHealth: null, unreadable: errMsg(error) };
   }
 }
 
@@ -272,7 +270,6 @@ export async function loadPipelineOverview(principal: PipelinePrincipal | null):
           unreadable: { eventLog: failures.unreadable, verdicts: verdicts.unreadable, release: release.unreadable },
           jobs: grouped.rows.map((row) => jobRow(row, failures.lines, timeouts)),
           jobRunHealth: verdicts.jobRunHealth,
-          runtimeShape: verdicts.runtimeShape,
           release: release.release,
           appGitSha: process.env.GIT_COMMIT_SHA || "unknown",
         },

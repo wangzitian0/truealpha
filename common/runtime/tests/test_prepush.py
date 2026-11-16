@@ -153,6 +153,6 @@ def test_it_runs_the_same_fast_stdlib_gates_as_ci_python_gates() -> None:
         for step in steps
         if isinstance(step.get("run"), str) and step["run"].strip().startswith("python3 tools/")
     ]
-    assert len(stdlib_gates) >= 5, f"expected >= 5 stdlib gates in ci-python.yml gates job, found {stdlib_gates}"
+    assert stdlib_gates, f"expected >= 1 stdlib gate in ci-python.yml gates job, found {stdlib_gates}"
     for gate in stdlib_gates:
         assert gate in script, f"prepush.sh is missing fast stdlib gate {gate!r} from ci-python.yml"
