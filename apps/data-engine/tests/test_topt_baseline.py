@@ -276,7 +276,8 @@ def test_the_gppe_reader_asks_for_the_run_of_the_head_and_compares_with_its_repo
     row = topt_baseline.read_gppe(connection, "capture-run:abc")
 
     assert row == Row("Q1", "pass", "Q1 GPPE 16/16 (100.0%) against 95.0%")
-    assert connection.asked[0][1][0] == "capture-run:abc"
+    assert connection.asked[0][1][0] == "universe:topt-us-%"
+    assert connection.asked[0][1][5] == "capture-run:abc"
     assert connection.asked[1][1] == ("capture-run:abc",)
     assert "0001067983" in connection.asked[0][1][2]  # BRK.B CIK passed via contract exclusion
     assert "J3WHBG0MTS7O8ZVMDC91" in connection.asked[0][1][3]  # XOM LEI passed via contract exclusion

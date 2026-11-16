@@ -115,19 +115,20 @@ def _query_standard_cells(connection: Connection[Any], sql: str, run_id: str) ->
 
 
 def _gppe_not_applicable_tokens(
-    universe_id: str | None = None,
-) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
-    entries: tuple[MetricApplicabilityExclusion, ...] = load_environment_contract().not_applicable_for_universe_id(
-        "gppe", universe_id
+    universe: str = "topt",
+) -> tuple[str, tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+    entries: tuple[MetricApplicabilityExclusion, ...] = load_environment_contract().not_applicable_identities(
+        "gppe", universe
     )
+    universe_prefix = f"{record(universe).id_prefix}%"
     legacy_ids = tuple(dict.fromkeys(legacy_id for entry in entries for legacy_id in entry.legacy_ids))
     ciks = tuple(dict.fromkeys(entry.cik for entry in entries))
     leis = tuple(dict.fromkeys(entry.lei.upper() for entry in entries))
-    return legacy_ids, ciks, leis
+    return universe_prefix, legacy_ids, ciks, leis
 
 
-def gppe_cells(connection: Connection[Any], run_id: str, *, universe_id: str | None = None) -> tuple[Cell, ...]:
-    legacy_ids, ciks, leis = _gppe_not_applicable_tokens(universe_id)
+def gppe_cells(connection: Connection[Any], run_id: str) -> tuple[Cell, ...]:
+    universe_prefix, legacy_ids, ciks, leis = _gppe_not_applicable_tokens("topt")
     if legacy_ids or ciks or leis:
         rows = connection.execute(
             """
@@ -137,23 +138,26 @@ def gppe_cells(connection: Connection[Any], run_id: str, *, universe_id: str | N
                    r.reason_codes,
                    r.gppe,
                    (
-                       r.issuer_id = any(%s::text[])
-                       or exists (
-                           select 1
-                           from mart.entity_identity ei
-                           where (ei.entity_id::text = r.issuer_id or ei.legacy_id = r.issuer_id)
-                             and (
-                                 ei.cik = any(%s::text[])
-                                 or upper(coalesce(ei.lei, '')) = any(%s::text[])
-                                 or ei.legacy_id = any(%s::text[])
-                             )
+                       r.universe_id like %s
+                       and (
+                           r.issuer_id = any(%s::text[])
+                           or exists (
+                               select 1
+                               from mart.entity_identity ei
+                               where (ei.entity_id::text = r.issuer_id or ei.legacy_id = r.issuer_id)
+                                 and (
+                                     ei.cik = any(%s::text[])
+                                     or upper(coalesce(ei.lei, '')) = any(%s::text[])
+                                     or ei.legacy_id = any(%s::text[])
+                                 )
+                           )
                        )
                    ) as contract_not_applicable
             from mart.topt_gppe_results r
             where r.run_id = %s
             order by r.issuer_id
             """,
-            (list(legacy_ids), list(ciks), list(leis), list(legacy_ids), run_id),
+            (universe_prefix, list(legacy_ids), list(ciks), list(leis), list(legacy_ids), run_id),
         ).fetchall()
     else:
         rows = connection.execute(
@@ -164,9 +168,9 @@ def gppe_cells(connection: Connection[Any], run_id: str, *, universe_id: str | N
     cells: list[Cell] = []
     for r in rows:
         cell = _classify_cell(r[0], r[1] or r[2], r[3], r[4] if len(r) > 4 else Decimal("1"))
-        is_not_applicable = bool(r[5]) if len(r) > 5 else (cell.subject_id in legacy_set)
-        if is_not_applicable:
-            cells.append(Cell(cell.subject_id, False, cell.reason or NOT_APPLICABLE_REASON, not_applicable=True))
+        in_contract = bool(r[5]) if len(r) > 5 else (cell.subject_id in legacy_set)
+        if in_contract and not cell.answered and cell.reason == "missing_gross_profit":
+            cells.append(Cell(cell.subject_id, False, cell.reason, not_applicable=True))
         else:
             cells.append(cell)
     return tuple(cells)
@@ -305,7 +309,7 @@ def compile_report(connection: Connection[Any], *, universe: str, executed_at: d
     head = governed_head_of(connection, key)
     if isinstance(head, NoHead):
         return None
-    gppe = gppe_cells(connection, head.run_id, universe_id=head.universe_id)
+    gppe = gppe_cells(connection, head.run_id)
     issuers = [cell.subject_id for cell in gppe]
     funds_observed = fund_cells(connection, head.run_id)
     funds = [cell.subject_id for cell in funds_observed]

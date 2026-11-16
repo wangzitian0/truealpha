@@ -456,7 +456,7 @@ def test_gppe_cells_and_classify_question_exclude_contract_not_applicable_issuer
     rows = [(issuer, "available", "available", [], Decimal("100"), False) for issuer in applicable] + [
         (issuer, "unavailable", "unavailable", ["missing_gross_profit"], None, True) for issuer in exempt
     ]
-    cells = gppe_cells(_Rows(rows), "capture-run:topt", universe_id=TOPT)
+    cells = gppe_cells(_Rows(rows), "capture-run:topt")
     assert len(cells) == 20
     assert sum(1 for c in cells if c.not_applicable) == 4
 
@@ -476,7 +476,7 @@ def test_gppe_cells_and_classify_question_exclude_contract_not_applicable_issuer
         (applicable[0], "unavailable", "unavailable", ["missing_headcount"], None, False),
         *rows[1:],
     ]
-    degraded_cells = gppe_cells(_Rows(degraded_rows), "capture-run:topt", universe_id=TOPT)
+    degraded_cells = gppe_cells(_Rows(degraded_rows), "capture-run:topt")
     degraded_q1 = classify_question(
         REQ[Question.Q1_MODEL_LEVERAGE],
         universe_id=TOPT,
