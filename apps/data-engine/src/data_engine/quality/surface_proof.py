@@ -23,11 +23,11 @@ from data_engine.sources import llm
 
 _NOT_SCHEDULED = "not_scheduled"
 
-#: `apps/app-web/src/server/mart/strategy-run-repository.ts` resolves the governed strategy
+#: `apps/llm-service/src/llm_service/services/research_service.py` resolves the governed strategy
 #: run through this view (`db/migrations/20260907T0630_bt_governed_strategy_run.sql`):
 #: /research/rankings, /strategy, /compare, /trace and /coverage all read it.
 _STRATEGY_HEAD_SQL = "select target_run_id, strategy_run_id from mart.governed_strategy_run"
-#: `apps/app-web/src/server/mart/theme-purity.ts` `LATEST_RUN_SQL`: the newest run in the
+#: `apps/llm-service/src/llm_service/services/research_service.py` `LATEST_RUN_SQL`: the newest run in the
 #: table, deliberately not the pointer — which is exactly why it has to be checked against it.
 #: No universe filter: every universe's head gets purity rows, and the page names a run and a
 #: cutoff, never a universe, so it serves whichever head cut off last (`themes_verdict`).
@@ -59,7 +59,7 @@ select exists (
     where p.environment = %s and p.factor_id = %s and p.universe_id like %s
 )
 """
-#: `apps/app-web/src/server/mart/fund-valuation.ts` `QQQ_POINTER_HEAD_SQL`.
+#: `apps/llm-service/src/llm_service/services/research_service.py` `QQQ_POINTER_HEAD_SQL`.
 _HOLDINGS_HEAD_SQL = """
 select run_id, freshness, availability, staleness_reason
 from mart.served_head
@@ -68,7 +68,7 @@ where factor_id = 'gross_profit_per_employee'
 order by advanced_at desc limit 1
 """
 _HOLDINGS_ROWS_SQL = "select count(*) from mart.fund_virtual_company where run_id = %s"
-#: `apps/app-web/src/server/admin/datahub-stats.ts` `QUESTION_COVERAGE_SQL`.
+#: `apps/llm-service/src/llm_service/services/admin_service.py` `QUESTION_COVERAGE_SQL`.
 _COVERAGE_HEAD_SQL = """
 select distinct on (universe_id) universe_id, run_id, payload
 from mart.question_coverage_report r

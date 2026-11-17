@@ -88,5 +88,5 @@ worth blocking" is what made merging 39 seconds early feel safe.
 - After every scripted edit: assert a NON-EMPTY diff (`git diff --stat` or
   redprove's built-in check). Four silent no-op edits in one session, one of
   which led to answering a review thread "fixed" while nothing had changed.
-- Red cases run through `tools/redprove.sh`, never the hand dance: it enforces
+- Red cases run through an explicit mutation check, never the hand dance: verify
   branch state, edit-landed, expected-assertion-matched, and restore.

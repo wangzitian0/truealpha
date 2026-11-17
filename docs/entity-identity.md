@@ -1,7 +1,7 @@
 # Entity identity: opaque UUIDs, typed aliases
 
 Status: owner decision 2026-09-17 (#877). PR-2 of #877 adds the store
-(`db/migrations/20260917T0412_datahub_entity_identity_store.sql`) and the Dagster job
+(`db/migrations/0002_staging.sql`, historical migration `20260917T0412_datahub_entity_identity_store.sql`) and the Dagster job
 `entity_identity_backfill` fills it (definitions in
 `20260917T0604_datahub_entity_backfill_job.sql`). Nothing reads it yet.
 
