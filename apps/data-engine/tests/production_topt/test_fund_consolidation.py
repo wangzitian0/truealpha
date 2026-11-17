@@ -26,6 +26,7 @@ from data_engine.datahub.production_topt.fund_consolidation import (
 )
 from data_engine.datahub.resolve_coordinates import resolve_entity
 from data_engine.lanes import capture
+from factors.shared import entity_resolution as er
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
 from deployed_tick import CUTOFF, RUN, run_deployed_tick  # noqa: E402
@@ -52,26 +53,25 @@ def connection():
         active.close()
 
 
+def _fund_uuid(connection) -> str:
+    return str(er.ensure_entity(connection, FUND, "fund", "Consolidation Test Fund", transaction_time=OLDEST_FILING))
+
+
 def _seed(connection, *, isin: str, ticker: str, weight: str, filing: datetime, period: str) -> None:
     """One filed holding line, its ISIN->listing identity, and nothing else."""
-    connection.execute(
-        "insert into staging.kg_entities (id, entity_type, display_name) values (%s, 'fund', %s) "
-        "on conflict (id) do nothing",
-        (FUND, "Consolidation Test Fund"),
-    )
-    entity = f"company:isin:{isin}"
-    connection.execute(
-        "insert into staging.kg_entities (id, entity_type, display_name) values (%s, 'company', %s) "
-        "on conflict (id) do nothing",
-        (entity, ticker),
-    )
+    fund_uuid = _fund_uuid(connection)
+    inst_uuid = er.ensure_entity(connection, f"company:isin:{isin}", "instrument", ticker, transaction_time=filing)
     for kind, value in (("isin", isin), ("ticker", ticker)):
-        connection.execute(
-            "insert into staging.kg_identifiers (entity_id, identifier_type, identifier_value, "
-            "valid_time, transaction_time, confidence, source, raw_ref) "
-            "values (%s, %s, %s, daterange(%s, null), %s, 1.0, 'test', 'test:consolidation') "
-            "on conflict do nothing",
-            (entity, kind, value, filing.date(), filing),
+        er.assert_identifier(
+            connection,
+            entity_id=inst_uuid,
+            source="test",
+            identifier_type=kind,
+            identifier_value=value,
+            confidence=1.0,
+            transaction_time=filing,
+            valid_from=period,
+            raw_ref="test:consolidation",
         )
     connection.execute(
         """
@@ -81,7 +81,7 @@ def _seed(connection, *, isin: str, ticker: str, weight: str, filing: datetime, 
         values (%s, %s, %s, %s, %s, %s, 1, 1000, %s, 1.0, 'test:consolidation')
         on conflict do nothing
         """,
-        (FUND, entity, f"{ticker} Inc.", period, filing, isin, Decimal(weight)),
+        (fund_uuid, inst_uuid, f"{ticker} Inc.", period, filing, isin, Decimal(weight)),
     )
 
 
@@ -93,8 +93,9 @@ def test_the_vintage_is_the_one_knowable_at_the_cutoff(connection) -> None:
     _seed(connection, isin="US0000000002", ticker="TCB", weight="80", filing=KNOWABLE_FILING, period="2026-03-31")
     _seed(connection, isin="US0000000003", ticker="TCC", weight="90", filing=LATER_FILING, period="2026-06-30")
 
+    fund_uuid = _fund_uuid(connection)
     vintages = {v.fund_id: v for v in load_fund_vintages(connection, run_id=RUN, cutoff=CUTOFF)}
-    chosen = vintages[FUND]
+    chosen = vintages[fund_uuid]
 
     assert chosen.transaction_time == KNOWABLE_FILING, "the newest filing AT OR BEFORE the cutoff"
     assert [line.holding_name for line in chosen.lines] == ["TCB Inc."]
@@ -102,7 +103,7 @@ def test_the_vintage_is_the_one_knowable_at_the_cutoff(connection) -> None:
     # trap row must really be a later filing, and it must really exist.
     assert LATER_FILING > CUTOFF
     newest = connection.execute(
-        "select max(transaction_time) from mart.fund_holdings where fund_id = %s", (FUND,)
+        "select max(transaction_time) from mart.fund_holdings where fund_id = %s", (fund_uuid,)
     ).fetchone()[0]
     assert newest == LATER_FILING, "the look-ahead row is present; the producer declined it"
 
@@ -110,11 +111,12 @@ def test_the_vintage_is_the_one_knowable_at_the_cutoff(connection) -> None:
 def test_a_row_is_written_with_masses_the_database_accepts(connection) -> None:
     _seed(connection, isin="US0000000010", ticker="TCV", weight="60", filing=KNOWABLE_FILING, period="2026-06-30")
     _seed(connection, isin="US0000000011", ticker="TCU", weight="39", filing=KNOWABLE_FILING, period="2026-06-30")
+    fund_uuid = _fund_uuid(connection)
 
     written = materialize_fund_consolidation(connection, run_id=RUN, cutoff=CUTOFF)
 
     # Other funds may exist in the database; this test owns exactly one.
-    assert FUND in {item.fund_id for item in written}
+    assert fund_uuid in {item.fund_id for item in written}
     row = connection.execute(
         """
         select weighted_valuation_gap, total_weight_pct, resolved_weight_pct, valued_weight_pct,
@@ -122,7 +124,7 @@ def test_a_row_is_written_with_masses_the_database_accepts(connection) -> None:
                factor_validation_status, reason_codes, definition_version, definition_sha256
         from mart.fund_virtual_company where run_id = %s and fund_id = %s
         """,
-        (RUN, FUND),
+        (RUN, fund_uuid),
     ).fetchone()
     assert row is not None, "the producer writes through the deployed table, not a dataclass"
     gap, total, resolved, valued, lines, valued_lines, availability, evidence, validation, reasons, ver, sha = row
@@ -137,7 +139,7 @@ def test_a_row_is_written_with_masses_the_database_accepts(connection) -> None:
     assert ver == "v0" and len(sha) == 64
     # #1235: a refused aggregate has no gap, so it names no valuation basis.
     basis = connection.execute(
-        "select valuation_basis from mart.fund_virtual_company where run_id = %s and fund_id = %s", (RUN, FUND)
+        "select valuation_basis from mart.fund_virtual_company where run_id = %s and fund_id = %s", (RUN, fund_uuid)
     ).fetchone()[0]
     assert basis is None
 
@@ -214,22 +216,24 @@ def test_the_table_refuses_a_basis_without_a_gap(connection) -> None:
 
 def test_the_write_is_idempotent_per_run_and_fund(connection) -> None:
     _seed(connection, isin="US0000000020", ticker="TCI", weight="99", filing=KNOWABLE_FILING, period="2026-06-30")
+    fund_uuid = _fund_uuid(connection)
 
     materialize_fund_consolidation(connection, run_id=RUN, cutoff=CUTOFF)
     materialize_fund_consolidation(connection, run_id=RUN, cutoff=CUTOFF)
 
     count = connection.execute(
-        "select count(*) from mart.fund_virtual_company where run_id = %s and fund_id = %s", (RUN, FUND)
+        "select count(*) from mart.fund_virtual_company where run_id = %s and fund_id = %s", (RUN, fund_uuid)
     ).fetchone()[0]
     assert count == 1, "a retried tick restates its own row rather than accumulating"
 
 
 def test_no_vintage_at_the_cutoff_writes_nothing(connection) -> None:
     _seed(connection, isin="US0000000030", ticker="TCF", weight="99", filing=LATER_FILING, period="2026-06-30")
+    fund_uuid = _fund_uuid(connection)
 
     written = materialize_fund_consolidation(connection, run_id=RUN, cutoff=CUTOFF)
 
-    assert all(item.fund_id != FUND for item in written), (
+    assert all(item.fund_id != fund_uuid for item in written), (
         "a fund whose only filing postdates the cutoff is absent from the run, not zero"
     )
 
@@ -299,10 +303,11 @@ def test_materialize_resolves_canonical_entity_uuid_listing_id(connection) -> No
     """
     eid = resolve_entity(connection, "listing:xnas:tcu", "listing", as_of=CUTOFF.date(), known_at=CUTOFF)
     _seed(connection, isin="US0000000040", ticker="TCU", weight="65", filing=KNOWABLE_FILING, period="2026-06-30")
+    fund_uuid = _fund_uuid(connection)
     _insert_core_result(connection, run_id=RUN, listing_id=str(eid), valuation_gap=0.42, confidence=0.85)
 
     written = materialize_fund_consolidation(connection, run_id=RUN, cutoff=CUTOFF)
-    matched = [item for item in written if item.fund_id == FUND]
+    matched = [item for item in written if item.fund_id == fund_uuid]
     assert len(matched) == 1
     fund = matched[0]
     assert fund.valued_lines == 1
@@ -315,10 +320,11 @@ def test_materialize_resolves_canonical_entity_uuid_listing_id(connection) -> No
 def test_materialize_supports_legacy_string_listing_id(connection) -> None:
     """#1099: mart.topt_core_results rows with legacy string listing_id still match directly."""
     _seed(connection, isin="US0000000041", ticker="TCL", weight="70", filing=KNOWABLE_FILING, period="2026-06-30")
+    fund_uuid = _fund_uuid(connection)
     _insert_core_result(connection, run_id=RUN, listing_id="listing:xnas:tcl", valuation_gap=-0.15, confidence=0.90)
 
     written = materialize_fund_consolidation(connection, run_id=RUN, cutoff=CUTOFF)
-    matched = [item for item in written if item.fund_id == FUND]
+    matched = [item for item in written if item.fund_id == fund_uuid]
     assert len(matched) == 1
     fund = matched[0]
     assert fund.valued_lines == 1
@@ -329,28 +335,24 @@ def test_materialize_supports_legacy_string_listing_id(connection) -> None:
 
 def test_dual_class_holding_joins_issuer_core_valuation_row(connection) -> None:
     """Two share-class holdings of the same issuer (GOOGL and GOOG) resolved to unpadded
-    company:cik:1652044 in staging.kg_identifiers both value against the issuer's single
-    mart.topt_core_results row (issuer:cik:0001652044) while keeping their own listing_ids."""
+    company:cik:1652044 in staging.entities both value against the issuer's single
+    mart.topt_core_results row while keeping their own listing_ids."""
     _seed(connection, isin="US02079K3059", ticker="GOOGL", weight="40", filing=KNOWABLE_FILING, period="2026-06-30")
     _seed(connection, isin="US02079K1079", ticker="GOOG", weight="35", filing=KNOWABLE_FILING, period="2026-06-30")
-    holding_company_cik = "company:cik:1652044"
-    connection.execute(
-        "insert into staging.kg_entities (id, entity_type, display_name) values (%s, 'company', 'Alphabet Inc.') "
-        "on conflict (id) do nothing",
-        (holding_company_cik,),
+    holding_uuid = er.ensure_entity(
+        connection, "company:cik:1652044", "issuer", "Alphabet Inc.", transaction_time=KNOWABLE_FILING
     )
     for isin in ("US02079K3059", "US02079K1079"):
-        connection.execute(
-            "insert into staging.kg_identifiers (entity_id, identifier_type, identifier_value, "
-            "valid_time, transaction_time, confidence, source, raw_ref) "
-            "values (%s, 'isin', %s, daterange(%s, null), %s, 0.95, 'openfigi', 'test:dual') "
-            "on conflict do nothing",
-            (
-                holding_company_cik,
-                isin,
-                (KNOWABLE_FILING + timedelta(seconds=1)).date(),
-                KNOWABLE_FILING + timedelta(seconds=1),
-            ),
+        er.assert_identifier(
+            connection,
+            entity_id=holding_uuid,
+            source="openfigi",
+            identifier_type="isin",
+            identifier_value=isin,
+            confidence=0.95,
+            transaction_time=KNOWABLE_FILING + timedelta(seconds=1),
+            valid_from=(KNOWABLE_FILING + timedelta(seconds=1)).date().isoformat(),
+            raw_ref="test:dual",
         )
     issuer_uuid = resolve_entity(connection, "issuer:cik:0001652044", "issuer", as_of=CUTOFF.date(), known_at=CUTOFF)
     listing_uuid = resolve_entity(connection, "listing:xnas:goog", "listing", as_of=CUTOFF.date(), known_at=CUTOFF)
@@ -389,8 +391,9 @@ def test_dual_class_holding_joins_issuer_core_valuation_row(connection) -> None:
         (res_sha, res_sha, RUN, str(issuer_uuid), str(listing_uuid)),
     )
 
+    fund_uuid = _fund_uuid(connection)
     written = materialize_fund_consolidation(connection, run_id=RUN, cutoff=CUTOFF)
-    matched = [item for item in written if item.fund_id == FUND]
+    matched = [item for item in written if item.fund_id == fund_uuid]
     assert len(matched) == 1
     fund = matched[0]
     assert (fund.lines, fund.valued_lines) == (2, 2)
@@ -406,6 +409,7 @@ def test_a_low_confidence_core_row_is_not_valued_and_does_not_zero_the_aggregate
     """
     _seed(connection, isin="US0000000050", ticker="TCG", weight="60", filing=KNOWABLE_FILING, period="2026-06-30")
     _seed(connection, isin="US0000000051", ticker="TCW", weight="30", filing=KNOWABLE_FILING, period="2026-06-30")
+    fund_uuid = _fund_uuid(connection)
     _insert_core_result(
         connection,
         run_id=RUN,
@@ -425,7 +429,7 @@ def test_a_low_confidence_core_row_is_not_valued_and_does_not_zero_the_aggregate
     )
 
     written = materialize_fund_consolidation(connection, run_id=RUN, cutoff=CUTOFF)
-    matched = [item for item in written if item.fund_id == FUND]
+    matched = [item for item in written if item.fund_id == fund_uuid]
     assert len(matched) == 1
     fund = matched[0]
     assert (fund.lines, fund.valued_lines) == (2, 1)
@@ -436,7 +440,7 @@ def test_a_low_confidence_core_row_is_not_valued_and_does_not_zero_the_aggregate
     row = connection.execute(
         "select valued_lines, confidence, availability_status from mart.fund_virtual_company "
         "where run_id = %s and fund_id = %s",
-        (RUN, FUND),
+        (RUN, fund_uuid),
     ).fetchone()
     assert row == (1, Decimal("0.85"), "available")
 
@@ -485,31 +489,46 @@ def test_mart_fund_holdings_deduplicates_reparsed_holding_lines(connection) -> N
     """#1359 AC3: when staging.fund_holding_facts retains both a legacy parse and a newer
     reparse (e.g. nport-holdings:2) for the same holding line in a vintage, mart.fund_holdings
     selects only the newest reparse so weights and lines are never double-counted."""
-    fund_id = "etf:series:S000088434-DEDUP-TEST"
-    connection.execute(
-        "insert into staging.kg_entities (id, entity_type, display_name) values (%s, 'etf', 'iShares Top 20 U.S. Stocks ETF') "
-        "on conflict (id) do nothing",
-        (fund_id,),
-    )
-    for entity_id in ("company:isin:US67066G1040", "company:cik:1045810"):
-        connection.execute(
-            "insert into staging.kg_entities (id, entity_type, display_name) values (%s, 'company', 'NVIDIA Corp.') "
-            "on conflict (id) do nothing",
-            (entity_id,),
+    fund_uuid = str(
+        er.ensure_entity(
+            connection,
+            "etf:series:S000088434-DEDUP-TEST",
+            "fund",
+            "iShares Top 20 U.S. Stocks ETF",
+            transaction_time=KNOWABLE_FILING,
         )
+    )
+    isin_uuid = er.ensure_entity(
+        connection,
+        "company:isin:US67066G1040",
+        "instrument",
+        "NVIDIA Corp.",
+        transaction_time=KNOWABLE_FILING,
+    )
+    cik_uuid = er.ensure_entity(
+        connection,
+        "company:cik:1045810",
+        "issuer",
+        "NVIDIA Corp.",
+        transaction_time=KNOWABLE_FILING,
+    )
     for kind, value in (("isin", "US67066G1040"), ("ticker", "NVDA")):
-        connection.execute(
-            "insert into staging.kg_identifiers (entity_id, identifier_type, identifier_value, "
-            "valid_time, transaction_time, confidence, source, raw_ref) "
-            "values ('company:cik:1045810', %s, %s, daterange(%s, null), %s, 1.0, 'test', 'raw.fetches:217') "
-            "on conflict do nothing",
-            (kind, value, KNOWABLE_FILING.date(), KNOWABLE_FILING),
+        er.assert_identifier(
+            connection,
+            entity_id=cik_uuid,
+            source="test",
+            identifier_type=kind,
+            identifier_value=value,
+            confidence=1.0,
+            transaction_time=KNOWABLE_FILING,
+            valid_from=KNOWABLE_FILING.date().isoformat(),
+            raw_ref="raw.fetches:217",
         )
     # Simulate the deployed staging index that permitted a second reparse row with a new id.
     connection.execute("drop index if exists staging.uq_fund_holding_line_vintage")
-    for holding_id, raw_ref in (
-        ("company:isin:US67066G1040", "raw.fetches:216"),
-        ("company:cik:1045810", "raw.fetches:217"),
+    for holding_uuid, raw_ref in (
+        (isin_uuid, "raw.fetches:216"),
+        (cik_uuid, "raw.fetches:217"),
     ):
         connection.execute(
             """
@@ -518,18 +537,18 @@ def test_mart_fund_holdings_deduplicates_reparsed_holding_lines(connection) -> N
                  isin, cusip, balance, value_usd, percent_of_net_assets, confidence, raw_ref)
             values (%s, %s, 'NVIDIA Corp.', '2026-03-31', %s, 'US67066G1040', '67066G104', 100, 160127, 16.01272878741, 1.0, %s)
             """,
-            (fund_id, holding_id, KNOWABLE_FILING, raw_ref),
+            (fund_uuid, holding_uuid, KNOWABLE_FILING, raw_ref),
         )
 
     rows = connection.execute(
         "select holding_id, percent_of_net_assets, raw_ref from mart.fund_holdings where fund_id = %s",
-        (fund_id,),
+        (fund_uuid,),
     ).fetchall()
-    assert rows == [("company:cik:1045810", Decimal("16.01272878741"), "raw.fetches:217")]
+    assert rows == [(str(cik_uuid), Decimal("16.01272878741"), "raw.fetches:217")]
 
     coverage = connection.execute(
         "select lines, resolved_lines, total_weight_pct, resolved_weight_pct from mart.fund_holdings_coverage where fund_id = %s",
-        (fund_id,),
+        (fund_uuid,),
     ).fetchone()
     assert coverage == (1, 1, Decimal("16.01272878741"), Decimal("16.01272878741"))
 
@@ -546,50 +565,38 @@ def test_lines_sql_bounds_core_and_entity_identity_joins_to_one_row() -> None:
     assert "left join lateral (" in normalized
     assert ") core on true" in normalized
     assert normalized.count("from mart.entity_identity ei_row") == 2
-    assert normalized.count("limit 1") == 3
+    assert normalized.count("limit 1") == 4
     assert "order by (coalesce(ei.listing_id, c.listing_id) = h.listing_id) desc" in normalized
 
 
 def test_dual_kg_entities_and_dual_listings_preserve_weight_conservation(connection) -> None:
-    """#1641: duplicate kg_entities rows and dual CIK core rows must not fan out holding weights."""
+    """#1641: multiple issuer entities and dual CIK core rows must not fan out holding weights."""
     _apply_issue_1641_migration(connection)
     _seed(connection, isin="US02079K3059", ticker="GOOGL", weight="40", filing=KNOWABLE_FILING, period="2026-06-30")
     _seed(connection, isin="US02079K1079", ticker="GOOG", weight="35", filing=KNOWABLE_FILING, period="2026-06-30")
-    holding_company_cik = "company:cik:1652044"
-    connection.execute(
-        "insert into staging.kg_entities (id, entity_type, display_name) values (%s, 'company', 'Alphabet Inc.') "
-        "on conflict (id) do nothing",
-        (holding_company_cik,),
+    fund_uuid = _fund_uuid(connection)
+    holding_company_uuid = er.ensure_entity(
+        connection,
+        "company:cik:1652044",
+        "issuer",
+        "Alphabet Inc.",
+        transaction_time=KNOWABLE_FILING,
     )
     for isin in ("US02079K3059", "US02079K1079"):
-        connection.execute(
-            "insert into staging.kg_identifiers (entity_id, identifier_type, identifier_value, "
-            "valid_time, transaction_time, confidence, source, raw_ref) "
-            "values (%s, 'isin', %s, daterange(%s, null), %s, 0.95, 'openfigi', 'test:1641') "
-            "on conflict do nothing",
-            (
-                holding_company_cik,
-                isin,
-                (KNOWABLE_FILING + timedelta(seconds=1)).date(),
-                KNOWABLE_FILING + timedelta(seconds=1),
-            ),
+        er.assert_identifier(
+            connection,
+            entity_id=holding_company_uuid,
+            source="openfigi",
+            identifier_type="isin",
+            identifier_value=isin,
+            confidence=0.95,
+            transaction_time=KNOWABLE_FILING + timedelta(seconds=1),
+            valid_from=(KNOWABLE_FILING + timedelta(seconds=1)).date().isoformat(),
+            raw_ref="test:1641",
         )
     issuer_uuid = resolve_entity(connection, "issuer:cik:0001652044", "issuer", as_of=CUTOFF.date(), known_at=CUTOFF)
     listing_goog = resolve_entity(connection, "listing:xnas:goog", "listing", as_of=CUTOFF.date(), known_at=CUTOFF)
     listing_googl = resolve_entity(connection, "listing:xnas:googl", "listing", as_of=CUTOFF.date(), known_at=CUTOFF)
-    for kg_id, name in (
-        (str(issuer_uuid), "Alphabet Inc. UUID"),
-        ("issuer:cik:0001652044", "Alphabet Inc. Legacy"),
-        (str(listing_goog), "Alphabet Class C UUID"),
-        ("listing:xnas:goog", "Alphabet Class C Legacy"),
-        (str(listing_googl), "Alphabet Class A UUID"),
-        ("listing:xnas:googl", "Alphabet Class A Legacy"),
-    ):
-        connection.execute(
-            "insert into staging.kg_entities (id, entity_type, display_name) values (%s, 'company', %s) "
-            "on conflict (id) do update set display_name = excluded.display_name",
-            (kg_id, name),
-        )
 
     for entity_uuid in (issuer_uuid, listing_goog, listing_googl):
         count = connection.execute(
@@ -635,7 +642,7 @@ def test_dual_kg_entities_and_dual_listings_preserve_weight_conservation(connect
         )
 
     written = materialize_fund_consolidation(connection, run_id=RUN, cutoff=CUTOFF)
-    matched = [item for item in written if item.fund_id == FUND]
+    matched = [item for item in written if item.fund_id == fund_uuid]
     assert len(matched) == 1
     fund = matched[0]
     assert (fund.lines, fund.valued_lines) == (2, 2)

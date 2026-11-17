@@ -72,7 +72,9 @@ def test_view_resolves_every_corpus_issuer_with_non_null_ticker(frozen_members) 
         assert ticker == expected and ticker, f"{issuer_id}: ticker {ticker!r} != parsed {expected!r}"
 
 
-def test_display_name_is_null_without_kg_and_fills_through_the_join(frozen_members) -> None:
+def test_display_name_is_null_without_alias_and_fills_through_the_join(frozen_members) -> None:
+    from factors.shared import entity_resolution as er
+
     connection, snapshot = frozen_members
     member = snapshot.members[0]
     issuer, ticker = member.issuer_id, member.listing_id.split(":", 2)[2].upper()
@@ -80,20 +82,25 @@ def test_display_name_is_null_without_kg_and_fills_through_the_join(frozen_membe
     before = connection.execute(
         "select display_name from mart.entity_display_resolution where issuer_id = %s", (issuer,)
     ).fetchone()
-    assert before == (None,), "kg_entities is empty in this transaction — name must be NULL, not invented"
+    assert before == (None,), "name alias is empty in this transaction — name must be NULL, not invented"
 
+    issuer_uuid = er.ensure_entity(connection, issuer, "issuer", "")
     connection.execute(
-        "insert into staging.kg_entities (id, entity_type, display_name) values (%s, 'company', %s)",
-        (issuer, ticker),
+        "insert into staging.entity_aliases "
+        "(entity_id, scheme, value, valid_from, transaction_time, source, raw_ref, method, confidence, mapping_version) "
+        "values (%s::uuid, 'name', %s, '-infinity', '2026-06-01T00:00:00Z', 'test', 'raw:0', 'asserted', 0.8, 'v1')",
+        (issuer_uuid, ticker),
     )
     bare_ticker = connection.execute(
         "select display_name from mart.entity_display_resolution where issuer_id = %s", (issuer,)
     ).fetchone()
-    assert bare_ticker == (None,), "a bare ticker in kg_entities.display_name must not masquerade as a company name"
+    assert bare_ticker == (None,), "a bare ticker in entity_aliases(name) must not masquerade as a company name"
 
     connection.execute(
-        "update staging.kg_entities set display_name = %s where id = %s",
-        ("Resolution Probe Co", issuer),
+        "insert into staging.entity_aliases "
+        "(entity_id, scheme, value, valid_from, transaction_time, source, raw_ref, method, confidence, mapping_version) "
+        "values (%s::uuid, 'name', %s, '-infinity', '2026-06-02T00:00:00Z', 'test', 'raw:1', 'asserted', 0.99, 'v1')",
+        (issuer_uuid, "Resolution Probe Co"),
     )
     after = connection.execute(
         "select display_name from mart.entity_display_resolution where issuer_id = %s", (issuer,)

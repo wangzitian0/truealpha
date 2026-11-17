@@ -29,7 +29,7 @@ do $$ begin if to_regclass('staging.idx_evidence_edges_from_id') is null then CR
 do $$ begin if to_regclass('staging.idx_evidence_edges_to_id') is null then CREATE INDEX idx_evidence_edges_to_id ON staging.evidence_edges USING btree (to_id); end if; end $$;
 do $$ begin if to_regclass('staging.idx_evidence_nodes_supersedes') is null then CREATE INDEX idx_evidence_nodes_supersedes ON staging.evidence_nodes USING btree (supersedes_node_id) WHERE (supersedes_node_id IS NOT NULL); end if; end $$;
 do $$ begin if to_regclass('staging.idx_fund_holding_facts_holding') is null then CREATE INDEX idx_fund_holding_facts_holding ON staging.fund_holding_facts USING btree (holding_id) WHERE (holding_id IS NOT NULL); end if; end $$;
-do $$ begin if to_regclass('staging.idx_kg_edges_to') is null then CREATE INDEX idx_kg_edges_to ON staging.kg_edges USING btree (to_id); end if; end $$;
+do $$ begin if to_regclass('staging.kg_edges') is not null and to_regclass('staging.idx_kg_edges_to') is null then CREATE INDEX idx_kg_edges_to ON staging.kg_edges USING btree (to_id); end if; end $$;
 
 -- 4. Add foreign-key indexes on raw.
 do $$ begin if to_regclass('raw.idx_capture_vintages_fetch') is null then CREATE INDEX idx_capture_vintages_fetch ON raw.capture_source_vintages USING btree (raw_fetch_id); end if; end $$;

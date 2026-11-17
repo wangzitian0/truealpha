@@ -63,12 +63,15 @@ class GraphStoreCheck:
                 self.settings.database_url, connect_timeout=self.settings.database_connect_timeout_seconds
             ) as connection:
                 row = connection.execute(
-                    "select to_regclass('staging.kg_edges'), to_regclass('staging.kg_identifiers')"
+                    "select to_regclass('staging.entities'), to_regclass('staging.entity_aliases'), "
+                    "to_regclass('staging.entity_relations')"
                 ).fetchone()
             elapsed = (time.perf_counter() - started) * 1000
             if row is None or any(table is None for table in row):
-                return ProbeResult(self.name, DependencyStatus.ABSENT, "Postgres KG tables are missing", elapsed)
-            return ProbeResult(self.name, DependencyStatus.PRESENT, "Postgres KG tables present", elapsed)
+                return ProbeResult(
+                    self.name, DependencyStatus.ABSENT, "Postgres entity graph tables are missing", elapsed
+                )
+            return ProbeResult(self.name, DependencyStatus.PRESENT, "Postgres entity graph tables present", elapsed)
 
         return _run_probe(self.name, _check, lambda exc: _redacted_detail(exc, self.settings))
 

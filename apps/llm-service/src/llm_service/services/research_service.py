@@ -1264,8 +1264,12 @@ def get_fund_valuations(*, database_url: str | None = None) -> FundValuationsRes
         select v.fund_id, coalesce(v.fund_name, v.fund_id) as fund_name,
                to_char(v.report_period, 'YYYY-MM-DD') as report_period,
                v.holding_name, v.ticker, v.percent_of_net_assets, v.listing_id,
-               lpad(substring(v.issuer_entity from '^(?:issuer|company):cik:0*([0-9]+)$'), 10, '0') as issuer_cik
+               coalesce(
+                 lpad(nullif(ltrim(ei_v.cik, '0'), ''), 10, '0'),
+                 lpad(substring(v.issuer_entity from '^(?:issuer|company):cik:0*([0-9]+)$'), 10, '0')
+               ) as issuer_cik
         from mart.fund_holdings_valuation v
+        left join mart.entity_identity ei_v on ei_v.entity_id::text = v.issuer_entity
       ), decisions as materialized (
         select coalesce(ei.listing_id, d.issuer_id) as listing_id,
                coalesce(

@@ -84,6 +84,25 @@ def _holding_display_name(connection, *, isin: str, ticker: str, listing_name: s
     return str(row[0]) if row and row[0] else None
 
 
+def _isin_needs_enrichment(connection, isin: str, as_of: datetime) -> bool:
+    inst_id = er.resolve(connection, "isin", isin, as_of=as_of)
+    if inst_id is None:
+        return True
+    has_ticker = connection.execute(
+        "select 1 from staging.entity_aliases where entity_id = %s::uuid and scheme in ('ticker', 'mic-ticker') limit 1",
+        (inst_id,),
+    ).fetchone()
+    if has_ticker is None:
+        return True
+    has_issuer = connection.execute(
+        "select 1 from staging.entity_relations r "
+        "join staging.entity_aliases ea on ea.entity_id = r.from_entity_id and ea.scheme = 'cik' "
+        "where r.to_entity_id = %s::uuid and r.relation_type = 'issues' limit 1",
+        (inst_id,),
+    ).fetchone()
+    return has_issuer is None
+
+
 def enrich_holding_identities(
     connection,
     *,
@@ -102,16 +121,7 @@ def enrich_holding_identities(
         if isins is None
         else [(isin,) for isin in sorted(isins)]
     )
-    minted = [
-        isin
-        for (isin,) in rows
-        if (er.resolve(connection, "isin", isin, as_of=at) or "").startswith(_MINTED_PREFIX)
-        or connection.execute(
-            "select 1 from staging.kg_identifiers where entity_id = %s and identifier_type = 'ticker' limit 1",
-            (f"{_MINTED_PREFIX}{isin}",),
-        ).fetchone()
-        is None
-    ]
+    minted = [isin for (isin,) in rows if _isin_needs_enrichment(connection, isin, at)]
     if not minted:
         return EnrichmentOutcome(0, 0, 0, 0, 0)
 
@@ -147,13 +157,30 @@ def enrich_holding_identities(
         if listing is None or ticker is None:
             unmapped += 1
             continue
-        minted_id = f"{_MINTED_PREFIX}{isin}"
         raw_ref, transaction_time = provenance[isin]
         valid_from = transaction_time.date().isoformat()
-        er.ensure_entity(connection, minted_id, "company", listing.name or isin)
+        inst_uuid = er.ensure_entity(
+            connection,
+            f"company:isin:{isin}",
+            "instrument",
+            listing.name or isin,
+            transaction_time=transaction_time,
+            raw_ref=raw_ref,
+        )
         er.assert_identifier(
             connection,
-            entity_id=minted_id,
+            entity_id=inst_uuid,
+            source="openfigi",
+            identifier_type="isin",
+            identifier_value=isin,
+            confidence=CONF_OPENFIGI,
+            transaction_time=transaction_time,
+            valid_from=valid_from,
+            raw_ref=raw_ref,
+        )
+        er.assert_identifier(
+            connection,
+            entity_id=inst_uuid,
             source="openfigi-listing",
             identifier_type="ticker",
             identifier_value=ticker,
@@ -169,36 +196,48 @@ def enrich_holding_identities(
             unmapped += 1
             continue
         target = f"issuer:cik:{cik:010d}"
-        if (er.resolve(connection, "isin", isin, as_of=at) or "").startswith(_MINTED_PREFIX):
-            er.ensure_entity(
-                connection,
-                target,
-                "company",
-                _holding_display_name(connection, isin=isin, ticker=ticker, listing_name=listing.name) or target,
-            )
-            for id_type, id_value in (("isin", isin), ("ticker", ticker)):
-                er.assert_identifier(
-                    connection,
-                    entity_id=target,
-                    source="openfigi",
-                    identifier_type=id_type,
-                    identifier_value=id_value,
-                    confidence=CONF_OPENFIGI,
-                    transaction_time=transaction_time,
-                    valid_from=valid_from,
-                    raw_ref=raw_ref,
-                )
-            er.add_edge(
-                connection,
-                from_id=minted_id,
-                to_id=target,
-                relation_type="same_as",
-                confidence=CONF_OPENFIGI,
-                source="openfigi",
-                transaction_time=transaction_time,
-                valid_from=valid_from,
-                raw_ref=raw_ref,
-            )
+        issuer_uuid = er.ensure_entity(
+            connection,
+            target,
+            "issuer",
+            _holding_display_name(connection, isin=isin, ticker=ticker, listing_name=listing.name) or target,
+            transaction_time=transaction_time,
+            raw_ref=raw_ref,
+        )
+        er.assert_identifier(
+            connection,
+            entity_id=issuer_uuid,
+            source="openfigi",
+            identifier_type="cik",
+            identifier_value=f"{cik:010d}",
+            confidence=CONF_OPENFIGI,
+            transaction_time=transaction_time,
+            valid_from=valid_from,
+            raw_ref=raw_ref,
+        )
+        er.assert_identifier(
+            connection,
+            entity_id=issuer_uuid,
+            source="openfigi",
+            identifier_type="ticker",
+            identifier_value=ticker,
+            confidence=CONF_OPENFIGI,
+            transaction_time=transaction_time,
+            valid_from=valid_from,
+            raw_ref=raw_ref,
+        )
+        added = er.add_edge(
+            connection,
+            from_id=issuer_uuid,
+            to_id=inst_uuid,
+            relation_type="issues",
+            confidence=CONF_OPENFIGI,
+            source="openfigi",
+            transaction_time=transaction_time,
+            valid_from=valid_from,
+            raw_ref=raw_ref,
+        )
+        if added:
             repointed += 1
 
     return EnrichmentOutcome(

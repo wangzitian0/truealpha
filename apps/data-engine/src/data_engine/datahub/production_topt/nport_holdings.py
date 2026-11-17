@@ -62,13 +62,20 @@ def capture_fund_holdings(connection, etf_ticker: str, *, http=None) -> Holdings
     filing_ref = raw_store.raw_ref(raw_id)
     holdings = [h for h in all_holdings if h.asset_cat in (None, "EC") and h.pct_val is not None]
 
-    fund_id = f"etf:series:{series_id}"
+    fund_ref = f"etf:series:{series_id}"
     report_period = info["report_period"] or filing_date
-    er.ensure_entity(connection, fund_id, "etf", info["series_name"] or etf_ticker.upper())
+    fund_uuid = er.ensure_entity(
+        connection,
+        fund_ref,
+        "fund",
+        info["series_name"] or etf_ticker.upper(),
+        transaction_time=filing_dt,
+        raw_ref=filing_ref,
+    )
     for id_type, id_value in (("ticker", etf_ticker.upper()), ("sec_series", series_id)):
         er.assert_identifier(
             connection,
-            entity_id=fund_id,
+            entity_id=fund_uuid,
             source="sec",
             identifier_type=id_type,
             identifier_value=id_value,
@@ -86,11 +93,17 @@ def capture_fund_holdings(connection, etf_ticker: str, *, http=None) -> Holdings
             continue
         holding_id = er.resolve(connection, "isin", h.isin, as_of=filing_dt)
         if holding_id is None:
-            holding_id = f"company:isin:{h.isin}"
-            er.ensure_entity(connection, holding_id, "company", h.name or h.isin)
+            holding_uuid = er.ensure_entity(
+                connection,
+                f"company:isin:{h.isin}",
+                "instrument",
+                h.name or h.isin,
+                transaction_time=filing_dt,
+                raw_ref=filing_ref,
+            )
             er.assert_identifier(
                 connection,
-                entity_id=holding_id,
+                entity_id=holding_uuid,
                 source="nport",
                 identifier_type="isin",
                 identifier_value=h.isin,
@@ -99,15 +112,24 @@ def capture_fund_holdings(connection, etf_ticker: str, *, http=None) -> Holdings
                 valid_from=report_period,
                 raw_ref=filing_ref,
             )
+            holding_id = str(holding_uuid)
             minted += 1
         else:
+            holding_uuid = er.coerce_entity_uuid(connection, holding_id, as_of=filing_dt) or er.ensure_entity(
+                connection,
+                holding_id,
+                "instrument",
+                h.name or h.isin,
+                transaction_time=filing_dt,
+                raw_ref=filing_ref,
+            )
             resolved += 1
         if holding_id not in edged:
             edged.add(holding_id)
             er.add_edge(
                 connection,
-                from_id=fund_id,
-                to_id=holding_id,
+                from_id=fund_uuid,
+                to_id=holding_uuid,
                 relation_type="holds",
                 confidence=CONF_FILING,
                 source="nport",
@@ -124,8 +146,8 @@ def capture_fund_holdings(connection, etf_ticker: str, *, http=None) -> Holdings
             on conflict do nothing
             """,
             (
-                fund_id,
-                holding_id,
+                fund_uuid,
+                holding_uuid,
                 h.name or h.isin,
                 report_period,
                 filing_dt,

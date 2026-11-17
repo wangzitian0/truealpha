@@ -158,8 +158,9 @@ class _Cursor:
 
     rowcount = 1
 
-    def __init__(self, sql: str = "") -> None:
+    def __init__(self, sql: str = "", params: Any = None) -> None:
         self._sql = sql
+        self._params = params
 
     def __enter__(self) -> _Cursor:
         return self
@@ -169,18 +170,24 @@ class _Cursor:
 
     def execute(self, sql: str, params: Any = None) -> _Cursor:
         self._sql = sql
+        self._params = params
         return self
 
     def fetchone(self) -> tuple[Any]:
         if "to_regclass" in self._sql:
-            return ("staging.kg_edges",)
+            return ("staging.entity_relations",)
         if self._sql.lstrip().startswith("select exists"):
             return (True,)
         return ("inserted",)
 
     def fetchall(self) -> list[tuple[Any, ...]]:
-        if "from staging.kg_edges e" in self._sql:
-            return [("partner:1", "Partner One", Decimal("0.9"))]
+        if "from staging.entity_relations r" in self._sql:
+            issuer_ref = (
+                str(self._params[0][0])
+                if isinstance(self._params, tuple | list) and self._params and self._params[0]
+                else "00000000-0000-5000-8000-000000000001"
+            )
+            return [(issuer_ref, "partner:1", Decimal("0.9"), None, issuer_ref, "Partner One")]
         return []
 
 
@@ -192,7 +199,7 @@ class _RecordingConnection:
 
     def execute(self, sql: str, params: Any = None) -> _Cursor:
         self.executed.append((sql, params))
-        return _Cursor(sql)
+        return _Cursor(sql, params)
 
     def cursor(self) -> _Cursor:
         return _Cursor()

@@ -125,16 +125,16 @@ def _plane_corpus() -> dict:
 
 
 def _seed_nport_crosswalk(connection, *holdings: dict) -> None:
-    """One N-PORT line per holding, and the knowledge graph resolving its ISIN to the
-    issuer's CIK entity through a newer OpenFIGI vintage plus the same_as hop, which is the
-    shape holdings enrichment leaves in production."""
-    fund = "etf:series:S000877002"
-    er.ensure_entity(connection, fund, "etf", "entity-store test fund")
+    """One N-PORT line per holding, and the entity store resolving its ISIN to the
+    issuer's CIK entity through a newer OpenFIGI vintage plus the issues relation."""
+    fund_uuid = er.ensure_entity(
+        connection, "etf:series:S000877002", "fund", "entity-store test fund", transaction_time=NPORT_FILED
+    )
     for holding in holdings:
         minted = f"company:isin:{holding['isin']}"
         issuer = f"issuer:cik:{holding['cik']}"
-        er.ensure_entity(connection, minted, "company", holding["isin"])
-        er.ensure_entity(connection, issuer, "company", holding["cik"])
+        minted_uuid = er.ensure_entity(connection, minted, "instrument", holding["isin"], transaction_time=NPORT_FILED)
+        issuer_uuid = er.ensure_entity(connection, issuer, "issuer", holding["cik"], transaction_time=FIGI_MAPPED)
         connection.execute(
             """
             insert into staging.fund_holding_facts
@@ -143,8 +143,8 @@ def _seed_nport_crosswalk(connection, *holdings: dict) -> None:
             values (%s, %s, %s, %s, %s, %s, %s, %s, %s, 1, 1, 1, %s)
             """,
             (
-                fund,
-                minted,
+                fund_uuid,
+                minted_uuid,
                 f"holding {holding['cusip']}",
                 date(2026, 3, 31),
                 NPORT_FILED,
@@ -157,7 +157,7 @@ def _seed_nport_crosswalk(connection, *holdings: dict) -> None:
         )
         er.assert_identifier(
             connection,
-            entity_id=minted,
+            entity_id=minted_uuid,
             source="nport",
             identifier_type="isin",
             identifier_value=holding["isin"],
@@ -168,7 +168,7 @@ def _seed_nport_crosswalk(connection, *holdings: dict) -> None:
         )
         er.assert_identifier(
             connection,
-            entity_id=issuer,
+            entity_id=issuer_uuid,
             source="openfigi",
             identifier_type="isin",
             identifier_value=holding["isin"],
@@ -179,9 +179,9 @@ def _seed_nport_crosswalk(connection, *holdings: dict) -> None:
         )
         er.add_edge(
             connection,
-            from_id=minted,
-            to_id=issuer,
-            relation_type="same_as",
+            from_id=issuer_uuid,
+            to_id=minted_uuid,
+            relation_type="issues",
             confidence=0.98,
             source="openfigi",
             transaction_time=FIGI_MAPPED,
@@ -559,35 +559,17 @@ def test_the_store_is_append_only_typed_and_derived(connection) -> None:
             connection.execute("set constraints all immediate")
 
 
-def test_the_backfill_plan_reads_only_tables_that_predate_it() -> None:
-    """The #877 dry run executes the plan's SELECT read-only against an environment that
-    has applied neither migration. That only works while the plan references nothing the
-    two migrations create."""
+def test_the_backfill_plan_reads_canonical_entity_store_and_no_kg_tables() -> None:
+    """Slice 2 (#1730): staging.entity_backfill_plan reads canonical staging.entity_* tables
+    and never references retired staging.kg_* tables."""
     backfill = BACKFILL_MIGRATION.read_text()
     replace = backfill.index("create or replace view staging.entity_backfill_plan as")
     start = replace + len("create or replace view staging.entity_backfill_plan as")
     body = backfill[start : backfill.index("$vc$;", start)]
     assert "from relation_state" in body and "$view$" not in body
-    entity_store_objects = {
-        "staging.entities",
-        "staging.entity_aliases",
-        "staging.entity_relations",
-        "staging.entity_retractions",
-        "staging.entity_kinds",
-        "staging.entity_alias_schemes",
-        "staging.entity_relation_types",
-        "staging.entity_mint",
-        "staging.entity_survivor",
-        "staging.entity_alias_valid_to",
-        "staging.entity_backfill_plan",
-    }
-    created = set(
-        re.findall(r"create (?:or replace )?(?:table if not exists|view|function) (staging\.\w+)", backfill, re.I)
-    )
-    created_entity_store = created & entity_store_objects
-    assert {"staging.entity_backfill_plan", "staging.entities", "staging.entity_mint"} <= created_entity_store
     referenced = set(re.findall(r"staging\.\w+", body)) - {"staging.entity_backfill_plan"}
-    assert referenced and not (referenced & created_entity_store), sorted(referenced & created_entity_store)
+    assert "staging.entity_aliases" in referenced and "staging.entity_relations" in referenced
+    assert not (referenced & {"staging.kg_entities", "staging.kg_identifiers", "staging.kg_edges"})
 
 
 @pytest.fixture(scope="module")

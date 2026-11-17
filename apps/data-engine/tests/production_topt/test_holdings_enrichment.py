@@ -66,13 +66,12 @@ def connection():
 
 
 def _seed_tranche_one(connection) -> None:
-    er.ensure_entity(connection, "etf:series:S-TEST-ENRICH", "etf", "Enrichment Test Fund")
+    fund_uuid = er.ensure_entity(connection, "etf:series:S-TEST-ENRICH", "etf", "Enrichment Test Fund")
     for isin in (_NVDA_ISIN, _FOREIGN_ISIN):
-        minted = f"company:isin:{isin}"
-        er.ensure_entity(connection, minted, "company", isin)
+        inst_uuid = er.ensure_entity(connection, f"company:isin:{isin}", "instrument", isin, transaction_time=_AT)
         er.assert_identifier(
             connection,
-            entity_id=minted,
+            entity_id=inst_uuid,
             source="nport",
             identifier_type="isin",
             identifier_value=isin,
@@ -89,7 +88,7 @@ def _seed_tranche_one(connection) -> None:
             values (%s, %s, %s, %s, %s, null, %s, null, 1, 100, 5.0, 1.0, 'raw.fetches:0')
             on conflict do nothing
             """,
-            ("etf:series:S-TEST-ENRICH", minted, isin, "2026-06-30", _AT, isin),
+            (fund_uuid, inst_uuid, isin, "2026-06-30", _AT, isin),
         )
 
 
@@ -120,20 +119,25 @@ def test_sweep_repoints_from_landed_batches_without_a_vendor(connection) -> None
     assert outcome.repointed == 1
     assert outcome.unmapped == 1, "the foreign ISIN stays minted, retried next sweep"
 
-    target = er.resolve(connection, "isin", _NVDA_ISIN, as_of=_AT + timedelta(days=1))
-    assert target == "issuer:cik:0001045810", f"newest vintage re-points resolution, got {target}"
-    assert er.resolve(connection, "ticker", "NVDA", as_of=_AT + timedelta(days=1)) == target
-    assert (er.resolve(connection, "isin", _FOREIGN_ISIN, as_of=_AT + timedelta(days=1)) or "").startswith(
-        "company:isin:"
-    )
+    inst_id = er.resolve(connection, "isin", _NVDA_ISIN, as_of=_AT + timedelta(days=1))
+    issuer_uuid = er.coerce_entity_uuid(connection, "issuer:cik:0001045810")
+    assert inst_id is not None and issuer_uuid is not None
+    assert er.resolve(connection, "ticker", "NVDA", as_of=_AT + timedelta(days=1)) == str(issuer_uuid)
+    foreign_id = er.resolve(connection, "isin", _FOREIGN_ISIN, as_of=_AT + timedelta(days=1))
+    assert foreign_id is not None
 
-    same_as = connection.execute(
-        "select to_id from staging.kg_edges where from_id = %s and relation_type = 'same_as'",
-        (f"company:isin:{_NVDA_ISIN}",),
+    issues = connection.execute(
+        "select from_entity_id from staging.entity_relations where to_entity_id = %s::uuid and relation_type = 'issues'",
+        (inst_id,),
     ).fetchall()
-    assert same_as == [("issuer:cik:0001045810",)], "immutable facts resolve forward through the merge hop"
+    assert issues == [(issuer_uuid,)], "immutable facts resolve forward through the issues relation"
+    foreign_issues = connection.execute(
+        "select from_entity_id from staging.entity_relations where to_entity_id = %s::uuid and relation_type = 'issues'",
+        (foreign_id,),
+    ).fetchall()
+    assert foreign_issues == []
     vintage_time = connection.execute(
-        "select transaction_time from staging.kg_identifiers where identifier_value = %s and source = 'openfigi'",
+        "select transaction_time from staging.entity_aliases where scheme = 'isin' and value = %s and source = 'openfigi'",
         (_NVDA_ISIN,),
     ).fetchone()[0]
     assert vintage_time == _AT, "the vintage carries the supplying batch's own clock (review on #695)"
@@ -154,7 +158,7 @@ def test_second_sweep_is_a_no_op(connection) -> None:
     assert again.repointed == 0, "a re-keyed identity never re-enters the sweep"
     assert again.unresolved == 1 and again.unmapped == 1, "only the still-minted foreign ISIN is considered"
     vintages = connection.execute(
-        "select count(*) from staging.kg_identifiers where identifier_value = %s and source = 'openfigi'",
+        "select count(*) from staging.entity_aliases where scheme = 'isin' and value = %s and source = 'openfigi'",
         (_NVDA_ISIN,),
     ).fetchone()[0]
     assert vintages == 1, "no duplicate identifier vintages sprayed by re-runs"
@@ -165,13 +169,12 @@ def test_share_classes_keep_their_own_tickers(connection) -> None:
     each minted per-ISIN entity carries ITS OWN ticker — the association the
     valuation view reads so the GOOG line can never render as GOOGL."""
     store = _InMemoryObjectStore()
-    er.ensure_entity(connection, "etf:series:S-TEST-DUAL", "etf", "Dual Class Test Fund")
+    fund_uuid = er.ensure_entity(connection, "etf:series:S-TEST-DUAL", "etf", "Dual Class Test Fund")
     for isin in (_GOOGL_ISIN, _GOOG_ISIN):
-        minted = f"company:isin:{isin}"
-        er.ensure_entity(connection, minted, "company", isin)
+        inst_uuid = er.ensure_entity(connection, f"company:isin:{isin}", "instrument", isin, transaction_time=_AT)
         er.assert_identifier(
             connection,
-            entity_id=minted,
+            entity_id=inst_uuid,
             source="nport",
             identifier_type="isin",
             identifier_value=isin,
@@ -188,7 +191,7 @@ def test_share_classes_keep_their_own_tickers(connection) -> None:
             values (%s, %s, 'Alphabet Inc.', '2026-06-30', %s, null, %s, null, 1, 100, 3.0, 1.0, 'raw.fetches:0')
             on conflict do nothing
             """,
-            ("etf:series:S-TEST-DUAL", minted, _AT, isin),
+            (fund_uuid, inst_uuid, _AT, isin),
         )
     raw_store.insert_json_fetch(
         connection,
@@ -209,19 +212,26 @@ def test_share_classes_keep_their_own_tickers(connection) -> None:
     )
 
     assert outcome.repointed == 2
+    goog_issuer = er.coerce_entity_uuid(connection, "issuer:cik:0001652044")
+    assert goog_issuer is not None
     for isin, expected in ((_GOOGL_ISIN, "GOOGL"), (_GOOG_ISIN, "GOOG")):
-        assert er.resolve(connection, "isin", isin, as_of=_AT + timedelta(days=1)) == "issuer:cik:0001652044"
+        inst_id = er.resolve(connection, "isin", isin, as_of=_AT + timedelta(days=1))
+        assert inst_id is not None
+        linked = connection.execute(
+            "select from_entity_id from staging.entity_relations where to_entity_id = %s::uuid and relation_type = 'issues'",
+            (inst_id,),
+        ).fetchone()
+        assert linked == (goog_issuer,)
         own = connection.execute(
-            "select identifier_value from staging.kg_identifiers"
-            " where entity_id = %s and identifier_type = 'ticker'"
-            " order by transaction_time desc, confidence desc, id desc limit 1",
-            (f"company:isin:{isin}",),
+            "select value from staging.entity_aliases"
+            " where entity_id = %s::uuid and scheme = 'ticker'"
+            " order by transaction_time desc, confidence desc, alias_id desc limit 1",
+            (inst_id,),
         ).fetchone()
         assert own == (expected,), f"{isin} must keep its own ticker, got {own}"
         issuer_row = connection.execute(
-            "select 1 from staging.kg_identifiers where entity_id = 'issuer:cik:0001652044'"
-            " and identifier_type = 'ticker' and identifier_value = %s",
-            (expected,),
+            "select 1 from staging.entity_aliases where entity_id = %s and scheme = 'ticker' and value = %s",
+            (goog_issuer, expected),
         ).fetchone()
         assert issuer_row is not None, (
             f"the issuer-level {expected} vintage must land TOO — the unique key"
@@ -259,12 +269,11 @@ def test_per_isin_ticker_lands_even_when_sec_crosswalk_omits_ticker(connection) 
     resolves listing_id."""
     store = _InMemoryObjectStore()
     ea_isin = "US2855121099"
-    minted = f"company:isin:{ea_isin}"
-    er.ensure_entity(connection, "etf:series:S-TEST-OMITTED", "etf", "Omitted Crosswalk Test Fund")
-    er.ensure_entity(connection, minted, "company", ea_isin)
+    fund_uuid = er.ensure_entity(connection, "etf:series:S-TEST-OMITTED", "etf", "Omitted Crosswalk Test Fund")
+    inst_uuid = er.ensure_entity(connection, f"company:isin:{ea_isin}", "instrument", ea_isin)
     er.assert_identifier(
         connection,
-        entity_id=minted,
+        entity_id=inst_uuid,
         source="nport",
         identifier_type="isin",
         identifier_value=ea_isin,
@@ -281,7 +290,7 @@ def test_per_isin_ticker_lands_even_when_sec_crosswalk_omits_ticker(connection) 
         values (%s, %s, 'Electronic Arts Inc.', '2026-06-30', %s, null, %s, null, 1, 100, 1.5, 1.0, 'raw.fetches:0')
         on conflict do nothing
         """,
-        ("etf:series:S-TEST-OMITTED", minted, _AT, ea_isin),
+        (fund_uuid, inst_uuid, _AT, ea_isin),
     )
     raw_store.insert_json_fetch(
         connection,
@@ -303,7 +312,7 @@ def test_per_isin_ticker_lands_even_when_sec_crosswalk_omits_ticker(connection) 
     assert outcome.repointed == 0 and outcome.unmapped == 1
     row = connection.execute(
         "select ticker, listing_id from mart.fund_holdings_resolved where fund_id = %s and isin = %s",
-        ("etf:series:S-TEST-OMITTED", ea_isin),
+        (str(fund_uuid), ea_isin),
     ).fetchone()
     assert row == ("EA", "listing:xnas:ea")
 
@@ -312,12 +321,11 @@ def test_company_cik_issuer_entity_resolves_ticker_in_fund_holdings_resolved(con
     """Holdings whose ISIN maps to bootstrap_universe's company:cik:<cik> entity resolve
     ticker and listing_id through the issuer_ticker lateral join in mart.fund_holdings_resolved."""
     ea_isin = "US2855121099"
-    company_cik = "company:cik:712515"
-    er.ensure_entity(connection, "etf:series:S-TEST-COMPANY-CIK", "etf", "Company CIK Test Fund")
-    er.ensure_entity(connection, company_cik, "company", "Electronic Arts Inc.")
+    fund_uuid = er.ensure_entity(connection, "etf:series:S-TEST-COMPANY-CIK", "etf", "Company CIK Test Fund")
+    company_uuid = er.ensure_entity(connection, "company:cik:712515", "issuer", "Electronic Arts Inc.")
     er.assert_identifier(
         connection,
-        entity_id=company_cik,
+        entity_id=company_uuid,
         source="openfigi",
         identifier_type="isin",
         identifier_value=ea_isin,
@@ -328,7 +336,7 @@ def test_company_cik_issuer_entity_resolves_ticker_in_fund_holdings_resolved(con
     )
     er.assert_identifier(
         connection,
-        entity_id=company_cik,
+        entity_id=company_uuid,
         source="sec_edgar",
         identifier_type="ticker",
         identifier_value="EA",
@@ -345,11 +353,11 @@ def test_company_cik_issuer_entity_resolves_ticker_in_fund_holdings_resolved(con
         values (%s, %s, 'Electronic Arts Inc.', '2026-06-30', %s, null, %s, null, 1, 100, 1.5, 1.0, 'raw.fetches:0')
         on conflict do nothing
         """,
-        ("etf:series:S-TEST-COMPANY-CIK", company_cik, _AT, ea_isin),
+        (fund_uuid, company_uuid, _AT, ea_isin),
     )
 
     row = connection.execute(
         "select issuer_entity, ticker, listing_id from mart.fund_holdings_resolved where fund_id = %s and isin = %s",
-        ("etf:series:S-TEST-COMPANY-CIK", ea_isin),
+        (str(fund_uuid), ea_isin),
     ).fetchone()
-    assert row == (company_cik, "EA", "listing:xnas:ea")
+    assert row == (str(company_uuid), "EA", "listing:xnas:ea")

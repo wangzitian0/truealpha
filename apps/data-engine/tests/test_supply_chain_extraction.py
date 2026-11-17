@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -315,8 +316,8 @@ def test_persist_extracted_supply_chain_edges_and_continuous_confidence() -> Non
                         {"plain_text": text, "accession": "0001045810-26-000001"},
                     )
                 ]
-            elif "insert into staging.kg_edges" in sql:
-                cur.fetchone = lambda: (1,)  # type: ignore[method-assign]
+            elif "insert into staging.entity_relations" in sql:
+                cur.fetchone = lambda: ("rel-uuid-1",)  # type: ignore[method-assign]
             return cur
 
     conn = _FilingConn()
@@ -328,7 +329,7 @@ def test_persist_extracted_supply_chain_edges_and_continuous_confidence() -> Non
         llm_gateway=gateway,
     )
     assert inserted == 1
-    assert any("insert into staging.kg_edges" in q[0] for q in conn.queries)
+    assert any("insert into staging.entity_relations" in q[0] for q in conn.queries)
 
 
 def test_real_10k_html_extraction_with_lei_issuer_and_supplier_customer_directions(
@@ -413,29 +414,36 @@ def test_real_10k_html_extraction_with_lei_issuer_and_supplier_customer_directio
                         {"cik": 1045810, "form": "10-K", "accession": "000104581025000023"},
                     )
                 ]
-            elif "insert into staging.kg_entities" in sql:
-                self.entities[str(p[0])] = str(p[2])
-            elif "select source, confidence from staging.kg_edges" in sql:
+            elif "from staging.entity_relations r" in sql:
+                aliases = set(p[0]) if p and isinstance(p[0], list | tuple) else set()
+                cur.fetchall = lambda: [  # type: ignore[method-assign]
+                    (
+                        from_id,
+                        to_id,
+                        Decimal(str(conf)),
+                        pct,
+                        self.entities.get(from_id, from_id),
+                        self.entities.get(to_id, to_id),
+                    )
+                    for from_id, to_id, rel, conf, pct in self.edges
+                    if (from_id in aliases or to_id in aliases) and rel == "supplies_to"
+                ]
+            elif "from staging.entity_aliases" in sql and "scheme = 'name'" in sql:
                 cur.fetchone = lambda: None  # type: ignore[method-assign]
-            elif "insert into staging.kg_edges" in sql:
-                self.edges.append((str(p[0]), str(p[1]), str(p[2]), float(str(p[5]))))
-                cur.fetchone = lambda: (len(self.edges),)  # type: ignore[method-assign]
-            elif "select exists (select 1 from staging.kg_edges" in sql:
+            elif "insert into staging.entity_relations" in sql:
+                attrs = json.loads(str(p[10]))
+                self.edges.append(
+                    (str(p[1]), str(p[2]), "supplies_to", float(str(p[8])), attrs.get("revenue_share_pct"))
+                )
+                cur.fetchone = lambda: ("rel-uuid",)  # type: ignore[method-assign]
+            elif "select exists (select 1 from staging.entity_relations" in sql:
                 cur.fetchone = lambda: (bool(self.edges),)  # type: ignore[method-assign]
-            elif "from staging.kg_edges e" in sql and "where e.from_id = %s" in sql:
-                target = str(p[0])
-                cur.fetchall = lambda: [  # type: ignore[method-assign]
-                    (to_id, self.entities.get(to_id, to_id), Decimal(str(conf)))
-                    for from_id, to_id, rel, conf in self.edges
-                    if from_id == target and rel == "supplies_to"
-                ]
-            elif "from staging.kg_edges e" in sql and "where e.to_id = %s" in sql:
-                target = str(p[0])
-                cur.fetchall = lambda: [  # type: ignore[method-assign]
-                    (from_id, self.entities.get(from_id, from_id), Decimal(str(conf)))
-                    for from_id, to_id, rel, conf in self.edges
-                    if to_id == target and rel == "supplies_to"
-                ]
+            elif "insert into staging.entity_aliases" in sql:
+                self.entities[str(p[0])] = str(p[1])
+            elif "select staging.entity_mint" in sql:
+                uid = str(uuid.uuid5(uuid.NAMESPACE_URL, f"partner:{p[0]}"))
+                self.entities.setdefault(uid, str(p[0]))
+                cur.fetchone = lambda uid=uid: (uid,)  # type: ignore[method-assign]
             elif "insert into mart.issuer_supply_chain_exposure" in sql:
                 self.mart_rows.append(p)
             return cur
@@ -596,8 +604,9 @@ def test_resolve_or_mint_partner_entity_passes_8_params_and_uses_savepoint() -> 
     )
     assert first_uuid == minted_id
     assert conn.mint_calls == 1
-    assert len(conn.alias_inserts) == 1
-    assert len(conn.alias_inserts[0]) == 8
+    assert len(conn.alias_inserts) == 2
+    assert len(conn.alias_inserts[0]) == 4
+    assert len(conn.alias_inserts[1]) == 4
 
     # Filing 2 (older tx_time: 2026-01-15) resolves existing legacy-id without re-minting
     second_uuid = _resolve_or_mint_partner_entity(
@@ -706,10 +715,15 @@ def test_supply_chain_rejects_unanchored_quotes_computes_filing_age_freshness_an
                         {"plain_text": text, "accession": "0001045810-26-000001"},
                     )
                 ]
-            elif "insert into staging.kg_entities" in sql:
-                entities_written[str(p[0])] = str(p[2])
-            elif "insert into staging.kg_edges" in sql:
-                cur.fetchone = lambda: (1,)  # type: ignore[method-assign]
+            elif "from staging.entity_aliases" in sql and "scheme = 'name'" in sql:
+                cur.fetchone = lambda: None  # type: ignore[method-assign]
+            elif "select staging.entity_mint" in sql:
+                uid = str(uuid.uuid5(uuid.NAMESPACE_URL, f"partner:{p[0]}"))
+                cur.fetchone = lambda uid=uid: (uid,)  # type: ignore[method-assign]
+            elif "insert into staging.entity_aliases" in sql:
+                entities_written[str(p[0])] = str(p[1])
+            elif "insert into staging.entity_relations" in sql:
+                cur.fetchone = lambda: ("rel-uuid-1",)  # type: ignore[method-assign]
             return cur
 
     conn = _EntityCheckConn()
@@ -719,7 +733,9 @@ def test_supply_chain_rejects_unanchored_quotes_computes_filing_age_freshness_an
         cutoff=datetime(2026, 3, 1, tzinfo=UTC),
         llm_gateway=gateway,
     )
-    assert entities_written[nvda_uuid] != "NVDA"
+    assert entities_written, "partner entity alias write was never exercised"
+    assert "NVDA" not in entities_written.values()
+    assert nvda_uuid not in entities_written
 
     # Verify identify_supply_chain_partners bounds normal oversized 10-K text while keeping head, anchored middle, and tail
     captured: dict[str, str] = {}
@@ -835,32 +851,6 @@ def test_load_issuer_graph_partners_reads_revenue_share_from_entity_relations_an
                         {"cik": 1045810, "form": "10-K", "accession": "000104581026000010", "plain_text": filing_text},
                     )
                 ]
-            elif "insert into staging.entity_relations" in sql:
-                attrs = json.loads(str(p[10]))
-                self.entity_relations.append((str(p[1]), str(p[2]), Decimal(str(p[8])), attrs.get("revenue_share_pct")))
-            elif "insert into staging.kg_entities" in sql:
-                self.entities[str(p[0])] = str(p[2])
-            elif "select source, confidence from staging.kg_edges" in sql:
-                cur.fetchone = lambda: None  # type: ignore[method-assign]
-            elif "insert into staging.kg_edges" in sql:
-                self.edges.append((str(p[0]), str(p[1]), str(p[2]), float(str(p[5]))))
-                cur.fetchone = lambda: (len(self.edges),)  # type: ignore[method-assign]
-            elif "select exists (select 1 from staging.kg_edges" in sql:
-                cur.fetchone = lambda: (bool(self.edges),)  # type: ignore[method-assign]
-            elif "from staging.kg_edges e" in sql and "where e.from_id = %s" in sql:
-                target = str(p[0])
-                cur.fetchall = lambda: [  # type: ignore[method-assign]
-                    (to_id, self.entities.get(to_id, to_id), Decimal(str(conf)))
-                    for from_id, to_id, rel, conf in self.edges
-                    if from_id == target and rel == "supplies_to"
-                ]
-            elif "from staging.kg_edges e" in sql and "where e.to_id = %s" in sql:
-                target = str(p[0])
-                cur.fetchall = lambda: [  # type: ignore[method-assign]
-                    (from_id, self.entities.get(from_id, from_id), Decimal(str(conf)))
-                    for from_id, to_id, rel, conf in self.edges
-                    if to_id == target and rel == "supplies_to"
-                ]
             elif "from staging.entity_relations r" in sql:
                 aliases = set(p[0]) if p and isinstance(p[0], list | tuple) else set()
                 cur.fetchall = lambda: [  # type: ignore[method-assign]
@@ -875,6 +865,20 @@ def test_load_issuer_graph_partners_reads_revenue_share_from_entity_relations_an
                     for from_id, to_id, conf, pct in self.entity_relations
                     if from_id in aliases or to_id in aliases
                 ]
+            elif "insert into staging.entity_relations" in sql:
+                attrs = json.loads(str(p[10]))
+                self.entity_relations.append((str(p[1]), str(p[2]), Decimal(str(p[8])), attrs.get("revenue_share_pct")))
+                cur.fetchone = lambda: ("rel-uuid",)  # type: ignore[method-assign]
+            elif "from staging.entity_aliases" in sql and "scheme = 'name'" in sql:
+                cur.fetchone = lambda: None  # type: ignore[method-assign]
+            elif "select exists (select 1 from staging.entity_relations" in sql:
+                cur.fetchone = lambda: (bool(self.entity_relations),)  # type: ignore[method-assign]
+            elif "insert into staging.entity_aliases" in sql:
+                self.entities[str(p[0])] = str(p[1])
+            elif "select staging.entity_mint" in sql:
+                uid = str(uuid.uuid5(uuid.NAMESPACE_URL, f"partner:{p[0]}"))
+                self.entities.setdefault(uid, str(p[0]))
+                cur.fetchone = lambda uid=uid: (uid,)  # type: ignore[method-assign]
             elif "insert into mart.issuer_supply_chain_exposure" in sql:
                 self.mart_rows.append(p)
             return cur

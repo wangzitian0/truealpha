@@ -13,7 +13,6 @@ from decimal import Decimal
 from typing import Any
 
 from factors.base.supply_chain_exposure import SupplyChainExposure, SupplyChainPartner, supply_chain_exposure
-from factors.shared.entity_resolution import add_edge, ensure_entity
 from psycopg import Connection
 
 from data_engine.datahub._helpers import (
@@ -21,7 +20,6 @@ from data_engine.datahub._helpers import (
     has_table,
     safe_call,
     safe_case_id_part,
-    safe_execute,
     safe_fetchall,
     safe_fetchone,
     single_origin_confidence,
@@ -237,10 +235,10 @@ def _resolve_or_mint_partner_entity(
     def _resolve() -> str:
         row = connection.execute(
             "select staging.entity_survivor(a.entity_id, %s)::text from staging.entity_aliases a "
-            "join staging.entities e on e.entity_id = a.entity_id where e.kind in ('issuer', 'fund') and "
-            "((a.scheme = 'legacy-id' and a.value = %s) or (a.scheme = 'name' and lower(a.value) = lower(%s) "
-            "and a.transaction_time <= %s)) order by (a.scheme = 'legacy-id') desc, a.confidence desc, "
-            "a.transaction_time desc limit 1",
+            "join staging.entities e on e.entity_id = a.entity_id where "
+            "(a.scheme = 'legacy-id' and a.value = %s) or "
+            "(e.kind in ('issuer', 'fund') and a.scheme = 'name' and lower(a.value) = lower(%s) and a.transaction_time <= %s) "
+            "order by (a.scheme = 'legacy-id') desc, a.confidence desc, a.transaction_time desc limit 1",
             (tx_time, legacy_id, clean_name, tx_time),
         ).fetchone()
         if row and row[0]:
@@ -267,11 +265,17 @@ def _resolve_or_mint_partner_entity(
                 "insert into staging.entity_aliases (entity_id, scheme, value, valid_from, valid_to, "
                 "transaction_time, source, raw_ref, method, confidence, mapping_version) values "
                 "(%s::uuid, 'legacy-id', %s, '-infinity'::date, null, least(%s::timestamptz, clock_timestamp()), "
-                "'datahub.supply_chain', %s, 'asserted', 0.9, 'supply-chain:v1'), "
-                "(%s::uuid, 'name', %s, '-infinity'::date, null, least(%s::timestamptz, clock_timestamp()), "
                 "'datahub.supply_chain', %s, 'asserted', 0.9, 'supply-chain:v1') on conflict do nothing",
-                (minted_uuid, legacy_id, tx_time, raw_ref, minted_uuid, clean_name, tx_time, raw_ref),
+                (minted_uuid, legacy_id, tx_time, raw_ref),
             )
+            if clean_name:
+                connection.execute(
+                    "insert into staging.entity_aliases (entity_id, scheme, value, valid_from, valid_to, "
+                    "transaction_time, source, raw_ref, method, confidence, mapping_version) values "
+                    "(%s::uuid, 'name', %s, '-infinity'::date, null, least(%s::timestamptz, clock_timestamp()), "
+                    "'datahub.supply_chain', %s, 'asserted', 0.9, 'supply-chain:v1') on conflict do nothing",
+                    (minted_uuid, clean_name, tx_time, raw_ref),
+                )
             return minted_uuid
         return _deterministic_partner_uuid(legacy_id)
 
@@ -393,11 +397,6 @@ def _issuer_display_name(connection: Connection[Any], canonical_issuer_id: str, 
         ).fetchone()
         if row and row[0]:
             return str(row[0])
-    if clean_ticker:
-        connection.execute(
-            "update staging.kg_entities set display_name = '' where id = %s and upper(btrim(display_name)) = %s",
-            (canonical_issuer_id, clean_ticker),
-        )
     return ""
 
 
@@ -501,7 +500,7 @@ def persist_extracted_supply_chain_edges(
             )
             if is_uuid(from_id) and is_uuid(to_id) and from_id != to_id:
                 attrs = {"revenue_share_pct": str(cand.revenue_share_pct)} if cand.revenue_share_pct is not None else {}
-                safe_execute(
+                row = safe_fetchone(
                     connection,
                     "with t as (select least(%s::timestamptz, clock_timestamp()) as eff_tx), "
                     "r as (select staging.entity_relation_uuid('supplies_to', %s::uuid, %s::uuid, %s::date, t.eff_tx, "
@@ -511,7 +510,8 @@ def persist_extracted_supply_chain_edges(
                     "select r.rel_id, 'supplies_to', %s::uuid, %s::uuid, %s::date, r.eff_tx, 'sec_10k_supply_chain', %s, "
                     "'asserted', %s, %s::jsonb, %s::jsonb, 'supply-chain:v1' from r "
                     "where exists (select 1 from staging.entities where entity_id = %s::uuid) "
-                    "and exists (select 1 from staging.entities where entity_id = %s::uuid) on conflict do nothing",
+                    "and exists (select 1 from staging.entities where entity_id = %s::uuid) "
+                    "on conflict do nothing returning relation_id",
                     (
                         tx_time,
                         from_id,
@@ -528,36 +528,8 @@ def persist_extracted_supply_chain_edges(
                         to_id,
                     ),
                 )
-
-            def _add_kg_edge(
-                from_id: str = from_id,
-                to_id: str = to_id,
-                partner_uuid: str = partner_uuid,
-                cand: SupplyChainEdgeCandidate = cand,
-            ) -> bool:
-                ensure_entity(
-                    connection,
-                    issuer_id,
-                    "company",
-                    _issuer_display_name(connection, issuer_id, matched.ticker, tx_time),
-                )
-                ensure_entity(connection, partner_uuid, "company", cand.target_entity_name)
-                return bool(
-                    add_edge(
-                        connection,
-                        from_id=from_id,
-                        to_id=to_id,
-                        relation_type="supplies_to",
-                        confidence=float(cand.confidence),
-                        source="sec_10k_supply_chain",
-                        transaction_time=tx_time,
-                        valid_from=filing_dt.isoformat(),
-                        raw_ref=raw_ref,
-                    )
-                )
-
-            if safe_call(connection, _add_kg_edge, False):
-                inserted += 1
+                if row:
+                    inserted += 1
     diag.edges_inserted = inserted
     return inserted
 
@@ -691,20 +663,6 @@ def _load_issuer_graph_partners(
 ) -> list[SupplyChainPartner]:
     partners: list[SupplyChainPartner] = []
     seen_edges: dict[tuple[str, str], int] = {}
-    for endpoint_id in dict.fromkeys((issuer.issuer_id, issuer.legacy_id)):
-        if not endpoint_id:
-            continue
-        for rel_type, partner_col, self_col in (("customer", "to_id", "from_id"), ("supplier", "from_id", "to_id")):
-            sql = (
-                f"select e.{partner_col}, coalesce(ent.display_name, e.{partner_col}), e.confidence "
-                f"from staging.kg_edges e left join staging.kg_entities ent on ent.id = e.{partner_col} "
-                f"where e.{self_col} = %s and e.relation_type = 'supplies_to' and e.transaction_time <= %s "
-                "and (e.valid_time is null or e.valid_time @> %s::date)"
-            )
-            for p_id, p_name, conf in connection.execute(sql, (endpoint_id, cutoff, cutoff_date)).fetchall():
-                pid_str, pname_str = str(p_id), str(p_name)
-                if (rel_type, pid_str) not in seen_edges:
-                    _append_partner(partners, seen_edges, pid_str, pname_str, rel_type, None, conf)
     det_uuid = (
         _deterministic_partner_uuid(issuer.legacy_id) if issuer.legacy_id and not is_uuid(issuer.legacy_id) else ""
     )
@@ -713,10 +671,18 @@ def _load_issuer_graph_partners(
         rows = safe_fetchall(
             connection,
             "select r.from_entity_id::text, r.to_entity_id::text, r.confidence, r.attributes->>'revenue_share_pct', "
-            "coalesce(ent_from.display_name, r.from_entity_id::text), coalesce(ent_to.display_name, r.to_entity_id::text) "
+            "coalesce(nf.value, r.from_entity_id::text), coalesce(nt.value, r.to_entity_id::text) "
             "from staging.entity_relations r "
-            "left join staging.kg_entities ent_from on ent_from.id = r.from_entity_id::text "
-            "left join staging.kg_entities ent_to on ent_to.id = r.to_entity_id::text "
+            "left join lateral ("
+            "  select ea.value from staging.entity_aliases ea "
+            "  where ea.entity_id = r.from_entity_id and ea.scheme = 'name' "
+            "  order by ea.confidence desc, ea.transaction_time desc, ea.alias_id desc limit 1"
+            ") nf on true "
+            "left join lateral ("
+            "  select ea.value from staging.entity_aliases ea "
+            "  where ea.entity_id = r.to_entity_id and ea.scheme = 'name' "
+            "  order by ea.confidence desc, ea.transaction_time desc, ea.alias_id desc limit 1"
+            ") nt on true "
             "where r.relation_type = 'supplies_to' and (r.from_entity_id::text = any(%s) or r.to_entity_id::text = any(%s)) "
             "and r.transaction_time <= %s and r.valid_from <= %s::date and (r.valid_to is null or r.valid_to > %s::date) "
             "order by r.transaction_time desc, r.relation_id desc",
@@ -758,7 +724,7 @@ def materialize_universe_supply_chain_exposure(
 ) -> SupplyChainRunReport:
     """Materialize supply-chain exposure for a universe run."""
     count = 0
-    has_edges_table = has_table(connection, "staging.kg_edges")
+    has_edges_table = has_table(connection, "staging.entity_relations")
     diag = _ExtractionDiagnostics()
     if has_edges_table:
         persist_extracted_supply_chain_edges(
@@ -811,13 +777,9 @@ def materialize_universe_supply_chain_exposure(
 
 
 def _supplies_to_edges_exist(connection: Connection[Any], cutoff: datetime) -> bool:
-    for table in ("staging.kg_edges", "staging.entity_relations"):
-        sql = f"select exists (select 1 from {table} where relation_type = 'supplies_to' and transaction_time <= %s)"  # noqa: S608
-        row = (
-            connection.execute(sql, (cutoff,)).fetchone()
-            if table == "staging.kg_edges"
-            else safe_fetchone(connection, sql, (cutoff,))
-        )
-        if row and row[0]:
-            return True
-    return False
+    row = safe_fetchone(
+        connection,
+        "select exists (select 1 from staging.entity_relations where relation_type = 'supplies_to' and transaction_time <= %s)",
+        (cutoff,),
+    )
+    return bool(row and row[0])

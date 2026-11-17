@@ -69,7 +69,10 @@ left join lateral (
               and coalesce(
                   lpad(nullif(ltrim(ei_issuer.cik, '0'), ''), 10, '0'),
                   lpad(substring(c.issuer_id from '^(?:issuer|company):cik:0*([0-9]+)$'), 10, '0')
-              ) = lpad(substring(h.issuer_entity from '^(?:issuer|company):cik:0*([0-9]+)$'), 10, '0')
+              ) = coalesce(
+                  lpad(nullif(ltrim(ei_hold.cik, '0'), ''), 10, '0'),
+                  lpad(substring(h.issuer_entity from '^(?:issuer|company):cik:0*([0-9]+)$'), 10, '0')
+              )
           )
       )
     order by (coalesce(ei.listing_id, c.listing_id) = h.listing_id) desc,
@@ -79,6 +82,15 @@ left join lateral (
 ) core on true
 order by h.fund_id, h.percent_of_net_assets desc nulls last, h.holding_name
 """
+
+_LINES_SQL = _LINES_SQL.replace(
+    "from mart.fund_holdings_resolved h\njoin vintage",
+    "from mart.fund_holdings_resolved h\n"
+    "left join lateral (\n"
+    "    select ei_h.cik from mart.entity_identity ei_h where ei_h.entity_id::text = h.issuer_entity limit 1\n"
+    ") ei_hold on true\n"
+    "join vintage",
+)
 
 
 @dataclass(frozen=True)

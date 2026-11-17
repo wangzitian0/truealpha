@@ -143,18 +143,27 @@ def _seed_edge(
     relation_type: str,
     knowable_at: datetime = _T772_KNOWABLE,
     valid: str = "[1989-01-01,)",
+    from_type: str = "issuer",
+    to_type: str = "issuer",
 ) -> None:
-    for entity_id in (from_id, to_id):
-        conn.execute(
-            "insert into staging.kg_entities (id, entity_type, display_name) values (%s, 'company', %s) "
-            "on conflict (id) do nothing",
-            (entity_id, entity_id),
-        )
-    conn.execute(
-        "insert into staging.kg_edges "
-        "(from_id, to_id, relation_type, valid_time, transaction_time, confidence, source, raw_ref) "
-        "values (%s, %s, %s, %s::daterange, %s, 0.9, 'test:t772', 'raw:t772')",
-        (from_id, to_id, relation_type, valid, knowable_at),
+    from factors.shared import entity_resolution as er
+
+    bounds = [part.strip() for part in valid.strip("[]()").split(",")]
+    valid_from = bounds[0] or "-infinity"
+    valid_to = bounds[1] if len(bounds) > 1 and bounds[1] else None
+    from_uuid = er.ensure_entity(conn, from_id, from_type, from_id, transaction_time=knowable_at, raw_ref="raw:t772")
+    to_uuid = er.ensure_entity(conn, to_id, to_type, to_id, transaction_time=knowable_at, raw_ref="raw:t772")
+    er.add_edge(
+        conn,
+        from_id=from_uuid,
+        to_id=to_uuid,
+        relation_type=relation_type,
+        confidence=0.9,
+        source="test:t772",
+        transaction_time=knowable_at,
+        valid_from=valid_from,
+        valid_to=valid_to,
+        raw_ref="raw:t772",
     )
 
 
@@ -174,8 +183,15 @@ def _materialize_t772(conn: psycopg.Connection[Any], run_id: str) -> dict[str, t
 def test_a_graph_with_no_supplies_to_edge_says_no_extraction_ran(connection: psycopg.Connection[Any]) -> None:
     # `holds` and `same_as` edges exist, as on Staging. Neither is a supplier edge, so neither
     # may count as an extraction and neither may turn an issuer into a supply-chain partner.
-    _seed_edge(connection, from_id="fund:t772", to_id="issuer:t772:a", relation_type="holds")
-    _seed_edge(connection, from_id="issuer:t772:a", to_id="figi:t772:a", relation_type="same_as")
+    _seed_edge(
+        connection,
+        from_id="etf:series:S000999772",
+        to_id="company:isin:US9997720001",
+        relation_type="holds",
+        from_type="fund",
+        to_type="instrument",
+    )
+    _seed_edge(connection, from_id="issuer:t772:a", to_id="issuer:t772:dup", relation_type="same_as")
     rows = _materialize_t772(connection, "run:t772:no-extraction")
     assert rows == {
         _T772_A: ("unavailable", ["no_supply_chain_extraction"], 0),
