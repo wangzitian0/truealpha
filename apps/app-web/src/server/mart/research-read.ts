@@ -29,6 +29,7 @@ export type Availability =
 	| "stale"
 	| "excluded"
 	| "low_confidence"
+	| "not_applicable"
 	| "error";
 
 export const DASHBOARD_STRATEGY_ID = "large_model_value_v0";
@@ -398,6 +399,9 @@ async function readOutputCount(
 }
 
 export function decisionAvailability(decision: StrategyRunDecision): Availability {
+	if (decision.availability_status === "not_applicable") {
+		return "not_applicable";
+	}
 	if (decision.outcome === "excluded") {
 		return decision.exclusion_reason === "below_confidence_floor" ? "low_confidence" : "excluded";
 	}
@@ -1158,6 +1162,7 @@ const AVAILABILITY_VALUES: ReadonlySet<Availability> = new Set<Availability>([
 	"stale",
 	"excluded",
 	"low_confidence",
+	"not_applicable",
 	"error",
 ]);
 

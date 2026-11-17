@@ -10,6 +10,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from truealpha_contracts.access import AccessContext
+from truealpha_contracts.execution import AvailabilityStatus
 from truealpha_contracts.research import ValuationTier
 from truealpha_contracts.strategy_run import (
     StrategyRunDecision,
@@ -43,6 +44,11 @@ def _decision_from_json(payload: dict[str, Any]) -> StrategyRunDecision:
         peg_rank=payload.get("peg_rank"),
         labor_efficiency_metric=payload.get("labor_efficiency_metric"),
         exclusion_reason=payload["exclusion_reason"],
+        availability_status=(
+            AvailabilityStatus(payload["availability_status"])
+            if payload.get("availability_status") is not None
+            else None
+        ),
         rank=payload["rank"],
         **dec,
     )

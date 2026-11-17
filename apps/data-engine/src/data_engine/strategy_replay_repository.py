@@ -12,6 +12,7 @@ from truealpha_contracts.strategy import LargeModelValueV0Definition
 
 from data_engine.core_strategy_replay import CORPUS_SHA256, Decision
 from data_engine.datahub.production_topt.status_dimensions import (
+    contract_not_applicable_issuer_ids,
     decision_availability_status,
     statuses_without_raw_pointer,
 )
@@ -133,12 +134,19 @@ def write_strategy_decision(
     strategy_run_id: str,
     definition: LargeModelValueV0Definition | None = None,
     source_evidence_status: InputEvidenceStatus | None = None,
+    not_applicable_issuers: frozenset[str] | None = None,
 ) -> str:
     payload = {"strategy_run_id": strategy_run_id, **decision.to_json()}
+    exempt_issuers = (
+        contract_not_applicable_issuer_ids(connection, metric="gppe")
+        if (not_applicable_issuers is None and decision.exclusion_reason == "missing_gross_profit_fact")
+        else (not_applicable_issuers or frozenset())
+    )
     availability_status = decision_availability_status(
         eligible=decision.eligible,
         exclusion_reason=decision.exclusion_reason,
         value_present=decision.capital_adjusted_labor_efficiency is not None,
+        not_applicable=decision.issuer_id in exempt_issuers,
     )
     definition_ids = () if definition is None else (f"{definition.strategy_id}:{definition.content_sha256}",)
     default_evidence, factor_validation_status = statuses_without_raw_pointer(definition_ids)
@@ -225,6 +233,7 @@ def write_replay(
         claim_ceiling=claim_ceiling,
         risk_free_rate=risk_free_rate,
     )
+    not_applicable_issuers = contract_not_applicable_issuer_ids(connection, metric="gppe")
     decision_ids = tuple(
         write_strategy_decision(
             connection,
@@ -232,6 +241,7 @@ def write_replay(
             strategy_run_id=run_id,
             definition=definition,
             source_evidence_status=source_evidence_status,
+            not_applicable_issuers=not_applicable_issuers,
         )
         for decision in decisions
     )

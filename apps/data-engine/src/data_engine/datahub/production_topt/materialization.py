@@ -68,6 +68,7 @@ from data_engine.datahub.production_topt.source_registrations import SEMANTIC_TY
 from data_engine.datahub.production_topt.status_dimensions import (
     StatusDimensions,
     availability_status_for,
+    contract_not_applicable_issuer_ids,
     factor_validation_status_for,
     resolve_raw_pointers,
     source_evidence_status_for,
@@ -1165,6 +1166,11 @@ class PostgresToptCoreRepository:
             )
             evidence_by_listing = self._load_source_evidence(snapshot)
             gppe_validation = factor_validation_status_for((gppe_definition.definition_id,))
+            not_applicable_issuers = contract_not_applicable_issuer_ids(
+                self._connection,
+                metric="gppe",
+                universe_id=snapshot.universe_id,
+            )
 
             def _status_dims(res: Any, validation: Any) -> StatusDimensions:
                 return StatusDimensions(
@@ -1173,6 +1179,7 @@ class PostgresToptCoreRepository:
                         freshness=res.freshness.value,
                         confidence=res.confidence,
                         reason_codes=(item.value for item in res.reason_codes),
+                        not_applicable=res.issuer_id in not_applicable_issuers,
                     ),
                     source_evidence_status=evidence_by_listing[res.listing_id],
                     factor_validation_status=validation,

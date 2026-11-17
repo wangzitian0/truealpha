@@ -9,7 +9,9 @@ from typing import Any
 
 from factors.validation_records import validation_status_for
 from psycopg import Connection
+from truealpha_contracts.environment_contract import load_environment_contract
 from truealpha_contracts.execution import AvailabilityStatus, FactorValidationStatus, InputEvidenceStatus
+from truealpha_contracts.universes import universe_with_role
 
 LOW_CONFIDENCE_FLOOR = Decimal("0.50")
 
@@ -28,15 +30,55 @@ class StatusDimensions:
         )
 
 
+def contract_not_applicable_issuer_ids(
+    connection: Connection[Any],
+    *,
+    metric: str = "gppe",
+    universe_id: str | None = None,
+) -> frozenset[str]:
+    """Resolve issuer identifiers declared not_applicable by the environment contract."""
+    contract = load_environment_contract()
+    entries = (
+        contract.not_applicable_identities(metric, universe_with_role("strategy"))
+        if universe_id is None
+        else contract.not_applicable_for_universe_id(metric, universe_id)
+    )
+    if not entries:
+        return frozenset()
+    legacy_ids = list(dict.fromkeys(legacy_id for entry in entries for legacy_id in entry.legacy_ids))
+    ciks = list(dict.fromkeys(entry.cik for entry in entries))
+    leis = list(dict.fromkeys(entry.lei.upper() for entry in entries))
+    resolved: set[str] = set(legacy_ids)
+    rows = connection.execute(
+        """
+        select ei.entity_id::text, ei.legacy_id
+        from mart.entity_identity ei
+        where ei.cik = any(%s::text[])
+           or upper(coalesce(ei.lei, '')) = any(%s::text[])
+           or ei.legacy_id = any(%s::text[])
+        """,
+        (ciks, leis, legacy_ids),
+    ).fetchall()
+    for entity_id, legacy_id in rows:
+        if entity_id:
+            resolved.add(str(entity_id))
+        if legacy_id:
+            resolved.add(str(legacy_id))
+    return frozenset(resolved)
+
+
 def availability_status_for(
     *,
     availability: str,
     freshness: str,
     confidence: Decimal,
     reason_codes: Iterable[str] = (),
+    not_applicable: bool = False,
 ) -> AvailabilityStatus:
     reasons = set(reason_codes)
     if availability == "unavailable":
+        if not_applicable and "missing_gross_profit" in reasons:
+            return AvailabilityStatus.NOT_APPLICABLE
         return AvailabilityStatus.UNAVAILABLE
     if freshness == "stale" or "stale_input" in reasons:
         return AvailabilityStatus.STALE
@@ -48,8 +90,14 @@ def availability_status_for(
 
 
 def decision_availability_status(
-    *, eligible: bool, exclusion_reason: str | None, value_present: bool
+    *,
+    eligible: bool,
+    exclusion_reason: str | None,
+    value_present: bool,
+    not_applicable: bool = False,
 ) -> AvailabilityStatus:
+    if not eligible and not_applicable and exclusion_reason == "missing_gross_profit_fact":
+        return AvailabilityStatus.NOT_APPLICABLE
     if not eligible and exclusion_reason:
         return AvailabilityStatus.EXCLUDED
     if not value_present:

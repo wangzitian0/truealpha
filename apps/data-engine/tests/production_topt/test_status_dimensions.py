@@ -48,12 +48,57 @@ def test_a_strategy_decision_is_excluded_by_its_own_rule_before_anything_else() 
         is AvailabilityStatus.EXCLUDED
     )
     assert (
+        decision_availability_status(eligible=False, exclusion_reason="below_confidence_floor", value_present=True)
+        is AvailabilityStatus.EXCLUDED
+    )
+    assert (
+        decision_availability_status(
+            eligible=False,
+            exclusion_reason="missing_gross_profit_fact",
+            value_present=False,
+            not_applicable=True,
+        )
+        is AvailabilityStatus.NOT_APPLICABLE
+    )
+    assert (
+        decision_availability_status(
+            eligible=False,
+            exclusion_reason="missing_headcount_disclosure",
+            value_present=False,
+            not_applicable=True,
+        )
+        is AvailabilityStatus.EXCLUDED
+    )
+    assert (
         decision_availability_status(eligible=False, exclusion_reason=None, value_present=False)
         is AvailabilityStatus.UNAVAILABLE
     )
     assert (
         decision_availability_status(eligible=True, exclusion_reason=None, value_present=True)
         is AvailabilityStatus.AVAILABLE
+    )
+
+
+def test_availability_status_marks_contract_missing_gross_profit_not_applicable_without_masking_other_gaps() -> None:
+    assert (
+        availability_status_for(
+            availability="unavailable",
+            freshness="fresh",
+            confidence=Decimal("0.9"),
+            reason_codes=("missing_gross_profit",),
+            not_applicable=True,
+        )
+        is AvailabilityStatus.NOT_APPLICABLE
+    )
+    assert (
+        availability_status_for(
+            availability="unavailable",
+            freshness="fresh",
+            confidence=Decimal("0.9"),
+            reason_codes=("missing_headcount",),
+            not_applicable=True,
+        )
+        is AvailabilityStatus.UNAVAILABLE
     )
 
 
