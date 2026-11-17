@@ -170,7 +170,12 @@ jobs:
             web:
               - 'tools/**'
               - 'apps/app-web/**'
-              - 'common/contracts/conformance/**'
+              - 'apps/llm-service/**'
+              - 'common/contracts/**'
+              - 'common/factors/**'
+              - 'common/runtime/**'
+              - 'db/**'
+              - '.github/actions/**'
               - '.github/workflows/ci-web.yml'
               - '.github/workflows/ci-required.yml'
             # No `!` entry stands in these lanes (#1412). This step uses the default

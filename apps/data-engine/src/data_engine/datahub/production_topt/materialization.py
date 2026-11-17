@@ -48,13 +48,13 @@ from truealpha_contracts.common import (
     reject_binary_float,
     require_aware,
 )
-from truealpha_contracts.concept_mapping import ConceptMappingRuleset
 from truealpha_contracts.environment_contract import UnknownUniverse, load_environment_contract
 from truealpha_contracts.execution import InputEvidenceStatus
 from truealpha_contracts.strategy import LargeModelValueV0Definition, load_live_strategy_definition
 from truealpha_runtime.storage import StorageError
 
 from data_engine import raw_store
+from data_engine.contracts.concept_mapping import ConceptMappingRuleset
 from data_engine.datahub.input_cells import InputCell, financial_input_rows, last_close_cell
 from data_engine.datahub.market_prices import SPLIT_ADJUSTED, UNADJUSTED
 from data_engine.datahub.price_series import load_daily_series

@@ -6,7 +6,8 @@ import json
 from typing import Any
 
 from psycopg import Connection
-from truealpha_contracts.concept_mapping import ConceptMappingRuleset
+
+from data_engine.contracts.concept_mapping import ConceptMappingRuleset
 
 _KIND = "concept-mapping"
 

@@ -10,8 +10,10 @@ from decimal import Decimal
 from typing import Any, Protocol, runtime_checkable
 
 from truealpha_contracts.common import canonical_sha256
-from truealpha_contracts.datahub import CaptureWorkItem, ObligationTerminalState
-from truealpha_contracts.evidence_graph import (
+from truealpha_contracts.models import DataSource
+
+from data_engine.contracts.datahub import CaptureWorkItem, ObligationTerminalState
+from data_engine.contracts.evidence_graph import (
     BitemporalStamp,
     EvidenceEdge,
     EvidenceGraphWriter,
@@ -20,8 +22,7 @@ from truealpha_contracts.evidence_graph import (
     EvidenceNodeRef,
     EvidenceRelation,
 )
-from truealpha_contracts.models import DataSource
-from truealpha_contracts.obligation_reason_codes import ObligationDisposition, ObligationReasonCode, disposition_for
+from data_engine.contracts.obligation_reason_codes import ObligationDisposition, ObligationReasonCode, disposition_for
 
 _HEX64 = 64
 SERVED_BY_FAILOVER = "served_by_failover"

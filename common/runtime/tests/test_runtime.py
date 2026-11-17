@@ -216,9 +216,7 @@ def test_raw_storage_is_content_addressed_and_idempotent():
 def test_importing_runtime_and_llm_service_does_not_instantiate_runtime_settings(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """#1375 (G1), #1389 (F1): truealpha_runtime exposes no import-time runtime_settings singleton,
-    and cold-importing truealpha_runtime and llm_service.main in a fresh subprocess with
-    S3_BUCKET=INVALID_UPPERCASE succeeds without instantiating RuntimeSettings."""
+    """#1375 (G1), #1389 (F1): neither `truealpha_runtime` nor `llm_service.main` instantiates settings on import."""
     import truealpha_runtime
     import truealpha_runtime.config as runtime_config
     from llm_service.config import Settings as LlmSettings
@@ -233,10 +231,10 @@ def test_importing_runtime_and_llm_service_does_not_instantiate_runtime_settings
 
     monkeypatch.setenv("S3_BUCKET", "INVALID_UPPERCASE")
     core = CoreRuntimeSettings(_env_file=None, app_env="test")
-    llm = LlmSettings(_env_file=None, app_env="test")
     assert core.app_env == "test"
-    assert llm.app_env == "test"
 
+    with pytest.raises(ValueError, match="S3_BUCKET must be a lowercase"):
+        LlmSettings(_env_file=None, app_env="test")
     with pytest.raises(ValueError, match="S3_BUCKET must be a lowercase"):
         RuntimeSettings(_env_file=None, app_env="test")
 

@@ -583,14 +583,14 @@ def test_cross_day_pair_reconciles_insufficient_not_conflict() -> None:
 
     from data_engine.datahub.quality_report import _served_day_assertions
     from truealpha_contracts.common import canonical_sha256
-    from truealpha_contracts.reconciliation import (
+    from truealpha_contracts.universe import SubjectKind, SubjectRef
+    from truealpha_runtime.reconciliation import (
         ReconciliationCell,
         ReconciliationOutcome,
         SourceAssertion,
         reconcile_source_assertions,
     )
-    from truealpha_contracts.reconciliation_policies import RECONCILIATION_POLICY
-    from truealpha_contracts.universe import SubjectKind, SubjectRef
+    from truealpha_runtime.reconciliation_policies import RECONCILIATION_POLICY
 
     entries = _served_day_assertions(
         [
@@ -645,14 +645,14 @@ def test_deployed_tolerance_absorbs_real_vendor_spread_and_still_catches_errors(
 
     from data_engine.datahub.quality_report import _served_day_assertions
     from truealpha_contracts.common import canonical_sha256
-    from truealpha_contracts.reconciliation import (
+    from truealpha_contracts.universe import SubjectKind, SubjectRef
+    from truealpha_runtime.reconciliation import (
         ReconciliationCell,
         ReconciliationOutcome,
         SourceAssertion,
         reconcile_source_assertions,
     )
-    from truealpha_contracts.reconciliation_policies import RECONCILIATION_POLICY
-    from truealpha_contracts.universe import SubjectKind, SubjectRef
+    from truealpha_runtime.reconciliation_policies import RECONCILIATION_POLICY
 
     observed = [
         ("aapl", "317.23", "317.20"),
@@ -837,7 +837,7 @@ def _reconcile(entries):
 def test_each_bar_field_gets_its_own_outcome_under_its_own_policy() -> None:
     """The 2026-08-14 AAPL cassette pair, as fusion grades it: five fields, five cells,
     five agreed outcomes — the report can now say more than one metric is HIGH."""
-    from truealpha_contracts.reconciliation_policies import (
+    from truealpha_runtime.reconciliation_policies import (
         FIELD_RECONCILIATION_POLICIES,
         RECONCILIATION_POLICY,
         VOLUME_RECONCILIATION_POLICY,
@@ -962,7 +962,7 @@ def test_the_volume_tolerance_absorbs_late_prints_and_still_catches_a_different_
     primary-listing-only figure stays a conflict."""
     from decimal import Decimal
 
-    from truealpha_contracts.reconciliation_policies import VOLUME_RECONCILIATION_POLICY
+    from truealpha_runtime.reconciliation_policies import VOLUME_RECONCILIATION_POLICY
 
     assert VOLUME_RECONCILIATION_POLICY.relative_tolerance == Decimal("0.001")
     assert VOLUME_RECONCILIATION_POLICY.absolute_tolerance == Decimal("0")
@@ -1162,7 +1162,7 @@ def test_the_cell_unit_is_the_primarys_currency_and_another_currency_never_corro
 def test_the_financial_policy_is_the_measured_one_and_the_price_policy_names_the_third_origin() -> None:
     from decimal import Decimal
 
-    from truealpha_contracts.reconciliation_policies import (
+    from truealpha_runtime.reconciliation_policies import (
         FINANCIAL_FACT_RECONCILIATION_POLICY,
         RECONCILIATION_POLICY,
     )

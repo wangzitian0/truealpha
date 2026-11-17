@@ -8,8 +8,8 @@ from fractions import Fraction
 from typing import Any, NamedTuple
 
 from factors.backtest.corporate_actions import SplitDerivationError, SplitEvent, split_factor_between
-from truealpha_contracts.concept_mapping import ConceptMappingRuleset, ConceptRef
 
+from data_engine.contracts.concept_mapping import ConceptMappingRuleset, ConceptRef
 from data_engine.datahub.market_prices import SPLIT_ADJUSTED, UNADJUSTED, oldest_session_within_lag
 from data_engine.datahub.price_series import DailySeries, load_daily_series, split_events_of
 

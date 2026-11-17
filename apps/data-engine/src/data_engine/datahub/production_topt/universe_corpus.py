@@ -7,10 +7,10 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any
 
-from truealpha_contracts.capture_control import CaptureListVersion
 from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.universe import SubjectKind, SubjectRef, UniverseRef
 
+from data_engine.contracts.capture_control import CaptureListVersion
 from data_engine.datahub.control_plane import frozen_topt_universe
 
 TOPT_CORPUS_FILENAME = "corpus.v1.json"

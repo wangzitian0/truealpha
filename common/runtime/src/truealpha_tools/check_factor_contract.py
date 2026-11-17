@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import ast
+import json
 import re
 import sys
 from pathlib import Path
@@ -11,7 +12,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[4]
 FACTORS = REPO / "common" / "factors" / "src" / "factors"
 MIGRATIONS = REPO / "db" / "migrations"
-QUESTIONS = REPO / "common" / "contracts" / "src" / "truealpha_contracts" / "question_requirements.py"
+REGISTRIES_JSON = REPO / "common" / "contracts" / "src" / "truealpha_contracts" / "data" / "registries.v1.json"
 
 
 def observed_factors() -> dict[str, dict[str, object]]:
@@ -37,17 +38,8 @@ def observed_factors() -> dict[str, dict[str, object]]:
 
 
 def observed_question_columns() -> list[dict[str, object]]:
-    fields = ("table", "column", "factor", "module")
-    found: list[dict[str, object]] = []
-    for node in ast.walk(ast.parse(QUESTIONS.read_text())):
-        if not (isinstance(node, ast.Call) and getattr(node.func, "id", None) == "FactorColumn"):
-            continue
-        spec: dict[str, object] = dict(zip(fields, (ast.literal_eval(arg) for arg in node.args[: len(fields)])))
-        for kw in node.keywords:
-            if kw.arg in fields:
-                spec[kw.arg] = ast.literal_eval(kw.value)
-        found.append(spec)
-    return found
+    reqs = json.loads(REGISTRIES_JSON.read_text())["question_requirements"]
+    return [dict(column) for req in reqs for column in req["columns"]]
 
 
 def observed_columns(table: str) -> list[str]:

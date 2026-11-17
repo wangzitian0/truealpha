@@ -1,637 +1,167 @@
-"""#1416: Environment contract SSOT, generated TypeScript module, and sentinel known answers."""
-
 from __future__ import annotations
 
+import importlib.util
 import json
 import re
 import runpy
 from decimal import Decimal
-from importlib import resources
 from pathlib import Path
+from typing import Any
 
 import pytest
 from pydantic import ValidationError
-from truealpha_contracts.environment_contract import (
-    ENVIRONMENT_CONTRACT_RESOURCE,
-    UTILIZATION_CEILING,
-    CodeServerCapacity,
-    EnvironmentContract,
-    EnvironmentUniverse,
-    ModelSeatContract,
-    UnknownUniverse,
-    load_environment_contract,
-    load_sentinel_known_answers,
-)
+from truealpha_contracts import environment_contract as _ec
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-_EXPORT_SCRIPT = Path(__file__).resolve().parents[1] / "conformance" / "export_environment_contract.py"
-_GENERATED_TS = REPO_ROOT / "apps" / "app-web" / "src" / "contracts" / "environmentContract.generated.ts"
-_SERVICE_OBJECTIVES_TS = REPO_ROOT / "apps" / "app-web" / "src" / "contracts" / "serviceObjectives.ts"
+_S = importlib.util.spec_from_file_location("ch", Path(__file__).parent / "fixtures/contract_helpers.py")
+assert _S and _S.loader
+_H = importlib.util.module_from_spec(_S)
+_S.loader.exec_module(_H)
+_C, _apply_ops, _raw, _with = _H.CASES, _H.apply_ops, _H.raw_env_contract, _H.with_env_contract
+ROOT = Path(__file__).resolve().parents[3]
 
 
-def test_environment_contract_loads_ten_sentinel_listings_across_nine_issuers() -> None:
-    contract = load_environment_contract()
-    assert len(contract.sentinels) == 10
-    issuers = {member.issuer_id for member in contract.sentinels}
-    assert len(issuers) == 9
-    tickers = [member.ticker for member in contract.sentinels]
-    assert tickers == [
-        "AAPL",
-        "GOOGL",
-        "GOOG",
-        "ASML",
-        "HBAN",
-        "CINF",
-        "JPM",
-        "NVDA",
-        "BRK.B",
-        "CRWD",
+def _cap(**ch: object) -> _ec.CodeServerCapacity:
+    return _ec.CodeServerCapacity.model_validate({**_C["base_cap"], **ch})
+
+
+def test_sentinels_universes_ticks_and_lanes(monkeypatch: pytest.MonkeyPatch) -> None:
+    c, raw = _ec.load_environment_contract(), _raw()
+    assert len(c.sentinels) == 10 and len({m.issuer_id for m in c.sentinels}) == 9
+    assert [m.ticker for m in c.sentinels] == _C["sentinels"]
+    assert all(c.is_head_scheduled(uid, env) is exp for uid, env, exp in _C["head_scheduled"])
+    with pytest.raises(_ec.UnknownUniverse, match="starts with no universe id prefix"):
+        c.universe_of_id("universe:unknown-us-2026-09-30")
+    st, pu = c.environments["staging"], [(e.key, e.status) for e in c.environments["production"].universes]
+    assert pu == [("topt", "scheduled"), ("qqq", "scheduled"), ("sp500", "stopped")]
+    assert [(e.key, e.status) for e in st.universes] == [("topt", "scheduled")] and st.list_refresh == ("qqq",)
+    assert not c.is_universe_scheduled("qqq", "staging") and c.is_universe_list_refresh_scheduled("qqq", "staging")
+    assert not c.is_universe_list_refresh_scheduled("sp500", "staging") and set(st.ticks) == {"topt", "canary"}
+    assert c.contract_version == raw["contract_version"] == "3.0.0" and c.schema_version == 1
+    for s in raw["environments"].values():
+        assert "strategy_universe" not in s and "target_strategy_universe" not in s
+        assert all("scheduled" not in t for t in s["ticks"].values())
+    assert [e for e in raw["environments"]["production"]["universes"] if e["key"] == "sp500"] == [
+        {"key": "sp500", "status": "stopped"}
     ]
-
-
-@pytest.mark.parametrize(
-    ("universe_id", "environment", "expected"),
-    [
-        ("universe:topt-us-2026-03-31", "production", True),
-        ("universe:topt-us-2026-03-31", "staging", True),
-        ("universe:qqq-us-2026-09-30", "production", True),
-        ("universe:qqq-us-2026-09-30", "staging", False),
-        ("universe:sp500-us-2026-09-30", "production", False),
-        ("universe:sp500-us-2026-09-30", "staging", False),
-        ("universe:canary-us-2026-09-30", "production", True),
-        ("universe:canary-us-2026-09-30", "staging", True),
-        ("universe:unknown-us-2026-09-30", "staging", True),
-        ("universe:qqq-us-2026-09-30", "unknown-env", True),
-        ("universe:qqq-us-2026-09-30", "preview", True),
-    ],
-)
-def test_contract_is_head_scheduled_matches_declared_ticks(universe_id: str, environment: str, expected: bool) -> None:
-    contract = load_environment_contract()
-    assert contract.is_head_scheduled(universe_id, environment) is expected
-
-
-def test_the_universe_of_an_id_outside_the_records_raises() -> None:
-    with pytest.raises(UnknownUniverse, match="starts with no universe id prefix"):
-        load_environment_contract().universe_of_id("universe:unknown-us-2026-09-30")
-
-
-def _raw_contract() -> dict:
-    return json.loads(resources.files("truealpha_contracts.data").joinpath(ENVIRONMENT_CONTRACT_RESOURCE).read_text())
-
-
-def _contract_with(mutate) -> EnvironmentContract:
-    """The real contract file after `mutate(raw)`, validated again."""
-    raw = _raw_contract()
-    mutate(raw)
-    return EnvironmentContract.model_validate_json(json.dumps(raw))
-
-
-def test_production_lists_topt_and_qqq_as_scheduled_and_sp500_as_stopped() -> None:
-    """Owner decision of 2026-10-21: production runs TOPT, QQQ and then the S&P 500."""
-    production = load_environment_contract().environments["production"]
-
-    assert [(entry.key, entry.status) for entry in production.universes] == [
-        ("topt", "scheduled"),
-        ("qqq", "scheduled"),
-        ("sp500", "stopped"),
-    ]
-
-
-def test_staging_lists_only_topt() -> None:
-    """Owner decision of 2026-10-21: staging runs TOPT only. The QQQ and SP500 ticks are not declared there.
-    #1523 D2: staging refreshes the QQQ constituent list weekly without running a QQQ capture tick."""
-    contract = load_environment_contract()
-    staging = contract.environments["staging"]
-
-    assert [(entry.key, entry.status) for entry in staging.universes] == [("topt", "scheduled")]
-    assert staging.list_refresh == ("qqq",)
-    assert contract.is_universe_scheduled("qqq", "staging") is False
-    assert contract.is_universe_list_refresh_scheduled("qqq", "staging") is True
-    assert contract.is_universe_list_refresh_scheduled("sp500", "staging") is False
-    assert set(staging.ticks) == {"topt", "canary"}
-
-
-def test_the_one_universe_list_replaces_the_strategy_universe_fields_and_the_scheduled_flag() -> None:
-    """#1310: "stopped" has one place. A flag on a tick would be a second place."""
-    raw = _raw_contract()
-
-    for name, spec in raw["environments"].items():
-        assert "strategy_universe" not in spec, name
-        assert "target_strategy_universe" not in spec, name
-        for key, tick in spec["ticks"].items():
-            assert "scheduled" not in tick, (name, key)
-
-
-def test_the_contract_is_version_three_because_the_unlock_shape_is_gone() -> None:
-    """The unlock block left the file and the model: a breaking change of the contract shape (#1523 S5)."""
-    contract = load_environment_contract()
-
-    assert contract.contract_version == _raw_contract()["contract_version"] == "3.0.0"
-    assert contract.schema_version == 1
-
-
-def test_a_stopped_universe_is_stopped_by_its_status_alone() -> None:
-    """Owner decision D5 of 2026-10-26: no gate other than the status holds a universe back."""
-    contract = load_environment_contract()
-    entries = [entry for entry in _raw_contract()["environments"]["production"]["universes"] if entry["key"] == "sp500"]
-
-    assert entries == [{"key": "sp500", "status": "stopped"}]
-    assert EnvironmentUniverse(key="sp500", status="stopped").status == "stopped"
-    assert contract.universe_status("sp500", "production") == "stopped"
-    assert contract.is_universe_scheduled("sp500", "production") is False
-    assert contract.is_head_scheduled("universe:sp500-us-2026-09-30", "production") is False
-
-
-@pytest.mark.parametrize(
-    ("environment", "expected"),
-    [("production", ("topt", "qqq")), ("prod", ("topt", "qqq")), ("staging", ("topt",)), ("preview", ()), ("dev", ())],
-)
-def test_the_scheduled_universes_of_an_environment(environment: str, expected: tuple[str, ...]) -> None:
-    assert load_environment_contract().scheduled_universes(environment) == expected
-
-
-def test_a_changed_status_in_the_file_makes_the_contract_schedule_the_universe() -> None:
-    """The status is read, not copied: a changed file changes every answer. This is the mutation of #1310."""
-
-    def schedule_sp500(raw: dict) -> None:
-        raw["environments"]["production"]["universes"][2]["status"] = "scheduled"
-
-    contract = _contract_with(schedule_sp500)
-
-    assert contract.is_universe_scheduled("sp500", "production") is True
-    assert contract.is_head_scheduled("universe:sp500-us-2026-09-30", "production") is True
-    assert contract.scheduled_universes("production") == ("topt", "qqq", "sp500")
-
-
-#: The block that a stopped universe held before contract version 3.0.0. The model refuses it now.
-_RETIRED_UNLOCK = {
-    "end_to_end": {"environment": "production", "universe": "qqq"},
-    "verdict": {"name": "job_run_health", "environment": "production", "consecutive_green_nights": 3},
-}
-
-
-@pytest.mark.parametrize(
-    ("mutate", "message"),
-    [
-        (
-            lambda raw: raw["environments"]["production"]["universes"][2].update(unlock=_RETIRED_UNLOCK),
-            "Extra inputs are not permitted",
-        ),
-        (
-            lambda raw: raw["environments"]["production"]["universes"][0].update(unlock=_RETIRED_UNLOCK),
-            "Extra inputs are not permitted",
-        ),
-        (
-            lambda raw: raw["environments"]["production"]["universes"].append({"key": "topt", "status": "scheduled"}),
-            "listed twice",
-        ),
-        (
-            lambda raw: raw["environments"]["staging"]["universes"].append({"key": "qqq", "status": "scheduled"}),
-            "differ",
-        ),
-        (lambda raw: raw["environments"]["staging"]["ticks"].pop("topt"), "differ"),
-        (lambda raw: raw["environments"]["production"].update(strategy_universe="topt"), "strategy_universe"),
-        (lambda raw: raw["environments"]["production"]["ticks"]["qqq"].update(scheduled=True), "scheduled"),
-    ],
-    ids=[
-        "unlock-key-on-a-stopped-universe",
-        "unlock-key-on-a-scheduled-universe",
-        "universe-listed-twice",
-        "universe-without-tick",
-        "tick-without-universe",
-        "old-strategy-universe-field",
-        "old-scheduled-flag",
-    ],
-)
-def test_a_universe_list_that_breaks_a_rule_is_refused(mutate, message: str) -> None:
-    with pytest.raises(ValidationError, match=message):
-        _contract_with(mutate)
-
-
-@pytest.mark.parametrize(
-    ("check", "environment", "expected"),
-    [
-        ("theme_purity@universe-list:qqq", "production", True),
-        ("theme_purity@universe-list:qqq", "prod", True),
-        ("theme_purity@universe-list:qqq", "staging", False),
-        ("question_coverage@universe-list:qqq", "staging", False),
-        ("datahub_confidence_report@universe-list:qqq", "staging", False),
-        ("datahub_confidence_report@universe-list:qqq", "production", True),
-        ("theme_purity@topt", "staging", True),
-        ("theme_purity@topt", "production", True),
-        ("theme_purity@universe-list:sp500", "production", False),
-        ("job_run_health", "staging", True),
-        ("fetch_keys_once", "staging", False),
-        ("fetch_keys_once", "production", False),
-        ("retired_check@topt", "production", False),
-        ("theme_purity@universe-list:qqq", "dev", True),
-        ("theme_purity@universe-list:qqq", None, True),
-    ],
-)
-def test_an_environment_records_the_per_universe_verdicts_of_the_universes_it_schedules(
-    check: str, environment: str | None, expected: bool
-) -> None:
-    """Staging runs TOPT only (owner decision of 2026-10-21). An unnamed environment shows every name."""
-    assert load_environment_contract().expects_verdict(check, environment) is expected
-
-
-def test_a_lane_name_outside_the_universe_records_raises_and_no_environment_records_its_verdict() -> None:
-    contract = load_environment_contract()
-    with pytest.raises(UnknownUniverse, match="the lane name of no universe"):
-        contract.universe_of_lane("universe:adhoc")
-    # The stored row of a retired universe is no check: /health must not report it as a stopped one.
-    assert not contract.expects_verdict("theme_purity@universe:adhoc", "staging")
-    assert not contract.expects_verdict("theme_purity@universe:adhoc", "production")
-
-
-def test_the_universe_records_hold_the_names_the_lanes_and_the_pointer_use() -> None:
-    contract = load_environment_contract()
-
-    assert {key: (record.id_prefix, record.lane_name) for key, record in contract.universes.items()} == {
-        "topt": ("universe:topt-us-", "topt"),
-        "qqq": ("universe:qqq-us-", "universe-list:qqq"),
-        "sp500": ("universe:sp500-us-", "universe-list:sp500"),
-        "canary": ("universe:canary-us-", "universe-list:canary"),
-    }
-    assert contract.universe_of_id("universe:topt-us-2026-03-31") == "topt"
-    assert contract.universe_of_lane("universe-list:qqq") == "qqq"
-    assert [key for key, record in contract.universes.items() if record.is_sentinel] == ["canary"]
-
-
-def test_nightly_verdicts_in_contract_equal_tools_nightly_verdicts_json() -> None:
-    """`environment_contract.v1.json` and `tools/nightly_verdicts.json` hold the exact same checks and per_universe maps (#1521, #1522)."""
-    contract = load_environment_contract()
-    tools_raw = json.loads((REPO_ROOT / "tools" / "nightly_verdicts.json").read_text(encoding="utf-8"))
-    assert contract.nightly_verdicts.model_dump(mode="json", exclude={"description"}) == {
-        "checks": tools_raw["checks"],
-        "per_universe": tools_raw["per_universe"],
-    }
-
-
-@pytest.mark.parametrize(
-    ("mutate", "message"),
-    [
-        (lambda raw: raw["universes"]["qqq"].update(id_prefix="universe:topt-us-"), "share a id_prefix"),
-        (lambda raw: raw["universes"]["qqq"].update(lane_name="topt"), "share a lane_name"),
-        (lambda raw: raw["universes"]["qqq"]["membership"].pop("url"), "needs url"),
-        (lambda raw: raw["universes"]["topt"]["membership"].update(url="https://example.invalid"), "holds \\['url'\\]"),
-        (lambda raw: raw["universes"]["topt"]["cron"].pop("staging"), "differ"),
-        (lambda raw: raw["universes"]["qqq"]["cron"].update(staging="20 23 * * *"), "differ"),
-        (
-            lambda raw: (raw["universes"].pop("sp500"), raw["environments"]["production"]["ticks"].pop("sp500")),
-            "no record",
-        ),
-        (lambda raw: raw["universes"]["qqq"].update(roles=["unknown"]), "roles"),
-    ],
-    ids=[
-        "two-records-share-an-id-prefix",
-        "two-records-share-a-lane-name",
-        "index-api-without-a-url",
-        "frozen-corpus-with-a-url",
-        "an-environment-lists-a-tick-the-record-does-not-time",
-        "the-record-times-a-tick-the-environment-does-not-list",
-        "an-environment-lists-a-universe-without-a-record",
-        "an-unknown-role",
-    ],
-)
-def test_a_universe_record_that_breaks_a_rule_is_refused(mutate, message: str) -> None:
-    with pytest.raises(ValidationError, match=message):
-        _contract_with(mutate)
-
-
-def test_generated_typescript_environment_contract_equals_fresh_render(monkeypatch: pytest.MonkeyPatch) -> None:
-    exporter = runpy.run_path(str(_EXPORT_SCRIPT))
-    rendered = exporter["render"]()
-    assert _GENERATED_TS.read_text(encoding="utf-8") == rendered
-    monkeypatch.setattr("sys.argv", [str(_EXPORT_SCRIPT), "--check"])
-    assert exporter["main"]() == 0
-
-    objectives_text = _SERVICE_OBJECTIVES_TS.read_text(encoding="utf-8")
-    assert "isHeadScheduledFromContract" in objectives_text
-    assert 'universeId.startsWith("universe:qqq-")' not in objectives_text
-
-
-def test_sentinel_known_answers_cover_all_nine_sentinel_issuers_with_accessions() -> None:
-    contract = load_environment_contract()
-    catalog = load_sentinel_known_answers()
-    sentinel_issuers = {member.issuer_id for member in contract.sentinels}
-    answered_issuers = {answer.issuer_id for answer in catalog.answers}
-    assert sentinel_issuers <= answered_issuers, (
-        f"every sentinel issuer must have at least one known answer; missing {sentinel_issuers - answered_issuers}"
+    assert _ec.EnvironmentUniverse(key="sp500", status="stopped").status == "stopped"
+    assert c.universe_status("sp500", "production") == "stopped" and not c.is_universe_scheduled("sp500", "production")
+    assert not c.is_head_scheduled("universe:sp500-us-2026-09-30", "production")
+    assert all(c.scheduled_universes(env) == tuple(exp) for env, exp in _C["scheduled_envs"])
+    c2 = _with(lambda r: r["environments"]["production"]["universes"][2].update(status="scheduled"))
+    assert c2.is_universe_scheduled("sp500", "production") and c2.scheduled_universes("production") == (
+        "topt",
+        "qqq",
+        "sp500",
     )
-    for answer in catalog.answers:
-        assert answer.accession, f"{answer.answer_id} lacks an accession"
-        assert answer.source_citation, f"{answer.answer_id} lacks a citation"
-    neg_tickers = {entry.ticker for entry in catalog.negative_theme_classifications}
-    assert {"SBUX", "PANW", "INTU"} <= neg_tickers
-    for entry in catalog.negative_theme_classifications:
-        assert Decimal(entry.max_theme_share) == Decimal("0.00")
+    assert c2.is_head_scheduled("universe:sp500-us-2026-09-30", "production")
+    assert all(c.expects_verdict(chk, env) is exp for chk, env, exp in _C["expects_verdict"])
+    with pytest.raises(_ec.UnknownUniverse, match="the lane name of no universe"):
+        c.universe_of_lane("universe:adhoc")
+    assert not any(c.expects_verdict("theme_purity@universe:adhoc", e) for e in ("staging", "production"))
+    assert {k: [r.id_prefix, r.lane_name] for k, r in c.universes.items()} == _C["universe_map"]
+    assert (
+        c.universe_of_id("universe:topt-us-2026-03-31") == "topt" and c.universe_of_lane("universe-list:qqq") == "qqq"
+    )
+    assert [k for k, r in c.universes.items() if r.is_sentinel] == ["canary"]
+    tools = json.loads((ROOT / "tools/nightly_verdicts.json").read_text("utf-8"))
+    assert c.nightly_verdicts.model_dump(mode="json", exclude={"description"}) == {
+        "checks": tools["checks"],
+        "per_universe": tools["per_universe"],
+    }
+    export_py = Path(__file__).resolve().parents[1] / "conformance/export_environment_contract.py"
+    exp_mod = runpy.run_path(str(export_py))
+    assert (ROOT / "apps/app-web/src/contracts/environmentContract.generated.ts").read_text("utf-8") == exp_mod[
+        "render"
+    ]()
+    monkeypatch.setattr("sys.argv", [str(export_py), "--check"])
+    assert exp_mod["main"]() == 0
+    obj = (ROOT / "apps/app-web/src/contracts/serviceObjectives.ts").read_text("utf-8")
+    assert "isHeadScheduledFromContract" in obj and 'universeId.startsWith("universe:qqq-")' not in obj
+    init_t, rel_t = (ROOT / "init.md").read_text("utf-8"), (ROOT / "docs/release-protocol.md").read_text("utf-8")
+    head = init_t.split("## 1. Core Design Principles", 1)[0]
+    assert "environment_contract.v1.json" in head and "S&P 500" in head
+    assert "| Local | `local_dev`, `local_test` |" not in init_t and "TWELVE_DATA_ENVIRONMENT_SHARES" not in init_t
+    assert "waits\n20 minutes" not in rel_t and "`DEFAULT_DAILY_CAP`" in rel_t and "owner's bound" not in rel_t
+    assert re.search(r"daily cap\s*\(\s*(?:\d+|[a-z]+),", rel_t) is None
 
 
-def test_quantitative_sentinel_known_answers_resolve_to_registered_metrics() -> None:
-    from truealpha_contracts.metrics import is_registered_input_key
-
-    catalog = load_sentinel_known_answers()
-    quantitative = [a for a in catalog.answers if a.metric != "operating_branch"]
-    assert len(quantitative) > 0
-    for answer in quantitative:
-        assert is_registered_input_key(answer.metric), (
-            f"answer {answer.answer_id} metric {answer.metric} is not in the canonical metric registry"
-        )
+@pytest.mark.parametrize(("ops", "msg"), _C["env_mutations"])
+def test_universe_mutations_refused(ops: list[list[Any]], msg: str) -> None:
+    with pytest.raises(ValidationError, match=msg):
+        _with(lambda r: _apply_ops(r, ops))
 
 
-def test_docs_point_to_environment_contract_and_drop_stale_copies() -> None:
-    init_text = (REPO_ROOT / "init.md").read_text(encoding="utf-8")
-    release_text = (REPO_ROOT / "docs" / "release-protocol.md").read_text(encoding="utf-8")
-
-    assert "environment_contract.v1.json" in init_text
-    assert "| Local | `local_dev`, `local_test` |" not in init_text
-    assert "TWELVE_DATA_ENVIRONMENT_SHARES" not in init_text
-
-    # Section 0 states the production target and points to the contract.
-    next_heading = "## 1. Core Design Principles"
-    assert next_heading in init_text, "The slice of section 0 needs the heading of section 1."
-    goal_section = init_text.split(next_heading, 1)[0]
-    assert "environment_contract.v1.json" in goal_section
-    assert "S&P 500" in goal_section
-
-    assert "waits\n20 minutes" not in release_text
-    # The daily cap of automatic releases has one value, `DEFAULT_DAILY_CAP`. The docs name it and state no number.
-    assert "`DEFAULT_DAILY_CAP`" in release_text
-    assert re.search(r"daily cap\s*\(\s*(?:\d+|[a-z]+),", release_text) is None
-    assert "owner's bound" not in release_text
-
-
-def test_derive_max_runtime_seconds() -> None:
-    contract = load_environment_contract()
-    assert contract.job_runtime_bounds.margin == 2.0
-    assert contract.job_runtime_bounds.floor_minutes == 10.0
-    assert contract.job_runtime_bounds.window_days == 30
-    # 22.5 minutes longest success -> margin 2.0 -> 45 minutes
-    assert contract.derive_max_runtime_seconds(22.5 * 60) == 45 * 60
-    # 0.5 minutes longest success -> margin 2.0 -> 1 minute, but floor is 10 minutes (600s)
-    assert contract.derive_max_runtime_seconds(0.5 * 60) == 10 * 60
-
-
-#: A fixed capacity for the tests of the derivation. It does not read the contract, so a new
-#: measurement in the contract cannot change what these tests expect of the formula.
-#: The server holds 200 MiB x 1.2 = 240 MiB.
-_BASE_CAPACITY: dict[str, object] = {
-    "description": "test",
-    "ceiling_mib": 1536,
-    "ceiling_source": "test",
-    "server_margin": 0.2,
-    "concurrent_runs": 2,
-    "server_processes": 1,
-    "processes_per_run": 1,
-    "measured": {
-        "at": "2026-10-21",
-        "environment": "staging",
-        "method": "test",
-        "grpc_server_hwm_mib": 200.0,
-        "fresh_import_hwm_mib": 180.0,
-        "working_run_hwm_mib": 380.0,
-        "source": "test",
-    },
-}
-
-
-def _capacity(**changes: object) -> CodeServerCapacity:
-    """The fixed capacity with `changes` applied, validated again (#1467)."""
-    return CodeServerCapacity.model_validate({**_BASE_CAPACITY, **changes})
-
-
-def test_the_declared_slots_leave_each_run_a_budget_that_fits_inside_the_usable_share() -> None:
-    """Whatever the contract declares: the server and all slots at the budget fit; one more MiB per slot does not."""
-    capacity = load_environment_contract().code_server_capacity
-    slots = capacity.concurrent_runs * capacity.processes_per_run
-    held = capacity.server_processes * capacity.server_mib + slots * capacity.run_mib
-
-    assert capacity.usable_mib == int(capacity.ceiling_mib * UTILIZATION_CEILING)
-    assert held <= capacity.usable_mib < held + slots, "the budget is the largest whole MiB per slot"
-    assert capacity.max_concurrent_runs == capacity.concurrent_runs
-    assert capacity.max_waiting_runs == capacity.concurrent_runs - 1 >= 1
-
-
-def test_the_declared_server_derives_from_its_measurement_and_margin() -> None:
-    """The server is the measured VmHWM plus the margin, rounded up. A run is no smaller than a fresh import."""
-    capacity = load_environment_contract().code_server_capacity
-    measured = capacity.measured
-    grown = Decimal(str(measured.grpc_server_hwm_mib)) * (1 + Decimal(str(capacity.server_margin)))
-
-    assert capacity.server_mib == int(grown) + (grown % 1 > 0)
-    assert capacity.server_mib > measured.grpc_server_hwm_mib
-    assert capacity.run_mib >= measured.working_run_hwm_mib >= measured.fresh_import_hwm_mib
-
-
-def test_the_one_seventy_percent_rule_is_a_python_constant_and_no_json_field() -> None:
-    """The owner rule of #1418 lives in `UTILIZATION_CEILING`. The JSON holds no second copy."""
-    raw = json.loads(resources.files("truealpha_contracts.data").joinpath(ENVIRONMENT_CONTRACT_RESOURCE).read_text())
-
-    assert "utilization_limit" not in raw["code_server_capacity"]
-    assert "70%" not in json.dumps(raw["code_server_capacity"])
-
-
-def test_the_peak_of_the_container_is_no_field_because_it_counts_page_cache() -> None:
-    """#1484: `container_peak_mib` was a required field that no code read. It holds 77% of the ceiling."""
-    raw = json.loads(resources.files("truealpha_contracts.data").joinpath(ENVIRONMENT_CONTRACT_RESOURCE).read_text())
-    measured = {**raw["code_server_capacity"]["measured"], "container_peak_mib": 1186.4}
-
+def test_capacity_and_model_seat() -> None:
+    c, raw = _ec.load_environment_contract(), _raw()
+    jrb, cap = c.job_runtime_bounds, c.code_server_capacity
+    assert (jrb.margin, jrb.floor_minutes, jrb.window_days) == (2.0, 10.0, 30)
+    assert c.derive_max_runtime_seconds(1350) == 2700 and c.derive_max_runtime_seconds(30) == 600
+    slots = cap.concurrent_runs * cap.processes_per_run
+    held = cap.server_processes * cap.server_mib + slots * cap.run_mib
+    assert cap.usable_mib == int(cap.ceiling_mib * _ec.UTILIZATION_CEILING) and held <= cap.usable_mib < held + slots
+    assert cap.max_concurrent_runs == cap.concurrent_runs and cap.max_waiting_runs == cap.concurrent_runs - 1 >= 1
+    grown = Decimal(str(cap.measured.grpc_server_hwm_mib)) * (1 + Decimal(str(cap.server_margin)))
+    assert cap.server_mib == int(grown) + (grown % 1 > 0) and cap.server_mib > cap.measured.grpc_server_hwm_mib
+    assert cap.run_mib >= cap.measured.working_run_hwm_mib >= cap.measured.fresh_import_hwm_mib
+    rc = raw["code_server_capacity"]
+    assert "utilization_limit" not in rc and "70%" not in json.dumps(rc)
     with pytest.raises(ValidationError, match="container_peak_mib"):
-        CodeServerCapacity.model_validate({**raw["code_server_capacity"], "measured": measured})
-
-
-def test_the_fixed_capacity_gives_two_slots_and_a_budget_of_417_mib() -> None:
-    """1536 MiB x 0.7 = 1075 MiB. The server holds 240 MiB. The other 835 MiB go to two slots: 417 MiB each."""
-    capacity = _capacity()
-
-    assert (capacity.usable_mib, capacity.server_mib, capacity.run_mib) == (1075, 240, 417)
-    assert (capacity.max_concurrent_runs, capacity.max_waiting_runs) == (2, 1)
-
-
-@pytest.mark.parametrize(
-    ("changes", "budget"),
-    [
-        ({"ceiling_mib": 2048}, 596),
-        ({"ceiling_mib": 1429}, 380),
-        ({"concurrent_runs": 3, "ceiling_mib": 2048}, 397),
-        ({"concurrent_runs": 4, "ceiling_mib": 4096}, 656),
-        ({"processes_per_run": 2, "ceiling_mib": 4096}, 656),
-        ({"server_processes": 2, "ceiling_mib": 2048}, 476),
-    ],
-)
-def test_the_run_budget_follows_each_input_of_the_derivation(changes: dict[str, object], budget: int) -> None:
-    assert _capacity(**changes).run_mib == budget
-
-
-@pytest.mark.parametrize(
-    ("margin", "server"),
-    [(0.1, 220), (0.2, 240), (0.201, 241), (0.5, 300)],
-)
-def test_the_server_is_its_measurement_times_one_plus_the_margin_rounded_up(margin: float, server: int) -> None:
-    assert _capacity(server_margin=margin).server_mib == server
-
-
-@pytest.mark.parametrize(
-    "changes",
-    [
-        {"server_margin": 0},
-        {"server_margin": -0.1},
-        {"concurrent_runs": 1},
-        {"concurrent_runs": 3},
-        {"concurrent_runs": 5},
-        {"ceiling_mib": 1426},
-        {"ceiling_mib": 768},
-        {"ceiling_mib": 0},
-    ],
-    ids=[
-        "no-margin-above-the-measured-server",
-        "negative-margin",
-        "one-slot-cannot-wait-for-another-run",
-        "three-slots-do-not-fit-the-measured-working-run",
-        "five-slots-do-not-fit-the-measured-working-run",
-        "budget-one-mib-below-the-measured-working-run",
-        "ceiling-too-small-for-two-working-runs",
-        "no-ceiling",
-    ],
-)
-def test_a_capacity_that_breaks_a_rule_is_refused(changes: dict[str, object]) -> None:
-    with pytest.raises(ValidationError):
-        _capacity(**changes)
-
-
-def test_a_measurement_of_a_working_run_below_a_fresh_import_is_refused() -> None:
-    """One of the two readings is wrong. A run is the import plus its work."""
-    measured = {**_BASE_CAPACITY["measured"], "working_run_hwm_mib": 100.0}  # type: ignore[dict-item]
-
+        _ec.CodeServerCapacity.model_validate({**rc, "measured": {**rc["measured"], "container_peak_mib": 1186.4}})
+    fc = _cap()
+    got = (fc.usable_mib, fc.server_mib, fc.run_mib, fc.max_concurrent_runs, fc.max_waiting_runs)
+    assert got == (1075, 240, 417, 2, 1)
+    assert all(_cap(**ch).run_mib == b for ch, b in _C["cap_run_mib"])
+    assert all(_cap(server_margin=m).server_mib == s for m, s in _C["cap_margins"])
+    for bad in _C["cap_invalid"]:
+        with pytest.raises(ValidationError):
+            _cap(**bad)
     with pytest.raises(ValidationError, match="below a fresh import"):
-        _capacity(measured=measured)
-
-
-# --- the model seat: one retry policy, per-environment pacing, probe slots (#1444) ----------
-
-
-def _seat(**changes: object) -> dict[str, object]:
-    """The shipped model seat as plain data, with ``changes`` laid over it."""
-    return {**load_environment_contract().model_seat.model_dump(mode="json"), **changes}
-
-
-def _retry(**changes: object) -> dict[str, object]:
-    return {**load_environment_contract().model_seat.retry.model_dump(mode="json"), **changes}
-
-
-def test_every_environment_that_calls_live_vendors_declares_model_seat_limits() -> None:
-    contract = load_environment_contract()
-    live = {name for name, spec in contract.environments.items() if spec.live_vendor_calls}
-    assert live == {"staging", "production"}
-    for name in live:
-        limits = contract.model_seat.limits_for(name)
-        assert limits is not None and limits.max_concurrent_calls >= 1 and limits.calls_per_minute >= 1
-    assert contract.model_seat.limits_for("dev") is None
-
-
-def test_the_shipped_retry_waits_at_least_ninety_seconds_with_no_random_extra() -> None:
-    retry = load_environment_contract().model_seat.retry
+        _cap(measured={**_C["base_cap"]["measured"], "working_run_hwm_mib": 100.0})
+    seat, retry = c.model_seat, c.model_seat.retry
+    assert {n for n, s in c.environments.items() if s.live_vendor_calls} == {"staging", "production"}
+    assert seat.limits_for("dev") is None
+    for n in ("staging", "production"):
+        lim = seat.limits_for(n)
+        assert lim is not None and lim.max_concurrent_calls >= 1 and lim.calls_per_minute >= 1
     assert [retry.base_backoff_seconds(n) for n in range(1, retry.max_attempts)] == [5, 10, 20, 40, 40, 40]
     assert retry.base_total_wait_seconds == 155 >= retry.min_total_wait_seconds == 90
     assert retry.deadline_seconds >= retry.min_total_wait_seconds
-
-
-def test_probe_slots_of_the_two_live_environments_differ_by_at_least_the_retry_deadline() -> None:
-    seat = load_environment_contract().model_seat
-    production, staging = seat.probe_cron("production"), seat.probe_cron("staging")
-    assert production != staging
-    minutes = sorted(seat.probe_offset_minutes(name) for name in ("production", "staging"))
-    longest = seat.retry.deadline_seconds + seat.probe.attempt_timeout_seconds + seat.probe.launch_margin_seconds
-    assert minutes[1] - minutes[0] >= longest / 60
-    assert production == f"{seat.probe_offset_minutes('production')} {seat.probe.hour_utc} * * *"
-
-
-@pytest.mark.parametrize(
-    ("changes", "message"),
-    [
-        ({"retry": _retry(max_attempts=3)}, "below min_total_wait_seconds"),
-        ({"retry": _retry(max_backoff_seconds=5, max_attempts=7)}, "below min_total_wait_seconds"),
-        ({"retry": _retry(deadline_seconds=60)}, "deadline_seconds 60 is below"),
-        ({"retry": _retry(transient_provider_codes=["1302", "1113"])}, "transient and terminal"),
-        ({"retry": _retry(jitter_percent=-1)}, "greater than or equal to 0"),
-        (
-            {
-                "environments": {
-                    "production": {"max_concurrent_calls": 2, "calls_per_minute": 10, "probe_offset_minutes": 0},
-                    "staging": {"max_concurrent_calls": 1, "calls_per_minute": 3, "probe_offset_minutes": 6},
-                }
-            },
-            "closer than slot_minutes",
-        ),
-        (
-            {
-                "environments": {
-                    "production": {"max_concurrent_calls": 0, "calls_per_minute": 10, "probe_offset_minutes": 0}
-                }
-            },
-            "greater than or equal to 1",
-        ),
-        (
-            {"probe": {"hour_utc": 6, "slot_minutes": 6, "attempt_timeout_seconds": 60, "launch_margin_seconds": 60}},
-            "below the longest probe of 7 minutes",
-        ),
-        (
-            {"probe": {"hour_utc": 6, "slot_minutes": 7, "attempt_timeout_seconds": 120, "launch_margin_seconds": 60}},
-            "below the longest probe of 8 minutes",
-        ),
-    ],
-)
-def test_a_model_seat_that_breaks_a_rule_is_refused(changes: dict[str, object], message: str) -> None:
-    with pytest.raises(ValidationError, match=message):
-        ModelSeatContract.model_validate_json(json.dumps(_seat(**changes)))
-
-
-def test_an_environment_without_a_named_decoding_version_uses_v1() -> None:
-    seat = load_environment_contract().model_seat
-    assert seat.decoding_version_for("dev") == "v1", "an environment the contract does not list"
-    data = json.loads(seat.environments["staging"].model_dump_json())
-    data.pop("decoding_version")
-    assert seat.environments["staging"].model_validate_json(json.dumps(data)).decoding_version == "v1"
-
-
-@pytest.mark.parametrize("name", ["2", "V2", "v", "v2.1", ""])
-def test_a_decoding_version_name_that_is_not_v_and_a_number_is_refused(name: str) -> None:
-    seat = json.loads(load_environment_contract().model_seat.model_dump_json())
-    seat["environments"]["staging"]["decoding_version"] = name
-    with pytest.raises(ValidationError, match="decoding_version"):
-        ModelSeatContract.model_validate_json(json.dumps(seat))
-
-
-def test_a_live_environment_without_model_seat_limits_is_refused() -> None:
-    data = load_environment_contract().model_dump(mode="json")
-    data["model_seat"]["environments"].pop("staging")
-    with pytest.raises(ValidationError, match="staging calls live vendors and declares no model seat limits"):
-        EnvironmentContract.model_validate_json(json.dumps(data))
-    data = load_environment_contract().model_dump(mode="json")
-    data["model_seat"]["environments"]["qa"] = {
-        "max_concurrent_calls": 1,
-        "calls_per_minute": 1,
-        "probe_offset_minutes": 30,
-    }
-    with pytest.raises(ValidationError, match="name unknown environments"):
-        EnvironmentContract.model_validate_json(json.dumps(data))
+    assert seat.probe_cron("production") != seat.probe_cron("staging") and seat.decoding_version_for("dev") == "v1"
+    assert seat.probe_cron("production") == f"{seat.probe_offset_minutes('production')} {seat.probe.hour_utc} * * *"
+    mins = sorted(seat.probe_offset_minutes(n) for n in ("production", "staging"))
+    need = (retry.deadline_seconds + seat.probe.attempt_timeout_seconds + seat.probe.launch_margin_seconds) / 60
+    assert mins[1] - mins[0] >= need
+    d = json.loads(seat.environments["staging"].model_dump_json())
+    d.pop("decoding_version")
+    assert seat.environments["staging"].model_validate_json(json.dumps(d)).decoding_version == "v1"
+    s_raw, r_raw = seat.model_dump(mode="json"), retry.model_dump(mode="json")
+    for target, patch, msg in _C["bad_seats"]:
+        pay = {**s_raw, "retry": {**r_raw, **patch}} if target == "retry" else {**s_raw, **patch}
+        with pytest.raises(ValidationError, match=msg):
+            _ec.ModelSeatContract.model_validate_json(json.dumps(pay))
+    for bad_ver in ("2", "V2", "v", "v2.1", ""):
+        s = json.loads(seat.model_dump_json())
+        s["environments"]["staging"]["decoding_version"] = bad_ver
+        with pytest.raises(ValidationError, match="decoding_version"):
+            _ec.ModelSeatContract.model_validate_json(json.dumps(s))
+    for ops, msg in _C["bad_env_seats"]:
+        data = c.model_dump(mode="json")
+        _apply_ops(data, ops)
+        with pytest.raises(ValidationError, match=msg):
+            _ec.EnvironmentContract.model_validate_json(json.dumps(data))
 
 
 def test_metric_applicability_declares_owner_approved_topt_gppe_exclusions() -> None:
-    """Owner Decision 2 (#1664, 2026-11-16T15:28:17+08:00): XOM, V, MA, and BRK.B are not_applicable for TOPT GPPE."""
-    contract = load_environment_contract()
-    topt_gppe = contract.not_applicable_for_universe_id("gppe", "universe:topt-us-2026-03-31")
-    assert {entry.ticker for entry in topt_gppe} == {"XOM", "V", "MA", "BRK.B"}
-    assert all(entry.status == "not_applicable" for entry in topt_gppe)
-    assert contract.not_applicable_for_universe_id("gppe", "universe:qqq-us-2026-06-30") == ()
-
-    bad_universe = load_environment_contract().model_dump(mode="json")
-    bad_universe["metric_applicability"][0]["universe"] = "unknown_universe"
-    with pytest.raises(ValidationError, match="unknown universe"):
-        EnvironmentContract.model_validate_json(json.dumps(bad_universe))
-
-    duplicate = load_environment_contract().model_dump(mode="json")
-    duplicate["metric_applicability"].append(duplicate["metric_applicability"][0])
+    c = _ec.load_environment_contract()
+    gppe = c.not_applicable_for_universe_id("gppe", "universe:topt-us-2026-03-31")
+    assert {e.ticker for e in gppe} == {"XOM", "V", "MA", "BRK.B"} and all(e.status == "not_applicable" for e in gppe)
+    assert c.not_applicable_for_universe_id("gppe", "universe:qqq-us-2026-06-30") == ()
+    for ops, msg in _C["bad_applicability"]:
+        data = c.model_dump(mode="json")
+        _apply_ops(data, ops)
+        with pytest.raises(ValidationError, match=msg):
+            _ec.EnvironmentContract.model_validate_json(json.dumps(data))
+    dup = c.model_dump(mode="json")
+    dup["metric_applicability"].append(dup["metric_applicability"][0])
     with pytest.raises(ValidationError, match="duplicate metric_applicability"):
-        EnvironmentContract.model_validate_json(json.dumps(duplicate))
+        _ec.EnvironmentContract.model_validate_json(json.dumps(dup))

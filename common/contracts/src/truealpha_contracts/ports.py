@@ -1,4 +1,4 @@
-"""Ports implemented by runtime/storage and Postgres repositories."""
+"""Storage port implemented by runtime/storage."""
 
 from __future__ import annotations
 

@@ -1,0 +1,229 @@
+{
+  "presets": [
+    [
+      "bold",
+      "sparse",
+      "neon",
+      "radial-gradient(circle at 85% 12%, #311042 0%, #140C1C 55%, #0B0711 100%)",
+      "#191126",
+      "#F5F5F7",
+      "#B8B8D4",
+      "#39FF14",
+      "#00F5FF",
+      "#120B1D"
+    ],
+    [
+      "screen-print",
+      "list",
+      "earth",
+      "#F5E6D0",
+      "#FFFDF9",
+      "#121212",
+      "#4A3F35",
+      "#E8751A",
+      "#121212",
+      "#EDE0CC"
+    ],
+    [
+      "notion",
+      "list",
+      "macaron",
+      "#FFFFFF",
+      "#FBFBFA",
+      "#37352F",
+      "#6B6860",
+      "#2F7D32",
+      "#E3E2DE",
+      "#F7F6F3"
+    ],
+    [
+      "minimal",
+      "comparison",
+      "cool",
+      "#FAFAFA",
+      "#FFFFFF",
+      "#111111",
+      "#555555",
+      "#0A6847",
+      "#111111",
+      "#F2F2F2"
+    ],
+    [
+      "study-notes",
+      "dense",
+      "warm",
+      "#FAF6EE",
+      "#FFFFFF",
+      "#222222",
+      "#5C5852",
+      "#1E3A5F",
+      "#1E3A5F",
+      "#F3EDE0"
+    ],
+    [
+      "retro",
+      "balanced",
+      "warm",
+      "#F2E6D0",
+      "#FAF3E6",
+      "#2A1F18",
+      "#634F40",
+      "#2E6B4E",
+      "#2A1F18",
+      "#E8D8BC"
+    ],
+    [
+      "chalkboard",
+      "quadrant",
+      "monochrome",
+      "#1E3226",
+      "#263D2F",
+      "#F2EFE9",
+      "#B8C7BC",
+      "#FFE066",
+      "#5E7A68",
+      "#18281E"
+    ],
+    [
+      "pop",
+      "quadrant",
+      "vivid",
+      "#FFE600",
+      "#FFFFFF",
+      "#000000",
+      "#333333",
+      "#FF0055",
+      "#000000",
+      "#FFF9B0"
+    ],
+    [
+      "sketch-notes",
+      "flow",
+      "warm",
+      "#FCF9F2",
+      "#FFFFFF",
+      "#2B2927",
+      "#5C5852",
+      "#E85D04",
+      "#2B2927",
+      "#F4EFE6"
+    ],
+    [
+      "fresh",
+      "mindmap",
+      "pastel",
+      "linear-gradient(160deg, #E8F8F5 0%, #F4FBF7 55%, #FFFFFF 100%)",
+      "#FFFFFF",
+      "#1B3B2B",
+      "#4A6B5D",
+      "#148F77",
+      "#48C9B0",
+      "#E8F6F3"
+    ]
+  ],
+  "risk_note": {
+    "company": "Research hypothesis, not investment advice. Confidence reflects source evidence, not independent formula validation unless marked empirically validated.",
+    "comparison": "Side-by-side comparison of independently materialized results at one cutoff; no cross-issuer metric is computed for this card.",
+    "ranking": "Ranking reflects one versioned strategy run at one cutoff; historical rank is not a forward-looking guarantee.",
+    "etf": "ETF virtual-company view is delayed by public holdings-disclosure lag and is a research hypothesis, not investment advice.",
+    "supply_chain": "Scenario propagation over a disclosed relationship graph. High edge confidence does not by itself establish a causal effect; this is not causal evidence.",
+    "strategy_summary": "Reflects one versioned strategy's decision at one cutoff, not a performance guarantee."
+  },
+  "source_attribution": "TrueAlpha research — traceable to a materialized factor output; see the compact trace id.",
+  "sections": {
+    "company": [
+      "operating_efficiency",
+      "valuation"
+    ],
+    "comparison": [
+      "valuation"
+    ],
+    "ranking": [
+      "valuation",
+      "strategy_summary",
+      "ranking"
+    ],
+    "etf": [
+      "etf_virtual_company"
+    ],
+    "supply_chain": [
+      "supply_chain"
+    ],
+    "strategy_summary": [
+      "strategy_summary"
+    ]
+  },
+  "default_tier_ceilings": [
+    [
+      "large_model_native",
+      "33.34"
+    ],
+    [
+      "tech",
+      "12.86"
+    ],
+    [
+      "traditional",
+      "8.75"
+    ]
+  ],
+  "instructions": "You are TrueAlpha's Xiaohongshu (RED) visual editorial card designer.\nGenerate a SINGLE self-contained HTML5 document (`<!DOCTYPE html><html>...</html>`) rendered at exact `1080px` width by `1440px` height (3:4 portrait aspect ratio).\n1. Fixed 1080x1440px container (`overflow: hidden; box-sizing: border-box;`), max 4 subjects per card.\n2. Direct Chinese buy-side copy in the main visual canvas; no generic AI filler.\n3. Inline CSS only. No `<script>` tags, event handlers, or external `http://`/`https://` URLs.\n4. Preserve verbatim every fact in `ResearchCard` JSON: cutoff date, `card_id` prefix, `research_risk_note`, `source_attribution`, subject `display_name`/`availability`/`claim_class`/`scenario_only`, and metric `label`/`value`/`currency`/`unit`/`period`/`factor_version`/`confidence`/`trace` prefix.\n5. Output ONLY raw HTML starting with `<!DOCTYPE html>` and ending with `</html>`.",
+  "metric_labels_zh": {
+    "capital_adjusted_labor_efficiency": "人均资本调整毛利 (GPPE)",
+    "tier": "所属估值档位",
+    "current_price_to_gross_profit": "当前市值/毛利 (P/GP)",
+    "target_price_to_gross_profit": "本档 P/GP 上限",
+    "current_price_to_sales": "当前市销率 (P/S)",
+    "target_price_to_sales": "本档 P/S 上限",
+    "valuation_gap": "较上限折价空间",
+    "outcome": "策略筛选结论",
+    "eligible": "是否纳入排位",
+    "rank": "当期策略排名",
+    "target_weight": "目标组合权重",
+    "exposure_score": "供应链敞口得分",
+    "direct_partners": "直接披露伙伴数",
+    "suppliers_count": "上游供应商数",
+    "customers_count": "下游客户数",
+    "max_partner_share": "最大单一伙伴占比",
+    "virtual_company_fundamentals": "ETF 穿透虚拟公司基本面"
+  },
+  "tier_labels_zh": {
+    "large_model_native": "大模型原生档 (上限 33.34x)",
+    "tech": "科技档 (上限 12.86x)",
+    "traditional": "传统档 (上限 8.75x)"
+  },
+  "outcome_labels_zh": {
+    "selected": "入选 (Top 2)",
+    "ranked_beyond_selection_count": "有折价 · 排第 2 名后候补",
+    "rejected_valuation_above_tier_band": "淘汰：估值超出本档上限",
+    "excluded": "剔除：缺审定毛利或坐标"
+  },
+  "card_kind_zh": {
+    "company": "单票深度拆解 · COMPANY",
+    "comparison": "多票横向对比 · COMPARISON",
+    "ranking": "策略估值折价榜 · RANKING",
+    "etf": "ETF 穿透虚拟公司 · ETF",
+    "supply_chain": "供应链情景推演 · SUPPLY CHAIN",
+    "strategy_summary": "策略过筛漏斗 · STRATEGY"
+  },
+  "default_preset_by_kind": {
+    "company": "study-notes",
+    "comparison": "minimal",
+    "ranking": "screen-print",
+    "etf": "retro",
+    "supply_chain": "sketch-notes",
+    "strategy_summary": "bold"
+  },
+  "css_template": "*{box-sizing:border-box;margin:0;padding:0;}html,body{width:${w}px;height:${h}px;overflow:hidden;background:${bg_css};color:${fg};font-family:'PingFang SC','Microsoft YaHei',sans-serif;}.card-canvas{width:${w}px;height:${h}px;padding:36px 42px 24px;display:flex;flex-direction:column;justify-content:space-between;overflow:hidden;border:3px solid ${border};background:${bg_css};}.card-header{border-bottom:2px solid ${border};padding-bottom:14px;margin-bottom:14px;}.eyebrow{display:flex;justify-content:space-between;align-items:center;font-size:13px;font-family:${mono};color:${mute};margin-bottom:8px;font-weight:700;}.preset-tag{background:${accent};color:#FFF;padding:3px 10px;border-radius:999px;font-size:11px;}h1{font-size:32px;line-height:1.18;margin:0 0 8px;font-weight:900;}.meta-strip{display:flex;flex-wrap:wrap;gap:12px;font-size:12px;font-family:${mono};color:${mute};}.strategy-bar{display:flex;flex-wrap:wrap;gap:10px;background:${chip_bg};border:1.5px solid ${border};border-radius:10px;padding:8px 12px;margin-bottom:12px;font-size:12px;}.subject-block{background:${surface_bg};border:2px solid ${border};border-radius:14px;padding:16px 18px;margin-bottom:12px;}.subject-block.compact{padding:11px 14px;margin-bottom:9px;}.subject-header{display:flex;justify-content:space-between;align-items:center;gap:10px;border-bottom:1px solid ${border};padding-bottom:8px;margin-bottom:10px;}.subject-title-group{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;}h2{font-size:20px;margin:0;font-weight:800;}.subject-block.compact h2{font-size:17px;}.subject-id{font-size:11px;font-family:${mono};color:${mute};}.rank-badge{background:${accent};color:#FFF;font-weight:800;padding:2px 8px;border-radius:6px;font-size:13px;}.subject-badges{display:flex;gap:6px;flex-wrap:wrap;}.pill{font-size:10.5px;font-family:${mono};padding:2px 7px;border-radius:999px;border:1px solid ${border};background:${chip_bg};font-weight:700;}.causal-banner{background:#FEF3C7;border:1px solid #D97706;color:#92400E;padding:6px 10px;border-radius:8px;font-size:12px;font-weight:700;margin-bottom:10px;}.metrics-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;}.metrics-grid.compact{grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;}.metric-tile{background:${chip_bg};border:1px solid ${border};border-radius:9px;padding:10px 12px;}.metric-tile.compact{padding:7px 9px;}.metric-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;gap:4px;}.metric-label-zh{font-size:11.5px;font-weight:700;color:${mute};}.metric-value{font-size:20px;font-weight:900;font-family:${mono};color:${fg};margin:2px 0 4px;}.metric-tile.compact .metric-value{font-size:16px;margin:2px 0 0;}.metric-meta{display:flex;justify-content:space-between;font-size:10.5px;color:${mute};font-family:${mono};}.empty-tile{grid-column:1/-1;padding:12px;text-align:center;color:${mute};font-size:13px;background:${chip_bg};border:1px dashed ${border};border-radius:8px;}.series-note{font-size:11.5px;color:${mute};text-align:center;padding:4px 0;font-weight:600;}.card-footer{border-top:2px solid ${border};padding-top:10px;margin-top:auto;display:flex;flex-direction:column;gap:3px;font-size:10.5px;color:${mute};}.ev-box{background:${chip_bg};border:1px solid ${border};border-radius:6px;padding:4px 7px;font-family:${mono};font-size:7.5px;line-height:1.22;max-height:145px;overflow:hidden;word-break:break-all;}",
+  "html": {
+    "metric_compact": "<div class=\"metric-tile compact\"><div class=\"metric-label-zh\">$zh</div><div class=\"metric-value\">$val</div></div>",
+    "metric_full": "<div class=\"metric-tile\"><div class=\"metric-top\"><span class=\"metric-label-zh\">$zh</span><span class=\"pill availability-$av\">$av</span></div><div class=\"metric-value\">$val</div><div class=\"metric-meta\"><span>截面: $period</span><span>置信度: $conf</span></div></div>",
+    "causal_banner": "<div class=\"causal-banner\">scenario_only · 仅做图谱情景推演，不构成因果结论。</div>",
+    "empty_tile": "<div class=\"empty-tile\">当前治理截面暂无已物化因子数据 (unavailable)</div>",
+    "subject": "<section class=\"subject-block$sfx\"><div class=\"subject-header\"><div class=\"subject-title-group\">$rk<h2>$name</h2><span class=\"subject-id\">$sid</span></div><div class=\"subject-badges\">$bg<span class=\"pill claim-class-$claim\">$claim</span><span class=\"pill availability-$avail\">$avail</span></div></div>$cs<div class=\"metrics-grid$sfx\">$tiles</div></section>",
+    "strategy_bar": "<div class=\"strategy-bar\"><span>候选池 <b>$total</b> 家</span><span>入选 <b>$sel</b> 家 (Top $k)</span><span>候补 <b>$beyond</b> 家</span><span>超上限淘汰 <b>$rej</b> 家</span><span>缺数据剔除 <b>$excl</b> 家</span><span>分档上限: $ceil</span></div>",
+    "series_note": "<div class=\"series-note\">本页展示前 $shown / 共 $total 家标的 · 完整明细已写入底部溯源签名并与分页序列对齐</div>",
+    "headline_zh": {"ranking": "估值折价排位", "comparison": "多票同截面比价", "strategy_summary": "策略过筛结论"},
+    "doc": "<!DOCTYPE html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><title>$title</title><style>$css</style></head><body><div class=\"card-canvas\"><div><header class=\"card-header\"><div class=\"eyebrow\"><span>TRUEALPHA 买方研报卡 · $kind_zh$sb</span><span class=\"preset-tag\">$preset_tag</span></div><h1>$hl</h1><div class=\"meta-strip\"><span>数据截面: $cdate ($ciso)</span><span>Schema: $sver</span><span>Template: $tver</span><span>Prompt: $pver</span></div></header>$cb$sub_html$ov</div><footer class=\"card-footer\"><div><strong>风险提示:</strong> 本卡仅反映单一治理截面下的版本化策略输出，不构成投资建议。 ($risk)</div><div><strong>数据溯源:</strong> 全部数字直接取自 TrueAlpha 已物化因子表 mart。 ($attr)</div><div>Card ID: $cid · Report ID: $rid</div><div class=\"ev-box\">$ev</div></footer></div></body></html>"
+  }
+}

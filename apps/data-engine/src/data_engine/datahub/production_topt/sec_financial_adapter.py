@@ -12,12 +12,12 @@ from typing import TYPE_CHECKING, Any
 import psycopg
 from factors.production_topt import OperatingBranch
 from truealpha_contracts.common import canonical_sha256
-from truealpha_contracts.concept_mapping import ConceptMappingRuleset, ConceptRef, ResolutionKind
-from truealpha_contracts.datahub import CaptureWorkItem
 from truealpha_contracts.models import DataSource
-from truealpha_contracts.obligation_reason_codes import ObligationReasonCode
 from truealpha_contracts.strategy import load_live_strategy_definition
 
+from data_engine.contracts.concept_mapping import ConceptMappingRuleset, ConceptRef, ResolutionKind
+from data_engine.contracts.datahub import CaptureWorkItem
+from data_engine.contracts.obligation_reason_codes import ObligationReasonCode
 from data_engine.datahub.production_topt.concept_mapping import DEFAULT_RULESET
 from data_engine.datahub.production_topt.corroboration_audit import FETCH, record_lost_corroboration
 from data_engine.datahub.production_topt.executor import (

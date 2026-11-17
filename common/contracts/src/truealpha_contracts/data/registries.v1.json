@@ -1,0 +1,627 @@
+{
+  "minted_nodes": [
+    [
+      "labor_efficiency",
+      "8f78ed40-9625-58eb-a866-4fd42015b43d"
+    ],
+    [
+      "gross_profit",
+      "c682a9c8-c41d-5262-899b-f2d62000e10f"
+    ],
+    [
+      "pre_provision_profit",
+      "75bf2b7a-1600-5bcf-9d86-648fb16a18ae"
+    ],
+    [
+      "total_assets",
+      "c1d19aea-eb4a-525e-b62c-2fc9efe3bf77"
+    ],
+    [
+      "employees_total",
+      "c7db1ab2-d0fa-5437-800e-34f3be376420"
+    ],
+    [
+      "risk_free_rate",
+      "c6ae2f22-4b96-5610-8482-71c6ccd132ed"
+    ],
+    [
+      "operating_gross_profit",
+      "34a38955-e69e-559b-a483-91f81b9a6ab0"
+    ],
+    [
+      "capital_charge",
+      "6b4ce481-f045-5503-9675-921160e2bcd2"
+    ],
+    [
+      "capital_adjusted_gross_profit",
+      "c3428286-eb85-5107-a32a-b8757ad5b340"
+    ],
+    [
+      "gppe_uniform_charge_v0",
+      "6143cf17-ceba-5f78-a2d3-a7cc423c49a7"
+    ],
+    [
+      "stockholders_equity",
+      "0aa53e41-0d12-5f11-92c4-fe6225166328"
+    ],
+    [
+      "preferred_stock_value",
+      "ddf51b59-2c0e-52f0-8798-a555673c9bf6"
+    ],
+    [
+      "goodwill",
+      "738c81a6-fd15-53ca-ad2f-679a2b700056"
+    ],
+    [
+      "intangible_assets_net_excluding_goodwill",
+      "14313d73-f5f7-5a47-a087-ed9ce71ebd88"
+    ],
+    [
+      "tangible_deductions",
+      "805d8f77-10aa-5dc4-b2bd-f47647e00593"
+    ],
+    [
+      "tangible_common_equity",
+      "8c346339-0ca5-588a-90d4-e67c96db8ecb"
+    ],
+    [
+      "charged_tangible_common_equity",
+      "2cc2205b-4649-51a4-9f21-9e64b238d162"
+    ],
+    [
+      "capital_charge_tce",
+      "588a8f4d-b301-5a2e-b0f3-de6743d60af4"
+    ],
+    [
+      "capital_adjusted_tce",
+      "57204502-7b9c-5671-b392-424b4368d9f1"
+    ],
+    [
+      "gppe_banking_tce_v1",
+      "582c62d6-4873-5ff4-ad91-eba1d571fc4c"
+    ],
+    [
+      "financial_assets",
+      "31e866ea-79cd-5bc5-8203-04fc40e3240f"
+    ],
+    [
+      "financial_returns",
+      "c7f19762-975d-52b1-86db-360f8f7958fc"
+    ],
+    [
+      "bank_net_revenue",
+      "4e99982c-03e2-510d-84fa-b7d8e988783e"
+    ],
+    [
+      "total_gross_return",
+      "1519c717-370f-5b3f-a8fd-d37fc895d160"
+    ],
+    [
+      "capital_adjusted_operating_financial",
+      "5e4a472f-71cd-57b3-90e6-21a5b94cc4cb"
+    ],
+    [
+      "gppe_operating_financial_v1",
+      "25ff84c7-8f4d-515c-a6bb-e33cf52a2ef1"
+    ]
+  ],
+  "minted_trees": [
+    [
+      [
+        "gppe",
+        "production-topt-v0.2.0"
+      ],
+      "ef13b940-b695-5f5f-846a-a36face5cc3e"
+    ],
+    [
+      [
+        "gppe_banking_tce",
+        "v2"
+      ],
+      "96fd6d4a-8983-5caf-b647-360122569d00"
+    ],
+    [
+      [
+        "gppe_operating_financial",
+        "1.0.0"
+      ],
+      "7183c828-7252-5591-81a8-99fd05737995"
+    ]
+  ],
+  "metric_specs": [
+    [
+      "revenue",
+      "currency",
+      "Total revenue for the fiscal period.",
+      false
+    ],
+    [
+      "segment_revenue",
+      "currency",
+      "Revenue attributed to one reportable segment (#772).",
+      false
+    ],
+    [
+      "gross_profit",
+      "currency",
+      "Gross profit for non-financial issuers.",
+      false
+    ],
+    [
+      "pre_provision_profit",
+      "currency",
+      "Bank pre-provision net revenue (#59, #1519).",
+      false
+    ],
+    [
+      "insurance_pre_claims_profit",
+      "currency",
+      "Insurance operating numerator (#496, #1519).",
+      false
+    ],
+    [
+      "shares_weighted_average_basic",
+      "count",
+      "Weighted-average basic common shares (#496, #1519).",
+      false
+    ],
+    [
+      "cost_of_revenue",
+      "currency",
+      "Reported cost of revenue.",
+      false
+    ],
+    [
+      "operating_income",
+      "currency",
+      "Reported operating income.",
+      false
+    ],
+    [
+      "net_income",
+      "currency",
+      "Net income attributable to the company.",
+      true
+    ],
+    [
+      "eps_diluted",
+      "per_share",
+      "Diluted earnings per share.",
+      false
+    ],
+    [
+      "shares_outstanding",
+      "count",
+      "Point-in-time common shares outstanding.",
+      false
+    ],
+    [
+      "stockholders_equity",
+      "currency",
+      "Total stockholders' equity (#1176).",
+      false
+    ],
+    [
+      "preferred_stock_value",
+      "currency",
+      "Preferred stock carrying value (#1176).",
+      false
+    ],
+    [
+      "goodwill",
+      "currency",
+      "Goodwill carrying amount (#1176).",
+      false
+    ],
+    [
+      "intangible_assets_net_excluding_goodwill",
+      "currency",
+      "Intangible assets excluding goodwill (#1176).",
+      false
+    ],
+    [
+      "employees_total",
+      "count",
+      "Total headcount.",
+      false
+    ],
+    [
+      "total_assets",
+      "currency",
+      "Total assets on the balance sheet.",
+      false
+    ],
+    [
+      "price",
+      "per_share",
+      "Unadjusted close price.",
+      false
+    ],
+    [
+      "consensus_profit_growth",
+      "percentage",
+      "Annual profit growth rate (#1354).",
+      false
+    ],
+    [
+      "gross_profit_per_employee",
+      "per_employee",
+      "Gross profit per employee (#1523).",
+      false
+    ],
+    [
+      "financial_assets",
+      "currency",
+      "Cash and marketable investments (#528).",
+      false
+    ],
+    [
+      "financial_returns",
+      "currency",
+      "Investment income, dividends, and gains (#528).",
+      false
+    ],
+    [
+      "bank_net_revenue",
+      "currency",
+      "Bank net revenue.",
+      false
+    ]
+  ],
+  "input_key_aliases": {
+    "headcount": "employees_total",
+    "last_close": "price",
+    "gppe": "gross_profit_per_employee"
+  },
+  "physically_non_negative": {
+    "total_assets": "balance of assets",
+    "employees_total": "count of people",
+    "risk_free_rate": "definition parameter",
+    "capital_charge": "total_assets * risk_free_rate",
+    "goodwill": "carrying amount of goodwill",
+    "intangible_assets_net_excluding_goodwill": "carrying amount of intangible assets",
+    "preferred_stock_value": "carrying amount of preferred stock",
+    "tangible_deductions": "sum of non-negative balances",
+    "charged_tangible_common_equity": "non-negative tangible common equity (#1518)",
+    "financial_assets": "cash and marketable investments"
+  },
+  "known_entity_display": {
+    "issuer:cik:0000723125": [
+      "MU",
+      "Micron Technology (美光科技)"
+    ],
+    "issuer:cik:0000104169": [
+      "WMT",
+      "Walmart (沃尔玛)"
+    ],
+    "issuer:cik:0001326801": [
+      "META",
+      "Meta Platforms"
+    ],
+    "issuer:cik:0001018724": [
+      "AMZN",
+      "Amazon (亚马逊)"
+    ],
+    "issuer:cik:0001045810": [
+      "NVDA",
+      "NVIDIA (英伟达)"
+    ],
+    "issuer:cik:0001065280": [
+      "NFLX",
+      "Netflix (奈飞)"
+    ],
+    "issuer:cik:0000019617": [
+      "JPM",
+      "JPMorgan Chase (摩根大通)"
+    ],
+    "issuer:cik:0000059478": [
+      "LLY",
+      "Eli Lilly (礼来)"
+    ],
+    "issuer:cik:0000200406": [
+      "JNJ",
+      "Johnson & Johnson (强生)"
+    ],
+    "issuer:cik:0000320193": [
+      "AAPL",
+      "Apple (苹果)"
+    ],
+    "issuer:cik:0000789019": [
+      "MSFT",
+      "Microsoft (微软)"
+    ],
+    "issuer:cik:0000909832": [
+      "COST",
+      "Costco (好市多)"
+    ],
+    "issuer:cik:0001067983": [
+      "BRK.B",
+      "Berkshire Hathaway (伯克希尔)"
+    ],
+    "issuer:cik:0001141391": [
+      "MA",
+      "Mastercard (万事达)"
+    ],
+    "issuer:cik:0001318605": [
+      "TSLA",
+      "Tesla (特斯拉)"
+    ],
+    "issuer:cik:0001403161": [
+      "V",
+      "Visa"
+    ],
+    "issuer:cik:0001551152": [
+      "ABBV",
+      "AbbVie (艾伯维)"
+    ],
+    "issuer:cik:0001652044": [
+      "GOOGL",
+      "Alphabet (谷歌)"
+    ],
+    "issuer:cik:0001730168": [
+      "AVGO",
+      "Broadcom (博通)"
+    ],
+    "issuer:lei:J3WHBG0MTS7O8ZVMDC91": [
+      "XOM",
+      "Exxon Mobil (埃克森美孚)"
+    ],
+    "issuer:cik:0000034088": [
+      "XOM",
+      "Exxon Mobil (埃克森美孚)"
+    ],
+    "issuer:cik:0000354950": [
+      "HD",
+      "Home Depot (家得宝)"
+    ],
+    "issuer:cik:0001075531": [
+      "BKNG",
+      "Booking Holdings"
+    ],
+    "issuer:cik:0000937966": [
+      "ASML",
+      "ASML Holding (阿斯麦)"
+    ],
+    "issuer:cik:0000049196": [
+      "HBAN",
+      "Huntington Bancshares"
+    ],
+    "issuer:cik:0000020286": [
+      "CINF",
+      "Cincinnati Financial"
+    ],
+    "issuer:cik:0001535527": [
+      "CRWD",
+      "CrowdStrike"
+    ],
+    "issuer:cik:0000829224": [
+      "SBUX",
+      "Starbucks (星巴克)"
+    ],
+    "issuer:cik:0001327567": [
+      "PANW",
+      "Palo Alto Networks"
+    ],
+    "issuer:cik:0000896878": [
+      "INTU",
+      "Intuit"
+    ],
+    "issuer:adm": [
+      "ADM",
+      "Archer-Daniels-Midland"
+    ],
+    "issuer:nice": [
+      "NICE",
+      "NICE Ltd."
+    ],
+    "issuer:ddog": [
+      "DDOG",
+      "Datadog"
+    ],
+    "issuer:shop": [
+      "SHOP",
+      "Shopify"
+    ]
+  },
+  "question_text": {
+    "q1": "Is this company actually leveraged by large models?",
+    "q2": "Is the current valuation reasonable relative to growth?",
+    "q3": "What is this company exposed to, up and down its supply chain?",
+    "q4": "Is a given analyst's track record worth trusting?",
+    "q5": "Does an ETF/portfolio \"look like\" a healthy company when treated as one?",
+    "q6": "Who's the \"purest\" name under a given theme?"
+  },
+  "question_requirements": [
+    {
+      "question": "q1",
+      "columns": [
+        {
+          "table": "mart.topt_gppe_results",
+          "column": "gppe",
+          "factor": "gross_profit_per_employee",
+          "module": 2,
+          "universe_role": null
+        }
+      ],
+      "standards": [
+        "employees_total"
+      ],
+      "scope": "issuer",
+      "tracking_issue": "#528"
+    },
+    {
+      "question": "q2",
+      "columns": [
+        {
+          "table": "mart.strategy_decisions",
+          "column": "peg",
+          "factor": "peg",
+          "module": 1,
+          "universe_role": "strategy"
+        }
+      ],
+      "standards": [],
+      "scope": "issuer",
+      "tracking_issue": "#284"
+    },
+    {
+      "question": "q3",
+      "columns": [
+        {
+          "table": "mart.issuer_supply_chain_exposure",
+          "column": "exposure_score",
+          "factor": "supply_chain_exposure",
+          "module": 3,
+          "universe_role": null
+        }
+      ],
+      "standards": [],
+      "scope": "issuer",
+      "tracking_issue": "#772"
+    },
+    {
+      "question": "q4",
+      "columns": [
+        {
+          "table": "mart.issuer_analyst_ratings",
+          "column": "consensus_rating",
+          "factor": "analyst_track_record",
+          "module": 4,
+          "universe_role": null
+        }
+      ],
+      "standards": [],
+      "scope": "issuer",
+      "tracking_issue": "#771"
+    },
+    {
+      "question": "q5",
+      "columns": [
+        {
+          "table": "mart.fund_virtual_company",
+          "column": "weighted_valuation_gap",
+          "factor": "etf_virtual_company",
+          "module": 5,
+          "universe_role": "fund_consolidation"
+        }
+      ],
+      "standards": [],
+      "scope": "fund",
+      "tracking_issue": "#36"
+    },
+    {
+      "question": "q6",
+      "columns": [
+        {
+          "table": "mart.issuer_theme_purity",
+          "column": "theme_share",
+          "factor": "theme_purity",
+          "module": 6,
+          "universe_role": null
+        }
+      ],
+      "standards": [
+        "segment_revenue"
+      ],
+      "scope": "issuer",
+      "tracking_issue": "#772"
+    }
+  ],
+  "confidence_policies": {
+    "segment-revenue-confidence:v1": {
+      "rule:exhaustive-partition:v1": "0.90",
+      "rule:single-segment:v4": "0.75",
+      "model-selection": "0.85"
+    },
+    "headcount-confidence:v1": {
+      "rule:single-candidate:v1": "0.85",
+      "model-selection": "0.90",
+      "manual-review": "0.70"
+    }
+  },
+  "standards": {
+    "employees_total": {
+      "metric": "employees_total",
+      "definition": "Company-wide total employees as stated in the issuer's latest annual filing (10-K or 20-F), as of the date the filing states.",
+      "acceptance_rule": "One company-wide total. Departmental, segment, geographic, part-time, temporary or contractor counts are not the value; a filing that states several distinct company-wide totals needs selection, not a guess.",
+      "kind": "hard",
+      "evidence": "filing_span",
+      "confidence_policy_id": "headcount-confidence:v1",
+      "max_age_days": 400,
+      "evidence_bearing_sources": [
+        "10k-extraction"
+      ],
+      "plane": {
+        "table": "staging.issuer_headcount_facts",
+        "issuer_column": "cik",
+        "policy": "headcount",
+        "withdrawn_extractors": []
+      },
+      "adapter": "data_engine.datahub.standards.filing_extraction:extract_headcount"
+    },
+    "segment_revenue": {
+      "metric": "segment_revenue",
+      "definition": "Revenue attributed to one reportable segment, as the issuer's latest annual filing states it in its own segment table.",
+      "acceptance_rule": "The parts, not a part. A segment set is the value only when it accounts for the issuer's consolidated revenue: a missed segment silently raises every remaining segment's share, so a set that does not balance is refused rather than ranked. Intersegment revenue is excluded, not summed.",
+      "kind": "hard",
+      "evidence": "filing_span",
+      "confidence_policy_id": "segment-revenue-confidence:v1",
+      "max_age_days": 400,
+      "evidence_bearing_sources": [
+        "10k-segment-extraction"
+      ],
+      "plane": {
+        "table": "staging.issuer_segment_revenue_facts",
+        "issuer_column": "cik",
+        "policy": "segment_revenue",
+        "withdrawn_extractors": [
+          "rule:single-segment:v1",
+          "rule:single-segment:v2",
+          "rule:single-segment:v3"
+        ]
+      },
+      "adapter": "data_engine.datahub.standards.segment_extraction:extract_segment_revenue"
+    }
+  },
+  "themes": [
+    {
+      "factor_key": "theme_purity",
+      "factor_version": "v0",
+      "theme_id": "ai-infrastructure",
+      "theme": "AI infrastructure",
+      "inclusion": "Revenue from hardware, software or services whose primary purpose is training or serving machine-learning models: accelerators and the networking, memory and power systems built for them, data-centre capacity sold for AI workloads, and model training or inference sold as a service. General-purpose computing, consumer devices, and software that merely embeds a model feature are NOT in the theme.",
+      "minimum_classified_share": "0.80"
+    },
+    {
+      "factor_key": "theme_purity",
+      "factor_version": "v0",
+      "theme_id": "cloud-software",
+      "theme": "Cloud software",
+      "inclusion": "Revenue from software delivered and billed as a subscription service the vendor operates, including the infrastructure and platform capacity sold to run it. Perpetual licences, on-premise maintenance, hardware and professional services are NOT in the theme.",
+      "minimum_classified_share": "0.80"
+    },
+    {
+      "factor_key": "theme_purity",
+      "factor_version": "v0",
+      "theme_id": "semiconductors",
+      "theme": "Semiconductors",
+      "inclusion": "Revenue from designing, manufacturing, packaging or testing integrated circuits, and from the equipment and materials used to do so. Systems that merely contain semiconductors, and software sold alongside them, are NOT in the theme.",
+      "minimum_classified_share": "0.80"
+    }
+  ],
+  "obligation_reasons": {
+    "auth_failed": "stop",
+    "contract_violation": "stop",
+    "release_scope_mismatch": "stop",
+    "look_ahead_violation": "stop",
+    "checksum_mismatch": "stop",
+    "transient_network": "retry",
+    "timeout": "retry",
+    "rate_limited": "retry",
+    "server_error": "retry",
+    "not_yet_knowable": "trace_only",
+    "field_unavailable": "trace_only",
+    "low_confidence": "trace_only",
+    "deferred_capacity": "trace_only"
+  }
+}

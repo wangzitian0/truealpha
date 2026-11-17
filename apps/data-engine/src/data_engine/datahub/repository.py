@@ -10,13 +10,14 @@ from typing import Any
 
 from psycopg import Connection, sql
 from psycopg.types.json import Jsonb
-from truealpha_contracts.capture_control import (
+from truealpha_contracts.common import canonical_sha256
+
+from data_engine.contracts.capture_control import (
     CaptureListObligation,
     CaptureListVersion,
     CaptureObligationWorkBinding,
 )
-from truealpha_contracts.common import canonical_sha256
-from truealpha_contracts.datahub import (
+from data_engine.contracts.datahub import (
     CaptureCampaign,
     CaptureRun,
     CaptureSchedulePolicy,

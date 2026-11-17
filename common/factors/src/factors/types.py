@@ -9,10 +9,9 @@ from enum import StrEnum
 from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
-from truealpha_contracts.measure import Measure, MeasureUnit
 from truealpha_contracts.metrics import METRICS, UnitFamily
 
-from factors.measure import UnitMismatchError, default_unit_for_metric, times
+from factors.measure import Measure, MeasureUnit, UnitMismatchError, default_unit_for_metric, times
 
 DataAvailability = Literal["verified", "unverified"]
 

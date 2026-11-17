@@ -6,7 +6,8 @@ from collections.abc import Sequence
 from typing import Any
 
 from psycopg import Connection
-from truealpha_contracts.evidence_graph import (
+
+from data_engine.contracts.evidence_graph import (
     BitemporalStamp,
     CurrentPointer,
     CurrentPointerKey,

@@ -1,0 +1,285 @@
+{
+  "cutoff_at": "2026-06-30T23:59:59Z",
+  "generated_from": "mart:research_report.v1",
+  "report_id": "report:1fde44a0518deccd1a526b16ff07cc60b9f276639a33cc8b6ae89abbe95975db",
+  "report_kind": "company",
+  "schema_version": "research_report.v1",
+  "subjects": [
+    {
+      "display_name": "ADM \u00b7 Archer-Daniels-Midland",
+      "rank": null,
+      "sections": [
+        {
+          "availability": "available",
+          "notes": [],
+          "reason_codes": [],
+          "results": [
+            {
+              "availability": "available",
+              "confidence": "0.90",
+              "currency": null,
+              "cutoff_at": "2026-06-30T23:59:59Z",
+              "factor_version": "large_model_value_v0",
+              "label": "capital_adjusted_labor_efficiency",
+              "period": "2026-06-30",
+              "trace": {
+                "factor_execution_id": null,
+                "materialized_output_id": null,
+                "reference_id": "mart:004e716a11f1:issuer:adm:2026-06-30T23:59:59Z",
+                "snapshot_id": null
+              },
+              "unit": "USD",
+              "value": "75207.29"
+            }
+          ],
+          "section_kind": "operating_efficiency",
+          "title": "Operating efficiency (capital-adjusted labor efficiency)",
+          "validation_status": "not_evaluated"
+        },
+        {
+          "availability": "available",
+          "notes": [],
+          "reason_codes": [],
+          "results": [
+            {
+              "availability": "available",
+              "confidence": "0.90",
+              "currency": null,
+              "cutoff_at": "2026-06-30T23:59:59Z",
+              "factor_version": "large_model_value_v0",
+              "label": "tier",
+              "period": "2026-06-30",
+              "trace": {
+                "factor_execution_id": null,
+                "materialized_output_id": null,
+                "reference_id": "mart:004e716a11f1:issuer:adm:2026-06-30T23:59:59Z",
+                "snapshot_id": null
+              },
+              "unit": null,
+              "value": "traditional"
+            },
+            {
+              "availability": "available",
+              "confidence": "0.90",
+              "currency": null,
+              "cutoff_at": "2026-06-30T23:59:59Z",
+              "factor_version": "large_model_value_v0",
+              "label": "current_price_to_gross_profit",
+              "period": "2026-06-30",
+              "trace": {
+                "factor_execution_id": null,
+                "materialized_output_id": null,
+                "reference_id": "mart:004e716a11f1:issuer:adm:2026-06-30T23:59:59Z",
+                "snapshot_id": null
+              },
+              "unit": null,
+              "value": "7.3046"
+            },
+            {
+              "availability": "available",
+              "confidence": "0.90",
+              "currency": null,
+              "cutoff_at": "2026-06-30T23:59:59Z",
+              "factor_version": "large_model_value_v0",
+              "label": "target_price_to_gross_profit",
+              "period": "2026-06-30",
+              "trace": {
+                "factor_execution_id": null,
+                "materialized_output_id": null,
+                "reference_id": "mart:004e716a11f1:issuer:adm:2026-06-30T23:59:59Z",
+                "snapshot_id": null
+              },
+              "unit": null,
+              "value": "8.7500"
+            },
+            {
+              "availability": "available",
+              "confidence": "0.90",
+              "currency": null,
+              "cutoff_at": "2026-06-30T23:59:59Z",
+              "factor_version": "large_model_value_v0",
+              "label": "current_price_to_sales",
+              "period": "2026-06-30",
+              "trace": {
+                "factor_execution_id": null,
+                "materialized_output_id": null,
+                "reference_id": "mart:004e716a11f1:issuer:adm:2026-06-30T23:59:59Z",
+                "snapshot_id": null
+              },
+              "unit": null,
+              "value": "0.4580"
+            },
+            {
+              "availability": "available",
+              "confidence": "0.90",
+              "currency": null,
+              "cutoff_at": "2026-06-30T23:59:59Z",
+              "factor_version": "large_model_value_v0",
+              "label": "valuation_gap",
+              "period": "2026-06-30",
+              "trace": {
+                "factor_execution_id": null,
+                "materialized_output_id": null,
+                "reference_id": "mart:004e716a11f1:issuer:adm:2026-06-30T23:59:59Z",
+                "snapshot_id": null
+              },
+              "unit": null,
+              "value": "0.1979"
+            }
+          ],
+          "section_kind": "valuation",
+          "title": "Valuation (three-tier P/GP)",
+          "validation_status": "not_evaluated"
+        },
+        {
+          "availability": "unavailable",
+          "notes": [],
+          "reason_codes": [
+            "peg_not_recorded"
+          ],
+          "results": [
+            {
+              "availability": "unavailable",
+              "confidence": "0.90",
+              "currency": null,
+              "cutoff_at": "2026-06-30T23:59:59Z",
+              "factor_version": "large_model_value_v0",
+              "label": "peg",
+              "period": "2026-06-30",
+              "trace": {
+                "factor_execution_id": null,
+                "materialized_output_id": null,
+                "reference_id": "mart:004e716a11f1:issuer:adm:2026-06-30T23:59:59Z",
+                "snapshot_id": null
+              },
+              "unit": null,
+              "value": null
+            },
+            {
+              "availability": "unavailable",
+              "confidence": "0.90",
+              "currency": null,
+              "cutoff_at": "2026-06-30T23:59:59Z",
+              "factor_version": "large_model_value_v0",
+              "label": "peg_rank",
+              "period": "2026-06-30",
+              "trace": {
+                "factor_execution_id": null,
+                "materialized_output_id": null,
+                "reference_id": "mart:004e716a11f1:issuer:adm:2026-06-30T23:59:59Z",
+                "snapshot_id": null
+              },
+              "unit": null,
+              "value": null
+            }
+          ],
+          "section_kind": "peg_conventions",
+          "title": "PEG",
+          "validation_status": "not_evaluated"
+        },
+        {
+          "availability": "unavailable",
+          "notes": [],
+          "reason_codes": [
+            "no_row_in_served_head"
+          ],
+          "results": [],
+          "section_kind": "supply_chain",
+          "title": "Supply-chain exposure",
+          "validation_status": null
+        },
+        {
+          "availability": "unavailable",
+          "notes": [],
+          "reason_codes": [
+            "no_row_in_served_head"
+          ],
+          "results": [],
+          "section_kind": "analyst_history",
+          "title": "Analyst consensus",
+          "validation_status": null
+        },
+        {
+          "availability": "available",
+          "notes": [],
+          "reason_codes": [],
+          "results": [
+            {
+              "availability": "available",
+              "confidence": "0.90",
+              "currency": null,
+              "cutoff_at": "2026-06-30T23:59:59Z",
+              "factor_version": "large_model_value_v0",
+              "label": "outcome",
+              "period": "2026-06-30",
+              "trace": {
+                "factor_execution_id": null,
+                "materialized_output_id": null,
+                "reference_id": "mart:004e716a11f1:issuer:adm:2026-06-30T23:59:59Z",
+                "snapshot_id": null
+              },
+              "unit": null,
+              "value": "selected"
+            },
+            {
+              "availability": "available",
+              "confidence": "0.90",
+              "currency": null,
+              "cutoff_at": "2026-06-30T23:59:59Z",
+              "factor_version": "large_model_value_v0",
+              "label": "eligible",
+              "period": "2026-06-30",
+              "trace": {
+                "factor_execution_id": null,
+                "materialized_output_id": null,
+                "reference_id": "mart:004e716a11f1:issuer:adm:2026-06-30T23:59:59Z",
+                "snapshot_id": null
+              },
+              "unit": null,
+              "value": "true"
+            },
+            {
+              "availability": "available",
+              "confidence": "0.90",
+              "currency": null,
+              "cutoff_at": "2026-06-30T23:59:59Z",
+              "factor_version": "large_model_value_v0",
+              "label": "rank",
+              "period": "2026-06-30",
+              "trace": {
+                "factor_execution_id": null,
+                "materialized_output_id": null,
+                "reference_id": "mart:004e716a11f1:issuer:adm:2026-06-30T23:59:59Z",
+                "snapshot_id": null
+              },
+              "unit": null,
+              "value": "2"
+            },
+            {
+              "availability": "available",
+              "confidence": "0.90",
+              "currency": null,
+              "cutoff_at": "2026-06-30T23:59:59Z",
+              "factor_version": "large_model_value_v0",
+              "label": "target_weight",
+              "period": "2026-06-30",
+              "trace": {
+                "factor_execution_id": null,
+                "materialized_output_id": null,
+                "reference_id": "mart:004e716a11f1:issuer:adm:2026-06-30T23:59:59Z",
+                "snapshot_id": null
+              },
+              "unit": null,
+              "value": "0.500000"
+            }
+          ],
+          "section_kind": "strategy_summary",
+          "title": "Large-model-value strategy decision",
+          "validation_status": "not_evaluated"
+        }
+      ],
+      "subject_id": "issuer:adm"
+    }
+  ],
+  "title": "ADM \u2014 company research report"
+}

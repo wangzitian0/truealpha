@@ -17,17 +17,17 @@ from decimal import Decimal
 from typing import Any
 
 import pytest
-from data_engine.datahub.standards.backfill import _adapter, _resolve
-from data_engine.datahub.standards.planner import OpenCell, UniverseIssuer, open_cells
-from truealpha_contracts.reconciliation import ReconciliationPolicy
-from truealpha_contracts.reconciliation_policies import HEADCOUNT_RECONCILIATION_POLICY
-from truealpha_contracts.standards import (
+from data_engine.contracts.standards import (
     STANDARDS,
     EvidenceRequirement,
     FactPlane,
     MetricStandard,
     StandardKind,
 )
+from data_engine.datahub.standards.backfill import _adapter, _resolve
+from data_engine.datahub.standards.planner import OpenCell, UniverseIssuer, open_cells
+from truealpha_runtime.reconciliation import ReconciliationPolicy
+from truealpha_runtime.reconciliation_policies import HEADCOUNT_RECONCILIATION_POLICY
 
 CUTOFF = datetime(2026, 9, 10, tzinfo=UTC)
 ISSUER = UniverseIssuer(issuer_id="issuer:cik:320193", ticker="AAPL", listing_id="listing:xnas:aapl", cik=320193)
@@ -138,7 +138,7 @@ def test_an_adapter_that_is_not_callable_is_refused_by_name() -> None:
     """A name that resolves to a constant or a class would crash at CALL time with a bare
     TypeError, losing the one piece of context worth having — which standard asked for it
     (review on #800). `EvidenceRequirement` is a real importable name that is not a function."""
-    not_callable = OTHER.model_copy(update={"adapter": "truealpha_contracts.standards:CONFIDENCE_POLICIES"})
+    not_callable = OTHER.model_copy(update={"adapter": "data_engine.contracts.standards:CONFIDENCE_POLICIES"})
     with pytest.raises(LookupError) as error:
         _adapter(not_callable)
     message = str(error.value)

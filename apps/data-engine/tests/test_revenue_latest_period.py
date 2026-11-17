@@ -35,8 +35,8 @@ from pathlib import Path
 import psycopg
 import pytest
 from data_engine.config import settings
+from data_engine.contracts.concept_mapping import ConceptMappingRuleset
 from data_engine.datahub.production_topt.concept_mapping import DEFAULT_RULESET, publish_ruleset
-from truealpha_contracts.concept_mapping import ConceptMappingRuleset
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "support"))
 from sec_route import served_financial_record  # noqa: E402

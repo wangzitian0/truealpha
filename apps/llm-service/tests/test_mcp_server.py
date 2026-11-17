@@ -1,19 +1,29 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 import pytest
-from fixtures.strategy_run_fixture import FixtureStrategyRunRepository
 from llm_service.mcp_server import _default_repository, build_mcp_server, mcp
 from mcp.shared.memory import create_connected_server_and_client_session
-from truealpha_contracts.access import AccessContext, AuthenticationMethod, PrincipalKind
-from truealpha_contracts.research_cards import ResearchCard
-from truealpha_contracts.research_report import ResearchReport
-from truealpha_contracts.research_report_mart import MartResearchReadRepository
-from truealpha_contracts.strategy_run import StrategyRunReport, StrategyRunUnavailable
-from truealpha_contracts.strategy_run_postgres import PostgresStrategyRunRepository
+from truealpha_runtime.access import AccessContext, AuthenticationMethod, PrincipalKind
+from truealpha_runtime.research_cards import ResearchCard
+from truealpha_runtime.research_report import ResearchReport
+from truealpha_runtime.research_report_mart import MartResearchReadRepository
+from truealpha_runtime.strategy_run import StrategyRunReport, StrategyRunUnavailable
+from truealpha_runtime.strategy_run_postgres import PostgresStrategyRunRepository
+
+_FIXTURE_PATH = (
+    Path(__file__).resolve().parents[3] / "common" / "runtime" / "tests" / "fixtures" / "strategy_run_fixture.py"
+)
+_FIXTURE_SPEC = importlib.util.spec_from_file_location("strategy_run_fixture", _FIXTURE_PATH)
+assert _FIXTURE_SPEC is not None and _FIXTURE_SPEC.loader is not None
+_FIXTURE_MOD = importlib.util.module_from_spec(_FIXTURE_SPEC)
+_FIXTURE_SPEC.loader.exec_module(_FIXTURE_MOD)
+FixtureStrategyRunRepository = _FIXTURE_MOD.FixtureStrategyRunRepository
 
 
 class _NoServedModuleRows:
@@ -104,38 +114,36 @@ async def test_governed_backtest_tool_reads_through_injected_reader() -> None:
 
 @pytest.mark.anyio
 async def test_topt_gppe_tool_serializes_whatever_repository_its_given() -> None:
-    """Proves the tool's wiring/serialization only -- an injected fake, not
-    PostgresToptGppeRepository's own SQL/row-materialization. That class has its
-    own real-Postgres coverage in common/contracts/tests/test_topt_read.py; a
-    previous version of this test's name (test_topt_gppe_reads_the_mart_repository
-    _not_a_fixture) implied it covered that class's DB logic, which it never did
-    -- see truealpha#462, where that misleading name was part of how #461's
-    KeyError bug shipped without a real regression test catching it."""
-    from truealpha_contracts.topt_read import ToptGppeCell, ToptGppeReport
+    """Proves the tool's wiring/serialization with an injected metric node repository."""
+    from truealpha_runtime.research_report_mart import MetricNodeValueCell, MetricNodeValueReport
 
     class _FakeTopt:
-        def latest(self, *, limit: int = 100) -> ToptGppeReport:
-            return ToptGppeReport(
+        def latest(self, *, limit: int = 100) -> MetricNodeValueReport:
+            return MetricNodeValueReport(
                 run_id="capture-run:" + "a" * 64,
-                requested_count=84,
+                node_key="gppe_uniform_charge_v0",
                 available_count=1,
                 cells=(
-                    ToptGppeCell(
-                        listing_id="listing:xnas:goog",
-                        availability="available",
-                        gppe="1153614.48",
+                    MetricNodeValueCell(
+                        issuer_id="listing:xnas:goog",
+                        node_id="6143cf17-ceba-5f78-a2d3-a7cc423c49a7",
+                        node_key="gppe_uniform_charge_v0",
+                        period="2025-12-31",
+                        value="1153614.48",
+                        availability_status="available",
+                        source_evidence_status="verified",
+                        factor_validation_status="validated",
                         confidence="0.85",
                     ),
                 ),
-                quality={"denominator_mean_confidence": "0.9171"},
             )
 
     server = build_mcp_server(repository=FixtureStrategyRunRepository(), topt_repository=_FakeTopt())
     content_blocks, structured = await server.call_tool("topt_gppe", {})  # type: ignore[misc]
-    report = ToptGppeReport.model_validate_json(json.dumps(structured["result"]))  # type: ignore[index]
+    report = MetricNodeValueReport.model_validate_json(json.dumps(structured["result"]))  # type: ignore[index]
     assert report.available_count == 1
-    assert report.cells[0].listing_id == "listing:xnas:goog"
-    assert report.cells[0].gppe == "1153614.48"
+    assert report.cells[0].issuer_id == "listing:xnas:goog"
+    assert report.cells[0].value == "1153614.48"
 
 
 @pytest.mark.anyio
@@ -220,12 +228,12 @@ async def test_tool_reads_through_the_shared_repository_and_matches_the_fixture(
         "strategy_run", {"request": {"strategy_id": "large_model_value_v0"}}
     )
     raw_result = structured["result"]  # type: ignore[index]
-    assert raw_result["strategy_run_id"] == "strategy_smoke_fixture"
+    assert raw_result["strategy_run_id"] == "test_fixture"
     assert "governed" in raw_result and raw_result["governed"] is False
     # JSON-mode validation: the wire payload is JSON-native (lists), not Python tuples.
     report = StrategyRunReport.model_validate_json(json.dumps(raw_result))
     assert report.strategy_id == "large_model_value_v0"
-    assert report.strategy_run_id == "strategy_smoke_fixture"
+    assert report.strategy_run_id == "test_fixture"
     assert report.governed is False
     selected = next(d for d in report.decisions if d.issuer_id == "issuer:adm" and d.cutoff_at.month == 3)
     assert selected.outcome.value == "selected"
@@ -296,12 +304,12 @@ async def test_claude_compatible_client_session_round_trip() -> None:
         assert result.isError is not True
         assert result.structuredContent is not None
         raw_result = result.structuredContent["result"]
-        assert raw_result["strategy_run_id"] == "strategy_smoke_fixture"
+        assert raw_result["strategy_run_id"] == "test_fixture"
         assert "governed" in raw_result and raw_result["governed"] is False
         report = StrategyRunReport.model_validate_json(json.dumps(raw_result))
         assert len(report.decisions) == 10
         assert report.golden_mismatches == ()
-        assert report.strategy_run_id == "strategy_smoke_fixture"
+        assert report.strategy_run_id == "test_fixture"
         assert report.governed is False
 
 
@@ -309,7 +317,7 @@ async def test_claude_compatible_client_session_round_trip() -> None:
 async def test_sequential_mcp_calls_and_ranking_card_coercion_succeed_without_empty_drops() -> None:
     """#1609: 12 sequential back-to-back MCP calls on one session succeed without drops,
     and research_card(card_kind='ranking') returns non-empty metrics and verified 1080x1440 HTML."""
-    from truealpha_contracts.research_cards import verify_card_html
+    from truealpha_runtime.research_cards import verify_card_html
 
     server = build_mcp_server(repository=FixtureStrategyRunRepository(), research_repository=_research_repository())
     async with create_connected_server_and_client_session(server._mcp_server) as client:
@@ -607,7 +615,7 @@ def test_resolve_fund_resolution_candidates_falsifiable() -> None:
 
 
 def test_issuer_identity_sql_ssot_falsifiable() -> None:
-    from truealpha_contracts.issuer_modules_mart import issuer_identity_sql
+    from truealpha_runtime.issuer_modules_mart import issuer_identity_sql
 
     predicate = issuer_identity_sql("d.issuer_id", "%s")
     assert predicate.count("%s") == 3
@@ -849,7 +857,7 @@ def test_company_profile_names_the_pgp_basis_of_a_definition_1_0_0_decision(them
 
 def test_format_company_profile_surfaces_decision_confidence_and_reason_codes() -> None:
     """#1517 stage A4: company_360_profile surfaces decision confidence and reason_codes from mart rows."""
-    from llm_service.mcp_server import _format_company_profile
+    from llm_service.services.research_service import _format_company_profile
 
     profile = _format_company_profile(
         issuer_id="issuer:ddog",

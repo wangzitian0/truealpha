@@ -1,10 +1,6 @@
 import { formatCell, formatRatio } from "@/client/format";
-import type { WidePanelCell } from "@/server/mart/research-read";
+import type { WidePanelCell } from "@/client/api";
 
-/**
- * Standardized wide-panel node cell for rankings and coverage tables (#1679).
- * Renders value and confidence with exact font-mono tabular-nums formatting.
- */
 export function PanelNodeTd({
   node,
   formatted,

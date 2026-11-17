@@ -2,31 +2,28 @@
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
+from importlib import resources
 from typing import Annotated, Any, ClassVar, Self
 
-from pydantic import (
-    AfterValidator,
-    BaseModel,
-    BeforeValidator,
-    ConfigDict,
-    Field,
-    SerializerFunctionWrapHandler,
-    ValidationInfo,
-    model_serializer,
-    model_validator,
-)
+import pydantic as _p
+from pydantic import BaseModel, ConfigDict, Field
 
 STABLE_ID_BODY = r"[A-Za-z0-9][A-Za-z0-9._:/@+\-]*"
-STABLE_ID_PATTERN = rf"^{STABLE_ID_BODY}$"
-SHA256_PATTERN = r"^[0-9a-f]{64}$"
+STABLE_ID_PATTERN, SHA256_PATTERN = rf"^{STABLE_ID_BODY}$", r"^[0-9a-f]{64}$"
 DEFAULT_MUTABLE_TOKENS = frozenset({"latest", "current", "default", "stable", "main", "head"})
+
+
+@functools.lru_cache(maxsize=16)
+def load_data_json(filename: str) -> Any:
+    return json.loads(resources.files("truealpha_contracts.data").joinpath(filename).read_text(encoding="utf-8"))
 
 
 class FrozenModel(BaseModel):
@@ -37,29 +34,23 @@ class StrictFrozenModel(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
 
-def reject_binary_float(value: Any, label: str = "monetary or ratio value") -> Any:
+def reject_binary_float(value: Any, label: str = "value") -> Any:
     if isinstance(value, float):
         raise ValueError(f"{label} cannot be a binary float")
     return value
 
 
-def finite_decimal_input(value: Any, *, coerce: bool = False) -> Any:
-    if isinstance(value, (bool, float)):
-        raise ValueError("binary float is forbidden; use Decimal or a base-10 string")
+def finite_decimal_input(value: Any) -> Any:
+    if isinstance(value, float):
+        raise ValueError("binary float is forbidden")
     if value is not None:
         try:
-            parsed = value if isinstance(value, Decimal) else Decimal(value)
+            p = value if isinstance(value, Decimal) else Decimal(value)
         except (InvalidOperation, TypeError, ValueError):
             return value
-        if not parsed.is_finite():
+        if not p.is_finite():
             raise ValueError("non-finite Decimal values are forbidden")
-        if coerce:
-            return parsed
     return value
-
-
-def _parsed_safe_decimal(value: Any) -> Any:
-    return finite_decimal_input(value, coerce=True)
 
 
 def require_aware(value: datetime, field_name: str) -> datetime:
@@ -68,23 +59,12 @@ def require_aware(value: datetime, field_name: str) -> datetime:
     return value
 
 
-def require_checks(*checks: tuple[bool, str]) -> None:
-    for failed, message in checks:
-        if failed:
-            raise ValueError(message)
-
-
 def require_stable_and_immutable(
-    value: str,
-    field_name: str,
-    *,
-    mutable_tokens: frozenset[str] = DEFAULT_MUTABLE_TOKENS,
-    pattern: str | None = STABLE_ID_PATTERN,
+    value: str, field_name: str, *, mutable_tokens: frozenset[str] = DEFAULT_MUTABLE_TOKENS
 ) -> str:
-    if pattern is not None and re.fullmatch(pattern, value) is None:
+    if re.fullmatch(STABLE_ID_PATTERN, value) is None:
         raise ValueError(f"{field_name} must be a stable coordinate")
-    tokens = {token for token in re.split(r"[._:/@+\-]", value.lower()) if token}
-    if tokens & mutable_tokens:
+    if {t for t in re.split(r"[._:/@+\-]", value.lower()) if t} & mutable_tokens:
         raise ValueError(f"{field_name} must name an immutable version")
     return value
 
@@ -96,42 +76,41 @@ def sorted_unique_coordinates(
     allow_empty: bool = True,
     immutable: bool = False,
     mutable_tokens: frozenset[str] = DEFAULT_MUTABLE_TOKENS,
-    pattern: str | None = STABLE_ID_PATTERN,
 ) -> tuple[str, ...]:
     if not allow_empty and not values:
         raise ValueError(f"{field_name} must not be empty")
     if len(values) != len(set(values)):
-        raise ValueError(f"{field_name} must not contain duplicates")
-    for val in values:
+        raise ValueError(f"{field_name} has duplicates")
+    for v in values:
         if immutable:
-            require_stable_and_immutable(val, field_name, mutable_tokens=mutable_tokens, pattern=pattern)
-        elif pattern is not None and re.fullmatch(pattern, val) is None:
+            require_stable_and_immutable(v, field_name, mutable_tokens=mutable_tokens)
+        elif re.fullmatch(STABLE_ID_PATTERN, v) is None:
             raise ValueError(f"{field_name} must contain stable coordinates")
     return tuple(sorted(values))
 
 
 def drop_none_fields(data: dict[str, Any], *fields: str) -> dict[str, Any]:
-    for name in fields:
-        if data.get(name) is None:
-            data.pop(name, None)
+    for n in fields:
+        if data.get(n) is None:
+            data.pop(n, None)
     return data
 
 
 def canonical_sha256(value: Any) -> str:
-    encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
-    return hashlib.sha256(encoded).hexdigest()
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
+    ).hexdigest()
 
 
 def identify(model: BaseModel, *, id_field: str, prefix: str, hash_field: str = "content_sha256") -> None:
-    payload = model.model_dump(mode="json", exclude={id_field, hash_field})
-    expected_hash = canonical_sha256(payload)
-    expected_id = f"{prefix}:{expected_hash}"
-    if getattr(model, hash_field) not in ("", expected_hash):
+    eh = canonical_sha256(model.model_dump(mode="json", exclude={id_field, hash_field}))
+    eid = f"{prefix}:{eh}"
+    if getattr(model, hash_field) not in ("", eh):
         raise ValueError(f"{hash_field} does not match canonical content")
-    if getattr(model, id_field) not in ("", expected_id):
+    if getattr(model, id_field) not in ("", eid):
         raise ValueError(f"{id_field} does not match canonical content")
-    object.__setattr__(model, hash_field, expected_hash)
-    object.__setattr__(model, id_field, expected_id)
+    object.__setattr__(model, hash_field, eh)
+    object.__setattr__(model, id_field, eid)
 
 
 class CaptureEnvironment(StrEnum):
@@ -145,66 +124,46 @@ class CaptureEnvironment(StrEnum):
 
 
 def identify_by_grain(model: BaseModel, *, id_field: str, prefix: str, identity_fields: tuple[str, ...]) -> None:
-    identity = model.model_dump(mode="json", include=set(identity_fields))
-    expected_id = f"{prefix}:{canonical_sha256({'kind': prefix, 'identity': identity})}"
-    expected_hash = canonical_sha256(model.model_dump(mode="json", exclude={id_field, "content_sha256"}))
-    if getattr(model, id_field) not in ("", expected_id):
-        raise ValueError(f"{id_field} does not match its declared identity grain")
-    if getattr(model, "content_sha256") not in ("", expected_hash):
-        raise ValueError("content_sha256 does not match the canonical record")
-    object.__setattr__(model, id_field, expected_id)
-    object.__setattr__(model, "content_sha256", expected_hash)
+    eid = f"{prefix}:{canonical_sha256({'kind': prefix, 'identity': model.model_dump(mode='json', include=set(identity_fields))})}"
+    eh = canonical_sha256(model.model_dump(mode="json", exclude={id_field, "content_sha256"}))
+    if getattr(model, id_field) not in ("", eid) or getattr(model, "content_sha256") not in ("", eh):
+        raise ValueError(f"{id_field}/content_sha256 grain mismatch")
+    object.__setattr__(model, id_field, eid)
+    object.__setattr__(model, "content_sha256", eh)
 
 
-def _aware_field(value: datetime, info: ValidationInfo) -> datetime:
-    return require_aware(value, info.field_name or "datetime")
-
-
-def _immutable_field(value: str, info: ValidationInfo) -> str:
-    return require_stable_and_immutable(value, info.field_name or "coordinate")
-
-
-def _sorted_unique_field(values: tuple[str, ...], info: ValidationInfo) -> tuple[str, ...]:
-    return sorted_unique_coordinates(values, info.field_name or "coordinates")
-
-
-#: Field types that replace one-line `@field_validator` hooks. Each error names its field.
-SafeDecimal = Annotated[Decimal, BeforeValidator(finite_decimal_input)]
-ParsedSafeDecimal = Annotated[Decimal, BeforeValidator(_parsed_safe_decimal)]
-AwareDatetime = Annotated[datetime, AfterValidator(_aware_field)]
-ImmutableId = Annotated[str, Field(pattern=STABLE_ID_PATTERN), AfterValidator(_immutable_field)]
-SortedUniqueIds = Annotated[tuple[str, ...], AfterValidator(_sorted_unique_field)]
+SafeDecimal = Annotated[Decimal, _p.BeforeValidator(finite_decimal_input)]
+AwareDatetime = Annotated[datetime, _p.AfterValidator(lambda v, i: require_aware(v, i.field_name or "datetime"))]
+ImmutableId = Annotated[
+    str,
+    Field(pattern=STABLE_ID_PATTERN),
+    _p.AfterValidator(lambda v, i: require_stable_and_immutable(v, i.field_name or "coordinate")),
+]
+SortedUniqueIds = Annotated[
+    tuple[str, ...], _p.AfterValidator(lambda v, i: sorted_unique_coordinates(v, i.field_name or "coordinates"))
+]
 StableId = Annotated[str, Field(pattern=STABLE_ID_PATTERN)]
 Sha256 = Annotated[str, Field(pattern=SHA256_PATTERN)]
 ContentHash = Annotated[str, Field(pattern=r"^(?:|[0-9a-f]{64})$")]
 
 
 def content_id(prefix: str) -> Any:
-    """An id field that is empty on input, or `{prefix}:{sha256}`."""
     return Field(default="", pattern=rf"^(?:|{prefix}:[0-9a-f]{{64}})$")
 
 
 def content_ref(prefix: str, **kwargs: Any) -> Any:
-    """A field that references a content address `{prefix}:{sha256}`."""
     return Field(pattern=rf"^{prefix}:[0-9a-f]{{64}}$", **kwargs)
 
 
 class IdentifiedFrozenModel(FrozenModel):
-    """A frozen model that stamps `content_sha256` and `{id_prefix}:{digest}` on `id_field`.
-
-    An empty `identity_fields` hashes the whole payload for the id (`identify`). A non-empty
-    `identity_fields` hashes only that grain for the id (`identify_by_grain`). Override
-    `_canonicalize` to check and normalize content before the identity is derived.
-    """
-
     id_field: ClassVar[str]
     id_prefix: ClassVar[str]
     identity_fields: ClassVar[tuple[str, ...]] = ()
 
     def _canonicalize(self) -> None:
-        """Check and normalize content before the identity is derived."""
+        pass
 
-    @model_validator(mode="after")
+    @_p.model_validator(mode="after")
     def freeze_and_identify(self) -> Self:
         self._canonicalize()
         if self.identity_fields:
@@ -219,18 +178,47 @@ class StrictIdentifiedFrozenModel(IdentifiedFrozenModel):
 
 
 class CanonicalHash(BaseModel):
-    """Mixin: `content_sha256` is the canonical hash of the full JSON payload."""
-
     @property
     def content_sha256(self) -> str:
         return canonical_sha256(self.model_dump(mode="json"))
 
 
 class OmitNoneFields(BaseModel):
-    """Serialize without the keys in `omit_none_fields` whose value is None."""
-
     omit_none_fields: ClassVar[tuple[str, ...]]
 
-    @model_serializer(mode="wrap")
-    def omit_absent_fields(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+    @_p.model_serializer(mode="wrap")
+    def omit_absent_fields(self, handler: _p.SerializerFunctionWrapHandler) -> dict[str, Any]:
         return drop_none_fields(handler(self), *self.omit_none_fields)
+
+
+class AttrBox(dict[str, Any]):
+    optional_attrs: ClassVar[tuple[str, ...]] = ()
+
+    def __getattr__(self, name: str) -> Any:
+        if name in self.optional_attrs:
+            return self.get(name)
+        try:
+            return self[name]
+        except KeyError as exc:
+            raise AttributeError(name) from exc
+
+    def model_dump(
+        self, *, mode: str = "json", exclude: set[str] | None = None, include: set[str] | None = None
+    ) -> dict[str, Any]:
+        return {
+            k: (v.model_dump(mode=mode) if hasattr(v, "model_dump") else dict(v) if isinstance(v, Mapping) else v)
+            for k, v in self.items()
+            if (not exclude or k not in exclude) and (include is None or k in include)
+        }
+
+    def model_dump_json(self) -> str:
+        return json.dumps(self, default=lambda x: x.model_dump(mode="json") if hasattr(x, "model_dump") else str(x))
+
+    def model_copy(self, *, update: Mapping[str, Any] | None = None) -> AttrBox:
+        return type(self)({**self, **(update or {})})
+
+
+def box_attrs(o: Any, cls: type[AttrBox] = AttrBox) -> Any:
+    if type(o) is dict:
+        return cls({k: box_attrs(v, cls) for k, v in o.items()})
+    return tuple(box_attrs(x, cls) for x in o) if isinstance(o, (list, tuple)) else o

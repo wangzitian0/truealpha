@@ -5,10 +5,9 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 
-from truealpha_contracts.datahub import CaptureWorkItem
-from truealpha_contracts.evidence_graph import EvidenceGraphWriter
-from truealpha_contracts.obligation_reason_codes import ObligationReasonCode
-
+from data_engine.contracts.datahub import CaptureWorkItem
+from data_engine.contracts.evidence_graph import EvidenceGraphWriter
+from data_engine.contracts.obligation_reason_codes import ObligationReasonCode
 from data_engine.datahub.production_topt.executor import (
     FailoverFetchPort,
     FetchFailure,

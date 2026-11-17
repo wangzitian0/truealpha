@@ -603,8 +603,8 @@ def _statement_first_ruleset():
 
     A pointer advance can publish such a ruleset with no deploy, so the code must not rely on the order.
     """
+    from data_engine.contracts.concept_mapping import ConceptMappingRuleset
     from data_engine.datahub.production_topt.concept_mapping import DEFAULT_RULESET
-    from truealpha_contracts.concept_mapping import ConceptMappingRuleset
 
     data = DEFAULT_RULESET.model_dump(mode="json")
     for mapping in data["mappings"]:

@@ -1,21 +1,35 @@
-/**
- * Derives trusted `SessionPrincipal` (`AccessContext` + `principalKind`) for Server Components
- * and Route Handlers from the verified session cookie via `cache()`.
- */
+import { cookies, headers } from "next/headers";
+import type { RequestOpts } from "@/client/api";
+import { resolveSessionPrincipal } from "./session";
 
-import { cookies } from "next/headers";
-import { cache } from "react";
-import { loadAuthConfig } from "./config";
-import { withAppRuntime } from "./db";
-import { getSessionPrincipal, PostgresPrincipalLookup, type SessionPrincipal } from "./session";
+export interface ServerPrincipal {
+  principalKind: "member" | "administrator" | "service";
+  context: { principalId: string; tenantId: string; contextId: string };
+  requestOpts: RequestOpts;
+}
 
-export const getServerPrincipal = cache(async (): Promise<SessionPrincipal | null> => {
-  const config = loadAuthConfig();
+export async function getServerRequestOpts(): Promise<RequestOpts> {
   const cookieStore = await cookies();
-  const cookie = cookieStore.get(config.cookieName)?.value;
-  if (!cookie) return null;
+  const headerStore = await headers();
+  const rawCookies = cookieStore
+    .getAll()
+    .map((c) => `${c.name}=${c.value}`)
+    .join("; ");
+  const authorization = headerStore.get("authorization") ?? undefined;
+  return { cookieHeader: rawCookies || undefined, authorization };
+}
 
-  return withAppRuntime((client) =>
-    getSessionPrincipal(cookie, new PostgresPrincipalLookup(client), { secret: config.secret }),
-  );
-});
+export async function getServerPrincipal(): Promise<ServerPrincipal | null> {
+  const requestOpts = await getServerRequestOpts();
+  const session = await resolveSessionPrincipal(requestOpts);
+  if (!session) return null;
+  return {
+    principalKind: session.principalKind,
+    context: {
+      principalId: session.principalId,
+      tenantId: session.tenantId,
+      contextId: `ctx:web:${session.principalId}`,
+    },
+    requestOpts,
+  };
+}

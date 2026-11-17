@@ -379,6 +379,7 @@ def test_lost_corroborations_reach_the_tick_summary(monkeypatch, caplog) -> None
     from datetime import date
     from decimal import Decimal
 
+    from data_engine.contracts.datahub import CaptureWorkItem
     from data_engine.datahub.production_topt.executor import FetchSuccess
     from data_engine.datahub.production_topt.market_price_adapter import (
         CorroboratingOrigin,
@@ -386,7 +387,6 @@ def test_lost_corroborations_reach_the_tick_summary(monkeypatch, caplog) -> None
         MarketPriceQuote,
         MarketPriceTarget,
     )
-    from truealpha_contracts.datahub import CaptureWorkItem
 
     registration = PointerRegistration(run_id="capture-run:" + "a" * 64, sequence=11, unmet=())
     _fake_tick(monkeypatch, registration)
@@ -519,6 +519,8 @@ def test_an_exhausted_budget_is_named_by_the_deployed_tick(monkeypatch, call_led
     from datetime import date
 
     from data_engine.config import settings
+    from data_engine.contracts.datahub import CaptureWorkItem
+    from data_engine.contracts.obligation_reason_codes import ObligationReasonCode
     from data_engine.datahub.production_topt import twelve_data_origin
     from data_engine.datahub.production_topt.executor import FetchFailure, FetchSuccess
     from data_engine.datahub.production_topt.market_price_adapter import (
@@ -528,8 +530,6 @@ def test_an_exhausted_budget_is_named_by_the_deployed_tick(monkeypatch, call_led
         yahoo_quote_fetcher,
     )
     from data_engine.sources import gateway, yahoo
-    from truealpha_contracts.datahub import CaptureWorkItem
-    from truealpha_contracts.obligation_reason_codes import ObligationReasonCode
 
     # The tier of `settings` is cached for the session, so the test names the environment of the gate itself.
     monkeypatch.setattr(gateway, "capacity_environment", lambda: "production")

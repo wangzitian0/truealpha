@@ -21,7 +21,14 @@ import {
   SWEEP_RUN_SOURCE_PATTERN as CANONICAL_SWEEP_PATTERN,
   SWEEP_RUN_SOURCE_REGEX_SOURCE,
 } from "../src/contracts/serviceObjectives";
-import { PREVIEW_ISSUERS } from "../scripts/seed-e2e-fixture";
+
+const PREVIEW_ISSUERS = {
+  "issuer:adm": { entityId: "018f9e6a-0001-7a1b-8c2d-9e0f1a2b3c4d", legacyId: "issuer:lei:549300ADM00000000001", displayName: "Archer-Daniels-Midland", ticker: "ADM" },
+  "issuer:ddog": { entityId: "018f9e6a-0002-7a1b-8c2d-9e0f1a2b3c4d", legacyId: "issuer:lei:549300DDOG0000000002", displayName: "Datadog", ticker: "DDOG" },
+  "issuer:jpm": { entityId: "018f9e6a-0003-7a1b-8c2d-9e0f1a2b3c4d", legacyId: "issuer:lei:549300JPM00000000003", displayName: "JPMorgan Chase", ticker: "JPM" },
+  "issuer:nice": { entityId: "018f9e6a-0004-7a1b-8c2d-9e0f1a2b3c4d", legacyId: "issuer:lei:549300NICE0000000004", displayName: "NICE Ltd.", ticker: "NICE" },
+  "issuer:shop": { entityId: "018f9e6a-0005-7a1b-8c2d-9e0f1a2b3c4d", legacyId: "issuer:lei:549300SHOP0000000005", displayName: "Shopify", ticker: "SHOP" },
+};
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);

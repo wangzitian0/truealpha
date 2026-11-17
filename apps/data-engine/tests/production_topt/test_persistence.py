@@ -23,6 +23,7 @@ from pathlib import Path
 import psycopg
 import pytest
 from data_engine.config import settings
+from data_engine.contracts.datahub import ObligationTerminalState
 from data_engine.datahub import quality_report
 from data_engine.datahub.evidence_graph_repository import PostgresEvidenceGraphRepository
 from data_engine.datahub.production_topt import PostgresToptCoreRepository
@@ -55,9 +56,8 @@ from data_engine.datahub.production_topt.source_registrations import (
     MOOMOO_KLINE_PARSER_VERSION,
 )
 from factors.production_topt import GppeV0Definition, OperatingBranch
-from truealpha_contracts import reconciliation_policies
-from truealpha_contracts.datahub import ObligationTerminalState
 from truealpha_contracts.models import DataSource, RawCapture, RawIngestionEnvelope
+from truealpha_runtime import reconciliation_policies
 from truealpha_runtime.testing import InMemoryRawObjectStore as _InMemoryObjectStore
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))

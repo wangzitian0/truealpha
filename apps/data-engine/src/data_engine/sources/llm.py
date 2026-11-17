@@ -19,7 +19,7 @@ from urllib.parse import urlparse
 from factors.shared import extraction as extraction_primitive
 from infra2_sdk.runtime.llm import LlmSettings
 from truealpha_contracts.common import canonical_sha256
-from truealpha_contracts.research_cards import (
+from truealpha_runtime.research_cards import (
     XHS_CARD_INSTRUCTIONS,
     XHS_CARD_PROMPT_VERSION,
     ResearchCard,

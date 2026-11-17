@@ -1,6 +1,6 @@
 """What release this data engine is, measured from the artifact it runs as (#784, #712).
 
-`truealpha_contracts.release` defines what the live release identity IS; this module reads
+`data_engine.contracts.release` defines what the live release identity IS; this module reads
 the three facts it is made of out of the running artifact:
 
     git_commit_sha                the release ref the deployment injected (`GIT_COMMIT_SHA`
@@ -38,9 +38,9 @@ from pathlib import Path
 from infra2_sdk import manifests
 from infra2_sdk.runtime.config_schema import EnvironmentManifest, manifest_config_fingerprint
 from truealpha_contracts.common import canonical_sha256
-from truealpha_contracts.release import live_release_payload
 
 from data_engine.config import settings
+from data_engine.contracts.release import live_release_payload
 
 #: The environment contract this image ships and infra2's entrypoint boot-validates the
 #: process environment against (`truealpha_runtime.boot.assert_environment`, #759).

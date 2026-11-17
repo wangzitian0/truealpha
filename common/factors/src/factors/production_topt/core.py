@@ -29,11 +29,10 @@ from truealpha_contracts.common import (
     content_ref,
     require_aware,
 )
-from truealpha_contracts.measure import Measure, PerUnit, Units
 from truealpha_contracts.research import ValuationTier
 from truealpha_contracts.strategy import LaborEfficiencyTreePin, LargeModelValueV0Definition, ValuationBasis
 
-from factors.measure import DEFAULT_REPORTING_CURRENCY, times
+from factors.measure import DEFAULT_REPORTING_CURRENCY, Measure, PerUnit, Units, times
 from factors.panel import (
     PANEL_METRICS,
     AliasKind,

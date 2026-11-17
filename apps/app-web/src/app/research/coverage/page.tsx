@@ -1,114 +1,59 @@
+import Link from "next/link";
+import { api } from "@/client/api";
 import { formatCell, formatNumberMagnitude, formatUsdMagnitude } from "@/client/format";
-import { exclusionLabel } from "@/contracts/exclusion-reasons";
+import { DASHBOARD_STRATEGY_ID, WIDE_PANEL_INPUT_COLUMNS } from "@/client/strategy";
 import { PanelNodeTd } from "@/components/panel-node-cell";
-import { EntityTh, RatioTd, ResearchTable } from "@/components/research-table";
-import { entityLabel, loadEntityDisplayMap } from "@/server/mart/entity-resolution";
-import { DASHBOARD_STRATEGY_ID, WIDE_PANEL_INPUT_COLUMNS } from "@/server/mart/research-read";
-import { loadStrategyRunPage } from "@/server/strategy-page";
-import { getServerPrincipal } from "@/server/auth/request-context";
+import { ResearchTable } from "@/components/research-table";
+import { loadAuthed } from "../../_load";
 
 export const dynamic = "force-dynamic";
 
 export default async function CoveragePage() {
-  const principal = await getServerPrincipal();
-  const outcome = await loadStrategyRunPage(principal, DASHBOARD_STRATEGY_ID);
+  const { data, error } = await loadAuthed("/research/coverage", (opts) => api.getStrategy({ strategy_id: DASHBOARD_STRATEGY_ID }, opts));
+  const decisions = data?.decisions ?? [];
+  const excluded = decisions.filter((d) => !d.eligible);
+  const widePanel = data?.wide_panel ?? {};
 
-  if (outcome.kind !== "ready") {
-    return (
-      <section aria-labelledby="coverage-heading">
-        <h1 id="coverage-heading" className="text-2xl font-bold tracking-tight">My data coverage</h1>
-        <p role="status" className="mt-4 rounded-lg border border-border bg-card p-4 text-gray-400">
-          {outcome.kind === "unavailable"
-            ? `No strategy run recorded yet (${outcome.detail.reason}).`
-            : outcome.kind === "empty"
-              ? "No decisions recorded for this strategy run."
-              : outcome.kind === "error"
-                ? `Error loading coverage: ${outcome.message}`
-                : "Access denied. No verified session for this request."}
-        </p>
-      </section>
-    );
-  }
-
-  const names = await loadEntityDisplayMap();
-  const decisions = [...outcome.report.decisions].sort((a, b) =>
-    entityLabel(a.issuer_id, names).localeCompare(entityLabel(b.issuer_id, names)),
-  );
-  const covered = decisions.filter((d) => d.exclusion_reason === null).length;
-  const widePanel = outcome.widePanel ?? {};
-
+  const td = "px-4 py-3";
   return (
     <section aria-labelledby="coverage-heading" className="space-y-6">
-      <div>
-        <h1 id="coverage-heading" className="text-2xl font-bold tracking-tight">My data coverage</h1>
-        <p className="mt-2 text-sm text-gray-400">
-          {covered} of {decisions.length} companies have every input the strategy needs; the rest say exactly what is missing. Deep per-layer diagnostics live in the operator world.
-        </p>
-      </div>
-
-      <ResearchTable caption="Per-company input coverage for the latest strategy run" headers={["Company", "Inputs", "What is missing"]}>
-        {decisions.map((d) => (
-          <tr key={d.issuer_id} className="border-t border-border">
-            <EntityTh issuerId={d.issuer_id} label={entityLabel(d.issuer_id, names)} />
-            <td className="px-4 py-3">
-              <span className={`rounded-full px-2.5 py-0.5 text-xs ${d.exclusion_reason === null ? "bg-emerald-400/10 text-emerald-400" : "bg-red-400/10 text-red-400"}`}>
-                {d.exclusion_reason === null ? "complete" : "incomplete"}
-              </span>
-            </td>
-            <td className="px-4 py-3 text-gray-400">{formatCell(exclusionLabel(d.exclusion_reason))}</td>
-          </tr>
-        ))}
-      </ResearchTable>
-
-      <div className="space-y-3" data-testid="coverage-wide-panel-section">
-        <div>
-          <h2 className="text-lg font-semibold text-gray-200">Standardized Wide Input Panel (Company × Metric + Confidence)</h2>
-          <p className="mt-1 text-xs text-gray-400">
-            Period-aligned, unit-normalized wide-panel cells and consumed cell confidence (<code className="font-mono text-gray-300">conf__&lt;metric&gt;</code>) from{" "}
-            <code className="font-mono text-gray-300">mart.metric_node_values</code> alongside strategy decision outputs.
-          </p>
-        </div>
-
-        <ResearchTable
-          caption="Company by standardized wide-panel field and confidence"
-          tableTestId="coverage-wide-panel-table"
-          headers={[
-            "Company",
-            "Run Confidence",
-            "Labor Efficiency",
-            "P/S",
-            "P/GP",
-            "PEG",
-            ...WIDE_PANEL_INPUT_COLUMNS.map((col) => ({ label: col.key, className: "font-mono" })),
-          ]}
-        >
-          {decisions.map((d) => {
-            const issuerCells = widePanel[d.issuer_id] ?? {};
-            return (
+      <div><h1 id="coverage-heading" className="text-2xl font-bold tracking-tight">Universe input coverage</h1><p className="mt-2 text-sm text-gray-400">Excluded subjects and wide-panel inputs from <code className="text-accent">mart.metric_node_values</code>.</p></div>
+      {error && <p className="text-sm text-red-400">{error}</p>}
+      {data && !data.available && <p className="text-sm text-gray-400">Unavailable: {data.reason}</p>}
+      {data?.available && (
+        <>
+          <p className="text-sm text-gray-400">{decisions.length - excluded.length} usable / {decisions.length} total ({excluded.length} excluded)</p>
+          <ResearchTable caption="Excluded issuers" headers={["Issuer", "Outcome", "Reason code", "Explanation", "Cutoff"]}>
+            {excluded.map((d) => (
               <tr key={d.issuer_id} className="border-t border-border">
-                <EntityTh issuerId={d.issuer_id} label={entityLabel(d.issuer_id, names)} />
-                <RatioTd value={d.confidence} mono />
-                <td className="px-4 py-3 font-mono tabular-nums" title={d.capital_adjusted_labor_efficiency ?? undefined}>
-                  <div>{formatCell(formatUsdMagnitude(d.capital_adjusted_labor_efficiency))}</div>
-                  {d.labor_efficiency_metric && <div className="text-[11px] text-gray-500">{d.labor_efficiency_metric}</div>}
-                </td>
-                <RatioTd value={d.current_price_to_sales} mono />
-                <RatioTd value={d.current_price_to_gross_profit} mono />
-                <RatioTd value={d.peg} mono />
-                {WIDE_PANEL_INPUT_COLUMNS.map((col) => {
-                  const node = issuerCells[col.key];
-                  const formattedVal = node?.value
-                    ? col.monetary
-                      ? formatUsdMagnitude(node.value)
-                      : formatNumberMagnitude(node.value)
-                    : null;
-                  return <PanelNodeTd key={col.key} node={node} formatted={formattedVal} />;
-                })}
+                <th scope="row" className={`${td} font-medium`}><Link href={`/research/entities/${encodeURIComponent(d.issuer_id)}`} className="text-accent hover:underline">{d.label}</Link></th>
+                <td className={`${td} font-mono text-xs`}>{d.outcome}</td>
+                <td className={`${td} font-mono text-xs`}>{formatCell(d.exclusion_reason)}</td>
+                <td className={`${td} text-xs text-gray-300`}>{formatCell(d.exclusion_label)}</td>
+                <td className={`${td} font-mono text-xs`}>{d.cutoff_at}</td>
               </tr>
-            );
-          })}
-        </ResearchTable>
-      </div>
+            ))}
+          </ResearchTable>
+          <div>
+            <h2 className="mb-3 text-lg font-semibold">Wide panel input coverage</h2>
+            <ResearchTable caption="Wide panel inputs" headers={["Issuer", ...WIDE_PANEL_INPUT_COLUMNS.map((c) => c.label)]}>
+              {decisions.map((d) => {
+                const cells = widePanel[d.issuer_id] ?? {};
+                return (
+                  <tr key={d.issuer_id} className="border-t border-border">
+                    <th scope="row" className={`${td} font-medium`}>{d.label}</th>
+                    {WIDE_PANEL_INPUT_COLUMNS.map((col) => {
+                      const node = cells[col.key];
+                      const fmt = node?.value ? (col.monetary ? formatUsdMagnitude(node.value) : formatNumberMagnitude(node.value)) : null;
+                      return <PanelNodeTd key={col.key} node={node} formatted={fmt} />;
+                    })}
+                  </tr>
+                );
+              })}
+            </ResearchTable>
+          </div>
+        </>
+      )}
     </section>
   );
 }

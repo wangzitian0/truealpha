@@ -31,10 +31,10 @@ from typing import Any
 import psycopg
 import pytest
 from data_engine.config import settings
+from data_engine.contracts.theme_purity import THEMES
 from data_engine.datahub.production_topt import theme_purity
 from data_engine.datahub.production_topt.theme_purity import IssuerPartition, materialize_theme_purity
 from data_engine.sources import gateway, llm
-from truealpha_contracts.theme_purity import THEMES
 
 AI = THEMES["ai-infrastructure"]
 SEGMENTS = (("Semiconductor solutions", Decimal("36858000000")), ("Infrastructure software", Decimal("27029000000")))

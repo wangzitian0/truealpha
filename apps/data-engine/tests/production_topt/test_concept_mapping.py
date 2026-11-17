@@ -12,12 +12,12 @@ import os
 import psycopg
 import pytest
 from data_engine.config import settings
+from data_engine.contracts.concept_mapping import ConceptMappingRuleset, ResolutionKind
 from data_engine.datahub.production_topt.concept_mapping import (
     DEFAULT_RULESET,
     publish_ruleset,
     resolve_ruleset,
 )
-from truealpha_contracts.concept_mapping import ConceptMappingRuleset, ResolutionKind
 
 
 @pytest.fixture

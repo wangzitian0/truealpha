@@ -1,94 +1,44 @@
-/**
- * #539: universe provenance — which universes the pipelines capture, published
- * from which governed version, with every constituent traceable to the exact
- * bytes the index operator answered.
- */
-
+import { api } from "@/client/api";
 import { formatCell, formatShortSha, formatUsdMagnitude } from "@/client/format";
 import { EmptyNotice } from "@/components/data-table";
-import { loadUniverses } from "@/server/admin/universes";
-import { getServerPrincipal } from "@/server/auth/request-context";
+import { ResearchTable } from "@/components/research-table";
+import { loadAuthed } from "../../_load";
 
 export const dynamic = "force-dynamic";
 
 export default async function AdminUniversesPage() {
-  const principal = await getServerPrincipal();
-  if (!principal || principal.principalKind !== "administrator") {
-    return <p className="text-amber-400">Access denied.</p>;
-  }
-  const overview = await loadUniverses();
+  const { data } = await loadAuthed("/admin/universes", (opts) => api.getAdminUniverses(opts), { admin: true });
+  const heads = data?.heads ?? [];
 
   return (
     <section className="space-y-6">
       <h1 className="text-2xl font-bold tracking-tight">Universes</h1>
-      <p className="text-sm text-gray-500">
-        Governed universe lists, published from the constituent data plane. Every row traces to the index
-        operator&apos;s verbatim response bytes; membership refreshes publish a new version only when the
-        mapping actually changed. The TOPT&nbsp;20 remains frozen corpus configuration until migrated here.
-      </p>
-
-      {overview.heads.length === 0 && (
-        <EmptyNotice>
-          No governed universe heads published yet — run the constituent refresh with --publish.
-        </EmptyNotice>
-      )}
-
-      {overview.heads.map((head) => (
-        <div key={head.kind} className="space-y-3">
-          <h2 className="font-mono text-lg text-accent">{head.universe_id}</h2>
-          <p className="text-xs text-gray-500">
-            {head.kind} · sequence {head.sequence} · {head.instrument_count} instruments · mapping{" "}
-            <span className="font-mono">{formatShortSha(head.mapping_sha256)}</span> · published {head.advanced_at} ·{" "}
-            {head.note}
-          </p>
-          <div className="overflow-x-auto rounded-xl border border-border">
-            <table className="w-full text-left text-sm">
-              <thead className="text-xs uppercase tracking-wider text-gray-500">
-                <tr>
-                  <th className="px-3 py-2">Ticker</th>
-                  <th className="px-3 py-2">Company</th>
-                  <th className="px-3 py-2">CIK</th>
-                  <th className="px-3 py-2">FIGI</th>
-                  <th className="px-3 py-2">Market cap</th>
-                  <th className="px-3 py-2">As of</th>
-                  <th className="px-3 py-2">Source bytes</th>
+      {heads.length === 0 && <EmptyNotice>No governed universe heads published yet.</EmptyNotice>}
+      {heads.map((head) => {
+        const kind = String(head.kind ?? "");
+        const rows = data?.members?.[kind] ?? [];
+        return (
+          <div key={kind} className="space-y-3">
+            <h2 className="font-mono text-lg text-accent">{String(head.universe_id ?? "")}</h2>
+            <p className="text-xs text-gray-500">
+              {kind} · seq {String(head.sequence ?? "")} · {String(head.instrument_count ?? 0)} instruments · mapping {formatShortSha(String(head.mapping_sha256 ?? ""))}
+            </p>
+            <ResearchTable caption={`Universe ${kind}`} headers={["Ticker", "Company", "CIK", "FIGI", "Market cap", "As of", "Source bytes"]}>
+              {rows.map((m) => (
+                <tr key={String(m.ticker ?? "")} className="border-t border-border font-mono text-xs">
+                  <td className="px-3 py-1.5">{String(m.ticker ?? "")}</td>
+                  <td className="px-3 py-1.5 font-sans">{String(m.company_name ?? "")}</td>
+                  <td className="px-3 py-1.5">{formatCell(m.cik as number | null)}</td>
+                  <td className="px-3 py-1.5">{formatCell(m.figi as string | null)}</td>
+                  <td className="px-3 py-1.5">{formatCell(formatUsdMagnitude(m.market_cap as string | null))}</td>
+                  <td className="px-3 py-1.5">{String(m.as_of ?? "")}</td>
+                  <td className="px-3 py-1.5">{String(m.source ?? "")} · {formatShortSha(String(m.fetch_sha256 ?? ""))}</td>
                 </tr>
-              </thead>
-              <tbody>
-                {(overview.members[head.kind] ?? []).map((member) => (
-                  <tr key={member.ticker} className="border-t border-border/60">
-                    <td className="px-3 py-1.5 font-mono">{member.ticker}</td>
-                    <td className="px-3 py-1.5">{member.company_name}</td>
-                    <td className="px-3 py-1.5 font-mono">{formatCell(member.cik)}</td>
-                    <td className="px-3 py-1.5 font-mono text-xs">{formatCell(member.figi)}</td>
-                    <td className="px-3 py-1.5 text-right tabular-nums" title={member.market_cap ?? undefined}>
-                      {formatCell(formatUsdMagnitude(member.market_cap))}
-                    </td>
-                    <td className="px-3 py-1.5">{member.as_of}</td>
-                    <td className="px-3 py-1.5 font-mono text-xs" title={member.object_uri ?? ""}>
-                      {member.source} · {formatShortSha(member.fetch_sha256)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+              ))}
+            </ResearchTable>
           </div>
-        </div>
-      ))}
-
-      {overview.history.length > overview.heads.length && (
-        <div>
-          <h2 className="text-lg font-semibold">Version history</h2>
-          <ul className="mt-2 space-y-1 text-xs text-gray-500">
-            {overview.history.map((row) => (
-              <li key={`${row.kind}:${row.sequence}`} className="font-mono">
-                {row.kind} seq {row.sequence} · {row.universe_id} · {formatShortSha(row.mapping_sha256)} ·{" "}
-                {row.advanced_at} · {row.note}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
+        );
+      })}
     </section>
   );
 }

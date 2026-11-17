@@ -1009,8 +1009,8 @@ def test_restated_2018_period_filed_in_2026_is_excluded_with_stale_period() -> N
     `2026-03-31` cutoff and is excluded with `stale_period`."""
     from datetime import UTC, date
 
+    from factors.measure import Measure, Money, PerUnit, Units
     from truealpha_contracts.fiscal_period import FiscalPeriod
-    from truealpha_contracts.measure import Measure, Money, PerUnit, Units
 
     filed = datetime(2026, 2, 1, 23, 59, 59, 999999, tzinfo=UTC)
     stale_fy2018 = FiscalPeriod(filing_fiscal_year=2025, kind="FY", start=date(2018, 1, 1), end=date(2018, 12, 31))

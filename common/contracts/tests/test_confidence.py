@@ -12,118 +12,61 @@ from truealpha_contracts.confidence import (
 )
 
 
-def _source(*, weight: str = "1") -> SourceConfidenceEvidence:
+def _ev(**ch: Any) -> SourceConfidenceEvidence:
     return SourceConfidenceEvidence(
-        provider_id="provider:primary",
-        origin_group_id="origin:primary",
-        independence_weight=weight,
-        successful_outcome_mass="8",
-        failed_outcome_mass="2",
-        freshness="1",
-        sample_conformance="1",
-        transport_integrity="1",
-        evidence_ids=("evidence:primary:v1",),
-        reason_codes=("measured",),
-    )
-
-
-def test_policy_is_content_addressed_and_rejects_parameter_drift() -> None:
-    first = ContinuousConfidencePolicy()
-    repeated = ContinuousConfidencePolicy()
-    changed = ContinuousConfidencePolicy(agreement_exponent="0.30", semantic_mapping_exponent="0.30")
-
-    assert first == repeated
-    assert first.policy_id == "confidence-policy:" + first.content_sha256
-    assert first.policy_id != changed.policy_id
-    with pytest.raises(ValidationError, match="sum exactly to one"):
-        ContinuousConfidencePolicy(agreement_exponent="0.30")
-
-
-def test_confidence_contracts_reject_binary_float_inputs() -> None:
-    binary_float: Any = 0.8
-    with pytest.raises(ValidationError, match="binary float"):
-        ContinuousConfidencePolicy(unobserved_reliability_ceiling=binary_float)
-    with pytest.raises(ValidationError, match="binary float"):
-        SourceConfidenceEvidence(
-            **{
-                **_source().model_dump(
-                    mode="python",
-                    exclude={"source_evidence_id", "content_sha256", "freshness"},
-                ),
-                "freshness": binary_float,
-            }
-        )
-
-
-@pytest.mark.parametrize("value", [Decimal("NaN"), Decimal("Infinity"), Decimal("-Infinity")])
-def test_confidence_contracts_reject_non_finite_decimals(value: Decimal) -> None:
-    with pytest.raises(ValidationError, match="non-finite Decimal"):
-        ContinuousConfidencePolicy(reliability_prior_success=value)
-    with pytest.raises(ValidationError, match="non-finite Decimal"):
-        SourceConfidenceEvidence(
-            **{
-                **_source().model_dump(
-                    mode="python",
-                    exclude={"source_evidence_id", "content_sha256", "successful_outcome_mass"},
-                ),
-                "successful_outcome_mass": value,
-            }
-        )
-
-
-def test_input_is_order_independent_and_one_origin_has_one_weight() -> None:
-    primary = _source()
-    mirror = SourceConfidenceEvidence(
         **{
-            **primary.model_dump(
-                mode="python",
-                exclude={"source_evidence_id", "content_sha256", "provider_id", "evidence_ids"},
-            ),
-            "provider_id": "provider:mirror",
-            "evidence_ids": ("evidence:mirror:v1",),
+            "provider_id": "provider:primary",
+            "origin_group_id": "origin:primary",
+            "independence_weight": "1",
+            "successful_outcome_mass": "8",
+            "failed_outcome_mass": "2",
+            "freshness": "1",
+            "sample_conformance": "1",
+            "transport_integrity": "1",
+            "evidence_ids": ("evidence:primary:v1",),
+            "reason_codes": ("measured",),
+            **ch,
         }
     )
-    fields = {
+
+
+def test_policy_float_non_finite_and_input_order() -> None:
+    p1, p2 = ContinuousConfidencePolicy(), ContinuousConfidencePolicy()
+    c = ContinuousConfidencePolicy(agreement_exponent="0.30", semantic_mapping_exponent="0.30")
+    assert p1 == p2 and p1.policy_id == "confidence-policy:" + p1.content_sha256 and p1.policy_id != c.policy_id
+    with pytest.raises(ValidationError, match="sum exactly to one"):
+        ContinuousConfidencePolicy(agreement_exponent="0.30")
+    bf: Any = 0.8
+    for fn in (lambda: ContinuousConfidencePolicy(unobserved_reliability_ceiling=bf), lambda: _ev(freshness=bf)):
+        with pytest.raises(ValidationError, match="binary float"):
+            fn()
+    for bad in (Decimal("NaN"), Decimal("Infinity"), Decimal("-Infinity")):
+        for fn in (
+            lambda: ContinuousConfidencePolicy(reliability_prior_success=bad),
+            lambda: _ev(successful_outcome_mass=bad),
+        ):
+            with pytest.raises(ValidationError, match="non-finite Decimal"):
+                fn()
+    p, m = _ev(), _ev(provider_id="provider:mirror", evidence_ids=("evidence:mirror:v1",))
+    f = {
         "case_id": "case:same-origin",
         "agreement": Decimal("1"),
         "semantic_mapping_quality": Decimal("1"),
         "lineage_completeness": Decimal("1"),
         "required_component_completeness": Decimal("1"),
     }
-    first = ContinuousConfidenceInput(sources=(primary, mirror), **fields)
-    repeated = ContinuousConfidenceInput(sources=(mirror, primary), **fields)
-    assert first == repeated
-
-    wrong_weight = SourceConfidenceEvidence(
-        **{
-            **mirror.model_dump(
-                mode="python",
-                exclude={"source_evidence_id", "content_sha256", "independence_weight"},
-            ),
-            "independence_weight": "0.5",
-        }
-    )
+    assert ContinuousConfidenceInput(sources=(p, m), **f) == ContinuousConfidenceInput(sources=(m, p), **f)
     with pytest.raises(ValidationError, match="one independence weight"):
-        ContinuousConfidenceInput(sources=(primary, wrong_weight), **fields)
-
-
-def test_source_confidence_evidence_validates_and_addresses_reliability_prior() -> None:
-    without_prior = _source()
-    with_prior = SourceConfidenceEvidence(
-        **{
-            **without_prior.model_dump(mode="python", exclude={"source_evidence_id", "content_sha256"}),
-            "reliability_prior": Decimal("0.96"),
-        }
-    )
-    assert without_prior.reliability_prior is None
-    assert with_prior.reliability_prior == Decimal("0.96")
-    assert with_prior.source_evidence_id != without_prior.source_evidence_id
-
-    for invalid_prior in (-Decimal("0.01"), Decimal("1.01"), 0.96):
+        ContinuousConfidenceInput(
+            sources=(
+                p,
+                _ev(provider_id="provider:mirror", evidence_ids=("evidence:mirror:v1",), independence_weight="0.5"),
+            ),
+            **f,
+        )
+    wp = _ev(reliability_prior=Decimal("0.96"))
+    assert p.reliability_prior is None and wp.reliability_prior == Decimal("0.96")
+    assert wp.source_evidence_id != p.source_evidence_id
+    for iv in (-Decimal("0.01"), Decimal("1.01"), 0.96):
         with pytest.raises(ValidationError):
-            SourceConfidenceEvidence(
-                **{
-                    **without_prior.model_dump(mode="python", exclude={"source_evidence_id", "content_sha256"}),
-                    "reliability_prior": invalid_prior,
-                }
-            )
+            _ev(reliability_prior=iv)

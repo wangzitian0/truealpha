@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { api, ApiError } from "@/client/api";
 
 export function TriggerRunButton() {
   const [forceFetch, setForceFetch] = useState(false);
@@ -14,19 +15,13 @@ export function TriggerRunButton() {
   async function submit() {
     setState({ kind: "submitting" });
     try {
-      const response = await fetch("/admin/api/trigger", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ force_fetch: forceFetch }),
-      });
-      const body = await response.json().catch(() => ({}));
-      if (response.status === 202 && typeof body.run_key === "string") {
-        setState({ kind: "accepted", runKey: body.run_key, forced: body.force_fetch === true });
-      } else {
-        setState({ kind: "failed", message: String(body.error ?? `HTTP ${response.status}`) });
-      }
+      const body = await api.triggerPipeline({ force_fetch: forceFetch });
+      setState({ kind: "accepted", runKey: body.run_key, forced: body.force_fetch === true });
     } catch (error) {
-      setState({ kind: "failed", message: error instanceof Error ? error.message : String(error) });
+      setState({
+        kind: "failed",
+        message: error instanceof ApiError ? error.detail : error instanceof Error ? error.message : String(error),
+      });
     }
   }
 

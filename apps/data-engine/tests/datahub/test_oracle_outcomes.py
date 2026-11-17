@@ -21,6 +21,8 @@ import psycopg
 import pytest
 from data_engine import raw_store
 from data_engine.config import settings
+from data_engine.contracts.oracle_policy import load_oracle_policy
+from data_engine.contracts.sentinel_known_answers import SentinelKnownAnswer
 from data_engine.datahub import confidence_report, oracle_outcomes
 from data_engine.datahub.oracle_outcomes import (
     AGREE,
@@ -54,9 +56,7 @@ from factors.production_topt import (
     ToptMarketValueComponent,
     ToptMetricInput,
 )
-from truealpha_contracts.environment_contract import SentinelKnownAnswer
 from truealpha_contracts.models import DataSource
-from truealpha_contracts.oracle_policy import load_oracle_policy
 from truealpha_runtime.testing import InMemoryRawObjectStore
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))

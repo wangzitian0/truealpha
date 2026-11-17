@@ -44,8 +44,8 @@ from data_engine.datahub.quality_report import (
     FINANCIAL_FACT_FUSION_FIELDS,
     PRICE_BAR_FIELDS,
 )
-from truealpha_contracts.reconciliation import ReconciliationOutcome
-from truealpha_contracts.reconciliation_policies import (
+from truealpha_runtime.reconciliation import ReconciliationOutcome
+from truealpha_runtime.reconciliation_policies import (
     FIELD_RECONCILIATION_POLICIES,
     FINANCIAL_FACT_RECONCILIATION_POLICY,
     INDEX_MEMBERSHIP_POLICY,

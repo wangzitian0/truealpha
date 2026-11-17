@@ -1,224 +1,80 @@
 import Link from "next/link";
-import { redirect } from "next/navigation";
+import { api } from "@/client/api";
+import { formatCell, formatNumberMagnitude, formatRatio, formatSignedRatio, formatTierLabel, formatUsdMagnitude, signColor } from "@/client/format";
+import { PEG_CONVENTION_LABELS, PEG_GROWTH_CONVENTIONS, type PegGrowthConvention, valuationBasisLabel } from "@/client/strategy";
+import { CardExportButton } from "@/components/card-export-button";
+import { ClaimCeilingBanner } from "@/components/claim-ceiling";
+import { PanelNodeTd } from "@/components/panel-node-cell";
 import { ProvenanceCell } from "@/components/provenance-cell";
 import { AvailabilityBadge, ReadStateNotice } from "@/components/read-state";
-import { NextPageLink } from "@/components/next-page-link";
-import { PanelNodeTd } from "@/components/panel-node-cell";
-import { EntityTh, RatioTd, ResearchTable, SignedRatioTd } from "@/components/research-table";
-import { loadRanking } from "@/server/dashboard";
-import { entityLabel, loadEntityDisplayMap } from "@/server/mart/entity-resolution";
-import { ClaimCeilingBanner } from "@/components/claim-ceiling";
-import { formatCell, formatNumberMagnitude, formatRatio, formatTierLabel, formatUsdMagnitude } from "@/client/format";
-import { GPPE_FACTOR_VARIANT_KEYS, RANKING_PANEL_INPUT_KEYS } from "@/server/mart/research-read";
-import { getServerPrincipal } from "@/server/auth/request-context";
-import { CardExportButton } from "@/components/card-export-button";
-import {
-  normalizePegConvention,
-  normalizeRankingUniverse,
-  PEG_CONVENTION_LABELS,
-  PEG_GROWTH_CONVENTIONS,
-  projectPegByConvention,
-  RANKING_UNIVERSES,
-  type PegGrowthConvention,
-  valuationBasisLabel,
-} from "@/contracts/strategyRun";
-import { universeRecord } from "@/contracts/environmentContract.generated";
+import { ResearchTable } from "@/components/research-table";
+import { UNIVERSES } from "@/contracts/environmentContract.generated";
 import { universeWithRole } from "@/contracts/universes";
+import { loadAuthed } from "../../_load";
 
 export const dynamic = "force-dynamic";
 
-function buildRankingsHref(params: {
-  cursor?: string | null;
-  cutoff?: string;
-  convention?: PegGrowthConvention;
-  universe?: string | null;
-}): string {
-  const query = new URLSearchParams();
-  if (params.cursor) query.set("cursor", params.cursor);
-  if (params.cutoff) query.set("cutoff", params.cutoff);
-  if (params.convention && params.convention !== "historical_cagr") query.set("convention", params.convention);
-  if (params.universe && params.universe !== universeWithRole("strategy")) query.set("universe", params.universe);
-  const qs = query.toString();
-  return qs.length > 0 ? `/research/rankings?${qs}` : "/research/rankings";
-}
+const pill = (active: boolean) =>
+  active ? "border border-sky-500 bg-sky-950/70 text-sky-300" : "border border-border bg-slate-900 text-gray-400 hover:border-gray-600 hover:text-gray-200";
 
-const pillClass = (active: boolean): string =>
-  active
-    ? "border border-sky-500 bg-sky-950/70 text-sky-300"
-    : "border border-border bg-slate-900 text-gray-400 hover:border-gray-600 hover:text-gray-200";
-
-export default async function RankingsPage({
-  searchParams,
-}: {
-  searchParams: Promise<{ cursor?: string; cutoff?: string; convention?: string; universe?: string }>;
-}) {
-  const principal = await getServerPrincipal();
-  if (!principal) redirect("/login?from=%2Fresearch%2Frankings");
+export default async function RankingsPage({ searchParams }: { searchParams: Promise<{ cutoff?: string; convention?: string; universe?: string }> }) {
   const params = await searchParams;
-  const convention = normalizePegConvention(params.convention);
-  const selectedUniverse = normalizeRankingUniverse(params.universe);
-  const state = await loadRanking(principal.context, {
-    cutoffAt: params.cutoff,
-    cursor: params.cursor ?? null,
-    universe: params.universe,
-  });
-  const names = await loadEntityDisplayMap();
-  const basisLabel = valuationBasisLabel(
-    state.kind === "ready" ? (state.data.rows.find((row) => row.valuationBasis !== null)?.valuationBasis ?? null) : null,
-  );
-  const headers = [
-    "Rank",
-    "Issuer",
-    "Tier",
-    "Current P/S",
-    `Current ${basisLabel}`,
-    `Target ${basisLabel}`,
-    `Valuation gap (${basisLabel})`,
-    `PEG (${PEG_CONVENTION_LABELS[convention]})`,
-    "PEG rank",
-    "Confidence",
-    "Availability",
-    "Inputs",
-  ];
+  const convention: PegGrowthConvention = params.convention === "consensus" || params.convention === "guidance" ? params.convention : "historical_cagr";
+  const universe = params.universe || universeWithRole("strategy");
+  const { data, error } = await loadAuthed("/research/rankings", (opts) => api.getRankings({ cutoff: params.cutoff, universe }, opts));
+  const rows = data?.rows ?? [];
+  const basisLabel = valuationBasisLabel(rows.find((r) => r.valuation_basis)?.valuation_basis);
+  const universes = UNIVERSES.filter((u) => !u.roles.includes("sentinel") && u.scheduled_somewhere).map((u) => u.key);
+  const headers = ["Rank", "Issuer", "Tier", "Current P/S", `Current ${basisLabel}`, `Target ${basisLabel}`, `Valuation gap (${basisLabel})`, "GPPE (uniform)", "GPPE (banking)", "GPPE (opfin)", "Employees", `PEG (${PEG_CONVENTION_LABELS[convention]})`, "PEG rank", "Confidence", "Availability", "Inputs"];
 
   return (
     <section aria-labelledby="rankings-heading" className="space-y-6">
-      <div>
-        <h1 id="rankings-heading" className="text-2xl font-bold tracking-tight">Valuation rankings</h1>
-        <p className="mt-2 text-sm text-gray-400">
-          Large-model-value universe ranked by valuation gap from the materialized strategy run. Revenue-share purity is on{" "}
-          <Link href="/research/themes" className="text-accent hover:underline">Theme purity</Link>.
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 id="rankings-heading" className="text-2xl font-bold tracking-tight">Valuation rankings</h1>
+          <p className="mt-1 text-sm text-gray-400">Governed strategy rankings served from OpenAPI <code className="text-accent">/api/v1/research/rankings</code>.</p>
+        </div>
+        <CardExportButton cutoff={data?.cutoff_at ?? undefined} convention={convention} universe={universe} />
       </div>
-
-      <ReadStateNotice state={state} />
+      <div className="flex flex-wrap gap-2 text-xs">
+        {universes.map((u) => (
+          <Link key={u} href={`/research/rankings?universe=${encodeURIComponent(u)}${convention !== "historical_cagr" ? `&convention=${convention}` : ""}`} className={`rounded-md px-2.5 py-1 ${pill(u === universe)}`}>{u}</Link>
+        ))}
+        {PEG_GROWTH_CONVENTIONS.map((c) => (
+          <Link key={c} href={`/research/rankings?universe=${encodeURIComponent(universe)}&convention=${c}`} className={`rounded-md px-2.5 py-1 ${pill(c === convention)}`}>{PEG_CONVENTION_LABELS[c]}</Link>
+        ))}
+      </div>
       <ClaimCeilingBanner />
-
-      <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-border bg-card p-4">
-        <div className="flex flex-wrap items-center gap-2" data-testid="peg-convention-selector">
-          <span className="text-xs font-semibold uppercase tracking-wider text-gray-400">Growth-Rate Convention (Module 1):</span>
-          {PEG_GROWTH_CONVENTIONS.map((item) => (
-            <Link
-              key={item}
-              href={buildRankingsHref({ cutoff: params.cutoff, convention: item, universe: selectedUniverse })}
-              data-peg-convention={item}
-              aria-current={item === convention ? "page" : undefined}
-              className={`rounded-md px-2.5 py-1 text-xs font-medium transition ${pillClass(item === convention)}`}
-            >
-              {PEG_CONVENTION_LABELS[item]} ({item})
-            </Link>
-          ))}
-        </div>
-        <div className="flex flex-wrap items-center gap-2" data-testid="universe-selector">
-          <span className="text-xs font-semibold uppercase tracking-wider text-gray-400">Universe Scope:</span>
-          {RANKING_UNIVERSES.map((univ) => (
-            <Link
-              key={univ}
-              href={buildRankingsHref({ cutoff: params.cutoff, convention, universe: univ })}
-              data-universe-selector={univ}
-              title={universeRecord(univ).label}
-              aria-current={univ === selectedUniverse ? "page" : undefined}
-              className={`rounded-md px-2.5 py-1 font-mono text-xs font-medium uppercase transition ${pillClass(univ === selectedUniverse)}`}
-            >
-              {univ.toUpperCase()}
-            </Link>
-          ))}
-        </div>
-      </div>
-
-      {state.kind === "ready" && (
-        <>
-          <div className="flex flex-wrap items-center justify-between gap-4">
-            <p className="text-sm text-gray-500">
-              Cutoff {state.data.cutoffAt} — {state.data.page.total} member(s) · Convention:{" "}
-              <span className="font-mono text-gray-300">{convention}</span> · Universe:{" "}
-              <span className="font-mono uppercase text-gray-300">{state.data.universe}</span>
-            </p>
-            <CardExportButton cutoff={params.cutoff} convention={convention} universe={state.data.universe} />
-          </div>
-          <ResearchTable caption={`Ranked issuers for the large-model-value theme at ${state.data.cutoffAt}`} headers={headers}>
-            {state.data.rows.map((row) => {
-              const { peg: rowPeg, pegRank: rowPegRank, pegReasonCodes: pegReasons } = projectPegByConvention(row, convention);
-              return (
-                <tr key={row.issuerId} className="border-t border-border">
-                  <td className="px-4 py-3">{formatCell(row.rank)}</td>
-                  <EntityTh issuerId={row.issuerId} label={entityLabel(row.issuerId, names)} convention={convention} />
-                  <td className="px-4 py-3">{formatTierLabel(row.tier)}</td>
-                  <RatioTd value={row.currentPriceToSales} />
-                  <RatioTd value={row.currentMultiple} />
-                  <RatioTd value={row.targetMultiple} />
-                  <SignedRatioTd value={row.valuationGap} />
-                  <td className="px-4 py-3 tabular-nums" title={rowPeg ?? undefined}>
-                    <RatioSpan value={rowPeg} />
-                    {rowPeg === null && pegReasons.length > 0 && (
-                      <div className="mt-0.5 font-mono text-[11px] text-amber-400" data-testid="peg-reason-codes">
-                        {pegReasons.join(", ")}
-                      </div>
-                    )}
-                  </td>
-                  <td className="px-4 py-3 tabular-nums">{formatCell(rowPegRank?.toString() ?? null)}</td>
-                  <RatioTd value={row.confidence} />
-                  <td className="px-4 py-3"><AvailabilityBadge status={row.availability} /></td>
-                  <td className="px-4 py-3"><ProvenanceCell row={row} /></td>
-                </tr>
-              );
-            })}
-          </ResearchTable>
-
-          <div className="space-y-3" data-testid="rankings-gppe-variants-section">
-            <div>
-              <h2 className="text-lg font-semibold text-gray-200">GPPE Factor Variants &amp; Standardized Wide-Panel Inputs (Module 2)</h2>
-              <p className="mt-1 text-xs text-gray-400">
-                Side-by-side GPPE factor variants and underlying wide-panel columns read from{" "}
-                <code className="font-mono text-gray-300">mart.metric_node_values</code>.
-              </p>
-            </div>
-            <ResearchTable
-              caption={`Side-by-side GPPE factor variants and wide-panel inputs at ${state.data.cutoffAt}`}
-              tableTestId="rankings-gppe-variants-table"
-              headers={[
-                "Issuer",
-                "Active Variant",
-                ...[...GPPE_FACTOR_VARIANT_KEYS, ...RANKING_PANEL_INPUT_KEYS].map((k) => ({ label: k, className: "font-mono" })),
-              ]}
-            >
-              {state.data.rows.map((row) => (
-                <tr key={row.issuerId} className="border-t border-border">
-                  <EntityTh issuerId={row.issuerId} label={entityLabel(row.issuerId, names)} />
-                  <td className="px-4 py-3 font-mono text-xs text-sky-400">{formatCell(row.laborEfficiencyMetric ?? null)}</td>
-                  {GPPE_FACTOR_VARIANT_KEYS.map((variantKey) => {
-                    const node = row.gppeVariants?.[variantKey] ?? null;
-                    return <PanelNodeTd key={variantKey} node={node} formatted={formatUsdMagnitude(node?.value ?? null)} />;
-                  })}
-                  {RANKING_PANEL_INPUT_KEYS.map((inputKey) => {
-                    const node = row.panelInputs?.[inputKey] ?? null;
-                    const formatted =
-                      inputKey === "employees_total"
-                        ? formatNumberMagnitude(node?.value ?? null)
-                        : formatUsdMagnitude(node?.value ?? null);
-                    return <PanelNodeTd key={inputKey} node={node} formatted={formatted} />;
-                  })}
-                </tr>
-              ))}
-            </ResearchTable>
-          </div>
-
-          <NextPageLink
-            hasMore={state.data.page.hasMore}
-            nextCursor={state.data.page.nextCursor}
-            href={buildRankingsHref({
-              cursor: state.data.page.nextCursor,
-              cutoff: params.cutoff,
-              convention,
-              universe: selectedUniverse,
-            })}
-          />
-        </>
+      {error && <ReadStateNotice state={{ kind: "error", message: error }} />}
+      {data && !data.available && <ReadStateNotice state={{ kind: "unavailable", reason: data.reason ?? "unavailable" }} />}
+      {data?.available && rows.length === 0 && <ReadStateNotice state={{ kind: "empty" }} />}
+      {data?.available && rows.length > 0 && (
+        <ResearchTable caption={`Valuation rankings at ${data.cutoff_at ?? ""}`} headers={headers}>
+          {rows.map((row) => {
+            const c = "px-4 py-3";
+            return (
+              <tr key={row.issuer_id} className="border-t border-border">
+                <td className={`${c} font-mono`}>{formatCell(row.rank)}</td>
+                <th scope="row" className={`${c} font-medium`}><Link href={`/research/entities/${encodeURIComponent(row.issuer_id)}`} className="text-accent hover:underline" title={row.issuer_id}>{row.label}</Link></th>
+                <td className={c}>{formatCell(formatTierLabel(row.tier))}</td>
+                <td className={`${c} tabular-nums`}>{formatCell(formatRatio(row.current_price_to_sales))}</td>
+                <td className={`${c} tabular-nums`}>{formatCell(formatRatio(row.current_multiple))}</td>
+                <td className={`${c} tabular-nums`}>{formatCell(formatRatio(row.target_multiple))}</td>
+                <td className={`${c} tabular-nums ${signColor(row.valuation_gap)}`}>{formatCell(formatSignedRatio(row.valuation_gap))}</td>
+                <PanelNodeTd node={row.gppe_variants?.gppe_uniform_charge_v0} formatted={formatUsdMagnitude(row.gppe_variants?.gppe_uniform_charge_v0?.value ?? null)} />
+                <PanelNodeTd node={row.gppe_variants?.gppe_banking_tce_v1} formatted={formatUsdMagnitude(row.gppe_variants?.gppe_banking_tce_v1?.value ?? null)} />
+                <PanelNodeTd node={row.gppe_variants?.gppe_operating_financial_v1} formatted={formatUsdMagnitude(row.gppe_variants?.gppe_operating_financial_v1?.value ?? null)} />
+                <PanelNodeTd node={row.panel_inputs?.employees_total} formatted={formatNumberMagnitude(row.panel_inputs?.employees_total?.value ?? null)} />
+                <td className={`${c} tabular-nums`}>{convention === "historical_cagr" ? formatCell(formatRatio(row.peg)) : "unsourced"}</td>
+                <td className={`${c} tabular-nums`}>{convention === "historical_cagr" ? formatCell(row.peg_rank) : "—"}</td>
+                <td className={`${c} tabular-nums`}>{formatCell(formatRatio(row.confidence))}</td>
+                <td className={c}><AvailabilityBadge status={row.availability ?? "unavailable"} /></td>
+                <td className={c}><ProvenanceCell row={row} /></td>
+              </tr>
+            );
+          })}
+        </ResearchTable>
       )}
     </section>
   );
-}
-
-function RatioSpan({ value }: { value: string | null }) {
-  return <div>{formatCell(formatRatio(value))}</div>;
 }

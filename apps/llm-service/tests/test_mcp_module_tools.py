@@ -18,20 +18,28 @@ from typing import Any
 
 import psycopg
 import pytest
-from fixtures.strategy_run_fixture import FixtureStrategyRunRepository
 from llm_service.mcp_server import ResearchReportMarkdown, build_mcp_server
 from mcp.shared.memory import create_connected_server_and_client_session
-from truealpha_contracts.access import AccessContext, AuthenticationMethod, PrincipalKind
-from truealpha_contracts.research_report import (
+from truealpha_runtime.access import AccessContext, AuthenticationMethod, PrincipalKind
+from truealpha_runtime.research_report import (
     ResearchReportKind,
     ResearchReportRequest,
     build_research_report,
     render_report_markdown,
 )
-from truealpha_contracts.research_report_mart import MartResearchReadRepository
+from truealpha_runtime.research_report_mart import MartResearchReadRepository
+
+_FIXTURE_PATH = (
+    Path(__file__).resolve().parents[3] / "common" / "runtime" / "tests" / "fixtures" / "strategy_run_fixture.py"
+)
+_FIXTURE_SPEC = importlib.util.spec_from_file_location("strategy_run_fixture", _FIXTURE_PATH)
+assert _FIXTURE_SPEC is not None and _FIXTURE_SPEC.loader is not None
+_FIXTURE_MOD = importlib.util.module_from_spec(_FIXTURE_SPEC)
+_FIXTURE_SPEC.loader.exec_module(_FIXTURE_MOD)
+FixtureStrategyRunRepository = _FIXTURE_MOD.FixtureStrategyRunRepository
 
 _SEED_PATH = (
-    Path(__file__).resolve().parents[3] / "common" / "contracts" / "tests" / "fixtures" / "issuer_modules_parity.py"
+    Path(__file__).resolve().parents[3] / "common" / "runtime" / "tests" / "fixtures" / "issuer_modules_parity.py"
 )
 _SPEC = importlib.util.spec_from_file_location("issuer_modules_parity_seed", _SEED_PATH)
 assert _SPEC is not None and _SPEC.loader is not None

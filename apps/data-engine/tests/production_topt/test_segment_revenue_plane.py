@@ -133,13 +133,13 @@ def test_the_writer_and_the_plane_agree(connection) -> None:
     """
     from datetime import UTC, date, datetime
 
+    from data_engine.contracts.standards import STANDARDS
     from data_engine.datahub.standards.segment_extraction import (
         SEGMENT_SOURCE,
         partition_already_recorded,
         partition_id_for,
         record_segment_partition,
     )
-    from truealpha_contracts.standards import STANDARDS
 
     period_end = date(2025, 11, 2)
     parts = [("Semiconductor solutions", Decimal("36858000000")), ("Infrastructure software", Decimal("27029000000"))]
@@ -187,8 +187,8 @@ def test_a_withdrawn_rules_row_does_not_close_the_planner_cell(connection) -> No
     plane because the filter is SQL and a recording fake would prove only that it was sent."""
     from datetime import UTC, datetime
 
+    from data_engine.contracts.standards import STANDARDS
     from data_engine.datahub.standards.planner import UniverseIssuer, open_cells
-    from truealpha_contracts.standards import STANDARDS
 
     standard = STANDARDS["segment_revenue"]
     issuer = UniverseIssuer(issuer_id=f"issuer:cik:{CIK:010d}", ticker="TEST", listing_id="listing:test", cik=CIK)

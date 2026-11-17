@@ -32,6 +32,8 @@ from unittest.mock import patch
 
 import psycopg
 import pytest
+from data_engine.contracts.capture_control import CaptureListVersion
+from data_engine.contracts.datahub import CaptureCampaign, CaptureRun, CaptureSchedulePolicy
 from data_engine.datahub.control_plane import expand_obligations, replay_retry_policy
 from data_engine.datahub.production_topt import source_registrations as registry
 from data_engine.datahub.production_topt.source_registrations import (
@@ -47,9 +49,7 @@ from data_engine.datahub.production_topt.status_dimensions import (
 )
 from data_engine.datahub.repository import PostgresCaptureControlRepository
 from factors.validation_records import validation_status_for
-from truealpha_contracts.capture_control import CaptureListVersion
 from truealpha_contracts.common import CaptureEnvironment, canonical_sha256
-from truealpha_contracts.datahub import CaptureCampaign, CaptureRun, CaptureSchedulePolicy
 from truealpha_contracts.execution import AvailabilityStatus, FactorValidationStatus, InputEvidenceStatus
 from truealpha_contracts.universe import SubjectKind, SubjectRef, UniverseRef
 from truealpha_runtime.testing import skip_or_fail

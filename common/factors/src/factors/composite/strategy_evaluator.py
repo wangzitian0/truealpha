@@ -10,7 +10,6 @@ from types import MappingProxyType
 
 from truealpha_contracts.fiscal_period import FiscalPeriod as AnnualFiscalPeriod
 from truealpha_contracts.fiscal_period import parse_annual
-from truealpha_contracts.measure import FiscalPeriod, Measure
 from truealpha_contracts.metrics import INPUT_KEY_ALIASES, METRICS, input_key_for_metric
 from truealpha_contracts.strategy import (
     DecimalQuantization,
@@ -30,7 +29,7 @@ from factors.base.peg import peg
 from factors.base.price_to_gross_profit import price_to_gross_profit
 from factors.base.price_to_sales import price_to_sales
 from factors.composite.three_tier_valuation import three_tier_valuation, tier_band
-from factors.measure import UNIT_MISMATCH_REASON, measure_for_input_key
+from factors.measure import UNIT_MISMATCH_REASON, FiscalPeriod, Measure, measure_for_input_key
 from factors.panel import (
     PANEL_METRICS,
     AliasKind,

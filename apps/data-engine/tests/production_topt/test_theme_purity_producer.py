@@ -20,13 +20,13 @@ from decimal import Decimal
 import psycopg
 import pytest
 from data_engine.config import settings
+from data_engine.contracts.theme_purity import THEMES
 from data_engine.datahub.production_topt.theme_purity import (
     load_partitions,
     materialize_theme_purity,
     summary_line,
 )
 from data_engine.sources import gateway, llm
-from truealpha_contracts.theme_purity import THEMES
 
 CIK = 999_000_042  # outside the real corpus; these rows are this test's own
 ISSUER = f"issuer:cik:{CIK:010d}"

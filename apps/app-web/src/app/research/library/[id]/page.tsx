@@ -1,104 +1,37 @@
-import { notFound, redirect } from "next/navigation";
-import { decodeRouteParam, formatCell, formatNumberMagnitude, formatShortSha } from "@/client/format";
-import { getServerPrincipal } from "@/server/auth/request-context";
-import { PostgresDocumentsRepository } from "@/server/documents";
+import Link from "next/link";
+import { api } from "@/client/api";
+import { decodeRouteParam } from "@/client/format";
+import { loadAuthed } from "../../../_load";
 
 export const dynamic = "force-dynamic";
 
-const repository = new PostgresDocumentsRepository();
-
 export default async function DocumentDetailPage({ params }: { params: Promise<{ id: string }> }) {
-  const principal = await getServerPrincipal();
-  if (!principal) redirect("/login?from=%2Fresearch%2Flibrary");
-
   const { id } = await params;
-  const document = await repository.getDocument(principal.context, decodeRouteParam(id));
-  if (!document) notFound();
-
-  const revisions = await repository.listRevisions(principal.context, document.documentId);
-  const latestRevision = revisions[0] ?? null;
-  let latestHtmlPreview: string | null = null;
-  if (
-    latestRevision &&
-    latestRevision.artifactContentType.toLowerCase().startsWith("text/html") &&
-    typeof repository.getRevisionBytes === "function"
-  ) {
-    try {
-      const bytes = await repository.getRevisionBytes(
-        principal.context,
-        document.documentId,
-        latestRevision.revisionId,
-      );
-      if (bytes) {
-        latestHtmlPreview = bytes.toString("utf8");
-      }
-    } catch {
-      latestHtmlPreview = null;
-    }
-  }
+  const { data: detail, error } = await loadAuthed("/research/library", (opts) => api.getDocument(decodeRouteParam(id), opts), { notFoundOn404: true });
+  if (!detail) return <p className="text-sm text-rose-400">{error ?? "Document unavailable."}</p>;
+  const revs = detail.revisions ?? [];
+  const isHtml = revs[revs.length - 1]?.artifact_content_type.toLowerCase().includes("text/html") ?? false;
 
   return (
-    <section aria-labelledby="document-heading" className="space-y-6">
-      <h1 id="document-heading" className="text-2xl font-bold tracking-tight">
-        Document
-      </h1>
-      <p className="text-xs text-gray-500">
-        <span data-evidence={document.documentId}>{document.documentId}</span> — created {document.createdAt}
-      </p>
-
-      {latestHtmlPreview && (
-        <div
-          data-testid="xhs-card-html-preview"
-          className="rounded-xl border border-border bg-card p-4 space-y-3"
-        >
-          <div className="flex items-center justify-between text-xs text-gray-400">
-            <span className="font-semibold uppercase tracking-wider">
-              Xiaohongshu Card Preview (1080 × 1440 · 3:4 Portrait HTML)
-            </span>
-            <span className="font-mono">{latestRevision?.sourceArtifactId}</span>
-          </div>
-          <div className="overflow-auto rounded-lg border border-border bg-black/20 p-2">
-            <iframe
-              sandbox=""
-              srcDoc={latestHtmlPreview}
-              title={`Xiaohongshu card preview for ${document.documentId}`}
-              width={1080}
-              height={1440}
-              className="mx-auto block rounded bg-white"
-            />
-          </div>
-        </div>
-      )}
-
-      {revisions.length === 0 ? (
-        <p role="status" className="text-sm text-gray-500">
-          No revisions yet.
-        </p>
+    <section aria-labelledby="doc-detail-heading" className="space-y-6">
+      <div>
+        <Link href="/research/library" className="text-xs text-accent hover:underline">← Back to library</Link>
+        <h1 id="doc-detail-heading" className="mt-1 font-mono text-xl font-bold text-white">{detail.document.document_id}</h1>
+        <p className="text-xs text-gray-500">Created {detail.document.created_at} · {revs.length} revision(s)</p>
+      </div>
+      {detail.latest_content != null && (isHtml ? (
+        <iframe sandbox="" srcDoc={detail.latest_content} title="Research Card HTML Preview" className="h-[720px] w-full rounded-xl border border-border bg-white" />
       ) : (
-        <ul className="space-y-3">
-          {revisions.map((revision) => (
-            <li key={revision.revisionId} className="rounded-lg border border-border bg-card p-4 text-sm">
-              <span className="text-xs uppercase tracking-wider text-gray-500" data-evidence={revision.sourceArtifactId}>
-                {revision.sourceArtifactId}
-              </span>
-              <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-gray-400">
-                <dt>sha256</dt>
-                <dd className="truncate font-mono" title={revision.artifactSha256}>
-                  {formatShortSha(revision.artifactSha256)}
-                </dd>
-                <dt>bytes</dt>
-                <dd className="font-mono tabular-nums" title={String(revision.artifactByteLength)}>
-                  {formatCell(formatNumberMagnitude(revision.artifactByteLength))}
-                </dd>
-                <dt>content type</dt>
-                <dd>{revision.artifactContentType}</dd>
-                <dt>created</dt>
-                <dd>{revision.createdAt}</dd>
-              </dl>
-            </li>
+        <pre className="overflow-x-auto whitespace-pre-wrap rounded-xl border border-border bg-card p-4 font-mono text-xs text-gray-200">{detail.latest_content}</pre>
+      ))}
+      <div className="rounded-xl border border-border bg-card p-4">
+        <h2 className="mb-2 text-sm font-semibold">Revisions</h2>
+        <ul className="space-y-2 font-mono text-xs text-gray-400">
+          {revs.map((rev) => (
+            <li key={rev.revision_id}>{rev.revision_id} · {rev.source_artifact_id} · {rev.artifact_content_type} · {rev.artifact_byte_length} bytes</li>
           ))}
         </ul>
-      )}
+      </div>
     </section>
   );
 }

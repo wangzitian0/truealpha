@@ -13,8 +13,8 @@ from data_engine.config import settings
 from data_engine.sources import gateway
 from data_engine.sources.llm import XHS_CARD_TASK, generate_xhs_card_html
 from truealpha_contracts.execution import AvailabilityStatus, FactorValidationStatus
-from truealpha_contracts.research_cards import CardKind, build_card, render_card_html, verify_card_html
-from truealpha_contracts.research_report import (
+from truealpha_runtime.research_cards import CardKind, build_card, render_card_html, verify_card_html
+from truealpha_runtime.research_report import (
     EvidenceTrace,
     ReportSection,
     ReportSectionKind,

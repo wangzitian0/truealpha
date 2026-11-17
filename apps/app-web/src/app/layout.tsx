@@ -3,6 +3,7 @@ import { AppChrome } from "@/components/app-chrome";
 import { HydrationMarker } from "@/components/hydration-marker";
 import "./globals.css";
 
+// Top bar reads verified session identity dynamically on every request.
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {

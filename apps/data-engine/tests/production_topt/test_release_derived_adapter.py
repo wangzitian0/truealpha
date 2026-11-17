@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import UTC, date, datetime
 
 import pytest
+from data_engine.contracts.datahub import CaptureWorkItem
+from data_engine.contracts.obligation_reason_codes import ObligationReasonCode
 from data_engine.datahub.production_topt.executor import FetchSuccess
 from data_engine.datahub.production_topt.release_derived_adapter import (
     ReleaseDerivedAdapter,
@@ -10,8 +12,6 @@ from data_engine.datahub.production_topt.release_derived_adapter import (
     build_route,
 )
 from data_engine.datahub.production_topt.source_registrations import RouteCell, RouteContext
-from truealpha_contracts.datahub import CaptureWorkItem
-from truealpha_contracts.obligation_reason_codes import ObligationReasonCode
 
 _CUTOFF = date(2026, 3, 31)
 _KNOWN = datetime(2026, 3, 1, tzinfo=UTC)

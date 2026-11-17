@@ -19,8 +19,8 @@ from factors.shared.extraction import (
     SetPartition,
     select_first_balancing_set,
 )
-from truealpha_contracts.standards import MetricStandard, confidence_for
 
+from data_engine.contracts.standards import MetricStandard, confidence_for
 from data_engine.datahub._helpers import OBSERVATION_VINTAGE_JOIN, execute_many
 from data_engine.datahub.production_topt.concept_mapping import DEFAULT_RULESET
 from data_engine.datahub.production_topt.source_registrations import AsOfAxis, knowable_instant

@@ -15,7 +15,8 @@ from factors.panel import ALL_ISSUER_CLASSES, IssuerClass, snapshot_field_specs
 from psycopg import Connection
 from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.confidence import ContinuousConfidencePolicy, SourceConfidenceEvidence
-from truealpha_contracts.reconciliation import (
+from truealpha_contracts.universes import key_of_lane, record
+from truealpha_runtime.reconciliation import (
     MEDIAN_QUORUM_GROUPS,
     ConflictBehavior,
     ReconciliationOutcome,
@@ -24,12 +25,11 @@ from truealpha_contracts.reconciliation import (
     SourceAssertion,
     reconcile_source_assertions,
 )
-from truealpha_contracts.reconciliation_policies import (
+from truealpha_runtime.reconciliation_policies import (
     FIELD_RECONCILIATION_POLICIES,
     FINANCIAL_FACT_RECONCILIATION_POLICY,
     INDEX_MEMBERSHIP_POLICY,
 )
-from truealpha_contracts.universes import key_of_lane, record
 
 from data_engine.datahub._helpers import CAPTURE_OBSERVATION_JOIN, fetch_topt_cutoff, parse_decimal
 from data_engine.datahub.oracle_outcomes import (

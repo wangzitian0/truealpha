@@ -1,73 +1,36 @@
 import Link from "next/link";
-import { redirect } from "next/navigation";
-import { getServerPrincipal } from "@/server/auth/request-context";
-import { PostgresDocumentsRepository } from "@/server/documents";
-import { createNoteDocumentAction, tombstoneDocumentAction } from "@/server/documents-actions";
+import { api } from "@/client/api";
+import { CreateDocumentForm, DeleteDocumentButton } from "@/components/document-actions";
+import { loadAuthed } from "../../_load";
 
 export const dynamic = "force-dynamic";
 
-const repository = new PostgresDocumentsRepository();
-
-export default async function LibraryPage() {
-  const principal = await getServerPrincipal();
-  if (!principal) redirect("/login?from=%2Fresearch%2Flibrary");
-
-  const page = await repository.listDocuments(principal.context, {});
+export default async function LibraryPage({ searchParams }: { searchParams: Promise<{ before_created_at?: string; before_document_id?: string }> }) {
+  const sp = await searchParams;
+  const { data, error } = await loadAuthed("/research/library", (opts) =>
+    api.listDocuments({ before_created_at: sp.before_created_at, before_document_id: sp.before_document_id }, opts),
+  );
+  const docs = data?.documents ?? [];
 
   return (
     <section aria-labelledby="library-heading" className="space-y-6">
       <div>
-        <h1 id="library-heading" className="text-2xl font-bold tracking-tight">
-          Library
-        </h1>
-        <p className="mt-2 text-sm text-gray-400">
-          Owner-scoped, RLS-isolated documents (#373). Exported ranking and entity cards from{" "}
-          <Link href="/research/rankings" className="text-accent hover:underline">
-            /research/rankings
-          </Link>{" "}
-          and entity pages save a copy here automatically (#1360).
-        </p>
+        <h1 id="library-heading" className="text-2xl font-bold tracking-tight">Research Library</h1>
+        <p className="mt-1 text-sm text-gray-400">Owner-isolated notes &amp; archived Xiaohongshu HTML cards via <code className="text-accent">/api/v1/research/documents</code>.</p>
       </div>
-
-      <form action={createNoteDocumentAction} className="flex gap-2">
-        <input
-          type="text"
-          name="content"
-          required
-          aria-label="Quick note"
-          placeholder="Quick note…"
-          className="flex-1 rounded-md border border-border bg-card px-3 py-2 text-sm"
-        />
-        <button
-          type="submit"
-          className="rounded-md bg-accent px-3 py-2 text-sm font-medium text-white"
-        >
-          Save
-        </button>
-      </form>
-
-      {page.documents.length === 0 ? (
-        <p role="status" className="text-sm text-gray-500">
-          No documents yet.
-        </p>
+      <CreateDocumentForm />
+      {error && <p className="text-sm text-rose-400">{error}</p>}
+      {docs.length === 0 ? (
+        <p className="text-sm text-gray-400">No documents saved yet.</p>
       ) : (
-        <ul className="space-y-2">
-          {page.documents.map((document) => (
-            <li
-              key={document.documentId}
-              className="flex items-center justify-between rounded-lg border border-border bg-card px-4 py-3 text-sm"
-            >
-              <Link
-                href={`/research/library/${encodeURIComponent(document.documentId)}`}
-                className="flex-1 text-gray-300 hover:text-white"
-              >
-                <span data-evidence={document.documentId}>{document.documentId}</span> — {document.createdAt}
-              </Link>
-              <form action={tombstoneDocumentAction.bind(null, document.documentId)}>
-                <button type="submit" className="text-xs text-gray-500 hover:text-red-400">
-                  Delete
-                </button>
-              </form>
+        <ul className="divide-y divide-border rounded-xl border border-border bg-card">
+          {docs.map((doc) => (
+            <li key={doc.document_id} className="flex items-center justify-between px-4 py-3 text-sm">
+              <div>
+                <Link href={`/research/library/${encodeURIComponent(doc.document_id)}`} className="font-mono text-accent hover:underline">{doc.document_id}</Link>
+                <div className="text-xs text-gray-500">Created {doc.created_at}</div>
+              </div>
+              <DeleteDocumentButton documentId={doc.document_id} />
             </li>
           ))}
         </ul>

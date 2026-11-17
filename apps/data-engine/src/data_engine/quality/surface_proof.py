@@ -1,4 +1,4 @@
-"""Verify that every report surface serves the governed head in the database."""
+"""Prove that every report surface serves the governed head in the environment database."""
 
 from __future__ import annotations
 
@@ -22,7 +22,18 @@ from data_engine.lanes.capture import is_universe_scheduled
 from data_engine.sources import llm
 
 _NOT_SCHEDULED = "not_scheduled"
+
+#: `apps/app-web/src/server/mart/strategy-run-repository.ts` resolves the governed strategy
+#: run through this view (`db/migrations/20260907T0630_bt_governed_strategy_run.sql`):
+#: /research/rankings, /strategy, /compare, /trace and /coverage all read it.
 _STRATEGY_HEAD_SQL = "select target_run_id, strategy_run_id from mart.governed_strategy_run"
+#: `apps/app-web/src/server/mart/theme-purity.ts` `LATEST_RUN_SQL`: the newest run in the
+#: table, deliberately not the pointer — which is exactly why it has to be checked against it.
+#: No universe filter: every universe's head gets purity rows, and the page names a run and a
+#: cutoff, never a universe, so it serves whichever head cut off last (`themes_verdict`).
+#:
+#: A purity row has a segment partition. The fill row of an issuer without one has none (#1117).
+#: A run that holds only fill rows is not populated, so no query here counts a fill row.
 _THEMES_HEAD_SQL = """
 select p.run_id, max(p.cutoff) as cutoff
 from mart.issuer_theme_purity p
@@ -35,47 +46,76 @@ group by run_id
 order by max(cutoff) desc
 limit 1
 """
+#: Whether a run has purity rows, i.e. whether the theme reader could select it.
 _THEME_ROWS_SQL = (
     "select exists (select 1 from mart.issuer_theme_purity where run_id = %s and partition_id is not null)"
 )
-_THEME_UNIVERSE_SQL = (
-    "select exists (select 1 from mart.current_pointer p "
-    "join mart.issuer_theme_purity t on t.run_id = p.target_run_id and t.partition_id is not null "
-    "where p.environment = %s and p.factor_id = %s and p.universe_id like %s)"
+#: Whether any run a universe's pointer ever named has purity rows: whether the theme lane
+#: covers that universe in this environment.
+_THEME_UNIVERSE_SQL = """
+select exists (
+    select 1 from mart.current_pointer p
+    join mart.issuer_theme_purity t on t.run_id = p.target_run_id and t.partition_id is not null
+    where p.environment = %s and p.factor_id = %s and p.universe_id like %s
 )
-_HOLDINGS_HEAD_SQL = (
-    "select run_id, freshness, availability, staleness_reason from mart.served_head "
-    "where factor_id = 'gross_profit_per_employee' and universe_id like %s order by advanced_at desc limit 1"
-)
+"""
+#: `apps/app-web/src/server/mart/fund-valuation.ts` `QQQ_POINTER_HEAD_SQL`.
+_HOLDINGS_HEAD_SQL = """
+select run_id, freshness, availability, staleness_reason
+from mart.served_head
+where factor_id = 'gross_profit_per_employee'
+  and universe_id like %s
+order by advanced_at desc limit 1
+"""
 _HOLDINGS_ROWS_SQL = "select count(*) from mart.fund_virtual_company where run_id = %s"
-_COVERAGE_HEAD_SQL = (
-    "select distinct on (universe_id) universe_id, run_id, payload from mart.question_coverage_report r "
-    "where universe_id in (select universe_id from mart.served_head) "
-    "order by universe_id, "
-    "exists (select 1 from mart.served_head h where h.universe_id = r.universe_id and coalesce(h.run_id, h.head_run_id) = r.run_id) desc, "
-    "created_at desc"
-)
-_SEGMENT_PARTITIONS_SQL = (
-    "select count(distinct partition_id) from staging.issuer_segment_revenue_facts where knowable_at <= %s"
-)
-_POINTER_RECORDED_SQL = "select max(created_at) from mart.current_pointer where environment = %s and factor_id = %s and universe_id = %s and target_run_id = %s"
+#: `apps/app-web/src/server/admin/datahub-stats.ts` `QUESTION_COVERAGE_SQL`.
+_COVERAGE_HEAD_SQL = """
+select distinct on (universe_id) universe_id, run_id, payload
+from mart.question_coverage_report r
+where universe_id in (select universe_id from mart.served_head)
+order by universe_id,
+         exists (
+           select 1 from mart.served_head h
+           where h.universe_id = r.universe_id
+             and coalesce(h.run_id, h.head_run_id) = r.run_id
+         ) desc,
+         created_at desc
+"""
+#: What the theme lane had to work with, for a MISMATCH line on an empty table: the accepted
+#: segment partitions knowable at the head's cutoff (`theme_purity._PARTITION_SQL`'s vintage
+#: rule, without the member join).
+_SEGMENT_PARTITIONS_SQL = """
+select count(distinct partition_id) from staging.issuer_segment_revenue_facts
+where knowable_at <= %s
+"""
+#: When the pointer row naming `target_run_id` was written: `advanced_at` is the tick's
+#: cutoff, which a tick that runs for an hour passes long before it commits.
+_POINTER_RECORDED_SQL = """
+select max(created_at) from mart.current_pointer
+where environment = %s and factor_id = %s and universe_id = %s and target_run_id = %s
+"""
+#: A universe this environment never ticks: nothing to serve and nothing served.
 _NOT_RUN_HERE = "not-run-in-this-environment"
 _THEMES_SURFACE = "/research/themes"
-_THEMES_READER = "theme-purity.ts LATEST_RUN_SQL"
-_DRIFT_FIELDS = ("answered", "unavailable", "missing")
+_THEMES_READER = "research_service.py THEME_LATEST_RUN_SQL"
 
 
 @dataclass(frozen=True)
 class SurfaceVerdict:
-    """Served run versus governed head for one surface."""
+    """One surface: the run its reader serves, against the run the pointer names."""
 
     surface: str
     reader: str
     expected_run: str | None
     served_run: str | None
+    #: Why a surface whose run is right is still wrong (a stored report the tables no
+    #: longer agree with), or context for a right one.
     detail: str = ""
     stale: bool = False
+    #: The universe whose head this surface must serve.
     universe: str | None = None
+    #: Why this surface's universe is still settling, when it is; set only on a surface that
+    #: does not match.
     in_progress: str = ""
 
     @property
@@ -84,7 +124,9 @@ class SurfaceVerdict:
 
     @property
     def state(self) -> str:
-        return "MATCH" if self.ok else ("IN-PROGRESS" if self.in_progress else "MISMATCH")
+        if self.ok:
+            return "MATCH"
+        return "IN-PROGRESS" if self.in_progress else "MISMATCH"
 
     @property
     def mismatched(self) -> bool:
@@ -92,25 +134,37 @@ class SurfaceVerdict:
 
     @property
     def line(self) -> str:
-        served, expected = self.served_run or "nothing", self.expected_run or "no governed head"
+        served = self.served_run or "nothing"
+        expected = self.expected_run or "no governed head"
         notes = [note for note in (self.detail, self.in_progress) if note]
         suffix = f" — {'; '.join(notes)}" if notes else ""
         return f"{self.state} {self.surface}: serves {served[:24]} vs head {expected[:24]}{suffix}"
 
 
 def _heads(connection: Connection[Any]) -> dict[str, GovernedHead | None]:
+    """#756: resolved under the environment this database declares, which is what
+    `mart.governed_strategy_run` -- the view `_STRATEGY_HEAD_SQL` reads on the other side of
+    this comparison -- has filtered on since that migration. While this function pinned the
+    literal `production` instead, the proof was comparing two different definitions of the
+    head and reporting the difference as a surface mismatch."""
     return {lane_name(key): governed_head(connection, universe_prefix=record(key).id_prefix) for key in served_keys()}
 
 
 def fresh_heads_without_reports(connection: Connection[Any], *, now: datetime, grace: timedelta) -> dict[str, str]:
-    """Return settling universes missing reports within `grace`."""
+    """universe -> why, for a head whose pointer row is younger than `grace` and whose reports
+    do not name it yet: the window between a tick's commit and the head-reports run the
+    pointer sensor launches for it. Older than `grace`, the same state is a MISMATCH — the
+    sensor did not follow the head. Read-only."""
     settling: dict[str, str] = {}
+    # Read once: the environment is a property of the database, not of a universe, so asking
+    # per head is one query per universe for an answer that cannot change between them.
     environment = declared_environment(connection)
     for universe, head in _heads(connection).items():
         if head is None or stored_report_run(connection, head.universe_id) == head.run_id:
             continue
         row = connection.execute(
-            _POINTER_RECORDED_SQL, (environment, GOVERNING_FACTOR, head.universe_id, head.run_id)
+            _POINTER_RECORDED_SQL,
+            (environment, GOVERNING_FACTOR, head.universe_id, head.run_id),
         ).fetchone()
         recorded = row[0] if row else None
         if recorded is not None and now - recorded < grace:
@@ -128,9 +182,15 @@ def _off_verdict(surface: str, reader: str, detail: str, universe: str, marker: 
 def prove(
     connection: Connection[Any], *, executed_at: datetime, settling: Mapping[str, str] | None = None
 ) -> tuple[SurfaceVerdict, ...]:
-    """Check report surfaces against governed heads."""
+    """Every surface's served run against the governed head, plus the coverage report against
+    its own recomputation. Read-only.
+
+    `settling` names the universes that have not settled (universe -> why): a surface of one
+    that does not match is IN-PROGRESS rather than MISMATCH."""
     environment = declared_environment(connection)
     heads = _heads(connection)
+    # The strategy pages serve the universe that holds the strategy role, the holdings page the universe that
+    # consolidates the fund (#1522): the proof names a role, never a universe key.
     strategy_key, fund_key = universe_with_role("strategy"), universe_with_role("fund_consolidation")
     topt, qqq = lane_name(strategy_key), lane_name(fund_key)
     verdicts: list[SurfaceVerdict] = []
@@ -149,6 +209,9 @@ def prove(
 
     row = connection.execute(_THEMES_HEAD_SQL).fetchone()
     if row is None and not llm.is_configured():
+        # No provider seated: the lane cannot judge a segment here, so it has nothing to serve
+        # and nothing to serve wrongly. An unseated key where one belongs is the model-key
+        # probe's red verdict (#876 W2), not this surface's.
         verdicts.append(
             _off_verdict(
                 _THEMES_SURFACE,
@@ -165,10 +228,13 @@ def prove(
     counted = connection.execute(_HOLDINGS_ROWS_SQL, (served,)).fetchone() if served else None
     funds = int(counted[0]) if counted else 0
     if heads.get(qqq) is None and served is None:
+        # An environment that never captures QQQ (staging today) has no holdings head to
+        # serve and none to serve wrongly; the page renders its filed weights unvalued. Not
+        # a mismatch — a surface with no run behind it in a place that runs no such tick.
         verdicts.append(
             _off_verdict(
                 "/research/holdings",
-                "fund-valuation.ts QQQ_POINTER_HEAD_SQL",
+                "research_service.py POINTER_HEAD_SQL",
                 f"no {fund_key} head in this environment; the page renders filed weights unvalued",
                 qqq,
             )
@@ -177,7 +243,7 @@ def prove(
         verdicts.append(
             SurfaceVerdict(
                 surface="/research/holdings",
-                reader="fund-valuation.ts QQQ_POINTER_HEAD_SQL",
+                reader="research_service.py POINTER_HEAD_SQL",
                 expected_run=_run(heads.get(qqq)),
                 served_run=served,
                 detail=f"{funds} consolidated fund row(s)",
@@ -190,7 +256,7 @@ def prove(
         str(universe_id): (str(run_id), payload)
         for universe_id, run_id, payload in connection.execute(_COVERAGE_HEAD_SQL).fetchall()
     }
-    cov_reader = "datahub-stats.ts QUESTION_COVERAGE_SQL"
+    cov_reader = "admin_service.py QUESTION_COVERAGE_SQL"
     for universe in heads:
         cov_surface = f"/admin/datahub coverage [{universe}]"
         prefix = record(key_of_lane(universe)).id_prefix
@@ -200,6 +266,9 @@ def prove(
             )
             continue
         head = heads[universe]
+        # The report for the head's OWN universe id when there is a head (two TOPT partitions
+        # would share a prefix; review on #859); by prefix only to say "nothing stored" for a
+        # universe with no head.
         match = (
             stored.get(head.universe_id)
             if head is not None
@@ -230,6 +299,7 @@ def prove(
 
 
 def _settle(verdict: SurfaceVerdict, pending: Mapping[str, str]) -> SurfaceVerdict:
+    """A surface that does not match, of a universe that has not settled, is in progress."""
     why = pending.get(verdict.universe) if verdict.universe is not None else None
     return replace(verdict, in_progress=why) if why and not verdict.ok else verdict
 
@@ -246,7 +316,7 @@ def _exists(connection: Connection[Any], sql: str, params: tuple[Any, ...]) -> b
 def themes_verdict(
     connection: Connection[Any], heads: Mapping[str, GovernedHead | None], served: str | None
 ) -> SurfaceVerdict:
-    """Verify `/research/themes` against newest governed head."""
+    """Verify /research/themes against newest-cutoff head among covered universes."""
     environment = declared_environment(connection)
     present = {universe: head for universe, head in heads.items() if head is not None}
     covered = {
@@ -298,6 +368,7 @@ def themes_verdict(
 
 
 def _no_theme_rows(connection: Connection[Any], head: GovernedHead | None) -> str:
+    """The MISMATCH detail for an empty theme table: what the plane under it holds."""
     if head is None:
         return "no theme purity rows at all"
     row = connection.execute(_SEGMENT_PARTITIONS_SQL, (head.cutoff,)).fetchone()
@@ -310,7 +381,21 @@ def _no_theme_rows(connection: Connection[Any], head: GovernedHead | None) -> st
     return f"no theme purity rows at all, though {partitions} segment partition(s) are knowable at the head's cutoff"
 
 
+#: The fields of one question the drift check compares.
+_DRIFT_FIELDS = ("answered", "unavailable", "missing")
+
+
+def _drift_value(entry: Mapping[str, Any], field: str) -> Any:
+    return entry.get(field)
+
+
 def _drift(stored: Any, fresh: dict[str, Any] | None) -> str:
+    """How the stored report differs from one compiled now over the same tables, per question.
+
+    When `answered` differs, the text is `stored N answered, tables say M`. Other fields move with
+    it: a subject that becomes answered leaves `unavailable`. When `answered` is equal and another
+    field differs, the text names each differing field with its stored and recomputed value.
+    """
     if stored is None:
         return "no stored report"
     if fresh is None:
@@ -322,22 +407,25 @@ def _drift(stored: Any, fresh: dict[str, Any] | None) -> str:
         if before is None:
             changed.append(f"{question}: absent from the stored report")
             continue
-        moved = [field for field in _DRIFT_FIELDS if before.get(field) != entry.get(field)]
+        moved = [field for field in _DRIFT_FIELDS if _drift_value(before, field) != _drift_value(entry, field)]
         if "answered" in moved:
             changed.append(f"{question}: stored {before.get('answered')} answered, tables say {entry['answered']}")
         elif moved:
-            changed.append(
-                f"{question}: {', '.join(f'{field} {before.get(field)} -> {entry.get(field)}' for field in moved)}"
+            fields = ", ".join(
+                f"{field} {_drift_value(before, field)} -> {_drift_value(entry, field)}" for field in moved
             )
+            changed.append(f"{question}: {fields}")
     return "; ".join(changed)
 
 
 def summary_lines(verdicts: Sequence[SurfaceVerdict]) -> list[str]:
-    return [*(verdict.line for verdict in verdicts), f"report surface proof: {verdict_counts(verdicts)}"]
+    lines = [verdict.line for verdict in verdicts]
+    lines.append(f"report surface proof: {verdict_counts(verdicts)}")
+    return lines
 
 
 def verdict_counts(verdicts: Sequence[SurfaceVerdict]) -> str:
-    """Summarize matched, in-progress, and mismatched surface counts."""
+    """`m/n surfaces serve the governed head`, then how many are in progress and how many do not."""
     matched = sum(1 for verdict in verdicts if verdict.ok)
     settling = sum(1 for verdict in verdicts if verdict.state == "IN-PROGRESS")
     failed = sum(1 for verdict in verdicts if verdict.mismatched)

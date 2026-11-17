@@ -41,6 +41,8 @@ import psycopg
 import pytest
 from data_engine import raw_store
 from data_engine.config import settings
+from data_engine.contracts.datahub import CaptureWorkItem
+from data_engine.contracts.obligation_reason_codes import ObligationReasonCode
 from data_engine.datahub.production_topt import composition
 from data_engine.datahub.production_topt.composition import (
     CaptureNotPublishableError,
@@ -66,8 +68,6 @@ from data_engine.datahub.production_topt.sec_financial_adapter import (
     SecTarget,
 )
 from factors.production_topt import OperatingBranch
-from truealpha_contracts.datahub import CaptureWorkItem
-from truealpha_contracts.obligation_reason_codes import ObligationReasonCode
 from truealpha_runtime.testing import InMemoryRawObjectStore as _InMemoryObjectStore
 from truealpha_runtime.testing import isolated_test_database
 

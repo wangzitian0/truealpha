@@ -1,121 +1,57 @@
+import { api } from "@/client/api";
 import { formatCell, formatMacroValue, formatUtcMinute } from "@/client/format";
+import { DataTable } from "@/components/data-table";
 import { ReadStateNotice } from "@/components/read-state";
-import { loadMacroPanel, type MacroSeries } from "@/server/admin/macro";
-import { getServerPrincipal } from "@/server/auth/request-context";
+import { loadAuthed } from "../../_load";
 
 export const dynamic = "force-dynamic";
 
-function ageWords(series: MacroSeries): string {
-  if (series.latest === null) return "no observation yet";
-  return `${series.latest.ageDays} ${series.latest.ageDays === 1 ? "day" : "days"} old, limit ${series.maxAgeDays}`;
-}
-
-export default async function MacroPage() {
-  const principal = await getServerPrincipal();
-  const outcome = await loadMacroPanel(principal === null ? null : { principalKind: principal.principalKind });
-
-  if (outcome.kind !== "ready") {
-    return (
-      <section aria-labelledby="macro-heading" className="space-y-4">
-        <h1 id="macro-heading" className="text-2xl font-bold tracking-tight">Macro base data</h1>
-        <ReadStateNotice
-          state={outcome}
-          overrides={{
-            denied: "Access denied. This area requires a verified administrator identity.",
-            empty: "No macro series is registered in this database yet. The macro job has not run.",
-          }}
-        />
-      </section>
-    );
-  }
-
-  const { series, months } = outcome.data;
-  const dates = Array.from(new Set(months.map((row) => row.observationDate)));
-  const valueOf = new Map(months.map((row) => [`${row.observationDate}|${row.seriesId}`, row.value]));
+export default async function AdminMacroPage() {
+  const { data: macro, error } = await loadAuthed("/admin/macro", (opts) => api.getAdminMacro(opts), { admin: true });
+  const series = macro?.series ?? [];
+  const months = macro?.months ?? [];
+  const dates = Array.from(new Set(months.map((m) => String(m.observation_date))));
+  const valueOf = new Map(months.map((m) => [`${m.observation_date}|${m.series_id}`, String(m.value)]));
 
   return (
     <section aria-labelledby="macro-heading" className="space-y-8">
       <div>
         <h1 id="macro-heading" className="text-2xl font-bold tracking-tight">Macro base data</h1>
-        <p className="mt-2 text-gray-400">
-          The U.S. Treasury par yield curve, loaded every day by the macro job and read through the{" "}
-          <code className="text-accent">mart</code> read-only role. The 3-month yield is the risk-free rate of the core
-          strategy (#1255).
-        </p>
+        <p className="mt-1 text-sm text-gray-400">U.S. Treasury par yield curve freshness and 12-month history.</p>
       </div>
-
-      <div className="grid gap-4 md:grid-cols-3" data-macro-series="cards">
-        {series.map((item) => (
-          <article
-            key={item.seriesId}
-            data-series-id={item.seriesId}
-            data-fresh={item.isFresh ? "true" : "false"}
-            className="rounded-xl border border-border bg-card p-5"
-          >
-            <h2 className="font-semibold">{item.label}</h2>
-            <p className="mt-1 text-xs text-gray-500"><code>{item.seriesId}</code></p>
-            <p className="mt-3 text-3xl font-bold tracking-tight" title={item.latest === null ? undefined : item.latest.value}>
-              {formatCell(item.latest === null ? null : formatMacroValue(item.unit, item.latest.value))}
-            </p>
-            <p className="mt-1 text-sm text-gray-400">
-              {item.latest === null ? "no observation" : `observed ${item.latest.observationDate}`}
-            </p>
-            <p
-              data-freshness={item.isFresh ? "fresh" : "stale"}
-              className={`mt-3 inline-block rounded-full border px-2 py-0.5 text-xs font-medium ${
-                item.isFresh ? "border-emerald-500/40 text-emerald-300" : "border-red-500/40 text-red-300"
-              }`}
-            >
-              {item.isFresh ? "fresh" : "stale"} · {ageWords(item)}
-            </p>
-            <dl className="mt-3 space-y-1 text-xs text-gray-400">
-              <div className="flex gap-2">
-                <dt className="text-gray-500">Source</dt>
-                <dd>{formatCell(item.latest?.source ?? null)}</dd>
-              </div>
-              <div className="flex gap-2">
-                <dt className="text-gray-500">Fetched</dt>
-                <dd title={item.latest?.fetchedAt}>{formatCell(formatUtcMinute(item.latest?.fetchedAt ?? null))}</dd>
-              </div>
-            </dl>
-          </article>
-        ))}
-      </div>
-
-      <div className="rounded-xl border border-border bg-card p-5">
-        <h2 className="font-semibold">Last 12 months</h2>
-        {dates.length === 0 ? (
-          <p className="mt-3 text-sm text-gray-400">No observation in the last 12 months.</p>
-        ) : (
-          <div className="mt-3 max-h-[32rem] overflow-auto">
-            <table className="w-full text-left text-sm" data-macro-series="months">
-              <thead className="sticky top-0 bg-card text-xs uppercase tracking-wider text-gray-500">
-                <tr>
-                  <th className="py-2 pr-4">Date</th>
-                  {series.map((item) => (
-                    <th key={item.seriesId} className="py-2 pr-4 text-right">{item.label}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {dates.map((date) => (
-                  <tr key={date} className="border-t border-border">
-                    <td className="py-1 pr-4 text-gray-300">{date}</td>
-                    {series.map((item) => {
-                      const value = valueOf.get(`${date}|${item.seriesId}`) ?? null;
-                      return (
-                        <td key={item.seriesId} className="py-1 pr-4 text-right tabular-nums" title={value ?? undefined}>
-                          {formatCell(formatMacroValue(item.unit, value))}
-                        </td>
-                      );
-                    })}
+      {error && <ReadStateNotice state={{ kind: "error", message: error }} />}
+      {macro && !macro.available && <ReadStateNotice state={{ kind: "unavailable", reason: macro.reason ?? "unavailable" }} />}
+      {macro?.available && (
+        <>
+          <div className="grid gap-4 md:grid-cols-3" data-macro-series="cards">
+            {series.map((item) => {
+              const latest = item.latest as Record<string, unknown> | null | undefined;
+              return (
+                <article key={item.series_id} data-series-id={item.series_id} data-fresh={item.is_fresh ? "true" : "false"} className="rounded-xl border border-border bg-card p-5">
+                  <h2 className="font-semibold">{item.label}</h2>
+                  <p className="text-xs font-mono text-gray-500">{item.series_id}</p>
+                  <p className="mt-3 text-3xl font-bold">{formatCell(latest ? formatMacroValue(item.unit, String(latest.value ?? "")) : null)}</p>
+                  <p className="mt-1 text-xs text-gray-400">
+                    {latest ? `${latest.observation_date} · ${latest.source} · ${formatUtcMinute(String(latest.fetched_at ?? ""))}` : "no observation"}
+                  </p>
+                </article>
+              );
+            })}
+          </div>
+          {dates.length > 0 && (
+            <div className="overflow-x-auto rounded-xl border border-border bg-card p-4" data-macro-series="months">
+              <DataTable headers={["Date", ...series.map((s) => s.series_id)]} className="w-full text-left text-xs font-mono">
+                {dates.slice(0, 24).map((d) => (
+                  <tr key={d} className="border-t border-border">
+                    <td className="py-1.5 pr-4">{d}</td>
+                    {series.map((s) => <td key={s.series_id} className="py-1.5 pr-4">{formatCell(valueOf.get(`${d}|${s.series_id}`) ?? null)}</td>)}
                   </tr>
                 ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
+              </DataTable>
+            </div>
+          )}
+        </>
+      )}
     </section>
   );
 }

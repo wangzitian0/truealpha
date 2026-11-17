@@ -9,7 +9,9 @@ from typing import Any
 
 import psycopg
 from truealpha_contracts.common import CaptureEnvironment
-from truealpha_contracts.evidence_graph import (
+from truealpha_runtime.reconciliation import ReconciliationOutcome
+
+from data_engine.contracts.evidence_graph import (
     BitemporalStamp,
     CurrentPointer,
     CurrentPointerKey,
@@ -19,8 +21,6 @@ from truealpha_contracts.evidence_graph import (
     EvidenceNodeRef,
     EvidenceRelation,
 )
-from truealpha_contracts.reconciliation import ReconciliationOutcome
-
 from data_engine.datahub.evidence_graph_repository import PostgresEvidenceGraphRepository
 
 POINTER_FACTOR_ID = "gross_profit_per_employee"

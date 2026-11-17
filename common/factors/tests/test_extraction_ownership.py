@@ -67,7 +67,7 @@ RULE_LITERAL_RE = re.compile(r"rule:[a-z0-9][a-z0-9-]*:v\d+")
 ALLOWED_RULE_LITERAL_FILES = {
     "common/factors/src/factors/shared/extraction.py",
     "apps/data-engine/src/data_engine/datahub/standards/filing_extraction.py",
-    "common/contracts/src/truealpha_contracts/standards.py",
+    "apps/data-engine/src/data_engine/contracts/standards.py",
 }
 
 SELECT_NAME_RE = re.compile(r"^select_[a-z_]*$")

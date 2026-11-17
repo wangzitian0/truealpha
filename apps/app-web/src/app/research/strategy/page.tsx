@@ -1,94 +1,59 @@
-import { loadStrategyRunPage } from "@/server/strategy-page";
-import { entityLabel, loadEntityDisplayMap, type EntityDisplay } from "@/server/mart/entity-resolution";
-import { DASHBOARD_STRATEGY_ID } from "@/server/mart/research-read";
+import Link from "next/link";
+import { api } from "@/client/api";
+import { formatCell, formatPercentFromFraction, formatRatio, formatSignedRatio, signColor } from "@/client/format";
+import { DASHBOARD_STRATEGY_ID, valuationBasisLabel } from "@/client/strategy";
 import { ClaimCeilingBanner } from "@/components/claim-ceiling";
-import { EntityTh, PercentTd, RatioTd, ResearchTable, SignedRatioTd } from "@/components/research-table";
-import { StrategyDefinitionLine } from "@/components/strategy-definition";
-import { formatCell } from "@/client/format";
-import { getServerPrincipal } from "@/server/auth/request-context";
-import {
-  currentMultipleOf,
-  reportValuationBasis,
-  targetMultipleOf,
-  valuationBasisLabel,
-  type StrategyRunDecision,
-  type StrategyRunOutcome,
-} from "@/contracts/strategyRun";
+import { ResearchTable } from "@/components/research-table";
+import { loadAuthed } from "../../_load";
 
-const OUTCOME_LABEL: Record<StrategyRunOutcome, string> = {
+export const dynamic = "force-dynamic";
+
+const OUTCOME_LABEL: Record<string, string> = {
   selected: "Selected",
   ranked_beyond_selection_count: "Ranked (not selected)",
   rejected_valuation_above_tier_band: "Rejected — valuation above tier band",
   excluded: "Excluded",
 };
 
-const decisionLabel = (decision: StrategyRunDecision) =>
-  decision.exclusion_reason ? `${OUTCOME_LABEL[decision.outcome]}: ${decision.exclusion_reason}` : OUTCOME_LABEL[decision.outcome];
-
-const NOTICE_STYLE = {
-  denied: "text-amber-400",
-  empty: "text-gray-400",
-  error: "text-red-400",
-  unavailable: "text-gray-400",
-} as const;
-
 export default async function StrategyRunsPage() {
-  const principal = await getServerPrincipal();
-  const outcome = await loadStrategyRunPage(principal, DASHBOARD_STRATEGY_ID);
-  const names: Map<string, EntityDisplay> = outcome.kind === "ready" ? await loadEntityDisplayMap() : new Map();
-  const basisLabel = valuationBasisLabel(outcome.kind === "ready" ? reportValuationBasis(outcome.report.decisions) : null);
-  const headers = ["Issuer", "Cutoff", "Status", "Tier", `Current ${basisLabel}`, `Target ${basisLabel}`, `Valuation gap (${basisLabel})`, "Confidence", "Rank", "Weight"];
+  const { data, error } = await loadAuthed("/research/strategy", (opts) => api.getStrategy({ strategy_id: DASHBOARD_STRATEGY_ID }, opts));
+  const decisions = data?.decisions ?? [];
+  const basisLabel = valuationBasisLabel(decisions.find((d) => d.valuation_basis)?.valuation_basis);
+  const headers = ["Issuer", "Cutoff", "Status", "Tier", `Current ${basisLabel}`, `Target ${basisLabel}`, `Gap (${basisLabel})`, "Confidence", "Rank", "Weight"];
 
   return (
-    <section aria-labelledby="strategy-runs-heading">
+    <section aria-labelledby="strategy-runs-heading" className="space-y-4">
       <h1 id="strategy-runs-heading" className="text-2xl font-bold tracking-tight">Strategy runs</h1>
-
-      {outcome.kind === "ready" ? (
-        <p className="mt-2 text-sm text-gray-400">
-          {outcome.report.strategy_id} — provisional source: {outcome.report.source}. Corpus{" "}
-          <code className="text-accent">{outcome.report.corpus_sha256}</code>.
-          {outcome.report.golden_mismatches.length > 0 && (
-            <>
-              {" "}
-              <span role="status" className="ml-2 text-red-400">{outcome.report.golden_mismatches.length} golden mismatch(es).</span>
-            </>
-          )}
-        </p>
-      ) : (
-        <p role="status" className={`mt-4 rounded-lg border border-border bg-card p-4 ${NOTICE_STYLE[outcome.kind]}`}>
-          {outcome.kind === "denied"
-            ? "Access denied. No verified session for this request."
-            : outcome.kind === "empty"
-              ? "No decisions recorded for this strategy run."
-              : outcome.kind === "error"
-                ? `Error loading strategy run: ${outcome.message}`
-                : `Unavailable: ${outcome.detail.reason} (${outcome.detail.strategy_id})`}
+      {error && <p role="status" className="rounded-lg border border-border bg-card p-4 text-red-400">{error}</p>}
+      {data && !data.available && (
+        <p role="status" className="rounded-lg border border-border bg-card p-4 text-gray-400">Unavailable: {data.reason ?? "unknown"} ({data.strategy_id})</p>
+      )}
+      {data?.available && (
+        <p className="text-sm text-gray-400">
+          {data.strategy_id} — source: {data.source}. Corpus <code className="text-accent">{data.corpus_sha256}</code>
+          {data.definition_version ? ` · v${data.definition_version} (${data.review_state ?? "unknown"})` : ""}
         </p>
       )}
-      {outcome.kind === "ready" && <StrategyDefinitionLine definition={outcome.report.definition} />}
-
       <ClaimCeilingBanner />
-
-      {outcome.kind === "ready" && (
-        <ResearchTable
-          className="mt-6 overflow-x-auto rounded-xl border border-border"
-          caption={`Decisions for ${outcome.report.strategy_id}, by issuer and cutoff`}
-          headers={headers}
-        >
-          {outcome.report.decisions.map((d) => (
-            <tr key={`${d.issuer_id}:${d.cutoff_at}`} className="border-t border-border">
-              <EntityTh issuerId={d.issuer_id} label={entityLabel(d.issuer_id, names)} />
-              <td className="px-4 py-3">{d.cutoff_at}</td>
-              <td className="px-4 py-3">{decisionLabel(d)}</td>
-              <td className="px-4 py-3">{formatCell(d.tier)}</td>
-              <RatioTd value={currentMultipleOf(d)} />
-              <RatioTd value={targetMultipleOf(d)} />
-              <SignedRatioTd value={d.valuation_gap} />
-              <RatioTd value={d.confidence} />
-              <td className="px-4 py-3 tabular-nums">{formatCell(d.rank)}</td>
-              <PercentTd value={d.target_weight} />
-            </tr>
-          ))}
+      {data?.available && decisions.length > 0 && (
+        <ResearchTable caption={`Decisions for ${data.strategy_id}`} headers={headers}>
+          {decisions.map((d) => {
+            const c = "px-4 py-3";
+            return (
+              <tr key={`${d.issuer_id}-${d.cutoff_at}`} className="border-t border-border">
+                <th scope="row" className={`${c} font-medium`}><Link href={`/research/entities/${encodeURIComponent(d.issuer_id)}`} className="text-accent hover:underline" title={d.issuer_id}>{d.label}</Link></th>
+                <td className={`${c} font-mono text-xs`}>{d.cutoff_at}</td>
+                <td className={`${c} text-xs`}>{OUTCOME_LABEL[d.outcome] ?? d.outcome}{d.exclusion_reason ? `: ${d.exclusion_reason}` : ""}</td>
+                <td className={c}>{formatCell(d.tier)}</td>
+                <td className={`${c} tabular-nums`}>{formatCell(formatRatio(d.current_multiple))}</td>
+                <td className={`${c} tabular-nums`}>{formatCell(formatRatio(d.target_multiple))}</td>
+                <td className={`${c} tabular-nums ${signColor(d.valuation_gap)}`}>{formatCell(formatSignedRatio(d.valuation_gap))}</td>
+                <td className={`${c} tabular-nums`}>{formatCell(formatRatio(d.confidence))}</td>
+                <td className={`${c} tabular-nums`}>{formatCell(d.rank)}</td>
+                <td className={`${c} tabular-nums`}>{formatCell(formatPercentFromFraction(d.target_weight))}</td>
+              </tr>
+            );
+          })}
         </ResearchTable>
       )}
     </section>

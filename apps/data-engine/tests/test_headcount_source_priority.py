@@ -6,7 +6,7 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 
 from data_engine.datahub.production_topt.headcount import PostgresHeadcountExtractor
-from truealpha_contracts.reconciliation_policies import HEADCOUNT_RECONCILIATION_POLICY
+from truealpha_runtime.reconciliation_policies import HEADCOUNT_RECONCILIATION_POLICY
 
 
 class _Capture:

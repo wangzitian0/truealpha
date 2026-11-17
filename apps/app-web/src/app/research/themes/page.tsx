@@ -1,84 +1,55 @@
-import { redirect } from "next/navigation";
-import { formatCell, formatShortSha } from "@/client/format";
-import { EntityTh, PercentTd, RatioTd, ResearchTable } from "@/components/research-table";
-import { getServerPrincipal } from "@/server/auth/request-context";
-import { entityLabel, loadEntityDisplayMap } from "@/server/mart/entity-resolution";
-import { classifiedShare, loadThemePurity } from "@/server/mart/theme-purity";
+import Link from "next/link";
+import { api } from "@/client/api";
+import { formatCell, formatPercentFromFraction, formatRatio, formatShortSha } from "@/client/format";
+import { classifiedShare } from "@/client/strategy";
+import { ResearchTable } from "@/components/research-table";
+import { loadAuthed } from "../../_load";
 
 export const dynamic = "force-dynamic";
 
 function millions(value: string): string {
-  if (!value || value.trim() === "") return "—";
-  const amount = Number(value);
-  return Number.isFinite(amount) ? `${(amount / 1_000_000).toLocaleString("en-US", { maximumFractionDigits: 0 })}` : "—";
+  const n = value.trim() ? Number(value) : NaN;
+  return Number.isFinite(n) ? `${(n / 1_000_000).toLocaleString("en-US", { maximumFractionDigits: 0 })}` : "—";
 }
 
 export default async function ThemesPage() {
-  const principal = await getServerPrincipal();
-  if (!principal) redirect("/login?from=%2Fresearch%2Fthemes");
-  const groups = await loadThemePurity();
-  const names = await loadEntityDisplayMap();
+  const { data, error } = await loadAuthed("/research/themes", (opts) => api.getThemes(opts));
+  const groups = data?.groups ?? [];
   const headers = ["Rank", "Issuer", "Theme share", "Classified", "In theme (m)", "Consolidated (m)", "Segments", "Period", "Confidence", "Status"];
 
   return (
     <section aria-labelledby="themes-heading" className="space-y-8">
       <div>
         <h1 id="themes-heading" className="text-2xl font-bold tracking-tight">Theme purity</h1>
-        <p className="mt-2 text-sm text-gray-400">
-          What share of each issuer&apos;s revenue a theme accounts for (init.md §0 question 6), read from{" "}
-          <code className="mx-1 rounded bg-card px-1">mart.issuer_theme_purity</code> and computed nowhere here. The
-          denominator is the issuer&apos;s <strong>consolidated</strong> revenue, never the sum of the segments that
-          happened to be classified — a missed segment would otherwise raise every remaining share and rank the
-          issuer with the worst data as the purest name.
-        </p>
-        <p className="mt-2 text-sm text-gray-400">
-          <strong>Classified</strong> is how much of that denominator carries a judgement either way. A 60% share with
-          40% unclassified is a different claim from a 60% share with none, so both are shown; a row whose classified
-          mass fell below the theme&apos;s floor is <strong>refused</strong> rather than ranked, and stays visible so
-          the list does not look more complete than it is.
-        </p>
+        <p className="mt-2 text-sm text-gray-400">Revenue share per theme over consolidated revenue from <code className="mx-1 rounded bg-card px-1">mart.issuer_theme_purity</code>.</p>
       </div>
-
-      {groups.length === 0 ? (
-        <p className="text-sm text-gray-400">
-          No theme purity materialized yet — the weekly standards lane writes the first rows after it lands a segment partition for a governed run.
-        </p>
+      {error && <p className="text-sm text-red-400">{error}</p>}
+      {groups.length === 0 && !error ? (
+        <p className="text-sm text-gray-400">No theme purity materialized yet.</p>
       ) : (
         groups.map((group) => (
-          <div key={group.themeId} className="space-y-3">
+          <div key={group.theme_id} className="space-y-3">
             <div>
               <h2 className="text-lg font-semibold">{group.theme}</h2>
               <p className="text-xs text-gray-500">
-                Definition {group.definitionVersion} (
-                <span className="font-mono" title={group.definitionSha256}>{formatShortSha(group.definitionSha256)}</span>
-                ) · run {group.runId} · cutoff {group.cutoff}
+                Definition {group.definition_version} (<span className="font-mono" title={group.definition_sha256}>{formatShortSha(group.definition_sha256)}</span>) · run {group.run_id} · cutoff {group.cutoff}
               </p>
             </div>
-            <ResearchTable caption={`Issuers ranked by ${group.theme} revenue share at ${group.cutoff}`} headers={headers}>
-              {group.rows.map((row, index) => (
-                <tr key={row.issuerId} className="border-t border-border">
-                  <td className="px-4 py-3">{row.themeShare === null ? "—" : index + 1}</td>
-                  <EntityTh issuerId={row.issuerId} label={entityLabel(row.issuerId, names)} />
-                  {row.themeShare === null ? (
-                    <td className="px-4 py-3 tabular-nums"><span className="text-gray-500">refused</span></td>
-                  ) : (
-                    <PercentTd value={row.themeShare} />
-                  )}
-                  <PercentTd value={classifiedShare(row)} />
-                  <td className="px-4 py-3 tabular-nums" title={row.inThemeRevenue}>{millions(row.inThemeRevenue)}</td>
-                  <td className="px-4 py-3 tabular-nums" title={row.consolidatedRevenue}>{millions(row.consolidatedRevenue)}</td>
-                  <td className="px-4 py-3 tabular-nums">{row.segments}</td>
-                  <td className="px-4 py-3">{row.periodEnd}</td>
-                  <RatioTd value={row.confidence} />
-                  <td className="px-4 py-3 text-xs">
-                    <span title={row.extractor}>{row.availabilityStatus}</span>
-                    {row.reasonCodes.length > 0 && (
-                      <>
-                        {" "}
-                        <span className="ml-1 text-gray-500">({row.reasonCodes.join(", ")})</span>
-                      </>
-                    )}
-                  </td>
+            <ResearchTable caption={`Issuers ranked by ${group.theme}`} headers={headers}>
+              {(group.rows ?? []).map((row, index) => (
+                <tr key={row.issuer_id} className="border-t border-border">
+                  <td className="px-4 py-3">{row.theme_share === null ? "—" : index + 1}</td>
+                  <th scope="row" className="px-4 py-3 font-medium">
+                    <Link href={`/research/entities/${encodeURIComponent(row.issuer_id)}`} className="text-accent hover:underline" title={row.issuer_id}>{row.label}</Link>
+                  </th>
+                  <td className="px-4 py-3 tabular-nums">{row.theme_share === null ? <span className="text-gray-500">refused</span> : formatCell(formatPercentFromFraction(row.theme_share))}</td>
+                  <td className="px-4 py-3 tabular-nums">{formatCell(formatPercentFromFraction(classifiedShare(row)))}</td>
+                  <td className="px-4 py-3 tabular-nums">{millions(row.in_theme_revenue)}</td>
+                  <td className="px-4 py-3 tabular-nums">{millions(row.consolidated_revenue)}</td>
+                  <td className="px-4 py-3 tabular-nums">{formatCell(row.segments)}</td>
+                  <td className="px-4 py-3">{row.period_end}</td>
+                  <td className="px-4 py-3 tabular-nums">{formatCell(formatRatio(row.confidence))}</td>
+                  <td className="px-4 py-3 text-xs">{row.availability_status}</td>
                 </tr>
               ))}
             </ResearchTable>

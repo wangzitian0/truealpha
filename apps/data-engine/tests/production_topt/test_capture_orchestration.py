@@ -4,6 +4,9 @@ from collections.abc import Sequence
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
+from data_engine.contracts.datahub import CaptureWorkItem, ObligationTerminalState
+from data_engine.contracts.evidence_graph import EvidenceEdge, EvidenceNode
+from data_engine.contracts.obligation_reason_codes import ObligationReasonCode
 from data_engine.datahub.production_topt.capture_orchestration import (
     CompositeSourceFetchPort,
     run_topt_capture,
@@ -18,9 +21,6 @@ from data_engine.datahub.production_topt.release_derived_adapter import (
     ReleaseDerivedAdapter,
     ReleaseDerivedRecord,
 )
-from truealpha_contracts.datahub import CaptureWorkItem, ObligationTerminalState
-from truealpha_contracts.evidence_graph import EvidenceEdge, EvidenceNode
-from truealpha_contracts.obligation_reason_codes import ObligationReasonCode
 
 _CUTOFF_D = date(2026, 3, 31)
 _CUTOFF = datetime(2026, 4, 1, tzinfo=UTC)

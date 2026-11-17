@@ -82,8 +82,8 @@ def test_the_weekly_run_covers_every_registered_standard() -> None:
     that list wearing a different hat, and the loop being generic (#799/#800) does not help if
     the only thing that runs it names one.
     """
+    from data_engine.contracts.standards import STANDARDS
     from data_engine.lanes.standards import standards_to_run
-    from truealpha_contracts.standards import STANDARDS
 
     context = dg.build_schedule_context(scheduled_execution_time=datetime(2026, 9, 13, 9, 7, tzinfo=UTC))
     for request in standard_backfill_schedule.evaluate_tick(context).run_requests:

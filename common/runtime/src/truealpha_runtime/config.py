@@ -41,7 +41,11 @@ class CoreRuntimeSettings(BaseSettings):
     )
 
     app_env: str = _schema_field(
-        "dev", "code", "runtime", injected=True, validation_alias=AliasChoices(RuntimeEnvKey.ENVIRONMENT.value, "APP_ENV")
+        "dev",
+        "code",
+        "runtime",
+        injected=True,
+        validation_alias=AliasChoices(RuntimeEnvKey.ENVIRONMENT.value, "APP_ENV"),
     )
     git_commit_sha: str = _schema_field("unknown", "release", "runtime")
     database_url: str = database_url_field()

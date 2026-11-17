@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import type { BacktestValuationRecord } from "@/server/mart/backtest-repository";
+import type { BacktestValuation as BacktestValuationRecord } from "@/client/api";
+import { formatRatio } from "@/client/format";
 
 interface Props {
   valuationsMonthly: BacktestValuationRecord[];
@@ -35,64 +36,29 @@ export function BacktestChart({ valuationsMonthly, valuationsDaily }: Props) {
   const toX = (idx: number, total: number) => pad + (idx / Math.max(total - 1, 1)) * (width - 2 * pad);
   const toY = (val: number) => height - pad - ((val - minNav) / rangeNav) * (height - 2 * pad);
 
-  const renderPath = (
-    data: BacktestValuationRecord[],
-    color: string,
-    strokeWidth = 2,
-    value: (d: BacktestValuationRecord) => number = (d) => (activeTab === "nav" ? d.cum_nav : d.drawdown),
-  ) => {
-    if (data.length === 0) return null;
-    const points = data.map((d, i) => `${toX(i, data.length)},${toY(value(d))}`);
-    return <path d={`M ${points.join(" L ")}`} fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" />;
-  };
+  const renderPath = (data: BacktestValuationRecord[], color: string, sw = 2, val: (d: BacktestValuationRecord) => number = (d) => (activeTab === "nav" ? d.cum_nav : d.drawdown)) =>
+    data.length ? <path d={`M ${data.map((d, i) => `${toX(i, data.length)},${toY(val(d))}`).join(" L ")}`} fill="none" stroke={color} strokeWidth={sw} strokeLinecap="round" strokeLinejoin="round" /> : null;
 
   return (
     <div className="rounded-xl border border-border bg-card p-5">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-4">
         <div className="flex gap-2">
-          {([
-            ["nav", "Cumulative NAV"],
-            ["drawdown", "Underwater Drawdown"],
-          ] as const).map(([tab, label]) => (
-            <button
-              key={tab}
-              type="button"
-              onClick={() => setActiveTab(tab)}
-              className={`rounded-lg px-3 py-1 text-xs font-semibold ${
-                activeTab === tab ? "bg-accent text-white" : "bg-muted text-gray-400 hover:text-white"
-              }`}
-            >
-              {label}
-            </button>
+          {([["nav", "Cumulative NAV"], ["drawdown", "Underwater Drawdown"]] as const).map(([tab, label]) => (
+            <button key={tab} type="button" onClick={() => setActiveTab(tab)} className={`rounded-lg px-3 py-1 text-xs font-semibold ${activeTab === tab ? "bg-accent text-white" : "bg-muted text-gray-400 hover:text-white"}`}>{label}</button>
           ))}
         </div>
-
         <div className="flex items-center gap-2 text-xs">
           <span className="text-gray-400">Resolution:</span>
-          {([
-            ["both", "Both (Overlay)"],
-            ["1M", "Month ends"],
-            ["1D", "Daily"],
-          ] as const).map(([res, label]) => (
-            <button
-              key={res}
-              type="button"
-              onClick={() => setResolution(res)}
-              className={`rounded px-2 py-0.5 ${resolution === res ? "bg-primary text-white" : "text-gray-400"}`}
-            >
-              {label}
-            </button>
+          {([["both", "Both (Overlay)"], ["1M", "Month ends"], ["1D", "Daily"]] as const).map(([res, label]) => (
+            <button key={res} type="button" onClick={() => setResolution(res)} className={`rounded px-2 py-0.5 ${resolution === res ? "bg-primary text-white" : "text-gray-400"}`}>{label}</button>
           ))}
         </div>
       </div>
-
       <div className="relative overflow-x-auto">
         <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-auto">
-          {[minNav, minNav + rangeNav * 0.5, maxNav].map((yVal, idx) => (
-            <line key={idx} x1={pad} y1={toY(yVal)} x2={width - pad} y2={toY(yVal)} stroke="#333" strokeDasharray="4 4" />
-          ))}
-          <text x={pad} y={toY(maxNav) - 8} fill="#888" fontSize="10">{maxNav.toFixed(2)}</text>
-          <text x={pad} y={toY(minNav) + 16} fill="#888" fontSize="10">{minNav.toFixed(2)}</text>
+          {[minNav, minNav + rangeNav * 0.5, maxNav].map((yVal, idx) => <line key={idx} x1={pad} y1={toY(yVal)} x2={width - pad} y2={toY(yVal)} stroke="#333" strokeDasharray="4 4" />)}
+          <text x={pad} y={toY(maxNav) - 8} fill="#888" fontSize="10">{formatRatio(maxNav) ?? String(maxNav)}</text>
+          <text x={pad} y={toY(minNav) + 16} fill="#888" fontSize="10">{formatRatio(minNav) ?? String(minNav)}</text>
           {resolution !== "1D" && renderPath(valuationsMonthly, "#3b82f6", 2.5)}
           {resolution !== "1M" && renderPath(valuationsDaily, "#10b981", 1.5)}
           {renderPath(benchmark, "#a3a3a3", 1.5, (d) => d.benchmark_cum_nav as number)}

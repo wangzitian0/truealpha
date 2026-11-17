@@ -27,23 +27,22 @@ import pytest
 from dagster._core.test_utils import instance_for_test
 from truealpha_runtime.testing import isolated_test_database
 
-ADMIN = Path(__file__).resolve().parents[3] / "apps" / "app-web" / "src" / "server" / "admin"
-PIPELINE = ADMIN / "pipeline.ts"
-OPS = ADMIN / "ops.ts"
+ADMIN = Path(__file__).resolve().parents[3] / "apps" / "llm-service" / "src" / "llm_service" / "services"
+PIPELINE = ADMIN / "admin_service.py"
+OPS = PIPELINE
 KILLED_MESSAGE = "Run timed out due to taking longer than 10800 seconds to complete."
 
 
 def loader_sql(path: Path, name: str) -> str:
-    """The text of `export const <name> = `...`;` in a loader, with its `$n` parameters as named ones."""
-    match = re.search(rf"export const {name} = `(.*?)`;", path.read_text(), re.S)
-    assert match is not None, f"{path} no longer exports {name} as a template literal"
-    sql = match.group(1).replace("%", "%%")
-    return re.sub(r"\$(\d+)", r"%(p\1)s", sql)
+    """The text of `<name> = \"\"\"...\"\"\"` in admin_service.py."""
+    match = re.search(rf'^{name}\s*=\s*"""(.*?)"""', path.read_text(), re.MULTILINE | re.S)
+    assert match is not None, f"{path} no longer defines {name} as a triple-quoted SQL literal"
+    return match.group(1)
 
 
 def loader_number(name: str) -> int:
-    match = re.search(rf"export const {name} = (\d+);", PIPELINE.read_text())
-    assert match is not None, f"{PIPELINE} no longer exports {name} as a number"
+    match = re.search(rf"^{name}\s*=\s*(\d+)", PIPELINE.read_text(), re.MULTILINE)
+    assert match is not None, f"{PIPELINE} no longer defines {name} as a number"
     return int(match.group(1))
 
 

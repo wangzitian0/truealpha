@@ -8,7 +8,7 @@ from decimal import Decimal
 from typing import Any
 
 from psycopg import Connection
-from truealpha_contracts import reconciliation_policies
+from truealpha_runtime import reconciliation_policies
 
 from data_engine.datahub.production_topt.sec_financial_adapter import HeadcountFact
 

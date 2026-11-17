@@ -16,7 +16,7 @@ from typing import get_args
 
 import pytest
 from data_engine.config import settings
-from truealpha_contracts.datahub import NormalizedObservation
+from data_engine.contracts.datahub import NormalizedObservation
 from truealpha_runtime.testing import skip_or_fail
 
 psycopg = pytest.importorskip("psycopg")

@@ -21,7 +21,7 @@ from data_engine.datahub.production_topt.headcount import (
     lookup_headcount,
     record_headcount,
 )
-from truealpha_contracts.reconciliation_policies import HEADCOUNT_RECONCILIATION_POLICY
+from truealpha_runtime.reconciliation_policies import HEADCOUNT_RECONCILIATION_POLICY
 
 _CIK = 9991264
 

@@ -1,73 +1,50 @@
-import { redirect } from "next/navigation";
-import { formatCell, formatUsdMagnitude } from "@/client/format";
+import Link from "next/link";
+import { api } from "@/client/api";
+import { formatCell, formatRatio, formatSignedRatio, formatUsdMagnitude, signColor } from "@/client/format";
+import { valuationBasisLabel } from "@/client/strategy";
 import { AvailabilityBadge, ReadStateNotice } from "@/components/read-state";
-import { NextPageLink } from "@/components/next-page-link";
-import { EntityTh, RatioTd, ResearchTable, SignedRatioTd } from "@/components/research-table";
-import { valuationBasisLabel } from "@/contracts/strategyRun";
-import { loadComparison } from "@/server/dashboard";
-import { entityLabel, loadEntityDisplayMap } from "@/server/mart/entity-resolution";
-import { getServerPrincipal } from "@/server/auth/request-context";
+import { ResearchTable } from "@/components/research-table";
+import { loadAuthed } from "../../_load";
 
 export const dynamic = "force-dynamic";
 
-export default async function ComparePage({ searchParams }: { searchParams: Promise<{ cursor?: string; cutoff?: string }> }) {
-  const principal = await getServerPrincipal();
-  if (!principal) redirect("/login?from=%2Fresearch%2Fcompare");
-  const params = await searchParams;
-  const state = await loadComparison(principal.context, { cutoffAt: params.cutoff, cursor: params.cursor ?? null });
-  const names = await loadEntityDisplayMap();
-  const basisLabel = valuationBasisLabel(
-    state.kind === "ready" ? (state.data.rows.find((row) => row.valuationBasis)?.valuationBasis ?? null) : null,
-  );
-  const headers = [
-    "Issuer",
-    "Capital-adjusted labor efficiency",
-    "Current P/S",
-    `Current ${basisLabel}`,
-    "Tier",
-    `Valuation gap (${basisLabel})`,
-    "Confidence",
-    "Availability",
-  ];
+export default async function ComparePage({ searchParams }: { searchParams: Promise<{ cutoff?: string }> }) {
+  const { cutoff } = await searchParams;
+  const { data, error } = await loadAuthed("/research/compare", (opts) => api.getRankings({ cutoff, universe: "all" }, opts));
+  const rows = data?.rows ?? [];
+  const basisLabel = valuationBasisLabel(rows.find((r) => r.valuation_basis)?.valuation_basis);
+  const headers = ["Issuer", "Capital-adjusted labor efficiency", "Current P/S", `Current ${basisLabel}`, "Tier", `Valuation gap (${basisLabel})`, "Confidence", "Availability"];
 
   return (
     <section aria-labelledby="compare-heading" className="space-y-6">
       <div>
         <h1 id="compare-heading" className="text-2xl font-bold tracking-tight">Issuer comparison</h1>
-        <p className="mt-2 text-sm text-gray-400">
-          Side-by-side operating efficiency and valuation for the materialized universe at one cutoff. Read-only; no cross-issuer metric is computed here.
-        </p>
+        <p className="mt-2 text-sm text-gray-400">Side-by-side operating efficiency and valuation at one cutoff.</p>
       </div>
-
-      <ReadStateNotice state={state} />
-
-      {state.kind === "ready" && (
+      {error && <ReadStateNotice state={{ kind: "error", message: error }} />}
+      {data && !data.available && <ReadStateNotice state={{ kind: "unavailable", reason: data.reason ?? "unavailable" }} />}
+      {data?.available && rows.length > 0 && (
         <>
-          <p className="text-sm text-gray-500">Cutoff {state.data.cutoffAt} — {state.data.page.total} issuer(s).</p>
-          <ResearchTable caption={`Issuer comparison at ${state.data.cutoffAt}`} headers={headers}>
-            {state.data.rows.map((row) => (
-              <tr key={row.issuerId} className="border-t border-border">
-                <EntityTh issuerId={row.issuerId} label={entityLabel(row.issuerId, names)} />
-                <td className="px-4 py-3 tabular-nums" title={row.capitalAdjustedLaborEfficiency ?? undefined}>
-                  {formatCell(formatUsdMagnitude(row.capitalAdjustedLaborEfficiency))}
-                  {row.capitalAdjustedLaborEfficiency !== null && (
-                    <div className="text-[11px] text-gray-500">{row.laborEfficiencyMetric ?? "metric not recorded"}</div>
-                  )}
+          <p className="text-sm text-gray-500">Cutoff {data.cutoff_at} — {data.total} issuer(s).</p>
+          <ResearchTable caption={`Issuer comparison at ${data.cutoff_at ?? ""}`} headers={headers}>
+            {rows.map((row) => (
+              <tr key={row.issuer_id} className="border-t border-border">
+                <th scope="row" className="px-4 py-3 font-medium">
+                  <Link href={`/research/entities/${encodeURIComponent(row.issuer_id)}`} className="text-accent hover:underline" title={row.issuer_id}>{row.label}</Link>
+                </th>
+                <td className="px-4 py-3 tabular-nums">
+                  {formatCell(formatUsdMagnitude(row.capital_adjusted_labor_efficiency))}
+                  {row.capital_adjusted_labor_efficiency && <div className="text-[11px] text-gray-500">{row.labor_efficiency_metric ?? "metric not recorded"}</div>}
                 </td>
-                <RatioTd value={row.currentPriceToSales} />
-                <RatioTd value={row.currentMultiple} />
+                <td className="px-4 py-3 tabular-nums">{formatCell(formatRatio(row.current_price_to_sales))}</td>
+                <td className="px-4 py-3 tabular-nums">{formatCell(formatRatio(row.current_multiple))}</td>
                 <td className="px-4 py-3">{formatCell(row.tier)}</td>
-                <SignedRatioTd value={row.valuationGap} />
-                <RatioTd value={row.confidence} />
-                <td className="px-4 py-3"><AvailabilityBadge status={row.availability} /></td>
+                <td className={`px-4 py-3 tabular-nums ${signColor(row.valuation_gap)}`}>{formatCell(formatSignedRatio(row.valuation_gap))}</td>
+                <td className="px-4 py-3 tabular-nums">{formatCell(formatRatio(row.confidence))}</td>
+                <td className="px-4 py-3"><AvailabilityBadge status={row.availability ?? "unavailable"} /></td>
               </tr>
             ))}
           </ResearchTable>
-          <NextPageLink
-            hasMore={state.data.page.hasMore}
-            nextCursor={state.data.page.nextCursor}
-            href={`/research/compare?cursor=${encodeURIComponent(state.data.page.nextCursor ?? "")}${params.cutoff ? `&cutoff=${encodeURIComponent(params.cutoff)}` : ""}`}
-          />
         </>
       )}
     </section>

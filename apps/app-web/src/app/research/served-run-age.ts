@@ -1,3 +1,5 @@
+/** #575: turn served run cutoff into whole-hour age and 36h staleness verdict. */
+
 export const STALE_HOURS = 36;
 
 export interface ServedRunAge {
@@ -6,6 +8,7 @@ export interface ServedRunAge {
 	stale: boolean;
 }
 
+/** Return null when cutoff cannot be parsed as an instant. */
 export function describeServedRunAge(
 	cutoffIso: string,
 	now: Date = new Date(),

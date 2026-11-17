@@ -1,20 +1,23 @@
+from typing import Any
+
 from pydantic import Field, SecretStr
-from truealpha_runtime import CoreRuntimeSettings, database_url_field
+from truealpha_runtime import RuntimeSettings, database_url_field
 from truealpha_runtime.config import POSTGRES_PROVIDED_BY
 
 #: app stack: postgres is reached over the compose network
 _APP_STACK_DSN = "postgresql://postgres:{POSTGRES_PASSWORD}@truealpha-postgres{env:ENV_SUFFIX}:5432/truealpha"
 
 
-class Settings(CoreRuntimeSettings):
-    """Runtime settings layered on the core runtime contract.
+class Settings(RuntimeSettings):
+    """Runtime settings layered on the runtime contract.
 
-    `llm-service` serves the MCP streamable-HTTP surface and `/health` over `mart`, and
-    its container entrypoint runs `db/apply_migrations.sh`. It never accesses S3 object
-    storage (AGENTS.md red line) and never calls an external LLM API.
+    `llm-service` serves the OpenAPI 3.1 API, MCP streamable-HTTP surface, `/health`,
+    and S3-backed document storage over `mart` and `app`, and its container entrypoint
+    runs `db/apply_migrations.sh`. It never calls an external LLM API.
 
-    There is no fixture backend to select (#434 exit criterion 3): MCP tools read only `mart`, and
-    test doubles inject through `build_mcp_server(repository=...)`, never behind a runtime flag.
+    There is no fixture backend to select (#434 exit criterion 3, 2026-09-07): the MCP
+    tools and OpenAPI endpoints read the real `mart` and `app` schemas and nothing else.
+    AGENTS.md: fixture data lives in tests only and is never reachable from a deployed route.
     """
 
     database_url: str = database_url_field(composed_from=_APP_STACK_DSN)
@@ -31,6 +34,23 @@ class Settings(CoreRuntimeSettings):
             "provided_by": POSTGRES_PROVIDED_BY,
             "composed_from": _APP_STACK_DSN,
         },
+    )
+
+    secret_key: SecretStr = Field(
+        default=SecretStr(""),
+        description="HS256 session signing key",
+        json_schema_extra={"source": "runtime", "injected": True, "sensitive": True, "group": "auth"},
+    )
+    access_token_expire_minutes: int = Field(
+        default=60 * 24 * 7,
+        ge=1,
+        description="Session token lifetime in minutes",
+        json_schema_extra={"source": "code", "group": "auth"},
+    )
+    s3_documents_prefix: str = Field(
+        default="documents",
+        description="Object key prefix for stored documents",
+        json_schema_extra={"source": "code", "group": "s3"},
     )
 
     # The credential the MCP route requires (#42, init.md rule 21). A client sends it as
@@ -62,4 +82,24 @@ class Settings(CoreRuntimeSettings):
     )
 
 
-settings = Settings()
+class _LazySettings:
+    """Defer Settings() validation until first access so cold imports stay side-effect free (#1375)."""
+
+    def __init__(self) -> None:
+        object.__setattr__(self, "_instance", None)
+
+    def _get(self) -> Settings:
+        inst = object.__getattribute__(self, "_instance")
+        if inst is None:
+            inst = Settings()
+            object.__setattr__(self, "_instance", inst)
+        return inst  # type: ignore[no-any-return]
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._get(), name)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        setattr(self._get(), name, value)
+
+
+settings: Any = _LazySettings()

@@ -3,10 +3,12 @@ import {
   readStateMessage,
   type ReadState,
   type ReadStateOverrides,
-} from "@/server/read-state";
-import type { Availability } from "@/server/mart/research-read";
+} from "@/client/read-state";
+export type { ReadState };
 
-const AVAILABILITY_STYLE: Record<Availability, string> = {
+type Availability = "available" | "unavailable" | "stale" | "excluded" | "low_confidence" | "error" | string;
+
+const AVAILABILITY_STYLE: Record<string, string> = {
   available: "border-emerald-500/40 text-emerald-300",
   unavailable: "border-gray-600 text-gray-400",
   stale: "border-amber-500/40 text-amber-300",
@@ -18,12 +20,15 @@ const AVAILABILITY_STYLE: Record<Availability, string> = {
 
 export function AvailabilityBadge({ status }: { status: Availability }) {
   return (
-    <span className={`inline-block rounded-full border px-2 py-0.5 text-xs font-medium ${AVAILABILITY_STYLE[status]}`}>
+    <span
+      className={`inline-block rounded-full border px-2 py-0.5 text-xs font-medium ${AVAILABILITY_STYLE[status] ?? AVAILABILITY_STYLE.unavailable}`}
+    >
       {status}
     </span>
   );
 }
 
+/** Renders the notice for a non-ready state (`ready` and `stale` render data). */
 export function ReadStateNotice({
   state,
   overrides,

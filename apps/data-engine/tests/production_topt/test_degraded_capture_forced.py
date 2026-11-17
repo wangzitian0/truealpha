@@ -18,6 +18,8 @@ import psycopg
 import pytest
 from data_engine import raw_store
 from data_engine.config import settings
+from data_engine.contracts.datahub import CaptureWorkItem
+from data_engine.contracts.obligation_reason_codes import ObligationReasonCode
 from data_engine.datahub.production_topt import composition
 from data_engine.datahub.production_topt.composition import (
     CaptureNotPublishableError,
@@ -43,8 +45,6 @@ from data_engine.datahub.production_topt.sec_financial_adapter import (
     SecTarget,
 )
 from factors.production_topt import OperatingBranch
-from truealpha_contracts.datahub import CaptureWorkItem
-from truealpha_contracts.obligation_reason_codes import ObligationReasonCode
 from truealpha_runtime.testing import InMemoryRawObjectStore as _InMemoryObjectStore
 from truealpha_runtime.testing import isolated_test_database
 
@@ -384,7 +384,7 @@ def _live_topt_tick(url: str, monkeypatch, *, executed_at: datetime, force_fetch
 
 
 def _context():
-    from truealpha_contracts.access import AccessContext, AuthenticationMethod, PrincipalKind
+    from truealpha_runtime.access import AccessContext, AuthenticationMethod, PrincipalKind
 
     issued = datetime(2026, 9, 16, tzinfo=UTC)
     return AccessContext(
@@ -400,8 +400,8 @@ def _context():
 
 
 def _served_report(url: str):
-    from truealpha_contracts.strategy_run import StrategyRunReport
-    from truealpha_contracts.strategy_run_postgres import PostgresStrategyRunRepository
+    from truealpha_runtime.strategy_run import StrategyRunReport
+    from truealpha_runtime.strategy_run_postgres import PostgresStrategyRunRepository
 
     report = PostgresStrategyRunRepository(database_url=url).get_latest(strategy_id=_STRATEGY, context=_context())
     assert isinstance(report, StrategyRunReport), report
@@ -565,7 +565,7 @@ def test_reuse_prefers_the_forced_capture_of_the_same_tick(tick_database_url, mo
     """#874: at tie-break, the forced capture is the newer look at the vendor, and it wins."""
     # The bar is dated as production dates it (#530 item 1, #1060). `as_of` (-> valid_from)
     # is the settled session of the cutoff, 2026-04-21 (verified with
-    # truealpha_contracts.calendar.settled_session_for_cutoff). It follows the corpus anchor
+    # data_engine.contracts.calendar.settled_session_for_cutoff). It follows the corpus anchor
     # (2026-03-31), so the reuse and the freeze must judge it at the cutoff day.
     # `knowable_at` must equal that session, because the reuse check
     # `_is_settled_session` requires it. `price_cutoff` is the settled session too: the
@@ -617,7 +617,7 @@ def test_reuse_prefers_the_forced_capture_of_the_same_tick(tick_database_url, mo
 def test_a_forced_tick_that_advances_the_head_is_read_once_through_its_own_run(tick_database_url, monkeypatch) -> None:
     """#877's live defect, confirmed: a forced TOPT tick shares the scheduled tick's cutoff."""
     from data_engine.datahub.question_coverage import peg_cells
-    from truealpha_contracts.strategy_run_postgres import LATEST_RUN_SQL, latest_run_params
+    from truealpha_runtime.strategy_run_postgres import LATEST_RUN_SQL, latest_run_params
 
     # Settled session vs. run clock, same as above (#530 item 1).
     day = date(2026, 3, 31)
@@ -668,7 +668,7 @@ def test_a_forced_tick_that_advances_the_head_is_read_once_through_its_own_run(t
 def test_a_degraded_forced_tick_advances_head_as_degraded(tick_database_url, monkeypatch) -> None:
     """Under weak gate policy, a degraded forced tick advances the head monotonically with degraded telemetry."""
     from data_engine.datahub.question_coverage import peg_cells
-    from truealpha_contracts.strategy_run_postgres import LATEST_RUN_SQL, latest_run_params
+    from truealpha_runtime.strategy_run_postgres import LATEST_RUN_SQL, latest_run_params
 
     # Settled session vs. run clock, same as above (#530 item 1).
     day = date(2026, 3, 31)

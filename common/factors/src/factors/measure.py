@@ -2,18 +2,64 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import date, datetime
 from decimal import Decimal
 
-from truealpha_contracts.measure import (
-    FiscalPeriod,
-    Measure,
-    MeasureUnit,
-    Money,
-    PerUnit,
-    Units,
-)
+from truealpha_contracts.fiscal_period import FiscalPeriod as AnnualFiscalPeriod
 from truealpha_contracts.metrics import INPUT_KEY_ALIASES, METRICS, UnitFamily
+
+FiscalPeriod = str | date | tuple[date, date] | AnnualFiscalPeriod
+
+
+def _ne_str(val: object, name: str) -> None:
+    if not isinstance(val, str) or not val.strip():
+        raise ValueError(f"{name} must be a non-empty string")
+
+
+@dataclass(frozen=True)
+class Money:
+    currency: str
+
+    def __post_init__(self) -> None:
+        _ne_str(self.currency, "Money.currency")
+
+
+@dataclass(frozen=True)
+class Units:
+    instrument_id: str
+
+    def __post_init__(self) -> None:
+        _ne_str(self.instrument_id, "Units.instrument_id")
+
+
+@dataclass(frozen=True)
+class PerUnit:
+    currency: str
+    instrument_id: str
+
+    def __post_init__(self) -> None:
+        _ne_str(self.currency, "PerUnit.currency")
+        _ne_str(self.instrument_id, "PerUnit.instrument_id")
+
+
+MeasureUnit = Money | Units | PerUnit
+
+
+@dataclass(frozen=True)
+class Measure:
+    value: Decimal
+    unit: MeasureUnit
+    period: FiscalPeriod | None = None
+    knowable_at: datetime | None = None
+    subject: str = ""
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.value, Decimal):
+            object.__setattr__(self, "value", Decimal(str(self.value)))
+        if not isinstance(self.unit, (Money, Units, PerUnit)):
+            raise TypeError("Measure.unit must be Money, Units, or PerUnit")
+
 
 UNIT_MISMATCH_REASON = "unit_mismatch"
 DEFAULT_REPORTING_CURRENCY = "USD"

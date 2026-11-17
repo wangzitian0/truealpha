@@ -112,9 +112,9 @@ def test_canonical_uuid_resolves_signed_predecessor_via_entity_aliases(connectio
         },
         connection=connection,
     )
+    from data_engine.contracts.datahub import CaptureWorkItem
     from data_engine.datahub.production_topt.executor import FetchSuccess
     from data_engine.sources import sec
-    from truealpha_contracts.datahub import CaptureWorkItem
 
     work_item = CaptureWorkItem(
         campaign_id="capture-campaign:" + "1" * 64,

@@ -9,6 +9,7 @@ from decimal import Decimal
 from typing import Any
 
 import pytest
+from data_engine.contracts.standards import STANDARDS
 from data_engine.datahub.fetch_key import FetchKey
 from data_engine.datahub.standards import backfill as backfill_module
 from data_engine.datahub.standards.backfill import run_standard_backfill
@@ -25,7 +26,6 @@ from data_engine.datahub.standards.filing_extraction import (
 from data_engine.datahub.standards.planner import UniverseIssuer, open_cells, resolve_missing_ciks
 from data_engine.sources.gateway import SourceCapacity, SourceGateway
 from truealpha_contracts.models import RawCapture, RawIngestionEnvelope, RawObjectRef
-from truealpha_contracts.standards import STANDARDS
 
 CUTOFF = datetime(2026, 9, 4, 22, 15, tzinfo=UTC)
 STANDARD = STANDARDS["employees_total"]

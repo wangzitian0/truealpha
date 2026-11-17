@@ -118,7 +118,7 @@ export async function runHydrationRace({
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const visitProblems = [];
   try {
-    const login = await context.request.post(`${proxy.url}/api/auth/login`, { data: { email, password } });
+    const login = await context.request.post(`${proxy.url}/api/v1/auth/login`, { data: { email, password } });
     if (login.status() !== 200) {
       return {
         problems: [`[hydration-race] login answered HTTP ${login.status()}`],
