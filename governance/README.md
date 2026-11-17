@@ -4,7 +4,7 @@ This directory holds records, not enforcement. Nothing here gates a merge. CI do
 
 ## What remains
 
-- `approvals/<env>.yaml`: the reviewed capture approval of each environment. `tools/release_identity.py` reads it at run time. infra2 injects the value as `CAPTURE_APPROVED_BY`.
+- `approvals/<env>.yaml`: the reviewed capture approval of each environment. `data_engine.release_identity` and `infra2` read it at release time. infra2 injects the value as `CAPTURE_APPROVED_BY`.
 - `sources/model-provider-zhipu-glm-coding-plan.v1.json`: the admission record of the model provider (`init.md` rule 19).
 - `gate0/issue-60.source-readiness.candidate-v1.json`: the source readiness record. Every source except the model provider is still `missing` there (`init.md` rule 19).
 - `reviews/large_model_value_v0-definition-1.0.0.md`: the owner review of strategy definition 1.0.0 (#1235), with its content hash and the production replay.

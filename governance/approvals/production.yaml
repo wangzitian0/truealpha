@@ -1,4 +1,4 @@
-# Reviewed human decision (#759). Read at the release SHA by tools/release_identity.py and
+# Reviewed human decision (#759). Read at the release SHA by infra2 and
 # injected by infra2 as CAPTURE_APPROVED_BY; it is not a secret and lives in no secret store.
 scope: production-topt-live
 capture_approved_by: zitian

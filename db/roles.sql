@@ -46,8 +46,7 @@ revoke select on app.conversation_audit_metadata from app_runtime;
 
 -- Document lifecycle (#373, migration 0031). Same RLS-scoped shape as
 -- conversations above. Revisions and tombstones are fully append-only (no
--- UPDATE grant at all); tickets get the same redeemed_at-only column grant
--- as clarification_tokens.
+-- UPDATE grant at all); tickets receive a redeemed_at-only UPDATE column grant.
 grant select, insert on app.research_documents, app.research_document_revisions,
     app.research_document_tombstones to app_runtime;
 grant select, insert, update (redeemed_at) on app.research_document_download_tickets to app_runtime;

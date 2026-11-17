@@ -34,7 +34,7 @@ def test_health(monkeypatch: pytest.MonkeyPatch):
     _stub_no_db_when_unarmed(monkeypatch)
     resp = TestClient(app).get("/health")
     assert resp.status_code == 200
-    # data_engine_parser is asserted separately (common/runtime test_health_check.py): it
+    # data_engine_parser is asserted separately (infra2_sdk.runtime.health): it
     # reports the DATA ENGINE's vintage, which has no HTTP surface of its own (#712). With
     # no database in a unit test the honest answer is "unknown" -- and it must never raise.
     payload = resp.json()
@@ -58,7 +58,7 @@ def test_health(monkeypatch: pytest.MonkeyPatch):
 
 
 def test_health_reports_the_deployed_git_sha() -> None:
-    """#508: tools/health_check.py needs this to confirm the deployed release is live."""
+    """#508: infra2 deploy health probes use this to confirm the deployed release is live."""
     from truealpha_runtime.testing import run_python_probe
 
     probe = (

@@ -15,13 +15,11 @@ from data_engine.datahub.repository import (
     ToptCaptureMetaInfo,
     ToptCaptureStatus,
 )
-from data_engine.datahub.topt_read import PostgresToptReadRepository
 
 __all__ = [
     "AttemptLedger",
     "CaptureRepositoryConflictError",
     "PostgresEvidenceGraphRepository",
-    "PostgresToptReadRepository",
     "PostgresCaptureControlRepository",
     "PostgresToptCoreRepository",
     "ToptCaptureMetaInfo",

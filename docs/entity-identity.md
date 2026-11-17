@@ -303,7 +303,6 @@ UUIDs without touching them.
   - `standards/planner.py`;
   - `confidence_report._CIK_ID`;
   - `theme_purity`;
-  - `canary_oracles`, which has literal `issuer:cik:` ids;
   - `holdings_enrichment`, which also writes aliases directly from PR-5 on.
 - **Mart.**
   - A new `mart.entity_identity` (`entity_id`, `kind`, current ticker, name, CIK, LEI,
@@ -329,7 +328,7 @@ UUIDs without touching them.
 
     | Consumer | Field | Fixed by |
     |---|---|---|
-    | `topt_read.py` / `topt-gppe-repository.ts` | `listing_id` | #954 / PR #967 |
+    | `topt_read.py` (historical) / `topt-gppe-repository.ts` | `listing_id` | #954 / PR #967 |
     | `strategy_run_postgres.py` / `strategy-run-repository.ts` | `issuer_id` | #953 |
     | `research_report` / `research_card` MCP tools | `subject_id` | #953, via the strategy-run read they wrap |
     | `entity-resolution.ts` | keyed by both the UUID and the `legacy_id` | #953 |
@@ -547,7 +546,7 @@ holding type.
    - Add `mart.entity_identity`, and move `entity_display_resolution` and
      `fund_holdings_valuation` onto it.
    - Switch the readers in §6 to alias lookups: `confidence_report`, `theme_purity`,
-     `canary_oracles`, and the predecessor lookup (D4).
+     and the predecessor lookup (D4).
    - Scope the strategy-input reader by run (H4) and the standards ticker map by head (H6).
    - Add the walk-tree UUID pattern.
    - Add a `mart` bridge from legacy ids to UUIDs for head-to-head comparisons across the
