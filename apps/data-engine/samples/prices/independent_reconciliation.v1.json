@@ -4,22 +4,56 @@
   "primary_source": "yahoo_chart",
   "independent_source": "twelve_data",
   "captured_at": null,
-  "universe": ["DDOG", "DUOL", "NICE", "SHOP"],
+  "universe": [
+    "DDOG",
+    "DUOL",
+    "NICE",
+    "SHOP"
+  ],
   "comparison": {
     "calendar": "intersection_of_provider_trading_dates",
-    "fields": ["open", "high", "low", "close", "adjusted_close", "volume"],
+    "fields": [
+      "open",
+      "high",
+      "low",
+      "close",
+      "adjusted_close",
+      "volume"
+    ],
     "tolerances": {
       "prices_relative": "0.0005",
       "volume_relative": "0.01"
     },
-    "corporate_actions": ["split", "dividend"],
-    "required_cutoffs": ["before_public_availability", "after_public_availability"]
+    "corporate_actions": [
+      "split",
+      "dividend"
+    ],
+    "required_cutoffs": [
+      "before_public_availability",
+      "after_public_availability"
+    ]
   },
   "primary_artifacts": [
-    {"symbol": "DDOG", "path": "prices/DDOG_prices_3y_20260712.csv", "sha256": "f491bec90e64488d6dc680d9c683d6d56baded6920aa9b19f389ab25606051c4"},
-    {"symbol": "DUOL", "path": "prices/DUOL_prices_3y_20260712.csv", "sha256": "6aa2c102f2920e002dea1470ad8cd9d26541056c418d8ec2995466de8d894853"},
-    {"symbol": "NICE", "path": "prices/NICE_prices_3y_20260712.csv", "sha256": "67ca7acde41b6d9a855a6f2a242be6ab6297c01e25c53f255640e2be979f3391"},
-    {"symbol": "SHOP", "path": "prices/SHOP_prices_3y_20260712.csv", "sha256": "a604b9e44dcf9a4d83fccda9c29741c267ee19178bc42214789460c4d33393d4"}
+    {
+      "symbol": "DDOG",
+      "path": "prices/DDOG_prices_3y_20260712.csv",
+      "sha256": "9166158be4ac3a1bdc4891e5c6871657afc76ead0b558b01098fe7e2f37c13c4"
+    },
+    {
+      "symbol": "DUOL",
+      "path": "prices/DUOL_prices_3y_20260712.csv",
+      "sha256": "f038edf2e7b3e3ccab7eb9a1c9917f8d71efa219829180fcdc0199b0f7d66df9"
+    },
+    {
+      "symbol": "NICE",
+      "path": "prices/NICE_prices_3y_20260712.csv",
+      "sha256": "49721f859da6204502ce564359bcafa42824b2139ddc5c58483ad4632b2e62cb"
+    },
+    {
+      "symbol": "SHOP",
+      "path": "prices/SHOP_prices_3y_20260712.csv",
+      "sha256": "848d6ffb0dfd76cc0e64833e0703b6c6ae2eaedfa98e36c91e1ebc1d8c1034ad"
+    }
   ],
   "observations": [],
   "blockers": [

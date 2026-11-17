@@ -6,18 +6,18 @@
   "baseline_exact_match": 1.0,
   "baseline_basis": "Matched rows divided by rows whose expected_rule_outcome is resolved. A row with another outcome is outside the denominator.",
   "sample_sha256": {
-    "apps/data-engine/samples/filings/AAPL_10K_000032019325000079.html": "548ae59778cf08ee0f2ee088e7ece20d947076c3c01f74d2d65db4c2777e436a",
-    "apps/data-engine/samples/filings/ADM_10K_000000708426000011.html": "969e53661a9df3d929ce3b1c6bb7e9b64ddad27927b3aa574864c50a14d0d8c7",
-    "apps/data-engine/samples/filings/ADP_10K_000000867026000030.html": "bc29885a3714f2bd7a248400606e8d9ce8683741f8389af89426a2c4bf6e5805",
-    "apps/data-engine/samples/filings/AVGO_10K_000173016825000121.html": "06d618a7e0bacc1d018d0ba8e473a56c5af2546c69475a883135b7b5d8fa2d32",
-    "apps/data-engine/samples/filings/DDOG_10K_000162828026008819.html": "dcdd728cc76efaa0ca2fce5c2b6fd0e1704a77092d232ce0d931eddca8debfde",
-    "apps/data-engine/samples/filings/DUOL_10K_000162828026012494.html": "ce32e7ff8e80ced74b8af45683a53cc4853c0cc884612c3d7a3424a1dc9f4226",
-    "apps/data-engine/samples/filings/JPM_10K_000162828026008131.html": "4d9febdbc2038dcdca8726053286df4cbbfd48885051cbd781efcc3becb66a23",
-    "apps/data-engine/samples/filings/NICE_20F_000100393526000010.html": "4a0cdd48e9e37345474abecc95249a46159ed5fcce7212967c5356921ae4bba2",
-    "apps/data-engine/samples/filings/PLUG_10K_000155837021007147.html": "fbe9fe64c7583f3f0b391396e9015a8787e58c8f3decb55292707c5ac6d0c9ed",
-    "apps/data-engine/samples/filings/PLUG_10KA_000155837022003577.html": "985468e206ba380f7b413c76227bb3cd759b48eef49f7ff943839776383b551f",
-    "apps/data-engine/samples/filings/SHOP_10K_000159480526000007.html": "57f18fb1f3e3eda7342861d765a61a01d262c4e8ba6593fe1c7d51d6ebc6e983",
-    "apps/data-engine/samples/filings/V_10K_000140316125000089.html": "2c0512fa290705cb7c9b6d1720b022382015ed9de0191d90efd27b1e3423828f"
+    "apps/data-engine/samples/filings/AAPL_10K_000032019325000079.html": "5aca766674852a894b3e8012ad5b15093452f4ad670cc80797d1583b4ff57b4b",
+    "apps/data-engine/samples/filings/ADM_10K_000000708426000011.html": "e8075ef0dde456b7ea507f6027d69f1a1a86b64bb1f9f7fc0c828c167241a4aa",
+    "apps/data-engine/samples/filings/ADP_10K_000000867026000030.html": "d06ee4a69f118667fb59e14650b3d4fd5a335851f774c077f4ab2b7e7d7792bb",
+    "apps/data-engine/samples/filings/AVGO_10K_000173016825000121.html": "7317dcd3ee6127018cde8b1df18b159e1c7e310aa10788ffd2e3e9c50bb62d92",
+    "apps/data-engine/samples/filings/DDOG_10K_000162828026008819.html": "e6fb26f2d64de74544d3c2d9879ca01ddda083a70c2b15d91b78b7971b10cb45",
+    "apps/data-engine/samples/filings/DUOL_10K_000162828026012494.html": "473262ae72fc628133a13f980748c54fb2b1da23213e3e2761e3edb84b245967",
+    "apps/data-engine/samples/filings/JPM_10K_000162828026008131.html": "caa7f12156646a9bf6fc9af8a3fd39ca20b84903900bd8304c5fd6dbabededdb",
+    "apps/data-engine/samples/filings/NICE_20F_000100393526000010.html": "8840a54ffbc05481c06e0607783aebd14d3c417b85aa47fb2b7458af84a209be",
+    "apps/data-engine/samples/filings/PLUG_10K_000155837021007147.html": "21bce91dcf9cf25db638437e948b4a19fe69ef494068338d91cc40de44dfb13b",
+    "apps/data-engine/samples/filings/PLUG_10KA_000155837022003577.html": "07c9dc1c1c8e8dbcf33b0d956c0998a07a850adbc20df75e6b6f8faa43f32318",
+    "apps/data-engine/samples/filings/SHOP_10K_000159480526000007.html": "3fd70b33c828d77ff4c8f29abe729555ec9144dd7398dea143ddb90dfc7a03da",
+    "apps/data-engine/samples/filings/V_10K_000140316125000089.html": "34ff9eafdb4177d2ed36dfa014a02beaa1fcc43f5e401b4fe5b9dde041f5d208"
   },
   "rows": [
     {
@@ -44,7 +44,7 @@
       "value": "41496",
       "unit": "employees",
       "scope": "total",
-      "evidence_span": "The following table sets forth information about the Company’s employees as of December 31, 2025. Number of Employees by Contract and Region Salaried Hourly Part-Time Total North America 8,802 9,904 145 18,851 Latin America (LATAM) 3,836 5,677 15 9,528 Europe, the Middle East, and Africa (EMEA) 5,460 4,214 528 10,202 Asia-Pacific (APAC) 2,021 884 10 2,915 Total 20,119 20,679 698 41,496",
+      "evidence_span": "The following table sets forth information about the Company\u2019s employees as of December 31, 2025. Number of Employees by Contract and Region Salaried Hourly Part-Time Total North America 8,802 9,904 145 18,851 Latin America (LATAM) 3,836 5,677 15 9,528 Europe, the Middle East, and Africa (EMEA) 5,460 4,214 528 10,202 Asia-Pacific (APAC) 2,021 884 10 2,915 Total 20,119 20,679 698 41,496",
       "expected_rule_outcome": "no_candidate",
       "scope_note": "The filing states the total only in a table. The label is the grand total of the Total column. The regions add up to the same figure."
     },

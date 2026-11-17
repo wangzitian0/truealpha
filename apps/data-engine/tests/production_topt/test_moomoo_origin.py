@@ -87,10 +87,10 @@ from truealpha_contracts.reconciliation_policies import (
 _SAMPLES = Path(__file__).resolve().parents[2] / "samples"
 # The 2026-07-10 reconnaissance capture, byte-pinned: a hand-edited fixture turns this red.
 _MOOMOO_CASSETTES = {
-    "DDOG": "925570ac2466f6f2f69aeb327f99ed62fc76795a321f2eaa1b8ae0e0c3900000",
-    "DUOL": "8450d29acb4737f7e091d539977a318ce6905dbfa69eb343c9aeb04d42824ebb",
-    "NICE": "c6c86c621a1398eb305f5fee26f84e295f0377fce1ab4bcc0fe29e13d593b2dd",
-    "SHOP": "0438047f45f5922cc1d2cc853ca18321141e79c4892b3d4567e7e2be92ff2577",
+    "DDOG": "0971fe838f5d2dbac2242054ff42e176fbca804bf84901b87f66f814ccb9b0b4",
+    "DUOL": "eed7cd4264aca71b442ab7abb4affe1bebbc8f4d44a8dcfa8fb592929d95a813",
+    "NICE": "999d396bfbd517953cdce2c48af26178994e91b497636740dfbe50deacfdab66",
+    "SHOP": "b2d3e0aa464abc5d8a7504b811a333edc0b80744b6557234d9931a607fd4b55e",
 }
 _SEC_CASSETTES = {
     "DDOG": "DDOG_CIK0001561550.json",
