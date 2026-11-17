@@ -1,8 +1,10 @@
 # Raw sample fixtures
 
-Real API/filing responses, byte-for-byte as returned by the source (no local
-redaction — see "A note on masked-looking fields" below), captured
-**2026-07-09** from the VPS (the same host truealpha deploys to, identified as
+Real API/filing responses compacted in Wave 2 Phase 4 (`#1654`) into minimal
+content-addressed golden fixtures (`<= 15,000` total lines) preserving all XBRL
+contexts, concepts, headcount spans, N-PORT holdings, and Moomoo statements
+(see "A note on masked-looking fields" below), captured **2026-07-09** from the
+VPS (the same host truealpha deploys to, identified as
 `$VPS_HOST` in infra2 — not published here; not from a local laptop, so these
 reflect the network/IP conditions the real ingestion pipeline will see).
 
