@@ -1873,34 +1873,6 @@ from seed
 where not exists (select 1 from mart.served_artifact as present where present.artifact_key = seed.artifact_key)
 on conflict (artifact_key) do nothing;
 
-grant select on mart.fund_holdings to mart_readonly;
-grant select on mart.fund_holdings_valuation to mart_readonly;
-grant select on mart.question_coverage_report to mart_readonly;
-grant select on mart.question_coverage_report to app_ops_reader;
-grant select on mart.fund_virtual_company to mart_readonly;
-grant select on mart.fund_holdings_resolved to mart_readonly;
-grant select on mart.fund_holdings_coverage to mart_readonly;
-grant select on mart.fund_virtual_company to app_ops_reader;
-grant select on mart.issuer_theme_purity to mart_readonly;
-grant select on mart.issuer_theme_purity to app_ops_reader;
-grant select on mart.datahub_confidence_report to mart_readonly;
-grant select on mart.datahub_confidence_report to app_ops_reader;
-grant select on mart.nightly_verdicts to mart_readonly;
-grant select on mart.issuer_analyst_ratings to mart_readonly;
-grant select on mart.issuer_analyst_ratings to app_ops_reader;
-grant select on mart.issuer_supply_chain_exposure to mart_readonly;
-grant select on mart.issuer_supply_chain_exposure to app_ops_reader;
-grant select on mart.nightly_verdicts to app_ops_reader;
-grant select on mart.metric_node_values to mart_readonly;
-grant select on mart.metric_node_values to app_ops_reader;
-grant select on mart.macro_series, mart.macro_series_daily, mart.macro_series_current, mart.macro_series_status to mart_readonly;
-grant select on mart.macro_series, mart.macro_series_daily, mart.macro_series_current, mart.macro_series_status to app_ops_reader;
-grant select on mart.cell_confidence to mart_readonly;
-grant select on mart.cell_confidence to app_ops_reader;
-grant select on mart.research_card_artifacts to mart_readonly;
-grant select on mart.research_card_artifacts to app_ops_reader;
-grant select on mart.entity_identity to mart_readonly;
-
 do $$
 declare
     tbl text;

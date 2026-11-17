@@ -2218,10 +2218,3 @@ where not exists (
     where issuer_id = 'issuer:lei:J3WHBG0MTS7O8ZVMDC91'
 )
 on conflict (issuer_id) do nothing;
-
-grant usage on schema staging to app_ops_reader;
-grant select on staging.etf_constituent_facts to app_ops_reader;
-grant select on staging.accepted_rulesets to app_ops_reader;
-grant select on staging.accepted_ruleset_head to app_ops_reader;
-grant select on staging.contract_objects to app_ops_reader;
-grant select on staging.api_call_ledger to app_ops_reader;

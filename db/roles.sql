@@ -222,6 +222,13 @@ grant select on mart.datahub_confidence_report to app_ops_reader;
 grant select on mart.topt_capture_status to app_ops_reader;
 grant select on mart.nightly_verdicts to app_ops_reader;
 grant select on mart.oracle_outcomes to app_ops_reader;
+grant select on mart.cell_confidence to app_ops_reader;
+grant select on mart.fund_virtual_company to app_ops_reader;
+grant select on mart.issuer_analyst_ratings to app_ops_reader;
+grant select on mart.issuer_supply_chain_exposure to app_ops_reader;
+grant select on mart.issuer_theme_purity to app_ops_reader;
+grant select on mart.macro_series, mart.macro_series_daily, mart.macro_series_current, mart.macro_series_status to app_ops_reader;
+grant select on mart.metric_node_values to app_ops_reader;
 grant select on mart.research_card_artifacts to mart_readonly;
 grant select on mart.research_card_artifacts to app_ops_reader;
 -- The Capacity section (#671) derives capture-window durations from the
