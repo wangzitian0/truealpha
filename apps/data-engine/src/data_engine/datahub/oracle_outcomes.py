@@ -13,13 +13,13 @@ from typing import Any, Protocol
 
 import psycopg
 from factors.production_topt import MetricAvailability, ToptCoreSnapshotInput
-from truealpha_contracts.environment_contract import SentinelKnownAnswer, load_sentinel_known_answers
 from truealpha_contracts.metrics import INPUT_KEY_ALIASES, METRICS
 from truealpha_contracts.models import DataSource
-from truealpha_contracts.oracle_policy import load_oracle_policy
 from truealpha_runtime.storage import StorageError
 
 from data_engine import raw_store
+from data_engine.contracts.oracle_policy import load_oracle_policy
+from data_engine.contracts.sentinel_known_answers import SentinelKnownAnswer, load_sentinel_known_answers
 from data_engine.datahub._helpers import CAPTURE_OBSERVATION_JOIN, fetch_topt_cutoff
 from data_engine.datahub.production_topt.source_registrations import AsOfAxis, knowable_instant
 from data_engine.datahub.production_topt.universe_plane import UNIVERSE_SOURCES

@@ -6,25 +6,20 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "generate:api": "openapi-typescript openapi.json -o src/client/openapi.generated.ts && bun -e 'const f=\"src/client/openapi.generated.ts\",fs=require(\"fs\");let s=fs.readFileSync(f,\"utf8\").replace(/\\/\\*[\\s\\S]*?\\*\\//g,\"\").split(/\\r?\\n/).map(l=>l.trim()).filter(l=>l&&!/^[a-zA-Z0-9_?]+:\\s*never;?$/.test(l)&&!/^parameters:\\s*\\{\\s*\\};?$/.test(l)).join(\" \").replace(/\\s*([{};:,])\\s*/g,\"$1\").replace(/export(interface|type)/g,\"\\nexport $1\").replace(/(\\\"\\/[^\"]+\\\":\\{)/g,\"\\n$1\");fs.writeFileSync(f,\"// Auto-generated from openapi.json\\n\"+s.trim()+\"\\n\");'"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.1090.0",
-    "@smithy/node-http-handler": "^4.9.7",
-    "bcryptjs": "^3.0.3",
-    "jose": "^6.2.3",
     "next": "16.4.2",
-    "pg": "^8.22.0",
     "react": "^18",
     "react-dom": "^18"
   },
   "devDependencies": {
-    "@types/bcryptjs": "^3.0.0",
     "@types/node": "^20",
-    "@types/pg": "^8.20.0",
     "@types/react": "^18",
     "@types/react-dom": "^18",
     "autoprefixer": "^10.4.23",
+    "openapi-typescript": "^7.6.1",
     "playwright": "1.58.2",
     "postcss": "^8.5.10",
     "tailwindcss": "^3.4.1",

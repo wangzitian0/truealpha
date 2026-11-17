@@ -1,0 +1,295 @@
+{
+  "unlock": {
+    "end_to_end": {"environment": "production", "universe": "qqq"},
+    "verdict": {"name": "job_run_health", "environment": "production", "consecutive_green_nights": 3}
+  },
+  "sentinels": ["AAPL", "GOOGL", "GOOG", "ASML", "HBAN", "CINF", "JPM", "NVDA", "BRK.B", "CRWD"],
+  "universe_map": {
+    "topt": ["universe:topt-us-", "topt"],
+    "qqq": ["universe:qqq-us-", "universe-list:qqq"],
+    "sp500": ["universe:sp500-us-", "universe-list:sp500"],
+    "canary": ["universe:canary-us-", "universe-list:canary"]
+  },
+  "scheduled_envs": [
+    ["production", ["topt", "qqq"]],
+    ["prod", ["topt", "qqq"]],
+    ["staging", ["topt"]],
+    ["preview", []],
+    ["dev", []]
+  ],
+  "base_cap": {
+    "description": "test",
+    "ceiling_mib": 1536,
+    "ceiling_source": "test",
+    "server_margin": 0.2,
+    "concurrent_runs": 2,
+    "server_processes": 1,
+    "processes_per_run": 1,
+    "measured": {
+      "at": "2026-10-21",
+      "environment": "staging",
+      "method": "test",
+      "grpc_server_hwm_mib": 200.0,
+      "fresh_import_hwm_mib": 180.0,
+      "working_run_hwm_mib": 380.0,
+      "source": "test"
+    }
+  },
+  "cap_run_mib": [
+    [{"ceiling_mib": 2048}, 596],
+    [{"ceiling_mib": 1429}, 380],
+    [{"concurrent_runs": 3, "ceiling_mib": 2048}, 397],
+    [{"concurrent_runs": 4, "ceiling_mib": 4096}, 656],
+    [{"processes_per_run": 2, "ceiling_mib": 4096}, 656],
+    [{"server_processes": 2, "ceiling_mib": 2048}, 476]
+  ],
+  "cap_margins": [[0.1, 220], [0.2, 240], [0.201, 241], [0.5, 300]],
+  "cap_invalid": [
+    {"server_margin": 0}, {"server_margin": -0.1}, {"concurrent_runs": 1}, {"concurrent_runs": 3},
+    {"concurrent_runs": 5}, {"ceiling_mib": 1426}, {"ceiling_mib": 768}, {"ceiling_mib": 0}
+  ],
+  "bad_seats": [
+    ["retry", {"max_attempts": 3}, "below min_total_wait_seconds"],
+    ["retry", {"max_backoff_seconds": 5, "max_attempts": 7}, "below min_total_wait_seconds"],
+    ["retry", {"deadline_seconds": 60}, "deadline_seconds 60 is below"],
+    ["retry", {"transient_provider_codes": ["1302", "1113"]}, "transient and terminal"],
+    ["retry", {"jitter_percent": -1}, "greater than or equal to 0"],
+    ["seat", {"environments": {"production": {"max_concurrent_calls": 2, "calls_per_minute": 10, "probe_offset_minutes": 0}, "staging": {"max_concurrent_calls": 1, "calls_per_minute": 3, "probe_offset_minutes": 6}}}, "closer than slot_minutes"],
+    ["seat", {"environments": {"production": {"max_concurrent_calls": 0, "calls_per_minute": 10, "probe_offset_minutes": 0}}}, "greater than or equal to 1"],
+    ["seat", {"probe": {"hour_utc": 6, "slot_minutes": 6, "attempt_timeout_seconds": 60, "launch_margin_seconds": 60}}, "below the longest probe of 7 minutes"],
+    ["seat", {"probe": {"hour_utc": 6, "slot_minutes": 7, "attempt_timeout_seconds": 120, "launch_margin_seconds": 60}}, "below the longest probe of 8 minutes"]
+  ],
+  "bad_env_seats": [
+    [[["pop", "model_seat.environments.staging"]], "staging calls live vendors and declares no model seat limits"],
+    [[["set", "model_seat.environments.qa", {"max_concurrent_calls": 1, "calls_per_minute": 1, "probe_offset_minutes": 30}]], "name unknown environments"]
+  ],
+  "bad_applicability": [
+    [[["set", "metric_applicability.0.universe", "unknown_universe"]], "unknown universe"]
+  ],
+  "head_scheduled": [
+    ["universe:topt-us-2026-03-31", "production", true],
+    ["universe:topt-us-2026-03-31", "staging", true],
+    ["universe:qqq-us-2026-09-30", "production", true],
+    ["universe:qqq-us-2026-09-30", "staging", false],
+    ["universe:sp500-us-2026-09-30", "production", false],
+    ["universe:sp500-us-2026-09-30", "staging", false],
+    ["universe:canary-us-2026-09-30", "production", true],
+    ["universe:canary-us-2026-09-30", "staging", true],
+    ["universe:unknown-us-2026-09-30", "staging", true],
+    ["universe:qqq-us-2026-09-30", "unknown-env", true],
+    ["universe:qqq-us-2026-09-30", "preview", true]
+  ],
+  "expects_verdict": [
+    ["theme_purity@universe-list:qqq", "production", true],
+    ["theme_purity@universe-list:qqq", "prod", true],
+    ["theme_purity@universe-list:qqq", "staging", false],
+    ["question_coverage@universe-list:qqq", "staging", false],
+    ["datahub_confidence_report@universe-list:qqq", "staging", false],
+    ["datahub_confidence_report@universe-list:qqq", "production", true],
+    ["theme_purity@topt", "staging", true],
+    ["theme_purity@topt", "production", true],
+    ["theme_purity@universe-list:sp500", "production", false],
+    ["job_run_health", "staging", true],
+    ["fetch_keys_once", "staging", false],
+    ["fetch_keys_once", "production", false],
+    ["retired_check@topt", "production", false],
+    ["theme_purity@universe-list:qqq", "dev", true],
+    ["theme_purity@universe-list:qqq", null, true]
+  ],
+  "env_mutations": [
+    [[["set", "environments.production.universes.2.unlock", "$UNLOCK"]], "Extra inputs are not permitted"],
+    [[["set", "environments.production.universes.0.unlock", "$UNLOCK"]], "Extra inputs are not permitted"],
+    [[["append", "environments.production.universes", {"key": "topt", "status": "scheduled"}]], "listed twice"],
+    [[["append", "environments.staging.universes", {"key": "qqq", "status": "scheduled"}]], "differ"],
+    [[["pop", "environments.staging.ticks.topt"]], "differ"],
+    [[["set", "environments.production.strategy_universe", "topt"]], "strategy_universe"],
+    [[["set", "environments.production.ticks.qqq.scheduled", true]], "scheduled"],
+    [[["set", "universes.qqq.id_prefix", "universe:topt-us-"]], "share a id_prefix"],
+    [[["set", "universes.qqq.lane_name", "topt"]], "share a lane_name"],
+    [[["pop", "universes.qqq.membership.url"]], "needs url"],
+    [[["set", "universes.topt.membership.url", "https://example.invalid"]], "holds \\['url'\\]"],
+    [[["pop", "universes.topt.cron.staging"]], "differ"],
+    [[["set", "universes.qqq.cron.staging", "20 23 * * *"]], "differ"],
+    [[["pop", "universes.sp500"], ["pop", "environments.production.ticks.sp500"]], "no record"],
+    [[["set", "universes.qqq.roles", ["unknown"]]], "roles"]
+  ],
+  "vendor_fz_limit": {
+    "id": "per_ten_seconds_probe",
+    "unit": "request",
+    "amount": 1,
+    "window_seconds": 10,
+    "counts_per": "not_stated",
+    "evidence": {"kind": "published", "source": ["https://example.com/limits"], "checked_at": "2026-10-27"}
+  },
+  "vendor_shares": {
+    "twelvedata": {"per_minute": [1, 1, 4], "per_day": [160, 160, 480]},
+    "sec_edgar": {"per_second": [2, 2, 6]},
+    "openfigi": {"per_minute": [50, 50, 150]},
+    "moomoo_opend": {"burst": [6, 6, 18], "kline_stocks": [null, null, null]}
+  },
+  "vendor_invalid": [
+    [[["set", "vendor_accounts.default_percent.production", 61]], "sum past 100"],
+    [[["set", "vendor_accounts.default_percent.preview", -1]], "0 to 100"],
+    [[["pop", "vendor_accounts.default_percent.preview"]], "percent table names"],
+    [[["set", "vendor_accounts.default_percent.dev", 0]], "percent table names|Input should be"],
+    [[["set", "vendor_accounts.accounts.twelvedata.percent.production", 61]], "sum past 100"],
+    [[["pop", "vendor_accounts.accounts.twelvedata.percent_reason"]], "percent_reason go together"],
+    [[["set", "vendor_accounts.accounts.openfigi.percent_reason", "Because."]], "percent_reason go together"],
+    [[["upd", "vendor_accounts.accounts.model_plan", {"percent": {"preview": 0, "staging": 0, "production": 0}, "percent_reason": "Because."}]], "outside consumers has no percent"],
+    [[["append", "vendor_accounts.accounts.yahoo.seats", "sec"]], "belongs to two accounts"],
+    [[["set", "vendor_accounts.accounts.model_plan.seats", ["another-seat"]]], "belongs to no vendor account"],
+    [[["set", "vendor_accounts.accounts.twelvedata.limits.1.id", "per_minute"]], "limit id is listed twice"],
+    [[["set", "vendor_accounts.accounts.twelvedata.limits.1.window_seconds", 60]], "share one window"],
+    [[["pop", "vendor_accounts.accounts.twelvedata.limits.0.evidence.checked_at"]], "published evidence needs"],
+    [[["pop", "vendor_accounts.accounts.twelvedata.limits.0.evidence.source"]], "published evidence needs"],
+    [[["set", "vendor_accounts.accounts.twelvedata.limits.0.evidence.source", ["http://twelvedata.com/pricing"]]], "no https URL"],
+    [[["set", "vendor_accounts.accounts.twelvedata.limits.0.evidence.method", "a page read"]], "stray"],
+    [[["set", "vendor_accounts.accounts.twelvedata.limits.0.evidence.checked_at", "26-10-27"]], "pattern"],
+    [[["set", "vendor_accounts.accounts.twelvedata.limits.0.amount", null]], "needs an amount"],
+    [[["pop", "vendor_accounts.accounts.twelvedata.limits.0.window_seconds"]], "needs a window"],
+    [[["set", "vendor_accounts.accounts.twelvedata.limits.0.amount", 0]], "greater than 0"],
+    [[["set", "vendor_accounts.accounts.twelvedata.limits.0.evidence", {"kind": "not_known", "reason": "None."}]], "carries no amount"],
+    [[["set", "vendor_accounts.accounts.twelvedata.limits.0.evidence", {"kind": "none_published", "reason": "None."}]], "carries no amount"],
+    [[["set", "vendor_accounts.accounts.twelvedata.limits.0.evidence", {"kind": "not_known"}]], "not_known evidence needs"],
+    [[["set", "vendor_accounts.accounts.twelvedata.limits.0.evidence", {"kind": "measured", "checked_at": "2026-10-27"}]], "measured evidence needs"],
+    [[["set", "vendor_accounts.accounts.twelvedata.limits.0.evidence", {"kind": "self_imposed", "checked_at": "2026-10-27"}]], "self_imposed evidence needs"],
+    [[["set", "vendor_accounts.accounts.twelvedata.limits.0.evidence", {"kind": "guessed"}]], "Input should be"]
+  ],
+  "strategy_v1": {
+    "bands": [
+      ["traditional", null, "1000000", "7.50", "10.00"],
+      ["tech", "1000000", "3000000", "11.43", "14.29"],
+      ["large_model_native", "3000000", null, "26.67", "40.00"]
+    ],
+    "ps": {"traditional": ["3", "4", "0.40"], "tech": ["8", "10", "0.70"], "large_model_native": ["20", "30", "0.75"]},
+    "pins": {"financial": ["gppe_banking_tce", "v2"], "non_financial": ["gppe", "production-topt-v0.2.0"], "insurance": ["gppe", "production-topt-v0.2.0"]},
+    "issuers": ["issuer:nice", "issuer:adm", "issuer:shop", "issuer:ddog", "issuer:jpm"],
+    "ora_keys": [
+      "capital_adjusted_labor_efficiency", "tier", "current_price_to_sales", "target_price_to_sales",
+      "current_price_to_gross_profit", "target_price_to_gross_profit", "valuation_gap",
+      "outcome", "exclusion_reason", "rank", "target_weight"
+    ],
+    "shared_attrs": ["schedule", "price_to_sales", "price_to_gross_profit", "tier_valuation", "valuation_gap", "selection", "sizing", "execution", "transaction_cost", "total_return"],
+    "hash_variants": [
+      [["set", "tier_valuation.bands.0.target_pgp_lower_bound", "7.49"]],
+      [["set", "tier_valuation.bands.2.target_pgp_upper_bound", "40.01"]],
+      [["set", "tier_valuation.bands.0.labor_efficiency_upper_bound", "999999"], ["set", "tier_valuation.bands.1.labor_efficiency_lower_bound", "999999"]],
+      [["set", "eligibility.minimum_confidence", "0.75"]],
+      [["set", "selection.selection_count", 3]],
+      [["set", "tier_valuation.bands.1.target_pgp_upper_bound", "15.00"]],
+      [["set", "labor_efficiency.factor_version", "0.2.0"]],
+      [["set", "transaction_cost.basis_points", "10"]],
+      [["upd", "labor_efficiency", {"factor_version": "0.2.0", "denominator": "labor_cost_salaries_plus_esop", "unit": {"dimension": "dimensionless", "unit_code": "ratio"}, "missing_denominator_reason": "missing_labor_cost_disclosure", "nonpositive_denominator_reason": "nonpositive_labor_cost"}]]
+    ],
+    "ff": {
+      "numerator": "gross_profit",
+      "capital_charge_base": "total_assets",
+      "denominator": "headcount",
+      "formula": "(numerator-capital_charge_base*risk_free_rate)/denominator",
+      "missing_numerator_reason": "missing_gross_profit_fact",
+      "missing_capital_base_reason": "missing_total_assets_fact",
+      "missing_denominator_reason": "missing_headcount_disclosure",
+      "nonpositive_denominator_reason": "nonpositive_headcount"
+    },
+    "cff": {
+      "rule_id": "minimum_consumed_confidence_floor",
+      "minimum_confidence": "0.70",
+      "confidence_semantics": "minimum_consumed_input_confidence",
+      "below_floor_reason": "below_confidence_floor"
+    },
+    "ps_tier_valuation": {
+      "factor_key": "three_tier_valuation",
+      "factor_version": "0.1.0",
+      "boundary_rule": "lower_inclusive_upper_exclusive",
+      "target_ps_selection": "band_midpoint",
+      "provisional_thresholds": true,
+      "unit": {"dimension": "dimensionless", "unit_code": "ratio"},
+      "quantization": {"decimal_places": 4, "rounding": "half_even"},
+      "bands": [
+        {"tier": "traditional", "labor_efficiency_lower_bound": null, "labor_efficiency_upper_bound": "1000000", "target_ps_lower_bound": "3.00", "target_ps_upper_bound": "4.00"},
+        {"tier": "tech", "labor_efficiency_lower_bound": "1000000", "labor_efficiency_upper_bound": "3000000", "target_ps_lower_bound": "8.00", "target_ps_upper_bound": "10.00"},
+        {"tier": "large_model_native", "labor_efficiency_lower_bound": "3000000", "labor_efficiency_upper_bound": null, "target_ps_lower_bound": "20.00", "target_ps_upper_bound": "30.00"}
+      ]
+    },
+    "frozen_bad": [
+      [[["pop", "price_to_gross_profit"]], "price_to_gross_profit factor definition"],
+      [[["upd", "valuation_gap", {"rule_id": "target_ps_over_current_ps_minus_one", "formula": "target_ps/current_ps-1"}]], "multiple of the tier bands"],
+      [[["set", "provisional_semantics", true]], "provisional_thresholds"],
+      [[["set", "provisional_semantics", true], ["set", "tier_valuation", "$PS_TV"], ["upd", "valuation_gap", {"rule_id": "target_ps_over_current_ps_minus_one", "formula": "target_ps/current_ps-1"}]], "a P/GP tier valuation requires exactly the price_to_gross_profit factor definition"],
+      [[["set", "tier_valuation.bands.1.labor_efficiency_lower_bound", "1000001"]], "contiguous"]
+    ],
+    "live_bad": [
+      [[["set", "eligibility.minimum_confidence", "0.70"]], "all present or all absent"],
+      [[["set", "labor_efficiency.numerator", "gross_profit"]], "all present or all absent"],
+      [[["upd", "labor_efficiency", "$FF"]], "one owner"],
+      [[["pop", "labor_efficiency_tree_keys"]], "one owner"]
+    ],
+    "golden_dual_basis": {
+      "capital_adjusted_labor_efficiency": "1",
+      "tier": "traditional",
+      "current_price_to_sales": "1",
+      "target_price_to_sales": "1",
+      "current_price_to_gross_profit": "1",
+      "target_price_to_gross_profit": "1",
+      "valuation_gap": "0",
+      "eligible": true,
+      "outcome": "rejected_valuation_above_tier_band",
+      "exclusion_reason": null,
+      "rank": null,
+      "target_weight": null
+    }
+  },
+  "deleted_contract_modules": [
+    "gates", "policy_bundle", "market", "documents", "conversations", "capture_contracts",
+    "readiness", "catalog", "service_demand", "usage", "registries", "data_quality",
+    "metric_node_read", "topt_read", "strategy_run_fixture"
+  ],
+  "deleted_de_quality": ["confidence", "strategy_samples"],
+  "deleted_factors": ["composite.registered_composite_probe", "base.registered_semantic_probe"],
+  "deleted_scripts": [
+    "datahub_quality_report.py", "refresh_etf_universe.py", "run_production_topt_capture.py",
+    "materialize_production_topt_core.py", "query_production_topt_datahub.py"
+  ],
+  "deleted_app_web": [
+    "src/app/research/conversations/page.tsx",
+    "src/app/research/conversations/[id]/page.tsx",
+    "src/server/conversations-actions.ts",
+    "src/server/conversations-answer.ts",
+    "src/server/conversations.ts",
+    "src/contracts/issue58.ts",
+    "tests/conversations-answer.test.ts",
+    "tests/conversations-validation.test.ts",
+    "tests/issue58-conformance.test.ts"
+  ],
+  "stable_id_probes": {
+    "copies": [
+      "^[a-zA-Z0-9][a-zA-Z0-9._:/@+-]*$",
+      "^[0-9A-Za-z][-+@/:_.0-9A-Za-z]*$",
+      "^[a-z0-9][a-z0-9._:/@+\\-]*$",
+      "^raw(?:\\.[a-z][a-z0-9_]*)+:[A-Za-z0-9][A-Za-z0-9._:/@+\\-]*$",
+      "[A-Za-z0-9][A-Za-z0-9._:/@+\\-]*",
+      "^[A-Za-z0-9][A-Za-z0-9._:/@+~\\-]*$"
+    ],
+    "non_copies": [
+      "[._:/@+\\-]",
+      "[^a-z0-9]+",
+      "<[^>]+>",
+      "\\s*([^<\\s]+)\\s*<",
+      "^[a-z][a-z0-9._:/-]*$",
+      "^[0-9A-Za-z][0-9A-Za-z._/-]{0,199}$",
+      "^[A-Za-z_][A-Za-z0-9_.-]*$"
+    ]
+  },
+  "ca_snippets": {
+    "pos": [
+      "def c(m, *, id_field, prefix):\n    payload = m.model_dump(mode='json')\n    digest = canonical_sha256(payload)\n    object.__setattr__(m, 'content_sha256', digest)\n    object.__setattr__(m, id_field, f'{prefix}:{digest}')\n",
+      "def c(m, *, id_field, prefix):\n    payload = m.model_dump(mode='json')\n    digest = common.canonical_sha256(payload)\n    object.__setattr__(m, 'content_sha256', digest)\n    object.__setattr__(m, id_field, f'{prefix}:{digest}')\n",
+      "def c(m, *, id_field, prefix):\n    digest = canonical_sha256(m.model_dump(mode='json'))\n    expected_id = f'{prefix}:{digest}'\n    object.__setattr__(m, 'content_sha256', digest)\n    object.__setattr__(m, id_field, expected_id)\n",
+      "def c(m, *, id_field, prefix):\n    digest = canonical_sha256(m.model_dump(mode='json'))\n    expected_id = f'{prefix}:{digest}'\n    object.__setattr__(m, 'content_sha256', digest)\n    object.__setattr__(m, id_field, f\"{prefix}:{digest}\")\n"
+    ],
+    "neg": [
+      "def f(s):\n    p = tuple(sorted(s.p, key=lambda x: x.n))\n    if canonical_sha256(s.d) != s.h: raise ValueError('bad')\n    object.__setattr__(s, 'p', p)\n",
+      "def f(s, m, *, id_field):\n    d = canonical_sha256(m.model_dump(mode='json'))\n    if d != s.e: raise ValueError(f'{id_field} != {d}')\n    object.__setattr__(s, 'checked', True)\n"
+    ]
+  }
+}

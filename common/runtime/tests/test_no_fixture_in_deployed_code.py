@@ -179,8 +179,8 @@ def test_the_closure_walk_is_not_vacuous() -> None:
         *DEPLOYED_ENTRY_POINTS,
         "llm_service.mcp_server",
         "truealpha_contracts",
-        "truealpha_contracts.research_report_mart",
-        "truealpha_contracts.strategy_run_postgres",
+        "truealpha_runtime.research_report_mart",
+        "truealpha_runtime.strategy_run_postgres",
         # Loaded by import_module from strings: the Dagster lanes and a source route builder.
         "data_engine.lanes.backtest",
         "data_engine.lanes.market_data",
@@ -192,7 +192,7 @@ def test_the_closure_walk_is_not_vacuous() -> None:
 
 def test_the_reach_check_catches_the_2026_10_20_shape() -> None:
     """The exact source of #42, and the shapes next to it, each named."""
-    path = REPO / "common/contracts/src/truealpha_contracts/research_report_mart.py"
+    path = REPO / "common/runtime/src/truealpha_runtime/research_report_mart.py"
     shapes = {
         "from truealpha_contracts.research_report_fixture import FixtureResearchReadRepository\n"
         "class MartResearchReadRepository(FixtureResearchReadRepository):\n    pass\n": 3,
@@ -204,7 +204,7 @@ def test_the_reach_check_catches_the_2026_10_20_shape() -> None:
         'ROUTE = "truealpha_contracts.strategy_run_fixture:build_route"\n': 1,
     }
     for source, expected in shapes.items():
-        found = _fixture_reaches("truealpha_contracts.research_report_mart", path, ast.parse(source))
+        found = _fixture_reaches("truealpha_runtime.research_report_mart", path, ast.parse(source))
         assert len(found) == expected, (source, found)
-    clean = "from truealpha_contracts.strategy_run_postgres import PostgresStrategyRunRepository\n"
-    assert _fixture_reaches("truealpha_contracts.x", path, ast.parse(clean)) == []
+    clean = "from truealpha_runtime.strategy_run_postgres import PostgresStrategyRunRepository\n"
+    assert _fixture_reaches("truealpha_runtime.x", path, ast.parse(clean)) == []

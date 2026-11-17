@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import calendar
 import hashlib
+import re
 import uuid
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
@@ -189,21 +190,15 @@ def test_coverage_can_be_required_where_the_data_is_real(
 
 
 def test_the_governed_head_matches_the_consumer_that_serves_it() -> None:
-    """Review caught the invariants inventing their own run resolution: `order by
-    created_at desc` picked a GPPE run nothing serves — production's pointer
-    targets capture-run:8c49eec8… while the newest row belongs to
-    capture-run:49a1f57e…. Checking a run no consumer reads is not checking a
-    published number.
-
-    So this asserts the Python and the TypeScript scope the head identically. The
-    duplication is deliberate (a Python tool cannot call a TS repository) and
-    therefore needs a guard — #462's defect is exactly this read reimplemented
-    without one. PR #1686 moved the inline consumer SQL into the shared
-    `POINTER_HEAD_SQL` of `mart/db.ts`, reached through `resolveGovernedHeadRunId`."""
-    consumer = (REPO_ROOT / "apps/app-web/src/server/mart/topt-gppe-repository.ts").read_text()
-    assert "resolveGovernedHeadRunId" in consumer, "consumer no longer resolves the governed head"
-    shared = (REPO_ROOT / "apps/app-web/src/server/mart/db.ts").read_text()
-    head = shared.split("POINTER_HEAD_SQL", 1)[1].split("`", 2)[1]
+    """One head for BOTH the invariants and the backend: compares the SQL in
+    `research_report_mart.py` (`POINTER_HEAD_SQL`), imported and called via `resolve_governed_head_run_id`."""
+    mart_text = (REPO_ROOT / "common/runtime/src/truealpha_runtime/research_report_mart.py").read_text()
+    service_text = (REPO_ROOT / "apps/llm-service/src/llm_service/services/research_service.py").read_text()
+    assert "POINTER_HEAD_SQL" in service_text, "backend no longer imports shared POINTER_HEAD_SQL"
+    assert re.search(r"(?<!def )\bresolve_governed_head_run_id\s*\(", service_text), (
+        "backend no longer calls resolve_governed_head_run_id"
+    )
+    head = mart_text.split("POINTER_HEAD_SQL", 1)[1].split('"""', 2)[1]
     for predicate in (
         "served_head",
         "factor_id = 'gross_profit_per_employee'",
@@ -212,7 +207,7 @@ def test_the_governed_head_matches_the_consumer_that_serves_it() -> None:
         assert predicate in head, f"the consumer no longer scopes the head by {predicate!r}"
         assert predicate in _module.GOVERNED_HEAD, (
             f"the invariants resolve the governed head without {predicate!r}, so they check a run "
-            f"the App does not serve"
+            f"the backend does not serve"
         )
     # #756: Each consumer's head query must carry no environment literal
     assert "'production'" not in head, "consumer carries 'production' literal (#756)"
@@ -239,23 +234,15 @@ def _run_ordering(sql: str) -> str:
 
 
 def test_the_strategy_run_matches_the_consumer_that_serves_it() -> None:
-    """Same, for the strategy plane: the App surfaces the latest run PER
-    strategy_key, not the latest across all strategies.
-
-    The first version asserted the ordering against a literal on the PYTHON side
-    and checked the TypeScript side only for `where strategy_key = $1`. Breaking
-    the consumer's ordering on purpose walked straight past it — a one-sided
-    consistency check, which is #462's defect committed inside the guard written
-    to prevent #462. Both sides are now read out and compared to each other, so
-    changing either alone is what turns this red.
-    """
-    ts = (REPO_ROOT / "apps/app-web/src/server/mart/strategy-run-repository.ts").read_text()
-    consumer = ts.split("LATEST_RUN_SQL", 1)[1].split("`", 2)[1]
-    assert "where r.strategy_key = $2" in " ".join(consumer.split())
+    """Same, for the strategy plane: the shared Python repository serves the latest run PER
+    strategy_key matching data-engine's invariants."""
+    repo_src = (REPO_ROOT / "common/runtime/src/truealpha_runtime/strategy_run_postgres.py").read_text()
+    consumer = repo_src.split("LATEST_RUN_SQL", 1)[1].split('"""', 2)[1]
+    assert "where r.strategy_key = %s" in " ".join(consumer.split())
     assert f"strategy_key = '{_module.DASHBOARD_STRATEGY}'" in " ".join(_module.LATEST_STRATEGY_RUN.split())
     served, judged = _run_ordering(consumer), _run_ordering(_module.LATEST_STRATEGY_RUN)
     assert served == judged, (
-        f"the App orders runs by {served!r} and the invariants by {judged!r}, so the invariants "
+        f"the consumer orders runs by {served!r} and the invariants by {judged!r}, so the invariants "
         f"judge a run nobody serves"
     )
 

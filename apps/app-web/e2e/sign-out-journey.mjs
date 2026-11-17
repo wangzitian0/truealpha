@@ -47,7 +47,7 @@ export const CONTROL = "[data-sign-out]";
 // has hydrated with its click handler. The server render never carries it.
 export const HYDRATED_CONTROL = '[data-sign-out][data-hydrated="true"]';
 const PROTECTED_PATH = "/research";
-const LOGOUT_PATH = "/api/auth/logout";
+const LOGOUT_PATH = "/api/v1/auth/logout";
 
 /** @typedef {{ hydrationMs: number, signOutMs: number, clickMs: number }} Timeouts */
 
@@ -231,7 +231,7 @@ const VIEWPORT = { width: 1440, height: 900 };
 async function signIn(browser, { base, email, password }) {
   const context = await browser.newContext({ viewport: VIEWPORT });
   try {
-    const login = await context.request.post(`${base}/api/auth/login`, { data: { email, password } });
+    const login = await context.request.post(`${base}/api/v1/auth/login`, { data: { email, password } });
     if (login.status() !== 200) {
       console.error(`login failed for the sign-out journey: ${login.status()}`);
       await context.close();

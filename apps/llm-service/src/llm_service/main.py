@@ -14,6 +14,7 @@ from truealpha_runtime.boot import assert_environment
 from truealpha_runtime.telemetry import telemetry_config_error
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
+from llm_service.api.v1 import admin, auth, research
 from llm_service.config import settings
 from llm_service.mcp_auth import BearerTokenGate
 from llm_service.mcp_server import mcp
@@ -151,6 +152,10 @@ def _data_engine_health_extra() -> dict[str, Any]:
         "nightly_verdicts": verdicts,
     }
 
+
+app.include_router(auth.router)
+app.include_router(research.router)
+app.include_router(admin.router)
 
 # Replace FastMCP's default Rich stderr handler so init_service installs SDK stdout JSON logging.
 logging.getLogger().handlers.clear()

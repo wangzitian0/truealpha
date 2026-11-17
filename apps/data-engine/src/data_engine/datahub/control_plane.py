@@ -7,15 +7,16 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-from truealpha_contracts.capture_control import CaptureListObligation, CaptureListVersion
-from truealpha_contracts.datahub import (
+from truealpha_contracts.universe import SubjectKind, UniverseRef
+
+from data_engine.contracts.capture_control import CaptureListObligation, CaptureListVersion
+from data_engine.contracts.datahub import (
     FetchAttempt,
     FetchAttemptOutcome,
     FetchAttemptResult,
     ListObligation,
     RetryPolicy,
 )
-from truealpha_contracts.universe import SubjectKind, UniverseRef
 
 
 def replay_retry_policy(max_attempts: int) -> RetryPolicy:

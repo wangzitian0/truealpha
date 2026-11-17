@@ -1,4 +1,4 @@
-"""The six init.md §0 questions bound to the factor columns that answer them (#748, rule 24)."""
+"""The six init.md §0 questions bound to the factor columns that answer them."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from dataclasses import asdict, dataclass
 from enum import StrEnum
 from types import MappingProxyType
 
-from truealpha_contracts.common import canonical_sha256
+from truealpha_contracts.common import canonical_sha256, load_data_json
 from truealpha_contracts.environment_contract import UniverseRole
 from truealpha_contracts.universes import record, universe_of
 
@@ -23,18 +23,6 @@ class Question(StrEnum):
     Q4_ANALYST_TRACK_RECORD = "q4"
     Q5_ETF_VIRTUAL_COMPANY = "q5"
     Q6_THEME_PURITY = "q6"
-
-
-QUESTION_TEXT: MappingProxyType[Question, str] = MappingProxyType(
-    {
-        Question.Q1_MODEL_LEVERAGE: "Is this company actually leveraged by large models?",
-        Question.Q2_VALUATION_VS_GROWTH: "Is the current valuation reasonable relative to growth?",
-        Question.Q3_SUPPLY_CHAIN_EXPOSURE: "What is this company exposed to, up and down its supply chain?",
-        Question.Q4_ANALYST_TRACK_RECORD: "Is a given analyst's track record worth trusting?",
-        Question.Q5_ETF_VIRTUAL_COMPANY: 'Does an ETF/portfolio "look like" a healthy company when treated as one?',
-        Question.Q6_THEME_PURITY: 'Who\'s the "purest" name under a given theme?',
-    }
-)
 
 
 @dataclass(frozen=True)
@@ -62,63 +50,33 @@ class QuestionRequirement:
         return bool(self.columns)
 
 
-def _qr(
-    question: Question,
-    col: FactorColumn,
-    tracking_issue: str,
-    standards: tuple[str, ...] = (),
-    scope: QuestionScope = QuestionScope.ISSUER,
-) -> QuestionRequirement:
-    return QuestionRequirement(
-        question=question, columns=(col,), standards=standards, tracking_issue=tracking_issue, scope=scope
+_REG = load_data_json("registries.v1.json")
+QUESTION_TEXT: MappingProxyType[Question, str] = MappingProxyType(
+    {Question(k): v for k, v in _REG["question_text"].items()}
+)
+QUESTION_REQUIREMENTS: tuple[QuestionRequirement, ...] = tuple(
+    QuestionRequirement(
+        Question(i["question"]),
+        tuple(FactorColumn(**c) for c in i["columns"]),
+        tuple(i["standards"]),
+        i["tracking_issue"],
+        QuestionScope(i["scope"]),
     )
-
-
-QUESTION_REQUIREMENTS: tuple[QuestionRequirement, ...] = (
-    _qr(
-        Question.Q1_MODEL_LEVERAGE,
-        FactorColumn("mart.topt_gppe_results", "gppe", "gross_profit_per_employee", 2),
-        "#528",
-        ("employees_total",),
-    ),
-    _qr(Question.Q2_VALUATION_VS_GROWTH, FactorColumn("mart.strategy_decisions", "peg", "peg", 1, "strategy"), "#284"),
-    _qr(
-        Question.Q3_SUPPLY_CHAIN_EXPOSURE,
-        FactorColumn("mart.issuer_supply_chain_exposure", "exposure_score", "supply_chain_exposure", 3),
-        "#772",
-    ),
-    _qr(
-        Question.Q4_ANALYST_TRACK_RECORD,
-        FactorColumn("mart.issuer_analyst_ratings", "consensus_rating", "analyst_track_record", 4),
-        "#771",
-    ),
-    _qr(
-        Question.Q5_ETF_VIRTUAL_COMPANY,
-        FactorColumn(
-            "mart.fund_virtual_company", "weighted_valuation_gap", "etf_virtual_company", 5, "fund_consolidation"
-        ),
-        "#36",
-        scope=QuestionScope.FUND,
-    ),
-    _qr(
-        Question.Q6_THEME_PURITY,
-        FactorColumn("mart.issuer_theme_purity", "theme_share", "theme_purity", 6),
-        "#772",
-        ("segment_revenue",),
-    ),
+    for i in _REG["question_requirements"]
 )
 
 
 def requirements_payload(requirements: tuple[QuestionRequirement, ...] = QUESTION_REQUIREMENTS) -> list[dict]:
+    cols = lambda r: [asdict(c) for c in r.columns]  # noqa: E731
     return [
         {
-            "question": item.question.value,
-            "columns": [asdict(column) for column in item.columns],
-            "standards": list(item.standards),
-            "scope": item.scope.value,
-            "tracking_issue": item.tracking_issue,
+            "question": r.question.value,
+            "columns": cols(r),
+            "standards": list(r.standards),
+            "scope": r.scope.value,
+            "tracking_issue": r.tracking_issue,
         }
-        for item in requirements
+        for r in requirements
     ]
 
 

@@ -14,8 +14,8 @@ from typing import Any, Literal
 from factors.shared import extraction as extraction_primitive
 from truealpha_contracts.models import DataSource
 from truealpha_contracts.ports import RawObjectStore
-from truealpha_contracts.standards import MetricStandard, confidence_for
 
+from data_engine.contracts.standards import MetricStandard, confidence_for
 from data_engine.datahub.fetch_key import FetchKey
 from data_engine.datahub.production_topt.headcount import record_headcount
 from data_engine.datahub.production_topt.issuer_registry import ANNUAL_STATEMENT_FORMS, STATEMENT_FORMS

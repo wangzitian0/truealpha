@@ -31,7 +31,7 @@ from pathlib import Path
 
 from data_engine.datahub.production_topt.twelve_data_origin import parse_last_settled_close
 from data_engine.sources.yahoo import _parse_chart_response
-from truealpha_contracts.reconciliation_policies import RECONCILIATION_POLICY
+from truealpha_runtime.reconciliation_policies import RECONCILIATION_POLICY
 
 _CASSETTES = Path(__file__).parent / "cassettes"
 
@@ -176,7 +176,7 @@ def test_every_bar_field_agrees_within_its_declared_tolerance_over_real_bytes() 
     tolerance — consolidated-tape volumes are the vendor's own aggregation — so its
     observed spread on the settled bar is measured here, not assumed: it is zero."""
     from data_engine.datahub.quality_report import PRICE_BAR_FIELDS
-    from truealpha_contracts.reconciliation_policies import FIELD_RECONCILIATION_POLICIES
+    from truealpha_runtime.reconciliation_policies import FIELD_RECONCILIATION_POLICIES
 
     yahoo = _yahoo_quote()
     twelve = parse_last_settled_close(_bytes(_TWELVE), partition=_PARTITION)

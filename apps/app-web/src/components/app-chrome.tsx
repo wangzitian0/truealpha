@@ -6,7 +6,6 @@ import { getServerPrincipal } from "@/server/auth/request-context";
 export async function AppChrome() {
   const principal = await getServerPrincipal();
   if (!principal) return null;
-
   const isAdministrator = principal.principalKind === "administrator";
 
   return (

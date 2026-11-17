@@ -26,6 +26,7 @@ import dagster as dg
 import psycopg
 import pytest
 from data_engine.config import settings
+from data_engine.contracts.theme_purity import THEMES
 from data_engine.datahub import question_coverage
 from data_engine.datahub.canonical_issuer import (
     NO_CANONICAL_ISSUER_ID,
@@ -42,7 +43,6 @@ from data_engine.datahub.standards import planner
 from data_engine.lanes import standards
 from data_engine.quality import nightly_verdicts
 from data_engine.sources import moomoo as moomoo_source
-from truealpha_contracts.theme_purity import THEMES
 
 EXECUTED_AT = "2026-10-06T04:00:00+00:00"
 UNIVERSE = "topt"

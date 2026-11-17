@@ -4,6 +4,9 @@ from collections.abc import Sequence
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
+from data_engine.contracts.datahub import CaptureWorkItem, ObligationTerminalState
+from data_engine.contracts.evidence_graph import EvidenceEdge, EvidenceNode
+from data_engine.contracts.obligation_reason_codes import ObligationReasonCode
 from data_engine.datahub.production_topt.executor import (
     FetchFailure,
     FetchOutcome,
@@ -13,10 +16,7 @@ from data_engine.datahub.production_topt.executor import (
     ToptCaptureExecutor,
 )
 from truealpha_contracts.common import canonical_sha256
-from truealpha_contracts.datahub import CaptureWorkItem, ObligationTerminalState
-from truealpha_contracts.evidence_graph import EvidenceEdge, EvidenceNode
 from truealpha_contracts.models import DataSource
-from truealpha_contracts.obligation_reason_codes import ObligationReasonCode
 
 _RUN = "capture-run:" + "a" * 64
 _CUTOFF = datetime(2026, 4, 1, tzinfo=UTC)

@@ -24,7 +24,7 @@ function assert(condition: unknown, message: string): asserts condition {
 }
 
 const BASE = "http://walk.invalid";
-const LOGOUT = "/api/auth/logout";
+const LOGOUT = "/api/v1/auth/logout";
 const POLL_MS = 5;
 // Small enough to run fast, and far enough apart that timer jitter cannot turn
 // a pass into a fail: hydration happens at 60 ms, and the journey waits up to 1 s.
@@ -147,7 +147,7 @@ class FakeContext {
 
 	/** The server: login sets the cookie, logout behaves as the scenario says. */
 	serve(path: string): Promise<FakeResponse> {
-		if (path === "/api/auth/login") {
+		if (path === "/api/v1/auth/login") {
 			this.world.logins += 1;
 			this.session = "signed-token";
 			return Promise.resolve(new FakeResponse(200));

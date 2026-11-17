@@ -26,8 +26,8 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
 
+from data_engine.contracts.standards import STANDARDS
 from data_engine.datahub.standards.segment_extraction import consolidated_revenue
-from truealpha_contracts.standards import STANDARDS
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SOURCE_TREES = (

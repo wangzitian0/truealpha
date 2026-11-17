@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { api } from "@/client/api";
 
 export function SignOutButton() {
   const [submitting, setSubmitting] = useState(false);
@@ -12,7 +13,9 @@ export function SignOutButton() {
   async function signOut() {
     setSubmitting(true);
     try {
-      await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
+      await api.logout();
+    } catch {
+      // Redirect even when session already cleared
     } finally {
       window.location.assign("/login");
     }

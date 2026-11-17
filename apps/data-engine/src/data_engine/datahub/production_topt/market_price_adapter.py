@@ -10,12 +10,12 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
-from truealpha_contracts import reconciliation_policies
 from truealpha_contracts.common import canonical_sha256
-from truealpha_contracts.datahub import CaptureWorkItem
 from truealpha_contracts.models import DataSource
-from truealpha_contracts.obligation_reason_codes import ObligationReasonCode
+from truealpha_runtime import reconciliation_policies
 
+from data_engine.contracts.datahub import CaptureWorkItem
+from data_engine.contracts.obligation_reason_codes import ObligationReasonCode
 from data_engine.datahub.production_topt.corroboration_audit import FETCH, record_lost_corroboration
 from data_engine.datahub.production_topt.executor import (
     SERVED_BY_FAILOVER,
@@ -274,7 +274,7 @@ def _serves_session(quote: MarketPriceQuote, target: MarketPriceTarget) -> bool:
 
 
 def last_settled_session_date(cutoff: datetime) -> date:
-    from truealpha_contracts.calendar import settled_session_for_cutoff
+    from data_engine.contracts.calendar import settled_session_for_cutoff
 
     return settled_session_for_cutoff(cutoff)
 

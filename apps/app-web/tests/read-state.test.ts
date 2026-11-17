@@ -14,8 +14,7 @@
  * Run standalone: `bun run tests/read-state.test.ts`.
  */
 
-import { NOTICE_KINDS, readStateMessage, type ReadState } from "../src/server/read-state";
-import { RUNS_EMPTY_MESSAGE, RUNS_UNAVAILABLE_MESSAGE } from "../src/server/admin/ops";
+import { NOTICE_KINDS, readStateMessage, RUNS_EMPTY_MESSAGE, RUNS_UNAVAILABLE_MESSAGE, type ReadState } from "../src/client/read-state";
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -82,7 +81,7 @@ for (const kind of NOTICE_KINDS) {
   assert(RUNS_UNAVAILABLE_MESSAGE.trim().length > 0, "the unavailable run table must say so");
   assert(RUNS_EMPTY_MESSAGE.trim().length > 0, "an empty run table must say so");
   assert(
-    RUNS_UNAVAILABLE_MESSAGE !== RUNS_EMPTY_MESSAGE,
+    new Set([RUNS_UNAVAILABLE_MESSAGE, RUNS_EMPTY_MESSAGE]).size === 2,
     '"Dagster has no tables here" and "Dagster has tables but no runs" must not read identically — ' +
       "that ambiguity is the defect this issue reopened for",
   );

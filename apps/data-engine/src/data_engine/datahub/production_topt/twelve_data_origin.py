@@ -297,7 +297,7 @@ class TwelveDataQuoteFetcher:
         if row is None:
             return None
         trading_date, open_, high, low, close, volume, transaction_time = row
-        from truealpha_contracts.calendar import settled_session_for_cutoff
+        from data_engine.contracts.calendar import settled_session_for_cutoff
 
         settled_date = settled_session_for_cutoff(datetime.combine(cutoff, datetime.max.time(), tzinfo=UTC))
         if trading_date < settled_date:

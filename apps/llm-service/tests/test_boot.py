@@ -32,10 +32,11 @@ def test_a_deployed_boot_refuses_a_missing_injected_value_by_name(monkeypatch: p
 
 
 def test_a_deployed_boot_refuses_a_missing_mcp_credential(monkeypatch: pytest.MonkeyPatch) -> None:
-    """#42: the deployment must inject MCP_BEARER_TOKEN. Every other injected name is
-    present here, so the refusal names the MCP credential alone."""
+    """#42: the deployment must inject MCP_BEARER_TOKEN, SECRET_KEY, and S3_ENDPOINT."""
     monkeypatch.setenv("GIT_COMMIT_SHA", "abc1234")
     monkeypatch.setenv("APP_ENV", "staging")
+    monkeypatch.setenv("SECRET_KEY", "test-secret-key")
+    monkeypatch.setenv("S3_ENDPOINT", "http://127.0.0.1:9000")
     monkeypatch.delenv("MCP_BEARER_TOKEN", raising=False)
     monkeypatch.setattr(main, "settings", Settings(_env_file=None, app_env="staging"))
     with pytest.raises(RuntimeError) as failure:
@@ -58,10 +59,13 @@ def test_an_empty_environment_value_does_not_shadow_the_default(monkeypatch: pyt
     assert Settings(_env_file=None).database_url == Settings.model_fields["database_url"].default
 
 
-def test_llm_service_settings_owns_migrations_and_excludes_s3_and_unused_llm_fields(
+def test_llm_service_settings_owns_migrations_auth_and_s3_fields(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    assert not any(name.startswith(("s3_", "llm_")) for name in Settings.model_fields)
+    assert {"secret_key", "access_token_expire_minutes", "s3_endpoint", "s3_documents_prefix"} <= set(
+        Settings.model_fields
+    )
+    assert not any(name.startswith("llm_") for name in Settings.model_fields)
     monkeypatch.setenv("MIGRATIONS_DATABASE_URL", "postgresql://admin:secret@db:5432/truealpha")
     resolved = Settings(_env_file=None)
     assert resolved.migrations_database_url == "postgresql://admin:secret@db:5432/truealpha"

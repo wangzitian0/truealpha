@@ -8,10 +8,10 @@ from typing import Any
 
 import dagster as dg
 import psycopg
-from truealpha_contracts.standards import STANDARDS
 from truealpha_contracts.universes import key_of_lane, lane_name, universe_with_role
 
 from data_engine.config import settings
+from data_engine.contracts.standards import STANDARDS
 from data_engine.datahub import analyst_ratings, question_coverage
 from data_engine.datahub.canonical_issuer import (
     CanonicalUniverse,

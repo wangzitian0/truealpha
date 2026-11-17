@@ -1,28 +1,15 @@
-import { formatShortSha } from "@/client/format";
-import { formatAgeHours } from "@/client/coerce";
-import { SummaryTile } from "@/components/data-table";
-import { ReadStateNotice } from "@/components/read-state";
-import { ResearchTable } from "@/components/research-table";
-import type { PipelineOutcome, PipelineVerdict } from "@/server/admin/pipeline";
+import type { PipelineOverviewResponse } from "@/client/api";
+import { formatCell, formatShortSha } from "@/client/format";
+import { ReadStateNotice, type ReadState } from "@/components/read-state";
 
-const ago = (iso: string, now: number) => `${formatAgeHours((now - new Date(iso).getTime()) / 3_600_000, 48)} ago`;
-
-function formatDuration(seconds: number | null): string {
-  if (seconds === null) return "—";
+function fmtDur(seconds: number | null | undefined): string {
+  if (seconds === null || seconds === undefined) return "—";
   if (seconds < 60) return `${seconds}s`;
-  const minutes = seconds / 60;
-  return minutes < 60 ? `${minutes.toFixed(1)}m` : `${(minutes / 60).toFixed(1)}h`;
+  const mins = seconds / 60;
+  return mins < 60 ? `${mins.toFixed(1)}m` : `${(mins / 60).toFixed(1)}h`;
 }
 
-function verdictLabel(verdict: PipelineVerdict | null): "ok" | "red" | "pending" | "none" {
-  if (verdict === null) return "none";
-  if (verdict.ok === null) return "pending";
-  return verdict.ok ? "ok" : "red";
-}
-
-const VERDICT_STYLE = { ok: "text-emerald-400", red: "text-rose-400", pending: "text-gray-400", none: "text-gray-400" } as const;
-
-export function PipelineHealth({ outcome, now }: { outcome: PipelineOutcome; now: number }) {
+export function PipelineHealth({ outcome }: { outcome: ReadState<PipelineOverviewResponse> }) {
   if (outcome.kind !== "ready") {
     return (
       <section aria-labelledby="pipeline-heading" className="space-y-4">
@@ -32,100 +19,75 @@ export function PipelineHealth({ outcome, now }: { outcome: PipelineOutcome; now
           overrides={{
             denied: "Access denied. This area requires a verified administrator identity.",
             empty: "No finished run in the Dagster history of this database yet.",
-            error: outcome.kind === "error" ? `Error loading the pipeline health: ${outcome.message}` : undefined,
+            unavailable: "reason" in outcome ? `Run history unavailable (${outcome.reason}).` : "Run history unavailable.",
           }}
         />
       </section>
     );
   }
 
-  const { windowDays, unreadable, jobs, jobRunHealth, release, appGitSha } = outcome.data;
-  const vLabel = verdictLabel(jobRunHealth);
+  const { window_days = 7, jobs = [], job_run_health, release, app_git_sha } = outcome.data;
+  if (outcome.data.available === false) {
+    return (
+      <section aria-labelledby="pipeline-heading" className="space-y-4">
+        <h1 id="pipeline-heading" className="text-2xl font-bold tracking-tight">Pipeline</h1>
+        <ReadStateNotice
+          state={{ kind: "unavailable", reason: outcome.data.reason ?? "unavailable" }}
+          overrides={{ unavailable: `Run history unavailable (${outcome.data.reason ?? "unavailable"}).` }}
+        />
+      </section>
+    );
+  }
+
+  const verdictLabel = job_run_health ? (job_run_health.ok ? "green" : "red") : "no verdict recorded";
+  const ageHours = typeof release?.age_hours === "number" ? release.age_hours : null;
+  const ageLabel = ageHours !== null ? `${(ageHours / 24).toFixed(1)}d` : "no build recorded";
 
   return (
     <section aria-labelledby="pipeline-heading" className="space-y-6">
       <div>
         <h1 id="pipeline-heading" className="text-2xl font-bold tracking-tight">Pipeline</h1>
-        <p className="mt-2 text-sm text-gray-500">
-          Finished runs (success or failure) of every Dagster job in the last {windowDays} days, from{" "}
-          <span className="font-mono">dagster.runs</span>. The nightly verdict{" "}
-          <span className="font-mono">job_run_health</span> judges these runs: red when the last two scheduled runs of a
-          job (of the last 30 days) failed and its newest run failed, or when its failure rate over {windowDays} days is
-          above that of the other jobs. This page shows the counts and the error line; it does not judge.
+        <p className="mt-1 text-sm text-gray-400">
+          Finished Dagster runs over the last {window_days} days · App {formatShortSha(app_git_sha)}
         </p>
       </div>
-
-      <dl className="grid grid-cols-1 gap-3 md:grid-cols-2">
-        <SummaryTile
-          label="Verdict · job run health"
-          value={vLabel === "none" ? (unreadable.verdicts !== null ? "not read" : "no verdict recorded") : vLabel}
-          valueClass={VERDICT_STYLE[vLabel]}
-          valueData={{ "data-verdict": "job_run_health" }}
-          footClass="break-words font-mono text-gray-400"
-          foot={jobRunHealth === null ? "—" : `${jobRunHealth.ranAt} · ${jobRunHealth.summary}`}
-        />
-        <SummaryTile
-          label="Release"
-          value={release === null ? (unreadable.release === null ? "unknown" : "not read") : formatAgeHours(release.ageHours, 48)}
-          valueData={{ "data-release-age": "true" }}
-          footClass="break-words text-gray-500"
-          foot={
-            release === null
-              ? unreadable.release === null
-                ? "no run has recorded its build yet"
-                : "see the notice above"
-              : `data engine ${formatShortSha(release.gitSha)} since ${release.since} · app ${formatShortSha(appGitSha)}`
-          }
-        />
-      </dl>
-
-      {(
-        [
-          ["event-log", "The Dagster event log could not be read, so the error lines are missing", unreadable.eventLog],
-          ["verdicts", "The verdicts could not be read", unreadable.verdicts],
-          ["release", "The run plans could not be read, so the release age is missing", unreadable.release],
-        ] as const
-      ).map(
-        ([part, words, reason]) =>
-          reason !== null && (
-            <p key={part} role="status" className="rounded-lg border border-amber-500/40 bg-card p-3 text-sm text-amber-300" data-unreadable={part}>
-              {words}: {reason}
-            </p>
-          ),
-      )}
-
-      <ResearchTable
-        caption={`Run health per Dagster job, last ${windowDays} days`}
-        headers={["Job", "Success rate", "Runs", "Derived bound", "Longest success", "Ended by bound", "Last success", "Last failure", "First error line of the last failure"]}
-      >
-        {jobs.map((job) => (
-          <tr key={job.job} className="border-t border-border/60" data-job={job.job}>
-            <td className="px-4 py-2 font-mono">{job.job}</td>
-            <td className={`px-4 py-2 tabular-nums ${job.failures > 0 ? "text-amber-400" : ""}`}>
-              {job.successRate === null ? "no run" : `${Math.round(job.successRate * 100)}%`}
-            </td>
-            <td className="px-4 py-2 tabular-nums">{job.successes} ok · {job.failures} failed</td>
-            <td className="px-4 py-2 font-mono text-xs tabular-nums text-gray-300">
-              {job.derivedBoundSeconds === null ? "instance limit (3h)" : formatDuration(job.derivedBoundSeconds)}
-            </td>
-            <td className="px-4 py-2 font-mono text-xs tabular-nums text-gray-300">{formatDuration(job.longestSuccessSeconds)}</td>
-            <td className={`px-4 py-2 tabular-nums ${job.runsEndedByBound > 0 ? "font-semibold text-rose-400" : "text-gray-400"}`}>
-              {job.runsEndedByBound}
-            </td>
-            <td className="px-4 py-2 text-gray-400" title={job.lastSuccessAt ?? undefined}>
-              {job.lastSuccessAt === null ? "never" : ago(job.lastSuccessAt, now)}
-            </td>
-            <td className="px-4 py-2 text-gray-400" title={job.lastFailure?.at}>
-              {job.lastFailure === null ? "never" : ago(job.lastFailure.at, now)}
-            </td>
-            <td className="px-4 py-2 font-mono text-xs text-gray-300" title={job.lastFailure?.runId}>
-              {job.lastFailure === null
-                ? "—"
-                : (job.lastFailure.firstError ?? (unreadable.eventLog === null ? "no error text in the event log" : "—"))}
-            </td>
-          </tr>
-        ))}
-      </ResearchTable>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div className="rounded-xl border border-border p-4">
+          <div className="text-xs uppercase text-gray-400">Job run health</div>
+          <div className="mt-1 text-lg font-semibold" data-verdict="job_run_health">{verdictLabel}</div>
+          {job_run_health?.summary ? <p className="mt-1 text-xs text-gray-400">{String(job_run_health.summary)}</p> : null}
+        </div>
+        <div className="rounded-xl border border-border p-4">
+          <div className="text-xs uppercase text-gray-400">Release age</div>
+          <div className="mt-1 text-lg font-semibold" data-release-age="true">{ageLabel}</div>
+          {release?.git_sha ? <p className="mt-1 text-xs font-mono text-gray-400">{formatShortSha(String(release.git_sha))}</p> : null}
+        </div>
+      </div>
+      <div className="overflow-x-auto rounded-xl border border-border">
+        <table className="w-full text-left text-xs">
+          <thead className="border-b border-border uppercase text-gray-400">
+            <tr>
+              {["Job", "Success rate", "Runs", "Derived bound", "Longest", "Timeouts", "Last success", "Last failure"].map((h) => (
+                <th key={h} className="px-3 py-2">{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-border font-mono">
+            {(jobs ?? []).map((j) => (
+              <tr key={j.job} data-job={j.job}>
+                <td className="px-3 py-2 text-white">{j.job}</td>
+                <td className="px-3 py-2">{j.runs === 0 ? "no run" : j.success_rate !== null && j.success_rate !== undefined ? `${(j.success_rate * 100).toFixed(0)}%` : "—"}</td>
+                <td className="px-3 py-2">{j.successes} ok · {j.failures} failed</td>
+                <td className="px-3 py-2">{fmtDur(j.derived_bound_seconds)}</td>
+                <td className="px-3 py-2">{fmtDur(j.longest_success_seconds)}</td>
+                <td className="px-3 py-2">{j.runs_ended_by_bound}</td>
+                <td className="px-3 py-2">{formatCell(j.last_success_at)}</td>
+                <td className="px-3 py-2 text-rose-300">{j.last_failure ? `${j.last_failure.at}: ${j.last_failure.first_error ?? ""}` : "never"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </section>
   );
 }

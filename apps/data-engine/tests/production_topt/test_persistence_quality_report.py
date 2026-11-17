@@ -21,6 +21,8 @@ from pathlib import Path
 import psycopg
 import pytest
 from data_engine.config import settings
+from data_engine.contracts.datahub import ObligationTerminalState
+from data_engine.contracts.obligation_reason_codes import ObligationReasonCode
 from data_engine.datahub import quality_report
 from data_engine.datahub.evidence_graph_repository import PostgresEvidenceGraphRepository
 from data_engine.datahub.production_topt import PostgresToptCoreRepository
@@ -53,9 +55,7 @@ from data_engine.datahub.production_topt.source_registrations import (
 )
 from factors.production_topt import GppeV0Definition, OperatingBranch
 from truealpha_contracts.common import canonical_sha256
-from truealpha_contracts.datahub import ObligationTerminalState
 from truealpha_contracts.models import DataSource
-from truealpha_contracts.obligation_reason_codes import ObligationReasonCode
 from truealpha_runtime.testing import InMemoryRawObjectStore as _InMemoryObjectStore
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
@@ -895,9 +895,9 @@ def test_semantic_freshness_windows_round_trip_and_cast(connection) -> None:
     """
     import datetime as _dt
 
+    from data_engine.contracts.datahub import CaptureSchedulePolicy
     from data_engine.datahub.control_plane import replay_retry_policy
     from data_engine.datahub.repository import PostgresCaptureControlRepository
-    from truealpha_contracts.datahub import CaptureSchedulePolicy
 
     policy = CaptureSchedulePolicy(
         policy_version="test-530-windows",

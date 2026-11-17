@@ -26,7 +26,7 @@ from truealpha_contracts.strategy import (
     registered_strategy_definition,
     strategy_definition_registry,
 )
-from truealpha_contracts.strategy_run import StrategyRunReport
+from truealpha_runtime.strategy_run import StrategyRunReport
 from truealpha_runtime.testing import synthetic_provisional_strategy_definition
 
 _REGISTRY = strategy_definition_registry()

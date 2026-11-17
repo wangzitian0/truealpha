@@ -181,3 +181,8 @@ export function formatTierLabel(tier: string | null | undefined, fallbackGlyph =
       return tier;
   }
 }
+
+export function formatAgeHours(hours: number, dayAfterHours: number = Number.POSITIVE_INFINITY): string {
+  if (hours < 1) return `${Math.round(hours * 60)}m`;
+  return hours < dayAfterHours ? `${hours.toFixed(1)}h` : `${(hours / 24).toFixed(1)}d`;
+}

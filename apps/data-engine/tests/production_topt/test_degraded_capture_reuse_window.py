@@ -256,7 +256,7 @@ def _materialized(url: str, run_id: str) -> tuple[int, int, int]:
 
 
 def _context():
-    from truealpha_contracts.access import AccessContext, AuthenticationMethod, PrincipalKind
+    from truealpha_runtime.access import AccessContext, AuthenticationMethod, PrincipalKind
 
     issued = datetime(2026, 9, 16, tzinfo=UTC)
     return AccessContext(
@@ -272,8 +272,8 @@ def _context():
 
 
 def _served_report(url: str):
-    from truealpha_contracts.strategy_run import StrategyRunReport
-    from truealpha_contracts.strategy_run_postgres import PostgresStrategyRunRepository
+    from truealpha_runtime.strategy_run import StrategyRunReport
+    from truealpha_runtime.strategy_run_postgres import PostgresStrategyRunRepository
 
     report = PostgresStrategyRunRepository(database_url=url).get_latest(strategy_id=_STRATEGY, context=_context())
     assert isinstance(report, StrategyRunReport), report

@@ -12,9 +12,9 @@ from factors.base.theme_purity import ThemePurity, ThemeSegment, theme_purity
 from factors.shared.extraction import RULE_NO_DESCRIPTION
 from psycopg import Connection
 from truealpha_contracts.execution import AvailabilityStatus, FactorValidationStatus, InputEvidenceStatus
-from truealpha_contracts.standards import STANDARDS, confidence_for
-from truealpha_contracts.theme_purity import THEMES, ThemeDefinition
 
+from data_engine.contracts.standards import STANDARDS, confidence_for
+from data_engine.contracts.theme_purity import THEMES, ThemeDefinition
 from data_engine.datahub.canonical_issuer import expand_issuer_alias_ids, is_canonical_issuer_id
 from data_engine.datahub.primary_listing import choose_primary_listings
 from data_engine.datahub.production_topt.status_dimensions import coverage_status_dimensions

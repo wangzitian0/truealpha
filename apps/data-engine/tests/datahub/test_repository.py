@@ -9,12 +9,8 @@ from pathlib import Path
 import psycopg
 import pytest
 from data_engine.config import settings
-from data_engine.datahub import PostgresCaptureControlRepository, expand_obligations
-from data_engine.datahub.control_plane import AttemptLedger, frozen_topt_universe, replay_retry_policy
-from data_engine.datahub.production_topt.universe_corpus import frozen_topt_list_version
-from truealpha_contracts.capture_control import CaptureObligationWorkBinding
-from truealpha_contracts.common import CaptureEnvironment, canonical_sha256
-from truealpha_contracts.datahub import (
+from data_engine.contracts.capture_control import CaptureObligationWorkBinding
+from data_engine.contracts.datahub import (
     CaptureCampaign,
     CaptureRun,
     CaptureSchedulePolicy,
@@ -26,6 +22,10 @@ from truealpha_contracts.datahub import (
     SourceRequest,
     SourceVintage,
 )
+from data_engine.datahub import PostgresCaptureControlRepository, expand_obligations
+from data_engine.datahub.control_plane import AttemptLedger, frozen_topt_universe, replay_retry_policy
+from data_engine.datahub.production_topt.universe_corpus import frozen_topt_list_version
+from truealpha_contracts.common import CaptureEnvironment, canonical_sha256
 from truealpha_contracts.universe import SubjectRef
 
 CORPUS = Path(__file__).parents[1] / "fixtures" / "capture_control" / "corpus.v1.json"

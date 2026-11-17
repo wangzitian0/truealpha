@@ -656,7 +656,7 @@ def _seed_theme_fill(connection, *, run_id: str, cutoff: datetime) -> None:
     """The Q6 fill of one issuer, one row per governed theme, inserted directly to test legacy fill exclusion."""
     import uuid
 
-    from truealpha_contracts.theme_purity import THEMES
+    from data_engine.contracts.theme_purity import THEMES
 
     issuer_id = str(uuid.uuid4())
     for t in THEMES.values():
@@ -684,47 +684,55 @@ def _seed_theme_fill(connection, *, run_id: str, cutoff: datetime) -> None:
     assert count == (len(THEMES),), "one fill row for each governed theme"
 
 
-def _typescript_query(name: str, rel_path: str = "apps/app-web/src/server/mart/theme-purity.ts") -> str:
-    """The text of a `const <name> = ...;` query in `rel_path`, with `$1` as `%s`."""
+def _service_query(name: str, rel_path: str = "apps/llm-service/src/llm_service/services/research_service.py") -> str:
+    """The SQL assigned to `<name> = '''...'''` in `rel_path`."""
     import re
     from pathlib import Path
 
     source = (Path(__file__).resolve().parents[3] / rel_path).read_text()
-    match = re.search(rf"const {name} = `(?P<sql>.*?)`;", source, re.S)
+    match = re.search(rf'{name}\s*=\s*"""(?P<sql>.*?)"""', source, re.S)
     assert match is not None, f"{rel_path} no longer declares {name}"
-    return match.group("sql").replace("$1", "%s")
+    return match.group("sql")
 
 
 def test_the_proof_and_the_theme_reader_select_the_same_run() -> None:
-    """The proof names `LATEST_RUN_SQL` as the reader it mirrors. A change to one text must change both."""
-    assert " ".join(_typescript_query("LATEST_RUN_SQL").split()) == " ".join(surface_proof._THEMES_HEAD_SQL.split())
+    """The proof names `THEME_LATEST_RUN_SQL` as the reader it mirrors. A change to one text must change both."""
+    assert " ".join(_service_query("THEME_LATEST_RUN_SQL").split()) == " ".join(surface_proof._THEMES_HEAD_SQL.split())
 
 
 def test_the_proof_and_the_holdings_and_coverage_readers_select_the_same_rows() -> None:
-    """`surface_proof` mirrors `mart/db.ts` `POINTER_HEAD_SQL` (moved from `fund-valuation.ts`
-    by #1686) and `datahub-stats.ts` `QUESTION_COVERAGE_SQL`; guard both so a filter added
-    on one side cannot drift from the other."""
-    holdings_ts = " ".join(_typescript_query("POINTER_HEAD_SQL", "apps/app-web/src/server/mart/db.ts").split())
-    holdings_py = " ".join(surface_proof._HOLDINGS_HEAD_SQL.replace("%%", "%").split())
-    assert holdings_ts == holdings_py
+    """`surface_proof` mirrors shared `POINTER_HEAD_SQL` (`research_report_mart.py`, imported by `research_service.py`) and `admin_service.py` `QUESTION_COVERAGE_SQL`."""
+    from pathlib import Path
 
-    coverage_ts = " ".join(_governed_latest_per_universe_sql().split())
+    research_svc = (
+        Path(__file__).resolve().parents[3] / "apps/llm-service/src/llm_service/services/research_service.py"
+    ).read_text()
+    assert "POINTER_HEAD_SQL" in research_svc and "resolve_governed_head_run_id(" in research_svc
+    holdings_svc = " ".join(
+        _service_query("POINTER_HEAD_SQL", "common/runtime/src/truealpha_runtime/research_report_mart.py").split()
+    )
+    holdings_py = " ".join(surface_proof._HOLDINGS_HEAD_SQL.split())
+    assert holdings_svc == holdings_py
+
+    coverage_svc = " ".join(_governed_latest_per_universe_sql().split())
     coverage_py = " ".join(surface_proof._COVERAGE_HEAD_SQL.split())
-    assert coverage_ts.startswith("select distinct on (universe_id) ")
+    assert coverage_svc.startswith("select distinct on (universe_id) ")
     assert coverage_py.startswith("select distinct on (universe_id) ")
-    assert coverage_ts.split(" from ", 1)[1] == coverage_py.split(" from ", 1)[1]
+    assert coverage_svc.split(" from ", 1)[1] == coverage_py.split(" from ", 1)[1]
 
 
 def _governed_latest_per_universe_sql() -> str:
-    """The `QUESTION_COVERAGE_SQL` text that `datahub-stats.ts` builds for coverage reports."""
+    """The `QUESTION_COVERAGE_SQL` text that `admin_service.py` builds for coverage reports."""
     import re
     from pathlib import Path
 
-    source = (Path(__file__).resolve().parents[3] / "apps/app-web/src/server/admin/datahub-stats.ts").read_text()
-    assert 'QUESTION_COVERAGE_SQL = governedLatestPerUniverseSql("mart.question_coverage_report")' in source
-    match = re.search(r"function governedLatestPerUniverseSql\(.*?`(?P<sql>.*?)`;", source, re.S)
-    assert match is not None, "datahub-stats.ts no longer declares governedLatestPerUniverseSql"
-    return match.group("sql").replace("${table}", "mart.question_coverage_report").replace("${extraCols}", "")
+    source = (
+        Path(__file__).resolve().parents[3] / "apps/llm-service/src/llm_service/services/admin_service.py"
+    ).read_text()
+    assert 'QUESTION_COVERAGE_SQL = governed_latest_per_universe_sql("mart.question_coverage_report")' in source
+    match = re.search(r'def governed_latest_per_universe_sql\(.*?return f"""(?P<sql>.*?)"""', source, re.S)
+    assert match is not None, "admin_service.py no longer declares governed_latest_per_universe_sql"
+    return match.group("sql").replace("{table}", "mart.question_coverage_report").replace("{extra_cols}", "")
 
 
 def test_a_run_with_only_fill_rows_is_not_populated_for_the_proof_and_the_theme_reader() -> None:
@@ -738,7 +746,7 @@ def test_a_run_with_only_fill_rows_is_not_populated_for_the_proof_and_the_theme_
         assert surface_proof._exists(connection, surface_proof._THEME_ROWS_SQL, (fill_only,)) is False
         for name, query in (
             ("proof", surface_proof._THEMES_HEAD_SQL),
-            ("App reader", _typescript_query("LATEST_RUN_SQL")),
+            ("App reader", _service_query("THEME_LATEST_RUN_SQL")),
         ):
             newest = connection.execute(query).fetchone()
             assert newest is not None and newest[0] == populated, f"{name} must skip the fill-only run"
@@ -754,7 +762,7 @@ def test_the_theme_page_query_returns_the_real_rows_of_a_run_and_no_fill_row() -
         _seed_theme_row(connection, run_id=run, cutoff=_REAL_CUTOFF)
         _seed_theme_fill(connection, run_id=run, cutoff=_REAL_CUTOFF)
 
-        rows = connection.execute(_typescript_query("ROWS_SQL"), (run,)).fetchall()
+        rows = connection.execute(_service_query("THEME_ROWS_SQL"), (run,)).fetchall()
 
         assert [row[5] for row in rows] == ["issuer:themes-910-test"], "issuer_id is the sixth column"
     finally:

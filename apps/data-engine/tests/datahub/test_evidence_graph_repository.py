@@ -8,9 +8,7 @@ from pathlib import Path
 import psycopg
 import pytest
 from data_engine.config import settings
-from data_engine.datahub.evidence_graph_repository import PostgresEvidenceGraphRepository
-from truealpha_contracts.common import CaptureEnvironment
-from truealpha_contracts.evidence_graph import (
+from data_engine.contracts.evidence_graph import (
     BitemporalStamp,
     CurrentPointer,
     CurrentPointerKey,
@@ -20,6 +18,8 @@ from truealpha_contracts.evidence_graph import (
     EvidenceNodeRef,
     EvidenceRelation,
 )
+from data_engine.datahub.evidence_graph_repository import PostgresEvidenceGraphRepository
+from truealpha_contracts.common import CaptureEnvironment
 
 _CONTRACT_SQL = Path(__file__).resolve().parents[4] / "db" / "tests" / "evidence_graph_contract.sql"
 

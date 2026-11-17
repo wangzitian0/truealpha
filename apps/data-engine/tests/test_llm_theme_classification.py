@@ -22,6 +22,7 @@ import json
 
 import pytest
 from data_engine.config import settings
+from data_engine.contracts.theme_purity import THEMES
 from data_engine.sources import gateway
 from data_engine.sources.llm import (
     SEGMENT_THEME_TASK,
@@ -29,7 +30,6 @@ from data_engine.sources.llm import (
     build_chat_request,
     classify_segments,
 )
-from truealpha_contracts.theme_purity import THEMES
 
 AVGO = ("Semiconductor solutions", "Infrastructure software")
 THEME = THEMES["ai-infrastructure"]

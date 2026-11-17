@@ -40,7 +40,7 @@ from truealpha_contracts.strategy import (
     load_live_strategy_corpus,
     load_live_strategy_definition,
 )
-from truealpha_contracts.topt_read import (
+from truealpha_runtime.research_report_mart import (
     MetricNodeValueReport,
     PostgresMetricNodeValueRepository,
 )

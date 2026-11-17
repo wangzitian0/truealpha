@@ -159,6 +159,11 @@ async function assertNoBlankResearchTableCells(page, path, problems) {
       problems.push(`GREEN-WHILE-EMPTY: expected populated table rows on ${path} in ${DATA_STATE} state, found 0`);
     }
   }
+  if (DATA_STATE === "empty" && ["/research/rankings", "/research/strategy"].includes(path)) {
+    if (result.rowCount > 0) {
+      problems.push(`STALE-OR-LEAKED-DATA: expected 0 table rows on ${path} in ${DATA_STATE} state, found ${result.rowCount}`);
+    }
+  }
 
   if (SEEDED_FIXTURE && DATA_STATE === "populated" && path === "/research/strategy") {
     const missingTickers = PREVIEW_TICKERS.filter(
@@ -596,7 +601,7 @@ async function preflightIdentities(browser, identities) {
   const sessions = await Promise.all(
     identities.map(async ({ role, email, password }) => {
       const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
-      const login = await context.request.post(`${BASE}/api/auth/login`, { data: { email, password } });
+      const login = await context.request.post(`${BASE}/api/v1/auth/login`, { data: { email, password } });
       return { role, status: login.status(), context };
     }),
   );

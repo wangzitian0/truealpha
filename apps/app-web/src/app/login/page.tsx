@@ -1,11 +1,7 @@
 "use client";
 
-/**
- * #368: login form only — there is no registration UI anywhere in this app.
- * Credentials are seeded by an administrator (scripts/seed-principal-credential.ts).
- */
-
 import { useState, type FormEvent } from "react";
+import { api, ApiError } from "@/client/api";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
@@ -18,18 +14,15 @@ export default function LoginPage() {
     setSubmitting(true);
     setError(null);
     try {
-      const response = await fetch("/api/auth/login", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ email, password }),
-      });
-      if (!response.ok) {
-        setError(response.status === 429 ? "Too many attempts — try again later." : "Invalid email or password.");
-        return;
-      }
+      await api.login({ email, password });
       const redirectTo = new URLSearchParams(window.location.search).get("from") || "/research";
       window.location.assign(redirectTo);
+    } catch (err) {
+      setError(
+        err instanceof ApiError && err.status === 429
+          ? "Too many attempts — try again later."
+          : "Invalid email or password.",
+      );
     } finally {
       setSubmitting(false);
     }

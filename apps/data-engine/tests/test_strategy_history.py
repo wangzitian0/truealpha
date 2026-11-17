@@ -21,6 +21,7 @@ import psycopg
 import pytest
 from data_engine import raw_store
 from data_engine.config import settings
+from data_engine.contracts.datahub import CaptureWorkItem
 from data_engine.datahub.input_cells import AsOfAxis, knowable_instant, vintage_knowable_at
 from data_engine.datahub.production_topt.concept_mapping import DEFAULT_RULESET
 from data_engine.datahub.production_topt.headcount import PostgresHeadcountExtractor, record_headcount
@@ -55,7 +56,6 @@ from data_engine.datahub.strategy_history import (
 )
 from data_engine.strategy_backtest_gateway import StrategyBacktestGateway
 from factors.production_topt import OperatingBranch
-from truealpha_contracts.datahub import CaptureWorkItem
 from truealpha_contracts.fiscal_period import parse_annual
 from truealpha_contracts.models import DataSource, RawCapture, RawIngestionEnvelope, RawObjectRef
 
@@ -808,8 +808,8 @@ class _MemoryStore:
 
 
 def _put_vintage(connection, store: _MemoryStore, cik: int, body: bytes, *, ordinal: int) -> None:
+    from data_engine.contracts.datahub import SourceRequest, SourceVintage  # noqa: PLC0415
     from data_engine.datahub.repository import PostgresCaptureControlRepository  # noqa: PLC0415
-    from truealpha_contracts.datahub import SourceRequest, SourceVintage  # noqa: PLC0415
     from truealpha_contracts.universe import SubjectRef  # noqa: PLC0415
 
     record_id = f"companyfacts:CIK{cik:010d}"

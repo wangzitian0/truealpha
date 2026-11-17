@@ -1,112 +1,76 @@
-import { formatShortSha } from "@/client/format";
-import { formatAgeHours } from "@/client/coerce";
-import { BADGE_TONES, SummaryTile } from "@/components/data-table";
-import { ReadStateNotice } from "@/components/read-state";
+import Link from "next/link";
+import { api } from "@/client/api";
+import { formatAgeHours, formatCell, formatShortSha } from "@/client/format";
+import { RUNS_EMPTY_MESSAGE, RUNS_UNAVAILABLE_MESSAGE } from "@/client/read-state";
 import { ResearchTable } from "@/components/research-table";
 import { TriggerRunButton } from "@/components/trigger-run-button";
-import { loadOpsOverview, RUNS_EMPTY_MESSAGE, RUNS_UNAVAILABLE_MESSAGE } from "@/server/admin/ops";
-import { getServerPrincipal } from "@/server/auth/request-context";
+import { loadAuthed } from "../_load";
 
 export const dynamic = "force-dynamic";
 
-export default async function AdminOverviewPage() {
-  const principal = await getServerPrincipal();
-  const outcome = await loadOpsOverview(principal === null ? null : { principalKind: principal.principalKind });
-
-  if (outcome.kind !== "ready") {
-    return (
-      <section aria-labelledby="ops-heading">
-        <h1 id="ops-heading" className="text-2xl font-bold tracking-tight">Operate</h1>
-        <ReadStateNotice
-          state={outcome}
-          overrides={{
-            denied: "Access denied. This area requires a verified administrator identity.",
-            error: outcome.kind === "error" ? `Error loading the ops overview: ${outcome.message}` : undefined,
-          }}
-        />
-      </section>
-    );
-  }
-
-  const { runs, pointers, dataEngine, appGitSha, quotaToday } = outcome.data;
+export default async function AdminOpsPage() {
+  const { data: ops, error } = await loadAuthed("/admin", (opts) => api.getAdminOps(opts), { admin: true });
+  const card = "rounded-xl border border-border bg-card p-4";
+  const td = "px-4 py-2";
 
   return (
-    <section aria-labelledby="ops-heading" className="space-y-8">
-      <div>
-        <h1 id="ops-heading" className="text-2xl font-bold tracking-tight">Operate</h1>
-        <p className="mt-2 text-sm text-gray-400">
-          Pipeline health at a glance. Schedule: daily 22:15 UTC (after the US close); the button below launches the same job
-          with an explicit timestamp. A scheduled tick reuses observations committed in the last 12 hours; tick &ldquo;Force
-          a fresh vendor fetch&rdquo; to fetch everything again (recorded as <code>forced_fetch</code>).
-        </p>
+    <section aria-labelledby="admin-heading" className="space-y-8">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 id="admin-heading" className="text-2xl font-bold tracking-tight">Operations</h1>
+          <p className="mt-1 text-sm text-gray-400">Dagster runs, governed served heads, and daily vendor fetch volume.</p>
+        </div>
+        <TriggerRunButton />
       </div>
-
-      <dl className="grid grid-cols-2 gap-3 md:grid-cols-3">
-        {pointers.length === 0 && <SummaryTile label="Pointer freshness" value="—" foot="no governed head on this database" />}
-        {pointers.map((pointer) => {
-          const badgeTone =
-            pointer.availability === "unavailable" || pointer.freshness === "stale"
-              ? BADGE_TONES.crit
-              : pointer.freshness === "manual"
-                ? BADGE_TONES.muted
-                : BADGE_TONES.ok;
-          return (
-            <SummaryTile
-              key={pointer.universeId}
-              label={`Pointer · ${pointer.universeId}`}
-              badge={
-                (pointer.freshness || pointer.availability === "unavailable") && (
-                  <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${badgeTone}`}>
-                    {pointer.availability === "unavailable" ? "unavailable" : pointer.freshness}
-                  </span>
-                )
-              }
-              value={pointer.ageHours != null ? `${formatAgeHours(pointer.ageHours)} ago` : "—"}
-              footClass="truncate text-gray-500"
-              footTitle={pointer.targetRunId}
-              foot={`seq ${pointer.sequence} · ${pointer.targetRunId}${pointer.stalenessReason ? ` · ${pointer.stalenessReason}` : ""}`}
-            />
-          );
-        })}
-        <SummaryTile
-          label="Data engine build"
-          value={dataEngine === null ? "unknown" : formatShortSha(dataEngine.gitSha)}
-          valueClass="truncate tabular-nums"
-          valueTitle={dataEngine?.imageDigest}
-          footClass="truncate text-gray-500"
-          footTitle={dataEngine?.runId}
-          foot={
-            dataEngine === null
-              ? "no run has recorded its build yet"
-              : `newest run ${formatAgeHours((Date.now() - new Date(dataEngine.createdAt).getTime()) / 3_600_000)} ago · app ${formatShortSha(appGitSha)}`
-          }
-        />
-        {quotaToday.map((entry) => (
-          <SummaryTile key={entry.source} label={`${entry.source} · fetches today`} value={entry.fetches} />
-        ))}
-      </dl>
-
-      <TriggerRunButton />
-
-      <ResearchTable caption="Most recent Dagster runs" headers={["Run", "Job", "Status", "Created", "Duration"]}>
-        {runs === "unavailable" || runs.length === 0 ? (
-          <tr>
-            <td colSpan={5} className="px-4 py-3 text-gray-400">
-              {runs === "unavailable" ? RUNS_UNAVAILABLE_MESSAGE : RUNS_EMPTY_MESSAGE}
-            </td>
-          </tr>
-        ) : (
-          runs.map((run) => (
-            <tr key={run.runId} className="border-t border-border">
-              <td className="px-4 py-3 font-mono text-xs" title={run.runId}>{formatShortSha(run.runId)}</td>
-              <td className="px-4 py-3">{run.jobName}</td>
-              <td className="px-4 py-3">{run.status}</td>
-              <td className="px-4 py-3 tabular-nums">{run.createdAt}</td>
-              <td className="px-4 py-3 tabular-nums">{run.durationSeconds === null ? "—" : `${run.durationSeconds}s`}</td>
-            </tr>
-          ))
-        )}
-      </ResearchTable>
+      {error && <p className="text-sm text-rose-400">{error}</p>}
+      {ops && (
+        <>
+          <div className="grid gap-4 md:grid-cols-3">
+            <div className={card}><div className="text-xs text-gray-500">App Git SHA</div><div className="mt-1 font-mono text-sm">{formatShortSha(ops.app_git_sha)}</div></div>
+            <div className={card}><div className="text-xs text-gray-500">Data Engine SHA</div><div className="mt-1 font-mono text-sm">{formatShortSha(ops.data_engine?.git_sha)}</div></div>
+            <div className={card}>
+              <div className="text-xs text-gray-500">Datahub surfaces</div>
+              <div className="mt-1 flex gap-3 text-xs text-accent">
+                <Link href="/admin/datahub" className="hover:underline">DataHub →</Link>
+                <Link href="/admin/quality" className="hover:underline">Quality →</Link>
+                <Link href="/admin/pipeline" className="hover:underline">Pipeline →</Link>
+              </div>
+            </div>
+          </div>
+          <div className="space-y-2">
+            <h2 className="text-lg font-semibold">Governed heads</h2>
+            <ResearchTable caption="Governed heads" headers={["Universe", "Seq", "Age", "Freshness", "Availability", "Run ID"]}>
+              {(ops.pointers ?? []).map((p) => (
+                <tr key={p.universe_id} className="border-t border-border font-mono text-xs">
+                  <td className={td}>{p.universe_id}</td>
+                  <td className={td}>{p.sequence}</td>
+                  <td className={td}>{p.age_hours != null ? formatAgeHours(p.age_hours, 48) : "—"}</td>
+                  <td className={td}>{formatCell(p.freshness)}</td>
+                  <td className={td}>{formatCell(p.availability)}</td>
+                  <td className={`${td} text-gray-400`}>{p.target_run_id}</td>
+                </tr>
+              ))}
+            </ResearchTable>
+          </div>
+          <div className="space-y-2">
+            <h2 className="text-lg font-semibold">Recent runs</h2>
+            {typeof ops.runs === "string" ? <p className="text-sm text-gray-400">{RUNS_UNAVAILABLE_MESSAGE}</p>
+              : (ops.runs ?? []).length === 0 ? <p className="text-sm text-gray-400">{RUNS_EMPTY_MESSAGE}</p> : (
+              <ResearchTable caption="Recent runs" headers={["Job", "Status", "Created", "Duration (s)", "Run ID"]}>
+                {ops.runs.map((r) => (
+                  <tr key={r.run_id} className="border-t border-border font-mono text-xs">
+                    <td className={td}>{r.job_name}</td>
+                    <td className={td}>{r.status}</td>
+                    <td className={td}>{r.created_at}</td>
+                    <td className={td}>{formatCell(r.duration_seconds)}</td>
+                    <td className={`${td} text-gray-400`}>{r.run_id}</td>
+                  </tr>
+                ))}
+              </ResearchTable>
+            )}
+          </div>
+        </>
+      )}
     </section>
   );
 }

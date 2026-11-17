@@ -1,4 +1,4 @@
-"""Ingestion raw-object DTOs and data-source taxonomy."""
+"""Raw ingestion contracts."""
 
 from __future__ import annotations
 

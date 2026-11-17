@@ -18,9 +18,8 @@ def test_a_deployed_process_refuses_to_boot_without_what_the_deployment_injects(
     with pytest.raises(RuntimeError) as failure:
         assert_environment(LLM_MANIFEST, environ=environ, require_injected=True)
     message = str(failure.value)
-    for name in ("ENVIRONMENT", "GIT_COMMIT_SHA", "MCP_BEARER_TOKEN"):
+    for name in ("ENVIRONMENT", "GIT_COMMIT_SHA", "MCP_BEARER_TOKEN", "S3_ENDPOINT", "SECRET_KEY"):
         assert name in message
-    assert "S3_ENDPOINT" not in message
     assert "hunter2" not in message and "postgresql://" not in message, "names only, never values"
 
     with pytest.raises(RuntimeError) as de_failure:
@@ -33,7 +32,13 @@ def test_a_local_process_tolerates_absent_injected_values() -> None:
 
 
 def test_an_empty_injected_value_counts_as_missing() -> None:
-    environ = {"APP_ENV": "staging", "GIT_COMMIT_SHA": "", "MCP_BEARER_TOKEN": "test-mcp-token"}
+    environ = {
+        "APP_ENV": "staging",
+        "GIT_COMMIT_SHA": "",
+        "MCP_BEARER_TOKEN": "test-mcp-token",
+        "S3_ENDPOINT": "http://127.0.0.1:9000",
+        "SECRET_KEY": "test-secret-key",
+    }
     with pytest.raises(RuntimeError, match="GIT_COMMIT_SHA"):
         assert_environment(LLM_MANIFEST, environ=environ, require_injected=True)
     environ["GIT_COMMIT_SHA"] = "v0.0.50"
@@ -71,7 +76,13 @@ def test_canonical_environment_and_sdk_shared_contract() -> None:
     assert (
         assert_environment(
             LLM_MANIFEST,
-            environ={"ENVIRONMENT": "staging", "GIT_COMMIT_SHA": "v0.2.101", "MCP_BEARER_TOKEN": "tok"},
+            environ={
+                "ENVIRONMENT": "staging",
+                "GIT_COMMIT_SHA": "v0.2.101",
+                "MCP_BEARER_TOKEN": "tok",
+                "S3_ENDPOINT": "http://minio:9000",
+                "SECRET_KEY": "sec",
+            },
             require_injected=True,
         )
         is None

@@ -30,66 +30,15 @@ jobs:
     defaults:
       run:
         working-directory: apps/app-web
-    # Real Postgres so the DB-backed tests RUN here instead of skipping (#468).
-    # Mirrors ci-python: same image, same migrations, same arming contract.
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: truealpha
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 5
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
       - run: make typecheck-web FULL=1
         working-directory: .
-      - name: Apply the migration chain (populated and empty)
+      - name: Run zero-DB unit tests
         working-directory: .
-        env:
-          PGPASSWORD: postgres
-        run: |
-          set -eu
-          # #580: a second database, migrated identically and left empty, so
-          # the browser suite can walk the absent-state branch of every surface.
-          # The loop is over DATABASES; the chain itself is applied by the one
-          # applier every call site shares (#984).
-          createdb -h localhost -U postgres truealpha_empty
-          for db in truealpha truealpha_empty; do
-            echo "== $db"
-            DATABASE_URL="postgresql://postgres:postgres@localhost:5432/$db" sh db/apply_migrations.sh
-          done
-      # Runs every tests/*.test.ts file, not just one hardcoded name — #373
-      # found that only issue58-conformance.test.ts was ever invoked here,
-      # so the other 13 (auth, conversations, documents, dashboard, route-group
-      # boundary scans, etc.) silently never ran in CI despite passing locally.
-      #
-      # TRUEALPHA_REQUIRE_RUNTIME=1 arms every DB guard: a test that cannot
-      # reach the Postgres service above must FAIL, not skip (#468). The grep
-      # gate below is the backstop for any future test that skips without
-      # honoring the arming variable — the convention is that a skip branch
-      # prints a line ending in "— SKIP", and no such line may appear here.
-      - name: Run tests (DB-backed tests armed)
-        working-directory: .
-        env:
-          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/truealpha
-          TRUEALPHA_REQUIRE_RUNTIME: "1"
-        run: |
-          set -euo pipefail
-          # Run every apps/app-web/tests/*.test.ts file via Makefile target.
-          make test-web FULL=1 2>&1 | tee /tmp/ci-web-tests.log
-          if grep -F -- "— SKIP" /tmp/ci-web-tests.log; then
-            echo "::error::a test printed a skip marker; the Postgres service exists so integration tests must RUN in CI" >&2
-            exit 1
-          fi
+        run: make test-web FULL=1
 
   # The browser half: a production build, then the frozen route tree walked
   # against two data states.
@@ -119,6 +68,11 @@ jobs:
           --health-retries 5
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-uv
+        with:
+          enable-cache: true
+      - run: uv sync --package truealpha-llm-service --frozen
+        working-directory: .
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
       - name: Apply the migration chain (populated and empty)
@@ -172,6 +126,7 @@ jobs:
       # plus the member/administrator principals the route-group gates
       # discriminate on.
       - name: Seed the e2e fixtures (populated and empty)
+        working-directory: .
         run: |
           set -euo pipefail
           E2E_PASSWORD="$(openssl rand -hex 24)"
@@ -179,11 +134,9 @@ jobs:
           echo "E2E_PASSWORD=$E2E_PASSWORD" >> "$GITHUB_ENV"
           export E2E_PASSWORD
           DATABASE_URL=postgresql://postgres:postgres@localhost:5432/truealpha \
-            bun run scripts/seed-e2e-fixture.ts
-          # The same principals, no mart rows: the login the walk needs, and
-          # nothing else, so every surface renders its absent state (#580).
+            uv run --package truealpha-llm-service python apps/llm-service/scripts/seed_e2e_fixture.py
           DATABASE_URL=postgresql://postgres:postgres@localhost:5432/truealpha_empty \
-            bun run scripts/seed-e2e-fixture.ts --principals-only
+            uv run --package truealpha-llm-service python apps/llm-service/scripts/seed_e2e_fixture.py --principals-only
       # `output: "standalone"` (next.config.mjs) does not copy .next/static, so
       # the server 404s every asset without this.
       #
@@ -221,13 +174,29 @@ jobs:
           # it walks. The trap the single-state version had was lost in the
           # conversion to a loop (review).
           server_pid=""
-          trap 'kill "${server_pid:-}" 2>/dev/null || true' EXIT
+          backend_pid=""
+          cleanup() {
+            if [ -n "${server_pid:-}" ]; then kill -TERM -"${server_pid}" "${server_pid}" 2>/dev/null || true; fi
+            if [ -n "${backend_pid:-}" ]; then kill -TERM -"${backend_pid}" "${backend_pid}" 2>/dev/null || true; fi
+          }
+          trap cleanup EXIT
+          SESSION_SECRET="$(openssl rand -hex 32)"
           for state in populated empty; do
             database=truealpha
             [ "$state" = empty ] && database=truealpha_empty
             echo "::group::walk against the ${state} database"
-            DATABASE_URL="postgresql://postgres:postgres@localhost:5432/${database}" \
-              SECRET_KEY="$(openssl rand -hex 32)" NODE_ENV=production \
+            (
+              cd "${GITHUB_WORKSPACE}" && \
+              ENVIRONMENT=ci SECRET_KEY="$SESSION_SECRET" DATABASE_URL="postgresql://postgres:postgres@localhost:5432/${database}" \
+                exec setsid uv run --package truealpha-llm-service uvicorn llm_service.main:app --host 127.0.0.1 --port 8000
+            ) &
+            backend_pid=$!
+            for _ in $(seq 1 30); do
+              curl -fsS -o /dev/null "http://127.0.0.1:8000/health" && break
+              sleep 1
+            done
+            curl -fsS -o /dev/null "http://127.0.0.1:8000/health"
+            setsid env LLM_SERVICE_URL="http://127.0.0.1:8000" NODE_ENV=production \
               NEXT_TELEMETRY_DISABLED=1 HOSTNAME=127.0.0.1 PORT=3000 \
               node .next/standalone/server.js &
             server_pid=$!
@@ -239,14 +208,21 @@ jobs:
             require_race=0
             [ "$state" = populated ] && require_race=1
             if ! TA_PASSWORD="$E2E_PASSWORD" TA_DATA_STATE="$state" TA_REQUIRE_RACE="$require_race" node e2e/walk-tree.mjs; then
-              echo "::error::the walk failed against the ${state} database. A failure here only \
-          on ${state} means the page handles one data state and not the other — the shape of \
-          every UI defect #580 was opened for."
-              kill "$server_pid" 2>/dev/null || true
+              echo "::error::the walk failed against the ${state} database."
+              cleanup
               exit 1
             fi
-            kill "$server_pid" 2>/dev/null || true
-            wait "$server_pid" 2>/dev/null || true
+            cleanup
+            wait "$server_pid" "$backend_pid" 2>/dev/null || true
+            for _ in $(seq 1 15); do
+              if ! curl -fsS -o /dev/null "http://127.0.0.1:8000/health" && ! curl -fsS -o /dev/null "$TA_BASE_URL/login"; then
+                break
+              fi
+              sleep 1
+            done
+            ! curl -fsS -o /dev/null "http://127.0.0.1:8000/health"
+            ! curl -fsS -o /dev/null "$TA_BASE_URL/login"
             server_pid=""
+            backend_pid=""
             echo "::endgroup::"
           done

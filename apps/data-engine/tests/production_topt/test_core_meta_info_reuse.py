@@ -23,10 +23,10 @@ from typing import Any
 
 import psycopg
 import pytest
+from data_engine.contracts.datahub import SourceRequest
 from data_engine.datahub.production_topt import PostgresToptCoreRepository, composition
 from factors.production_topt import GppeV0Definition
 from truealpha_contracts.common import CaptureEnvironment, canonical_sha256
-from truealpha_contracts.datahub import SourceRequest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from production_topt.test_degraded_capture_reuse import (  # noqa: E402

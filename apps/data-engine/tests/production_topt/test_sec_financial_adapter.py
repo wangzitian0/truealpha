@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from data_engine.contracts.datahub import CaptureWorkItem
+from data_engine.contracts.obligation_reason_codes import ObligationReasonCode
 from data_engine.datahub.production_topt.executor import FetchFailure, FetchSuccess
 from data_engine.datahub.production_topt.issuer_registry import (
     operating_branch_for_sic,
@@ -43,8 +45,6 @@ from factors.production_topt import (
     ToptMetricInput,
     compute_topt_gppe,
 )
-from truealpha_contracts.datahub import CaptureWorkItem
-from truealpha_contracts.obligation_reason_codes import ObligationReasonCode
 from truealpha_contracts.strategy import load_live_strategy_definition
 
 _CUTOFF = date(2026, 3, 31)
@@ -2560,8 +2560,8 @@ def test_live_tick_settled_accession_cutoff_keeps_same_day_filing_and_empty_bund
     2) a foreign/non-XBRL issuer with an empty bundle (`TRI`) stamps fallback
        `knowable_instant(AsOfAxis.ACCESSION, D-1) == (D-1) 23:59:59.999999Z <= cutoff`,
     satisfying `BitemporalStamp(transaction_time=result.transaction_time, recorded_at=cutoff)` (#1519)."""
+    from data_engine.contracts.evidence_graph import BitemporalStamp
     from data_engine.datahub.production_topt.source_registrations import last_settled_accession_date
-    from truealpha_contracts.evidence_graph import BitemporalStamp
 
     tick_cutoff = datetime(2026, 10, 30, 22, 15, tzinfo=UTC)
     settled_cutoff_date = last_settled_accession_date(tick_cutoff)

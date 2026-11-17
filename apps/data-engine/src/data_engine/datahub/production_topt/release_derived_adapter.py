@@ -10,10 +10,10 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
 from truealpha_contracts.common import canonical_sha256
-from truealpha_contracts.datahub import CaptureWorkItem
 from truealpha_contracts.models import DataSource
-from truealpha_contracts.obligation_reason_codes import ObligationReasonCode
 
+from data_engine.contracts.datahub import CaptureWorkItem
+from data_engine.contracts.obligation_reason_codes import ObligationReasonCode
 from data_engine.datahub.production_topt.executor import (
     FetchFailure,
     FetchOutcome,

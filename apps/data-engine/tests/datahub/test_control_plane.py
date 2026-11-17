@@ -3,9 +3,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from data_engine.contracts.capture_control import CaptureListVersion
+from data_engine.contracts.datahub import FetchAttemptOutcome, RetryPolicy
 from data_engine.datahub import AttemptLedger, expand_obligations
-from truealpha_contracts.capture_control import CaptureListVersion
-from truealpha_contracts.datahub import FetchAttemptOutcome, RetryPolicy
 from truealpha_contracts.universe import SubjectKind, SubjectRef, UniverseRef
 
 ROOT = Path(__file__).parents[1]

@@ -17,7 +17,6 @@ const LINKS: readonly { href: string; label: string }[] = [
 
 export function ResearchNav() {
   const pathname = usePathname();
-
   return (
     <nav aria-label="Research sections" className="flex flex-wrap gap-2">
       {LINKS.map((link) => {

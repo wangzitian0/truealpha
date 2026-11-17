@@ -508,8 +508,8 @@ def test_the_manual_path_launches_the_same_job_with_an_explicit_config() -> None
 
 
 def test_the_standards_with_a_history_run_are_registered_standards() -> None:
+    from data_engine.contracts.standards import STANDARDS
     from data_engine.lanes import standards
-    from truealpha_contracts.standards import STANDARDS
 
     assert standards.STANDARDS_WITH_HISTORY, "no standard has a history run"
     assert set(standards.STANDARDS_WITH_HISTORY) <= set(STANDARDS)

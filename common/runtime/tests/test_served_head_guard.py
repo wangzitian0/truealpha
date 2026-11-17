@@ -60,7 +60,12 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 #: Code that a consumer reaches: the Web App, the LLM service and the contracts both import.
 #: `apps/data-engine/src` and `tools/` are not consumers. They may read the pointer. That holds
 #: only while no consumer imports them. `test_no_consumer_imports_the_data_engine` checks it.
-CONSUMER_ROOTS = ("apps/app-web/src", "apps/llm-service/src", "common/contracts/src")
+CONSUMER_ROOTS = (
+    "apps/app-web/src",
+    "apps/llm-service/src",
+    "common/contracts/src",
+    "common/runtime/src/truealpha_runtime",
+)
 
 TS_SUFFIXES = {".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"}
 SKIP_DIRECTORIES = {"node_modules", ".next", "__pycache__", "dist", "build"}
@@ -71,9 +76,8 @@ POINTER_RELATIONS = ("mart.current_pointer_head", "mart.current_pointer", "mart.
 #: The one read point. `mart.served_head_environments` is a different view and is not a head.
 SERVED_HEAD = "mart.served_head"
 
-#: The shared TypeScript resolver that reads `mart.served_head` for a consumer (#1686 moved
-#: the inline head reads of `fund-valuation.ts` and `topt-gppe-repository.ts` into it).
-SHARED_HEAD_RESOLVER = re.compile(r"\bresolveGovernedHeadRunId\b")
+#: Call to the shared Python resolver that reads `mart.served_head` for a consumer (#1716).
+SHARED_HEAD_RESOLVER = re.compile(r"(?<!def )\bresolve_governed_head_run_id\s*\(")
 
 #: Columns that address a run, or the artifacts of one run. A mart relation with one of them
 #: holds results that a head must select.
@@ -772,6 +776,7 @@ def test_no_consumer_imports_the_data_engine() -> None:
 
 def test_the_scan_reads_the_consumer_trees_and_finds_statements() -> None:
     """Green while empty: a scanner that reads nothing passes every rule."""
+    assert all((REPO_ROOT / r).is_dir() for r in CONSUMER_ROOTS)
     violations, files = scan()
     assert files > 100, f"the scan read only {files} files"
     served = [
@@ -831,13 +836,65 @@ def test_the_health_endpoint_reads_the_served_head() -> None:
     assert not any(entry.file == relative for entry in BASELINE)
 
 
-def test_the_app_reads_the_core_lineage_view_through_the_trace_reader() -> None:
-    """#1241: SERVED must name a relation that a consumer reads, or the list says what is not true.
-    `mart.topt_core_meta_info` moved here from NOT_SERVED when /research/trace began to read it."""
-    readers = consumer_references(REPO_ROOT, ("mart.topt_core_meta_info",))
-    assert "apps/app-web/src/server/mart/research-read.ts" in readers, sorted(readers)
-    assert "mart.topt_core_meta_info" in SERVED
-    assert "mart.topt_core_meta_info" not in NOT_SERVED
+LEGACY_TOPT_CORE_BASELINE: dict[str, frozenset[str]] = {
+    "common/contracts/src/truealpha_contracts/metrics.py": frozenset(
+        {"mart.topt_core_results", "mart.topt_gppe_results"}
+    ),
+    "common/runtime/src/truealpha_runtime/strategy_run_postgres.py": frozenset(
+        {"mart.topt_core_results", "mart.topt_core_meta_info"}
+    ),
+}
+
+
+def test_no_consumer_reaches_legacy_topt_core_views() -> None:
+    """#1716/#1699: no consumer reads legacy mart.topt_core_* / mart.topt_gppe_results beyond the exact shrunk baseline."""
+    readers = consumer_references(
+        REPO_ROOT, ("mart.topt_core_meta_info", "mart.topt_core_results", "mart.topt_gppe_results")
+    )
+    actual = {path: frozenset(rels) for path, rels in readers.items()}
+    assert actual == LEGACY_TOPT_CORE_BASELINE, actual
+
+
+def test_every_served_reader_function_in_research_service_scopes_via_served_head() -> None:
+    """Per-function Rule B ratchet for unified research_service.py (#1716): no reader can coast on a sibling function."""
+    path = REPO_ROOT / "apps/llm-service/src/llm_service/services/research_service.py"
+    source_text = path.read_text(encoding="utf-8")
+    tree = ast.parse(source_text)
+    head_tokens = (
+        "mart.served_head",
+        "SERVED_HEAD_SQL",
+        "THEME_LATEST_RUN_SQL",
+        "resolve_governed_head_run_id(",
+        "served_run_predicate(",
+        "served_or_empty_head_predicate(",
+        "MartResearchReadRepository",
+        "PostgresMetricNodeValueRepository",
+        "read_strategy_provenance",
+        "read_trace_lineage",
+    )
+    backtest_tables = {"mart.backtest_runs", "mart.backtest_valuations", "mart.backtest_trades"}
+    offenders: list[str] = []
+    for node in tree.body:
+        defs = (
+            [node]
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            else (
+                [m for m in node.body if isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef))]
+                if isinstance(node, ast.ClassDef)
+                else []
+            )
+        )
+        for fn in defs:
+            seg = ast.get_source_segment(source_text, fn) or ""
+            sub_relations = [rel for rel in SERVED if rel not in backtest_tables and relation_references(seg, rel)]
+            if sub_relations and not any(tok in seg for tok in head_tokens):
+                offenders.append(f"{fn.name} reads {sub_relations} without head scoping")
+            if fn.name == "_module_output_counts":
+                assert "served_tables" not in seg, "_module_output_counts must govern every MODULE_CATALOG output_table"
+    assert not re.search(r"served_(?:run|or_empty_head)_predicate\(\s*[\"']d\.strategy_run_id", source_text), (
+        "strategy_run_id must never be matched against mart.served_head capture_run_id"
+    )
+    assert offenders == [], offenders
 
 
 def test_no_consumer_reaches_a_relation_listed_as_not_served() -> None:

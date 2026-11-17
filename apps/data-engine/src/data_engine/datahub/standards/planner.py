@@ -6,8 +6,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, Literal
 
-from truealpha_contracts.standards import MetricStandard
-
+from data_engine.contracts.standards import MetricStandard
 from data_engine.datahub._helpers import OBSERVATION_VINTAGE_JOIN
 from data_engine.datahub.canonical_issuer import signed_predecessor_ciks
 from data_engine.datahub.primary_listing import choose_primary_listings

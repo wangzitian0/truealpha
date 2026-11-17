@@ -163,8 +163,10 @@ def test_the_input_order_does_not_change_the_verdict() -> None:
 
 def test_the_window_of_the_admin_page_is_the_window_of_the_verdict() -> None:
     """One definition: `/admin/pipeline` counts the same days as the verdict judges."""
-    source = (Path(__file__).resolve().parents[3] / "apps/app-web/src/server/admin/pipeline.ts").read_text()
-    match = re.search(r"export const PIPELINE_WINDOW_DAYS = (\d+);", source)
+    source = (
+        Path(__file__).resolve().parents[3] / "apps/llm-service/src/llm_service/services/admin_service.py"
+    ).read_text()
+    match = re.search(r"^PIPELINE_WINDOW_DAYS\s*=\s*(\d+)", source, re.MULTILINE)
 
     assert match is not None
     assert int(match.group(1)) == job_run_health.WINDOW_DAYS

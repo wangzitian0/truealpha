@@ -3,34 +3,6 @@
   "source": "apps/app-web",
   "fields": [
     {
-      "field": "database_url",
-      "env": "DATABASE_URL",
-      "required": true,
-      "has_default": false,
-      "sensitive": true,
-      "group": "postgres",
-      "source": "runtime",
-      "provided_by": "truealpha/postgres:POSTGRES_PASSWORD",
-      "composed_from": "postgresql://postgres:{POSTGRES_PASSWORD}@truealpha-postgres{env:ENV_SUFFIX}:5432/truealpha",
-      "description": "Superuser DSN until the app_service_login cutover (#432 Stage A)."
-    },
-    {
-      "field": "secret_key",
-      "env": "SECRET_KEY",
-      "required": true,
-      "has_default": false,
-      "sensitive": true,
-      "group": "auth",
-      "source": "runtime",
-      "description": "HS256 session signing key; the image refuses to serve without one (#447)."
-    },
-    {
-      "field": "access_token_expire_minutes",
-      "env": "ACCESS_TOKEN_EXPIRE_MINUTES",
-      "group": "auth",
-      "source": "code"
-    },
-    {
       "field": "node_env",
       "env": "NODE_ENV",
       "group": "runtime",
@@ -54,62 +26,14 @@
       "injected": true
     },
     {
-      "field": "s3_endpoint",
-      "env": "S3_ENDPOINT",
-      "group": "s3",
-      "source": "code",
-      "injected": true
-    },
-    {
-      "field": "s3_access_key",
-      "env": "S3_ACCESS_KEY",
-      "group": "s3",
-      "source": "runtime",
-      "empty_ok": true,
-      "sensitive": true
-    },
-    {
-      "field": "s3_secret_key",
-      "env": "S3_SECRET_KEY",
-      "group": "s3",
-      "source": "runtime",
-      "empty_ok": true,
-      "sensitive": true
-    },
-    {
-      "field": "s3_bucket",
-      "env": "S3_BUCKET",
-      "group": "s3",
-      "source": "code"
-    },
-    {
-      "field": "s3_region",
-      "env": "S3_REGION",
-      "group": "s3",
-      "source": "code"
-    },
-    {
-      "field": "s3_raw_prefix",
-      "env": "S3_RAW_PREFIX",
-      "group": "s3",
-      "source": "code"
-    },
-    {
-      "field": "s3_connect_timeout_seconds",
-      "env": "S3_CONNECT_TIMEOUT_SECONDS",
-      "group": "s3",
-      "source": "code"
-    },
-    {
-      "field": "s3_documents_prefix",
-      "env": "S3_DOCUMENTS_PREFIX",
+      "field": "llm_service_url",
+      "env": "LLM_SERVICE_URL",
       "required": false,
-      "injected": false,
       "has_default": true,
       "sensitive": false,
-      "group": "s3",
-      "description": "Object key prefix for stored documents.",
-      "source": "code"
+      "group": "backend",
+      "source": "code",
+      "description": "Base URL of the unified FastAPI backend service (truealpha-llm-service)."
     },
     {
       "field": "otel_service_name",

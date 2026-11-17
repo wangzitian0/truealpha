@@ -23,6 +23,8 @@ from pathlib import Path
 import psycopg
 import pytest
 from data_engine.config import settings
+from data_engine.contracts.datahub import ObligationTerminalState
+from data_engine.contracts.obligation_reason_codes import ObligationReasonCode
 from data_engine.datahub import quality_report
 from data_engine.datahub.evidence_graph_repository import PostgresEvidenceGraphRepository
 from data_engine.datahub.production_topt import PostgresToptCoreRepository
@@ -55,9 +57,7 @@ from data_engine.datahub.production_topt.source_registrations import (
 )
 from factors.production_topt import GppeV0Definition, OperatingBranch
 from truealpha_contracts.common import canonical_sha256
-from truealpha_contracts.datahub import ObligationTerminalState
 from truealpha_contracts.models import DataSource
-from truealpha_contracts.obligation_reason_codes import ObligationReasonCode
 from truealpha_runtime.testing import InMemoryRawObjectStore as _InMemoryObjectStore
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
@@ -525,7 +525,7 @@ def test_the_governed_head_selects_the_strategy_run_not_recency(connection) -> N
         run_strategy_replay_for_cutoff,
         seed_strategy_inputs_from_capture,
     )
-    from truealpha_contracts.strategy_run_postgres import LATEST_RUN_SQL, latest_run_params
+    from truealpha_runtime.strategy_run_postgres import LATEST_RUN_SQL, latest_run_params
 
     plan = _capture(connection, version="test-governed-strategy-run")
     core = PostgresToptCoreRepository(connection)
