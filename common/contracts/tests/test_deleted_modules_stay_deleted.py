@@ -24,6 +24,10 @@ _DELETED_MODULES = [
         for n in _CASES["deleted_de_quality"]
     ),
     *(
+        (f"data_engine.datahub.{n}", DATA_ENGINE_SRC / "datahub" / f"{n}.py", DATA_ENGINE_SRC / "datahub" / n)
+        for n in _CASES.get("deleted_de_datahub", ())
+    ),
+    *(
         (f"factors.{n}", FACTORS_SRC / f"{n.replace('.', '/')}.py", FACTORS_SRC / n.replace(".", "/"))
         for n in _CASES["deleted_factors"]
     ),

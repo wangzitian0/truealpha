@@ -31,16 +31,3 @@ Every other action is the agent's task when the checklist of its stage passes.
 This covers merging any PR, including a CI or governance change, and staging
 verification. `.github/CODEOWNERS` asks the owner for a review of CI and
 governance paths. It is not a merge condition.
-
-## A release declares its data replays (#1412 R4)
-
-A changed parser, mapping or projector writes new rows only when it runs
-again. #1270: a projector fix reached main, and the next backtest ran on rows
-that the old projector wrote. `apps/data-engine/release-replays.json` is the
-one declaration. Its `identities` list names each watched version identity.
-Its `replays` list holds one entry for each declared replay.
-
-The `infra2` release train compares each watched identity
-at the base release tag with `HEAD`. A changed identity needs a replay entry
-that the base declaration does not hold. The PR that changes the identity adds
-that entry.

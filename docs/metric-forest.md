@@ -300,7 +300,7 @@ In #909, `compute_topt_gppe` evaluates the tree. Three tests, added by #909 in
 3. The tree's identity is frozen under `production-topt-v0.2.0`, and the tree's version is
    bound to `GppeV0Definition.factor_version`.
 
-#909 also adds two `tools/mutations.json` entries:
+#909 also added two historical mutation entries:
 
 - Mutation id panel/gppe-tree-reproduces-v020 re-proves check 2 weekly by binding a bank's numerator to
   `total_assets`.

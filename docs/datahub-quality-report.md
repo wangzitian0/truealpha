@@ -45,7 +45,7 @@ of cells whose close did:
 | open, high, low, close | `RECONCILIATION_POLICY` | USD |
 | volume | `VOLUME_RECONCILIATION_POLICY` | shares |
 
-`common/contracts/src/truealpha_contracts/reconciliation_policies.py` holds every policy.
+`common/runtime/src/truealpha_runtime/reconciliation_policies.py` holds every policy.
 Each policy holds its version, its source order and its tolerance.
 
 Volume is not a price: it is each vendor's own aggregation of the consolidated tape and

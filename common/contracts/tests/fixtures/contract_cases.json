@@ -244,11 +244,15 @@
     "readiness", "catalog", "service_demand", "usage", "registries", "data_quality",
     "metric_node_read", "topt_read", "strategy_run_fixture"
   ],
-  "deleted_de_quality": ["confidence", "strategy_samples"],
+  "deleted_de_quality": ["confidence", "strategy_samples", "invariants", "runtime_shape", "release_fetch_proof"],
+  "deleted_de_datahub": ["sentinel_corpus", "canary_oracles", "topt_read"],
   "deleted_factors": ["composite.registered_composite_probe", "base.registered_semantic_probe"],
   "deleted_scripts": [
     "datahub_quality_report.py", "refresh_etf_universe.py", "run_production_topt_capture.py",
-    "materialize_production_topt_core.py", "query_production_topt_datahub.py"
+    "materialize_production_topt_core.py", "query_production_topt_datahub.py",
+    "capture_strategy_evidence.py", "capture_fundamental_samples.py", "probe_etf_holdings.py",
+    "pull_sec_samples.py", "seed_issuer_headcounts.py", "canary_assert.py",
+    "assert_data_invariants.py", "export_issue58.py"
   ],
   "deleted_app_web": [
     "src/app/research/conversations/page.tsx",
@@ -259,7 +263,12 @@
     "src/contracts/issue58.ts",
     "tests/conversations-answer.test.ts",
     "tests/conversations-validation.test.ts",
-    "tests/issue58-conformance.test.ts"
+    "tests/issue58-conformance.test.ts",
+    "src/components/next-page-link.tsx",
+    "src/server/mart/research-read.ts",
+    "src/server/admin/datahub-stats.ts",
+    "src/server/cards/xhs-card.ts",
+    "src/server/topt-quality.ts"
   ],
   "stable_id_probes": {
     "copies": [

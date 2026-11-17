@@ -411,7 +411,7 @@ async function assertPipelineHealth(page, path, problems, role) {
   }
 }
 
-// #1241. The text that NOT_RECORDED prints in src/server/mart/research-read.ts for a field that the
+// #1241. The text that NOT_RECORDED prints in /research/trace for a field that the
 // lineage does not carry. tests/walk-tree-trace-inputs.test.ts fails when the two texts differ.
 const NOT_RECORDED = "not recorded";
 // The five cells of one input row. TraceInputsTable marks each cell with data-field.
