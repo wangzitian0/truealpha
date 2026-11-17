@@ -26,7 +26,7 @@ IDENTITY = {
 }
 DEPLOYED = {
     "OTEL_SERVICE_NAME": "truealpha-dagster",
-    "APP_ENV": "production",
+    "ENVIRONMENT": "production",
     "OTEL_RESOURCE_ATTRIBUTES": ",".join(f"{key}={value}" for key, value in IDENTITY.items()),
 }
 

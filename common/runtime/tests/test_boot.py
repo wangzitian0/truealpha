@@ -33,7 +33,7 @@ def test_a_local_process_tolerates_absent_injected_values() -> None:
 
 def test_an_empty_injected_value_counts_as_missing() -> None:
     environ = {
-        "APP_ENV": "staging",
+        "ENVIRONMENT": "staging",
         "GIT_COMMIT_SHA": "",
         "MCP_BEARER_TOKEN": "test-mcp-token",
         "S3_ENDPOINT": "http://127.0.0.1:9000",
@@ -88,3 +88,15 @@ def test_canonical_environment_and_sdk_shared_contract() -> None:
         is None
     )
     assert any(entry["name"] == "LLM_API_KEY" for entry in shared_env_contract()["groups"]["llm"])
+
+
+def test_retired_app_env_alias_does_not_satisfy_environment() -> None:
+    environ = {
+        "APP_ENV": "staging",
+        "GIT_COMMIT_SHA": "v0.2.101",
+        "MCP_BEARER_TOKEN": "tok",
+        "S3_ENDPOINT": "http://minio:9000",
+        "SECRET_KEY": "sec",
+    }
+    with pytest.raises(RuntimeError, match="ENVIRONMENT"):
+        assert_environment(LLM_MANIFEST, environ=environ, require_injected=True)

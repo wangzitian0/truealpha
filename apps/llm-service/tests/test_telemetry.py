@@ -31,7 +31,7 @@ def _attributes(deployment_environment: str) -> str:
 
 DEPLOYED = {
     "OTEL_SERVICE_NAME": "truealpha-app",
-    "APP_ENV": "staging",
+    "ENVIRONMENT": "staging",
     "OTEL_RESOURCE_ATTRIBUTES": _attributes(IDENTITY["deployment.environment.name"]),
 }
 
@@ -96,11 +96,11 @@ def test_without_an_endpoint_the_app_imports_with_telemetry_off() -> None:
 def test_with_an_endpoint_and_the_rendered_identity_the_app_exports_without_the_contrib_instrumentor(
     deployment_environment: str,
 ) -> None:
-    """Preview stacks run with `APP_ENV=staging` and carry their own alias as the issued name.
+    """Preview stacks run with `ENVIRONMENT=staging` and carry their own alias as the issued name.
     No contrib instrumentor is attached (#1660): it would replace the stable HTTP metric."""
     environ = {
         **DEPLOYED,
-        "APP_ENV": "staging",
+        "ENVIRONMENT": "staging",
         "OTEL_RESOURCE_ATTRIBUTES": _attributes(deployment_environment),
         "OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:9",
     }
@@ -127,7 +127,7 @@ def test_with_an_endpoint_but_without_the_identity_the_app_refuses_to_import(mis
 
 def test_a_request_and_an_error_log_reach_the_collector_under_the_rendered_identity() -> None:
     """On the wire, in the shape infra2's preview compose renders: staging behaviour, own alias."""
-    preview = {**DEPLOYED, "APP_ENV": "staging", "OTEL_RESOURCE_ATTRIBUTES": _attributes("pr-12")}
+    preview = {**DEPLOYED, "ENVIRONMENT": "staging", "OTEL_RESOURCE_ATTRIBUTES": _attributes("pr-12")}
     with OtlpCollectorStub() as collector:
         result = run_python_probe(EXPORT_PROBE, {**preview, "OTEL_EXPORTER_OTLP_ENDPOINT": collector.endpoint})
     assert result.returncode == 0, result.stderr

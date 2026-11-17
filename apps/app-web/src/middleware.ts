@@ -5,7 +5,7 @@ export function resolveBackendOrigin(): string {
   if (configured) return configured.replace(/\/+$/, "");
   const suffix = process.env.ENV_SUFFIX;
   if (suffix !== undefined) return `http://truealpha-llm${suffix}:8000`;
-  const env = (process.env.APP_ENV || "").trim().toLowerCase();
+  const env = (process.env.ENVIRONMENT || "").trim().toLowerCase();
   if (env === "staging") return "http://truealpha-llm-staging:8000";
   if (env === "prod" || env === "production") return "http://truealpha-llm:8000";
   return "http://127.0.0.1:8000";

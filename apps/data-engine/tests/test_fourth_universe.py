@@ -158,7 +158,7 @@ def _run_child() -> subprocess.CompletedProcess[str]:
     with tempfile.TemporaryDirectory() as scratch:
         path = Path(scratch) / "variant.json"
         path.write_text(variant_text(), encoding="utf-8")
-        env = {**os.environ, "APP_ENV": "production", "VARIANT_CONTRACT": str(path)}
+        env = {**os.environ, "ENVIRONMENT": "production", "VARIANT_CONTRACT": str(path)}
         return subprocess.run(
             [sys.executable, str(Path(__file__).resolve())],
             env=env,

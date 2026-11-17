@@ -75,7 +75,7 @@ def main() -> None:
     from data_engine.config import settings
 
     print(
-        f"env: APP_ENV={settings.app_env}  db={settings.database_url.rsplit('@', 1)[-1]}  s3={'configured' if settings.s3_endpoint else 'UNCONFIGURED'}"
+        f"env: ENVIRONMENT={settings.app_env}  db={settings.database_url.rsplit('@', 1)[-1]}  s3={'configured' if settings.s3_endpoint else 'UNCONFIGURED'}"
     )
     failed = False
     for name, problems, required in (

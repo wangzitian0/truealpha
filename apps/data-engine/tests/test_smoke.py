@@ -4,8 +4,8 @@ from data_engine.sources.sec import COMPANY_FACTS_URL
 
 def test_settings_defaults(monkeypatch):
     # _env_file=None only isolates the .env FILE; ambient variables (CI sets
-    # APP_ENV=ci) still win — strip them so this genuinely tests the defaults.
-    monkeypatch.delenv("APP_ENV", raising=False)
+    # ENVIRONMENT=ci) still win — strip them so this genuinely tests the defaults.
+    monkeypatch.delenv("ENVIRONMENT", raising=False)
     monkeypatch.delenv("SEC_USER_AGENT", raising=False)
     monkeypatch.delenv("LLM_MODEL", raising=False)
     s = Settings(_env_file=None)

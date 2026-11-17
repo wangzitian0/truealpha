@@ -651,7 +651,7 @@ def test_the_two_environments_never_tick_at_the_same_instant() -> None:
     # The full half-hour the fix promises: one env's ~6-minute request train plus
     # throttling drift must never reach the other's window.
     assert abs(int(production.split()[0]) - int(staging.split()[0])) >= 30
-    # Alias safety: APP_ENV=prod is production, not an accidental staging slot.
+    # Alias safety: ENVIRONMENT=prod is production, not an accidental staging slot.
     assert tick_cron("topt", "prod") == production
     assert tick_cron("topt", "PRODUCTION") == production
     assert tick_cron("topt", "dev") == staging, "unrecognized envs share the lower-stakes slot"
@@ -1082,7 +1082,7 @@ def test_issue_1310_no_running_production_schedule_launches_the_sp500_tick() -> 
 
 def test_issue_1310_the_deployed_module_loads_the_sp500_schedule_stopped_under_production(tmp_path: Path) -> None:
     """The production daemon runs `-m data_engine.dagster_defs`. That module binds each tick's default
-    status when it loads. It does not call `build_definitions`. A new interpreter with APP_ENV=production
+    status when it loads. It does not call `build_definitions`. A new interpreter with ENVIRONMENT=production
     loads the same module. It reports the schedules that the production daemon registers."""
     import os
     import subprocess
@@ -1097,7 +1097,7 @@ def test_issue_1310_the_deployed_module_loads_the_sp500_schedule_stopped_under_p
     finished = subprocess.run(
         [sys.executable, "-c", probe],
         cwd=tmp_path,  # A temporary directory holds no `.env` file for the settings to read.
-        env={**os.environ, "APP_ENV": "production"},
+        env={**os.environ, "ENVIRONMENT": "production"},
         capture_output=True,
         text=True,
         timeout=120,
@@ -1174,7 +1174,7 @@ def test_the_sp500_stop_is_read_from_the_contract_and_from_no_constant() -> None
         finished = subprocess.run(
             [sys.executable, "-c", probe],
             cwd=Path(__file__).parent,  # a directory without a `.env` file
-            env={**os.environ, "APP_ENV": app_env},
+            env={**os.environ, "ENVIRONMENT": app_env},
             capture_output=True,
             text=True,
             timeout=120,
@@ -1229,7 +1229,7 @@ def test_the_refresh_of_a_universe_follows_the_contract_of_the_process_environme
 
 @pytest.mark.parametrize("app_env", ["dev", "typo-in-app-env", ""])
 def test_an_environment_the_contract_does_not_name_runs_the_topt_tick_and_the_canary_only(app_env: str) -> None:
-    """A mistyped APP_ENV must never start the production ticks (QQQ, the S&P 500). It takes the rule of staging."""
+    """A mistyped ENVIRONMENT must never start the production ticks (QQQ, the S&P 500). It takes the rule of staging."""
     from data_engine.environment_universes import rule_environment, scheduled_universe_names
 
     rows = _schedule_rows(dagster_defs.build_definitions(app_env))
