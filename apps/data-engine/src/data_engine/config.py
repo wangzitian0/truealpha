@@ -29,7 +29,7 @@ class Settings(RuntimeSettings):
         "",
         "decision",
         "release",
-        validation_alias=AliasChoices("TRUEALPHA_CAPTURE_APPROVED_BY", "CAPTURE_APPROVED_BY"),
+        validation_alias=AliasChoices("CAPTURE_APPROVED_BY", "TRUEALPHA_CAPTURE_APPROVED_BY"),
     )
     database_url: str = database_url_field(
         composed_from="postgresql://postgres:{POSTGRES_PASSWORD}@127.0.0.1:{env:TA_POSTGRES_PORT}/truealpha",

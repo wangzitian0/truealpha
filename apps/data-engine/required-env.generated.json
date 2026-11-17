@@ -4,8 +4,10 @@
   "fields": [
     {
       "field": "app_env",
-      "env": "APP_ENV",
-      "aliases": [],
+      "env": "ENVIRONMENT",
+      "aliases": [
+        "APP_ENV"
+      ],
       "required": false,
       "injected": true,
       "has_default": true,
@@ -272,9 +274,9 @@
     },
     {
       "field": "capture_approved_by",
-      "env": "TRUEALPHA_CAPTURE_APPROVED_BY",
+      "env": "CAPTURE_APPROVED_BY",
       "aliases": [
-        "CAPTURE_APPROVED_BY"
+        "TRUEALPHA_CAPTURE_APPROVED_BY"
       ],
       "required": false,
       "injected": true,
