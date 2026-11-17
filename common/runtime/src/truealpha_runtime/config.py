@@ -6,8 +6,8 @@ from typing import Any
 
 from infra2_sdk.runtime.environment import EnvironmentTier, RuntimeEnvKey
 from infra2_sdk.runtime.environment import resolve_environment_tier as _resolve_tier
-from pydantic import AliasChoices, Field, SecretStr, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field, SecretStr, field_validator
+from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
 DEFAULT_DATABASE_URL = "postgresql://postgres:postgres@localhost:5432/truealpha"
 POSTGRES_PROVIDED_BY = "truealpha/postgres:POSTGRES_PASSWORD"
@@ -28,7 +28,7 @@ def resolve_environment_tier(app_env: str, *, github_actions: bool = False) -> E
     try:
         return _resolve_tier(app_env, github_actions=github_actions)
     except ValueError:
-        raise ValueError(f"unknown APP_ENV: {app_env!r}") from None
+        raise ValueError(f"unknown ENVIRONMENT: {app_env!r}") from None
 
 
 class CoreRuntimeSettings(BaseSettings):
@@ -40,12 +40,28 @@ class CoreRuntimeSettings(BaseSettings):
         populate_by_name=True,
     )
 
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        """Keep `app_env=` working for Python callers without reading `app_env` from env/dotenv."""
+        for source in (env_settings, dotenv_settings):
+            source.config = SettingsConfigDict(
+                **{**source.config, "populate_by_name": False, "validate_by_name": False}
+            )
+        return init_settings, env_settings, dotenv_settings, file_secret_settings
+
     app_env: str = _schema_field(
         "dev",
         "code",
         "runtime",
         injected=True,
-        validation_alias=AliasChoices(RuntimeEnvKey.ENVIRONMENT.value, "APP_ENV"),
+        validation_alias=RuntimeEnvKey.ENVIRONMENT.value,
     )
     git_commit_sha: str = _schema_field("unknown", "release", "runtime")
     database_url: str = database_url_field()

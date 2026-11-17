@@ -78,7 +78,7 @@ class FailoverDrill:
                 raise DrillRefused("drill_primary_lagging needs drill tickers")
             return None
         if is_production(app_env):
-            raise DrillRefused(f"a failover drill never runs in production (APP_ENV={app_env!r})")
+            raise DrillRefused(f"a failover drill never runs in production (ENVIRONMENT={app_env!r})")
         if not force_fetch:
             raise DrillRefused("a failover drill must force a fetch (force_fetch: true), or it proves nothing")
         if primary_lagging and twelve_data_unavailable:
@@ -103,7 +103,7 @@ class FailoverDrill:
         self, app_env: str, fetcher: MarketPriceFetcher, origins: Sequence[CorroboratingOrigin]
     ) -> tuple[MarketPriceFetcher, tuple[CorroboratingOrigin, ...]]:
         if is_production(app_env):
-            raise DrillRefused(f"a failover drill never arms in production (APP_ENV={app_env!r})")
+            raise DrillRefused(f"a failover drill never arms in production (ENVIRONMENT={app_env!r})")
         down = set(self.origins_down)
         primary_fetcher = (
             self._lagged(fetcher) if self.kind is DrillKind.PRIMARY_LAGGING else self._broken(fetcher, "primary")

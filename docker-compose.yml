@@ -76,7 +76,7 @@ services:
     restart: ${RESTART_POLICY:-unless-stopped}
     logging: *default-logging
     environment:
-      APP_ENV: ${APP_ENV:-dev}
+      ENVIRONMENT: ${ENVIRONMENT:-dev}
       GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-}
       SECRET_KEY: ${SECRET_KEY:-}
       DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-truealpha}
@@ -113,7 +113,7 @@ services:
     environment:
       HOSTNAME: 0.0.0.0
       PORT: "3000"
-      APP_ENV: ${APP_ENV:-dev}
+      ENVIRONMENT: ${ENVIRONMENT:-dev}
       GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-}
       LLM_SERVICE_URL: http://llm-service:8000
     depends_on:

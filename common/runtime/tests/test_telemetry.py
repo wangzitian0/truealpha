@@ -41,7 +41,7 @@ def _environ(**overrides: str | None) -> dict[str, str]:
     environ = {
         "OTEL_EXPORTER_OTLP_ENDPOINT": ENDPOINT,
         "OTEL_SERVICE_NAME": "truealpha-app",
-        "APP_ENV": "staging",
+        "ENVIRONMENT": "staging",
         "OTEL_RESOURCE_ATTRIBUTES": ",".join(f"{key}={value}" for key, value in IDENTITY.items()),
     }
     for name, value in overrides.items():
@@ -139,7 +139,7 @@ def test_the_process_environment_is_the_default_source(monkeypatch: pytest.Monke
         monkeypatch.delenv(name, raising=False)
     assert init_telemetry() is None
     monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", ENDPOINT)
-    monkeypatch.delenv("APP_ENV", raising=False)
+    monkeypatch.delenv("ENVIRONMENT", raising=False)
     with pytest.raises(TelemetryConfigError, match="OTEL_SERVICE_NAME"):
         init_telemetry()
 
@@ -210,26 +210,28 @@ def _exported_deployment_environment(environ: dict[str, str]) -> str:
 
 
 @pytest.mark.parametrize("alias", ["pr-12", "branch-main", "commit-abc1234", "tag-v1-2-3", "canary-preview"])
-def test_a_preview_stack_starts_with_its_alias_although_app_env_says_staging(alias: str) -> None:
-    """The exact shape infra2's preview compose renders: `APP_ENV: staging` hard-coded (preview runs
-    with staging behaviour) next to the deploy's own `deployment.environment.name=<alias>`. APP_ENV is
+def test_a_preview_stack_starts_with_its_alias_although_environment_says_staging(alias: str) -> None:
+    """The exact shape infra2's preview compose renders: `ENVIRONMENT: staging` hard-coded (preview runs
+    with staging behaviour) next to the deploy's own `deployment.environment.name=<alias>`. ENVIRONMENT is
     the app's behavioural tier; the telemetry identity is what infra2 issued, and it must survive
-    unchanged rather than be reconciled against APP_ENV (which refused every preview boot)."""
-    environ = _environ(APP_ENV="staging", OTEL_RESOURCE_ATTRIBUTES=_issued_attributes(alias))
+    unchanged rather than be reconciled against ENVIRONMENT (which refused every preview boot)."""
+    environ = _environ(ENVIRONMENT="staging", OTEL_RESOURCE_ATTRIBUTES=_issued_attributes(alias))
     assert _exported_deployment_environment(environ) == alias
 
 
 @pytest.mark.parametrize("tier", ["staging", "production"])
 def test_the_protected_environments_start_under_their_own_name(tier: str) -> None:
-    environ = _environ(APP_ENV=tier, OTEL_RESOURCE_ATTRIBUTES=_issued_attributes(tier))
+    environ = _environ(ENVIRONMENT=tier, OTEL_RESOURCE_ATTRIBUTES=_issued_attributes(tier))
     assert _exported_deployment_environment(environ) == tier
 
 
-def test_app_env_does_not_decide_whether_telemetry_starts_or_what_it_says() -> None:
-    """Absent, or unrelated to the issued name, APP_ENV changes nothing about the identity."""
+def test_environment_does_not_decide_whether_telemetry_starts_or_what_it_says() -> None:
+    """Absent, or unrelated to the issued name, ENVIRONMENT changes nothing about the identity."""
     issued = _issued_attributes("production")
-    assert _exported_deployment_environment(_environ(APP_ENV=None, OTEL_RESOURCE_ATTRIBUTES=issued)) == "production"
-    assert _exported_deployment_environment(_environ(APP_ENV="dev", OTEL_RESOURCE_ATTRIBUTES=issued)) == "production"
+    assert _exported_deployment_environment(_environ(ENVIRONMENT=None, OTEL_RESOURCE_ATTRIBUTES=issued)) == "production"
+    assert (
+        _exported_deployment_environment(_environ(ENVIRONMENT="dev", OTEL_RESOURCE_ATTRIBUTES=issued)) == "production"
+    )
 
 
 def test_an_issued_name_the_sdk_does_not_know_is_refused() -> None:
@@ -247,7 +249,7 @@ def test_a_malformed_attribute_string_is_refused_by_its_own_reason(attributes: s
     """Not read as "identity missing": the SDK discards a malformed string quietly when it is not
     strict, so the refusal has to carry the parse error itself."""
     with pytest.raises(TelemetryConfigError, match=reason):
-        init_telemetry(_environ(APP_ENV=None, OTEL_RESOURCE_ATTRIBUTES=attributes))
+        init_telemetry(_environ(ENVIRONMENT=None, OTEL_RESOURCE_ATTRIBUTES=attributes))
     assert _exporters_created() == 0
 
 

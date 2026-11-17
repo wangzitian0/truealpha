@@ -44,7 +44,7 @@ It is the application half of infra2 `ops.observability` section 4.2:
 - On, the identity is consumed from infra2's deploy and never defaulted: `OTEL_SERVICE_NAME`
   plus `deployment.environment.name`, `infra.service.id`, `service.version` and
   `infra.iac.ref` in `OTEL_RESOURCE_ATTRIBUTES`. A missing key refuses startup by name.
-  `ENVIRONMENT` (or its alias `APP_ENV`) is not consulted for OTEL identity: a preview stack
+  `ENVIRONMENT` is not consulted for OTEL identity: a preview stack
   runs with `ENVIRONMENT=staging` and its own `deployment.environment.name` (`pr-12`,
   `canary-preview`, ...), which is exported as issued.
 - Services with HTTP APIs (`llm_service.main`) call `infra2_sdk.fastapi.init_service` for

@@ -5,9 +5,7 @@
     {
       "field": "app_env",
       "env": "ENVIRONMENT",
-      "aliases": [
-        "APP_ENV"
-      ],
+      "aliases": [],
       "required": false,
       "injected": true,
       "has_default": true,

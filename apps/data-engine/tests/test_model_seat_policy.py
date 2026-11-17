@@ -768,13 +768,13 @@ def test_the_schedule_of_each_live_environment_runs_in_its_own_slot(environment)
 
 @pytest.mark.parametrize("environment", sorted(SEAT.environments))
 def test_a_process_of_each_environment_deploys_the_schedule_of_its_own_slot(environment) -> None:
-    """The real wiring: import the lane in a fresh process whose APP_ENV names the environment.
-    A CI process (APP_ENV=ci) is not listed in the contract and cannot tell the slots apart."""
+    """The real wiring: import the lane in a fresh process whose ENVIRONMENT names the environment.
+    A CI process (ENVIRONMENT=ci) is not listed in the contract and cannot tell the slots apart."""
     code = (
         "from data_engine.lanes import quality; "
         "print(quality.defs.get_schedule_def('model_key_health_schedule').cron_schedule)"
     )
-    env = {**os.environ, "APP_ENV": environment}
+    env = {**os.environ, "ENVIRONMENT": environment}
     done = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, timeout=120)
     assert done.returncode == 0, done.stderr[-2000:]
     assert done.stdout.strip().splitlines()[-1] == SEAT.probe_cron(environment)

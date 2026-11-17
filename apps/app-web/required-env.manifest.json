@@ -13,10 +13,7 @@
       "env": "ENVIRONMENT",
       "group": "runtime",
       "source": "code",
-      "injected": true,
-      "aliases": [
-        "APP_ENV"
-      ]
+      "injected": true
     },
     {
       "field": "git_commit_sha",

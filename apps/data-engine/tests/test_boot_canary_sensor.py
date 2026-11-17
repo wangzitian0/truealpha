@@ -192,7 +192,7 @@ def test_identity_comes_from_settings_not_from_the_process_environment(monkeypat
     monkeypatch.setenv("TRUEALPHA_DATA_ENGINE_IMAGE_DIGEST", "sha256:" + "9" * 64)
     monkeypatch.setenv("TRUEALPHA_CONFIGURATION_SHA256", "c" * 64)
     monkeypatch.setenv("GIT_COMMIT_SHA", "v9.9.9")
-    monkeypatch.setenv("APP_ENV", "staging")
+    monkeypatch.setenv("ENVIRONMENT", "staging")
     request, _ = _launch()
     assert request.run_key == f"boot:{DIGEST}:deploy-1" and request.tags["truealpha/build"] == "v0.0.47"
     assert request.tags["truealpha/configuration"] == CONFIG

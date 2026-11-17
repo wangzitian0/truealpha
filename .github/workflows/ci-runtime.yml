@@ -8,7 +8,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      APP_ENV: ci
+      ENVIRONMENT: ci
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/truealpha
       S3_ENDPOINT: http://localhost:9000
       S3_ACCESS_KEY: minio

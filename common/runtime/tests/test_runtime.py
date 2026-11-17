@@ -69,8 +69,18 @@ def test_runtime_accepts_the_shared_sdk_environment_vocabulary(value, expected):
 
 
 def test_unknown_environment_keeps_the_app_error_contract():
-    with pytest.raises(ValueError, match="unknown APP_ENV"):
+    with pytest.raises(ValueError, match="unknown ENVIRONMENT"):
         resolve_environment_tier("unknown-tier")
+
+
+def test_retired_app_env_alias_is_not_accepted_as_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    from truealpha_runtime import CoreRuntimeSettings
+
+    monkeypatch.delenv("ENVIRONMENT", raising=False)
+    monkeypatch.setenv("APP_ENV", "staging")
+    assert CoreRuntimeSettings(_env_file=None).app_env == "dev"
+    monkeypatch.setenv("ENVIRONMENT", "staging")
+    assert CoreRuntimeSettings(_env_file=None).app_env == "staging"
 
 
 def test_runtime_dependency_environment_keys_do_not_drift():
