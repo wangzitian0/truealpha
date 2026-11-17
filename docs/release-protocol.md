@@ -10,7 +10,7 @@ reporting, and scheduler-liveness checks run centrally in wangzitian0/infra2
 
 `runtime-hooks.manifest.json` (`schema_version: 2`, `service: "truealpha/app"`)
 is the single contract between `truealpha` and the `infra2` release train.
-`common/runtime/src/truealpha_tools/env_manifest.py` validates it alongside
+`infra2_sdk.manifests` (`python -m infra2_sdk.manifests check`) validates it alongside
 `env.manifest.json` on every CI run.
 
 It declares five `Pre -> Deploy -> Post` verification slots that `infra2` invokes. Each slot lists
@@ -40,8 +40,7 @@ that the old projector wrote. `apps/data-engine/release-replays.json` is the
 one declaration. Its `identities` list names each watched version identity.
 Its `replays` list holds one entry for each declared replay.
 
-`tools/release_replays.py` (tested by
-`common/runtime/tests/test_release_replays.py`) compares each watched identity
+The `infra2` release train compares each watched identity
 at the base release tag with `HEAD`. A changed identity needs a replay entry
 that the base declaration does not hold. The PR that changes the identity adds
 that entry.

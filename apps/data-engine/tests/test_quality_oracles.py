@@ -4,21 +4,16 @@ Note what these tests can and cannot do. They prove the oracle's selection rule 
 independent one and that its SQL is valid — both are properties of THIS code, so a
 fixture is the right instrument. They deliberately do NOT assert any captured value is
 correct: that assertion only has meaning against a real database and a live vendor, which
-is `scripts/assert_data_invariants.py`, not pytest. A test that seeded its own warehouse
+is `tools/output_invariants.py`, not pytest. A test that seeded its own warehouse
 and then checked the warehouse would be the exact self-referential loop this layer exists
 to break.
 """
 
 from __future__ import annotations
 
-import os
 from datetime import date
 from decimal import Decimal
 
-import psycopg
-import pytest
-from data_engine.config import settings
-from data_engine.quality.invariants import INVARIANTS, check
 from data_engine.quality.vendor_oracle import Drift, gross_profit, latest_across_variants, period_reporting, revenue
 
 _CUTOFF = date(2026, 7, 27)
@@ -139,41 +134,6 @@ def test_quarterly_spans_never_win_over_annual_ones() -> None:
 def test_an_issuer_that_reports_nothing_yields_nothing() -> None:
     assert latest_across_variants(_facts(), ("Revenues",), "USD", _CUTOFF) is None
     assert gross_profit(_facts(), _CUTOFF) is None
-
-
-# -- the invariant SQL is valid and runs -----------------------------------------------
-
-
-@pytest.fixture
-def connection():
-    try:
-        active = psycopg.connect(settings.database_url, connect_timeout=3, autocommit=False)
-    except psycopg.OperationalError as error:
-        if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
-            pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
-        pytest.skip("no local Postgres; CI runs the required integration coverage")
-    try:
-        active.execute("select 1")
-        yield active
-    finally:
-        active.rollback()
-        active.close()
-
-
-def test_every_invariant_executes_and_returns_a_count(connection) -> None:
-    """Validity only. An empty CI database satisfies every invariant vacuously, which is
-    precisely why passing here is not evidence about production data."""
-    assert len(INVARIANTS) > 0
-    results = check(connection)
-    assert len(results) == len(INVARIANTS)
-    assert all(isinstance(item.violations, int) for item in results)
-
-
-def test_each_invariant_declares_why_it_needs_no_domain_knowledge() -> None:
-    assert len(INVARIANTS) > 0
-    for invariant in INVARIANTS:
-        assert invariant.self_evident_because, f"{invariant.id} must say why it is self-evident"
-        assert invariant.statement
 
 
 def test_staleness_is_measured_from_the_period_mart_actually_used() -> None:

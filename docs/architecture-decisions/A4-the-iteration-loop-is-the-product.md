@@ -120,7 +120,7 @@ pipeline. Break-glass stays: an incident label releases a single PR immediately.
 
 **D6 — Agent-loop mechanics** (no approval needed, self-imposed): every scripted
 edit is followed by a non-empty-diff assertion; a red case first asserts the
-symbol under test exists on the current branch; `tools/runtime_truth.py` prints
+symbol under test exists on the current branch; `tools/runtime_truth.py` <!-- doc-drift: history --> prints
 each deployed container's effective entrypoint/command/image so "what actually
 runs" is one command instead of SSH archaeology. All three failure modes cost
 real time that sprint.

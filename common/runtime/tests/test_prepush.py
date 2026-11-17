@@ -15,8 +15,7 @@ all of them learned the hard way:
   `git diff` until it is added, and dogfooding caught the script skipping
   ITSELF for that reason;
 - tests run through the diff scope, never the whole suite — the laptop tier
-  is <= 60 s by design (A4 budget table). `test_diff_scope.py` proves the
-  selection through this script (#1412 T1).
+  is <= 60 s by design (A4 budget table, #1412 T1).
 """
 
 from __future__ import annotations
