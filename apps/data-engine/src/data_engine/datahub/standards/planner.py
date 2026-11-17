@@ -8,7 +8,7 @@ from typing import Any, Literal
 
 from truealpha_contracts.standards import MetricStandard
 
-from data_engine.datahub._helpers import CAPTURE_OBSERVATION_JOIN
+from data_engine.datahub._helpers import OBSERVATION_VINTAGE_JOIN
 from data_engine.datahub.canonical_issuer import signed_predecessor_ciks
 from data_engine.datahub.primary_listing import choose_primary_listings
 from data_engine.datahub.production_topt.headcount import is_eligible_headcount_row
@@ -22,7 +22,7 @@ _NEWER_ANNUAL_FILING_SQL = (
     "select 1 from raw.fetches where source = 'sec' and source_record_id like %s "
     "and source_published_at > %s and source_published_at <= %s "
     "and coalesce(metadata->>'form', '10-K') in ('10-K', '20-F') "
-    f"union all select 1 {CAPTURE_OBSERVATION_JOIN} "
+    f"union all select 1 {OBSERVATION_VINTAGE_JOIN} "
     "where o.semantic_type = 'financial-fact' and v.source_record_id = %s "
     "and o.knowable_at > %s and o.knowable_at <= %s "
     "and p.normalized_payload->'vintage'->'revenue'->>'form' in ('10-K', '20-F') limit 1"

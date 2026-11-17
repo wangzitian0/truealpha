@@ -21,7 +21,7 @@ from factors.shared.extraction import (
 )
 from truealpha_contracts.standards import MetricStandard, confidence_for
 
-from data_engine.datahub._helpers import CAPTURE_OBSERVATION_JOIN, execute_many
+from data_engine.datahub._helpers import OBSERVATION_VINTAGE_JOIN, execute_many
 from data_engine.datahub.production_topt.concept_mapping import DEFAULT_RULESET
 from data_engine.datahub.production_topt.source_registrations import AsOfAxis, knowable_instant
 from data_engine.datahub.standards.filing_extraction import (
@@ -339,7 +339,7 @@ SEGMENT_TOLERANCE = Decimal("5")
 
 _CONSOLIDATED_REVENUE_SQL = (
     "select p.normalized_payload->>'revenue', p.normalized_payload->>'revenue_period_end' "
-    + CAPTURE_OBSERVATION_JOIN
+    + OBSERVATION_VINTAGE_JOIN
     + " where o.semantic_type = 'financial-fact' and v.source_record_id = %s and o.knowable_at <= %s"
     " and p.normalized_payload->>'revenue' is not null"
     " and p.normalized_payload->>'revenue_period_end' is not null"

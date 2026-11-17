@@ -758,15 +758,6 @@ def _is_primary_parser(parser_version: str, *, allow_integration_parser: bool = 
     )
 
 
-def _resolve_coordinate(
-    parser_version: str, *, allow_integration_parser: bool = False
-) -> tuple[bool, tuple[str, str, str]] | None:
-    if _is_primary_parser(parser_version, allow_integration_parser=allow_integration_parser):
-        return True, (SEC_COMPANY_FACTS_SOURCE, SEC_COMPANY_FACTS_ORIGIN, "close")
-    coord = SOURCE_BY_PARSER.get(parser_version)
-    return None if coord is None else (False, coord)
-
-
 def load_run_subjects(
     connection: Connection[Any], run_id: str, cutoff: datetime, *, allow_integration_parser: bool = False
 ) -> dict[str, _Subject]:
@@ -782,6 +773,7 @@ def load_run_subjects(
         (run_id,),
     ).fetchall()
     financial: dict[str, list[FinancialObservation]] = {}
+    integration = (SEC_COMPANY_FACTS_SOURCE, SEC_COMPANY_FACTS_ORIGIN, "close")
     for sid_raw, sem, pver, know_at, obs_id, payload_raw in rows:
         subject = subjects.setdefault(str(sid_raw), _Subject())
         payload = payload_raw or {}
@@ -791,12 +783,17 @@ def load_run_subjects(
             subject.issuer_id = subject.issuer_id or iid
         if sem in RELEASE_SEMANTICS:
             subject.ticker = subject.ticker or payload.get("ticker")
-        elif (resolved := _resolve_coordinate(pver, allow_integration_parser=allow_integration_parser)) is not None:
-            is_primary, coord = resolved
-            if sem == MARKET_PRICE_SEMANTIC:
+        elif sem == MARKET_PRICE_SEMANTIC:
+            coord = SOURCE_BY_PARSER.get(pver) or (
+                integration if allow_integration_parser and pver == "production-topt-integration-parser:v1" else None
+            )
+            if coord is not None:
                 for family, origin in bar_origins(coord, payload, knowable_at=know_at, observation_id=obs_id).items():
                     subject.add(family, origin)
-            elif sem == "financial-fact":
+        elif sem == "financial-fact":
+            is_primary = _is_primary_parser(pver, allow_integration_parser=allow_integration_parser)
+            coord = integration if is_primary else SOURCE_BY_PARSER.get(pver)
+            if coord is not None:
                 if (raw_branch := payload.get("operating_branch")) is not None and subject.operating_branch is None:
                     try:
                         subject.operating_branch = IssuerClass(str(raw_branch))

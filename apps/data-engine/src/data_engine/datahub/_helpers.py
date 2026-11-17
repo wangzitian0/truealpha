@@ -24,6 +24,11 @@ CAPTURE_OBSERVATION_JOIN = (
     "join staging.capture_normalized_observations o on o.observation_id = oo.observation_id\n"
     "join staging.capture_observation_payloads p on p.observation_id = o.observation_id"
 )
+OBSERVATION_VINTAGE_JOIN = (
+    "from staging.capture_normalized_observations o "
+    "join staging.capture_observation_payloads p on p.observation_id = o.observation_id "
+    "join raw.capture_source_vintages v on v.source_vintage_id = o.source_vintage_id"
+)
 
 _CASE_ID_SANITIZE_RE = re.compile(r"[^A-Za-z0-9._:/@+-]+")
 

@@ -443,6 +443,7 @@ def run_supply_chain_exposure(
         if early is not None:
             return early
         assert universe is not None
+        connection.rollback()
         floor_failure = universe.lane_failure()
         if floor_failure is None:
             sc_report = materialize_universe_supply_chain_exposure(
@@ -507,6 +508,7 @@ def run_analyst_ratings(context: dg.OpExecutionContext, config: StandardBackfill
         if early is not None:
             return early
         assert universe is not None
+        connection.rollback()
         floor_failure = universe.lane_failure()
         if floor_failure is None and universe.issuers:
             with ExitStack() as stack:
