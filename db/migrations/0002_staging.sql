@@ -1554,7 +1554,7 @@ begin
 end;
 $function$;
 
-do $$ begin if to_regclass('staging.accepted_ruleset_head') is null or md5(pg_get_viewdef(to_regclass('staging.accepted_ruleset_head'), true)) <> '8def2b42776ae02e14618f1fab55d829' then
+do $$ begin if to_regclass('staging.accepted_ruleset_head') is null then
 execute $vc$create or replace view staging.accepted_ruleset_head as
  SELECT DISTINCT ON (accepted_rulesets.kind) accepted_rulesets.kind,
     accepted_rulesets.contract_id,
@@ -1564,7 +1564,7 @@ execute $vc$create or replace view staging.accepted_ruleset_head as
    FROM staging.accepted_rulesets
   ORDER BY accepted_rulesets.kind, accepted_rulesets.sequence DESC$vc$;
 end if; end $$;
-do $$ begin if to_regclass('staging.entity_alias_resolution') is null or md5(pg_get_viewdef(to_regclass('staging.entity_alias_resolution'), true)) <> '48481d8b36ae8594bbf7f8529b4e0315' then
+do $$ begin if to_regclass('staging.entity_alias_resolution') is null then
 execute $vc$create or replace view staging.entity_alias_resolution as
  SELECT alias.alias_id,
     alias.scheme,
@@ -1581,7 +1581,7 @@ execute $vc$create or replace view staging.entity_alias_resolution as
    FROM staging.entity_aliases alias
      JOIN staging.entities entity ON entity.entity_id = alias.entity_id$vc$;
 end if; end $$;
-do $$ begin if to_regclass('staging.entity_backfill_plan') is null or md5(pg_get_viewdef(to_regclass('staging.entity_backfill_plan'), true)) <> '42684567e84ef67ca47179e428550d4c' then
+do $$ begin if to_regclass('staging.entity_backfill_plan') is null then
 execute $vc$create or replace view staging.entity_backfill_plan as
 with usage as (
     select payload.normalized_payload->>'issuer_id' as issuer_id,
@@ -2007,7 +2007,7 @@ select 'relation',
        end
 from relation_state$vc$;
 end if; end $$;
-do $$ begin if to_regclass('staging.entity_graph_edges') is null or md5(pg_get_viewdef(to_regclass('staging.entity_graph_edges'), true)) <> 'da2b4df27921b267761b76dd5843479f' then
+do $$ begin if to_regclass('staging.entity_graph_edges') is null then
 execute $vc$create or replace view staging.entity_graph_edges as
  SELECT relation.relation_id,
     relation.relation_type,
@@ -2026,7 +2026,7 @@ execute $vc$create or replace view staging.entity_graph_edges as
            FROM staging.entity_retractions retraction
           WHERE retraction.relation_id = relation.relation_id AND (relation_type.is_identity OR retraction.valid_to <= relation.valid_from)))$vc$;
 end if; end $$;
-do $$ begin if to_regclass('staging.entity_graph_nodes') is null or md5(pg_get_viewdef(to_regclass('staging.entity_graph_nodes'), true)) <> 'd15c957e7c62801f45f3af42c18d64d5' then
+do $$ begin if to_regclass('staging.entity_graph_nodes') is null then
 execute $vc$create or replace view staging.entity_graph_nodes as
  SELECT entity.entity_id,
     entity.kind,
@@ -2201,7 +2201,9 @@ from (values
     ('superseded_by', 'entity', 'entity', true, true, 'supersedes',
      'A merge: the source entity''s identity continues as the target. The resolver follows it.'),
     ('split_into', 'entity', 'entity', true, true, 'split_from',
-     'A split: from valid_from on, part of the source entity continues as the target.')
+     'A split: from valid_from on, part of the source entity continues as the target.'),
+    ('primary_listing', 'issuer', 'listing', false, false, 'primary_listing_of',
+     'The listing that the engines use for an issuer with several listings. The classification file names it.')
 ) as seed (relation_type, domain_kind, range_kind, same_kind, is_identity, inverse_name, description)
 where not exists (
     select 1 from staging.entity_relation_types as present where present.relation_type = seed.relation_type

@@ -17,7 +17,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from factors.shared import extraction as extraction_primitive
-from infra2_sdk.runtime.llm import LlmSettings, _extract_json, _record_span_attrs
+from infra2_sdk.runtime.llm import LlmSettings
 from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.research_cards import (
     XHS_CARD_INSTRUCTIONS,
@@ -746,9 +746,31 @@ class ThemeClassification:
         return self.invocation.extractor
 
 
-def _parse_json_payload(content: str) -> Any:
+_JSON_FENCE_RE = re.compile(r"\A```(?:json)?\s*(.*?)\s*```\Z", re.IGNORECASE | re.DOTALL)
+
+
+def _record_span_attrs(model: str, provider: str, in_tok: int, out_tok: int) -> None:
     try:
-        return _extract_json(content)
+        from opentelemetry import trace
+    except ImportError:  # pragma: no cover
+        return
+    span = trace.get_current_span()
+    if span is not None and span.is_recording():
+        for k, v in (
+            ("gen_ai.system", provider),
+            ("gen_ai.request.model", model),
+            ("gen_ai.usage.input_tokens", in_tok),
+            ("gen_ai.usage.output_tokens", out_tok),
+        ):
+            span.set_attribute(k, v)
+
+
+def _parse_json_payload(content: str) -> Any:
+    cleaned = content.strip()
+    if match := _JSON_FENCE_RE.match(cleaned):
+        cleaned = match.group(1).strip()
+    try:
+        return json.loads(cleaned)
     except (json.JSONDecodeError, ValueError):
         return None
 

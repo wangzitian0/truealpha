@@ -115,19 +115,25 @@ class PostgresCaptureControlRepository:
     def _payload(value: Any) -> dict[str, Any]:
         return value.model_dump(mode="json", exclude_computed_fields=True)
 
-    def _insert_idempotent(
-        self, table: str, id_column: str, identity: str, sha: str, stmt: str, params: tuple[Any, ...]
-    ) -> bool:
-        if self._connection.execute(stmt, params).fetchone():
-            return True
+    def _check_existing(self, table: str, id_column: str, identity: str, sha: str, *, require: bool = True) -> bool:
         existing = self._connection.execute(
             f"select content_sha256 from {table} where {id_column} = %s",  # noqa: S608
             (identity,),
         ).fetchone()
         if existing is None:
-            raise RuntimeError(f"insert into {table} returned no row and no conflict")
+            if require:
+                raise RuntimeError(f"insert into {table} returned no row and no conflict")
+            return False
         if existing[0] != sha:
             raise CaptureRepositoryConflictError(f"{identity} is already bound to different content")
+        return True
+
+    def _insert_idempotent(
+        self, table: str, id_column: str, identity: str, sha: str, stmt: str, params: tuple[Any, ...]
+    ) -> bool:
+        if self._connection.execute(stmt, params).fetchone():
+            return True
+        self._check_existing(table, id_column, identity, sha, require=True)
         return False
 
     def _put(self, table: str, id_column: str, obj: Any, attrs: tuple[str, ...] = (), **extra: Any) -> bool:
@@ -259,6 +265,10 @@ class PostgresCaptureControlRepository:
         )
 
     def put_attempt(self, attempt: FetchAttempt) -> bool:
+        if self._check_existing(
+            "raw.capture_attempts", "attempt_id", attempt.attempt_id, attempt.content_sha256, require=False
+        ):
+            return False
         return self._put(
             "raw.capture_attempts",
             "attempt_id",
@@ -301,29 +311,39 @@ class PostgresCaptureControlRepository:
             raise ValueError("observation confidence must be between zero and one")
         if canonical_sha256(normalized_payload) != observation.normalized_payload_sha256:
             raise ValueError("normalized payload does not match the observation hash")
-        created = self._put(
+        created = self._insert_idempotent(
             "staging.capture_normalized_observations",
             "observation_id",
-            observation,
+            observation.observation_id,
+            observation.content_sha256,
+            "insert into staging.capture_normalized_observations (observation_id, content_sha256, "
+            "capture_obligation_id, source_vintage_id, semantic_type, semantic_version, subject_kind, "
+            "subject_id, valid_from, valid_to, knowable_at, parser_version, mapping_version, "
+            "normalized_payload_sha256, is_restatement, supersedes_observation_id, confidence, "
+            "freshness_state, payload) values ("
+            + ", ".join(("%s",) * 19)
+            + ") on conflict (observation_id) do nothing returning observation_id",
             (
-                "source_vintage_id",
-                "semantic_type",
-                "semantic_version",
-                "valid_from",
-                "valid_to",
-                "knowable_at",
-                "parser_version",
-                "mapping_version",
-                "normalized_payload_sha256",
-                "is_restatement",
-                "supersedes_observation_id",
+                observation.observation_id,
+                observation.content_sha256,
+                capture_obligation_id,
+                observation.source_vintage_id,
+                observation.semantic_type,
+                observation.semantic_version,
+                observation.subject.kind.value,
+                observation.subject.id,
+                observation.valid_from,
+                observation.valid_to,
+                observation.knowable_at,
+                observation.parser_version,
+                observation.mapping_version,
+                observation.normalized_payload_sha256,
+                observation.is_restatement,
+                observation.supersedes_observation_id,
+                confidence,
+                freshness_state,
+                Jsonb(self._payload(observation)),
             ),
-            capture_obligation_id=capture_obligation_id,
-            subject_kind=observation.subject.kind.value,
-            subject_id=observation.subject.id,
-            confidence=confidence,
-            freshness_state=freshness_state,
-            payload=Jsonb(self._payload(observation)),
         )
         self.bind_observation(capture_obligation_id, observation.observation_id)
         self._put_observation_payload(observation, normalized_payload)

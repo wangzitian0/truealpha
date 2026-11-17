@@ -387,7 +387,7 @@
     "measured": {
       "at": "2026-10-21",
       "environment": "staging",
-      "method": "VmHWM of /proc/1/status and working run burst on staging v0.2.35.",
+      "method": "VmHWM of /proc/1/status 13 hours after its start and working run burst on staging v0.2.35.",
       "grpc_server_hwm_mib": 236.1,
       "fresh_import_hwm_mib": 179.7,
       "working_run_hwm_mib": 384.4,

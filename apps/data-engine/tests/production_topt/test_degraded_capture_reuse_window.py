@@ -339,12 +339,13 @@ def _key_topt_like_the_planes(monkeypatch) -> dict[str, tuple[str, str]]:
     qqq_fixture = Path(__file__).resolve().parents[1] / "fixtures" / "corpus.qqq.v1.json"
     real_load_corpus = universe_corpus.load_corpus
 
-    def _load_corpus_with_qqq(filename: str):
+    def _load_corpus_with_qqq(filename: str = "corpus.v1.json"):
         if filename == "corpus.qqq.v1.json":
             return json.loads(qqq_fixture.read_text())
         return real_load_corpus(filename)
 
     monkeypatch.setattr(universe_corpus, "load_corpus", _load_corpus_with_qqq)
+    monkeypatch.setattr(composition, "_load_capture_corpus", _load_corpus_with_qqq)
 
     plane = {
         str(row[2]): (str(row[0]), str(row[1]))

@@ -190,7 +190,7 @@ begin
 end;
 $function$;
 
-do $$ begin if to_regclass('app.conversation_audit_metadata') is null or md5(pg_get_viewdef(to_regclass('app.conversation_audit_metadata'), true)) <> 'bb8642d173eaf76c151d45448bda98d2' then
+do $$ begin if to_regclass('app.conversation_audit_metadata') is null then
 execute $vc$create or replace view app.conversation_audit_metadata as
  SELECT c.tenant_id,
     c.conversation_id,
@@ -205,7 +205,7 @@ execute $vc$create or replace view app.conversation_audit_metadata as
           WHERE reader.principal_id = NULLIF(current_setting('truealpha.principal_id'::text, true), ''::text) AND reader.tenant_id = c.tenant_id AND reader.principal_kind = 'administrator'::text))
   GROUP BY c.tenant_id, c.conversation_id, c.owner_principal_id, c.created_at$vc$;
 end if; end $$;
-do $$ begin if to_regclass('app.document_audit_metadata') is null or md5(pg_get_viewdef(to_regclass('app.document_audit_metadata'), true)) <> 'edd1dfa604a22a02cea609627564b765' then
+do $$ begin if to_regclass('app.document_audit_metadata') is null then
 execute $vc$create or replace view app.document_audit_metadata as
  SELECT d.tenant_id,
     d.document_id,

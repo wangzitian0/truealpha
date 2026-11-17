@@ -61,6 +61,7 @@ logger = logging.getLogger(__name__)
 
 _OWNER_PRINCIPAL_ID = "principal:owner"
 _CONTEXT_LIFETIME = timedelta(minutes=5)
+SERVED_HEAD_SQL = "select run_id, freshness, availability from mart.served_head"
 MART_READ_FAILED_MESSAGE = "the mart read failed; the detail is in the service log"
 _LEGACY_JOIN = (
     "left join lateral ("

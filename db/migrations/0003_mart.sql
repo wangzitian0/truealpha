@@ -810,7 +810,7 @@ begin
 end
 $function$;
 
-do $$ begin if to_regclass('mart.current_pointer_head') is null or md5(pg_get_viewdef(to_regclass('mart.current_pointer_head'), true)) <> '3990fa88c558d85f46db9d85a79b3644' then
+do $$ begin if to_regclass('mart.current_pointer_head') is null then
 execute $vc$create or replace view mart.current_pointer_head as
  SELECT DISTINCT ON (current_pointer.environment, current_pointer.universe_id, current_pointer.universe_version, current_pointer.factor_id) current_pointer.pointer_id,
     current_pointer.content_sha256,
@@ -825,7 +825,7 @@ execute $vc$create or replace view mart.current_pointer_head as
    FROM mart.current_pointer
   ORDER BY current_pointer.environment, current_pointer.universe_id, current_pointer.universe_version, current_pointer.factor_id, current_pointer.sequence DESC$vc$;
 end if; end $$;
-do $$ begin if to_regclass('mart.data_engine_identity') is null or md5(pg_get_viewdef(to_regclass('mart.data_engine_identity'), true)) <> '714f3b6e8d0effbddc8b8e26efa0647c' then
+do $$ begin if to_regclass('mart.data_engine_identity') is null then
 execute $vc$create or replace view mart.data_engine_identity as
  SELECT production_topt_run_plans.run_id,
     production_topt_run_plans.release_manifest_id,
@@ -834,7 +834,7 @@ execute $vc$create or replace view mart.data_engine_identity as
     production_topt_run_plans.created_at
    FROM raw.production_topt_run_plans$vc$;
 end if; end $$;
-do $$ begin if to_regclass('mart.entity_display_resolution') is null or md5(pg_get_viewdef(to_regclass('mart.entity_display_resolution'), true)) <> 'f7f362dfa7d4bb466ef9c6f25d1bee22' then
+do $$ begin if to_regclass('mart.entity_display_resolution') is null then
 execute $vc$create or replace view mart.entity_display_resolution as
  WITH primary_listings AS (
          SELECT DISTINCT ON (relation.from_entity_id) relation.from_entity_id AS issuer_id,
@@ -927,7 +927,7 @@ execute $vc$create or replace view mart.entity_display_resolution as
      LEFT JOIN constituent_names cn ON cn.ticker = upper(rt.ticker)
   ORDER BY rt.issuer_id$vc$;
 end if; end $$;
-do $$ begin if to_regclass('mart.entity_identity') is null or md5(pg_get_viewdef(to_regclass('mart.entity_identity'), true)) <> '30b96ce931035d43c7c876947a5591b8' then
+do $$ begin if to_regclass('mart.entity_identity') is null then
 execute $vc$create or replace view mart.entity_identity as
  WITH RECURSIVE merge_edges AS (
          SELECT DISTINCT ON (relation.from_entity_id) relation.from_entity_id,
@@ -1079,7 +1079,7 @@ execute $vc$create or replace view mart.entity_identity as
           ORDER BY (kg_row.id = e.entity_id::text) DESC, (NULLIF(btrim(kg_row.display_name), ''::text) IS NOT NULL) DESC, kg_row.id
          LIMIT 1) kg ON true$vc$;
 end if; end $$;
-do $$ begin if to_regclass('mart.fund_holdings') is null or md5(pg_get_viewdef(to_regclass('mart.fund_holdings'), true)) <> 'bc9d91181f964acaad65b355132e67f6' then
+do $$ begin if to_regclass('mart.fund_holdings') is null then
 execute $vc$create or replace view mart.fund_holdings as
  SELECT DISTINCT ON (facts.fund_id, facts.report_period, facts.transaction_time, (COALESCE(facts.isin, ''::text)), (COALESCE(facts.cusip, ''::text)), facts.holding_name) facts.fund_id,
     fund_entity.display_name AS fund_name,
@@ -1097,7 +1097,7 @@ execute $vc$create or replace view mart.fund_holdings as
      LEFT JOIN staging.kg_entities fund_entity ON fund_entity.id = facts.fund_id
   ORDER BY facts.fund_id, facts.report_period, facts.transaction_time, (COALESCE(facts.isin, ''::text)), (COALESCE(facts.cusip, ''::text)), facts.holding_name, facts.recorded_at DESC, facts.id DESC$vc$;
 end if; end $$;
-do $$ begin if to_regclass('mart.macro_series_current') is null or md5(pg_get_viewdef(to_regclass('mart.macro_series_current'), true)) <> '788c507b9f14008f63ebfa2c66c7d313' then
+do $$ begin if to_regclass('mart.macro_series_current') is null then
 execute $vc$create or replace view mart.macro_series_current as
  SELECT DISTINCT ON (macro_series_daily.series_id, macro_series_daily.observation_date) macro_series_daily.series_id,
     macro_series_daily.observation_date,
@@ -1111,7 +1111,7 @@ execute $vc$create or replace view mart.macro_series_current as
    FROM mart.macro_series_daily
   ORDER BY macro_series_daily.series_id, macro_series_daily.observation_date DESC, macro_series_daily.recorded_at DESC, macro_series_daily.id DESC$vc$;
 end if; end $$;
-do $$ begin if to_regclass('mart.topt_capture_meta_info') is null or md5(pg_get_viewdef(to_regclass('mart.topt_capture_meta_info'), true)) <> 'e0d3821c1cd99c31d94d290ede0a98ea' then
+do $$ begin if to_regclass('mart.topt_capture_meta_info') is null then
 execute $vc$create or replace view mart.topt_capture_meta_info as
  SELECT obligation.run_id,
     obligation.obligation_id,
@@ -1201,7 +1201,7 @@ execute $vc$create or replace view mart.topt_capture_meta_info as
                   WHERE usage.capture_obligation_id = obligation.obligation_id AND candidate.source_vintage_id = COALESCE(final_attempt_result.source_vintage_id, final_attempt_result.reused_source_vintage_id) AND candidate.subject_kind = obligation.subject_kind AND candidate.subject_id = obligation.subject_id AND candidate.semantic_type = regexp_replace(obligation.capture_requirement_id, ':v1$'::text, ''::text) AND (candidate.valid_from AT TIME ZONE 'UTC'::text)::date <= (campaign.cutoff AT TIME ZONE 'UTC'::text)::date AND (candidate.valid_to IS NULL OR (candidate.valid_to AT TIME ZONE 'UTC'::text)::date >= (campaign.cutoff AT TIME ZONE 'UTC'::text)::date) AND candidate.knowable_at <= campaign.cutoff) selected
           WHERE selected.selection_count = 1) observation ON true$vc$;
 end if; end $$;
-do $$ begin if to_regclass('mart.topt_capture_status') is null or md5(pg_get_viewdef(to_regclass('mart.topt_capture_status'), true)) <> '0ea61db5d33ff07d904fdad549d10fa8' then
+do $$ begin if to_regclass('mart.topt_capture_status') is null then
 execute $vc$create or replace view mart.topt_capture_status as
  SELECT run.run_id,
     run.campaign_id,
@@ -1225,7 +1225,7 @@ execute $vc$create or replace view mart.topt_capture_status as
      LEFT JOIN raw.capture_obligation_results result ON result.capture_obligation_id = obligation.obligation_id
   GROUP BY run.run_id, run.campaign_id, campaign.environment, campaign.cutoff, list_version.universe_id, list_version.universe_version, list_version.universe_sha256$vc$;
 end if; end $$;
-do $$ begin if to_regclass('mart.topt_core_meta_info') is null or md5(pg_get_viewdef(to_regclass('mart.topt_core_meta_info'), true)) <> '5cf753d22b1e98bca9eb5b1ef44a2e88' then
+do $$ begin if to_regclass('mart.topt_core_meta_info') is null then
 execute $vc$create or replace view mart.topt_core_meta_info as
  SELECT result.result_id,
     result.invocation_id,
@@ -1272,7 +1272,7 @@ execute $vc$create or replace view mart.topt_core_meta_info as
                      JOIN raw.capture_source_requests request ON request.source_request_id = vintage.source_request_id
                   ORDER BY observation.observation_id, obligation.obligation_id) item) lineage ON true$vc$;
 end if; end $$;
-do $$ begin if to_regclass('mart.topt_core_result_read') is null or md5(pg_get_viewdef(to_regclass('mart.topt_core_result_read'), true)) <> '59d93d15703dfbb540330931b0a4ce37' then
+do $$ begin if to_regclass('mart.topt_core_result_read') is null then
 execute $vc$create or replace view mart.topt_core_result_read as
  SELECT result.result_id,
     result.invocation_id,
@@ -1310,7 +1310,7 @@ execute $vc$create or replace view mart.topt_core_result_read as
     result.created_at
    FROM mart.topt_core_results result$vc$;
 end if; end $$;
-do $$ begin if to_regclass('mart.governed_strategy_run') is null or md5(pg_get_viewdef(to_regclass('mart.governed_strategy_run'), true)) <> 'c09b99c90a98bab5ed703187d43930f9' then
+do $$ begin if to_regclass('mart.governed_strategy_run') is null then
 execute $vc$create or replace view mart.governed_strategy_run as
  WITH head AS (
          SELECT current_pointer_head.environment,
@@ -1348,7 +1348,7 @@ execute $vc$create or replace view mart.governed_strategy_run as
           WHERE binding.capture_run_id = head.target_run_id
           ORDER BY candidate.strategy_key, binding.bound_at DESC, candidate.strategy_run_id DESC) run ON true$vc$;
 end if; end $$;
-do $$ begin if to_regclass('mart.served_head') is null or md5(pg_get_viewdef(to_regclass('mart.served_head'), true)) <> '2d6edfb64c2321e1474e8eb6e93b275d' then
+do $$ begin if to_regclass('mart.served_head') is null then
 execute $vc$create or replace view mart.served_head as
  SELECT h.environment,
     h.universe_id,
@@ -1388,7 +1388,7 @@ execute $vc$create or replace view mart.served_head as
   WHERE h.environment = (( SELECT environment_identity.environment
            FROM mart.environment_identity)) AND h.version_rank = 1$vc$;
 end if; end $$;
-do $$ begin if to_regclass('mart.served_head_environments') is null or md5(pg_get_viewdef(to_regclass('mart.served_head_environments'), true)) <> 'db2c3a0852e2974af9433b0493b326e0' then
+do $$ begin if to_regclass('mart.served_head_environments') is null then
 execute $vc$create or replace view mart.served_head_environments as
  SELECT h.environment,
     count(*) AS heads,
@@ -1397,7 +1397,7 @@ execute $vc$create or replace view mart.served_head_environments as
    FROM mart.current_pointer_head h
   GROUP BY h.environment$vc$;
 end if; end $$;
-do $$ begin if to_regclass('mart.fund_holdings_resolved') is null or md5(pg_get_viewdef(to_regclass('mart.fund_holdings_resolved'), true)) <> '8562413f047e3c7ec97a4498b8ac193f' then
+do $$ begin if to_regclass('mart.fund_holdings_resolved') is null then
 execute $vc$create or replace view mart.fund_holdings_resolved as
  WITH resolved AS (
          SELECT holdings.fund_id,
@@ -1445,7 +1445,7 @@ execute $vc$create or replace view mart.fund_holdings_resolved as
           ORDER BY identifier.transaction_time DESC, identifier.confidence DESC, identifier.id DESC
          LIMIT 1) issuer_ticker ON true$vc$;
 end if; end $$;
-do $$ begin if to_regclass('mart.macro_series_status') is null or md5(pg_get_viewdef(to_regclass('mart.macro_series_status'), true)) <> '68c6375bcd1ec5b69aafcd12be2b8c8e' then
+do $$ begin if to_regclass('mart.macro_series_status') is null then
 execute $vc$create or replace view mart.macro_series_status as
  WITH newest AS (
          SELECT DISTINCT ON (macro_series_current.series_id) macro_series_current.series_id,
@@ -1470,7 +1470,7 @@ execute $vc$create or replace view mart.macro_series_status as
    FROM mart.macro_series s
      LEFT JOIN newest n USING (series_id)$vc$;
 end if; end $$;
-do $$ begin if to_regclass('mart.strategy_run_capture') is null or md5(pg_get_viewdef(to_regclass('mart.strategy_run_capture'), true)) <> '0449a1b2869164817ecb60fd3173e2d3' then
+do $$ begin if to_regclass('mart.strategy_run_capture') is null then
 execute $vc$create or replace view mart.strategy_run_capture as
  SELECT DISTINCT ON (binding.strategy_run_id) binding.strategy_run_id,
     binding.capture_run_id,
@@ -1479,7 +1479,7 @@ execute $vc$create or replace view mart.strategy_run_capture as
      LEFT JOIN mart.governed_strategy_run governed ON governed.strategy_run_id = binding.strategy_run_id AND governed.target_run_id = binding.capture_run_id
   ORDER BY binding.strategy_run_id, (governed.strategy_run_id IS NOT NULL) DESC, binding.bound_at DESC, binding.capture_run_id DESC$vc$;
 end if; end $$;
-do $$ begin if to_regclass('mart.fund_holdings_coverage') is null or md5(pg_get_viewdef(to_regclass('mart.fund_holdings_coverage'), true)) <> 'b4c7059de9f680d56b8e4e215107829d' then
+do $$ begin if to_regclass('mart.fund_holdings_coverage') is null then
 execute $vc$create or replace view mart.fund_holdings_coverage as
  SELECT fund_holdings_resolved.fund_id,
     fund_holdings_resolved.report_period,
@@ -1491,7 +1491,7 @@ execute $vc$create or replace view mart.fund_holdings_coverage as
    FROM mart.fund_holdings_resolved
   GROUP BY fund_holdings_resolved.fund_id, fund_holdings_resolved.report_period, fund_holdings_resolved.transaction_time$vc$;
 end if; end $$;
-do $$ begin if to_regclass('mart.fund_holdings_valuation') is null or md5(pg_get_viewdef(to_regclass('mart.fund_holdings_valuation'), true)) <> '261e150cb9c29466a3813f8d2574500f' then
+do $$ begin if to_regclass('mart.fund_holdings_valuation') is null then
 execute $vc$create or replace view mart.fund_holdings_valuation as
  WITH newest AS (
          SELECT DISTINCT ON (fund_holdings.fund_id) fund_holdings.fund_id,

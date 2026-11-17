@@ -151,7 +151,7 @@ const peakSql = (secs: number): string =>
 function governedLatestPerUniverseSql(table: string, extraCols = ""): string {
   return `select distinct on (universe_id) universe_id${extraCols}, cutoff::text, created_at::text, payload
 from ${table} r where universe_id in (select universe_id from mart.served_head)
-order by universe_id, exists (select 1 from mart.served_head h where h.universe_id = r.universe_id and ${HEAD_RUN_SQL} = r.run_id) desc, created_at desc`;
+order by universe_id, exists (select 1 from mart.served_head h where h.universe_id = r.universe_id and coalesce(h.run_id, h.head_run_id) = r.run_id) desc, created_at desc`;
 }
 
 export const ORACLE_OUTCOME_METRICS = [

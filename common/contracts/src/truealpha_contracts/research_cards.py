@@ -349,7 +349,7 @@ def enrich_card_metadata(
             if v is not None
         },
     }
-    base = card.model_copy(update=updates)
+    base = ResearchCard(**{**card.model_dump(exclude={"card_id", "rendered_html"}), **updates})
     if not include_rendered_html:
         return base
     return base.model_copy(update={"rendered_html": render_card_html(base, preset=base.style_preset)})
