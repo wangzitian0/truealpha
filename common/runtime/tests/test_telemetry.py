@@ -346,15 +346,11 @@ def _uptime_points_per_batch(batches: list[Any]) -> list[list[Any]]:
 
 def test_the_process_exports_an_uptime_heartbeat_once_per_collection() -> None:
     """#1660: the "no telemetry" alert needs a series that exists without a request. A second
-    registration on the same installation must not add a second observation: two points per
-    collection would double the series the alert reads. (`shutdown` collects once more, so the
-    sink holds several batches; each must hold exactly one point.)"""
-    from truealpha_runtime.telemetry import _register_heartbeat
-
+    collection must still carry one process.uptime observation supplied by infra2-sdk."""
     providers = init_telemetry(_environ(), set_global=False)
     assert providers is not None
     try:
-        _register_heartbeat(providers)  # the repeat that an idempotent init_telemetry makes
+        assert providers.meter_provider is not None
         providers.meter_provider.force_flush()
     finally:
         providers.shutdown()
@@ -372,12 +368,3 @@ def test_the_process_exports_an_uptime_heartbeat_once_per_collection() -> None:
         if metric.name == "process.uptime"
     }
     assert units == {"s"}
-
-
-def test_the_heartbeat_needs_no_meter_provider() -> None:
-    """The SDK may hand back no meter provider; registering the heartbeat then does nothing."""
-    from types import SimpleNamespace
-
-    from truealpha_runtime.telemetry import _register_heartbeat
-
-    _register_heartbeat(SimpleNamespace(meter_provider=None))  # type: ignore[arg-type]

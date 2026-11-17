@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 import os
-import time
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 
 from infra2_sdk.runtime.otel import (
     REQUIRED_IDENTITY_ATTRIBUTES,  # noqa: F401
@@ -12,7 +11,6 @@ from infra2_sdk.runtime.otel import (
     TelemetryProviders,
     configure_telemetry,
 )
-from opentelemetry.metrics import CallbackOptions, Observation
 
 
 class TelemetryConfigError(RuntimeError):
@@ -31,26 +29,8 @@ def load_telemetry_settings(environ: Mapping[str, str] | None = None) -> OtelSet
     return settings if settings.enabled else None
 
 
-def _register_heartbeat(providers: TelemetryProviders) -> None:
-    if providers.meter_provider is None:
-        return
-    started = time.monotonic()
-
-    def observe(_options: CallbackOptions) -> Iterable[Observation]:
-        yield Observation(time.monotonic() - started)
-
-    providers.meter_provider.get_meter("truealpha_runtime").create_observable_gauge(
-        "process.uptime",
-        callbacks=[observe],
-        unit="s",
-        description="Seconds since this process started telemetry; present whenever the process exports.",
-    )
-
-
 def init_telemetry(environ: Mapping[str, str] | None = None, *, set_global: bool = True) -> TelemetryProviders | None:
     settings = load_telemetry_settings(environ)
     if settings is None:
         return None
-    providers = configure_telemetry(settings, set_global=set_global)
-    _register_heartbeat(providers)
-    return providers
+    return configure_telemetry(settings, set_global=set_global)
