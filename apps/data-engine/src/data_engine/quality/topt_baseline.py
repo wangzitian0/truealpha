@@ -12,7 +12,11 @@ from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 from pathlib import Path
 from typing import Any, Literal
 
-from truealpha_contracts.environment_contract import DAY_SECONDS, UTILIZATION_CEILING, EnvironmentContract
+from truealpha_contracts.environment_contract import (
+    DAY_SECONDS,
+    UTILIZATION_CEILING,
+    EnvironmentContract,
+)
 from truealpha_contracts.universes import record
 
 from data_engine.datahub.a1_evidence import ACCEPTED_SERVICE_OBJECTIVES
@@ -149,7 +153,7 @@ def judge(*, gppe: Row, quota: Row, server: Row, schema: Row) -> Judgement:
 
 HEAD_SQL = "select run_id, freshness, availability from mart.served_head where universe_id like %s order by advanced_at desc limit 1"
 GPPE_SQL = (
-    "select count(distinct issuer_id)::int, "
+    "select (count(distinct issuer_id) filter (where coalesce(availability_status, availability) <> 'not_applicable'))::int, "
     "(count(distinct issuer_id) filter (where coalesce(availability_status, availability) = 'available' and gppe is not null))::int "
     "from mart.topt_gppe_results where run_id = %s"
 )

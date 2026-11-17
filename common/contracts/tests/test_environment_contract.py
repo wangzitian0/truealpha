@@ -616,3 +616,22 @@ def test_a_live_environment_without_model_seat_limits_is_refused() -> None:
     }
     with pytest.raises(ValidationError, match="name unknown environments"):
         EnvironmentContract.model_validate_json(json.dumps(data))
+
+
+def test_metric_applicability_declares_owner_approved_topt_gppe_exclusions() -> None:
+    """Owner Decision 2 (#1664, 2026-11-16T15:28:17+08:00): XOM, V, MA, and BRK.B are not_applicable for TOPT GPPE."""
+    contract = load_environment_contract()
+    topt_gppe = contract.not_applicable_for_universe_id("gppe", "universe:topt-us-2026-03-31")
+    assert {entry.ticker for entry in topt_gppe} == {"XOM", "V", "MA", "BRK.B"}
+    assert all(entry.status == "not_applicable" for entry in topt_gppe)
+    assert contract.not_applicable_for_universe_id("gppe", "universe:qqq-us-2026-06-30") == ()
+
+    bad_universe = load_environment_contract().model_dump(mode="json")
+    bad_universe["metric_applicability"][0]["universe"] = "unknown_universe"
+    with pytest.raises(ValidationError, match="unknown universe"):
+        EnvironmentContract.model_validate_json(json.dumps(bad_universe))
+
+    duplicate = load_environment_contract().model_dump(mode="json")
+    duplicate["metric_applicability"].append(duplicate["metric_applicability"][0])
+    with pytest.raises(ValidationError, match="duplicate metric_applicability"):
+        EnvironmentContract.model_validate_json(json.dumps(duplicate))

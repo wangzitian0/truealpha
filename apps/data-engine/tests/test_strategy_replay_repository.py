@@ -333,3 +333,36 @@ def test_the_identity_does_not_depend_on_the_database_row_of_the_fetch() -> None
         definition, executed_at=_EXECUTED_AT, risk_free_rate=other_database
     )
     assert "risk_free" not in _run_payload(definition, executed_at=_EXECUTED_AT), "a fixture run keeps its identity"
+
+
+def test_write_replay_persists_not_applicable_for_exempt_missing_gross_profit_decision(connection) -> None:
+    """Owner Decision 2 (#1664): strategy P/GP persists availability_status='not_applicable' for exempt TOPT issuers."""
+    decisions, definition = run()
+    exempt_decision = decisions[0].__class__(
+        issuer_id="issuer:lei:J3WHBG0MTS7O8ZVMDC91",  # XOM
+        cutoff_at=decisions[0].cutoff_at,
+        capital_adjusted_labor_efficiency=None,
+        tier=None,
+        current_price_to_sales=None,
+        target_price_to_sales=None,
+        valuation_gap=None,
+        eligible=False,
+        outcome="excluded",
+        exclusion_reason="missing_gross_profit_fact",
+        rank=None,
+        target_weight=None,
+        peg=None,
+        peg_rank=None,
+        peg_reason_codes=(),
+        labor_efficiency_metric=decisions[0].labor_efficiency_metric,
+    )
+    other_decision = exempt_decision.__class__(**(exempt_decision.to_json() | {"issuer_id": "issuer:cik:0000000001"}))
+    run_id, _ = write_replay(connection, [exempt_decision, other_decision], definition, executed_at=_EXECUTED_AT)
+    statuses = dict(
+        connection.execute(
+            "select issuer_id, availability_status from mart.strategy_decisions where strategy_run_id = %s",
+            (run_id,),
+        ).fetchall()
+    )
+    assert statuses["issuer:lei:J3WHBG0MTS7O8ZVMDC91"] == "not_applicable"
+    assert statuses["issuer:cik:0000000001"] == "excluded"

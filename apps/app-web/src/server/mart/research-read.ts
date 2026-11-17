@@ -20,7 +20,7 @@ export { servedRunPredicate } from "./db";
 import { type DecisionProvenance, MartStrategyRunRepository } from "./strategy-run-repository";
 import type { MartClientLike } from "./topt-gppe-repository";
 
-export type Availability = "available" | "unavailable" | "stale" | "excluded" | "low_confidence" | "error";
+export type Availability = "available" | "unavailable" | "stale" | "excluded" | "low_confidence" | "not_applicable" | "error";
 
 export const DASHBOARD_STRATEGY_ID = "large_model_value_v0";
 export const SERVED_HEAD_SQL = "select run_id, freshness, availability from mart.served_head";
@@ -297,7 +297,9 @@ function countOf(value: unknown, column: string): number {
 }
 
 export function decisionAvailability(decision: StrategyRunDecision): Availability {
+	if (decision.availability_status === "not_applicable") return "not_applicable";
 	return decision.outcome === "excluded" ? (decision.exclusion_reason === "below_confidence_floor" ? "low_confidence" : "excluded") : "available";
+}
 }
 
 export const TRACE_LINEAGE_SQL = `select m.result_id, m.listing_id, m.lineage
@@ -587,7 +589,7 @@ export class StrategyRunReadAdapter {
 
 	private bidirectionalIssuerPredicate(column: string): string {
 		const match = this.identityMatchSql();
-		return `(${column} = $1 or ${column} in (select ei.entity_id::text from mart.entity_identity ei cross join (select btrim($1::text) as q) inp where ${match}) or ${column} in (select ei.legacy_id from mart.entity_identity ei cross join (select btrim($1::text) as q) inp where ei.legacy_id is not null and ${match}))`;
+		return `(${column} = $1 or ${column} = any (array(select id_val from (select ei.entity_id::text as entity_id, ei.legacy_id from mart.entity_identity ei cross join (select btrim($1::text) as q) inp where ${match} offset 0) matched cross join lateral (values (matched.entity_id), (matched.legacy_id)) as v(id_val) where id_val is not null)))`;
 	}
 
 	private async safeQuery<T>(label: string, fallback: T, fn: (client: MartClientLike) => Promise<T>): Promise<T> {
@@ -595,6 +597,9 @@ export class StrategyRunReadAdapter {
 			return await this.runWithClient(fn);
 		} catch (error) {
 			console.error(`${label} error:`, error);
+			if ((error as { code?: unknown })?.code === "57014") {
+				throw error;
+			}
 			return fallback;
 		}
 	}
@@ -712,7 +717,7 @@ function moduleDetailMetadata(row: Record<string, unknown>, defaultExtractor: st
 }
 
 const AVAILABILITY_VALUES: ReadonlySet<Availability> = new Set<Availability>([
-	"available", "unavailable", "stale", "excluded", "low_confidence", "error",
+	"available", "unavailable", "stale", "excluded", "low_confidence", "not_applicable", "error",
 ]);
 
 export function toAvailabilityStatus(value: unknown): Availability {

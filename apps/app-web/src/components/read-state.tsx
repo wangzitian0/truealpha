@@ -12,6 +12,7 @@ const AVAILABILITY_STYLE: Record<Availability, string> = {
   stale: "border-amber-500/40 text-amber-300",
   excluded: "border-gray-600 text-gray-400",
   low_confidence: "border-amber-500/40 text-amber-300",
+  not_applicable: "border-gray-600 text-gray-400",
   error: "border-red-500/40 text-red-300",
 };
 

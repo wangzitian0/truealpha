@@ -33,6 +33,7 @@ class Cell:
     subject_id: str
     answered: bool
     reason: str | None = None
+    not_applicable: bool = False
 
 
 @dataclass(frozen=True)
@@ -91,7 +92,17 @@ def head_report_date(connection: Connection[Any], head: GovernedHead) -> date:
         raise ValueError(f"the partition key {keys[0]!r} of {head.run_id} is not an ISO date") from error
 
 
-def _classify_cell(subject_id: Any, status: Any, reason_codes: Any, value: Any) -> Cell:
+def _classify_cell(
+    subject_id: Any,
+    status: Any,
+    reason_codes: Any,
+    value: Any,
+    *,
+    allow_not_applicable: bool = False,
+) -> Cell:
+    if allow_not_applicable and status == "not_applicable":
+        reason = (list(reason_codes or []) or [status])[0]
+        return Cell(str(subject_id), False, str(reason), not_applicable=True)
     if status == "available" and value is not None:
         return Cell(str(subject_id), True)
     if status == "available" and value is None:
@@ -107,10 +118,14 @@ def _query_standard_cells(connection: Connection[Any], sql: str, run_id: str) ->
 
 def gppe_cells(connection: Connection[Any], run_id: str) -> tuple[Cell, ...]:
     rows = connection.execute(
-        "select issuer_id, availability_status, availability, reason_codes, gppe from mart.topt_gppe_results where run_id = %s order by issuer_id",
+        "select issuer_id, availability_status, availability, reason_codes, gppe "
+        "from mart.topt_gppe_results where run_id = %s order by issuer_id",
         (run_id,),
     ).fetchall()
-    return tuple(_classify_cell(r[0], r[1] or r[2], r[3], r[4] if len(r) > 4 else Decimal("1")) for r in rows)
+    return tuple(
+        _classify_cell(r[0], r[1] or r[2], r[3], r[4] if len(r) > 4 else Decimal("1"), allow_not_applicable=True)
+        for r in rows
+    )
 
 
 def peg_cells(connection: Connection[Any], *, run_id: str) -> tuple[Cell, ...]:
@@ -206,15 +221,27 @@ def classify_question(
         return entry
     observed = [{cell.subject_id: cell for cell in cells_by_column.get(key, ())} for key in col_keys]
     unavailable: Counter[str] = Counter()
+    answered = 0
+    applicable = 0
+    not_applicable_count = 0
     for subject_id in expected:
         cells = [lookup[subject_id] for lookup in observed if subject_id in lookup]
         if not cells:
             unavailable[NO_ROW] += 1
+            applicable += 1
+        elif all(cell.not_applicable for cell in cells):
+            not_applicable_count += 1
         elif any(cell.answered for cell in cells):
-            entry["answered"] += 1
+            answered += 1
+            applicable += 1
         else:
             unavailable[cells[0].reason or UNRECORDED_REASON] += 1
+            applicable += 1
+    entry["denominator"] = applicable
+    entry["answered"] = answered
     entry["unavailable"] = dict(sorted(unavailable.items(), key=lambda item: (-item[1], item[0])))
+    if not_applicable_count:
+        entry["not_applicable"] = not_applicable_count
     return entry
 
 

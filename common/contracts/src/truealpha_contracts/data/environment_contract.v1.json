@@ -435,5 +435,59 @@
       "question_coverage": {"cadence_hours": 24, "job": "head_reports_pipeline"},
       "theme_purity": {"cadence_hours": 24, "job": "head_reports_pipeline"}
     }
-  }
+  },
+  "metric_applicability": [
+    {
+      "metric": "gppe",
+      "universe": "topt",
+      "ticker": "XOM",
+      "cik": "0000034088",
+      "lei": "J3WHBG0MTS7O8ZVMDC91",
+      "legacy_ids": ["issuer:lei:J3WHBG0MTS7O8ZVMDC91", "issuer:cik:0000034088"],
+      "status": "not_applicable",
+      "reason": "no_us_gaap_gross_profit_tag",
+      "approved_by": "owner",
+      "approved_at": "2026-11-16T15:28:17+08:00",
+      "tracking_issue": "#1664"
+    },
+    {
+      "metric": "gppe",
+      "universe": "topt",
+      "ticker": "V",
+      "cik": "0001403161",
+      "lei": "549300JZ4OKEHW3DPJ59",
+      "legacy_ids": ["issuer:cik:0001403161", "issuer:lei:549300JZ4OKEHW3DPJ59"],
+      "status": "not_applicable",
+      "reason": "no_us_gaap_gross_profit_tag",
+      "approved_by": "owner",
+      "approved_at": "2026-11-16T15:28:17+08:00",
+      "tracking_issue": "#1664"
+    },
+    {
+      "metric": "gppe",
+      "universe": "topt",
+      "ticker": "MA",
+      "cik": "0001141391",
+      "lei": "AR5L2ODV9HN37376R084",
+      "legacy_ids": ["issuer:cik:0001141391", "issuer:lei:AR5L2ODV9HN37376R084"],
+      "status": "not_applicable",
+      "reason": "no_us_gaap_gross_profit_tag",
+      "approved_by": "owner",
+      "approved_at": "2026-11-16T15:28:17+08:00",
+      "tracking_issue": "#1664"
+    },
+    {
+      "metric": "gppe",
+      "universe": "topt",
+      "ticker": "BRK.B",
+      "cik": "0001067983",
+      "lei": "5493000C01ZX7D35SD85",
+      "legacy_ids": ["issuer:cik:0001067983", "issuer:lei:5493000C01ZX7D35SD85"],
+      "status": "not_applicable",
+      "reason": "no_us_gaap_gross_profit_tag",
+      "approved_by": "owner",
+      "approved_at": "2026-11-16T15:28:17+08:00",
+      "tracking_issue": "#1664"
+    }
+  ]
 }

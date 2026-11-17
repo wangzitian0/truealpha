@@ -591,15 +591,28 @@ async function checkRoute(page, path, role, pageErrors) {
   return problems;
 }
 
-/** One full pass over every live route under one identity. */
-async function walkRoutes(browser, { role, email, password }, pageErrors) {
-  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
-  const login = await context.request.post(`${BASE}/api/auth/login`, { data: { email, password } });
-  if (login.status() !== 200) {
-    console.error(`login failed for ${role}: ${login.status()}`);
-    await context.close();
+/** Verify every identity can authenticate before walking any route so credential drift fails fast across all roles. */
+async function preflightIdentities(browser, identities) {
+  const sessions = await Promise.all(
+    identities.map(async ({ role, email, password }) => {
+      const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+      const login = await context.request.post(`${BASE}/api/auth/login`, { data: { email, password } });
+      return { role, status: login.status(), context };
+    }),
+  );
+  const failed = sessions.filter((session) => session.status !== 200);
+  if (failed.length > 0) {
+    for (const { role, status } of failed) {
+      console.error(`login failed for ${role}: ${status}`);
+    }
+    await Promise.all(sessions.map((session) => session.context.close()));
     process.exit(2);
   }
+  return sessions;
+}
+
+/** One full pass over every live route under one already-authenticated identity. */
+async function walkRoutes(role, context, pageErrors) {
   // Warm heavy research routes under the authenticated session to avoid cold render timeouts.
   for (const warmPath of ["/research", "/research/coverage", "/research/rankings", "/research/strategy"]) {
     try {
@@ -636,14 +649,20 @@ async function walkRoutes(browser, { role, email, password }, pageErrors) {
 const browser = await chromium.launch();
 const pageErrors = createPageErrorLedger();
 let failures = 0;
+let sessions = [];
 try {
+  // Pre-flight all identities concurrently before walking routes so any credential mismatch fails in <1s.
+  const identities = [{ role: "administrator", email: EMAIL, password: PASSWORD }];
+  if (MEMBER_EMAIL) {
+    identities.push({ role: "member", email: MEMBER_EMAIL, password: PASSWORD });
+  }
+  sessions = await preflightIdentities(browser, identities);
   // Two passes. The administrator pass asserts (c) across the whole frozen tree —
   // it is the only identity that can see operator chrome at all. The member pass
   // (#371) asserts the mirror image: no chrome, no world switch, and the same
   // identity/current-page properties everywhere else.
-  failures += await walkRoutes(browser, { role: "administrator", email: EMAIL, password: PASSWORD }, pageErrors);
-  if (MEMBER_EMAIL) {
-    failures += await walkRoutes(browser, { role: "member", email: MEMBER_EMAIL, password: PASSWORD }, pageErrors);
+  for (const session of sessions) {
+    failures += await walkRoutes(session.role, session.context, pageErrors);
   }
   // #540/#811: the sign-out journey lives in its own module so a test can drive it
   // against a fake browser. It logs in once more, for its own session.

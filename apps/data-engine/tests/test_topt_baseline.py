@@ -271,12 +271,14 @@ class Recording:
 
 
 def test_the_gppe_reader_asks_for_the_run_of_the_head_and_compares_with_its_report() -> None:
-    connection = Recording([(20, 16)], [(16, 20)])
+    connection = Recording([(16, 16)], [(16, 16)])
 
     row = topt_baseline.read_gppe(connection, "capture-run:abc")
 
-    assert row == Row("Q1", "fail", "Q1 GPPE 16/20 (80.0%) against 95.0%")
-    assert [params for _sql, params in connection.asked] == [("capture-run:abc",), ("capture-run:abc",)]
+    assert row == Row("Q1", "pass", "Q1 GPPE 16/16 (100.0%) against 95.0%")
+    assert connection.asked[0][1] == ("capture-run:abc",)
+    assert connection.asked[1][1] == ("capture-run:abc",)
+    assert "not_applicable" in connection.asked[0][0]
     assert "mart.topt_gppe_results" in connection.asked[0][0]
     assert "mart.question_coverage_report" in connection.asked[1][0]
 
@@ -653,6 +655,32 @@ def test_q1_counts_an_issuer_as_the_report_does_not_as_the_availability_column_d
         row = topt_baseline.read_q1(connection)
 
     assert row == Row("Q1", "fail", "Q1 GPPE 18/20 (90.0%) against 95.0%")
+
+
+def test_q1_excludes_persisted_not_applicable_issuers_and_catches_applicable_failure(
+    seeded_url: str,
+) -> None:
+    """Owner Decision 2 (#1664): persisted availability_status='not_applicable' leaves Q1 denominator at 16
+    (16/16 pass 100.0%), while any failure among the 16 applicable issuers still fails (15/16 = 93.8%)."""
+    exempt_ids = [
+        "issuer:lei:J3WHBG0MTS7O8ZVMDC91",  # XOM
+        "issuer:cik:0001403161",  # V
+        "issuer:cik:0001141391",  # MA
+        "issuer:cik:0001067983",  # BRK.B
+    ]
+    with psycopg.connect(seeded_url) as connection:
+        pass_rows = issuers(16, 16) + [(eid, "unavailable", "not_applicable", None) for eid in exempt_ids]
+        seed_head(connection, "capture-run:decision2-pass")
+        seed_gppe(connection, "capture-run:decision2-pass", pass_rows)
+        seed_report(connection, "capture-run:decision2-pass", 16, 16)
+        assert topt_baseline.read_q1(connection) == Row("Q1", "pass", "Q1 GPPE 16/16 (100.0%) against 95.0%")
+
+        fail_rows = issuers(15, 16) + [(eid, "unavailable", "not_applicable", None) for eid in exempt_ids]
+        seed_head(connection, "capture-run:decision2-fail")
+        seed_gppe(connection, "capture-run:decision2-fail", fail_rows)
+        seed_report(connection, "capture-run:decision2-fail", 15, 16)
+        assert topt_baseline.read_q1(connection) == Row("Q1", "fail", "Q1 GPPE 15/16 (93.8%) against 95.0%")
+        connection.commit()
 
 
 def test_q1_is_red_when_the_report_of_the_head_says_other_numbers(seeded_url: str) -> None:

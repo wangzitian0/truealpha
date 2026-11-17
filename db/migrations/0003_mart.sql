@@ -542,7 +542,7 @@ create table if not exists mart.strategy_decisions (
  target_price_to_gross_profit numeric,
  constraint strategy_decisions_pkey PRIMARY KEY (strategy_decision_id),
  constraint strategy_decisions_strategy_run_id_issuer_id_cutoff_at_key UNIQUE (strategy_run_id, issuer_id, cutoff_at),
- constraint strategy_decisions_availability_status_check CHECK ((availability_status = ANY (ARRAY['available'::text, 'unavailable'::text, 'stale'::text, 'excluded'::text, 'low_confidence'::text, 'error'::text]))),
+ constraint strategy_decisions_availability_status_check CHECK ((availability_status = ANY (ARRAY['available'::text, 'unavailable'::text, 'stale'::text, 'excluded'::text, 'low_confidence'::text, 'not_applicable'::text, 'error'::text]))),
  constraint strategy_decisions_content_sha256_check CHECK ((content_sha256 ~ '^[0-9a-f]{64}$'::text)),
  constraint strategy_decisions_factor_validation_status_check CHECK ((factor_validation_status = ANY (ARRAY['accepted'::text, 'rejected'::text, 'not_evaluated'::text]))),
  constraint strategy_decisions_peg_positive CHECK (((peg IS NULL) OR (peg > (0)::numeric))),
@@ -625,7 +625,7 @@ create table if not exists mart.topt_gppe_results (
  constraint topt_gppe_results_content_sha256_key UNIQUE (content_sha256),
  constraint topt_gppe_results_invocation_id_issuer_id_key UNIQUE (invocation_id, issuer_id),
  constraint topt_gppe_results_availability_check CHECK ((availability = ANY (ARRAY['available'::text, 'unavailable'::text]))),
- constraint topt_gppe_results_availability_status_check CHECK ((availability_status = ANY (ARRAY['available'::text, 'unavailable'::text, 'stale'::text, 'excluded'::text, 'low_confidence'::text, 'error'::text]))),
+ constraint topt_gppe_results_availability_status_check CHECK ((availability_status = ANY (ARRAY['available'::text, 'unavailable'::text, 'stale'::text, 'excluded'::text, 'low_confidence'::text, 'not_applicable'::text, 'error'::text]))),
  constraint topt_gppe_results_check CHECK ((split_part(result_id, ':'::text, 2) = content_sha256)),
  constraint topt_gppe_results_confidence_check CHECK (((confidence >= (0)::numeric) AND (confidence <= (1)::numeric))),
  constraint topt_gppe_results_content_sha256_check CHECK ((content_sha256 ~ '^[0-9a-f]{64}$'::text)),
@@ -695,7 +695,7 @@ create table if not exists mart.topt_core_results (
  constraint topt_core_results_content_sha256_key UNIQUE (content_sha256),
  constraint topt_core_results_invocation_id_issuer_id_key UNIQUE (invocation_id, issuer_id),
  constraint topt_core_results_availability_check CHECK ((availability = ANY (ARRAY['available'::text, 'unavailable'::text]))),
- constraint topt_core_results_availability_status_check CHECK ((availability_status = ANY (ARRAY['available'::text, 'unavailable'::text, 'stale'::text, 'excluded'::text, 'low_confidence'::text, 'error'::text]))),
+ constraint topt_core_results_availability_status_check CHECK ((availability_status = ANY (ARRAY['available'::text, 'unavailable'::text, 'stale'::text, 'excluded'::text, 'low_confidence'::text, 'not_applicable'::text, 'error'::text]))),
  constraint topt_core_results_check CHECK ((split_part(result_id, ':'::text, 2) = content_sha256)),
  constraint topt_core_results_confidence_check CHECK (((confidence >= (0)::numeric) AND (confidence <= (1)::numeric))),
  constraint topt_core_results_content_sha256_check CHECK ((content_sha256 ~ '^[0-9a-f]{64}$'::text)),
@@ -1900,3 +1900,41 @@ grant select on mart.cell_confidence to app_ops_reader;
 grant select on mart.research_card_artifacts to mart_readonly;
 grant select on mart.research_card_artifacts to app_ops_reader;
 grant select on mart.entity_identity to mart_readonly;
+
+do $$
+declare
+    tbl text;
+    cname text;
+begin
+    foreach tbl in array array['mart.topt_gppe_results', 'mart.topt_core_results', 'mart.strategy_decisions'] loop
+        if not exists (
+            select 1
+            from pg_constraint con
+            join pg_attribute att
+              on att.attrelid = con.conrelid and att.attnum = any(con.conkey)
+            where con.conrelid = tbl::regclass
+              and con.contype = 'c'
+              and att.attname = 'availability_status'
+              and not att.attisdropped
+              and pg_get_constraintdef(con.oid) like '%not_applicable%'
+        ) then
+            select con.conname into cname
+            from pg_constraint con
+            join pg_attribute att
+              on att.attrelid = con.conrelid and att.attnum = any(con.conkey)
+            where con.conrelid = tbl::regclass
+              and con.contype = 'c'
+              and att.attname = 'availability_status'
+              and not att.attisdropped
+            limit 1;
+            if cname is not null then
+                execute format('alter table %s drop constraint %I', tbl, cname);
+            end if;
+            execute format(
+                'alter table %s add constraint %I check (availability_status in (''available'', ''unavailable'', ''stale'', ''excluded'', ''low_confidence'', ''not_applicable'', ''error''))',
+                tbl,
+                split_part(tbl, '.', 2) || '_availability_status_check'
+            );
+        end if;
+    end loop;
+end $$;

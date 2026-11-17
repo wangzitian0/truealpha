@@ -122,6 +122,7 @@ export interface StrategyRunDecision {
 	valuation_gap: string | null;
 	confidence: string | null;
 	exclusion_reason: string | null;
+	availability_status?: string | null;
 	rank: number | null;
 	target_weight: string | null;
 	peg?: string | null;

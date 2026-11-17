@@ -7,9 +7,13 @@
  * all shows an absent aggregate, never a zero.
  */
 
+import { Client } from "pg";
+
+import { hex } from "../scripts/lineage-seed";
 import { idPrefixLikeOfRole } from "../src/contracts/universes";
-import { loadFundValuation } from "../src/server/mart/fund-valuation";
+import { loadFundValuation, VALUED_LINES_SQL } from "../src/server/mart/fund-valuation";
 import type { MartClientLike } from "../src/server/mart/topt-gppe-repository";
+import { requireDb } from "./helpers/db-guard";
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -214,3 +218,183 @@ function fakeRunner(
 }
 
 console.log("mart fund-valuation coverage arithmetic passed");
+
+type ExplainPlanNode = {
+  "Node Type"?: string;
+  "Relation Name"?: string;
+  "Subplan Name"?: string;
+  "Actual Loops"?: number;
+  "Actual Rows"?: number;
+  Plans?: ExplainPlanNode[];
+};
+
+function collectPlanNodes(root: ExplainPlanNode): ExplainPlanNode[] {
+  const out: ExplainPlanNode[] = [root];
+  for (const child of root.Plans ?? []) {
+    out.push(...collectPlanNodes(child));
+  }
+  return out;
+}
+
+export function assertValuedLinesDoesNotRescan(planRoot: ExplainPlanNode): void {
+  const nodes = collectPlanNodes(planRoot);
+  assert(
+    (planRoot["Actual Rows"] ?? 0) >= 4,
+    `expected at least 4 holding rows from VALUED_LINES_SQL, got ${planRoot["Actual Rows"]}`,
+  );
+  const coreSubplan = nodes.find((node) => node["Subplan Name"] === "CTE core");
+  assert(coreSubplan !== undefined, "VALUED_LINES_SQL plan must materialize CTE core");
+  assert(
+    coreSubplan["Actual Loops"] === 1,
+    `CTE core must evaluate once (Actual Loops === 1), got ${coreSubplan["Actual Loops"]}`,
+  );
+  const coreTableScans = nodes.filter((node) => node["Relation Name"] === "topt_core_results");
+  assert(coreTableScans.length > 0, "expected a scan on topt_core_results in VALUED_LINES_SQL plan");
+  for (const scan of coreTableScans) {
+    assert(
+      scan["Actual Loops"] === 1,
+      `topt_core_results must be scanned once (Actual Loops === 1), got ${scan["Actual Loops"]}`,
+    );
+  }
+}
+
+{
+  // Falsifiability check: assertValuedLinesDoesNotRescan must fail on missing CTE core or per-holding rescan.
+  for (const badPlan of [
+    {
+      "Node Type": "Sort",
+      "Actual Rows": 4,
+      Plans: [{ "Relation Name": "topt_core_results", "Actual Loops": 4 }],
+    },
+    {
+      "Node Type": "Sort",
+      "Actual Rows": 4,
+      Plans: [
+        { "Subplan Name": "CTE core", "Actual Loops": 1 },
+        { "Relation Name": "topt_core_results", "Actual Loops": 4 },
+      ],
+    },
+  ] satisfies ExplainPlanNode[]) {
+    let threw = false;
+    try {
+      assertValuedLinesDoesNotRescan(badPlan);
+    } catch {
+      threw = true;
+    }
+    assert(threw, "assertValuedLinesDoesNotRescan must reject non-materialized or rescanned plans");
+  }
+}
+
+const dbUrl = requireDb("mart-fund-valuation", { write: true });
+if (dbUrl) {
+  const client = new Client({ connectionString: dbUrl, connectionTimeoutMillis: 3000 });
+  let connected = false;
+  try {
+    await client.connect();
+    connected = true;
+  } catch (error) {
+    await client.end().catch(() => {});
+    if (process.env.TRUEALPHA_REQUIRE_RUNTIME) {
+      throw new Error(`configured Postgres is unreachable: ${String(error)}`);
+    }
+    console.log("mart-fund-valuation: no local Postgres and TRUEALPHA_REQUIRE_RUNTIME unset — SKIP");
+  }
+  if (connected) {
+    try {
+      await client.query("begin");
+      await client.query("set local session_replication_role = replica");
+
+      const fundId = "etf:series:TEST-VALUATION-PLAN";
+      const issuerId = "issuer:cik:0008880001";
+      const runId = `capture-run:${hex()}`;
+      const decoyRunId = `capture-run:${hex()}`;
+      const isins = ["TESTVAL00001", "TESTVAL00002", "TESTVAL00003", "TESTVAL00004"];
+      const tickers = ["TVA", "TVB", "TVC", "TVD"];
+
+      for (const [id, kind, name] of [
+        [fundId, "etf", "Test Valuation Plan Fund"],
+        [issuerId, "company", "Alpha Valuation Corp"],
+        ...isins.map((isin, idx) => [`company:isin:${isin}`, "company", `Holding ${idx + 1}`]),
+      ]) {
+        await client.query(
+          "insert into staging.kg_entities (id, entity_type, display_name) values ($1, $2, $3) on conflict (id) do nothing",
+          [id, kind, name],
+        );
+      }
+
+      for (let i = 0; i < isins.length; i += 1) {
+        await client.query(
+          `insert into staging.fund_holding_facts
+             (fund_id, holding_id, holding_name, report_period, transaction_time,
+              cusip, isin, lei, balance, value_usd, percent_of_net_assets, confidence, raw_ref)
+           values ($1, $2, $3, '2026-06-30', '2026-08-01T00:00:00Z', null, $4, null, 10, 100, 25, 1.0, 'raw.fetches:0')
+           on conflict do nothing`,
+          [fundId, `company:isin:${isins[i]}`, `Holding ${i + 1}`, isins[i]],
+        );
+        await client.query(
+          `insert into staging.kg_identifiers
+             (entity_id, source, identifier_type, identifier_value, valid_time, transaction_time, confidence, raw_ref)
+           values ($1, 'test', 'ticker', $2, daterange('2026-08-01', null, '[)'), '2026-08-01T00:00:00Z', 0.98, 'raw.fetches:0')
+           on conflict (source, identifier_type, identifier_value, transaction_time) do nothing`,
+          [i === 0 ? issuerId : `company:isin:${isins[i]}`, tickers[i]],
+        );
+      }
+      await client.query(
+        `insert into staging.kg_identifiers
+           (entity_id, source, identifier_type, identifier_value, valid_time, transaction_time, confidence, raw_ref)
+         values ($1, 'test', 'isin', $2, daterange('2026-08-01', null, '[)'), '2026-08-01T00:00:00Z', 0.98, 'raw.fetches:0')
+         on conflict (source, identifier_type, identifier_value, transaction_time) do nothing`,
+        [issuerId, isins[0]],
+      );
+
+      for (const [targetRunId, targetIssuer, targetListing] of [
+        [runId, issuerId, "listing:xnas:tva"],
+        [decoyRunId, "issuer:cik:0008880002", "listing:xnas:decoy"],
+      ]) {
+        const sha = hex();
+        await client.query(
+          `insert into mart.topt_core_results
+             (result_id, content_sha256, invocation_id, snapshot_id, run_id, release_manifest_id, universe_id,
+              universe_version, universe_sha256, cutoff, issuer_id, instrument_id, listing_id, operating_branch,
+              operating_metric, availability, operating_efficiency, capital_adjusted_gross_profit, gppe, tier,
+              target_ps_lower, target_ps_upper, target_ps_midpoint, current_ps, valuation_gap, confidence,
+              freshness, reason_codes, input_observation_ids, gppe_invocation_id, gppe_result_id,
+              gppe_definition_id, gppe_definition_sha256, tier_definition_id, tier_definition_sha256, payload,
+              created_at, availability_status, source_evidence_status, factor_validation_status)
+           values ($1, $2, $3, $4, $5, $6, 'universe:topt-us-2026-03-31', 'v1', $7, '2026-03-31T00:00:00Z',
+                   $8, $9, $10, 'non_financial', 'capital_adjusted_gppe', 'available', 12.5, 1, 12.5, 'tech',
+                   15, 20, 18.75, 20, 0.5, 0.85, 'fresh', '{}', array['o1','o2','o3','o4'],
+                   $11, $12, 'gppe-def:test', $13, 'tier-def:test', $14, '{}'::jsonb,
+                   '2026-04-01T00:00:00Z', 'available', 'verified', 'not_evaluated')`,
+          [
+            `topt-core-result:${sha}`,
+            sha,
+            `topt-core-invocation:${hex()}`,
+            `topt-core-snapshot:${hex()}`,
+            targetRunId,
+            `release-manifest:${hex()}`,
+            hex(),
+            targetIssuer,
+            `instrument:${hex(4)}`,
+            targetListing,
+            `topt-gppe-invocation:${hex()}`,
+            `topt-gppe-result:${hex()}`,
+            hex(),
+            hex(),
+          ],
+        );
+      }
+
+      const explain = await client.query<{ "QUERY PLAN": Array<{ Plan: ExplainPlanNode }> }>(
+        `EXPLAIN (ANALYZE, COSTS OFF, FORMAT JSON) ${VALUED_LINES_SQL}`,
+        [runId],
+      );
+      const planRoot = explain.rows[0]["QUERY PLAN"][0].Plan;
+      assertValuedLinesDoesNotRescan(planRoot);
+      console.log("mart fund-valuation EXPLAIN plan assertion passed");
+    } finally {
+      await client.query("rollback").catch(() => {});
+      await client.end().catch(() => {});
+    }
+  }
+}

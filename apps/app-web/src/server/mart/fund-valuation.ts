@@ -39,7 +39,7 @@ export type FundValuation = {
   lines: ValuedHoldingRow[];
 };
 
-const VALUED_LINES_SQL = `
+export const VALUED_LINES_SQL = `
   with vintage as materialized (
     select v.fund_id,
            coalesce(v.fund_name, v.fund_id) as fund_name,

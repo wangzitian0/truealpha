@@ -55,7 +55,7 @@ export const DECISIONS_SQL = `
          d.capital_adjusted_labor_efficiency, d.tier,
          d.current_price_to_sales, d.target_price_to_sales,
          d.current_price_to_gross_profit, d.target_price_to_gross_profit, d.valuation_gap,
-         d.eligible, d.outcome, d.exclusion_reason, d.rank, d.target_weight, d.peg, d.peg_rank,
+         d.eligible, d.outcome, d.exclusion_reason, d.availability_status, d.rank, d.target_weight, d.peg, d.peg_rank,
          d.peg_reason_codes,
          d.labor_efficiency_metric,
          t.confidence,
@@ -167,6 +167,9 @@ export function decisionFromRow(row: Record<string, unknown>): StrategyRunDecisi
 		valuation_gap: decimalString(row.valuation_gap, "valuation_gap"),
 		confidence: decimalString(row.confidence, "confidence"),
 		exclusion_reason: typeof row.exclusion_reason === "string" ? row.exclusion_reason : null,
+		...(typeof row.availability_status === "string"
+			? { availability_status: row.availability_status }
+			: {}),
 		rank: (rank as number | null) ?? null,
 		target_weight: boundedDecimalString(row.target_weight, "target_weight"),
 		peg: decimalString(row.peg, "peg"),

@@ -206,6 +206,7 @@ _AVAILABILITY_RANK = {
     AvailabilityStatus.LOW_CONFIDENCE: 3,
     AvailabilityStatus.STALE: 4,
     AvailabilityStatus.AVAILABLE: 5,
+    AvailabilityStatus.NOT_APPLICABLE: 6,
 }
 
 

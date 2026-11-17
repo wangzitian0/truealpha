@@ -90,6 +90,7 @@ def _normalized_payload(
     semantic_type: str,
     *,
     financial_vintage: dict[str, Any] | None = None,
+    gross_profit_none_tickers: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
     issuer_id, instrument_id, listing_id, ticker = coordinates
     identity = {
@@ -110,7 +111,7 @@ def _normalized_payload(
             **identity,
             "operating_branch": "financial" if financial else "non_financial",
             "currency": "USD",
-            "gross_profit": None if financial else "210000000",
+            "gross_profit": None if (financial or ticker in gross_profit_none_tickers) else "210000000",
             "total_assets": "200000000",
             "headcount": "100",
             "revenue": "100000000",
@@ -160,6 +161,7 @@ def _seed_complete_production_run(
     financial_vintage: dict[str, Any] | None = None,
     environment: CaptureEnvironment = CaptureEnvironment.PRODUCTION,
     declare_primary_listings: bool = True,
+    gross_profit_none_tickers: frozenset[str] = frozenset(),
 ):
     """Seed one complete run in the given capture environment.
 
@@ -270,7 +272,10 @@ def _seed_complete_production_run(
 
         semantic_type = obligation.capture_requirement_id.removesuffix(":v1")
         normalized_payload = _normalized_payload(
-            coordinates[obligation.subject.id], semantic_type, financial_vintage=financial_vintage
+            coordinates[obligation.subject.id],
+            semantic_type,
+            financial_vintage=financial_vintage,
+            gross_profit_none_tickers=gross_profit_none_tickers,
         )
         raw_sha256 = canonical_sha256({"ordinal": ordinal, "payload": normalized_payload})
         source_record_id = f"production-topt-integration:{ordinal}"
@@ -1847,7 +1852,15 @@ def test_every_materialized_row_carries_the_three_status_dimensions(connection) 
     ).fetchall()
     assert len(core_rows) == len(results)
     for availability_status, evidence, validation, availability, freshness, confidence, headcount in core_rows:
-        assert availability_status in {"available", "unavailable", "stale", "excluded", "low_confidence", "error"}
+        assert availability_status in {
+            "available",
+            "unavailable",
+            "stale",
+            "excluded",
+            "low_confidence",
+            "not_applicable",
+            "error",
+        }
         if availability == "unavailable":
             assert availability_status == "unavailable"
         elif freshness == "stale":
@@ -2226,3 +2239,47 @@ def test_a_qqq_listing_outside_topt_is_valued_once_the_qqq_price_lane_stores_its
     assert after["listing:xnas:t1277q"].availability is ToptCoreAvailability.AVAILABLE
     assert after["listing:xnas:t1277q"].reason_codes == ()
     assert after["listing:xnas:aapl"].availability is ToptCoreAvailability.AVAILABLE
+
+
+def test_materialize_persists_not_applicable_status_for_exempt_topt_issuer(connection) -> None:
+    """Owner Decision 2 (#1664): materialize() persists 'not_applicable' into gppe and core tables for exempt TOPT issuers."""
+    from data_engine.datahub.question_coverage import gppe_cells
+
+    (_, run, _, release_manifest_id, *_rest) = _seed_complete_production_run(
+        connection,
+        gross_profit_none_tickers=frozenset({"XOM", "V", "MA", "BRK.B", "AAPL"}),
+    )
+    repository = PostgresToptCoreRepository(connection)
+    snapshot = repository.freeze_snapshot(run_id=run.run_id, release_manifest_id=release_manifest_id)
+    results = repository.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate="0.05"))
+    assert len(results) == 20
+
+    gppe_statuses = dict(
+        connection.execute(
+            "select issuer_id, availability_status from mart.topt_gppe_results where run_id = %s",
+            (run.run_id,),
+        ).fetchall()
+    )
+    core_statuses = dict(
+        connection.execute(
+            "select issuer_id, availability_status from mart.topt_core_results where run_id = %s",
+            (run.run_id,),
+        ).fetchall()
+    )
+    xom_id = "issuer:lei:J3WHBG0MTS7O8ZVMDC91"
+    v_id = "issuer:lei:549300JZ4OKEHW3DPJ59"
+    ma_id = "issuer:lei:AR5L2ODV9HN37376R084"
+    brk_id = "issuer:lei:5493000C01ZX7D35SD85"
+    aapl_id = "issuer:lei:HWUPKR0MPOU8FGXBT394"
+
+    for exempt_id in (xom_id, v_id, ma_id, brk_id):
+        assert gppe_statuses[exempt_id] == "not_applicable"
+        assert core_statuses[exempt_id] == "not_applicable"
+    assert gppe_statuses[aapl_id] == "unavailable"
+    assert core_statuses[aapl_id] == "unavailable"
+
+    cells = gppe_cells(connection, run.run_id)
+    by_subject = {cell.subject_id: cell for cell in cells}
+    assert all(by_subject[eid].not_applicable for eid in (xom_id, v_id, ma_id, brk_id))
+    assert by_subject[aapl_id].not_applicable is False
+    assert by_subject[aapl_id].answered is False

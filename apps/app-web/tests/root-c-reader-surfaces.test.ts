@@ -225,8 +225,8 @@ const adapter = new StrategyRunReadAdapter(
   assert(executedSqls.length === 4, `expected 4 entity detail queries, got ${executedSqls.length}`);
   for (const sql of executedSqls) {
     assert(
-      sql.includes("select ei.entity_id::text from mart.entity_identity ei") &&
-        sql.includes("select ei.legacy_id from mart.entity_identity ei") &&
+      sql.includes("select ei.entity_id::text as entity_id, ei.legacy_id from mart.entity_identity ei") &&
+        sql.includes("offset 0") &&
         sql.includes("ei.current_ticker") &&
         sql.includes("ei.cik") &&
         sql.includes("ei.lei"),
@@ -343,7 +343,7 @@ const adapter = new StrategyRunReadAdapter(
   assert(tierKey("tech_enabled") === "tech" && formatTierLabel("tech_enabled") === "Tech", "SSOT: formatTierLabel formats Tech");
   assert(tierKey("traditional") === "traditional" && formatTierLabel("traditional") === "Traditional", "SSOT: formatTierLabel formats Traditional");
   assert(formatTierLabel(null, "-") === "-", "SSOT: formatTierLabel honors custom fallbackGlyph");
-  for (const status of ["available", "unavailable", "stale", "excluded", "low_confidence", "error"] as const) {
+  for (const status of ["available", "unavailable", "stale", "excluded", "low_confidence", "not_applicable", "error"] as const) {
     assert(toAvailabilityStatus(status) === status, `SSOT: toAvailabilityStatus must preserve ${status}`);
   }
   assert(toAvailabilityStatus("unknown_status") === "unavailable", "SSOT: toAvailabilityStatus falls back to unavailable");
