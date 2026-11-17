@@ -177,7 +177,9 @@ export function decisionFromRow(row: Record<string, unknown>): StrategyRunDecisi
 		valuation_gap: decimalString(row.valuation_gap, "valuation_gap"),
 		confidence: decimalString(row.confidence, "confidence"),
 		exclusion_reason: typeof row.exclusion_reason === "string" ? row.exclusion_reason : null,
-		availability_status: typeof row.availability_status === "string" ? row.availability_status : null,
+		...(typeof row.availability_status === "string"
+			? { availability_status: row.availability_status }
+			: {}),
 		rank: (rank as number | null) ?? null,
 		target_weight: boundedDecimalString(row.target_weight, "target_weight"),
 		peg: decimalString(row.peg, "peg"),

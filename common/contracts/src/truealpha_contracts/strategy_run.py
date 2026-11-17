@@ -5,15 +5,16 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
-from typing import Literal, Protocol, Self
+from typing import Any, Literal, Protocol, Self
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, SerializerFunctionWrapHandler, field_validator, model_serializer, model_validator
 
 from truealpha_contracts.access import AccessContext
 from truealpha_contracts.common import (
     AwareDatetime,
     Sha256,
     StrictFrozenModel,
+    drop_none_fields,
 )
 from truealpha_contracts.execution import AvailabilityStatus
 from truealpha_contracts.research import ValuationTier
@@ -52,6 +53,10 @@ class StrategyRunDecision(StrictFrozenModel):
     @classmethod
     def parse_cutoff_at(cls, value: object) -> object:
         return datetime.fromisoformat(value.replace("Z", "+00:00")) if isinstance(value, str) else value
+
+    @model_serializer(mode="wrap")
+    def _omit_absent_availability_status(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        return drop_none_fields(handler(self), "availability_status")
 
     @model_validator(mode="after")
     def validate_one_valuation_basis(self) -> Self:
