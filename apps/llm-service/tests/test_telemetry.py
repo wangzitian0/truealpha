@@ -2,7 +2,7 @@
 
 Asserted through the deployed entrypoint, `llm_service.main`, imported in a fresh interpreter the
 way uvicorn imports it: a test that built providers by hand would prove the settings and still
-pass if `main` never called `init_telemetry`. The decisive test points a real import of the app at
+pass if `main` never called `init_service`. The decisive test points a real import of the app at
 a localhost OTLP receiver and reads back what arrived: the server span of a real request, a metric
 batch, and an ERROR log record, each under the identity infra2's deploy renders. The service name is whatever `OTEL_SERVICE_NAME` says (infra2 issues
 `truealpha-app` for this stack); nothing in the app names it.
@@ -62,10 +62,14 @@ from opentelemetry import _logs, metrics, trace
 # /mcp answers 307 from the app's own route: a real request through the instrumented stack that
 # needs no database.
 client = TestClient(main.app, follow_redirects=False)
-assert client.get("/mcp").status_code == 307
-# The probe paths (#1660): answered, and absent from spans and metrics.
-assert client.get("/livez").status_code == 200
-assert client.get("/readyz").status_code in (200, 503)
+r_mcp = client.get("/mcp", headers={"X-Request-ID": "req-probe-1"})
+assert r_mcp.status_code == 307
+assert r_mcp.headers["X-Request-ID"] == "req-probe-1"
+# The probe paths (#1660): answered with X-Request-ID, and absent from spans and metrics.
+r_livez = client.get("/livez")
+assert r_livez.status_code == 200 and r_livez.headers["X-Request-ID"]
+r_readyz = client.get("/readyz")
+assert r_readyz.status_code in (200, 503) and r_readyz.headers["X-Request-ID"]
 logging.getLogger("llm_service.probe").error("llm-service probe failure")
 trace.get_tracer_provider().force_flush()
 metrics.get_meter_provider().force_flush()
@@ -73,10 +77,14 @@ _logs.get_logger_provider().force_flush()
 """
 
 
+def _probe_state(stdout: str) -> dict[str, object]:
+    return next(json.loads(line) for line in stdout.splitlines() if '"contrib_instrumented"' in line)
+
+
 def test_without_an_endpoint_the_app_imports_with_telemetry_off() -> None:
     result = run_python_probe(STATE_PROBE, {})
     assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout.splitlines()[-1]) == {
+    assert _probe_state(result.stdout) == {
         "contrib_instrumented": False,
         "sdk_provider": False,
         "service_name": None,
@@ -98,7 +106,7 @@ def test_with_an_endpoint_and_the_rendered_identity_the_app_exports_without_the_
     }
     result = run_python_probe(STATE_PROBE, environ)
     assert result.returncode == 0, result.stderr
-    state = json.loads(result.stdout.splitlines()[-1])
+    state = _probe_state(result.stdout)
     assert state == {
         "contrib_instrumented": False,
         "sdk_provider": True,
@@ -146,6 +154,9 @@ def test_a_request_and_an_error_log_reach_the_collector_under_the_rendered_ident
     assert not [name for name in collector.span_names() if any(route in name for route in probe_routes)]
     assert not [attributes for _unit, attributes in durations if attributes.get("http.route") in probe_routes]
     assert "llm-service probe failure" in collector.log_bodies()
+    json_lines = [json.loads(line) for line in result.stdout.splitlines() if line.startswith("{")]
+    probe_logs = [entry for entry in json_lines if entry.get("message") == "llm-service probe failure"]
+    assert probe_logs and probe_logs[-1]["service.name"] == "truealpha-app"
     expected = {**IDENTITY, "deployment.environment.name": "pr-12", "service.name": "truealpha-app"}
     for signal in ("traces", "metrics", "logs"):
         resources = collector.resources(signal)

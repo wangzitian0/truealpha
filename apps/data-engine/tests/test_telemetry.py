@@ -59,10 +59,14 @@ _logs.get_logger_provider().force_flush()
 """
 
 
+def _probe_state(stdout: str) -> dict[str, object]:
+    return next(json.loads(line) for line in stdout.splitlines() if '"sdk_provider"' in line)
+
+
 def test_without_an_endpoint_the_code_location_loads_with_telemetry_off() -> None:
     result = run_python_probe(STATE_PROBE, {})
     assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout.splitlines()[-1]) == {
+    assert _probe_state(result.stdout) == {
         "sdk_provider": False,
         "service_name": None,
         "otlp_log_handlers": 0,
@@ -75,7 +79,7 @@ def test_the_host_network_roles_get_no_endpoint_and_stay_cleanly_disabled() -> N
     must load exactly like local development: no providers, no exporter thread, no log handler."""
     result = run_python_probe(STATE_PROBE, DEPLOYED)
     assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout.splitlines()[-1]) == {
+    assert _probe_state(result.stdout) == {
         "sdk_provider": False,
         "service_name": None,
         "otlp_log_handlers": 0,
@@ -85,7 +89,7 @@ def test_the_host_network_roles_get_no_endpoint_and_stay_cleanly_disabled() -> N
 def test_with_an_endpoint_and_the_rendered_identity_the_code_location_configures_telemetry() -> None:
     result = run_python_probe(STATE_PROBE, {**DEPLOYED, "OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:9"})
     assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout.splitlines()[-1]) == {
+    assert _probe_state(result.stdout) == {
         "sdk_provider": True,
         "service_name": "truealpha-dagster",
         "otlp_log_handlers": 1,
