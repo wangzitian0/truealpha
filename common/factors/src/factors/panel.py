@@ -38,7 +38,6 @@ MINTED_NODE_IDS, MINTED_TREE_IDS, NAMESPACE_UUID = _m.MINTED_NODE_IDS, _m.MINTED
 PHYSICALLY_NON_NEGATIVE = _m.PHYSICALLY_NON_NEGATIVE
 _ = (AliasKind, SignFinding, input_key_of, judge_sign, metric_of, node_id_for, tree_id_for)
 
-# 1. Native Polars pl.Expr Definitions Over the Standardized Wide Panel
 EXPR_OPERATING_GROSS_PROFIT: pl.Expr = (
     pl.when(pl.col("issuer_class") == IssuerClass.FINANCIAL.value)
     .then(pl.col("pre_provision_profit"))
@@ -118,7 +117,6 @@ FACTOR_EXPRESSIONS: Mapping[str, pl.Expr] = {
 PANEL_EXPRESSIONS: Mapping[str, pl.Expr] = {**INTERMEDIATE_EXPRESSIONS, **FACTOR_EXPRESSIONS}
 PANEL_INDEX_COLUMNS: frozenset[str] = frozenset({"issuer_id", "period", "issuer_class"})
 
-# 2. PanelMetricSpec & FactorVariantSpec Metadata (Zero Custom Formula DSL)
 _EVERY_CLASS = ALL_ISSUER_CLASSES
 _NON_BANK = frozenset({IssuerClass.NON_FINANCIAL, IssuerClass.INSURANCE})
 _FINANCIAL = frozenset({IssuerClass.FINANCIAL})
@@ -228,7 +226,6 @@ def snapshot_field_specs(metrics: _Specs = PANEL_METRICS) -> _Specs:
     return {spec.snapshot_field: spec for spec in metrics.values() if spec.is_input and spec.snapshot_field}
 
 
-# 3. Dependency Discovery (`expr.meta.root_names()`) & Wide-Panel Evaluation
 def consumed_columns(expr: pl.Expr) -> tuple[str, ...]:
     return tuple(name for name in expr.meta.root_names() if name not in PANEL_INDEX_COLUMNS)
 
@@ -375,8 +372,11 @@ def evaluate_wide_panel(
 
 
 def _eval_binary_ast_decimal(b: _Row, row: _Row, undef: dict[str, str], tgt: str | None) -> Any:
-    op = b["op"]
-    lv, rv = _eval_polars_ast_decimal(b["left"], row, undef), _eval_polars_ast_decimal(b["right"], row, undef)
+    op, lv, rv = (
+        b["op"],
+        _eval_polars_ast_decimal(b["left"], row, undef),
+        _eval_polars_ast_decimal(b["right"], row, undef),
+    )
     if op == "Eq":
         return lv == rv
     if lv is None or rv is None:
@@ -401,8 +401,9 @@ def _eval_ternary_ast_decimal(t: _Row, row: _Row, undef: dict[str, str], tgt: st
         return _eval_polars_ast_decimal(t["truthy"], row, undef, tgt)
     val = _eval_polars_ast_decimal(t["falsy"], row, undef, tgt)
     if val is None and tgt and tgt not in undef:
-        is_gte = t["predicate"].get("BinaryExpr", {}).get("op") == "GtEq"
-        undef[tgt] = "negative_operand" if is_gte else "zero_denominator"
+        undef[tgt] = (
+            "negative_operand" if t["predicate"].get("BinaryExpr", {}).get("op") == "GtEq" else "zero_denominator"
+        )
     return val
 
 
@@ -463,7 +464,6 @@ def evaluate_panel_variant(
     return PanelRowEvaluation(variant.key, variant.version, issuer_class, values, undefined)
 
 
-# 4. Sign Policy & Strategy Definition Binding Helpers
 def published_node(table: str, column: str, *, metrics: _Specs = PANEL_METRICS) -> PanelMetricSpec:
     return metrics[PUBLISHED_COLUMNS[table][column]]
 
@@ -518,8 +518,7 @@ bound_tree = bound_variant
 
 
 def capital_adjusted_node(v: FactorVariantSpec, cls: IssuerClass, *, metrics: _Specs = PANEL_METRICS) -> str:
-    pair = ratio_operands_of(metrics[v.root])
-    if pair is None:
+    if (pair := ratio_operands_of(metrics[v.root])) is None:
         raise ValueError(f"root {v.root} of {v.key} is not a ratio expression")
     return pair[0]
 
@@ -527,15 +526,16 @@ def capital_adjusted_node(v: FactorVariantSpec, cls: IssuerClass, *, metrics: _S
 def operating_numerator_node(
     v: FactorVariantSpec, cls: IssuerClass, *, metrics: _Specs = PANEL_METRICS
 ) -> PanelMetricSpec:
-    cap_adj_expr = metrics[capital_adjusted_node(v, cls, metrics=metrics)].expr_for(cls)
-    assert cap_adj_expr is not None
-    first_dep = consumed_columns(cap_adj_expr)[0]
-    leaves = leaf_consumed_columns(first_dep, issuer_class=cls, metrics=metrics)
+    expr = metrics[capital_adjusted_node(v, cls, metrics=metrics)].expr_for(cls)
+    assert expr is not None
+    first = consumed_columns(expr)[0]
     req = [
-        metrics[k] for k in leaves if k in metrics and metrics[k].is_input and metrics[k].default_when_missing is None
+        m
+        for k in leaf_consumed_columns(first, issuer_class=cls, metrics=metrics)
+        if (m := metrics.get(k)) and m.is_input and m.default_when_missing is None
     ]
     if len(req) != 1:
-        raise ValueError(f"variant {v.key}: numerator {first_dep} does not reduce to one captured input")
+        raise ValueError(f"variant {v.key}: numerator {first} does not reduce to one captured input")
     return req[0]
 
 

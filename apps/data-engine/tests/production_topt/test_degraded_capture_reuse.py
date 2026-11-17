@@ -337,13 +337,25 @@ def _live_topt_tick(url: str, monkeypatch, *, executed_at: datetime, force_fetch
 
 
 def _key_topt_like_the_planes(monkeypatch) -> dict[str, tuple[str, str]]:
-    from data_engine.datahub.production_topt.universe_corpus import load_corpus
+    import json
+
+    from data_engine.datahub.production_topt import universe_corpus
+
+    qqq_fixture = Path(__file__).resolve().parents[1] / "fixtures" / "corpus.qqq.v1.json"
+    real_load_corpus = universe_corpus.load_corpus
+
+    def _load_corpus_with_qqq(filename: str):
+        if filename == "corpus.qqq.v1.json":
+            return json.loads(qqq_fixture.read_text())
+        return real_load_corpus(filename)
+
+    monkeypatch.setattr(universe_corpus, "load_corpus", _load_corpus_with_qqq)
 
     plane = {
         str(row[2]): (str(row[0]), str(row[1]))
-        for row in load_corpus("corpus.qqq.v1.json")["topt_denominator"]["instruments"]
+        for row in _load_corpus_with_qqq("corpus.qqq.v1.json")["topt_denominator"]["instruments"]
     }
-    topt = {str(row[2]) for row in load_corpus("corpus.v1.json")["topt_denominator"]["instruments"]}
+    topt = {str(row[2]) for row in _load_corpus_with_qqq("corpus.v1.json")["topt_denominator"]["instruments"]}
     shared = {listing: ids for listing, ids in plane.items() if listing in topt}
     real = composition.plan_and_persist
 

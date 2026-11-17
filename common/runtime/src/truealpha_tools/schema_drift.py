@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare a live Postgres catalog against a fresh migration-chain reference database (#984)."""
+"""Compare live Postgres catalog against migration-chain reference database (#984)."""
 
 from __future__ import annotations
 
@@ -27,14 +27,9 @@ from truealpha_runtime.testing import DB_DIR, apply_migration_chain
 
 log = logging.getLogger(__name__)
 
-#: A scratch reference database is `<prefix><unix seconds>_<pid>_<8 hex>`. The seconds let a later run drop one that a
-#: killed process left behind (a SIGKILL skips the `finally`). A name of another shape is never dropped.
 REFERENCE_PREFIX = "truealpha_chain_reference_"
-#: `re.ASCII`: `\d` alone accepts digits of other scripts, and `int()` reads them as other numbers.
 REFERENCE_NAME = re.compile(rf"{re.escape(REFERENCE_PREFIX)}(\d{{10}})_\d+_[0-9a-f]{{8}}", re.ASCII)
-#: A reference builds in about 15 s. One hour is far past any live build.
 STALE_REFERENCE_AGE = timedelta(hours=1)
-#: A drop of a database waits for its sessions to end. It never holds the verdict for more than this.
 SWEEP_STATEMENT_TIMEOUT = "60s"
 LOCAL_TARGET = Path(__file__).resolve().parents[4] / "db" / "local_target.sh"
 REMOTE_REFERENCE_ENV = "TRUEALPHA_ALLOW_REMOTE_REFERENCE"
@@ -49,103 +44,64 @@ class Category:
     statement: str
 
 
-_ALL_SCHEMAS = """
-    select n.nspname from pg_namespace as n
-    where n.nspname not like 'pg\\_%' and n.nspname <> 'information_schema'
-    order by 1
-"""
+_ALL_SCHEMAS = "select n.nspname from pg_namespace as n where n.nspname not like 'pg\\_%' and n.nspname <> 'information_schema' order by 1"
+
+_NS_C = "join pg_namespace as n on n.oid = c.relnamespace "
+_W = "where n.nspname = any(%(schemas)s)"
 
 CATEGORIES: tuple[Category, ...] = (
     Category(
         "relations",
         2,
-        """
-        select n.nspname, c.relname, c.relkind
-          from pg_class as c join pg_namespace as n on n.oid = c.relnamespace
-         where n.nspname = any(%(schemas)s) and c.relkind in ('r', 'p', 'v', 'm', 'f', 'S')
-         order by 1, 2
-        """,
+        f"select n.nspname, c.relname, c.relkind from pg_class as c {_NS_C}"
+        f"{_W} and c.relkind in ('r', 'p', 'v', 'm', 'f', 'S') order by 1, 2",
     ),
     Category(
         "columns",
         3,
-        """
-        select n.nspname, c.relname, a.attname,
-               row_number() over (partition by a.attrelid order by a.attnum) as position,
-               format_type(a.atttypid, a.atttypmod) as type,
-               a.attnotnull, pg_get_expr(d.adbin, d.adrelid) as column_default,
-               a.attidentity, a.attgenerated
-          from pg_attribute as a
-          join pg_class as c on c.oid = a.attrelid
-          join pg_namespace as n on n.oid = c.relnamespace
-          left join pg_attrdef as d on d.adrelid = a.attrelid and d.adnum = a.attnum
-         where n.nspname = any(%(schemas)s)
-           and a.attnum > 0 and not a.attisdropped and c.relkind in ('r', 'p', 'v', 'm', 'f')
-         order by 1, 2, 3
-        """,
+        "select n.nspname, c.relname, a.attname, "
+        "row_number() over (partition by a.attrelid order by a.attnum) as position, "
+        "format_type(a.atttypid, a.atttypmod) as type, a.attnotnull, pg_get_expr(d.adbin, d.adrelid) as column_default, "
+        "a.attidentity, a.attgenerated from pg_attribute as a "
+        f"join pg_class as c on c.oid = a.attrelid {_NS_C}"
+        "left join pg_attrdef as d on d.adrelid = a.attrelid and d.adnum = a.attnum "
+        f"{_W} and a.attnum > 0 and not a.attisdropped and c.relkind in ('r', 'p', 'v', 'm', 'f') order by 1, 2, 3",
     ),
     Category(
         "constraints",
         3,
-        """
-        select n.nspname, c.relname, con.conname, pg_get_constraintdef(con.oid)
-          from pg_constraint as con
-          join pg_class as c on c.oid = con.conrelid
-          join pg_namespace as n on n.oid = c.relnamespace
-         where n.nspname = any(%(schemas)s) order by 1, 2, 3
-        """,
+        f"select n.nspname, c.relname, con.conname, pg_get_constraintdef(con.oid) from pg_constraint as con "
+        f"join pg_class as c on c.oid = con.conrelid {_NS_C}{_W} order by 1, 2, 3",
     ),
     Category(
         "indexes",
         3,
-        """
-        select n.nspname, c.relname, i.relname, pg_get_indexdef(x.indexrelid)
-          from pg_index as x
-          join pg_class as i on i.oid = x.indexrelid
-          join pg_class as c on c.oid = x.indrelid
-          join pg_namespace as n on n.oid = c.relnamespace
-         where n.nspname = any(%(schemas)s) order by 1, 2, 3
-        """,
+        "select n.nspname, c.relname, i.relname, pg_get_indexdef(x.indexrelid) from pg_index as x "
+        f"join pg_class as i on i.oid = x.indexrelid join pg_class as c on c.oid = x.indrelid {_NS_C}{_W} order by 1, 2, 3",
     ),
     Category(
         "triggers",
         3,
-        """
-        select n.nspname, c.relname, t.tgname, pg_get_triggerdef(t.oid)
-          from pg_trigger as t
-          join pg_class as c on c.oid = t.tgrelid
-          join pg_namespace as n on n.oid = c.relnamespace
-         where n.nspname = any(%(schemas)s) and not t.tgisinternal order by 1, 2, 3
-        """,
+        "select n.nspname, c.relname, t.tgname, pg_get_triggerdef(t.oid) from pg_trigger as t "
+        f"join pg_class as c on c.oid = t.tgrelid {_NS_C}{_W} and not t.tgisinternal order by 1, 2, 3",
     ),
     Category(
         "routines",
         3,
-        """
-        select n.nspname, p.proname, pg_get_function_identity_arguments(p.oid), p.prokind, md5(p.prosrc)
-          from pg_proc as p join pg_namespace as n on n.oid = p.pronamespace
-         where n.nspname = any(%(schemas)s) order by 1, 2, 3
-        """,
+        "select n.nspname, p.proname, pg_get_function_identity_arguments(p.oid), p.prokind, md5(p.prosrc) "
+        f"from pg_proc as p join pg_namespace as n on n.oid = p.pronamespace {_W} order by 1, 2, 3",
     ),
     Category(
         "views",
         2,
-        """
-        select n.nspname, c.relname, pg_get_viewdef(c.oid, true)
-          from pg_class as c join pg_namespace as n on n.oid = c.relnamespace
-         where n.nspname = any(%(schemas)s) and c.relkind in ('v', 'm') order by 1, 2
-        """,
+        f"select n.nspname, c.relname, pg_get_viewdef(c.oid, true) from pg_class as c {_NS_C}"
+        f"{_W} and c.relkind in ('v', 'm') order by 1, 2",
     ),
     Category(
         "sequences",
         2,
-        """
-        select n.nspname, c.relname, s.seqstart, s.seqincrement, s.seqmin, s.seqmax, s.seqcycle
-          from pg_sequence as s
-          join pg_class as c on c.oid = s.seqrelid
-          join pg_namespace as n on n.oid = c.relnamespace
-         where n.nspname = any(%(schemas)s) order by 1, 2
-        """,
+        "select n.nspname, c.relname, s.seqstart, s.seqincrement, s.seqmin, s.seqmax, s.seqcycle from pg_sequence as s "
+        f"join pg_class as c on c.oid = s.seqrelid {_NS_C}{_W} order by 1, 2",
     ),
 )
 
@@ -179,16 +135,19 @@ def differences(live: Fingerprint, declared: Fingerprint) -> list[str]:
     report: list[str] = []
     for category in CATEGORIES:
         mine, theirs = live[category.name], declared[category.name]
-        for key in sorted(set(theirs) - set(mine)):
-            report.append(f"{category.name}: MISSING   {_render(key, theirs[key])}")
-        for key in sorted(set(mine) - set(theirs)):
-            report.append(f"{category.name}: EXTRA     {_render(key, mine[key])}")
-        for key in sorted(k for k in set(mine) & set(theirs) if mine[k] != theirs[k]):
-            report.append(
-                f"{category.name}: DIFFERS   {'.'.join(str(part) for part in key)}\n"
-                f"      declared: {_shape(theirs[key])}\n"
-                f"      live:     {_shape(mine[key])}"
-            )
+        report.extend(
+            f"{category.name}: MISSING   {_render(key, theirs[key])}" for key in sorted(set(theirs) - set(mine))
+        )
+        report.extend(
+            f"{category.name}: EXTRA     {_render(key, mine[key])}" for key in sorted(set(mine) - set(theirs))
+        )
+        for key in sorted(set(mine) & set(theirs)):
+            if mine[key] != theirs[key]:
+                report.append(
+                    f"{category.name}: DIFFERS   {'.'.join(str(part) for part in key)}\n"
+                    f"      declared: {_shape(theirs[key])}\n"
+                    f"      live:     {_shape(mine[key])}"
+                )
     return report
 
 
@@ -207,19 +166,12 @@ def target_locality(database_url: str) -> tuple[str, str]:
     return parsed["ta_locality"], parsed["ta_redacted"]
 
 
-#: What `roles.sql` is replaced with when a reference is built without it.
 ROLES_STUB = "-- Left out on purpose: roles are state of the whole server, not of the scratch database.\n"
 
 
 @contextmanager
 def _chain_without_roles(db_dir: Path) -> Iterator[Path]:
-    """A chain directory with the migrations and the applier of `db_dir` and an empty `roles.sql`.
-
-    `roles.sql` writes state of the whole server: `ALTER ROLE ... SET`, `GRANT <role> TO <role>`, and the app login
-    password when one is set. A check that builds a scratch database has no reason to write any of it, and two
-    appliers that write the same role at the same moment fail with `tuple concurrently updated`. `roles.sql` creates
-    no relation, column, constraint, index, trigger, function, view or sequence, so `compare()` cannot see its work.
-    The test `test_a_reference_without_roles_equals_one_with_roles` fails when that stops being true."""
+    """Create temporary chain directory using migrations from ``db_dir`` and an empty ``roles.sql``."""
     with tempfile.TemporaryDirectory(prefix="truealpha_chain_without_roles_") as scratch:
         root = Path(scratch)
         for name in ("migrations", "apply_migrations.sh"):
@@ -237,14 +189,7 @@ def reference_database(
     allow_remote: bool = False,
     skip_roles: bool = False,
 ) -> Iterator[str]:
-    """A database of its own on `server_url` that ran the chain; dropped when the block ends.
-
-    `db_dir` names the directory that holds `migrations/`, `roles.sql` and `apply_migrations.sh` when it is not
-    the checkout of this file: the data-engine image bakes it at `/app/db`. `allow_remote` is the in-code form
-    of `REMOTE_REFERENCE_ENV`. The caller states that the reference has to sit on this server. The deployed check
-    of an environment passes it for the database that it runs against, never for a URL that a person supplied.
-    `skip_roles` builds the reference without `roles.sql` (see `_chain_without_roles`): the build then writes nothing
-    outside its own scratch database."""
+    """Yield temporary reference database URL on `server_url` and drop on exit."""
     if not allow_remote:
         locality, redacted = target_locality(server_url)
         if locality != "local" and os.environ.get(REMOTE_REFERENCE_ENV) != "1":
@@ -285,10 +230,7 @@ def reference_database(
 def drop_stale_references(
     server_url: str, *, older_than: timedelta = STALE_REFERENCE_AGE, now: float | None = None
 ) -> list[str]:
-    """Drop the scratch reference databases on `server_url` that are older than `older_than`; return their names.
-
-    Only a name that matches `REFERENCE_NAME` is a candidate: no other database is ever dropped. A drop that
-    fails is logged, and the next candidate is still tried. Each statement stops after `SWEEP_STATEMENT_TIMEOUT`."""
+    """Drop stale scratch reference databases matching ``REFERENCE_NAME``."""
     moment = time.time() if now is None else now
     dropped: list[str] = []
     with psycopg.connect(

@@ -97,19 +97,9 @@ function textOrNull(value: unknown): string | null {
 	throw new SchemaMismatchError("expected a text column");
 }
 
-function outcomeOf(value: unknown): StrategyRunOutcome {
-	if (typeof value === "string" && (STRATEGY_RUN_OUTCOMES as readonly string[]).includes(value)) {
-		return value as StrategyRunOutcome;
-	}
-	throw new SchemaMismatchError(`unknown outcome ${String(value)}`);
-}
-
-function tierOf(value: unknown): ValuationTier | null {
-	if (value === null || value === undefined) return null;
-	if (typeof value === "string" && (VALUATION_TIERS as readonly string[]).includes(value)) {
-		return value as ValuationTier;
-	}
-	throw new SchemaMismatchError(`unknown tier ${String(value)}`);
+function enumOf<T extends string>(value: unknown, allowed: readonly T[], label: string): T {
+	if (typeof value === "string" && (allowed as readonly string[]).includes(value)) return value as T;
+	throw new SchemaMismatchError(`unknown ${label} ${String(value)}`);
 }
 
 function cutoffIso(value: unknown): string {
@@ -157,9 +147,9 @@ export function decisionFromRow(row: Record<string, unknown>): StrategyRunDecisi
 	return {
 		issuer_id: row.issuer_id,
 		cutoff_at: cutoffIso(row.cutoff_at),
-		outcome: outcomeOf(row.outcome),
+		outcome: enumOf(row.outcome, STRATEGY_RUN_OUTCOMES, "outcome"),
 		eligible: row.eligible,
-		tier: tierOf(row.tier),
+		tier: row.tier == null ? null : enumOf(row.tier, VALUATION_TIERS, "tier"),
 		capital_adjusted_labor_efficiency: decimalString(
 			row.capital_adjusted_labor_efficiency,
 			"capital_adjusted_labor_efficiency",

@@ -35,8 +35,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 from production_topt.test_materialization import CUTOFF, _seed_complete_production_run  # noqa: E402
 
 MIGRATIONS = Path(__file__).parents[3] / "db" / "migrations"
-STORE_MIGRATION = MIGRATIONS / "20260917T0412_datahub_entity_identity_store.sql"
-BACKFILL_MIGRATION = MIGRATIONS / "20260917T0604_datahub_entity_backfill_job.sql"
+STORE_MIGRATION = MIGRATIONS / "0002_staging.sql"
+BACKFILL_MIGRATION = STORE_MIGRATION
 
 # The id rule, restated independently of the SQL: UUIDv5 of `scheme:value` under the kind's
 # namespace, which is UUIDv5 of `kind:<kind>` under the root.
@@ -564,16 +564,30 @@ def test_the_backfill_plan_reads_only_tables_that_predate_it() -> None:
     has applied neither migration. That only works while the plan references nothing the
     two migrations create."""
     backfill = BACKFILL_MIGRATION.read_text()
-    both = STORE_MIGRATION.read_text() + backfill
-    # The view body is the `$view$` literal its boot-lock guard compares and applies (#915).
-    replace = backfill.index("create or replace view staging.entity_backfill_plan as ")
-    opening = backfill.rindex("$view$", 0, backfill.rindex("$view$", 0, replace))
-    body = backfill[opening + len("$view$") : backfill.index("$view$", opening + len("$view$"))]
+    replace = backfill.index("create or replace view staging.entity_backfill_plan as")
+    start = replace + len("create or replace view staging.entity_backfill_plan as")
+    body = backfill[start : backfill.index("$vc$;", start)]
     assert "from relation_state" in body and "$view$" not in body
-    created = set(re.findall(r"create (?:or replace )?(?:table if not exists|view|function) (staging\.\w+)", both))
-    assert {"staging.entity_backfill_plan", "staging.entities", "staging.entity_mint"} <= created
+    entity_store_objects = {
+        "staging.entities",
+        "staging.entity_aliases",
+        "staging.entity_relations",
+        "staging.entity_retractions",
+        "staging.entity_kinds",
+        "staging.entity_alias_schemes",
+        "staging.entity_relation_types",
+        "staging.entity_mint",
+        "staging.entity_survivor",
+        "staging.entity_alias_valid_to",
+        "staging.entity_backfill_plan",
+    }
+    created = set(
+        re.findall(r"create (?:or replace )?(?:table if not exists|view|function) (staging\.\w+)", backfill, re.I)
+    )
+    created_entity_store = created & entity_store_objects
+    assert {"staging.entity_backfill_plan", "staging.entities", "staging.entity_mint"} <= created_entity_store
     referenced = set(re.findall(r"staging\.\w+", body)) - {"staging.entity_backfill_plan"}
-    assert referenced and not (referenced & created), sorted(referenced & created)
+    assert referenced and not (referenced & created_entity_store), sorted(referenced & created_entity_store)
 
 
 @pytest.fixture(scope="module")
@@ -648,12 +662,14 @@ _DATA_STATEMENT = re.compile(
 
 
 def _top_level_statements(sql_text: str) -> list[str]:
-    """Statements of a migration file, split on `;` outside comments, quotes and $$ bodies."""
+    """Statements of a migration file, split on `;` outside comments, quotes and dollar-quoted bodies."""
     text = re.sub(r"--[^\n]*", "", sql_text)
     statements, current, index = [], [], 0
     while index < len(text):
-        if text.startswith("$$", index):
-            end = text.index("$$", index + 2) + 2
+        dollar_match = re.match(r"\$[A-Za-z_0-9]*\$", text[index:])
+        if dollar_match:
+            tag = dollar_match.group(0)
+            end = text.index(tag, index + len(tag)) + len(tag)
             current.append(text[index:end])
             index = end
         elif text[index] == "'":
@@ -677,21 +693,26 @@ def _top_level_statements(sql_text: str) -> list[str]:
 
 def test_no_boot_migration_reads_or_writes_data_for_the_entity_store() -> None:
     """Every migration re-applies on every llm-service boot; the backfill held staging's boot
-    for 34 s and failed a rollout. The entity migrations may only define things and seed
-    their own registries, and no migration may call the backfill."""
-    assert _top_level_statements((MIGRATIONS / "20260917T0430_datahub_entity_backfill.sql").read_text()) == []
-    registries = ("staging.entity_kinds", "staging.entity_alias_schemes", "staging.entity_relation_types")
-    for path in (STORE_MIGRATION, BACKFILL_MIGRATION):
-        for statement in _top_level_statements(path.read_text()):
-            head = statement.lower().split(None, 3)
-            if head[0] == "insert":
-                assert head[2] in registries, f"{path.name}: {statement[:80]}"
-            elif head[0] == "do":
-                # #915: a DO block may only guard a definition (create it when the catalog
-                # says it is missing or different) -- it never reads or writes rows.
-                assert not _DATA_STATEMENT.search(statement), f"{path.name} runs {statement[:120]!r} at boot"
-            else:
-                assert head[0] in {"create", "comment", "drop"}, f"{path.name} runs {statement[:80]!r} at boot"
+    for 34 s and failed a rollout. The baseline may only define things and seed
+    its own registries, and no migration may call the backfill."""
+    registries = (
+        "staging.entity_kinds",
+        "staging.entity_alias_schemes",
+        "staging.entity_relation_types",
+        "staging.issuer_cik_predecessors",
+    )
+    for statement in _top_level_statements(STORE_MIGRATION.read_text()):
+        head = statement.lower().split(None, 3)
+        if head[0] == "insert":
+            assert head[2] in registries, f"{STORE_MIGRATION.name}: {statement[:80]}"
+        elif head[0] == "do":
+            # #915: a DO block may only guard a definition (create it when the catalog
+            # says it is missing or different) -- it never reads or writes rows.
+            assert not _DATA_STATEMENT.search(statement), f"{STORE_MIGRATION.name} runs {statement[:120]!r} at boot"
+        else:
+            assert head[0] in {"set", "create", "comment", "drop", "grant", "alter"}, (
+                f"{STORE_MIGRATION.name} runs {statement[:80]!r} at boot"
+            )
     for path in MIGRATIONS.glob("*.sql"):
         for statement in _top_level_statements(path.read_text()):
             assert "entity_backfill(" not in statement.lower() or statement.lower().startswith(("create", "comment")), (

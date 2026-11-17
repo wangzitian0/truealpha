@@ -3,44 +3,17 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import replace
-from datetime import UTC, date, datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, NamedTuple
 
-from factors.composite.strategy_evaluator import IssuerInput, LookAheadError, evaluate_cutoff
+from factors.composite.strategy_evaluator import IssuerInput, LookAheadError
 from factors.measure import measure_for_input_key
-from factors.panel import IssuerClass, uniform_tree_pins
 from psycopg import Connection
 from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.fiscal_period import parse_annual
-from truealpha_contracts.strategy import LargeModelValueV0Definition
 
-from data_engine.core_strategy_replay import Decision, _risk_free_rate, _to_decision
-
-
-def seed_strategy_backtest_inputs(connection: Connection[Any], corpus: dict[str, Any]) -> int:
-    written = 0
-    for decision in corpus["golden_decision_set"]["decisions"]:
-        issuer_id, cutoff_at = decision["issuer"]["id"], decision["cutoff_at"]
-        for record in decision["inputs"]:
-            connection.execute(
-                """
-                insert into staging.strategy_backtest_inputs
-                    (issuer_id, cutoff_at, input_key, value, confidence, knowable_at)
-                values (%s, %s, %s, %s, %s, %s)
-                """,
-                (
-                    issuer_id,
-                    cutoff_at,
-                    record["input_key"],
-                    record["value"],
-                    record["confidence"],
-                    record["knowable_at"],
-                ),
-            )
-            written += 1
-    return written
+from data_engine.datahub._helpers import parse_utc
 
 
 def _period_end_key(tag: str) -> tuple[date, str]:
@@ -84,42 +57,27 @@ class StrategyBacktestGateway:
 
     def rows_at(self, cutoff_at: str | datetime) -> list[InputRow]:
         return self._connection.execute(
-            """
-            select distinct on (issuer_id, input_key, fiscal_period)
-                   issuer_id, input_key, value, confidence, fiscal_period, knowable_at
-            from staging.strategy_backtest_inputs
-            where cutoff_at = %s
-            order by issuer_id, input_key, fiscal_period, knowable_at desc, recorded_at desc
-            """,
+            "select distinct on (issuer_id, input_key, fiscal_period) "
+            "issuer_id, input_key, value, confidence, fiscal_period, knowable_at "
+            "from staging.strategy_backtest_inputs where cutoff_at = %s "
+            "order by issuer_id, input_key, fiscal_period, knowable_at desc, recorded_at desc",
             (cutoff_at,),
         ).fetchall()
 
     def market_value_vintages_at(self, cutoff_at: str | datetime) -> list[MarketValueVintage]:
         rows = self._connection.execute(
-            """
-            select issuer_id,
-                   max(knowable_at) filter (where input_key = 'shares_outstanding'),
-                   max(knowable_at) filter (where input_key = 'last_close')
-            from staging.strategy_backtest_inputs
-            where cutoff_at = %s
-              and fiscal_period is null
-              and input_key in ('shares_outstanding', 'last_close')
-            group by issuer_id
-            having count(distinct input_key) = 2
-            order by issuer_id
-            """,
+            "select issuer_id, "
+            "max(knowable_at) filter (where input_key = 'shares_outstanding'), "
+            "max(knowable_at) filter (where input_key = 'last_close') "
+            "from staging.strategy_backtest_inputs "
+            "where cutoff_at = %s and fiscal_period is null and input_key in ('shares_outstanding', 'last_close') "
+            "group by issuer_id having count(distinct input_key) = 2 order by issuer_id",
             (cutoff_at,),
         ).fetchall()
         return [MarketValueVintage(*row) for row in rows]
 
     def issuer_inputs(self, cutoff_at: str | datetime, *, enforce_pit: bool = False) -> list[IssuerInput]:
-        cutoff_dt: datetime | None = None
-        if enforce_pit:
-            cutoff_dt = (
-                datetime.fromisoformat(cutoff_at.replace("Z", "+00:00")).astimezone(UTC)
-                if isinstance(cutoff_at, str)
-                else cutoff_at.astimezone(UTC)
-            )
+        cutoff_dt = parse_utc(cutoff_at) if enforce_pit else None
         return issuer_inputs_from_rows(self.rows_at(cutoff_at), cutoff_at=cutoff_dt)
 
     def snapshot_id(self, cutoff_at: str | datetime) -> str:
@@ -140,11 +98,7 @@ def _measure_pair(key: str, seen: _Observed, subject: str, *, period: str | None
     return measure_for_input_key(key, seen.value, **kwargs), seen.confidence
 
 
-def issuer_inputs_from_rows(
-    rows: Sequence[InputRow],
-    *,
-    cutoff_at: datetime | None = None,
-) -> list[IssuerInput]:
+def issuer_inputs_from_rows(rows: Sequence[InputRow], *, cutoff_at: datetime | None = None) -> list[IssuerInput]:
     scalars: dict[str, dict[str, _Observed]] = {}
     periods: dict[str, dict[str, dict[str, _Observed]]] = {}
     for issuer_id, input_key, value, confidence, fiscal_period, knowable_at in rows:
@@ -179,28 +133,3 @@ def snapshot_id_from_rows(rows: Sequence[InputRow]) -> str:
         for issuer_id, input_key, value, confidence, fiscal_period, _knowable_at in rows
     )
     return f"strategy-snapshot:{canonical_sha256(payload)}"
-
-
-def run_backtest_from_staging(
-    connection: Connection[Any], corpus: dict[str, Any], definition: LargeModelValueV0Definition
-) -> tuple[list[Decision], str]:
-    gateway = StrategyBacktestGateway(connection)
-    rates = corpus["golden_decision_set"]["risk_free_rates"]
-    cutoff_ats = sorted({decision["cutoff_at"] for decision in corpus["golden_decision_set"]["decisions"]})
-    classes = {
-        decision["issuer"]["id"]: IssuerClass(decision["issuer_branch"])
-        for decision in corpus["golden_decision_set"]["decisions"]
-    }
-    decisions: list[Decision] = []
-    for cutoff_at in cutoff_ats:
-        as_of = datetime.fromisoformat(cutoff_at.replace("Z", "+00:00"))
-        evaluated = evaluate_cutoff(
-            [replace(item, issuer_class=classes.get(item.issuer_id)) for item in gateway.issuer_inputs(cutoff_at)],
-            definition=definition,
-            cutoff_at=as_of,
-            risk_free_rate=_risk_free_rate(rates, cutoff_at),
-            tree_pins=uniform_tree_pins(),
-        )
-        decisions.extend(_to_decision(item, cutoff_at) for item in evaluated)
-    decisions.sort(key=lambda item: (item.cutoff_at, item.issuer_id))
-    return decisions, gateway.run_snapshot_id(cutoff_ats)

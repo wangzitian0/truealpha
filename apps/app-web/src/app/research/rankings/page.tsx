@@ -4,23 +4,12 @@ import { ProvenanceCell } from "@/components/provenance-cell";
 import { AvailabilityBadge, ReadStateNotice } from "@/components/read-state";
 import { NextPageLink } from "@/components/next-page-link";
 import { PanelNodeTd } from "@/components/panel-node-cell";
-import { ResearchTable } from "@/components/research-table";
+import { EntityTh, RatioTd, ResearchTable, SignedRatioTd } from "@/components/research-table";
 import { loadRanking } from "@/server/dashboard";
 import { entityLabel, loadEntityDisplayMap } from "@/server/mart/entity-resolution";
 import { ClaimCeilingBanner } from "@/components/claim-ceiling";
-import {
-  formatCell,
-  formatNumberMagnitude,
-  formatRatio,
-  formatSignedRatio,
-  formatTierLabel,
-  formatUsdMagnitude,
-  signColor,
-} from "@/client/format";
-import {
-  GPPE_FACTOR_VARIANT_KEYS,
-  RANKING_PANEL_INPUT_KEYS,
-} from "@/server/mart/research-read";
+import { formatCell, formatNumberMagnitude, formatRatio, formatTierLabel, formatUsdMagnitude } from "@/client/format";
+import { GPPE_FACTOR_VARIANT_KEYS, RANKING_PANEL_INPUT_KEYS } from "@/server/mart/research-read";
 import { getServerPrincipal } from "@/server/auth/request-context";
 import { CardExportButton } from "@/components/card-export-button";
 import {
@@ -75,9 +64,7 @@ export default async function RankingsPage({
   });
   const names = await loadEntityDisplayMap();
   const basisLabel = valuationBasisLabel(
-    state.kind === "ready"
-      ? (state.data.rows.find((row) => row.valuationBasis !== null)?.valuationBasis ?? null)
-      : null,
+    state.kind === "ready" ? (state.data.rows.find((row) => row.valuationBasis !== null)?.valuationBasis ?? null) : null,
   );
   const headers = [
     "Rank",
@@ -97,15 +84,10 @@ export default async function RankingsPage({
   return (
     <section aria-labelledby="rankings-heading" className="space-y-6">
       <div>
-        <h1 id="rankings-heading" className="text-2xl font-bold tracking-tight">
-          Valuation rankings
-        </h1>
+        <h1 id="rankings-heading" className="text-2xl font-bold tracking-tight">Valuation rankings</h1>
         <p className="mt-2 text-sm text-gray-400">
           Large-model-value universe ranked by valuation gap from the materialized strategy run. Revenue-share purity is on{" "}
-          <Link href="/research/themes" className="text-accent hover:underline">
-            Theme purity
-          </Link>
-          .
+          <Link href="/research/themes" className="text-accent hover:underline">Theme purity</Link>.
         </p>
       </div>
 
@@ -114,9 +96,7 @@ export default async function RankingsPage({
 
       <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-border bg-card p-4">
         <div className="flex flex-wrap items-center gap-2" data-testid="peg-convention-selector">
-          <span className="text-xs font-semibold uppercase tracking-wider text-gray-400">
-            Growth-Rate Convention (Module 1):
-          </span>
+          <span className="text-xs font-semibold uppercase tracking-wider text-gray-400">Growth-Rate Convention (Module 1):</span>
           {PEG_GROWTH_CONVENTIONS.map((item) => (
             <Link
               key={item}
@@ -156,44 +136,20 @@ export default async function RankingsPage({
             </p>
             <CardExportButton cutoff={params.cutoff} convention={convention} universe={state.data.universe} />
           </div>
-          <ResearchTable
-            caption={`Ranked issuers for the large-model-value theme at ${state.data.cutoffAt}`}
-            headers={headers}
-          >
+          <ResearchTable caption={`Ranked issuers for the large-model-value theme at ${state.data.cutoffAt}`} headers={headers}>
             {state.data.rows.map((row) => {
-              const { peg: rowPeg, pegRank: rowPegRank, pegReasonCodes: pegReasons } = projectPegByConvention(
-                row,
-                convention,
-              );
+              const { peg: rowPeg, pegRank: rowPegRank, pegReasonCodes: pegReasons } = projectPegByConvention(row, convention);
               return (
                 <tr key={row.issuerId} className="border-t border-border">
                   <td className="px-4 py-3">{formatCell(row.rank)}</td>
-                  <th scope="row" className="px-4 py-3 font-medium">
-                    <Link
-                      href={`/research/entities/${encodeURIComponent(row.issuerId)}${
-                        convention !== "historical_cagr" ? `?convention=${encodeURIComponent(convention)}` : ""
-                      }`}
-                      className="text-accent hover:underline"
-                      title={row.issuerId}
-                    >
-                      {entityLabel(row.issuerId, names)}
-                    </Link>
-                  </th>
+                  <EntityTh issuerId={row.issuerId} label={entityLabel(row.issuerId, names)} convention={convention} />
                   <td className="px-4 py-3">{formatTierLabel(row.tier)}</td>
-                  <td className="px-4 py-3 tabular-nums" title={row.currentPriceToSales ?? undefined}>
-                    {formatCell(formatRatio(row.currentPriceToSales))}
-                  </td>
-                  <td className="px-4 py-3 tabular-nums" title={row.currentMultiple ?? undefined}>
-                    {formatCell(formatRatio(row.currentMultiple))}
-                  </td>
-                  <td className="px-4 py-3 tabular-nums" title={row.targetMultiple ?? undefined}>
-                    {formatCell(formatRatio(row.targetMultiple))}
-                  </td>
-                  <td className={`px-4 py-3 tabular-nums ${signColor(row.valuationGap)}`} title={row.valuationGap ?? undefined}>
-                    {formatCell(formatSignedRatio(row.valuationGap))}
-                  </td>
+                  <RatioTd value={row.currentPriceToSales} />
+                  <RatioTd value={row.currentMultiple} />
+                  <RatioTd value={row.targetMultiple} />
+                  <SignedRatioTd value={row.valuationGap} />
                   <td className="px-4 py-3 tabular-nums" title={rowPeg ?? undefined}>
-                    <div>{formatCell(formatRatio(rowPeg))}</div>
+                    <RatioSpan value={rowPeg} />
                     {rowPeg === null && pegReasons.length > 0 && (
                       <div className="mt-0.5 font-mono text-[11px] text-amber-400" data-testid="peg-reason-codes">
                         {pegReasons.join(", ")}
@@ -201,15 +157,9 @@ export default async function RankingsPage({
                     )}
                   </td>
                   <td className="px-4 py-3 tabular-nums">{formatCell(rowPegRank?.toString() ?? null)}</td>
-                  <td className="px-4 py-3 tabular-nums" title={row.confidence ?? undefined}>
-                    {formatCell(formatRatio(row.confidence))}
-                  </td>
-                  <td className="px-4 py-3">
-                    <AvailabilityBadge status={row.availability} />
-                  </td>
-                  <td className="px-4 py-3">
-                    <ProvenanceCell row={row} />
-                  </td>
+                  <RatioTd value={row.confidence} />
+                  <td className="px-4 py-3"><AvailabilityBadge status={row.availability} /></td>
+                  <td className="px-4 py-3"><ProvenanceCell row={row} /></td>
                 </tr>
               );
             })}
@@ -217,62 +167,40 @@ export default async function RankingsPage({
 
           <div className="space-y-3" data-testid="rankings-gppe-variants-section">
             <div>
-              <h2 className="text-lg font-semibold text-gray-200">
-                GPPE Factor Variants &amp; Standardized Wide-Panel Inputs (Module 2)
-              </h2>
+              <h2 className="text-lg font-semibold text-gray-200">GPPE Factor Variants &amp; Standardized Wide-Panel Inputs (Module 2)</h2>
               <p className="mt-1 text-xs text-gray-400">
                 Side-by-side GPPE factor variants and underlying wide-panel columns read from{" "}
                 <code className="font-mono text-gray-300">mart.metric_node_values</code>.
               </p>
             </div>
-            <div className="overflow-x-auto rounded-xl border border-border">
-              <table className="w-full text-left text-sm" data-testid="rankings-gppe-variants-table">
-                <caption className="sr-only">
-                  Side-by-side GPPE factor variants and wide-panel inputs at {state.data.cutoffAt}
-                </caption>
-                <thead className="bg-card text-xs uppercase text-gray-500">
-                  <tr>
-                    <th scope="col" className="px-4 py-3">Issuer</th>
-                    <th scope="col" className="px-4 py-3">Active Variant</th>
-                    {[...GPPE_FACTOR_VARIANT_KEYS, ...RANKING_PANEL_INPUT_KEYS].map((k) => (
-                      <th key={k} scope="col" className="px-4 py-3 font-mono">
-                        {k}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {state.data.rows.map((row) => (
-                    <tr key={row.issuerId} className="border-t border-border">
-                      <th scope="row" className="px-4 py-3 font-medium">
-                        <Link
-                          href={`/research/entities/${encodeURIComponent(row.issuerId)}`}
-                          className="text-accent hover:underline"
-                          title={row.issuerId}
-                        >
-                          {entityLabel(row.issuerId, names)}
-                        </Link>
-                      </th>
-                      <td className="px-4 py-3 font-mono text-xs text-sky-400">
-                        {formatCell(row.laborEfficiencyMetric ?? null)}
-                      </td>
-                      {GPPE_FACTOR_VARIANT_KEYS.map((variantKey) => {
-                        const node = row.gppeVariants?.[variantKey] ?? null;
-                        return <PanelNodeTd key={variantKey} node={node} formatted={formatUsdMagnitude(node?.value ?? null)} />;
-                      })}
-                      {RANKING_PANEL_INPUT_KEYS.map((inputKey) => {
-                        const node = row.panelInputs?.[inputKey] ?? null;
-                        const formatted =
-                          inputKey === "employees_total"
-                            ? formatNumberMagnitude(node?.value ?? null)
-                            : formatUsdMagnitude(node?.value ?? null);
-                        return <PanelNodeTd key={inputKey} node={node} formatted={formatted} />;
-                      })}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <ResearchTable
+              caption={`Side-by-side GPPE factor variants and wide-panel inputs at ${state.data.cutoffAt}`}
+              tableTestId="rankings-gppe-variants-table"
+              headers={[
+                "Issuer",
+                "Active Variant",
+                ...[...GPPE_FACTOR_VARIANT_KEYS, ...RANKING_PANEL_INPUT_KEYS].map((k) => ({ label: k, className: "font-mono" })),
+              ]}
+            >
+              {state.data.rows.map((row) => (
+                <tr key={row.issuerId} className="border-t border-border">
+                  <EntityTh issuerId={row.issuerId} label={entityLabel(row.issuerId, names)} />
+                  <td className="px-4 py-3 font-mono text-xs text-sky-400">{formatCell(row.laborEfficiencyMetric ?? null)}</td>
+                  {GPPE_FACTOR_VARIANT_KEYS.map((variantKey) => {
+                    const node = row.gppeVariants?.[variantKey] ?? null;
+                    return <PanelNodeTd key={variantKey} node={node} formatted={formatUsdMagnitude(node?.value ?? null)} />;
+                  })}
+                  {RANKING_PANEL_INPUT_KEYS.map((inputKey) => {
+                    const node = row.panelInputs?.[inputKey] ?? null;
+                    const formatted =
+                      inputKey === "employees_total"
+                        ? formatNumberMagnitude(node?.value ?? null)
+                        : formatUsdMagnitude(node?.value ?? null);
+                    return <PanelNodeTd key={inputKey} node={node} formatted={formatted} />;
+                  })}
+                </tr>
+              ))}
+            </ResearchTable>
           </div>
 
           <NextPageLink
@@ -289,4 +217,8 @@ export default async function RankingsPage({
       )}
     </section>
   );
+}
+
+function RatioSpan({ value }: { value: string | null }) {
+  return <div>{formatCell(formatRatio(value))}</div>;
 }

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check architectural invariants I2-I6 for the factor and datahub boundary (#284, #855, #1610)."""
+"""Check factor and datahub invariants I2-I6 (#284, #855, #1610)."""
 
 from __future__ import annotations
 
@@ -113,19 +113,12 @@ def _check_module_and_question_invariants(actual_factors: dict[str, dict[str, ob
 
 
 def _check_pointer_and_period_invariants(failures: list[str]) -> None:
-    for path in (
-        list((REPO / "apps").rglob("*.py"))
-        + list((REPO / "common").rglob("*.py"))
-        + list((REPO / "apps").rglob("*.ts"))
-        + list((REPO / "tools").glob("*.py"))
-    ):
+    py_paths = list((REPO / "common").rglob("*.py")) + list((REPO / "apps").rglob("*.py"))
+    for path in py_paths + list((REPO / "apps").rglob("*.ts")) + list((REPO / "tools").glob("*.py")):
         if "test" in path.name or "node_modules" in str(path):
             continue
         text = path.read_text()
-        for table, guard in (
-            ("mart.current_pointer_head", ""),
-            ("mart.topt_capture_status", "datahub_quality_report"),
-        ):
+        for table, guard in (("mart.current_pointer_head", ""), ("mart.topt_capture_status", "datahub_quality_report")):
             for block in re.finditer(rf"from {re.escape(table)}(?P<body>.{{0,600}})", text, re.S):
                 body = re.sub(r"--[^\n]*", "", block.group("body"))
                 if (not guard or guard in body) and "universe_id" not in body:
@@ -135,13 +128,12 @@ def _check_pointer_and_period_invariants(failures: list[str]) -> None:
                     )
                     break
 
-    for path in sorted((REPO / "common").rglob("*.py")) + sorted((REPO / "apps").rglob("*.py")):
+    for path in sorted(py_paths):
         if "test" in path.name or path.name == "fiscal_period.py":
             continue
         if re.search(r"FY\{[^}]*\}:FY:|:FY:\(\?P?<?\\d\{4\}|:FY:\(\\d\{4\}", path.read_text()):
             failures.append(
-                f"{path.relative_to(REPO)} builds or matches the fiscal-period tag itself. "
-                "Use truealpha_contracts.fiscal_period"
+                f"{path.relative_to(REPO)} builds or matches the fiscal-period tag itself. Use truealpha_contracts.fiscal_period"
             )
 
 

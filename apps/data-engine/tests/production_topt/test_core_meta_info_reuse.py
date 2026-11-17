@@ -38,10 +38,9 @@ from production_topt.test_degraded_capture_reuse import (  # noqa: E402
 from production_topt.test_materialization import _seed_complete_production_run  # noqa: E402
 
 MIGRATIONS = Path(__file__).resolve().parents[4] / "db" / "migrations"
-#: The definition before #1331. It owns the text of the old view.
-INPUTS_MIGRATION = MIGRATIONS / "20261012T1130_web_topt_core_meta_info_inputs.sql"
-#: The definition of #1331. It is the last file that defines the view.
-REUSED_INPUTS_MIGRATION = MIGRATIONS / "20261015T0720_web_topt_core_meta_info_reused_inputs.sql"
+#: Squashed baseline defining `mart.topt_core_meta_info` (#1331).
+INPUTS_MIGRATION = MIGRATIONS / "0003_mart.sql"
+REUSED_INPUTS_MIGRATION = INPUTS_MIGRATION
 
 REUSED_SEMANTICS = ("financial-fact", "market-price")
 ALL_SEMANTICS = (*REUSED_SEMANTICS, "listing-identity", "universe-membership")
@@ -362,7 +361,7 @@ def _view_state(conn: psycopg.Connection) -> tuple[str, str]:
     return row[0], row[1]
 
 
-@pytest.mark.parametrize("migration", [INPUTS_MIGRATION, REUSED_INPUTS_MIGRATION], ids=["inputs", "reused-inputs"])
+@pytest.mark.parametrize("migration", [INPUTS_MIGRATION], ids=["0003_mart"])
 def test_a_replay_keeps_the_view_and_takes_no_strong_lock(conn: psycopg.Connection, migration: Path) -> None:
     """#1331 criterion 4: a boot replays both files on a settled database.
 

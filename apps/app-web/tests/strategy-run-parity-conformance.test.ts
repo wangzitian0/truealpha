@@ -45,7 +45,7 @@ process.env.DATABASE_URL = DATABASE_URL;
 const REQUIRE_DB = Boolean(process.env.DATABASE_URL || process.env.TRUEALPHA_REQUIRE_RUNTIME);
 
 const FIXTURE = JSON.parse(
-  readFileSync(new URL("../../../common/contracts/conformance/strategy_run_parity.json", import.meta.url), "utf8"),
+  readFileSync(new URL("../../../common/contracts/tests/fixtures/strategy_run_parity.json", import.meta.url), "utf8"),
 ) as Record<
   string,
   {

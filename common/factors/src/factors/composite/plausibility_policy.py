@@ -1,4 +1,4 @@
-"""Plausibility policy (#544, v4 since #1443): check published factors against physical invariants."""
+"""Plausibility policy (#544, v4): check published factors against invariants."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""External call gateway, capacity enforcement, landed-key deduplication, and audit ledger (#729, #1521)."""
+"""External call gateway, capacity enforcement, and audit ledger (#729)."""
 
 from __future__ import annotations
 
@@ -43,8 +43,6 @@ _REDACTED_KEY_MARKERS = ("apikey", "api_key", "api-key", "token", "secret", "pas
 
 @dataclass(frozen=True)
 class SourceCapacity:
-    """Declared rate-window and daily-budget limits for one ledger seat."""
-
     source: str
     window_seconds: float | None
     calls_per_window: int | None
@@ -198,21 +196,19 @@ class CallRecord:
 
 
 def _is_credential_key(key: str) -> bool:
-    lowered = key.lower()
-    return any(marker in lowered for marker in _REDACTED_KEY_MARKERS)
+    low = key.lower()
+    return any(m in low for m in _REDACTED_KEY_MARKERS)
 
 
 def redact_uri(uri: str | None) -> str | None:
-    if uri is None:
-        return None
-    parts = urllib.parse.urlsplit(uri)
-    if not parts.query:
+    if not uri or "?" not in uri:
         return uri
-    query = [
-        (key, "***" if _is_credential_key(key) else value)
-        for key, value in urllib.parse.parse_qsl(parts.query, keep_blank_values=True)
+    parts = urllib.parse.urlsplit(uri)
+    q = [
+        (k, "***" if _is_credential_key(k) else v)
+        for k, v in urllib.parse.parse_qsl(parts.query, keep_blank_values=True)
     ]
-    return urllib.parse.urlunsplit(parts._replace(query=urllib.parse.urlencode(query)))
+    return urllib.parse.urlunsplit(parts._replace(query=urllib.parse.urlencode(q)))
 
 
 _pg_conn = None
@@ -313,8 +309,6 @@ def postgres_writer(record: CallRecord) -> None:
 
 
 class MemoryLedger(list[CallRecord]):
-    """In-memory test double implementing both writer and ledger window/budget queries."""
-
     def __call__(self, record: CallRecord) -> None:
         self.append(record)
 
@@ -354,8 +348,6 @@ def emit(record: CallRecord) -> None:
 
 
 class CapacityExceeded(RuntimeError):
-    """Raised when the rule-6 capacity gate refuses an outbound call before dispatch."""
-
     def __init__(self, source: str, reason: str) -> None:
         super().__init__(f"{source}: {reason}")
         self.source = source
@@ -363,8 +355,6 @@ class CapacityExceeded(RuntimeError):
 
 
 class BudgetExhausted(CapacityExceeded):
-    """Raised when the environment's daily seat budget is spent for the UTC day."""
-
     def __init__(self, source: str, *, environment: str, budget: int, spent: int) -> None:
         super().__init__(source, f"daily budget {budget} spent ({spent} calls today) in {environment}")
         self.environment = environment
@@ -376,8 +366,6 @@ SHARE_BELOW_ONE_CALL = "share_below_one_call"
 
 
 class ShareBelowOneCall(CapacityExceeded):
-    """Raised when the environment's share of a shared vendor account is below one call per window."""
-
     def __init__(self, source: str, *, environment: str, account: str) -> None:
         super().__init__(
             source,
@@ -457,9 +445,16 @@ def _utcnow() -> datetime:
 _EXPIRY_MARGIN_SECONDS = 0.01
 
 
+def _require_capacity(capacities: Mapping[str, SourceCapacity], source: str) -> SourceCapacity:
+    declared = capacities.get(source)
+    if declared is None:
+        _refuse(CapacityExceeded(source, "no declared capacity — register the source before calling it"))
+    return declared
+
+
 @dataclass
 class CapacityGate:
-    """Enforce declared per-window rate pacing and daily call budgets across seats."""
+    """Enforce rate pacing and daily call budgets."""
 
     capacities: Mapping[str, SourceCapacity] = field(default_factory=lambda: CAPACITIES)
     environment: str | None = None
@@ -473,9 +468,7 @@ class CapacityGate:
     _admitted: dict[str, tuple[date, int]] = field(default_factory=dict, repr=False)
 
     def admit(self, source: str) -> None:
-        declared = self.capacities.get(source)
-        if declared is None:
-            _refuse(CapacityExceeded(source, "no declared capacity — register the source before calling it"))
+        declared = _require_capacity(self.capacities, source)
         capacity = declared.in_environment(self._environment())
         if capacity is None:
             _refuse(ShareBelowOneCall(source, environment=self._environment(), account=str(declared.account)))
@@ -516,15 +509,6 @@ class CapacityGate:
             return max(0.0, window - (at - oldest).total_seconds() + _EXPIRY_MARGIN_SECONDS)
         return 0.0
 
-    def _refuse_full_window(self, source: str, window: float, calls: int, waited: float, wait: float) -> None:
-        if waited + wait > self.max_wait_seconds:
-            _refuse(
-                CapacityExceeded(
-                    source,
-                    f"rate window ({calls} per {window:g} s) stayed full for {self.max_wait_seconds:g} s",
-                )
-            )
-
     def _queue(self, source: str, seats: tuple[str, ...], window: float, calls: int) -> float:
         key = (seats[0], calls, float(window))
         if key not in self._windows:
@@ -533,6 +517,7 @@ class CapacityGate:
         waited = 0.0
         while True:
             shared_wait = self._shared_window_wait(seats, window, calls)
+            allowed = False
             if shared_wait > 0 and tracker.used < calls:
                 wait = shared_wait
             else:
@@ -540,13 +525,16 @@ class CapacityGate:
                 if allowed and shared_wait <= 0:
                     return waited
                 wait = max(0.0 if allowed else local_wait, shared_wait)
-                if allowed:
-                    self._refuse_full_window(source, window, calls, waited, wait)
-                    self.sleep(wait)
-                    return waited + wait
-            self._refuse_full_window(source, window, calls, waited, wait)
+            if waited + wait > self.max_wait_seconds:
+                _refuse(
+                    CapacityExceeded(
+                        source, f"rate window ({calls} per {window:g} s) stayed full for {self.max_wait_seconds:g} s"
+                    )
+                )
             self.sleep(wait)
             waited += wait
+            if allowed:
+                return waited
 
 
 _bound_gate: contextvars.ContextVar[CapacityGate | None] = contextvars.ContextVar("capacity_gate", default=None)
@@ -596,7 +584,7 @@ def record_call(
     cost: Decimal | int = 1,
     admit: bool = True,
 ) -> Iterator[CallRecord]:
-    """Admit and record one outbound vendor or model request (collapsing nested calls into the outer record)."""
+    """Admit and record one outbound request."""
     outer = _active.get()
     if outer is not None:
         if outer.request_uri is None and request_uri is not None:
@@ -641,9 +629,8 @@ def record_call(
 def _requested_uri(url: str, params: Any) -> str:
     if not params:
         return url
-    items = params.items() if hasattr(params, "items") else params
-    query = urllib.parse.urlencode(list(items), doseq=True)
-    return f"{url}&{query}" if "?" in url else f"{url}?{query}"
+    q = urllib.parse.urlencode(list(params.items() if hasattr(params, "items") else params), doseq=True)
+    return f"{url}&{q}" if "?" in url else f"{url}?{q}"
 
 
 def _fail_http(call: CallRecord, status: int, body: bytes | Any) -> None:
@@ -684,32 +671,12 @@ def _http_request(
         return response
 
 
-def http_get(
-    client: Any,
-    source: str,
-    endpoint: str,
-    url: str,
-    *,
-    identity: FetchKey,
-    caller: str,
-    cost: Decimal | int = 1,
-    **kwargs: Any,
-) -> Any:
-    return _http_request("get", client, source, endpoint, url, identity=identity, caller=caller, cost=cost, **kwargs)
+def http_get(*args: Any, **kwargs: Any) -> Any:
+    return _http_request("get", *args, **kwargs)
 
 
-def http_post(
-    client: Any,
-    source: str,
-    endpoint: str,
-    url: str,
-    *,
-    identity: FetchKey,
-    caller: str,
-    cost: Decimal | int = 1,
-    **kwargs: Any,
-) -> Any:
-    return _http_request("post", client, source, endpoint, url, identity=identity, caller=caller, cost=cost, **kwargs)
+def http_post(*args: Any, **kwargs: Any) -> Any:
+    return _http_request("post", *args, **kwargs)
 
 
 class SourceHTTPError(Exception):
@@ -719,24 +686,15 @@ class SourceHTTPError(Exception):
         self.body = body
 
 
-def _status_of(response: Any) -> int | None:
-    status = getattr(response, "status", None)
-    if status is None and hasattr(response, "getcode"):
-        status = response.getcode()
-    return int(status) if status is not None else None
-
-
 def _vendor_message(body: bytes) -> str | None:
     try:
         payload = json.loads(body.decode())
     except (ValueError, UnicodeDecodeError):
         return None
-    if not isinstance(payload, dict):
-        return None
-    for key in ("message", "error", "detail", "Message"):
-        value = payload.get(key)
-        if isinstance(value, str) and value:
-            return value[:300]
+    if isinstance(payload, dict):
+        for key in ("message", "error", "detail", "Message"):
+            if isinstance(value := payload.get(key), str) and value:
+                return value[:300]
     return None
 
 
@@ -753,23 +711,20 @@ def urlopen(
 ) -> tuple[int | None, bytes]:
     uri = request.full_url if isinstance(request, urllib.request.Request) else request
     with record_call(source, endpoint, identity=identity, caller=caller, request_uri=uri, cost=cost) as call:
+        http_err: urllib.error.HTTPError | None = None
         try:
             with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310
-                body = bytes(response.read())
-                status = _status_of(response)
+                raw_status = getattr(response, "status", getattr(response, "getcode", lambda: None)())
+                status, body = (int(raw_status) if raw_status is not None else None), bytes(response.read())
         except urllib.error.HTTPError as error:
+            http_err = error
             with error:
-                body = bytes(error.read())
-            status = int(error.code)
-            call.observe(status_code=status, body=body)
-            _fail_http(call, status, body)
-            if raise_for_status:
-                raise SourceHTTPError(status, body) from error
-            return status, body
+                status, body = int(error.code), bytes(error.read())
         call.observe(status_code=status, body=body)
-        if raise_for_status and status is not None and status >= 400:
-            _fail_http(call, status, body)
-            raise SourceHTTPError(status, body)
+        if http_err is not None or (raise_for_status and status is not None and status >= 400):
+            _fail_http(call, int(status or 0), body)
+            if raise_for_status:
+                raise SourceHTTPError(int(status or 0), body) from http_err
         return status, body
 
 
@@ -820,7 +775,7 @@ def fetch_once(
     content_type: str = "application/json",
     keep: bool = True,
 ) -> bytes:
-    """Return landed bytes for `key`, or execute `fetch(key)` once and land accepted answers."""
+    """Return landed bytes or fetch and store accepted answers."""
     if _probe.get():
         return fetch(key)
     if not keep:
@@ -838,8 +793,6 @@ def fetch_once(
 
 @dataclass
 class SourceGateway:
-    """Explicit rate-window and budget-enforced vendor gateway for standards and model callers."""
-
     connection: Any
     caller: str
     capacities: Mapping[str, SourceCapacity] = field(default_factory=lambda: CAPACITIES)
@@ -862,9 +815,7 @@ class SourceGateway:
         )
 
     def capacity(self, source: str) -> SourceCapacity:
-        capacity = self.capacities.get(source)
-        if capacity is None:
-            _refuse(CapacityExceeded(source, "no declared capacity — register the source before calling it"))
+        capacity = _require_capacity(self.capacities, source)
         if not capacity.enforceable:
             _refuse(
                 CapacityExceeded(

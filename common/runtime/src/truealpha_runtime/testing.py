@@ -1,7 +1,6 @@
-"""Test harness helpers for repository tools, isolated databases, and OTLP verification."""
+"""Test helpers for tools, isolated databases, and OTLP."""
 
 import copy
-import hashlib
 import importlib.util
 import json
 import os
@@ -24,6 +23,8 @@ from infra2_sdk.runtime.environment import runtime_env_contract
 from psycopg import sql
 from truealpha_contracts.models import RawCapture, RawIngestionEnvelope, RawObjectRef
 from truealpha_contracts.strategy import LargeModelValueV0Definition, load_live_strategy_corpus
+
+from truealpha_runtime.storage import build_raw_envelope
 
 SeedValue = str | int | bool | None
 
@@ -322,23 +323,9 @@ class InMemoryRawObjectStore:
         self.objects: dict[str, bytes] = {}
 
     def store(self, capture: RawCapture) -> RawIngestionEnvelope:
-        digest = hashlib.sha256(capture.body).hexdigest()
-        key = f"raw/{capture.source.value}/{digest[:2]}/{digest}"
-        self.objects[key] = capture.body
-        return RawIngestionEnvelope(
-            source=capture.source,
-            source_record_id=capture.source_record_id,
-            object=RawObjectRef(
-                bucket=self.bucket,
-                key=key,
-                sha256=digest,
-                byte_length=len(capture.body),
-                content_type=capture.content_type,
-            ),
-            fetched_at=capture.fetched_at,
-            source_published_at=capture.source_published_at,
-            metadata=capture.metadata,
-        )
+        envelope = build_raw_envelope(capture, bucket=self.bucket)
+        self.objects[envelope.object.key] = capture.body
+        return envelope
 
     def get(self, ref: RawObjectRef) -> bytes:
         if ref.key not in self.objects:
@@ -355,13 +342,13 @@ class IsolatedDatabase(str):
         return instance
 
 
-def _named_url_for(database_url: str, dbname: str) -> str:
+def _admin_url_for(database_url: str, dbname: str = "postgres") -> str:
     base = urlsplit(database_url)
     return urlunsplit((base.scheme, base.netloc, f"/{dbname}", base.query, ""))
 
 
-def _admin_url_for(database_url: str) -> str:
-    return _named_url_for(database_url, "postgres")
+def _new_db_name(prefix: str) -> str:
+    return f"truealpha_{prefix}_{os.getpid()}_{uuid.uuid4().hex[:8]}"
 
 
 def _dbname_for(database_url: str) -> str:
@@ -399,8 +386,8 @@ def isolated_test_database(
     import pytest
 
     base_url = guard_db_write(database_url)
-    name = f"truealpha_{name_prefix}_{os.getpid()}_{uuid.uuid4().hex[:8]}"
-    target_url = _named_url_for(base_url, name)
+    name = _new_db_name(name_prefix)
+    target_url = _admin_url_for(base_url, name)
     try:
         admin_conn = psycopg.connect(_admin_url_for(base_url), connect_timeout=connect_timeout, autocommit=True)
     except psycopg.OperationalError as error:
@@ -434,12 +421,11 @@ def clone_test_database(
     connect_timeout: int = 3,
 ) -> Iterator[IsolatedDatabase]:
     base_url = guard_db_write(source_database if "://" in source_database else None)
-    source_name = _dbname_for(source_database)
-    clone_name = f"truealpha_{name_prefix}_{os.getpid()}_{uuid.uuid4().hex[:8]}"
+    clone_name = _new_db_name(name_prefix)
     admin_conn = psycopg.connect(_admin_url_for(base_url), connect_timeout=connect_timeout, autocommit=True)
     try:
-        _clone_from_template(admin_conn, clone_name, source_name)
-        yield IsolatedDatabase(_named_url_for(base_url, clone_name), clone_name)
+        _clone_from_template(admin_conn, clone_name, _dbname_for(source_database))
+        yield IsolatedDatabase(_admin_url_for(base_url, clone_name), clone_name)
     finally:
         _drop_database_and_close(admin_conn, clone_name)
 

@@ -1,4 +1,4 @@
-"""Input cells of one captured payload (#1518, step 4): one builder for every engine."""
+"""Captured-payload input cell builder (#1518)."""
 
 from __future__ import annotations
 
@@ -7,22 +7,15 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, NamedTuple
 
-from factors.confidence import evaluate_cell_confidence
-from truealpha_contracts.confidence import ContinuousConfidencePolicy, SourceConfidenceEvidence
 from truealpha_contracts.fiscal_period import encode_annual
 from truealpha_contracts.metrics import INPUT_KEY_ALIASES, METRICS, UnitFamily, input_key_for_metric
 
-from data_engine.datahub.production_topt.source_registrations import (
-    AsOfAxis,
-    knowable_instant,
-    source_reliability_prior,
-)
+from data_engine.datahub._helpers import single_origin_confidence
+from data_engine.datahub.production_topt.source_registrations import AsOfAxis, knowable_instant
 
 LAST_CLOSE_KEY = "last_close"
-_CONFIDENCE_POLICY = ContinuousConfidencePolicy()
 _STRATEGY_FINANCIAL_KEYS = tuple(sorted(input_key_for_metric(name) for name in METRICS if name != "price"))
 _STRATEGY_PERIODIC_KEYS = {name: f"{name}_by_period" for name, spec in METRICS.items() if spec.periodic}
-_PERIOD_SERIES_SUFFIX = "_periods"
 _COUNT_UNITS = {
     "employees_total": "employees",
     "shares_outstanding": "shares",
@@ -46,10 +39,7 @@ def unit_of(input_key: str, currency: str) -> str:
     metric = INPUT_KEY_ALIASES.get(input_key, input_key)
     spec = METRICS.get(metric)
     if spec is None:
-        raise ValueError(
-            f"{input_key!r} is not a registered metric (truealpha_contracts.metrics.METRICS); "
-            "register it there before using it as a strategy input"
-        )
+        raise ValueError(f"{input_key!r} is not a registered metric (truealpha_contracts.metrics.METRICS)")
     if spec.unit_family is UnitFamily.CURRENCY:
         return currency
     if spec.unit_family is UnitFamily.COUNT:
@@ -75,9 +65,8 @@ def vintage_knowable_at(payload: Mapping[str, Any]) -> KnowableAtOf:
     vintage = payload.get("vintage") or {}
 
     def knowable_at_of(input_key: str, period_end: str | None) -> datetime | None:
-        if period_end is None:
-            return _entry_knowable_at(vintage.get(input_key))
-        return _entry_knowable_at((vintage.get(f"{input_key}{_PERIOD_SERIES_SUFFIX}") or {}).get(period_end))
+        bucket = vintage if period_end is None else (vintage.get(f"{input_key}_periods") or {})
+        return _entry_knowable_at(bucket.get(input_key if period_end is None else period_end))
 
     return knowable_at_of
 
@@ -87,48 +76,18 @@ def live_knowable_at(payload: Mapping[str, Any], observed_at: datetime) -> Calla
     return lambda input_key, period_end: stamp if (stamp := named(input_key, period_end)) is not None else observed_at
 
 
-def _evaluate_single_origin_confidence(
-    case_id: str,
-    provider_id: str,
-    lineage: str,
-    fallback_prior_id: str,
-    evidence_id: str,
-    *,
-    served_by_failover: bool = False,
-) -> Decimal:
-    reason = "reason:served_by_failover" if served_by_failover else "reason:single_origin"
-    source = SourceConfidenceEvidence(
-        provider_id=provider_id,
-        origin_group_id=f"lineage:{lineage}",
-        independence_weight=Decimal("1"),
-        reliability_prior=source_reliability_prior(provider_id) or source_reliability_prior(fallback_prior_id),
-        successful_outcome_mass=Decimal("0"),
-        failed_outcome_mass=Decimal("0"),
-        freshness=Decimal("1"),
-        sample_conformance=Decimal("0.90") if served_by_failover else Decimal("1"),
-        transport_integrity=Decimal("1"),
-        evidence_ids=(evidence_id,),
-        reason_codes=(reason,),
-    )
-    return evaluate_cell_confidence(
-        case_id=case_id,
-        sources=(source,),
-        agreement=Decimal("1"),
-        semantic_mapping_quality=Decimal("1"),
-        lineage_completeness=Decimal("1"),
-        required_component_completeness=Decimal("1"),
-        extra_reason_codes=(reason,),
-        policy=_CONFIDENCE_POLICY,
-    ).confidence
-
-
 def _evaluate_sec_field_confidence(key: str, payload: Mapping[str, Any]) -> Decimal:
     producer = str(((payload.get("vintage") or {}).get("headcount") or {}).get("source") or "10k-extraction")
     provider_id = f"origin:headcount:{producer}" if key == "headcount" else "origin:sec-company-facts:v1"
     lineage = "sec-10k" if key == "headcount" else "sec-company-facts"
     subject = payload.get("listing_id") or payload.get("issuer_id") or "sec"
-    return _evaluate_single_origin_confidence(
-        f"cell:{key}:{subject}", provider_id, lineage, "origin:sec-company-facts:v1", f"obs:{key}"
+    return single_origin_confidence(
+        case_id=f"cell:{key}:{subject}",
+        provider_id=provider_id,
+        lineage=lineage,
+        fallback_prior_id="origin:sec-company-facts:v1",
+        evidence_id=f"obs:{key}",
+        extra_reason_codes=("reason:single_origin",),
     )
 
 
@@ -136,13 +95,16 @@ def _evaluate_close_confidence(payload: Mapping[str, Any]) -> Decimal:
     served_by = payload.get("served_by_failover")
     origin_id = str(served_by) if served_by else "origin:yahoo:v1"
     lineage = origin_id.split(":")[1] if origin_id.startswith("origin:") and origin_id.count(":") >= 2 else "yahoo"
-    return _evaluate_single_origin_confidence(
-        f"cell:close:{payload.get('listing_id') or 'listing'}",
-        origin_id,
-        lineage,
-        "origin:yahoo:v1",
-        "obs:close",
-        served_by_failover=bool(served_by),
+    reason = "reason:served_by_failover" if served_by else "reason:single_origin"
+    return single_origin_confidence(
+        case_id=f"cell:close:{payload.get('listing_id') or 'listing'}",
+        provider_id=origin_id,
+        lineage=lineage,
+        fallback_prior_id="origin:yahoo:v1",
+        evidence_id="obs:close",
+        sample_conformance=Decimal("0.90") if served_by else Decimal("1"),
+        reason_codes=(reason,),
+        extra_reason_codes=(reason,),
     )
 
 
@@ -175,18 +137,13 @@ def financial_input_rows(
     for key, payload_key in _STRATEGY_PERIODIC_KEYS.items():
         key_conf = _conf_for(key)
         for period_end, value in sorted((payload.get(payload_key) or {}).items()):
-            if (stamp := stamp_of(key, period_end)) is None:
-                continue
-            tag = encode_annual(date.fromisoformat(period_end))
-            cells.append(InputCell(key, Decimal(str(value)), unit_of(key, currency), key_conf, stamp, tag))
+            if (stamp := stamp_of(key, period_end)) is not None:
+                tag = encode_annual(date.fromisoformat(period_end))
+                cells.append(InputCell(key, Decimal(str(value)), unit_of(key, currency), key_conf, stamp, tag))
     return cells
 
 
-def last_close_cell(
-    payload: Mapping[str, Any],
-    confidence: Decimal | None,
-    observed_at: datetime,
-) -> InputCell | None:
+def last_close_cell(payload: Mapping[str, Any], confidence: Decimal | None, observed_at: datetime) -> InputCell | None:
     close = payload.get("close")
     if close is None:
         return None

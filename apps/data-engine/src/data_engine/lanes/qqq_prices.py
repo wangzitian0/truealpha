@@ -16,20 +16,17 @@ from truealpha_contracts.universes import lane_name
 from data_engine.config import settings
 from data_engine.datahub.market_prices import (
     MAX_BAR_LAG_SESSIONS,
-    SPLIT_ADJUSTED,
     TWELVE_DATA_SEAT,
-    UNADJUSTED,
     TwelveDataApiError,
     TwelveDataClient,
     TwelveDataRateLimitError,
     ingest_daily_series,
     stored_symbols,
 )
-from data_engine.datahub.price_series import load_daily_series
 from data_engine.datahub.primary_listing import primary_symbols
 from data_engine.datahub.production_topt.source_registrations import origin_per_key_cost
 from data_engine.datahub.production_topt.universe_plane import resolve_universe_corpus
-from data_engine.datahub.share_basis import SplitHistory, split_history
+from data_engine.datahub.share_basis import SplitHistory, load_split_histories
 from data_engine.external_op import external_op
 from data_engine.lanes.capture import is_universe_scheduled
 from data_engine.sources import gateway
@@ -113,9 +110,7 @@ def environment_share(environment: str) -> int | None:
 
 
 def newest_sessions(connection: psycopg.Connection, symbols: Sequence[str]) -> dict[str, date]:
-    unadjusted = load_daily_series(connection, symbols, adjust=UNADJUSTED)
-    split_adjusted = load_daily_series(connection, symbols, adjust=SPLIT_ADJUSTED)
-    histories = {symbol: split_history(symbol, unadjusted, split_adjusted) for symbol in symbols}
+    histories = load_split_histories(connection, symbols)
     return {symbol: history.last_session for symbol, history in histories.items() if isinstance(history, SplitHistory)}
 
 

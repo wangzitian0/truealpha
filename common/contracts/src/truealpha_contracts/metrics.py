@@ -77,50 +77,36 @@ class MetricSpec(BaseModel):
     description: str = Field(min_length=1)
 
 
-_SPEC_ROWS: tuple[tuple[str, UnitFamily, str, bool], ...] = (
-    ("revenue", UnitFamily.CURRENCY, "Total revenue for the fiscal period.", False),
-    ("segment_revenue", UnitFamily.CURRENCY, "Revenue attributed to one reportable segment (#772).", False),
-    ("gross_profit", UnitFamily.CURRENCY, "Gross profit for non-financial issuers.", False),
-    ("pre_provision_profit", UnitFamily.CURRENCY, "Bank pre-provision net revenue (#59, #1519).", False),
-    ("insurance_pre_claims_profit", UnitFamily.CURRENCY, "Insurance operating numerator (#496, #1519).", False),
-    ("shares_weighted_average_basic", UnitFamily.COUNT, "Weighted-average basic common shares (#496, #1519).", False),
-    ("cost_of_revenue", UnitFamily.CURRENCY, "Reported cost of revenue.", False),
-    ("operating_income", UnitFamily.CURRENCY, "Reported operating income.", False),
+_SPEC_ROWS: tuple[tuple[str, UnitFamily, str] | tuple[str, UnitFamily, str, bool], ...] = (
+    ("revenue", UnitFamily.CURRENCY, "Total revenue for the fiscal period."),
+    ("segment_revenue", UnitFamily.CURRENCY, "Revenue attributed to one reportable segment (#772)."),
+    ("gross_profit", UnitFamily.CURRENCY, "Gross profit for non-financial issuers."),
+    ("pre_provision_profit", UnitFamily.CURRENCY, "Bank pre-provision net revenue (#59, #1519)."),
+    ("insurance_pre_claims_profit", UnitFamily.CURRENCY, "Insurance operating numerator (#496, #1519)."),
+    ("shares_weighted_average_basic", UnitFamily.COUNT, "Weighted-average basic common shares (#496, #1519)."),
+    ("cost_of_revenue", UnitFamily.CURRENCY, "Reported cost of revenue."),
+    ("operating_income", UnitFamily.CURRENCY, "Reported operating income."),
     ("net_income", UnitFamily.CURRENCY, "Net income attributable to the company.", True),
-    ("eps_diluted", UnitFamily.PER_SHARE, "Diluted earnings per share.", False),
-    ("shares_outstanding", UnitFamily.COUNT, "Point-in-time common shares outstanding.", False),
-    ("stockholders_equity", UnitFamily.CURRENCY, "Total stockholders' equity (#1176).", False),
-    ("preferred_stock_value", UnitFamily.CURRENCY, "Preferred stock carrying value (#1176).", False),
-    ("goodwill", UnitFamily.CURRENCY, "Goodwill carrying amount (#1176).", False),
-    (
-        "intangible_assets_net_excluding_goodwill",
-        UnitFamily.CURRENCY,
-        "Intangible assets excluding goodwill (#1176).",
-        False,
-    ),
-    ("employees_total", UnitFamily.COUNT, "Total headcount.", False),
-    ("total_assets", UnitFamily.CURRENCY, "Total assets on the balance sheet.", False),
-    ("price", UnitFamily.PER_SHARE, "Unadjusted close price.", False),
-    ("consensus_profit_growth", UnitFamily.PERCENTAGE, "Annual profit growth rate (#1354).", False),
-    ("gross_profit_per_employee", UnitFamily.PER_EMPLOYEE, "Gross profit per employee (#1523).", False),
-    ("financial_assets", UnitFamily.CURRENCY, "Cash and marketable investments (#528).", False),
-    ("financial_returns", UnitFamily.CURRENCY, "Investment income, dividends, and gains (#528).", False),
-    ("bank_net_revenue", UnitFamily.CURRENCY, "Bank net revenue.", False),
+    ("eps_diluted", UnitFamily.PER_SHARE, "Diluted earnings per share."),
+    ("shares_outstanding", UnitFamily.COUNT, "Point-in-time common shares outstanding."),
+    ("stockholders_equity", UnitFamily.CURRENCY, "Total stockholders' equity (#1176)."),
+    ("preferred_stock_value", UnitFamily.CURRENCY, "Preferred stock carrying value (#1176)."),
+    ("goodwill", UnitFamily.CURRENCY, "Goodwill carrying amount (#1176)."),
+    ("intangible_assets_net_excluding_goodwill", UnitFamily.CURRENCY, "Intangible assets excluding goodwill (#1176)."),
+    ("employees_total", UnitFamily.COUNT, "Total headcount."),
+    ("total_assets", UnitFamily.CURRENCY, "Total assets on the balance sheet."),
+    ("price", UnitFamily.PER_SHARE, "Unadjusted close price."),
+    ("consensus_profit_growth", UnitFamily.PERCENTAGE, "Annual profit growth rate (#1354)."),
+    ("gross_profit_per_employee", UnitFamily.PER_EMPLOYEE, "Gross profit per employee (#1523)."),
+    ("financial_assets", UnitFamily.CURRENCY, "Cash and marketable investments (#528)."),
+    ("financial_returns", UnitFamily.CURRENCY, "Investment income, dividends, and gains (#528)."),
+    ("bank_net_revenue", UnitFamily.CURRENCY, "Bank net revenue."),
 )
 
-
-def _build_registry(specs: tuple[MetricSpec, ...]) -> dict[str, MetricSpec]:
-    registry: dict[str, MetricSpec] = {}
-    for spec in specs:
-        if spec.name in registry:
-            raise ValueError(f"duplicate metric registration: {spec.name}")
-        registry[spec.name] = spec
-    return registry
-
-
-METRICS: dict[str, MetricSpec] = _build_registry(
-    tuple(MetricSpec(name=n, unit_family=u, description=d, periodic=p) for n, u, d, p in _SPEC_ROWS)
-)
+METRICS: dict[str, MetricSpec] = {
+    row[0]: MetricSpec(name=row[0], unit_family=row[1], description=row[2], periodic=len(row) > 3 and row[3])
+    for row in _SPEC_ROWS
+}
 
 INPUT_KEY_ALIASES: dict[str, str] = {
     "headcount": "employees_total",

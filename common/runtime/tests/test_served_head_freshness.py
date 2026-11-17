@@ -29,9 +29,9 @@ from psycopg import errors, sql
 from truealpha_runtime.testing import isolated_test_database, read_seed_rows
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-MIGRATION = REPO_ROOT / "db" / "migrations" / "20261006T1020_datahub_served_head_freshness.sql"
-#: The last file that defines `mart.served_head` (#1320). The seed stays in MIGRATION.
-LIVE_VERSION_MIGRATION = REPO_ROOT / "db" / "migrations" / "20261015T0555_datahub_served_head_live_version.sql"
+MIGRATION = REPO_ROOT / "db" / "migrations" / "0003_mart.sql"
+#: Squashed baseline defining `mart.served_head` and its seed rows.
+LIVE_VERSION_MIGRATION = MIGRATION
 
 AS_OF = datetime(2026, 10, 6, 12, 0, tzinfo=UTC)
 HOUR = timedelta(hours=1)
@@ -647,7 +647,7 @@ def test_a_missing_withhold_limit_fails_closed(conn: psycopg.Connection) -> None
     assert (row["availability"], row["run_id"], row["head_run_id"]) == ("unavailable", None, run_id)
 
 
-@pytest.mark.parametrize("migration", [MIGRATION, LIVE_VERSION_MIGRATION], ids=["seed", "live-version"])
+@pytest.mark.parametrize("migration", [MIGRATION], ids=["0003_mart"])
 def test_a_replay_with_no_change_takes_no_strong_lock(conn: psycopg.Connection, migration: Path) -> None:
     """Boot-lock rule: a replay on a settled database holds only three lock modes. They are
     ACCESS SHARE, ROW EXCLUSIVE and the SHARE UPDATE EXCLUSIVE of a comment. A strong lock on a

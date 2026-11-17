@@ -536,10 +536,7 @@ def test_mart_fund_holdings_deduplicates_reparsed_holding_lines(connection) -> N
 
 def _apply_issue_1641_migration(connection) -> None:
     """Apply the #1641 migration inside the rolled-back test transaction."""
-    migration = (
-        Path(__file__).resolve().parents[4]
-        / "db/migrations/20261110T1500_datahub_entity_identity_unique_and_fund_conservation.sql"
-    )
+    migration = Path(__file__).resolve().parents[4] / "db/migrations/0003_mart.sql"
     connection.execute(migration.read_text(encoding="utf-8"))
 
 

@@ -1,19 +1,11 @@
-"""Raw landing per the runtime contract (AGENTS.md raw-storage hard constraint,
-db/migrations/0004_runtime_contracts.sql): immutable source-response bytes go to
-S3-compatible object storage, and `raw.fetches` keeps the checksum, object
-pointer, timestamps, and lineage. Rows are append-only vintages — a re-fetch
-with identical bytes collapses onto the existing row (content-addressed), a
-re-fetch with different bytes is a new vintage.
+"""Object landing and verification for `raw.fetches`."""
 
-`already_fetched` is the sweep resume check: "a row exists for this
-(source, source_record_id)" means "don't spend the call again"; a deliberate
-re-pull just skips the check and lands a new vintage.
-"""
+from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
 
-from truealpha_contracts.models import DataSource, RawCapture
+from truealpha_contracts.models import DataSource, RawCapture, RawObjectRef
 from truealpha_contracts.ports import RawObjectStore
 from truealpha_runtime import S3RawObjectStore
 
@@ -25,6 +17,30 @@ def object_store() -> S3RawObjectStore:
     if _store is None:
         _store = S3RawObjectStore()
     return _store
+
+
+def parse_s3_uri(object_uri: str) -> tuple[str, str]:
+    bucket, _, key = object_uri.removeprefix("s3://").partition("/")
+    return bucket, key
+
+
+def get_uri_payload(
+    object_uri: str,
+    sha256: str,
+    byte_length: int | None,
+    content_type: str | None,
+    *,
+    store: RawObjectStore | None = None,
+) -> bytes:
+    bucket, key = parse_s3_uri(object_uri)
+    ref = RawObjectRef(
+        bucket=bucket,
+        key=key,
+        sha256=sha256,
+        byte_length=int(byte_length or 0),
+        content_type=content_type or "application/octet-stream",
+    )
+    return (store or object_store()).get(ref)
 
 
 def insert_fetch(
@@ -40,12 +56,6 @@ def insert_fetch(
     store: RawObjectStore | None = None,
     recorded_at: datetime | None = None,
 ) -> int:
-    """Store the bytes in object storage, record the pointer row, return its id
-    (the existing row's id when these exact bytes were already recorded).
-
-    ``recorded_at`` is an explicit replay clock; live callers omit it and use
-    wall-clock landing time.
-    """
     capture = RawCapture(
         source=source,
         source_record_id=source_record_id,
@@ -60,21 +70,12 @@ def insert_fetch(
         raise ValueError("recorded_at must be timezone-aware")
     if landing_time < fetched_at:
         raise ValueError("recorded_at must not precede fetched_at")
-    active_store = store or object_store()
-    envelope = active_store.store(capture)
-    # recorded_at is passed explicitly rather than left to its now() default:
-    # Postgres's now() is the TRANSACTION start, so in a long-running sweep a
-    # fetch made mid-transaction would violate check (recorded_at >= fetched_at).
-    # Live paths use wall clock; frozen replay paths provide a reviewed clock.
+    envelope = (store or object_store()).store(capture)
     row = conn.execute(
-        """
-        insert into raw.fetches
-            (source, source_record_id, payload_sha256, object_uri, content_type,
-             byte_length, source_published_at, fetched_at, recorded_at, metadata)
-        values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
-        on conflict (source, source_record_id, payload_sha256) do nothing
-        returning id
-        """,
+        "insert into raw.fetches (source, source_record_id, payload_sha256, object_uri, content_type, "
+        "byte_length, source_published_at, fetched_at, recorded_at, metadata) "
+        "values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb) "
+        "on conflict (source, source_record_id, payload_sha256) do nothing returning id",
         (
             source.value,
             source_record_id,
@@ -90,11 +91,10 @@ def insert_fetch(
     ).fetchone()
     if row is not None:
         return row[0]
-    existing = conn.execute(
+    return conn.execute(
         "select id from raw.fetches where source = %s and source_record_id = %s and payload_sha256 = %s",
         (source.value, source_record_id, envelope.object.sha256),
-    ).fetchone()
-    return existing[0]
+    ).fetchone()[0]
 
 
 def insert_json_fetch(
@@ -134,23 +134,15 @@ def already_fetched(conn, *, source: DataSource, source_record_id: str) -> bool:
 
 
 def raw_ref(fetch_id: int) -> str:
-    """The pointer format staging rows use to trace back here (init.md Section 6)."""
+    """Format a `raw.fetches:<id>` lineage reference."""
     return f"raw.fetches:{fetch_id}"
 
 
 def get_payload(conn, fetch_id: int, *, store: RawObjectStore | None = None) -> bytes:
-    """Read a fetch's bytes back through its pointer row — checksum-verified by
-    the object store. This is how offline rebuilds (--figi-from-raw) reuse
-    landed responses instead of re-spending API calls."""
-    from truealpha_contracts.models import RawObjectRef
-
+    """Load checksum-verified bytes for `fetch_id` from object storage."""
     row = conn.execute(
-        "select object_uri, payload_sha256, byte_length, content_type from raw.fetches where id = %s",
-        (fetch_id,),
+        "select object_uri, payload_sha256, byte_length, content_type from raw.fetches where id = %s", (fetch_id,)
     ).fetchone()
     if row is None:
         raise LookupError(f"raw.fetches:{fetch_id} does not exist")
-    object_uri, sha256, byte_length, content_type = row
-    bucket, _, key = object_uri.removeprefix("s3://").partition("/")
-    ref = RawObjectRef(bucket=bucket, key=key, sha256=sha256, byte_length=byte_length, content_type=content_type)
-    return (store or object_store()).get(ref)
+    return get_uri_payload(*row, store=store)

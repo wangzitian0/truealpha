@@ -1,18 +1,5 @@
 "use client";
 
-/**
- * #495 (surface 2b): the manual-trigger control — the SAME thin trigger the
- * schedule uses, only the `executed_at` parameter differs (defaults to now).
- * POSTs to /admin/api/trigger, which INSERTs the Postgres-mediated request
- * the data-engine sensor consumes; shows the run_key so the operator can
- * find the launched run in the table above after the sensor's next poll.
- *
- * #874: the checkbox asks for a forced fetch. The tick skips the 12-hour
- * reuse window and fetches every obligation again under its own capture
- * identity, which is how a new origin or a corrected capture is proven by
- * hand. The run plan and the quality report record `forced_fetch`.
- */
-
 import { useState } from "react";
 
 export function TriggerRunButton() {

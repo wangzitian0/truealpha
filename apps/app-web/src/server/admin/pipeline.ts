@@ -2,65 +2,39 @@
  * Administrator `/admin/pipeline` loader via `app_ops_reader`.
  */
 
-import type { PoolClient } from "pg";
 import { RUN_TIME_BOUNDS } from "@/contracts/environmentContract.generated";
 import type { ReadState } from "@/server/read-state";
-import { loadDataEngineBuild, loadReleaseStart, RUNS_UNAVAILABLE_MESSAGE, UNDEFINED_TABLE, withOpsReader } from "./ops";
+import {
+  errMessage,
+  isUndefinedTable,
+  loadDataEngineBuild,
+  loadReleaseStart,
+  RUNS_UNAVAILABLE_MESSAGE,
+  runAdminRead,
+  withOpsReader,
+  type OpsPrincipal,
+  type OpsQueryClient,
+} from "./ops";
 
 export const PIPELINE_WINDOW_DAYS = 7;
 export const PIPELINE_LISTED_DAYS = 100;
 
-export interface PipelineFailure {
-  runId: string;
-  at: string;
-  firstError: string | null;
-}
-
-export interface PipelineJobRow {
-  job: string;
-  runs: number;
-  successes: number;
-  failures: number;
-  successRate: number | null;
-  lastSuccessAt: string | null;
-  lastFailure: PipelineFailure | null;
-  longestSuccessSeconds: number | null;
-  derivedBoundSeconds: number | null;
-  runsEndedByBound: number;
-}
-
-export interface PipelineVerdict {
-  ok: boolean | null;
-  ranAt: string;
-  summary: string;
-}
-
-export interface PipelineRelease {
-  gitSha: string;
-  since: string;
-  ageHours: number;
-}
-
-export interface PipelineUnreadable {
-  eventLog: string | null;
-  verdicts: string | null;
-  release: string | null;
-}
-
-export interface PipelineOverview {
-  windowDays: number;
-  unreadable: PipelineUnreadable;
-  jobs: PipelineJobRow[];
-  jobRunHealth: PipelineVerdict | null;
-  release: PipelineRelease | null;
-  appGitSha: string;
-}
+export type PipelineFailure = { runId: string; at: string; firstError: string | null };
+export type PipelineJobRow = {
+  job: string; runs: number; successes: number; failures: number; successRate: number | null;
+  lastSuccessAt: string | null; lastFailure: PipelineFailure | null; longestSuccessSeconds: number | null;
+  derivedBoundSeconds: number | null; runsEndedByBound: number;
+};
+export type PipelineVerdict = { ok: boolean | null; ranAt: string; summary: string };
+export type PipelineRelease = { gitSha: string; since: string; ageHours: number };
+export type PipelineUnreadable = { eventLog: string | null; verdicts: string | null; release: string | null };
+export type PipelineOverview = {
+  windowDays: number; unreadable: PipelineUnreadable; jobs: PipelineJobRow[];
+  jobRunHealth: PipelineVerdict | null; release: PipelineRelease | null; appGitSha: string;
+};
 
 export type PipelineOutcome = ReadState<PipelineOverview>;
-
-export interface PipelinePrincipal {
-  principalKind: "member" | "administrator" | "service";
-}
+export type PipelinePrincipal = OpsPrincipal;
 
 export const JOBS_SQL = `
   select r.pipeline_name as job,
@@ -120,8 +94,7 @@ interface EventPayload {
 
 function firstLine(text: unknown): string | null {
   if (typeof text !== "string") return null;
-  const line = text.split("\n").find((candidate) => candidate.trim().length > 0);
-  return line === undefined ? null : line.trim();
+  return text.split("\n").find((line) => line.trim().length > 0)?.trim() ?? null;
 }
 
 export function firstErrorLine(eventJson: string): string | null {
@@ -142,61 +115,53 @@ export function firstErrorLine(eventJson: string): string | null {
 }
 
 const iso = (v: unknown): string => new Date(v as string | number | Date).toISOString();
-const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
-async function readVerdict(client: Pick<PoolClient, "query">, check: string): Promise<PipelineVerdict | null> {
-  const result = await client.query(VERDICT_SQL, [check]);
-  const row = result.rows[0];
-  if (row === undefined) return null;
-  return {
-    ok: row.ok === null || row.ok === undefined ? null : Boolean(row.ok),
-    ranAt: iso(row.ran_at),
-    summary: row.summary === null || row.summary === undefined ? "" : String(row.summary),
-  };
-}
-
-async function readVerdicts(client: Pick<PoolClient, "query">) {
+async function tryReadPart<T>(fallback: T, fn: () => Promise<{ value: T; reason?: string | null }>): Promise<{ value: T; unreadable: string | null }> {
   try {
-    return {
-      jobRunHealth: await readVerdict(client, "job_run_health"),
-      unreadable: null,
-    };
+    const out = await fn();
+    return { value: out.value, unreadable: out.reason ?? null };
   } catch (error) {
-    return { jobRunHealth: null, unreadable: errMsg(error) };
+    return { value: fallback, unreadable: errMessage(error) };
   }
 }
 
-async function readRelease(client: Pick<PoolClient, "query">, now: number) {
-  try {
+async function readVerdictPart(client: OpsQueryClient) {
+  return tryReadPart<PipelineVerdict | null>(null, async () => {
+    const row = (await client.query(VERDICT_SQL, ["job_run_health"])).rows[0];
+    return {
+      value: row
+        ? {
+            ok: row.ok == null ? null : Boolean(row.ok),
+            ranAt: iso(row.ran_at),
+            summary: row.summary == null ? "" : String(row.summary),
+          }
+        : null,
+    };
+  });
+}
+
+async function readReleasePart(client: OpsQueryClient, now: number) {
+  return tryReadPart<PipelineRelease | null>(null, async () => {
     const build = await loadDataEngineBuild(client);
-    if (build === null) return { release: null, unreadable: null };
-    if (build.gitSha === "unknown") {
-      return { release: null, unreadable: "the newest run plan records no build sha" };
-    }
+    if (build === null) return { value: null };
+    if (build.gitSha === "unknown") return { value: null, reason: "the newest run plan records no build sha" };
     const since = await loadReleaseStart(client, build.gitSha);
-    if (since === null) return { release: null, unreadable: `the run plans hold no start for the build ${build.gitSha}` };
-    return {
-      release: { gitSha: build.gitSha, since, ageHours: (now - new Date(since).getTime()) / 3_600_000 },
-      unreadable: null,
-    };
-  } catch (error) {
-    return { release: null, unreadable: errMsg(error) };
-  }
+    if (since === null) return { value: null, reason: `the run plans hold no start for the build ${build.gitSha}` };
+    return { value: { gitSha: build.gitSha, since, ageHours: (now - new Date(since).getTime()) / 3_600_000 } };
+  });
 }
 
-async function readFailureLines(client: Pick<PoolClient, "query">, runIds: string[]) {
+async function readFailureLinesPart(client: OpsQueryClient, runIds: string[]) {
   const lines = new Map<string, string | null>();
-  if (runIds.length === 0) return { lines, unreadable: null };
-  try {
+  if (runIds.length === 0) return { value: lines, unreadable: null };
+  return tryReadPart(lines, async () => {
     const result = await client.query(FAILURE_EVENTS_SQL, [runIds]);
     for (const row of result.rows) lines.set(String(row.run_id), firstErrorLine(String(row.event)));
-    return { lines, unreadable: null };
-  } catch (error) {
-    return { lines, unreadable: errMsg(error) };
-  }
+    return { value: lines };
+  });
 }
 
-async function readTimeouts(client: Pick<PoolClient, "query">, windowDays: number): Promise<Map<string, number>> {
+async function readTimeouts(client: OpsQueryClient, windowDays: number): Promise<Map<string, number>> {
   const counts = new Map<string, number>();
   try {
     const result = await client.query(TIMEOUTS_SQL, [windowDays]);
@@ -207,17 +172,12 @@ async function readTimeouts(client: Pick<PoolClient, "query">, windowDays: numbe
   return counts;
 }
 
-function jobRow(
-  row: Record<string, unknown>,
-  lines: Map<string, string | null>,
-  timeouts: Map<string, number>,
-): PipelineJobRow {
+function jobRow(row: Record<string, unknown>, lines: Map<string, string | null>, timeouts: Map<string, number>): PipelineJobRow {
   const successes = Number(row.successes);
   const failures = Number(row.failures);
   const runs = successes + failures;
   const runId = row.last_failure_run_id == null ? null : String(row.last_failure_run_id);
-  const longestSuccessSeconds =
-    row.longest_success_seconds == null ? null : Math.round(Number(row.longest_success_seconds));
+  const longestSuccessSeconds = row.longest_success_seconds == null ? null : Math.round(Number(row.longest_success_seconds));
   const derivedBoundSeconds =
     longestSuccessSeconds === null
       ? null
@@ -229,10 +189,7 @@ function jobRow(
     failures,
     successRate: runs === 0 ? null : successes / runs,
     lastSuccessAt: row.last_success == null ? null : iso(row.last_success),
-    lastFailure:
-      runId === null || row.last_failure == null
-        ? null
-        : { runId, at: iso(row.last_failure), firstError: lines.get(runId) ?? null },
+    lastFailure: runId === null || row.last_failure == null ? null : { runId, at: iso(row.last_failure), firstError: lines.get(runId) ?? null },
     longestSuccessSeconds,
     derivedBoundSeconds,
     runsEndedByBound: timeouts.get(String(row.job)) ?? 0,
@@ -240,42 +197,33 @@ function jobRow(
 }
 
 export async function loadPipelineOverview(principal: PipelinePrincipal | null): Promise<PipelineOutcome> {
-  if (principal === null || principal.principalKind !== "administrator") {
-    return { kind: "denied" };
-  }
-  try {
-    return await withOpsReader(async (client): Promise<PipelineOutcome> => {
+  return runAdminRead(principal, () =>
+    withOpsReader(async (client): Promise<PipelineOutcome> => {
       let grouped;
       try {
         grouped = await client.query(JOBS_SQL, [PIPELINE_WINDOW_DAYS, PIPELINE_LISTED_DAYS, RUN_TIME_BOUNDS.windowDays]);
       } catch (error) {
-        if ((error as { code?: string }).code === UNDEFINED_TABLE) {
-          return { kind: "unavailable", reason: RUNS_UNAVAILABLE_MESSAGE };
-        }
+        if (isUndefinedTable(error)) return { kind: "unavailable", reason: RUNS_UNAVAILABLE_MESSAGE };
         throw error;
       }
       if (grouped.rows.length === 0) return { kind: "empty" };
-      const failedRunIds = grouped.rows
-        .map((row) => row.last_failure_run_id)
-        .filter((id): id is string => typeof id === "string");
-      const failures = await readFailureLines(client, failedRunIds);
+      const failedRunIds = grouped.rows.map((row) => row.last_failure_run_id).filter((id): id is string => typeof id === "string");
+      const failures = await readFailureLinesPart(client, failedRunIds);
       const totalFailures = grouped.rows.reduce((sum, r) => sum + Number(r.failures || 0), 0);
       const timeouts = totalFailures > 0 ? await readTimeouts(client, PIPELINE_WINDOW_DAYS) : new Map<string, number>();
-      const verdicts = await readVerdicts(client);
-      const release = await readRelease(client, Date.now());
+      const verdicts = await readVerdictPart(client);
+      const release = await readReleasePart(client, Date.now());
       return {
         kind: "ready",
         data: {
           windowDays: PIPELINE_WINDOW_DAYS,
           unreadable: { eventLog: failures.unreadable, verdicts: verdicts.unreadable, release: release.unreadable },
-          jobs: grouped.rows.map((row) => jobRow(row, failures.lines, timeouts)),
-          jobRunHealth: verdicts.jobRunHealth,
-          release: release.release,
+          jobs: grouped.rows.map((row) => jobRow(row, failures.value, timeouts)),
+          jobRunHealth: verdicts.value,
+          release: release.value,
           appGitSha: process.env.GIT_COMMIT_SHA || "unknown",
         },
       };
-    });
-  } catch (error) {
-    return { kind: "error", message: errMsg(error) };
-  }
+    }),
+  );
 }

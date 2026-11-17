@@ -1,4 +1,4 @@
-"""Sealed-holdout verdicts per factor definition (init.md §8 `factor_validation_status`, #65)."""
+"""Sealed-holdout verdicts per factor definition (init.md §8, #65)."""
 
 from __future__ import annotations
 

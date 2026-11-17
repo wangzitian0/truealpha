@@ -1,17 +1,4 @@
-"""Sweep SEC company-facts for every KG company with a CIK into raw.fetches.
-
-Free and quota-less (SEC fair use is ~10 req/s; we pace at 4/s), so this can run
-from anywhere — it doesn't need the OpenD host. Covers the US-filer part of the
-universe only; HK/CN-listed names have no SEC data and are moomoo's job.
-
-Resume: a CIK with a successful raw.fetches row is skipped, so rerunning after
-any abort continues where it left off. A deliberate refresh (new vintage of
-everything) is `--refetch`, which skips the check — never an overwrite, raw is
-append-only.
-
-Usage:
-    uv run --package truealpha-data-engine python apps/data-engine/scripts/sweep_sec_facts.py [--limit N] [--refetch]
-"""
+"""Sweep SEC company-facts into `raw.fetches`."""
 
 import argparse
 import time
@@ -49,10 +36,6 @@ def main() -> None:
             try:
                 facts = sec.fetch_company_facts(cik, client)
             except httpx.HTTPError as e:
-                # HTTPError covers both status errors (404 = registrant with no
-                # XBRL facts, rare but real) and transport errors (timeouts,
-                # connection resets) — none of which should kill a 500-company
-                # sweep; the resume check retries them on the next run.
                 failed += 1
                 status = getattr(getattr(e, "response", None), "status_code", None)
                 print(f"  {record_id} ({entity_id}): {f'HTTP {status}' if status else repr(e)}, skipping")

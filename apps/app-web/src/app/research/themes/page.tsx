@@ -1,7 +1,6 @@
 import { redirect } from "next/navigation";
-import Link from "next/link";
-import { formatCell, formatPercentFromFraction, formatRatio, formatShortSha } from "@/client/format";
-import { ResearchTable } from "@/components/research-table";
+import { formatCell, formatShortSha } from "@/client/format";
+import { EntityTh, PercentTd, RatioTd, ResearchTable } from "@/components/research-table";
 import { getServerPrincipal } from "@/server/auth/request-context";
 import { entityLabel, loadEntityDisplayMap } from "@/server/mart/entity-resolution";
 import { classifiedShare, loadThemePurity } from "@/server/mart/theme-purity";
@@ -19,18 +18,7 @@ export default async function ThemesPage() {
   if (!principal) redirect("/login?from=%2Fresearch%2Fthemes");
   const groups = await loadThemePurity();
   const names = await loadEntityDisplayMap();
-  const headers = [
-    "Rank",
-    "Issuer",
-    "Theme share",
-    "Classified",
-    "In theme (m)",
-    "Consolidated (m)",
-    "Segments",
-    "Period",
-    "Confidence",
-    "Status",
-  ];
+  const headers = ["Rank", "Issuer", "Theme share", "Classified", "In theme (m)", "Consolidated (m)", "Segments", "Period", "Confidence", "Status"];
 
   return (
     <section aria-labelledby="themes-heading" className="space-y-8">
@@ -53,8 +41,7 @@ export default async function ThemesPage() {
 
       {groups.length === 0 ? (
         <p className="text-sm text-gray-400">
-          No theme purity materialized yet — the weekly standards lane writes the first rows after it lands a segment
-          partition for a governed run.
+          No theme purity materialized yet — the weekly standards lane writes the first rows after it lands a segment partition for a governed run.
         </p>
       ) : (
         groups.map((group) => (
@@ -67,43 +54,33 @@ export default async function ThemesPage() {
                 ) · run {group.runId} · cutoff {group.cutoff}
               </p>
             </div>
-            <ResearchTable
-              caption={`Issuers ranked by ${group.theme} revenue share at ${group.cutoff}`}
-              headers={headers}
-            >
-              {group.rows.map((row, index) => {
-                const classified = classifiedShare(row);
-                return (
-                  <tr key={row.issuerId} className="border-t border-border">
-                    <td className="px-4 py-3">{row.themeShare === null ? "—" : index + 1}</td>
-                    <th scope="row" className="px-4 py-3 font-medium">
-                      <Link href={`/research/entities/${encodeURIComponent(row.issuerId)}`} className="text-accent hover:underline" title={row.issuerId}>
-                        {entityLabel(row.issuerId, names)}
-                      </Link>
-                    </th>
-                    <td className="px-4 py-3 tabular-nums" title={row.themeShare ?? undefined}>
-                      {row.themeShare === null ? <span className="text-gray-500">refused</span> : formatCell(formatPercentFromFraction(row.themeShare))}
-                    </td>
-                    <td className="px-4 py-3 tabular-nums" title={classified ?? undefined}>
-                      {formatCell(formatPercentFromFraction(classified))}
-                    </td>
-                    <td className="px-4 py-3 tabular-nums" title={row.inThemeRevenue}>{millions(row.inThemeRevenue)}</td>
-                    <td className="px-4 py-3 tabular-nums" title={row.consolidatedRevenue}>{millions(row.consolidatedRevenue)}</td>
-                    <td className="px-4 py-3 tabular-nums">{row.segments}</td>
-                    <td className="px-4 py-3">{row.periodEnd}</td>
-                    <td className="px-4 py-3 tabular-nums" title={row.confidence}>{formatCell(formatRatio(row.confidence))}</td>
-                    <td className="px-4 py-3 text-xs">
-                      <span title={row.extractor}>{row.availabilityStatus}</span>
-                      {row.reasonCodes.length > 0 && (
-                        <>
-                          {" "}
-                          <span className="ml-1 text-gray-500">({row.reasonCodes.join(", ")})</span>
-                        </>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
+            <ResearchTable caption={`Issuers ranked by ${group.theme} revenue share at ${group.cutoff}`} headers={headers}>
+              {group.rows.map((row, index) => (
+                <tr key={row.issuerId} className="border-t border-border">
+                  <td className="px-4 py-3">{row.themeShare === null ? "—" : index + 1}</td>
+                  <EntityTh issuerId={row.issuerId} label={entityLabel(row.issuerId, names)} />
+                  {row.themeShare === null ? (
+                    <td className="px-4 py-3 tabular-nums"><span className="text-gray-500">refused</span></td>
+                  ) : (
+                    <PercentTd value={row.themeShare} />
+                  )}
+                  <PercentTd value={classifiedShare(row)} />
+                  <td className="px-4 py-3 tabular-nums" title={row.inThemeRevenue}>{millions(row.inThemeRevenue)}</td>
+                  <td className="px-4 py-3 tabular-nums" title={row.consolidatedRevenue}>{millions(row.consolidatedRevenue)}</td>
+                  <td className="px-4 py-3 tabular-nums">{row.segments}</td>
+                  <td className="px-4 py-3">{row.periodEnd}</td>
+                  <RatioTd value={row.confidence} />
+                  <td className="px-4 py-3 text-xs">
+                    <span title={row.extractor}>{row.availabilityStatus}</span>
+                    {row.reasonCodes.length > 0 && (
+                      <>
+                        {" "}
+                        <span className="ml-1 text-gray-500">({row.reasonCodes.join(", ")})</span>
+                      </>
+                    )}
+                  </td>
+                </tr>
+              ))}
             </ResearchTable>
           </div>
         ))

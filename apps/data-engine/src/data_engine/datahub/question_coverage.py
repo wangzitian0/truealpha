@@ -52,24 +52,18 @@ def declared_environment(connection: Connection[Any]) -> str:
     row = connection.execute("select environment from mart.environment_identity").fetchone()
     if row is None:
         raise RuntimeError(
-            "mart.environment_identity is empty: this database has not declared its environment, "
-            "so no head can be resolved against it (#756)"
+            "mart.environment_identity is empty: this database has not declared its environment, so no head can be resolved against it (#756)"
         )
     return str(row[0])
 
 
 def governed_head(connection: Connection[Any], *, universe_prefix: str) -> GovernedHead | None:
     row = connection.execute(
-        """
-        select h.universe_id, h.target_run_id, min(r.cutoff)
-        from mart.current_pointer_head h
-        join mart.topt_gppe_results r on r.run_id = h.target_run_id
-        where h.environment = (select environment from mart.environment_identity)
-          and h.factor_id = %s and h.universe_id like %s
-        group by h.universe_id, h.target_run_id, h.advanced_at
-        order by h.advanced_at desc
-        limit 1
-        """,
+        "select h.universe_id, h.target_run_id, min(r.cutoff) from mart.current_pointer_head h "
+        "join mart.topt_gppe_results r on r.run_id = h.target_run_id "
+        "where h.environment = (select environment from mart.environment_identity) "
+        "and h.factor_id = %s and h.universe_id like %s "
+        "group by h.universe_id, h.target_run_id, h.advanced_at order by h.advanced_at desc limit 1",
         (GOVERNING_FACTOR, universe_prefix + "%"),
     ).fetchone()
     return None if row is None else GovernedHead(universe_id=str(row[0]), run_id=str(row[1]), cutoff=row[2])
@@ -121,19 +115,10 @@ def gppe_cells(connection: Connection[Any], run_id: str) -> tuple[Cell, ...]:
 
 def peg_cells(connection: Connection[Any], *, run_id: str) -> tuple[Cell, ...]:
     rows = connection.execute(
-        """
-        with chosen as (
-            select binding.strategy_run_id
-            from mart.strategy_run_capture_bindings binding
-            where binding.capture_run_id = %s
-            order by binding.bound_at desc, binding.strategy_run_id desc
-            limit 1
-        )
-        select d.issuer_id, d.peg, d.availability_status, d.exclusion_reason, d.peg_reason_codes
-        from mart.strategy_decisions d
-        where d.strategy_run_id = (select strategy_run_id from chosen)
-        order by d.issuer_id
-        """,
+        "with chosen as (select binding.strategy_run_id from mart.strategy_run_capture_bindings binding "
+        "where binding.capture_run_id = %s order by binding.bound_at desc, binding.strategy_run_id desc limit 1) "
+        "select d.issuer_id, d.peg, d.availability_status, d.exclusion_reason, d.peg_reason_codes "
+        "from mart.strategy_decisions d where d.strategy_run_id = (select strategy_run_id from chosen) order by d.issuer_id",
         (run_id,),
     ).fetchall()
     cells = []
@@ -203,25 +188,23 @@ def classify_question(
     cells_by_column: Mapping[str, Iterable[Cell]],
     funds: Iterable[str] = (),
 ) -> dict[str, Any]:
-    subjects = funds if requirement.scope is QuestionScope.FUND else issuers
-    expected = tuple(dict.fromkeys(subjects))
+    expected = tuple(dict.fromkeys(funds if requirement.scope is QuestionScope.FUND else issuers))
     columns = [column for column in requirement.columns if column.applies_to(universe_id)]
+    col_keys = [_column_key(column) for column in columns]
     entry: dict[str, Any] = {
         "text": QUESTION_TEXT[requirement.question],
         "tracking_issue": requirement.tracking_issue,
         "scope": requirement.scope.value,
         "denominator": len(expected),
-        "column": None,
-        "columns": [_column_key(column) for column in columns],
+        "column": col_keys[0] if col_keys else None,
+        "columns": col_keys,
         "answered": 0,
         "unavailable": {},
-        "missing": 0,
+        "missing": len(expected) if not col_keys else 0,
     }
     if not columns:
-        entry["missing"] = len(expected)
         return entry
-    entry["column"] = entry["columns"][0]
-    observed = [{cell.subject_id: cell for cell in cells_by_column.get(_column_key(column), ())} for column in columns]
+    observed = [{cell.subject_id: cell for cell in cells_by_column.get(key, ())} for key in col_keys]
     unavailable: Counter[str] = Counter()
     for subject_id in expected:
         cells = [lookup[subject_id] for lookup in observed if subject_id in lookup]
@@ -243,7 +226,6 @@ def compile_report(connection: Connection[Any], *, universe: str, executed_at: d
     gppe = gppe_cells(connection, head.run_id)
     issuers = [cell.subject_id for cell in gppe]
     funds_observed = fund_cells(connection, head.run_id)
-    funds = [cell.subject_id for cell in funds_observed]
     cells_by_column = {
         "mart.topt_gppe_results.gppe": gppe,
         "mart.strategy_decisions.peg": peg_cells(connection, run_id=head.run_id)
@@ -254,12 +236,6 @@ def compile_report(connection: Connection[Any], *, universe: str, executed_at: d
         "mart.fund_virtual_company.weighted_valuation_gap": funds_observed,
         "mart.issuer_theme_purity.theme_share": theme_purity_cells(connection, head.run_id),
     }
-    questions = {
-        req.question.value: classify_question(
-            req, universe_id=head.universe_id, issuers=issuers, funds=funds, cells_by_column=cells_by_column
-        )
-        for req in QUESTION_REQUIREMENTS
-    }
     return {
         "universe": universe,
         "universe_id": head.universe_id,
@@ -269,7 +245,16 @@ def compile_report(connection: Connection[Any], *, universe: str, executed_at: d
         "requirements_sha256": QUESTION_REQUIREMENTS_SHA256,
         "generated_at": executed_at.astimezone(UTC).isoformat(),
         "denominator": len(issuers),
-        "questions": questions,
+        "questions": {
+            req.question.value: classify_question(
+                req,
+                universe_id=head.universe_id,
+                issuers=issuers,
+                funds=[c.subject_id for c in funds_observed],
+                cells_by_column=cells_by_column,
+            )
+            for req in QUESTION_REQUIREMENTS
+        },
     }
 
 
@@ -340,11 +325,10 @@ def summary_line(report: Mapping[str, Any]) -> str:
     parts = []
     for question, entry in report["questions"].items():
         unavailable_map = entry["unavailable"] or {}
-        unavailable = sum(unavailable_map.values())
         exceeded = int(unavailable_map.get("context_window_exceeded", 0))
         exceeded_note = f" ({exceeded} >1M context_window_exceeded)" if exceeded > 0 else ""
         parts.append(
             f"{question}: {entry['answered']}/{entry['denominator']} answered, "
-            f"{unavailable} unavailable{exceeded_note}, {entry['missing']} missing"
+            f"{sum(unavailable_map.values())} unavailable{exceeded_note}, {entry['missing']} missing"
         )
     return f"{report['universe_id']} @ {report['cutoff']}: " + "; ".join(parts)

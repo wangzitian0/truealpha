@@ -1,8 +1,9 @@
-"""Post-deploy canary oracles (#648): judge the newest canary run by named expectations."""
+"""Judge newest canary run against invariants (#648)."""
 
 from __future__ import annotations
 
 import argparse
+import importlib.metadata
 import re
 import sys
 from decimal import Decimal
@@ -12,8 +13,9 @@ import psycopg
 from truealpha_contracts.environment_contract import load_environment_contract
 from truealpha_contracts.universes import id_prefix_like, universe_with_role
 
-from data_engine import release_identity
+from data_engine import raw_store, release_identity
 from data_engine.config import settings
+from data_engine.datahub._helpers import CAPTURE_OBSERVATION_JOIN
 from data_engine.datahub.production_topt.source_registrations import registered_semantic_types
 from data_engine.datahub.production_topt.universe_plane import UNIVERSE_SOURCES
 
@@ -21,9 +23,7 @@ _WHEEL_PIN = re.compile(r"/releases/download/v(?P<version>\d+\.\d+\.\d+)/infra2_
 
 
 def pinned_infra2_sdk() -> str:
-    from importlib.metadata import requires
-
-    for requirement in requires("truealpha-runtime") or []:
+    for requirement in importlib.metadata.requires("truealpha-runtime") or []:
         if re.split(r"[\s\[@;]", requirement, maxsplit=1)[0] == "infra2-sdk":
             match = _WHEEL_PIN.search(requirement)
             if match is None:
@@ -35,18 +35,19 @@ def pinned_infra2_sdk() -> str:
 def expected_canary_snapshot() -> tuple[int, int, int]:
     static_members = UNIVERSE_SOURCES["canary"].static_members
     expected_instruments = len(static_members)
-    expected_observations = expected_instruments * len(registered_semantic_types())
     issuers_by_ticker = {member.ticker: member.issuer_id for member in load_environment_contract().sentinels}
-    expected_issuers = len({issuers_by_ticker.get(t, t) for t in static_members})
-    return (expected_issuers, expected_instruments, expected_observations)
+    return (
+        len({issuers_by_ticker.get(ticker, ticker) for ticker in static_members}),
+        expected_instruments,
+        expected_instruments * len(registered_semantic_types()),
+    )
 
 
 def failures_for_run(connection: psycopg.Connection, run_id: str) -> list[str]:
     bad = image_content_failures()
-
     status = connection.execute(
-        "select obligation_count, success_count + unchanged_count, failed_count, complete"
-        " from mart.topt_capture_status where run_id = %s",
+        "select obligation_count, success_count + unchanged_count, failed_count, complete "
+        "from mart.topt_capture_status where run_id = %s",
         (run_id,),
     ).fetchone()
     if status is None:
@@ -60,36 +61,25 @@ def failures_for_run(connection: psycopg.Connection, run_id: str) -> list[str]:
         (run_id,),
     ).fetchone()
     expected_snapshot = expected_canary_snapshot()
-    expected_instruments = expected_snapshot[1]
     if snapshot is None:
         bad.append("no frozen snapshot")
     elif snapshot != expected_snapshot:
         bad.append(f"snapshot counts {snapshot} != {expected_snapshot}")
 
     alphabet = connection.execute(
-        """
-        with payload as (
-            select observation.semantic_type, payload.normalized_payload as body
-            from raw.capture_obligations obligation
-            join raw.capture_obligation_results done on done.capture_obligation_id = obligation.obligation_id
-            join raw.capture_attempt_results attempt on attempt.attempt_id = done.final_attempt_id
-            join staging.capture_normalized_observations observation
-              on observation.source_vintage_id = coalesce(attempt.source_vintage_id, attempt.reused_source_vintage_id)
-             and observation.subject_id = obligation.subject_id
-             and observation.semantic_type = regexp_replace(obligation.capture_requirement_id, ':v1$', '')
-            join staging.capture_observation_payloads payload on payload.observation_id = observation.observation_id
-            where obligation.run_id = %s and obligation.subject_id = 'listing:xnas:googl'
-        )
-        select result.current_ps,
-               (select (body->>'revenue')::numeric from payload where semantic_type = 'financial-fact' limit 1),
-               (select (body->>'shares_outstanding')::numeric from payload where semantic_type = 'financial-fact' limit 1),
-               (select (body->>'close')::numeric from payload where semantic_type = 'market-price' limit 1)
-        from mart.topt_core_results result
-        where result.run_id = %s and (
-            result.issuer_id = 'issuer:cik:0001652044'
-            or result.issuer_id::text = (select staging.entity_resolve('cik', '0001652044', current_date, now())::text)
-        )
-        """,
+        "with payload as (select o.semantic_type, p.normalized_payload as body from raw.capture_obligations ob "
+        "join raw.capture_obligation_results done on done.capture_obligation_id = ob.obligation_id "
+        "join raw.capture_attempt_results attempt on attempt.attempt_id = done.final_attempt_id "
+        "join staging.capture_normalized_observations o on o.source_vintage_id = coalesce(attempt.source_vintage_id, attempt.reused_source_vintage_id) "
+        "and o.subject_id = ob.subject_id and o.semantic_type = regexp_replace(ob.capture_requirement_id, ':v1$', '') "
+        "join staging.capture_observation_payloads p on p.observation_id = o.observation_id "
+        "where ob.run_id = %s and ob.subject_id = 'listing:xnas:googl') "
+        "select result.current_ps, "
+        "(select (body->>'revenue')::numeric from payload where semantic_type = 'financial-fact' limit 1), "
+        "(select (body->>'shares_outstanding')::numeric from payload where semantic_type = 'financial-fact' limit 1), "
+        "(select (body->>'close')::numeric from payload where semantic_type = 'market-price' limit 1) "
+        "from mart.topt_core_results result where result.run_id = %s and (result.issuer_id = 'issuer:cik:0001652044' "
+        "or result.issuer_id::text = (select staging.entity_resolve('cik', '0001652044', current_date, now())::text))",
         (run_id, run_id),
     ).fetchone()
     if alphabet is None:
@@ -102,20 +92,18 @@ def failures_for_run(connection: psycopg.Connection, run_id: str) -> list[str]:
             recomputed = close * shares / revenue
             if recomputed == 0 or abs(current_ps - recomputed) / recomputed > Decimal("0.01"):
                 bad.append(
-                    f"Alphabet current_ps {current_ps} != recomputed {recomputed} "
-                    "from its own payloads (dual-class double count, #705)"
+                    f"Alphabet current_ps {current_ps} != recomputed {recomputed} from its own payloads (dual-class double count, #705)"
                 )
 
     report = connection.execute(
-        "select payload->'factor_availability'->'gross_profit_per_employee'->>'universe_subjects'"
-        " from mart.datahub_quality_report where run_id = %s"
-        " order by created_at desc limit 1",
+        "select payload->'factor_availability'->'gross_profit_per_employee'->>'universe_subjects' "
+        "from mart.datahub_quality_report where run_id = %s order by created_at desc limit 1",
         (run_id,),
     ).fetchone()
     if report is None or report[0] is None:
         bad.append("quality report missing factor_availability (#644)")
-    elif int(report[0]) != expected_instruments:
-        bad.append(f"factor_availability universe_subjects {report[0]} != {expected_instruments}")
+    elif int(report[0]) != expected_snapshot[1]:
+        bad.append(f"factor_availability universe_subjects {report[0]} != {expected_snapshot[1]}")
 
     bad.extend(_infra_failures(connection, run_id))
     return bad
@@ -124,69 +112,42 @@ def failures_for_run(connection: psycopg.Connection, run_id: str) -> list[str]:
 def image_content_failures() -> list[str]:
     bad: list[str] = []
     try:
-        from importlib.metadata import version as _installed
-
-        loaded = _installed("infra2-sdk")
-        pinned = pinned_infra2_sdk()
+        loaded, pinned = importlib.metadata.version("infra2-sdk"), pinned_infra2_sdk()
     except Exception as error:  # noqa: BLE001
         bad.append(f"infra2-sdk or its pin is not readable in the deployed image: {type(error).__name__}: {error}")
     else:
         if loaded != pinned:
             bad.append(f"infra2-sdk {loaded} loaded, truealpha-runtime pins {pinned}")
-
     if not release_identity.ENV_MANIFEST_PATH.is_file():
         bad.append(
-            f"the deployed image does not ship {release_identity.ENV_MANIFEST_PATH}: infra2's entrypoint "
-            f"cannot boot-validate this environment (#759, #784)"
+            f"the deployed image does not ship {release_identity.ENV_MANIFEST_PATH}: infra2's entrypoint cannot boot-validate this environment (#759, #784)"
         )
     try:
         release_identity.measure()
     except Exception as error:  # noqa: BLE001
         bad.append(f"the deployed image cannot measure its release identity: {error}")
-
     return bad
 
 
 def _infra_failures(connection: psycopg.Connection, run_id: str) -> list[str]:
-    bad: list[str] = []
     row = connection.execute(
-        """
-        select f.object_uri, f.payload_sha256, f.byte_length, f.content_type
-        from staging.capture_normalized_observations o
-        join raw.capture_obligations ob on ob.obligation_id = o.capture_obligation_id
-        join raw.capture_source_vintages v on v.source_vintage_id = o.source_vintage_id
-        join raw.fetches f on f.id = v.raw_fetch_id
-        where ob.run_id = %s and f.object_uri is not null
-        order by f.id desc limit 1
-        """,
+        f"select f.object_uri, f.payload_sha256, f.byte_length, f.content_type {CAPTURE_OBSERVATION_JOIN} "
+        "join raw.capture_source_vintages v on v.source_vintage_id = o.source_vintage_id "
+        "join raw.fetches f on f.id = v.raw_fetch_id where ob.run_id = %s and f.object_uri is not null order by f.id desc limit 1",
         (run_id,),
     ).fetchone()
     if row is None:
         return ["no fetch with an object_uri in this run — nothing to dereference (#531)"]
     object_uri, expected_sha, expected_len, content_type = row
     try:
-        from truealpha_contracts.models import RawObjectRef
-        from truealpha_runtime.storage import S3RawObjectStore
-
-        bucket, _, key = object_uri.removeprefix("s3://").partition("/")
-        payload = S3RawObjectStore().get(
-            RawObjectRef(
-                bucket=bucket,
-                key=key,
-                sha256=expected_sha,
-                byte_length=int(expected_len or 0),
-                content_type=content_type or "application/octet-stream",
-            )
-        )
+        payload = raw_store.get_uri_payload(object_uri, expected_sha, expected_len, content_type)
     except Exception as error:  # noqa: BLE001
-        bad.append(f"object storage unreachable or misconfigured: {type(error).__name__} ({object_uri})")
-    else:
-        actual = sha256(payload).hexdigest()
-        if actual != expected_sha:
-            bad.append(f"object bytes do not match the recorded checksum for {object_uri}")
-        elif expected_len is not None and len(payload) != int(expected_len):
-            bad.append(f"object byte_length {len(payload)} != recorded {expected_len} for {object_uri}")
-    return bad
+        return [f"object storage unreachable or misconfigured: {type(error).__name__} ({object_uri})"]
+    if sha256(payload).hexdigest() != expected_sha:
+        return [f"object bytes do not match the recorded checksum for {object_uri}"]
+    if expected_len is not None and len(payload) != int(expected_len):
+        return [f"object byte_length {len(payload)} != recorded {expected_len} for {object_uri}"]
+    return []
 
 
 def main() -> int:

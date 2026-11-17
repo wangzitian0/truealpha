@@ -92,11 +92,11 @@ export const E2E_PRINCIPALS = [
 /** Resolved from this file, not from the process cwd, so the seeder works
  * whether it is invoked from `apps/app-web` or the repository root. */
 const CANON_URL = new URL(
-  "../../../common/contracts/conformance/strategy_run_parity.json",
+  "../../../common/contracts/tests/fixtures/strategy_run_parity.json",
   import.meta.url,
 );
 const PREVIEW_URL = new URL(
-  "../../../common/contracts/src/truealpha_contracts/data/strategy_run_preview.v1.json",
+  "../../../common/contracts/tests/fixtures/strategy_run_preview.v1.json",
   import.meta.url,
 );
 const PREVIEW_CUTOFF = "2026-03-31T23:59:59Z";

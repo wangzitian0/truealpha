@@ -47,60 +47,15 @@ MIGRATIONS = REPO_ROOT / "db/migrations"
 #: Collisions that predate the guard. Frozen, never extended — a new number in
 #: here means two lanes collided again and one of them must renumber before
 #: merge, which is cheap while the migration is unreleased and expensive after.
-KNOWN_COLLISIONS = {"0019", "0029", "0030", "0031", "0037", "0039", "0040"}
+KNOWN_COLLISIONS: set[str] = set()
 
-#: Every file of the sequential form, frozen at the moment the form was retired
-#: (#731). The chain is closed on both sides: a sequential-form file not in this
-#: tuple is a new one and is red (that includes a third `0039_*.sql` under a known
-#: collision key); a name in this tuple missing from disk is a deployed migration
-#: that was renamed or deleted, which reorders every environment that ran it, and
-#: is red until the entry is removed here on purpose.
+#: Every file of the sequential form, frozen at the squashed baseline.
+#: New migrations take `YYYYMMDDTHHMM_<lane>_<slug>.sql` and run after `0004_app.sql`.
 LEGACY_NAMES: tuple[str, ...] = (
-    "0001_schemas.sql",
-    "0002_staging_core.sql",
-    "0003_ops.sql",
-    "0004_runtime_contracts.sql",
-    "0005_fund_holding_dual_lines.sql",
-    "0006_bitemporal_lineage.sql",
-    "0017_contract_objects.sql",
-    "0018_usage_review_contracts.sql",
-    "0019_filing_documents_stale_shape_cleanup.sql",
-    "0019_mvp_filing_document.sql",
-    "0020_headcount_extraction.sql",
-    "0021_mvp_medium_domains.sql",
-    "0022_app_identity.sql",
-    "0023_capture_control.sql",
-    "0024_access_policy_bindings.sql",
-    "0025_manual_topt_capture_reads.sql",
-    "0026_production_topt_core.sql",
-    "0027_core_strategy_replay_mart.sql",
-    "0028_evidence_graph.sql",
-    "0029_datahub_quality_report.sql",
-    "0029_principal_credentials.sql",
-    "0030_converge_topt_gppe_uniform.sql",
-    "0030_conversations.sql",
-    "0031_documents.sql",
-    "0031_strategy_run_snapshot_id.sql",
-    "0032_strategy_backtest_inputs.sql",
-    "0033_entity_display_resolution.sql",
-    "0034_pipeline_trigger_requests.sql",
-    "0035_strategy_input_coverage.sql",
-    "0036_operating_branch_insurance.sql",
-    "0037_issuer_cik_predecessors.sql",
-    "0037_issuer_headcount_facts.sql",
-    "0038_accepted_rulesets.sql",
-    "0039_peg_module_1.sql",
-    "0039_semantic_freshness_windows.sql",
-    "0040_peg_rank.sql",
-    "0040_topt_core_result_periods.sql",
-    "0041_etf_universe_plane.sql",
-    "0042_generalize_core_snapshot_invariants.sql",
-    "0043_strategy_input_fiscal_period.sql",
-    "0044_canonical_sha256_search_path.sql",
-    "0045_canary_trigger_job.sql",
-    "0046_fund_holdings_mart.sql",
-    "0047_fund_holdings_valuation.sql",
-    "0048_per_isin_ticker_crosswalk.sql",
+    "0001_raw.sql",
+    "0002_staging.sql",
+    "0003_mart.sql",
+    "0004_app.sql",
 )
 
 #: The workspace names that prefix issue and PR titles (AGENTS.md rule 3), so a

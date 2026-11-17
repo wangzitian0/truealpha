@@ -1,14 +1,3 @@
-/**
- * Universe provenance for the Operate world (#539 data-driven universes).
- *
- * Every governed universe head (kind: the lane name of a universe record), its version
- * history, and the newest constituent snapshot WITH raw lineage — ticker rows
- * join back to the exact bytes the index operator answered (`raw.fetches`
- * sha256 + object URI), so "where did this universe come from" is a click,
- * not an investigation. Read-only through app_ops_reader, like every loader
- * in this directory.
- */
-
 import type { PoolClient } from "pg";
 import { laneNames, universeOfLane } from "@/contracts/universes";
 import { withOpsReader } from "./ops";

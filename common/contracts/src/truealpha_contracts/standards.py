@@ -74,55 +74,66 @@ CONFIDENCE_POLICIES: MappingProxyType[str, MappingProxyType[str, Decimal]] = Map
     }
 )
 
+
+def _std(
+    metric: str,
+    defn: str,
+    rule: str,
+    pol: str,
+    src: str,
+    tbl: str,
+    recon: ReconciliationPolicy,
+    adapter: str,
+    withdrawn: tuple[str, ...] = (),
+) -> MetricStandard:
+    return MetricStandard(
+        metric=metric,
+        definition=defn,
+        acceptance_rule=rule,
+        kind=StandardKind.HARD,
+        evidence=EvidenceRequirement.FILING_SPAN,
+        confidence_policy_id=pol,
+        max_age_days=400,
+        evidence_bearing_sources=(src,),
+        plane=FactPlane(
+            table=tbl,
+            issuer_column="cik",
+            reconciliation_policy=recon,
+            withdrawn_extractors=withdrawn,
+        ),
+        adapter=adapter,
+    )
+
+
 STANDARDS: MappingProxyType[str, MetricStandard] = MappingProxyType(
     {
-        "employees_total": MetricStandard(
-            metric="employees_total",
-            definition=(
-                "Company-wide total employees as stated in the issuer's latest annual filing "
-                "(10-K or 20-F), as of the date the filing states."
-            ),
-            acceptance_rule=(
-                "One company-wide total. Departmental, segment, geographic, part-time, "
-                "temporary or contractor counts are not the value; a filing that states "
-                "several distinct company-wide totals needs selection, not a guess."
-            ),
-            kind=StandardKind.HARD,
-            evidence=EvidenceRequirement.FILING_SPAN,
-            confidence_policy_id="headcount-confidence:v1",
-            max_age_days=400,
-            evidence_bearing_sources=("10k-extraction",),
-            plane=FactPlane(
-                table="staging.issuer_headcount_facts",
-                issuer_column="cik",
-                reconciliation_policy=HEADCOUNT_RECONCILIATION_POLICY,
-            ),
-            adapter="data_engine.datahub.standards.filing_extraction:extract_headcount",
+        "employees_total": _std(
+            "employees_total",
+            "Company-wide total employees as stated in the issuer's latest annual filing "
+            "(10-K or 20-F), as of the date the filing states.",
+            "One company-wide total. Departmental, segment, geographic, part-time, "
+            "temporary or contractor counts are not the value; a filing that states "
+            "several distinct company-wide totals needs selection, not a guess.",
+            "headcount-confidence:v1",
+            "10k-extraction",
+            "staging.issuer_headcount_facts",
+            HEADCOUNT_RECONCILIATION_POLICY,
+            "data_engine.datahub.standards.filing_extraction:extract_headcount",
         ),
-        "segment_revenue": MetricStandard(
-            metric="segment_revenue",
-            definition=(
-                "Revenue attributed to one reportable segment, as the issuer's latest annual "
-                "filing states it in its own segment table."
-            ),
-            acceptance_rule=(
-                "The parts, not a part. A segment set is the value only when it accounts for "
-                "the issuer's consolidated revenue: a missed segment silently raises every "
-                "remaining segment's share, so a set that does not balance is refused rather "
-                "than ranked. Intersegment revenue is excluded, not summed."
-            ),
-            kind=StandardKind.HARD,
-            evidence=EvidenceRequirement.FILING_SPAN,
-            confidence_policy_id="segment-revenue-confidence:v1",
-            max_age_days=400,
-            evidence_bearing_sources=("10k-segment-extraction",),
-            plane=FactPlane(
-                table="staging.issuer_segment_revenue_facts",
-                issuer_column="cik",
-                reconciliation_policy=SEGMENT_REVENUE_RECONCILIATION_POLICY,
-                withdrawn_extractors=("rule:single-segment:v1", "rule:single-segment:v2", "rule:single-segment:v3"),
-            ),
-            adapter="data_engine.datahub.standards.segment_extraction:extract_segment_revenue",
+        "segment_revenue": _std(
+            "segment_revenue",
+            "Revenue attributed to one reportable segment, as the issuer's latest annual "
+            "filing states it in its own segment table.",
+            "The parts, not a part. A segment set is the value only when it accounts for "
+            "the issuer's consolidated revenue: a missed segment silently raises every "
+            "remaining segment's share, so a set that does not balance is refused rather "
+            "than ranked. Intersegment revenue is excluded, not summed.",
+            "segment-revenue-confidence:v1",
+            "10k-segment-extraction",
+            "staging.issuer_segment_revenue_facts",
+            SEGMENT_REVENUE_RECONCILIATION_POLICY,
+            "data_engine.datahub.standards.segment_extraction:extract_segment_revenue",
+            withdrawn=("rule:single-segment:v1", "rule:single-segment:v2", "rule:single-segment:v3"),
         ),
     }
 )

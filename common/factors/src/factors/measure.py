@@ -1,4 +1,4 @@
-"""Dimensional arithmetic over typed Measure values."""
+"""Dimensional arithmetic for Measure values."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ DEFAULT_REPORTING_CURRENCY = "USD"
 
 
 class UnitMismatchError(ValueError):
-    """Raised when two measures cannot be multiplied because their units do not cancel."""
+    """Incompatible measure units."""
 
     def __init__(self, message: str = UNIT_MISMATCH_REASON) -> None:
         super().__init__(message)
@@ -34,7 +34,6 @@ def default_unit_for_metric(
     *,
     currency: str = DEFAULT_REPORTING_CURRENCY,
 ) -> MeasureUnit:
-    """Derive the canonical MeasureUnit for a registered metric and subject."""
     if unit_family is UnitFamily.PER_SHARE:
         return PerUnit(currency=currency, instrument_id=subject)
     if unit_family is UnitFamily.CURRENCY:
@@ -51,7 +50,6 @@ def measure_for_input_key(
     period: FiscalPeriod | None = None,
     knowable_at: datetime | None = None,
 ) -> Measure:
-    """Wrap a scalar input value in its canonical Measure for the given strategy input key."""
     metric = INPUT_KEY_ALIASES.get(input_key, input_key)
     spec = METRICS.get(metric)
     unit_family = spec.unit_family if spec is not None else UnitFamily.COUNT
@@ -65,39 +63,28 @@ def measure_for_input_key(
     )
 
 
-def _combine_knowable_at(left: datetime | None, right: datetime | None) -> datetime | None:
-    if left is not None and right is not None:
-        return max(left, right)
-    return left if left is not None else right
-
-
-def _combine_period(left: FiscalPeriod | None, right: FiscalPeriod | None) -> FiscalPeriod | None:
-    return left if left is not None else right
-
-
 def times(left: Measure, right: Measure) -> Measure:
-    """Multiply PerUnit(currency, instrument_id) and Units(instrument_id) into Money(currency).
-
-    Raises UnitMismatchError when the unit pair is not (PerUnit, Units) or when
-    instrument_id differs between the two operands.
-    """
+    """Multiply PerUnit and Units into Money."""
     if isinstance(left.unit, PerUnit) and isinstance(right.unit, Units):
-        per_unit = left.unit
-        units = right.unit
+        per_unit, units = left.unit, right.unit
     elif isinstance(left.unit, Units) and isinstance(right.unit, PerUnit):
-        per_unit = right.unit
-        units = left.unit
+        per_unit, units = right.unit, left.unit
     else:
         raise UnitMismatchError(UNIT_MISMATCH_REASON)
 
     if per_unit.instrument_id != units.instrument_id:
         raise UnitMismatchError(UNIT_MISMATCH_REASON)
 
+    known = (
+        max(left.knowable_at, right.knowable_at)
+        if left.knowable_at is not None and right.knowable_at is not None
+        else (left.knowable_at if left.knowable_at is not None else right.knowable_at)
+    )
     return Measure(
         value=left.value * right.value,
         unit=Money(currency=per_unit.currency),
-        period=_combine_period(left.period, right.period),
-        knowable_at=_combine_knowable_at(left.knowable_at, right.knowable_at),
+        period=left.period if left.period is not None else right.period,
+        knowable_at=known,
         subject=left.subject or right.subject,
     )
 

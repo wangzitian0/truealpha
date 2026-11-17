@@ -1,4 +1,4 @@
-"""Shared primitives used by both base and composite factors — not reimplemented per module."""
+"""Shared primitives for base and composite factors."""
 
 from factors.shared import entity_resolution, extraction
 

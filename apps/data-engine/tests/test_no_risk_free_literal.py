@@ -47,7 +47,7 @@ SCANNED_ROOTS = (
 )
 #: The data files of the contracts. The golden decision set holds explicit rates for the known-answer replay.
 DATA_ROOT = REPO / "common" / "contracts" / "src" / "truealpha_contracts" / "data"
-ALLOWED_DATA_PATHS = {("large_model_value_v0_definition_1_0_0.json", ("golden_decision_set", "risk_free_rates"))}
+ALLOWED_DATA_PATHS: set[tuple[str, tuple[str, ...]]] = set()
 _NAME = re.compile(r"risk_?free|(^|_)t_?bills?(\d|_|$)|treasury_(bill_)?rate|(^|_)rf_?rate", re.IGNORECASE)
 #: Calls that take the rate. A literal argument, zero too, would hand them a number the code made up.
 CONSUMERS = {"GppeV0Definition", "evaluate_cutoff", "run_strategy_replay_for_cutoff"}

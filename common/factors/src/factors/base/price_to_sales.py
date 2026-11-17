@@ -1,4 +1,4 @@
-"""Feeder: issuer price-to-sales (P/S), `(price * shares_outstanding) / revenue`."""
+"""Feeder: issuer price-to-sales (P/S)."""
 
 from collections.abc import Sequence
 from datetime import datetime

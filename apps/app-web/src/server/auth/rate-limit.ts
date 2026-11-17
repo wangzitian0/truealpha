@@ -1,15 +1,4 @@
-/**
- * #368: per-IP login rate limiting — a fixed-window in-memory counter.
- *
- * Known limitation: this is process-local. It resets on restart and does
- * not share state across multiple app-web instances. That is an accepted
- * gap for the current single-instance deployment (docker-compose, one
- * `app-web` container); moving to a shared store (e.g. Redis) is follow-up
- * work if/when app-web is horizontally scaled, not blocking for v1.
- */
-
 export interface RateLimiter {
-  /** Records an attempt for `key` and returns whether it is allowed. */
   attempt(key: string): boolean;
 }
 
@@ -38,5 +27,4 @@ export function createFixedWindowRateLimiter(
   };
 }
 
-/** Process-wide singleton for the login route: 10 attempts per IP per 5 minutes. */
 export const loginRateLimiter = createFixedWindowRateLimiter(10, 5 * 60_000);

@@ -167,6 +167,13 @@ def _git_cmd(run: GitRun, repo: str, *args: str) -> subprocess.CompletedProcess[
     return run(["git", "-C", repo, *args], capture_output=True, text=True, check=False)
 
 
+def _git_output(run: GitRun, repo: str, error: str, *args: str) -> str:
+    result = _git_cmd(run, repo, *args)
+    if result.returncode != 0:
+        raise VerdictCheckFailure(f"{error}: {result.stderr.strip()[:120]}")
+    return result.stdout
+
+
 def git_release_reader(
     repo: str = ".",
     run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
@@ -179,15 +186,11 @@ def git_release_reader(
         commit = resolved.stdout.strip()
         if resolved.returncode != 0 or not commit:
             raise VerdictCheckFailure(f"{ref!r} is not a commit in this checkout (fetch tags)")
-        listed = _git_cmd(run, repo, "ls-tree", "--name-only", commit, "--", path)
-        if listed.returncode != 0:
-            raise VerdictCheckFailure(f"cannot list {ref}'s tree: {listed.stderr.strip()[:120]}")
-        if not listed.stdout.strip():
+        if not _git_output(
+            run, repo, f"cannot list {ref}'s tree", "ls-tree", "--name-only", commit, "--", path
+        ).strip():
             return None
-        shown = _git_cmd(run, repo, "show", f"{commit}:{path}")
-        if shown.returncode != 0:
-            raise VerdictCheckFailure(f"cannot read {path} at {ref}: {shown.stderr.strip()[:120]}")
-        return shown.stdout
+        return _git_output(run, repo, f"cannot read {path} at {ref}", "show", f"{commit}:{path}")
 
     return read
 
@@ -238,23 +241,17 @@ def first_declared_at(
     run: GitRun = subprocess.run,
 ) -> datetime | None:
     try:
-        log = run(
-            [
-                "git",
-                "-C",
-                repo,
-                "log",
-                "--reverse",
-                "--format=%H %cI",
-                "-S",
-                f'"{check}"',
-                release,
-                "--",
-                RELEASE_EXPECTATIONS_PATH,
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
+        log = _git_cmd(
+            run,
+            repo,
+            "log",
+            "--reverse",
+            "--format=%H %cI",
+            "-S",
+            f'"{check}"',
+            release,
+            "--",
+            RELEASE_EXPECTATIONS_PATH,
         )
         lines = log.stdout.split("\n") if log.returncode == 0 else []
         first = lines[0].split() if lines and lines[0].strip() else []
@@ -307,19 +304,14 @@ def judge(
                 f"{name}: newest verdict is dated {verdict.ran_at.isoformat()} ({-age:.1f} h in the future) — "
                 f"a run launched with a future tick masks every real one, so this verdict cannot vouch for today"
             )
-            continue
-        if verdict.ok is None:
-            stale = age > expectation.max_age_hours
-            if stale:
+        elif verdict.ok is None:
+            if age > expectation.max_age_hours:
                 failures.append(_stale_message(name, verdict, age, expectation))
-                continue
-            if notes is not None:
+            elif notes is not None:
                 notes.append(f"{name}: pending ({verdict.summary})")
-            continue
-        if not verdict.ok:
+        elif not verdict.ok:
             failures.append(f"{name}: red since {verdict.ran_at.isoformat()} ({age:.1f} h ago) — {verdict.summary}")
-            continue
-        if age > expectation.max_age_hours:
+        elif age > expectation.max_age_hours:
             failures.append(_stale_message(name, verdict, age, expectation))
     return failures
 

@@ -1,11 +1,3 @@
-/**
- * #373 / #1360: Owner-scoped research document listing (`app.research_documents`).
- *
- * Lists only the authenticated principal's own documents (RLS-enforced; tombstoned
- * documents are excluded by the repository query). Supports creating plain-text
- * notes and lists exported ranking and entity cards saved by `/research/api/cards/export`.
- */
-
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getServerPrincipal } from "@/server/auth/request-context";

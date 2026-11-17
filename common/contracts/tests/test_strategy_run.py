@@ -6,6 +6,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
+from fixtures.strategy_run_fixture import FixtureStrategyRunRepository
 from pydantic import ValidationError
 from truealpha_contracts.access import AccessContext, AuthenticationMethod, PrincipalKind
 from truealpha_contracts.research import ValuationTier
@@ -15,9 +16,8 @@ from truealpha_contracts.strategy_run import (
     StrategyRunReport,
     StrategyRunUnavailable,
 )
-from truealpha_contracts.strategy_run_fixture import FixtureStrategyRunRepository
 
-FIXTURE_PATH = Path(__file__).parents[1] / "src" / "truealpha_contracts" / "data" / "strategy_run_preview.v1.json"
+FIXTURE_PATH = Path(__file__).parent / "fixtures" / "strategy_run_preview.v1.json"
 
 
 def _context(*, expired: bool = False) -> AccessContext:
@@ -151,8 +151,8 @@ def test_fixture_repository_does_not_evaluate_context() -> None:
 def test_fixture_repository_fails_closed_on_missing_fixture(monkeypatch: pytest.MonkeyPatch) -> None:
     """A missing packaged fixture must not crash the caller (#351 review)."""
     monkeypatch.setattr(
-        "truealpha_contracts.strategy_run_fixture.resources.files",
-        lambda _package: _MissingAnchor(),
+        "fixtures.strategy_run_fixture._load_preview_bytes",
+        lambda: (_ for _ in ()).throw(FileNotFoundError("strategy_run_preview.v1.json")),
     )
     repository = FixtureStrategyRunRepository()
     result = repository.get_latest(strategy_id="large_model_value_v0", context=_context())
@@ -163,11 +163,10 @@ def test_fixture_repository_fails_closed_on_missing_fixture(monkeypatch: pytest.
 
 def test_fixture_repository_fails_closed_on_missing_package(monkeypatch: pytest.MonkeyPatch) -> None:
     """A mis-packaged install (data package itself absent) must not crash the caller (#356 review)."""
-
-    def _raise_module_not_found(_package: str) -> object:
-        raise ModuleNotFoundError("truealpha_contracts.data")
-
-    monkeypatch.setattr("truealpha_contracts.strategy_run_fixture.resources.files", _raise_module_not_found)
+    monkeypatch.setattr(
+        "fixtures.strategy_run_fixture._load_preview_bytes",
+        lambda: (_ for _ in ()).throw(ModuleNotFoundError("fixtures")),
+    )
     repository = FixtureStrategyRunRepository()
     result = repository.get_latest(strategy_id="large_model_value_v0", context=_context())
 
@@ -177,10 +176,7 @@ def test_fixture_repository_fails_closed_on_missing_package(monkeypatch: pytest.
 
 def test_fixture_repository_fails_closed_on_corrupt_json(monkeypatch: pytest.MonkeyPatch) -> None:
     """Unparsable or schema-drifted fixture bytes must not crash the caller (#351 review)."""
-    monkeypatch.setattr(
-        "truealpha_contracts.strategy_run_fixture.resources.files",
-        lambda _package: _CorruptAnchor(),
-    )
+    monkeypatch.setattr("fixtures.strategy_run_fixture._load_preview_bytes", lambda: b"{not-json")
     repository = FixtureStrategyRunRepository()
     result = repository.get_latest(strategy_id="large_model_value_v0", context=_context())
 

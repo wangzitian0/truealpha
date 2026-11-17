@@ -7,7 +7,6 @@ import json
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
-from importlib import resources
 from pathlib import Path
 from typing import Any
 
@@ -17,14 +16,9 @@ from factors.panel import IssuerClass, uniform_tree_pins
 from truealpha_contracts.strategy import LargeModelValueV0Definition
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
-_FIXTURE_PACKAGE = "truealpha_contracts.data"
-_FIXTURE_NAME = "large_model_value_v0_definition_1_0_0.json"
+_GOLDEN_FIXTURE = REPOSITORY_ROOT / "common/contracts/tests/fixtures/large_model_value_v0_golden_1_0_0.json"
 CORPUS_SHA256 = "004e716a11f1a9604275d2da5b13160676411fbb8fc7846b25489b43aef31496"
 STRATEGY_ID = "large_model_value_v0"
-
-
-def _opt_str(val: Decimal | None) -> str | None:
-    return None if val is None else str(val)
 
 
 @dataclass(frozen=True)
@@ -51,21 +45,24 @@ class Decision:
 
     def to_json(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
-            "issuer_id": self.issuer_id,
-            "cutoff_at": self.cutoff_at,
-            "capital_adjusted_labor_efficiency": _opt_str(self.capital_adjusted_labor_efficiency),
-            "tier": self.tier,
-            "current_price_to_sales": _opt_str(self.current_price_to_sales),
-            "target_price_to_sales": _opt_str(self.target_price_to_sales),
-            "valuation_gap": _opt_str(self.valuation_gap),
-            "eligible": self.eligible,
-            "outcome": self.outcome,
-            "exclusion_reason": self.exclusion_reason,
-            "rank": self.rank,
-            "target_weight": _opt_str(self.target_weight),
-            "confidence": _opt_str(self.confidence),
-            "peg": _opt_str(self.peg),
-            "peg_rank": self.peg_rank,
+            name: (str(val) if isinstance(val := getattr(self, name), Decimal) else val)
+            for name in (
+                "issuer_id",
+                "cutoff_at",
+                "capital_adjusted_labor_efficiency",
+                "tier",
+                "current_price_to_sales",
+                "target_price_to_sales",
+                "valuation_gap",
+                "eligible",
+                "outcome",
+                "exclusion_reason",
+                "rank",
+                "target_weight",
+                "confidence",
+                "peg",
+                "peg_rank",
+            )
         }
         for name in ("current_price_to_gross_profit", "target_price_to_gross_profit"):
             if (value := getattr(self, name)) is not None:
@@ -74,7 +71,7 @@ class Decision:
 
 
 def _load_corpus() -> dict[str, Any]:
-    raw = resources.files(_FIXTURE_PACKAGE).joinpath(_FIXTURE_NAME).read_bytes()
+    raw = _GOLDEN_FIXTURE.read_bytes()
     digest = hashlib.sha256(raw).hexdigest()
     if digest != CORPUS_SHA256:
         raise ValueError(f"corpus sha256 mismatch: expected {CORPUS_SHA256}, got {digest}")
@@ -96,75 +93,73 @@ def _risk_free_rate(definition_rates: list[dict[str, Any]], cutoff_at: str) -> D
 
 
 def _to_decision(evaluated: EvaluatedDecision, cutoff_at: str) -> Decision:
+    attrs = {
+        k: getattr(evaluated, k)
+        for k in EvaluatedDecision.__dataclass_fields__
+        if k not in ("issuer_id", "outcome", "exclusion_reason")
+    }
     return Decision(
-        evaluated.issuer_id,
-        cutoff_at,
-        evaluated.capital_adjusted_labor_efficiency,
-        evaluated.tier,
-        evaluated.current_price_to_sales,
-        evaluated.target_price_to_sales,
-        evaluated.valuation_gap,
-        evaluated.eligible,
-        evaluated.outcome.value,
-        None if evaluated.exclusion_reason is None else evaluated.exclusion_reason.value,
-        rank=evaluated.rank,
-        target_weight=evaluated.target_weight,
-        confidence=evaluated.confidence,
-        peg=evaluated.peg,
-        peg_rank=evaluated.peg_rank,
-        peg_reason_codes=evaluated.peg_reason_codes,
-        labor_efficiency_metric=evaluated.labor_efficiency_metric,
-        current_price_to_gross_profit=evaluated.current_price_to_gross_profit,
-        target_price_to_gross_profit=evaluated.target_price_to_gross_profit,
+        issuer_id=evaluated.issuer_id,
+        cutoff_at=cutoff_at,
+        outcome=evaluated.outcome.value,
+        exclusion_reason=None if evaluated.exclusion_reason is None else evaluated.exclusion_reason.value,
+        **attrs,
     )
+
+
+def evaluate_cutoff_decisions(
+    issuers: list[IssuerInput],
+    *,
+    cutoff_at: str,
+    definition: LargeModelValueV0Definition,
+    rates: list[dict[str, Any]],
+) -> list[Decision]:
+    evaluated = evaluate_cutoff(
+        issuers,
+        definition=definition,
+        cutoff_at=_instant(cutoff_at),
+        risk_free_rate=_risk_free_rate(rates, cutoff_at),
+        tree_pins=uniform_tree_pins(),
+    )
+    return [_to_decision(item, cutoff_at) for item in evaluated]
 
 
 def run() -> tuple[list[Decision], LargeModelValueV0Definition]:
     corpus = _load_corpus()
     definition = LargeModelValueV0Definition.model_validate_json(json.dumps(corpus["strategy_definition"]))
     rates = corpus["golden_decision_set"]["risk_free_rates"]
-
     by_cutoff: dict[str, list[dict[str, Any]]] = {}
     for golden in corpus["golden_decision_set"]["decisions"]:
         by_cutoff.setdefault(golden["cutoff_at"], []).append(golden)
-
     decisions: list[Decision] = []
     for cutoff_at, group in by_cutoff.items():
         issuers = [
             IssuerInput(
                 issuer_id=item["issuer"]["id"],
                 records={
-                    record["input_key"]: (
+                    rec["input_key"]: (
                         measure_for_input_key(
-                            record["input_key"],
-                            Decimal(str(record["value"])),
+                            rec["input_key"],
+                            Decimal(str(rec["value"])),
                             subject=item["issuer"]["id"],
-                            knowable_at=_instant(record["knowable_at"]),
+                            knowable_at=_instant(rec["knowable_at"]),
                         ),
-                        Decimal(str(record["confidence"])),
+                        Decimal(str(rec["confidence"])),
                     )
-                    for record in item["inputs"]
+                    for rec in item["inputs"]
                 },
-                knowable_at={record["input_key"]: _instant(record["knowable_at"]) for record in item["inputs"]},
+                knowable_at={rec["input_key"]: _instant(rec["knowable_at"]) for rec in item["inputs"]},
                 issuer_class=IssuerClass(item["issuer_branch"]),
             )
             for item in group
         ]
-        evaluated = evaluate_cutoff(
-            issuers,
-            definition=definition,
-            cutoff_at=_instant(cutoff_at),
-            risk_free_rate=_risk_free_rate(rates, cutoff_at),
-            tree_pins=uniform_tree_pins(),
-        )
-        decisions.extend(_to_decision(item, cutoff_at) for item in evaluated)
-
+        decisions.extend(evaluate_cutoff_decisions(issuers, cutoff_at=cutoff_at, definition=definition, rates=rates))
     decisions.sort(key=lambda item: (item.cutoff_at, item.issuer_id))
     return decisions, definition
 
 
 def _compare_against_golden(decisions: list[Decision], corpus: dict[str, Any]) -> list[str]:
-    by_key = {(d.issuer_id, d.cutoff_at): d for d in decisions}
+    by_key = {(decision.issuer_id, decision.cutoff_at): decision for decision in decisions}
     mismatches: list[str] = []
     for golden in corpus["golden_decision_set"]["decisions"]:
         key = (golden["issuer"]["id"], golden["cutoff_at"])
@@ -179,8 +174,7 @@ def _compare_against_golden(decisions: list[Decision], corpus: dict[str, Any]) -
             ("rank", expected["rank"]),
             ("valuation_gap", expected_gap),
         ):
-            act_val = getattr(actual, attr)
-            if act_val != exp_val:
+            if (act_val := getattr(actual, attr)) != exp_val:
                 mismatches.append(f"{key}: {attr} {act_val!r} != golden {exp_val!r}")
     return mismatches
 
@@ -189,17 +183,16 @@ def render_markdown(decisions: list[Decision]) -> str:
     lines = [
         "# Strategy smoke preview: large_model_value_v0",
         "",
-        "Preview replay against #335's golden fixture. Not a performance claim; "
-        "see the module docstring for what this does and does not prove.",
+        "Preview replay against #335's golden fixture.",
         "",
         "| Issuer | Cutoff | Outcome | Tier | Valuation gap | Rank | Weight |",
         "|---|---|---|---|---|---|---|",
     ]
-    for d in decisions:
+    for item in decisions:
+        gap = item.valuation_gap if item.valuation_gap is not None else "-"
+        rank = item.rank if item.rank is not None else "-"
+        weight = item.target_weight if item.target_weight is not None else "-"
         lines.append(
-            f"| {d.issuer_id} | {d.cutoff_at} | {d.outcome} | {d.tier or '-'} | "
-            f"{d.valuation_gap if d.valuation_gap is not None else '-'} | "
-            f"{d.rank if d.rank is not None else '-'} | "
-            f"{d.target_weight if d.target_weight is not None else '-'} |"
+            f"| {item.issuer_id} | {item.cutoff_at} | {item.outcome} | {item.tier or '-'} | {gap} | {rank} | {weight} |"
         )
     return "\n".join(lines) + "\n"

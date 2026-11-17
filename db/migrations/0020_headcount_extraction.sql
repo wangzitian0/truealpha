@@ -1,6 +1,0 @@
--- Retired in #1061.
--- This file created staging.headcount_extraction_invocations and staging.headcount_facts.
--- No code reads or writes these tables, and they hold no rows in Production or Staging.
--- 20261006T1325_datahub_retire_empty_planes.sql drops them in deployed databases.
--- The live headcount plane is staging.issuer_headcount_facts (0037_issuer_headcount_facts.sql).
--- The file stays because the chain never deletes the name of a deployed migration.

@@ -1,4 +1,4 @@
-"""Missing-cell planner for `(standard, issuer)` cells at a point-in-time cutoff (#733, #1519)."""
+"""PIT missing-cell planner for `(standard, issuer)` cells (#733, #1519)."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ from typing import Any, Literal
 
 from truealpha_contracts.standards import MetricStandard
 
+from data_engine.datahub._helpers import CAPTURE_OBSERVATION_JOIN
 from data_engine.datahub.canonical_issuer import signed_predecessor_ciks
 from data_engine.datahub.primary_listing import choose_primary_listings
 from data_engine.datahub.production_topt.headcount import is_eligible_headcount_row
@@ -21,9 +22,7 @@ _NEWER_ANNUAL_FILING_SQL = (
     "select 1 from raw.fetches where source = 'sec' and source_record_id like %s "
     "and source_published_at > %s and source_published_at <= %s "
     "and coalesce(metadata->>'form', '10-K') in ('10-K', '20-F') "
-    "union all select 1 from staging.capture_normalized_observations o "
-    "join staging.capture_observation_payloads p on p.observation_id = o.observation_id "
-    "join raw.capture_source_vintages v on v.source_vintage_id = o.source_vintage_id "
+    f"union all select 1 {CAPTURE_OBSERVATION_JOIN} "
     "where o.semantic_type = 'financial-fact' and v.source_record_id = %s "
     "and o.knowable_at > %s and o.knowable_at <= %s "
     "and p.normalized_payload->'vintage'->'revenue'->>'form' in ('10-K', '20-F') limit 1"
@@ -50,26 +49,21 @@ class OpenCell:
 
 
 def resolve_issuer_cik(connection: Any, issuer_id: str, *, as_of: date, known_at: datetime) -> int | None:
-    """Resolve an issuer identifier (`issuer:cik:...`, UUID, or legacy id) to its integer CIK."""
+    """Resolve issuer id to integer CIK."""
     if issuer_id.startswith("issuer:cik:"):
         return int(issuer_id.removeprefix("issuer:cik:"))
     if connection is None:
         return None
-    if is_uuid(issuer_id):
-        cik_val = alias_of(connection, issuer_id, "cik", valid_at=as_of, known_at=known_at)
-        try:
-            return int(cik_val) if cik_val is not None else None
-        except (ValueError, TypeError):
-            return None
     try:
-        entity_uuid = lookup_entity(connection, issuer_id, "issuer", as_of=as_of, known_at=known_at)
-        if entity_uuid is not None:
-            cik_val = alias_of(connection, entity_uuid, "cik", valid_at=as_of, known_at=known_at)
-            if cik_val is not None:
-                return int(cik_val)
+        entity = (
+            issuer_id
+            if is_uuid(issuer_id)
+            else lookup_entity(connection, issuer_id, "issuer", as_of=as_of, known_at=known_at)
+        )
+        cik_val = alias_of(connection, entity, "cik", valid_at=as_of, known_at=known_at) if entity is not None else None
+        return int(cik_val) if cik_val is not None else None
     except Exception:  # noqa: BLE001
         return None
-    return None
 
 
 def universe_issuers(connection: Any, universe: str, *, cutoff: datetime | None = None) -> list[UniverseIssuer]:

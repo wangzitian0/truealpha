@@ -1,4 +1,4 @@
-"""Yahoo Finance daily price bars with exact float32-to-Decimal cent recovery below 2**16."""
+"""Yahoo Finance daily bars with cent recovery."""
 
 import json
 from datetime import UTC, date, datetime, timedelta

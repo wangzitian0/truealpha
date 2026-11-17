@@ -1,8 +1,3 @@
-/** #368: POST /api/auth/logout — clears the session cookie. No server-side
- * token revocation list exists yet (short-lived-enough sessions + this being
- * a small named-user deployment, not a public SaaS, made that an accepted
- * v1 gap rather than blocking scope). */
-
 import { NextResponse } from "next/server";
 import { loadAuthConfig } from "@/server/auth/config";
 

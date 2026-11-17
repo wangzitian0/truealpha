@@ -1,4 +1,4 @@
-"""Point-in-time entity resolution over staging.kg_entities, kg_identifiers, and kg_edges."""
+"""PIT entity resolution over KG staging tables."""
 
 from datetime import datetime
 

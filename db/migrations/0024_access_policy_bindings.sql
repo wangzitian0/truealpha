@@ -1,8 +1,0 @@
--- Stable E2 bindings between immutable release policy, runtime grants, and decisions.
---
--- #1240: this file no longer creates objects. The access plane that it built is retired:
--- app.publication_policy_sets, app.publication_policy_entitlements,
--- app.publication_policy_set_seals, app.authorization_decision_grants, their trigger
--- functions, and the app.access_audit_metadata view. The retire migration
--- 20261012T1130_runtime_retire_app_access_tables.sql drops them in deployed databases.
--- The file name stays, because a deployed database has applied it (see README.md).

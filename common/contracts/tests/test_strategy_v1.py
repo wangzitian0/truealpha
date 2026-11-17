@@ -28,6 +28,7 @@ from __future__ import annotations
 import copy
 import json
 from decimal import ROUND_HALF_EVEN, Decimal
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -178,7 +179,8 @@ def test_definition_1_0_0_tier_cuts_and_valuation_contracts() -> None:
 
 
 def test_the_golden_expectations_equal_the_independent_oracle() -> None:
-    corpus = _corpus()
+    golden_path = Path(__file__).resolve().parent / "fixtures" / "large_model_value_v0_golden_1_0_0.json"
+    corpus = json.loads(golden_path.read_text(encoding="utf-8"))
     golden = GoldenDecisionSet.model_validate_json(json.dumps(corpus["golden_decision_set"]))
     assert golden.golden_decision_set_id == corpus["expected"]["golden_decision_set_id"]
     assert golden.strategy_definition_sha256 == _V1_SHA256

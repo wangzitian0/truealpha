@@ -1,5 +1,4 @@
-"""Warehouse connection (settings.database_url). One place to connect so scripts
-don't each parse env config; callers own transaction boundaries."""
+"""Postgres connection helper over `settings.database_url`."""
 
 import psycopg
 

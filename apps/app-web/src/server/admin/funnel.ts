@@ -11,28 +11,12 @@ import type { AccessContext } from "@/contracts/strategyRun";
 import { resolveHeadFreshness } from "@/contracts/serviceObjectives";
 import { idPrefixLikeOfRole } from "@/contracts/universes";
 import type { ReadState } from "@/server/read-state";
+import { runAdminRead } from "./ops";
 
-export interface FunnelLayer {
-  key: string;
-  title: string;
-  headline: string;
-  ratio: number | null;
-  status: "ok" | "warn" | "crit" | "muted";
-  detail: string;
-}
-
-export interface FunnelPrincipal {
-  context: AccessContext;
-  principalKind: "member" | "administrator" | "service";
-}
-
+export type FunnelLayer = { key: string; title: string; headline: string; ratio: number | null; status: "ok" | "warn" | "crit" | "muted"; detail: string };
+export type FunnelPrincipal = { context: AccessContext; principalKind: "member" | "administrator" | "service" };
 export type FunnelOutcome = ReadState<{ runId: string; layers: FunnelLayer[] }>;
-
-export interface FunnelDeps {
-  gppeRepo?: ToptGppeRepositoryLike;
-  strategyRepo?: Pick<MartStrategyRunRepository, "getLatest">;
-  runWithMartClient?: <T>(fn: (client: MartClientLike) => Promise<T>) => Promise<T>;
-}
+export type FunnelDeps = { gppeRepo?: ToptGppeRepositoryLike; strategyRepo?: Pick<MartStrategyRunRepository, "getLatest">; runWithMartClient?: <T>(fn: (client: MartClientLike) => Promise<T>) => Promise<T> };
 
 const DEFAULT_POINTER_LIMIT_HOURS = 48;
 const MIN_BAR_RATIO = 0.04;
@@ -47,14 +31,11 @@ export async function loadQualityFunnel(
   principal: FunnelPrincipal | null,
   deps: FunnelDeps = {},
 ): Promise<FunnelOutcome> {
-  if (principal === null || principal.principalKind !== "administrator") {
-    return { kind: "denied" };
-  }
-  const gppeRepo = deps.gppeRepo ?? new MartToptGppeRepository();
-  const strategyRepo = deps.strategyRepo ?? new MartStrategyRunRepository();
-  const runWithMartClient = deps.runWithMartClient ?? withMartReadonly;
+  return runAdminRead(principal, async () => {
+    const gppeRepo = deps.gppeRepo ?? new MartToptGppeRepository();
+    const strategyRepo = deps.strategyRepo ?? new MartStrategyRunRepository();
+    const runWithMartClient = deps.runWithMartClient ?? withMartReadonly;
 
-  try {
     const gppe = await gppeRepo.latest();
     if (!("cells" in gppe)) return { kind: "unavailable", reason: gppe.reason };
     const runId = gppe.run_id;
@@ -62,14 +43,12 @@ export async function loadQualityFunnel(
 
     const [coverage, pointerHead] = await runWithMartClient(async (client) => {
       const cov = await client.query(
-        "select count(*)::int as total, sum((present_count = required_count)::int)::int as complete " +
-          "from mart.strategy_input_coverage where run_id = $1",
+        "select count(*)::int as total, sum((present_count = required_count)::int)::int as complete from mart.strategy_input_coverage where run_id = $1",
         [runId],
       );
       const ptr = await client.query(
         "select environment, universe_id, age_hours as age, freshness, limit_hours, availability " +
-          "from mart.served_head " +
-          "where coalesce(run_id, head_run_id) = $1 or universe_id like $2 " +
+          "from mart.served_head where coalesce(run_id, head_run_id) = $1 or universe_id like $2 " +
           "order by (coalesce(run_id, head_run_id) = $1) desc, advanced_at desc limit 1",
         [runId, idPrefixLikeOfRole("strategy")],
       );
@@ -91,7 +70,7 @@ export async function loadQualityFunnel(
       ] as const;
     });
 
-    const strategy = await strategyRepo.getLatest("large_model_value_v0", principal.context);
+    const strategy = await strategyRepo.getLatest("large_model_value_v0", principal!.context);
     const decisions = "decisions" in strategy ? strategy.decisions : [];
     const selected = decisions.filter((d) => d.outcome === "selected").length;
     const ranked = decisions.filter((d) => d.rank !== null).length;
@@ -114,56 +93,53 @@ export async function loadQualityFunnel(
               ? "ok"
               : "warn";
 
-    const layers: FunnelLayer[] = [
-      {
-        key: "L1",
-        title: "Capture",
-        headline: `${finiteOrNull(quality.available_count) ?? "?"} / ${finiteOrNull(quality.requested_count) ?? gppe.requested_count ?? "?"} cells`,
-        ratio: availability,
-        status: availability === null ? "muted" : availability >= 1 ? "ok" : availability >= 0.9 ? "warn" : "crit",
-        detail: `freshness ${freshness ?? "?"} · reconciliation ${finiteOrNull(quality.independent_reconciliation) ?? "?"}`,
+    return {
+      kind: "ready",
+      data: {
+        runId,
+        layers: [
+          {
+            key: "L1",
+            title: "Capture",
+            headline: `${finiteOrNull(quality.available_count) ?? "?"} / ${finiteOrNull(quality.requested_count) ?? gppe.requested_count ?? "?"} cells`,
+            ratio: availability,
+            status: availability === null ? "muted" : availability >= 1 ? "ok" : availability >= 0.9 ? "warn" : "crit",
+            detail: `freshness ${freshness ?? "?"} · reconciliation ${finiteOrNull(quality.independent_reconciliation) ?? "?"}`,
+          },
+          {
+            key: "L2",
+            title: "Facts",
+            headline: coverage.total === 0 ? "no coverage rows yet" : `${coverage.complete} / ${coverage.total} issuers input-complete`,
+            ratio: coverage.total === 0 ? null : coverage.complete / coverage.total,
+            status: completenessStatus(coverage.complete, coverage.total),
+            detail: "missing_keys per issuer in mart.strategy_input_coverage (#496 fix-list)",
+          },
+          {
+            key: "L3",
+            title: "Factors",
+            headline: `GPPE ${gppeAvailable} / ${gppe.cells.length} listings`,
+            ratio: gppe.cells.length === 0 ? null : gppeAvailable / gppe.cells.length,
+            status: completenessStatus(gppeAvailable, gppe.cells.length),
+            detail: "bounded by L2 — per-listing table below",
+          },
+          {
+            key: "L4",
+            title: "Strategy",
+            headline: `${decisions.length} evaluated → ${ranked} ranked → ${selected} selected`,
+            ratio: decisions.length === 0 ? null : Math.max(selected / Math.max(decisions.length, 1), MIN_BAR_RATIO),
+            status: decisions.length === 0 ? "crit" : "ok",
+            detail: "claim ceiling: preview — selection narrowing is by design, not data loss",
+          },
+          {
+            key: "L5",
+            title: "Consumption",
+            headline: pointerAgeHours === null ? "no pointer" : `pointer ${pointerAgeHours.toFixed(1)}h old`,
+            ratio: pointerAgeHours === null ? null : Math.max(MIN_BAR_RATIO, Math.min(1, 1 - pointerAgeHours / pointerLimitHours)),
+            status: pointerStatus,
+            detail: "mart.served_head — web/MCP/chat resolve the same governed run",
+          },
+        ],
       },
-      {
-        key: "L2",
-        title: "Facts",
-        headline:
-          coverage.total === 0
-            ? "no coverage rows yet"
-            : `${coverage.complete} / ${coverage.total} issuers input-complete`,
-        ratio: coverage.total === 0 ? null : coverage.complete / coverage.total,
-        status: completenessStatus(coverage.complete, coverage.total),
-        detail: "missing_keys per issuer in mart.strategy_input_coverage (#496 fix-list)",
-      },
-      {
-        key: "L3",
-        title: "Factors",
-        headline: `GPPE ${gppeAvailable} / ${gppe.cells.length} listings`,
-        ratio: gppe.cells.length === 0 ? null : gppeAvailable / gppe.cells.length,
-        status: completenessStatus(gppeAvailable, gppe.cells.length),
-        detail: "bounded by L2 — per-listing table below",
-      },
-      {
-        key: "L4",
-        title: "Strategy",
-        headline: `${decisions.length} evaluated → ${ranked} ranked → ${selected} selected`,
-        ratio: decisions.length === 0 ? null : Math.max(selected / Math.max(decisions.length, 1), MIN_BAR_RATIO),
-        status: decisions.length === 0 ? "crit" : "ok",
-        detail: "claim ceiling: preview — selection narrowing is by design, not data loss",
-      },
-      {
-        key: "L5",
-        title: "Consumption",
-        headline: pointerAgeHours === null ? "no pointer" : `pointer ${pointerAgeHours.toFixed(1)}h old`,
-        ratio:
-          pointerAgeHours === null
-            ? null
-            : Math.max(MIN_BAR_RATIO, Math.min(1, 1 - pointerAgeHours / pointerLimitHours)),
-        status: pointerStatus,
-        detail: "mart.served_head — web/MCP/chat resolve the same governed run",
-      },
-    ];
-    return { kind: "ready", data: { runId, layers } };
-  } catch (error) {
-    return { kind: "error", message: error instanceof Error ? error.message : String(error) };
-  }
+    };
+  });
 }

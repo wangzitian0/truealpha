@@ -1,45 +1,11 @@
-"""Data-quality standing checks that run where the data lives (#674, #725 item A, #581).
-
-`tools/output_invariants.py` is the only check that asks whether a published NUMBER is
-possible. Until 2026-09-07 its only scheduled host was a GitHub runner that cannot reach
-the loopback Postgres, so the step announced itself unconfigured and exited 0 every day;
-run by hand against production that day it found two stale invariants and no new data
-defect. This lane runs the same suite, from the copy baked into the image, against the
-environment's own database after the nightly ticks — a red Dagster run, in the daemon's
-log and in `dagster.runs`, is the verdict.
-
-The second job here is the datahub CONFIDENCE & ACCURACY report (owner standard,
-2026-09-15): after the invariants have judged the day's heads, grade every (metric family,
-subject) cell of each governed head into high / medium / low / missing from what its
-origins asserted, sample the subjects of the universe record across every origin, and append
-one content-addressed `mart.datahub_confidence_report` row per universe. The op also records the
-outside comparisons of the head's run in `mart.oracle_outcomes` (#1523).
-
-The third is the model-provider key probe (#876 W2): one minimal ask a day through the
-source gateway, so a revoked key is a red verdict by 07:00 instead of a human reading the
-ledger (#832).
-
-The fourth is the run health of every job (`quality.job_run_health`, #1466): whether the runs of the last
-7 days in `dagster.runs` succeeded, job by job. It is a dashboard row and not a gate: a red verdict leaves
-the run that records it green. `/admin/pipeline` shows the counts and the error line beside it.
-
-The seventh is the TOPT baseline (`quality.topt_baseline`, #1664): whether the served TOPT head meets the
-accepted availability, whether the Twelve Data seat stayed inside its share, whether the code server stayed
-inside its memory budget, and whether the schema of the database equals the migration chain. It reads the primary tables, and it names the rows of #1664 that no environment can
-run alone. It is a dashboard row and not a gate, like the run health.
-
-Every check here records its verdict — green and red — in `mart.nightly_verdicts`
-(`quality.nightly_verdicts`, #876 W1); `/health` publishes the newest per check and the
-daily delivery report shows a red, stale or missing one. The names a run
-can record are `NIGHTLY_VERDICTS` below.
-"""
+"""Data-quality checks against environment database (#674, #725, #581)."""
 
 import contextlib
 import io
 import json
 import runpy
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -67,43 +33,21 @@ from data_engine.quality.nightly_verdicts import (
 )
 from data_engine.sources import gateway
 
-#: Run tag of a job whose run waits for other runs to finish (`_await_settled`). The run queue of
-#: `dagster.yaml` caps the runs that carry it below the queue limit, so a run that they wait for always
-#: finds a slot (#1467). `test_run_capacity.py` holds every job that waits to this tag.
 WAITS_FOR_RUNS_TAG = "truealpha/waits_for_runs"
 
 OUTPUT_INVARIANTS_JOB_NAME = "output_invariants_check"
-# 00:15 UTC: after the canary (23:47) has published, before anything reads the day's head.
-# The QQQ tick (23:20) can still be running then — since the moomoo origins it ran until 23:55
-# on 2026-09-16, and a smaller Twelve Data share (#900) slows it further — so the surface proof
-# waits for every universe to settle rather than judging a head its reports have not reached.
 OUTPUT_INVARIANTS_CRON = "15 0 * * *"
-#: How long the surface proof waits for a universe to settle, and how often it looks. Three
-#: hours takes the proof past any tick that is merely slow (the verdict still lands hours
-#: before the delivery report reads it at 07:00). A tick still running after that leaves its
-#: head to age in `mart.served_head`, and a later proof fails on a stale scheduled head. This
-#: proof names the universe IN-PROGRESS instead of calling its surfaces wrong.
 SURFACE_SETTLE_TIMEOUT = timedelta(hours=3)
 SURFACE_SETTLE_POLL_SECONDS = 60.0
-#: How long after a head's pointer row is written its reports may still be missing without the
-#: proof calling it a mismatch: the pointer sensor looks every 30 s and a head-reports run
-#: takes about a minute. Past this, missing reports mean the sensor did not follow the head.
 HEAD_REPORTS_GRACE = timedelta(minutes=10)
 
 CONFIDENCE_REPORT_JOB_NAME = "datahub_confidence_report"
-# 00:45 UTC: after the invariants (00:15) have had their say on the same heads.
-# Manual runs launch the same job by name with an explicit `executed_at`.
-# The report waits for a settled universe first, like the surface proof: a slow QQQ tick
-# can still commit after 00:20, and the pointer sensor then rewrites that head's reports.
 CONFIDENCE_REPORT_CRON = "45 0 * * *"
-#: The confidence report runs for the universes that the process environment schedules (the contract
-#: lists them: staging runs TOPT only). `scheduled_universe_names()` gives them at the time of the tick.
 
 MODEL_KEY_HEALTH_JOB_NAME = "model_key_health"
 
 
 def model_key_health_cron(environment: str) -> str:
-    """The daily cron of the key probe of ``environment``."""
     return load_environment_contract().model_seat.probe_cron(environment)
 
 
@@ -113,7 +57,6 @@ JOB_RUN_HEALTH_CRON = "20 6 * * *"
 TOPT_BASELINE_JOB_NAME = "topt_baseline_check"
 TOPT_BASELINE_CRON = "25 6 * * *"
 
-#: Verdict names (`mart.nightly_verdicts.check_name`) this lane records.
 OUTPUT_INVARIANTS_VERDICT = "output_invariants"
 REPORT_SURFACE_VERDICT = "report_surface_proof"
 CONFIDENCE_REPORT_VERDICT = "datahub_confidence_report"
@@ -129,7 +72,6 @@ NIGHTLY_VERDICTS: tuple[str, ...] = (
     TOPT_BASELINE_VERDICT,
 )
 
-#: The suite as the image carries it (Dockerfile), or the repository copy for local runs.
 _IMAGE_COPY = Path("/app/common/runtime/src/truealpha_tools/output_invariants.py")
 _REPO_COPY = (
     Path(__file__).resolve().parents[5] / "common" / "runtime" / "src" / "truealpha_tools" / "output_invariants.py"
@@ -145,9 +87,6 @@ def _suite_path() -> Path:
 
 @external_op
 def run_output_invariants(context: dg.OpExecutionContext) -> str:
-    """Run the suite against this environment's database; fail the run on any verdict
-    the suite fails on (a violation, an expired exemption, a stale exemption, missing
-    coverage). The suite's own report is the run log."""
     with verdict(
         OUTPUT_INVARIANTS_VERDICT, registered=NIGHTLY_VERDICTS, run_id=context.run_id, tick=tick_of(context)
     ) as outcome:
@@ -166,8 +105,6 @@ def run_output_invariants(context: dg.OpExecutionContext) -> str:
 
 
 def invariants_summary(lines: list[str], exit_code: int) -> str:
-    """The suite's verdict in counts and invariant ids — never its offending rows, which carry
-    values and belong in the run log only."""
     marks = [line.split()[0] for line in lines if line.startswith("  ") and line.split()]
     held, deferred, empty = marks.count("ok"), marks.count("DEFERRED"), marks.count("EMPTY")
     failed = [
@@ -182,7 +119,6 @@ def invariants_summary(lines: list[str], exit_code: int) -> str:
     return f"exit {exit_code}: {len(failed)} failed ({named}); {counts}"
 
 
-#: A run in one of these has not finished; a queued run is committed to running.
 UNFINISHED_RUN_STATUSES = (
     dg.DagsterRunStatus.QUEUED,
     dg.DagsterRunStatus.NOT_STARTED,
@@ -190,19 +126,10 @@ UNFINISHED_RUN_STATUSES = (
     dg.DagsterRunStatus.STARTED,
     dg.DagsterRunStatus.CANCELING,
 )
-#: An unfinished run created longer ago than this is not a reason to wait: no tick or report
-#: run takes half a day, and a run whose worker died without marking it would otherwise excuse
-#: its universe's mismatches every night.
 IN_FLIGHT_MAX_AGE = timedelta(hours=12)
 
 
 def runs_in_flight(instance: dg.DagsterInstance, *, now: datetime | None = None) -> dict[str, str]:
-    """universe -> the unfinished run that will move its head or rewrite its reports.
-
-    The capture ticks move a head (the job names the universe); the head-reports and backfill
-    jobs rewrite its purity rows and coverage report (the run config names it, so a run an
-    operator launched untagged counts too). Runs created more than `IN_FLIGHT_MAX_AGE` before
-    `now` are not counted."""
     created_after = (now or datetime.now(UTC)) - IN_FLIGHT_MAX_AGE
     served = {lane_name(key) for key in served_keys()}
     ticks = {tick.job_name: tick.lane_name for tick in TICKS if tick.lane_name in served}
@@ -223,23 +150,16 @@ def runs_in_flight(instance: dg.DagsterInstance, *, now: datetime | None = None)
 
 
 def settling(connection: psycopg.Connection, instance: dg.DagsterInstance, *, now: datetime) -> dict[str, str]:
-    """Every universe the proof should not judge yet, with why: an unfinished run for it, or a
-    head recorded within `HEAD_REPORTS_GRACE` whose reports do not name it yet."""
-    pending = runs_in_flight(instance, now=now)
-    for universe, why in surface_proof.fresh_heads_without_reports(
-        connection, now=now, grace=HEAD_REPORTS_GRACE
-    ).items():
-        pending.setdefault(universe, why)
-    return pending
+    return {
+        **surface_proof.fresh_heads_without_reports(connection, now=now, grace=HEAD_REPORTS_GRACE),
+        **runs_in_flight(instance, now=now),
+    }
 
 
-#: Indirected so a test can wait without sleeping.
 _sleep = time.sleep
 
 
 def _await_settled(context: dg.OpExecutionContext) -> None:
-    """Poll until no universe is settling, or until `SURFACE_SETTLE_TIMEOUT` has passed.
-    The output-invariants suite, the surface proof, and the confidence report all judge heads through it."""
     deadline = time.monotonic() + SURFACE_SETTLE_TIMEOUT.total_seconds()
     while True:
         with psycopg.connect(settings.database_url) as connection:
@@ -254,15 +174,10 @@ def _await_settled(context: dg.OpExecutionContext) -> None:
         _sleep(SURFACE_SETTLE_POLL_SECONDS)
 
 
-#: Every served head. The check counts the scheduled heads, so it reads the fresh ones too.
-_SERVED_HEADS_SQL = """
-select universe_id, freshness, availability, staleness_reason
-from mart.served_head
-order by universe_id
-"""
+_SERVED_HEADS_SQL = (
+    "select universe_id, freshness, availability, staleness_reason from mart.served_head order by universe_id"
+)
 
-#: The finding when an environment serves no scheduled head. Zero heads prove nothing about
-#: freshness: no run was ever governed, or the identity row hides every head (#28 V3).
 NO_SCHEDULED_HEAD = "no scheduled governed head"
 
 
@@ -273,28 +188,22 @@ def stale_served_heads(
     environment: str | None = None,
     require_head: bool = False,
 ) -> list[str]:
-    """Return every scheduled served head where `mart.served_head.freshness != 'fresh'` or
-    `availability != 'available'` (#1299, #1256, #54).
-
-    With `require_head`, zero scheduled heads is also a finding (#28 V3: unknown is not OK).
-    A head with no running schedule in this environment does not count (#1256)."""
     if environment is None:
         try:
             environment = declared_environment(connection)
-        except Exception:  # noqa: BLE001 - test doubles that do not answer environment_identity fall back to settings
+        except Exception:  # noqa: BLE001
             environment = settings.app_env
-    rows = connection.execute(_SERVED_HEADS_SQL).fetchall()
     out: list[str] = []
     scheduled = 0
-    for row in rows:
+    contract = load_environment_contract()
+    for row in connection.execute(_SERVED_HEADS_SQL).fetchall():
         universe_id = str(row[0])
         if universe_prefix and not universe_id.startswith(universe_prefix):
             continue
-        if not load_environment_contract().is_head_scheduled(universe_id, environment):
+        if not contract.is_head_scheduled(universe_id, environment):
             continue
         scheduled += 1
-        freshness = str(row[1])
-        availability = str(row[2])
+        freshness, availability = str(row[1]), str(row[2])
         if freshness == "fresh" and availability == "available":
             continue
         reason = f" ({row[3]})" if len(row) > 3 and row[3] else ""
@@ -306,16 +215,6 @@ def stale_served_heads(
 
 @external_op
 def run_report_surface_proof(context: dg.OpExecutionContext) -> str:
-    """Every report surface serves the governed head (#855 C1): replay each App reader's own
-    run selection and the coverage report's recomputation against this environment's
-    database; one line per surface in the log; fail the run on any surface that serves
-    another run than the pointer names, or a report the tables no longer agree with.
-
-    Judged on a settled head, never a moving one (2026-09-17: the proof read the QQQ head a
-    tick had committed at 23:55 against a coverage report written at 23:31). It waits for every
-    universe to settle, then proves inside ONE repeatable-read snapshot, so a commit that lands
-    mid-proof cannot put a new head beside an old report. A universe still settling when the
-    wait runs out is IN-PROGRESS: named, and not a failure."""
     from data_engine.quality.surface_proof import prove, summary_lines, verdict_counts
 
     with verdict(
@@ -333,10 +232,9 @@ def run_report_surface_proof(context: dg.OpExecutionContext) -> str:
             context.log.info(line)
         failed = [surface for surface in surfaces if surface.mismatched]
         settling_surfaces = [surface for surface in surfaces if surface.state == "IN-PROGRESS"]
-        status = "pass" if not failed and not stale_heads else "fail"
         context.add_output_metadata(
             {
-                "status": status,
+                "status": "pass" if not failed and not stale_heads else "fail",
                 "surfaces": len(surfaces),
                 "mismatched": len(failed),
                 "in_progress": len(settling_surfaces),
@@ -365,36 +263,34 @@ def run_report_surface_proof(context: dg.OpExecutionContext) -> str:
 
 @dg.job(name=OUTPUT_INVARIANTS_JOB_NAME, tags={WAITS_FOR_RUNS_TAG: "true"})
 def output_invariants_job() -> None:
-    # Two independent verdicts in one nightly run: the numbers are possible (the suite), and
-    # every surface serves the head the pointer names (the proof). Neither depends on the other, and a
-    # failure of one does not stop the other. The in-process executor runs them one after the other;
-    # the second wait for a settled universe ends at once when the first saw every universe settle.
     run_output_invariants()
     run_report_surface_proof()
 
 
-@dg.schedule(
-    job=output_invariants_job,
-    cron_schedule=OUTPUT_INVARIANTS_CRON,
-    execution_timezone="UTC",
-    default_status=dg.DefaultScheduleStatus.RUNNING,
-)
-def output_invariants_schedule(context: dg.ScheduleEvaluationContext) -> dg.RunRequest:
-    tick = context.scheduled_execution_time.isoformat()
-    # The job takes no config, so the tick travels as a tag: the verdict is dated by it.
-    return dg.RunRequest(run_key=tick, tags={TICK_TAG: tick})
+def _tick_schedule(name: str, job: dg.JobDefinition, cron_schedule: str) -> dg.ScheduleDefinition:
+    @dg.schedule(
+        name=name,
+        job=job,
+        cron_schedule=cron_schedule,
+        execution_timezone="UTC",
+        default_status=dg.DefaultScheduleStatus.RUNNING,
+    )
+    def _schedule(context: dg.ScheduleEvaluationContext) -> dg.RunRequest:
+        tick = context.scheduled_execution_time.isoformat()
+        return dg.RunRequest(run_key=tick, tags={TICK_TAG: tick})
+
+    return _schedule
+
+
+output_invariants_schedule = _tick_schedule("output_invariants_schedule", output_invariants_job, OUTPUT_INVARIANTS_CRON)
 
 
 class ConfidenceReportConfig(dg.Config):
-    """`executed_at` is the schedule's tick time (ISO 8601), never the wall clock. The report samples the
-    subjects that the universe record names (`report_sample`)."""
-
     executed_at: str
     universe: str = lane_name(universe_with_role("fund_consolidation"))
 
 
 def _oracle_comparators_of(connection: Any, report: Mapping[str, Any]) -> dict[str, int]:
-    """Return comparator name -> compared count for `report` (#1523 S3)."""
     raw_comparators = report.get("comparators")
     if raw_comparators is None:
         rollup = report.get("oracle_outcomes_rollup") or report.get("oracle_outcomes")
@@ -402,14 +298,12 @@ def _oracle_comparators_of(connection: Any, report: Mapping[str, Any]) -> dict[s
             raw_comparators = rollup["comparators"]
     if raw_comparators is None:
         raw_comparators = load_oracle_outcomes_rollup(connection, run_id=str(report["run_id"]))["comparators"]
-    out: dict[str, int] = {}
-    if isinstance(raw_comparators, Mapping):
-        for name, item in raw_comparators.items():
-            if isinstance(item, Mapping):
-                out[str(name)] = int(item.get("compared", 0))
-            else:
-                out[str(name)] = int(item)
-    return out
+    if not isinstance(raw_comparators, Mapping):
+        return {}
+    return {
+        str(name): int(item.get("compared", 0) if isinstance(item, Mapping) else item)
+        for name, item in raw_comparators.items()
+    }
 
 
 @external_op
@@ -423,11 +317,7 @@ def run_confidence_report(context: dg.OpExecutionContext, config: ConfidenceRepo
         run_id=context.run_id,
         tick=tick_from_config(config.executed_at),
     ) as outcome:
-        # A head still moving (a tick committing, its reports being rewritten) is waited
-        # out before the report reads it (2026-09-17: QQQ may commit around 00:20 and its
-        # head reports follow a minute later).
         _await_settled(context)
-        # The op makes no vendor call: the report and the outside comparisons read stored rows and bytes.
         with psycopg.connect(settings.database_url) as connection:
             stale_heads = stale_served_heads(connection, universe_prefix=record(key_of_lane(config.universe)).id_prefix)
             if stale_heads:
@@ -443,8 +333,6 @@ def run_confidence_report(context: dg.OpExecutionContext, config: ConfidenceRepo
             else:
                 report_id = persist(connection, report)
                 connection.commit()
-                # #1523: the outside comparisons of the head's run, in a transaction of their own. A
-                # replay of this report writes each comparison once; a failure here is logged only.
                 oracle_rows = record_oracle_outcomes_safely(
                     connection, report["run_id"], compared_at=executed_at, log=context.log
                 )
@@ -491,26 +379,23 @@ def datahub_confidence_report_job() -> None:
     default_status=dg.DefaultScheduleStatus.RUNNING,
 )
 def datahub_confidence_report_schedule(context: dg.ScheduleEvaluationContext):
-    executed_at = context.scheduled_execution_time.isoformat()
-    for universe in scheduled_universe_names():
-        yield dg.RunRequest(
-            run_key=f"{executed_at}:{universe}",
-            run_config=dg.RunConfig(
-                ops={"run_confidence_report": ConfidenceReportConfig(executed_at=executed_at, universe=universe)}
-            ),
+    t = context.scheduled_execution_time.isoformat()
+    return [
+        dg.RunRequest(
+            run_key=f"{t}:{u}",
+            run_config=dg.RunConfig(ops={"run_confidence_report": ConfidenceReportConfig(executed_at=t, universe=u)}),
         )
+        for u in scheduled_universe_names()
+    ]
 
 
 @external_op
 def run_model_key_health(context: dg.OpExecutionContext) -> str:
-    """One minimal ask of the seated model provider (#876 W2). A rejected key, an erroring or
-    unreachable provider, or no seated key at all is a red run and a red verdict."""
     from data_engine.quality.model_key_health import probe
 
     with verdict(
         MODEL_KEY_HEALTH_VERDICT, registered=NIGHTLY_VERDICTS, run_id=context.run_id, tick=tick_of(context)
     ) as outcome:
-        # The ask lands in the external call ledger attributed to this run (#729): `external_op` binds it.
         health = probe()
         outcome.summary = health.summary
         context.log.info("model key health: %s", health.summary)
@@ -526,55 +411,54 @@ def model_key_health_job() -> None:
 
 
 def build_model_key_health_schedule(environment: str) -> dg.ScheduleDefinition:
-    """The daily key probe of ``environment``. The slot comes from the contract (`model_key_health_cron`)."""
-
-    @dg.schedule(
-        name="model_key_health_schedule",
-        job=model_key_health_job,
-        cron_schedule=model_key_health_cron(environment),
-        execution_timezone="UTC",
-        default_status=dg.DefaultScheduleStatus.RUNNING,
-    )
-    def model_key_health_schedule(context: dg.ScheduleEvaluationContext) -> dg.RunRequest:
-        tick = context.scheduled_execution_time.isoformat()
-        return dg.RunRequest(run_key=tick, tags={TICK_TAG: tick})
-
-    return model_key_health_schedule
+    return _tick_schedule("model_key_health_schedule", model_key_health_job, model_key_health_cron(environment))
 
 
 model_key_health_schedule = build_model_key_health_schedule(gateway.capacity_environment())
 
 
-class _RedJobRunHealth(dg.Failure):
-    """The verdict is red. `verdict()` records it and re-raises; the op catches this and ends green."""
+class _RedDashboardVerdict(dg.Failure):
+    pass
+
+
+def _run_dashboard_verdict(
+    context: dg.OpExecutionContext,
+    verdict_name: str,
+    evaluate: Callable[[Any, datetime], tuple[dict[str, Any], dict[str, Any], str | None]],
+) -> str:
+    payload: dict[str, Any] = {}
+    tick = tick_of(context)
+    now = tick or datetime.now(UTC)
+    try:
+        with verdict(verdict_name, registered=NIGHTLY_VERDICTS, run_id=context.run_id, tick=tick) as outcome:
+            metadata, payload, red_msg = evaluate(outcome, now)
+            context.add_output_metadata(metadata)
+            if red_msg is not None:
+                raise _RedDashboardVerdict(red_msg)
+    except _RedDashboardVerdict as red:
+        context.log.warning(str(red))
+    return json.dumps(payload)
 
 
 @external_op
 def run_job_run_health(context: dg.OpExecutionContext) -> str:
-    """Judge the finished runs of every job in the last 7 days against the rest of the fleet (#1466).
+    def _evaluate(outcome: Any, now: datetime) -> tuple[dict[str, Any], dict[str, Any], str | None]:
+        with psycopg.connect(settings.database_url, autocommit=True) as connection:
+            runs = job_run_health.read_runs(connection, now=now)
+        judgement = job_run_health.judge(runs, now=now)
+        context.log.info(f"job run health: {judgement.summary}")
+        outcome.summary = judgement.summary
+        if not judgement.jobs:
+            outcome.pending = True
+            outcome.summary = f"no finished run in {job_run_health.WINDOW_DAYS} days; nothing to judge"
+        red_msg = f"job run health: {judgement.summary} (#1466)" if judgement.red else None
+        return (
+            {"jobs": len(judgement.jobs), "red": len(judgement.red)},
+            {"red": [job.job for job in judgement.red], "summary": judgement.summary},
+            red_msg,
+        )
 
-    A red verdict is a dashboard row, not a gate: the op records it and ends green, so this job does not add
-    its own failure to the history that it judges. A history with no finished run is pending, never green."""
-    tick = tick_of(context)
-    now = tick or datetime.now(UTC)
-    judgement = None
-    try:
-        with verdict(JOB_RUN_HEALTH_VERDICT, registered=NIGHTLY_VERDICTS, run_id=context.run_id, tick=tick) as outcome:
-            with psycopg.connect(settings.database_url, autocommit=True) as connection:
-                runs = job_run_health.read_runs(connection, now=now)
-            judgement = job_run_health.judge(runs, now=now)
-            context.log.info(f"job run health: {judgement.summary}")
-            context.add_output_metadata({"jobs": len(judgement.jobs), "red": len(judgement.red)})
-            outcome.summary = judgement.summary
-            if not judgement.jobs:
-                outcome.pending = True
-                outcome.summary = f"no finished run in {job_run_health.WINDOW_DAYS} days; nothing to judge"
-            if judgement.red:
-                raise _RedJobRunHealth(f"job run health: {judgement.summary} (#1466)")
-    except _RedJobRunHealth as red:
-        context.log.warning(str(red))
-    assert judgement is not None
-    return json.dumps({"red": [job.job for job in judgement.red], "summary": judgement.summary})
+    return _run_dashboard_verdict(context, JOB_RUN_HEALTH_VERDICT, _evaluate)
 
 
 @dg.job(name=JOB_RUN_HEALTH_JOB_NAME)
@@ -582,51 +466,35 @@ def job_run_health_job() -> None:
     run_job_run_health()
 
 
-@dg.schedule(
-    job=job_run_health_job,
-    cron_schedule=JOB_RUN_HEALTH_CRON,
-    execution_timezone="UTC",
-    default_status=dg.DefaultScheduleStatus.RUNNING,
-)
-def job_run_health_schedule(context: dg.ScheduleEvaluationContext) -> dg.RunRequest:
-    tick = context.scheduled_execution_time.isoformat()
-    return dg.RunRequest(run_key=tick, tags={TICK_TAG: tick})
-
-
-class _RedToptBaseline(dg.Failure):
-    """The verdict is red. `verdict()` records it and re-raises; the op catches this and ends green."""
+job_run_health_schedule = _tick_schedule("job_run_health_schedule", job_run_health_job, JOB_RUN_HEALTH_CRON)
 
 
 @external_op
 def run_topt_baseline(context: dg.OpExecutionContext) -> str:
-    """Judge the served TOPT head, the Twelve Data share and the code server against the baseline (#1664).
-
-    A red verdict is a dashboard row, not a gate: the op records it and ends green, so this job does not add
-    its own failure to the run history that `job_run_health` judges. A row that cannot be measured keeps the
-    verdict red: unknown is not OK."""
-    tick = tick_of(context)
-    now = tick or datetime.now(UTC)
     contract = load_environment_contract()
-    judgement = None
-    try:
-        with verdict(TOPT_BASELINE_VERDICT, registered=NIGHTLY_VERDICTS, run_id=context.run_id, tick=tick) as outcome:
-            with psycopg.connect(settings.database_url, autocommit=True) as connection:
-                gppe = topt_baseline.read_q1(connection)
-                quota = topt_baseline.read_quota(
-                    connection, now=now, environment=gateway.capacity_environment(), contract=contract
-                )
-            server = topt_baseline.read_server(budget_mib=contract.code_server_capacity.server_mib)
-            schema = topt_baseline.read_schema(settings.database_url)
-            judgement = topt_baseline.judge(gppe=gppe, quota=quota, server=server, schema=schema)
-            context.log.info(f"topt baseline: {judgement.summary}")
-            context.add_output_metadata({"failed": len(judgement.failed), "not_measured": len(judgement.unmeasured)})
-            outcome.summary = judgement.summary
-            if not judgement.ok:
-                raise _RedToptBaseline(f"topt baseline: {judgement.summary} (#1664)")
-    except _RedToptBaseline as red:
-        context.log.warning(str(red))
-    assert judgement is not None
-    return json.dumps({"failed": [row.key for row in judgement.failed], "summary": judgement.summary})
+
+    def _evaluate(outcome: Any, now: datetime) -> tuple[dict[str, Any], dict[str, Any], str | None]:
+        with psycopg.connect(settings.database_url, autocommit=True) as connection:
+            gppe = topt_baseline.read_q1(connection)
+            quota = topt_baseline.read_quota(
+                connection, now=now, environment=gateway.capacity_environment(), contract=contract
+            )
+        judgement = topt_baseline.judge(
+            gppe=gppe,
+            quota=quota,
+            server=topt_baseline.read_server(budget_mib=contract.code_server_capacity.server_mib),
+            schema=topt_baseline.read_schema(settings.database_url),
+        )
+        context.log.info(f"topt baseline: {judgement.summary}")
+        outcome.summary = judgement.summary
+        red_msg = None if judgement.ok else f"topt baseline: {judgement.summary} (#1664)"
+        return (
+            {"failed": len(judgement.failed), "not_measured": len(judgement.unmeasured)},
+            {"failed": [row.key for row in judgement.failed], "summary": judgement.summary},
+            red_msg,
+        )
+
+    return _run_dashboard_verdict(context, TOPT_BASELINE_VERDICT, _evaluate)
 
 
 @dg.job(name=TOPT_BASELINE_JOB_NAME)
@@ -634,15 +502,7 @@ def topt_baseline_job() -> None:
     run_topt_baseline()
 
 
-@dg.schedule(
-    job=topt_baseline_job,
-    cron_schedule=TOPT_BASELINE_CRON,
-    execution_timezone="UTC",
-    default_status=dg.DefaultScheduleStatus.RUNNING,
-)
-def topt_baseline_schedule(context: dg.ScheduleEvaluationContext) -> dg.RunRequest:
-    tick = context.scheduled_execution_time.isoformat()
-    return dg.RunRequest(run_key=tick, tags={TICK_TAG: tick})
+topt_baseline_schedule = _tick_schedule("topt_baseline_schedule", topt_baseline_job, TOPT_BASELINE_CRON)
 
 
 OUTPUT_INVARIANTS_SENSOR_NAME = "output_invariants_on_advance"
@@ -656,24 +516,16 @@ OUTPUT_INVARIANTS_SENSOR_INTERVAL_SECONDS = 60
     default_status=dg.DefaultSensorStatus.RUNNING,
 )
 def output_invariants_on_advance_sensor(context: dg.SensorEvaluationContext):
-    """Re-evaluate `output_invariants_job` when a new build or governed head lands while
-    `output_invariants` or `report_surface_proof` is red (#1346, #1295, #1227).
-
-    Instead of waiting up to 24 hours for the 00:15 UTC cron after a fix deploys or a
-    governed pointer advances, this sensor checks whether the newest verdict is red and,
-    if so, launches one run per `(image_digest, head_run_ids)` state (`run_key`).
-    """
     build = (settings.data_engine_image_digest or "").strip() or "unversioned"
     try:
         with psycopg.connect(settings.database_url) as connection:
             rows = connection.execute(
                 "select universe_id, coalesce(run_id, head_run_id, '') from mart.served_head order by universe_id"
             ).fetchall()
-    except Exception as exc:  # noqa: BLE001 - sensor never crashes the daemon on a transient DB blip
+    except Exception as exc:  # noqa: BLE001
         yield dg.SkipReason(f"cannot read mart.served_head: {type(exc).__name__}")
         return
-    heads = ",".join(f"{u}={r}" for u, r in rows)
-    state_key = f"heal:{build[:19]}:{heads}"
+    state_key = f"heal:{build[:19]}:{','.join(f'{u}={r}' for u, r in rows)}"
     if context.cursor == state_key:
         yield dg.SkipReason("already evaluated on current build and governed heads")
         return
@@ -683,10 +535,7 @@ def output_invariants_on_advance_sensor(context: dg.SensorEvaluationContext):
         yield dg.SkipReason("newest output_invariants and report_surface_proof verdicts are green")
         return
     tick = datetime.now(UTC).replace(microsecond=0).isoformat()
-    yield dg.RunRequest(
-        run_key=state_key,
-        tags={TICK_TAG: tick},
-    )
+    yield dg.RunRequest(run_key=state_key, tags={TICK_TAG: tick})
 
 
 defs = dg.Definitions(

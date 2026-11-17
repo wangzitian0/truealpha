@@ -1,4 +1,4 @@
-"""Deterministic list expansion and bounded attempt recording."""
+"""Deterministic capture list expansion and bounded attempt ledger."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ from truealpha_contracts.universe import SubjectKind, UniverseRef
 
 
 def replay_retry_policy(max_attempts: int) -> RetryPolicy:
-    """Build the frozen D5 retry partition without activating a scheduler."""
+    """Build the frozen retry policy."""
     return RetryPolicy(
         max_attempts=max_attempts,
         retryable_outcomes=(
@@ -38,32 +38,25 @@ def replay_retry_policy(max_attempts: int) -> RetryPolicy:
 
 
 def frozen_topt_universe(corpus: Mapping[str, Any]) -> UniverseRef:
-    """Reconstruct the frozen TOPT universe coordinate used by every D5 rung."""
-    denominator = corpus["topt_denominator"]
+    """Reconstruct the frozen TOPT universe coordinate."""
     return UniverseRef(
-        universe_id=denominator["universe_id"],
+        universe_id=corpus["topt_denominator"]["universe_id"],
         universe_version="topt-candidate-2026-03-31-v1",
         content_sha256="8b2f885e6161c01603b9d78882d411c7984ff6a3dbf35d636cb11e8c2ecfcf8f",
     )
 
 
 def expand_obligations(
-    *,
-    run_id: str,
-    list_version: CaptureListVersion,
-    semantic_types: tuple[str, ...],
-    partition: str,
+    *, run_id: str, list_version: CaptureListVersion, semantic_types: tuple[str, ...], partition: str
 ) -> tuple[CaptureListObligation, ...]:
-    """Expand the exact list/type denominator without collapsing share classes."""
+    """Expand list members and semantic types into capture obligations."""
     if not semantic_types:
         raise ValueError("semantic_types must not be empty")
     if len(semantic_types) != len(set(semantic_types)):
         raise ValueError("obligation inputs must not contain duplicates")
-    supported_kinds = {SubjectKind.LISTING, SubjectKind.SECURITY}
-    if any(member.kind not in supported_kinds for member in list_version.members):
+    if any(member.kind not in {SubjectKind.LISTING, SubjectKind.SECURITY} for member in list_version.members):
         raise ValueError("capture-control expansion requires listing or security members")
-    ordered_semantic_types = tuple(sorted(semantic_types))
-    obligations = (
+    return tuple(
         CaptureListObligation(
             list_version_id=list_version.list_version_id,
             obligation=ListObligation(
@@ -75,14 +68,13 @@ def expand_obligations(
             ),
         )
         for member in list_version.members
-        for semantic_type in ordered_semantic_types
+        for semantic_type in sorted(semantic_types)
     )
-    return tuple(obligations)
 
 
 @dataclass
 class AttemptLedger:
-    """Append-only in-memory E0 ledger; persistence is supplied by the repository layer later."""
+    """Append-only in-memory attempt ledger."""
 
     work_item_id: str
     retry_policy: RetryPolicy
@@ -105,9 +97,7 @@ class AttemptLedger:
         if len(self.attempts) >= self.maximum_attempts:
             raise ValueError("maximum attempts exceeded")
         attempt = FetchAttempt(
-            work_item_id=self.work_item_id,
-            attempt_number=len(self.attempts) + 1,
-            started_at=started_at,
+            work_item_id=self.work_item_id, attempt_number=len(self.attempts) + 1, started_at=started_at
         )
         self.attempts.append(attempt)
         return attempt

@@ -139,7 +139,9 @@ def _write_corpus(path: Path, definition: LargeModelValueV0Definition) -> None:
 def test_a_definition_file_joins_the_scan_by_its_content_not_its_name(tmp_path: Path) -> None:
     packaged = resources.files("truealpha_contracts.data")
     (tmp_path / "first.json").write_bytes(packaged.joinpath(_FROZEN_RESOURCE).read_bytes())
-    (tmp_path / "a_run_report.json").write_bytes(packaged.joinpath(_PREVIEW_FIXTURE_RESOURCE).read_bytes())
+    (tmp_path / "a_run_report.json").write_bytes(
+        (Path(__file__).parent / "fixtures" / _PREVIEW_FIXTURE_RESOURCE).read_bytes()
+    )
     synthetic = synthetic_provisional_strategy_definition()
     _write_corpus(tmp_path / "second.json", synthetic)
 

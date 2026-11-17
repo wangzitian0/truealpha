@@ -1,4 +1,4 @@
-"""Inline-XBRL segment revenue extraction and consolidated-revenue balancing (#772, #830)."""
+"""Inline-XBRL segment revenue extraction (#772, #830)."""
 
 from __future__ import annotations
 
@@ -9,7 +9,6 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
-from functools import partial
 from typing import Any
 
 from factors.shared.extraction import (
@@ -22,12 +21,14 @@ from factors.shared.extraction import (
 )
 from truealpha_contracts.standards import MetricStandard, confidence_for
 
+from data_engine.datahub._helpers import CAPTURE_OBSERVATION_JOIN
 from data_engine.datahub.production_topt.concept_mapping import DEFAULT_RULESET
 from data_engine.datahub.production_topt.source_registrations import AsOfAxis, knowable_instant
 from data_engine.datahub.standards.filing_extraction import (
     ExtractionOutcome,
     fetch_annual_filing,
     filing_plain_text,
+    require_annual_filing,
 )
 from data_engine.datahub.standards.inline_xbrl import InlineXbrl, TaggedFact
 
@@ -49,7 +50,7 @@ class DeclaredSegmentCount:
 
 
 def declared_segment_count(filing: bytes | InlineXbrl) -> DeclaredSegmentCount | None:
-    """Return the whole-filer segment count at the latest tagged period, preferring reportable over operating."""
+    """Return whole-filer segment count at the latest tagged period."""
     document = filing if isinstance(filing, InlineXbrl) else InlineXbrl(filing)
     stated: dict[str, list[TaggedFact]] = {}
     for fact in document.facts(_SEGMENT_COUNT_CONCEPTS):
@@ -97,46 +98,11 @@ _ANNUAL_DAYS = range(340, 381)
 _CAMEL_CASE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
 _MINOR_WORDS = frozenset({"And", "Of", "The", "For", "In", "To", "On"})
 _GEOGRAPHIC_REGION_NAMES = frozenset(
-    {
-        "americas",
-        "the americas",
-        "north america",
-        "latin america",
-        "south america",
-        "central america",
-        "united states",
-        "u s",
-        "us",
-        "usa",
-        "u s a",
-        "united kingdom",
-        "uk",
-        "u k",
-        "international",
-        "europe",
-        "emea",
-        "europe middle east and africa",
-        "europe middle east africa",
-        "greater china",
-        "china",
-        "mainland china",
-        "prc",
-        "japan",
-        "asia",
-        "asia pacific",
-        "apac",
-        "rest of asia pacific",
-        "other asia pacific",
-        "all other asia",
-        "rest of world",
-        "rest of the world",
-        "other countries",
-        "other regions",
-        "other international",
-        "other foreign",
-        "foreign",
-        "domestic",
-    }
+    "americas|the americas|north america|latin america|south america|central america|united states|u s|us|usa|"
+    "u s a|united kingdom|uk|u k|international|europe|emea|europe middle east and africa|europe middle east africa|"
+    "greater china|china|mainland china|prc|japan|asia|asia pacific|apac|rest of asia pacific|other asia pacific|"
+    "all other asia|rest of world|rest of the world|other countries|other regions|other international|other foreign|"
+    "foreign|domestic".split("|")
 )
 
 
@@ -187,6 +153,22 @@ class TaggedSegments:
         return concept if self.shape == "all" else f"{concept} ({self.shape.replace('-', ' ')} only)"
 
 
+def _collect_axis_members(
+    current: Sequence[TaggedFact],
+    axis: str,
+    extra: tuple[tuple[str, str], ...] = (),
+    scale: int = 0,
+) -> tuple[dict[str, set[Decimal | None]], int]:
+    members: dict[str, set[Decimal | None]] = {}
+    for fact in current:
+        dimensions = dict(fact.context.dimensions)
+        member = dimensions.pop(axis, "")
+        if member and tuple(dimensions.items()) == extra:
+            members.setdefault(member, set()).add(fact.value)
+            scale = max(scale, fact.scale)
+    return members, scale
+
+
 def _product_axis_candidate(
     concept: str,
     current: Sequence[TaggedFact],
@@ -194,16 +176,8 @@ def _product_axis_candidate(
     base_scale: int,
     reconciling: tuple[tuple[str, Decimal], ...],
 ) -> TaggedSegments | None:
-    prod_members: dict[str, set[Decimal | None]] = {}
-    prod_scale = base_scale
-    for fact in current:
-        dimensions = dict(fact.context.dimensions)
-        member = dimensions.pop(_PRODUCT_AXIS, "")
-        if not member or dimensions:
-            continue
-        prod_members.setdefault(member, set()).add(fact.value)
-        prod_scale = max(prod_scale, fact.scale)
-    prod_members = _prune_coarse_product_rollup(prod_members)
+    raw_members, prod_scale = _collect_axis_members(current, _PRODUCT_AXIS, scale=base_scale)
+    prod_members = _prune_coarse_product_rollup(raw_members)
     if not prod_members:
         return None
     prod_set = _tagged_set(
@@ -238,13 +212,9 @@ def _segment_axis_candidates(
     by_shape: dict[str, dict[str, set[Decimal | None]]] = {}
     scale = 0
     for shape, extra in _SHAPES:
-        for fact in current:
-            dimensions = dict(fact.context.dimensions)
-            member = dimensions.pop(_SEGMENT_AXIS, "")
-            if not member or tuple(dimensions.items()) != extra:
-                continue
-            by_shape.setdefault(shape, {}).setdefault(member, set()).add(fact.value)
-            scale = max(scale, fact.scale)
+        members, scale = _collect_axis_members(current, _SEGMENT_AXIS, extra, scale)
+        if members:
+            by_shape[shape] = members
     union: dict[str, set[Decimal | None]] = {}
     for members in by_shape.values():
         for member, values in members.items():
@@ -258,7 +228,7 @@ def _segment_axis_candidates(
 
 
 def tagged_segment_revenues(filing: bytes | InlineXbrl) -> tuple[TaggedSegments, ...]:
-    """Return candidate annual segment revenue sets ordered by concept and context shape."""
+    """Return candidate annual segment revenue sets ordered by priority."""
     document = filing if isinstance(filing, InlineXbrl) else InlineXbrl(filing)
     facts = [
         fact
@@ -313,7 +283,7 @@ class TaggedPartition:
 def accepted_tagged_partition(
     tagged: Sequence[TaggedSegments], *, total: Decimal, period_end: date | None
 ) -> TaggedPartition | list[str]:
-    """Select the first balancing tagged segment set against consolidated `total`."""
+    """Select first balancing tagged segment set."""
     refusals: list[str] = []
     eligible: list[TaggedSegments] = []
     for segments in tagged:
@@ -385,7 +355,7 @@ _DESCRIPTION_LIMIT = 720
 
 
 def single_segment_description(document: InlineXbrl, declared: DeclaredSegmentCount, body: bytes) -> str | None:
-    """Assemble the classifier description for a declared single-segment issuer."""
+    """Build classifier description for a single-segment issuer."""
     note = document.text_block(_SEGMENT_NOTE, limit=_SEGMENT_NOTE_LIMIT)
     if note:
         declaration: str | None = single_segment_statement(note) or note[: _STATEMENT_LEAD + _SINGLE_SEGMENT_SPAN]
@@ -402,20 +372,14 @@ def single_segment_description(document: InlineXbrl, declared: DeclaredSegmentCo
 
 SEGMENT_TOLERANCE = Decimal("5")
 
-_CONSOLIDATED_REVENUE_SQL = """
-select p.normalized_payload->>'revenue',
-       p.normalized_payload->>'revenue_period_end'
-from staging.capture_normalized_observations o
-join staging.capture_observation_payloads p on p.observation_id = o.observation_id
-join raw.capture_source_vintages v on v.source_vintage_id = o.source_vintage_id
-where o.semantic_type = 'financial-fact'
-  and v.source_record_id = %s
-  and o.knowable_at <= %s
-  and p.normalized_payload->>'revenue' is not null
-  and p.normalized_payload->>'revenue_period_end' is not null
-order by o.knowable_at desc
-limit 1
-"""
+_CONSOLIDATED_REVENUE_SQL = (
+    "select p.normalized_payload->>'revenue', p.normalized_payload->>'revenue_period_end' "
+    + CAPTURE_OBSERVATION_JOIN
+    + " where o.semantic_type = 'financial-fact' and v.source_record_id = %s and o.knowable_at <= %s"
+    " and p.normalized_payload->>'revenue' is not null"
+    " and p.normalized_payload->>'revenue_period_end' is not null"
+    " order by o.knowable_at desc limit 1"
+)
 
 
 @dataclass(frozen=True)
@@ -470,34 +434,49 @@ def record_segment_partition(
     extractor: str,
     confidence: Decimal,
 ) -> int:
-    for segment_name, revenue in parts:
-        connection.execute(
-            """
-            insert into staging.issuer_segment_revenue_facts
-                (cik, segment_name, segment_revenue, partition_id, partition_total,
-                 partition_residual, knowable_at, period_end, source, evidence_ref,
-                 extractor, confidence)
-            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """,
-            (
-                cik,
-                segment_name,
-                revenue,
-                partition_id,
-                partition_total,
-                partition_residual,
-                knowable_at,
-                period_end,
-                SEGMENT_SOURCE,
-                evidence_ref,
-                extractor,
-                confidence,
-            ),
+    query = (
+        "insert into staging.issuer_segment_revenue_facts "
+        "(cik, segment_name, segment_revenue, partition_id, partition_total, partition_residual, "
+        "knowable_at, period_end, source, evidence_ref, extractor, confidence) "
+        "values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+    )
+    rows = [
+        (
+            cik,
+            name,
+            revenue,
+            partition_id,
+            partition_total,
+            partition_residual,
+            knowable_at,
+            period_end,
+            SEGMENT_SOURCE,
+            evidence_ref,
+            extractor,
+            confidence,
         )
+        for name, revenue in parts
+    ]
+    with connection.cursor() as cur:
+        cur.executemany(query, rows)
     return len(parts)
 
 
 SINGLE_SEGMENT_NAME = "Single reportable segment"
+
+
+def _doc_outcome(
+    cik: int, status: Any, document: Any, *, detail: str, extractor: str | None = None
+) -> ExtractionOutcome:
+    return ExtractionOutcome(
+        cik,
+        status,
+        extractor=extractor or ExtractionOutcome.extractor,
+        accession=document.accession,
+        form=document.form,
+        filing_date=document.filing_date,
+        detail=detail,
+    )
 
 
 def _land_partition(
@@ -516,18 +495,16 @@ def _land_partition(
     note: str = "",
 ) -> ExtractionOutcome:
     partition_id = partition_id_for(record_cik, oracle.period_end, parts, extractor=extractor)
-    outcome = partial(
-        ExtractionOutcome,
-        record_cik,
-        extractor=extractor,
-        accession=document.accession,
-        form=document.form,
-        filing_date=document.filing_date,
-    )
     if not write:
-        return outcome("resolved", detail=f"would land {summary}{note}")
+        return _doc_outcome(record_cik, "resolved", document, extractor=extractor, detail=f"would land {summary}{note}")
     if partition_already_recorded(connection, partition_id):
-        return outcome("already_recorded", detail=f"{partition_id} already holds {summary}")
+        return _doc_outcome(
+            record_cik,
+            "already_recorded",
+            document,
+            extractor=extractor,
+            detail=f"{partition_id} already holds {summary}",
+        )
     record_segment_partition(
         connection,
         cik=record_cik,
@@ -541,7 +518,9 @@ def _land_partition(
         extractor=extractor,
         confidence=confidence_for(standard.confidence_policy_id, extractor),
     )
-    return outcome("resolved", detail=f"{partition_id} landed {summary}{note}")
+    return _doc_outcome(
+        record_cik, "resolved", document, extractor=extractor, detail=f"{partition_id} landed {summary}{note}"
+    )
 
 
 def _tagged_segments_outcome(
@@ -555,20 +534,22 @@ def _tagged_segments_outcome(
     standard: MetricStandard,
     write: bool,
 ) -> ExtractionOutcome:
-    refused = partial(
-        ExtractionOutcome,
-        cik,
-        "no_candidate",
-        accession=document.accession,
-        form=document.form,
-        filing_date=document.filing_date,
-    )
     if oracle is None:
-        labels = "; ".join(f"{segments.label}: {PartitionRefusal.NO_TOTAL.value}" for segments in tagged)
-        return refused(detail=f"tagged segment revenue accounts for no consolidated revenue ({labels})")
+        reason_text = "; ".join(f"{segments.label}: {PartitionRefusal.NO_TOTAL.value}" for segments in tagged)
+        return _doc_outcome(
+            cik,
+            "no_candidate",
+            document,
+            detail=f"tagged segment revenue accounts for no consolidated revenue ({reason_text})",
+        )
     accepted = accepted_tagged_partition(tagged, total=oracle.value, period_end=oracle.period_end)
     if isinstance(accepted, list):
-        return refused(detail=f"tagged segment revenue accounts for no consolidated revenue ({'; '.join(accepted)})")
+        return _doc_outcome(
+            cik,
+            "no_candidate",
+            document,
+            detail=f"tagged segment revenue accounts for no consolidated revenue ({'; '.join(accepted)})",
+        )
     parts = [(segment_name_for(member), value) for member, value in accepted.parts]
     named = ", ".join(f"{name}={value}" for name, value in parts)
     verdict = accepted.verdict
@@ -614,26 +595,29 @@ def extract_segment_revenue(
     issuer_label: str | None = None,
     **_unused: Any,
 ) -> ExtractionOutcome:
-    """Fetch the latest annual filing, verify inline-XBRL segment counts/revenues against consolidated revenue, and land."""
+    """Extract and balance iXBRL segment revenues and persist."""
     del issuer_label, store
     record_cik = cik if record_cik is None else record_cik
-    document = fetch_annual_filing(cik, http=http, gateway=gateway, cutoff=cutoff)
+    document = require_annual_filing(
+        cik,
+        http=http,
+        gateway=gateway,
+        cutoff=cutoff,
+        no_filing_detail="no 10-K/20-F at or before the cutoff",
+        fetcher=fetch_annual_filing,
+    )
     if isinstance(document, ExtractionOutcome):
         return document
-    if document is None:
-        return ExtractionOutcome(cik, "no_annual_filing", detail="no 10-K/20-F at or before the cutoff")
 
     oracle = consolidated_revenue(connection, record_cik, cutoff=cutoff)
     xbrl = InlineXbrl(document.body)
     declared = declared_segment_count(xbrl)
     if declared is not None and declared.value == 1 and oracle is not None:
         if declared.period_end != oracle.period_end:
-            return ExtractionOutcome(
+            return _doc_outcome(
                 cik,
                 "no_candidate",
-                accession=document.accession,
-                form=document.form,
-                filing_date=document.filing_date,
+                document,
                 detail=(
                     f"declares a single segment for {declared.period_end} ({declared.concept}), but "
                     f"the consolidated revenue on file is for {oracle.period_end}"
@@ -681,11 +665,4 @@ def extract_segment_revenue(
         )
     else:
         detail = "the filing tags no segment revenue on the business-segment axis for its latest year"
-    return ExtractionOutcome(
-        cik,
-        "no_candidate",
-        accession=document.accession,
-        form=document.form,
-        filing_date=document.filing_date,
-        detail=detail,
-    )
+    return _doc_outcome(cik, "no_candidate", document, detail=detail)

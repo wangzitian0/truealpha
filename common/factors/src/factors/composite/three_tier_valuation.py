@@ -1,4 +1,4 @@
-"""Module 7: three-tier valuation composite (#21, #1235)."""
+"""Module 7: three-tier valuation (#21, #1235)."""
 
 from collections.abc import Sequence
 from datetime import datetime

@@ -1,16 +1,4 @@
-"""TrueAlpha factor library.
-
-Layout (init.md Section 4):
-- base/      factors that consume staging (incl. KG) data directly
-- composite/ factors that consume other factors' mart outputs; confidence = min() of inputs
-- shared/    entity resolution (KG read/write) + LLM structured-extraction primitive
-- panel.py   the standardized wide panel and native Polars pl.Expr evaluator (#1610)
-
-Hard constraints (init.md Section 1):
-- Factors never know data provenance, only confidence: every input is a
-  (entity_id, value, unit_family, confidence, as_of) tuple.
-- Function signatures align with the eventual Dagster asset convention from Phase -1 on.
-"""
+"""TrueAlpha factor library."""
 
 from factors.confidence import (
     DEFAULT_CONFIDENCE_POLICY,

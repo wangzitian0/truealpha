@@ -18,6 +18,7 @@ from typing import Any
 
 import psycopg
 import pytest
+from fixtures.strategy_run_fixture import FixtureStrategyRunRepository
 from llm_service.mcp_server import ResearchReportMarkdown, build_mcp_server
 from mcp.shared.memory import create_connected_server_and_client_session
 from truealpha_contracts.access import AccessContext, AuthenticationMethod, PrincipalKind
@@ -28,7 +29,6 @@ from truealpha_contracts.research_report import (
     render_report_markdown,
 )
 from truealpha_contracts.research_report_mart import MartResearchReadRepository
-from truealpha_contracts.strategy_run_fixture import FixtureStrategyRunRepository
 
 _SEED_PATH = (
     Path(__file__).resolve().parents[3] / "common" / "contracts" / "tests" / "fixtures" / "issuer_modules_parity.py"

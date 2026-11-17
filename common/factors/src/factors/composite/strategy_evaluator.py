@@ -1,4 +1,4 @@
-"""Single-source evaluator for the large_model_value_v0 decision algorithm (#393, #1235, #1518)."""
+"""Evaluator for `large_model_value_v0` (#393, #1235, #1518)."""
 
 from __future__ import annotations
 
@@ -257,17 +257,16 @@ def _make_fact(
 def _facts_for(issuer: IssuerInput, keys: Sequence[str], *, as_of: datetime) -> list[Fact]:
     facts: list[Fact] = []
     for key in keys:
-        if key in issuer.periodic_records:
-            for period, (raw_measure, confidence) in sorted(issuer.periodic_records[key].items()):
-                measure = _as_measure(key, raw_measure, subject=issuer.issuer_id, period=period, knowable_at=as_of)
-                facts.append(_make_fact(issuer.issuer_id, key, measure, confidence, as_of, period=period))
-            continue
-        record = issuer.records.get(_resolve_bank_numerator_key(key, issuer.records))
-        if record is None:
-            continue
-        raw_measure, confidence = record
-        measure = _as_measure(key, raw_measure, subject=issuer.issuer_id, knowable_at=as_of)
-        facts.append(_make_fact(issuer.issuer_id, key, measure, confidence, as_of))
+        items = (
+            sorted(issuer.periodic_records[key].items())
+            if key in issuer.periodic_records
+            else [(None, issuer.records[_resolve_bank_numerator_key(key, issuer.records)])]
+            if _resolve_bank_numerator_key(key, issuer.records) in issuer.records
+            else []
+        )
+        for period, (raw_measure, confidence) in items:
+            measure = _as_measure(key, raw_measure, subject=issuer.issuer_id, period=period, knowable_at=as_of)
+            facts.append(_make_fact(issuer.issuer_id, key, measure, confidence, as_of, period=period))
     return facts
 
 
@@ -301,7 +300,7 @@ def _has_stale_period(issuer: IssuerInput, keys: Sequence[str], *, as_of: dateti
 
 
 class LookAheadError(ValueError):
-    """Raised when an input's `knowable_at` is strictly after the evaluation `cutoff_at`."""
+    """Input `knowable_at` exceeds `cutoff_at`."""
 
 
 def _has_stale_required_input(
@@ -360,42 +359,19 @@ def _check_issuer_eligibility(
     metrics: Mapping[str, PanelMetricSpec],
 ) -> tuple[EvaluatedDecision | None, Decimal]:
     assert issuer.issuer_class is not None
-    metric = tree.root
     consumed = _consumed_input_keys(metrics, {issuer.issuer_class: tree})
     required = _required_inputs(definition.valuation_basis, consumed)
     if (missing := _missing_required_reason(issuer, required)) is not None:
-        return _excluded(issuer.issuer_id, missing, confidence=None, labor_efficiency_metric=metric), Decimal(0)
+        return _excluded(issuer.issuer_id, missing, None, tree.root), Decimal(0)
     max_age = timedelta(days=definition.eligibility.maximum_input_age_days)
     if _has_stale_required_input(issuer, [k for k, _ in required], as_of=as_of, maximum_age=max_age):
-        return (
-            _excluded(
-                issuer.issuer_id,
-                ExclusionReason.STALE_REQUIRED_INPUT,
-                confidence=None,
-                labor_efficiency_metric=metric,
-            ),
-            Decimal(0),
-        )
+        return _excluded(issuer.issuer_id, ExclusionReason.STALE_REQUIRED_INPUT, None, tree.root), Decimal(0)
     if _has_stale_period(issuer, sorted(consumed), as_of=as_of, maximum_age=max_age):
-        return (
-            _excluded(issuer.issuer_id, ExclusionReason.STALE_PERIOD, confidence=None, labor_efficiency_metric=metric),
-            Decimal(0),
-        )
-    consumed_confidence = _consumed_confidence_for(issuer, required)
-    if (
-        definition.eligibility.minimum_confidence is not None
-        and consumed_confidence < definition.eligibility.minimum_confidence
-    ):
-        return (
-            _excluded(
-                issuer.issuer_id,
-                ExclusionReason.BELOW_CONFIDENCE_FLOOR,
-                confidence=consumed_confidence,
-                labor_efficiency_metric=metric,
-            ),
-            Decimal(0),
-        )
-    return None, consumed_confidence
+        return _excluded(issuer.issuer_id, ExclusionReason.STALE_PERIOD, None, tree.root), Decimal(0)
+    conf = _consumed_confidence_for(issuer, required)
+    if definition.eligibility.minimum_confidence is not None and conf < definition.eligibility.minimum_confidence:
+        return _excluded(issuer.issuer_id, ExclusionReason.BELOW_CONFIDENCE_FLOOR, conf, tree.root), Decimal(0)
+    return None, conf
 
 
 def _evaluate_issuer(
@@ -409,7 +385,7 @@ def _evaluate_issuer(
 ) -> tuple[EvaluatedDecision, Decimal | None]:
     tree = None if issuer.issuer_class is None else trees.get(issuer.issuer_class)
     if issuer.issuer_class is None or tree is None:
-        return _excluded(issuer.issuer_id, ExclusionReason.MISSING_ISSUER_CLASS, confidence=None), None
+        return _excluded(issuer.issuer_id, ExclusionReason.MISSING_ISSUER_CLASS), None
 
     rejection, consumed_confidence = _check_issuer_eligibility(
         issuer, definition=definition, as_of=as_of, tree=tree, metrics=metrics
@@ -445,10 +421,7 @@ def _evaluate_issuer(
             (r for flag, r in _REFUSAL_FLAG_REASONS if flag in flags),
             ExclusionReason.STALE_REQUIRED_INPUT,
         )
-        return (
-            _excluded(issuer.issuer_id, reason, confidence=consumed_confidence, labor_efficiency_metric=tree.root),
-            None,
-        )
+        return _excluded(issuer.issuer_id, reason, consumed_confidence, tree.root), None
 
     peg_result = peg(
         _facts_for(issuer, _input_keys("peg"), as_of=as_of),
@@ -470,15 +443,9 @@ def _evaluate_issuer(
         definition=definition,
     )
     if tier_result.value is None:
-        return (
-            _excluded(
-                issuer.issuer_id,
-                ExclusionReason.MISSING_MARKET_VALUE_INPUT,
-                confidence=tier_result.confidence,
-                labor_efficiency_metric=tree.root,
-            ),
-            None,
-        )
+        return _excluded(
+            issuer.issuer_id, ExclusionReason.MISSING_MARKET_VALUE_INPUT, tier_result.confidence, tree.root
+        ), None
 
     band = tier_band(definition, labor_efficiency)
     target_multiple = _quantize(
@@ -511,8 +478,7 @@ def _evaluate_issuer(
 def _excluded(
     issuer_id: str,
     reason: ExclusionReason,
-    *,
-    confidence: Decimal | None,
+    confidence: Decimal | None = None,
     labor_efficiency_metric: str | None = None,
 ) -> EvaluatedDecision:
     return EvaluatedDecision(

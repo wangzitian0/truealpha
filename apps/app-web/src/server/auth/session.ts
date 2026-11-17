@@ -1,10 +1,3 @@
-/**
- * #368: derives `AccessContext` only from a verified session cookie —
- * replaces `getLocalAdminAccessContext()` on every production route.
- * Never accepts a client-supplied principal/tenant/role/entitlement field;
- * the only inputs are the signed cookie and a server-side DB lookup.
- */
-
 import type { AccessContext } from "@/contracts/strategyRun";
 import type { QueryExecutor } from "./credentials";
 import { verifySessionToken } from "./security";
@@ -16,9 +9,6 @@ export interface ResolvedPrincipal {
 }
 
 export interface PrincipalLookup {
-  /** Resolves principal_kind + tenant_id for an already-authenticated
-   * principal_id from `app.principals`. Returns `null` if the principal no
-   * longer resolves (deleted, or never existed). */
   findPrincipal(principalId: string): Promise<ResolvedPrincipal | null>;
 }
 
@@ -31,15 +21,6 @@ export interface SessionPrincipal {
   principalKind: ResolvedPrincipal["principalKind"];
 }
 
-/** Derives `AccessContext` + `principalKind` only from a verified session
- * cookie. Returns `null` (deny) for a missing/invalid/expired token, a
- * principal no longer resolvable in `app.principals`, or a token whose
- * `tenantId` claim disagrees with the current `app.principals` row — the
- * database is the authority on tenant membership, not the JWT's own
- * (possibly stale) claim. This is identity derivation only; it makes no
- * authorization decision — every repository operation still re-authorizes
- * through #229. `principalKind` is what #371's route groups gate on
- * (administrator vs member), never a client-supplied field. */
 export async function getSessionPrincipal(
   cookieValue: string | undefined,
   lookup: PrincipalLookup,
@@ -68,8 +49,6 @@ export async function getSessionPrincipal(
   };
 }
 
-/** Thin wrapper over `getSessionPrincipal` for callers that only need
- * identity, not role (e.g. #368's `/api/auth/me`). */
 export async function getSessionAccessContext(
   cookieValue: string | undefined,
   lookup: PrincipalLookup,
@@ -79,8 +58,6 @@ export async function getSessionAccessContext(
   return resolved ? resolved.context : null;
 }
 
-/** Reads `principal_kind` + `tenant_id` from `app.principals`. Must be
- * constructed with a client already scoped to `app_runtime`. */
 export class PostgresPrincipalLookup implements PrincipalLookup {
   constructor(private readonly db: QueryExecutor) {}
 

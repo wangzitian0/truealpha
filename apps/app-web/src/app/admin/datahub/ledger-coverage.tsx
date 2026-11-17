@@ -1,10 +1,3 @@
-/**
- * #1521 step 6: the key and run coverage of the call ledger, one row per UTC day, vendor and endpoint.
- *
- * The table replaces the nightly verdict `fetch_keys_once`. It judges nothing: an amber cell marks a count above
- * zero, and no run turns red on it. SQL computes every count and ratio (`LEDGER_COVERAGE_SQL`); this view formats.
- */
-
 import { formatCell, formatPercentFromFraction } from "@/client/format";
 import { DataTable, EmptyNotice } from "@/components/data-table";
 import { LEDGER_COVERAGE_DAYS, type LedgerCoverageRow } from "@/server/admin/datahub-stats";

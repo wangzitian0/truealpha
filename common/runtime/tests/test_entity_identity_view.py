@@ -39,23 +39,12 @@ from truealpha_runtime.testing import apply_migration_chain, isolated_test_datab
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 MIGRATIONS = REPO_ROOT / "db" / "migrations"
-#: The definition before #1337. Its `$view$` text is the reference of the equivalence checks.
-LEGACY_ID_MIGRATION = MIGRATIONS / "20260923T1800_datahub_mart_entity_identity_legacy_id.sql"
-#: The definition of #1337. It creates the view only on a database that has none.
-SET_BASED_MIGRATION = MIGRATIONS / "20261015T0900_datahub_mart_entity_identity_set_based.sql"
-#: The definition of #1518. It reads the relation `primary_listing`.
-PRIMARY_LISTING_MIGRATION = MIGRATIONS / "20261027T1100_datahub_primary_listing_relation.sql"
-#: The definition of #1641. It bounds the staging.kg_entities join to one row per entity.
-UNIQUE_IDENTITY_MIGRATION = MIGRATIONS / "20261110T1500_datahub_entity_identity_unique_and_fund_conservation.sql"
-#: Every file that defines the view. Each boot replays all of them.
-VIEW_MIGRATIONS = (
-    MIGRATIONS / "20260921T2100_datahub_mart_entity_identity.sql",
-    MIGRATIONS / "20260923T0800_datahub_mart_entity_identity_listing_id.sql",
-    LEGACY_ID_MIGRATION,
-    SET_BASED_MIGRATION,
-    PRIMARY_LISTING_MIGRATION,
-    UNIQUE_IDENTITY_MIGRATION,
-)
+#: Squashed baseline defining `mart.entity_identity` (#1337, #1518, #1641).
+LEGACY_ID_MIGRATION = MIGRATIONS / "0003_mart.sql"
+SET_BASED_MIGRATION = LEGACY_ID_MIGRATION
+PRIMARY_LISTING_MIGRATION = LEGACY_ID_MIGRATION
+UNIQUE_IDENTITY_MIGRATION = LEGACY_ID_MIGRATION
+VIEW_MIGRATIONS = (LEGACY_ID_MIGRATION,)
 
 COLUMNS = ("entity_id", "kind", "current_ticker", "name", "cik", "lei", "listing_id", "legacy_id")
 HELPERS = ("entity_survivor", "entity_alias_valid_to")
@@ -397,12 +386,139 @@ def seed_production_size(conn: psycopg.Connection) -> tuple[int, int]:
 
 def old_definition() -> str:
     """The view text of 20260923T1800, the definition before #1337, with #1641 1:1 kg_entities join."""
-    parts = LEGACY_ID_MIGRATION.read_text(encoding="utf-8").split("$view$")
-    assert len(parts) == 3, f"{LEGACY_ID_MIGRATION.name} must hold exactly one $view$ body"
-    assert "staging.entity_survivor(" in parts[1], "the reference text must be the definition that calls the helpers"
-    return parts[1].replace(
-        "left join staging.kg_entities kg on (kg.id = e.entity_id::text or (la.legacy_id is not null and kg.id = la.legacy_id))",
-        """left join lateral (
+    return """
+with active_aliases as (
+    select
+        staging.entity_survivor(alias.entity_id, 'infinity') as survivor_id,
+        alias.scheme,
+        alias.value,
+        row_number() over (
+            partition by staging.entity_survivor(alias.entity_id, 'infinity'), alias.scheme
+            order by alias.confidence desc, alias.transaction_time desc, alias.alias_id desc
+        ) as rn
+    from staging.entity_aliases alias
+    where staging.entity_alias_valid_to(alias.alias_id, 'infinity') is null
+       or staging.entity_alias_valid_to(alias.alias_id, 'infinity') > alias.valid_from
+),
+latest_by_scheme as (
+    select survivor_id, scheme, value
+    from active_aliases
+    where rn = 1
+),
+direct_ciks as (select survivor_id, value as cik from latest_by_scheme where scheme = 'cik'),
+direct_leis as (select survivor_id, value as lei from latest_by_scheme where scheme = 'lei'),
+direct_tickers as (
+    select distinct on (survivor_id)
+        survivor_id,
+        case
+            when scheme = 'mic-ticker' then split_part(value, ':', 2)
+            when scheme = 'legacy-id' and value ~ '^listing:[0-9a-z]{4}:[0-9a-z][0-9a-z.\\-]*$'
+            then upper(split_part(value, ':', 3))
+        end as ticker
+    from latest_by_scheme
+    where scheme = 'mic-ticker'
+       or (scheme = 'legacy-id' and value ~ '^listing:[0-9a-z]{4}:[0-9a-z][0-9a-z.\\-]*$')
+    order by survivor_id, (scheme = 'mic-ticker') desc
+),
+issuer_tickers as (
+    select distinct on (r_issues.from_entity_id)
+        r_issues.from_entity_id as issuer_id,
+        dt.ticker
+    from staging.entity_relations r_issues
+    join staging.entity_relations r_listed
+      on r_listed.from_entity_id = r_issues.to_entity_id
+     and r_listed.relation_type = 'listed_as'
+    join direct_tickers dt
+      on dt.survivor_id = r_listed.to_entity_id
+    where r_issues.relation_type = 'issues'
+      and dt.ticker is not null
+    order by r_issues.from_entity_id,
+             case
+                 when dt.ticker = 'GOOGL' then 0
+                 when dt.ticker = 'GOOG' then 2
+                 else 1
+             end,
+             r_issues.transaction_time desc,
+             dt.ticker asc,
+             r_issues.relation_id desc
+),
+instrument_tickers as (
+    select distinct on (r_listed.from_entity_id)
+        r_listed.from_entity_id as instrument_id,
+        dt.ticker
+    from staging.entity_relations r_listed
+    join direct_tickers dt
+      on dt.survivor_id = r_listed.to_entity_id
+    where r_listed.relation_type = 'listed_as'
+      and dt.ticker is not null
+    order by r_listed.from_entity_id,
+             r_listed.transaction_time desc,
+             dt.ticker asc,
+             r_listed.relation_id desc
+),
+direct_names as (select survivor_id, value as name from latest_by_scheme where scheme = 'name'),
+legacy_aliases as (
+    select distinct on (survivor_id) survivor_id, value as legacy_id
+    from latest_by_scheme
+    where scheme = 'legacy-id'
+    order by survivor_id
+),
+direct_listings as (
+    select distinct on (survivor_id)
+        survivor_id,
+        case
+            when scheme = 'legacy-id' and value ~ '^listing:[0-9a-z]{4}:[0-9a-z][0-9a-z.\\-]*$'
+            then value
+            when scheme = 'mic-ticker'
+            then 'listing:' || lower(split_part(value, ':', 1)) || ':' || lower(split_part(value, ':', 2))
+        end as listing_id
+    from latest_by_scheme
+    where scheme = 'legacy-id' or scheme = 'mic-ticker'
+    order by survivor_id, (scheme = 'legacy-id') desc
+),
+issuer_listings as (
+    select distinct on (r_issues.from_entity_id)
+        r_issues.from_entity_id as issuer_id,
+        dl.listing_id
+    from staging.entity_relations r_issues
+    join staging.entity_relations r_listed
+      on r_listed.from_entity_id = r_issues.to_entity_id
+     and r_listed.relation_type = 'listed_as'
+    join direct_listings dl
+      on dl.survivor_id = r_listed.to_entity_id
+    where r_issues.relation_type = 'issues'
+      and dl.listing_id is not null
+    order by r_issues.from_entity_id,
+             case
+                 when dl.listing_id = 'listing:xnas:googl' then 0
+                 when dl.listing_id = 'listing:xnas:goog' then 2
+                 else 1
+             end,
+             r_issues.transaction_time desc,
+             dl.listing_id asc,
+             r_issues.relation_id desc
+)
+select
+    e.entity_id,
+    e.kind,
+    coalesce(dt.ticker, it.ticker, inst.ticker) as current_ticker,
+    coalesce(dn.name, kg.display_name) as name,
+    dc.cik,
+    dl.lei,
+    coalesce(dlist.listing_id, ilist.listing_id) as listing_id,
+    la.legacy_id
+from staging.entities e
+cross join lateral (select staging.entity_survivor(e.entity_id, 'infinity') as id) survivor
+left join direct_tickers dt on dt.survivor_id = survivor.id
+left join issuer_tickers it on it.issuer_id = survivor.id
+left join instrument_tickers inst on inst.instrument_id = survivor.id
+left join direct_names dn on dn.survivor_id = survivor.id
+left join legacy_aliases la on la.survivor_id = survivor.id
+left join direct_ciks dc on dc.survivor_id = survivor.id
+left join direct_leis dl on dl.survivor_id = survivor.id
+left join direct_listings dlist on dlist.survivor_id = survivor.id
+left join issuer_listings ilist on ilist.issuer_id = survivor.id
+left join lateral (
     select kg_row.display_name
     from staging.kg_entities kg_row
     where kg_row.id = e.entity_id::text
@@ -411,8 +527,8 @@ def old_definition() -> str:
              nullif(btrim(kg_row.display_name), '') is not null desc,
              kg_row.id
     limit 1
-) kg on true""",
-    )
+) kg on true
+"""
 
 
 def create_old_view(conn: psycopg.Connection) -> None:

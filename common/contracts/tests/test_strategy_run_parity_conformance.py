@@ -34,7 +34,7 @@ from truealpha_contracts.access import AccessContext, AuthenticationMethod, Prin
 from truealpha_contracts.strategy_run import StrategyRunReport, StrategyRunUnavailable
 from truealpha_contracts.strategy_run_postgres import PostgresStrategyRunRepository
 
-_FIXTURE_PATH = Path(__file__).parents[1] / "conformance" / "strategy_run_parity.json"
+_FIXTURE_PATH = Path(__file__).parent / "fixtures" / "strategy_run_parity.json"
 _FIXTURE = json.loads(_FIXTURE_PATH.read_text())
 _REPORT_CASES = sorted(name for name, case in _FIXTURE.items() if "expected_report" in case)
 _DIVERGENCE_CASES = ("wrong_strategy_id", "rank_zero", "weight_out_of_bounds")

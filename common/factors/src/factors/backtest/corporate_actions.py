@@ -1,4 +1,4 @@
-"""Split events derived from unadjusted and split-adjusted price series (#758, M3)."""
+"""Split events derived from price series (#758)."""
 
 from __future__ import annotations
 

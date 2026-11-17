@@ -33,6 +33,7 @@ from truealpha_contracts.strategy import load_live_strategy_definition
 from truealpha_contracts.universe import SubjectKind, SubjectRef
 from truealpha_runtime import S3RawObjectStore
 
+from data_engine.datahub._helpers import CAPTURE_OBSERVATION_JOIN, fetch_topt_cutoff
 from data_engine.datahub.production_topt.executor import SERVED_BY_FAILOVER
 from data_engine.datahub.production_topt.materialization import (
     FinancialFactPayload,
@@ -47,6 +48,7 @@ from data_engine.datahub.production_topt.source_registrations import (
 )
 from data_engine.datahub.repository import persist_run_report
 from data_engine.datahub.standards.listing_unit_ratio import OUTCOME_NOT_MEASURED, OUTCOMES, outcome_of_payload
+from data_engine.raw_store import parse_s3_uri
 
 _HEADLINE_FIELD = "close"
 PRICE_BAR_FIELDS: tuple[str, ...] = ("open", "high", "low", "close", "volume")
@@ -54,16 +56,13 @@ FIELD_UNITS: dict[str, str] = {"open": "USD", "high": "USD", "low": "USD", "clos
 _SOURCE_BY_PARSER = SOURCE_BY_PARSER
 _IDENTITY_SEMANTICS = RELEASE_SEMANTICS
 _FACTOR_REQUIRED_SEMANTICS: dict[str, tuple[str, ...]] = {"gross_profit_per_employee": ("financial-fact",)}
-
 _PER_EMPLOYEE_FLOOR = Decimal("1000")
 _PER_EMPLOYEE_CEILING = Decimal("20000000")
 _PRIMARY_PRICE_SOURCE = RECONCILIATION_POLICY.source_priority[0]
 
 _FINANCIAL_FACT_REGISTRATION = registration_for("financial-fact")
 _PRIMARY_FINANCIAL_SOURCE = f"{_FINANCIAL_FACT_REGISTRATION.source_id}:{_FINANCIAL_FACT_REGISTRATION.version}"
-_PRIMARY_FINANCIAL_ORIGIN_GROUP = (
-    f"origin:{_FINANCIAL_FACT_REGISTRATION.source_id}:{_FINANCIAL_FACT_REGISTRATION.version}"
-)
+_PRIMARY_FINANCIAL_ORIGIN_GROUP = f"origin:{_PRIMARY_FINANCIAL_SOURCE}"
 _PRIMARY_FINANCIAL_VINTAGES = frozenset(PARSER_VERSION_HISTORY)
 
 FINANCIAL_FACT_FUSION_FIELDS: dict[str, tuple[str, str]] = {
@@ -73,31 +72,16 @@ FINANCIAL_FACT_FUSION_FIELDS: dict[str, tuple[str, str]] = {
     "total_assets": ("total_assets", "vintage.total_assets.period_end"),
 }
 _ISO_CURRENCY = re.compile(r"[A-Z]{3}")
-
 _FINANCIAL_OBLIGATION_METRICS: frozenset[str] = frozenset(
-    {
-        "gross_profit",
-        "total_assets",
-        "shares_outstanding",
-        "revenue",
-        "net_income",
-        "headcount",
-        "pre_provision_profit",
-    }
+    {"gross_profit", "total_assets", "shares_outstanding", "revenue", "net_income", "headcount", "pre_provision_profit"}
 )
-
-_CORE_COMPLETE_LISTINGS_SQL = """
-    select distinct coalesce(identity.listing_id, member->>'listing_id')
-    from staging.topt_core_snapshots s
-    cross join lateral jsonb_array_elements(s.payload->'members') member
-    left join mart.entity_identity identity on identity.entity_id::text = member->>'listing_id'
-    where s.run_id = %s
-      and exists (
-          select 1 from mart.topt_core_results r
-          where r.run_id = s.run_id and r.issuer_id = member->>'issuer_id' and r.availability = 'available'
-      )
-    order by 1
-"""
+_CORE_COMPLETE_LISTINGS_SQL = (
+    "select distinct coalesce(identity.listing_id, member->>'listing_id') from staging.topt_core_snapshots s "
+    "cross join lateral jsonb_array_elements(s.payload->'members') member "
+    "left join mart.entity_identity identity on identity.entity_id::text = member->>'listing_id' "
+    "where s.run_id = %s and exists (select 1 from mart.topt_core_results r "
+    "where r.run_id = s.run_id and r.issuer_id = member->>'issuer_id' and r.availability = 'available') order by 1"
+)
 
 
 def _operating_numerator_field(branch: OperatingBranch) -> str:
@@ -119,16 +103,13 @@ def _factor_availability(
     conn: psycopg.Connection[Any], run_id: str, usable_by_subject: Mapping[str, Mapping[str, bool]]
 ) -> dict[str, dict[str, Any]]:
     universe = sorted(usable_by_subject)
-    core_count_row = conn.execute("select count(*) from mart.topt_core_results where run_id = %s", (run_id,)).fetchone()
-    core_count = core_count_row[0] if core_count_row is not None else 0
+    core_row = conn.execute("select count(*) from mart.topt_core_results where run_id = %s", (run_id,)).fetchone()
+    core_count = core_row[0] if core_row is not None else 0
     complete_ids = (
-        sorted(
-            str(row[0]) for row in conn.execute(_CORE_COMPLETE_LISTINGS_SQL, (run_id,)).fetchall() if row[0] is not None
-        )
+        sorted(str(r[0]) for r in conn.execute(_CORE_COMPLETE_LISTINGS_SQL, (run_id,)).fetchall() if r[0] is not None)
         if core_count > 0
         else []
     )
-    ratio = _quantized_ratio(len(complete_ids), len(universe)) if universe else "0"
     return {
         "gross_profit_per_employee": {
             "status": "computed" if core_count > 0 else "not_computed",
@@ -136,7 +117,7 @@ def _factor_availability(
             "complete_subjects": len(complete_ids),
             "complete_subject_ids": complete_ids,
             "universe_subjects": len(universe),
-            "ratio": ratio,
+            "ratio": _quantized_ratio(len(complete_ids), len(universe)),
         }
     }
 
@@ -144,8 +125,10 @@ def _factor_availability(
 @functools.cache
 def _core_payload_fields(branch: OperatingBranch) -> tuple[str, ...]:
     issuer_class = IssuerClass(branch.value)
-    tree = bound_tree(load_live_strategy_definition(), issuer_class)
-    fields = (node.alias(AliasKind.TOPT_SNAPSHOT_FIELD) for node in required_inputs(tree, issuer_class))
+    fields = (
+        node.alias(AliasKind.TOPT_SNAPSHOT_FIELD)
+        for node in required_inputs(bound_tree(load_live_strategy_definition(), issuer_class), issuer_class)
+    )
     return tuple(field for field in fields if field is not None)
 
 
@@ -161,16 +144,12 @@ def _has_usable_value(semantic_type: str, payload: dict[str, Any] | None) -> boo
         if semantic_type == "financial-fact":
             fact = FinancialFactPayload.model_validate(payload)
             return all(
-                getattr(fact, name) is not None
-                for name in (*_core_payload_fields(fact.operating_branch), "revenue", "shares_outstanding")
+                getattr(fact, n) is not None
+                for n in (*_core_payload_fields(fact.operating_branch), "revenue", "shares_outstanding")
             )
     except ValidationError:
         return False
     return False
-
-
-def _observation_usable(semantic_type: str, payload: dict[str, Any] | None) -> bool:
-    return _has_usable_value(semantic_type, payload)
 
 
 def _plausibility_violations(fact: FinancialFactPayload) -> list[str]:
@@ -180,8 +159,7 @@ def _plausibility_violations(fact: FinancialFactPayload) -> list[str]:
     if fact.pre_provision_profit is not None and fact.revenue is not None and fact.pre_provision_profit > fact.revenue:
         violated.append("pre_provision_profit_exceeds_revenue")
     for name in ("headcount", "total_assets", "shares_outstanding"):
-        value = getattr(fact, name)
-        if value is not None and value <= 0:
+        if (value := getattr(fact, name)) is not None and value <= 0:
             violated.append(f"nonpositive_{name}")
     numerator = getattr(fact, _FINANCIAL_FACT_OPERATING_NUMERATOR[fact.operating_branch])
     if numerator is not None and fact.headcount is not None and fact.headcount > 0:
@@ -213,23 +191,24 @@ class _PointerDereferencer:
 
     def dereferences(self, *, object_uri: str, sha256: str, byte_length: int, content_type: str) -> bool:
         cache_key = (object_uri, sha256)
-        if cache_key in self._cache:
-            return self._cache[cache_key]
-        reader = self._reader()
-        result = False
-        bucket, _, key = object_uri.removeprefix("s3://").partition("/")
-        if reader is not None and bucket and key:
+        if cache_key not in self._cache:
+            reader, (bucket, key) = self._reader(), parse_s3_uri(object_uri)
             try:
-                body = reader.get(
-                    RawObjectRef(
-                        bucket=bucket, key=key, sha256=sha256, byte_length=byte_length, content_type=content_type
+                body = (
+                    reader.get(
+                        RawObjectRef(
+                            bucket=bucket, key=key, sha256=sha256, byte_length=byte_length, content_type=content_type
+                        )
                     )
+                    if reader and bucket and key
+                    else None
                 )
-                result = hashlib.sha256(body).hexdigest() == sha256 and len(body) == byte_length
+                self._cache[cache_key] = bool(
+                    body and hashlib.sha256(body).hexdigest() == sha256 and len(body) == byte_length
+                )
             except Exception:
-                result = False
-        self._cache[cache_key] = result
-        return result
+                self._cache[cache_key] = False
+        return self._cache[cache_key]
 
 
 def listing_ratio_cell(payload: Mapping[str, Any], *, ticker: str | None = None) -> dict[str, Any]:
@@ -282,12 +261,12 @@ def _obligation_cell_confidence(
     if semantic_type in ("listing-identity", "universe-membership"):
         return cell_confidences.get((obligation_subject, semantic_type))
     if semantic_type == "financial-fact":
-        fin_confs = [
-            conf
-            for (subj, metric), conf in cell_confidences.items()
-            if subj == obligation_subject and metric in _FINANCIAL_OBLIGATION_METRICS and conf > Decimal("0")
+        confs = [
+            c
+            for (subj, m), c in cell_confidences.items()
+            if subj == obligation_subject and m in _FINANCIAL_OBLIGATION_METRICS and c > Decimal("0")
         ]
-        return min(fin_confs) if fin_confs else Decimal("0")
+        return min(confs) if confs else Decimal("0")
     return None
 
 
@@ -297,11 +276,10 @@ def _tickers_by_subject(rows: Sequence[Sequence[Any]]) -> dict[str, str]:
         sem_type, ob_subject, subj_id, row_payload = row[1], row[2], row[3], row[5]
         if sem_type in _IDENTITY_SEMANTICS and isinstance(row_payload, Mapping):
             raw_ticker = row_payload.get("ticker")
-            if isinstance(raw_ticker, str) and raw_ticker.strip():
-                t = raw_ticker.strip()
-                tickers[str(ob_subject)] = t
+            if isinstance(raw_ticker, str) and (stripped := raw_ticker.strip()):
+                tickers[str(ob_subject)] = stripped
                 if subj_id is not None:
-                    tickers[str(subj_id)] = t
+                    tickers[str(subj_id)] = stripped
     return tickers
 
 
@@ -320,34 +298,24 @@ def build_report(
     conn: psycopg.Connection[Any], run_id: str, *, object_store: _ObjectReader | None = None
 ) -> dict[str, Any]:
     status = conn.execute(
-        """
-        select obligation_count, terminal_count, success_count, unchanged_count,
-               unavailable_count, skipped_count, failed_count, complete
-        from mart.topt_capture_status where run_id = %s
-        """,
+        "select obligation_count, terminal_count, success_count, unchanged_count, unavailable_count, skipped_count, failed_count, complete "
+        "from mart.topt_capture_status where run_id = %s",
         (run_id,),
     ).fetchone()
     if status is None:
         raise ValueError(f"no capture status for run {run_id}")
     requested = status[0]
-
     rows = conn.execute(
-        """
-        select ob.obligation_id,
-               regexp_replace(ob.capture_requirement_id, ':v1$', '') as semantic_type,
-               ob.subject_id as obligation_subject,
-               o.subject_id, o.observation_id, p.normalized_payload, meta.freshness_state,
-               f.object_uri, f.payload_sha256, f.byte_length, f.content_type
-        from raw.capture_obligations ob
-        left join staging.capture_observation_obligations oo on oo.capture_obligation_id = ob.obligation_id
-        left join staging.capture_normalized_observations o on o.observation_id = oo.observation_id
-        left join staging.capture_observation_payloads p on p.observation_id = o.observation_id
-        left join raw.capture_source_vintages v on v.source_vintage_id = o.source_vintage_id
-        left join raw.fetches f on f.id = v.raw_fetch_id
-        left join mart.topt_capture_meta_info meta on meta.obligation_id = ob.obligation_id
-        where ob.run_id = %s
-        order by ob.obligation_id, o.observation_id
-        """,
+        "select ob.obligation_id, regexp_replace(ob.capture_requirement_id, ':v1$', '') as semantic_type, "
+        "ob.subject_id as obligation_subject, o.subject_id, o.observation_id, p.normalized_payload, meta.freshness_state, "
+        "f.object_uri, f.payload_sha256, f.byte_length, f.content_type from raw.capture_obligations ob "
+        "left join staging.capture_observation_obligations oo on oo.capture_obligation_id = ob.obligation_id "
+        "left join staging.capture_normalized_observations o on o.observation_id = oo.observation_id "
+        "left join staging.capture_observation_payloads p on p.observation_id = o.observation_id "
+        "left join raw.capture_source_vintages v on v.source_vintage_id = o.source_vintage_id "
+        "left join raw.fetches f on f.id = v.raw_fetch_id "
+        "left join mart.topt_capture_meta_info meta on meta.obligation_id = ob.obligation_id "
+        "where ob.run_id = %s order by ob.obligation_id, o.observation_id",
         (run_id,),
     ).fetchall()
 
@@ -360,77 +328,67 @@ def build_report(
     listing_ratio: dict[str, dict[str, Any]] = {}
     tickers_by_subject = _tickers_by_subject(rows)
     usable_by_subject: dict[str, dict[str, bool]] = {}
-    for (
-        obligation_id,
-        semantic_type,
-        obligation_subject,
-        subject_id,
-        observation_id,
-        payload,
-        freshness_state,
-        object_uri,
-        payload_sha256,
-        byte_length,
-        content_type,
-    ) in rows:
-        cell = cells.setdefault(obligation_id, _Cell())
-        subject_semantics = usable_by_subject.setdefault(str(obligation_subject), {})
-        subject_semantics.setdefault(semantic_type, False)
-        if observation_id is None:
+    for row in rows:
+        ob_id, sem_type, ob_subject, subj_id, obs_id, payload, fresh_state, obj_uri, sha256, byte_len, ctype = row
+        cell = cells.setdefault(ob_id, _Cell())
+        subject_semantics = usable_by_subject.setdefault(str(ob_subject), {})
+        subject_semantics.setdefault(sem_type, False)
+        if obs_id is None:
             continue
-        cell.fresh = cell.fresh or freshness_state == "fresh"
-        obs_conf = _obligation_cell_confidence(cell_confidences, str(obligation_subject), semantic_type)
-        if obs_conf is not None:
+        cell.fresh = cell.fresh or fresh_state == "fresh"
+        if (obs_conf := _obligation_cell_confidence(cell_confidences, str(ob_subject), sem_type)) is not None:
             cell.confidence = obs_conf if cell.confidence is None else max(cell.confidence, obs_conf)
         if not cell.available:
-            cell.available = _observation_usable(semantic_type, payload)
+            cell.available = _has_usable_value(sem_type, payload)
         if cell.available:
-            subject_semantics[semantic_type] = True
-        if semantic_type == "financial-fact" and payload is not None and subject_id is not None:
+            subject_semantics[sem_type] = True
+        if sem_type == "financial-fact" and payload is not None and subj_id is not None:
             record_listing_ratio(
                 listing_ratio,
-                str(subject_id),
+                str(subj_id),
                 payload,
-                ticker=tickers_by_subject.get(str(subject_id), tickers_by_subject.get(str(obligation_subject))),
+                ticker=tickers_by_subject.get(str(subj_id), tickers_by_subject.get(str(ob_subject))),
             )
-            _record_plausibility(plausibility, str(subject_id), payload)
-        if not cell.lineage_complete and payload is not None and object_uri is not None:
+            _record_plausibility(plausibility, str(subj_id), payload)
+        if not cell.lineage_complete and payload is not None and obj_uri is not None:
             cell.lineage_complete = pointers.dereferences(
-                object_uri=object_uri, sha256=payload_sha256, byte_length=byte_length, content_type=content_type
+                object_uri=obj_uri, sha256=sha256, byte_length=byte_len, content_type=ctype
             )
 
-    available = sum(1 for cell in cells.values() if cell.available)
-    lineage_complete = sum(1 for cell in cells.values() if cell.lineage_complete)
-    fresh = sum(1 for cell in cells.values() if cell.fresh)
+    agreed_val = ReconciliationOutcome.AGREED.value
+    available = sum(1 for c in cells.values() if c.available)
+    lineage_complete = sum(1 for c in cells.values() if c.lineage_complete)
+    fresh = sum(1 for c in cells.values() if c.fresh)
     reconciliation = _reconcile_market_price_cells(conn, run_id)
-    independent = sum(1 for cell in reconciliation.values() if cell["outcome"] == ReconciliationOutcome.AGREED.value)
-    served_by_failover = sum(1 for cell in reconciliation.values() if SERVED_BY_FAILOVER in cell)
-    field_reconciliation = _field_reconciliation(reconciliation)
-    financial_reconciliation = _reconcile_financial_fact_cells(conn, run_id)
-    financial_independent = sum(
-        1 for cell in financial_reconciliation.values() if cell["outcome"] == ReconciliationOutcome.AGREED.value
-    )
-    financial_graded = sum(
-        1 for cell in financial_reconciliation.values() if cell["outcome"] != ReconciliationOutcome.UNAVAILABLE.value
-    )
-    confidences = [cell.confidence for cell in cells.values() if cell.confidence is not None]
+    independent = sum(1 for c in reconciliation.values() if c["outcome"] == agreed_val)
+    served_by_failover = sum(1 for c in reconciliation.values() if SERVED_BY_FAILOVER in c)
+    fin_rec = _reconcile_financial_fact_cells(conn, run_id)
+    fin_indep = sum(1 for c in fin_rec.values() if c["outcome"] == agreed_val)
+    fin_graded = sum(1 for c in fin_rec.values() if c["outcome"] != ReconciliationOutcome.UNAVAILABLE.value)
+    confidences = [c.confidence for c in cells.values() if c.confidence is not None]
     mean_conf = (sum(confidences) / requested) if requested else Decimal(0)
     plan = conn.execute(
         "select coalesce((payload->>'forced_fetch')::boolean, false) from raw.production_topt_run_plans where run_id = %s",
         (run_id,),
     ).fetchone()
-
+    ratios = {
+        "terminal_coverage": status[1],
+        "availability": available,
+        "freshness": fresh,
+        "independent_reconciliation": independent,
+        "lineage_completeness": lineage_complete,
+    }
     return {
         "reconciliation_policy_id": RECONCILIATION_POLICY.policy_id,
         "reconciliation_cells": reconciliation,
-        "field_reconciliation": field_reconciliation,
+        "field_reconciliation": _field_reconciliation(reconciliation),
         "financial_fact_reconciliation_policy_id": FINANCIAL_FACT_RECONCILIATION_POLICY.policy_id,
-        "financial_fact_reconciliation_cells": financial_reconciliation,
-        "financial_fact_independently_reconciled_count": financial_independent,
-        "financial_fact_independent_reconciliation": _quantized_ratio(financial_independent, financial_graded),
+        "financial_fact_reconciliation_cells": fin_rec,
+        "financial_fact_independently_reconciled_count": fin_indep,
+        "financial_fact_independent_reconciliation": _quantized_ratio(fin_indep, fin_graded),
         "plausibility_cells": plausibility,
         "listing_ratio": listing_ratio_report(listing_ratio),
-        "implausible_count": sum(1 for cell in plausibility.values() if cell["outcome"] == "implausible"),
+        "implausible_count": sum(1 for c in plausibility.values() if c["outcome"] == "implausible"),
         "run_id": run_id,
         "requested_count": requested,
         "terminal_count": status[1],
@@ -439,11 +397,7 @@ def build_report(
         "independently_reconciled_count": independent,
         "served_by_failover_count": served_by_failover,
         "lineage_complete_count": lineage_complete,
-        "terminal_coverage": _quantized_ratio(status[1], requested),
-        "availability": _quantized_ratio(available, requested),
-        "freshness": _quantized_ratio(fresh, requested),
-        "independent_reconciliation": _quantized_ratio(independent, requested),
-        "lineage_completeness": _quantized_ratio(lineage_complete, requested),
+        **{key: _quantized_ratio(val, requested) for key, val in ratios.items()},
         "denominator_mean_confidence": str(Decimal(mean_conf).quantize(Decimal("0.0001"))),
         "factor_availability": _factor_availability(conn, run_id, usable_by_subject),
         "complete": bool(status[7]),
@@ -469,13 +423,11 @@ def _field_reconciliation(cells: dict[str, dict[str, Any]]) -> dict[str, dict[st
         field: {
             "agreed": (
                 agreed := sum(
-                    1
-                    for cell in cells.values()
-                    if cell["fields"][field]["outcome"] == ReconciliationOutcome.AGREED.value
+                    1 for c in cells.values() if c["fields"][field]["outcome"] == ReconciliationOutcome.AGREED.value
                 )
             ),
             "cells": graded,
-            "share": _quantized_ratio(agreed, graded) if graded else "0",
+            "share": _quantized_ratio(agreed, graded),
             "policy_id": FIELD_RECONCILIATION_POLICIES[field].policy_id,
         }
         for field in PRICE_BAR_FIELDS
@@ -528,11 +480,7 @@ def _source_assertion(
 
 
 def reconcile_price_bar(
-    listing_id: str,
-    entries: list[tuple[str, Any, str, str, str, str, dict]],
-    *,
-    partition: date,
-    cutoff: datetime,
+    listing_id: str, entries: list[tuple[str, Any, str, str, str, str, dict]], *, partition: date, cutoff: datetime
 ) -> dict[str, Any]:
     fields: dict[str, dict[str, Any]] = {}
     for field in PRICE_BAR_FIELDS:
@@ -577,26 +525,16 @@ def graded_cell(result: ReconciliationResult, assertions: Sequence[SourceAsserti
 def _query_semantic_observations(
     conn: psycopg.Connection[Any], run_id: str, semantic_type: str
 ) -> tuple[datetime | None, list[Any]]:
-    status = conn.execute("select cutoff from mart.topt_capture_status where run_id = %s", (run_id,)).fetchone()
-    if status is None:
+    if (cutoff := fetch_topt_cutoff(conn, run_id)) is None:
         return None, []
     rows = conn.execute(
-        """
-        select o.subject_id, o.parser_version, o.knowable_at,
-               o.normalized_payload_sha256, o.observation_id,
-               v.source_vintage_id, v.raw_object_id, p.normalized_payload,
-               (ob.partition_key)::date as partition_date
-        from raw.capture_obligations ob
-        join staging.capture_observation_obligations oo on oo.capture_obligation_id = ob.obligation_id
-        join staging.capture_normalized_observations o on o.observation_id = oo.observation_id
-        join staging.capture_observation_payloads p on p.observation_id = o.observation_id
-        join raw.capture_source_vintages v on v.source_vintage_id = o.source_vintage_id
-        where ob.run_id = %s and o.semantic_type = %s
-        order by o.subject_id
-        """,
+        f"select o.subject_id, o.parser_version, o.knowable_at, o.normalized_payload_sha256, o.observation_id, "
+        f"v.source_vintage_id, v.raw_object_id, p.normalized_payload, (ob.partition_key)::date as partition_date "
+        f"{CAPTURE_OBSERVATION_JOIN} join raw.capture_source_vintages v on v.source_vintage_id = o.source_vintage_id "
+        "where ob.run_id = %s and o.semantic_type = %s order by o.subject_id",
         (run_id, semantic_type),
     ).fetchall()
-    return status[0], rows
+    return cutoff, rows
 
 
 def _reconcile_market_price_cells(conn: psycopg.Connection[Any], run_id: str) -> dict[str, dict[str, Any]]:
@@ -611,8 +549,7 @@ def _reconcile_market_price_cells(conn: psycopg.Connection[Any], run_id: str) ->
             continue
         partition = partition or part
         source_id, origin_group, value_key = _SOURCE_BY_PARSER[parser]
-        value = payload.get(value_key)
-        if value is None:
+        if (value := payload.get(value_key)) is None:
             continue
         if payload.get(SERVED_BY_FAILOVER):
             served_by_failover[subject_id] = payload[SERVED_BY_FAILOVER]
@@ -628,7 +565,6 @@ def _reconcile_market_price_cells(conn: psycopg.Connection[Any], run_id: str) ->
                 {"origin_group": origin_group, "values": values},
             )
         )
-
     outcomes: dict[str, dict[str, Any]] = {}
     for listing_id, entries in sorted(by_listing.items()):
         outcomes[listing_id] = reconcile_price_bar(
@@ -656,22 +592,18 @@ def _payload_path(payload: Mapping[str, Any], path: str) -> Any:
 def primary_financial_fields(payload: Mapping[str, Any]) -> dict[str, tuple[Decimal, date]]:
     out: dict[str, tuple[Decimal, date]] = {}
     for field_name, (value_key, period_path) in FINANCIAL_FACT_FUSION_FIELDS.items():
-        value = payload.get(value_key)
-        period = _payload_path(payload, period_path)
-        if value is None or not isinstance(period, str):
-            continue
-        try:
-            out[field_name] = (Decimal(str(value)), date.fromisoformat(period))
-        except (ValueError, ArithmeticError):
-            continue
+        value, period = payload.get(value_key), _payload_path(payload, period_path)
+        if value is not None and isinstance(period, str):
+            try:
+                out[field_name] = (Decimal(str(value)), date.fromisoformat(period))
+            except (ValueError, ArithmeticError):
+                continue
     return out
 
 
 def corroborating_financial_value(payload: Mapping[str, Any], field_name: str, period_end: date) -> Decimal | None:
     periods = payload.get("by_period_end")
-    if not isinstance(periods, Mapping):
-        return None
-    values = periods.get(period_end.isoformat())
+    values = periods.get(period_end.isoformat()) if isinstance(periods, Mapping) else None
     if not isinstance(values, Mapping) or values.get(field_name) is None:
         return None
     try:
@@ -720,11 +652,15 @@ def reconcile_financial_fact_entries(
     listing_id: str, entries: Sequence[FinancialFactEntry], *, cutoff: datetime
 ) -> dict[str, Any]:
     primaries = [entry for entry in entries if entry.is_primary]
-    if not primaries:
-        return {"outcome": ReconciliationOutcome.UNAVAILABLE.value, "fields": {}, "origin_groups": 0}
-    primary = max(primaries, key=lambda entry: (entry.knowable_at, entry.observation_id))
-    unit = financial_fact_unit(primary.payload)
-    if unit is None:
+    if (
+        not primaries
+        or (
+            unit := financial_fact_unit(
+                (primary := max(primaries, key=lambda e: (e.knowable_at, e.observation_id))).payload
+            )
+        )
+        is None
+    ):
         return {"outcome": ReconciliationOutcome.UNAVAILABLE.value, "fields": {}, "origin_groups": 0}
     fields: dict[str, dict[str, Any]] = {}
     outcomes: list[str] = []
@@ -739,46 +675,42 @@ def reconcile_financial_fact_entries(
             period_end,
             max(period_end, utc_day(cutoff)),
         )
-        assertions = [
-            _source_assertion(
+
+        def _make_assertion(entry: FinancialFactEntry, val: Decimal) -> SourceAssertion:
+            return _source_assertion(
                 cell.cell_id,
-                primary.observation_id,
-                primary.source_id,
-                primary.origin_group,
-                primary.knowable_at,
-                primary.payload_sha,
-                value,
-                primary.vintage_id,
-                primary.raw_object,
+                entry.observation_id,
+                entry.source_id,
+                entry.origin_group,
+                entry.knowable_at,
+                entry.payload_sha,
+                val,
+                entry.vintage_id,
+                entry.raw_object,
             )
-        ]
+
+        assertions = [_make_assertion(primary, value)]
         for entry in entries:
-            if entry.is_primary or financial_fact_unit(entry.payload) != unit:
-                continue
-            other = corroborating_financial_value(entry.payload, field_name, period_end)
-            if other is not None:
-                assertions.append(
-                    _source_assertion(
-                        cell.cell_id,
-                        entry.observation_id,
-                        entry.source_id,
-                        entry.origin_group,
-                        entry.knowable_at,
-                        entry.payload_sha,
-                        other,
-                        entry.vintage_id,
-                        entry.raw_object,
-                    )
-                )
+            if (
+                not entry.is_primary
+                and financial_fact_unit(entry.payload) == unit
+                and (other := corroborating_financial_value(entry.payload, field_name, period_end)) is not None
+            ):
+                assertions.append(_make_assertion(entry, other))
                 participating.add(entry.origin_group)
         result = reconcile_source_assertions(
             cell=cell, assertions=tuple(assertions), policy=FINANCIAL_FACT_RECONCILIATION_POLICY, cutoff=cutoff
         )
-        fields[field_name] = {**graded_cell(result, assertions), "period_end": period_end.isoformat(), "unit": unit}
+        fields[field_name] = {
+            **graded_cell(result, assertions),
+            "period_end": period_end.isoformat(),
+            "unit": unit,
+        }
         outcomes.append(result.outcome.value)
-    if any(outcome == ReconciliationOutcome.CONFLICT_PRIORITY_SERVED.value for outcome in outcomes):
+    outcome_set = set(outcomes)
+    if ReconciliationOutcome.CONFLICT_PRIORITY_SERVED.value in outcome_set:
         overall = ReconciliationOutcome.CONFLICT_PRIORITY_SERVED.value
-    elif outcomes and all(outcome == ReconciliationOutcome.AGREED.value for outcome in outcomes):
+    elif outcome_set == {ReconciliationOutcome.AGREED.value}:
         overall = ReconciliationOutcome.AGREED.value
     elif outcomes:
         overall = ReconciliationOutcome.INSUFFICIENT_INDEPENDENT_ORIGINS.value
@@ -793,8 +725,7 @@ def _reconcile_financial_fact_cells(conn: psycopg.Connection[Any], run_id: str) 
         return {}
     by_listing: dict[str, list[FinancialFactEntry]] = {}
     for row in rows:
-        entry = classify_financial_fact_entry(*row[1:8])
-        if entry is not None:
+        if (entry := classify_financial_fact_entry(*row[1:8])) is not None:
             by_listing.setdefault(row[0], []).append(entry)
     return {
         listing_id: reconcile_financial_fact_entries(listing_id, entries, cutoff=cutoff)

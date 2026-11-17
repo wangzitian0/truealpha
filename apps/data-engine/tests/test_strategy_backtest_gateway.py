@@ -2,20 +2,59 @@ from __future__ import annotations
 
 import json
 import os
+from dataclasses import replace
 from datetime import UTC, datetime
+from typing import Any
 
 import psycopg
 import pytest
 from data_engine.config import settings
-from data_engine.core_strategy_replay import _compare_against_golden, _load_corpus
+from data_engine.core_strategy_replay import (
+    Decision,
+    _compare_against_golden,
+    _load_corpus,
+    evaluate_cutoff_decisions,
+)
 from data_engine.strategy_backtest_gateway import (
     MarketValueVintage,
     StrategyBacktestGateway,
-    run_backtest_from_staging,
-    seed_strategy_backtest_inputs,
 )
 from data_engine.strategy_replay_repository import write_replay
+from factors.panel import IssuerClass
+from psycopg import Connection
 from truealpha_contracts.strategy import LargeModelValueV0Definition
+
+
+def seed_strategy_backtest_inputs(connection: Connection[Any], corpus: dict[str, Any]) -> int:
+    rows = [
+        (dec["issuer"]["id"], dec["cutoff_at"], rec["input_key"], rec["value"], rec["confidence"], rec["knowable_at"])
+        for dec in corpus["golden_decision_set"]["decisions"]
+        for rec in dec["inputs"]
+    ]
+    with connection.cursor() as cur:
+        cur.executemany(
+            "insert into staging.strategy_backtest_inputs "
+            "(issuer_id, cutoff_at, input_key, value, confidence, knowable_at) values (%s, %s, %s, %s, %s, %s)",
+            rows,
+        )
+    return len(rows)
+
+
+def run_backtest_from_staging(
+    connection: Connection[Any], corpus: dict[str, Any], definition: LargeModelValueV0Definition
+) -> tuple[list[Decision], str]:
+    gateway = StrategyBacktestGateway(connection)
+    golden = corpus["golden_decision_set"]
+    rates = golden["risk_free_rates"]
+    cutoff_ats = sorted({decision["cutoff_at"] for decision in golden["decisions"]})
+    classes = {dec["issuer"]["id"]: IssuerClass(dec["issuer_branch"]) for dec in golden["decisions"]}
+    decisions: list[Decision] = []
+    for cutoff_at in cutoff_ats:
+        issuers = [replace(item, issuer_class=classes.get(item.issuer_id)) for item in gateway.issuer_inputs(cutoff_at)]
+        decisions.extend(evaluate_cutoff_decisions(issuers, cutoff_at=cutoff_at, definition=definition, rates=rates))
+    decisions.sort(key=lambda item: (item.cutoff_at, item.issuer_id))
+    return decisions, gateway.run_snapshot_id(cutoff_ats)
+
 
 _EXECUTED_AT = datetime(2026, 7, 19, 12, 0, 0, tzinfo=UTC)
 

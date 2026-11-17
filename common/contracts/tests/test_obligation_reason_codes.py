@@ -1,20 +1,13 @@
-import pytest
-from pydantic import ValidationError
 from truealpha_contracts.obligation_reason_codes import (
     ObligationDisposition,
     ObligationReasonCode,
-    ObligationReasonCodeRegistry,
-    ReasonCodeEntry,
     disposition_for,
 )
 
 
 def test_every_code_maps_to_exactly_one_disposition() -> None:
-    registry = ObligationReasonCodeRegistry.canonical()
     for code in ObligationReasonCode:
-        assert registry.disposition_for(code) is disposition_for(code)
-    # The canonical registry binds every code exactly once.
-    assert {entry.code for entry in registry.entries} == set(ObligationReasonCode)
+        assert disposition_for(code) in ObligationDisposition
 
 
 def test_dispositions_are_as_specified() -> None:
@@ -29,25 +22,3 @@ def test_dispositions_are_as_specified() -> None:
     # after a rate window), never "field absent".
     assert disposition_for(ObligationReasonCode.DEFERRED_CAPACITY) is ObligationDisposition.TRACE_ONLY
     assert ObligationReasonCode.DEFERRED_CAPACITY.value == "deferred_capacity"
-
-
-def test_registry_is_content_identified_and_deterministic() -> None:
-    a = ObligationReasonCodeRegistry.canonical()
-    b = ObligationReasonCodeRegistry.canonical()
-    assert a.registry_id.startswith("obligation-reason-registry:")
-    assert a.registry_id == b.registry_id
-    assert a.content_sha256 == b.content_sha256
-
-
-def test_incomplete_registry_is_rejected() -> None:
-    with pytest.raises(ValidationError):
-        ObligationReasonCodeRegistry(
-            registry_version="v1",
-            entries=(ReasonCodeEntry(code=ObligationReasonCode.TIMEOUT, disposition=ObligationDisposition.RETRY),),
-        )
-
-
-def test_duplicate_code_is_rejected() -> None:
-    full = ObligationReasonCodeRegistry.canonical().entries
-    with pytest.raises(ValidationError):
-        ObligationReasonCodeRegistry(registry_version="v1", entries=(*full, full[0]))

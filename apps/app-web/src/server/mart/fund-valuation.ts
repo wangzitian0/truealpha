@@ -39,11 +39,6 @@ export type FundValuation = {
   lines: ValuedHoldingRow[];
 };
 
-// #1708: both sides materialize once. Inside mart.fund_holdings_valuation the
-// issuer_entity lookup is a correlated kg_identifiers subquery; referenced in the
-// join filter it was re-evaluated per join pair (13.7 s measured). Materialized
-// CTEs pin it to one evaluation per holdings row, and both join keys (listing_id,
-// issuer CIK) are computed before the join instead of per pair.
 const VALUED_LINES_SQL = `
   with vintage as materialized (
     select v.fund_id,
@@ -73,8 +68,6 @@ const VALUED_LINES_SQL = `
     join mart.topt_core_results t on t.result_id = c.result_id
     left join mart.entity_identity ei on ei.entity_id::text = c.listing_id
     left join mart.entity_identity ei_issuer on ei_issuer.entity_id::text = c.issuer_id
-    -- filter before materializing: a materialized CTE blocks predicate pushdown,
-    -- so the run filter must live inside (5 of 9334 rows for the served head).
     where c.run_id = $1
   )
   select v.fund_id,

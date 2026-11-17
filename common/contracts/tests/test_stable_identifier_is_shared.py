@@ -52,8 +52,8 @@ _THE_DEFINITION = "common/contracts/src/truealpha_contracts/common.py"
 #: listed here fails.
 _ACROSS_A_LANGUAGE_BOUNDARY = {
     "apps/app-web/src/server/documents.ts": (
-        "TypeScript cannot import the Python constant; apps/app-web/tests/stable-identifier-parity.test.ts "
-        "measures it against the pattern the conformance bundle exports, per character, in CI"
+        "TypeScript cannot import the Python constant; test_documents_ts_pattern_matches_shared_grammar checks "
+        "documents.ts's STABLE_ID_PATTERN against Python's STABLE_ID_PATTERN per character."
     ),
 }
 
@@ -250,3 +250,19 @@ def test_the_embedding_form_is_the_same_grammar() -> None:
     """`STABLE_ID_BODY` is what a prefixed pattern embeds and `STABLE_ID_PATTERN` is it anchored;
     if the two drift, prefixed ids and bare ids stop agreeing again."""
     assert STABLE_ID_PATTERN == f"^{STABLE_ID_BODY}$"
+
+
+def test_documents_ts_pattern_matches_shared_grammar() -> None:
+    src = (_REPO_ROOT / "apps/app-web/src/server/documents.ts").read_text(encoding="utf-8")
+    match = re.search(r"export const STABLE_ID_PATTERN\s*=\s*/([^/\n]+(?:\//[^/\n]+)*)/\s*;", src)
+    if match is None:
+        match = re.search(r"export const STABLE_ID_PATTERN\s*=\s*/(.+?)/[gimuy]*;", src)
+    assert match is not None, "STABLE_ID_PATTERN not found in documents.ts"
+    ts_regex = re.compile(match.group(1).replace("\\/", "/"))
+    disagreements = [
+        probe
+        for ch in _PROBE_CHARACTERS
+        for probe in (ch, f"a{ch}")
+        if _accepts(_SHARED, probe) != bool(ts_regex.fullmatch(probe))
+    ]
+    assert not disagreements, f"documents.ts STABLE_ID_PATTERN disagrees on: {disagreements}"

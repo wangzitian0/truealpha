@@ -58,27 +58,3 @@ HEADCOUNT_RECONCILIATION_POLICY = _priority_only_policy("headcount-priority:v1",
 SEGMENT_REVENUE_RECONCILIATION_POLICY = _priority_only_policy(
     "segment-revenue-priority:v1", ("10k-segment-extraction",)
 )
-
-SUPERSEDED_RECONCILIATION_POLICIES: tuple[ReconciliationPolicy, ...] = (
-    ReconciliationPolicy(
-        policy_version="market-price-fusion:v3",
-        source_priority=("yahoo-chart:v1", "twelve-data:v1", "moomoo-kline:v1"),
-        absolute_tolerance=Decimal("0"),
-        relative_tolerance=Decimal("0.003"),
-        minimum_independent_origin_groups=2,
-    ),
-    ReconciliationPolicy(
-        policy_version="market-volume-fusion:v1",
-        source_priority=("yahoo-chart:v1", "twelve-data:v1", "moomoo-kline:v1"),
-        absolute_tolerance=Decimal("0"),
-        relative_tolerance=Decimal("0.02"),
-        minimum_independent_origin_groups=2,
-    ),
-    ReconciliationPolicy(
-        policy_version="financial-fact-fusion:v1",
-        source_priority=("sec-company-facts:v1", "moomoo-financials:v1"),
-        absolute_tolerance=Decimal("0"),
-        relative_tolerance=Decimal("0.01"),
-        minimum_independent_origin_groups=2,
-    ),
-)

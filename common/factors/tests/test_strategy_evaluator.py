@@ -10,7 +10,7 @@ import hashlib
 import json
 from datetime import datetime, timedelta
 from decimal import Decimal
-from importlib import resources
+from pathlib import Path
 
 import pytest
 from factors.composite.strategy_evaluator import (
@@ -32,7 +32,9 @@ from truealpha_contracts.strategy import (
 
 #: The frozen #21 file: definition 1.0.0 and its golden decisions. The live file is definition 1.1.0.
 _FROZEN_RESOURCE = "large_model_value_v0_definition_1_0_0.json"
-
+_GOLDEN_FIXTURE = (
+    Path(__file__).resolve().parents[3] / "common/contracts/tests/fixtures/large_model_value_v0_golden_1_0_0.json"
+)
 _CORPUS_SHA256 = "004e716a11f1a9604275d2da5b13160676411fbb8fc7846b25489b43aef31496"
 
 
@@ -46,7 +48,7 @@ def _known_before(records: dict, cutoff: datetime, *, days: int = 3) -> dict[str
 
 
 def test_evaluator_reproduces_every_golden_decision_exactly() -> None:
-    raw = resources.files("truealpha_contracts.data").joinpath(_FROZEN_RESOURCE).read_bytes()
+    raw = _GOLDEN_FIXTURE.read_bytes()
     assert hashlib.sha256(raw).hexdigest() == _CORPUS_SHA256
     corpus = json.loads(raw)
     definition = LargeModelValueV0Definition.model_validate_json(json.dumps(corpus["strategy_definition"]))
@@ -670,7 +672,7 @@ def test_an_exclusion_after_the_metric_is_chosen_still_names_it() -> None:
 # -- definition 1.0.0: the P/GP valuation basis (#1235) ---------------------------------
 
 
-_V1_CORPUS = load_strategy_definition_corpus(_FROZEN_RESOURCE)
+_V1_CORPUS = json.loads(_GOLDEN_FIXTURE.read_text(encoding="utf-8"))
 _V1_CUTOFF = datetime.fromisoformat("2026-10-08T00:00:00+00:00")
 
 
@@ -952,7 +954,7 @@ def test_ddog_at_0_65_confidence_is_eligible_and_carries_its_confidence_under_1_
     """In 1.0.0, DDOG (minimum confidence 0.65 on headcount) was excluded by the 0.70 floor.
     Under 1.1.0 (#1517 stage A4), there is no confidence floor: DDOG is evaluated and carries
     confidence 0.65, and an in-band issuer at 0.65 confidence is ranked and selected."""
-    corpus = json.loads(resources.files("truealpha_contracts.data").joinpath(_FROZEN_RESOURCE).read_bytes())
+    corpus = json.loads(_GOLDEN_FIXTURE.read_text(encoding="utf-8"))
     ddog_golden = next(d for d in corpus["golden_decision_set"]["decisions"] if d["decision_key"] == "ddog-2026-03-31")
     ddog_records = {
         record["input_key"]: (Decimal(record["value"]), Decimal(record["confidence"]))

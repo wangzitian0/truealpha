@@ -1,4 +1,4 @@
-"""Bind a captured run to its release manifest and advance the governed pointer (#378 / #429 P2 / #536)."""
+"""Bind capture runs to release manifests and advance pointers (#378, #536)."""
 
 from __future__ import annotations
 
@@ -81,10 +81,6 @@ def _ratio(value: Any) -> Decimal:
         return Decimal(0)
 
 
-def _plain(value: Decimal) -> str:
-    return format(value.normalize(), "f")
-
-
 def _cell_origin_groups(cell: Any) -> int:
     if not isinstance(cell, Mapping) or cell.get("outcome") != ReconciliationOutcome.AGREED.value:
         return 0
@@ -98,8 +94,7 @@ def _corroborated_share(cells: Any, *, minimum_origin_groups: int) -> Decimal:
     if not isinstance(cells, Mapping) or not cells:
         return Decimal(0)
     minimum = max(minimum_origin_groups, 1)
-    corroborated = sum(1 for cell in cells.values() if _cell_origin_groups(cell) >= minimum)
-    return Decimal(corroborated) / Decimal(len(cells))
+    return Decimal(sum(1 for cell in cells.values() if _cell_origin_groups(cell) >= minimum)) / Decimal(len(cells))
 
 
 def unmet_objectives(
@@ -110,14 +105,13 @@ def unmet_objectives(
         "availability": (_ratio(report.get("availability")), objectives.minimum_availability),
         "corroborated_share": (
             _corroborated_share(
-                report.get("reconciliation_cells"),
-                minimum_origin_groups=objectives.minimum_independent_origin_groups,
+                report.get("reconciliation_cells"), minimum_origin_groups=objectives.minimum_independent_origin_groups
             ),
             objectives.minimum_corroborated_share,
         ),
     }
     return tuple(
-        UnmetObjective(objective=name, required=_plain(required), observed=_plain(observed))
+        UnmetObjective(name, format(required.normalize(), "f"), format(observed.normalize(), "f"))
         for name, (observed, required) in measured.items()
         if observed < required
     )
@@ -138,19 +132,16 @@ def register_run_evidence(
     if status is None:
         raise ValueError(f"no capture status for run {run_id}")
     universe_id, universe_version, cutoff, raw_env = status
-    env = CaptureEnvironment(raw_env)
-
     stamp = BitemporalStamp(valid_from=cutoff.date(), transaction_time=cutoff, recorded_at=cutoff)
     run_ref = EvidenceNodeRef(kind=EvidenceNodeKind.CAPTURE_RUN, node_id=run_id)
     manifest_ref = EvidenceNodeRef(kind=EvidenceNodeKind.RELEASE_MANIFEST, node_id=release_manifest_id)
-    manifest_node = EvidenceNode(ref=manifest_ref, content_sha256=manifest_ref.content_sha256, stamp=stamp)
-    edge = EvidenceEdge(from_ref=run_ref, to_ref=manifest_ref, relation=EvidenceRelation.BOUND_TO, stamp=stamp)
-
     repo = PostgresEvidenceGraphRepository(connection)
-    repo.append([manifest_node], [edge])
-
+    repo.append(
+        [EvidenceNode(ref=manifest_ref, content_sha256=manifest_ref.content_sha256, stamp=stamp)],
+        [EvidenceEdge(from_ref=run_ref, to_ref=manifest_ref, relation=EvidenceRelation.BOUND_TO, stamp=stamp)],
+    )
     key = CurrentPointerKey(
-        environment=env,
+        environment=CaptureEnvironment(raw_env),
         universe_id=universe_id,
         universe_version=universe_version,
         factor_id=POINTER_FACTOR_ID,
@@ -158,7 +149,6 @@ def register_run_evidence(
     head = repo.head(key)
     if head is not None and head.target_run.node_id == run_id:
         return PointerRegistration(run_id=run_id, sequence=head.sequence, unmet=(), advanced=False)
-
     pointer = CurrentPointer(
         key=key,
         target_run=run_ref,

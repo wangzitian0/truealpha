@@ -932,7 +932,6 @@ const { default: DocumentDetailPage } = await import("../src/app/research/librar
 
   for (const serverModule of [
     "src/server/mart/fund-valuation.ts",
-    "src/server/mart/fund-holdings.ts",
     "src/server/cards/xhs-card.ts",
   ]) {
     const source = readAppFile(serverModule);

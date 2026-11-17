@@ -10,9 +10,15 @@ deployment, not hidden in a test module's import side effect.
 from __future__ import annotations
 
 import os
+import sys
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
+
+_CONTRACTS_TESTS = str(Path(__file__).resolve().parents[3] / "common" / "contracts" / "tests")
+if _CONTRACTS_TESTS not in sys.path:
+    sys.path.insert(0, _CONTRACTS_TESTS)
 
 
 @pytest.fixture(autouse=True)

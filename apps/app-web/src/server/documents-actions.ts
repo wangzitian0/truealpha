@@ -1,12 +1,5 @@
 "use server";
 
-/**
- * #373: server actions backing /research/library. Every action re-derives
- * AccessContext from the verified session itself (never trusts anything
- * passed from the client) and redirects to /login if there is none — the
- * same rule every other #371 route follows.
- */
-
 import { randomUUID } from "node:crypto";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";

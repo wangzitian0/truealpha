@@ -1,4 +1,4 @@
-"""Audit physical Gate Epics (#28, #54) against /api/health verdicts and pointers."""
+"""Audit Gate Epics against /api/health verdicts (#28, #54)."""
 
 from __future__ import annotations
 
@@ -45,7 +45,7 @@ class VisionAuditReport:
 
 def _assess_served_head_freshness(report: Any, *, environment: str = "production") -> tuple[bool, str]:
     pointers = getattr(report, "governed_pointers", None)
-    if pointers is None or pointers == "unknown" or not isinstance(pointers, list) or not pointers:
+    if not isinstance(pointers, list) or not pointers:
         return False, "mart.served_head.freshness=unknown (no governed pointers)"
     stale: list[str] = []
     scheduled_seen = 0
@@ -58,8 +58,7 @@ def _assess_served_head_freshness(report: Any, *, environment: str = "production
         if not contract.is_head_scheduled(universe, environment):
             continue
         scheduled_seen += 1
-        freshness = str(entry.get("freshness", "fresh"))
-        availability = str(entry.get("availability", "available"))
+        freshness, availability = str(entry.get("freshness", "fresh")), str(entry.get("availability", "available"))
         if freshness != "fresh" or availability != "available":
             stale.append(f"{universe}:{freshness}/{availability}")
     if stale:

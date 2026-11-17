@@ -344,7 +344,7 @@ export function asStrategyRunReport(value: unknown): StrategyRunReport {
 export const parseStrategyRunReport = asStrategyRunReport;
 
 const FIXTURE_RELATIVE =
-	"common/contracts/src/truealpha_contracts/data/strategy_run_preview.v1.json";
+	"common/contracts/tests/fixtures/strategy_run_preview.v1.json";
 const FIXTURE_PATH = join(process.cwd(), "..", "..", FIXTURE_RELATIVE);
 const REPO_ROOT_FIXTURE_PATH = join(process.cwd(), FIXTURE_RELATIVE);
 

@@ -1,21 +1,3 @@
-/**
- * Server-only route loader for /research/strategy — see #349/#371/#362/#493.
- *
- * Re-authorizes on every call (never trusts a cached decision), then reads
- * through the real `mart` schema (`MartStrategyRunRepository`, via the
- * `mart_readonly` role) — #362 retired the checked-in fixture as the shipped
- * consumer path. No App code here queries raw/staging or calls FastAPI for
- * data display.
- *
- * #371: takes an already-resolved `StrategyRunPrincipal | null` (this
- * module never derives identity itself — same pattern as `dashboard.ts`).
- * #493 moved this page from /admin/strategy-runs into the research world:
- * strategy decisions are research output, readable by every verified
- * principal — the same mart rows /research/rankings already serves them.
- * Anonymous (null principal) stays denied; the administrator-only gate is
- * gone by design, not by accident.
- */
-
 import type { AccessContext, StrategyRunReport, StrategyRunUnavailable } from "@/contracts/strategyRun";
 import { StrategyRunReadAdapter, type WidePanelCell } from "@/server/mart/research-read";
 import { MartStrategyRunRepository } from "@/server/mart/strategy-run-repository";
@@ -40,7 +22,6 @@ export type StrategyRunPageOutcome =
   | { kind: "denied" }
   | { kind: "error"; message: string };
 
-/** `repository` is an injection point for tests only; production code omits it. */
 export async function loadStrategyRunPage(
   principal: StrategyRunPrincipal | null,
   strategyId: string,

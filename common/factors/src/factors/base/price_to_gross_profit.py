@@ -1,4 +1,4 @@
-"""Feeder: issuer price-to-gross-profit (P/GP), `(price * shares_outstanding) / gross_profit`."""
+"""Feeder: issuer price-to-gross-profit (P/GP)."""
 
 from collections.abc import Sequence
 from datetime import datetime

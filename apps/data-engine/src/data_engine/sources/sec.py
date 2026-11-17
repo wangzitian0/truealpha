@@ -2,7 +2,6 @@
 
 import json
 import re
-from pathlib import Path
 from typing import Any
 
 import httpx
@@ -180,12 +179,3 @@ def fetch_company_facts_response(cik: int, http: httpx.Client | None = None) -> 
 
 def fetch_company_facts(cik: int, http: httpx.Client | None = None) -> dict[str, Any]:
     return fetch_company_facts_response(cik, http)[1]
-
-
-def save_sample(ticker: str, out_dir: Path) -> Path:
-    cik = ticker_to_cik(ticker)
-    facts = fetch_company_facts(cik)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    path = out_dir / f"{ticker.upper()}_CIK{cik:010d}.json"
-    path.write_text(json.dumps(facts, indent=1))
-    return path

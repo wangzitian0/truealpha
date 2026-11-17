@@ -1,15 +1,4 @@
-"""The one answer to "which listing of an issuer is its primary listing" (#1518, step 2).
-
-The owner of the fact is the relation `primary_listing` (issuer to listing) in
-`staging.entity_relations`. `resolve_coordinates` writes it from the packaged classification
-file. `choose_primary_listings` is the one function that reads it. Every engine calls it: the
-core snapshot, the strategy seed, the history projector, the QQQ price lane, the standards
-planner and the issuer labels. No caller ranks listings by ticker or by id.
-
-An issuer with one listing uses that listing. An issuer with several listings uses the listing
-that a row names. An issuer with several listings and no row has no primary listing. Its caller
-marks it unavailable with the reason `PRIMARY_LISTING_UNDECLARED`.
-"""
+"""Primary listing resolver for multi-listing issuers (#1518)."""
 
 from __future__ import annotations
 
@@ -24,39 +13,22 @@ from data_engine.datahub.resolve_coordinates import alias_of, is_uuid, lookup_en
 
 __all__ = ("PRIMARY_LISTING_UNDECLARED", "choose_primary_listings", "primary_symbols")
 
-#: The reason of an unavailable issuer: it has several listings, and no `primary_listing` row names one.
 PRIMARY_LISTING_UNDECLARED = "primary_listing_undeclared"
 
-# The `primary_listing` claims known at one time, newest first. A retracted claim is not a claim.
-# The survivor of each end follows a merge. Few rows exist: one for each declared multi-listing issuer.
-_DECLARED_SQL = """
-select staging.entity_survivor(claim.from_entity_id, %(known_at)s)::text,
-       staging.entity_survivor(claim.to_entity_id, %(known_at)s)::text
-from (
-    select relation.from_entity_id, relation.to_entity_id
-    from staging.entity_relations relation
-    where relation.relation_type = 'primary_listing'
-      and relation.transaction_time <= %(known_at)s
-      and not exists (
-          select 1 from staging.entity_retractions retraction where retraction.relation_id = relation.relation_id)
-    order by relation.transaction_time desc, relation.relation_id desc
-) claim
-"""
+_DECLARED_SQL = (
+    "select staging.entity_survivor(claim.from_entity_id, %(known_at)s)::text, "
+    "staging.entity_survivor(claim.to_entity_id, %(known_at)s)::text from ("
+    "select relation.from_entity_id, relation.to_entity_id from staging.entity_relations relation "
+    "where relation.relation_type = 'primary_listing' and relation.transaction_time <= %(known_at)s "
+    "and not exists (select 1 from staging.entity_retractions retraction where retraction.relation_id = relation.relation_id) "
+    "order by relation.transaction_time desc, relation.relation_id desc) claim"
+)
 
 
 def choose_primary_listings(
-    connection: psycopg.Connection[Any],
-    candidates: Mapping[str, Sequence[str]],
-    *,
-    known_at: datetime,
+    connection: psycopg.Connection[Any], candidates: Mapping[str, Sequence[str]], *, known_at: datetime
 ) -> dict[str, str | None]:
-    """For each issuer, the one candidate listing that the engines use, or None when undeclared.
-
-    `candidates` maps an issuer id to the listings it has in the caller's data. An id may be an entity
-    UUID or a legacy id. A listing may be an entity UUID, a legacy id (`listing:xnas:googl`) or a ticker.
-    The answer is the candidate as the caller spelled it. One candidate is its own answer. Several
-    candidates give the one that a `primary_listing` row, known at `known_at`, names for the issuer.
-    """
+    """Return primary candidate listing per issuer, or None."""
     if known_at.tzinfo is None or known_at.utcoffset() is None:
         raise ValueError("known_at must carry a time zone")
     chosen: dict[str, str | None] = {}
@@ -75,7 +47,6 @@ def choose_primary_listings(
     as_of = known_at.astimezone(UTC).date()
     for issuer, listings in contested.items():
         entities = {listing: _listing_entity(connection, listing, as_of, known_at) for listing in listings}
-        # Two spellings of one listing (a legacy id and its entity UUID) are one listing, not a choice.
         if len({entity or listing.strip().lower() for listing, entity in entities.items()}) == 1:
             chosen[issuer] = listings[0]
             continue
@@ -97,12 +68,7 @@ def choose_primary_listings(
 def primary_symbols(
     connection: psycopg.Connection[Any], denominator: Mapping[str, Any], *, known_at: datetime
 ) -> tuple[str, ...]:
-    """The ticker of the primary listing of each issuer in the universe denominator, by symbol (#1522).
-
-    The denominator is the one of a universe corpus: the frozen TOPT file or a published head. An issuer
-    with several listings and none declared adds no symbol (`choose_primary_listings`). A listing without a
-    ticker names no price series. Every lane that stores a price series for a universe asks this function.
-    """
+    """Sorted tickers of primary listings in `denominator`."""
     fields = list(denominator["instrument_tuple_fields"])
     issuer_at, listing_at, ticker_at = (fields.index(name) for name in ("issuer_id", "listing_id", "ticker"))
     tickers: dict[str, str | None] = {}
@@ -117,7 +83,6 @@ def primary_symbols(
 
 
 def _listing_entity(connection: psycopg.Connection[Any], listing: str, as_of: date, known_at: datetime) -> str | None:
-    """The entity that a listing id or entity UUID names, or None for a ticker or an unknown id."""
     if not (is_uuid(listing) or listing.startswith("listing:")):
         return None
     entity = lookup_entity(connection, listing, "listing", as_of=as_of, known_at=known_at)
@@ -125,13 +90,11 @@ def _listing_entity(connection: psycopg.Connection[Any], listing: str, as_of: da
 
 
 def _listing_names(connection: psycopg.Connection[Any], listing_entity: str, known_at: datetime) -> set[str]:
-    """Every name of one listing, in lower case: its entity id, legacy id, `mic:ticker` and ticker."""
     valid_at = known_at.astimezone(UTC).date()
     names = {str(uuid.UUID(listing_entity))}
-    legacy = alias_of(connection, listing_entity, "legacy-id", valid_at=valid_at, known_at=known_at)
-    mic_ticker = alias_of(connection, listing_entity, "mic-ticker", valid_at=valid_at, known_at=known_at)
-    if legacy:
+    if legacy := alias_of(connection, listing_entity, "legacy-id", valid_at=valid_at, known_at=known_at):
         names.add(legacy)
+    mic_ticker = alias_of(connection, listing_entity, "mic-ticker", valid_at=valid_at, known_at=known_at)
     if mic_ticker and ":" in mic_ticker:
         mic, ticker = mic_ticker.split(":", 1)
         names.update({mic_ticker, ticker, f"listing:{mic}:{ticker}"})

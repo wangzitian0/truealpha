@@ -41,8 +41,7 @@ grant select on app.principals, app.tenants to app_runtime;
 -- Conversation persistence (#396, migration 0030). RLS-scoped: app_runtime
 -- authenticates as itself, then the transaction-local tenant/principal GUCs
 -- (set by withOwnerScopedRuntime) are what the row security policies actually check.
-grant select, insert on app.conversations, app.conversation_messages, app.research_gap_requests to app_runtime;
-grant select, insert, update (redeemed_at) on app.clarification_tokens to app_runtime;
+grant select, insert on app.conversations, app.conversation_messages to app_runtime;
 revoke select on app.conversation_audit_metadata from app_runtime;
 
 -- Document lifecycle (#373, migration 0031). Same RLS-scoped shape as

@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
-from decimal import Decimal
 from typing import Any
 
 import psycopg
@@ -40,28 +39,16 @@ def _bar_field(bar: Any, *keys: str) -> Any:
 
 
 def _extract_bar_date(bar: Any) -> date:
-    d = _bar_field(bar, "date", "datetime")
-    if d is None:
+    raw = _bar_field(bar, "date", "datetime")
+    if raw is None:
         raise ValueError(f"Unable to extract date from bar: {bar!r}")
-    if isinstance(d, datetime):
-        return d.date()
-    if isinstance(d, date):
-        return d
-    if isinstance(d, str):
-        return date.fromisoformat(d[:10])
-    raise TypeError(f"Unsupported date type {type(d)} in bar: {bar!r}")
-
-
-def _extract_bar_volume(bar: Any) -> Decimal | None:
-    return parse_decimal(_bar_field(bar, "volume"))
-
-
-def _extract_bar_close(bar: Any) -> Decimal | None:
-    return parse_decimal(_bar_field(bar, "close"))
-
-
-def _extract_is_suspended(bar: Any) -> bool:
-    return bool(_bar_field(bar, "is_suspended"))
+    if isinstance(raw, datetime):
+        return raw.date()
+    if isinstance(raw, date):
+        return raw
+    if isinstance(raw, str):
+        return date.fromisoformat(raw[:10])
+    raise TypeError(f"Unsupported date type {type(raw)} in bar: {bar!r}")
 
 
 def evaluate_symbol_pit(
@@ -74,40 +61,32 @@ def evaluate_symbol_pit(
     resolution: str = "1M",
 ) -> UniverseMaskRecord:
     def mask(eligible: bool, reason: str) -> UniverseMaskRecord:
-        return UniverseMaskRecord(
-            symbol=symbol, cutoff_date=cutoff_date, eligible=eligible, reason_code=reason, resolution=resolution
-        )
+        return UniverseMaskRecord(symbol, cutoff_date, eligible, reason, resolution)
 
     if listing_date is not None and listing_date > cutoff_date:
         return mask(False, UniverseMaskReason.UNLISTED)
 
     pit_bars = [bar for bar in bars if _extract_bar_date(bar) <= cutoff_date]
     if not pit_bars:
-        reason = (
-            UniverseMaskReason.INSUFFICIENT_HISTORY
-            if listing_date is not None and listing_date <= cutoff_date
-            else UniverseMaskReason.UNLISTED
+        return mask(
+            False, UniverseMaskReason.UNLISTED if listing_date is None else UniverseMaskReason.INSUFFICIENT_HISTORY
         )
-        return mask(False, reason)
-
     if len(pit_bars) < min_periods:
         return mask(False, UniverseMaskReason.INSUFFICIENT_HISTORY)
 
-    latest_bar = max(pit_bars, key=_extract_bar_date)
-    latest_date = _extract_bar_date(latest_bar)
+    latest = max(pit_bars, key=_extract_bar_date)
     expected = snap_to_last_xnys_session_of_month(cutoff_date) if resolution == "1M" else cutoff_date
-    vol = _extract_bar_volume(latest_bar)
-    cls = _extract_bar_close(latest_bar)
+    vol = parse_decimal(_bar_field(latest, "volume"))
+    cls = parse_decimal(_bar_field(latest, "close"))
     if (
-        latest_date != expected
-        or _extract_is_suspended(latest_bar)
+        _extract_bar_date(latest) != expected
+        or bool(_bar_field(latest, "is_suspended"))
         or vol is None
         or vol <= 0
         or cls is None
         or cls <= 0
     ):
         return mask(False, UniverseMaskReason.SUSPENDED)
-
     return mask(True, UniverseMaskReason.OK)
 
 
@@ -123,10 +102,8 @@ def compute_universe_mask(
     listing_dates_map = listing_dates or {}
     bars_by_symbol: dict[str, list[Any]] = {sym: [] for sym in symbols}
     for bar in prices:
-        sym = _bar_field(bar, "symbol")
-        if sym in bars_by_symbol:
+        if (sym := _bar_field(bar, "symbol")) in bars_by_symbol:
             bars_by_symbol[sym].append(bar)
-
     return [
         evaluate_symbol_pit(
             symbol=sym,
@@ -144,16 +121,13 @@ def compute_universe_mask(
 def persist_universe_mask(connection: psycopg.Connection, records: Sequence[UniverseMaskRecord]) -> int:
     if not records:
         return 0
-    query = """
-        insert into staging.universe_mask (
-            symbol, cutoff_date, resolution, eligible, reason_code, computed_at
-        ) values (%s, %s, %s, %s, %s, clock_timestamp())
-        on conflict (symbol, cutoff_date, resolution) do update set
-            eligible = excluded.eligible,
-            reason_code = excluded.reason_code,
-            computed_at = excluded.computed_at;
-    """
-    rows = [(r.symbol, r.cutoff_date, r.resolution, r.eligible, r.reason_code) for r in records]
+    query = (
+        "insert into staging.universe_mask (symbol, cutoff_date, resolution, eligible, reason_code, computed_at) "
+        "values (%s, %s, %s, %s, %s, clock_timestamp()) "
+        "on conflict (symbol, cutoff_date, resolution) do update set "
+        "eligible = excluded.eligible, reason_code = excluded.reason_code, computed_at = excluded.computed_at;"
+    )
+    rows = [(rec.symbol, rec.cutoff_date, rec.resolution, rec.eligible, rec.reason_code) for rec in records]
     with connection.cursor() as cur:
         cur.executemany(query, rows)
     return len(rows)
@@ -172,22 +146,18 @@ def compute_and_persist_universe_mask_from_db(
 ) -> list[UniverseMaskRecord]:
     if not symbols or not cutoff_dates:
         return []
-    query = f"""
-        select symbol, trading_date, open, high, low, close, volume
-        from {source_table}
-        where symbol = any(%s) and trading_date <= %s and adjust = %s
-        order by trading_date asc;
-    """
+    query = (
+        f"select symbol, trading_date, open, high, low, close, volume from {source_table} "
+        "where symbol = any(%s) and trading_date <= %s and adjust = %s order by trading_date asc;"
+    )
     with connection.cursor() as cur:
         cur.execute(query, (list(symbols), max(cutoff_dates), adjust))
         rows = cur.fetchall()
-
     keys = ("symbol", "date", "open", "high", "low", "close", "volume")
-    prices = [dict(zip(keys, r, strict=True)) for r in rows]
     records = compute_universe_mask(
         symbols=symbols,
         cutoff_dates=cutoff_dates,
-        prices=prices,
+        prices=[dict(zip(keys, row, strict=True)) for row in rows],
         listing_dates=listing_dates,
         min_periods=min_periods,
         resolution=resolution,

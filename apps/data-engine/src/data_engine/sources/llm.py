@@ -1,4 +1,4 @@
-"""Gated LLM extraction, classification, and card generation source (#70, #735, init.md §9)."""
+"""Gated LLM extraction, classification, and card source (#70, #735, init.md §9)."""
 
 from __future__ import annotations
 
@@ -8,17 +8,16 @@ import json
 import logging
 import re
 import urllib.request
-from collections.abc import Callable, Sequence
-from contextlib import nullcontext
-from dataclasses import dataclass
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager, nullcontext
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
-from functools import partial
 from typing import Any
 from urllib.parse import urlparse
 
 from factors.shared import extraction as extraction_primitive
-from infra2_sdk.runtime.llm import LlmSettings
+from infra2_sdk.runtime.llm import LlmSettings, _extract_json, _record_span_attrs
 from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.research_cards import (
     XHS_CARD_INSTRUCTIONS,
@@ -69,8 +68,6 @@ RESPONSE_SCHEMA: dict[str, Any] = {
 
 @dataclass(frozen=True)
 class ModelTask:
-    """Bound prompt version, instructions, response schema, and token/timeout limits."""
-
     prompt_version: str
     instructions: str
     response_schema: dict[str, Any]
@@ -95,8 +92,6 @@ SCHEMA_SHA256 = HEADCOUNT_TASK.schema_sha256
 
 @dataclass(frozen=True)
 class ModelInvocation:
-    """Recorded or replayed model invocation metadata and parsed task decision."""
-
     decision: dict[str, Any]
     model: str
     provider: str
@@ -118,12 +113,10 @@ Transport = Callable[[str, dict[str, str], bytes], tuple[int, bytes]]
 
 
 class ModelNotConfigured(RuntimeError):
-    """Raised when the LLM provider API key is empty."""
+    pass
 
 
 class ModelHTTPError(RuntimeError):
-    """Raised when the LLM provider returns an HTTP error status."""
-
     def __init__(self, status_code: int, message: str, provider_code: str | None = None) -> None:
         super().__init__(message)
         self.status_code = status_code
@@ -131,23 +124,17 @@ class ModelHTTPError(RuntimeError):
 
 
 class ModelCapacityRefused(ModelHTTPError):
-    """Raised when the local model pacer finds no slot or rate window before deadline."""
-
     def __init__(self, detail: str) -> None:
         super().__init__(429, f"{SOURCE}: {detail}")
 
 
 class ModelOutputTruncated(ModelHTTPError):
-    """Raised when the provider truncates output at `max_tokens` (`finish_reason=length`)."""
-
     def __init__(self, max_tokens: int) -> None:
         super().__init__(200, f"{SOURCE}: the answer was cut off at max_tokens {max_tokens}")
         self.max_tokens = max_tokens
 
 
 class ModelContextLimitError(ModelHTTPError):
-    """Raised when a prompt exceeds the model context window ceiling."""
-
     def __init__(
         self,
         *,
@@ -203,7 +190,7 @@ def build_chat_request(
     model: str,
     decoding: model_decoding.DecodingVersion | None = None,
 ) -> dict[str, Any]:
-    """Build the canonical chat-completions request payload whose digest forms the replay key."""
+    """Build canonical chat request payload for replay key hashing."""
     version = decoding or model_decoding.for_environment(gateway.capacity_environment())
     return {
         "model": model,
@@ -221,8 +208,7 @@ def _headcount_user_content(issuer_label: str, form: str, candidates: Sequence[C
 
 
 def _request_params(request_body: dict[str, Any], decoding: model_decoding.DecodingVersion) -> dict[str, Any]:
-    thinking = request_body.get("thinking")
-    response_format = request_body.get("response_format")
+    thinking, response_format = request_body.get("thinking"), request_body.get("response_format")
     return {
         "model": request_body.get("model"),
         "decoding_version": decoding.name,
@@ -240,12 +226,21 @@ _attempt_timeout: contextvars.ContextVar[int] = contextvars.ContextVar(
 _attempt_identity: contextvars.ContextVar[FetchKey] = contextvars.ContextVar("llm_attempt_identity")
 
 
+@contextmanager
+def _attempt_context(timeout_seconds: int, identity: FetchKey) -> Iterator[None]:
+    timeout_token = _attempt_timeout.set(timeout_seconds)
+    identity_token = _attempt_identity.set(identity)
+    try:
+        yield
+    finally:
+        _attempt_identity.reset(identity_token)
+        _attempt_timeout.reset(timeout_token)
+
+
 def _model_key(standard: str, cik: int, accession: str, request_sha256: str) -> FetchKey:
-    if accession:
-        return FetchKey(SOURCE, f"{ENDPOINT}?standard={standard}", f"filing:{cik:010d}:{accession}", request_sha256)
-    return FetchKey(
-        SOURCE, f"{ENDPOINT}?standard={standard}", f"seat:{SOURCE}", f"{gateway.utc_day()}:{request_sha256}"
-    )
+    target = f"filing:{cik:010d}:{accession}" if accession else f"seat:{SOURCE}"
+    digest = request_sha256 if accession else f"{gateway.utc_day()}:{request_sha256}"
+    return FetchKey(SOURCE, f"{ENDPOINT}?standard={standard}", target, digest)
 
 
 def _gateway_transport(url: str, headers: dict[str, str], body: bytes) -> tuple[int, bytes]:
@@ -263,19 +258,17 @@ def _gateway_transport(url: str, headers: dict[str, str], body: bytes) -> tuple[
 
 
 def _stored_request(request_body: dict[str, Any]) -> dict[str, Any]:
-    """Compact user messages larger than 16 KB into deterministic SHA-256 + length metadata."""
     messages = request_body.get("messages")
     if not isinstance(messages, list):
         return request_body
-    compacted_messages: list[dict[str, Any]] = []
+    compacted: list[dict[str, Any]] = []
     changed = False
     for msg in messages:
-        if isinstance(msg, dict) and msg.get("role") == "user" and isinstance(msg.get("content"), str):
-            content = msg["content"]
+        if isinstance(msg, dict) and msg.get("role") == "user" and isinstance(content := msg.get("content"), str):
             raw_bytes = content.encode("utf-8")
             if len(raw_bytes) > _COMPACT_REQUEST_BYTE_THRESHOLD:
                 changed = True
-                compacted_messages.append(
+                compacted.append(
                     {
                         "role": "user",
                         "content_sha256": hashlib.sha256(raw_bytes).hexdigest(),
@@ -284,16 +277,13 @@ def _stored_request(request_body: dict[str, Any]) -> dict[str, Any]:
                     }
                 )
                 continue
-        compacted_messages.append(msg)
-    return {**request_body, "messages": compacted_messages} if changed else request_body
+        compacted.append(msg)
+    return {**request_body, "messages": compacted} if changed else request_body
 
 
-def _without_model(request_body: dict[str, Any]) -> dict[str, Any]:
-    return {key: value for key, value in _stored_request(request_body).items() if key != "model"}
-
-
-def _estimate_prompt_tokens(task: ModelTask, user_content: str) -> int:
-    return int((len(task.instructions) + len(user_content)) / _CHARS_PER_TOKEN_FLOOR)
+def _question(request_body: dict[str, Any]) -> str:
+    without_model = {key: value for key, value in _stored_request(request_body).items() if key != "model"}
+    return json.dumps(without_model, sort_keys=True, ensure_ascii=False)
 
 
 _CONTEXT_LIMIT_CODES = frozenset(
@@ -390,6 +380,10 @@ def _synthetic_cik(text: str) -> int:
     return (int(hashlib.sha256(text.encode()).hexdigest()[:8], 16) & 0x7FFFFFFF) or 1
 
 
+def _utcnow() -> datetime:
+    return datetime.now(UTC)
+
+
 def invoke(
     connection: Any | None,
     *,
@@ -403,47 +397,159 @@ def invoke(
     refusal: Callable[[str], dict[str, Any]],
     persist: bool = True,
     transport: Transport | None = None,
-    now: Callable[[], datetime] = lambda: datetime.now(UTC),
+    now: Callable[[], datetime] = _utcnow,
 ) -> ModelInvocation:
-    """Invoke the seated model with advisory-locked replay and append-only persistence."""
+    """Invoke seated model with locked replay and append-only persistence."""
     if not is_configured():
         raise ModelNotConfigured(f"{settings.llm_api_key_env} is not set; no provider seated (#70 scope 1)")
     cik = cik if cik > 0 else _synthetic_cik(accession)
     model = settings.llm_model
     decoding = model_decoding.for_environment(gateway.capacity_environment())
     request_body = build_chat_request(task, user_content, model=model, decoding=decoding)
-    ask = partial(
-        _ask,
-        task=task,
-        model=model,
-        decoding=decoding,
-        request_body=request_body,
-        cik=cik,
-        accession=accession,
-        caller=caller,
-        standard=standard,
-        parse=parse,
-        refusal=refusal,
-        transport=transport,
-        now=now,
+    active_conn = connection if persist and connection is not None else None
+    tx_ctx = (
+        active_conn.transaction()
+        if active_conn is not None and getattr(active_conn, "autocommit", False)
+        else nullcontext()
     )
-    if not persist or connection is None:
-        invocation, error = ask(None)
-    else:
-        with connection.transaction() if getattr(connection, "autocommit", False) else nullcontext():
+    with tx_ctx:
+        if active_conn is not None:
             known = [build_chat_request(task, user_content, model=model, decoding=v) for v in model_decoding.KNOWN]
-            _lock_question(connection, cik=cik, accession=accession, question=_question(known[0]))
-            replayed = _replay(connection, task=task, cik=cik, accession=accession, model=model, requests=known)
-            if replayed is not None:
+            _lock_question(active_conn, cik=cik, accession=accession, question=_question(known[0]))
+            if (
+                replayed := _replay(active_conn, task=task, cik=cik, accession=accession, model=model, requests=known)
+            ) is not None:
                 return replayed
-            invocation, error = ask(connection)
-    if error is not None:
-        raise error
+        llm_cfg = LlmSettings(
+            provider=settings.llm_provider, base_url=settings.llm_base_url, api_key=settings.llm_api_key
+        )
+        request_bytes = _request_bytes(request_body)
+        request_sha256 = hashlib.sha256(request_bytes).hexdigest()
+        url = f"{llm_cfg.base_url.rstrip('/')}{llm_cfg.chat_completions_path}"
+        headers = {"Authorization": f"Bearer {llm_cfg.api_key}", "Content-Type": "application/json"}
+        started_at = now()
+        usage: dict[str, Any] = {}
+        payload: dict[str, Any] = {}
+        estimated_tokens = int((len(task.instructions) + len(user_content)) / _CHARS_PER_TOKEN_FLOOR)
+        context_limit_exceeded = estimated_tokens > task.max_context_tokens
+        provider_code: str | None = None
+        prompt_tokens: int | None = None
+        completion_tokens: int | None = None
+        context_prefix = f"context_window_exceeded: cik={cik} accession={accession} standard={standard}"
+        if context_limit_exceeded:
+            status, prompt_tokens, completion_tokens, served_model = 413, estimated_tokens, 0, None
+            limit_msg = (
+                f"{context_prefix} estimated_tokens={estimated_tokens} "
+                f"exceeds max_context_tokens={task.max_context_tokens} (chars={len(user_content)})"
+            )
+            logger.error("LLM context ceiling exceeded (>1M tokens): %s", limit_msg)
+            body = json.dumps(
+                {
+                    "error": {
+                        "code": "context_window_exceeded",
+                        "message": limit_msg,
+                        "estimated_tokens": estimated_tokens,
+                        "max_context_tokens": task.max_context_tokens,
+                    }
+                }
+            ).encode("utf-8")
+            decision = refusal(limit_msg)
+        else:
+            status, body, payload, usage, provider_code = _call_provider(
+                url,
+                headers,
+                request_bytes,
+                request_body,
+                decoding,
+                task,
+                caller,
+                _model_key(standard, cik, accession, request_sha256),
+                transport,
+            )
+            prompt_tokens, completion_tokens = usage.get("prompt_tokens"), usage.get("completion_tokens")
+            served_model = str(payload["model"]) if payload.get("model") else None
+            if status >= 400:
+                if _is_context_limit_response(status, body):
+                    context_limit_exceeded = True
+                    limit_msg = f"{context_prefix} HTTP {status}: {body[:200]!r}"
+                    logger.error("LLM provider rejected prompt for exceeding context window: %s", limit_msg)
+                    decision = refusal(limit_msg)
+                else:
+                    decision = refusal(f"HTTP {status}: {body[:200]!r}")
+            else:
+                decision = _answer_decision(payload, request_body["max_tokens"], task.answer_required, parse, refusal)
+        completed_at = now()
+        response_sha256 = hashlib.sha256(body).hexdigest()
+        invocation_id = "model-invocation:" + canonical_sha256(
+            {
+                "provider": llm_cfg.provider,
+                "model": model,
+                "prompt_sha256": task.prompt_sha256,
+                "request_sha256": request_sha256,
+                "response_sha256": response_sha256,
+                "started_at": started_at.isoformat(),
+                **({"served_model": served_model} if served_model else {}),
+            }
+        )
+        invocation = ModelInvocation(
+            decision,
+            model,
+            llm_cfg.provider,
+            task.prompt_sha256,
+            request_sha256,
+            response_sha256,
+            prompt_tokens,
+            completion_tokens,
+            invocation_id,
+            False,
+            served_model,
+        )
+        if active_conn is not None:
+            active_conn.execute(
+                "insert into staging.model_invocations (invocation_id, provider, model, base_url_host, standard, subject_cik, "
+                "accession, prompt_version, prompt_sha256, schema_sha256, request_sha256, response_sha256, status_code, "
+                "prompt_tokens, completion_tokens, cost, decision, request, response, started_at, completed_at, served_model) "
+                "values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, %s, %s, %s) "
+                "on conflict (invocation_id) do nothing",
+                (
+                    invocation.invocation_id,
+                    settings.llm_provider,
+                    invocation.model,
+                    urlparse(url).hostname or "",
+                    standard,
+                    cik,
+                    accession,
+                    task.prompt_version,
+                    task.prompt_sha256,
+                    task.schema_sha256,
+                    invocation.request_sha256,
+                    invocation.response_sha256,
+                    status,
+                    invocation.prompt_tokens,
+                    invocation.completion_tokens,
+                    Decimal(int(usage.get("total_tokens") or 0)),
+                    json.dumps(invocation.decision, sort_keys=True),
+                    json.dumps(_stored_request(request_body), sort_keys=True, ensure_ascii=False),
+                    _jsonb_or_null(body),
+                    started_at,
+                    completed_at,
+                    invocation.served_model,
+                ),
+            )
+    if context_limit_exceeded:
+        raise ModelContextLimitError(
+            cik=cik,
+            accession=accession,
+            estimated_tokens=estimated_tokens,
+            max_context_tokens=task.max_context_tokens,
+            detail=f"{SOURCE}: context_window_exceeded (cik={cik}, accession={accession}, estimated_tokens={estimated_tokens})",
+            status_code=status,
+        )
+    if status >= 400:
+        raise ModelHTTPError(status, f"{SOURCE}: HTTP {status}: {body[:200]!r}", provider_code)
+    if task.answer_required and _cut_off(payload):
+        raise ModelOutputTruncated(request_body["max_tokens"])
     return invocation
-
-
-def _question(request_body: dict[str, Any]) -> str:
-    return json.dumps(_without_model(request_body), sort_keys=True, ensure_ascii=False)
 
 
 def _request_sha256(request_body: dict[str, Any]) -> str:
@@ -454,131 +560,79 @@ def _request_bytes(request_body: dict[str, Any]) -> bytes:
     return json.dumps(request_body, sort_keys=True, ensure_ascii=False).encode()
 
 
-@dataclass(frozen=True)
-class _ProviderAnswer:
-    status: int
-    body: bytes
-    payload: dict[str, Any]
-    usage: dict[str, Any]
-    provider_code: str | None
-
-
 def _call_provider(
-    *,
     url: str,
     headers: dict[str, str],
     request_bytes: bytes,
     request_body: dict[str, Any],
     decoding: model_decoding.DecodingVersion,
-    timeout_seconds: int,
-    answer_required: bool,
+    task: ModelTask,
     caller: str,
     identity: FetchKey,
     transport: Transport | None,
-) -> _ProviderAnswer:
+) -> tuple[int, bytes, dict[str, Any], dict[str, Any], str | None]:
     request_params = _request_params(request_body, decoding)
     budget = model_policy.RetryBudget()
     pacer = model_policy.pacer_for(gateway.capacity_environment())
     send = transport or _gateway_transport
-    token = _attempt_timeout.set(timeout_seconds)
-    identity_token = _attempt_identity.set(identity)
-    try:
-        last: _ProviderAnswer | None = None
+
+    def _run_attempt(attempt: int) -> tuple[int, bytes, dict[str, Any], dict[str, Any], str | None]:
+        payload: dict[str, Any] = {}
+        usage: dict[str, Any] = {}
+        provider_code: str | None = None
+        with (
+            pacer.admitted(budget.remaining_seconds) if pacer is not None else nullcontext(),
+            record_call(
+                SOURCE, ENDPOINT, identity=identity, caller=caller, request_uri=url, cost=0, admit=False
+            ) as call,
+        ):
+            call.attempt = attempt
+            call.request_params = request_params
+            status, body = send(url, headers, request_bytes)
+            call.observe(status_code=status, body=body)
+            if status >= 400:
+                provider_code = model_policy.provider_code(body)
+                call.provider_code = provider_code
+                call.fail(f"HTTP {status}: {body[:200]!r}")
+            else:
+                payload = json.loads(body.decode())
+                usage = payload.get("usage") or {}
+                call.cost = Decimal(int(usage.get("total_tokens") or 0))
+                call.completion_tokens = _token_count(usage.get("completion_tokens"))
+                call.reasoning_tokens = _token_count(
+                    (usage.get("completion_tokens_details") or {}).get("reasoning_tokens")
+                )
+                _record_span_attrs(
+                    str(payload.get("model") or request_params.get("model") or ""),
+                    settings.llm_provider,
+                    _token_count(usage.get("prompt_tokens")) or 0,
+                    call.completion_tokens or 0,
+                )
+                if task.answer_required and _cut_off(payload):
+                    call.fail(f"finish_reason={FINISH_REASON_CUT_OFF}: the answer was cut at max_tokens")
+        return status, body, payload, usage, provider_code
+
+    with _attempt_context(task.timeout_seconds, identity):
+        last: tuple[int, bytes, dict[str, Any], dict[str, Any], str | None] | None = None
         while True:
             attempt = budget.begin_attempt()
             try:
-                last = _attempt(
-                    attempt=attempt,
-                    pacer=pacer,
-                    remaining_seconds=budget.remaining_seconds,
-                    send=send,
-                    url=url,
-                    headers=headers,
-                    request_bytes=request_bytes,
-                    request_params=request_params,
-                    caller=caller,
-                    identity=identity,
-                    answer_required=answer_required,
-                )
+                last = _run_attempt(attempt)
             except gateway.CapacityExceeded as refusal:
                 if last is None:
                     raise ModelCapacityRefused(refusal.reason) from refusal
                 return last
-            wait = None if last.status < 400 else budget.wait_before_next(last.status, last.provider_code)
+            wait = None if last[0] < 400 else budget.wait_before_next(last[0], last[4])
             if wait is None:
                 return last
             logger.warning(
                 "model call answered HTTP %s (provider code %s) on attempt %s; waiting %.1f s",
-                last.status,
-                last.provider_code,
+                last[0],
+                last[4],
                 attempt,
                 wait,
             )
             model_policy.sleep(wait)
-    finally:
-        _attempt_identity.reset(identity_token)
-        _attempt_timeout.reset(token)
-
-
-def _attempt(
-    *,
-    attempt: int,
-    pacer: model_policy.ModelPacer | None,
-    remaining_seconds: Callable[[], float],
-    send: Transport,
-    url: str,
-    headers: dict[str, str],
-    request_bytes: bytes,
-    request_params: dict[str, Any],
-    caller: str,
-    identity: FetchKey,
-    answer_required: bool,
-) -> _ProviderAnswer:
-    payload: dict[str, Any] = {}
-    usage: dict[str, Any] = {}
-    provider_code: str | None = None
-    with (
-        pacer.admitted(remaining_seconds) if pacer is not None else nullcontext(),
-        record_call(SOURCE, ENDPOINT, identity=identity, caller=caller, request_uri=url, cost=0, admit=False) as call,
-    ):
-        call.attempt = attempt
-        call.request_params = request_params
-        status, body = send(url, headers, request_bytes)
-        call.observe(status_code=status, body=body)
-        if status >= 400:
-            provider_code = model_policy.provider_code(body)
-            call.provider_code = provider_code
-            call.fail(f"HTTP {status}: {body[:200]!r}")
-        else:
-            payload = json.loads(body.decode())
-            usage = payload.get("usage") or {}
-            call.cost = Decimal(int(usage.get("total_tokens") or 0))
-            call.completion_tokens = _token_count(usage.get("completion_tokens"))
-            call.reasoning_tokens = _token_count((usage.get("completion_tokens_details") or {}).get("reasoning_tokens"))
-            _record_gen_ai_span(str(payload.get("model") or request_params.get("model") or ""), usage)
-            if answer_required and _cut_off(payload):
-                call.fail(f"finish_reason={FINISH_REASON_CUT_OFF}: the answer was cut at max_tokens")
-    return _ProviderAnswer(status, body, payload, usage, provider_code)
-
-
-def _record_gen_ai_span(model: str, usage: dict[str, Any]) -> None:
-    """Attach standard OpenTelemetry GenAI attributes when an active recording span exists."""
-    try:
-        from opentelemetry import trace
-    except ImportError:
-        return
-    span = trace.get_current_span()
-    if span is None or not span.is_recording():
-        return
-    in_tokens = _token_count(usage.get("prompt_tokens")) or 0
-    out_tokens = _token_count(usage.get("completion_tokens")) or 0
-    for key, value in (
-        ("gen_ai.system", settings.llm_provider),
-        ("gen_ai.request.model", model),
-        ("gen_ai.usage.input_tokens", in_tokens),
-        ("gen_ai.usage.output_tokens", out_tokens),
-    ):
-        span.set_attribute(key, value)
 
 
 def _cut_off(payload: dict[str, Any]) -> bool:
@@ -601,220 +655,6 @@ def _token_count(value: Any) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
 
 
-def _persist_invocation(
-    connection: Any,
-    invocation: ModelInvocation,
-    *,
-    task: ModelTask,
-    url: str,
-    standard: str,
-    cik: int,
-    accession: str,
-    status: int,
-    usage: dict[str, Any],
-    stored_request: dict[str, Any],
-    body: bytes,
-    started_at: datetime,
-    completed_at: datetime,
-) -> None:
-    connection.execute(
-        """
-        insert into staging.model_invocations
-            (invocation_id, provider, model, base_url_host, standard, subject_cik, accession,
-             prompt_version, prompt_sha256, schema_sha256, request_sha256, response_sha256, status_code,
-             prompt_tokens, completion_tokens, cost, decision, request, response, started_at, completed_at,
-             served_model)
-        values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, %s, %s, %s)
-        on conflict (invocation_id) do nothing
-        """,
-        (
-            invocation.invocation_id,
-            settings.llm_provider,
-            invocation.model,
-            urlparse(url).hostname or "",
-            standard,
-            cik,
-            accession,
-            task.prompt_version,
-            task.prompt_sha256,
-            task.schema_sha256,
-            invocation.request_sha256,
-            invocation.response_sha256,
-            status,
-            invocation.prompt_tokens,
-            invocation.completion_tokens,
-            Decimal(int(usage.get("total_tokens") or 0)),
-            json.dumps(invocation.decision, sort_keys=True),
-            json.dumps(stored_request, sort_keys=True, ensure_ascii=False),
-            _jsonb_or_null(body),
-            started_at,
-            completed_at,
-            invocation.served_model,
-        ),
-    )
-
-
-def _ask(
-    connection: Any | None,
-    *,
-    task: ModelTask,
-    model: str,
-    decoding: model_decoding.DecodingVersion,
-    request_body: dict[str, Any],
-    cik: int,
-    accession: str,
-    caller: str,
-    standard: str,
-    parse: Callable[[str], dict[str, Any]],
-    refusal: Callable[[str], dict[str, Any]],
-    transport: Transport | None,
-    now: Callable[[], datetime],
-) -> tuple[ModelInvocation, ModelHTTPError | None]:
-    llm_cfg = LlmSettings(
-        provider=settings.llm_provider,
-        base_url=settings.llm_base_url,
-        api_key=settings.llm_api_key,
-        small_model=model,
-        large_model=model,
-        multimodal_model=model,
-        json_timeout_seconds=float(task.timeout_seconds),
-        json_max_tokens=task.max_tokens,
-    )
-    request_bytes = _request_bytes(request_body)
-    request_sha256 = hashlib.sha256(request_bytes).hexdigest()
-    stored_request = _stored_request(request_body)
-    url = f"{llm_cfg.base_url.rstrip('/')}{llm_cfg.chat_completions_path}"
-    headers = {"Authorization": f"Bearer {llm_cfg.api_key}", "Content-Type": "application/json"}
-    started_at = now()
-    usage: dict[str, Any] = {}
-    payload: dict[str, Any] = {}
-    user_text = next(
-        (
-            str(msg.get("content", ""))
-            for msg in request_body.get("messages", [])
-            if isinstance(msg, dict) and msg.get("role") == "user"
-        ),
-        "",
-    )
-    estimated_tokens = _estimate_prompt_tokens(task, user_text)
-    context_limit_exceeded = estimated_tokens > task.max_context_tokens
-    provider_code: str | None = None
-    if context_limit_exceeded:
-        status = 413
-        limit_msg = (
-            f"context_window_exceeded: cik={cik} accession={accession} standard={standard} "
-            f"estimated_tokens={estimated_tokens} exceeds max_context_tokens={task.max_context_tokens} "
-            f"(chars={len(user_text)})"
-        )
-        logger.error("LLM context ceiling exceeded (>1M tokens): %s", limit_msg)
-        body = json.dumps(
-            {
-                "error": {
-                    "code": "context_window_exceeded",
-                    "message": limit_msg,
-                    "estimated_tokens": estimated_tokens,
-                    "max_context_tokens": task.max_context_tokens,
-                }
-            }
-        ).encode("utf-8")
-        prompt_tokens: int | None = estimated_tokens
-        completion_tokens: int | None = 0
-        served_model: str | None = None
-        decision = refusal(limit_msg)
-    else:
-        answer = _call_provider(
-            url=url,
-            headers=headers,
-            request_bytes=request_bytes,
-            request_body=request_body,
-            decoding=decoding,
-            timeout_seconds=task.timeout_seconds,
-            answer_required=task.answer_required,
-            caller=caller,
-            identity=_model_key(standard, cik, accession, request_sha256),
-            transport=transport,
-        )
-        status, body, payload, usage, provider_code = (
-            answer.status,
-            answer.body,
-            answer.payload,
-            answer.usage,
-            answer.provider_code,
-        )
-        prompt_tokens = usage.get("prompt_tokens")
-        completion_tokens = usage.get("completion_tokens")
-        served_model = str(payload["model"]) if payload.get("model") else None
-        if status >= 400:
-            if _is_context_limit_response(status, body):
-                context_limit_exceeded = True
-                limit_msg = (
-                    f"context_window_exceeded: cik={cik} accession={accession} standard={standard} "
-                    f"HTTP {status}: {body[:200]!r}"
-                )
-                logger.error("LLM provider rejected prompt for exceeding context window: %s", limit_msg)
-                decision = refusal(limit_msg)
-            else:
-                decision = refusal(f"HTTP {status}: {body[:200]!r}")
-        else:
-            decision = _answer_decision(payload, request_body["max_tokens"], task.answer_required, parse, refusal)
-    completed_at = now()
-    response_sha256 = hashlib.sha256(body).hexdigest()
-    invocation_id = "model-invocation:" + canonical_sha256(
-        {
-            "provider": llm_cfg.provider,
-            "model": model,
-            "prompt_sha256": task.prompt_sha256,
-            "request_sha256": request_sha256,
-            "response_sha256": response_sha256,
-            "started_at": started_at.isoformat(),
-            **({"served_model": served_model} if served_model else {}),
-        }
-    )
-    invocation = ModelInvocation(
-        decision=decision,
-        model=model,
-        provider=llm_cfg.provider,
-        prompt_sha256=task.prompt_sha256,
-        request_sha256=request_sha256,
-        response_sha256=response_sha256,
-        prompt_tokens=prompt_tokens,
-        completion_tokens=completion_tokens,
-        invocation_id=invocation_id,
-        replayed=False,
-        served_model=served_model,
-    )
-    if connection is not None:
-        _persist_invocation(
-            connection,
-            invocation,
-            task=task,
-            url=url,
-            standard=standard,
-            cik=cik,
-            accession=accession,
-            status=status,
-            usage=usage,
-            stored_request=stored_request,
-            body=body,
-            started_at=started_at,
-            completed_at=completed_at,
-        )
-    if context_limit_exceeded:
-        return invocation, ModelContextLimitError(
-            cik=cik,
-            accession=accession,
-            estimated_tokens=estimated_tokens,
-            max_context_tokens=task.max_context_tokens,
-            detail=f"{SOURCE}: context_window_exceeded (cik={cik}, accession={accession}, estimated_tokens={estimated_tokens})",
-            status_code=status,
-        )
-    if status >= 400:
-        return invocation, ModelHTTPError(status, f"{SOURCE}: HTTP {status}: {body[:200]!r}", provider_code)
-    if task.answer_required and _cut_off(payload):
-        return invocation, ModelOutputTruncated(request_body["max_tokens"])
-    return invocation, None
-
-
 def select_headcount(
     connection: Any | None,
     *,
@@ -827,10 +667,10 @@ def select_headcount(
     standard: str = "employees_total",
     persist: bool = True,
     transport: Transport | None = None,
-    now: Callable[[], datetime] = lambda: datetime.now(UTC),
+    now: Callable[[], datetime] = _utcnow,
 ) -> ModelSelection:
-    """Select company-wide employee headcount from enumerated filing candidates."""
-    invocation = invoke(
+    """Select company-wide headcount from enumerated candidates."""
+    inv = invoke(
         connection,
         task=HEADCOUNT_TASK,
         cik=cik,
@@ -838,14 +678,14 @@ def select_headcount(
         user_content=_headcount_user_content(issuer_label, form, candidates),
         caller=caller,
         standard=standard,
-        parse=lambda content: _parse_decision(content, candidates),
-        refusal=lambda detail: {"value": None, "candidate_index": None, "reason": detail},
+        parse=lambda c: _parse_decision(c, candidates),
+        refusal=lambda d: {"value": None, "candidate_index": None, "reason": d},
         persist=persist,
         transport=transport,
         now=now,
     )
-    decision = invocation.decision
-    meta = {k: getattr(invocation, k) for k in ModelInvocation.__dataclass_fields__ if k != "decision"}
+    decision = inv.decision
+    meta = {k: getattr(inv, k) for k in ModelInvocation.__dataclass_fields__ if k != "decision"}
     return ModelSelection(
         value=decision.get("value"),
         candidate_index=decision.get("candidate_index"),
@@ -895,7 +735,7 @@ SEGMENT_THEME_TASK = ModelTask(
 
 @dataclass(frozen=True)
 class ThemeClassification:
-    """Per-segment boolean or None (`unclassified`) theme classification verdicts."""
+    """Per-segment theme classification verdicts (`True`, `False`, or `None`)."""
 
     verdicts: tuple[bool | None, ...]
     reasons: tuple[str, ...]
@@ -906,22 +746,14 @@ class ThemeClassification:
         return self.invocation.extractor
 
 
-_JSON_FENCE_RE = re.compile(r"\A```(?:json)?\s*(.*?)\s*```\Z", re.S | re.I)
-
-
 def _parse_json_payload(content: str) -> Any:
-    """Decode JSON content after stripping optional markdown code fences."""
-    cleaned = content.strip()
-    if match := _JSON_FENCE_RE.match(cleaned):
-        cleaned = match.group(1).strip()
     try:
-        return json.loads(cleaned)
-    except json.JSONDecodeError:
+        return _extract_json(content)
+    except (json.JSONDecodeError, ValueError):
         return None
 
 
 def _json_list_field(content: str, key: str) -> list[Any] | None:
-    """Extract a flattened list from `{"<key>": [...]}` or `[{"<key>": [...]}]` JSON responses."""
     parsed = _parse_json_payload(content)
     if parsed is None:
         return None
@@ -965,12 +797,12 @@ def classify_segments(
     standard: str = "segment_revenue",
     persist: bool = True,
     transport: Transport | None = None,
-    now: Callable[[], datetime] = lambda: datetime.now(UTC),
+    now: Callable[[], datetime] = _utcnow,
 ) -> ThemeClassification:
-    """Classify reportable segment names against an investment theme without exposing revenue figures."""
-    lines = [f"[{i}] {name}" for i, name in enumerate(segments)]
-    user = f"Issuer: {issuer_label}.\nTheme: {theme}.\nIn-theme means: {inclusion}\nSegments:\n" + "\n".join(lines)
-    invocation = invoke(
+    """Classify reportable segment names against an investment theme."""
+    lines = "\n".join(f"[{i}] {name}" for i, name in enumerate(segments))
+    user = f"Issuer: {issuer_label}.\nTheme: {theme}.\nIn-theme means: {inclusion}\nSegments:\n{lines}"
+    inv = invoke(
         connection,
         task=SEGMENT_THEME_TASK,
         cik=cik,
@@ -978,18 +810,18 @@ def classify_segments(
         user_content=user,
         caller=caller,
         standard=standard,
-        parse=lambda content: _parse_theme_verdicts(content, segments),
-        refusal=lambda detail: {"verdicts": [None] * len(segments), "reasons": [detail] * len(segments)},
+        parse=lambda c: _parse_theme_verdicts(c, segments),
+        refusal=lambda d: {"verdicts": [None] * len(segments), "reasons": [d] * len(segments)},
         persist=persist,
         transport=transport,
         now=now,
     )
-    decision = invocation.decision
-    raw = decision.get("verdicts") or []
-    verdicts = tuple((raw[i] if i < len(raw) and isinstance(raw[i], bool) else None) for i in range(len(segments)))
-    raw_reasons = decision.get("reasons") or []
-    reasons = tuple(str(raw_reasons[i]) if i < len(raw_reasons) else "" for i in range(len(segments)))
-    return ThemeClassification(verdicts=verdicts, reasons=reasons, invocation=invocation)
+    raw_v, raw_r = inv.decision.get("verdicts") or [], inv.decision.get("reasons") or []
+    verdicts = tuple(
+        (raw_v[i] if i < len(raw_v) and isinstance(raw_v[i], bool) else None) for i in range(len(segments))
+    )
+    reasons = tuple(str(raw_r[i]) if i < len(raw_r) else "" for i in range(len(segments)))
+    return ThemeClassification(verdicts=verdicts, reasons=reasons, invocation=inv)
 
 
 def _jsonb_or_null(body: bytes) -> str | None:
@@ -1000,21 +832,23 @@ def _jsonb_or_null(body: bytes) -> str | None:
 
 
 def _parse_decision(content: str, candidates: Sequence[Candidate]) -> dict[str, Any]:
+    def _null(reason: str) -> dict[str, Any]:
+        return {"value": None, "candidate_index": None, "reason": reason}
+
     parsed = _parse_json_payload(content)
     if not isinstance(parsed, dict):
-        return {"value": None, "candidate_index": None, "reason": f"unparseable model answer: {content[:120]!r}"}
-    value = parsed.get("value")
-    index = parsed.get("candidate_index")
+        return _null(f"unparseable model answer: {content[:120]!r}")
+    value, index = parsed.get("value"), parsed.get("candidate_index")
     reason = str(parsed.get("reason", ""))[:400]
     if value is None:
-        return {"value": None, "candidate_index": None, "reason": reason or "model answered null"}
+        return _null(reason or "model answered null")
     try:
         value = int(value)
     except (TypeError, ValueError):
-        return {"value": None, "candidate_index": None, "reason": f"non-integer model value {value!r}"}
+        return _null(f"non-integer model value {value!r}")
     matching = [i for i, c in enumerate(candidates) if c.value == value]
     if not matching:
-        return {"value": None, "candidate_index": None, "reason": f"model chose {value}, which is not a candidate"}
+        return _null(f"model chose {value}, which is not a candidate")
     chosen = index if isinstance(index, int) and index in matching else matching[0]
     return {"value": value, "candidate_index": chosen, "reason": reason}
 
@@ -1050,10 +884,10 @@ def as_selector(
     standard: str = "employees_total",
     persist: bool = True,
     transport: Transport | None = None,
-    now: Callable[[], datetime] = lambda: datetime.now(UTC),
+    now: Callable[[], datetime] = _utcnow,
     on_model_selection: Callable[[ModelSelection], None] | None = None,
 ) -> extraction_primitive.Selector:
-    """Bind ledger/replay context into a `factors.shared.extraction.Selector` callable."""
+    """Bind replay context into a `Selector` callable."""
 
     def select(candidates: Sequence[extraction_primitive.Candidate]) -> extraction_primitive.Selection | None:
         local_candidates = [Candidate(value=_integral_value(c.value), sentence=c.sentence) for c in candidates]
@@ -1147,7 +981,7 @@ class SupplyChainExtraction:
         return self.invocation.extractor
 
 
-def _normalize_partner_entry(item: Any) -> dict[str, Any] | None:
+def _as_partner(item: Any) -> ExtractedSupplyChainPartner | None:
     if not isinstance(item, dict):
         return None
     name = str(item.get("partner_name") or "").strip()
@@ -1158,21 +992,15 @@ def _normalize_partner_entry(item: Any) -> dict[str, Any] | None:
     raw_ticker = item.get("ticker")
     ticker = str(raw_ticker).strip().upper() if isinstance(raw_ticker, str) and raw_ticker.strip() else None
     raw_share = item.get("revenue_share_pct")
-    share_str: str | None = None
+    share: Decimal | None = None
     if isinstance(raw_share, int | float | str) and not isinstance(raw_share, bool):
         try:
             val = Decimal(str(raw_share))
             if Decimal("0") <= val <= Decimal("100"):
-                share_str = str(val)
+                share = val
         except Exception:  # noqa: BLE001
-            share_str = None
-    return {
-        "partner_name": name,
-        "ticker": ticker,
-        "relation_type": rel,
-        "revenue_share_pct": share_str,
-        "evidence_quote": quote,
-    }
+            share = None
+    return ExtractedSupplyChainPartner(name, ticker, rel, share, quote)
 
 
 def _parse_supply_chain_partners(content: str) -> dict[str, Any]:
@@ -1182,13 +1010,14 @@ def _parse_supply_chain_partners(content: str) -> dict[str, Any]:
     partners: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
     for item in items:
-        normalized = _normalize_partner_entry(item)
-        if normalized is None:
+        if (partner := _as_partner(item)) is None:
             continue
-        key = (normalized["relation_type"], normalized["partner_name"].lower())
+        key = (partner.relation_type, partner.partner_name.lower())
         if key not in seen:
             seen.add(key)
-            partners.append(normalized)
+            row = asdict(partner)
+            row["revenue_share_pct"] = None if partner.revenue_share_pct is None else str(partner.revenue_share_pct)
+            partners.append(row)
     return {"partners": partners, "reason": "ok"}
 
 
@@ -1233,20 +1062,6 @@ def _bound_supply_chain_filing_text(filing_text: str) -> str:
     return "\n...\n".join(parts)
 
 
-def _as_partner(item: Any) -> ExtractedSupplyChainPartner | None:
-    normalized = _normalize_partner_entry(item)
-    if normalized is None:
-        return None
-    raw_share = normalized["revenue_share_pct"]
-    return ExtractedSupplyChainPartner(
-        partner_name=normalized["partner_name"],
-        ticker=normalized["ticker"],
-        relation_type=normalized["relation_type"],
-        revenue_share_pct=Decimal(raw_share) if raw_share is not None else None,
-        evidence_quote=normalized["evidence_quote"],
-    )
-
-
 def identify_supply_chain_partners(
     connection: Any | None,
     *,
@@ -1258,12 +1073,12 @@ def identify_supply_chain_partners(
     standard: str = "supply_chain",
     persist: bool = True,
     transport: Transport | None = None,
-    now: Callable[[], datetime] = lambda: datetime.now(UTC),
+    now: Callable[[], datetime] = _utcnow,
 ) -> SupplyChainExtraction:
-    """Extract named third-party suppliers and customers from 10-K filing text."""
-    bounded_text = _bound_supply_chain_filing_text(filing_text)
-    user = f"Issuer: {issuer_label} (CIK {cik:010d}), form 10-K, accession {accession}.\nFiling text:\n{bounded_text}"
-    invocation = invoke(
+    """Extract named third-party suppliers and customers from 10-K text."""
+    bounded = _bound_supply_chain_filing_text(filing_text)
+    user = f"Issuer: {issuer_label} (CIK {cik:010d}), form 10-K, accession {accession}.\nFiling text:\n{bounded}"
+    inv = invoke(
         connection,
         task=SUPPLY_CHAIN_TASK,
         cik=cik,
@@ -1272,15 +1087,13 @@ def identify_supply_chain_partners(
         caller=caller,
         standard=standard,
         parse=_parse_supply_chain_partners,
-        refusal=lambda detail: {"partners": [], "reason": detail},
+        refusal=lambda d: {"partners": [], "reason": d},
         persist=persist,
         transport=transport,
         now=now,
     )
-    partners = tuple(
-        partner for item in invocation.decision.get("partners") or [] if (partner := _as_partner(item)) is not None
-    )
-    return SupplyChainExtraction(partners=partners, invocation=invocation)
+    partners = tuple(p for item in inv.decision.get("partners") or [] if (p := _as_partner(item)) is not None)
+    return SupplyChainExtraction(partners=partners, invocation=inv)
 
 
 XHS_CARD_RESPONSE_SCHEMA: dict[str, Any] = {
@@ -1329,18 +1142,18 @@ def generate_xhs_card_html(
     standard: str = "xhs_card",
     persist: bool = True,
     transport: Transport | None = None,
-    now: Callable[[], datetime] = lambda: datetime.now(UTC),
+    now: Callable[[], datetime] = _utcnow,
 ) -> XhsCardGenerationResult:
-    """Generate a verified 1080x1440 Xiaohongshu HTML card with deterministic fallback."""
-    user_prompt = build_card_prompt(card)
-    prompt_digest = XHS_CARD_TASK.prompt_sha256
+    """Generate verified 1080x1440 Xiaohongshu HTML card with fallback."""
+    html, render_mode = render_card_html(card), "deterministic_fallback"
+    prompt_sha256, model, invocation_id, replayed = XHS_CARD_TASK.prompt_sha256, None, None, False
     try:
         invocation = invoke(
             connection,
             task=XHS_CARD_TASK,
             cik=_synthetic_cik(card.card_id),
             accession=card.card_id[:36],
-            user_content=user_prompt,
+            user_content=build_card_prompt(card),
             caller=caller,
             standard=standard,
             parse=_parse_xhs_card_html,
@@ -1352,29 +1165,17 @@ def generate_xhs_card_html(
         candidate_html = str(invocation.decision.get("html") or "")
         ok, violations = verify_card_html(card, candidate_html)
         if ok:
-            return XhsCardGenerationResult(
-                card_id=card.card_id,
-                html=candidate_html,
-                render_mode="model_glm",
-                prompt_sha256=invocation.prompt_sha256,
-                model=invocation.served_model or invocation.model,
-                invocation_id=invocation.invocation_id,
-                replayed=invocation.replayed,
+            html, render_mode = candidate_html, "model_glm"
+            prompt_sha256 = invocation.prompt_sha256
+            model = invocation.served_model or invocation.model
+            invocation_id = invocation.invocation_id
+            replayed = invocation.replayed
+        else:
+            logger.warning(
+                "xhs_card_html model output failed fact-preservation verifier for %s (%s); using deterministic fallback",
+                card.card_id,
+                violations,
             )
-        logger.warning(
-            "xhs_card_html model output failed fact-preservation verifier for %s (%s); using deterministic fallback",
-            card.card_id,
-            violations,
-        )
     except (ModelNotConfigured, ModelHTTPError) as exc:
         logger.info("xhs_card_html falling back to deterministic Cold-Verdict HTML for %s: %s", card.card_id, exc)
-
-    return XhsCardGenerationResult(
-        card_id=card.card_id,
-        html=render_card_html(card),
-        render_mode="deterministic_fallback",
-        prompt_sha256=prompt_digest,
-        model=None,
-        invocation_id=None,
-        replayed=False,
-    )
+    return XhsCardGenerationResult(card.card_id, html, render_mode, prompt_sha256, model, invocation_id, replayed)

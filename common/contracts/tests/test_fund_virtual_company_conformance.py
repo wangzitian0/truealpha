@@ -17,7 +17,7 @@ from pathlib import Path
 
 from truealpha_contracts.etf_virtual_company import ETF_CONSOLIDATION_V0, EtfConsolidationDefinition
 
-FIXTURE = Path(__file__).resolve().parents[1] / "conformance" / "fund_virtual_company.json"
+FIXTURE = Path(__file__).resolve().parent / "fixtures" / "fund_virtual_company.json"
 
 
 def _fixture() -> dict:

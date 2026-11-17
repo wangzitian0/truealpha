@@ -18,7 +18,7 @@ import { readFileSync } from "node:fs";
 import { loadFundValuation } from "../src/server/mart/fund-valuation";
 import type { MartClientLike } from "../src/server/mart/topt-gppe-repository";
 
-const fixtureUrl = new URL("../../../common/contracts/conformance/fund_virtual_company.json", import.meta.url);
+const fixtureUrl = new URL("../../../common/contracts/tests/fixtures/fund_virtual_company.json", import.meta.url);
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);

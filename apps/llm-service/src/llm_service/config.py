@@ -13,12 +13,8 @@ class Settings(CoreRuntimeSettings):
     its container entrypoint runs `db/apply_migrations.sh`. It never accesses S3 object
     storage (AGENTS.md red line) and never calls an external LLM API.
 
-    There is no fixture backend to select (#434 exit criterion 3, 2026-09-07): the MCP
-    tools read the real `mart` and nothing else. The checked-in golden fixture lives in
-    tests only (`truealpha_contracts.strategy_run_fixture`, injected through
-    `build_mcp_server(repository=...)`), never behind a runtime flag a deployed process
-    could flip. AGENTS.md: fixture data lives in tests only and is never reachable from a
-    deployed route.
+    There is no fixture backend to select (#434 exit criterion 3): MCP tools read only `mart`, and
+    test doubles inject through `build_mcp_server(repository=...)`, never behind a runtime flag.
     """
 
     database_url: str = database_url_field(composed_from=_APP_STACK_DSN)

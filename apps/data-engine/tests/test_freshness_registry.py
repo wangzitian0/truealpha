@@ -22,9 +22,7 @@ import pytest
 from data_engine.lanes import LANE_MODULES, lane_definitions
 from truealpha_runtime.testing import SeedValue, read_seed_rows
 
-MIGRATION = (
-    Path(__file__).resolve().parents[3] / "db" / "migrations" / "20261006T1020_datahub_served_head_freshness.sql"
-)
+MIGRATION = Path(__file__).resolve().parents[3] / "db" / "migrations" / "0003_mart.sql"
 
 Row = Mapping[str, SeedValue]
 

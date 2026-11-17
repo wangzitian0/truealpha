@@ -32,7 +32,7 @@ from truealpha_contracts.datahub import (
 
 
 class CaptureRepositoryConflictError(RuntimeError):
-    """A content-addressed identity is already bound to different content."""
+    """Content-addressed identity is already bound to different content."""
 
 
 def persist_run_report(
@@ -44,7 +44,7 @@ def persist_run_report(
     columns: tuple[str, ...],
     exclude_from_hash: tuple[str, ...] = (),
 ) -> str:
-    """Insert one content-addressed run report; a repeated report stays one row."""
+    """Insert one content-addressed run report row."""
     digest = canonical_sha256({key: value for key, value in report.items() if key not in exclude_from_hash})
     report_id = f"{report_id_prefix}:{digest}"
     insert_columns = ("report_id", "content_sha256", *columns, "payload")
@@ -55,10 +55,7 @@ def persist_run_report(
         columns=sql.SQL(", ").join(sql.Identifier(column) for column in insert_columns),
         placeholders=sql.SQL(", ").join(sql.Placeholder() for _ in insert_columns),
     )
-    connection.execute(
-        statement,
-        (report_id, digest, *(report[column] for column in columns), Jsonb(dict(report))),
-    )
+    connection.execute(statement, (report_id, digest, *(report[column] for column in columns), Jsonb(dict(report))))
     return report_id
 
 
@@ -118,144 +115,82 @@ class PostgresCaptureControlRepository:
     def _payload(value: Any) -> dict[str, Any]:
         return value.model_dump(mode="json", exclude_computed_fields=True)
 
-    def _check_existing(self, table: str, id_column: str, identity: str, content_sha256: str) -> bool:
-        row = self._connection.execute(
+    def _insert_idempotent(
+        self, table: str, id_column: str, identity: str, sha: str, stmt: str, params: tuple[Any, ...]
+    ) -> bool:
+        if self._connection.execute(stmt, params).fetchone():
+            return True
+        existing = self._connection.execute(
             f"select content_sha256 from {table} where {id_column} = %s",  # noqa: S608
             (identity,),
         ).fetchone()
-        if row is None:
+        if existing is None:
             raise RuntimeError(f"insert into {table} returned no row and no conflict")
-        if row[0] != content_sha256:
+        if existing[0] != sha:
             raise CaptureRepositoryConflictError(f"{identity} is already bound to different content")
         return False
 
-    def _existing_matches(self, table: str, id_column: str, identity: str, content_sha256: str) -> bool:
-        row = self._connection.execute(
-            f"select content_sha256 from {table} where {id_column} = %s",  # noqa: S608
-            (identity,),
-        ).fetchone()
-        if row is None:
-            return False
-        if row[0] != content_sha256:
-            raise CaptureRepositoryConflictError(f"{identity} is already bound to different content")
-        return True
-
-    def _insert_idempotent(
-        self, table: str, id_column: str, identity: str, content_sha256: str, sql: str, params: tuple[Any, ...]
-    ) -> bool:
-        inserted = self._connection.execute(sql, params).fetchone()
-        return True if inserted else self._check_existing(table, id_column, identity, content_sha256)
+    def _put(self, table: str, id_column: str, obj: Any, attrs: tuple[str, ...] = (), **extra: Any) -> bool:
+        identity, sha = getattr(obj, id_column), obj.content_sha256
+        row = {id_column: identity, "content_sha256": sha, **{k: getattr(obj, k) for k in attrs}, **extra}
+        cols = ", ".join(row)
+        placeholders = ", ".join(("%s",) * len(row))
+        stmt = f"insert into {table} ({cols}) values ({placeholders}) on conflict ({id_column}) do nothing returning {id_column}"  # noqa: S608
+        return self._insert_idempotent(table, id_column, identity, sha, stmt, tuple(row.values()))
 
     def put_schedule_policy(self, policy: CaptureSchedulePolicy) -> bool:
-        payload = self._payload(policy)
-        return self._insert_idempotent(
+        return self._put(
             "raw.capture_schedule_policies",
             "schedule_policy_id",
-            policy.schedule_policy_id,
-            policy.content_sha256,
-            """
-            insert into raw.capture_schedule_policies (
-                schedule_policy_id, content_sha256, policy_version, demanded_cadence,
-                provider_availability_cadence, freshness_max_age,
-                semantic_freshness_max_age, retry_policy, payload
-            ) values (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-            on conflict (schedule_policy_id) do nothing returning schedule_policy_id
-            """,
-            (
-                policy.schedule_policy_id,
-                policy.content_sha256,
-                policy.policy_version,
-                policy.demanded_cadence,
-                policy.provider_availability_cadence,
-                policy.freshness_max_age,
-                Jsonb({k: f"{v.total_seconds()} seconds" for k, v in policy.semantic_freshness_max_age.items()}),
-                Jsonb(policy.retry.model_dump(mode="json")),
-                Jsonb(payload),
+            policy,
+            ("policy_version", "demanded_cadence", "provider_availability_cadence", "freshness_max_age"),
+            semantic_freshness_max_age=Jsonb(
+                {k: f"{v.total_seconds()} seconds" for k, v in policy.semantic_freshness_max_age.items()}
             ),
+            retry_policy=Jsonb(policy.retry.model_dump(mode="json")),
+            payload=Jsonb(self._payload(policy)),
         )
 
     def put_campaign(self, campaign: CaptureCampaign) -> bool:
         payload = self._payload(campaign)
-        return self._insert_idempotent(
+        return self._put(
             "raw.capture_campaigns",
             "campaign_id",
-            campaign.campaign_id,
-            campaign.content_sha256,
-            """
-            insert into raw.capture_campaigns (
-                campaign_id, content_sha256, policy_id, environment, cutoff,
-                cutoff_canonical, universe_refs
-            ) values (%s, %s, %s, %s, %s, %s, %s)
-            on conflict (campaign_id) do nothing returning campaign_id
-            """,
-            (
-                campaign.campaign_id,
-                campaign.content_sha256,
-                campaign.campaign_policy_id,
-                campaign.environment.value,
-                campaign.cutoff,
-                payload["cutoff"],
-                Jsonb(payload["universe_refs"]),
-            ),
+            campaign,
+            ("cutoff",),
+            policy_id=campaign.campaign_policy_id,
+            environment=campaign.environment.value,
+            cutoff_canonical=payload["cutoff"],
+            universe_refs=Jsonb(payload["universe_refs"]),
         )
 
     def put_run(self, run: CaptureRun) -> bool:
-        return self._insert_idempotent(
+        return self._put(
             "raw.capture_runs",
             "run_id",
-            run.run_id,
-            run.content_sha256,
-            """
-            insert into raw.capture_runs (
-                run_id, campaign_id, run_sequence, schedule_policy_id,
-                capture_scope_id, content_sha256
-            ) values (%s, %s, %s, %s, %s, %s)
-            on conflict (run_id) do nothing returning run_id
-            """,
-            (
-                run.run_id,
-                run.campaign_id,
-                run.run_sequence,
-                run.schedule_policy_id,
-                run.capture_scope_id,
-                run.content_sha256,
-            ),
+            run,
+            ("campaign_id", "run_sequence", "schedule_policy_id", "capture_scope_id"),
         )
 
     def put_list_version(self, version: CaptureListVersion) -> bool:
         payload = self._payload(version)
-        created = self._insert_idempotent(
+        created = self._put(
             "raw.capture_list_versions",
             "list_version_id",
-            version.list_version_id,
-            version.content_sha256,
-            """
-            insert into raw.capture_list_versions (
-                list_version_id, universe_id, universe_version, universe_sha256,
-                effective_at, effective_at_canonical, member_count, members, content_sha256
-            ) values (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-            on conflict (list_version_id) do nothing returning list_version_id
-            """,
-            (
-                version.list_version_id,
-                version.universe.universe_id,
-                version.universe.universe_version,
-                version.universe.content_sha256,
-                version.effective_at,
-                payload["effective_at"],
-                len(version.members),
-                Jsonb(payload["members"]),
-                version.content_sha256,
-            ),
+            version,
+            ("effective_at",),
+            universe_id=version.universe.universe_id,
+            universe_version=version.universe.universe_version,
+            universe_sha256=version.universe.content_sha256,
+            effective_at_canonical=payload["effective_at"],
+            member_count=len(version.members),
+            members=Jsonb(payload["members"]),
         )
-        for ordinal, member in enumerate(version.members, start=1):
-            self._connection.execute(
-                """
-                insert into raw.capture_list_version_members (
-                    list_version_id, member_ordinal, subject_kind, subject_id
-                ) values (%s, %s, %s, %s) on conflict do nothing
-                """,
-                (version.list_version_id, ordinal, member.kind.value, member.id),
+        if version.members:
+            self._connection.cursor().executemany(
+                "insert into raw.capture_list_version_members (list_version_id, member_ordinal, subject_kind, subject_id) "
+                "values (%s, %s, %s, %s) on conflict do nothing",
+                [(version.list_version_id, i, m.kind.value, m.id) for i, m in enumerate(version.members, start=1)],
             )
         return created
 
@@ -266,58 +201,33 @@ class PostgresCaptureControlRepository:
         )
 
     def put_obligation(self, campaign_id: str, obligation: CaptureListObligation) -> bool:
-        return self._insert_idempotent(
+        return self._put(
             "raw.capture_obligations",
             "obligation_id",
-            obligation.obligation_id,
-            obligation.content_sha256,
-            """
-            insert into raw.capture_obligations (
-                obligation_id, campaign_id, run_id, list_version_id, subject_kind,
-                subject_id, capture_requirement_id, partition_key, content_sha256
-            ) values (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-            on conflict (obligation_id) do nothing returning obligation_id
-            """,
-            (
-                obligation.obligation_id,
-                campaign_id,
-                obligation.run_id,
-                obligation.list_version_id,
-                obligation.subject.kind.value,
-                obligation.subject.id,
-                obligation.capture_requirement_id,
-                obligation.partition,
-                obligation.content_sha256,
-            ),
+            obligation,
+            ("run_id", "list_version_id", "capture_requirement_id"),
+            campaign_id=campaign_id,
+            subject_kind=obligation.subject.kind.value,
+            subject_id=obligation.subject.id,
+            partition_key=obligation.partition,
         )
 
     def put_source_request(self, request: SourceRequest) -> bool:
         payload = self._payload(request)
-        return self._insert_idempotent(
+        return self._put(
             "raw.capture_source_requests",
             "source_request_id",
-            request.source_request_id,
-            request.content_sha256,
-            """
-            insert into raw.capture_source_requests (
-                source_request_id, content_sha256, source_registry_entry_id, source_policy_id,
-                request_fingerprint_version, canonical_request_sha256, subject_refs,
-                capture_requirement_ids, partition_key, payload
-            ) values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            on conflict (source_request_id) do nothing returning source_request_id
-            """,
+            request,
             (
-                request.source_request_id,
-                request.content_sha256,
-                request.source_registry_entry_id,
-                request.source_policy_id,
-                request.request_fingerprint_version,
-                request.canonical_request_sha256,
-                Jsonb(payload["subject_refs"]),
-                list(request.capture_requirement_ids),
-                request.partition,
-                Jsonb(payload),
+                "source_registry_entry_id",
+                "source_policy_id",
+                "request_fingerprint_version",
+                "canonical_request_sha256",
             ),
+            subject_refs=Jsonb(payload["subject_refs"]),
+            capture_requirement_ids=list(request.capture_requirement_ids),
+            partition_key=request.partition,
+            payload=Jsonb(payload),
         )
 
     def put_work_item(self, item: CaptureWorkItem, retry: RetryPolicy) -> bool:
@@ -332,126 +242,50 @@ class PostgresCaptureControlRepository:
                 "terminal_outcomes": terminal,
             }
         )
-        return self._insert_idempotent(
+        return self._put(
             "raw.capture_work_items",
             "work_item_id",
-            item.work_item_id,
-            item.content_sha256,
-            """
-            insert into raw.capture_work_items (
-                work_item_id, campaign_id, source_request_id, schedule_policy_id,
-                maximum_attempts, retryable_outcomes, terminal_outcomes,
-                content_sha256, storage_envelope_sha256
-            ) values (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-            on conflict (work_item_id) do nothing returning work_item_id
-            """,
-            (
-                item.work_item_id,
-                item.campaign_id,
-                item.source_request_id,
-                item.schedule_policy_id,
-                retry.max_attempts,
-                retryable,
-                terminal,
-                item.content_sha256,
-                envelope_sha256,
-            ),
+            item,
+            ("campaign_id", "source_request_id", "schedule_policy_id"),
+            maximum_attempts=retry.max_attempts,
+            retryable_outcomes=retryable,
+            terminal_outcomes=terminal,
+            storage_envelope_sha256=envelope_sha256,
         )
 
     def put_binding(self, binding: CaptureObligationWorkBinding) -> bool:
-        return self._insert_idempotent(
-            "raw.capture_obligation_work_bindings",
-            "binding_id",
-            binding.binding_id,
-            binding.content_sha256,
-            """
-            insert into raw.capture_obligation_work_bindings (
-                binding_id, obligation_id, work_item_id, content_sha256
-            ) values (%s, %s, %s, %s)
-            on conflict (binding_id) do nothing returning binding_id
-            """,
-            (binding.binding_id, binding.obligation_id, binding.work_item_id, binding.content_sha256),
+        return self._put(
+            "raw.capture_obligation_work_bindings", "binding_id", binding, ("obligation_id", "work_item_id")
         )
 
     def put_attempt(self, attempt: FetchAttempt) -> bool:
-        if self._existing_matches("raw.capture_attempts", "attempt_id", attempt.attempt_id, attempt.content_sha256):
-            return False
-        payload = self._payload(attempt)
-        return self._insert_idempotent(
+        return self._put(
             "raw.capture_attempts",
             "attempt_id",
-            attempt.attempt_id,
-            attempt.content_sha256,
-            """
-            insert into raw.capture_attempts (
-                attempt_id, work_item_id, attempt_number, started_at,
-                started_at_canonical, content_sha256
-            ) values (%s, %s, %s, %s, %s, %s)
-            on conflict (attempt_id) do nothing returning attempt_id
-            """,
-            (
-                attempt.attempt_id,
-                attempt.work_item_id,
-                attempt.attempt_number,
-                attempt.started_at,
-                payload["started_at"],
-                attempt.content_sha256,
-            ),
+            attempt,
+            ("work_item_id", "attempt_number", "started_at"),
+            started_at_canonical=self._payload(attempt)["started_at"],
         )
 
     def put_attempt_result(self, result: FetchAttemptResult) -> bool:
-        payload = self._payload(result)
-        return self._insert_idempotent(
+        return self._put(
             "raw.capture_attempt_results",
             "attempt_result_id",
-            result.attempt_result_id,
-            result.content_sha256,
-            """
-            insert into raw.capture_attempt_results (
-                attempt_result_id, attempt_id, completed_at, completed_at_canonical,
-                outcome, status_code, reason_codes, source_vintage_id,
-                reused_source_vintage_id, content_sha256
-            ) values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            on conflict (attempt_result_id) do nothing returning attempt_result_id
-            """,
-            (
-                result.attempt_result_id,
-                result.attempt_id,
-                result.completed_at,
-                payload["completed_at"],
-                result.outcome.value,
-                result.status_code,
-                list(result.reason_codes),
-                result.source_vintage_id,
-                result.reused_source_vintage_id,
-                result.content_sha256,
-            ),
+            result,
+            ("attempt_id", "completed_at", "status_code", "source_vintage_id", "reused_source_vintage_id"),
+            completed_at_canonical=self._payload(result)["completed_at"],
+            outcome=result.outcome.value,
+            reason_codes=list(result.reason_codes),
         )
 
     def put_source_vintage(self, vintage: SourceVintage, *, raw_fetch_id: int) -> bool:
-        payload = self._payload(vintage)
-        return self._insert_idempotent(
+        return self._put(
             "raw.capture_source_vintages",
             "source_vintage_id",
-            vintage.source_vintage_id,
-            vintage.content_sha256,
-            """
-            insert into raw.capture_source_vintages (
-                source_vintage_id, content_sha256, source_request_id, source_record_id,
-                source_published_at, raw_object_id, raw_fetch_id, payload
-            ) values (%s, %s, %s, %s, %s, %s, %s, %s)
-            on conflict (source_vintage_id) do nothing returning source_vintage_id
-            """,
-            (
-                vintage.source_vintage_id,
-                vintage.content_sha256,
-                vintage.source_request_id,
-                vintage.source_record_id,
-                vintage.source_published_at,
-                vintage.raw_object_id,
-                raw_fetch_id,
-                Jsonb(payload),
-            ),
+            vintage,
+            ("source_request_id", "source_record_id", "source_published_at", "raw_object_id"),
+            raw_fetch_id=raw_fetch_id,
+            payload=Jsonb(self._payload(vintage)),
         )
 
     def put_observation(
@@ -467,59 +301,39 @@ class PostgresCaptureControlRepository:
             raise ValueError("observation confidence must be between zero and one")
         if canonical_sha256(normalized_payload) != observation.normalized_payload_sha256:
             raise ValueError("normalized payload does not match the observation hash")
-        payload = self._payload(observation)
-        created = self._insert_idempotent(
+        created = self._put(
             "staging.capture_normalized_observations",
             "observation_id",
-            observation.observation_id,
-            observation.content_sha256,
-            """
-            insert into staging.capture_normalized_observations (
-                observation_id, content_sha256, capture_obligation_id, source_vintage_id,
-                semantic_type, semantic_version, subject_kind, subject_id, valid_from,
-                valid_to, knowable_at, parser_version, mapping_version,
-                normalized_payload_sha256, is_restatement, supersedes_observation_id,
-                confidence, freshness_state, payload
-            ) values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            on conflict (observation_id) do nothing returning observation_id
-            """,
+            observation,
             (
-                observation.observation_id,
-                observation.content_sha256,
-                capture_obligation_id,
-                observation.source_vintage_id,
-                observation.semantic_type,
-                observation.semantic_version,
-                observation.subject.kind.value,
-                observation.subject.id,
-                observation.valid_from,
-                observation.valid_to,
-                observation.knowable_at,
-                observation.parser_version,
-                observation.mapping_version,
-                observation.normalized_payload_sha256,
-                observation.is_restatement,
-                observation.supersedes_observation_id,
-                confidence,
-                freshness_state,
-                Jsonb(payload),
+                "source_vintage_id",
+                "semantic_type",
+                "semantic_version",
+                "valid_from",
+                "valid_to",
+                "knowable_at",
+                "parser_version",
+                "mapping_version",
+                "normalized_payload_sha256",
+                "is_restatement",
+                "supersedes_observation_id",
             ),
+            capture_obligation_id=capture_obligation_id,
+            subject_kind=observation.subject.kind.value,
+            subject_id=observation.subject.id,
+            confidence=confidence,
+            freshness_state=freshness_state,
+            payload=Jsonb(self._payload(observation)),
         )
         self.bind_observation(capture_obligation_id, observation.observation_id)
         self._put_observation_payload(observation, normalized_payload)
         return created
 
     def _put_observation_payload(self, observation: NormalizedObservation, normalized_payload: dict[str, Any]) -> bool:
-        payload_sha256 = canonical_sha256(normalized_payload)
-        if payload_sha256 != observation.normalized_payload_sha256:
-            raise ValueError("normalized payload does not match the observation hash")
+        payload_sha256 = observation.normalized_payload_sha256
         inserted = self._connection.execute(
-            """
-            insert into staging.capture_observation_payloads (
-                observation_id, normalized_payload_sha256, normalized_payload
-            ) values (%s, %s, %s)
-            on conflict (observation_id) do nothing returning observation_id
-            """,
+            "insert into staging.capture_observation_payloads (observation_id, normalized_payload_sha256, normalized_payload) "
+            "values (%s, %s, %s) on conflict (observation_id) do nothing returning observation_id",
             (observation.observation_id, payload_sha256, Jsonb(normalized_payload)),
         ).fetchone()
         if inserted:
@@ -542,66 +356,37 @@ class PostgresCaptureControlRepository:
 
     def put_obligation_result(self, capture_obligation_id: str, result: ListObligationResult) -> bool:
         expected = self._connection.execute(
-            """
-            select 'list-obligation:' || raw.canonical_sha256(jsonb_build_object(
-                'kind', 'list-obligation',
-                'identity', jsonb_build_object(
-                    'run_id', obligation.run_id,
-                    'universe_ref', jsonb_build_object(
-                        'universe_id', version.universe_id,
-                        'universe_version', version.universe_version,
-                        'content_sha256', version.universe_sha256
-                    ),
-                    'subject', jsonb_build_object('kind', obligation.subject_kind, 'id', obligation.subject_id),
-                    'capture_requirement_id', obligation.capture_requirement_id,
-                    'partition', obligation.partition_key
-                )
-            ))
-            from raw.capture_obligations obligation
-            join raw.capture_list_versions version using (list_version_id)
-            where obligation.obligation_id = %s
-            """,
+            "select 'list-obligation:' || raw.canonical_sha256(jsonb_build_object("
+            "'kind', 'list-obligation', 'identity', jsonb_build_object('run_id', obligation.run_id, "
+            "'universe_ref', jsonb_build_object('universe_id', version.universe_id, 'universe_version', "
+            "version.universe_version, 'content_sha256', version.universe_sha256), 'subject', jsonb_build_object("
+            "'kind', obligation.subject_kind, 'id', obligation.subject_id), 'capture_requirement_id', "
+            "obligation.capture_requirement_id, 'partition', obligation.partition_key))) "
+            "from raw.capture_obligations obligation join raw.capture_list_versions version using (list_version_id) "
+            "where obligation.obligation_id = %s",
             (capture_obligation_id,),
         ).fetchone()
         if expected is None:
             raise LookupError(f"capture obligation not found: {capture_obligation_id}")
         if expected[0] != result.obligation_id:
             raise ValueError("terminal result logical obligation does not match capture obligation")
-        payload = self._payload(result)
-        return self._insert_idempotent(
+        return self._put(
             "raw.capture_obligation_results",
             "result_id",
-            result.result_id,
-            result.content_sha256,
-            """
-            insert into raw.capture_obligation_results (
-                result_id, content_sha256, capture_obligation_id, logical_obligation_id,
-                terminal_state, completed_at, final_attempt_id, reason_codes, payload
-            ) values (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-            on conflict (result_id) do nothing returning result_id
-            """,
-            (
-                result.result_id,
-                result.content_sha256,
-                capture_obligation_id,
-                result.obligation_id,
-                result.terminal_state.value,
-                result.completed_at,
-                result.final_attempt_id,
-                list(result.reason_codes),
-                Jsonb(payload),
-            ),
+            result,
+            ("completed_at", "final_attempt_id"),
+            capture_obligation_id=capture_obligation_id,
+            logical_obligation_id=result.obligation_id,
+            terminal_state=result.terminal_state.value,
+            reason_codes=list(result.reason_codes),
+            payload=Jsonb(self._payload(result)),
         )
 
     def status(self, run_id: str) -> ToptCaptureStatus:
         row = self._connection.execute(
-            """
-            select run_id, campaign_id, environment, cutoff, universe_id,
-                   universe_version, universe_sha256, obligation_count, terminal_count,
-                   success_count, unchanged_count, unavailable_count, skipped_count,
-                   failed_count, complete
-            from mart.topt_capture_status where run_id = %s
-            """,
+            "select run_id, campaign_id, environment, cutoff, universe_id, universe_version, universe_sha256, "
+            "obligation_count, terminal_count, success_count, unchanged_count, unavailable_count, skipped_count, "
+            "failed_count, complete from mart.topt_capture_status where run_id = %s",
             (run_id,),
         ).fetchone()
         if row is None:
@@ -612,16 +397,11 @@ class PostgresCaptureControlRepository:
         if not 1 <= limit <= 500 or offset < 0:
             raise ValueError("meta_info pagination is outside the bounded range")
         rows = self._connection.execute(
-            """
-            select run_id, obligation_id, logical_obligation_id, subject_kind, subject_id,
-                   capture_requirement_id, partition_key, work_item_id, source_request_id,
-                   source_registry_entry_id, source_policy_id, request_fingerprint_version,
-                   terminal_state, reason_codes, completed_at, attempt_count,
-                   final_status_code, observation_id, semantic_version, parser_version,
-                   mapping_version, confidence, freshness_state, knowable_at, recorded_at
-            from mart.topt_capture_meta_info
-            where run_id = %s order by obligation_id limit %s offset %s
-            """,
+            "select run_id, obligation_id, logical_obligation_id, subject_kind, subject_id, capture_requirement_id, "
+            "partition_key, work_item_id, source_request_id, source_registry_entry_id, source_policy_id, "
+            "request_fingerprint_version, terminal_state, reason_codes, completed_at, attempt_count, final_status_code, "
+            "observation_id, semantic_version, parser_version, mapping_version, confidence, freshness_state, "
+            "knowable_at, recorded_at from mart.topt_capture_meta_info where run_id = %s order by obligation_id limit %s offset %s",
             (run_id, limit, offset),
         ).fetchall()
         return tuple(

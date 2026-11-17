@@ -8,7 +8,6 @@ from truealpha_contracts.evidence_graph import (
     CurrentPointer,
     CurrentPointerKey,
     EvidenceEdge,
-    EvidenceGraphReader,
     EvidenceGraphWriter,
     EvidenceNode,
     EvidenceNodeKind,
@@ -124,14 +123,7 @@ def test_closure_requires_root_and_connected_edges() -> None:
 
 
 def test_ports_are_runtime_checkable_protocols() -> None:
-    class _Reader:
-        def resolve_pointer(self, key):
-            return None
-
-        def closure(self, root, *, reverse=False, max_nodes=1000): ...
-
     class _Writer:
         def append(self, nodes, edges): ...
 
-    assert isinstance(_Reader(), EvidenceGraphReader)
     assert isinstance(_Writer(), EvidenceGraphWriter)

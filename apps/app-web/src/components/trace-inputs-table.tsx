@@ -6,13 +6,6 @@ import {
   type TraceListing,
 } from "@/server/mart/research-read";
 
-/**
- * The inputs of one strategy decision (#1241): value with its currency, period, the filing date or
- * knowable_at, filing accession and source. Every cell is a field that `mart.topt_core_meta_info`
- * carries. A field that the lineage does not carry prints NOT_RECORDED. The component never invents
- * or defaults a value. It is a server component; it takes plain data and renders it.
- */
-
 const BASIS_TEXT: Record<KnowableAtBasis, string> = {
   filed: "filed",
   input: "input knowable_at",

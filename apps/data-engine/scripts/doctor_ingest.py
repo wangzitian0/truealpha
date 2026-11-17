@@ -1,21 +1,4 @@
-"""Ingestion-environment health check — run before any sweep, in any environment.
-
-Probes exactly what the ingestion path depends on, using the same settings the
-sweeps will use:
-
-- Postgres reachable + every table the sweeps touch exists (i.e. ALL of
-  db/migrations applied — the ledger is 0003, the runtime contracts 0004/0005)
-- object storage reachable + a raw_store write/read-back round-trip
-  (content-addressed, so repeated runs re-use the same object)
-- moomoo OpenD TCP reachability (NO moomoo API call — zero quota; login state
-  can only be proven by a real call, which is probe_moomoo_nonus.py's job)
-
-Exit code 0 only if every REQUIRED probe passes (OpenD is reported but
-optional — SEC-only environments like CI/laptops without OpenD are fine).
-
-Usage:
-    uv run --package truealpha-data-engine python apps/data-engine/scripts/doctor_ingest.py [--require-opend]
-"""
+"""Health check for Postgres, S3 storage, and OpenD."""
 
 import argparse
 import socket
@@ -81,9 +64,6 @@ def check_opend() -> list[str]:
         with socket.create_connection((settings.moomoo_opend_host, settings.moomoo_opend_port), timeout=3):
             return []
     except OSError as e:
-        # The coordinates are secret-managed, so a diagnostic must not echo them into a
-        # log, a CI annotation or a pasted issue comment. The error type is what a reader
-        # needs; where it was dialling is something they can look up where it is governed.
         return [f"OpenD not reachable at its configured address ({type(e).__name__})"]
 
 
