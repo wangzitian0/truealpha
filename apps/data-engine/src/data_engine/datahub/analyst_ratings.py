@@ -16,6 +16,7 @@ from factors.base.analyst_track_record import AnalystRatingItem, AnalystTrackRec
 from psycopg import Connection
 
 from data_engine.datahub._helpers import (
+    execute_many,
     optional_savepoint,
     safe_case_id_part,
     single_origin_confidence,
@@ -271,12 +272,19 @@ def _fetch_error_row(company_id: str, exc: Exception) -> dict[str, Any]:
     return _rating_row(company_id, reason_codes=[f"fetch_error:{type(exc).__name__}"])
 
 
-def _research_payload(code: str, endpoint: str, request: Callable[[FetchKey], Any]) -> Any:
+def _research_payload(ctx: Any, code: str, endpoint: str, fn: Callable[..., Any], **kwargs: Any) -> Any:
     from data_engine.sources import gateway
     from data_engine.sources.moomoo import canonical_moomoo_bytes
 
     key = FetchKey("moomoo", endpoint, f"symbol:{code.removeprefix('US.')}", gateway.utc_day())
-    return json.loads(gateway.fetch_once(key, lambda identity: canonical_moomoo_bytes(request(identity))).decode())
+    return json.loads(
+        gateway.fetch_once(
+            key,
+            lambda identity: canonical_moomoo_bytes(
+                fn(ctx, code, caller="capture_ticker_analyst_ratings", identity=identity, **kwargs)
+            ),
+        ).decode()
+    )
 
 
 def _fetch_rating_enrichment(
@@ -288,13 +296,7 @@ def _fetch_rating_enrichment(
     summary_items: list[AnalystRatingItem] = []
     if hasattr(ctx, "get_research_rating_summary"):
         try:
-            payload = _research_payload(
-                code,
-                "get_research_rating_summary",
-                lambda identity: get_rating_summary(
-                    ctx, code, caller="capture_ticker_analyst_ratings", identity=identity
-                ),
-            )
+            payload = _research_payload(ctx, code, "get_research_rating_summary", get_rating_summary)
             summary_items = parse_rating_summary(payload, as_of=as_of)
         except Exception:  # noqa: BLE001
             summary_items = []
@@ -302,56 +304,13 @@ def _fetch_rating_enrichment(
     profit_growth: dict[date, Decimal] = {}
     if hasattr(ctx, "get_valuation_detail"):
         try:
-            val_payload = _research_payload(
-                code,
-                "get_valuation_detail",
-                lambda identity: get_valuation_detail(
-                    ctx, code, valuation_type=1, caller="capture_ticker_analyst_ratings", identity=identity
-                ),
-            )
-            has_valuation = isinstance(val_payload, Mapping) and bool(val_payload)
+            val_payload = _research_payload(ctx, code, "get_valuation_detail", get_valuation_detail, valuation_type=1)
             if isinstance(val_payload, Mapping):
+                has_valuation = bool(val_payload)
                 profit_growth = parse_valuation_profit_growth(val_payload, cutoff=as_of.date())
         except Exception:  # noqa: BLE001
             has_valuation, profit_growth = False, {}
     return summary_items, has_valuation, profit_growth
-
-
-def _enrich_consensus_row(
-    consensus_row: dict[str, Any],
-    *,
-    company_id: str,
-    summary_items: list[AnalystRatingItem],
-    has_valuation: bool,
-    profit_growth: Mapping[date, Decimal],
-    as_of: datetime | None = None,
-) -> None:
-    if not (summary_items or has_valuation):
-        return
-    if summary_items:
-        weighted = analyst_track_record(summary_items, entity_id=company_id, as_of=as_of or datetime.now(tz=UTC))
-        if weighted.consensus_rating is not None:
-            consensus_row["consensus_rating"] = weighted.consensus_rating
-        high, low, mean = _target_stats(summary_items)
-        for key, val in (("target_high", high), ("target_low", low), ("target_mean", mean)):
-            if consensus_row.get(key) is None and val is not None:
-                consensus_row[key] = val
-        consensus_row["rating_items"] = list(summary_items)
-    consensus_row["confidence"] = _moomoo_rating_confidence(
-        f"consensus:{company_id}",
-        f"consensus:{company_id}",
-        agreement=min(item.confidence for item in summary_items) if summary_items else Decimal("0.90"),
-        sample_conformance=Decimal("0.90") if summary_items else Decimal("0.95"),
-        reason="vendor_timestamp",
-    )
-    if summary_items and "vendor_timestamp" not in consensus_row["reason_codes"]:
-        consensus_row["reason_codes"] = [*consensus_row["reason_codes"], "vendor_timestamp"]
-    if profit_growth:
-        consensus_row["profit_growth_by_period"] = {
-            end.isoformat(): str(rate) for end, rate in sorted(profit_growth.items())
-        }
-        if "valuation_profit_growth" not in consensus_row["reason_codes"]:
-            consensus_row["reason_codes"] = [*consensus_row["reason_codes"], "valuation_profit_growth"]
 
 
 def _ticker_row(
@@ -369,17 +328,11 @@ def _ticker_row(
         return _fetch_error_row(company_id, open_error), FetchFailure(
             ticker, f"{type(open_error).__name__}: {open_error}"
         )
-    code = f"US.{ticker}" if not ticker.startswith("US.") else ticker
+    code = ticker if ticker.startswith("US.") else f"US.{ticker}"
     try:
         from data_engine.sources.moomoo import get_analyst_consensus
 
-        payload = _research_payload(
-            code,
-            "get_research_analyst_consensus",
-            lambda identity: get_analyst_consensus(
-                ctx, code, caller="capture_ticker_analyst_ratings", identity=identity
-            ),
-        )
+        payload = _research_payload(ctx, code, "get_research_analyst_consensus", get_analyst_consensus)
         consensus_row = _consensus_row(payload, company_id)
         summary_items, has_valuation, profit_growth = _fetch_rating_enrichment(ctx, code, as_of=as_of)
     except Exception as exc:
@@ -388,34 +341,54 @@ def _ticker_row(
             "analyst consensus fetch failed for %s (%s): %s", ticker, company_id, failure.error, exc_info=log_traceback
         )
         return _fetch_error_row(company_id, exc), failure
-    if consensus_row is None:
-        if summary_items:
-            rec = analyst_track_record(summary_items, entity_id=company_id, as_of=as_of)
-            high, low, mean = _target_stats(summary_items)
-            return _rating_row(
-                company_id,
-                rec.consensus_rating,
-                rec.ratings_count,
-                rec.buy_count,
-                rec.hold_count,
-                rec.sell_count,
-                rec.result.confidence,
-                "available" if rec.consensus_rating is not None else "unavailable",
-                [*rec.result.flags, "vendor_timestamp"],
-                target_high=high,
-                target_low=low,
-                target_mean=mean,
-                rating_items=list(summary_items),
-            ), None
+    if consensus_row is None and not summary_items:
         return analyst_track_record([], entity_id=company_id, as_of=as_of), None
-    _enrich_consensus_row(
-        consensus_row,
-        company_id=company_id,
-        summary_items=summary_items,
-        has_valuation=has_valuation,
-        profit_growth=profit_growth,
-        as_of=as_of,
-    )
+    summary_rec = analyst_track_record(summary_items, entity_id=company_id, as_of=as_of) if summary_items else None
+    high, low, mean = _target_stats(summary_items) if summary_items else (None, None, None)
+    if consensus_row is None:
+        assert summary_rec is not None
+        return _rating_row(
+            company_id,
+            summary_rec.consensus_rating,
+            summary_rec.ratings_count,
+            summary_rec.buy_count,
+            summary_rec.hold_count,
+            summary_rec.sell_count,
+            summary_rec.result.confidence,
+            "available" if summary_rec.consensus_rating is not None else "unavailable",
+            [*summary_rec.result.flags, "vendor_timestamp"],
+            target_high=high,
+            target_low=low,
+            target_mean=mean,
+            rating_items=list(summary_items),
+        ), None
+    if summary_items or has_valuation:
+        if summary_rec is not None:
+            if summary_rec.consensus_rating is not None:
+                consensus_row["consensus_rating"] = summary_rec.consensus_rating
+            for key, val in (("target_high", high), ("target_low", low), ("target_mean", mean)):
+                if consensus_row.get(key) is None and val is not None:
+                    consensus_row[key] = val
+            consensus_row["rating_items"] = list(summary_items)
+        consensus_row["confidence"] = _moomoo_rating_confidence(
+            f"consensus:{company_id}",
+            f"consensus:{company_id}",
+            agreement=min(item.confidence for item in summary_items) if summary_items else Decimal("0.90"),
+            sample_conformance=Decimal("0.90") if summary_items else Decimal("0.95"),
+            reason="vendor_timestamp",
+        )
+        if profit_growth:
+            consensus_row["profit_growth_by_period"] = {
+                end.isoformat(): str(rate) for end, rate in sorted(profit_growth.items())
+            }
+        reasons = list(consensus_row["reason_codes"])
+        for active, tag in (
+            (bool(summary_items), "vendor_timestamp"),
+            (bool(profit_growth), "valuation_profit_growth"),
+        ):
+            if active and tag not in reasons:
+                reasons.append(tag)
+        consensus_row["reason_codes"] = reasons
     return consensus_row, None
 
 
@@ -431,8 +404,9 @@ def _persist_analyst_rating_events(
     if not valid_items:
         return 0
     try:
-        with optional_savepoint(connection), connection.cursor() as cur:
-            cur.executemany(
+        with optional_savepoint(connection):
+            execute_many(
+                connection,
                 "insert into staging.kg_entities (id, entity_type, display_name) values (%s, 'company', %s), (%s, 'analyst', %s) on conflict (id) do nothing",
                 [(company_id, company_id, item.analyst_id, item.analyst_id) for item in valid_items],
             )
@@ -458,7 +432,8 @@ def _persist_analyst_rating_events(
                         f"moomoo:rating_summary:{run_id}:{company_id}:{item.analyst_id}",
                     )
                 )
-            cur.executemany(
+            execute_many(
+                connection,
                 "insert into staging.analyst_rating_events (analyst_id, company_id, recommendation_at, transaction_time, rating, target_price, confidence, raw_ref) "
                 "select %s, %s, least(%s::timestamptz, %s::timestamptz, clock_timestamp()), least(%s::timestamptz, clock_timestamp()), %s, %s, %s, %s "
                 "where to_regclass('staging.analyst_rating_events') is not null on conflict (analyst_id, company_id, recommendation_at, transaction_time) do nothing",

@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import psycopg
-from factors.panel import PANEL_METRICS, PUBLISHED_COLUMNS, IssuerClass, SignPolicy, ratio_operands_of
+from factors.panel import PANEL_METRICS, PUBLISHED_COLUMNS, IssuerClass, SignPolicy, definition_pins, ratio_operands_of
 from truealpha_contracts import reconciliation_policies
 from truealpha_contracts.environment_contract import EnvironmentContract, load_environment_contract
 from truealpha_contracts.strategy import load_live_strategy_definition
@@ -23,7 +23,7 @@ SERVED_UNIVERSE_LIKE = id_prefix_like(universe_with_role("strategy"))
 _MAX_INPUT_AGE_DAYS = load_live_strategy_definition().eligibility.maximum_input_age_days
 
 GOVERNED_HEAD = (
-    f"select run_id from mart.served_head where factor_id = 'gross_profit_per_employee' "
+    "select run_id from mart.served_head where factor_id = 'gross_profit_per_employee' "
     f"and universe_id like '{SERVED_UNIVERSE_LIKE}' order by advanced_at desc limit 1"
 )
 
@@ -38,7 +38,6 @@ LATEST_STRATEGY_RUN = (
 
 def _expected_inputs() -> tuple[tuple[str, str], ...]:
     from factors.composite import strategy_evaluator
-    from factors.panel import definition_pins
 
     definition = load_live_strategy_definition()
     peg_keys = set(strategy_evaluator._input_keys("peg"))
@@ -51,33 +50,33 @@ def _expected_inputs() -> tuple[tuple[str, str], ...]:
     )
 
 
-def _primary_market_price_parser() -> str:
-    try:
-        from data_engine.datahub.production_topt.source_registrations import registration_for
-
-        return registration_for("market-price").origins[0].parser_versions[-1].split(":")[0]
-    except ImportError:
-        return "production-topt-live-parser"
-
-
-def _market_price_parser_ranks() -> tuple[tuple[str, int], ...]:
+def _market_price_config() -> tuple[str, tuple[tuple[str, int], ...]]:
     try:
         from data_engine.datahub.production_topt.source_registrations import SOURCE_BY_PARSER, registration_for
     except ImportError:
-        return ()
-    market = {origin.origin_id for origin in registration_for("market-price").origins}
+        return "production-topt-live-parser", ()
+    origins = registration_for("market-price").origins
+    primary = origins[0].parser_versions[-1].split(":")[0]
+    market = {origin.origin_id for origin in origins}
     priority = reconciliation_policies.RECONCILIATION_POLICY.source_priority
     ranks: dict[str, int] = {}
     for vintage, (source_id, origin_id, _value_key) in SOURCE_BY_PARSER.items():
         if origin_id in market and source_id in priority:
             family, rank = vintage.split(":")[0], priority.index(source_id)
             ranks[family] = min(rank, ranks.get(family, rank))
-    return tuple(sorted(ranks.items(), key=lambda item: (item[1], item[0])))
+    return primary, tuple(sorted(ranks.items(), key=lambda item: (item[1], item[0])))
+
+
+def _primary_market_price_parser() -> str:
+    return _market_price_config()[0]
+
+
+def _market_price_parser_ranks() -> tuple[tuple[str, int], ...]:
+    return _market_price_config()[1]
 
 
 EXPECTED_INPUTS = _expected_inputs()
-PRIMARY_MARKET_PRICE_PARSER = _primary_market_price_parser()
-MARKET_PRICE_PARSER_RANKS = _market_price_parser_ranks()
+PRIMARY_MARKET_PRICE_PARSER, MARKET_PRICE_PARSER_RANKS = _market_price_config()
 
 
 @dataclass(frozen=True)
@@ -98,9 +97,9 @@ def _classes(values: set[IssuerClass]) -> str:
 
 def _sign_policy_queries() -> tuple[str, str | None]:
     table = SIGN_POLICY_TABLE
-    columns = PUBLISHED_COLUMNS[table]
+    ordered_cols = sorted(PUBLISHED_COLUMNS[table].items())
     judged: dict[str, str] = {}
-    for column, node_key in sorted(columns.items()):
+    for column, node_key in ordered_cols:
         judged.setdefault(node_key, column)
     violations: list[str] = []
     signals: list[str] = []
@@ -114,7 +113,7 @@ def _sign_policy_queries() -> tuple[str, str | None]:
             f"from {table} where run_id = ({GOVERNED_HEAD}){scope} and ({predicate})"
         )
 
-    for column, node_key in sorted(columns.items()):
+    for column, node_key in ordered_cols:
         first = judged[node_key]
         if column != first:
             violations.append(
@@ -149,12 +148,11 @@ def _sign_policy_queries() -> tuple[str, str | None]:
         numerator, denominator = pair
         if numerator not in judged or denominator not in PANEL_METRICS:
             continue
-        classes = {
+        if classes := {
             cls
             for cls in spec.applicability
             if PANEL_METRICS[denominator].sign_policy.get(cls) is SignPolicy.MUST_BE_NON_NEGATIVE
-        }
-        if classes:
+        }:
             out_col, num_col = judged[spec.key], judged[numerator]
             violations.append(
                 select(
@@ -183,6 +181,11 @@ _FUSION_CTES = (
     ")"
 )
 
+_FUSION_JOIN = (
+    "from selected "
+    "join staging.capture_observation_obligations uo on uo.observation_id = selected.observation_id "
+    "join contested on contested.capture_obligation_id = uo.capture_obligation_id"
+)
 _SCHEDULED_HEADS_CTE = (
     "with heads as (select h.universe_id, coalesce(h.run_id, h.head_run_id) as run_id "
     "from mart.served_head h where h.factor_id = 'gross_profit_per_employee' and __HEAD_IS_SCHEDULED__)"
@@ -194,6 +197,7 @@ _SCHEDULED_RESULTS_POP = (
 )
 _ACC18_RE = "accession=([0-9]{18}|[0-9]{10}-[0-9]{2}-[0-9]{6})"
 _ACC10_RE = "accession=([0-9]{4}-[0-9]{2}-[0-9]{6})"
+_ACC_ANY_RE = "accession=([0-9]{18}|[0-9]{10}-[0-9]{2}-[0-9]{6}|[0-9]{4}-[0-9]{2}-[0-9]{6})"
 _FILED_RE = "filed=([0-9]{4}-[0-9]{2}-[0-9]{2})"
 _RAW_RE = r"raw=raw\.fetches:([0-9]+)"
 _ZERO_TS = "'2026-01-01T00:00:00Z'::timestamptz"
@@ -212,53 +216,34 @@ def _valid_headcount_citation(alias: str) -> str:
     )
 
 
-def _inv(id: str, claim: str, violations: str, population: str, signals: str | None = None) -> Invariant:
-    return Invariant(id, claim, violations, population, signals)
-
+_AVAILABLE_GPPE_FROM = f"from mart.topt_gppe_results where run_id = ({GOVERNED_HEAD}) and availability = 'available'"
+_SELECTED_DECISIONS_FROM = (
+    f"from mart.strategy_decisions where strategy_run_id = ({LATEST_STRATEGY_RUN}) and outcome = 'selected'"
+)
 
 _TEMPLATES: tuple[Invariant, ...] = (
-    _inv(
+    Invariant(
         "node-sign-policy",
-        (
-            "a published value respects the sign policy its metric-forest node declares for the "
-            "issuer's class — the definition says what a negative number means, and this asserts "
-            "exactly that (init.md rule 17, #528)"
-        ),
+        "published values respect metric-forest per-class sign policies (init.md rule 17, #528)",
         _SIGN_VIOLATIONS,
         f"select count(*) from {SIGN_POLICY_TABLE} where run_id = ({GOVERNED_HEAD})",
         _SIGN_SIGNALS,
     ),
-    _inv(
+    Invariant(
         "available-means-a-value",
-        (
-            "a cell marked `available` carries a value and a non-zero confidence — "
-            "'available with nothing in it' is a contradiction, not a state"
-        ),
-        (
-            "select listing_id, availability, coalesce(gppe::text, 'null') as gppe, confidence::text "
-            f"from mart.topt_gppe_results where run_id = ({GOVERNED_HEAD}) "
-            "and availability = 'available' and (gppe is null or confidence = 0)"
-        ),
-        f"select count(*) from mart.topt_gppe_results where run_id = ({GOVERNED_HEAD}) and availability = 'available'",
+        "available cells carry a value and non-zero confidence",
+        f"select listing_id, availability, coalesce(gppe::text, 'null') as gppe, confidence::text {_AVAILABLE_GPPE_FROM} and (gppe is null or confidence = 0)",
+        f"select count(*) {_AVAILABLE_GPPE_FROM}",
     ),
-    _inv(
+    Invariant(
         "selected-weights-close",
-        "the selected positions of a strategy run sum to a whole portfolio",
-        (
-            "select strategy_run_id, round(sum(target_weight), 6)::text as total, count(*)::text as selected "
-            f"from mart.strategy_decisions where strategy_run_id = ({LATEST_STRATEGY_RUN}) and outcome = 'selected' "
-            "group by strategy_run_id having abs(sum(target_weight) - 1) > 0.000001"
-        ),
-        f"select count(*) from mart.strategy_decisions where strategy_run_id = ({LATEST_STRATEGY_RUN}) and outcome = 'selected'",
+        "selected positions sum to 1",
+        f"select strategy_run_id, round(sum(target_weight), 6)::text as total, count(*)::text as selected {_SELECTED_DECISIONS_FROM} group by strategy_run_id having abs(sum(target_weight) - 1) > 0.000001",
+        f"select count(*) {_SELECTED_DECISIONS_FROM}",
     ),
-    _inv(
+    Invariant(
         "every-consumed-input-is-populated",
-        (
-            "an input key the strategy consumes must be written for at least one issuer at "
-            "the latest cutoff — a key that is declared, permitted by the 0039 CHECK and "
-            "written for NOBODY is a wiring gap, and it publishes as a missing factor rather "
-            "than an error (#284)"
-        ),
+        "every consumed strategy input is populated at latest cutoff (#284)",
         (
             "with expected(input_key, issuer_class) as (values __EXPECTED_VALUES__), "
             "latest as (select max(cutoff_at) as cutoff_at from staging.strategy_backtest_inputs), "
@@ -275,18 +260,14 @@ _TEMPLATES: tuple[Invariant, ...] = (
             "where cutoff_at = (select max(cutoff_at) from staging.strategy_backtest_inputs)"
         ),
     ),
-    _inv(
+    Invariant(
         "fusion-selects-by-priority-not-recency",
-        (
-            "where two sources assert the same obligation, the snapshot selected the "
-            "highest-priority source -- never whichever published later (init.md rule 12)"
-        ),
+        "contested obligations pick highest-priority source, not latest publisher (init.md rule 12)",
         f"with ranks(family, rank) as (values __MARKET_PRICE_PARSER_RANKS__), {_FUSION_CTES} "
         "select selected.run_id, o.semantic_type, split_part(o.parser_version, ':', 1) as selected_parser "
-        "from selected join staging.capture_normalized_observations o on o.observation_id = selected.observation_id "
+        f"{_FUSION_JOIN} "
+        "join staging.capture_normalized_observations o on o.observation_id = selected.observation_id "
         "join staging.capture_observation_payloads p on p.observation_id = o.observation_id "
-        "join staging.capture_observation_obligations uo on uo.observation_id = o.observation_id "
-        "join contested on contested.capture_obligation_id = uo.capture_obligation_id "
         "left join ranks selected_rank on selected_rank.family = split_part(o.parser_version, ':', 1) "
         "where o.semantic_type = 'market-price' and split_part(o.parser_version, ':', 1) <> '{PRIMARY_MARKET_PRICE_PARSER}' "
         "and (selected_rank.rank is null or p.normalized_payload ->> 'served_by_failover' is null "
@@ -295,22 +276,17 @@ _TEMPLATES: tuple[Invariant, ...] = (
         "join ranks peer_rank on peer_rank.family = split_part(peer.parser_version, ':', 1) "
         "where peer_link.capture_obligation_id = uo.capture_obligation_id and peer_rank.rank < selected_rank.rank "
         "and (peer.knowable_at at time zone 'UTC')::date = (o.knowable_at at time zone 'UTC')::date))",
-        f"with {_FUSION_CTES} select count(*) from selected "
-        "join staging.capture_observation_obligations uo on uo.observation_id = selected.observation_id "
-        "join contested on contested.capture_obligation_id = uo.capture_obligation_id",
+        f"with {_FUSION_CTES} select count(*) {_FUSION_JOIN}",
     ),
-    _inv(
+    Invariant(
         "extraction-citations-resolve",
-        (
-            "every issuer headcount fact must carry an 18-digit SEC accession and a filing knowable_at, "
-            "and a 10k-extraction citation must resolve to captured bytes in raw.fetches (#1295, #735, #70)"
-        ),
+        "headcount facts cite SEC accession and filing knowable_at; 10k-extraction resolves in raw.fetches (#1295, #735, #70)",
         (
             "with eligible as (select distinct g.cik from staging.issuer_headcount_facts g "
             "where g.source in ('10k-extraction', 'manual-review', 'manual-reviewed', 'sec-10k-regex-v1') "
             f"and {_valid_headcount_citation('g')}) "
             "select f.id::text, f.cik::text, f.source, "
-            "coalesce(substring(f.evidence_ref from 'accession=([0-9]{18}|[0-9]{10}-[0-9]{2}-[0-9]{6}|[0-9]{4}-[0-9]{2}-[0-9]{6})'), 'missing-accession') as cited_accession, "
+            f"coalesce(substring(f.evidence_ref from '{_ACC_ANY_RE}'), 'missing-accession') as cited_accession, "
             f"coalesce(substring(f.evidence_ref from '{_RAW_RE}'), 'none') as cited_raw_id "
             "from staging.issuer_headcount_facts f "
             f"where (f.source = 'curated-10k-2025' or not ({_valid_headcount_citation('f')})) "
@@ -319,14 +295,9 @@ _TEMPLATES: tuple[Invariant, ...] = (
         ),
         "select count(*) from staging.issuer_headcount_facts",
     ),
-    _inv(
+    Invariant(
         "revenue-period-is-recent",
-        (
-            f"each available core result of a scheduled governed head has a revenue period that ends at most "
-            f"{_MAX_INPUT_AGE_DAYS} days before the cutoff of its run, and each such head states a revenue "
-            "period in at least one of its results — an older period is a stale figure that the head serves as "
-            "a current one, and a head with no stated period has an unknown age (#1457, #1519)"
-        ),
+        f"available scheduled-head core results have revenue_period_end within {_MAX_INPUT_AGE_DAYS}d of cutoff and >= 1 stated period (#1457, #1519)",
         f"{_SCHEDULED_HEADS_CTE}, served as ("
         "select distinct heads.universe_id, r.run_id, r.issuer_id, r.revenue_period_end, "
         "(r.cutoff at time zone 'UTC')::date as cutoff from heads "
@@ -338,12 +309,9 @@ _TEMPLATES: tuple[Invariant, ...] = (
         "order by 1, 2, 3",
         f"{_SCHEDULED_RESULTS_POP} and r.availability = 'available' and r.revenue_period_end is not null",
     ),
-    _inv(
+    Invariant(
         "governed-entities-resolve-display-name",
-        (
-            "every issuer in an active governed head resolves to a human-readable company name in "
-            "mart.entity_display_resolution, never NULL, its raw issuer_id, or its bare ticker (#1517)"
-        ),
+        "active governed-head issuers resolve to non-trivial display_name in mart.entity_display_resolution (#1517)",
         f"{_SCHEDULED_HEADS_CTE}, members as ("
         "select distinct heads.universe_id, r.run_id, r.issuer_id from heads "
         "join mart.topt_core_results r on r.run_id = heads.run_id) "
@@ -354,15 +322,15 @@ _TEMPLATES: tuple[Invariant, ...] = (
         "or lower(btrim(d.display_name)) = lower(btrim(coalesce(d.ticker, ''))) order by 1, 2, 3",
         _SCHEDULED_RESULTS_POP,
     ),
-    _inv(
+    Invariant(
         "entity-identity-unique-per-entity",
-        "mart.entity_identity returns at most one row per entity_id — duplicate rows fan out every downstream join (#1641)",
+        "mart.entity_identity has <= 1 row per entity_id (#1641)",
         "select entity_id::text, count(*)::text as row_count from mart.entity_identity group by entity_id having count(*) > 1 order by 1",
         "select count(*) from mart.entity_identity",
     ),
-    _inv(
+    Invariant(
         "fund-virtual-company-weights-conserved",
-        "every mart.fund_virtual_company row conserves portfolio weight (0 <= valued_weight_pct <= resolved_weight_pct <= total_weight_pct <= 105) (#1641)",
+        "mart.fund_virtual_company satisfies 0 <= valued_weight_pct <= resolved_weight_pct <= total_weight_pct <= 105 (#1641)",
         (
             "select run_id, fund_id, total_weight_pct::text, resolved_weight_pct::text, valued_weight_pct::text "
             "from mart.fund_virtual_company where total_weight_pct < 0 or total_weight_pct > 105 "
@@ -372,10 +340,6 @@ _TEMPLATES: tuple[Invariant, ...] = (
         "select count(*) from mart.fund_virtual_company",
     ),
 )
-
-
-def _rank_values(ranks: tuple[tuple[str, int], ...]) -> str:
-    return ", ".join(f"('{family}', {rank})" for family, rank in ranks) or "(null::text, null::integer)"
 
 
 def head_is_scheduled_sql(contract: EnvironmentContract) -> str:
@@ -392,30 +356,33 @@ def head_is_scheduled_sql(contract: EnvironmentContract) -> str:
     return f"not ({' or '.join(unscheduled)})" if unscheduled else "true"
 
 
-def _render(invariant: Invariant, scheduled: str) -> Invariant:
-    values = ", ".join(f"('{key}', '{issuer_class}')" for key, issuer_class in EXPECTED_INPUTS)
-    ranks = _rank_values(MARKET_PRICE_PARSER_RANKS)
-
-    def fill(sql: str) -> str:
-        return (
-            sql.replace("__EXPECTED_VALUES__", values)
-            .replace("{PRIMARY_MARKET_PRICE_PARSER}", PRIMARY_MARKET_PRICE_PARSER)
-            .replace("__MARKET_PRICE_PARSER_RANKS__", ranks)
-            .replace("__HEAD_IS_SCHEDULED__", scheduled)
-        )
-
-    return Invariant(
-        id=invariant.id,
-        claim=invariant.claim,
-        violations=fill(invariant.violations),
-        population=fill(invariant.population),
-        signals=None if invariant.signals is None else fill(invariant.signals),
-    )
+def _rank_values(ranks: tuple[tuple[str, int], ...]) -> str:
+    return ", ".join(f"('{f}', {r})" for f, r in ranks) or "(null::text, null::integer)"
 
 
 def render_invariants(contract: EnvironmentContract) -> tuple[Invariant, ...]:
-    scheduled = head_is_scheduled_sql(contract)
-    return tuple(_render(template, scheduled) for template in _TEMPLATES)
+    replacements = {
+        "__EXPECTED_VALUES__": ", ".join(f"('{key}', '{issuer_class}')" for key, issuer_class in EXPECTED_INPUTS),
+        "{PRIMARY_MARKET_PRICE_PARSER}": PRIMARY_MARKET_PRICE_PARSER,
+        "__MARKET_PRICE_PARSER_RANKS__": _rank_values(MARKET_PRICE_PARSER_RANKS),
+        "__HEAD_IS_SCHEDULED__": head_is_scheduled_sql(contract),
+    }
+
+    def _fill(sql: str) -> str:
+        for token, value in replacements.items():
+            sql = sql.replace(token, value)
+        return sql
+
+    return tuple(
+        Invariant(
+            inv.id,
+            inv.claim,
+            _fill(inv.violations),
+            _fill(inv.population),
+            None if inv.signals is None else _fill(inv.signals),
+        )
+        for inv in _TEMPLATES
+    )
 
 
 INVARIANTS: tuple[Invariant, ...] = render_invariants(load_environment_contract())
@@ -458,6 +425,9 @@ def check(
     exemptions = load_exemptions() if exemptions is None else exemptions
     failures: list[str] = []
 
+    def _row_str(row: tuple[Any, ...]) -> str:
+        return " ".join(map(str, row))
+
     with connect(database_url) as connection:
         for inv in invariants:
             population = _rows(connection, inv.population)[0][0]
@@ -465,18 +435,20 @@ def check(
             exemption = exemptions.get(inv.id)
             if inv.signals is not None:
                 for row in _rows(connection, inv.signals):
-                    print(f"  SIGNAL   {inv.id}: " + " ".join(str(field) for field in row))
-            if violations and exemption and exemption.expires >= today:
-                print(
-                    f"  DEFERRED {inv.id}: {len(violations)} violation(s), exempt until {exemption.expires} under {exemption.issue} — {exemption.reason}"
-                )
-                continue
+                    print(f"  SIGNAL   {inv.id}: {_row_str(row)}")
             if violations:
-                detail = "; ".join(" ".join(str(field) for field in row) for row in violations[:5])
-                expired = f" The exemption under {exemption.issue} expired {exemption.expires}." if exemption else ""
-                failures.append(
-                    f"{inv.id}: {len(violations)} violation(s) — {inv.claim}.{expired} Offending rows: {detail}"
-                )
+                if exemption and exemption.expires >= today:
+                    print(
+                        f"  DEFERRED {inv.id}: {len(violations)} violation(s), until {exemption.expires} ({exemption.issue}): {exemption.reason}"
+                    )
+                else:
+                    detail = "; ".join(_row_str(row) for row in violations[:5])
+                    expired = (
+                        f" The exemption under {exemption.issue} expired {exemption.expires}." if exemption else ""
+                    )
+                    failures.append(
+                        f"{inv.id}: {len(violations)} violation(s) — {inv.claim}.{expired} Offending rows: {detail}"
+                    )
                 continue
             if population == 0:
                 print(f"  EMPTY    {inv.id}: examined 0 rows, so it proved nothing")
@@ -486,7 +458,7 @@ def check(
             if exemption:
                 failures.append(
                     f"{inv.id}: exempt under {exemption.issue} but no longer violated across {population} row(s). "
-                    "Remove the exemption — a standing waiver for a fixed defect hides the next one"
+                    "Remove the exemption"
                 )
                 continue
             print(f"  ok       {inv.id}: {population} row(s) examined")

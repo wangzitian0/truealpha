@@ -167,6 +167,7 @@
     }
   },
   "expected": {
-    "strategy_definition_id": "strategy-definition:a0c6f1f003373b5eff85872fd493de91e2fd6d9fa3d15e78e278f96b88bd8803"
+    "strategy_definition_id": "strategy-definition:a0c6f1f003373b5eff85872fd493de91e2fd6d9fa3d15e78e278f96b88bd8803",
+    "strategy_definition_sha256": "a0c6f1f003373b5eff85872fd493de91e2fd6d9fa3d15e78e278f96b88bd8803"
   }
 }

@@ -300,7 +300,6 @@ export function decisionAvailability(decision: StrategyRunDecision): Availabilit
 	if (decision.availability_status === "not_applicable") return "not_applicable";
 	return decision.outcome === "excluded" ? (decision.exclusion_reason === "below_confidence_floor" ? "low_confidence" : "excluded") : "available";
 }
-}
 
 export const TRACE_LINEAGE_SQL = `select m.result_id, m.listing_id, m.lineage
 from mart.strategy_decisions d join mart.strategy_run_capture scope on scope.strategy_run_id = d.strategy_run_id

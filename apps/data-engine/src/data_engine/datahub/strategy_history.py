@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import calendar
-import dataclasses
 import json
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any, NamedTuple
@@ -126,12 +125,16 @@ class HistorySummary:
     share_basis_unrecognised: int = 0
 
 
+def _require_tz(value: datetime, name: str) -> datetime:
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError(f"{name} must carry a time zone")
+    return value.astimezone(UTC)
+
+
 def monthly_cutoffs(tick: datetime, months: int = DEFAULT_MONTHS) -> list[datetime]:
-    if tick.tzinfo is None or tick.utcoffset() is None:
-        raise ValueError("tick must carry a time zone")
+    utc_tick = _require_tz(tick, "tick")
     if months < 1:
         raise ValueError(f"months must be at least 1, got {months}")
-    utc_tick = tick.astimezone(UTC)
     newest = utc_tick.year * 12 + utc_tick.month - 1
     return [datetime(idx // 12, idx % 12 + 1, 1, tzinfo=UTC) for idx in range(newest - months + 1, newest + 1)]
 
@@ -145,11 +148,8 @@ _QUARTER_END_MONTHS = (3, 6, 9, 12)
 
 
 def quarter_end_cutoffs(schedule: QuarterlyCutoffSchedule, *, start: datetime, end: datetime) -> list[datetime]:
-    for name, value in (("start", start), ("end", end)):
-        if value.tzinfo is None or value.utcoffset() is None:
-            raise ValueError(f"{name} must carry a time zone")
+    first, last = _require_tz(start, "start"), _require_tz(end, "end")
     clock = schedule.first_cutoff_at.astimezone(UTC).timetz()
-    first, last = start.astimezone(UTC), end.astimezone(UTC)
     return [
         cutoff
         for year in range(first.year, last.year + 1)
@@ -244,12 +244,7 @@ def latest_financial_observations(
     pairs = [(issuer_id, entity_id) for entity_id, ids in ids_by_entity.items() for issuer_id in ids]
     rows = connection.execute(
         _LATEST_FINANCIAL_SQL,
-        (
-            [issuer_id for issuer_id, _ in pairs],
-            [entity_id for _, entity_id in pairs],
-            parser_version,
-            UNAVAILABLE_PAYLOAD_KEY,
-        ),
+        ([p[0] for p in pairs], [p[1] for p in pairs], parser_version, UNAVAILABLE_PAYLOAD_KEY),
     ).fetchall()
     candidates: dict[str, list[tuple[dict[str, Any], str]]] = {}
     for entity_id, payload, record_id in rows:
@@ -320,9 +315,7 @@ def canonical_history_issuers(
     known_at: datetime,
     parser_version: str = PARSER_VERSION,
 ) -> CanonicalIssuers:
-    if known_at.tzinfo is None or known_at.utcoffset() is None:
-        raise ValueError("known_at must carry a time zone")
-    as_of = known_at.astimezone(UTC).date()
+    as_of = _require_tz(known_at, "known_at").date()
     ids_by_entity: dict[str, list[str]] = {}
     unresolved: list[str] = []
     for issuer_id in sorted(set(issuer_ids)):
@@ -343,7 +336,7 @@ def canonical_history_issuers(
         if issuer is None:
             unresolved.extend(ids)
         else:
-            issuers.append(dataclasses.replace(issuer, issuer_id=entity))
+            issuers.append(replace(issuer, issuer_id=entity))
     resolved = {issuer.issuer_id for issuer in issuers}
     return CanonicalIssuers(
         issuers=tuple(_with_predecessors(connection, issuers, ids_by_entity)),
@@ -369,18 +362,9 @@ def _with_predecessors(
     return [
         issuer
         if (pred := found.get(issuer.listing_id)) is None or int(pred) == issuer.cik
-        else dataclasses.replace(issuer, predecessor_cik=int(pred), predecessor_signed=pred.signed)
+        else replace(issuer, predecessor_cik=int(pred), predecessor_signed=pred.signed)
         for issuer in issuers
     ]
-
-
-def _work_item(issuer: HistoryIssuer, cutoff_at: datetime) -> CaptureWorkItem:
-    digest = canonical_sha256({"issuer": issuer.issuer_id, "cutoff": cutoff_at.isoformat(), "kind": "strategy-history"})
-    return CaptureWorkItem(
-        campaign_id=f"capture-campaign:{digest}",
-        source_request_id=f"source-request:{digest}",
-        schedule_policy_id=f"schedule-policy:{digest}",
-    )
 
 
 def project_issuer_rows(
@@ -411,7 +395,14 @@ def project_issuer_rows(
     bases = {COVER: 0, STATEMENT: 0, UNRECOGNISED: 0}
     for cutoff_at in cutoffs:
         as_of = last_settled_accession_date(cutoff_at)
-        item = _work_item(issuer, cutoff_at)
+        digest = canonical_sha256(
+            {"issuer": issuer.issuer_id, "cutoff": cutoff_at.isoformat(), "kind": "strategy-history"}
+        )
+        item = CaptureWorkItem(
+            campaign_id=f"capture-campaign:{digest}",
+            source_request_id=f"source-request:{digest}",
+            schedule_policy_id=f"schedule-policy:{digest}",
+        )
         target = SecTarget(
             cik=issuer.cik,
             cutoff=as_of,
@@ -446,10 +437,13 @@ def project_issuer_rows(
             row = HistoryRow(issuer.issuer_id, cutoff_at, input_key, value, confidence, knowable_at, fiscal_period)
             if input_key == SHARES_KEY and fiscal_period is None:
                 filed_date = row.knowable_at.astimezone(UTC).date()
-                if bar is not None:
+                close_splits: tuple[SplitEvent, ...] = ()
+                if bar is None:
+                    basis_as_of, close_session, close_known = filed_date, filed_date, row.knowable_at
+                else:
                     if splits is None:
                         splits = split_events(issuer.ticker)
-                    basis = share_count_as_of(
+                    basis_info = share_count_as_of(
                         (payload.get("vintage") or {}).get(SHARES_KEY),
                         row.value,
                         [stored[1] for stored in documents.values() if stored is not None],
@@ -457,22 +451,27 @@ def project_issuer_rows(
                         statement_concepts=statement_concepts,
                         filed_fallback=filed_date,
                     )
-                    bases[basis.kind] += 1
-                    basis_as_of = basis.as_of
-                else:
-                    basis_as_of = filed_date
-                if (
-                    on_basis := _on_close_basis(
-                        row,
-                        bar,
-                        splits or (),
-                        as_of=basis_as_of,
-                        listing_units_per_share=listing_units_per_share_of(payload),
+                    bases[basis_info.kind] += 1
+                    basis_as_of = basis_info.as_of
+                    close_session, close_known, close_splits = (
+                        bar.knowable_at.astimezone(UTC).date(),
+                        bar.knowable_at,
+                        splits,
                     )
-                ) is None:
+                basis = on_close_basis(
+                    row.value,
+                    row.knowable_at,
+                    basis_date=basis_as_of,
+                    close_session=close_session,
+                    close_knowable_at=close_known,
+                    splits=close_splits,
+                    listing_units_per_share=listing_units_per_share_of(payload),
+                )
+                if isinstance(basis, Unavailable):
                     continue
-                row, adjusted = on_basis
-                split_adjusted += adjusted
+                if (basis.value, basis.knowable_at) != (row.value, row.knowable_at):
+                    row = replace(row, value=basis.value, knowable_at=basis.knowable_at)
+                split_adjusted += basis.factor != 1
             rows.append(_checked(row))
         if bar is not None:
             rows.append(
@@ -485,33 +484,6 @@ def project_issuer_rows(
     return Projection(
         tuple(rows), no_outcome, undated, split_adjusted, bases[COVER], bases[STATEMENT], bases[UNRECOGNISED]
     )
-
-
-def _on_close_basis(
-    shares: HistoryRow,
-    bar: LastClose | None,
-    splits: Sequence[SplitEvent],
-    *,
-    as_of: date,
-    listing_units_per_share: Decimal | None,
-) -> tuple[HistoryRow, bool] | None:
-    basis = on_close_basis(
-        shares.value,
-        shares.knowable_at,
-        basis_date=as_of,
-        close_session=as_of if bar is None else bar.knowable_at.astimezone(UTC).date(),
-        close_knowable_at=shares.knowable_at if bar is None else bar.knowable_at,
-        splits=() if bar is None else splits,
-        listing_units_per_share=listing_units_per_share,
-    )
-    if isinstance(basis, Unavailable):
-        return None
-    row = (
-        shares
-        if (basis.value, basis.knowable_at) == (shares.value, shares.knowable_at)
-        else dataclasses.replace(shares, value=basis.value, knowable_at=basis.knowable_at)
-    )
-    return row, basis.factor != 1
 
 
 def _checked(row: HistoryRow) -> HistoryRow:
@@ -565,10 +537,9 @@ def run_strategy_history(
     splits = split_events or postgres_split_events(connection, [issuer.ticker for issuer in issuers])
     rules = ruleset or resolve_ruleset(connection)
     ratio_reader = listing_ratio_reader or CoverRatioReader()
-    inserted = already_present = no_outcome = undated = split_adjusted = 0
-    basis_cover = basis_statement = basis_unrecognised = 0
+    inserted = already_present = no_outcome = undated = split_adj = cover = stmt = unrec = 0
     for issuer in issuers:
-        projection = project_issuer_rows(
+        proj = project_issuer_rows(
             issuer,
             cutoffs,
             load_facts=load_facts,
@@ -578,28 +549,17 @@ def run_strategy_history(
             ruleset=rules,
             listing_ratio_reader=ratio_reader,
         )
-        skipped = _write_new_rows(connection, issuer, projection.rows)
+        skipped = _write_new_rows(connection, issuer, proj.rows)
         already_present += skipped
-        inserted += len(projection.rows) - skipped
-        no_outcome += projection.no_outcome
-        undated += projection.undated
-        split_adjusted += projection.split_adjusted
-        basis_cover += projection.share_basis_cover
-        basis_statement += projection.share_basis_statement
-        basis_unrecognised += projection.share_basis_unrecognised
+        inserted += len(proj.rows) - skipped
+        no_outcome += proj.no_outcome
+        undated += proj.undated
+        split_adj += proj.split_adjusted
+        cover += proj.share_basis_cover
+        stmt += proj.share_basis_statement
+        unrec += proj.share_basis_unrecognised
     return HistorySummary(
-        len(issuers),
-        len(cutoffs),
-        inserted,
-        already_present,
-        no_outcome,
-        undated,
-        (),
-        0,
-        split_adjusted,
-        basis_cover,
-        basis_statement,
-        basis_unrecognised,
+        len(issuers), len(cutoffs), inserted, already_present, no_outcome, undated, (), 0, split_adj, cover, stmt, unrec
     )
 
 
@@ -626,4 +586,4 @@ def project_deployed_history(
         raise RuntimeError(
             f"the projector produced no row for {summary.issuers} issuers over {summary.cutoffs} cutoffs"
         )
-    return dataclasses.replace(summary, unresolved_issuers=canonical.unresolved, merged_ids=len(canonical.merged))
+    return replace(summary, unresolved_issuers=canonical.unresolved, merged_ids=len(canonical.merged))

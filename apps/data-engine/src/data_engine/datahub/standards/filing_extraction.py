@@ -210,41 +210,6 @@ def _fetch_bytes_via_gateway(
     return gw_mod.fetch_once(key, fetch, content_type="application/octet-stream")
 
 
-def _fetch_json_via_gateway(
-    http: Any, gateway_instance: SourceGateway | None, endpoint: str, url: str, *, key: FetchKey
-) -> dict[str, Any]:
-    return dict(json.loads(_fetch_bytes_via_gateway(http, gateway_instance, endpoint, url, key=key).decode()))
-
-
-def _annual_filing_from_index(
-    cik: int,
-    index_block: dict[str, Any],
-    *,
-    cutoff_date: date,
-    http: Any,
-    gateway: SourceGateway | None = None,
-    allowed_forms: Collection[str] = ANNUAL_FORMS,
-) -> FilingDocument | None:
-    forms = index_block.get("form") or ()
-    for index, form in enumerate(forms):
-        if (
-            form in allowed_forms
-            and (filing_date := date.fromisoformat(index_block["filingDate"][index])) <= cutoff_date
-        ):
-            accession = index_block["accessionNumber"][index].replace("-", "")
-            document = index_block["primaryDocument"][index]
-            url = ARCHIVE_URL.format(cik=cik, accession=accession, document=document)
-            body = _fetch_bytes_via_gateway(
-                http,
-                gateway,
-                "archive",
-                url,
-                key=FetchKey("sec", "archive", f"filing:{cik:010d}:{accession}:{document}", ACCESSION_AS_OF),
-            )
-            return FilingDocument(cik, accession, form, filing_date, document, url, body)
-    return None
-
-
 def _latest_filing_for_forms(
     cik: int,
     *,
@@ -254,24 +219,31 @@ def _latest_filing_for_forms(
     allowed_forms: Collection[str],
 ) -> FilingDocument | None:
     cutoff_date = cutoff.astimezone(UTC).date()
-    filings = (
-        _fetch_json_via_gateway(
-            http, gateway, "submissions", SUBMISSIONS_URL.format(cik=cik), key=submissions_key(cik)
-        ).get("filings")
-        or {}
-    )
-    if found := _annual_filing_from_index(
-        cik,
-        filings.get("recent") or {},
-        cutoff_date=cutoff_date,
-        http=http,
-        gateway=gateway,
-        allowed_forms=allowed_forms,
-    ):
+
+    def fetch_json(url: str, key: FetchKey) -> dict[str, Any]:
+        return dict(json.loads(_fetch_bytes_via_gateway(http, gateway, "submissions", url, key=key).decode()))
+
+    def scan(block: dict[str, Any]) -> FilingDocument | None:
+        for index, form in enumerate(block.get("form") or ()):
+            if form in allowed_forms and (filing_date := date.fromisoformat(block["filingDate"][index])) <= cutoff_date:
+                accession = block["accessionNumber"][index].replace("-", "")
+                document = block["primaryDocument"][index]
+                url = ARCHIVE_URL.format(cik=cik, accession=accession, document=document)
+                body = _fetch_bytes_via_gateway(
+                    http,
+                    gateway,
+                    "archive",
+                    url,
+                    key=FetchKey("sec", "archive", f"filing:{cik:010d}:{accession}:{document}", ACCESSION_AS_OF),
+                )
+                return FilingDocument(cik, accession, form, filing_date, document, url, body)
+        return None
+
+    filings = fetch_json(SUBMISSIONS_URL.format(cik=cik), submissions_key(cik)).get("filings") or {}
+    if found := scan(filings.get("recent") or {}):
         return found
     for file_meta in filings.get("files") or ():
-        name = file_meta.get("name")
-        if not name:
+        if not (name := file_meta.get("name")):
             continue
         if filing_from := file_meta.get("filingFrom"):
             try:
@@ -279,16 +251,7 @@ def _latest_filing_for_forms(
                     continue
             except ValueError:
                 pass
-        overflow = _fetch_json_via_gateway(
-            http,
-            gateway,
-            "submissions",
-            SUBMISSIONS_OVERFLOW_URL.format(name=name),
-            key=submissions_key(cik, overflow=name),
-        )
-        if found := _annual_filing_from_index(
-            cik, overflow, cutoff_date=cutoff_date, http=http, gateway=gateway, allowed_forms=allowed_forms
-        ):
+        if found := scan(fetch_json(SUBMISSIONS_OVERFLOW_URL.format(name=name), submissions_key(cik, overflow=name))):
             return found
     return None
 
@@ -328,25 +291,6 @@ def _class_member(dimensions: Any, members: Sequence[str], *, single_dim: bool =
     return member if isinstance(member, str) and member in members else None
 
 
-def _uniform_class_par_values(ix: Any, members: Sequence[str]) -> bool:
-    par_by_member: dict[str, Decimal] = {}
-    for fact in ix.facts((_PAR_VALUE_CONCEPT,)):
-        if fact.value is None or fact.context.start is not None:
-            continue
-        if (member := _class_member(fact.context.dimensions, members)) is not None:
-            par_by_member[member] = fact.value
-    return len(set(par_by_member.values())) <= 1
-
-
-def _listed_stock_members(ix: Any, members: Sequence[str]) -> set[str]:
-    listed: set[str] = set()
-    for text_fact in ix.text_facts((_DEI_TRADING_SYMBOL_CONCEPT,), limit=40):
-        context = ix.contexts.get(text_fact.context_id)
-        if context is not None and (member := _class_member(context.dimensions, members)) is not None:
-            listed.add(member)
-    return listed
-
-
 def _class_conversion_rates(ix: Any, body: bytes, members: Sequence[str], *, as_of: date) -> dict[str, Decimal] | None:
     concepts = set(_CONVERSION_RATE_CONCEPT.findall(body.decode("utf-8", "ignore")))
     latest_by_member: dict[str, tuple[date, Decimal]] = {}
@@ -357,7 +301,13 @@ def _class_conversion_rates(ix: Any, body: bytes, members: Sequence[str], *, as_
             member not in latest_by_member or fact.context.end >= latest_by_member[member][0]
         ):
             latest_by_member[member] = (fact.context.end, fact.value)
-    base_candidates = sorted(_listed_stock_members(ix, members)) or [
+    listed = {
+        member
+        for text_fact in ix.text_facts((_DEI_TRADING_SYMBOL_CONCEPT,), limit=40)
+        if (context := ix.contexts.get(text_fact.context_id)) is not None
+        and (member := _class_member(context.dimensions, members)) is not None
+    }
+    base_candidates = sorted(listed) or [
         member
         for member in members
         if latest_by_member.get(member, (as_of, Decimal(-1)))[1] in (Decimal(0), Decimal(1))
@@ -392,7 +342,15 @@ def multi_class_share_entries(document: FilingDocument) -> list[dict[str, Any]]:
         return []
     latest_end = max(by_end)
     by_member = by_end[latest_end]
-    if len(by_member) < 2 or not _uniform_class_par_values(ix, tuple(by_member)):
+    members = tuple(by_member)
+    par_by_member = {
+        member: fact.value
+        for fact in ix.facts((_PAR_VALUE_CONCEPT,))
+        if fact.value is not None
+        and fact.context.start is None
+        and (member := _class_member(fact.context.dimensions, members)) is not None
+    }
+    if len(by_member) < 2 or len(set(par_by_member.values())) > 1:
         return []
     base: dict[str, Any] = {
         "end": latest_end.isoformat(),
@@ -444,20 +402,6 @@ def require_annual_filing(
     if isinstance(document, ExtractionOutcome):
         return document
     return ExtractionOutcome(cik, "no_annual_filing", detail=no_filing_detail) if document is None else document
-
-
-def _model_selection_summary(
-    model_runs: Sequence[llm.ModelSelection], status: ExtractionStatus
-) -> tuple[str, bool | None]:
-    if not model_runs:
-        return "", None
-    (model_run,) = model_runs
-    detail = f" model={model_run.model} invocation={model_run.invocation_id}" + (
-        " (replayed)" if model_run.replayed else ""
-    )
-    if status == "model_declined":
-        detail += f" reason={model_run.reason!r}"
-    return detail, model_run.replayed
 
 
 def extract_headcount(
@@ -512,7 +456,15 @@ def extract_headcount(
     )
     chosen = _chosen_total(totals, selection) if selection is not None else None
     extractor = selection.extractor if selection is not None else RULE_SINGLE_CANDIDATE
-    model_detail, model_replayed = _model_selection_summary(model_runs, status)
+    model_detail, model_replayed = "", None
+    if model_runs:
+        (model_run,) = model_runs
+        model_replayed = model_run.replayed
+        model_detail = f" model={model_run.model} invocation={model_run.invocation_id}" + (
+            " (replayed)" if model_run.replayed else ""
+        )
+        if status == "model_declined":
+            model_detail += f" reason={model_run.reason!r}"
     outcome = ExtractionOutcome(
         cik,
         status,
@@ -539,6 +491,7 @@ def extract_headcount(
         )
 
     landed_at = now or datetime.now(UTC)
+    knowable = knowable_instant(AsOfAxis.ACCESSION, document.filing_date)
     raw_id = insert_fetch(
         connection,
         source=DataSource.SEC,
@@ -546,7 +499,7 @@ def extract_headcount(
         body=document.body,
         content_type="text/html",
         fetched_at=landed_at,
-        source_published_at=knowable_instant(AsOfAxis.ACCESSION, document.filing_date),
+        source_published_at=knowable,
         metadata={"form": document.form, "accession": document.accession, "cik": cik, "url": document.url},
         store=store,
         recorded_at=landed_at,
@@ -554,14 +507,13 @@ def extract_headcount(
     filing_cik = "" if record_cik == cik else f" filing_cik={cik}"
     evidence_ref = (
         f"accession={document.accession} form={document.form} filed={document.filing_date.isoformat()}{filing_cik} "
-        f"raw=raw.fetches:{raw_id} extractor={extractor}{model_detail} "
-        f"span={chosen.sentence[:400]!r}"
+        f"raw=raw.fetches:{raw_id} extractor={extractor}{model_detail} span={chosen.sentence[:400]!r}"
     )
     fact_id = record_headcount(
         connection,
         cik=record_cik,
         headcount=Decimal(chosen.value),
-        knowable_at=knowable_instant(AsOfAxis.ACCESSION, document.filing_date),
+        knowable_at=knowable,
         period_end=outcome.as_of,
         source=EXTRACTION_SOURCE,
         evidence_ref=evidence_ref,

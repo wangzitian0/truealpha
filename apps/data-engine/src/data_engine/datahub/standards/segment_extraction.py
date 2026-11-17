@@ -21,7 +21,7 @@ from factors.shared.extraction import (
 )
 from truealpha_contracts.standards import MetricStandard, confidence_for
 
-from data_engine.datahub._helpers import CAPTURE_OBSERVATION_JOIN
+from data_engine.datahub._helpers import CAPTURE_OBSERVATION_JOIN, execute_many
 from data_engine.datahub.production_topt.concept_mapping import DEFAULT_RULESET
 from data_engine.datahub.production_topt.source_registrations import AsOfAxis, knowable_instant
 from data_engine.datahub.standards.filing_extraction import (
@@ -62,7 +62,10 @@ def declared_segment_count(filing: bytes | InlineXbrl) -> DeclaredSegmentCount |
             continue
         latest = max(fact.context.end for fact in facts)
         at_latest = [fact for fact in facts if fact.context.end == latest]
-        values = {_whole(fact.value) for fact in at_latest}
+        values = {
+            int(fact.value) if fact.value is not None and fact.value == fact.value.to_integral_value() else None
+            for fact in at_latest
+        }
         value = values.pop() if len(values) == 1 else None
         printed = [fact.offset for fact in at_latest if not fact.hidden]
         statement = (
@@ -72,10 +75,6 @@ def declared_segment_count(filing: bytes | InlineXbrl) -> DeclaredSegmentCount |
         )
         return DeclaredSegmentCount(concept, value, latest, statement)
     return None
-
-
-def _whole(value: Decimal | None) -> int | None:
-    return int(value) if value is not None and value == value.to_integral_value() else None
 
 
 def _ruleset_concepts(*fields: str) -> tuple[str, ...]:
@@ -112,19 +111,6 @@ def _is_geographic_member(member: str) -> bool:
         return True
     normalized = re.sub(r"[^a-z0-9]+", " ", segment_name_for(clean).lower()).strip()
     return normalized in _GEOGRAPHIC_REGION_NAMES
-
-
-def _prune_coarse_product_rollup(
-    members: dict[str, set[Decimal | None]],
-) -> dict[str, set[Decimal | None]]:
-    if "us-gaap:ProductMember" not in members:
-        return members
-    specific = [m for m in members if m not in ("us-gaap:ProductMember", "us-gaap:ServiceMember")]
-    if not specific:
-        return members
-    filtered = dict(members)
-    filtered.pop("us-gaap:ProductMember", None)
-    return filtered
 
 
 _SHAPES = (("segment-axis", ()), ("operating-segments", (_OPERATING_SEGMENTS,)))
@@ -169,29 +155,6 @@ def _collect_axis_members(
     return members, scale
 
 
-def _product_axis_candidate(
-    concept: str,
-    current: Sequence[TaggedFact],
-    period_end: date,
-    base_scale: int,
-    reconciling: tuple[tuple[str, Decimal], ...],
-) -> TaggedSegments | None:
-    raw_members, prod_scale = _collect_axis_members(current, _PRODUCT_AXIS, scale=base_scale)
-    prod_members = _prune_coarse_product_rollup(raw_members)
-    if not prod_members:
-        return None
-    prod_set = _tagged_set(
-        concept,
-        "product-axis",
-        period_end,
-        prod_members,
-        prod_scale,
-        reconciling,
-        check_geographic=False,
-    )
-    return prod_set if prod_set.refusal is None and prod_set.parts else None
-
-
 def _reconciling_items(current: Sequence[TaggedFact]) -> tuple[tuple[str, Decimal], ...]:
     items: dict[str, set[Decimal]] = {}
     for fact in current:
@@ -201,30 +164,6 @@ def _reconciling_items(current: Sequence[TaggedFact]) -> tuple[tuple[str, Decima
         if axis == _CONSOLIDATION_AXIS and member.split(":", 1)[-1] in _RECONCILING_LABELS:
             items.setdefault(member, set()).add(fact.value)
     return tuple(sorted((member, min(values)) for member, values in items.items() if len(values) == 1))
-
-
-def _segment_axis_candidates(
-    concept: str,
-    current: Sequence[TaggedFact],
-    period_end: date,
-    reconciling: tuple[tuple[str, Decimal], ...],
-) -> tuple[list[TaggedSegments], int]:
-    by_shape: dict[str, dict[str, set[Decimal | None]]] = {}
-    scale = 0
-    for shape, extra in _SHAPES:
-        members, scale = _collect_axis_members(current, _SEGMENT_AXIS, extra, scale)
-        if members:
-            by_shape[shape] = members
-    union: dict[str, set[Decimal | None]] = {}
-    for members in by_shape.values():
-        for member, values in members.items():
-            union.setdefault(member, set()).update(values)
-    candidates = [("all", union)] if union else []
-    candidates += [(shape, members) for shape, members in by_shape.items() if members != union]
-    concept_sets = [
-        _tagged_set(concept, shape, period_end, members, scale, reconciling) for shape, members in candidates
-    ]
-    return concept_sets, scale
 
 
 def tagged_segment_revenues(filing: bytes | InlineXbrl) -> tuple[TaggedSegments, ...]:
@@ -242,11 +181,34 @@ def tagged_segment_revenues(filing: bytes | InlineXbrl) -> tuple[TaggedSegments,
     for concept in _REVENUE_CONCEPTS:
         current = [fact for fact in facts if fact.concept == concept and fact.context.end == latest]
         reconciling = _reconciling_items(current)
-        concept_sets, scale = _segment_axis_candidates(concept, current, latest, reconciling)
+        by_shape: dict[str, dict[str, set[Decimal | None]]] = {}
+        scale = 0
+        for shape, extra in _SHAPES:
+            members, scale = _collect_axis_members(current, _SEGMENT_AXIS, extra, scale)
+            if members:
+                by_shape[shape] = members
+        union: dict[str, set[Decimal | None]] = {}
+        for members in by_shape.values():
+            for member, values in members.items():
+                union.setdefault(member, set()).update(values)
+        candidates = [("all", union)] if union else []
+        candidates += [(shape, members) for shape, members in by_shape.items() if members != union]
+        concept_sets = [
+            _tagged_set(concept, shape, latest, members, scale, reconciling) for shape, members in candidates
+        ]
         found.extend(concept_sets)
         if concept_sets and all(seg.refusal == "geographic_axis_members" for seg in concept_sets):
-            if (prod_set := _product_axis_candidate(concept, current, latest, scale, reconciling)) is not None:
-                found.append(prod_set)
+            prod_members, prod_scale = _collect_axis_members(current, _PRODUCT_AXIS, scale=scale)
+            if "us-gaap:ProductMember" in prod_members and any(
+                m not in ("us-gaap:ProductMember", "us-gaap:ServiceMember") for m in prod_members
+            ):
+                prod_members.pop("us-gaap:ProductMember", None)
+            if prod_members:
+                prod_set = _tagged_set(
+                    concept, "product-axis", latest, prod_members, prod_scale, reconciling, check_geographic=False
+                )
+                if prod_set.refusal is None and prod_set.parts:
+                    found.append(prod_set)
     return tuple(found)
 
 
@@ -260,16 +222,19 @@ def _tagged_set(
     *,
     check_geographic: bool = True,
 ) -> TaggedSegments:
+    refusal: str | None = None
+    parts: tuple[tuple[str, Decimal], ...] = ()
     if any(None in tagged for tagged in members.values()):
-        return TaggedSegments(concept, shape, period_end, (), scale, "unreadable_value")
-    if any(len(tagged) > 1 for tagged in members.values()):
-        return TaggedSegments(concept, shape, period_end, (), scale, "member_tagged_twice")
-    parts = tuple(sorted((member, value) for member, (value,) in members.items() if value is not None))
-    if any(value < 0 for _, value in parts):
-        return TaggedSegments(concept, shape, period_end, (), scale, "negative_part")
-    if check_geographic and parts and all(_is_geographic_member(member) for member, _ in parts):
-        return TaggedSegments(concept, shape, period_end, (), scale, "geographic_axis_members")
-    return TaggedSegments(concept, shape, period_end, parts, scale, None, reconciling)
+        refusal = "unreadable_value"
+    elif any(len(tagged) > 1 for tagged in members.values()):
+        refusal = "member_tagged_twice"
+    else:
+        parts = tuple(sorted((member, value) for member, (value,) in members.items() if value is not None))
+        if any(value < 0 for _, value in parts):
+            refusal, parts = "negative_part", ()
+        elif check_geographic and parts and all(_is_geographic_member(member) for member, _ in parts):
+            refusal, parts = "geographic_axis_members", ()
+    return TaggedSegments(concept, shape, period_end, parts, scale, refusal, () if refusal else reconciling)
 
 
 @dataclass(frozen=True)
@@ -457,9 +422,7 @@ def record_segment_partition(
         )
         for name, revenue in parts
     ]
-    with connection.cursor() as cur:
-        cur.executemany(query, rows)
-    return len(parts)
+    return execute_many(connection, query, rows)
 
 
 SINGLE_SEGMENT_NAME = "Single reportable segment"
@@ -523,64 +486,6 @@ def _land_partition(
     )
 
 
-def _tagged_segments_outcome(
-    connection: Any,
-    *,
-    cik: int,
-    record_cik: int,
-    document: Any,
-    oracle: ConsolidatedRevenue | None,
-    tagged: Sequence[TaggedSegments],
-    standard: MetricStandard,
-    write: bool,
-) -> ExtractionOutcome:
-    if oracle is None:
-        reason_text = "; ".join(f"{segments.label}: {PartitionRefusal.NO_TOTAL.value}" for segments in tagged)
-        return _doc_outcome(
-            cik,
-            "no_candidate",
-            document,
-            detail=f"tagged segment revenue accounts for no consolidated revenue ({reason_text})",
-        )
-    accepted = accepted_tagged_partition(tagged, total=oracle.value, period_end=oracle.period_end)
-    if isinstance(accepted, list):
-        return _doc_outcome(
-            cik,
-            "no_candidate",
-            document,
-            detail=f"tagged segment revenue accounts for no consolidated revenue ({'; '.join(accepted)})",
-        )
-    parts = [(segment_name_for(member), value) for member, value in accepted.parts]
-    named = ", ".join(f"{name}={value}" for name, value in parts)
-    verdict = accepted.verdict
-    return _land_partition(
-        connection,
-        record_cik=record_cik,
-        document=document,
-        oracle=oracle,
-        parts=parts,
-        residual=Decimal(str(verdict.residual)),
-        extractor=verdict.extractor,
-        evidence_ref=" ".join(
-            [
-                f"accession={document.accession}",
-                f"form={document.form}",
-                "recall=xbrl",
-                f"concept={accepted.segments.concept}",
-                f"shape={accepted.segments.shape}",
-                f"members={','.join(member for member, _ in accepted.segments.parts)}",
-            ]
-            + ([f"reconciling={accepted.reconciling}"] if accepted.reconciling else [])
-        ),
-        standard=standard,
-        write=write,
-        summary=(
-            f"{len(parts)} parts accounting for {verdict.total} (residual {verdict.residual}) "
-            f"for {oracle.period_end}: {named}"
-        ),
-    )
-
-
 def extract_segment_revenue(
     cik: int,
     *,
@@ -612,6 +517,7 @@ def extract_segment_revenue(
     oracle = consolidated_revenue(connection, record_cik, cutoff=cutoff)
     xbrl = InlineXbrl(document.body)
     declared = declared_segment_count(xbrl)
+    base_ref = f"accession={document.accession} form={document.form}"
     if declared is not None and declared.value == 1 and oracle is not None:
         if declared.period_end != oracle.period_end:
             return _doc_outcome(
@@ -624,6 +530,7 @@ def extract_segment_revenue(
                 ),
             )
         statement = single_segment_description(xbrl, declared, document.body)
+        stmt_ref = f" single_segment_statement={statement[:_DESCRIPTION_LIMIT]}" if statement else ""
         return _land_partition(
             connection,
             record_cik=record_cik,
@@ -632,10 +539,7 @@ def extract_segment_revenue(
             parts=[(SINGLE_SEGMENT_NAME, oracle.value)],
             residual=Decimal(0),
             extractor=RULE_SINGLE_SEGMENT,
-            evidence_ref=" ".join(
-                [f"accession={document.accession}", f"form={document.form}", f"segment_count={declared.evidence}"]
-                + ([f"single_segment_statement={statement[:_DESCRIPTION_LIMIT]}"] if statement else [])
-            ),
+            evidence_ref=f"{base_ref} segment_count={declared.evidence}{stmt_ref}",
             standard=standard,
             write=write,
             summary=(
@@ -645,17 +549,43 @@ def extract_segment_revenue(
             note=f": {(statement or '')[:160]}",
         )
 
-    tagged = tagged_segment_revenues(xbrl)
-    if tagged:
-        return _tagged_segments_outcome(
+    if tagged := tagged_segment_revenues(xbrl):
+        accepted = (
+            [f"{s.label}: {PartitionRefusal.NO_TOTAL.value}" for s in tagged]
+            if oracle is None
+            else accepted_tagged_partition(tagged, total=oracle.value, period_end=oracle.period_end)
+        )
+        if oracle is None or isinstance(accepted, list):
+            refusals = accepted if isinstance(accepted, list) else []
+            return _doc_outcome(
+                cik,
+                "no_candidate",
+                document,
+                detail=f"tagged segment revenue accounts for no consolidated revenue ({'; '.join(refusals)})",
+            )
+        parts = [(segment_name_for(member), value) for member, value in accepted.parts]
+        named = ", ".join(f"{name}={value}" for name, value in parts)
+        verdict = accepted.verdict
+        reconciling_ref = f" reconciling={accepted.reconciling}" if accepted.reconciling else ""
+        members_csv = ",".join(member for member, _ in accepted.segments.parts)
+        return _land_partition(
             connection,
-            cik=cik,
             record_cik=record_cik,
             document=document,
             oracle=oracle,
-            tagged=tagged,
+            parts=parts,
+            residual=Decimal(str(verdict.residual)),
+            extractor=verdict.extractor,
+            evidence_ref=(
+                f"{base_ref} recall=xbrl concept={accepted.segments.concept} "
+                f"shape={accepted.segments.shape} members={members_csv}{reconciling_ref}"
+            ),
             standard=standard,
             write=write,
+            summary=(
+                f"{len(parts)} parts accounting for {verdict.total} (residual {verdict.residual}) "
+                f"for {oracle.period_end}: {named}"
+            ),
         )
 
     if declared is not None and declared.value == 1:

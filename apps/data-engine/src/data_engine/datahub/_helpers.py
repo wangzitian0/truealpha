@@ -179,3 +179,17 @@ def unbacked_status_values(cutoff: datetime | None) -> tuple[datetime, str, str]
 def fetch_topt_cutoff(connection: Any, run_id: str) -> datetime | None:
     row = connection.execute("select cutoff from mart.topt_capture_status where run_id = %s", (run_id,)).fetchone()
     return row[0] if row is not None else None
+
+
+def execute_many(connection: Any, query: str, rows: Sequence[Any]) -> int:
+    """Use psycopg cursor.executemany when supported; fall back to connection.execute for mocks."""
+    if not rows:
+        return 0
+    if hasattr(connection, "pgconn") and callable(getattr(connection, "cursor", None)):
+        with connection.cursor() as cur:
+            cur.executemany(query, rows)
+            rowcount = getattr(cur, "rowcount", -1)
+            return int(rowcount) if isinstance(rowcount, int) and rowcount >= 0 else len(rows)
+    for row in rows:
+        connection.execute(query, row)
+    return len(rows)

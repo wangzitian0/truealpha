@@ -72,24 +72,25 @@ NIGHTLY_VERDICTS: tuple[str, ...] = (
     TOPT_BASELINE_VERDICT,
 )
 
-_IMAGE_COPY = Path("/app/common/runtime/src/truealpha_tools/output_invariants.py")
-_REPO_COPY = (
-    Path(__file__).resolve().parents[5] / "common" / "runtime" / "src" / "truealpha_tools" / "output_invariants.py"
-)
-
 
 def _suite_path() -> Path:
-    for candidate in (_IMAGE_COPY, _REPO_COPY):
+    candidates = (
+        Path("/app/common/runtime/src/truealpha_tools/output_invariants.py"),
+        Path(__file__).resolve().parents[5] / "common/runtime/src/truealpha_tools/output_invariants.py",
+    )
+    for candidate in candidates:
         if candidate.exists():
             return candidate
-    raise FileNotFoundError(f"output_invariants.py is neither at {_IMAGE_COPY} nor {_REPO_COPY}")
+    raise FileNotFoundError(f"output_invariants.py is neither at {candidates[0]} nor {candidates[1]}")
+
+
+def _op_verdict(context: dg.OpExecutionContext, name: str, *, tick: datetime | None = None):
+    return verdict(name, registered=NIGHTLY_VERDICTS, run_id=context.run_id, tick=tick or tick_of(context))
 
 
 @external_op
 def run_output_invariants(context: dg.OpExecutionContext) -> str:
-    with verdict(
-        OUTPUT_INVARIANTS_VERDICT, registered=NIGHTLY_VERDICTS, run_id=context.run_id, tick=tick_of(context)
-    ) as outcome:
+    with _op_verdict(context, OUTPUT_INVARIANTS_VERDICT) as outcome:
         _await_settled(context)
         module = runpy.run_path(str(_suite_path()), run_name="output_invariants")
         report = io.StringIO()
@@ -105,18 +106,16 @@ def run_output_invariants(context: dg.OpExecutionContext) -> str:
 
 
 def invariants_summary(lines: list[str], exit_code: int) -> str:
-    marks = [line.split()[0] for line in lines if line.startswith("  ") and line.split()]
-    held, deferred, empty = marks.count("ok"), marks.count("DEFERRED"), marks.count("EMPTY")
+    marks = [parts[0] for line in lines if line.startswith("  ") and (parts := line.split())]
+    counts = f"{marks.count('ok')} held, {marks.count('DEFERRED')} deferred, {marks.count('EMPTY')} empty"
+    if exit_code == 0:
+        return counts
     failed = [
         line.removeprefix("invariant failed: ").split(":", 1)[0]
         for line in lines
         if line.startswith("invariant failed: ")
     ]
-    counts = f"{held} held, {deferred} deferred, {empty} empty"
-    if exit_code == 0:
-        return counts
-    named = ", ".join(failed) if failed else "none named, see the run log"
-    return f"exit {exit_code}: {len(failed)} failed ({named}); {counts}"
+    return f"exit {exit_code}: {len(failed)} failed ({', '.join(failed) or 'none named, see the run log'}); {counts}"
 
 
 UNFINISHED_RUN_STATUSES = (
@@ -131,16 +130,14 @@ IN_FLIGHT_MAX_AGE = timedelta(hours=12)
 
 def runs_in_flight(instance: dg.DagsterInstance, *, now: datetime | None = None) -> dict[str, str]:
     created_after = (now or datetime.now(UTC)) - IN_FLIGHT_MAX_AGE
+    statuses = list(UNFINISHED_RUN_STATUSES)
     served = {lane_name(key) for key in served_keys()}
     ticks = {tick.job_name: tick.lane_name for tick in TICKS if tick.lane_name in served}
     found: dict[str, str] = {}
     for job_name in (*ticks, HEAD_REPORTS_JOB_NAME, STANDARD_BACKFILL_JOB_NAME):
-        runs = instance.get_runs(
-            filters=dg.RunsFilter(
-                job_name=job_name, statuses=list(UNFINISHED_RUN_STATUSES), created_after=created_after
-            )
-        )
-        for run in runs:
+        for run in instance.get_runs(
+            filters=dg.RunsFilter(job_name=job_name, statuses=statuses, created_after=created_after)
+        ):
             universe = ticks.get(job_name) or run_universe(run.run_config or {})
             if universe in served:
                 found.setdefault(
@@ -174,10 +171,6 @@ def _await_settled(context: dg.OpExecutionContext) -> None:
         _sleep(SURFACE_SETTLE_POLL_SECONDS)
 
 
-_SERVED_HEADS_SQL = (
-    "select universe_id, freshness, availability, staleness_reason from mart.served_head order by universe_id"
-)
-
 NO_SCHEDULED_HEAD = "no scheduled governed head"
 
 
@@ -196,18 +189,20 @@ def stale_served_heads(
     out: list[str] = []
     scheduled = 0
     contract = load_environment_contract()
-    for row in connection.execute(_SERVED_HEADS_SQL).fetchall():
-        universe_id = str(row[0])
-        if universe_prefix and not universe_id.startswith(universe_prefix):
-            continue
-        if not contract.is_head_scheduled(universe_id, environment):
+    rows = connection.execute(
+        "select universe_id, freshness, availability, staleness_reason from mart.served_head order by universe_id"
+    ).fetchall()
+    for universe_id, freshness, availability, *rest in rows:
+        uid = str(universe_id)
+        if (universe_prefix and not uid.startswith(universe_prefix)) or not contract.is_head_scheduled(
+            uid, environment
+        ):
             continue
         scheduled += 1
-        freshness, availability = str(row[1]), str(row[2])
-        if freshness == "fresh" and availability == "available":
+        if str(freshness) == "fresh" and str(availability) == "available":
             continue
-        reason = f" ({row[3]})" if len(row) > 3 and row[3] else ""
-        out.append(f"{universe_id} freshness={freshness} availability={availability}{reason}")
+        reason = f" ({rest[0]})" if rest and rest[0] else ""
+        out.append(f"{uid} freshness={freshness} availability={availability}{reason}")
     if require_head and not scheduled:
         out.append(f"{NO_SCHEDULED_HEAD} in {environment}: freshness is not proven (#28 V3)")
     return out
@@ -217,16 +212,13 @@ def stale_served_heads(
 def run_report_surface_proof(context: dg.OpExecutionContext) -> str:
     from data_engine.quality.surface_proof import prove, summary_lines, verdict_counts
 
-    with verdict(
-        REPORT_SURFACE_VERDICT, registered=NIGHTLY_VERDICTS, run_id=context.run_id, tick=tick_of(context)
-    ) as outcome:
+    with _op_verdict(context, REPORT_SURFACE_VERDICT) as outcome:
         _await_settled(context)
         with psycopg.connect(settings.database_url) as connection:
             connection.isolation_level = psycopg.IsolationLevel.REPEATABLE_READ
             connection.read_only = True
             now = datetime.now(UTC)
-            pending = settling(connection, context.instance, now=now)
-            surfaces = prove(connection, executed_at=now, settling=pending)
+            surfaces = prove(connection, executed_at=now, settling=settling(connection, context.instance, now=now))
             stale_heads = stale_served_heads(connection, require_head=True)
         for line in summary_lines(surfaces):
             context.log.info(line)
@@ -240,15 +232,13 @@ def run_report_surface_proof(context: dg.OpExecutionContext) -> str:
                 "in_progress": len(settling_surfaces),
             }
         )
-        outcome.summary = (
-            verdict_counts(surfaces).split(";", 1)[0]
-            + (
-                f"; in progress: {', '.join(surface.surface for surface in settling_surfaces)}"
-                if settling_surfaces
-                else ""
-            )
-            + (f"; mismatched: {', '.join(surface.surface for surface in failed)}" if failed else "")
-            + (f"; stale served_head: {', '.join(stale_heads)}" if stale_heads else "")
+        extras = (
+            ("in progress", [s.surface for s in settling_surfaces]),
+            ("mismatched", [s.surface for s in failed]),
+            ("stale served_head", stale_heads),
+        )
+        outcome.summary = "; ".join(
+            [verdict_counts(surfaces).split(";", 1)[0], *(f"{k}: {', '.join(v)}" for k, v in extras if v)]
         )
         if failed or stale_heads:
             reasons = [surface.line for surface in failed] + [f"mart.served_head {item}" for item in stale_heads]
@@ -311,11 +301,8 @@ def run_confidence_report(context: dg.OpExecutionContext, config: ConfidenceRepo
     from data_engine.datahub.confidence_report import compile_report, persist, summary_line
 
     executed_at = datetime.fromisoformat(config.executed_at)
-    with verdict(
-        check_name(CONFIDENCE_REPORT_VERDICT, config.universe),
-        registered=NIGHTLY_VERDICTS,
-        run_id=context.run_id,
-        tick=tick_from_config(config.executed_at),
+    with _op_verdict(
+        context, check_name(CONFIDENCE_REPORT_VERDICT, config.universe), tick=tick_from_config(config.executed_at)
     ) as outcome:
         _await_settled(context)
         with psycopg.connect(settings.database_url) as connection:
@@ -330,27 +317,25 @@ def run_confidence_report(context: dg.OpExecutionContext, config: ConfidenceRepo
                 context.log.warning("no governed head for %s; no confidence report", config.universe)
                 outcome.pending = True
                 outcome.summary = NO_HEAD_SUMMARY
-            else:
-                report_id = persist(connection, report)
-                connection.commit()
-                oracle_rows = record_oracle_outcomes_safely(
-                    connection, report["run_id"], compared_at=executed_at, log=context.log
+                return json.dumps({"universe": config.universe, "report": None})
+            report_id = persist(connection, report)
+            connection.commit()
+            oracle_rows = record_oracle_outcomes_safely(
+                connection, report["run_id"], compared_at=executed_at, log=context.log
+            )
+            comparators = _oracle_comparators_of(connection, report)
+            if not comparators:
+                outcome.pending = True
+                outcome.summary = f"no comparator for {report['universe_id']}"
+            elif zero_comparators := sorted(name for name, count in comparators.items() if count <= 0):
+                outcome.summary = (
+                    f"comparator {', '.join(zero_comparators)} compared 0 rows for {report['universe_id']}"
                 )
-                comparators = _oracle_comparators_of(connection, report)
-                if not comparators:
-                    outcome.pending = True
-                    outcome.summary = f"no comparator for {report['universe_id']}"
-                else:
-                    zero_comparators = sorted(name for name, count in comparators.items() if count <= 0)
-                    if zero_comparators:
-                        outcome.summary = (
-                            f"comparator {', '.join(zero_comparators)} compared 0 rows for {report['universe_id']}"
-                        )
-                        raise dg.Failure(f"datahub confidence report: {outcome.summary} (#1523)")
-                    outcome.summary = f"report persisted for {report['universe_id']}"
-    if report is None:
-        return json.dumps({"universe": config.universe, "report": None})
-    context.log.info("confidence report %s: %s", report_id, summary_line(report))
+                raise dg.Failure(f"datahub confidence report: {outcome.summary} (#1523)")
+            else:
+                outcome.summary = f"report persisted for {report['universe_id']}"
+    summary = summary_line(report)
+    context.log.info("confidence report %s: %s", report_id, summary)
     context.add_output_metadata(
         {
             "status": "pass",
@@ -364,7 +349,7 @@ def run_confidence_report(context: dg.OpExecutionContext, config: ConfidenceRepo
             "oracle_outcomes_rows": oracle_rows or 0,
         }
     )
-    return json.dumps({"status": "pass", "report_id": report_id, "summary": summary_line(report)})
+    return json.dumps({"status": "pass", "report_id": report_id, "summary": summary})
 
 
 @dg.job(name=CONFIDENCE_REPORT_JOB_NAME, tags={WAITS_FOR_RUNS_TAG: "true"})
@@ -393,9 +378,7 @@ def datahub_confidence_report_schedule(context: dg.ScheduleEvaluationContext):
 def run_model_key_health(context: dg.OpExecutionContext) -> str:
     from data_engine.quality.model_key_health import probe
 
-    with verdict(
-        MODEL_KEY_HEALTH_VERDICT, registered=NIGHTLY_VERDICTS, run_id=context.run_id, tick=tick_of(context)
-    ) as outcome:
+    with _op_verdict(context, MODEL_KEY_HEALTH_VERDICT) as outcome:
         health = probe()
         outcome.summary = health.summary
         context.log.info("model key health: %s", health.summary)
@@ -424,17 +407,24 @@ class _RedDashboardVerdict(dg.Failure):
 def _run_dashboard_verdict(
     context: dg.OpExecutionContext,
     verdict_name: str,
-    evaluate: Callable[[Any, datetime], tuple[dict[str, Any], dict[str, Any], str | None]],
+    label: str,
+    issue: str,
+    evaluate: Callable[[psycopg.Connection, Any, datetime], tuple[str, bool, dict[str, Any], dict[str, Any]]],
 ) -> str:
     payload: dict[str, Any] = {}
     tick = tick_of(context)
     now = tick or datetime.now(UTC)
     try:
-        with verdict(verdict_name, registered=NIGHTLY_VERDICTS, run_id=context.run_id, tick=tick) as outcome:
-            metadata, payload, red_msg = evaluate(outcome, now)
+        with (
+            _op_verdict(context, verdict_name, tick=tick) as outcome,
+            psycopg.connect(settings.database_url, autocommit=True) as connection,
+        ):
+            summary, is_red, metadata, payload = evaluate(connection, outcome, now)
+            context.log.info(f"{label}: {summary}")
+            outcome.summary = outcome.summary or summary
             context.add_output_metadata(metadata)
-            if red_msg is not None:
-                raise _RedDashboardVerdict(red_msg)
+            if is_red:
+                raise _RedDashboardVerdict(f"{label}: {summary} ({issue})")
     except _RedDashboardVerdict as red:
         context.log.warning(str(red))
     return json.dumps(payload)
@@ -442,23 +432,21 @@ def _run_dashboard_verdict(
 
 @external_op
 def run_job_run_health(context: dg.OpExecutionContext) -> str:
-    def _evaluate(outcome: Any, now: datetime) -> tuple[dict[str, Any], dict[str, Any], str | None]:
-        with psycopg.connect(settings.database_url, autocommit=True) as connection:
-            runs = job_run_health.read_runs(connection, now=now)
-        judgement = job_run_health.judge(runs, now=now)
-        context.log.info(f"job run health: {judgement.summary}")
-        outcome.summary = judgement.summary
+    def _evaluate(
+        connection: psycopg.Connection, outcome: Any, now: datetime
+    ) -> tuple[str, bool, dict[str, Any], dict[str, Any]]:
+        judgement = job_run_health.judge(job_run_health.read_runs(connection, now=now), now=now)
         if not judgement.jobs:
             outcome.pending = True
             outcome.summary = f"no finished run in {job_run_health.WINDOW_DAYS} days; nothing to judge"
-        red_msg = f"job run health: {judgement.summary} (#1466)" if judgement.red else None
         return (
+            judgement.summary,
+            bool(judgement.red),
             {"jobs": len(judgement.jobs), "red": len(judgement.red)},
             {"red": [job.job for job in judgement.red], "summary": judgement.summary},
-            red_msg,
         )
 
-    return _run_dashboard_verdict(context, JOB_RUN_HEALTH_VERDICT, _evaluate)
+    return _run_dashboard_verdict(context, JOB_RUN_HEALTH_VERDICT, "job run health", "#1466", _evaluate)
 
 
 @dg.job(name=JOB_RUN_HEALTH_JOB_NAME)
@@ -473,28 +461,25 @@ job_run_health_schedule = _tick_schedule("job_run_health_schedule", job_run_heal
 def run_topt_baseline(context: dg.OpExecutionContext) -> str:
     contract = load_environment_contract()
 
-    def _evaluate(outcome: Any, now: datetime) -> tuple[dict[str, Any], dict[str, Any], str | None]:
-        with psycopg.connect(settings.database_url, autocommit=True) as connection:
-            gppe = topt_baseline.read_q1(connection)
-            quota = topt_baseline.read_quota(
-                connection, now=now, environment=gateway.capacity_environment(), contract=contract
-            )
+    def _evaluate(
+        connection: psycopg.Connection, _outcome: Any, now: datetime
+    ) -> tuple[str, bool, dict[str, Any], dict[str, Any]]:
         judgement = topt_baseline.judge(
-            gppe=gppe,
-            quota=quota,
+            gppe=topt_baseline.read_q1(connection),
+            quota=topt_baseline.read_quota(
+                connection, now=now, environment=gateway.capacity_environment(), contract=contract
+            ),
             server=topt_baseline.read_server(budget_mib=contract.code_server_capacity.server_mib),
             schema=topt_baseline.read_schema(settings.database_url),
         )
-        context.log.info(f"topt baseline: {judgement.summary}")
-        outcome.summary = judgement.summary
-        red_msg = None if judgement.ok else f"topt baseline: {judgement.summary} (#1664)"
         return (
+            judgement.summary,
+            not judgement.ok,
             {"failed": len(judgement.failed), "not_measured": len(judgement.unmeasured)},
             {"failed": [row.key for row in judgement.failed], "summary": judgement.summary},
-            red_msg,
         )
 
-    return _run_dashboard_verdict(context, TOPT_BASELINE_VERDICT, _evaluate)
+    return _run_dashboard_verdict(context, TOPT_BASELINE_VERDICT, "topt baseline", "#1664", _evaluate)
 
 
 @dg.job(name=TOPT_BASELINE_JOB_NAME)
@@ -529,9 +514,9 @@ def output_invariants_on_advance_sensor(context: dg.SensorEvaluationContext):
     if context.cursor == state_key:
         yield dg.SkipReason("already evaluated on current build and governed heads")
         return
-    red = [name for name in (OUTPUT_INVARIANTS_VERDICT, REPORT_SURFACE_VERDICT) if newest_is_red(name)]
+    has_red = any(newest_is_red(name) for name in (OUTPUT_INVARIANTS_VERDICT, REPORT_SURFACE_VERDICT))
     context.update_cursor(state_key)
-    if not red:
+    if not has_red:
         yield dg.SkipReason("newest output_invariants and report_surface_proof verdicts are green")
         return
     tick = datetime.now(UTC).replace(microsecond=0).isoformat()

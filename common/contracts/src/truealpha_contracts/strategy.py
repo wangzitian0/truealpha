@@ -13,7 +13,7 @@ from enum import StrEnum
 from importlib import resources
 from importlib.resources.abc import Traversable
 from itertools import pairwise
-from typing import Annotated, Any, ClassVar, Literal, NamedTuple, Protocol, Self
+from typing import Annotated, Any, ClassVar, Literal, NamedTuple, Self
 
 from pydantic import AfterValidator, Field, ValidationInfo, field_validator, model_validator
 
@@ -44,18 +44,14 @@ from truealpha_contracts.universe import SubjectKind, SubjectRef, UniverseRef
 
 _STABLE_KEY_PATTERN = r"^[a-z][a-z0-9]*(?:[._:/-][a-z0-9]+)*$"
 _VERSION_PATTERN = r"^[a-z0-9][a-z0-9]*(?:[._-][a-z0-9]+)*$"
-_MUTABLE_TOKENS = frozenset({"current", "default", "head", "latest", "main", "master", "stable"})
-_QUARTER_END_MONTHS = frozenset({3, 6, 9, 12})
-
-
-def _validate_ref_hash(reference_id: str, content_sha256: str, field_name: str) -> None:
-    if not reference_id.endswith(f":{content_sha256}"):
-        raise ValueError(f"{field_name} ID and hash do not match")
 
 
 def _immutable_field(value: str, info: ValidationInfo) -> str:
     return require_stable_and_immutable(
-        value, info.field_name or "coordinate", mutable_tokens=_MUTABLE_TOKENS, pattern=None
+        value,
+        info.field_name or "coordinate",
+        mutable_tokens=frozenset({"current", "default", "head", "latest", "main", "master", "stable"}),
+        pattern=None,
     )
 
 
@@ -147,18 +143,6 @@ class CapitalChargeBase(StrEnum):
     TOTAL_ASSETS = "total_assets"
 
 
-_FORMULA_FIELDS = (
-    "numerator",
-    "capital_charge_base",
-    "denominator",
-    "formula",
-    "missing_numerator_reason",
-    "missing_capital_base_reason",
-    "missing_denominator_reason",
-    "nonpositive_denominator_reason",
-)
-
-
 class _FactorDefinitionBase(StrictIdentifiedFrozenModel):
     id_field = "factor_definition_id"
     id_prefix = "factor-definition"
@@ -170,7 +154,16 @@ class _FactorDefinitionBase(StrictIdentifiedFrozenModel):
 
 
 class CapitalAdjustedLaborEfficiencyDefinition(OmitNoneFields, _FactorDefinitionBase):
-    omit_none_fields = _FORMULA_FIELDS
+    omit_none_fields = (
+        "numerator",
+        "capital_charge_base",
+        "denominator",
+        "formula",
+        "missing_numerator_reason",
+        "missing_capital_base_reason",
+        "missing_denominator_reason",
+        "nonpositive_denominator_reason",
+    )
     factor_key: Literal["capital_adjusted_labor_efficiency"]
     numerator: LaborEfficiencyNumerator | None = None
     capital_charge_base: CapitalChargeBase | None = None
@@ -183,17 +176,22 @@ class CapitalAdjustedLaborEfficiencyDefinition(OmitNoneFields, _FactorDefinition
     nonpositive_denominator_reason: ExclusionReason | None = None
 
     def _canonicalize(self) -> None:
-        _require_all_or_none(self, _FORMULA_FIELDS, "formula")
-        if self.formula is not None:
-            self._validate_formula_semantics()
-
-    def _validate_formula_semantics(self) -> None:
-        is_hc = self.denominator is LaborEfficiencyDenominator.HEADCOUNT
-        expected_dim = FactorDimension.REPORTING_CURRENCY_PER_EMPLOYEE if is_hc else FactorDimension.DIMENSIONLESS
-        expected_missing = (
-            ExclusionReason.MISSING_HEADCOUNT_DISCLOSURE if is_hc else ExclusionReason.MISSING_LABOR_COST_DISCLOSURE
+        _require_all_or_none(self, self.omit_none_fields, "formula")
+        if self.formula is None:
+            return
+        expected_dim, expected_missing, expected_nonpos = (
+            (
+                FactorDimension.REPORTING_CURRENCY_PER_EMPLOYEE,
+                ExclusionReason.MISSING_HEADCOUNT_DISCLOSURE,
+                ExclusionReason.NONPOSITIVE_HEADCOUNT,
+            )
+            if self.denominator is LaborEfficiencyDenominator.HEADCOUNT
+            else (
+                FactorDimension.DIMENSIONLESS,
+                ExclusionReason.MISSING_LABOR_COST_DISCLOSURE,
+                ExclusionReason.NONPOSITIVE_LABOR_COST,
+            )
         )
-        expected_nonpos = ExclusionReason.NONPOSITIVE_HEADCOUNT if is_hc else ExclusionReason.NONPOSITIVE_LABOR_COST
         _require_checks(
             (
                 self.numerator is LaborEfficiencyNumerator.GROSS_PROFIT
@@ -226,64 +224,57 @@ class LaborEfficiencyTreePin(StrictFrozenModel):
 
 
 class _MarketMultipleDefinitionBase(_FactorDefinitionBase):
+    _multiple_spec: ClassVar[tuple[str, str, ExclusionReason, ExclusionReason]]
     market_value_rule: Literal["shares_outstanding_times_last_unadjusted_close"]
     price_rule: Literal["last_unadjusted_close_at_or_before_cutoff"]
     shares_rule: Literal["latest_knowable_shares_outstanding_at_or_before_cutoff"]
     missing_market_value_reason: ExclusionReason
 
-    def _validate_multiple(
-        self,
-        label: str,
-        missing: ExclusionReason,
-        nonpositive: ExclusionReason,
-        exp_missing: ExclusionReason,
-        exp_nonpos: ExclusionReason,
-        item_name: str,
-    ) -> None:
+    def _canonicalize(self) -> None:
+        stem, label, exp_missing, exp_nonpos = self._multiple_spec
         if self.unit.dimension is not FactorDimension.DIMENSIONLESS:
             raise ValueError(f"{label} is a dimensionless ratio")
+        item_name = stem.replace("_", " ")
         _require_checks(
             (
                 self.missing_market_value_reason is not ExclusionReason.MISSING_MARKET_VALUE_INPUT,
                 "missing market-value inputs must use their exact reason code",
             ),
-            (missing is not exp_missing, f"missing {item_name} must use its exact reason code"),
-            (nonpositive is not exp_nonpos, f"nonpositive {item_name} must use its exact reason code"),
+            (
+                getattr(self, f"missing_{stem}_reason") is not exp_missing,
+                f"missing {item_name} must use its exact reason code",
+            ),
+            (
+                getattr(self, f"nonpositive_{stem}_reason") is not exp_nonpos,
+                f"nonpositive {item_name} must use its exact reason code",
+            ),
         )
 
 
 class PriceToSalesDefinition(_MarketMultipleDefinitionBase):
+    _multiple_spec = (
+        "revenue",
+        "price-to-sales",
+        ExclusionReason.MISSING_REVENUE_FACT,
+        ExclusionReason.NONPOSITIVE_REVENUE,
+    )
     factor_key: Literal["price_to_sales"]
     revenue_rule: Literal["latest_complete_fiscal_year_total_revenue"]
     missing_revenue_reason: ExclusionReason
     nonpositive_revenue_reason: ExclusionReason
 
-    def _canonicalize(self) -> None:
-        self._validate_multiple(
-            "price-to-sales",
-            self.missing_revenue_reason,
-            self.nonpositive_revenue_reason,
-            ExclusionReason.MISSING_REVENUE_FACT,
-            ExclusionReason.NONPOSITIVE_REVENUE,
-            "revenue",
-        )
-
 
 class PriceToGrossProfitDefinition(_MarketMultipleDefinitionBase):
+    _multiple_spec = (
+        "gross_profit",
+        "price-to-gross-profit",
+        ExclusionReason.MISSING_GROSS_PROFIT_FACT,
+        ExclusionReason.NONPOSITIVE_GROSS_PROFIT,
+    )
     factor_key: Literal["price_to_gross_profit"]
     gross_profit_rule: Literal["latest_complete_fiscal_year_gross_profit"]
     missing_gross_profit_reason: ExclusionReason
     nonpositive_gross_profit_reason: ExclusionReason
-
-    def _canonicalize(self) -> None:
-        self._validate_multiple(
-            "price-to-gross-profit",
-            self.missing_gross_profit_reason,
-            self.nonpositive_gross_profit_reason,
-            ExclusionReason.MISSING_GROSS_PROFIT_FACT,
-            ExclusionReason.NONPOSITIVE_GROSS_PROFIT,
-            "gross profit",
-        )
 
 
 class ValuationBasis(StrEnum):
@@ -292,36 +283,6 @@ class ValuationBasis(StrEnum):
 
 
 _TIER_ORDER = {ValuationTier.TRADITIONAL: 0, ValuationTier.TECH: 1, ValuationTier.LARGE_MODEL_NATIVE: 2}
-
-
-class _TierBand(Protocol):
-    @property
-    def tier(self) -> ValuationTier: ...
-    @property
-    def labor_efficiency_lower_bound(self) -> Decimal | None: ...
-    @property
-    def labor_efficiency_upper_bound(self) -> Decimal | None: ...
-
-
-def _ordered_tier_bands[BandT: _TierBand](bands: tuple[BandT, ...]) -> tuple[BandT, ...]:
-    ordered = tuple(sorted(bands, key=lambda item: _TIER_ORDER[item.tier]))
-    if {band.tier for band in ordered} != set(ValuationTier):
-        raise ValueError("tier bands require exactly traditional, tech, and large-model-native")
-    if ordered[0].labor_efficiency_lower_bound is not None or ordered[-1].labor_efficiency_upper_bound is not None:
-        raise ValueError("tier bands must cover the complete labor-efficiency domain")
-    for left, right in pairwise(ordered):
-        if left.labor_efficiency_upper_bound != right.labor_efficiency_lower_bound:
-            raise ValueError("tier bands must be contiguous and unambiguous")
-    return ordered
-
-
-def _band_for[BandT: _TierBand](bands: tuple[BandT, ...], labor_efficiency: Decimal) -> BandT:
-    for band in bands:
-        lo_ok = band.labor_efficiency_lower_bound is None or labor_efficiency >= band.labor_efficiency_lower_bound
-        hi_ok = band.labor_efficiency_upper_bound is None or labor_efficiency < band.labor_efficiency_upper_bound
-        if lo_ok and hi_ok:
-            return band
-    raise ValueError("tier bands do not cover the supplied labor efficiency")
 
 
 class _TierBandBase(StrictFrozenModel):
@@ -374,10 +335,25 @@ class _ThreeTierValuationBase(_FactorDefinitionBase):
     def _canonicalize(self) -> None:
         if self.unit.dimension is not FactorDimension.DIMENSIONLESS:
             raise ValueError(f"target {self.target_label} is a dimensionless ratio")
-        object.__setattr__(self, "bands", _ordered_tier_bands(getattr(self, "bands")))
+        ordered: tuple[_TierBandBase, ...] = tuple(
+            sorted(getattr(self, "bands"), key=lambda item: _TIER_ORDER[item.tier])
+        )
+        if {band.tier for band in ordered} != set(ValuationTier):
+            raise ValueError("tier bands require exactly traditional, tech, and large-model-native")
+        if ordered[0].labor_efficiency_lower_bound is not None or ordered[-1].labor_efficiency_upper_bound is not None:
+            raise ValueError("tier bands must cover the complete labor-efficiency domain")
+        for left, right in pairwise(ordered):
+            if left.labor_efficiency_upper_bound != right.labor_efficiency_lower_bound:
+                raise ValueError("tier bands must be contiguous and unambiguous")
+        object.__setattr__(self, "bands", ordered)
 
     def band_for(self, labor_efficiency: Decimal) -> Any:
-        return _band_for(getattr(self, "bands"), labor_efficiency)
+        for band in getattr(self, "bands"):
+            lo_ok = band.labor_efficiency_lower_bound is None or labor_efficiency >= band.labor_efficiency_lower_bound
+            hi_ok = band.labor_efficiency_upper_bound is None or labor_efficiency < band.labor_efficiency_upper_bound
+            if lo_ok and hi_ok:
+                return band
+        raise ValueError("tier bands do not cover the supplied labor efficiency")
 
 
 class ThreeTierValuationDefinition(_ThreeTierValuationBase):
@@ -419,11 +395,8 @@ class ValuationGapRule(StrictFrozenModel):
     tie_break: Literal["ascending_issuer_id"]
 
 
-_CONFIDENCE_FLOOR_FIELDS = ("rule_id", "minimum_confidence", "confidence_semantics", "below_floor_reason")
-
-
 class ConfidenceEligibilityRule(OmitNoneFields, StrictFrozenModel):
-    omit_none_fields = _CONFIDENCE_FLOOR_FIELDS
+    omit_none_fields = ("rule_id", "minimum_confidence", "confidence_semantics", "below_floor_reason")
     rule_id: Literal["minimum_consumed_confidence_floor"] | None = None
     minimum_confidence: ParsedSafeDecimal | None = Field(default=None, ge=0, le=1)
     confidence_semantics: Literal["minimum_consumed_input_confidence"] | None = None
@@ -433,7 +406,7 @@ class ConfidenceEligibilityRule(OmitNoneFields, StrictFrozenModel):
 
     @model_validator(mode="after")
     def validate_reasons(self) -> Self:
-        _require_all_or_none(self, _CONFIDENCE_FLOOR_FIELDS, "confidence-floor")
+        _require_all_or_none(self, self.omit_none_fields, "confidence-floor")
         _require_checks(
             (
                 self.below_floor_reason is not None
@@ -470,7 +443,7 @@ class QuarterlyCutoffSchedule(StrictFrozenModel):
     def validate_first_cutoff_at(cls, value: datetime) -> datetime:
         canonical = require_aware(value, "first_cutoff_at").astimezone(UTC)
         _require_checks(
-            (canonical.month not in _QUARTER_END_MONTHS, "quarterly cutoffs must land on calendar quarter ends"),
+            (canonical.month not in {3, 6, 9, 12}, "quarterly cutoffs must land on calendar quarter ends"),
             (
                 (canonical + timedelta(days=1)).month == canonical.month,
                 "quarterly cutoffs must use the last calendar day of the quarter",
@@ -654,6 +627,21 @@ class GoldenInputRecord(StrictFrozenModel):
     grounding: str = Field(min_length=1)
 
 
+_OUTCOME_SHAPE = {
+    GoldenDecisionOutcome.SELECTED: (True, True, "a selected decision requires a rank and a target weight"),
+    GoldenDecisionOutcome.RANKED_BEYOND_SELECTION_COUNT: (
+        True,
+        False,
+        "a ranked-beyond decision carries a rank and no weight",
+    ),
+    GoldenDecisionOutcome.REJECTED_VALUATION_ABOVE_TIER_BAND: (
+        False,
+        False,
+        "a valuation-rejected decision carries no rank or weight",
+    ),
+}
+
+
 class GoldenExpectation(OmitNoneFields, StrictFrozenModel):
     omit_none_fields = ("current_price_to_gross_profit", "target_price_to_gross_profit")
     capital_adjusted_labor_efficiency: ParsedSafeDecimal | None
@@ -685,25 +673,13 @@ class GoldenExpectation(OmitNoneFields, StrictFrozenModel):
         by_ps = self.target_price_to_sales is not None and all(v is None for v in pgp)
         by_pgp = self.target_price_to_sales is None and all(v is not None for v in pgp)
         factors = (self.capital_adjusted_labor_efficiency, self.tier, self.current_price_to_sales, self.valuation_gap)
+        exp_rank, exp_weight, shape_msg = _OUTCOME_SHAPE[self.outcome]
         _require_checks(
             (self.exclusion_reason is not None, "only excluded decisions carry an exclusion reason"),
             (not self.eligible, "non-excluded decisions passed eligibility"),
             (any(v is None for v in factors), "eligible decisions require every expected factor value"),
             (not (by_ps or by_pgp), "eligible decisions require the target multiple of exactly one valuation basis"),
-            (
-                self.outcome is GoldenDecisionOutcome.SELECTED and (self.rank is None or self.target_weight is None),
-                "a selected decision requires a rank and a target weight",
-            ),
-            (
-                self.outcome is GoldenDecisionOutcome.RANKED_BEYOND_SELECTION_COUNT
-                and (self.rank is None or self.target_weight is not None),
-                "a ranked-beyond decision carries a rank and no weight",
-            ),
-            (
-                self.outcome is GoldenDecisionOutcome.REJECTED_VALUATION_ABOVE_TIER_BAND
-                and (self.rank is not None or self.target_weight is not None),
-                "a valuation-rejected decision carries no rank or weight",
-            ),
+            ((self.rank is not None) != exp_rank or (self.target_weight is not None) != exp_weight, shape_msg),
         )
         return self
 
@@ -741,21 +717,6 @@ _REQUIRED_GOLDEN_OUTCOMES = frozenset(
 )
 
 
-def _validate_cutoff_ranks(at_cutoff: list[GoldenDecision]) -> None:
-    ranked = sorted((d for d in at_cutoff if d.expected.rank is not None), key=lambda d: d.expected.rank or 0)
-    selected = [d for d in ranked if d.expected.outcome is GoldenDecisionOutcome.SELECTED]
-    weights = [d.expected.target_weight for d in selected if d.expected.target_weight is not None]
-    _require_checks(
-        (
-            [d.expected.rank for d in ranked] != list(range(1, len(ranked) + 1)),
-            "golden ranks must be contiguous from one within each cutoff",
-        ),
-        (selected != ranked[: len(selected)], "selected golden ranks must precede ranked-beyond decisions"),
-        (bool(weights and sum(weights) > 1), "selected golden weights cannot exceed a fully invested portfolio"),
-        (len(set(weights)) > 1, "equal-weight golden selections must share one target weight"),
-    )
-
-
 class GoldenDecisionSet(StrictIdentifiedFrozenModel):
     id_field = "golden_decision_set_id"
     id_prefix = "golden-decision-set"
@@ -767,19 +728,22 @@ class GoldenDecisionSet(StrictIdentifiedFrozenModel):
     decisions: tuple[GoldenDecision, ...] = Field(min_length=6)
 
     def _canonicalize(self) -> None:
-        _validate_ref_hash(self.strategy_definition_id, self.strategy_definition_sha256, "strategy definition")
         rates = tuple(sorted(self.risk_free_rates, key=lambda i: i.cutoff_at))
-        rate_cutoffs = tuple(i.cutoff_at for i in rates)
+        rate_cutoffs = {i.cutoff_at for i in rates}
         decisions = tuple(sorted(self.decisions, key=lambda i: (i.cutoff_at, i.issuer.id)))
         decision_cutoffs = {d.cutoff_at for d in decisions}
         _require_checks(
-            (len(rate_cutoffs) != len(set(rate_cutoffs)), "risk-free rate cutoffs must be unique"),
+            (
+                not self.strategy_definition_id.endswith(f":{self.strategy_definition_sha256}"),
+                "strategy definition ID and hash do not match",
+            ),
+            (len(rates) != len(rate_cutoffs), "risk-free rate cutoffs must be unique"),
             (len({d.decision_key for d in decisions}) != len(decisions), "golden decision keys must be unique"),
             (
                 len({(d.issuer.id, d.cutoff_at) for d in decisions}) != len(decisions),
                 "golden decisions must be unique per issuer and cutoff",
             ),
-            (decision_cutoffs != set(rate_cutoffs), "every golden cutoff requires exactly one declared risk-free rate"),
+            (decision_cutoffs != rate_cutoffs, "every golden cutoff requires exactly one declared risk-free rate"),
             (
                 len({d.issuer.id for d in decisions}) < 3,
                 "golden decisions require at least three materially different issuers",
@@ -791,7 +755,24 @@ class GoldenDecisionSet(StrictIdentifiedFrozenModel):
             ),
         )
         for cutoff in decision_cutoffs:
-            _validate_cutoff_ranks([d for d in decisions if d.cutoff_at == cutoff])
+            ranked = sorted(
+                (d for d in decisions if d.cutoff_at == cutoff and d.expected.rank is not None),
+                key=lambda d: d.expected.rank or 0,
+            )
+            selected = [d for d in ranked if d.expected.outcome is GoldenDecisionOutcome.SELECTED]
+            weights = [d.expected.target_weight for d in selected if d.expected.target_weight is not None]
+            _require_checks(
+                (
+                    [d.expected.rank for d in ranked] != list(range(1, len(ranked) + 1)),
+                    "golden ranks must be contiguous from one within each cutoff",
+                ),
+                (selected != ranked[: len(selected)], "selected golden ranks must precede ranked-beyond decisions"),
+                (
+                    bool(weights and sum(weights) > 1),
+                    "selected golden weights cannot exceed a fully invested portfolio",
+                ),
+                (len(set(weights)) > 1, "equal-weight golden selections must share one target weight"),
+            )
         object.__setattr__(self, "risk_free_rates", rates)
         object.__setattr__(self, "decisions", decisions)
 
