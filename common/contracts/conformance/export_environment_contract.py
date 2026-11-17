@@ -41,8 +41,7 @@ def render() -> str:
         for k, u in contract.universes.items()
     ]
     sentinels = [
-        {"ticker": m.ticker, "issuer_id": m.issuer_id, "listing_id": m.listing_id, "trait": m.trait}
-        for m in contract.sentinels
+        m.model_dump(mode="json", include={"ticker", "issuer_id", "listing_id", "trait"}) for m in contract.sentinels
     ]
     env_names = tuple(contract.vendor_accounts.default_percent.keys())
     vendor_accounts = []
@@ -50,20 +49,11 @@ def render() -> str:
         shares = {e: contract.account_share(name, e) for e in env_names}
         limits = [
             {
-                "id": lim.id,
-                "unit": lim.unit,
-                "amount": lim.amount,
-                "window_seconds": lim.window_seconds,
-                "counts_per": lim.counts_per,
-                "applies_to": lim.applies_to,
+                **lim.model_dump(
+                    mode="json", include={"id", "unit", "amount", "window_seconds", "counts_per", "applies_to"}
+                ),
                 "divided": lim.divided,
-                "evidence": {
-                    "kind": lim.evidence.kind,
-                    "source": list(lim.evidence.source),
-                    "checked_at": lim.evidence.checked_at,
-                    "method": lim.evidence.method,
-                    "reason": lim.evidence.reason,
-                },
+                "evidence": lim.evidence.model_dump(mode="json"),
                 "shares": {e: shares[e].limits[i].share for e in env_names},
             }
             for i, lim in enumerate(acc.limits)
@@ -71,23 +61,20 @@ def render() -> str:
         vendor_accounts.append(
             {
                 "name": name,
-                "holder": acc.holder,
-                "seats": list(acc.seats),
-                "outside_consumers": acc.outside_consumers,
+                **acc.model_dump(mode="json", include={"holder", "seats", "outside_consumers"}),
                 "percent": {e: shares[e].percent for e in env_names},
-                "percent_reason": acc.percent_reason,
-                "note": acc.note,
+                **acc.model_dump(mode="json", include={"percent_reason", "note"}),
                 "limits": limits,
             }
         )
-    model_seat = {
-        "seat": contract.model_seat.seat,
-        "measured_at": contract.model_seat.measured_at,
-        "environments": {
-            e: {"max_concurrent_calls": lim.max_concurrent_calls, "calls_per_minute": lim.calls_per_minute}
-            for e, lim in contract.model_seat.environments.items()
+    model_seat = contract.model_seat.model_dump(
+        mode="json",
+        include={
+            "seat": True,
+            "measured_at": True,
+            "environments": {"__all__": {"max_concurrent_calls", "calls_per_minute"}},
         },
-    }
+    )
     nightly_verdicts = {
         "checks": list(contract.nightly_verdicts.checks.keys()),
         "per_universe": list(contract.nightly_verdicts.per_universe.keys()),

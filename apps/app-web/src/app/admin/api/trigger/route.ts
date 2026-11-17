@@ -1,13 +1,3 @@
-/**
- * #495 (surface 2): POST /admin/api/trigger — administrator-only manual
- * pipeline launch, mediated through Postgres (migration 0034 + the
- * data-engine sensor). Route handlers do NOT inherit the /admin layout
- * gate, so this handler re-derives and checks the principal itself; the
- * response echoes the request identity the admin page then shows linked to
- * the launched run. `force_fetch: true` (#874) asks for a tick that skips the
- * 12-hour reuse window and fetches every obligation again.
- */
-
 import { NextResponse } from "next/server";
 import { requestPipelineTrigger } from "@/server/admin/trigger";
 import { getServerPrincipal } from "@/server/auth/request-context";

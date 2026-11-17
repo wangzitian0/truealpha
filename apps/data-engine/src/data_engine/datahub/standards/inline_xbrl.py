@@ -1,4 +1,4 @@
-"""Inline XBRL context, numeric-fact, and text-block parser for SEC primary HTML filings."""
+"""Inline XBRL parser for SEC primary HTML filings."""
 
 from __future__ import annotations
 
@@ -31,22 +31,9 @@ _ATTRIBUTE = re.compile(r"([\w:.-]+)\s*=\s*(?:\"([^\"]*)\"|'([^']*)')")
 _HIDDEN_HEADER = re.compile(r"<ix:header\b.*?</ix:header\s*>", re.IGNORECASE | re.DOTALL)
 _MARKUP = re.compile(r"<[^>]+>")
 _NUMBER_WORDS = {
-    "no": 0,
-    "none": 0,
-    "zero": 0,
-    "one": 1,
-    "two": 2,
-    "three": 3,
-    "four": 4,
-    "five": 5,
-    "six": 6,
-    "seven": 7,
-    "eight": 8,
-    "nine": 9,
-    "ten": 10,
-    "eleven": 11,
-    "twelve": 12,
-}
+    word: index
+    for index, word in enumerate("zero one two three four five six seven eight nine ten eleven twelve".split())
+} | {"no": 0, "none": 0}
 _MARK = "⦃tagged-fact⦄"
 TYPED_DIMENSION = ("typed", "")
 
@@ -80,7 +67,7 @@ class TextFact:
 
 
 class InlineXbrl:
-    """Parse contexts, `ix:nonFraction` numeric facts, and `ix:nonNumeric` text blocks from an iXBRL document."""
+    """Parse contexts and iXBRL facts."""
 
     def __init__(self, body: bytes) -> None:
         self._raw = body.decode("utf-8", "ignore")
@@ -141,7 +128,7 @@ class InlineXbrl:
             body = self._element_body(tag)
             if body is None:
                 continue
-            text = " ".join(html.unescape(_MARKUP.sub(" ", body)).split())[:limit]
+            text = _plain_text(body)[:limit]
             if text:
                 found.append(TextFact(concept=concept, context_id=context_id, text=text))
         return found
@@ -172,8 +159,7 @@ class InlineXbrl:
                 body = self._element_body(part)
                 if body is None:
                     break
-                text = " ".join(html.unescape(_MARKUP.sub(" ", body)).split())
-                if text:
+                if text := _plain_text(body):
                     length += len(text) + (1 if parts else 0)
                     parts.append(text)
                 following = _attributes(part.group(0)).get("continuedAt")
@@ -196,6 +182,10 @@ class InlineXbrl:
         return re.search(
             rf"<ix:continuation\b[^>]*\bid\s*=\s*[\"']{re.escape(part_id)}[\"'][^>]*>", self._raw, re.IGNORECASE
         )
+
+
+def _plain_text(body: str) -> str:
+    return " ".join(html.unescape(_MARKUP.sub(" ", body)).split())
 
 
 def _attributes(tag: str) -> dict[str, str]:

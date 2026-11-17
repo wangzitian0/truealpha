@@ -1,4 +1,4 @@
-"""Materialize prompt-driven Xiaohongshu 1080x1440 HTML cards into `mart.research_card_artifacts` (#44)."""
+"""Materialize verified Xiaohongshu HTML cards into `mart.research_card_artifacts`."""
 
 from __future__ import annotations
 
@@ -11,11 +11,7 @@ from psycopg import Connection
 from psycopg.types.json import Jsonb
 from truealpha_contracts.access import AccessContext, AuthenticationMethod, PrincipalKind
 from truealpha_contracts.research_cards import CardKind, ResearchCard, build_card, render_card_json
-from truealpha_contracts.research_report import (
-    ResearchReportKind,
-    ResearchReportRequest,
-    build_research_report,
-)
+from truealpha_contracts.research_report import ResearchReportKind, ResearchReportRequest, build_research_report
 from truealpha_contracts.research_report_mart import MartResearchReadRepository
 
 from data_engine.config import settings
@@ -51,28 +47,11 @@ def persist_card_artifact(
     model_invocation_ref: str | None,
     prompt_sha256: str,
 ) -> None:
-    """Persist a verified Xiaohongshu HTML card row into `mart.research_card_artifacts`."""
-    card_payload = json.loads(render_card_json(card))
     connection.execute(
-        """
-        insert into mart.research_card_artifacts (
-            run_id,
-            card_id,
-            card_kind,
-            subject_key,
-            convention,
-            universe,
-            cutoff_at,
-            card_json,
-            html,
-            render_mode,
-            model,
-            model_invocation_ref,
-            prompt_sha256
-        )
-        values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        on conflict (run_id, card_kind, subject_key, convention, universe) do nothing
-        """,
+        "insert into mart.research_card_artifacts (run_id, card_id, card_kind, subject_key, convention, universe, "
+        "cutoff_at, card_json, html, render_mode, model, model_invocation_ref, prompt_sha256) "
+        "values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+        "on conflict (run_id, card_kind, subject_key, convention, universe) do nothing",
         (
             run_id,
             card.card_id,
@@ -81,7 +60,7 @@ def persist_card_artifact(
             convention,
             universe,
             card.cutoff_at,
-            Jsonb(card_payload),
+            Jsonb(json.loads(render_card_json(card))),
             html,
             render_mode,
             model,
@@ -102,56 +81,33 @@ def materialize_head_research_cards(
     database_url: str | None = None,
     transport: Transport | None = None,
 ) -> dict[str, int]:
-    """Build and materialize governed Xiaohongshu 1080x1440 HTML cards (`ranking` + top `company` cards)
-    for `run_id` using `glm-5.3-flash` through `sources/llm.py` and `verify_card_html`.
-    """
-    db_url = database_url or settings.database_url
-    repository = MartResearchReadRepository(database_url=db_url)
+    repository = MartResearchReadRepository(database_url=database_url or settings.database_url)
     now = datetime.now(UTC)
     context = _service_access_context(now)
 
-    cards_to_generate: list[tuple[str, ResearchCard]] = []
-
-    ranking_req = ResearchReportRequest(
-        report_kind=ResearchReportKind.THEME_RANKING,
-        target_entity_ids=("theme:large_model_value",),
-        cutoff_at=cutoff,
-    )
-    ranking_report = build_research_report(ranking_req, repository, context=context)
-    ranking_card = build_card(ranking_report, CardKind.RANKING)
-    cards_to_generate.append(("theme:large_model_value", ranking_card))
-
-    top_subject_ids = [s.subject_id for s in ranking_report.subjects[:max_entities] if s.subject_id]
-    for subject_id in top_subject_ids:
-        company_req = ResearchReportRequest(
-            report_kind=ResearchReportKind.COMPANY,
-            target_entity_ids=(subject_id,),
-            cutoff_at=cutoff,
+    def _card(kind: ResearchReportKind, card_kind: CardKind, subject: str) -> tuple[Any, ResearchCard]:
+        report = build_research_report(
+            ResearchReportRequest(report_kind=kind, target_entity_ids=(subject,), cutoff_at=cutoff),
+            repository,
+            context=context,
         )
-        company_report = build_research_report(company_req, repository, context=context)
-        company_card = build_card(company_report, CardKind.COMPANY)
-        cards_to_generate.append((subject_id, company_card))
+        return report, build_card(report, card_kind)
 
-    written = 0
-    model_rendered = 0
-    fallback_rendered = 0
+    ranking_report, ranking_card = _card(ResearchReportKind.THEME_RANKING, CardKind.RANKING, "theme:large_model_value")
+    cards_to_generate = [("theme:large_model_value", ranking_card)]
+    for subject_id in [sub.subject_id for sub in ranking_report.subjects[:max_entities] if sub.subject_id]:
+        cards_to_generate.append((subject_id, _card(ResearchReportKind.COMPANY, CardKind.COMPANY, subject_id)[1]))
 
+    counts = {"written": 0, "model_glm": 0, "deterministic_fallback": 0}
     for subject_key, card in cards_to_generate:
         existing = connection.execute(
-            """
-            select 1 from mart.research_card_artifacts
-            where run_id = %s and card_kind = %s and subject_key = %s and convention = %s and universe = %s
-            """,
+            "select 1 from mart.research_card_artifacts "
+            "where run_id = %s and card_kind = %s and subject_key = %s and convention = %s and universe = %s",
             (run_id, card.card_kind.value, subject_key, convention, universe),
         ).fetchone()
         if existing is not None:
             continue
-        outcome = generate_xhs_card_html(
-            connection,
-            card=card,
-            transport=transport,
-            now=lambda: now,
-        )
+        outcome = generate_xhs_card_html(connection, card=card, transport=transport, now=lambda: now)
         persist_card_artifact(
             connection,
             run_id=run_id,
@@ -165,14 +121,6 @@ def materialize_head_research_cards(
             model_invocation_ref=outcome.invocation_id,
             prompt_sha256=outcome.prompt_sha256,
         )
-        written += 1
-        if outcome.render_mode == "model_glm":
-            model_rendered += 1
-        else:
-            fallback_rendered += 1
-
-    return {
-        "written": written,
-        "model_glm": model_rendered,
-        "deterministic_fallback": fallback_rendered,
-    }
+        counts["written"] += 1
+        counts["model_glm" if outcome.render_mode == "model_glm" else "deterministic_fallback"] += 1
+    return counts

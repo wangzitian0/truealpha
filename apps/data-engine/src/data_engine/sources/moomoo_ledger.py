@@ -1,4 +1,4 @@
-"""Moomoo 7-day rolling distinct-stock K-line quota gate and ledger readers (#1411, #1520)."""
+"""Moomoo 7-day distinct-stock K-line quota gate (#1411, #1520)."""
 
 from __future__ import annotations
 

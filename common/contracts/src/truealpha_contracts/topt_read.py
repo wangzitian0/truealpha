@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any
 
@@ -118,56 +119,66 @@ def _require_limit(limit: int) -> None:
         raise ValueError("limit must be between 1 and 500")
 
 
+def _governed_read[ReportT, UnavailT](
+    database_url: str,
+    query: Callable[[Any, str], ReportT],
+    unavailable: Callable[[str], UnavailT],
+) -> ReportT | UnavailT:
+    try:
+        with psycopg.connect(database_url, row_factory=dict_row) as conn:
+            run_id, err = resolve_strategy_governed_run(conn)
+            return unavailable(err or "no_run") if err is not None or run_id is None else query(conn, run_id)
+    except psycopg.Error:
+        return unavailable("database_unavailable")
+    except _ROW_VALIDATION_ERRORS:
+        return unavailable("schema_mismatch")
+
+
 class PostgresToptGppeRepository:
     def __init__(self, *, database_url: str) -> None:
         self._database_url = database_url
 
     def latest(self, *, limit: int = 100) -> ToptGppeReport | ToptGppeUnavailable:
         _require_limit(limit)
-        try:
-            with psycopg.connect(self._database_url, row_factory=dict_row) as conn:
-                run_id, err = resolve_strategy_governed_run(conn)
-                if err is not None or run_id is None:
-                    return ToptGppeUnavailable(reason=err or "no_run")
-                rows = conn.execute(
-                    """
-                    select coalesce(ei.listing_id, nullif(r.payload->>'listing_id', '')) as listing_id,
-                           r.payload->>'availability' as availability,
-                           r.payload->>'gppe' as gppe, r.payload->>'confidence' as confidence
-                    from mart.topt_gppe_results r
-                    left join lateral (
-                        select ei.listing_id from mart.entity_identity ei
-                        where ei.entity_id::text = (r.payload->>'listing_id')
-                           or (ei.entity_id::text = r.issuer_id and ei.kind = 'issuer')
-                        order by (ei.entity_id::text = (r.payload->>'listing_id')) desc limit 1
-                    ) ei on true
-                    where r.run_id = %s
-                    order by coalesce(ei.listing_id, nullif(r.payload->>'listing_id', '')) limit %s
-                    """,
-                    (run_id, limit),
-                ).fetchall()
-                report_row = conn.execute(
-                    "select payload from mart.datahub_quality_report where run_id = %s order by created_at desc limit 1",
-                    (run_id,),
-                ).fetchone()
-                status_row = conn.execute(
-                    "select obligation_count from mart.topt_capture_status where run_id = %s",
-                    (run_id,),
-                ).fetchone()
-                if status_row is None:
-                    return ToptGppeUnavailable(reason="no capture status for the governed run")
-                cells = tuple(ToptGppeCell(**r) for r in rows)
-                return ToptGppeReport(
-                    run_id=run_id,
-                    requested_count=status_row["obligation_count"],
-                    available_count=sum(c.availability == "available" for c in cells),
-                    cells=cells,
-                    quality=report_row["payload"] if report_row else None,
-                )
-        except psycopg.Error:
-            return ToptGppeUnavailable(reason="database_unavailable")
-        except _ROW_VALIDATION_ERRORS:
-            return ToptGppeUnavailable(reason="schema_mismatch")
+
+        def _query(conn: Any, run_id: str) -> ToptGppeReport | ToptGppeUnavailable:
+            rows = conn.execute(
+                """
+                select coalesce(ei.listing_id, nullif(r.payload->>'listing_id', '')) as listing_id,
+                       r.payload->>'availability' as availability,
+                       r.payload->>'gppe' as gppe, r.payload->>'confidence' as confidence
+                from mart.topt_gppe_results r
+                left join lateral (
+                    select ei.listing_id from mart.entity_identity ei
+                    where ei.entity_id::text = (r.payload->>'listing_id')
+                       or (ei.entity_id::text = r.issuer_id and ei.kind = 'issuer')
+                    order by (ei.entity_id::text = (r.payload->>'listing_id')) desc limit 1
+                ) ei on true
+                where r.run_id = %s
+                order by coalesce(ei.listing_id, nullif(r.payload->>'listing_id', '')) limit %s
+                """,
+                (run_id, limit),
+            ).fetchall()
+            report_row = conn.execute(
+                "select payload from mart.datahub_quality_report where run_id = %s order by created_at desc limit 1",
+                (run_id,),
+            ).fetchone()
+            status_row = conn.execute(
+                "select obligation_count from mart.topt_capture_status where run_id = %s",
+                (run_id,),
+            ).fetchone()
+            if status_row is None:
+                return ToptGppeUnavailable(reason="no capture status for the governed run")
+            cells = tuple(ToptGppeCell(**r) for r in rows)
+            return ToptGppeReport(
+                run_id=run_id,
+                requested_count=status_row["obligation_count"],
+                available_count=sum(c.availability == "available" for c in cells),
+                cells=cells,
+                quality=report_row["payload"] if report_row else None,
+            )
+
+        return _governed_read(self._database_url, _query, lambda reason: ToptGppeUnavailable(reason=reason))
 
 
 class PostgresMetricNodeValueRepository:
@@ -184,45 +195,42 @@ class PostgresMetricNodeValueRepository:
         if not node_key or not node_key.strip():
             raise ValueError("node_key must be non-empty")
         _require_limit(limit)
-        try:
-            with psycopg.connect(self._database_url, row_factory=dict_row) as conn:
-                run_id, err = resolve_strategy_governed_run(conn)
-                if err is not None or run_id is None:
-                    return MetricNodeValueUnavailable(node_key=node_key, reason=err or "no_run")
-                where = "v.run_id = %s and v.node_key = %s" + (" and v.issuer_id = %s" if issuer_id is not None else "")
-                params = (run_id, node_key, *((issuer_id,) if issuer_id is not None else ()), limit)
-                rows = conn.execute(
-                    f"""
-                    select v.issuer_id, v.node_id::text as node_id, v.node_key, v.period, v.period_tag,
-                           v.value::text as value, v.unit, v.availability_status, v.reason_codes,
-                           v.source_evidence_status, v.factor_validation_status,
-                           v.confidence::text as confidence, v.tree_version, v.tree_sha256
-                    from mart.metric_node_values v where {where}
-                    order by v.issuer_id, v.period desc limit %s
-                    """,
-                    params,
-                ).fetchall()
-                cells = tuple(
-                    MetricNodeValueCell(
-                        **(
-                            r
-                            | {
-                                "reason_codes": tuple(r["reason_codes"] or ()),
-                                "confidence_band": confidence_band(
-                                    None if r["confidence"] is None else Decimal(r["confidence"])
-                                ),
-                            }
-                        )
+
+        def _query(conn: Any, run_id: str) -> MetricNodeValueReport:
+            where = "v.run_id = %s and v.node_key = %s" + (" and v.issuer_id = %s" if issuer_id is not None else "")
+            params = (run_id, node_key, *((issuer_id,) if issuer_id is not None else ()), limit)
+            rows = conn.execute(
+                f"""
+                select v.issuer_id, v.node_id::text as node_id, v.node_key, v.period, v.period_tag,
+                       v.value::text as value, v.unit, v.availability_status, v.reason_codes,
+                       v.source_evidence_status, v.factor_validation_status,
+                       v.confidence::text as confidence, v.tree_version, v.tree_sha256
+                from mart.metric_node_values v where {where}
+                order by v.issuer_id, v.period desc limit %s
+                """,
+                params,
+            ).fetchall()
+            cells = tuple(
+                MetricNodeValueCell(
+                    **(
+                        r
+                        | {
+                            "reason_codes": tuple(r["reason_codes"] or ()),
+                            "confidence_band": confidence_band(
+                                None if r["confidence"] is None else Decimal(r["confidence"])
+                            ),
+                        }
                     )
-                    for r in rows
                 )
-                return MetricNodeValueReport(
-                    run_id=run_id,
-                    node_key=node_key,
-                    available_count=sum(c.availability_status == "available" for c in cells),
-                    cells=cells,
-                )
-        except psycopg.Error:
-            return MetricNodeValueUnavailable(node_key=node_key, reason="database_unavailable")
-        except _ROW_VALIDATION_ERRORS:
-            return MetricNodeValueUnavailable(node_key=node_key, reason="schema_mismatch")
+                for r in rows
+            )
+            return MetricNodeValueReport(
+                run_id=run_id,
+                node_key=node_key,
+                available_count=sum(c.availability_status == "available" for c in cells),
+                cells=cells,
+            )
+
+        return _governed_read(
+            self._database_url, _query, lambda reason: MetricNodeValueUnavailable(node_key=node_key, reason=reason)
+        )

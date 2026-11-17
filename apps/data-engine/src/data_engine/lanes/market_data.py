@@ -35,7 +35,6 @@ FRESHNESS_SERIES: tuple[str, ...] = (UNADJUSTED, SPLIT_ADJUSTED)
 
 
 def _daily_cutoff(now: datetime) -> date:
-    """Return the most recent XNYS trading session closed as of ``now``."""
     today = now.date()
     candidate = most_recent_xnys_session(today)
     if candidate == today and now < xnys_session_close_utc(candidate):
@@ -44,7 +43,6 @@ def _daily_cutoff(now: datetime) -> date:
 
 
 def _monthly_cutoff(now: datetime) -> date:
-    """Return the most recent month-end XNYS session closed as of ``now``."""
     return latest_closed_monthly_session(now)
 
 

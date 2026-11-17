@@ -1,5 +1,0 @@
--- Retired in #1061.
--- This file created staging.normalized_records and staging.filing_documents with their trigger functions.
--- No code reads or writes these tables, and they hold no rows in Production or Staging.
--- 20261006T1325_datahub_retire_empty_planes.sql drops them in deployed databases.
--- The file stays because the chain never deletes the name of a deployed migration.

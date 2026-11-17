@@ -1,4 +1,4 @@
-"""Core value types and shared helpers across base, feeder, and composite factors."""
+"""Core types and helpers for base, feeder, and composite factors."""
 
 from __future__ import annotations
 
@@ -86,7 +86,7 @@ class FactorResult(BaseModel):
 
 
 class FactorError(Exception):
-    """Base class for factor-domain errors."""
+    pass
 
 
 class InsufficientDataError(FactorError):
@@ -98,7 +98,7 @@ class InsufficientDataError(FactorError):
 
 
 def sole_fact(facts: Sequence[Fact], entity_id: str, metric: str) -> Fact | None:
-    """Return the single PIT-resolved Fact for (entity_id, metric), or raise on ambiguity."""
+    """Return the single Fact for `(entity_id, metric)`, or raise on ambiguity."""
     matches = [f for f in facts if f.entity_id == entity_id and f.metric == metric]
     if len(matches) > 1:
         raise ValueError(f"{entity_id}: multiple PIT-resolved facts for metric {metric!r}")
@@ -114,7 +114,7 @@ def refused_factor_result(
     unit_family: UnitFamily = UnitFamily.RATIO,
     dedupe_sorted: bool = False,
 ) -> FactorResult:
-    """Build a standard unavailable FactorResult with confidence=0 and value=None."""
+    """Build unavailable FactorResult with zero confidence."""
     return FactorResult(
         factor=factor_name,
         entity_id=entity_id,
@@ -137,7 +137,7 @@ def market_multiple_factor(
     missing_denominator_flag: str,
     nonpositive_denominator_flag: str,
 ) -> FactorResult:
-    """Shared `(price * shares_outstanding) / denominator` computation for feeder multiples."""
+    """Compute `(price * shares_outstanding) / denominator`."""
     price_fact = sole_fact(facts, entity_id, "price")
     shares_fact = sole_fact(facts, entity_id, "shares_outstanding")
     denom_fact = sole_fact(facts, entity_id, denominator_metric)

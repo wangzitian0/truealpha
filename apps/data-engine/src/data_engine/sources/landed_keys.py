@@ -1,4 +1,4 @@
-"""Persisted and in-memory landed fetch-key index (`staging.landed_fetch_keys`, #1411 K3)."""
+"""Landed fetch-key index (`staging.landed_fetch_keys`, #1411)."""
 
 from __future__ import annotations
 
@@ -34,17 +34,9 @@ class MemoryLandedKeys:
         self.bodies[key] = body
 
 
-_LOOKUP_SQL = """
-select raw_fetch_id
-from staging.landed_fetch_keys
-where seat = %s and endpoint = %s and canonical_entity_id = %s and as_of = %s
-"""
-
-_REUSE_SQL = """
-update staging.landed_fetch_keys
-set reuse_count = reuse_count + 1, last_reused_at = clock_timestamp()
-where seat = %s and endpoint = %s and canonical_entity_id = %s and as_of = %s
-"""
+_KEY_WHERE = "where seat = %s and endpoint = %s and canonical_entity_id = %s and as_of = %s"
+_LOOKUP_SQL = f"select raw_fetch_id from staging.landed_fetch_keys {_KEY_WHERE}"
+_REUSE_SQL = f"update staging.landed_fetch_keys set reuse_count = reuse_count + 1, last_reused_at = clock_timestamp() {_KEY_WHERE}"
 
 _LAND_SQL = """
 insert into staging.landed_fetch_keys

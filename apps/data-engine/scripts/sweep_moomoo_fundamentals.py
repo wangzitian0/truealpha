@@ -1,4 +1,4 @@
-"""Full-universe moomoo fundamental sweep into raw.fetches."""
+"""Moomoo fundamental sweep into `raw.fetches`."""
 
 import argparse
 from collections import Counter

@@ -20,6 +20,21 @@ def _check(name: str, ok: bool, detail: str = "") -> None:
         _FAILURES.append(name)
 
 
+def _try(name: str, fn):
+    try:
+        return True, fn()
+    except Exception as error:  # noqa: BLE001
+        _check(name, False, f"{type(error).__name__}: {error}")
+        return False, None
+
+
+def _json_or_none(body: bytes):
+    try:
+        return json.loads(body)
+    except json.JSONDecodeError:
+        return None
+
+
 def _twelve(path: str, params: dict[str, str], api_key: str) -> tuple[int, bytes]:
     from data_engine.datahub.fetch_key import FetchKey
 
@@ -46,11 +61,10 @@ def check_yahoo() -> None:
     from data_engine.sources.yahoo import fetch_daily_chart
 
     today = datetime.now(UTC).date()
-    try:
-        _body, bars = fetch_daily_chart("AAPL", end=today)
-    except Exception as error:  # noqa: BLE001
-        _check("yahoo: chart endpoint reachable", False, f"{type(error).__name__}: {error}")
+    ok, res = _try("yahoo: chart endpoint reachable", lambda: fetch_daily_chart("AAPL", end=today))
+    if not ok:
         return
+    _body, bars = res
     _check("yahoo: chart endpoint reachable", True)
     _check("yahoo: chart returns parseable bars", len(bars) >= 1, f"{len(bars)} bars")
     if bars:
@@ -71,16 +85,15 @@ def check_twelve_data() -> None:
     if not key:
         _check("twelvedata: TWELVE_DATA_API_KEY provisioned", False, "checks skipped — provision the key")
         return
-
     tomorrow = datetime.now(UTC).date() + timedelta(days=1)
     status, body = _twelve("eod", {"symbol": "AAPL", "date": str(tomorrow)}, key)
     _check("twelvedata: /eod no-data date returns an HTTP error status", status >= 400, f"status {status}")
-    try:
-        payload = json.loads(body)
-        _check("twelvedata: /eod error body is JSON with a code", "code" in payload, str(payload)[:80])
-    except json.JSONDecodeError:
-        _check("twelvedata: /eod error body is JSON with a code", False, body[:60].decode(errors="replace"))
-
+    payload = _json_or_none(body)
+    _check(
+        "twelvedata: /eod error body is JSON with a code",
+        payload is not None and "code" in payload,
+        str(payload)[:80] if payload is not None else body[:60].decode(errors="replace"),
+    )
     start = datetime.now(UTC).date() - timedelta(days=12)
     status, body = _twelve(
         "time_series",
@@ -89,35 +102,29 @@ def check_twelve_data() -> None:
     )
     ok_rows = ok_bar = False
     detail = bar_detail = f"status {status}"
-    if status == 200:
-        try:
-            rows = json.loads(body).get("values", [])
-            ok_rows = bool(rows) and all("datetime" in r and isinstance(r.get("close"), str) for r in rows)
-            ok_bar = (
-                bool(rows)
-                and all(isinstance(r.get(k), str) for r in rows for k in ("open", "high", "low"))
-                and all(r.get("volume") in (None, "") or isinstance(r.get("volume"), str) for r in rows)
-            )
-            detail = f"{len(rows)} rows"
-            bar_detail = detail
-        except json.JSONDecodeError:
-            detail = bar_detail = "body not JSON"
+    if status == 200 and (parsed := _json_or_none(body)) is not None:
+        rows = parsed.get("values", [])
+        ok_rows = bool(rows) and all("datetime" in r and isinstance(r.get("close"), str) for r in rows)
+        ok_bar = (
+            bool(rows)
+            and all(isinstance(r.get(k), str) for r in rows for k in ("open", "high", "low"))
+            and all(r.get("volume") in (None, "") or isinstance(r.get("volume"), str) for r in rows)
+        )
+        detail = bar_detail = f"{len(rows)} rows"
+    elif status == 200:
+        detail = bar_detail = "body not JSON"
     _check("twelvedata: time_series rows carry datetime + string close", ok_rows, detail)
     _check("twelvedata: time_series rows carry the open/high/low bar as strings (volume optional)", ok_bar, bar_detail)
-
     weekday = datetime.now(UTC).date() - timedelta(days=1)
     while weekday.weekday() >= 5:
         weekday -= timedelta(days=1)
     status, body = _twelve("eod", {"symbol": "AAPL", "date": str(weekday)}, key)
-    ok_close = False
-    detail = f"status {status}"
-    if status == 200:
-        try:
-            payload = json.loads(body)
-            ok_close = isinstance(payload.get("close"), str) and payload.get("datetime") == str(weekday)
-            detail = f"{payload.get('datetime')} close {payload.get('close')}"
-        except json.JSONDecodeError:
-            detail = "body not JSON"
+    ok_close, detail = False, f"status {status}"
+    if status == 200 and (payload := _json_or_none(body)) is not None:
+        ok_close = isinstance(payload.get("close"), str) and payload.get("datetime") == str(weekday)
+        detail = f"{payload.get('datetime')} close {payload.get('close')}"
+    elif status == 200:
+        detail = "body not JSON"
     _check("twelvedata: /eod settled date returns a string close", ok_close, detail)
 
 
@@ -175,15 +182,16 @@ def check_moomoo() -> None:
         return
     client = OpenDClient()
     today = datetime.now(UTC).date()
-    try:
-        bars = client.history_kline(
+    ok, bars = _try(
+        "moomoo: OpenD reachable and K-line answers",
+        lambda: client.history_kline(
             "US.AAPL",
             start=today - timedelta(days=14),
             end=today - timedelta(days=1),
             identity=FetchKey("moomoo", "history_kline", "symbol:US.AAPL", gateway.utc_day()),
-        )
-    except Exception as error:  # noqa: BLE001
-        _check("moomoo: OpenD reachable and K-line answers", False, f"{type(error).__name__}: {error}")
+        ),
+    )
+    if not ok:
         return
     _check("moomoo: OpenD reachable and K-line answers", True, f"{len(bars)} bars")
     _check(
@@ -191,19 +199,21 @@ def check_moomoo() -> None:
         bool(bars)
         and all(str(b.get("time_key", "")).endswith(" 00:00:00") and isinstance(b.get("close"), float) for b in bars),
     )
-    try:
-        quote = parse_settled_close(canonical_bytes(bars), partition=today - timedelta(days=1))
+    ok_q, quote = _try(
+        "moomoo: the window parses to a settled close",
+        lambda: parse_settled_close(canonical_bytes(bars), partition=today - timedelta(days=1)),
+    )
+    if ok_q:
         _check("moomoo: the window parses to a settled close", quote is not None)
-    except Exception as error:  # noqa: BLE001
-        _check("moomoo: the window parses to a settled close", False, f"{type(error).__name__}: {error}")
-    try:
-        income = client.financial_statements(
+    ok_inc, income = _try(
+        "moomoo: income statement answers",
+        lambda: client.financial_statements(
             "US.AAPL",
             statement_type=INCOME_STATEMENT,
             identity=FetchKey("moomoo", "financial_statements:income", "symbol:US.AAPL", gateway.utc_day()),
-        )
-    except Exception as error:  # noqa: BLE001
-        _check("moomoo: income statement answers", False, f"{type(error).__name__}: {error}")
+        ),
+    )
+    if not ok_inc:
         return
     annual = [r for r in income.get("report_list", []) if r.get("financial_type") == 7]
     _check("moomoo: income statement carries annual rows", bool(annual), f"{len(annual)} annual rows")

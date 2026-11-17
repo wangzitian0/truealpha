@@ -1,11 +1,10 @@
-import Link from "next/link";
 import { loadStrategyRunPage } from "@/server/strategy-page";
 import { entityLabel, loadEntityDisplayMap, type EntityDisplay } from "@/server/mart/entity-resolution";
 import { DASHBOARD_STRATEGY_ID } from "@/server/mart/research-read";
 import { ClaimCeilingBanner } from "@/components/claim-ceiling";
-import { ResearchTable } from "@/components/research-table";
+import { EntityTh, PercentTd, RatioTd, ResearchTable, SignedRatioTd } from "@/components/research-table";
 import { StrategyDefinitionLine } from "@/components/strategy-definition";
-import { formatCell, formatPercentFromFraction, formatRatio, formatSignedRatio, signColor } from "@/client/format";
+import { formatCell } from "@/client/format";
 import { getServerPrincipal } from "@/server/auth/request-context";
 import {
   currentMultipleOf,
@@ -23,10 +22,8 @@ const OUTCOME_LABEL: Record<StrategyRunOutcome, string> = {
   excluded: "Excluded",
 };
 
-function decisionLabel(decision: StrategyRunDecision): string {
-  const base = OUTCOME_LABEL[decision.outcome];
-  return decision.exclusion_reason ? `${base}: ${decision.exclusion_reason}` : base;
-}
+const decisionLabel = (decision: StrategyRunDecision) =>
+  decision.exclusion_reason ? `${OUTCOME_LABEL[decision.outcome]}: ${decision.exclusion_reason}` : OUTCOME_LABEL[decision.outcome];
 
 const NOTICE_STYLE = {
   denied: "text-amber-400",
@@ -39,21 +36,8 @@ export default async function StrategyRunsPage() {
   const principal = await getServerPrincipal();
   const outcome = await loadStrategyRunPage(principal, DASHBOARD_STRATEGY_ID);
   const names: Map<string, EntityDisplay> = outcome.kind === "ready" ? await loadEntityDisplayMap() : new Map();
-  const basisLabel = valuationBasisLabel(
-    outcome.kind === "ready" ? reportValuationBasis(outcome.report.decisions) : null,
-  );
-  const headers = [
-    "Issuer",
-    "Cutoff",
-    "Status",
-    "Tier",
-    `Current ${basisLabel}`,
-    `Target ${basisLabel}`,
-    `Valuation gap (${basisLabel})`,
-    "Confidence",
-    "Rank",
-    "Weight",
-  ];
+  const basisLabel = valuationBasisLabel(outcome.kind === "ready" ? reportValuationBasis(outcome.report.decisions) : null);
+  const headers = ["Issuer", "Cutoff", "Status", "Tier", `Current ${basisLabel}`, `Target ${basisLabel}`, `Valuation gap (${basisLabel})`, "Confidence", "Rank", "Weight"];
 
   return (
     <section aria-labelledby="strategy-runs-heading">
@@ -66,9 +50,7 @@ export default async function StrategyRunsPage() {
           {outcome.report.golden_mismatches.length > 0 && (
             <>
               {" "}
-              <span role="status" className="ml-2 text-red-400">
-                {outcome.report.golden_mismatches.length} golden mismatch(es).
-              </span>
+              <span role="status" className="ml-2 text-red-400">{outcome.report.golden_mismatches.length} golden mismatch(es).</span>
             </>
           )}
         </p>
@@ -95,30 +77,16 @@ export default async function StrategyRunsPage() {
         >
           {outcome.report.decisions.map((d) => (
             <tr key={`${d.issuer_id}:${d.cutoff_at}`} className="border-t border-border">
-              <th scope="row" className="px-4 py-3 font-medium">
-                <Link href={`/research/entities/${encodeURIComponent(d.issuer_id)}`} className="text-accent hover:underline" title={d.issuer_id}>
-                  {entityLabel(d.issuer_id, names)}
-                </Link>
-              </th>
+              <EntityTh issuerId={d.issuer_id} label={entityLabel(d.issuer_id, names)} />
               <td className="px-4 py-3">{d.cutoff_at}</td>
               <td className="px-4 py-3">{decisionLabel(d)}</td>
               <td className="px-4 py-3">{formatCell(d.tier)}</td>
-              <td className="px-4 py-3 tabular-nums" title={currentMultipleOf(d) ?? undefined}>
-                {formatCell(formatRatio(currentMultipleOf(d)))}
-              </td>
-              <td className="px-4 py-3 tabular-nums" title={targetMultipleOf(d) ?? undefined}>
-                {formatCell(formatRatio(targetMultipleOf(d)))}
-              </td>
-              <td className={`px-4 py-3 tabular-nums ${signColor(d.valuation_gap)}`} title={d.valuation_gap ?? undefined}>
-                {formatCell(formatSignedRatio(d.valuation_gap))}
-              </td>
-              <td className="px-4 py-3 tabular-nums" title={d.confidence ?? undefined}>
-                {formatCell(formatRatio(d.confidence))}
-              </td>
+              <RatioTd value={currentMultipleOf(d)} />
+              <RatioTd value={targetMultipleOf(d)} />
+              <SignedRatioTd value={d.valuation_gap} />
+              <RatioTd value={d.confidence} />
               <td className="px-4 py-3 tabular-nums">{formatCell(d.rank)}</td>
-              <td className="px-4 py-3 tabular-nums" title={d.target_weight ?? undefined}>
-                {formatCell(formatPercentFromFraction(d.target_weight))}
-              </td>
+              <PercentTd value={d.target_weight} />
             </tr>
           ))}
         </ResearchTable>

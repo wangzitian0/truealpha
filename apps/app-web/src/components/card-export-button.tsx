@@ -1,12 +1,5 @@
 "use client";
 
-/**
- * Card export button (#1360 / #44).
- *
- * Default: 1080x1440 Xiaohongshu HTML card export via `/research/api/cards/export`.
- * Downloads the rendered HTML (or JSON) card and disables the button while export is in progress.
- */
-
 import { useState } from "react";
 import type { PegGrowthConvention } from "@/contracts/strategyRun";
 import { universeWithRole } from "@/contracts/universes";

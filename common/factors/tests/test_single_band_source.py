@@ -50,7 +50,7 @@ _PYTHON_ROOTS = tuple(sorted({*_REPO.glob("apps/*/src"), *_REPO.glob("common/*/s
 _TYPESCRIPT_ROOTS = tuple(sorted(_REPO.glob("apps/*/src")))
 _MIGRATIONS = _REPO / "db" / "migrations"
 #: This PR's migration. Every migration from it on is in scope; the older ones are history.
-_FIRST_SCANNED_MIGRATION = "20261013T0201_factors_price_to_gross_profit.sql"
+_FIRST_SCANNED_MIGRATION = "0003_mart.sql"
 _DATA = _REPO / "common" / "contracts" / "src" / "truealpha_contracts" / "data"
 #: The frozen #21 file (definition 1.0.0) holds the same band values as the live file, and the golden
 #: decisions that its replay reads. It is named here on purpose (#1518).

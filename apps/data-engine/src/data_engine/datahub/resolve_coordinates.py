@@ -1,4 +1,4 @@
-"""Entity coordinates resolution for capture pipelines (docs/entity-identity.md §5)."""
+"""Entity coordinate resolution for capture pipelines (docs/entity-identity.md §5)."""
 
 from __future__ import annotations
 

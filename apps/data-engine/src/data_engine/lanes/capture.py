@@ -245,12 +245,12 @@ def _run_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfig, tick: 
     summary += f"; {corroborations.summary()}; {corroborations.refusals()}; served by failover {served_by_failover}"
 
     degraded = f" (DEGRADED: {registration.summary})" if registration.unmet else ""
-    if registration.advanced and registration.unmet:
-        context.log.warning(f"{summary}; pointer sequence {registration.sequence}{degraded}")
-    elif registration.advanced:
-        context.log.info(f"{summary}; pointer sequence {registration.sequence}")
-    else:
-        context.log.info(f"{summary}; pointer already at sequence {registration.sequence}{degraded}")
+    note = (
+        f"; pointer sequence {registration.sequence}{degraded}"
+        if registration.advanced
+        else f"; pointer already at sequence {registration.sequence}{degraded}"
+    )
+    (context.log.warning if registration.advanced and registration.unmet else context.log.info)(f"{summary}{note}")
 
     context.add_output_metadata(
         {

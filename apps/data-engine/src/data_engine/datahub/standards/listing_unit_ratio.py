@@ -1,4 +1,4 @@
-"""Depositary share-to-listing unit ratio reader from annual filing iXBRL cover titles (#1519)."""
+"""Cover-title listing unit ratio reader (#1519)."""
 
 from __future__ import annotations
 
@@ -55,32 +55,12 @@ PAYLOAD_KEYS = (
 
 _TITLE_LIMIT = 400
 _NUMBER_WORDS = {
-    "one": 1,
-    "two": 2,
-    "three": 3,
-    "four": 4,
-    "five": 5,
-    "six": 6,
-    "seven": 7,
-    "eight": 8,
-    "nine": 9,
-    "ten": 10,
-    "eleven": 11,
-    "twelve": 12,
-    "thirteen": 13,
-    "fourteen": 14,
-    "fifteen": 15,
-    "sixteen": 16,
-    "seventeen": 17,
-    "eighteen": 18,
-    "nineteen": 19,
-    "twenty": 20,
-    "twenty five": 25,
-    "thirty": 30,
-    "forty": 40,
-    "fifty": 50,
-    "one hundred": 100,
-}
+    word: index
+    for index, word in enumerate(
+        "one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty".split(),
+        1,
+    )
+} | {"twenty five": 25, "thirty": 30, "forty": 40, "fifty": 50, "one hundred": 100}
 _QUANTITY = (
     r"(?P<quantity>\d{1,4}|"
     + "|".join(w.replace(" ", "[- ]") for w in sorted(_NUMBER_WORDS, key=len, reverse=True))

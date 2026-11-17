@@ -45,40 +45,30 @@ class ExecutionRules:
 
 def execution_rules(definition: LargeModelValueV0Definition) -> ExecutionRules:
     """Validate and extract engine parameters from ``definition``."""
-    execution = definition.execution
-    cost = definition.transaction_cost
-    total_return = definition.total_return
-    sizing = definition.sizing
+    ex, cost, tr, sz = definition.execution, definition.transaction_cost, definition.total_return, definition.sizing
     checks: tuple[tuple[object, object, str], ...] = (
-        (execution.rule_id, "next_eligible_market_session_open", "execution.rule_id"),
-        (execution.price_field, "unadjusted_open", "execution.price_field"),
-        (execution.unfilled_order_behavior, "remain_cash", "execution.unfilled_order_behavior"),
+        (ex.rule_id, "next_eligible_market_session_open", "execution.rule_id"),
+        (ex.price_field, "unadjusted_open", "execution.price_field"),
+        (ex.unfilled_order_behavior, "remain_cash", "execution.unfilled_order_behavior"),
         (cost.rule_id, "per_side_notional_basis_points", "transaction_cost.rule_id"),
-        (total_return.rule_id, "unadjusted_bars_explicit_corporate_actions", "total_return.rule_id"),
-        (total_return.price_basis, "unadjusted", "total_return.price_basis"),
-        (
-            total_return.corporate_action_processing,
-            "explicit_event_lifecycle_once",
-            "total_return.corporate_action_processing",
-        ),
-        (total_return.adjusted_prices_affect_returns, False, "total_return.adjusted_prices_affect_returns"),
-        (sizing.rule_id, "equal_weight_selected", "sizing.rule_id"),
-        (sizing.empty_selection_behavior, "retain_all_cash", "sizing.empty_selection_behavior"),
-        (sizing.quantization.rounding, "half_even", "sizing.quantization.rounding"),
+        (tr.rule_id, "unadjusted_bars_explicit_corporate_actions", "total_return.rule_id"),
+        (tr.price_basis, "unadjusted", "total_return.price_basis"),
+        (tr.corporate_action_processing, "explicit_event_lifecycle_once", "total_return.corporate_action_processing"),
+        (tr.adjusted_prices_affect_returns, False, "total_return.adjusted_prices_affect_returns"),
+        (sz.rule_id, "equal_weight_selected", "sizing.rule_id"),
+        (sz.empty_selection_behavior, "retain_all_cash", "sizing.empty_selection_behavior"),
+        (sz.quantization.rounding, "half_even", "sizing.quantization.rounding"),
     )
-    for actual, expected, name in checks[:3]:
+    for actual, expected, name in checks:
         if actual != expected:
             raise UnsupportedRuleError(f"{name} is {actual!r}; this engine implements only {expected!r}")
-    if not isinstance(execution.lag_sessions, int) or execution.lag_sessions < 1:
-        raise UnsupportedRuleError(f"execution.lag_sessions is {execution.lag_sessions!r}; it must be 1 or more")
-    for actual, expected, name in checks[3:]:
-        if actual != expected:
-            raise UnsupportedRuleError(f"{name} is {actual!r}; this engine implements only {expected!r}")
+    if not isinstance(ex.lag_sessions, int) or ex.lag_sessions < 1:
+        raise UnsupportedRuleError(f"execution.lag_sessions is {ex.lag_sessions!r}; it must be 1 or more")
     return ExecutionRules(
-        lag_sessions=execution.lag_sessions,
+        lag_sessions=ex.lag_sessions,
         cost_rate=Decimal(cost.basis_points) / _BASIS_POINTS_PER_UNIT,
-        weight_quantization=sizing.quantization,
-        unfilled_order_behavior=execution.unfilled_order_behavior,
+        weight_quantization=sz.quantization,
+        unfilled_order_behavior=ex.unfilled_order_behavior,
     )
 
 

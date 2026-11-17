@@ -15,7 +15,7 @@ from pathlib import Path
 from truealpha_runtime.testing import read_seed_rows
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-MIGRATION = REPO_ROOT / "db" / "migrations" / "20261006T1020_datahub_served_head_freshness.sql"
+MIGRATION = REPO_ROOT / "db" / "migrations" / "0003_mart.sql"
 INIT = REPO_ROOT / "init.md"
 QUALITY_REPORT = REPO_ROOT / "docs" / "datahub-quality-report.md"
 HEADING = "### Served freshness (read time)"

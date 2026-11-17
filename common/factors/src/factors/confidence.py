@@ -56,24 +56,26 @@ def _confidence_reason_codes(
     evidence: ContinuousConfidenceInput,
     grouped_count: int,
 ) -> tuple[str, ...]:
-    reasons = {"confidence.evaluated"}
-    checks = (
-        (grouped_count == 1, "support.single-origin-ceiling"),
-        (len(evidence.sources) > grouped_count, "support.same-origin-deduplicated"),
-        (
-            any(s.successful_outcome_mass + s.failed_outcome_mass == 0 for s in evidence.sources),
-            "reliability.provisional-unobserved-ceiling",
+    return (
+        "confidence.evaluated",
+        *(
+            code
+            for triggered, code in (
+                (grouped_count == 1, "support.single-origin-ceiling"),
+                (len(evidence.sources) > grouped_count, "support.same-origin-deduplicated"),
+                (
+                    any(s.successful_outcome_mass + s.failed_outcome_mass == 0 for s in evidence.sources),
+                    "reliability.provisional-unobserved-ceiling",
+                ),
+                (evidence.agreement < 1, "quality.source-disagreement"),
+                (evidence.semantic_mapping_quality < 1, "quality.semantic-mapping-penalty"),
+                (evidence.lineage_completeness < 1, "quality.lineage-penalty"),
+                (evidence.required_component_completeness < 1, "quality.required-component-penalty"),
+                (any(s.transport_integrity == 0 for s in evidence.sources), "evidence.raw-transport-missing"),
+            )
+            if triggered
         ),
-        (evidence.agreement < 1, "quality.source-disagreement"),
-        (evidence.semantic_mapping_quality < 1, "quality.semantic-mapping-penalty"),
-        (evidence.lineage_completeness < 1, "quality.lineage-penalty"),
-        (evidence.required_component_completeness < 1, "quality.required-component-penalty"),
-        (any(s.transport_integrity == 0 for s in evidence.sources), "evidence.raw-transport-missing"),
     )
-    for triggered, code in checks:
-        if triggered:
-            reasons.add(code)
-    return tuple(reasons)
 
 
 def evaluate_continuous_confidence(
@@ -124,14 +126,15 @@ def evaluate_continuous_confidence(
 
         quantized_evidence_mass = _quantize(evidence_mass, policy.output_decimal_places)
         quantized_source_support = _quantize(Decimal(1) - (-evidence_mass).exp(), policy.output_decimal_places)
-        confidence = _quantize(
-            quantized_source_support
-            * _power(evidence.agreement, policy.agreement_exponent)
-            * _power(evidence.semantic_mapping_quality, policy.semantic_mapping_exponent)
-            * _power(evidence.lineage_completeness, policy.lineage_exponent)
-            * _power(evidence.required_component_completeness, policy.completeness_exponent),
-            policy.output_decimal_places,
-        )
+        support = quantized_source_support
+        for base, exp in (
+            (evidence.agreement, policy.agreement_exponent),
+            (evidence.semantic_mapping_quality, policy.semantic_mapping_exponent),
+            (evidence.lineage_completeness, policy.lineage_exponent),
+            (evidence.required_component_completeness, policy.completeness_exponent),
+        ):
+            support *= _power(base, exp)
+        confidence = _quantize(support, policy.output_decimal_places)
 
     return ContinuousConfidenceEvaluation(
         policy_id=policy.policy_id,
@@ -185,21 +188,16 @@ def evaluate_cell_confidence(
     extra_reason_codes: Sequence[str] = (),
     policy: ContinuousConfidencePolicy = DEFAULT_CONFIDENCE_POLICY,
 ) -> CellConfidence:
-    if definitional:
+    if definitional or not has_value or not sources:
+        payload: dict[str, object] = {"case_id": case_id, "definitional": definitional}
+        if not definitional:
+            payload["has_value"] = False
         return _static_cell_confidence(
-            confidence=Decimal("1"),
+            confidence=Decimal("1" if definitional else "0"),
             policy=policy,
-            base_reason="confidence.definitional",
+            base_reason="confidence.definitional" if definitional else "confidence.no-origin-value",
             extra_reason_codes=extra_reason_codes,
-            payload={"case_id": case_id, "definitional": True},
-        )
-    if not has_value or not sources:
-        return _static_cell_confidence(
-            confidence=Decimal("0"),
-            policy=policy,
-            base_reason="confidence.no-origin-value",
-            extra_reason_codes=extra_reason_codes,
-            payload={"case_id": case_id, "definitional": False, "has_value": False},
+            payload=payload,
         )
     evidence = ContinuousConfidenceInput(
         case_id=case_id,

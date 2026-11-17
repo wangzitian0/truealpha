@@ -37,12 +37,26 @@ from truealpha_contracts.strategy_run import (
 from truealpha_contracts.strategy_run_postgres import PostgresStrategyRunRepository
 
 _DEFAULT_STRATEGY_ID = _STRATEGY_FACTOR_VERSION = "large_model_value_v0"
-_SUPPLY_CHAIN_TITLE = "Supply-chain exposure"
-_ANALYST_TITLE = "Analyst consensus"
 MART_READ_FAILED = "mart_read_failed"
 ROW_AFTER_REPORT_CUTOFF = "served_row_after_report_cutoff"
 PEG_NOT_RECORDED = "peg_not_recorded"
 _ETF_DISPLAY_NAMES = {"etf:qqq": "Invesco QQQ Trust", "etf:ivv": "iShares Core S&P 500 ETF"}
+_MODULE_SPECS: tuple[tuple[ReportSectionKind, str, str, str, tuple[str, ...]], ...] = (
+    (
+        ReportSectionKind.SUPPLY_CHAIN,
+        "Supply-chain exposure",
+        "mart.issuer_supply_chain_exposure",
+        "supply_chain_exposure",
+        ("exposure_score", "direct_partners", "suppliers_count", "customers_count", "max_partner_share"),
+    ),
+    (
+        ReportSectionKind.ANALYST_HISTORY,
+        "Analyst consensus",
+        "mart.issuer_analyst_ratings",
+        "analyst_ratings",
+        ("consensus_rating", "target_price", "analysts_count", "buy_count", "hold_count", "sell_count"),
+    ),
+)
 
 
 def _opt_str(value: Any) -> str | None:
@@ -105,7 +119,7 @@ def _decision_section(
 
 def _valuation_section(decision: StrategyRunDecision, source: str, corpus_sha256: str) -> ReportSection:
     by_gp = decision.valuation_basis == "price_to_gross_profit"
-    middle: tuple[tuple[str, str | None, str | None], ...] = (
+    middle = (
         (
             ("current_price_to_gross_profit", _opt_str(decision.current_price_to_gross_profit), None),
             ("target_price_to_gross_profit", _opt_str(decision.target_price_to_gross_profit), None),
@@ -149,7 +163,7 @@ def _peg_section(decision: StrategyRunDecision, source: str, corpus_sha256: str)
 
 
 def _strategy_summary_section(decision: StrategyRunDecision, source: str, corpus_sha256: str) -> ReportSection:
-    reasons: tuple[str, ...] = (
+    reasons = (
         (decision.exclusion_reason,)
         if decision.exclusion_reason is not None
         else (
@@ -256,23 +270,11 @@ def _company_subject(
             _operating_efficiency_section(decision, source, corpus_sha256),
             _valuation_section(decision, source, corpus_sha256),
             _peg_section(decision, source, corpus_sha256),
-            _read_module_section(
-                decision.issuer_id,
-                decision.cutoff_at,
-                ReportSectionKind.SUPPLY_CHAIN,
-                _SUPPLY_CHAIN_TITLE,
-                "mart.issuer_supply_chain_exposure",
-                modules.supply_chain_exposure,
-                ("exposure_score", "direct_partners", "suppliers_count", "customers_count", "max_partner_share"),
-            ),
-            _read_module_section(
-                decision.issuer_id,
-                decision.cutoff_at,
-                ReportSectionKind.ANALYST_HISTORY,
-                _ANALYST_TITLE,
-                "mart.issuer_analyst_ratings",
-                modules.analyst_ratings,
-                ("consensus_rating", "target_price", "analysts_count", "buy_count", "hold_count", "sell_count"),
+            *(
+                _read_module_section(
+                    decision.issuer_id, decision.cutoff_at, kind, title, table, getattr(modules, method), fields
+                )
+                for kind, title, table, method, fields in _MODULE_SPECS
             ),
             _strategy_summary_section(decision, source, corpus_sha256),
         ),

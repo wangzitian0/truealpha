@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import json
 from decimal import Decimal, InvalidOperation
-from importlib import resources
+from pathlib import Path
 from typing import Any
 
 from pydantic import ValidationError
-
 from truealpha_contracts.access import AccessContext
 from truealpha_contracts.execution import AvailabilityStatus
 from truealpha_contracts.research import ValuationTier
@@ -54,11 +53,18 @@ def _decision_from_json(payload: dict[str, Any]) -> StrategyRunDecision:
     )
 
 
+_PREVIEW_PATH = Path(__file__).with_name("strategy_run_preview.v1.json")
+
+
+def _load_preview_bytes() -> bytes:
+    return _PREVIEW_PATH.read_bytes()
+
+
 class FixtureStrategyRunRepository:
     def get_latest(self, *, strategy_id: str, context: AccessContext) -> StrategyRunReport | StrategyRunUnavailable:
         del context
         try:
-            raw = resources.files("truealpha_contracts.data").joinpath("strategy_run_preview.v1.json").read_bytes()
+            raw = _load_preview_bytes()
         except (FileNotFoundError, ModuleNotFoundError):
             return StrategyRunUnavailable(strategy_id=strategy_id, reason="fixture_missing")
         try:

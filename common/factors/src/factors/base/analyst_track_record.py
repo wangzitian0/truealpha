@@ -1,4 +1,4 @@
-"""Module 4: Analyst track record and consensus (#771)."""
+"""Module 4: analyst ratings and consensus (#771)."""
 
 from __future__ import annotations
 

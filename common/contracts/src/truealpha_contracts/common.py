@@ -43,8 +43,8 @@ def reject_binary_float(value: Any, label: str = "monetary or ratio value") -> A
     return value
 
 
-def finite_decimal_input(value: Any) -> Any:
-    if isinstance(value, float):
+def finite_decimal_input(value: Any, *, coerce: bool = False) -> Any:
+    if isinstance(value, (bool, float)):
         raise ValueError("binary float is forbidden; use Decimal or a base-10 string")
     if value is not None:
         try:
@@ -53,7 +53,13 @@ def finite_decimal_input(value: Any) -> Any:
             return value
         if not parsed.is_finite():
             raise ValueError("non-finite Decimal values are forbidden")
+        if coerce:
+            return parsed
     return value
+
+
+def _parsed_safe_decimal(value: Any) -> Any:
+    return finite_decimal_input(value, coerce=True)
 
 
 def require_aware(value: datetime, field_name: str) -> datetime:
@@ -62,13 +68,20 @@ def require_aware(value: datetime, field_name: str) -> datetime:
     return value
 
 
+def require_checks(*checks: tuple[bool, str]) -> None:
+    for failed, message in checks:
+        if failed:
+            raise ValueError(message)
+
+
 def require_stable_and_immutable(
     value: str,
     field_name: str,
     *,
     mutable_tokens: frozenset[str] = DEFAULT_MUTABLE_TOKENS,
+    pattern: str | None = STABLE_ID_PATTERN,
 ) -> str:
-    if re.fullmatch(STABLE_ID_PATTERN, value) is None:
+    if pattern is not None and re.fullmatch(pattern, value) is None:
         raise ValueError(f"{field_name} must be a stable coordinate")
     tokens = {token for token in re.split(r"[._:/@+\-]", value.lower()) if token}
     if tokens & mutable_tokens:
@@ -83,6 +96,7 @@ def sorted_unique_coordinates(
     allow_empty: bool = True,
     immutable: bool = False,
     mutable_tokens: frozenset[str] = DEFAULT_MUTABLE_TOKENS,
+    pattern: str | None = STABLE_ID_PATTERN,
 ) -> tuple[str, ...]:
     if not allow_empty and not values:
         raise ValueError(f"{field_name} must not be empty")
@@ -90,8 +104,8 @@ def sorted_unique_coordinates(
         raise ValueError(f"{field_name} must not contain duplicates")
     for val in values:
         if immutable:
-            require_stable_and_immutable(val, field_name, mutable_tokens=mutable_tokens)
-        elif re.fullmatch(STABLE_ID_PATTERN, val) is None:
+            require_stable_and_immutable(val, field_name, mutable_tokens=mutable_tokens, pattern=pattern)
+        elif pattern is not None and re.fullmatch(pattern, val) is None:
             raise ValueError(f"{field_name} must contain stable coordinates")
     return tuple(sorted(values))
 
@@ -156,6 +170,7 @@ def _sorted_unique_field(values: tuple[str, ...], info: ValidationInfo) -> tuple
 
 #: Field types that replace one-line `@field_validator` hooks. Each error names its field.
 SafeDecimal = Annotated[Decimal, BeforeValidator(finite_decimal_input)]
+ParsedSafeDecimal = Annotated[Decimal, BeforeValidator(_parsed_safe_decimal)]
 AwareDatetime = Annotated[datetime, AfterValidator(_aware_field)]
 ImmutableId = Annotated[str, Field(pattern=STABLE_ID_PATTERN), AfterValidator(_immutable_field)]
 SortedUniqueIds = Annotated[tuple[str, ...], AfterValidator(_sorted_unique_field)]

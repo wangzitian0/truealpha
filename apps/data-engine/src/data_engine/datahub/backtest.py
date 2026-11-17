@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections import Counter
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
@@ -17,7 +18,6 @@ from factors.backtest.engine import (
     ENGINE_ID,
     PRICE_BASIS,
     Bar,
-    Fill,
     Performance,
     PriceBook,
     Simulation,
@@ -35,11 +35,7 @@ from factors.backtest.engine import (
 from factors.composite.strategy_evaluator import IssuerInput, evaluate_cutoff
 from factors.panel import IssuerClass
 from truealpha_contracts.common import canonical_sha256
-from truealpha_contracts.strategy import (
-    GoldenDecisionOutcome,
-    LargeModelValueV0Definition,
-    QuarterlyCutoffSchedule,
-)
+from truealpha_contracts.strategy import GoldenDecisionOutcome, LargeModelValueV0Definition, QuarterlyCutoffSchedule
 
 from data_engine.config import settings
 from data_engine.datahub.market_prices import SPLIT_ADJUSTED, UNADJUSTED
@@ -99,8 +95,7 @@ def deployed_code_identity(app_env: str, git_commit_sha: str) -> str:
     sha = (git_commit_sha or "").strip()
     if app_env.strip().lower() in DEPLOYED_ENVIRONMENTS and sha.lower() in _NO_CODE_IDENTITY:
         raise RuntimeError(
-            f"the backtest refuses to run in {app_env!r} without a code identity: GIT_COMMIT_SHA is "
-            f"{git_commit_sha!r}; the deployment must inject the release ref"
+            f"the backtest refuses to run in {app_env!r} without a code identity: GIT_COMMIT_SHA is {git_commit_sha!r}; the deployment must inject the release ref"
         )
     return sha
 
@@ -115,20 +110,18 @@ class ShareBasisError(RuntimeError):
 
 def schedule_cutoffs(connection: psycopg.Connection[Any], schedule: QuarterlyCutoffSchedule) -> list[datetime]:
     rows = connection.execute("select distinct cutoff_at from staging.strategy_backtest_inputs").fetchall()
-    found = sorted({row[0].astimezone(UTC) for row in rows if is_schedule_cutoff(row[0], schedule)})
-    return require_contiguous_quarters(found, schedule)
+    return require_contiguous_quarters(
+        sorted({row[0].astimezone(UTC) for row in rows if is_schedule_cutoff(row[0], schedule)}), schedule
+    )
 
 
 def require_contiguous_quarters(cutoffs: Sequence[datetime], schedule: QuarterlyCutoffSchedule) -> list[datetime]:
-    found = sorted(cutoffs)
-    if not found:
+    if not (found := sorted(cutoffs)):
         return []
-    missing = sorted(set(quarter_end_cutoffs(schedule, start=found[0], end=found[-1])) - set(found))
-    if missing:
+    if missing := sorted(set(quarter_end_cutoffs(schedule, start=found[0], end=found[-1])) - set(found)):
         raise ValueError(
-            f"the quarter-end cutoffs are not contiguous: {[cutoff.isoformat() for cutoff in missing]} are "
-            f"missing between {found[0].isoformat()} and {found[-1].isoformat()}; "
-            "run strategy_history_projection_pipeline"
+            f"the quarter-end cutoffs are not contiguous: {[c.isoformat() for c in missing]} are "
+            f"missing between {found[0].isoformat()} and {found[-1].isoformat()}; run strategy_history_projection_pipeline"
         )
     return found
 
@@ -142,64 +135,50 @@ class CutoffDecision:
     outcomes: Mapping[str, int]
 
 
-InputsAt = Callable[[datetime], Sequence[IssuerInput]]
-RateAt = Callable[[datetime], Decimal]
-
-
-def _issuer_class(issuer: HistoryIssuer | None) -> IssuerClass | None:
-    return None if issuer is None else IssuerClass(issuer.operating_branch.value)
-
-
 def decide(
     cutoffs: Sequence[datetime],
-    inputs_at: InputsAt,
+    inputs_at: Callable[[datetime], Sequence[IssuerInput]],
     issuers: Mapping[str, HistoryIssuer],
     definition: LargeModelValueV0Definition,
     *,
-    rate_at: RateAt,
+    rate_at: Callable[[datetime], Decimal],
 ) -> list[CutoffDecision]:
     decisions: list[CutoffDecision] = []
     for cutoff in cutoffs:
-        rate = rate_at(cutoff)
-        inputs = [replace(item, issuer_class=_issuer_class(issuers.get(item.issuer_id))) for item in inputs_at(cutoff)]
-        evaluated = evaluate_cutoff(inputs, definition=definition, cutoff_at=cutoff, risk_free_rate=rate)
+        inputs = [
+            replace(
+                item,
+                issuer_class=IssuerClass(iss.operating_branch.value) if (iss := issuers.get(item.issuer_id)) else None,
+            )
+            for item in inputs_at(cutoff)
+        ]
+        evaluated = evaluate_cutoff(inputs, definition=definition, cutoff_at=cutoff, risk_free_rate=rate_at(cutoff))
         selected: list[str] = []
         tickers: list[str] = []
         evaluator_weights: set[Decimal | None] = set()
-        outcomes: dict[str, int] = {}
+        outcomes: Counter[str] = Counter()
         for decision in evaluated:
-            key = decision.exclusion_reason.value if decision.exclusion_reason else decision.outcome.value
-            outcomes[key] = outcomes.get(key, 0) + 1
+            outcomes[decision.exclusion_reason.value if decision.exclusion_reason else decision.outcome.value] += 1
             if decision.outcome is not GoldenDecisionOutcome.SELECTED:
                 continue
-            issuer = issuers.get(decision.issuer_id)
-            if issuer is None:
+            if (issuer := issuers.get(decision.issuer_id)) is None:
                 raise ValueError(f"{decision.issuer_id} is selected at {cutoff.isoformat()} without a listing")
             tickers.append(issuer.ticker)
             selected.append(decision.issuer_id)
             evaluator_weights.add(decision.target_weight)
         weights = equal_weights(tickers, definition.sizing.quantization)
-        if tickers and evaluator_weights != {weights[sorted(tickers)[0]]}:
+        if tickers and evaluator_weights != {weights[min(tickers)]}:
             raise ValueError(f"the evaluator weights {evaluator_weights} at {cutoff.isoformat()} are not 1/N")
         decisions.append(
-            CutoffDecision(
-                cutoff_at=cutoff,
-                weights=weights,
-                selected=tuple(selected),
-                eligible=sum(1 for item in evaluated if item.eligible),
-                outcomes=outcomes,
-            )
+            CutoffDecision(cutoff, weights, tuple(selected), sum(1 for item in evaluated if item.eligible), outcomes)
         )
     return decisions
 
 
 def price_book(unadjusted: DailySeries, split_adjusted: DailySeries) -> PriceBook:
-    bars = {
-        symbol: {day: Bar(open_, close) for day, (open_, close) in unadjusted[symbol].items()}
-        for symbol in sorted(unadjusted)
-    }
+    bars = {sym: {day: Bar(o, c) for day, (o, c) in unadjusted[sym].items()} for sym in sorted(unadjusted)}
     events = split_events_by_symbol(sorted(unadjusted), unadjusted, split_adjusted)
-    return PriceBook(bars=bars, splits=tuple(event for symbol in sorted(events) for event in events[symbol]))
+    return PriceBook(bars=bars, splits=tuple(ev for sym in sorted(events) for ev in events[sym]))
 
 
 def _cutoff_symbol_dates(
@@ -214,44 +193,30 @@ def _cutoff_symbol_dates(
 
 
 def selected_without_bars(decisions: Sequence[CutoffDecision], unadjusted: DailySeries) -> dict[str, tuple[date, ...]]:
-    priced = set(unadjusted)
-    return _cutoff_symbol_dates(decisions, lambda d: set(d.weights) - priced)
+    return _cutoff_symbol_dates(decisions, lambda dec: set(dec.weights) - set(unadjusted))
 
 
 def selected_without_open(decisions: Sequence[CutoffDecision], strategy: Simulation) -> dict[str, tuple[date, ...]]:
     fills = {fill.cutoff_at: fill for fill in strategy.fills}
     return _cutoff_symbol_dates(
         decisions,
-        lambda d: (set(d.weights) & set(fills[d.cutoff_at].unfilled_symbols)) if d.cutoff_at in fills else (),
+        lambda dec: (set(dec.weights) & set(fills[dec.cutoff_at].unfilled_symbols)) if dec.cutoff_at in fills else (),
     )
 
 
 def price_snapshot_sha256(unadjusted: DailySeries, split_adjusted: DailySeries) -> str:
-    rows = [
-        [adjust, symbol, day.isoformat(), str(open_), str(close)]
-        for adjust, series in ((UNADJUSTED, unadjusted), (SPLIT_ADJUSTED, split_adjusted))
-        for symbol, bars in series.items()
-        for day, (open_, close) in bars.items()
-    ]
-    return canonical_sha256(sorted(rows))
-
-
-def _stale_share_basis(
-    symbol: str, cutoff: datetime, shares_known: date, close_known: date, between: Sequence[SplitEvent]
-) -> str:
-    splits = ", ".join(
-        f"{event.numerator}/{event.denominator} split on {event.ex_date.isoformat()}" for event in between
-    )
-    return (
-        f"{symbol} at {cutoff.isoformat()} (share count known {shares_known.isoformat()}, "
-        f"close known {close_known.isoformat()}, {splits})"
+    return canonical_sha256(
+        sorted(
+            [adjust, symbol, day.isoformat(), str(open_), str(close)]
+            for adjust, series in ((UNADJUSTED, unadjusted), (SPLIT_ADJUSTED, split_adjusted))
+            for symbol, bars in series.items()
+            for day, (open_, close) in bars.items()
+        )
     )
 
 
 def require_current_share_basis(
-    vintages: Mapping[datetime, Sequence[MarketValueVintage]],
-    tickers: Mapping[str, str],
-    splits: Sequence[SplitEvent],
+    vintages: Mapping[datetime, Sequence[MarketValueVintage]], tickers: Mapping[str, str], splits: Sequence[SplitEvent]
 ) -> None:
     events: dict[str, list[SplitEvent]] = {}
     for event in splits:
@@ -259,24 +224,26 @@ def require_current_share_basis(
     stale: list[str] = []
     for cutoff, rows in sorted(vintages.items()):
         for row in rows:
-            symbol = tickers.get(row.issuer_id)
-            if symbol is None:
+            if (symbol := tickers.get(row.issuer_id)) is None:
                 continue
             shares_known = row.shares_knowable_at.astimezone(UTC).date()
             close_known = row.close_knowable_at.astimezone(UTC).date()
-            if split_factor_between(events.get(symbol, ()), after=shares_known, through=close_known) == 1:
+            sym_events = events.get(symbol, ())
+            if split_factor_between(sym_events, after=shares_known, through=close_known) == 1:
                 continue
             between = [
-                event
-                for event in events.get(symbol, ())
-                if split_factor_between([event], after=shares_known, through=close_known) != 1
+                f"{ev.numerator}/{ev.denominator} split on {ev.ex_date.isoformat()}"
+                for ev in sym_events
+                if split_factor_between([ev], after=shares_known, through=close_known) != 1
             ]
-            stale.append(_stale_share_basis(symbol, cutoff, shares_known, close_known, between))
+            stale.append(
+                f"{symbol} at {cutoff.isoformat()} (share count known {shares_known.isoformat()}, "
+                f"close known {close_known.isoformat()}, {', '.join(between)})"
+            )
     if stale:
         raise ShareBasisError(
             "A share count predates a split that its close follows, so the market value mixes two share "
-            f"bases ({len(stale)} found): {'; '.join(stale)}. Run strategy_history_projection_pipeline, "
-            "then run the backtest again."
+            f"bases ({len(stale)} found): {'; '.join(stale)}. Run strategy_history_projection_pipeline, then run the backtest again."
         )
 
 
@@ -295,8 +262,7 @@ class BacktestOutcome:
         state = "succeeded" if self.inserted else "unchanged"
         return (
             f"{state}: {self.run_id[:25]} {self.strategy_key} cutoffs={self.cutoffs} trades={self.trades} "
-            f"cagr={_text(self.strategy.cagr)} benchmark_cagr={_text(self.benchmark.cagr)} "
-            f"max_dd={_text(self.strategy.max_drawdown)}"
+            f"cagr={_text(self.strategy.cagr)} benchmark_cagr={_text(self.benchmark.cagr)} max_dd={_text(self.strategy.max_drawdown)}"
         )
 
 
@@ -306,15 +272,12 @@ def _text(value: Decimal | None) -> str:
 
 def _merge_override_dict(base: dict[str, Any], overrides: Mapping[str, Any]) -> None:
     for raw_key, value in overrides.items():
-        parts = raw_key.split(".")
+        *parents, leaf = raw_key.split(".")
         cursor = base
-        for part in parts[:-1]:
-            child = cursor.get(part)
-            if not isinstance(child, dict):
-                child = {}
-                cursor[part] = child
-            cursor = child
-        leaf = parts[-1]
+        for part in parents:
+            if not isinstance(cursor.get(part), dict):
+                cursor[part] = {}
+            cursor = cursor[part]
         if isinstance(value, Mapping) and isinstance(cursor.get(leaf), dict):
             _merge_override_dict(cursor[leaf], value)
         else:
@@ -322,33 +285,15 @@ def _merge_override_dict(base: dict[str, Any], overrides: Mapping[str, Any]) -> 
 
 
 def apply_definition_overrides(
-    definition: LargeModelValueV0Definition,
-    overrides: Mapping[str, Any],
+    definition: LargeModelValueV0Definition, overrides: Mapping[str, Any]
 ) -> LargeModelValueV0Definition:
     if not overrides:
         return definition
-    payload: dict[str, Any] = json.loads(
-        definition.model_dump_json(exclude={"strategy_definition_id", "content_sha256"})
-    )
+    payload: dict[str, Any] = definition.model_dump(mode="json", exclude={"strategy_definition_id", "content_sha256"})
     _merge_override_dict(payload, overrides)
     payload.pop("strategy_definition_id", None)
     payload.pop("content_sha256", None)
     return LargeModelValueV0Definition.model_validate_json(json.dumps(payload))
-
-
-def _filter_cutoff_window(
-    cutoffs: Sequence[datetime],
-    *,
-    start_cutoff: datetime | None,
-    end_cutoff: datetime | None,
-) -> list[datetime]:
-    start_utc = None if start_cutoff is None else start_cutoff.astimezone(UTC)
-    end_utc = None if end_cutoff is None else end_cutoff.astimezone(UTC)
-    return [
-        cutoff
-        for cutoff in cutoffs
-        if (start_utc is None or cutoff >= start_utc) and (end_utc is None or cutoff <= end_utc)
-    ]
 
 
 def run_core_strategy_backtest(
@@ -363,15 +308,15 @@ def run_core_strategy_backtest(
     if tick.tzinfo is None or tick.utcoffset() is None:
         raise ValueError("tick must carry a time zone")
     code_identity = deployed_code_identity(settings.app_env, settings.git_commit_sha)
-    definition = definition or load_strategy_definition()
-    if overrides:
-        definition = apply_definition_overrides(definition, overrides)
+    definition = apply_definition_overrides(definition or load_strategy_definition(), overrides or {})
     rules = execution_rules(definition)
-    cutoffs = _filter_cutoff_window(
-        schedule_cutoffs(connection, definition.schedule),
-        start_cutoff=start_cutoff,
-        end_cutoff=end_cutoff,
-    )
+    start_utc = start_cutoff.astimezone(UTC) if start_cutoff else None
+    end_utc = end_cutoff.astimezone(UTC) if end_cutoff else None
+    cutoffs = [
+        c
+        for c in schedule_cutoffs(connection, definition.schedule)
+        if (start_utc is None or c >= start_utc) and (end_utc is None or c <= end_utc)
+    ]
     if not cutoffs:
         raise BacktestPending("no quarter-end strategy inputs; run strategy_history_projection_pipeline")
 
@@ -383,66 +328,51 @@ def run_core_strategy_backtest(
     if not canonical.issuers:
         raise RuntimeError(f"no stored lineage resolves any of the {len(issuer_ids)} issuers with quarter-end inputs")
     issuers = {issuer.issuer_id: issuer for issuer in canonical.issuers}
-    tickers = [issuer.ticker for issuer in canonical.issuers]
-    if len(set(tickers)) != len(tickers):
-        raise RuntimeError(f"two issuers resolve to one ticker: {sorted(tickers)}")
-    canonical_rows = {
-        cutoff: [row for row in rows if row[0] in canonical.canonical_ids] for cutoff, rows in rows_by_cutoff.items()
-    }
-    cutoffs = require_contiguous_quarters(
-        [cutoff for cutoff, rows in canonical_rows.items() if rows], definition.schedule
-    )
+    tickers = {issuer.issuer_id: issuer.ticker for issuer in canonical.issuers}
+    if len(set(tickers.values())) != len(tickers):
+        raise RuntimeError(f"two issuers resolve to one ticker: {sorted(tickers.values())}")
+    canonical_rows = {c: [r for r in rows if r[0] in canonical.canonical_ids] for c, rows in rows_by_cutoff.items()}
+    cutoffs = require_contiguous_quarters([c for c, rows in canonical_rows.items() if rows], definition.schedule)
     if not cutoffs:
         raise BacktestPending(
             "no quarter-end inputs under canonical issuer ids; run strategy_history_projection_pipeline"
         )
     inputs_by_cutoff = {cutoff: issuer_inputs_from_rows(canonical_rows[cutoff], cutoff_at=cutoff) for cutoff in cutoffs}
-    snapshot_ids = [snapshot_id_from_rows(canonical_rows[cutoff]) for cutoff in cutoffs]
     rates: dict[datetime, RiskFreeRate] = {cutoff: risk_free_rate_at(connection, cutoff) for cutoff in cutoffs}
 
     decisions = decide(
         cutoffs, inputs_by_cutoff.__getitem__, issuers, definition, rate_at=lambda cutoff: rates[cutoff].value
     )
     if not any(decision.weights for decision in decisions):
-        outcomes: dict[str, int] = {}
+        outcomes = Counter[str]()
         for decision in decisions:
-            for key, count in decision.outcomes.items():
-                outcomes[key] = outcomes.get(key, 0) + count
+            outcomes.update(decision.outcomes)
         raise RuntimeError(f"no cutoff of {len(cutoffs)} selected an issuer; outcomes {dict(sorted(outcomes.items()))}")
 
-    symbols = sorted(tickers)
+    symbols = sorted(tickers.values())
     unadjusted = load_daily_series(connection, symbols, adjust=UNADJUSTED)
     if not unadjusted:
         raise BacktestPending(f"no unadjusted daily bars for {len(symbols)} symbols")
-    unpriced = selected_without_bars(decisions, unadjusted)
-    if unpriced:
+    if unpriced := selected_without_bars(decisions, unadjusted):
         raise RuntimeError(
             "no daily bars for selected symbols: "
-            + "; ".join(f"{symbol} ({', '.join(day.isoformat() for day in days)})" for symbol, days in unpriced.items())
+            + "; ".join(f"{sym} ({', '.join(day.isoformat() for day in days)})" for sym, days in unpriced.items())
         )
     split_adjusted = load_daily_series(connection, symbols, adjust=SPLIT_ADJUSTED)
-    missing_adjusted = sorted(set(unadjusted) - set(split_adjusted))
-    if missing_adjusted:
+    if missing_adjusted := sorted(set(unadjusted) - set(split_adjusted)):
         raise RuntimeError(f"no split-adjusted daily bars, so no split events, for {missing_adjusted}")
     book = price_book(unadjusted, split_adjusted)
-    require_current_share_basis(
-        {cutoff: vintages_by_cutoff[cutoff] for cutoff in cutoffs},
-        {issuer.issuer_id: issuer.ticker for issuer in canonical.issuers},
-        book.splits,
-    )
+    require_current_share_basis({c: vintages_by_cutoff[c] for c in cutoffs}, tickers, book.splits)
 
     strategy = simulate(
-        book,
-        [TargetPortfolio(decision.cutoff_at, decision.weights) for decision in decisions],
-        rules,
-        capital=NOTIONAL_CAPITAL,
+        book, [TargetPortfolio(d.cutoff_at, d.weights) for d in decisions], rules, capital=NOTIONAL_CAPITAL
     )
     if not strategy.valuations:
         raise BacktestPending(f"no session after the first cutoff {cutoffs[0].isoformat()} in the daily bars")
     if not strategy.trades:
         raise RuntimeError("the strategy selected issuers but no order filled: no open on any fill session")
     first_universe = sorted(
-        issuers[item.issuer_id].ticker for item in inputs_by_cutoff[cutoffs[0]] if item.issuer_id in issuers
+        tickers[item.issuer_id] for item in inputs_by_cutoff[cutoffs[0]] if item.issuer_id in tickers
     )
     if not first_universe:
         raise RuntimeError(f"no resolved issuer holds inputs at the first cutoff {cutoffs[0].isoformat()}")
@@ -459,49 +389,122 @@ def run_core_strategy_backtest(
         "strategy_key": definition.strategy_id,
         "definition_content_sha256": definition.content_sha256,
         "cutoffs": [cutoff.isoformat() for cutoff in cutoffs],
-        "input_snapshot_id": combine_snapshot_ids(snapshot_ids),
+        "input_snapshot_id": combine_snapshot_ids([snapshot_id_from_rows(canonical_rows[c]) for c in cutoffs]),
         "benchmark_universe": first_universe,
-        "issuers": sorted(
-            [issuer.issuer_id, issuer.ticker, issuer.operating_branch.value] for issuer in canonical.issuers
-        ),
+        "issuers": sorted([i.issuer_id, i.ticker, i.operating_branch.value] for i in canonical.issuers),
         "price_snapshot_sha256": price_snapshot_sha256(unadjusted, split_adjusted),
         "risk_free_rates": [
             {
-                "cutoff_at": cutoff.isoformat(),
-                "series_id": rates[cutoff].series_id,
-                "observation_date": rates[cutoff].observation_date.isoformat(),
-                "annualized_rate": str(rates[cutoff].value),
-                "source": rates[cutoff].source,
+                "cutoff_at": c.isoformat(),
+                "series_id": rate.series_id,
+                "observation_date": rate.observation_date.isoformat(),
+                "annualized_rate": str(rate.value),
+                "source": rate.source,
             }
-            for cutoff in cutoffs
+            for c in cutoffs
+            for rate in (rates[c],)
         ],
         "capital": str(NOTIONAL_CAPITAL),
         "benchmark_rule": BENCHMARK_RULE,
     }
     run_id = f"backtest-run:{canonical_sha256(binding)}"
-    record = _record(
-        run_id=run_id,
-        tick=tick,
-        definition=definition,
-        binding=binding,
-        decisions=decisions,
-        strategy=strategy,
-        benchmark=benchmark,
-        book=book,
-        unresolved=canonical.unresolved,
-        ignored_legacy_ids=sorted(canonical.merged),
-        benchmark_universe=first_universe,
-        cost_basis_points=definition.transaction_cost.basis_points,
+    never_filled = benchmark_never_filled(benchmark)
+    benchmark_by_session = {item.session: item for item in benchmark.valuations}
+    valuations = _valuation_rows(
+        month_end_valuations(strategy.valuations), benchmark_by_session, "1M"
+    ) + _valuation_rows(strategy.valuations, benchmark_by_session, "1D")
+    trades = tuple(
+        (t.session, t.symbol, t.side, t.shares, t.price, t.notional, t.weight_before, t.weight_after, t.fee)
+        for t in strategy.trades
+    )
+    strategy_perf, benchmark_perf = performance(strategy.valuations), performance(benchmark.valuations)
+    strategy_map, benchmark_map = _decimal_map(strategy_perf), _decimal_map(benchmark_perf)
+    turnover_monthly = monthly_turnover(strategy)
+    fills = {fill.cutoff_at: fill for fill in strategy.fills}
+    result_sha256 = canonical_sha256(
+        {
+            "valuations": [list(map(str, row)) for row in valuations],
+            "trades": [list(map(str, row)) for row in trades],
+            "strategy": strategy_map,
+            "benchmark": benchmark_map,
+            "turnover_monthly": str(turnover_monthly),
+        }
+    )
+    payload: dict[str, Any] = {
+        "binding": binding,
+        "result_sha256": result_sha256,
+        "engine_id": ENGINE_ID,
+        "price_basis": PRICE_BASIS,
+        "claim_ceiling": CLAIM_CEILING,
+        "execution": {
+            "rule_id": definition.execution.rule_id,
+            "lag_sessions": definition.execution.lag_sessions,
+            "price_field": definition.execution.price_field,
+            "unfilled_order_behavior": definition.execution.unfilled_order_behavior,
+            "transaction_cost_basis_points_per_side": str(definition.transaction_cost.basis_points),
+        },
+        "strategy": strategy_map,
+        "benchmark": {
+            "rule": BENCHMARK_RULE,
+            "universe": list(first_universe),
+            "unfilled_order_behavior": "next_session_open",
+            "deferred_fills": [
+                {
+                    "symbol": item.symbol,
+                    "ordered_session": item.ordered_session.isoformat(),
+                    "filled_session": item.filled_session.isoformat(),
+                }
+                for item in benchmark.deferred_fills
+            ],
+            "never_filled": list(never_filled),
+            "splits_applied": _splits_applied(benchmark),
+            **benchmark_map,
+        },
+        "turnover_monthly": str(turnover_monthly),
+        "sharpe_risk_free": SHARPE_RISK_FREE.payload(),
+        "cutoffs": [
+            {
+                "cutoff_at": d.cutoff_at.isoformat(),
+                "fill_session": None if fill is None or fill.session is None else fill.session.isoformat(),
+                "weights": {symbol: str(weight) for symbol, weight in sorted(d.weights.items())},
+                "selected_issuers": list(d.selected),
+                "eligible": d.eligible,
+                "outcomes": dict(sorted(d.outcomes.items())),
+                "unfilled_symbols": [] if fill is None else list(fill.unfilled_symbols),
+                "turnover": None if fill is None else str(fill.turnover),
+            }
+            for d in decisions
+            for fill in (fills.get(d.cutoff_at),)
+        ],
+        "split_events": [
+            {"symbol": ev.symbol, "ex_date": ev.ex_date.isoformat(), "factor": str(ev.factor)} for ev in book.splits
+        ],
+        "splits_applied": _splits_applied(strategy),
+        "unresolved_issuers": list(canonical.unresolved),
+        "ignored_legacy_issuer_ids": sorted(canonical.merged),
+        "limitations": list(run_limitations(never_filled, selected_without_open(decisions, strategy))),
+    }
+    book_symbols = sorted(book.bars)
+    record = BacktestRecord(
+        run_id,
+        definition.strategy_id,
+        definition.definition_version,
+        f"strategy-backtest-inputs:{len(book_symbols)}-symbols:{canonical_sha256(book_symbols)[:16]}",
+        strategy.valuations[0].session,
+        strategy.valuations[-1].session,
+        tick,
+        definition.content_sha256,
+        strategy_perf,
+        benchmark_perf,
+        turnover_monthly,
+        payload,
+        tuple(valuations),
+        trades,
+        result_sha256,
     )
     inserted = persist_backtest_run(connection, record)
     return BacktestOutcome(
-        run_id=run_id,
-        inserted=inserted,
-        strategy_key=definition.strategy_id,
-        cutoffs=len(cutoffs),
-        trades=len(strategy.trades),
-        strategy=record.strategy_performance,
-        benchmark=record.benchmark_performance,
+        run_id, inserted, definition.strategy_id, len(cutoffs), len(strategy.trades), strategy_perf, benchmark_perf
     )
 
 
@@ -561,7 +564,7 @@ def _splits_applied(simulation: Simulation) -> list[dict[str, str]]:
 
 
 def _decimal_map(value: Performance) -> dict[str, str | None]:
-    return {key: None if item is None else str(item) for key, item in value.__dict__.items()}
+    return {k: None if v is None else str(v) for k, v in value.__dict__.items()}
 
 
 def _valuation_rows(
@@ -569,162 +572,28 @@ def _valuation_rows(
 ) -> list[tuple[str, date, Decimal, Decimal, Decimal, Decimal, Decimal]]:
     rows = []
     for item in strategy:
-        paired = benchmark.get(item.session)
-        if paired is None:
+        if (p := benchmark.get(item.session)) is None:
             raise ValueError(f"the benchmark has no valuation on {item.session.isoformat()}")
         rows.append(
-            (
-                resolution,
-                item.session,
-                item.cum_nav,
-                item.drawdown,
-                item.gross_exposure,
-                item.cash_weight,
-                paired.cum_nav,
-            )
+            (resolution, item.session, item.cum_nav, item.drawdown, item.gross_exposure, item.cash_weight, p.cum_nav)
         )
     return rows
 
 
-def _cutoff_entry(decision: CutoffDecision, fill: Fill | None) -> dict[str, Any]:
-    return {
-        "cutoff_at": decision.cutoff_at.isoformat(),
-        "fill_session": None if fill is None or fill.session is None else fill.session.isoformat(),
-        "weights": {symbol: str(weight) for symbol, weight in sorted(decision.weights.items())},
-        "selected_issuers": list(decision.selected),
-        "eligible": decision.eligible,
-        "outcomes": dict(sorted(decision.outcomes.items())),
-        "unfilled_symbols": [] if fill is None else list(fill.unfilled_symbols),
-        "turnover": None if fill is None else str(fill.turnover),
-    }
-
-
-def _record(
-    *,
-    run_id: str,
-    tick: datetime,
-    definition: LargeModelValueV0Definition,
-    binding: dict[str, Any],
-    decisions: Sequence[CutoffDecision],
-    strategy: Simulation,
-    benchmark: Simulation,
-    book: PriceBook,
-    unresolved: Sequence[str],
-    ignored_legacy_ids: Sequence[str],
-    benchmark_universe: Sequence[str],
-    cost_basis_points: Decimal,
-) -> BacktestRecord:
-    never_filled = benchmark_never_filled(benchmark)
-    unfilled_selections = selected_without_open(decisions, strategy)
-    benchmark_by_session = {item.session: item for item in benchmark.valuations}
-    valuations = _valuation_rows(
-        month_end_valuations(strategy.valuations), benchmark_by_session, "1M"
-    ) + _valuation_rows(strategy.valuations, benchmark_by_session, "1D")
-    trades = tuple(
-        (
-            trade.session,
-            trade.symbol,
-            trade.side,
-            trade.shares,
-            trade.price,
-            trade.notional,
-            trade.weight_before,
-            trade.weight_after,
-            trade.fee,
-        )
-        for trade in strategy.trades
-    )
-    strategy_performance = performance(strategy.valuations)
-    benchmark_performance = performance(benchmark.valuations)
-    first, last = strategy.valuations[0].session, strategy.valuations[-1].session
-    turnover_monthly = monthly_turnover(strategy)
-    fills = {fill.cutoff_at: fill for fill in strategy.fills}
-    result_sha256 = canonical_sha256(
-        {
-            "valuations": [[str(cell) for cell in row] for row in valuations],
-            "trades": [[str(cell) for cell in row] for row in trades],
-            "strategy": _decimal_map(strategy_performance),
-            "benchmark": _decimal_map(benchmark_performance),
-            "turnover_monthly": str(turnover_monthly),
-        }
-    )
-    payload: dict[str, Any] = {
-        "binding": binding,
-        "result_sha256": result_sha256,
-        "engine_id": ENGINE_ID,
-        "price_basis": PRICE_BASIS,
-        "claim_ceiling": CLAIM_CEILING,
-        "execution": {
-            "rule_id": definition.execution.rule_id,
-            "lag_sessions": definition.execution.lag_sessions,
-            "price_field": definition.execution.price_field,
-            "unfilled_order_behavior": definition.execution.unfilled_order_behavior,
-            "transaction_cost_basis_points_per_side": str(cost_basis_points),
-        },
-        "strategy": _decimal_map(strategy_performance),
-        "benchmark": {
-            "rule": BENCHMARK_RULE,
-            "universe": list(benchmark_universe),
-            "unfilled_order_behavior": "next_session_open",
-            "deferred_fills": [
-                {
-                    "symbol": item.symbol,
-                    "ordered_session": item.ordered_session.isoformat(),
-                    "filled_session": item.filled_session.isoformat(),
-                }
-                for item in benchmark.deferred_fills
-            ],
-            "never_filled": list(never_filled),
-            "splits_applied": _splits_applied(benchmark),
-            **_decimal_map(benchmark_performance),
-        },
-        "turnover_monthly": str(turnover_monthly),
-        "sharpe_risk_free": SHARPE_RISK_FREE.payload(),
-        "cutoffs": [_cutoff_entry(decision, fills.get(decision.cutoff_at)) for decision in decisions],
-        "split_events": [
-            {"symbol": event.symbol, "ex_date": event.ex_date.isoformat(), "factor": str(event.factor)}
-            for event in book.splits
-        ],
-        "splits_applied": _splits_applied(strategy),
-        "unresolved_issuers": list(unresolved),
-        "ignored_legacy_issuer_ids": list(ignored_legacy_ids),
-        "limitations": list(run_limitations(never_filled, unfilled_selections)),
-    }
-    symbols = sorted(book.bars)
-    return BacktestRecord(
-        run_id=run_id,
-        strategy_key=definition.strategy_id,
-        strategy_version=definition.definition_version,
-        universe_id=f"strategy-backtest-inputs:{len(symbols)}-symbols:{canonical_sha256(symbols)[:16]}",
-        start_date=first,
-        end_date=last,
-        executed_at=tick,
-        definition_content_sha256=definition.content_sha256,
-        strategy_performance=strategy_performance,
-        benchmark_performance=benchmark_performance,
-        turnover_monthly=turnover_monthly,
-        metrics_payload=payload,
-        valuations=tuple(valuations),
-        trades=trades,
-        result_sha256=result_sha256,
-    )
-
-
-_INSERT_RUN_SQL = """
-insert into mart.backtest_runs (
-    run_id, strategy_key, strategy_version, universe_id, start_date, end_date, status,
-    cagr_monthly, sharpe_daily, max_dd_daily, vol_daily, turnover_monthly, calmar_daily,
-    metrics_payload, error_message, executed_at,
-    definition_content_sha256, price_basis, claim_ceiling,
-    benchmark_rule, benchmark_cagr, benchmark_max_dd
-) values (
-    %s, %s, %s, %s, %s, %s, 'succeeded',
-    %s, %s, %s, %s, %s, %s,
-    %s, null, %s,
-    %s, %s, %s,
-    %s, %s, %s
+_INSERT_RUN_SQL = (
+    "insert into mart.backtest_runs (run_id, strategy_key, strategy_version, universe_id, start_date, end_date, status, "
+    "cagr_monthly, sharpe_daily, max_dd_daily, vol_daily, turnover_monthly, calmar_daily, metrics_payload, error_message, "
+    "executed_at, definition_content_sha256, price_basis, claim_ceiling, benchmark_rule, benchmark_cagr, benchmark_max_dd) "
+    "values (%s, %s, %s, %s, %s, %s, 'succeeded', %s, %s, %s, %s, %s, %s, %s, null, %s, %s, %s, %s, %s, %s, %s)"
 )
-"""
+_INSERT_VALUATIONS_SQL = (
+    "insert into mart.backtest_valuations (run_id, resolution, valuation_date, cum_nav, drawdown, gross_exposure, cash_weight, benchmark_cum_nav) "
+    "values (%s, %s, %s, %s, %s, %s, %s, %s)"
+)
+_INSERT_TRADES_SQL = (
+    "insert into mart.backtest_trades (run_id, trade_date, symbol, side, shares, execution_price, trade_value, weight_before, weight_after, fee_paid) "
+    "values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+)
 
 
 def persist_backtest_run(connection: psycopg.Connection[Any], record: BacktestRecord) -> bool:
@@ -765,24 +634,8 @@ def persist_backtest_run(connection: psycopg.Connection[Any], record: BacktestRe
         ),
     )
     with connection.cursor() as cursor:
-        cursor.executemany(
-            """
-            insert into mart.backtest_valuations (
-                run_id, resolution, valuation_date, cum_nav, drawdown, gross_exposure, cash_weight,
-                benchmark_cum_nav
-            ) values (%s, %s, %s, %s, %s, %s, %s, %s)
-            """,
-            [(record.run_id, *row) for row in record.valuations],
-        )
-        cursor.executemany(
-            """
-            insert into mart.backtest_trades (
-                run_id, trade_date, symbol, side, shares, execution_price, trade_value,
-                weight_before, weight_after, fee_paid
-            ) values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """,
-            [(record.run_id, *row) for row in record.trades],
-        )
+        for sql, rows in ((_INSERT_VALUATIONS_SQL, record.valuations), (_INSERT_TRADES_SQL, record.trades)):
+            cursor.executemany(sql, [(record.run_id, *row) for row in rows])
     return True
 
 

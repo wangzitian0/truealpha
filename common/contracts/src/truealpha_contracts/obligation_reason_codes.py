@@ -4,13 +4,6 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-from truealpha_contracts.common import (
-    ContentHash,
-    FrozenModel,
-    IdentifiedFrozenModel,
-    content_id,
-)
-
 
 class ObligationDisposition(StrEnum):
     STOP = "stop"
@@ -53,38 +46,3 @@ _CANONICAL: dict[ObligationReasonCode, ObligationDisposition] = {
 
 def disposition_for(code: ObligationReasonCode) -> ObligationDisposition:
     return _CANONICAL[code]
-
-
-class ReasonCodeEntry(FrozenModel):
-    code: ObligationReasonCode
-    disposition: ObligationDisposition
-
-
-class ObligationReasonCodeRegistry(IdentifiedFrozenModel):
-    id_field = "registry_id"
-    id_prefix = "obligation-reason-registry"
-    registry_id: str = content_id("obligation-reason-registry")
-    content_sha256: ContentHash = ""
-    registry_version: str
-    entries: tuple[ReasonCodeEntry, ...]
-
-    def _canonicalize(self) -> None:
-        codes = [entry.code for entry in self.entries]
-        if len(codes) != len(set(codes)):
-            raise ValueError("a reason code cannot appear twice in the registry")
-        if set(codes) != set(ObligationReasonCode):
-            raise ValueError("the registry must bind every reason code exactly once")
-
-    def disposition_for(self, code: ObligationReasonCode) -> ObligationDisposition:
-        for entry in self.entries:
-            if entry.code is code:
-                return entry.disposition
-        raise KeyError(code)
-
-    @classmethod
-    def canonical(cls) -> ObligationReasonCodeRegistry:
-        entries = tuple(
-            ReasonCodeEntry(code=code, disposition=disposition)
-            for code, disposition in sorted(_CANONICAL.items(), key=lambda item: item[0].value)
-        )
-        return cls(registry_version="v2", entries=entries)

@@ -1,4 +1,4 @@
-"""Single-source evaluator for the large_model_value_v0 decision algorithm (#393, #1235, #1518)."""
+"""Evaluator for `large_model_value_v0` (#393, #1235, #1518)."""
 
 from __future__ import annotations
 
@@ -54,24 +54,20 @@ def _input_keys(factor_name: str, *, issuer_class: IssuerClass | None = None) ->
     return keys
 
 
-_PEG_CAGR_YEARS = 3
-_PEG_WINDOW_FLAG_PREFIXES = ("cagr_years:", "window:")
-_METRIC_FOR_KEY = INPUT_KEY_ALIASES
-
-_REQUIRED_INPUT_REASONS: tuple[tuple[str, ExclusionReason], ...] = (
-    ("gross_profit", ExclusionReason.MISSING_GROSS_PROFIT_FACT),
-    ("pre_provision_profit", ExclusionReason.MISSING_GROSS_PROFIT_FACT),
-    ("bank_net_revenue", ExclusionReason.MISSING_GROSS_PROFIT_FACT),
-    ("total_assets", ExclusionReason.MISSING_TOTAL_ASSETS_FACT),
-    ("stockholders_equity", ExclusionReason.MISSING_TANGIBLE_COMMON_EQUITY),
-    ("goodwill", ExclusionReason.MISSING_TANGIBLE_COMMON_EQUITY),
-    ("intangible_assets_net_excluding_goodwill", ExclusionReason.MISSING_TANGIBLE_COMMON_EQUITY),
-    ("preferred_stock_value", ExclusionReason.MISSING_PREFERRED_STOCK_VALUE),
-    ("headcount", ExclusionReason.MISSING_HEADCOUNT_DISCLOSURE),
-    ("revenue", ExclusionReason.MISSING_REVENUE_FACT),
-    ("shares_outstanding", ExclusionReason.MISSING_MARKET_VALUE_INPUT),
-    ("last_close", ExclusionReason.MISSING_MARKET_VALUE_INPUT),
-)
+_REQUIRED_INPUT_REASONS: Mapping[str, ExclusionReason] = {
+    "gross_profit": ExclusionReason.MISSING_GROSS_PROFIT_FACT,
+    "pre_provision_profit": ExclusionReason.MISSING_GROSS_PROFIT_FACT,
+    "bank_net_revenue": ExclusionReason.MISSING_GROSS_PROFIT_FACT,
+    "total_assets": ExclusionReason.MISSING_TOTAL_ASSETS_FACT,
+    "stockholders_equity": ExclusionReason.MISSING_TANGIBLE_COMMON_EQUITY,
+    "goodwill": ExclusionReason.MISSING_TANGIBLE_COMMON_EQUITY,
+    "intangible_assets_net_excluding_goodwill": ExclusionReason.MISSING_TANGIBLE_COMMON_EQUITY,
+    "preferred_stock_value": ExclusionReason.MISSING_PREFERRED_STOCK_VALUE,
+    "headcount": ExclusionReason.MISSING_HEADCOUNT_DISCLOSURE,
+    "revenue": ExclusionReason.MISSING_REVENUE_FACT,
+    "shares_outstanding": ExclusionReason.MISSING_MARKET_VALUE_INPUT,
+    "last_close": ExclusionReason.MISSING_MARKET_VALUE_INPUT,
+}
 
 _REFUSAL_FLAG_REASONS: tuple[tuple[str, ExclusionReason], ...] = (
     (NEGATIVE_TCE_FLAG, ExclusionReason.NEGATIVE_TANGIBLE_COMMON_EQUITY),
@@ -80,22 +76,15 @@ _REFUSAL_FLAG_REASONS: tuple[tuple[str, ExclusionReason], ...] = (
     (UNIT_MISMATCH_REASON, ExclusionReason.MISSING_MARKET_VALUE_INPUT),
 )
 
-_MULTIPLE_FACTOR = {
-    ValuationBasis.PRICE_TO_SALES: price_to_sales,
-    ValuationBasis.PRICE_TO_GROSS_PROFIT: price_to_gross_profit,
-}
-
-
-def _recorded_only_input_keys(basis: ValuationBasis) -> frozenset[str]:
-    if basis is ValuationBasis.PRICE_TO_SALES:
-        return frozenset()
-    return frozenset(_input_keys("price_to_sales")) - frozenset(_input_keys(basis.value))
-
 
 def _required_inputs(basis: ValuationBasis, consumed: frozenset[str]) -> tuple[tuple[str, ExclusionReason], ...]:
-    recorded_only = _recorded_only_input_keys(basis)
+    recorded_only = (
+        frozenset()
+        if basis is ValuationBasis.PRICE_TO_SALES
+        else frozenset(_input_keys("price_to_sales")) - frozenset(_input_keys(basis.value))
+    )
     return tuple(
-        (key, reason) for key, reason in _REQUIRED_INPUT_REASONS if key in consumed and key not in recorded_only
+        (key, reason) for key, reason in _REQUIRED_INPUT_REASONS.items() if key in consumed and key not in recorded_only
     )
 
 
@@ -174,26 +163,25 @@ class IssuerInput:
     issuer_class: IssuerClass | None = None
 
     def __post_init__(self) -> None:
-        normalized_records = {
-            key: (_as_measure(key, val, subject=self.issuer_id, knowable_at=self.knowable_at.get(key)), conf)
-            for key, (val, conf) in self.records.items()
-        }
-        object.__setattr__(self, "records", MappingProxyType(normalized_records))
-        normalized_periodic = {
-            key: MappingProxyType(
-                {
-                    period: (
-                        _as_measure(
-                            key, val, subject=self.issuer_id, period=period, knowable_at=self.knowable_at.get(key)
-                        ),
-                        conf,
-                    )
-                    for period, (val, conf) in by_period.items()
-                }
+        def _wrap(
+            key: str, raw: Measure | Decimal, conf: Decimal, period: FiscalPeriod | None = None
+        ) -> tuple[Measure, Decimal]:
+            return (
+                _as_measure(key, raw, subject=self.issuer_id, period=period, knowable_at=self.knowable_at.get(key)),
+                conf,
             )
-            for key, by_period in self.periodic_records.items()
-        }
-        object.__setattr__(self, "periodic_records", MappingProxyType(normalized_periodic))
+
+        object.__setattr__(self, "records", MappingProxyType({k: _wrap(k, v, c) for k, (v, c) in self.records.items()}))
+        object.__setattr__(
+            self,
+            "periodic_records",
+            MappingProxyType(
+                {
+                    k: MappingProxyType({p: _wrap(k, v, c, p) for p, (v, c) in by_period.items()})
+                    for k, by_period in self.periodic_records.items()
+                }
+            ),
+        )
 
 
 @dataclass(frozen=True)
@@ -221,7 +209,7 @@ class EvaluatedDecision:
 def peg_reason_codes(result: FactorResult) -> tuple[str, ...]:
     if result.value is not None:
         return ()
-    return tuple(flag for flag in result.flags if not flag.startswith(_PEG_WINDOW_FLAG_PREFIXES))
+    return tuple(flag for flag in result.flags if not flag.startswith(("cagr_years:", "window:")))
 
 
 def _quantize(value: Decimal, quantization: DecimalQuantization) -> Decimal:
@@ -238,36 +226,33 @@ def _resolve_bank_numerator_key(key: str, mapping: Mapping[str, object]) -> str:
     return key
 
 
-def _make_fact(
-    issuer_id: str, key: str, measure: Measure, confidence: Decimal, as_of: datetime, period: str | None = None
-) -> Fact:
-    metric = _METRIC_FOR_KEY.get(key, key)
-    return Fact(
-        entity_id=issuer_id,
-        metric=metric,
-        value=measure.value,
-        unit_family=METRICS[metric].unit_family,
-        unit=measure.unit,
-        confidence=confidence,
-        as_of=as_of,
-        fiscal_period=period,
-    )
-
-
 def _facts_for(issuer: IssuerInput, keys: Sequence[str], *, as_of: datetime) -> list[Fact]:
     facts: list[Fact] = []
     for key in keys:
-        if key in issuer.periodic_records:
-            for period, (raw_measure, confidence) in sorted(issuer.periodic_records[key].items()):
-                measure = _as_measure(key, raw_measure, subject=issuer.issuer_id, period=period, knowable_at=as_of)
-                facts.append(_make_fact(issuer.issuer_id, key, measure, confidence, as_of, period=period))
-            continue
-        record = issuer.records.get(_resolve_bank_numerator_key(key, issuer.records))
-        if record is None:
-            continue
-        raw_measure, confidence = record
-        measure = _as_measure(key, raw_measure, subject=issuer.issuer_id, knowable_at=as_of)
-        facts.append(_make_fact(issuer.issuer_id, key, measure, confidence, as_of))
+        resolved = _resolve_bank_numerator_key(key, issuer.records)
+        items = (
+            sorted(issuer.periodic_records[key].items())
+            if key in issuer.periodic_records
+            else [(None, issuer.records[resolved])]
+            if resolved in issuer.records
+            else []
+        )
+        metric = INPUT_KEY_ALIASES.get(key, key)
+        unit_family = METRICS[metric].unit_family
+        for period, (raw_measure, confidence) in items:
+            measure = _as_measure(key, raw_measure, subject=issuer.issuer_id, period=period, knowable_at=as_of)
+            facts.append(
+                Fact(
+                    entity_id=issuer.issuer_id,
+                    metric=metric,
+                    value=measure.value,
+                    unit_family=unit_family,
+                    unit=measure.unit,
+                    confidence=confidence,
+                    as_of=as_of,
+                    fiscal_period=period,
+                )
+            )
     return facts
 
 
@@ -301,7 +286,7 @@ def _has_stale_period(issuer: IssuerInput, keys: Sequence[str], *, as_of: dateti
 
 
 class LookAheadError(ValueError):
-    """Raised when an input's `knowable_at` is strictly after the evaluation `cutoff_at`."""
+    """Input `knowable_at` exceeds `cutoff_at`."""
 
 
 def _has_stale_required_input(
@@ -318,39 +303,6 @@ def _has_stale_required_input(
     return any(as_of - issuer.knowable_at[key] > maximum_age for key in resolved_keys)
 
 
-def _missing_required_reason(
-    issuer: IssuerInput, required: Sequence[tuple[str, ExclusionReason]]
-) -> ExclusionReason | None:
-    return next(
-        (reason for key, reason in required if _resolve_bank_numerator_key(key, issuer.records) not in issuer.records),
-        None,
-    )
-
-
-def _consumed_confidence_for(issuer: IssuerInput, required: Sequence[tuple[str, ExclusionReason]]) -> Decimal:
-    return min(issuer.records[_resolve_bank_numerator_key(key, issuer.records)][1] for key, _reason in required)
-
-
-def _multiple_facts_for(
-    issuer: IssuerInput,
-    basis: ValuationBasis,
-    as_of: datetime,
-    *,
-    tree: FactorVariantSpec | None = None,
-    metrics: Mapping[str, PanelMetricSpec] = PANEL_METRICS,
-) -> list[Fact]:
-    keys = list(_input_keys(basis.value, issuer_class=issuer.issuer_class))
-    if basis is ValuationBasis.PRICE_TO_GROSS_PROFIT and tree is not None and issuer.issuer_class is not None:
-        num_key = input_key_of(operating_numerator_node(tree, issuer.issuer_class, metrics=metrics))
-        keys = [num_key if k in ("gross_profit", "pre_provision_profit") else k for k in keys]
-    facts = _facts_for(issuer, keys, as_of=as_of)
-    if basis is ValuationBasis.PRICE_TO_GROSS_PROFIT and not any(f.metric == "gross_profit" for f in facts):
-        proxy = next((f for f in facts if f.metric in ("pre_provision_profit", "bank_net_revenue")), None)
-        if proxy is not None:
-            return [*facts, proxy.model_copy(update={"metric": "gross_profit"})]
-    return facts
-
-
 def _check_issuer_eligibility(
     issuer: IssuerInput,
     *,
@@ -358,44 +310,25 @@ def _check_issuer_eligibility(
     as_of: datetime,
     tree: FactorVariantSpec,
     metrics: Mapping[str, PanelMetricSpec],
-) -> tuple[EvaluatedDecision | None, Decimal]:
+) -> EvaluatedDecision | Decimal:
     assert issuer.issuer_class is not None
-    metric = tree.root
     consumed = _consumed_input_keys(metrics, {issuer.issuer_class: tree})
     required = _required_inputs(definition.valuation_basis, consumed)
-    if (missing := _missing_required_reason(issuer, required)) is not None:
-        return _excluded(issuer.issuer_id, missing, confidence=None, labor_efficiency_metric=metric), Decimal(0)
+    missing = next(
+        (reason for key, reason in required if _resolve_bank_numerator_key(key, issuer.records) not in issuer.records),
+        None,
+    )
+    if missing is not None:
+        return _excluded(issuer.issuer_id, missing, None, tree.root)
     max_age = timedelta(days=definition.eligibility.maximum_input_age_days)
     if _has_stale_required_input(issuer, [k for k, _ in required], as_of=as_of, maximum_age=max_age):
-        return (
-            _excluded(
-                issuer.issuer_id,
-                ExclusionReason.STALE_REQUIRED_INPUT,
-                confidence=None,
-                labor_efficiency_metric=metric,
-            ),
-            Decimal(0),
-        )
+        return _excluded(issuer.issuer_id, ExclusionReason.STALE_REQUIRED_INPUT, None, tree.root)
     if _has_stale_period(issuer, sorted(consumed), as_of=as_of, maximum_age=max_age):
-        return (
-            _excluded(issuer.issuer_id, ExclusionReason.STALE_PERIOD, confidence=None, labor_efficiency_metric=metric),
-            Decimal(0),
-        )
-    consumed_confidence = _consumed_confidence_for(issuer, required)
-    if (
-        definition.eligibility.minimum_confidence is not None
-        and consumed_confidence < definition.eligibility.minimum_confidence
-    ):
-        return (
-            _excluded(
-                issuer.issuer_id,
-                ExclusionReason.BELOW_CONFIDENCE_FLOOR,
-                confidence=consumed_confidence,
-                labor_efficiency_metric=metric,
-            ),
-            Decimal(0),
-        )
-    return None, consumed_confidence
+        return _excluded(issuer.issuer_id, ExclusionReason.STALE_PERIOD, None, tree.root)
+    conf = min(issuer.records[_resolve_bank_numerator_key(key, issuer.records)][1] for key, _ in required)
+    if definition.eligibility.minimum_confidence is not None and conf < definition.eligibility.minimum_confidence:
+        return _excluded(issuer.issuer_id, ExclusionReason.BELOW_CONFIDENCE_FLOOR, conf, tree.root)
+    return conf
 
 
 def _evaluate_issuer(
@@ -406,16 +339,15 @@ def _evaluate_issuer(
     as_of: datetime,
     trees: Mapping[IssuerClass, FactorVariantSpec],
     metrics: Mapping[str, PanelMetricSpec],
-) -> tuple[EvaluatedDecision, Decimal | None]:
+) -> EvaluatedDecision:
     tree = None if issuer.issuer_class is None else trees.get(issuer.issuer_class)
     if issuer.issuer_class is None or tree is None:
-        return _excluded(issuer.issuer_id, ExclusionReason.MISSING_ISSUER_CLASS, confidence=None), None
+        return _excluded(issuer.issuer_id, ExclusionReason.MISSING_ISSUER_CLASS)
 
-    rejection, consumed_confidence = _check_issuer_eligibility(
-        issuer, definition=definition, as_of=as_of, tree=tree, metrics=metrics
-    )
-    if rejection is not None:
-        return rejection, None
+    eligibility = _check_issuer_eligibility(issuer, definition=definition, as_of=as_of, tree=tree, metrics=metrics)
+    if isinstance(eligibility, EvaluatedDecision):
+        return eligibility
+    consumed_confidence = eligibility
 
     basis = definition.valuation_basis
     gppe_result = gross_profit_per_employee(
@@ -430,32 +362,35 @@ def _evaluate_issuer(
     ps_result = price_to_sales(
         _facts_for(issuer, _input_keys("price_to_sales"), as_of=as_of), entity_id=issuer.issuer_id, as_of=as_of
     )
-    multiple_result = (
-        ps_result
-        if basis is ValuationBasis.PRICE_TO_SALES
-        else _MULTIPLE_FACTOR[basis](
-            _multiple_facts_for(issuer, basis, as_of, tree=tree, metrics=metrics),
-            entity_id=issuer.issuer_id,
-            as_of=as_of,
-        )
-    )
+    if basis is ValuationBasis.PRICE_TO_SALES:
+        multiple_result = ps_result
+    else:
+        num_key = input_key_of(operating_numerator_node(tree, issuer.issuer_class, metrics=metrics))
+        pgp_keys = [
+            num_key if k in ("gross_profit", "pre_provision_profit") else k
+            for k in _input_keys(basis.value, issuer_class=issuer.issuer_class)
+        ]
+        pgp_facts = _facts_for(issuer, pgp_keys, as_of=as_of)
+        if not any(f.metric == "gross_profit" for f in pgp_facts):
+            if (
+                proxy := next((f for f in pgp_facts if f.metric in ("pre_provision_profit", "bank_net_revenue")), None)
+            ) is not None:
+                pgp_facts.append(proxy.model_copy(update={"metric": "gross_profit"}))
+        multiple_result = price_to_gross_profit(pgp_facts, entity_id=issuer.issuer_id, as_of=as_of)
     if gppe_result.value is None or multiple_result.value is None:
         flags = (*gppe_result.flags, *multiple_result.flags)
         reason = next(
             (r for flag, r in _REFUSAL_FLAG_REASONS if flag in flags),
             ExclusionReason.STALE_REQUIRED_INPUT,
         )
-        return (
-            _excluded(issuer.issuer_id, reason, confidence=consumed_confidence, labor_efficiency_metric=tree.root),
-            None,
-        )
+        return _excluded(issuer.issuer_id, reason, consumed_confidence, tree.root)
 
     peg_result = peg(
         _facts_for(issuer, _input_keys("peg"), as_of=as_of),
         entity_id=issuer.issuer_id,
         growth_convention=GrowthConvention.HISTORICAL_CAGR,
         as_of=as_of,
-        cagr_years=_PEG_CAGR_YEARS,
+        cagr_years=3,
     )
     labor_efficiency = _quantize(gppe_result.value, definition.labor_efficiency.quantization)
     current_ps = None if ps_result.value is None else _quantize(ps_result.value, definition.price_to_sales.quantization)
@@ -470,14 +405,8 @@ def _evaluate_issuer(
         definition=definition,
     )
     if tier_result.value is None:
-        return (
-            _excluded(
-                issuer.issuer_id,
-                ExclusionReason.MISSING_MARKET_VALUE_INPUT,
-                confidence=tier_result.confidence,
-                labor_efficiency_metric=tree.root,
-            ),
-            None,
+        return _excluded(
+            issuer.issuer_id, ExclusionReason.MISSING_MARKET_VALUE_INPUT, tier_result.confidence, tree.root
         )
 
     band = tier_band(definition, labor_efficiency)
@@ -504,15 +433,14 @@ def _evaluate_issuer(
         labor_efficiency_metric=tree.root,
     )
     if current_multiple > band.target_upper_bound:
-        return replace(decision, outcome=GoldenDecisionOutcome.REJECTED_VALUATION_ABOVE_TIER_BAND), None
-    return decision, valuation_gap
+        return replace(decision, outcome=GoldenDecisionOutcome.REJECTED_VALUATION_ABOVE_TIER_BAND)
+    return decision
 
 
 def _excluded(
     issuer_id: str,
     reason: ExclusionReason,
-    *,
-    confidence: Decimal | None,
+    confidence: Decimal | None = None,
     labor_efficiency_metric: str | None = None,
 ) -> EvaluatedDecision:
     return EvaluatedDecision(
@@ -550,12 +478,15 @@ def rank_and_select(
         Decimal(1) / Decimal(max(min(len(candidates), selection_count), 1)), definition.sizing.quantization
     )
     for position, decision in enumerate(candidates, start=1):
-        if position <= selection_count:
-            resolved.append(
-                replace(decision, outcome=GoldenDecisionOutcome.SELECTED, rank=position, target_weight=weight)
+        selected = position <= selection_count
+        resolved.append(
+            replace(
+                decision,
+                outcome=GoldenDecisionOutcome.SELECTED if selected else decision.outcome,
+                rank=position,
+                target_weight=weight if selected else None,
             )
-        else:
-            resolved.append(replace(decision, rank=position))
+        )
     return sorted(resolved, key=lambda d: d.issuer_id)
 
 
@@ -574,16 +505,11 @@ def evaluate_cutoff(
         IssuerClass(name): bound_tree(definition, IssuerClass(name), metrics=metrics, pins=tree_pins) for name in pins
     }
     decisions = [
-        _excluded(issuer.issuer_id, plausibility_refusals[issuer.issuer_id], confidence=None)
+        _excluded(issuer.issuer_id, plausibility_refusals[issuer.issuer_id])
         if issuer.issuer_id in plausibility_refusals
         else _evaluate_issuer(
-            issuer,
-            definition=definition,
-            risk_free_rate=risk_free_rate,
-            as_of=cutoff_at,
-            trees=trees,
-            metrics=metrics,
-        )[0]
+            issuer, definition=definition, risk_free_rate=risk_free_rate, as_of=cutoff_at, trees=trees, metrics=metrics
+        )
         for issuer in issuers
     ]
     return rank_and_select(decisions, definition=definition)

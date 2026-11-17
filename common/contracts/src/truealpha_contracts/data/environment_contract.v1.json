@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "contract_version": "3.0.0",
-  "description": "Single source of truth for every universe (one record each: key, id prefix, lane name, membership, roles, report sample, tick cron), the universes each environment runs (a list, with the status of each: scheduled or stopped), sentinel set, the vendor accounts that several environments call with their limits, evidence and the percent of each environment (#1520), the maximum runtime policy of Dagster jobs (#1442, #1522), the memory capacity of the Dagster code server (#1467), and the retry, pacing and probe slots of the model seat (#1444).",
+  "description": "Environment scope, sentinels, vendor account quotas, job runtime bounds, code server memory capacity, and model seat pacing (#1416, #1520).",
   "sentinels": [
     {
       "ticker": "AAPL",
@@ -167,7 +167,7 @@
     }
   },
   "vendor_accounts": {
-    "description": "Every vendor account that more than one environment calls has one row here (#1520). A row holds the limits of the vendor, each with its evidence, and the percent of each environment. The share of a limit is amount x percent // 100 (integer floor), in the window of the limit. The shares of the environments never sum past the amount. A share of 0 is not an error: the contract loads and the gate refuses the call. A limit with the evidence kind self_imposed is our own pace. The gate enforces it and never divides it. A limit with no amount (none_published, not_known) is shown and never invented. An environment that this table does not name (local, CI) gets the whole figure of a host_ip account and no call to any other account. The gate enforces the shares of twelvedata, sec_edgar, openfigi and moomoo_opend, and the self_imposed paces of yahoo, nasdaq_index and us_treasury. The K-line stock quota of moomoo_opend is enforced by moomoo_ledger.py from this row. The provider states no whole-account figure for model_plan; each environment paces its own model attempts from model_seat.environments. The default percent 20/20/60 is owner decision D4 of 2026-10-26. The Twelve Data override 0/40/60 and the moomoo shares 6/6/18 are working choices of 2026-10-27, not owner approval.",
+    "description": "Per-vendor rate limits and environment percentage shares (#1520). Default split 20/20/60.",
     "default_percent": {"preview": 20, "staging": 20, "production": 60},
     "accounts": {
       "twelvedata": {
@@ -175,7 +175,7 @@
         "seats": ["twelvedata"],
         "outside_consumers": false,
         "percent": {"preview": 0, "staging": 40, "production": 60},
-        "percent_reason": "Working choice OD3 A of #1520, recorded 2026-10-27 and not yet an owner approval. It keeps the split that staging and production ran before this row: 3 and 4 calls a minute, 320 and 480 a day. Preview calls no Twelve Data endpoint.",
+        "percent_reason": "Keeps 3/min and 4/min split across staging/production; preview makes zero calls (#1520).",
         "limits": [
           {
             "id": "per_minute",
@@ -206,7 +206,7 @@
             "amount": 10,
             "window_seconds": 1,
             "counts_per": "not_stated",
-            "applies_to": "All SEC hosts that the sec and nport seats call share one counter. The vendor publishes no daily limit.",
+            "applies_to": "Shared across sec and nport seats.",
             "evidence": {
               "kind": "published",
               "source": ["https://www.sec.gov/search-filings/edgar-search-assistance/accessing-edgar-data"],
@@ -219,7 +219,7 @@
         "holder": "api_key",
         "seats": ["openfigi"],
         "outside_consumers": false,
-        "note": "Whether staging and production use one key is not verified here. The key is held in infra2.",
+        "note": "API key managed in infra2.",
         "limits": [
           {
             "id": "per_minute",
@@ -227,7 +227,7 @@
             "amount": 250,
             "window_seconds": 60,
             "counts_per": "api_key",
-            "applies_to": "Mapping requests with an API key. Each window starts with the first request.",
+            "applies_to": "Mapping requests with API key.",
             "evidence": {"kind": "published", "source": ["https://www.openfigi.com/api/documentation"], "checked_at": "2026-10-27"}
           }
         ]
@@ -236,7 +236,7 @@
         "holder": "account",
         "seats": ["moomoo"],
         "outside_consumers": false,
-        "note": "The shares 6/6/18 come from the default percent and are a working choice of 2026-10-27 (OD5 A of #1520), not owner approval. CapacityGate admits every moomoo call and moomoo_ledger.py checks the K-line stock quota from this row.",
+        "note": "Default 20/20/60 burst split; K-line stock quota checked by moomoo_ledger.py (#1520).",
         "limits": [
           {
             "id": "burst",
@@ -244,7 +244,7 @@
             "amount": 30,
             "window_seconds": 30,
             "counts_per": "not_stated",
-            "applies_to": "All endpoints, all processes and all environments, at the smallest published figure.",
+            "applies_to": "All endpoints across processes and environments.",
             "evidence": {
               "kind": "published",
               "source": [
@@ -262,10 +262,10 @@
             "amount": null,
             "window_seconds": 604800,
             "counts_per": "account",
-            "applies_to": "Distinct stocks of history K-line requests.",
+            "applies_to": "Distinct stocks in history K-line requests.",
             "evidence": {
               "kind": "not_known",
-              "reason": "The vendor sets this quota by the tier of the account and states no figure for ours. No stored reading exists yet. Step 2 of #1520 stores get_history_kl_quota readings."
+              "reason": "Account-tier quota unpublished by vendor (#1520)."
             }
           }
         ]
@@ -280,7 +280,7 @@
             "unit": "request",
             "amount": null,
             "counts_per": "not_stated",
-            "evidence": {"kind": "none_published", "reason": "The chart endpoint is unofficial. It has no published limit and no SLA (init.md section 9)."}
+            "evidence": {"kind": "none_published", "reason": "Unofficial chart endpoint publishes no limit."}
           },
           {
             "id": "pace",
@@ -290,7 +290,7 @@
             "counts_per": "not_stated",
             "evidence": {
               "kind": "self_imposed",
-              "reason": "Our own pace, carried over from source_registrations.py. It stops a runaway loop. OD2 A of #1520 deletes the daily number.",
+              "reason": "Self-imposed pace to avoid runaway loops (#1520).",
               "checked_at": "2026-10-27"
             }
           }
@@ -306,7 +306,7 @@
             "unit": "request",
             "amount": null,
             "counts_per": "not_stated",
-            "evidence": {"kind": "none_published", "reason": "The index-constituent endpoint publishes no limit."}
+            "evidence": {"kind": "none_published", "reason": "No published limit."}
           },
           {
             "id": "pace",
@@ -316,7 +316,7 @@
             "counts_per": "not_stated",
             "evidence": {
               "kind": "self_imposed",
-              "reason": "Our own pace, carried over from source_registrations.py. The weekly refresh makes one call. OD2 A of #1520 deletes the daily number.",
+              "reason": "Self-imposed weekly refresh pace (#1520).",
               "checked_at": "2026-10-27"
             }
           }
@@ -332,7 +332,7 @@
             "unit": "request",
             "amount": null,
             "counts_per": "not_stated",
-            "evidence": {"kind": "none_published", "reason": "The public CSV on home.treasury.gov needs no key and states no limit."}
+            "evidence": {"kind": "none_published", "reason": "Public CSV states no limit."}
           },
           {
             "id": "pace",
@@ -342,7 +342,7 @@
             "counts_per": "not_stated",
             "evidence": {
               "kind": "self_imposed",
-              "reason": "Our own pace, carried over from source_registrations.py. The nightly run makes one request. OD2 A of #1520 deletes the daily number.",
+              "reason": "Self-imposed nightly pace (#1520).",
               "checked_at": "2026-10-27"
             }
           }
@@ -352,7 +352,7 @@
         "holder": "account",
         "seats": ["filing-extraction-model"],
         "outside_consumers": true,
-        "note": "Other users of the coding plan spend the same rate limit. The provider states no whole-account figure; the per-environment pace stays in model_seat.environments (#1520).",
+        "note": "Shared coding plan; per-environment pacing sits in model_seat.environments (#1520).",
         "limits": [
           {
             "id": "rate",
@@ -363,7 +363,7 @@
               "kind": "none_published",
               "source": ["https://docs.z.ai/api-reference/api-code"],
               "checked_at": "2026-10-27",
-              "reason": "Code 1302 means that the rate limit is reached. The page states no figure and no scope."
+              "reason": "Provider returns code 1302 on limit without published numeric quota."
             }
           }
         ]
@@ -371,15 +371,15 @@
     }
   },
   "run_time_bounds": {
-    "description": "The policy parameters for job runtime bounds (#1442, #1522). Bound = margin x the longest successful run in dagster.runs over the window, and never below floor_minutes. When a job has no successful run in the window, no tag is written and the instance limit applies. Margin, floor and window stay policy.",
+    "description": "Dagster job timeout policy: max(floor_minutes, margin * longest 30d run) (#1442, #1522).",
     "margin": 2,
     "floor_minutes": 10,
     "window_days": 30
   },
   "code_server_capacity": {
-    "description": "The memory that the Dagster code server container gives to its processes, and the run limit of dagster.yaml (#1467). Every run executes inside the code server container, in the same cgroup as the gRPC server. The queue admits concurrent_runs runs (at least 2: a run that waits for other runs holds a slot). The processes may hold the share UTILIZATION_CEILING of the ceiling (the owner rule of #1418, one constant in environment_contract.py). The server holds server_mib = ceil(measured.grpc_server_hwm_mib x (1 + server_margin)). The budget of one run process is run_mib = floor((usable_mib - server_processes x server_mib) / (concurrent_runs x processes_per_run)). It is a decision, not a measurement. Tests hold dagster.yaml equal to concurrent_runs and the deployed jobs to processes_per_run. The nightly verdict runtime_shape reads the real memory.max, memory.peak and oom_kill of the container and every process size. It fails when the ceiling is lower than declared here, when the peak of a container rises above the usable share of memory.max, when a process is larger than the server or run budget, when the swap peak rises while the container is at memory.max, or when a kill or an unplanned restart is seen. A sensor keeps the counters of containers that a deploy replaced.",
+    "description": "Dagster code server memory ceiling (UTILIZATION_CEILING) and per-run budget (#1467).",
     "ceiling_mib": 1536,
-    "ceiling_source": "infra2 truealpha/truealpha/20.data_engine/compose.yaml, x-dagster-service mem_limit, one value for staging and production (infra2#1342)",
+    "ceiling_source": "infra2 20.data_engine/compose.yaml x-dagster-service mem_limit",
     "server_margin": 0.1,
     "concurrent_runs": 2,
     "server_processes": 1,
@@ -387,7 +387,7 @@
     "measured": {
       "at": "2026-10-21",
       "environment": "staging",
-      "method": "Server: VmHWM of /proc/1/status in the code server container (docker exec, read only), 13 hours after its start. server_margin is 10% for growth (the same reading was 229.5 MiB on 2026-10-20 and 211.5 MiB for a fresh server in a Linux container). Fresh import: VmHWM of /proc/self/status of a fresh interpreter that imports data_engine.dagster_defs, in a Linux container with the image layout (uv sync --frozen --no-dev --no-editable). Working run: the sensor (every 30 s) sampled the boot burst of the deploy of v0.2.35 on staging, 2026-10-21 06:41-06:46 UTC, when canary_live_pipeline and topt_live_pipeline ran together; the largest VmHWM of any process except the code server in that container was 384.4 MiB (dagster.kvs, key truealpha/runtime_shape/tracker, field largest_process). The container peak counts page cache and kernel memory, and the process peaks need not fall at the same moment, so no size per run is derived from it. The runtime_shape verdict measures the largest process of every sample and goes red above run_mib. Staging runs the TOPT universe only; production sizes come from its first nights.",
+      "method": "VmHWM of /proc/1/status 13 hours after its start and working run burst on staging v0.2.35.",
       "grpc_server_hwm_mib": 236.1,
       "fresh_import_hwm_mib": 179.7,
       "working_run_hwm_mib": 384.4,
@@ -395,11 +395,11 @@
     }
   },
   "model_seat": {
-    "description": "The limits of the model provider seat (#1444). All environments call one coding-plan account, and other users of that account share its rate limit. When the account is over its limit, it answers HTTP 429 with provider code 1302. Every model call passes one retry policy: the extraction path and the nightly key probe. A call retries only on a transient answer. A transient answer is HTTP 429 without a terminal provider code, or any answer with a transient provider code. The wait before retry n is min(initial_backoff_seconds x backoff_factor^(n-1), max_backoff_seconds), plus a random extra of at most jitter_percent. The random extra only lengthens the wait, so the waits sum to at least min_total_wait_seconds. A call stops after max_attempts attempts, or when the next wait would pass deadline_seconds since the first attempt. The wait of an attempt for the per-minute window also counts against that deadline. A call lasts at most deadline_seconds plus the timeout of one attempt. The wait for a concurrency slot counts against the deadline too. The timeout of an attempt is a socket timeout: it limits each socket operation, not the whole response. Each attempt is one ledger row. Each environment starts at most calls_per_minute attempts per minute and runs at most max_concurrent_calls attempts at one time. The limit is per environment because the account is shared. The probe starts at probe.hour_utc plus probe_offset_minutes of its environment, up to launch_margin_seconds late (the probe of production was seen 40 s late on 2026-10-21). The probe call uses attempt_timeout_seconds as its attempt timeout. Probe slots of two environments stay at least probe.slot_minutes apart. slot_minutes holds the deadline, one attempt and the launch margin, so the retries of one probe never meet the probe of another environment. Each environment names the decoding version of its model request (decoding_version, default v1; the versions are defined in data_engine.sources.model_decoding). Production moves to another version only with a production release that the owner approves. An environment that is not listed (dev, ci) has no pacing limit, the probe offset 0 and the default decoding version.",
+    "description": "Model provider retry policy, per-environment concurrency/RPM limits, and nightly probe slots (#1444).",
     "seat": "filing-extraction-model",
     "shared_credential": "single_coding_plan_account",
     "measured_at": "2026-10-21",
-    "source": "staging.api_call_ledger of both environments, source filing-extraction-model, last 36 hours, read-only SQL: staging made 71 calls, 0 failures, longest call 40 s, at most 1 call at one time; production made 7 calls, 3 failures, all by the nightly probe at 06:00:40, 06:00:43 and 06:00:47 UTC (HTTP 429, provider code 1302, answered in 446 to 600 ms). Provider codes: https://docs.z.ai/api-reference/api-code. Issue: https://github.com/wangzitian0/truealpha/issues/1444",
+    "source": "staging.api_call_ledger (#1444) and https://docs.z.ai/api-reference/api-code",
     "retry": {
       "transient_http_statuses": [429],
       "transient_provider_codes": ["1302", "1305"],
@@ -419,7 +419,7 @@
     }
   },
   "nightly_verdicts": {
-    "description": "The nightly in-environment checks that mart.nightly_verdicts records and tools/nightly_verdicts.py bounds (#876, #1521, #1522). A per_universe check expands over the lane names of the universes that an environment schedules. A stored row whose check or lane is not declared here is a retired check and is ignored by /api/health and /admin/datahub.",
+    "description": "Declared nightly checks and scheduled per-universe checks (#876, #1521, #1522).",
     "checks": {
       "market_data_freshness": {"cadence_hours": 72, "job": "market_data_refresh_pipeline"},
       "model_key_health": {"cadence_hours": 24, "job": "model_key_health"},

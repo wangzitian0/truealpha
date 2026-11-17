@@ -1,4 +1,0 @@
-{
-  "contract_set": "truealpha.issue-58.exact-contracts.v1",
-  "stable_id_pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+\\-]*$"
-}

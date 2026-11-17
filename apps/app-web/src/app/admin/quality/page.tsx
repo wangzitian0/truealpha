@@ -1,5 +1,7 @@
 import { redirect } from "next/navigation";
 import { AvailabilityBadge, ReadStateNotice } from "@/components/read-state";
+import { SummaryTile } from "@/components/data-table";
+import { ResearchTable } from "@/components/research-table";
 import { captureAvailableCount, loadToptQuality } from "@/server/topt-quality";
 import { loadQualityFunnel, type FunnelLayer } from "@/server/admin/funnel";
 import { loadOpsOverview } from "@/server/admin/ops";
@@ -22,14 +24,13 @@ function qualityHeadline(quality: unknown): { label: string; value: string }[] {
     const raw = q[key];
     return typeof raw === "string" || typeof raw === "number" ? formatRatio(String(raw)) : null;
   };
-  const cards: { label: string; value: string | null }[] = [
+  return [
     { label: "Availability (cells)", value: ratio("availability") },
     { label: "Freshness", value: ratio("freshness") },
     { label: "Lineage completeness", value: ratio("lineage_completeness") },
     { label: "Mean confidence", value: ratio("denominator_mean_confidence") },
     { label: "Complete", value: typeof q.complete === "boolean" ? String(q.complete) : null },
-  ];
-  return cards.filter((c): c is { label: string; value: string } => c.value !== null);
+  ].filter((c): c is { label: string; value: string } => c.value !== null);
 }
 
 export default async function ToptQualityPage() {
@@ -48,8 +49,8 @@ export default async function ToptQualityPage() {
       <div>
         <h1 id="quality-heading" className="text-3xl font-bold tracking-tight">TOPT data quality</h1>
         <p className="mt-2 text-gray-400">
-          Reads the governed production TOPT run through the <code className="text-accent">mart</code> read-only
-          role — the same run the MCP <code className="text-accent">topt_gppe</code> tool serves (#433).
+          Reads the governed production TOPT run through the <code className="text-accent">mart</code> read-only role —
+          the same run the MCP <code className="text-accent">topt_gppe</code> tool serves (#433).
         </p>
       </div>
 
@@ -113,49 +114,30 @@ export default async function ToptQualityPage() {
             .
           </p>
 
-          <div className="overflow-x-auto rounded-xl border border-border">
-            <table className="w-full text-left text-sm">
-              <caption className="sr-only">GPPE results by listing for the governed production run</caption>
-              <thead className="bg-card text-xs uppercase text-gray-500">
-                <tr>
-                  {["Listing", "Availability", "GPPE", "Confidence"].map((h) => (
-                    <th key={h} scope="col" className="px-4 py-3">{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {state.data.cells.map((row) => (
-                  <tr key={row.listing_id} className="border-t border-border">
-                    <th scope="row" className="px-4 py-3 font-medium" title={row.listing_id}>
-                      <span>{formatListingLabel(row.listing_id) ?? row.listing_id}</span>{" "}
-                      <code data-evidence="true" className="ml-1.5 rounded bg-gray-500/15 px-1.5 py-0.5 font-mono text-xs text-gray-400">
-                        {row.listing_id}
-                      </code>
-                    </th>
-                    <td className="px-4 py-3">
-                      <AvailabilityBadge status={row.availability === "available" ? "available" : "unavailable"} />
-                    </td>
-                    <td className="px-4 py-3 tabular-nums" title={row.gppe ?? undefined}>
-                      {formatCell(formatUsdMagnitude(row.gppe))}
-                    </td>
-                    <td className="px-4 py-3 tabular-nums" title={row.confidence ?? undefined}>
-                      {formatCell(formatRatio(row.confidence))}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <ResearchTable caption="GPPE results by listing for the governed production run" headers={["Listing", "Availability", "GPPE", "Confidence"]}>
+            {state.data.cells.map((row) => (
+              <tr key={row.listing_id} className="border-t border-border">
+                <th scope="row" className="px-4 py-3 font-medium" title={row.listing_id}>
+                  <span>{formatListingLabel(row.listing_id) ?? row.listing_id}</span>{" "}
+                  <code data-evidence="true" className="ml-1.5 rounded bg-gray-500/15 px-1.5 py-0.5 font-mono text-xs text-gray-400">
+                    {row.listing_id}
+                  </code>
+                </th>
+                <td className="px-4 py-3">
+                  <AvailabilityBadge status={row.availability === "available" ? "available" : "unavailable"} />
+                </td>
+                <td className="px-4 py-3 tabular-nums" title={row.gppe ?? undefined}>{formatCell(formatUsdMagnitude(row.gppe))}</td>
+                <td className="px-4 py-3 tabular-nums" title={row.confidence ?? undefined}>{formatCell(formatRatio(row.confidence))}</td>
+              </tr>
+            ))}
+          </ResearchTable>
 
           {state.data.quality && (
             <div className="rounded-xl border border-border bg-card p-5">
               <h2 className="font-semibold">Quality report</h2>
               <dl className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-3">
                 {qualityHeadline(state.data.quality).map(({ label, value }) => (
-                  <div key={label} className="rounded-lg border border-border bg-background px-4 py-3">
-                    <dt className="text-xs uppercase tracking-wide text-gray-500">{label}</dt>
-                    <dd className="mt-1 text-lg font-semibold tabular-nums">{value}</dd>
-                  </div>
+                  <SummaryTile key={label} label={label} value={value} />
                 ))}
               </dl>
               <details className="mt-4">

@@ -10,8 +10,8 @@ from typing import Any, NamedTuple
 from factors.backtest.corporate_actions import SplitDerivationError, SplitEvent, split_factor_between
 from truealpha_contracts.concept_mapping import ConceptMappingRuleset, ConceptRef
 
-from data_engine.datahub.market_prices import oldest_session_within_lag
-from data_engine.datahub.price_series import DailySeries, split_events_of
+from data_engine.datahub.market_prices import SPLIT_ADJUSTED, UNADJUSTED, oldest_session_within_lag
+from data_engine.datahub.price_series import DailySeries, load_daily_series, split_events_of
 
 SHARES_KEY = "shares_outstanding"
 
@@ -90,6 +90,21 @@ class OnCloseBasis(NamedTuple):
     factor: Fraction
 
 
+def _validate_unit_ratio(
+    listing_units_per_share: Decimal | int | None, shares_basis: str | None
+) -> Decimal | Unavailable:
+    if shares_basis == MISSING_CLASS_RATIO:
+        return Unavailable(MISSING_CLASS_RATIO, "the multi-class share count has no proven class conversion ratio")
+    if listing_units_per_share is None or isinstance(listing_units_per_share, bool):
+        return Unavailable(MISSING_LISTING_UNIT_RATIO, "the share count has no proven listing unit ratio")
+    ratio = Decimal(listing_units_per_share)
+    if ratio <= 0:
+        return Unavailable(
+            MISSING_LISTING_UNIT_RATIO, f"the listing unit ratio must be positive; got {listing_units_per_share!r}"
+        )
+    return ratio
+
+
 def on_close_basis(
     value: Decimal,
     knowable_at: datetime,
@@ -101,22 +116,9 @@ def on_close_basis(
     listing_units_per_share: Decimal | int | None,
     shares_basis: str | None = None,
 ) -> OnCloseBasis | Unavailable:
-    if shares_basis == MISSING_CLASS_RATIO:
-        return Unavailable(
-            MISSING_CLASS_RATIO,
-            "the multi-class share count has no proven class conversion ratio",
-        )
-    if listing_units_per_share is None or isinstance(listing_units_per_share, bool):
-        return Unavailable(
-            MISSING_LISTING_UNIT_RATIO,
-            "the share count has no proven listing unit ratio",
-        )
-    ratio = Decimal(listing_units_per_share)
-    if ratio <= 0:
-        return Unavailable(
-            MISSING_LISTING_UNIT_RATIO,
-            f"the listing unit ratio must be positive; got {listing_units_per_share!r}",
-        )
+    ratio = _validate_unit_ratio(listing_units_per_share, shares_basis)
+    if isinstance(ratio, Unavailable):
+        return ratio
     in_listed_units = value if ratio == 1 else value / ratio
     factor = split_factor_between(splits, after=basis_date, through=close_session)
     if factor == 1:
@@ -243,20 +245,8 @@ def live_on_close_basis(
     documents: Callable[[], Sequence[Mapping[str, Any]]],
     ruleset: Callable[[], ConceptMappingRuleset],
 ) -> OnCloseBasis | Unavailable:
-    if shares_basis == MISSING_CLASS_RATIO:
-        return Unavailable(
-            MISSING_CLASS_RATIO,
-            "the multi-class share count has no proven class conversion ratio",
-        )
-    if (
-        listing_units_per_share is None
-        or isinstance(listing_units_per_share, bool)
-        or Decimal(listing_units_per_share) <= 0
-    ):
-        return Unavailable(
-            MISSING_LISTING_UNIT_RATIO,
-            "the share count has no proven listing unit ratio",
-        )
+    if isinstance(ratio_or_err := _validate_unit_ratio(listing_units_per_share, shares_basis), Unavailable):
+        return ratio_or_err
     gaps = [history for history in histories if isinstance(history, Unavailable)]
     if gaps:
         return Unavailable(gaps[0].reason, "; ".join(gap.detail for gap in gaps))
@@ -322,6 +312,18 @@ def live_on_close_basis(
     )
 
 
+def load_split_histories(
+    connection: Any,
+    symbols: Sequence[str],
+    *,
+    unadjusted_adjust: str = UNADJUSTED,
+    split_adjusted_adjust: str = SPLIT_ADJUSTED,
+) -> dict[str, SplitHistory | Unavailable | None]:
+    unadjusted = load_daily_series(connection, symbols, adjust=unadjusted_adjust)
+    split_adjusted = load_daily_series(connection, symbols, adjust=split_adjusted_adjust)
+    return {symbol: split_history(symbol, unadjusted, split_adjusted) for symbol in symbols}
+
+
 __all__ = [
     "CLOSE_JUMP_BEYOND_SERIES",
     "CLOSE_JUMP_LIMIT",
@@ -346,6 +348,7 @@ __all__ = [
     "listing_units_per_share_of",
     "live_on_close_basis",
     "on_close_basis",
+    "load_split_histories",
     "share_count_as_of",
     "share_count_concepts",
     "split_history",

@@ -148,7 +148,6 @@ test-web:
 smoke: lint typecheck test
 
 contract-conformance:
-	uv run python common/contracts/conformance/export_issue58.py --check
 	uv run python common/contracts/conformance/export_environment_contract.py --check
 	uv run python common/contracts/conformance/export_strategy_definitions.py --check
 

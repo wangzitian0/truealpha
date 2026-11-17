@@ -7,6 +7,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
+from fixtures.strategy_run_fixture import FixtureStrategyRunRepository
 from pydantic import ValidationError
 from truealpha_contracts import research_cards
 from truealpha_contracts.access import AccessContext, AuthenticationMethod, PrincipalKind
@@ -36,7 +37,6 @@ from truealpha_contracts.research_report import (
     build_research_report,
 )
 from truealpha_contracts.research_report_mart import MartResearchReadRepository
-from truealpha_contracts.strategy_run_fixture import FixtureStrategyRunRepository
 
 GOLDEN = Path(__file__).parent / "golden_cards"
 CUTOFF = datetime(2026, 6, 30, 23, 59, 59, tzinfo=UTC)

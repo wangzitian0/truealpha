@@ -6,6 +6,10 @@ import { getServerPrincipal } from "@/server/auth/request-context";
 
 export const dynamic = "force-dynamic";
 
+function RightTd({ raw, display }: { raw: string | null; display: string }) {
+  return <td className="px-3 py-1.5 text-right tabular-nums" title={raw ?? undefined}>{display}</td>;
+}
+
 export default async function HoldingsPage() {
   const principal = await getServerPrincipal();
   if (!principal) redirect("/login?from=%2Fresearch%2Fholdings");
@@ -25,9 +29,7 @@ export default async function HoldingsPage() {
       </div>
 
       {funds.length === 0 ? (
-        <p className="text-sm text-gray-400">
-          No holdings captured yet — the weekly refresh lands the first vintage on its next run.
-        </p>
+        <p className="text-sm text-gray-400">No holdings captured yet — the weekly refresh lands the first vintage on its next run.</p>
       ) : (
         funds.map((fund) => (
           <div key={fund.fundId} className="space-y-3">
@@ -37,15 +39,11 @@ export default async function HoldingsPage() {
                 period {fund.reportPeriod} · filed weight {fund.totalWeightPct}% · resolved {fund.resolvedWeightPct}% ·
                 valued {fund.valuedWeightPct}%
                 {fund.weightedGap !== null
-                  ? ` · weighted gap (valued mass, ${
-                      fund.weightedGapBasis !== null ? valuationBasisLabel(fund.weightedGapBasis) : "basis not recorded"
-                    }) ${fund.weightedGap}`
+                  ? ` · weighted gap (valued mass, ${fund.weightedGapBasis !== null ? valuationBasisLabel(fund.weightedGapBasis) : "basis not recorded"}) ${fund.weightedGap}`
                   : fund.reasonCodes.length > 0
                     ? ` · weighted gap refused (${fund.reasonCodes.join(", ")})`
                     : " · no weighted gap for this run"}
-                {fund.availabilityStatus !== null
-                  ? ` · ${fund.availabilityStatus}/${fund.sourceEvidenceStatus}/${fund.factorValidationStatus}`
-                  : ""}
+                {fund.availabilityStatus !== null ? ` · ${fund.availabilityStatus}/${fund.sourceEvidenceStatus}/${fund.factorValidationStatus}` : ""}
                 {fund.runId ? ` · run ${fund.runId.slice(0, 20)}…` : " · no governed valuation run yet"}
               </span>
             </div>
@@ -63,33 +61,25 @@ export default async function HoldingsPage() {
                 </thead>
                 <tbody>
                   {fund.lines.map((line, index) => {
-                    const weightFormatted = formatRatio(line.weightPct);
-                    const targetPgpFormatted = formatRatio(line.targetPgpMidpoint);
-                    const targetPsFormatted = formatRatio(line.targetPsMidpoint);
-                    const gapFormatted = formatRatio(line.valuationGap);
+                    const weightFmt = formatRatio(line.weightPct);
+                    const targetPgp = formatRatio(line.targetPgpMidpoint);
+                    const targetPs = formatRatio(line.targetPsMidpoint);
+                    const gapFmt = formatRatio(line.valuationGap);
                     return (
                       <tr key={`${line.holdingName}-${index}`} className="border-t border-border">
                         <td className="px-3 py-1.5">{line.holdingName}</td>
                         <td className="px-3 py-1.5 font-mono text-xs text-gray-400">{formatCell(line.ticker)}</td>
-                        <td className="px-3 py-1.5 text-right tabular-nums" title={line.weightPct ?? undefined}>
-                          {weightFormatted !== null ? `${weightFormatted}%` : "—"}
-                        </td>
-                        <td className="px-3 py-1.5 text-right tabular-nums" title={line.currentPs ?? undefined}>
-                          {formatCell(formatRatio(line.currentPs))}
-                        </td>
-                        <td className="px-3 py-1.5 text-right tabular-nums" title={line.currentPgp ?? undefined}>
-                          {formatCell(formatRatio(line.currentPgp))}
-                        </td>
-                        <td className="px-3 py-1.5 text-right tabular-nums" title={line.targetPgpMidpoint ?? line.targetPsMidpoint ?? undefined}>
-                          {targetPgpFormatted !== null
-                            ? `${targetPgpFormatted} P/GP`
-                            : targetPsFormatted !== null
-                              ? `${targetPsFormatted} P/S`
-                              : "—"}
-                        </td>
-                        <td className="px-3 py-1.5 text-right tabular-nums" title={line.valuationGap ?? undefined}>
-                          {gapFormatted === null ? "—" : `${gapFormatted} ${line.currentPgp !== null ? "P/GP" : "P/S"}`}
-                        </td>
+                        <RightTd raw={line.weightPct} display={weightFmt !== null ? `${weightFmt}%` : "—"} />
+                        <RightTd raw={line.currentPs} display={formatCell(formatRatio(line.currentPs))} />
+                        <RightTd raw={line.currentPgp} display={formatCell(formatRatio(line.currentPgp))} />
+                        <RightTd
+                          raw={line.targetPgpMidpoint ?? line.targetPsMidpoint}
+                          display={targetPgp !== null ? `${targetPgp} P/GP` : targetPs !== null ? `${targetPs} P/S` : "—"}
+                        />
+                        <RightTd
+                          raw={line.valuationGap}
+                          display={gapFmt === null ? "—" : `${gapFmt} ${line.currentPgp !== null ? "P/GP" : "P/S"}`}
+                        />
                         <td className="px-3 py-1.5 text-xs">{formatCell(line.tier)}</td>
                       </tr>
                     );

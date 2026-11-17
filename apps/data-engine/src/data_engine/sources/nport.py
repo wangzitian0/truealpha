@@ -1,4 +1,4 @@
-"""SEC N-PORT-P ETF holdings-weight client and XML parser."""
+"""SEC N-PORT-P ETF holdings client and XML parser."""
 
 import json
 import xml.etree.ElementTree as ET

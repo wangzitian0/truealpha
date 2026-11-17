@@ -1,11 +1,11 @@
 import { formatShortSha } from "@/client/format";
 import { formatAgeHours } from "@/client/coerce";
+import { SummaryTile } from "@/components/data-table";
 import { ReadStateNotice } from "@/components/read-state";
+import { ResearchTable } from "@/components/research-table";
 import type { PipelineOutcome, PipelineVerdict } from "@/server/admin/pipeline";
 
-function ago(iso: string, now: number): string {
-  return `${formatAgeHours((now - new Date(iso).getTime()) / 3_600_000, 48)} ago`;
-}
+const ago = (iso: string, now: number) => `${formatAgeHours((now - new Date(iso).getTime()) / 3_600_000, 48)} ago`;
 
 function formatDuration(seconds: number | null): string {
   if (seconds === null) return "—";
@@ -20,27 +20,7 @@ function verdictLabel(verdict: PipelineVerdict | null): "ok" | "red" | "pending"
   return verdict.ok ? "ok" : "red";
 }
 
-const VERDICT_STYLE = {
-  ok: "text-emerald-400",
-  red: "text-rose-400",
-  pending: "text-gray-400",
-  none: "text-gray-400",
-} as const;
-
-function VerdictCard({ title, check, verdict, unreadable }: { title: string; check: string; verdict: PipelineVerdict | null; unreadable: boolean }) {
-  const label = verdictLabel(verdict);
-  return (
-    <div className="rounded-lg border border-border bg-card px-4 py-3">
-      <dt className="text-xs uppercase tracking-wide text-gray-500">{title}</dt>
-      <dd className={`mt-1 text-lg font-semibold ${VERDICT_STYLE[label]}`} data-verdict={check}>
-        {label === "none" ? (unreadable ? "not read" : "no verdict recorded") : label}
-      </dd>
-      <p className="mt-1 break-words font-mono text-xs text-gray-400">
-        {verdict === null ? "—" : `${verdict.ranAt} · ${verdict.summary}`}
-      </p>
-    </div>
-  );
-}
+const VERDICT_STYLE = { ok: "text-emerald-400", red: "text-rose-400", pending: "text-gray-400", none: "text-gray-400" } as const;
 
 export function PipelineHealth({ outcome, now }: { outcome: PipelineOutcome; now: number }) {
   if (outcome.kind !== "ready") {
@@ -60,17 +40,7 @@ export function PipelineHealth({ outcome, now }: { outcome: PipelineOutcome; now
   }
 
   const { windowDays, unreadable, jobs, jobRunHealth, release, appGitSha } = outcome.data;
-  const headers = [
-    "Job",
-    "Success rate",
-    "Runs",
-    "Derived bound",
-    "Longest success",
-    "Ended by bound",
-    "Last success",
-    "Last failure",
-    "First error line of the last failure",
-  ];
+  const vLabel = verdictLabel(jobRunHealth);
 
   return (
     <section aria-labelledby="pipeline-heading" className="space-y-6">
@@ -86,20 +56,27 @@ export function PipelineHealth({ outcome, now }: { outcome: PipelineOutcome; now
       </div>
 
       <dl className="grid grid-cols-1 gap-3 md:grid-cols-2">
-        <VerdictCard title="Verdict · job run health" check="job_run_health" verdict={jobRunHealth} unreadable={unreadable.verdicts !== null} />
-        <div className="rounded-lg border border-border bg-card px-4 py-3">
-          <dt className="text-xs uppercase tracking-wide text-gray-500">Release</dt>
-          <dd className="mt-1 text-lg font-semibold tabular-nums" data-release-age="true">
-            {release === null ? (unreadable.release === null ? "unknown" : "not read") : formatAgeHours(release.ageHours, 48)}
-          </dd>
-          <p className="mt-1 break-words text-xs text-gray-500">
-            {release === null
+        <SummaryTile
+          label="Verdict · job run health"
+          value={vLabel === "none" ? (unreadable.verdicts !== null ? "not read" : "no verdict recorded") : vLabel}
+          valueClass={VERDICT_STYLE[vLabel]}
+          valueData={{ "data-verdict": "job_run_health" }}
+          footClass="break-words font-mono text-gray-400"
+          foot={jobRunHealth === null ? "—" : `${jobRunHealth.ranAt} · ${jobRunHealth.summary}`}
+        />
+        <SummaryTile
+          label="Release"
+          value={release === null ? (unreadable.release === null ? "unknown" : "not read") : formatAgeHours(release.ageHours, 48)}
+          valueData={{ "data-release-age": "true" }}
+          footClass="break-words text-gray-500"
+          foot={
+            release === null
               ? unreadable.release === null
                 ? "no run has recorded its build yet"
                 : "see the notice above"
-              : `data engine ${formatShortSha(release.gitSha)} since ${release.since} · app ${formatShortSha(appGitSha)}`}
-          </p>
-        </div>
+              : `data engine ${formatShortSha(release.gitSha)} since ${release.since} · app ${formatShortSha(appGitSha)}`
+          }
+        />
       </dl>
 
       {(
@@ -117,49 +94,38 @@ export function PipelineHealth({ outcome, now }: { outcome: PipelineOutcome; now
           ),
       )}
 
-      <div className="overflow-x-auto rounded-xl border border-border">
-        <table className="w-full text-left text-sm">
-          <caption className="sr-only">Run health per Dagster job, last {windowDays} days</caption>
-          <thead className="bg-card text-xs uppercase text-gray-500">
-            <tr>
-              {headers.map((h) => (
-                <th key={h} scope="col" className="px-4 py-3">{h}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {jobs.map((job) => (
-              <tr key={job.job} className="border-t border-border/60" data-job={job.job}>
-                <td className="px-4 py-2 font-mono">{job.job}</td>
-                <td className={`px-4 py-2 tabular-nums ${job.failures > 0 ? "text-amber-400" : ""}`}>
-                  {job.successRate === null ? "no run" : `${Math.round(job.successRate * 100)}%`}
-                </td>
-                <td className="px-4 py-2 tabular-nums">{job.successes} ok · {job.failures} failed</td>
-                <td className="px-4 py-2 font-mono text-xs tabular-nums text-gray-300">
-                  {job.derivedBoundSeconds === null ? "instance limit (3h)" : formatDuration(job.derivedBoundSeconds)}
-                </td>
-                <td className="px-4 py-2 font-mono text-xs tabular-nums text-gray-300">
-                  {formatDuration(job.longestSuccessSeconds)}
-                </td>
-                <td className={`px-4 py-2 tabular-nums ${job.runsEndedByBound > 0 ? "font-semibold text-rose-400" : "text-gray-400"}`}>
-                  {job.runsEndedByBound}
-                </td>
-                <td className="px-4 py-2 text-gray-400" title={job.lastSuccessAt ?? undefined}>
-                  {job.lastSuccessAt === null ? "never" : ago(job.lastSuccessAt, now)}
-                </td>
-                <td className="px-4 py-2 text-gray-400" title={job.lastFailure?.at}>
-                  {job.lastFailure === null ? "never" : ago(job.lastFailure.at, now)}
-                </td>
-                <td className="px-4 py-2 font-mono text-xs text-gray-300" title={job.lastFailure?.runId}>
-                  {job.lastFailure === null
-                    ? "—"
-                    : (job.lastFailure.firstError ?? (unreadable.eventLog === null ? "no error text in the event log" : "—"))}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <ResearchTable
+        caption={`Run health per Dagster job, last ${windowDays} days`}
+        headers={["Job", "Success rate", "Runs", "Derived bound", "Longest success", "Ended by bound", "Last success", "Last failure", "First error line of the last failure"]}
+      >
+        {jobs.map((job) => (
+          <tr key={job.job} className="border-t border-border/60" data-job={job.job}>
+            <td className="px-4 py-2 font-mono">{job.job}</td>
+            <td className={`px-4 py-2 tabular-nums ${job.failures > 0 ? "text-amber-400" : ""}`}>
+              {job.successRate === null ? "no run" : `${Math.round(job.successRate * 100)}%`}
+            </td>
+            <td className="px-4 py-2 tabular-nums">{job.successes} ok · {job.failures} failed</td>
+            <td className="px-4 py-2 font-mono text-xs tabular-nums text-gray-300">
+              {job.derivedBoundSeconds === null ? "instance limit (3h)" : formatDuration(job.derivedBoundSeconds)}
+            </td>
+            <td className="px-4 py-2 font-mono text-xs tabular-nums text-gray-300">{formatDuration(job.longestSuccessSeconds)}</td>
+            <td className={`px-4 py-2 tabular-nums ${job.runsEndedByBound > 0 ? "font-semibold text-rose-400" : "text-gray-400"}`}>
+              {job.runsEndedByBound}
+            </td>
+            <td className="px-4 py-2 text-gray-400" title={job.lastSuccessAt ?? undefined}>
+              {job.lastSuccessAt === null ? "never" : ago(job.lastSuccessAt, now)}
+            </td>
+            <td className="px-4 py-2 text-gray-400" title={job.lastFailure?.at}>
+              {job.lastFailure === null ? "never" : ago(job.lastFailure.at, now)}
+            </td>
+            <td className="px-4 py-2 font-mono text-xs text-gray-300" title={job.lastFailure?.runId}>
+              {job.lastFailure === null
+                ? "—"
+                : (job.lastFailure.firstError ?? (unreadable.eventLog === null ? "no error text in the event log" : "—"))}
+            </td>
+          </tr>
+        ))}
+      </ResearchTable>
     </section>
   );
 }

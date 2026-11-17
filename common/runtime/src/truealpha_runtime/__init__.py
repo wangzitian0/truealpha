@@ -1,4 +1,4 @@
-"""The application-to-runtime dependency boundary."""
+"""Runtime dependency boundary."""
 
 from truealpha_runtime.checks import (
     DatabaseCheck,

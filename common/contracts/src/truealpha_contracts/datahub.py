@@ -23,6 +23,9 @@ from truealpha_contracts.common import (
     content_ref,
     sorted_unique_coordinates,
 )
+from truealpha_contracts.common import (
+    require_checks as _require_checks,
+)
 from truealpha_contracts.universe import SubjectRef, UniverseRef
 
 
@@ -45,12 +48,6 @@ class ObligationTerminalState(StrEnum):
     FAILED = "failed"
 
 
-class AssessmentFreshness(StrEnum):
-    FRESH = "fresh"
-    STALE = "stale"
-    UNKNOWN = "unknown"
-
-
 class RetryPolicy(FrozenModel):
     max_attempts: int = Field(ge=1, le=20)
     retryable_outcomes: tuple[FetchAttemptOutcome, ...] = Field(min_length=1)
@@ -60,20 +57,18 @@ class RetryPolicy(FrozenModel):
     def validate_outcome_partition(self) -> Self:
         retryable = tuple(sorted(set(self.retryable_outcomes), key=lambda v: v.value))
         terminal = tuple(sorted(set(self.terminal_outcomes), key=lambda v: v.value))
-        if len(retryable) != len(self.retryable_outcomes):
-            raise ValueError("retryable_outcomes must not contain duplicates")
-        if len(terminal) != len(self.terminal_outcomes):
-            raise ValueError("terminal_outcomes must not contain duplicates")
-        if set(retryable) & set(terminal):
-            raise ValueError("retryable and terminal outcomes must be disjoint")
-        required = {
+        req = {
             FetchAttemptOutcome.SUCCESS,
             FetchAttemptOutcome.UNCHANGED,
             FetchAttemptOutcome.UNAVAILABLE,
             FetchAttemptOutcome.FAILED,
         }
-        if not required.issubset(terminal):
-            raise ValueError("terminal_outcomes must classify every terminal DataHub outcome")
+        _require_checks(
+            (len(retryable) != len(self.retryable_outcomes), "retryable_outcomes must not contain duplicates"),
+            (len(terminal) != len(self.terminal_outcomes), "terminal_outcomes must not contain duplicates"),
+            (bool(set(retryable) & set(terminal)), "retryable and terminal outcomes must be disjoint"),
+            (not req.issubset(terminal), "terminal_outcomes must classify every terminal DataHub outcome"),
+        )
         object.__setattr__(self, "retryable_outcomes", retryable)
         object.__setattr__(self, "terminal_outcomes", terminal)
         return self
@@ -100,10 +95,16 @@ class CaptureSchedulePolicy(IdentifiedFrozenModel):
     retry: RetryPolicy
 
     def _canonicalize(self) -> None:
-        if self.demanded_cadence <= timedelta(0) or self.freshness_max_age <= timedelta(0):
-            raise ValueError("cadence and freshness_max_age must be positive")
-        if any(w <= timedelta(0) for w in self.semantic_freshness_max_age.values()):
-            raise ValueError("semantic freshness windows must be positive")
+        _require_checks(
+            (
+                self.demanded_cadence <= timedelta(0) or self.freshness_max_age <= timedelta(0),
+                "cadence and freshness_max_age must be positive",
+            ),
+            (
+                any(w <= timedelta(0) for w in self.semantic_freshness_max_age.values()),
+                "semantic freshness windows must be positive",
+            ),
+        )
 
 
 class CaptureCampaign(IdentifiedFrozenModel):
@@ -293,20 +294,17 @@ class NormalizedObservation(IdentifiedFrozenModel):
     supersedes_observation_id: str | None = content_ref("normalized-observation", default=None)
 
     def _canonicalize(self) -> None:
-        if self.valid_to is not None and self.valid_to < self.valid_from:
-            raise ValueError("valid_to cannot precede valid_from")
-        if self.is_restatement != (self.supersedes_observation_id is not None):
-            raise ValueError("only a restatement may name, and every restatement must name, its predecessor")
-
-    @model_validator(mode="after")
-    def reject_self_supersession(self) -> Self:
-        if self.supersedes_observation_id == self.observation_id:
-            raise ValueError("a restatement cannot supersede itself")
-        return self
+        _require_checks(
+            (self.valid_to is not None and self.valid_to < self.valid_from, "valid_to cannot precede valid_from"),
+            (
+                self.is_restatement != (self.supersedes_observation_id is not None),
+                "only a restatement may name, and every restatement must name, its predecessor",
+            ),
+            (self.supersedes_observation_id == self.observation_id, "a restatement cannot supersede itself"),
+        )
 
 
 __all__ = [
-    "AssessmentFreshness",
     "CaptureCampaign",
     "CaptureRun",
     "CaptureSchedulePolicy",

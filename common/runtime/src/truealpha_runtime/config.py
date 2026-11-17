@@ -13,15 +13,15 @@ DEFAULT_DATABASE_URL = "postgresql://postgres:postgres@localhost:5432/truealpha"
 POSTGRES_PROVIDED_BY = "truealpha/postgres:POSTGRES_PASSWORD"
 
 
+def _schema_field(default: Any, source: str, group: str, **kw: Any) -> Any:
+    meta_keys = ("injected", "empty_ok", "sensitive", "scope", "composed_from", "provided_by")
+    extra: dict[str, Any] = {"source": source, "group": group, **{k: kw.pop(k) for k in meta_keys if k in kw}}
+    return Field(default=default, json_schema_extra=extra, **kw)
+
+
 def database_url_field(*, composed_from: str | None = None) -> Any:
-    schema_extra: dict[str, Any] = {
-        "source": "runtime",
-        "group": "postgres",
-        "provided_by": POSTGRES_PROVIDED_BY,
-    }
-    if composed_from is not None:
-        schema_extra["composed_from"] = composed_from
-    return Field(default=DEFAULT_DATABASE_URL, json_schema_extra=schema_extra)
+    kw = {"composed_from": composed_from} if composed_from is not None else {}
+    return _schema_field(DEFAULT_DATABASE_URL, "runtime", "postgres", provided_by=POSTGRES_PROVIDED_BY, **kw)
 
 
 def resolve_environment_tier(app_env: str, *, github_actions: bool = False) -> EnvironmentTier:
@@ -40,12 +40,10 @@ class CoreRuntimeSettings(BaseSettings):
         populate_by_name=True,
     )
 
-    app_env: str = Field(default="dev", json_schema_extra={"source": "code", "injected": True, "group": "runtime"})
-    git_commit_sha: str = Field(default="unknown", json_schema_extra={"source": "release", "group": "runtime"})
+    app_env: str = _schema_field("dev", "code", "runtime", injected=True)
+    git_commit_sha: str = _schema_field("unknown", "release", "runtime")
     database_url: str = database_url_field()
-    database_connect_timeout_seconds: int = Field(
-        default=5, ge=1, le=60, json_schema_extra={"source": "code", "group": "postgres"}
-    )
+    database_connect_timeout_seconds: int = _schema_field(5, "code", "postgres", ge=1, le=60)
 
     @field_validator("database_url")
     @classmethod
@@ -68,17 +66,13 @@ class CoreRuntimeSettings(BaseSettings):
 
 
 class RuntimeSettings(CoreRuntimeSettings):
-    s3_endpoint: str | None = Field(default=None, json_schema_extra={"source": "code", "injected": True, "group": "s3"})
-    s3_access_key: str = Field(
-        default="", json_schema_extra={"source": "runtime", "empty_ok": True, "sensitive": True, "group": "s3"}
-    )
-    s3_secret_key: SecretStr = Field(
-        default=SecretStr(""), json_schema_extra={"source": "runtime", "empty_ok": True, "group": "s3"}
-    )
-    s3_bucket: str = Field(default="truealpha-raw", json_schema_extra={"source": "code", "group": "s3"})
-    s3_region: str = Field(default="us-east-1", json_schema_extra={"source": "code", "group": "s3"})
-    s3_raw_prefix: str = Field(default="raw", json_schema_extra={"source": "code", "group": "s3"})
-    s3_connect_timeout_seconds: int = Field(default=5, ge=1, le=60, json_schema_extra={"source": "code", "group": "s3"})
+    s3_endpoint: str | None = _schema_field(None, "code", "s3", injected=True)
+    s3_access_key: str = _schema_field("", "runtime", "s3", empty_ok=True, sensitive=True)
+    s3_secret_key: SecretStr = _schema_field(SecretStr(""), "runtime", "s3", empty_ok=True)
+    s3_bucket: str = _schema_field("truealpha-raw", "code", "s3")
+    s3_region: str = _schema_field("us-east-1", "code", "s3")
+    s3_raw_prefix: str = _schema_field("raw", "code", "s3")
+    s3_connect_timeout_seconds: int = _schema_field(5, "code", "s3", ge=1, le=60)
 
     @field_validator("s3_bucket")
     @classmethod

@@ -89,18 +89,20 @@ class PostgresStrategyRunRepository:
     def get_latest(self, *, strategy_id: str, context: AccessContext) -> StrategyRunReport | StrategyRunUnavailable:
         del context
         try:
-            with psycopg.connect(self._database_url, connect_timeout=5, autocommit=True) as connection:
-                with connection.cursor(row_factory=dict_row) as cursor:
-                    cursor.execute(LATEST_RUN_SQL, latest_run_params(strategy_id))
-                    run_row = cursor.fetchone()
-                    if run_row is None:
-                        return StrategyRunUnavailable(strategy_id=strategy_id, reason="no_runs_recorded")
-                    cursor.execute(_DECISIONS_SQL, (run_row["strategy_run_id"],))
-                    decision_rows = cursor.fetchall()
-                    if strategy_id != "large_model_value_v0":
-                        return StrategyRunUnavailable(strategy_id=strategy_id, reason="schema_mismatch")
-                    if not decision_rows:
-                        return StrategyRunUnavailable(strategy_id=strategy_id, reason="empty_decisions")
+            with (
+                psycopg.connect(self._database_url, connect_timeout=5, autocommit=True) as connection,
+                connection.cursor(row_factory=dict_row) as cursor,
+            ):
+                cursor.execute(LATEST_RUN_SQL, latest_run_params(strategy_id))
+                run_row = cursor.fetchone()
+                if run_row is None:
+                    return StrategyRunUnavailable(strategy_id=strategy_id, reason="no_runs_recorded")
+                cursor.execute(_DECISIONS_SQL, (run_row["strategy_run_id"],))
+                decision_rows = cursor.fetchall()
+                if strategy_id != "large_model_value_v0":
+                    return StrategyRunUnavailable(strategy_id=strategy_id, reason="schema_mismatch")
+                if not decision_rows:
+                    return StrategyRunUnavailable(strategy_id=strategy_id, reason="empty_decisions")
         except psycopg.Error:
             return StrategyRunUnavailable(strategy_id=strategy_id, reason="database_unavailable")
         try:

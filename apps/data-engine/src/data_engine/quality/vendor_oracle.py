@@ -13,17 +13,16 @@ from typing import Any
 from psycopg import Connection
 from truealpha_contracts.universes import id_prefix_like, universe_with_role
 
+from data_engine.datahub._helpers import CAPTURE_OBSERVATION_JOIN
 from data_engine.datahub.fetch_key import FetchKey
 from data_engine.datahub.production_topt.concept_mapping import DEFAULT_RULESET
 
 _COMPANY_FACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik:010d}.json"
 _TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
-# An annual period. 350 days absorbs 52/53-week fiscal calendars.
 _ANNUAL_MINIMUM_DAYS = 350
 
 
 def _ruleset_us_gaap_concepts(*fields: str, extra: Sequence[str] = ()) -> tuple[str, ...]:
-    """Return deduplicated `us-gaap` concept names from `DEFAULT_RULESET` plus `extra` (#1518)."""
     concepts = [
         item.concept
         for field in fields
@@ -34,10 +33,6 @@ def _ruleset_us_gaap_concepts(*fields: str, extra: Sequence[str] = ()) -> tuple[
     return tuple(dict.fromkeys([*concepts, *extra]))
 
 
-# Wider than the adapter's frozen mapping on purpose — see the module docstring. An
-# oracle that only knows the tags we already declared cannot reveal a tag we missed.
-# It holds every revenue concept of the ruleset too. `tests/test_revenue_concepts.py`
-# states each concept beyond the ruleset and its reason (#1379).
 _EXTRA_REVENUE = (
     "SalesRevenueNet",
     "SalesRevenueGoodsNet",
@@ -56,8 +51,6 @@ _ASSETS_CONCEPTS = _ruleset_us_gaap_concepts("total_assets")
 
 @dataclass(frozen=True)
 class VendorFact:
-    """One independently derived annual vendor figure with its period and filing dates."""
-
     value: Decimal
     period_end: date
     concept: str
@@ -66,8 +59,6 @@ class VendorFact:
 
 @dataclass(frozen=True)
 class Drift:
-    """Compare mart values against vendor figures to detect reporting staleness."""
-
     ticker: str
     field: str
     mart_value: Decimal | None
@@ -78,32 +69,21 @@ class Drift:
     @property
     def agrees(self) -> bool:
         if self.vendor is None:
-            return True  # the vendor asserts nothing; mart having a gap is not drift
-        if self.mart_value is None:
-            return False
-        return self.mart_value == self.vendor.value
+            return True
+        return self.mart_value is not None and self.mart_value == self.vendor.value
 
     @property
     def staleness_years(self) -> int | None:
-        """How many years behind the vendor's current period mart's figure actually is.
-
-        Distinguishes the two defects that look identical in a diff: a restatement (same
-        period, revised value) and a stale tag (a period years back). Only resolvable
-        when the value was matched to a vendor period.
-        """
         if self.agrees or self.vendor is None or self.mart_period_end is None:
             return None
         return max(0, self.vendor.period_end.year - self.mart_period_end.year)
 
 
 def _http_json(url: str, user_agent: str, key: FetchKey) -> dict[str, Any]:
-    """One SEC document, fetched once per ``key`` (#1411 K5): the oracle reads the bytes the tick landed."""
     from data_engine.sources import gateway
 
     def fetch(identity: FetchKey) -> bytes:
         request = urllib.request.Request(url, headers={"User-Agent": user_agent})
-        # The oracle's own SEC reads are external calls too (#729): recorded, and a 4xx
-        # raises as it always did here instead of being parsed as a document.
         _status, body = gateway.urlopen(
             "sec",
             "vendor-oracle",
@@ -134,7 +114,6 @@ def company_facts(cik: int, user_agent: str) -> dict[str, Any]:
 def _annual_entries(
     facts: dict[str, Any], concept: str, unit: str, cutoff: date
 ) -> Iterable[tuple[date, Decimal, date]]:
-    """Annual (period_end, value, filed) triples for one concept that were filed by `cutoff`."""
     entries = facts.get("facts", {}).get("us-gaap", {}).get(concept, {}).get("units", {}).get(unit) or []
     for entry in entries:
         filed_raw, end_raw, start_raw, value_raw = (
@@ -152,15 +131,13 @@ def _annual_entries(
             value = Decimal(str(value_raw))
         except (InvalidOperation, ValueError):
             continue
-        if filed > cutoff:
-            continue  # not knowable at the cutoff
-        yield end, value, filed
+        if filed <= cutoff:
+            yield end, value, filed
 
 
 def latest_across_variants(
     facts: dict[str, Any], concepts: Sequence[str], unit: str, cutoff: date
 ) -> VendorFact | None:
-    """Select the most recent annual value across all concept variants."""
     best: VendorFact | None = None
     for concept in concepts:
         for period_end, value, filed in _annual_entries(facts, concept, unit, cutoff):
@@ -170,17 +147,14 @@ def latest_across_variants(
 
 
 def revenue(facts: dict[str, Any], cutoff: date) -> VendorFact | None:
-    """Reported revenue of the most recent annual period across every revenue variant."""
     return latest_across_variants(facts, _REVENUE_CONCEPTS, "USD", cutoff)
 
 
 def total_assets(facts: dict[str, Any], cutoff: date) -> VendorFact | None:
-    """Reported total assets of the most recent annual period (#1517)."""
     return latest_across_variants(facts, _ASSETS_CONCEPTS, "USD", cutoff)
 
 
 def gross_profit(facts: dict[str, Any], cutoff: date) -> VendorFact | None:
-    """Select reported gross profit or derived revenue minus cost for latest period."""
     direct = latest_across_variants(facts, ("GrossProfit",), "USD", cutoff)
     revenue_by_period = _all_periods(facts, _REVENUE_CONCEPTS, cutoff)
     cost_by_period = _all_periods(facts, _COGS_CONCEPTS, cutoff)
@@ -188,12 +162,12 @@ def gross_profit(facts: dict[str, Any], cutoff: date) -> VendorFact | None:
     derived: VendorFact | None = None
     if shared:
         end = max(shared)
-        (revenue_value, revenue_filed), (cost_value, cost_filed) = revenue_by_period[end], cost_by_period[end]
+        (rev_val, rev_filed), (cost_val, cost_filed) = revenue_by_period[end], cost_by_period[end]
         derived = VendorFact(
-            value=revenue_value - cost_value,
+            value=rev_val - cost_val,
             period_end=end,
             concept="Revenues-CostOfRevenue",
-            filed=max(revenue_filed, cost_filed),
+            filed=max(rev_filed, cost_filed),
         )
     candidates = [item for item in (direct, derived) if item is not None]
     return max(candidates, key=lambda item: item.period_end) if candidates else None
@@ -202,12 +176,6 @@ def gross_profit(facts: dict[str, Any], cutoff: date) -> VendorFact | None:
 def period_reporting(
     facts: dict[str, Any], concepts: Sequence[str], value: Decimal | None, cutoff: date
 ) -> date | None:
-    """The latest period any variant reported `value` for — i.e. where mart's figure came from.
-
-    A figure that matches no period at all is a computed or corrupted value rather than a
-    stale selection, and stays `None` so the report does not claim a staleness it cannot
-    substantiate.
-    """
     if value is None:
         return None
     found: date | None = None
@@ -219,7 +187,6 @@ def period_reporting(
 
 
 def _all_periods(facts: dict[str, Any], concepts: Sequence[str], cutoff: date) -> dict[date, tuple[Decimal, date]]:
-    """Every annual period any variant reports as (value, filed), the first variant winning a shared period."""
     merged: dict[date, tuple[Decimal, date]] = {}
     for concept in concepts:
         for period_end, value, filed in _annual_entries(facts, concept, "USD", cutoff):
@@ -228,42 +195,21 @@ def _all_periods(facts: dict[str, Any], concepts: Sequence[str], cutoff: date) -
 
 
 def mart_financial_facts(connection: Connection[Any]) -> tuple[tuple[str, Decimal | None, Decimal | None], ...]:
-    """(ticker, revenue, gross_profit) for the run the governed pointer currently heads."""
     rows = connection.execute(
-        """
-        -- `limit 1` with no ordering picked an arbitrary universe's head, so the oracle
-        -- re-derived whichever pipeline the planner happened to return. The universe is part
-        -- of the governed key.
-        with head as (
-            select target_run_id from mart.current_pointer_head
-            where universe_id like %s
-            order by sequence desc limit 1
-        ),
-        payloads as (
-            select observation.subject_id, observation.semantic_type, payload.normalized_payload
-            from staging.capture_normalized_observations observation
-            join staging.capture_observation_payloads payload using (observation_id)
-            join staging.capture_observation_obligations usage using (observation_id)
-            join raw.capture_obligations obligation
-              on obligation.obligation_id = usage.capture_obligation_id
-            where obligation.run_id = (select target_run_id from head)
-        )
-        select identity.normalized_payload->>'ticker',
-               (financial.normalized_payload->>'revenue')::numeric,
-               (financial.normalized_payload->>'gross_profit')::numeric
-        from payloads identity
-        join payloads financial
-          on financial.subject_id = identity.subject_id and financial.semantic_type = 'financial-fact'
-        where identity.semantic_type = 'listing-identity'
-        order by 1
-        """,
+        f"with head as (select target_run_id from mart.current_pointer_head where universe_id like %s "
+        f"order by sequence desc limit 1), payloads as ("
+        f"select o.subject_id, o.semantic_type, p.normalized_payload {CAPTURE_OBSERVATION_JOIN} "
+        "where ob.run_id = (select target_run_id from head)) "
+        "select identity.normalized_payload->>'ticker', (financial.normalized_payload->>'revenue')::numeric, "
+        "(financial.normalized_payload->>'gross_profit')::numeric from payloads identity "
+        "join payloads financial on financial.subject_id = identity.subject_id and financial.semantic_type = 'financial-fact' "
+        "where identity.semantic_type = 'listing-identity' order by 1",
         (id_prefix_like(universe_with_role("strategy")),),
     ).fetchall()
     return tuple((str(row[0]).upper(), row[1], row[2]) for row in rows)
 
 
 def compare(connection: Connection[Any], *, cutoff: date, user_agent: str) -> tuple[Drift, ...]:
-    """Re-derive revenue and gross profit from SEC for the governed run, and report drift."""
     facts_rows = mart_financial_facts(connection)
     if not facts_rows:
         return ()
@@ -274,27 +220,25 @@ def compare(connection: Connection[Any], *, cutoff: date, user_agent: str) -> tu
         cik = index.get(ticker.replace(".", "-"))
         if cik is None:
             continue
-        if cik not in seen:  # dual-class listings share one CIK; one fetch covers both
-            seen[cik] = company_facts(cik, user_agent)
-        facts = seen[cik]
-        drifts.append(
-            Drift(
-                ticker=ticker,
-                field="revenue",
-                mart_value=mart_revenue,
-                vendor=latest_across_variants(facts, _REVENUE_CONCEPTS, "USD", cutoff),
-                cutoff=cutoff,
-                mart_period_end=period_reporting(facts, _REVENUE_CONCEPTS, mart_revenue, cutoff),
-            )
-        )
-        drifts.append(
-            Drift(
-                ticker=ticker,
-                field="gross_profit",
-                mart_value=mart_gross_profit,
-                vendor=gross_profit(facts, cutoff),
-                cutoff=cutoff,
-                mart_period_end=period_reporting(facts, ("GrossProfit",), mart_gross_profit, cutoff),
+        facts = seen.setdefault(cik, company_facts(cik, user_agent)) if cik not in seen else seen[cik]
+        drifts.extend(
+            (
+                Drift(
+                    ticker=ticker,
+                    field="revenue",
+                    mart_value=mart_revenue,
+                    vendor=latest_across_variants(facts, _REVENUE_CONCEPTS, "USD", cutoff),
+                    cutoff=cutoff,
+                    mart_period_end=period_reporting(facts, _REVENUE_CONCEPTS, mart_revenue, cutoff),
+                ),
+                Drift(
+                    ticker=ticker,
+                    field="gross_profit",
+                    mart_value=mart_gross_profit,
+                    vendor=gross_profit(facts, cutoff),
+                    cutoff=cutoff,
+                    mart_period_end=period_reporting(facts, ("GrossProfit",), mart_gross_profit, cutoff),
+                ),
             )
         )
     return tuple(drifts)

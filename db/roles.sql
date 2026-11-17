@@ -41,8 +41,7 @@ grant select on app.principals, app.tenants to app_runtime;
 -- Conversation persistence (#396, migration 0030). RLS-scoped: app_runtime
 -- authenticates as itself, then the transaction-local tenant/principal GUCs
 -- (set by withOwnerScopedRuntime) are what the row security policies actually check.
-grant select, insert on app.conversations, app.conversation_messages, app.research_gap_requests to app_runtime;
-grant select, insert, update (redeemed_at) on app.clarification_tokens to app_runtime;
+grant select, insert on app.conversations, app.conversation_messages to app_runtime;
 revoke select on app.conversation_audit_metadata from app_runtime;
 
 -- Document lifecycle (#373, migration 0031). Same RLS-scoped shape as
@@ -223,6 +222,13 @@ grant select on mart.datahub_confidence_report to app_ops_reader;
 grant select on mart.topt_capture_status to app_ops_reader;
 grant select on mart.nightly_verdicts to app_ops_reader;
 grant select on mart.oracle_outcomes to app_ops_reader;
+grant select on mart.cell_confidence to app_ops_reader;
+grant select on mart.fund_virtual_company to app_ops_reader;
+grant select on mart.issuer_analyst_ratings to app_ops_reader;
+grant select on mart.issuer_supply_chain_exposure to app_ops_reader;
+grant select on mart.issuer_theme_purity to app_ops_reader;
+grant select on mart.macro_series, mart.macro_series_daily, mart.macro_series_current, mart.macro_series_status to app_ops_reader;
+grant select on mart.metric_node_values to app_ops_reader;
 grant select on mart.research_card_artifacts to mart_readonly;
 grant select on mart.research_card_artifacts to app_ops_reader;
 -- The Capacity section (#671) derives capture-window durations from the

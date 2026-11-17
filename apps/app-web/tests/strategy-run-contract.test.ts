@@ -20,7 +20,7 @@ import {
 } from "./support/fixture-strategy-run";
 
 const fixtureUrl = new URL(
-  "../../../common/contracts/src/truealpha_contracts/data/strategy_run_preview.v1.json",
+  "../../../common/contracts/tests/fixtures/strategy_run_preview.v1.json",
   import.meta.url,
 );
 

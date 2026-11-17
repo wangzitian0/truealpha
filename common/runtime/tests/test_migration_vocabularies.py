@@ -48,12 +48,15 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[3]
 MIGRATIONS = REPO_ROOT / "db/migrations"
 
-#: `add constraint <name> ... check (... in ('a', 'b'))`, across newlines.
+#: `constraint <name> check (... in (...) | = any (array[...]))` across baseline and delta DDL.
 _ADD = re.compile(
-    r"add\s+constraint\s+(?P<name>[a-z_]+)\s+check\s*\((?P<body>.*?)\)\s*;",
+    r"(?:add\s+)?constraint\s+(?P<name>[a-z_]+)\s+check\s*\((?P<body>[^;]*?)\)\s*[,;]",
     re.IGNORECASE | re.DOTALL,
 )
-_IN_LIST = re.compile(r"\bin\s*\((?P<values>[^)]*)\)", re.IGNORECASE)
+_IN_LIST = re.compile(
+    r"(?:\bin\s*\(|\bany\s*\(\s*array\s*\[)(?P<values>[^)\]]+)",
+    re.IGNORECASE,
+)
 
 
 def _vocabularies() -> dict[str, list[tuple[str, set[str]]]]:

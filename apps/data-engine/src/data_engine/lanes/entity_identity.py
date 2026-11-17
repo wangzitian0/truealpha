@@ -1,32 +1,4 @@
-"""The entity identity backfill as a Dagster job, never a boot step (#877).
-
-`staging.entity_backfill()` (migration 20260917T0604) fills the entity identity store from
-what the pipeline already stored: every legacy issuer/instrument/listing id gets a derived
-UUID and its aliases, and TOPT's LEI/CUSIP ids are joined to the plane's CIK/FIGI ids where
-N-PORT and the knowledge graph prove it (docs/entity-identity.md). It used to run inside a
-migration on every llm-service boot; on staging that held the boot for 34 s and failed the
-v0.0.80 rollout. It runs here instead, and nothing waits for it.
-
-Two launchers:
-
-* `entity_identity_backfill_sensor` launches the job once per environment when the store is
-  empty, when an observed or published id has no entity yet, or when N-PORT or knowledge-graph
-  rows arrived since its last launch. Its cursor is the newest ingestion time among those
-  inputs, so a quiet database costs one cheap `max()` read per evaluation. A failed run is
-  retried at the next arriving evidence, or by hand.
-* By hand, through the Dagster GraphQL API (no run config)::
-
-    mutation {
-      launchRun(executionParams: {
-        selector: {repositoryLocationName: "data_engine.dagster_defs",
-                   repositoryName: "__repository__",
-                   jobName: "entity_identity_backfill"}
-      }) { __typename ... on LaunchRunSuccess { run { runId } } }
-    }
-
-The function takes an advisory lock, so a hand launch and a sensor launch never interleave.
-Its ids are derived, so a rerun, or a run in another environment, mints the same UUIDs.
-"""
+"""Sensor-driven entity identity backfill job (#877)."""
 
 import json
 import time
@@ -44,7 +16,6 @@ ENTITY_BACKFILL_JOB_NAME = "entity_identity_backfill"
 
 
 def run_entity_backfill(connection: psycopg.Connection[Any]) -> dict[str, Any]:
-    """Apply the backfill in the caller's transaction; returns its summary plus the time taken."""
     started = time.monotonic()
     row = connection.execute("select staging.entity_backfill()").fetchone()
     assert row is not None
@@ -59,14 +30,11 @@ def _count(section: Mapping[str, Any]) -> int:
 
 @external_op
 def entity_identity_backfill_op(context: dg.OpExecutionContext) -> dg.Output[dict[str, Any]]:
-    """Run staging.entity_backfill() once and record what it wrote, held back and failed."""
     with psycopg.connect(settings.database_url) as connection:
         summary = run_entity_backfill(connection)
         connection.commit()
     context.log.info(f"entity backfill: {json.dumps(summary, sort_keys=True)}")
     if summary["failed"]:
-        # Rolled back per component inside the function; the rest committed. Loud, not fatal:
-        # the next run retries exactly these.
         context.log.warning(f"entity backfill could not write {len(summary['failed'])} component(s)")
     return dg.Output(
         summary,
@@ -92,15 +60,12 @@ def _cursor_time(cursor: str | None) -> datetime | None:
         return None
     try:
         dt = datetime.fromisoformat(cursor)
-        if dt.tzinfo is None:
-            return dt.replace(tzinfo=UTC)
-        return dt.astimezone(UTC)
+        return dt.replace(tzinfo=UTC) if dt.tzinfo is None else dt.astimezone(UTC)
     except ValueError:
         return None
 
 
 def evaluate_backfill_due(connection: psycopg.Connection[Any], cursor: str | None) -> tuple[str | None, str | None]:
-    """(reason to launch or None, the cursor to store). One `max()` read when nothing arrived."""
     since = _cursor_time(cursor)
     row = connection.execute("select staging.entity_evidence_watermark()").fetchone()
     watermark: datetime | None = row[0] if row else None
@@ -117,7 +82,6 @@ def evaluate_backfill_due(connection: psycopg.Connection[Any], cursor: str | Non
     default_status=dg.DefaultSensorStatus.RUNNING,
 )
 def entity_identity_backfill_sensor(context: dg.SensorEvaluationContext):
-    """Launch the backfill when the store is empty or behind what the pipeline stored."""
     with psycopg.connect(settings.database_url, autocommit=True) as connection:
         reason, next_cursor = evaluate_backfill_due(connection, context.cursor)
     if next_cursor is not None and next_cursor != context.cursor:

@@ -1,4 +1,4 @@
-"""Structured-extraction primitive: candidate -> selection -> evidence (#769, #772)."""
+"""Structured-extraction selection primitive (#769, #772)."""
 
 from __future__ import annotations
 

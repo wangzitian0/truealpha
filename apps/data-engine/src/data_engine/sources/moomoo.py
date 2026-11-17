@@ -1,4 +1,4 @@
-"""Moomoo OpenD Quote API read-only client gated through `moomoo_ledger.gate` and `gateway.record_call`."""
+"""Moomoo OpenD Quote API read-only client."""
 
 import json
 import logging
@@ -43,7 +43,6 @@ def connect() -> Iterator["moomoo.OpenQuoteContext"]:
 
 
 def canonical_moomoo_bytes(payload) -> bytes:
-    """Canonical JSON byte rendering shared between the API call ledger and `raw.fetches`."""
     from data_engine.jsonable import to_jsonable
 
     return json.dumps(to_jsonable(payload), sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")

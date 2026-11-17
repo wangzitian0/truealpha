@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import Literal, Self
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field
 
 from truealpha_contracts.common import (
     ContentHash,
@@ -17,7 +16,7 @@ from truealpha_contracts.common import (
     StableId,
     content_id,
     content_ref,
-    sorted_unique_coordinates,
+    require_checks,
 )
 
 
@@ -129,73 +128,26 @@ class ContinuousConfidenceEvaluation(IdentifiedFrozenModel):
     def _canonicalize(self) -> None:
         source_scores = tuple(sorted(self.source_scores, key=lambda v: v.source_evidence_id))
         origin_groups = tuple(sorted(self.origin_groups, key=lambda v: v.origin_group_id))
-        if len({s.source_evidence_id for s in source_scores}) != len(source_scores):
-            raise ValueError("evaluation source scores must be unique")
-        if len({g.origin_group_id for g in origin_groups}) != len(origin_groups):
-            raise ValueError("evaluation origin groups must be unique")
         scores_by_id = {s.source_evidence_id: s for s in source_scores}
-        if any(
-            g.selected_source_evidence_id not in scores_by_id
-            or scores_by_id[g.selected_source_evidence_id].origin_group_id != g.origin_group_id
-            for g in origin_groups
-        ):
-            raise ValueError("origin groups must select a scored source from the same group")
-        if self.policy_id != f"confidence-policy:{self.policy_sha256}":
-            raise ValueError("policy identity and hash must agree")
-        if self.input_id != f"confidence-input:{self.input_sha256}":
-            raise ValueError("input identity and hash must agree")
+        require_checks(
+            (
+                len({s.source_evidence_id for s in source_scores}) != len(source_scores),
+                "evaluation source scores must be unique",
+            ),
+            (
+                len({g.origin_group_id for g in origin_groups}) != len(origin_groups),
+                "evaluation origin groups must be unique",
+            ),
+            (
+                any(
+                    g.selected_source_evidence_id not in scores_by_id
+                    or scores_by_id[g.selected_source_evidence_id].origin_group_id != g.origin_group_id
+                    for g in origin_groups
+                ),
+                "origin groups must select a scored source from the same group",
+            ),
+            (self.policy_id != f"confidence-policy:{self.policy_sha256}", "policy identity and hash must agree"),
+            (self.input_id != f"confidence-input:{self.input_sha256}", "input identity and hash must agree"),
+        )
         object.__setattr__(self, "source_scores", source_scores)
         object.__setattr__(self, "origin_groups", origin_groups)
-
-
-class ConfidenceCalibrationScenario(FrozenModel):
-    scenario_id: StableId
-    evidence_class: Literal["sensitivity", "empirical_anchor"]
-    expected_effect: str = Field(min_length=1)
-    input: ContinuousConfidenceInput
-    evaluation: ContinuousConfidenceEvaluation
-
-    @model_validator(mode="after")
-    def verify_evaluation(self) -> Self:
-        if self.scenario_id != self.input.case_id:
-            raise ValueError("scenario ID must match the confidence input case ID")
-        if self.evaluation.input_id != self.input.input_id:
-            raise ValueError("scenario evaluation must bind the exact confidence input")
-        return self
-
-
-class ConfidenceCalibrationReport(IdentifiedFrozenModel):
-    id_field = "report_id"
-    id_prefix = "confidence-calibration-report"
-    report_id: str = content_id("confidence-calibration-report")
-    content_sha256: ContentHash = ""
-    schema_version: Literal["truealpha.confidence-calibration@v1"] = "truealpha.confidence-calibration@v1"
-    policy: ContinuousConfidencePolicy
-    denominator_id: StableId
-    denominator_size: int = Field(gt=0)
-    empirically_observed_subject_ids: tuple[str, ...]
-    scenarios: tuple[ConfidenceCalibrationScenario, ...] = Field(min_length=1)
-    limitations: tuple[str, ...] = Field(min_length=1)
-    claim_ceiling: Literal["development_sensitivity_only"] = "development_sensitivity_only"
-
-    @field_validator("empirically_observed_subject_ids")
-    @classmethod
-    def validate_subjects(cls, values: tuple[str, ...]) -> tuple[str, ...]:
-        return sorted_unique_coordinates(values, "empirically_observed_subject_ids", allow_empty=True)
-
-    @field_validator("limitations")
-    @classmethod
-    def validate_limitations(cls, values: tuple[str, ...]) -> tuple[str, ...]:
-        if len(values) != len(set(values)):
-            raise ValueError("limitations must not contain duplicates")
-        return tuple(sorted(values))
-
-    def _canonicalize(self) -> None:
-        scenarios = tuple(sorted(self.scenarios, key=lambda v: v.scenario_id))
-        if len({s.scenario_id for s in scenarios}) != len(scenarios):
-            raise ValueError("calibration scenario IDs must be unique")
-        if len(self.empirically_observed_subject_ids) > self.denominator_size:
-            raise ValueError("empirical subjects cannot exceed the frozen denominator")
-        if any(s.evaluation.policy_id != self.policy.policy_id for s in scenarios):
-            raise ValueError("every calibration scenario must use the report policy")
-        object.__setattr__(self, "scenarios", scenarios)

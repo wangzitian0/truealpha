@@ -1,9 +1,8 @@
-import Link from "next/link";
 import { redirect } from "next/navigation";
-import { formatCell, formatRatio, formatSignedRatio, formatUsdMagnitude, signColor } from "@/client/format";
+import { formatCell, formatUsdMagnitude } from "@/client/format";
 import { AvailabilityBadge, ReadStateNotice } from "@/components/read-state";
 import { NextPageLink } from "@/components/next-page-link";
-import { ResearchTable } from "@/components/research-table";
+import { EntityTh, RatioTd, ResearchTable, SignedRatioTd } from "@/components/research-table";
 import { valuationBasisLabel } from "@/contracts/strategyRun";
 import { loadComparison } from "@/server/dashboard";
 import { entityLabel, loadEntityDisplayMap } from "@/server/mart/entity-resolution";
@@ -11,11 +10,7 @@ import { getServerPrincipal } from "@/server/auth/request-context";
 
 export const dynamic = "force-dynamic";
 
-export default async function ComparePage({
-  searchParams,
-}: {
-  searchParams: Promise<{ cursor?: string; cutoff?: string }>;
-}) {
+export default async function ComparePage({ searchParams }: { searchParams: Promise<{ cursor?: string; cutoff?: string }> }) {
   const principal = await getServerPrincipal();
   if (!principal) redirect("/login?from=%2Fresearch%2Fcompare");
   const params = await searchParams;
@@ -40,8 +35,7 @@ export default async function ComparePage({
       <div>
         <h1 id="compare-heading" className="text-2xl font-bold tracking-tight">Issuer comparison</h1>
         <p className="mt-2 text-sm text-gray-400">
-          Side-by-side operating efficiency and valuation for the materialized universe at one cutoff. Read-only; no
-          cross-issuer metric is computed here.
+          Side-by-side operating efficiency and valuation for the materialized universe at one cutoff. Read-only; no cross-issuer metric is computed here.
         </p>
       </div>
 
@@ -53,30 +47,18 @@ export default async function ComparePage({
           <ResearchTable caption={`Issuer comparison at ${state.data.cutoffAt}`} headers={headers}>
             {state.data.rows.map((row) => (
               <tr key={row.issuerId} className="border-t border-border">
-                <th scope="row" className="px-4 py-3 font-medium">
-                  <Link href={`/research/entities/${encodeURIComponent(row.issuerId)}`} className="text-accent hover:underline" title={row.issuerId}>
-                    {entityLabel(row.issuerId, names)}
-                  </Link>
-                </th>
+                <EntityTh issuerId={row.issuerId} label={entityLabel(row.issuerId, names)} />
                 <td className="px-4 py-3 tabular-nums" title={row.capitalAdjustedLaborEfficiency ?? undefined}>
                   {formatCell(formatUsdMagnitude(row.capitalAdjustedLaborEfficiency))}
                   {row.capitalAdjustedLaborEfficiency !== null && (
                     <div className="text-[11px] text-gray-500">{row.laborEfficiencyMetric ?? "metric not recorded"}</div>
                   )}
                 </td>
-                <td className="px-4 py-3 tabular-nums" title={row.currentPriceToSales ?? undefined}>
-                  {formatCell(formatRatio(row.currentPriceToSales))}
-                </td>
-                <td className="px-4 py-3 tabular-nums" title={row.currentMultiple ?? undefined}>
-                  {formatCell(formatRatio(row.currentMultiple ?? null))}
-                </td>
+                <RatioTd value={row.currentPriceToSales} />
+                <RatioTd value={row.currentMultiple} />
                 <td className="px-4 py-3">{formatCell(row.tier)}</td>
-                <td className={`px-4 py-3 tabular-nums ${signColor(row.valuationGap)}`} title={row.valuationGap ?? undefined}>
-                  {formatCell(formatSignedRatio(row.valuationGap))}
-                </td>
-                <td className="px-4 py-3 tabular-nums" title={row.confidence ?? undefined}>
-                  {formatCell(formatRatio(row.confidence))}
-                </td>
+                <SignedRatioTd value={row.valuationGap} />
+                <RatioTd value={row.confidence} />
                 <td className="px-4 py-3"><AvailabilityBadge status={row.availability} /></td>
               </tr>
             ))}
@@ -84,9 +66,7 @@ export default async function ComparePage({
           <NextPageLink
             hasMore={state.data.page.hasMore}
             nextCursor={state.data.page.nextCursor}
-            href={`/research/compare?cursor=${encodeURIComponent(state.data.page.nextCursor ?? "")}${
-              params.cutoff ? `&cutoff=${encodeURIComponent(params.cutoff)}` : ""
-            }`}
+            href={`/research/compare?cursor=${encodeURIComponent(state.data.page.nextCursor ?? "")}${params.cutoff ? `&cutoff=${encodeURIComponent(params.cutoff)}` : ""}`}
           />
         </>
       )}

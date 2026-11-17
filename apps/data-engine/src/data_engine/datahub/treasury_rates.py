@@ -1,4 +1,4 @@
-"""U.S. Treasury daily par yield curve ingestion and append-only persistence (#1255)."""
+"""U.S. Treasury daily yield curve ingestion (#1255)."""
 
 from __future__ import annotations
 
@@ -35,46 +35,40 @@ ENDPOINT = "daily_treasury_yield_curve"
 BASE_URL = "https://home.treasury.gov/resource-center/data-chart-center/interest-rates/daily-treasury-rates.csv"
 USER_AGENT = "TrueAlpha-DataEngine/1.0"
 REQUEST_TIMEOUT_SECONDS = 30
-
 DATE_COLUMN = "Date"
 DATE_FORMAT = "%m/%d/%Y"
 CONFIDENCE = Decimal("0.92")
 COMPLETE_FROM = (12, 29)
 _LOCK_NAME = "mart.macro_series_daily"
 
-_UPSERT_CATALOG_SQL = """
-insert into mart.macro_series (series_id, label, unit, source_id, max_age_days)
-values (%s, %s, %s, %s, %s)
-on conflict (series_id) do update
-set label = excluded.label, unit = excluded.unit, source_id = excluded.source_id,
-    max_age_days = excluded.max_age_days, updated_at = clock_timestamp()
-where (mart.macro_series.label, mart.macro_series.unit, mart.macro_series.source_id, mart.macro_series.max_age_days)
-    is distinct from (excluded.label, excluded.unit, excluded.source_id, excluded.max_age_days)
-"""
-
-_LATEST_OF_YEAR_SQL = """
-select series_id, observation_date, value
-from mart.macro_series_current
-where series_id = any(%s) and observation_date >= %s and observation_date < %s
-"""
-
-_INSERT_SQL = """
-insert into mart.macro_series_daily
-    (series_id, observation_date, value, knowable_at, source, fetch_id, fetched_at, confidence)
-values (%s, %s, %s, %s, %s, %s, %s, %s)
-"""
+_UPSERT_CATALOG_SQL = (
+    "insert into mart.macro_series (series_id, label, unit, source_id, max_age_days) values (%s, %s, %s, %s, %s) "
+    "on conflict (series_id) do update set label = excluded.label, unit = excluded.unit, "
+    "source_id = excluded.source_id, max_age_days = excluded.max_age_days, updated_at = clock_timestamp() "
+    "where (mart.macro_series.label, mart.macro_series.unit, mart.macro_series.source_id, mart.macro_series.max_age_days) "
+    "is distinct from (excluded.label, excluded.unit, excluded.source_id, excluded.max_age_days)"
+)
+_LATEST_OF_YEAR_SQL = (
+    "select series_id, observation_date, value from mart.macro_series_current "
+    "where series_id = any(%s) and observation_date >= %s and observation_date < %s"
+)
+_INSERT_SQL = (
+    "insert into mart.macro_series_daily "
+    "(series_id, observation_date, value, knowable_at, source, fetch_id, fetched_at, confidence) "
+    "values (%s, %s, %s, %s, %s, %s, %s, %s)"
+)
 
 
 class TreasuryFetchError(RuntimeError):
-    """The Treasury did not answer with a file."""
+    pass
 
 
 class TreasuryFormatError(ValueError):
-    """The file does not conform to the expected CSV contract."""
+    pass
 
 
 class TreasuryRefreshError(RuntimeError):
-    """One or more years failed during refresh."""
+    pass
 
 
 @dataclass(frozen=True)
@@ -105,11 +99,7 @@ def fetch_key_of(year: int, *, on: date) -> FetchKey:
 
 
 def has_landed(connection: psycopg.Connection[Any], key: FetchKey) -> bool:
-    row = connection.execute(
-        "select exists (select 1 from raw.fetches where source = %s and source_record_id = %s)",
-        (key.seat, key.source_record_id),
-    ).fetchone()
-    return bool(row and row[0])
+    return raw_store.already_fetched(connection, source=SOURCE, source_record_id=key.source_record_id)
 
 
 def fetch_year(year: int, identity: FetchKey) -> bytes:
@@ -159,8 +149,7 @@ def parse_par_yield_csv(
         raise TreasuryFormatError(f"the {year} file is empty")
     header = rows[0]
     wanted = [DATE_COLUMN, *(item.source_column for item in series)]
-    missing = [name for name in wanted if name not in header]
-    if missing:
+    if missing := [name for name in wanted if name not in header]:
         raise TreasuryFormatError(f"the {year} file has no {missing} header column: {header[:6]}")
     date_index = header.index(DATE_COLUMN)
     index_of = {item.series_id: header.index(item.source_column) for item in series}
@@ -174,13 +163,9 @@ def parse_par_yield_csv(
             raise TreasuryFormatError(f"row {number}: the date {observation_date.isoformat()} appears twice")
         seen.add(observation_date)
         for item in series:
-            text_value = row[index_of[item.series_id]].strip()
-            if text_value:
+            if text_value := row[index_of[item.series_id]].strip():
                 found[item.series_id][observation_date] = _parse_percent(text_value, number, item.source_column)
-    return {
-        series_id: tuple(Observation(day, value) for day, value in sorted(values.items()))
-        for series_id, values in found.items()
-    }
+    return {sid: tuple(Observation(day, val) for day, val in sorted(vals.items())) for sid, vals in found.items()}
 
 
 def register_series(connection: psycopg.Connection[Any], registration: MacroSourceRegistration = REGISTRATION) -> None:
@@ -188,15 +173,10 @@ def register_series(connection: psycopg.Connection[Any], registration: MacroSour
         cursor.executemany(
             _UPSERT_CATALOG_SQL,
             [
-                (item.series_id, item.label, item.unit, registration.source_id, registration.max_age_days)
-                for item in registration.series
+                (s.series_id, s.label, s.unit, registration.source_id, registration.max_age_days)
+                for s in registration.series
             ],
         )
-
-
-def _knowable_at(observation_date: date, *, revised: bool, seen_at: datetime) -> datetime:
-    cut = knowable_at_of(observation_date)
-    return max(cut, seen_at) if revised else cut
 
 
 def persist_observations(
@@ -209,27 +189,27 @@ def persist_observations(
 ) -> int:
     connection.execute("select pg_advisory_xact_lock(hashtext(%s))", (_LOCK_NAME,))
     stored = {
-        (series_id, observation_date): value
-        for series_id, observation_date, value in connection.execute(
+        (sid, obs_date): value
+        for sid, obs_date, value in connection.execute(
             _LATEST_OF_YEAR_SQL, (list(observations), date(year, 1, 1), date(year + 1, 1, 1))
         ).fetchall()
     }
     fresh = [
         (
-            series_id,
+            sid,
             item.observation_date,
             item.value,
-            _knowable_at(
-                item.observation_date, revised=(series_id, item.observation_date) in stored, seen_at=fetched_at
-            ),
+            max(knowable_at_of(item.observation_date), fetched_at)
+            if (sid, item.observation_date) in stored
+            else knowable_at_of(item.observation_date),
             SOURCE.value,
             fetch_id,
             fetched_at,
             CONFIDENCE,
         )
-        for series_id, items in observations.items()
+        for sid, items in observations.items()
         for item in items
-        if stored.get((series_id, item.observation_date)) != item.value
+        if stored.get((sid, item.observation_date)) != item.value
     ]
     with connection.cursor() as cursor:
         cursor.executemany(_INSERT_SQL, fresh)
@@ -283,16 +263,13 @@ def _refresh_year(
         metadata={
             "year": year,
             "url": year_url(year),
-            "series": {item.series_id: item.source_column for item in registration.series},
+            "series": {s.series_id: s.source_column for s in registration.series},
         },
         store=store,
     )
     inserted = persist_observations(connection, observations, year=year, fetch_id=fetch_id, fetched_at=fetched_at)
     return YearResult(
-        year=year,
-        inserted=inserted,
-        fetch_id=fetch_id,
-        observations=sum(len(items) for items in observations.values()),
+        year=year, inserted=inserted, fetch_id=fetch_id, observations=sum(len(v) for v in observations.values())
     )
 
 

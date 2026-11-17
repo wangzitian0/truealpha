@@ -1,27 +1,7 @@
 import Link from "next/link";
-
 import { formatShortSha } from "@/client/format";
 import type { RankingRow } from "@/server/mart/research-read";
 
-/** What a published number was computed FROM, on the surface rather than in an audit.
- *
- * The cell this replaces printed a full trace id — `mart:8cdb081d887f:issuer:lei:
- * BQ4BKCS1HXDV9HN80Z93:2026-08-18T23:47:25.196906Z` — as the widest column in the
- * table, which told a reader nothing they could act on while the facts that matter
- * were not on the page at all.
- *
- * init.md, section 0: "Every step downstream must trace back to the original
- * raw material. This is the reason the point-in-time principle exists."
- *
- * The summary shows the operating period end, because that is the value that
- * silently drifts: across the run serving /research today the period ends span
- * 2025-08-31 to 2026-01-25, five months of spread behind one "current P/S"
- * column. #529 was the same shape — a rank-1 holding at 50% weight, selected on
- * a 2010 share count that the surface reported as fresh.
- *
- * `<details>` rather than a click handler: this stays a server component, and a
- * reader with JavaScript off still gets every field.
- */
 export function ProvenanceCell({ row }: { row: RankingRow }) {
 	const { provenance: p } = row;
 	const vintages: [string, string | null][] = [

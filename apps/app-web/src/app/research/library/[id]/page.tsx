@@ -1,14 +1,3 @@
-/**
- * #373 / #44: one document's revisions, owner-scoped. `getDocument` returning
- * `null` covers both "does not exist" and "exists but belongs to someone
- * else or is tombstoned" identically (RLS + tombstone filter), which is the
- * non-enumerating property the issue requires.
- *
- * When the latest revision is a `text/html` Xiaohongshu card artifact (#44),
- * renders a sandboxed 1080x1440 (3:4 portrait) inline preview alongside the
- * revision metadata.
- */
-
 import { notFound, redirect } from "next/navigation";
 import { decodeRouteParam, formatCell, formatNumberMagnitude, formatShortSha } from "@/client/format";
 import { getServerPrincipal } from "@/server/auth/request-context";

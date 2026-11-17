@@ -1,4 +1,4 @@
-"""Module 6: theme purity — share of consolidated revenue attributable to a theme (#772)."""
+"""Module 6: theme revenue share (#772)."""
 
 from __future__ import annotations
 

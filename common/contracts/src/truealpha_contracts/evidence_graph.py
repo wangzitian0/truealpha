@@ -11,7 +11,6 @@ from typing import Protocol, runtime_checkable
 from pydantic import Field, field_validator, model_validator
 
 from truealpha_contracts.common import (
-    DEFAULT_MUTABLE_TOKENS,
     CaptureEnvironment,
     ContentHash,
     FrozenModel,
@@ -19,13 +18,9 @@ from truealpha_contracts.common import (
     Sha256,
     StableId,
     content_id,
+    require_checks,
+    require_stable_and_immutable,
 )
-
-
-def _reject_mutable_version(value: str, field_name: str) -> str:
-    if {token for token in re.split(r"[._:/@+-]", value.lower()) if token} & DEFAULT_MUTABLE_TOKENS:
-        raise ValueError(f"{field_name} must be immutable")
-    return value
 
 
 class EvidenceNodeKind(StrEnum):
@@ -101,13 +96,20 @@ class EvidenceNode(FrozenModel):
 
     @model_validator(mode="after")
     def check_integrity(self) -> EvidenceNode:
-        if self.ref.content_sha256 != self.content_sha256:
-            raise ValueError("content_sha256 integrity column does not match the node id")
-        if self.supersedes is not None:
-            if self.supersedes.kind != self.ref.kind:
-                raise ValueError("a restatement supersedes a node of the same kind")
-            if self.supersedes.node_id == self.ref.node_id:
-                raise ValueError("a node cannot supersede itself")
+        require_checks(
+            (
+                self.ref.content_sha256 != self.content_sha256,
+                "content_sha256 integrity column does not match the node id",
+            ),
+            (
+                self.supersedes is not None and self.supersedes.kind != self.ref.kind,
+                "a restatement supersedes a node of the same kind",
+            ),
+            (
+                self.supersedes is not None and self.supersedes.node_id == self.ref.node_id,
+                "a node cannot supersede itself",
+            ),
+        )
         return self
 
 
@@ -122,10 +124,13 @@ class EvidenceEdge(IdentifiedFrozenModel):
     stamp: BitemporalStamp
 
     def _canonicalize(self) -> None:
-        if self.from_ref == self.to_ref:
-            raise ValueError("an evidence edge cannot connect a node to itself")
-        if self.relation is EvidenceRelation.SUPERSEDES and self.from_ref.kind != self.to_ref.kind:
-            raise ValueError("supersedes connects nodes of the same kind")
+        require_checks(
+            (self.from_ref == self.to_ref, "an evidence edge cannot connect a node to itself"),
+            (
+                self.relation is EvidenceRelation.SUPERSEDES and self.from_ref.kind != self.to_ref.kind,
+                "supersedes connects nodes of the same kind",
+            ),
+        )
 
 
 class CurrentPointerKey(FrozenModel):
@@ -137,7 +142,7 @@ class CurrentPointerKey(FrozenModel):
     @field_validator("universe_version", "factor_id")
     @classmethod
     def reject_mutable(cls, value: str) -> str:
-        return _reject_mutable_version(value, "pointer scope identities")
+        return require_stable_and_immutable(value, "pointer scope identities", pattern=None)
 
 
 class CurrentPointer(IdentifiedFrozenModel):
@@ -152,17 +157,28 @@ class CurrentPointer(IdentifiedFrozenModel):
     advanced_at: datetime
 
     def _canonicalize(self) -> None:
-        if self.target_run.kind is not EvidenceNodeKind.CAPTURE_RUN:
-            raise ValueError("a current pointer resolves to a capture-run node")
-        if self.previous_run is not None:
-            if self.previous_run.kind is not EvidenceNodeKind.CAPTURE_RUN:
-                raise ValueError("previous_run must be a capture-run node")
-            if self.previous_run.node_id == self.target_run.node_id:
-                raise ValueError("a pointer advance must change the target run")
-            if self.sequence == 0:
-                raise ValueError("the first pointer at sequence 0 has no previous run")
-        elif self.sequence != 0:
-            raise ValueError("a later advance must name the previous run it supersedes")
+        require_checks(
+            (
+                self.target_run.kind is not EvidenceNodeKind.CAPTURE_RUN,
+                "a current pointer resolves to a capture-run node",
+            ),
+            (
+                self.previous_run is not None and self.previous_run.kind is not EvidenceNodeKind.CAPTURE_RUN,
+                "previous_run must be a capture-run node",
+            ),
+            (
+                self.previous_run is not None and self.previous_run.node_id == self.target_run.node_id,
+                "a pointer advance must change the target run",
+            ),
+            (
+                self.previous_run is not None and self.sequence == 0,
+                "the first pointer at sequence 0 has no previous run",
+            ),
+            (
+                self.previous_run is None and self.sequence != 0,
+                "a later advance must name the previous run it supersedes",
+            ),
+        )
 
 
 class ProvenanceClosure(FrozenModel):
@@ -185,12 +201,6 @@ class ProvenanceClosure(FrozenModel):
 @runtime_checkable
 class EvidenceGraphWriter(Protocol):
     def append(self, nodes: Sequence[EvidenceNode], edges: Sequence[EvidenceEdge]) -> None: ...
-
-
-@runtime_checkable
-class EvidenceGraphReader(Protocol):
-    def resolve_pointer(self, key: CurrentPointerKey) -> CurrentPointer | None: ...
-    def closure(self, root: EvidenceNodeRef, *, reverse: bool = False, max_nodes: int = 1000) -> ProvenanceClosure: ...
 
 
 @runtime_checkable

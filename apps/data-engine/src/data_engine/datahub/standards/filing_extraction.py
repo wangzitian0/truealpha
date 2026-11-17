@@ -1,4 +1,4 @@
-"""SEC filing fetcher, multi-class share cover reader, and headcount adapter (rule:single-candidate:v1)."""
+"""SEC filing reader and headcount adapter (rule:single-candidate:v1)."""
 
 from __future__ import annotations
 
@@ -142,7 +142,7 @@ def _parse_headcount_value(raw_number: str | None, raw_scale: str | None) -> int
 
 
 def candidates(text: str) -> list[FilingCandidate]:
-    """Enumerate all stated headcount figures in `text` with sentence span, as-of date, and partial mark."""
+    """Enumerate headcount candidates in `text`."""
     found: dict[tuple[int, str | None, str], FilingCandidate] = {}
     for match in _HEADCOUNT.finditer(text):
         sentence = _sentence(text, match.start(), match.end())
@@ -172,7 +172,7 @@ def _chosen_total(totals: Sequence[FilingCandidate], selection: extraction_primi
 
 
 def select_total(found: list[FilingCandidate]) -> tuple[ExtractionStatus, FilingCandidate | None]:
-    """Delegate deterministic single-candidate selection to `factors.shared.extraction.extract_metric`."""
+    """Delegate selection to `factors.shared.extraction.extract_metric`."""
     totals = [candidate for candidate in found if not candidate.partial]
     if not totals:
         return "no_candidate", None
@@ -210,42 +210,6 @@ def _fetch_bytes_via_gateway(
     return gw_mod.fetch_once(key, fetch, content_type="application/octet-stream")
 
 
-def _fetch_json_via_gateway(
-    http: Any, gateway_instance: SourceGateway | None, endpoint: str, url: str, *, key: FetchKey
-) -> dict[str, Any]:
-    return dict(json.loads(_fetch_bytes_via_gateway(http, gateway_instance, endpoint, url, key=key).decode()))
-
-
-def _annual_filing_from_index(
-    cik: int,
-    index_block: dict[str, Any],
-    *,
-    cutoff_date: date,
-    http: Any,
-    gateway: SourceGateway | None = None,
-    allowed_forms: Collection[str] = ANNUAL_FORMS,
-) -> FilingDocument | None:
-    forms = index_block.get("form") or ()
-    for index, form in enumerate(forms):
-        if form not in allowed_forms:
-            continue
-        filing_date = date.fromisoformat(index_block["filingDate"][index])
-        if filing_date > cutoff_date:
-            continue
-        accession = index_block["accessionNumber"][index].replace("-", "")
-        document = index_block["primaryDocument"][index]
-        url = ARCHIVE_URL.format(cik=cik, accession=accession, document=document)
-        body = _fetch_bytes_via_gateway(
-            http,
-            gateway,
-            "archive",
-            url,
-            key=FetchKey("sec", "archive", f"filing:{cik:010d}:{accession}:{document}", ACCESSION_AS_OF),
-        )
-        return FilingDocument(cik, accession, form, filing_date, document, url, body)
-    return None
-
-
 def _latest_filing_for_forms(
     cik: int,
     *,
@@ -255,42 +219,39 @@ def _latest_filing_for_forms(
     allowed_forms: Collection[str],
 ) -> FilingDocument | None:
     cutoff_date = cutoff.astimezone(UTC).date()
-    submissions = _fetch_json_via_gateway(
-        http, gateway, "submissions", SUBMISSIONS_URL.format(cik=cik), key=submissions_key(cik)
-    )
-    filings = submissions.get("filings") or {}
-    found = _annual_filing_from_index(
-        cik,
-        filings.get("recent") or {},
-        cutoff_date=cutoff_date,
-        http=http,
-        gateway=gateway,
-        allowed_forms=allowed_forms,
-    )
-    if found is not None:
+
+    def fetch_json(url: str, key: FetchKey) -> dict[str, Any]:
+        return dict(json.loads(_fetch_bytes_via_gateway(http, gateway, "submissions", url, key=key).decode()))
+
+    def scan(block: dict[str, Any]) -> FilingDocument | None:
+        for index, form in enumerate(block.get("form") or ()):
+            if form in allowed_forms and (filing_date := date.fromisoformat(block["filingDate"][index])) <= cutoff_date:
+                accession = block["accessionNumber"][index].replace("-", "")
+                document = block["primaryDocument"][index]
+                url = ARCHIVE_URL.format(cik=cik, accession=accession, document=document)
+                body = _fetch_bytes_via_gateway(
+                    http,
+                    gateway,
+                    "archive",
+                    url,
+                    key=FetchKey("sec", "archive", f"filing:{cik:010d}:{accession}:{document}", ACCESSION_AS_OF),
+                )
+                return FilingDocument(cik, accession, form, filing_date, document, url, body)
+        return None
+
+    filings = fetch_json(SUBMISSIONS_URL.format(cik=cik), submissions_key(cik)).get("filings") or {}
+    if found := scan(filings.get("recent") or {}):
         return found
     for file_meta in filings.get("files") or ():
-        name = file_meta.get("name")
-        if not name:
+        if not (name := file_meta.get("name")):
             continue
-        filing_from = file_meta.get("filingFrom")
-        if filing_from:
+        if filing_from := file_meta.get("filingFrom"):
             try:
                 if date.fromisoformat(str(filing_from)) > cutoff_date:
                     continue
             except ValueError:
                 pass
-        overflow = _fetch_json_via_gateway(
-            http,
-            gateway,
-            "submissions",
-            SUBMISSIONS_OVERFLOW_URL.format(name=name),
-            key=submissions_key(cik, overflow=name),
-        )
-        found = _annual_filing_from_index(
-            cik, overflow, cutoff_date=cutoff_date, http=http, gateway=gateway, allowed_forms=allowed_forms
-        )
-        if found is not None:
+        if found := scan(fetch_json(SUBMISSIONS_OVERFLOW_URL.format(name=name), submissions_key(cik, overflow=name))):
             return found
     return None
 
@@ -322,26 +283,12 @@ _CONVERSION_RATE_CONCEPT = re.compile(
 )
 
 
-def _uniform_class_par_values(ix: Any, members: Sequence[str]) -> bool:
-    par_by_member: dict[str, Decimal] = {}
-    for fact in ix.facts((_PAR_VALUE_CONCEPT,)):
-        if fact.value is None or fact.context.start is not None:
-            continue
-        member = dict(fact.context.dimensions).get(_CLASS_OF_STOCK_AXIS)
-        if isinstance(member, str) and member in members:
-            par_by_member[member] = fact.value
-    return len(set(par_by_member.values())) <= 1
-
-
-def _listed_stock_members(ix: Any, members: Sequence[str]) -> set[str]:
-    listed: set[str] = set()
-    for text_fact in ix.text_facts((_DEI_TRADING_SYMBOL_CONCEPT,), limit=40):
-        context = ix.contexts.get(text_fact.context_id)
-        if context is not None:
-            member = dict(context.dimensions).get(_CLASS_OF_STOCK_AXIS)
-            if isinstance(member, str) and member in members:
-                listed.add(member)
-    return listed
+def _class_member(dimensions: Any, members: Sequence[str], *, single_dim: bool = False) -> str | None:
+    dims = dict(dimensions)
+    if single_dim and len(dims) != 1:
+        return None
+    member = dims.get(_CLASS_OF_STOCK_AXIS)
+    return member if isinstance(member, str) and member in members else None
 
 
 def _class_conversion_rates(ix: Any, body: bytes, members: Sequence[str], *, as_of: date) -> dict[str, Decimal] | None:
@@ -350,15 +297,17 @@ def _class_conversion_rates(ix: Any, body: bytes, members: Sequence[str], *, as_
     for fact in ix.facts(concepts) if concepts else ():
         if fact.value is None or fact.context.start is not None or fact.context.end > as_of:
             continue
-        dims = dict(fact.context.dimensions)
-        member = dims.get(_CLASS_OF_STOCK_AXIS) if len(dims) == 1 else None
-        if (
-            isinstance(member, str)
-            and member in members
-            and (member not in latest_by_member or fact.context.end >= latest_by_member[member][0])
+        if (member := _class_member(fact.context.dimensions, members, single_dim=True)) is not None and (
+            member not in latest_by_member or fact.context.end >= latest_by_member[member][0]
         ):
             latest_by_member[member] = (fact.context.end, fact.value)
-    base_candidates = sorted(_listed_stock_members(ix, members)) or [
+    listed = {
+        member
+        for text_fact in ix.text_facts((_DEI_TRADING_SYMBOL_CONCEPT,), limit=40)
+        if (context := ix.contexts.get(text_fact.context_id)) is not None
+        and (member := _class_member(context.dimensions, members)) is not None
+    }
+    base_candidates = sorted(listed) or [
         member
         for member in members
         if latest_by_member.get(member, (as_of, Decimal(-1)))[1] in (Decimal(0), Decimal(1))
@@ -377,25 +326,8 @@ def _class_conversion_rates(ix: Any, body: bytes, members: Sequence[str], *, as_
     return rates
 
 
-def _share_entry(
-    *, end: str, val: Decimal, accn: str, fy: int, fp: str, form: str, filed: str, segment: str | None = None
-) -> dict[str, Any]:
-    entry: dict[str, Any] = {
-        "end": end,
-        "val": int(val) if val == int(val) else str(val),
-        "accn": accn,
-        "fy": fy,
-        "fp": fp,
-        "form": form,
-        "filed": filed,
-    }
-    if segment is not None:
-        entry["segment"] = segment
-    return entry
-
-
 def multi_class_share_entries(document: FilingDocument) -> list[dict[str, Any]]:
-    """Extract dimensional cover-page share entries from an iXBRL filing document (#1265, #1519)."""
+    """Extract cover-page share entries from iXBRL filing (#1265, #1519)."""
     from data_engine.datahub.standards.inline_xbrl import InlineXbrl
 
     ix = InlineXbrl(document.body)
@@ -410,9 +342,17 @@ def multi_class_share_entries(document: FilingDocument) -> list[dict[str, Any]]:
         return []
     latest_end = max(by_end)
     by_member = by_end[latest_end]
-    if len(by_member) < 2 or not _uniform_class_par_values(ix, tuple(by_member)):
+    members = tuple(by_member)
+    par_by_member = {
+        member: fact.value
+        for fact in ix.facts((_PAR_VALUE_CONCEPT,))
+        if fact.value is not None
+        and fact.context.start is None
+        and (member := _class_member(fact.context.dimensions, members)) is not None
+    }
+    if len(by_member) < 2 or len(set(par_by_member.values())) > 1:
         return []
-    base_kwargs: dict[str, Any] = {
+    base: dict[str, Any] = {
         "end": latest_end.isoformat(),
         "accn": format_accession(document.accession),
         "fy": latest_end.year,
@@ -421,10 +361,15 @@ def multi_class_share_entries(document: FilingDocument) -> list[dict[str, Any]]:
         "filed": document.filing_date.isoformat(),
     }
     rates = _class_conversion_rates(ix, document.body, tuple(by_member), as_of=latest_end)
-    if rates is not None:
-        total = sum((count * rates[member] for member, count in by_member.items()), Decimal(0))
-        return [_share_entry(val=total, **base_kwargs)]
-    return [_share_entry(val=val, segment=member, **base_kwargs) for member, val in sorted(by_member.items())]
+    items: list[tuple[str | None, Decimal]] = (
+        [(None, sum((count * rates[m] for m, count in by_member.items()), Decimal(0)))]
+        if rates is not None
+        else sorted(by_member.items())
+    )
+    return [
+        {**base, "val": int(val) if val == int(val) else str(val), **({"segment": seg} if seg is not None else {})}
+        for seg, val in items
+    ]
 
 
 def _get_bytes(http: Any, url: str) -> bytes:
@@ -444,18 +389,19 @@ def fetch_annual_filing(
         return ExtractionOutcome(cik, "error", detail=f"{type(error).__name__}: {error}")
 
 
-def _model_selection_summary(
-    model_runs: Sequence[llm.ModelSelection], status: ExtractionStatus
-) -> tuple[str, bool | None]:
-    if not model_runs:
-        return "", None
-    (model_run,) = model_runs
-    detail = f" model={model_run.model} invocation={model_run.invocation_id}" + (
-        " (replayed)" if model_run.replayed else ""
-    )
-    if status == "model_declined":
-        detail += f" reason={model_run.reason!r}"
-    return detail, model_run.replayed
+def require_annual_filing(
+    cik: int,
+    *,
+    http: Any,
+    gateway: SourceGateway,
+    cutoff: datetime,
+    no_filing_detail: str,
+    fetcher: Any = None,
+) -> FilingDocument | ExtractionOutcome:
+    document = (fetcher or fetch_annual_filing)(cik, http=http, gateway=gateway, cutoff=cutoff)
+    if isinstance(document, ExtractionOutcome):
+        return document
+    return ExtractionOutcome(cik, "no_annual_filing", detail=no_filing_detail) if document is None else document
 
 
 def extract_headcount(
@@ -474,13 +420,13 @@ def extract_headcount(
     model_transport: llm.Transport | None = None,
     issuer_label: str | None = None,
 ) -> ExtractionOutcome:
-    """Enumerate filing headcount candidates, select by deterministic rule or model, and persist."""
+    """Extract filing headcount candidates, select, and persist."""
     record_cik = cik if record_cik is None else record_cik
-    document = fetch_annual_filing(cik, http=http, gateway=gateway, cutoff=cutoff)
+    document = require_annual_filing(
+        cik, http=http, gateway=gateway, cutoff=cutoff, no_filing_detail="no 10-K/20-F on file at the cutoff"
+    )
     if isinstance(document, ExtractionOutcome):
         return document
-    if document is None:
-        return ExtractionOutcome(cik, "no_annual_filing", detail="no 10-K/20-F on file at the cutoff")
 
     try:
         found = candidates(filing_plain_text(document.body))
@@ -503,18 +449,22 @@ def extract_headcount(
             on_model_selection=model_runs.append,
         )
     selection = extraction_primitive.extract_metric(_shared_candidates(totals), selector).selection
-    status: ExtractionStatus
-    if selection is not None:
-        status = "resolved"
-    elif not totals:
-        status = "no_candidate"
-    elif selector is not None:
-        status = "model_declined"
-    else:
-        status = "needs_model_selection"
+    status: ExtractionStatus = (
+        "resolved"
+        if selection is not None
+        else ("no_candidate" if not totals else ("model_declined" if selector is not None else "needs_model_selection"))
+    )
     chosen = _chosen_total(totals, selection) if selection is not None else None
     extractor = selection.extractor if selection is not None else RULE_SINGLE_CANDIDATE
-    model_detail, model_replayed = _model_selection_summary(model_runs, status)
+    model_detail, model_replayed = "", None
+    if model_runs:
+        (model_run,) = model_runs
+        model_replayed = model_run.replayed
+        model_detail = f" model={model_run.model} invocation={model_run.invocation_id}" + (
+            " (replayed)" if model_run.replayed else ""
+        )
+        if status == "model_declined":
+            model_detail += f" reason={model_run.reason!r}"
     outcome = ExtractionOutcome(
         cik,
         status,
@@ -541,6 +491,7 @@ def extract_headcount(
         )
 
     landed_at = now or datetime.now(UTC)
+    knowable = knowable_instant(AsOfAxis.ACCESSION, document.filing_date)
     raw_id = insert_fetch(
         connection,
         source=DataSource.SEC,
@@ -548,7 +499,7 @@ def extract_headcount(
         body=document.body,
         content_type="text/html",
         fetched_at=landed_at,
-        source_published_at=knowable_instant(AsOfAxis.ACCESSION, document.filing_date),
+        source_published_at=knowable,
         metadata={"form": document.form, "accession": document.accession, "cik": cik, "url": document.url},
         store=store,
         recorded_at=landed_at,
@@ -556,14 +507,13 @@ def extract_headcount(
     filing_cik = "" if record_cik == cik else f" filing_cik={cik}"
     evidence_ref = (
         f"accession={document.accession} form={document.form} filed={document.filing_date.isoformat()}{filing_cik} "
-        f"raw=raw.fetches:{raw_id} extractor={extractor}{model_detail} "
-        f"span={chosen.sentence[:400]!r}"
+        f"raw=raw.fetches:{raw_id} extractor={extractor}{model_detail} span={chosen.sentence[:400]!r}"
     )
     fact_id = record_headcount(
         connection,
         cik=record_cik,
         headcount=Decimal(chosen.value),
-        knowable_at=knowable_instant(AsOfAxis.ACCESSION, document.filing_date),
+        knowable_at=knowable,
         period_end=outcome.as_of,
         source=EXTRACTION_SOURCE,
         evidence_ref=evidence_ref,

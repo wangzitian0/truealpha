@@ -35,19 +35,22 @@ export interface ComparisonData {
   page: PageInfo;
 }
 
-export interface MartAdapterLike {
-  overview: StrategyRunReadAdapter["overview"];
-  runIdentity: StrategyRunReadAdapter["runIdentity"];
-  latestCutoff: StrategyRunReadAdapter["latestCutoff"];
-  ranking: StrategyRunReadAdapter["ranking"];
-  comparison: StrategyRunReadAdapter["comparison"];
-  entityDetail: StrategyRunReadAdapter["entityDetail"];
-  traceView: StrategyRunReadAdapter["traceView"];
-  entityThemePurity: StrategyRunReadAdapter["entityThemePurity"];
-  entityGppeDetail: StrategyRunReadAdapter["entityGppeDetail"];
-  entityAnalystRatings: StrategyRunReadAdapter["entityAnalystRatings"];
-  entitySupplyChainExposure: StrategyRunReadAdapter["entitySupplyChainExposure"];
-}
+export type MartAdapterLike = Pick<
+  StrategyRunReadAdapter,
+  | "overview"
+  | "runIdentity"
+  | "latestCutoff"
+  | "ranking"
+  | "comparison"
+  | "entityDetail"
+  | "traceView"
+  | "entityThemePurity"
+  | "entityGppeDetail"
+  | "entityAnalystRatings"
+  | "entitySupplyChainExposure"
+>;
+
+type PageParams = { cutoffAt?: string; cursor?: string | null; limit?: number };
 
 async function guard<T>(
   context: AccessContext | null,
@@ -61,6 +64,23 @@ async function guard<T>(
     if (error instanceof MartReadUnavailable) return { kind: "unavailable", reason: error.reason };
     return { kind: "error", message: error instanceof Error ? error.message : String(error) };
   }
+}
+
+async function loadCutoffPage<Row, Extra extends Record<string, unknown>>(
+  context: AccessContext | null,
+  params: PageParams,
+  adapter: MartAdapterLike,
+  loadRows: (mart: MartAdapterLike, ctx: AccessContext, cutoffAt: string) => Promise<readonly Row[] | null>,
+  extra: Extra,
+): Promise<ReadState<{ cutoffAt: string; rows: readonly Row[]; page: PageInfo } & Extra>> {
+  return guard<{ cutoffAt: string; rows: readonly Row[]; page: PageInfo } & Extra>(context, async (mart, ctx) => {
+    const cutoffAt = params.cutoffAt ?? (await mart.latestCutoff(ctx));
+    if (cutoffAt === null) return { kind: "empty" };
+    const rows = await loadRows(mart, ctx, cutoffAt);
+    if (rows === null || rows.length === 0) return { kind: "empty" };
+    const page = paginate(rows, params.cursor ?? null, params.limit);
+    return { kind: "ready", data: { ...extra, cutoffAt, rows: page.items, page: page.info } };
+  }, adapter);
 }
 
 export async function loadOverview(
@@ -79,35 +99,27 @@ export async function loadOverview(
 
 export async function loadRanking(
   context: AccessContext | null,
-  params: { cutoffAt?: string; cursor?: string | null; limit?: number; universe?: string } = {},
+  params: PageParams & { universe?: string } = {},
   adapter: MartAdapterLike = new StrategyRunReadAdapter(),
 ): Promise<ReadState<RankingData>> {
-  return guard<RankingData>(context, async (mart, ctx) => {
-    const universe = normalizeRankingUniverse(params.universe);
-    if (universe === null) return { kind: "empty" };
-    const cutoffAt = params.cutoffAt ?? (await mart.latestCutoff(ctx));
-    if (cutoffAt === null) return { kind: "empty" };
-    const allRows = await mart.ranking(ctx, cutoffAt);
-    const rows = allRows.filter((row) => matchesRankingUniverse(row.provenance.universeId, universe));
-    if (rows.length === 0) return { kind: "empty" };
-    const page = paginate(rows, params.cursor ?? null, params.limit);
-    return { kind: "ready", data: { cutoffAt, universe, rows: page.items, page: page.info } };
-  }, adapter);
+  const universe = normalizeRankingUniverse(params.universe);
+  if (universe === null) return context === null ? { kind: "denied" } : { kind: "empty" };
+  return loadCutoffPage(
+    context,
+    params,
+    adapter,
+    async (mart, ctx, cutoffAt) =>
+      (await mart.ranking(ctx, cutoffAt)).filter((row) => matchesRankingUniverse(row.provenance.universeId, universe)),
+    { universe },
+  );
 }
 
 export async function loadComparison(
   context: AccessContext | null,
-  params: { cutoffAt?: string; cursor?: string | null; limit?: number } = {},
+  params: PageParams = {},
   adapter: MartAdapterLike = new StrategyRunReadAdapter(),
 ): Promise<ReadState<ComparisonData>> {
-  return guard<ComparisonData>(context, async (mart, ctx) => {
-    const cutoffAt = params.cutoffAt ?? (await mart.latestCutoff(ctx));
-    if (cutoffAt === null) return { kind: "empty" };
-    const rows = await mart.comparison(ctx, cutoffAt);
-    if (rows.length === 0) return { kind: "empty" };
-    const page = paginate(rows, params.cursor ?? null, params.limit);
-    return { kind: "ready", data: { cutoffAt, rows: page.items, page: page.info } };
-  }, adapter);
+  return loadCutoffPage(context, params, adapter, (mart, ctx, cutoffAt) => mart.comparison(ctx, cutoffAt), {});
 }
 
 export async function loadEntityDetail(

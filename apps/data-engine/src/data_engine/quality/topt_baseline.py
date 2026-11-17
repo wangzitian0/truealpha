@@ -1,58 +1,4 @@
-"""Does TOPT meet the accepted baseline in this environment? The nightly verdict `topt_baseline` (#1664).
-
-The owner decided on 2026-11-11: TOPT is below the baseline, so no other universe goes forward until it
-meets the baseline. #1664 lists the checks. This module runs each check that one environment can run on
-its own data, from the primary tables. It never reads a number from a report that a dashboard also shows,
-except to compare the two.
-
-What each row reads, and what makes it red:
-
-* Q1 (GPPE availability). The served TOPT head of `mart.served_head`, the head that the dashboard shows. A head
-  that is withheld or not fresh is red. For a fresh head: the issuers of `mart.topt_gppe_results` that the coverage
-  report would count as answered (`coalesce(availability_status, availability) = 'available'` and a GPPE value)
-  against all issuers of the run. Red below `minimum_availability` of `ACCEPTED_SERVICE_OBJECTIVES` (95%). The
-  stored coverage report of the same run must show the same two numbers. When it shows others, or no report
-  exists, the row is red: a dashboard that disagrees with its own tables is a defect.
-* R1 (quota). The calls of the Twelve Data seat in `staging.api_call_ledger` on each of the last 7 UTC days
-  against the share of this environment (`account_share`, the window of one day). Red above
-  `UTILIZATION_CEILING` (70%) on any day. A ledger row counts, failed or not: the vendor counts it. A share of 0
-  is inside the share when the seat made no call, and red when it made one.
-* C1 (server memory). `VmHWM` of the first process of the code server container against `server_mib` of the
-  capacity contract. A server below the budget that started less than `MATURE_SERVER_HOURS` ago is not
-  measured: the high-water mark only grows, and the contract states its reading at 13 hours after the start.
-  The size is shown in whole MiB, up for a red row and down otherwise. One read of `VmHWM` is not exact to 0.1 MiB:
-  on production on 2026-11-13 the same process read 260.15 MiB at 06:31 UTC and 260.31 MiB ten minutes later, and
-  the row of 06:25 UTC showed 260.4 (rounded up). A digit after the point would claim a precision that the read
-  does not have. The verdict (above or below the budget) held in every read.
-
-* S (S1 to S3, schema). The live catalog of this environment's database against a reference database that ran the
-  chain (`truealpha_tools.schema_drift`). The reference sits on the same server, is built by the one applier
-  `db/apply_migrations.sh` from `/app/db`, and is dropped at the end. The build leaves `db/roles.sql` out: that file
-  writes state of the whole server (role settings, role membership, the app login password), and it creates no
-  object that the comparison reads. The check creates and drops its own scratch database and writes nothing else.
-  The number is the count of differences in places, not of objects: an extra schema counts once. Green only at 0.
-  The comparison covers these properties of the schemas that the chain declares: relations, columns, constraints,
-  indexes, triggers, the source text of functions, the definition text of views, and sequences. A green S does NOT
-  prove any of these: function attributes (SECURITY DEFINER, STRICT, volatility, cost, return type, settings), view
-  options (security_barrier), row-level security flags and policies, grants, disabled triggers, invalid indexes,
-  enum types, comments, and the `dagster` schema, which the Dagster runtime owns. A reference that cannot be built or
-  compared is red, never green. A scratch database that a killed process left behind is dropped by the next run
-  (older than 1 h). Each environment runs its own check, so the row is S1 in production and S2 in staging, and the
-  scheduled verdict is S3.
-
-Q3 of #1664 cannot run inside one environment today. It compares two environments, and no database sees the other.
-It is listed as not measured. A verdict with a row that is not measured is never green: unknown is not OK.
-
-A shown percentage or size is rounded in the direction that keeps the text true: up for a red row, down for a
-row that passes. A text never says "70.0% against 70.0%" for a row that failed.
-
-A summary starts with the texts of the rows that keep the verdict red: the failed rows or, when no row failed,
-the rows that are not measured. Then it lists the rows that passed (their names), and, after a failed row, the rows
-that are not measured (their names). A green row is visible and differs from a row that did not run.
-
-A summary is public (`/api/health`). It holds row names, counts and percentages. Never a research value.
-`verdict()` puts "failed: " before a red summary, so the first text of a summary says why the verdict is red.
-"""
+"""Nightly TOPT baseline verdict check (#1664)."""
 
 from __future__ import annotations
 
@@ -80,24 +26,12 @@ log = logging.getLogger(__name__)
 
 MIB = 1024 * 1024
 PROC_ROOT = Path("/proc")
-
-#: The seat of Twelve Data in the call ledger (the constant of the writer), and the days that R1 reads.
 QUOTA_SOURCE = TWELVE_DATA_SEAT
 QUOTA_DAYS = 7
-
-#: The code server holds its reading of `grpc_server_hwm_mib` in the contract 13 hours after its start
-#: (`code_server_capacity.measured.method`). A younger server has not shown its size yet.
 MATURE_SERVER_HOURS = 13
 
-#: Rows of #1664 that no environment can run alone, with the reason. The summary names them.
-NOT_MEASURED: Mapping[str, str] = {
-    "Q3": "compares two environments; no database sees the other",
-}
-
-#: Where the data-engine image holds the chain for the reference database (`apps/data-engine/Dockerfile`).
+NOT_MEASURED: Mapping[str, str] = {"Q3": "compares two environments; no database sees the other"}
 IMAGE_DB_DIR = Path("/app/db")
-#: `db/roles.sql` sets the password of the app login when this variable is set. The reference build leaves
-#: `roles.sql` out (`skip_roles`); this mask is the second guard: the check changes no credential.
 MASKED_ENVIRONMENT = ("APP_SERVICE_DB_PASSWORD",)
 
 State = Literal["pass", "fail", "unmeasured"]
@@ -105,8 +39,6 @@ State = Literal["pass", "fail", "unmeasured"]
 
 @dataclass(frozen=True)
 class Row:
-    """One check of #1664 and what it found. `text` is public: names and counts only."""
-
     key: str
     state: State
     text: str
@@ -126,13 +58,10 @@ class Judgement:
 
     @property
     def ok(self) -> bool:
-        """Green only when every row passed. A row that is not measured is never a pass."""
         return all(row.state == "pass" for row in self.rows)
 
     @property
     def summary(self) -> str:
-        """The rows that keep the verdict red come first: the failed rows, or, when none failed, the rows that are
-        not measured. `verdict()` puts "failed: " before a red summary, so that first part must say why."""
         lead = self.failed or self.unmeasured
         if not lead:
             return "ok: " + "; ".join(row.text for row in self.rows)
@@ -145,21 +74,15 @@ class Judgement:
         return ". ".join(parts)
 
 
-def _one_decimal(value: Decimal, *, up: bool) -> Decimal:
-    return value.quantize(Decimal("0.1"), rounding=ROUND_CEILING if up else ROUND_FLOOR)
-
-
-def _whole_mib(value: Decimal, *, up: bool) -> Decimal:
-    """Whole MiB, up for a red row and down for a row that passes. The reading has no digit after the point to give."""
-    return value.quantize(Decimal("1"), rounding=ROUND_CEILING if up else ROUND_FLOOR)
+def _round(value: Decimal, place: str, *, up: bool) -> Decimal:
+    return value.quantize(Decimal(place), rounding=ROUND_CEILING if up else ROUND_FLOOR)
 
 
 def _percent(ratio: Decimal, *, up: bool) -> str:
-    return f"{_one_decimal(ratio * 100, up=up)}%"
+    return f"{_round(ratio * 100, '0.1', up=up)}%"
 
 
 def judge_head(*, run_id: str | None, freshness: str, availability: str) -> Row | None:
-    """Q1, first step: a head that is withheld or not fresh is red before any count. None when it is served."""
     if run_id is None or availability != "available":
         return Row("Q1", "fail", f"Q1 the served TOPT head is withheld ({availability})")
     if freshness != "fresh":
@@ -168,7 +91,6 @@ def judge_head(*, run_id: str | None, freshness: str, availability: str) -> Row 
 
 
 def judge_gppe(*, available: int, total: int, reported: tuple[int, int] | None) -> Row:
-    """Q1: the share of issuers of the served TOPT head with a GPPE, and the stored report's own numbers."""
     if total <= 0:
         return Row("Q1", "fail", "Q1 the served TOPT head holds no GPPE row")
     if reported is None:
@@ -185,7 +107,6 @@ def judge_gppe(*, available: int, total: int, reported: tuple[int, int] | None) 
 
 
 def judge_quota(*, source: str, daily_calls: Mapping[date, int], share: int | None) -> Row:
-    """R1: the busiest of the last days against the share of one day, at `UTILIZATION_CEILING`."""
     if share is None:
         return Row("R1", "fail", f"R1 {source} has no daily limit to judge against")
     total = sum(daily_calls.values())
@@ -203,13 +124,12 @@ def judge_quota(*, source: str, daily_calls: Mapping[date, int], share: int | No
 
 
 def judge_server(*, hwm_bytes: int | None, age_seconds: float | None, budget_mib: int) -> Row:
-    """C1: the code server's high-water mark against its budget. A young server is not measured yet."""
     if hwm_bytes is None:
         return Row("C1", "fail", "C1 the size of the code server cannot be read")
     size = Decimal(hwm_bytes) / MIB
     over = hwm_bytes > budget_mib * MIB
-    age = "age unknown" if age_seconds is None else f"age {_one_decimal(Decimal(str(age_seconds)) / 3600, up=False)} h"
-    text = f"C1 code server {_whole_mib(size, up=over)}/{budget_mib} MiB, {age}"
+    age = "age unknown" if age_seconds is None else f"age {_round(Decimal(str(age_seconds)) / 3600, '0.1', up=False)} h"
+    text = f"C1 code server {_round(size, '1', up=over)}/{budget_mib} MiB, {age}"
     if over:
         return Row("C1", "fail", text)
     if age_seconds is None or age_seconds < MATURE_SERVER_HOURS * 3600:
@@ -218,7 +138,6 @@ def judge_server(*, hwm_bytes: int | None, age_seconds: float | None, budget_mib
 
 
 def judge_schema(*, differences: int | None, failure: str = "") -> Row:
-    """S: the places where the live catalog differs from the chain. None means that the comparison did not run."""
     if differences is None:
         return Row("S", "fail", f"S the schema could not be compared ({failure})")
     if differences == 0:
@@ -228,50 +147,24 @@ def judge_schema(*, differences: int | None, failure: str = "") -> Row:
 
 
 def judge(*, gppe: Row, quota: Row, server: Row, schema: Row) -> Judgement:
-    """The rows in the order of #1664, then the rows that no environment can run alone."""
     waiting = tuple(Row(key, "unmeasured", f"{key} not measured: {reason}") for key, reason in NOT_MEASURED.items())
     return Judgement((gppe, quota, server, schema, *waiting))
 
 
-# --- readers ------------------------------------------------------------------------------------------------
-
-#: The head that the dashboard shows: the newest TOPT pointer of `mart.served_head`. `run_id` is null while the
-#: head is withheld.
-HEAD_SQL = """
-select run_id, freshness, availability
-from mart.served_head
-where universe_id like %s
-order by advanced_at desc
-limit 1
-"""
-
-#: The applicable issuers of the run (excluding persisted `not_applicable` rows)
-#: and those counted as answered (`coalesce(availability_status, availability) = 'available'` with non-null gppe).
-GPPE_SQL = """
-select (count(distinct issuer_id)
-          filter (where coalesce(availability_status, availability) <> 'not_applicable'))::int,
-       (count(distinct issuer_id)
-          filter (where coalesce(availability_status, availability) = 'available' and gppe is not null))::int
-from mart.topt_gppe_results
-where run_id = %s
-"""
-
-#: The numbers of q1 in the newest stored coverage report of the run. The dashboard shows the same report.
-REPORTED_Q1_SQL = """
-select (payload -> 'questions' -> 'q1' ->> 'answered')::int,
-       (payload -> 'questions' -> 'q1' ->> 'denominator')::int
-from mart.question_coverage_report
-where run_id = %s
-order by created_at desc
-limit 1
-"""
-
-DAILY_CALLS_SQL = """
-select (called_at at time zone 'utc')::date, count(*)::int
-from staging.api_call_ledger
-where source = %s and called_at >= %s and called_at <= %s
-group by 1
-"""
+HEAD_SQL = "select run_id, freshness, availability from mart.served_head where universe_id like %s order by advanced_at desc limit 1"
+GPPE_SQL = (
+    "select (count(distinct issuer_id) filter (where coalesce(availability_status, availability) <> 'not_applicable'))::int, "
+    "(count(distinct issuer_id) filter (where coalesce(availability_status, availability) = 'available' and gppe is not null))::int "
+    "from mart.topt_gppe_results where run_id = %s"
+)
+REPORTED_Q1_SQL = (
+    "select (payload -> 'questions' -> 'q1' ->> 'answered')::int, (payload -> 'questions' -> 'q1' ->> 'denominator')::int "
+    "from mart.question_coverage_report where run_id = %s order by created_at desc limit 1"
+)
+DAILY_CALLS_SQL = (
+    "select (called_at at time zone 'utc')::date, count(*)::int "
+    "from staging.api_call_ledger where source = %s and called_at >= %s and called_at <= %s group by 1"
+)
 
 
 def topt_universe_like() -> str:
@@ -282,14 +175,15 @@ def read_gppe(connection: Any, run_id: str) -> Row:
     counts = connection.execute(GPPE_SQL, (run_id,)).fetchone()
     total, available = (0, 0) if counts is None else (int(counts[0]), int(counts[1]))
     reported_row = connection.execute(REPORTED_Q1_SQL, (run_id,)).fetchone()
-    reported = None
-    if reported_row is not None and reported_row[0] is not None and reported_row[1] is not None:
-        reported = (int(reported_row[0]), int(reported_row[1]))
+    reported = (
+        (int(reported_row[0]), int(reported_row[1]))
+        if reported_row is not None and reported_row[0] is not None and reported_row[1] is not None
+        else None
+    )
     return judge_gppe(available=available, total=total, reported=reported)
 
 
 def read_q1(connection: Any) -> Row:
-    """Q1 for the head that is served now."""
     head = connection.execute(HEAD_SQL, (topt_universe_like(),)).fetchone()
     if head is None:
         return Row("Q1", "fail", "Q1 no served TOPT head")
@@ -299,9 +193,7 @@ def read_q1(connection: Any) -> Row:
 
 
 def window_start(now: datetime) -> datetime:
-    """Midnight UTC of the first of the last `QUOTA_DAYS` days, today included."""
-    today = now.astimezone(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
-    return today - timedelta(days=QUOTA_DAYS - 1)
+    return now.astimezone(UTC).replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=QUOTA_DAYS - 1)
 
 
 def read_quota(connection: Any, *, now: datetime, environment: str, contract: EnvironmentContract) -> Row:
@@ -312,7 +204,6 @@ def read_quota(connection: Any, *, now: datetime, environment: str, contract: En
 
 
 def server_age_seconds(proc_root: Path = PROC_ROOT, ticks_per_second: int | None = None) -> float | None:
-    """Seconds since the first process started: the uptime of the host minus the start of the process (ticks)."""
     try:
         stat = (proc_root / "1" / "stat").read_text()
         started_ticks = int(stat[stat.rindex(")") + 2 :].split()[19])
@@ -324,7 +215,6 @@ def server_age_seconds(proc_root: Path = PROC_ROOT, ticks_per_second: int | None
 
 
 def _hwm_bytes(status: str) -> int | None:
-    """`VmHWM` of a `/proc/<pid>/status` text in bytes, or None when absent."""
     for line in status.splitlines():
         if line.startswith("VmHWM:"):
             return int(line.split()[1]) * 1024
@@ -332,7 +222,6 @@ def _hwm_bytes(status: str) -> int | None:
 
 
 def _server_process(proc_root: Path) -> int:
-    """`VmHWM` in bytes of PID 1 when it is the Dagster code server."""
     if b"dagster" not in (proc_root / "1" / "cmdline").read_bytes():
         raise ValueError("the first process is not the code server")
     size = _hwm_bytes((proc_root / "1" / "status").read_bytes().decode("utf-8", errors="replace"))
@@ -341,16 +230,9 @@ def _server_process(proc_root: Path) -> int:
     return size
 
 
-def read_server(
-    *,
-    budget_mib: int,
-    proc_root: Path = PROC_ROOT,
-    reader: Callable[[Path], int] | None = None,
-) -> Row:
-    """The code server of this container."""
-    read_hwm = reader or _server_process
+def read_server(*, budget_mib: int, proc_root: Path = PROC_ROOT, reader: Callable[[Path], int] | None = None) -> Row:
     try:
-        hwm: int | None = read_hwm(proc_root)
+        hwm: int | None = (reader or _server_process)(proc_root)
     except (OSError, ValueError):
         hwm = None
     return judge_server(hwm_bytes=hwm, age_seconds=server_age_seconds(proc_root), budget_mib=budget_mib)
@@ -358,7 +240,6 @@ def read_server(
 
 @contextmanager
 def _without_environment(names: tuple[str, ...]) -> Iterator[None]:
-    """Mask variables of this process for the block, then put them back."""
     held = {name: os.environ.pop(name) for name in names if name in os.environ}
     try:
         yield
@@ -367,24 +248,20 @@ def _without_environment(names: tuple[str, ...]) -> Iterator[None]:
 
 
 def read_schema(database_url: str, *, db_dir: Path | None = None) -> Row:
-    """S: build the reference on the server of `database_url`, compare, drop it.
-
-    Any failure is a red row. The row names the exception type and nothing else, because a connection error names its
-    host and the row is public. The log of the run keeps the full error."""
     chain_dir = IMAGE_DB_DIR if db_dir is None else db_dir
     try:
-        from truealpha_tools import schema_drift
+        import truealpha_tools.schema_drift as schema_drift
 
         try:
-            schema_drift.drop_stale_references(database_url)  # logs each database that it drops
-        except Exception:  # noqa: BLE001 - a failed sweep never hides the measurement
+            schema_drift.drop_stale_references(database_url)
+        except Exception:  # noqa: BLE001
             log.warning("could not sweep stale scratch reference databases", exc_info=True)
         with _without_environment(MASKED_ENVIRONMENT):
             with schema_drift.reference_database(
                 database_url, db_dir=chain_dir, allow_remote=True, skip_roles=True
             ) as reference_url:
                 report, _counts = schema_drift.compare(database_url, reference_url)
-    except Exception as failure:  # noqa: BLE001 - every failure is a red row, never a crash of the verdict
+    except Exception as failure:  # noqa: BLE001 - report error class only in public row
         log.warning("the schema comparison failed", exc_info=True)
         return judge_schema(differences=None, failure=type(failure).__name__)
     return judge_schema(differences=len(report))

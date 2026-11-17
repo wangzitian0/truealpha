@@ -1,4 +1,4 @@
--- #396: owner-scoped conversation persistence + clarification tokens.
+-- #396: owner-scoped conversation persistence.
 -- Run as: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/tests/conversations_contract.sql
 -- Everything happens inside one transaction and rolls back at the end.
 
@@ -9,8 +9,6 @@ do $$
 begin
     if to_regclass('app.conversations') is null
        or to_regclass('app.conversation_messages') is null
-       or to_regclass('app.clarification_tokens') is null
-       or to_regclass('app.research_gap_requests') is null
        or to_regclass('app.conversation_audit_metadata') is null then
         raise exception 'conversation persistence storage boundary is incomplete';
     end if;
@@ -20,14 +18,8 @@ begin
     ) or not exists (
         select 1 from pg_class
         where oid = 'app.conversation_messages'::regclass and relrowsecurity and relforcerowsecurity
-    ) or not exists (
-        select 1 from pg_class
-        where oid = 'app.clarification_tokens'::regclass and relrowsecurity and relforcerowsecurity
-    ) or not exists (
-        select 1 from pg_class
-        where oid = 'app.research_gap_requests'::regclass and relrowsecurity and relforcerowsecurity
     ) then
-        raise exception 'all four conversation tables must force row-level security';
+        raise exception 'all conversation tables must force row-level security';
     end if;
     if exists (
         select 1 from information_schema.columns
@@ -133,81 +125,6 @@ begin
         -- (SQLSTATE 42501 / insufficient_privilege) for the WITH CHECK failure — this is
         -- not the raise_exception (P0001) class our own sentinel/trigger errors use.
         when insufficient_privilege then null; -- expected: RLS blocked the forged insert
-    end;
-end;
-$$;
-
--- Deliberately no `reset role` here: clarification tokens and gap requests
--- below stay under app_runtime + alice's GUCs, so these sections exercise
--- the real owner-scoped RLS surface the web repository relies on, not
--- superuser behavior that would trivially pass regardless of policy.
-
--- --- clarification tokens: single redemption, no other field mutable ---
-insert into app.clarification_tokens (
-    token_id, conversation_id, tenant_id, owner_principal_id, originating_message_id,
-    requested_fields, expires_at, created_at
-) values (
-    'token:alpha:1', 'conversation:alpha:alice-1', 'tenant:alpha', 'principal:alpha:alice',
-    'message:alpha:alice-1', array['cutoff'], now() + interval '10 minutes', now()
-);
-
-do $$
-declare
-    first_redemption integer;
-    second_redemption integer;
-begin
-    update app.clarification_tokens
-        set redeemed_at = now()
-        where token_id = 'token:alpha:1' and redeemed_at is null and expires_at > now();
-    get diagnostics first_redemption = row_count;
-    if first_redemption <> 1 then
-        raise exception 'first redemption of a fresh token must affect exactly one row, affected %', first_redemption;
-    end if;
-
-    update app.clarification_tokens
-        set redeemed_at = now()
-        where token_id = 'token:alpha:1' and redeemed_at is null and expires_at > now();
-    get diagnostics second_redemption = row_count;
-    if second_redemption <> 0 then
-        raise exception 'replaying an already-redeemed token must affect zero rows (single redemption), affected %', second_redemption;
-    end if;
-end;
-$$;
-
-do $$
-begin
-    begin
-        update app.clarification_tokens set requested_fields = array['convention'] where token_id = 'token:alpha:1';
-        raise exception 'mutating a field other than redeemed_at unexpectedly succeeded';
-    exception
-        -- Two independent layers can block this, and either is acceptable:
-        -- app_runtime's column-scoped grant (redeemed_at only) denies it before
-        -- the trigger ever runs; a role with broader UPDATE would still be
-        -- caught by trg_clarification_tokens_guard_update's field-tamper check.
-        when insufficient_privilege then null;
-        when raise_exception then
-            if sqlerrm = 'mutating a field other than redeemed_at unexpectedly succeeded' then raise; end if;
-            if sqlerrm <> 'clarification_tokens: only redeemed_at may change after creation' then raise; end if;
-    end;
-end;
-$$;
-
--- --- research gap requests: append-only, owner-isolated, no consent flag exists ---
-insert into app.research_gap_requests (gap_request_id, tenant_id, owner_principal_id, conversation_id, prompt_text, created_at)
-    values ('gap:alpha:1', 'tenant:alpha', 'principal:alpha:alice', 'conversation:alpha:alice-1', 'cover XYZ supply chain', now());
-
-do $$
-begin
-    begin
-        update app.research_gap_requests set prompt_text = 'edited' where gap_request_id = 'gap:alpha:1';
-        raise exception 'gap request update unexpectedly succeeded';
-    exception
-        -- app_runtime has no UPDATE grant at all on this table (fully
-        -- append-only), so this is denied at the privilege layer before
-        -- trg_research_gap_requests_append_only would even run.
-        when insufficient_privilege then null;
-        when raise_exception then
-            if sqlerrm = 'gap request update unexpectedly succeeded' then raise; end if;
     end;
 end;
 $$;

@@ -1,4 +1,4 @@
-"""The core strategy backtest computation: split events and the definition-driven simulation (#758)."""
+"""Core strategy backtest split events and simulation (#758)."""
 
 from factors.backtest.corporate_actions import (
     SeriesBar,

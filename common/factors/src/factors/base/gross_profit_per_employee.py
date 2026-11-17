@@ -1,4 +1,4 @@
-"""Module 2: gross profit per employee (capital-adjusted labor efficiency over pinned panel variants)."""
+"""Module 2: gross profit per employee."""
 
 from collections.abc import Mapping, Sequence
 from datetime import datetime
@@ -30,15 +30,6 @@ _MISSING_LEAF_FLAGS = {
     "intangible_assets_net_excluding_goodwill": MISSING_TCE_FLAG,
     "preferred_stock_value": MISSING_PREFERRED_FLAG,
 }
-
-
-def _resolve_leaf_fact(facts: Sequence[Fact], entity_id: str, metric: str) -> Fact | None:
-    fact = sole_fact(facts, entity_id, metric)
-    if fact is None and metric == "pre_provision_profit":
-        return sole_fact(facts, entity_id, _GROSS_PROFIT)
-    if fact is None and metric == "bank_net_revenue":
-        return sole_fact(facts, entity_id, "pre_provision_profit") or sole_fact(facts, entity_id, _GROSS_PROFIT)
-    return fact
 
 
 @factor(
@@ -77,7 +68,11 @@ def gross_profit_per_employee(
             tree_inputs[node.key] = risk_free_rate
             continue
         metric = metric_of(node)
-        fact = _resolve_leaf_fact(facts, entity_id, metric)
+        fact = sole_fact(facts, entity_id, metric)
+        if fact is None and metric == "bank_net_revenue":
+            fact = sole_fact(facts, entity_id, "pre_provision_profit")
+        if fact is None and metric in ("pre_provision_profit", "bank_net_revenue"):
+            fact = sole_fact(facts, entity_id, _GROSS_PROFIT)
         tree_inputs[node.key] = None
         if fact is None or fact.value is None:
             if node.default_when_missing is not None:

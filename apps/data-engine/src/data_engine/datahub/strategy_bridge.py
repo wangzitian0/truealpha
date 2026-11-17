@@ -15,15 +15,13 @@ import psycopg
 from factors.composite.strategy_evaluator import IssuerInput, Measure, evaluate_cutoff, required_input_keys
 from factors.panel import IssuerClass
 from truealpha_contracts.fiscal_period import FiscalPeriod as AnnualFiscalPeriod
-from truealpha_contracts.metrics import is_registered_input_key
 from truealpha_contracts.strategy import ExclusionReason, LargeModelValueV0Definition, load_live_strategy_definition
 from truealpha_runtime.storage import StorageError
 
 from data_engine import raw_store
 from data_engine.core_strategy_replay import _to_decision
+from data_engine.datahub._helpers import CAPTURE_OBSERVATION_JOIN, execute_many, require_registered_input_key
 from data_engine.datahub.input_cells import InputCell, financial_input_rows, last_close_cell, live_knowable_at
-from data_engine.datahub.market_prices import SPLIT_ADJUSTED, UNADJUSTED
-from data_engine.datahub.price_series import load_daily_series
 from data_engine.datahub.primary_listing import choose_primary_listings
 from data_engine.datahub.production_topt.concept_mapping import resolve_ruleset
 from data_engine.datahub.production_topt.executor import SERVED_BY_FAILOVER
@@ -36,58 +34,34 @@ from data_engine.datahub.share_basis import (
     Unavailable,
     listing_units_per_share_of,
     live_on_close_basis,
+    load_split_histories,
     on_close_basis,
-    split_history,
 )
 from data_engine.datahub.share_count_entry import share_count_entry
 from data_engine.strategy_backtest_gateway import StrategyBacktestGateway
 from data_engine.strategy_replay_repository import bind_strategy_run_to_capture, write_replay
 
 log = logging.getLogger(__name__)
-
 _Cell = tuple[str, dict, datetime]
 
-_RUN_LISTINGS_SQL = """
-select distinct on (p.normalized_payload ->> 'listing_id')
-       p.normalized_payload ->> 'listing_id',
-       p.normalized_payload ->> 'issuer_id'
-from raw.capture_obligations ob
-join staging.capture_observation_obligations oo on oo.capture_obligation_id = ob.obligation_id
-join staging.capture_normalized_observations o on o.observation_id = oo.observation_id
-join staging.capture_observation_payloads p on p.observation_id = o.observation_id
-where ob.run_id = %s
-  and o.semantic_type in ('listing-identity', 'financial-fact')
-order by p.normalized_payload ->> 'listing_id',
-         (o.semantic_type = 'listing-identity') desc,
-         p.normalized_payload ->> 'issuer_id'
-"""
-
-_LISTING_TICKERS_SQL = """
-select distinct p.normalized_payload ->> 'issuer_id', p.normalized_payload ->> 'ticker'
-from raw.capture_obligations ob
-join staging.capture_observation_obligations oo on oo.capture_obligation_id = ob.obligation_id
-join staging.capture_normalized_observations o on o.observation_id = oo.observation_id
-join staging.capture_observation_payloads p on p.observation_id = o.observation_id
-where ob.run_id = %s
-  and o.semantic_type = 'listing-identity'
-  and p.normalized_payload ->> 'issuer_id' = any(%s)
-  and p.normalized_payload ->> 'ticker' is not null
-"""
-
-_FINANCIAL_SOURCES_SQL = """
-select distinct v.raw_fetch_id
-from raw.capture_obligations ob
-join staging.capture_observation_obligations oo on oo.capture_obligation_id = ob.obligation_id
-join staging.capture_normalized_observations o on o.observation_id = oo.observation_id
-join staging.capture_observation_payloads p on p.observation_id = o.observation_id
-join raw.capture_source_vintages v on v.source_vintage_id = o.source_vintage_id
-where ob.run_id = %s
-  and o.semantic_type = 'financial-fact'
-  and o.parser_version = %s
-  and (p.normalized_payload ->> 'issuer_id' = %s or p.normalized_payload ->> 'listing_id' = %s)
-  and v.raw_fetch_id is not null
-order by 1
-"""
+_RUN_LISTINGS_SQL = (
+    f"select distinct on (p.normalized_payload ->> 'listing_id') p.normalized_payload ->> 'listing_id', "
+    f"p.normalized_payload ->> 'issuer_id' {CAPTURE_OBSERVATION_JOIN} "
+    "where ob.run_id = %s and o.semantic_type in ('listing-identity', 'financial-fact') "
+    "order by p.normalized_payload ->> 'listing_id', (o.semantic_type = 'listing-identity') desc, p.normalized_payload ->> 'issuer_id'"
+)
+_LISTING_TICKERS_SQL = (
+    f"select distinct p.normalized_payload ->> 'issuer_id', p.normalized_payload ->> 'ticker' {CAPTURE_OBSERVATION_JOIN} "
+    "where ob.run_id = %s and o.semantic_type = 'listing-identity' "
+    "and p.normalized_payload ->> 'issuer_id' = any(%s) and p.normalized_payload ->> 'ticker' is not null"
+)
+_FINANCIAL_SOURCES_SQL = (
+    f"select distinct v.raw_fetch_id {CAPTURE_OBSERVATION_JOIN} "
+    "join raw.capture_source_vintages v on v.source_vintage_id = o.source_vintage_id "
+    "where ob.run_id = %s and o.semantic_type = 'financial-fact' and o.parser_version = %s "
+    "and (p.normalized_payload ->> 'issuer_id' = %s or p.normalized_payload ->> 'listing_id' = %s) "
+    "and v.raw_fetch_id is not null order by 1"
+)
 
 
 def load_strategy_definition() -> LargeModelValueV0Definition:
@@ -102,45 +76,27 @@ def _listings_by_issuer(listing_to_issuer: Mapping[str, str]) -> dict[str, list[
 
 
 def seed_strategy_inputs_from_capture(
-    connection: psycopg.Connection[Any],
-    run_id: str,
-    *,
-    cutoff: datetime,
-    parser_version: str = PRIMARY_PARSER_VERSION,
+    connection: psycopg.Connection[Any], run_id: str, *, cutoff: datetime, parser_version: str = PRIMARY_PARSER_VERSION
 ) -> int:
     raw_rows = connection.execute(
-        """
-        select o.semantic_type, o.confidence, p.normalized_payload, o.knowable_at
-        from raw.capture_obligations ob
-        join staging.capture_observation_obligations oo on oo.capture_obligation_id = ob.obligation_id
-        join staging.capture_normalized_observations o on o.observation_id = oo.observation_id
-        join staging.capture_observation_payloads p on p.observation_id = o.observation_id
-        where ob.run_id = %s
-          and o.semantic_type in ('financial-fact', 'market-price', 'listing-identity')
-          and (
-              o.parser_version = %s
-              or o.semantic_type = 'listing-identity'
-              or (o.semantic_type = 'market-price' and p.normalized_payload ->> %s is not null)
-          )
-        """,
+        f"select o.semantic_type, o.confidence, p.normalized_payload, o.knowable_at {CAPTURE_OBSERVATION_JOIN} "
+        "where ob.run_id = %s and o.semantic_type in ('financial-fact', 'market-price', 'listing-identity') "
+        "and (o.parser_version = %s or o.semantic_type = 'listing-identity' "
+        "or (o.semantic_type = 'market-price' and p.normalized_payload ->> %s is not null))",
         (run_id, parser_version, SERVED_BY_FAILOVER),
     ).fetchall()
     rows = [(r[0], None, r[1], r[2]) if len(r) == 3 else (r[0], r[1], r[2], r[3]) for r in raw_rows]
-
-    listing_to_issuer: dict[str, str] = {
-        str(payload["listing_id"]): str(payload["issuer_id"])
-        for semantic_type, _conf, payload, _obs_at in rows
-        if semantic_type == "listing-identity"
-    }
-    for semantic_type, _conf, payload, _obs_at in rows:
-        if semantic_type in ("financial-fact", "market-price"):
-            listing_to_issuer.setdefault(str(payload["listing_id"]), str(payload["issuer_id"]))
+    listing_to_issuer: dict[str, str] = {}
+    for sem, _c, p, _o in rows:
+        if sem == "listing-identity":
+            listing_to_issuer[str(p["listing_id"])] = str(p["issuer_id"])
+        elif sem in ("financial-fact", "market-price"):
+            listing_to_issuer.setdefault(str(p["listing_id"]), str(p["issuer_id"]))
     primary = choose_primary_listings(connection, _listings_by_issuer(listing_to_issuer), known_at=cutoff)
 
     from data_engine.datahub.confidence_report import evaluate_and_persist_run_cell_confidence
 
     cell_confidences = evaluate_and_persist_run_cell_confidence(connection, run_id, cutoff=cutoff)
-
     financial: dict[str, tuple[str, Decimal | None, dict, datetime]] = {}
     price: dict[str, tuple[str, Decimal | None, dict, datetime]] = {}
     for semantic_type, raw_conf, payload, observed_at in rows:
@@ -184,31 +140,25 @@ def seed_strategy_inputs_from_capture(
                 close_cell := last_close_cell(payload, close_conf, observed_at)
             ) is not None:
                 inputs.append(close_cell)
+        seed_rows = []
         for input_key, value, _unit, confidence, knowable_at, fiscal_period in inputs:
-            if not is_registered_input_key(input_key):
-                raise ValueError(
-                    f"{input_key!r} is not a registered metric (truealpha_contracts.metrics.METRICS); "
-                    "register it there before seeding it as a strategy input"
-                )
-            connection.execute(
-                """
-                insert into staging.strategy_backtest_inputs
-                    (issuer_id, cutoff_at, input_key, value, confidence, knowable_at, fiscal_period)
-                values (%s, %s, %s, %s, %s, %s, %s)
-                """,
-                (issuer_id, cutoff, input_key, value, confidence, knowable_at, fiscal_period),
+            require_registered_input_key(input_key, verb="seeding")
+            seed_rows.append((issuer_id, cutoff, input_key, value, confidence, knowable_at, fiscal_period))
+        if seed_rows:
+            written += execute_many(
+                connection,
+                "insert into staging.strategy_backtest_inputs "
+                "(issuer_id, cutoff_at, input_key, value, confidence, knowable_at, fiscal_period) "
+                "values (%s, %s, %s, %s, %s, %s, %s)",
+                seed_rows,
             )
-            written += 1
     return written
 
 
 def undeclared_primary_listing_issuers(
     connection: psycopg.Connection[Any], run_id: str, *, cutoff: datetime
 ) -> tuple[str, ...]:
-    listing_to_issuer = {
-        str(listing_id): str(issuer_id)
-        for listing_id, issuer_id in connection.execute(_RUN_LISTINGS_SQL, (run_id,)).fetchall()
-    }
+    listing_to_issuer = {str(lid): str(iid) for lid, iid in connection.execute(_RUN_LISTINGS_SQL, (run_id,)).fetchall()}
     chosen = choose_primary_listings(connection, _listings_by_issuer(listing_to_issuer), known_at=cutoff)
     return tuple(sorted(issuer_id for issuer_id, listing_id in chosen.items() if listing_id is None))
 
@@ -222,14 +172,13 @@ def _counts_on_close_basis(
     parser_version: str,
 ) -> dict[str, OnCloseBasis | Unavailable]:
     meeting = sorted(
-        issuer_id
-        for issuer_id in financial.keys() & price.keys()
-        if financial[issuer_id][1].get(SHARES_KEY) is not None and price[issuer_id][1].get("close") is not None
+        iid
+        for iid in financial.keys() & price.keys()
+        if financial[iid][1].get(SHARES_KEY) is not None and price[iid][1].get("close") is not None
     )
     outcomes: dict[str, OnCloseBasis | Unavailable] = {}
     for issuer_id, (_listing, payload, observed_at) in financial.items():
-        shares_raw = payload.get(SHARES_KEY)
-        if shares_raw is None or issuer_id in meeting:
+        if (shares_raw := payload.get(SHARES_KEY)) is None or issuer_id in meeting:
             continue
         knowable = live_knowable_at(payload, observed_at)(SHARES_KEY, None)
         filed_day = knowable.astimezone(UTC).date()
@@ -249,9 +198,7 @@ def _counts_on_close_basis(
     for issuer_id, ticker in connection.execute(_LISTING_TICKERS_SQL, (run_id, meeting)).fetchall():
         tickers.setdefault(str(issuer_id), []).append(str(ticker))
     symbols = sorted({ticker for names in tickers.values() for ticker in names})
-    unadjusted = load_daily_series(connection, symbols, adjust=UNADJUSTED)
-    split_adjusted = load_daily_series(connection, symbols, adjust=SPLIT_ADJUSTED)
-    histories = {symbol: split_history(symbol, unadjusted, split_adjusted) for symbol in symbols}
+    histories = load_split_histories(connection, symbols)
     ruleset = cache(partial(resolve_ruleset, connection))
     for issuer_id in meeting:
         fin_listing, payload, observed_at = financial[issuer_id]
@@ -296,12 +243,7 @@ def _counts_on_close_basis(
 
 
 def _company_facts_documents(
-    connection: psycopg.Connection[Any],
-    run_id: str,
-    issuer_id: str,
-    parser_version: str,
-    *,
-    listing_id: str = "",
+    connection: psycopg.Connection[Any], run_id: str, issuer_id: str, parser_version: str, *, listing_id: str = ""
 ) -> list[dict[str, Any]]:
     documents: list[dict[str, Any]] = []
     for (raw_fetch_id,) in connection.execute(
@@ -345,16 +287,15 @@ def run_strategy_replay_for_cutoff(
     periods_by_issuer = _issuer_periods_for_run(connection, capture_run_id)
     issuer_inputs = [
         _with_periods(
-            replace(item, issuer_class=issuer_classes.get(item.issuer_id)),
-            periods_by_issuer.get(item.issuer_id, {}),
+            replace(item, issuer_class=issuer_classes.get(item.issuer_id)), periods_by_issuer.get(item.issuer_id, {})
         )
         for item in gateway.issuer_inputs(cutoff)
     ]
     seeded = {item.issuer_id for item in issuer_inputs}
     issuer_inputs += [
-        IssuerInput(issuer_id=issuer_id, records={}, knowable_at={})
-        for issuer_id in sorted(plausibility_refusals)
-        if issuer_id not in seeded
+        IssuerInput(issuer_id=iid, records={}, knowable_at={})
+        for iid in sorted(plausibility_refusals)
+        if iid not in seeded
     ]
     evaluated = evaluate_cutoff(
         issuer_inputs,
@@ -365,8 +306,7 @@ def run_strategy_replay_for_cutoff(
     )
     cutoff_key = cutoff.astimezone(UTC).isoformat()
     decisions = sorted(
-        (_to_decision(item, cutoff_key) for item in evaluated),
-        key=lambda item: (item.cutoff_at, item.issuer_id),
+        (_to_decision(item, cutoff_key) for item in evaluated), key=lambda item: (item.cutoff_at, item.issuer_id)
     )
     snapshot_id = gateway.snapshot_id(cutoff)
     run_id, decision_ids = write_replay(
@@ -398,24 +338,12 @@ def _financial_payload_fields_for_run(
 ) -> list[tuple[Any, ...]]:
     projections = ", ".join(f"p.normalized_payload ->> '{field}'" for field in fields)
     return connection.execute(
-        f"""
-        with listing_issuers as (
-            select distinct p.normalized_payload ->> 'listing_id' as listing_id,
-                            p.normalized_payload ->> 'issuer_id' as issuer_id
-            from raw.capture_obligations ob
-            join staging.capture_observation_obligations oo on oo.capture_obligation_id = ob.obligation_id
-            join staging.capture_normalized_observations o on o.observation_id = oo.observation_id
-            join staging.capture_observation_payloads p on p.observation_id = o.observation_id
-            where ob.run_id = %s and o.semantic_type = 'listing-identity'
-        )
-        select distinct coalesce(li.issuer_id, p.normalized_payload ->> 'issuer_id'), {projections}
-        from raw.capture_obligations ob
-        join staging.capture_observation_obligations oo on oo.capture_obligation_id = ob.obligation_id
-        join staging.capture_normalized_observations o on o.observation_id = oo.observation_id
-        join staging.capture_observation_payloads p on p.observation_id = o.observation_id
-        left join listing_issuers li on li.listing_id = p.normalized_payload ->> 'listing_id'
-        where ob.run_id = %s and o.semantic_type = 'financial-fact'
-        """,  # noqa: S608
+        f"with listing_issuers as (select distinct p.normalized_payload ->> 'listing_id' as listing_id, "  # noqa: S608
+        f"p.normalized_payload ->> 'issuer_id' as issuer_id {CAPTURE_OBSERVATION_JOIN} "
+        f"where ob.run_id = %s and o.semantic_type = 'listing-identity') "
+        f"select distinct coalesce(li.issuer_id, p.normalized_payload ->> 'issuer_id'), {projections} "
+        f"{CAPTURE_OBSERVATION_JOIN} left join listing_issuers li on li.listing_id = p.normalized_payload ->> 'listing_id' "
+        "where ob.run_id = %s and o.semantic_type = 'financial-fact'",
         (run_id, run_id),
     ).fetchall()
 
@@ -437,8 +365,7 @@ def _issuer_periods_for_run(
         periods = result.setdefault(str(issuer_id), {})
         if op_end_raw:
             fp = _annual_period(op_end_raw)
-            periods["gross_profit"] = fp
-            periods["pre_provision_profit"] = fp
+            periods["gross_profit"] = periods["pre_provision_profit"] = fp
         if rev_end_raw:
             periods["revenue"] = _annual_period(rev_end_raw)
     return result
@@ -447,10 +374,7 @@ def _issuer_periods_for_run(
 def _issuer_classes_for_run(connection: psycopg.Connection[Any], run_id: str) -> dict[str, IssuerClass]:
     classes: dict[str, IssuerClass] = {}
     for issuer_id, branch in _financial_payload_fields_for_run(connection, run_id, "operating_branch"):
-        if branch is None:
-            continue
-        issuer_class = IssuerClass(branch)
-        if classes.setdefault(issuer_id, issuer_class) != issuer_class:
+        if branch is not None and classes.setdefault(issuer_id, IssuerClass(branch)) != IssuerClass(branch):
             raise ValueError(f"{issuer_id}: two operating branches in capture run {run_id}")
     return classes
 
@@ -466,19 +390,13 @@ def persist_strategy_input_coverage(
             "select distinct issuer_id from mart.topt_core_meta_info where run_id = %s order by 1", (run_id,)
         )
     ]
-    present_rows = connection.execute(
-        """
-        select distinct on (issuer_id, input_key) issuer_id, input_key
-        from staging.strategy_backtest_inputs
-        where cutoff_at = %s
-        order by issuer_id, input_key, recorded_at desc
-        """,
-        (cutoff,),
-    ).fetchall()
     present: dict[str, set[str]] = {}
-    for issuer_id, input_key in present_rows:
+    for issuer_id, input_key in connection.execute(
+        "select distinct on (issuer_id, input_key) issuer_id, input_key from staging.strategy_backtest_inputs "
+        "where cutoff_at = %s order by issuer_id, input_key, recorded_at desc",
+        (cutoff,),
+    ).fetchall():
         present.setdefault(issuer_id, set()).add(input_key)
-
     complete = 0
     for issuer_id in issuers:
         required = sorted(required_input_keys(definition, classes.get(issuer_id)))
@@ -486,8 +404,7 @@ def persist_strategy_input_coverage(
         if not missing:
             complete += 1
         connection.execute(
-            "insert into mart.strategy_input_coverage "
-            "(run_id, issuer_id, required_count, present_count, missing_keys) "
+            "insert into mart.strategy_input_coverage (run_id, issuer_id, required_count, present_count, missing_keys) "
             "values (%s, %s, %s, %s, %s) on conflict (run_id, issuer_id) do nothing",
             (run_id, issuer_id, len(required), len(required) - len(missing), missing),
         )

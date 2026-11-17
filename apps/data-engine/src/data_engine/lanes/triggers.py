@@ -1,4 +1,4 @@
-"""Sensors that launch capture lane jobs on manual trigger or deployment boot (#495 / #712)."""
+"""Sensors triggering capture jobs on manual requests or boot (#495, #712)."""
 
 import json
 from collections.abc import Mapping

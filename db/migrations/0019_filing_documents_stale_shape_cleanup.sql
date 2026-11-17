@@ -1,5 +1,0 @@
--- Retired in #1061.
--- This file dropped a stale-shape staging.filing_documents so that 0019 could create the new shape.
--- 0019_mvp_filing_document.sql no longer creates that table.
--- 20261006T1325_datahub_retire_empty_planes.sql drops the table in deployed databases.
--- The file stays because the chain never deletes the name of a deployed migration.

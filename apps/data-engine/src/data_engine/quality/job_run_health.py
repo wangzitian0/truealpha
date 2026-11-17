@@ -1,4 +1,4 @@
-"""Dagster job run health verdict over a 7-day window against a 30-day fleet baseline."""
+"""Dagster 7-day job health verdict against 30-day baseline."""
 
 from __future__ import annotations
 

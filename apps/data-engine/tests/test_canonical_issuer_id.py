@@ -173,9 +173,13 @@ def _qqq_denominator(report_date: date, *, without: str | None = None) -> dict[s
 
     `without` drops one issuer, as a later publication of the universe does.
     """
-    from data_engine.datahub.production_topt.universe_corpus import _mapping_sha256, load_corpus
+    import json
+    from pathlib import Path
 
-    instruments = load_corpus("corpus.qqq.v1.json")["topt_denominator"]["instruments"][:21]
+    from data_engine.datahub.production_topt.universe_corpus import _mapping_sha256
+
+    qqq_path = Path(__file__).resolve().parent / "fixtures" / "corpus.qqq.v1.json"
+    instruments = json.loads(qqq_path.read_text())["topt_denominator"]["instruments"][:21]
     if without is not None:
         instruments = [row for row in instruments if row[0] != without]
     denominator: dict[str, Any] = {

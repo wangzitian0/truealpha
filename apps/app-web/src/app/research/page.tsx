@@ -1,21 +1,10 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import {
-	formatCell,
-	formatPercentFromFraction,
-	formatRatio,
-	formatSignedRatio,
-	signColor,
-} from "@/client/format";
+import { formatCell } from "@/client/format";
 import { summarizeUniverseUsability } from "@/contracts/exclusion-reasons";
-import {
-	currentMultipleOf,
-	reportValuationBasis,
-	targetMultipleOf,
-	valuationBasisLabel,
-} from "@/contracts/strategyRun";
+import { currentMultipleOf, reportValuationBasis, targetMultipleOf, valuationBasisLabel } from "@/contracts/strategyRun";
 import { ClaimCeilingBanner } from "@/components/claim-ceiling";
-import { ResearchTable } from "@/components/research-table";
+import { EntityTh, PercentTd, RatioTd, ResearchTable, SignedRatioTd } from "@/components/research-table";
 import { StrategyDefinitionLine } from "@/components/strategy-definition";
 import { AvailabilityBadge, ReadStateNotice } from "@/components/read-state";
 import { getServerPrincipal } from "@/server/auth/request-context";
@@ -33,33 +22,20 @@ export default async function ResearchOverviewPage() {
 	const state = await loadOverview(principal.context);
 	const strategy = await loadStrategyRunPage(principal, DASHBOARD_STRATEGY_ID);
 	const names = await loadEntityDisplayMap();
-	const usability = summarizeUniverseUsability(
-		strategy.kind === "ready" ? strategy.report.decisions : [],
-	);
+	const usability = summarizeUniverseUsability(strategy.kind === "ready" ? strategy.report.decisions : []);
 	const { selections, evaluatedCount: evaluated } = usability;
 	const basisLabel = valuationBasisLabel(reportValuationBasis(selections));
 	const latestCutoff =
 		selections[0]?.cutoff_at ??
 		(strategy.kind === "ready" ? (strategy.report.decisions[0]?.cutoff_at ?? null) : null);
-	const governed =
-		strategy.kind === "ready" && "governed" in strategy.report && strategy.report.governed === true;
+	const governed = strategy.kind === "ready" && "governed" in strategy.report && strategy.report.governed === true;
 	const age = latestCutoff ? describeServedRunAge(latestCutoff) : null;
-	const selectionHeaders = [
-		"Selected",
-		"Tier",
-		`Current ${basisLabel}`,
-		`Target ${basisLabel}`,
-		`Valuation gap (${basisLabel})`,
-		"Weight",
-		"Trace",
-	];
+	const selectionHeaders = ["Selected", "Tier", `Current ${basisLabel}`, `Target ${basisLabel}`, `Valuation gap (${basisLabel})`, "Weight", "Trace"];
 
 	return (
 		<section aria-labelledby="overview-heading" className="space-y-8">
 			<div>
-				<h1 id="overview-heading" className="text-3xl font-bold tracking-tight">
-					Today
-				</h1>
+				<h1 id="overview-heading" className="text-3xl font-bold tracking-tight">Today</h1>
 				<p className="mt-2 text-gray-400">
 					{latestCutoff
 						? governed
@@ -98,31 +74,12 @@ export default async function ResearchOverviewPage() {
 					<ResearchTable caption="Current strategy selections" headers={selectionHeaders}>
 						{selections.map((decision) => (
 							<tr key={decision.issuer_id} className="border-t border-border">
-								<th scope="row" className="px-4 py-3 font-medium">
-									<Link
-										href={`/research/entities/${encodeURIComponent(decision.issuer_id)}`}
-										className="text-accent hover:underline"
-										title={decision.issuer_id}
-									>
-										{entityLabel(decision.issuer_id, names)}
-									</Link>
-								</th>
+								<EntityTh issuerId={decision.issuer_id} label={entityLabel(decision.issuer_id, names)} />
 								<td className="px-4 py-3">{formatCell(decision.tier)}</td>
-								<td className="px-4 py-3 tabular-nums" title={currentMultipleOf(decision) ?? undefined}>
-									{formatCell(formatRatio(currentMultipleOf(decision)))}
-								</td>
-								<td className="px-4 py-3 tabular-nums" title={targetMultipleOf(decision) ?? undefined}>
-									{formatCell(formatRatio(targetMultipleOf(decision)))}
-								</td>
-								<td
-									className={`px-4 py-3 tabular-nums ${signColor(decision.valuation_gap)}`}
-									title={decision.valuation_gap ?? undefined}
-								>
-									{formatCell(formatSignedRatio(decision.valuation_gap))}
-								</td>
-								<td className="px-4 py-3 tabular-nums" title={decision.target_weight ?? undefined}>
-									{formatCell(formatPercentFromFraction(decision.target_weight))}
-								</td>
+								<RatioTd value={currentMultipleOf(decision)} />
+								<RatioTd value={targetMultipleOf(decision)} />
+								<SignedRatioTd value={decision.valuation_gap} />
+								<PercentTd value={decision.target_weight} />
 								<td className="px-4 py-3">
 									<Link
 										className="text-accent hover:underline"
@@ -137,28 +94,19 @@ export default async function ResearchOverviewPage() {
 					<p className="text-sm text-gray-500" data-testid="universe-usability-summary">
 						{selections.length} selected · {usability.usableCount} usable of {evaluated} evaluated
 						{usability.excludedCount > 0 ? ` (${usability.excludedCount} excluded)` : ""} —{" "}
-						<Link href="/research/strategy" className="text-accent hover:underline">
-							full decisions
-						</Link>{" "}
+						<Link href="/research/strategy" className="text-accent hover:underline">full decisions</Link>{" "}
 						·{" "}
-						<Link href="/research/coverage" className="text-accent hover:underline">
-							why some companies are missing
-						</Link>
+						<Link href="/research/coverage" className="text-accent hover:underline">why some companies are missing</Link>
 					</p>
 					{usability.excluded.length > 0 && (
-						<div
-							className="rounded-lg border border-border bg-card/50 p-4 text-xs text-gray-400"
-							data-testid="excluded-issuers-disclosure"
-						>
+						<div className="rounded-lg border border-border bg-card/50 p-4 text-xs text-gray-400" data-testid="excluded-issuers-disclosure">
 							<p className="font-medium text-gray-300">
 								Excluded from the {evaluated}-issuer universe ({usability.usableCount} usable):
 							</p>
 							<ul className="mt-2 space-y-1">
 								{usability.excluded.map((item) => (
 									<li key={item.issuer_id}>
-										<span className="font-medium text-gray-200" title={item.issuer_id}>
-											{entityLabel(item.issuer_id, names)}
-										</span>
+										<span className="font-medium text-gray-200" title={item.issuer_id}>{entityLabel(item.issuer_id, names)}</span>
 										{item.exclusion_reason && (
 											<>
 												{" "}
@@ -183,18 +131,14 @@ export default async function ResearchOverviewPage() {
 						{state.data.run.strategyRunId
 							? `Run ${state.data.run.strategyRunId} · executed ${state.data.run.executedAt ?? "unknown"} · source ${state.data.run.source}. `
 							: `Source ${state.data.run.source} (no persisted run id). `}
-						{state.data.latestCutoff
-							? `Latest materialized cutoff: ${state.data.latestCutoff}.`
-							: "No materialized cutoff yet."}
+						{state.data.latestCutoff ? `Latest materialized cutoff: ${state.data.latestCutoff}.` : "No materialized cutoff yet."}
 					</p>
 					<ul className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
 						{state.data.modules.map((module) => (
 							<li key={module.module} className="rounded-xl border border-border bg-card p-5">
 								<div className="flex items-center justify-between">
 									<span className="text-sm text-gray-500">Module {module.module}</span>
-									<span className="rounded-full border border-border px-2 py-0.5 text-xs text-gray-400">
-										{module.gate}
-									</span>
+									<span className="rounded-full border border-border px-2 py-0.5 text-xs text-gray-400">{module.gate}</span>
 								</div>
 								<h2 className="mt-2 font-semibold">{module.name}</h2>
 								<p className="mt-1 text-sm text-gray-400">{module.note}</p>
@@ -203,8 +147,7 @@ export default async function ResearchOverviewPage() {
 								</p>
 								{module.output !== null && (
 									<p className="mt-1 text-xs text-gray-500 tabular-nums" data-testid="module-output">
-										{module.output.rows} rows · {module.output.availableRows} available · latest cutoff{" "}
-										{formatCell(module.output.latestCutoff)}
+										{module.output.rows} rows · {module.output.availableRows} available · latest cutoff {formatCell(module.output.latestCutoff)}
 									</p>
 								)}
 								<div className="mt-3 flex items-center gap-2">
@@ -224,14 +167,9 @@ export default async function ResearchOverviewPage() {
 					</ul>
 					<p className="text-sm text-gray-500">
 						Explore the{" "}
-						<Link href="/research/rankings" className="text-accent hover:underline">
-							theme rankings
-						</Link>{" "}
+						<Link href="/research/rankings" className="text-accent hover:underline">theme rankings</Link>{" "}
 						or{" "}
-						<Link href="/research/compare" className="text-accent hover:underline">
-							issuer comparison
-						</Link>
-						.
+						<Link href="/research/compare" className="text-accent hover:underline">issuer comparison</Link>.
 					</p>
 				</>
 			)}

@@ -1,7 +1,7 @@
-"""Standards slow plane, weekly backfill, history backfill, and pointer-following head reports (#735 / #855)."""
+"""Standards backfill, history backfill, and head reports (#735, #855)."""
 
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from contextlib import ExitStack
 from datetime import UTC, datetime
 from typing import Any
@@ -162,11 +162,6 @@ def history_standards(selected: str) -> tuple[str, ...]:
     return standards_to_run(selected) if selected else STANDARDS_WITH_HISTORY
 
 
-def _downstream_ops_config(executed_at: str, universe: str) -> dict[str, StandardBackfillConfig]:
-    cfg = StandardBackfillConfig(executed_at=executed_at, universe=universe)
-    return dict.fromkeys(_DOWNSTREAM_OPS, cfg)
-
-
 def _universe_tickers(connection: Any, universe: str, *, use_planner: bool = False) -> dict[str, str]:
     fn = planner.universe_issuers if use_planner else universe_issuers
     return {issuer.issuer_id: issuer.ticker for issuer in fn(connection, universe)}
@@ -180,11 +175,6 @@ def _json_dict(raw: str) -> dict[str, Any]:
     except ValueError:
         return {}
     return parsed if isinstance(parsed, dict) else {}
-
-
-def _upstream_failure(summary: str) -> tuple[str | None, str | None]:
-    parsed = _json_dict(summary)
-    return parsed.get(LANE_FAILURE), parsed.get(VERDICT_TEXT)
 
 
 def reports_current(upstream_summary: str) -> str | None:
@@ -201,39 +191,45 @@ def _no_head_response(context: dg.OpExecutionContext, universe: str, label: str)
     return json.dumps({"universe": universe, "rows": 0, "reason": "no_governed_head"})
 
 
+def _verdict(context: dg.OpExecutionContext, check: str, universe: str, executed_at: object) -> Any:
+    return verdict(
+        check_name(check, universe),
+        registered=NIGHTLY_VERDICTS,
+        run_id=context.run_id,
+        tick=tick_from_config(str(executed_at)) if executed_at else None,
+    )
+
+
 def _already_current(context: dg.OpExecutionContext, check: str, config: StandardBackfillConfig, run_id: str) -> str:
     name = check_name(check, config.universe)
     if is_registered(name, NIGHTLY_VERDICTS) and newest_is_red(name):
         context.log.info("%s: the newest verdict is red; no green row written over it", name)
     else:
-        with verdict(
-            name, registered=NIGHTLY_VERDICTS, run_id=context.run_id, tick=tick_from_config(config.executed_at)
-        ) as outcome:
+        with _verdict(context, check, config.universe, config.executed_at) as outcome:
             outcome.summary = f"reports already current on {run_id[:24]}; nothing recomputed"
         context.log.info("%s for %s: %s", check, config.universe, outcome.summary)
     return _current_passthrough(config.universe, run_id)
 
 
 def _report_unmapped(context: dg.OpExecutionContext, lane: str, universe: CanonicalUniverse) -> None:
-    for member in universe.unmapped[:MAX_UNMAPPED_LOGGED]:
-        detail = f" ({member.detail})" if member.detail else ""
-        context.log.warning(
-            "%s: no row for %s (%s): %s%s", lane, member.ticker, member.legacy_id, member.reason, detail
-        )
-    if len(universe.unmapped) > MAX_UNMAPPED_LOGGED:
-        context.log.warning(
-            "%s: %s more issuers get no row, not named here", lane, len(universe.unmapped) - MAX_UNMAPPED_LOGGED
-        )
-    for issuer in universe.unvisited[:MAX_UNMAPPED_LOGGED]:
-        context.log.warning("%s: unavailable row for %s (%s): %s", lane, issuer.ticker, issuer.legacy_id, issuer.reason)
-    if len(universe.unvisited) > MAX_UNMAPPED_LOGGED:
-        context.log.warning(
-            "%s: %s more issuers get an unavailable row, not named here",
-            lane,
-            len(universe.unvisited) - MAX_UNMAPPED_LOGGED,
-        )
-    failure = universe.lane_failure()
-    if failure is not None:
+    groups = (
+        (
+            universe.unmapped,
+            lambda m: f"no row for {m.ticker} ({m.legacy_id}): {m.reason}" + (f" ({m.detail})" if m.detail else ""),
+            "issuers get no row, not named here",
+        ),
+        (
+            universe.unvisited,
+            lambda i: f"unavailable row for {i.ticker} ({i.legacy_id}): {i.reason}",
+            "issuers get an unavailable row, not named here",
+        ),
+    )
+    for items, fmt, overflow in groups:
+        for item in items[:MAX_UNMAPPED_LOGGED]:
+            context.log.warning("%s: %s", lane, fmt(item))
+        if len(items) > MAX_UNMAPPED_LOGGED:
+            context.log.warning("%s: %s more %s", lane, len(items) - MAX_UNMAPPED_LOGGED, overflow)
+    if (failure := universe.lane_failure()) is not None:
         context.log.error("%s: %s", lane, failure)
 
 
@@ -247,15 +243,17 @@ def _canonical_universe(
     wide = {cell.subject_id for cell in question_coverage.gppe_cells(connection, head.run_id)}
     if not all(is_canonical_issuer_id(issuer_id) for issuer_id in wide):
         raise ValueError(f"the wide row of {head.run_id} holds an issuer id that is not a canonical UUID")
-    resolved = CanonicalUniverse(issuers=())
-    if tickers:
-        resolved = canonicalize_universe(
+    resolved = (
+        canonicalize_universe(
             connection,
             tickers,
             cutoff=head.cutoff,
             as_of=question_coverage.head_report_date(connection, head),
             wide_row_ids=wide,
         )
+        if tickers
+        else CanonicalUniverse(issuers=())
+    )
     resolved = account_for_head_members(connection, resolved, cutoff=head.cutoff, wide_row_ids=wide)
     _report_unmapped(context, lane, resolved)
     return resolved
@@ -283,6 +281,7 @@ def run_standard_backfill(context: dg.OpExecutionContext, config: StandardBackfi
         raise ValueError(f"mode must be backfill or probe, got {config.mode!r}")
     names = standards_to_run(config.standard)
     summaries = []
+    meta: dict[str, Any] = {"universe": config.universe, "standards": ", ".join(names), "mode": config.mode}
     with gateway.capacity_scope(), psycopg.connect(settings.database_url) as connection:
         for name in names:
             report = _run_standard_backfill(
@@ -295,7 +294,7 @@ def run_standard_backfill(context: dg.OpExecutionContext, config: StandardBackfi
                 log=context.log.info,
             )
             summaries.append(report.summary())
-            context.add_output_metadata(
+            meta.update(
                 {
                     f"{name}_issuers": report.issuers,
                     f"{name}_open_cells": report.open,
@@ -303,8 +302,28 @@ def run_standard_backfill(context: dg.OpExecutionContext, config: StandardBackfi
                     f"{name}_outcomes": str(dict(report.outcomes)),
                 }
             )
-    context.add_output_metadata({"universe": config.universe, "standards": ", ".join(names), "mode": config.mode})
+    context.add_output_metadata(meta)
     return json.dumps(summaries, sort_keys=True)
+
+
+def _downstream_canonical_op(
+    context: dg.OpExecutionContext,
+    config: StandardBackfillConfig,
+    prev_summary: str,
+    follow_msg: str,
+    verdict_name: str | None = None,
+    *,
+    preview_limit: int = 200,
+) -> str | None:
+    context.log.info(f"{follow_msg}: %s", prev_summary[:preview_limit])
+    current = reports_current(prev_summary)
+    if current is None:
+        return None
+    return (
+        _already_current(context, verdict_name, config, current)
+        if verdict_name
+        else _current_passthrough(config.universe, current)
+    )
 
 
 @external_op
@@ -312,23 +331,19 @@ def run_theme_purity(context: dg.OpExecutionContext, config: StandardBackfillCon
     from data_engine.datahub.production_topt.theme_purity import materialize_theme_purity, summary_line
     from data_engine.datahub.question_coverage import NoHead, governed_head_of
 
-    context.log.info("theme purity follows backfill: %s", backfill_summary[:200])
-    current = reports_current(backfill_summary)
-    if current is not None:
-        return _already_current(context, THEME_PURITY_VERDICT, config, current)
+    if (
+        early := _downstream_canonical_op(
+            context, config, backfill_summary, "theme purity follows backfill", THEME_PURITY_VERDICT
+        )
+    ) is not None:
+        return early
     with (
-        verdict(
-            check_name(THEME_PURITY_VERDICT, config.universe),
-            registered=NIGHTLY_VERDICTS,
-            run_id=context.run_id,
-            tick=tick_from_config(config.executed_at),
-        ) as outcome,
+        _verdict(context, THEME_PURITY_VERDICT, config.universe, config.executed_at) as outcome,
         psycopg.connect(settings.database_url) as connection,
     ):
         head = governed_head_of(connection, key_of_lane(config.universe))
         if isinstance(head, NoHead):
-            outcome.pending = True
-            outcome.summary = head.summary
+            outcome.pending, outcome.summary = True, head.summary
             return _no_head_response(context, config.universe, "theme purity rows")
         rows = materialize_theme_purity(
             connection, run_id=head.run_id, cutoff=head.cutoff, tickers=_universe_tickers(connection, config.universe)
@@ -342,57 +357,108 @@ def run_theme_purity(context: dg.OpExecutionContext, config: StandardBackfillCon
     return json.dumps(summary)
 
 
+def _prepare_canonical_head(
+    context: dg.OpExecutionContext,
+    connection: Any,
+    config: StandardBackfillConfig,
+    *,
+    lane_label: str,
+    verdict_prefix: str | None = None,
+    empty_extra: Mapping[str, Any] | None = None,
+    log_failure: bool = False,
+) -> tuple[Any, CanonicalUniverse | None, str | None]:
+    from data_engine.datahub.question_coverage import NoHead, governed_head_of
+
+    head = governed_head_of(connection, key_of_lane(config.universe))
+    if isinstance(head, NoHead):
+        return None, None, _no_head_response(context, config.universe, f"{lane_label} rows")
+    universe, identity_failure = _canonical_universe_or_failure(
+        context, lane_label, connection, head, _universe_tickers(connection, config.universe, use_planner=True)
+    )
+    if universe is None:
+        if log_failure and identity_failure:
+            context.log.error("%s lane failed for %s: %s", lane_label, config.universe, identity_failure)
+        return (
+            None,
+            None,
+            json.dumps(
+                {
+                    "universe": config.universe,
+                    **(empty_extra or {}),
+                    "run_id": head.run_id,
+                    "rows": 0,
+                    LANE_FAILURE: identity_failure,
+                    VERDICT_TEXT: f"{verdict_prefix or lane_label}: {identity_failure}",
+                }
+            ),
+        )
+    return head, universe, None
+
+
+def _finish_canonical_lane(
+    context: dg.OpExecutionContext,
+    universe_name: str,
+    run_id: str,
+    rows: int,
+    universe: CanonicalUniverse,
+    failure: str | None,
+    verdict_text: str | None = None,
+    **extra: Any,
+) -> str:
+    summary: dict[str, Any] = {
+        "universe": universe_name,
+        "run_id": run_id,
+        "rows": rows,
+        JOINED_ISSUERS: rows,
+        **extra,
+        UNMAPPED_ISSUERS: len(universe.unmapped),
+        UNMAPPED_BY_REASON: universe.unmapped_by_reason(),
+        WIDE_ROW_ISSUERS: universe.wide_row_issuers,
+    }
+    if failure is not None:
+        summary[LANE_FAILURE] = failure
+        if verdict_text is not None:
+            summary[VERDICT_TEXT] = verdict_text
+        context.log.error("%s: %s", universe_name, failure)
+    context.add_output_metadata(summary)
+    return json.dumps(summary)
+
+
 @external_op
 def run_supply_chain_exposure(
     context: dg.OpExecutionContext, config: StandardBackfillConfig, purity_summary: str
 ) -> str:
-    from data_engine.datahub.question_coverage import NoHead, governed_head_of
     from data_engine.datahub.standards.supply_chain_extraction import materialize_universe_supply_chain_exposure
 
-    context.log.info("supply chain exposure follows theme purity: %s", purity_summary[:200])
-    current = reports_current(purity_summary)
-    if current is not None:
-        return _current_passthrough(config.universe, current)
-
+    if (
+        early := _downstream_canonical_op(context, config, purity_summary, "supply chain exposure follows theme purity")
+    ) is not None:
+        return early
+    joined = model_extracted = replayed = exceeded = 0
+    exceeded_filings: tuple[str, ...] = ()
     with gateway.capacity_scope(), psycopg.connect(settings.database_url) as connection:
-        head = governed_head_of(connection, key_of_lane(config.universe))
-        if isinstance(head, NoHead):
-            return _no_head_response(context, config.universe, "supply chain exposure rows")
-        universe, identity_failure = _canonical_universe_or_failure(
-            context,
-            "supply chain exposure",
-            connection,
-            head,
-            _universe_tickers(connection, config.universe, use_planner=True),
+        head, universe, early = _prepare_canonical_head(
+            context, connection, config, lane_label="supply chain exposure", verdict_prefix="supply chain"
         )
-        if universe is None:
-            return json.dumps(
-                {
-                    "universe": config.universe,
-                    "run_id": head.run_id,
-                    "rows": 0,
-                    LANE_FAILURE: identity_failure,
-                    VERDICT_TEXT: f"supply chain: {identity_failure}",
-                }
-            )
+        if early is not None:
+            return early
+        assert universe is not None
+        connection.rollback()
         floor_failure = universe.lane_failure()
-        joined = model_extracted = replayed = context_window_exceeded = 0
-        exceeded_filings: tuple[str, ...] = ()
         if floor_failure is None:
             sc_report = materialize_universe_supply_chain_exposure(
                 connection, run_id=head.run_id, cutoff=head.cutoff, issuers=universe.issuers
             )
+            connection.commit()
             joined = int(sc_report)
             model_extracted = int(getattr(sc_report, "model_extracted", 0))
             replayed = int(getattr(sc_report, "replayed", 0))
-            context_window_exceeded = int(getattr(sc_report, "context_window_exceeded", 0))
+            exceeded = int(getattr(sc_report, "context_window_exceeded", 0))
             exceeded_filings = tuple(getattr(sc_report, "exceeded_filings", ()))
-        connection.commit()
-
-    if context_window_exceeded > 0:
+    if exceeded > 0:
         context.log.error(
             "supply chain exposure: %s 10-K filing(s) exceeded 1M context window for %s: %s",
-            context_window_exceeded,
+            exceeded,
             config.universe,
             ", ".join(exceeded_filings[:MAX_UNMAPPED_LOGGED]),
         )
@@ -402,72 +468,51 @@ def run_supply_chain_exposure(
         config.universe,
         model_extracted,
         replayed,
-        context_window_exceeded,
+        exceeded,
     )
-    summary: dict[str, Any] = {
-        "universe": config.universe,
-        "run_id": head.run_id,
-        "rows": joined,
-        JOINED_ISSUERS: joined,
-        "model_extracted": model_extracted,
-        "replayed": replayed,
-        "context_window_exceeded": context_window_exceeded,
-        UNMAPPED_ISSUERS: len(universe.unmapped),
-        UNMAPPED_BY_REASON: universe.unmapped_by_reason(),
-        WIDE_ROW_ISSUERS: universe.wide_row_issuers,
-    }
-    if floor_failure is not None:
-        summary[LANE_FAILURE] = floor_failure
-        summary[VERDICT_TEXT] = f"supply chain: {floor_failure}"
-    elif context_window_exceeded > 0:
-        limit_msg = f"supply chain: {context_window_exceeded} of {joined} filings exceeded 1M context window"
-        summary[LANE_FAILURE] = limit_msg
-        summary[VERDICT_TEXT] = limit_msg
-    context.add_output_metadata(summary)
-    return json.dumps(summary)
+    failure = floor_failure or (
+        f"supply chain: {exceeded} of {joined} filings exceeded 1M context window" if exceeded > 0 else None
+    )
+    return _finish_canonical_lane(
+        context,
+        config.universe,
+        head.run_id,
+        joined,
+        universe,
+        failure,
+        f"supply chain: {floor_failure}" if floor_failure else failure,
+        model_extracted=model_extracted,
+        replayed=replayed,
+        context_window_exceeded=exceeded,
+    )
 
 
 @external_op
 def run_analyst_ratings(context: dg.OpExecutionContext, config: StandardBackfillConfig, sc_summary: str) -> str:
     from data_engine.datahub.analyst_ratings import materialize_universe_analyst_ratings
-    from data_engine.datahub.question_coverage import NoHead, governed_head_of
 
-    context.log.info("analyst ratings follows supply chain exposure: %s", sc_summary[:200])
-    current = reports_current(sc_summary)
-    if current is not None:
-        return _current_passthrough(config.universe, current)
-
+    if (
+        early := _downstream_canonical_op(context, config, sc_summary, "analyst ratings follows supply chain exposure")
+    ) is not None:
+        return early
+    captured = analyst_ratings.UniverseCapture(rows=0)
     with gateway.capacity_scope(), psycopg.connect(settings.database_url) as connection:
-        head = governed_head_of(connection, key_of_lane(config.universe))
-        if isinstance(head, NoHead):
-            return _no_head_response(context, config.universe, "analyst ratings rows")
-        universe, identity_failure = _canonical_universe_or_failure(
+        head, universe, early = _prepare_canonical_head(
             context,
-            "analyst ratings",
             connection,
-            head,
-            _universe_tickers(connection, config.universe, use_planner=True),
+            config,
+            lane_label="analyst ratings",
+            empty_extra={"executed_at": config.executed_at, "fetch_errors": 0},
+            log_failure=True,
         )
-        if universe is None:
-            context.log.error("analyst ratings lane failed for %s: %s", config.universe, identity_failure)
-            return json.dumps(
-                {
-                    "universe": config.universe,
-                    "executed_at": config.executed_at,
-                    "run_id": head.run_id,
-                    "rows": 0,
-                    "fetch_errors": 0,
-                    LANE_FAILURE: identity_failure,
-                    VERDICT_TEXT: f"analyst ratings: {identity_failure}",
-                }
-            )
+        if early is not None:
+            return early
+        assert universe is not None
         connection.rollback()
         floor_failure = universe.lane_failure()
-        captured = analyst_ratings.UniverseCapture(rows=0)
-        with ExitStack() as stack:
-            if floor_failure is None and universe.issuers:
-                ctx = None
-                open_error: Exception | None = None
+        if floor_failure is None and universe.issuers:
+            with ExitStack() as stack:
+                ctx = open_error = None
                 try:
                     from data_engine.sources.moomoo import connect as moomoo_connect
 
@@ -483,30 +528,15 @@ def run_analyst_ratings(context: dg.OpExecutionContext, config: StandardBackfill
                     ctx=ctx,
                     open_error=open_error,
                 )
-            connection.commit()
-
-    summary: dict[str, Any] = {
-        "universe": config.universe,
-        "executed_at": config.executed_at,
-        "run_id": head.run_id,
-        "rows": captured.rows,
-        JOINED_ISSUERS: captured.rows,
-        "fetch_errors": len(captured.failures),
-        UNMAPPED_ISSUERS: len(universe.unmapped),
-        UNMAPPED_BY_REASON: universe.unmapped_by_reason(),
-        WIDE_ROW_ISSUERS: universe.wide_row_issuers,
-    }
+                connection.commit()
     lane_failure = captured.lane_failure()
+    verdict_text = None
     if lane_failure is None:
         lane_failure = floor_failure
         verdict_text = f"analyst ratings: {lane_failure}" if lane_failure else None
         if lane_failure is None:
-            lane_failure, verdict_text = _upstream_failure(sc_summary)
-        if lane_failure is not None:
-            summary[VERDICT_TEXT] = verdict_text
-    if lane_failure is not None:
-        summary[LANE_FAILURE] = lane_failure
-        context.log.error("analyst ratings lane failed for %s: %s", config.universe, lane_failure)
+            sc_parsed = _json_dict(sc_summary)
+            lane_failure, verdict_text = sc_parsed.get(LANE_FAILURE), sc_parsed.get(VERDICT_TEXT)
     for failure in captured.failures[: analyst_ratings.MAX_FAILURES_LOGGED]:
         context.log.error("analyst consensus fetch failed for %s: %s", failure.ticker, failure.error)
     if len(captured.failures) > analyst_ratings.MAX_FAILURES_LOGGED:
@@ -514,14 +544,23 @@ def run_analyst_ratings(context: dg.OpExecutionContext, config: StandardBackfill
             "%s more analyst consensus fetch failures not logged; each unavailable row holds its reason code",
             len(captured.failures) - analyst_ratings.MAX_FAILURES_LOGGED,
         )
-    context.add_output_metadata(summary)
     context.log.info(
         "published %s analyst ratings rows for %s (%s fetch errors)",
         captured.rows,
         config.universe,
         len(captured.failures),
     )
-    return json.dumps(summary)
+    return _finish_canonical_lane(
+        context,
+        config.universe,
+        head.run_id,
+        captured.rows,
+        universe,
+        lane_failure,
+        verdict_text,
+        executed_at=config.executed_at,
+        fetch_errors=len(captured.failures),
+    )
 
 
 def _run_coverage_verdict_failure(report: Mapping[str, Any]) -> str | None:
@@ -546,85 +585,94 @@ def _run_coverage_verdict_failure(report: Mapping[str, Any]) -> str | None:
 
 @external_op
 def run_question_coverage(context: dg.OpExecutionContext, config: StandardBackfillConfig, analyst_summary: str) -> str:
+    from data_engine.datahub import confidence_report as _confidence_report
+    from data_engine.datahub.oracle_outcomes import record_oracle_outcomes_safely
     from data_engine.datahub.question_coverage import NO_HEAD_SUMMARY, compile_report, persist, summary_line
+    from data_engine.datahub.research_card_artifacts import materialize_head_research_cards
 
-    context.log.info("coverage follows analyst ratings: %s", analyst_summary[:400])
-    current = reports_current(analyst_summary)
-    if current is not None:
-        return _already_current(context, QUESTION_COVERAGE_VERDICT, config, current)
+    if (
+        early := _downstream_canonical_op(
+            context,
+            config,
+            analyst_summary,
+            "coverage follows analyst ratings",
+            QUESTION_COVERAGE_VERDICT,
+            preview_limit=400,
+        )
+    ) is not None:
+        return early
     executed_at = datetime.fromisoformat(config.executed_at)
     with (
-        verdict(
-            check_name(QUESTION_COVERAGE_VERDICT, config.universe),
-            registered=NIGHTLY_VERDICTS,
-            run_id=context.run_id,
-            tick=tick_from_config(config.executed_at),
-        ) as outcome,
+        _verdict(context, QUESTION_COVERAGE_VERDICT, config.universe, config.executed_at) as outcome,
         psycopg.connect(settings.database_url) as connection,
     ):
         report = compile_report(connection, universe=config.universe, executed_at=executed_at)
         if report is None:
             context.log.warning("no governed head for %s; no coverage report", config.universe)
-            outcome.pending = True
-            outcome.summary = NO_HEAD_SUMMARY
+            outcome.pending, outcome.summary = True, NO_HEAD_SUMMARY
             return json.dumps({"universe": config.universe, "report": None})
         report_id = persist(connection, report)
-        try:
-            with connection.transaction():
-                from data_engine.datahub.research_card_artifacts import materialize_head_research_cards
 
-                card_counts = materialize_head_research_cards(
-                    connection,
-                    run_id=str(report["run_id"]),
-                    cutoff=datetime.fromisoformat(str(report["cutoff"])),
-                    universe=config.universe,
-                )
-            context.log.info("research_card_artifacts materialized for %s: %s", config.universe, card_counts)
-        except Exception as exc:
-            context.log.warning("research_card_artifacts materialization skipped for %s: %s", config.universe, exc)
-        conf_report = None
-        try:
-            with connection.transaction():
-                from data_engine.datahub import confidence_report as _confidence_report
+        def _try(label: str, fn: Callable[[], Any], *, transactional: bool = True) -> Any:
+            try:
+                with connection.transaction() if transactional else ExitStack():
+                    return fn()
+            except Exception as exc:
+                context.log.warning("%s for %s: %s", label, config.universe, exc)
+                return None
 
-                conf_report = _confidence_report.compile_report(
-                    connection, universe=config.universe, executed_at=executed_at
-                )
-                if conf_report is not None:
-                    _confidence_report.persist(connection, conf_report)
-        except Exception as exc:
-            context.log.warning("confidence_report refresh skipped for %s: %s", config.universe, exc)
+        def _cards() -> None:
+            counts = materialize_head_research_cards(
+                connection,
+                run_id=str(report["run_id"]),
+                cutoff=datetime.fromisoformat(str(report["cutoff"])),
+                universe=config.universe,
+            )
+            context.log.info("research_card_artifacts materialized for %s: %s", config.universe, counts)
+
+        def _conf() -> dict[str, Any] | None:
+            compiled = _confidence_report.compile_report(connection, universe=config.universe, executed_at=executed_at)
+            if compiled is not None:
+                _confidence_report.persist(connection, compiled)
+            return compiled
+
+        _try("research_card_artifacts materialization skipped", _cards)
+        conf_report = _try("confidence_report refresh skipped", _conf)
         connection.commit()
         if conf_report is not None:
-            try:
-                from data_engine.datahub.oracle_outcomes import record_oracle_outcomes_safely
-
-                record_oracle_outcomes_safely(
+            _try(
+                "oracle_outcomes refresh skipped",
+                lambda: record_oracle_outcomes_safely(
                     connection, str(conf_report["run_id"]), compared_at=executed_at, log=context.log
-                )
-            except Exception as exc:
-                context.log.warning("oracle_outcomes refresh skipped for %s: %s", config.universe, exc)
+                ),
+                transactional=False,
+            )
         zero_failure = _run_coverage_verdict_failure(report)
-        q3_unavail = (report.get("questions", {}).get("q3", {}) or {}).get("unavailable") or {}
-        exceeded_q3 = int(q3_unavail.get("context_window_exceeded", 0))
+        exceeded_q3 = int(
+            ((report.get("questions", {}).get("q3", {}) or {}).get("unavailable") or {}).get(
+                "context_window_exceeded", 0
+            )
+        )
         suffix = (
             f" ({zero_failure})"
             if zero_failure is not None
             else (f" ({exceeded_q3} filing(s) exceeded 1M context window)" if exceeded_q3 > 0 else "")
         )
         outcome.summary = f"report persisted for {report['universe_id']}{suffix}"
-    context.log.info("question coverage %s: %s", report_id, summary_line(report))
+    summary_text = summary_line(report)
+    context.log.info("question coverage %s: %s", report_id, summary_text)
+    q_items = report["questions"].items()
     context.add_output_metadata(
         {
             "report_id": report_id,
             "universe_id": report["universe_id"],
             "denominator": report["denominator"],
             "q3_context_window_exceeded": exceeded_q3,
-            **{f"{q}_answered": entry["answered"] for q, entry in report["questions"].items()},
-            **{f"{q}_missing": entry["missing"] for q, entry in report["questions"].items()},
+            **{f"{q}_answered": entry["answered"] for q, entry in q_items},
+            **{f"{q}_missing": entry["missing"] for q, entry in q_items},
         }
     )
-    out_summary: dict[str, Any] = {"report_id": report_id, "summary": summary_line(report)}
+    out_summary: dict[str, Any] = {"report_id": report_id, "summary": summary_text}
     if zero_failure is not None:
         out_summary.update(
             {"universe": config.universe, "executed_at": config.executed_at, VERDICT_FAILURE: zero_failure}
@@ -634,10 +682,8 @@ def run_question_coverage(context: dg.OpExecutionContext, config: StandardBackfi
 
 @external_op
 def fail_if_a_lane_failed(context: dg.OpExecutionContext, analyst_summary: str, coverage_summary: str) -> None:
-    parsed = _json_dict(analyst_summary)
-    coverage_parsed = _json_dict(coverage_summary)
-    failure = parsed.get(LANE_FAILURE)
-    coverage_failure = coverage_parsed.get(VERDICT_FAILURE)
+    parsed, coverage_parsed = _json_dict(analyst_summary), _json_dict(coverage_summary)
+    failure, coverage_failure = parsed.get(LANE_FAILURE), coverage_parsed.get(VERDICT_FAILURE)
     if not failure and not coverage_failure:
         return
     universe = str(
@@ -645,20 +691,16 @@ def fail_if_a_lane_failed(context: dg.OpExecutionContext, analyst_summary: str, 
         or coverage_parsed.get("universe")
         or StandardBackfillConfig.model_fields["universe"].default
     )
-    executed_at = parsed.get("executed_at") or coverage_parsed.get("executed_at")
-    with verdict(
-        check_name(QUESTION_COVERAGE_VERDICT, universe),
-        registered=NIGHTLY_VERDICTS,
-        run_id=context.run_id,
-        tick=tick_from_config(str(executed_at)) if executed_at else None,
+    with _verdict(
+        context, QUESTION_COVERAGE_VERDICT, universe, parsed.get("executed_at") or coverage_parsed.get("executed_at")
     ) as outcome:
-        if failure:
-            outcome.summary = parsed.get(VERDICT_TEXT) or (
-                f"analyst ratings fetch failed for {parsed['fetch_errors']} of {parsed.get(JOINED_ISSUERS, parsed['rows'])} tickers"
-            )
-            raise RuntimeError(failure)
-        outcome.summary = str(coverage_failure)
-        raise RuntimeError(str(coverage_failure))
+        outcome.summary = (
+            parsed.get(VERDICT_TEXT)
+            or f"analyst ratings fetch failed for {parsed['fetch_errors']} of {parsed.get(JOINED_ISSUERS, parsed['rows'])} tickers"
+            if failure
+            else str(coverage_failure)
+        )
+        raise RuntimeError(str(failure or coverage_failure))
 
 
 @dg.job(name=STANDARD_BACKFILL_JOB_NAME)
@@ -667,31 +709,53 @@ def standard_backfill_pipeline_job() -> None:
     fail_if_a_lane_failed(analyst_summary, run_question_coverage(analyst_summary))
 
 
+def _downstream_run_config(op_name: str, op_config: dg.Config, executed_at: str, universe: str) -> dg.RunConfig:
+    cfg = StandardBackfillConfig(executed_at=executed_at, universe=universe)
+    return dg.RunConfig(ops={op_name: op_config, **dict.fromkeys(_DOWNSTREAM_OPS, cfg)})
+
+
 def backfill_run_config(executed_at: str, universe: str, standard: str = "") -> dg.RunConfig:
-    return dg.RunConfig(
-        ops={
-            "run_standard_backfill": StandardBackfillConfig(
-                executed_at=executed_at, universe=universe, standard=standard
-            ),
-            **_downstream_ops_config(executed_at, universe),
-        }
+    return _downstream_run_config(
+        "run_standard_backfill",
+        StandardBackfillConfig(executed_at=executed_at, universe=universe, standard=standard),
+        executed_at,
+        universe,
     )
 
 
-@dg.schedule(
-    job=standard_backfill_pipeline_job,
-    cron_schedule=STANDARD_BACKFILL_CRON,
-    execution_timezone="UTC",
-    default_status=dg.DefaultScheduleStatus.RUNNING,
-)
-def standard_backfill_schedule(context: dg.ScheduleEvaluationContext):
-    executed_at = context.scheduled_execution_time.isoformat()
+def _backfill_requests(executed_at: str, *, key_prefix: str = ""):
+    prefix = f"{key_prefix}:" if key_prefix else ""
     for universe in scheduled_universe_names():
         yield dg.RunRequest(
-            run_key=f"{executed_at}:{universe}",
+            run_key=f"{prefix}{executed_at}:{universe}",
             run_config=backfill_run_config(executed_at, universe),
             tags={UNIVERSE_TAG: universe},
         )
+
+
+def _cron_schedule(
+    job: dg.JobDefinition,
+    cron_schedule: str,
+    fn: Callable[[dg.ScheduleEvaluationContext], Any],
+    *,
+    name: str | None = None,
+    default_status: dg.DefaultScheduleStatus = dg.DefaultScheduleStatus.RUNNING,
+) -> dg.ScheduleDefinition:
+    return dg.schedule(
+        name=name or job.name.replace("_pipeline_job", "_schedule"),
+        job=job,
+        cron_schedule=cron_schedule,
+        execution_timezone="UTC",
+        default_status=default_status,
+    )(fn)
+
+
+standard_backfill_schedule = _cron_schedule(
+    standard_backfill_pipeline_job,
+    STANDARD_BACKFILL_CRON,
+    lambda context: _backfill_requests(context.scheduled_execution_time.isoformat()),
+    name="standard_backfill_schedule",
+)
 
 
 @external_op
@@ -735,18 +799,21 @@ def history_run_config(executed_at: str, universe: str) -> dg.RunConfig:
     return dg.RunConfig(ops={"run_standard_history": StandardHistoryConfig(executed_at=executed_at, universe=universe)})
 
 
-@dg.schedule(
-    job=standard_history_backfill_pipeline_job,
-    cron_schedule=STANDARD_HISTORY_CRON,
-    execution_timezone="UTC",
-    default_status=dg.DefaultScheduleStatus.RUNNING,
+standard_history_schedule = _cron_schedule(
+    standard_history_backfill_pipeline_job,
+    STANDARD_HISTORY_CRON,
+    lambda context: [
+        dg.RunRequest(
+            run_key=f"history:{(t := context.scheduled_execution_time.isoformat())}:{(u := lane_name(universe_with_role('strategy')))}",
+            run_config=history_run_config(t, u),
+        )
+    ],
+    name="standard_history_schedule",
 )
-def standard_history_schedule(context: dg.ScheduleEvaluationContext):
-    executed_at = context.scheduled_execution_time.isoformat()
-    universe = lane_name(universe_with_role("strategy"))
-    yield dg.RunRequest(
-        run_key=f"history:{executed_at}:{universe}", run_config=history_run_config(executed_at, universe)
-    )
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(UTC).replace(microsecond=0).isoformat()
 
 
 @dg.sensor(
@@ -763,8 +830,7 @@ def standard_backfill_catchup_sensor(context: dg.SensorEvaluationContext):
             f"armed on {build[:19]}; a catch-up waits for the next evaluation, clear of the deploy walk"
         )
         return
-    universes = scheduled_universe_names()
-    if not universes:
+    if not (universes := scheduled_universe_names()):
         yield dg.SkipReason("the environment contract schedules no universe in this environment")
         return
     with psycopg.connect(settings.database_url) as connection:
@@ -772,7 +838,7 @@ def standard_backfill_catchup_sensor(context: dg.SensorEvaluationContext):
     if not missing:
         yield dg.SkipReason("every registered standard has completed a backfill over every universe here")
         return
-    executed_at = datetime.now(UTC).replace(microsecond=0).isoformat()
+    executed_at = _utc_now_iso()
     by_universe: dict[str, list[str]] = {}
     for universe, standard in missing:
         by_universe.setdefault(universe, []).append(standard)
@@ -785,34 +851,26 @@ def standard_backfill_catchup_sensor(context: dg.SensorEvaluationContext):
         )
 
 
-def _red_report_checks(universe: str) -> list[str]:
-    names = (check_name(check, universe) for check in (QUESTION_COVERAGE_VERDICT, THEME_PURITY_VERDICT))
-    return [name for name in names if newest_is_red(name)]
-
-
 @external_op
 def head_reports_start(context: dg.OpExecutionContext, config: HeadReportsStartConfig) -> str:
     summary: dict[str, Any] = {"universe": config.universe, "mode": "head-reports", "executed_at": config.executed_at}
     if config.only_if_stale:
-        red: list[str] = []
+        outcome = "no current reports; recomputing"
         with psycopg.connect(settings.database_url) as connection:
             head = question_coverage.governed_head_of(connection, key_of_lane(config.universe))
             if not isinstance(head, question_coverage.NoHead) and question_coverage.reports_current_for_head(
                 connection, head
             ):
-                red = _red_report_checks(config.universe)
-                if not red:
+                red = [
+                    name
+                    for check in (QUESTION_COVERAGE_VERDICT, THEME_PURITY_VERDICT)
+                    if newest_is_red(name := check_name(check, config.universe))
+                ]
+                if red:
+                    outcome = f"newest verdict is red for {', '.join(red)}; recomputing to retry"
+                else:
                     summary[REPORTS_CURRENT] = head.run_id
-        current = summary.get(REPORTS_CURRENT)
-        outcome = (
-            f"reports already current on {current[:24]}"
-            if current
-            else (
-                f"newest verdict is red for {', '.join(red)}; recomputing to retry"
-                if red
-                else "no current reports; recomputing"
-            )
-        )
+                    outcome = f"reports already current on {head.run_id[:24]}"
         context.log.info("fallback for %s: %s", config.universe, outcome)
     return json.dumps(summary)
 
@@ -829,28 +887,30 @@ def head_reports_request(
     tags = {UNIVERSE_TAG: universe, **({HEAD_RUN_TAG: head_run_id} if head_run_id else {})}
     return dg.RunRequest(
         run_key=run_key,
-        run_config=dg.RunConfig(
-            ops={
-                "head_reports_start": HeadReportsStartConfig(
-                    executed_at=executed_at, universe=universe, only_if_stale=only_if_stale
-                ),
-                **_downstream_ops_config(executed_at, universe),
-            }
+        run_config=_downstream_run_config(
+            "head_reports_start",
+            HeadReportsStartConfig(executed_at=executed_at, universe=universe, only_if_stale=only_if_stale),
+            executed_at,
+            universe,
         ),
         tags=tags,
     )
 
 
-@dg.schedule(
-    job=head_reports_pipeline_job,
-    cron_schedule=HEAD_REPORTS_CRON,
-    execution_timezone="UTC",
-    default_status=dg.DefaultScheduleStatus.RUNNING,
+head_reports_schedule = _cron_schedule(
+    head_reports_pipeline_job,
+    HEAD_REPORTS_CRON,
+    lambda context: [
+        head_reports_request(
+            universe,
+            (tick := context.scheduled_execution_time.isoformat()),
+            run_key=f"{tick}:{universe}",
+            only_if_stale=True,
+        )
+        for universe in scheduled_universe_names()
+    ],
+    name="head_reports_schedule",
 )
-def head_reports_schedule(context: dg.ScheduleEvaluationContext):
-    executed_at = context.scheduled_execution_time.isoformat()
-    for universe in scheduled_universe_names():
-        yield head_reports_request(universe, executed_at, run_key=f"{executed_at}:{universe}", only_if_stale=True)
 
 
 def _followed(cursor: str | None) -> dict[str, str]:
@@ -865,7 +925,7 @@ def _followed(cursor: str | None) -> dict[str, str]:
 )
 def head_reports_sensor(context: dg.SensorEvaluationContext):
     followed = _followed(context.cursor)
-    executed_at = datetime.now(UTC).replace(microsecond=0).isoformat()
+    executed_at = _utc_now_iso()
     requests: list[dg.RunRequest] = []
     with psycopg.connect(settings.database_url) as connection:
         for universe in scheduled_universe_names():
@@ -894,46 +954,27 @@ def head_reports_sensor(context: dg.SensorEvaluationContext):
     yield from requests
 
 
-def _build_standards_plane_schedule(
-    schedule_name: str, cron_schedule: str, *, job: dg.JobDefinition
-) -> dg.ScheduleDefinition:
-    @dg.schedule(
-        name=schedule_name,
-        job=job,
-        cron_schedule=cron_schedule,
-        execution_timezone="UTC",
-        default_status=STANDARDS_PLANE_SCHEDULE_STATUS,
-    )
-    def _plane_schedule(context: dg.ScheduleEvaluationContext):
-        executed_at = context.scheduled_execution_time.isoformat()
-        if job.name == STANDARD_BACKFILL_JOB_NAME:
-            for universe in scheduled_universe_names():
-                yield dg.RunRequest(
-                    run_key=f"{schedule_name}:{executed_at}:{universe}",
-                    run_config=backfill_run_config(executed_at, universe),
-                    tags={UNIVERSE_TAG: universe},
-                )
-        else:
-            yield dg.RunRequest(run_key=f"{schedule_name}:{executed_at}")
-
-    return _plane_schedule
-
-
 def build_standards_plane_schedules() -> tuple[dg.ScheduleDefinition, ...]:
     from data_engine.lanes.universe_refresh import universe_refresh_pipeline_job
 
-    return tuple(
-        _build_standards_plane_schedule(
-            schedule_name,
-            cron_schedule,
-            job=(
-                universe_refresh_pipeline_job
-                if schedule_name == NPORT_MONTHLY_SCHEDULE_NAME
-                else standard_backfill_pipeline_job
-            ),
+    def _build_one(name: str, cron: str) -> dg.ScheduleDefinition:
+        if name == NPORT_MONTHLY_SCHEDULE_NAME:
+            return _cron_schedule(
+                universe_refresh_pipeline_job,
+                cron,
+                lambda ctx: [dg.RunRequest(run_key=f"{name}:{ctx.scheduled_execution_time.isoformat()}")],
+                name=name,
+                default_status=STANDARDS_PLANE_SCHEDULE_STATUS,
+            )
+        return _cron_schedule(
+            standard_backfill_pipeline_job,
+            cron,
+            lambda ctx: _backfill_requests(ctx.scheduled_execution_time.isoformat(), key_prefix=name),
+            name=name,
+            default_status=STANDARDS_PLANE_SCHEDULE_STATUS,
         )
-        for schedule_name, cron_schedule in STANDARDS_PLANE_CRONS.items()
-    )
+
+    return tuple(_build_one(name, cron) for name, cron in STANDARDS_PLANE_CRONS.items())
 
 
 (

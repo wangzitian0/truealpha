@@ -1,17 +1,5 @@
 #!/usr/bin/env python3
-"""CLI wrapper: run `data_engine.core_strategy_replay.run()` and write reports.
-
-The replay logic itself lives in `data_engine.core_strategy_replay` (a plain
-importable module, no Dagster/CLI concerns) so this script calls the same
-`run()` the live strategy bridge builds on, without depending on it. (The
-retired `core_strategy_replay_assets` Dagster asset that also called it was
-deleted with the fixture generations, #731.) Re-exports the names `apps/data-engine/tests/
-test_strategy_smoke.py` already loads off this script module dynamically
-(`importlib.util.spec_from_file_location`), so that test needed no changes.
-
-Usage: uv run --package truealpha-data-engine python \
-    apps/data-engine/scripts/run_strategy_smoke.py --output-dir <dir>
-"""
+"""CLI runner for `data_engine.core_strategy_replay.run()`."""
 
 from __future__ import annotations
 
@@ -45,12 +33,8 @@ __all__ = [
 
 OUTPUT_JSON = "strategy_smoke.json"
 OUTPUT_MARKDOWN = "strategy_smoke.md"
-# Checked-in, deterministic mirror of a clean run — see #347. This is the
-# fixture `truealpha_contracts.strategy_run_fixture.FixtureStrategyRunRepository`
-# (and its TypeScript port under apps/app-web/src/contracts) reads at runtime.
-# It excludes `generated_at` so its bytes are stable across regenerations, and
-# it is only refreshed when this script reproduces the golden fixture exactly.
-CANONICAL_FIXTURE_PATH = REPOSITORY_ROOT / "common/contracts/src/truealpha_contracts/data/strategy_run_preview.v1.json"
+# Deterministic golden snapshot excluding generated_at (#347).
+CANONICAL_FIXTURE_PATH = REPOSITORY_ROOT / "common/contracts/tests/fixtures/strategy_run_preview.v1.json"
 
 
 def main() -> int:
@@ -62,19 +46,19 @@ def main() -> int:
     corpus = _load_corpus()
     mismatches = _compare_against_golden(decisions, corpus)
 
+    base: dict[str, object] = {
+        "corpus_sha256": CORPUS_SHA256,
+        "decisions": [d.to_json() for d in decisions],
+    }
+
+    def _dump(path: Path, payload: dict[str, object], suffix: str = "") -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, indent=2, sort_keys=True) + suffix)
+
     output_dir = args.output_dir
-    output_dir.mkdir(parents=True, exist_ok=True)
-    (output_dir / OUTPUT_JSON).write_text(
-        json.dumps(
-            {
-                "generated_at": datetime.now(UTC).isoformat(),
-                "corpus_sha256": CORPUS_SHA256,
-                "decisions": [d.to_json() for d in decisions],
-                "golden_mismatches": mismatches,
-            },
-            indent=2,
-            sort_keys=True,
-        )
+    _dump(
+        output_dir / OUTPUT_JSON,
+        {**base, "generated_at": datetime.now(UTC).isoformat(), "golden_mismatches": mismatches},
     )
     (output_dir / OUTPUT_MARKDOWN).write_text(render_markdown(decisions))
 
@@ -84,20 +68,10 @@ def main() -> int:
             print(f"  - {mismatch}")
         return 1
 
-    CANONICAL_FIXTURE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    CANONICAL_FIXTURE_PATH.write_text(
-        json.dumps(
-            {
-                "strategy_id": STRATEGY_ID,
-                "source": "strategy_smoke_fixture",
-                "corpus_sha256": CORPUS_SHA256,
-                "decisions": [d.to_json() for d in decisions],
-                "golden_mismatches": [],
-            },
-            indent=2,
-            sort_keys=True,
-        )
-        + "\n"
+    _dump(
+        CANONICAL_FIXTURE_PATH,
+        {**base, "strategy_id": STRATEGY_ID, "source": "strategy_smoke_fixture", "golden_mismatches": []},
+        "\n",
     )
 
     print(f"OK: all {len(decisions)} decisions reproduced the golden fixture exactly.")

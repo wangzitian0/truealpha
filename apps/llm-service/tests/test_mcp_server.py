@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
+from fixtures.strategy_run_fixture import FixtureStrategyRunRepository
 from llm_service.mcp_server import _default_repository, build_mcp_server, mcp
 from mcp.shared.memory import create_connected_server_and_client_session
 from truealpha_contracts.access import AccessContext, AuthenticationMethod, PrincipalKind
@@ -12,7 +13,6 @@ from truealpha_contracts.research_cards import ResearchCard
 from truealpha_contracts.research_report import ResearchReport
 from truealpha_contracts.research_report_mart import MartResearchReadRepository
 from truealpha_contracts.strategy_run import StrategyRunReport, StrategyRunUnavailable
-from truealpha_contracts.strategy_run_fixture import FixtureStrategyRunRepository
 from truealpha_contracts.strategy_run_postgres import PostgresStrategyRunRepository
 
 

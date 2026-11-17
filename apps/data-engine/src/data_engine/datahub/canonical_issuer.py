@@ -1,4 +1,4 @@
-"""Wide-row issuer id resolution for universe members (#1079, docs/entity-identity.md §5)."""
+"""Wide-row issuer resolution (#1079, docs/entity-identity.md §5)."""
 
 from __future__ import annotations
 
@@ -220,7 +220,7 @@ def account_for_head_members(
 
 
 class ConflictingPredecessorError(ValueError):
-    """Two signed registry rows name different predecessor CIKs for one issuer (#1257, #1263)."""
+    """Signed registry rows name disagreeing predecessor CIKs (#1257, #1263)."""
 
 
 def expand_issuer_alias_ids(

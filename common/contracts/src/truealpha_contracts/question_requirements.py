@@ -62,47 +62,49 @@ class QuestionRequirement:
         return bool(self.columns)
 
 
+def _qr(
+    question: Question,
+    col: FactorColumn,
+    tracking_issue: str,
+    standards: tuple[str, ...] = (),
+    scope: QuestionScope = QuestionScope.ISSUER,
+) -> QuestionRequirement:
+    return QuestionRequirement(
+        question=question, columns=(col,), standards=standards, tracking_issue=tracking_issue, scope=scope
+    )
+
+
 QUESTION_REQUIREMENTS: tuple[QuestionRequirement, ...] = (
-    QuestionRequirement(
-        question=Question.Q1_MODEL_LEVERAGE,
-        columns=(FactorColumn("mart.topt_gppe_results", "gppe", "gross_profit_per_employee", 2),),
-        standards=("employees_total",),
-        tracking_issue="#528",
+    _qr(
+        Question.Q1_MODEL_LEVERAGE,
+        FactorColumn("mart.topt_gppe_results", "gppe", "gross_profit_per_employee", 2),
+        "#528",
+        ("employees_total",),
     ),
-    QuestionRequirement(
-        question=Question.Q2_VALUATION_VS_GROWTH,
-        columns=(FactorColumn("mart.strategy_decisions", "peg", "peg", 1, "strategy"),),
-        standards=(),
-        tracking_issue="#284",
+    _qr(Question.Q2_VALUATION_VS_GROWTH, FactorColumn("mart.strategy_decisions", "peg", "peg", 1, "strategy"), "#284"),
+    _qr(
+        Question.Q3_SUPPLY_CHAIN_EXPOSURE,
+        FactorColumn("mart.issuer_supply_chain_exposure", "exposure_score", "supply_chain_exposure", 3),
+        "#772",
     ),
-    QuestionRequirement(
-        question=Question.Q3_SUPPLY_CHAIN_EXPOSURE,
-        columns=(FactorColumn("mart.issuer_supply_chain_exposure", "exposure_score", "supply_chain_exposure", 3),),
-        standards=(),
-        tracking_issue="#772",
+    _qr(
+        Question.Q4_ANALYST_TRACK_RECORD,
+        FactorColumn("mart.issuer_analyst_ratings", "consensus_rating", "analyst_track_record", 4),
+        "#771",
     ),
-    QuestionRequirement(
-        question=Question.Q4_ANALYST_TRACK_RECORD,
-        columns=(FactorColumn("mart.issuer_analyst_ratings", "consensus_rating", "analyst_track_record", 4),),
-        standards=(),
-        tracking_issue="#771",
-    ),
-    QuestionRequirement(
-        question=Question.Q5_ETF_VIRTUAL_COMPANY,
-        columns=(
-            FactorColumn(
-                "mart.fund_virtual_company", "weighted_valuation_gap", "etf_virtual_company", 5, "fund_consolidation"
-            ),
+    _qr(
+        Question.Q5_ETF_VIRTUAL_COMPANY,
+        FactorColumn(
+            "mart.fund_virtual_company", "weighted_valuation_gap", "etf_virtual_company", 5, "fund_consolidation"
         ),
-        standards=(),
+        "#36",
         scope=QuestionScope.FUND,
-        tracking_issue="#36",
     ),
-    QuestionRequirement(
-        question=Question.Q6_THEME_PURITY,
-        columns=(FactorColumn("mart.issuer_theme_purity", "theme_share", "theme_purity", 6),),
-        standards=("segment_revenue",),
-        tracking_issue="#772",
+    _qr(
+        Question.Q6_THEME_PURITY,
+        FactorColumn("mart.issuer_theme_purity", "theme_share", "theme_purity", 6),
+        "#772",
+        ("segment_revenue",),
     ),
 )
 
