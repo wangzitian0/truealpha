@@ -10,10 +10,6 @@ from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from psycopg import Connection
-from truealpha_contracts.universes import id_prefix_like, universe_with_role
-
-from data_engine.datahub._helpers import CAPTURE_OBSERVATION_JOIN
 from data_engine.datahub.fetch_key import FetchKey
 from data_engine.datahub.production_topt.concept_mapping import DEFAULT_RULESET
 
@@ -55,28 +51,6 @@ class VendorFact:
     period_end: date
     concept: str
     filed: date
-
-
-@dataclass(frozen=True)
-class Drift:
-    ticker: str
-    field: str
-    mart_value: Decimal | None
-    vendor: VendorFact | None
-    cutoff: date
-    mart_period_end: date | None = None
-
-    @property
-    def agrees(self) -> bool:
-        if self.vendor is None:
-            return True
-        return self.mart_value is not None and self.mart_value == self.vendor.value
-
-    @property
-    def staleness_years(self) -> int | None:
-        if self.agrees or self.vendor is None or self.mart_period_end is None:
-            return None
-        return max(0, self.vendor.period_end.year - self.mart_period_end.year)
 
 
 def _http_json(url: str, user_agent: str, key: FetchKey) -> dict[str, Any]:
@@ -173,72 +147,9 @@ def gross_profit(facts: dict[str, Any], cutoff: date) -> VendorFact | None:
     return max(candidates, key=lambda item: item.period_end) if candidates else None
 
 
-def period_reporting(
-    facts: dict[str, Any], concepts: Sequence[str], value: Decimal | None, cutoff: date
-) -> date | None:
-    if value is None:
-        return None
-    found: date | None = None
-    for concept in concepts:
-        for period_end, candidate, _filed in _annual_entries(facts, concept, "USD", cutoff):
-            if candidate == value and (found is None or period_end > found):
-                found = period_end
-    return found
-
-
 def _all_periods(facts: dict[str, Any], concepts: Sequence[str], cutoff: date) -> dict[date, tuple[Decimal, date]]:
     merged: dict[date, tuple[Decimal, date]] = {}
     for concept in concepts:
         for period_end, value, filed in _annual_entries(facts, concept, "USD", cutoff):
             merged.setdefault(period_end, (value, filed))
     return merged
-
-
-def mart_financial_facts(connection: Connection[Any]) -> tuple[tuple[str, Decimal | None, Decimal | None], ...]:
-    rows = connection.execute(
-        f"with head as (select target_run_id from mart.current_pointer_head where universe_id like %s "
-        f"order by sequence desc limit 1), payloads as ("
-        f"select o.subject_id, o.semantic_type, p.normalized_payload {CAPTURE_OBSERVATION_JOIN} "
-        "where ob.run_id = (select target_run_id from head)) "
-        "select identity.normalized_payload->>'ticker', (financial.normalized_payload->>'revenue')::numeric, "
-        "(financial.normalized_payload->>'gross_profit')::numeric from payloads identity "
-        "join payloads financial on financial.subject_id = identity.subject_id and financial.semantic_type = 'financial-fact' "
-        "where identity.semantic_type = 'listing-identity' order by 1",
-        (id_prefix_like(universe_with_role("strategy")),),
-    ).fetchall()
-    return tuple((str(row[0]).upper(), row[1], row[2]) for row in rows)
-
-
-def compare(connection: Connection[Any], *, cutoff: date, user_agent: str) -> tuple[Drift, ...]:
-    facts_rows = mart_financial_facts(connection)
-    if not facts_rows:
-        return ()
-    index = ticker_cik_index(user_agent)
-    drifts: list[Drift] = []
-    seen: dict[int, dict[str, Any]] = {}
-    for ticker, mart_revenue, mart_gross_profit in facts_rows:
-        cik = index.get(ticker.replace(".", "-"))
-        if cik is None:
-            continue
-        facts = seen.setdefault(cik, company_facts(cik, user_agent)) if cik not in seen else seen[cik]
-        drifts.extend(
-            (
-                Drift(
-                    ticker=ticker,
-                    field="revenue",
-                    mart_value=mart_revenue,
-                    vendor=latest_across_variants(facts, _REVENUE_CONCEPTS, "USD", cutoff),
-                    cutoff=cutoff,
-                    mart_period_end=period_reporting(facts, _REVENUE_CONCEPTS, mart_revenue, cutoff),
-                ),
-                Drift(
-                    ticker=ticker,
-                    field="gross_profit",
-                    mart_value=mart_gross_profit,
-                    vendor=gross_profit(facts, cutoff),
-                    cutoff=cutoff,
-                    mart_period_end=period_reporting(facts, ("GrossProfit",), mart_gross_profit, cutoff),
-                ),
-            )
-        )
-    return tuple(drifts)

@@ -24,7 +24,6 @@ from truealpha_runtime.telemetry import (
     REQUIRED_IDENTITY_ATTRIBUTES,
     TelemetryConfigError,
     init_telemetry,
-    load_telemetry_settings,
 )
 
 ENDPOINT = "http://platform-signoz-otel-collector:4318"
@@ -110,7 +109,6 @@ def _exporters_created() -> int:
 
 
 def test_no_endpoint_means_no_telemetry_and_no_exporter() -> None:
-    assert load_telemetry_settings({}) is None
     assert init_telemetry({}) is None
     # Identity variables alone do not switch it on: the endpoint is the switch.
     assert init_telemetry(_environ(OTEL_EXPORTER_OTLP_ENDPOINT=None)) is None
