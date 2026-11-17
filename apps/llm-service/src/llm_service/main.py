@@ -1,6 +1,7 @@
 """Provide LLM orchestration and MCP transport service."""
 
-from collections.abc import AsyncIterator, MutableMapping
+import logging
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -8,10 +9,9 @@ from typing import Any
 from fastapi import FastAPI, Request
 from fastapi.responses import RedirectResponse
 from infra2_sdk.fastapi import init_service
-from infra2_sdk.runtime.otel import PROBE_PATHS
 from truealpha_contracts.environment_contract import load_environment_contract
 from truealpha_runtime.boot import assert_environment
-from truealpha_runtime.telemetry import init_telemetry
+from truealpha_runtime.telemetry import telemetry_config_error
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from llm_service.config import settings
@@ -43,12 +43,7 @@ async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
         yield
 
 
-def _is_probe(scope: MutableMapping[str, Any]) -> bool:
-    return scope.get("path") in PROBE_PATHS
-
-
-app = FastAPI(title="truealpha-llm-service", lifespan=_lifespan, telemetry={"exclude": _is_probe})
-_telemetry = init_telemetry()
+app = FastAPI(title="truealpha-llm-service", lifespan=_lifespan)
 app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=list(TRUSTED_PROXIES))
 
 
@@ -146,12 +141,9 @@ def _data_engine_facts() -> tuple[str, str, str, list[dict[str, Any]] | str, lis
     return parser, git_sha, image_digest, pointers, verdicts
 
 
-@app.get("/health")
-def health() -> dict[str, Any]:
+def _data_engine_health_extra() -> dict[str, Any]:
     parser, git_sha, image_digest, pointers, verdicts = _data_engine_facts()
     return {
-        "status": "ok",
-        "git_sha": settings.git_commit_sha,
         "data_engine_parser": parser,
         "data_engine_git_sha": git_sha,
         "data_engine_image_digest": image_digest,
@@ -160,4 +152,15 @@ def health() -> dict[str, Any]:
     }
 
 
-init_service(app, "truealpha-llm-service", enable_otel=False, suppress_probe_telemetry=True)
+# Replace FastMCP's default Rich stderr handler so init_service installs SDK stdout JSON logging.
+logging.getLogger().handlers.clear()
+try:
+    init_service(
+        app,
+        "truealpha-llm-service",
+        require_issued_identity=True,
+        suppress_probe_telemetry=True,
+        health_extra=_data_engine_health_extra,
+    )
+except ValueError as exc:
+    raise telemetry_config_error(exc) from exc

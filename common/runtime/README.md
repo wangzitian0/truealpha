@@ -33,9 +33,10 @@ the dependency instances and which tiers require each service remain TrueAlpha-o
 
 Telemetry (#1034):
 
-`truealpha_runtime.telemetry.init_telemetry()` exports OTLP/HTTP traces, metrics and ERROR
-logs to infra2's shared SigNoz through `infra2_sdk.runtime.otel`; there is no exporter code
-in this repository. It is the application half of infra2 `ops.observability` section 4.2:
+`truealpha_runtime.telemetry.init_telemetry()` delegates to `infra2_sdk.runtime.otel.init_worker`
+to emit structured stdout JSON logs and OTLP/HTTP traces, metrics (including `process.uptime`),
+and `INFO+` logs to infra2's shared SigNoz; there is no exporter code in this repository.
+It is the application half of infra2 `ops.observability` section 4.2:
 
 - Off unless `OTEL_EXPORTER_OTLP_ENDPOINT` is set (or when `OTEL_SDK_DISABLED=true`), so
   local development, CI and every test are unaffected. A process that cannot reach the
@@ -43,9 +44,12 @@ in this repository. It is the application half of infra2 `ops.observability` sec
 - On, the identity is consumed from infra2's deploy and never defaulted: `OTEL_SERVICE_NAME`
   plus `deployment.environment.name`, `infra.service.id`, `service.version` and
   `infra.iac.ref` in `OTEL_RESOURCE_ATTRIBUTES`. A missing key refuses startup by name.
-  `APP_ENV` is not consulted: a preview stack runs with `APP_ENV=staging` and its own
-  `deployment.environment.name` (`pr-12`, `canary-preview`, ...), which is exported as issued.
-- Called once at startup by `llm_service.main` (which also instruments FastAPI) and
-  `data_engine.dagster_defs`. The Next.js app is not a Python service and is out of scope.
+  `ENVIRONMENT` (or its alias `APP_ENV`) is not consulted for OTEL identity: a preview stack
+  runs with `ENVIRONMENT=staging` and its own `deployment.environment.name` (`pr-12`,
+  `canary-preview`, ...), which is exported as issued.
+- Services with HTTP APIs (`llm_service.main`) call `infra2_sdk.fastapi.init_service` for
+  FastAPI instrumentation, `X-Request-ID`, `/livez`, `/readyz`, `/health`, and probe suppression;
+  worker processes (`data_engine.dagster_defs`) call `init_telemetry()`. The Next.js app is not
+  a Python service and is out of scope.
 - Complements init.md rule 9: Dagster's UI remains the surface for pipeline runs; this adds
-  application-level signals (request errors, latency, error logs) that infra2 can alert on.
+  application-level signals (request errors, latency, logs) that infra2 can alert on.

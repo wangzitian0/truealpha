@@ -12,7 +12,6 @@ import psycopg
 import pytest
 from fastapi.testclient import TestClient
 from llm_service import main
-from llm_service.config import Settings
 from llm_service.main import ROUTED_PREFIX, app
 from psycopg import sql
 from pydantic import SecretStr
@@ -46,34 +45,34 @@ def test_health(monkeypatch: pytest.MonkeyPatch):
     # #876: same two honest answers for the nightly verdicts.
     assert payload.pop("nightly_verdicts") in ([], "unknown")
     assert payload == {
-        "status": "ok",
+        "status": "healthy",
+        "service": "truealpha-llm-service",
+        "version": "unknown",
         "git_sha": "unknown",
+        "checks": {},
+        "reasons": [],
         "data_engine_parser": "unknown",
         "data_engine_git_sha": "unknown",
         "data_engine_image_digest": "unknown",
     }
 
 
-def test_health_reports_the_deployed_git_sha(monkeypatch):
-    """#508: tools/health_check.py needs this to confirm the deployed release is live.
+def test_health_reports_the_deployed_git_sha() -> None:
+    """#508: tools/health_check.py needs this to confirm the deployed release is live."""
+    from truealpha_runtime.testing import run_python_probe
 
-    Through `settings` since #784: the value this endpoint publishes is the one the manifest
-    it boot-validates against declared, not whatever sits in the process environment beside
-    it. The environment is set to a DIFFERENT value here, and must lose."""
-    _stub_no_db_when_unarmed(monkeypatch)
-    monkeypatch.setattr(main, "settings", Settings(_env_file=None, git_commit_sha="abc1234"))
-    monkeypatch.setenv("GIT_COMMIT_SHA", "def5678-from-the-environment")
-    resp = TestClient(app).get("/health")
-    payload = resp.json()
-    assert payload.pop("governed_pointers") in ([], "unknown")
-    assert payload.pop("nightly_verdicts") in ([], "unknown")
-    assert payload == {
-        "status": "ok",
-        "git_sha": "abc1234",
-        "data_engine_parser": "unknown",
-        "data_engine_git_sha": "unknown",
-        "data_engine_image_digest": "unknown",
-    }
+    probe = (
+        "import json\n"
+        "from fastapi.testclient import TestClient\n"
+        "from llm_service.main import app\n"
+        "print(json.dumps(TestClient(app).get('/health').json()))\n"
+    )
+    res = run_python_probe(probe, {"GIT_COMMIT_SHA": "abc1234", "SERVICE_VERSION": "abc1234"})
+    assert res.returncode == 0, res.stderr
+    payload = json.loads(res.stdout.splitlines()[-1])
+    assert payload["status"] == "healthy"
+    assert payload["git_sha"] == "abc1234"
+    assert payload["version"] == "abc1234"
 
 
 class _Rows:
@@ -258,7 +257,11 @@ SERVED_ROWS = [
 #: tools and tests that compare the whole answer.
 TOP_LEVEL_KEYS = {
     "status",
+    "service",
+    "version",
     "git_sha",
+    "checks",
+    "reasons",
     "data_engine_parser",
     "data_engine_git_sha",
     "data_engine_image_digest",
@@ -351,7 +354,7 @@ def test_a_stale_or_withheld_head_does_not_turn_the_status_red(monkeypatch) -> N
     monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: _PointersOnly(SERVED_ROWS))
     response = TestClient(app).get("/health")
     assert response.status_code == 200
-    assert response.json()["status"] == "ok"
+    assert response.json()["status"] == "healthy"
     assert {entry["freshness"] for entry in response.json()["governed_pointers"]} >= {"stale", "fresh"}
 
 
@@ -408,7 +411,7 @@ def test_no_served_row_and_a_head_in_some_environment_reports_unknown(monkeypatc
     monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: connection)
     payload = TestClient(app).get("/health").json()
     assert payload["governed_pointers"] == "unknown"
-    assert payload["status"] == "ok"
+    assert payload["status"] == "healthy"
     assert main.HEAD_ENVIRONMENTS_SQL in connection.asked
 
 
@@ -536,7 +539,7 @@ def test_health_ages_real_heads_through_the_real_served_head(monkeypatch, clone)
     payload = health_of(monkeypatch, clone(THREE_HEADS))
     by_universe = {entry["universe_id"]: entry for entry in payload["governed_pointers"]}
     assert set(by_universe) == {"universe:topt-us-health", "universe:qqq-us-health", "universe:canary-us-health"}
-    assert payload["status"] == "ok"
+    assert payload["status"] == "healthy"
     topt, qqq, canary = (by_universe[f"universe:{name}-us-health"] for name in ("topt", "qqq", "canary"))
     assert (topt["freshness"], topt["availability"], topt["staleness_reason"], topt["limit_hours"]) == (
         "stale",
@@ -557,7 +560,7 @@ def test_health_ages_real_heads_through_the_real_served_head(monkeypatch, clone)
 def test_a_missing_identity_row_with_heads_present_reports_unknown(monkeypatch, clone) -> None:
     payload = health_of(monkeypatch, clone(THREE_HEADS, identity="missing"))
     assert payload["governed_pointers"] == "unknown"
-    assert payload["status"] == "ok"
+    assert payload["status"] == "healthy"
 
 
 def test_an_identity_that_matches_no_head_environment_reports_unknown(monkeypatch, clone) -> None:
@@ -766,13 +769,11 @@ def test_the_mcp_surface_keeps_tls_the_prefix_and_its_endpoint(
     )
 
 
-def test_init_service_registers_livez_and_readyz_while_keeping_pinned_health_body(
+def test_init_service_registers_livez_readyz_and_sdk_health_with_extra(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """#1528: infra2_sdk.fastapi.init_service provides /livez and /readyz while our /health
-    registered first keeps its pinned 'ok' status and git_sha body."""
+    """infra2_sdk.fastapi.init_service provides /livez, /readyz, and OpenAPI /health with health_extra."""
     _stub_no_db_when_unarmed(monkeypatch)
-    monkeypatch.setattr(main, "settings", Settings(_env_file=None, git_commit_sha="v0.2.78"))
     client = TestClient(app)
 
     livez = client.get("/livez")
@@ -786,5 +787,6 @@ def test_init_service_registers_livez_and_readyz_while_keeping_pinned_health_bod
     health = client.get("/health")
     assert health.status_code == 200
     body = health.json()
-    assert body["status"] == "ok"
-    assert body["git_sha"] == "v0.2.78"
+    assert body["status"] == "healthy"
+    assert body["service"] == "truealpha-llm-service"
+    assert set(body) == TOP_LEVEL_KEYS
