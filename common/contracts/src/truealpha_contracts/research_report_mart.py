@@ -50,6 +50,8 @@ def _opt_str(value: Any) -> str | None:
 
 
 def _decision_availability(decision: StrategyRunDecision) -> AvailabilityStatus:
+    if decision.availability_status is AvailabilityStatus.NOT_APPLICABLE:
+        return AvailabilityStatus.NOT_APPLICABLE
     if decision.outcome is StrategyRunOutcome.EXCLUDED:
         return (
             AvailabilityStatus.LOW_CONFIDENCE
@@ -86,7 +88,11 @@ def _decision_section(
                 unit=unit,
                 period=period,
                 cutoff_at=decision.cutoff_at,
-                availability=status if val is not None else AvailabilityStatus.UNAVAILABLE,
+                availability=(
+                    status
+                    if (val is not None or status is AvailabilityStatus.NOT_APPLICABLE)
+                    else AvailabilityStatus.UNAVAILABLE
+                ),
                 confidence=decision.confidence,
                 factor_version=_STRATEGY_FACTOR_VERSION,
                 trace=trace,

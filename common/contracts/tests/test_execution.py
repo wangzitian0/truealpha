@@ -14,6 +14,7 @@ def test_execution_status_enums_preserve_mart_and_consumer_wire_values() -> None
         "stale",
         "excluded",
         "low_confidence",
+        "not_applicable",
         "error",
     )
     assert tuple(s.value for s in FactorValidationStatus) == (

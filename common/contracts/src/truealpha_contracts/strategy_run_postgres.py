@@ -11,6 +11,7 @@ from psycopg.rows import dict_row
 from pydantic import ValidationError
 
 from truealpha_contracts.access import AccessContext
+from truealpha_contracts.execution import AvailabilityStatus
 from truealpha_contracts.research import ValuationTier
 from truealpha_contracts.strategy_run import (
     StrategyRunDecision,
@@ -54,7 +55,7 @@ _DECISIONS_SQL = (
     "select coalesce(ei.legacy_id, d.issuer_id) as issuer_id, d.cutoff_at,"
     " d.capital_adjusted_labor_efficiency, d.tier, d.current_price_to_sales, d.target_price_to_sales,"
     " d.current_price_to_gross_profit, d.target_price_to_gross_profit, d.valuation_gap,"
-    " d.eligible, d.outcome, d.exclusion_reason, d.rank, d.target_weight, d.peg, d.peg_rank,"
+    " d.eligible, d.outcome, d.exclusion_reason, d.availability_status, d.rank, d.target_weight, d.peg, d.peg_rank,"
     " d.labor_efficiency_metric, t.confidence " + DECISIONS_FROM_SQL
 )
 
@@ -71,6 +72,11 @@ def _decision_from_row(row: dict[str, Any]) -> StrategyRunDecision:
                 "cutoff_at": row["cutoff_at"].astimezone(UTC),
                 "outcome": StrategyRunOutcome(row["outcome"]),
                 "tier": ValuationTier(row["tier"]) if row["tier"] is not None else None,
+                "availability_status": (
+                    AvailabilityStatus(row["availability_status"])
+                    if row.get("availability_status") is not None
+                    else None
+                ),
             }
         )
     )

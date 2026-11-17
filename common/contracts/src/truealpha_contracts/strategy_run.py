@@ -15,6 +15,7 @@ from truealpha_contracts.common import (
     Sha256,
     StrictFrozenModel,
 )
+from truealpha_contracts.execution import AvailabilityStatus
 from truealpha_contracts.research import ValuationTier
 from truealpha_contracts.strategy import DefinitionReviewState, definition_review_state
 
@@ -43,6 +44,7 @@ class StrategyRunDecision(StrictFrozenModel):
     labor_efficiency_metric: str | None = None
     confidence: Decimal | None = Field(default=None, ge=0, le=1)
     exclusion_reason: str | None = None
+    availability_status: AvailabilityStatus | None = None
     rank: int | None = Field(default=None, ge=1)
     target_weight: Decimal | None = Field(default=None, ge=0, le=1)
 

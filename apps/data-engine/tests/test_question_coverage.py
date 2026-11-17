@@ -444,8 +444,8 @@ def test_reports_current_for_head_requires_both_coverage_and_confidence_reports(
     assert reports_current_for_head(_ReportConnection("capture-run:new", "capture-run:new"), head) is True
 
 
-def test_gppe_cells_and_classify_question_exclude_contract_not_applicable_issuers() -> None:
-    """Owner Decision 2 (#1664): XOM, V, MA, BRK.B leave Q1 denominator at 16 without masking applicable failures."""
+def test_gppe_cells_and_classify_question_honor_persisted_not_applicable_status() -> None:
+    """Owner Decision 2 (#1664): persisted availability_status='not_applicable' keeps denominator at 16 without masking failures."""
     applicable = [f"issuer:applicable:{i}" for i in range(16)]
     exempt = [
         "issuer:lei:J3WHBG0MTS7O8ZVMDC91",  # XOM
@@ -453,8 +453,8 @@ def test_gppe_cells_and_classify_question_exclude_contract_not_applicable_issuer
         "issuer:cik:0001141391",  # MA
         "issuer:cik:0001067983",  # BRK.B
     ]
-    rows = [(issuer, "available", "available", [], Decimal("100"), False) for issuer in applicable] + [
-        (issuer, "unavailable", "unavailable", ["missing_gross_profit"], None, True) for issuer in exempt
+    rows = [(issuer, "available", "available", [], Decimal("100")) for issuer in applicable] + [
+        (issuer, "not_applicable", "unavailable", ["missing_gross_profit"], None) for issuer in exempt
     ]
     cells = gppe_cells(_Rows(rows), "capture-run:topt")
     assert len(cells) == 20
@@ -473,7 +473,7 @@ def test_gppe_cells_and_classify_question_exclude_contract_not_applicable_issuer
     assert q1["not_applicable"] == 4
 
     degraded_rows = [
-        (applicable[0], "unavailable", "unavailable", ["missing_headcount"], None, False),
+        (applicable[0], "unavailable", "unavailable", ["missing_headcount"], None),
         *rows[1:],
     ]
     degraded_cells = gppe_cells(_Rows(degraded_rows), "capture-run:topt")

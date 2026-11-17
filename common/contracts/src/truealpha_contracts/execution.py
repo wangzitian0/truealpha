@@ -17,6 +17,7 @@ class AvailabilityStatus(StrEnum):
     STALE = "stale"
     EXCLUDED = "excluded"
     LOW_CONFIDENCE = "low_confidence"
+    NOT_APPLICABLE = "not_applicable"
     ERROR = "error"
 
 

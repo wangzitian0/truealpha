@@ -10,7 +10,6 @@ from decimal import Decimal
 from typing import Any
 
 from psycopg import Connection
-from truealpha_contracts.environment_contract import MetricApplicabilityExclusion, load_environment_contract
 from truealpha_contracts.question_requirements import (
     QUESTION_REQUIREMENTS,
     QUESTION_REQUIREMENTS_SHA256,
@@ -27,7 +26,6 @@ GOVERNING_FACTOR = "gross_profit_per_employee"
 UNRECORDED_REASON = "unrecorded_reason"
 NO_ROW = "no_row"
 NO_HEAD_SUMMARY = "no governed head"
-NOT_APPLICABLE_REASON = "not_applicable"
 
 
 @dataclass(frozen=True)
@@ -100,7 +98,17 @@ def head_report_date(connection: Connection[Any], head: GovernedHead) -> date:
         raise ValueError(f"the partition key {keys[0]!r} of {head.run_id} is not an ISO date") from error
 
 
-def _classify_cell(subject_id: Any, status: Any, reason_codes: Any, value: Any) -> Cell:
+def _classify_cell(
+    subject_id: Any,
+    status: Any,
+    reason_codes: Any,
+    value: Any,
+    *,
+    allow_not_applicable: bool = False,
+) -> Cell:
+    if allow_not_applicable and status == "not_applicable":
+        reason = (list(reason_codes or []) or [status])[0]
+        return Cell(str(subject_id), False, str(reason), not_applicable=True)
     if status == "available" and value is not None:
         return Cell(str(subject_id), True)
     if status == "available" and value is None:
@@ -114,66 +122,16 @@ def _query_standard_cells(connection: Connection[Any], sql: str, run_id: str) ->
     return tuple(_classify_cell(r[0], r[1], r[2], r[3] if len(r) > 3 else Decimal("1")) for r in rows)
 
 
-def _gppe_not_applicable_tokens(
-    universe: str = "topt",
-) -> tuple[str, tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
-    entries: tuple[MetricApplicabilityExclusion, ...] = load_environment_contract().not_applicable_identities(
-        "gppe", universe
-    )
-    universe_prefix = f"{record(universe).id_prefix}%"
-    legacy_ids = tuple(dict.fromkeys(legacy_id for entry in entries for legacy_id in entry.legacy_ids))
-    ciks = tuple(dict.fromkeys(entry.cik for entry in entries))
-    leis = tuple(dict.fromkeys(entry.lei.upper() for entry in entries))
-    return universe_prefix, legacy_ids, ciks, leis
-
-
 def gppe_cells(connection: Connection[Any], run_id: str) -> tuple[Cell, ...]:
-    universe_prefix, legacy_ids, ciks, leis = _gppe_not_applicable_tokens("topt")
-    if legacy_ids or ciks or leis:
-        rows = connection.execute(
-            """
-            select r.issuer_id,
-                   r.availability_status,
-                   r.availability,
-                   r.reason_codes,
-                   r.gppe,
-                   (
-                       r.universe_id like %s
-                       and (
-                           r.issuer_id = any(%s::text[])
-                           or exists (
-                               select 1
-                               from mart.entity_identity ei
-                               where (ei.entity_id::text = r.issuer_id or ei.legacy_id = r.issuer_id)
-                                 and (
-                                     ei.cik = any(%s::text[])
-                                     or upper(coalesce(ei.lei, '')) = any(%s::text[])
-                                     or ei.legacy_id = any(%s::text[])
-                                 )
-                           )
-                       )
-                   ) as contract_not_applicable
-            from mart.topt_gppe_results r
-            where r.run_id = %s
-            order by r.issuer_id
-            """,
-            (universe_prefix, list(legacy_ids), list(ciks), list(leis), list(legacy_ids), run_id),
-        ).fetchall()
-    else:
-        rows = connection.execute(
-            "select issuer_id, availability_status, availability, reason_codes, gppe from mart.topt_gppe_results where run_id = %s order by issuer_id",
-            (run_id,),
-        ).fetchall()
-    legacy_set = set(legacy_ids)
-    cells: list[Cell] = []
-    for r in rows:
-        cell = _classify_cell(r[0], r[1] or r[2], r[3], r[4] if len(r) > 4 else Decimal("1"))
-        in_contract = bool(r[5]) if len(r) > 5 else (cell.subject_id in legacy_set)
-        if in_contract and not cell.answered and cell.reason == "missing_gross_profit":
-            cells.append(Cell(cell.subject_id, False, cell.reason, not_applicable=True))
-        else:
-            cells.append(cell)
-    return tuple(cells)
+    rows = connection.execute(
+        "select issuer_id, availability_status, availability, reason_codes, gppe "
+        "from mart.topt_gppe_results where run_id = %s order by issuer_id",
+        (run_id,),
+    ).fetchall()
+    return tuple(
+        _classify_cell(r[0], r[1] or r[2], r[3], r[4] if len(r) > 4 else Decimal("1"), allow_not_applicable=True)
+        for r in rows
+    )
 
 
 def peg_cells(connection: Connection[Any], *, run_id: str) -> tuple[Cell, ...]:
