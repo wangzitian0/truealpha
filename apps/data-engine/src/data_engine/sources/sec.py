@@ -142,13 +142,6 @@ def ticker_mic_index(http: httpx.Client | None = None, *, via: gateway.SourceGat
     return index
 
 
-def ticker_to_cik(ticker: str) -> int:
-    cik = ticker_cik_index().get(ticker.upper())
-    if cik is None:
-        raise KeyError(f"ticker not found in SEC mapping: {ticker}")
-    return cik
-
-
 @accept_rule("sec", "submissions")
 def _is_json_object(_key: FetchKey, body: bytes) -> bool:
     try:

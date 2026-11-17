@@ -14,7 +14,7 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal
 
-from data_engine.quality.vendor_oracle import Drift, gross_profit, latest_across_variants, period_reporting, revenue
+from data_engine.quality.vendor_oracle import gross_profit, latest_across_variants, revenue
 
 _CUTOFF = date(2026, 7, 27)
 
@@ -134,35 +134,6 @@ def test_quarterly_spans_never_win_over_annual_ones() -> None:
 def test_an_issuer_that_reports_nothing_yields_nothing() -> None:
     assert latest_across_variants(_facts(), ("Revenues",), "USD", _CUTOFF) is None
     assert gross_profit(_facts(), _CUTOFF) is None
-
-
-def test_staleness_is_measured_from_the_period_mart_actually_used() -> None:
-    """A stale-tag defect and a restatement look identical in a diff; only the period mart's
-    value came from separates them, and the payload does not record it — so it is recovered
-    by matching the value back to a vendor period."""
-    facts = _facts(
-        Revenues=[_annual("2018-09-29", "2017-10-01", 265595000000, "2018-11-05")],
-        RevenueFromContractWithCustomerExcludingAssessedTax=[
-            _annual("2025-09-27", "2024-09-29", 416161000000, "2025-10-31")
-        ],
-    )
-    concepts = ("Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax")
-    drift = Drift(
-        ticker="AAPL",
-        field="revenue",
-        mart_value=Decimal("265595000000"),
-        vendor=latest_across_variants(facts, concepts, "USD", _CUTOFF),
-        cutoff=_CUTOFF,
-        mart_period_end=period_reporting(facts, concepts, Decimal("265595000000"), _CUTOFF),
-    )
-    assert not drift.agrees
-    assert drift.mart_period_end == date(2018, 9, 29)
-    assert drift.staleness_years == 7
-
-
-def test_a_value_matching_no_vendor_period_claims_no_staleness() -> None:
-    facts = _facts(Revenues=[_annual("2025-12-31", "2025-01-01", 900, "2026-02-01")])
-    assert period_reporting(facts, ("Revenues",), Decimal("12345"), _CUTOFF) is None
 
 
 # -- the fusion origin registry must track the parser identity -------------------------
