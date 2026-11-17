@@ -4,9 +4,9 @@ import os
 from functools import cached_property
 from typing import Any
 
-from infra2_sdk.runtime.environment import EnvironmentTier
+from infra2_sdk.runtime.environment import EnvironmentTier, RuntimeEnvKey
 from infra2_sdk.runtime.environment import resolve_environment_tier as _resolve_tier
-from pydantic import Field, SecretStr, field_validator
+from pydantic import AliasChoices, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEFAULT_DATABASE_URL = "postgresql://postgres:postgres@localhost:5432/truealpha"
@@ -40,7 +40,9 @@ class CoreRuntimeSettings(BaseSettings):
         populate_by_name=True,
     )
 
-    app_env: str = _schema_field("dev", "code", "runtime", injected=True)
+    app_env: str = _schema_field(
+        "dev", "code", "runtime", injected=True, validation_alias=AliasChoices(RuntimeEnvKey.ENVIRONMENT.value, "APP_ENV")
+    )
     git_commit_sha: str = _schema_field("unknown", "release", "runtime")
     database_url: str = database_url_field()
     database_connect_timeout_seconds: int = _schema_field(5, "code", "postgres", ge=1, le=60)

@@ -18,7 +18,7 @@ def test_a_deployed_process_refuses_to_boot_without_what_the_deployment_injects(
     with pytest.raises(RuntimeError) as failure:
         assert_environment(LLM_MANIFEST, environ=environ, require_injected=True)
     message = str(failure.value)
-    for name in ("APP_ENV", "GIT_COMMIT_SHA", "MCP_BEARER_TOKEN"):
+    for name in ("ENVIRONMENT", "GIT_COMMIT_SHA", "MCP_BEARER_TOKEN"):
         assert name in message
     assert "S3_ENDPOINT" not in message
     assert "hunter2" not in message and "postgresql://" not in message, "names only, never values"
@@ -60,3 +60,20 @@ def test_a_required_field_is_missing_in_every_tier(tmp_path: Path) -> None:
 def test_a_manifest_the_image_does_not_ship_is_its_own_red(tmp_path: Path) -> None:
     with pytest.raises(RuntimeError, match="not in the image"):
         assert_environment(tmp_path / "required-env.generated.json", environ={}, require_injected=True)
+
+
+def test_canonical_environment_and_sdk_shared_contract() -> None:
+    from infra2_sdk.runtime.environment import shared_env_contract
+    from truealpha_runtime.config import CoreRuntimeSettings
+
+    settings = CoreRuntimeSettings(_env_file=None, ENVIRONMENT="staging")
+    assert settings.app_env == "staging"
+    assert (
+        assert_environment(
+            LLM_MANIFEST,
+            environ={"ENVIRONMENT": "staging", "GIT_COMMIT_SHA": "v0.2.101", "MCP_BEARER_TOKEN": "tok"},
+            require_injected=True,
+        )
+        is None
+    )
+    assert any(entry["name"] == "LLM_API_KEY" for entry in shared_env_contract()["groups"]["llm"])

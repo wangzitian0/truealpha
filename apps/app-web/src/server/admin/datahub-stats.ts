@@ -305,7 +305,7 @@ const CHECK_NAME = /^[a-z0-9_]+(@[a-z0-9_.:-]+)?$/;
 const LEDGER_SUM_KEYS = ["rows_today", "failed_today", "http_429_today", "code_1302_today", "peak_1s", "peak_30s", "peak_60s"] as const;
 
 const qualityMatchRank = (family: string) => { const idx = QUALITY_MATCH_ORDER.indexOf(family); return idx === -1 ? QUALITY_MATCH_ORDER.length : idx; };
-const normalizeDashboardEnvironment = (env?: string | null) => { const raw = (env || process.env.APP_ENV || "production").trim().toLowerCase() || "production"; return raw === "prod" ? "production" : raw; };
+const normalizeDashboardEnvironment = (env?: string | null) => { const raw = (env || process.env.ENVIRONMENT || process.env.APP_ENV || "production").trim().toLowerCase() || "production"; return raw === "prod" ? "production" : raw; };
 const modelSeatLimits = (env: string) => MODEL_SEAT.environments[env] ?? null;
 const shareRatio = (used: number, limit: number | null) => (limit === null ? null : limit > 0 ? used / limit : used > 0 ? Number.POSITIVE_INFINITY : 0);
 const verdictRow = (r: NightlyVerdictRow): NightlyVerdictRow => ({ check_name: r.check_name, ran_at: r.ran_at, ok: r.ok == null ? null : Boolean(r.ok), summary: r.summary ?? "", dagster_run_id: r.dagster_run_id ?? null });
@@ -548,7 +548,7 @@ export async function loadDatahubStats() {
       q<OracleOutcomeDbRow>(ORACLE_OUTCOMES_SQL), q<NightlyVerdictRow>(NIGHTLY_VERDICTS_SQL),
     ]);
 
-    const activeEnv = process.env.APP_ENV || headRows.find((r) => r.environment)?.environment || "production";
+    const activeEnv = process.env.ENVIRONMENT || process.env.APP_ENV || headRows.find((r) => r.environment)?.environment || "production";
     const vendorAccounts = vendorAccountRows(vendorLedgerToday, activeEnv);
     return {
       oracleOutcomes: oracleOutcomesTable(oracleOutcomes, headRows.map((r) => r.universe_id), confidence.map((r) => r.universe_id)),
