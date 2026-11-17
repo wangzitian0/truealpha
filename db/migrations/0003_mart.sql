@@ -1771,9 +1771,7 @@ do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'staging.top
 
 do $$ begin if to_regclass('mart.idx_backtest_runs_strategy') is null then CREATE INDEX idx_backtest_runs_strategy ON mart.backtest_runs USING btree (strategy_key, executed_at DESC); end if; end $$;
 do $$ begin if to_regclass('mart.idx_backtest_trades_run') is null then CREATE INDEX idx_backtest_trades_run ON mart.backtest_trades USING btree (run_id, trade_date); end if; end $$;
-do $$ begin if to_regclass('mart.idx_backtest_val_run_res') is null then CREATE INDEX idx_backtest_val_run_res ON mart.backtest_valuations USING btree (run_id, resolution, valuation_date); end if; end $$;
 do $$ begin if to_regclass('mart.idx_mart_cell_confidence_observation') is null then CREATE INDEX idx_mart_cell_confidence_observation ON mart.cell_confidence USING btree (observation_id) WHERE (observation_id IS NOT NULL); end if; end $$;
-do $$ begin if to_regclass('mart.idx_mart_cell_confidence_run_subject') is null then CREATE INDEX idx_mart_cell_confidence_run_subject ON mart.cell_confidence USING btree (run_id, subject_id); end if; end $$;
 do $$ begin if to_regclass('mart.ix_datahub_confidence_report_universe') is null then CREATE INDEX ix_datahub_confidence_report_universe ON mart.datahub_confidence_report USING btree (universe_id, created_at DESC); end if; end $$;
 do $$ begin if to_regclass('mart.ix_fund_virtual_company_fund') is null then CREATE INDEX ix_fund_virtual_company_fund ON mart.fund_virtual_company USING btree (fund_id, cutoff DESC); end if; end $$;
 do $$ begin if to_regclass('mart.ix_issuer_analyst_ratings_cutoff') is null then CREATE INDEX ix_issuer_analyst_ratings_cutoff ON mart.issuer_analyst_ratings USING btree (cutoff DESC, consensus_rating DESC NULLS LAST); end if; end $$;
@@ -1786,7 +1784,6 @@ do $$ begin if to_regclass('mart.ix_nightly_verdicts_latest') is null then CREAT
 do $$ begin if to_regclass('mart.ix_question_coverage_report_universe') is null then CREATE INDEX ix_question_coverage_report_universe ON mart.question_coverage_report USING btree (universe_id, created_at DESC); end if; end $$;
 do $$ begin if to_regclass('mart.idx_mart_research_card_artifacts_card_id') is null then CREATE INDEX idx_mart_research_card_artifacts_card_id ON mart.research_card_artifacts USING btree (card_id); end if; end $$;
 do $$ begin if to_regclass('mart.idx_strategy_decisions_issuer_cutoff') is null then CREATE INDEX idx_strategy_decisions_issuer_cutoff ON mart.strategy_decisions USING btree (issuer_id, cutoff_at); end if; end $$;
-do $$ begin if to_regclass('mart.idx_strategy_decisions_run') is null then CREATE INDEX idx_strategy_decisions_run ON mart.strategy_decisions USING btree (strategy_run_id); end if; end $$;
 do $$ begin if to_regclass('mart.idx_strategy_run_capture_bindings_strategy_run') is null then CREATE INDEX idx_strategy_run_capture_bindings_strategy_run ON mart.strategy_run_capture_bindings USING btree (strategy_run_id); end if; end $$;
 do $$ begin if to_regclass('mart.idx_strategy_runs_strategy_key_order') is null then CREATE INDEX idx_strategy_runs_strategy_key_order ON mart.strategy_runs USING btree (strategy_key, executed_at DESC, created_at DESC, strategy_run_id DESC); end if; end $$;
 do $$ begin if to_regclass('mart.idx_topt_core_results_lookup') is null then CREATE INDEX idx_topt_core_results_lookup ON mart.topt_core_results USING btree (run_id, issuer_id, cutoff); end if; end $$;
