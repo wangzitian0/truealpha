@@ -90,7 +90,7 @@ _CORE_COMPLETE_LISTINGS_SQL = (
     "where s.run_id = %(run_id)s and ("
     "select r.availability_status from mart.metric_node_values r "
     "where r.run_id = s.run_id and r.issuer_id = member->>'issuer_id' "
-    "and ((coalesce(member->'factor_input'->>'operating_branch', 'non_financial') = 'financial' "
+    "and ((coalesce(member->>'operating_branch', 'non_financial') = 'financial' "
     "and r.node_key = %(bank_key)s) or r.node_key = %(base_key)s) "
     "order by (r.node_key = %(bank_key)s) desc limit 1"
     ") = 'available' order by 1"

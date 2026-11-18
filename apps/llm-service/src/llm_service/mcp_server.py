@@ -308,7 +308,6 @@ def _default_backtest_reader() -> BacktestReader:
 def build_mcp_server(
     *,
     repository: StrategyRunReadRepository | None = None,
-    topt_repository: Any | None = None,
     metric_node_repository: PostgresMetricNodeValueRepository | None = None,
     research_repository: ResearchReadPort | None = None,
     company_profile_reader: CompanyProfileReader | None = None,
@@ -353,8 +352,6 @@ def build_mcp_server(
         request: PanelCoverageToolRequest | None = None,
     ) -> PanelCoverageResponse | MetricNodeValueReport | MetricNodeValueUnavailable:
         req = request or PanelCoverageToolRequest()
-        if topt_repository is not None and (req.node_key is None or req.node_key == "gppe_uniform_charge_v0"):
-            return topt_repository.latest()  # type: ignore[no-any-return]
         if req.node_key is not None and metric_node_repository is not None:
             return active_metric_node.latest(node_key=req.node_key, issuer_id=req.issuer_id, limit=req.limit)
         if req.node_key is not None and req.universe is None and req.cutoff is None:
