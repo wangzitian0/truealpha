@@ -87,6 +87,7 @@ __all__ = [
     "SupplyChainExposure",
     "issuer_identity_sql",
     "load_entity_display_map",
+    "resolve_issuer_candidates_from_cursor",
     "resolve_issuer_id_candidates_batch",
     "resolve_static_entity_display",
 ]
@@ -152,26 +153,56 @@ def load_entity_display_map(database_url: str | None) -> dict[str, tuple[str, st
     return merged
 
 
-def _module_sql(table: str, alias: str, cols: str) -> str:
+def _module_sql(table: str, alias: str, cols: str, *, where_issuer: str | None = None) -> str:
+    issuer_pred = where_issuer or issuer_identity_sql(f"{alias}.issuer_id", "%s")
     return (
         f"select {alias}.run_id, to_char({alias}.cutoff at time zone 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') as cutoff, {cols}, "
         f"{alias}.confidence::text as confidence, {alias}.reason_codes, {alias}.extractor, coalesce({alias}.availability_status, 'unavailable') as availability_status, "
         f"coalesce({alias}.source_evidence_status, 'degraded') as source_evidence_status, coalesce({alias}.factor_validation_status, 'not_evaluated') as factor_validation_status "
-        f"from {table} {alias} where {issuer_identity_sql(f'{alias}.issuer_id', '%s')} and {alias}.run_id in (select h.run_id from mart.served_head h where h.run_id is not null) "
+        f"from {table} {alias} where {issuer_pred} and {alias}.run_id in (select h.run_id from mart.served_head h where h.run_id is not null) "
         f"order by ({alias}.availability_status = 'available') desc, {alias}.cutoff desc, {alias}.created_at desc limit 1"
     )
 
 
-SUPPLY_CHAIN_EXPOSURE_SQL = _module_sql(
-    "mart.issuer_supply_chain_exposure",
-    "s",
-    "s.exposure_score::text as exposure_score, s.direct_partners, s.suppliers_count, s.customers_count, s.max_partner_share::text as max_partner_share",
+_SUPPLY_CHAIN_COLS = "s.exposure_score::text as exposure_score, s.direct_partners, s.suppliers_count, s.customers_count, s.max_partner_share::text as max_partner_share"
+_ANALYST_RATINGS_COLS = "r.consensus_rating::text as consensus_rating, coalesce(to_jsonb(r) ->> 'target_price', (select substring(rc from '^target_price:([0-9.]+)$') from unnest(r.reason_codes) as rc where rc like 'target_price:%%' limit 1)) as target_price, r.analysts_count, r.buy_count, r.hold_count, r.sell_count"
+SUPPLY_CHAIN_EXPOSURE_SQL = _module_sql("mart.issuer_supply_chain_exposure", "s", _SUPPLY_CHAIN_COLS)
+ANALYST_RATINGS_SQL = _module_sql("mart.issuer_analyst_ratings", "r", _ANALYST_RATINGS_COLS)
+_SUPPLY_CHAIN_BY_IDS_SQL = _module_sql(
+    "mart.issuer_supply_chain_exposure", "s", _SUPPLY_CHAIN_COLS, where_issuer="s.issuer_id = any(%s::text[])"
 )
-ANALYST_RATINGS_SQL = _module_sql(
-    "mart.issuer_analyst_ratings",
-    "r",
-    "r.consensus_rating::text as consensus_rating, coalesce(to_jsonb(r) ->> 'target_price', (select substring(rc from '^target_price:([0-9.]+)$') from unnest(r.reason_codes) as rc where rc like 'target_price:%%' limit 1)) as target_price, r.analysts_count, r.buy_count, r.hold_count, r.sell_count",
+_ANALYST_RATINGS_BY_IDS_SQL = _module_sql(
+    "mart.issuer_analyst_ratings", "r", _ANALYST_RATINGS_COLS, where_issuer="r.issuer_id = any(%s::text[])"
 )
+
+
+def _append_resolved_candidates(target: list[str], row: dict[str, Any]) -> None:
+    for k in ("entity_id", "legacy_id", "current_ticker", "cik", "lei"):
+        if isinstance(v := row.get(k), str) and v and v not in target:
+            target.append(v)
+    for pre, k in (("issuer:cik:", "cik"), ("company:cik:", "cik"), ("issuer:lei:", "lei")):
+        if (v := row.get(k)) and f"{pre}{v}" not in target:
+            target.append(f"{pre}{v}")
+
+
+def resolve_issuer_candidates_from_cursor(cur: Any, issuer_id: str) -> list[str]:
+    clean = issuer_id.strip()
+    if not clean:
+        return [issuer_id]
+    out = [clean]
+    try:
+        cur.execute("savepoint _issuer_cand_sp")
+        cur.execute(_RESOLVE_BATCH_CANDIDATES_SQL, ([clean],))
+        for row in cur.fetchall():
+            _append_resolved_candidates(out, row)
+        cur.execute("release savepoint _issuer_cand_sp")
+    except psycopg.Error:
+        try:
+            cur.execute("rollback to savepoint _issuer_cand_sp")
+            cur.execute("release savepoint _issuer_cand_sp")
+        except psycopg.Error:
+            pass
+    return out
 
 
 def resolve_issuer_id_candidates_batch(
@@ -183,12 +214,7 @@ def resolve_issuer_id_candidates_batch(
     try:
         for row in _query_rows(database_url, _RESOLVE_BATCH_CANDIDATES_SQL, (list(by_input),)):
             if (target := by_input.get(str(row.get("raw_q") or ""))) is not None:
-                for k in ("entity_id", "legacy_id", "current_ticker", "cik", "lei"):
-                    if isinstance(v := row.get(k), str) and v and v not in target:
-                        target.append(v)
-                for pre, k in (("issuer:cik:", "cik"), ("company:cik:", "cik"), ("issuer:lei:", "lei")):
-                    if (v := row.get(k)) and f"{pre}{v}" not in target:
-                        target.append(f"{pre}{v}")
+                _append_resolved_candidates(target, row)
     except psycopg.Error:
         pass
     return {raw: tuple(vals) for raw, vals in by_input.items()}
@@ -197,17 +223,33 @@ def resolve_issuer_id_candidates_batch(
 class PostgresIssuerModuleReader:
     def __init__(self, *, database_url: str) -> None:
         self._database_url = database_url
+        self._candidates_cache: dict[str, list[str]] = {}
+
+    def seed_candidates(self, issuer_id: str, candidates: list[str] | tuple[str, ...]) -> None:
+        clean = issuer_id.strip() or issuer_id
+        self._candidates_cache[clean] = list(candidates)
+
+    def _candidates(self, issuer_id: str) -> list[str]:
+        clean = issuer_id.strip() or issuer_id
+        if clean not in self._candidates_cache:
+            resolved = resolve_issuer_id_candidates_batch(self._database_url, [clean]).get(clean)
+            self._candidates_cache[clean] = list(resolved) if resolved else [clean]
+        return self._candidates_cache[clean]
 
     def _one(self, sql: str, issuer_id: str) -> dict[str, Any] | None:
-        rows = _query_rows(self._database_url, sql, (issuer_id, issuer_id, issuer_id))
+        rows = _query_rows(self._database_url, sql, (self._candidates(issuer_id),))
         return None if not rows else {**rows[0], "reason_codes": tuple(str(c) for c in rows[0]["reason_codes"] or ())}
 
     def supply_chain_exposure(self, issuer_id: str) -> SupplyChainExposure | None:
         return (
             None
-            if (r := self._one(SUPPLY_CHAIN_EXPOSURE_SQL, issuer_id)) is None
+            if (r := self._one(_SUPPLY_CHAIN_BY_IDS_SQL, issuer_id)) is None
             else SupplyChainExposure.model_validate(r)
         )
 
     def analyst_ratings(self, issuer_id: str) -> AnalystRatings | None:
-        return None if (r := self._one(ANALYST_RATINGS_SQL, issuer_id)) is None else AnalystRatings.model_validate(r)
+        return (
+            None
+            if (r := self._one(_ANALYST_RATINGS_BY_IDS_SQL, issuer_id)) is None
+            else AnalystRatings.model_validate(r)
+        )

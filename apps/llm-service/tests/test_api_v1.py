@@ -478,3 +478,99 @@ def test_real_postgres_auth_admin_ledger_documents_rls_and_served_head_withholdi
         )
         assert not any(d["document_id"] == doc_id for d in client.get("/api/v1/research/documents").json()["documents"])
         assert client.get("/api/v1/admin/datahub").status_code == 403
+
+
+def test_entity_detail_resolves_candidates_once_and_avoids_duplicate_strategy_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page_calls = 0
+    candidate_resolve_calls = 0
+    executed_sqls: list[str] = []
+
+    fake_decision = research_service.StrategyDecisionItemDto(
+        issuer_id="issuer:cik:0000723125",
+        label="MU · Micron",
+        cutoff_at="2026-06-30T00:00:00+00:00",
+        outcome="eligible",
+        eligible=True,
+        trace_id="trace:abc123",
+    )
+    fake_page = research_service.StrategyRunPageResponse(
+        available=True,
+        strategy_id="large_model_value_v0",
+        strategy_run_id="strategy-run:1",
+        decisions=[fake_decision],
+        display_map={
+            "issuer:cik:0000723125": research_service.EntityDisplayItem(
+                issuer_id="issuer:cik:0000723125", ticker="MU", display_name="Micron", label="MU · Micron"
+            )
+        },
+    )
+
+    def _fake_page(*_a: Any, **_k: Any) -> research_service.StrategyRunPageResponse:
+        nonlocal page_calls
+        page_calls += 1
+        return fake_page
+
+    class _RecordingCur:
+        def execute(self, sql: str, _params: Any = None) -> None:
+            executed_sqls.append(sql)
+
+        def fetchall(self) -> list[Any]:
+            return []
+
+        def fetchone(self) -> None:
+            return None
+
+    def _fake_with_mart(fn: Any, **_k: Any) -> Any:
+        return fn(_RecordingCur())
+
+    def _fake_resolve(_cur: Any, iid: str) -> list[str]:
+        nonlocal candidate_resolve_calls
+        candidate_resolve_calls += 1
+        return [iid, "11111111-1111-1111-1111-111111111111"]
+
+    monkeypatch.setattr(research_service, "get_strategy_run_page", _fake_page)
+    monkeypatch.setattr(research_service, "with_mart_readonly", _fake_with_mart)
+    monkeypatch.setattr(research_service, "resolve_issuer_candidates_from_cursor", _fake_resolve)
+    monkeypatch.setattr(research_service, "read_trace_lineage", lambda *_a: (None, None, None))
+    monkeypatch.setattr(research_service.PostgresIssuerModuleReader, "supply_chain_exposure", lambda *_a, **_k: None)
+    monkeypatch.setattr(research_service.PostgresIssuerModuleReader, "analyst_ratings", lambda *_a, **_k: None)
+
+    ctx = auth_service.access_context_for(
+        auth_service.PrincipalRecord(principal_id="p:1", tenant_id="t:1", principal_kind="member")
+    )
+    res = research_service.get_entity_detail(ctx, issuer_id="issuer:cik:0000723125", database_url="postgresql://x")
+    assert res.label == "MU · Micron"
+    assert len(res.decisions) == 1
+    assert page_calls == 1
+    assert candidate_resolve_calls == 1
+    assert executed_sqls, "expected SQL queries to execute"
+    assert all("= any(%s::text[])" in sql for sql in executed_sqls)
+    assert not any("in (select ei." in sql for sql in executed_sqls)
+
+
+def test_issuer_module_reader_resolves_candidates_once_per_instance(monkeypatch: pytest.MonkeyPatch) -> None:
+    from truealpha_runtime import issuer_modules_mart
+
+    batch_calls = 0
+    module_sqls: list[str] = []
+
+    def _fake_batch(_db_url: str, ids: list[str] | tuple[str, ...]) -> dict[str, tuple[str, ...]]:
+        nonlocal batch_calls
+        batch_calls += 1
+        return {str(i): (str(i), "uuid-1") for i in ids}
+
+    def _fake_query_rows(_db_url: str, sql: str, params: Any = ()) -> list[dict[str, Any]]:
+        module_sqls.append(sql)
+        assert params == (["issuer:cik:0000723125", "uuid-1"],)
+        return []
+
+    monkeypatch.setattr(issuer_modules_mart, "resolve_issuer_id_candidates_batch", _fake_batch)
+    monkeypatch.setattr(issuer_modules_mart, "_query_rows", _fake_query_rows)
+    reader = issuer_modules_mart.PostgresIssuerModuleReader(database_url="postgresql://x")
+    assert reader.supply_chain_exposure("issuer:cik:0000723125") is None
+    assert reader.analyst_ratings("issuer:cik:0000723125") is None
+    assert batch_calls == 1
+    assert len(module_sqls) == 2
+    assert all("= any(%s::text[])" in sql and "mart.entity_identity" not in sql for sql in module_sqls)

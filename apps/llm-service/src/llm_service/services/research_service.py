@@ -23,7 +23,7 @@ from truealpha_runtime.issuer_modules_mart import (
     AnalystRatings,
     PostgresIssuerModuleReader,
     SupplyChainExposure,
-    issuer_identity_sql,
+    resolve_issuer_candidates_from_cursor,
     resolve_static_entity_display,
 )
 from truealpha_runtime.research_cards import (
@@ -1112,9 +1112,11 @@ def get_trace(
     *,
     issuer_id: str,
     cutoff: str | None = None,
+    page: StrategyRunPageResponse | None = None,
+    candidates: list[str] | None = None,
     database_url: str | None = None,
 ) -> TraceResponse:
-    page = get_strategy_run_page(context, cutoff=cutoff, database_url=database_url)
+    page = page if page is not None else get_strategy_run_page(context, cutoff=cutoff, database_url=database_url)
     if not page.available:
         return TraceResponse(available=False, reason=page.reason, issuer_id=issuer_id)
     decision = next(
@@ -1126,13 +1128,14 @@ def get_trace(
              coalesce(v.availability_status, 'unavailable') as availability_status, v.reason_codes
       from mart.metric_node_values v
       where {served_run_predicate("v.run_id")}
-        and {issuer_identity_sql("v.issuer_id", "%s")}
+        and v.issuer_id = any(%s::text[])
       order by v.node_key, v.period desc
       limit 100
     """
 
     def _q(cur: Any) -> tuple[list[TraceNodeValueDto], str | None, list[dict[str, Any]]]:
-        cur.execute(node_sql, (target_iid, target_iid, target_iid))
+        cand = list(candidates) if candidates else resolve_issuer_candidates_from_cursor(cur, target_iid)
+        cur.execute(node_sql, (cand,))
         nodes = [
             TraceNodeValueDto(
                 node_key=str(r["node_key"]),
@@ -1185,11 +1188,23 @@ def get_entity_detail(
     database_url: str | None = None,
 ) -> EntityDetailResponse:
     page = get_strategy_run_page(context, database_url=database_url)
-    decisions = [d for d in page.decisions if d.issuer_id == issuer_id]
-    trace = get_trace(context, issuer_id=issuer_id, database_url=database_url)
     db_url = database_url or settings.database_url
-    profile = PostgresCompanyProfileReader(database_url=db_url).get_company_profile(issuer_id=issuer_id)
+    try:
+        candidates = with_mart_readonly(
+            lambda cur: resolve_issuer_candidates_from_cursor(cur, issuer_id),
+            database_url=database_url,
+        )
+    except psycopg.Error:
+        candidates = [issuer_id]
+    cand_set = set(candidates)
+    decisions = [d for d in page.decisions if d.issuer_id in cand_set]
+    trace = get_trace(context, issuer_id=issuer_id, page=page, candidates=candidates, database_url=database_url)
+    profile = PostgresCompanyProfileReader(database_url=db_url).get_company_profile(
+        issuer_id=issuer_id, candidates=candidates
+    )
     modules = PostgresIssuerModuleReader(database_url=db_url)
+    if hasattr(modules, "seed_candidates"):
+        modules.seed_candidates(issuer_id, candidates)
     supply = modules.supply_chain_exposure(issuer_id=issuer_id)
     ratings = modules.analyst_ratings(issuer_id=issuer_id)
     return EntityDetailResponse(
@@ -1522,11 +1537,13 @@ class PostgresCompanyProfileReader:
     def __init__(self, *, database_url: str) -> None:
         self._database_url = database_url
 
-    def get_company_profile(self, *, issuer_id: str) -> dict[str, Any]:
+    def get_company_profile(
+        self, *, issuer_id: str, candidates: list[str] | tuple[str, ...] | None = None
+    ) -> dict[str, Any]:
         clean = issuer_id.strip()
-        params = (clean, clean, clean)
 
         def _q(cur: Any) -> tuple[Any, dict[str, Any] | None, list[dict[str, Any]]]:
+            cand = list(candidates) if candidates else resolve_issuer_candidates_from_cursor(cur, clean)
             cur.execute(
                 f"""
                 select coalesce(ei.legacy_id, d.issuer_id) as issuer_id,
@@ -1554,11 +1571,11 @@ class PostgresCompanyProfileReader:
                   select ei.legacy_id from mart.entity_identity ei
                   where ei.entity_id::text = d.issuer_id limit 1
                 ) ei on true
-                where {issuer_identity_sql("d.issuer_id", "%s")}
+                where d.issuer_id = any(%s::text[])
                   and {served_or_empty_head_predicate("scope.capture_run_id")}
                 order by d.cutoff_at desc limit 1
                 """,
-                params,
+                (cand,),
             )
             decision = cur.fetchone()
             cur.execute(
@@ -1568,12 +1585,12 @@ class PostgresCompanyProfileReader:
                        coalesce(v.availability_status, 'unavailable') as availability_status,
                        v.reason_codes
                 from mart.metric_node_values v
-                where {issuer_identity_sql("v.issuer_id", "%s")}
+                where v.issuer_id = any(%s::text[])
                   and v.node_key = any(%s::text[])
                   and {served_run_predicate("v.run_id")}
                 order by (v.availability_status = 'available') desc, v.period desc limit 1
                 """,
-                (*params, list(GPPE_VARIANT_KEYS)),
+                (cand, list(GPPE_VARIANT_KEYS)),
             )
             gppe = cur.fetchone()
             cur.execute(
@@ -1588,14 +1605,14 @@ class PostgresCompanyProfileReader:
                          p.confidence::text as confidence,
                          coalesce(p.availability_status, 'unavailable') as availability_status
                   from mart.issuer_theme_purity p
-                  where {issuer_identity_sql("p.issuer_id", "%s")}
+                  where p.issuer_id = any(%s::text[])
                     and p.partition_id is not null
                     and {served_or_empty_head_predicate("p.run_id")}
                   order by p.theme_id, p.cutoff desc, p.created_at desc
                 ) latest_per_theme
                 order by raw_share desc nulls last, theme asc
                 """,
-                params,
+                (cand,),
             )
             themes = [dict(r) for r in cur.fetchall()]
             return decision, gppe, themes
