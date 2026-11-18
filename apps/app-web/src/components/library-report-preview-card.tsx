@@ -3,11 +3,11 @@
 import { useState } from "react";
 import { api, ApiError } from "@/client/api";
 
-export function AdminApiSurfaceCard() {
+export function LibraryReportPreviewCard() {
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  async function probeLibraryReport() {
+  async function previewThemeReport() {
     setBusy(true);
     setStatus(null);
     try {
@@ -28,18 +28,18 @@ export function AdminApiSurfaceCard() {
     <div className="rounded-xl border border-border bg-card p-4 space-y-2">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="text-sm font-semibold text-white">Library Report Surface</h2>
+          <h2 className="text-sm font-semibold text-white">Library Report Preview</h2>
           <p className="text-xs text-gray-400">
-            On-demand staging check for <code className="text-accent">GET /api/v1/library/reports</code>.
+            Generate a deterministic theme report via <code className="text-accent">GET /api/v1/library/reports</code>.
           </p>
         </div>
         <button
           type="button"
-          onClick={probeLibraryReport}
+          onClick={previewThemeReport}
           disabled={busy}
           className="rounded-lg border border-border px-3 py-1.5 text-xs text-gray-200 hover:border-accent disabled:opacity-50"
         >
-          {busy ? "Checking…" : "Preview theme report"}
+          {busy ? "Loading…" : "Preview theme report"}
         </button>
       </div>
       {status && <p className="font-mono text-xs text-gray-300">{status}</p>}

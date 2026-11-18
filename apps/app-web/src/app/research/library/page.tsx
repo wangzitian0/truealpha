@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { api } from "@/client/api";
 import { CreateDocumentForm, DeleteDocumentButton } from "@/components/document-actions";
+import { LibraryReportPreviewCard } from "@/components/library-report-preview-card";
 import { loadAuthed } from "../../_load";
 
 export const dynamic = "force-dynamic";
@@ -19,6 +20,7 @@ export default async function LibraryPage({ searchParams }: { searchParams: Prom
         <p className="mt-1 text-sm text-gray-400">Owner-isolated notes &amp; archived Xiaohongshu HTML cards via <code className="text-accent">/api/v1/library/documents</code>.</p>
       </div>
       <CreateDocumentForm />
+      <LibraryReportPreviewCard />
       {error && <p className="text-sm text-rose-400">{error}</p>}
       {docs.length === 0 ? (
         <p className="text-sm text-gray-400">No documents saved yet.</p>
