@@ -202,6 +202,7 @@ def plan_and_persist(
     force_fetch: bool = False,
     drill: Any | None = None,
     environment: CaptureEnvironment | None = None,
+    refresh_mart: bool = True,
 ) -> PlannedRun:
     """Freeze scope and persist capture-control dispatch intent without calling external vendors."""
     from data_engine.config import settings
@@ -230,7 +231,13 @@ def plan_and_persist(
     from data_engine.datahub.resolve_coordinates import resolve_coordinates
 
     with connection.transaction():
-        coordinates = resolve_coordinates(connection, denominator["instruments"], as_of=as_of, known_at=cutoff)
+        coordinates = resolve_coordinates(
+            connection,
+            denominator["instruments"],
+            as_of=as_of,
+            known_at=cutoff,
+            refresh_mart=refresh_mart,
+        )
     partition = str(denominator["report_date"])
     list_version = (
         corpus_list_version(corpus) if "instrument_mapping_sha256" in denominator else frozen_topt_list_version(corpus)
@@ -633,6 +640,7 @@ def run_topt_pipeline(
         universe_head_kind=universe_head_kind,
         force_fetch=force_fetch,
         drill=drill,
+        refresh_mart=False,
     )
     status = PostgresCaptureControlRepository(connection).status(plan.run_id)
     resumed = (
@@ -682,6 +690,10 @@ def run_topt_pipeline(
         if not status.complete or status.success_count + status.unchanged_count != status.obligation_count:
             _record_and_refuse(connection, plan, status)
         connection.commit()
+    if plan.coordinates:
+        from truealpha_runtime.mart_refresh import MART_ENTITY_IDENTITY, refresh_mart_materialized_views
+
+        refresh_mart_materialized_views(connection, (MART_ENTITY_IDENTITY,), concurrently=True)
 
     rate = risk_free_rate_at(connection, cutoff)
     core = PostgresToptCoreRepository(connection)

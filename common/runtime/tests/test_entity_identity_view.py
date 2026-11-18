@@ -35,6 +35,7 @@ from typing import Any
 
 import psycopg
 import pytest
+from truealpha_runtime.mart_refresh import MART_ENTITY_IDENTITY, refresh_mart_materialized_views
 from truealpha_runtime.testing import apply_migration_chain, isolated_test_database
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -47,6 +48,7 @@ UNIQUE_IDENTITY_MIGRATION = LEGACY_ID_MIGRATION
 VIEW_MIGRATIONS = (
     LEGACY_ID_MIGRATION,
     MIGRATIONS / "20261118T1100_runtime_entity_identity_pivoted.sql",
+    MIGRATIONS / "20261118T1300_datahub_slice5_converge_staging_and_mart_mvs.sql",
 )
 
 COLUMNS = ("entity_id", "kind", "current_ticker", "name", "cik", "lei", "listing_id", "legacy_id")
@@ -531,13 +533,16 @@ def columns(conn: psycopg.Connection, relation: str) -> list[tuple[str, str]]:
     ]
 
 
-def all_rows(conn: psycopg.Connection, relation: str) -> list[Row]:
+def all_rows(conn: psycopg.Connection, relation: str, *, refresh: bool = True) -> list[Row]:
+    if refresh and relation == MART_ENTITY_IDENTITY:
+        refresh_mart_materialized_views(conn, (MART_ENTITY_IDENTITY,))
     rows = conn.execute(f"select {', '.join(COLUMNS)} from {relation}").fetchall()  # noqa: S608
     return sorted((tuple(row) for row in rows), key=repr)
 
 
 def rows_by_label(conn: psycopg.Connection, ids: dict[str, str]) -> dict[str, list[Row]]:
     """The rows of `mart.entity_identity` for each seeded entity, without the entity id."""
+    refresh_mart_materialized_views(conn, (MART_ENTITY_IDENTITY,))
     labels = {entity_id: label for label, entity_id in ids.items()}
     found: dict[str, list[Row]] = {label: [] for label in ids}
     for row in conn.execute(
@@ -574,6 +579,7 @@ def full_ties(conn: psycopg.Connection) -> int:
 def assert_same_rows_as_the_old_definition(conn: psycopg.Connection) -> list[Row]:
     """Compares the view with the old definition, as multisets, in both directions."""
     assert full_ties(conn) == 0, "a full tie has no defined winner; the comparison needs a seed without one"
+    refresh_mart_materialized_views(conn, (MART_ENTITY_IDENTITY,))
     create_old_view(conn)
     for left, right in (("mart.entity_identity", OLD_VIEW), (OLD_VIEW, "mart.entity_identity")):
         extra = conn.execute(
@@ -644,9 +650,18 @@ def test_one_evaluation_calls_each_helper_at_most_once_for_each_row(conn: psycop
     conn.execute("set local track_functions = 'all'")
     survivor_bound = aliases + identities
 
+    from truealpha_runtime.mart_refresh import MART_ENTITY_IDENTITY, refresh_mart_materialized_views
+
+    before_refresh = helper_calls(conn)
+    refresh_mart_materialized_views(conn, (MART_ENTITY_IDENTITY,))
+    after_refresh = helper_calls(conn)
+    assert (after_refresh["entity_survivor"] - before_refresh["entity_survivor"]) <= survivor_bound
+    assert (after_refresh["entity_alias_valid_to"] - before_refresh["entity_alias_valid_to"]) <= aliases
+    assert conn.execute("select count(*) from mart.entity_identity").fetchone() == (identities,)
+
     calls = calls_of_one_evaluation(conn, "mart.entity_identity")
-    assert calls["entity_survivor"] <= survivor_bound, (calls, identities, aliases)
-    assert calls["entity_alias_valid_to"] <= aliases, (calls, identities, aliases)
+    assert calls["entity_survivor"] == 0, calls
+    assert calls["entity_alias_valid_to"] == 0, calls
 
     # Control: on the same rows the old definition breaks the bound. So the probe sees calls.
     create_old_view(conn)
@@ -659,7 +674,7 @@ def test_mart_readonly_reads_the_view(conn: psycopg.Connection) -> None:
     ids, _ = seed_cases(conn)
     as_owner = all_rows(conn, "mart.entity_identity")
     conn.execute("set local role mart_readonly")
-    assert all_rows(conn, "mart.entity_identity") == as_owner
+    assert all_rows(conn, "mart.entity_identity", refresh=False) == as_owner
     assert len(as_owner) == len(ids)
 
 
@@ -793,6 +808,7 @@ def test_equal_confidence_and_transaction_time_tie_breaks_by_alias_id(conn: psyc
     issuer = store.mint("issuer", "lei", lei(901), at=T0)
     store.alias(issuer, "name", "First Tie Name", at=T0, confidence="0.9")
     store.alias(issuer, "name", "Second Tie Name", at=T0, confidence="0.9")
+    refresh_mart_materialized_views(conn, (MART_ENTITY_IDENTITY,))
     row = conn.execute(
         "select name from mart.entity_identity where entity_id = %s::uuid",
         (issuer,),
@@ -819,6 +835,7 @@ def seed_two_listings_of_one_issuer(store: Store, n: int) -> tuple[str, str, str
 
 
 def identity_of(conn: psycopg.Connection, issuer: str) -> tuple[Any, ...]:
+    refresh_mart_materialized_views(conn, (MART_ENTITY_IDENTITY,))
     row = conn.execute(
         "select current_ticker, listing_id from mart.entity_identity where entity_id = %s::uuid", (issuer,)
     ).fetchone()
@@ -867,7 +884,9 @@ def test_bare_ticker_in_aliases_never_masquerades_as_company_name(conn: psycopg.
     issuer, _list_c, list_a = seed_two_listings_of_one_issuer(store, 906)
     store.relate("primary_listing", issuer, list_a, at=T0)
     store.alias(issuer, "name", "GOOGL", at=T0, confidence="0.8")
+    refresh_mart_materialized_views(conn, (MART_ENTITY_IDENTITY,))
     sql = "select current_ticker, name from mart.entity_identity where entity_id = %s::uuid"
     assert conn.execute(sql, (issuer,)).fetchone() == ("GOOGL", None)
     store.alias(issuer, "name", "Alphabet Inc.", at=T0 + HOUR, confidence="0.95")
+    refresh_mart_materialized_views(conn, (MART_ENTITY_IDENTITY,))
     assert conn.execute(sql, (issuer,)).fetchone() == ("GOOGL", "Alphabet Inc.")

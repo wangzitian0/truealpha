@@ -222,6 +222,7 @@ def resolve_coordinates(
     *,
     as_of: date,
     known_at: datetime | None = None,
+    refresh_mart: bool = True,
 ) -> dict[str, tuple[str, str, str, str]]:
     if known_at is None:
         known_at = datetime.combine(as_of, datetime.min.time(), tzinfo=UTC)
@@ -241,6 +242,10 @@ def resolve_coordinates(
         if name := _resolve_issuer_display_name(connection, ticker, issuer_raw=issuer_raw, issuer_uuid=issuer_uuid):
             _assert_issuer_name_alias(connection, issuer_uuid, name, known_at=known_at)
         result[listing_raw] = (str(issuer_uuid), str(instrument_uuid), str(listing_uuid), ticker)
+    if refresh_mart and connection is not None and result:
+        from truealpha_runtime.mart_refresh import MART_ENTITY_IDENTITY, refresh_mart_materialized_views
+
+        refresh_mart_materialized_views(connection, (MART_ENTITY_IDENTITY,))
     return result
 
 

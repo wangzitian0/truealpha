@@ -318,6 +318,31 @@ class TwelveDataQuoteFetcher:
             if isinstance(transaction_time, datetime)
             else knowable_instant(AsOfAxis.SETTLED_SESSION, trading_date)
         )
+        existing_fetch_id: int | None = None
+        existing_sha256: str | None = None
+        if hasattr(self._connection, "pgconn"):
+            with self._connection.transaction():
+                landed = self._connection.execute(
+                    """
+                    select rf.id, rf.payload_sha256
+                    from staging.landed_fetch_keys lfk
+                    join raw.fetches rf on rf.id = lfk.raw_fetch_id
+                    where lfk.seat = 'twelvedata'
+                      and lfk.canonical_entity_id = %s
+                      and (
+                          (lfk.endpoint = 'eod' and lfk.as_of in (%s, %s))
+                          or (lfk.endpoint = 'time_series' and split_part(lfk.as_of, ':', 2) = %s)
+                      )
+                    order by case when lfk.endpoint = 'time_series' then 0 else 1 end,
+                             lfk.landed_at desc,
+                             rf.recorded_at desc
+                    limit 1
+                    """,
+                    (symbol, trading_date.isoformat(), cutoff.isoformat(), trading_date.isoformat()),
+                ).fetchone()
+            if landed is not None:
+                existing_fetch_id = int(landed[0])
+                existing_sha256 = str(landed[1])
         return MarketPriceQuote(
             raw_bytes=raw_bytes,
             close=Decimal(str(close)),
@@ -327,6 +352,8 @@ class TwelveDataQuoteFetcher:
             high=None if high is None else Decimal(str(high)),
             low=None if low is None else Decimal(str(low)),
             volume=None if volume is None else Decimal(str(volume)),
+            existing_raw_fetch_id=existing_fetch_id,
+            existing_raw_sha256=existing_sha256,
         )
 
     def __call__(self, symbol: str, cutoff: date) -> MarketPriceQuote | None:

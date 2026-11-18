@@ -46,9 +46,21 @@ class RawResponse:
     source: DataSource
     record_id: str
     content_type: str = "application/json"
+    existing_raw_fetch_id: int | None = None
+    existing_raw_sha256: str | None = None
+
+    def __post_init__(self) -> None:
+        if (self.existing_raw_fetch_id is None) != (self.existing_raw_sha256 is None):
+            raise ValueError("existing_raw_fetch_id and existing_raw_sha256 must be provided together")
+        if self.existing_raw_fetch_id is not None and self.existing_raw_fetch_id <= 0:
+            raise ValueError("existing_raw_fetch_id must be positive")
+        if self.existing_raw_sha256 is not None:
+            _require_digest(self.existing_raw_sha256)
 
     @property
     def sha256(self) -> str:
+        if self.existing_raw_fetch_id is not None and self.existing_raw_sha256 is not None:
+            return self.existing_raw_sha256
         return hashlib.sha256(self.body).hexdigest()
 
     @property

@@ -959,6 +959,16 @@ def test_refresh_universes_skips_stopped_sp500_and_isolates_per_universe_transac
         nport_holdings, "capture_fund_holdings", lambda conn, ticker: nport_calls.append(ticker) or f"ok:{ticker}"
     )
     monkeypatch.setattr(holdings_enrichment, "enrich_holding_identities", lambda conn, api_key="": "enriched")
+    from truealpha_runtime import mart_refresh
+
+    mv_refresh_calls: list[tuple[tuple[str, ...], bool, bool]] = []
+    monkeypatch.setattr(
+        mart_refresh,
+        "refresh_mart_materialized_views",
+        lambda conn, views=mart_refresh.MART_MV_REFRESH_ORDER, *, concurrently=True, commit_before=False: (
+            mv_refresh_calls.append((tuple(views), concurrently, commit_before)) or tuple(views)
+        ),
+    )
 
     refreshed: list[str] = []
 
@@ -975,12 +985,14 @@ def test_refresh_universes_skips_stopped_sp500_and_isolates_per_universe_transac
     # SP500 was skipped completely while STOPPED; canary still refreshed and committed despite qqq failing.
     assert refreshed == ["qqq", "canary"]
     assert nport_calls == ["QQQ"]
-    assert len(commits) == 3  # canary constituents + QQQ N-PORT + identity enrichment
+    assert len(commits) == 4  # canary constituents + QQQ N-PORT + identity enrichment + mart MV refresh
+    assert mv_refresh_calls == [(mart_refresh.MART_MV_REFRESH_ORDER, True, True)]
 
     # #1523 D2: in staging, QQQ is in list_refresh (constituents refreshed weekly), not scheduled (no N-PORT capture).
     refreshed.clear()
     nport_calls.clear()
     commits.clear()
+    mv_refresh_calls.clear()
     monkeypatch.setattr(settings, "app_env", "staging")
     universe_refresh._refresh_universes(
         ctx,
@@ -992,7 +1004,8 @@ def test_refresh_universes_skips_stopped_sp500_and_isolates_per_universe_transac
     )
     assert refreshed == ["qqq", "canary"]
     assert nport_calls == []
-    assert len(commits) == 3  # qqq constituents + canary constituents + identity enrichment
+    assert len(commits) == 4  # qqq constituents + canary constituents + identity enrichment + mart MV refresh
+    assert mv_refresh_calls == [(mart_refresh.MART_MV_REFRESH_ORDER, True, True)]
 
 
 # -- #1310: the SP500 schedule stays STOPPED while its status in the contract is stopped ------------------

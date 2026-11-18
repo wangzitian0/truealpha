@@ -1683,7 +1683,7 @@ def test_rating_summary_and_valuation_detail_enrich_consensus_with_pit_vendor_ti
     assert "vendor_timestamp" in params[9]
     assert "valuation_profit_growth" in params[9]
     assert Decimal("0.40") < params[8] < Decimal("0.85")
-    assert any("insert into staging.analyst_rating_events" in sql for sql, _ in conn.executed)
+    assert not any("analyst_rating_events" in sql for sql, _ in conn.executed)
 
 
 def test_ticker_row_prefers_track_record_rating_and_preserves_consensus_targets() -> None:

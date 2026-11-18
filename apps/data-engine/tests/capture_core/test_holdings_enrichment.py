@@ -310,6 +310,9 @@ def test_per_isin_ticker_lands_even_when_sec_crosswalk_omits_ticker(connection) 
         isins=[ea_isin],
     )
     assert outcome.repointed == 0 and outcome.unmapped == 1
+    from truealpha_runtime.mart_refresh import MART_FUND_HOLDINGS_MV_ORDER, refresh_mart_materialized_views
+
+    refresh_mart_materialized_views(connection, MART_FUND_HOLDINGS_MV_ORDER)
     row = connection.execute(
         "select ticker, listing_id from mart.fund_holdings_resolved where fund_id = %s and isin = %s",
         (str(fund_uuid), ea_isin),
@@ -355,6 +358,9 @@ def test_company_cik_issuer_entity_resolves_ticker_in_fund_holdings_resolved(con
         """,
         (fund_uuid, company_uuid, _AT, ea_isin),
     )
+    from truealpha_runtime.mart_refresh import MART_FUND_HOLDINGS_MV_ORDER, refresh_mart_materialized_views
+
+    refresh_mart_materialized_views(connection, MART_FUND_HOLDINGS_MV_ORDER)
 
     row = connection.execute(
         "select issuer_entity, ticker, listing_id from mart.fund_holdings_resolved where fund_id = %s and isin = %s",

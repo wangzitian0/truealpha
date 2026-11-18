@@ -679,6 +679,9 @@ def test_the_seeded_members_resolve_through_the_identity_store(conn: psycopg.Con
     maps it to the listing id of the report. Without this, the tests below could pass on
     seeds that never used the identity store."""
     run_id = _seed_head(conn, "universe:canary-us-2026-06-30", [ALPHABET, _issuer("apple", "aapl")])
+    from truealpha_runtime.mart_refresh import MART_ENTITY_IDENTITY, refresh_mart_materialized_views
+
+    refresh_mart_materialized_views(conn, (MART_ENTITY_IDENTITY,))
     rows = conn.execute(
         """
         select member->>'listing_id', identity.listing_id
@@ -1075,6 +1078,9 @@ def test_entity_identity_unique_per_entity_passes_with_dual_kg_rows_and_fails_on
             "values (%s::uuid, 'name', %s, '-infinity', '2026-01-01T00:00:00Z'::timestamptz + (%s || ' minutes')::interval, 'test', 'test', 'asserted', 0.9, 'v1')",
             (entity_uuid, name, str(idx)),
         )
+    from truealpha_runtime.mart_refresh import MART_ENTITY_IDENTITY, refresh_mart_materialized_views
+
+    refresh_mart_materialized_views(conn, (MART_ENTITY_IDENTITY,))
     code, output = _parity_verdict(conn, capsys, ENTITY_IDENTITY_UNIQUE_INVARIANT)
     assert code == 0, output
     assert f"ok       {ENTITY_IDENTITY_UNIQUE_INVARIANT}: 1 row(s) examined" in output

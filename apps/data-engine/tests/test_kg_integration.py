@@ -224,17 +224,17 @@ def test_slice2_backfill_cli_verifies_fk_refs_without_legacy_tables(conn):
     sys.modules[spec.name] = mod
     spec.loader.exec_module(mod)
 
-    analyst_uuid = er.ensure_entity(conn, "analyst:moomoo:test-b", "person", "Test Analyst B", transaction_time=T1)
+    fund_uuid = er.ensure_entity(conn, "etf:series:S000004310", "fund", "Test Fund", transaction_time=T1)
     company_uuid = er.ensure_entity(conn, "issuer:cik:0000320193", "issuer", "Apple Inc.", transaction_time=T1)
     conn.execute(
         """
-        insert into staging.analyst_rating_events
-            (analyst_id, company_id, recommendation_at, transaction_time, rating, confidence, raw_ref)
-        values (%s, %s, %s, %s, 5, 0.9, 'test:slice2-cli')
+        insert into staging.fund_holding_facts
+            (fund_id, holding_id, holding_name, report_period, transaction_time, value_usd, percent_of_net_assets, confidence, raw_ref)
+        values (%s, %s, 'Apple Inc.', '2026-03-31', %s, 1000, 5.0, 0.9, 'test:slice2-cli')
         """,
-        (analyst_uuid, company_uuid, T1, T1),
+        (fund_uuid, company_uuid, T1),
     )
     report = mod.backfill_legacy_kg_to_uuid(conn, apply=False)
     assert report.applied is False
-    assert report.rating_refs_checked >= 2
+    assert report.holding_refs_checked >= 2
     assert report.unmapped_refs == ()

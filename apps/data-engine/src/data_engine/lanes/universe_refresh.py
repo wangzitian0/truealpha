@@ -113,6 +113,17 @@ def _refresh_universes(
         failures,
         lambda conn: context.log.info(str(enrich_holding_identities(conn, api_key=settings.openfigi_api_key))),
     )
+    from truealpha_runtime.mart_refresh import refresh_mart_materialized_views
+
+    _isolated_db_step(
+        context,
+        "mart-mv-refresh",
+        "mart materialized view refresh",
+        failures,
+        lambda conn: context.log.info(
+            f"refreshed mart materialized views: {refresh_mart_materialized_views(conn, commit_before=True)}"
+        ),
+    )
     if failures:
         raise RuntimeError(f"Universe refresh failed for: {', '.join(step for step, _ in failures)}") from failures[-1][
             1
