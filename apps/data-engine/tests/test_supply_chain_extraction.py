@@ -903,3 +903,104 @@ def test_load_issuer_graph_partners_reads_revenue_share_from_entity_relations_an
     assert row[3] == Decimal("0.0324")  # 0.18^2 HHI
     assert row[9] == []  # quantified share + supplier present -> no warning flags
     assert row[11] == "available"
+
+
+def test_empty_10k_partners_records_model_extractor_and_scopes_to_current_raw_ref(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1664 Q3: Empty 10-K partner extraction must record the model extractor and ignore prior-filing edges."""
+    from data_engine import raw_store
+
+    filing_text = (
+        "Item 1. Business. "
+        "Costco operates membership warehouses and does not rely on any single supplier or customer "
+        "for more than ten percent of consolidated net sales."
+    )
+    monkeypatch.setattr(raw_store, "get_payload", lambda _conn, _fid, **_kw: filing_text.encode("utf-8"))
+
+    cost_uuid = _issuer_id("cost")
+    stale_partner_uuid = _issuer_id("stale-supplier")
+    gateway = _StubLLMGateway(partners=())
+    seen_labels: list[str] = []
+    orig_identify = gateway.identify_supply_chain_partners
+
+    def _capture_identify(conn: Any, **kwargs: Any) -> llm.SupplyChainExtraction:
+        seen_labels.append(str(kwargs.get("issuer_label")))
+        return orig_identify(conn, **kwargs)
+
+    gateway.identify_supply_chain_partners = _capture_identify  # type: ignore[method-assign]
+
+    class _ScopedConn:
+        def __init__(self) -> None:
+            self.mart_rows: list[tuple[object, ...]] = []
+            self.scoped_queries: list[str | None] = []
+            self.entity_relations = [
+                (stale_partner_uuid, cost_uuid, Decimal("0.90"), None, "raw.fetches:100"),
+            ]
+
+        def cursor(self):
+            class _RegCur(_MockCursor):
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *args: object):
+                    pass
+
+                def fetchone(self):
+                    return ("exists",)
+
+            return _RegCur()
+
+        def execute(self, sql: str, params: object = None):
+            cur = _MockCursor()
+            p = tuple(params) if isinstance(params, list | tuple) else ()
+            if "from raw.fetches" in sql:
+                cur.fetchall = lambda: [  # type: ignore[method-assign]
+                    (
+                        200,
+                        "filing-document:CIK0000909832:000090983226000010",
+                        "s3://truealpha-raw/raw/sec/cost.htm",
+                        datetime(2026, 10, 10, tzinfo=UTC),
+                        {"cik": 909832, "form": "10-K", "accession": "000090983226000010", "plain_text": filing_text},
+                    )
+                ]
+            elif "from staging.entity_relations r" in sql:
+                raw_ref_filter = p[2] if len(p) > 2 else None
+                self.scoped_queries.append(None if raw_ref_filter is None else str(raw_ref_filter))
+                aliases = set(p[0]) if p and isinstance(p[0], list | tuple) else set()
+                cur.fetchall = lambda: [  # type: ignore[method-assign]
+                    (
+                        from_id,
+                        to_id,
+                        conf,
+                        pct,
+                        "Stale Supplier",
+                        "Costco",
+                    )
+                    for from_id, to_id, conf, pct, raw_ref in self.entity_relations
+                    if (from_id in aliases or to_id in aliases)
+                    and (raw_ref_filter is None or raw_ref == raw_ref_filter)
+                ]
+            elif "select exists (select 1 from staging.entity_relations" in sql:
+                cur.fetchone = lambda: (True,)  # type: ignore[method-assign]
+            elif "insert into mart.issuer_supply_chain_exposure" in sql:
+                self.mart_rows.append(p)
+            return cur
+
+    conn = _ScopedConn()
+    issuers = [CanonicalIssuer(issuer_id=cost_uuid, legacy_id="company:cik:0000909832", ticker="BRK-B")]
+    report = materialize_universe_supply_chain_exposure(
+        conn,  # type: ignore[arg-type]
+        run_id="capture-run:q3-empty-scope",
+        cutoff=datetime(2026, 10, 20, tzinfo=UTC),
+        issuers=issuers,
+        llm_gateway=gateway,
+    )
+    assert report == 1
+    assert seen_labels == ["BRK.B"]
+    assert conn.scoped_queries == ["raw.fetches:200"]
+    assert len(conn.mart_rows) == 1
+    row = conn.mart_rows[0]
+    assert row[4] == 0
+    assert row[10] == "model:glm-5.3-flash:aaaaaaaaaaaa"
+    assert "graph:kg-edges:v1" not in str(row[10])

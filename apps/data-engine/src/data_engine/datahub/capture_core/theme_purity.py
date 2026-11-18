@@ -204,11 +204,12 @@ def compute_for_theme(
         )
         flagged = refused.result.model_copy(update={"flags": [NO_DESCRIPTION, *refused.result.flags]})
         return replace(refused, result=flagged), NO_DESCRIPTION_EXTRACTOR
+    canonical_ticker = ticker.strip().upper().replace("-", ".") if ticker else None
     classification = llm.classify_segments(
         connection,
         cik=partition.cik,
         accession=partition.accession,
-        issuer_label=f"{ticker} ({partition.issuer_id})" if ticker else partition.issuer_id,
+        issuer_label=f"{canonical_ticker} ({partition.issuer_id})" if canonical_ticker else partition.issuer_id,
         theme=definition.theme,
         inclusion=definition.inclusion,
         segments=list(partition.descriptions),

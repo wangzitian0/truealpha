@@ -123,9 +123,9 @@
   },
   "vendor_shares": {
     "twelvedata": {"per_minute": [1, 1, 4], "per_day": [160, 160, 480]},
-    "sec_edgar": {"per_second": [2, 2, 6]},
+    "sec_edgar": {"per_second": [0, 4, 6]},
     "openfigi": {"per_minute": [50, 50, 150]},
-    "moomoo_opend": {"burst": [6, 6, 18], "kline_stocks": [null, null, null]}
+    "moomoo_opend": {"burst": [0, 12, 18], "kline_stocks": [null, null, null]}
   },
   "vendor_invalid": [
     [[["set", "vendor_accounts.default_percent.production", 61]], "sum past 100"],
