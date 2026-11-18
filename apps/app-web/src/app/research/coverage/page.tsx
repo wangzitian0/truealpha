@@ -45,6 +45,27 @@ export default async function CoveragePage() {
       {cov?.available && (
         <>
           <p className="text-sm text-gray-400">{decisions.length - excluded.length} usable / {decisions.length} total ({excluded.length} excluded)</p>
+          <div>
+            <h2 className="mb-3 text-lg font-semibold">Wide panel input coverage</h2>
+            <ResearchTable caption="Wide panel inputs" headers={["Issuer", ...WIDE_PANEL_INPUT_COLUMNS.map((c) => c.label), "Trace"]}>
+              {decisions.map((d) => {
+                const cells = widePanel[d.issuer_id] ?? {};
+                return (
+                  <tr key={d.issuer_id} className="border-t border-border">
+                    <th scope="row" className={`${td} font-medium`}>
+                      <Link href={`/research/entities/${encodeURIComponent(d.issuer_id)}`} className="text-accent hover:underline" title={d.issuer_id}>{d.label}</Link>
+                    </th>
+                    {WIDE_PANEL_INPUT_COLUMNS.map((col) => {
+                      const node = cells[col.key];
+                      const fmt = node?.value ? (col.monetary ? formatUsdMagnitude(node.value) : formatNumberMagnitude(node.value)) : null;
+                      return <PanelNodeTd key={col.key} node={node} formatted={fmt} />;
+                    })}
+                    <td className={td}><Link href={`/research/trace?issuer=${encodeURIComponent(d.issuer_id)}&cutoff=${encodeURIComponent(d.cutoff_at)}`} className="text-accent hover:underline text-xs">trace →</Link></td>
+                  </tr>
+                );
+              })}
+            </ResearchTable>
+          </div>
           <ResearchTable caption="Excluded issuers" headers={["Issuer", "Outcome", "Reason code", "Explanation", "Cutoff", "Trace"]}>
             {excluded.map((d) => (
               <tr key={d.issuer_id} className="border-t border-border">
@@ -59,25 +80,6 @@ export default async function CoveragePage() {
               </tr>
             ))}
           </ResearchTable>
-          <div>
-            <h2 className="mb-3 text-lg font-semibold">Wide panel input coverage</h2>
-            <ResearchTable caption="Wide panel inputs" headers={["Issuer", ...WIDE_PANEL_INPUT_COLUMNS.map((c) => c.label), "Trace"]}>
-              {decisions.map((d) => {
-                const cells = widePanel[d.issuer_id] ?? {};
-                return (
-                  <tr key={d.issuer_id} className="border-t border-border">
-                    <th scope="row" className={`${td} font-medium`} title={d.issuer_id}>{d.label}</th>
-                    {WIDE_PANEL_INPUT_COLUMNS.map((col) => {
-                      const node = cells[col.key];
-                      const fmt = node?.value ? (col.monetary ? formatUsdMagnitude(node.value) : formatNumberMagnitude(node.value)) : null;
-                      return <PanelNodeTd key={col.key} node={node} formatted={fmt} />;
-                    })}
-                    <td className={td}><Link href={`/research/trace?issuer=${encodeURIComponent(d.issuer_id)}&cutoff=${encodeURIComponent(d.cutoff_at)}`} className="text-accent hover:underline text-xs">trace →</Link></td>
-                  </tr>
-                );
-              })}
-            </ResearchTable>
-          </div>
         </>
       )}
       <div className="space-y-4">

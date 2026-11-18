@@ -165,7 +165,7 @@ async function assertNoBlankResearchTableCells(page, path, problems) {
     }
   }
 
-  if (SEEDED_FIXTURE && DATA_STATE === "populated" && path === "/research/rankings") {
+  if (SEEDED_FIXTURE && DATA_STATE === "populated" && path === "/research/coverage") {
     const missingTickers = PREVIEW_TICKERS.filter(
       (ticker) => !result.labels.some((label) => label.startsWith(`${ticker} · `) || label === ticker),
     );
@@ -520,7 +520,7 @@ async function checkRoute(page, path, role, pageErrors) {
   await assertOperateChromeMembership(page, path, problems, role);
   await assertWorldSwitch(page, path, problems, role);
   await assertSignedInIdentity(page, path, problems);
-  await assertCurrentNavLink(page, path, problems);
+  await assertCurrentNavLink(page, finalPath, problems);
   await assertDatahubPlantHealth(page, path, problems, role);
   // Last, because these navigate away from this page.
   await assertEntityDetailRenders(page, path, problems);

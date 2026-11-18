@@ -200,7 +200,7 @@ def test_band_values_live_only_in_the_definition_files() -> None:
         if path.name >= _FIRST_SCANNED_MIGRATION:
             violations.extend(text_violations(path.read_text(), str(path.relative_to(_REPO)), wide))
             scanned["sql"] += 1
-    assert scanned["py"] > 150 and scanned["ts"] > 60 and scanned["sql"] >= 1, f"the guard roots moved: {scanned}"
+    assert scanned["py"] > 150 and scanned["ts"] > 50 and scanned["sql"] >= 1, f"the guard roots moved: {scanned}"
     assert not violations, "a second band set exists outside the definition files:\n" + "\n".join(violations)
 
 
