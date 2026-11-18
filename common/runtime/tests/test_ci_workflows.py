@@ -54,3 +54,12 @@ def test_runtime_hooks_manifest_and_fail_fast_slots(tmp_path: Path) -> None:
     assert record["checks"][1]["detail"] == "boom: first line"
     if len(checks) > 2:
         assert checks[2].argv[-1] not in ran
+
+
+def test_browser_hook_slots_use_headless_shell_and_staging_budget() -> None:
+    from infra2_sdk.manifests import SLOT_MAX_TIMEOUT_SECONDS, load_hooks_manifest
+
+    hooks = load_hooks_manifest(REPO_ROOT / "runtime-hooks.manifest.json")
+    for slot_name in ("preview_gate", "staging_gate"):
+        assert "--only-shell" in hooks.slots[slot_name].bootstrap
+    assert hooks.slots["staging_gate"].timeout_seconds == SLOT_MAX_TIMEOUT_SECONDS["staging_gate"]
