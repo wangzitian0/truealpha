@@ -4,13 +4,10 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 const LINKS: readonly { href: string; label: string }[] = [
-  { href: "/research", label: "Overview" },
+  { href: "/research/coverage", label: "Coverage" },
   { href: "/research/rankings", label: "Rankings" },
   { href: "/research/themes", label: "Theme purity" },
-  { href: "/research/compare", label: "Comparison" },
   { href: "/research/holdings", label: "Holdings" },
-  { href: "/research/strategy", label: "Strategy" },
-  { href: "/research/coverage", label: "Coverage" },
   { href: "/research/library", label: "Library" },
   { href: "/research/backtest", label: "Backtests" },
 ];

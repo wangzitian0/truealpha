@@ -1,5 +1,5 @@
 {
-  "_comment": "#493: the frozen app-web URL tree — the inner-tree counterpart of tools/route_manifest.json (which only assigns service PREFIXES). tests/route-tree-freeze.test.ts fails when a filesystem route exists that is not listed here, when a live route is missing, or when a planned route gets built without flipping it to live in the same PR. Planned entries are the approved-but-unbuilt pages from the 4-step overhaul (#494/#495); adding any route outside this contract requires amending this file, visibly, in the same PR.",
+  "_comment": "#1748: the frozen 15-route app-web URL tree — converged from 23 routes by deleting overlapping/placeholder surfaces (/research/{strategy,compare}, /admin/{pipeline,quality,universes,macro,releases,access}).",
   "routes": [
     {
       "path": "/",
@@ -22,19 +22,11 @@
       "live": true
     },
     {
-      "path": "/research/strategy",
-      "live": true
-    },
-    {
       "path": "/research/backtest",
       "live": true
     },
     {
       "path": "/research/backtest/[id]",
-      "live": true
-    },
-    {
-      "path": "/research/compare",
       "live": true
     },
     {
@@ -67,30 +59,6 @@
     },
     {
       "path": "/admin/datahub",
-      "live": true
-    },
-    {
-      "path": "/admin/quality",
-      "live": true
-    },
-    {
-      "path": "/admin/pipeline",
-      "live": true
-    },
-    {
-      "path": "/admin/releases",
-      "live": false
-    },
-    {
-      "path": "/admin/access",
-      "live": false
-    },
-    {
-      "path": "/admin/universes",
-      "live": true
-    },
-    {
-      "path": "/admin/macro",
       "live": true
     }
   ]

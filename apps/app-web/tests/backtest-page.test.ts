@@ -73,10 +73,10 @@ const sampleValuations = [
 
 __setApiFetch(async (input) => {
   const url = String(input);
-  if (url.endsWith("/api/v1/research/backtests") || url.includes("/api/v1/research/backtests?")) {
+  if (url.endsWith("/api/v1/strategy/backtests") || url.includes("/api/v1/strategy/backtests?")) {
     return new Response(JSON.stringify({ runs: [sampleRun] }), { status: 200, headers: { "Content-Type": "application/json" } });
   }
-  if (url.includes(`/api/v1/research/backtests/${encodeURIComponent(runId)}`)) {
+  if (url.includes(`/api/v1/strategy/backtests/${encodeURIComponent(runId)}`)) {
     return new Response(
       JSON.stringify({ run: sampleRun, valuations: sampleValuations }),
       { status: 200, headers: { "Content-Type": "application/json" } },

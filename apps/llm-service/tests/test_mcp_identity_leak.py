@@ -65,21 +65,26 @@ _CUTOFF = "2026-03-31T23:59:59Z"
 # tool_is_covered` fails if this does not match what the server registers, so a new tool
 # cannot be added without deciding how it gets called here.
 _TOOL_CALLS: dict[str, dict[str, Any]] = {
-    "strategy_run": {"request": {"strategy_id": "large_model_value_v0"}},
-    # theme_ranking, not company: a ranking report projects EVERY decision of the run into
-    # a subject, so its subject ids come from the read path rather than being echoed back
-    # from target_entity_ids the test itself supplied. The request needs at least one
-    # target id (the DTO rejects an empty tuple), and it is deliberately NOT a UUID: a
-    # UUID the test hands in and the report echoes back would be this guard tripping over
-    # its own argument, not over a leak.
-    "research_report": {
+    "panel_universes": {},
+    "panel_coverage": {"request": {"node_key": "gppe_uniform_charge_v0"}},
+    "panel_macro": {},
+    "strategy_rankings": {"request": {"strategy_id": "large_model_value_v0"}},
+    "strategy_backtests": {"request": {"strategy_key": "qqq_topk_rank", "limit": 5}},
+    "strategy_backtest_detail": {"request": {"run_id": "backtest-run:unused"}},
+    "entities_holdings": {"request": {"fund_id": "etf:series:S000101292"}},
+    "entities_themes": {"request": {"theme_id": "ai-infrastructure", "limit": 10}},
+    "entities_trace": {"request": {"issuer_id": "issuer:ranking-scope-unused"}},
+    "entities_supply_chain": {"request": {"issuer_id": "issuer:ranking-scope-unused"}},
+    "entities_analyst_ratings": {"request": {"issuer_id": "issuer:ranking-scope-unused"}},
+    "entities_detail": {"request": {"issuer_id": "issuer:ranking-scope-unused"}},
+    "library_report": {
         "request": {
             "report_kind": "theme_ranking",
             "target_entity_ids": ["issuer:ranking-scope-unused"],
             "cutoff_at": _CUTOFF,
         }
     },
-    "research_card": {
+    "library_card_export": {
         "request": {
             "report_kind": "theme_ranking",
             "target_entity_ids": ["issuer:ranking-scope-unused"],
@@ -87,28 +92,14 @@ _TOOL_CALLS: dict[str, dict[str, Any]] = {
             "card_kind": "ranking",
         }
     },
-    # topt_gppe reads the governed capture head, which this transaction does not seed; on a
-    # database with no accepted production run it answers a typed Unavailable, and the walk
-    # below covers whatever it does answer. Its own cell translation has real coverage in
-    # common/contracts/tests/test_topt_read.py (#954).
-    "topt_gppe": {},
-    "company_360_profile": {"request": {"issuer_id": "issuer:ranking-scope-unused"}},
-    "theme_purity_leaderboard": {"request": {"theme_id": "ai-infrastructure", "limit": 10}},
-    "etf_virtual_company_profile": {"request": {"fund_id": "etf:series:S000101292"}},
-    "governed_backtest": {"request": {"strategy_key": "qqq_topk_rank", "limit": 5}},
-    # #42: the same ranking request as research_report; the markdown renders that report.
-    "research_report_markdown": {
+    "library_documents_list": {},
+    "library_document_create": {
         "request": {
-            "report_kind": "theme_ranking",
-            "target_entity_ids": ["issuer:ranking-scope-unused"],
-            "cutoff_at": _CUTOFF,
+            "source_artifact_id": "note:identity-leak-probe",
+            "content": "probe-body",
         }
     },
-    # #42: modules 3 and 4 answer no row here (nothing is seeded for this id); the walk
-    # covers the typed unavailable answer, and test_mcp_module_tools.py covers a served row.
-    "issuer_supply_chain_exposure": {"request": {"issuer_id": "issuer:ranking-scope-unused"}},
-    "issuer_analyst_ratings": {"request": {"issuer_id": "issuer:ranking-scope-unused"}},
-    "metric_node_values": {"request": {"node_key": "gppe_uniform_charge_v0"}},
+    "library_document_detail": {"request": {"document_id": "document:unused"}},
 }
 
 
@@ -121,17 +112,28 @@ class _BorrowedConnection:
     transaction; close/commit are withheld so the rollback owns the data. Carries both
     access shapes the repositories use: ``cursor(...)`` and ``execute(...)``."""
 
-    def __init__(self, real: psycopg.Connection) -> None:
+    def __init__(self, real: psycopg.Connection, row_factory: Any = None) -> None:
         self._real = real
+        self._row_factory = row_factory
 
     def __enter__(self) -> _BorrowedConnection:
         return self
 
     def __exit__(self, *_exc: object) -> None:
+        self._real.execute("reset role")
         return None
 
     def cursor(self, **kwargs: Any) -> Any:
+        if self._row_factory is not None and "row_factory" not in kwargs:
+            kwargs["row_factory"] = self._row_factory
         return self._real.cursor(**kwargs)
+
+    @property
+    def connection(self) -> psycopg.Connection:
+        return self._real
+
+    def rollback(self) -> None:
+        return None
 
     def execute(self, query: Any, params: Any = None, **kwargs: Any) -> Any:
         # topt_read connects with row_factory=dict_row and reads rows by key.
@@ -229,7 +231,23 @@ def seeded_entity(monkeypatch: pytest.MonkeyPatch):
                 _CUTOFF,
             ),
         )
-        monkeypatch.setattr(psycopg, "connect", lambda *args, **kwargs: _BorrowedConnection(connection))
+        from llm_service.services import library_service
+
+        connection.execute("insert into app.tenants (tenant_id) values ('tenant:truealpha') on conflict do nothing")
+        connection.execute(
+            "insert into app.principals (principal_id, tenant_id, principal_kind) values "
+            "('principal:owner', 'tenant:truealpha', 'administrator') on conflict do nothing"
+        )
+        monkeypatch.setattr(
+            library_service,
+            "_put_s3_bytes",
+            lambda *_a, **_k: ("documents/principal:owner/aa/" + "a" * 64, "a" * 64, 10),
+        )
+        monkeypatch.setattr(
+            psycopg,
+            "connect",
+            lambda *args, **kwargs: _BorrowedConnection(connection, kwargs.get("row_factory")),
+        )
         yield {"entity_uuid": entity_uuid, "legacy_id": legacy_id}
     finally:
         connection.rollback()

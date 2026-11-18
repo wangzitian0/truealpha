@@ -173,10 +173,10 @@ async function navigate(path: string, hydrationDelayMs: number[], timeouts = TIM
 
 // ─── (b4) slow first attempt, hydrated second attempt: one printed retry ─────
 {
-	const { outcome, page, lines } = await navigate("/research/strategy", [NEVER, 20], SHORT_HYDRATION);
+	const { outcome, page, lines } = await navigate("/research/coverage", [NEVER, 20], SHORT_HYDRATION);
 	assert(outcome.kind === "resolved", `the retry hydrated, so gotoStable must resolve: ${JSON.stringify(outcome)}`);
 	assert(page.visits.length === 2, `expected one retry; gotoStable navigated ${page.visits.length} times`);
-	assert(lines.length === 1 && lines[0].includes("/research/strategy"), `the retry must be printed: ${JSON.stringify(lines)}`);
+	assert(lines.length === 1 && lines[0].includes("/research/coverage"), `the retry must be printed: ${JSON.stringify(lines)}`);
 }
 
 // ─── (c) every page error fails its route, React #418 included (#1468) ───────

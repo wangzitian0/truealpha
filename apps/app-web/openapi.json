@@ -5,6 +5,979 @@
     "version": "0.1.0"
   },
   "paths": {
+    "/api/v1/panel/universes": {
+      "get": {
+        "tags": [
+          "panel"
+        ],
+        "summary": "Panel Universes",
+        "operationId": "panel_universes",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UniverseOverviewResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/panel/coverage": {
+      "get": {
+        "tags": [
+          "panel"
+        ],
+        "summary": "Panel Coverage",
+        "operationId": "panel_coverage",
+        "parameters": [
+          {
+            "name": "strategy_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "large_model_value_v0",
+              "title": "Strategy Id"
+            }
+          },
+          {
+            "name": "universe",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Universe"
+            }
+          },
+          {
+            "name": "cutoff",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cutoff"
+            }
+          },
+          {
+            "name": "node_key",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Node Key"
+            }
+          },
+          {
+            "name": "issuer_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Issuer Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "minimum": 1,
+              "default": 100,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PanelCoverageResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/panel/macro": {
+      "get": {
+        "tags": [
+          "panel"
+        ],
+        "summary": "Panel Macro",
+        "operationId": "panel_macro",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MacroPanelResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/strategy/rankings": {
+      "get": {
+        "tags": [
+          "strategy"
+        ],
+        "summary": "Rankings",
+        "operationId": "strategy_rankings",
+        "parameters": [
+          {
+            "name": "strategy_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "large_model_value_v0",
+              "title": "Strategy Id"
+            }
+          },
+          {
+            "name": "universe",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": "all",
+              "title": "Universe"
+            }
+          },
+          {
+            "name": "cutoff",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cutoff"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "minimum": 1,
+              "default": 200,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RankingsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/strategy/backtests": {
+      "get": {
+        "tags": [
+          "strategy"
+        ],
+        "summary": "Backtests List",
+        "operationId": "strategy_backtests",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 20,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "strategy_key",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Strategy Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BacktestRunsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/strategy/backtests/{run_id}": {
+      "get": {
+        "tags": [
+          "strategy"
+        ],
+        "summary": "Backtest Detail",
+        "operationId": "strategy_backtest_detail",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BacktestDetailResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/entities/holdings": {
+      "get": {
+        "tags": [
+          "entities"
+        ],
+        "summary": "Holdings",
+        "operationId": "entities_holdings",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FundValuationsResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/entities/themes": {
+      "get": {
+        "tags": [
+          "entities"
+        ],
+        "summary": "Themes",
+        "operationId": "entities_themes",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThemesResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/entities/trace": {
+      "get": {
+        "tags": [
+          "entities"
+        ],
+        "summary": "Trace",
+        "operationId": "entities_trace",
+        "parameters": [
+          {
+            "name": "issuer_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "title": "Issuer Id"
+            }
+          },
+          {
+            "name": "cutoff",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cutoff"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/entities/{issuer_id}/supply-chain": {
+      "get": {
+        "tags": [
+          "entities"
+        ],
+        "summary": "Supply Chain",
+        "operationId": "entities_supply_chain",
+        "parameters": [
+          {
+            "name": "issuer_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Issuer Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/SupplyChainExposure"
+                    },
+                    {
+                      "$ref": "#/components/schemas/IssuerModuleUnavailable"
+                    }
+                  ],
+                  "title": "Response Entities Supply Chain"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/entities/{issuer_id}/analyst-ratings": {
+      "get": {
+        "tags": [
+          "entities"
+        ],
+        "summary": "Analyst Ratings",
+        "operationId": "entities_analyst_ratings",
+        "parameters": [
+          {
+            "name": "issuer_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Issuer Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/AnalystRatings"
+                    },
+                    {
+                      "$ref": "#/components/schemas/IssuerModuleUnavailable"
+                    }
+                  ],
+                  "title": "Response Entities Analyst Ratings"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/entities/{issuer_id}": {
+      "get": {
+        "tags": [
+          "entities"
+        ],
+        "summary": "Entity Detail",
+        "operationId": "entities_detail",
+        "parameters": [
+          {
+            "name": "issuer_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Issuer Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EntityDetailResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/library/reports": {
+      "get": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Reports",
+        "operationId": "library_report",
+        "parameters": [
+          {
+            "name": "report_kind",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/ResearchReportKind",
+              "default": "theme_ranking"
+            }
+          },
+          {
+            "name": "target_entity_ids",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": [
+                "theme:large_model_value"
+              ],
+              "title": "Target Entity Ids"
+            }
+          },
+          {
+            "name": "cutoff_at",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cutoff At"
+            }
+          },
+          {
+            "name": "section_kinds",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/ReportSectionKind"
+              },
+              "default": [],
+              "title": "Section Kinds"
+            }
+          },
+          {
+            "name": "strategy_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Strategy Id"
+            }
+          },
+          {
+            "name": "title",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Title"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "json",
+                "markdown"
+              ],
+              "type": "string",
+              "default": "json",
+              "title": "Format"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryReportResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/library/cards/export": {
+      "post": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Export Card",
+        "operationId": "library_card_export",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CardExportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CardExportResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/library/documents": {
+      "get": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Documents List",
+        "operationId": "library_documents_list",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 200,
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "before_created_at",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Before Created At"
+            }
+          },
+          {
+            "name": "before_document_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Before Document Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Documents Create",
+        "operationId": "library_documents_create",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateDocumentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateDocumentResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/library/documents/{document_id}": {
+      "get": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Documents Detail",
+        "operationId": "library_document_detail",
+        "parameters": [
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Document Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentDetailResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Documents Delete",
+        "operationId": "library_document_delete",
+        "parameters": [
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Document Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeleteDocumentResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/auth/login": {
       "post": {
         "tags": [
@@ -88,704 +1061,6 @@
         }
       }
     },
-    "/api/v1/research/overview": {
-      "get": {
-        "tags": [
-          "research"
-        ],
-        "summary": "Overview",
-        "operationId": "research_overview",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OverviewResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/research/strategy": {
-      "get": {
-        "tags": [
-          "research"
-        ],
-        "summary": "Strategy",
-        "operationId": "research_strategy",
-        "parameters": [
-          {
-            "name": "strategy_id",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "default": "large_model_value_v0",
-              "title": "Strategy Id"
-            }
-          },
-          {
-            "name": "universe",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Universe"
-            }
-          },
-          {
-            "name": "cutoff",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Cutoff"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/StrategyRunPageResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/research/rankings": {
-      "get": {
-        "tags": [
-          "research"
-        ],
-        "summary": "Rankings",
-        "operationId": "research_rankings",
-        "parameters": [
-          {
-            "name": "universe",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": "all",
-              "title": "Universe"
-            }
-          },
-          {
-            "name": "cutoff",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Cutoff"
-            }
-          },
-          {
-            "name": "limit",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "maximum": 500,
-              "minimum": 1,
-              "default": 200,
-              "title": "Limit"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RankingsResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/research/trace": {
-      "get": {
-        "tags": [
-          "research"
-        ],
-        "summary": "Trace",
-        "operationId": "research_trace",
-        "parameters": [
-          {
-            "name": "issuer_id",
-            "in": "query",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "minLength": 1,
-              "title": "Issuer Id"
-            }
-          },
-          {
-            "name": "cutoff",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Cutoff"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TraceResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/research/entities/{issuer_id}": {
-      "get": {
-        "tags": [
-          "research"
-        ],
-        "summary": "Entity Detail",
-        "operationId": "research_entity_detail",
-        "parameters": [
-          {
-            "name": "issuer_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Issuer Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EntityDetailResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/research/themes": {
-      "get": {
-        "tags": [
-          "research"
-        ],
-        "summary": "Themes",
-        "operationId": "research_themes",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ThemesResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/research/funds": {
-      "get": {
-        "tags": [
-          "research"
-        ],
-        "summary": "Funds",
-        "operationId": "research_funds",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/FundValuationsResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/research/backtests": {
-      "get": {
-        "tags": [
-          "research"
-        ],
-        "summary": "Backtests List",
-        "operationId": "research_backtests_list",
-        "parameters": [
-          {
-            "name": "limit",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "maximum": 100,
-              "minimum": 1,
-              "default": 20,
-              "title": "Limit"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BacktestRunsResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/research/backtests/{run_id}": {
-      "get": {
-        "tags": [
-          "research"
-        ],
-        "summary": "Backtest Detail",
-        "operationId": "research_backtest_detail",
-        "parameters": [
-          {
-            "name": "run_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Run Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BacktestDetailResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/research/cards/export": {
-      "post": {
-        "tags": [
-          "research"
-        ],
-        "summary": "Export Card",
-        "operationId": "research_cards_export",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CardExportRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CardExportResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/research/documents": {
-      "get": {
-        "tags": [
-          "research"
-        ],
-        "summary": "Documents List",
-        "operationId": "research_documents_list",
-        "parameters": [
-          {
-            "name": "limit",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "integer",
-                  "maximum": 200,
-                  "minimum": 1
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Limit"
-            }
-          },
-          {
-            "name": "before_created_at",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Before Created At"
-            }
-          },
-          {
-            "name": "before_document_id",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Before Document Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DocumentListResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      },
-      "post": {
-        "tags": [
-          "research"
-        ],
-        "summary": "Documents Create",
-        "operationId": "research_documents_create",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CreateDocumentRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CreateDocumentResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/research/documents/{document_id}": {
-      "get": {
-        "tags": [
-          "research"
-        ],
-        "summary": "Documents Detail",
-        "operationId": "research_documents_detail",
-        "parameters": [
-          {
-            "name": "document_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Document Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DocumentDetailResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      },
-      "delete": {
-        "tags": [
-          "research"
-        ],
-        "summary": "Documents Delete",
-        "operationId": "research_documents_delete",
-        "parameters": [
-          {
-            "name": "document_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Document Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DeleteDocumentResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/research/documents/{document_id}/revisions/{revision_id}/content": {
-      "get": {
-        "tags": [
-          "research"
-        ],
-        "summary": "Documents Revision Content",
-        "operationId": "research_documents_revision_content",
-        "parameters": [
-          {
-            "name": "document_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Document Id"
-            }
-          },
-          {
-            "name": "revision_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Revision Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/v1/admin/ops": {
       "get": {
         "tags": [
@@ -807,154 +1082,7 @@
         }
       }
     },
-    "/api/v1/admin/pipeline": {
-      "get": {
-        "tags": [
-          "admin"
-        ],
-        "summary": "Pipeline Overview",
-        "operationId": "admin_pipeline_overview",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PipelineOverviewResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/admin/quality": {
-      "get": {
-        "tags": [
-          "admin"
-        ],
-        "summary": "Quality Overview",
-        "operationId": "admin_quality_overview",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/QualityOverviewResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/admin/macro": {
-      "get": {
-        "tags": [
-          "admin"
-        ],
-        "summary": "Macro Panel",
-        "operationId": "admin_macro_panel",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MacroPanelResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/admin/universes": {
-      "get": {
-        "tags": [
-          "admin"
-        ],
-        "summary": "Universes Overview",
-        "operationId": "admin_universes_overview",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UniverseOverviewResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/admin/datahub": {
-      "get": {
-        "tags": [
-          "admin"
-        ],
-        "summary": "Datahub Stats",
-        "operationId": "admin_datahub_stats",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DatahubStatsResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/admin/verdicts/{check_name}": {
-      "get": {
-        "tags": [
-          "admin"
-        ],
-        "summary": "Verdict History",
-        "operationId": "admin_verdict_history",
-        "parameters": [
-          {
-            "name": "check_name",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Check Name"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/VerdictHistoryResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/admin/pipeline/trigger": {
+    "/api/v1/admin/triggers": {
       "post": {
         "tags": [
           "admin"
@@ -995,13 +1123,34 @@
         }
       }
     },
+    "/api/v1/admin/datahub": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Datahub Stats",
+        "operationId": "admin_datahub_stats",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatahubStatsResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/livez": {
       "get": {
         "tags": [
-          "Observability"
+          "system"
         ],
         "summary": "Livez",
-        "operationId": "livez_livez_get",
+        "operationId": "system_livez",
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -1019,10 +1168,10 @@
     "/readyz": {
       "get": {
         "tags": [
-          "Observability"
+          "system"
         ],
         "summary": "Readyz",
-        "operationId": "readyz_readyz_get",
+        "operationId": "system_readyz",
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -1050,10 +1199,10 @@
     "/health": {
       "get": {
         "tags": [
-          "Observability"
+          "system"
         ],
         "summary": "Health",
-        "operationId": "health_health_get",
+        "operationId": "system_health",
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -1081,6 +1230,112 @@
   },
   "components": {
     "schemas": {
+      "AnalystRatings": {
+        "properties": {
+          "run_id": {
+            "type": "string",
+            "title": "Run Id"
+          },
+          "cutoff": {
+            "type": "string",
+            "title": "Cutoff"
+          },
+          "confidence": {
+            "type": "string",
+            "title": "Confidence"
+          },
+          "reason_codes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Reason Codes"
+          },
+          "extractor": {
+            "type": "string",
+            "title": "Extractor"
+          },
+          "availability_status": {
+            "$ref": "#/components/schemas/AvailabilityStatus"
+          },
+          "source_evidence_status": {
+            "$ref": "#/components/schemas/InputEvidenceStatus"
+          },
+          "factor_validation_status": {
+            "$ref": "#/components/schemas/FactorValidationStatus"
+          },
+          "consensus_rating": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Consensus Rating"
+          },
+          "target_price": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Price"
+          },
+          "analysts_count": {
+            "type": "integer",
+            "title": "Analysts Count"
+          },
+          "buy_count": {
+            "type": "integer",
+            "title": "Buy Count"
+          },
+          "hold_count": {
+            "type": "integer",
+            "title": "Hold Count"
+          },
+          "sell_count": {
+            "type": "integer",
+            "title": "Sell Count"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "run_id",
+          "cutoff",
+          "confidence",
+          "reason_codes",
+          "extractor",
+          "availability_status",
+          "source_evidence_status",
+          "factor_validation_status",
+          "consensus_rating",
+          "target_price",
+          "analysts_count",
+          "buy_count",
+          "hold_count",
+          "sell_count"
+        ],
+        "title": "AnalystRatings"
+      },
+      "AvailabilityStatus": {
+        "type": "string",
+        "enum": [
+          "available",
+          "unavailable",
+          "stale",
+          "excluded",
+          "low_confidence",
+          "not_applicable",
+          "error"
+        ],
+        "title": "AvailabilityStatus"
+      },
       "BacktestDetailResponse": {
         "properties": {
           "run": {
@@ -1626,6 +1881,66 @@
         ],
         "title": "CheckDetail"
       },
+      "CoverageDecisionDto": {
+        "properties": {
+          "issuer_id": {
+            "type": "string",
+            "title": "Issuer Id"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "cutoff_at": {
+            "type": "string",
+            "title": "Cutoff At"
+          },
+          "outcome": {
+            "type": "string",
+            "title": "Outcome"
+          },
+          "eligible": {
+            "type": "boolean",
+            "title": "Eligible"
+          },
+          "exclusion_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exclusion Reason"
+          },
+          "exclusion_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exclusion Label"
+          },
+          "trace_id": {
+            "type": "string",
+            "title": "Trace Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "issuer_id",
+          "label",
+          "cutoff_at",
+          "outcome",
+          "eligible",
+          "trace_id"
+        ],
+        "title": "CoverageDecisionDto"
+      },
       "CreateDocumentRequest": {
         "properties": {
           "source_artifact_id": {
@@ -1667,14 +1982,6 @@
       },
       "DatahubStatsResponse": {
         "properties": {
-          "heads": {
-            "items": {
-              "additionalProperties": true,
-              "type": "object"
-            },
-            "type": "array",
-            "title": "Heads"
-          },
           "sources": {
             "items": {
               "additionalProperties": true,
@@ -1683,13 +1990,13 @@
             "type": "array",
             "title": "Sources"
           },
-          "runs": {
+          "capture_runs": {
             "items": {
               "additionalProperties": true,
               "type": "object"
             },
             "type": "array",
-            "title": "Runs"
+            "title": "Capture Runs"
           },
           "validation": {
             "items": {
@@ -1770,14 +2077,6 @@
             },
             "type": "array",
             "title": "Oracle Outcomes"
-          },
-          "nightly_verdicts": {
-            "items": {
-              "additionalProperties": true,
-              "type": "object"
-            },
-            "type": "array",
-            "title": "Nightly Verdicts"
           }
         },
         "type": "object",
@@ -2157,6 +2456,15 @@
         ],
         "title": "EntityDisplayItem"
       },
+      "FactorValidationStatus": {
+        "type": "string",
+        "enum": [
+          "accepted",
+          "rejected",
+          "not_evaluated"
+        ],
+        "title": "FactorValidationStatus"
+      },
       "FundValuationDto": {
         "properties": {
           "fund_id": {
@@ -2288,50 +2596,6 @@
         "type": "object",
         "title": "FundValuationsResponse"
       },
-      "FunnelLayerDto": {
-        "properties": {
-          "key": {
-            "type": "string",
-            "title": "Key"
-          },
-          "title": {
-            "type": "string",
-            "title": "Title"
-          },
-          "headline": {
-            "type": "string",
-            "title": "Headline"
-          },
-          "ratio": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Ratio"
-          },
-          "status": {
-            "type": "string",
-            "title": "Status"
-          },
-          "detail": {
-            "type": "string",
-            "title": "Detail"
-          }
-        },
-        "type": "object",
-        "required": [
-          "key",
-          "title",
-          "headline",
-          "status",
-          "detail"
-        ],
-        "title": "FunnelLayerDto"
-      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -2389,6 +2653,94 @@
           "reasons"
         ],
         "title": "HealthResponse"
+      },
+      "InputEvidenceStatus": {
+        "type": "string",
+        "enum": [
+          "verified",
+          "degraded",
+          "rejected"
+        ],
+        "title": "InputEvidenceStatus"
+      },
+      "IssuerModuleUnavailable": {
+        "properties": {
+          "issuer_id": {
+            "type": "string",
+            "title": "Issuer Id"
+          },
+          "module": {
+            "type": "string",
+            "enum": [
+              "supply_chain_exposure",
+              "analyst_ratings"
+            ],
+            "title": "Module"
+          },
+          "reason": {
+            "type": "string",
+            "const": "no_row_in_served_head",
+            "title": "Reason",
+            "default": "no_row_in_served_head"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "issuer_id",
+          "module"
+        ],
+        "title": "IssuerModuleUnavailable"
+      },
+      "LibraryReportResponse": {
+        "properties": {
+          "report_id": {
+            "type": "string",
+            "title": "Report Id"
+          },
+          "schema_version": {
+            "type": "string",
+            "title": "Schema Version"
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "json",
+              "markdown"
+            ],
+            "title": "Format",
+            "default": "json"
+          },
+          "report": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Report"
+          },
+          "markdown": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Markdown"
+          }
+        },
+        "type": "object",
+        "required": [
+          "report_id",
+          "schema_version"
+        ],
+        "title": "LibraryReportResponse"
       },
       "LoginRequest": {
         "properties": {
@@ -2539,121 +2891,6 @@
         ],
         "title": "MacroSeriesDto"
       },
-      "ModuleOutputCountDto": {
-        "properties": {
-          "table": {
-            "type": "string",
-            "title": "Table"
-          },
-          "run_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Run Id"
-          },
-          "rows": {
-            "type": "integer",
-            "title": "Rows",
-            "default": 0
-          },
-          "available_rows": {
-            "type": "integer",
-            "title": "Available Rows",
-            "default": 0
-          },
-          "latest_cutoff": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Latest Cutoff"
-          }
-        },
-        "type": "object",
-        "required": [
-          "table"
-        ],
-        "title": "ModuleOutputCountDto"
-      },
-      "ModuleOverviewRowDto": {
-        "properties": {
-          "module": {
-            "type": "integer",
-            "title": "Module"
-          },
-          "name": {
-            "type": "string",
-            "title": "Name"
-          },
-          "note": {
-            "type": "string",
-            "title": "Note"
-          },
-          "gate": {
-            "type": "string",
-            "title": "Gate"
-          },
-          "availability": {
-            "type": "string",
-            "title": "Availability"
-          },
-          "with_value": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "With Value"
-          },
-          "total": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Total"
-          },
-          "source": {
-            "type": "string",
-            "title": "Source"
-          },
-          "output": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/ModuleOutputCountDto"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
-        "type": "object",
-        "required": [
-          "module",
-          "name",
-          "note",
-          "gate",
-          "availability",
-          "source"
-        ],
-        "title": "ModuleOverviewRowDto"
-      },
       "OpsDataEngineBuildDto": {
         "properties": {
           "git_sha": {
@@ -2699,13 +2936,6 @@
             "title": "Runs",
             "default": "unavailable"
           },
-          "pointers": {
-            "items": {
-              "$ref": "#/components/schemas/OpsPointerRowDto"
-            },
-            "type": "array",
-            "title": "Pointers"
-          },
           "data_engine": {
             "anyOf": [
               {
@@ -2720,107 +2950,10 @@
             "type": "string",
             "title": "App Git Sha",
             "default": "unknown"
-          },
-          "quota_today": {
-            "items": {
-              "$ref": "#/components/schemas/OpsQuotaRowDto"
-            },
-            "type": "array",
-            "title": "Quota Today"
           }
         },
         "type": "object",
         "title": "OpsOverviewResponse"
-      },
-      "OpsPointerRowDto": {
-        "properties": {
-          "universe_id": {
-            "type": "string",
-            "title": "Universe Id"
-          },
-          "target_run_id": {
-            "type": "string",
-            "title": "Target Run Id"
-          },
-          "sequence": {
-            "type": "integer",
-            "title": "Sequence"
-          },
-          "advanced_at": {
-            "type": "string",
-            "title": "Advanced At"
-          },
-          "age_hours": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Age Hours"
-          },
-          "freshness": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Freshness"
-          },
-          "availability": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Availability"
-          },
-          "staleness_reason": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Staleness Reason"
-          }
-        },
-        "type": "object",
-        "required": [
-          "universe_id",
-          "target_run_id",
-          "sequence",
-          "advanced_at"
-        ],
-        "title": "OpsPointerRowDto"
-      },
-      "OpsQuotaRowDto": {
-        "properties": {
-          "source": {
-            "type": "string",
-            "title": "Source"
-          },
-          "fetches": {
-            "type": "integer",
-            "title": "Fetches"
-          }
-        },
-        "type": "object",
-        "required": [
-          "source",
-          "fetches"
-        ],
-        "title": "OpsQuotaRowDto"
       },
       "OpsRunRowDto": {
         "properties": {
@@ -2861,12 +2994,11 @@
         ],
         "title": "OpsRunRowDto"
       },
-      "OverviewResponse": {
+      "PanelCoverageResponse": {
         "properties": {
           "available": {
             "type": "boolean",
-            "title": "Available",
-            "default": true
+            "title": "Available"
           },
           "reason": {
             "anyOf": [
@@ -2878,6 +3010,11 @@
               }
             ],
             "title": "Reason"
+          },
+          "strategy_id": {
+            "type": "string",
+            "title": "Strategy Id",
+            "default": "large_model_value_v0"
           },
           "strategy_run_id": {
             "anyOf": [
@@ -2890,7 +3027,7 @@
             ],
             "title": "Strategy Run Id"
           },
-          "executed_at": {
+          "cutoff_at": {
             "anyOf": [
               {
                 "type": "string"
@@ -2899,19 +3036,9 @@
                 "type": "null"
               }
             ],
-            "title": "Executed At"
+            "title": "Cutoff At"
           },
-          "source": {
-            "type": "string",
-            "title": "Source",
-            "default": "mart"
-          },
-          "corpus_prefix": {
-            "type": "string",
-            "title": "Corpus Prefix",
-            "default": ""
-          },
-          "latest_cutoff": {
+          "universe": {
             "anyOf": [
               {
                 "type": "string"
@@ -2920,197 +3047,55 @@
                 "type": "null"
               }
             ],
-            "title": "Latest Cutoff"
+            "title": "Universe"
           },
-          "modules": {
-            "items": {
-              "$ref": "#/components/schemas/ModuleOverviewRowDto"
-            },
-            "type": "array",
-            "title": "Modules"
-          }
-        },
-        "type": "object",
-        "title": "OverviewResponse"
-      },
-      "PipelineFailureDto": {
-        "properties": {
-          "run_id": {
-            "type": "string",
-            "title": "Run Id"
-          },
-          "at": {
-            "type": "string",
-            "title": "At"
-          },
-          "first_error": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "First Error"
-          }
-        },
-        "type": "object",
-        "required": [
-          "run_id",
-          "at"
-        ],
-        "title": "PipelineFailureDto"
-      },
-      "PipelineJobRowDto": {
-        "properties": {
-          "job": {
-            "type": "string",
-            "title": "Job"
-          },
-          "runs": {
+          "total_decisions": {
             "type": "integer",
-            "title": "Runs"
-          },
-          "successes": {
-            "type": "integer",
-            "title": "Successes"
-          },
-          "failures": {
-            "type": "integer",
-            "title": "Failures"
-          },
-          "success_rate": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Success Rate"
-          },
-          "last_success_at": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Last Success At"
-          },
-          "last_failure": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/PipelineFailureDto"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "longest_success_seconds": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Longest Success Seconds"
-          },
-          "derived_bound_seconds": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Derived Bound Seconds"
-          },
-          "runs_ended_by_bound": {
-            "type": "integer",
-            "title": "Runs Ended By Bound",
+            "title": "Total Decisions",
             "default": 0
+          },
+          "decisions": {
+            "items": {
+              "$ref": "#/components/schemas/CoverageDecisionDto"
+            },
+            "type": "array",
+            "title": "Decisions"
+          },
+          "wide_panel": {
+            "additionalProperties": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/WidePanelCellDto"
+              },
+              "type": "object"
+            },
+            "type": "object",
+            "title": "Wide Panel"
+          },
+          "display_map": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/EntityDisplayItem"
+            },
+            "type": "object",
+            "title": "Display Map"
+          },
+          "node_values_report": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Node Values Report"
           }
         },
         "type": "object",
         "required": [
-          "job",
-          "runs",
-          "successes",
-          "failures"
+          "available"
         ],
-        "title": "PipelineJobRowDto"
-      },
-      "PipelineOverviewResponse": {
-        "properties": {
-          "available": {
-            "type": "boolean",
-            "title": "Available",
-            "default": true
-          },
-          "reason": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Reason"
-          },
-          "window_days": {
-            "type": "integer",
-            "title": "Window Days",
-            "default": 7
-          },
-          "jobs": {
-            "items": {
-              "$ref": "#/components/schemas/PipelineJobRowDto"
-            },
-            "type": "array",
-            "title": "Jobs"
-          },
-          "job_run_health": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Job Run Health"
-          },
-          "release": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Release"
-          },
-          "app_git_sha": {
-            "type": "string",
-            "title": "App Git Sha",
-            "default": "unknown"
-          }
-        },
-        "type": "object",
-        "title": "PipelineOverviewResponse"
+        "title": "PanelCoverageResponse"
       },
       "ProbeResponse": {
         "properties": {
@@ -3144,58 +3129,6 @@
         ],
         "title": "ProbeResponse"
       },
-      "QualityOverviewResponse": {
-        "properties": {
-          "available": {
-            "type": "boolean",
-            "title": "Available",
-            "default": true
-          },
-          "reason": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Reason"
-          },
-          "run_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Run Id"
-          },
-          "layers": {
-            "items": {
-              "$ref": "#/components/schemas/FunnelLayerDto"
-            },
-            "type": "array",
-            "title": "Layers"
-          },
-          "node_values_report": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Node Values Report"
-          }
-        },
-        "type": "object",
-        "title": "QualityOverviewResponse"
-      },
       "RankingsResponse": {
         "properties": {
           "available": {
@@ -3213,6 +3146,44 @@
               }
             ],
             "title": "Reason"
+          },
+          "strategy_id": {
+            "type": "string",
+            "title": "Strategy Id",
+            "default": "large_model_value_v0"
+          },
+          "strategy_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strategy Run Id"
+          },
+          "definition_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Definition Version"
+          },
+          "review_state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review State"
           },
           "cutoff_at": {
             "anyOf": [
@@ -3252,6 +3223,30 @@
         },
         "type": "object",
         "title": "RankingsResponse"
+      },
+      "ReportSectionKind": {
+        "type": "string",
+        "enum": [
+          "operating_efficiency",
+          "valuation",
+          "peg_conventions",
+          "supply_chain",
+          "analyst_history",
+          "etf_virtual_company",
+          "pure_blood",
+          "strategy_summary",
+          "ranking"
+        ],
+        "title": "ReportSectionKind"
+      },
+      "ResearchReportKind": {
+        "type": "string",
+        "enum": [
+          "company",
+          "etf",
+          "theme_ranking"
+        ],
+        "title": "ResearchReportKind"
       },
       "SessionResponse": {
         "properties": {
@@ -3576,133 +3571,86 @@
         ],
         "title": "StrategyDecisionItemDto"
       },
-      "StrategyRunPageResponse": {
+      "SupplyChainExposure": {
         "properties": {
-          "available": {
-            "type": "boolean",
-            "title": "Available",
-            "default": true
-          },
-          "reason": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Reason"
-          },
-          "strategy_id": {
+          "run_id": {
             "type": "string",
-            "title": "Strategy Id"
+            "title": "Run Id"
           },
-          "strategy_run_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Strategy Run Id"
-          },
-          "executed_at": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Executed At"
-          },
-          "source": {
+          "cutoff": {
             "type": "string",
-            "title": "Source",
-            "default": "mart"
+            "title": "Cutoff"
           },
-          "corpus_sha256": {
+          "confidence": {
             "type": "string",
-            "title": "Corpus Sha256",
-            "default": ""
+            "title": "Confidence"
           },
-          "definition_version": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Definition Version"
-          },
-          "review_state": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Review State"
-          },
-          "cutoff_at": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Cutoff At"
-          },
-          "universe": {
-            "type": "string",
-            "title": "Universe",
-            "default": "all"
-          },
-          "total_decisions": {
-            "type": "integer",
-            "title": "Total Decisions",
-            "default": 0
-          },
-          "decisions": {
+          "reason_codes": {
             "items": {
-              "$ref": "#/components/schemas/StrategyDecisionItemDto"
+              "type": "string"
             },
             "type": "array",
-            "title": "Decisions"
+            "title": "Reason Codes"
           },
-          "wide_panel": {
-            "additionalProperties": {
-              "additionalProperties": {
-                "$ref": "#/components/schemas/WidePanelCellDto"
+          "extractor": {
+            "type": "string",
+            "title": "Extractor"
+          },
+          "availability_status": {
+            "$ref": "#/components/schemas/AvailabilityStatus"
+          },
+          "source_evidence_status": {
+            "$ref": "#/components/schemas/InputEvidenceStatus"
+          },
+          "factor_validation_status": {
+            "$ref": "#/components/schemas/FactorValidationStatus"
+          },
+          "exposure_score": {
+            "anyOf": [
+              {
+                "type": "string"
               },
-              "type": "object"
-            },
-            "type": "object",
-            "title": "Wide Panel"
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exposure Score"
           },
-          "display_map": {
-            "additionalProperties": {
-              "$ref": "#/components/schemas/EntityDisplayItem"
-            },
-            "type": "object",
-            "title": "Display Map"
+          "direct_partners": {
+            "type": "integer",
+            "title": "Direct Partners"
+          },
+          "suppliers_count": {
+            "type": "integer",
+            "title": "Suppliers Count"
+          },
+          "customers_count": {
+            "type": "integer",
+            "title": "Customers Count"
+          },
+          "max_partner_share": {
+            "type": "string",
+            "title": "Max Partner Share"
           }
         },
+        "additionalProperties": false,
         "type": "object",
         "required": [
-          "strategy_id"
+          "run_id",
+          "cutoff",
+          "confidence",
+          "reason_codes",
+          "extractor",
+          "availability_status",
+          "source_evidence_status",
+          "factor_validation_status",
+          "exposure_score",
+          "direct_partners",
+          "suppliers_count",
+          "customers_count",
+          "max_partner_share"
         ],
-        "title": "StrategyRunPageResponse"
+        "title": "SupplyChainExposure"
       },
       "ThemePurityGroupDto": {
         "properties": {
@@ -4304,27 +4252,6 @@
           "holding_name"
         ],
         "title": "ValuedHoldingRowDto"
-      },
-      "VerdictHistoryResponse": {
-        "properties": {
-          "check_name": {
-            "type": "string",
-            "title": "Check Name"
-          },
-          "rows": {
-            "items": {
-              "additionalProperties": true,
-              "type": "object"
-            },
-            "type": "array",
-            "title": "Rows"
-          }
-        },
-        "type": "object",
-        "required": [
-          "check_name"
-        ],
-        "title": "VerdictHistoryResponse"
       },
       "WidePanelCellDto": {
         "properties": {

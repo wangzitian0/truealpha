@@ -1,4 +1,4 @@
-"""The MCP endpoint registering read-only mart tools behind BearerTokenGate (#348, #758, #1104, #42)."""
+"""The MCP endpoint registering 17 1:1 research mart tools behind BearerTokenGate (#1748)."""
 
 from __future__ import annotations
 
@@ -25,11 +25,8 @@ from truealpha_runtime.research_cards import CardKind, ResearchCard
 from truealpha_runtime.research_report import (
     ReportSectionKind,
     ResearchReadPort,
-    ResearchReport,
     ResearchReportKind,
     ResearchReportRequest,
-    build_research_report,
-    render_report_markdown,
 )
 from truealpha_runtime.research_report_mart import (
     MartResearchReadRepository,
@@ -41,16 +38,39 @@ from truealpha_runtime.strategy_run import StrategyRunReadRepository, StrategyRu
 from truealpha_runtime.strategy_run_postgres import PostgresStrategyRunRepository
 
 from llm_service.config import settings
-from llm_service.services.research_service import (
-    CardExportRequest,
-    PostgresBacktestReader,
+from llm_service.services.entities_service import (
     PostgresCompanyProfileReader,
     PostgresEtfProfileReader,
     PostgresThemePurityLeaderboardReader,
-    backtest_run_limitations,
-    export_or_render_card,
+    TraceResponse,
+    get_trace,
     normalize_theme_slug,
     resolve_fund_resolution_candidates,
+)
+from llm_service.services.library_service import (
+    CardExportRequest,
+    CreateDocumentResponse,
+    DocumentDetailResponse,
+    DocumentListResponse,
+    LibraryReportResponse,
+    build_library_report,
+    create_document,
+    export_or_render_card,
+    get_document_detail,
+    list_documents,
+)
+from llm_service.services.panel_service import (
+    MacroPanelResponse,
+    PanelCoverageResponse,
+    UniverseOverviewResponse,
+    load_macro_curve,
+    load_universes_panel,
+    load_wide_panel_coverage,
+)
+from llm_service.services.strategy_service import (
+    DASHBOARD_STRATEGY_ID,
+    PostgresBacktestReader,
+    backtest_run_limitations,
 )
 
 __all__ = [
@@ -79,60 +99,88 @@ class _ToolModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class StrategyRunToolRequest(BaseModel):
+class PanelCoverageToolRequest(_ToolModel):
+    strategy_id: str = DASHBOARD_STRATEGY_ID
+    universe: str | None = None
+    cutoff: str | None = None
+    node_key: str | None = None
+    issuer_id: str | None = None
+    limit: int = 100
+
+
+class StrategyRankingsToolRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
-    strategy_id: str
+    strategy_id: str = DASHBOARD_STRATEGY_ID
 
 
-class ResearchReportToolRequest(_ToolModel):
+class StrategyBacktestsToolRequest(_ToolModel):
+    strategy_key: str | None = None
+    limit: int = 20
+
+
+class StrategyBacktestDetailToolRequest(_ToolModel):
+    run_id: str
+
+
+class EntitiesHoldingsToolRequest(_ToolModel):
+    fund_id: str = "etf:series:S000101292"
+
+
+class EntitiesThemesToolRequest(_ToolModel):
+    theme_id: str
+    limit: int = 10
+
+
+class EntitiesTraceToolRequest(_ToolModel):
+    issuer_id: str
+    cutoff: str | None = None
+
+
+class EntitiesIssuerModuleToolRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    issuer_id: str
+
+
+class EntitiesDetailToolRequest(_ToolModel):
+    issuer_id: str
+
+
+class LibraryReportToolRequest(_ToolModel):
     report_kind: ResearchReportKind
     target_entity_ids: tuple[str, ...]
     cutoff_at: datetime
     section_kinds: tuple[ReportSectionKind, ...] = ()
     strategy_id: str | None = None
     title: str | None = None
+    format: Literal["json", "markdown"] = "json"
 
 
-class ResearchReportMarkdown(_ToolModel):
-    report_id: str
-    schema_version: str
-    markdown: str
-
-
-class ResearchCardToolRequest(ResearchReportToolRequest):
+class LibraryCardExportToolRequest(_ToolModel):
+    report_kind: ResearchReportKind
+    target_entity_ids: tuple[str, ...]
+    cutoff_at: datetime
     card_kind: CardKind
+    section_kinds: tuple[ReportSectionKind, ...] = ()
+    strategy_id: str | None = None
     style_preset: str | None = None
     page: int | None = None
+    title: str | None = None
 
 
-class IssuerModuleToolRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-    issuer_id: str
+class LibraryDocumentsListToolRequest(_ToolModel):
+    limit: int | None = None
+    before_created_at: str | None = None
+    before_document_id: str | None = None
 
 
-class CompanyProfileToolRequest(_ToolModel):
-    issuer_id: str
+class LibraryDocumentCreateToolRequest(_ToolModel):
+    source_artifact_id: str
+    content: str
+    content_type: str = "text/plain; charset=utf-8"
 
 
-class ThemePurityToolRequest(_ToolModel):
-    theme_id: str
-    limit: int = 10
-
-
-class EtfProfileToolRequest(_ToolModel):
-    fund_id: str = "etf:series:S000101292"
-
-
-class BacktestToolRequest(_ToolModel):
-    run_id: str | None = None
-    strategy_key: str | None = None
-    limit: int = 10
-
-
-class MetricNodeValueToolRequest(_ToolModel):
-    node_key: str
-    issuer_id: str | None = None
-    limit: int = 100
+class LibraryDocumentDetailToolRequest(_ToolModel):
+    document_id: str
 
 
 def _owner_access_context() -> AccessContext:
@@ -204,18 +252,7 @@ def _handle_issuer_module(
     return row if isinstance(row, expected_type) else IssuerModuleUnavailable(issuer_id=issuer_id, module=module_name)
 
 
-def _report_request(request: ResearchReportToolRequest) -> ResearchReportRequest:
-    return ResearchReportRequest(
-        report_kind=request.report_kind,
-        target_entity_ids=request.target_entity_ids,
-        cutoff_at=request.cutoff_at,
-        section_kinds=request.section_kinds,
-        strategy_id=request.strategy_id,
-        title=request.title,
-    )
-
-
-def _card_report_request(request: ResearchCardToolRequest) -> ResearchReportRequest:
+def _card_report_request(request: LibraryCardExportToolRequest) -> ResearchReportRequest:
     report_kind = request.report_kind
     if (
         request.card_kind is CardKind.RANKING
@@ -299,53 +336,151 @@ def build_mcp_server(
     active_backtest = backtest_reader or _default_backtest_reader()
     active_modules = issuer_module_reader or _default_issuer_module_reader()
 
-    @server.tool(
-        name="strategy_run",
-        description="Read the latest large_model_value_v0 Core Strategy run and its definition review_state from mart.",
-    )
-    def strategy_run(request: StrategyRunToolRequest) -> StrategyRunReport | StrategyRunUnavailable:
-        return active_repository.get_latest(strategy_id=request.strategy_id, context=_owner_access_context())
+    # --- Domain 1: panel (3) ---
 
     @server.tool(
-        name="topt_gppe",
-        description="Read the current materialized GPPE metric node outputs at the governed head.",
+        name="panel_universes",
+        description="Read governed universe ruleset heads, history, and constituent members.",
     )
-    def topt_gppe() -> MetricNodeValueReport | MetricNodeValueUnavailable:
-        if topt_repository is not None:
+    def panel_universes() -> UniverseOverviewResponse:
+        return load_universes_panel()
+
+    @server.tool(
+        name="panel_coverage",
+        description="Read wide-panel input coverage, exclusions, and metric-forest node values at the governed head.",
+    )
+    def panel_coverage(
+        request: PanelCoverageToolRequest | None = None,
+    ) -> PanelCoverageResponse | MetricNodeValueReport | MetricNodeValueUnavailable:
+        req = request or PanelCoverageToolRequest()
+        if topt_repository is not None and (req.node_key is None or req.node_key == "gppe_uniform_charge_v0"):
             return topt_repository.latest()  # type: ignore[no-any-return]
-        return active_metric_node.latest(node_key="gppe_uniform_charge_v0")
-
-    @server.tool(
-        name="metric_node_values",
-        description="Read materialized metric-forest node outputs by node_key at the governed head.",
-    )
-    def metric_node_values(request: MetricNodeValueToolRequest) -> MetricNodeValueReport | MetricNodeValueUnavailable:
-        return active_metric_node.latest(node_key=request.node_key, issuer_id=request.issuer_id, limit=request.limit)
-
-    @server.tool(
-        name="research_report",
-        description="Assemble a deterministic research report (company, ETF, or theme ranking) over mart outputs.",
-    )
-    def research_report(request: ResearchReportToolRequest) -> ResearchReport:
-        return build_research_report(_report_request(request), active_research, context=_owner_access_context())
-
-    @server.tool(
-        name="research_report_markdown",
-        description="Render the deterministic research report of a request as Markdown with value, period, confidence and trace.",
-    )
-    def research_report_markdown(request: ResearchReportToolRequest) -> ResearchReportMarkdown:
-        report = build_research_report(_report_request(request), active_research, context=_owner_access_context())
-        return ResearchReportMarkdown(
-            report_id=report.report_id,
-            schema_version=report.schema_version,
-            markdown=render_report_markdown(report),
+        if req.node_key is not None and metric_node_repository is not None:
+            return active_metric_node.latest(node_key=req.node_key, issuer_id=req.issuer_id, limit=req.limit)
+        if req.node_key is not None and req.universe is None and req.cutoff is None:
+            return active_metric_node.latest(node_key=req.node_key, issuer_id=req.issuer_id, limit=req.limit)
+        return load_wide_panel_coverage(
+            _owner_access_context(),
+            strategy_id=req.strategy_id,
+            universe=req.universe,
+            cutoff=req.cutoff,
+            node_key=req.node_key,
+            issuer_id=req.issuer_id,
+            limit=req.limit,
         )
 
     @server.tool(
-        name="research_card",
-        description="Render a versioned research card via the unified OpenAPI/MCP card service.",
+        name="panel_macro",
+        description="Read U.S. Treasury par yield curve freshness and 12-month macro series history.",
     )
-    def research_card(request: ResearchCardToolRequest) -> ResearchCard:
+    def panel_macro() -> MacroPanelResponse:
+        return load_macro_curve()
+
+    # --- Domain 2: strategy (3) ---
+
+    @server.tool(
+        name="strategy_rankings",
+        description="Read the latest governed strategy rankings and definition review_state from mart.",
+    )
+    def strategy_rankings(request: StrategyRankingsToolRequest) -> StrategyRunReport | StrategyRunUnavailable:
+        return active_repository.get_latest(strategy_id=request.strategy_id, context=_owner_access_context())
+
+    @server.tool(
+        name="strategy_backtests",
+        description="List governed backtest execution runs and performance summaries from mart.",
+    )
+    def strategy_backtests(request: StrategyBacktestsToolRequest) -> dict[str, Any]:
+        return active_backtest.get_backtest_report(strategy_key=request.strategy_key, limit=request.limit)
+
+    @server.tool(
+        name="strategy_backtest_detail",
+        description="Read a governed backtest run's valuations, trades, and stored limitations from mart.",
+    )
+    def strategy_backtest_detail(request: StrategyBacktestDetailToolRequest) -> dict[str, Any]:
+        return active_backtest.get_backtest_report(run_id=request.run_id)
+
+    # --- Domain 3: entities (6) ---
+
+    @server.tool(
+        name="entities_holdings",
+        description="Read an ETF virtual-company consolidation profile and holdings valuation from mart.",
+    )
+    def entities_holdings(request: EntitiesHoldingsToolRequest) -> dict[str, Any]:
+        return active_etf_profile.get_etf_profile(fund_id=request.fund_id)
+
+    @server.tool(
+        name="entities_themes",
+        description="Read the theme purity leaderboard ranking the purest issuers under a thematic definition.",
+    )
+    def entities_themes(request: EntitiesThemesToolRequest) -> dict[str, Any]:
+        return active_theme_purity.get_leaderboard(theme_id=request.theme_id, limit=request.limit)
+
+    @server.tool(
+        name="entities_trace",
+        description="Resolve a strategy decision output to its mart.metric_node_values and source lineage.",
+    )
+    def entities_trace(request: EntitiesTraceToolRequest) -> TraceResponse:
+        return get_trace(_owner_access_context(), issuer_id=request.issuer_id, cutoff=request.cutoff)
+
+    @server.tool(
+        name="entities_supply_chain",
+        description="Read module 3 supply-chain exposure of an issuer from the governed head in mart.served_head.",
+    )
+    def entities_supply_chain(
+        request: EntitiesIssuerModuleToolRequest,
+    ) -> SupplyChainExposure | IssuerModuleUnavailable:
+        return _handle_issuer_module(
+            active_modules.supply_chain_exposure,
+            SupplyChainExposure,
+            "supply_chain_exposure",
+            request.issuer_id,
+            "entities_supply_chain",
+        )
+
+    @server.tool(
+        name="entities_analyst_ratings",
+        description="Read module 4 analyst consensus of an issuer from the governed head in mart.served_head.",
+    )
+    def entities_analyst_ratings(request: EntitiesIssuerModuleToolRequest) -> AnalystRatings | IssuerModuleUnavailable:
+        return _handle_issuer_module(
+            active_modules.analyst_ratings,
+            AnalystRatings,
+            "analyst_ratings",
+            request.issuer_id,
+            "entities_analyst_ratings",
+        )
+
+    @server.tool(
+        name="entities_detail",
+        description="Read an issuer's 360 profile across GPPE, valuation tier, valuation gap, PEG, and theme purity.",
+    )
+    def entities_detail(request: EntitiesDetailToolRequest) -> dict[str, Any]:
+        return active_company_profile.get_company_profile(issuer_id=request.issuer_id)
+
+    # --- Domain 4: library (5) ---
+
+    @server.tool(
+        name="library_report",
+        description="Assemble a deterministic research report (JSON or Markdown) over mart outputs.",
+    )
+    def library_report(request: LibraryReportToolRequest) -> LibraryReportResponse:
+        return build_library_report(
+            _owner_access_context(),
+            report_kind=request.report_kind,
+            target_entity_ids=request.target_entity_ids,
+            cutoff_at=request.cutoff_at,
+            section_kinds=request.section_kinds,
+            strategy_id=request.strategy_id,
+            title=request.title,
+            output_format=request.format,
+            research_repo=active_research,
+        )
+
+    @server.tool(
+        name="library_card_export",
+        description="Render a versioned 1080x1440 research card via the unified OpenAPI/MCP card service.",
+    )
+    def library_card_export(request: LibraryCardExportToolRequest) -> ResearchCard:
         report_req = _card_report_request(request)
         exported = export_or_render_card(
             _owner_access_context(),
@@ -367,60 +502,36 @@ def build_mcp_server(
         )
 
     @server.tool(
-        name="company_360_profile",
-        description="Read an issuer's 360 profile across GPPE, valuation tier, valuation gap, PEG, and theme purity.",
+        name="library_documents_list",
+        description="List owner-scoped research documents and archived cards from app.research_documents.",
     )
-    def company_360_profile(request: CompanyProfileToolRequest) -> dict[str, Any]:
-        return active_company_profile.get_company_profile(issuer_id=request.issuer_id)
-
-    @server.tool(
-        name="theme_purity_leaderboard",
-        description="Read the theme purity leaderboard ranking the purest issuers under a thematic definition.",
-    )
-    def theme_purity_leaderboard(request: ThemePurityToolRequest) -> dict[str, Any]:
-        return active_theme_purity.get_leaderboard(theme_id=request.theme_id, limit=request.limit)
-
-    @server.tool(
-        name="etf_virtual_company_profile",
-        description="Read an ETF virtual-company consolidation profile and holdings valuation from mart.",
-    )
-    def etf_virtual_company_profile(request: EtfProfileToolRequest) -> dict[str, Any]:
-        return active_etf_profile.get_etf_profile(fund_id=request.fund_id)
-
-    @server.tool(
-        name="issuer_supply_chain_exposure",
-        description="Read module 3 supply-chain exposure of an issuer from the governed head in mart.served_head.",
-    )
-    def issuer_supply_chain_exposure(request: IssuerModuleToolRequest) -> SupplyChainExposure | IssuerModuleUnavailable:
-        return _handle_issuer_module(
-            active_modules.supply_chain_exposure,
-            SupplyChainExposure,
-            "supply_chain_exposure",
-            request.issuer_id,
-            "issuer_supply_chain_exposure",
+    def library_documents_list(request: LibraryDocumentsListToolRequest | None = None) -> DocumentListResponse:
+        req = request or LibraryDocumentsListToolRequest()
+        return list_documents(
+            _owner_access_context(),
+            limit=req.limit,
+            before_created_at=req.before_created_at,
+            before_document_id=req.before_document_id,
         )
 
     @server.tool(
-        name="issuer_analyst_ratings",
-        description="Read module 4 analyst consensus of an issuer from the governed head in mart.served_head.",
+        name="library_document_create",
+        description="Persist an owner-scoped research document revision in app.research_documents and S3.",
     )
-    def issuer_analyst_ratings(request: IssuerModuleToolRequest) -> AnalystRatings | IssuerModuleUnavailable:
-        return _handle_issuer_module(
-            active_modules.analyst_ratings,
-            AnalystRatings,
-            "analyst_ratings",
-            request.issuer_id,
-            "issuer_analyst_ratings",
+    def library_document_create(request: LibraryDocumentCreateToolRequest) -> CreateDocumentResponse:
+        return create_document(
+            _owner_access_context(),
+            source_artifact_id=request.source_artifact_id,
+            content_bytes=request.content.encode("utf-8"),
+            content_type=request.content_type,
         )
 
     @server.tool(
-        name="governed_backtest",
-        description="Read governed backtest execution runs, performance metrics, valuations and simulated trades from mart.",
+        name="library_document_detail",
+        description="Read an owner-scoped research document's revisions and latest content.",
     )
-    def governed_backtest(request: BacktestToolRequest) -> dict[str, Any]:
-        return active_backtest.get_backtest_report(
-            run_id=request.run_id, strategy_key=request.strategy_key, limit=request.limit
-        )
+    def library_document_detail(request: LibraryDocumentDetailToolRequest) -> DocumentDetailResponse | None:
+        return get_document_detail(_owner_access_context(), document_id=request.document_id)
 
     return server
 

@@ -18,7 +18,8 @@ from typing import Any
 
 import psycopg
 import pytest
-from llm_service.mcp_server import ResearchReportMarkdown, build_mcp_server
+from llm_service.mcp_server import build_mcp_server
+from llm_service.services.library_service import LibraryReportResponse
 from mcp.shared.memory import create_connected_server_and_client_session
 from truealpha_runtime.access import AccessContext, AuthenticationMethod, PrincipalKind
 from truealpha_runtime.research_report import (
@@ -100,8 +101,8 @@ async def test_the_module_tools_answer_the_served_row_the_app_shows(database: ps
     _SEED.seed_module_rows(database)
     _SEED.seed_served_head(database)
 
-    assert await _call("issuer_supply_chain_exposure", CANON["issuer_id"]) == CANON["supply_chain_exposure"]["expected"]
-    assert await _call("issuer_analyst_ratings", CANON["issuer_id"]) == CANON["analyst_ratings"]["expected"]
+    assert await _call("entities_supply_chain", CANON["issuer_id"]) == CANON["supply_chain_exposure"]["expected"]
+    assert await _call("entities_analyst_ratings", CANON["issuer_id"]) == CANON["analyst_ratings"]["expected"]
 
 
 @pytest.mark.anyio
@@ -109,8 +110,8 @@ async def test_no_served_run_is_a_typed_unavailable_answer(database: psycopg.Con
     _SEED.seed_module_rows(database)
 
     for name, module in (
-        ("issuer_supply_chain_exposure", "supply_chain_exposure"),
-        ("issuer_analyst_ratings", "analyst_ratings"),
+        ("entities_supply_chain", "supply_chain_exposure"),
+        ("entities_analyst_ratings", "analyst_ratings"),
     ):
         assert await _call(name, CANON["issuer_id"]) == {
             "issuer_id": CANON["issuer_id"],
@@ -135,7 +136,7 @@ async def test_a_failed_read_is_a_tool_error_not_an_empty_answer() -> None:
     server = build_mcp_server(issuer_module_reader=_FailingModules())
     async with create_connected_server_and_client_session(server._mcp_server) as client:
         await client.initialize()
-        for name in ("issuer_supply_chain_exposure", "issuer_analyst_ratings"):
+        for name in ("entities_supply_chain", "entities_analyst_ratings"):
             result = await client.call_tool(name, {"request": {"issuer_id": "issuer:any"}})
             assert result.isError is True, f"{name} hid a failed read as an answer"
             text = " ".join(getattr(block, "text", "") for block in result.content)
@@ -176,10 +177,10 @@ async def test_the_markdown_tool_renders_the_report_of_the_same_request() -> Non
     server = build_mcp_server(repository=FixtureStrategyRunRepository(), research_repository=repository)
     request = {"report_kind": "company", "target_entity_ids": ["issuer:adm"], "cutoff_at": "2026-06-30T23:59:59Z"}
 
-    _content, rendered = await server.call_tool("research_report_markdown", {"request": request})  # type: ignore[misc]
-    _content, report = await server.call_tool("research_report", {"request": request})  # type: ignore[misc]
+    _content, rendered = await server.call_tool("library_report", {"request": {**request, "format": "markdown"}})  # type: ignore[misc]
+    _content, report = await server.call_tool("library_report", {"request": {**request, "format": "json"}})  # type: ignore[misc]
 
-    markdown = ResearchReportMarkdown.model_validate(rendered)
+    markdown = LibraryReportResponse.model_validate(rendered)
     expected = build_research_report(
         ResearchReportRequest(
             report_kind=ResearchReportKind.COMPANY,
@@ -191,5 +192,5 @@ async def test_the_markdown_tool_renders_the_report_of_the_same_request() -> Non
     )
     assert markdown.report_id == report["report_id"] == expected.report_id
     assert markdown.markdown == render_report_markdown(expected)
-    assert f"- Report ID: `{expected.report_id}`" in markdown.markdown
-    assert "### Supply-chain exposure" in markdown.markdown
+    assert f"- Report ID: `{expected.report_id}`" in (markdown.markdown or "")
+    assert "### Supply-chain exposure" in (markdown.markdown or "")
