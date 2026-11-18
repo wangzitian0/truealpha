@@ -572,8 +572,15 @@ def test_the_report_and_the_mart_agree_about_the_same_broken_run(connection) -> 
     store_flat_topt_series(connection, last=CUTOFF.date())
     core = PostgresToptCoreRepository(connection)
     snapshot = core.freeze_snapshot(run_id=plan.run_id, release_manifest_id=plan.release_manifest_id)
-    results = core.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate="0.05"))
-    unavailable = [result for result in results if result.availability.value == "unavailable"]
+    core.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate="0.05"))
+    unavailable = connection.execute(
+        """
+        select issuer_id
+        from mart.metric_node_values
+        where run_id = %s and node_key = 'gppe_uniform_charge_v0' and availability_status = 'unavailable'
+        """,
+        (plan.run_id,),
+    ).fetchall()
 
     report = quality_report.build_report(connection, plan.run_id, object_store=store)
 
@@ -1156,7 +1163,9 @@ def test_a_listing_whose_share_count_the_core_drops_is_not_complete_in_the_repor
 
         dropped = sorted(listing for listing, coordinate in plan.coordinates.items() if coordinate[3] == _NO_BAR_TICKER)
         assert len(dropped) == 1, "the fixture holds one listing of the symbol"
-        assert [result.availability.value for result in results].count("unavailable") == len(dropped)
+        assert [result.market_value_components[0].shares_outstanding.availability.value for result in results].count(
+            "unavailable"
+        ) == len(dropped)
         grade = report["factor_availability"]["gross_profit_per_employee"]
         assert grade["status"] == "computed"
         expected_complete = sorted(set(plan.coordinates))
