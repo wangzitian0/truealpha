@@ -591,7 +591,7 @@ def test_the_history_projector_converts_shares_by_the_cover_ratio_and_drops_unpa
     from data_engine.datahub.capture_core.concept_mapping import DEFAULT_RULESET
     from data_engine.datahub.standards.filing_extraction import FilingDocument
     from data_engine.datahub.strategy_history import HistoryIssuer, LastClose, project_issuer_rows
-    from factors.production_topt import OperatingBranch
+    from factors.snapshot_inputs import OperatingBranch
 
     cutoff = datetime(2026, 4, 1, tzinfo=UTC)
     close = LastClose(Decimal("40"), Decimal("0.90"), datetime(2026, 3, 31, 20, 0, tzinfo=UTC))
@@ -808,7 +808,7 @@ def test_multi_class_shares_convert_by_tagged_ratio_and_refuse_missing_class_rat
     )
     from data_engine.datahub.standards import filing_extraction
     from data_engine.datahub.standards.filing_extraction import FilingDocument
-    from factors.production_topt import OperatingBranch
+    from factors.snapshot_inputs import OperatingBranch
 
     def _base_facts(*, segmented: bool) -> dict[str, Any]:
         dei_shares: list[dict[str, Any]] = [

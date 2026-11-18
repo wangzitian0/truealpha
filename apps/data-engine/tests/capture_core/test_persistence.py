@@ -55,7 +55,7 @@ from data_engine.datahub.capture_core.source_registrations import (
     MOOMOO_KLINE_PARSER_VERSION,
 )
 from data_engine.datahub.evidence_graph_repository import PostgresEvidenceGraphRepository
-from factors.production_topt import GppeV0Definition, OperatingBranch
+from factors.snapshot_inputs import GppeV0Definition, OperatingBranch
 from truealpha_contracts.models import DataSource, RawCapture, RawIngestionEnvelope
 from truealpha_runtime import reconciliation_policies
 from truealpha_runtime.testing import InMemoryRawObjectStore as _InMemoryObjectStore

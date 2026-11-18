@@ -47,7 +47,7 @@ from data_engine.datahub.oracle_outcomes import (
 from data_engine.lanes import quality
 from data_engine.quality import nightly_verdicts, vendor_oracle
 from data_engine.sources import gateway
-from factors.production_topt import (
+from factors.snapshot_inputs import (
     MetricAvailability,
     MetricFreshness,
     OperatingBranch,

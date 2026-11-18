@@ -13,7 +13,7 @@ from data_engine.datahub.capture_core.sec_financial_adapter import build_bundle
 from factors.base.peg import peg
 from factors.composite.strategy_evaluator import IssuerInput, evaluate_cutoff
 from factors.panel import IssuerClass
-from factors.production_topt import OperatingBranch
+from factors.snapshot_inputs import OperatingBranch
 from factors.types import Fact, GrowthConvention, UnitFamily
 from truealpha_contracts.strategy import load_live_strategy_definition
 

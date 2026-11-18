@@ -76,7 +76,7 @@ from data_engine.datahub.quality_report import (
 from data_engine.sources import gateway
 from data_engine.sources import moomoo as mm
 from data_engine.sources import moomoo_ledger as ledger
-from factors.production_topt import OperatingBranch
+from factors.snapshot_inputs import OperatingBranch
 from truealpha_contracts.models import DataSource
 from truealpha_runtime.reconciliation import ReconciliationOutcome
 from truealpha_runtime.reconciliation_policies import (

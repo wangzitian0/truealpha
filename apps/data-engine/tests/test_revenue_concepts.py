@@ -34,7 +34,7 @@ from data_engine.datahub.capture_core.sec_financial_adapter import (
 )
 from data_engine.datahub.standards import segment_extraction
 from data_engine.quality import vendor_oracle
-from factors.production_topt import OperatingBranch
+from factors.snapshot_inputs import OperatingBranch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "support"))
 from sec_route import served_financial_record  # noqa: E402

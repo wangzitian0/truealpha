@@ -55,7 +55,7 @@ from data_engine.datahub.strategy_history import (
     run_strategy_history,
 )
 from data_engine.strategy_backtest_gateway import StrategyBacktestGateway
-from factors.production_topt import OperatingBranch
+from factors.snapshot_inputs import OperatingBranch
 from truealpha_contracts.fiscal_period import parse_annual
 from truealpha_contracts.models import DataSource, RawCapture, RawIngestionEnvelope, RawObjectRef
 

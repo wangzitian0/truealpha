@@ -144,7 +144,7 @@ def _materialize_head(
     connection: psycopg.Connection[Any], plan: Any, universe_prefix: str
 ) -> question_coverage.GovernedHead:
     from data_engine.datahub.capture_core import PostgresToptCoreRepository
-    from factors.production_topt import GppeV0Definition
+    from factors.snapshot_inputs import GppeV0Definition
 
     core = PostgresToptCoreRepository(connection)
     snapshot = core.freeze_snapshot(run_id=plan.run_id, release_manifest_id=plan.release_manifest_id)

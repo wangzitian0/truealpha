@@ -25,7 +25,7 @@ import psycopg
 import pytest
 from data_engine.contracts.datahub import SourceRequest
 from data_engine.datahub.capture_core import PostgresToptCoreRepository, composition
-from factors.production_topt import GppeV0Definition
+from factors.snapshot_inputs import GppeV0Definition
 from truealpha_contracts.common import CaptureEnvironment, canonical_sha256
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))

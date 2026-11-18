@@ -11,7 +11,7 @@ from datetime import date
 from typing import Any
 
 import httpx
-from factors.production_topt import OperatingBranch
+from factors.snapshot_inputs import OperatingBranch
 
 from data_engine.sources import sec
 from data_engine.sources.gateway import CapacityExceeded

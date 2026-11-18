@@ -51,13 +51,15 @@ METRICS: dict[str, MetricSpec] = {
 }
 INPUT_KEY_ALIASES: dict[str, str] = dict(_REG["input_key_aliases"])
 PHYSICALLY_NON_NEGATIVE: Mapping[str, str] = MappingProxyType(_REG["physically_non_negative"])
-_METRIC_NODE_COLUMNS = MappingProxyType(
+_GPPE = MappingProxyType(
     {
         "gppe_uniform_charge_v0": "gppe_uniform_charge_v0",
+        "gppe_banking_tce_v1": "gppe_banking_tce_v1",
         "capital_adjusted_gross_profit": "capital_adjusted_gross_profit",
+        "capital_adjusted_tce": "capital_adjusted_tce",
     }
 )
-PUBLISHED_COLUMNS: Mapping[str, Mapping[str, str]] = MappingProxyType({"mart.metric_node_values": _METRIC_NODE_COLUMNS})
+PUBLISHED_COLUMNS: Mapping[str, Mapping[str, str]] = MappingProxyType({"mart.metric_node_values": _GPPE})
 
 
 def is_registered_input_key(input_key: str) -> bool:

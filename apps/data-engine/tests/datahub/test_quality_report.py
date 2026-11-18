@@ -35,7 +35,7 @@ from data_engine.datahub.quality_report import (
     persist,
 )
 from data_engine.datahub.share_basis import SplitHistory, Unavailable
-from factors.production_topt import OperatingBranch
+from factors.snapshot_inputs import OperatingBranch
 from truealpha_contracts.models import RawObjectRef
 
 
@@ -94,7 +94,7 @@ def test_a_payload_that_yields_no_number_is_not_usable() -> None:
     assert not _has_usable_value("financial-fact", {**_FINANCIAL, "gross_profit": None})
     assert not _has_usable_value("financial-fact", {**_FINANCIAL, "headcount": None})
     assert not _has_usable_value("financial-fact", {**_FINANCIAL, "total_assets": None})
-    assert not _has_usable_value("financial-fact", {**_FINANCIAL, "revenue": None})
+    assert _has_usable_value("financial-fact", {**_FINANCIAL, "revenue": None})
     assert not _has_usable_value("financial-fact", {**_FINANCIAL, "shares_outstanding": None})
 
 
@@ -242,31 +242,69 @@ _SHARE_HISTORIES = {
 
 
 @pytest.mark.parametrize("histories", _SHARE_HISTORIES.values(), ids=_SHARE_HISTORIES.keys())
-def test_financial_fact_usability_matches_topt_core_availability_across_branches_and_fields(histories) -> None:
-    """SSOT guard (#434): the report's decision on a `financial-fact` observation and `compute_topt_core`
+def test_financial_fact_usability_matches_strategy_evaluator_availability_across_branches_and_fields(histories) -> None:
+    """SSOT guard (#434): the report's decision on a `financial-fact` observation and `evaluate_cutoff`
     must agree on every `OperatingBranch`, every nullable field of `FinancialFactPayload`, and every
     verdict on the share count (#1346). The report reads the verdict of the frozen snapshot. It does not
     decide it.
     """
     from datetime import UTC, datetime
     from decimal import Decimal
+    from typing import Any
 
     from data_engine.datahub.capture_core.materialization import (
         PostgresToptCoreRepository,
         ToptCoreSnapshot,
         _ObservationRow,
     )
-    from factors.production_topt import (
-        GppeV0Definition,
-        MetricAvailability,
-        MetricFreshness,
-        compute_topt_core,
-        compute_topt_gppe,
-    )
+    from factors.composite.strategy_evaluator import IssuerInput, evaluate_cutoff
+    from factors.panel import IssuerClass
+    from factors.snapshot_inputs import MetricAvailability, MetricFreshness
     from truealpha_contracts.strategy import load_live_strategy_definition
 
+    def _to_issuer_input(fi: Any) -> IssuerInput:
+        records: dict[str, tuple[Decimal, Decimal]] = {}
+        knowable: dict[str, datetime] = {}
+        for key, m in (
+            ("gross_profit", fi.gross_profit),
+            ("total_assets", fi.total_assets),
+            ("headcount", fi.headcount),
+            ("revenue", fi.revenue),
+            ("pre_provision_profit", fi.pre_provision_profit),
+            *fi.inputs.items(),
+        ):
+            if key == "gross_profit" and fi.operating_branch == OperatingBranch.FINANCIAL:
+                continue
+            if m is not None and m.availability is MetricAvailability.AVAILABLE and m.value is not None:
+                records[key] = (m.value, m.confidence)
+                knowable[key] = m.knowable_at
+        if fi.market_value_components:
+            comp = fi.market_value_components[0]
+            if (
+                comp.market_price is not None
+                and comp.market_price.availability is MetricAvailability.AVAILABLE
+                and comp.market_price.value is not None
+            ):
+                records["last_close"] = (comp.market_price.value, comp.market_price.confidence)
+                knowable["last_close"] = comp.market_price.knowable_at
+            if (
+                comp.shares_outstanding is not None
+                and comp.shares_outstanding.availability is MetricAvailability.AVAILABLE
+                and comp.shares_outstanding.value is not None
+            ):
+                records["shares_outstanding"] = (
+                    comp.shares_outstanding.value,
+                    comp.shares_outstanding.confidence,
+                )
+                knowable["shares_outstanding"] = comp.shares_outstanding.knowable_at
+        return IssuerInput(
+            issuer_id=fi.issuer_id,
+            records=records,
+            knowable_at=knowable,
+            issuer_class=IssuerClass(fi.operating_branch.value),
+        )
+
     cutoff = datetime(2026, 8, 14, 21, 0, tzinfo=UTC)
-    gppe_def = GppeV0Definition(risk_free_rate=Decimal("0.04"))
     tier_def = load_live_strategy_definition()
     identity_payload = {
         "issuer_id": "issuer:lei:5493000C01ZX7D35SD85",
@@ -378,19 +416,13 @@ def test_financial_fact_usability_matches_topt_core_availability_across_branches
                 members=(member,),
             )
             (factor_input,) = snapshot.factor_inputs()
-            gppe_res = compute_topt_gppe(
-                factor_input,
-                invocation_id="topt-gppe-invocation:" + "4" * 64,
-                gppe_definition=gppe_def,
+            [decision] = evaluate_cutoff(
+                [_to_issuer_input(factor_input)],
                 definition=tier_def,
+                cutoff_at=cutoff,
+                risk_free_rate=Decimal("0.04"),
             )
-            core_res = compute_topt_core(
-                factor_input,
-                gppe_res,
-                invocation_id="topt-core-invocation:" + "5" * 64,
-                definition=tier_def,
-            )
-            core_available = core_res.availability == MetricAvailability.AVAILABLE
+            core_available = decision.exclusion_reason is None
             if histories == _SHARE_HISTORIES["series-prove-no-split"]:
                 assert _has_usable_value("financial-fact", fin_payload) is core_available, (
                     branch,

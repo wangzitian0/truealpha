@@ -113,7 +113,7 @@ def test_the_fixtures_hold_the_old_figures_that_the_route_must_not_serve() -> No
 def test_the_utility_total_never_replaces_the_figure_of_an_earlier_concept_for_the_same_period() -> None:
     """The utility concept is the last synonym. For one period, the earlier concept keeps its value."""
     from data_engine.datahub.capture_core.sec_financial_adapter import build_bundle
-    from factors.production_topt import OperatingBranch
+    from factors.snapshot_inputs import OperatingBranch
 
     def annual(value: int) -> dict:
         row = {"start": "2025-01-01", "end": "2025-12-31", "val": value, "filed": "2026-02-10"}

@@ -460,7 +460,7 @@ def test_rows_are_the_governed_runs_members_under_the_ids_the_run_gives_them(con
     from data_engine.datahub.capture_core import PostgresToptCoreRepository
     from data_engine.datahub.capture_core.theme_purity import governed_members
     from data_engine.datahub.question_coverage import gppe_cells, theme_purity_cells
-    from factors.production_topt import GppeV0Definition
+    from factors.snapshot_inputs import GppeV0Definition
 
     # Undone after the test, unlike a bare sys.path.insert (review on #829).
     monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1]))
@@ -516,7 +516,7 @@ def test_a_run_that_fetched_unchanged_bytes_still_resolves_every_member(connecti
     from data_engine.datahub.capture_core import PostgresToptCoreRepository
     from data_engine.datahub.capture_core.theme_purity import governed_members
     from data_engine.datahub.question_coverage import gppe_cells
-    from factors.production_topt import GppeV0Definition
+    from factors.snapshot_inputs import GppeV0Definition
 
     monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1]))
     import capture_core.test_persistence as persistence  # noqa: E402

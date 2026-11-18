@@ -21,11 +21,11 @@ from factors.panel import (
     operating_numerator_node,
     required_inputs,
 )
-from factors.production_topt import OperatingBranch
+from factors.snapshot_inputs import OperatingBranch
 from pydantic import ValidationError
 from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.models import RawObjectRef
-from truealpha_contracts.strategy import load_live_strategy_definition
+from truealpha_contracts.strategy import ValuationBasis, load_live_strategy_definition
 from truealpha_contracts.universe import SubjectKind, SubjectRef
 from truealpha_runtime import S3RawObjectStore
 from truealpha_runtime.reconciliation import (
@@ -142,11 +142,17 @@ def _factor_availability(
 @functools.cache
 def _core_payload_fields(branch: OperatingBranch) -> tuple[str, ...]:
     issuer_class = IssuerClass(branch.value)
+    definition = load_live_strategy_definition()
     fields = (
         node.alias(AliasKind.TOPT_SNAPSHOT_FIELD)
-        for node in required_inputs(bound_tree(load_live_strategy_definition(), issuer_class), issuer_class)
+        for node in required_inputs(bound_tree(definition, issuer_class), issuer_class)
     )
-    return tuple(field for field in fields if field is not None)
+    extra = (
+        ("revenue", "shares_outstanding")
+        if definition.valuation_basis is ValuationBasis.PRICE_TO_SALES
+        else ("shares_outstanding",)
+    )
+    return (*tuple(field for field in fields if field is not None), *extra)
 
 
 def _has_usable_value(semantic_type: str, payload: dict[str, Any] | None) -> bool:
@@ -160,10 +166,7 @@ def _has_usable_value(semantic_type: str, payload: dict[str, Any] | None) -> boo
             return MarketPricePayload.model_validate(payload).close is not None
         if semantic_type == "financial-fact":
             fact = FinancialFactPayload.model_validate(payload)
-            return all(
-                getattr(fact, n) is not None
-                for n in (*_core_payload_fields(fact.operating_branch), "revenue", "shares_outstanding")
-            )
+            return all(getattr(fact, n) is not None for n in _core_payload_fields(fact.operating_branch))
     except ValidationError:
         return False
     return False

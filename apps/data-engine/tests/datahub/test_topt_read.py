@@ -10,7 +10,7 @@ from data_engine.config import settings
 from data_engine.datahub import quality_report
 from data_engine.datahub.a1_evidence import register_run_evidence
 from data_engine.datahub.capture_core import PostgresToptCoreRepository
-from factors.production_topt import GppeV0Definition
+from factors.snapshot_inputs import GppeV0Definition
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from capture_core.test_materialization import _CORPUS_OBJECTIVES, _seed_complete_production_run  # noqa: E402

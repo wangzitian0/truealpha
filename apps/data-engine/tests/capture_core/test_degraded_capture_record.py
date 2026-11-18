@@ -67,7 +67,7 @@ from data_engine.datahub.capture_core.sec_financial_adapter import (
     SecFinancialFactAdapter,
     SecTarget,
 )
-from factors.production_topt import OperatingBranch
+from factors.snapshot_inputs import OperatingBranch
 from truealpha_runtime.testing import InMemoryRawObjectStore as _InMemoryObjectStore
 from truealpha_runtime.testing import isolated_test_database
 

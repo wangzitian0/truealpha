@@ -13,7 +13,7 @@ import json
 from pathlib import Path
 
 from data_engine.datahub.capture_core.materialization import SnapshotMember, ToptCoreSnapshot
-from factors.production_topt import TCE_SNAPSHOT_FIELDS
+from factors.snapshot_inputs import TCE_SNAPSHOT_FIELDS
 from truealpha_contracts.common import canonical_sha256
 
 _FIXTURE = json.loads(

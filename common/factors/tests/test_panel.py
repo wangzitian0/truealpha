@@ -48,17 +48,6 @@ from factors.panel import (
     tree_id_for,
     variant_sha256,
 )
-from factors.production_topt import (
-    GppeV0Definition,
-    MetricAvailability,
-    MetricFreshness,
-    OperatingBranch,
-    ToptCellQualityInput,
-    ToptCoreSnapshotInput,
-    ToptMarketValueComponent,
-    ToptMetricInput,
-    compute_topt_gppe,
-)
 
 D = Decimal
 
@@ -419,78 +408,6 @@ def test_gppe_v0_tree_reproduces_v020_golden_decimals(
     assert ev.values["capital_adjusted_gross_profit"] == (
         None if expected_cap_adj is None else expected_cap_adj.normalize()
     )
-
-
-@pytest.mark.parametrize("case", sorted(GOLDEN_TOPT_GPPE))
-def test_compute_topt_gppe_reproduces_the_pre_forest_result_identity(case: str) -> None:
-    from datetime import UTC, datetime, timedelta
-
-    from truealpha_contracts.strategy import load_live_strategy_definition
-
-    (branch, gross_profit, ppnr, assets, headcount, rate), result_id, gppe = GOLDEN_TOPT_GPPE[case]
-    cutoff = datetime(2026, 9, 16, tzinfo=UTC)
-    known = cutoff - timedelta(days=1)
-    obs_ids = tuple(f"normalized-observation:{ch * 64}" for ch in "1234")
-
-    def _m(metric: str, val: str | None, *, input_id: str = obs_ids[0]) -> ToptMetricInput:
-        return ToptMetricInput(
-            input_id=input_id,
-            metric=metric,
-            value=val,
-            confidence="0.9",
-            knowable_at=known,
-            freshness=MetricFreshness.FRESH,
-            availability=MetricAvailability.AVAILABLE if val is not None else MetricAvailability.UNAVAILABLE,
-        )
-
-    leaves = JPM_TCE_LEAVES if branch == "financial" else {}
-    snap = ToptCoreSnapshotInput.model_validate(
-        {
-            "snapshot_id": f"topt-core-snapshot:{'a' * 64}",
-            "run_id": f"capture-run:{'b' * 64}",
-            "release_manifest_id": f"release-manifest:{'c' * 64}",
-            "universe_id": "universe:topt-candidate-v1",
-            "universe_version": "2026-03-31-v1",
-            "universe_sha256": "d" * 64,
-            "cutoff": cutoff,
-            "issuer_id": "issuer:example",
-            "instrument_id": "instrument:example",
-            "listing_id": "listing:example",
-            "operating_branch": OperatingBranch(branch),
-            "observation_ids": obs_ids,
-            "cell_inputs": tuple(
-                ToptCellQualityInput(
-                    input_id=oid,
-                    confidence="0.9",
-                    knowable_at=known,
-                    freshness=MetricFreshness.FRESH,
-                )
-                for oid in obs_ids
-            ),
-            "gross_profit": _m("gross_profit", gross_profit),
-            "pre_provision_profit": _m("pre_provision_profit", ppnr),
-            "total_assets": _m("total_assets", assets),
-            "headcount": _m("headcount", headcount),
-            "revenue": _m("revenue", "100000000"),
-            **{name: _m(name, value) for name, value in leaves.items()},
-            "market_value_components": (
-                ToptMarketValueComponent(
-                    instrument_id="instrument:example",
-                    listing_id="listing:example",
-                    market_price=_m("market_price", "40", input_id=obs_ids[1]),
-                    shares_outstanding=_m("shares_outstanding", "10000000", input_id=obs_ids[0]),
-                ),
-            ),
-        }
-    )
-    res = compute_topt_gppe(
-        snap,
-        invocation_id=f"topt-gppe-invocation:{'f' * 64}",
-        gppe_definition=GppeV0Definition(risk_free_rate=rate),
-        definition=load_live_strategy_definition(),
-    )
-    assert (None if res.gppe is None else str(res.gppe)) == gppe
-    assert res.result_id == result_id
 
 
 def test_must_be_non_negative_is_reserved_for_physical_quantities_and_judge_sign_enforces_it() -> None:

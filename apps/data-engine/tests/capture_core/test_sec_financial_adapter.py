@@ -31,21 +31,12 @@ from data_engine.datahub.capture_core.sec_financial_adapter import (
     pre_provision_profit,
     sec_financial_fetcher,
 )
-from factors.production_topt import (
-    GppeV0Definition,
-    MetricAvailability,
-    MetricFreshness,
+from factors.composite.strategy_evaluator import IssuerInput, evaluate_cutoff
+from factors.panel import IssuerClass
+from factors.snapshot_inputs import (
     OperatingBranch,
-    ToptCellQualityInput,
-    ToptCoreAvailability,
-    ToptCoreReasonCode,
-    ToptCoreSnapshotInput,
-    ToptGppeResult,
-    ToptMarketValueComponent,
-    ToptMetricInput,
-    compute_topt_gppe,
 )
-from truealpha_contracts.strategy import load_live_strategy_definition
+from truealpha_contracts.strategy import ExclusionReason, load_live_strategy_definition
 
 _CUTOFF = date(2026, 3, 31)
 
@@ -1630,8 +1621,8 @@ def _bkng_shaped_facts(*, gross_profit_end: str, gross_profit_filed: str) -> dic
     }
 
 
-def _gppe_for_facts(facts: dict) -> tuple[FetchSuccess, ToptGppeResult]:
-    """Run the adapter and then module 2 on one company-facts document, as the pipeline does."""
+def _gppe_for_facts(facts: dict) -> tuple[FetchSuccess, Any]:
+    """Run the adapter and then the strategy evaluator on one company-facts document."""
     item = _work_item("7" * 64)
     headcount = HeadcountFact(value=Decimal("24000"), knowable_at=datetime(2026, 2, 25, tzinfo=UTC))
     adapter = SecFinancialFactAdapter(
@@ -1643,74 +1634,36 @@ def _gppe_for_facts(facts: dict) -> tuple[FetchSuccess, ToptGppeResult]:
     assert isinstance(result, FetchSuccess)
     financial = FinancialFactPayload(**result.record.payload)
     cutoff = datetime(2026, 4, 2, tzinfo=UTC)
-    observation_ids = tuple(f"normalized-observation:{character * 64}" for character in "1234")
 
     from data_engine.datahub.input_cells import _evaluate_sec_field_confidence
 
     sec_conf = _evaluate_sec_field_confidence("gross_profit", result.record.payload)
-
-    def metric(name: str, value: Decimal | None) -> ToptMetricInput:
-        return ToptMetricInput(
-            input_id=observation_ids[0],
-            metric=name,
-            value=value,
-            confidence=sec_conf,
-            knowable_at=cutoff - timedelta(days=1),
-            freshness=MetricFreshness.FRESH,
-            availability=MetricAvailability.AVAILABLE if value is not None else MetricAvailability.UNAVAILABLE,
-        )
-
-    snapshot = ToptCoreSnapshotInput(
-        snapshot_id=f"topt-core-snapshot:{'a' * 64}",
-        run_id=f"capture-run:{'b' * 64}",
-        release_manifest_id=f"release-manifest:{'c' * 64}",
-        universe_id="universe:test",
-        universe_version="1",
-        universe_sha256="d" * 64,
-        cutoff=cutoff,
+    when = cutoff - timedelta(days=1)
+    records: dict[str, tuple[Decimal, Decimal]] = {"last_close": (Decimal("5000"), Decimal("0.9"))}
+    knowable: dict[str, datetime] = {"last_close": when}
+    for key, val in (
+        ("gross_profit", financial.gross_profit),
+        ("total_assets", financial.total_assets),
+        ("headcount", financial.headcount),
+        ("revenue", financial.revenue),
+        ("shares_outstanding", financial.shares_outstanding),
+    ):
+        if val is not None:
+            records[key] = (val, sec_conf)
+            knowable[key] = when
+    issuer = IssuerInput(
         issuer_id=financial.issuer_id,
-        instrument_id=financial.instrument_id,
-        listing_id=financial.listing_id,
-        operating_branch=OperatingBranch.NON_FINANCIAL,
-        observation_ids=observation_ids,
-        cell_inputs=tuple(
-            ToptCellQualityInput(
-                input_id=input_id,
-                confidence=sec_conf,
-                knowable_at=cutoff - timedelta(days=1),
-                freshness=MetricFreshness.FRESH,
-            )
-            for input_id in observation_ids
-        ),
-        gross_profit=metric("gross_profit", financial.gross_profit),
-        total_assets=metric("total_assets", financial.total_assets),
-        headcount=metric("headcount", financial.headcount),
-        revenue=metric("revenue", financial.revenue),
-        pre_provision_profit=metric("pre_provision_profit", financial.pre_provision_profit),
-        market_value_components=(
-            ToptMarketValueComponent(
-                instrument_id=financial.instrument_id,
-                listing_id=financial.listing_id,
-                market_price=ToptMetricInput(
-                    input_id=observation_ids[1],
-                    metric="market_price",
-                    value=Decimal("5000"),
-                    confidence=Decimal("0.9"),
-                    knowable_at=cutoff - timedelta(days=1),
-                    freshness=MetricFreshness.FRESH,
-                    availability=MetricAvailability.AVAILABLE,
-                ),
-                shares_outstanding=metric("shares_outstanding", financial.shares_outstanding),
-            ),
-        ),
+        records=records,
+        knowable_at=knowable,
+        issuer_class=IssuerClass.NON_FINANCIAL,
     )
-    gppe = compute_topt_gppe(
-        snapshot,
-        invocation_id=f"topt-gppe-invocation:{'f' * 64}",
-        gppe_definition=GppeV0Definition(risk_free_rate="0.05"),
+    [decision] = evaluate_cutoff(
+        [issuer],
         definition=load_live_strategy_definition(),
+        cutoff_at=cutoff,
+        risk_free_rate=Decimal("0.05"),
     )
-    return result, gppe
+    return result, decision
 
 
 def test_a_gross_profit_older_than_the_revenue_period_makes_gppe_unavailable_with_a_reason() -> None:
@@ -1732,8 +1685,7 @@ def test_a_gross_profit_older_than_the_revenue_period_makes_gppe_unavailable_wit
     assert payload["operating_period_stale"] is True
     assert payload["stale_operating_period_end"] == "2017-12-31"
     assert result.confidence is None
-    assert gppe.availability is ToptCoreAvailability.UNAVAILABLE
-    assert gppe.reason_codes == (ToptCoreReasonCode.MISSING_GROSS_PROFIT,)
+    assert gppe.exclusion_reason is ExclusionReason.MISSING_GROSS_PROFIT_FACT
 
 
 def test_a_gross_profit_of_the_revenue_period_keeps_gppe_available() -> None:
@@ -1744,8 +1696,8 @@ def test_a_gross_profit_of_the_revenue_period_keeps_gppe_available() -> None:
 
     assert result.record.payload["gross_profit"] == "12681000000"
     assert "operating_period_stale" not in result.record.payload
-    assert gppe.availability is ToptCoreAvailability.AVAILABLE
-    assert gppe.reason_codes == ()
+    assert gppe.exclusion_reason is None
+    assert gppe.capital_adjusted_labor_efficiency is not None
 
 
 # --- #1176 step 2: banking tangible common equity from the SEC source gateway -----------------
@@ -2514,10 +2466,11 @@ def test_gbp_price_against_usd_filing_marks_only_that_listing_currency_mismatch_
                     (run_id,),
                 ).fetchall()
             )
-            core = {
+            node_rows = {
                 row[0]: (row[1], row[2])
                 for row in reader.execute(
-                    "select issuer_id, availability_status, reason_codes from mart.metric_node_values where run_id = %s and node_key = 'gppe_uniform_charge_v0'",
+                    "select issuer_id, availability_status, reason_codes from mart.metric_node_values "
+                    "where run_id = %s and node_key = 'gppe_uniform_charge_v0'",
                     (run_id,),
                 ).fetchall()
             }
@@ -2539,12 +2492,11 @@ def test_gbp_price_against_usd_filing_marks_only_that_listing_currency_mismatch_
         assert msft_comp["market_price"]["value"] is None
         assert msft_comp["market_price"]["unavailable_reason"] == "currency_mismatch"
         assert msft_comp["shares_outstanding"]["availability"] == "available"
-        assert core[msft_issuer] == ("available", [])
         assert decisions[msft_issuer] == "missing_market_value_input"
 
         other_available = [
             issuer_id
-            for issuer_id, (avail, _reasons) in core.items()
+            for issuer_id, (avail, _reasons) in node_rows.items()
             if issuer_id != msft_issuer and avail == "available"
         ]
         assert len(other_available) == 19

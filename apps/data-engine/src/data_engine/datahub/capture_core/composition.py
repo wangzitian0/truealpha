@@ -9,7 +9,7 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Any, NoReturn
 
 import psycopg
-from factors.production_topt import GppeV0Definition
+from factors.snapshot_inputs import GppeV0Definition
 from truealpha_contracts.common import CaptureEnvironment, canonical_sha256
 from truealpha_contracts.environment_contract import load_environment_contract
 from truealpha_contracts.universes import id_prefix_like, schedule_name

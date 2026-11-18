@@ -48,7 +48,7 @@ from data_engine.datahub.capture_core.sec_financial_adapter import (
 )
 from data_engine.datahub.capture_core.universe_plane import parse_nasdaq_index_rows
 from data_engine.lanes.capture import ToptLiveTickConfig, run_qqq_live_tick
-from factors.production_topt import OperatingBranch
+from factors.snapshot_inputs import OperatingBranch
 from psycopg.rows import dict_row
 from truealpha_runtime import EnvironmentTier as RuntimeEnvironmentTier
 from truealpha_runtime.testing import InMemoryRawObjectStore, isolated_test_database

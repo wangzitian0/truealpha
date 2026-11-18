@@ -21,7 +21,7 @@ from data_engine.datahub.capture_core.executor import FetchSuccess
 from data_engine.datahub.capture_core.sec_financial_adapter import build_route
 from data_engine.datahub.capture_core.source_registrations import RouteCell, RouteContext
 from data_engine.sources import sec
-from factors.production_topt import OperatingBranch
+from factors.snapshot_inputs import OperatingBranch
 
 
 def served_financial_record(

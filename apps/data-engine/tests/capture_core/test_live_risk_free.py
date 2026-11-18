@@ -47,7 +47,7 @@ from data_engine.datahub.capture_core.sec_financial_adapter import (
 )
 from data_engine.datahub.repository import PostgresCaptureControlRepository
 from data_engine.datahub.risk_free import MissingRiskFreeRate
-from factors.production_topt import OperatingBranch
+from factors.snapshot_inputs import OperatingBranch
 from truealpha_runtime.testing import InMemoryRawObjectStore, isolated_test_database
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))

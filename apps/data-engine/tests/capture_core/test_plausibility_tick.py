@@ -19,7 +19,7 @@ import pytest
 from data_engine.datahub.capture_core.sec_financial_adapter import FinancialFactsBundle
 from factors.composite import plausibility_policy
 from factors.panel import IssuerClass, SignPolicy, published_node
-from factors.production_topt import OperatingBranch
+from factors.snapshot_inputs import OperatingBranch
 from truealpha_contracts.strategy import ExclusionReason
 from truealpha_runtime.testing import isolated_test_database
 

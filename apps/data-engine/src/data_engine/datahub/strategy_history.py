@@ -10,7 +10,7 @@ from typing import Any, NamedTuple
 
 import psycopg
 from factors.backtest.corporate_actions import SplitEvent
-from factors.production_topt import OperatingBranch
+from factors.snapshot_inputs import OperatingBranch
 from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.strategy import QuarterlyCutoffSchedule
 

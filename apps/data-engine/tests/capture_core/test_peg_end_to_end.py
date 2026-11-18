@@ -29,7 +29,7 @@ from data_engine.config import settings
 from data_engine.datahub.capture_core.sec_financial_adapter import build_bundle
 from factors.composite.strategy_evaluator import IssuerInput, evaluate_cutoff
 from factors.panel import IssuerClass
-from factors.production_topt import OperatingBranch
+from factors.snapshot_inputs import OperatingBranch
 from truealpha_contracts.strategy import LargeModelValueV0Definition
 
 _CUTOFF = datetime(2026, 3, 31, tzinfo=UTC)
