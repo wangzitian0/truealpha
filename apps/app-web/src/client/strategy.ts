@@ -1,6 +1,5 @@
 export const DASHBOARD_STRATEGY_ID = "large_model_value_v0";
 
-export type ValuationBasis = "price_to_sales" | "price_to_gross_profit";
 export type PegGrowthConvention = "historical_cagr" | "consensus" | "guidance";
 export const PEG_GROWTH_CONVENTIONS: readonly PegGrowthConvention[] = [
   "historical_cagr",
@@ -31,11 +30,6 @@ export const WIDE_PANEL_INPUT_COLUMNS = [
   { key: "shares_outstanding", label: "Shares outstanding", monetary: false },
 ] as const;
 
-export function unvisitedReasonText(reason: string): string {
-  if (reason === "unvisited") return "Not yet classified by theme screening";
-  return reason.replace(/_/g, " ");
-}
-
 export function classifiedShare(row: {
   in_theme_revenue?: string | null;
   out_of_theme_revenue?: string | null;
@@ -46,22 +40,4 @@ export function classifiedShare(row: {
   const total = Number(row.consolidated_revenue ?? 0);
   if (!Number.isFinite(total) || total <= 0) return null;
   return (((inRev + outRev) / total) * 100).toFixed(1) + "%";
-}
-
-export function summarizeUniverseUsability(decisions: ReadonlyArray<{ eligible: boolean; exclusion_label?: string | null; exclusion_reason?: string | null }>) {
-  const total = decisions.length;
-  const usable = decisions.filter((d) => d.eligible).length;
-  const counts = new Map<string, number>();
-  for (const d of decisions) {
-    if (!d.eligible) {
-      const key = d.exclusion_label || d.exclusion_reason || "excluded";
-      counts.set(key, (counts.get(key) ?? 0) + 1);
-    }
-  }
-  return {
-    total,
-    usable,
-    excluded: total - usable,
-    topReasons: [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3),
-  };
 }

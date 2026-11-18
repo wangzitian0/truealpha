@@ -171,11 +171,11 @@ class FakeContext {
 
 	/** Where a navigation lands, as the app's server-side gates decide it. */
 	land(path: string): string {
-		if (path !== "/research") return path;
+		if (path !== "/research/coverage") return path;
 		this.protectedVisits += 1;
 		const { gate, bounceFreshSession } = this.world.scenario;
 		if ((gate && this.session === null) || (bounceFreshSession && this.protectedVisits === 1)) {
-			return "/login?from=%2Fresearch";
+			return "/login?from=%2Fresearch%2Fcoverage";
 		}
 		return path;
 	}
@@ -369,7 +369,7 @@ const failedWith = (line: string, label: string, message: string) => line === `F
 		failedWith(
 			endpoint,
 			"sign-out endpoint",
-			"logout endpoint did not clear the cookie; protected route still rendered after logout (/research)",
+			"logout endpoint did not clear the cookie; protected route still rendered after logout (/research/coverage)",
 		),
 		`a broken endpoint must be reported even when the click could not be tried: ${endpoint}`,
 	);
@@ -397,7 +397,7 @@ const failedWith = (line: string, label: string, message: string) => line === `F
 		failedWith(
 			endpoint,
 			"sign-out endpoint",
-			"logout endpoint did not clear the cookie; protected route still rendered after logout (/research)",
+			"logout endpoint did not clear the cookie; protected route still rendered after logout (/research/coverage)",
 		),
 		`an endpoint that keeps the cookie: ${endpoint}`,
 	);
@@ -414,7 +414,7 @@ const failedWith = (line: string, label: string, message: string) => line === `F
 		failedWith(
 			endpoint,
 			"sign-out endpoint",
-			"logout endpoint answered 502; logout endpoint did not clear the cookie; protected route still rendered after logout (/research)",
+			"logout endpoint answered 502; logout endpoint did not clear the cookie; protected route still rendered after logout (/research/coverage)",
 		),
 		`a 502 from the endpoint: ${endpoint}`,
 	);
@@ -441,7 +441,7 @@ const failedWith = (line: string, label: string, message: string) => line === `F
 	const { control, endpoint } = await walk({ gate: false });
 	assert(passed(control), `the click path works in this scenario: ${control}`);
 	assert(
-		failedWith(endpoint, "sign-out endpoint", "protected route still rendered after logout (/research)"),
+		failedWith(endpoint, "sign-out endpoint", "protected route still rendered after logout (/research/coverage)"),
 		`an ungated route: ${endpoint}`,
 	);
 }
@@ -457,7 +457,7 @@ const failedWith = (line: string, label: string, message: string) => line === `F
 {
 	const { world, control, endpoint } = await walk({ bounceFreshSession: true });
 	assert(
-		failedWith(control, "sign-out control", "a fresh session was sent from /research to /login before sign-out was tried"),
+		failedWith(control, "sign-out control", "a fresh session was sent from /research/coverage to /login before sign-out was tried"),
 		`a bounced fresh session: ${control}`,
 	);
 	assert(world.clicks.length === 0, "the journey clicked on a page it had been bounced to");

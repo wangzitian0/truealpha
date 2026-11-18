@@ -197,7 +197,7 @@ create table if not exists mart.issuer_supply_chain_exposure (
  max_partner_share numeric default 0 not null,
  confidence numeric default 0 not null,
  reason_codes text[] default '{}'::text[] not null,
- extractor text default 'graph:kg-edges:v1'::text not null,
+ extractor text default 'graph:entity-relations:v1'::text not null,
  availability_status text not null,
  source_evidence_status text not null,
  factor_validation_status text not null,

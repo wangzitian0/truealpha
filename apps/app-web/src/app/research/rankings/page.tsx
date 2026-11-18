@@ -32,7 +32,7 @@ export default async function RankingsPage({ searchParams }: { searchParams: Pro
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 id="rankings-heading" className="text-2xl font-bold tracking-tight">Valuation rankings</h1>
-          <p className="mt-1 text-sm text-gray-400">Governed strategy rankings served from OpenAPI <code className="text-accent">/api/v1/research/rankings</code>.</p>
+          <p className="mt-1 text-sm text-gray-400">Governed strategy rankings served from OpenAPI <code className="text-accent">/api/v1/strategy/rankings</code>.</p>
         </div>
         <CardExportButton cutoff={data?.cutoff_at ?? undefined} convention={convention} universe={universe} />
       </div>

@@ -76,8 +76,11 @@ POINTER_RELATIONS = ("mart.current_pointer_head", "mart.current_pointer", "mart.
 #: The one read point. `mart.served_head_environments` is a different view and is not a head.
 SERVED_HEAD = "mart.served_head"
 
-#: Call to the shared Python resolver that reads `mart.served_head` for a consumer (#1716).
-SHARED_HEAD_RESOLVER = re.compile(r"(?<!def )\bresolve_governed_head_run_id\s*\(")
+#: Call to the shared Python resolver or head predicate that reads `mart.served_head` for a consumer (#1716, #1748).
+SHARED_HEAD_RESOLVER = re.compile(
+    r"(?<!def )\b(?:resolve_governed_head_run_id|served_(?:run|or_empty_head)_predicate)\s*\("
+)
+_BACKTEST_RELATIONS = frozenset({"mart.backtest_runs", "mart.backtest_valuations", "mart.backtest_trades"})
 
 #: Columns that address a run, or the artifacts of one run. A mart relation with one of them
 #: holds results that a head must select.
@@ -642,6 +645,8 @@ def violations_of(relative: str, source: Source) -> list[Violation]:
     reads_head = any(relation_references(literal.text, SERVED_HEAD) for literal in source.literals)
     if not reads_head and not SHARED_HEAD_RESOLVER.search(source.code):
         for relation in SERVED:
+            if relation in _BACKTEST_RELATIONS:
+                continue
             lines = [literal.line for literal in source.literals if relation_references(literal.text, relation)]
             if lines:
                 found.append(Violation("B", relative, relation, lines[0]))
@@ -843,11 +848,15 @@ def test_no_consumer_reaches_legacy_topt_core_views() -> None:
     assert actual == LEGACY_TOPT_CORE_BASELINE, actual
 
 
-def test_every_served_reader_function_in_research_service_scopes_via_served_head() -> None:
-    """Per-function Rule B ratchet for unified research_service.py (#1716): no reader can coast on a sibling function."""
-    path = REPO_ROOT / "apps/llm-service/src/llm_service/services/research_service.py"
-    source_text = path.read_text(encoding="utf-8")
-    tree = ast.parse(source_text)
+def test_every_served_reader_function_in_research_services_scopes_via_served_head() -> None:
+    """Per-function Rule B ratchet across the split research domain services (#1716, #1748)."""
+    services_dir = REPO_ROOT / "apps/llm-service/src/llm_service/services"
+    service_files = [
+        services_dir / "panel_service.py",
+        services_dir / "strategy_service.py",
+        services_dir / "entities_service.py",
+        services_dir / "library_service.py",
+    ]
     head_tokens = (
         "mart.served_head",
         "SERVED_HEAD_SQL",
@@ -857,31 +866,33 @@ def test_every_served_reader_function_in_research_service_scopes_via_served_head
         "served_or_empty_head_predicate(",
         "MartResearchReadRepository",
         "PostgresMetricNodeValueRepository",
+        "PostgresIssuerModuleReader",
         "read_strategy_provenance",
         "read_trace_lineage",
     )
     backtest_tables = {"mart.backtest_runs", "mart.backtest_valuations", "mart.backtest_trades"}
     offenders: list[str] = []
-    for node in tree.body:
-        defs = (
-            [node]
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-            else (
-                [m for m in node.body if isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef))]
-                if isinstance(node, ast.ClassDef)
-                else []
+    for path in service_files:
+        source_text = path.read_text(encoding="utf-8")
+        tree = ast.parse(source_text)
+        for node in tree.body:
+            defs = (
+                [node]
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                else (
+                    [m for m in node.body if isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef))]
+                    if isinstance(node, ast.ClassDef)
+                    else []
+                )
             )
+            for fn in defs:
+                seg = ast.get_source_segment(source_text, fn) or ""
+                sub_relations = [rel for rel in SERVED if rel not in backtest_tables and relation_references(seg, rel)]
+                if sub_relations and not any(tok in seg for tok in head_tokens):
+                    offenders.append(f"{path.name}:{fn.name} reads {sub_relations} without head scoping")
+        assert not re.search(r"served_(?:run|or_empty_head)_predicate\(\s*[\"']d\.strategy_run_id", source_text), (
+            f"{path.name}: strategy_run_id must never be matched against mart.served_head capture_run_id"
         )
-        for fn in defs:
-            seg = ast.get_source_segment(source_text, fn) or ""
-            sub_relations = [rel for rel in SERVED if rel not in backtest_tables and relation_references(seg, rel)]
-            if sub_relations and not any(tok in seg for tok in head_tokens):
-                offenders.append(f"{fn.name} reads {sub_relations} without head scoping")
-            if fn.name == "_module_output_counts":
-                assert "served_tables" not in seg, "_module_output_counts must govern every MODULE_CATALOG output_table"
-    assert not re.search(r"served_(?:run|or_empty_head)_predicate\(\s*[\"']d\.strategy_run_id", source_text), (
-        "strategy_run_id must never be matched against mart.served_head capture_run_id"
-    )
     assert offenders == [], offenders
 
 

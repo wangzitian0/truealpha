@@ -267,11 +267,11 @@ def test_the_gateway_of_the_standards_lane_admits_with_the_same_share(call_ledge
         environment="staging",
         recent_calls=None,
     )
-    for index, seat in enumerate(("sec", "nport")):  # staging: 2 a second for sec and nport together
+    for index, seat in enumerate(("sec", "nport", "sec", "nport")):  # staging: 4 a second for sec and nport together
         explicit.call(seat, "probe", lambda: b"{}", identity=FetchKey(seat, "probe", f"symbol:{index}", "2026-10-27"))
     assert clock.slept == []
 
-    explicit.call("sec", "probe", lambda: b"{}", identity=FetchKey("sec", "probe", "symbol:2", "2026-10-27"))
+    explicit.call("sec", "probe", lambda: b"{}", identity=FetchKey("sec", "probe", "symbol:4", "2026-10-27"))
 
     assert clock.slept == [pytest.approx(1.0)]
 

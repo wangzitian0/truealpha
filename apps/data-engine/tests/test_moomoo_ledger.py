@@ -46,27 +46,27 @@ def test_gate_blocks_once_7d_kline_stock_quota_exhausted(moomoo_ledger_db, monke
         ledger.gate("request_history_kline", "test", request_uri="moomoo://US.MSFT")
 
 
-def test_kline_distinct_stock_quota_staging_share_20(call_ledger, monkeypatch):
-    """Criterion 2b: Stored reading 100, share 20 (staging/preview): the 21st distinct stock in 7 days is refused."""
+def test_kline_distinct_stock_quota_staging_share_40(call_ledger, monkeypatch):
+    """Criterion 2b: Stored reading 100, share 40 (staging #1664 C2): the 41st distinct stock in 7 days is refused."""
     monkeypatch.setattr(gateway, "capacity_environment", lambda: "staging")
     ledger.reset_stored_history_kl_quota()
     try:
         ledger.store_history_kl_quota(100)
-        assert ledger.distinct_stock_quota() == 20
+        assert ledger.distinct_stock_quota() == 40
 
-        # Admit 20 distinct stocks
-        for i in range(20):
+        # Admit 40 distinct stocks
+        for i in range(40):
             _kline(f"US.STOCK{i}")
 
-        assert len(ledger.kline_distinct_stocks_7d()) == 20
+        assert len(ledger.kline_distinct_stocks_7d()) == 40
 
-        # Requesting one of the 20 existing stocks is still allowed
+        # Requesting one of the 40 existing stocks is still allowed
         ledger.gate("request_history_kline", "test", request_uri="moomoo://US.STOCK0")
 
-        # Requesting the 21st distinct stock is refused
+        # Requesting the 41st distinct stock is refused
         with pytest.raises(ledger.BudgetExceededError) as exc_info:
-            ledger.gate("request_history_kline", "test", request_uri="moomoo://US.STOCK21")
-        assert "20/20 stocks used in the last 7 days" in str(exc_info.value)
+            ledger.gate("request_history_kline", "test", request_uri="moomoo://US.STOCK41")
+        assert "40/40 stocks used in the last 7 days" in str(exc_info.value)
     finally:
         ledger.reset_stored_history_kl_quota()
 
@@ -192,5 +192,5 @@ def test_get_history_kline_refreshes_reading_and_enforces_quota(call_ledger, mon
     )
     assert bars is not None
     assert ledger.stored_history_kl_quota() == 100
-    # Staging share is 20%, so quota is 20 distinct stocks
-    assert ledger.distinct_stock_quota() == 20
+    # Staging share is 40%, so quota is 40 distinct stocks (#1664 C2)
+    assert ledger.distinct_stock_quota() == 40

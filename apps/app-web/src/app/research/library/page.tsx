@@ -16,7 +16,7 @@ export default async function LibraryPage({ searchParams }: { searchParams: Prom
     <section aria-labelledby="library-heading" className="space-y-6">
       <div>
         <h1 id="library-heading" className="text-2xl font-bold tracking-tight">Research Library</h1>
-        <p className="mt-1 text-sm text-gray-400">Owner-isolated notes &amp; archived Xiaohongshu HTML cards via <code className="text-accent">/api/v1/research/documents</code>.</p>
+        <p className="mt-1 text-sm text-gray-400">Owner-isolated notes &amp; archived Xiaohongshu HTML cards via <code className="text-accent">/api/v1/library/documents</code>.</p>
       </div>
       <CreateDocumentForm />
       {error && <p className="text-sm text-rose-400">{error}</p>}

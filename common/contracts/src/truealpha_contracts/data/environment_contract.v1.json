@@ -199,6 +199,8 @@
         "holder": "host_ip",
         "seats": ["sec", "nport"],
         "outside_consumers": false,
+        "percent": {"preview": 0, "staging": 40, "production": 60},
+        "percent_reason": "Gives staging 4/s and production 6/s while preview makes zero live calls (#1664 C2).",
         "limits": [
           {
             "id": "per_second",
@@ -236,7 +238,9 @@
         "holder": "account",
         "seats": ["moomoo"],
         "outside_consumers": false,
-        "note": "Default 20/20/60 burst split; K-line stock quota checked by moomoo_ledger.py (#1520).",
+        "percent": {"preview": 0, "staging": 40, "production": 60},
+        "percent_reason": "Doubles staging burst capacity from 6 to 12 per 30s without reducing production 18 per 30s (#1664 C2); preview makes zero live calls.",
+        "note": "K-line stock quota checked by moomoo_ledger.py (#1520).",
         "limits": [
           {
             "id": "burst",

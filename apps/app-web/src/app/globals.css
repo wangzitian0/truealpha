@@ -1,6 +1,14 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+
+@theme {
+  --color-background: #0d0e12;
+  --color-foreground: #f3f4f6;
+  --color-card: #15171e;
+  --color-border: #23262f;
+  --color-accent: #4f46e5;
+  --color-accent-hover: #6366f1;
+  --color-accent-muted: #312e81;
+}
 
 :root {
   --background: #0d0e12;

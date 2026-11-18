@@ -124,7 +124,8 @@ def test_vendor_accounts_shares_seats_and_live_readiness() -> None:
     assert _no_call(raw) == []
     zp = _raw()
     zp["vendor_accounts"]["default_percent"].update(preview=40, staging=60, production=0)
-    assert {("sec_edgar", "per_second", "production"), ("openfigi", "per_minute", "production")} <= set(_no_call(zp))
+    assert ("openfigi", "per_minute", "production") in set(_no_call(zp))
+    assert ("sec_edgar", "per_second", "production") not in set(_no_call(zp))
     fz = _raw()
     fz["vendor_accounts"]["accounts"]["sec_edgar"]["limits"].append(_C["vendor_fz_limit"])
     assert _no_call(fz) == [

@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 from llm_service.mcp_server import _default_repository, build_mcp_server, mcp
+from llm_service.services.library_service import LibraryReportResponse
 from mcp.shared.memory import create_connected_server_and_client_session
 from truealpha_runtime.access import AccessContext, AuthenticationMethod, PrincipalKind
 from truealpha_runtime.research_cards import ResearchCard
@@ -54,24 +55,33 @@ class _RecordingRepository:
         return StrategyRunUnavailable(strategy_id=strategy_id, reason="unknown_strategy_id")
 
 
+_EXPECTED_MCP_TOOLS = [
+    "entities_analyst_ratings",
+    "entities_detail",
+    "entities_holdings",
+    "entities_supply_chain",
+    "entities_themes",
+    "entities_trace",
+    "library_card_export",
+    "library_document_create",
+    "library_document_detail",
+    "library_documents_list",
+    "library_report",
+    "panel_coverage",
+    "panel_macro",
+    "panel_universes",
+    "strategy_backtest_detail",
+    "strategy_backtests",
+    "strategy_rankings",
+]
+
+
 @pytest.mark.anyio
 async def test_advertises_the_expected_tools() -> None:
     tools = await mcp.list_tools()
-    assert sorted(tool.name for tool in tools) == [
-        "company_360_profile",
-        "etf_virtual_company_profile",
-        "governed_backtest",
-        "issuer_analyst_ratings",
-        "issuer_supply_chain_exposure",
-        "metric_node_values",
-        "research_card",
-        "research_report",
-        "research_report_markdown",
-        "strategy_run",
-        "theme_purity_leaderboard",
-        "topt_gppe",
-    ]
-    strategy_tool = next(t for t in tools if t.name == "strategy_run")
+    assert sorted(tool.name for tool in tools) == _EXPECTED_MCP_TOOLS
+    assert len(tools) == 17
+    strategy_tool = next(t for t in tools if t.name == "strategy_rankings")
     assert strategy_tool.inputSchema["required"] == ["request"]
     assert strategy_tool.outputSchema is not None
     assert "result" in strategy_tool.outputSchema["properties"]
@@ -104,17 +114,24 @@ async def test_governed_backtest_tool_reads_through_injected_reader() -> None:
 
     server = build_mcp_server(repository=FixtureStrategyRunRepository(), backtest_reader=_FakeBacktestReader())
     content_blocks, structured = await server.call_tool(  # type: ignore[misc]
-        "governed_backtest",
+        "strategy_backtests",
         {"request": {"strategy_key": "qqq_topk_rank", "limit": 5}},
     )
     assert structured["count"] == 1
     assert structured["availability_status"] == "available"
     assert structured["runs"][0]["strategy_key"] == "qqq_topk_rank"
 
+    _, detail = await server.call_tool(  # type: ignore[misc]
+        "strategy_backtest_detail",
+        {"request": {"run_id": "backtest:qqq_topk_rank:20261009_000000"}},
+    )
+    assert detail["count"] == 1
+    assert detail["runs"][0]["run_id"] == "backtest:qqq_topk_rank:20261009_000000"
+
 
 @pytest.mark.anyio
 async def test_topt_gppe_tool_serializes_whatever_repository_its_given() -> None:
-    """Proves the tool's wiring/serialization with an injected metric node repository."""
+    """Proves panel_coverage wiring/serialization with an injected metric node repository."""
     from truealpha_runtime.research_report_mart import MetricNodeValueCell, MetricNodeValueReport
 
     class _FakeTopt:
@@ -139,7 +156,7 @@ async def test_topt_gppe_tool_serializes_whatever_repository_its_given() -> None
             )
 
     server = build_mcp_server(repository=FixtureStrategyRunRepository(), topt_repository=_FakeTopt())
-    content_blocks, structured = await server.call_tool("topt_gppe", {})  # type: ignore[misc]
+    content_blocks, structured = await server.call_tool("panel_coverage", {})  # type: ignore[misc]
     report = MetricNodeValueReport.model_validate_json(json.dumps(structured["result"]))  # type: ignore[index]
     assert report.available_count == 1
     assert report.cells[0].issuer_id == "listing:xnas:goog"
@@ -152,7 +169,7 @@ async def test_research_report_reads_through_the_injected_repository() -> None:
     deployed path invokes build_research_report at all, independent of #26's writer."""
     server = build_mcp_server(repository=FixtureStrategyRunRepository(), research_repository=_research_repository())
     content_blocks, structured = await server.call_tool(  # type: ignore[misc]
-        "research_report",
+        "library_report",
         {
             "request": {
                 "report_kind": "company",
@@ -162,12 +179,9 @@ async def test_research_report_reads_through_the_injected_repository() -> None:
         },
     )
     assert content_blocks
-    # Unlike strategy_run/topt_gppe (Report | Unavailable unions, wrapped under a
-    # top-level "result" key), a tool whose return type is a single concrete BaseModel
-    # gets its own fields flattened directly into `structured` — verified empirically.
-    # JSON-mode validation (not model_validate on the raw dict): ResearchReport is a
-    # strict model, and only JSON-mode coerces a wire string into datetime/enum/tuple.
-    report = ResearchReport.model_validate_json(json.dumps(structured))
+    resp = LibraryReportResponse.model_validate_json(json.dumps(structured))
+    assert resp.report is not None
+    report = ResearchReport.model_validate_json(json.dumps(resp.report))
     assert report.report_id.startswith("report:")
     assert report.generated_from == "mart:research_report.v1"
     assert report.subjects[0].subject_id == "issuer:adm"
@@ -175,11 +189,11 @@ async def test_research_report_reads_through_the_injected_repository() -> None:
 
 @pytest.mark.anyio
 async def test_research_card_renders_from_a_freshly_built_report() -> None:
-    """#372/#434 track C: research_card is the renderer's first deployed consumer --
+    """#372/#434 track C: library_card_export is the renderer's first deployed consumer --
     proves the deployed path invokes build_card at all over a real ResearchReport."""
     server = build_mcp_server(repository=FixtureStrategyRunRepository(), research_repository=_research_repository())
     content_blocks, structured = await server.call_tool(  # type: ignore[misc]
-        "research_card",
+        "library_card_export",
         {
             "request": {
                 "report_kind": "company",
@@ -225,7 +239,7 @@ async def test_tool_reads_through_the_shared_repository_and_matches_the_fixture(
     # returns a (content_blocks, structured_dict) tuple when structured output
     # is enabled (verified at runtime); silence the resulting stub mismatch.
     content_blocks, structured = await server.call_tool(  # type: ignore[misc]
-        "strategy_run", {"request": {"strategy_id": "large_model_value_v0"}}
+        "strategy_rankings", {"request": {"strategy_id": "large_model_value_v0"}}
     )
     raw_result = structured["result"]  # type: ignore[index]
     assert raw_result["strategy_run_id"] == "test_fixture"
@@ -245,7 +259,7 @@ async def test_tool_reads_through_the_shared_repository_and_matches_the_fixture(
 async def test_unknown_strategy_returns_structured_unavailable_not_a_crash() -> None:
     server = build_mcp_server(repository=FixtureStrategyRunRepository())
     _content_blocks, structured = await server.call_tool(  # type: ignore[misc]
-        "strategy_run", {"request": {"strategy_id": "does_not_exist"}}
+        "strategy_rankings", {"request": {"strategy_id": "does_not_exist"}}
     )
     unavailable = StrategyRunUnavailable.model_validate(structured["result"])  # type: ignore[index]
     assert unavailable.reason == "unknown_strategy_id"
@@ -257,7 +271,7 @@ async def test_context_is_the_owner_delegated_through_the_adapter_and_not_client
     adapter builds the context; the client supplies no identity."""
     repository = _RecordingRepository()
     server = build_mcp_server(repository=repository)
-    await server.call_tool("strategy_run", {"request": {"strategy_id": "large_model_value_v0"}})
+    await server.call_tool("strategy_rankings", {"request": {"strategy_id": "large_model_value_v0"}})
 
     assert len(repository.received_contexts) == 1
     context = repository.received_contexts[0]
@@ -270,7 +284,8 @@ async def test_context_is_the_owner_delegated_through_the_adapter_and_not_client
 
     # The tool's own input schema has no identity/role/tenant argument at all.
     tools = await server.list_tools()
-    request_schema = tools[0].inputSchema["$defs"]["StrategyRunToolRequest"]
+    strat_tool = next(t for t in tools if t.name == "strategy_rankings")
+    request_schema = strat_tool.inputSchema["$defs"]["StrategyRankingsToolRequest"]
     assert set(request_schema["properties"]) == {"strategy_id"}
 
 
@@ -285,22 +300,9 @@ async def test_claude_compatible_client_session_round_trip() -> None:
     async with create_connected_server_and_client_session(server._mcp_server) as client:
         await client.initialize()
         tools = await client.list_tools()
-        assert sorted(tool.name for tool in tools.tools) == [
-            "company_360_profile",
-            "etf_virtual_company_profile",
-            "governed_backtest",
-            "issuer_analyst_ratings",
-            "issuer_supply_chain_exposure",
-            "metric_node_values",
-            "research_card",
-            "research_report",
-            "research_report_markdown",
-            "strategy_run",
-            "theme_purity_leaderboard",
-            "topt_gppe",
-        ]
+        assert sorted(tool.name for tool in tools.tools) == _EXPECTED_MCP_TOOLS
 
-        result = await client.call_tool("strategy_run", {"request": {"strategy_id": "large_model_value_v0"}})
+        result = await client.call_tool("strategy_rankings", {"request": {"strategy_id": "large_model_value_v0"}})
         assert result.isError is not True
         assert result.structuredContent is not None
         raw_result = result.structuredContent["result"]
@@ -324,7 +326,7 @@ async def test_sequential_mcp_calls_and_ranking_card_coercion_succeed_without_em
         await client.initialize()
         for idx in range(12):
             res = await client.call_tool(
-                "research_card",
+                "library_card_export",
                 {
                     "request": {
                         "report_kind": "company" if idx % 2 == 0 else "theme_ranking",
@@ -451,7 +453,7 @@ async def test_company_360_profile_tool_reads_through_injected_reader() -> None:
         company_profile_reader=_FakeCompanyProfileReader(),
     )
     content_blocks, structured = await server.call_tool(  # type: ignore[misc]
-        "company_360_profile",
+        "entities_detail",
         {"request": {"issuer_id": "issuer:adm"}},
     )
     assert content_blocks
@@ -497,7 +499,7 @@ async def test_theme_purity_leaderboard_tool_reads_through_injected_reader() -> 
         theme_purity_reader=_FakeThemePurityLeaderboardReader(),
     )
     content_blocks, structured = await server.call_tool(  # type: ignore[misc]
-        "theme_purity_leaderboard",
+        "entities_themes",
         {"request": {"theme_id": "ai-infrastructure", "limit": 5}},
     )
     assert content_blocks
@@ -544,7 +546,7 @@ async def test_etf_virtual_company_profile_tool_reads_through_injected_reader() 
         etf_profile_reader=_FakeEtfProfileReader(),
     )
     content_blocks, structured = await server.call_tool(  # type: ignore[misc]
-        "etf_virtual_company_profile",
+        "entities_holdings",
         {"request": {"fund_id": "etf:series:S000101292"}},
     )
     assert content_blocks
@@ -857,7 +859,7 @@ def test_company_profile_names_the_pgp_basis_of_a_definition_1_0_0_decision(them
 
 def test_format_company_profile_surfaces_decision_confidence_and_reason_codes() -> None:
     """#1517 stage A4: company_360_profile surfaces decision confidence and reason_codes from mart rows."""
-    from llm_service.services.research_service import _format_company_profile
+    from llm_service.services.entities_service import _format_company_profile
 
     profile = _format_company_profile(
         issuer_id="issuer:ddog",
@@ -929,12 +931,12 @@ async def test_every_tool_call_writes_one_content_free_audit_line(caplog: pytest
     server = build_mcp_server(repository=FixtureStrategyRunRepository())
     secret_argument = "argument-value-that-must-not-be-logged"
     with caplog.at_level("INFO", logger="llm_service.mcp_server"):
-        await server.call_tool("strategy_run", {"request": {"strategy_id": secret_argument}})
+        await server.call_tool("strategy_rankings", {"request": {"strategy_id": secret_argument}})
         with pytest.raises(Exception):  # noqa: B017 - any validation error; the outcome is what is audited
-            await server.call_tool("strategy_run", {"request": {"unknown_field": secret_argument}})
+            await server.call_tool("strategy_rankings", {"request": {"unknown_field": secret_argument}})
 
     audit = [record.getMessage() for record in caplog.records if record.getMessage().startswith("mcp tool call:")]
     assert len(audit) == 2, audit
-    assert "tool=strategy_run" in audit[0] and "principal=principal:owner" in audit[0]
+    assert "tool=strategy_rankings" in audit[0] and "principal=principal:owner" in audit[0]
     assert "outcome=ok" in audit[0] and "outcome=error" in audit[1]
     assert secret_argument not in caplog.text

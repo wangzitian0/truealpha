@@ -21,7 +21,7 @@ export const RACE_ROUTES = Object.freeze([
   "/research/backtest",
   "/research/rankings",
   "/research/themes",
-  "/research/strategy",
+  "/research/coverage",
 ]);
 
 export const RACE_VISITS_PER_ROUTE = 6;

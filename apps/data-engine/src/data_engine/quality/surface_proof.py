@@ -23,11 +23,11 @@ from data_engine.sources import llm
 
 _NOT_SCHEDULED = "not_scheduled"
 
-#: `apps/llm-service/src/llm_service/services/research_service.py` resolves the governed strategy
+#: `apps/llm-service/src/llm_service/services/strategy_service.py` resolves the governed strategy
 #: run through this view (`db/migrations/20260907T0630_bt_governed_strategy_run.sql`):
-#: /research/rankings, /strategy, /compare, /trace and /coverage all read it.
+#: /research/rankings, /trace and /coverage all read it.
 _STRATEGY_HEAD_SQL = "select target_run_id, strategy_run_id from mart.governed_strategy_run"
-#: `apps/llm-service/src/llm_service/services/research_service.py` `LATEST_RUN_SQL`: the newest run in the
+#: `apps/llm-service/src/llm_service/services/entities_service.py` `THEME_LATEST_RUN_SQL`: the newest run in the
 #: table, deliberately not the pointer — which is exactly why it has to be checked against it.
 #: No universe filter: every universe's head gets purity rows, and the page names a run and a
 #: cutoff, never a universe, so it serves whichever head cut off last (`themes_verdict`).
@@ -59,7 +59,7 @@ select exists (
     where p.environment = %s and p.factor_id = %s and p.universe_id like %s
 )
 """
-#: `apps/llm-service/src/llm_service/services/research_service.py` `QQQ_POINTER_HEAD_SQL`.
+#: `apps/llm-service/src/llm_service/services/panel_service.py` `POINTER_HEAD_SQL`.
 _HOLDINGS_HEAD_SQL = """
 select run_id, freshness, availability, staleness_reason
 from mart.served_head
@@ -97,7 +97,7 @@ where environment = %s and factor_id = %s and universe_id = %s and target_run_id
 #: A universe this environment never ticks: nothing to serve and nothing served.
 _NOT_RUN_HERE = "not-run-in-this-environment"
 _THEMES_SURFACE = "/research/themes"
-_THEMES_READER = "research_service.py THEME_LATEST_RUN_SQL"
+_THEMES_READER = "entities_service.py THEME_LATEST_RUN_SQL"
 
 
 @dataclass(frozen=True)
@@ -234,7 +234,7 @@ def prove(
         verdicts.append(
             _off_verdict(
                 "/research/holdings",
-                "research_service.py POINTER_HEAD_SQL",
+                "panel_service.py POINTER_HEAD_SQL",
                 f"no {fund_key} head in this environment; the page renders filed weights unvalued",
                 qqq,
             )
@@ -243,7 +243,7 @@ def prove(
         verdicts.append(
             SurfaceVerdict(
                 surface="/research/holdings",
-                reader="research_service.py POINTER_HEAD_SQL",
+                reader="panel_service.py POINTER_HEAD_SQL",
                 expected_run=_run(heads.get(qqq)),
                 served_run=served,
                 detail=f"{funds} consolidated fund row(s)",

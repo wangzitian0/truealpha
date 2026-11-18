@@ -193,9 +193,10 @@ def test_the_governed_head_matches_the_consumer_that_serves_it() -> None:
     """One head for BOTH the invariants and the backend: compares the SQL in
     `research_report_mart.py` (`POINTER_HEAD_SQL`), imported and called via `resolve_governed_head_run_id`."""
     mart_text = (REPO_ROOT / "common/runtime/src/truealpha_runtime/research_report_mart.py").read_text()
-    service_text = (REPO_ROOT / "apps/llm-service/src/llm_service/services/research_service.py").read_text()
-    assert "POINTER_HEAD_SQL" in service_text, "backend no longer imports shared POINTER_HEAD_SQL"
-    assert re.search(r"(?<!def )\bresolve_governed_head_run_id\s*\(", service_text), (
+    panel_text = (REPO_ROOT / "apps/llm-service/src/llm_service/services/panel_service.py").read_text()
+    entities_text = (REPO_ROOT / "apps/llm-service/src/llm_service/services/entities_service.py").read_text()
+    assert "POINTER_HEAD_SQL" in panel_text, "backend no longer imports shared POINTER_HEAD_SQL"
+    assert re.search(r"(?<!def )\bresolve_governed_head_run_id\s*\(", entities_text), (
         "backend no longer calls resolve_governed_head_run_id"
     )
     head = mart_text.split("POINTER_HEAD_SQL", 1)[1].split('"""', 2)[1]

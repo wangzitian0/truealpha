@@ -659,7 +659,7 @@ def test_the_mcp_surface_keeps_tls_the_prefix_and_its_endpoint(
         "jsonrpc": "2.0",
         "id": 2,
         "method": "tools/call",
-        "params": {"name": "topt_gppe", "arguments": {}},
+        "params": {"name": "panel_coverage", "arguments": {"request": {"node_key": "gppe_uniform_charge_v0"}}},
     }
     mcp_headers = {"Accept": "application/json, text/event-stream"}
     authorized = {**mcp_headers, "Authorization": f"Bearer {MCP_TEST_TOKEN}"}
@@ -737,7 +737,7 @@ def test_the_mcp_surface_keeps_tls_the_prefix_and_its_endpoint(
         f"the MCP endpoint answers {endpoint.status_code}; a redirect fix that breaks routing points clients at a 404"
     )
     assert session["mcp-session-id"], "initialize with the token opened no session"
-    assert listed.status_code == 200 and '"strategy_run"' in listed.text, (
+    assert listed.status_code == 200 and '"strategy_rankings"' in listed.text, (
         f"tools/list with the token answers {listed.status_code}: {listed.text[:200]}"
     )
     # An open session is not a credential: without the token the same session gets 401.

@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import csv
 import json
-import re
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -161,17 +160,6 @@ def test_the_input_order_does_not_change_the_verdict() -> None:
     assert job_run_health.judge(reversed(runs), now=NOW) == job_run_health.judge(runs, now=NOW)
 
 
-def test_the_window_of_the_admin_page_is_the_window_of_the_verdict() -> None:
-    """One definition: `/admin/pipeline` counts the same days as the verdict judges."""
-    source = (
-        Path(__file__).resolve().parents[3] / "apps/llm-service/src/llm_service/services/admin_service.py"
-    ).read_text()
-    match = re.search(r"^PIPELINE_WINDOW_DAYS\s*=\s*(\d+)", source, re.MULTILINE)
-
-    assert match is not None
-    assert int(match.group(1)) == job_run_health.WINDOW_DAYS
-
-
 def test_manual_failures_are_not_a_scheduled_pair() -> None:
     """The rule names the schedule: two failed manual launches of a busy job are not two failed nights."""
     busy = runs_of("busy", "s" * 20, scheduled=False) + runs_of("busy", "ff", scheduled=False, end=NOW)
@@ -304,7 +292,7 @@ def test_this_morning_on_staging_is_red_for_the_two_jobs_that_fail_by_design(
 ) -> None:
     """The real history. `output_invariants_check` failed 15 of its 22 runs in 7 days. `runtime_shape_check`
     failed 2 of its 3. The single failure of `topt_live_pipeline` and the three manual failures of
-    `head_reports_pipeline` stay under the bound; `/admin/pipeline` shows them."""
+    `head_reports_pipeline` stay under the bound; `/admin` surfaces them via `dagster.runs`."""
     load_runs(run_storage_url, fixture_rows())
 
     verdict = run_check(run_storage_url, monkeypatch)
