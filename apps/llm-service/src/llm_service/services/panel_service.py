@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 from truealpha_contracts.environment_contract import EnvironmentContract
 from truealpha_contracts.universes import id_prefix_like, key_of_lane, keys, lane_name, universe_with_role
 from truealpha_runtime.access import AccessContext
-from truealpha_runtime.issuer_modules_mart import resolve_static_entity_display
+from truealpha_runtime.issuer_modules_mart import ENTITY_DISPLAY_SQL, resolve_static_entity_display
 from truealpha_runtime.research_report_mart import (
     POINTER_HEAD_SQL,
     MetricNodeValueReport,
@@ -77,20 +77,6 @@ def _resolve_head_freshness(
     return "unknown"
 
 
-ENTITY_DISPLAY_SQL = """
-  select r.issuer_id,
-         coalesce(nullif(btrim(r.ticker), ''), nullif(btrim(ei.current_ticker), '')) as ticker,
-         coalesce(nullif(btrim(r.display_name), ''), nullif(btrim(ei.name), '')) as display_name,
-         ei.legacy_id
-  from mart.entity_display_resolution r
-  left join (
-    select distinct on (e.entity_id::text)
-           e.entity_id::text as issuer_id, e.current_ticker, e.name, e.legacy_id
-    from mart.entity_identity e
-    order by e.entity_id::text, e.legacy_id
-  ) ei on ei.issuer_id = r.issuer_id
-"""
-
 WIDE_PANEL_INPUT_KEYS: tuple[str, ...] = (
     "gross_profit",
     "pre_provision_profit",
@@ -121,10 +107,6 @@ class EntityDisplayItem(BaseModel):
     ticker: str
     display_name: str | None = None
     label: str
-
-
-class EntityDisplayMapResponse(BaseModel):
-    items: dict[str, EntityDisplayItem] = Field(default_factory=dict)
 
 
 class WidePanelCellDto(BaseModel):
@@ -432,7 +414,6 @@ __all__ = [
     "CoverageDecisionDto",
     "ENTITY_DISPLAY_SQL",
     "EntityDisplayItem",
-    "EntityDisplayMapResponse",
     "GPPE_VARIANT_KEYS",
     "MacroPanelResponse",
     "MacroSeriesDto",

@@ -292,7 +292,7 @@ def test_this_morning_on_staging_is_red_for_the_two_jobs_that_fail_by_design(
 ) -> None:
     """The real history. `output_invariants_check` failed 15 of its 22 runs in 7 days. `runtime_shape_check`
     failed 2 of its 3. The single failure of `topt_live_pipeline` and the three manual failures of
-    `head_reports_pipeline` stay under the bound; `/admin/pipeline` shows them."""
+    `head_reports_pipeline` stay under the bound; `/admin` surfaces them via `dagster.runs`."""
     load_runs(run_storage_url, fixture_rows())
 
     verdict = run_check(run_storage_url, monkeypatch)

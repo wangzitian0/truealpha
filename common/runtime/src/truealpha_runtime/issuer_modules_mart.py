@@ -114,7 +114,7 @@ _RESOLVE_BATCH_CANDIDATES_SQL = (
     f"select u.raw_q, ei.entity_id::text as entity_id, ei.legacy_id, ei.current_ticker, ei.cik, ei.lei "
     f"from unnest(%s::text[]) as u(raw_q) cross join lateral (select btrim(u.raw_q) as q) inp join mart.entity_identity ei on ({_IDENTITY_MATCH_SQL})"
 )
-_ENTITY_DISPLAY_SQL = (
+ENTITY_DISPLAY_SQL = (
     "select r.issuer_id, coalesce(nullif(btrim(r.ticker), ''), nullif(btrim(ei.current_ticker), '')) as ticker, "
     "coalesce(nullif(btrim(r.display_name), ''), nullif(btrim(ei.name), '')) as display_name, ei.legacy_id "
     "from mart.entity_display_resolution r left join (select distinct on (e.entity_id::text) e.entity_id::text as issuer_id, "
@@ -137,7 +137,7 @@ def load_entity_display_map(database_url: str | None) -> dict[str, tuple[str, st
     if not database_url:
         return merged
     try:
-        rows = _query_rows(database_url, _ENTITY_DISPLAY_SQL)
+        rows = _query_rows(database_url, ENTITY_DISPLAY_SQL)
     except psycopg.Error:
         return merged
     for row in rows:

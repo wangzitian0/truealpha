@@ -10,10 +10,10 @@ dependencies = [
     "fastapi>=0.162.0",
     "uvicorn[standard]>=0.30.0",
     "pydantic-settings>=2.2.0",
-    "pyjwt>=2.8.0",
+    "pyjwt>=2.15.1",
     "bcrypt>=4.0.0",
     "truealpha-factors",
-    "mcp>=1.0.0",
+    "mcp>=1.30.0,<2",
     "truealpha-contracts",
     "truealpha-runtime",
 ]

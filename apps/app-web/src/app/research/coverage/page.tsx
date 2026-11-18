@@ -7,6 +7,7 @@ import { PanelNodeTd } from "@/components/panel-node-cell";
 import { ReadStateNotice } from "@/components/read-state";
 import { ResearchTable } from "@/components/research-table";
 import { loadAuthed } from "../../_load";
+import { describeServedRunAge } from "../served-run-age";
 
 export const dynamic = "force-dynamic";
 
@@ -21,6 +22,7 @@ export default async function CoveragePage() {
   });
 
   const cov = data?.coverage ?? null;
+  const age = cov?.cutoff_at ? describeServedRunAge(cov.cutoff_at) : null;
   const decisions = cov?.decisions ?? [];
   const excluded = decisions.filter((d) => !d.eligible);
   const widePanel = cov?.wide_panel ?? {};
@@ -34,11 +36,21 @@ export default async function CoveragePage() {
   const td = "px-4 py-3";
   return (
     <section aria-labelledby="coverage-heading" className="space-y-8">
-      <div>
-        <h1 id="coverage-heading" className="text-2xl font-bold tracking-tight">Universe input coverage</h1>
-        <p className="mt-2 text-sm text-gray-400">
-          Excluded subjects, wide-panel inputs, governed universes, and macro curve from <code className="text-accent">/api/v1/panel/*</code>.
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 id="coverage-heading" className="text-2xl font-bold tracking-tight">Universe input coverage</h1>
+          <p className="mt-2 text-sm text-gray-400">
+            Excluded subjects, wide-panel inputs, governed universes, and macro curve from <code className="text-accent">/api/v1/panel/*</code>.
+          </p>
+        </div>
+        {cov?.cutoff_at && (
+          <span
+            data-served-run-age={age ? String(age.hours) : ""}
+            className={`rounded-full border px-3 py-1 font-mono text-xs ${age?.stale ? "border-amber-500/40 text-amber-300" : "border-emerald-500/40 text-emerald-300"}`}
+          >
+            as of {cov.cutoff_at.slice(0, 10)} ({age?.label ?? "unknown"})
+          </span>
+        )}
       </div>
       {error && <ReadStateNotice state={{ kind: "error", message: error }} />}
       {cov && !cov.available && <ReadStateNotice state={{ kind: "unavailable", reason: cov.reason ?? "unavailable" }} />}
