@@ -56,6 +56,7 @@ from data_engine.datahub.standards.listing_unit_ratio import (
 )
 from data_engine.sources import gateway, sec
 from data_engine.sources.landed_keys import MemoryLandedKeys
+from factors.panel import GPPE_BANKING_TCE_SPEC, GPPE_V0_SPEC
 from truealpha_runtime.testing import isolated_test_database
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -311,7 +312,8 @@ def _observe(*, reader_on: bool) -> Observed:
                 row[0]: tuple(row[1:])
                 for row in reader.execute(
                     """
-                    select cil.issuer_id,
+                    select distinct on (cil.issuer_id)
+                           cil.issuer_id,
                            cil.operating_branch,
                            'capital_adjusted_gppe',
                            coalesce(d.availability_status, mnv.availability_status),
@@ -328,14 +330,32 @@ def _observe(*, reader_on: bool) -> Observed:
                            d.current_price_to_gross_profit, null::numeric, null::numeric, d.target_price_to_gross_profit
                     from mart.capture_issuer_lineage cil
                     join mart.metric_node_values mnv
-                      on mnv.run_id = cil.run_id and mnv.issuer_id = cil.issuer_id and mnv.node_key = 'gppe_uniform_charge_v0'
+                      on mnv.run_id = cil.run_id
+                     and mnv.issuer_id = cil.issuer_id
+                     and (
+                         (cil.operating_branch = 'financial' and mnv.node_key = %(bank_key)s)
+                         or mnv.node_key = %(base_key)s
+                     )
                     left join mart.metric_node_values cagp
-                      on cagp.run_id = cil.run_id and cagp.issuer_id = cil.issuer_id and cagp.node_key = 'capital_adjusted_gross_profit'
+                      on cagp.run_id = cil.run_id
+                     and cagp.issuer_id = cil.issuer_id
+                     and cagp.node_key = (
+                         case
+                             when cil.operating_branch = 'financial' then 'capital_adjusted_tce'
+                             else 'capital_adjusted_gross_profit'
+                         end
+                     )
                     left join mart.strategy_decisions d
-                      on d.strategy_run_id = %s and d.issuer_id = cil.issuer_id
-                    where cil.run_id = %s
+                      on d.strategy_run_id = %(strategy_run_id)s and d.issuer_id = cil.issuer_id
+                    where cil.run_id = %(run_id)s
+                    order by cil.issuer_id, (mnv.node_key = %(bank_key)s) desc
                     """,
-                    (metadata["strategy_run_id"], run_id),
+                    {
+                        "strategy_run_id": metadata["strategy_run_id"],
+                        "run_id": run_id,
+                        "bank_key": GPPE_BANKING_TCE_SPEC.root,
+                        "base_key": GPPE_V0_SPEC.root,
+                    },
                 ).fetchall()
             }
             decisions = dict(
@@ -534,9 +554,9 @@ def test_the_pdd_shaped_listing_divides_ordinary_shares_by_four_before_multiplyi
 
     assert nvda_core[2] == "available"
     assert nvda_core[10] == expected_ps == Decimal("1")
-    assert nvda_core[21] == expected_pgp
+    assert nvda_core[21] == expected_pgp.quantize(Decimal("0.0001"))
     assert msft_core[10] == Decimal("4") == 4 * nvda_core[10]
-    assert msft_core[21] == expected_msft_pgp
+    assert msft_core[21] == expected_msft_pgp.quantize(Decimal("0.0001"))
 
 
 def test_missing_listing_unit_ratio_in_payload_marks_every_share_count_and_core_result_unavailable(

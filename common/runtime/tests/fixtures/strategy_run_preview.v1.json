@@ -189,6 +189,6 @@
     }
   ],
   "golden_mismatches": [],
-  "source": "strategy_smoke_fixture",
+  "source": "mart",
   "strategy_id": "large_model_value_v0"
 }

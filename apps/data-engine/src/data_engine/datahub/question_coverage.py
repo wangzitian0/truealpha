@@ -9,6 +9,7 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any
 
+from factors.panel import GPPE_BANKING_TCE_SPEC, GPPE_V0_SPEC
 from psycopg import Connection
 from truealpha_contracts.question_requirements import (
     QUESTION_REQUIREMENTS,
@@ -118,9 +119,14 @@ def _query_standard_cells(connection: Connection[Any], sql: str, run_id: str) ->
 
 def gppe_cells(connection: Connection[Any], run_id: str) -> tuple[Cell, ...]:
     rows = connection.execute(
-        "select issuer_id, availability_status, reason_codes, value "
-        "from mart.metric_node_values where run_id = %s and node_key = 'gppe_uniform_charge_v0' order by issuer_id",
-        (run_id,),
+        "select distinct on (mnv.issuer_id) mnv.issuer_id, mnv.availability_status, mnv.reason_codes, mnv.value "
+        "from mart.metric_node_values mnv "
+        "left join mart.capture_issuer_lineage cil using (run_id, issuer_id) "
+        "where mnv.run_id = %(run_id)s "
+        "and ((cil.operating_branch = 'financial' and mnv.node_key = %(bank_key)s) "
+        "or mnv.node_key = %(base_key)s) "
+        "order by mnv.issuer_id, (mnv.node_key = %(bank_key)s) desc",
+        {"run_id": run_id, "bank_key": GPPE_BANKING_TCE_SPEC.root, "base_key": GPPE_V0_SPEC.root},
     ).fetchall()
     return tuple(
         _classify_cell(r[0], r[1], r[2], r[3] if len(r) > 3 else Decimal("1"), allow_not_applicable=True) for r in rows

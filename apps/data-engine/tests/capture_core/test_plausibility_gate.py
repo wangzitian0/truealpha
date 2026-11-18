@@ -19,7 +19,7 @@ from data_engine.config import settings
 from data_engine.datahub.capture_core import PostgresToptCoreRepository, plausibility_gate
 from factors.composite import plausibility_policy
 from factors.composite.plausibility_policy import RULE_EMPTY_ELIGIBLE, RULE_NODE_SIGN_POLICY
-from factors.panel import IssuerClass, SignPolicy, published_node
+from factors.panel import GPPE_BANKING_TCE_SPEC, GPPE_V0_SPEC, IssuerClass, SignPolicy, published_node
 from factors.production_topt import GppeV0Definition
 from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.strategy import ExclusionReason
@@ -119,9 +119,9 @@ def _jpm_negative(connection, run_id: str) -> None:
           and mnv.issuer_id = cil.issuer_id
           and mnv.run_id = %s
           and cil.listing_id = 'listing:xnys:jpm'
-          and mnv.node_key = 'gppe_uniform_charge_v0'
+          and mnv.node_key in (%s, %s)
         """,
-        (run_id,),
+        (run_id, GPPE_V0_SPEC.root, GPPE_BANKING_TCE_SPEC.root),
     )
 
 

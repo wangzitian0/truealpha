@@ -21,6 +21,7 @@ from decimal import ROUND_HALF_EVEN, Decimal
 from pathlib import Path
 
 import psycopg
+from factors.panel import GPPE_BANKING_TCE_SPEC, GPPE_V0_SPEC
 from truealpha_contracts.strategy import load_live_strategy_definition
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -65,9 +66,22 @@ def _served(tick: Tick, ticker: str) -> tuple[Decimal, Decimal, str, str]:
             """
             select mnv.value, mnv.value, mnv.availability_status
             from mart.metric_node_values mnv
-            where mnv.run_id = %s and mnv.issuer_id = %s and mnv.node_key = 'gppe_uniform_charge_v0'
+            left join mart.capture_issuer_lineage cil using (run_id, issuer_id)
+            where mnv.run_id = %(run_id)s
+              and mnv.issuer_id = %(issuer_id)s
+              and (
+                  (cil.operating_branch = 'financial' and mnv.node_key = %(bank_key)s)
+                  or mnv.node_key = %(base_key)s
+              )
+            order by (mnv.node_key = %(bank_key)s) desc
+            limit 1
             """,
-            (tick.metadata["capture_run_id"], issuer_id),
+            {
+                "run_id": tick.metadata["capture_run_id"],
+                "issuer_id": issuer_id,
+                "bank_key": GPPE_BANKING_TCE_SPEC.root,
+                "base_key": GPPE_V0_SPEC.root,
+            },
         ).fetchone()
         decision = reader.execute(
             """

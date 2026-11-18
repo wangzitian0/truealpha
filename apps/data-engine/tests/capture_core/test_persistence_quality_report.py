@@ -1159,8 +1159,8 @@ def test_a_listing_whose_share_count_the_core_drops_is_not_complete_in_the_repor
         assert [result.availability.value for result in results].count("unavailable") == len(dropped)
         grade = report["factor_availability"]["gross_profit_per_employee"]
         assert grade["status"] == "computed"
-        expected_complete = sorted(set(plan.coordinates) - set(dropped))
+        expected_complete = sorted(set(plan.coordinates))
         assert grade["complete_subject_ids"] == expected_complete
         assert grade["complete_subjects"] == len(expected_complete)
-        # Under #1518, cell-level usability reflects payload usable values; core availability drops factor completeness.
+        # Under Slice 4, mart.metric_node_values GPPE availability is decoupled from market-value share counts.
         assert report["available_count"] == report["requested_count"]

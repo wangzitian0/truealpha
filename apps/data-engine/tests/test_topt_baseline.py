@@ -263,9 +263,9 @@ class Recording:
 
     def __init__(self, *answers: list[tuple[Any, ...]]) -> None:
         self.answers = list(answers)
-        self.asked: list[tuple[str, tuple[Any, ...]]] = []
+        self.asked: list[tuple[str, Any]] = []
 
-    def execute(self, sql: str, params: tuple[Any, ...] = ()) -> Answer:
+    def execute(self, sql: str, params: Any = ()) -> Answer:
         self.asked.append((sql, params))
         return Answer(self.answers.pop(0))
 
@@ -276,7 +276,7 @@ def test_the_gppe_reader_asks_for_the_run_of_the_head_and_compares_with_its_repo
     row = topt_baseline.read_gppe(connection, "capture-run:abc")
 
     assert row == Row("Q1", "pass", "Q1 GPPE 16/16 (100.0%) against 95.0%")
-    assert connection.asked[0][1] == ("capture-run:abc",)
+    assert connection.asked[0][1]["run_id"] == "capture-run:abc"
     assert connection.asked[1][1] == ("capture-run:abc",)
     assert "not_applicable" in connection.asked[0][0]
     assert "mart.metric_node_values" in connection.asked[0][0]

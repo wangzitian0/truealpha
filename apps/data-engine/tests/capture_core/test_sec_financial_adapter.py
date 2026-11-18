@@ -2539,7 +2539,7 @@ def test_gbp_price_against_usd_filing_marks_only_that_listing_currency_mismatch_
         assert msft_comp["market_price"]["value"] is None
         assert msft_comp["market_price"]["unavailable_reason"] == "currency_mismatch"
         assert msft_comp["shares_outstanding"]["availability"] == "available"
-        assert core[msft_issuer] == ("unavailable", ["currency_mismatch"])
+        assert core[msft_issuer] == ("available", [])
         assert decisions[msft_issuer] == "missing_market_value_input"
 
         other_available = [
