@@ -624,7 +624,7 @@ def test_resolve_or_mint_partner_entity_passes_8_params_and_uses_savepoint() -> 
 def test_build_issuer_lookup_resolves_ciks_via_governed_members(monkeypatch: pytest.MonkeyPatch) -> None:
     """LEI-keyed wide-row issuers resolve to their SEC CIK via `governed_members(connection, run_id=...)`
     even when `staging.entity_aliases` has no `scheme = 'cik'` row."""
-    from data_engine.datahub.production_topt import theme_purity
+    from data_engine.datahub.capture_core import theme_purity
     from data_engine.datahub.standards.supply_chain_extraction import _build_issuer_lookup
 
     nvda_uuid = _issuer_id("nvda")

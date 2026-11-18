@@ -21,6 +21,7 @@ from zoneinfo import ZoneInfo
 import psycopg
 import pytest
 from data_engine.config import settings
+from data_engine.datahub.capture_core.twelve_data_origin import TwelveDataQuoteFetcher
 from data_engine.datahub.market_prices import (
     PriceBarRecord,
     TwelveDataClient,
@@ -32,7 +33,6 @@ from data_engine.datahub.market_prices import (
     xnys_early_close_days,
     xnys_session_close_utc,
 )
-from data_engine.datahub.production_topt.twelve_data_origin import TwelveDataQuoteFetcher
 from data_engine.sources import gateway
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))

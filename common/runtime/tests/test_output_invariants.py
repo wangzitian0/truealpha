@@ -450,7 +450,7 @@ def _seed_issuer(
         "listing_id": execution,
     }
     conn.execute(
-        "insert into staging.topt_core_snapshot_members (snapshot_id, instrument_id, issuer_id, listing_id, "
+        "insert into staging.core_snapshot_members (snapshot_id, instrument_id, issuer_id, listing_id, "
         "observation_ids, member_sha256, factor_input) values (%s, %s, %s, %s, %s, %s, %s)",
         (
             snapshot_id,
@@ -583,7 +583,7 @@ def _seed_head(
         for listing in issuer.listings
     ]
     conn.execute(
-        "insert into staging.topt_core_snapshots (snapshot_id, content_sha256, run_id, release_manifest_id, "
+        "insert into staging.core_snapshots (snapshot_id, content_sha256, run_id, release_manifest_id, "
         "universe_id, universe_version, universe_sha256, cutoff, issuer_count, instrument_count, "
         "observation_count, payload) values (%s, %s, %s, %s, %s, 'v1', %s, '2026-03-31T20:00:00Z', %s, %s, %s, %s)",
         (
@@ -613,7 +613,7 @@ def _seeded_shape(conn: psycopg.Connection, run_id: str) -> tuple[int, ...]:
                (q.payload->'factor_availability'->'gross_profit_per_employee'->>'complete_subjects')::int,
                (select count(*)::int from mart.topt_core_results r
                 where r.run_id = s.run_id and r.availability = 'available')
-        from staging.topt_core_snapshots s
+        from staging.core_snapshots s
         join mart.datahub_quality_report q on q.run_id = s.run_id
         where s.run_id = %s
         """,
@@ -667,7 +667,7 @@ def test_the_seeded_members_resolve_through_the_identity_store(conn: psycopg.Con
     rows = conn.execute(
         """
         select member->>'listing_id', identity.listing_id
-        from staging.topt_core_snapshots s
+        from staging.core_snapshots s
         cross join lateral jsonb_array_elements(s.payload->'members') member
         left join mart.entity_identity identity on identity.entity_id::text = member->>'listing_id'
         where s.run_id = %s

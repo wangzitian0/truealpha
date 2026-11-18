@@ -38,6 +38,6 @@ def test_the_corpus_function_has_one_definition() -> None:
             for node in ast.walk(ast.parse(path.read_text()))
         )
     ]
-    assert definitions == ["data_engine.datahub.production_topt.universe_corpus"], (
+    assert definitions == ["data_engine.datahub.capture_core.universe_corpus"], (
         f"expected exactly one definition in universe_corpus, found {definitions}"
     )

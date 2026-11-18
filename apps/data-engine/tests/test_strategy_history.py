@@ -22,15 +22,15 @@ import pytest
 from data_engine import raw_store
 from data_engine.config import settings
 from data_engine.contracts.datahub import CaptureWorkItem
-from data_engine.datahub.input_cells import AsOfAxis, knowable_instant, vintage_knowable_at
-from data_engine.datahub.production_topt.concept_mapping import DEFAULT_RULESET
-from data_engine.datahub.production_topt.headcount import PostgresHeadcountExtractor, record_headcount
-from data_engine.datahub.production_topt.sec_financial_adapter import (
+from data_engine.datahub.capture_core.concept_mapping import DEFAULT_RULESET
+from data_engine.datahub.capture_core.headcount import PostgresHeadcountExtractor, record_headcount
+from data_engine.datahub.capture_core.sec_financial_adapter import (
     HeadcountFact,
     SecFinancialFactAdapter,
     SecTarget,
     build_bundle,
 )
+from data_engine.datahub.input_cells import AsOfAxis, knowable_instant, vintage_knowable_at
 from data_engine.datahub.standards.listing_unit_ratio import PATTERN_PLAIN_SHARE, ListingUnitRatio
 from data_engine.datahub.strategy_bridge import load_strategy_definition
 from data_engine.datahub.strategy_history import (
@@ -450,7 +450,7 @@ def _work_item() -> CaptureWorkItem:
 
 
 def test_the_projector_rows_match_the_rows_the_live_bridge_writes_for_the_same_payload() -> None:
-    from data_engine.datahub.production_topt.executor import FetchSuccess
+    from data_engine.datahub.capture_core.executor import FetchSuccess
     from data_engine.datahub.strategy_bridge import seed_strategy_inputs_from_capture
 
     issuer, document = _issuer(7), _doc(base=3000)
@@ -863,7 +863,7 @@ def test_the_lineage_query_finds_the_latest_financial_fact_of_each_issuer(connec
     from pathlib import Path
 
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from production_topt.test_materialization import _seed_complete_production_run  # noqa: PLC0415
+    from capture_core.test_materialization import _seed_complete_production_run  # noqa: PLC0415
 
     _seed_complete_production_run(connection, declare_primary_listings=False)
     from data_engine.datahub.strategy_history import latest_financial_observations  # noqa: PLC0415

@@ -37,7 +37,7 @@ from data_engine.datahub.canonical_issuer import (
     canonicalize_universe,
     is_canonical_issuer_id,
 )
-from data_engine.datahub.production_topt import theme_purity
+from data_engine.datahub.capture_core import theme_purity
 from data_engine.datahub.resolve_coordinates import lookup_entity, resolve_entity
 from data_engine.datahub.standards import planner
 from data_engine.lanes import standards
@@ -148,7 +148,7 @@ def _advance_pointer(
 def _materialize_head(
     connection: psycopg.Connection[Any], plan: Any, universe_prefix: str
 ) -> question_coverage.GovernedHead:
-    from data_engine.datahub.production_topt import PostgresToptCoreRepository
+    from data_engine.datahub.capture_core import PostgresToptCoreRepository
     from factors.production_topt import GppeV0Definition
 
     core = PostgresToptCoreRepository(connection)
@@ -162,7 +162,7 @@ def _capture_head(
 ) -> question_coverage.GovernedHead:
     """A real captured TOPT run with its wide row, advanced as the head of its universe."""
     monkeypatch.syspath_prepend(str(Path(__file__).resolve().parent))
-    from production_topt.test_persistence import _capture, _OneBrokenCell  # noqa: E402
+    from capture_core.test_persistence import _capture, _OneBrokenCell  # noqa: E402
 
     broken = _OneBrokenCell(financial_fact_numerator=blank_one_cell)
     plan = _capture(connection, version="test-1079", broken=broken)
@@ -181,7 +181,7 @@ def _qqq_denominator(report_date: date, *, without: str | None = None) -> dict[s
     import json
     from pathlib import Path
 
-    from data_engine.datahub.production_topt.universe_corpus import _mapping_sha256
+    from data_engine.datahub.capture_core.universe_corpus import _mapping_sha256
 
     qqq_path = Path(__file__).resolve().parent / "fixtures" / "corpus.qqq.v1.json"
     instruments = json.loads(qqq_path.read_text())["topt_denominator"]["instruments"][:21]
@@ -209,10 +209,10 @@ def _capture_qqq_head(
 ) -> question_coverage.GovernedHead:
     """A real capture of the QQQ-shaped universe. The cutoff is after its report date, so its
     inputs are stale and every wide row is `unavailable`."""
-    from data_engine.datahub.production_topt import composition
+    from data_engine.datahub.capture_core import composition
 
     monkeypatch.syspath_prepend(str(Path(__file__).resolve().parent))
-    import production_topt.test_persistence as persistence  # noqa: E402
+    import capture_core.test_persistence as persistence  # noqa: E402
 
     monkeypatch.setattr(
         composition, "_load_capture_corpus", lambda *_a, **_k: {"topt_denominator": _qqq_denominator(QQQ_REPORT_DATE)}
@@ -1193,7 +1193,7 @@ def test_the_head_report_date_is_the_partition_its_capture_wrote(
     `plan_and_persist` writes `str(denominator["report_date"])` as the partition of each obligation.
     The universe id ends with the same date here. The partition is the exact source.
     """
-    from data_engine.datahub.production_topt.universe_corpus import TOPT_CORPUS_FILENAME, load_corpus
+    from data_engine.datahub.capture_core.universe_corpus import TOPT_CORPUS_FILENAME, load_corpus
 
     corpus_date = date.fromisoformat(load_corpus(TOPT_CORPUS_FILENAME)["topt_denominator"]["report_date"])
     assert question_coverage.head_report_date(connection, head) == corpus_date == REPORT_DATE
@@ -1227,7 +1227,7 @@ def test_a_head_whose_report_date_cannot_be_read_fails_loudly(rows: list[tuple[s
 
 
 def test_the_planner_and_the_capture_share_one_topt_corpus_filename() -> None:
-    from data_engine.datahub.production_topt import composition, universe_corpus
+    from data_engine.datahub.capture_core import composition, universe_corpus
 
     assert planner.TOPT_CORPUS_FILENAME is universe_corpus.TOPT_CORPUS_FILENAME
     for function in (composition._load_capture_corpus, composition.plan_and_persist, composition.run_topt_pipeline):
@@ -1344,11 +1344,11 @@ def _seed_one_partition(
 
     Returns the wide-row id of that member. Every other member of the head keeps no partition.
     """
-    from data_engine.datahub.production_topt.theme_purity import governed_members
+    from data_engine.datahub.capture_core.theme_purity import governed_members
     from data_engine.sources import llm
 
     monkeypatch.syspath_prepend(str(Path(__file__).resolve().parent))
-    from production_topt.test_theme_purity_producer import _answers, _seed  # noqa: E402
+    from capture_core.test_theme_purity_producer import _answers, _seed  # noqa: E402
 
     members = governed_members(connection, run_id=head.run_id)
     assert members, "the head has members whose financials were fetched"
@@ -1373,7 +1373,7 @@ def _write_every_table(
     connection: psycopg.Connection[Any], head: question_coverage.GovernedHead, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Run the real writer of each lane table on the head. The capture fixture wrote the first two."""
-    from data_engine.datahub.production_topt.theme_purity import materialize_theme_purity
+    from data_engine.datahub.capture_core.theme_purity import materialize_theme_purity
     from data_engine.datahub.strategy_bridge import persist_strategy_input_coverage
 
     persist_strategy_input_coverage(connection, head.run_id, cutoff=head.cutoff)

@@ -815,7 +815,7 @@ def test_the_missing_key_message_names_the_variable_that_settings_reads(monkeypa
 def test_the_registry_holds_no_summed_model_limit_and_names_model_plan() -> None:
     """#1520 step 5: `LEDGER_CAPACITIES` no longer sums environment limits (13/min, 3 concurrent).
     The whole-account figure is `none_published` (`None`), and per-environment pacing stays in `model_seat`."""
-    from data_engine.datahub.production_topt import source_registrations as registry
+    from data_engine.datahub.capture_core import source_registrations as registry
 
     declared = registry.LEDGER_CAPACITIES[SEAT.seat]
     view = gateway.CAPACITIES[SEAT.seat]

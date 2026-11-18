@@ -166,8 +166,7 @@ def check_us_treasury() -> None:
 
 
 def check_moomoo() -> None:
-    from data_engine.datahub.fetch_key import FetchKey
-    from data_engine.datahub.production_topt.moomoo_origin import (
+    from data_engine.datahub.capture_core.moomoo_origin import (
         BALANCE_SHEET_FIELDS,
         INCOME_FIELDS,
         INCOME_STATEMENT,
@@ -176,6 +175,7 @@ def check_moomoo() -> None:
         parse_settled_close,
         period_end_of,
     )
+    from data_engine.datahub.fetch_key import FetchKey
 
     if not settings.moomoo_opend_host or not settings.moomoo_opend_port:
         _check("moomoo: OPEND coordinates configured", False, "checks skipped — set MOOMOO_OPEND_HOST/PORT")

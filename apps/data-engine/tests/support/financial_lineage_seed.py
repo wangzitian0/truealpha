@@ -39,8 +39,8 @@ from data_engine.contracts.datahub import (
     SourceRequest,
     SourceVintage,
 )
+from data_engine.datahub.capture_core.parser_identity import PARSER_VERSION
 from data_engine.datahub.control_plane import expand_obligations, replay_retry_policy
-from data_engine.datahub.production_topt.parser_identity import PARSER_VERSION
 from data_engine.datahub.repository import PostgresCaptureControlRepository
 from data_engine.datahub.resolve_coordinates import resolve_coordinates, resolve_entity
 from truealpha_contracts.common import CaptureEnvironment, canonical_sha256

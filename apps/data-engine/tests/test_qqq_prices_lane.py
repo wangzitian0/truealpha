@@ -28,6 +28,7 @@ import psycopg
 import pytest
 from data_engine import dagster_defs
 from data_engine.config import settings
+from data_engine.datahub.capture_core.universe_plane import parse_nasdaq_index_rows
 from data_engine.datahub.market_prices import (
     TwelveDataApiError,
     TwelveDataClient,
@@ -36,7 +37,6 @@ from data_engine.datahub.market_prices import (
     most_recent_xnys_session,
     xnys_session_close_utc,
 )
-from data_engine.datahub.production_topt.universe_plane import parse_nasdaq_index_rows
 from data_engine.datahub.share_basis import LiveShareCount, OnCloseBasis, SplitHistory, live_on_close_basis
 from data_engine.lanes import capture, market_data, qqq_prices
 from data_engine.lanes.market_data import _daily_cutoff
@@ -49,7 +49,7 @@ from split_series_seed import store_daily_series  # noqa: E402
 from topt_symbols import TOPT_SYMBOLS  # noqa: E402
 
 #: The Nasdaq-100 list as the index operator answered it on 2026-08-17 (sha-pinned by `test_universe_plane.py`).
-NASDAQ100_CASSETTE = Path(__file__).parent / "production_topt" / "cassettes" / "nasdaq100_index.bcc3fb15.json"
+NASDAQ100_CASSETTE = Path(__file__).parent / "capture_core" / "cassettes" / "nasdaq100_index.bcc3fb15.json"
 #: The Twelve Data calls of all other callers on 2026-10-15, from read-only SQL on each ledger (#1277).
 PRODUCTION_OTHER_CALLERS_DAY = 284
 STAGING_OTHER_CALLERS_DAY = 306

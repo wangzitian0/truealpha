@@ -199,7 +199,7 @@ def connection():
 
 
 def _seed_runs(connection, *, label: str, count: int) -> tuple[str, ...]:
-    """Seed the smallest capture-control chain `mart.topt_capture_status` resolves, with
+    """Seed the smallest capture-control chain `mart.capture_status` resolves, with
     `count` runs over ONE universe so every run shares one governed pointer key.
 
     The run's own evidence node is the capture executor's to append (#171 A1/A4); this

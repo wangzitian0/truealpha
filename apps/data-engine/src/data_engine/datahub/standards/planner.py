@@ -9,10 +9,10 @@ from typing import Any, Literal
 from data_engine.contracts.standards import MetricStandard
 from data_engine.datahub._helpers import OBSERVATION_VINTAGE_JOIN
 from data_engine.datahub.canonical_issuer import signed_predecessor_ciks
+from data_engine.datahub.capture_core.headcount import is_eligible_headcount_row
+from data_engine.datahub.capture_core.universe_corpus import TOPT_CORPUS_FILENAME, load_corpus
+from data_engine.datahub.capture_core.universe_plane import resolve_universe_corpus
 from data_engine.datahub.primary_listing import choose_primary_listings
-from data_engine.datahub.production_topt.headcount import is_eligible_headcount_row
-from data_engine.datahub.production_topt.universe_corpus import TOPT_CORPUS_FILENAME, load_corpus
-from data_engine.datahub.production_topt.universe_plane import resolve_universe_corpus
 from data_engine.datahub.resolve_coordinates import alias_of, is_uuid, lookup_entity
 
 TOPT_UNIVERSE = "topt"

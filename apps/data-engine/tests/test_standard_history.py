@@ -24,7 +24,7 @@ import dagster as dg
 import psycopg
 import pytest
 from data_engine.config import settings
-from data_engine.datahub.production_topt.headcount import PostgresHeadcountExtractor
+from data_engine.datahub.capture_core.headcount import PostgresHeadcountExtractor
 from data_engine.datahub.standards import backfill as backfill_module
 from data_engine.datahub.standards.planner import UniverseIssuer
 from data_engine.sources import llm

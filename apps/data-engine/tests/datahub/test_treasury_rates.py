@@ -31,13 +31,13 @@ import psycopg
 import pytest
 from data_engine import raw_store
 from data_engine.datahub import treasury_rates
-from data_engine.datahub.fetch_key import FetchKey
-from data_engine.datahub.production_topt.source_registrations import (
+from data_engine.datahub.capture_core.source_registrations import (
     LEDGER_CAPACITIES,
     MACRO_REGISTRATIONS,
     MacroSeries,
     macro_registration_for,
 )
+from data_engine.datahub.fetch_key import FetchKey
 from data_engine.datahub.risk_free import INSTRUMENT, MissingRiskFreeRate, risk_free_rate_at
 from data_engine.datahub.treasury_rates import (
     REGISTRATION,

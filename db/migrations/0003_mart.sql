@@ -448,7 +448,7 @@ create table if not exists mart.topt_gppe_invocations (
  constraint topt_gppe_invocations_gppe_definition_sha256_check CHECK ((gppe_definition_sha256 ~ '^[0-9a-f]{64}$'::text)),
  constraint topt_gppe_invocations_invocation_id_check CHECK ((invocation_id ~ '^topt-gppe-invocation:[0-9a-f]{64}$'::text)),
  constraint topt_gppe_invocations_payload_check CHECK ((jsonb_typeof(payload) = 'object'::text)),
- constraint topt_gppe_invocations_snapshot_id_fkey FOREIGN KEY (snapshot_id) REFERENCES staging.topt_core_snapshots(snapshot_id)
+ constraint topt_gppe_invocations_snapshot_id_fkey FOREIGN KEY (snapshot_id) REFERENCES staging.core_snapshots(snapshot_id)
 );
 
 create table if not exists mart.backtest_trades (
@@ -587,7 +587,7 @@ create table if not exists mart.topt_core_invocations (
  constraint topt_core_invocations_tier_definition_id_check CHECK ((tier_definition_id ~ '^(three-tier-definition|strategy-definition):[0-9a-f]{64}$'::text)),
  constraint topt_core_invocations_tier_definition_sha256_check CHECK ((tier_definition_sha256 ~ '^[0-9a-f]{64}$'::text)),
  constraint topt_core_invocations_gppe_invocation_id_fkey FOREIGN KEY (gppe_invocation_id) REFERENCES mart.topt_gppe_invocations(invocation_id),
- constraint topt_core_invocations_snapshot_id_fkey FOREIGN KEY (snapshot_id) REFERENCES staging.topt_core_snapshots(snapshot_id)
+ constraint topt_core_invocations_snapshot_id_fkey FOREIGN KEY (snapshot_id) REFERENCES staging.core_snapshots(snapshot_id)
 );
 
 create table if not exists mart.topt_gppe_results (
@@ -640,7 +640,7 @@ create table if not exists mart.topt_gppe_results (
  constraint topt_gppe_results_universe_sha256_check CHECK ((universe_sha256 ~ '^[0-9a-f]{64}$'::text)),
  constraint topt_gppe_results_invocation_id_fkey FOREIGN KEY (invocation_id) REFERENCES mart.topt_gppe_invocations(invocation_id),
  constraint topt_gppe_results_run_id_fkey FOREIGN KEY (run_id) REFERENCES raw.capture_runs(run_id),
- constraint topt_gppe_results_snapshot_id_fkey FOREIGN KEY (snapshot_id) REFERENCES staging.topt_core_snapshots(snapshot_id)
+ constraint topt_gppe_results_snapshot_id_fkey FOREIGN KEY (snapshot_id) REFERENCES staging.core_snapshots(snapshot_id)
 );
 
 create table if not exists mart.topt_core_results (
@@ -714,7 +714,7 @@ create table if not exists mart.topt_core_results (
  constraint topt_core_results_gppe_result_id_fkey FOREIGN KEY (gppe_result_id) REFERENCES mart.topt_gppe_results(result_id),
  constraint topt_core_results_invocation_id_fkey FOREIGN KEY (invocation_id) REFERENCES mart.topt_core_invocations(invocation_id),
  constraint topt_core_results_run_id_fkey FOREIGN KEY (run_id) REFERENCES raw.capture_runs(run_id),
- constraint topt_core_results_snapshot_id_fkey FOREIGN KEY (snapshot_id) REFERENCES staging.topt_core_snapshots(snapshot_id)
+ constraint topt_core_results_snapshot_id_fkey FOREIGN KEY (snapshot_id) REFERENCES staging.core_snapshots(snapshot_id)
 );
 
 do $$ begin if not exists (select 1 from pg_constraint where conrelid = 'mart.backtest_runs'::regclass and conname = 'backtest_runs_succeeded_declares_basis') then alter table mart.backtest_runs add constraint backtest_runs_succeeded_declares_basis CHECK (((status <> 'succeeded'::text) OR ((definition_content_sha256 IS NOT NULL) AND (price_basis IS NOT NULL) AND (claim_ceiling IS NOT NULL) AND (benchmark_rule IS NOT NULL)))) NOT VALID; end if; end $$;
@@ -827,12 +827,12 @@ execute $vc$create or replace view mart.current_pointer_head as
 end if; end $$;
 do $$ begin if to_regclass('mart.data_engine_identity') is null then
 execute $vc$create or replace view mart.data_engine_identity as
- SELECT production_topt_run_plans.run_id,
-    production_topt_run_plans.release_manifest_id,
-    COALESCE(production_topt_run_plans.payload ->> 'data_engine_git_sha'::text, 'unknown'::text) AS git_sha,
-    COALESCE(production_topt_run_plans.payload ->> 'data_engine_image_digest'::text, 'unknown'::text) AS image_digest,
-    production_topt_run_plans.created_at
-   FROM raw.production_topt_run_plans$vc$;
+ SELECT capture_run_plans.run_id,
+    capture_run_plans.release_manifest_id,
+    COALESCE(capture_run_plans.payload ->> 'data_engine_git_sha'::text, 'unknown'::text) AS git_sha,
+    COALESCE(capture_run_plans.payload ->> 'data_engine_image_digest'::text, 'unknown'::text) AS image_digest,
+    capture_run_plans.created_at
+   FROM raw.capture_run_plans$vc$;
 end if; end $$;
 do $$ begin if to_regclass('mart.entity_display_resolution') is null then
 execute $vc$create or replace view mart.entity_display_resolution as
@@ -865,7 +865,7 @@ execute $vc$create or replace view mart.entity_display_resolution as
                     WHEN m.issuer_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'::text THEN m.issuer_id::uuid
                     ELSE (SELECT ea.entity_id FROM staging.entity_aliases ea WHERE ea.scheme = 'legacy-id'::text AND ea.value = m.issuer_id ORDER BY ea.transaction_time DESC, ea.alias_id DESC LIMIT 1)
                 END AS issuer_uuid
-           FROM staging.topt_core_snapshot_members m
+           FROM staging.core_snapshot_members m
              LEFT JOIN primary_listings primary_listing ON primary_listing.issuer_id =
                 CASE
                     WHEN m.issuer_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'::text THEN m.issuer_id::uuid
@@ -1082,8 +1082,8 @@ execute $vc$create or replace view mart.macro_series_current as
    FROM mart.macro_series_daily
   ORDER BY macro_series_daily.series_id, macro_series_daily.observation_date DESC, macro_series_daily.recorded_at DESC, macro_series_daily.id DESC$vc$;
 end if; end $$;
-do $$ begin if to_regclass('mart.topt_capture_meta_info') is null then
-execute $vc$create or replace view mart.topt_capture_meta_info as
+do $$ begin if to_regclass('mart.capture_meta_info') is null then
+execute $vc$create or replace view mart.capture_meta_info as
  SELECT obligation.run_id,
     obligation.obligation_id,
     result.logical_obligation_id,
@@ -1172,8 +1172,8 @@ execute $vc$create or replace view mart.topt_capture_meta_info as
                   WHERE usage.capture_obligation_id = obligation.obligation_id AND candidate.source_vintage_id = COALESCE(final_attempt_result.source_vintage_id, final_attempt_result.reused_source_vintage_id) AND candidate.subject_kind = obligation.subject_kind AND candidate.subject_id = obligation.subject_id AND candidate.semantic_type = regexp_replace(obligation.capture_requirement_id, ':v1$'::text, ''::text) AND (candidate.valid_from AT TIME ZONE 'UTC'::text)::date <= (campaign.cutoff AT TIME ZONE 'UTC'::text)::date AND (candidate.valid_to IS NULL OR (candidate.valid_to AT TIME ZONE 'UTC'::text)::date >= (campaign.cutoff AT TIME ZONE 'UTC'::text)::date) AND candidate.knowable_at <= campaign.cutoff) selected
           WHERE selected.selection_count = 1) observation ON true$vc$;
 end if; end $$;
-do $$ begin if to_regclass('mart.topt_capture_status') is null then
-execute $vc$create or replace view mart.topt_capture_status as
+do $$ begin if to_regclass('mart.capture_status') is null then
+execute $vc$create or replace view mart.capture_status as
  SELECT run.run_id,
     run.campaign_id,
     campaign.environment,
@@ -1557,16 +1557,16 @@ AS $function$
 declare
     invocation mart.topt_core_invocations%rowtype;
     gppe_result mart.topt_gppe_results%rowtype;
-    snapshot staging.topt_core_snapshots%rowtype;
-    member staging.topt_core_snapshot_members%rowtype;
+    snapshot staging.core_snapshots%rowtype;
+    member staging.core_snapshot_members%rowtype;
     pgp_keys constant text[] := array['current_pgp', 'target_pgp_lower', 'target_pgp_upper', 'target_pgp_midpoint'];
     carries_pgp boolean := new.payload ?| pgp_keys;
 begin
     select * into invocation from mart.topt_core_invocations where invocation_id = new.invocation_id;
     select * into gppe_result from mart.topt_gppe_results where result_id = new.gppe_result_id;
-    select * into snapshot from staging.topt_core_snapshots where snapshot_id = new.snapshot_id;
+    select * into snapshot from staging.core_snapshots where snapshot_id = new.snapshot_id;
     select * into member
-      from staging.topt_core_snapshot_members
+      from staging.core_snapshot_members
      where snapshot_id = new.snapshot_id and issuer_id = new.issuer_id;
     if invocation.invocation_id is null
        or snapshot.snapshot_id is null
@@ -1679,12 +1679,12 @@ CREATE OR REPLACE FUNCTION mart.validate_topt_gppe_result()
 AS $function$
 declare
     invocation mart.topt_gppe_invocations%rowtype;
-    snapshot staging.topt_core_snapshots%rowtype;
-    member staging.topt_core_snapshot_members%rowtype;
+    snapshot staging.core_snapshots%rowtype;
+    member staging.core_snapshot_members%rowtype;
 begin
     select * into invocation from mart.topt_gppe_invocations where invocation_id = new.invocation_id;
-    select * into snapshot from staging.topt_core_snapshots where snapshot_id = new.snapshot_id;
-    select * into member from staging.topt_core_snapshot_members
+    select * into snapshot from staging.core_snapshots where snapshot_id = new.snapshot_id;
+    select * into member from staging.core_snapshot_members
      where snapshot_id = new.snapshot_id and issuer_id = new.issuer_id;
     if invocation.invocation_id is null or snapshot.snapshot_id is null or member.snapshot_id is null
        or invocation.snapshot_id <> new.snapshot_id
@@ -1737,16 +1737,16 @@ begin
 end;
 $function$;
 
-CREATE OR REPLACE FUNCTION staging.validate_topt_core_snapshot()
+CREATE OR REPLACE FUNCTION staging.validate_core_snapshot()
  RETURNS trigger
  LANGUAGE plpgsql
 AS $function$
 declare
-    capture_status mart.topt_capture_status%rowtype;
+    capture_status mart.capture_status%rowtype;
     release_exists boolean;
     release_matches_plan boolean;
 begin
-    select * into capture_status from mart.topt_capture_status where run_id = new.run_id;
+    select * into capture_status from mart.capture_status where run_id = new.run_id;
     if capture_status.run_id is null
        or capture_status.environment <> (select environment from mart.environment_identity)
        or capture_status.obligation_count <> new.observation_count
@@ -1767,7 +1767,7 @@ begin
          where contract_id = new.release_manifest_id and contract_kind = 'release_manifest'
     ) into release_exists;
     select exists (
-        select 1 from raw.production_topt_run_plans
+        select 1 from raw.capture_run_plans
          where run_id = new.run_id and release_manifest_id = new.release_manifest_id
     ) into release_matches_plan;
     if not release_exists or not release_matches_plan then
@@ -1802,7 +1802,7 @@ do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'mart.topt_g
 do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'mart.topt_gppe_results'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = '3146cbe498803394cc4bf41a4f180dd2') then drop trigger if exists reject_mutation on mart.topt_gppe_results; CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON mart.topt_gppe_results FOR EACH ROW EXECUTE FUNCTION raw.reject_capture_control_mutation(); end if; end $$;
 do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'mart.topt_gppe_results'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = '049275c2907a3c1b0b50b7342a07fc13') then drop trigger if exists validate_gppe_result on mart.topt_gppe_results; CREATE TRIGGER validate_gppe_result BEFORE INSERT ON mart.topt_gppe_results FOR EACH ROW EXECUTE FUNCTION mart.validate_topt_gppe_result(); end if; end $$;
 
-do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'staging.topt_core_snapshots'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = '29d6015f9d20ecf7db85d43d5d533cda') then drop trigger if exists validate_snapshot on staging.topt_core_snapshots; CREATE TRIGGER validate_snapshot BEFORE INSERT ON staging.topt_core_snapshots FOR EACH ROW EXECUTE FUNCTION staging.validate_topt_core_snapshot(); end if; end $$;
+do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'staging.core_snapshots'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = '8b33b1bf393eb684b9370d3f0927bfd4') then drop trigger if exists validate_snapshot on staging.core_snapshots; CREATE TRIGGER validate_snapshot BEFORE INSERT ON staging.core_snapshots FOR EACH ROW EXECUTE FUNCTION staging.validate_core_snapshot(); end if; end $$;
 
 do $$ begin if to_regclass('mart.idx_backtest_runs_strategy') is null then CREATE INDEX idx_backtest_runs_strategy ON mart.backtest_runs USING btree (strategy_key, executed_at DESC); end if; end $$;
 do $$ begin if to_regclass('mart.idx_backtest_trades_run') is null then CREATE INDEX idx_backtest_trades_run ON mart.backtest_trades USING btree (run_id, trade_date); end if; end $$;

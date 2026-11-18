@@ -13,8 +13,8 @@ from factors.confidence import evaluate_cell_confidence
 from truealpha_contracts.confidence import ContinuousConfidencePolicy, SourceConfidenceEvidence
 from truealpha_contracts.metrics import is_registered_input_key
 
-from data_engine.datahub.production_topt.source_registrations import source_reliability_prior
-from data_engine.datahub.production_topt.status_dimensions import statuses_without_raw_pointer
+from data_engine.datahub.capture_core.source_registrations import source_reliability_prior
+from data_engine.datahub.capture_core.status_dimensions import statuses_without_raw_pointer
 
 DEFAULT_CONFIDENCE_POLICY = ContinuousConfidencePolicy()
 
@@ -182,7 +182,7 @@ def unbacked_status_values(cutoff: datetime | None) -> tuple[datetime, str, str]
 
 
 def fetch_topt_cutoff(connection: Any, run_id: str) -> datetime | None:
-    row = connection.execute("select cutoff from mart.topt_capture_status where run_id = %s", (run_id,)).fetchone()
+    row = connection.execute("select cutoff from mart.capture_status where run_id = %s", (run_id,)).fetchone()
     return row[0] if row is not None else None
 
 

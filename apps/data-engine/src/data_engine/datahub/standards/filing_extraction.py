@@ -16,10 +16,10 @@ from truealpha_contracts.models import DataSource
 from truealpha_contracts.ports import RawObjectStore
 
 from data_engine.contracts.standards import MetricStandard, confidence_for
+from data_engine.datahub.capture_core.headcount import record_headcount
+from data_engine.datahub.capture_core.issuer_registry import ANNUAL_STATEMENT_FORMS, STATEMENT_FORMS
+from data_engine.datahub.capture_core.source_registrations import AsOfAxis, knowable_instant
 from data_engine.datahub.fetch_key import FetchKey
-from data_engine.datahub.production_topt.headcount import record_headcount
-from data_engine.datahub.production_topt.issuer_registry import ANNUAL_STATEMENT_FORMS, STATEMENT_FORMS
-from data_engine.datahub.production_topt.source_registrations import AsOfAxis, knowable_instant
 from data_engine.raw_store import insert_fetch
 from data_engine.sources import llm
 from data_engine.sources.gateway import CapacityExceeded, SourceGateway

@@ -290,7 +290,7 @@ def _research_payload(ctx: Any, code: str, endpoint: str, fn: Callable[..., Any]
 def _fetch_rating_enrichment(
     ctx: Any, code: str, *, as_of: datetime
 ) -> tuple[list[AnalystRatingItem], bool, dict[date, Decimal]]:
-    from data_engine.datahub.production_topt.moomoo_origin import parse_valuation_profit_growth
+    from data_engine.datahub.capture_core.moomoo_origin import parse_valuation_profit_growth
     from data_engine.sources.moomoo import get_rating_summary, get_valuation_detail
 
     summary_items: list[AnalystRatingItem] = []

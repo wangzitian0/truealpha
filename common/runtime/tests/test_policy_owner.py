@@ -16,9 +16,9 @@ from typing import Any
 import pytest
 from data_engine.contracts.standards import STANDARDS, FactPlane
 from data_engine.datahub import quality_report
-from data_engine.datahub.production_topt import headcount, twelve_data_origin
-from data_engine.datahub.production_topt.market_price_adapter import CorroboratingOrigin, failover_order
-from data_engine.datahub.production_topt.source_registrations import (
+from data_engine.datahub.capture_core import headcount, twelve_data_origin
+from data_engine.datahub.capture_core.market_price_adapter import CorroboratingOrigin, failover_order
+from data_engine.datahub.capture_core.source_registrations import (
     MOOMOO_KLINE_MAPPING_VERSION,
     MOOMOO_KLINE_ORIGIN,
     MOOMOO_KLINE_PARSER_VERSION,

@@ -589,7 +589,7 @@ def test_the_runs_that_hold_a_universe_are_its_ticks_and_its_report_writers() ->
 
 def test_head_reports_record_purity_and_coverage_per_universe(monkeypatch, written) -> None:
     from data_engine.datahub import question_coverage
-    from data_engine.datahub.production_topt import theme_purity
+    from data_engine.datahub.capture_core import theme_purity
 
     monkeypatch.setattr(settings, "app_env", "production")  # production runs TOPT and QQQ
 
@@ -623,7 +623,7 @@ def test_the_purity_summary_counts_rows_and_carries_no_value(monkeypatch, writte
     from types import SimpleNamespace
 
     from data_engine.datahub import question_coverage
-    from data_engine.datahub.production_topt import theme_purity
+    from data_engine.datahub.capture_core import theme_purity
 
     run = "capture-run:" + "c" * 64
     head = question_coverage.GovernedHead("universe:topt-us-2026-03-31", run, datetime(2026, 9, 16, 22, 45, tzinfo=UTC))

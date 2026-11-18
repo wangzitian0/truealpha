@@ -22,8 +22,8 @@ from factors.shared.extraction import (
 
 from data_engine.contracts.standards import MetricStandard, confidence_for
 from data_engine.datahub._helpers import OBSERVATION_VINTAGE_JOIN, execute_many
-from data_engine.datahub.production_topt.concept_mapping import DEFAULT_RULESET
-from data_engine.datahub.production_topt.source_registrations import AsOfAxis, knowable_instant
+from data_engine.datahub.capture_core.concept_mapping import DEFAULT_RULESET
+from data_engine.datahub.capture_core.source_registrations import AsOfAxis, knowable_instant
 from data_engine.datahub.standards.filing_extraction import (
     ExtractionOutcome,
     fetch_annual_filing,

@@ -44,7 +44,7 @@ Query the actual database:
 ```sql
 -- Assert real data rows exist in the target mart table
 SELECT run_id, count(*), min(valid_time), max(valid_time)
-FROM mart.topt_capture_status
+FROM mart.capture_status
 WHERE complete = true
 GROUP BY run_id
 ORDER BY max(valid_time) DESC

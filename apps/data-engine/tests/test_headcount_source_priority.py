@@ -5,7 +5,7 @@ declared knowable_at is later."""
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
-from data_engine.datahub.production_topt.headcount import PostgresHeadcountExtractor
+from data_engine.datahub.capture_core.headcount import PostgresHeadcountExtractor
 from truealpha_runtime.reconciliation_policies import HEADCOUNT_RECONCILIATION_POLICY
 
 

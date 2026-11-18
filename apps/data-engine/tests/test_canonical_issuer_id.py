@@ -143,7 +143,7 @@ def _advance_pointer(
 def _materialize_head(
     connection: psycopg.Connection[Any], plan: Any, universe_prefix: str
 ) -> question_coverage.GovernedHead:
-    from data_engine.datahub.production_topt import PostgresToptCoreRepository
+    from data_engine.datahub.capture_core import PostgresToptCoreRepository
     from factors.production_topt import GppeV0Definition
 
     core = PostgresToptCoreRepository(connection)
@@ -157,7 +157,7 @@ def _capture_head(
 ) -> question_coverage.GovernedHead:
     """A real captured TOPT run with its wide row, advanced as the head of its universe."""
     monkeypatch.syspath_prepend(str(Path(__file__).resolve().parent))
-    from production_topt.test_persistence import _capture, _OneBrokenCell  # noqa: E402
+    from capture_core.test_persistence import _capture, _OneBrokenCell  # noqa: E402
 
     broken = _OneBrokenCell(financial_fact_numerator=blank_one_cell)
     plan = _capture(connection, version="test-1079", broken=broken)
@@ -176,7 +176,7 @@ def _qqq_denominator(report_date: date, *, without: str | None = None) -> dict[s
     import json
     from pathlib import Path
 
-    from data_engine.datahub.production_topt.universe_corpus import _mapping_sha256
+    from data_engine.datahub.capture_core.universe_corpus import _mapping_sha256
 
     qqq_path = Path(__file__).resolve().parent / "fixtures" / "corpus.qqq.v1.json"
     instruments = json.loads(qqq_path.read_text())["topt_denominator"]["instruments"][:21]
@@ -204,10 +204,10 @@ def _capture_qqq_head(
 ) -> question_coverage.GovernedHead:
     """A real capture of the QQQ-shaped universe. The cutoff is after its report date, so its
     inputs are stale and every wide row is `unavailable`."""
-    from data_engine.datahub.production_topt import composition
+    from data_engine.datahub.capture_core import composition
 
     monkeypatch.syspath_prepend(str(Path(__file__).resolve().parent))
-    import production_topt.test_persistence as persistence  # noqa: E402
+    import capture_core.test_persistence as persistence  # noqa: E402
 
     monkeypatch.setattr(
         composition, "_load_capture_corpus", lambda *_a, **_k: {"topt_denominator": _qqq_denominator(QQQ_REPORT_DATE)}

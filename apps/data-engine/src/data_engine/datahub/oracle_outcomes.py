@@ -21,8 +21,8 @@ from data_engine import raw_store
 from data_engine.contracts.oracle_policy import load_oracle_policy
 from data_engine.contracts.sentinel_known_answers import SentinelKnownAnswer, load_sentinel_known_answers
 from data_engine.datahub._helpers import CAPTURE_OBSERVATION_JOIN, fetch_topt_cutoff
-from data_engine.datahub.production_topt.source_registrations import AsOfAxis, knowable_instant
-from data_engine.datahub.production_topt.universe_plane import UNIVERSE_SOURCES
+from data_engine.datahub.capture_core.source_registrations import AsOfAxis, knowable_instant
+from data_engine.datahub.capture_core.universe_plane import UNIVERSE_SOURCES
 from data_engine.quality import vendor_oracle
 
 OPERATOR_COMPARATOR = "operator_listed_units"
@@ -56,8 +56,8 @@ NO_OBSERVATION = "no_observation"
 SIGN_DIFFERS = "sign_differs"
 
 _FROZEN_FACTOR_INPUTS_SQL = (
-    "select member.factor_input from staging.topt_core_snapshots snapshot "
-    "join staging.topt_core_snapshot_members member on member.snapshot_id = snapshot.snapshot_id "
+    "select member.factor_input from staging.core_snapshots snapshot "
+    "join staging.core_snapshot_members member on member.snapshot_id = snapshot.snapshot_id "
     "where snapshot.run_id = %s order by member.snapshot_id, member.factor_input ->> 'issuer_id'"
 )
 _OBSERVATION_FETCH_SQL = (

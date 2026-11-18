@@ -14,8 +14,8 @@ from collections.abc import Mapping, Sequence
 from datetime import UTC, date, datetime
 
 from data_engine import raw_store
+from data_engine.datahub.capture_core.universe_plane import UNIVERSE_SOURCES, publish_universe_list
 from data_engine.datahub.market_prices import TwelveDataClient
-from data_engine.datahub.production_topt.universe_plane import UNIVERSE_SOURCES, publish_universe_list
 from truealpha_contracts.models import DataSource
 from truealpha_runtime.testing import InMemoryRawObjectStore
 

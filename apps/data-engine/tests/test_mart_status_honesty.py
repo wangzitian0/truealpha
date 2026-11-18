@@ -35,7 +35,7 @@ from data_engine.datahub.analyst_ratings import (
     materialize_universe_analyst_ratings,
 )
 from data_engine.datahub.canonical_issuer import CanonicalIssuer
-from data_engine.datahub.production_topt import status_dimensions
+from data_engine.datahub.capture_core import status_dimensions
 from data_engine.datahub.standards.supply_chain_extraction import (
     materialize_supply_chain_exposure,
     materialize_universe_supply_chain_exposure,
@@ -51,7 +51,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 DATA_ENGINE_SRC = REPO_ROOT / "apps" / "data-engine" / "src"
 
 #: The one data-engine module that may name the `accepted` status. It holds the status source.
-STATUS_SOURCE_FILES = {"apps/data-engine/src/data_engine/datahub/production_topt/status_dimensions.py"}
+STATUS_SOURCE_FILES = {"apps/data-engine/src/data_engine/datahub/capture_core/status_dimensions.py"}
 
 #: Writers that must appear in the scanned tree. A scan that misses them proves nothing.
 SWEPT_WRITER_FILES = {

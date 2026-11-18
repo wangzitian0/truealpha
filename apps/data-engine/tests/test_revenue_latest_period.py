@@ -36,7 +36,7 @@ import psycopg
 import pytest
 from data_engine.config import settings
 from data_engine.contracts.concept_mapping import ConceptMappingRuleset
-from data_engine.datahub.production_topt.concept_mapping import DEFAULT_RULESET, publish_ruleset
+from data_engine.datahub.capture_core.concept_mapping import DEFAULT_RULESET, publish_ruleset
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "support"))
 from sec_route import served_financial_record  # noqa: E402
@@ -112,7 +112,7 @@ def test_the_fixtures_hold_the_old_figures_that_the_route_must_not_serve() -> No
 
 def test_the_utility_total_never_replaces_the_figure_of_an_earlier_concept_for_the_same_period() -> None:
     """The utility concept is the last synonym. For one period, the earlier concept keeps its value."""
-    from data_engine.datahub.production_topt.sec_financial_adapter import build_bundle
+    from data_engine.datahub.capture_core.sec_financial_adapter import build_bundle
     from factors.production_topt import OperatingBranch
 
     def annual(value: int) -> dict:

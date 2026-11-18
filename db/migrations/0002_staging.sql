@@ -400,7 +400,7 @@ create table if not exists staging.strategy_backtest_inputs (
  constraint strategy_backtest_inputs_pit CHECK ((knowable_at <= cutoff_at))
 );
 
-create table if not exists staging.topt_core_snapshots (
+create table if not exists staging.core_snapshots (
  snapshot_id text not null,
  content_sha256 text not null,
  run_id text not null,
@@ -414,18 +414,18 @@ create table if not exists staging.topt_core_snapshots (
  observation_count integer not null,
  payload jsonb not null,
  created_at timestamp with time zone default clock_timestamp() not null,
- constraint topt_core_snapshots_pkey PRIMARY KEY (snapshot_id),
- constraint topt_core_snapshots_content_sha256_key UNIQUE (content_sha256),
- constraint topt_core_snapshots_run_id_key UNIQUE (run_id),
- constraint topt_core_snapshots_check CHECK ((split_part(snapshot_id, ':'::text, 2) = content_sha256)),
- constraint topt_core_snapshots_content_sha256_check CHECK ((content_sha256 ~ '^[0-9a-f]{64}$'::text)),
- constraint topt_core_snapshots_instrument_count_check CHECK ((instrument_count >= 1)),
- constraint topt_core_snapshots_issuer_count_check CHECK (((issuer_count >= 1) AND (issuer_count <= instrument_count))),
- constraint topt_core_snapshots_observation_count_check CHECK ((observation_count = (4 * instrument_count))),
- constraint topt_core_snapshots_payload_check CHECK ((jsonb_typeof(payload) = 'object'::text)),
- constraint topt_core_snapshots_snapshot_id_check CHECK ((snapshot_id ~ '^topt-core-snapshot:[0-9a-f]{64}$'::text)),
- constraint topt_core_snapshots_universe_sha256_check CHECK ((universe_sha256 ~ '^[0-9a-f]{64}$'::text)),
- constraint topt_core_snapshots_run_id_fkey FOREIGN KEY (run_id) REFERENCES raw.capture_runs(run_id)
+ constraint core_snapshots_pkey PRIMARY KEY (snapshot_id),
+ constraint core_snapshots_content_sha256_key UNIQUE (content_sha256),
+ constraint core_snapshots_run_id_key UNIQUE (run_id),
+ constraint core_snapshots_check CHECK ((split_part(snapshot_id, ':'::text, 2) = content_sha256)),
+ constraint core_snapshots_content_sha256_check CHECK ((content_sha256 ~ '^[0-9a-f]{64}$'::text)),
+ constraint core_snapshots_instrument_count_check CHECK ((instrument_count >= 1)),
+ constraint core_snapshots_issuer_count_check CHECK (((issuer_count >= 1) AND (issuer_count <= instrument_count))),
+ constraint core_snapshots_observation_count_check CHECK ((observation_count = (4 * instrument_count))),
+ constraint core_snapshots_payload_check CHECK ((jsonb_typeof(payload) = 'object'::text)),
+ constraint core_snapshots_snapshot_id_check CHECK ((snapshot_id ~ '^topt-core-snapshot:[0-9a-f]{64}$'::text)),
+ constraint core_snapshots_universe_sha256_check CHECK ((universe_sha256 ~ '^[0-9a-f]{64}$'::text)),
+ constraint core_snapshots_run_id_fkey FOREIGN KEY (run_id) REFERENCES raw.capture_runs(run_id)
 );
 
 create table if not exists staging.universe_mask (
@@ -584,7 +584,7 @@ create table if not exists staging.fund_holding_facts (
  constraint fund_holding_facts_holding_id_fkey FOREIGN KEY (holding_id) REFERENCES staging.entities(entity_id)
 );
 
-create table if not exists staging.topt_core_snapshot_members (
+create table if not exists staging.core_snapshot_members (
  snapshot_id text not null,
  instrument_id text not null,
  issuer_id text not null,
@@ -593,13 +593,13 @@ create table if not exists staging.topt_core_snapshot_members (
  member_sha256 text not null,
  factor_input jsonb not null,
  created_at timestamp with time zone default clock_timestamp() not null,
- constraint topt_core_snapshot_members_pkey PRIMARY KEY (snapshot_id, issuer_id),
- constraint topt_core_snapshot_members_snapshot_id_instrument_id_key UNIQUE (snapshot_id, instrument_id),
- constraint topt_core_snapshot_members_snapshot_id_listing_id_key UNIQUE (snapshot_id, listing_id),
- constraint topt_core_snapshot_members_factor_input_check CHECK ((jsonb_typeof(factor_input) = 'object'::text)),
- constraint topt_core_snapshot_members_member_sha256_check CHECK ((member_sha256 ~ '^[0-9a-f]{64}$'::text)),
- constraint topt_core_snapshot_members_observation_ids_check CHECK (((cardinality(observation_ids) >= 4) AND ((cardinality(observation_ids) % 4) = 0))),
- constraint topt_core_snapshot_members_snapshot_id_fkey FOREIGN KEY (snapshot_id) REFERENCES staging.topt_core_snapshots(snapshot_id)
+ constraint core_snapshot_members_pkey PRIMARY KEY (snapshot_id, issuer_id),
+ constraint core_snapshot_members_snapshot_id_instrument_id_key UNIQUE (snapshot_id, instrument_id),
+ constraint core_snapshot_members_snapshot_id_listing_id_key UNIQUE (snapshot_id, listing_id),
+ constraint core_snapshot_members_factor_input_check CHECK ((jsonb_typeof(factor_input) = 'object'::text)),
+ constraint core_snapshot_members_member_sha256_check CHECK ((member_sha256 ~ '^[0-9a-f]{64}$'::text)),
+ constraint core_snapshot_members_observation_ids_check CHECK (((cardinality(observation_ids) >= 4) AND ((cardinality(observation_ids) % 4) = 0))),
+ constraint core_snapshot_members_snapshot_id_fkey FOREIGN KEY (snapshot_id) REFERENCES staging.core_snapshots(snapshot_id)
 );
 
 create table if not exists staging.capture_entity_refs (
@@ -1416,7 +1416,7 @@ begin
     return new;
 end;
 $function$;
-CREATE OR REPLACE FUNCTION staging.validate_topt_core_snapshot_member()
+CREATE OR REPLACE FUNCTION staging.validate_core_snapshot_member()
  RETURNS trigger
  LANGUAGE plpgsql
 AS $function$
@@ -2085,9 +2085,9 @@ do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'staging.mar
 do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'staging.model_invocations'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = 'f4eed3ab505235da7ad42f852a85b296') then drop trigger if exists reject_mutation on staging.model_invocations; CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON staging.model_invocations FOR EACH ROW EXECUTE FUNCTION raw.reject_mutation(); end if; end $$;
 do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'staging.pipeline_trigger_requests'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = '60b2cbed702e09257811e325bd3d8422') then drop trigger if exists reject_trigger_delete on staging.pipeline_trigger_requests; CREATE TRIGGER reject_trigger_delete BEFORE DELETE ON staging.pipeline_trigger_requests FOR EACH ROW EXECUTE FUNCTION staging.reject_pipeline_trigger_delete(); end if; end $$;
 do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'staging.pipeline_trigger_requests'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = 'ccb40a047cd2d232acdbb00c9659605b') then drop trigger if exists validate_trigger_update on staging.pipeline_trigger_requests; CREATE TRIGGER validate_trigger_update BEFORE UPDATE ON staging.pipeline_trigger_requests FOR EACH ROW EXECUTE FUNCTION staging.validate_pipeline_trigger_update(); end if; end $$;
-do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'staging.topt_core_snapshot_members'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = '3a001b807958e25ddb36dba8107947a0') then drop trigger if exists reject_mutation on staging.topt_core_snapshot_members; CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON staging.topt_core_snapshot_members FOR EACH ROW EXECUTE FUNCTION raw.reject_capture_control_mutation(); end if; end $$;
-do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'staging.topt_core_snapshot_members'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = 'bc46e8d3e82e69705b3ce8e7d5d98c97') then drop trigger if exists validate_member on staging.topt_core_snapshot_members; CREATE TRIGGER validate_member BEFORE INSERT ON staging.topt_core_snapshot_members FOR EACH ROW EXECUTE FUNCTION staging.validate_topt_core_snapshot_member(); end if; end $$;
-do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'staging.topt_core_snapshots'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = '7324d399982f8931f8ba8a3b220a2b94') then drop trigger if exists reject_mutation on staging.topt_core_snapshots; CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON staging.topt_core_snapshots FOR EACH ROW EXECUTE FUNCTION raw.reject_capture_control_mutation(); end if; end $$;
+do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'staging.core_snapshot_members'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = '56604115308729397b03ef37195b8e35') then drop trigger if exists reject_mutation on staging.core_snapshot_members; CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON staging.core_snapshot_members FOR EACH ROW EXECUTE FUNCTION raw.reject_capture_control_mutation(); end if; end $$;
+do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'staging.core_snapshot_members'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = '1824f0b6a6a1d9b451608875e265ddb7') then drop trigger if exists validate_member on staging.core_snapshot_members; CREATE TRIGGER validate_member BEFORE INSERT ON staging.core_snapshot_members FOR EACH ROW EXECUTE FUNCTION staging.validate_core_snapshot_member(); end if; end $$;
+do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'staging.core_snapshots'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = '7a1b7a74986466bcc6ce6aeecdbfa49f') then drop trigger if exists reject_mutation on staging.core_snapshots; CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON staging.core_snapshots FOR EACH ROW EXECUTE FUNCTION raw.reject_capture_control_mutation(); end if; end $$;
 
 do $$ begin if to_regclass('staging.idx_analyst_rating_events_asof') is null then CREATE INDEX idx_analyst_rating_events_asof ON staging.analyst_rating_events USING btree (company_id, transaction_time DESC, recommendation_at DESC); end if; end $$;
 do $$ begin if to_regclass('staging.ix_api_call_ledger_called_at') is null then CREATE INDEX ix_api_call_ledger_called_at ON staging.api_call_ledger USING btree (called_at DESC); end if; end $$;

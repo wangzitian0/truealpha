@@ -25,8 +25,8 @@ from infra2_sdk.capacity import RateLimitWindow
 from truealpha_contracts.environment_contract import DAY_SECONDS, load_environment_contract
 
 from data_engine.config import settings
+from data_engine.datahub.capture_core.source_registrations import LEDGER_CAPACITIES, CapacityDeclaration
 from data_engine.datahub.fetch_key import FetchKey
-from data_engine.datahub.production_topt.source_registrations import LEDGER_CAPACITIES, CapacityDeclaration
 from data_engine.sources import accept_rules
 from data_engine.sources.landed_keys import LandedKeys, PostgresLandedKeys
 

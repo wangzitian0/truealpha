@@ -16,10 +16,10 @@ from typing import Any
 
 from data_engine.config import settings
 from data_engine.contracts.datahub import CaptureWorkItem
-from data_engine.datahub.production_topt import issuer_registry
-from data_engine.datahub.production_topt.executor import FetchSuccess
-from data_engine.datahub.production_topt.sec_financial_adapter import build_route
-from data_engine.datahub.production_topt.source_registrations import RouteCell, RouteContext
+from data_engine.datahub.capture_core import issuer_registry
+from data_engine.datahub.capture_core.executor import FetchSuccess
+from data_engine.datahub.capture_core.sec_financial_adapter import build_route
+from data_engine.datahub.capture_core.source_registrations import RouteCell, RouteContext
 from data_engine.sources import sec
 from factors.production_topt import OperatingBranch
 

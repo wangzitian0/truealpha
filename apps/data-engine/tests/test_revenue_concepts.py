@@ -26,9 +26,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from data_engine.datahub.production_topt.concept_mapping import DEFAULT_RULESET
-from data_engine.datahub.production_topt.parser_identity import MAPPING_VERSION, PARSER_VERSION
-from data_engine.datahub.production_topt.sec_financial_adapter import (
+from data_engine.datahub.capture_core.concept_mapping import DEFAULT_RULESET
+from data_engine.datahub.capture_core.parser_identity import MAPPING_VERSION, PARSER_VERSION
+from data_engine.datahub.capture_core.sec_financial_adapter import (
     annual_values_by_period_end,
     build_bundle,
 )

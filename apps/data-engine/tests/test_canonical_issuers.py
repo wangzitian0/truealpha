@@ -551,7 +551,7 @@ def _project_shares(document: dict, *, ruleset=None):
     """
     from datetime import date
 
-    from data_engine.datahub.production_topt.concept_mapping import DEFAULT_RULESET
+    from data_engine.datahub.capture_core.concept_mapping import DEFAULT_RULESET
     from data_engine.datahub.strategy_history import HistoryIssuer, LastClose, project_issuer_rows
     from factors.backtest.corporate_actions import SplitEvent
     from factors.production_topt import OperatingBranch
@@ -604,7 +604,7 @@ def _statement_first_ruleset():
     A pointer advance can publish such a ruleset with no deploy, so the code must not rely on the order.
     """
     from data_engine.contracts.concept_mapping import ConceptMappingRuleset
-    from data_engine.datahub.production_topt.concept_mapping import DEFAULT_RULESET
+    from data_engine.datahub.capture_core.concept_mapping import DEFAULT_RULESET
 
     data = DEFAULT_RULESET.model_dump(mode="json")
     for mapping in data["mappings"]:

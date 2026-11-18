@@ -13,9 +13,9 @@ from decimal import Decimal
 from typing import Any
 
 import pytest
+from data_engine.datahub.capture_core.concept_mapping import DEFAULT_RULESET
 from data_engine.datahub.market_prices import is_xnys_trading_day
 from data_engine.datahub.price_series import DailySeries
-from data_engine.datahub.production_topt.concept_mapping import DEFAULT_RULESET
 from data_engine.datahub.share_basis import (
     CLOSE_JUMP_BEYOND_SERIES,
     LISTINGS_DISAGREE,

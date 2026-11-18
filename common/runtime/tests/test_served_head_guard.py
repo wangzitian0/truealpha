@@ -113,7 +113,7 @@ SERVED = (
     "mart.datahub_confidence_report",
     "mart.question_coverage_report",
     "mart.strategy_input_coverage",
-    "mart.topt_capture_status",
+    "mart.capture_status",
     "mart.data_engine_identity",
     "mart.backtest_runs",
     "mart.backtest_trades",
@@ -125,7 +125,7 @@ SERVED = (
 #: Relations with a run key that no consumer-reachable file reads. The reason is checkable:
 #: `test_no_consumer_reaches_a_relation_listed_as_not_served` fails when a file names one.
 NOT_SERVED = {
-    "mart.topt_capture_meta_info": "metadata of one capture run; no consumer reads it",
+    "mart.capture_meta_info": "metadata of one capture run; no consumer reads it",
     "mart.topt_core_invocations": "factor invocation records; no consumer reads them",
     "mart.topt_gppe_invocations": "factor invocation records; no consumer reads them",
     "mart.strategy_run_capture_bindings": "the write side of the capture binding; no consumer reads it",
@@ -1273,16 +1273,16 @@ def test_a_consumer_file_that_names_a_not_served_relation_is_reported(tmp_path: 
     _write(
         tmp_path,
         "apps/app-web/src/server/mart/capture.ts",
-        "export const SQL = `select run_id from mart.topt_capture_meta_info order by created_at desc limit 1`;\n",
+        "export const SQL = `select run_id from mart.capture_meta_info order by created_at desc limit 1`;\n",
     )
     _write(
         tmp_path,
         "common/contracts/src/truealpha_contracts/meta.py",
         'SQL = "select 1 from MART.TOPT_CORE_INVOCATIONS"\n',
     )
-    _write(tmp_path, "apps/app-web/src/server/mart/quiet.ts", "// mart.topt_capture_meta_info in a comment only\n")
+    _write(tmp_path, "apps/app-web/src/server/mart/quiet.ts", "// mart.capture_meta_info in a comment only\n")
     assert consumer_references(tmp_path, tuple(NOT_SERVED)) == {
-        "apps/app-web/src/server/mart/capture.ts": ["mart.topt_capture_meta_info"],
+        "apps/app-web/src/server/mart/capture.ts": ["mart.capture_meta_info"],
         "common/contracts/src/truealpha_contracts/meta.py": ["mart.topt_core_invocations"],
     }
 

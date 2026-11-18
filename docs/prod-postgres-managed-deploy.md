@@ -28,7 +28,7 @@ Two services: a `vault-agent` (renders the postgres password from Vault via AppR
    `truealpha-postgres-prod-data` volume, OR restore the latest dump
    (`/root/backups/truealpha-prod/prod-*.dump`) into the managed instance:
    `pg_restore -U postgres -d truealpha --clean --if-exists <dump>`.
-4. **Verify:** `mart.topt_capture_status.complete = t` and
+4. **Verify:** `mart.capture_status.complete = t` and
    `select payload->>'gppe' from mart.topt_gppe_results where payload->>'availability'='available'`
    returns `1153614.480937195208819629373924669` (the MVP GOOG GPPE).
 5. **Retire the bootstrap:** stop/remove the `docker run` container and delete

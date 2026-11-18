@@ -34,8 +34,8 @@ from data_engine.dagster_defs import (
     topt_live_schedule,
 )
 from data_engine.datahub.a1_evidence import PointerRegistration, UnmetObjective
+from data_engine.datahub.capture_core.composition import ToptPipelineResult, live_version_for
 from data_engine.datahub.fetch_key import FetchKey
-from data_engine.datahub.production_topt.composition import ToptPipelineResult, live_version_for
 from data_engine.lanes import LANE_MODULES, capture, lane_definitions
 from data_engine.lanes.capture import tick_cron
 from truealpha_contracts.environment_contract import UnknownUniverse, load_environment_contract
@@ -219,7 +219,7 @@ def _fake_tick(monkeypatch, registration: PointerRegistration) -> None:
     # #544: the plausibility gate reads mart through the connection; these tests fake the
     # connection, so the gate is stubbed to a passing verdict (its own tests are
     # production_topt/test_plausibility_gate.py, against a real database).
-    from data_engine.datahub.production_topt.plausibility_gate import Verdict
+    from data_engine.datahub.capture_core.plausibility_gate import Verdict
 
     passing = Verdict("v4", (), (), ())
     monkeypatch.setattr(capture, "judge_issuers", lambda *a, **k: passing)
@@ -330,7 +330,7 @@ def test_the_strategy_replay_gets_the_rate_the_core_engine_used_and_the_op_repor
 
 def _two_issuers_flagged(monkeypatch, flagged: list[str]) -> None:
     """The gate judged two issuers; the registry could not classify `flagged`."""
-    from data_engine.datahub.production_topt.plausibility_gate import Verdict
+    from data_engine.datahub.capture_core.plausibility_gate import Verdict
 
     judged = Verdict("v4", (), (), (), issuers={"listing:a": "issuer:a", "listing:b": "issuer:b"})
     monkeypatch.setattr(capture, "judge_issuers", lambda *a, **k: judged)
@@ -380,8 +380,8 @@ def test_lost_corroborations_reach_the_tick_summary(monkeypatch, caplog) -> None
     from decimal import Decimal
 
     from data_engine.contracts.datahub import CaptureWorkItem
-    from data_engine.datahub.production_topt.executor import FetchSuccess
-    from data_engine.datahub.production_topt.market_price_adapter import (
+    from data_engine.datahub.capture_core.executor import FetchSuccess
+    from data_engine.datahub.capture_core.market_price_adapter import (
         CorroboratingOrigin,
         MarketPriceAdapter,
         MarketPriceQuote,
@@ -521,9 +521,9 @@ def test_an_exhausted_budget_is_named_by_the_deployed_tick(monkeypatch, call_led
     from data_engine.config import settings
     from data_engine.contracts.datahub import CaptureWorkItem
     from data_engine.contracts.obligation_reason_codes import ObligationReasonCode
-    from data_engine.datahub.production_topt import twelve_data_origin
-    from data_engine.datahub.production_topt.executor import FetchFailure, FetchSuccess
-    from data_engine.datahub.production_topt.market_price_adapter import (
+    from data_engine.datahub.capture_core import twelve_data_origin
+    from data_engine.datahub.capture_core.executor import FetchFailure, FetchSuccess
+    from data_engine.datahub.capture_core.market_price_adapter import (
         MarketPriceAdapter,
         MarketPriceQuote,
         MarketPriceTarget,
@@ -787,8 +787,8 @@ def test_all_active_universes_and_standards_planes_are_scheduled_and_enabled_in_
     `form4_daily_schedule`, `10k_annual_schedule`). `topt`, `qqq`, and `canary` are RUNNING in
     production/prod; the SP500 schedules (#1310) and the 4 unimplemented per-form Standards Plane
     schedules stay registered and STOPPED until their budgets and per-form filters exist."""
+    from data_engine.datahub.capture_core.universe_plane import UNIVERSE_SOURCES
     from data_engine.datahub.confidence_report import _universe_source
-    from data_engine.datahub.production_topt.universe_plane import UNIVERSE_SOURCES
     from data_engine.lanes import standards, universe_refresh
 
     active_universe_keys = {"topt", "qqq", "sp500", "canary"}
@@ -927,8 +927,8 @@ def test_refresh_universes_skips_stopped_sp500_and_isolates_per_universe_transac
     constituent failure never rolls back another universe's published list."""
     import psycopg
     from data_engine.config import settings
-    from data_engine.datahub.production_topt import holdings_enrichment, nport_holdings
-    from data_engine.datahub.production_topt.universe_plane import UNIVERSE_SOURCES, latest_quarter_end
+    from data_engine.datahub.capture_core import holdings_enrichment, nport_holdings
+    from data_engine.datahub.capture_core.universe_plane import UNIVERSE_SOURCES, latest_quarter_end
     from data_engine.lanes import universe_refresh
 
     monkeypatch.setattr(settings, "app_env", "production")
@@ -1261,18 +1261,18 @@ def test_issue_1310_registered_schedules_fit_within_twelve_data_daily_allowance_
     from datetime import date
 
     from data_engine.config import settings
-    from data_engine.datahub.production_topt import (
+    from data_engine.datahub.capture_core import (
         market_price_adapter,
         moomoo_origin,
         twelve_data_origin,
         universe_corpus,
     )
-    from data_engine.datahub.production_topt.source_registrations import (
+    from data_engine.datahub.capture_core.source_registrations import (
         RouteCell,
         RouteContext,
         origin_per_key_cost,
     )
-    from data_engine.datahub.production_topt.universe_plane import parse_nasdaq_index_rows
+    from data_engine.datahub.capture_core.universe_plane import parse_nasdaq_index_rows
     from data_engine.lanes import market_data, qqq_prices
     from data_engine.sources import gateway
     from truealpha_contracts.environment_contract import EnvironmentContract, load_environment_contract
@@ -1295,7 +1295,7 @@ def test_issue_1310_registered_schedules_fit_within_twelve_data_daily_allowance_
 
     topt_corpus = universe_corpus.load_corpus(universe_corpus.TOPT_CORPUS_FILENAME)
     topt_symbols = {str(row[3]) for row in topt_corpus["topt_denominator"]["instruments"]}
-    nasdaq100_path = Path(__file__).parent / "production_topt" / "cassettes" / "nasdaq100_index.bcc3fb15.json"
+    nasdaq100_path = Path(__file__).parent / "capture_core" / "cassettes" / "nasdaq100_index.bcc3fb15.json"
     qqq_tickers = {row["ticker"] for row in parse_nasdaq_index_rows(nasdaq100_path.read_bytes())}
     qqq_outside_topt = qqq_tickers - topt_symbols
 

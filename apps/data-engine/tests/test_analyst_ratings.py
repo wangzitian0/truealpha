@@ -1075,7 +1075,7 @@ def _execute_job(
     `universe` is the universe of the run. `connects` gets one entry per attempt to open the moomoo
     context, so a test can tell a run that fetched from a run that found the head current."""
     from data_engine.datahub import question_coverage
-    from data_engine.datahub.production_topt import theme_purity
+    from data_engine.datahub.capture_core import theme_purity
     from data_engine.datahub.standards import planner, supply_chain_extraction
     from data_engine.lanes import standards
     from data_engine.quality import nightly_verdicts

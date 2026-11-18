@@ -110,7 +110,7 @@ def _check_pointer_and_period_invariants(failures: list[str]) -> None:
         if "test" in path.name or "node_modules" in str(path):
             continue
         text = path.read_text()
-        for table, guard in (("mart.current_pointer_head", ""), ("mart.topt_capture_status", "datahub_quality_report")):
+        for table, guard in (("mart.current_pointer_head", ""), ("mart.capture_status", "datahub_quality_report")):
             for block in re.finditer(rf"from {re.escape(table)}(?P<body>.{{0,600}})", text, re.S):
                 body = re.sub(r"--[^\n]*", "", block.group("body"))
                 if (not guard or guard in body) and "universe_id" not in body:

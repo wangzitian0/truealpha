@@ -184,7 +184,7 @@ def test_the_closure_walk_is_not_vacuous() -> None:
         # Loaded by import_module from strings: the Dagster lanes and a source route builder.
         "data_engine.lanes.backtest",
         "data_engine.lanes.market_data",
-        "data_engine.datahub.production_topt.release_derived_adapter",
+        "data_engine.datahub.capture_core.release_derived_adapter",
     ):
         assert module in closure, f"{module} is deployed but the walk did not reach it"
     assert len(closure) > 100, f"the walk reached only {len(closure)} modules"

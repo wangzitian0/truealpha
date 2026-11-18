@@ -7,7 +7,7 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
-from data_engine.datahub.production_topt.source_registrations import (
+from data_engine.datahub.capture_core.source_registrations import (
     REGISTRATIONS,
     AsOfAxis,
     SourceRegistration,
@@ -40,7 +40,7 @@ def test_last_settled_accession_date_never_exceeds_cutoff_and_routes_through_com
         assert knowable_instant(AsOfAxis.ACCESSION, settled) <= cutoff
 
     data_engine_src = Path(__file__).resolve().parents[1] / "src" / "data_engine"
-    comp_text = (data_engine_src / "datahub" / "production_topt" / "composition.py").read_text(encoding="utf-8")
+    comp_text = (data_engine_src / "datahub" / "capture_core" / "composition.py").read_text(encoding="utf-8")
     hist_text = (data_engine_src / "datahub" / "strategy_history.py").read_text(encoding="utf-8")
     assert "cutoff_date=last_settled_accession_date(plan.cutoff)" in comp_text
     assert "as_of = last_settled_accession_date(cutoff_at)" in hist_text

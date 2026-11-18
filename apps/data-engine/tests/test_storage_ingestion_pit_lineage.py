@@ -8,7 +8,7 @@ This module tests the four core pillars of Topic 2:
 2. Scope SSOT & Denominator Integrity:
    - Obligation planning strictly computes the exact Cartesian product of members and semantics.
    - Anti-exclusion: No dropping failing tickers to fabricate a green completion status.
-   - mart.topt_capture_status.complete is strictly count(result_id) = count(obligation_id).
+   - mart.capture_status.complete is strictly count(result_id) = count(obligation_id).
 3. PIT Storage & §8 Status Dimensions:
    - staging.capture_normalized_observations.knowable_at has NO default clock expression.
    - Constraint recorded_at >= knowable_at prevents physical ingestion before knowable-at cutoff.
@@ -34,19 +34,19 @@ import psycopg
 import pytest
 from data_engine.contracts.capture_control import CaptureListVersion
 from data_engine.contracts.datahub import CaptureCampaign, CaptureRun, CaptureSchedulePolicy
-from data_engine.datahub.control_plane import expand_obligations, replay_retry_policy
-from data_engine.datahub.production_topt import source_registrations as registry
-from data_engine.datahub.production_topt.source_registrations import (
+from data_engine.datahub.capture_core import source_registrations as registry
+from data_engine.datahub.capture_core.source_registrations import (
     LEDGER_CAPACITIES,
     REGISTRATIONS,
     CapacityDeclaration,
     OriginRegistration,
 )
-from data_engine.datahub.production_topt.status_dimensions import (
+from data_engine.datahub.capture_core.status_dimensions import (
     availability_status_for,
     source_evidence_status_for,
     statuses_without_raw_pointer,
 )
+from data_engine.datahub.control_plane import expand_obligations, replay_retry_policy
 from data_engine.datahub.repository import PostgresCaptureControlRepository
 from factors.validation_records import validation_status_for
 from truealpha_contracts.common import CaptureEnvironment, canonical_sha256
@@ -418,8 +418,8 @@ def test_pit_schema_constraint_recorded_at_must_be_after_knowable_at(db_conn: ps
         )
 
 
-def test_scope_ssot_mart_topt_capture_status_denominator_and_completion(db_conn: psycopg.Connection[Any]) -> None:
-    """mart.topt_capture_status derives obligation_count from raw obligations and checks completion."""
+def test_scope_ssot_mart_capture_status_denominator_and_completion(db_conn: psycopg.Connection[Any]) -> None:
+    """mart.capture_status derives obligation_count from raw obligations and checks completion."""
     label = f"scope_test_{datetime.now(UTC).timestamp()}"
     universe = UniverseRef(
         universe_id=f"universe:{label}",
@@ -470,7 +470,7 @@ def test_scope_ssot_mart_topt_capture_status_denominator_and_completion(db_conn:
 
     # Before results are inserted: obligation_count == 4, terminal_count == 0, complete == false
     status = db_conn.execute(
-        "select obligation_count, terminal_count, complete from mart.topt_capture_status where run_id = %s",
+        "select obligation_count, terminal_count, complete from mart.capture_status where run_id = %s",
         (run.run_id,),
     ).fetchone()
     assert status is not None

@@ -761,7 +761,7 @@ def get_datahub_stats(*, database_url: str | None = None) -> DatahubStatsRespons
             cur,
             "select run_id, universe_id, cutoff::text as cutoff, obligation_count as obligations, "
             "(success_count + unchanged_count)::int as resolved, failed_count as failed, complete "
-            "from mart.topt_capture_status order by cutoff desc limit 12",
+            "from mart.capture_status order by cutoff desc limit 12",
         )
         verdicts_raw = _safe(
             cur,
@@ -813,7 +813,7 @@ def get_datahub_stats(*, database_url: str | None = None) -> DatahubStatsRespons
             f"select 'plausibility sign checks' as check, "
             f"case when coalesce((q.payload->>'implausible_count')::int, 0) = 0 then 'pass' else 'violations' end as verdict, "
             f"coalesce(q.payload->>'implausible_count', '0') || ' implausible cells in the newest report' as detail "
-            f"from mart.datahub_quality_report q join mart.topt_capture_status s using (run_id) where {NON_CANARY_UNIVERSE_WHERE} "
+            f"from mart.datahub_quality_report q join mart.capture_status s using (run_id) where {NON_CANARY_UNIVERSE_WHERE} "
             "order by s.cutoff desc limit 1",
             (sentinel_likes,),
         ) + _safe(
@@ -821,7 +821,7 @@ def get_datahub_stats(*, database_url: str | None = None) -> DatahubStatsRespons
             "select 'cross-run reuse (24h)' as check, "
             "case when coalesce(sum(unchanged_count), 0) > 0 then 'active' else 'idle' end as verdict, "
             "coalesce(sum(unchanged_count), 0) || ' vendor fetches avoided across ' || count(*) || ' runs' as detail "
-            "from mart.topt_capture_status where cutoff > now() - interval '24 hours'",
+            "from mart.capture_status where cutoff > now() - interval '24 hours'",
         )
         return DatahubStatsResponse(
             heads=heads_raw,

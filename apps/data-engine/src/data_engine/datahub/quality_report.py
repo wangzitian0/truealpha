@@ -34,14 +34,14 @@ from truealpha_runtime.reconciliation_policies import (
 )
 
 from data_engine.datahub._helpers import CAPTURE_OBSERVATION_JOIN, fetch_topt_cutoff
-from data_engine.datahub.production_topt.executor import SERVED_BY_FAILOVER
-from data_engine.datahub.production_topt.materialization import (
+from data_engine.datahub.capture_core.executor import SERVED_BY_FAILOVER
+from data_engine.datahub.capture_core.materialization import (
     FinancialFactPayload,
     IdentityPayload,
     MarketPricePayload,
 )
-from data_engine.datahub.production_topt.parser_identity import PARSER_VERSION_HISTORY
-from data_engine.datahub.production_topt.source_registrations import (
+from data_engine.datahub.capture_core.parser_identity import PARSER_VERSION_HISTORY
+from data_engine.datahub.capture_core.source_registrations import (
     RELEASE_SEMANTICS,
     SOURCE_BY_PARSER,
     registration_for,
@@ -76,7 +76,7 @@ _FINANCIAL_OBLIGATION_METRICS: frozenset[str] = frozenset(
     {"gross_profit", "total_assets", "shares_outstanding", "revenue", "net_income", "headcount", "pre_provision_profit"}
 )
 _CORE_COMPLETE_LISTINGS_SQL = (
-    "select distinct coalesce(identity.listing_id, member->>'listing_id') from staging.topt_core_snapshots s "
+    "select distinct coalesce(identity.listing_id, member->>'listing_id') from staging.core_snapshots s "
     "cross join lateral jsonb_array_elements(s.payload->'members') member "
     "left join mart.entity_identity identity on identity.entity_id::text = member->>'listing_id' "
     "where s.run_id = %s and exists (select 1 from mart.topt_core_results r "
@@ -299,7 +299,7 @@ def build_report(
 ) -> dict[str, Any]:
     status = conn.execute(
         "select obligation_count, terminal_count, success_count, unchanged_count, unavailable_count, skipped_count, failed_count, complete "
-        "from mart.topt_capture_status where run_id = %s",
+        "from mart.capture_status where run_id = %s",
         (run_id,),
     ).fetchone()
     if status is None:
@@ -314,7 +314,7 @@ def build_report(
         "left join staging.capture_observation_payloads p on p.observation_id = o.observation_id "
         "left join raw.capture_source_vintages v on v.source_vintage_id = o.source_vintage_id "
         "left join raw.fetches f on f.id = v.raw_fetch_id "
-        "left join mart.topt_capture_meta_info meta on meta.obligation_id = ob.obligation_id "
+        "left join mart.capture_meta_info meta on meta.obligation_id = ob.obligation_id "
         "where ob.run_id = %s order by ob.obligation_id, o.observation_id",
         (run_id,),
     ).fetchall()
@@ -368,7 +368,7 @@ def build_report(
     confidences = [c.confidence for c in cells.values() if c.confidence is not None]
     mean_conf = (sum(confidences) / requested) if requested else Decimal(0)
     plan = conn.execute(
-        "select coalesce((payload->>'forced_fetch')::boolean, false) from raw.production_topt_run_plans where run_id = %s",
+        "select coalesce((payload->>'forced_fetch')::boolean, false) from raw.capture_run_plans where run_id = %s",
         (run_id,),
     ).fetchone()
     ratios = {
