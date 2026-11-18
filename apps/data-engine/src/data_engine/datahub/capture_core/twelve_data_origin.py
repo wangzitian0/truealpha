@@ -320,28 +320,29 @@ class TwelveDataQuoteFetcher:
         )
         existing_fetch_id: int | None = None
         existing_sha256: str | None = None
-        if hasattr(self._connection, "transaction"):
-            try:
-                with self._connection.transaction():
-                    landed = self._connection.execute(
-                        """
-                        select rf.id, rf.payload_sha256
-                        from staging.landed_fetch_keys lfk
-                        join raw.fetches rf on rf.id = lfk.fetch_id
-                        where lfk.seat = 'twelvedata'
-                          and lfk.canonical_entity_id = %s
-                          and lfk.as_of <= %s
-                        order by lfk.as_of desc, rf.recorded_at desc
-                        limit 1
-                        """,
-                        (symbol, cutoff),
-                    ).fetchone()
-                if landed is not None:
-                    existing_fetch_id = int(landed[0])
-                    existing_sha256 = str(landed[1])
-            except Exception:  # noqa: BLE001
-                existing_fetch_id = None
-                existing_sha256 = None
+        if hasattr(self._connection, "pgconn"):
+            with self._connection.transaction():
+                landed = self._connection.execute(
+                    """
+                    select rf.id, rf.payload_sha256
+                    from staging.landed_fetch_keys lfk
+                    join raw.fetches rf on rf.id = lfk.raw_fetch_id
+                    where lfk.seat = 'twelvedata'
+                      and lfk.canonical_entity_id = %s
+                      and (
+                          (lfk.endpoint = 'eod' and lfk.as_of in (%s, %s))
+                          or (lfk.endpoint = 'time_series' and split_part(lfk.as_of, ':', 2) = %s)
+                      )
+                    order by case when lfk.endpoint = 'time_series' then 0 else 1 end,
+                             lfk.landed_at desc,
+                             rf.recorded_at desc
+                    limit 1
+                    """,
+                    (symbol, trading_date.isoformat(), cutoff.isoformat(), trading_date.isoformat()),
+                ).fetchone()
+            if landed is not None:
+                existing_fetch_id = int(landed[0])
+                existing_sha256 = str(landed[1])
         return MarketPriceQuote(
             raw_bytes=raw_bytes,
             close=Decimal(str(close)),

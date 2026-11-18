@@ -386,5 +386,23 @@ WITH DATA
         create unique index uq_mart_fund_holdings_valuation
             on mart.fund_holdings_valuation using btree (fund_id, report_period, transaction_time, isin, cusip, holding_name) nulls not distinct;
     end if;
+
+    if exists (select 1 from pg_roles where rolname = 'mart_readonly') then
+        grant select on
+            mart.entity_identity,
+            mart.fund_holdings,
+            mart.fund_holdings_resolved,
+            mart.fund_holdings_coverage,
+            mart.fund_holdings_valuation
+        to mart_readonly;
+    end if;
+    if exists (select 1 from pg_roles where rolname = 'app_ops_reader') then
+        grant select on
+            mart.fund_holdings,
+            mart.fund_holdings_resolved,
+            mart.fund_holdings_coverage,
+            mart.fund_holdings_valuation
+        to app_ops_reader;
+    end if;
 end
 $$;

@@ -16,12 +16,13 @@ from data_engine.external_op import external_op
 ENTITY_BACKFILL_JOB_NAME = "entity_identity_backfill"
 
 
-def run_entity_backfill(connection: psycopg.Connection[Any]) -> dict[str, Any]:
+def run_entity_backfill(connection: psycopg.Connection[Any], *, refresh_mart: bool = True) -> dict[str, Any]:
     started = time.monotonic()
     row = connection.execute("select staging.entity_backfill()").fetchone()
     assert row is not None
     summary: dict[str, Any] = dict(row[0])
-    refresh_mart_materialized_views(connection)
+    if refresh_mart:
+        refresh_mart_materialized_views(connection)
     summary["duration_seconds"] = round(time.monotonic() - started, 3)
     return summary
 
@@ -33,9 +34,9 @@ def _count(section: Mapping[str, Any]) -> int:
 @external_op
 def entity_identity_backfill_op(context: dg.OpExecutionContext) -> dg.Output[dict[str, Any]]:
     with psycopg.connect(settings.database_url) as connection:
-        summary = run_entity_backfill(connection)
+        summary = run_entity_backfill(connection, refresh_mart=False)
         connection.commit()
-        refresh_mart_materialized_views(connection, concurrently=True, commit_before=True)
+        refresh_mart_materialized_views(connection, concurrently=True)
     context.log.info(f"entity backfill: {json.dumps(summary, sort_keys=True)}")
     if summary["failed"]:
         context.log.warning(f"entity backfill could not write {len(summary['failed'])} component(s)")

@@ -256,6 +256,9 @@ def main() -> None:
             stats["holding_fact_lines"] += len(holding_fact_rows)
 
     conn.commit()
+    from truealpha_runtime.mart_refresh import refresh_mart_materialized_views
+
+    refresh_mart_materialized_views(conn, concurrently=True)
     conn.close()
     print(
         f"companies={stats['companies']} holds_edges={stats['holds_edges']} holding_facts={stats['holding_fact_lines']}"

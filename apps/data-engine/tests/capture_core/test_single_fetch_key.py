@@ -504,88 +504,151 @@ def test_k4_d1_twelve_data_quote_fetcher_reads_staging_market_prices_daily_witho
 
 
 def test_k4_d1_from_price_store_reuses_existing_raw_fetch_without_inserting_duplicate(monkeypatch) -> None:
-    """When landed_fetch_keys + raw.fetches already hold a Twelve Data landing, _from_price_store
-    attaches existing_raw_fetch_id and _put_vintage reuses it without calling raw_store.insert_fetch (#1730)."""
-    from contextlib import nullcontext
+    """When landed_fetch_keys + raw.fetches already hold a Twelve Data landing in Postgres,
+    _from_price_store resolves raw_fetch_id without SQL/type errors and _put_vintage reuses it (#1730)."""
+    import hashlib
+    import os
 
+    import psycopg
+    from data_engine.config import settings
     from data_engine.datahub.capture_core.executor import RawResponse
+    from data_engine.datahub.market_prices import PriceBarRecord, insert_market_prices_daily
+    from data_engine.raw_store import insert_fetch
+    from data_engine.sources.landed_keys import _LAND_SQL
     from truealpha_contracts.models import DataSource
+    from truealpha_runtime.testing import InMemoryRawObjectStore
 
-    expected_sha = "a" * 64
+    try:
+        conn = psycopg.connect(settings.database_url, connect_timeout=3, autocommit=False)
+    except psycopg.OperationalError as error:
+        if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
+            pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
+        pytest.skip("no local Postgres; CI runs required DB tests")
 
-    class _ReuseConn:
-        info = object()
+    try:
+        store = InMemoryRawObjectStore()
+        now = datetime(2026, 10, 16, 20, 0, tzinfo=UTC)
+        sym_series = "T1730TS"
+        sym_eod = "T1730EOD"
 
-        def transaction(self):
-            return nullcontext()
+        stale_body = b'{"symbol":"T1730TS","close":"200.00"}'
+        stale_fetch_id = insert_fetch(
+            conn,
+            source=DataSource.TWELVE_DATA,
+            source_record_id=f"{sym_series}:eod:2026-10-14",
+            body=stale_body,
+            content_type="application/json",
+            fetched_at=datetime(2026, 10, 14, 20, 0, tzinfo=UTC),
+            store=store,
+        )
+        conn.execute(_LAND_SQL, ("twelvedata", "eod", sym_series, "2026-10-14", "run-stale", stale_fetch_id))
 
-        def execute(self, sql: str, params: tuple[Any, ...]):
-            if "staging.market_prices_daily" in sql:
-                assert params == ("AAPL", date(2026, 10, 16))
-                row = (
-                    date(2026, 10, 16),
-                    Decimal("225.10"),
-                    Decimal("228.50"),
-                    Decimal("224.00"),
-                    Decimal("227.55"),
-                    Decimal("42000000"),
-                    datetime(2026, 10, 16, 20, 0, tzinfo=UTC),
-                )
-            elif "staging.landed_fetch_keys" in sql:
-                assert params == ("AAPL", date(2026, 10, 16))
-                row = (4242, expected_sha)
-            else:
-                raise AssertionError(f"unexpected SQL: {sql}")
+        ts_body = b'{"symbol":"T1730TS","values":[{"datetime":"2026-10-16","close":"227.55"}]}'
+        ts_sha = hashlib.sha256(ts_body).hexdigest()
+        ts_fetch_id = insert_fetch(
+            conn,
+            source=DataSource.TWELVE_DATA,
+            source_record_id=f"{sym_series}:time_series:2026-10-16",
+            body=ts_body,
+            content_type="application/json",
+            fetched_at=now,
+            store=store,
+        )
+        conn.execute(
+            _LAND_SQL,
+            ("twelvedata", "time_series", sym_series, "2026-10-17:2026-10-16", "run-ts", ts_fetch_id),
+        )
 
-            class _One:
-                def __init__(self, value):
-                    self._value = value
+        eod_body = b'{"symbol":"T1730EOD","close":"150.25"}'
+        eod_sha = hashlib.sha256(eod_body).hexdigest()
+        eod_fetch_id = insert_fetch(
+            conn,
+            source=DataSource.TWELVE_DATA,
+            source_record_id=f"{sym_eod}:eod:2026-10-16",
+            body=eod_body,
+            content_type="application/json",
+            fetched_at=now,
+            store=store,
+        )
+        conn.execute(_LAND_SQL, ("twelvedata", "eod", sym_eod, "2026-10-16", "run-eod", eod_fetch_id))
 
-                def fetchone(self):
-                    return self._value
+        insert_market_prices_daily(
+            conn,
+            [
+                PriceBarRecord(
+                    symbol=sym_series,
+                    date=date(2026, 10, 16),
+                    open=225.10,
+                    high=228.50,
+                    low=224.00,
+                    close=227.55,
+                    volume=42000000,
+                    source="twelvedata",
+                    resolution="1D",
+                ),
+                PriceBarRecord(
+                    symbol=sym_eod,
+                    date=date(2026, 10, 16),
+                    open=149.00,
+                    high=151.00,
+                    low=148.50,
+                    close=150.25,
+                    volume=1000000,
+                    source="twelvedata",
+                    resolution="1D",
+                ),
+            ],
+            adjust="none",
+        )
 
-            return _One(row)
+        fetcher = TwelveDataQuoteFetcher("test-key", connection=conn)
+        ts_quote = fetcher(sym_series, date(2026, 10, 16))
+        assert ts_quote is not None
+        assert ts_quote.existing_raw_fetch_id == ts_fetch_id
+        assert ts_quote.existing_raw_sha256 == ts_sha
 
-    fetcher = TwelveDataQuoteFetcher("test-key", connection=_ReuseConn())
-    quote = fetcher("AAPL", date(2026, 10, 16))
-    assert quote is not None
-    assert quote.existing_raw_fetch_id == 4242
-    assert quote.existing_raw_sha256 == expected_sha
+        eod_quote = fetcher(sym_eod, date(2026, 10, 16))
+        assert eod_quote is not None
+        assert eod_quote.existing_raw_fetch_id == eod_fetch_id
+        assert eod_quote.existing_raw_sha256 == eod_sha
 
-    raw = RawResponse(
-        body=quote.raw_bytes,
-        source=DataSource.TWELVE_DATA,
-        record_id="twelve-data:AAPL:2026-10-16",
-        existing_raw_fetch_id=quote.existing_raw_fetch_id,
-        existing_raw_sha256=quote.existing_raw_sha256,
-    )
-    assert raw.sha256 == expected_sha
+        raw = RawResponse(
+            body=ts_quote.raw_bytes,
+            source=DataSource.TWELVE_DATA,
+            record_id=f"twelve-data:{sym_series}:2026-10-16",
+            existing_raw_fetch_id=ts_quote.existing_raw_fetch_id,
+            existing_raw_sha256=ts_quote.existing_raw_sha256,
+        )
+        assert raw.sha256 == ts_sha
 
-    from data_engine.datahub.capture_core.persistence import CaptureTimeline, PostgresCaptureControlSink
+        from data_engine.datahub.capture_core.persistence import CaptureTimeline, PostgresCaptureControlSink
 
-    recorded_vintages: list[tuple[Any, int]] = []
+        recorded_vintages: list[tuple[Any, int]] = []
 
-    class _FakeRepo:
-        def put_source_vintage(self, vintage, *, raw_fetch_id: int) -> None:
-            recorded_vintages.append((vintage, raw_fetch_id))
+        class _FakeRepo:
+            def put_source_vintage(self, vintage, *, raw_fetch_id: int) -> None:
+                recorded_vintages.append((vintage, raw_fetch_id))
 
-    def _forbid_insert_fetch(*_args, **_kwargs):
-        raise AssertionError("raw_store.insert_fetch must not be called when existing_raw_fetch_id is set")
+        def _forbid_insert_fetch(*_args, **_kwargs):
+            raise AssertionError("raw_store.insert_fetch must not be called when existing_raw_fetch_id is set")
 
-    monkeypatch.setattr("data_engine.raw_store.insert_fetch", _forbid_insert_fetch)
-    sink = PostgresCaptureControlSink.__new__(PostgresCaptureControlSink)
-    sink._connection = object()
-    sink._object_store = None
-    sink._repository = _FakeRepo()
-    sink._timeline = CaptureTimeline.for_partition(datetime(2026, 10, 17, 1, 0, tzinfo=UTC), "2026-10-16")
-    vintage = sink._put_vintage(
-        source_request_id=f"source-request:{'0' * 64}",
-        raw=raw,
-        source_published_at=datetime(2026, 10, 16, 20, 0, tzinfo=UTC),
-    )
-    assert vintage.raw_object_id == f"raw-object:{expected_sha}"
-    assert len(recorded_vintages) == 1
-    assert recorded_vintages[0][1] == 4242
+        monkeypatch.setattr("data_engine.raw_store.insert_fetch", _forbid_insert_fetch)
+        sink = PostgresCaptureControlSink.__new__(PostgresCaptureControlSink)
+        sink._connection = conn
+        sink._object_store = store
+        sink._repository = _FakeRepo()
+        sink._timeline = CaptureTimeline.for_partition(datetime(2026, 10, 17, 1, 0, tzinfo=UTC), "2026-10-16")
+        vintage = sink._put_vintage(
+            source_request_id=f"source-request:{'0' * 64}",
+            raw=raw,
+            source_published_at=now,
+        )
+        assert vintage.raw_object_id == f"raw-object:{ts_sha}"
+        assert len(recorded_vintages) == 1
+        assert recorded_vintages[0][1] == ts_fetch_id
+    finally:
+        conn.rollback()
+        conn.close()
 
 
 def test_k4_d2_monthly_series_skipped_mid_month_when_prior_closed_month_is_stored() -> None:

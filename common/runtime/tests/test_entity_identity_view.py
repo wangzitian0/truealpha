@@ -650,9 +650,18 @@ def test_one_evaluation_calls_each_helper_at_most_once_for_each_row(conn: psycop
     conn.execute("set local track_functions = 'all'")
     survivor_bound = aliases + identities
 
+    from truealpha_runtime.mart_refresh import MART_ENTITY_IDENTITY, refresh_mart_materialized_views
+
+    before_refresh = helper_calls(conn)
+    refresh_mart_materialized_views(conn, (MART_ENTITY_IDENTITY,))
+    after_refresh = helper_calls(conn)
+    assert (after_refresh["entity_survivor"] - before_refresh["entity_survivor"]) <= survivor_bound
+    assert (after_refresh["entity_alias_valid_to"] - before_refresh["entity_alias_valid_to"]) <= aliases
+    assert conn.execute("select count(*) from mart.entity_identity").fetchone() == (identities,)
+
     calls = calls_of_one_evaluation(conn, "mart.entity_identity")
-    assert calls["entity_survivor"] <= survivor_bound, (calls, identities, aliases)
-    assert calls["entity_alias_valid_to"] <= aliases, (calls, identities, aliases)
+    assert calls["entity_survivor"] == 0, calls
+    assert calls["entity_alias_valid_to"] == 0, calls
 
     # Control: on the same rows the old definition breaks the bound. So the probe sees calls.
     create_old_view(conn)

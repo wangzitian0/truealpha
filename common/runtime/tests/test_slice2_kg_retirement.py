@@ -2,8 +2,7 @@
 
 Verifies:
 1. Retired tables (staging.kg_entities, staging.kg_identifiers, staging.kg_edges) do not exist.
-2. staging.analyst_rating_events and staging.fund_holding_facts use uuid FK columns referencing
-   staging.entities(entity_id).
+2. staging.fund_holding_facts uses uuid FK columns referencing staging.entities(entity_id).
 3. Runtime views/functions reference zero retired kg_* tables.
 4. No active application or shared module queries staging.kg_entities, staging.kg_identifiers, or
    staging.kg_edges.

@@ -433,6 +433,9 @@ def main() -> int:
                 conn, preview_run_id, "2027-06-02T00:00:00Z", PREVIEW_ISSUERS[selected_rows[0]["issuer_id"]][0]
             )
         conn.commit()
+        from truealpha_runtime.mart_refresh import refresh_mart_materialized_views
+
+        refresh_mart_materialized_views(conn, concurrently=True)
     return 0
 
 

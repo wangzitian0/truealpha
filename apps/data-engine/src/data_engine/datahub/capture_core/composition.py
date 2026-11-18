@@ -227,10 +227,23 @@ def plan_and_persist(
         if "report_date" in denominator
         else cutoff.astimezone(UTC).date()
     )
+    from psycopg.pq import TransactionStatus
+    from truealpha_runtime.mart_refresh import MART_ENTITY_IDENTITY, refresh_mart_materialized_views
+
     from data_engine.datahub.resolve_coordinates import resolve_coordinates
 
+    conn_info = getattr(connection, "info", None)
+    was_idle = conn_info is not None and conn_info.transaction_status == TransactionStatus.IDLE
     with connection.transaction():
-        coordinates = resolve_coordinates(connection, denominator["instruments"], as_of=as_of, known_at=cutoff)
+        coordinates = resolve_coordinates(
+            connection,
+            denominator["instruments"],
+            as_of=as_of,
+            known_at=cutoff,
+            refresh_mart=not was_idle,
+        )
+    if was_idle and coordinates:
+        refresh_mart_materialized_views(connection, (MART_ENTITY_IDENTITY,), concurrently=True)
     partition = str(denominator["report_date"])
     list_version = (
         corpus_list_version(corpus) if "instrument_mapping_sha256" in denominator else frozen_topt_list_version(corpus)
