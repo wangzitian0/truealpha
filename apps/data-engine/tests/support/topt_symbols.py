@@ -10,7 +10,7 @@ equal to `stored_symbols` against a database (a known residual of #1522 step 3);
 
 from __future__ import annotations
 
-from data_engine.datahub.production_topt.universe_corpus import TOPT_CORPUS_FILENAME, load_corpus
+from data_engine.datahub.capture_core.universe_corpus import TOPT_CORPUS_FILENAME, load_corpus
 from data_engine.datahub.resolve_coordinates import primary_listing_ids
 
 

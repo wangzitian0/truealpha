@@ -42,7 +42,7 @@ def _isolated_db_step(
 
 @external_op
 def refresh_universes_op(context: dg.OpExecutionContext) -> None:
-    from data_engine.datahub.production_topt.universe_plane import (
+    from data_engine.datahub.capture_core.universe_plane import (
         UNIVERSE_SOURCES,
         latest_quarter_end,
         refresh_and_publish,
@@ -92,7 +92,7 @@ def _refresh_universes(
             context, f"constituents:{source.etf}", f"constituents[{source.etf}]", failures, _run_constituents
         )
 
-    from data_engine.datahub.production_topt.nport_holdings import capture_fund_holdings
+    from data_engine.datahub.capture_core.nport_holdings import capture_fund_holdings
 
     for source in active_sources:
         ticker = source.nport_ticker
@@ -104,7 +104,7 @@ def _refresh_universes(
 
         _isolated_db_step(context, f"nport:{ticker}", f"nport[{ticker}]", failures, _run_nport)
 
-    from data_engine.datahub.production_topt.holdings_enrichment import enrich_holding_identities
+    from data_engine.datahub.capture_core.holdings_enrichment import enrich_holding_identities
 
     _isolated_db_step(
         context,

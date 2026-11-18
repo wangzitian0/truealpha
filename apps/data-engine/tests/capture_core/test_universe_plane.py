@@ -1,0 +1,1548 @@
+"""The data-driven universe plane (#539): parse real bytes, land, publish, resolve.
+
+The cassette is the exact byte string the index operator answered on 2026-08-17
+(sha-anchored, #569's pattern); the round-trip test drives the same functions the
+refresh job runs, against the real database, and proves the capture pipeline can
+resolve its universe from the governed head — the property that replaced the
+checked-in corpus file this plane exists to eliminate.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import sys
+from dataclasses import replace
+from datetime import UTC, date, datetime
+from decimal import Decimal
+from pathlib import Path
+
+import psycopg
+import pytest
+from data_engine.config import settings
+from data_engine.datahub.capture_core.universe_corpus import (
+    corpus_list_version,
+    frozen_topt_list_version,
+    load_corpus,
+)
+from data_engine.datahub.capture_core.universe_plane import (
+    UNIVERSE_SOURCES,
+    build_denominator,
+    current_head_mapping_sha,
+    parse_nasdaq_index_rows,
+    publish_universe_list,
+    resolve_universe_corpus,
+)
+from truealpha_contracts.common import canonical_sha256
+from truealpha_contracts.models import DataSource
+from truealpha_contracts.universes import lane_name
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
+from variant_contract import serve_variant  # noqa: E402
+
+_CASSETTE = Path(__file__).parent / "cassettes" / "nasdaq100_index.bcc3fb15.json"
+_CASSETTE_SHA = "bcc3fb150a3988b699eba12e798e950e0ec0e7d55f4d99765c69dd528f087518"
+
+
+@pytest.fixture
+def connection():
+    try:
+        active = psycopg.connect(settings.database_url, connect_timeout=3, autocommit=False)
+    except psycopg.OperationalError as error:
+        pytest.skip(f"no local database: {error}")
+    try:
+        yield active
+    finally:
+        active.rollback()
+        active.close()
+
+
+def _bytes() -> bytes:
+    body = _CASSETTE.read_bytes()
+    assert hashlib.sha256(body).hexdigest() == _CASSETTE_SHA, "cassette is not the operator's bytes"
+    return body
+
+
+def test_the_operator_bytes_parse_to_the_full_index() -> None:
+    rows = parse_nasdaq_index_rows(_bytes())
+    assert len(rows) == 102
+    tickers = {row["ticker"] for row in rows}
+    assert {"AAPL", "NVDA", "GOOG", "GOOGL"} <= tickers
+    assert all(row["name"] for row in rows)
+    # The operator's own market caps ride the same bytes (weights proper are
+    # #63's N-PORT plane): AAPL parses to its actual dollar figure, not a string.
+    aapl = next(row for row in rows if row["ticker"] == "AAPL")
+    assert aapl["market_cap"] == "4464797487400"
+    assert sum(1 for row in rows if row["market_cap"]) >= 100
+
+
+def test_the_operator_bytes_carry_the_last_sale_price_beside_the_market_cap() -> None:
+    """#1523 S1: the operator quotes a price with every cap, and the pair is the only outside
+    witness of a listed share count (cap / price). The parser keeps both."""
+    rows = {row["ticker"]: row for row in parse_nasdaq_index_rows(_bytes())}
+    assert (rows["PDD"]["market_cap"], rows["PDD"]["last_sale_price"]) == ("120689786013", "86.60")
+    assert rows["AAPL"]["last_sale_price"] == "307.167"
+    assert all(row["last_sale_price"] for row in rows.values())
+
+
+def test_refresh_lands_the_last_sale_price_beside_the_market_cap(connection, monkeypatch) -> None:
+    """Through the refresh job's own function: the stored row of PDD holds the cap and the price."""
+    from data_engine.datahub.capture_core import universe_plane
+    from data_engine.sources import sec
+
+    body = _bytes()
+    tickers = [row["ticker"] for row in parse_nasdaq_index_rows(body)]
+    monkeypatch.setattr(universe_plane, "_get", lambda *_args, **_kwargs: (200, body))
+    monkeypatch.setattr(universe_plane, "_resolve_figis", lambda *_a, **_k: {t: f"bbg-{t.lower()}" for t in tickers})
+    monkeypatch.setattr(
+        sec, "ticker_cik_index", lambda: {t.replace(".", "-"): 100000 + i for i, t in enumerate(tickers)}
+    )
+
+    landed = universe_plane.refresh_etf_constituents(
+        connection, UNIVERSE_SOURCES["qqq"], as_of=date(2026, 10, 24), openfigi_api_key="test"
+    )
+
+    assert landed == 102
+    stored = connection.execute(
+        "select market_cap, last_sale_price from staging.etf_constituent_facts where etf_symbol = 'qqq' and ticker = 'PDD'"
+    ).fetchone()
+    assert stored == (Decimal("120689786013"), Decimal("86.60"))
+    unpriced = connection.execute(
+        "select count(*) from staging.etf_constituent_facts where etf_symbol = 'qqq' and last_sale_price is null"
+    ).fetchone()
+    assert unpriced == (0,)
+
+
+def test_a_truncated_response_refuses_to_parse() -> None:
+    import json
+
+    payload = json.loads(_bytes())
+    payload["data"]["data"]["rows"] = payload["data"]["data"]["rows"][:40]
+    with pytest.raises(ValueError, match="only 40 rows"):
+        parse_nasdaq_index_rows(json.dumps(payload).encode())
+
+
+def test_land_publish_resolve_round_trip(connection) -> None:
+    """Rows land with lineage; the published head resolves as a validated corpus."""
+    source = UNIVERSE_SOURCES["qqq"]
+    body = _bytes()
+    fetched_at = datetime(2026, 8, 17, 12, 0, tzinfo=UTC)
+    from data_engine import raw_store
+
+    fetch_id = raw_store.insert_fetch(
+        connection,
+        source=DataSource.NASDAQ_INDEX,
+        source_record_id="index-constituents:qqq:test",
+        body=body,
+        content_type="application/json",
+        fetched_at=fetched_at,
+        recorded_at=fetched_at,
+    )
+    for i, row in enumerate(parse_nasdaq_index_rows(body)):
+        connection.execute(
+            """
+            insert into staging.etf_constituent_facts
+                (etf_symbol, as_of, source, raw_fetch_id, ticker, company_name, market_cap, cik, figi, knowable_at)
+            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                "qqq",
+                date(2026, 8, 17),
+                DataSource.NASDAQ_INDEX.value,
+                fetch_id,
+                row["ticker"],
+                row["name"],
+                row.get("market_cap"),
+                100000 + i,  # resolution is exercised live by the refresh; here the
+                f"bbg{i:09d}",  # plane's own shape and the publish/resolve legs are under test
+                fetched_at,
+            ),
+        )
+
+    denominator = build_denominator(connection, source, report_date=date(2026, 6, 30))
+    assert denominator["instrument_count"] == 102
+    assert denominator["obligation_count"] == 408
+
+    assert current_head_mapping_sha(connection, source) != denominator["instrument_mapping_sha256"]
+    contract_id, sequence = publish_universe_list(
+        connection, source, report_date=date(2026, 6, 30), note="round-trip test"
+    )
+    assert contract_id.startswith("universe-list:")
+    assert current_head_mapping_sha(connection, source) == denominator["instrument_mapping_sha256"]
+
+    corpus = resolve_universe_corpus(connection, lane_name(source.etf))
+    version = corpus_list_version(corpus)
+    assert len(version.members) == 102
+    assert version.universe.universe_id == "universe:qqq-us-2026-06-30"
+
+
+def test_resolving_an_unpublished_universe_fails_loud(connection) -> None:
+    with pytest.raises(LookupError, match="no published universe head"):
+        resolve_universe_corpus(connection, "universe-list:never-published")
+
+
+def test_a_same_day_second_refresh_does_not_smear_the_denominator(connection) -> None:
+    """Two landings on one as_of: the denominator is the newest refresh alone
+    (Copilot Medium on #606 — max(as_of) alone unioned both)."""
+    source = UNIVERSE_SOURCES["qqq"]
+    body = _bytes()
+    from data_engine import raw_store
+
+    for hour, marker in ((10, "first"), (14, "second")):
+        fetched_at = datetime(2026, 8, 17, hour, 0, tzinfo=UTC)
+        fetch_id = raw_store.insert_fetch(
+            connection,
+            source=DataSource.NASDAQ_INDEX,
+            source_record_id=f"index-constituents:qqq:smear-{marker}",
+            body=body + marker.encode(),
+            content_type="application/json",
+            fetched_at=fetched_at,
+            recorded_at=fetched_at,
+        )
+        for i, row in enumerate(parse_nasdaq_index_rows(body)):
+            connection.execute(
+                """
+                insert into staging.etf_constituent_facts
+                    (etf_symbol, as_of, source, raw_fetch_id, ticker, company_name, market_cap, cik, figi, knowable_at)
+                values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    "qqq",
+                    date(2026, 8, 17),
+                    DataSource.NASDAQ_INDEX.value,
+                    fetch_id,
+                    row["ticker"],
+                    row["name"],
+                    row.get("market_cap"),
+                    200000 + i,
+                    f"smr{marker}{i:06d}",
+                    fetched_at,
+                ),
+            )
+    denominator = build_denominator(connection, source, report_date=date(2026, 6, 30))
+    assert denominator["instrument_count"] == 102, "one refresh's rows, not the union"
+    assert all(row[1].startswith("security:figi:smrsecond") for row in denominator["instruments"])
+
+
+def test_the_edgar_atom_cik_parses() -> None:
+    """The fallback's parse leg on EDGAR's real answer shape: SEC's crosswalk files
+    miss AEP entirely while browse-edgar resolves it (verified live 2026-08-17).
+    Newly listed constituents (SPCX 0001181412, HONA 0002089271) before their first
+    10-K return an Atom <feed> with <company-info><cik>...</cik></company-info> and
+    zero <entry> elements."""
+    from data_engine.datahub.capture_core.universe_plane import _parse_edgar_cik
+
+    assert (
+        _parse_edgar_cik(b'<link href="...cgi-bin/browse-edgar?action=getcompany&amp;CIK=0000004904&amp;type=10-K"/>')
+        == 4904
+    )
+    assert (
+        _parse_edgar_cik(
+            b'<feed><company-info><cik>0000004904</cik></company-info><entry><link href="...CIK=0000004904&amp;type=10-K"/></entry></feed>'
+        )
+        == 4904
+    )
+    assert (
+        _parse_edgar_cik(
+            b'<feed><company-info><cik>0001181412</cik></company-info><link rel="self" href="...CIK=0001181412&amp;type=10-K"/></feed>'
+        )
+        == 1181412
+    )
+    assert (
+        _parse_edgar_cik(
+            b'<feed><link rel="alternate" href="...cgi-bin/browse-edgar?action=getcompany&amp;CIK=0001821349&amp;type=10-K"/></feed>'
+        )
+        is None
+    )
+    assert _parse_edgar_cik(b"<feed>no cik here</feed>") is None
+
+
+def test_build_routes_trusts_the_universes_embedded_ciks(connection, monkeypatch) -> None:
+    """A plane universe must never re-derive identities the governed head already
+    carries: the first QQQ run failed in build_routes on the same SEC crosswalk
+    hole (AEP) the refresh had already resolved via EDGAR. With issuer:cik ids in
+    the plan, the crosswalk is not even consulted."""
+    from data_engine.datahub.capture_core.composition import build_routes, plan_and_persist
+
+    source = UNIVERSE_SOURCES["qqq"]
+    body = _bytes()
+    fetched_at = datetime(2026, 8, 17, 12, 0, tzinfo=UTC)
+    from data_engine import raw_store
+
+    fetch_id = raw_store.insert_fetch(
+        connection,
+        source=DataSource.NASDAQ_INDEX,
+        source_record_id="index-constituents:qqq:routes",
+        body=body,
+        content_type="application/json",
+        fetched_at=fetched_at,
+        recorded_at=fetched_at,
+    )
+    for i, row in enumerate(parse_nasdaq_index_rows(body)):
+        connection.execute(
+            """
+            insert into staging.etf_constituent_facts
+                (etf_symbol, as_of, source, raw_fetch_id, ticker, company_name, market_cap, cik, figi, knowable_at)
+            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                "qqq",
+                date(2026, 8, 17),
+                DataSource.NASDAQ_INDEX.value,
+                fetch_id,
+                row["ticker"],
+                row["name"],
+                row.get("market_cap"),
+                300000 + i,
+                f"rte{i:09d}",
+                fetched_at,
+            ),
+        )
+    publish_universe_list(connection, source, report_date=date(2026, 6, 30), note="routes test")
+
+    def crosswalk_must_not_be_needed():
+        raise AssertionError("plane universes must not consult the SEC crosswalk")
+
+    # #72: the crosswalk and the classification registry are consulted by the SEC
+    # source's own route builder, which imports them at call time from their modules —
+    # so the modules are where a fake must land, not the composition root.
+    from data_engine.datahub.capture_core import issuer_registry
+    from data_engine.sources import sec as sec_module
+
+    monkeypatch.setattr(sec_module, "ticker_cik_index", crosswalk_must_not_be_needed)
+    # Branch classification fetches SEC submissions per CIK — real network, not
+    # this test's subject; the embedded-CIK path is.
+    monkeypatch.setattr(
+        issuer_registry,
+        "resolve_issuer_classifications",
+        lambda cik_by_ticker: issuer_registry.RegistryReading(classifications={}),
+    )
+    plan = plan_and_persist(
+        connection,
+        cutoff=datetime(2026, 8, 17, 12, 30, tzinfo=UTC),
+        version="test-routes",
+        universe_head_kind=lane_name(source.etf),
+        label_prefix="test-qqq",
+    )
+    routes = build_routes(plan, connection)
+    assert len(routes) == 102 * 4
+
+
+def test_latest_quarter_end_is_the_completed_quarter() -> None:
+    from data_engine.datahub.capture_core.universe_plane import latest_quarter_end
+
+    assert latest_quarter_end(date(2026, 8, 17)) == date(2026, 6, 30)
+    assert latest_quarter_end(date(2026, 1, 2)) == date(2025, 12, 31)
+    # A quarter end publishes the PRIOR quarter — 06-30's own data is not settled on 06-30.
+    assert latest_quarter_end(date(2026, 6, 30)) == date(2026, 3, 31)
+    assert latest_quarter_end(date(2026, 7, 1)) == date(2026, 6, 30)
+
+
+def test_snapshot_invariants_are_self_consistent_not_universe_literals() -> None:
+    """#539: the first QQQ run captured all 408 obligations and died on a hardcoded
+    84 in freeze/snapshot validation. Invariants are now derived from the snapshot
+    itself — any universe size freezes through the same checks, and the
+    four-distinct-observations-per-member consistency still refuses a malformed set."""
+    from datetime import UTC as _UTC
+    from datetime import datetime as _dt
+    from decimal import Decimal as _D
+
+    import pytest as _pytest
+    from data_engine.datahub.capture_core.materialization import SnapshotMember, ToptCoreSnapshot
+    from factors.production_topt import (
+        MetricAvailability,
+        MetricFreshness,
+        OperatingBranch,
+        ToptCellQualityInput,
+        ToptMetricInput,
+    )
+
+    def oid(member: int, k: int) -> str:
+        return "normalized-observation:" + f"{member:x}{k:x}".ljust(64, "0")
+
+    def metric(name: str, member: int, k: int) -> ToptMetricInput:
+        return ToptMetricInput(
+            input_id=oid(member, k),
+            metric=name,
+            value=_D("100"),
+            confidence=_D("0.9"),
+            knowable_at=_dt(2026, 8, 1, tzinfo=_UTC),
+            freshness=MetricFreshness.FRESH,
+            availability=MetricAvailability.AVAILABLE,
+        )
+
+    def member(i: int) -> SnapshotMember:
+        observation_ids = tuple(oid(i, k) for k in range(4))
+        cells = tuple(
+            ToptCellQualityInput(
+                input_id=one,
+                confidence=_D("0.9"),
+                knowable_at=_dt(2026, 8, 1, tzinfo=_UTC),
+                freshness=MetricFreshness.FRESH,
+            )
+            for one in observation_ids
+        )
+        return SnapshotMember(
+            issuer_id=f"issuer:cik:{i:010d}",
+            instrument_id=f"security:figi:test{i:08d}",
+            listing_id=f"listing:xnas:t{i:03d}",
+            operating_branch=OperatingBranch.NON_FINANCIAL,
+            observation_ids=observation_ids,
+            cell_inputs=cells,
+            gross_profit=metric("gross_profit", i, 0),
+            total_assets=metric("total_assets", i, 1),
+            headcount=metric("headcount", i, 2),
+            revenue=metric("revenue", i, 3),
+            pre_provision_profit=None,
+            shares_outstanding=metric("shares_outstanding", i, 0),
+            market_price=metric("market_price", i, 1),
+        )
+
+    snapshot = ToptCoreSnapshot(
+        run_id="capture-run:" + "a" * 64,
+        release_manifest_id="release-manifest:" + "b" * 64,
+        universe_id="universe:test-2026-06-30",
+        universe_version="test-2026-06-30-v1",
+        universe_sha256="c" * 64,
+        cutoff=_dt(2026, 8, 17, tzinfo=_UTC),
+        members=(member(1), member(2)),
+    )
+    assert snapshot.snapshot_id.startswith("topt-core-snapshot:")
+
+    twin = member(3)
+    with _pytest.raises(ValueError, match="four distinct observations per member"):
+        ToptCoreSnapshot(
+            run_id="capture-run:" + "a" * 64,
+            release_manifest_id="release-manifest:" + "b" * 64,
+            universe_id="universe:test-2026-06-30",
+            universe_version="test-2026-06-30-v1",
+            universe_sha256="c" * 64,
+            cutoff=_dt(2026, 8, 17, tzinfo=_UTC),
+            members=(
+                twin,
+                twin.model_copy(update={"instrument_id": "security:figi:other000", "listing_id": "listing:xnas:oth"}),
+            ),
+        )
+
+    # #1061: one member that repeats an observation is refused by the same snapshot check.
+    # Its set of observations is one short of four per member, so no member-level check is needed.
+    first, second = member(4), member(5)
+    repeating = SnapshotMember.model_validate(
+        {**first.model_dump(), "observation_ids": (*first.observation_ids[:3], first.observation_ids[2])}
+    )
+    with _pytest.raises(ValueError, match="four distinct observations per member"):
+        ToptCoreSnapshot(
+            run_id="capture-run:" + "a" * 64,
+            release_manifest_id="release-manifest:" + "b" * 64,
+            universe_id="universe:test-2026-06-30",
+            universe_version="test-2026-06-30-v1",
+            universe_sha256="c" * 64,
+            cutoff=_dt(2026, 8, 17, tzinfo=_UTC),
+            members=(repeating, second),
+        )
+    # An unsorted member would hash to a second identity for the same observations.
+    with _pytest.raises(ValueError, match="snapshot member requires sorted observations"):
+        SnapshotMember.model_validate({**first.model_dump(), "observation_ids": tuple(reversed(first.observation_ids))})
+
+    # The INSERT itself must carry the snapshot's own counts — the first scheduled
+    # QQQ run passed every model check and then died on `values (..., 20, 21, 84, ...)`
+    # hardcoded in _put_snapshot's SQL, which the 0042 trigger rightly refused
+    # (obligation_count 408 <> observation_count 84). Pin the bound parameters.
+    from data_engine.datahub.capture_core.materialization import PostgresToptCoreRepository
+
+    captured: list[tuple[str, tuple]] = []
+
+    class _Cursor:
+        def __init__(self, row):
+            self._row = row
+
+        def fetchone(self):
+            return self._row
+
+    class _Conn:
+        def transaction(self):
+            import contextlib
+
+            return contextlib.nullcontext()
+
+        def execute(self, sql, params=()):
+            captured.append((" ".join(sql.split()), tuple(params)))
+            if "insert into" in sql:
+                return _Cursor(("row",))
+            return _Cursor(None)
+
+    store = PostgresToptCoreRepository.__new__(PostgresToptCoreRepository)
+    store._connection = _Conn()
+    store._put_snapshot(snapshot)
+    head_sql, head_params = captured[0]
+    assert "insert into staging.core_snapshots" in head_sql
+    assert not any(literal in head_sql for literal in (" 20,", " 21,", " 84,")), head_sql
+    # issuer_count, instrument_count, observation_count derive from the two-member snapshot:
+    assert head_params[8:11] == (2, 2, 8)
+
+
+def test_figi_resolution_lands_its_response_bytes(connection, monkeypatch) -> None:
+    """#641 D3: the security:figi identities must be traceable to landed vendor
+    bytes — DataSource.OPENFIGI's contract comment always said so."""
+    import io
+    import json as _json
+    import urllib.request as _url
+
+    from data_engine.datahub.capture_core.universe_plane import _resolve_figis
+
+    body = _json.dumps([{"data": [{"shareClassFIGI": "BBG00TESTFIG1"}]}]).encode()
+    monkeypatch.setattr(_url, "urlopen", lambda req, timeout=0: io.BytesIO(body))
+    resolved = _resolve_figis(connection, ["ALFA"], as_of=date(2026, 8, 19), api_key="k")
+    assert resolved == {"ALFA": "bbg00testfig1"}
+    landed = connection.execute(
+        "select source, source_record_id, metadata->'request_jobs'->0->>'idValue'"
+        " from raw.fetches where source = 'openfigi'"
+        " and source_record_id = 'figi-mapping:2026-08-19:0'"
+    ).fetchone()
+    # The response bytes alone cannot pair FIGIs to tickers (OpenFIGI does not
+    # echo the query) — the landed row must carry the request batch too.
+    assert landed == ("openfigi", "figi-mapping:2026-08-19:0", "ALFA")
+
+
+def test_canary_static_members_refresh_publish_resolve(connection, monkeypatch) -> None:
+    """#648: the canary source has no index API — the hand-picked membership lands
+    as the fetch body (versioned operator configuration), identities resolve through
+    the SAME paths as an index-fed source, and the published head resolves to a
+    corpus with the dual-class pair collapsed to one issuer (5 issuers / 6 listings)."""
+    from data_engine.datahub.capture_core import universe_plane as up
+
+    ciks = {
+        "AAPL": 320193,
+        "GOOGL": 1652044,
+        "GOOG": 1652044,
+        "ASML": 937966,
+        "HBAN": 49196,
+        "CINF": 20286,
+    }
+    from data_engine.sources import sec as sec_module
+
+    monkeypatch.setattr(sec_module, "ticker_cik_index", lambda: dict(ciks))
+    monkeypatch.setattr(
+        up,
+        "_resolve_figis",
+        lambda conn, tickers, *, as_of, api_key="": {t: f"bbg-canary-{t.lower()}" for t in tickers},
+    )
+    source = up.UNIVERSE_SOURCES["canary"]
+    landed = up.refresh_etf_constituents(connection, source, as_of=date(2026, 8, 20))
+    assert landed == 6  # six tickers, six listing rows; the issuer collapse happens at denominator build
+    fetch = connection.execute(
+        "select source from raw.fetches where source_record_id = 'index-constituents:canary:2026-08-20'"
+    ).fetchone()
+    assert fetch == ("release",)  # the membership itself is the landed evidence
+
+    contract_id, sequence = up.publish_universe_list(
+        connection, source, report_date=date(2026, 6, 30), note="canary first publish"
+    )
+    assert contract_id.startswith("universe-list:") and sequence >= 1
+    corpus = up.resolve_universe_corpus(connection, "universe-list:canary")
+    denominator = corpus["topt_denominator"]
+    assert denominator["instrument_count"] == 6
+    assert denominator["issuer_count"] == 5  # GOOGL+GOOG collapse to one issuer
+    assert denominator["universe_id"] == "universe:canary-us-2026-06-30"
+
+
+# -- one denominator check serves both loaders (#1061) -------------------------------------------
+
+
+def _frozen_corpus() -> dict:
+    """The corpus the deployed tick loads for the TOPT 20."""
+    return load_corpus("corpus.v1.json")
+
+
+def _self_pinned(corpus: dict) -> dict:
+    """The same denominator, self-pinned the way `build_denominator` pins a generated one."""
+    denominator = corpus["topt_denominator"]
+    denominator["instrument_mapping_sha256"] = canonical_sha256(
+        {"fields": denominator["instrument_tuple_fields"], "instruments": denominator["instruments"]}
+    )
+    return corpus
+
+
+def _drop_last_row_consistently(denominator: dict) -> None:
+    denominator["instruments"].pop()
+    denominator["instrument_count"] = len(denominator["instruments"])
+    denominator["issuer_count"] = len({row[0] for row in denominator["instruments"]})
+
+
+_DENOMINATOR_DRIFT = (
+    pytest.param(lambda d: d["instruments"].pop(), "instrument denominator shrink", id="row-dropped"),
+    pytest.param(
+        lambda d: d["instruments"].append(list(d["instruments"][0])),
+        "instrument denominator shrink",
+        id="row-repeated",
+    ),
+    pytest.param(
+        lambda d: d.__setitem__("issuer_count", d["issuer_count"] - 1), "issuer denominator drift", id="issuers"
+    ),
+    pytest.param(
+        lambda d: d["instruments"][1].__setitem__(1, d["instruments"][0][1]),
+        "security denominator contains duplicates",
+        id="security-repeated",
+    ),
+    pytest.param(
+        lambda d: d["instruments"][1].__setitem__(2, d["instruments"][0][2]),
+        "listing denominator contains duplicates",
+        id="listing-repeated",
+    ),
+)
+
+
+def test_the_frozen_topt_list_version_loads_the_pinned_denominator() -> None:
+    """The mapping sha pin is the only literal. It fixes the 21 listings and 20 issuers."""
+    corpus = _frozen_corpus()
+    version = frozen_topt_list_version(corpus)
+
+    assert len(version.members) == 21
+    assert len({row[0] for row in corpus["topt_denominator"]["instruments"]}) == 20
+    assert version.list_version_id == corpus["topt_denominator"]["list_version_id"]
+
+
+@pytest.mark.parametrize(("mutate", "message"), _DENOMINATOR_DRIFT)
+def test_the_frozen_topt_list_version_refuses_a_drifted_denominator(mutate, message: str) -> None:
+    corpus = _frozen_corpus()
+    mutate(corpus["topt_denominator"])
+
+    with pytest.raises(ValueError, match=f"TOPT {message}"):
+        frozen_topt_list_version(corpus)
+
+
+def test_the_frozen_topt_pin_refuses_a_shrunk_denominator_whose_counts_agree() -> None:
+    """The counts below agree with the rows, so the shared check passes. Only the pin
+    refuses. The loader once refused this input with a literal count of 21."""
+    corpus = _frozen_corpus()
+    _drop_last_row_consistently(corpus["topt_denominator"])
+
+    with pytest.raises(ValueError, match="frozen TOPT instrument mapping drift"):
+        frozen_topt_list_version(corpus)
+
+
+def test_the_frozen_topt_pin_refuses_an_edited_identity() -> None:
+    corpus = _frozen_corpus()
+    corpus["topt_denominator"]["instruments"][3][0] = "issuer:lei:REPLACED-IDENTITY"
+
+    with pytest.raises(ValueError, match="frozen TOPT instrument mapping drift"):
+        frozen_topt_list_version(corpus)
+
+
+def test_the_frozen_topt_list_identity_must_match_the_corpus() -> None:
+    corpus = _frozen_corpus()
+    corpus["topt_denominator"]["list_version_id"] = "list-version:" + "0" * 64
+
+    with pytest.raises(ValueError, match="frozen TOPT list identity drift"):
+        frozen_topt_list_version(corpus)
+
+
+def test_a_self_pinned_corpus_loads() -> None:
+    assert len(corpus_list_version(_self_pinned(_frozen_corpus())).members) == 21
+
+
+@pytest.mark.parametrize(("mutate", "message"), _DENOMINATOR_DRIFT)
+def test_a_self_pinned_corpus_refuses_a_drifted_denominator(mutate, message: str) -> None:
+    corpus = _self_pinned(_frozen_corpus())
+    mutate(corpus["topt_denominator"])
+
+    with pytest.raises(ValueError, match=f"universe corpus {message}"):
+        corpus_list_version(corpus)
+
+
+def test_a_self_pinned_corpus_refuses_rows_that_do_not_reproduce_its_sha() -> None:
+    corpus = _self_pinned(_frozen_corpus())
+    corpus["topt_denominator"]["instruments"][3][0] = "issuer:lei:REPLACED-IDENTITY"
+
+    with pytest.raises(ValueError, match="universe corpus instrument mapping drift"):
+        corpus_list_version(corpus)
+
+
+# -- the listing exchange of a multi-exchange source (#1411 K6, #1418) -------------------------
+
+_UNKNOWN_EXCHANGE = "unresolved_listing_exchange"
+
+
+@pytest.fixture
+def in_memory_objects(monkeypatch):
+    """The raw bytes of a landed fetch go to memory, so the test needs no object store."""
+    from data_engine import raw_store
+    from truealpha_runtime.testing import InMemoryRawObjectStore
+
+    store = InMemoryRawObjectStore()
+    monkeypatch.setattr(raw_store, "object_store", lambda: store)
+
+
+def _land_constituents(connection, etf: str, rows: list[tuple[str, int, str]]) -> None:
+    """Land one constituent refresh of `etf`: (ticker, cik, figi) rows with raw lineage."""
+    from data_engine import raw_store
+
+    fetched_at = datetime(2026, 8, 17, 12, 0, tzinfo=UTC)
+    fetch_id = raw_store.insert_fetch(
+        connection,
+        source=DataSource.NASDAQ_INDEX,
+        source_record_id=f"index-constituents:{etf}:exchange-test",
+        body=f"constituents of {etf}".encode(),
+        content_type="application/json",
+        fetched_at=fetched_at,
+        recorded_at=fetched_at,
+    )
+    for ticker, cik, figi in rows:
+        connection.execute(
+            """
+            insert into staging.etf_constituent_facts
+                (etf_symbol, as_of, source, raw_fetch_id, ticker, company_name, cik, figi, knowable_at)
+            values (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (etf, date(2026, 8, 17), DataSource.NASDAQ_INDEX.value, fetch_id, ticker, ticker, cik, figi, fetched_at),
+        )
+
+
+def _identity_store_lists(connection, mic_ticker: str) -> None:
+    """The identity store holds one listing entity with a `mic-ticker` alias such as `XNAS:ZQNX`."""
+    legacy_id = f"listing:{mic_ticker.lower()}"
+    entity_id = connection.execute(
+        "select staging.entity_mint('listing', 'legacy-id', %s, 'test')", (legacy_id,)
+    ).fetchone()[0]
+    for scheme, value in (("legacy-id", legacy_id), ("mic-ticker", mic_ticker)):
+        connection.execute(
+            """
+            insert into staging.entity_aliases
+                (entity_id, scheme, value, valid_from, valid_to, transaction_time, source, raw_ref,
+                 method, confidence, mapping_version)
+            values (%s, %s, %s, '-infinity', null, %s, 'test', 'test', 'asserted', 1, 'test')
+            """,
+            (entity_id, scheme, value, datetime(2026, 1, 1, tzinfo=UTC)),
+        )
+
+
+def test_a_constituent_with_no_known_exchange_is_excluded_by_name_and_gets_no_listing(
+    connection, in_memory_objects
+) -> None:
+    """#1411 K6. The S&P 500 lists NYSE and Nasdaq names. No default exchange stands in for a missing fact.
+
+    ZQUN is in no identity alias, no QQQ row and no TOPT corpus row. Red on main: the denominator
+    held `listing:xnys:zqun`, a listing identity that no source asserted.
+    """
+    _land_constituents(
+        connection,
+        "sp500",
+        [
+            ("AAPL", 320193, "bbg000b9xry4"),
+            ("JPM", 19617, "bbg000dmbxr2"),
+            ("ZQNX", 9990001, "bbg0zqnx0001"),
+            ("ZQUN", 9990002, "bbg0zqun0001"),
+        ],
+    )
+    _identity_store_lists(connection, "XNAS:ZQNX")
+
+    denominator = build_denominator(connection, UNIVERSE_SOURCES["sp500"], report_date=date(2026, 6, 30))
+
+    listings = {row[3]: row[2] for row in denominator["instruments"]}
+    assert listings == {
+        "AAPL": "listing:xnas:aapl",
+        "JPM": "listing:xnys:jpm",
+        "ZQNX": "listing:xnas:zqnx",
+    }, "the identity store and the corpus name the exchange; no other ticker gets a listing"
+    assert denominator["excluded"] == [
+        {"ticker": "ZQUN", "issuer_id": "issuer:cik:0009990002", "reason": _UNKNOWN_EXCHANGE}
+    ]
+    assert not any(row[2].startswith("listing:xnys:zqun") for row in denominator["instruments"])
+    assert denominator["instrument_count"] == 3 and denominator["obligation_count"] == 12
+
+
+def test_a_single_exchange_source_keeps_the_exchange_that_it_declares(connection, in_memory_objects) -> None:
+    """The canary lists Nasdaq names only, and it says so. Its members need no identity alias."""
+    assert UNIVERSE_SOURCES["canary"].mic == "xnas" and UNIVERSE_SOURCES["qqq"].mic == "xnas"
+    assert UNIVERSE_SOURCES["sp500"].mic is None, "a multi-exchange source declares no exchange"
+    _land_constituents(connection, "canary", [("HBAN", 49196, "bbg000bhp8x8"), ("CINF", 20286, "bbg000bd7q91")])
+
+    denominator = build_denominator(connection, UNIVERSE_SOURCES["canary"], report_date=date(2026, 6, 30))
+
+    assert {row[3]: row[2] for row in denominator["instruments"]} == {
+        "CINF": "listing:xnas:cinf",
+        "HBAN": "listing:xnas:hban",
+    }
+    assert denominator["excluded"] == []
+
+
+def test_a_multi_exchange_source_with_no_resolvable_constituent_fails_loud(connection, in_memory_objects) -> None:
+    _land_constituents(connection, "sp500", [("ZQUN", 9990002, "bbg0zqun0001")])
+
+    with pytest.raises(LookupError, match="no listing exchange resolved"):
+        build_denominator(connection, UNIVERSE_SOURCES["sp500"], report_date=date(2026, 6, 30))
+
+
+def test_the_membership_route_skips_the_constituent_that_the_denominator_excluded(
+    connection, in_memory_objects
+) -> None:
+    """The confidence report grades the same listings as the denominator holds.
+
+    Red on main: the route stamped the source's `xnys` on every S&P 500 name, and graded
+    `listing:xnys:aapl` and `listing:xnys:zqun`, two listings that the denominator never held.
+    """
+    from data_engine.datahub.confidence_report import INDEX_MEMBERSHIP_FAMILY, load_index_membership
+
+    _land_constituents(connection, "sp500", [("AAPL", 320193, "bbg000b9xry4"), ("ZQUN", 9990002, "bbg0zqun0001")])
+
+    origins, notes = load_index_membership(connection, UNIVERSE_SOURCES["sp500"], datetime(2026, 9, 1, tzinfo=UTC))
+
+    assert set(origins[INDEX_MEMBERSHIP_FAMILY]) == {"listing:xnas:aapl"}
+    assert notes["constituents_without_listing_exchange"] == ["ZQUN"]
+    assert notes["constituent_count"] == 2
+
+
+# -- the order of the evidence, the validity of an alias, and the failed read (#1411 K6 review) --
+#
+# Every ticker below is one that no ambient alias, QQQ row or TOPT corpus row names, so a shared
+# database cannot change a result. The TOPT corpus is replaced by a corpus that this test writes.
+
+
+@pytest.fixture
+def corpus_rows(monkeypatch):
+    """Replace the TOPT corpus of the resolver with `(ticker, mic)` rows that a test names."""
+    from data_engine.datahub.capture_core import universe_plane
+
+    def install(*rows: tuple[str, str]) -> None:
+        instruments = [
+            [
+                f"issuer:test:{ticker.lower()}",
+                f"security:test:{ticker.lower()}",
+                f"listing:{mic}:{ticker.lower()}",
+                ticker,
+            ]
+            for ticker, mic in rows
+        ]
+        corpus = {"topt_denominator": {"instruments": instruments}}
+        monkeypatch.setattr(universe_plane, "load_corpus", lambda _name: corpus)
+
+    install()
+    return install
+
+
+def _resolve(connection, source_name: str, *tickers: str, **kwargs) -> dict[str, str | None]:
+    from data_engine.datahub.capture_core.universe_plane import resolve_listing_mics
+
+    return resolve_listing_mics(connection, UNIVERSE_SOURCES[source_name], list(tickers), **kwargs)
+
+
+def _alias(
+    connection,
+    mic_ticker: str,
+    *,
+    valid_from: date | None = None,
+    valid_to: date | None = None,
+    recorded: datetime = datetime(2026, 1, 1, tzinfo=UTC),
+    retracted_from: date | None = None,
+    retraction_known: datetime = datetime(2026, 6, 1, tzinfo=UTC),
+) -> None:
+    """One `mic-ticker` alias of a new listing entity.
+
+    It is valid from `valid_from` (always, by default) to `valid_to` (open, by default), and it became
+    known at `recorded`. A retraction from `retracted_from` ends it, and that became known at
+    `retraction_known`."""
+    legacy_id = f"listing:{mic_ticker.lower()}"
+    entity_id = connection.execute(
+        "select staging.entity_mint('listing', 'legacy-id', %s, 'test')", (legacy_id,)
+    ).fetchone()[0]
+    mic_alias_id = None
+    for scheme, value in (("legacy-id", legacy_id), ("mic-ticker", mic_ticker)):
+        is_mic = scheme == "mic-ticker"
+        alias_id = connection.execute(
+            """
+            insert into staging.entity_aliases
+                (entity_id, scheme, value, valid_from, valid_to, transaction_time, source, raw_ref,
+                 method, confidence, mapping_version)
+            values (%s, %s, %s, coalesce(%s::date, '-infinity'::date), %s, %s, 'test', 'test', 'asserted', 1, 'test')
+            returning alias_id
+            """,
+            (entity_id, scheme, value, valid_from if is_mic else None, valid_to if is_mic else None, recorded),
+        ).fetchone()[0]
+        if is_mic:
+            mic_alias_id = alias_id
+    if retracted_from is not None:
+        connection.execute(
+            "insert into staging.entity_retractions (alias_id, valid_to, reason, transaction_time, source, raw_ref) "
+            "values (%s, %s, 'listing moved', %s, 'test', 'test')",
+            (mic_alias_id, retracted_from, retraction_known),
+        )
+
+
+def test_each_kind_of_evidence_names_the_exchange_alone(connection, in_memory_objects, corpus_rows) -> None:
+    """Deleting a block of the resolver turns one line of this test red."""
+    corpus_rows(("ZQE1", "xnys"))
+    _land_constituents(connection, "qqq", [("ZQE2", 9990012, "bbg0zqe20001")])
+    _alias(connection, "XNYS:ZQE3")
+
+    assert _resolve(connection, "sp500", "ZQE1") == {"ZQE1": "xnys"}, "the corpus"
+    assert _resolve(connection, "sp500", "ZQE2") == {"ZQE2": "xnas"}, "the landed QQQ rows"
+    assert _resolve(connection, "sp500", "ZQE3") == {"ZQE3": "xnys"}, "the identity store"
+    assert _resolve(connection, "canary", "ZQE4") == {"ZQE4": "xnas"}, "the exchange that the source declares"
+    assert _resolve(connection, "sp500", "ZQE5") == {"ZQE5": None}, "no evidence"
+
+
+def test_the_evidence_overrides_in_the_documented_order(connection, in_memory_objects, corpus_rows) -> None:
+    """One case for each adjacent pair: source < corpus < landed QQQ rows < identity store."""
+    corpus_rows(("ZQP1", "xnys"), ("ZQP2", "xnys"), ("ZQP3", "xnys"))
+    _land_constituents(connection, "qqq", [("ZQP2", 9990022, "bbg0zqp20001"), ("ZQP3", 9990023, "bbg0zqp30001")])
+    _alias(connection, "XNYS:ZQP3")
+
+    assert _resolve(connection, "canary", "ZQP1") == {"ZQP1": "xnys"}, "the corpus beats the exchange of the source"
+    assert _resolve(connection, "sp500", "ZQP2") == {"ZQP2": "xnas"}, "the QQQ rows beat the corpus"
+    assert _resolve(connection, "sp500", "ZQP3") == {"ZQP3": "xnys"}, "the identity store beats the QQQ rows"
+
+
+def test_an_alias_that_ended_or_was_retracted_names_no_exchange(connection, in_memory_objects, corpus_rows) -> None:
+    """A retracted `XNYS` alias must not beat the `xnas` that the QQQ rows give. Red on the first review:
+    the resolver read the raw alias rows and took the newest."""
+    _land_constituents(connection, "qqq", [("ZQV1", 9990031, "bbg0zqv10001"), ("ZQV2", 9990032, "bbg0zqv20001")])
+    _alias(connection, "XNYS:ZQV1", valid_to=date(2020, 1, 1))
+    _alias(connection, "XNYS:ZQV2", retracted_from=date(2020, 1, 1))
+    _alias(connection, "XNYS:ZQV3", retracted_from=date(2020, 1, 1))
+
+    resolved = _resolve(connection, "sp500", "ZQV1", "ZQV2", "ZQV3")
+
+    assert resolved == {"ZQV1": "xnas", "ZQV2": "xnas", "ZQV3": None}
+
+
+def test_an_alias_is_read_as_known_at_the_time_asked(connection, in_memory_objects, corpus_rows) -> None:
+    """The retraction became known on 2026-06-01. Before that day the alias still counts."""
+    _land_constituents(connection, "qqq", [("ZQV4", 9990034, "bbg0zqv40001")])
+    _alias(connection, "XNYS:ZQV4", retracted_from=date(2020, 1, 1))
+
+    before = _resolve(connection, "sp500", "ZQV4", valid_at=date(2026, 5, 1), known_at=datetime(2026, 5, 1, tzinfo=UTC))
+    after = _resolve(connection, "sp500", "ZQV4", valid_at=date(2026, 7, 1), known_at=datetime(2026, 7, 1, tzinfo=UTC))
+
+    assert before == {"ZQV4": "xnys"}
+    assert after == {"ZQV4": "xnas"}
+
+
+def test_an_alias_that_starts_after_the_day_asked_names_no_exchange(connection, in_memory_objects, corpus_rows) -> None:
+    """Delete the clause `alias.valid_from <= valid_at` and the first line turns red."""
+    _land_constituents(connection, "qqq", [("ZQW1", 9990061, "bbg0zqw10001")])
+    _alias(connection, "XNYS:ZQW1", valid_from=date(2030, 1, 1))
+    known = datetime(2026, 7, 1, tzinfo=UTC)
+
+    assert _resolve(connection, "sp500", "ZQW1", valid_at=date(2026, 5, 1), known_at=known) == {"ZQW1": "xnas"}
+    assert _resolve(connection, "sp500", "ZQW1", valid_at=date(2031, 1, 1), known_at=known) == {"ZQW1": "xnys"}
+
+
+def test_an_alias_recorded_after_the_time_asked_names_no_exchange(connection, in_memory_objects, corpus_rows) -> None:
+    """Delete the clause `alias.transaction_time <= known_at` and the first line turns red."""
+    _land_constituents(connection, "qqq", [("ZQW2", 9990062, "bbg0zqw20001")])
+    _alias(connection, "XNYS:ZQW2", recorded=datetime(2026, 6, 1, tzinfo=UTC))
+
+    before = _resolve(connection, "sp500", "ZQW2", valid_at=date(2026, 5, 1), known_at=datetime(2026, 5, 1, tzinfo=UTC))
+    after = _resolve(connection, "sp500", "ZQW2", valid_at=date(2026, 7, 1), known_at=datetime(2026, 7, 1, tzinfo=UTC))
+
+    assert before == {"ZQW2": "xnas"}
+    assert after == {"ZQW2": "xnys"}
+
+
+def test_the_membership_route_reads_the_identity_store_as_known_at_its_cutoff(
+    connection, in_memory_objects, corpus_rows
+) -> None:
+    """The confidence report asks the resolver for the day and the knowledge of its cutoff.
+
+    Only the identity store names these two tickers: the corpus is empty and no QQQ row exists.
+    ZQC1: a retraction that ended the alias before the cutoff became known only after it. ZQC2: the
+    alias ends on a day after the cutoff. Today is after both. Without `known_at=cutoff` the first
+    ticker has no exchange, and without `valid_at=cutoff.date()` and `known_at=cutoff` the second has none.
+    """
+    from data_engine.datahub.confidence_report import INDEX_MEMBERSHIP_FAMILY, load_index_membership
+
+    _land_constituents(connection, "sp500", [("ZQC1", 9990071, "bbg0zqc10001"), ("ZQC2", 9990072, "bbg0zqc20001")])
+    _alias(connection, "XNYS:ZQC1", retracted_from=date(2026, 8, 1), retraction_known=datetime(2026, 10, 1, tzinfo=UTC))
+    _alias(connection, "XNYS:ZQC2", valid_to=date(2026, 9, 15))
+
+    origins, notes = load_index_membership(connection, UNIVERSE_SOURCES["sp500"], datetime(2026, 9, 1, tzinfo=UTC))
+
+    assert set(origins[INDEX_MEMBERSHIP_FAMILY]) == {"listing:xnys:zqc1", "listing:xnys:zqc2"}
+    assert notes["constituents_without_listing_exchange"] == []
+
+
+class _FailingReads:
+    """A connection whose read of one table fails. Everything else goes to the real connection."""
+
+    def __init__(self, inner, table: str) -> None:
+        self._inner, self._table = inner, table
+
+    def transaction(self):
+        return self._inner.transaction()
+
+    def execute(self, sql, params=None):
+        if self._table in sql:
+            raise psycopg.OperationalError(f"injected read failure of {self._table}")
+        return self._inner.execute(sql, params)
+
+
+@pytest.mark.parametrize("table", ["staging.etf_constituent_facts", "staging.entity_aliases"])
+def test_a_failed_read_of_the_evidence_raises_and_never_shrinks_the_denominator(
+    connection, corpus_rows, table: str
+) -> None:
+    with pytest.raises(psycopg.OperationalError, match="injected read failure"):
+        _resolve(_FailingReads(connection, table), "sp500", "ZQF1")
+
+
+def test_a_failed_read_of_the_corpus_raises(connection, monkeypatch) -> None:
+    from data_engine.datahub.capture_core import universe_plane
+
+    def unreadable(_name: str) -> dict:
+        raise FileNotFoundError("the TOPT corpus is not in the image")
+
+    monkeypatch.setattr(universe_plane, "load_corpus", unreadable)
+
+    with pytest.raises(FileNotFoundError, match="not in the image"):
+        _resolve(connection, "sp500", "ZQF2")
+
+
+# -- the exclusion is visible where the operator looks (#1411 K6 review) --------------------------
+
+_UNKNOWN_TICKERS = [f"ZQU{index}" for index in range(1, 8)]
+_REFRESH_ROWS = [("ZQR1", 9990041, "bbg0zqr10001")] + [
+    (ticker, 9990050 + index, f"bbg0zqu{index:05d}") for index, ticker in enumerate(_UNKNOWN_TICKERS, start=1)
+]
+
+
+def _exchange_source():
+    """A multi-exchange source: the S&P 500 declares no exchange, so each constituent resolves through the identity store."""
+    from data_engine.datahub.capture_core.universe_plane import UNIVERSE_SOURCES
+
+    source = UNIVERSE_SOURCES["sp500"]
+    assert source.mic is None
+    return replace(source, nport_ticker=None)
+
+
+def _landing(rows: list[tuple[str, int, str]]):
+    """A stand-in for `refresh_etf_constituents`: it lands `rows` as the constituents of the source."""
+
+    def land(connection, source, openfigi_api_key: str = "") -> int:
+        _land_constituents(connection, source.etf, rows)
+        return len(rows)
+
+    return land
+
+
+def test_the_refresh_summary_names_the_count_and_the_first_excluded_tickers(
+    connection, in_memory_objects, corpus_rows, monkeypatch
+) -> None:
+    from data_engine.datahub.capture_core import universe_plane
+
+    corpus_rows(("ZQR1", "xnas"))
+    monkeypatch.setattr(universe_plane, "refresh_etf_constituents", _landing(_REFRESH_ROWS))
+
+    outcome = universe_plane.refresh_and_publish(
+        connection, _exchange_source(), report_date=date(2026, 6, 30), note="exchange test"
+    )
+
+    assert "7 constituents excluded, no listing exchange known" in outcome
+    assert "(first 5: ZQU1, ZQU2, ZQU3, ZQU4, ZQU5)" in outcome and "ZQU6" not in outcome
+    assert [item["ticker"] for item in outcome.excluded] == _UNKNOWN_TICKERS
+    assert {item["reason"] for item in outcome.excluded} == {"unresolved_listing_exchange"}
+
+
+def test_the_refresh_summary_of_a_universe_without_exclusions_says_nothing_of_them(
+    connection, in_memory_objects, corpus_rows, monkeypatch
+) -> None:
+    from data_engine.datahub.capture_core import universe_plane
+
+    corpus_rows(("ZQR1", "xnas"))
+    monkeypatch.setattr(universe_plane, "refresh_etf_constituents", _landing(_REFRESH_ROWS[:1]))
+
+    outcome = universe_plane.refresh_and_publish(
+        connection, _exchange_source(), report_date=date(2026, 6, 30), note="exchange test"
+    )
+
+    assert "excluded" not in outcome and outcome.excluded == ()
+
+
+def test_the_refresh_op_reports_the_exclusion_in_its_output_metadata(
+    in_memory_objects, corpus_rows, monkeypatch
+) -> None:
+    """Through the deployed op, with its own connection and commit, in a database of its own."""
+    import dagster as dg
+    from data_engine.datahub.capture_core import holdings_enrichment, universe_plane
+    from data_engine.lanes.universe_refresh import refresh_universes_op
+    from truealpha_runtime.testing import isolated_test_database
+
+    corpus_rows(("ZQR1", "xnas"))
+    monkeypatch.setattr(universe_plane, "UNIVERSE_SOURCES", {"sp500": _exchange_source()})
+    monkeypatch.setattr(universe_plane, "refresh_etf_constituents", _landing(_REFRESH_ROWS))
+    monkeypatch.setattr(holdings_enrichment, "enrich_holding_identities", lambda *_args, **_kwargs: "skipped")
+    # The refresh skips a universe that the environment does not schedule: the variant schedules the S&P 500.
+    monkeypatch.setattr(settings, "app_env", "production")
+    with serve_variant(), isolated_test_database("universe_refresh") as url:
+        monkeypatch.setattr(settings, "database_url", url)
+        context = dg.build_op_context()
+
+        refresh_universes_op(context)
+
+    metadata = context.get_output_metadata("result")
+    assert metadata is not None and "constituents_excluded" in metadata, "the op reported no exclusion"
+    reported = metadata["constituents_excluded"].value
+    assert reported == {"sp500": {"count": 7, "tickers": _UNKNOWN_TICKERS, "reason": "unresolved_listing_exchange"}}
+
+
+# -- S&P 500 membership from IVV N-PORT holdings (#1441) ------------------------------------------
+
+_IVV_NPORT_XML = b"""<?xml version="1.0" encoding="UTF-8"?>
+<edgarSubmission xmlns="http://www.sec.gov/edgar/nport">
+  <formData>
+    <genInfo>
+      <regName>iShares Trust</regName>
+      <seriesName>iShares Core S&amp;P 500 ETF</seriesName>
+      <seriesId>S000004310</seriesId>
+      <repPdDate>2026-06-30</repPdDate>
+    </genInfo>
+    < fundInfo><totAssets>500000000000</totAssets><totLiabs>100000000</totLiabs><netAssets>499900000000</netAssets></fundInfo>
+    <invstOrSecs>
+      <invstOrSec>
+        <name>APPLE INC</name>
+        <lei>HWUPKR0MPOU8FGXBT394</lei>
+        <title>APPLE INC</title>
+        <cusip>037833100</cusip>
+        <identifiers><isin value="US0378331005"/></identifiers>
+        <balance>1000000</balance>
+        <units>NS</units>
+        <curCd>USD</curCd>
+        <valUSD>220000000</valUSD>
+        <pctVal>7.10</pctVal>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>US</invCountry>
+      </invstOrSec>
+      <invstOrSec>
+        <name>JPMORGAN CHASE &amp; CO</name>
+        <lei>8I5DZWZKVSZI1NUHU748</lei>
+        <title>JPMORGAN CHASE &amp; CO</title>
+        <cusip>46625H100</cusip>
+        <identifiers><isin value="US46625H1005"/></identifiers>
+        <balance>500000</balance>
+        <units>NS</units>
+        <curCd>USD</curCd>
+        <valUSD>105000000</valUSD>
+        <pctVal>1.35</pctVal>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>US</invCountry>
+      </invstOrSec>
+      <invstOrSec>
+        <name>BERKSHIRE HATHAWAY INC CL B</name>
+        <lei>5493000F4ZO33MV32P92</lei>
+        <title>BERKSHIRE HATHAWAY INC</title>
+        <cusip>084670702</cusip>
+        <identifiers><isin value="US0846707026"/></identifiers>
+        <balance>400000</balance>
+        <units>NS</units>
+        <curCd>USD</curCd>
+        <valUSD>165000000</valUSD>
+        <pctVal>1.72</pctVal>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>US</invCountry>
+      </invstOrSec>
+      <invstOrSec>
+        <name>BLACKROCK CASH CL INST SL AGENCY</name>
+        <cusip>09248U700</cusip>
+        <identifiers><isin value="US09248U7000"/></identifiers>
+        <balance>10000000</balance>
+        <units>NS</units>
+        <curCd>USD</curCd>
+        <valUSD>10000000</valUSD>
+        <pctVal>0.02</pctVal>
+        <assetCat>STIV</assetCat>
+        <issuerCat>RF</issuerCat>
+        <invCountry>US</invCountry>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Hologic, Inc., CVR</name>
+        <title>Hologic, Inc., CVR</title>
+        <cusip>436CVR021</cusip>
+        <identifiers><isin value="US436CVR0216"/></identifiers>
+        <balance>50000</balance>
+        <units>NS</units>
+        <curCd>USD</curCd>
+        <valUSD>12500</valUSD>
+        <pctVal>0.00</pctVal>
+        <assetConditional assetCat="OTHER" desc="Right"/>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>US</invCountry>
+      </invstOrSec>
+    </invstOrSecs>
+  </formData>
+</edgarSubmission>""".replace(b"< fundInfo>", b"<fundInfo>")
+
+
+def test_sp500_contract_has_no_nasdaq_endpoint_and_uses_ivv_nport() -> None:
+    """#1441 Criterion 1: the dead Nasdaq sp500 URL is removed from the contract and universe source."""
+    from truealpha_contracts.environment_contract import load_environment_contract
+
+    contract = load_environment_contract()
+    sp500_record = contract.record("sp500")
+    assert sp500_record.membership.kind == "nport"
+    assert sp500_record.membership.url is None
+    assert sp500_record.membership.nport_ticker == "IVV"
+    assert "list-type/sp500" not in contract.model_dump_json()
+
+    source = UNIVERSE_SOURCES["sp500"]
+    assert source.index_api == ""
+    assert source.nport_ticker == "IVV"
+    assert source.mic is None
+
+
+def test_sp500_universe_builds_from_ivv_nport_with_filing_knowable_at(in_memory_objects, monkeypatch) -> None:
+    """#1441 Criterion 1: S&P 500 membership refreshes from IVV N-PORT holdings, stamps the filing's
+    knowable_at (never the fetch clock), and resolves CIK, FIGI and primary exchange MIC."""
+    import io
+    import json as _json
+    import urllib.request as _url
+
+    from data_engine.datahub.capture_core import universe_plane as up
+    from data_engine.sources import nport, sec
+
+    filing_date = "2026-08-25"
+    accession = "000110066326000099"
+    series_id = "S000004310"
+    cik = 1100663
+
+    atom = f"""<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry><content type="text/xml">
+    <accession-number>0001100663-26-000099</accession-number>
+    <filing-date>{filing_date}</filing-date>
+  </content></entry>
+</feed>""".encode()
+
+    class _FakeResp:
+        status_code = 200
+
+        def __init__(self, payload: bytes | dict) -> None:
+            self.content = payload if isinstance(payload, bytes) else _json.dumps(payload).encode()
+
+        @property
+        def text(self) -> str:
+            return self.content.decode()
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self):
+            return _json.loads(self.content)
+
+    class _FakeSecHttp:
+        def get(self, url: str) -> _FakeResp:
+            if url == nport.MF_TICKERS_URL:
+                return _FakeResp({"data": [[cik, series_id, "C000012345", "IVV"]]})
+            if url == nport.BROWSE_URL.format(series_id=series_id):
+                return _FakeResp(atom)
+            if url == nport.ARCHIVE_URL.format(cik=cik, accession=accession):
+                return _FakeResp(_IVV_NPORT_XML)
+            raise AssertionError(f"unexpected SEC URL: {url}")
+
+    openfigi_by_isin = {
+        "US0378331005": {"ticker": "AAPL", "shareClassFIGI": "BBG001S5N8V8", "name": "APPLE INC"},
+        "US46625H1005": {"ticker": "JPM", "shareClassFIGI": "BBG001S8CRC3", "name": "JPMORGAN CHASE & CO"},
+        "US0846707026": {"ticker": "BRK/B", "shareClassFIGI": "BBG001S5P000", "name": "BERKSHIRE HATHAWAY INC-CL B"},
+    }
+
+    def _fake_urlopen(req: _url.Request, timeout: float = 0):
+        jobs = _json.loads(req.data.decode())
+        assert all(job.get("includeUnlistedEquities") is True for job in jobs)
+        assert all(job["idValue"] != "US436CVR0216" for job in jobs)
+        body = _json.dumps([{"data": [openfigi_by_isin[job["idValue"]]]} for job in jobs]).encode()
+        return io.BytesIO(body)
+
+    monkeypatch.setattr(_url, "urlopen", _fake_urlopen)
+    monkeypatch.setattr(
+        sec,
+        "ticker_cik_index",
+        lambda *_a, **_k: {"AAPL": 320193, "JPM": 19617, "BRK-B": 1067983},
+    )
+    monkeypatch.setattr(
+        sec,
+        "ticker_mic_index",
+        lambda *_a, **_k: {"AAPL": "XNAS", "JPM": "XNYS", "BRK-B": "XNYS", "BRK.B": "XNYS"},
+    )
+
+    fetches: list[tuple[DataSource, str, datetime | None]] = []
+
+    def _fake_insert_fetch(
+        _conn,
+        *,
+        source: DataSource,
+        source_record_id: str,
+        body: bytes,
+        content_type: str,
+        fetched_at: datetime | None = None,
+        recorded_at: datetime | None = None,
+        source_published_at: datetime | None = None,
+        metadata: dict | None = None,
+    ) -> int:
+        fetches.append((source, source_record_id, source_published_at))
+        return len(fetches)
+
+    monkeypatch.setattr(up.raw_store, "insert_fetch", _fake_insert_fetch)
+
+    class _FakeCursor:
+        def __init__(self, rows: list[tuple]) -> None:
+            self._rows = rows
+
+        def fetchall(self) -> list[tuple]:
+            return self._rows
+
+        def fetchone(self) -> tuple | None:
+            return self._rows[0] if self._rows else None
+
+    class _FakeConn:
+        def __init__(self) -> None:
+            self.constituents: list[tuple] = []
+            self.aliases: list[tuple[str, str]] = []
+
+        def transaction(self):
+            import contextlib
+
+            return contextlib.nullcontext()
+
+        def execute(self, sql: str, params: tuple = ()):
+            norm = " ".join(sql.split()).lower()
+            if norm.startswith("insert into staging.etf_constituent_facts"):
+                self.constituents.append(params)
+                return _FakeCursor([])
+            if "select ticker, cik, figi from staging.etf_constituent_facts" in norm:
+                return _FakeCursor([(r[4], r[7], r[8]) for r in sorted(self.constituents, key=lambda x: x[4])])
+            if "from staging.etf_constituent_facts where etf_symbol = 'qqq'" in norm:
+                return _FakeCursor([("AAPL",)])
+            if "from staging.entity_aliases alias" in norm:
+                return _FakeCursor([(val,) for scheme, val in self.aliases if scheme == "mic-ticker"])
+            if "select entity_id from staging.entity_aliases" in norm:
+                return _FakeCursor([])
+            if "select staging.entity_mint(" in norm:
+                return _FakeCursor([(f"uuid-{params[0]}",)])
+            if norm.startswith("insert into staging.entity_aliases"):
+                self.aliases.append((str(params[1]), str(params[2])))
+                return _FakeCursor([])
+            raise AssertionError(f"unexpected SQL: {sql}")
+
+    conn = _FakeConn()
+    source = up.UNIVERSE_SOURCES["sp500"]
+    landed = up.refresh_etf_constituents(
+        conn,  # type: ignore[arg-type]
+        source,
+        openfigi_api_key="test-key",
+        http=_FakeSecHttp(),
+    )
+    assert landed == 3
+    expected_knowable = datetime(2026, 8, 25, 0, 0, tzinfo=UTC)
+    assert fetches[0] == (DataSource.NPORT, f"nport-constituents:sp500:{accession}", expected_knowable)
+    assert fetches[1][0] == DataSource.OPENFIGI
+
+    rows = [(r[4], r[5], r[6], r[7], r[8], r[2], r[1], r[9]) for r in conn.constituents]
+    assert rows == [
+        ("AAPL", "APPLE INC", Decimal("7.1"), 320193, "bbg001s5n8v8", "nport", date(2026, 6, 30), expected_knowable),
+        (
+            "BRK.B",
+            "BERKSHIRE HATHAWAY INC CL B",
+            Decimal("1.72"),
+            1067983,
+            "bbg001s5p000",
+            "nport",
+            date(2026, 6, 30),
+            expected_knowable,
+        ),
+        (
+            "JPM",
+            "JPMORGAN CHASE & CO",
+            Decimal("1.35"),
+            19617,
+            "bbg001s8crc3",
+            "nport",
+            date(2026, 6, 30),
+            expected_knowable,
+        ),
+    ]
+
+    denominator = up.build_denominator(conn, source, report_date=date(2026, 6, 30))  # type: ignore[arg-type]
+    assert denominator["instrument_count"] == 3
+    assert denominator["issuer_count"] == 3
+    assert denominator["excluded"] == []
+    assert {row[3]: row[2] for row in denominator["instruments"]} == {
+        "AAPL": "listing:xnas:aapl",
+        "BRK.B": "listing:xnys:brk.b",
+        "JPM": "listing:xnys:jpm",
+    }
+
+
+def test_nport_unlisted_openfigi_placeholder_ticker_falls_back_to_sec_company_tickers(monkeypatch) -> None:
+    """#1441: OpenFIGI's unlisted US record for Exxon Mobil and ONEOK carries a digit-leading
+    placeholder ticker ('9666655D', '9666690D') beside the valid shareClassFIGI; the refresh
+    resolves the US ticker through SEC's company_tickers normalized title index while preserving
+    OpenFIGI's shareClassFIGI."""
+    import json as _json
+
+    from data_engine.datahub.capture_core import universe_plane as up
+    from data_engine.sources import gateway, nport, sec
+
+    company_tickers_payload = _json.dumps(
+        {
+            "0": {"cik_str": 2115436, "ticker": "XOM", "title": "ExxonMobil Holdings Corp"},
+            "1": {"cik_str": 1039684, "ticker": "OKE", "title": "ONEOK INC /NEW/"},
+            "2": {"cik_str": 1039684, "ticker": "OKE-PA", "title": "ONEOK INC /NEW/"},
+        }
+    ).encode()
+    monkeypatch.setattr(gateway, "fetch_once", lambda _key, _fetch: company_tickers_payload)
+
+    title_map = sec.title_ticker_index()
+    assert title_map["EXXONMOBIL"] == "XOM"
+    assert title_map["ONEOK"] == "OKE"
+
+    match_xom = up._select_openfigi_match(
+        {"data": [{"ticker": "9666655D", "shareClassFIGI": "BBG001S69V32", "name": "EXXON MOBIL CORP"}]}
+    )
+    assert match_xom == ("", "bbg001s69v32", "EXXON MOBIL CORP")
+
+    holdings = [
+        nport.Holding(
+            name="EXXON MOBIL CORP",
+            cusip="30231G102",
+            isin="US30231G1022",
+            lei=None,
+            balance=100.0,
+            value_usd=10000.0,
+            pct_val=1.15,
+            asset_cat="EC",
+        ),
+        nport.Holding(
+            name="ONEOK INC",
+            cusip="682680103",
+            isin="US6826801036",
+            lei=None,
+            balance=50.0,
+            value_usd=5000.0,
+            pct_val=0.42,
+            asset_cat="EC",
+        ),
+    ]
+    resolved_ids = {
+        ("ID_ISIN", "US30231G1022"): ("", "bbg001s69v32", "EXXON MOBIL CORP"),
+        ("ID_ISIN", "US6826801036"): ("", "bbg001s5twk1", "ONEOK INC"),
+    }
+    by_ticker = up._aggregate_nport_holdings(holdings, resolved_ids, etf="sp500", title_tickers=title_map)
+    assert by_ticker == {
+        "XOM": ("EXXON MOBIL CORP", Decimal("1.15"), "bbg001s69v32"),
+        "OKE": ("ONEOK INC", Decimal("0.42"), "bbg001s5twk1"),
+    }
+
+
+def test_sec_ticker_mic_index_and_seed_listing_mic_aliases_resolve_multi_exchange_constituents(
+    corpus_rows, monkeypatch
+) -> None:
+    """#1418: SEC company_tickers_exchange.json maps NYSE/Nasdaq/CBOE tickers to XNYS/XNAS/BATS and
+    _seed_sec_listing_mic_aliases writes idempotent mic-ticker aliases so build_denominator resolves them."""
+    import contextlib
+    import json as _json
+
+    from data_engine.datahub.capture_core import universe_plane as up
+    from data_engine.sources import gateway, sec
+
+    exchange_payload = _json.dumps(
+        {
+            "fields": ["cik", "name", "ticker", "exchange"],
+            "data": [
+                [30231, "EXXON MOBIL CORP", "ZQXOM", "NYSE"],
+                [1039684, "NASDAQ TEST CO", "ZQNSD", "Nasdaq"],
+                [1234567, "CBOE TEST CO", "ZQCBO", "CBOE"],
+                [7654321, "SHARE CLASS CO", "ZQBRK-B", "NYSE"],
+                [9999999, "NULL EXCHANGE CO", "ZQNUL", None],
+            ],
+        }
+    ).encode()
+    monkeypatch.setattr(gateway, "fetch_once", lambda _key, _fetch: exchange_payload)
+
+    mic_map = sec.ticker_mic_index()
+    assert mic_map == {
+        "ZQXOM": "XNYS",
+        "ZQNSD": "XNAS",
+        "ZQCBO": "BATS",
+        "ZQBRK-B": "XNYS",
+        "ZQBRK.B": "XNYS",
+    }
+
+    class _FakeCursor:
+        def __init__(self, rows: list[tuple]) -> None:
+            self._rows = rows
+
+        def fetchall(self) -> list[tuple]:
+            return self._rows
+
+        def fetchone(self) -> tuple | None:
+            return self._rows[0] if self._rows else None
+
+    class _FakeConn:
+        def __init__(self) -> None:
+            self.constituents = [
+                ("ZQBRK.B", 7654321, "bbg0zqbrk001"),
+                ("ZQCBO", 1234567, "bbg0zqcbo001"),
+                ("ZQNSD", 1039684, "bbg0zqnsd001"),
+                ("ZQNUL", 9999999, "bbg0zqnul001"),
+                ("ZQXOM", 30231, "bbg0zqxom001"),
+            ]
+            self.aliases: list[tuple[str, str]] = []
+            self.minted_legacy: set[str] = set()
+
+        def transaction(self):
+            return contextlib.nullcontext()
+
+        def execute(self, sql: str, params: tuple = ()):
+            norm = " ".join(sql.split()).lower()
+            if "select ticker, cik, figi from staging.etf_constituent_facts" in norm:
+                return _FakeCursor(self.constituents)
+            if "from staging.etf_constituent_facts where etf_symbol = 'qqq'" in norm:
+                return _FakeCursor([])
+            if "from staging.entity_aliases alias" in norm:
+                return _FakeCursor([(val,) for scheme, val in self.aliases if scheme == "mic-ticker"])
+            if "select entity_id from staging.entity_aliases" in norm:
+                legacy_val = str(params[0])
+                if any(s == "legacy-id" and v == legacy_val for s, v in self.aliases):
+                    return _FakeCursor([(f"uuid-{legacy_val}",)])
+                return _FakeCursor([])
+            if "select staging.entity_mint(" in norm:
+                legacy_val = str(params[0])
+                assert legacy_val not in self.minted_legacy, f"minted twice: {legacy_val}"
+                self.minted_legacy.add(legacy_val)
+                return _FakeCursor([(f"uuid-{legacy_val}",)])
+            if norm.startswith("insert into staging.entity_aliases"):
+                pair = (str(params[1]), str(params[2]))
+                if pair not in self.aliases:
+                    self.aliases.append(pair)
+                return _FakeCursor([])
+            raise AssertionError(f"unexpected SQL: {sql}")
+
+    conn = _FakeConn()
+    tickers = ["ZQXOM", "ZQNSD", "ZQCBO", "ZQBRK.B", "ZQNUL"]
+    filing_dt = datetime(2026, 8, 25, tzinfo=UTC)
+    up._seed_sec_listing_mic_aliases(
+        conn,  # type: ignore[arg-type]
+        tickers,
+        mic_index=mic_map,
+        valid_from=date(2026, 6, 30),
+        transaction_time=filing_dt,
+    )
+    # Calling a second time is idempotent and does not duplicate aliases or re-mint
+    up._seed_sec_listing_mic_aliases(
+        conn,  # type: ignore[arg-type]
+        tickers,
+        mic_index=mic_map,
+        valid_from=date(2026, 6, 30),
+        transaction_time=filing_dt,
+    )
+    assert len(conn.minted_legacy) == 4
+
+    denominator = build_denominator(conn, UNIVERSE_SOURCES["sp500"], report_date=date(2026, 6, 30))  # type: ignore[arg-type]
+    assert {row[3]: row[2] for row in denominator["instruments"]} == {
+        "ZQBRK.B": "listing:xnys:zqbrk.b",
+        "ZQCBO": "listing:bats:zqcbo",
+        "ZQNSD": "listing:xnas:zqnsd",
+        "ZQXOM": "listing:xnys:zqxom",
+    }
+    assert denominator["excluded"] == [
+        {"ticker": "ZQNUL", "issuer_id": "issuer:cik:0009999999", "reason": _UNKNOWN_EXCHANGE}
+    ]

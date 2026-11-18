@@ -415,7 +415,7 @@ def test_the_scan_reads_the_code_that_runs_the_strategy() -> None:
     for required in (
         "apps/data-engine/src/data_engine/datahub/risk_free.py",
         "apps/data-engine/src/data_engine/datahub/backtest.py",
-        "apps/data-engine/src/data_engine/datahub/production_topt/composition.py",
+        "apps/data-engine/src/data_engine/datahub/capture_core/composition.py",
         "apps/data-engine/src/data_engine/lanes/capture.py",
         "common/factors/src/factors/composite/strategy_evaluator.py",
         "common/factors/src/factors/production_topt/core.py",

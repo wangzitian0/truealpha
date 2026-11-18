@@ -116,7 +116,7 @@ def test_aapl_resolves_identically_across_topt_and_qqq(connection) -> None:
 
 def test_plan_and_persist_coordinates_are_uuids(connection) -> None:
     """plan_and_persist produces canonical UUIDs for all coordinates."""
-    from data_engine.datahub.production_topt.composition import plan_and_persist
+    from data_engine.datahub.capture_core.composition import plan_and_persist
 
     plan = plan_and_persist(connection, cutoff=CUTOFF, version="test-uuid-coords")
     assert len(plan.coordinates) == 21
@@ -133,7 +133,7 @@ def test_capture_entity_refs_persisted(connection) -> None:
     from pathlib import Path
 
     sys.path.insert(0, str(Path(__file__).parents[1]))
-    from production_topt.test_persistence import _capture
+    from capture_core.test_persistence import _capture
 
     plan = _capture(connection, version="test-refs-persist")
     refs = connection.execute(
@@ -158,7 +158,7 @@ def test_resolve_coordinates_asserts_issuer_display_name_aliases_for_all_topt_me
     """#1517, #1518: `resolve_coordinates` asserts a `scheme = 'name'` alias on every TOPT issuer entity
     without any hardcoded Python dictionary."""
     from data_engine.datahub import resolve_coordinates as rc
-    from data_engine.datahub.production_topt.composition import plan_and_persist
+    from data_engine.datahub.capture_core.composition import plan_and_persist
 
     assert not hasattr(rc, "_CANONICAL_ISSUER_NAMES") and not hasattr(rc, "canonical_issuer_name")
     plan = plan_and_persist(connection, cutoff=CUTOFF, version="test-xnys-names")
@@ -179,7 +179,7 @@ def test_resolve_coordinates_holds_no_hardcoded_issuer_name_dictionary() -> None
     from unittest.mock import MagicMock
 
     from data_engine.datahub import resolve_coordinates as rc
-    from data_engine.datahub.production_topt.holdings_enrichment import _holding_display_name
+    from data_engine.datahub.capture_core.holdings_enrichment import _holding_display_name
 
     assert not hasattr(rc, "_CANONICAL_ISSUER_NAMES") and not hasattr(rc, "canonical_issuer_name")
     assert rc._corpus_issuer_names()["JPM"] == "JPMorgan Chase & Co."

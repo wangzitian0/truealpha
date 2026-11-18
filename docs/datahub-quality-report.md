@@ -214,7 +214,7 @@ A manual launch with `force_fetch: true` skips the reuse window for every obliga
 
   ```sql
   select plan.run_id, (plan.payload->>'forced_fetch')::boolean as forced_fetch
-  from raw.production_topt_run_plans plan
+  from raw.capture_run_plans plan
   order by plan.created_at desc limit 5;
 
   select report.run_id, (report.payload->>'forced_fetch')::boolean as forced_fetch

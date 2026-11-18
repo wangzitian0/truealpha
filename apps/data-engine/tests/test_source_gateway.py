@@ -251,7 +251,7 @@ def test_yahoo_chart_fetch_is_one_yahoo_row(call_ledger, monkeypatch) -> None:
 
 
 def test_twelve_data_no_end_of_day_is_a_failed_twelvedata_row_with_the_key_redacted(call_ledger, monkeypatch) -> None:
-    from data_engine.datahub.production_topt import twelve_data_origin as origin
+    from data_engine.datahub.capture_core import twelve_data_origin as origin
 
     body = json.dumps({"code": 400, "message": "No data is available on the specified dates"}).encode()
 
@@ -329,7 +329,7 @@ def test_an_httpx_error_status_carries_the_vendor_message(call_ledger) -> None:
 
 
 def test_index_operator_fetch_is_one_nasdaq_index_row(call_ledger, monkeypatch) -> None:
-    from data_engine.datahub.production_topt import universe_plane
+    from data_engine.datahub.capture_core import universe_plane
 
     body = b'{"data": {"data": {"rows": []}}}'
     monkeypatch.setattr(urllib.request, "urlopen", lambda request, timeout=None: io.BytesIO(body))
@@ -404,7 +404,7 @@ _IDENTITY_FUNCTIONS = frozenset(
             "get_history_kl_quota",
         )
     }
-    | {"data_engine.datahub.production_topt.universe_plane._get"}
+    | {"data_engine.datahub.capture_core.universe_plane._get"}
 )
 #: Methods of the moomoo client protocol; any owner (`client.history_kline`, `self._client.history_kline`).
 _IDENTITY_METHODS = frozenset({"history_kline", "financial_statements"})
@@ -808,7 +808,7 @@ def _gate(
 def test_the_gateways_capacities_are_the_registrys_and_nothing_else() -> None:
     """One declaration (2026-09-16 design audit: the gateway's own table said SEC 8/s and
     moomoo 60/30 s while the registry said 10/s and 8/30 s, and nothing read the registry)."""
-    from data_engine.datahub.production_topt.source_registrations import LEDGER_CAPACITIES
+    from data_engine.datahub.capture_core.source_registrations import LEDGER_CAPACITIES
 
     assert set(gateway.CAPACITIES) == set(LEDGER_CAPACITIES)
     for seat, declared in LEDGER_CAPACITIES.items():

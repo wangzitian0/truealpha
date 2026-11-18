@@ -32,7 +32,7 @@ from truealpha_contracts.common import canonical_sha256
 from truealpha_runtime.testing import clone_test_database, isolated_test_database
 
 sys.path.insert(0, str(Path(__file__).parent))
-from production_topt.test_materialization import CUTOFF, _seed_complete_production_run  # noqa: E402
+from capture_core.test_materialization import CUTOFF, _seed_complete_production_run  # noqa: E402
 
 MIGRATIONS = Path(__file__).parents[3] / "db" / "migrations"
 STORE_MIGRATION = MIGRATIONS / "0002_staging.sql"

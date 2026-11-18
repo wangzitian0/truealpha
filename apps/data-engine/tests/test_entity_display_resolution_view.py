@@ -26,10 +26,10 @@ from pathlib import Path
 import psycopg
 import pytest
 from data_engine.config import settings
-from data_engine.datahub.production_topt import PostgresToptCoreRepository
+from data_engine.datahub.capture_core import PostgresToptCoreRepository
 
 sys.path.insert(0, str(Path(__file__).parent))
-from production_topt.test_materialization import _seed_complete_production_run  # noqa: E402
+from capture_core.test_materialization import _seed_complete_production_run  # noqa: E402
 
 
 @pytest.fixture
@@ -114,4 +114,4 @@ def test_mart_readonly_reads_the_view_but_not_staging(frozen_members) -> None:
     row = connection.execute("select issuer_id, ticker from mart.entity_display_resolution limit 1").fetchone()
     assert row is not None and row[1]
     with pytest.raises(psycopg.errors.InsufficientPrivilege):
-        connection.execute("select 1 from staging.topt_core_snapshot_members limit 1")
+        connection.execute("select 1 from staging.core_snapshot_members limit 1")

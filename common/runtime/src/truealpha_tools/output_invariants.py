@@ -59,7 +59,7 @@ def _expected_inputs() -> tuple[tuple[str, str], ...]:
 
 def _primary_market_price_parser() -> str:
     try:
-        from data_engine.datahub.production_topt.source_registrations import registration_for
+        from data_engine.datahub.capture_core.source_registrations import registration_for
 
         return registration_for("market-price").origins[0].parser_versions[-1].split(":")[0]
     except ImportError:
@@ -68,7 +68,7 @@ def _primary_market_price_parser() -> str:
 
 def _market_price_parser_ranks() -> tuple[tuple[str, int], ...]:
     try:
-        from data_engine.datahub.production_topt.source_registrations import SOURCE_BY_PARSER, registration_for
+        from data_engine.datahub.capture_core.source_registrations import SOURCE_BY_PARSER, registration_for
     except ImportError:
         return ()
     market = {origin.origin_id for origin in registration_for("market-price").origins}
@@ -198,7 +198,7 @@ _FUSION_CTES = """
     selected as (
         select s.run_id, sel.observation_id
         from mart.current_pointer_head head
-        join staging.topt_core_snapshots s
+        join staging.core_snapshots s
           on s.run_id = head.target_run_id
          and s.universe_id = head.universe_id
          and s.universe_version = head.universe_version

@@ -10,8 +10,8 @@ from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+from data_engine.datahub.capture_core.concept_mapping import DEFAULT_RULESET
 from data_engine.datahub.fetch_key import FetchKey
-from data_engine.datahub.production_topt.concept_mapping import DEFAULT_RULESET
 
 _COMPANY_FACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik:010d}.json"
 _TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"

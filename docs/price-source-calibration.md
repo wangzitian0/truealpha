@@ -33,7 +33,7 @@ current source of truth.
 
 OpenD runs on the VPS and the data-engine containers reach it over the host network,
 yet until this origin existed `staging.api_call_ledger` held zero moomoo rows. The
-origin (`apps/data-engine/src/data_engine/datahub/production_topt/moomoo_origin.py`)
+origin (`apps/data-engine/src/data_engine/datahub/capture_core/moomoo_origin.py`)
 asks `request_history_kline` for a bounded daily window ending on the price cutoff —
 the last settled session (#637) — UNADJUSTED (`AuType.NONE`) and regular-session only
 (`extended_time=False`), and refuses any bar stamped with an instant or dated after the

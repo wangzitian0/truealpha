@@ -15,9 +15,9 @@ from importlib import resources
 from typing import Any
 
 import pytest
+from data_engine.datahub.capture_core import source_registrations as registry
+from data_engine.datahub.capture_core.corroboration_audit import corroboration_tally
 from data_engine.datahub.fetch_key import FetchKey
-from data_engine.datahub.production_topt import source_registrations as registry
-from data_engine.datahub.production_topt.corroboration_audit import corroboration_tally
 from data_engine.sources import gateway
 from truealpha_contracts.environment_contract import (
     DAY_SECONDS,

@@ -15,7 +15,7 @@ from pathlib import Path
 
 import psycopg
 import pytest
-from data_engine.datahub.production_topt.source_registrations import macro_registration_for
+from data_engine.datahub.capture_core.source_registrations import macro_registration_for
 from data_engine.datahub.risk_free import (
     INSTRUMENT,
     MAX_RATE_LAG_DAYS,

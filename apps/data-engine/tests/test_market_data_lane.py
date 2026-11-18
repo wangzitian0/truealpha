@@ -839,7 +839,7 @@ def _denominator(*tickers: str) -> dict[str, Any]:
 def test_the_lane_stores_the_primary_listing_of_a_21st_issuer(monkeypatch, written, fake_connection) -> None:
     """The symbols of the lane come from the corpus of the universe record (#1522): an issuer that the corpus
     gains is stored with no edit in the lane. The 20-symbol tuple used to ignore it. This runs the deployed job."""
-    from data_engine.datahub.production_topt import universe_corpus
+    from data_engine.datahub.capture_core import universe_corpus
 
     monkeypatch.setattr(
         universe_corpus, "load_corpus", lambda _filename: {"topt_denominator": _denominator("AAPL", "ZZZZ")}

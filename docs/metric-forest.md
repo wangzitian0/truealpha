@@ -352,7 +352,7 @@ entry from `tools/output_invariant_exemptions.json`, which today still defers <!
 `gppe-not-negative` until 2026-09-23.
 
 Red-proofs that #909 adds, all against a real materialized governed head
-(`apps/data-engine/tests/production_topt/test_node_sign_invariant.py`):
+(`apps/data-engine/tests/capture_core/test_node_sign_invariant.py`):
 
 - the same JPM row fails under a forest whose GPPE node forbids a negative financial value;
 - a sign flip between `gppe` and `capital_adjusted_gross_profit` fails, and so does a published

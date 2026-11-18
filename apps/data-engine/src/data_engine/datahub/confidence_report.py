@@ -32,23 +32,23 @@ from truealpha_runtime.reconciliation_policies import (
 )
 
 from data_engine.datahub._helpers import CAPTURE_OBSERVATION_JOIN, fetch_topt_cutoff, parse_decimal
-from data_engine.datahub.oracle_outcomes import (
-    canonical_metric,
-    load_oracle_confidence_inputs,
-    oracle_cell_agreement,
-    oracle_outcome_mass_by_origin,
-)
-from data_engine.datahub.production_topt.executor import SERVED_BY_FAILOVER
-from data_engine.datahub.production_topt.headcount import is_eligible_headcount_row
-from data_engine.datahub.production_topt.parser_identity import PARSER_VERSION_HISTORY
-from data_engine.datahub.production_topt.source_registrations import (
+from data_engine.datahub.capture_core.executor import SERVED_BY_FAILOVER
+from data_engine.datahub.capture_core.headcount import is_eligible_headcount_row
+from data_engine.datahub.capture_core.parser_identity import PARSER_VERSION_HISTORY
+from data_engine.datahub.capture_core.source_registrations import (
     RELEASE_SEMANTICS,
     SOURCE_BY_PARSER,
     registered_semantic_types,
     registration_for,
     source_reliability_prior,
 )
-from data_engine.datahub.production_topt.universe_plane import UNIVERSE_SOURCES, UniverseSource, resolve_listing_mics
+from data_engine.datahub.capture_core.universe_plane import UNIVERSE_SOURCES, UniverseSource, resolve_listing_mics
+from data_engine.datahub.oracle_outcomes import (
+    canonical_metric,
+    load_oracle_confidence_inputs,
+    oracle_cell_agreement,
+    oracle_outcome_mass_by_origin,
+)
 from data_engine.datahub.quality_report import (
     FIELD_UNITS,
     FINANCIAL_FACT_FUSION_FIELDS,

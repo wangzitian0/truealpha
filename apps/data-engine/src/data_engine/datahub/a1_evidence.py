@@ -126,7 +126,7 @@ def register_run_evidence(
     objectives: ServiceObjectives = ACCEPTED_SERVICE_OBJECTIVES,
 ) -> PointerRegistration:
     status = connection.execute(
-        "select universe_id, universe_version, cutoff, environment from mart.topt_capture_status where run_id = %s",
+        "select universe_id, universe_version, cutoff, environment from mart.capture_status where run_id = %s",
         (run_id,),
     ).fetchone()
     if status is None:

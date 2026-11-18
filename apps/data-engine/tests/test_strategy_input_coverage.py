@@ -24,7 +24,7 @@ from pathlib import Path
 import psycopg
 import pytest
 from data_engine.config import settings
-from data_engine.datahub.production_topt import PostgresToptCoreRepository
+from data_engine.datahub.capture_core import PostgresToptCoreRepository
 from data_engine.datahub.strategy_bridge import (
     persist_strategy_input_coverage,
     seed_strategy_inputs_from_capture,
@@ -32,7 +32,7 @@ from data_engine.datahub.strategy_bridge import (
 from factors.production_topt import GppeV0Definition
 
 sys.path.insert(0, str(Path(__file__).parent))
-from production_topt.test_materialization import CUTOFF, _seed_complete_production_run  # noqa: E402
+from capture_core.test_materialization import CUTOFF, _seed_complete_production_run  # noqa: E402
 
 
 @pytest.fixture

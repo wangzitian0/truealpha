@@ -1,0 +1,2624 @@
+from __future__ import annotations
+
+import json
+from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
+from pathlib import Path
+from typing import Any
+
+import pytest
+from data_engine.contracts.datahub import CaptureWorkItem
+from data_engine.contracts.obligation_reason_codes import ObligationReasonCode
+from data_engine.datahub.capture_core.executor import FetchFailure, FetchSuccess
+from data_engine.datahub.capture_core.issuer_registry import (
+    operating_branch_for_sic,
+)
+from data_engine.datahub.capture_core.materialization import FinancialFactPayload
+from data_engine.datahub.capture_core.sec_financial_adapter import (
+    DEFAULT_RULESET,
+    FinancialFactsBundle,
+    HeadcountFact,
+    SecFinancialFactAdapter,
+    SecTarget,
+    SourceUnavailableError,
+    _statement_period_ends,
+    annual_values_by_period_end,
+    build_bundle,
+    company_facts_record_id,
+    gross_profit,
+    insurance_pre_claims_profit,
+    merge_company_facts,
+    pre_provision_profit,
+    sec_financial_fetcher,
+)
+from factors.production_topt import (
+    GppeV0Definition,
+    MetricAvailability,
+    MetricFreshness,
+    OperatingBranch,
+    ToptCellQualityInput,
+    ToptCoreAvailability,
+    ToptCoreReasonCode,
+    ToptCoreSnapshotInput,
+    ToptGppeResult,
+    ToptMarketValueComponent,
+    ToptMetricInput,
+    compute_topt_gppe,
+)
+from truealpha_contracts.strategy import load_live_strategy_definition
+
+_CUTOFF = date(2026, 3, 31)
+
+
+def _work_item(digest: str) -> CaptureWorkItem:
+    return CaptureWorkItem(
+        campaign_id="capture-campaign:" + "1" * 64,
+        source_request_id="source-request:" + digest,
+        schedule_policy_id="schedule-policy:" + "2" * 64,
+    )
+
+
+def _target(cik: int = 1, branch: OperatingBranch = OperatingBranch.NON_FINANCIAL) -> SecTarget:
+    return SecTarget(
+        cik=cik,
+        cutoff=_CUTOFF,
+        issuer_id="issuer:lei:X",
+        instrument_id="security:cusip:Y",
+        listing_id="listing:xnas:goog",
+        operating_branch=branch,
+    )
+
+
+def _annual(end: str, start: str, val: object, filed: str, *, accn: str | None = None, form: str = "10-K") -> dict:
+    entry = {"end": end, "start": start, "val": val, "filed": filed, "form": form, "fy": int(end[:4]), "fp": "FY"}
+    if accn is not None:
+        entry["accn"] = accn
+    return entry
+
+
+def _facts() -> dict:
+    return {
+        "facts": {
+            "us-gaap": {
+                "GrossProfit": {
+                    "units": {
+                        "USD": [
+                            _annual("2024-12-31", "2024-01-01", 100, "2025-02-01"),
+                            _annual("2025-12-31", "2025-01-01", 120, "2026-02-01"),
+                            # Filed after the cutoff — must be excluded (not knowable yet).
+                            _annual("2026-03-31", "2025-04-01", 999, "2026-04-20"),
+                            # A quarter, not a year: must never win over the annual figure.
+                            _annual("2025-12-31", "2025-10-01", 30, "2026-02-01"),
+                        ]
+                    }
+                },
+                "Assets": {"units": {"USD": [{"end": "2025-12-31", "val": 500, "filed": "2026-02-01"}]}},
+                "CommonStockSharesOutstanding": {
+                    "units": {"shares": [{"end": "2026-01-31", "val": 10, "filed": "2026-02-10"}]}
+                },
+            }
+        }
+    }
+
+
+def test_pit_excludes_future_filings_and_quarters() -> None:
+    values = annual_values_by_period_end(_facts(), "us-gaap", "GrossProfit", "USD", _CUTOFF)
+    assert set(values) == {date(2024, 12, 31), date(2025, 12, 31)}  # the 2026-04-20 filing is not knowable
+    assert values[date(2025, 12, 31)].value == Decimal("120")  # the 30 is a quarter, dropped
+    assert values[date(2025, 12, 31)].filed == date(2026, 2, 1)
+
+
+def test_build_bundle_extracts_the_core_fields() -> None:
+    bundle = build_bundle(_facts(), _CUTOFF, OperatingBranch.NON_FINANCIAL)
+    assert bundle.gross_profit == Decimal("120")
+    assert bundle.total_assets == Decimal("500")
+    assert bundle.shares_outstanding == Decimal("10")
+    assert bundle.pre_provision_profit is None
+    assert bundle.knowable_at is not None
+    assert bundle.knowable_at.date() <= _CUTOFF
+
+
+def _no_cogs_facts() -> dict:
+    """An issuer tagging neither GrossProfit nor any COGS concept, but reporting revenue.
+
+    Shared by a payment network (whose cost of revenue really is ~zero) and an oil major
+    (whose cost of revenue is enormous but untagged) — the payload cannot tell them apart,
+    which is the whole point of #533.
+    """
+    facts = _facts()
+    del facts["facts"]["us-gaap"]["GrossProfit"]
+    facts["facts"]["us-gaap"]["Revenues"] = {
+        "units": {"USD": [_annual("2025-12-31", "2025-01-01", 332238000000, "2026-02-01")]}
+    }
+    return facts
+
+
+def test_the_revenue_proxy_is_refused_for_an_industry_it_was_not_approved_for() -> None:
+    # XOM's real shape: no GrossProfit, no COGS family, $332B revenue. Petroleum Refining
+    # is not a ~zero-COGS industry, so the substitution must not happen (#533).
+    item = _work_item("e" * 64)
+    target = SecTarget(
+        cik=2115436,
+        cutoff=_CUTOFF,
+        issuer_id="issuer:lei:J3WHBG0MTS7O8ZVMDC91",
+        instrument_id="security:cusip:30231G102",
+        listing_id="listing:xnys:xom",
+        operating_branch=OperatingBranch.NON_FINANCIAL,
+    )
+    adapter = SecFinancialFactAdapter(
+        {item.work_item_id: target}, lambda cik, cutoff, branch: build_bundle(_no_cogs_facts(), cutoff, branch)
+    )
+    result = adapter.fetch(item)
+    assert isinstance(result, FetchSuccess)
+    assert result.record.payload["gross_profit"] is None, "an oil major must not publish revenue as gross profit"
+    # Revenue itself is untouched: the issuer really does report it.
+    assert result.record.payload["revenue"] == "332238000000"
+    # And the lineage does not claim a filing for the input it refused (Copilot on #774).
+    assert "gross_profit" not in result.record.payload["vintage"]
+    assert "revenue" in result.record.payload["vintage"]
+
+
+def test_no_cogs_issuer_without_gross_profit_resolves_none() -> None:
+    """#1519 step 6: `gross_profit` is never filled from `revenue` when neither `GrossProfit`
+    nor a COGS concept is reported, and `revenue_proxy_allowed` plumbing is deleted."""
+    from data_engine.datahub.capture_core import issuer_registry
+
+    assert not hasattr(issuer_registry, "revenue_proxy_allowed_for_sic")
+    assert not hasattr(issuer_registry.IssuerClassification, "revenue_proxy_allowed")
+    assert "revenue_proxy_allowed" not in SecTarget.__dataclass_fields__
+    item = _work_item("f" * 64)
+    target = SecTarget(
+        cik=1403161,
+        cutoff=_CUTOFF,
+        issuer_id="issuer:lei:549300JZ4OKEHW3DPJ59",
+        instrument_id="security:cusip:92826C839",
+        listing_id="listing:xnys:v",
+        operating_branch=OperatingBranch.NON_FINANCIAL,
+    )
+    adapter = SecFinancialFactAdapter(
+        {item.work_item_id: target}, lambda cik, cutoff, branch: build_bundle(_no_cogs_facts(), cutoff, branch)
+    )
+    result = adapter.fetch(item)
+    assert isinstance(result, FetchSuccess)
+    assert result.record.payload["gross_profit"] is None
+    assert result.record.payload["revenue"] == "332238000000"
+    assert "gross_profit" not in result.record.payload["vintage"]
+
+
+def test_the_bundle_leaves_gross_profit_none_when_no_cogs_or_gross_profit_is_reported() -> None:
+    assert build_bundle(_no_cogs_facts(), _CUTOFF, OperatingBranch.NON_FINANCIAL).gross_profit is None
+    assert build_bundle(_facts(), _CUTOFF, OperatingBranch.NON_FINANCIAL).gross_profit == Decimal("120")
+
+
+def _multi_class_facts(shares_end: str, shares_filed: str, shares_val: object) -> dict:
+    """A multi-class issuer's shape: current profit, and the only surviving share fact old.
+
+    company-facts drops the dimensional per-class share facts, so what remains for V and
+    BRK.B is the cover-page figure from before dimensional tagging. The concept is present
+    and parses, which is exactly why nothing refused it (#529).
+    """
+    facts = _facts()
+    del facts["facts"]["us-gaap"]["CommonStockSharesOutstanding"]
+    facts["facts"]["dei"] = {
+        "EntityCommonStockSharesOutstanding": {
+            "units": {"shares": [{"end": shares_end, "val": shares_val, "filed": shares_filed}]}
+        }
+    }
+    return facts
+
+
+def _issuer_shape(
+    *,
+    shares: tuple[str, str, object] | None,
+    reports_gross_profit: bool,
+) -> dict:
+    """One issuer's company-facts shape.
+
+    `shares=None` means the issuer tags a current `CommonStockSharesOutstanding` (the
+    ordinary case); a tuple is the multi-class shape where only a `dei` cover-page fact
+    survives.
+    """
+    facts = _facts() if shares is None else _multi_class_facts(*shares)
+    if not reports_gross_profit:
+        del facts["facts"]["us-gaap"]["GrossProfit"]
+        facts["facts"]["us-gaap"]["Revenues"] = {
+            "units": {"USD": [_annual("2025-12-31", "2025-01-01", 332238000000, "2026-02-01")]}
+        }
+    return facts
+
+
+# The universe's real shapes, so a regression in either guard turns this red rather than
+# being caught only by re-deriving from the vendor by hand (AGENTS.md rule 7). Each row is
+# (label, SIC, surviving dei share fact or None, tags GrossProfit, expect gross profit,
+# expect shares). The dates and SICs are the live values verified on 2026-07-30.
+_UNIVERSE_SHAPES = [
+    # Ordinary issuers: real gross profit, current share count. Stands for the sixteen
+    # whose values this change must leave untouched.
+    ("AAPL-like non_financial", "3571", None, True, True, True),
+    # SIC 7389, tags neither GrossProfit nor COGS: #1519 step 6 removed the revenue proxy so gross_profit is None.
+    ("V-like payment network", "7389", None, False, False, True),
+    # Petroleum Refining with the same untagged shape: the proxy must NOT apply (#533).
+    ("XOM-like oil major", "2911", None, False, False, True),
+    # Multi-class issuer whose only surviving cover-page fact is from 2010 (#529).
+    ("V-like multi-class shares", "7389", ("2010-01-27", "2010-02-03", 469280842), True, True, False),
+    # Berkshire's Class-A-scale figure from 2011, refused for the same reason. Its gross
+    # profit is absent too, because SIC 6331 routes to the insurance numerator and the
+    # claims concept it needs stops at FY2016 in company-facts — the open residual on #496,
+    # and the reason this landmine has not yet detonated in a decision.
+    ("BRK.B-like multi-class shares", "6331", ("2011-04-29", "2011-05-06", 941481), True, False, False),
+    # A current cover-page fact is kept: the bound must not reject a compliant filer.
+    ("MA-like current cover page", "7389", ("2026-01-31", "2026-02-10", 905000000), True, True, True),
+]
+
+
+def test_both_guards_hold_across_every_shape_in_the_universe() -> None:
+    for label, sic, shares, reports_gp, expect_gp, expect_shares in _UNIVERSE_SHAPES:
+        facts = _issuer_shape(shares=shares, reports_gross_profit=reports_gp)
+        branch = operating_branch_for_sic(sic)
+        item = _work_item("1" * 64)
+        target = SecTarget(
+            cik=1,
+            cutoff=_CUTOFF,
+            issuer_id="issuer:lei:X",
+            instrument_id="security:cusip:Y",
+            listing_id="listing:xnas:x",
+            operating_branch=branch,
+        )
+        adapter = SecFinancialFactAdapter(
+            {item.work_item_id: target}, lambda cik, cutoff, b, _f=facts: build_bundle(_f, cutoff, b)
+        )
+        result = adapter.fetch(item)
+        assert isinstance(result, FetchSuccess), label
+        payload = result.record.payload
+        assert (payload["gross_profit"] is not None) is expect_gp, f"{label}: gross_profit"
+        assert (payload["shares_outstanding"] is not None) is expect_shares, f"{label}: shares_outstanding"
+
+
+def test_a_share_count_older_than_the_staleness_bound_is_refused() -> None:
+    # V's real shape: shares measured 2010-01-27 against fresh current-period profit.
+    bundle = build_bundle(
+        _multi_class_facts("2010-01-27", "2010-02-03", 469280842), _CUTOFF, OperatingBranch.NON_FINANCIAL
+    )
+    assert bundle.shares_outstanding is None, "a 2010 share count must not build a market capitalisation"
+    # The measurement date survives the refusal so the gap is diagnosable in SQL, not just
+    # reproducible by re-deriving from the vendor.
+    assert bundle.shares_period_end == date(2010, 1, 27)
+    # Refusing shares must not disturb the other inputs.
+    assert bundle.gross_profit == Decimal("120")
+    assert bundle.total_assets == Decimal("500")
+
+
+def test_a_current_share_count_is_kept_and_dated() -> None:
+    bundle = build_bundle(_multi_class_facts("2026-01-31", "2026-02-10", 1000), _CUTOFF, OperatingBranch.NON_FINANCIAL)
+    assert bundle.shares_outstanding == Decimal("1000")
+    assert bundle.shares_period_end == date(2026, 1, 31)
+
+
+def test_the_staleness_bound_does_not_reject_a_normal_quarterly_cadence() -> None:
+    # A filer whose latest cover page is a year old is late, not broken: the bound exists to
+    # catch a fifteen-year gap, and must not start excluding compliant issuers.
+    bundle = build_bundle(_multi_class_facts("2025-03-31", "2025-04-15", 1000), _CUTOFF, OperatingBranch.NON_FINANCIAL)
+    assert bundle.shares_outstanding == Decimal("1000")
+
+
+def test_a_refused_share_count_lowers_the_recorded_confidence() -> None:
+    # `_confidence` counts present fields, so the refusal has to show up as a real gap
+    # rather than a full-confidence record with a null in it.
+    item = _work_item("d" * 64)
+
+    def _fetched(shares_end: str, shares_filed: str, val: object) -> FetchSuccess | FetchFailure:
+        adapter = SecFinancialFactAdapter(
+            {item.work_item_id: _target()},
+            lambda cik, cutoff, branch: build_bundle(
+                _multi_class_facts(shares_end, shares_filed, val), cutoff, OperatingBranch.NON_FINANCIAL
+            ),
+        )
+        return adapter.fetch(item)
+
+    stale = _fetched("2010-01-27", "2010-02-03", 469280842)
+    fresh = _fetched("2026-01-31", "2026-02-10", 1000)
+    assert isinstance(stale, FetchSuccess) and isinstance(fresh, FetchSuccess)
+    assert stale.confidence is None and fresh.confidence is None
+    assert stale.record.payload["shares_outstanding"] is None
+    assert fresh.record.payload["shares_outstanding"] == "1000"
+    assert stale.record.payload["shares_period_end"] == "2010-01-27"
+
+
+def test_gross_profit_falls_back_to_revenue_minus_cost_over_a_shared_period() -> None:
+    facts = {
+        "facts": {
+            "us-gaap": {
+                "Revenues": {"units": {"USD": [_annual("2025-12-31", "2025-01-01", 900, "2026-02-01")]}},
+                "CostOfGoodsAndServicesSold": {
+                    "units": {"USD": [_annual("2025-12-31", "2025-01-01", 400, "2026-02-01")]}
+                },
+            }
+        }
+    }
+    datum = gross_profit(facts, _CUTOFF)
+    assert datum is not None
+    assert datum.value == Decimal("500")
+
+
+def test_gross_profit_never_mixes_periods() -> None:
+    facts = {
+        "facts": {
+            "us-gaap": {
+                "Revenues": {"units": {"USD": [_annual("2025-12-31", "2025-01-01", 900, "2026-02-01")]}},
+                "CostOfRevenue": {"units": {"USD": [_annual("2024-12-31", "2024-01-01", 400, "2025-02-01")]}},
+            }
+        }
+    }
+    assert gross_profit(facts, _CUTOFF) is None
+
+
+def _bank_facts() -> dict:
+    return {
+        "facts": {
+            "us-gaap": {
+                "RevenuesNetOfInterestExpense": {
+                    "units": {"USD": [_annual("2025-12-31", "2025-01-01", 180, "2026-02-01")]}
+                },
+                "NoninterestExpense": {"units": {"USD": [_annual("2025-12-31", "2025-01-01", 95, "2026-02-01")]}},
+                "Assets": {"units": {"USD": [{"end": "2025-12-31", "val": 4900, "filed": "2026-02-01"}]}},
+            }
+        }
+    }
+
+
+def test_depository_branch_uses_pre_provision_profit_as_the_operating_numerator() -> None:
+    datum = pre_provision_profit(_bank_facts(), _CUTOFF)
+    assert datum is not None
+    assert datum.value == Decimal("85")
+
+    bundle = build_bundle(_bank_facts(), _CUTOFF, OperatingBranch.FINANCIAL)
+    # #1519 step 6: a bank records pre_provision_profit under its own metric and leaves gross_profit None.
+    assert bundle.gross_profit is None
+    assert bundle.pre_provision_profit == Decimal("85")
+
+
+def test_non_financial_branch_never_derives_a_bank_proxy() -> None:
+    bundle = build_bundle(_bank_facts(), _CUTOFF, OperatingBranch.NON_FINANCIAL)
+    assert bundle.gross_profit is None
+    assert bundle.pre_provision_profit is None
+
+
+def test_a_payload_with_no_eligible_fact_is_captured_with_nulls() -> None:
+    """A source that publishes nothing is a real, captured state — not a failure.
+
+    XOM's post-reorganization CIK serves a company-facts document with no us-gaap
+    taxonomy; the cell must record honest nulls so the factor names the gap.
+    """
+    item = _work_item("a" * 64)
+    empty = {"facts": {"ffd": {}}}
+    adapter = SecFinancialFactAdapter(
+        {item.work_item_id: _target()}, lambda cik, cutoff, branch: build_bundle(empty, cutoff, branch)
+    )
+    result = adapter.fetch(item)
+    assert isinstance(result, FetchSuccess)
+    assert result.record is not None
+    assert result.record.payload["gross_profit"] is None
+    assert result.record.payload["total_assets"] is None
+    assert result.confidence is None
+
+
+def _bundle(**overrides: object) -> FinancialFactsBundle:
+    fields: dict = {
+        "gross_profit": Decimal("120"),
+        "total_assets": Decimal("500"),
+        "shares_outstanding": Decimal("10"),
+        "revenue": Decimal("900"),
+        "pre_provision_profit": None,
+        "raw_bytes": b"{}",
+        "knowable_at": datetime(2026, 2, 1, tzinfo=UTC),
+    }
+    fields.update(overrides)
+    return FinancialFactsBundle(**fields)  # type: ignore[arg-type]
+
+
+def test_adapter_success_carries_the_identity_and_branch() -> None:
+    item = _work_item("3" * 64)
+    adapter = SecFinancialFactAdapter({item.work_item_id: _target(320193)}, lambda cik, cutoff, branch: _bundle())
+    result = adapter.fetch(item)
+    assert isinstance(result, FetchSuccess)
+    assert result.confidence is None
+    assert result.record is not None
+    assert result.record.payload["issuer_id"] == "issuer:lei:X"
+    assert result.record.payload["operating_branch"] == "non_financial"
+    assert result.record.payload["currency"] == "USD"
+
+
+def test_adapter_no_bundle_is_field_unavailable() -> None:
+    item = _work_item("4" * 64)
+    adapter = SecFinancialFactAdapter({item.work_item_id: _target()}, lambda cik, cutoff, branch: None)
+    result = adapter.fetch(item)
+    assert isinstance(result, FetchFailure)
+    assert result.reason_code is ObligationReasonCode.FIELD_UNAVAILABLE
+
+
+def test_adapter_transient_and_timeout() -> None:
+    item = _work_item("5" * 64)
+
+    def _boom(cik, cutoff, branch):
+        raise SourceUnavailableError("503")
+
+    def _timeout(cik, cutoff, branch):
+        raise TimeoutError
+
+    a1 = SecFinancialFactAdapter({item.work_item_id: _target()}, _boom)
+    a2 = SecFinancialFactAdapter({item.work_item_id: _target()}, _timeout)
+    assert a1.fetch(item).reason_code is ObligationReasonCode.TRANSIENT_NETWORK
+    assert a2.fetch(item).reason_code is ObligationReasonCode.TIMEOUT
+
+
+def test_adapter_capacity_and_budget_exhaustion() -> None:
+    from data_engine.sources.gateway import BudgetExhausted, CapacityExceeded
+
+    item = _work_item("5" * 64)
+
+    def _budget(cik, cutoff, branch):
+        raise BudgetExhausted("sec", environment="production", budget=100, spent=100)
+
+    def _capacity(cik, cutoff, branch):
+        raise CapacityExceeded("sec", "0 calls left in window")
+
+    a1 = SecFinancialFactAdapter({item.work_item_id: _target()}, _budget)
+    a2 = SecFinancialFactAdapter({item.work_item_id: _target()}, _capacity)
+    assert a1.fetch(item).reason_code is ObligationReasonCode.DEFERRED_CAPACITY
+    assert a2.fetch(item).reason_code is ObligationReasonCode.DEFERRED_CAPACITY
+
+
+def test_unknown_work_item_is_contract_violation() -> None:
+    item = _work_item("6" * 64)
+    other = _work_item("7" * 64)
+    adapter = SecFinancialFactAdapter({item.work_item_id: _target()}, lambda cik, cutoff, branch: None)
+    assert adapter.fetch(other).reason_code is ObligationReasonCode.CONTRACT_VIOLATION
+
+
+def test_headcount_extractor_changes_the_normalized_identity() -> None:
+    item = _work_item("8" * 64)
+    without = SecFinancialFactAdapter({item.work_item_id: _target()}, lambda c, cut, b: _bundle())
+    fact = HeadcountFact(value=Decimal("1800"), knowable_at=datetime(2026, 3, 1, tzinfo=UTC))
+    with_hc = SecFinancialFactAdapter(
+        {item.work_item_id: _target()},
+        lambda c, cut, b: _bundle(),
+        headcount_extractor=lambda c, cut: fact,
+    )
+    r0 = without.fetch(item)
+    r1 = with_hc.fetch(item)
+    assert isinstance(r0, FetchSuccess) and isinstance(r1, FetchSuccess)
+    # Merging headcount changes the normalized observation identity and advances knowable_at.
+    assert r1.normalized_sha256 != r0.normalized_sha256
+    assert r1.transaction_time == datetime(2026, 3, 1, tzinfo=UTC)
+    assert r1.record is not None
+    assert r1.record.payload["headcount"] == "1800"
+    # A terse fixture fact carries no evidence: the vintage says so instead of implying it.
+    assert r1.record.payload["vintage"]["headcount"]["raw"] is None
+    assert r1.record.payload["vintage"]["headcount"]["source"] is None
+    assert "headcount" not in r0.record.payload["vintage"]
+
+
+def test_the_headcounts_evidence_travels_on_the_row() -> None:
+    """#747 / #530: an extraction-backed headcount names its filing and raw pointer; a
+    reviewed seed names its source but no pointer, which is what makes it `degraded`."""
+    item = _work_item("a" * 64)
+    extracted = HeadcountFact(
+        value=Decimal("17581"),
+        knowable_at=datetime(2026, 2, 12, tzinfo=UTC),
+        source="10k-extraction",
+        evidence_ref=(
+            "accession=000000490426000013 form=10-K filed=2026-02-12 raw=raw.fetches:18752 "
+            "extractor=model:glm-5.3:4128c20fa0bb model=glm-5.3 span='approximately 17,581 employees'"
+        ),
+        period_end=date(2025, 12, 31),
+        confidence=Decimal("0.90"),
+    )
+    adapter = SecFinancialFactAdapter(
+        {item.work_item_id: _target()}, lambda c, cut, b: _bundle(), headcount_extractor=lambda c, cut: extracted
+    )
+    result = adapter.fetch(item)
+    assert isinstance(result, FetchSuccess)
+    vintage = result.record.payload["vintage"]["headcount"]
+    assert vintage == {
+        "accession": "000000490426000013",
+        "confidence": "0.90",
+        "evidence_ref": extracted.evidence_ref,
+        "filed": "2026-02-12",
+        "form": "10-K",
+        "knowable_at": "2026-02-12T00:00:00+00:00",
+        "period_end": "2025-12-31",
+        "raw": "raw.fetches:18752",
+        "source": "10k-extraction",
+    }
+    seed = HeadcountFact(
+        value=Decimal("164000"),
+        knowable_at=datetime(2026, 1, 1, tzinfo=UTC),
+        source="manual-review",
+        evidence_ref="manual-review: 10-K FY2025 Item 1, reviewed 2026-07-30",
+        confidence=Decimal("0.70"),
+    )
+    seeded = SecFinancialFactAdapter(
+        {item.work_item_id: _target()}, lambda c, cut, b: _bundle(), headcount_extractor=lambda c, cut: seed
+    )
+    seeded_vintage = seeded.fetch(item).record.payload["vintage"]["headcount"]
+    assert seeded_vintage["source"] == "manual-review" and seeded_vintage["raw"] is None
+    assert seeded_vintage["accession"] is None
+
+
+def test_headcount_after_cutoff_is_ignored() -> None:
+    item = _work_item("9" * 64)
+    late = HeadcountFact(value=Decimal("1"), knowable_at=datetime(2026, 4, 20, tzinfo=UTC))
+    adapter = SecFinancialFactAdapter(
+        {item.work_item_id: _target()},
+        lambda c, cut, b: _bundle(),
+        headcount_extractor=lambda c, cut: late,
+    )
+    baseline = SecFinancialFactAdapter({item.work_item_id: _target()}, lambda c, cut, b: _bundle())
+    # A post-cutoff headcount is excluded, so the identity equals the no-headcount case.
+    assert adapter.fetch(item).normalized_sha256 == baseline.fetch(item).normalized_sha256
+
+
+def test_look_ahead_bundle_is_rejected() -> None:
+    item = _work_item("b" * 64)
+    adapter = SecFinancialFactAdapter(
+        {item.work_item_id: _target()},
+        lambda c, cut, b: _bundle(knowable_at=datetime(2026, 4, 20, tzinfo=UTC)),
+    )
+    assert adapter.fetch(item).reason_code is ObligationReasonCode.LOOK_AHEAD_VIOLATION
+
+
+# -- concept-variant recency (#496) ----------------------------------------------------
+#
+# Every fixture above declares exactly one variant per field. That is the premise
+# production data violates: an issuer that switched tags keeps the abandoned one's history
+# forever, so both are present and only the period end says which is current. The cases
+# below are the real shapes, reduced.
+
+
+def test_a_current_variant_beats_an_abandoned_one_regardless_of_declaration_order() -> None:
+    """AAPL: `Revenues` stops at FY2018, `RevenueFromContract…` carries FY2025.
+
+    The abandoned tag is declared first, so a first-non-empty rule returns the 2018 figure
+    — which is what production mart held for seven years.
+    """
+    facts = {
+        "facts": {
+            "us-gaap": {
+                "Revenues": {"units": {"USD": [_annual("2018-09-29", "2017-10-01", 265595000000, "2018-11-05")]}},
+                "RevenueFromContractWithCustomerExcludingAssessedTax": {
+                    "units": {"USD": [_annual("2025-09-27", "2024-09-29", 416161000000, "2025-10-31")]}
+                },
+            }
+        }
+    }
+    bundle = build_bundle(facts, _CUTOFF, OperatingBranch.NON_FINANCIAL)
+    assert bundle.revenue == Decimal("416161000000")
+    assert bundle.revenue_period_end == date(2025, 9, 27)
+
+
+def test_a_stale_reported_gross_profit_loses_to_a_current_derivation() -> None:
+    """AMZN: `GrossProfit` last tagged FY2009; FY2025 revenue and cost are both present."""
+    facts = {
+        "facts": {
+            "us-gaap": {
+                "GrossProfit": {"units": {"USD": [_annual("2009-12-31", "2009-01-01", 5531000000, "2010-01-29")]}},
+                "RevenueFromContractWithCustomerExcludingAssessedTax": {
+                    "units": {"USD": [_annual("2025-12-31", "2025-01-01", 716924000000, "2026-02-06")]}
+                },
+                "CostOfGoodsAndServicesSold": {
+                    "units": {"USD": [_annual("2025-12-31", "2025-01-01", 356414000000, "2026-02-06")]}
+                },
+            }
+        }
+    }
+    datum = gross_profit(facts, _CUTOFF)
+    assert datum is not None
+    assert datum.value == Decimal("360510000000")
+    assert datum.period_end == date(2025, 12, 31)
+
+
+def test_a_reported_figure_still_wins_its_own_period() -> None:
+    """The rule is 'later period wins', not 'derivation always wins': for a shared period
+    the issuer's own assertion is preferred over our arithmetic."""
+    facts = {
+        "facts": {
+            "us-gaap": {
+                "GrossProfit": {"units": {"USD": [_annual("2025-12-31", "2025-01-01", 500, "2026-02-01")]}},
+                "Revenues": {"units": {"USD": [_annual("2025-12-31", "2025-01-01", 900, "2026-02-01")]}},
+                "CostOfRevenue": {"units": {"USD": [_annual("2025-12-31", "2025-01-01", 380, "2026-02-01")]}},
+            }
+        }
+    }
+    datum = gross_profit(facts, _CUTOFF)
+    assert datum is not None
+    assert datum.value == Decimal("500")  # not 520
+
+
+def test_variants_are_never_cross_paired_across_periods() -> None:
+    """A legacy revenue tag and a current cost tag must not be subtracted from each other
+    just because that pair is reached first."""
+    facts = {
+        "facts": {
+            "us-gaap": {
+                "Revenues": {"units": {"USD": [_annual("2018-12-31", "2018-01-01", 100, "2019-02-01")]}},
+                "RevenueFromContractWithCustomerExcludingAssessedTax": {
+                    "units": {"USD": [_annual("2025-12-31", "2025-01-01", 900, "2026-02-01")]}
+                },
+                "CostOfRevenue": {"units": {"USD": [_annual("2025-12-31", "2025-01-01", 400, "2026-02-01")]}},
+            }
+        }
+    }
+    datum = gross_profit(facts, _CUTOFF)
+    assert datum is not None
+    assert datum.value == Decimal("500")  # 900 - 400, both FY2025 — never 100 - 400
+
+
+def test_a_restatement_wins_by_filing_date_not_array_position() -> None:
+    """Company-facts repeats one period end across every document that reported it. The
+    latest FILING must win; taking whatever sits last in the array makes restatement
+    handling depend on the vendor's serialization order."""
+    facts = {
+        "facts": {
+            "us-gaap": {
+                "GrossProfit": {
+                    "units": {
+                        "USD": [
+                            _annual("2025-12-31", "2025-01-01", 120, "2026-03-01"),  # restated, later filing
+                            _annual("2025-12-31", "2025-01-01", 100, "2026-02-01"),  # original, later in array
+                        ]
+                    }
+                }
+            }
+        }
+    }
+    values = annual_values_by_period_end(facts, "us-gaap", "GrossProfit", "USD", _CUTOFF)
+    assert values[date(2025, 12, 31)].value == Decimal("120")
+    assert values[date(2025, 12, 31)].filed == date(2026, 3, 1)
+
+
+def test_share_count_resolves_through_the_dei_taxonomy() -> None:
+    """META/ABBV/JNJ/LLY reported no us-gaap share count at all; the figure large filers
+    actually publish lives in `dei`."""
+    facts = {
+        "facts": {
+            "dei": {
+                "EntityCommonStockSharesOutstanding": {
+                    "units": {"shares": [{"end": "2026-01-31", "val": 2500000000, "filed": "2026-02-10"}]}
+                }
+            }
+        }
+    }
+    bundle = build_bundle(facts, _CUTOFF, OperatingBranch.NON_FINANCIAL)
+    assert bundle.shares_outstanding == Decimal("2500000000")
+
+
+def test_the_normalized_payload_carries_the_fiscal_periods() -> None:
+    """Without these the warehouse cannot answer how old its own numbers are — the
+    seven-year-stale revenue was only detectable by re-deriving from the vendor (#429)."""
+    adapter = SecFinancialFactAdapter(
+        {_work_item("d" * 64).work_item_id: _target()},
+        lambda *_: build_bundle(_facts(), _CUTOFF, OperatingBranch.NON_FINANCIAL),
+    )
+    result = adapter.fetch(_work_item("d" * 64))
+    assert isinstance(result, FetchSuccess)
+    assert result.record is not None
+    assert result.record.payload["operating_period_end"] == "2025-12-31"
+
+
+# -- synonym variants merge; stand-in variants do not ----------------------------------
+
+
+def test_treasury_inflated_share_counts_are_never_substituted() -> None:
+    """`CommonStockSharesIssued` includes treasury stock: JNJ reports 3,119,843,000 issued
+    against 2,409,898,597 outstanding. Ranking share concepts purely by period end would
+    hand market cap a 29% error on whichever filing cycle carried the later date."""
+    facts = {
+        "facts": {
+            "dei": {
+                "EntityCommonStockSharesOutstanding": {
+                    "units": {"shares": [{"end": "2026-01-31", "val": 2409898597, "filed": "2026-02-10"}]}
+                }
+            },
+            "us-gaap": {
+                "CommonStockSharesIssued": {  # later period, larger number, different quantity
+                    "units": {"shares": [{"end": "2026-03-31", "val": 3119843000, "filed": "2026-04-20"}]}
+                }
+            },
+        }
+    }
+    bundle = build_bundle(facts, _CUTOFF, OperatingBranch.NON_FINANCIAL)
+    assert bundle.shares_outstanding == Decimal("2409898597")
+
+
+def test_a_bank_never_takes_gross_revenue_just_because_it_is_more_recent() -> None:
+    """For a bank, plain `Revenues` is gross of interest expense. Subtracting noninterest
+    expense from it is not pre-provision NET revenue, however recent it is."""
+    facts = {
+        "facts": {
+            "us-gaap": {
+                "RevenuesNetOfInterestExpense": {
+                    "units": {"USD": [_annual("2024-12-31", "2024-01-01", 180, "2025-02-01")]}
+                },
+                "Revenues": {"units": {"USD": [_annual("2025-12-31", "2025-01-01", 400, "2026-02-01")]}},
+                "NoninterestExpense": {
+                    "units": {
+                        "USD": [
+                            _annual("2024-12-31", "2024-01-01", 95, "2025-02-01"),
+                            _annual("2025-12-31", "2025-01-01", 100, "2026-02-01"),
+                        ]
+                    }
+                },
+            }
+        }
+    }
+    datum = pre_provision_profit(facts, _CUTOFF)
+    assert datum is not None
+    assert datum.value == Decimal("85")  # 180 - 95, the net-of-interest pair — never 400 - 100
+    assert datum.period_end == date(2024, 12, 31)
+
+
+def test_the_bank_fallback_is_still_reachable_when_the_exact_concept_is_absent() -> None:
+    """Preference must not become prohibition: an issuer publishing no net-of-interest
+    total still resolves, it just is not overridden by recency when it does publish one."""
+    facts = {
+        "facts": {
+            "us-gaap": {
+                "Revenues": {"units": {"USD": [_annual("2025-12-31", "2025-01-01", 400, "2026-02-01")]}},
+                "NoninterestExpense": {"units": {"USD": [_annual("2025-12-31", "2025-01-01", 100, "2026-02-01")]}},
+            }
+        }
+    }
+    datum = pre_provision_profit(facts, _CUTOFF)
+    assert datum is not None
+    assert datum.value == Decimal("300")
+
+
+# --- #496 numerator policies (mapping v3, owner decision 2026-07-28) ---------------
+
+
+def _units(entries: list[dict], unit: str = "USD") -> dict:
+    return {"units": {unit: entries}}
+
+
+def test_no_cogs_filer_resolves_gross_profit_none() -> None:
+    """#1519 step 6: no GrossProfit and no COGS-family concept resolves gross_profit as None."""
+    facts = {
+        "facts": {
+            "us-gaap": {
+                "Revenues": _units([_annual("2025-12-31", "2025-01-01", 300, "2026-02-01")]),
+            }
+        }
+    }
+    assert gross_profit(facts, _CUTOFF) is None
+
+
+def test_cogs_filer_with_period_mismatch_still_resolves_none() -> None:
+    """Concept-level absence only: a real COGS filer whose periods never align
+    must NOT silently fall to the revenue proxy."""
+    facts = {
+        "facts": {
+            "us-gaap": {
+                "Revenues": _units([_annual("2025-12-31", "2025-01-01", 300, "2026-02-01")]),
+                "CostOfRevenue": _units([_annual("2024-12-31", "2024-01-01", 120, "2025-02-01")]),
+            }
+        }
+    }
+    assert gross_profit(facts, _CUTOFF) is None
+
+
+def test_insurance_branch_subtracts_claims_at_the_latest_revenue_period() -> None:
+    facts = {
+        "facts": {
+            "us-gaap": {
+                "Revenues": _units([_annual("2025-12-31", "2025-01-01", 400, "2026-02-01")]),
+                "PolicyholderBenefitsAndClaimsIncurredNet": _units(
+                    [_annual("2025-12-31", "2025-01-01", 250, "2026-02-01")]
+                ),
+            }
+        }
+    }
+    datum = insurance_pre_claims_profit(facts, _CUTOFF)
+    assert datum is not None and datum.value == Decimal("150")
+
+
+def test_insurance_branch_refuses_a_stale_claims_series() -> None:
+    """BRK.B reality: the only API-visible claims series stops years before the
+    latest revenue period — a stale difference paired with current headcount is
+    the Amazon-2009 lesson, so the numerator resolves None (honest absence)."""
+    facts = {
+        "facts": {
+            "us-gaap": {
+                "Revenues": _units(
+                    [
+                        _annual("2016-12-31", "2016-01-01", 200, "2017-02-01"),
+                        _annual("2025-12-31", "2025-01-01", 400, "2026-02-01"),
+                    ]
+                ),
+                "IncurredClaimsPropertyCasualtyAndLiability": _units(
+                    [_annual("2016-12-31", "2016-01-01", 120, "2017-02-01")]
+                ),
+            }
+        }
+    }
+    assert insurance_pre_claims_profit(facts, _CUTOFF) is None
+
+
+def test_weighted_average_shares_is_a_last_resort_and_never_shadows_point_in_time() -> None:
+    both = {
+        "facts": {
+            "dei": {
+                "EntityCommonStockSharesOutstanding": _units(
+                    [{"end": "2026-01-31", "val": 10, "filed": "2026-02-10"}], unit="shares"
+                )
+            },
+            "us-gaap": {
+                "WeightedAverageNumberOfSharesOutstandingBasic": _units(
+                    [_annual("2026-01-31", "2025-02-01", 999, "2026-02-10")], unit="shares"
+                )
+            },
+        }
+    }
+    dual_class_only = {
+        "facts": {
+            "us-gaap": {
+                "WeightedAverageNumberOfSharesOutstandingBasic": _units(
+                    [_annual("2025-12-31", "2025-01-01", 2500, "2026-02-01")], unit="shares"
+                )
+            }
+        }
+    }
+    # Same period end: preference decides, and the point-in-time count wins.
+    bundle = build_bundle(both, _CUTOFF, OperatingBranch.NON_FINANCIAL)
+    assert bundle.shares_outstanding == Decimal("10"), "point-in-time count must win its period"
+
+    # No point-in-time tag at all: the dual-class filer gets the weighted average.
+    bundle = build_bundle(dual_class_only, _CUTOFF, OperatingBranch.NON_FINANCIAL)
+    assert bundle.shares_outstanding == Decimal("2500"), "META-style filers get the weighted average"
+
+
+def test_a_weighted_average_never_wins_on_recency_alone() -> None:
+    """The case a shared-period fixture cannot reach.
+
+    A weighted average is a period figure and a cover-page count is an instant, so their
+    dates routinely differ. Whenever the cover page predates the latest fiscal year end,
+    ranking both in one synonym list hands the share count to the average — a different
+    quantity, promoted purely by carrying a later date. Declaring it as a separate
+    last-resort field is what makes that impossible rather than merely unlikely.
+    """
+    stale_cover_page = {
+        "facts": {
+            "dei": {
+                "EntityCommonStockSharesOutstanding": _units(
+                    [{"end": "2025-02-01", "val": 10, "filed": "2025-02-10"}], unit="shares"
+                )
+            },
+            "us-gaap": {
+                "WeightedAverageNumberOfSharesOutstandingBasic": _units(
+                    [_annual("2025-12-31", "2025-01-01", 999, "2026-02-01")], unit="shares"
+                )
+            },
+        }
+    }
+    bundle = build_bundle(stale_cover_page, _CUTOFF, OperatingBranch.NON_FINANCIAL)
+    assert bundle.shares_outstanding == Decimal("10"), "a period average must not displace a real count"
+
+
+def test_operating_branch_for_sic_maps_insurers() -> None:
+    from data_engine.datahub.capture_core.issuer_registry import operating_branch_for_sic
+
+    assert operating_branch_for_sic("6331") is OperatingBranch.INSURANCE
+    assert operating_branch_for_sic("6022") is OperatingBranch.FINANCIAL
+    assert operating_branch_for_sic("7389") is OperatingBranch.NON_FINANCIAL
+
+
+def test_predecessor_cik_fallback_fires_when_the_mapped_document_asserts_no_income() -> None:
+    """#496: the mapped CIK's document exists but asserts nothing (knowable_at
+    None) -> the adapter refetches through the SAME injected fetcher with the
+    lineage-resolved predecessor. A payload with an income fact never falls
+    back, and no predecessor means honest nulls. (A payload with balance-sheet
+    facts but NO income fact also falls back since 2026-09-07 — the case below.)"""
+    calls: list[int] = []
+    empty = FinancialFactsBundle(
+        gross_profit=None,
+        total_assets=None,
+        shares_outstanding=None,
+        revenue=None,
+        pre_provision_profit=None,
+        raw_bytes=b"{}",
+        knowable_at=None,
+    )
+    full = FinancialFactsBundle(
+        gross_profit=Decimal("5"),
+        total_assets=Decimal("9"),
+        shares_outstanding=Decimal("3"),
+        revenue=Decimal("7"),
+        pre_provision_profit=None,
+        raw_bytes=b"{}",
+        knowable_at=datetime(2026, 3, 1, tzinfo=UTC),
+    )
+
+    def fetcher(cik: int, cutoff: date, branch: OperatingBranch) -> FinancialFactsBundle:
+        calls.append(cik)
+        return empty if cik == 2115436 else full
+
+    item = _work_item("a" * 64)
+    target = SecTarget(
+        cik=2115436,
+        cutoff=_CUTOFF,
+        issuer_id="issuer:lei:X",
+        instrument_id="security:cusip:Y",
+        listing_id="listing:xnys:xom",
+        operating_branch=OperatingBranch.NON_FINANCIAL,
+        predecessor_cik=34088,
+    )
+    adapter = SecFinancialFactAdapter({item.work_item_id: target}, fetcher)
+    outcome = adapter.fetch(item)
+    assert calls == [2115436, 34088], "fallback must reuse the injected fetcher with the predecessor"
+    assert isinstance(outcome, FetchSuccess)
+
+    calls.clear()
+    item2 = _work_item("b" * 64)
+    target2 = SecTarget(
+        cik=2115436,
+        cutoff=_CUTOFF,
+        issuer_id="issuer:lei:X",
+        instrument_id="security:cusip:Y",
+        listing_id="listing:xnys:xom",
+        operating_branch=OperatingBranch.NON_FINANCIAL,
+    )
+    adapter_no_pred = SecFinancialFactAdapter({item2.work_item_id: target2}, fetcher)
+    adapter_no_pred.fetch(item2)
+    assert calls == [2115436], "no predecessor -> no second fetch, honest nulls stand"
+
+
+# -- earnings CAGR for module 1 (PEG) -------------------------------------------------
+
+
+def _earnings_facts(*pairs: tuple[str, str, object]) -> dict:
+    """company-facts carrying annual NetIncomeLoss periods: (start, end, value)."""
+    facts = _facts()
+    facts["facts"]["us-gaap"]["NetIncomeLoss"] = {
+        "units": {"USD": [_annual(end, start, value, f"{end[:4]}-02-15") for start, end, value in pairs]}
+    }
+    return facts
+
+
+def test_the_series_is_never_knowable_before_the_filings_it_consumed() -> None:
+    """The PIT obligation strategy participation adds (#284).
+
+    `strategy_backtest_inputs_pit` only asserts `knowable_at <= cutoff_at`, so it would
+    accept a growth basis built from a restatement that was not public at the historical
+    cutoff — which makes a backtest look better for free. `knowable_at` must be at or
+    after the latest filing behind EVERY period in the series, not just the window's two
+    endpoints: the rate downstream rests on all of them.
+    """
+    facts = _earnings_facts(
+        ("2022-01-01", "2022-12-31", 100),
+        ("2023-01-01", "2023-12-31", 120),
+        ("2024-01-01", "2024-12-31", 150),
+        ("2025-01-01", "2025-12-31", 200),
+    )
+    bundle = build_bundle(facts, date(2026, 3, 31), OperatingBranch.NON_FINANCIAL)
+    assert len(bundle.net_income_by_period) == 4
+    assert bundle.knowable_at is not None
+    # The 2025 period was filed 2025-02-15 in this fixture; nothing may claim the series
+    # was knowable before then.
+    assert bundle.knowable_at.date() >= date(2025, 2, 15)
+
+
+def test_net_income_falls_back_to_profit_loss_for_the_latest_year() -> None:
+    """AVGO's real shape: `NetIncomeLoss` stops at FY2024, `ProfitLoss` carries FY2025.
+
+    Measured 2026-08-17 — AVGO filed its FY2025 10-K on 2025-12-18 and company-facts holds
+    that year's figure only under `ProfitLoss` (23.13B, period ending 2025-11-02), while
+    `NetIncomeLoss` ends at 2024-11-03. Without the synonym the window has no recent
+    endpoint and PEG is unavailable for an issuer whose earnings are plainly on file. This
+    is the tag inconsistency `samples/README.md` recorded for revenue, reaching net income.
+
+    `ProfitLoss` includes noncontrolling interests where `NetIncomeLoss` excludes them, so
+    it is a synonym rather than an equal: declaration order prefers `NetIncomeLoss` for any
+    period both report, and the merged series only reaches for `ProfitLoss` where the
+    preferred tag is silent.
+    """
+    facts = _facts()
+    us = facts["facts"]["us-gaap"]
+    us["NetIncomeLoss"] = {"units": {"USD": [_annual("2023-12-31", "2023-01-01", 100, "2024-02-15")]}}
+    us["ProfitLoss"] = {
+        "units": {
+            "USD": [
+                _annual("2022-12-31", "2022-01-01", 80, "2023-02-15"),
+                _annual("2023-12-31", "2023-01-01", 999, "2024-02-15"),  # must lose to NetIncomeLoss
+                _annual("2024-12-31", "2024-01-01", 130, "2025-02-15"),
+                _annual("2025-12-31", "2025-01-01", 160, "2026-02-15"),
+            ]
+        }
+    }
+    bundle = build_bundle(facts, date(2026, 8, 17), OperatingBranch.NON_FINANCIAL)
+    assert bundle.net_income == Decimal("160")
+    # The fallback completes the series, and 2023 resolves to 100 from the preferred tag
+    # rather than 999 — declaration order wins wherever both tags report a period.
+    assert bundle.net_income_by_period == {
+        date(2022, 12, 31): Decimal("80"),
+        date(2023, 12, 31): Decimal("100"),
+        date(2024, 12, 31): Decimal("130"),
+        date(2025, 12, 31): Decimal("160"),
+    }
+
+
+def test_the_deployed_fetcher_resolves_the_growth_basis_without_being_asked() -> None:  # noqa: D103
+    """The regression this arms: PEG's two inputs were structurally null in production.
+
+    `build_bundle` took `earnings_cagr_years: int | None = None`, and `sec_financial_fetcher`
+    — the only deployed caller — never passed it. So every real run emitted `net_income` and
+    `earnings_cagr_3y` as keys whose value was null for all 20 issuers, `mart.peg` was NULL
+    everywhere, and the run reported SUCCESS. Every existing CAGR test above passes
+    `earnings_cagr_years=3` explicitly, which is exactly why none of them saw it: they
+    supplied the argument production omits.
+
+    So this test asserts through the DEPLOYED entry point and passes no window at all. Wire
+    the growth basis behind a flag again and it fails here.
+    """
+    facts = _earnings_facts(
+        ("2022-01-01", "2022-12-31", 100),
+        ("2023-01-01", "2023-12-31", 120),
+        ("2024-01-01", "2024-12-31", 150),
+        ("2025-01-01", "2025-12-31", 200),
+    )
+    monkeypatched: dict[str, object] = {}
+
+    def fake_fetch(cik: int) -> tuple[bytes, dict[str, object]]:
+        monkeypatched["cik"] = cik
+        return b"{}", facts
+
+    from data_engine.sources import sec
+
+    original = sec.fetch_company_facts_response
+    sec.fetch_company_facts_response = fake_fetch  # type: ignore[assignment]
+    try:
+        bundle = sec_financial_fetcher(7, date(2026, 8, 17), OperatingBranch.NON_FINANCIAL)
+    finally:
+        sec.fetch_company_facts_response = original  # type: ignore[assignment]
+
+    assert monkeypatched["cik"] == 7
+    assert bundle.net_income == Decimal("200"), "the deployed path must resolve net income"
+    # The whole series, not a scalar: the deployed path is what feeds the factor, and a
+    # factor that asked for history must receive history.
+    assert sorted(bundle.net_income_by_period) == [
+        date(2022, 12, 31),
+        date(2023, 12, 31),
+        date(2024, 12, 31),
+        date(2025, 12, 31),
+    ]
+
+
+def test_predecessor_fallback_also_fires_when_the_holdco_reports_no_income_fact() -> None:
+    """XOM after its 2026 reorganization (production, 2026-09-06 head run): the new holdco
+    CIK 2115436 files a balance sheet and a share count but no revenue, gross profit or
+    pre-provision profit, so every published XOM number stayed unavailable although the
+    owner-signed predecessor (34088) carries the company's income history. The fallback
+    now keys on "asserts no income fact", not on "asserts nothing"; it still does not fire
+    when the mapped CIK reports income, and it keeps the mapped document when the
+    predecessor has no income either."""
+    calls: list[int] = []
+    balance_only = FinancialFactsBundle(
+        gross_profit=None,
+        total_assets=Decimal("464482000000"),
+        shares_outstanding=Decimal("4111911960"),
+        revenue=None,
+        pre_provision_profit=None,
+        raw_bytes=b'{"holdco": true}',
+        knowable_at=datetime(2026, 2, 15, tzinfo=UTC),
+    )
+    with_income = FinancialFactsBundle(
+        gross_profit=Decimal("5"),
+        total_assets=Decimal("9"),
+        shares_outstanding=Decimal("3"),
+        revenue=Decimal("7"),
+        pre_provision_profit=None,
+        raw_bytes=b'{"predecessor": true}',
+        knowable_at=datetime(2026, 3, 1, tzinfo=UTC),
+    )
+
+    def fetcher(cik: int, cutoff: date, branch: OperatingBranch) -> FinancialFactsBundle:
+        calls.append(cik)
+        return balance_only if cik == 2115436 else with_income
+
+    item = _work_item("b" * 64)
+    target = SecTarget(
+        cik=2115436,
+        cutoff=_CUTOFF,
+        issuer_id="issuer:lei:X",
+        instrument_id="security:cusip:Y",
+        listing_id="listing:xnys:xom",
+        operating_branch=OperatingBranch.NON_FINANCIAL,
+        predecessor_cik=34088,
+    )
+    adapter = SecFinancialFactAdapter({item.work_item_id: target}, fetcher, mapping_version="test:v1")
+    outcome = adapter.fetch(item)
+    assert calls == [2115436, 34088]
+    assert isinstance(outcome, FetchSuccess)
+    assert outcome.raw.body == b'{"predecessor": true}'
+    assert outcome.record.payload["revenue"] == "7"
+
+    # The mapped CIK reporting income never falls back: exactly one fetch, of the mapped CIK.
+    calls.clear()
+
+    def income_first(cik: int, cutoff: date, branch: OperatingBranch) -> FinancialFactsBundle:
+        calls.append(cik)
+        return with_income
+
+    adapter = SecFinancialFactAdapter({item.work_item_id: target}, income_first, mapping_version="test:v1")
+    outcome = adapter.fetch(item)
+    assert calls == [2115436]
+    assert isinstance(outcome, FetchSuccess)
+
+    # A predecessor without income does not replace the mapped document.
+    calls.clear()
+
+    def sparse_both(cik: int, cutoff: date, branch: OperatingBranch) -> FinancialFactsBundle:
+        calls.append(cik)
+        return balance_only
+
+    adapter = SecFinancialFactAdapter({item.work_item_id: target}, sparse_both, mapping_version="test:v1")
+    outcome = adapter.fetch(item)
+    assert calls == [2115436, 34088]
+    assert isinstance(outcome, FetchSuccess)
+    assert outcome.raw.body == b'{"holdco": true}'
+    assert outcome.record.payload["revenue"] is None
+
+
+def test_the_bundle_names_the_filing_behind_each_input() -> None:
+    """#530 item 4: `accn`/`form`/`fy`/`fp` were read from company-facts and discarded;
+    the row could date its numbers but not name the document. Every resolved input now
+    carries its filing identity, and the payload ships it under `vintage`."""
+    facts = _facts()
+    gaap = facts["facts"]["us-gaap"]
+    gaap["GrossProfit"] = {
+        "units": {"USD": [_annual("2025-12-31", "2025-01-01", 120, "2026-02-01", accn="0000320193-26-000010")]}
+    }
+    gaap["Revenues"] = {
+        "units": {"USD": [_annual("2025-12-31", "2025-01-01", 400, "2026-02-01", accn="0000320193-26-000010")]}
+    }
+    gaap["NetIncomeLoss"] = {
+        "units": {
+            "USD": [
+                _annual("2024-12-31", "2024-01-01", 30, "2025-02-01", accn="0000320193-25-000009"),
+                _annual("2025-12-31", "2025-01-01", 40, "2026-02-01", accn="0000320193-26-000010"),
+            ]
+        }
+    }
+    bundle = build_bundle(facts, _CUTOFF, OperatingBranch.NON_FINANCIAL)
+    assert bundle.vintages["revenue"] == {
+        "accession": "0000320193-26-000010",
+        "filed": "2026-02-01",
+        "form": "10-K",
+        "fp": "FY",
+        "fy": 2025,
+        "period_end": "2025-12-31",
+        "document": None,
+        "statement_form": True,
+    }
+    assert bundle.vintages["gross_profit"]["accession"] == "0000320193-26-000010"
+    assert bundle.vintages["net_income"]["period_end"] == "2025-12-31"
+    assert bundle.vintages["net_income_periods"]["2024-12-31"]["accession"] == "0000320193-25-000009"
+    # Inputs that resolved to nothing are absent, never null-filled.
+    assert set(bundle.vintages) <= {
+        "gross_profit",
+        "total_assets",
+        "shares_outstanding",
+        "revenue",
+        "net_income",
+        "net_income_periods",
+    }
+
+
+def test_a_derived_figure_is_attributed_to_the_later_filing() -> None:
+    facts = _facts()
+    gaap = facts["facts"]["us-gaap"]
+    gaap.pop("GrossProfit", None)
+    gaap["Revenues"] = {
+        "units": {"USD": [_annual("2025-12-31", "2025-01-01", 400, "2026-02-01", accn="0000000001-26-000001")]}
+    }
+    gaap["CostOfRevenue"] = {
+        "units": {"USD": [_annual("2025-12-31", "2025-01-01", 250, "2026-02-20", accn="0000000001-26-000002")]}
+    }
+    bundle = build_bundle(facts, _CUTOFF, OperatingBranch.NON_FINANCIAL)
+    assert bundle.gross_profit == 150
+    assert bundle.vintages["gross_profit"]["accession"] == "0000000001-26-000002"
+    assert bundle.vintages["gross_profit"]["filed"] == "2026-02-20"
+
+
+def _instant(end: str, val: object, filed: str, *, accn: str | None = None) -> dict:
+    entry = {"end": end, "val": val, "filed": filed, "form": "10-K", "fy": int(end[:4]), "fp": "FY"}
+    if accn is not None:
+        entry["accn"] = accn
+    return entry
+
+
+def _facts_with(gaap_extra: dict) -> dict:
+    facts = _facts()
+    for concept, entries in gaap_extra.items():
+        facts["facts"]["us-gaap"][concept] = {"units": {"USD": entries}}
+    return facts
+
+
+def test_financial_assets_take_cash_plus_the_first_investment_tier_only_once() -> None:
+    """#528: a manufacturer tagging cash, ShortTermInvestments AND the marketable-securities
+    pair resolves cash + the STI/LTI tier and never adds the second tier on top."""
+    facts = _facts_with(
+        {
+            "CashAndCashEquivalentsAtCarryingValue": [
+                _instant("2025-12-31", 100, "2026-02-01", accn="0000000001-26-000001")
+            ],
+            "ShortTermInvestments": [_instant("2025-12-31", 40, "2026-02-01")],
+            "LongTermInvestments": [_instant("2025-12-31", 60, "2026-02-01")],
+            "MarketableSecuritiesCurrent": [_instant("2025-12-31", 999, "2026-02-01")],
+            "InvestmentIncomeInterest": [
+                _annual("2025-12-31", "2025-01-01", 7, "2026-02-01", accn="0000000001-26-000001")
+            ],
+            "GainLossOnInvestments": [_annual("2025-12-31", "2025-01-01", 3, "2026-02-01")],
+        }
+    )
+    bundle = build_bundle(facts, _CUTOFF, OperatingBranch.NON_FINANCIAL)
+    assert bundle.financial_assets == Decimal("200")
+    assert bundle.financial_assets_basis == "cash_and_equivalents+short_term_investments+long_term_investments"
+    assert bundle.financial_returns == Decimal("10")
+    assert bundle.financial_returns_basis == "investment_income+investment_gains"
+    assert bundle.financial_returns_is_proxy is False
+    assert bundle.vintages["financial_assets"]["period_end"] == "2025-12-31"
+    assert bundle.vintages["financial_returns"]["accession"] == "0000000001-26-000001"
+
+
+def test_financial_returns_fall_back_to_the_non_operating_line_flagged_as_a_proxy() -> None:
+    facts = _facts_with(
+        {
+            "CashCashEquivalentsAndShortTermInvestments": [_instant("2025-12-31", 150, "2026-02-01")],
+            "OtherNonoperatingIncomeExpense": [_annual("2025-12-31", "2025-01-01", -4, "2026-02-01")],
+        }
+    )
+    bundle = build_bundle(facts, _CUTOFF, OperatingBranch.NON_FINANCIAL)
+    assert (
+        bundle.financial_assets == Decimal("150") and bundle.financial_assets_basis == "cash_and_short_term_investments"
+    )
+    assert bundle.financial_returns == Decimal("-4")
+    assert bundle.financial_returns_basis == "nonoperating_income" and bundle.financial_returns_is_proxy is True
+
+
+def test_a_bank_holds_its_securities_portfolio_and_reports_no_financial_return_yet() -> None:
+    """A bank's cash is deposits in mirror, so the financial side is the portfolio only, and
+    its return stays absent until the bank-specific mapping is reviewed (#528)."""
+    facts = _facts_with(
+        {
+            "CashAndCashEquivalentsAtCarryingValue": [_instant("2025-12-31", 500_000, "2026-02-20")],
+            "AvailableForSaleSecuritiesDebtSecurities": [_instant("2025-12-31", 300, "2026-02-20")],
+            "HeldToMaturitySecurities": [_instant("2025-12-31", 200, "2026-02-20")],
+            "FederalFundsSoldAndSecuritiesPurchasedUnderAgreementsToResell": [_instant("2025-12-31", 50, "2026-02-20")],
+            "InvestmentIncomeInterest": [_annual("2025-12-31", "2025-01-01", 99, "2026-02-20")],
+        }
+    )
+    bundle = build_bundle(facts, _CUTOFF, OperatingBranch.FINANCIAL)
+    assert bundle.financial_assets == Decimal("550")
+    assert bundle.financial_assets_basis == "afs_debt_securities+htm_securities+fed_funds_sold"
+    assert bundle.financial_returns is None and bundle.financial_returns_basis is None
+
+
+def test_the_payload_carries_the_financial_side_and_its_basis() -> None:
+    item = _work_item("c" * 64)
+    adapter = SecFinancialFactAdapter(
+        {item.work_item_id: _target()},
+        lambda c, cut, b: _bundle(
+            financial_assets=Decimal("200"),
+            financial_assets_basis="cash_and_equivalents+short_term_investments",
+            financial_returns=Decimal("10"),
+            financial_returns_basis="investment_income",
+        ),
+    )
+    result = adapter.fetch(item)
+    assert isinstance(result, FetchSuccess)
+    payload = result.record.payload
+    assert payload["financial_assets"] == "200" and payload["financial_returns"] == "10"
+    assert payload["financial_basis"] == {
+        "assets": "cash_and_equivalents+short_term_investments",
+        "returns": "investment_income",
+        "returns_is_proxy": False,
+    }
+    bare = SecFinancialFactAdapter({item.work_item_id: _target()}, lambda c, cut, b: _bundle()).fetch(item)
+    assert bare.record.payload["financial_assets"] is None
+    assert bare.record.payload["financial_basis"] == {"assets": None, "returns": None, "returns_is_proxy": False}
+
+
+def test_a_second_origin_that_raises_is_absent_logged_and_counted(caplog) -> None:
+    """#885: an origin whose fetcher raises past its own guard leaves the financial cell
+    single-origin — logged with the origin and the exception type, counted for the tick."""
+    import logging
+
+    from data_engine.datahub.capture_core.corroboration_audit import corroboration_tally
+    from data_engine.datahub.capture_core.sec_financial_adapter import FinancialFactCorroboratingOrigin
+
+    def unreachable(ticker: str, cutoff: date):
+        raise TimeoutError("statements endpoint timed out")
+
+    item = _work_item("e" * 64)
+    target = SecTarget(
+        cik=320193,
+        cutoff=_CUTOFF,
+        issuer_id="issuer:lei:X",
+        instrument_id="security:cusip:Y",
+        listing_id="listing:xnas:aapl",
+        operating_branch=OperatingBranch.NON_FINANCIAL,
+        ticker="AAPL",
+    )
+    origin = FinancialFactCorroboratingOrigin(
+        origin="moomoo-financials",
+        parser_version="moomoo-financials-parser:v1",
+        mapping_version="moomoo-financials-map:v1",
+        confidence=Decimal("0.75"),
+        fetch=unreachable,
+    )
+    adapter = SecFinancialFactAdapter(
+        {item.work_item_id: target}, lambda cik, cutoff, branch: _bundle(), corroborating_origins=(origin,)
+    )
+    with caplog.at_level(logging.WARNING), corroboration_tally() as tally:
+        result = adapter.fetch(item)
+    assert isinstance(result, FetchSuccess) and result.corroborations == ()
+    [warning] = [record for record in caplog.records if record.levelno == logging.WARNING]
+    assert "moomoo-financials" in warning.getMessage() and "TimeoutError" in warning.getMessage()
+    assert "AAPL" in warning.getMessage() and warning.exc_info is not None
+    assert tally.summary() == "corroborations refused 1 (moomoo-financials fetch 1)"
+
+
+def test_an_exhausted_sec_budget_defers_the_cell_through_the_deployed_fetcher(call_ledger, monkeypatch) -> None:
+    """Rule 6 (#729): the company-facts request is refused before it is sent once this
+    environment's SEC budget is spent; the cell is `deferred_capacity`, never read as an
+    issuer that files nothing."""
+    from functools import partial
+
+    from data_engine.datahub.capture_core.sec_financial_adapter import sec_financial_fetcher
+    from data_engine.sources import gateway, sec
+
+    now = datetime.now(UTC)
+    call_ledger.extend([gateway.CallRecord(source="sec", endpoint="x", caller="x", called_at=now, ok=True)] * 2)
+    asked: list[str] = []
+
+    class _Client:
+        def __init__(self, **_kwargs: object) -> None: ...
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc: object) -> None: ...
+
+        def get(self, url: str, **_kwargs: object):
+            asked.append(url)
+            raise AssertionError("a refused request reached SEC")
+
+    monkeypatch.setattr(sec.settings, "sec_user_agent", "TrueAlpha test test@example.com")
+    monkeypatch.setattr(sec.httpx, "Client", _Client)
+    gate = gateway.CapacityGate(capacities={"sec": gateway.SourceCapacity("sec", 1.0, 8, 2)}, environment="production")
+    item = _work_item("8" * 64)
+    adapter = SecFinancialFactAdapter({item.work_item_id: _target(320193)}, partial(sec_financial_fetcher))
+    with gateway.capacity_scope(gate):
+        result = adapter.fetch(item)
+    assert isinstance(result, FetchFailure)
+    assert result.reason_code is ObligationReasonCode.DEFERRED_CAPACITY
+    assert asked == [] and len(call_ledger) == 2
+
+
+def test_statement_period_ends_handles_non_usd_units() -> None:
+    facts = {
+        "facts": {
+            "us-gaap": {
+                "Assets": {
+                    "units": {
+                        "EUR": [
+                            {"end": "2025-12-31", "val": 500, "filed": "2026-02-01", "form": "10-K"},
+                            {"end": "2026-03-31", "val": 520, "filed": "2026-04-15", "form": "10-Q"},
+                        ]
+                    }
+                }
+            }
+        }
+    }
+    latest, latest_annual = _statement_period_ends(facts, DEFAULT_RULESET, date(2026, 3, 31))
+    assert latest == date(2025, 12, 31)
+    assert latest_annual == date(2025, 12, 31)
+
+
+def test_merge_company_facts_combines_holdco_and_predecessor_documents() -> None:
+    holdco_facts = {
+        "facts": {
+            "us-gaap": {
+                "Assets": {
+                    "units": {
+                        "USD": [{"end": "2026-06-30", "val": 464482000000, "filed": "2026-08-05", "form": "10-Q"}]
+                    }
+                },
+                "CommonStockSharesOutstanding": {
+                    "units": {
+                        "shares": [{"end": "2026-06-30", "val": 4111911960, "filed": "2026-08-05", "form": "10-Q"}]
+                    }
+                },
+            }
+        }
+    }
+    predecessor_facts = {
+        "facts": {
+            "us-gaap": {
+                "Assets": {
+                    "units": {
+                        "USD": [{"end": "2025-12-31", "val": 400000000000, "filed": "2026-02-15", "form": "10-K"}]
+                    }
+                },
+                "Revenues": {
+                    "units": {
+                        "USD": [
+                            _annual(
+                                "2025-12-31",
+                                "2025-01-01",
+                                340000000000,
+                                "2026-02-15",
+                                accn="0000034088-26-000010",
+                            )
+                        ]
+                    }
+                },
+            }
+        }
+    }
+    merged = merge_company_facts(
+        [
+            (company_facts_record_id(2115436), holdco_facts),
+            (company_facts_record_id(34088), predecessor_facts),
+        ],
+        DEFAULT_RULESET,
+    )
+    bundle = build_bundle(merged, date(2026, 9, 1), OperatingBranch.NON_FINANCIAL)
+    assert bundle.total_assets == Decimal("464482000000")
+    assert bundle.shares_outstanding == Decimal("4111911960")
+    assert bundle.revenue == Decimal("340000000000")
+    assert bundle.vintages["total_assets"]["document"] == "companyfacts:CIK0002115436"
+    assert bundle.vintages["revenue"]["document"] == "companyfacts:CIK0000034088"
+
+
+def test_adapter_fetch_merges_holdco_and_predecessor_when_documents_present() -> None:
+    holdco_doc = {
+        "facts": {
+            "us-gaap": {
+                "Assets": {
+                    "units": {
+                        "USD": [{"end": "2026-06-30", "val": 464482000000, "filed": "2026-08-05", "form": "10-Q"}]
+                    }
+                },
+                "CommonStockSharesOutstanding": {
+                    "units": {
+                        "shares": [{"end": "2026-06-30", "val": 4111911960, "filed": "2026-08-05", "form": "10-Q"}]
+                    }
+                },
+            }
+        }
+    }
+    pred_doc = {
+        "facts": {
+            "us-gaap": {
+                "Revenues": {
+                    "units": {
+                        "USD": [
+                            _annual(
+                                "2025-12-31",
+                                "2025-01-01",
+                                340000000000,
+                                "2026-02-15",
+                                accn="0000034088-26-000010",
+                            )
+                        ]
+                    }
+                },
+            }
+        }
+    }
+    holdco_bundle = build_bundle(
+        holdco_doc, date(2026, 9, 1), OperatingBranch.NON_FINANCIAL, raw_bytes=b'{"holdco": true}'
+    )
+    pred_bundle = build_bundle(
+        pred_doc, date(2026, 9, 1), OperatingBranch.NON_FINANCIAL, raw_bytes=b'{"predecessor": true}'
+    )
+
+    def fetcher(cik: int, cutoff: date, branch: OperatingBranch) -> FinancialFactsBundle:
+        return holdco_bundle if cik == 2115436 else pred_bundle
+
+    item = _work_item("c" * 64)
+    target = SecTarget(
+        cik=2115436,
+        cutoff=date(2026, 9, 1),
+        issuer_id="issuer:lei:X",
+        instrument_id="security:cusip:Y",
+        listing_id="listing:xnys:xom",
+        operating_branch=OperatingBranch.NON_FINANCIAL,
+        predecessor_cik=34088,
+        predecessor_signed=True,
+    )
+    adapter = SecFinancialFactAdapter({item.work_item_id: target}, fetcher)
+    outcome = adapter.fetch(item)
+    assert isinstance(outcome, FetchSuccess)
+    assert outcome.record.payload["total_assets"] == "464482000000"
+    assert outcome.record.payload["revenue"] == "340000000000"
+    assert outcome.record.payload["shares_basis"] == "point_in_time"
+    assert outcome.raw.body == b'{"holdco": true}'
+    from data_engine.datahub.capture_core.materialization import FinancialFactPayload
+
+    validated = FinancialFactPayload(**outcome.record.payload)
+    assert validated.shares_basis == "point_in_time"
+    assert validated.total_assets == Decimal("464482000000")
+
+    # Unsigned predecessor (e.g. lineage-only) keeps whole-document fallback instead of merging
+    unsigned_target = SecTarget(
+        cik=2115436,
+        cutoff=date(2026, 9, 1),
+        issuer_id="issuer:lei:X",
+        instrument_id="security:cusip:Y",
+        listing_id="listing:xnys:xom",
+        operating_branch=OperatingBranch.NON_FINANCIAL,
+        predecessor_cik=34088,
+        predecessor_signed=False,
+    )
+    adapter_unsigned = SecFinancialFactAdapter({item.work_item_id: unsigned_target}, fetcher)
+    outcome_unsigned = adapter_unsigned.fetch(item)
+    assert isinstance(outcome_unsigned, FetchSuccess)
+    assert outcome_unsigned.raw.body == b'{"predecessor": true}'
+    assert outcome_unsigned.record.payload["revenue"] == "340000000000"
+    assert outcome_unsigned.record.payload["total_assets"] is None
+
+
+@pytest.mark.parametrize("branch", [OperatingBranch.NON_FINANCIAL, OperatingBranch.FINANCIAL])
+def test_a_period_mismatch_never_yields_a_positive_confidence_operating_metric(branch: OperatingBranch) -> None:
+    """The adapter output holds no operating metric when its period differs from the revenue period."""
+    stale_profit = Decimal("101839000000")
+    bundle = _bundle(
+        gross_profit=stale_profit,
+        pre_provision_profit=stale_profit if branch is OperatingBranch.FINANCIAL else None,
+        revenue=Decimal("391035000000"),
+        operating_period_end=date(2018, 9, 29),
+        revenue_period_end=date(2025, 9, 27),
+    )
+    item = _work_item("5" * 64)
+    adapter = SecFinancialFactAdapter({item.work_item_id: _target(branch=branch)}, lambda c, cut, b: bundle)
+    result = adapter.fetch(item)
+    assert isinstance(result, FetchSuccess)
+    payload = result.record.payload
+    assert payload["gross_profit"] is None
+    assert payload["pre_provision_profit"] is None
+    assert payload["operating_period_end"] is None
+    assert payload["operating_period_stale"] is True
+    assert payload["stale_operating_period_end"] == "2018-09-29"
+    assert payload["revenue_period_end"] == "2025-09-27"
+    assert payload["revenue"] == "391035000000"
+    assert payload["total_assets"] == "500"
+    assert result.confidence is None
+    assert "gross_profit" not in payload["vintage"]
+
+
+def test_matching_periods_keep_the_operating_metric_and_add_no_stale_marker() -> None:
+    """The stale marker appears only on a dropped metric, so a current payload keeps its hash."""
+    bundle = _bundle(operating_period_end=date(2025, 12, 31), revenue_period_end=date(2025, 12, 31))
+    item = _work_item("6" * 64)
+    adapter = SecFinancialFactAdapter({item.work_item_id: _target()}, lambda c, cut, b: bundle)
+    result = adapter.fetch(item)
+    assert isinstance(result, FetchSuccess)
+    payload = result.record.payload
+    assert payload["gross_profit"] == "120"
+    assert payload["operating_period_end"] == "2025-12-31"
+    assert "operating_period_stale" not in payload
+    assert "stale_operating_period_end" not in payload
+    assert result.confidence is None
+
+
+def _bkng_shaped_facts(*, gross_profit_end: str, gross_profit_filed: str) -> dict:
+    """BKNG shape (#1114): current revenue, assets and shares, and one reported gross profit."""
+    return {
+        "facts": {
+            "us-gaap": {
+                "GrossProfit": _units(
+                    [_annual(gross_profit_end, f"{gross_profit_end[:4]}-01-01", 12681000000, gross_profit_filed)]
+                ),
+                "Revenues": _units([_annual("2025-12-31", "2025-01-01", 26917000000, "2026-02-25")]),
+                "Assets": {"units": {"USD": [{"end": "2025-12-31", "val": 28000000000, "filed": "2026-02-25"}]}},
+                "CommonStockSharesOutstanding": {
+                    "units": {"shares": [{"end": "2026-01-31", "val": 32000000, "filed": "2026-02-10"}]}
+                },
+            }
+        }
+    }
+
+
+def _gppe_for_facts(facts: dict) -> tuple[FetchSuccess, ToptGppeResult]:
+    """Run the adapter and then module 2 on one company-facts document, as the pipeline does."""
+    item = _work_item("7" * 64)
+    headcount = HeadcountFact(value=Decimal("24000"), knowable_at=datetime(2026, 2, 25, tzinfo=UTC))
+    adapter = SecFinancialFactAdapter(
+        {item.work_item_id: _target()},
+        lambda c, cut, b: build_bundle(facts, _CUTOFF, OperatingBranch.NON_FINANCIAL),
+        headcount_extractor=lambda c, cut: headcount,
+    )
+    result = adapter.fetch(item)
+    assert isinstance(result, FetchSuccess)
+    financial = FinancialFactPayload(**result.record.payload)
+    cutoff = datetime(2026, 4, 2, tzinfo=UTC)
+    observation_ids = tuple(f"normalized-observation:{character * 64}" for character in "1234")
+
+    from data_engine.datahub.input_cells import _evaluate_sec_field_confidence
+
+    sec_conf = _evaluate_sec_field_confidence("gross_profit", result.record.payload)
+
+    def metric(name: str, value: Decimal | None) -> ToptMetricInput:
+        return ToptMetricInput(
+            input_id=observation_ids[0],
+            metric=name,
+            value=value,
+            confidence=sec_conf,
+            knowable_at=cutoff - timedelta(days=1),
+            freshness=MetricFreshness.FRESH,
+            availability=MetricAvailability.AVAILABLE if value is not None else MetricAvailability.UNAVAILABLE,
+        )
+
+    snapshot = ToptCoreSnapshotInput(
+        snapshot_id=f"topt-core-snapshot:{'a' * 64}",
+        run_id=f"capture-run:{'b' * 64}",
+        release_manifest_id=f"release-manifest:{'c' * 64}",
+        universe_id="universe:test",
+        universe_version="1",
+        universe_sha256="d" * 64,
+        cutoff=cutoff,
+        issuer_id=financial.issuer_id,
+        instrument_id=financial.instrument_id,
+        listing_id=financial.listing_id,
+        operating_branch=OperatingBranch.NON_FINANCIAL,
+        observation_ids=observation_ids,
+        cell_inputs=tuple(
+            ToptCellQualityInput(
+                input_id=input_id,
+                confidence=sec_conf,
+                knowable_at=cutoff - timedelta(days=1),
+                freshness=MetricFreshness.FRESH,
+            )
+            for input_id in observation_ids
+        ),
+        gross_profit=metric("gross_profit", financial.gross_profit),
+        total_assets=metric("total_assets", financial.total_assets),
+        headcount=metric("headcount", financial.headcount),
+        revenue=metric("revenue", financial.revenue),
+        pre_provision_profit=metric("pre_provision_profit", financial.pre_provision_profit),
+        market_value_components=(
+            ToptMarketValueComponent(
+                instrument_id=financial.instrument_id,
+                listing_id=financial.listing_id,
+                market_price=ToptMetricInput(
+                    input_id=observation_ids[1],
+                    metric="market_price",
+                    value=Decimal("5000"),
+                    confidence=Decimal("0.9"),
+                    knowable_at=cutoff - timedelta(days=1),
+                    freshness=MetricFreshness.FRESH,
+                    availability=MetricAvailability.AVAILABLE,
+                ),
+                shares_outstanding=metric("shares_outstanding", financial.shares_outstanding),
+            ),
+        ),
+    )
+    gppe = compute_topt_gppe(
+        snapshot,
+        invocation_id=f"topt-gppe-invocation:{'f' * 64}",
+        gppe_definition=GppeV0Definition(risk_free_rate="0.05"),
+        definition=load_live_strategy_definition(),
+    )
+    return result, gppe
+
+
+def test_a_gross_profit_older_than_the_revenue_period_makes_gppe_unavailable_with_a_reason() -> None:
+    """BKNG (#1114): GrossProfit ends 2017-12-31 and revenue ends 2025-12-31.
+
+    GPPE must not pair a 2017 gross profit with 2025 assets. The row reports
+    `missing_gross_profit` instead of a number or a zero-confidence value.
+    """
+    facts = _bkng_shaped_facts(gross_profit_end="2017-12-31", gross_profit_filed="2018-02-27")
+    bundle = build_bundle(facts, _CUTOFF, OperatingBranch.NON_FINANCIAL)
+    # The fixture is BKNG-shaped: the parse itself still finds the old figure.
+    assert bundle.gross_profit == Decimal("12681000000")
+    assert (bundle.operating_period_end, bundle.revenue_period_end) == (date(2017, 12, 31), date(2025, 12, 31))
+
+    result, gppe = _gppe_for_facts(facts)
+
+    payload = result.record.payload
+    assert payload["gross_profit"] is None
+    assert payload["operating_period_stale"] is True
+    assert payload["stale_operating_period_end"] == "2017-12-31"
+    assert result.confidence is None
+    assert gppe.availability is ToptCoreAvailability.UNAVAILABLE
+    assert gppe.reason_codes == (ToptCoreReasonCode.MISSING_GROSS_PROFIT,)
+
+
+def test_a_gross_profit_of_the_revenue_period_keeps_gppe_available() -> None:
+    """Control for the test above: the same document with a current GrossProfit yields a GPPE value."""
+    facts = _bkng_shaped_facts(gross_profit_end="2025-12-31", gross_profit_filed="2026-02-25")
+
+    result, gppe = _gppe_for_facts(facts)
+
+    assert result.record.payload["gross_profit"] == "12681000000"
+    assert "operating_period_stale" not in result.record.payload
+    assert gppe.availability is ToptCoreAvailability.AVAILABLE
+    assert gppe.reason_codes == ()
+
+
+# --- #1176 step 2: banking tangible common equity from the SEC source gateway -----------------
+# The fixture is the recorded JPM companyfacts document (captured 2026-07-09, byte-for-byte
+# from SEC). Its FY2025 10-K is accession 0001628280-26-008131, filed 2026-02-13. JPM reports
+# no `IntangibleAssetsNetExcludingGoodwill`; it tags the two lifetime classes instead.
+
+_JPM_SAMPLE = Path(__file__).parents[2] / "samples" / "sec" / "JPM_CIK0000019617.json"
+_JPM_CUTOFF = date(2026, 6, 30)
+
+
+def _jpm_facts() -> dict:
+    return json.loads(_JPM_SAMPLE.read_bytes())
+
+
+def _without_concept(facts: dict, concept: str) -> dict:
+    gaap = dict(facts["facts"]["us-gaap"])
+    gaap.pop(concept)
+    return {**facts, "facts": {**facts["facts"], "us-gaap": gaap}}
+
+
+def test_banking_tce_components_are_measured_for_jpm_at_the_latest_complete_period() -> None:
+    # The 10-Q for Q1 2026 tags equity and goodwill but no intangible components, so the
+    # measurement falls back to FY2025, the latest period where all three are filed together.
+    bundle = build_bundle(_jpm_facts(), _JPM_CUTOFF, OperatingBranch.FINANCIAL)
+    assert bundle.tangible_equity_period_end == date(2025, 12, 31)
+    assert bundle.stockholders_equity == Decimal("362438000000")
+    assert bundle.goodwill == Decimal("52731000000")
+    # Intangibles: lifetime-class components summed at the same period end (1.3B + 1.3B).
+    assert bundle.intangible_assets_net_excluding_goodwill == Decimal("2600000000")
+    assert bundle.intangible_basis == "FiniteLivedIntangibleAssetsNet+IndefiniteLivedIntangibleAssetsExcludingGoodwill"
+
+
+def test_banking_tce_components_are_not_captured_for_a_non_financial_branch() -> None:
+    # Per-class mapping: the same document yields no tangible-equity input for any other class.
+    for branch in (OperatingBranch.NON_FINANCIAL, OperatingBranch.INSURANCE):
+        bundle = build_bundle(_jpm_facts(), _JPM_CUTOFF, branch)
+        assert bundle.stockholders_equity is None
+        assert bundle.goodwill is None
+        assert bundle.intangible_assets_net_excluding_goodwill is None
+        assert bundle.tangible_equity_period_end is None
+
+
+def test_banking_tce_is_unmeasured_when_one_intangible_component_is_missing() -> None:
+    # No zero stand-in for a missing component: without the second lifetime class, the
+    # intangibles are not measured, and the whole tangible measurement is absent.
+    facts = _without_concept(_jpm_facts(), "IndefiniteLivedIntangibleAssetsExcludingGoodwill")
+    bundle = build_bundle(facts, _JPM_CUTOFF, OperatingBranch.FINANCIAL)
+    assert bundle.intangible_assets_net_excluding_goodwill is None
+    assert bundle.tangible_equity_period_end is None
+
+
+def test_a_bank_payload_carries_the_tangible_common_equity_inputs_and_a_non_bank_payload_does_not() -> None:
+    # The capture path, not only the bundle: a FINANCIAL row names its TCE inputs and their filing,
+    # while a non-financial row carries no TCE key, so its payload hash does not move.
+    item = _work_item("f" * 64)
+    bank = SecFinancialFactAdapter(
+        {item.work_item_id: _target(branch=OperatingBranch.FINANCIAL)},
+        lambda cik, cutoff, branch: build_bundle(_jpm_facts(), cutoff, branch),
+    ).fetch(item)
+    assert isinstance(bank, FetchSuccess)
+    payload = bank.record.payload
+    assert payload["stockholders_equity"] == "362438000000"
+    assert payload["goodwill"] == "52731000000"
+    assert payload["intangible_assets_net_excluding_goodwill"] == "2600000000"
+    assert payload["tangible_equity_period_end"] == "2025-12-31"
+    assert payload["vintage"]["stockholders_equity"]["accession"] == "0001628280-26-008131"
+    plain = SecFinancialFactAdapter(
+        {item.work_item_id: _target()},
+        lambda cik, cutoff, branch: build_bundle(_jpm_facts(), cutoff, branch),
+    ).fetch(item)
+    assert isinstance(plain, FetchSuccess)
+    assert "stockholders_equity" not in plain.record.payload
+    assert "stockholders_equity" not in plain.record.payload["vintage"]
+
+
+# --- #1176 follow-up: deduct preferred stock; a missing preferred value is never zero ----------
+
+
+def _with_preferred_stock(facts: dict, *, value: int, end: str, filed: str, accn: str) -> dict:
+    # Fixture: a filer that tags the named concept. The value is the FY2025 10-K balance-sheet
+    # preferred line of JPM (20,045M). The companyfacts sample itself carries no such fact.
+    gaap = dict(facts["facts"]["us-gaap"])
+    entry = {"end": end, "val": value, "accn": accn, "fy": 2025, "fp": "FY", "form": "10-K", "filed": filed}
+    gaap["PreferredStockValue"] = {"label": "Preferred Stock, Value, Issued", "units": {"USD": [entry]}}
+    return {**facts, "facts": {**facts["facts"], "us-gaap": gaap}}
+
+
+def _without_preferred(facts: dict) -> dict:
+    # Both preferred concepts removed: a filer that reports neither.
+    return _without_concept(
+        _without_concept(facts, "PreferredStockValue"), "PreferredStockIncludingAdditionalPaidInCapitalNetOfDiscount"
+    )
+
+
+def test_a_filer_reporting_neither_preferred_concept_gets_no_value_not_zero() -> None:
+    # Absence is refused, not zero-filled. The other three inputs are still measured.
+    bundle = build_bundle(_without_preferred(_jpm_facts()), _JPM_CUTOFF, OperatingBranch.FINANCIAL)
+    assert bundle.preferred_stock_value is None
+    assert "preferred_stock_value" not in bundle.vintages
+    # The three other inputs are still measured at the same period.
+    assert bundle.stockholders_equity == Decimal("362438000000")
+    assert bundle.tangible_equity_period_end == date(2025, 12, 31)
+
+
+def test_a_filed_preferred_stock_value_is_taken_at_the_tangible_period() -> None:
+    facts = _with_preferred_stock(
+        _jpm_facts(), value=20045000000, end="2025-12-31", filed="2026-02-13", accn="0001628280-26-008131"
+    )
+    bundle = build_bundle(facts, _JPM_CUTOFF, OperatingBranch.FINANCIAL)
+    assert bundle.preferred_stock_value == Decimal("20045000000")
+    assert bundle.tangible_equity_period_end == date(2025, 12, 31)
+    assert bundle.vintages["preferred_stock_value"]["accession"] == "0001628280-26-008131"
+
+
+def test_the_bank_payload_names_an_absent_preferred_value_as_null() -> None:
+    item = _work_item("d" * 64)
+    result = SecFinancialFactAdapter(
+        {item.work_item_id: _target(branch=OperatingBranch.FINANCIAL)},
+        lambda cik, cutoff, branch: build_bundle(_without_preferred(_jpm_facts()), cutoff, branch),
+    ).fetch(item)
+    assert isinstance(result, FetchSuccess)
+    assert "preferred_stock_value" in result.record.payload
+    assert result.record.payload["preferred_stock_value"] is None
+    assert "preferred_stock_value" not in result.record.payload["vintage"]
+
+
+def test_jpm_preferred_stock_resolves_on_the_balance_sheet_concept_and_banking_value_matches() -> None:
+    # JPM tags its balance-sheet preferred line as PreferredStockIncludingAdditionalPaidInCapitalNetOfDiscount.
+    # The companyfacts sample carries it non-dimensionally: 20,045,000,000 at 2025-12-31, from the FY2025
+    # 10-K (accession 0001628280-26-008131). Verified against the repo 10-K sample, not against live EDGAR.
+    # Headcount 318,512 is not in companyfacts. It is the 10-K "Employees" figure that #1108 cites.
+    # The value is the one of the registered banking tree (#1518), the tree that definition 1.1.0 pins.
+    from factors.panel import GPPE_BANKING_TCE_SPEC, IssuerClass, evaluate_panel_variant
+
+    bundle = build_bundle(_jpm_facts(), _JPM_CUTOFF, OperatingBranch.FINANCIAL)
+    evaluation = evaluate_panel_variant(
+        GPPE_BANKING_TCE_SPEC,
+        issuer_class=IssuerClass.FINANCIAL,
+        inputs={
+            "pre_provision_profit": bundle.pre_provision_profit,
+            "stockholders_equity": bundle.stockholders_equity,
+            "preferred_stock_value": bundle.preferred_stock_value,
+            "goodwill": bundle.goodwill,
+            "intangible_assets_net_excluding_goodwill": bundle.intangible_assets_net_excluding_goodwill,
+            "employees_total": Decimal("318512"),
+            "risk_free_rate": Decimal("0.05"),
+        },
+    )
+    assert evaluation.undefined == {}, evaluation.undefined
+    assert bundle.preferred_stock_value == Decimal("20045000000")
+    # Hand computation: TCE = 362,438M - 20,045M - 52,731M - 2,600M = 287,062M. Value = (86,807M - 287,062M x 0.05) / 318,512.
+    value = evaluation.values["gppe_banking_tce_v1"]
+    assert value is not None
+    assert abs(value - Decimal("227476.20")) <= Decimal("0.01")
+
+
+def test_xom_signed_predecessor_merges_revenue_and_net_income_while_refusing_revenue_proxy_under_533() -> None:
+    """#1263 + #533: XOM holdco CIK 2115436 reports balance-sheet Assets and CommonStockSharesOutstanding,
+    while predecessor CIK 34088 reports Revenues and NetIncomeLoss without us-gaap GrossProfit or
+    CostOfGoodsAndServicesSold (crude oil purchases use custom xom: extension tags). Merging via the
+    signed predecessor restores revenue and net_income, while keeping `gross_profit=None` so
+    Petroleum Refining never substitutes revenue for gross profit."""
+    holdco_doc = {
+        "facts": {
+            "us-gaap": {
+                "Assets": {
+                    "units": {
+                        "USD": [
+                            {
+                                "end": "2026-06-30",
+                                "val": 464482000000,
+                                "accn": "0002115436-26-000012",
+                                "fy": 2026,
+                                "fp": "Q2",
+                                "form": "10-Q",
+                                "filed": "2026-08-03",
+                            }
+                        ]
+                    }
+                },
+                "CommonStockSharesOutstanding": {
+                    "units": {
+                        "shares": [
+                            {
+                                "end": "2026-06-30",
+                                "val": 4111911960,
+                                "accn": "0002115436-26-000012",
+                                "fy": 2026,
+                                "fp": "Q2",
+                                "form": "10-Q",
+                                "filed": "2026-08-03",
+                            }
+                        ]
+                    }
+                },
+            }
+        }
+    }
+    pred_doc = {
+        "facts": {
+            "us-gaap": {
+                "Revenues": {
+                    "units": {
+                        "USD": [
+                            _annual(
+                                "2025-12-31",
+                                "2025-01-01",
+                                332238000000,
+                                "2026-02-18",
+                                accn="0000034088-26-000017",
+                            )
+                        ]
+                    }
+                },
+                "NetIncomeLoss": {
+                    "units": {
+                        "USD": [
+                            _annual(
+                                "2025-12-31",
+                                "2025-01-01",
+                                28844000000,
+                                "2026-02-18",
+                                accn="0000034088-26-000017",
+                            )
+                        ]
+                    }
+                },
+            }
+        }
+    }
+    cutoff = date(2026, 9, 2)
+    holdco_bundle = build_bundle(holdco_doc, cutoff, OperatingBranch.NON_FINANCIAL, raw_bytes=b'{"cik":2115436}')
+    pred_bundle = build_bundle(pred_doc, cutoff, OperatingBranch.NON_FINANCIAL, raw_bytes=b'{"cik":34088}')
+
+    def fetcher(cik: int, _cutoff: date, _branch: OperatingBranch) -> FinancialFactsBundle:
+        return holdco_bundle if cik == 2115436 else pred_bundle
+
+    item = _work_item("e" * 64)
+    target = SecTarget(
+        cik=2115436,
+        cutoff=cutoff,
+        issuer_id="e0f10530-9f50-5bf0-a4c6-2c41763d1209",
+        instrument_id="f8a00530-9f50-5bf0-a4c6-2c41763d1209",
+        listing_id="a1b20530-9f50-5bf0-a4c6-2c41763d1209",
+        operating_branch=OperatingBranch.NON_FINANCIAL,
+        predecessor_cik=34088,
+        predecessor_signed=True,
+        ticker="XOM",
+    )
+    adapter = SecFinancialFactAdapter({item.work_item_id: target}, fetcher)
+    outcome = adapter.fetch(item)
+    assert isinstance(outcome, FetchSuccess)
+    payload = outcome.record.payload
+    assert payload["revenue"] == "332238000000"
+    assert payload["net_income"] == "28844000000"
+    assert payload["total_assets"] == "464482000000"
+    assert payload["shares_outstanding"] == "4111911960"
+    assert payload["gross_profit"] is None
+    assert "gross_profit" not in payload["vintage"]
+    assert payload["vintage"]["revenue"]["document"] == "companyfacts:CIK0000034088"
+    assert payload["vintage"]["total_assets"]["document"] == "companyfacts:CIK0002115436"
+
+    from data_engine.datahub.standards.listing_unit_ratio import CoverRatioReader
+
+    no_html_adapter = SecFinancialFactAdapter(
+        {item.work_item_id: target},
+        fetcher,
+        listing_ratio_reader=CoverRatioReader(lambda _cik, _cutoff: None),
+    )
+    no_html_outcome = no_html_adapter.fetch(item)
+    assert isinstance(no_html_outcome, FetchSuccess)
+    no_html_payload = no_html_outcome.record.payload
+    assert no_html_payload["listing_units_per_share"] == "1"
+    assert no_html_payload["ratio_pattern"] == "plain_share_title"
+    assert no_html_payload["ratio_reason"] is None
+    assert no_html_payload["ratio_form"] == "10-K"
+    assert no_html_payload["ratio_accession"] == "0000034088-26-000017"
+    assert no_html_payload["ratio_filed"] == "2026-02-18"
+
+
+def test_per_class_segmented_share_counts_are_refused_without_conversion_rates_unless_unsegmented_total_exists() -> (
+    None
+):
+    """#1519 Step 3: when an issuer reports CommonStockSharesOutstanding or EntityCommonStockSharesOutstanding
+    only with per-class `segment` dimensions and no class conversion rate or unsegmented total for that period,
+    `shares_outstanding` is `None` with `shares_basis="missing_class_ratio"`.
+    When an unsegmented total is also present, the unsegmented total wins (`shares_basis="point_in_time"`)."""
+    from data_engine.datahub.capture_core.sec_financial_adapter import (
+        MISSING_CLASS_RATIO,
+        SHARES_POINT_IN_TIME,
+    )
+
+    facts = _facts()
+    facts["facts"]["us-gaap"].pop("CommonStockSharesOutstanding", None)
+    facts["facts"].setdefault("dei", {})["EntityCommonStockSharesOutstanding"] = {
+        "units": {
+            "shares": [
+                {
+                    "end": "2026-07-16",
+                    "val": 1704112694,
+                    "accn": "0001403161-26-000046",
+                    "fy": 2026,
+                    "fp": "Q3",
+                    "form": "10-Q",
+                    "filed": "2026-07-23",
+                    "segment": {
+                        "dimension": "us-gaap:StatementClassOfStockAxis",
+                        "value": "us-gaap:CommonClassAMember",
+                    },
+                },
+                {
+                    "end": "2026-07-16",
+                    "val": 2180148,
+                    "accn": "0001403161-26-000046",
+                    "fy": 2026,
+                    "fp": "Q3",
+                    "form": "10-Q",
+                    "filed": "2026-07-23",
+                    "segment": {
+                        "dimension": "us-gaap:StatementClassOfStockAxis",
+                        "value": "v:ClassB1CommonStockMember",
+                    },
+                },
+                {
+                    "end": "2026-07-16",
+                    "val": 67498601,
+                    "accn": "0001403161-26-000046",
+                    "fy": 2026,
+                    "fp": "Q3",
+                    "form": "10-Q",
+                    "filed": "2026-07-23",
+                    "segment": {
+                        "dimension": "us-gaap:StatementClassOfStockAxis",
+                        "value": "v:ClassB2CommonStockMember",
+                    },
+                },
+                {
+                    "end": "2026-07-16",
+                    "val": 10637091,
+                    "accn": "0001403161-26-000046",
+                    "fy": 2026,
+                    "fp": "Q3",
+                    "form": "10-Q",
+                    "filed": "2026-07-23",
+                    "segment": {
+                        "dimension": "us-gaap:StatementClassOfStockAxis",
+                        "value": " us-gaap:CommonClassCMember ",
+                    },
+                },
+            ]
+        }
+    }
+    cutoff = date(2026, 8, 17)
+    bundle = build_bundle(facts, cutoff, OperatingBranch.NON_FINANCIAL)
+    assert bundle.shares_outstanding is None
+    assert bundle.shares_basis == MISSING_CLASS_RATIO
+    assert bundle.shares_period_end == date(2026, 7, 16)
+
+    item = _work_item("f" * 64)
+    target = SecTarget(
+        cik=1403161,
+        cutoff=cutoff,
+        issuer_id="issuer:lei:V",
+        instrument_id="security:cusip:V",
+        listing_id="listing:xnys:v",
+        operating_branch=OperatingBranch.NON_FINANCIAL,
+    )
+    outcome = SecFinancialFactAdapter(
+        {item.work_item_id: target},
+        lambda _cik, _cutoff, _branch: bundle,
+    ).fetch(item)
+    assert isinstance(outcome, FetchSuccess)
+    validated = FinancialFactPayload.model_validate(outcome.record.payload)
+    assert validated.shares_outstanding is None
+    assert validated.shares_basis == MISSING_CLASS_RATIO
+
+    facts["facts"]["dei"]["EntityCommonStockSharesOutstanding"]["units"]["shares"].append(
+        {
+            "end": "2026-07-16",
+            "val": 2000000000,
+            "accn": "0001403161-26-000046",
+            "fy": 2026,
+            "fp": "Q3",
+            "form": "10-Q",
+            "filed": "2026-07-23",
+        }
+    )
+    bundle_with_total = build_bundle(facts, cutoff, OperatingBranch.NON_FINANCIAL)
+    assert bundle_with_total.shares_outstanding == Decimal("2000000000")
+    assert bundle_with_total.shares_basis == SHARES_POINT_IN_TIME
+
+
+def test_sec_financial_fetcher_enriches_visa_multi_class_cover_page_shares_with_conversion_rates_and_refuses_unconverted_classes() -> (
+    None
+):
+    """#1519 Step 3: `sec_financial_fetcher` converts non-base share classes by their tagged
+    `CommonStockConversionRate` (`A + r_B1 * B1 + r_B2 * B2 + r_C * C`) into an unsegmented
+    `SHARES_POINT_IN_TIME` share count when all non-base classes have conversion rates and share a single
+    par value, while refusing multi-class shares without conversion rates (`MISSING_CLASS_RATIO`) and
+    refusing Berkshire Hathaway's dual-par Class A ($5) + Class B ($0.0033) shares (#529)."""
+    from contextlib import nullcontext
+
+    from data_engine.datahub.capture_core.sec_financial_adapter import (
+        MISSING_CLASS_RATIO,
+        SHARES_POINT_IN_TIME,
+    )
+    from data_engine.datahub.standards import filing_extraction
+    from data_engine.datahub.standards.filing_extraction import FilingDocument, multi_class_share_entries
+    from data_engine.sources import sec
+
+    visa_html_with_rates = b"""
+    <html><body>
+      <ix:header><ix:resources>
+        <xbrli:context id="c_entity">
+          <xbrli:entity><xbrli:segment>
+            <xbrldi:explicitMember dimension="us-gaap:StatementClassOfStockAxis">us-gaap:CommonClassAMember</xbrldi:explicitMember>
+          </xbrli:segment></xbrli:entity>
+          <xbrli:period><xbrli:startDate>2024-10-01</xbrli:startDate><xbrli:endDate>2025-09-30</xbrli:endDate></xbrli:period>
+        </xbrli:context>
+        <xbrli:context id="c_a">
+          <xbrli:entity><xbrli:segment>
+            <xbrldi:explicitMember dimension="us-gaap:StatementClassOfStockAxis">us-gaap:CommonClassAMember</xbrldi:explicitMember>
+          </xbrli:segment></xbrli:entity>
+          <xbrli:period><xbrli:instant>2025-10-29</xbrli:instant></xbrli:period>
+        </xbrli:context>
+        <xbrli:context id="c_b1">
+          <xbrli:entity><xbrli:segment>
+            <xbrldi:explicitMember dimension="us-gaap:StatementClassOfStockAxis">v:ClassB1CommonStockMember</xbrldi:explicitMember>
+          </xbrli:segment></xbrli:entity>
+          <xbrli:period><xbrli:instant>2025-10-29</xbrli:instant></xbrli:period>
+        </xbrli:context>
+        <xbrli:context id="c_b2">
+          <xbrli:entity><xbrli:segment>
+            <xbrldi:explicitMember dimension="us-gaap:StatementClassOfStockAxis">v:ClassB2CommonStockMember</xbrldi:explicitMember>
+          </xbrli:segment></xbrli:entity>
+          <xbrli:period><xbrli:instant>2025-10-29</xbrli:instant></xbrli:period>
+        </xbrli:context>
+        <xbrli:context id="c_c">
+          <xbrli:entity><xbrli:segment>
+            <xbrldi:explicitMember dimension="us-gaap:StatementClassOfStockAxis">us-gaap:CommonClassCMember</xbrldi:explicitMember>
+          </xbrli:segment></xbrli:entity>
+          <xbrli:period><xbrli:instant>2025-10-29</xbrli:instant></xbrli:period>
+        </xbrli:context>
+      </ix:resources></ix:header>
+      <ix:nonNumeric contextRef="c_entity" name="dei:TradingSymbol">V</ix:nonNumeric>
+      <ix:nonFraction contextRef="c_a" name="dei:EntityCommonStockSharesOutstanding" unitRef="shares" decimals="0">1,691,833,241</ix:nonFraction>
+      <ix:nonFraction contextRef="c_b1" name="dei:EntityCommonStockSharesOutstanding" unitRef="shares" decimals="0">4,830,173</ix:nonFraction>
+      <ix:nonFraction contextRef="c_b2" name="dei:EntityCommonStockSharesOutstanding" unitRef="shares" decimals="0">120,257,385</ix:nonFraction>
+      <ix:nonFraction contextRef="c_c" name="dei:EntityCommonStockSharesOutstanding" unitRef="shares" decimals="0">4,822,010</ix:nonFraction>
+      <ix:nonFraction contextRef="c_a" name="us-gaap:CommonStockParOrStatedValuePerShare" unitRef="usdPerShare" decimals="4">0.0001</ix:nonFraction>
+      <ix:nonFraction contextRef="c_b1" name="us-gaap:CommonStockParOrStatedValuePerShare" unitRef="usdPerShare" decimals="4">0.0001</ix:nonFraction>
+      <ix:nonFraction contextRef="c_b2" name="us-gaap:CommonStockParOrStatedValuePerShare" unitRef="usdPerShare" decimals="4">0.0001</ix:nonFraction>
+      <ix:nonFraction contextRef="c_c" name="us-gaap:CommonStockParOrStatedValuePerShare" unitRef="usdPerShare" decimals="4">0.0001</ix:nonFraction>
+      <ix:nonFraction contextRef="c_b1" name="v:CommonStockConversionRate" unitRef="pure" decimals="4">1.5875</ix:nonFraction>
+      <ix:nonFraction contextRef="c_b2" name="v:CommonStockConversionRate" unitRef="pure" decimals="4">1.5875</ix:nonFraction>
+      <ix:nonFraction contextRef="c_c" name="v:CommonStockConversionRate" unitRef="pure" decimals="4">4.0000</ix:nonFraction>
+    </body></html>
+    """
+
+    def _stale_visa_facts() -> dict[str, Any]:
+        facts = _facts()
+        facts["facts"]["us-gaap"].pop("CommonStockSharesOutstanding", None)
+        facts["facts"].setdefault("dei", {})["EntityCommonStockSharesOutstanding"] = {
+            "units": {
+                "shares": [
+                    {
+                        "end": "2010-01-27",
+                        "val": 469280842,
+                        "accn": "0001193125-10-020952",
+                        "fy": 2010,
+                        "fp": "Q1",
+                        "form": "10-Q",
+                        "filed": "2010-02-03",
+                    }
+                ]
+            }
+        }
+        return facts
+
+    visa_doc = FilingDocument(
+        cik=1403161,
+        accession="000140316125000089",
+        form="10-K",
+        filing_date=date(2025, 11, 6),
+        primary_document="v-20250930.htm",
+        url="https://www.sec.gov/Archives/edgar/data/1403161/000140316125000089/v-20250930.htm",
+        body=visa_html_with_rates,
+    )
+
+    orig_facts = sec.fetch_company_facts_response
+    orig_client = sec.client
+    orig_periodic = filing_extraction.latest_periodic_filing
+    sec.fetch_company_facts_response = lambda _cik: (b"{}", _stale_visa_facts())  # type: ignore[assignment]
+    sec.client = lambda: nullcontext(object())  # type: ignore[assignment]
+    filing_extraction.latest_periodic_filing = lambda *_a, **_kw: visa_doc  # type: ignore[assignment]
+    try:
+        bundle = sec_financial_fetcher(1403161, date(2026, 3, 31), OperatingBranch.NON_FINANCIAL)
+    finally:
+        sec.fetch_company_facts_response = orig_facts  # type: ignore[assignment]
+        sec.client = orig_client  # type: ignore[assignment]
+        filing_extraction.latest_periodic_filing = orig_periodic  # type: ignore[assignment]
+
+    expected_converted = (
+        Decimal("1691833241")
+        + Decimal("4830173") * Decimal("1.5875")
+        + Decimal("120257385") * Decimal("1.5875")
+        + Decimal("4822010") * Decimal("4.0000")
+    )
+    assert bundle.shares_outstanding == expected_converted
+    assert bundle.shares_basis == SHARES_POINT_IN_TIME
+    assert bundle.shares_period_end == date(2025, 10, 29)
+
+    visa_html_without_rates = b"\n".join(
+        line for line in visa_html_with_rates.splitlines() if b"CommonStockConversionRate" not in line
+    )
+    visa_doc_no_rates = FilingDocument(
+        cik=1403161,
+        accession="000140316125000089",
+        form="10-K",
+        filing_date=date(2025, 11, 6),
+        primary_document="v-20250930.htm",
+        url="https://www.sec.gov/Archives/edgar/data/1403161/000140316125000089/v-20250930.htm",
+        body=visa_html_without_rates,
+    )
+    sec.fetch_company_facts_response = lambda _cik: (b"{}", _stale_visa_facts())  # type: ignore[assignment]
+    sec.client = lambda: nullcontext(object())  # type: ignore[assignment]
+    filing_extraction.latest_periodic_filing = lambda *_a, **_kw: visa_doc_no_rates  # type: ignore[assignment]
+    try:
+        bundle_no_rates = sec_financial_fetcher(1403161, date(2026, 3, 31), OperatingBranch.NON_FINANCIAL)
+    finally:
+        sec.fetch_company_facts_response = orig_facts  # type: ignore[assignment]
+        sec.client = orig_client  # type: ignore[assignment]
+        filing_extraction.latest_periodic_filing = orig_periodic  # type: ignore[assignment]
+
+    assert bundle_no_rates.shares_outstanding is None
+    assert bundle_no_rates.shares_basis == MISSING_CLASS_RATIO
+    assert bundle_no_rates.shares_period_end == date(2025, 10, 29)
+
+    brk_html = b"""
+    <html><body>
+      <ix:header><ix:resources>
+        <xbrli:context id="c_a_inst">
+          <xbrli:entity><xbrli:segment>
+            <xbrldi:explicitMember dimension="us-gaap:StatementClassOfStockAxis">us-gaap:CommonClassAMember</xbrldi:explicitMember>
+          </xbrli:segment></xbrli:entity>
+          <xbrli:period><xbrli:instant>2026-02-17</xbrli:instant></xbrli:period>
+        </xbrli:context>
+        <xbrli:context id="c_b_inst">
+          <xbrli:entity><xbrli:segment>
+            <xbrldi:explicitMember dimension="us-gaap:StatementClassOfStockAxis">us-gaap:CommonClassBMember</xbrldi:explicitMember>
+          </xbrli:segment></xbrli:entity>
+          <xbrli:period><xbrli:instant>2026-02-17</xbrli:instant></xbrli:period>
+        </xbrli:context>
+      </ix:resources></ix:header>
+      <ix:nonFraction contextRef="c_a_inst" name="dei:EntityCommonStockSharesOutstanding" unitRef="shares" decimals="0">488,450</ix:nonFraction>
+      <ix:nonFraction contextRef="c_b_inst" name="dei:EntityCommonStockSharesOutstanding" unitRef="shares" decimals="0">1,408,035,161</ix:nonFraction>
+      <ix:nonFraction contextRef="c_a_inst" name="us-gaap:CommonStockParOrStatedValuePerShare" unitRef="usdPerShare" decimals="2">5</ix:nonFraction>
+      <ix:nonFraction contextRef="c_b_inst" name="us-gaap:CommonStockParOrStatedValuePerShare" unitRef="usdPerShare" decimals="4">0.0033</ix:nonFraction>
+    </body></html>
+    """
+    brk_doc = FilingDocument(
+        cik=1067983,
+        accession="000106798326000010",
+        form="10-K",
+        filing_date=date(2026, 2, 28),
+        primary_document="brka-20251231.htm",
+        url="https://www.sec.gov/Archives/edgar/data/1067983/000106798326000010/brka-20251231.htm",
+        body=brk_html,
+    )
+    assert multi_class_share_entries(brk_doc) == []
+
+
+def test_financial_branch_separates_pre_provision_profit_and_never_populates_gross_profit() -> None:
+    """#1519 step 6: a FINANCIAL issuer populates `pre_provision_profit` and its vintage entry
+    while leaving `gross_profit` None, and `valid_from` reflects the reported period start
+    rather than the filing date (#1519 step 7)."""
+    bank_facts = {
+        "facts": {
+            "us-gaap": {
+                "InterestIncomeExpenseNet": {
+                    "units": {"USD": [_annual("2025-12-31", "2025-01-01", 95000000000, "2026-02-13")]}
+                },
+                "NoninterestIncome": {
+                    "units": {"USD": [_annual("2025-12-31", "2025-01-01", 87000000000, "2026-02-13")]}
+                },
+                "NoninterestExpense": {
+                    "units": {"USD": [_annual("2025-12-31", "2025-01-01", 96000000000, "2026-02-13")]}
+                },
+                "Revenues": {"units": {"USD": [_annual("2025-12-31", "2025-01-01", 182000000000, "2026-02-13")]}},
+                "Assets": {
+                    "units": {
+                        "USD": [
+                            {
+                                "end": "2025-12-31",
+                                "val": 4000000000000,
+                                "accn": "0000019617-26-000001",
+                                "fy": 2025,
+                                "fp": "FY",
+                                "form": "10-K",
+                                "filed": "2026-02-13",
+                            }
+                        ]
+                    }
+                },
+            },
+            "dei": {},
+        }
+    }
+    cutoff = date(2026, 3, 31)
+    bundle = build_bundle(bank_facts, cutoff, OperatingBranch.FINANCIAL)
+    assert bundle.gross_profit is None
+    assert bundle.pre_provision_profit == Decimal("86000000000")
+    assert bundle.period_start == date(2025, 1, 1)
+    assert "pre_provision_profit" in bundle.vintages
+    assert "gross_profit" not in bundle.vintages
+
+    item = _work_item("1" * 64)
+    target = SecTarget(
+        cik=19617,
+        cutoff=cutoff,
+        issuer_id="issuer:lei:JPM",
+        instrument_id="security:cusip:JPM",
+        listing_id="listing:xnys:jpm",
+        operating_branch=OperatingBranch.FINANCIAL,
+    )
+    outcome = SecFinancialFactAdapter(
+        {item.work_item_id: target},
+        lambda _cik, _cutoff, _branch: bundle,
+    ).fetch(item)
+    assert isinstance(outcome, FetchSuccess)
+    assert outcome.valid_from == date(2025, 1, 1)
+    payload = outcome.record.payload
+    assert payload["gross_profit"] is None
+    assert payload["pre_provision_profit"] == "86000000000"
+    validated = FinancialFactPayload.model_validate(payload)
+    assert validated.vintage is not None
+    assert "pre_provision_profit" in validated.vintage
+    assert "gross_profit" not in validated.vintage
+
+
+def test_expanded_cost_of_revenue_concepts_and_bank_net_revenue_resolve() -> None:
+    """#1518 / #1522: CostOfSales, DirectOperatingCosts, ProgrammingAndProductionCosts derive gross_profit,
+    and bank_net_revenue resolves from RevenuesNetOfInterestExpense or InterestIncomeExpenseNet + NoninterestIncome."""
+    from data_engine.datahub.capture_core.sec_financial_adapter import bank_net_revenue
+
+    for cogs_concept in ("CostOfSales", "DirectOperatingCosts", "ProgrammingAndProductionCosts"):
+        facts = {
+            "facts": {
+                "us-gaap": {
+                    "Revenues": _units([_annual("2025-12-31", "2025-01-01", 1000, "2026-02-01")]),
+                    cogs_concept: _units([_annual("2025-12-31", "2025-01-01", 400, "2026-02-01")]),
+                }
+            }
+        }
+        datum = gross_profit(facts, _CUTOFF)
+        assert datum is not None, f"gross_profit did not resolve from {cogs_concept}"
+        assert datum.value == Decimal("600")
+
+    bank_sum_facts = {
+        "facts": {
+            "us-gaap": {
+                "InterestIncomeExpenseNet": _units([_annual("2025-12-31", "2025-01-01", 90000000000, "2026-02-15")]),
+                "NoninterestIncome": _units([_annual("2025-12-31", "2025-01-01", 60000000000, "2026-02-15")]),
+                "NoninterestExpense": _units([_annual("2025-12-31", "2025-01-01", 80000000000, "2026-02-15")]),
+                "Assets": _units([{"end": "2025-12-31", "val": 4000000000000, "filed": "2026-02-15"}]),
+            }
+        }
+    }
+    net_rev = bank_net_revenue(bank_sum_facts, _CUTOFF)
+    assert net_rev is not None
+    assert net_rev.value == Decimal("150000000000")
+
+    bundle = build_bundle(bank_sum_facts, _CUTOFF, OperatingBranch.FINANCIAL)
+    assert bundle.bank_net_revenue == Decimal("150000000000")
+
+
+def test_gbp_price_against_usd_filing_marks_only_that_listing_currency_mismatch_in_live_tick() -> None:
+    """Step 4 (`#1519`): when one listing (`MSFT`) has a `GBP` price quote against a `USD` filing,
+    `run_topt_live_tick` marks only that listing's `market_price` unavailable with `currency_mismatch`,
+    its core result has `reason_codes == ['currency_mismatch']`, its strategy decision is excluded
+    (`missing_market_value_input`), and all other listings materialize and rank."""
+    import sys
+    from datetime import time
+    from pathlib import Path
+
+    import psycopg
+    import pytest
+    from data_engine.datahub.capture_core import composition
+    from data_engine.datahub.capture_core.market_price_adapter import (
+        MarketPriceAdapter,
+        MarketPriceQuote,
+        MarketPriceTarget,
+    )
+    from truealpha_runtime.testing import isolated_test_database
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
+    from capture_core.test_degraded_capture_forced import (  # noqa: E402
+        _arm,
+        _live_topt_tick,
+        _offline_routes,
+    )
+    from macro_seed import store_risk_free_series  # noqa: E402
+    from split_series_seed import store_topt_series  # noqa: E402
+
+    session = date(2026, 4, 8)
+    with isolated_test_database("currency_mismatch") as url, pytest.MonkeyPatch.context() as mp:
+        store_topt_series(url)
+        store_risk_free_series(url)
+        _arm(mp, price_cutoff=session)
+
+        def build(plan: Any, connection: Any = None) -> dict[str, Any]:
+            routes = _offline_routes(plan, connection, price_cutoff=session)
+            price_targets: dict[str, MarketPriceTarget] = {}
+            for work_item_id, binding in plan.bindings.items():
+                if binding.obligation.capture_requirement_id == "market-price:v1":
+                    issuer_id, instrument_id, listing_id, ticker = plan.coordinates[binding.obligation.subject.id]
+                    price_targets[work_item_id] = MarketPriceTarget(
+                        symbol=ticker,
+                        cutoff=session,
+                        issuer_id=issuer_id,
+                        instrument_id=instrument_id,
+                        listing_id=listing_id,
+                    )
+            price_port = MarketPriceAdapter(
+                price_targets,
+                lambda symbol, cutoff: MarketPriceQuote(
+                    raw_bytes=f"bar:{cutoff.isoformat()}:40:{symbol}".encode(),
+                    close=Decimal("40"),
+                    as_of=cutoff,
+                    knowable_at=datetime.combine(cutoff, datetime.min.time(), tzinfo=UTC),
+                    currency="GBP" if symbol == "MSFT" else "USD",
+                ),
+            )
+            routes.update(dict.fromkeys(price_targets, price_port))
+            return routes
+
+        mp.setattr(composition, "build_routes", build)
+        executed_at = datetime.combine(session, time(22, 15), tzinfo=UTC)
+        metadata = _live_topt_tick(url, mp, executed_at=executed_at, accept=True)
+        run_id = metadata["capture_run_id"]
+
+        with psycopg.connect(url) as reader:
+            listing_of = {
+                ticker: listing
+                for ticker, listing in reader.execute(
+                    """
+                    select p.normalized_payload->>'ticker', p.normalized_payload->>'listing_id'
+                    from raw.capture_obligations ob
+                    join staging.capture_observation_obligations oo on oo.capture_obligation_id = ob.obligation_id
+                    join staging.capture_observation_payloads p on p.observation_id = oo.observation_id
+                    where ob.run_id = %s and ob.capture_requirement_id = 'listing-identity:v1'
+                    """,
+                    (run_id,),
+                ).fetchall()
+            }
+            factor_inputs = dict(
+                reader.execute(
+                    """
+                    select m.issuer_id, m.factor_input
+                    from staging.core_snapshot_members m
+                    join staging.core_snapshots s on s.snapshot_id = m.snapshot_id
+                    where s.run_id = %s
+                    """,
+                    (run_id,),
+                ).fetchall()
+            )
+            core = {
+                row[0]: (row[1], row[2])
+                for row in reader.execute(
+                    "select issuer_id, availability, reason_codes from mart.topt_core_results where run_id = %s",
+                    (run_id,),
+                ).fetchall()
+            }
+            decisions = dict(
+                reader.execute(
+                    "select issuer_id, exclusion_reason from mart.strategy_decisions where strategy_run_id = %s",
+                    (metadata["strategy_run_id"],),
+                ).fetchall()
+            )
+
+        msft_listing = listing_of["MSFT"]
+        msft_issuer = next(
+            issuer_id
+            for issuer_id, payload in factor_inputs.items()
+            if any(comp["listing_id"] == msft_listing for comp in payload["market_value_components"])
+        )
+        (msft_comp,) = factor_inputs[msft_issuer]["market_value_components"]
+        assert msft_comp["market_price"]["availability"] == "unavailable"
+        assert msft_comp["market_price"]["value"] is None
+        assert msft_comp["market_price"]["unavailable_reason"] == "currency_mismatch"
+        assert msft_comp["shares_outstanding"]["availability"] == "available"
+        assert core[msft_issuer] == ("unavailable", ["currency_mismatch"])
+        assert decisions[msft_issuer] == "missing_market_value_input"
+
+        other_available = [
+            issuer_id
+            for issuer_id, (avail, _reasons) in core.items()
+            if issuer_id != msft_issuer and avail == "available"
+        ]
+        assert len(other_available) == 19
+        ranked = [issuer_id for issuer_id, reason in decisions.items() if reason is None]
+        assert len(ranked) == 19
+        assert msft_issuer not in ranked
+
+
+def test_live_tick_settled_accession_cutoff_keeps_same_day_filing_and_empty_bundle_within_bitemporal_bounds() -> None:
+    """At a 22:15Z live tick on day D, `last_settled_accession_date(cutoff)` is D-1, so:
+    1) an issuer filing on day D (`AMZN`/`ADP` on 2026-10-30) selects its prior settled filing (`<= D-1`),
+       and
+    2) a foreign/non-XBRL issuer with an empty bundle (`TRI`) stamps fallback
+       `knowable_instant(AsOfAxis.ACCESSION, D-1) == (D-1) 23:59:59.999999Z <= cutoff`,
+    satisfying `BitemporalStamp(transaction_time=result.transaction_time, recorded_at=cutoff)` (#1519)."""
+    from data_engine.contracts.evidence_graph import BitemporalStamp
+    from data_engine.datahub.capture_core.source_registrations import last_settled_accession_date
+
+    tick_cutoff = datetime(2026, 10, 30, 22, 15, tzinfo=UTC)
+    settled_cutoff_date = last_settled_accession_date(tick_cutoff)
+    assert settled_cutoff_date == date(2026, 10, 29)
+
+    same_day_facts = _facts()
+    same_day_facts["facts"]["us-gaap"]["GrossProfit"]["units"]["USD"].append(
+        _annual("2026-09-30", "2025-10-01", 777, "2026-10-30")
+    )
+    bundle_settled = build_bundle(same_day_facts, settled_cutoff_date, OperatingBranch.NON_FINANCIAL)
+    assert bundle_settled.gross_profit == Decimal("999")
+    assert bundle_settled.knowable_at == datetime(2026, 4, 20, 23, 59, 59, 999999, tzinfo=UTC)
+    assert bundle_settled.knowable_at <= tick_cutoff
+
+    tri_item = _work_item("f" * 64)
+    tri_target = SecTarget(
+        cik=1144354,
+        cutoff=settled_cutoff_date,
+        issuer_id="issuer:lei:549300561UZND4C7B569",
+        instrument_id="security:cusip:884903808",
+        listing_id="listing:xnas:tri",
+        operating_branch=OperatingBranch.NON_FINANCIAL,
+        ticker="TRI",
+    )
+    tri_adapter = SecFinancialFactAdapter(
+        {tri_item.work_item_id: tri_target},
+        lambda _cik, _cutoff, _branch: FinancialFactsBundle(
+            gross_profit=None,
+            total_assets=None,
+            shares_outstanding=None,
+            revenue=None,
+            pre_provision_profit=None,
+            raw_bytes=b"{}",
+            knowable_at=None,
+        ),
+    )
+    tri_outcome = tri_adapter.fetch(tri_item)
+    assert isinstance(tri_outcome, FetchSuccess)
+    assert tri_outcome.transaction_time == datetime(2026, 10, 29, 23, 59, 59, 999999, tzinfo=UTC)
+    assert tri_outcome.transaction_time <= tick_cutoff
+    stamp = BitemporalStamp(
+        valid_from=tri_outcome.valid_from,
+        transaction_time=tri_outcome.transaction_time,
+        recorded_at=tick_cutoff,
+    )
+    assert stamp.transaction_time <= stamp.recorded_at
+
+
+def test_adm_consolidated_revenues_beats_partial_customer_contract_revenue_in_same_10k() -> None:
+    """#1519 Cause 3: ADM reports consolidated total `Revenues` ($80,269M) and the ASC 606
+    subset `RevenueFromContractWithCustomerExcludingAssessedTax` ($24,956M) in its FY2025 10-K.
+    `DEFAULT_RULESET` prioritizes `Revenues` before the customer-contract subset so `build_bundle`
+    resolves consolidated revenue."""
+    adm_path = Path(__file__).resolve().parents[2] / "samples" / "sec" / "ADM_CIK0000007084.json"
+    facts = json.loads(adm_path.read_bytes())
+    bundle = build_bundle(facts, date(2026, 3, 31), OperatingBranch.NON_FINANCIAL)
+    assert bundle.revenue == Decimal("80269000000")
+    assert bundle.revenue_period_end == date(2025, 12, 31)
+    assert bundle.gross_profit == Decimal("5033000000")
+    assert bundle.operating_period_end == date(2025, 12, 31)

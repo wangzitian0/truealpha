@@ -10,7 +10,7 @@ from typing import Any
 import psycopg
 from truealpha_contracts.strategy import ExclusionReason, RiskFreeInstrument
 
-from data_engine.datahub.production_topt.source_registrations import macro_registration_for
+from data_engine.datahub.capture_core.source_registrations import macro_registration_for
 
 INSTRUMENT = RiskFreeInstrument.US_TREASURY_BILL_3_MONTH.value
 MAX_RATE_LAG_DAYS = 2 * macro_registration_for(INSTRUMENT).max_age_days

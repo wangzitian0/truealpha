@@ -160,7 +160,7 @@ def start_of(url: str, builds: list[tuple[str, int]], sha: str) -> tuple[datetim
         connection.execute("set local session_replication_role = replica")  # run plans need a run row and a validator
         for index, (build, offset) in enumerate(builds):
             connection.execute(
-                "insert into raw.production_topt_run_plans (run_id, release_manifest_id, content_sha256, payload, created_at) "
+                "insert into raw.capture_run_plans (run_id, release_manifest_id, content_sha256, payload, created_at) "
                 "values (%s, %s, %s, %s::jsonb, %s)",
                 (
                     f"capture-run:test{index}",

@@ -147,8 +147,8 @@ def test_the_origin_registry_covers_the_current_parser_version() -> None:
     two-origin cells and said so without raising — a green run reporting no reconciliation
     at all. Version bumps are routine; this asserts the coupling stays real.
     """
-    from data_engine.datahub.production_topt.parser_identity import PARSER_VERSION
-    from data_engine.datahub.production_topt.twelve_data_origin import PARSER_VERSION as SECOND_ORIGIN_VERSION
+    from data_engine.datahub.capture_core.parser_identity import PARSER_VERSION
+    from data_engine.datahub.capture_core.twelve_data_origin import PARSER_VERSION as SECOND_ORIGIN_VERSION
     from data_engine.datahub.quality_report import _SOURCE_BY_PARSER
 
     assert PARSER_VERSION in _SOURCE_BY_PARSER, "primary parser vintage is not mapped to an origin group"
@@ -170,7 +170,7 @@ def test_the_origin_registry_covers_every_parser_version_ever_shipped() -> None:
     Observations are append-only and never rewritten, so every vintage ever shipped stays
     readable forever and must stay mapped forever.
     """
-    from data_engine.datahub.production_topt.parser_identity import PARSER_VERSION, PARSER_VERSION_HISTORY
+    from data_engine.datahub.capture_core.parser_identity import PARSER_VERSION, PARSER_VERSION_HISTORY
     from data_engine.datahub.quality_report import _SOURCE_BY_PARSER
 
     missing = [vintage for vintage in PARSER_VERSION_HISTORY if vintage not in _SOURCE_BY_PARSER]

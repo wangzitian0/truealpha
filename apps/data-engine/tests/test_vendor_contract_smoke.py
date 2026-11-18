@@ -12,8 +12,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from data_engine.datahub.capture_core import moomoo_origin
 from data_engine.datahub.fetch_key import FetchKey
-from data_engine.datahub.production_topt import moomoo_origin
 
 TESTS_DIR = Path(__file__).resolve().parent
 SCRIPT = TESTS_DIR.parent / "scripts" / "vendor_contract_smoke.py"
@@ -26,14 +26,14 @@ class _StubOpenD:
 
     def history_kline(self, code: str, *, start: date, end: date, identity: FetchKey) -> list[dict[str, Any]]:
         self.keys.append(identity)
-        from production_topt.test_moomoo_origin import _bar
+        from capture_core.test_moomoo_origin import _bar
 
         days = [start + timedelta(days=offset) for offset in range((end - start).days + 1)]
         return [_bar(day.isoformat(), 334.55 + offset) for offset, day in enumerate(days)]
 
     def financial_statements(self, code: str, *, statement_type: int, identity: FetchKey) -> dict[str, Any]:
         self.keys.append(identity)
-        from production_topt.test_moomoo_origin import _statements
+        from capture_core.test_moomoo_origin import _statements
 
         income, balance = _statements("DDOG")
         return {moomoo_origin.INCOME_STATEMENT: income, moomoo_origin.BALANCE_SHEET: balance}[statement_type]

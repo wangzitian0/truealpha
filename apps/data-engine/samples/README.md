@@ -134,7 +134,7 @@ Verified working end-to-end for all 4 tickers.
   assets — byte-equal for DDOG, DUOL, NICE and SHOP across FY2023–FY2025 except the
   net-income definition gap. `date_time` is midnight Asia/Shanghai on the period-end date,
   so `date_time_str` (its UTC rendering) is the day BEFORE the SEC `period_end`. Both facts
-  are standing checks in `tests/production_topt/test_moomoo_origin.py`, which byte-pins
+  are standing checks in `tests/capture_core/test_moomoo_origin.py`, which byte-pins
   these sample files, and they drive the `moomoo-financials:v1` origin.
 - **Morningstar coverage exists for all 4 tickers** (star ratings 2–5), but
   `economic_moat_label` came back empty for all 4 despite the star rating being

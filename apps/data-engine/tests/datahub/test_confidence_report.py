@@ -27,6 +27,7 @@ import psycopg
 import pytest
 from data_engine.config import settings
 from data_engine.datahub import confidence_report as cr
+from data_engine.datahub.capture_core import source_registrations as registry
 from data_engine.datahub.confidence_report import (
     CLOSE_FAMILY,
     FAMILIES,
@@ -38,7 +39,6 @@ from data_engine.datahub.confidence_report import (
     family_policy,
     persist,
 )
-from data_engine.datahub.production_topt import source_registrations as registry
 from data_engine.datahub.quality_report import (
     FIELD_UNITS,
     FINANCIAL_FACT_FUSION_FIELDS,

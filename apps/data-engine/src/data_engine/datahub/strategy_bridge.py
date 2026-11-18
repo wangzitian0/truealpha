@@ -21,11 +21,11 @@ from truealpha_runtime.storage import StorageError
 from data_engine import raw_store
 from data_engine.core_strategy_replay import _to_decision
 from data_engine.datahub._helpers import CAPTURE_OBSERVATION_JOIN, execute_many, require_registered_input_key
+from data_engine.datahub.capture_core.concept_mapping import resolve_ruleset
+from data_engine.datahub.capture_core.executor import SERVED_BY_FAILOVER
+from data_engine.datahub.capture_core.parser_identity import PARSER_VERSION as PRIMARY_PARSER_VERSION
 from data_engine.datahub.input_cells import InputCell, financial_input_rows, last_close_cell, live_knowable_at
 from data_engine.datahub.primary_listing import choose_primary_listings
-from data_engine.datahub.production_topt.concept_mapping import resolve_ruleset
-from data_engine.datahub.production_topt.executor import SERVED_BY_FAILOVER
-from data_engine.datahub.production_topt.parser_identity import PARSER_VERSION as PRIMARY_PARSER_VERSION
 from data_engine.datahub.risk_free import RiskFreeRate
 from data_engine.datahub.share_basis import (
     SHARES_KEY,

@@ -44,7 +44,7 @@ def _jobs_of_the_readers() -> dict[str, set[str]]:
     backtest lane. The modules that define the two functions call `risk_free_rate_at` or each other."""
     ticks = {tick.job_name for tick in capture.TICKS}
     return {
-        "apps/data-engine/src/data_engine/datahub/production_topt/composition.py": ticks,
+        "apps/data-engine/src/data_engine/datahub/capture_core/composition.py": ticks,
         "apps/data-engine/src/data_engine/lanes/capture.py": ticks,
         "apps/data-engine/src/data_engine/datahub/backtest.py": {backtest.BACKTEST_JOB_NAME},
         "apps/data-engine/src/data_engine/lanes/backtest.py": {backtest.BACKTEST_JOB_NAME},

@@ -23,8 +23,8 @@ from data_engine.contracts.datahub import (
     SourceVintage,
 )
 from data_engine.datahub import PostgresCaptureControlRepository, expand_obligations
+from data_engine.datahub.capture_core.universe_corpus import frozen_topt_list_version
 from data_engine.datahub.control_plane import AttemptLedger, frozen_topt_universe, replay_retry_policy
-from data_engine.datahub.production_topt.universe_corpus import frozen_topt_list_version
 from truealpha_contracts.common import CaptureEnvironment, canonical_sha256
 from truealpha_contracts.universe import SubjectRef
 

@@ -395,18 +395,18 @@ create table if not exists raw.capture_obligations (
  constraint capture_obligations_run_id_campaign_id_fkey FOREIGN KEY (run_id, campaign_id) REFERENCES raw.capture_runs(run_id, campaign_id)
 );
 
-create table if not exists raw.production_topt_run_plans (
+create table if not exists raw.capture_run_plans (
  run_id text not null,
  release_manifest_id text not null,
  content_sha256 text not null,
  payload jsonb not null,
  created_at timestamp with time zone default clock_timestamp() not null,
- constraint production_topt_run_plans_pkey PRIMARY KEY (run_id),
- constraint production_topt_run_plans_content_sha256_key UNIQUE (content_sha256),
- constraint production_topt_run_plans_content_sha256_check CHECK ((content_sha256 ~ '^[0-9a-f]{64}$'::text)),
- constraint production_topt_run_plans_payload_check CHECK ((jsonb_typeof(payload) = 'object'::text)),
- constraint production_topt_run_plans_release_manifest_id_check CHECK ((release_manifest_id ~ '^release-manifest:[0-9a-f]{64}$'::text)),
- constraint production_topt_run_plans_run_id_fkey FOREIGN KEY (run_id) REFERENCES raw.capture_runs(run_id)
+ constraint capture_run_plans_pkey PRIMARY KEY (run_id),
+ constraint capture_run_plans_content_sha256_key UNIQUE (content_sha256),
+ constraint capture_run_plans_content_sha256_check CHECK ((content_sha256 ~ '^[0-9a-f]{64}$'::text)),
+ constraint capture_run_plans_payload_check CHECK ((jsonb_typeof(payload) = 'object'::text)),
+ constraint capture_run_plans_release_manifest_id_check CHECK ((release_manifest_id ~ '^release-manifest:[0-9a-f]{64}$'::text)),
+ constraint capture_run_plans_run_id_fkey FOREIGN KEY (run_id) REFERENCES raw.capture_runs(run_id)
 );
 
 create table if not exists raw.capture_attempts (
@@ -974,7 +974,7 @@ begin
     return new;
 end;
 $function$;
-CREATE OR REPLACE FUNCTION raw.validate_production_topt_run_plan()
+CREATE OR REPLACE FUNCTION raw.validate_capture_run_plan()
  RETURNS trigger
  LANGUAGE plpgsql
 AS $function$
@@ -1018,8 +1018,8 @@ do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'raw.capture
 do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'raw.capture_work_items'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = 'e29b9cb1a5a2ae8b6bcb6550b00d83e4') then drop trigger if exists reject_mutation on raw.capture_work_items; CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON raw.capture_work_items FOR EACH ROW EXECUTE FUNCTION raw.reject_capture_control_mutation(); end if; end $$;
 do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'raw.capture_work_items'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = '9956aadc7a99a9c11ed5bf7d19a4db0d') then drop trigger if exists zz_validate_work_item_address on raw.capture_work_items; CREATE TRIGGER zz_validate_work_item_address BEFORE INSERT ON raw.capture_work_items FOR EACH ROW EXECUTE FUNCTION raw.validate_capture_work_item_address(); end if; end $$;
 do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'raw.fetches'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = '9db88add0a4ca8a34326b0e284fd5836') then drop trigger if exists trg_raw_fetches_append_only on raw.fetches; CREATE TRIGGER trg_raw_fetches_append_only BEFORE DELETE OR UPDATE ON raw.fetches FOR EACH ROW EXECUTE FUNCTION raw.reject_mutation(); end if; end $$;
-do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'raw.production_topt_run_plans'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = '001c48a41211fc06cd317680c42a3ed7') then drop trigger if exists reject_mutation on raw.production_topt_run_plans; CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON raw.production_topt_run_plans FOR EACH ROW EXECUTE FUNCTION raw.reject_capture_control_mutation(); end if; end $$;
-do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'raw.production_topt_run_plans'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = 'f79749597d53af78c943d375ad271baf') then drop trigger if exists validate_plan on raw.production_topt_run_plans; CREATE TRIGGER validate_plan BEFORE INSERT ON raw.production_topt_run_plans FOR EACH ROW EXECUTE FUNCTION raw.validate_production_topt_run_plan(); end if; end $$;
+do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'raw.capture_run_plans'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = '7b22901aabf63485b8068ef4a732f9b5') then drop trigger if exists reject_mutation on raw.capture_run_plans; CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON raw.capture_run_plans FOR EACH ROW EXECUTE FUNCTION raw.reject_capture_control_mutation(); end if; end $$;
+do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'raw.capture_run_plans'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = 'c17b007de6210e8b5f4e208eb13f2428') then drop trigger if exists validate_plan on raw.capture_run_plans; CREATE TRIGGER validate_plan BEFORE INSERT ON raw.capture_run_plans FOR EACH ROW EXECUTE FUNCTION raw.validate_capture_run_plan(); end if; end $$;
 
 do $$ begin if to_regclass('raw.idx_raw_fetches_source_time') is null then CREATE INDEX idx_raw_fetches_source_time ON raw.fetches USING btree (source, source_record_id, fetched_at DESC); end if; end $$;
 do $$ begin if to_regclass('raw.ix_raw_fetches_payload_sha256') is null then CREATE INDEX ix_raw_fetches_payload_sha256 ON raw.fetches USING btree (payload_sha256); end if; end $$;

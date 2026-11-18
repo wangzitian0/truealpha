@@ -162,7 +162,7 @@ def _seed_trace_lineage(
     for entity_id, _legacy_id, _mic, ticker, _name in PREVIEW_ISSUERS.values():
         sym = ticker.lower()
         conn.execute(
-            "insert into staging.topt_core_snapshot_members (snapshot_id, instrument_id, issuer_id, listing_id, observation_ids, member_sha256, factor_input) "
+            "insert into staging.core_snapshot_members (snapshot_id, instrument_id, issuer_id, listing_id, observation_ids, member_sha256, factor_input) "
             "values (%s, %s, %s, %s, %s, %s, '{}'::jsonb) on conflict (snapshot_id, issuer_id) do nothing",
             (
                 snapshot_id,

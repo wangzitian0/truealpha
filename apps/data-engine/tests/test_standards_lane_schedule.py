@@ -165,7 +165,7 @@ def test_theme_purity_finds_the_head_the_capture_tick_registers_in_every_deploym
 
     import psycopg
     from data_engine.config import settings
-    from data_engine.datahub.production_topt import theme_purity
+    from data_engine.datahub.capture_core import theme_purity
     from data_engine.lanes.standards import StandardBackfillConfig, run_theme_purity
     from truealpha_contracts.common import CaptureEnvironment
 
@@ -431,7 +431,7 @@ def _run_fallback(monkeypatch, *, stored: str | None) -> tuple[list, list, list,
     """Execute the fallback schedule's request for TOPT through the deployed job, with the head
     on TOPT_NEW and the newest stored report naming `stored`."""
     from data_engine.datahub import analyst_ratings, question_coverage
-    from data_engine.datahub.production_topt import theme_purity
+    from data_engine.datahub.capture_core import theme_purity
     from data_engine.datahub.standards import planner, supply_chain_extraction
     from data_engine.lanes import standards
     from data_engine.quality import nightly_verdicts

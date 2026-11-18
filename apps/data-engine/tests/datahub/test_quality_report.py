@@ -1,7 +1,7 @@
 """Coverage for `quality_report` (truealpha#462 AC4, #537).
 
 Two layers. The falsifiability harness for `availability` and `lineage_completeness`
-lives in `tests/production_topt/test_persistence.py`, because falsifying them needs a
+lives in `tests/capture_core/test_persistence.py`, because falsifying them needs a
 real 84-cell capture run with one deliberately broken cell. What is here is the
 Postgres-free half: the two predicates those metrics are built on, pinned directly, so
 "usable value" and "the pointer dereferences" cannot quietly widen back into
@@ -10,7 +10,7 @@ Postgres-free half: the two predicates those metrics are built on, pinned direct
 `persist` is the one function in this module genuinely testable standalone: it
 inserts a caller-supplied report dict straight into `mart.datahub_quality_report`,
 an append-only table with no foreign-key dependency on the capture-control tables.
-`build_report`/`_reconcile_market_price_cells` read from `mart.topt_capture_status`, a view over the full capture-control pipeline (campaigns,
+`build_report`/`_reconcile_market_price_cells` read from `mart.capture_status`, a view over the full capture-control pipeline (campaigns,
 obligations, attempts) -- exercising those against a real Postgres needs that whole
 chain seeded first, which is out of scope here; this file closes the narrower,
 achievable slice of the coverage gap #462 found (this module had zero tests
@@ -27,7 +27,7 @@ from decimal import Decimal
 import psycopg
 import pytest
 from data_engine.config import settings
-from data_engine.datahub.production_topt.materialization import FinancialFactPayload
+from data_engine.datahub.capture_core.materialization import FinancialFactPayload
 from data_engine.datahub.quality_report import (
     _FINANCIAL_FACT_OPERATING_NUMERATOR,
     _has_usable_value,
@@ -251,7 +251,7 @@ def test_financial_fact_usability_matches_topt_core_availability_across_branches
     from datetime import UTC, datetime
     from decimal import Decimal
 
-    from data_engine.datahub.production_topt.materialization import (
+    from data_engine.datahub.capture_core.materialization import (
         PostgresToptCoreRepository,
         ToptCoreSnapshot,
         _ObservationRow,
@@ -403,7 +403,7 @@ def test_financial_fact_usability_matches_topt_core_availability_across_branches
 
 
 def _fact(**overrides):
-    from data_engine.datahub.production_topt.materialization import FinancialFactPayload
+    from data_engine.datahub.capture_core.materialization import FinancialFactPayload
 
     base = {
         "issuer_id": "issuer:lei:TEST00000000000000000",
@@ -989,7 +989,7 @@ def test_the_volume_tolerance_absorbs_late_prints_and_still_catches_a_different_
 def _financial_entry(source: str, payload: dict, *, knowable: str = "2026-02-18"):
     from datetime import UTC, datetime
 
-    from data_engine.datahub.production_topt.parser_identity import PARSER_VERSION
+    from data_engine.datahub.capture_core.parser_identity import PARSER_VERSION
     from data_engine.datahub.quality_report import classify_financial_fact_entry
 
     parser = PARSER_VERSION if source == "sec" else "moomoo-financials-parser:v1"

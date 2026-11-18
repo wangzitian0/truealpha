@@ -29,8 +29,8 @@ log = logging.getLogger(__name__)
 
 def stored_symbols(connection: psycopg.Connection, *, known_at: datetime) -> tuple[str, ...]:
     """Primary listing symbols for scheduled frozen-corpus universes (#1522)."""
+    from data_engine.datahub.capture_core import universe_corpus
     from data_engine.datahub.primary_listing import primary_symbols
-    from data_engine.datahub.production_topt import universe_corpus
     from data_engine.environment_universes import rule_environment
 
     contract, environment = load_environment_contract(), rule_environment()

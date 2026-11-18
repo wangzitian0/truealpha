@@ -15,21 +15,21 @@ from truealpha_contracts.universes import job_name, keys, lane_name, op_name, re
 
 from data_engine.config import settings
 from data_engine.datahub.a1_evidence import ACCEPTED_SERVICE_OBJECTIVES, ServiceObjectives, register_run_evidence
-from data_engine.datahub.oracle_outcomes import record_oracle_outcomes_safely
-from data_engine.datahub.production_topt.composition import (
+from data_engine.datahub.capture_core.composition import (
     ensure_served_head_artifacts,
     live_version_for,
     run_topt_pipeline,
 )
-from data_engine.datahub.production_topt.corroboration_audit import CorroborationTally, corroboration_tally
-from data_engine.datahub.production_topt.fund_consolidation import (
+from data_engine.datahub.capture_core.corroboration_audit import CorroborationTally, corroboration_tally
+from data_engine.datahub.capture_core.fund_consolidation import (
     materialize_fund_consolidation,
 )
-from data_engine.datahub.production_topt.fund_consolidation import (
+from data_engine.datahub.capture_core.fund_consolidation import (
     summary_line as fund_consolidation_summary,
 )
-from data_engine.datahub.production_topt.issuer_registry import registry_unavailable_issuers
-from data_engine.datahub.production_topt.plausibility_gate import judge_issuers, judge_strategy
+from data_engine.datahub.capture_core.issuer_registry import registry_unavailable_issuers
+from data_engine.datahub.capture_core.plausibility_gate import judge_issuers, judge_strategy
+from data_engine.datahub.oracle_outcomes import record_oracle_outcomes_safely
 from data_engine.datahub.strategy_bridge import (
     persist_strategy_input_coverage,
     run_strategy_replay_for_cutoff,

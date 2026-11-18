@@ -14,6 +14,8 @@ from truealpha_contracts.environment_contract import UTILIZATION_CEILING
 from truealpha_contracts.universes import lane_name
 
 from data_engine.config import settings
+from data_engine.datahub.capture_core.source_registrations import origin_per_key_cost
+from data_engine.datahub.capture_core.universe_plane import resolve_universe_corpus
 from data_engine.datahub.market_prices import (
     MAX_BAR_LAG_SESSIONS,
     TWELVE_DATA_SEAT,
@@ -24,8 +26,6 @@ from data_engine.datahub.market_prices import (
     stored_symbols,
 )
 from data_engine.datahub.primary_listing import primary_symbols
-from data_engine.datahub.production_topt.source_registrations import origin_per_key_cost
-from data_engine.datahub.production_topt.universe_plane import resolve_universe_corpus
 from data_engine.datahub.share_basis import SplitHistory, load_split_histories
 from data_engine.external_op import external_op
 from data_engine.lanes.capture import is_universe_scheduled

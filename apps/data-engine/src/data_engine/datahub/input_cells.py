@@ -11,7 +11,7 @@ from truealpha_contracts.fiscal_period import encode_annual
 from truealpha_contracts.metrics import INPUT_KEY_ALIASES, METRICS, UnitFamily, input_key_for_metric
 
 from data_engine.datahub._helpers import single_origin_confidence
-from data_engine.datahub.production_topt.source_registrations import AsOfAxis, knowable_instant
+from data_engine.datahub.capture_core.source_registrations import AsOfAxis, knowable_instant
 
 LAST_CLOSE_KEY = "last_close"
 _STRATEGY_FINANCIAL_KEYS = tuple(sorted(input_key_for_metric(name) for name in METRICS if name != "price"))

@@ -471,7 +471,7 @@ POINTER_HEAD_SQL = """
 
 ACCEPTANCE_FALLBACK_HEAD_SQL = """
   select s.run_id
-  from mart.topt_capture_status s
+  from mart.capture_status s
   join mart.datahub_quality_report q on q.run_id = s.run_id
   where s.environment = (select environment from mart.environment_identity)
     and coalesce((q.payload->>'complete')::boolean, false)

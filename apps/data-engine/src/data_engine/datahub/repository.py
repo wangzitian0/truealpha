@@ -407,7 +407,7 @@ class PostgresCaptureControlRepository:
         row = self._connection.execute(
             "select run_id, campaign_id, environment, cutoff, universe_id, universe_version, universe_sha256, "
             "obligation_count, terminal_count, success_count, unchanged_count, unavailable_count, skipped_count, "
-            "failed_count, complete from mart.topt_capture_status where run_id = %s",
+            "failed_count, complete from mart.capture_status where run_id = %s",
             (run_id,),
         ).fetchone()
         if row is None:
@@ -422,7 +422,7 @@ class PostgresCaptureControlRepository:
             "partition_key, work_item_id, source_request_id, source_registry_entry_id, source_policy_id, "
             "request_fingerprint_version, terminal_state, reason_codes, completed_at, attempt_count, final_status_code, "
             "observation_id, semantic_version, parser_version, mapping_version, confidence, freshness_state, "
-            "knowable_at, recorded_at from mart.topt_capture_meta_info where run_id = %s order by obligation_id limit %s offset %s",
+            "knowable_at, recorded_at from mart.capture_meta_info where run_id = %s order by obligation_id limit %s offset %s",
             (run_id, limit, offset),
         ).fetchall()
         return tuple(

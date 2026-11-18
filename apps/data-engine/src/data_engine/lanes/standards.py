@@ -328,7 +328,7 @@ def _downstream_canonical_op(
 
 @external_op
 def run_theme_purity(context: dg.OpExecutionContext, config: StandardBackfillConfig, backfill_summary: str) -> str:
-    from data_engine.datahub.production_topt.theme_purity import materialize_theme_purity, summary_line
+    from data_engine.datahub.capture_core.theme_purity import materialize_theme_purity, summary_line
     from data_engine.datahub.question_coverage import NoHead, governed_head_of
 
     if (

@@ -24,6 +24,7 @@ from data_engine.config import settings
 from data_engine.contracts.oracle_policy import load_oracle_policy
 from data_engine.contracts.sentinel_known_answers import SentinelKnownAnswer
 from data_engine.datahub import confidence_report, oracle_outcomes
+from data_engine.datahub.capture_core import PostgresToptCoreRepository
 from data_engine.datahub.oracle_outcomes import (
     AGREE,
     DISAGREE,
@@ -43,7 +44,6 @@ from data_engine.datahub.oracle_outcomes import (
     compare_listed_units,
     served_listed_units,
 )
-from data_engine.datahub.production_topt import PostgresToptCoreRepository
 from data_engine.lanes import quality
 from data_engine.quality import nightly_verdicts, vendor_oracle
 from data_engine.sources import gateway
@@ -61,7 +61,7 @@ from truealpha_runtime.testing import InMemoryRawObjectStore
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
-from production_topt.test_materialization import _seed_complete_production_run  # noqa: E402
+from capture_core.test_materialization import _seed_complete_production_run  # noqa: E402
 from split_series_seed import share_count_vintage, store_flat_topt_series  # noqa: E402
 
 
@@ -594,8 +594,8 @@ def _frozen(connection) -> tuple[Any, dict[str, Decimal]]:
     PostgresToptCoreRepository(connection).freeze_snapshot(run_id=run.run_id, release_manifest_id=release_manifest_id)
     rows = connection.execute(
         """
-        select member.factor_input from staging.topt_core_snapshots snapshot
-        join staging.topt_core_snapshot_members member on member.snapshot_id = snapshot.snapshot_id
+        select member.factor_input from staging.core_snapshots snapshot
+        join staging.core_snapshot_members member on member.snapshot_id = snapshot.snapshot_id
         where snapshot.run_id = %s
         """,
         (run.run_id,),
@@ -609,7 +609,7 @@ def _frozen(connection) -> tuple[Any, dict[str, Decimal]]:
 
 
 def _cutoff(connection, run_id: str) -> datetime:
-    return connection.execute("select cutoff from mart.topt_capture_status where run_id = %s", (run_id,)).fetchone()[0]
+    return connection.execute("select cutoff from mart.capture_status where run_id = %s", (run_id,)).fetchone()[0]
 
 
 def _operator_list(connection, figures: dict[str, tuple[str | None, str | None]], *, knowable_at: datetime) -> None:
@@ -734,8 +734,8 @@ def test_every_issuer_gets_one_row_with_its_result_and_a_replay_writes_nothing(c
 def _issuer_of(connection, run_id: str, listing_id: str) -> str:
     return connection.execute(
         """
-        select member.factor_input ->> 'issuer_id' from staging.topt_core_snapshots snapshot
-        join staging.topt_core_snapshot_members member on member.snapshot_id = snapshot.snapshot_id
+        select member.factor_input ->> 'issuer_id' from staging.core_snapshots snapshot
+        join staging.core_snapshot_members member on member.snapshot_id = snapshot.snapshot_id
         where snapshot.run_id = %s and member.factor_input ->> 'listing_id' = %s
         """,
         (run_id, listing_id),

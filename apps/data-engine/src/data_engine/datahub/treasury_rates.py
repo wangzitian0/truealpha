@@ -17,14 +17,14 @@ from truealpha_contracts.models import DataSource
 from truealpha_contracts.ports import RawObjectStore
 
 from data_engine import raw_store
-from data_engine.datahub.fetch_key import FetchKey
-from data_engine.datahub.production_topt.source_registrations import (
+from data_engine.datahub.capture_core.source_registrations import (
     MACRO_REGISTRATIONS,
     AsOfAxis,
     MacroSeries,
     MacroSourceRegistration,
     knowable_instant,
 )
+from data_engine.datahub.fetch_key import FetchKey
 from data_engine.sources import gateway
 
 log = logging.getLogger(__name__)

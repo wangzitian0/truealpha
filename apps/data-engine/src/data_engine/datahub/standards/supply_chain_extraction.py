@@ -311,7 +311,7 @@ def _build_issuer_lookup(
         if run_id:
 
             def _load_governed() -> None:
-                from data_engine.datahub.production_topt.theme_purity import governed_members
+                from data_engine.datahub.capture_core.theme_purity import governed_members
 
                 for cik_int, member_id in governed_members(connection, run_id=run_id).items():
                     if (matched := by_issuer_id.get(member_id) or uuid_to_issuer.get(member_id.lower())) is not None:
