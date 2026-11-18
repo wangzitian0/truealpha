@@ -348,7 +348,7 @@ def test_snapshot_invariants_are_self_consistent_not_universe_literals() -> None
 
     import pytest as _pytest
     from data_engine.datahub.capture_core.materialization import SnapshotMember, ToptCoreSnapshot
-    from factors.production_topt import (
+    from factors.snapshot_inputs import (
         MetricAvailability,
         MetricFreshness,
         OperatingBranch,

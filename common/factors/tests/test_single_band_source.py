@@ -1,8 +1,8 @@
 """#1235: one band set. The tier bands exist only in the packaged definition files.
 
 Two engines used to tier the same issuers on one tick with different bands: the strategy
-read its definition file, and the TOPT core engine carried its own literals in
-``factors.production_topt.core``. Both now read ``load_live_strategy_definition()``. This
+read its definition file, and the retired core engine carried its own literals.
+Both now read ``load_live_strategy_definition()`` through the shared snapshot input contracts. This
 guard fails when a band value is written anywhere else in a source tree.
 
 Scope: every tree that can hold executable code or schema.

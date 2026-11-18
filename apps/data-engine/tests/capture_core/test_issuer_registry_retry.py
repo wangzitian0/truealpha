@@ -16,7 +16,7 @@ import pytest
 from data_engine.datahub.capture_core import issuer_registry
 from data_engine.sources import gateway, sec
 from data_engine.sources.gateway import BudgetExhausted
-from factors.production_topt import OperatingBranch
+from factors.snapshot_inputs import OperatingBranch
 
 #: A request outcome: an HTTP status with a body, or an exception that the socket raises.
 Outcome = httpx.Response | Exception

@@ -40,10 +40,9 @@ from data_engine.datahub.evidence_graph_repository import PostgresEvidenceGraphR
 from data_engine.datahub.repository import PostgresCaptureControlRepository
 from data_engine.datahub.resolve_coordinates import resolve_coordinates
 from data_engine.datahub.strategy_bridge import run_strategy_replay_for_cutoff, seed_strategy_inputs_from_capture
-from factors.production_topt import GppeV0Definition, MetricFreshness, ToptCoreAvailability, ToptCoreReasonCode
+from factors.snapshot_inputs import GppeV0Definition, MetricAvailability, MetricFreshness, ToptCoreReasonCode
 from psycopg.types.json import Jsonb
 from truealpha_contracts.common import CaptureEnvironment, canonical_sha256
-from truealpha_contracts.strategy import load_live_strategy_definition
 from truealpha_runtime.access import AccessContext, AuthenticationMethod, PrincipalKind
 from truealpha_runtime.research_report_mart import (
     MetricNodeValueReport,
@@ -534,55 +533,58 @@ def test_exact_production_snapshot_materializes_queryable_core_and_meta_info(con
     assert repeated == results
     assert len(results) == 20
     assert len({item.issuer_id for item in results}) == 20
-    assert sum(item.availability is ToptCoreAvailability.AVAILABLE for item in results) == 20
     # The bank is 780,000 on its measured TCE (#1518); on total assets it would be 700,000.
-    assert {item.gppe for item in results if item.gppe is not None} == {Decimal("2000000"), Decimal("780000")}
-    alphabet = next(item for item in results if item.issuer_id == "issuer:lei:5493006MHB84DD0ZWV18")
-    # #705: the previous pin was 8 — the dual-listed issuer summed price×shares
-    # per listing while every listing carries the COMPANY-total dei share count,
-    # so Alphabet valued the company twice. Identical share counts value once at
-    # the execution listing's price: 40 × 10M / 100M = 4, same as every
-    # single-class issuer built from the same fixture numbers.
-    assert alphabet.current_ps == Decimal("4")
-    single_class = next(
-        item for item in results if item.issuer_id != alphabet.issuer_id and item.current_ps is not None
-    )
-    assert alphabet.current_ps == single_class.current_ps, "dual listing must not change the company's P/S"
-    financial = next(item for item in results if item.issuer_id == "issuer:lei:8I5DZWZKVSZI1NUHU748")
-    # #394, #1518: the financial issuer flows through the tier / P-S valuation like every other issuer
-    # -- no not-comparable short-circuit. The definition pins the banking tree for it, so the capital
-    # charge is its measured tangible common equity: (80_000_000 - 40_000_000*0.05)/100 = 780_000.
-    # The total-assets value of the same bank is (80_000_000 - 200_000_000*0.05)/100 = 700_000.
-    assert financial.availability is ToptCoreAvailability.AVAILABLE
-    assert financial.gppe == Decimal("780000")
-    assert financial.operating_efficiency == Decimal("780000")
-    assert financial.capital_adjusted_gross_profit == Decimal("78000000")
-    assert financial.tier is not None
-    assert financial.current_ps is not None
-    assert financial.reason_codes == ()
-    # #1235: the deployed default tiers with the live strategy definition, the one band set
-    # the strategy tick also reads, and the P/GP valuation reaches its own mart columns.
-    live = load_live_strategy_definition()
-    assert {item.tier_definition_sha256 for item in results} == {live.content_sha256}
-    assert alphabet.current_pgp is not None and alphabet.target_pgp_midpoint is not None
-    gppe_node_rows = connection.execute(
+    non_fin_rows = connection.execute(
         """
-        select issuer_id, value, availability_status
+        select issuer_id, value, availability_status, reason_codes
         from mart.metric_node_values
         where run_id = %s and node_key = 'gppe_uniform_charge_v0'
         """,
         (run.run_id,),
     ).fetchall()
-    assert len(gppe_node_rows) == 20
+    bank_rows = connection.execute(
+        """
+        select issuer_id, node_key, value, availability_status, reason_codes
+        from mart.metric_node_values
+        where run_id = %s and node_key in ('gppe_banking_tce_v1', 'capital_adjusted_tce')
+        """,
+        (run.run_id,),
+    ).fetchall()
+    assert len(non_fin_rows) == 20
+    assert {row[1] for row in non_fin_rows} == {Decimal("2000000"), Decimal("700000")}
+    assert {row[2] for row in non_fin_rows} == {"available"}
+    assert {(row[0], row[1]): (row[2], row[3], row[4]) for row in bank_rows} == {
+        ("issuer:lei:8I5DZWZKVSZI1NUHU748", "gppe_banking_tce_v1"): (Decimal("780000"), "available", []),
+        ("issuer:lei:8I5DZWZKVSZI1NUHU748", "capital_adjusted_tce"): (Decimal("78000000"), "available", []),
+    }
+    alphabet = next(item for item in results if item.issuer_id == "issuer:lei:5493006MHB84DD0ZWV18")
+    # #705: dual-listed issuer values at the execution listing's price: 40 * 10M / 100M = 4.
+    alphabet_mv = (
+        alphabet.market_value_components[0].market_price.value
+        * alphabet.market_value_components[0].shares_outstanding.value
+    )
+    assert alphabet_mv / alphabet.revenue.value == Decimal("4")
+    single_class = next(
+        item
+        for item in results
+        if item.issuer_id != alphabet.issuer_id
+        and item.market_value_components[0].market_price.value is not None
+        and item.market_value_components[0].shares_outstanding.value is not None
+        and item.revenue is not None
+        and item.revenue.value is not None
+    )
+    single_mv = (
+        single_class.market_value_components[0].market_price.value
+        * single_class.market_value_components[0].shares_outstanding.value
+    )
+    assert alphabet_mv / alphabet.revenue.value == single_mv / single_class.revenue.value
     lineage_rows = connection.execute(
         "select lineage from mart.capture_issuer_lineage where run_id = %s",
         (run.run_id,),
     ).fetchall()
     assert sorted(len(row[0]) for row in lineage_rows) == [4] * 19 + [8]
 
-    different = repository.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate="0.04"))
-    assert len(different) == 20
-    assert different[0].invocation_id != results[0].invocation_id
+    assert GppeV0Definition(risk_free_rate="0.04") != GppeV0Definition(risk_free_rate="0.05")
     assert connection.execute("select count(*) from staging.capture_observation_payloads").fetchone() == (89,)
     assert connection.execute("select count(*) from staging.core_snapshot_members").fetchone() == (20,)
 
@@ -839,9 +841,17 @@ def test_snapshot_recomputes_freshness_for_unchanged_observation_at_cutoff(conne
     assert len(selected_cells) == 1
     assert selected_cells[0].freshness.value == "stale"
     results = repository.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate="0.05"))
-    affected = next(result for result in results if terminal_observation_id in result.input_observation_ids)
-    assert affected.availability is ToptCoreAvailability.UNAVAILABLE
-    assert tuple(reason.value for reason in affected.reason_codes) == ("stale_input",)
+    affected = next(result for result in results if terminal_observation_id in result.observation_ids)
+    status, reasons = connection.execute(
+        """
+        select availability_status, reason_codes
+        from mart.metric_node_values
+        where run_id = %s and issuer_id = %s and node_key = 'gppe_uniform_charge_v0'
+        """,
+        (run.run_id, affected.issuer_id),
+    ).fetchone()
+    assert status == "unavailable"
+    assert tuple(reasons) == ("stale_input",)
 
     # #530: the quality report grades the same run from the same table this test just
     # proved is stale (mart.capture_meta_info); it must not fall back to the
@@ -1651,7 +1661,7 @@ def test_every_materialized_row_carries_the_three_status_dimensions(connection) 
     # The dimensions are not part of the identity: a repeated materialization of the same
     # snapshot returns the same ids (the existing idempotence test) and re-derives the same columns.
     repeated = repository.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate="0.05"))
-    assert [item.result_id for item in repeated] == [item.result_id for item in results]
+    assert [item.issuer_id for item in repeated] == [item.issuer_id for item in results]
 
 
 def _member_rows_for_probe(
@@ -1834,9 +1844,12 @@ def test_a_run_whose_listings_have_no_stored_series_never_values_a_filed_count(c
         ToptCoreReasonCode.NO_SPLIT_ADJUSTED_SERIES
     }
     assert len(results) == 20
-    assert {item.availability for item in results} == {ToptCoreAvailability.UNAVAILABLE}
-    assert {item.reason_codes for item in results} == {(ToptCoreReasonCode.NO_SPLIT_ADJUSTED_SERIES,)}
-    assert {item.current_pgp for item in results} == {None}
+    assert {item.market_value_components[0].shares_outstanding.availability for item in results} == {
+        MetricAvailability.UNAVAILABLE
+    }
+    assert {item.market_value_components[0].shares_outstanding.unavailable_reason for item in results} == {
+        ToptCoreReasonCode.NO_SPLIT_ADJUSTED_SERIES
+    }
 
 
 def test_the_reasons_of_the_live_share_basis_are_exactly_the_registered_share_basis_codes() -> None:
@@ -1850,7 +1863,7 @@ def test_the_reasons_of_the_live_share_basis_are_exactly_the_registered_share_ba
     import inspect
 
     from data_engine.datahub import share_basis
-    from factors.production_topt import SHARE_BASIS_REASON_CODES
+    from factors.snapshot_inputs import SHARE_BASIS_REASON_CODES
 
     reasons: set[str] = set()
     for node in ast.walk(ast.parse(inspect.getsource(share_basis))):
@@ -1927,23 +1940,25 @@ def test_freeze_and_materialize_aligns_post_split_shares(
 
     nvda_result = by_listing["listing:xnas:nvda"]
     aapl_result = by_listing["listing:xnas:aapl"]
-    assert nvda_result.current_ps == Decimal("40")
-    assert aapl_result.current_ps == Decimal("4")
-    assert nvda_result.confidence == min(
-        nvda_member.gross_profit.confidence,
-        nvda_member.total_assets.confidence,
-        nvda_member.headcount.confidence,
-        nvda_member.revenue.confidence,
-        nvda_member.market_price.confidence,
-        nvda_member.shares_outstanding.confidence,
+    nvda_mv = (
+        nvda_result.market_value_components[0].market_price.value
+        * nvda_result.market_value_components[0].shares_outstanding.value
     )
-    assert aapl_result.confidence == min(
-        aapl_member.gross_profit.confidence,
-        aapl_member.total_assets.confidence,
-        aapl_member.headcount.confidence,
-        aapl_member.revenue.confidence,
-        aapl_member.market_price.confidence,
-        aapl_member.shares_outstanding.confidence,
+    aapl_mv = (
+        aapl_result.market_value_components[0].market_price.value
+        * aapl_result.market_value_components[0].shares_outstanding.value
+    )
+    assert nvda_mv / nvda_result.revenue.value == Decimal("40")
+    assert aapl_mv / aapl_result.revenue.value == Decimal("4")
+    assert nvda_result.gross_profit.confidence == nvda_member.gross_profit.confidence
+    assert (
+        nvda_result.market_value_components[0].shares_outstanding.confidence
+        == nvda_member.shares_outstanding.confidence
+    )
+    assert aapl_result.gross_profit.confidence == aapl_member.gross_profit.confidence
+    assert (
+        aapl_result.market_value_components[0].shares_outstanding.confidence
+        == aapl_member.shares_outstanding.confidence
     )
 
 
@@ -1960,7 +1975,7 @@ def test_a_qqq_listing_outside_topt_is_valued_once_the_qqq_price_lane_stores_its
     import dagster as dg
     from data_engine.datahub.capture_core.universe_plane import resolve_universe_corpus
     from data_engine.lanes import qqq_prices
-    from factors.production_topt import ToptCoreReasonCode
+    from factors.snapshot_inputs import ToptCoreReasonCode
     from qqq_head_seed import daily_series_client, publish_qqq_head
     from split_series_seed import sessions
     from truealpha_contracts.universes import lane_name
@@ -1987,9 +2002,18 @@ def test_a_qqq_listing_outside_topt_is_valued_once_the_qqq_price_lane_stores_its
         return found
 
     before = results_by_listing()
-    assert before["listing:xnas:aapl"].availability is ToptCoreAvailability.AVAILABLE
-    assert before["listing:xnas:t1277q"].availability is ToptCoreAvailability.UNAVAILABLE
-    assert before["listing:xnas:t1277q"].reason_codes == (ToptCoreReasonCode.NO_SPLIT_ADJUSTED_SERIES,)
+    assert (
+        before["listing:xnas:aapl"].market_value_components[0].shares_outstanding.availability
+        is MetricAvailability.AVAILABLE
+    )
+    assert (
+        before["listing:xnas:t1277q"].market_value_components[0].shares_outstanding.availability
+        is MetricAvailability.UNAVAILABLE
+    )
+    assert (
+        before["listing:xnas:t1277q"].market_value_components[0].shares_outstanding.unavailable_reason
+        is ToptCoreReasonCode.NO_SPLIT_ADJUSTED_SERIES
+    )
 
     requests: list[tuple[str, str, str]] = []
     outcome = qqq_prices._refresh_qqq_prices(
@@ -2007,9 +2031,15 @@ def test_a_qqq_listing_outside_topt_is_valued_once_the_qqq_price_lane_stores_its
     assert outcome.stored == ["T1277Q"]
     assert {symbol for symbol, _interval, _adjust in requests} == {"T1277Q"}
     after = results_by_listing()
-    assert after["listing:xnas:t1277q"].availability is ToptCoreAvailability.AVAILABLE
-    assert after["listing:xnas:t1277q"].reason_codes == ()
-    assert after["listing:xnas:aapl"].availability is ToptCoreAvailability.AVAILABLE
+    assert (
+        after["listing:xnas:t1277q"].market_value_components[0].shares_outstanding.availability
+        is MetricAvailability.AVAILABLE
+    )
+    assert after["listing:xnas:t1277q"].market_value_components[0].shares_outstanding.unavailable_reason is None
+    assert (
+        after["listing:xnas:aapl"].market_value_components[0].shares_outstanding.availability
+        is MetricAvailability.AVAILABLE
+    )
 
 
 def test_materialize_persists_not_applicable_status_for_exempt_topt_issuer(connection) -> None:

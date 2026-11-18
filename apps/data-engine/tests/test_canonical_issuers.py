@@ -505,7 +505,7 @@ def test_every_symbol_without_its_split_adjusted_series_is_named(connection) -> 
     from data_engine.datahub.market_prices import PriceBarRecord, insert_market_prices_daily
     from data_engine.datahub.strategy_history import HistoryIssuer, run_strategy_history
     from factors.backtest.corporate_actions import SplitDerivationError
-    from factors.production_topt import OperatingBranch
+    from factors.snapshot_inputs import OperatingBranch
 
     issuers = []
     for number, ticker in enumerate(("H1257X", "H1257Y", "H1257Z"), start=1):
@@ -554,7 +554,7 @@ def _project_shares(document: dict, *, ruleset=None):
     from data_engine.datahub.capture_core.concept_mapping import DEFAULT_RULESET
     from data_engine.datahub.strategy_history import HistoryIssuer, LastClose, project_issuer_rows
     from factors.backtest.corporate_actions import SplitEvent
-    from factors.production_topt import OperatingBranch
+    from factors.snapshot_inputs import OperatingBranch
 
     issuer = HistoryIssuer(
         "issuer:h1257:basis", "", "listing:xnas:h1257v", "H1257V", 1_257_701, OperatingBranch.NON_FINANCIAL

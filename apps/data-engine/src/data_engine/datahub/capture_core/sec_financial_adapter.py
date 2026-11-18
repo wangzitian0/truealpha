@@ -10,7 +10,7 @@ from decimal import Decimal, InvalidOperation
 from typing import TYPE_CHECKING, Any
 
 import psycopg
-from factors.production_topt import OperatingBranch
+from factors.snapshot_inputs import OperatingBranch
 from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.models import DataSource
 from truealpha_contracts.strategy import load_live_strategy_definition

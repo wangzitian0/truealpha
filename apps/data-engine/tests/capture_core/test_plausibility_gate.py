@@ -20,7 +20,7 @@ from data_engine.datahub.capture_core import PostgresToptCoreRepository, plausib
 from factors.composite import plausibility_policy
 from factors.composite.plausibility_policy import RULE_EMPTY_ELIGIBLE, RULE_NODE_SIGN_POLICY
 from factors.panel import GPPE_BANKING_TCE_SPEC, GPPE_V0_SPEC, IssuerClass, SignPolicy, published_node
-from factors.production_topt import GppeV0Definition
+from factors.snapshot_inputs import GppeV0Definition
 from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.strategy import ExclusionReason
 

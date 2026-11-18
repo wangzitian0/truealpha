@@ -418,7 +418,8 @@ def test_the_scan_reads_the_code_that_runs_the_strategy() -> None:
         "apps/data-engine/src/data_engine/datahub/capture_core/composition.py",
         "apps/data-engine/src/data_engine/lanes/capture.py",
         "common/factors/src/factors/composite/strategy_evaluator.py",
-        "common/factors/src/factors/production_topt/core.py",
+        "common/factors/src/factors/panel.py",
+        "common/factors/src/factors/snapshot_inputs.py",
         "common/contracts/src/truealpha_contracts/strategy.py",
     ):
         assert required in files, required

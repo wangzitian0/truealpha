@@ -156,13 +156,13 @@ def test_the_frozen_snapshot_carries_the_banking_leaves_of_the_bank_only_and_an_
     """The member of the bank holds its four banking leaves. Every other member holds none, so its content
     hash does not move. A snapshot stored before #1518 has no leaves: it reloads, and its bank is
     unavailable with the four fields named (a replay of such a run reads nothing else)."""
+    from datetime import datetime
+
     from data_engine.datahub.capture_core.materialization import ToptCoreSnapshot
-    from factors.production_topt import (
-        TCE_SNAPSHOT_FIELDS,
-        GppeV0Definition,
-        ToptCoreAvailability,
-        compute_topt_gppe,
-    )
+    from factors.composite.strategy_evaluator import IssuerInput, evaluate_cutoff
+    from factors.panel import IssuerClass
+    from factors.snapshot_inputs import TCE_SNAPSHOT_FIELDS, MetricAvailability
+    from truealpha_contracts.strategy import ExclusionReason
 
     with psycopg.connect(tick.url) as reader:
         stored = reader.execute(
@@ -181,15 +181,29 @@ def test_the_frozen_snapshot_carries_the_banking_leaves_of_the_bank_only_and_an_
             member.pop(name, None)
     reloaded = ToptCoreSnapshot.model_validate(payload)
     (bank_input,) = [item for item in reloaded.factor_inputs() if item.operating_branch.value == "financial"]
-    result = compute_topt_gppe(
-        bank_input,
-        invocation_id=f"topt-gppe-invocation:{'f' * 64}",
-        gppe_definition=GppeV0Definition(risk_free_rate=_rate(tick)),
+    records: dict[str, tuple[Decimal, Decimal]] = {}
+    knowable: dict[str, datetime] = {}
+    for key, metric in (
+        ("total_assets", bank_input.total_assets),
+        ("headcount", bank_input.headcount),
+        ("revenue", bank_input.revenue),
+        ("pre_provision_profit", bank_input.pre_provision_profit),
+        *bank_input.inputs.items(),
+    ):
+        if metric is not None and metric.availability is MetricAvailability.AVAILABLE and metric.value is not None:
+            records[key] = (metric.value, metric.confidence)
+            knowable[key] = metric.knowable_at
+    [decision] = evaluate_cutoff(
+        [IssuerInput(bank_input.issuer_id, records, knowable, issuer_class=IssuerClass.FINANCIAL)],
         definition=load_live_strategy_definition(),
+        cutoff_at=reloaded.cutoff,
+        risk_free_rate=_rate(tick),
     )
 
-    assert result.availability is ToptCoreAvailability.UNAVAILABLE
-    assert {reason.value for reason in result.reason_codes} == {f"missing_{name}" for name in TCE_SNAPSHOT_FIELDS}
+    assert decision.exclusion_reason in (
+        ExclusionReason.MISSING_TANGIBLE_COMMON_EQUITY,
+        ExclusionReason.MISSING_PREFERRED_STOCK_VALUE,
+    )
 
 
 # --- the invariant `every-consumed-input-is-populated` expects the banking leaves only where a bank ran (#1518) ---

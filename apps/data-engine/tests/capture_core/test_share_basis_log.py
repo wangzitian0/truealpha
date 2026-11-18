@@ -28,7 +28,7 @@ import pytest
 from data_engine.config import settings
 from data_engine.datahub.capture_core import PostgresToptCoreRepository
 from data_engine.datahub.share_basis import NO_SPLIT_ADJUSTED_SERIES, SPLIT_DERIVATION_FAILED, Unavailable
-from factors.production_topt import MetricAvailability, ToptCoreReasonCode
+from factors.snapshot_inputs import MetricAvailability, ToptCoreReasonCode
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
 sys.path.insert(0, str(Path(__file__).parents[1] / "support"))

@@ -29,7 +29,7 @@ from data_engine.datahub.strategy_bridge import (
     persist_strategy_input_coverage,
     seed_strategy_inputs_from_capture,
 )
-from factors.production_topt import GppeV0Definition
+from factors.snapshot_inputs import GppeV0Definition
 
 sys.path.insert(0, str(Path(__file__).parent))
 from capture_core.test_materialization import CUTOFF, _seed_complete_production_run  # noqa: E402

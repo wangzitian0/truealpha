@@ -55,7 +55,7 @@ from data_engine.datahub.capture_core.source_registrations import (
     MOOMOO_KLINE_PARSER_VERSION,
 )
 from data_engine.datahub.evidence_graph_repository import PostgresEvidenceGraphRepository
-from factors.production_topt import GppeV0Definition, OperatingBranch
+from factors.snapshot_inputs import GppeV0Definition, OperatingBranch
 from truealpha_contracts.models import DataSource, RawCapture, RawIngestionEnvelope
 from truealpha_runtime import reconciliation_policies
 from truealpha_runtime.testing import InMemoryRawObjectStore as _InMemoryObjectStore
@@ -419,7 +419,15 @@ def test_executor_run_reconstructs_the_snapshot_and_mart(connection) -> None:
     assert len(snapshot.members) == 21
     results = core.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate="0.05"))
     assert len(results) == 20
-    assert all(result.availability.value == "available" for result in results)
+    gppe_statuses = connection.execute(
+        """
+        select count(*)
+        from mart.metric_node_values
+        where run_id = %s and node_key = 'gppe_uniform_charge_v0' and availability_status = 'available'
+        """,
+        (plan.run_id,),
+    ).fetchone()[0]
+    assert gppe_statuses == 20
     # The depository-institution branch survives capture: a bank scores through the
     # pre-provision-profit numerator instead of landing missing_gross_profit.
     branches = {result.operating_branch for result in results}

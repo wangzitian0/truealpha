@@ -25,7 +25,7 @@ from data_engine.strategy_backtest_gateway import MarketValueVintage
 from factors.backtest.corporate_actions import SplitDerivationError, SplitEvent
 from factors.backtest.engine import Valuation, performance
 from factors.composite.strategy_evaluator import IssuerInput
-from factors.production_topt import OperatingBranch
+from factors.snapshot_inputs import OperatingBranch
 
 Q1 = datetime(2024, 3, 31, 23, 59, 59, tzinfo=UTC)
 Q2 = datetime(2024, 6, 30, 23, 59, 59, tzinfo=UTC)

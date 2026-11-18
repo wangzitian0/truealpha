@@ -31,7 +31,7 @@ from factors.panel import (
     tree_id_for,
     variant_sha256,
 )
-from factors.production_topt import (
+from factors.snapshot_inputs import (
     GppeV0Definition,
     MetricAvailability,
     MetricFreshness,

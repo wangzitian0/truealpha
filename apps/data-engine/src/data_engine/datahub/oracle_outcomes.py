@@ -13,7 +13,7 @@ from typing import Any, Protocol
 
 import psycopg
 from factors.panel import GPPE_BANKING_TCE_SPEC, GPPE_V0_SPEC
-from factors.production_topt import MetricAvailability, ToptCoreSnapshotInput
+from factors.snapshot_inputs import MetricAvailability, ToptCoreSnapshotInput
 from truealpha_contracts.metrics import INPUT_KEY_ALIASES, METRICS
 from truealpha_contracts.models import DataSource
 from truealpha_runtime.storage import StorageError

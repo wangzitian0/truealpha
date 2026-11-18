@@ -13,7 +13,7 @@ from typing import Any, ClassVar
 
 from factors.composite.strategy_evaluator import deciding_input_keys
 from factors.panel import IssuerClass, definition_pins
-from factors.production_topt import (
+from factors.snapshot_inputs import (
     OPTIONAL_SNAPSHOT_FIELDS,
     GppeV0Definition,
     MetricAvailability,
@@ -21,12 +21,9 @@ from factors.production_topt import (
     OperatingBranch,
     ToptCellQualityInput,
     ToptCoreReasonCode,
-    ToptCoreResult,
     ToptCoreSnapshotInput,
     ToptMarketValueComponent,
     ToptMetricInput,
-    compute_topt_core,
-    compute_topt_gppe,
     drop_absent_banking_leaves,
 )
 from psycopg import Connection
@@ -1020,53 +1017,23 @@ class PostgresToptCoreRepository:
         *,
         gppe_definition: GppeV0Definition,
         definition: LargeModelValueV0Definition | None = None,
-    ) -> tuple[ToptCoreResult, ...]:
+    ) -> tuple[ToptCoreSnapshotInput, ...]:
         definition = definition or load_live_strategy_definition()
         factor_inputs = snapshot.factor_inputs()
         gppe_definition = gppe_definition.pinned_by(definition)
-        gppe_invocation_payload = {
-            "snapshot_id": snapshot.snapshot_id,
-            "gppe_definition": gppe_definition.model_dump(mode="json"),
-        }
-        gppe_invocation_sha256 = canonical_sha256(gppe_invocation_payload)
-        gppe_invocation_id = f"topt-gppe-invocation:{gppe_invocation_sha256}"
-        gppe_results = tuple(
-            compute_topt_gppe(
-                factor_input,
-                invocation_id=gppe_invocation_id,
-                gppe_definition=gppe_definition,
-                definition=definition,
-            )
-            for factor_input in factor_inputs
-        )
-        invocation_payload = {
-            "snapshot_id": snapshot.snapshot_id,
-            "gppe_invocation_id": gppe_invocation_id,
-            "tier_definition": definition.model_dump(mode="json"),
-        }
-        invocation_sha256 = canonical_sha256(invocation_payload)
-        invocation_id = f"topt-core-invocation:{invocation_sha256}"
         expected_issuers = len({member.issuer_id for member in snapshot.members})
-        if len(gppe_results) != expected_issuers:
-            raise ValueError("GPPE materialization denominator drifted from the snapshot's issuers")
-        results = tuple(
-            compute_topt_core(
-                factor_input,
-                gppe_result,
-                invocation_id=invocation_id,
-                definition=definition,
-            )
-            for factor_input, gppe_result in zip(factor_inputs, gppe_results, strict=True)
-        )
-        if len(results) != expected_issuers or len({item.issuer_id for item in results}) != expected_issuers:
-            raise ValueError("core materialization denominator drifted from the snapshot's issuers")
+        if (
+            len(factor_inputs) != expected_issuers
+            or len({item.issuer_id for item in factor_inputs}) != expected_issuers
+        ):
+            raise ValueError("materialization denominator drifted from the snapshot's issuers")
 
         with self._connection.transaction():
             evidence_by_listing = self._load_source_evidence(snapshot)
             periods_by_listing = self._load_result_periods(snapshot)
-            for result in results:
-                if result.listing_id not in periods_by_listing:
-                    raise ValueError(f"no financial-fact observation for {result.listing_id} in its own snapshot")
+            for factor_input in factor_inputs:
+                if factor_input.listing_id not in periods_by_listing:
+                    raise ValueError(f"no financial-fact observation for {factor_input.listing_id} in its own snapshot")
             not_applicable_issuers = contract_not_applicable_issuer_ids(
                 self._connection,
                 metric="gppe",
@@ -1081,7 +1048,7 @@ class PostgresToptCoreRepository:
                 evidence_by_listing=evidence_by_listing,
                 not_applicable_issuers=not_applicable_issuers,
             )
-        return results
+        return factor_inputs
 
     def _load_source_evidence(self, snapshot: ToptCoreSnapshot) -> dict[str, InputEvidenceStatus]:
         all_ids = sorted({oid for member in snapshot.members for oid in member.observation_ids})

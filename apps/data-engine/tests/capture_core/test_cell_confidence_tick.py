@@ -16,7 +16,7 @@ from data_engine.datahub.capture_core.source_registrations import (
 )
 from data_engine.datahub.confidence_report import evaluate_and_persist_run_cell_confidence
 from data_engine.datahub.strategy_bridge import seed_strategy_inputs_from_capture
-from factors.production_topt import GppeV0Definition
+from factors.snapshot_inputs import GppeV0Definition
 
 from .test_persistence import CUTOFF, _capture
 
@@ -65,7 +65,7 @@ def test_snapshot_member_financial_cell_confidence_bounds_by_deciding_keys_only(
     from datetime import datetime, timedelta
 
     from data_engine.datahub.capture_core.materialization import InputAgeLimit, _ObservationRow
-    from factors.production_topt import MetricFreshness
+    from factors.snapshot_inputs import MetricFreshness
 
     cutoff = datetime(2026, 4, 2, 12, 0, tzinfo=UTC)
     obs_id = f"normalized-observation:{'1' * 64}"
