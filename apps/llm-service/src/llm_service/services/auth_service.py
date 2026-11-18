@@ -20,7 +20,6 @@ from llm_service.services._db import with_app_runtime
 
 SESSION_COOKIE_NAME = "truealpha_session"
 _JWT_ALGORITHM = "HS256"
-_DEFAULT_DELEGATION_ID = "delegation:web-session"
 _DUMMY_BCRYPT_HASH = bcrypt.hashpw(b"timing-equalizer-secret", bcrypt.gensalt(rounds=10)).decode("ascii")
 
 

@@ -45,15 +45,6 @@ def normalize_peg_convention(value: str | None) -> str:
     return "historical_cagr"
 
 
-def project_peg_by_convention(
-    *, peg: str | None = None, peg_rank: int | None = None, convention: str = "historical_cagr"
-) -> tuple[str | None, int | None, list[str]]:
-    norm = normalize_peg_convention(convention)
-    if norm == "historical_cagr":
-        return peg, peg_rank, []
-    return None, None, [f"growth_convention_unsourced:{norm}"]
-
-
 def normalize_ranking_universe(value: str | None) -> str | None:
     clean = (value or "").strip().lower()
     if not clean:
@@ -426,17 +417,30 @@ def get_rankings(
     )
 
 
-_BACKTEST_RUN_SELECT = """
+def _backtest_run_select(*, as_text: bool = False) -> str:
+    cast = "::text" if as_text else "::float"
+    metric_cols = ", ".join(
+        f"{col}{cast} as {col}" if as_text else f"{col}{cast}"
+        for col in ("cagr_monthly", "sharpe_daily", "max_dd_daily", "vol_daily", "turnover_monthly", "calmar_daily")
+    )
+    bench_cols = ", ".join(
+        f"{col}{cast} as {col}" if as_text else f"{col}{cast}" for col in ("benchmark_cagr", "benchmark_max_dd")
+    )
+    payload_col = "metrics_payload" if as_text else "coalesce(metrics_payload, '{}'::jsonb) as metrics_payload"
+    return f"""
   select run_id, strategy_key, strategy_version, universe_id,
          start_date::text, end_date::text, status,
-         cagr_monthly::float, sharpe_daily::float, max_dd_daily::float,
-         vol_daily::float, turnover_monthly::float, calmar_daily::float,
-         coalesce(metrics_payload, '{}'::jsonb) as metrics_payload, error_message,
+         {metric_cols},
+         {payload_col}, error_message,
          executed_at::text, created_at::text,
          definition_content_sha256, price_basis, claim_ceiling,
-         benchmark_rule, benchmark_cagr::float, benchmark_max_dd::float
+         benchmark_rule, {bench_cols}
   from mart.backtest_runs
 """
+
+
+_BACKTEST_RUN_SELECT = _backtest_run_select(as_text=False)
+_MCP_BACKTEST_RUN_SELECT = _backtest_run_select(as_text=True)
 
 
 def list_backtest_runs(
@@ -501,19 +505,6 @@ def backtest_run_limitations(run: dict[str, Any]) -> list[str]:
     payload = run.get("metrics_payload")
     stored = payload.get("limitations") if isinstance(payload, dict) else None
     return [str(item) for item in stored] if isinstance(stored, list) else []
-
-
-_MCP_BACKTEST_RUN_SELECT = """
-    select run_id, strategy_key, strategy_version, universe_id,
-           start_date::text, end_date::text, status,
-           cagr_monthly::text as cagr_monthly, sharpe_daily::text as sharpe_daily,
-           max_dd_daily::text as max_dd_daily, vol_daily::text as vol_daily,
-           turnover_monthly::text as turnover_monthly, calmar_daily::text as calmar_daily,
-           metrics_payload, error_message, executed_at::text, created_at::text,
-           definition_content_sha256, price_basis, claim_ceiling, benchmark_rule,
-           benchmark_cagr::text as benchmark_cagr, benchmark_max_dd::text as benchmark_max_dd
-    from mart.backtest_runs
-"""
 
 
 class PostgresBacktestReader:
@@ -608,5 +599,4 @@ __all__ = [
     "matches_ranking_universe",
     "normalize_peg_convention",
     "normalize_ranking_universe",
-    "project_peg_by_convention",
 ]

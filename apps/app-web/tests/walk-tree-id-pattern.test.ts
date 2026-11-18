@@ -91,7 +91,7 @@ for (const text of DISPLAYED) {
 }
 
 // #987 / #1322 Anti-puppet check against GREEN-WHILE-EMPTY: walk-tree must verify populated table rows
-// and 5 resolved preview tickers on /research/strategy.
+// and 5 resolved preview tickers on /research/coverage.
 assert(source.includes("GREEN-WHILE-EMPTY"), "walk-tree.mjs does not check for GREEN-WHILE-EMPTY table states");
 assert(source.includes("TA_DATA_STATE"), "walk-tree.mjs does not read TA_DATA_STATE");
 assert(source.includes("PREVIEW_TICKERS"), "walk-tree.mjs does not verify the 5 golden preview tickers");

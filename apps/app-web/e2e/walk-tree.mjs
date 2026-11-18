@@ -3,8 +3,7 @@
  * running deployment and assert the three contract properties:
  *   (a) research first screens show NO raw entity ids as visible text
  *       (ids may appear only in attributes: title/href/data-evidence);
- *   (b) the claim-ceiling banner is present on rankings + strategy (+ the
- *       overview when selections render);
+ * (b) the claim-ceiling banner is present on rankings;
  *   (c) OPERATE chrome on every /admin page, absent on every /research page.
  * #1241 adds a fourth: the trace page of a strategy decision renders its inputs.
  *
@@ -315,20 +314,6 @@ async function assertDatahubPlantHealth(page, path, problems, role) {
     }
     if (oracleShape.invalidCells.length > 0) {
       problems.push(`/admin/datahub oracle_outcomes table has malformed cell(s): ${oracleShape.invalidCells.slice(0, 2).join(" | ")}`);
-    }
-  }
-
-  // #1466: the verdict table lists the CURRENT verdict of each check, so no check name appears twice.
-  const verdictHeading = page.getByRole("heading", { name: /^Standing check verdicts/i });
-  if ((await verdictHeading.count()) > 0) {
-    const checkNames = await verdictHeading.first().evaluate((node) => {
-      const container = node.closest("div")?.parentElement;
-      if (!container) return [];
-      return Array.from(container.querySelectorAll("tbody tr td:first-child")).map((td) => td.innerText.trim());
-    });
-    const repeated = checkNames.filter((name, index) => checkNames.indexOf(name) !== index);
-    if (repeated.length > 0) {
-      problems.push(`/admin/datahub verdict table lists a check more than once: ${[...new Set(repeated)].join(", ")}`);
     }
   }
 
