@@ -189,7 +189,9 @@ def test_concurrent_refresh_and_multi_cusip_uniqueness(slice5_db: str) -> None:
         assert ro_rows == [("CUSIP0001",), ("CUSIP0002",), ("CUSIP0003",)]
 
 
-def test_slice5_migration_upgrades_pre_slice5_database_and_preserves_parity() -> None:
+def test_slice5_migration_upgrades_pre_slice5_database_and_preserves_parity(tmp_path: Path) -> None:
+    import shutil
+
     admin_url = _admin_url()
     name = f"truealpha_s5_upg_{os.getpid()}_{uuid.uuid4().hex[:8]}"
     params = conninfo_to_dict(admin_url)
@@ -203,12 +205,26 @@ def test_slice5_migration_upgrades_pre_slice5_database_and_preserves_parity() ->
         pytest.skip("no local Postgres; CI runs required DB tests")
 
     try:
-        pre_slice5_files = sorted(
-            path for path in (REPO_ROOT / "db/migrations").glob("*.sql") if path.name < SLICE5_MIGRATION.name
+        pre_db_dir = tmp_path / "db"
+        shutil.copytree(
+            REPO_ROOT / "db",
+            pre_db_dir,
+            ignore=lambda directory, names: (
+                [n for n in names if n >= SLICE5_MIGRATION.name and n.endswith(".sql")]
+                if Path(directory).name == "migrations"
+                else []
+            ),
         )
-        for sql_file in pre_slice5_files:
-            _run_psql(db_url, sql_file)
-        _run_psql(db_url, ROLES_SQL)
+        pre_proc = subprocess.run(
+            ["bash", str(REPO_ROOT / "db/apply_migrations.sh")],
+            env={**os.environ, "DATABASE_URL": db_url, "TRUEALPHA_DB_DIR": str(pre_db_dir)},
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert pre_proc.returncode == 0, (
+            f"pre-Slice-5 apply_migrations.sh failed:\n{pre_proc.stdout}\n{pre_proc.stderr}"
+        )
 
         t0 = datetime(2026, 6, 1, tzinfo=UTC)
         with psycopg.connect(db_url) as conn:
