@@ -25,7 +25,7 @@ export default async function AdminDatahubPage() {
   const coverage = (stats?.ledger_coverage ?? []) as unknown as LedgerCoverageRow[];
   const rawOutcomes = (stats?.oracle_outcomes ?? []) as Record<string, unknown>[];
   const uSet = new Set<string>();
-  for (const h of [...(stats?.heads ?? []), ...rawOutcomes]) {
+  for (const h of rawOutcomes) {
     const uid = String(h.universe_id ?? "");
     if (uid && !uid.includes("canary")) uSet.add(uid);
   }
@@ -36,11 +36,10 @@ export default async function AdminDatahubPage() {
   return (
     <section aria-labelledby="datahub-heading" className="space-y-8">
       <div className="flex flex-wrap items-start justify-between gap-4">
-        <div><h1 id="datahub-heading" className="text-2xl font-bold tracking-tight">Datahub</h1><p className="mt-1 text-sm text-gray-400">Governed heads, oracle outcomes, verdicts, and API ledger.</p></div>
+        <div><h1 id="datahub-heading" className="text-2xl font-bold tracking-tight">Datahub</h1><p className="mt-1 text-sm text-gray-400">Question coverage, oracle outcomes, capture runs, and API ledger.</p></div>
         <TriggerRunButton />
       </div>
       {error && <p className="text-sm text-rose-400">{error}</p>}
-      <DataSection title="Governed heads" headers={["Universe", "Freshness", "Availability", "Agreed cells", "Run ID"]} rows={(stats?.heads ?? []).map((h) => [String(h.universe_id), formatCell(h.freshness as string), formatCell(h.availability as string), `${h.agreed_cells ?? 0}/${h.total_cells ?? 0}`, String(h.target_run_id ?? "")])} />
       <DataSection title="Question coverage matrix" headers={["Universe", "Cutoff", "Created"]} rows={(stats?.question_coverage ?? []).map((q) => [String(q.universe_id ?? ""), String(q.cutoff ?? ""), String(q.created_at ?? "")])} />
       <div className="space-y-2">
         <h2 className="text-lg font-semibold">Oracle outcomes (mart.oracle_outcomes)</h2>
@@ -58,11 +57,10 @@ export default async function AdminDatahubPage() {
           </table>
         </div>
       </div>
-      <DataSection title="Standing check verdicts" headers={["Check", "Status", "Ran at", "Summary"]} rows={(stats?.nightly_verdicts ?? []).map((v) => [String(v.check_name), v.ok === true ? "PASS" : v.ok === false ? "FAIL" : "PENDING", String(v.ran_at ?? ""), String(v.summary ?? "")])} />
       <DataSection title="Traffic (external calls, today UTC)" headers={["Source", "Calls", "Failed", "Avg ms", "Last call"]} rows={(stats?.traffic ?? []).map((t) => [String(t.source ?? ""), String(t.calls ?? 0), String(t.failed ?? 0), formatCell(t.avg_ms as string), String(t.last_call ?? "")])} />
       <div className="space-y-2"><h2 className="text-lg font-semibold">Fetch key and run coverage</h2><LedgerCoverageTable rows={coverage} /></div>
       <DataSection title="Sources" headers={["Source", "Total", "24h", "Last fetch"]} rows={(stats?.sources ?? []).map((s) => [String(s.source ?? ""), String(s.fetches_total ?? 0), String(s.fetches_24h ?? 0), String(s.last_fetch ?? "")])} />
-      <DataSection title="Recent capture runs" headers={["Universe", "Cutoff", "Resolved", "Failed", "Complete", "Run ID"]} rows={(stats?.runs ?? []).map((r) => [String(r.universe_id ?? ""), String(r.cutoff ?? ""), `${r.resolved ?? 0}/${r.obligations ?? 0}`, String(r.failed ?? 0), r.complete ? "yes" : "no", String(r.run_id ?? "")])} />
+      <DataSection title="Recent capture runs" headers={["Universe", "Cutoff", "Resolved", "Failed", "Complete", "Run ID"]} rows={(stats?.capture_runs ?? []).map((r) => [String(r.universe_id ?? ""), String(r.cutoff ?? ""), `${r.resolved ?? 0}/${r.obligations ?? 0}`, String(r.failed ?? 0), r.complete ? "yes" : "no", String(r.run_id ?? "")])} />
     </section>
   );
 }

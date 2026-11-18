@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { api } from "@/client/api";
+import { api, type AnalystRatings, type SupplyChainExposure } from "@/client/api";
 import { decodeRouteParam, formatCell, formatPercentFromFraction, formatRatio, formatSignedRatio, formatTierLabel, formatUsdMagnitude, signColor } from "@/client/format";
 import { PEG_CONVENTION_LABELS, PEG_GROWTH_CONVENTIONS, type PegGrowthConvention, valuationBasisLabel } from "@/client/strategy";
 import { CardExportButton } from "@/components/card-export-button";
@@ -21,7 +21,23 @@ export default async function EntityDetailPage({
   const [{ id }, sp] = await Promise.all([params, searchParams ?? Promise.resolve<{ convention?: string }>({})]);
   const convention: PegGrowthConvention = sp.convention === "consensus" || sp.convention === "guidance" ? sp.convention : "historical_cagr";
   const issuerId = decodeRouteParam(id);
-  const { data: detail, error } = await loadAuthed("/research/entities", (opts) => api.getEntity(issuerId, opts));
+  const { data: loaded, error } = await loadAuthed("/research/entities", async (opts) => {
+    const [detail, supplyChain, ratings] = await Promise.all([
+      api.getEntity(issuerId, opts),
+      api.getSupplyChain(issuerId, opts).catch(() => null),
+      api.getAnalystRatings(issuerId, opts).catch(() => null),
+    ]);
+    return { detail, supplyChain, ratings };
+  });
+  const detail = loaded?.detail ?? null;
+  const supplyExposure: Record<string, unknown> | null =
+    loaded?.supplyChain && !("reason" in loaded.supplyChain)
+      ? (loaded.supplyChain as SupplyChainExposure as unknown as Record<string, unknown>)
+      : (detail?.supply_chain_exposure ?? null);
+  const analystRatings: Record<string, unknown> | null =
+    loaded?.ratings && !("reason" in loaded.ratings)
+      ? (loaded.ratings as AnalystRatings as unknown as Record<string, unknown>)
+      : (detail?.analyst_ratings ?? null);
   const rows = detail?.decisions ?? [];
   const latest = rows[0];
   const basisLabel = valuationBasisLabel(latest?.valuation_basis);
@@ -70,8 +86,8 @@ export default async function EntityDetailPage({
             </ResearchTable>
           )}
           {(detail.node_values?.length ?? 0) > 0 && <div className="rounded-xl border border-border bg-card p-5"><h2 className="text-base font-semibold">Metric forest nodes</h2><TraceInputsTable nodeValues={detail.node_values ?? []} /></div>}
-          {detail.analyst_ratings && <div className="rounded-xl border border-border bg-card p-4 text-xs text-gray-300"><strong className="text-white">Analyst Consensus:</strong> {formatCell(detail.analyst_ratings.consensus_rating as string | null)} · Analysts: {String(detail.analyst_ratings.analysts_count ?? 0)}</div>}
-          {detail.supply_chain_exposure && <div className="rounded-xl border border-border bg-card p-4 text-xs text-gray-300"><strong className="text-white">Supply Chain Scenario Exposure:</strong> {formatCell(detail.supply_chain_exposure.exposure_score as string | null)} · Partners: {String(detail.supply_chain_exposure.direct_partners ?? 0)}</div>}
+          {analystRatings && <div className="rounded-xl border border-border bg-card p-4 text-xs text-gray-300"><strong className="text-white">Analyst Consensus:</strong> {formatCell(analystRatings.consensus_rating as string | null)} · Analysts: {String(analystRatings.analysts_count ?? 0)}</div>}
+          {supplyExposure && <div className="rounded-xl border border-border bg-card p-4 text-xs text-gray-300"><strong className="text-white">Supply Chain Scenario Exposure:</strong> {formatCell(supplyExposure.exposure_score as string | null)} · Partners: {String(supplyExposure.direct_partners ?? 0)}</div>}
         </>
       )}
     </section>

@@ -41,7 +41,7 @@ const ISSUER_ID = "018f9e6a-0001-7a1b-8c2d-9e0f1a2b3c4d";
 
 __setApiFetch(async (input) => {
   const url = String(input);
-  if (url.includes("/api/v1/research/rankings")) {
+  if (url.includes("/api/v1/strategy/rankings")) {
     return new Response(
       JSON.stringify({
         available: true,
@@ -70,7 +70,19 @@ __setApiFetch(async (input) => {
       { status: 200, headers: { "Content-Type": "application/json" } },
     );
   }
-  if (url.includes(`/api/v1/research/entities/${encodeURIComponent(ISSUER_ID)}`)) {
+  if (url.includes(`/api/v1/entities/${encodeURIComponent(ISSUER_ID)}/supply-chain`)) {
+    return new Response(
+      JSON.stringify({ exposure_score: "0.42", direct_partners: 9 }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    );
+  }
+  if (url.includes(`/api/v1/entities/${encodeURIComponent(ISSUER_ID)}/analyst-ratings`)) {
+    return new Response(
+      JSON.stringify({ consensus_rating: "4.35", analysts_count: 18 }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    );
+  }
+  if (url.includes(`/api/v1/entities/${encodeURIComponent(ISSUER_ID)}`)) {
     return new Response(
       JSON.stringify({
         issuer_id: ISSUER_ID,
@@ -99,7 +111,7 @@ __setApiFetch(async (input) => {
       { status: 200, headers: { "Content-Type": "application/json" } },
     );
   }
-  if (url.includes("/api/v1/research/documents/doc-card-1")) {
+  if (url.includes("/api/v1/library/documents/doc-card-1")) {
     return new Response(
       JSON.stringify({
         document: { document_id: "doc-card-1", created_at: "2026-10-19T00:00:00Z" },

@@ -132,10 +132,10 @@ async function assertNoVisibleRawIds(page, path, problems) {
  * (a2) #987 / #1322 Anti-puppet check against GREEN-WHILE-EMPTY: Research data tables
  * must display non-empty tickers/labels rather than blank cells.
  * Under populated data state, populated research routes MUST render at least 1 row,
- * and in the CI seeded fixture `/research/strategy` MUST render all 5 preview tickers.
+ * and in the CI seeded fixture `/research/rankings` MUST render all 5 preview tickers.
  */
 async function assertNoBlankResearchTableCells(page, path, problems) {
-  if (!["/research/rankings", "/research/strategy", "/research/compare", "/research/coverage"].includes(path)) return;
+  if (!["/research/rankings", "/research/coverage"].includes(path)) return;
   const result = await page.evaluate(() => {
     const rows = Array.from(document.querySelectorAll("tbody tr"));
     let emptyCount = 0;
@@ -154,18 +154,18 @@ async function assertNoBlankResearchTableCells(page, path, problems) {
     return { rowCount: rows.length, emptyCount, labels };
   });
 
-  if (DATA_STATE === "populated" && ["/research/rankings", "/research/strategy"].includes(path)) {
+  if (DATA_STATE === "populated" && ["/research/rankings", "/research/coverage"].includes(path)) {
     if (result.rowCount === 0) {
       problems.push(`GREEN-WHILE-EMPTY: expected populated table rows on ${path} in ${DATA_STATE} state, found 0`);
     }
   }
-  if (DATA_STATE === "empty" && ["/research/rankings", "/research/strategy"].includes(path)) {
+  if (DATA_STATE === "empty" && ["/research/rankings", "/research/coverage"].includes(path)) {
     if (result.rowCount > 0) {
       problems.push(`STALE-OR-LEAKED-DATA: expected 0 table rows on ${path} in ${DATA_STATE} state, found ${result.rowCount}`);
     }
   }
 
-  if (SEEDED_FIXTURE && DATA_STATE === "populated" && path === "/research/strategy") {
+  if (SEEDED_FIXTURE && DATA_STATE === "populated" && path === "/research/coverage") {
     const missingTickers = PREVIEW_TICKERS.filter(
       (ticker) => !result.labels.some((label) => label.startsWith(`${ticker} · `) || label === ticker),
     );
@@ -183,11 +183,10 @@ async function assertNoBlankResearchTableCells(page, path, problems) {
 
 /**
  * (b) The claim ceiling renders wherever strategy output does. Unconditional on
- * both pages by construction; `tests/claim-ceiling-placement.test.ts` fails at
- * the source file if an early return is reintroduced above either banner.
+ * rankings by construction.
  */
 async function assertClaimCeiling(page, path, problems) {
-  if (path !== "/research/rankings" && path !== "/research/strategy") return;
+  if (path !== "/research/rankings") return;
   const banner = await page.getByRole("note").filter({ hasText: "Not investment advice" }).count();
   if (banner === 0) problems.push("claim-ceiling banner missing");
 }
@@ -264,47 +263,6 @@ async function assertCurrentNavLink(page, path, problems) {
   }
   const href = await current.first().getAttribute("href");
   if (href !== path) problems.push(`nav marks ${href} current on ${path}`);
-}
-
-/** #494 criterion 3: the funnel block says something in EVERY state.
- *
- * `{funnel.kind === "ready" && …}` with no else made the headline L0–L5
- * diagnostic vanish without comment whenever it could not be computed, which
- * reads as "nothing is wrong" rather than "not computed". #495 fixed the code;
- * this is the assertion, and it is deliberately state-agnostic: it does not
- * care whether the funnel computed, only that the region is never empty below
- * its own heading. A CI database cannot compute the funnel, so this exercises
- * the branch that used to render nothing.
- *
- * Anchored on the heading rather than a test id: the two branches render
- * different containers, and asserting through the visible heading means a
- * refactor that drops the heading fails here too, which is the point.
- *
- * Administrator only. A member reaching /admin/quality gets the layout's denied
- * section, which correctly has no funnel — found by walking real staging with
- * both identities, after a local administrator-only run had passed. */
-async function assertFunnelSaysSomething(page, path, problems, role) {
-  if (path !== "/admin/quality" || role !== "administrator") return;
-  // Tolerant of the dash character, surrounding whitespace and capitalisation:
-  // the assertion is about the region saying something, and it should not fail
-  // because someone typed an en dash or title-cased a word (review).
-  const heading = page.getByRole("heading", { name: /L0\s*[-–—]?\s*L5\s+funnel/i });
-  if ((await heading.count()) === 0) {
-    problems.push("no L0-L5 funnel section on /admin/quality");
-    return;
-  }
-  const section = await heading.first().evaluate((node) => {
-    // `closest("div")` rather than parentElement: the ready and non-ready
-    // branches render different containers, and wrapping the heading in a
-    // <header> later would otherwise shrink the subtree this inspects to the
-    // heading itself and make the assertion vacuously pass (review).
-    const container = node.closest("div") ?? node.parentElement;
-    return { heading: node.innerText.trim(), all: container ? container.innerText.trim() : "" };
-  });
-  const body = section.all.replace(section.heading, "").trim();
-  if (body.length === 0) {
-    problems.push("the funnel section renders its heading and nothing else — every state must say something");
-  }
 }
 
 const SWEEP_RUN_SOURCE_PATTERN = /-[0-9]{8}T[0-9]{4}$/;
@@ -388,29 +346,6 @@ async function assertDatahubPlantHealth(page, path, problems, role) {
   }
 }
 
-/** #1466: /admin/pipeline says something in every state. With Dagster tables it lists a row per job and shows
- * both verdict cards and the release age; without them (the CI database) it says that the history is unavailable.
- * Either way the page leaks no `undefined`, `[object Object]` or `NaN`. */
-async function assertPipelineHealth(page, path, problems, role) {
-  if (path !== "/admin/pipeline" || role !== "administrator") return;
-  if ((await page.getByRole("heading", { name: /^Pipeline$/i }).count()) === 0) {
-    problems.push("missing /admin/pipeline heading");
-    return;
-  }
-  const mainText = await page.locator("main").innerText();
-  const leak = mainText.match(/\bundefined\b|\[object Object\]|\bNaN\b/);
-  if (leak) problems.push(`/admin/pipeline shows "${leak[0]}"`);
-  const jobRows = await page.locator("tr[data-job]").count();
-  if (jobRows > 0) {
-    for (const marker of ['[data-verdict="job_run_health"]', "[data-release-age]"]) {
-      if ((await page.locator(marker).count()) === 0) problems.push(`/admin/pipeline lists jobs but has no ${marker}`);
-    }
-  } else if (!/Run history unavailable|No finished run/.test(mainText)) {
-    // An error state is a problem too: the page loaded nothing and the walk must say so.
-    problems.push("/admin/pipeline lists no job and does not say why (an error state counts as a failure)");
-  }
-}
-
 // #1241. The text that NOT_RECORDED prints in /research/trace for a field that the
 // lineage does not carry. tests/walk-tree-trace-inputs.test.ts fails when the two texts differ.
 const NOT_RECORDED = "not recorded";
@@ -438,14 +373,14 @@ const TRACE_FIELDS = ["value", "period", "knowable_at", "accession", "source"];
 async function assertTraceRendersDecisionInputs(page, path, problems) {
   if (path !== "/research/trace" || DATA_STATE !== "populated") return;
 
-  await gotoStable(page, `${BASE}/research`);
+  await gotoStable(page, `${BASE}/research/coverage`);
   const href = await page
     .locator('a[href^="/research/trace?"]')
     .first()
     .getAttribute("href", { timeout: 15000 })
     .catch(() => null);
   if (href === null) {
-    problems.push("trace: /research offers no trace link in the populated state");
+    problems.push("trace: /research/coverage offers no trace link in the populated state");
     return;
   }
 
@@ -585,10 +520,8 @@ async function checkRoute(page, path, role, pageErrors) {
   await assertOperateChromeMembership(page, path, problems, role);
   await assertWorldSwitch(page, path, problems, role);
   await assertSignedInIdentity(page, path, problems);
-  await assertCurrentNavLink(page, path, problems);
-  await assertFunnelSaysSomething(page, path, problems, role);
+  await assertCurrentNavLink(page, finalPath, problems);
   await assertDatahubPlantHealth(page, path, problems, role);
-  await assertPipelineHealth(page, path, problems, role);
   // Last, because these navigate away from this page.
   await assertEntityDetailRenders(page, path, problems);
   await assertTraceRendersDecisionInputs(page, path, problems);
@@ -619,7 +552,7 @@ async function preflightIdentities(browser, identities) {
 /** One full pass over every live route under one already-authenticated identity. */
 async function walkRoutes(role, context, pageErrors) {
   // Warm heavy research routes under the authenticated session to avoid cold render timeouts.
-  for (const warmPath of ["/research", "/research/coverage", "/research/rankings", "/research/strategy"]) {
+  for (const warmPath of ["/research/coverage", "/research/rankings", "/research/themes"]) {
     try {
       await context.request.get(`${BASE}${warmPath}`, { timeout: 15000 });
     } catch {

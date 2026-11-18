@@ -12,30 +12,70 @@ import bcrypt
 import pytest
 from fastapi.testclient import TestClient
 from llm_service.main import app
-from llm_service.services import admin_service, auth_service, research_service
+from llm_service.services import (
+    admin_service,
+    auth_service,
+    entities_service,
+    library_service,
+    panel_service,
+    strategy_service,
+)
 from pydantic import SecretStr
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
-def test_openapi_schema_has_at_least_21_paths_and_zero_warnings() -> None:
+def test_openapi_schema_has_25_paths_27_ops_and_zero_warnings() -> None:
     with warnings.catch_warnings(record=True) as captured:
         warnings.simplefilter("error")
         app.openapi_schema = None
         schema = app.openapi()
     assert captured == []
     paths = schema["paths"]
-    assert len(paths) >= 21
+    assert len(paths) == 25
     op_ids = [
         op["operationId"]
         for methods in paths.values()
         for method, op in methods.items()
         if method in {"get", "post", "put", "delete", "patch"} and isinstance(op, dict)
     ]
+    assert len(op_ids) == 27
     assert len(op_ids) == len(set(op_ids)), "OpenAPI operationIds must be unique"
     assert "/api/v1/auth/login" in paths
-    assert "/api/v1/research/cards/export" in paths
-    assert "/api/v1/admin/pipeline/trigger" in paths
+    assert "/api/v1/library/cards/export" in paths
+    assert "/api/v1/admin/triggers" in paths
+    assert "/api/v1/panel/coverage" in paths
+    assert paths["/health"]["get"]["tags"] == ["system"]
+    assert paths["/health"]["get"]["operationId"] == "system_health"
+    assert paths["/livez"]["get"]["operationId"] == "system_livez"
+    assert paths["/readyz"]["get"]["operationId"] == "system_readyz"
+
+
+def test_entities_suffix_routes_are_not_swallowed_by_path_wildcard(monkeypatch: pytest.MonkeyPatch) -> None:
+    from llm_service.api.v1 import entities as entities_router
+
+    principal = auth_service.PrincipalRecord(principal_id="principal:1", tenant_id="tenant:1", principal_kind="member")
+    monkeypatch.setattr(auth_service, "resolve_principal_from_token", lambda *_a, **_k: principal)
+    monkeypatch.setattr(
+        entities_router,
+        "load_supply_chain_exposure",
+        lambda *, issuer_id: entities_service.IssuerModuleUnavailable(
+            issuer_id=issuer_id, module="supply_chain_exposure"
+        ),
+    )
+    monkeypatch.setattr(
+        entities_router,
+        "load_analyst_ratings",
+        lambda *, issuer_id: entities_service.IssuerModuleUnavailable(issuer_id=issuer_id, module="analyst_ratings"),
+    )
+    client = TestClient(app)
+    headers = {"Authorization": "Bearer tok"}
+    sc = client.get("/api/v1/entities/issuer:aapl/supply-chain", headers=headers)
+    ar = client.get("/api/v1/entities/issuer:aapl/analyst-ratings", headers=headers)
+    assert sc.status_code == 200 and sc.json()["module"] == "supply_chain_exposure"
+    assert sc.json()["issuer_id"] == "issuer:aapl"
+    assert ar.status_code == 200 and ar.json()["module"] == "analyst_ratings"
+    assert ar.json()["issuer_id"] == "issuer:aapl"
 
 
 def test_committed_openapi_json_matches_live_fastapi_spec() -> None:
@@ -120,22 +160,22 @@ def test_auth_login_rate_limiter_and_jwt_session_roundtrip(monkeypatch: pytest.M
 
 
 def test_documents_validation_and_rls_scope(monkeypatch: pytest.MonkeyPatch) -> None:
-    assert research_service.assert_non_empty_text("  note:1  ", "id") == "note:1"
-    assert research_service.assert_stable_id("report:abc123", "source") == "report:abc123"
-    assert research_service.clamp_list_limit(None) == 50
-    assert research_service.clamp_list_limit(0) == 1
-    assert research_service.clamp_list_limit(999) == 200
+    assert library_service.assert_non_empty_text("  note:1  ", "id") == "note:1"
+    assert library_service.assert_stable_id("report:abc123", "source") == "report:abc123"
+    assert library_service.clamp_list_limit(None) == 50
+    assert library_service.clamp_list_limit(0) == 1
+    assert library_service.clamp_list_limit(999) == 200
 
     for bad_id in ("", "   ", "report:latest", "report:head", "bad space"):
         with pytest.raises(ValueError):
-            research_service.assert_stable_id(bad_id, "source")
+            library_service.assert_stable_id(bad_id, "source")
 
-    assert research_service.parse_before_cursor(None, None) is None
-    ts, doc = research_service.parse_before_cursor("2026-07-18T00:00:00.123456Z", "document:1") or ("", "")
+    assert library_service.parse_before_cursor(None, None) is None
+    ts, doc = library_service.parse_before_cursor("2026-07-18T00:00:00.123456Z", "document:1") or ("", "")
     assert ts == "2026-07-18T00:00:00.123456Z" and doc == "document:1"
     for bad_ts, bad_doc in (("not-a-date", "document:1"), ("2026-07-18T00:00:00Z", "document:latest")):
         with pytest.raises(ValueError):
-            research_service.parse_before_cursor(bad_ts, bad_doc)
+            library_service.parse_before_cursor(bad_ts, bad_doc)
 
     # Verify owner RLS transaction GUCs are set on document queries.
     executed: list[tuple[str, Any]] = []
@@ -176,13 +216,12 @@ def test_documents_validation_and_rls_scope(monkeypatch: pytest.MonkeyPatch) -> 
         def __exit__(self, *args: object) -> None:
             return None
 
-    monkeypatch.setattr(research_service.psycopg, "connect", lambda *_a, **_k: _FakeConn())
     monkeypatch.setattr("llm_service.services._db.psycopg.connect", lambda *_a, **_k: _FakeConn())
-    monkeypatch.setattr(research_service, "_put_s3_bytes", lambda *_a: ("documents/p1/aa/hash", "a" * 64, 5))
+    monkeypatch.setattr(library_service, "_put_s3_bytes", lambda *_a: ("documents/p1/aa/hash", "a" * 64, 5))
 
     principal = auth_service.PrincipalRecord(principal_id="principal:1", tenant_id="tenant:1", principal_kind="member")
     ctx = auth_service.access_context_for(principal)
-    created = research_service.create_document(ctx, source_artifact_id="note:test", content_bytes=b"hello")
+    created = library_service.create_document(ctx, source_artifact_id="note:test", content_bytes=b"hello")
     assert created.document.document_id == "document:abc"
     assert any("truealpha.tenant_id" in sql and params == ("tenant:1",) for sql, params in executed)
     assert any("truealpha.principal_id" in sql and params == ("principal:1",) for sql, params in executed)
@@ -211,18 +250,18 @@ def test_unified_card_export_prefers_governed_artifact_and_persists_document(
     )
     principal = auth_service.PrincipalRecord(principal_id="principal:1", tenant_id="tenant:1", principal_kind="member")
     monkeypatch.setattr(auth_service, "resolve_principal_from_token", lambda *_a, **_k: principal)
-    monkeypatch.setattr(research_service, "_lookup_governed_card_artifact", lambda **_k: None)
+    monkeypatch.setattr(library_service, "_lookup_governed_card_artifact", lambda **_k: None)
     monkeypatch.setattr(
-        research_service,
+        library_service,
         "create_document",
-        lambda *_a, **_k: research_service.CreateDocumentResponse(
-            document=research_service.DocumentDto(
+        lambda *_a, **_k: library_service.CreateDocumentResponse(
+            document=library_service.DocumentDto(
                 document_id="document:card-saved",
                 tenant_id="tenant:1",
                 owner_principal_id="principal:1",
                 created_at="2026-07-01T00:00:00Z",
             ),
-            revision=research_service.DocumentRevisionDto(
+            revision=library_service.DocumentRevisionDto(
                 revision_id="revision:card-saved",
                 document_id="document:card-saved",
                 tenant_id="tenant:1",
@@ -236,10 +275,10 @@ def test_unified_card_export_prefers_governed_artifact_and_persists_document(
         ),
     )
 
-    resp = research_service.export_or_render_card(
+    resp = library_service.export_or_render_card(
         auth_service.access_context_for(principal),
-        research_service.CardExportRequest(
-            card_kind=research_service.CardKind.COMPANY,
+        library_service.CardExportRequest(
+            card_kind=library_service.CardKind.COMPANY,
             issuer_id="issuer:nvda",
             cutoff="2026-06-30T23:59:59Z",
             format="html",
@@ -275,15 +314,15 @@ def test_real_postgres_auth_admin_ledger_documents_rls_and_served_head_withholdi
         monkeypatch.setattr(settings, "secret_key", SecretStr("test-session-secret-for-ci"))
         pw_hash = bcrypt.hashpw(b"correct-horse-battery", bcrypt.gensalt(rounds=4)).decode("ascii")
         stored_blobs: dict[str, bytes] = {}
-        monkeypatch.setattr(research_service, "create_s3_client", lambda *_a, **_k: object())
+        monkeypatch.setattr(library_service, "create_s3_client", lambda *_a, **_k: object())
 
         def _put_blob(_c: object, *, bucket: str, key: str, data: bytes, **_k: object) -> dict[str, object]:
             stored_blobs[f"{bucket}/{key}"] = data
             return {}
 
-        monkeypatch.setattr(research_service, "put_object_bytes", _put_blob)
+        monkeypatch.setattr(library_service, "put_object_bytes", _put_blob)
         monkeypatch.setattr(
-            research_service,
+            library_service,
             "read_object_bytes",
             lambda _c, *, bucket, key: stored_blobs[f"{bucket}/{key}"],
         )
@@ -432,18 +471,18 @@ def test_real_postgres_auth_admin_ledger_documents_rls_and_served_head_withholdi
             conn.commit()
 
         # Unavailable heads must withhold strategy, theme, and ETF outputs without falling back to old_cap
-        withheld = research_service.PostgresCompanyProfileReader(database_url=db_url).get_company_profile(
+        withheld = entities_service.PostgresCompanyProfileReader(database_url=db_url).get_company_profile(
             issuer_id=issuer
         )
         assert withheld["strategy_decision"] is None and withheld["theme_purity"] == []
         assert (
-            research_service.PostgresThemePurityLeaderboardReader(database_url=db_url).get_leaderboard(
+            entities_service.PostgresThemePurityLeaderboardReader(database_url=db_url).get_leaderboard(
                 theme_id="ai-infra"
             )["count"]
             == 0
         )
         assert (
-            research_service.PostgresEtfProfileReader(database_url=db_url).get_etf_profile(fund_id="etf:series:ZZCI")[
+            entities_service.PostgresEtfProfileReader(database_url=db_url).get_etf_profile(fund_id="etf:series:ZZCI")[
                 "weighted_valuation_gap"
             ]
             is None
@@ -458,15 +497,23 @@ def test_real_postgres_auth_admin_ledger_documents_rls_and_served_head_withholdi
 
         dh = client.get("/api/v1/admin/datahub")
         assert dh.status_code == 200
-        cov = dh.json()["ledger_coverage"][0]
+        dh_json = dh.json()
+        assert "capture_runs" in dh_json and "runs" not in dh_json
+        assert "heads" not in dh_json and "nightly_verdicts" not in dh_json
+        cov = dh_json["ledger_coverage"][0]
         assert cov["by_reason"] == {"probe": 2} and cov["keys_twice"] == 1
 
+        ops = client.get("/api/v1/admin/ops")
+        assert ops.status_code == 200
+        ops_json = ops.json()
+        assert "pointers" not in ops_json and "quota_today" not in ops_json
+
         created = client.post(
-            "/api/v1/research/documents", json={"source_artifact_id": "note:rls", "content": "rls-body"}
+            "/api/v1/library/documents", json={"source_artifact_id": "note:rls", "content": "rls-body"}
         )
         assert created.status_code == 201
         doc_id = created.json()["document"]["document_id"]
-        assert any(d["document_id"] == doc_id for d in client.get("/api/v1/research/documents").json()["documents"])
+        assert any(d["document_id"] == doc_id for d in client.get("/api/v1/library/documents").json()["documents"])
 
         # Switch session to member -> RLS must hide adm's document
         client.post("/api/v1/auth/logout")
@@ -476,7 +523,7 @@ def test_real_postgres_auth_admin_ledger_documents_rls_and_served_head_withholdi
             ).status_code
             == 200
         )
-        assert not any(d["document_id"] == doc_id for d in client.get("/api/v1/research/documents").json()["documents"])
+        assert not any(d["document_id"] == doc_id for d in client.get("/api/v1/library/documents").json()["documents"])
         assert client.get("/api/v1/admin/datahub").status_code == 403
 
 
@@ -487,7 +534,7 @@ def test_entity_detail_resolves_candidates_once_and_avoids_duplicate_strategy_pa
     candidate_resolve_calls = 0
     executed_sqls: list[str] = []
 
-    fake_decision = research_service.StrategyDecisionItemDto(
+    fake_decision = strategy_service.StrategyDecisionItemDto(
         issuer_id="issuer:cik:0000723125",
         label="MU · Micron",
         cutoff_at="2026-06-30T00:00:00+00:00",
@@ -495,19 +542,19 @@ def test_entity_detail_resolves_candidates_once_and_avoids_duplicate_strategy_pa
         eligible=True,
         trace_id="trace:abc123",
     )
-    fake_page = research_service.StrategyRunPageResponse(
+    fake_page = strategy_service.StrategyRunPageResponse(
         available=True,
         strategy_id="large_model_value_v0",
         strategy_run_id="strategy-run:1",
         decisions=[fake_decision],
         display_map={
-            "issuer:cik:0000723125": research_service.EntityDisplayItem(
+            "issuer:cik:0000723125": panel_service.EntityDisplayItem(
                 issuer_id="issuer:cik:0000723125", ticker="MU", display_name="Micron", label="MU · Micron"
             )
         },
     )
 
-    def _fake_page(*_a: Any, **_k: Any) -> research_service.StrategyRunPageResponse:
+    def _fake_page(*_a: Any, **_k: Any) -> strategy_service.StrategyRunPageResponse:
         nonlocal page_calls
         page_calls += 1
         return fake_page
@@ -530,17 +577,17 @@ def test_entity_detail_resolves_candidates_once_and_avoids_duplicate_strategy_pa
         candidate_resolve_calls += 1
         return [iid, "11111111-1111-1111-1111-111111111111"]
 
-    monkeypatch.setattr(research_service, "get_strategy_run_page", _fake_page)
-    monkeypatch.setattr(research_service, "with_mart_readonly", _fake_with_mart)
-    monkeypatch.setattr(research_service, "resolve_issuer_candidates_from_cursor", _fake_resolve)
-    monkeypatch.setattr(research_service, "read_trace_lineage", lambda *_a: (None, None, None))
-    monkeypatch.setattr(research_service.PostgresIssuerModuleReader, "supply_chain_exposure", lambda *_a, **_k: None)
-    monkeypatch.setattr(research_service.PostgresIssuerModuleReader, "analyst_ratings", lambda *_a, **_k: None)
+    monkeypatch.setattr(entities_service, "get_strategy_run_page", _fake_page)
+    monkeypatch.setattr(entities_service, "with_mart_readonly", _fake_with_mart)
+    monkeypatch.setattr(entities_service, "resolve_issuer_candidates_from_cursor", _fake_resolve)
+    monkeypatch.setattr(entities_service, "read_trace_lineage", lambda *_a: (None, None, None))
+    monkeypatch.setattr(entities_service.PostgresIssuerModuleReader, "supply_chain_exposure", lambda *_a, **_k: None)
+    monkeypatch.setattr(entities_service.PostgresIssuerModuleReader, "analyst_ratings", lambda *_a, **_k: None)
 
     ctx = auth_service.access_context_for(
         auth_service.PrincipalRecord(principal_id="p:1", tenant_id="t:1", principal_kind="member")
     )
-    res = research_service.get_entity_detail(ctx, issuer_id="issuer:cik:0000723125", database_url="postgresql://x")
+    res = entities_service.get_entity_detail(ctx, issuer_id="issuer:cik:0000723125", database_url="postgresql://x")
     assert res.label == "MU · Micron"
     assert len(res.decisions) == 1
     assert page_calls == 1
@@ -597,10 +644,10 @@ def test_company_profile_reader_resolves_legacy_id_without_lateral_entity_identi
         uuid_str = "11111111-1111-1111-1111-111111111111"
         return [iid, uuid_str, "issuer:cik:0001045810"], {uuid_str: "issuer:cik:0001045810"}
 
-    monkeypatch.setattr(research_service, "with_mart_readonly", lambda fn, **_k: fn(_RecordingCur()))
-    monkeypatch.setattr(research_service, "resolve_issuer_identity_from_cursor", _fake_identity)
+    monkeypatch.setattr(entities_service, "with_mart_readonly", lambda fn, **_k: fn(_RecordingCur()))
+    monkeypatch.setattr(entities_service, "resolve_issuer_identity_from_cursor", _fake_identity)
 
-    reader = research_service.PostgresCompanyProfileReader(database_url="postgresql://x")
+    reader = entities_service.PostgresCompanyProfileReader(database_url="postgresql://x")
     profile = reader.get_company_profile(issuer_id="NVDA")
     assert resolve_calls == 1
     assert profile["issuer_id"] == "issuer:cik:0001045810"

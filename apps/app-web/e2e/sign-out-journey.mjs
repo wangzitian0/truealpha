@@ -46,7 +46,7 @@ export const CONTROL = "[data-sign-out]";
 // Set by `SignOutButton` in an effect, so it exists only after the component
 // has hydrated with its click handler. The server render never carries it.
 export const HYDRATED_CONTROL = '[data-sign-out][data-hydrated="true"]';
-const PROTECTED_PATH = "/research";
+const PROTECTED_PATH = "/research/coverage";
 const LOGOUT_PATH = "/api/v1/auth/logout";
 
 /** @typedef {{ hydrationMs: number, signOutMs: number, clickMs: number }} Timeouts */

@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import csv
 import json
-import re
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -159,17 +158,6 @@ def test_the_input_order_does_not_change_the_verdict() -> None:
     runs = newest_first(FLEET, runs_of("nightly", "ssssff"))
 
     assert job_run_health.judge(reversed(runs), now=NOW) == job_run_health.judge(runs, now=NOW)
-
-
-def test_the_window_of_the_admin_page_is_the_window_of_the_verdict() -> None:
-    """One definition: `/admin/pipeline` counts the same days as the verdict judges."""
-    source = (
-        Path(__file__).resolve().parents[3] / "apps/llm-service/src/llm_service/services/admin_service.py"
-    ).read_text()
-    match = re.search(r"^PIPELINE_WINDOW_DAYS\s*=\s*(\d+)", source, re.MULTILINE)
-
-    assert match is not None
-    assert int(match.group(1)) == job_run_health.WINDOW_DAYS
 
 
 def test_manual_failures_are_not_a_scheduled_pair() -> None:

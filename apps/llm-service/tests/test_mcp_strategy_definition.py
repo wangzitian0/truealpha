@@ -99,7 +99,7 @@ async def _served_result(connection: psycopg.Connection[Any], *, version: str, c
         ("strategy-decision:" + secrets.token_hex(32), secrets.token_hex(32), run_id),
     )
     _content, structured = await build_mcp_server().call_tool(  # type: ignore[misc]
-        "strategy_run", {"request": {"strategy_id": "large_model_value_v0"}}
+        "strategy_rankings", {"request": {"strategy_id": "large_model_value_v0"}}
     )
     result: dict[str, Any] = structured["result"]  # type: ignore[index]
     assert result.get("strategy_run_id") == run_id, f"the tool served {result!r}, not the seeded run"

@@ -8,13 +8,14 @@ from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.responses import RedirectResponse
+from fastapi.routing import APIRoute
 from infra2_sdk.fastapi import init_service
 from truealpha_contracts.environment_contract import load_environment_contract
 from truealpha_runtime.boot import assert_environment
 from truealpha_runtime.telemetry import telemetry_config_error
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
-from llm_service.api.v1 import admin, auth, research
+from llm_service.api.v1 import admin, auth, entities, library, panel, strategy
 from llm_service.config import settings
 from llm_service.mcp_auth import BearerTokenGate
 from llm_service.mcp_server import mcp
@@ -31,6 +32,12 @@ GOVERNED_POINTERS_SQL = (
     "from mart.served_head order by universe_id"
 )
 HEAD_ENVIRONMENTS_SQL = "select 1 from mart.served_head_environments limit 1"
+
+_SYSTEM_PROBES: dict[str, str] = {
+    "/health": "system_health",
+    "/livez": "system_livez",
+    "/readyz": "system_readyz",
+}
 
 
 def refuse_to_boot_on_a_missing_environment() -> None:
@@ -153,8 +160,11 @@ def _data_engine_health_extra() -> dict[str, Any]:
     }
 
 
+app.include_router(panel.router)
+app.include_router(strategy.router)
+app.include_router(entities.router)
+app.include_router(library.router)
 app.include_router(auth.router)
-app.include_router(research.router)
 app.include_router(admin.router)
 
 # Replace FastMCP's default Rich stderr handler so init_service installs SDK stdout JSON logging.
@@ -169,3 +179,9 @@ try:
     )
 except ValueError as exc:
     raise telemetry_config_error(exc) from exc
+
+for route in app.routes:
+    if isinstance(route, APIRoute) and route.path in _SYSTEM_PROBES:
+        route.tags = ["system"]
+        route.operation_id = _SYSTEM_PROBES[route.path]
+app.openapi_schema = None

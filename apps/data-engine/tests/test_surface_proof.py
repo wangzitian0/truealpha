@@ -684,7 +684,7 @@ def _seed_theme_fill(connection, *, run_id: str, cutoff: datetime) -> None:
     assert count == (len(THEMES),), "one fill row for each governed theme"
 
 
-def _service_query(name: str, rel_path: str = "apps/llm-service/src/llm_service/services/research_service.py") -> str:
+def _service_query(name: str, rel_path: str = "apps/llm-service/src/llm_service/services/entities_service.py") -> str:
     """The SQL assigned to `<name> = '''...'''` in `rel_path`."""
     import re
     from pathlib import Path
@@ -701,13 +701,13 @@ def test_the_proof_and_the_theme_reader_select_the_same_run() -> None:
 
 
 def test_the_proof_and_the_holdings_and_coverage_readers_select_the_same_rows() -> None:
-    """`surface_proof` mirrors shared `POINTER_HEAD_SQL` (`research_report_mart.py`, imported by `research_service.py`) and `admin_service.py` `QUESTION_COVERAGE_SQL`."""
+    """`surface_proof` mirrors shared `POINTER_HEAD_SQL` (`research_report_mart.py`, imported by `panel_service.py`) and `admin_service.py` `QUESTION_COVERAGE_SQL`."""
     from pathlib import Path
 
-    research_svc = (
-        Path(__file__).resolve().parents[3] / "apps/llm-service/src/llm_service/services/research_service.py"
+    panel_svc = (
+        Path(__file__).resolve().parents[3] / "apps/llm-service/src/llm_service/services/panel_service.py"
     ).read_text()
-    assert "POINTER_HEAD_SQL" in research_svc and "resolve_governed_head_run_id(" in research_svc
+    assert "POINTER_HEAD_SQL" in panel_svc and "resolve_governed_head_run_id(" in panel_svc
     holdings_svc = " ".join(
         _service_query("POINTER_HEAD_SQL", "common/runtime/src/truealpha_runtime/research_report_mart.py").split()
     )
