@@ -106,8 +106,15 @@ class SupplyChainEdgeCandidate:
     confidence: Decimal
     target_ticker: str | None = None
     revenue_share_pct: Decimal | None = None
-    extractor: str = "graph:kg-edges:v1"
+    extractor: str = "graph:entity-relations:v1"
     replayed: bool = False
+
+
+@dataclass(frozen=True)
+class _SupplyChainExtractionResult:
+    candidates: tuple[SupplyChainEdgeCandidate, ...]
+    extractor: str
+    replayed: bool
 
 
 _WS_RE = re.compile(r"\s+")
@@ -165,7 +172,7 @@ def _filing_doc_cik_digits(source_record_id: object) -> str | None:
     return None
 
 
-def extract_supply_chain_relationships(
+def _extract_supply_chain_result(
     filing_text: str,
     *,
     issuer_id: str,
@@ -177,10 +184,9 @@ def extract_supply_chain_relationships(
     connection: Connection[Any] | None = None,
     llm_gateway: Any | None = None,
     persist: bool = True,
-) -> tuple[SupplyChainEdgeCandidate, ...]:
-    """Extract supplier/customer edge candidates from 10-K text."""
+) -> _SupplyChainExtractionResult:
     if not filing_text or len(filing_text.strip()) < 40:
-        return ()
+        return _SupplyChainExtractionResult(candidates=(), extractor="graph:entity-relations:v1", replayed=False)
     resolved_cik = cik if cik is not None else _parse_cik_from_identifier(issuer_id or accession)
     extraction = (llm_gateway or llm).identify_supply_chain_partners(
         connection,
@@ -214,7 +220,39 @@ def extract_supply_chain_relationships(
                 replayed=extraction.invocation.replayed,
             )
         )
-    return tuple(results)
+    return _SupplyChainExtractionResult(
+        candidates=tuple(results),
+        extractor=extraction.extractor,
+        replayed=extraction.invocation.replayed,
+    )
+
+
+def extract_supply_chain_relationships(
+    filing_text: str,
+    *,
+    issuer_id: str,
+    filing_date: date,
+    accession: str,
+    cik: int | None = None,
+    issuer_label: str | None = None,
+    cutoff: date | datetime | None = None,
+    connection: Connection[Any] | None = None,
+    llm_gateway: Any | None = None,
+    persist: bool = True,
+) -> tuple[SupplyChainEdgeCandidate, ...]:
+    """Extract supplier/customer edge candidates from 10-K text."""
+    return _extract_supply_chain_result(
+        filing_text,
+        issuer_id=issuer_id,
+        filing_date=filing_date,
+        accession=accession,
+        cik=cik,
+        issuer_label=issuer_label,
+        cutoff=cutoff,
+        connection=connection,
+        llm_gateway=llm_gateway,
+        persist=persist,
+    ).candidates
 
 
 def _slug_entity_id(name: str) -> str:
@@ -383,6 +421,7 @@ class _ExtractionDiagnostics:
     model_errors: int = 0
     exceeded_issuers: dict[str, str] = field(default_factory=dict)
     issuer_extractors: dict[str, str] = field(default_factory=dict)
+    issuer_raw_refs: dict[str, str] = field(default_factory=dict)
 
 
 def _issuer_display_name(connection: Connection[Any], canonical_issuer_id: str, ticker: str, tx_time: datetime) -> str:
@@ -444,14 +483,15 @@ def persist_extracted_supply_chain_edges(
         accession = str(meta.get("accession") or source_record_id)
         cik_int = _extract_cik_int(source_record_id, meta, matched)
         issuer_id = matched.issuer_id
+        canonical_label = matched.ticker.strip().upper().replace("-", ".") if matched.ticker else f"CIK {cik_int:010d}"
         try:
-            candidates = extract_supply_chain_relationships(
+            extraction = _extract_supply_chain_result(
                 filing_text,
                 issuer_id=issuer_id,
                 filing_date=filing_dt,
                 accession=accession,
                 cik=cik_int,
-                issuer_label=matched.ticker or issuer_id,
+                issuer_label=canonical_label,
                 cutoff=cutoff,
                 connection=connection,
                 llm_gateway=llm_gateway,
@@ -478,13 +518,14 @@ def persist_extracted_supply_chain_edges(
                 exc,
             )
             continue
-        if candidates:
-            diag.issuer_extractors[issuer_id] = candidates[0].extractor
-        if candidates and candidates[0].replayed:
+        raw_ref = f"raw.fetches:{fetch_id}"
+        diag.issuer_extractors[issuer_id] = extraction.extractor
+        diag.issuer_raw_refs[issuer_id] = raw_ref
+        if extraction.replayed:
             diag.replayed += 1
         else:
             diag.model_extracted += 1
-        raw_ref = f"raw.fetches:{fetch_id}"
+        candidates = extraction.candidates
         for cand in candidates:
             partner_uuid = _resolve_or_mint_partner_entity(
                 connection,
@@ -535,7 +576,7 @@ def persist_extracted_supply_chain_edges(
 
 
 def _exposure_params(
-    item: dict[str, Any] | SupplyChainExposure, *, as_of: datetime, default_extractor: str = "graph:kg-edges:v1"
+    item: dict[str, Any] | SupplyChainExposure, *, as_of: datetime, default_extractor: str = "graph:entity-relations:v1"
 ) -> tuple[Any, ...]:
     extractor = default_extractor
     if isinstance(item, dict):
@@ -584,7 +625,7 @@ def materialize_supply_chain_exposure(
     run_id: str,
     cutoff: datetime | None = None,
     exposure_data: Sequence[dict[str, Any] | SupplyChainExposure],
-    default_extractor: str = "graph:kg-edges:v1",
+    default_extractor: str = "graph:entity-relations:v1",
 ) -> int:
     """Materialize exposure rows into `mart.issuer_supply_chain_exposure`."""
     as_of, source_status, val_status = unbacked_status_values(cutoff)
@@ -659,7 +700,12 @@ def _resolve_relation_endpoint(row: Sequence[Any], alias_set: set[str]) -> tuple
 
 
 def _load_issuer_graph_partners(
-    connection: Connection[Any], *, issuer: CanonicalIssuer, cutoff: datetime, cutoff_date: Any
+    connection: Connection[Any],
+    *,
+    issuer: CanonicalIssuer,
+    cutoff: datetime,
+    cutoff_date: Any,
+    current_raw_ref: str | None = None,
 ) -> list[SupplyChainPartner]:
     partners: list[SupplyChainPartner] = []
     seen_edges: dict[tuple[str, str], int] = {}
@@ -684,9 +730,10 @@ def _load_issuer_graph_partners(
             "  order by ea.confidence desc, ea.transaction_time desc, ea.alias_id desc limit 1"
             ") nt on true "
             "where r.relation_type = 'supplies_to' and (r.from_entity_id::text = any(%s) or r.to_entity_id::text = any(%s)) "
+            "and (%s::text is null or r.raw_ref = %s) "
             "and r.transaction_time <= %s and r.valid_from <= %s::date and (r.valid_to is null or r.valid_to > %s::date) "
             "order by r.transaction_time desc, r.relation_id desc",
-            (aliases, aliases, cutoff, cutoff_date, cutoff_date),
+            (aliases, aliases, current_raw_ref, current_raw_ref, cutoff, cutoff_date, cutoff_date),
         )
         alias_set = set(aliases)
         for row in rows or ():
@@ -751,7 +798,13 @@ def materialize_universe_supply_chain_exposure(
             }
         else:
             partners = (
-                _load_issuer_graph_partners(connection, issuer=issuer, cutoff=cutoff, cutoff_date=cutoff_date)
+                _load_issuer_graph_partners(
+                    connection,
+                    issuer=issuer,
+                    cutoff=cutoff,
+                    cutoff_date=cutoff_date,
+                    current_raw_ref=diag.issuer_raw_refs.get(issuer.issuer_id),
+                )
                 if has_edges_table
                 else []
             )
@@ -763,7 +816,7 @@ def materialize_universe_supply_chain_exposure(
             run_id=run_id,
             cutoff=cutoff,
             exposure_data=[item],
-            default_extractor=diag.issuer_extractors.get(issuer.issuer_id, "graph:kg-edges:v1"),
+            default_extractor=diag.issuer_extractors.get(issuer.issuer_id, "graph:entity-relations:v1"),
         )
     return SupplyChainRunReport(
         count,
