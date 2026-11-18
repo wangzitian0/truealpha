@@ -166,6 +166,8 @@ def test_slice2_migration_converts_legacy_kg_database_losslessly() -> None:
         with psycopg.connect(admin_url, connect_timeout=3, autocommit=True) as admin:
             admin.execute(sql.SQL("create database {}").format(sql.Identifier(name)))
     except psycopg.OperationalError as error:
+        if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
+            pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
         pytest.skip(f"no local database: {error}")
 
     params = conninfo_to_dict(admin_url)
@@ -206,6 +208,10 @@ def test_slice2_migration_converts_legacy_kg_database_losslessly() -> None:
                     source text not null,
                     raw_ref text not null,
                     recorded_at timestamptz default now() not null
+                );
+                create table staging.market_prices (
+                    id bigint generated always as identity primary key,
+                    unified_id text not null constraint market_prices_unified_id_fkey references staging.kg_entities(id)
                 );
                 alter table staging.analyst_rating_events
                     drop constraint analyst_rating_events_analyst_id_fkey,
