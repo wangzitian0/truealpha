@@ -548,6 +548,65 @@ def test_entity_detail_resolves_candidates_once_and_avoids_duplicate_strategy_pa
     assert executed_sqls, "expected SQL queries to execute"
     assert all("= any(%s::text[])" in sql for sql in executed_sqls)
     assert not any("in (select ei." in sql for sql in executed_sqls)
+    assert not any("mart.entity_identity" in sql for sql in executed_sqls)
+    assert not any("mart.strategy_decisions" in sql for sql in executed_sqls)
+
+
+def test_company_profile_reader_resolves_legacy_id_without_lateral_entity_identity_join(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    resolve_calls = 0
+    executed_sqls: list[str] = []
+
+    class _RecordingCur:
+        def __init__(self) -> None:
+            self._last_sql = ""
+
+        def execute(self, sql: str, _params: Any = None) -> None:
+            self._last_sql = sql
+            executed_sqls.append(sql)
+
+        def fetchone(self) -> dict[str, Any] | None:
+            if "from mart.strategy_decisions" in self._last_sql:
+                return {
+                    "issuer_id": "11111111-1111-1111-1111-111111111111",
+                    "cutoff_at": "2026-06-30T00:00:00Z",
+                    "tier": "high",
+                    "valuation_gap": "0.15",
+                    "current_price_to_sales": None,
+                    "target_price_to_sales": None,
+                    "current_price_to_gross_profit": "4.0",
+                    "target_price_to_gross_profit": "4.6",
+                    "outcome": "eligible",
+                    "exclusion_reason": None,
+                    "rank": 1,
+                    "peg": "1.2",
+                    "peg_rank": 1,
+                    "peg_reason_codes": [],
+                    "confidence": "0.9",
+                    "reason_codes": [],
+                }
+            return None
+
+        def fetchall(self) -> list[Any]:
+            return []
+
+    def _fake_identity(_cur: Any, iid: str) -> tuple[list[str], dict[str, str]]:
+        nonlocal resolve_calls
+        resolve_calls += 1
+        uuid_str = "11111111-1111-1111-1111-111111111111"
+        return [iid, uuid_str, "issuer:cik:0001045810"], {uuid_str: "issuer:cik:0001045810"}
+
+    monkeypatch.setattr(research_service, "with_mart_readonly", lambda fn, **_k: fn(_RecordingCur()))
+    monkeypatch.setattr(research_service, "resolve_issuer_identity_from_cursor", _fake_identity)
+
+    reader = research_service.PostgresCompanyProfileReader(database_url="postgresql://x")
+    profile = reader.get_company_profile(issuer_id="NVDA")
+    assert resolve_calls == 1
+    assert profile["issuer_id"] == "issuer:cik:0001045810"
+    assert profile["tier"] == "high"
+    assert len(executed_sqls) == 3
+    assert all("= any(%s::text[])" in sql and "mart.entity_identity" not in sql for sql in executed_sqls)
 
 
 def test_issuer_module_reader_resolves_candidates_once_per_instance(monkeypatch: pytest.MonkeyPatch) -> None:

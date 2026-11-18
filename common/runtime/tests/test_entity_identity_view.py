@@ -44,7 +44,10 @@ LEGACY_ID_MIGRATION = MIGRATIONS / "0003_mart.sql"
 SET_BASED_MIGRATION = LEGACY_ID_MIGRATION
 PRIMARY_LISTING_MIGRATION = LEGACY_ID_MIGRATION
 UNIQUE_IDENTITY_MIGRATION = LEGACY_ID_MIGRATION
-VIEW_MIGRATIONS = (LEGACY_ID_MIGRATION,)
+VIEW_MIGRATIONS = (
+    LEGACY_ID_MIGRATION,
+    MIGRATIONS / "20261118T1100_runtime_entity_identity_pivoted.sql",
+)
 
 COLUMNS = ("entity_id", "kind", "current_ticker", "name", "cik", "lei", "listing_id", "legacy_id")
 HELPERS = ("entity_survivor", "entity_alias_valid_to")
