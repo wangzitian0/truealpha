@@ -414,6 +414,15 @@ begin
         add constraint fund_holding_facts_fund_id_fkey FOREIGN KEY (fund_id) REFERENCES staging.entities(entity_id),
         add constraint fund_holding_facts_holding_id_fkey FOREIGN KEY (holding_id) REFERENCES staging.entities(entity_id);
 
+    -- Unblock retiring staging.kg_entities when superseded staging.market_prices exists on upgraded DBs.
+    if to_regclass('staging.market_prices') is not null then
+        alter table staging.market_prices
+            drop constraint if exists market_prices_unified_id_fkey;
+        if not exists (select 1 from staging.market_prices limit 1) then
+            drop table staging.market_prices;
+        end if;
+    end if;
+
     -- Retire legacy kg_* tables and indexes.
     drop index if exists staging.idx_kg_edges_to;
     drop index if exists staging.idx_kg_edges_asof;
