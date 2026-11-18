@@ -11,7 +11,7 @@
       ]
     },
     "preview_gate": {
-      "bootstrap": "cd apps/app-web && bun install --frozen-lockfile && bunx playwright install --with-deps chromium",
+      "bootstrap": "cd apps/app-web && bun install --frozen-lockfile && bunx playwright install --with-deps --only-shell chromium",
       "timeout_seconds": 360,
       "required_env": [
         "APP_URL",
@@ -49,8 +49,8 @@
       ]
     },
     "staging_gate": {
-      "bootstrap": "cd apps/app-web && bun install --frozen-lockfile && bunx playwright install --with-deps chromium",
-      "timeout_seconds": 420,
+      "bootstrap": "cd apps/app-web && bun install --frozen-lockfile && bunx playwright install --with-deps --only-shell chromium",
+      "timeout_seconds": 600,
       "required_env": [
         "APP_URL",
         "APP_VERSION_REF",
