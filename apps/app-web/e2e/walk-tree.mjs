@@ -458,39 +458,64 @@ async function assertTraceRendersDecisionInputs(page, path, problems) {
   }
 }
 
-/** #1358: Follow the first entity detail link from `/research/rankings` in the populated state so
- * `/research/entities/[id]` (which is excluded from `livePages` because its route pattern contains `[`)
- * is exercised in every populated e2e walk. */
-async function assertEntityDetailRenders(page, path, problems) {
-  if (path !== "/research/rankings" || DATA_STATE !== "populated") return;
+/** Follow the first dynamic `[id]` link from a list page so dynamic routes are exercised alongside `livePages`. */
+async function assertDynamicDetailRenders(page, path, problems, spec) {
+  if (path !== spec.listPath || DATA_STATE !== "populated") return;
 
   const href = await page
-    .locator('a[href^="/research/entities/"]')
+    .locator(`a[href^="${spec.hrefPrefix}"]`)
     .first()
     .getAttribute("href", { timeout: 15000 })
     .catch(() => null);
   if (href === null) {
-    problems.push("entity-detail: /research/rankings offers no /research/entities/[id] link in the populated state");
+    if (spec.required) problems.push(`${spec.name}: ${spec.listPath} offers no ${spec.routePattern} link in the populated state`);
     return;
   }
 
   const response = await gotoStable(page, `${BASE}${href}`);
   const status = response ? response.status() : null;
   if (status === null || status >= 400) {
-    problems.push(`entity-detail: ${href} answered HTTP ${status}`);
+    problems.push(`${spec.name}: ${href} answered HTTP ${status}`);
     return;
   }
-  const section = page.locator('section[aria-labelledby="entity-heading"]');
+  const section = page.locator(`section[aria-labelledby="${spec.headingId}"]`);
   try {
-    await section.locator("#entity-heading").waitFor({ state: "visible", timeout: 15000 });
+    await section.locator(`#${spec.headingId}`).waitFor({ state: "visible", timeout: 15000 });
   } catch {
-    problems.push(`entity-detail: #entity-heading is not visible on ${href}`);
+    problems.push(`${spec.name}: #${spec.headingId} is not visible on ${href}`);
     return;
   }
   await assertNoVisibleRawIds(page, href, problems);
   const leak = (await section.innerText()).match(/\bundefined\b|\[object Object\]|\bNaN\b/);
-  if (leak) problems.push(`entity-detail: ${href} shows "${leak[0]}"`);
+  if (leak) problems.push(`${spec.name}: ${href} shows "${leak[0]}"`);
 }
+
+const DYNAMIC_DETAIL_SPECS = [
+  {
+    name: "entity-detail",
+    listPath: "/research/rankings",
+    hrefPrefix: "/research/entities/",
+    routePattern: "/research/entities/[id]",
+    headingId: "entity-heading",
+    required: true,
+  },
+  {
+    name: "backtest-detail",
+    listPath: "/research/backtest",
+    hrefPrefix: "/research/backtest/",
+    routePattern: "/research/backtest/[id]",
+    headingId: "backtest-detail-heading",
+    required: false,
+  },
+  {
+    name: "library-detail",
+    listPath: "/research/library",
+    hrefPrefix: "/research/library/",
+    routePattern: "/research/library/[id]",
+    headingId: "doc-detail-heading",
+    required: false,
+  },
+];
 
 async function checkRoute(page, path, role, pageErrors) {
   pageErrors.startRoute(role, path);
@@ -508,7 +533,9 @@ async function checkRoute(page, path, role, pageErrors) {
   await assertCurrentNavLink(page, finalPath, problems);
   await assertDatahubPlantHealth(page, path, problems, role);
   // Last, because these navigate away from this page.
-  await assertEntityDetailRenders(page, path, problems);
+  for (const spec of DYNAMIC_DETAIL_SPECS) {
+    await assertDynamicDetailRenders(page, path, problems, spec);
+  }
   await assertTraceRendersDecisionInputs(page, path, problems);
   problems.push(...pageErrors.problems());
   return problems;

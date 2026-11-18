@@ -103,6 +103,67 @@ for (const m of apiMethods) {
   assert(new RegExp(`\\bapi\\.${m.name}\\s*\\(`).test(scope), `dead api.${m.name}() wrapper in src/client/api.ts`);
 }
 
+// Enforce domain-pure UI callers across pages and their imported components.
+const methodDomain = new Map<string, string>();
+for (const m of apiMethods) {
+  const match = m.body.match(/\/api\/v1\/([a-z]+)\//);
+  assert(match !== null, `api.${m.name}() does not target /api/v1/<domain>/`);
+  methodDomain.set(m.name, match[1]);
+}
+
+function collectReachableFiles(entryFile: string, visited = new Set<string>()): string[] {
+  if (visited.has(entryFile)) return [];
+  visited.add(entryFile);
+  const src = readFileSync(entryFile, "utf8");
+  const files = [entryFile];
+  for (const imp of src.matchAll(/from\s+["'](@\/[^"']+)["']/g)) {
+    const rel = imp[1].replace(/^@\//, "src/");
+    for (const ext of [".tsx", ".ts", "/index.tsx", "/index.ts"]) {
+      const candidate = join(APP_ROOT, `${rel}${ext}`);
+      try {
+        readFileSync(candidate, "utf8");
+        files.push(...collectReachableFiles(candidate, visited));
+        break;
+      } catch {
+        // Ignore non-matching extension.
+      }
+    }
+  }
+  return files;
+}
+
+const ROUTE_DOMAIN_RULES: { prefix: string; allowedDomains: Set<string>; allowedMethods?: Set<string> }[] = [
+  { prefix: "src/app/admin/", allowedDomains: new Set(["admin"]) },
+  { prefix: "src/app/login/", allowedDomains: new Set(["auth"]) },
+  { prefix: "src/app/research/coverage/", allowedDomains: new Set(["panel"]) },
+  { prefix: "src/app/research/backtest/", allowedDomains: new Set(["strategy"]) },
+  { prefix: "src/app/research/rankings/", allowedDomains: new Set(["strategy"]), allowedMethods: new Set(["exportCard"]) },
+  { prefix: "src/app/research/themes/", allowedDomains: new Set(["entities"]) },
+  { prefix: "src/app/research/holdings/", allowedDomains: new Set(["entities"]) },
+  { prefix: "src/app/research/trace/", allowedDomains: new Set(["entities"]) },
+  { prefix: "src/app/research/entities/", allowedDomains: new Set(["entities"]), allowedMethods: new Set(["exportCard"]) },
+  { prefix: "src/app/research/library/", allowedDomains: new Set(["library"]) },
+];
+
+for (const file of walkFiles(join(APP_ROOT, "src/app"))) {
+  const rel = file.slice(APP_ROOT.length);
+  const rule = ROUTE_DOMAIN_RULES.find((r) => rel.startsWith(r.prefix));
+  if (!rule) continue;
+  for (const depFile of collectReachableFiles(file)) {
+    const depSrc = readFileSync(depFile, "utf8");
+    for (const call of depSrc.matchAll(/\bapi\.([a-zA-Z0-9_]+)\s*\(/g)) {
+      const method = call[1];
+      const domain = methodDomain.get(method);
+      assert(domain !== undefined, `unknown api.${method}() in ${depFile.slice(APP_ROOT.length)}`);
+      const ok = rule.allowedDomains.has(domain) || (rule.allowedMethods?.has(method) ?? false);
+      assert(
+        ok,
+        `${rel} crosses domain boundary via ${depFile.slice(APP_ROOT.length)} calling api.${method}() (domain: ${domain})`,
+      );
+    }
+  }
+}
+
 const pkg = JSON.parse(readFileSync(join(APP_ROOT, "package.json"), "utf8")) as {
   dependencies?: Record<string, string>;
   devDependencies?: Record<string, string>;

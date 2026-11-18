@@ -2,7 +2,6 @@ import Link from "next/link";
 import { api } from "@/client/api";
 import { formatCell, formatShortSha } from "@/client/format";
 import { RUNS_EMPTY_MESSAGE, RUNS_UNAVAILABLE_MESSAGE } from "@/client/read-state";
-import { AdminApiSurfaceCard } from "@/components/admin-api-surface-card";
 import { ResearchTable } from "@/components/research-table";
 import { TriggerRunButton } from "@/components/trigger-run-button";
 import { loadAuthed } from "../_load";
@@ -55,7 +54,6 @@ export default async function AdminOpsPage() {
           </div>
         </>
       )}
-      <AdminApiSurfaceCard />
     </section>
   );
 }

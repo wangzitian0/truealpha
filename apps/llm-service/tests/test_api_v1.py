@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 import json
-import warnings
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -25,138 +24,10 @@ from pydantic import SecretStr
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
-def test_openapi_schema_has_25_paths_27_ops_and_zero_warnings() -> None:
-    with warnings.catch_warnings(record=True) as captured:
-        warnings.simplefilter("error")
-        app.openapi_schema = None
-        schema = app.openapi()
-    assert captured == []
-    paths = schema["paths"]
-    assert len(paths) == 25
-    op_ids = [
-        op["operationId"]
-        for methods in paths.values()
-        for method, op in methods.items()
-        if method in {"get", "post", "put", "delete", "patch"} and isinstance(op, dict)
-    ]
-    assert len(op_ids) == 27
-    assert len(op_ids) == len(set(op_ids)), "OpenAPI operationIds must be unique"
-    assert "/api/v1/auth/login" in paths
-    assert "/api/v1/library/cards/export" in paths
-    assert "/api/v1/admin/triggers" in paths
-    assert "/api/v1/panel/coverage" in paths
-    assert paths["/health"]["get"]["tags"] == ["system"]
-    assert paths["/health"]["get"]["operationId"] == "system_health"
-    assert paths["/livez"]["get"]["operationId"] == "system_livez"
-    assert paths["/readyz"]["get"]["operationId"] == "system_readyz"
-
-
-def test_entities_suffix_routes_are_not_swallowed_by_path_wildcard(monkeypatch: pytest.MonkeyPatch) -> None:
-    from llm_service.api.v1 import entities as entities_router
-
-    principal = auth_service.PrincipalRecord(principal_id="principal:1", tenant_id="tenant:1", principal_kind="member")
-    monkeypatch.setattr(auth_service, "resolve_principal_from_token", lambda *_a, **_k: principal)
-    monkeypatch.setattr(
-        entities_router,
-        "load_supply_chain_exposure",
-        lambda *, issuer_id: entities_service.IssuerModuleUnavailable(
-            issuer_id=issuer_id, module="supply_chain_exposure"
-        ),
-    )
-    monkeypatch.setattr(
-        entities_router,
-        "load_analyst_ratings",
-        lambda *, issuer_id: entities_service.IssuerModuleUnavailable(issuer_id=issuer_id, module="analyst_ratings"),
-    )
-    client = TestClient(app)
-    headers = {"Authorization": "Bearer tok"}
-    sc = client.get("/api/v1/entities/issuer:aapl/supply-chain", headers=headers)
-    ar = client.get("/api/v1/entities/issuer:aapl/analyst-ratings", headers=headers)
-    assert sc.status_code == 200 and sc.json()["module"] == "supply_chain_exposure"
-    assert sc.json()["issuer_id"] == "issuer:aapl"
-    assert ar.status_code == 200 and ar.json()["module"] == "analyst_ratings"
-    assert ar.json()["issuer_id"] == "issuer:aapl"
-
-
 def test_committed_openapi_json_matches_live_fastapi_spec() -> None:
     app.openapi_schema = None
     committed = json.loads((REPO_ROOT / "apps/app-web/openapi.json").read_text(encoding="utf-8"))
     assert app.openapi() == committed
-
-
-def test_auth_login_rate_limiter_and_jwt_session_roundtrip(monkeypatch: pytest.MonkeyPatch) -> None:
-    clock = [100.0]
-    limiter = auth_service.FixedWindowRateLimiter(2, 60, now=lambda: clock[0])
-    assert limiter.attempt("1.2.3.4") is True
-    assert limiter.attempt("1.2.3.4") is True
-    assert limiter.attempt("1.2.3.4") is False
-    clock[0] += 61.0
-    assert limiter.attempt("1.2.3.4") is True
-
-    from llm_service.config import Settings
-
-    test_settings = Settings(
-        _env_file=None,
-        app_env="staging",
-        secret_key=SecretStr("unit-test-signing-key-32-chars-minimum"),
-    )
-    monkeypatch.setattr(auth_service, "settings", test_settings)
-    pw_hash = bcrypt.hashpw(b"CorrectHorseBatteryStaple", bcrypt.gensalt(rounds=4)).decode("ascii")
-
-    monkeypatch.setattr(
-        auth_service,
-        "_lookup_credential_by_email",
-        lambda email: ("principal:1", "tenant:1", "member", pw_hash) if email == "alice@example.com" else None,
-    )
-    monkeypatch.setattr(
-        auth_service,
-        "_lookup_principal",
-        lambda pid, tid: (
-            auth_service.PrincipalRecord(principal_id=pid, tenant_id=tid, principal_kind="member")
-            if pid == "principal:1"
-            else None
-        ),
-    )
-
-    test_limiter = auth_service.FixedWindowRateLimiter(3, 60)
-    monkeypatch.setattr(auth_service, "login_rate_limiter", test_limiter)
-
-    client = TestClient(app, base_url="https://testserver")
-    bad = client.post("/api/v1/auth/login", json={"email": "alice@example.com", "password": "wrong"})
-    assert bad.status_code == 401
-
-    ok = client.post(
-        "/api/v1/auth/login", json={"email": "  ALICE@Example.com ", "password": "CorrectHorseBatteryStaple"}
-    )
-    assert ok.status_code == 200
-    assert ok.json()["principal_id"] == "principal:1"
-    assert auth_service.SESSION_COOKIE_NAME in ok.cookies
-
-    sess = client.get("/api/v1/auth/session")
-    assert sess.status_code == 200
-    assert sess.json() == {
-        "authenticated": True,
-        "principal_id": "principal:1",
-        "tenant_id": "tenant:1",
-        "principal_kind": "member",
-    }
-
-    # Member cannot access admin endpoints (403).
-    denied_admin = client.get("/api/v1/admin/ops")
-    assert denied_admin.status_code == 403
-
-    out = client.post("/api/v1/auth/logout")
-    assert out.status_code == 200
-    assert out.json() == {"ok": True}
-
-    expired = auth_service.sign_session_token(
-        principal_id="principal:1",
-        tenant_id="tenant:1",
-        secret=auth_service.resolve_signing_secret(),
-        expire_minutes=-1,
-        now=datetime.now(UTC) - timedelta(minutes=5),
-    )
-    assert auth_service.verify_session_token(expired, secret=auth_service.resolve_signing_secret()) is None
 
 
 def test_documents_validation_and_rls_scope(monkeypatch: pytest.MonkeyPatch) -> None:

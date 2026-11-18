@@ -84,7 +84,7 @@ const ROOT_D_FILES = [
   "src/app/research/backtest/page.tsx",
   "src/app/research/backtest/[id]/page.tsx",
   "src/app/admin/datahub/ledger-coverage.tsx",
-  "src/components/admin-api-surface-card.tsx",
+  "src/components/library-report-preview-card.tsx",
   "src/components/app-chrome.tsx",
   "src/components/trace-inputs-table.tsx",
   "src/components/provenance-cell.tsx",
