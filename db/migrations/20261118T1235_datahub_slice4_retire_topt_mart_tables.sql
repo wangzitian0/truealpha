@@ -4,6 +4,64 @@ do $$
 declare
     v_has_core boolean := to_regclass('mart.topt_core_results') is not null;
 begin
+    -- Re-create mart.capture_issuer_lineage if Slice 3 dropped an empty-table binding before renaming.
+    if to_regclass('mart.capture_issuer_lineage') is null and to_regclass('staging.core_snapshot_members') is not null then
+        execute $vc$create or replace view mart.capture_issuer_lineage as
+ SELECT ('core-result:'::text || m.member_sha256) AS result_id,
+    s.snapshot_id,
+    s.run_id,
+    s.release_manifest_id,
+    s.universe_id,
+    s.universe_version,
+    s.universe_sha256,
+    s.cutoff,
+    m.issuer_id,
+    m.instrument_id,
+    m.listing_id,
+    COALESCE(m.factor_input ->> 'operating_branch'::text, 'non_financial'::text) AS operating_branch,
+    m.observation_ids AS input_observation_ids,
+    mnv.tree_id,
+    mnv.tree_version,
+    mnv.tree_sha256 AS gppe_definition_sha256,
+    mnv.confidence,
+    periods.operating_period_end,
+    periods.revenue_period_end,
+    periods.shares_period_end,
+    s.created_at,
+    ( SELECT jsonb_agg(item.entry ORDER BY item.observation_id) AS items
+           FROM ( SELECT DISTINCT ON (observation.observation_id) observation.observation_id,
+                    jsonb_build_object('observation_id', observation.observation_id, 'semantic_type', observation.semantic_type, 'semantic_version', observation.semantic_version, 'source_vintage_id', observation.source_vintage_id, 'source_request_id', vintage.source_request_id, 'source_registry_entry_id', request.source_registry_entry_id, 'source_policy_id', request.source_policy_id, 'parser_version', observation.parser_version, 'mapping_version', observation.mapping_version, 'normalized_payload_sha256', observation.normalized_payload_sha256, 'confidence', observation.confidence, 'freshness',
+                        CASE
+                            WHEN (s.cutoff - observation.knowable_at) <= COALESCE(NULLIF(policy.semantic_freshness_max_age ->> observation.semantic_type, ''::text)::interval, policy.freshness_max_age) THEN 'fresh'::text
+                            ELSE 'stale'::text
+                        END, 'knowable_at', observation.knowable_at, 'recorded_at', observation.recorded_at, 'vintage', payload.normalized_payload -> 'vintage'::text, 'inputs', ( SELECT COALESCE(jsonb_object_agg(field.key, field.value), '{}'::jsonb) AS "coalesce"
+                           FROM jsonb_each(payload.normalized_payload) field(key, value)
+                          WHERE field.key = ANY (ARRAY['gross_profit'::text, 'total_assets'::text, 'headcount'::text, 'revenue'::text, 'shares_outstanding'::text, 'close'::text, 'currency'::text, 'listing_id'::text]))) AS entry
+                   FROM unnest(m.observation_ids) selected(observation_id)
+                     JOIN staging.capture_normalized_observations observation USING (observation_id)
+                     JOIN staging.capture_observation_obligations usage USING (observation_id)
+                     JOIN staging.capture_observation_payloads payload USING (observation_id)
+                     JOIN raw.capture_obligations obligation ON obligation.obligation_id = usage.capture_obligation_id AND obligation.run_id = s.run_id
+                     JOIN raw.capture_obligation_work_bindings binding ON binding.obligation_id = obligation.obligation_id
+                     JOIN raw.capture_work_items work USING (work_item_id)
+                     JOIN raw.capture_schedule_policies policy USING (schedule_policy_id)
+                     JOIN raw.capture_source_vintages vintage USING (source_vintage_id)
+                     JOIN raw.capture_source_requests request ON request.source_request_id = vintage.source_request_id
+                  ORDER BY observation.observation_id, obligation.obligation_id) item) AS lineage
+   FROM staging.core_snapshots s
+     JOIN staging.core_snapshot_members m USING (snapshot_id)
+     LEFT JOIN mart.metric_node_values mnv ON mnv.run_id = s.run_id AND mnv.issuer_id = m.issuer_id AND mnv.node_key = 'gppe_uniform_charge_v0'::text
+     LEFT JOIN LATERAL ( SELECT (NULLIF(p.normalized_payload ->> 'operating_period_end'::text, ''::text))::date AS operating_period_end,
+            (NULLIF(p.normalized_payload ->> 'revenue_period_end'::text, ''::text))::date AS revenue_period_end,
+            (NULLIF(p.normalized_payload ->> 'shares_period_end'::text, ''::text))::date AS shares_period_end
+           FROM unnest(m.observation_ids) sel(observation_id)
+             JOIN staging.capture_normalized_observations o USING (observation_id)
+             JOIN staging.capture_observation_payloads p USING (observation_id)
+          WHERE o.semantic_type = 'financial-fact'::text
+          ORDER BY o.knowable_at DESC, o.observation_id DESC
+         LIMIT 1) periods ON true$vc$;
+    end if;
+
     -- Ensure mart.metric_node_values permits 'not_applicable' on upgraded databases.
     if to_regclass('mart.metric_node_values') is not null then
         if exists (

@@ -585,9 +585,10 @@ def test_lines_sql_bounds_core_and_entity_identity_joins_to_one_row() -> None:
     """#1641: _LINES_SQL uses LATERAL LIMIT 1 joins so core results and entity_identity never fan out."""
     normalized = " ".join(_LINES_SQL.split()).lower()
     assert "left join lateral (" in normalized
+    assert ") mnv on true" in normalized
     assert ") core on true" in normalized
     assert normalized.count("from mart.entity_identity ei_row") == 2
-    assert normalized.count("limit 1") == 4
+    assert normalized.count("limit 1") == 5
     assert "order by (coalesce(ei.listing_id, cil.listing_id) = h.listing_id) desc" in normalized
 
 

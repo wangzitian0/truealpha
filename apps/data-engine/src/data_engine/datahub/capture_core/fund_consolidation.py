@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Any
 
 from factors.base.etf_virtual_company import FundConsolidation, HoldingLine, consolidate_fund
+from factors.panel import GPPE_BANKING_TCE_SPEC, GPPE_V0_SPEC
 from psycopg import Connection
 from truealpha_contracts.etf_virtual_company import ETF_CONSOLIDATION_V0, EtfConsolidationDefinition
 from truealpha_contracts.execution import AvailabilityStatus, FactorValidationStatus, InputEvidenceStatus
@@ -44,14 +45,23 @@ left join lateral (
                when d.valuation_gap is not null then 'price_to_sales'
            end as valuation_basis
     from mart.strategy_run_capture scope
+    join mart.strategy_runs sr on sr.strategy_run_id = scope.strategy_run_id
     join mart.strategy_decisions d on d.strategy_run_id = scope.strategy_run_id
-    left join mart.metric_node_values mnv
-      on mnv.run_id = scope.capture_run_id
-     and mnv.issuer_id = d.issuer_id
-     and mnv.node_key = 'gppe_uniform_charge_v0'
     left join mart.capture_issuer_lineage cil
       on cil.run_id = scope.capture_run_id
      and cil.issuer_id = d.issuer_id
+    left join lateral (
+        select mnv.confidence
+        from mart.metric_node_values mnv
+        where mnv.run_id = scope.capture_run_id
+          and mnv.issuer_id = d.issuer_id
+          and (
+              (cil.operating_branch = 'financial' and mnv.node_key = %(bank_key)s)
+              or mnv.node_key = %(base_key)s
+          )
+        order by (mnv.node_key = %(bank_key)s) desc
+        limit 1
+    ) mnv on true
     left join lateral (
         select ei_row.listing_id
         from mart.entity_identity ei_row
@@ -83,6 +93,13 @@ left join lateral (
       )
     order by (coalesce(ei.listing_id, cil.listing_id) = h.listing_id) desc,
              d.valuation_gap is not null desc,
+             exists (
+                 select 1 from mart.governed_strategy_run g
+                 where g.strategy_run_id = sr.strategy_run_id
+             ) desc,
+             sr.executed_at desc,
+             sr.created_at desc,
+             sr.strategy_run_id desc,
              cil.listing_id nulls last
     limit 1
 ) core on true
@@ -110,7 +127,15 @@ class FundVintage:
 
 
 def load_fund_vintages(connection: Connection[Any], *, run_id: str, cutoff: datetime) -> tuple[FundVintage, ...]:
-    rows = connection.execute(_LINES_SQL, {"run_id": run_id, "cutoff": cutoff}).fetchall()
+    rows = connection.execute(
+        _LINES_SQL,
+        {
+            "run_id": run_id,
+            "cutoff": cutoff,
+            "bank_key": GPPE_BANKING_TCE_SPEC.root,
+            "base_key": GPPE_V0_SPEC.root,
+        },
+    ).fetchall()
     by_fund: dict[str, list[Any]] = {}
     meta: dict[str, tuple[str, Any, datetime]] = {}
     for fund_id, fund_name, report_period, transaction_time, *rest in rows:

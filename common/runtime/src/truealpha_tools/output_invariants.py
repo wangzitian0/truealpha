@@ -12,7 +12,15 @@ from pathlib import Path
 from typing import Any
 
 import psycopg
-from factors.panel import PANEL_METRICS, PUBLISHED_COLUMNS, IssuerClass, SignPolicy, ratio_operands_of
+from factors.panel import (
+    GPPE_BANKING_TCE_SPEC,
+    GPPE_V0_SPEC,
+    PANEL_METRICS,
+    PUBLISHED_COLUMNS,
+    IssuerClass,
+    SignPolicy,
+    ratio_operands_of,
+)
 from truealpha_contracts.environment_contract import EnvironmentContract, load_environment_contract
 from truealpha_contracts.strategy import load_live_strategy_definition
 from truealpha_contracts.universes import id_prefix_like, universe_with_role
@@ -21,6 +29,8 @@ from truealpha_runtime import reconciliation_policies
 EXEMPTIONS_PATH = Path(__file__).resolve().parents[4] / "tools" / "output_invariant_exemptions.json"
 SERVED_UNIVERSE_LIKE = id_prefix_like(universe_with_role("strategy"))
 _MAX_INPUT_AGE_DAYS = load_live_strategy_definition().eligibility.maximum_input_age_days
+_BASE_GPPE_NODE = GPPE_V0_SPEC.root
+_BANK_GPPE_NODE = GPPE_BANKING_TCE_SPEC.root
 
 GOVERNED_HEAD = f"""
     select run_id from mart.served_head
@@ -253,14 +263,14 @@ _TEMPLATES: tuple[Invariant, ...] = (
             from mart.metric_node_values mv
             left join mart.capture_issuer_lineage cil using (run_id, issuer_id)
             where mv.run_id = ({GOVERNED_HEAD})
-              and mv.node_key = 'gppe_uniform_charge_v0'
+              and mv.node_key in ('{_BASE_GPPE_NODE}', '{_BANK_GPPE_NODE}')
               and mv.availability_status = 'available'
               and (mv.value is null or mv.confidence = 0)
         """,
         population=f"""
             select count(*) from mart.metric_node_values
             where run_id = ({GOVERNED_HEAD})
-              and node_key = 'gppe_uniform_charge_v0'
+              and node_key in ('{_BASE_GPPE_NODE}', '{_BANK_GPPE_NODE}')
               and availability_status = 'available'
         """,
     ),
@@ -441,15 +451,18 @@ _TEMPLATES: tuple[Invariant, ...] = (
         violations=f"""
             {_SCHEDULED_HEADS_CTE},
             served as (
-                select distinct heads.universe_id, cil.run_id, cil.issuer_id, cil.revenue_period_end,
+                select distinct on (heads.universe_id, cil.run_id, cil.issuer_id)
+                       heads.universe_id, cil.run_id, cil.issuer_id, cil.revenue_period_end,
                        (cil.cutoff at time zone 'UTC')::date as cutoff
                 from heads
                 join mart.capture_issuer_lineage cil on cil.run_id = heads.run_id
                 join mart.metric_node_values mv
                   on mv.run_id = cil.run_id
                  and mv.issuer_id = cil.issuer_id
-                 and mv.node_key = 'gppe_uniform_charge_v0'
+                 and ((cil.operating_branch = 'financial' and mv.node_key = '{_BANK_GPPE_NODE}')
+                      or mv.node_key = '{_BASE_GPPE_NODE}')
                 where mv.availability_status = 'available'
+                order by heads.universe_id, cil.run_id, cil.issuer_id, (mv.node_key = '{_BANK_GPPE_NODE}') desc
             )
             select universe_id, run_id, issuer_id, revenue_period_end::text, cutoff::text
             from served
@@ -463,18 +476,23 @@ _TEMPLATES: tuple[Invariant, ...] = (
             )
             order by 1, 2, 3
         """,
-        population="""
-            select count(distinct (cil.run_id, cil.issuer_id))
-            from mart.served_head h
-            join mart.capture_issuer_lineage cil on cil.run_id = coalesce(h.run_id, h.head_run_id)
-            join mart.metric_node_values mv
-              on mv.run_id = cil.run_id
-             and mv.issuer_id = cil.issuer_id
-             and mv.node_key = 'gppe_uniform_charge_v0'
-            where h.factor_id = 'gross_profit_per_employee'
-              and __HEAD_IS_SCHEDULED__
-              and mv.availability_status = 'available'
-              and cil.revenue_period_end is not null
+        population=f"""
+            with per_issuer as (
+                select distinct on (cil.run_id, cil.issuer_id) cil.run_id, cil.issuer_id
+                from mart.served_head h
+                join mart.capture_issuer_lineage cil on cil.run_id = coalesce(h.run_id, h.head_run_id)
+                join mart.metric_node_values mv
+                  on mv.run_id = cil.run_id
+                 and mv.issuer_id = cil.issuer_id
+                 and ((cil.operating_branch = 'financial' and mv.node_key = '{_BANK_GPPE_NODE}')
+                      or mv.node_key = '{_BASE_GPPE_NODE}')
+                where h.factor_id = 'gross_profit_per_employee'
+                  and __HEAD_IS_SCHEDULED__
+                  and mv.availability_status = 'available'
+                  and cil.revenue_period_end is not null
+                order by cil.run_id, cil.issuer_id, (mv.node_key = '{_BANK_GPPE_NODE}') desc
+            )
+            select count(*) from per_issuer
         """,
     ),
     Invariant(

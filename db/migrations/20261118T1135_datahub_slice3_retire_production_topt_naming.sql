@@ -24,6 +24,7 @@ begin
     if to_regclass('staging.topt_core_snapshot_members') is not null
        and to_regclass('staging.core_snapshot_members') is not null then
         if not exists (select 1 from staging.core_snapshot_members limit 1) then
+            drop view if exists mart.capture_issuer_lineage;
             drop table staging.core_snapshot_members;
         end if;
     end if;
