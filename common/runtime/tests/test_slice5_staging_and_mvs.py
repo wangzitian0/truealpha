@@ -123,12 +123,11 @@ def test_five_mart_projections_are_materialized_with_nulls_not_distinct_unique_i
                 (f"mart.{view_name}",),
             ).fetchone()
             assert priv == (True,), view_name
-            if view_name != "entity_identity":
-                ops_priv = conn.execute(
-                    "select has_table_privilege('app_ops_reader', %s, 'SELECT')",
-                    (f"mart.{view_name}",),
-                ).fetchone()
-                assert ops_priv == (True,), view_name
+            ops_priv = conn.execute(
+                "select has_table_privilege('app_ops_reader', %s, 'SELECT')",
+                (f"mart.{view_name}",),
+            ).fetchone()
+            assert ops_priv == (True,), view_name
 
 
 def test_concurrent_refresh_and_multi_cusip_uniqueness(slice5_db: str) -> None:
@@ -195,8 +194,13 @@ def test_slice5_migration_upgrades_pre_slice5_database_and_preserves_parity() ->
     name = f"truealpha_s5_upg_{os.getpid()}_{uuid.uuid4().hex[:8]}"
     params = conninfo_to_dict(admin_url)
     db_url = make_conninfo(**(params | {"dbname": name}))
-    with psycopg.connect(admin_url, connect_timeout=3, autocommit=True) as admin:
-        admin.execute(sql.SQL("create database {}").format(sql.Identifier(name)))
+    try:
+        with psycopg.connect(admin_url, connect_timeout=3, autocommit=True) as admin:
+            admin.execute(sql.SQL("create database {}").format(sql.Identifier(name)))
+    except psycopg.OperationalError as error:
+        if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
+            pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
+        pytest.skip("no local Postgres; CI runs required DB tests")
 
     try:
         pre_slice5_files = sorted(
@@ -311,10 +315,9 @@ def test_slice5_migration_upgrades_pre_slice5_database_and_preserves_parity() ->
                 assert conn.execute(
                     "select has_table_privilege('mart_readonly', %s, 'SELECT')", (f"mart.{view_name}",)
                 ).fetchone() == (True,), view_name
-                if view_name != "entity_identity":
-                    assert conn.execute(
-                        "select has_table_privilege('app_ops_reader', %s, 'SELECT')", (f"mart.{view_name}",)
-                    ).fetchone() == (True,), view_name
+                assert conn.execute(
+                    "select has_table_privilege('app_ops_reader', %s, 'SELECT')", (f"mart.{view_name}",)
+                ).fetchone() == (True,), view_name
 
             upgraded_identity = conn.execute(
                 "select entity_id, kind, current_ticker, name, cik, lei, listing_id, legacy_id "
