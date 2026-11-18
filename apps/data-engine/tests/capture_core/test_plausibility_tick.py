@@ -95,7 +95,12 @@ def test_one_refused_issuer_does_not_roll_back_the_tick(tick_database_url, monke
         (coordinates,) = reader.execute(_LISTING_SQL, (metadata["capture_run_id"], "NVDA")).fetchall()
         listing, issuer = str(coordinates[0]), str(coordinates[1])
         published = reader.execute(
-            "select availability, operating_efficiency from mart.topt_core_results where run_id = %s and listing_id = %s",
+            """
+            select mnv.availability_status, mnv.value
+            from mart.metric_node_values mnv
+            join mart.capture_issuer_lineage cil using (run_id, issuer_id)
+            where mnv.run_id = %s and cil.listing_id = %s and mnv.node_key = 'gppe_uniform_charge_v0'
+            """,
             (metadata["capture_run_id"], listing),
         ).fetchone()
         # Precondition: the refused row is published as available with a negative metric.

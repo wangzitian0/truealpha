@@ -39,14 +39,15 @@ order by v.cik, f.segment_revenue desc, f.segment_name
 """
 
 _MEMBERS_SQL = """
-select distinct g.issuer_id, v.source_record_id
-from mart.topt_gppe_results g
-cross join lateral unnest(g.input_observation_ids) as consumed(observation_id)
+select distinct m.issuer_id, v.source_record_id
+from staging.core_snapshots s
+join staging.core_snapshot_members m using (snapshot_id)
+cross join lateral unnest(m.observation_ids) as consumed(observation_id)
 join staging.capture_normalized_observations n
   on n.observation_id = consumed.observation_id and n.semantic_type = 'financial-fact'
 join raw.capture_source_vintages v
   on v.source_vintage_id = n.source_vintage_id
-where g.run_id = %(run_id)s
+where s.run_id = %(run_id)s
   and v.source_record_id like 'companyfacts:CIK%%'
 """
 

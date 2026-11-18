@@ -111,8 +111,16 @@ def test_a_plausible_run_passes(connection, tmp_path) -> None:
 def _jpm_negative(connection, run_id: str) -> None:
     _bypass_append_only(connection)
     connection.execute(
-        "update mart.topt_core_results set operating_efficiency = -514726, availability = 'available' "
-        "where run_id = %s and listing_id = 'listing:xnys:jpm'",
+        """
+        update mart.metric_node_values mnv
+        set value = -514726, availability_status = 'available'
+        from mart.capture_issuer_lineage cil
+        where mnv.run_id = cil.run_id
+          and mnv.issuer_id = cil.issuer_id
+          and mnv.run_id = %s
+          and cil.listing_id = 'listing:xnys:jpm'
+          and mnv.node_key = 'gppe_uniform_charge_v0'
+        """,
         (run_id,),
     )
 

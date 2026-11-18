@@ -479,8 +479,8 @@ async function assertTraceRendersDecisionInputs(page, path, problems) {
     problems.push('trace: no "Core result:" line under "Decision inputs"');
     return;
   }
-  // A recorded id has the shape that the topt_core_results CHECK constraint enforces.
-  const coreResult = coreText.match(/^Core result: (topt-core-result:[0-9a-f]{64})\./)?.[1] ?? null;
+  // A recorded id has the converged capture lineage result prefix.
+  const coreResult = coreText.match(/^Core result: ((?:topt-)?core-result:[0-9a-f]{64})\./)?.[1] ?? null;
   if (coreResult === null && !coreText.startsWith(`Core result: ${NOT_RECORDED}.`)) {
     problems.push(`trace: "Core result:" shows neither a result id nor "${NOT_RECORDED}": ${coreText.slice(0, 80)}`);
     return;

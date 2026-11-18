@@ -595,10 +595,11 @@ def test_the_report_and_the_mart_agree_about_the_same_broken_run(connection) -> 
         left join mart.entity_identity identity on identity.entity_id::text = member->>'listing_id'
         where s.run_id = %s
           and exists (
-              select 1 from mart.topt_core_results r
+              select 1 from mart.metric_node_values r
               where r.run_id = s.run_id
                 and r.issuer_id = member->>'issuer_id'
-                and r.availability = 'available'
+                and r.node_key = 'gppe_uniform_charge_v0'
+                and r.availability_status = 'available'
           )
         """,
         (plan.run_id,),
@@ -645,10 +646,11 @@ def test_factor_availability_reads_core_availability_when_issuer_is_unavailable_
             left join mart.entity_identity identity on identity.entity_id::text = member->>'listing_id'
             where s.run_id = %s
               and exists (
-                  select 1 from mart.topt_core_results r
+                  select 1 from mart.metric_node_values r
                   where r.run_id = s.run_id
                     and r.issuer_id = member->>'issuer_id'
-                    and r.availability = 'available'
+                    and r.node_key = 'gppe_uniform_charge_v0'
+                    and r.availability_status = 'available'
               )
             order by 1
             """,
@@ -1095,7 +1097,7 @@ def test_the_vintage_axis_reaches_the_served_mart_row(connection) -> None:
     rows = connection.execute(
         """
         select operating_period_end, revenue_period_end, shares_period_end
-        from mart.topt_core_results where run_id = %s
+        from mart.capture_issuer_lineage where run_id = %s
         """,
         (plan.run_id,),
     ).fetchall()

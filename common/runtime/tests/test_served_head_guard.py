@@ -96,11 +96,8 @@ NOT_RUN_KEYS = {
 #: consumer must select their rows through the head's `run_id`. A read of the newest run by
 #: `order by cutoff desc limit 1` is the defect that #1062 exists for.
 SERVED = (
-    "mart.topt_core_results",
-    "mart.topt_core_result_read",
     # #1241: /research/trace reads the lineage and the input values of the strategy run's capture run.
-    "mart.topt_core_meta_info",
-    "mart.topt_gppe_results",
+    "mart.capture_issuer_lineage",
     "mart.metric_node_values",
     "mart.strategy_decisions",
     "mart.strategy_runs",
@@ -126,8 +123,6 @@ SERVED = (
 #: `test_no_consumer_reaches_a_relation_listed_as_not_served` fails when a file names one.
 NOT_SERVED = {
     "mart.capture_meta_info": "metadata of one capture run; no consumer reads it",
-    "mart.topt_core_invocations": "factor invocation records; no consumer reads them",
-    "mart.topt_gppe_invocations": "factor invocation records; no consumer reads them",
     "mart.strategy_run_capture_bindings": "the write side of the capture binding; no consumer reads it",
     "mart.cell_confidence": "append-only per-cell confidence of one run; no reader moves to it until stage B3 (#1517)",
 }
@@ -836,14 +831,7 @@ def test_the_health_endpoint_reads_the_served_head() -> None:
     assert not any(entry.file == relative for entry in BASELINE)
 
 
-LEGACY_TOPT_CORE_BASELINE: dict[str, frozenset[str]] = {
-    "common/contracts/src/truealpha_contracts/metrics.py": frozenset(
-        {"mart.topt_core_results", "mart.topt_gppe_results"}
-    ),
-    "common/runtime/src/truealpha_runtime/strategy_run_postgres.py": frozenset(
-        {"mart.topt_core_results", "mart.topt_core_meta_info"}
-    ),
-}
+LEGACY_TOPT_CORE_BASELINE: dict[str, frozenset[str]] = {}
 
 
 def test_no_consumer_reaches_legacy_topt_core_views() -> None:
@@ -925,14 +913,14 @@ def test_a_typescript_reader_that_bypasses_the_served_head_is_reported(tmp_path:
         "  select target_run_id as run_id from mart.current_pointer_head\n"
         "  where extract(epoch from (now() - advanced_at)) / 3600 < 36\n"
         "`;\n"
-        "export const RESULTS_SQL = `select * from mart.topt_gppe_results where run_id = $1`;\n"
+        "export const RESULTS_SQL = `select * from mart.metric_node_values where run_id = $1`;\n"
         "export const STALE_AFTER_HOURS = 36;\n"
         "export const age = (advancedAt: string) => Date.now() - new Date(advancedAt).getTime();\n",
     )
     file = "apps/app-web/src/server/mart/bypass.ts"
     assert _found(tmp_path) == {
         ("A", file, "mart.current_pointer_head"),
-        ("B", file, "mart.topt_gppe_results"),
+        ("B", file, "mart.metric_node_values"),
         ("C", file, "now-minus-advanced"),
         ("C", file, "extract-epoch-from-now"),
         ("C", file, "stale-after-constant"),
@@ -971,7 +959,7 @@ def test_a_reader_of_the_served_head_is_clean(tmp_path: Path) -> None:
         "export const SQL = `\n"
         "  select h.run_id, h.freshness, h.availability, h.age_hours\n"
         "  from mart.served_head h\n"
-        "  join mart.topt_gppe_results r on r.run_id = h.run_id\n"
+        "  join mart.metric_node_values r on r.run_id = h.run_id\n"
         "`;\n",
     )
     _write(
@@ -1009,7 +997,7 @@ def test_a_template_with_an_interpolation_is_read_whole(tmp_path: Path) -> None:
 # The expected violation names the relation in its lower-case, schema-qualified form.
 
 A_HEAD = ("A", "mart.current_pointer_head")
-B_GPPE = ("B", "mart.topt_gppe_results")
+B_GPPE = ("B", "mart.metric_node_values")
 C_AGE = ("C", "clock-with-advanced")
 
 TYPESCRIPT_BYPASSES = {
@@ -1032,7 +1020,7 @@ TYPESCRIPT_BYPASSES = {
         "export const RE = /['\"/]/g;\nexport const SQL = `select run_id from mart.current_pointer_head`;\n",
         A_HEAD,
     ),
-    "upper-case-result-relation": ("export const SQL = `select 1 from MART.TOPT_GPPE_RESULTS`;\n", B_GPPE),
+    "upper-case-result-relation": ("export const SQL = `select 1 from MART.METRIC_NODE_VALUES`;\n", B_GPPE),
     # M1: a helper that lives in another module still receives the head's time.
     "age-helper-from-another-module": (
         "export const label = (row: Row) => hoursSince(row.advanced_at);\n",
@@ -1082,7 +1070,7 @@ TYPESCRIPT_BYPASSES = {
         A_HEAD,
     ),
     "the-environments-view-is-not-the-served-head": (
-        "export const SQL = `select 1 from mart.topt_gppe_results r join mart.served_head_environments e on true`;\n",
+        "export const SQL = `select 1 from mart.metric_node_values r join mart.served_head_environments e on true`;\n",
         B_GPPE,
     ),
 }
@@ -1096,7 +1084,7 @@ PYTHON_BYPASSES = {
     "fragment-join-without-select": ('JOIN = " join mart.current_pointer_head h on h.x = y.x"\n', A_HEAD),
     "interpolated-schema": ('def sql(s):\n    return f"select 1 from {s}.current_pointer_head"\n', A_HEAD),
     "interpolated-schema-in-a-fragment": ('def frm(s):\n    return f"from {s}.current_pointer_head h"\n', A_HEAD),
-    "upper-case-result-relation": ('SQL = "select 1 from MART.TOPT_GPPE_RESULTS"\n', B_GPPE),
+    "upper-case-result-relation": ('SQL = "select 1 from MART.METRIC_NODE_VALUES"\n', B_GPPE),
     # M1: a helper that lives in another module still receives the head's time.
     "age-helper-from-another-module": (
         "def label(row):\n    return hours_since(row.advanced_at)\n",
@@ -1278,12 +1266,12 @@ def test_a_consumer_file_that_names_a_not_served_relation_is_reported(tmp_path: 
     _write(
         tmp_path,
         "common/contracts/src/truealpha_contracts/meta.py",
-        'SQL = "select 1 from MART.TOPT_CORE_INVOCATIONS"\n',
+        'SQL = "select 1 from MART.STRATEGY_RUN_CAPTURE_BINDINGS"\n',
     )
     _write(tmp_path, "apps/app-web/src/server/mart/quiet.ts", "// mart.capture_meta_info in a comment only\n")
     assert consumer_references(tmp_path, tuple(NOT_SERVED)) == {
         "apps/app-web/src/server/mart/capture.ts": ["mart.capture_meta_info"],
-        "common/contracts/src/truealpha_contracts/meta.py": ["mart.topt_core_invocations"],
+        "common/contracts/src/truealpha_contracts/meta.py": ["mart.strategy_run_capture_bindings"],
     }
 
 
@@ -1384,7 +1372,7 @@ def test_a_new_relation_or_a_new_key_name_is_reported() -> None:
     ]
     assert unclassified(run_addressed_relations(columns), SERVED, NOT_SERVED) == ["mart.brand_new_results"]
     assert unknown_run_columns(columns) == ["mart.other.release_run_id"]
-    assert unclassified({"mart.strategy_decisions"}, ("mart.topt_gppe_results",), {}) == ["mart.strategy_decisions"]
+    assert unclassified({"mart.strategy_decisions"}, ("mart.metric_node_values",), {}) == ["mart.strategy_decisions"]
 
 
 def test_the_catalog_read_sees_a_materialized_view_and_ignores_a_name_that_only_contains_run(

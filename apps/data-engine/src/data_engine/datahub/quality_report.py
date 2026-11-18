@@ -79,8 +79,9 @@ _CORE_COMPLETE_LISTINGS_SQL = (
     "select distinct coalesce(identity.listing_id, member->>'listing_id') from staging.core_snapshots s "
     "cross join lateral jsonb_array_elements(s.payload->'members') member "
     "left join mart.entity_identity identity on identity.entity_id::text = member->>'listing_id' "
-    "where s.run_id = %s and exists (select 1 from mart.topt_core_results r "
-    "where r.run_id = s.run_id and r.issuer_id = member->>'issuer_id' and r.availability = 'available') order by 1"
+    "where s.run_id = %s and exists (select 1 from mart.metric_node_values r "
+    "where r.run_id = s.run_id and r.issuer_id = member->>'issuer_id' "
+    "and r.node_key = 'gppe_uniform_charge_v0' and r.availability_status = 'available') order by 1"
 )
 
 
@@ -103,7 +104,10 @@ def _factor_availability(
     conn: psycopg.Connection[Any], run_id: str, usable_by_subject: Mapping[str, Mapping[str, bool]]
 ) -> dict[str, dict[str, Any]]:
     universe = sorted(usable_by_subject)
-    core_row = conn.execute("select count(*) from mart.topt_core_results where run_id = %s", (run_id,)).fetchone()
+    core_row = conn.execute(
+        "select count(*) from mart.metric_node_values where run_id = %s and node_key = 'gppe_uniform_charge_v0'",
+        (run_id,),
+    ).fetchone()
     core_count = core_row[0] if core_row is not None else 0
     complete_ids = (
         sorted(str(r[0]) for r in conn.execute(_CORE_COMPLETE_LISTINGS_SQL, (run_id,)).fetchall() if r[0] is not None)

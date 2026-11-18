@@ -296,7 +296,7 @@ create table if not exists mart.metric_node_values (
  input_observation_ids text[] default '{}'::text[] not null,
  recorded_at timestamp with time zone default clock_timestamp() not null,
  constraint metric_node_values_pkey PRIMARY KEY (run_id, issuer_id, node_id, period),
- constraint metric_node_values_availability_status_check CHECK ((availability_status = ANY (ARRAY['available'::text, 'unavailable'::text, 'stale'::text, 'excluded'::text, 'low_confidence'::text, 'error'::text]))),
+ constraint metric_node_values_availability_status_check CHECK ((availability_status = ANY (ARRAY['available'::text, 'unavailable'::text, 'stale'::text, 'excluded'::text, 'low_confidence'::text, 'not_applicable'::text, 'error'::text]))),
  constraint metric_node_values_confidence_check CHECK (((confidence IS NULL) OR ((confidence >= (0)::numeric) AND (confidence <= (1)::numeric)))),
  constraint metric_node_values_factor_validation_status_check CHECK ((factor_validation_status = ANY (ARRAY['accepted'::text, 'rejected'::text, 'not_evaluated'::text]))),
  constraint metric_node_values_issuer_id_check CHECK ((issuer_id <> ''::text)),
@@ -430,27 +430,6 @@ create table if not exists mart.strategy_runs (
  constraint strategy_runs_strategy_run_id_check CHECK ((strategy_run_id ~ '^strategy-run:[0-9a-f]{64}$'::text))
 );
 
-create table if not exists mart.topt_gppe_invocations (
- invocation_id text not null,
- content_sha256 text not null,
- snapshot_id text not null,
- gppe_definition_id text not null,
- gppe_definition_sha256 text not null,
- payload jsonb not null,
- created_at timestamp with time zone default clock_timestamp() not null,
- constraint topt_gppe_invocations_pkey PRIMARY KEY (invocation_id),
- constraint topt_gppe_invocations_content_sha256_key UNIQUE (content_sha256),
- constraint topt_gppe_invocations_snapshot_id_gppe_definition_id_key UNIQUE (snapshot_id, gppe_definition_id),
- constraint topt_gppe_invocations_check CHECK ((split_part(invocation_id, ':'::text, 2) = content_sha256)),
- constraint topt_gppe_invocations_check1 CHECK ((raw.canonical_sha256(payload) = content_sha256)),
- constraint topt_gppe_invocations_content_sha256_check CHECK ((content_sha256 ~ '^[0-9a-f]{64}$'::text)),
- constraint topt_gppe_invocations_gppe_definition_id_check CHECK ((gppe_definition_id ~ '^gppe-definition:[0-9a-f]{64}$'::text)),
- constraint topt_gppe_invocations_gppe_definition_sha256_check CHECK ((gppe_definition_sha256 ~ '^[0-9a-f]{64}$'::text)),
- constraint topt_gppe_invocations_invocation_id_check CHECK ((invocation_id ~ '^topt-gppe-invocation:[0-9a-f]{64}$'::text)),
- constraint topt_gppe_invocations_payload_check CHECK ((jsonb_typeof(payload) = 'object'::text)),
- constraint topt_gppe_invocations_snapshot_id_fkey FOREIGN KEY (snapshot_id) REFERENCES staging.core_snapshots(snapshot_id)
-);
-
 create table if not exists mart.backtest_trades (
  trade_id bigint generated always as identity,
  run_id text not null,
@@ -563,168 +542,9 @@ create table if not exists mart.strategy_run_capture_bindings (
  constraint strategy_run_capture_bindings_strategy_run_id_fkey FOREIGN KEY (strategy_run_id) REFERENCES mart.strategy_runs(strategy_run_id)
 );
 
-create table if not exists mart.topt_core_invocations (
- invocation_id text not null,
- content_sha256 text not null,
- snapshot_id text not null,
- gppe_invocation_id text not null,
- gppe_definition_id text not null,
- gppe_definition_sha256 text not null,
- tier_definition_id text not null,
- tier_definition_sha256 text not null,
- payload jsonb not null,
- created_at timestamp with time zone default clock_timestamp() not null,
- constraint topt_core_invocations_pkey PRIMARY KEY (invocation_id),
- constraint topt_core_invocations_content_sha256_key UNIQUE (content_sha256),
- constraint topt_core_invocations_snapshot_id_gppe_invocation_id_tier_d_key UNIQUE (snapshot_id, gppe_invocation_id, tier_definition_id),
- constraint topt_core_invocations_check CHECK ((split_part(invocation_id, ':'::text, 2) = content_sha256)),
- constraint topt_core_invocations_check1 CHECK ((raw.canonical_sha256(payload) = content_sha256)),
- constraint topt_core_invocations_content_sha256_check CHECK ((content_sha256 ~ '^[0-9a-f]{64}$'::text)),
- constraint topt_core_invocations_gppe_definition_id_check CHECK ((gppe_definition_id ~ '^gppe-definition:[0-9a-f]{64}$'::text)),
- constraint topt_core_invocations_gppe_definition_sha256_check CHECK ((gppe_definition_sha256 ~ '^[0-9a-f]{64}$'::text)),
- constraint topt_core_invocations_invocation_id_check CHECK ((invocation_id ~ '^topt-core-invocation:[0-9a-f]{64}$'::text)),
- constraint topt_core_invocations_payload_check CHECK ((jsonb_typeof(payload) = 'object'::text)),
- constraint topt_core_invocations_tier_definition_id_check CHECK ((tier_definition_id ~ '^(three-tier-definition|strategy-definition):[0-9a-f]{64}$'::text)),
- constraint topt_core_invocations_tier_definition_sha256_check CHECK ((tier_definition_sha256 ~ '^[0-9a-f]{64}$'::text)),
- constraint topt_core_invocations_gppe_invocation_id_fkey FOREIGN KEY (gppe_invocation_id) REFERENCES mart.topt_gppe_invocations(invocation_id),
- constraint topt_core_invocations_snapshot_id_fkey FOREIGN KEY (snapshot_id) REFERENCES staging.core_snapshots(snapshot_id)
-);
-
-create table if not exists mart.topt_gppe_results (
- result_id text not null,
- content_sha256 text not null,
- invocation_id text not null,
- snapshot_id text not null,
- run_id text not null,
- release_manifest_id text not null,
- universe_id text not null,
- universe_version text not null,
- universe_sha256 text not null,
- cutoff timestamp with time zone not null,
- issuer_id text not null,
- instrument_id text not null,
- listing_id text not null,
- operating_branch text not null,
- operating_metric text not null,
- availability text not null,
- operating_efficiency numeric,
- capital_adjusted_gross_profit numeric,
- gppe numeric,
- confidence numeric not null,
- freshness text not null,
- reason_codes text[] not null,
- input_observation_ids text[] not null,
- gppe_definition_id text not null,
- gppe_definition_sha256 text not null,
- payload jsonb not null,
- created_at timestamp with time zone default clock_timestamp() not null,
- availability_status text,
- source_evidence_status text,
- factor_validation_status text,
- constraint topt_gppe_results_pkey PRIMARY KEY (result_id),
- constraint topt_gppe_results_content_sha256_key UNIQUE (content_sha256),
- constraint topt_gppe_results_invocation_id_issuer_id_key UNIQUE (invocation_id, issuer_id),
- constraint topt_gppe_results_availability_check CHECK ((availability = ANY (ARRAY['available'::text, 'unavailable'::text]))),
- constraint topt_gppe_results_availability_status_check CHECK ((availability_status = ANY (ARRAY['available'::text, 'unavailable'::text, 'stale'::text, 'excluded'::text, 'low_confidence'::text, 'not_applicable'::text, 'error'::text]))),
- constraint topt_gppe_results_check CHECK ((split_part(result_id, ':'::text, 2) = content_sha256)),
- constraint topt_gppe_results_confidence_check CHECK (((confidence >= (0)::numeric) AND (confidence <= (1)::numeric))),
- constraint topt_gppe_results_content_sha256_check CHECK ((content_sha256 ~ '^[0-9a-f]{64}$'::text)),
- constraint topt_gppe_results_factor_validation_status_check CHECK ((factor_validation_status = ANY (ARRAY['accepted'::text, 'rejected'::text, 'not_evaluated'::text]))),
- constraint topt_gppe_results_freshness_check CHECK ((freshness = ANY (ARRAY['fresh'::text, 'stale'::text, 'unknown'::text]))),
- constraint topt_gppe_results_gppe_definition_sha256_check CHECK ((gppe_definition_sha256 ~ '^[0-9a-f]{64}$'::text)),
- constraint topt_gppe_results_input_observation_ids_check CHECK (((cardinality(input_observation_ids) >= 4) AND ((cardinality(input_observation_ids) % 4) = 0))),
- constraint topt_gppe_results_operating_branch_check CHECK ((operating_branch = ANY (ARRAY['non_financial'::text, 'financial'::text, 'insurance'::text]))),
- constraint topt_gppe_results_payload_check CHECK ((jsonb_typeof(payload) = 'object'::text)),
- constraint topt_gppe_results_result_id_check CHECK ((result_id ~ '^topt-gppe-result:[0-9a-f]{64}$'::text)),
- constraint topt_gppe_results_source_evidence_status_check CHECK ((source_evidence_status = ANY (ARRAY['verified'::text, 'degraded'::text, 'rejected'::text]))),
- constraint topt_gppe_results_universe_sha256_check CHECK ((universe_sha256 ~ '^[0-9a-f]{64}$'::text)),
- constraint topt_gppe_results_invocation_id_fkey FOREIGN KEY (invocation_id) REFERENCES mart.topt_gppe_invocations(invocation_id),
- constraint topt_gppe_results_run_id_fkey FOREIGN KEY (run_id) REFERENCES raw.capture_runs(run_id),
- constraint topt_gppe_results_snapshot_id_fkey FOREIGN KEY (snapshot_id) REFERENCES staging.core_snapshots(snapshot_id)
-);
-
-create table if not exists mart.topt_core_results (
- result_id text not null,
- content_sha256 text not null,
- invocation_id text not null,
- snapshot_id text not null,
- run_id text not null,
- release_manifest_id text not null,
- universe_id text not null,
- universe_version text not null,
- universe_sha256 text not null,
- cutoff timestamp with time zone not null,
- issuer_id text not null,
- instrument_id text not null,
- listing_id text not null,
- operating_branch text not null,
- operating_metric text not null,
- availability text not null,
- operating_efficiency numeric,
- capital_adjusted_gross_profit numeric,
- gppe numeric,
- tier text,
- target_ps_lower numeric,
- target_ps_upper numeric,
- target_ps_midpoint numeric,
- current_ps numeric,
- valuation_gap numeric,
- confidence numeric not null,
- freshness text not null,
- reason_codes text[] not null,
- input_observation_ids text[] not null,
- gppe_invocation_id text not null,
- gppe_result_id text not null,
- gppe_definition_id text not null,
- gppe_definition_sha256 text not null,
- tier_definition_id text not null,
- tier_definition_sha256 text not null,
- payload jsonb not null,
- created_at timestamp with time zone default clock_timestamp() not null,
- operating_period_end date,
- revenue_period_end date,
- shares_period_end date,
- availability_status text,
- source_evidence_status text,
- factor_validation_status text,
- current_pgp numeric,
- target_pgp_lower numeric,
- target_pgp_upper numeric,
- target_pgp_midpoint numeric,
- constraint topt_core_results_pkey PRIMARY KEY (result_id),
- constraint topt_core_results_content_sha256_key UNIQUE (content_sha256),
- constraint topt_core_results_invocation_id_issuer_id_key UNIQUE (invocation_id, issuer_id),
- constraint topt_core_results_availability_check CHECK ((availability = ANY (ARRAY['available'::text, 'unavailable'::text]))),
- constraint topt_core_results_availability_status_check CHECK ((availability_status = ANY (ARRAY['available'::text, 'unavailable'::text, 'stale'::text, 'excluded'::text, 'low_confidence'::text, 'not_applicable'::text, 'error'::text]))),
- constraint topt_core_results_check CHECK ((split_part(result_id, ':'::text, 2) = content_sha256)),
- constraint topt_core_results_confidence_check CHECK (((confidence >= (0)::numeric) AND (confidence <= (1)::numeric))),
- constraint topt_core_results_content_sha256_check CHECK ((content_sha256 ~ '^[0-9a-f]{64}$'::text)),
- constraint topt_core_results_factor_validation_status_check CHECK ((factor_validation_status = ANY (ARRAY['accepted'::text, 'rejected'::text, 'not_evaluated'::text]))),
- constraint topt_core_results_freshness_check CHECK ((freshness = ANY (ARRAY['fresh'::text, 'stale'::text, 'unknown'::text]))),
- constraint topt_core_results_gppe_definition_sha256_check CHECK ((gppe_definition_sha256 ~ '^[0-9a-f]{64}$'::text)),
- constraint topt_core_results_input_observation_ids_check CHECK (((cardinality(input_observation_ids) >= 4) AND ((cardinality(input_observation_ids) % 4) = 0))),
- constraint topt_core_results_operating_branch_check CHECK ((operating_branch = ANY (ARRAY['non_financial'::text, 'financial'::text, 'insurance'::text]))),
- constraint topt_core_results_payload_check CHECK ((jsonb_typeof(payload) = 'object'::text)),
- constraint topt_core_results_result_id_check CHECK ((result_id ~ '^topt-core-result:[0-9a-f]{64}$'::text)),
- constraint topt_core_results_source_evidence_status_check CHECK ((source_evidence_status = ANY (ARRAY['verified'::text, 'degraded'::text, 'rejected'::text]))),
- constraint topt_core_results_tier_check CHECK ((tier = ANY (ARRAY['traditional'::text, 'tech'::text, 'large_model_native'::text]))),
- constraint topt_core_results_tier_definition_sha256_check CHECK ((tier_definition_sha256 ~ '^[0-9a-f]{64}$'::text)),
- constraint topt_core_results_universe_sha256_check CHECK ((universe_sha256 ~ '^[0-9a-f]{64}$'::text)),
- constraint topt_core_results_gppe_invocation_id_fkey FOREIGN KEY (gppe_invocation_id) REFERENCES mart.topt_gppe_invocations(invocation_id),
- constraint topt_core_results_gppe_result_id_fkey FOREIGN KEY (gppe_result_id) REFERENCES mart.topt_gppe_results(result_id),
- constraint topt_core_results_invocation_id_fkey FOREIGN KEY (invocation_id) REFERENCES mart.topt_core_invocations(invocation_id),
- constraint topt_core_results_run_id_fkey FOREIGN KEY (run_id) REFERENCES raw.capture_runs(run_id),
- constraint topt_core_results_snapshot_id_fkey FOREIGN KEY (snapshot_id) REFERENCES staging.core_snapshots(snapshot_id)
-);
-
 do $$ begin if not exists (select 1 from pg_constraint where conrelid = 'mart.backtest_runs'::regclass and conname = 'backtest_runs_succeeded_declares_basis') then alter table mart.backtest_runs add constraint backtest_runs_succeeded_declares_basis CHECK (((status <> 'succeeded'::text) OR ((definition_content_sha256 IS NOT NULL) AND (price_basis IS NOT NULL) AND (claim_ceiling IS NOT NULL) AND (benchmark_rule IS NOT NULL)))) NOT VALID; end if; end $$;
 do $$ begin if not exists (select 1 from pg_constraint where conrelid = 'mart.fund_virtual_company'::regclass and conname = 'fund_virtual_company_valuation_basis_check') then alter table mart.fund_virtual_company add constraint fund_virtual_company_valuation_basis_check CHECK ((((valuation_basis = ANY (ARRAY['price_to_sales'::text, 'price_to_gross_profit'::text])) AND (weighted_valuation_gap IS NOT NULL)) OR (valuation_basis IS NULL))) NOT VALID; end if; end $$;
 do $$ begin if not exists (select 1 from pg_constraint where conrelid = 'mart.strategy_decisions'::regclass and conname = 'strategy_decisions_one_valuation_basis_check') then alter table mart.strategy_decisions add constraint strategy_decisions_one_valuation_basis_check CHECK ((((target_price_to_sales IS NULL) OR (target_price_to_gross_profit IS NULL)) AND ((current_price_to_gross_profit IS NULL) = (target_price_to_gross_profit IS NULL)) AND ((current_price_to_gross_profit IS NULL) OR (current_price_to_gross_profit > (0)::numeric)))) NOT VALID; end if; end $$;
-do $$ begin if not exists (select 1 from pg_constraint where conrelid = 'mart.topt_core_results'::regclass and conname = 'topt_core_results_operating_metric_check') then alter table mart.topt_core_results add constraint topt_core_results_operating_metric_check CHECK ((operating_metric = 'capital_adjusted_gppe'::text)) NOT VALID; end if; end $$;
-do $$ begin if not exists (select 1 from pg_constraint where conrelid = 'mart.topt_core_results'::regclass and conname = 'topt_core_results_pgp_values_check') then alter table mart.topt_core_results add constraint topt_core_results_pgp_values_check CHECK (((num_nonnulls(current_pgp, target_pgp_lower, target_pgp_upper, target_pgp_midpoint) = 0) OR ((num_nonnulls(current_pgp, target_pgp_lower, target_pgp_upper, target_pgp_midpoint) = 4) AND (availability = 'available'::text) AND (current_pgp > (0)::numeric) AND (target_pgp_lower > (0)::numeric) AND (target_pgp_lower < target_pgp_upper)))) NOT VALID; end if; end $$;
-do $$ begin if not exists (select 1 from pg_constraint where conrelid = 'mart.topt_core_results'::regclass and conname = 'topt_core_results_uniform_values_check') then alter table mart.topt_core_results add constraint topt_core_results_uniform_values_check CHECK ((((availability = 'available'::text) AND (operating_metric = 'capital_adjusted_gppe'::text) AND (operating_efficiency IS NOT NULL) AND (capital_adjusted_gross_profit IS NOT NULL) AND (gppe IS NOT NULL) AND (tier IS NOT NULL) AND (target_ps_lower IS NOT NULL) AND (target_ps_upper IS NOT NULL) AND (target_ps_midpoint IS NOT NULL) AND (current_ps IS NOT NULL) AND (valuation_gap IS NOT NULL) AND (cardinality(reason_codes) = 0)) OR ((availability = 'unavailable'::text) AND (capital_adjusted_gross_profit IS NULL) AND (gppe IS NULL) AND (tier IS NULL) AND (target_ps_lower IS NULL) AND (target_ps_upper IS NULL) AND (target_ps_midpoint IS NULL) AND (current_ps IS NULL) AND (valuation_gap IS NULL) AND (operating_efficiency IS NULL) AND (cardinality(reason_codes) > 0)))) NOT VALID; end if; end $$;
-do $$ begin if not exists (select 1 from pg_constraint where conrelid = 'mart.topt_gppe_results'::regclass and conname = 'topt_gppe_results_operating_metric_check') then alter table mart.topt_gppe_results add constraint topt_gppe_results_operating_metric_check CHECK ((operating_metric = 'capital_adjusted_gppe'::text)) NOT VALID; end if; end $$;
-do $$ begin if not exists (select 1 from pg_constraint where conrelid = 'mart.topt_gppe_results'::regclass and conname = 'topt_gppe_results_uniform_values_check') then alter table mart.topt_gppe_results add constraint topt_gppe_results_uniform_values_check CHECK ((((availability = 'available'::text) AND (cardinality(reason_codes) = 0) AND (operating_efficiency IS NOT NULL) AND (operating_metric = 'capital_adjusted_gppe'::text) AND (capital_adjusted_gross_profit IS NOT NULL) AND (gppe IS NOT NULL)) OR ((availability = 'unavailable'::text) AND (cardinality(reason_codes) > 0) AND (operating_efficiency IS NULL) AND (capital_adjusted_gross_profit IS NULL) AND (gppe IS NULL)))) NOT VALID; end if; end $$;
 
 CREATE OR REPLACE FUNCTION mart.head_freshness(p_refreshed_at timestamp with time zone, p_family text, p_as_of timestamp with time zone DEFAULT now())
  RETURNS TABLE(age_hours numeric, limit_hours integer, freshness text, availability text, staleness_reason text)
@@ -1196,90 +1016,61 @@ execute $vc$create or replace view mart.capture_status as
      LEFT JOIN raw.capture_obligation_results result ON result.capture_obligation_id = obligation.obligation_id
   GROUP BY run.run_id, run.campaign_id, campaign.environment, campaign.cutoff, list_version.universe_id, list_version.universe_version, list_version.universe_sha256$vc$;
 end if; end $$;
-do $$ begin if to_regclass('mart.topt_core_meta_info') is null then
-execute $vc$create or replace view mart.topt_core_meta_info as
- SELECT result.result_id,
-    result.invocation_id,
-    result.snapshot_id,
-    result.run_id,
-    result.release_manifest_id,
-    result.universe_id,
-    result.universe_version,
-    result.universe_sha256,
-    result.cutoff,
-    result.issuer_id,
-    result.instrument_id,
-    result.listing_id,
-    result.input_observation_ids,
-    result.gppe_invocation_id,
-    result.gppe_result_id,
-    result.gppe_definition_id,
-    result.gppe_definition_sha256,
-    result.tier_definition_id,
-    result.tier_definition_sha256,
-    result.confidence,
-    result.freshness,
-    result.created_at,
-    lineage.items AS lineage
-   FROM mart.topt_core_results result
-     JOIN LATERAL ( SELECT jsonb_agg(item.entry ORDER BY item.observation_id) AS items
+do $$ begin if to_regclass('mart.capture_issuer_lineage') is null then
+execute $vc$create or replace view mart.capture_issuer_lineage as
+ SELECT ('core-result:'::text || m.member_sha256) AS result_id,
+    s.snapshot_id,
+    s.run_id,
+    s.release_manifest_id,
+    s.universe_id,
+    s.universe_version,
+    s.universe_sha256,
+    s.cutoff,
+    m.issuer_id,
+    m.instrument_id,
+    m.listing_id,
+    COALESCE(m.factor_input ->> 'operating_branch'::text, 'non_financial'::text) AS operating_branch,
+    m.observation_ids AS input_observation_ids,
+    mnv.tree_id,
+    mnv.tree_version,
+    mnv.tree_sha256 AS gppe_definition_sha256,
+    mnv.confidence,
+    periods.operating_period_end,
+    periods.revenue_period_end,
+    periods.shares_period_end,
+    s.created_at,
+    ( SELECT jsonb_agg(item.entry ORDER BY item.observation_id) AS items
            FROM ( SELECT DISTINCT ON (observation.observation_id) observation.observation_id,
                     jsonb_build_object('observation_id', observation.observation_id, 'semantic_type', observation.semantic_type, 'semantic_version', observation.semantic_version, 'source_vintage_id', observation.source_vintage_id, 'source_request_id', vintage.source_request_id, 'source_registry_entry_id', request.source_registry_entry_id, 'source_policy_id', request.source_policy_id, 'parser_version', observation.parser_version, 'mapping_version', observation.mapping_version, 'normalized_payload_sha256', observation.normalized_payload_sha256, 'confidence', observation.confidence, 'freshness',
                         CASE
-                            WHEN (result.cutoff - observation.knowable_at) <= COALESCE(NULLIF(policy.semantic_freshness_max_age ->> observation.semantic_type, ''::text)::interval, policy.freshness_max_age) THEN 'fresh'::text
+                            WHEN (s.cutoff - observation.knowable_at) <= COALESCE(NULLIF(policy.semantic_freshness_max_age ->> observation.semantic_type, ''::text)::interval, policy.freshness_max_age) THEN 'fresh'::text
                             ELSE 'stale'::text
                         END, 'knowable_at', observation.knowable_at, 'recorded_at', observation.recorded_at, 'vintage', payload.normalized_payload -> 'vintage'::text, 'inputs', ( SELECT COALESCE(jsonb_object_agg(field.key, field.value), '{}'::jsonb) AS "coalesce"
                            FROM jsonb_each(payload.normalized_payload) field(key, value)
                           WHERE field.key = ANY (ARRAY['gross_profit'::text, 'total_assets'::text, 'headcount'::text, 'revenue'::text, 'shares_outstanding'::text, 'close'::text, 'currency'::text, 'listing_id'::text]))) AS entry
-                   FROM unnest(result.input_observation_ids) selected(observation_id)
+                   FROM unnest(m.observation_ids) selected(observation_id)
                      JOIN staging.capture_normalized_observations observation USING (observation_id)
                      JOIN staging.capture_observation_obligations usage USING (observation_id)
                      JOIN staging.capture_observation_payloads payload USING (observation_id)
-                     JOIN raw.capture_obligations obligation ON obligation.obligation_id = usage.capture_obligation_id AND obligation.run_id = result.run_id
+                     JOIN raw.capture_obligations obligation ON obligation.obligation_id = usage.capture_obligation_id AND obligation.run_id = s.run_id
                      JOIN raw.capture_obligation_work_bindings binding ON binding.obligation_id = obligation.obligation_id
                      JOIN raw.capture_work_items work USING (work_item_id)
                      JOIN raw.capture_schedule_policies policy USING (schedule_policy_id)
                      JOIN raw.capture_source_vintages vintage USING (source_vintage_id)
                      JOIN raw.capture_source_requests request ON request.source_request_id = vintage.source_request_id
-                  ORDER BY observation.observation_id, obligation.obligation_id) item) lineage ON true$vc$;
-end if; end $$;
-do $$ begin if to_regclass('mart.topt_core_result_read') is null then
-execute $vc$create or replace view mart.topt_core_result_read as
- SELECT result.result_id,
-    result.invocation_id,
-    result.snapshot_id,
-    result.run_id,
-    result.release_manifest_id,
-    result.universe_id,
-    result.universe_version,
-    result.universe_sha256,
-    result.cutoff,
-    result.issuer_id,
-    result.instrument_id,
-    result.listing_id,
-    result.operating_branch,
-    result.operating_metric,
-    result.availability,
-    result.operating_efficiency,
-    result.capital_adjusted_gross_profit,
-    result.gppe,
-    result.tier,
-    result.target_ps_lower,
-    result.target_ps_upper,
-    result.target_ps_midpoint,
-    result.current_ps,
-    result.valuation_gap,
-    result.confidence,
-    result.freshness,
-    result.reason_codes,
-    result.gppe_invocation_id,
-    result.gppe_result_id,
-    result.gppe_definition_id,
-    result.gppe_definition_sha256,
-    result.tier_definition_id,
-    result.tier_definition_sha256,
-    result.created_at
-   FROM mart.topt_core_results result$vc$;
+                  ORDER BY observation.observation_id, obligation.obligation_id) item) AS lineage
+   FROM staging.core_snapshots s
+     JOIN staging.core_snapshot_members m USING (snapshot_id)
+     LEFT JOIN mart.metric_node_values mnv ON mnv.run_id = s.run_id AND mnv.issuer_id = m.issuer_id AND mnv.node_key = 'gppe_uniform_charge_v0'::text
+     LEFT JOIN LATERAL ( SELECT (NULLIF(p.normalized_payload ->> 'operating_period_end'::text, ''::text))::date AS operating_period_end,
+            (NULLIF(p.normalized_payload ->> 'revenue_period_end'::text, ''::text))::date AS revenue_period_end,
+            (NULLIF(p.normalized_payload ->> 'shares_period_end'::text, ''::text))::date AS shares_period_end
+           FROM unnest(m.observation_ids) sel(observation_id)
+             JOIN staging.capture_normalized_observations o USING (observation_id)
+             JOIN staging.capture_observation_payloads p USING (observation_id)
+          WHERE o.semantic_type = 'financial-fact'::text
+          ORDER BY o.knowable_at DESC, o.observation_id DESC
+         LIMIT 1) periods ON true$vc$;
 end if; end $$;
 do $$ begin if to_regclass('mart.governed_strategy_run') is null then
 execute $vc$create or replace view mart.governed_strategy_run as
@@ -1550,193 +1341,6 @@ execute $vc$create or replace view mart.fund_holdings_valuation as
      JOIN newest USING (fund_id, report_period, transaction_time)$vc$;
 end if; end $$;
 
-CREATE OR REPLACE FUNCTION mart.validate_topt_core_result()
- RETURNS trigger
- LANGUAGE plpgsql
-AS $function$
-declare
-    invocation mart.topt_core_invocations%rowtype;
-    gppe_result mart.topt_gppe_results%rowtype;
-    snapshot staging.core_snapshots%rowtype;
-    member staging.core_snapshot_members%rowtype;
-    pgp_keys constant text[] := array['current_pgp', 'target_pgp_lower', 'target_pgp_upper', 'target_pgp_midpoint'];
-    carries_pgp boolean := new.payload ?| pgp_keys;
-begin
-    select * into invocation from mart.topt_core_invocations where invocation_id = new.invocation_id;
-    select * into gppe_result from mart.topt_gppe_results where result_id = new.gppe_result_id;
-    select * into snapshot from staging.core_snapshots where snapshot_id = new.snapshot_id;
-    select * into member
-      from staging.core_snapshot_members
-     where snapshot_id = new.snapshot_id and issuer_id = new.issuer_id;
-    if invocation.invocation_id is null
-       or snapshot.snapshot_id is null
-       or member.snapshot_id is null
-       or invocation.snapshot_id <> new.snapshot_id
-       or invocation.gppe_invocation_id <> new.gppe_invocation_id
-       or gppe_result.result_id is null
-       or gppe_result.invocation_id <> new.gppe_invocation_id
-       or gppe_result.snapshot_id <> new.snapshot_id
-       or gppe_result.issuer_id <> new.issuer_id
-       or gppe_result.gppe_definition_id <> new.gppe_definition_id
-       or gppe_result.gppe_definition_sha256 <> new.gppe_definition_sha256
-       or gppe_result.operating_branch <> new.operating_branch
-       or gppe_result.operating_metric <> new.operating_metric
-       or gppe_result.input_observation_ids <> new.input_observation_ids
-       or new.confidence > gppe_result.confidence
-       or (new.availability = 'unavailable' and gppe_result.confidence <> new.confidence)
-       or gppe_result.freshness <> new.freshness
-       or (gppe_result.availability = 'unavailable' and (
-           new.availability <> 'unavailable'
-           or gppe_result.reason_codes <> new.reason_codes
-       ))
-       or (new.operating_efficiency is not null
-           and gppe_result.operating_efficiency is distinct from new.operating_efficiency)
-       or (new.availability = 'available' and (
-           gppe_result.availability <> 'available'
-           or gppe_result.capital_adjusted_gross_profit is distinct from new.capital_adjusted_gross_profit
-           or gppe_result.gppe is distinct from new.gppe
-       ))
-       or invocation.gppe_definition_id <> new.gppe_definition_id
-       or invocation.gppe_definition_sha256 <> new.gppe_definition_sha256
-       or invocation.tier_definition_id <> new.tier_definition_id
-       or invocation.tier_definition_sha256 <> new.tier_definition_sha256
-       or snapshot.run_id <> new.run_id
-       or snapshot.release_manifest_id <> new.release_manifest_id
-       or snapshot.universe_id <> new.universe_id
-       or snapshot.universe_version <> new.universe_version
-       or snapshot.universe_sha256 <> new.universe_sha256
-       or snapshot.cutoff <> new.cutoff
-       or member.instrument_id <> new.instrument_id
-       or member.listing_id <> new.listing_id
-       or member.observation_ids <> new.input_observation_ids
-       or (select count(*) from jsonb_object_keys(new.payload)) <> (case when carries_pgp then 37 else 33 end)
-       or not (new.payload ?& array[
-           'invocation_id', 'snapshot_id', 'run_id', 'release_manifest_id',
-           'universe_id', 'universe_version', 'universe_sha256', 'cutoff',
-           'issuer_id', 'instrument_id', 'listing_id', 'operating_branch',
-           'operating_metric', 'availability', 'operating_efficiency',
-           'capital_adjusted_gross_profit', 'gppe', 'tier', 'target_ps_lower',
-           'target_ps_upper', 'target_ps_midpoint', 'current_ps', 'valuation_gap',
-           'confidence', 'freshness', 'reason_codes', 'input_observation_ids',
-           'gppe_invocation_id', 'gppe_result_id',
-           'gppe_definition_id', 'gppe_definition_sha256',
-           'tier_definition_id', 'tier_definition_sha256'
-       ])
-       or (carries_pgp and not (new.payload ?& pgp_keys))
-       or (not carries_pgp and (new.current_pgp is not null or new.target_pgp_lower is not null
-           or new.target_pgp_upper is not null or new.target_pgp_midpoint is not null))
-       or (carries_pgp and (
-           (new.payload->>'current_pgp')::numeric is distinct from new.current_pgp
-           or (new.payload->>'target_pgp_lower')::numeric is distinct from new.target_pgp_lower
-           or (new.payload->>'target_pgp_upper')::numeric is distinct from new.target_pgp_upper
-           or (new.payload->>'target_pgp_midpoint')::numeric is distinct from new.target_pgp_midpoint
-       ))
-       or new.payload->>'invocation_id' is distinct from new.invocation_id
-       or new.payload->>'snapshot_id' is distinct from new.snapshot_id
-       or new.payload->>'run_id' is distinct from new.run_id
-       or new.payload->>'release_manifest_id' is distinct from new.release_manifest_id
-       or new.payload->>'universe_id' is distinct from new.universe_id
-       or new.payload->>'universe_version' is distinct from new.universe_version
-       or new.payload->>'universe_sha256' is distinct from new.universe_sha256
-       or (new.payload->>'cutoff')::timestamptz is distinct from new.cutoff
-       or new.payload->>'issuer_id' is distinct from new.issuer_id
-       or new.payload->>'instrument_id' is distinct from new.instrument_id
-       or new.payload->>'listing_id' is distinct from new.listing_id
-       or new.payload->>'operating_branch' is distinct from new.operating_branch
-       or new.payload->>'operating_metric' is distinct from new.operating_metric
-       or new.payload->>'availability' is distinct from new.availability
-       or (new.payload->>'operating_efficiency')::numeric is distinct from new.operating_efficiency
-       or (new.payload->>'capital_adjusted_gross_profit')::numeric
-            is distinct from new.capital_adjusted_gross_profit
-       or (new.payload->>'gppe')::numeric is distinct from new.gppe
-       or new.payload->>'tier' is distinct from new.tier
-       or (new.payload->>'target_ps_lower')::numeric is distinct from new.target_ps_lower
-       or (new.payload->>'target_ps_upper')::numeric is distinct from new.target_ps_upper
-       or (new.payload->>'target_ps_midpoint')::numeric is distinct from new.target_ps_midpoint
-       or (new.payload->>'current_ps')::numeric is distinct from new.current_ps
-       or (new.payload->>'valuation_gap')::numeric is distinct from new.valuation_gap
-       or (new.payload->>'confidence')::numeric is distinct from new.confidence
-       or new.payload->>'freshness' is distinct from new.freshness
-       or array(select jsonb_array_elements_text(new.payload->'reason_codes'))
-            is distinct from new.reason_codes
-       or array(select jsonb_array_elements_text(new.payload->'input_observation_ids'))
-            is distinct from new.input_observation_ids
-       or new.payload->>'gppe_invocation_id' is distinct from new.gppe_invocation_id
-       or new.payload->>'gppe_result_id' is distinct from new.gppe_result_id
-       or new.payload->>'gppe_definition_id' is distinct from new.gppe_definition_id
-       or new.payload->>'gppe_definition_sha256' is distinct from new.gppe_definition_sha256
-       or new.payload->>'tier_definition_id' is distinct from new.tier_definition_id
-       or new.payload->>'tier_definition_sha256' is distinct from new.tier_definition_sha256
-       or raw.canonical_sha256(new.payload) <> new.content_sha256 then
-        raise check_violation using message = 'TOPT core result does not match its invocation or content';
-    end if;
-    return new;
-end;
-$function$;
-CREATE OR REPLACE FUNCTION mart.validate_topt_gppe_result()
- RETURNS trigger
- LANGUAGE plpgsql
-AS $function$
-declare
-    invocation mart.topt_gppe_invocations%rowtype;
-    snapshot staging.core_snapshots%rowtype;
-    member staging.core_snapshot_members%rowtype;
-begin
-    select * into invocation from mart.topt_gppe_invocations where invocation_id = new.invocation_id;
-    select * into snapshot from staging.core_snapshots where snapshot_id = new.snapshot_id;
-    select * into member from staging.core_snapshot_members
-     where snapshot_id = new.snapshot_id and issuer_id = new.issuer_id;
-    if invocation.invocation_id is null or snapshot.snapshot_id is null or member.snapshot_id is null
-       or invocation.snapshot_id <> new.snapshot_id
-       or invocation.gppe_definition_id <> new.gppe_definition_id
-       or invocation.gppe_definition_sha256 <> new.gppe_definition_sha256
-       or snapshot.run_id <> new.run_id or snapshot.release_manifest_id <> new.release_manifest_id
-       or snapshot.universe_id <> new.universe_id or snapshot.universe_version <> new.universe_version
-       or snapshot.universe_sha256 <> new.universe_sha256 or snapshot.cutoff <> new.cutoff
-       or member.instrument_id <> new.instrument_id or member.listing_id <> new.listing_id
-       or member.observation_ids <> new.input_observation_ids
-       or (select count(*) from jsonb_object_keys(new.payload)) <> 23
-       or not (new.payload ?& array[
-           'invocation_id', 'snapshot_id', 'run_id', 'release_manifest_id',
-           'universe_id', 'universe_version', 'universe_sha256', 'cutoff',
-           'issuer_id', 'instrument_id', 'listing_id', 'operating_branch',
-           'operating_metric', 'availability', 'operating_efficiency',
-           'capital_adjusted_gross_profit', 'gppe', 'confidence', 'freshness',
-           'reason_codes', 'input_observation_ids', 'gppe_definition_id',
-           'gppe_definition_sha256'
-       ])
-       or new.payload->>'invocation_id' is distinct from new.invocation_id
-       or new.payload->>'snapshot_id' is distinct from new.snapshot_id
-       or new.payload->>'run_id' is distinct from new.run_id
-       or new.payload->>'release_manifest_id' is distinct from new.release_manifest_id
-       or new.payload->>'universe_id' is distinct from new.universe_id
-       or new.payload->>'universe_version' is distinct from new.universe_version
-       or new.payload->>'universe_sha256' is distinct from new.universe_sha256
-       or (new.payload->>'cutoff')::timestamptz is distinct from new.cutoff
-       or new.payload->>'issuer_id' is distinct from new.issuer_id
-       or new.payload->>'instrument_id' is distinct from new.instrument_id
-       or new.payload->>'listing_id' is distinct from new.listing_id
-       or new.payload->>'operating_branch' is distinct from new.operating_branch
-       or new.payload->>'operating_metric' is distinct from new.operating_metric
-       or new.payload->>'availability' is distinct from new.availability
-       or (new.payload->>'operating_efficiency')::numeric is distinct from new.operating_efficiency
-       or (new.payload->>'capital_adjusted_gross_profit')::numeric is distinct from new.capital_adjusted_gross_profit
-       or (new.payload->>'gppe')::numeric is distinct from new.gppe
-       or (new.payload->>'confidence')::numeric is distinct from new.confidence
-       or new.payload->>'freshness' is distinct from new.freshness
-       or array(select jsonb_array_elements_text(new.payload->'reason_codes'))
-            is distinct from new.reason_codes
-       or array(select jsonb_array_elements_text(new.payload->'input_observation_ids'))
-            is distinct from new.input_observation_ids
-       or new.payload->>'gppe_definition_id' is distinct from new.gppe_definition_id
-       or new.payload->>'gppe_definition_sha256' is distinct from new.gppe_definition_sha256
-       or raw.canonical_sha256(new.payload) <> new.content_sha256 then
-        raise check_violation using message = 'TOPT GPPE result does not match its invocation or content';
-    end if;
-    return new;
-end;
-$function$;
-
 CREATE OR REPLACE FUNCTION staging.validate_core_snapshot()
  RETURNS trigger
  LANGUAGE plpgsql
@@ -1795,12 +1399,6 @@ do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'mart.strate
 do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'mart.strategy_run_capture_bindings'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = '0b9cdaf2ffa58ea702e3cb6685d4ba43') then drop trigger if exists trg_strategy_run_capture_bindings_append_only on mart.strategy_run_capture_bindings; CREATE TRIGGER trg_strategy_run_capture_bindings_append_only BEFORE DELETE OR UPDATE ON mart.strategy_run_capture_bindings FOR EACH ROW EXECUTE FUNCTION mart.reject_mutation(); end if; end $$;
 do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'mart.strategy_runs'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = '955638e2a1989bd4f24a4ff64a3b690a') then drop trigger if exists require_stored_fetch on mart.strategy_runs; CREATE TRIGGER require_stored_fetch BEFORE INSERT ON mart.strategy_runs FOR EACH ROW EXECUTE FUNCTION mart.require_stored_fetch('risk_free_fetch_id'); end if; end $$;
 do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'mart.strategy_runs'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = '12e3dbdeafd06c9d14e5130eee178e38') then drop trigger if exists trg_strategy_runs_append_only on mart.strategy_runs; CREATE TRIGGER trg_strategy_runs_append_only BEFORE DELETE OR UPDATE ON mart.strategy_runs FOR EACH ROW EXECUTE FUNCTION mart.reject_mutation(); end if; end $$;
-do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'mart.topt_core_invocations'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = 'a74541ac40dcb6cb749456a0a475a00e') then drop trigger if exists reject_mutation on mart.topt_core_invocations; CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON mart.topt_core_invocations FOR EACH ROW EXECUTE FUNCTION raw.reject_capture_control_mutation(); end if; end $$;
-do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'mart.topt_core_results'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = '25202cb471232444b7ce3db3dbc977e1') then drop trigger if exists reject_mutation on mart.topt_core_results; CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON mart.topt_core_results FOR EACH ROW EXECUTE FUNCTION raw.reject_capture_control_mutation(); end if; end $$;
-do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'mart.topt_core_results'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = 'e3102e292d28a4ff0c69303228fa0266') then drop trigger if exists validate_result on mart.topt_core_results; CREATE TRIGGER validate_result BEFORE INSERT ON mart.topt_core_results FOR EACH ROW EXECUTE FUNCTION mart.validate_topt_core_result(); end if; end $$;
-do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'mart.topt_gppe_invocations'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = 'd84bbaebed75821f02cd65ad146ca54b') then drop trigger if exists reject_mutation on mart.topt_gppe_invocations; CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON mart.topt_gppe_invocations FOR EACH ROW EXECUTE FUNCTION raw.reject_capture_control_mutation(); end if; end $$;
-do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'mart.topt_gppe_results'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = '3146cbe498803394cc4bf41a4f180dd2') then drop trigger if exists reject_mutation on mart.topt_gppe_results; CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON mart.topt_gppe_results FOR EACH ROW EXECUTE FUNCTION raw.reject_capture_control_mutation(); end if; end $$;
-do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'mart.topt_gppe_results'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = '049275c2907a3c1b0b50b7342a07fc13') then drop trigger if exists validate_gppe_result on mart.topt_gppe_results; CREATE TRIGGER validate_gppe_result BEFORE INSERT ON mart.topt_gppe_results FOR EACH ROW EXECUTE FUNCTION mart.validate_topt_gppe_result(); end if; end $$;
 
 do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'staging.core_snapshots'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = '8b33b1bf393eb684b9370d3f0927bfd4') then drop trigger if exists validate_snapshot on staging.core_snapshots; CREATE TRIGGER validate_snapshot BEFORE INSERT ON staging.core_snapshots FOR EACH ROW EXECUTE FUNCTION staging.validate_core_snapshot(); end if; end $$;
 
@@ -1821,7 +1419,6 @@ do $$ begin if to_regclass('mart.idx_mart_research_card_artifacts_card_id') is n
 do $$ begin if to_regclass('mart.idx_strategy_decisions_issuer_cutoff') is null then CREATE INDEX idx_strategy_decisions_issuer_cutoff ON mart.strategy_decisions USING btree (issuer_id, cutoff_at); end if; end $$;
 do $$ begin if to_regclass('mart.idx_strategy_run_capture_bindings_strategy_run') is null then CREATE INDEX idx_strategy_run_capture_bindings_strategy_run ON mart.strategy_run_capture_bindings USING btree (strategy_run_id); end if; end $$;
 do $$ begin if to_regclass('mart.idx_strategy_runs_strategy_key_order') is null then CREATE INDEX idx_strategy_runs_strategy_key_order ON mart.strategy_runs USING btree (strategy_key, executed_at DESC, created_at DESC, strategy_run_id DESC); end if; end $$;
-do $$ begin if to_regclass('mart.idx_topt_core_results_lookup') is null then CREATE INDEX idx_topt_core_results_lookup ON mart.topt_core_results USING btree (run_id, issuer_id, cutoff); end if; end $$;
 
 insert into mart.environment_identity (singleton, environment)
 select true, 'production'
@@ -1910,7 +1507,7 @@ declare
     tbl text;
     cname text;
 begin
-    foreach tbl in array array['mart.topt_gppe_results', 'mart.topt_core_results', 'mart.strategy_decisions'] loop
+    foreach tbl in array array['mart.metric_node_values', 'mart.strategy_decisions'] loop
         if not exists (
             select 1
             from pg_constraint con

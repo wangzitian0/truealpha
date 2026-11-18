@@ -478,7 +478,7 @@ def test_the_persisted_report_of_the_tick_excludes_the_listings_whose_share_coun
             )
         }
         unavailable_issuers = reader.execute(
-            "select count(distinct issuer_id) from mart.topt_core_results where run_id = %s and availability = 'unavailable'",
+            "select count(distinct issuer_id) from mart.metric_node_values where run_id = %s and node_key = 'gppe_uniform_charge_v0' and availability_status = 'unavailable'",
             (run_id,),
         ).fetchone()
     assert persisted is not None and unavailable_issuers is not None
@@ -507,10 +507,14 @@ def _core(tick: Tick, ticker: str) -> Core:
     with psycopg.connect(tick.url) as reader:
         row = reader.execute(
             """
-            select r.availability, r.reason_codes, r.current_pgp, r.current_ps
-            from mart.topt_core_results r
-            where r.run_id = %s
-              and r.issuer_id = (
+            select mnv.availability_status, mnv.reason_codes, d.current_price_to_gross_profit, d.current_price_to_sales
+            from mart.metric_node_values mnv
+            join mart.strategy_run_capture scope on scope.capture_run_id = mnv.run_id
+            left join mart.strategy_decisions d
+              on d.strategy_run_id = scope.strategy_run_id and d.issuer_id = mnv.issuer_id
+            where mnv.run_id = %s
+              and mnv.node_key = 'gppe_uniform_charge_v0'
+              and mnv.issuer_id = (
                   select distinct p.normalized_payload ->> 'issuer_id'
                   from raw.capture_obligations ob
                   join staging.capture_observation_obligations oo on oo.capture_obligation_id = ob.obligation_id

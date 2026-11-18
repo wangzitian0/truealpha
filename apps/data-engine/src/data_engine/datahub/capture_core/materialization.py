@@ -23,7 +23,6 @@ from factors.production_topt import (
     ToptCoreReasonCode,
     ToptCoreResult,
     ToptCoreSnapshotInput,
-    ToptGppeResult,
     ToptMarketValueComponent,
     ToptMetricInput,
     compute_topt_core,
@@ -31,7 +30,6 @@ from factors.production_topt import (
     drop_absent_banking_leaves,
 )
 from psycopg import Connection
-from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from pydantic import (
     Field,
@@ -62,10 +60,7 @@ from data_engine.datahub.capture_core.metric_node_values import (
 )
 from data_engine.datahub.capture_core.source_registrations import SEMANTIC_TYPES
 from data_engine.datahub.capture_core.status_dimensions import (
-    StatusDimensions,
-    availability_status_for,
     contract_not_applicable_issuer_ids,
-    factor_validation_status_for,
     resolve_raw_pointers,
     source_evidence_status_for,
 )
@@ -351,92 +346,6 @@ class ToptCoreSnapshot(IdentifiedFrozenModel):
             primary_listing_undeclared=undeclared,
             inputs={name: val for name in OPTIONAL_SNAPSHOT_FIELDS if (val := common_metric(name)) is not None},
         )
-
-
-@dataclass(frozen=True)
-class ToptCoreIdentity:
-    run_id: str
-    release_manifest_id: str
-    universe_id: str
-    universe_version: str
-    universe_sha256: str
-    snapshot_id: str
-    invocation_id: str
-
-
-@dataclass(frozen=True)
-class ToptCoreReadResult:
-    """One `mart.topt_core_results` row read through `results()`."""
-
-    result_id: str
-    invocation_id: str
-    snapshot_id: str
-    run_id: str
-    release_manifest_id: str
-    universe_id: str
-    universe_version: str
-    universe_sha256: str
-    cutoff: datetime
-    issuer_id: str
-    instrument_id: str
-    listing_id: str
-    operating_branch: str
-    operating_metric: str
-    availability: str
-    operating_efficiency: Decimal | None
-    capital_adjusted_gross_profit: Decimal | None
-    gppe: Decimal | None
-    tier: str | None
-    target_ps_lower: Decimal | None
-    target_ps_upper: Decimal | None
-    target_ps_midpoint: Decimal | None
-    current_ps: Decimal | None
-    current_pgp: Decimal | None
-    target_pgp_lower: Decimal | None
-    target_pgp_upper: Decimal | None
-    target_pgp_midpoint: Decimal | None
-    valuation_gap: Decimal | None
-    confidence: Decimal
-    freshness: str
-    reason_codes: tuple[str, ...]
-    gppe_invocation_id: str
-    gppe_result_id: str
-    gppe_definition_id: str
-    gppe_definition_sha256: str
-    tier_definition_id: str
-    tier_definition_sha256: str
-    created_at: datetime
-
-    @property
-    def target_ps_is_implied(self) -> bool:
-        return self.target_pgp_midpoint is not None
-
-
-@dataclass(frozen=True)
-class ToptCoreMetaInfo:
-    result_id: str
-    invocation_id: str
-    snapshot_id: str
-    run_id: str
-    release_manifest_id: str
-    universe_id: str
-    universe_version: str
-    universe_sha256: str
-    cutoff: datetime
-    issuer_id: str
-    instrument_id: str
-    listing_id: str
-    input_observation_ids: tuple[str, ...]
-    gppe_invocation_id: str
-    gppe_result_id: str
-    gppe_definition_id: str
-    gppe_definition_sha256: str
-    tier_definition_id: str
-    tier_definition_sha256: str
-    confidence: Decimal
-    freshness: str
-    created_at: datetime
-    lineage: tuple[dict[str, Any], ...]
 
 
 @dataclass(frozen=True)
@@ -1140,104 +1049,29 @@ class PostgresToptCoreRepository:
         expected_issuers = len({member.issuer_id for member in snapshot.members})
         if len(gppe_results) != expected_issuers:
             raise ValueError("GPPE materialization denominator drifted from the snapshot's issuers")
+        results = tuple(
+            compute_topt_core(
+                factor_input,
+                gppe_result,
+                invocation_id=invocation_id,
+                definition=definition,
+            )
+            for factor_input, gppe_result in zip(factor_inputs, gppe_results, strict=True)
+        )
+        if len(results) != expected_issuers or len({item.issuer_id for item in results}) != expected_issuers:
+            raise ValueError("core materialization denominator drifted from the snapshot's issuers")
 
         with self._connection.transaction():
-            _insert_or_verify(
-                self._connection,
-                insert_sql="""
-                    insert into mart.topt_gppe_invocations (
-                        invocation_id, content_sha256, snapshot_id,
-                        gppe_definition_id, gppe_definition_sha256, payload
-                    ) values (%s, %s, %s, %s, %s, %s)
-                    on conflict (invocation_id) do nothing returning invocation_id
-                """,
-                insert_params=(
-                    gppe_invocation_id,
-                    gppe_invocation_sha256,
-                    snapshot.snapshot_id,
-                    gppe_definition.definition_id,
-                    gppe_definition.content_sha256,
-                    Jsonb(gppe_invocation_payload),
-                ),
-                check_sql="select content_sha256, payload from mart.topt_gppe_invocations where invocation_id = %s",
-                check_params=(gppe_invocation_id,),
-                expected=(gppe_invocation_sha256, gppe_invocation_payload),
-                conflict_message="TOPT GPPE invocation identity conflict",
-            )
             evidence_by_listing = self._load_source_evidence(snapshot)
-            gppe_validation = factor_validation_status_for((gppe_definition.definition_id,))
+            periods_by_listing = self._load_result_periods(snapshot)
+            for result in results:
+                if result.listing_id not in periods_by_listing:
+                    raise ValueError(f"no financial-fact observation for {result.listing_id} in its own snapshot")
             not_applicable_issuers = contract_not_applicable_issuer_ids(
                 self._connection,
                 metric="gppe",
                 universe_id=snapshot.universe_id,
             )
-
-            def _status_dims(res: Any, validation: Any) -> StatusDimensions:
-                return StatusDimensions(
-                    availability_status=availability_status_for(
-                        availability=res.availability.value,
-                        freshness=res.freshness.value,
-                        confidence=res.confidence,
-                        reason_codes=(item.value for item in res.reason_codes),
-                        not_applicable=res.issuer_id in not_applicable_issuers,
-                    ),
-                    source_evidence_status=evidence_by_listing[res.listing_id],
-                    factor_validation_status=validation,
-                )
-
-            for gppe_result in gppe_results:
-                self._put_gppe_result(gppe_result, _status_dims(gppe_result, gppe_validation))
-            materialized_gppe_results = self._load_gppe_results(gppe_invocation_id)
-            if len(materialized_gppe_results) != expected_issuers:
-                raise ValueError("GPPE materialization did not persist the complete denominator")
-
-            results = tuple(
-                compute_topt_core(
-                    factor_input,
-                    gppe_result,
-                    invocation_id=invocation_id,
-                    definition=definition,
-                )
-                for factor_input, gppe_result in zip(factor_inputs, materialized_gppe_results, strict=True)
-            )
-            if len(results) != expected_issuers or len({item.issuer_id for item in results}) != expected_issuers:
-                raise ValueError("core materialization denominator drifted from the snapshot's issuers")
-
-            _insert_or_verify(
-                self._connection,
-                insert_sql="""
-                    insert into mart.topt_core_invocations (
-                        invocation_id, content_sha256, snapshot_id,
-                        gppe_invocation_id,
-                        gppe_definition_id, gppe_definition_sha256,
-                        tier_definition_id, tier_definition_sha256, payload
-                    ) values (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    on conflict (invocation_id) do nothing returning invocation_id
-                """,
-                insert_params=(
-                    invocation_id,
-                    invocation_sha256,
-                    snapshot.snapshot_id,
-                    gppe_invocation_id,
-                    gppe_definition.definition_id,
-                    gppe_definition.content_sha256,
-                    definition.strategy_definition_id,
-                    definition.content_sha256,
-                    Jsonb(invocation_payload),
-                ),
-                check_sql="select content_sha256, payload from mart.topt_core_invocations where invocation_id = %s",
-                check_params=(invocation_id,),
-                expected=(invocation_sha256, invocation_payload),
-                conflict_message="TOPT core invocation identity conflict",
-            )
-            periods_by_listing = self._load_result_periods(snapshot)
-            core_validation = factor_validation_status_for(
-                (gppe_definition.definition_id, definition.strategy_definition_id)
-            )
-            for result in results:
-                if result.listing_id not in periods_by_listing:
-                    raise ValueError(f"no financial-fact observation for {result.listing_id} in its own snapshot")
-                self._put_result(result, periods_by_listing[result.listing_id], _status_dims(result, core_validation))
             materialize_metric_node_values(
                 self._connection,
                 factor_inputs=factor_inputs,
@@ -1245,6 +1079,7 @@ class PostgresToptCoreRepository:
                 tier_definition_id=definition.strategy_definition_id,
                 periods_by_listing=periods_by_listing,
                 evidence_by_listing=evidence_by_listing,
+                not_applicable_issuers=not_applicable_issuers,
             )
         return results
 
@@ -1287,299 +1122,6 @@ class PostgresToptCoreRepository:
             for subject_id, operating, revenue, shares in rows
         }
 
-    def _load_gppe_results(self, invocation_id: str) -> tuple[ToptGppeResult, ...]:
-        rows = self._connection.execute(
-            """
-            select result_id, content_sha256, payload
-            from mart.topt_gppe_results
-            where invocation_id = %s
-            order by issuer_id
-            """,
-            (invocation_id,),
-        ).fetchall()
-        return tuple(
-            ToptGppeResult.model_validate({**row[2], "result_id": row[0], "content_sha256": row[1]}) for row in rows
-        )
-
-    def _put_gppe_result(self, result: ToptGppeResult, statuses: StatusDimensions) -> None:
-        payload = result.model_dump(mode="json", exclude={"result_id", "content_sha256"})
-        _insert_or_verify(
-            self._connection,
-            insert_sql=_insert_sql(
-                "mart.topt_gppe_results",
-                (
-                    "result_id",
-                    "content_sha256",
-                    "invocation_id",
-                    "snapshot_id",
-                    "run_id",
-                    "release_manifest_id",
-                    "universe_id",
-                    "universe_version",
-                    "universe_sha256",
-                    "cutoff",
-                    "issuer_id",
-                    "instrument_id",
-                    "listing_id",
-                    "operating_branch",
-                    "operating_metric",
-                    "availability",
-                    "operating_efficiency",
-                    "capital_adjusted_gross_profit",
-                    "gppe",
-                    "confidence",
-                    "freshness",
-                    "reason_codes",
-                    "input_observation_ids",
-                    "gppe_definition_id",
-                    "gppe_definition_sha256",
-                    "payload",
-                    "availability_status",
-                    "source_evidence_status",
-                    "factor_validation_status",
-                ),
-                conflict="result_id",
-                returning="result_id",
-            ),
-            insert_params=(
-                result.result_id,
-                result.content_sha256,
-                result.invocation_id,
-                result.snapshot_id,
-                result.run_id,
-                result.release_manifest_id,
-                result.universe_id,
-                result.universe_version,
-                result.universe_sha256,
-                result.cutoff,
-                result.issuer_id,
-                result.instrument_id,
-                result.listing_id,
-                result.operating_branch.value,
-                result.operating_metric.value,
-                result.availability.value,
-                result.operating_efficiency,
-                result.capital_adjusted_gross_profit,
-                result.gppe,
-                result.confidence,
-                result.freshness.value,
-                [item.value for item in result.reason_codes],
-                list(result.input_observation_ids),
-                result.gppe_definition_id,
-                result.gppe_definition_sha256,
-                Jsonb(payload),
-                *statuses.as_columns(),
-            ),
-            check_sql=_content_check_sql("mart.topt_gppe_results", "result_id"),
-            check_params=(result.result_id,),
-            expected=(result.content_sha256, payload),
-            conflict_message="TOPT GPPE result identity conflict",
-        )
-
-    def _put_result(
-        self,
-        result: ToptCoreResult,
-        periods: tuple[date | None, date | None, date | None],
-        statuses: StatusDimensions,
-    ) -> None:
-        payload = result.model_dump(mode="json", exclude={"result_id", "content_sha256"})
-        _insert_or_verify(
-            self._connection,
-            insert_sql=_insert_sql(
-                "mart.topt_core_results",
-                (
-                    "result_id",
-                    "content_sha256",
-                    "invocation_id",
-                    "snapshot_id",
-                    "run_id",
-                    "release_manifest_id",
-                    "universe_id",
-                    "universe_version",
-                    "universe_sha256",
-                    "cutoff",
-                    "issuer_id",
-                    "instrument_id",
-                    "listing_id",
-                    "operating_branch",
-                    "operating_metric",
-                    "availability",
-                    "operating_efficiency",
-                    "capital_adjusted_gross_profit",
-                    "gppe",
-                    "tier",
-                    "target_ps_lower",
-                    "target_ps_upper",
-                    "target_ps_midpoint",
-                    "current_ps",
-                    "valuation_gap",
-                    "current_pgp",
-                    "target_pgp_lower",
-                    "target_pgp_upper",
-                    "target_pgp_midpoint",
-                    "operating_period_end",
-                    "revenue_period_end",
-                    "shares_period_end",
-                    "confidence",
-                    "freshness",
-                    "reason_codes",
-                    "input_observation_ids",
-                    "gppe_invocation_id",
-                    "gppe_result_id",
-                    "gppe_definition_id",
-                    "gppe_definition_sha256",
-                    "tier_definition_id",
-                    "tier_definition_sha256",
-                    "payload",
-                    "availability_status",
-                    "source_evidence_status",
-                    "factor_validation_status",
-                ),
-                conflict="result_id",
-                returning="result_id",
-            ),
-            insert_params=(
-                result.result_id,
-                result.content_sha256,
-                result.invocation_id,
-                result.snapshot_id,
-                result.run_id,
-                result.release_manifest_id,
-                result.universe_id,
-                result.universe_version,
-                result.universe_sha256,
-                result.cutoff,
-                result.issuer_id,
-                result.instrument_id,
-                result.listing_id,
-                result.operating_branch.value,
-                result.operating_metric.value,
-                result.availability.value,
-                result.operating_efficiency,
-                result.capital_adjusted_gross_profit,
-                result.gppe,
-                None if result.tier is None else result.tier.value,
-                result.target_ps_lower,
-                result.target_ps_upper,
-                result.target_ps_midpoint,
-                result.current_ps,
-                result.valuation_gap,
-                result.current_pgp,
-                result.target_pgp_lower,
-                result.target_pgp_upper,
-                result.target_pgp_midpoint,
-                periods[0],
-                periods[1],
-                periods[2],
-                result.confidence,
-                result.freshness.value,
-                [item.value for item in result.reason_codes],
-                list(result.input_observation_ids),
-                result.gppe_invocation_id,
-                result.gppe_result_id,
-                result.gppe_definition_id,
-                result.gppe_definition_sha256,
-                result.tier_definition_id,
-                result.tier_definition_sha256,
-                Jsonb(payload),
-                *statuses.as_columns(),
-            ),
-            check_sql=_content_check_sql("mart.topt_core_results", "result_id"),
-            check_params=(result.result_id,),
-            expected=(result.content_sha256, payload),
-            conflict_message="TOPT core result identity conflict",
-        )
-
-    @staticmethod
-    def _validate_page(limit: int, offset: int) -> None:
-        if not 1 <= limit <= 100 or offset < 0:
-            raise ValueError("TOPT core query pagination is outside the bounded range")
-
-    @staticmethod
-    def _identity_query_params(identity: ToptCoreIdentity, limit: int, offset: int) -> tuple[Any, ...]:
-        return (
-            identity.run_id,
-            identity.release_manifest_id,
-            identity.universe_id,
-            identity.universe_version,
-            identity.universe_sha256,
-            identity.snapshot_id,
-            identity.invocation_id,
-            limit,
-            offset,
-        )
-
-    def results(
-        self,
-        identity: ToptCoreIdentity,
-        *,
-        limit: int = 100,
-        offset: int = 0,
-    ) -> tuple[ToptCoreReadResult, ...]:
-        self._validate_page(limit, offset)
-        with self._connection.cursor(row_factory=dict_row) as cursor:
-            cursor.execute(
-                """
-                select r.result_id, r.invocation_id, r.snapshot_id, r.run_id, r.release_manifest_id,
-                       r.universe_id, r.universe_version, r.universe_sha256, r.cutoff, r.issuer_id,
-                       r.instrument_id, r.listing_id, r.operating_branch, r.operating_metric,
-                       r.availability, r.operating_efficiency, r.capital_adjusted_gross_profit,
-                       r.gppe, r.tier, r.target_ps_lower, r.target_ps_upper, r.target_ps_midpoint,
-                       r.current_ps, r.valuation_gap, r.confidence, r.freshness, r.reason_codes,
-                       r.gppe_invocation_id, r.gppe_result_id,
-                       r.gppe_definition_id, r.gppe_definition_sha256,
-                       r.tier_definition_id, r.tier_definition_sha256, r.created_at,
-                       t.current_pgp, t.target_pgp_lower, t.target_pgp_upper, t.target_pgp_midpoint
-                from mart.topt_core_result_read r
-                join mart.topt_core_results t on t.result_id = r.result_id
-                where r.run_id = %s and r.release_manifest_id = %s and r.universe_id = %s
-                  and r.universe_version = %s and r.universe_sha256 = %s and r.snapshot_id = %s
-                  and r.invocation_id = %s
-                order by r.issuer_id limit %s offset %s
-                """,
-                self._identity_query_params(identity, limit, offset),
-            )
-            rows = cursor.fetchall()
-        return tuple(ToptCoreReadResult(**{**row, "reason_codes": tuple(row["reason_codes"])}) for row in rows)
-
-    def meta_info(
-        self,
-        identity: ToptCoreIdentity,
-        *,
-        limit: int = 100,
-        offset: int = 0,
-    ) -> tuple[ToptCoreMetaInfo, ...]:
-        self._validate_page(limit, offset)
-        with self._connection.cursor(row_factory=dict_row) as cursor:
-            cursor.execute(
-                """
-                select result_id, invocation_id, snapshot_id, run_id, release_manifest_id,
-                       universe_id, universe_version, universe_sha256, cutoff, issuer_id,
-                       instrument_id, listing_id, input_observation_ids,
-                       gppe_invocation_id, gppe_result_id,
-                       gppe_definition_id, gppe_definition_sha256,
-                       tier_definition_id, tier_definition_sha256,
-                       confidence, freshness, created_at, lineage
-                from mart.topt_core_meta_info
-                where run_id = %s and release_manifest_id = %s and universe_id = %s
-                  and universe_version = %s and universe_sha256 = %s and snapshot_id = %s
-                  and invocation_id = %s
-                order by issuer_id limit %s offset %s
-                """,
-                self._identity_query_params(identity, limit, offset),
-            )
-            rows = cursor.fetchall()
-        return tuple(
-            ToptCoreMetaInfo(
-                **{
-                    **row,
-                    "input_observation_ids": tuple(row["input_observation_ids"]),
-                    "lineage": tuple(row["lineage"]),
-                }
-            )
-            for row in rows
-        )
-
 
 __all__ = [
     "FinancialFactPayload",
@@ -1587,8 +1129,5 @@ __all__ = [
     "MarketPricePayload",
     "PostgresToptCoreRepository",
     "SnapshotMember",
-    "ToptCoreIdentity",
-    "ToptCoreMetaInfo",
-    "ToptCoreReadResult",
     "ToptCoreSnapshot",
 ]

@@ -2517,7 +2517,7 @@ def test_gbp_price_against_usd_filing_marks_only_that_listing_currency_mismatch_
             core = {
                 row[0]: (row[1], row[2])
                 for row in reader.execute(
-                    "select issuer_id, availability, reason_codes from mart.topt_core_results where run_id = %s",
+                    "select issuer_id, availability_status, reason_codes from mart.metric_node_values where run_id = %s and node_key = 'gppe_uniform_charge_v0'",
                     (run_id,),
                 ).fetchall()
             }

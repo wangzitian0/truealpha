@@ -153,9 +153,9 @@ def judge(*, gppe: Row, quota: Row, server: Row, schema: Row) -> Judgement:
 
 HEAD_SQL = "select run_id, freshness, availability from mart.served_head where universe_id like %s order by advanced_at desc limit 1"
 GPPE_SQL = (
-    "select (count(distinct issuer_id) filter (where coalesce(availability_status, availability) <> 'not_applicable'))::int, "
-    "(count(distinct issuer_id) filter (where coalesce(availability_status, availability) = 'available' and gppe is not null))::int "
-    "from mart.topt_gppe_results where run_id = %s"
+    "select (count(distinct issuer_id) filter (where availability_status <> 'not_applicable'))::int, "
+    "(count(distinct issuer_id) filter (where availability_status = 'available' and value is not null))::int "
+    "from mart.metric_node_values where run_id = %s and node_key = 'gppe_uniform_charge_v0'"
 )
 REPORTED_Q1_SQL = (
     "select (payload -> 'questions' -> 'q1' ->> 'answered')::int, (payload -> 'questions' -> 'q1' ->> 'denominator')::int "

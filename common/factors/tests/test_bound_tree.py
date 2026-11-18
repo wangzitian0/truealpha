@@ -196,8 +196,8 @@ def test_the_published_column_is_judged_by_a_node_that_has_the_sign_policy_of_th
     every class declares the same sign policy as that node, and so does the numerator column."""
     live = load_live_strategy_definition()
     tree = bound_tree(live, issuer_class)
-    judged = published_node("mart.topt_gppe_results", "gppe")
+    judged = published_node("mart.metric_node_values", "gppe_uniform_charge_v0")
     assert PANEL_METRICS[tree.root].sign_policy[issuer_class] == judged.sign_policy[issuer_class]
-    judged_numerator = published_node("mart.topt_gppe_results", "capital_adjusted_gross_profit")
+    judged_numerator = published_node("mart.metric_node_values", "capital_adjusted_gross_profit")
     numerator = PANEL_METRICS[capital_adjusted_node(tree, issuer_class)]
     assert numerator.sign_policy[issuer_class] == judged_numerator.sign_policy[issuer_class]

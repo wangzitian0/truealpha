@@ -387,7 +387,9 @@ def persist_strategy_input_coverage(
     issuers = [
         row[0]
         for row in connection.execute(
-            "select distinct issuer_id from mart.topt_core_meta_info where run_id = %s order by 1", (run_id,)
+            "select distinct m.issuer_id from staging.core_snapshots s "
+            "join staging.core_snapshot_members m using (snapshot_id) where s.run_id = %s order by 1",
+            (run_id,),
         )
     ]
     present: dict[str, set[str]] = {}

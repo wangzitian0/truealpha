@@ -2,9 +2,6 @@
 
 from data_engine.datahub.capture_core.materialization import (
     PostgresToptCoreRepository,
-    ToptCoreIdentity,
-    ToptCoreMetaInfo,
-    ToptCoreReadResult,
     ToptCoreSnapshot,
 )
 from data_engine.datahub.control_plane import AttemptLedger, expand_obligations
@@ -24,9 +21,6 @@ __all__ = [
     "PostgresToptCoreRepository",
     "ToptCaptureMetaInfo",
     "ToptCaptureStatus",
-    "ToptCoreIdentity",
-    "ToptCoreMetaInfo",
-    "ToptCoreReadResult",
     "ToptCoreSnapshot",
     "expand_obligations",
 ]

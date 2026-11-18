@@ -27,10 +27,16 @@ _EXEMPTIONS_REPO = Path(__file__).resolve().parents[6] / "tools" / "output_invar
 _SHARED_EXEMPTION = {RULE_NODE_SIGN_POLICY: "node-sign-policy"}
 
 _ROWS_SQL = """
-    select r.listing_id, r.issuer_id, r.operating_branch, r.availability, r.operating_efficiency
-    from mart.topt_core_results r
-    where r.run_id = %s
-    order by r.listing_id
+    select m.listing_id,
+           mv.issuer_id,
+           coalesce(m.factor_input ->> 'operating_branch', 'non_financial') as operating_branch,
+           case when mv.availability_status in ('available', 'low_confidence') then 'available' else 'unavailable' end as availability,
+           mv.value as operating_efficiency
+    from mart.metric_node_values mv
+    join staging.core_snapshots s on s.run_id = mv.run_id
+    join staging.core_snapshot_members m on m.snapshot_id = s.snapshot_id and m.issuer_id = mv.issuer_id
+    where mv.run_id = %s and mv.node_key = 'gppe_uniform_charge_v0'
+    order by m.listing_id
 """
 
 _OUTCOMES_SQL = """

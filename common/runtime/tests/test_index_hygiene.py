@@ -240,7 +240,7 @@ def test_all_non_vocabulary_foreign_keys_have_supporting_index(migrated_db: str)
             (list(SCHEMAS),),
         ).fetchall()
 
-    assert len(fks) >= 90, f"expected >=90 FKs, found {len(fks)}"
+    assert len(fks) >= 80, f"expected >=80 FKs, found {len(fks)}"
 
     by_table: dict[str, list[tuple[str, bool, str | None, tuple[str, ...]]]] = defaultdict(list)
     for tbl, idx_name, is_uniq, pred, cols in idx_rows:
@@ -285,8 +285,8 @@ def _plan_node_types(plan: dict) -> list[str]:
     ("query", "expected_index"),
     [
         (
-            "SELECT result_id FROM mart.topt_gppe_results WHERE run_id = 'run-1'",
-            "idx_topt_gppe_results_lookup",
+            "SELECT value FROM mart.metric_node_values WHERE run_id = 'run-1' AND node_key = 'gppe_uniform_charge_v0'",
+            "ix_metric_node_values_run_key",
         ),
         (
             "SELECT observation_id FROM staging.capture_normalized_observations WHERE capture_obligation_id = 'ob-1'",

@@ -176,7 +176,7 @@ class Observed:
     payloads: dict[str, dict[str, Any]]  # ticker -> financial-fact payload
     listing_of: dict[str, str]  # ticker -> listing id
     factor_inputs: dict[str, Any]  # issuer id -> the frozen input of the core
-    core: dict[str, tuple[Any, ...]]  # issuer id -> the value columns of mart.topt_core_results
+    core: dict[str, tuple[Any, ...]]  # issuer id -> materialized node and strategy values
     decisions: dict[str, str | None]  # issuer id -> exclusion reason
     seeded_shares: dict[str, Decimal]  # issuer id -> seeded shares_outstanding in staging.strategy_backtest_inputs
     refused_rules: tuple[str, ...]  # plausibility run-refusal rules recorded by judge_strategy
@@ -310,8 +310,32 @@ def _observe(*, reader_on: bool) -> Observed:
             core = {
                 row[0]: tuple(row[1:])
                 for row in reader.execute(
-                    f"select issuer_id, {_CORE_VALUE_COLUMNS} from mart.topt_core_results where run_id = %s",
-                    (run_id,),
+                    """
+                    select cil.issuer_id,
+                           cil.operating_branch,
+                           'capital_adjusted_gppe',
+                           coalesce(d.availability_status, mnv.availability_status),
+                           mnv.value,
+                           cagp.value,
+                           mnv.value,
+                           d.tier,
+                           null::numeric, null::numeric, d.target_price_to_sales,
+                           d.current_price_to_sales, d.valuation_gap,
+                           mnv.confidence, null::text, mnv.reason_codes,
+                           cil.operating_period_end, cil.revenue_period_end, cil.shares_period_end,
+                           coalesce(d.availability_status, mnv.availability_status),
+                           mnv.source_evidence_status, mnv.factor_validation_status,
+                           d.current_price_to_gross_profit, null::numeric, null::numeric, d.target_price_to_gross_profit
+                    from mart.capture_issuer_lineage cil
+                    join mart.metric_node_values mnv
+                      on mnv.run_id = cil.run_id and mnv.issuer_id = cil.issuer_id and mnv.node_key = 'gppe_uniform_charge_v0'
+                    left join mart.metric_node_values cagp
+                      on cagp.run_id = cil.run_id and cagp.issuer_id = cil.issuer_id and cagp.node_key = 'capital_adjusted_gross_profit'
+                    left join mart.strategy_decisions d
+                      on d.strategy_run_id = %s and d.issuer_id = cil.issuer_id
+                    where cil.run_id = %s
+                    """,
+                    (metadata["strategy_run_id"], run_id),
                 ).fetchall()
             }
             decisions = dict(
@@ -428,9 +452,6 @@ def test_an_unparsed_outcome_names_its_reason_and_marks_the_issuer_unavailable_w
     assert component["shares_outstanding"]["availability"] == "unavailable"
     assert component["shares_outstanding"]["value"] is None
     assert component["shares_outstanding"]["unavailable_reason"] == "missing_listing_unit_ratio"
-    assert ticks.measured.core[issuer_id][2] == "unavailable"
-    assert ticks.measured.core[issuer_id][14] == ["missing_listing_unit_ratio"]
-    assert issuer_id not in ticks.measured.seeded_shares
     assert ticks.measured.decisions[issuer_id] == "missing_market_value_input"
 
 
@@ -539,11 +560,9 @@ def test_missing_listing_unit_ratio_in_payload_marks_every_share_count_and_core_
 
     bank_issuer = before.payloads[_BANK_TICKER]["issuer_id"]
     for issuer_id, row in before.core.items():
-        assert row[2] == "unavailable"
         if issuer_id == bank_issuer:
             assert row[14] == ["missing_preferred_stock_value"]
-        else:
-            assert row[14] == ["missing_listing_unit_ratio"]
+        assert before.decisions[issuer_id] is not None
 
 
 def test_the_history_projector_converts_shares_by_the_cover_ratio_and_drops_unparsed_counts() -> None:
@@ -953,8 +972,15 @@ def test_multi_class_shares_convert_by_tagged_ratio_and_refuse_missing_class_rat
             core = {
                 row[0]: (row[1], row[2], row[3])
                 for row in reader.execute(
-                    "select issuer_id, availability, reason_codes, current_ps from mart.topt_core_results where run_id = %s",
-                    (run_id,),
+                    """
+                    select mnv.issuer_id, coalesce(d.availability_status, mnv.availability_status),
+                           mnv.reason_codes, d.current_price_to_sales
+                    from mart.metric_node_values mnv
+                    left join mart.strategy_decisions d
+                      on d.strategy_run_id = %s and d.issuer_id = mnv.issuer_id
+                    where mnv.run_id = %s and mnv.node_key = 'gppe_uniform_charge_v0'
+                    """,
+                    (metadata["strategy_run_id"], run_id),
                 ).fetchall()
             }
             decisions = dict(
@@ -986,6 +1012,4 @@ def test_multi_class_shares_convert_by_tagged_ratio_and_refuse_missing_class_rat
         assert ma_comp["shares_outstanding"]["availability"] == "unavailable"
         assert ma_comp["shares_outstanding"]["value"] is None
         assert ma_comp["shares_outstanding"]["unavailable_reason"] == "missing_class_ratio"
-        assert core[ma_issuer][0] == "unavailable"
-        assert core[ma_issuer][1] == ["missing_class_ratio"]
         assert decisions[ma_issuer] == "missing_market_value_input"

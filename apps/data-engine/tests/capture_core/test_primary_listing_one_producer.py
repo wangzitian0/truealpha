@@ -251,12 +251,17 @@ def _core_row(tick: Tick, issuer_id: str) -> tuple:
     with psycopg.connect(tick.url) as reader:
         row = reader.execute(
             """
-            select instrument_id, listing_id, availability, reason_codes, current_ps
-            from mart.topt_core_results where run_id = %s and issuer_id = %s
+            select cil.instrument_id, cil.listing_id, mnv.availability_status, mnv.reason_codes,
+                   d.current_price_to_sales
+            from mart.capture_issuer_lineage cil
+            join mart.metric_node_values mnv using (run_id, issuer_id)
+            left join mart.strategy_decisions d
+              on d.strategy_run_id = %s and d.issuer_id = cil.issuer_id
+            where cil.run_id = %s and cil.issuer_id = %s and mnv.node_key = 'gppe_uniform_charge_v0'
             """,
-            (tick.metadata["capture_run_id"], issuer_id),
+            (tick.metadata["strategy_run_id"], tick.metadata["capture_run_id"], issuer_id),
         ).fetchone()
-    assert row is not None, f"the tick wrote no core row for {issuer_id}"
+    assert row is not None, f"the tick wrote no metric_node_values row for {issuer_id}"
     return row
 
 
@@ -388,9 +393,9 @@ def test_an_undeclared_issuer_leaves_the_other_issuers_alone(undeclared_tick: Ti
     with psycopg.connect(undeclared_tick.url) as reader:
         row = reader.execute(
             """
-            select availability, reason_codes from mart.topt_core_results r
+            select r.availability_status, r.reason_codes from mart.metric_node_values r
             join mart.entity_identity i on i.entity_id::text = r.issuer_id
-            where r.run_id = %s and i.current_ticker = 'AAPL'
+            where r.run_id = %s and r.node_key = 'gppe_uniform_charge_v0' and i.current_ticker = 'AAPL'
             """,
             (undeclared_tick.metadata["capture_run_id"],),
         ).fetchone()

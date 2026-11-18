@@ -428,7 +428,12 @@ def _query_gppe_by_issuer(
     connection: psycopg.Connection[Any], run_id: str, cutoff: datetime
 ) -> dict[str, tuple[Decimal | None, str | None, str | None, datetime | None]]:
     rows = connection.execute(
-        "select issuer_id, gppe, operating_period_end, input_observation_ids, cutoff, result_id from mart.topt_core_results where run_id = %s",
+        """
+        select mnv.issuer_id, mnv.value, cil.operating_period_end, mnv.input_observation_ids, cil.cutoff, cil.result_id
+        from mart.metric_node_values mnv
+        join mart.capture_issuer_lineage cil using (run_id, issuer_id)
+        where mnv.run_id = %s and mnv.node_key = 'gppe_uniform_charge_v0'
+        """,
         (run_id,),
     ).fetchall()
     gppe_by_issuer: dict[str, tuple[Decimal | None, str | None, str | None, datetime | None]] = {}

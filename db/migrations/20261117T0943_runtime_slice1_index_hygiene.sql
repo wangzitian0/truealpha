@@ -8,12 +8,12 @@ do $$ begin if to_regclass('staging.idx_entity_aliases_lookup') is not null then
 do $$ begin if to_regclass('staging.idx_kg_identifiers_asof') is not null then drop index if exists staging.idx_kg_identifiers_asof; end if; end $$;
 
 -- 2. Add hot-path and foreign-key indexes on mart.
-do $$ begin if to_regclass('mart.idx_topt_gppe_results_lookup') is null then CREATE INDEX idx_topt_gppe_results_lookup ON mart.topt_gppe_results USING btree (run_id, issuer_id, cutoff); end if; end $$;
-do $$ begin if to_regclass('mart.idx_topt_gppe_results_snapshot') is null then CREATE INDEX idx_topt_gppe_results_snapshot ON mart.topt_gppe_results USING btree (snapshot_id); end if; end $$;
-do $$ begin if to_regclass('mart.idx_topt_core_results_snapshot') is null then CREATE INDEX idx_topt_core_results_snapshot ON mart.topt_core_results USING btree (snapshot_id); end if; end $$;
-do $$ begin if to_regclass('mart.idx_topt_core_results_gppe_result') is null then CREATE INDEX idx_topt_core_results_gppe_result ON mart.topt_core_results USING btree (gppe_result_id); end if; end $$;
-do $$ begin if to_regclass('mart.idx_topt_core_results_gppe_invocation') is null then CREATE INDEX idx_topt_core_results_gppe_invocation ON mart.topt_core_results USING btree (gppe_invocation_id); end if; end $$;
-do $$ begin if to_regclass('mart.idx_topt_core_invocations_gppe_invocation') is null then CREATE INDEX idx_topt_core_invocations_gppe_invocation ON mart.topt_core_invocations USING btree (gppe_invocation_id); end if; end $$;
+do $$ begin if to_regclass('mart.topt_gppe_results') is not null and to_regclass('mart.idx_topt_gppe_results_lookup') is null then CREATE INDEX idx_topt_gppe_results_lookup ON mart.topt_gppe_results USING btree (run_id, issuer_id, cutoff); end if; end $$;
+do $$ begin if to_regclass('mart.topt_gppe_results') is not null and to_regclass('mart.idx_topt_gppe_results_snapshot') is null then CREATE INDEX idx_topt_gppe_results_snapshot ON mart.topt_gppe_results USING btree (snapshot_id); end if; end $$;
+do $$ begin if to_regclass('mart.topt_core_results') is not null and to_regclass('mart.idx_topt_core_results_snapshot') is null then CREATE INDEX idx_topt_core_results_snapshot ON mart.topt_core_results USING btree (snapshot_id); end if; end $$;
+do $$ begin if to_regclass('mart.topt_core_results') is not null and to_regclass('mart.idx_topt_core_results_gppe_result') is null then CREATE INDEX idx_topt_core_results_gppe_result ON mart.topt_core_results USING btree (gppe_result_id); end if; end $$;
+do $$ begin if to_regclass('mart.topt_core_results') is not null and to_regclass('mart.idx_topt_core_results_gppe_invocation') is null then CREATE INDEX idx_topt_core_results_gppe_invocation ON mart.topt_core_results USING btree (gppe_invocation_id); end if; end $$;
+do $$ begin if to_regclass('mart.topt_core_invocations') is not null and to_regclass('mart.idx_topt_core_invocations_gppe_invocation') is null then CREATE INDEX idx_topt_core_invocations_gppe_invocation ON mart.topt_core_invocations USING btree (gppe_invocation_id); end if; end $$;
 do $$ begin if to_regclass('mart.idx_current_pointer_target_run') is null then CREATE INDEX idx_current_pointer_target_run ON mart.current_pointer USING btree (target_run_id); end if; end $$;
 do $$ begin if to_regclass('mart.idx_current_pointer_previous_run') is null then CREATE INDEX idx_current_pointer_previous_run ON mart.current_pointer USING btree (previous_run_id) WHERE (previous_run_id IS NOT NULL); end if; end $$;
 

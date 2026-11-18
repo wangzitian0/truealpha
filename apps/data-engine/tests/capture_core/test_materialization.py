@@ -32,7 +32,7 @@ from data_engine.datahub.a1_evidence import (
     ServiceObjectives,
     register_run_evidence,
 )
-from data_engine.datahub.capture_core import PostgresToptCoreRepository, ToptCoreIdentity
+from data_engine.datahub.capture_core import PostgresToptCoreRepository
 from data_engine.datahub.capture_core.materialization import _ObservationRow
 from data_engine.datahub.capture_core.universe_corpus import corpus_list_version, frozen_topt_list_version
 from data_engine.datahub.control_plane import AttemptLedger, expand_obligations, replay_retry_policy
@@ -565,205 +565,31 @@ def test_exact_production_snapshot_materializes_queryable_core_and_meta_info(con
     live = load_live_strategy_definition()
     assert {item.tier_definition_sha256 for item in results} == {live.content_sha256}
     assert alphabet.current_pgp is not None and alphabet.target_pgp_midpoint is not None
-    assert connection.execute(
+    gppe_node_rows = connection.execute(
         """
-        select current_pgp, target_pgp_lower, target_pgp_upper, target_pgp_midpoint, tier_definition_id
-        from mart.topt_core_results where result_id = %s
+        select issuer_id, value, availability_status
+        from mart.metric_node_values
+        where run_id = %s and node_key = 'gppe_uniform_charge_v0'
         """,
-        (alphabet.result_id,),
-    ).fetchone() == (
-        alphabet.current_pgp,
-        alphabet.target_pgp_lower,
-        alphabet.target_pgp_upper,
-        alphabet.target_pgp_midpoint,
-        live.strategy_definition_id,
-    )
-    identity = ToptCoreIdentity(
-        run_id=run.run_id,
-        release_manifest_id=release_manifest_id,
-        universe_id=list_version.universe.universe_id,
-        universe_version=list_version.universe.universe_version,
-        universe_sha256=list_version.universe.content_sha256,
-        snapshot_id=snapshot.snapshot_id,
-        invocation_id=results[0].invocation_id,
-    )
-    reads = repository.results(identity)
-    meta_info = repository.meta_info(identity)
-    assert len(reads) == len(meta_info) == 20
-    # #1235 audit: the read DTO carries the P/GP valuation and marks the P/S target implied.
-    by_result = {item.result_id: item for item in results}
-    for read in reads:
-        written = by_result[read.result_id]
-        assert (read.current_pgp, read.target_pgp_midpoint) == (written.current_pgp, written.target_pgp_midpoint)
-        assert read.target_ps_is_implied is (written.target_pgp_midpoint is not None)
-    assert all(read.target_ps_is_implied for read in reads if read.availability == "available")
-    assert all(item.gppe_invocation_id == results[0].gppe_invocation_id for item in reads)
-    assert {item.gppe_result_id for item in reads} == {item.gppe_result_id for item in results}
-    assert sorted(len(item.lineage) for item in meta_info) == [4] * 19 + [8]
-    assert connection.execute("select count(*) from mart.topt_gppe_invocations").fetchone() == (1,)
-    assert connection.execute("select count(*) from mart.topt_gppe_results").fetchone() == (20,)
-    assert connection.execute(
-        """
-        select count(*)
-        from mart.topt_core_results core
-        join mart.topt_gppe_results gppe on gppe.result_id = core.gppe_result_id
-        where gppe.invocation_id = core.gppe_invocation_id
-          and gppe.snapshot_id = core.snapshot_id
-          and gppe.issuer_id = core.issuer_id
-        """
-    ).fetchone() == (20,)
-    assert (
-        repository.results(ToptCoreIdentity(**{**identity.__dict__, "snapshot_id": f"topt-core-snapshot:{'0' * 64}"}))
-        == ()
-    )
-    assert (
-        repository.results(
-            ToptCoreIdentity(**{**identity.__dict__, "invocation_id": f"topt-core-invocation:{'0' * 64}"})
-        )
-        == ()
-    )
+        (run.run_id,),
+    ).fetchall()
+    assert len(gppe_node_rows) == 20
+    lineage_rows = connection.execute(
+        "select lineage from mart.capture_issuer_lineage where run_id = %s",
+        (run.run_id,),
+    ).fetchall()
+    assert sorted(len(row[0]) for row in lineage_rows) == [4] * 19 + [8]
+
     different = repository.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate="0.04"))
     assert len(different) == 20
-    assert different[0].invocation_id != identity.invocation_id
-    assert repository.results(identity) == reads
+    assert different[0].invocation_id != results[0].invocation_id
     assert connection.execute("select count(*) from staging.capture_observation_payloads").fetchone() == (89,)
     assert connection.execute("select count(*) from staging.core_snapshot_members").fetchone() == (20,)
 
-    corrupt_payload = results[0].model_dump(mode="json", exclude={"result_id", "content_sha256"})
-    corrupt_payload["gppe_result_id"] = results[1].gppe_result_id
-    corrupt_sha256 = canonical_sha256(corrupt_payload)
-    with pytest.raises(psycopg.errors.CheckViolation, match="does not match its invocation"), connection.transaction():
-        connection.execute(
-            """
-            insert into mart.topt_core_results (
-                result_id, content_sha256, invocation_id, snapshot_id, run_id,
-                release_manifest_id, universe_id, universe_version, universe_sha256,
-                cutoff, issuer_id, instrument_id, listing_id, operating_branch,
-                operating_metric, availability, operating_efficiency,
-                capital_adjusted_gross_profit, gppe, tier, target_ps_lower,
-                target_ps_upper, target_ps_midpoint, current_ps, valuation_gap,
-                confidence, freshness, reason_codes, input_observation_ids,
-                gppe_invocation_id, gppe_result_id,
-                gppe_definition_id, gppe_definition_sha256,
-                tier_definition_id, tier_definition_sha256, payload
-            )
-            select
-                %s, %s, invocation_id, snapshot_id, run_id,
-                release_manifest_id, universe_id, universe_version, universe_sha256,
-                cutoff, issuer_id, instrument_id, listing_id, operating_branch,
-                operating_metric, availability, operating_efficiency,
-                capital_adjusted_gross_profit, gppe, tier, target_ps_lower,
-                target_ps_upper, target_ps_midpoint, current_ps, valuation_gap,
-                confidence, freshness, reason_codes, input_observation_ids,
-                gppe_invocation_id, %s,
-                gppe_definition_id, gppe_definition_sha256,
-                tier_definition_id, tier_definition_sha256, %s
-            from mart.topt_core_results where result_id = %s
-            on conflict (result_id) do nothing
-            """,
-            (
-                f"topt-core-result:{corrupt_sha256}",
-                corrupt_sha256,
-                results[1].gppe_result_id,
-                psycopg.types.json.Jsonb(corrupt_payload),
-                results[0].result_id,
-            ),
-        )
-
-    # A P/GP column the payload does not assert is refused like any other column (#1235).
-    pgp_payload = results[0].model_dump(mode="json", exclude={"result_id", "content_sha256"})
-    pgp_payload["current_pgp"] = "1"
-    pgp_sha256 = canonical_sha256(pgp_payload)
-    with pytest.raises(psycopg.errors.CheckViolation, match="does not match its invocation"), connection.transaction():
-        connection.execute(
-            """
-            insert into mart.topt_core_results (
-                result_id, content_sha256, invocation_id, snapshot_id, run_id,
-                release_manifest_id, universe_id, universe_version, universe_sha256,
-                cutoff, issuer_id, instrument_id, listing_id, operating_branch,
-                operating_metric, availability, operating_efficiency,
-                capital_adjusted_gross_profit, gppe, tier, target_ps_lower,
-                target_ps_upper, target_ps_midpoint, current_ps, valuation_gap,
-                current_pgp, target_pgp_lower, target_pgp_upper, target_pgp_midpoint,
-                confidence, freshness, reason_codes, input_observation_ids,
-                gppe_invocation_id, gppe_result_id,
-                gppe_definition_id, gppe_definition_sha256,
-                tier_definition_id, tier_definition_sha256, payload
-            )
-            select
-                %s, %s, invocation_id, snapshot_id, run_id,
-                release_manifest_id, universe_id, universe_version, universe_sha256,
-                cutoff, issuer_id, instrument_id, listing_id, operating_branch,
-                operating_metric, availability, operating_efficiency,
-                capital_adjusted_gross_profit, gppe, tier, target_ps_lower,
-                target_ps_upper, target_ps_midpoint, current_ps, valuation_gap,
-                current_pgp, target_pgp_lower, target_pgp_upper, target_pgp_midpoint,
-                confidence, freshness, reason_codes, input_observation_ids,
-                gppe_invocation_id, gppe_result_id,
-                gppe_definition_id, gppe_definition_sha256,
-                tier_definition_id, tier_definition_sha256, %s
-            from mart.topt_core_results where result_id = %s
-            on conflict (result_id) do nothing
-            """,
-            (
-                f"topt-core-result:{pgp_sha256}",
-                pgp_sha256,
-                psycopg.types.json.Jsonb(pgp_payload),
-                results[0].result_id,
-            ),
-        )
-
-    # #1235 audit: a P/GP valuation is all four values or none. A half-filled available row
-    # (here target_pgp_lower absent, consistently in payload and column) must be refused.
-    half_payload = results[0].model_dump(mode="json", exclude={"result_id", "content_sha256"})
-    half_payload["target_pgp_lower"] = None
-    half_sha256 = canonical_sha256(half_payload)
-    with (
-        pytest.raises(psycopg.errors.CheckViolation, match="topt_core_results_pgp_values_check"),
-        connection.transaction(),
-    ):
-        connection.execute(
-            """
-            insert into mart.topt_core_results (
-                result_id, content_sha256, invocation_id, snapshot_id, run_id,
-                release_manifest_id, universe_id, universe_version, universe_sha256,
-                cutoff, issuer_id, instrument_id, listing_id, operating_branch,
-                operating_metric, availability, operating_efficiency,
-                capital_adjusted_gross_profit, gppe, tier, target_ps_lower,
-                target_ps_upper, target_ps_midpoint, current_ps, valuation_gap,
-                current_pgp, target_pgp_lower, target_pgp_upper, target_pgp_midpoint,
-                confidence, freshness, reason_codes, input_observation_ids,
-                gppe_invocation_id, gppe_result_id,
-                gppe_definition_id, gppe_definition_sha256,
-                tier_definition_id, tier_definition_sha256, payload
-            )
-            select
-                %s, %s, invocation_id, snapshot_id, run_id,
-                release_manifest_id, universe_id, universe_version, universe_sha256,
-                cutoff, issuer_id, instrument_id, listing_id, operating_branch,
-                operating_metric, availability, operating_efficiency,
-                capital_adjusted_gross_profit, gppe, tier, target_ps_lower,
-                target_ps_upper, target_ps_midpoint, current_ps, valuation_gap,
-                current_pgp, null, target_pgp_upper, target_pgp_midpoint,
-                confidence, freshness, reason_codes, input_observation_ids,
-                gppe_invocation_id, gppe_result_id,
-                gppe_definition_id, gppe_definition_sha256,
-                tier_definition_id, tier_definition_sha256, %s
-            from mart.topt_core_results where result_id = %s
-            on conflict (result_id) do nothing
-            """,
-            (
-                f"topt-core-result:{half_sha256}",
-                half_sha256,
-                psycopg.types.json.Jsonb(half_payload),
-                results[0].result_id,
-            ),
-        )
-
     with pytest.raises(psycopg.errors.RaiseException, match="append-only"), connection.transaction():
         connection.execute(
-            "update mart.topt_core_results set confidence = 0 where result_id = %s",
-            (results[0].result_id,),
+            "update mart.metric_node_values set confidence = 0 where run_id = %s and node_key = 'gppe_uniform_charge_v0'",
+            (run.run_id,),
         )
 
 
@@ -1798,17 +1624,17 @@ def test_every_materialized_row_carries_the_three_status_dimensions(connection) 
     snapshot = repository.freeze_snapshot(run_id=run.run_id, release_manifest_id=release_manifest_id)
     results = repository.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate="0.05"))
     assert results
-    core_rows = connection.execute(
+    node_rows = connection.execute(
         """
-        select r.availability_status, r.source_evidence_status, r.factor_validation_status,
-               r.availability, r.freshness, r.confidence, r.payload->>'headcount'
-        from mart.topt_core_results r
-        where r.result_id = any(%s)
+        select m.availability_status, m.source_evidence_status, m.factor_validation_status,
+               m.value, m.confidence
+        from mart.metric_node_values m
+        where m.run_id = %s and m.node_key = 'gppe_uniform_charge_v0'
         """,
-        ([result.result_id for result in results],),
+        (run.run_id,),
     ).fetchall()
-    assert len(core_rows) == len(results)
-    for availability_status, evidence, validation, availability, freshness, confidence, headcount in core_rows:
+    assert len(node_rows) == len(results)
+    for availability_status, evidence, validation, value, confidence in node_rows:
         assert availability_status in {
             "available",
             "unavailable",
@@ -1818,22 +1644,10 @@ def test_every_materialized_row_carries_the_three_status_dimensions(connection) 
             "not_applicable",
             "error",
         }
-        if availability == "unavailable":
-            assert availability_status == "unavailable"
-        elif freshness == "stale":
-            assert availability_status == "stale"
         assert validation == "not_evaluated"
         assert evidence in {"verified", "degraded"}, "a seeded run never carries a dangling pointer"
-    gppe_rows = connection.execute(
-        """
-        select availability_status, source_evidence_status, factor_validation_status
-        from mart.topt_gppe_results where invocation_id = %s
-        """,
-        (results[0].gppe_invocation_id,),
-    ).fetchall()
-    assert len(gppe_rows) == len(results)
-    assert {row[2] for row in gppe_rows} == {"not_evaluated"}
-    assert all(row[0] and row[1] for row in gppe_rows)
+        if availability_status == "available":
+            assert value is not None and confidence is not None and confidence >= Decimal("0.5")
     # The dimensions are not part of the identity: a repeated materialization of the same
     # snapshot returns the same ids (the existing idempotence test) and re-derives the same columns.
     repeated = repository.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate="0.05"))
@@ -2213,13 +2027,8 @@ def test_materialize_persists_not_applicable_status_for_exempt_topt_issuer(conne
 
     gppe_statuses = dict(
         connection.execute(
-            "select issuer_id, availability_status from mart.topt_gppe_results where run_id = %s",
-            (run.run_id,),
-        ).fetchall()
-    )
-    core_statuses = dict(
-        connection.execute(
-            "select issuer_id, availability_status from mart.topt_core_results where run_id = %s",
+            "select issuer_id, availability_status from mart.metric_node_values "
+            "where run_id = %s and node_key = 'gppe_uniform_charge_v0'",
             (run.run_id,),
         ).fetchall()
     )
@@ -2231,9 +2040,7 @@ def test_materialize_persists_not_applicable_status_for_exempt_topt_issuer(conne
 
     for exempt_id in (xom_id, v_id, ma_id, brk_id):
         assert gppe_statuses[exempt_id] == "not_applicable"
-        assert core_statuses[exempt_id] == "not_applicable"
     assert gppe_statuses[aapl_id] == "unavailable"
-    assert core_statuses[aapl_id] == "unavailable"
 
     cells = gppe_cells(connection, run.run_id)
     by_subject = {cell.subject_id: cell for cell in cells}

@@ -256,7 +256,7 @@ def test_capture_leaves_observation_confidence_null_and_persists_cell_confidence
         assert member.market_price.confidence == expected_close_conf
         assert Decimal("0.5") < member.market_price.confidence < Decimal("1.0")
     gppe_confs = connection.execute(
-        "select confidence from mart.topt_gppe_results where run_id = %s and availability = 'available'",
+        "select confidence from mart.metric_node_values where run_id = %s and node_key = 'gppe_uniform_charge_v0' and availability_status = 'available'",
         (plan.run_id,),
     ).fetchall()
     assert gppe_confs and all(Decimal("0.5") < c < Decimal("1.0") for (c,) in gppe_confs)

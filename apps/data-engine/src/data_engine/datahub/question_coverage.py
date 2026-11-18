@@ -60,8 +60,8 @@ def declared_environment(connection: Connection[Any]) -> str:
 
 def governed_head(connection: Connection[Any], *, universe_prefix: str) -> GovernedHead | None:
     row = connection.execute(
-        "select h.universe_id, h.target_run_id, min(r.cutoff) from mart.current_pointer_head h "
-        "join mart.topt_gppe_results r on r.run_id = h.target_run_id "
+        "select h.universe_id, h.target_run_id, min(cs.cutoff) from mart.current_pointer_head h "
+        "join mart.capture_status cs on cs.run_id = h.target_run_id "
         "where h.environment = (select environment from mart.environment_identity) "
         "and h.factor_id = %s and h.universe_id like %s "
         "group by h.universe_id, h.target_run_id, h.advanced_at order by h.advanced_at desc limit 1",
@@ -118,13 +118,12 @@ def _query_standard_cells(connection: Connection[Any], sql: str, run_id: str) ->
 
 def gppe_cells(connection: Connection[Any], run_id: str) -> tuple[Cell, ...]:
     rows = connection.execute(
-        "select issuer_id, availability_status, availability, reason_codes, gppe "
-        "from mart.topt_gppe_results where run_id = %s order by issuer_id",
+        "select issuer_id, availability_status, reason_codes, value "
+        "from mart.metric_node_values where run_id = %s and node_key = 'gppe_uniform_charge_v0' order by issuer_id",
         (run_id,),
     ).fetchall()
     return tuple(
-        _classify_cell(r[0], r[1] or r[2], r[3], r[4] if len(r) > 4 else Decimal("1"), allow_not_applicable=True)
-        for r in rows
+        _classify_cell(r[0], r[1], r[2], r[3] if len(r) > 3 else Decimal("1"), allow_not_applicable=True) for r in rows
     )
 
 
@@ -254,7 +253,7 @@ def compile_report(connection: Connection[Any], *, universe: str, executed_at: d
     issuers = [cell.subject_id for cell in gppe]
     funds_observed = fund_cells(connection, head.run_id)
     cells_by_column = {
-        "mart.topt_gppe_results.gppe": gppe,
+        "mart.metric_node_values.value": gppe,
         "mart.strategy_decisions.peg": peg_cells(connection, run_id=head.run_id)
         if "strategy" in record(key).roles
         else (),

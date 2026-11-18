@@ -501,7 +501,7 @@ def test_must_be_non_negative_is_reserved_for_physical_quantities_and_judge_sign
     }
     assert non_neg_nodes == set(PHYSICALLY_NON_NEGATIVE)
 
-    gppe_node = published_node("mart.topt_gppe_results", "gppe")
+    gppe_node = published_node("mart.metric_node_values", "gppe_uniform_charge_v0")
     finding_signal = judge_sign(
         gppe_node,
         issuer_class="financial",

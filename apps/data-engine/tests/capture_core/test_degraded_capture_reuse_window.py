@@ -58,10 +58,12 @@ _REUSE_CUTOFF = datetime(2026, 3, 31, 22, 15, tzinfo=UTC)
 _STRATEGY = "large_model_value_v0"
 
 _MAIN_DECISIONS_SQL = """
-    select d.issuer_id, t.confidence, t.run_id
+    select d.issuer_id, mnv.confidence, cil.run_id
     from mart.strategy_decisions d
-    left join mart.topt_core_results t
-      on t.issuer_id = d.issuer_id and t.cutoff = d.cutoff_at
+    left join mart.capture_issuer_lineage cil
+      on cil.issuer_id = d.issuer_id and cil.cutoff = d.cutoff_at
+    left join mart.metric_node_values mnv
+      on mnv.run_id = cil.run_id and mnv.issuer_id = cil.issuer_id and mnv.node_key = 'gppe_uniform_charge_v0'
     where d.strategy_run_id = %s
     order by d.cutoff_at, d.issuer_id
 """
@@ -250,8 +252,14 @@ def _materialized(url: str, run_id: str) -> tuple[int, int, int]:
         snapshots = reader.execute(
             "select count(*) from staging.core_snapshots where run_id = %s", (run_id,)
         ).fetchone()[0]
-        gppe = reader.execute("select count(*) from mart.topt_gppe_results where run_id = %s", (run_id,)).fetchone()[0]
-        core = reader.execute("select count(*) from mart.topt_core_results where run_id = %s", (run_id,)).fetchone()[0]
+        gppe = reader.execute(
+            "select count(*) from mart.metric_node_values where run_id = %s and node_key = 'gppe_uniform_charge_v0'",
+            (run_id,),
+        ).fetchone()[0]
+        core = reader.execute(
+            "select count(*) from mart.metric_node_values where run_id = %s and node_key = 'capital_adjusted_gross_profit'",
+            (run_id,),
+        ).fetchone()[0]
     return snapshots, gppe, core
 
 
@@ -289,12 +297,12 @@ def _served_report(url: str):
 #: which is exactly what these assertions caught when the translation landed.
 _SERVED_IDENTITY_SQL = """
     select coalesce(ei.legacy_id, t.issuer_id), t.confidence
-    from mart.topt_core_results t
+    from mart.metric_node_values t
     left join lateral (
         select ei.legacy_id from mart.entity_identity ei
         where ei.entity_id::text = t.issuer_id limit 1
     ) ei on true
-    where t.run_id = %s
+    where t.run_id = %s and t.node_key = 'gppe_uniform_charge_v0'
 """
 
 
@@ -461,7 +469,7 @@ def test_another_universe_at_the_same_cutoff_is_neither_reused_nor_joined(tick_d
     with psycopg.connect(tick_database_url) as reader:
         aapl_issuer = shared["listing:xnas:aapl"][0]
         per_run = reader.execute(
-            "select run_id from mart.topt_core_results where issuer_id = %s and cutoff = %s",
+            "select run_id from mart.capture_issuer_lineage where issuer_id = %s and cutoff = %s",
             (aapl_issuer, cutoff),
         ).fetchall()
         assert sorted(row[0] for row in per_run) == sorted([qqq.run_id, topt["capture_run_id"]])
@@ -545,7 +553,7 @@ def test_two_universes_at_one_cutoff_share_a_valid_price_and_are_not_joined(tick
     with psycopg.connect(tick_database_url) as reader:
         aapl_issuer = shared["listing:xnas:aapl"][0]
         per_run = reader.execute(
-            "select run_id from mart.topt_core_results where issuer_id = %s and cutoff = %s",
+            "select run_id from mart.capture_issuer_lineage where issuer_id = %s and cutoff = %s",
             (aapl_issuer, cutoff),
         ).fetchall()
         assert sorted(row[0] for row in per_run) == sorted([qqq.run_id, topt["capture_run_id"]])

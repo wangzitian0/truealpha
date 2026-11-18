@@ -158,23 +158,28 @@ def _seed_trace_lineage(
         "select 1 from mart.strategy_run_capture_bindings where strategy_run_id = %s", (preview_run_id,)
     ).fetchone():
         return
-    snapshot_id = f"topt-core-snapshot:{_sha(f'e2e-preview-snapshot:{preview_run_id}')}"
-    for entity_id, _legacy_id, _mic, ticker, _name in PREVIEW_ISSUERS.values():
-        sym = ticker.lower()
-        conn.execute(
-            "insert into staging.core_snapshot_members (snapshot_id, instrument_id, issuer_id, listing_id, observation_ids, member_sha256, factor_input) "
-            "values (%s, %s, %s, %s, %s, %s, '{}'::jsonb) on conflict (snapshot_id, issuer_id) do nothing",
-            (
-                snapshot_id,
-                f"instrument:{sym}",
-                entity_id,
-                f"listing:xnas:{sym}",
-                ["obs:1", "obs:2", "obs:3", "obs:4"],
-                _sha(f"member:{entity_id}"),
-            ),
-        )
+    snapshot_sha = _sha(f"e2e-preview-snapshot:{preview_run_id}")
+    snapshot_id = f"topt-core-snapshot:{snapshot_sha}"
     capture_run_id = f"capture-run:{_hex()}"
     schedule_policy_id = f"schedule-policy:{_hex()}"
+    strategy_universe = f"{load_environment_contract().record(universe_with_role('strategy')).id_prefix}seed"
+    conn.execute(
+        "insert into staging.core_snapshots (snapshot_id, content_sha256, run_id, release_manifest_id, universe_id, universe_version, universe_sha256, cutoff, issuer_count, instrument_count, observation_count, payload, created_at) "
+        "values (%s, %s, %s, %s, %s, 'v1', %s, %s::timestamptz, %s, %s, %s, '{}'::jsonb, %s::timestamptz) on conflict (snapshot_id) do nothing",
+        (
+            snapshot_id,
+            snapshot_sha,
+            capture_run_id,
+            f"release-manifest:{_hex()}",
+            strategy_universe,
+            _hex(),
+            PREVIEW_CUTOFF,
+            len(PREVIEW_ISSUERS),
+            len(PREVIEW_ISSUERS),
+            4 * len(PREVIEW_ISSUERS),
+            executed_at,
+        ),
+    )
     conn.execute(
         "insert into raw.capture_schedule_policies (schedule_policy_id, content_sha256, policy_version, demanded_cadence, provider_availability_cadence, freshness_max_age, retry_policy, payload) "
         "values (%s, %s, 'trace-test:v1', interval '1 day', 'manual-only:v1', interval '30 days', '{}'::jsonb, '{}'::jsonb)",
@@ -257,31 +262,31 @@ def _seed_trace_lineage(
             ),
         ]
     )
-    strategy_universe = f"{load_environment_contract().record(universe_with_role('strategy')).id_prefix}seed"
-    result_sha = _hex()
+    for entity_id, _legacy_id, _mic, ticker, _name in PREVIEW_ISSUERS.values():
+        t_sym = ticker.lower()
+        member_obs = obs_ids if entity_id == first_selected_entity_id else ["obs:1", "obs:2", "obs:3", "obs:4"]
+        conn.execute(
+            "insert into staging.core_snapshot_members (snapshot_id, instrument_id, issuer_id, listing_id, observation_ids, member_sha256, factor_input) "
+            "values (%s, %s, %s, %s, %s, %s, %s::jsonb) on conflict (snapshot_id, issuer_id) do nothing",
+            (
+                snapshot_id,
+                f"instrument:{t_sym}",
+                entity_id,
+                f"listing:xnas:{t_sym}",
+                member_obs,
+                _sha(f"member:{entity_id}"),
+                json.dumps({"operating_branch": "non_financial"}),
+            ),
+        )
     conn.execute(
-        "insert into mart.topt_core_results (result_id, content_sha256, invocation_id, snapshot_id, run_id, release_manifest_id, universe_id, universe_version, universe_sha256, cutoff, issuer_id, instrument_id, listing_id, operating_branch, operating_metric, availability, operating_efficiency, capital_adjusted_gross_profit, gppe, tier, target_ps_lower, target_ps_upper, target_ps_midpoint, current_ps, valuation_gap, confidence, freshness, reason_codes, input_observation_ids, gppe_invocation_id, gppe_result_id, gppe_definition_id, gppe_definition_sha256, tier_definition_id, tier_definition_sha256, payload, created_at, availability_status, source_evidence_status, factor_validation_status) "
-        "values (%s, %s, %s, %s, %s, %s, %s, 'v1', %s, %s::timestamptz, %s, %s, %s, 'non_financial', 'capital_adjusted_gppe', 'available', 12.5, 1, 12.5, 'tech', 15, 20, 18.75, 20, 0.5, 0.85, 'fresh', '{}', %s, %s, %s, %s, %s, %s, %s, '{}'::jsonb, %s::timestamptz, 'available', 'verified', 'not_evaluated')",
+        "insert into mart.metric_node_values (run_id, issuer_id, node_id, node_key, period, value, availability_status, reason_codes, source_evidence_status, factor_validation_status, confidence, tree_id, tree_version, tree_sha256, input_observation_ids, recorded_at) "
+        "values (%s, %s, '6143cf17-ceba-5f78-a2d3-a7cc423c49a7'::uuid, 'gppe_uniform_charge_v0', '2025-12-31', 12.5, 'available', '{}', 'verified', 'not_evaluated', 0.85, 'ef13b940-b695-5f5f-846a-a36face5cc3e'::uuid, 'production-topt-v0.2.0', %s, %s, %s::timestamptz) "
+        "on conflict (run_id, issuer_id, node_id, period) do nothing",
         (
-            f"topt-core-result:{result_sha}",
-            result_sha,
-            f"topt-core-invocation:{_hex()}",
-            f"topt-core-snapshot:{_hex()}",
             capture_run_id,
-            f"release-manifest:{_hex()}",
-            strategy_universe,
-            _hex(),
-            PREVIEW_CUTOFF,
             first_selected_entity_id,
-            instrument_id,
-            listing_id,
+            _hex(),
             obs_ids,
-            f"topt-gppe-invocation:{_hex()}",
-            f"topt-gppe-result:{_hex()}",
-            f"gppe-definition:{_hex()}",
-            _hex(),
-            f"three-tier-definition:{_hex()}",
-            _hex(),
             executed_at,
         ),
     )

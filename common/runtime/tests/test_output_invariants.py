@@ -392,7 +392,7 @@ def _digest(*parts: str) -> str:
 
 
 def _observations(listing: str) -> list[str]:
-    return [f"observation:{_digest(listing, str(cell))}" for cell in range(CELLS_PER_LISTING)]
+    return [f"normalized-observation:{_digest(listing, str(cell))}" for cell in range(CELLS_PER_LISTING)]
 
 
 @pytest.fixture(scope="module")
@@ -463,57 +463,70 @@ def _seed_issuer(
         ),
     )
     if issuer.available:
-        value, tier, reasons = 1, "tech", []
+        value, reasons = 1, []
     else:
         # #1309: an issuer with complete facts and no stored daily series is unavailable.
-        value, tier = None, None
+        value = None
         default = ("no_split_adjusted_series",) if issuer.facts_complete else ("missing_gross_profit",)
         reasons = list(issuer.reasons or default)
-    result_sha = _digest("result", snapshot_id, issuer.issuer_id)
+    avail_status = "available" if issuer.available else "unavailable"
+    observations = sorted(item for listing in issuer.listings for item in _observations(listing))
+    if issuer.revenue_period_end is not None and observations:
+        obs_id = observations[0]
+        obs_sha = obs_id.split(":", 1)[1]
+        payload = {"revenue_period_end": issuer.revenue_period_end.isoformat()}
+        conn.execute(
+            """
+            insert into staging.capture_normalized_observations (
+                observation_id, content_sha256, capture_obligation_id, source_vintage_id,
+                semantic_type, semantic_version, subject_kind, subject_id,
+                valid_from, knowable_at, parser_version, mapping_version,
+                normalized_payload_sha256, is_restatement, confidence, freshness_state,
+                payload, recorded_at
+            ) values (
+                %s, %s, %s, %s,
+                'financial-fact', 'v1', 'listing', %s,
+                '2026-01-01T00:00:00Z', '2026-03-31T20:00:00Z', 'v1', 'v1',
+                %s, false, 0.9, 'fresh',
+                '{}'::jsonb, '2026-03-31T20:00:00Z'
+            ) on conflict (observation_id) do nothing
+            """,
+            (obs_id, obs_sha, f"ob:{obs_sha}", f"vintage:{obs_sha}", execution, obs_sha),
+        )
+        conn.execute(
+            """
+            insert into staging.capture_observation_payloads (
+                observation_id, normalized_payload_sha256, normalized_payload
+            ) values (%s, %s, %s)
+            on conflict (observation_id) do nothing
+            """,
+            (obs_id, obs_sha, Jsonb(payload)),
+        )
     conn.execute(
         """
-        insert into mart.topt_core_results (
-            result_id, content_sha256, invocation_id, snapshot_id, run_id, release_manifest_id,
-            universe_id, universe_version, universe_sha256, cutoff, issuer_id, instrument_id, listing_id,
-            operating_branch, operating_metric, availability, operating_efficiency,
-            capital_adjusted_gross_profit, gppe, tier, target_ps_lower, target_ps_upper,
-            target_ps_midpoint, current_ps, valuation_gap, confidence, freshness, reason_codes,
-            input_observation_ids, gppe_invocation_id, gppe_result_id, gppe_definition_id,
-            gppe_definition_sha256, tier_definition_id, tier_definition_sha256, payload,
-            revenue_period_end
+        insert into mart.metric_node_values (
+            run_id, issuer_id, node_id, node_key, period, period_tag,
+            value, unit, availability_status, reason_codes,
+            source_evidence_status, factor_validation_status,
+            confidence, tree_id, tree_version, tree_sha256, input_observation_ids
         ) values (
-            %(result_id)s, %(result_sha)s, %(invocation)s, %(snapshot)s, %(run)s, %(release)s,
-            %(universe)s, 'v1', %(seed)s, '2026-03-31T20:00:00Z', %(issuer)s, %(instrument)s, %(listing)s,
-            'non_financial', 'capital_adjusted_gppe', %(availability)s, %(value)s,
-            %(value)s, %(value)s, %(tier)s, %(value)s, %(value)s,
-            %(value)s, %(value)s, %(value)s, 0.9, 'fresh', %(reasons)s,
-            %(observations)s, %(gppe_invocation)s, %(gppe_result)s, %(gppe_definition)s,
-            %(seed)s, %(tier_definition)s, %(seed)s, '{}'::jsonb,
-            %(revenue_period_end)s
+            %(run)s, %(issuer)s, '6143cf17-ceba-5f78-a2d3-a7cc423c49a7'::uuid,
+            'gppe_uniform_charge_v0', %(period)s, 'FY',
+            %(value)s, 'per_employee', %(availability_status)s, %(reasons)s,
+            'verified', 'accepted', 0.9,
+            'ef13b940-b695-5f5f-846a-a36face5cc3e'::uuid, 'production-topt-v0.2.0',
+            %(seed)s, %(observations)s
         )
         """,
         {
-            "result_id": f"topt-core-result:{result_sha}",
-            "result_sha": result_sha,
-            "invocation": f"topt-core-invocation:{_digest('core', snapshot_id)}",
-            "snapshot": snapshot_id,
             "run": run_id,
-            "release": f"release-manifest:{SEED_SHA256}",
-            "universe": universe_id,
-            "seed": SEED_SHA256,
             "issuer": issuer.issuer_id,
-            "instrument": instrument_id,
-            "listing": execution,
-            "availability": "available" if issuer.available else "unavailable",
+            "period": issuer.revenue_period_end.isoformat() if issuer.revenue_period_end else "2025-12-31",
             "value": value,
-            "tier": tier,
+            "availability_status": avail_status,
             "reasons": reasons,
-            "observations": sorted(item for listing in issuer.listings for item in _observations(listing)),
-            "gppe_invocation": f"topt-gppe-invocation:{_digest('gppe', snapshot_id)}",
-            "gppe_result": f"topt-gppe-result:{_digest('gppe', snapshot_id, issuer.issuer_id)}",
-            "gppe_definition": f"gppe-definition:{SEED_SHA256}",
-            "tier_definition": f"three-tier-definition:{SEED_SHA256}",
-            "revenue_period_end": issuer.revenue_period_end,
+            "seed": SEED_SHA256,
+            "observations": observations,
         },
     )
 
@@ -611,8 +624,9 @@ def _seeded_shape(conn: psycopg.Connection, run_id: str) -> tuple[int, ...]:
         """
         select s.instrument_count, s.issuer_count,
                (q.payload->'factor_availability'->'gross_profit_per_employee'->>'complete_subjects')::int,
-               (select count(*)::int from mart.topt_core_results r
-                where r.run_id = s.run_id and r.availability = 'available')
+               (select count(*)::int from mart.metric_node_values r
+                where r.run_id = s.run_id and r.node_key = 'gppe_uniform_charge_v0'
+                  and r.availability_status = 'available')
         from staging.core_snapshots s
         join mart.datahub_quality_report q on q.run_id = s.run_id
         where s.run_id = %s

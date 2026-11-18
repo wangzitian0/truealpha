@@ -247,51 +247,99 @@ def _insert_core_result(
     availability: str = "available",
     confidence: float = 0.85,
     availability_status: str | None = None,
+    issuer_id: str | None = None,
 ) -> None:
     connection.execute("set local session_replication_role = replica")
-    res_sha = f"{abs(hash((run_id, listing_id))):064x}"[:64]
+    seed = "a" * 64
+    resolved_issuer = issuer_id or f"issuer:{listing_id}"
+    resolved_avail_status = availability_status or availability
+    strat_run_id = f"strategy-run:{seed}"
+    dec_sha = f"{abs(hash((strat_run_id, resolved_issuer, listing_id))):064x}"[:64]
+    snap_id = f"topt-core-snapshot:{seed}"
+    mem_sha = f"{abs(hash((snap_id, resolved_issuer, listing_id))):064x}"[:64]
     connection.execute(
         """
-        insert into mart.topt_core_results (
-            result_id, content_sha256, invocation_id, snapshot_id, run_id,
-            release_manifest_id, universe_id, universe_version, universe_sha256,
-            cutoff, issuer_id, instrument_id, listing_id, operating_branch,
-            operating_metric, availability, operating_efficiency,
-            capital_adjusted_gross_profit, gppe, tier, target_ps_lower,
-            target_ps_upper, target_ps_midpoint, current_ps, valuation_gap,
-            confidence, freshness, reason_codes, input_observation_ids,
-            gppe_invocation_id, gppe_result_id,
-            gppe_definition_id, gppe_definition_sha256,
-            tier_definition_id, tier_definition_sha256, payload, availability_status
+        insert into mart.strategy_runs (
+            strategy_run_id, content_sha256, strategy_key, strategy_version,
+            definition_content_sha256, corpus_sha256, claim_ceiling, executed_at
+        ) values (%s, %s, 'large_model_value_v0', '1.1.0', %s, %s, 'internal_research_only', now())
+        on conflict (strategy_run_id) do nothing
+        """,
+        (strat_run_id, seed, seed, seed),
+    )
+    connection.execute(
+        """
+        insert into mart.strategy_run_capture_bindings (capture_run_id, strategy_run_id, bound_by)
+        values (%s, %s, 'tick')
+        on conflict (capture_run_id, strategy_run_id) do nothing
+        """,
+        (run_id, strat_run_id),
+    )
+    connection.execute(
+        """
+        insert into mart.strategy_decisions (
+            strategy_decision_id, content_sha256, strategy_run_id, issuer_id, cutoff_at,
+            capital_adjusted_labor_efficiency, tier, current_price_to_sales, target_price_to_sales,
+            valuation_gap, eligible, outcome, exclusion_reason, availability_status,
+            source_evidence_status, factor_validation_status
         ) values (
-            'topt-core-result:' || %s, %s,
-            'topt-core-invocation:' || repeat('b', 64),
-            'topt-core-snapshot:' || repeat('c', 64),
-            %s,
-            'release-manifest:' || repeat('d', 64),
-            'universe:test', '1', repeat('e', 64),
-            now(), 'issuer:' || %s, 'inst:test', %s,
-            'non_financial', 'capital_adjusted_gppe', %s,
-            100, 100, 1.5, 'tech', 1.0, 2.0, 1.5, 1.2, %s,
-            %s, 'fresh', '{}', array['obs1','obs2','obs3','obs4'],
-            'gppe-inv:' || repeat('f', 64), 'gppe-res:' || repeat('0', 64),
-            'gppe-def:v0', repeat('1', 64),
-            'tier-def:v0', repeat('2', 64),
-            '{}'::jsonb, %s
+            'strategy-decision:' || %s, %s, %s, %s, now(),
+            1.5, 'traditional', 1.2, 1.5,
+            %s, %s, %s, %s, %s,
+            'verified', 'accepted'
         )
-        on conflict (result_id) do nothing
+        on conflict do nothing
         """,
         (
-            res_sha,
-            res_sha,
-            run_id,
-            listing_id,
-            listing_id,
-            availability,
+            dec_sha,
+            dec_sha,
+            strat_run_id,
+            resolved_issuer,
             valuation_gap,
-            confidence,
-            availability_status,
+            resolved_avail_status == "available",
+            "selected" if resolved_avail_status == "available" else "excluded",
+            None if resolved_avail_status == "available" else resolved_avail_status,
+            resolved_avail_status,
         ),
+    )
+    connection.execute(
+        """
+        insert into mart.metric_node_values (
+            run_id, issuer_id, node_id, node_key, period, period_tag,
+            value, unit, availability_status, reason_codes,
+            source_evidence_status, factor_validation_status,
+            confidence, tree_id, tree_version, tree_sha256, input_observation_ids
+        ) values (
+            %s, %s, '6143cf17-ceba-5f78-a2d3-a7cc423c49a7'::uuid, 'gppe_uniform_charge_v0',
+            '2026-06-30', 'FY', 1.5, 'per_employee', %s, '{}',
+            'verified', 'accepted', %s,
+            'ef13b940-b695-5f5f-846a-a36face5cc3e'::uuid, 'production-topt-v0.2.0', %s,
+            array['obs1','obs2','obs3','obs4']
+        )
+        on conflict (run_id, issuer_id, node_id, period) do nothing
+        """,
+        (run_id, resolved_issuer, resolved_avail_status, confidence, seed),
+    )
+    connection.execute(
+        """
+        insert into staging.core_snapshots (
+            snapshot_id, content_sha256, run_id, release_manifest_id,
+            universe_id, universe_version, universe_sha256, cutoff,
+            issuer_count, instrument_count, observation_count, payload
+        ) values (%s, %s, %s, 'release-manifest:' || %s, 'universe:test', '1', %s, now(), 1, 1, 4, '{}'::jsonb)
+        on conflict (snapshot_id) do nothing
+        """,
+        (snap_id, seed, run_id, seed, seed),
+    )
+    connection.execute(
+        """
+        insert into staging.core_snapshot_members (
+            snapshot_id, instrument_id, issuer_id, listing_id,
+            observation_ids, member_sha256, factor_input
+        ) values (%s, %s, %s, %s, array['obs1','obs2','obs3','obs4'], %s, '{}'::jsonb)
+        on conflict (snapshot_id, issuer_id) do nothing
+        """,
+        (snap_id, f"inst:{listing_id}", resolved_issuer, listing_id, mem_sha),
     )
 
 
@@ -356,39 +404,13 @@ def test_dual_class_holding_joins_issuer_core_valuation_row(connection) -> None:
         )
     issuer_uuid = resolve_entity(connection, "issuer:cik:0001652044", "issuer", as_of=CUTOFF.date(), known_at=CUTOFF)
     listing_uuid = resolve_entity(connection, "listing:xnas:goog", "listing", as_of=CUTOFF.date(), known_at=CUTOFF)
-    connection.execute("set local session_replication_role = replica")
-    res_sha = f"{abs(hash((RUN, str(issuer_uuid)))):064x}"[:64]
-    connection.execute(
-        """
-        insert into mart.topt_core_results (
-            result_id, content_sha256, invocation_id, snapshot_id, run_id,
-            release_manifest_id, universe_id, universe_version, universe_sha256,
-            cutoff, issuer_id, instrument_id, listing_id, operating_branch,
-            operating_metric, availability, operating_efficiency,
-            capital_adjusted_gross_profit, gppe, tier, target_ps_lower,
-            target_ps_upper, target_ps_midpoint, current_ps, valuation_gap,
-            confidence, freshness, reason_codes, input_observation_ids,
-            gppe_invocation_id, gppe_result_id,
-            gppe_definition_id, gppe_definition_sha256,
-            tier_definition_id, tier_definition_sha256, payload, availability_status
-        ) values (
-            'topt-core-result:' || %s, %s,
-            'topt-core-invocation:' || repeat('b', 64),
-            'topt-core-snapshot:' || repeat('c', 64),
-            %s,
-            'release-manifest:' || repeat('d', 64),
-            'universe:test', '1', repeat('e', 64),
-            now(), %s, 'inst:test', %s,
-            'non_financial', 'capital_adjusted_gppe', 'available',
-            100, 100, 1.5, 'tech', 1.0, 2.0, 1.5, 1.2, 0.25,
-            0.85, 'fresh', '{}', array['obs1','obs2','obs3','obs4'],
-            'gppe-inv:' || repeat('f', 64), 'gppe-res:' || repeat('0', 64),
-            'gppe-def:v0', repeat('1', 64),
-            'tier-def:v0', repeat('2', 64),
-            '{}'::jsonb, 'available'
-        )
-        """,
-        (res_sha, res_sha, RUN, str(issuer_uuid), str(listing_uuid)),
+    _insert_core_result(
+        connection,
+        run_id=RUN,
+        listing_id=str(listing_uuid),
+        valuation_gap=0.25,
+        confidence=0.85,
+        issuer_id=str(issuer_uuid),
     )
 
     fund_uuid = _fund_uuid(connection)
@@ -566,7 +588,7 @@ def test_lines_sql_bounds_core_and_entity_identity_joins_to_one_row() -> None:
     assert ") core on true" in normalized
     assert normalized.count("from mart.entity_identity ei_row") == 2
     assert normalized.count("limit 1") == 4
-    assert "order by (coalesce(ei.listing_id, c.listing_id) = h.listing_id) desc" in normalized
+    assert "order by (coalesce(ei.listing_id, cil.listing_id) = h.listing_id) desc" in normalized
 
 
 def test_dual_kg_entities_and_dual_listings_preserve_weight_conservation(connection) -> None:
@@ -605,41 +627,14 @@ def test_dual_kg_entities_and_dual_listings_preserve_weight_conservation(connect
         ).fetchone()[0]
         assert count == 1
 
-    connection.execute("set local session_replication_role = replica")
-    for listing_uuid, gap in ((listing_goog, Decimal("0.20")), (listing_googl, Decimal("0.30"))):
-        res_sha = f"{abs(hash((RUN, str(issuer_uuid), str(listing_uuid)))):064x}"[:64]
-        connection.execute(
-            """
-            insert into mart.topt_core_results (
-                result_id, content_sha256, invocation_id, snapshot_id, run_id,
-                release_manifest_id, universe_id, universe_version, universe_sha256,
-                cutoff, issuer_id, instrument_id, listing_id, operating_branch,
-                operating_metric, availability, operating_efficiency,
-                capital_adjusted_gross_profit, gppe, tier, target_ps_lower,
-                target_ps_upper, target_ps_midpoint, current_ps, valuation_gap,
-                confidence, freshness, reason_codes, input_observation_ids,
-                gppe_invocation_id, gppe_result_id,
-                gppe_definition_id, gppe_definition_sha256,
-                tier_definition_id, tier_definition_sha256, payload, availability_status
-            ) values (
-                'topt-core-result:' || %s, %s,
-                'topt-core-invocation:' || %s,
-                'topt-core-snapshot:' || repeat('c', 64),
-                %s,
-                'release-manifest:' || repeat('d', 64),
-                'universe:test', '1', repeat('e', 64),
-                now(), %s, 'inst:test', %s,
-                'non_financial', 'capital_adjusted_gppe', 'available',
-                100, 100, 1.5, 'tech', 1.0, 2.0, 1.5, 1.2, %s,
-                0.85, 'fresh', '{}', array['obs1','obs2','obs3','obs4'],
-                'gppe-inv:' || repeat('f', 64), 'gppe-res:' || repeat('0', 64),
-                'gppe-def:v0', repeat('1', 64),
-                'tier-def:v0', repeat('2', 64),
-                '{}'::jsonb, 'available'
-            )
-            """,
-            (res_sha, res_sha, res_sha, RUN, str(issuer_uuid), str(listing_uuid), gap),
-        )
+    _insert_core_result(
+        connection,
+        run_id=RUN,
+        listing_id=str(listing_goog),
+        valuation_gap=0.20,
+        confidence=0.85,
+        issuer_id=str(issuer_uuid),
+    )
 
     written = materialize_fund_consolidation(connection, run_id=RUN, cutoff=CUTOFF)
     matched = [item for item in written if item.fund_id == fund_uuid]

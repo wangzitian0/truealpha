@@ -634,62 +634,40 @@ def test_5_hop_backward_lineage_trace_from_mart_to_s3_bytes(db_conn: psycopg.Con
         ),
     )
 
-    # 5. Hop 1: Insert mart.topt_core_results
-    result_sha = canonical_sha256({"trace": "mart_core_result"})
-    result_id = f"topt-core-result:{result_sha}"
+    # 5. Hop 1: Insert mart.metric_node_values
     db_conn.execute("set local session_replication_role = replica")
     db_conn.execute(
         """
-        insert into mart.topt_core_results (
-            result_id, content_sha256, invocation_id, snapshot_id, run_id,
-            release_manifest_id, universe_id, universe_version, universe_sha256,
-            cutoff, issuer_id, instrument_id, listing_id, operating_branch,
-            operating_metric, availability, operating_efficiency,
-            capital_adjusted_gross_profit, gppe, tier, target_ps_lower,
-            target_ps_upper, target_ps_midpoint, current_ps, valuation_gap,
-            confidence, freshness, reason_codes, input_observation_ids,
-            gppe_invocation_id, gppe_result_id, gppe_definition_id,
-            gppe_definition_sha256, tier_definition_id, tier_definition_sha256,
-            payload
+        insert into mart.metric_node_values (
+            run_id, issuer_id, node_id, node_key, period, period_tag,
+            value, unit, availability_status, reason_codes,
+            source_evidence_status, factor_validation_status,
+            confidence, tree_id, tree_version, tree_sha256, input_observation_ids
         ) values (
-            %s, %s, %s, %s, %s,
-            %s, 'universe:trace', 'v1', %s,
-            %s, 'issuer:aapl', 'instrument:aapl', 'listing:xnys:aapl', 'non_financial',
-            'capital_adjusted_gppe', 'available', 1200.0,
-            60000.0, 30.0, 'tech', 2.0,
-            4.0, 3.0, 2.5, 0.5,
-            0.92, 'fresh', '{}', array[%s, %s, %s, %s],
-            %s, %s, 'gppe-def:v1',
-            %s, 'tier-def:v1', %s,
-            '{}'::jsonb
+            %s, 'issuer:aapl', '6143cf17-ceba-5f78-a2d3-a7cc423c49a7'::uuid,
+            'gppe_uniform_charge_v0', '2026-03-31', 'FY',
+            30.0, 'per_employee', 'available', '{}',
+            'verified', 'accepted', 0.92,
+            'ef13b940-b695-5f5f-846a-a36face5cc3e'::uuid, 'production-topt-v0.2.0',
+            %s, array[%s, %s, %s, %s]
         )
         """,
         (
-            result_id,
-            result_sha,
-            f"topt-core-invocation:{'1' * 64}",
-            f"topt-core-snapshot:{'2' * 64}",
             run.run_id,
-            f"release-manifest:{'3' * 64}",
-            canonical_sha256({"trace": "universe"}),
-            knowable_at,
-            observation_id,
-            observation_id,
-            observation_id,
-            observation_id,
-            f"gppe-inv:{'4' * 64}",
-            f"gppe-res:{'5' * 64}",
             canonical_sha256({"gppe": "v1"}),
-            canonical_sha256({"tier": "v1"}),
+            observation_id,
+            observation_id,
+            observation_id,
+            observation_id,
         ),
     )
 
     # 6. Backward 5-Hop Query Verification
     traversal_query = """
         select
-            m.result_id,
-            m.listing_id,
-            m.cutoff,
+            m.run_id || ':' || m.issuer_id as result_id,
+            coalesce(pl.normalized_payload ->> 'listing_id', obs.subject_id) as listing_id,
+            cs.cutoff,
             obs.observation_id,
             obs.knowable_at,
             obs.recorded_at,
@@ -701,19 +679,21 @@ def test_5_hop_backward_lineage_trace_from_mart_to_s3_bytes(db_conn: psycopg.Con
             f.object_uri,
             f.payload_sha256,
             f.byte_length
-        from mart.topt_core_results m
+        from mart.metric_node_values m
+        join mart.capture_status cs on cs.run_id = m.run_id
         cross join lateral unnest(m.input_observation_ids) as input_obs(obs_id)
         join staging.capture_normalized_observations obs on obs.observation_id = input_obs.obs_id
+        left join staging.capture_observation_payloads pl on pl.observation_id = obs.observation_id
         join raw.capture_source_vintages v on v.source_vintage_id = obs.source_vintage_id
         join raw.fetches f on f.id = v.raw_fetch_id
-        where m.result_id = %s
+        where m.run_id = %s and m.issuer_id = 'issuer:aapl' and m.node_key = 'gppe_uniform_charge_v0'
     """
-    rows = db_conn.execute(traversal_query, (result_id,)).fetchall()
+    rows = db_conn.execute(traversal_query, (run.run_id,)).fetchall()
     assert len(rows) == 4, "Must retrieve all 4 input observation lineage hops"
 
     row = rows[0]
     # Mart assertions
-    assert row[0] == result_id
+    assert row[0] == f"{run.run_id}:issuer:aapl"
     assert row[1] == "listing:xnys:aapl"
     assert row[2] == knowable_at
 

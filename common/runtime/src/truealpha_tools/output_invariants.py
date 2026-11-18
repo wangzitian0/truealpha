@@ -95,7 +95,7 @@ class Invariant:
     signals: str | None = None
 
 
-SIGN_POLICY_TABLE = "mart.topt_gppe_results"
+SIGN_POLICY_TABLE = "mart.metric_node_values"
 
 
 def _classes(values: set[IssuerClass]) -> str:
@@ -110,27 +110,30 @@ def _sign_policy_queries(table: str = SIGN_POLICY_TABLE) -> tuple[str, str | Non
     violations: list[str] = []
     signals: list[str] = []
 
-    def select(column: str, node_key: str, predicate: str, why: str, *, published: bool = True) -> str:
+    def select(
+        column: str,
+        node_key: str,
+        predicate: str,
+        why: str,
+        *,
+        extra_join: str = "",
+        published: bool = True,
+    ) -> str:
         node = PANEL_METRICS[node_key]
-        scope = f" and {column} is not null" if published else ""
+        scope = " and mv.value is not null" if published else ""
         return (
-            f"select listing_id, operating_branch, '{column}' as published_column, "
-            f"'{node.key}:{node.node_id}' as node, coalesce({column}::text, 'null') as value, '{why}' as policy "
-            f"from {table} where run_id = ({GOVERNED_HEAD}){scope} and ({predicate})"
+            f"select cil.listing_id, cil.operating_branch, '{column}' as published_column, "
+            f"'{node.key}:{node.node_id}' as node, coalesce(mv.value::text, 'null') as value, '{why}' as policy "
+            f"from {table} mv "
+            f"join mart.capture_issuer_lineage cil using (run_id, issuer_id)"
+            f"{extra_join} "
+            f"where mv.run_id = ({GOVERNED_HEAD}) and mv.node_key = '{node_key}' "
+            f"and mv.availability_status <> 'not_applicable'{scope} and ({predicate})"
         )
 
     for column, node_key in sorted(columns.items()):
         first = judged[node_key]
         if column != first:
-            violations.append(
-                select(
-                    column,
-                    node_key,
-                    f"{column} is distinct from {first}",
-                    f"same node as {first}, other value",
-                    published=False,
-                )
-            )
             continue
         node = PANEL_METRICS[node_key]
         by_policy = {
@@ -140,7 +143,7 @@ def _sign_policy_queries(table: str = SIGN_POLICY_TABLE) -> tuple[str, str | Non
             select(
                 column,
                 node_key,
-                f"operating_branch not in ({_classes(set(node.sign_policy))})",
+                f"cil.operating_branch not in ({_classes(set(node.sign_policy))})",
                 "no policy for this class",
             )
         )
@@ -150,7 +153,7 @@ def _sign_policy_queries(table: str = SIGN_POLICY_TABLE) -> tuple[str, str | Non
                 select(
                     column,
                     node_key,
-                    f"{column} < 0 and operating_branch in ({_classes(forbidden)})",
+                    f"mv.value < 0 and cil.operating_branch in ({_classes(forbidden)})",
                     SignPolicy.MUST_BE_NON_NEGATIVE.value,
                 )
             )
@@ -160,7 +163,7 @@ def _sign_policy_queries(table: str = SIGN_POLICY_TABLE) -> tuple[str, str | Non
                 select(
                     column,
                     node_key,
-                    f"{column} < 0 and operating_branch in ({_classes(signalled)})",
+                    f"mv.value < 0 and cil.operating_branch in ({_classes(signalled)})",
                     SignPolicy.SIGN_IS_SIGNAL.value,
                 )
             )
@@ -184,9 +187,13 @@ def _sign_policy_queries(table: str = SIGN_POLICY_TABLE) -> tuple[str, str | Non
                 select(
                     output_column,
                     spec.key,
-                    f"operating_branch in ({_classes(classes)}) and ({numerator_column} is null "
-                    f"or sign({output_column}) <> sign({numerator_column}))",
+                    f"cil.operating_branch in ({_classes(classes)}) and (num.value is null "
+                    f"or sign(mv.value) <> sign(num.value))",
                     f"sign of {numerator_column} over non-negative {denominator}",
+                    extra_join=(
+                        f" left join {table} num on num.run_id = mv.run_id and num.issuer_id = mv.issuer_id "
+                        f"and num.node_key = '{numerator}' and num.availability_status <> 'not_applicable'"
+                    ),
                 )
             )
     return "\n union all\n".join(violations), ("\n union all\n".join(signals) if signals else None)
@@ -241,15 +248,20 @@ _TEMPLATES: tuple[Invariant, ...] = (
             "'available with nothing in it' is a contradiction, not a state"
         ),
         violations=f"""
-            select listing_id, availability, coalesce(gppe::text, 'null') as gppe, confidence::text
-            from mart.topt_gppe_results
-            where run_id = ({GOVERNED_HEAD})
-              and availability = 'available'
-              and (gppe is null or confidence = 0)
+            select cil.listing_id, mv.availability_status as availability,
+                   coalesce(mv.value::text, 'null') as gppe, mv.confidence::text
+            from mart.metric_node_values mv
+            left join mart.capture_issuer_lineage cil using (run_id, issuer_id)
+            where mv.run_id = ({GOVERNED_HEAD})
+              and mv.node_key = 'gppe_uniform_charge_v0'
+              and mv.availability_status = 'available'
+              and (mv.value is null or mv.confidence = 0)
         """,
         population=f"""
-            select count(*) from mart.topt_gppe_results
-            where run_id = ({GOVERNED_HEAD}) and availability = 'available'
+            select count(*) from mart.metric_node_values
+            where run_id = ({GOVERNED_HEAD})
+              and node_key = 'gppe_uniform_charge_v0'
+              and availability_status = 'available'
         """,
     ),
     Invariant(
@@ -280,8 +292,8 @@ _TEMPLATES: tuple[Invariant, ...] = (
             ), latest as (
                 select max(cutoff_at) as cutoff_at from staging.strategy_backtest_inputs
             ), present as (
-                select distinct r.operating_branch as issuer_class from mart.topt_core_results r
-                where r.cutoff = (select cutoff_at from latest)
+                select distinct cil.operating_branch as issuer_class from mart.capture_issuer_lineage cil
+                where cil.cutoff = (select cutoff_at from latest)
             )
             select distinct expected.input_key, (select cutoff_at from latest)::text as cutoff_at
             from expected
@@ -429,11 +441,15 @@ _TEMPLATES: tuple[Invariant, ...] = (
         violations=f"""
             {_SCHEDULED_HEADS_CTE},
             served as (
-                select distinct heads.universe_id, r.run_id, r.issuer_id, r.revenue_period_end,
-                       (r.cutoff at time zone 'UTC')::date as cutoff
+                select distinct heads.universe_id, cil.run_id, cil.issuer_id, cil.revenue_period_end,
+                       (cil.cutoff at time zone 'UTC')::date as cutoff
                 from heads
-                join mart.topt_core_results r on r.run_id = heads.run_id
-                where r.availability = 'available'
+                join mart.capture_issuer_lineage cil on cil.run_id = heads.run_id
+                join mart.metric_node_values mv
+                  on mv.run_id = cil.run_id
+                 and mv.issuer_id = cil.issuer_id
+                 and mv.node_key = 'gppe_uniform_charge_v0'
+                where mv.availability_status = 'available'
             )
             select universe_id, run_id, issuer_id, revenue_period_end::text, cutoff::text
             from served
@@ -448,13 +464,17 @@ _TEMPLATES: tuple[Invariant, ...] = (
             order by 1, 2, 3
         """,
         population="""
-            select count(distinct (r.run_id, r.issuer_id))
+            select count(distinct (cil.run_id, cil.issuer_id))
             from mart.served_head h
-            join mart.topt_core_results r on r.run_id = coalesce(h.run_id, h.head_run_id)
+            join mart.capture_issuer_lineage cil on cil.run_id = coalesce(h.run_id, h.head_run_id)
+            join mart.metric_node_values mv
+              on mv.run_id = cil.run_id
+             and mv.issuer_id = cil.issuer_id
+             and mv.node_key = 'gppe_uniform_charge_v0'
             where h.factor_id = 'gross_profit_per_employee'
               and __HEAD_IS_SCHEDULED__
-              and r.availability = 'available'
-              and r.revenue_period_end is not null
+              and mv.availability_status = 'available'
+              and cil.revenue_period_end is not null
         """,
     ),
     Invariant(
@@ -466,9 +486,9 @@ _TEMPLATES: tuple[Invariant, ...] = (
         violations=f"""
             {_SCHEDULED_HEADS_CTE},
             members as (
-                select distinct heads.universe_id, r.run_id, r.issuer_id
+                select distinct heads.universe_id, cil.run_id, cil.issuer_id
                 from heads
-                join mart.topt_core_results r on r.run_id = heads.run_id
+                join mart.capture_issuer_lineage cil on cil.run_id = heads.run_id
             )
             select m.universe_id, m.run_id, m.issuer_id, coalesce(d.display_name, 'NULL')
             from members m
@@ -479,9 +499,9 @@ _TEMPLATES: tuple[Invariant, ...] = (
             order by 1, 2, 3
         """,
         population="""
-            select count(distinct (r.run_id, r.issuer_id))
+            select count(distinct (cil.run_id, cil.issuer_id))
             from mart.served_head h
-            join mart.topt_core_results r on r.run_id = coalesce(h.run_id, h.head_run_id)
+            join mart.capture_issuer_lineage cil on cil.run_id = coalesce(h.run_id, h.head_run_id)
             where h.factor_id = 'gross_profit_per_employee'
               and __HEAD_IS_SCHEDULED__
         """,

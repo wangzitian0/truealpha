@@ -35,49 +35,55 @@ select h.fund_id,
 from mart.fund_holdings_resolved h
 join vintage using (fund_id, report_period, transaction_time)
 left join lateral (
-    select c.valuation_gap,
-           c.availability,
-           c.confidence,
-           status.availability_status,
+    select d.valuation_gap,
+           case when d.availability_status = 'available' then 'available' else 'unavailable' end as availability,
+           coalesce(mnv.confidence, 0) as confidence,
+           d.availability_status,
            case
-               when status.current_pgp is not null then 'price_to_gross_profit'
-               when c.valuation_gap is not null then 'price_to_sales'
+               when d.current_price_to_gross_profit is not null then 'price_to_gross_profit'
+               when d.valuation_gap is not null then 'price_to_sales'
            end as valuation_basis
-    from mart.topt_core_result_read c
-    left join mart.topt_core_results status
-      on status.result_id = c.result_id
+    from mart.strategy_run_capture scope
+    join mart.strategy_decisions d on d.strategy_run_id = scope.strategy_run_id
+    left join mart.metric_node_values mnv
+      on mnv.run_id = scope.capture_run_id
+     and mnv.issuer_id = d.issuer_id
+     and mnv.node_key = 'gppe_uniform_charge_v0'
+    left join mart.capture_issuer_lineage cil
+      on cil.run_id = scope.capture_run_id
+     and cil.issuer_id = d.issuer_id
     left join lateral (
         select ei_row.listing_id
         from mart.entity_identity ei_row
-        where ei_row.entity_id::text = c.listing_id
+        where ei_row.entity_id::text = cil.listing_id
         limit 1
     ) ei on true
     left join lateral (
         select ei_row.cik
         from mart.entity_identity ei_row
-        where ei_row.entity_id::text = c.issuer_id
+        where ei_row.entity_id::text = d.issuer_id
         limit 1
     ) ei_issuer on true
-    where c.run_id = %(run_id)s
+    where scope.capture_run_id = %(run_id)s
       and (
-          coalesce(ei.listing_id, c.listing_id) = h.listing_id
+          coalesce(ei.listing_id, cil.listing_id) = h.listing_id
           or (
               coalesce(
                   lpad(nullif(ltrim(ei_issuer.cik, '0'), ''), 10, '0'),
-                  lpad(substring(c.issuer_id from '^(?:issuer|company):cik:0*([0-9]+)$'), 10, '0')
+                  lpad(substring(d.issuer_id from '^(?:issuer|company):cik:0*([0-9]+)$'), 10, '0')
               ) is not null
               and coalesce(
                   lpad(nullif(ltrim(ei_issuer.cik, '0'), ''), 10, '0'),
-                  lpad(substring(c.issuer_id from '^(?:issuer|company):cik:0*([0-9]+)$'), 10, '0')
+                  lpad(substring(d.issuer_id from '^(?:issuer|company):cik:0*([0-9]+)$'), 10, '0')
               ) = coalesce(
                   lpad(nullif(ltrim(ei_hold.cik, '0'), ''), 10, '0'),
                   lpad(substring(h.issuer_entity from '^(?:issuer|company):cik:0*([0-9]+)$'), 10, '0')
               )
           )
       )
-    order by (coalesce(ei.listing_id, c.listing_id) = h.listing_id) desc,
-             c.valuation_gap is not null desc,
-             c.listing_id
+    order by (coalesce(ei.listing_id, cil.listing_id) = h.listing_id) desc,
+             d.valuation_gap is not null desc,
+             cil.listing_id nulls last
     limit 1
 ) core on true
 order by h.fund_id, h.percent_of_net_assets desc nulls last, h.holding_name

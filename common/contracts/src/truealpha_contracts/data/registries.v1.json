@@ -436,8 +436,8 @@
       "question": "q1",
       "columns": [
         {
-          "table": "mart.topt_gppe_results",
-          "column": "gppe",
+          "table": "mart.metric_node_values",
+          "column": "value",
           "factor": "gross_profit_per_employee",
           "module": 2,
           "universe_role": null
