@@ -130,12 +130,12 @@ async def test_governed_backtest_tool_reads_through_injected_reader() -> None:
 
 
 @pytest.mark.anyio
-async def test_topt_gppe_tool_serializes_whatever_repository_its_given() -> None:
+async def test_panel_coverage_serializes_the_injected_metric_node_repository() -> None:
     """Proves panel_coverage wiring/serialization with an injected metric node repository."""
     from truealpha_runtime.research_report_mart import MetricNodeValueCell, MetricNodeValueReport
 
     class _FakeTopt:
-        def latest(self, *, limit: int = 100) -> MetricNodeValueReport:
+        def latest(self, *, node_key: str, issuer_id: str | None = None, limit: int = 100) -> MetricNodeValueReport:
             return MetricNodeValueReport(
                 run_id="capture-run:" + "a" * 64,
                 node_key="gppe_uniform_charge_v0",
@@ -155,8 +155,10 @@ async def test_topt_gppe_tool_serializes_whatever_repository_its_given() -> None
                 ),
             )
 
-    server = build_mcp_server(repository=FixtureStrategyRunRepository(), topt_repository=_FakeTopt())
-    content_blocks, structured = await server.call_tool("panel_coverage", {})  # type: ignore[misc]
+    server = build_mcp_server(repository=FixtureStrategyRunRepository(), metric_node_repository=_FakeTopt())
+    content_blocks, structured = await server.call_tool(
+        "panel_coverage", {"request": {"node_key": "gppe_uniform_charge_v0"}}
+    )  # type: ignore[misc]
     report = MetricNodeValueReport.model_validate_json(json.dumps(structured["result"]))  # type: ignore[index]
     assert report.available_count == 1
     assert report.cells[0].issuer_id == "listing:xnas:goog"

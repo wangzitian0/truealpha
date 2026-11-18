@@ -128,6 +128,15 @@ def test_slice4_schema_has_lineage_view_and_no_retired_topt_mart_objects(slice4_
         assert conn.execute("select count(*) from mart.capture_issuer_lineage").fetchone() == (0,)
 
 
+def test_lineage_view_joins_the_banking_node_for_financial_issuers(slice4_db: str) -> None:
+    with psycopg.connect(slice4_db) as conn:
+        definition = conn.execute("select pg_get_viewdef(to_regclass('mart.capture_issuer_lineage'), true)").fetchone()[
+            0
+        ]
+    assert "gppe_banking_tce_v1" in definition
+    assert "gppe_uniform_charge_v0" in definition
+
+
 def test_slice4_migration_backfills_and_retires_pre_slice4_database(slice4_db: str) -> None:
     from truealpha_tools.schema_drift import differences, fingerprint
 
