@@ -120,12 +120,16 @@ class _FakeQuoteContext:
 
 
 class _MockCursor:
-    def __init__(self):
+    def __init__(self, result: Any = None) -> None:
         self.executed = []
+        self._result = result
 
     def execute(self, sql, params=None):
         self.executed.append((sql, params))
         return self
+
+    def fetchone(self):
+        return self._result
 
 
 class _MockConnection:
@@ -134,7 +138,17 @@ class _MockConnection:
 
     def execute(self, sql, params=None):
         self.executed.append((sql, params))
-        return _MockCursor()
+        p = tuple(params) if isinstance(params, list | tuple) else ()
+        result = None
+        if "select staging.entity_alias_normalize" in sql:
+            result = (p[1],) if len(p) > 1 else ("mock",)
+        elif "from staging.entity_alias_schemes s" in sql:
+            result = ("entity", False, True, ".*", p[0] if p else "name", True)
+        elif "select staging.entity_mint" in sql:
+            result = (uuid.uuid5(uuid.NAMESPACE_URL, f"mock:{':'.join(map(str, p))}"),)
+        elif "insert into staging.entity_aliases" in sql:
+            result = (1,)
+        return _MockCursor(result)
 
 
 def test_materialize_analyst_ratings_handles_dict_and_factor_record() -> None:

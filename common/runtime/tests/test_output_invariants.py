@@ -938,22 +938,36 @@ def test_governed_entities_resolve_display_name_passes_with_real_names_and_fails
 ) -> None:
     """#1517: every member in an active governed head must resolve to a non-empty company name
     in `mart.entity_display_resolution` that is neither its raw `issuer_id` nor its bare `ticker`."""
+    minted: list[tuple[str, str, str, str]] = []
+    for cik, ticker, name in [
+        ("0000019617", "jpm0", "JPMorgan Chase & Co."),
+        ("0000059478", "lly0", "Eli Lilly and Company"),
+    ]:
+        eid = conn.execute("select staging.entity_mint('issuer', 'cik', %s, 'test')", (cik,)).fetchone()[0]
+        conn.execute(
+            "insert into staging.entity_aliases (entity_id, scheme, value, valid_from, transaction_time, source, raw_ref, method, confidence, mapping_version) "
+            "values (%s, 'cik', %s, '-infinity', '2026-01-01T00:00:00Z', 'test', 'test', 'asserted', 1.0, 'v1')",
+            (eid, cik),
+        )
+        minted.append((str(eid), ticker, name, cik))
+
     issuers = [
-        _issuer("jpm", "jpm0", revenue_period_end=date(2025, 12, 31)),
-        _issuer("lly", "lly0", revenue_period_end=date(2025, 12, 31)),
+        SeededIssuer(eid, (f"listing:xnas:{ticker}",), True, True, None, date(2025, 12, 31))
+        for eid, ticker, _, _ in minted
     ]
     run_id = _seed_head(conn, REVENUE_UNIVERSE, issuers)
 
-    # Without KG / alias names, mart.entity_display_resolution resolves display_name as NULL -> violation!
+    # Without name aliases, mart.entity_display_resolution resolves display_name as NULL -> violation!
     code, output = _parity_verdict(conn, capsys, DISPLAY_NAME_INVARIANT)
     assert code == 1, output
     assert f"{DISPLAY_NAME_INVARIANT}: 2 violation(s)" in output
 
-    # Insert real company names into staging.kg_entities for both issuers -> passes!
-    for issuer_id, name in [("issuer:jpm", "JPMorgan Chase & Co."), ("issuer:lly", "Eli Lilly and Company")]:
+    # Insert real company names into staging.entity_aliases for both issuers -> passes!
+    for eid, _, name, _ in minted:
         conn.execute(
-            "insert into staging.kg_entities (id, entity_type, display_name) values (%s, 'company', %s)",
-            (issuer_id, name),
+            "insert into staging.entity_aliases (entity_id, scheme, value, valid_from, transaction_time, source, raw_ref, method, confidence, mapping_version) "
+            "values (%s::uuid, 'name', %s, '-infinity', '2026-01-01T00:00:00Z', 'test', 'test', 'asserted', 1.0, 'v1')",
+            (eid, name),
         )
     code_ok, output_ok = _parity_verdict(conn, capsys, DISPLAY_NAME_INVARIANT)
     assert code_ok == 0, output_ok
@@ -1038,12 +1052,13 @@ def test_entity_identity_unique_and_fund_weights_conserved_structure_and_behavio
 def test_entity_identity_unique_per_entity_passes_with_dual_kg_rows_and_fails_on_duplicate(
     conn: psycopg.Connection, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """#1641: mart.entity_identity emits one row per entity even when staging.kg_entities holds UUID and legacy rows."""
+    """#1641: mart.entity_identity emits one row per entity even when staging.entity_aliases holds multiple names."""
     entity_uuid = _mint_listing(conn, "listing:xnas:goog")
-    for kg_id, name in ((entity_uuid, "Alphabet UUID"), ("listing:xnas:goog", "Alphabet Legacy")):
+    for idx, name in enumerate(("Alphabet UUID", "Alphabet Legacy")):
         conn.execute(
-            "insert into staging.kg_entities (id, entity_type, display_name) values (%s, 'company', %s)",
-            (kg_id, name),
+            "insert into staging.entity_aliases (entity_id, scheme, value, valid_from, transaction_time, source, raw_ref, method, confidence, mapping_version) "
+            "values (%s::uuid, 'name', %s, '-infinity', '2026-01-01T00:00:00Z'::timestamptz + (%s || ' minutes')::interval, 'test', 'test', 'asserted', 0.9, 'v1')",
+            (entity_uuid, name, str(idx)),
         )
     code, output = _parity_verdict(conn, capsys, ENTITY_IDENTITY_UNIQUE_INVARIANT)
     assert code == 0, output

@@ -401,12 +401,9 @@ def main() -> int:
             conn.execute(
                 "insert into staging.entity_aliases (entity_id, scheme, value, valid_from, transaction_time, source, raw_ref, method, confidence, mapping_version) "
                 "values (%s, 'legacy-id', %s, '2026-01-01', '2026-01-01T00:00:00Z', 'e2e-seed', 'e2e-seed', 'asserted', 1, 'e2e-seed:v1'), "
-                "(%s, 'mic-ticker', %s, '2026-01-01', '2026-01-01T00:00:00Z', 'e2e-seed', 'e2e-seed', 'asserted', 1, 'e2e-seed:v1') on conflict do nothing",
-                (entity_id, legacy_id, entity_id, mic_ticker),
-            )
-            conn.execute(
-                "insert into staging.kg_entities (id, entity_type, display_name) values (%s, 'company', %s) on conflict (id) do nothing",
-                (entity_id, display_name),
+                "(%s, 'mic-ticker', %s, '2026-01-01', '2026-01-01T00:00:00Z', 'e2e-seed', 'e2e-seed', 'asserted', 1, 'e2e-seed:v1'), "
+                "(%s, 'name', %s, '2026-01-01', '2026-01-01T00:00:00Z', 'e2e-seed', 'e2e-seed', 'asserted', 1, 'e2e-seed:v1') on conflict do nothing",
+                (entity_id, legacy_id, entity_id, mic_ticker, entity_id, display_name),
             )
             conn.execute(
                 "insert into mart.issuer_analyst_ratings (run_id, issuer_id, cutoff, consensus_rating, analysts_count, buy_count, hold_count, sell_count, confidence, reason_codes, extractor, availability_status, source_evidence_status, factor_validation_status) "

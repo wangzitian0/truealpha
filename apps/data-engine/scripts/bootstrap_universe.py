@@ -1,6 +1,7 @@
 """Build the research universe in the knowledge graph from ETF N-PORT holdings."""
 
 import argparse
+import uuid
 from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -136,7 +137,9 @@ def main() -> None:
 
     map_ref = raw_store.raw_ref(map_raw_id)
 
-    def assert_id(eid: str, src: str, id_type: str, id_val: str, conf: float = 0.98, tx=run_at, vf=today, ref=map_ref):
+    def assert_id(
+        eid: str | uuid.UUID, src: str, id_type: str, id_val: str, conf: float = 0.98, tx=run_at, vf=today, ref=map_ref
+    ):
         er.assert_identifier(
             conn,
             entity_id=eid,
@@ -150,9 +153,16 @@ def main() -> None:
         )
 
     for etf, f in etfs.items():
-        er.ensure_entity(conn, f.entity_id, "etf", f.info["series_name"] or etf)
+        fund_uuid = er.ensure_entity(
+            conn,
+            f.entity_id,
+            "fund",
+            f.info["series_name"] or etf,
+            transaction_time=f.filing_dt,
+            raw_ref=raw_store.raw_ref(f.raw_id),
+        )
         for id_type, id_val in (("ticker", etf), ("sec_series", f.series_id)):
-            assert_id(f.entity_id, "sec", id_type, id_val, 1.0)
+            assert_id(fund_uuid, "sec", id_type, id_val, 1.0)
 
     stats: Counter = Counter()
 
@@ -160,43 +170,55 @@ def main() -> None:
         cik = group["cik"]
         group_isins = sorted({h.isin for _, h, _ in group["lines"] if h.isin})
         if cik is not None:
-            entity_id = f"company:cik:{cik}"
+            raw_entity_key = f"company:cik:{cik}"
+            entity_kind = "issuer"
             display = cik_titles.get(cik) or (group["names"][0] if group["names"] else f"CIK {cik}")
         elif group_isins:
-            entity_id = f"company:isin:{group_isins[0]}"
+            raw_entity_key = f"company:isin:{group_isins[0]}"
+            entity_kind = "instrument"
             display = group["names"][0] if group["names"] else group_isins[0]
         else:
             continue
 
-        er.ensure_entity(conn, entity_id, "company", display)
+        entity_uuid = er.ensure_entity(
+            conn, raw_entity_key, entity_kind, display, transaction_time=run_at, raw_ref=map_ref
+        )
         stats["companies"] += 1
         if cik is not None:
-            assert_id(entity_id, "sec", "cik", str(cik))
+            assert_id(entity_uuid, "sec", "cik", str(cik))
 
         primary_isin = group_isins[0] if group_isins else None
         held_by: set[str] = set()
         holding_fact_rows = []
         for etf, h, listing in group["lines"]:
             f = etfs[etf]
+            fund_uuid = er.ensure_entity(
+                conn,
+                f.entity_id,
+                "fund",
+                f.info["series_name"] or etf,
+                transaction_time=f.filing_dt,
+                raw_ref=raw_store.raw_ref(f.raw_id),
+            )
             filing_ref = raw_store.raw_ref(f.raw_id)
             line_conf = CONF_FILING if (cik is not None or h.isin == primary_isin) else CONF_NAME_MERGE
             for id_type, id_val in (("isin", h.isin), ("cusip", h.cusip), ("lei", h.lei)):
                 if id_val:
-                    assert_id(entity_id, "nport", id_type, id_val, line_conf, f.filing_dt, f.filing_date, filing_ref)
+                    assert_id(entity_uuid, "nport", id_type, id_val, line_conf, f.filing_dt, f.filing_date, filing_ref)
             if listing is not None:
                 us_ticker = universe.sec_ticker(listing)
                 if us_ticker:
-                    assert_id(entity_id, "openfigi", "ticker", us_ticker)
+                    assert_id(entity_uuid, "openfigi", "ticker", us_ticker)
                 mm_pair = universe.moomoo_code(listing)
                 if mm_pair is not None:
-                    assert_id(entity_id, "openfigi", "moomoo", mm_pair[0], mm_pair[1])
+                    assert_id(entity_uuid, "openfigi", "moomoo", mm_pair[0], mm_pair[1])
 
             if f.entity_id not in held_by:
                 held_by.add(f.entity_id)
                 er.add_edge(
                     conn,
-                    from_id=f.entity_id,
-                    to_id=entity_id,
+                    from_id=fund_uuid,
+                    to_id=entity_uuid,
                     relation_type="holds",
                     confidence=CONF_FILING,
                     source="nport",
@@ -209,8 +231,8 @@ def main() -> None:
             if h.value_usd is not None:
                 holding_fact_rows.append(
                     (
-                        f.entity_id,
-                        entity_id,
+                        fund_uuid,
+                        entity_uuid,
                         h.name or h.isin or "UNKNOWN",
                         f.info["report_period"] or f.filing_date,
                         f.filing_dt,

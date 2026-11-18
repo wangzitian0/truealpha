@@ -119,7 +119,7 @@ def test_pit_time_axes_have_no_insert_clock_default(columns):
         assert default is None, f"{column} gained a default: {default}"
 
 
-def test_kg_edges_carries_both_time_axes():
+def test_entity_relations_carries_both_time_axes():
     try:
         conn = psycopg.connect(settings.database_url, connect_timeout=3)
     except psycopg.OperationalError:
@@ -128,12 +128,12 @@ def test_kg_edges_carries_both_time_axes():
         """
         select column_name, column_default
         from information_schema.columns
-        where table_schema = 'staging' and table_name = 'kg_edges'
+        where table_schema = 'staging' and table_name = 'entity_relations'
           and column_name in ('transaction_time', 'recorded_at')
         """
     ).fetchall()
     conn.close()
     by_name = dict(rows)
-    assert "recorded_at" in by_name, "kg_edges lost its recorded_at axis"
-    assert "transaction_time" in by_name, "kg_edges lost its transaction_time axis"
-    assert by_name["transaction_time"] is None, "kg_edges.transaction_time regained an insert-clock default"
+    assert "recorded_at" in by_name, "entity_relations lost its recorded_at axis"
+    assert "transaction_time" in by_name, "entity_relations lost its transaction_time axis"
+    assert by_name["transaction_time"] is None, "entity_relations.transaction_time regained an insert-clock default"

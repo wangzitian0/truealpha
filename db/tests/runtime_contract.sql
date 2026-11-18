@@ -7,11 +7,18 @@ begin
     if to_regclass('raw.fetches') is null then
         raise exception 'raw.fetches is missing';
     end if;
-    if to_regclass('staging.kg_edges') is null then
-        raise exception 'Postgres graph store is missing';
+    -- #1730 Slice 2: legacy staging.kg_* tables are retired; verify they do not exist.
+    if to_regclass('staging.kg_entities') is not null then
+        raise exception 'retired staging.kg_entities must not exist';
     end if;
-    if to_regclass('staging.kg_identifiers') is null then
-        raise exception 'Postgres graph identifier index is missing';
+    if to_regclass('staging.kg_edges') is not null then
+        raise exception 'retired staging.kg_edges must not exist';
+    end if;
+    if to_regclass('staging.kg_identifiers') is not null then
+        raise exception 'retired staging.kg_identifiers must not exist';
+    end if;
+    if to_regclass('staging.entities') is null then
+        raise exception 'Postgres canonical entity store (staging.entities) is missing';
     end if;
     if to_regclass('staging.contract_objects') is null then
         raise exception 'immutable Gate 0 contract repository is missing';

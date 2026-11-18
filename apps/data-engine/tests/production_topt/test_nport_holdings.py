@@ -95,12 +95,14 @@ def test_capture_lands_filing_and_weighted_lines(connection) -> None:
     landed = connection.execute("select id, source from raw.fetches where id = %s", (outcome.raw_id,)).fetchone()
     assert landed is not None and landed[1] == DataSource.NPORT.value
 
+    fund_uuid = er.coerce_entity_uuid(connection, f"etf:series:{_SERIES}")
+    assert fund_uuid is not None
     rows = connection.execute(
         """
         select holding_id, percent_of_net_assets, raw_ref, transaction_time
         from staging.fund_holding_facts where fund_id = %s and report_period = %s
         """,
-        (f"etf:series:{_SERIES}", outcome.report_period),
+        (fund_uuid, outcome.report_period),
     ).fetchall()
     assert len(rows) == outcome.facts_inserted
     assert all(r[1] is not None for r in rows), "every fact carries the filed weight"
@@ -117,17 +119,17 @@ def test_rerun_of_same_filing_inserts_nothing(connection) -> None:
 
     assert again.raw_id == first.raw_id, "content-addressed landing must dedupe"
     assert again.facts_inserted == 0
-    assert again.holdings_minted == 0, "minted entities resolve from the KG on rerun"
+    assert again.holdings_minted == 0, "minted entities resolve from the ontology on rerun"
     assert again.holdings_resolved == first.facts_inserted
 
 
 def test_known_isin_resolves_to_existing_entity_not_a_mint(connection) -> None:
     _, holdings = nport.parse_nport(_XML)
     target = next(h.isin for h in holdings if h.isin is not None and h.pct_val is not None and h.value_usd is not None)
-    er.ensure_entity(connection, "company:cik:320193", "company", "Pre-seeded Issuer")
+    issuer_uuid = er.ensure_entity(connection, "company:cik:320193", "company", "Pre-seeded Issuer")
     er.assert_identifier(
         connection,
-        entity_id="company:cik:320193",
+        entity_id=issuer_uuid,
         source="test",
         identifier_type="isin",
         identifier_value=target,
@@ -139,8 +141,15 @@ def test_known_isin_resolves_to_existing_entity_not_a_mint(connection) -> None:
 
     capture_fund_holdings(connection, "QQQ", http=_FakeSec())
 
+    fund_uuid = er.coerce_entity_uuid(connection, f"etf:series:{_SERIES}")
+    inst_uuid = er.coerce_entity_uuid(connection, f"security:isin:{target}")
     held_as = connection.execute(
         "select holding_id from staging.fund_holding_facts where fund_id = %s and isin = %s",
-        (f"etf:series:{_SERIES}", target),
+        (fund_uuid, target),
     ).fetchall()
-    assert held_as and all(r[0] == "company:cik:320193" for r in held_as)
+    assert held_as and all(r[0] == inst_uuid for r in held_as)
+    linked = connection.execute(
+        "select from_entity_id from staging.entity_relations where to_entity_id = %s and relation_type = 'issues'",
+        (inst_uuid,),
+    ).fetchone()
+    assert linked == (issuer_uuid,)

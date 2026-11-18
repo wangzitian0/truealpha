@@ -7,9 +7,9 @@ from datetime import UTC, datetime
 
 REQUIRED_TABLES = [
     "raw.fetches",
-    "staging.kg_entities",
-    "staging.kg_identifiers",
-    "staging.kg_edges",
+    "staging.entities",
+    "staging.entity_aliases",
+    "staging.entity_relations",
     "staging.fund_holding_facts",
     "staging.api_call_ledger",
 ]

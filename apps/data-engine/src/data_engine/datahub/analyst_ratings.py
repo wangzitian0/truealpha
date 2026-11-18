@@ -404,12 +404,28 @@ def _persist_analyst_rating_events(
     if not valid_items:
         return 0
     try:
+        from factors.shared.entity_resolution import ensure_entity
+
         with optional_savepoint(connection):
-            execute_many(
+            company_uuid = ensure_entity(
                 connection,
-                "insert into staging.kg_entities (id, entity_type, display_name) values (%s, 'company', %s), (%s, 'analyst', %s) on conflict (id) do nothing",
-                [(company_id, company_id, item.analyst_id, item.analyst_id) for item in valid_items],
+                company_id,
+                "issuer",
+                company_id,
+                transaction_time=as_of,
+                raw_ref=f"moomoo:rating_summary:{run_id}:{company_id}",
             )
+            analyst_uuids = {
+                item.analyst_id: ensure_entity(
+                    connection,
+                    item.analyst_id,
+                    "person",
+                    item.analyst_id,
+                    transaction_time=as_of,
+                    raw_ref=f"moomoo:rating_summary:{run_id}:{company_id}:{item.analyst_id}",
+                )
+                for item in valid_items
+            }
             event_rows = []
             for item in valid_items:
                 raw_rec = getattr(item, "recommendation_at", None) or getattr(item, "recommendation_date", None)
@@ -421,8 +437,8 @@ def _persist_analyst_rating_events(
                     rec_at = as_of
                 event_rows.append(
                     (
-                        item.analyst_id,
-                        company_id,
+                        analyst_uuids[item.analyst_id],
+                        company_uuid,
                         rec_at,
                         as_of,
                         as_of,
@@ -440,7 +456,8 @@ def _persist_analyst_rating_events(
                 event_rows,
             )
         return len(valid_items)
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
+        log.warning("analyst rating event persistence failed for %s: %s", company_id, exc)
         return 0
 
 

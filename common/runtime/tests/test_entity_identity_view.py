@@ -159,12 +159,6 @@ class Store:
             (relation_id, at),
         )
 
-    def kg(self, kg_id: str, display_name: str) -> None:
-        self.conn.execute(
-            "insert into staging.kg_entities (id, entity_type, display_name) values (%s, 'company', %s)",
-            (kg_id, display_name),
-        )
-
 
 def seed_cases(conn: psycopg.Connection) -> tuple[dict[str, str], dict[str, list[Row]]]:
     """The small seed: one entity or group for each rule. Returns the ids and the expected rows."""
@@ -178,7 +172,6 @@ def seed_cases(conn: psycopg.Connection) -> tuple[dict[str, str], dict[str, list
     store.alias(ids["issuer"], "cik", "0000001337")
     store.alias(ids["issuer"], "name", "Plain Issuer", confidence="0.9")
     store.alias(ids["issuer"], "legacy-id", f"issuer:lei:{lei(1)}")
-    store.kg(f"issuer:lei:{lei(1)}", "KG Plain")
     ids["instrument"] = store.mint("instrument", "figi", figi(1))
     store.alias(ids["instrument"], "legacy-id", f"security:figi:{figi(1).lower()}")
     ids["listing"] = store.mint("listing", "mic-ticker", "XNAS:PLN")
@@ -257,23 +250,22 @@ def seed_cases(conn: psycopg.Connection) -> tuple[dict[str, str], dict[str, list
     store.alias(ids["confidence_tie"], "name", "Low Name", confidence="0.3", at=T0 + 3 * HOUR)
     expected["confidence_tie"] = [("issuer", None, "Newer Name", None, lei(30), None, None)]
 
-    # Two staging.kg_entities rows match one entity: one by UUID and one by legacy id (#1641).
+    # Multiple name aliases on one entity select the highest-confidence active name cleanly.
     ids["double_match"] = store.mint("issuer", "lei", lei(40))
     store.alias(ids["double_match"], "legacy-id", f"issuer:lei:{lei(40)}")
-    store.kg(ids["double_match"], "KG by UUID")
-    store.kg(f"issuer:lei:{lei(40)}", "KG by legacy id")
+    store.alias(ids["double_match"], "name", "Alias Primary", confidence="0.95", at=T0)
+    store.alias(ids["double_match"], "name", "Alias Secondary", confidence="0.80", at=T0 + HOUR)
     expected["double_match"] = [
-        ("issuer", None, "KG by UUID", None, lei(40), None, f"issuer:lei:{lei(40)}"),
+        ("issuer", None, "Alias Primary", None, lei(40), None, f"issuer:lei:{lei(40)}"),
     ]
 
-    # No alias: one entity has no alias row, one has only a withdrawn alias and a KG name.
+    # No alias: one entity has no alias row, one has only a withdrawn alias.
     ids["no_alias"] = store.mint("issuer", "lei", lei(50), birth_alias=False)
     expected["no_alias"] = [("issuer", None, None, None, None, None, None)]
     ids["withdrawn_only"] = store.mint("issuer", "lei", lei(51), birth_alias=False)
     withdrawn = store.alias(ids["withdrawn_only"], "lei", lei(51))
     store.end_alias(withdrawn, "-infinity", at=T0 + 1 * HOUR)
-    store.kg(ids["withdrawn_only"], "KG Only")
-    expected["withdrawn_only"] = [("issuer", None, "KG Only", None, None, None, None)]
+    expected["withdrawn_only"] = [("issuer", None, None, None, None, None, None)]
 
     # A merged listing. The old listing reads the ticker of its survivor. The relation names
     # the old listing, so the instrument gets no ticker through it.
@@ -326,10 +318,6 @@ begin
                 'issues', v_issuer, v_instrument, '-infinity', v_t, 'test:1337', 'test:1337', 'asserted', 1, 'test:1337'),
                (staging.entity_relation_uuid('listed_as', v_instrument, v_listing, '-infinity', v_t, 'test:1337', 'asserted'),
                 'listed_as', v_instrument, v_listing, '-infinity', v_t, 'test:1337', 'test:1337', 'asserted', 1, 'test:1337');
-        insert into staging.kg_entities (id, entity_type, display_name) values ('issuer:lei:' || v_lei, 'company', 'KG Issuer ' || n);
-        if n % 10 = 0 then
-            insert into staging.kg_entities (id, entity_type, display_name) values (v_issuer::text, 'company', 'KG UUID ' || n);
-        end if;
         -- Four merge chains a -> b -> issuer n. The third edge of chain 4 is retracted.
         if n <= 4 then
             v_a := staging.entity_mint('issuer', 'lei', 'TC1337' || lpad((10 * n + 1)::text, 12, '0') || '00', 'test:1337');
@@ -502,7 +490,7 @@ select
     e.entity_id,
     e.kind,
     coalesce(dt.ticker, it.ticker, inst.ticker) as current_ticker,
-    coalesce(dn.name, kg.display_name) as name,
+    dn.name as name,
     dc.cik,
     dl.lei,
     coalesce(dlist.listing_id, ilist.listing_id) as listing_id,
@@ -518,16 +506,6 @@ left join direct_ciks dc on dc.survivor_id = survivor.id
 left join direct_leis dl on dl.survivor_id = survivor.id
 left join direct_listings dlist on dlist.survivor_id = survivor.id
 left join issuer_listings ilist on ilist.issuer_id = survivor.id
-left join lateral (
-    select kg_row.display_name
-    from staging.kg_entities kg_row
-    where kg_row.id = e.entity_id::text
-       or (la.legacy_id is not null and kg_row.id = la.legacy_id)
-    order by (kg_row.id = e.entity_id::text) desc,
-             nullif(btrim(kg_row.display_name), '') is not null desc,
-             kg_row.id
-    limit 1
-) kg on true
 """
 
 
@@ -880,13 +858,13 @@ def test_a_live_view_names_no_ticker_literal(conn: psycopg.Connection, view: str
     assert "primary_listing" in str(row[0])
 
 
-def test_bare_ticker_in_kg_entities_never_masquerades_as_company_name(conn: psycopg.Connection) -> None:
-    """#1518: `mart.entity_identity` ignores a `staging.kg_entities.display_name` equal to `current_ticker`."""
+def test_bare_ticker_in_aliases_never_masquerades_as_company_name(conn: psycopg.Connection) -> None:
+    """#1518: `mart.entity_identity` ignores a `name` alias equal to `current_ticker`."""
     store = Store(conn)
     issuer, _list_c, list_a = seed_two_listings_of_one_issuer(store, 906)
     store.relate("primary_listing", issuer, list_a, at=T0)
-    store.kg(issuer, "GOOGL")
+    store.alias(issuer, "name", "GOOGL", at=T0, confidence="0.8")
     sql = "select current_ticker, name from mart.entity_identity where entity_id = %s::uuid"
     assert conn.execute(sql, (issuer,)).fetchone() == ("GOOGL", None)
-    store.alias(issuer, "name", "Alphabet Inc.", at=T0)
+    store.alias(issuer, "name", "Alphabet Inc.", at=T0 + HOUR, confidence="0.95")
     assert conn.execute(sql, (issuer,)).fetchone() == ("GOOGL", "Alphabet Inc.")

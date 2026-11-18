@@ -158,7 +158,7 @@ def test_graph_store_check_reports_only_the_error_type_when_settings_constructio
 
 
 def test_graph_store_check_reports_present_when_tables_exist(monkeypatch: pytest.MonkeyPatch) -> None:
-    fake_conn = FakeConnection(query_result=("staging.kg_edges", "staging.kg_identifiers"))
+    fake_conn = FakeConnection(query_result=("staging.entities", "staging.entity_aliases", "staging.entity_relations"))
     monkeypatch.setattr(psycopg, "connect", lambda *args, **kwargs: fake_conn)
 
     settings = RuntimeSettings(
@@ -176,7 +176,7 @@ def test_graph_store_check_reports_present_when_tables_exist(monkeypatch: pytest
 def test_graph_store_check_reports_absent_when_tables_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    fake_conn = FakeConnection(query_result=(None, "staging.kg_identifiers"))
+    fake_conn = FakeConnection(query_result=(None, "staging.entity_aliases", "staging.entity_relations"))
     monkeypatch.setattr(psycopg, "connect", lambda *args, **kwargs: fake_conn)
 
     settings = RuntimeSettings(

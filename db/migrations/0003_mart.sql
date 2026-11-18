@@ -863,7 +863,7 @@ execute $vc$create or replace view mart.entity_display_resolution as
                 END AS listing_uuid,
                 CASE
                     WHEN m.issuer_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'::text THEN m.issuer_id::uuid
-                    ELSE NULL::uuid
+                    ELSE (SELECT ea.entity_id FROM staging.entity_aliases ea WHERE ea.scheme = 'legacy-id'::text AND ea.value = m.issuer_id ORDER BY ea.transaction_time DESC, ea.alias_id DESC LIMIT 1)
                 END AS issuer_uuid
            FROM staging.topt_core_snapshot_members m
              LEFT JOIN primary_listings primary_listing ON primary_listing.issuer_id =
@@ -881,12 +881,6 @@ execute $vc$create or replace view mart.entity_display_resolution as
             NULLIF(btrim(entity_aliases.value), ''::text) AS display_name
            FROM staging.entity_aliases
           WHERE entity_aliases.scheme = 'name'::text AND NULLIF(btrim(entity_aliases.value), ''::text) IS NOT NULL
-          ORDER BY entity_aliases.entity_id, entity_aliases.confidence DESC, entity_aliases.transaction_time DESC, entity_aliases.alias_id DESC
-        ), issuer_legacy_ids AS (
-         SELECT DISTINCT ON (entity_aliases.entity_id) entity_aliases.entity_id,
-            btrim(entity_aliases.value) AS legacy_id
-           FROM staging.entity_aliases
-          WHERE entity_aliases.scheme = 'legacy-id'::text AND NULLIF(btrim(entity_aliases.value), ''::text) IS NOT NULL
           ORDER BY entity_aliases.entity_id, entity_aliases.confidence DESC, entity_aliases.transaction_time DESC, entity_aliases.alias_id DESC
         ), constituent_names AS (
          SELECT DISTINCT ON ((upper(cf.ticker))) upper(cf.ticker) AS ticker,
@@ -910,19 +904,12 @@ execute $vc$create or replace view mart.entity_display_resolution as
  SELECT rt.issuer_id,
     rt.listing_id,
     rt.ticker,
-    COALESCE(inam.display_name,
+    COALESCE(
         CASE
-            WHEN upper(btrim(e.display_name)) <> upper(btrim(COALESCE(rt.ticker, ''::text))) THEN NULLIF(btrim(e.display_name), ''::text)
-            ELSE NULL::text
-        END,
-        CASE
-            WHEN upper(btrim(e_legacy.display_name)) <> upper(btrim(COALESCE(rt.ticker, ''::text))) THEN NULLIF(btrim(e_legacy.display_name), ''::text)
+            WHEN upper(btrim(inam.display_name)) <> upper(btrim(COALESCE(rt.ticker, ''::text))) THEN NULLIF(btrim(inam.display_name), ''::text)
             ELSE NULL::text
         END, cn.display_name) AS display_name
    FROM resolved_tickers rt
-     LEFT JOIN issuer_legacy_ids il ON il.entity_id = rt.issuer_uuid
-     LEFT JOIN staging.kg_entities e ON e.id = rt.issuer_id
-     LEFT JOIN staging.kg_entities e_legacy ON e_legacy.id = il.legacy_id
      LEFT JOIN issuer_names inam ON inam.entity_id = rt.issuer_uuid
      LEFT JOIN constituent_names cn ON cn.ticker = upper(rt.ticker)
   ORDER BY rt.issuer_id$vc$;
@@ -990,11 +977,14 @@ execute $vc$create or replace view mart.entity_identity as
                 CASE
                     WHEN latest_by_scheme.scheme = 'mic-ticker'::text THEN split_part(latest_by_scheme.value, ':'::text, 2)
                     WHEN latest_by_scheme.scheme = 'legacy-id'::text AND latest_by_scheme.value ~ '^listing:[0-9a-z]{4}:[0-9a-z][0-9a-z.\-]*$'::text THEN upper(split_part(latest_by_scheme.value, ':'::text, 3))
+                    WHEN latest_by_scheme.scheme = 'ticker'::text THEN upper(latest_by_scheme.value)
                     ELSE NULL::text
                 END AS ticker
            FROM latest_by_scheme
-          WHERE latest_by_scheme.scheme = 'mic-ticker'::text OR latest_by_scheme.scheme = 'legacy-id'::text AND latest_by_scheme.value ~ '^listing:[0-9a-z]{4}:[0-9a-z][0-9a-z.\-]*$'::text
-          ORDER BY latest_by_scheme.survivor_id, (latest_by_scheme.scheme = 'mic-ticker'::text) DESC
+          WHERE latest_by_scheme.scheme = 'mic-ticker'::text
+             OR latest_by_scheme.scheme = 'legacy-id'::text AND latest_by_scheme.value ~ '^listing:[0-9a-z]{4}:[0-9a-z][0-9a-z.\-]*$'::text
+             OR latest_by_scheme.scheme = 'ticker'::text
+          ORDER BY latest_by_scheme.survivor_id, (latest_by_scheme.scheme = 'mic-ticker'::text) DESC, (latest_by_scheme.scheme = 'legacy-id'::text) DESC
         ), primary_listings AS (
          SELECT DISTINCT ON (relation.from_entity_id) relation.from_entity_id AS issuer_id,
             relation.to_entity_id AS listing_id
@@ -1053,11 +1043,10 @@ execute $vc$create or replace view mart.entity_identity as
  SELECT e.entity_id,
     e.kind,
     COALESCE(dt.ticker, it.ticker, inst.ticker) AS current_ticker,
-    COALESCE(dn.name,
-        CASE
-            WHEN upper(btrim(kg.display_name)) <> upper(btrim(COALESCE(dt.ticker, it.ticker, inst.ticker, ''::text))) THEN NULLIF(btrim(kg.display_name), ''::text)
-            ELSE NULL::text
-        END) AS name,
+    CASE
+        WHEN upper(btrim(dn.name)) <> upper(btrim(COALESCE(dt.ticker, it.ticker, inst.ticker, ''::text))) THEN NULLIF(btrim(dn.name), ''::text)
+        ELSE NULL::text
+    END AS name,
     dc.cik,
     dl.lei,
     COALESCE(dlist.listing_id, ilist.listing_id) AS listing_id,
@@ -1072,18 +1061,13 @@ execute $vc$create or replace view mart.entity_identity as
      LEFT JOIN direct_ciks dc ON dc.survivor_id = survivor.id
      LEFT JOIN direct_leis dl ON dl.survivor_id = survivor.id
      LEFT JOIN direct_listings dlist ON dlist.survivor_id = survivor.id
-     LEFT JOIN issuer_listings ilist ON ilist.issuer_id = survivor.id
-     LEFT JOIN LATERAL ( SELECT kg_row.display_name
-           FROM staging.kg_entities kg_row
-          WHERE kg_row.id = e.entity_id::text OR la.legacy_id IS NOT NULL AND kg_row.id = la.legacy_id
-          ORDER BY (kg_row.id = e.entity_id::text) DESC, (NULLIF(btrim(kg_row.display_name), ''::text) IS NOT NULL) DESC, kg_row.id
-         LIMIT 1) kg ON true$vc$;
+     LEFT JOIN issuer_listings ilist ON ilist.issuer_id = survivor.id$vc$;
 end if; end $$;
 do $$ begin if to_regclass('mart.fund_holdings') is null then
 execute $vc$create or replace view mart.fund_holdings as
- SELECT DISTINCT ON (facts.fund_id, facts.report_period, facts.transaction_time, (COALESCE(facts.isin, ''::text)), (COALESCE(facts.cusip, ''::text)), facts.holding_name) facts.fund_id,
-    fund_entity.display_name AS fund_name,
-    facts.holding_id,
+ SELECT DISTINCT ON (facts.fund_id, facts.report_period, facts.transaction_time, (COALESCE(facts.isin, ''::text)), (COALESCE(facts.cusip, ''::text)), facts.holding_name) facts.fund_id::text AS fund_id,
+    fund_name.value AS fund_name,
+    facts.holding_id::text AS holding_id,
     facts.holding_name,
     facts.isin,
     facts.report_period,
@@ -1094,7 +1078,11 @@ execute $vc$create or replace view mart.fund_holdings as
     facts.confidence,
     facts.raw_ref
    FROM staging.fund_holding_facts facts
-     LEFT JOIN staging.kg_entities fund_entity ON fund_entity.id = facts.fund_id
+     LEFT JOIN LATERAL ( SELECT alias.value
+           FROM staging.entity_aliases alias
+          WHERE alias.entity_id = facts.fund_id AND alias.scheme = 'name'::text
+          ORDER BY alias.confidence DESC, alias.transaction_time DESC, alias.alias_id DESC
+         LIMIT 1) fund_name ON true
   ORDER BY facts.fund_id, facts.report_period, facts.transaction_time, (COALESCE(facts.isin, ''::text)), (COALESCE(facts.cusip, ''::text)), facts.holding_name, facts.recorded_at DESC, facts.id DESC$vc$;
 end if; end $$;
 do $$ begin if to_regclass('mart.macro_series_current') is null then
@@ -1399,7 +1387,33 @@ execute $vc$create or replace view mart.served_head_environments as
 end if; end $$;
 do $$ begin if to_regclass('mart.fund_holdings_resolved') is null then
 execute $vc$create or replace view mart.fund_holdings_resolved as
- WITH resolved AS (
+ WITH RECURSIVE merge_edges AS (
+         SELECT DISTINCT ON (relation.from_entity_id) relation.from_entity_id,
+            relation.to_entity_id
+           FROM staging.entity_relations relation
+          WHERE relation.relation_type = 'superseded_by'::text
+            AND NOT (EXISTS ( SELECT 1
+                   FROM staging.entity_retractions retraction
+                  WHERE retraction.relation_id = relation.relation_id))
+          ORDER BY relation.from_entity_id, relation.transaction_time DESC, relation.relation_id DESC
+        ), survivor_walk(entity_id, current_id, depth) AS (
+         SELECT entity.entity_id,
+            entity.entity_id,
+            0 AS depth
+           FROM staging.entities entity
+        UNION ALL
+         SELECT walk.entity_id,
+            edge.to_entity_id,
+            walk.depth + 1
+           FROM survivor_walk walk
+             JOIN merge_edges edge ON edge.from_entity_id = walk.current_id
+          WHERE walk.depth < 32
+        ), survivors AS (
+         SELECT DISTINCT ON (walk.entity_id) walk.entity_id,
+            walk.current_id AS survivor_id
+           FROM survivor_walk walk
+          ORDER BY walk.entity_id, walk.depth DESC
+        ), resolved AS (
          SELECT holdings.fund_id,
             holdings.fund_name,
             holdings.holding_id,
@@ -1412,37 +1426,75 @@ execute $vc$create or replace view mart.fund_holdings_resolved as
             holdings.balance,
             holdings.confidence,
             holdings.raw_ref,
-            ( SELECT identifier.entity_id
-                   FROM staging.kg_identifiers identifier
-                  WHERE identifier.identifier_type = 'isin'::text AND identifier.identifier_value = holdings.isin
-                  ORDER BY identifier.transaction_time DESC, identifier.confidence DESC, identifier.id DESC
-                 LIMIT 1) AS issuer_entity
+            COALESCE(
+                NULLIF(holdings.holding_id, ''::text)::uuid,
+                ( SELECT alias.entity_id
+                       FROM staging.entity_aliases alias
+                      WHERE alias.scheme = 'isin'::text AND alias.value = upper(holdings.isin)
+                      ORDER BY alias.transaction_time DESC, alias.confidence DESC, alias.alias_id DESC
+                     LIMIT 1)
+            ) AS holding_uuid
            FROM mart.fund_holdings holdings
+        ), linked AS (
+         SELECT resolved.*,
+            COALESCE(
+                ( SELECT COALESCE(sup.survivor_id, rel.from_entity_id)
+                       FROM staging.entity_relations rel
+                         LEFT JOIN survivors sup ON sup.entity_id = rel.from_entity_id
+                      WHERE rel.to_entity_id = resolved.holding_uuid AND rel.relation_type = 'issues'::text
+                      ORDER BY rel.transaction_time DESC, rel.relation_id DESC
+                     LIMIT 1),
+                COALESCE(self_sup.survivor_id, resolved.holding_uuid)
+            ) AS issuer_uuid
+           FROM resolved
+             LEFT JOIN survivors self_sup ON self_sup.entity_id = resolved.holding_uuid
         )
- SELECT resolved.fund_id,
-    resolved.fund_name,
-    resolved.report_period,
-    resolved.transaction_time,
-    resolved.holding_name,
-    resolved.isin,
-    resolved.percent_of_net_assets,
-    resolved.value_usd,
-    resolved.issuer_entity,
-    COALESCE(per_isin_ticker.identifier_value, issuer_ticker.identifier_value) AS ticker,
+ SELECT linked.fund_id,
+    linked.fund_name,
+    linked.report_period,
+    linked.transaction_time,
+    linked.holding_name,
+    linked.isin,
+    linked.percent_of_net_assets,
+    linked.value_usd,
+    linked.issuer_uuid::text AS issuer_entity,
+    COALESCE(listing_alias.ticker, holding_ticker.value, issuer_ticker.value) AS ticker,
+    COALESCE(
+        listing_alias.listing_id,
         CASE
-            WHEN COALESCE(per_isin_ticker.identifier_value, issuer_ticker.identifier_value) IS NOT NULL THEN 'listing:xnas:'::text || lower(COALESCE(per_isin_ticker.identifier_value, issuer_ticker.identifier_value))
+            WHEN COALESCE(listing_alias.ticker, holding_ticker.value, issuer_ticker.value) IS NOT NULL THEN 'listing:xnas:'::text || lower(COALESCE(listing_alias.ticker, holding_ticker.value, issuer_ticker.value))
             ELSE NULL::text
-        END AS listing_id
-   FROM resolved
-     LEFT JOIN LATERAL ( SELECT identifier.identifier_value
-           FROM staging.kg_identifiers identifier
-          WHERE identifier.identifier_type = 'ticker'::text AND identifier.entity_id = ('company:isin:'::text || resolved.isin)
-          ORDER BY identifier.transaction_time DESC, identifier.confidence DESC, identifier.id DESC
-         LIMIT 1) per_isin_ticker ON true
-     LEFT JOIN LATERAL ( SELECT identifier.identifier_value
-           FROM staging.kg_identifiers identifier
-          WHERE identifier.identifier_type = 'ticker'::text AND identifier.entity_id = resolved.issuer_entity AND (resolved.issuer_entity ~~ 'issuer:cik:%'::text OR resolved.issuer_entity ~~ 'company:cik:%'::text)
-          ORDER BY identifier.transaction_time DESC, identifier.confidence DESC, identifier.id DESC
+        END
+    ) AS listing_id
+   FROM linked
+     LEFT JOIN LATERAL ( SELECT
+                CASE
+                    WHEN alias.scheme = 'mic-ticker'::text THEN upper(split_part(alias.value, ':'::text, 2))
+                    WHEN alias.scheme = 'legacy-id'::text AND alias.value ~ '^listing:[0-9a-z]{4}:[0-9a-z][0-9a-z.\-]*$'::text THEN upper(split_part(alias.value, ':'::text, 3))
+                    WHEN alias.scheme = 'ticker'::text THEN upper(alias.value)
+                    ELSE NULL::text
+                END AS ticker,
+                CASE
+                    WHEN alias.scheme = 'legacy-id'::text AND alias.value ~ '^listing:[0-9a-z]{4}:[0-9a-z][0-9a-z.\-]*$'::text THEN alias.value
+                    WHEN alias.scheme = 'mic-ticker'::text THEN ('listing:'::text || lower(split_part(alias.value, ':'::text, 1))) || ':'::text || lower(split_part(alias.value, ':'::text, 2))
+                    ELSE NULL::text
+                END AS listing_id
+           FROM staging.entity_relations rel
+             JOIN staging.entity_aliases alias ON alias.entity_id = rel.to_entity_id
+          WHERE rel.from_entity_id = linked.holding_uuid
+            AND rel.relation_type = 'listed_as'::text
+            AND (alias.scheme = 'mic-ticker'::text OR alias.scheme = 'ticker'::text OR (alias.scheme = 'legacy-id'::text AND alias.value ~ '^listing:[0-9a-z]{4}:[0-9a-z][0-9a-z.\-]*$'::text))
+          ORDER BY (alias.scheme = 'mic-ticker'::text) DESC, (alias.scheme = 'legacy-id'::text) DESC, alias.confidence DESC, alias.transaction_time DESC, alias.alias_id DESC
+         LIMIT 1) listing_alias ON true
+     LEFT JOIN LATERAL ( SELECT upper(alias.value) AS value
+           FROM staging.entity_aliases alias
+          WHERE alias.entity_id = linked.holding_uuid AND alias.scheme = 'ticker'::text
+          ORDER BY alias.transaction_time DESC, alias.confidence DESC, alias.alias_id DESC
+         LIMIT 1) holding_ticker ON true
+     LEFT JOIN LATERAL ( SELECT upper(alias.value) AS value
+           FROM staging.entity_aliases alias
+          WHERE alias.entity_id = linked.issuer_uuid AND alias.scheme = 'ticker'::text
+          ORDER BY alias.transaction_time DESC, alias.confidence DESC, alias.alias_id DESC
          LIMIT 1) issuer_ticker ON true$vc$;
 end if; end $$;
 do $$ begin if to_regclass('mart.macro_series_status') is null then

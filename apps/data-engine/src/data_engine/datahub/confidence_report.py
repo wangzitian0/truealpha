@@ -847,9 +847,12 @@ def load_index_membership(
         (source.etf, cutoff),
     ).fetchall()
     fund = connection.execute(
-        "select entity_id from staging.kg_identifiers where identifier_type = 'ticker' and identifier_value = %s "
-        "and entity_id like 'etf:series:%%' order by transaction_time desc, id desc limit 1",
-        (str(source.nport_ticker).upper(),),
+        "select e.entity_id::text from staging.entities e "
+        "join staging.entity_aliases ea on ea.entity_id = e.entity_id "
+        "where e.kind = 'fund' and ea.scheme in ('ticker', 'name', 'legacy-id') "
+        "and upper(ea.value) in (%s, %s) "
+        "order by (ea.scheme = 'ticker') desc, ea.transaction_time desc, ea.alias_id desc limit 1",
+        (str(source.nport_ticker).upper(), f"ETF:SERIES:{str(source.nport_ticker).upper()}"),
     ).fetchone()
     holdings: list[Any] = []
     vintage: dict[str, Any] = {}

@@ -262,13 +262,6 @@ create table if not exists staging.issuer_segment_revenue_facts (
  constraint issuer_segment_revenue_facts_source_check CHECK ((source <> ''::text))
 );
 
-create table if not exists staging.kg_entities (
- id text not null,
- entity_type text not null,
- display_name text not null,
- constraint kg_entities_pkey PRIMARY KEY (id)
-);
-
 create table if not exists staging.landed_fetch_keys (
  seat text not null,
  endpoint text not null,
@@ -524,10 +517,28 @@ create table if not exists staging.evidence_edges (
  constraint evidence_edges_to_id_fkey FOREIGN KEY (to_id) REFERENCES staging.evidence_nodes(node_id)
 );
 
+create table if not exists staging.entities (
+ entity_id uuid not null,
+ kind text not null,
+ mint_rule text not null,
+ minted_at timestamp with time zone default clock_timestamp() not null,
+ minted_by text not null,
+ birth_scheme text not null,
+ birth_value text not null,
+ birth_generation integer default 1 not null,
+ constraint entities_pkey PRIMARY KEY (entity_id),
+ constraint entities_birth_generation_check CHECK ((birth_generation >= 1)),
+ constraint entities_mint_rule_check CHECK ((mint_rule = 'uuidv5:v1'::text)),
+ constraint entities_minted_by_check CHECK ((length(minted_by) > 0)),
+ constraint entity_id_is_uuidv5 CHECK ((SUBSTRING((entity_id)::text FROM 15 FOR 1) = '5'::text)),
+ constraint entities_birth_scheme_fkey FOREIGN KEY (birth_scheme) REFERENCES staging.entity_alias_schemes(scheme),
+ constraint entities_kind_fkey FOREIGN KEY (kind) REFERENCES staging.entity_kinds(kind)
+);
+
 create table if not exists staging.analyst_rating_events (
  id bigint generated always as identity,
- analyst_id text not null,
- company_id text not null,
+ analyst_id uuid not null,
+ company_id uuid not null,
  recommendation_at timestamp with time zone not null,
  transaction_time timestamp with time zone not null,
  vendor_updated_at timestamp with time zone,
@@ -546,14 +557,14 @@ create table if not exists staging.analyst_rating_events (
  constraint analyst_rating_events_currency_check CHECK (((currency IS NULL) OR (currency ~ '^[A-Z]{3}$'::text))),
  constraint analyst_rating_events_rating_check CHECK (((rating >= 1) AND (rating <= 5))),
  constraint analyst_rating_events_target_price_check CHECK ((target_price >= (0)::numeric)),
- constraint analyst_rating_events_analyst_id_fkey FOREIGN KEY (analyst_id) REFERENCES staging.kg_entities(id),
- constraint analyst_rating_events_company_id_fkey FOREIGN KEY (company_id) REFERENCES staging.kg_entities(id)
+ constraint analyst_rating_events_analyst_id_fkey FOREIGN KEY (analyst_id) REFERENCES staging.entities(entity_id),
+ constraint analyst_rating_events_company_id_fkey FOREIGN KEY (company_id) REFERENCES staging.entities(entity_id)
 );
 
 create table if not exists staging.fund_holding_facts (
  id bigint generated always as identity,
- fund_id text not null,
- holding_id text,
+ fund_id uuid not null,
+ holding_id uuid,
  holding_name text not null,
  report_period date not null,
  transaction_time timestamp with time zone not null,
@@ -569,44 +580,8 @@ create table if not exists staging.fund_holding_facts (
  constraint fund_holding_facts_pkey PRIMARY KEY (id),
  constraint fund_holding_facts_check CHECK ((recorded_at >= transaction_time)),
  constraint fund_holding_facts_confidence_check CHECK (((confidence >= (0)::numeric) AND (confidence <= (1)::numeric))),
- constraint fund_holding_facts_fund_id_fkey FOREIGN KEY (fund_id) REFERENCES staging.kg_entities(id),
- constraint fund_holding_facts_holding_id_fkey FOREIGN KEY (holding_id) REFERENCES staging.kg_entities(id)
-);
-
-create table if not exists staging.kg_edges (
- id bigint generated always as identity,
- from_id text not null,
- to_id text not null,
- relation_type text not null,
- valid_time daterange not null,
- transaction_time timestamp with time zone not null,
- confidence numeric not null,
- source text not null,
- raw_ref text not null,
- recorded_at timestamp with time zone default now() not null,
- constraint kg_edges_pkey PRIMARY KEY (id),
- constraint kg_edges_confidence_check CHECK (((confidence >= (0)::numeric) AND (confidence <= (1)::numeric))),
- constraint kg_edges_recorded_after_knowable CHECK ((recorded_at >= transaction_time)),
- constraint kg_edges_from_id_fkey FOREIGN KEY (from_id) REFERENCES staging.kg_entities(id),
- constraint kg_edges_to_id_fkey FOREIGN KEY (to_id) REFERENCES staging.kg_entities(id)
-);
-
-create table if not exists staging.kg_identifiers (
- id bigint generated always as identity,
- entity_id text not null,
- source text not null,
- identifier_type text not null,
- identifier_value text not null,
- valid_time daterange not null,
- transaction_time timestamp with time zone not null,
- recorded_at timestamp with time zone default now() not null,
- confidence numeric not null,
- raw_ref text not null,
- constraint kg_identifiers_pkey PRIMARY KEY (id),
- constraint kg_identifiers_source_identifier_type_identifier_value_tran_key UNIQUE (source, identifier_type, identifier_value, transaction_time),
- constraint kg_identifiers_check CHECK ((recorded_at >= transaction_time)),
- constraint kg_identifiers_confidence_check CHECK (((confidence >= (0)::numeric) AND (confidence <= (1)::numeric))),
- constraint kg_identifiers_entity_id_fkey FOREIGN KEY (entity_id) REFERENCES staging.kg_entities(id)
+ constraint fund_holding_facts_fund_id_fkey FOREIGN KEY (fund_id) REFERENCES staging.entities(entity_id),
+ constraint fund_holding_facts_holding_id_fkey FOREIGN KEY (holding_id) REFERENCES staging.entities(entity_id)
 );
 
 create table if not exists staging.topt_core_snapshot_members (
@@ -625,24 +600,6 @@ create table if not exists staging.topt_core_snapshot_members (
  constraint topt_core_snapshot_members_member_sha256_check CHECK ((member_sha256 ~ '^[0-9a-f]{64}$'::text)),
  constraint topt_core_snapshot_members_observation_ids_check CHECK (((cardinality(observation_ids) >= 4) AND ((cardinality(observation_ids) % 4) = 0))),
  constraint topt_core_snapshot_members_snapshot_id_fkey FOREIGN KEY (snapshot_id) REFERENCES staging.topt_core_snapshots(snapshot_id)
-);
-
-create table if not exists staging.entities (
- entity_id uuid not null,
- kind text not null,
- mint_rule text not null,
- minted_at timestamp with time zone default clock_timestamp() not null,
- minted_by text not null,
- birth_scheme text not null,
- birth_value text not null,
- birth_generation integer default 1 not null,
- constraint entities_pkey PRIMARY KEY (entity_id),
- constraint entities_birth_generation_check CHECK ((birth_generation >= 1)),
- constraint entities_mint_rule_check CHECK ((mint_rule = 'uuidv5:v1'::text)),
- constraint entities_minted_by_check CHECK ((length(minted_by) > 0)),
- constraint entity_id_is_uuidv5 CHECK ((SUBSTRING((entity_id)::text FROM 15 FOR 1) = '5'::text)),
- constraint entities_birth_scheme_fkey FOREIGN KEY (birth_scheme) REFERENCES staging.entity_alias_schemes(scheme),
- constraint entities_kind_fkey FOREIGN KEY (kind) REFERENCES staging.entity_kinds(kind)
 );
 
 create table if not exists staging.capture_entity_refs (
@@ -910,6 +867,44 @@ begin
                 v_survivor := staging.entity_mint(v_component.kind, v_birth_scheme, v_birth_value, v_version);
                 insert into pg_temp.entity_backfill_survivors (entity_id, survivor_id)
                 values (v_survivor, v_survivor);
+            elsif not exists (
+                select 1 from staging.entities entity
+                where entity.entity_id = any(v_existing)
+                  and entity.birth_value not like 'company:isin:%'
+            ) then
+                v_survivor := staging.entity_mint(v_component.kind, v_birth_scheme, v_birth_value, v_version);
+                insert into pg_temp.entity_backfill_survivors (entity_id, survivor_id)
+                values (v_survivor, v_survivor);
+                select max(claim.transaction_time),
+                       jsonb_build_object(
+                           'component', v_component.component,
+                           'crosswalk', coalesce(
+                               jsonb_agg(claim.evidence) filter (where claim.method = 'crosswalk'),
+                               '[]'::jsonb))
+                  into v_merge_known, v_merge_evidence
+                from pg_temp.entity_backfill_claims claim
+                where claim.claim = 'alias' and claim.status = 'planned'
+                  and claim.kind = v_component.kind and claim.component = v_component.component;
+                for v_loser in
+                    select entity.entity_id from staging.entities entity
+                    where entity.entity_id = any(v_existing)
+                    order by entity.birth_scheme, entity.birth_value, entity.birth_generation
+                loop
+                    insert into staging.entity_relations
+                        (relation_id, relation_type, from_entity_id, to_entity_id, valid_from,
+                         transaction_time, source, raw_ref, method, confidence, evidence,
+                         mapping_version)
+                    select staging.entity_relation_uuid(
+                               edge.relation_type, v_loser, v_survivor, '-infinity',
+                               v_merge_known, 'entity-backfill', 'merge'),
+                           edge.relation_type, v_loser, v_survivor, '-infinity',
+                           v_merge_known, 'entity-backfill', v_component.component, 'merge', 1.0,
+                           v_merge_evidence, v_version
+                    from (values ('same_as'), ('superseded_by')) as edge (relation_type);
+                    update pg_temp.entity_backfill_survivors
+                       set survivor_id = v_survivor
+                     where survivor_id = v_loser;
+                end loop;
             else
                 -- The survivor follows the same rule: the entity born from the component's
                 -- birth alias, else the one whose birth alias became knowable first. A store
@@ -1145,11 +1140,14 @@ AS $function$
                 select 1 from staging.fund_holding_facts
                 where recorded_at > coalesce(p_since, '-infinity'::timestamptz))
           or exists (
-                select 1 from staging.kg_identifiers
-                where recorded_at > coalesce(p_since, '-infinity'::timestamptz))
+                select 1 from staging.entity_aliases
+                where scheme = 'isin'
+                  and mapping_version not like 'entity-backfill%'
+                  and recorded_at > coalesce(p_since, '-infinity'::timestamptz))
           or exists (
-                select 1 from staging.kg_edges
-                where recorded_at > coalesce(p_since, '-infinity'::timestamptz))
+                select 1 from staging.entity_relations
+                where mapping_version not like 'entity-backfill%'
+                  and recorded_at > coalesce(p_since, '-infinity'::timestamptz))
             then 'new-crosswalk-evidence'
     end;
 $function$;
@@ -1170,8 +1168,8 @@ AS $function$
         (select max(recorded_at) from staging.capture_normalized_observations),
         (select max(recorded_at) from staging.contract_objects where contract_kind like 'universe-list:%'),
         (select max(recorded_at) from staging.fund_holding_facts),
-        (select max(recorded_at) from staging.kg_identifiers),
-        (select max(recorded_at) from staging.kg_edges));
+        (select max(recorded_at) from staging.entity_aliases where scheme = 'isin' and mapping_version not like 'entity-backfill%'),
+        (select max(recorded_at) from staging.entity_relations where mapping_version not like 'entity-backfill%'));
 $function$;
 CREATE OR REPLACE FUNCTION staging.entity_kind_is_a(p_kind text, p_ancestor text)
  RETURNS boolean
@@ -1681,36 +1679,42 @@ with usage as (
            upper(line.cusip) as cusip,
            upper(line.isin) as isin,
            line.report_period,
-           lpad(substring(coalesce(hop.to_id, identifier.entity_id)
-                          from '^(?:issuer|company):cik:([0-9]{1,10})$'), 10, '0') as cik,
-           greatest(line.transaction_time, identifier.transaction_time, hop.transaction_time) as known_at,
-           least(line.confidence, identifier.confidence, hop.confidence) as confidence,
+           cik_alias.value as cik,
+           greatest(line.transaction_time, isin_alias.transaction_time, cik_alias.transaction_time, coalesce(rel.transaction_time, line.transaction_time)) as known_at,
+           least(line.confidence, isin_alias.confidence, cik_alias.confidence, coalesce(rel.confidence, 1.0)) as confidence,
            line.raw_ref,
            jsonb_build_object(
                'fund_holding_fact_id', line.id,
                'nport_raw_ref', line.raw_ref,
-               'kg_identifier_id', identifier.id,
-               'kg_identifier_raw_ref', identifier.raw_ref,
-               'kg_same_as_edge_id', hop.id,
-               'kg_entity_id', coalesce(hop.to_id, identifier.entity_id)) as evidence
+               'isin_alias_id', isin_alias.alias_id,
+               'isin_raw_ref', isin_alias.raw_ref,
+               'issues_relation_id', rel.relation_id,
+               'issuer_entity_id', coalesce(rel.from_entity_id, isin_alias.entity_id)) as evidence
     from staging.fund_holding_facts line
     cross join lateral (
-        select kg.id, kg.entity_id, kg.transaction_time, kg.confidence, kg.raw_ref
-        from staging.kg_identifiers kg
-        where kg.identifier_type = 'isin' and kg.identifier_value = line.isin
-        order by kg.transaction_time desc, kg.confidence desc, kg.id desc
+        select ea.alias_id, ea.entity_id, ea.transaction_time, ea.confidence, ea.raw_ref
+        from staging.entity_aliases ea
+        where ea.scheme = 'isin' and ea.value = upper(line.isin)
+        order by ea.transaction_time desc, ea.confidence desc, ea.alias_id desc
         limit 1
-    ) identifier
+    ) isin_alias
     left join lateral (
-        select edge.id, edge.to_id, edge.transaction_time, edge.confidence
-        from staging.kg_edges edge
-        where edge.from_id = identifier.entity_id and edge.relation_type = 'same_as'
-        order by edge.transaction_time desc, edge.id desc
+        select r.relation_id, r.from_entity_id, r.transaction_time, r.confidence
+        from staging.entity_relations r
+        where r.to_entity_id = isin_alias.entity_id and r.relation_type = 'issues'
+        order by r.transaction_time desc, r.relation_id desc
         limit 1
-    ) hop on true
+    ) rel on true
+    cross join lateral (
+        select ea.value, ea.transaction_time, ea.confidence
+        from staging.entity_aliases ea
+        where ea.entity_id = staging.entity_survivor(coalesce(rel.from_entity_id, isin_alias.entity_id), 'infinity'::timestamptz)
+          and ea.scheme = 'cik'
+        order by ea.transaction_time desc, ea.confidence desc, ea.alias_id desc
+        limit 1
+    ) cik_alias
     where line.lei ~ '^[0-9A-Za-z]{20}$'
       and line.isin ~ '^[0-9A-Za-z]{12}$'
-      and coalesce(hop.to_id, identifier.entity_id) ~ '^(issuer|company):cik:[0-9]{1,10}$'
 ), lei_link as (
     select lei,
            count(distinct cik) as ciks,
@@ -2076,8 +2080,6 @@ do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'staging.fun
 do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'staging.issuer_cik_predecessors'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = '829de5f44febe7eb69d98026f74e98b0') then drop trigger if exists reject_mutation on staging.issuer_cik_predecessors; CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON staging.issuer_cik_predecessors FOR EACH ROW EXECUTE FUNCTION staging.reject_cik_predecessor_mutation(); end if; end $$;
 do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'staging.issuer_headcount_facts'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = '4e060aa7687460b6e7a3a7a68975faf9') then drop trigger if exists reject_mutation on staging.issuer_headcount_facts; CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON staging.issuer_headcount_facts FOR EACH ROW EXECUTE FUNCTION raw.reject_mutation(); end if; end $$;
 do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'staging.issuer_segment_revenue_facts'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = '6f6441f8cbf8b43ad6db6cca44cab3ed') then drop trigger if exists reject_mutation on staging.issuer_segment_revenue_facts; CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON staging.issuer_segment_revenue_facts FOR EACH ROW EXECUTE FUNCTION raw.reject_mutation(); end if; end $$;
-do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'staging.kg_edges'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = '572cf682a0232a92f7dfcb395ce195f0') then drop trigger if exists trg_kg_edges_append_only on staging.kg_edges; CREATE TRIGGER trg_kg_edges_append_only BEFORE DELETE OR UPDATE ON staging.kg_edges FOR EACH ROW EXECUTE FUNCTION staging.reject_point_in_time_mutation(); end if; end $$;
-do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'staging.kg_identifiers'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = 'bef9f7946f878a1330ef7372b5ff07b8') then drop trigger if exists trg_kg_identifiers_append_only on staging.kg_identifiers; CREATE TRIGGER trg_kg_identifiers_append_only BEFORE DELETE OR UPDATE ON staging.kg_identifiers FOR EACH ROW EXECUTE FUNCTION staging.reject_point_in_time_mutation(); end if; end $$;
 do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'staging.market_prices_daily'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = '1afdcd030642604e375467d5deafaa36') then drop trigger if exists trg_market_prices_daily_append_only on staging.market_prices_daily; CREATE TRIGGER trg_market_prices_daily_append_only BEFORE DELETE OR UPDATE ON staging.market_prices_daily FOR EACH ROW EXECUTE FUNCTION staging.reject_point_in_time_mutation(); end if; end $$;
 do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'staging.market_prices_monthly'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = 'ef67524e52b3fd8f6439fefc23ba258e') then drop trigger if exists trg_market_prices_monthly_append_only on staging.market_prices_monthly; CREATE TRIGGER trg_market_prices_monthly_append_only BEFORE DELETE OR UPDATE ON staging.market_prices_monthly FOR EACH ROW EXECUTE FUNCTION staging.reject_point_in_time_mutation(); end if; end $$;
 do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'staging.model_invocations'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = 'f4eed3ab505235da7ad42f852a85b296') then drop trigger if exists reject_mutation on staging.model_invocations; CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON staging.model_invocations FOR EACH ROW EXECUTE FUNCTION raw.reject_mutation(); end if; end $$;
@@ -2108,10 +2110,6 @@ do $$ begin if to_regclass('staging.idx_fund_holding_facts_asof') is null then C
 do $$ begin if to_regclass('staging.uq_fund_holding_line_vintage') is null then CREATE UNIQUE INDEX uq_fund_holding_line_vintage ON staging.fund_holding_facts USING btree (fund_id, holding_name, report_period, transaction_time, COALESCE(isin, ''::text), COALESCE(cusip, ''::text)); end if; end $$;
 do $$ begin if to_regclass('staging.idx_issuer_headcount_pit') is null then CREATE INDEX idx_issuer_headcount_pit ON staging.issuer_headcount_facts USING btree (cik, knowable_at DESC); end if; end $$;
 do $$ begin if to_regclass('staging.ix_issuer_segment_revenue_facts_pit') is null then CREATE INDEX ix_issuer_segment_revenue_facts_pit ON staging.issuer_segment_revenue_facts USING btree (cik, knowable_at DESC); end if; end $$;
-do $$ begin if to_regclass('staging.idx_kg_edges_asof') is null then CREATE INDEX idx_kg_edges_asof ON staging.kg_edges USING btree (from_id, relation_type, transaction_time DESC); end if; end $$;
-do $$ begin if to_regclass('staging.uq_kg_edges_vintage') is null then CREATE UNIQUE INDEX uq_kg_edges_vintage ON staging.kg_edges USING btree (from_id, to_id, relation_type, transaction_time, source, COALESCE(raw_ref, ''::text)); end if; end $$;
-do $$ begin if to_regclass('staging.idx_kg_identifiers_entity_type') is null then CREATE INDEX idx_kg_identifiers_entity_type ON staging.kg_identifiers USING btree (entity_id, identifier_type); end if; end $$;
-do $$ begin if to_regclass('staging.idx_kg_identifiers_type_value') is null then CREATE INDEX idx_kg_identifiers_type_value ON staging.kg_identifiers USING btree (identifier_type, identifier_value); end if; end $$;
 do $$ begin if to_regclass('staging.idx_market_prices_daily_symbol_date') is null then CREATE INDEX idx_market_prices_daily_symbol_date ON staging.market_prices_daily USING btree (symbol, trading_date, transaction_time DESC, recorded_at DESC); end if; end $$;
 do $$ begin if to_regclass('staging.idx_market_prices_monthly_symbol_date') is null then CREATE INDEX idx_market_prices_monthly_symbol_date ON staging.market_prices_monthly USING btree (symbol, trading_date, transaction_time DESC, recorded_at DESC); end if; end $$;
 do $$ begin if to_regclass('staging.ix_model_invocations_subject') is null then CREATE INDEX ix_model_invocations_subject ON staging.model_invocations USING btree (subject_cik, accession, prompt_sha256, model, id DESC); end if; end $$;
@@ -2165,6 +2163,8 @@ from (values
      'Registered fund series id (S000…). No writer yet.'),
     ('moomoo-code', 'listing', true, true, '^[A-Z]{2}\.[A-Z0-9][A-Z0-9.\-]*$', 'moomoo OpenAPI',
      'Market-prefixed quote code, for example US.AAPL. No writer yet.'),
+    ('ticker', 'entity', false, true, '^[A-Z0-9][A-Z0-9.\-]*$', 'the asserting source',
+     'Unqualified trading symbol asserted when venue MIC is unknown.'),
     ('name', 'entity', false, true, '^\S(.*\S)?$', 'the asserting source',
      'A display label. Not unique; never resolves an entity.')
 ) as seed (scheme, applies_to_kind, is_unique, value_reusable, value_pattern, authority, description)

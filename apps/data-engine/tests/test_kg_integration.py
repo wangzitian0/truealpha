@@ -52,54 +52,54 @@ def _ident(conn, entity_id, value, *, transaction_time=T1, confidence=0.98, id_t
 
 
 def test_identifier_roundtrip_idempotency_and_lookup(conn):
-    uid = uuid.uuid4().hex[:10]
+    uid = uuid.uuid4().hex[:8]
     company = f"company:test:{uid}"
-    code = f"US.T{uid}"
-    er.ensure_entity(conn, company, "company", f"Test Co {uid}")
-    er.ensure_entity(conn, company, "company", "different name")  # first writer wins, no error
+    code = f"US.T{uid.upper()}"
+    company_uuid = str(er.ensure_entity(conn, company, "listing", f"Test Co {uid}"))
+    er.ensure_entity(conn, company, "listing", "different name")
 
-    assert _ident(conn, company, code, transaction_time=T1)
+    assert _ident(conn, company_uuid, code, transaction_time=T1)
     # identical assertion later -> already current, skipped
-    assert not _ident(conn, company, code, transaction_time=T2)
+    assert not _ident(conn, company_uuid, code, transaction_time=T2)
     # a changed assertion (new confidence) -> new vintage
-    assert _ident(conn, company, code, transaction_time=T2, confidence=0.9)
+    assert _ident(conn, company_uuid, code, transaction_time=T2, confidence=0.9)
 
-    assert er.resolve(conn, "moomoo", code, as_of=NOW) == company
+    assert er.resolve(conn, "moomoo", code, as_of=NOW) == company_uuid
     assert er.resolve(conn, "moomoo", code, as_of=datetime(2026, 6, 1, tzinfo=UTC)) is None  # before T1
     assert er.resolve(conn, "moomoo", "US.DOES_NOT_EXIST", as_of=NOW) is None
-    assert er.crosswalk(conn, company, as_of=NOW) == {"moomoo": [code]}
-    assert (code, company) in er.identifiers(conn, "moomoo", as_of=NOW)
+    assert er.crosswalk(conn, company_uuid, as_of=NOW) == {"moomoo": [code]}
+    assert (code, company_uuid) in er.identifiers(conn, "moomoo", as_of=NOW)
 
 
 def test_identifier_correction_can_be_corrected_back(conn):
     """Identifier rows are pointer-like: after X->A is superseded by X->B,
     re-asserting X->A must append a vintage that wins in resolve() — deduping
     against all history would make the supersession permanent."""
-    uid = uuid.uuid4().hex[:10]
+    uid = uuid.uuid4().hex[:8]
     a, b = f"company:test:{uid}a", f"company:test:{uid}b"
-    isin = f"XX{uid}"
-    er.ensure_entity(conn, a, "company", "A")
-    er.ensure_entity(conn, b, "company", "B")
+    isin = f"XX{uid.upper()}01"
+    a_uuid = str(er.ensure_entity(conn, a, "instrument", "A"))
+    b_uuid = str(er.ensure_entity(conn, b, "instrument", "B"))
 
-    assert _ident(conn, a, isin, id_type="isin", transaction_time=T1)
-    assert _ident(conn, b, isin, id_type="isin", transaction_time=T2)  # bad upstream data
-    assert er.resolve(conn, "isin", isin, as_of=NOW) == b
-    assert _ident(conn, a, isin, id_type="isin", transaction_time=T3)  # corrected back — must insert
-    assert er.resolve(conn, "isin", isin, as_of=NOW) == a
+    assert _ident(conn, a_uuid, isin, id_type="isin", transaction_time=T1)
+    assert _ident(conn, b_uuid, isin, id_type="isin", transaction_time=T2)  # bad upstream data
+    assert er.resolve(conn, "isin", isin, as_of=NOW) == b_uuid
+    assert _ident(conn, a_uuid, isin, id_type="isin", transaction_time=T3)  # corrected back — must insert
+    assert er.resolve(conn, "isin", isin, as_of=NOW) == a_uuid
     # and re-asserting what is now current is a no-op
-    assert not _ident(conn, a, isin, id_type="isin", transaction_time=T3)
+    assert not _ident(conn, a_uuid, isin, id_type="isin", transaction_time=T3)
 
 
 def test_resolve_follows_one_merge_hop(conn):
-    uid = uuid.uuid4().hex[:10]
+    uid = uuid.uuid4().hex[:8]
     a, b = f"company:test:{uid}a", f"company:test:{uid}b"
-    er.ensure_entity(conn, a, "company", "A")
-    er.ensure_entity(conn, b, "company", "B")
-    _ident(conn, a, f"XX{uid}", id_type="isin")
+    a_uuid = str(er.ensure_entity(conn, a, "instrument", "A"))
+    b_uuid = str(er.ensure_entity(conn, b, "instrument", "B"))
+    _ident(conn, a_uuid, f"XX{uid.upper()}02", id_type="isin")
     er.add_edge(
         conn,
-        from_id=a,
-        to_id=b,
+        from_id=a_uuid,
+        to_id=b_uuid,
         relation_type="same_as",
         confidence=0.9,
         source="test",
@@ -107,20 +107,20 @@ def test_resolve_follows_one_merge_hop(conn):
         valid_from="2026-07-02",
         raw_ref=REF,
     )
-    assert er.resolve(conn, "isin", f"XX{uid}", as_of=NOW) == b
+    assert er.resolve(conn, "isin", f"XX{uid.upper()}02", as_of=NOW) == b_uuid
 
 
 def test_holds_edge_rerun_skips_and_new_filing_appends(conn):
-    uid = uuid.uuid4().hex[:10]
+    uid = uuid.uuid4().hex[:8]
     etf, company = f"etf:test:{uid}", f"company:test:{uid}"
-    er.ensure_entity(conn, etf, "etf", "Test ETF")
-    er.ensure_entity(conn, company, "company", "Held Co")
+    etf_uuid = er.ensure_entity(conn, etf, "etf", "Test ETF")
+    inst_uuid = er.ensure_entity(conn, company, "instrument", "Held Co")
 
     def hold(tx, valid):
         return er.add_edge(
             conn,
-            from_id=etf,
-            to_id=company,
+            from_id=etf_uuid,
+            to_id=inst_uuid,
             relation_type="holds",
             confidence=1.0,
             source="nport",
@@ -137,8 +137,8 @@ def test_holds_edge_rerun_skips_and_new_filing_appends(conn):
     # revision: same pair, revised confidence -> new vintage.
     assert er.add_edge(
         conn,
-        from_id=etf,
-        to_id=company,
+        from_id=etf_uuid,
+        to_id=inst_uuid,
         relation_type="holds",
         confidence=0.9,
         source="nport",
@@ -152,10 +152,10 @@ def test_fund_holding_dual_lines_coexist_and_rerun_conflicts_away(conn):
     """MCHI really holds one issuer via the A-share AND H-share line in one
     period with an identical name — 0005's unique key keeps both, and a re-run
     of the same filing collapses onto the existing rows (on conflict)."""
-    uid = uuid.uuid4().hex[:10]
+    uid = uuid.uuid4().hex[:8]
     etf, company = f"etf:test:{uid}", f"company:test:{uid}"
-    er.ensure_entity(conn, etf, "etf", "Test ETF")
-    er.ensure_entity(conn, company, "company", "Ping An Test")
+    etf_uuid = er.ensure_entity(conn, etf, "etf", "Test ETF")
+    inst_uuid = er.ensure_entity(conn, company, "instrument", "Ping An Test")
 
     def line(isin, pct, value):
         return conn.execute(
@@ -167,7 +167,7 @@ def test_fund_holding_dual_lines_coexist_and_rerun_conflicts_away(conn):
             on conflict do nothing
             returning id
             """,
-            (etf, company, T1, isin, value, pct, REF),
+            (etf_uuid, inst_uuid, T1, isin, value, pct, REF),
         ).fetchone()
 
     assert line("CNE000001R84", 2.08, 1000.0) is not None
@@ -209,3 +209,32 @@ def test_the_moomoo_reads_count_the_rows_the_one_writer_wrote(conn, monkeypatch)
     monkeypatch.setattr(ledger, "distinct_stock_quota", lambda: len(ledger.kline_distinct_stocks_7d()))
     with pytest.raises(ledger.BudgetExceededError):
         ledger.gate("request_history_kline", "test", request_uri="moomoo://US.NEW_STOCK_OVER_QUOTA")
+
+
+def test_slice2_backfill_cli_verifies_fk_refs_without_legacy_tables(conn):
+    import importlib.util
+    from pathlib import Path
+
+    script_path = Path(__file__).resolve().parents[1] / "scripts" / "backfill_slice2_kg_to_uuid.py"
+    spec = importlib.util.spec_from_file_location("backfill_slice2_kg_to_uuid", script_path)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    import sys
+
+    sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+
+    analyst_uuid = er.ensure_entity(conn, "analyst:moomoo:test-b", "person", "Test Analyst B", transaction_time=T1)
+    company_uuid = er.ensure_entity(conn, "issuer:cik:0000320193", "issuer", "Apple Inc.", transaction_time=T1)
+    conn.execute(
+        """
+        insert into staging.analyst_rating_events
+            (analyst_id, company_id, recommendation_at, transaction_time, rating, confidence, raw_ref)
+        values (%s, %s, %s, %s, 5, 0.9, 'test:slice2-cli')
+        """,
+        (analyst_uuid, company_uuid, T1, T1),
+    )
+    report = mod.backfill_legacy_kg_to_uuid(conn, apply=False)
+    assert report.applied is False
+    assert report.rating_refs_checked >= 2
+    assert report.unmapped_refs == ()

@@ -69,15 +69,15 @@ def _resolve_issuer_display_name(
         (normalized,),
     ).fetchone():
         return str(row[0])
-    if (kg_ids := [item for item in (str(issuer_uuid) if issuer_uuid else "", issuer_raw.strip()) if item]) and (
-        kg_row := connection.execute(
-            "select nullif(btrim(display_name), '') from staging.kg_entities"
-            " where id = any(%s) and nullif(btrim(display_name), '') is not null"
-            " and upper(btrim(display_name)) <> %s and btrim(display_name) <> id limit 1",
-            (kg_ids, normalized),
+    if issuer_uuid and (
+        alias_row := connection.execute(
+            "select nullif(btrim(value), '') from staging.entity_aliases"
+            " where entity_id = %s and scheme = 'name' and nullif(btrim(value), '') is not null"
+            " and upper(btrim(value)) <> %s order by confidence desc, transaction_time desc, alias_id desc limit 1",
+            (issuer_uuid, normalized),
         ).fetchone()
     ):
-        return str(kg_row[0])
+        return str(alias_row[0])
     return _corpus_issuer_names().get(normalized)
 
 
