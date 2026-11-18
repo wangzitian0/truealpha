@@ -865,7 +865,7 @@ begin
     end if;
 
     if to_regclass('mart.entity_display_resolution') is null then
-        execute $vc$create or replace view mart.entity_display_resolution as
+        execute replace($vc$create or replace view mart.entity_display_resolution as
          WITH primary_listings AS (
                  SELECT DISTINCT ON (relation.from_entity_id) relation.from_entity_id AS issuer_id, relation.to_entity_id AS listing_id
                    FROM staging.entity_relations relation
@@ -885,7 +885,7 @@ begin
                  SELECT DISTINCT ON (m.issuer_id) m.issuer_id, m.listing_id,
                         CASE WHEN m.listing_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'::text THEN m.listing_id::uuid ELSE NULL::uuid END AS listing_uuid,
                         CASE WHEN m.issuer_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'::text THEN m.issuer_id::uuid ELSE (SELECT ea.entity_id FROM staging.entity_aliases ea WHERE ea.scheme = 'legacy-id'::text AND ea.value = m.issuer_id ORDER BY ea.transaction_time DESC, ea.alias_id DESC LIMIT 1) END AS issuer_uuid
-                   FROM staging.topt_core_snapshot_members m
+                   FROM staging.core_snapshot_members m
                      LEFT JOIN primary_listings primary_listing ON primary_listing.issuer_id = CASE WHEN m.issuer_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'::text THEN m.issuer_id::uuid ELSE NULL::uuid END
                       AND primary_listing.listing_id = CASE WHEN m.listing_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'::text THEN m.listing_id::uuid ELSE NULL::uuid END
                   ORDER BY m.issuer_id, (primary_listing.listing_id IS NOT NULL) DESC, m.created_at DESC, m.listing_id
@@ -911,7 +911,13 @@ begin
            FROM resolved_tickers rt
              LEFT JOIN issuer_names inam ON inam.entity_id = rt.issuer_uuid
              LEFT JOIN constituent_names cn ON cn.ticker = upper(rt.ticker)
-          ORDER BY rt.issuer_id$vc$;
+          ORDER BY rt.issuer_id$vc$,
+            'staging.core_snapshot_members',
+            case
+                when to_regclass('staging.topt_core_snapshot_members') is not null then 'staging.topt_core_snapshot_members'
+                else 'staging.core_snapshot_members'
+            end
+        );
     end if;
 
     if to_regclass('mart.entity_identity') is null then
