@@ -734,11 +734,11 @@ def test_a_head_that_fetches_opens_opend_once_for_every_ticker(
 def test_a_wide_row_issuer_id_that_is_not_a_uuid_ends_the_run_red_after_the_report(
     connection: psycopg.Connection[Any], head: question_coverage.GovernedHead
 ) -> None:
-    """`mart.topt_gppe_results.issuer_id` is plain text. A legacy id there must not crash the ops."""
-    connection.execute("set local session_replication_role = replica")  # the wide row is append-only
+    """`mart.metric_node_values.issuer_id` is plain text. A legacy id there must not crash the ops."""
+    connection.execute("set local session_replication_role = replica")  # metric_node_values is append-only
     connection.execute(
-        "update mart.topt_gppe_results set issuer_id = 'issuer:lei:XXXXXXXXXXXXXXXXXX77' "
-        "where run_id = %s and issuer_id = (select min(issuer_id) from mart.topt_gppe_results where run_id = %s)",
+        "update mart.metric_node_values set issuer_id = 'issuer:lei:XXXXXXXXXXXXXXXXXX77' "
+        "where run_id = %s and issuer_id = (select min(issuer_id) from mart.metric_node_values where run_id = %s)",
         (head.run_id, head.run_id),
     )
     connection.execute("set local session_replication_role = origin")
@@ -1305,11 +1305,9 @@ def test_the_wide_row_form_is_the_lower_case_hyphenated_uuid(value: str, expecte
 #: that is not here fails `test_every_run_scoped_issuer_table_is_covered`: add its real writer to
 #: `_write_every_table` and name it here.
 WRITERS = {
-    "topt_gppe_results": "the capture tick: the wide row, the reference form",
-    "topt_core_results": "the capture tick, from the same coordinates",
-    "metric_node_values": "the capture tick, long-table node values from the same coordinates",
+    "metric_node_values": "the capture tick, long-table node values from the snapshot",
     "strategy_input_coverage": "persist_strategy_input_coverage, from the run's own issuers",
-    "issuer_theme_purity": "materialize_theme_purity, members read from the wide row",
+    "issuer_theme_purity": "materialize_theme_purity, members read from the snapshot/node values",
     "issuer_supply_chain_exposure": "run_supply_chain_exposure",
     "issuer_analyst_ratings": "run_analyst_ratings",
 }

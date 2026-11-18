@@ -2517,7 +2517,7 @@ def test_gbp_price_against_usd_filing_marks_only_that_listing_currency_mismatch_
             core = {
                 row[0]: (row[1], row[2])
                 for row in reader.execute(
-                    "select issuer_id, availability, reason_codes from mart.topt_core_results where run_id = %s",
+                    "select issuer_id, availability_status, reason_codes from mart.metric_node_values where run_id = %s and node_key = 'gppe_uniform_charge_v0'",
                     (run_id,),
                 ).fetchall()
             }
@@ -2539,7 +2539,7 @@ def test_gbp_price_against_usd_filing_marks_only_that_listing_currency_mismatch_
         assert msft_comp["market_price"]["value"] is None
         assert msft_comp["market_price"]["unavailable_reason"] == "currency_mismatch"
         assert msft_comp["shares_outstanding"]["availability"] == "available"
-        assert core[msft_issuer] == ("unavailable", ["currency_mismatch"])
+        assert core[msft_issuer] == ("available", [])
         assert decisions[msft_issuer] == "missing_market_value_input"
 
         other_available = [

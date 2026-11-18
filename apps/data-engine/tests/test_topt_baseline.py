@@ -263,9 +263,9 @@ class Recording:
 
     def __init__(self, *answers: list[tuple[Any, ...]]) -> None:
         self.answers = list(answers)
-        self.asked: list[tuple[str, tuple[Any, ...]]] = []
+        self.asked: list[tuple[str, Any]] = []
 
-    def execute(self, sql: str, params: tuple[Any, ...] = ()) -> Answer:
+    def execute(self, sql: str, params: Any = ()) -> Answer:
         self.asked.append((sql, params))
         return Answer(self.answers.pop(0))
 
@@ -276,10 +276,10 @@ def test_the_gppe_reader_asks_for_the_run_of_the_head_and_compares_with_its_repo
     row = topt_baseline.read_gppe(connection, "capture-run:abc")
 
     assert row == Row("Q1", "pass", "Q1 GPPE 16/16 (100.0%) against 95.0%")
-    assert connection.asked[0][1] == ("capture-run:abc",)
+    assert connection.asked[0][1]["run_id"] == "capture-run:abc"
     assert connection.asked[1][1] == ("capture-run:abc",)
     assert "not_applicable" in connection.asked[0][0]
-    assert "mart.topt_gppe_results" in connection.asked[0][0]
+    assert "mart.metric_node_values" in connection.asked[0][0]
     assert "mart.question_coverage_report" in connection.asked[1][0]
 
 
@@ -552,45 +552,33 @@ def seed_head(connection: psycopg.Connection[Any], run_id: str, *, age_hours: fl
 def seed_gppe(
     connection: psycopg.Connection[Any], run_id: str, rows: list[tuple[str, str, str | None, int | None]]
 ) -> None:
-    """One GPPE row per tuple: issuer, availability, availability_status, gppe. The rows satisfy the checks of the
-    table: an available row holds its values and no reason, an unavailable row holds a reason and no value. The
-    foreign key to the invocation is off for the insert: the test reads the result table and nothing upstream."""
-    connection.execute("set session_replication_role = replica")
-    try:
-        for issuer, availability, status, gppe in rows:
-            sha = hashlib.sha256(f"{run_id}:{issuer}".encode()).hexdigest()
-            available = availability == "available"
-            connection.execute(
-                """
-                insert into mart.topt_gppe_results (result_id, content_sha256, invocation_id, snapshot_id, run_id,
-                    release_manifest_id, universe_id, universe_version, universe_sha256, cutoff, issuer_id,
-                    instrument_id, listing_id, operating_branch, operating_metric, availability, confidence,
-                    freshness, reason_codes, input_observation_ids, gppe_definition_id, gppe_definition_sha256,
-                    payload, operating_efficiency, capital_adjusted_gross_profit, gppe, availability_status)
-                values (%s, %s, %s, 'snapshot:x', %s, 'release:x', %s, 'v1', %s, now(), %s,
-                        'instrument:x', 'listing:x', 'non_financial', 'capital_adjusted_gppe', %s, 0.5, 'fresh',
-                        %s, %s, 'definition:x', %s, '{}', %s, %s, %s, %s)
-                """,
-                (
-                    f"topt-gppe-result:{sha}",
-                    sha,
-                    f"invocation:{run_id}",
-                    run_id,
-                    UNIVERSE,
-                    sha,
-                    issuer,
-                    availability,
-                    [] if available else ["missing_gross_profit"],
-                    ["o1", "o2", "o3", "o4"],
-                    sha,
-                    gppe,
-                    gppe,
-                    gppe,
-                    status,
-                ),
+    """One GPPE row per tuple: issuer, availability, availability_status, gppe."""
+    for issuer, availability, status, gppe in rows:
+        sha = hashlib.sha256(f"{run_id}:{issuer}".encode()).hexdigest()
+        available = availability == "available"
+        avail_status = status or ("available" if available else "unavailable")
+        connection.execute(
+            """
+            insert into mart.metric_node_values (
+                run_id, issuer_id, node_id, node_key, period, period_tag,
+                value, unit, availability_status, reason_codes,
+                source_evidence_status, factor_validation_status,
+                confidence, tree_id, tree_version, tree_sha256, input_observation_ids
             )
-    finally:
-        connection.execute("set session_replication_role = origin")
+            values (%s, %s, '6143cf17-ceba-5f78-a2d3-a7cc423c49a7'::uuid, 'gppe_uniform_charge_v0',
+                    '2025-12-31', 'FY', %s, 'per_employee', %s, %s, 'verified', 'accepted',
+                    0.5, 'ef13b940-b695-5f5f-846a-a36face5cc3e'::uuid, 'production-topt-v0.2.0', %s, %s)
+            """,
+            (
+                run_id,
+                issuer,
+                gppe,
+                avail_status,
+                [] if available else ["missing_gross_profit"],
+                sha,
+                ["o1", "o2", "o3", "o4"],
+            ),
+        )
 
 
 def seed_report(connection: psycopg.Connection[Any], run_id: str, answered: int, denominator: int) -> None:

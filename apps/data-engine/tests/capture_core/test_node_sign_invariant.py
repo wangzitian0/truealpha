@@ -56,23 +56,22 @@ def _check(conn, invariant) -> int:
     )
 
 
-def _set_jpm(conn, run_id: str, *, gppe: str, efficiency: str | None, adjusted: str | None) -> None:
+def _set_jpm(conn, run_id: str, *, gppe: str, adjusted: str | None) -> None:
     _bypass_append_only(conn)
-    conn.execute(
-        """
-        update mart.topt_gppe_results
-        set availability = 'available', gppe = %s, operating_efficiency = %s, capital_adjusted_gross_profit = %s
-        where run_id = %s and listing_id = 'listing:xnys:jpm'
-        """,
-        (gppe, efficiency, adjusted, run_id),
-    )
-
-
-def _allow_grandfathered_shape(conn) -> None:
-    """`topt_gppe_results_uniform_values_check` (0030) is NOT VALID: it refuses a NULL beside a
-    value on new writes but grandfathers older rows, so the suite must still name that shape.
-    Dropped inside this test's transaction only (rolled back by the fixture)."""
-    conn.execute("alter table mart.topt_gppe_results drop constraint topt_gppe_results_uniform_values_check")
+    for node_key, val in (("gppe_uniform_charge_v0", gppe), ("capital_adjusted_gross_profit", adjusted)):
+        conn.execute(
+            """
+            update mart.metric_node_values mnv
+            set availability_status = 'available', value = %s
+            from mart.capture_issuer_lineage cil
+            where mnv.run_id = cil.run_id
+              and mnv.issuer_id = cil.issuer_id
+              and mnv.run_id = %s
+              and cil.listing_id = 'listing:xnys:jpm'
+              and mnv.node_key = %s
+            """,
+            (val, run_id, node_key),
+        )
 
 
 @pytest.fixture
@@ -87,7 +86,7 @@ def test_the_governed_head_holds_and_shows_a_declared_low_signal(connection, hea
     out = capsys.readouterr().out
     assert "ok       node-sign-policy" in out and "SIGNAL" not in out
 
-    _set_jpm(connection, head, gppe="-514726.13", efficiency="-514726.13", adjusted="-163940000000")
+    _set_jpm(connection, head, gppe="-514726.13", adjusted="-163940000000")
     assert _check(connection, _invariant()) == 0
     signals = [line for line in capsys.readouterr().out.splitlines() if line.startswith("  SIGNAL")]
     assert len(signals) == 2, signals  # gppe and capital_adjusted_gross_profit, each by name
@@ -98,27 +97,14 @@ def test_the_governed_head_holds_and_shows_a_declared_low_signal(connection, hea
 def test_a_sign_a_ratio_cannot_produce_is_red(connection, head, capsys) -> None:  # noqa: F811
     """gppe = capital_adjusted_gross_profit / employees_total with a non-negative headcount:
     the two signs agree, whatever the policy of either."""
-    _set_jpm(connection, head, gppe="-514726.13", efficiency="-514726.13", adjusted="163940000000")
+    _set_jpm(connection, head, gppe="-514726.13", adjusted="163940000000")
     assert _check(connection, _invariant()) == 1
     err = capsys.readouterr().err
     assert "listing:xnys:jpm" in err and "sign of capital_adjusted_gross_profit" in err
     # a published ratio whose numerator is absent is named too: sign(NULL) would compare as NULL
-    _allow_grandfathered_shape(connection)
-    _set_jpm(connection, head, gppe="-514726.13", efficiency="-514726.13", adjusted=None)
+    _set_jpm(connection, head, gppe="-514726.13", adjusted=None)
     assert _check(connection, _invariant()) == 1
     assert "sign of capital_adjusted_gross_profit" in capsys.readouterr().err
-
-
-def test_two_columns_carrying_one_node_must_agree(connection, head, capsys) -> None:  # noqa: F811
-    _set_jpm(connection, head, gppe="-514726.13", efficiency="514726.13", adjusted="-163940000000")
-    assert _check(connection, _invariant()) == 1
-    assert "same node as gppe" in capsys.readouterr().err
-    # a NULL beside a value is a disagreement, not a pass
-    _allow_grandfathered_shape(connection)
-    _set_jpm(connection, head, gppe="-514726.13", efficiency=None, adjusted="-163940000000")
-    assert _check(connection, _invariant()) == 1
-    err = capsys.readouterr().err
-    assert "same node as gppe" in err and "operating_efficiency" in err and " null " in err
 
 
 def test_a_negative_value_the_node_forbids_is_red(connection, head, capsys, monkeypatch) -> None:  # noqa: F811
@@ -132,7 +118,7 @@ def test_a_negative_value_the_node_forbids_is_red(connection, head, capsys, monk
     }
     monkeypatch.setattr(suite, "PANEL_METRICS", strict_metrics)
     strict = _invariant(suite._sign_policy_queries())
-    _set_jpm(connection, head, gppe="-514726.13", efficiency="-514726.13", adjusted="-163940000000")
+    _set_jpm(connection, head, gppe="-514726.13", adjusted="-163940000000")
     assert _check(connection, strict) == 1
     captured = capsys.readouterr()
     assert "listing:xnys:jpm" in captured.err and "must-be-non-negative" in captured.err

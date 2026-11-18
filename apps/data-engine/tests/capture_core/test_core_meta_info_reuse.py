@@ -125,7 +125,7 @@ def conn(database: str) -> Iterator[psycopg.Connection]:
             connection.rollback()
 
 
-def _served(conn: psycopg.Connection, run_id: str, relation: str = "mart.topt_core_meta_info") -> dict[str, Any]:
+def _served(conn: psycopg.Connection, run_id: str, relation: str = "mart.capture_issuer_lineage") -> dict[str, Any]:
     """result_id -> (input_observation_ids, lineage) for every core result of one run."""
     rows = conn.execute(
         f"select result_id, input_observation_ids, lineage from {relation} where run_id = %s",  # noqa: S608
@@ -205,30 +205,22 @@ def _seed_integration_run(conn: psycopg.Connection) -> str:
 
 _OLD_DEFINITION_BEFORE_1331 = """
 select
-    result.result_id,
-    result.invocation_id,
-    result.snapshot_id,
-    result.run_id,
-    result.release_manifest_id,
-    result.universe_id,
-    result.universe_version,
-    result.universe_sha256,
-    result.cutoff,
-    result.issuer_id,
-    result.instrument_id,
-    result.listing_id,
-    result.input_observation_ids,
-    result.gppe_invocation_id,
-    result.gppe_result_id,
-    result.gppe_definition_id,
-    result.gppe_definition_sha256,
-    result.tier_definition_id,
-    result.tier_definition_sha256,
-    result.confidence,
-    result.freshness,
-    result.created_at,
+    ('core-result:' || m.member_sha256) as result_id,
+    s.snapshot_id,
+    s.run_id,
+    s.release_manifest_id,
+    s.universe_id,
+    s.universe_version,
+    s.universe_sha256,
+    s.cutoff,
+    m.issuer_id,
+    m.instrument_id,
+    m.listing_id,
+    m.observation_ids as input_observation_ids,
+    s.created_at,
     lineage.items as lineage
-from mart.topt_core_results result
+from staging.core_snapshots s
+join staging.core_snapshot_members m using (snapshot_id)
 join lateral (
     select jsonb_agg(
         jsonb_build_object(
@@ -244,7 +236,7 @@ join lateral (
             'normalized_payload_sha256', observation.normalized_payload_sha256,
             'confidence', observation.confidence,
             'freshness', case
-                when result.cutoff - observation.knowable_at <= coalesce(nullif(policy.semantic_freshness_max_age->>observation.semantic_type, '')::interval, policy.freshness_max_age) then 'fresh'
+                when s.cutoff - observation.knowable_at <= coalesce(nullif(policy.semantic_freshness_max_age->>observation.semantic_type, '')::interval, policy.freshness_max_age) then 'fresh'
                 else 'stale'
             end,
             'knowable_at', observation.knowable_at,
@@ -260,13 +252,13 @@ join lateral (
             )
         ) order by observation.observation_id
     ) as items
-    from unnest(result.input_observation_ids) selected(observation_id)
+    from unnest(m.observation_ids) selected(observation_id)
     join staging.capture_normalized_observations observation using (observation_id)
     join staging.capture_observation_obligations usage using (observation_id)
     join staging.capture_observation_payloads payload using (observation_id)
     join raw.capture_obligations obligation
       on obligation.obligation_id = usage.capture_obligation_id
-     and obligation.run_id = result.run_id
+     and obligation.run_id = s.run_id
     join raw.capture_obligation_work_bindings binding
       on binding.obligation_id = obligation.obligation_id
     join raw.capture_work_items work using (work_item_id)
@@ -428,10 +420,10 @@ def _view_state(conn: psycopg.Connection) -> tuple[str, str]:
         """
         select rule.xmin::text, pg_get_viewdef(rule.ev_class)
         from pg_rewrite rule
-        where rule.ev_class = to_regclass('mart.topt_core_meta_info') and rule.rulename = '_RETURN'
+        where rule.ev_class = to_regclass('mart.capture_issuer_lineage') and rule.rulename = '_RETURN'
         """
     ).fetchone()
-    assert row is not None, "mart.topt_core_meta_info does not exist"
+    assert row is not None, "mart.capture_issuer_lineage does not exist"
     return row[0], row[1]
 
 

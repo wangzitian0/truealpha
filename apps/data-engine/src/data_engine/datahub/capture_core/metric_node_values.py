@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -42,6 +43,7 @@ from truealpha_contracts.execution import FactorValidationStatus, InputEvidenceS
 
 from data_engine.datahub.capture_core.status_dimensions import (
     availability_status_for,
+    contract_not_applicable_issuer_ids,
     factor_validation_status_for,
 )
 
@@ -261,12 +263,14 @@ def _insert_metric_node_value(
     tree_version: str,
     tree_sha256: str,
     observation_ids: Sequence[str],
+    not_applicable: bool = False,
 ) -> int:
     avail_status = availability_status_for(
         availability=availability,
         freshness=freshness.value,
         confidence=confidence,
         reason_codes=reason_codes,
+        not_applicable=not_applicable,
     )
     row = connection.execute(
         _INSERT_NODE_VALUE_SQL,
@@ -304,10 +308,20 @@ def materialize_metric_node_values(
     variants: Sequence[FactorVariantSpec] = FACTOR_VARIANTS,
     metrics: Mapping[str, PanelMetricSpec] = PANEL_METRICS,
     extra_expressions: Mapping[str, pl.Expr] | None = None,
+    not_applicable_issuers: AbstractSet[str] | None = None,
 ) -> int:
     """Evaluate every applicable factor variant and any extra Polars `pl.Expr` columns over the wide panel."""
     if not factor_inputs:
         return 0
+    resolved_not_applicable = (
+        contract_not_applicable_issuer_ids(
+            connection,
+            metric="gppe",
+            universe_id=factor_inputs[0].universe_id,
+        )
+        if not_applicable_issuers is None
+        else not_applicable_issuers
+    )
     all_obs_ids = sorted({oid for item in factor_inputs for oid in item.observation_ids})
     financial_by_listing = {
         listing_id: payloads[-1]
@@ -320,8 +334,6 @@ def materialize_metric_node_values(
     variant_hashes = {(v.key, v.version): variant_sha256(v, metrics=metrics) for v in variants}
     inserted_count = 0
     for factor_input in factor_inputs:
-        if factor_input.primary_listing_undeclared:
-            continue
         issuer_class = IssuerClass(factor_input.operating_branch.value)
         freshness = _snapshot_freshness(factor_input)
         base_confidence = _snapshot_leaf_confidence(factor_input)
@@ -346,6 +358,7 @@ def materialize_metric_node_values(
                 base_confidence=base_confidence,
                 source_evidence=source_evidence,
                 validation_status=validation_status,
+                not_applicable=factor_input.issuer_id in resolved_not_applicable,
             )
 
     if extra_expressions:
@@ -477,7 +490,42 @@ def _materialize_issuer_tree(
     source_evidence: InputEvidenceStatus,
     validation_status: FactorValidationStatus,
     metrics: Mapping[str, PanelMetricSpec] = PANEL_METRICS,
+    not_applicable: bool = False,
 ) -> int:
+    if factor_input.primary_listing_undeclared:
+        count = 0
+        for node_key in sorted(reachable_derived_columns(tree.root, issuer_class=issuer_class, metrics=metrics)):
+            node = metrics[node_key]
+            period_str, period_tag = _node_period(
+                node,
+                factor_input=factor_input,
+                periods=periods,
+                financial_payload=financial_payload,
+            )
+            count += _insert_metric_node_value(
+                connection,
+                run_id=factor_input.run_id,
+                issuer_id=factor_input.issuer_id,
+                node_id=node.node_id,
+                node_key=node.key,
+                period=period_str,
+                period_tag=period_tag,
+                value=None,
+                unit=node.unit.value if node.unit is not None else None,
+                availability="unavailable",
+                freshness=freshness,
+                confidence=Decimal("0"),
+                reason_codes=["primary_listing_undeclared"],
+                source_evidence=source_evidence,
+                validation_status=validation_status,
+                tree_id=tree.tree_id,
+                tree_version=tree.version,
+                tree_sha256=tree_sha256,
+                observation_ids=factor_input.observation_ids,
+                not_applicable=not_applicable,
+            )
+        return count
+
     inputs: dict[str, Decimal | None] = {}
     input_reasons: dict[str, str] = {}
     input_confidences: dict[str, Decimal] = {}
@@ -543,5 +591,6 @@ def _materialize_issuer_tree(
             tree_version=tree.version,
             tree_sha256=tree_sha256,
             observation_ids=factor_input.observation_ids,
+            not_applicable=not_applicable,
         )
     return count

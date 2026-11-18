@@ -20,6 +20,7 @@ from factors.composite.plausibility_policy import (
     node_sign_policy,
     sign_signals,
 )
+from factors.panel import GPPE_BANKING_TCE_SPEC, GPPE_V0_SPEC
 from truealpha_contracts.strategy import ExclusionReason
 
 _EXEMPTIONS_IMAGE = Path("/app/tools/output_invariant_exemptions.json")
@@ -27,10 +28,22 @@ _EXEMPTIONS_REPO = Path(__file__).resolve().parents[6] / "tools" / "output_invar
 _SHARED_EXEMPTION = {RULE_NODE_SIGN_POLICY: "node-sign-policy"}
 
 _ROWS_SQL = """
-    select r.listing_id, r.issuer_id, r.operating_branch, r.availability, r.operating_efficiency
-    from mart.topt_core_results r
-    where r.run_id = %s
-    order by r.listing_id
+    select distinct on (m.listing_id)
+           m.listing_id,
+           mv.issuer_id,
+           coalesce(m.factor_input ->> 'operating_branch', 'non_financial') as operating_branch,
+           case when mv.availability_status in ('available', 'low_confidence') then 'available' else 'unavailable' end as availability,
+           mv.value as operating_efficiency
+    from mart.metric_node_values mv
+    join staging.core_snapshots s on s.run_id = mv.run_id
+    join staging.core_snapshot_members m on m.snapshot_id = s.snapshot_id and m.issuer_id = mv.issuer_id
+    where mv.run_id = %(run_id)s
+      and (
+          (coalesce(m.factor_input ->> 'operating_branch', 'non_financial') = 'financial'
+           and mv.node_key = %(bank_key)s)
+          or mv.node_key = %(base_key)s
+      )
+    order by m.listing_id, (mv.node_key = %(bank_key)s) desc
 """
 
 _OUTCOMES_SQL = """
@@ -83,7 +96,10 @@ class Verdict:
 def _rows(connection: Any, run_id: str) -> tuple[list[Row], dict[str, str]]:
     rows: list[Row] = []
     issuers: dict[str, str] = {}
-    for listing_id, issuer_id, branch, availability, op in connection.execute(_ROWS_SQL, (run_id,)).fetchall():
+    for listing_id, issuer_id, branch, availability, op in connection.execute(
+        _ROWS_SQL,
+        {"run_id": run_id, "bank_key": GPPE_BANKING_TCE_SPEC.root, "base_key": GPPE_V0_SPEC.root},
+    ).fetchall():
         rows.append(
             Row(
                 listing_id=str(listing_id),

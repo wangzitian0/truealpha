@@ -477,17 +477,19 @@ def test_the_persisted_report_of_the_tick_excludes_the_listings_whose_share_coun
                 (run_id, sorted(UNAVAILABLE)),
             )
         }
-        unavailable_issuers = reader.execute(
-            "select count(distinct issuer_id) from mart.topt_core_results where run_id = %s and availability = 'unavailable'",
-            (run_id,),
+        excluded_issuers = reader.execute(
+            "select count(distinct issuer_id) from mart.strategy_decisions where strategy_run_id = %s and exclusion_reason = 'missing_market_value_input'",
+            (tick.metadata["strategy_run_id"],),
         ).fetchone()
-    assert persisted is not None and unavailable_issuers is not None
+    assert persisted is not None and excluded_issuers is not None
     assert persisted[0]["factor_availability"]["gross_profit_per_employee"]["status"] == "computed"
     complete = set(persisted[0]["factor_availability"]["gross_profit_per_employee"]["complete_subject_ids"])
 
     assert len(dropped) == len(UNAVAILABLE), "one listing for each symbol without a proven share basis"
-    assert unavailable_issuers[0] == len(UNAVAILABLE), "the core marks exactly those issuers unavailable"
-    assert subjects - complete == dropped
+    assert excluded_issuers[0] == len(UNAVAILABLE), (
+        "strategy decisions exclude those issuers on missing_market_value_input"
+    )
+    assert complete == subjects, "GPPE factor availability is decoupled from market-value share counts"
 
 
 # -- acceptance of #1277: the same tick, read from the core results -----------------------------
@@ -495,22 +497,35 @@ def test_the_persisted_report_of_the_tick_excludes_the_listings_whose_share_coun
 
 @dataclass(frozen=True)
 class Core:
-    """What the tick wrote to `mart.topt_core_results` for one issuer."""
+    """What the tick wrote to `mart.metric_node_values`, `staging.core_snapshot_members`, and `mart.strategy_decisions`."""
 
     availability: str
     reason_codes: tuple[str, ...]
     current_pgp: Decimal | None
     current_ps: Decimal | None
+    exclusion_reason: str | None
+    share_reason: str | None
 
 
 def _core(tick: Tick, ticker: str) -> Core:
     with psycopg.connect(tick.url) as reader:
         row = reader.execute(
             """
-            select r.availability, r.reason_codes, r.current_pgp, r.current_ps
-            from mart.topt_core_results r
-            where r.run_id = %s
-              and r.issuer_id = (
+            select mnv.availability_status,
+                   mnv.reason_codes,
+                   d.current_price_to_gross_profit,
+                   d.current_price_to_sales,
+                   d.exclusion_reason,
+                   m.factor_input -> 'market_value_components' -> 0 -> 'shares_outstanding' ->> 'unavailable_reason'
+            from mart.metric_node_values mnv
+            join mart.strategy_run_capture scope on scope.capture_run_id = mnv.run_id
+            left join mart.strategy_decisions d
+              on d.strategy_run_id = scope.strategy_run_id and d.issuer_id = mnv.issuer_id
+            left join staging.core_snapshots s on s.run_id = mnv.run_id
+            left join staging.core_snapshot_members m on m.snapshot_id = s.snapshot_id and m.issuer_id = mnv.issuer_id
+            where mnv.run_id = %s
+              and mnv.node_key = 'gppe_uniform_charge_v0'
+              and mnv.issuer_id = (
                   select distinct p.normalized_payload ->> 'issuer_id'
                   from raw.capture_obligations ob
                   join staging.capture_observation_obligations oo on oo.capture_obligation_id = ob.obligation_id
@@ -522,13 +537,18 @@ def _core(tick: Tick, ticker: str) -> Core:
         ).fetchone()
     assert row is not None, f"the tick wrote no core result for {ticker}"
     return Core(
-        row[0], tuple(row[1]), None if row[2] is None else Decimal(row[2]), None if row[3] is None else Decimal(row[3])
+        row[0],
+        tuple(row[1]),
+        None if row[2] is None else Decimal(row[2]),
+        None if row[3] is None else Decimal(row[3]),
+        row[4],
+        row[5],
     )
 
 
 def _places(value: Decimal | None) -> Decimal | None:
-    """A multiple at 12 decimal places. The engine divides at 34 digits, and a test at 28 would differ."""
-    return None if value is None else value.quantize(Decimal("1e-12"))
+    """A multiple at 4 decimal places matching `mart.strategy_decisions` numeric(20, 4) storage."""
+    return None if value is None else value.quantize(Decimal("0.0001"))
 
 
 def test_a_split_after_the_filing_gives_the_core_price_to_gross_profit_on_the_post_split_basis(tick: Tick) -> None:
@@ -550,15 +570,13 @@ def test_a_split_after_the_filing_gives_the_core_price_to_gross_profit_on_the_po
 
 def test_a_listing_without_its_series_makes_the_core_result_unavailable_with_the_named_reason(tick: Tick) -> None:
     """#1277 acceptance b. Each issuer of `UNAVAILABLE` has stored series that cannot prove its splits,
-    or none at all. The core result is unavailable and names the cause. It holds no multiple.
-
-    Red on main: the core named `missing_shares_outstanding` for each of them, which does not say
-    whether the filing has no share count or the series have no bars.
+    or none at all. The share basis names the cause, strategy decisions exclude it, and it holds no multiple.
     """
     for ticker, reason in UNAVAILABLE.items():
         core = _core(tick, ticker)
-        assert core.availability == "unavailable", (ticker, core)
-        assert core.reason_codes == (reason,), (ticker, core)
+        assert core.availability == "available", (ticker, core)
+        assert core.exclusion_reason == "missing_market_value_input", (ticker, core)
+        assert core.share_reason == reason, (ticker, core)
         assert core.current_pgp is None and core.current_ps is None, (ticker, core)
 
 

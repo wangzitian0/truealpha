@@ -86,9 +86,7 @@ def test_anti_green_while_empty_rejects_null_metric_as_answered() -> None:
     assert all(c.reason == "null_metric_value" for c in cells_a)
 
     # 3. GPPE cells with null gppe
-    mock_conn.execute.return_value.fetchall.return_value = [
-        (f"issuer:{i}", "available", "available", [], None) for i in range(20)
-    ]
+    mock_conn.execute.return_value.fetchall.return_value = [(f"issuer:{i}", "available", [], None) for i in range(20)]
     cells_g = gppe_cells(mock_conn, "run:test")
     assert len(cells_g) == 20
     assert all(not c.answered for c in cells_g)

@@ -19,8 +19,8 @@ EXCLUSION_REASON: Mapping[str, ExclusionReason] = {
     RULE_NODE_SIGN_POLICY: ExclusionReason.PLAUSIBILITY_REFUSED_NODE_SIGN_POLICY,
 }
 
-JUDGED_TABLE = "mart.topt_core_results"
-JUDGED_COLUMN = "operating_efficiency"
+JUDGED_TABLE = "mart.metric_node_values"
+JUDGED_COLUMN = "gppe_uniform_charge_v0"
 
 
 @dataclass(frozen=True)

@@ -353,8 +353,14 @@ def _materialized(url: str, run_id: str) -> tuple[int, int, int]:
         snapshots = reader.execute(
             "select count(*) from staging.core_snapshots where run_id = %s", (run_id,)
         ).fetchone()[0]
-        gppe = reader.execute("select count(*) from mart.topt_gppe_results where run_id = %s", (run_id,)).fetchone()[0]
-        core = reader.execute("select count(*) from mart.topt_core_results where run_id = %s", (run_id,)).fetchone()[0]
+        gppe = reader.execute(
+            "select count(*) from mart.metric_node_values where run_id = %s and node_key = 'gppe_uniform_charge_v0'",
+            (run_id,),
+        ).fetchone()[0]
+        core = reader.execute(
+            "select count(*) from mart.metric_node_values where run_id = %s and node_key = 'capital_adjusted_gross_profit'",
+            (run_id,),
+        ).fetchone()[0]
     return snapshots, gppe, core
 
 

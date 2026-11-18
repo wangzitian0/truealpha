@@ -19,7 +19,7 @@ from data_engine.config import settings
 from data_engine.datahub.capture_core import PostgresToptCoreRepository, plausibility_gate
 from factors.composite import plausibility_policy
 from factors.composite.plausibility_policy import RULE_EMPTY_ELIGIBLE, RULE_NODE_SIGN_POLICY
-from factors.panel import IssuerClass, SignPolicy, published_node
+from factors.panel import GPPE_BANKING_TCE_SPEC, GPPE_V0_SPEC, IssuerClass, SignPolicy, published_node
 from factors.production_topt import GppeV0Definition
 from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.strategy import ExclusionReason
@@ -111,9 +111,17 @@ def test_a_plausible_run_passes(connection, tmp_path) -> None:
 def _jpm_negative(connection, run_id: str) -> None:
     _bypass_append_only(connection)
     connection.execute(
-        "update mart.topt_core_results set operating_efficiency = -514726, availability = 'available' "
-        "where run_id = %s and listing_id = 'listing:xnys:jpm'",
-        (run_id,),
+        """
+        update mart.metric_node_values mnv
+        set value = -514726, availability_status = 'available'
+        from mart.capture_issuer_lineage cil
+        where mnv.run_id = cil.run_id
+          and mnv.issuer_id = cil.issuer_id
+          and mnv.run_id = %s
+          and cil.listing_id = 'listing:xnys:jpm'
+          and mnv.node_key in (%s, %s)
+        """,
+        (run_id, GPPE_V0_SPEC.root, GPPE_BANKING_TCE_SPEC.root),
     )
 
 

@@ -12,6 +12,7 @@ from decimal import Decimal
 from typing import Any, Protocol
 
 import psycopg
+from factors.panel import GPPE_BANKING_TCE_SPEC, GPPE_V0_SPEC
 from factors.production_topt import MetricAvailability, ToptCoreSnapshotInput
 from truealpha_contracts.metrics import INPUT_KEY_ALIASES, METRICS
 from truealpha_contracts.models import DataSource
@@ -428,8 +429,19 @@ def _query_gppe_by_issuer(
     connection: psycopg.Connection[Any], run_id: str, cutoff: datetime
 ) -> dict[str, tuple[Decimal | None, str | None, str | None, datetime | None]]:
     rows = connection.execute(
-        "select issuer_id, gppe, operating_period_end, input_observation_ids, cutoff, result_id from mart.topt_core_results where run_id = %s",
-        (run_id,),
+        """
+        select distinct on (mnv.issuer_id)
+               mnv.issuer_id, mnv.value, cil.operating_period_end, mnv.input_observation_ids, cil.cutoff, cil.result_id
+        from mart.metric_node_values mnv
+        join mart.capture_issuer_lineage cil using (run_id, issuer_id)
+        where mnv.run_id = %(run_id)s
+          and (
+              (cil.operating_branch = 'financial' and mnv.node_key = %(bank_key)s)
+              or mnv.node_key = %(base_key)s
+          )
+        order by mnv.issuer_id, (mnv.node_key = %(bank_key)s) desc
+        """,
+        {"run_id": run_id, "bank_key": GPPE_BANKING_TCE_SPEC.root, "base_key": GPPE_V0_SPEC.root},
     ).fetchall()
     gppe_by_issuer: dict[str, tuple[Decimal | None, str | None, str | None, datetime | None]] = {}
     for iss_id, gppe, op_period, obs_ids, cut, res_id in rows:

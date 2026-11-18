@@ -336,16 +336,22 @@ def test_the_core_engine_materialized_with_the_same_rate(world: World) -> None:
     with psycopg.connect(world.url) as reader:
         rows = reader.execute(
             """
-            select r.issuer_id, r.gppe, i.payload -> 'gppe_definition' ->> 'risk_free_rate'
-            from mart.topt_gppe_results r join mart.topt_gppe_invocations i using (invocation_id)
-            where r.run_id = %s and r.availability = 'available' and r.operating_branch = 'non_financial'
+            select mnv.issuer_id, mnv.value, sr.risk_free_value
+            from mart.metric_node_values mnv
+            join mart.capture_issuer_lineage cil using (run_id, issuer_id)
+            join mart.strategy_run_capture scope on scope.capture_run_id = mnv.run_id
+            join mart.strategy_runs sr using (strategy_run_id)
+            where mnv.run_id = %s
+              and mnv.node_key = 'gppe_uniform_charge_v0'
+              and mnv.availability_status = 'available'
+              and cil.operating_branch = 'non_financial'
             """,
             (metadata["capture_run_id"],),
         ).fetchall()
 
     assert len(rows) == 19
-    for _issuer, gppe, rate_in_definition in rows:
-        assert Decimal(rate_in_definition) == USED
+    for _issuer, gppe, risk_free_value in rows:
+        assert Decimal(risk_free_value) == USED
         assert abs(gppe - (GROSS_PROFIT - TOTAL_ASSETS * USED) / HEADCOUNT) < Decimal("1e-9")
     assert metadata["pointer_advanced"] is True
 
@@ -369,7 +375,7 @@ def test_a_tick_without_a_rate_in_ten_days_fails_with_the_named_error_and_publis
     world.store_rates({date(2026, 3, 15): "0.0420"})
     before = {
         table: world.scalar(f"select count(*) from {table}")
-        for table in ("mart.topt_core_results", "mart.strategy_runs", "mart.strategy_decisions")
+        for table in ("mart.metric_node_values", "mart.strategy_runs", "mart.strategy_decisions")
     }
     heads_before = world.scalar("select count(*) from mart.current_pointer_head")
     plans_before = world.run_plans()

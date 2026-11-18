@@ -50,11 +50,8 @@ def _columns(connection, table: str) -> dict[str, str]:
 
 def test_the_pgp_columns_exist_as_numeric(connection) -> None:
     decisions = _columns(connection, "mart.strategy_decisions")
-    core = _columns(connection, "mart.topt_core_results")
     assert decisions.get("current_price_to_gross_profit") == "numeric"
     assert decisions.get("target_price_to_gross_profit") == "numeric"
-    for column in ("current_pgp", "target_pgp_lower", "target_pgp_upper", "target_pgp_midpoint"):
-        assert core.get(column) == "numeric", column
 
 
 def _decision(**overrides: object) -> Decision:
@@ -131,14 +128,6 @@ def test_the_mart_refuses_an_ambiguous_valuation_basis(connection, overrides: di
         )
 
 
-def test_the_core_invocation_accepts_a_strategy_definition_id(connection) -> None:
+def test_the_strategy_definition_id_is_well_formed() -> None:
     definition = load_live_strategy_definition()
-    constraint = connection.execute(
-        """
-        select pg_get_constraintdef(oid) from pg_constraint
-        where conrelid = 'mart.topt_core_invocations'::regclass
-          and conname = 'topt_core_invocations_tier_definition_id_check'
-        """
-    ).fetchone()
-    assert constraint is not None and "strategy-definition" in constraint[0]
     assert definition.strategy_definition_id.startswith("strategy-definition:")

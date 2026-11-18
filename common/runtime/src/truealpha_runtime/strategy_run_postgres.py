@@ -75,10 +75,12 @@ def read_strategy_provenance(cursor: Any, strategy_run_id: str) -> dict[str, dic
                to_char(t.revenue_period_end, 'YYYY-MM-DD') as revenue_period_end,
                to_char(t.shares_period_end, 'YYYY-MM-DD') as shares_period_end,
                t.universe_id, t.universe_version, t.universe_sha256,
-               t.gppe_definition_sha256, t.tier_definition_sha256
+               t.gppe_definition_sha256,
+               sr.definition_content_sha256 as tier_definition_sha256
         from mart.strategy_decisions d
+        join mart.strategy_runs sr on sr.strategy_run_id = d.strategy_run_id
         left join mart.strategy_run_capture scope on scope.strategy_run_id = d.strategy_run_id
-        left join mart.topt_core_results t
+        left join mart.capture_issuer_lineage t
           on t.run_id = scope.capture_run_id and t.issuer_id = d.issuer_id and t.cutoff = d.cutoff_at
         left join lateral (
           select ei.legacy_id from mart.entity_identity ei
@@ -99,7 +101,7 @@ def read_trace_lineage(
         select m.result_id, m.listing_id, m.lineage
         from mart.strategy_decisions d
         join mart.strategy_run_capture scope on scope.strategy_run_id = d.strategy_run_id
-        join mart.topt_core_meta_info m
+        join mart.capture_issuer_lineage m
           on m.run_id = scope.capture_run_id and m.issuer_id = d.issuer_id and m.cutoff = d.cutoff_at
         left join lateral (
           select ei.legacy_id from mart.entity_identity ei

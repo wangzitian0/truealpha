@@ -219,7 +219,7 @@ def test_one_registry_timeout_excludes_one_issuer_and_the_tick_publishes_the_res
         assert "registry_unavailable" not in classified
         # the row states a gap
         (availability,) = reader.execute(
-            "select availability from mart.topt_core_results where run_id = %s and issuer_id = %s",
+            "select availability_status from mart.metric_node_values where run_id = %s and issuer_id = %s and node_key = 'gppe_uniform_charge_v0'",
             (metadata["capture_run_id"], issuer),
         ).fetchone()
         assert availability != "available"
@@ -245,7 +245,7 @@ def test_the_next_unforced_tick_asks_the_registry_again(
         issuer = _issuer_of(reader, second["capture_run_id"], TIMED_OUT_TICKER)
         assert _decisions(reader, second["strategy_run_id"])[issuer] != REASON
         (availability,) = reader.execute(
-            "select availability from mart.topt_core_results where run_id = %s and issuer_id = %s",
+            "select availability_status from mart.metric_node_values where run_id = %s and issuer_id = %s and node_key = 'gppe_uniform_charge_v0'",
             (second["capture_run_id"], issuer),
         ).fetchone()
         assert availability == "available"

@@ -5,9 +5,6 @@ from data_engine.datahub.capture_core.materialization import (
     IdentityPayload,
     MarketPricePayload,
     PostgresToptCoreRepository,
-    ToptCoreIdentity,
-    ToptCoreMetaInfo,
-    ToptCoreReadResult,
     ToptCoreSnapshot,
 )
 
@@ -16,8 +13,5 @@ __all__ = [
     "IdentityPayload",
     "MarketPricePayload",
     "PostgresToptCoreRepository",
-    "ToptCoreIdentity",
-    "ToptCoreMetaInfo",
-    "ToptCoreReadResult",
     "ToptCoreSnapshot",
 ]

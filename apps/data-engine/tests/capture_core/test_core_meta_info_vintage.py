@@ -33,7 +33,6 @@ from capture_core.test_materialization import _seed_complete_production_run  # n
 #: The columns of the view, in order. 20261012T1130 (#1241) and 20261015T0720 (#1331) must not change one of them.
 VIEW_COLUMNS = [
     "result_id",
-    "invocation_id",
     "snapshot_id",
     "run_id",
     "release_manifest_id",
@@ -44,15 +43,15 @@ VIEW_COLUMNS = [
     "issuer_id",
     "instrument_id",
     "listing_id",
+    "operating_branch",
     "input_observation_ids",
-    "gppe_invocation_id",
-    "gppe_result_id",
-    "gppe_definition_id",
+    "tree_id",
+    "tree_version",
     "gppe_definition_sha256",
-    "tier_definition_id",
-    "tier_definition_sha256",
     "confidence",
-    "freshness",
+    "operating_period_end",
+    "revenue_period_end",
+    "shares_period_end",
     "created_at",
     "lineage",
 ]
@@ -123,9 +122,9 @@ def connection():
 def _viewdef(connection) -> str:
     # `to_regclass` returns NULL for a missing relation; `'…'::regclass` RAISES, which made
     # the assertion below dead code and the failure message misleading (review on #798).
-    row = connection.execute("select pg_get_viewdef(to_regclass('mart.topt_core_meta_info'), true)").fetchone()
+    row = connection.execute("select pg_get_viewdef(to_regclass('mart.capture_issuer_lineage'), true)").fetchone()
     assert row is not None and row[0] is not None, (
-        "mart.topt_core_meta_info does not exist — apply db/migrations before running this"
+        "mart.capture_issuer_lineage does not exist — apply db/migrations before running this"
     )
     return " ".join(row[0].split())
 
@@ -201,7 +200,7 @@ def test_the_vintage_in_the_payload_table_reaches_the_lineage_of_the_served_row(
     assert len(core.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate="0.05"))) == 20
 
     lineages = connection.execute(
-        "select lineage from mart.topt_core_meta_info where run_id = %s", (run.run_id,)
+        "select lineage from mart.capture_issuer_lineage where run_id = %s", (run.run_id,)
     ).fetchall()
     items = [item for (lineage,) in lineages for item in lineage]
     financial = [item for item in items if item["semantic_type"] == "financial-fact"]
@@ -221,7 +220,7 @@ def test_the_view_keeps_every_column_when_inputs_is_added(connection) -> None:
             """
             select attname
             from pg_attribute
-            where attrelid = to_regclass('mart.topt_core_meta_info') and attnum > 0 and not attisdropped
+            where attrelid = to_regclass('mart.capture_issuer_lineage') and attnum > 0 and not attisdropped
             order by attnum
             """
         ).fetchall()
@@ -245,7 +244,7 @@ def test_the_inputs_of_a_served_row_carry_the_values_of_the_payload_table(connec
     served = connection.execute(
         """
         select item
-        from mart.topt_core_meta_info info, jsonb_array_elements(info.lineage) item
+        from mart.capture_issuer_lineage info, jsonb_array_elements(info.lineage) item
         where info.run_id = %s
         """,
         (run.run_id,),
@@ -305,7 +304,7 @@ def test_an_input_the_payload_lacks_stays_absent(connection) -> None:
     (item,) = connection.execute(
         """
         select item
-        from mart.topt_core_meta_info info, jsonb_array_elements(info.lineage) item
+        from mart.capture_issuer_lineage info, jsonb_array_elements(info.lineage) item
         where info.run_id = %s and item ->> 'semantic_type' = 'market-price'
         limit 1
         """,

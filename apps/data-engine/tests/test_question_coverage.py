@@ -49,9 +49,9 @@ def test_a_question_with_a_column_counts_answered_unavailable_by_reason_and_no_r
         REQ[Question.Q1_MODEL_LEVERAGE],
         universe_id=QQQ,
         issuers=["issuer:a", "issuer:b", "issuer:c", "issuer:d", "issuer:e"],
-        cells_by_column={"mart.topt_gppe_results.gppe": cells},
+        cells_by_column={"mart.metric_node_values.value": cells},
     )
-    assert entry["column"] == "mart.topt_gppe_results.gppe"
+    assert entry["column"] == "mart.metric_node_values.value"
     assert entry["answered"] == 1 and entry["missing"] == 0 and entry["denominator"] == 5
     # sorted by count desc then reason; the issuer with no row is the left-join's honest gap
     assert entry["unavailable"] == {"missing_headcount": 2, "missing_gross_profit": 1, NO_ROW: 1}
@@ -101,7 +101,7 @@ def test_a_question_with_an_applicable_column_counts_answered() -> None:
         REQ[Question.Q1_MODEL_LEVERAGE],
         universe_id=QQQ,
         issuers=["issuer:a"],
-        cells_by_column={"mart.topt_gppe_results.gppe": (Cell("issuer:a", True),)},
+        cells_by_column={"mart.metric_node_values.value": (Cell("issuer:a", True),)},
     )
     assert entry["denominator"] == 1 and entry["answered"] == 1 and entry["missing"] == 0
 
@@ -117,15 +117,16 @@ class _Rows:
         return self.rows
 
 
-def test_gppe_cells_fall_back_to_availability_for_rows_written_before_the_status_columns() -> None:
+def test_gppe_cells_use_persisted_availability_status() -> None:
     rows = [
-        ("issuer:a", "available", "available", []),
-        ("issuer:b", None, "available", []),
-        ("issuer:c", None, "unavailable", ["missing_headcount", "missing_total_assets"]),
-        ("issuer:d", "stale", "available", ["stale_input"]),
+        ("issuer:a", "available", [], Decimal("1")),
+        ("issuer:b", "low_confidence", ["low_confidence"], Decimal("1")),
+        ("issuer:c", "unavailable", ["missing_headcount", "missing_total_assets"], None),
+        ("issuer:d", "stale", ["stale_input"], Decimal("1")),
     ]
     cells = gppe_cells(_Rows(rows), "run")
-    assert [c.answered for c in cells] == [True, True, False, False]
+    assert [c.answered for c in cells] == [True, False, False, False]
+    assert cells[1].reason == "low_confidence"
     assert cells[2].reason == "missing_headcount" and cells[3].reason == "stale_input"
 
 
@@ -275,7 +276,7 @@ def test_issuer_scoped_questions_ignore_the_fund_subjects() -> None:
         universe_id=QQQ,
         issuers=["issuer:a", "issuer:b", "issuer:c"],
         funds=["etf:series:S000101292"],
-        cells_by_column={"mart.topt_gppe_results.gppe": (Cell("issuer:a", True),)},
+        cells_by_column={"mart.metric_node_values.value": (Cell("issuer:a", True),)},
     )
     assert entry["scope"] == "issuer"
     assert entry["denominator"] == 3 and entry["answered"] == 1
@@ -371,7 +372,7 @@ def test_coverage_verdict_failure_flags_zero_answered_applicable_questions_only(
                 REQ[Question.Q1_MODEL_LEVERAGE],
                 universe_id=QQQ,
                 issuers=["issuer:a"],
-                cells_by_column={"mart.topt_gppe_results.gppe": (Cell("issuer:a", True),)},
+                cells_by_column={"mart.metric_node_values.value": (Cell("issuer:a", True),)},
             ),
             # Q2 has no column on QQQ (missing == denominator), so it is not applicable.
             "q2": classify_question(
@@ -453,8 +454,8 @@ def test_gppe_cells_and_classify_question_honor_persisted_not_applicable_status(
         "issuer:cik:0001141391",  # MA
         "issuer:cik:0001067983",  # BRK.B
     ]
-    rows = [(issuer, "available", "available", [], Decimal("100")) for issuer in applicable] + [
-        (issuer, "not_applicable", "unavailable", ["missing_gross_profit"], None) for issuer in exempt
+    rows = [(issuer, "available", [], Decimal("100")) for issuer in applicable] + [
+        (issuer, "not_applicable", ["missing_gross_profit"], None) for issuer in exempt
     ]
     cells = gppe_cells(_Rows(rows), "capture-run:topt")
     assert len(cells) == 20
@@ -464,7 +465,7 @@ def test_gppe_cells_and_classify_question_honor_persisted_not_applicable_status(
         REQ[Question.Q1_MODEL_LEVERAGE],
         universe_id=TOPT,
         issuers=[c.subject_id for c in cells],
-        cells_by_column={"mart.topt_gppe_results.gppe": cells},
+        cells_by_column={"mart.metric_node_values.value": cells},
     )
     assert q1["answered"] == 16
     assert q1["denominator"] == 16
@@ -473,7 +474,7 @@ def test_gppe_cells_and_classify_question_honor_persisted_not_applicable_status(
     assert q1["not_applicable"] == 4
 
     degraded_rows = [
-        (applicable[0], "unavailable", "unavailable", ["missing_headcount"], None),
+        (applicable[0], "unavailable", ["missing_headcount"], None),
         *rows[1:],
     ]
     degraded_cells = gppe_cells(_Rows(degraded_rows), "capture-run:topt")
@@ -481,7 +482,7 @@ def test_gppe_cells_and_classify_question_honor_persisted_not_applicable_status(
         REQ[Question.Q1_MODEL_LEVERAGE],
         universe_id=TOPT,
         issuers=[c.subject_id for c in degraded_cells],
-        cells_by_column={"mart.topt_gppe_results.gppe": degraded_cells},
+        cells_by_column={"mart.metric_node_values.value": degraded_cells},
     )
     assert degraded_q1["answered"] == 15
     assert degraded_q1["denominator"] == 16

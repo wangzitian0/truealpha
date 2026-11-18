@@ -12,7 +12,15 @@ from decimal import Decimal
 from typing import Any, Protocol
 
 import psycopg
-from factors.panel import AliasKind, IssuerClass, bound_tree, operating_numerator_node, required_inputs
+from factors.panel import (
+    GPPE_BANKING_TCE_SPEC,
+    GPPE_V0_SPEC,
+    AliasKind,
+    IssuerClass,
+    bound_tree,
+    operating_numerator_node,
+    required_inputs,
+)
 from factors.production_topt import OperatingBranch
 from pydantic import ValidationError
 from truealpha_contracts.common import canonical_sha256
@@ -79,8 +87,13 @@ _CORE_COMPLETE_LISTINGS_SQL = (
     "select distinct coalesce(identity.listing_id, member->>'listing_id') from staging.core_snapshots s "
     "cross join lateral jsonb_array_elements(s.payload->'members') member "
     "left join mart.entity_identity identity on identity.entity_id::text = member->>'listing_id' "
-    "where s.run_id = %s and exists (select 1 from mart.topt_core_results r "
-    "where r.run_id = s.run_id and r.issuer_id = member->>'issuer_id' and r.availability = 'available') order by 1"
+    "where s.run_id = %(run_id)s and ("
+    "select r.availability_status from mart.metric_node_values r "
+    "where r.run_id = s.run_id and r.issuer_id = member->>'issuer_id' "
+    "and ((coalesce(member->'factor_input'->>'operating_branch', 'non_financial') = 'financial' "
+    "and r.node_key = %(bank_key)s) or r.node_key = %(base_key)s) "
+    "order by (r.node_key = %(bank_key)s) desc limit 1"
+    ") = 'available' order by 1"
 )
 
 
@@ -103,10 +116,14 @@ def _factor_availability(
     conn: psycopg.Connection[Any], run_id: str, usable_by_subject: Mapping[str, Mapping[str, bool]]
 ) -> dict[str, dict[str, Any]]:
     universe = sorted(usable_by_subject)
-    core_row = conn.execute("select count(*) from mart.topt_core_results where run_id = %s", (run_id,)).fetchone()
+    gppe_params = {"run_id": run_id, "bank_key": GPPE_BANKING_TCE_SPEC.root, "base_key": GPPE_V0_SPEC.root}
+    core_row = conn.execute(
+        "select count(*) from mart.metric_node_values where run_id = %s and node_key in (%s, %s)",
+        (run_id, GPPE_V0_SPEC.root, GPPE_BANKING_TCE_SPEC.root),
+    ).fetchone()
     core_count = core_row[0] if core_row is not None else 0
     complete_ids = (
-        sorted(str(r[0]) for r in conn.execute(_CORE_COMPLETE_LISTINGS_SQL, (run_id,)).fetchall() if r[0] is not None)
+        sorted(str(r[0]) for r in conn.execute(_CORE_COMPLETE_LISTINGS_SQL, gppe_params).fetchall() if r[0] is not None)
         if core_count > 0
         else []
     )

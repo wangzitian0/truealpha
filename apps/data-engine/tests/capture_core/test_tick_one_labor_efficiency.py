@@ -21,6 +21,7 @@ from decimal import ROUND_HALF_EVEN, Decimal
 from pathlib import Path
 
 import psycopg
+from factors.panel import GPPE_BANKING_TCE_SPEC, GPPE_V0_SPEC
 from truealpha_contracts.strategy import load_live_strategy_definition
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -62,8 +63,25 @@ def _served(tick: Tick, ticker: str) -> tuple[Decimal, Decimal, str, str]:
     with psycopg.connect(tick.url) as reader:
         issuer_id = _issuer_id(reader, tick, ticker)
         core = reader.execute(
-            "select operating_efficiency, gppe, availability from mart.topt_core_results where run_id = %s and issuer_id = %s",
-            (tick.metadata["capture_run_id"], issuer_id),
+            """
+            select mnv.value, mnv.value, mnv.availability_status
+            from mart.metric_node_values mnv
+            left join mart.capture_issuer_lineage cil using (run_id, issuer_id)
+            where mnv.run_id = %(run_id)s
+              and mnv.issuer_id = %(issuer_id)s
+              and (
+                  (cil.operating_branch = 'financial' and mnv.node_key = %(bank_key)s)
+                  or mnv.node_key = %(base_key)s
+              )
+            order by (mnv.node_key = %(bank_key)s) desc
+            limit 1
+            """,
+            {
+                "run_id": tick.metadata["capture_run_id"],
+                "issuer_id": issuer_id,
+                "bank_key": GPPE_BANKING_TCE_SPEC.root,
+                "base_key": GPPE_V0_SPEC.root,
+            },
         ).fetchone()
         decision = reader.execute(
             """
@@ -204,7 +222,7 @@ def test_the_cutoffs_of_the_inputs_and_of_the_core_rows_are_one_instant(tick: Ti
     the two cutoffs are the same instant. Without this, the class filter would find none and expect every key."""
     with psycopg.connect(tick.url) as reader:
         inputs = reader.execute("select max(cutoff_at) from staging.strategy_backtest_inputs").fetchone()
-        core = reader.execute("select max(cutoff) from mart.topt_core_results").fetchone()
+        core = reader.execute("select max(cutoff) from mart.capture_issuer_lineage").fetchone()
     assert inputs == core and inputs[0] is not None
 
 
@@ -226,6 +244,9 @@ def test_an_environment_without_a_bank_does_not_expect_the_banking_leaves(tick: 
     no_bank = _unpopulated_keys(
         tick,
         ("delete from staging.strategy_backtest_inputs where input_key = any(%s)", (list(_TCE_KEYS),)),
-        ("delete from mart.topt_core_results where operating_branch = %s", ("financial",)),
+        (
+            "delete from staging.core_snapshot_members where factor_input ->> 'operating_branch' = %s",
+            ("financial",),
+        ),
     )
     assert no_bank == baseline, "the banking leaves are not expected where no bank ran"

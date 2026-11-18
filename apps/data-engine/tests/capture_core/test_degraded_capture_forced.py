@@ -86,10 +86,12 @@ _MAIN_LATEST_RUN_SQL = f"""
     limit 1
 """
 _MAIN_DECISIONS_SQL = """
-    select d.issuer_id, t.confidence, t.run_id
+    select d.issuer_id, mnv.confidence, cil.run_id
     from mart.strategy_decisions d
-    left join mart.topt_core_results t
-      on t.issuer_id = d.issuer_id and t.cutoff = d.cutoff_at
+    left join mart.capture_issuer_lineage cil
+      on cil.issuer_id = d.issuer_id and cil.cutoff = d.cutoff_at
+    left join mart.metric_node_values mnv
+      on mnv.run_id = cil.run_id and mnv.issuer_id = cil.issuer_id and mnv.node_key = 'gppe_uniform_charge_v0'
     where d.strategy_run_id = %s
     order by d.cutoff_at, d.issuer_id
 """
@@ -327,8 +329,14 @@ def _materialized(url: str, run_id: str) -> tuple[int, int, int]:
         snapshots = reader.execute(
             "select count(*) from staging.core_snapshots where run_id = %s", (run_id,)
         ).fetchone()[0]
-        gppe = reader.execute("select count(*) from mart.topt_gppe_results where run_id = %s", (run_id,)).fetchone()[0]
-        core = reader.execute("select count(*) from mart.topt_core_results where run_id = %s", (run_id,)).fetchone()[0]
+        gppe = reader.execute(
+            "select count(*) from mart.metric_node_values where run_id = %s and node_key = 'gppe_uniform_charge_v0'",
+            (run_id,),
+        ).fetchone()[0]
+        core = reader.execute(
+            "select count(*) from mart.metric_node_values where run_id = %s and node_key = 'capital_adjusted_gross_profit'",
+            (run_id,),
+        ).fetchone()[0]
     return snapshots, gppe, core
 
 
@@ -415,12 +423,12 @@ def _served_report(url: str):
 #: which is exactly what these assertions caught when the translation landed.
 _SERVED_IDENTITY_SQL = """
     select coalesce(ei.legacy_id, t.issuer_id), t.confidence
-    from mart.topt_core_results t
+    from mart.metric_node_values t
     left join lateral (
         select ei.legacy_id from mart.entity_identity ei
         where ei.entity_id::text = t.issuer_id limit 1
     ) ei on true
-    where t.run_id = %s
+    where t.run_id = %s and t.node_key = 'gppe_uniform_charge_v0'
 """
 
 
@@ -630,7 +638,7 @@ def test_a_forced_tick_that_advances_the_head_is_read_once_through_its_own_run(t
         assert scheduled["strategy_run_id"] != forced["strategy_run_id"]
         assert forced["pointer_sequence"] == scheduled["pointer_sequence"] + 1
         core_runs = reader.execute(
-            "select count(distinct run_id) from mart.topt_core_results where cutoff = %s", (cutoff,)
+            "select count(distinct run_id) from mart.capture_issuer_lineage where cutoff = %s", (cutoff,)
         ).fetchone()[0]
         assert core_runs == 2
 
