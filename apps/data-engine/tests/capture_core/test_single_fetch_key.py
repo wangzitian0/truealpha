@@ -621,6 +621,22 @@ def test_k4_d1_from_price_store_reuses_existing_raw_fetch_without_inserting_dupl
         )
         assert raw.sha256 == ts_sha
 
+        with pytest.raises(ValueError, match="must be provided together"):
+            RawResponse(
+                body=b"{}",
+                source=DataSource.TWELVE_DATA,
+                record_id="bad-partial-sha",
+                existing_raw_sha256=ts_sha,
+            )
+        with pytest.raises(ValueError, match="must be lowercase sha256 hex"):
+            RawResponse(
+                body=b"{}",
+                source=DataSource.TWELVE_DATA,
+                record_id="bad-digest",
+                existing_raw_fetch_id=1,
+                existing_raw_sha256="not-a-sha",
+            )
+
         from data_engine.datahub.capture_core.persistence import CaptureTimeline, PostgresCaptureControlSink
 
         recorded_vintages: list[tuple[Any, int]] = []

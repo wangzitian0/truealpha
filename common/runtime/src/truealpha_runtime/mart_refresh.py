@@ -74,7 +74,7 @@ def refresh_mart_materialized_views(
     if commit_before and info.transaction_status == TransactionStatus.INTRANS:
         connection.commit()
 
-    use_concurrent = concurrently and info.transaction_status != TransactionStatus.INTRANS
+    use_concurrent = concurrently and info.transaction_status == TransactionStatus.IDLE
     refreshed: list[str] = []
     if use_concurrent:
         prev_autocommit = bool(connection.autocommit)
