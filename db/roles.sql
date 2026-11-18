@@ -209,6 +209,8 @@ end $$;
 -- #877 PR-4: mart.entity_identity + entity_display_resolution for consumer entity display and resolution
 grant select on mart.entity_identity to mart_readonly;
 grant select on mart.entity_identity to app_ops_reader;
+grant select on mart.fund_holdings, mart.fund_holdings_resolved, mart.fund_holdings_coverage, mart.fund_holdings_valuation to mart_readonly;
+grant select on mart.fund_holdings, mart.fund_holdings_resolved, mart.fund_holdings_coverage, mart.fund_holdings_valuation to app_ops_reader;
 grant select on mart.entity_display_resolution to mart_readonly;
 grant select on mart.entity_display_resolution to app_ops_reader;
 -- The /admin/datahub dashboard (#641 D5) joins heads to their quality grades and

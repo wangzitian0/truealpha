@@ -85,6 +85,34 @@ begin
         on conflict (raw_id) do nothing;
     end if;
 
+    if to_regclass('staging.analyst_rating_events') is not null then
+        insert into pg_temp.slice2_id_map (raw_id, kind, birth_scheme, birth_value, parsed_scheme, parsed_value, display_name)
+        select distinct s.raw_id, s.kind,
+               case
+                   when s.raw_id ~ '^[a-z][a-z0-9-]*:[a-z0-9-]+:\S+$' then 'legacy-id'
+                   else 'name'
+               end,
+               case
+                   when s.raw_id ~ '^[a-z][a-z0-9-]*:[a-z0-9-]+:\S+$' then s.raw_id
+                   else btrim(s.raw_id)
+               end,
+               case
+                   when s.raw_id ~ '^(issuer|company):cik:[0-9]{1,10}$' then 'cik'
+                   when s.raw_id ~ '^(issuer|company):lei:[0-9A-Za-z]{18}[0-9]{2}$' then 'lei'
+               end,
+               case
+                   when s.raw_id ~ '^(issuer|company):cik:[0-9]{1,10}$' then lpad(split_part(s.raw_id, ':', 3), 10, '0')
+                   when s.raw_id ~ '^(issuer|company):lei:[0-9A-Za-z]{18}[0-9]{2}$' then upper(split_part(s.raw_id, ':', 3))
+               end,
+               null::text
+        from (
+            select analyst_id::text as raw_id, 'person'::text as kind from staging.analyst_rating_events
+            union
+            select company_id::text, case when company_id::text ~ '^etf:' then 'fund' else 'issuer' end from staging.analyst_rating_events
+        ) s
+        on conflict (raw_id) do nothing;
+    end if;
+
     insert into pg_temp.slice2_id_map (raw_id, kind, birth_scheme, birth_value, parsed_scheme, parsed_value, display_name)
     select distinct s.raw_id, s.kind,
            case
@@ -109,11 +137,7 @@ begin
            end,
            null::text
     from (
-        select analyst_id::text as raw_id, 'person'::text as kind from staging.analyst_rating_events
-        union
-        select company_id::text, case when company_id::text ~ '^etf:' then 'fund' else 'issuer' end from staging.analyst_rating_events
-        union
-        select fund_id::text, 'fund'::text from staging.fund_holding_facts
+        select fund_id::text as raw_id, 'fund'::text as kind from staging.fund_holding_facts
         union
         select holding_id::text, case when holding_id::text ~ '^(company:isin:|security:)' then 'instrument' else 'issuer' end
         from staging.fund_holding_facts
@@ -345,38 +369,40 @@ begin
         select entity_uuid from pg_temp.slice2_id_map where raw_id = p_raw;
     $fn$;
 
-    -- Convert staging.analyst_rating_events FKs and columns to uuid -> staging.entities(entity_id).
-    alter table staging.analyst_rating_events drop constraint if exists analyst_rating_events_analyst_id_fkey;
-    alter table staging.analyst_rating_events drop constraint if exists analyst_rating_events_company_id_fkey;
+    if to_regclass('staging.analyst_rating_events') is not null then
+        -- Convert staging.analyst_rating_events FKs and columns to uuid -> staging.entities(entity_id).
+        alter table staging.analyst_rating_events drop constraint if exists analyst_rating_events_analyst_id_fkey;
+        alter table staging.analyst_rating_events drop constraint if exists analyst_rating_events_company_id_fkey;
 
-    if exists (
-        select 1 from information_schema.columns
-        where table_schema = 'staging' and table_name = 'analyst_rating_events'
-          and column_name in ('analyst_id', 'company_id') and data_type <> 'uuid'
-    ) then
-        alter table staging.analyst_rating_events disable trigger trg_analyst_rating_events_append_only;
-        delete from staging.analyst_rating_events a
-        using (
-            select id,
-                   row_number() over (
-                       partition by ma.entity_uuid, mc.entity_uuid, e.recommendation_at, e.transaction_time
-                       order by (e.company_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$') desc, e.id desc
-                   ) as rn
-            from staging.analyst_rating_events e
-            join pg_temp.slice2_id_map ma on ma.raw_id = e.analyst_id::text
-            join pg_temp.slice2_id_map mc on mc.raw_id = e.company_id::text
-        ) ranked
-        where a.id = ranked.id and ranked.rn > 1;
-        alter table staging.analyst_rating_events enable trigger trg_analyst_rating_events_append_only;
+        if exists (
+            select 1 from information_schema.columns
+            where table_schema = 'staging' and table_name = 'analyst_rating_events'
+              and column_name in ('analyst_id', 'company_id') and data_type <> 'uuid'
+        ) then
+            alter table staging.analyst_rating_events disable trigger trg_analyst_rating_events_append_only;
+            delete from staging.analyst_rating_events a
+            using (
+                select id,
+                       row_number() over (
+                           partition by ma.entity_uuid, mc.entity_uuid, e.recommendation_at, e.transaction_time
+                           order by (e.company_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$') desc, e.id desc
+                       ) as rn
+                from staging.analyst_rating_events e
+                join pg_temp.slice2_id_map ma on ma.raw_id = e.analyst_id::text
+                join pg_temp.slice2_id_map mc on mc.raw_id = e.company_id::text
+            ) ranked
+            where a.id = ranked.id and ranked.rn > 1;
+            alter table staging.analyst_rating_events enable trigger trg_analyst_rating_events_append_only;
+
+            alter table staging.analyst_rating_events
+                alter column analyst_id type uuid using pg_temp.slice2_lookup_uuid(analyst_id::text),
+                alter column company_id type uuid using pg_temp.slice2_lookup_uuid(company_id::text);
+        end if;
 
         alter table staging.analyst_rating_events
-            alter column analyst_id type uuid using pg_temp.slice2_lookup_uuid(analyst_id::text),
-            alter column company_id type uuid using pg_temp.slice2_lookup_uuid(company_id::text);
+            add constraint analyst_rating_events_analyst_id_fkey FOREIGN KEY (analyst_id) REFERENCES staging.entities(entity_id),
+            add constraint analyst_rating_events_company_id_fkey FOREIGN KEY (company_id) REFERENCES staging.entities(entity_id);
     end if;
-
-    alter table staging.analyst_rating_events
-        add constraint analyst_rating_events_analyst_id_fkey FOREIGN KEY (analyst_id) REFERENCES staging.entities(entity_id),
-        add constraint analyst_rating_events_company_id_fkey FOREIGN KEY (company_id) REFERENCES staging.entities(entity_id);
 
     -- Convert staging.fund_holding_facts FKs and columns to uuid -> staging.entities(entity_id).
     alter table staging.fund_holding_facts drop constraint if exists fund_holding_facts_fund_id_fkey;

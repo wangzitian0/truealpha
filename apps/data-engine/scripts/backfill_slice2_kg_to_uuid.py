@@ -48,13 +48,18 @@ def backfill_legacy_kg_to_uuid(conn: psycopg.Connection, *, apply: bool = False)
                 raw_ref="backfill:slice2",
             )
 
-    rating_rows = conn.execute(
-        """
-        select distinct analyst_id::text, 'analyst'::text from staging.analyst_rating_events
-        union
-        select distinct company_id::text, 'company'::text from staging.analyst_rating_events
-        """
-    ).fetchall()
+    has_ratings = conn.execute("select to_regclass('staging.analyst_rating_events')").fetchone()
+    rating_rows = (
+        conn.execute(
+            """
+            select distinct analyst_id::text, 'analyst'::text from staging.analyst_rating_events
+            union
+            select distinct company_id::text, 'company'::text from staging.analyst_rating_events
+            """
+        ).fetchall()
+        if has_ratings and has_ratings[0] is not None
+        else []
+    )
     holding_rows = conn.execute(
         """
         select distinct fund_id::text, 'etf'::text from staging.fund_holding_facts

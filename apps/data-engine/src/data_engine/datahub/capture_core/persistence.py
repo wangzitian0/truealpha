@@ -277,15 +277,19 @@ class PostgresCaptureControlSink:
         self, *, source_request_id: str, raw: RawResponse, source_published_at: datetime | None = None
     ) -> SourceVintage:
         ingested_at = datetime.now(UTC)
-        raw_fetch_id = raw_store.insert_fetch(
-            self._connection,
-            source=raw.source,
-            source_record_id=raw.record_id,
-            body=raw.body,
-            content_type=raw.content_type,
-            fetched_at=ingested_at,
-            recorded_at=ingested_at,
-            store=self._object_store,
+        raw_fetch_id = (
+            raw.existing_raw_fetch_id
+            if raw.existing_raw_fetch_id is not None
+            else raw_store.insert_fetch(
+                self._connection,
+                source=raw.source,
+                source_record_id=raw.record_id,
+                body=raw.body,
+                content_type=raw.content_type,
+                fetched_at=ingested_at,
+                recorded_at=ingested_at,
+                store=self._object_store,
+            )
         )
         vintage = SourceVintage(
             source_request_id=source_request_id,

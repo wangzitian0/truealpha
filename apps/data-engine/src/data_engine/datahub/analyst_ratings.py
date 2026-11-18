@@ -16,8 +16,6 @@ from factors.base.analyst_track_record import AnalystRatingItem, AnalystTrackRec
 from psycopg import Connection
 
 from data_engine.datahub._helpers import (
-    execute_many,
-    optional_savepoint,
     safe_case_id_part,
     single_origin_confidence,
     unbacked_status_values,
@@ -392,75 +390,6 @@ def _ticker_row(
     return consensus_row, None
 
 
-def _persist_analyst_rating_events(
-    connection: Connection[Any],
-    *,
-    company_id: str,
-    as_of: datetime,
-    rating_items: Sequence[AnalystRatingItem],
-    run_id: str,
-) -> int:
-    valid_items = [item for item in rating_items if isinstance(item, AnalystRatingItem) and 1 <= item.rating <= 5]
-    if not valid_items:
-        return 0
-    try:
-        from factors.shared.entity_resolution import ensure_entity
-
-        with optional_savepoint(connection):
-            company_uuid = ensure_entity(
-                connection,
-                company_id,
-                "issuer",
-                company_id,
-                transaction_time=as_of,
-                raw_ref=f"moomoo:rating_summary:{run_id}:{company_id}",
-            )
-            analyst_uuids = {
-                item.analyst_id: ensure_entity(
-                    connection,
-                    item.analyst_id,
-                    "person",
-                    item.analyst_id,
-                    transaction_time=as_of,
-                    raw_ref=f"moomoo:rating_summary:{run_id}:{company_id}:{item.analyst_id}",
-                )
-                for item in valid_items
-            }
-            event_rows = []
-            for item in valid_items:
-                raw_rec = getattr(item, "recommendation_at", None) or getattr(item, "recommendation_date", None)
-                if isinstance(raw_rec, date) and not isinstance(raw_rec, datetime):
-                    rec_at = datetime(raw_rec.year, raw_rec.month, raw_rec.day, tzinfo=UTC)
-                elif isinstance(raw_rec, datetime):
-                    rec_at = raw_rec if raw_rec.tzinfo is not None else raw_rec.replace(tzinfo=UTC)
-                else:
-                    rec_at = as_of
-                event_rows.append(
-                    (
-                        analyst_uuids[item.analyst_id],
-                        company_uuid,
-                        rec_at,
-                        as_of,
-                        as_of,
-                        int(item.rating),
-                        item.target_price,
-                        item.confidence if Decimal("0") <= item.confidence <= Decimal("1") else Decimal("0.8"),
-                        f"moomoo:rating_summary:{run_id}:{company_id}:{item.analyst_id}",
-                    )
-                )
-            execute_many(
-                connection,
-                "insert into staging.analyst_rating_events (analyst_id, company_id, recommendation_at, transaction_time, rating, target_price, confidence, raw_ref) "
-                "select %s, %s, least(%s::timestamptz, %s::timestamptz, clock_timestamp()), least(%s::timestamptz, clock_timestamp()), %s, %s, %s, %s "
-                "where to_regclass('staging.analyst_rating_events') is not null on conflict (analyst_id, company_id, recommendation_at, transaction_time) do nothing",
-                event_rows,
-            )
-        return len(valid_items)
-    except Exception as exc:  # noqa: BLE001
-        log.warning("analyst rating event persistence failed for %s: %s", company_id, exc)
-        return 0
-
-
 def _unpack_track_record(rec: AnalystTrackRecord) -> tuple[Any, int, int, int, int, Decimal, list[str], str]:
     avail = "available" if not rec.result.flags and rec.consensus_rating is not None else "unavailable"
     return (
@@ -519,10 +448,6 @@ def materialize_analyst_ratings(
         connection.execute(
             _INSERT_SQL, (run_id, canonical_id, as_of, *fields[:-1], extractor, fields[-1], source_status, val_status)
         )
-        if rating_items:
-            _persist_analyst_rating_events(
-                connection, company_id=canonical_id, as_of=as_of, rating_items=rating_items, run_id=run_id
-            )
     return len(ratings_data)
 
 

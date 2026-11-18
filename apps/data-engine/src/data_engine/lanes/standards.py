@@ -450,6 +450,9 @@ def run_supply_chain_exposure(
                 connection, run_id=head.run_id, cutoff=head.cutoff, issuers=universe.issuers
             )
             connection.commit()
+            from truealpha_runtime.mart_refresh import MART_ENTITY_IDENTITY, refresh_mart_materialized_views
+
+            refresh_mart_materialized_views(connection, (MART_ENTITY_IDENTITY,), commit_before=True)
             joined = int(sc_report)
             model_extracted = int(getattr(sc_report, "model_extracted", 0))
             replayed = int(getattr(sc_report, "replayed", 0))

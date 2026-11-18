@@ -46,10 +46,12 @@ class RawResponse:
     source: DataSource
     record_id: str
     content_type: str = "application/json"
+    existing_raw_fetch_id: int | None = None
+    existing_raw_sha256: str | None = None
 
     @property
     def sha256(self) -> str:
-        return hashlib.sha256(self.body).hexdigest()
+        return self.existing_raw_sha256 or hashlib.sha256(self.body).hexdigest()
 
     @property
     def byte_length(self) -> int:

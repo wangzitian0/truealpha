@@ -83,6 +83,9 @@ def _seed(connection, *, isin: str, ticker: str, weight: str, filing: datetime, 
         """,
         (fund_uuid, inst_uuid, f"{ticker} Inc.", period, filing, isin, Decimal(weight)),
     )
+    from truealpha_runtime.mart_refresh import refresh_mart_materialized_views
+
+    refresh_mart_materialized_views(connection)
 
 
 def test_the_vintage_is_the_one_knowable_at_the_cutoff(connection) -> None:
@@ -404,6 +407,9 @@ def test_dual_class_holding_joins_issuer_core_valuation_row(connection) -> None:
         )
     issuer_uuid = resolve_entity(connection, "issuer:cik:0001652044", "issuer", as_of=CUTOFF.date(), known_at=CUTOFF)
     listing_uuid = resolve_entity(connection, "listing:xnas:goog", "listing", as_of=CUTOFF.date(), known_at=CUTOFF)
+    from truealpha_runtime.mart_refresh import refresh_mart_materialized_views
+
+    refresh_mart_materialized_views(connection)
     _insert_core_result(
         connection,
         run_id=RUN,
@@ -561,6 +567,9 @@ def test_mart_fund_holdings_deduplicates_reparsed_holding_lines(connection) -> N
             """,
             (fund_uuid, holding_uuid, KNOWABLE_FILING, raw_ref),
         )
+    from truealpha_runtime.mart_refresh import MART_FUND_HOLDINGS_MV_ORDER, refresh_mart_materialized_views
+
+    refresh_mart_materialized_views(connection, MART_FUND_HOLDINGS_MV_ORDER)
 
     rows = connection.execute(
         "select holding_id, percent_of_net_assets, raw_ref from mart.fund_holdings where fund_id = %s",
@@ -620,6 +629,9 @@ def test_dual_kg_entities_and_dual_listings_preserve_weight_conservation(connect
     issuer_uuid = resolve_entity(connection, "issuer:cik:0001652044", "issuer", as_of=CUTOFF.date(), known_at=CUTOFF)
     listing_goog = resolve_entity(connection, "listing:xnas:goog", "listing", as_of=CUTOFF.date(), known_at=CUTOFF)
     listing_googl = resolve_entity(connection, "listing:xnas:googl", "listing", as_of=CUTOFF.date(), known_at=CUTOFF)
+    from truealpha_runtime.mart_refresh import refresh_mart_materialized_views
+
+    refresh_mart_materialized_views(connection)
 
     for entity_uuid in (issuer_uuid, listing_goog, listing_googl):
         count = connection.execute(

@@ -503,6 +503,91 @@ def test_k4_d1_twelve_data_quote_fetcher_reads_staging_market_prices_daily_witho
     assert http_calls == [], "must make 0 Twelve Data HTTP calls when bar is in staging.market_prices_daily"
 
 
+def test_k4_d1_from_price_store_reuses_existing_raw_fetch_without_inserting_duplicate(monkeypatch) -> None:
+    """When landed_fetch_keys + raw.fetches already hold a Twelve Data landing, _from_price_store
+    attaches existing_raw_fetch_id and _put_vintage reuses it without calling raw_store.insert_fetch (#1730)."""
+    from contextlib import nullcontext
+
+    from data_engine.datahub.capture_core.executor import RawResponse
+    from truealpha_contracts.models import DataSource
+
+    expected_sha = "a" * 64
+
+    class _ReuseConn:
+        info = object()
+
+        def transaction(self):
+            return nullcontext()
+
+        def execute(self, sql: str, params: tuple[Any, ...]):
+            if "staging.market_prices_daily" in sql:
+                assert params == ("AAPL", date(2026, 10, 16))
+                row = (
+                    date(2026, 10, 16),
+                    Decimal("225.10"),
+                    Decimal("228.50"),
+                    Decimal("224.00"),
+                    Decimal("227.55"),
+                    Decimal("42000000"),
+                    datetime(2026, 10, 16, 20, 0, tzinfo=UTC),
+                )
+            elif "staging.landed_fetch_keys" in sql:
+                assert params == ("AAPL", date(2026, 10, 16))
+                row = (4242, expected_sha)
+            else:
+                raise AssertionError(f"unexpected SQL: {sql}")
+
+            class _One:
+                def __init__(self, value):
+                    self._value = value
+
+                def fetchone(self):
+                    return self._value
+
+            return _One(row)
+
+    fetcher = TwelveDataQuoteFetcher("test-key", connection=_ReuseConn())
+    quote = fetcher("AAPL", date(2026, 10, 16))
+    assert quote is not None
+    assert quote.existing_raw_fetch_id == 4242
+    assert quote.existing_raw_sha256 == expected_sha
+
+    raw = RawResponse(
+        body=quote.raw_bytes,
+        source=DataSource.TWELVE_DATA,
+        record_id="twelve-data:AAPL:2026-10-16",
+        existing_raw_fetch_id=quote.existing_raw_fetch_id,
+        existing_raw_sha256=quote.existing_raw_sha256,
+    )
+    assert raw.sha256 == expected_sha
+
+    from data_engine.datahub.capture_core.persistence import CaptureTimeline, PostgresCaptureControlSink
+
+    recorded_vintages: list[tuple[Any, int]] = []
+
+    class _FakeRepo:
+        def put_source_vintage(self, vintage, *, raw_fetch_id: int) -> None:
+            recorded_vintages.append((vintage, raw_fetch_id))
+
+    def _forbid_insert_fetch(*_args, **_kwargs):
+        raise AssertionError("raw_store.insert_fetch must not be called when existing_raw_fetch_id is set")
+
+    monkeypatch.setattr("data_engine.raw_store.insert_fetch", _forbid_insert_fetch)
+    sink = PostgresCaptureControlSink.__new__(PostgresCaptureControlSink)
+    sink._connection = object()
+    sink._object_store = None
+    sink._repository = _FakeRepo()
+    sink._timeline = CaptureTimeline.for_partition(datetime(2026, 10, 17, 1, 0, tzinfo=UTC), "2026-10-16")
+    vintage = sink._put_vintage(
+        source_request_id=f"source-request:{'0' * 64}",
+        raw=raw,
+        source_published_at=datetime(2026, 10, 16, 20, 0, tzinfo=UTC),
+    )
+    assert vintage.raw_object_id == f"raw-object:{expected_sha}"
+    assert len(recorded_vintages) == 1
+    assert recorded_vintages[0][1] == 4242
+
+
 def test_k4_d2_monthly_series_skipped_mid_month_when_prior_closed_month_is_stored() -> None:
     """Mid-month weekday run when the prior closed month-end bar is already stored makes 0 1month calls (#1411 K4 D2)."""
     mid_month_now = datetime(2026, 10, 14, 21, 15, tzinfo=UTC)

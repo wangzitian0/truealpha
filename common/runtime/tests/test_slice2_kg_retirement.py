@@ -81,8 +81,6 @@ def test_mart_readonly_can_query_holdings_and_entity_views_without_staging_defin
 
 def test_staging_entity_fks_use_uuid_referencing_staging_entities(slice2_db: str) -> None:
     expected = {
-        ("analyst_rating_events", "analyst_id"): "uuid",
-        ("analyst_rating_events", "company_id"): "uuid",
         ("fund_holding_facts", "fund_id"): "uuid",
         ("fund_holding_facts", "holding_id"): "uuid",
     }
@@ -92,8 +90,8 @@ def test_staging_entity_fks_use_uuid_referencing_staging_entities(slice2_db: str
             select table_name, column_name, data_type
             from information_schema.columns
             where table_schema = 'staging'
-              and ((table_name = 'analyst_rating_events' and column_name in ('analyst_id', 'company_id'))
-                or (table_name = 'fund_holding_facts' and column_name in ('fund_id', 'holding_id')))
+              and table_name = 'fund_holding_facts'
+              and column_name in ('fund_id', 'holding_id')
             """
         ).fetchall()
         assert {(t, c): dt for t, c, dt in cols} == expected
@@ -108,7 +106,7 @@ def test_staging_entity_fks_use_uuid_referencing_staging_entities(slice2_db: str
               on tc.constraint_name = ccu.constraint_name and tc.table_schema = ccu.table_schema
             where tc.constraint_type = 'FOREIGN KEY'
               and tc.table_schema = 'staging'
-              and tc.table_name in ('analyst_rating_events', 'fund_holding_facts')
+              and tc.table_name = 'fund_holding_facts'
             """
         ).fetchall()
         fk_map = {(t, c): (ref_t, ref_c) for t, c, ref_t, ref_c in fks}
@@ -122,6 +120,10 @@ def test_views_and_functions_reference_no_retired_kg_tables(slice2_db: str) -> N
             """
             select schemaname || '.' || viewname, definition
             from pg_views
+            where schemaname in ('raw', 'staging', 'mart', 'app')
+            union all
+            select schemaname || '.' || matviewname, definition
+            from pg_matviews
             where schemaname in ('raw', 'staging', 'mart', 'app')
             """
         ).fetchall()
@@ -213,13 +215,6 @@ def test_slice2_migration_converts_legacy_kg_database_losslessly() -> None:
                     id bigint generated always as identity primary key,
                     unified_id text not null constraint market_prices_unified_id_fkey references staging.kg_entities(id)
                 );
-                alter table staging.analyst_rating_events
-                    drop constraint analyst_rating_events_analyst_id_fkey,
-                    drop constraint analyst_rating_events_company_id_fkey,
-                    alter column analyst_id type text using analyst_id::text,
-                    alter column company_id type text using company_id::text,
-                    add constraint analyst_rating_events_analyst_id_fkey foreign key (analyst_id) references staging.kg_entities(id),
-                    add constraint analyst_rating_events_company_id_fkey foreign key (company_id) references staging.kg_entities(id);
                 drop view if exists mart.fund_holdings_valuation, mart.fund_holdings_coverage, mart.fund_holdings_resolved, mart.fund_holdings;
                 alter table staging.fund_holding_facts
                     drop constraint fund_holding_facts_fund_id_fkey,
@@ -295,18 +290,6 @@ def test_slice2_migration_converts_legacy_kg_database_losslessly() -> None:
                 """,
                 (now.date(), now, now.date(), now, now.date(), now),
             )
-            # Include a collision between legacy company:cik:1045810 and nvda_uuid at identical timestamp.
-            conn.execute(
-                """
-                insert into staging.analyst_rating_events
-                    (analyst_id, company_id, recommendation_at, transaction_time, rating, target_price, confidence, raw_ref)
-                values
-                    ('analyst:moomoo:abc123', 'company:cik:1045810', %s, %s, 5, 150, 0.9, 'r1'),
-                    ('analyst:moomoo:abc123', %s, %s, %s, 5, 150, 0.9, 'r1b'),
-                    ('Geoff Meacham', 'company:cik:1045810', %s, %s, 4, 140, 0.8, 'r2')
-                """,
-                (now, now, str(nvda_uuid), now, now, now, now),
-            )
             conn.execute(
                 """
                 insert into staging.fund_holding_facts
@@ -328,9 +311,6 @@ def test_slice2_migration_converts_legacy_kg_database_losslessly() -> None:
         with psycopg.connect(db_url) as check:
             for qualified in RETIRED_TABLES:
                 assert check.execute("select to_regclass(%s)", (qualified,)).fetchone() == (None,)
-            rating_rows = check.execute("select analyst_id, company_id from staging.analyst_rating_events").fetchall()
-            assert len(rating_rows) == 2
-            assert all(isinstance(aid, uuid.UUID) and isinstance(cid, uuid.UUID) for aid, cid in rating_rows)
             holding_rows = check.execute("select fund_id, holding_id from staging.fund_holding_facts").fetchall()
             assert len(holding_rows) == 1
             assert isinstance(holding_rows[0][0], uuid.UUID) and isinstance(holding_rows[0][1], uuid.UUID)

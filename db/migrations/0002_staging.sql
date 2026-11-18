@@ -535,32 +535,6 @@ create table if not exists staging.entities (
  constraint entities_kind_fkey FOREIGN KEY (kind) REFERENCES staging.entity_kinds(kind)
 );
 
-create table if not exists staging.analyst_rating_events (
- id bigint generated always as identity,
- analyst_id uuid not null,
- company_id uuid not null,
- recommendation_at timestamp with time zone not null,
- transaction_time timestamp with time zone not null,
- vendor_updated_at timestamp with time zone,
- recorded_at timestamp with time zone default now() not null,
- rating smallint not null,
- target_price numeric,
- currency text,
- source_url text,
- confidence numeric not null,
- raw_ref text not null,
- constraint analyst_rating_events_pkey PRIMARY KEY (id),
- constraint analyst_rating_events_analyst_id_company_id_recommendation__key UNIQUE (analyst_id, company_id, recommendation_at, transaction_time),
- constraint analyst_rating_events_check CHECK ((transaction_time >= recommendation_at)),
- constraint analyst_rating_events_check1 CHECK ((recorded_at >= transaction_time)),
- constraint analyst_rating_events_confidence_check CHECK (((confidence >= (0)::numeric) AND (confidence <= (1)::numeric))),
- constraint analyst_rating_events_currency_check CHECK (((currency IS NULL) OR (currency ~ '^[A-Z]{3}$'::text))),
- constraint analyst_rating_events_rating_check CHECK (((rating >= 1) AND (rating <= 5))),
- constraint analyst_rating_events_target_price_check CHECK ((target_price >= (0)::numeric)),
- constraint analyst_rating_events_analyst_id_fkey FOREIGN KEY (analyst_id) REFERENCES staging.entities(entity_id),
- constraint analyst_rating_events_company_id_fkey FOREIGN KEY (company_id) REFERENCES staging.entities(entity_id)
-);
-
 create table if not exists staging.fund_holding_facts (
  id bigint generated always as identity,
  fund_id uuid not null,
@@ -2055,7 +2029,6 @@ execute $vc$create or replace view staging.entity_graph_nodes as
 end if; end $$;
 
 do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'staging.accepted_rulesets'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = '30ab83bc19361d65b937ab567f44c01e') then drop trigger if exists reject_mutation on staging.accepted_rulesets; CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON staging.accepted_rulesets FOR EACH ROW EXECUTE FUNCTION raw.reject_mutation(); end if; end $$;
-do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'staging.analyst_rating_events'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = '1b582c6bea1f27b597fd796a200669f7') then drop trigger if exists trg_analyst_rating_events_append_only on staging.analyst_rating_events; CREATE TRIGGER trg_analyst_rating_events_append_only BEFORE DELETE OR UPDATE ON staging.analyst_rating_events FOR EACH ROW EXECUTE FUNCTION staging.reject_point_in_time_mutation(); end if; end $$;
 do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'staging.capture_entity_refs'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = '788a191badb30e518bf2d920ba99e613') then drop trigger if exists reject_mutation on staging.capture_entity_refs; CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON staging.capture_entity_refs FOR EACH ROW EXECUTE FUNCTION staging.reject_entity_mutation(); end if; end $$;
 do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'staging.capture_normalized_observations'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = '6f51a39c2f4039549a3690d013a02642') then drop trigger if exists reject_mutation on staging.capture_normalized_observations; CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON staging.capture_normalized_observations FOR EACH ROW EXECUTE FUNCTION staging.reject_point_in_time_mutation(); end if; end $$;
 do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'staging.capture_observation_obligations'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = '93403becc156e47f1b723c6a5098884e') then drop trigger if exists reject_mutation on staging.capture_observation_obligations; CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON staging.capture_observation_obligations FOR EACH ROW EXECUTE FUNCTION raw.reject_capture_control_mutation(); end if; end $$;
@@ -2089,7 +2062,6 @@ do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'staging.cor
 do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'staging.core_snapshot_members'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = '1824f0b6a6a1d9b451608875e265ddb7') then drop trigger if exists validate_member on staging.core_snapshot_members; CREATE TRIGGER validate_member BEFORE INSERT ON staging.core_snapshot_members FOR EACH ROW EXECUTE FUNCTION staging.validate_core_snapshot_member(); end if; end $$;
 do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'staging.core_snapshots'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = '7a1b7a74986466bcc6ce6aeecdbfa49f') then drop trigger if exists reject_mutation on staging.core_snapshots; CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON staging.core_snapshots FOR EACH ROW EXECUTE FUNCTION raw.reject_capture_control_mutation(); end if; end $$;
 
-do $$ begin if to_regclass('staging.idx_analyst_rating_events_asof') is null then CREATE INDEX idx_analyst_rating_events_asof ON staging.analyst_rating_events USING btree (company_id, transaction_time DESC, recommendation_at DESC); end if; end $$;
 do $$ begin if to_regclass('staging.ix_api_call_ledger_called_at') is null then CREATE INDEX ix_api_call_ledger_called_at ON staging.api_call_ledger USING btree (called_at DESC); end if; end $$;
 do $$ begin if to_regclass('staging.ix_api_call_ledger_fetch_key') is null then CREATE INDEX ix_api_call_ledger_fetch_key ON staging.api_call_ledger USING btree (called_at, fetch_key) WHERE (fetch_key IS NOT NULL); end if; end $$;
 do $$ begin if to_regclass('staging.ix_api_call_ledger_payload_sha256') is null then CREATE INDEX ix_api_call_ledger_payload_sha256 ON staging.api_call_ledger USING btree (payload_sha256) WHERE (payload_sha256 IS NOT NULL); end if; end $$;

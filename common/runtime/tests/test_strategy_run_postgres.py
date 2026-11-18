@@ -336,6 +336,9 @@ def test_an_entity_uuid_issuer_id_is_translated_to_its_symbolic_identity(connect
     """
     strategy_key = "large_model_value_v0"
     entity_uuid, legacy_id = _mint_issuer_with_legacy_alias(connection)
+    from truealpha_runtime.mart_refresh import MART_ENTITY_IDENTITY, refresh_mart_materialized_views
+
+    refresh_mart_materialized_views(connection, (MART_ENTITY_IDENTITY,))
     run_id = "strategy-run:" + uuid.uuid4().hex + "0" * 32
     _insert_run(connection, run_id, strategy_key, executed_at=datetime.now(UTC))
     _insert_decision(

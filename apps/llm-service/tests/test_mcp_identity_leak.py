@@ -205,6 +205,12 @@ def seeded_entity(monkeypatch: pytest.MonkeyPatch):
             """,
             (entity_uuid, lei, entity_uuid, legacy_id),
         )
+        from truealpha_runtime.mart_refresh import (
+            MART_ENTITY_IDENTITY,
+            refresh_mart_materialized_views,
+        )
+
+        refresh_mart_materialized_views(connection, (MART_ENTITY_IDENTITY,))
         run_id = "strategy-run:" + secrets.token_hex(32)
         connection.execute(
             """

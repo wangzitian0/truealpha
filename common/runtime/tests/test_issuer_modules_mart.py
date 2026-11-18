@@ -209,6 +209,9 @@ def test_resolve_issuer_id_candidates_batch_executes_against_live_entity_identit
         """,
         (entity_uuid, entity_uuid, entity_uuid),
     )
+    from truealpha_runtime.mart_refresh import MART_ENTITY_IDENTITY, refresh_mart_materialized_views
+
+    refresh_mart_materialized_views(database, (MART_ENTITY_IDENTITY,))
 
     batch = resolve_issuer_id_candidates_batch(
         "postgresql://borrowed",

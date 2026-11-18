@@ -975,7 +975,7 @@ def test_refresh_universes_skips_stopped_sp500_and_isolates_per_universe_transac
     # SP500 was skipped completely while STOPPED; canary still refreshed and committed despite qqq failing.
     assert refreshed == ["qqq", "canary"]
     assert nport_calls == ["QQQ"]
-    assert len(commits) == 3  # canary constituents + QQQ N-PORT + identity enrichment
+    assert len(commits) == 4  # canary constituents + QQQ N-PORT + identity enrichment + mart MV refresh
 
     # #1523 D2: in staging, QQQ is in list_refresh (constituents refreshed weekly), not scheduled (no N-PORT capture).
     refreshed.clear()
@@ -992,7 +992,7 @@ def test_refresh_universes_skips_stopped_sp500_and_isolates_per_universe_transac
     )
     assert refreshed == ["qqq", "canary"]
     assert nport_calls == []
-    assert len(commits) == 3  # qqq constituents + canary constituents + identity enrichment
+    assert len(commits) == 4  # qqq constituents + canary constituents + identity enrichment + mart MV refresh
 
 
 # -- #1310: the SP500 schedule stays STOPPED while its status in the contract is stopped ------------------

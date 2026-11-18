@@ -63,6 +63,8 @@ class MarketPriceQuote:
     volume: Decimal | None = None
     is_provisional: bool = False
     currency: str | None = _DEFAULT_QUOTE_CURRENCY
+    existing_raw_fetch_id: int | None = None
+    existing_raw_sha256: str | None = None
 
 
 BAR_FIELDS: tuple[str, ...] = ("open", "high", "low", "volume")
@@ -241,6 +243,8 @@ class MarketPriceAdapter:
             body=quote.raw_bytes,
             source=origin.raw_source,
             record_id=f"{origin.origin}:{target.symbol}:{quote.as_of.isoformat()}",
+            existing_raw_fetch_id=quote.existing_raw_fetch_id,
+            existing_raw_sha256=quote.existing_raw_sha256,
         )
 
     def _corroboration(
