@@ -89,6 +89,7 @@ __all__ = [
     "load_entity_display_map",
     "resolve_issuer_candidates_from_cursor",
     "resolve_issuer_id_candidates_batch",
+    "resolve_issuer_identity_from_cursor",
     "resolve_static_entity_display",
 ]
 
@@ -185,16 +186,22 @@ def _append_resolved_candidates(target: list[str], row: dict[str, Any]) -> None:
             target.append(f"{pre}{v}")
 
 
-def resolve_issuer_candidates_from_cursor(cur: Any, issuer_id: str) -> list[str]:
+def resolve_issuer_identity_from_cursor(cur: Any, issuer_id: str) -> tuple[list[str], dict[str, str]]:
+    """Resolve candidate identifiers and ``entity_id -> legacy_id`` mapping on an open cursor."""
     clean = issuer_id.strip()
     if not clean:
-        return [issuer_id]
+        return [issuer_id], {}
     out = [clean]
+    legacy_by_entity: dict[str, str] = {}
     try:
         cur.execute("savepoint _issuer_cand_sp")
         cur.execute(_RESOLVE_BATCH_CANDIDATES_SQL, ([clean],))
         for row in cur.fetchall():
             _append_resolved_candidates(out, row)
+            eid = row.get("entity_id")
+            leg = row.get("legacy_id")
+            if isinstance(eid, str) and eid and isinstance(leg, str) and leg:
+                legacy_by_entity.setdefault(eid, leg)
         cur.execute("release savepoint _issuer_cand_sp")
     except psycopg.Error:
         try:
@@ -202,7 +209,12 @@ def resolve_issuer_candidates_from_cursor(cur: Any, issuer_id: str) -> list[str]
             cur.execute("release savepoint _issuer_cand_sp")
         except psycopg.Error:
             pass
-    return out
+    return out, legacy_by_entity
+
+
+def resolve_issuer_candidates_from_cursor(cur: Any, issuer_id: str) -> list[str]:
+    candidates, _legacy_map = resolve_issuer_identity_from_cursor(cur, issuer_id)
+    return candidates
 
 
 def resolve_issuer_id_candidates_batch(

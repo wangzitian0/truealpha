@@ -7,6 +7,7 @@ import json
 import logging
 import re
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from typing import Any, Literal
 
@@ -24,6 +25,7 @@ from truealpha_runtime.issuer_modules_mart import (
     PostgresIssuerModuleReader,
     SupplyChainExposure,
     resolve_issuer_candidates_from_cursor,
+    resolve_issuer_identity_from_cursor,
     resolve_static_entity_display,
 )
 from truealpha_runtime.research_cards import (
@@ -993,11 +995,17 @@ def get_strategy_run_page(
         return StrategyRunPageResponse(
             available=False, reason=report.reason, strategy_id=strategy_id, universe=norm_universe
         )
-    display_map = load_entity_display_items(database_url=database_url)
-    prov_map = _load_strategy_provenance(report.strategy_run_id, database_url=database_url)
-    wide_panel = _load_wide_panel(
-        WIDE_PANEL_INPUT_KEYS + GPPE_VARIANT_KEYS + RANKING_PANEL_INPUT_KEYS, database_url=database_url
-    )
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        f_display = pool.submit(load_entity_display_items, database_url=database_url)
+        f_prov = pool.submit(_load_strategy_provenance, report.strategy_run_id, database_url=database_url)
+        f_panel = pool.submit(
+            _load_wide_panel,
+            WIDE_PANEL_INPUT_KEYS + GPPE_VARIANT_KEYS + RANKING_PANEL_INPUT_KEYS,
+            database_url=database_url,
+        )
+        display_map = f_display.result()
+        prov_map = f_prov.result()
+        wide_panel = f_panel.result()
     target_cutoff = cutoff or max((d.cutoff_at.isoformat() for d in report.decisions), default=None)
     filtered = [
         d
@@ -1187,26 +1195,51 @@ def get_entity_detail(
     issuer_id: str,
     database_url: str | None = None,
 ) -> EntityDetailResponse:
-    page = get_strategy_run_page(context, database_url=database_url)
     db_url = database_url or settings.database_url
-    try:
-        candidates = with_mart_readonly(
-            lambda cur: resolve_issuer_candidates_from_cursor(cur, issuer_id),
-            database_url=database_url,
-        )
-    except psycopg.Error:
-        candidates = [issuer_id]
+
+    def _resolve_candidates() -> list[str]:
+        try:
+            return with_mart_readonly(
+                lambda cur: resolve_issuer_candidates_from_cursor(cur, issuer_id),
+                database_url=database_url,
+            )
+        except psycopg.Error:
+            return [issuer_id]
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        f_page = pool.submit(get_strategy_run_page, context, database_url=database_url)
+        f_candidates = pool.submit(_resolve_candidates)
+        page = f_page.result()
+        candidates = f_candidates.result()
+
     cand_set = set(candidates)
     decisions = [d for d in page.decisions if d.issuer_id in cand_set]
-    trace = get_trace(context, issuer_id=issuer_id, page=page, candidates=candidates, database_url=database_url)
-    profile = PostgresCompanyProfileReader(database_url=db_url).get_company_profile(
-        issuer_id=issuer_id, candidates=candidates
-    )
     modules = PostgresIssuerModuleReader(database_url=db_url)
     if hasattr(modules, "seed_candidates"):
         modules.seed_candidates(issuer_id, candidates)
-    supply = modules.supply_chain_exposure(issuer_id=issuer_id)
-    ratings = modules.analyst_ratings(issuer_id=issuer_id)
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        f_trace = pool.submit(
+            get_trace,
+            context,
+            issuer_id=issuer_id,
+            page=page,
+            candidates=candidates,
+            database_url=database_url,
+        )
+        f_profile = pool.submit(
+            PostgresCompanyProfileReader(database_url=db_url).get_company_profile,
+            issuer_id=issuer_id,
+            candidates=candidates,
+            include_decision=False,
+        )
+        f_supply = pool.submit(modules.supply_chain_exposure, issuer_id)
+        f_ratings = pool.submit(modules.analyst_ratings, issuer_id)
+        trace = f_trace.result()
+        profile = f_profile.result()
+        supply = f_supply.result()
+        ratings = f_ratings.result()
+
     return EntityDetailResponse(
         issuer_id=issuer_id,
         label=_display_label(issuer_id, page.display_map),
@@ -1538,61 +1571,70 @@ class PostgresCompanyProfileReader:
         self._database_url = database_url
 
     def get_company_profile(
-        self, *, issuer_id: str, candidates: list[str] | tuple[str, ...] | None = None
+        self,
+        *,
+        issuer_id: str,
+        candidates: list[str] | tuple[str, ...] | None = None,
+        include_decision: bool = True,
     ) -> dict[str, Any]:
         clean = issuer_id.strip()
 
         def _q(cur: Any) -> tuple[Any, dict[str, Any] | None, list[dict[str, Any]]]:
-            cand = list(candidates) if candidates else resolve_issuer_candidates_from_cursor(cur, clean)
-            cur.execute(
-                f"""
-                select coalesce(ei.legacy_id, d.issuer_id) as issuer_id,
-                       to_char(d.cutoff_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as cutoff_at,
-                       d.tier, d.valuation_gap::text as valuation_gap,
-                       d.current_price_to_sales::text as current_price_to_sales,
-                       d.target_price_to_sales::text as target_price_to_sales,
-                       d.current_price_to_gross_profit::text as current_price_to_gross_profit,
-                       d.target_price_to_gross_profit::text as target_price_to_gross_profit,
-                       d.outcome, d.exclusion_reason, d.rank,
-                       d.peg::text as peg, d.peg_rank, d.peg_reason_codes,
-                       m.confidence, m.reason_codes
-                from mart.strategy_decisions d
-                left join mart.strategy_run_capture scope on scope.strategy_run_id = d.strategy_run_id
-                left join lateral (
-                  select m.confidence::text as confidence, m.reason_codes
-                  from mart.metric_node_values m
-                  where m.run_id = scope.capture_run_id
-                    and m.issuer_id = d.issuer_id
-                    and m.node_key = coalesce(d.labor_efficiency_metric, 'gppe_uniform_charge_v0')
-                  order by m.recorded_at desc
-                  limit 1
-                ) m on true
-                left join lateral (
-                  select ei.legacy_id from mart.entity_identity ei
-                  where ei.entity_id::text = d.issuer_id limit 1
-                ) ei on true
-                where d.issuer_id = any(%s::text[])
-                  and {served_or_empty_head_predicate("scope.capture_run_id")}
-                order by d.cutoff_at desc limit 1
-                """,
-                (cand,),
-            )
-            decision = cur.fetchone()
-            cur.execute(
-                f"""
-                select v.value::text as gppe, v.node_key as operating_branch,
-                       v.confidence::text as confidence,
-                       coalesce(v.availability_status, 'unavailable') as availability_status,
-                       v.reason_codes
-                from mart.metric_node_values v
-                where v.issuer_id = any(%s::text[])
-                  and v.node_key = any(%s::text[])
-                  and {served_run_predicate("v.run_id")}
-                order by (v.availability_status = 'available') desc, v.period desc limit 1
-                """,
-                (cand, list(GPPE_VARIANT_KEYS)),
-            )
-            gppe = cur.fetchone()
+            if candidates is not None:
+                cand = list(candidates)
+                legacy_by_entity: dict[str, str] = {}
+            else:
+                cand, legacy_by_entity = resolve_issuer_identity_from_cursor(cur, clean)
+            decision: dict[str, Any] | None = None
+            gppe: dict[str, Any] | None = None
+            if include_decision:
+                cur.execute(
+                    f"""
+                    select d.issuer_id,
+                           to_char(d.cutoff_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as cutoff_at,
+                           d.tier, d.valuation_gap::text as valuation_gap,
+                           d.current_price_to_sales::text as current_price_to_sales,
+                           d.target_price_to_sales::text as target_price_to_sales,
+                           d.current_price_to_gross_profit::text as current_price_to_gross_profit,
+                           d.target_price_to_gross_profit::text as target_price_to_gross_profit,
+                           d.outcome, d.exclusion_reason, d.rank,
+                           d.peg::text as peg, d.peg_rank, d.peg_reason_codes,
+                           m.confidence, m.reason_codes
+                    from mart.strategy_decisions d
+                    left join mart.strategy_run_capture scope on scope.strategy_run_id = d.strategy_run_id
+                    left join lateral (
+                      select m.confidence::text as confidence, m.reason_codes
+                      from mart.metric_node_values m
+                      where m.run_id = scope.capture_run_id
+                        and m.issuer_id = d.issuer_id
+                        and m.node_key = coalesce(d.labor_efficiency_metric, 'gppe_uniform_charge_v0')
+                      order by m.recorded_at desc
+                      limit 1
+                    ) m on true
+                    where d.issuer_id = any(%s::text[])
+                      and {served_or_empty_head_predicate("scope.capture_run_id")}
+                    order by d.cutoff_at desc limit 1
+                    """,
+                    (cand,),
+                )
+                decision = cur.fetchone()
+                if decision and decision.get("issuer_id") in legacy_by_entity:
+                    decision = {**decision, "issuer_id": legacy_by_entity[str(decision["issuer_id"])]}
+                cur.execute(
+                    f"""
+                    select v.value::text as gppe, v.node_key as operating_branch,
+                           v.confidence::text as confidence,
+                           coalesce(v.availability_status, 'unavailable') as availability_status,
+                           v.reason_codes
+                    from mart.metric_node_values v
+                    where v.issuer_id = any(%s::text[])
+                      and v.node_key = any(%s::text[])
+                      and {served_run_predicate("v.run_id")}
+                    order by (v.availability_status = 'available') desc, v.period desc limit 1
+                    """,
+                    (cand, list(GPPE_VARIANT_KEYS)),
+                )
+                gppe = cur.fetchone()
             cur.execute(
                 f"""
                 select theme_id, theme, theme_share, in_theme_revenue, consolidated_revenue,

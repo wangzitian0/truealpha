@@ -956,35 +956,38 @@ execute $vc$create or replace view mart.entity_identity as
              JOIN survivors survivor_1 ON survivor_1.entity_id = alias.entity_id
              LEFT JOIN alias_retractions retracted ON retracted.alias_id = alias.alias_id
           WHERE LEAST(alias.valid_to, retracted.valid_to) IS NULL OR LEAST(alias.valid_to, retracted.valid_to) > alias.valid_from
-        ), latest_by_scheme AS (
+        ), pivoted_aliases AS MATERIALIZED (
          SELECT active_aliases.survivor_id,
-            active_aliases.scheme,
-            active_aliases.value
+            max(active_aliases.value) FILTER (WHERE active_aliases.scheme = 'cik'::text) AS cik,
+            max(active_aliases.value) FILTER (WHERE active_aliases.scheme = 'lei'::text) AS lei,
+            max(active_aliases.value) FILTER (WHERE active_aliases.scheme = 'name'::text) AS name,
+            max(active_aliases.value) FILTER (WHERE active_aliases.scheme = 'legacy-id'::text) AS legacy_id,
+            COALESCE(
+                max(split_part(active_aliases.value, ':'::text, 2)) FILTER (WHERE active_aliases.scheme = 'mic-ticker'::text),
+                max(upper(split_part(active_aliases.value, ':'::text, 3))) FILTER (
+                    WHERE active_aliases.scheme = 'legacy-id'::text
+                      AND active_aliases.value ~ '^listing:[0-9a-z]{4}:[0-9a-z][0-9a-z.\-]*$'::text
+                ),
+                max(upper(active_aliases.value)) FILTER (WHERE active_aliases.scheme = 'ticker'::text)
+            ) AS direct_ticker,
+            CASE
+                WHEN bool_or(active_aliases.scheme = 'legacy-id'::text) THEN max(
+                    CASE
+                        WHEN active_aliases.scheme = 'legacy-id'::text
+                         AND active_aliases.value ~ '^listing:[0-9a-z]{4}:[0-9a-z][0-9a-z.\-]*$'::text
+                        THEN active_aliases.value
+                    END
+                )
+                ELSE max(
+                    CASE
+                        WHEN active_aliases.scheme = 'mic-ticker'::text
+                        THEN (('listing:'::text || lower(split_part(active_aliases.value, ':'::text, 1))) || ':'::text) || lower(split_part(active_aliases.value, ':'::text, 2))
+                    END
+                )
+            END AS direct_listing
            FROM active_aliases
           WHERE active_aliases.rn = 1
-        ), direct_ciks AS (
-         SELECT latest_by_scheme.survivor_id,
-            latest_by_scheme.value AS cik
-           FROM latest_by_scheme
-          WHERE latest_by_scheme.scheme = 'cik'::text
-        ), direct_leis AS (
-         SELECT latest_by_scheme.survivor_id,
-            latest_by_scheme.value AS lei
-           FROM latest_by_scheme
-          WHERE latest_by_scheme.scheme = 'lei'::text
-        ), direct_tickers AS (
-         SELECT DISTINCT ON (latest_by_scheme.survivor_id) latest_by_scheme.survivor_id,
-                CASE
-                    WHEN latest_by_scheme.scheme = 'mic-ticker'::text THEN split_part(latest_by_scheme.value, ':'::text, 2)
-                    WHEN latest_by_scheme.scheme = 'legacy-id'::text AND latest_by_scheme.value ~ '^listing:[0-9a-z]{4}:[0-9a-z][0-9a-z.\-]*$'::text THEN upper(split_part(latest_by_scheme.value, ':'::text, 3))
-                    WHEN latest_by_scheme.scheme = 'ticker'::text THEN upper(latest_by_scheme.value)
-                    ELSE NULL::text
-                END AS ticker
-           FROM latest_by_scheme
-          WHERE latest_by_scheme.scheme = 'mic-ticker'::text
-             OR latest_by_scheme.scheme = 'legacy-id'::text AND latest_by_scheme.value ~ '^listing:[0-9a-z]{4}:[0-9a-z][0-9a-z.\-]*$'::text
-             OR latest_by_scheme.scheme = 'ticker'::text
-          ORDER BY latest_by_scheme.survivor_id, (latest_by_scheme.scheme = 'mic-ticker'::text) DESC, (latest_by_scheme.scheme = 'legacy-id'::text) DESC
+          GROUP BY active_aliases.survivor_id
         ), primary_listings AS (
          SELECT DISTINCT ON (relation.from_entity_id) relation.from_entity_id AS issuer_id,
             relation.to_entity_id AS listing_id
@@ -993,74 +996,54 @@ execute $vc$create or replace view mart.entity_identity as
                    FROM staging.entity_retractions retraction
                   WHERE retraction.relation_id = relation.relation_id))
           ORDER BY relation.from_entity_id, relation.transaction_time DESC, relation.relation_id DESC
-        ), issuer_tickers AS (
-         SELECT DISTINCT ON (r_issues.from_entity_id) r_issues.from_entity_id AS issuer_id,
-            dt_1.ticker
+        ), issuer_rels AS MATERIALIZED (
+         SELECT r_issues.from_entity_id AS issuer_id,
+            (primary_listing.listing_id IS NOT NULL) AS is_primary,
+            r_issues.transaction_time,
+            r_issues.relation_id,
+            pa.direct_ticker,
+            pa.direct_listing
            FROM staging.entity_relations r_issues
              JOIN staging.entity_relations r_listed ON r_listed.from_entity_id = r_issues.to_entity_id AND r_listed.relation_type = 'listed_as'::text
-             JOIN direct_tickers dt_1 ON dt_1.survivor_id = r_listed.to_entity_id
+             JOIN pivoted_aliases pa ON pa.survivor_id = r_listed.to_entity_id
              LEFT JOIN primary_listings primary_listing ON primary_listing.issuer_id = r_issues.from_entity_id AND primary_listing.listing_id = r_listed.to_entity_id
-          WHERE r_issues.relation_type = 'issues'::text AND dt_1.ticker IS NOT NULL
-          ORDER BY r_issues.from_entity_id, (primary_listing.listing_id IS NOT NULL) DESC, r_issues.transaction_time DESC, dt_1.ticker, r_issues.relation_id DESC
+          WHERE r_issues.relation_type = 'issues'::text
+        ), issuer_tickers AS (
+         SELECT DISTINCT ON (issuer_rels.issuer_id) issuer_rels.issuer_id,
+            issuer_rels.direct_ticker AS ticker
+           FROM issuer_rels
+          WHERE issuer_rels.direct_ticker IS NOT NULL
+          ORDER BY issuer_rels.issuer_id, issuer_rels.is_primary DESC, issuer_rels.transaction_time DESC, issuer_rels.direct_ticker, issuer_rels.relation_id DESC
         ), instrument_tickers AS (
          SELECT DISTINCT ON (r_listed.from_entity_id) r_listed.from_entity_id AS instrument_id,
-            dt_1.ticker
+            pa.direct_ticker AS ticker
            FROM staging.entity_relations r_listed
-             JOIN direct_tickers dt_1 ON dt_1.survivor_id = r_listed.to_entity_id
-          WHERE r_listed.relation_type = 'listed_as'::text AND dt_1.ticker IS NOT NULL
-          ORDER BY r_listed.from_entity_id, r_listed.transaction_time DESC, dt_1.ticker, r_listed.relation_id DESC
-        ), direct_names AS (
-         SELECT latest_by_scheme.survivor_id,
-            latest_by_scheme.value AS name
-           FROM latest_by_scheme
-          WHERE latest_by_scheme.scheme = 'name'::text
-        ), legacy_aliases AS (
-         SELECT DISTINCT ON (latest_by_scheme.survivor_id) latest_by_scheme.survivor_id,
-            latest_by_scheme.value AS legacy_id
-           FROM latest_by_scheme
-          WHERE latest_by_scheme.scheme = 'legacy-id'::text
-          ORDER BY latest_by_scheme.survivor_id
-        ), direct_listings AS (
-         SELECT DISTINCT ON (latest_by_scheme.survivor_id) latest_by_scheme.survivor_id,
-                CASE
-                    WHEN latest_by_scheme.scheme = 'legacy-id'::text AND latest_by_scheme.value ~ '^listing:[0-9a-z]{4}:[0-9a-z][0-9a-z.\-]*$'::text THEN latest_by_scheme.value
-                    WHEN latest_by_scheme.scheme = 'mic-ticker'::text THEN (('listing:'::text || lower(split_part(latest_by_scheme.value, ':'::text, 1))) || ':'::text) || lower(split_part(latest_by_scheme.value, ':'::text, 2))
-                    ELSE NULL::text
-                END AS listing_id
-           FROM latest_by_scheme
-          WHERE latest_by_scheme.scheme = 'legacy-id'::text OR latest_by_scheme.scheme = 'mic-ticker'::text
-          ORDER BY latest_by_scheme.survivor_id, (latest_by_scheme.scheme = 'legacy-id'::text) DESC
+             JOIN pivoted_aliases pa ON pa.survivor_id = r_listed.to_entity_id
+          WHERE r_listed.relation_type = 'listed_as'::text AND pa.direct_ticker IS NOT NULL
+          ORDER BY r_listed.from_entity_id, r_listed.transaction_time DESC, pa.direct_ticker, r_listed.relation_id DESC
         ), issuer_listings AS (
-         SELECT DISTINCT ON (r_issues.from_entity_id) r_issues.from_entity_id AS issuer_id,
-            dl_1.listing_id
-           FROM staging.entity_relations r_issues
-             JOIN staging.entity_relations r_listed ON r_listed.from_entity_id = r_issues.to_entity_id AND r_listed.relation_type = 'listed_as'::text
-             JOIN direct_listings dl_1 ON dl_1.survivor_id = r_listed.to_entity_id
-             LEFT JOIN primary_listings primary_listing ON primary_listing.issuer_id = r_issues.from_entity_id AND primary_listing.listing_id = r_listed.to_entity_id
-          WHERE r_issues.relation_type = 'issues'::text AND dl_1.listing_id IS NOT NULL
-          ORDER BY r_issues.from_entity_id, (primary_listing.listing_id IS NOT NULL) DESC, r_issues.transaction_time DESC, dl_1.listing_id, r_issues.relation_id DESC
+         SELECT DISTINCT ON (issuer_rels.issuer_id) issuer_rels.issuer_id,
+            issuer_rels.direct_listing AS listing_id
+           FROM issuer_rels
+          WHERE issuer_rels.direct_listing IS NOT NULL
+          ORDER BY issuer_rels.issuer_id, issuer_rels.is_primary DESC, issuer_rels.transaction_time DESC, issuer_rels.direct_listing, issuer_rels.relation_id DESC
         )
  SELECT e.entity_id,
     e.kind,
-    COALESCE(dt.ticker, it.ticker, inst.ticker) AS current_ticker,
+    COALESCE(pa.direct_ticker, it.ticker, inst.ticker) AS current_ticker,
     CASE
-        WHEN upper(btrim(dn.name)) <> upper(btrim(COALESCE(dt.ticker, it.ticker, inst.ticker, ''::text))) THEN NULLIF(btrim(dn.name), ''::text)
+        WHEN upper(btrim(pa.name)) <> upper(btrim(COALESCE(pa.direct_ticker, it.ticker, inst.ticker, ''::text))) THEN NULLIF(btrim(pa.name), ''::text)
         ELSE NULL::text
     END AS name,
-    dc.cik,
-    dl.lei,
-    COALESCE(dlist.listing_id, ilist.listing_id) AS listing_id,
-    la.legacy_id
+    pa.cik,
+    pa.lei,
+    COALESCE(pa.direct_listing, ilist.listing_id) AS listing_id,
+    pa.legacy_id
    FROM staging.entities e
      JOIN survivors survivor ON survivor.entity_id = e.entity_id
-     LEFT JOIN direct_tickers dt ON dt.survivor_id = survivor.id
+     LEFT JOIN pivoted_aliases pa ON pa.survivor_id = survivor.id
      LEFT JOIN issuer_tickers it ON it.issuer_id = survivor.id
      LEFT JOIN instrument_tickers inst ON inst.instrument_id = survivor.id
-     LEFT JOIN direct_names dn ON dn.survivor_id = survivor.id
-     LEFT JOIN legacy_aliases la ON la.survivor_id = survivor.id
-     LEFT JOIN direct_ciks dc ON dc.survivor_id = survivor.id
-     LEFT JOIN direct_leis dl ON dl.survivor_id = survivor.id
-     LEFT JOIN direct_listings dlist ON dlist.survivor_id = survivor.id
      LEFT JOIN issuer_listings ilist ON ilist.issuer_id = survivor.id$vc$;
 end if; end $$;
 do $$ begin if to_regclass('mart.fund_holdings') is null then
