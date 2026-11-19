@@ -221,3 +221,60 @@ def test_resolve_issuer_id_candidates_batch_executes_against_live_entity_identit
     assert "issuer:lei:549300S4KLFTLO7GSQ80" in batch["0001045810"]
     assert "issuer:cik:0001045810" in batch["0001045810"]
     assert batch["UNKNOWN_TICKER_XYZ"] == ("UNKNOWN_TICKER_XYZ",)
+
+
+def test_query_rows_sets_mart_readonly_timeout_and_resets_role(monkeypatch: pytest.MonkeyPatch) -> None:
+    from truealpha_runtime import issuer_modules_mart
+
+    executed: list[tuple[str, Any]] = []
+    connect_kwargs: list[dict[str, Any]] = []
+
+    class _FakeCur:
+        def __enter__(self) -> _FakeCur:
+            return self
+
+        def __exit__(self, *_a: object) -> None:
+            return None
+
+        def execute(self, sql: str, params: Any = None) -> None:
+            executed.append((sql, params))
+
+        def fetchall(self) -> list[dict[str, Any]]:
+            return [{"ok": 1}]
+
+    class _FakeConn:
+        def __enter__(self) -> _FakeConn:
+            return self
+
+        def __exit__(self, *_a: object) -> None:
+            return None
+
+        def cursor(self, **_k: Any) -> _FakeCur:
+            return _FakeCur()
+
+    def _fake_connect(_dsn: str, **kwargs: Any) -> _FakeConn:
+        connect_kwargs.append(kwargs)
+        return _FakeConn()
+
+    monkeypatch.setattr(issuer_modules_mart.psycopg, "connect", _fake_connect)
+    rows = issuer_modules_mart._query_rows("postgresql://unused", "select 1 as ok")
+    assert rows == [{"ok": 1}]
+    assert "autocommit" not in connect_kwargs[0]
+    assert [sql for sql, _ in executed] == [
+        "set local role mart_readonly",
+        "select set_config('statement_timeout', '5s', true)",
+        "select 1 as ok",
+        "reset role",
+    ]
+
+
+def test_resolve_issuer_id_candidates_batch_propagates_db_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    from truealpha_runtime import issuer_modules_mart
+
+    monkeypatch.setattr(
+        issuer_modules_mart,
+        "_query_rows",
+        lambda *_a, **_k: (_ for _ in ()).throw(psycopg.OperationalError("down")),
+    )
+    with pytest.raises(psycopg.OperationalError, match="down"):
+        issuer_modules_mart.resolve_issuer_id_candidates_batch("postgresql://unused", ["NVDA"])

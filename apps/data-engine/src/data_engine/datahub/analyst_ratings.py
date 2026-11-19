@@ -7,7 +7,7 @@ import logging
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from numbers import Real
 from typing import Any
 
@@ -95,15 +95,22 @@ def _moomoo_rating_confidence(
     )
 
 
+def _finite_decimal(value: object) -> Decimal | None:
+    if isinstance(value, bool) or not isinstance(value, (Decimal, Real)):
+        return None
+    dec = value if isinstance(value, Decimal) else Decimal(str(value))
+    return dec if dec.is_finite() else None
+
+
 def _count_from_share(total: int, share: object) -> int:
     if share is None:
         return 0
-    if isinstance(share, bool) or not isinstance(share, Real):
+    percent = _finite_decimal(share)
+    if percent is None:
         raise ValueError(f"analyst share {share!r} is not a number")
-    percent = float(share)
-    if not 0 <= percent <= 100:
+    if not Decimal("0") <= percent <= Decimal("100"):
         raise ValueError(f"analyst share {percent} is outside 0 to 100 percent")
-    return round(total * percent / 100)
+    return int((Decimal(total) * percent / Decimal("100")).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
 
 def _is_empty(payload: object) -> bool:
@@ -116,9 +123,10 @@ def _is_empty(payload: object) -> bool:
 
 def _whole_number(payload: Mapping[str, Any], key: str) -> int:
     value = payload[key]
-    if isinstance(value, bool) or not isinstance(value, Real) or not float(value).is_integer():
+    dec = _finite_decimal(value)
+    if dec is None or dec != dec.to_integral_value():
         raise ValueError(f"moomoo {key} {value!r} is not a whole number")
-    return int(float(value))
+    return int(dec)
 
 
 def _optional_target(payload: Mapping[str, Any], *keys: str) -> Decimal | None:
@@ -208,9 +216,12 @@ def _consensus_row(payload: object, company_id: str) -> dict[str, Any] | None:
 
 def _analyst_confidence(analyst_id: str, raw_sr: object) -> Decimal:
     sr_factor = Decimal("0.85")
-    if isinstance(raw_sr, Real) and not isinstance(raw_sr, bool):
-        clamped = max(0.0, min(100.0, float(raw_sr)))
-        sr_factor = Decimal(str(round(0.70 + 0.30 * (clamped / 100.0), 4)))
+    sr_dec = _finite_decimal(raw_sr)
+    if sr_dec is not None:
+        clamped = max(Decimal("0"), min(Decimal("100"), sr_dec))
+        sr_factor = (Decimal("0.70") + Decimal("0.30") * (clamped / Decimal("100"))).quantize(
+            Decimal("0.0001"), rounding=ROUND_HALF_UP
+        )
     safe_analyst = safe_case_id_part(analyst_id, "analyst")
     return _moomoo_rating_confidence(
         f"analyst:{safe_analyst}",
@@ -227,9 +238,10 @@ def _valid_rating_point(r_item: object, cutoff_iso: str) -> tuple[str, int] | No
     rec_date, raw_rating = r_item.get("recommendation_date_str"), r_item.get("rating")
     if not isinstance(rec_date, str) or len(rec_date) < 10 or rec_date[:10] > cutoff_iso:
         return None
-    if isinstance(raw_rating, bool) or not isinstance(raw_rating, Real) or not float(raw_rating).is_integer():
+    rating_dec = _finite_decimal(raw_rating)
+    if rating_dec is None or rating_dec != rating_dec.to_integral_value():
         return None
-    rating_int = int(float(raw_rating))
+    rating_int = int(rating_dec)
     return (rec_date[:10], rating_int) if _RATING_MIN <= rating_int <= _RATING_MAX else None
 
 

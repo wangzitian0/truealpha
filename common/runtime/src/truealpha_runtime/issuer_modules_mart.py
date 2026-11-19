@@ -124,11 +124,15 @@ ENTITY_DISPLAY_SQL = (
 
 def _query_rows(database_url: str, sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
     with (
-        psycopg.connect(database_url, connect_timeout=5, autocommit=True) as conn,
+        psycopg.connect(database_url, connect_timeout=5) as conn,
         conn.cursor(row_factory=dict_row) as cur,
     ):
+        cur.execute("set local role mart_readonly")
+        cur.execute("select set_config('statement_timeout', '5s', true)")
         cur.execute(sql, params)
-        return cur.fetchall()
+        rows = cur.fetchall()
+        cur.execute("reset role")
+        return rows
 
 
 def load_entity_display_map(database_url: str | None) -> dict[str, tuple[str, str]]:
@@ -223,12 +227,9 @@ def resolve_issuer_id_candidates_batch(
     by_input: dict[str, list[str]] = {c: [c] for item in issuer_ids if item and (c := item.strip())}
     if not by_input:
         return {}
-    try:
-        for row in _query_rows(database_url, _RESOLVE_BATCH_CANDIDATES_SQL, (list(by_input),)):
-            if (target := by_input.get(str(row.get("raw_q") or ""))) is not None:
-                _append_resolved_candidates(target, row)
-    except psycopg.Error:
-        pass
+    for row in _query_rows(database_url, _RESOLVE_BATCH_CANDIDATES_SQL, (list(by_input),)):
+        if (target := by_input.get(str(row.get("raw_q") or ""))) is not None:
+            _append_resolved_candidates(target, row)
     return {raw: tuple(vals) for raw, vals in by_input.items()}
 
 

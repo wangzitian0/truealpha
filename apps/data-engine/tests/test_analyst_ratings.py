@@ -1733,3 +1733,21 @@ def test_ticker_row_prefers_track_record_rating_and_preserves_consensus_targets(
     assert row["target_low"] == Decimal("139.0")
     assert row["target_mean"] == Decimal("242.79")
     assert len(row["rating_items"]) == 3
+
+
+def test_analyst_ratings_uses_decimal_without_float_conversion() -> None:
+    import inspect
+
+    from data_engine.datahub import analyst_ratings
+
+    source = inspect.getsource(analyst_ratings)
+    assert "float(" not in source
+    assert analyst_ratings._count_from_share(21, Decimal("33.3333")) == 7
+    assert analyst_ratings._whole_number({"total": Decimal("12.0")}, "total") == 12
+    assert analyst_ratings._analyst_confidence("a-1", Decimal("50")) == analyst_ratings._moomoo_rating_confidence(
+        "analyst:a-1",
+        "analyst:a-1",
+        agreement=Decimal("0.8500"),
+        sample_conformance=Decimal("0.90"),
+        reason="vendor_timestamp",
+    )

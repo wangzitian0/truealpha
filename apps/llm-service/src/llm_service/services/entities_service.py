@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
 from typing import Any
 
 from pydantic import BaseModel, Field
 from truealpha_runtime.access import AccessContext
 from truealpha_runtime.issuer_modules_mart import (
+    _ANALYST_RATINGS_BY_IDS_SQL,
+    _SUPPLY_CHAIN_BY_IDS_SQL,
+    ENTITY_DISPLAY_SQL,
     AnalystRatings,
     IssuerModuleUnavailable,
     PostgresIssuerModuleReader,
@@ -24,12 +28,12 @@ from llm_service.services.panel_service import (
     EntityDisplayItem,
     _display_label,
     _id_prefix_like,
-    load_entity_display_items,
     resolve_governed_head_run_id,
     served_or_empty_head_predicate,
     served_run_predicate,
 )
 from llm_service.services.strategy_service import (
+    _EXCLUSION_LABELS,
     DASHBOARD_STRATEGY_ID,
     StrategyDecisionItemDto,
     StrategyRunPageResponse,
@@ -65,6 +69,51 @@ THEME_ROWS_SQL = """
   where run_id = %s and partition_id is not null
   order by theme_id, theme_share desc nulls last, issuer_id
 """
+
+_COMPANY_DECISION_SQL = f"""
+  select d.issuer_id, d.strategy_run_id, sr.corpus_sha256,
+         to_char(d.cutoff_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as cutoff_at,
+         d.eligible, d.tier,
+         d.capital_adjusted_labor_efficiency::text as capital_adjusted_labor_efficiency,
+         d.labor_efficiency_metric,
+         d.valuation_gap::text as valuation_gap,
+         d.current_price_to_sales::text as current_price_to_sales,
+         d.target_price_to_sales::text as target_price_to_sales,
+         d.current_price_to_gross_profit::text as current_price_to_gross_profit,
+         d.target_price_to_gross_profit::text as target_price_to_gross_profit,
+         d.outcome, d.exclusion_reason, d.rank,
+         d.target_weight::text as target_weight,
+         d.peg::text as peg, d.peg_rank, d.peg_reason_codes,
+         d.availability_status,
+         m.confidence, m.reason_codes
+  from mart.strategy_decisions d
+  left join mart.strategy_runs sr on sr.strategy_run_id = d.strategy_run_id
+  left join mart.strategy_run_capture scope on scope.strategy_run_id = d.strategy_run_id
+  left join lateral (
+    select m.confidence::text as confidence, m.reason_codes
+    from mart.metric_node_values m
+    where m.run_id = scope.capture_run_id
+      and m.issuer_id = d.issuer_id
+      and m.node_key = coalesce(d.labor_efficiency_metric, 'gppe_uniform_charge_v0')
+    order by m.period desc, m.node_id
+    limit 1
+  ) m on true
+  where d.issuer_id = any(%s::text[])
+    and {served_or_empty_head_predicate("scope.capture_run_id")}
+  order by d.cutoff_at desc limit 1
+"""
+
+_THEME_VALID_PREDICATE = f"p.partition_id is not null and {served_or_empty_head_predicate('p.run_id')}"
+_FUND_VIRTUAL_COLS = (
+    "fund_id, coalesce(fund_name, fund_id) as fund_name,"
+    ' to_char(cutoff, \'YYYY-MM-DD"T"HH24:MI:SS"Z"\') as cutoff,'
+    " to_char(report_period, 'YYYY-MM-DD') as report_period,"
+    " weighted_valuation_gap::text as weighted_valuation_gap, valuation_basis,"
+    " total_weight_pct::text as total_weight_pct, resolved_weight_pct::text as resolved_weight_pct,"
+    " valued_weight_pct::text as valued_weight_pct, lines, valued_lines,"
+    " confidence::text as confidence, coalesce(availability_status, 'unavailable') as availability_status,"
+    " source_evidence_status, factor_validation_status, reason_codes"
+)
 
 
 class TraceNodeValueDto(BaseModel):
@@ -222,6 +271,157 @@ def _extract_lineage_inputs(lineage: Any, listing_id: str | None) -> list[dict[s
     return out
 
 
+def _entity_display_item_from_parts(issuer_id: str, ticker: str, display_name: str | None) -> EntityDisplayItem:
+    clean_name = (display_name or "").strip() or None
+    if ticker and clean_name:
+        label = clean_name if clean_name.startswith(f"{ticker} ·") else f"{ticker} · {clean_name}"
+    else:
+        label = ticker or clean_name or issuer_id
+    return EntityDisplayItem(issuer_id=issuer_id, ticker=ticker, display_name=clean_name, label=label)
+
+
+def _fetch_all_display_map_from_cursor(cur: Any) -> dict[str, EntityDisplayItem]:
+    cur.execute(ENTITY_DISPLAY_SQL)
+    out: dict[str, EntityDisplayItem] = {}
+    for row in cur.fetchall():
+        iid = str(row["issuer_id"])
+        item = _entity_display_item_from_parts(iid, str(row.get("ticker") or "").strip(), row.get("display_name"))
+        out[iid] = item
+        legacy_id = row.get("legacy_id")
+        if isinstance(legacy_id, str) and legacy_id and legacy_id not in out:
+            out[legacy_id] = item
+    return out
+
+
+def _fetch_issuer_display_map_from_cursor(
+    cur: Any,
+    issuer_id: str,
+    candidates: list[str],
+    legacy_by_entity: dict[str, str],
+) -> dict[str, EntityDisplayItem]:
+    cur.execute(
+        """
+        select issuer_id, nullif(btrim(ticker), '') as ticker, nullif(btrim(display_name), '') as display_name
+        from mart.entity_display_resolution
+        where issuer_id = any(%s::text[])
+        """,
+        (candidates,),
+    )
+    out: dict[str, EntityDisplayItem] = {}
+    for row in cur.fetchall():
+        iid = str(row["issuer_id"])
+        item = _entity_display_item_from_parts(iid, str(row.get("ticker") or "").strip(), row.get("display_name"))
+        out[iid] = item
+        if leg := legacy_by_entity.get(iid):
+            out.setdefault(leg, item)
+    if issuer_id not in out:
+        for cand in candidates:
+            if item := out.get(cand):
+                out[issuer_id] = item
+                break
+    if issuer_id not in out:
+        resolved_id, static_ticker, static_label = resolve_static_entity_display(issuer_id)
+        if static_ticker:
+            name_part = static_label.split(" · ", 1)[1] if " · " in static_label else None
+            item = _entity_display_item_from_parts(issuer_id, static_ticker, name_part)
+            out[issuer_id] = item
+            if resolved_id and resolved_id not in out:
+                out[resolved_id] = item
+    return out
+
+
+def _fetch_trace_nodes_from_cursor(cur: Any, candidates: list[str]) -> list[TraceNodeValueDto]:
+    node_sql = f"""
+      select v.node_key, v.period, v.value::text as value, v.unit, v.confidence::text as confidence,
+             coalesce(v.availability_status, 'unavailable') as availability_status, v.reason_codes
+      from mart.metric_node_values v
+      where {served_run_predicate("v.run_id")}
+        and v.issuer_id = any(%s::text[])
+      order by v.node_key, v.period desc
+      limit 100
+    """
+    cur.execute(node_sql, (candidates,))
+    return [
+        TraceNodeValueDto(
+            node_key=str(r["node_key"]),
+            period=r.get("period"),
+            value=r.get("value"),
+            unit=r.get("unit"),
+            confidence=r.get("confidence"),
+            availability_status=str(r.get("availability_status") or "unavailable"),
+            reason_codes=list(r.get("reason_codes") or ()),
+        )
+        for r in cur.fetchall()
+    ]
+
+
+def _fetch_module_row_from_cursor(cur: Any, sql: str, candidates: list[str]) -> dict[str, Any] | None:
+    cur.execute(sql, (candidates,))
+    row = cur.fetchone()
+    if row is None:
+        return None
+    return {**row, "reason_codes": tuple(str(c) for c in row.get("reason_codes") or ())}
+
+
+def _decision_row_to_dto(row: dict[str, Any], *, display_map: dict[str, EntityDisplayItem]) -> StrategyDecisionItemDto:
+    iid = str(row["issuer_id"])
+    cutoff_at = str(row.get("cutoff_at") or "")
+    corpus_sha256 = str(row.get("corpus_sha256") or "")
+    cur_ps = _opt_str(row, "current_price_to_sales")
+    tgt_ps = _opt_str(row, "target_price_to_sales")
+    cur_pgp = _opt_str(row, "current_price_to_gross_profit")
+    tgt_pgp = _opt_str(row, "target_price_to_gross_profit")
+    basis = (
+        "price_to_gross_profit"
+        if cur_pgp is not None or tgt_pgp is not None
+        else ("price_to_sales" if cur_ps is not None or tgt_ps is not None else None)
+    )
+    cur_mult = cur_pgp if basis == "price_to_gross_profit" else cur_ps
+    tgt_mult = tgt_pgp if basis == "price_to_gross_profit" else tgt_ps
+    cap_eff = _opt_str(row, "capital_adjusted_labor_efficiency")
+    outcome = str(row.get("outcome") or "unavailable")
+    excl = _opt_str(row, "exclusion_reason")
+    avail_status = _opt_str(row, "availability_status")
+    tier = _opt_str(row, "tier")
+    if avail_status == "not_applicable":
+        avail = "not_applicable"
+    elif outcome == "excluded":
+        avail = "excluded"
+    elif tier is not None or cur_ps is not None or cur_pgp is not None or cap_eff is not None:
+        avail = "available"
+    else:
+        avail = "unavailable"
+    trace_payload = f"mart:{corpus_sha256[:12]}:{iid}:{cutoff_at}"
+    trace_id = f"trace:{hashlib.sha256(trace_payload.encode()).hexdigest()[:16]}"
+    return StrategyDecisionItemDto(
+        issuer_id=iid,
+        label=_display_label(iid, display_map),
+        cutoff_at=cutoff_at,
+        outcome=outcome,
+        eligible=bool(row.get("eligible")),
+        tier=tier,
+        capital_adjusted_labor_efficiency=cap_eff,
+        labor_efficiency_metric=_opt_str(row, "labor_efficiency_metric"),
+        current_price_to_sales=cur_ps,
+        target_price_to_sales=tgt_ps,
+        current_price_to_gross_profit=cur_pgp,
+        target_price_to_gross_profit=tgt_pgp,
+        valuation_basis=basis,
+        current_multiple=cur_mult,
+        target_multiple=tgt_mult,
+        valuation_gap=_opt_str(row, "valuation_gap"),
+        confidence=_opt_str(row, "confidence"),
+        exclusion_reason=excl,
+        exclusion_label=_EXCLUSION_LABELS.get(excl) if excl else None,
+        rank=_opt_int(row, "rank"),
+        target_weight=_opt_str(row, "target_weight"),
+        peg=_opt_str(row, "peg"),
+        peg_rank=_opt_int(row, "peg_rank"),
+        availability=avail,
+        trace_id=trace_id,
+    )
+
+
 def get_trace(
     context: AccessContext,
     *,
@@ -238,31 +438,10 @@ def get_trace(
         (d for d in page.decisions if d.issuer_id == issuer_id or issuer_id.lower() in d.label.lower()), None
     )
     target_iid = decision.issuer_id if decision else issuer_id
-    node_sql = f"""
-      select v.node_key, v.period, v.value::text as value, v.unit, v.confidence::text as confidence,
-             coalesce(v.availability_status, 'unavailable') as availability_status, v.reason_codes
-      from mart.metric_node_values v
-      where {served_run_predicate("v.run_id")}
-        and v.issuer_id = any(%s::text[])
-      order by v.node_key, v.period desc
-      limit 100
-    """
 
     def _q(cur: Any) -> tuple[list[TraceNodeValueDto], str | None, list[dict[str, Any]]]:
         cand = list(candidates) if candidates else resolve_issuer_candidates_from_cursor(cur, target_iid)
-        cur.execute(node_sql, (cand,))
-        nodes = [
-            TraceNodeValueDto(
-                node_key=str(r["node_key"]),
-                period=r.get("period"),
-                value=r.get("value"),
-                unit=r.get("unit"),
-                confidence=r.get("confidence"),
-                availability_status=str(r.get("availability_status") or "unavailable"),
-                reason_codes=list(r.get("reason_codes") or ()),
-            )
-            for r in cur.fetchall()
-        ]
+        nodes = _fetch_trace_nodes_from_cursor(cur, cand)
         res_id: str | None = None
         lin_inputs: list[dict[str, Any]] = []
         target_cutoff = decision.cutoff_at if decision else cutoff
@@ -293,44 +472,31 @@ def get_entity_detail(
     issuer_id: str,
     database_url: str | None = None,
 ) -> EntityDetailResponse:
-    db_url = database_url or settings.database_url
-    page = get_strategy_run_page(context, database_url=database_url)
-    candidates = with_mart_readonly(
-        lambda cur: resolve_issuer_candidates_from_cursor(cur, issuer_id),
-        database_url=database_url,
-    )
+    del context
 
-    cand_set = set(candidates)
-    decisions = [d for d in page.decisions if d.issuer_id in cand_set]
-    modules = PostgresIssuerModuleReader(database_url=db_url)
-    if hasattr(modules, "seed_candidates"):
-        modules.seed_candidates(issuer_id, candidates)
+    def _q(cur: Any) -> EntityDetailResponse:
+        cand, legacy_by_entity = resolve_issuer_identity_from_cursor(cur, issuer_id)
+        display_map = _fetch_issuer_display_map_from_cursor(cur, issuer_id, cand, legacy_by_entity)
+        decision_row = _fetch_company_decision_from_cursor(cur, cand, legacy_by_entity)
+        decisions = [_decision_row_to_dto(decision_row, display_map=display_map)] if decision_row else []
+        node_values = _fetch_trace_nodes_from_cursor(cur, cand)
+        themes = _fetch_company_themes_from_cursor(cur, cand)
+        sc_row = _fetch_module_row_from_cursor(cur, _SUPPLY_CHAIN_BY_IDS_SQL, cand)
+        ar_row = _fetch_module_row_from_cursor(cur, _ANALYST_RATINGS_BY_IDS_SQL, cand)
+        supply = SupplyChainExposure.model_validate(sc_row) if sc_row else None
+        ratings = AnalystRatings.model_validate(ar_row) if ar_row else None
+        return EntityDetailResponse(
+            issuer_id=issuer_id,
+            label=_display_label(issuer_id, display_map),
+            decisions=decisions,
+            node_values=node_values,
+            themes=themes,
+            analyst_ratings=ratings.model_dump(mode="json") if isinstance(ratings, AnalystRatings) else None,
+            supply_chain_exposure=supply.model_dump(mode="json") if isinstance(supply, SupplyChainExposure) else None,
+            display_map=display_map,
+        )
 
-    trace = get_trace(
-        context,
-        issuer_id=issuer_id,
-        page=page,
-        candidates=candidates,
-        database_url=database_url,
-    )
-    profile = PostgresCompanyProfileReader(database_url=db_url).get_company_profile(
-        issuer_id=issuer_id,
-        candidates=candidates,
-        include_decision=False,
-    )
-    supply = modules.supply_chain_exposure(issuer_id)
-    ratings = modules.analyst_ratings(issuer_id)
-
-    return EntityDetailResponse(
-        issuer_id=issuer_id,
-        label=_display_label(issuer_id, page.display_map),
-        decisions=decisions,
-        node_values=trace.node_values,
-        themes=list(profile.get("theme_purity") or ()),
-        analyst_ratings=ratings.model_dump(mode="json") if isinstance(ratings, AnalystRatings) else None,
-        supply_chain_exposure=supply.model_dump(mode="json") if isinstance(supply, SupplyChainExposure) else None,
-        display_map=page.display_map,
-    )
+    return with_mart_readonly(_q, database_url=database_url)
 
 
 def load_supply_chain_exposure(
@@ -358,16 +524,14 @@ def load_analyst_ratings(
 
 
 def get_themes_overview(*, database_url: str | None = None) -> ThemesResponse:
-    display_map = load_entity_display_items(database_url=database_url)
-    rows_sql = THEME_ROWS_SQL
-
     def _q(cur: Any) -> ThemesResponse:
         cur.execute(THEME_LATEST_RUN_SQL)
         head = cur.fetchone()
         if not head or not head.get("run_id"):
             return ThemesResponse()
+        display_map = _fetch_all_display_map_from_cursor(cur)
         run_id = str(head["run_id"])
-        cur.execute(rows_sql, (run_id,))
+        cur.execute(THEME_ROWS_SQL, (run_id,))
         groups: dict[str, ThemePurityGroupDto] = {}
         for r in cur.fetchall():
             tid = str(r["theme_id"])
@@ -446,10 +610,8 @@ def get_fund_valuations(*, database_url: str | None = None) -> FundValuationsRes
       left join decisions r on (r.listing_id = v.listing_id or (r.issuer_cik is not null and r.issuer_cik = v.issuer_cik))
       order by v.fund_id, v.percent_of_net_assets desc nulls last, v.holding_name
     """
-    consolidation_sql = """
-      select fund_id, weighted_valuation_gap::text as weighted_gap, valuation_basis,
-             valued_weight_pct::text as valued_weight_pct, availability_status,
-             source_evidence_status, factor_validation_status, reason_codes
+    consolidation_sql = f"""
+      select {_FUND_VIRTUAL_COLS}
       from mart.fund_virtual_company where run_id = %s
     """
     coverage_sql = """
@@ -483,7 +645,7 @@ def get_fund_valuations(*, database_url: str | None = None) -> FundValuationsRes
                     valued_weight_pct=str(c.get("valued_weight_pct") or "0.00"),
                     resolved_weight_pct=str(cv.get("resolved_weight_pct") or "0.00"),
                     total_weight_pct=str(cv.get("total_weight_pct") or "0.00"),
-                    weighted_gap=c.get("weighted_gap"),
+                    weighted_gap=c.get("weighted_valuation_gap"),
                     weighted_gap_basis=c.get("valuation_basis"),
                     availability_status=c.get("availability_status"),
                     source_evidence_status=c.get("source_evidence_status"),
@@ -599,6 +761,42 @@ def _format_company_profile(
     }
 
 
+def _fetch_company_decision_from_cursor(
+    cur: Any,
+    candidates: list[str],
+    legacy_by_entity: dict[str, str],
+) -> dict[str, Any] | None:
+    cur.execute(_COMPANY_DECISION_SQL, (candidates,))
+    decision = cur.fetchone()
+    if decision and decision.get("issuer_id") in legacy_by_entity:
+        return {**decision, "issuer_id": legacy_by_entity[str(decision["issuer_id"])]}
+    return dict(decision) if decision else None
+
+
+def _fetch_company_themes_from_cursor(cur: Any, candidates: list[str]) -> list[dict[str, Any]]:
+    cur.execute(
+        f"""
+        select theme_id, theme, theme_share, in_theme_revenue, consolidated_revenue,
+               segments, confidence, availability_status
+        from (
+          select distinct on (p.theme_id)
+                 p.theme_id, p.theme, p.theme_share::text as theme_share,
+                 p.theme_share as raw_share, p.in_theme_revenue::text as in_theme_revenue,
+                 p.consolidated_revenue::text as consolidated_revenue, p.segments,
+                 p.confidence::text as confidence,
+                 coalesce(p.availability_status, 'unavailable') as availability_status
+          from mart.issuer_theme_purity p
+          where p.issuer_id = any(%s::text[])
+            and {_THEME_VALID_PREDICATE}
+          order by p.theme_id, p.cutoff desc, p.created_at desc
+        ) latest_per_theme
+        order by raw_share desc nulls last, theme asc
+        """,
+        (candidates,),
+    )
+    return [dict(r) for r in cur.fetchall()]
+
+
 class PostgresCompanyProfileReader:
     def __init__(self, *, database_url: str) -> None:
         self._database_url = database_url
@@ -612,7 +810,7 @@ class PostgresCompanyProfileReader:
     ) -> dict[str, Any]:
         clean = issuer_id.strip()
 
-        def _q(cur: Any) -> tuple[Any, dict[str, Any] | None, list[dict[str, Any]]]:
+        def _q(cur: Any) -> tuple[dict[str, Any] | None, dict[str, Any] | None, list[dict[str, Any]]]:
             if candidates is not None:
                 cand = list(candidates)
                 legacy_by_entity: dict[str, str] = {}
@@ -621,38 +819,7 @@ class PostgresCompanyProfileReader:
             decision: dict[str, Any] | None = None
             gppe: dict[str, Any] | None = None
             if include_decision:
-                cur.execute(
-                    f"""
-                    select d.issuer_id,
-                           to_char(d.cutoff_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as cutoff_at,
-                           d.tier, d.valuation_gap::text as valuation_gap,
-                           d.current_price_to_sales::text as current_price_to_sales,
-                           d.target_price_to_sales::text as target_price_to_sales,
-                           d.current_price_to_gross_profit::text as current_price_to_gross_profit,
-                           d.target_price_to_gross_profit::text as target_price_to_gross_profit,
-                           d.outcome, d.exclusion_reason, d.rank,
-                           d.peg::text as peg, d.peg_rank, d.peg_reason_codes,
-                           m.confidence, m.reason_codes
-                    from mart.strategy_decisions d
-                    left join mart.strategy_run_capture scope on scope.strategy_run_id = d.strategy_run_id
-                    left join lateral (
-                      select m.confidence::text as confidence, m.reason_codes
-                      from mart.metric_node_values m
-                      where m.run_id = scope.capture_run_id
-                        and m.issuer_id = d.issuer_id
-                        and m.node_key = coalesce(d.labor_efficiency_metric, 'gppe_uniform_charge_v0')
-                      order by m.recorded_at desc
-                      limit 1
-                    ) m on true
-                    where d.issuer_id = any(%s::text[])
-                      and {served_or_empty_head_predicate("scope.capture_run_id")}
-                    order by d.cutoff_at desc limit 1
-                    """,
-                    (cand,),
-                )
-                decision = cur.fetchone()
-                if decision and decision.get("issuer_id") in legacy_by_entity:
-                    decision = {**decision, "issuer_id": legacy_by_entity[str(decision["issuer_id"])]}
+                decision = _fetch_company_decision_from_cursor(cur, cand, legacy_by_entity)
                 cur.execute(
                     f"""
                     select v.value::text as gppe, v.node_key as operating_branch,
@@ -668,28 +835,7 @@ class PostgresCompanyProfileReader:
                     (cand, list(GPPE_VARIANT_KEYS)),
                 )
                 gppe = cur.fetchone()
-            cur.execute(
-                f"""
-                select theme_id, theme, theme_share, in_theme_revenue, consolidated_revenue,
-                       segments, confidence, availability_status
-                from (
-                  select distinct on (p.theme_id)
-                         p.theme_id, p.theme, p.theme_share::text as theme_share,
-                         p.theme_share as raw_share, p.in_theme_revenue::text as in_theme_revenue,
-                         p.consolidated_revenue::text as consolidated_revenue, p.segments,
-                         p.confidence::text as confidence,
-                         coalesce(p.availability_status, 'unavailable') as availability_status
-                  from mart.issuer_theme_purity p
-                  where p.issuer_id = any(%s::text[])
-                    and p.partition_id is not null
-                    and {served_or_empty_head_predicate("p.run_id")}
-                  order by p.theme_id, p.cutoff desc, p.created_at desc
-                ) latest_per_theme
-                order by raw_share desc nulls last, theme asc
-                """,
-                (cand,),
-            )
-            themes = [dict(r) for r in cur.fetchall()]
+            themes = _fetch_company_themes_from_cursor(cur, cand)
             return decision, gppe, themes
 
         decision_row, gppe_row, themes = with_mart_readonly(_q, database_url=self._database_url)
@@ -761,8 +907,7 @@ class PostgresThemePurityLeaderboardReader:
                            p.cutoff, p.created_at
                     from mart.issuer_theme_purity p
                     where (p.theme_id = %s or p.theme_id = %s or lower(p.theme) = lower(%s))
-                      and p.partition_id is not null
-                      and {served_or_empty_head_predicate("p.run_id")}
+                      and {_THEME_VALID_PREDICATE}
                     order by p.issuer_id, p.cutoff desc, p.created_at desc
                 )
                 select coalesce(ei.legacy_id, l.issuer_id) as issuer_id,
@@ -812,13 +957,7 @@ class PostgresEtfProfileReader:
         def _load(cur: Any) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
             cur.execute(
                 f"""
-                select fund_id, coalesce(fund_name, fund_id) as fund_name,
-                       to_char(cutoff, 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as cutoff,
-                       to_char(report_period, 'YYYY-MM-DD') as report_period,
-                       weighted_valuation_gap::text as weighted_valuation_gap, valuation_basis,
-                       total_weight_pct::text as total_weight_pct, resolved_weight_pct::text as resolved_weight_pct,
-                       valued_weight_pct::text as valued_weight_pct, lines, valued_lines, confidence::text as confidence,
-                       coalesce(availability_status, 'unavailable') as availability_status, reason_codes
+                select {_FUND_VIRTUAL_COLS}
                 from mart.fund_virtual_company
                 where ({fund_where})
                   and {served_or_empty_head_predicate("run_id", _id_prefix_like("fund_consolidation").removesuffix("%"))}
