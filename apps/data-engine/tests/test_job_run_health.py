@@ -331,14 +331,15 @@ def test_retired_jobs_outside_active_jobs_are_excluded_while_active_failures_sta
 def test_this_morning_on_staging_is_green_without_the_two_jobs_that_fail_by_design(
     run_storage_url: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The other 13 jobs, with their real failures: 1 of 12 for `topt_live_pipeline` and 3 of 13 for
-    `head_reports_pipeline` in the 22 hours before the tick. None of them is red."""
+    """The 12 active non-verdict jobs (retired `release_fetch_proof` and VERDICT_JOBS excluded),
+    with 1 of 12 for `topt_live_pipeline` and 3 of 13 for `head_reports_pipeline` failing.
+    None of them is red."""
     load_runs(run_storage_url, [row for row in fixture_rows() if row[0] not in VERDICT_JOBS])
 
     verdict = run_check(run_storage_url, monkeypatch)
 
     assert verdict["ok"] is True
-    assert verdict["summary"].startswith("ok: 13 jobs")
+    assert verdict["summary"].startswith("ok: 12 jobs")
     assert verdict["output"]["red"] == []
 
 
