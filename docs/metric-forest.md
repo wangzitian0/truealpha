@@ -42,8 +42,7 @@ hardcoded formula.
   - Both held only under an exemption that expires on 2026-09-23. Without it, JPM's tick is
     refused and the TOPT head freezes.
 - **The wide row is fixed columns.**
-  - `mart.topt_gppe_results` and `mart.topt_core_results` carry `gppe`,
-    `operating_efficiency` and `capital_adjusted_gross_profit`.
+  - `mart.metric_node_values` carries one row per node (`node_key`, `value`, `availability_status`). The wide tables `mart.topt_gppe_results` and `mart.topt_core_results` were retired in #1664.
   - `mart.strategy_decisions` carries `capital_adjusted_labor_efficiency`.
   - `staging.strategy_backtest_inputs` is long (`input_key`) and is validated against
     `METRICS`.
@@ -233,7 +232,7 @@ registered tree. The core and the composite evaluate that pin. The bank capital 
 tangible common equity (owner decision D2, 2026-10-26). An issuer with no class is excluded with
 `missing_issuer_class`. The frozen #21 replay of definition 1.0.0 passes `uniform_tree_pins()` by name.
 
-The mart column `gppe` of `mart.topt_gppe_results` and `mart.topt_core_results` holds the root of the PINNED tree
+The `mart.metric_node_values` row with node key `gppe_uniform_charge_v0` (or `gppe_banking_tce_v1` for a bank) holds the root of the PINNED tree
 of the row's class. `capital_adjusted_gross_profit` holds the numerator of that root ratio (`capital_adjusted_tce` for a
 bank). `PUBLISHED_COLUMNS` ties each column to one node for the sign policy. A test holds that the pinned root of every
 class declares the same sign policy as that node. `mart.metric_node_values` evaluates every applicable tree for an issuer,
@@ -295,7 +294,7 @@ In #909, `compute_topt_gppe` evaluates the tree. Three tests, added by #909 in
      division, a bank with gross profit but no PPNR, missing inputs, and a non-positive
      headcount.
    - A result id hashes every published field, so an equal id means byte-identical
-     `mart.topt_gppe_results` rows. `GppeV0Definition`, and therefore every
+     `mart.metric_node_values` rows. `GppeV0Definition`, and therefore every
      `gppe_definition_id`, is unchanged.
 3. The tree's identity is frozen under `production-topt-v0.2.0`, and the tree's version is
    bound to `GppeV0Definition.factor_version`.
@@ -422,10 +421,8 @@ migration in the diff.
 `(node, period) → column label` (`gppe@FY0`, `operating_real_profit@FY0`, `mva@cutoff`). The
 typed App/MCP reader and the strategy input projection both read the pivot.
 
-The existing fixed columns stay as a compatibility projection:
-
-- `mart.topt_gppe_results`, `mart.topt_core_results` and
-  `mart.strategy_decisions.capital_adjusted_labor_efficiency` remain;
+The fixed columns were a compatibility projection. `mart.topt_gppe_results` and `mart.topt_core_results` are retired (#1664); only
+  `mart.strategy_decisions.capital_adjusted_labor_efficiency` remains;
 - `PUBLISHED_COLUMNS` ties each of them to its node, so the invariants judge them now;
 - step D generates `PUBLISHED_COLUMNS` instead of declaring it.
 

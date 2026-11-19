@@ -29,8 +29,8 @@ Two services: a `vault-agent` (renders the postgres password from Vault via AppR
    (`/root/backups/truealpha-prod/prod-*.dump`) into the managed instance:
    `pg_restore -U postgres -d truealpha --clean --if-exists <dump>`.
 4. **Verify:** `mart.capture_status.complete = t` and
-   `select payload->>'gppe' from mart.topt_gppe_results where payload->>'availability'='available'`
-   returns `1153614.480937195208819629373924669` (the MVP GOOG GPPE).
+   `select value from mart.metric_node_values where node_key='gppe_uniform_charge_v0' and availability_status='available'`
+   returns `1153614.480937195208819629373924669` among its rows (the MVP GOOG GPPE).
 5. **Retire the bootstrap:** stop/remove the `docker run` container and delete
    `/root/.truealpha_prod_pgpw`; the managed vault-agent now owns the credential.
 
