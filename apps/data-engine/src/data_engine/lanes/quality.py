@@ -430,12 +430,22 @@ def _run_dashboard_verdict(
     return json.dumps(payload)
 
 
+def _active_dagster_job_names() -> frozenset[str]:
+    from data_engine.lanes import lane_definitions
+
+    return frozenset(job.name for defs in lane_definitions().values() for job in defs.resolve_all_job_defs())
+
+
 @external_op
 def run_job_run_health(context: dg.OpExecutionContext) -> str:
     def _evaluate(
         connection: psycopg.Connection, outcome: Any, now: datetime
     ) -> tuple[str, bool, dict[str, Any], dict[str, Any]]:
-        judgement = job_run_health.judge(job_run_health.read_runs(connection, now=now), now=now)
+        judgement = job_run_health.judge(
+            job_run_health.read_runs(connection, now=now),
+            now=now,
+            active_jobs=_active_dagster_job_names(),
+        )
         if not judgement.jobs:
             outcome.pending = True
             outcome.summary = f"no finished run in {job_run_health.WINDOW_DAYS} days; nothing to judge"
