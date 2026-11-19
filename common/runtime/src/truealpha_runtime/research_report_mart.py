@@ -469,16 +469,6 @@ POINTER_HEAD_SQL = """
   order by advanced_at desc limit 1
 """
 
-ACCEPTANCE_FALLBACK_HEAD_SQL = """
-  select s.run_id
-  from mart.capture_status s
-  join mart.datahub_quality_report q on q.run_id = s.run_id
-  where s.environment = (select environment from mart.environment_identity)
-    and coalesce((q.payload->>'complete')::boolean, false)
-    and s.universe_id like %s
-  order by q.created_at desc, q.report_id desc limit 1
-"""
-
 
 def resolve_strategy_governed_run(conn: Any) -> tuple[str | None, str | None]:
     prefixes = [(id_prefix_like(k),) for k in universes_with_role("strategy")]
@@ -494,11 +484,7 @@ def resolve_strategy_governed_run(conn: Any) -> tuple[str | None, str | None]:
             return str(head["run_id"]), None
     if unavailable_reason is not None:
         return None, unavailable_reason
-    for like_prefix in prefixes:
-        head = conn.execute(ACCEPTANCE_FALLBACK_HEAD_SQL, like_prefix).fetchone()
-        if head is not None and head["run_id"] is not None:
-            return str(head["run_id"]), None
-    return None, "no accepted (quality-reported) strategy run"
+    return None, "no served head for strategy"
 
 
 class PostgresMetricNodeValueRepository:
@@ -512,14 +498,18 @@ class PostgresMetricNodeValueRepository:
             raise ValueError("invalid node_key or limit")
         try:
             with psycopg.connect(self._database_url, row_factory=dict_row) as conn:
+                conn.execute("set local role mart_readonly")
+                conn.execute("select set_config('statement_timeout', '5s', true)")
                 run_id, err = resolve_strategy_governed_run(conn)
                 if err is not None or run_id is None:
+                    conn.execute("reset role")
                     return MetricNodeValueUnavailable(node_key=node_key, reason=err or "no_run")
                 where = "v.run_id = %s and v.node_key = %s" + (" and v.issuer_id = %s" if issuer_id is not None else "")
                 rows = conn.execute(
                     f"select v.issuer_id, v.node_id::text as node_id, v.node_key, v.period, v.period_tag, v.value::text as value, v.unit, v.availability_status, v.reason_codes, v.source_evidence_status, v.factor_validation_status, v.confidence::text as confidence, v.tree_version, v.tree_sha256 from mart.metric_node_values v where {where} order by v.issuer_id, v.period desc limit %s",
                     (run_id, node_key, *((issuer_id,) if issuer_id is not None else ()), limit),
                 ).fetchall()
+                conn.execute("reset role")
                 cells = tuple(
                     MetricNodeValueCell(
                         **(
