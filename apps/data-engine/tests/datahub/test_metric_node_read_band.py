@@ -1,26 +1,26 @@
 """#1517 A2: the MCP reader derives `confidence_band` from `confidence` and never reads the stored column.
 
-The run is a complete production run, materialized and quality-reported, in a real Postgres schema.
-It heads no pointer, so the reader takes the acceptance-gated fallback. Each
-row of one node gets a confidence from the probe of the audit and a stored `confidence_band` word
-that no band rule gives (the column stays until the second release of A2).
+The run is a complete production run, materialized, quality-reported, and registered on `mart.current_pointer`
+in a real Postgres schema so `mart.served_head` serves it. Each row of one node gets a confidence from the probe
+of the audit and a stored `confidence_band` word that no band rule gives (the column stays until the second release
+of A2).
 """
 
 from __future__ import annotations
 
 import sys
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
 import psycopg
 import pytest
-from data_engine.datahub import quality_report
 from truealpha_contracts.confidence_bands import confidence_band
 from truealpha_runtime.research_report_mart import MetricNodeValueReport, PostgresMetricNodeValueRepository
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from datahub.test_topt_read import _materialized_run, connection  # noqa: E402, F401
+from datahub.test_topt_read import _accepted_run, connection  # noqa: E402, F401
 
 # confidence stored on one row each -> the word the three sentences of init.md give.
 _EXPECTED_BANDS = {
@@ -54,8 +54,13 @@ def test_the_reader_serves_the_band_of_the_stored_confidence_not_the_stored_word
     connection,  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    run, _release_manifest_id = _materialized_run(connection)
-    quality_report.persist(connection, quality_report.build_report(connection, run.run_id))
+    run = _accepted_run(connection)
+    connection.execute("set local session_replication_role = replica")
+    connection.execute(
+        "update mart.current_pointer set advanced_at = %s where target_run_id = %s",
+        (datetime.now(UTC), run.run_id),
+    )
+    connection.execute("set local session_replication_role = origin")
     stored_words = connection.execute(
         "select count(*) from mart.metric_node_values where run_id = %s and confidence_band is not null", (run.run_id,)
     ).fetchone()
