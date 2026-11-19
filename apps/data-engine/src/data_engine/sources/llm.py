@@ -18,7 +18,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from factors.shared import extraction as extraction_primitive
-from infra2_sdk.runtime.llm import LlmClient, LlmSettings, _extract_json
+from infra2_sdk.runtime.llm import LlmClient, LlmSettings
 from truealpha_contracts.common import canonical_sha256
 from truealpha_runtime.research_cards import (
     XHS_CARD_INSTRUCTIONS,
@@ -430,7 +430,7 @@ def invoke(
             json_disable_thinking=False,
         )
         request_sha256 = _request_sha256(request_body)
-        url = LlmClient(llm_cfg)._url(llm_cfg.chat_completions_path)
+        url = f"{llm_cfg.base_url.rstrip('/')}{llm_cfg.chat_completions_path}"
         started_at = now()
         usage: dict[str, Any] = {}
         payload: dict[str, Any] = {}
@@ -762,10 +762,16 @@ class ThemeClassification:
         return self.invocation.extractor
 
 
+_JSON_FENCE_RE = re.compile(r"\A```(?:json)?\s*(.*?)\s*```\Z", re.IGNORECASE | re.DOTALL)
+
+
 def _parse_json_payload(content: str) -> Any:
+    cleaned = content.strip()
+    if match := _JSON_FENCE_RE.match(cleaned):
+        cleaned = match.group(1).strip()
     try:
-        return _extract_json(content)
-    except ValueError:
+        return json.loads(cleaned)
+    except (json.JSONDecodeError, ValueError):
         return None
 
 
