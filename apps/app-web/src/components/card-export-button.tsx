@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { api } from "@/client/api";
 import type { PegGrowthConvention } from "@/client/strategy";
-import { universeWithRole } from "@/contracts/universes";
+import { universesWithRole } from "@/contracts/universes";
 
 interface CardExportButtonProps {
   cutoff?: string;
@@ -20,7 +20,7 @@ export function CardExportButton({
   kind,
   format = "html",
   convention = "historical_cagr",
-  universe = universeWithRole("strategy"),
+  universe = universesWithRole("strategy")[0] ?? "all",
 }: CardExportButtonProps) {
   const [downloading, setDownloading] = useState(false);
 

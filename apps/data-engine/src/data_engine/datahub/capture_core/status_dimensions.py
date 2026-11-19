@@ -11,7 +11,7 @@ from factors.validation_records import validation_status_for
 from psycopg import Connection
 from truealpha_contracts.environment_contract import load_environment_contract
 from truealpha_contracts.execution import AvailabilityStatus, FactorValidationStatus, InputEvidenceStatus
-from truealpha_contracts.universes import universe_with_role
+from truealpha_contracts.universes import universes_with_role
 
 LOW_CONFIDENCE_FLOOR = Decimal("0.50")
 
@@ -39,7 +39,7 @@ def contract_not_applicable_issuer_ids(
     """Resolve issuer identifiers declared not_applicable by the environment contract."""
     contract = load_environment_contract()
     entries = (
-        contract.not_applicable_identities(metric, universe_with_role("strategy"))
+        tuple(entry for u in universes_with_role("strategy") for entry in contract.not_applicable_identities(metric, u))
         if universe_id is None
         else contract.not_applicable_for_universe_id(metric, universe_id)
     )

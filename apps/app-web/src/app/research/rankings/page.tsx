@@ -9,7 +9,7 @@ import { ProvenanceCell } from "@/components/provenance-cell";
 import { AvailabilityBadge, ReadStateNotice } from "@/components/read-state";
 import { ResearchTable } from "@/components/research-table";
 import { UNIVERSES } from "@/contracts/environmentContract.generated";
-import { universeWithRole } from "@/contracts/universes";
+import { universesWithRole } from "@/contracts/universes";
 import { loadAuthed } from "../../_load";
 
 export const dynamic = "force-dynamic";
@@ -20,11 +20,11 @@ const pill = (active: boolean) =>
 export default async function RankingsPage({ searchParams }: { searchParams: Promise<{ cutoff?: string; convention?: string; universe?: string }> }) {
   const params = await searchParams;
   const convention: PegGrowthConvention = params.convention === "consensus" || params.convention === "guidance" ? params.convention : "historical_cagr";
-  const universe = params.universe || universeWithRole("strategy");
+  const universes = UNIVERSES.filter((u) => !u.roles.includes("sentinel") && u.scheduled_somewhere).map((u) => u.key);
+  const universe = params.universe || universesWithRole("strategy")[0] || universes[0] || "all";
   const { data, error } = await loadAuthed("/research/rankings", (opts) => api.getRankings({ cutoff: params.cutoff, universe }, opts));
   const rows = data?.rows ?? [];
   const basisLabel = valuationBasisLabel(rows.find((r) => r.valuation_basis)?.valuation_basis);
-  const universes = UNIVERSES.filter((u) => !u.roles.includes("sentinel") && u.scheduled_somewhere).map((u) => u.key);
   const headers = ["Rank", "Issuer", "Tier", "Current P/S", `Current ${basisLabel}`, `Target ${basisLabel}`, `Valuation gap (${basisLabel})`, "GPPE (uniform)", "GPPE (banking)", "GPPE (opfin)", "Employees", `PEG (${PEG_CONVENTION_LABELS[convention]})`, "PEG rank", "Confidence", "Availability", "Inputs"];
 
   return (

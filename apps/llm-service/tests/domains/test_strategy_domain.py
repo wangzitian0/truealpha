@@ -91,3 +91,35 @@ async def test_strategy_http_and_mcp_usecases(monkeypatch: pytest.MonkeyPatch) -
     assert r_mcp["result"]["strategy_id"] == "large_model_value_v0"
     assert b_mcp["runs"][0]["strategy_key"] == "large_model_value_v0"
     assert bd_mcp["runs"][0]["run_id"] == "backtest-run:1"
+
+
+def test_strategy_removes_thread_pool_and_fails_closed_on_db_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    import psycopg
+
+    assert not hasattr(strategy_service, "ThreadPoolExecutor")
+
+    def _boom(*_a: Any, **_k: Any) -> Any:
+        raise psycopg.OperationalError("connection refused")
+
+    monkeypatch.setattr(strategy_service, "with_mart_readonly", _boom)
+    with pytest.raises(psycopg.OperationalError, match="connection refused"):
+        strategy_service._load_strategy_provenance("strategy-run:1", database_url="postgresql://unused")
+    with pytest.raises(psycopg.OperationalError, match="connection refused"):
+        strategy_service.list_backtest_runs(database_url="postgresql://unused")
+    with pytest.raises(psycopg.OperationalError, match="connection refused"):
+        strategy_service.get_backtest_detail("backtest-run:1", database_url="postgresql://unused")
+    with pytest.raises(psycopg.OperationalError, match="connection refused"):
+        strategy_service.PostgresBacktestReader(database_url="postgresql://unused").get_backtest_report(
+            strategy_key="large_model_value_v0"
+        )
+
+
+def test_multi_universe_strategy_role_helpers_do_not_require_singleton() -> None:
+    from truealpha_contracts.universes import universes_with_role
+
+    strategy_keys = universes_with_role("strategy")
+    assert "topt" in strategy_keys
+    assert strategy_service.normalize_ranking_universe(None) in strategy_keys
+    assert strategy_service.normalize_ranking_universe("qqq") == "qqq"
+    assert strategy_service.normalize_ranking_universe("sp500") == "sp500"
+    assert strategy_service.normalize_ranking_universe("all") == "all"

@@ -8,7 +8,14 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from psycopg import Connection
-from truealpha_contracts.universes import key_of_lane, lane_name, record, served_keys, universe_with_role
+from truealpha_contracts.universes import (
+    key_of_lane,
+    lane_name,
+    record,
+    served_keys,
+    universe_with_role,
+    universes_with_role,
+)
 
 from data_engine.datahub.question_coverage import (
     GOVERNING_FACTOR,
@@ -191,8 +198,9 @@ def prove(
     heads = _heads(connection)
     # The strategy pages serve the universe that holds the strategy role, the holdings page the universe that
     # consolidates the fund (#1522): the proof names a role, never a universe key.
-    strategy_key, fund_key = universe_with_role("strategy"), universe_with_role("fund_consolidation")
-    topt, qqq = lane_name(strategy_key), lane_name(fund_key)
+    strategy_keys = universes_with_role("strategy")
+    fund_key = universe_with_role("fund_consolidation")
+    topt, qqq = lane_name(strategy_keys[0]), lane_name(fund_key)
     verdicts: list[SurfaceVerdict] = []
 
     row = connection.execute(_STRATEGY_HEAD_SQL).fetchone()
@@ -336,7 +344,7 @@ def themes_verdict(
             expected_run=None,
             served_run=served,
             detail="" if served else _no_theme_rows(connection, None),
-            universe=lane_name(universe_with_role("strategy")),
+            universe=lane_name(universes_with_role("strategy")[0]),
         )
     newest = max(head.cutoff for head in candidates.values())
     tied = sorted(universe for universe, head in candidates.items() if head.cutoff == newest)

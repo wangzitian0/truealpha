@@ -12,7 +12,7 @@ from pathlib import Path
 import bcrypt
 import psycopg
 from truealpha_contracts.environment_contract import load_environment_contract
-from truealpha_contracts.universes import universe_with_role
+from truealpha_contracts.universes import universes_with_role
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 CANON_PATH = REPO_ROOT / "common/contracts/tests/fixtures/strategy_run_parity.json"
@@ -162,7 +162,7 @@ def _seed_trace_lineage(
     snapshot_id = f"topt-core-snapshot:{snapshot_sha}"
     capture_run_id = f"capture-run:{_hex()}"
     schedule_policy_id = f"schedule-policy:{_hex()}"
-    strategy_universe = f"{load_environment_contract().record(universe_with_role('strategy')).id_prefix}seed"
+    strategy_universe = f"{load_environment_contract().record(universes_with_role('strategy')[0]).id_prefix}seed"
     conn.execute(
         "insert into staging.core_snapshots (snapshot_id, content_sha256, run_id, release_manifest_id, universe_id, universe_version, universe_sha256, cutoff, issuer_count, instrument_count, observation_count, payload, created_at) "
         "values (%s, %s, %s, %s, %s, 'v1', %s, %s::timestamptz, %s, %s, %s, '{}'::jsonb, %s::timestamptz) on conflict (snapshot_id) do nothing",
