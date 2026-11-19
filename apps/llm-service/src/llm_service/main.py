@@ -20,6 +20,9 @@ from llm_service.api.v1 import admin, auth, entities, library, panel, strategy
 from llm_service.config import settings
 from llm_service.mcp_auth import BearerTokenGate
 from llm_service.mcp_server import build_mcp_server
+from llm_service.services._db import redact_db_error
+
+logger = logging.getLogger(__name__)
 
 ENV_MANIFEST_PATH = Path("apps/llm-service/required-env.generated.json")
 ROUTED_PREFIX = "/api"
@@ -95,19 +98,21 @@ app.mount(
 )
 
 
-def _safe_query(conn: Any, query: str, transform: Any, default: Any) -> Any:
+def _read_health_fact(conn: Any, query: str, transform: Any, default: Any) -> Any:
     import psycopg
 
+    degraded_errors = (
+        psycopg.OperationalError,
+        psycopg.errors.UndefinedTable,
+        psycopg.errors.UndefinedColumn,
+        psycopg.errors.InsufficientPrivilege,
+    )
     try:
         return transform(conn.execute(query))
-    except psycopg.Error:
+    except degraded_errors as exc:
+        logger.warning("health mart fact degraded: %s", redact_db_error(exc, database_url=settings.database_url))
         conn.rollback()
         return default
-
-
-def _first_str(cursor: Any) -> str:
-    row = cursor.fetchone()
-    return str(row[0]) if row and row[0] else "unknown"
 
 
 def _identity(cursor: Any) -> tuple[str, str]:
@@ -148,32 +153,36 @@ def _nightly_verdicts(cursor: Any, contract: Any) -> list[dict[str, Any]]:
 
 
 def _data_engine_facts() -> tuple[str, str, str, list[dict[str, Any]] | str, list[dict[str, Any]] | str]:
+    import psycopg
+
     parser, git_sha, image_digest = "unknown", "unknown", "unknown"
     pointers: list[dict[str, Any]] | str = "unknown"
     verdicts: list[dict[str, Any]] | str = "unknown"
+    contract = load_environment_contract()
+    degraded_errors = (
+        psycopg.OperationalError,
+        psycopg.errors.UndefinedTable,
+        psycopg.errors.InsufficientPrivilege,
+    )
     try:
-        import psycopg
-
-        contract = load_environment_contract()
         with psycopg.connect(settings.database_url, connect_timeout=settings.database_connect_timeout_seconds) as conn:
-            parser = _safe_query(
-                conn,
-                "select parser_version from staging.capture_normalized_observations order by recorded_at desc limit 1",
-                _first_str,
-                "unknown",
-            )
-            git_sha, image_digest = _safe_query(
+            if hasattr(conn, "cursor"):
+                conn.execute("set local role app_ops_reader")
+                conn.execute("select set_config('statement_timeout', '5s', true)")
+            git_sha, image_digest = _read_health_fact(
                 conn,
                 "select git_sha, image_digest from mart.data_engine_identity order by created_at desc limit 1",
                 _identity,
                 ("unknown", "unknown"),
             )
-            pointers = _safe_query(
+            pointers = _read_health_fact(
                 conn, GOVERNED_POINTERS_SQL, lambda cur: _served_pointers(conn, cur, contract), "unknown"
             )
-            verdicts = _safe_query(conn, NIGHTLY_VERDICTS_SQL, lambda cur: _nightly_verdicts(cur, contract), "unknown")
-    except Exception:  # noqa: BLE001
-        pass
+            verdicts = _read_health_fact(
+                conn, NIGHTLY_VERDICTS_SQL, lambda cur: _nightly_verdicts(cur, contract), "unknown"
+            )
+    except degraded_errors as exc:
+        logger.warning("health database unavailable: %s", redact_db_error(exc, database_url=settings.database_url))
     return parser, git_sha, image_digest, pointers, verdicts
 
 
