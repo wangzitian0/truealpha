@@ -23,11 +23,12 @@ from factors.panel import (
 )
 from truealpha_contracts.environment_contract import EnvironmentContract, load_environment_contract
 from truealpha_contracts.strategy import load_live_strategy_definition
-from truealpha_contracts.universes import id_prefix_like, universe_with_role
+from truealpha_contracts.universes import id_prefix_like, universes_with_role
 from truealpha_runtime import reconciliation_policies
 
 EXEMPTIONS_PATH = Path(__file__).resolve().parents[4] / "tools" / "output_invariant_exemptions.json"
-SERVED_UNIVERSE_LIKE = id_prefix_like(universe_with_role("strategy"))
+SERVED_UNIVERSE_LIKES = tuple(id_prefix_like(k) for k in universes_with_role("strategy"))
+_SERVED_UNIVERSE_SQL = " or ".join(f"universe_id like '{p}'" for p in SERVED_UNIVERSE_LIKES)
 _MAX_INPUT_AGE_DAYS = load_live_strategy_definition().eligibility.maximum_input_age_days
 _BASE_GPPE_NODE = GPPE_V0_SPEC.root
 _BANK_GPPE_NODE = GPPE_BANKING_TCE_SPEC.root
@@ -35,7 +36,7 @@ _BANK_GPPE_NODE = GPPE_BANKING_TCE_SPEC.root
 GOVERNED_HEAD = f"""
     select run_id from mart.served_head
     where factor_id = 'gross_profit_per_employee'
-      and universe_id like '{SERVED_UNIVERSE_LIKE}'
+      and ({_SERVED_UNIVERSE_SQL})
     order by advanced_at desc limit 1
 """
 

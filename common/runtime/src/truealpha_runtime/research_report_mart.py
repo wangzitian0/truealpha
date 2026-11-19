@@ -13,7 +13,7 @@ from pydantic import ValidationError
 from truealpha_contracts.common import FrozenModel
 from truealpha_contracts.confidence_bands import confidence_band
 from truealpha_contracts.execution import AvailabilityStatus, FactorValidationStatus
-from truealpha_contracts.universes import id_prefix_like, universe_with_role
+from truealpha_contracts.universes import id_prefix_like, universes_with_role
 
 from truealpha_runtime.access import AccessContext
 from truealpha_runtime.issuer_modules_mart import (
@@ -481,17 +481,24 @@ ACCEPTANCE_FALLBACK_HEAD_SQL = """
 
 
 def resolve_strategy_governed_run(conn: Any) -> tuple[str | None, str | None]:
-    like_prefix = (id_prefix_like(universe_with_role("strategy")),)
-    head = conn.execute(POINTER_HEAD_SQL, like_prefix).fetchone()
-    if head is not None and (head["availability"] == "unavailable" or head["run_id"] is None):
-        return None, f"head_unavailable: {head['staleness_reason'] or 'older_than_30d'}"
-    if head is None:
+    prefixes = [(id_prefix_like(k),) for k in universes_with_role("strategy")]
+    unavailable_reason: str | None = None
+    for like_prefix in prefixes:
+        head = conn.execute(POINTER_HEAD_SQL, like_prefix).fetchone()
+        if head is not None:
+            if head["availability"] == "unavailable" or head["run_id"] is None:
+                unavailable_reason = (
+                    unavailable_reason or f"head_unavailable: {head['staleness_reason'] or 'older_than_30d'}"
+                )
+                continue
+            return str(head["run_id"]), None
+    if unavailable_reason is not None:
+        return None, unavailable_reason
+    for like_prefix in prefixes:
         head = conn.execute(ACCEPTANCE_FALLBACK_HEAD_SQL, like_prefix).fetchone()
-    return (
-        (None, "no accepted (quality-reported) strategy run")
-        if (head is None or head["run_id"] is None)
-        else (str(head["run_id"]), None)
-    )
+        if head is not None and head["run_id"] is not None:
+            return str(head["run_id"]), None
+    return None, "no accepted (quality-reported) strategy run"
 
 
 class PostgresMetricNodeValueRepository:

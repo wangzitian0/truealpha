@@ -11,7 +11,7 @@ from psycopg.rows import dict_row
 from pydantic import ValidationError
 from truealpha_contracts.execution import AvailabilityStatus
 from truealpha_contracts.research import ValuationTier
-from truealpha_contracts.universes import id_prefix_like, universe_with_role
+from truealpha_contracts.universes import id_prefix_like, universes_with_role
 
 from truealpha_runtime.access import AccessContext
 from truealpha_runtime.strategy_run import (
@@ -31,7 +31,7 @@ LATEST_RUN_SQL = """
                join mart.strategy_run_capture b on b.capture_run_id = h.run_id
                where b.strategy_run_id = r.strategy_run_id
                  and h.factor_id = 'gross_profit_per_employee'
-                 and h.universe_id like %s
+                 and h.universe_id like any(%s::text[])
            ) as is_governed,
            r.strategy_version, r.definition_content_sha256
     from mart.strategy_runs r
@@ -125,8 +125,8 @@ def read_trace_lineage(
     )
 
 
-def latest_run_params(strategy_key: str) -> tuple[str, str]:
-    return (id_prefix_like(universe_with_role("strategy")), strategy_key)
+def latest_run_params(strategy_key: str) -> tuple[list[str], str]:
+    return ([id_prefix_like(k) for k in universes_with_role("strategy")], strategy_key)
 
 
 def _decision_from_row(row: dict[str, Any]) -> StrategyRunDecision:

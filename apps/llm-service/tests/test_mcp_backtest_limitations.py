@@ -14,7 +14,6 @@ import secrets
 import psycopg
 import pytest
 from llm_service.mcp_server import PostgresBacktestReader, backtest_run_limitations
-from llm_service.services import strategy_service
 
 LIMITS = ["Price return only. No dividend source exists, so dividends are not included."]
 
@@ -60,7 +59,7 @@ def test_the_backtest_report_returns_the_stored_limitations(monkeypatch: pytest.
             (run_id, json.dumps({"limitations": LIMITS}), secrets.token_hex(32)),
         )
         connection.row_factory = psycopg.rows.dict_row
-        monkeypatch.setattr(strategy_service.psycopg, "connect", lambda *_args, **_kwargs: _Borrowed(connection))
+        monkeypatch.setattr("llm_service.services._db.psycopg.connect", lambda *_args, **_kwargs: _Borrowed(connection))
 
         report = PostgresBacktestReader(database_url=url).get_backtest_report(run_id=run_id)
 

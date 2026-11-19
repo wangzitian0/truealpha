@@ -3,15 +3,12 @@
 from __future__ import annotations
 
 import hashlib
-import logging
-from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
-import psycopg
 from pydantic import BaseModel, Field
 from truealpha_contracts.environment_contract import UnknownUniverse, load_environment_contract
 from truealpha_contracts.strategy import ExclusionReason
-from truealpha_contracts.universes import universe_with_role
+from truealpha_contracts.universes import universes_with_role
 from truealpha_runtime.access import AccessContext
 from truealpha_runtime.strategy_run import StrategyRunReport, StrategyRunUnavailable
 from truealpha_runtime.strategy_run_postgres import PostgresStrategyRunRepository, read_strategy_provenance
@@ -30,7 +27,6 @@ from llm_service.services.panel_service import (
 )
 
 DASHBOARD_STRATEGY_ID = "large_model_value_v0"
-logger = logging.getLogger(__name__)
 
 _EXCLUSION_LABELS: dict[str, str] = {
     reason.value: reason.value.replace("_", " ").capitalize() for reason in ExclusionReason
@@ -48,7 +44,8 @@ def normalize_peg_convention(value: str | None) -> str:
 def normalize_ranking_universe(value: str | None) -> str | None:
     clean = (value or "").strip().lower()
     if not clean:
-        return universe_with_role("strategy")
+        keys = universes_with_role("strategy")
+        return keys[0] if keys else None
     if clean == "all":
         return "all"
     contract = load_environment_contract()
@@ -315,10 +312,7 @@ def _load_strategy_provenance(
 ) -> dict[str, dict[str, Any]]:
     if not strategy_run_id:
         return {}
-    try:
-        return with_mart_readonly(lambda cur: read_strategy_provenance(cur, strategy_run_id), database_url=database_url)
-    except psycopg.Error:
-        return {}
+    return with_mart_readonly(lambda cur: read_strategy_provenance(cur, strategy_run_id), database_url=database_url)
 
 
 def _load_strategy_report(
@@ -342,17 +336,12 @@ def get_strategy_run_page(
         return StrategyRunPageResponse(
             available=False, reason=report.reason, strategy_id=strategy_id, universe=norm_universe
         )
-    with ThreadPoolExecutor(max_workers=3) as pool:
-        f_display = pool.submit(load_entity_display_items, database_url=database_url)
-        f_prov = pool.submit(_load_strategy_provenance, report.strategy_run_id, database_url=database_url)
-        f_panel = pool.submit(
-            _load_wide_panel,
-            WIDE_PANEL_INPUT_KEYS + GPPE_VARIANT_KEYS + RANKING_PANEL_INPUT_KEYS,
-            database_url=database_url,
-        )
-        display_map = f_display.result()
-        prov_map = f_prov.result()
-        wide_panel = f_panel.result()
+    display_map = load_entity_display_items(database_url=database_url)
+    prov_map = _load_strategy_provenance(report.strategy_run_id, database_url=database_url)
+    wide_panel = _load_wide_panel(
+        WIDE_PANEL_INPUT_KEYS + GPPE_VARIANT_KEYS + RANKING_PANEL_INPUT_KEYS,
+        database_url=database_url,
+    )
     target_cutoff = cutoff or max((d.cutoff_at.isoformat() for d in report.decisions), default=None)
     filtered = [
         d
@@ -456,10 +445,7 @@ def list_backtest_runs(
             cur.execute(f"{_BACKTEST_RUN_SELECT} order by created_at desc limit %s", (limit,))
         return BacktestRunsResponse(runs=[BacktestRunDto(**dict(r)) for r in cur.fetchall()])
 
-    try:
-        return with_mart_readonly(_q, database_url=database_url)
-    except psycopg.Error:
-        return BacktestRunsResponse()
+    return with_mart_readonly(_q, database_url=database_url)
 
 
 def get_backtest_detail(run_id: str, *, database_url: str | None = None) -> BacktestDetailResponse | None:
@@ -495,10 +481,7 @@ def get_backtest_detail(run_id: str, *, database_url: str | None = None) -> Back
         trades = [BacktestTradeDto(**dict(r)) for r in cur.fetchall()]
         return BacktestDetailResponse(run=BacktestRunDto(**dict(row)), valuations=vals, trades=trades)
 
-    try:
-        return with_mart_readonly(_q, database_url=database_url)
-    except psycopg.Error:
-        return None
+    return with_mart_readonly(_q, database_url=database_url)
 
 
 def backtest_run_limitations(run: dict[str, Any]) -> list[str]:
@@ -555,18 +538,7 @@ class PostgresBacktestReader:
                 out_runs = [dict(r) for r in cur.fetchall()]
             return out_runs, out_vals, out_trades
 
-        try:
-            runs, valuations, trades = with_mart_readonly(_load, database_url=self._database_url)
-        except Exception as e:
-            logger.warning("Failed to read backtest from mart: %s", e)
-            return {
-                "runs": [],
-                "valuations": [],
-                "trades": [],
-                "count": 0,
-                "availability_status": "unavailable",
-                "error": str(e),
-            }
+        runs, valuations, trades = with_mart_readonly(_load, database_url=self._database_url)
 
         for run in runs:
             run["limitations"] = backtest_run_limitations(run)

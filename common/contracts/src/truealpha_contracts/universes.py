@@ -35,10 +35,15 @@ def universe_of(universe_id: str) -> str:
 
 
 def universe_with_role(role: UniverseRole) -> str:
-    holders = [k for k, u in load_environment_contract().universes.items() if role in u.roles]
+    holders = universes_with_role(role)
     if len(holders) != 1:
-        raise UnknownUniverse(f"the role {role!r} needs exactly one universe, the record holds {holders}")
+        raise UnknownUniverse(f"the role {role!r} needs exactly one universe, the record holds {list(holders)}")
     return holders[0]
+
+
+def universes_with_role(role: UniverseRole) -> tuple[str, ...]:
+    """Return every universe key whose roles include `role` in declaration order."""
+    return tuple(k for k, u in load_environment_contract().universes.items() if role in u.roles)
 
 
 def job_name(key: str) -> str:

@@ -8,7 +8,7 @@ from typing import Any
 
 import dagster as dg
 import psycopg
-from truealpha_contracts.universes import key_of_lane, lane_name, universe_with_role
+from truealpha_contracts.universes import key_of_lane, lane_name, universe_with_role, universes_with_role
 
 from data_engine.config import settings
 from data_engine.contracts.standards import STANDARDS
@@ -133,7 +133,7 @@ class StandardBackfillConfig(dg.Config):
 
 class StandardHistoryConfig(dg.Config):
     executed_at: str
-    universe: str = lane_name(universe_with_role("strategy"))
+    universe: str = lane_name(universes_with_role("strategy")[0])
     standard: str = ""
     months: int = STANDARD_HISTORY_MONTHS
 
@@ -807,9 +807,10 @@ standard_history_schedule = _cron_schedule(
     STANDARD_HISTORY_CRON,
     lambda context: [
         dg.RunRequest(
-            run_key=f"history:{(t := context.scheduled_execution_time.isoformat())}:{(u := lane_name(universe_with_role('strategy')))}",
+            run_key=f"history:{(t := context.scheduled_execution_time.isoformat())}:{(u := lane_name(key))}",
             run_config=history_run_config(t, u),
         )
+        for key in universes_with_role("strategy")
     ],
     name="standard_history_schedule",
 )
