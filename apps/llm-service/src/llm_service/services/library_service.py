@@ -6,11 +6,10 @@ import hashlib
 import json
 import re
 import uuid
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any, Literal
 
-import psycopg
-from infra2_sdk.runtime.s3 import create_s3_client, put_object_bytes, read_object_bytes
+from infra2_sdk.runtime.s3 import create_s3_client, is_not_found, put_object_bytes, read_object_bytes
 from pydantic import BaseModel, Field
 from truealpha_contracts.common import require_stable_and_immutable
 from truealpha_runtime.access import AccessContext
@@ -33,13 +32,12 @@ from truealpha_runtime.research_report import (
     render_report_markdown,
 )
 from truealpha_runtime.research_report_mart import MartResearchReadRepository
+from truealpha_runtime.strategy_run_postgres import PostgresStrategyRunRepository
 
 from llm_service.config import settings
 from llm_service.services._db import with_mart_readonly, with_owner_scoped_runtime
-from llm_service.services.panel_service import served_run_predicate
 from llm_service.services.strategy_service import (
     DASHBOARD_STRATEGY_ID,
-    get_strategy_run_page,
     normalize_peg_convention,
     normalize_ranking_universe,
 )
@@ -174,8 +172,10 @@ def _get_s3_bytes(key: str) -> bytes | None:
     try:
         client = create_s3_client(settings.to_s3_settings())
         return read_object_bytes(client, bucket=settings.s3_bucket, key=key)
-    except Exception:  # noqa: BLE001
-        return None
+    except Exception as exc:  # noqa: BLE001
+        if is_not_found(exc):
+            return None
+        raise
 
 
 def list_documents(
@@ -395,28 +395,53 @@ def delete_document(
 
 
 def _lookup_governed_card_artifact(
-    *, card_kind: str, subject_key: str, convention: str, universe: str, database_url: str | None = None
+    *,
+    card_kind: str,
+    subject_key: str,
+    convention: str,
+    universe: str,
+    cutoff_at: datetime | None = None,
+    database_url: str | None = None,
 ) -> tuple[str, str] | None:
-    sql = f"""
+    sql = """
       select a.html, a.render_mode
       from mart.research_card_artifacts a
-      where {served_run_predicate("a.run_id")}
+      join mart.served_head h on h.run_id = a.run_id
+      where h.run_id is not null
         and a.card_kind = %s
         and a.subject_key = %s
         and a.convention = %s
         and a.universe = %s
-      order by a.recorded_at desc limit 1
+        and (%s::timestamptz is null or a.cutoff_at = %s::timestamptz)
+      order by h.advanced_at desc, h.sequence desc, a.run_id desc
+      limit 1
     """
 
     def _q(cur: Any) -> tuple[str, str] | None:
-        cur.execute(sql, (card_kind, subject_key, convention, universe))
+        cur.execute(sql, (card_kind, subject_key, convention, universe, cutoff_at, cutoff_at))
         row = cur.fetchone()
         return (str(row["html"]), str(row["render_mode"])) if row else None
 
-    try:
-        return with_mart_readonly(_q, database_url=database_url)
-    except psycopg.Error:
-        return None
+    return with_mart_readonly(_q, database_url=database_url)
+
+
+def _resolve_governed_cutoff(
+    context: AccessContext,
+    *,
+    research_repo: ResearchReadPort,
+    strategy_id: str | None = None,
+    database_url: str | None = None,
+) -> datetime:
+    sid = strategy_id or DASHBOARD_STRATEGY_ID
+    strategy_repo = getattr(research_repo, "_strategy_repository", None)
+    if strategy_repo is None and database_url is not None:
+        strategy_repo = PostgresStrategyRunRepository(database_url=database_url)
+    if strategy_repo is not None:
+        latest = strategy_repo.get_latest(strategy_id=sid, context=context)
+        decisions = getattr(latest, "decisions", None)
+        if decisions:
+            return max(d.cutoff_at for d in decisions)
+    raise ValueError("governed cutoff_at is unavailable and no explicit cutoff was supplied")
 
 
 def build_library_report(
@@ -433,8 +458,18 @@ def build_library_report(
     database_url: str | None = None,
 ) -> LibraryReportResponse:
     db_url = database_url or settings.database_url
+    postgres_db_url = (
+        database_url
+        if database_url is not None
+        else (getattr(research_repo, "_database_url", None) if research_repo is not None else settings.database_url)
+    )
     active_repo = research_repo or MartResearchReadRepository(database_url=db_url)
-    effective_cutoff = cutoff_at or datetime.now(UTC)
+    effective_cutoff = cutoff_at or _resolve_governed_cutoff(
+        context,
+        research_repo=active_repo,
+        strategy_id=strategy_id,
+        database_url=postgres_db_url,
+    )
     report = build_research_report(
         ResearchReportRequest(
             report_kind=report_kind,
@@ -471,11 +506,17 @@ def export_or_render_card(
     database_url: str | None = None,
 ) -> CardExportResponse:
     db_url = database_url or settings.database_url
+    postgres_db_url = (
+        database_url
+        if database_url is not None
+        else (getattr(research_repo, "_database_url", None) if research_repo is not None else settings.database_url)
+    )
     active_repo = research_repo or MartResearchReadRepository(database_url=db_url)
     norm_convention = normalize_peg_convention(req.convention)
     norm_universe = normalize_ranking_universe(req.universe) or "all"
     if report_request is not None:
         effective_req = report_request
+        target_cutoff_dt = report_request.cutoff_at
         subject_key = (
             report_request.target_entity_ids[0]
             if req.card_kind == CardKind.COMPANY and report_request.target_entity_ids
@@ -483,12 +524,14 @@ def export_or_render_card(
         )
     else:
         target_cutoff_dt = (
-            datetime.fromisoformat(req.cutoff.replace("Z", "+00:00")) if req.cutoff else datetime.now(UTC)
+            datetime.fromisoformat(req.cutoff.replace("Z", "+00:00"))
+            if req.cutoff
+            else _resolve_governed_cutoff(
+                context,
+                research_repo=active_repo,
+                database_url=postgres_db_url,
+            )
         )
-        if req.cutoff is None:
-            page_info = get_strategy_run_page(context, universe=norm_universe, database_url=db_url)
-            if page_info.cutoff_at:
-                target_cutoff_dt = datetime.fromisoformat(page_info.cutoff_at.replace("Z", "+00:00"))
 
         if req.card_kind == CardKind.COMPANY and req.issuer_id:
             report_kind = ResearchReportKind.COMPANY
@@ -549,9 +592,10 @@ def export_or_render_card(
             subject_key=subject_key,
             convention=norm_convention,
             universe=norm_universe,
-            database_url=db_url,
+            cutoff_at=target_cutoff_dt,
+            database_url=postgres_db_url,
         )
-        if req.page is None
+        if req.page is None and postgres_db_url is not None
         else None
     )
     html: str
@@ -567,17 +611,14 @@ def export_or_render_card(
 
     doc_id: str | None = None
     if req.persist:
-        try:
-            saved = create_document(
-                context,
-                source_artifact_id=card.card_id,
-                content_bytes=html.encode("utf-8"),
-                content_type="text/html; charset=utf-8",
-                database_url=db_url,
-            )
-            doc_id = saved.document.document_id
-        except Exception:  # noqa: BLE001 — persistence best-effort when object store/app is offline in unit probes
-            doc_id = None
+        saved = create_document(
+            context,
+            source_artifact_id=card.card_id,
+            content_bytes=html.encode("utf-8"),
+            content_type="text/html; charset=utf-8",
+            database_url=db_url,
+        )
+        doc_id = saved.document.document_id
 
     return CardExportResponse(
         card_id=card.card_id,

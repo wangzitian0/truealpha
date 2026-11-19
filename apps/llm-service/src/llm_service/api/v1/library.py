@@ -41,16 +41,19 @@ def reports(
     format: Literal["json", "markdown"] = Query(default="json"),
     principal: PrincipalRecord = Depends(require_principal),
 ) -> LibraryReportResponse:
-    return build_library_report(
-        access_context_for(principal),
-        report_kind=report_kind,
-        target_entity_ids=tuple(target_entity_ids),
-        cutoff_at=cutoff_at,
-        section_kinds=tuple(section_kinds),
-        strategy_id=strategy_id,
-        title=title,
-        output_format=format,
-    )
+    try:
+        return build_library_report(
+            access_context_for(principal),
+            report_kind=report_kind,
+            target_entity_ids=tuple(target_entity_ids),
+            cutoff_at=cutoff_at,
+            section_kinds=tuple(section_kinds),
+            strategy_id=strategy_id,
+            title=title,
+            output_format=format,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from None
 
 
 @router.post("/cards/export", response_model=CardExportResponse, operation_id="library_card_export")
