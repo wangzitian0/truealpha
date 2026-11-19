@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-import logging
-from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
-import psycopg
 from pydantic import BaseModel, Field
 from truealpha_runtime.access import AccessContext
 from truealpha_runtime.issuer_modules_mart import (
@@ -38,8 +35,6 @@ from llm_service.services.strategy_service import (
     StrategyRunPageResponse,
     get_strategy_run_page,
 )
-
-logger = logging.getLogger(__name__)
 
 THEME_LATEST_RUN_SQL = """
   select p.run_id, max(p.cutoff) as cutoff
@@ -272,20 +267,11 @@ def get_trace(
         lin_inputs: list[dict[str, Any]] = []
         target_cutoff = decision.cutoff_at if decision else cutoff
         if page.strategy_run_id and target_cutoff:
-            try:
-                res_id, list_id, lineage = read_trace_lineage(cur, page.strategy_run_id, target_iid, target_cutoff)
-                lin_inputs = _extract_lineage_inputs(lineage, list_id)
-            except psycopg.Error:
-                cur.connection.rollback()
+            res_id, list_id, lineage = read_trace_lineage(cur, page.strategy_run_id, target_iid, target_cutoff)
+            lin_inputs = _extract_lineage_inputs(lineage, list_id)
         return nodes, res_id, lin_inputs
 
-    nodes: list[TraceNodeValueDto] = []
-    lineage_result_id: str | None = None
-    lineage_inputs: list[dict[str, Any]] = []
-    try:
-        nodes, lineage_result_id, lineage_inputs = with_mart_readonly(_q, database_url=database_url)
-    except psycopg.Error:
-        nodes = []
+    nodes, lineage_result_id, lineage_inputs = with_mart_readonly(_q, database_url=database_url)
     return TraceResponse(
         available=decision is not None or bool(nodes),
         reason=None if (decision or nodes) else "trace_not_found",
@@ -308,21 +294,11 @@ def get_entity_detail(
     database_url: str | None = None,
 ) -> EntityDetailResponse:
     db_url = database_url or settings.database_url
-
-    def _resolve_candidates() -> list[str]:
-        try:
-            return with_mart_readonly(
-                lambda cur: resolve_issuer_candidates_from_cursor(cur, issuer_id),
-                database_url=database_url,
-            )
-        except psycopg.Error:
-            return [issuer_id]
-
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        f_page = pool.submit(get_strategy_run_page, context, database_url=database_url)
-        f_candidates = pool.submit(_resolve_candidates)
-        page = f_page.result()
-        candidates = f_candidates.result()
+    page = get_strategy_run_page(context, database_url=database_url)
+    candidates = with_mart_readonly(
+        lambda cur: resolve_issuer_candidates_from_cursor(cur, issuer_id),
+        database_url=database_url,
+    )
 
     cand_set = set(candidates)
     decisions = [d for d in page.decisions if d.issuer_id in cand_set]
@@ -330,27 +306,20 @@ def get_entity_detail(
     if hasattr(modules, "seed_candidates"):
         modules.seed_candidates(issuer_id, candidates)
 
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        f_trace = pool.submit(
-            get_trace,
-            context,
-            issuer_id=issuer_id,
-            page=page,
-            candidates=candidates,
-            database_url=database_url,
-        )
-        f_profile = pool.submit(
-            PostgresCompanyProfileReader(database_url=db_url).get_company_profile,
-            issuer_id=issuer_id,
-            candidates=candidates,
-            include_decision=False,
-        )
-        f_supply = pool.submit(modules.supply_chain_exposure, issuer_id)
-        f_ratings = pool.submit(modules.analyst_ratings, issuer_id)
-        trace = f_trace.result()
-        profile = f_profile.result()
-        supply = f_supply.result()
-        ratings = f_ratings.result()
+    trace = get_trace(
+        context,
+        issuer_id=issuer_id,
+        page=page,
+        candidates=candidates,
+        database_url=database_url,
+    )
+    profile = PostgresCompanyProfileReader(database_url=db_url).get_company_profile(
+        issuer_id=issuer_id,
+        candidates=candidates,
+        include_decision=False,
+    )
+    supply = modules.supply_chain_exposure(issuer_id)
+    ratings = modules.analyst_ratings(issuer_id)
 
     return EntityDetailResponse(
         issuer_id=issuer_id,
@@ -436,10 +405,7 @@ def get_themes_overview(*, database_url: str | None = None) -> ThemesResponse:
             )
         return ThemesResponse(groups=list(groups.values()))
 
-    try:
-        return with_mart_readonly(_q, database_url=database_url)
-    except psycopg.Error:
-        return ThemesResponse()
+    return with_mart_readonly(_q, database_url=database_url)
 
 
 def get_fund_valuations(*, database_url: str | None = None) -> FundValuationsResponse:
@@ -541,10 +507,7 @@ def get_fund_valuations(*, database_url: str | None = None) -> FundValuationsRes
             )
         return FundValuationsResponse(funds=sorted(by_fund.values(), key=lambda f: f.fund_name))
 
-    try:
-        return with_mart_readonly(_q, database_url=database_url)
-    except psycopg.Error:
-        return FundValuationsResponse()
+    return with_mart_readonly(_q, database_url=database_url)
 
 
 def _decision_reason_codes(decision_row: dict[str, Any] | None) -> list[str]:
@@ -729,10 +692,7 @@ class PostgresCompanyProfileReader:
             themes = [dict(r) for r in cur.fetchall()]
             return decision, gppe, themes
 
-        try:
-            decision_row, gppe_row, themes = with_mart_readonly(_q, database_url=self._database_url)
-        except psycopg.Error:
-            decision_row, gppe_row, themes = None, None, []
+        decision_row, gppe_row, themes = with_mart_readonly(_q, database_url=self._database_url)
         return _format_company_profile(
             issuer_id=issuer_id,
             decision_row=dict(decision_row) if decision_row else None,
@@ -746,14 +706,6 @@ def _legacy_id_join(column: str) -> str:
         "left join lateral (select ei.legacy_id from mart.entity_identity ei "
         f"where ei.entity_id::text = {column} limit 1) ei on true"
     )
-
-
-def _query_mart(database_url: str, label: str, query_fn: Any, default: Any) -> Any:
-    try:
-        return with_mart_readonly(query_fn, database_url=database_url)
-    except psycopg.Error as exc:
-        logger.warning("%s failed to query database: %s", label, exc)
-        return default
 
 
 def _format_theme_row(row: dict[str, Any], *, include_issuer: bool = False) -> dict[str, Any]:
@@ -826,7 +778,7 @@ class PostgresThemePurityLeaderboardReader:
             )
             return [_format_theme_row(r, include_issuer=True) for r in cur.fetchall()]
 
-        issuers = _query_mart(self._database_url, "get_leaderboard", _load, [])
+        issuers = with_mart_readonly(_load, database_url=self._database_url)
         return {"theme_id": theme_id, "limit": clamped_limit, "count": len(issuers), "issuers": issuers}
 
 
@@ -890,7 +842,7 @@ class PostgresEtfProfileReader:
             )
             return f_row, cur.fetchall()
 
-        fund_row, raw_holdings = _query_mart(self._database_url, "get_etf_profile", _load, (None, []))
+        fund_row, raw_holdings = with_mart_readonly(_load, database_url=self._database_url)
         first_holding = raw_holdings[0] if raw_holdings else None
         holdings = [
             {

@@ -572,16 +572,31 @@ def _stub_connection_error(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_postgres_theme_purity_leaderboard_reader_normalizes_theme_slug(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    import psycopg
     from llm_service.mcp_server import PostgresThemePurityLeaderboardReader
+    from llm_service.services import entities_service
 
     _stub_connection_error(monkeypatch)
-    # Disconnected DB should return empty list gracefully without unhandled exception
     reader = PostgresThemePurityLeaderboardReader(database_url="postgresql://invalid:invalid@127.0.0.1:59999/none")
+    with pytest.raises(psycopg.OperationalError, match="connection refused"):
+        reader.get_leaderboard(theme_id="AI Infrastructure", limit=5)
+
+    captured_params: list[tuple[Any, ...]] = []
+
+    class _FakeCur:
+        def execute(self, _sql: str, params: tuple[Any, ...]) -> None:
+            captured_params.append(params)
+
+        def fetchall(self) -> list[Any]:
+            return []
+
+    monkeypatch.setattr(entities_service, "with_mart_readonly", lambda fn, **_k: fn(_FakeCur()))
     result = reader.get_leaderboard(theme_id="AI Infrastructure", limit=5)
     assert result["theme_id"] == "AI Infrastructure"
     assert result["limit"] == 5
     assert result["count"] == 0
     assert result["issuers"] == []
+    assert captured_params[0][1] == "ai-infrastructure"
 
 
 def test_normalize_theme_slug_falsifiable() -> None:
@@ -633,28 +648,25 @@ def test_issuer_identity_sql_ssot_falsifiable() -> None:
 def test_postgres_company_profile_reader_handles_connection_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    import psycopg
     from llm_service.mcp_server import PostgresCompanyProfileReader
 
     _stub_connection_error(monkeypatch)
     reader = PostgresCompanyProfileReader(database_url="postgresql://invalid:invalid@127.0.0.1:59999/none")
-    result = reader.get_company_profile(issuer_id="NVDA")
-    assert result["issuer_id"] == "NVDA"
-    assert result["availability_status"] == "unavailable"
-    assert result["theme_purity"] == []
+    with pytest.raises(psycopg.OperationalError, match="connection refused"):
+        reader.get_company_profile(issuer_id="NVDA")
 
 
 def test_postgres_etf_profile_reader_handles_connection_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    import psycopg
     from llm_service.mcp_server import PostgresEtfProfileReader
 
     _stub_connection_error(monkeypatch)
     reader = PostgresEtfProfileReader(database_url="postgresql://invalid:invalid@127.0.0.1:59999/none")
-    result = reader.get_etf_profile(fund_id="fund:nasdaq:qqq")
-    assert result["fund_id"] == "fund:nasdaq:qqq"
-    assert result["availability_status"] == "unavailable"
-    assert result["reason_codes"] == ["no_virtual_company_consolidation_found"]
-    assert result["holdings"] == []
+    with pytest.raises(psycopg.OperationalError, match="connection refused"):
+        reader.get_etf_profile(fund_id="fund:nasdaq:qqq")
 
 
 # --- #1117: the theme readers meet the unvisited fill rows of Q6 ---------------------------------
