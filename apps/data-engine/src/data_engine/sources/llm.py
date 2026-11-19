@@ -13,11 +13,12 @@ from contextlib import contextmanager, nullcontext
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
+from types import SimpleNamespace
 from typing import Any
 from urllib.parse import urlparse
 
 from factors.shared import extraction as extraction_primitive
-from infra2_sdk.runtime.llm import LlmSettings
+from infra2_sdk.runtime.llm import LlmClient, LlmSettings
 from truealpha_contracts.common import canonical_sha256
 from truealpha_runtime.research_cards import (
     XHS_CARD_INSTRUCTIONS,
@@ -421,12 +422,15 @@ def invoke(
             ) is not None:
                 return replayed
         llm_cfg = LlmSettings(
-            provider=settings.llm_provider, base_url=settings.llm_base_url, api_key=settings.llm_api_key
+            provider=settings.llm_provider,
+            base_url=settings.llm_base_url,
+            api_key=settings.llm_api_key,
+            json_timeout_seconds=float(task.timeout_seconds),
+            json_max_tokens=task.max_tokens,
+            json_disable_thinking=False,
         )
-        request_bytes = _request_bytes(request_body)
-        request_sha256 = hashlib.sha256(request_bytes).hexdigest()
+        request_sha256 = _request_sha256(request_body)
         url = f"{llm_cfg.base_url.rstrip('/')}{llm_cfg.chat_completions_path}"
-        headers = {"Authorization": f"Bearer {llm_cfg.api_key}", "Content-Type": "application/json"}
         started_at = now()
         usage: dict[str, Any] = {}
         payload: dict[str, Any] = {}
@@ -456,9 +460,8 @@ def invoke(
             decision = refusal(limit_msg)
         else:
             status, body, payload, usage, provider_code = _call_provider(
-                url,
-                headers,
-                request_bytes,
+                llm_cfg,
+                user_content,
                 request_body,
                 decoding,
                 task,
@@ -561,9 +564,8 @@ def _request_bytes(request_body: dict[str, Any]) -> bytes:
 
 
 def _call_provider(
-    url: str,
-    headers: dict[str, str],
-    request_bytes: bytes,
+    llm_cfg: LlmSettings,
+    user_content: str,
     request_body: dict[str, Any],
     decoding: model_decoding.DecodingVersion,
     task: ModelTask,
@@ -575,42 +577,56 @@ def _call_provider(
     budget = model_policy.RetryBudget()
     pacer = model_policy.pacer_for(gateway.capacity_environment())
     send = transport or _gateway_transport
+    messages = [{"role": "system", "content": task.instructions}, {"role": "user", "content": user_content}]
+    extra_body = {"temperature": 0, **decoding.parameters()}
 
     def _run_attempt(attempt: int) -> tuple[int, bytes, dict[str, Any], dict[str, Any], str | None]:
-        payload: dict[str, Any] = {}
-        usage: dict[str, Any] = {}
-        provider_code: str | None = None
-        with (
-            pacer.admitted(budget.remaining_seconds) if pacer is not None else nullcontext(),
-            record_call(
-                SOURCE, ENDPOINT, identity=identity, caller=caller, request_uri=url, cost=0, admit=False
-            ) as call,
-        ):
-            call.attempt = attempt
-            call.request_params = request_params
-            status, body = send(url, headers, request_bytes)
-            call.observe(status_code=status, body=body)
-            if status >= 400:
-                provider_code = model_policy.provider_code(body)
-                call.provider_code = provider_code
-                call.fail(f"HTTP {status}: {body[:200]!r}")
-            else:
-                payload = json.loads(body.decode())
-                usage = payload.get("usage") or {}
+        captured: dict[str, Any] = {"status": 0, "body": b"", "provider_code": None}
+
+        def _dispatch(_method: str, req_url: str, *, headers: dict[str, str], **req_kwargs: Any) -> Any:
+            with (
+                pacer.admitted(budget.remaining_seconds) if pacer is not None else nullcontext(),
+                record_call(
+                    SOURCE, ENDPOINT, identity=identity, caller=caller, request_uri=req_url, cost=0, admit=False
+                ) as call,
+            ):
+                call.attempt = attempt
+                call.request_params = request_params
+                status, raw_body = send(req_url, dict(headers), _request_bytes(req_kwargs["json"]))
+                call.observe(status_code=status, body=raw_body)
+                captured["status"], captured["body"] = status, raw_body
+                if status >= 400:
+                    provider_code = model_policy.provider_code(raw_body)
+                    captured["provider_code"] = provider_code
+                    call.provider_code = provider_code
+                    call.fail(f"HTTP {status}: {raw_body[:200]!r}")
+                    return SimpleNamespace(status_code=status, headers={}, json=dict)
+                parsed = json.loads(raw_body.decode())
+                usage = parsed.get("usage") or {}
                 call.cost = Decimal(int(usage.get("total_tokens") or 0))
                 call.completion_tokens = _token_count(usage.get("completion_tokens"))
                 call.reasoning_tokens = _token_count(
                     (usage.get("completion_tokens_details") or {}).get("reasoning_tokens")
                 )
-                _record_span_attrs(
-                    str(payload.get("model") or request_params.get("model") or ""),
-                    settings.llm_provider,
-                    _token_count(usage.get("prompt_tokens")) or 0,
-                    call.completion_tokens or 0,
-                )
-                if task.answer_required and _cut_off(payload):
+                if task.answer_required and _cut_off(parsed):
                     call.fail(f"finish_reason={FINISH_REASON_CUT_OFF}: the answer was cut at max_tokens")
-        return status, body, payload, usage, provider_code
+                return SimpleNamespace(status_code=status, headers={}, json=lambda: parsed)
+
+        sdk_client = LlmClient(llm_cfg, client=SimpleNamespace(request=_dispatch), max_retries=1)
+        try:
+            response = sdk_client.chat(
+                messages,
+                model=str(request_body["model"]),
+                json_mode=True,
+                max_tokens=task.max_tokens,
+                extra_body=extra_body,
+            )
+        except RuntimeError:
+            if captured["status"] >= 400:
+                return captured["status"], captured["body"], {}, {}, captured["provider_code"]
+            raise
+        payload = dict(response.raw)
+        return captured["status"], captured["body"], payload, payload.get("usage") or {}, None
 
     with _attempt_context(task.timeout_seconds, identity):
         last: tuple[int, bytes, dict[str, Any], dict[str, Any], str | None] | None = None
@@ -747,22 +763,6 @@ class ThemeClassification:
 
 
 _JSON_FENCE_RE = re.compile(r"\A```(?:json)?\s*(.*?)\s*```\Z", re.IGNORECASE | re.DOTALL)
-
-
-def _record_span_attrs(model: str, provider: str, in_tok: int, out_tok: int) -> None:
-    try:
-        from opentelemetry import trace
-    except ImportError:  # pragma: no cover
-        return
-    span = trace.get_current_span()
-    if span is not None and span.is_recording():
-        for k, v in (
-            ("gen_ai.system", provider),
-            ("gen_ai.request.model", model),
-            ("gen_ai.usage.input_tokens", in_tok),
-            ("gen_ai.usage.output_tokens", out_tok),
-        ):
-            span.set_attribute(k, v)
 
 
 def _parse_json_payload(content: str) -> Any:
