@@ -167,3 +167,144 @@ async def test_library_http_and_mcp_usecases(monkeypatch: pytest.MonkeyPatch) ->
     assert l_mcp["documents"][0]["document_id"] == "document:1"
     assert dc_mcp["document"]["document_id"] == "document:1"
     assert dd_mcp["result"]["latest_content"] == "hello"
+
+
+def test_library_export_persist_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _FakeModules:
+        def supply_chain_exposure(self, **_k: Any) -> None:
+            return None
+
+        def analyst_ratings(self, **_k: Any) -> None:
+            return None
+
+    fake_repo = MartResearchReadRepository(
+        strategy_repository=load_fixture_strategy_repo(), issuer_modules=_FakeModules()
+    )
+    monkeypatch.setattr(library_service, "_lookup_governed_card_artifact", lambda **_k: None)
+
+    def _fail_create(*_a: Any, **_k: Any) -> Any:
+        raise RuntimeError("s3_down")
+
+    monkeypatch.setattr(library_service, "create_document", _fail_create)
+
+    from llm_service.services.auth_service import PrincipalRecord, access_context_for
+
+    ctx = access_context_for(PrincipalRecord(principal_id="principal:1", tenant_id="tenant:1", principal_kind="member"))
+    with pytest.raises(RuntimeError, match="s3_down"):
+        library_service.export_or_render_card(
+            ctx,
+            library_service.CardExportRequest(
+                card_kind=library_service.CardKind.COMPANY,
+                issuer_id="issuer:nvda",
+                cutoff="2026-06-30T23:59:59Z",
+                format="html",
+                persist=True,
+            ),
+            research_repo=fake_repo,
+        )
+
+
+def test_library_report_requires_governed_cutoff_without_wall_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    from truealpha_runtime.strategy_run import StrategyRunUnavailable
+
+    class _UnavailableStrategyRepo:
+        def get_latest(self, *, strategy_id: str, context: Any) -> StrategyRunUnavailable:
+            return StrategyRunUnavailable(strategy_id=strategy_id, reason="no_runs_recorded")
+
+    class _NoModules:
+        def supply_chain_exposure(self, **_k: Any) -> None:
+            return None
+
+        def analyst_ratings(self, **_k: Any) -> None:
+            return None
+
+    unavailable_repo = MartResearchReadRepository(
+        strategy_repository=_UnavailableStrategyRepo(), issuer_modules=_NoModules()
+    )
+    from llm_service.services.auth_service import PrincipalRecord, access_context_for
+
+    ctx = access_context_for(PrincipalRecord(principal_id="principal:1", tenant_id="tenant:1", principal_kind="member"))
+    with pytest.raises(ValueError, match="cutoff"):
+        library_service.build_library_report(ctx, cutoff_at=None, research_repo=unavailable_repo)
+
+    # Same ValueError surfaces as HTTP 422 on GET /api/v1/library/reports.
+    client, headers = auth_client(monkeypatch)
+    monkeypatch.setattr(
+        "llm_service.api.v1.library.build_library_report",
+        lambda *_a, **_k: (_ for _ in ()).throw(ValueError("governed cutoff_at is unavailable")),
+    )
+    bad = client.get("/api/v1/library/reports", headers=headers)
+    assert bad.status_code == 422
+
+    # When strategy decisions exist, cutoff_at=None resolves deterministically from the governed run (not now()).
+    fixture_repo = MartResearchReadRepository(
+        strategy_repository=load_fixture_strategy_repo(), issuer_modules=_NoModules()
+    )
+    resp = library_service.build_library_report(
+        ctx,
+        report_kind=library_service.ResearchReportKind.COMPANY,
+        target_entity_ids=("issuer:nvda",),
+        cutoff_at=None,
+        research_repo=fixture_repo,
+    )
+    assert resp.report is not None and resp.report["cutoff_at"].startswith("2026-")
+
+
+def test_library_get_s3_bytes_distinguishes_not_found_from_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _NotFoundError(Exception):
+        response = {"Error": {"Code": "NoSuchKey"}}
+
+    monkeypatch.setattr(library_service, "create_s3_client", lambda *_a, **_k: object())
+    monkeypatch.setattr(
+        library_service,
+        "read_object_bytes",
+        lambda *_a, **_k: (_ for _ in ()).throw(_NotFoundError("missing")),
+    )
+    assert library_service._get_s3_bytes("documents/p/missing") is None
+
+    monkeypatch.setattr(
+        library_service,
+        "read_object_bytes",
+        lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("s3_network_timeout")),
+    )
+    with pytest.raises(RuntimeError, match="s3_network_timeout"):
+        library_service._get_s3_bytes("documents/p/broken")
+
+
+def test_lookup_governed_card_artifact_does_not_swallow_db_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    import psycopg
+
+    def _boom(*_a: Any, **_k: Any) -> Any:
+        raise psycopg.OperationalError("connection refused")
+
+    monkeypatch.setattr(library_service, "with_mart_readonly", _boom)
+    with pytest.raises(psycopg.OperationalError, match="connection refused"):
+        library_service._lookup_governed_card_artifact(
+            card_kind="ranking",
+            subject_key="theme:large_model_value",
+            convention="ttm",
+            universe="topt",
+            database_url="postgresql://unused",
+        )
+
+    captured_sql: list[str] = []
+
+    class _FakeCur:
+        def execute(self, sql: str, _params: Any) -> None:
+            captured_sql.append(sql)
+
+        def fetchone(self) -> None:
+            return None
+
+    monkeypatch.setattr(library_service, "with_mart_readonly", lambda fn, **_k: fn(_FakeCur()))
+    library_service._lookup_governed_card_artifact(
+        card_kind="ranking",
+        subject_key="theme:large_model_value",
+        convention="ttm",
+        universe="topt",
+        cutoff_at=datetime(2026, 6, 30, tzinfo=UTC),
+        database_url="postgresql://unused",
+    )
+    assert len(captured_sql) == 1
+    assert "join mart.served_head" in captured_sql[0]
+    assert "recorded_at desc" not in captured_sql[0]
