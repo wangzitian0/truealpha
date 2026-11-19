@@ -16,7 +16,6 @@ from llm_service.services import (
     auth_service,
     entities_service,
     library_service,
-    panel_service,
     strategy_service,
 )
 from pydantic import SecretStr
@@ -401,59 +400,74 @@ def test_real_postgres_auth_admin_ledger_documents_rls_and_served_head_withholdi
 def test_entity_detail_resolves_candidates_once_and_avoids_duplicate_strategy_page(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    page_calls = 0
-    candidate_resolve_calls = 0
-    executed_sqls: list[str] = []
+    import inspect
 
-    fake_decision = strategy_service.StrategyDecisionItemDto(
-        issuer_id="issuer:cik:0000723125",
-        label="MU · Micron",
-        cutoff_at="2026-06-30T00:00:00+00:00",
-        outcome="eligible",
-        eligible=True,
-        trace_id="trace:abc123",
-    )
-    fake_page = strategy_service.StrategyRunPageResponse(
-        available=True,
-        strategy_id="large_model_value_v0",
-        strategy_run_id="strategy-run:1",
-        decisions=[fake_decision],
-        display_map={
-            "issuer:cik:0000723125": panel_service.EntityDisplayItem(
-                issuer_id="issuer:cik:0000723125", ticker="MU", display_name="Micron", label="MU · Micron"
-            )
-        },
-    )
+    page_calls = 0
+    identity_resolve_calls = 0
+    mart_conn_calls = 0
+    executed_sqls: list[str] = []
 
     def _fake_page(*_a: Any, **_k: Any) -> strategy_service.StrategyRunPageResponse:
         nonlocal page_calls
         page_calls += 1
-        return fake_page
+        raise AssertionError("get_entity_detail must not load the whole strategy pool via get_strategy_run_page")
 
     class _RecordingCur:
+        def __init__(self) -> None:
+            self._last_sql = ""
+
         def execute(self, sql: str, _params: Any = None) -> None:
+            self._last_sql = sql
             executed_sqls.append(sql)
 
-        def fetchall(self) -> list[Any]:
+        def fetchall(self) -> list[dict[str, Any]]:
+            if "from mart.entity_display_resolution" in self._last_sql:
+                return [{"issuer_id": "issuer:cik:0000723125", "ticker": "MU", "display_name": "Micron"}]
             return []
 
-        def fetchone(self) -> None:
+        def fetchone(self) -> dict[str, Any] | None:
+            if "from mart.strategy_decisions" in self._last_sql:
+                return {
+                    "issuer_id": "11111111-1111-1111-1111-111111111111",
+                    "strategy_run_id": "strategy-run:1",
+                    "corpus_sha256": "a" * 64,
+                    "cutoff_at": "2026-06-30T00:00:00Z",
+                    "eligible": True,
+                    "tier": "high",
+                    "capital_adjusted_labor_efficiency": "120000",
+                    "labor_efficiency_metric": "gppe_uniform_charge_v0",
+                    "valuation_gap": "0.15",
+                    "current_price_to_sales": None,
+                    "target_price_to_sales": None,
+                    "current_price_to_gross_profit": "4.0",
+                    "target_price_to_gross_profit": "4.6",
+                    "outcome": "eligible",
+                    "exclusion_reason": None,
+                    "rank": 1,
+                    "target_weight": "0.05",
+                    "peg": "1.2",
+                    "peg_rank": 1,
+                    "peg_reason_codes": [],
+                    "availability_status": "available",
+                    "confidence": "0.9",
+                    "reason_codes": [],
+                }
             return None
 
     def _fake_with_mart(fn: Any, **_k: Any) -> Any:
+        nonlocal mart_conn_calls
+        mart_conn_calls += 1
         return fn(_RecordingCur())
 
-    def _fake_resolve(_cur: Any, iid: str) -> list[str]:
-        nonlocal candidate_resolve_calls
-        candidate_resolve_calls += 1
-        return [iid, "11111111-1111-1111-1111-111111111111"]
+    def _fake_identity(_cur: Any, iid: str) -> tuple[list[str], dict[str, str]]:
+        nonlocal identity_resolve_calls
+        identity_resolve_calls += 1
+        uuid_str = "11111111-1111-1111-1111-111111111111"
+        return [iid, uuid_str], {uuid_str: "issuer:cik:0000723125"}
 
     monkeypatch.setattr(entities_service, "get_strategy_run_page", _fake_page)
     monkeypatch.setattr(entities_service, "with_mart_readonly", _fake_with_mart)
-    monkeypatch.setattr(entities_service, "resolve_issuer_candidates_from_cursor", _fake_resolve)
-    monkeypatch.setattr(entities_service, "read_trace_lineage", lambda *_a: (None, None, None))
-    monkeypatch.setattr(entities_service.PostgresIssuerModuleReader, "supply_chain_exposure", lambda *_a, **_k: None)
-    monkeypatch.setattr(entities_service.PostgresIssuerModuleReader, "analyst_ratings", lambda *_a, **_k: None)
+    monkeypatch.setattr(entities_service, "resolve_issuer_identity_from_cursor", _fake_identity)
 
     ctx = auth_service.access_context_for(
         auth_service.PrincipalRecord(principal_id="p:1", tenant_id="t:1", principal_kind="member")
@@ -461,13 +475,16 @@ def test_entity_detail_resolves_candidates_once_and_avoids_duplicate_strategy_pa
     res = entities_service.get_entity_detail(ctx, issuer_id="issuer:cik:0000723125", database_url="postgresql://x")
     assert res.label == "MU · Micron"
     assert len(res.decisions) == 1
-    assert page_calls == 1
-    assert candidate_resolve_calls == 1
-    assert executed_sqls, "expected SQL queries to execute"
+    assert res.decisions[0].issuer_id == "issuer:cik:0000723125"
+    assert res.decisions[0].valuation_basis == "price_to_gross_profit"
+    assert page_calls == 0
+    assert mart_conn_calls == 1
+    assert identity_resolve_calls == 1
+    assert len(executed_sqls) == 6
     assert all("= any(%s::text[])" in sql for sql in executed_sqls)
     assert not any("in (select ei." in sql for sql in executed_sqls)
     assert not any("mart.entity_identity" in sql for sql in executed_sqls)
-    assert not any("mart.strategy_decisions" in sql for sql in executed_sqls)
+    assert "recorded_at" not in inspect.getsource(entities_service)
 
 
 def test_company_profile_reader_resolves_legacy_id_without_lateral_entity_identity_join(

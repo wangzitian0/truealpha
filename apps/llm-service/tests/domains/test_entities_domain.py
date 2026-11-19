@@ -153,7 +153,6 @@ def test_entities_removes_thread_pools_and_fails_closed_on_db_errors(monkeypatch
         raise psycopg.OperationalError("connection refused")
 
     monkeypatch.setattr(entities_service, "with_mart_readonly", _boom)
-    monkeypatch.setattr(entities_service, "load_entity_display_items", lambda **_k: {})
     monkeypatch.setattr(
         entities_service,
         "get_strategy_run_page",
