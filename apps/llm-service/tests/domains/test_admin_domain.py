@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import psycopg
 import pytest
 from fastapi.testclient import TestClient
 from llm_service.main import app
@@ -63,3 +64,62 @@ def test_admin_ops_triggers_and_datahub_usecases(monkeypatch: pytest.MonkeyPatch
     assert trig_ok.status_code == 202 and trig_ok.json()["job_name"] == "topt_daily"
     assert trig_bad.status_code == 400
     assert dh.status_code == 200 and dh.json()["capture_runs"][0]["run_id"] == "cap:1"
+
+
+def test_admin_get_datahub_stats_and_ops_overview_fail_closed_on_db_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _ExplodingCursor:
+        def __init__(self, exc: Exception) -> None:
+            self._exc = exc
+            self.connection = self
+
+        def execute(self, *_a: object, **_k: object) -> None:
+            raise self._exc
+
+        def fetchone(self) -> None:
+            return None
+
+        def fetchall(self) -> list[object]:
+            return []
+
+        def rollback(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "llm_service.services.admin_service.with_ops_reader",
+        lambda fn, **_k: fn(_ExplodingCursor(psycopg.OperationalError("connection lost"))),
+    )
+    with pytest.raises(psycopg.OperationalError, match="connection lost"):
+        admin_service.get_datahub_stats()
+    with pytest.raises(psycopg.OperationalError, match="connection lost"):
+        admin_service.get_ops_overview()
+
+
+def test_admin_get_ops_overview_degrades_only_when_dagster_runs_table_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _MissingDagsterCursor:
+        def __init__(self) -> None:
+            self.connection = self
+            self._last_sql = ""
+
+        def execute(self, sql: str, *_a: object, **_k: object) -> None:
+            self._last_sql = sql
+            if "dagster.runs" in sql:
+                raise psycopg.errors.UndefinedTable('relation "dagster.runs" does not exist')
+
+        def fetchone(self) -> None:
+            return None
+
+        def fetchall(self) -> list[object]:
+            return []
+
+        def rollback(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "llm_service.services.admin_service.with_ops_reader",
+        lambda fn, **_k: fn(_MissingDagsterCursor()),
+    )
+    overview = admin_service.get_ops_overview()
+    assert overview.data_engine is None
+    assert overview.runs == "unavailable"

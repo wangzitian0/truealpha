@@ -6,13 +6,14 @@ import argparse
 import json
 import sys
 from collections.abc import Mapping, Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from data_engine.environment_universes import scheduled_universe_names
 from infra2_sdk.deploy import default_http_get
 from infra2_sdk.routing import resolve_app_hostname
 from truealpha_contracts.environment_contract import load_environment_contract
+from truealpha_contracts.goal_criteria import load_goal_criteria
 
 from truealpha_tools.nightly_verdicts import HealthReport, read_report
 
@@ -32,6 +33,16 @@ class GateAuditResult:
 
 
 @dataclass(frozen=True)
+class CriterionAuditResult:
+    """Verification outcome for one goal criterion that declares verdict_keys."""
+
+    criterion_id: str
+    status: str
+    verified: bool
+    evidence: str
+
+
+@dataclass(frozen=True)
 class VisionAuditReport:
     target_env: str
     health_url: str
@@ -41,6 +52,7 @@ class VisionAuditReport:
     nightly_verdicts_summary: dict[str, Any]
     status: str = "fail"
     served_head_freshness: str = "fresh"
+    criteria: list[CriterionAuditResult] = field(default_factory=list)
 
 
 def _assess_served_head_freshness(report: Any, *, environment: str = "production") -> tuple[bool, str]:
@@ -127,6 +139,48 @@ def _coverage_gate(verdicts_by_check: Mapping[str, Any], env: str) -> GateAuditR
     )
 
 
+def _audit_goal_criteria(
+    verdicts_by_check: Mapping[str, Any],
+    *,
+    env: str,
+) -> tuple[list[CriterionAuditResult], list[str]]:
+    scheduled = set(scheduled_universe_names(env))
+    results: list[CriterionAuditResult] = []
+    blockers: list[str] = []
+    for criterion in load_goal_criteria().criteria:
+        if not criterion.verdict_keys:
+            continue
+        applicable = [key for key in criterion.verdict_keys if "@" not in key or key.split("@", 1)[1] in scheduled]
+        if not applicable:
+            continue
+        parts: list[str] = []
+        failed_present = False
+        missing_any = False
+        for key in applicable:
+            verdict = verdicts_by_check.get(key)
+            if verdict is None:
+                missing_any = True
+                parts.append(f"{key}=missing")
+            elif verdict.ok is True:
+                parts.append(f"{key}=ok({verdict.summary})")
+            else:
+                failed_present = True
+                parts.append(f"{key}=FAIL({verdict.summary})")
+        verified = not failed_present and not missing_any
+        # Fail closed on any explicitly recorded non-green criterion verdict or any missing backed criterion.
+        if failed_present or (criterion.status == "backed" and missing_any):
+            blockers.append(f"{criterion.id}: {'; '.join(parts)}")
+        results.append(
+            CriterionAuditResult(
+                criterion_id=criterion.id,
+                status=criterion.status,
+                verified=verified,
+                evidence="; ".join(parts),
+            )
+        )
+    return results, blockers
+
+
 def audit_vision(
     *,
     env: str = "production",
@@ -149,6 +203,7 @@ def audit_vision(
         heads_fresh, freshness_detail = False, "mart.served_head.freshness=unknown"
         effective_outcomes = oracle_outcomes
 
+    criteria_results, criteria_blockers = _audit_goal_criteria(verdicts_by_check, env=env)
     market_fresh = verdicts_by_check.get("market_data_freshness")
     gates = [
         _verdict_gate(
@@ -170,15 +225,19 @@ def audit_vision(
         _gate(
             "#54",
             "Gate 4: Production Graduation & Vision Completion",
-            all(g.verified for g in gates) and market_fresh is not None and market_fresh.ok is True,
+            all(g.verified for g in gates)
+            and market_fresh is not None
+            and market_fresh.ok is True
+            and not criteria_blockers,
             f"market_data_freshness: {market_fresh.summary if market_fresh else 'missing'}. "
-            "Production graduation requires all prior gates VERIFIED and human owner sign-off.",
+            + (f"criteria_blockers: {' | '.join(criteria_blockers)}. " if criteria_blockers else "")
+            + "Production graduation requires all prior gates VERIFIED and human owner sign-off.",
         )
     )
     if not heads_fresh and gates:
         last = gates[-1]
         gates[-1] = GateAuditResult(last.gate_id, last.title, "OPEN", False, f"{last.evidence} [{freshness_detail}]")
-    all_passed = all(g.verified for g in gates) and heads_fresh
+    all_passed = all(g.verified for g in gates) and heads_fresh and not criteria_blockers
     return VisionAuditReport(
         target_env=env,
         health_url=resolved_url,
@@ -188,6 +247,7 @@ def audit_vision(
         nightly_verdicts_summary=verdicts_summary,
         status="pass" if all_passed else "fail",
         served_head_freshness="fresh" if heads_fresh else freshness_detail,
+        criteria=criteria_results,
     )
 
 
@@ -200,19 +260,22 @@ def main() -> int:
     args = parser.parse_args()
 
     report = audit_vision(env=args.env, health_url=args.health_url)
+    exit_code = 0 if (not args.fail_closed or report.all_passed) else 1
     if args.json:
         print(json.dumps(asdict(report), indent=2))
-        return 0
+        return exit_code
     print(f"=== TrueAlpha Vision Audit [{report.target_env.upper()}] ===")
     print(f"Health Endpoint: {report.health_url}\nDeployed Release: {report.release or 'unknown'}\n")
     for g in report.gates:
         print(f"[{'PASS' if g.verified else 'FAIL'}] {g.gate_id} {g.title}: {g.status}\n       Evidence: {g.evidence}")
+    for c in report.criteria:
+        print(f"[{'PASS' if c.verified else 'INFO'}] {c.criterion_id} ({c.status}): {c.evidence}")
     print(
         "\nStatus: All Gate Epics physically verified."
         if report.all_passed
         else "\nStatus: System contains open gates and unfulfilled physical criteria."
     )
-    return 0
+    return exit_code
 
 
 if __name__ == "__main__":

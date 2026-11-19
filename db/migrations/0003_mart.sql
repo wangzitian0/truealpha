@@ -735,7 +735,7 @@ execute $vc$create or replace view mart.entity_display_resolution as
   ORDER BY rt.issuer_id$vc$;
 end if; end $$;
 do $$ begin if to_regclass('mart.entity_identity') is null then
-execute $vc$create or replace view mart.entity_identity as
+execute $vc$create materialized view mart.entity_identity as
  WITH RECURSIVE merge_edges AS (
          SELECT DISTINCT ON (relation.from_entity_id) relation.from_entity_id,
             relation.to_entity_id
@@ -864,15 +864,17 @@ execute $vc$create or replace view mart.entity_identity as
      LEFT JOIN pivoted_aliases pa ON pa.survivor_id = survivor.id
      LEFT JOIN issuer_tickers it ON it.issuer_id = survivor.id
      LEFT JOIN instrument_tickers inst ON inst.instrument_id = survivor.id
-     LEFT JOIN issuer_listings ilist ON ilist.issuer_id = survivor.id$vc$;
+     LEFT JOIN issuer_listings ilist ON ilist.issuer_id = survivor.id
+WITH DATA$vc$;
 end if; end $$;
 do $$ begin if to_regclass('mart.fund_holdings') is null then
-execute $vc$create or replace view mart.fund_holdings as
+execute $vc$create materialized view mart.fund_holdings as
  SELECT DISTINCT ON (facts.fund_id, facts.report_period, facts.transaction_time, (COALESCE(facts.isin, ''::text)), (COALESCE(facts.cusip, ''::text)), facts.holding_name) facts.fund_id::text AS fund_id,
     fund_name.value AS fund_name,
     facts.holding_id::text AS holding_id,
     facts.holding_name,
     facts.isin,
+    facts.cusip,
     facts.report_period,
     facts.transaction_time,
     facts.percent_of_net_assets,
@@ -886,7 +888,8 @@ execute $vc$create or replace view mart.fund_holdings as
           WHERE alias.entity_id = facts.fund_id AND alias.scheme = 'name'::text
           ORDER BY alias.confidence DESC, alias.transaction_time DESC, alias.alias_id DESC
          LIMIT 1) fund_name ON true
-  ORDER BY facts.fund_id, facts.report_period, facts.transaction_time, (COALESCE(facts.isin, ''::text)), (COALESCE(facts.cusip, ''::text)), facts.holding_name, facts.recorded_at DESC, facts.id DESC$vc$;
+  ORDER BY facts.fund_id, facts.report_period, facts.transaction_time, (COALESCE(facts.isin, ''::text)), (COALESCE(facts.cusip, ''::text)), facts.holding_name, facts.recorded_at DESC, facts.id DESC
+WITH DATA$vc$;
 end if; end $$;
 do $$ begin if to_regclass('mart.macro_series_current') is null then
 execute $vc$create or replace view mart.macro_series_current as
@@ -1061,7 +1064,7 @@ execute $vc$create or replace view mart.capture_issuer_lineage as
                   ORDER BY observation.observation_id, obligation.obligation_id) item) AS lineage
    FROM staging.core_snapshots s
      JOIN staging.core_snapshot_members m USING (snapshot_id)
-     LEFT JOIN mart.metric_node_values mnv ON mnv.run_id = s.run_id AND mnv.issuer_id = m.issuer_id AND mnv.node_key = 'gppe_uniform_charge_v0'::text
+     LEFT JOIN mart.metric_node_values mnv ON mnv.run_id = s.run_id AND mnv.issuer_id = m.issuer_id AND mnv.node_key = CASE WHEN COALESCE(m.factor_input ->> 'operating_branch'::text, 'non_financial'::text) = 'financial'::text THEN 'gppe_banking_tce_v1'::text ELSE 'gppe_uniform_charge_v0'::text END
      LEFT JOIN LATERAL ( SELECT (NULLIF(p.normalized_payload ->> 'operating_period_end'::text, ''::text))::date AS operating_period_end,
             (NULLIF(p.normalized_payload ->> 'revenue_period_end'::text, ''::text))::date AS revenue_period_end,
             (NULLIF(p.normalized_payload ->> 'shares_period_end'::text, ''::text))::date AS shares_period_end
@@ -1160,7 +1163,7 @@ execute $vc$create or replace view mart.served_head_environments as
   GROUP BY h.environment$vc$;
 end if; end $$;
 do $$ begin if to_regclass('mart.fund_holdings_resolved') is null then
-execute $vc$create or replace view mart.fund_holdings_resolved as
+execute $vc$create materialized view mart.fund_holdings_resolved as
  WITH RECURSIVE merge_edges AS (
          SELECT DISTINCT ON (relation.from_entity_id) relation.from_entity_id,
             relation.to_entity_id
@@ -1193,6 +1196,7 @@ execute $vc$create or replace view mart.fund_holdings_resolved as
             holdings.holding_id,
             holdings.holding_name,
             holdings.isin,
+            holdings.cusip,
             holdings.report_period,
             holdings.transaction_time,
             holdings.percent_of_net_assets,
@@ -1229,6 +1233,7 @@ execute $vc$create or replace view mart.fund_holdings_resolved as
     linked.transaction_time,
     linked.holding_name,
     linked.isin,
+    linked.cusip,
     linked.percent_of_net_assets,
     linked.value_usd,
     linked.issuer_uuid::text AS issuer_entity,
@@ -1269,7 +1274,8 @@ execute $vc$create or replace view mart.fund_holdings_resolved as
            FROM staging.entity_aliases alias
           WHERE alias.entity_id = linked.issuer_uuid AND alias.scheme = 'ticker'::text
           ORDER BY alias.transaction_time DESC, alias.confidence DESC, alias.alias_id DESC
-         LIMIT 1) issuer_ticker ON true$vc$;
+         LIMIT 1) issuer_ticker ON true
+WITH DATA$vc$;
 end if; end $$;
 do $$ begin if to_regclass('mart.macro_series_status') is null then
 execute $vc$create or replace view mart.macro_series_status as
@@ -1306,7 +1312,7 @@ execute $vc$create or replace view mart.strategy_run_capture as
   ORDER BY binding.strategy_run_id, (governed.strategy_run_id IS NOT NULL) DESC, binding.bound_at DESC, binding.capture_run_id DESC$vc$;
 end if; end $$;
 do $$ begin if to_regclass('mart.fund_holdings_coverage') is null then
-execute $vc$create or replace view mart.fund_holdings_coverage as
+execute $vc$create materialized view mart.fund_holdings_coverage as
  SELECT fund_holdings_resolved.fund_id,
     fund_holdings_resolved.report_period,
     fund_holdings_resolved.transaction_time,
@@ -1315,10 +1321,11 @@ execute $vc$create or replace view mart.fund_holdings_coverage as
     COALESCE(sum(fund_holdings_resolved.percent_of_net_assets), 0::numeric) AS total_weight_pct,
     COALESCE(sum(fund_holdings_resolved.percent_of_net_assets) FILTER (WHERE fund_holdings_resolved.listing_id IS NOT NULL), 0::numeric) AS resolved_weight_pct
    FROM mart.fund_holdings_resolved
-  GROUP BY fund_holdings_resolved.fund_id, fund_holdings_resolved.report_period, fund_holdings_resolved.transaction_time$vc$;
+  GROUP BY fund_holdings_resolved.fund_id, fund_holdings_resolved.report_period, fund_holdings_resolved.transaction_time
+WITH DATA$vc$;
 end if; end $$;
 do $$ begin if to_regclass('mart.fund_holdings_valuation') is null then
-execute $vc$create or replace view mart.fund_holdings_valuation as
+execute $vc$create materialized view mart.fund_holdings_valuation as
  WITH newest AS (
          SELECT DISTINCT ON (fund_holdings.fund_id) fund_holdings.fund_id,
             fund_holdings.report_period,
@@ -1332,13 +1339,15 @@ execute $vc$create or replace view mart.fund_holdings_valuation as
     resolved.transaction_time,
     resolved.holding_name,
     resolved.isin,
+    resolved.cusip,
     resolved.percent_of_net_assets,
     resolved.value_usd,
     resolved.issuer_entity,
     resolved.ticker,
     resolved.listing_id
    FROM mart.fund_holdings_resolved resolved
-     JOIN newest USING (fund_id, report_period, transaction_time)$vc$;
+     JOIN newest USING (fund_id, report_period, transaction_time)
+WITH DATA$vc$;
 end if; end $$;
 
 CREATE OR REPLACE FUNCTION staging.validate_core_snapshot()
@@ -1419,6 +1428,14 @@ do $$ begin if to_regclass('mart.idx_mart_research_card_artifacts_card_id') is n
 do $$ begin if to_regclass('mart.idx_strategy_decisions_issuer_cutoff') is null then CREATE INDEX idx_strategy_decisions_issuer_cutoff ON mart.strategy_decisions USING btree (issuer_id, cutoff_at); end if; end $$;
 do $$ begin if to_regclass('mart.idx_strategy_run_capture_bindings_strategy_run') is null then CREATE INDEX idx_strategy_run_capture_bindings_strategy_run ON mart.strategy_run_capture_bindings USING btree (strategy_run_id); end if; end $$;
 do $$ begin if to_regclass('mart.idx_strategy_runs_strategy_key_order') is null then CREATE INDEX idx_strategy_runs_strategy_key_order ON mart.strategy_runs USING btree (strategy_key, executed_at DESC, created_at DESC, strategy_run_id DESC); end if; end $$;
+do $$ begin if to_regclass('mart.idx_current_pointer_target_run') is null then CREATE INDEX idx_current_pointer_target_run ON mart.current_pointer USING btree (target_run_id); end if; end $$;
+do $$ begin if to_regclass('mart.idx_current_pointer_previous_run') is null then CREATE INDEX idx_current_pointer_previous_run ON mart.current_pointer USING btree (previous_run_id) WHERE (previous_run_id IS NOT NULL); end if; end $$;
+do $$ begin if to_regclass('mart.uq_mart_entity_identity') is null then CREATE UNIQUE INDEX uq_mart_entity_identity ON mart.entity_identity USING btree (entity_id) NULLS NOT DISTINCT; end if; end $$;
+do $$ begin if to_regclass('mart.ix_mart_entity_identity_listing') is null then CREATE INDEX ix_mart_entity_identity_listing ON mart.entity_identity USING btree (listing_id) WHERE (listing_id IS NOT NULL); end if; end $$;
+do $$ begin if to_regclass('mart.uq_mart_fund_holdings') is null then CREATE UNIQUE INDEX uq_mart_fund_holdings ON mart.fund_holdings USING btree (fund_id, report_period, transaction_time, isin, cusip, holding_name) NULLS NOT DISTINCT; end if; end $$;
+do $$ begin if to_regclass('mart.uq_mart_fund_holdings_resolved') is null then CREATE UNIQUE INDEX uq_mart_fund_holdings_resolved ON mart.fund_holdings_resolved USING btree (fund_id, report_period, transaction_time, isin, cusip, holding_name) NULLS NOT DISTINCT; end if; end $$;
+do $$ begin if to_regclass('mart.uq_mart_fund_holdings_coverage') is null then CREATE UNIQUE INDEX uq_mart_fund_holdings_coverage ON mart.fund_holdings_coverage USING btree (fund_id, report_period, transaction_time) NULLS NOT DISTINCT; end if; end $$;
+do $$ begin if to_regclass('mart.uq_mart_fund_holdings_valuation') is null then CREATE UNIQUE INDEX uq_mart_fund_holdings_valuation ON mart.fund_holdings_valuation USING btree (fund_id, report_period, transaction_time, isin, cusip, holding_name) NULLS NOT DISTINCT; end if; end $$;
 
 insert into mart.environment_identity (singleton, environment)
 select true, 'production'

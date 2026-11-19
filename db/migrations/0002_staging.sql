@@ -2089,6 +2089,17 @@ do $$ begin if to_regclass('staging.idx_strategy_backtest_inputs_asof') is null 
 do $$ begin if to_regclass('staging.idx_strategy_backtest_inputs_period') is null then CREATE INDEX idx_strategy_backtest_inputs_period ON staging.strategy_backtest_inputs USING btree (cutoff_at, issuer_id, input_key, fiscal_period, recorded_at DESC); end if; end $$;
 do $$ begin if to_regclass('staging.strategy_backtest_inputs_identity') is null then CREATE UNIQUE INDEX strategy_backtest_inputs_identity ON staging.strategy_backtest_inputs USING btree (issuer_id, cutoff_at, input_key, COALESCE(fiscal_period, ''::text), recorded_at); end if; end $$;
 do $$ begin if to_regclass('staging.idx_universe_mask_cutoff_eligible') is null then CREATE INDEX idx_universe_mask_cutoff_eligible ON staging.universe_mask USING btree (resolution, cutoff_date, eligible); end if; end $$;
+do $$ begin if to_regclass('staging.idx_capture_obs_obligation') is null then CREATE INDEX idx_capture_obs_obligation ON staging.capture_normalized_observations USING btree (capture_obligation_id); end if; end $$;
+do $$ begin if to_regclass('staging.idx_capture_obs_vintage') is null then CREATE INDEX idx_capture_obs_vintage ON staging.capture_normalized_observations USING btree (source_vintage_id); end if; end $$;
+do $$ begin if to_regclass('staging.idx_capture_obs_supersedes') is null then CREATE INDEX idx_capture_obs_supersedes ON staging.capture_normalized_observations USING btree (supersedes_observation_id) WHERE (supersedes_observation_id IS NOT NULL); end if; end $$;
+do $$ begin if to_regclass('staging.idx_capture_obs_subject_pit') is null then CREATE INDEX idx_capture_obs_subject_pit ON staging.capture_normalized_observations USING btree (subject_kind, subject_id, semantic_type, knowable_at DESC); end if; end $$;
+do $$ begin if to_regclass('staging.idx_capture_obs_obligations_obs') is null then CREATE INDEX idx_capture_obs_obligations_obs ON staging.capture_observation_obligations USING btree (observation_id); end if; end $$;
+do $$ begin if to_regclass('staging.idx_etf_constituent_facts_raw_fetch') is null then CREATE INDEX idx_etf_constituent_facts_raw_fetch ON staging.etf_constituent_facts USING btree (raw_fetch_id); end if; end $$;
+do $$ begin if to_regclass('staging.idx_landed_fetch_keys_raw_fetch') is null then CREATE INDEX idx_landed_fetch_keys_raw_fetch ON staging.landed_fetch_keys USING btree (raw_fetch_id); end if; end $$;
+do $$ begin if to_regclass('staging.idx_evidence_edges_from_id') is null then CREATE INDEX idx_evidence_edges_from_id ON staging.evidence_edges USING btree (from_id); end if; end $$;
+do $$ begin if to_regclass('staging.idx_evidence_edges_to_id') is null then CREATE INDEX idx_evidence_edges_to_id ON staging.evidence_edges USING btree (to_id); end if; end $$;
+do $$ begin if to_regclass('staging.idx_evidence_nodes_supersedes') is null then CREATE INDEX idx_evidence_nodes_supersedes ON staging.evidence_nodes USING btree (supersedes_node_id) WHERE (supersedes_node_id IS NOT NULL); end if; end $$;
+do $$ begin if to_regclass('staging.idx_fund_holding_facts_holding') is null then CREATE INDEX idx_fund_holding_facts_holding ON staging.fund_holding_facts USING btree (holding_id) WHERE (holding_id IS NOT NULL); end if; end $$;
 
 insert into staging.entity_kinds (kind, parent_kind, is_abstract, uuid_namespace, description)
 select kind, parent_kind, is_abstract,
