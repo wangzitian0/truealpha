@@ -316,10 +316,14 @@ def _load_strategy_provenance(
 
 
 def _load_strategy_report(
-    context: AccessContext, *, strategy_id: str = DASHBOARD_STRATEGY_ID, database_url: str | None = None
+    context: AccessContext,
+    *,
+    strategy_id: str = DASHBOARD_STRATEGY_ID,
+    universe: str | None = None,
+    database_url: str | None = None,
 ) -> StrategyRunReport | StrategyRunUnavailable:
     repo = PostgresStrategyRunRepository(database_url=database_url or settings.database_url)
-    return repo.get_latest(strategy_id=strategy_id, context=context)
+    return repo.get_latest(strategy_id=strategy_id, context=context, universe=universe)
 
 
 def get_strategy_run_page(
@@ -331,7 +335,7 @@ def get_strategy_run_page(
     database_url: str | None = None,
 ) -> StrategyRunPageResponse:
     norm_universe = "all" if universe is None else (normalize_ranking_universe(universe) or "all")
-    report = _load_strategy_report(context, strategy_id=strategy_id, database_url=database_url)
+    report = _load_strategy_report(context, strategy_id=strategy_id, universe=norm_universe, database_url=database_url)
     if isinstance(report, StrategyRunUnavailable):
         return StrategyRunPageResponse(
             available=False, reason=report.reason, strategy_id=strategy_id, universe=norm_universe
@@ -407,13 +411,13 @@ def get_rankings(
 
 
 def _backtest_run_select(*, as_text: bool = False) -> str:
-    cast = "::text" if as_text else "::float"
+    cast = "::text" if as_text else ""
     metric_cols = ", ".join(
-        f"{col}{cast} as {col}" if as_text else f"{col}{cast}"
+        f"{col}{cast} as {col}" if as_text else col
         for col in ("cagr_monthly", "sharpe_daily", "max_dd_daily", "vol_daily", "turnover_monthly", "calmar_daily")
     )
     bench_cols = ", ".join(
-        f"{col}{cast} as {col}" if as_text else f"{col}{cast}" for col in ("benchmark_cagr", "benchmark_max_dd")
+        f"{col}{cast} as {col}" if as_text else col for col in ("benchmark_cagr", "benchmark_max_dd")
     )
     payload_col = "metrics_payload" if as_text else "coalesce(metrics_payload, '{}'::jsonb) as metrics_payload"
     return f"""
@@ -457,8 +461,8 @@ def get_backtest_detail(run_id: str, *, database_url: str | None = None) -> Back
         cur.execute(
             """
             select run_id, resolution, valuation_date::text,
-                   cum_nav::float, drawdown::float, gross_exposure::float,
-                   cash_weight::float, benchmark_cum_nav::float
+                   cum_nav, drawdown, gross_exposure,
+                   cash_weight, benchmark_cum_nav
             from mart.backtest_valuations
             where run_id = %s
             order by valuation_date asc
@@ -469,8 +473,8 @@ def get_backtest_detail(run_id: str, *, database_url: str | None = None) -> Back
         cur.execute(
             """
             select trade_id, run_id, trade_date::text, symbol, side,
-                   shares::float, execution_price::float, trade_value::float,
-                   weight_before::float, weight_after::float, fee_paid::float
+                   shares, execution_price, trade_value,
+                   weight_before, weight_after, fee_paid
             from mart.backtest_trades
             where run_id = %s
             order by trade_date asc, trade_id asc

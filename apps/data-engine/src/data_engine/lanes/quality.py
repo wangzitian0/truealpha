@@ -13,7 +13,7 @@ from typing import Any
 import dagster as dg
 import psycopg
 from truealpha_contracts.environment_contract import load_environment_contract
-from truealpha_contracts.universes import key_of_lane, lane_name, record, served_keys, universe_with_role
+from truealpha_contracts.universes import key_of_lane, lane_name, record, served_keys, universes_with_role
 
 from data_engine.config import settings
 from data_engine.datahub.oracle_outcomes import load_oracle_outcomes_rollup, record_oracle_outcomes_safely
@@ -277,7 +277,7 @@ output_invariants_schedule = _tick_schedule("output_invariants_schedule", output
 
 class ConfidenceReportConfig(dg.Config):
     executed_at: str
-    universe: str = lane_name(universe_with_role("fund_consolidation"))
+    universe: str = lane_name(universes_with_role("fund_consolidation")[0])
 
 
 def _oracle_comparators_of(connection: Any, report: Mapping[str, Any]) -> dict[str, int]:

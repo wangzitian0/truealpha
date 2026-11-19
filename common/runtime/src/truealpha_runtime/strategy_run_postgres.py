@@ -49,7 +49,7 @@ DECISIONS_FROM_SQL = """
         where m.run_id = scope.capture_run_id
           and m.issuer_id = d.issuer_id
           and m.node_key = coalesce(d.labor_efficiency_metric, 'gppe_uniform_charge_v0')
-        order by m.recorded_at desc
+        order by m.period desc, m.node_id
         limit 1
     ) m on true
     left join lateral (
@@ -125,7 +125,10 @@ def read_trace_lineage(
     )
 
 
-def latest_run_params(strategy_key: str) -> tuple[list[str], str]:
+def latest_run_params(strategy_key: str, *, universe: str | None = None) -> tuple[list[str], str]:
+    clean = (universe or "").strip().lower()
+    if clean and clean != "all":
+        return ([id_prefix_like(clean)], strategy_key)
     return ([id_prefix_like(k) for k in universes_with_role("strategy")], strategy_key)
 
 
@@ -151,19 +154,29 @@ class PostgresStrategyRunRepository:
     def __init__(self, *, database_url: str) -> None:
         self._database_url = database_url
 
-    def get_latest(self, *, strategy_id: str, context: AccessContext) -> StrategyRunReport | StrategyRunUnavailable:
+    def get_latest(
+        self,
+        *,
+        strategy_id: str,
+        context: AccessContext,
+        universe: str | None = None,
+    ) -> StrategyRunReport | StrategyRunUnavailable:
         del context
         try:
             with (
-                psycopg.connect(self._database_url, connect_timeout=5, autocommit=True) as connection,
+                psycopg.connect(self._database_url, connect_timeout=5) as connection,
                 connection.cursor(row_factory=dict_row) as cursor,
             ):
-                cursor.execute(LATEST_RUN_SQL, latest_run_params(strategy_id))
+                cursor.execute("set local role mart_readonly")
+                cursor.execute("select set_config('statement_timeout', '5s', true)")
+                cursor.execute(LATEST_RUN_SQL, latest_run_params(strategy_id, universe=universe))
                 run_row = cursor.fetchone()
                 if run_row is None:
+                    cursor.execute("reset role")
                     return StrategyRunUnavailable(strategy_id=strategy_id, reason="no_runs_recorded")
                 cursor.execute(_DECISIONS_SQL, (run_row["strategy_run_id"],))
                 decision_rows = cursor.fetchall()
+                cursor.execute("reset role")
                 if strategy_id != "large_model_value_v0":
                     return StrategyRunUnavailable(strategy_id=strategy_id, reason="schema_mismatch")
                 if not decision_rows:

@@ -107,4 +107,6 @@ class StrategyRunUnavailable(StrictFrozenModel):
 
 
 class StrategyRunReadRepository(Protocol):
-    def get_latest(self, *, strategy_id: str, context: AccessContext) -> StrategyRunReport | StrategyRunUnavailable: ...
+    def get_latest(
+        self, *, strategy_id: str, context: AccessContext, universe: str | None = None
+    ) -> StrategyRunReport | StrategyRunUnavailable: ...

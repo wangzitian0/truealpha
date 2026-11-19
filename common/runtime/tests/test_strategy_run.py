@@ -147,3 +147,73 @@ def test_strategy_run_models_fixture_and_postgres(tmp_path: Path, monkeypatch: p
         strategy_id="large_model_value_v0", context=_ctx()
     )
     assert isinstance(res, StrategyRunUnavailable) and res.reason == "empty_decisions"
+
+
+def test_latest_run_params_and_mart_readonly_scope(monkeypatch: pytest.MonkeyPatch) -> None:
+    import inspect
+
+    from truealpha_contracts.universes import id_prefix_like
+    from truealpha_runtime import strategy_run_postgres
+
+    assert "recorded_at" not in inspect.getsource(strategy_run_postgres)
+    prefixes_all, key_all = strategy_run_postgres.latest_run_params("large_model_value_v0")
+    assert key_all == "large_model_value_v0" and id_prefix_like("topt") in prefixes_all
+    assert strategy_run_postgres.latest_run_params("large_model_value_v0", universe="qqq") == (
+        [id_prefix_like("qqq")],
+        "large_model_value_v0",
+    )
+
+    executed: list[tuple[str, object]] = []
+    connect_kwargs: list[dict[str, object]] = []
+
+    class _Cur:
+        def __enter__(self) -> _Cur:
+            return self
+
+        def __exit__(self, *_a: object) -> None:
+            return None
+
+        def execute(self, sql: str, params: object = None) -> None:
+            executed.append((sql, params))
+
+        def fetchone(self) -> None:
+            return None
+
+        def fetchall(self) -> list[object]:
+            return []
+
+    class _Conn:
+        def __enter__(self) -> _Conn:
+            return self
+
+        def __exit__(self, *_a: object) -> None:
+            return None
+
+        def cursor(self, **_k: object) -> _Cur:
+            return _Cur()
+
+    def _fake_connect(_dsn: str, **kwargs: object) -> _Conn:
+        connect_kwargs.append(kwargs)
+        return _Conn()
+
+    monkeypatch.setattr("psycopg.connect", _fake_connect)
+    now = datetime.now(UTC)
+    ctx = AccessContext(
+        context_id="ctx:t",
+        principal_id="p:t",
+        tenant_id="t:t",
+        session_id="s:t",
+        authentication_method=AuthenticationMethod.SERVICE_IDENTITY,
+        principal_kind=PrincipalKind.SERVICE,
+        issued_at=now,
+        expires_at=now + timedelta(hours=1),
+    )
+    res = strategy_run_postgres.PostgresStrategyRunRepository(database_url="postgresql://fake").get_latest(
+        strategy_id="large_model_value_v0", context=ctx, universe="qqq"
+    )
+    assert isinstance(res, StrategyRunUnavailable) and res.reason == "no_runs_recorded"
+    assert "autocommit" not in connect_kwargs[0]
+    assert executed[0][0] == "set local role mart_readonly"
+    assert executed[1][0] == "select set_config('statement_timeout', '5s', true)"
+    assert executed[2][1] == ([id_prefix_like("qqq")], "large_model_value_v0")
+    assert executed[3][0] == "reset role"
