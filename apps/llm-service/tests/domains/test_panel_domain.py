@@ -43,7 +43,7 @@ async def test_panel_http_and_mcp_usecases(monkeypatch: pytest.MonkeyPatch) -> N
         months=[{"series_id": "us_treasury_note_10_year", "observation_date": "2026-11-16", "value": "4.25"}],
     )
 
-    class _FakeOpsCur:
+    class _FakeMartCur:
         def __init__(self) -> None:
             self._sql = ""
 
@@ -51,7 +51,7 @@ async def test_panel_http_and_mcp_usecases(monkeypatch: pytest.MonkeyPatch) -> N
             self._sql = sql
 
         def fetchall(self) -> list[dict[str, Any]]:
-            if "staging.accepted_rulesets" in self._sql:
+            if "mart.universe_heads" in self._sql:
                 return [
                     {
                         "kind": "topt",
@@ -63,28 +63,20 @@ async def test_panel_http_and_mcp_usecases(monkeypatch: pytest.MonkeyPatch) -> N
                         "mapping_sha256": "a" * 64,
                     }
                 ]
-            return [
-                {
-                    "ticker": "NVDA",
-                    "company_name": "NVIDIA Corp",
-                    "cik": 1045810,
-                    "figi": "BBG000BBJQV0",
-                    "market_cap": "1000",
-                    "as_of": "2026-03-31",
-                    "source": "sec",
-                    "fetch_sha256": "b" * 64,
-                    "object_uri": "s3://raw/1",
-                }
-            ]
-
-    class _FakeMartCur:
-        def __init__(self) -> None:
-            self._sql = ""
-
-        def execute(self, sql: str, _params: Any = None) -> None:
-            self._sql = sql
-
-        def fetchall(self) -> list[dict[str, Any]]:
+            if "mart.universe_constituents" in self._sql:
+                return [
+                    {
+                        "ticker": "NVDA",
+                        "company_name": "NVIDIA Corp",
+                        "cik": 1045810,
+                        "figi": "BBG000BBJQV0",
+                        "market_cap": "1000",
+                        "as_of": "2026-03-31",
+                        "source": "sec",
+                        "fetch_sha256": "b" * 64,
+                        "object_uri": "s3://raw/1",
+                    }
+                ]
             if "mart.macro_series_status" in self._sql:
                 return [
                     {
@@ -111,8 +103,8 @@ async def test_panel_http_and_mcp_usecases(monkeypatch: pytest.MonkeyPatch) -> N
         def __init__(self, **_k: Any) -> None:
             pass
 
-        def get_latest(self, *, strategy_id: str, context: Any) -> StrategyRunReport:
-            del context
+        def get_latest(self, *, strategy_id: str, context: Any, universe: str | None = None) -> StrategyRunReport:
+            del context, universe
             return StrategyRunReport(
                 strategy_id=strategy_id,
                 strategy_run_id="strategy-run:1",
@@ -121,7 +113,6 @@ async def test_panel_http_and_mcp_usecases(monkeypatch: pytest.MonkeyPatch) -> N
                 decisions=(),
             )
 
-    monkeypatch.setattr(panel_service, "with_ops_reader", lambda fn, **_k: fn(_FakeOpsCur()))
     monkeypatch.setattr(panel_service, "with_mart_readonly", lambda fn, **_k: fn(_FakeMartCur()))
     monkeypatch.setattr(panel_service, "PostgresStrategyRunRepository", _FakeStrategyRepo)
 
@@ -169,20 +160,28 @@ def test_panel_decouples_from_strategy_and_fails_closed_on_db_errors(monkeypatch
         lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("panel must not call strategy_service")),
     )
 
+    from truealpha_contracts import universes
+
+    assert not hasattr(universes, "universe_with_role")
+
+    seen_universes: list[str | None] = []
+
     class _FakeStrategyRepo:
         def __init__(self, **_k: Any) -> None:
             pass
 
-        def get_latest(self, *, strategy_id: str, context: Any) -> StrategyRunUnavailable:
+        def get_latest(self, *, strategy_id: str, context: Any, universe: str | None = None) -> StrategyRunUnavailable:
             del context
+            seen_universes.append(universe)
             return StrategyRunUnavailable(strategy_id=strategy_id, reason="no_runs_recorded")
 
     monkeypatch.setattr(panel_service, "PostgresStrategyRunRepository", _FakeStrategyRepo, raising=False)
     from llm_service.services.auth_service import PrincipalRecord, access_context_for
 
     ctx = access_context_for(PrincipalRecord(principal_id="p:1", tenant_id="t:1", principal_kind="member"))
-    cov = panel_service.load_wide_panel_coverage(ctx, database_url="postgresql://unused")
+    cov = panel_service.load_wide_panel_coverage(ctx, universe="qqq", database_url="postgresql://unused")
     assert cov.available is False and cov.reason == "no_runs_recorded"
+    assert seen_universes == ["qqq"]
 
     # 2. OperationalError is never silently swallowed into {} or generic available=False.
     def _op_fail(*_a: Any, **_k: Any) -> Any:
@@ -204,3 +203,22 @@ def test_panel_decouples_from_strategy_and_fails_closed_on_db_errors(monkeypatch
     )
     macro = panel_service.load_macro_curve(database_url="postgresql://unused")
     assert macro.available is False and macro.reason == "Macro mart views not yet migrated"
+
+
+def test_panel_service_uses_only_mart_views_and_has_no_fallback_head(monkeypatch: pytest.MonkeyPatch) -> None:
+    import inspect
+
+    source = inspect.getsource(panel_service)
+    for forbidden in ("staging.", "raw.", "with_ops_reader", "ACCEPTANCE_FALLBACK_HEAD_SQL"):
+        assert forbidden not in source, f"panel_service still references {forbidden}"
+
+    class _EmptyMartCur:
+        def execute(self, _sql: str, _params: Any = None) -> None:
+            return None
+
+        def fetchone(self) -> None:
+            return None
+
+    run_id, err = panel_service.resolve_governed_head_run_id(_EmptyMartCur(), "universe:topt-%")
+    assert run_id is None and err == "no served head for strategy"
+    monkeypatch.undo()

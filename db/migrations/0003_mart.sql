@@ -1556,3 +1556,37 @@ begin
         end if;
     end loop;
 end $$;
+
+do $$ begin if to_regclass('mart.universe_heads') is null then
+execute $vc$create or replace view mart.universe_heads as
+ select r.kind,
+    r.sequence,
+    coalesce(r.note, ''::text) as note,
+    r.advanced_at,
+    (o.payload ->> 'universe_id'::text) as universe_id,
+    ((o.payload ->> 'instrument_count'::text))::integer as instrument_count,
+    (o.payload ->> 'instrument_mapping_sha256'::text) as mapping_sha256
+   from staging.accepted_rulesets r
+     join staging.contract_objects o on o.contract_id = r.contract_id$vc$;
+end if; end $$;
+
+do $$ begin if to_regclass('mart.universe_constituents') is null then
+execute $vc$create or replace view mart.universe_constituents as
+ select f.etf_symbol,
+    f.ticker,
+    f.company_name,
+    f.cik,
+    f.figi,
+    f.market_cap,
+    f.as_of,
+    f.source,
+    r.payload_sha256 as fetch_sha256,
+    r.object_uri
+   from staging.etf_constituent_facts f
+     join raw.fetches r on r.id = f.raw_fetch_id
+  where f.as_of = (
+    select max(f2.as_of)
+      from staging.etf_constituent_facts f2
+     where f2.etf_symbol = f.etf_symbol
+  )$vc$;
+end if; end $$;

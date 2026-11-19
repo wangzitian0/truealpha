@@ -204,3 +204,42 @@ def test_missing_subject_when_strategy_key_has_no_runs(connection) -> None:
 def test_requires_database_url_or_strategy_repository() -> None:
     with pytest.raises(TypeError):
         MartResearchReadRepository()
+
+
+def test_panel_head_resolution_has_no_fallback_and_node_latest_uses_mart_readonly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from truealpha_runtime import research_report_mart
+
+    assert not hasattr(research_report_mart, "ACCEPTANCE_FALLBACK_HEAD_SQL")
+
+    executed: list[tuple[str, object]] = []
+
+    class _DummyConn:
+        def __enter__(self) -> _DummyConn:
+            return self
+
+        def __exit__(self, *_a: object) -> None:
+            return None
+
+        def execute(self, sql: str, params: object = None) -> _DummyConn:
+            executed.append((sql, params))
+            return self
+
+        def fetchone(self) -> None:
+            return None
+
+        def fetchall(self) -> list[object]:
+            return []
+
+    monkeypatch.setattr(research_report_mart.psycopg, "connect", lambda *_a, **_k: _DummyConn())
+    out = research_report_mart.PostgresMetricNodeValueRepository(database_url="postgresql://unused").latest(
+        node_key="gppe_uniform_charge_v0"
+    )
+    assert isinstance(out, research_report_mart.MetricNodeValueUnavailable)
+    assert out.reason == "no served head for strategy"
+    sqls = [sql for sql, _ in executed]
+    assert sqls[0] == "set local role mart_readonly"
+    assert sqls[1] == "select set_config('statement_timeout', '5s', true)"
+    assert sqls[-1] == "reset role"
+    assert all("capture_status" not in s and "datahub_quality_report" not in s for s in sqls)

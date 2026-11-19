@@ -1312,7 +1312,7 @@ def test_governed_read_serves_the_mcp_repository_only_after_pointer_advance(conn
     before = reader.latest(node_key="gppe_uniform_charge_v0")
     fresh_database = isinstance(before, MetricNodeValueUnavailable)
     if fresh_database:
-        assert before.reason == "no accepted (quality-reported) strategy run"
+        assert before.reason == "no served head for strategy"
 
     _repository, run, _list_version, release_manifest_id, *_ = _seed_complete_production_run(connection)
     core = PostgresToptCoreRepository(connection)
@@ -1323,14 +1323,15 @@ def test_governed_read_serves_the_mcp_repository_only_after_pointer_advance(conn
     if fresh_database:
         withheld = reader.latest(node_key="gppe_uniform_charge_v0")
         assert isinstance(withheld, MetricNodeValueUnavailable)
+        assert withheld.reason == "no served head for strategy"
 
     graded = quality_report.build_report(connection, run.run_id)
     quality_report.persist(connection, graded)
 
     if fresh_database:
-        via_fallback = reader.latest(node_key="gppe_uniform_charge_v0")
-        assert isinstance(via_fallback, MetricNodeValueReport), f"expected the fallback to serve, got {via_fallback!r}"
-        assert via_fallback.run_id == run.run_id
+        still_withheld = reader.latest(node_key="gppe_uniform_charge_v0")
+        assert isinstance(still_withheld, MetricNodeValueUnavailable)
+        assert still_withheld.reason == "no served head for strategy"
 
     registration = register_run_evidence(
         connection,

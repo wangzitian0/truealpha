@@ -9,7 +9,7 @@ import psycopg
 from pydantic import BaseModel, Field
 from truealpha_contracts.environment_contract import EnvironmentContract, UnknownUniverse, load_environment_contract
 from truealpha_contracts.strategy import ExclusionReason
-from truealpha_contracts.universes import id_prefix_like, key_of_lane, keys, lane_name, universe_with_role
+from truealpha_contracts.universes import id_prefix_like, key_of_lane, keys, lane_name, universes_with_role
 from truealpha_runtime.access import AccessContext
 from truealpha_runtime.issuer_modules_mart import ENTITY_DISPLAY_SQL, resolve_static_entity_display
 from truealpha_runtime.research_report_mart import (
@@ -22,7 +22,7 @@ from truealpha_runtime.strategy_run import StrategyRunReport, StrategyRunUnavail
 from truealpha_runtime.strategy_run_postgres import PostgresStrategyRunRepository, read_strategy_provenance
 
 from llm_service.config import settings
-from llm_service.services._db import with_mart_readonly, with_ops_reader
+from llm_service.services._db import with_mart_readonly
 
 SERVED_HEAD_SQL = "select run_id, freshness, availability from mart.served_head"
 DASHBOARD_STRATEGY_ID = "large_model_value_v0"
@@ -51,24 +51,18 @@ def served_or_empty_head_predicate(column: str, universe_prefix: str | None = No
 
 def resolve_governed_head_run_id(cur: Any, universe_like: str) -> tuple[str | None, str | None]:
     """Resolve the governed served run id for `universe_like`, failing closed when unavailable."""
-    from truealpha_runtime.research_report_mart import ACCEPTANCE_FALLBACK_HEAD_SQL
-
     cur.execute(POINTER_HEAD_SQL, (universe_like,))
     row = cur.fetchone()
-    if row is not None:
-        if row.get("availability") == "unavailable" or row.get("run_id") is None:
-            reason = str(row.get("staleness_reason") or "").strip() or "older_than_30d"
-            return None, f"head_unavailable: {reason}"
-        return str(row["run_id"]), None
-    cur.execute(ACCEPTANCE_FALLBACK_HEAD_SQL, (universe_like,))
-    fallback = cur.fetchone()
-    if fallback is None or fallback.get("run_id") is None:
-        return None, "no accepted (quality-reported) strategy run"
-    return str(fallback["run_id"]), None
+    if row is None:
+        return None, "no served head for strategy"
+    if row.get("availability") == "unavailable" or row.get("run_id") is None:
+        reason = str(row.get("staleness_reason") or "").strip() or "older_than_30d"
+        return None, f"head_unavailable: {reason}"
+    return str(row["run_id"]), None
 
 
 def _id_prefix_like(role: str) -> str:
-    return id_prefix_like(universe_with_role(role))  # type: ignore[arg-type]
+    return id_prefix_like(universes_with_role(role)[0])  # type: ignore[arg-type]
 
 
 def _resolve_head_freshness(
@@ -319,14 +313,11 @@ def load_universes_panel(*, database_url: str | None = None) -> UniverseOverview
     def _q(cur: Any) -> UniverseOverviewResponse:
         cur.execute(
             """
-            select r.kind, r.sequence, coalesce(r.note, '') as note, r.advanced_at::text as advanced_at,
-                   o.payload->>'universe_id' as universe_id,
-                   (o.payload->>'instrument_count')::int as instrument_count,
-                   o.payload->>'instrument_mapping_sha256' as mapping_sha256
-            from staging.accepted_rulesets r
-            join staging.contract_objects o on o.contract_id = r.contract_id
-            where r.kind = any(%s::text[])
-            order by r.kind, r.sequence desc
+            select kind, sequence, note, advanced_at::text as advanced_at,
+                   universe_id, instrument_count, mapping_sha256
+            from mart.universe_heads
+            where kind = any(%s::text[])
+            order by kind, sequence desc
             """,
             ([lane_name(k) for k in keys()],),
         )
@@ -343,20 +334,18 @@ def load_universes_panel(*, database_url: str | None = None) -> UniverseOverview
             ukey = key_of_lane(str(head["kind"]))
             cur.execute(
                 """
-                select f.ticker, f.company_name, f.cik, f.figi, f.market_cap::text as market_cap,
-                       f.as_of::text as as_of, f.source, r.payload_sha256 as fetch_sha256, r.object_uri
-                from staging.etf_constituent_facts f
-                join raw.fetches r on r.id = f.raw_fetch_id
-                where f.etf_symbol = %s
-                  and f.as_of = (select max(as_of) from staging.etf_constituent_facts where etf_symbol = %s)
-                order by f.ticker
+                select ticker, company_name, cik, figi, market_cap::text as market_cap,
+                       as_of::text as as_of, source, fetch_sha256, object_uri
+                from mart.universe_constituents
+                where etf_symbol = %s
+                order by ticker
                 """,
-                (ukey, ukey),
+                (ukey,),
             )
             members[str(head["kind"])] = [dict(r) for r in cur.fetchall()]
         return UniverseOverviewResponse(heads=heads, history=history, members=members)
 
-    return with_ops_reader(_q, database_url=database_url)
+    return with_mart_readonly(_q, database_url=database_url)
 
 
 def _normalize_coverage_universe(value: str | None) -> str:
@@ -403,7 +392,7 @@ def load_wide_panel_coverage(
         ).model_dump(mode="json")
 
     report: StrategyRunReport | StrategyRunUnavailable = PostgresStrategyRunRepository(database_url=db_url).get_latest(
-        strategy_id=strategy_id, context=context
+        strategy_id=strategy_id, context=context, universe=norm_universe
     )
     if isinstance(report, StrategyRunUnavailable):
         return PanelCoverageResponse(
