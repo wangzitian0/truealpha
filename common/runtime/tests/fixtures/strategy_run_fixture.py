@@ -53,8 +53,10 @@ def _dec(p: dict[str, Any]) -> StrategyRunDecision:
 
 
 class FixtureStrategyRunRepository:
-    def get_latest(self, *, strategy_id: str, context: AccessContext) -> StrategyRunReport | StrategyRunUnavailable:
-        del context
+    def get_latest(
+        self, *, strategy_id: str, context: AccessContext, universe: str | None = None
+    ) -> StrategyRunReport | StrategyRunUnavailable:
+        del context, universe
         try:
             raw = FIXTURE_PATH.read_bytes()
         except FileNotFoundError:

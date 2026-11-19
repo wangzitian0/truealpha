@@ -13,7 +13,6 @@ from truealpha_contracts.universes import (
     lane_name,
     record,
     served_keys,
-    universe_with_role,
     universes_with_role,
 )
 
@@ -199,7 +198,7 @@ def prove(
     # The strategy pages serve the universe that holds the strategy role, the holdings page the universe that
     # consolidates the fund (#1522): the proof names a role, never a universe key.
     strategy_keys = universes_with_role("strategy")
-    fund_key = universe_with_role("fund_consolidation")
+    fund_key = universes_with_role("fund_consolidation")[0]
     topt, qqq = lane_name(strategy_keys[0]), lane_name(fund_key)
     verdicts: list[SurfaceVerdict] = []
 

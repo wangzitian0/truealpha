@@ -208,7 +208,8 @@ def test_library_report_requires_governed_cutoff_without_wall_clock(monkeypatch:
     from truealpha_runtime.strategy_run import StrategyRunUnavailable
 
     class _UnavailableStrategyRepo:
-        def get_latest(self, *, strategy_id: str, context: Any) -> StrategyRunUnavailable:
+        def get_latest(self, *, strategy_id: str, context: Any, universe: str | None = None) -> StrategyRunUnavailable:
+            del context, universe
             return StrategyRunUnavailable(strategy_id=strategy_id, reason="no_runs_recorded")
 
     class _NoModules:

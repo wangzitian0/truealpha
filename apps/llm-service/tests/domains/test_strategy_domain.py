@@ -123,3 +123,31 @@ def test_multi_universe_strategy_role_helpers_do_not_require_singleton() -> None
     assert strategy_service.normalize_ranking_universe("qqq") == "qqq"
     assert strategy_service.normalize_ranking_universe("sp500") == "sp500"
     assert strategy_service.normalize_ranking_universe("all") == "all"
+
+
+def test_strategy_page_passes_universe_and_drops_float_casts(monkeypatch: pytest.MonkeyPatch) -> None:
+    import inspect
+
+    from llm_service.services.auth_service import PrincipalRecord, access_context_for
+    from truealpha_runtime.strategy_run import StrategyRunUnavailable
+
+    assert "::float" not in inspect.getsource(strategy_service)
+    assert "::float" not in strategy_service._BACKTEST_RUN_SELECT
+
+    recorded: list[tuple[str, str | None]] = []
+
+    class _FakeRepo:
+        def __init__(self, *, database_url: str) -> None:
+            del database_url
+
+        def get_latest(self, *, strategy_id: str, context: Any, universe: str | None = None) -> StrategyRunUnavailable:
+            del context
+            recorded.append((strategy_id, universe))
+            return StrategyRunUnavailable(strategy_id=strategy_id, reason="no_runs_recorded")
+
+    monkeypatch.setattr(strategy_service, "PostgresStrategyRunRepository", _FakeRepo)
+    ctx = access_context_for(PrincipalRecord(principal_id="p:1", tenant_id="t:1", principal_kind="member"))
+    page = strategy_service.get_strategy_run_page(ctx, universe="qqq", database_url="postgresql://unused")
+    assert not page.available
+    assert page.universe == "qqq"
+    assert recorded == [(strategy_service.DASHBOARD_STRATEGY_ID, "qqq")]

@@ -8,7 +8,7 @@ from typing import Any
 
 import dagster as dg
 import psycopg
-from truealpha_contracts.universes import key_of_lane, lane_name, universe_with_role, universes_with_role
+from truealpha_contracts.universes import key_of_lane, lane_name, universes_with_role
 
 from data_engine.config import settings
 from data_engine.contracts.standards import STANDARDS
@@ -125,7 +125,7 @@ __all__ = (
 
 class StandardBackfillConfig(dg.Config):
     executed_at: str
-    universe: str = lane_name(universe_with_role("fund_consolidation"))
+    universe: str = lane_name(universes_with_role("fund_consolidation")[0])
     standard: str = ""
     mode: str = "backfill"
     max_issuers: int = 0
