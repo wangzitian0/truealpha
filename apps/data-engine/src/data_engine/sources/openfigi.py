@@ -27,28 +27,27 @@ def map_isins(
         batch = isins[start : start + chunk_size]
         jobs = [{"idType": "ID_ISIN", "idValue": isin} for isin in batch]
         identity = FetchKey.for_batch("openfigi", "mapping", batch, gateway.utc_day())
-        for attempt in range(30):
-            resp = gateway.http_post(
-                client,
-                "openfigi",
-                "mapping",
-                MAPPING_URL,
-                identity=identity,
-                caller="openfigi.map_isins",
-                json=jobs,
-                headers=headers,
-            )
-            if resp.status_code != 429:
-                resp.raise_for_status()
-                break
-            if attempt and attempt % 6 == 0:
-                print(f"  openfigi: still rate-limited after {attempt * 10}s (batch at {start}/{len(isins)})")
-            sleep(10.0)
-        else:
+        resp = gateway.http_post(
+            client,
+            "openfigi",
+            "mapping",
+            MAPPING_URL,
+            identity=identity,
+            caller="openfigi.map_isins",
+            json=jobs,
+            headers=headers,
+            max_attempts=30,
+            retry_statuses=(429,),
+            backoff_base=10.0,
+            max_backoff=10.0,
+            sleep=sleep,
+        )
+        if resp.status_code == 429:
             raise RuntimeError(
                 f"OpenFIGI kept returning 429 for 5 minutes (batch at {start}/{len(isins)}) — "
                 "check service status or set OPENFIGI_API_KEY"
             )
+        resp.raise_for_status()
         results = resp.json()
         if on_batch is not None:
             on_batch(batch, results)

@@ -18,10 +18,11 @@ from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, date, datetime, timedelta
 from datetime import time as clock_time
 from decimal import Decimal
-from types import MappingProxyType
+from types import MappingProxyType, SimpleNamespace
 from typing import Any, NoReturn, TypeVar
 
 from infra2_sdk.capacity import RateLimitWindow
+from infra2_sdk.runtime.http import request_with_retry
 from truealpha_contracts.environment_contract import DAY_SECONDS, load_environment_contract
 
 from data_engine.config import settings
@@ -656,19 +657,45 @@ def _http_request(
     identity: FetchKey,
     caller: str,
     cost: Decimal | int = 1,
+    max_attempts: int = 1,
+    retry_statuses: tuple[int, ...] = (429, 502, 503, 504),
+    backoff_base: float = 0.5,
+    max_backoff: float = 30.0,
+    sleep: Callable[[float], None] = time.sleep,
     **kwargs: Any,
 ) -> Any:
-    with record_call(
-        source,
-        endpoint,
-        identity=identity,
-        caller=caller,
-        request_uri=_requested_uri(url, kwargs.get("params")),
-        cost=cost,
-    ) as call:
-        response = getattr(client, method)(url, **kwargs)
-        _observe_http(call, response)
-        return response
+    def _send(req_method: str, req_url: str, **call_kwargs: Any) -> Any:
+        with record_call(
+            source,
+            endpoint,
+            identity=identity,
+            caller=caller,
+            request_uri=_requested_uri(req_url, call_kwargs.get("params")),
+            cost=cost,
+        ) as call:
+            req_fn = getattr(client, "request", None)
+            response = (
+                req_fn(req_method, req_url, **call_kwargs)
+                if callable(req_fn)
+                else getattr(client, req_method.lower())(req_url, **call_kwargs)
+            )
+            _observe_http(call, response)
+            status = getattr(response, "status_code", None)
+            if status is not None and int(status) in retry_statuses and not hasattr(response, "headers"):
+                response.headers = {}
+            return response
+
+    return request_with_retry(
+        SimpleNamespace(request=_send),
+        method.upper(),
+        url,
+        max_attempts=max_attempts,
+        retry_statuses=retry_statuses,
+        backoff_base=backoff_base,
+        max_backoff=max_backoff,
+        sleep=sleep,
+        **kwargs,
+    )
 
 
 def http_get(*args: Any, **kwargs: Any) -> Any:
