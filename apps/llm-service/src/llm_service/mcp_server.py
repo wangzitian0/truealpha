@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Callable
-from datetime import UTC, datetime, timedelta
+from datetime import datetime
 from typing import Any, Literal, Protocol
 
 import psycopg
@@ -13,7 +13,6 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
 from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import BaseModel, ConfigDict
-from truealpha_runtime.access import AccessContext, AuthenticationMethod, PrincipalKind
 from truealpha_runtime.issuer_modules_mart import (
     AnalystRatings,
     IssuerModuleReader,
@@ -38,6 +37,7 @@ from truealpha_runtime.strategy_run import StrategyRunReadRepository, StrategyRu
 from truealpha_runtime.strategy_run_postgres import PostgresStrategyRunRepository
 
 from llm_service.config import settings
+from llm_service.services.auth_service import MCP_OWNER_PRINCIPAL_ID, resolve_mcp_access_context
 from llm_service.services.entities_service import (
     PostgresCompanyProfileReader,
     PostgresEtfProfileReader,
@@ -80,18 +80,12 @@ __all__ = [
     "PostgresThemePurityLeaderboardReader",
     "backtest_run_limitations",
     "build_mcp_server",
-    "mcp",
     "normalize_theme_slug",
     "resolve_fund_resolution_candidates",
 ]
 
 logger = logging.getLogger(__name__)
 
-_SERVICE_PRINCIPAL_ID = "principal:llm-service-mcp"
-_OWNER_PRINCIPAL_ID = "principal:owner"
-_SERVICE_TENANT_ID = "tenant:truealpha"
-_DELEGATION_ID = "delegation:mcp-bearer-token"
-_CONTEXT_LIFETIME = timedelta(minutes=5)
 MART_READ_FAILED_MESSAGE = "the mart read failed; the detail is in the service log"
 
 
@@ -183,25 +177,10 @@ class LibraryDocumentDetailToolRequest(_ToolModel):
     document_id: str
 
 
-def _owner_access_context() -> AccessContext:
-    issued_at = datetime.now(UTC)
-    stamp = issued_at.timestamp()
-    return AccessContext(
-        context_id=f"ctx:mcp-owner:{stamp}",
-        principal_id=_OWNER_PRINCIPAL_ID,
-        tenant_id=_SERVICE_TENANT_ID,
-        session_id=f"session:mcp-owner:{stamp}",
-        authentication_method=AuthenticationMethod.DELEGATED_MCP,
-        principal_kind=PrincipalKind.ADMINISTRATOR,
-        issued_at=issued_at,
-        expires_at=issued_at + _CONTEXT_LIFETIME,
-        delegated_by_service_principal_id=_SERVICE_PRINCIPAL_ID,
-        delegation_id=_DELEGATION_ID,
-    )
-
-
 class _AuditedFastMCP(FastMCP):
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> Any:
+        from datetime import UTC
+
         started = datetime.now(UTC)
         outcome = "error"
         try:
@@ -213,7 +192,7 @@ class _AuditedFastMCP(FastMCP):
             logger.info(
                 "mcp tool call: tool=%s principal=%s outcome=%s duration_ms=%d",
                 name,
-                _OWNER_PRINCIPAL_ID,
+                MCP_OWNER_PRINCIPAL_ID,
                 outcome,
                 elapsed_ms,
             )
@@ -357,7 +336,7 @@ def build_mcp_server(
         if req.node_key is not None and req.universe is None and req.cutoff is None:
             return active_metric_node.latest(node_key=req.node_key, issuer_id=req.issuer_id, limit=req.limit)
         return load_wide_panel_coverage(
-            _owner_access_context(),
+            resolve_mcp_access_context(),
             strategy_id=req.strategy_id,
             universe=req.universe,
             cutoff=req.cutoff,
@@ -380,7 +359,7 @@ def build_mcp_server(
         description="Read the latest governed strategy rankings and definition review_state from mart.",
     )
     def strategy_rankings(request: StrategyRankingsToolRequest) -> StrategyRunReport | StrategyRunUnavailable:
-        return active_repository.get_latest(strategy_id=request.strategy_id, context=_owner_access_context())
+        return active_repository.get_latest(strategy_id=request.strategy_id, context=resolve_mcp_access_context())
 
     @server.tool(
         name="strategy_backtests",
@@ -417,7 +396,7 @@ def build_mcp_server(
         description="Resolve a strategy decision output to its mart.metric_node_values and source lineage.",
     )
     def entities_trace(request: EntitiesTraceToolRequest) -> TraceResponse:
-        return get_trace(_owner_access_context(), issuer_id=request.issuer_id, cutoff=request.cutoff)
+        return get_trace(resolve_mcp_access_context(), issuer_id=request.issuer_id, cutoff=request.cutoff)
 
     @server.tool(
         name="entities_supply_chain",
@@ -462,7 +441,7 @@ def build_mcp_server(
     )
     def library_report(request: LibraryReportToolRequest) -> LibraryReportResponse:
         return build_library_report(
-            _owner_access_context(),
+            resolve_mcp_access_context(),
             report_kind=request.report_kind,
             target_entity_ids=request.target_entity_ids,
             cutoff_at=request.cutoff_at,
@@ -480,7 +459,7 @@ def build_mcp_server(
     def library_card_export(request: LibraryCardExportToolRequest) -> ResearchCard:
         report_req = _card_report_request(request)
         exported = export_or_render_card(
-            _owner_access_context(),
+            resolve_mcp_access_context(),
             CardExportRequest(
                 card_kind=request.card_kind,
                 issuer_id=report_req.target_entity_ids[0] if report_req.target_entity_ids else None,
@@ -505,7 +484,7 @@ def build_mcp_server(
     def library_documents_list(request: LibraryDocumentsListToolRequest | None = None) -> DocumentListResponse:
         req = request or LibraryDocumentsListToolRequest()
         return list_documents(
-            _owner_access_context(),
+            resolve_mcp_access_context(),
             limit=req.limit,
             before_created_at=req.before_created_at,
             before_document_id=req.before_document_id,
@@ -517,7 +496,7 @@ def build_mcp_server(
     )
     def library_document_create(request: LibraryDocumentCreateToolRequest) -> CreateDocumentResponse:
         return create_document(
-            _owner_access_context(),
+            resolve_mcp_access_context(),
             source_artifact_id=request.source_artifact_id,
             content_bytes=request.content.encode("utf-8"),
             content_type=request.content_type,
@@ -528,36 +507,6 @@ def build_mcp_server(
         description="Read an owner-scoped research document's revisions and latest content.",
     )
     def library_document_detail(request: LibraryDocumentDetailToolRequest) -> DocumentDetailResponse | None:
-        return get_document_detail(_owner_access_context(), document_id=request.document_id)
+        return get_document_detail(resolve_mcp_access_context(), document_id=request.document_id)
 
     return server
-
-
-class _LazyMcp:
-    """Defer build_mcp_server() and Settings() validation until runtime (#1375)."""
-
-    def __init__(self) -> None:
-        self._instance: FastMCP | None = None
-        self._http_app: Any = None
-
-    def _get(self) -> FastMCP:
-        if self._instance is None:
-            inst = build_mcp_server()
-            self._http_app = inst.streamable_http_app()
-            self._instance = inst
-        return self._instance
-
-    def streamable_http_app(self) -> Any:
-        lazy = self
-
-        async def _asgi(scope: Any, receive: Any, send: Any) -> None:
-            lazy._get()
-            await lazy._http_app(scope, receive, send)
-
-        return _asgi
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._get(), name)
-
-
-mcp: Any = _LazyMcp()

@@ -6,6 +6,7 @@ from collections.abc import Callable
 from typing import Any, Literal
 
 import psycopg
+from infra2_sdk.runtime.postgres import PostgresSettings, redact_postgres_error
 from psycopg.rows import dict_row
 from truealpha_runtime.access import AccessContext
 
@@ -13,6 +14,19 @@ from llm_service.config import settings
 
 DatabaseRole = Literal["app_runtime", "mart_readonly", "app_ops_reader"]
 _ALLOWED_ROLES: frozenset[str] = frozenset({"app_runtime", "mart_readonly", "app_ops_reader"})
+_STATEMENT_TIMEOUT = "5s"
+
+
+def redact_db_error(exc: Exception, *, database_url: str | None = None) -> str:
+    """Redact credentials from a Postgres exception using SDK settings."""
+    try:
+        pg = PostgresSettings(
+            dsn=database_url or settings.database_url,
+            connect_timeout_seconds=settings.database_connect_timeout_seconds,
+        )
+        return f"{type(exc).__name__}: {redact_postgres_error(str(exc), pg)}"
+    except Exception:  # noqa: BLE001
+        return type(exc).__name__
 
 
 def _connect(*, database_url: str | None = None) -> psycopg.Connection[dict[str, Any]]:
@@ -35,6 +49,7 @@ def with_role_client[T](
     with _connect(database_url=database_url) as conn:
         with conn.cursor() as cur:
             cur.execute(f"set local role {role}")  # noqa: S608 — role checked against closed literal set
+            cur.execute("select set_config('statement_timeout', %s, true)", (_STATEMENT_TIMEOUT,))
             return fn(cur)
 
 
@@ -72,6 +87,7 @@ def with_owner_scoped_runtime[T](
     with _connect(database_url=database_url) as conn:
         with conn.cursor() as cur:
             cur.execute("set local role app_runtime")
+            cur.execute("select set_config('statement_timeout', %s, true)", (_STATEMENT_TIMEOUT,))
             cur.execute("select set_config('truealpha.tenant_id', %s, true)", (context.tenant_id,))
             cur.execute("select set_config('truealpha.principal_id', %s, true)", (context.principal_id,))
             return fn(cur)

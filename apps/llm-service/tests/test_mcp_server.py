@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from llm_service.mcp_server import _default_repository, build_mcp_server, mcp
+from llm_service.mcp_server import _default_repository, build_mcp_server
 from llm_service.services.library_service import LibraryReportResponse
 from mcp.shared.memory import create_connected_server_and_client_session
 from truealpha_runtime.access import AccessContext, AuthenticationMethod, PrincipalKind
@@ -78,7 +78,7 @@ _EXPECTED_MCP_TOOLS = [
 
 @pytest.mark.anyio
 async def test_advertises_the_expected_tools() -> None:
-    tools = await mcp.list_tools()
+    tools = await build_mcp_server().list_tools()
     assert sorted(tool.name for tool in tools) == _EXPECTED_MCP_TOOLS
     assert len(tools) == 17
     strategy_tool = next(t for t in tools if t.name == "strategy_rankings")

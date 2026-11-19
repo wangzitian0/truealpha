@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from typing import Any
 
 import bcrypt
 import pytest
 from fastapi.testclient import TestClient
+from llm_service import main as main_mod
 from llm_service.config import Settings
 from llm_service.main import app
-from llm_service.services import auth_service
+from llm_service.services import _db, auth_service
 from pydantic import SecretStr
+from truealpha_runtime.access import AuthenticationMethod, PrincipalKind
 
 
 def test_auth_login_session_logout_and_rate_limiter(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -82,3 +86,78 @@ def test_auth_login_session_logout_and_rate_limiter(monkeypatch: pytest.MonkeyPa
         now=datetime.now(UTC) - timedelta(minutes=5),
     )
     assert auth_service.verify_session_token(expired, secret=auth_service.resolve_signing_secret()) is None
+
+
+def test_mcp_access_context_and_reenterable_lifespan(monkeypatch: pytest.MonkeyPatch) -> None:
+    ctx = auth_service.resolve_mcp_access_context()
+    assert ctx.authentication_method is AuthenticationMethod.DELEGATED_MCP
+    assert ctx.principal_kind is PrincipalKind.ADMINISTRATOR
+    assert ctx.principal_id == "principal:owner"
+    assert ctx.delegated_by_service_principal_id == "principal:llm-service-mcp"
+
+    monkeypatch.setattr(main_mod, "refuse_to_boot_on_a_missing_environment", lambda: None)
+    monkeypatch.setattr(main_mod.settings, "mcp_bearer_token", SecretStr("mcp-lifespan-secret"))
+    headers = {"Accept": "application/json, text/event-stream", "Authorization": "Bearer mcp-lifespan-secret"}
+    init_body = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": {"name": "auth-domain-test", "version": "1"},
+        },
+    }
+    for _ in range(2):
+        with TestClient(app, client=("127.0.0.1", 50000)) as client:
+            unauth = client.post("/mcp/", headers={"Accept": "application/json, text/event-stream"}, json=init_body)
+            assert unauth.status_code == 401 and unauth.headers["www-authenticate"].startswith("Bearer ")
+            ok = client.post("/mcp/", headers=headers, json=init_body)
+            assert ok.status_code == 200 and ok.headers.get("mcp-session-id")
+
+
+def test_db_statement_timeout_and_error_redaction(monkeypatch: pytest.MonkeyPatch) -> None:
+    executed: list[tuple[str, Any]] = []
+
+    class _Cur:
+        def execute(self, sql: str, params: Any = None) -> None:
+            executed.append((sql, params))
+
+        def __enter__(self) -> _Cur:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+    class _Conn:
+        def cursor(self) -> _Cur:
+            return _Cur()
+
+        def __enter__(self) -> _Conn:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+    monkeypatch.setattr(_db.psycopg, "connect", lambda *_a, **_k: _Conn())
+    _db.with_app_runtime(lambda _cur: None)
+    assert ("select set_config('statement_timeout', %s, true)", ("5s",)) in executed
+
+    redacted = _db.redact_db_error(
+        RuntimeError("connection failed: postgresql://app_service_login:SuperSecretPass123@db:5432/truealpha"),
+        database_url="postgresql://app_service_login:SuperSecretPass123@db:5432/truealpha",
+    )
+    assert "SuperSecretPass123" not in redacted
+
+
+def test_web_auth_server_stays_thin_forwarding() -> None:
+    repo_root = Path(__file__).resolve().parents[4]
+    auth_dir = repo_root / "apps/app-web/src/server/auth"
+    ts_files = sorted(auth_dir.glob("*.ts"))
+    assert ts_files
+    total_lines = sum(len(f.read_text(encoding="utf-8").splitlines()) for f in ts_files)
+    assert total_lines <= 71, f"apps/app-web/src/server/auth/*.ts grew to {total_lines} lines"
+    for f in ts_files:
+        text = f.read_text(encoding="utf-8")
+        for forbidden in ("withAppRuntime", "PostgresCredentialsRepository", "signSessionToken", "hashPassword"):
+            assert forbidden not in text, f"{f.name} contains forbidden symbol {forbidden}"
