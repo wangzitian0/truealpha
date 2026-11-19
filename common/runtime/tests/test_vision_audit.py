@@ -352,3 +352,31 @@ def test_gate_1_verifies_from_live_confidence_report_verdicts_when_health_report
         assert g1.verified is False and g1.status == "OPEN"
         assert "no comparator" in g1.evidence
         assert failed.all_passed is False
+
+
+def test_vision_audit_fail_closed_exits_nonzero_on_open_gate_or_failing_goal_criterion(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    failing_verdicts = [
+        _FakeVerdict("job_run_health", True, "capture ok"),
+        _FakeVerdict("report_surface_proof", True, "6/6 surfaces ok"),
+        _FakeVerdict("output_invariants", True, "10 held, 0 empty"),
+        _FakeVerdict("datahub_confidence_report@topt", True, "report persisted for universe:topt-us-2026-03-31"),
+        _FakeVerdict("question_coverage@topt", True, "coverage ok"),
+        _FakeVerdict("nightly_backtest", True, "backtest ok"),
+        _FakeVerdict("market_data_freshness", True, "freshness ok"),
+        _FakeVerdict("topt_baseline", False, "failed: S schema differs from the chain in 6 places"),
+    ]
+    monkeypatch.setattr(_module, "read_report", lambda _url, _http_get: _FakeHealthReport(failing_verdicts, "v0.2.115"))
+
+    report = audit_vision(env="staging")
+    assert report.all_passed is False
+    assert report.status == "fail"
+    assert any(c.criterion_id == "R2.B3" and not c.verified for c in report.criteria)
+
+    monkeypatch.setattr("sys.argv", ["vision_audit.py", "--env", "staging", "--fail-closed"])
+    assert _module.main() == 1
+    monkeypatch.setattr("sys.argv", ["vision_audit.py", "--env", "staging", "--json", "--fail-closed"])
+    assert _module.main() == 1
+    _ = capsys.readouterr()

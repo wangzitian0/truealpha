@@ -128,19 +128,16 @@ class TriggerPipelineResponse(BaseModel):
 def get_ops_overview(*, database_url: str | None = None) -> OpsOverviewResponse:
     def _q(cur: Any) -> OpsOverviewResponse:
         de: OpsDataEngineBuildDto | None = None
-        try:
-            cur.execute(
-                "select run_id, git_sha, image_digest, created_at from mart.data_engine_identity order by created_at desc limit 1"
+        cur.execute(
+            "select run_id, git_sha, image_digest, created_at from mart.data_engine_identity order by created_at desc limit 1"
+        )
+        if row := cur.fetchone():
+            de = OpsDataEngineBuildDto(
+                run_id=str(row["run_id"]),
+                git_sha=str(row["git_sha"]),
+                image_digest=str(row["image_digest"]),
+                created_at=row["created_at"].isoformat(),
             )
-            if row := cur.fetchone():
-                de = OpsDataEngineBuildDto(
-                    run_id=str(row["run_id"]),
-                    git_sha=str(row["git_sha"]),
-                    image_digest=str(row["image_digest"]),
-                    created_at=row["created_at"].isoformat(),
-                )
-        except psycopg.Error:
-            cur.connection.rollback()
 
         runs: list[OpsRunRowDto] | str = "unavailable"
         try:
@@ -161,7 +158,7 @@ def get_ops_overview(*, database_url: str | None = None) -> OpsOverviewResponse:
                 )
                 for r in cur.fetchall()
             ]
-        except psycopg.Error:
+        except psycopg.errors.UndefinedTable:
             cur.connection.rollback()
 
         return OpsOverviewResponse(
@@ -177,42 +174,38 @@ def get_datahub_stats(*, database_url: str | None = None) -> DatahubStatsRespons
     contract = load_environment_contract()
     sentinel_likes = [id_prefix_like(k) for k, u in contract.universes.items() if u.is_sentinel]
 
-    def _safe(cur: Any, sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
-        try:
-            cur.execute(sql, params)
-            return [dict(r) for r in cur.fetchall()]
-        except psycopg.Error:
-            cur.connection.rollback()
-            return []
+    def _rows(cur: Any, sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
+        cur.execute(sql, params)
+        return [dict(r) for r in cur.fetchall()]
 
     def _q(cur: Any) -> DatahubStatsResponse:
-        sources = _safe(
+        sources = _rows(
             cur,
             f"select source, count(*)::int as fetches_total, "
             f"(count(*) filter (where recorded_at > now() - interval '24 hours'))::int as fetches_24h, "
             f"max(recorded_at)::text as last_fetch from raw.fetches where {REGISTERED_RAW_SOURCE_FILTER} "
             "group by source order by max(recorded_at) desc, count(*) desc limit 12",
         )
-        capture_runs = _safe(
+        capture_runs = _rows(
             cur,
             "select run_id, universe_id, cutoff::text as cutoff, obligation_count as obligations, "
             "(success_count + unchanged_count)::int as resolved, failed_count as failed, complete "
             "from mart.capture_status order by cutoff desc limit 12",
         )
-        traffic = _safe(
+        traffic = _rows(
             cur,
             f"select l.source, count(*)::int as calls, (count(*) filter (where not l.ok))::int as failed, "
             f"round(avg(l.duration_ms))::int as avg_ms, "
             f"to_char(max(l.called_at) at time zone 'utc', 'YYYY-MM-DD HH24:MI:SS\"Z\"') as last_call "
             f"from staging.api_call_ledger l where l.called_at >= {UTC_DAY_START_SQL} group by l.source order by calls desc",
         )
-        recent_calls = _safe(
+        recent_calls = _rows(
             cur,
             "select l.id, to_char(l.called_at at time zone 'utc', 'YYYY-MM-DD HH24:MI:SS\"Z\"') as called_at, "
             "l.source, l.endpoint, l.caller, l.ok, l.status_code, l.duration_ms, left(l.error, 160) as error, l.run_key "
             "from staging.api_call_ledger l order by l.called_at desc, l.id desc limit 40",
         )
-        ledger_cov = _safe(
+        ledger_cov = _rows(
             cur,
             f"with ledger as (select (l.called_at at time zone 'utc')::date as day, l.source, l.endpoint, "
             f"l.ok, l.fetch_key, l.run_key, l.repeat_reason from staging.api_call_ledger l "
@@ -234,10 +227,10 @@ def get_datahub_stats(*, database_url: str | None = None) -> DatahubStatsRespons
             "left join twice w using (day, source, endpoint) order by t.day desc, t.source, t.endpoint",
             (LEDGER_COVERAGE_DAYS,),
         )
-        question_cov = _safe(cur, QUESTION_COVERAGE_SQL)
-        confidence = _safe(cur, CONFIDENCE_REPORT_SQL)
-        oracle_outcomes = _safe(cur, ORACLE_OUTCOMES_SQL)
-        validation = _safe(
+        question_cov = _rows(cur, QUESTION_COVERAGE_SQL)
+        confidence = _rows(cur, CONFIDENCE_REPORT_SQL)
+        oracle_outcomes = _rows(cur, ORACLE_OUTCOMES_SQL)
+        validation = _rows(
             cur,
             f"select 'plausibility sign checks' as check, "
             f"case when coalesce((q.payload->>'implausible_count')::int, 0) = 0 then 'pass' else 'violations' end as verdict, "
@@ -245,7 +238,7 @@ def get_datahub_stats(*, database_url: str | None = None) -> DatahubStatsRespons
             f"from mart.datahub_quality_report q join mart.capture_status s using (run_id) where {NON_CANARY_UNIVERSE_WHERE} "
             "order by s.cutoff desc limit 1",
             (sentinel_likes,),
-        ) + _safe(
+        ) + _rows(
             cur,
             "select 'cross-run reuse (24h)' as check, "
             "case when coalesce(sum(unchanged_count), 0) > 0 then 'active' else 'idle' end as verdict, "

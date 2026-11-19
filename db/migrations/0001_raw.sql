@@ -1023,3 +1023,15 @@ do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'raw.capture
 
 do $$ begin if to_regclass('raw.idx_raw_fetches_source_time') is null then CREATE INDEX idx_raw_fetches_source_time ON raw.fetches USING btree (source, source_record_id, fetched_at DESC); end if; end $$;
 do $$ begin if to_regclass('raw.ix_raw_fetches_payload_sha256') is null then CREATE INDEX ix_raw_fetches_payload_sha256 ON raw.fetches USING btree (payload_sha256); end if; end $$;
+do $$ begin if to_regclass('raw.idx_capture_vintages_fetch') is null then CREATE INDEX idx_capture_vintages_fetch ON raw.capture_source_vintages USING btree (raw_fetch_id); end if; end $$;
+do $$ begin if to_regclass('raw.idx_capture_vintages_request') is null then CREATE INDEX idx_capture_vintages_request ON raw.capture_source_vintages USING btree (source_request_id); end if; end $$;
+do $$ begin if to_regclass('raw.idx_capture_attempt_results_vintage') is null then CREATE INDEX idx_capture_attempt_results_vintage ON raw.capture_attempt_results USING btree (source_vintage_id); end if; end $$;
+do $$ begin if to_regclass('raw.idx_capture_attempt_results_reused_vintage') is null then CREATE INDEX idx_capture_attempt_results_reused_vintage ON raw.capture_attempt_results USING btree (reused_source_vintage_id) WHERE (reused_source_vintage_id IS NOT NULL); end if; end $$;
+do $$ begin if to_regclass('raw.idx_capture_obligation_results_attempt') is null then CREATE INDEX idx_capture_obligation_results_attempt ON raw.capture_obligation_results USING btree (final_attempt_id) WHERE (final_attempt_id IS NOT NULL); end if; end $$;
+do $$ begin if to_regclass('raw.idx_capture_work_items_request') is null then CREATE INDEX idx_capture_work_items_request ON raw.capture_work_items USING btree (source_request_id); end if; end $$;
+do $$ begin if to_regclass('raw.idx_capture_obligation_work_bindings_work_item') is null then CREATE INDEX idx_capture_obligation_work_bindings_work_item ON raw.capture_obligation_work_bindings USING btree (work_item_id); end if; end $$;
+do $$ begin if to_regclass('raw.idx_capture_obligations_campaign_list') is null then CREATE INDEX idx_capture_obligations_campaign_list ON raw.capture_obligations USING btree (campaign_id, list_version_id); end if; end $$;
+do $$ begin if to_regclass('raw.idx_capture_obligations_list_subject') is null then CREATE INDEX idx_capture_obligations_list_subject ON raw.capture_obligations USING btree (list_version_id, subject_kind, subject_id); end if; end $$;
+do $$ begin if to_regclass('raw.idx_capture_obligations_run_campaign') is null then CREATE INDEX idx_capture_obligations_run_campaign ON raw.capture_obligations USING btree (run_id, campaign_id); end if; end $$;
+do $$ begin if to_regclass('raw.idx_capture_campaign_list_versions_list') is null then CREATE INDEX idx_capture_campaign_list_versions_list ON raw.capture_campaign_list_versions USING btree (list_version_id); end if; end $$;
+do $$ begin if to_regclass('raw.idx_capture_runs_schedule_policy') is null then CREATE INDEX idx_capture_runs_schedule_policy ON raw.capture_runs USING btree (schedule_policy_id); end if; end $$;

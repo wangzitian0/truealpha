@@ -8,101 +8,26 @@ tests change one fact and assert the named finding, so each direction can fail.
 from __future__ import annotations
 
 import ast
-import functools
 import json
 import re
 import tomllib
 from collections import defaultdict
 from collections.abc import Mapping, Set
 from pathlib import Path
-from typing import Literal, Self
 
 import pytest
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import ValidationError
+from truealpha_contracts.goal_criteria import (
+    ROOTS,
+    GoalCriteriaCatalog,
+    GoalCriterion,
+    goal_criteria_path,
+    load_goal_criteria,
+)
 from truealpha_runtime.testing import load_tool  # noqa: I001
 
 REPO = Path(__file__).resolve().parents[3]
-GOAL_CRITERIA_PATH = Path(__file__).resolve().parent / "fixtures" / "goal_criteria.v1.json"
-
-#: Root number -> its root issue and the letter its acceptance ids use (#28 "Chain").
-ROOTS: Mapping[int, tuple[str, str]] = {
-    1: ("#1417", "A"),
-    2: ("#1418", "B"),
-    3: ("#1419", "C"),
-    4: ("#1420", "D"),
-    5: ("#1421", "E"),
-}
-
-_ID = re.compile(r"^R(?P<root>[1-5])\.(?:(?P<letter>[A-E])(?P<number>[1-9][0-9]?)|M0)$")
-
-Tier = Literal["M0", "M1"]
-Oracle = Literal["repository", "filing", "second_vendor", "label", "platform", "owner"]
-Status = Literal["backed", "partial", "pending"]
-
-
-class _Frozen(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-
-class GoalCriterion(_Frozen):
-    id: str
-    root: str
-    tier: Tier
-    statement: str = Field(min_length=1)
-    threshold: str | None = Field(default=None, min_length=1)
-    window: str | None = Field(default=None, min_length=1)
-    oracle: Oracle
-    status: Status
-    verdict_keys: tuple[str, ...] = ()
-    pending_on: str | None = Field(default=None, min_length=1)
-
-    @model_validator(mode="after")
-    def _id_names_its_root_and_tier(self) -> Self:
-        match = _ID.match(self.id)
-        if match is None:
-            raise ValueError(f"{self.id!r} is not R<root>.<letter><number> or R<root>.M0")
-        issue, letter = ROOTS[int(match["root"])]
-        if self.root != issue:
-            raise ValueError(f"{self.id}: root {self.root} is not {issue}")
-        if match["letter"] is not None and match["letter"] != letter:
-            raise ValueError(f"{self.id}: root {issue} uses the letter {letter}")
-        expected_tier = "M0" if match["letter"] is None else "M1"
-        if self.tier != expected_tier:
-            raise ValueError(f"{self.id}: tier {self.tier} is not {expected_tier}")
-        if (self.status == "backed") == (self.pending_on is not None):
-            raise ValueError(
-                f"{self.id}: a {self.status} criterion {'must' if self.pending_on is None else 'must not'} name pending_on"
-            )
-        if len(set(self.verdict_keys)) != len(self.verdict_keys):
-            raise ValueError(f"{self.id}: a verdict key is named twice")
-        return self
-
-
-class GoalCriteriaCatalog(_Frozen):
-    schema_version: Literal[1]
-    catalog_version: str = Field(min_length=1)
-    description: str = Field(min_length=1)
-    criteria: tuple[GoalCriterion, ...] = Field(min_length=1)
-
-    @model_validator(mode="after")
-    def _ids_are_unique_and_every_root_has_one_m0(self) -> Self:
-        ids = [criterion.id for criterion in self.criteria]
-        duplicates = sorted({item for item in ids if ids.count(item) > 1})
-        if duplicates:
-            raise ValueError(f"criterion ids named twice: {duplicates}")
-        for number in ROOTS:
-            if f"R{number}.M0" not in ids:
-                raise ValueError(f"root R{number} has no M0 criterion")
-        return self
-
-    def by_id(self) -> dict[str, GoalCriterion]:
-        return {criterion.id: criterion for criterion in self.criteria}
-
-
-@functools.cache
-def load_goal_criteria() -> GoalCriteriaCatalog:
-    payload = json.loads(GOAL_CRITERIA_PATH.read_bytes())
-    return GoalCriteriaCatalog.model_validate(payload)
+GOAL_CRITERIA_PATH = goal_criteria_path()
 
 
 def backing_findings(

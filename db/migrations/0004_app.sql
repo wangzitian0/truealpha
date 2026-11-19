@@ -235,6 +235,25 @@ do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'app.tenants
 do $$ begin if to_regclass('app.idx_conversation_messages_conversation') is null then CREATE INDEX idx_conversation_messages_conversation ON app.conversation_messages USING btree (conversation_id, created_at); end if; end $$;
 do $$ begin if to_regclass('app.idx_principal_credentials_email_lower') is null then CREATE UNIQUE INDEX idx_principal_credentials_email_lower ON app.principal_credentials USING btree (lower(email)); end if; end $$;
 do $$ begin if to_regclass('app.idx_research_document_revisions_document') is null then CREATE INDEX idx_research_document_revisions_document ON app.research_document_revisions USING btree (document_id, created_at); end if; end $$;
+do $$ begin if to_regclass('app.idx_principals_tenant') is null then CREATE INDEX idx_principals_tenant ON app.principals USING btree (tenant_id); end if; end $$;
+do $$ begin if to_regclass('app.idx_conversations_tenant') is null then CREATE INDEX idx_conversations_tenant ON app.conversations USING btree (tenant_id); end if; end $$;
+do $$ begin if to_regclass('app.idx_conversations_owner') is null then CREATE INDEX idx_conversations_owner ON app.conversations USING btree (owner_principal_id); end if; end $$;
+do $$ begin if to_regclass('app.idx_conversation_messages_conv_tenant_owner') is null then CREATE INDEX idx_conversation_messages_conv_tenant_owner ON app.conversation_messages USING btree (conversation_id, tenant_id, owner_principal_id); end if; end $$;
+do $$ begin if to_regclass('app.idx_conversation_messages_tenant') is null then CREATE INDEX idx_conversation_messages_tenant ON app.conversation_messages USING btree (tenant_id); end if; end $$;
+do $$ begin if to_regclass('app.idx_conversation_messages_owner') is null then CREATE INDEX idx_conversation_messages_owner ON app.conversation_messages USING btree (owner_principal_id); end if; end $$;
+do $$ begin if to_regclass('app.idx_entitlement_grants_tenant') is null then CREATE INDEX idx_entitlement_grants_tenant ON app.entitlement_grants USING btree (tenant_id); end if; end $$;
+do $$ begin if to_regclass('app.idx_entitlement_grants_principal') is null then CREATE INDEX idx_entitlement_grants_principal ON app.entitlement_grants USING btree (principal_id); end if; end $$;
+do $$ begin if to_regclass('app.idx_research_documents_tenant') is null then CREATE INDEX idx_research_documents_tenant ON app.research_documents USING btree (tenant_id); end if; end $$;
+do $$ begin if to_regclass('app.idx_research_documents_owner') is null then CREATE INDEX idx_research_documents_owner ON app.research_documents USING btree (owner_principal_id); end if; end $$;
+do $$ begin if to_regclass('app.idx_research_document_revisions_doc_tenant_owner') is null then CREATE INDEX idx_research_document_revisions_doc_tenant_owner ON app.research_document_revisions USING btree (document_id, tenant_id, owner_principal_id); end if; end $$;
+do $$ begin if to_regclass('app.idx_research_document_revisions_tenant') is null then CREATE INDEX idx_research_document_revisions_tenant ON app.research_document_revisions USING btree (tenant_id); end if; end $$;
+do $$ begin if to_regclass('app.idx_research_document_revisions_owner') is null then CREATE INDEX idx_research_document_revisions_owner ON app.research_document_revisions USING btree (owner_principal_id); end if; end $$;
+do $$ begin if to_regclass('app.idx_research_document_tombstones_tenant') is null then CREATE INDEX idx_research_document_tombstones_tenant ON app.research_document_tombstones USING btree (tenant_id); end if; end $$;
+do $$ begin if to_regclass('app.idx_research_document_tombstones_owner') is null then CREATE INDEX idx_research_document_tombstones_owner ON app.research_document_tombstones USING btree (owner_principal_id); end if; end $$;
+do $$ begin if to_regclass('app.idx_research_document_download_tickets_doc_tenant_owner') is null then CREATE INDEX idx_research_document_download_tickets_doc_tenant_owner ON app.research_document_download_tickets USING btree (document_id, tenant_id, owner_principal_id); end if; end $$;
+do $$ begin if to_regclass('app.idx_research_document_download_tickets_rev_doc_tenant_owner') is null then CREATE INDEX idx_research_document_download_tickets_rev_doc_tenant_owner ON app.research_document_download_tickets USING btree (revision_id, document_id, tenant_id, owner_principal_id); end if; end $$;
+do $$ begin if to_regclass('app.idx_research_document_download_tickets_tenant') is null then CREATE INDEX idx_research_document_download_tickets_tenant ON app.research_document_download_tickets USING btree (tenant_id); end if; end $$;
+do $$ begin if to_regclass('app.idx_research_document_download_tickets_owner') is null then CREATE INDEX idx_research_document_download_tickets_owner ON app.research_document_download_tickets USING btree (owner_principal_id); end if; end $$;
 
 do $$ begin
     if not exists (
