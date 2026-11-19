@@ -12,9 +12,10 @@ from psycopg import Connection
 from truealpha_contracts.etf_virtual_company import ETF_CONSOLIDATION_V0, EtfConsolidationDefinition
 from truealpha_contracts.execution import AvailabilityStatus, FactorValidationStatus, InputEvidenceStatus
 
+from data_engine.datahub._helpers import gppe_branch_predicate
 from data_engine.datahub.capture_core.status_dimensions import coverage_status_dimensions
 
-_LINES_SQL = """
+_LINES_SQL = f"""
 with vintage as (
     select distinct on (fund_id) fund_id, report_period, transaction_time
     from mart.fund_holdings_resolved
@@ -55,10 +56,7 @@ left join lateral (
         from mart.metric_node_values mnv
         where mnv.run_id = scope.capture_run_id
           and mnv.issuer_id = d.issuer_id
-          and (
-              (cil.operating_branch = 'financial' and mnv.node_key = %(bank_key)s)
-              or mnv.node_key = %(base_key)s
-          )
+          and {gppe_branch_predicate("mnv", "cil", bank_param="%(bank_key)s", base_param="%(base_key)s")}
         order by (mnv.node_key = %(bank_key)s) desc
         limit 1
     ) mnv on true

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import dataclasses
-import json
 import math
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -16,12 +15,15 @@ from factors.panel import GPPE_BANKING_TCE_SPEC, GPPE_V0_SPEC
 from factors.snapshot_inputs import MetricAvailability, ToptCoreSnapshotInput
 from truealpha_contracts.metrics import INPUT_KEY_ALIASES, METRICS
 from truealpha_contracts.models import DataSource
-from truealpha_runtime.storage import StorageError
 
-from data_engine import raw_store
 from data_engine.contracts.oracle_policy import load_oracle_policy
 from data_engine.contracts.sentinel_known_answers import SentinelKnownAnswer, load_sentinel_known_answers
-from data_engine.datahub._helpers import CAPTURE_OBSERVATION_JOIN, fetch_topt_cutoff
+from data_engine.datahub._helpers import (
+    CAPTURE_OBSERVATION_JOIN,
+    fetch_topt_cutoff,
+    gppe_branch_predicate,
+    read_raw_json,
+)
 from data_engine.datahub.capture_core.source_registrations import AsOfAxis, knowable_instant
 from data_engine.datahub.capture_core.universe_plane import UNIVERSE_SOURCES
 from data_engine.quality import vendor_oracle
@@ -306,12 +308,7 @@ def compare_independent_parse(
     )
 
 
-def stored_document(connection: psycopg.Connection[Any], fetch_id: int) -> dict[str, Any] | None:
-    try:
-        document = json.loads(raw_store.get_payload(connection, fetch_id))
-    except (LookupError, StorageError, ValueError):
-        return None
-    return document if isinstance(document, dict) else None
+stored_document = read_raw_json
 
 
 def _financial_observation(factor_input: ToptCoreSnapshotInput) -> str | None:
@@ -429,16 +426,13 @@ def _query_gppe_by_issuer(
     connection: psycopg.Connection[Any], run_id: str, cutoff: datetime
 ) -> dict[str, tuple[Decimal | None, str | None, str | None, datetime | None]]:
     rows = connection.execute(
-        """
+        f"""
         select distinct on (mnv.issuer_id)
                mnv.issuer_id, mnv.value, cil.operating_period_end, mnv.input_observation_ids, cil.cutoff, cil.result_id
         from mart.metric_node_values mnv
         join mart.capture_issuer_lineage cil using (run_id, issuer_id)
         where mnv.run_id = %(run_id)s
-          and (
-              (cil.operating_branch = 'financial' and mnv.node_key = %(bank_key)s)
-              or mnv.node_key = %(base_key)s
-          )
+          and {gppe_branch_predicate("mnv", "cil", bank_param="%(bank_key)s", base_param="%(base_key)s")}
         order by mnv.issuer_id, (mnv.node_key = %(bank_key)s) desc
         """,
         {"run_id": run_id, "bank_key": GPPE_BANKING_TCE_SPEC.root, "base_key": GPPE_V0_SPEC.root},

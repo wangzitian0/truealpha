@@ -31,7 +31,7 @@ from truealpha_runtime.reconciliation_policies import (
     INDEX_MEMBERSHIP_POLICY,
 )
 
-from data_engine.datahub._helpers import CAPTURE_OBSERVATION_JOIN, fetch_topt_cutoff, parse_decimal
+from data_engine.datahub._helpers import CAPTURE_OBSERVATION_JOIN, execute_many, fetch_topt_cutoff, parse_decimal
 from data_engine.datahub.capture_core.executor import SERVED_BY_FAILOVER
 from data_engine.datahub.capture_core.headcount import is_eligible_headcount_row
 from data_engine.datahub.capture_core.parser_identity import PARSER_VERSION_HISTORY
@@ -1110,7 +1110,7 @@ def persist(connection: Connection[Any], report: Mapping[str, Any]) -> str:
     if isinstance(cells_by_family, Mapping) and cells_by_family:
         families_meta: Mapping[str, Any] = report["families"] if isinstance(report.get("families"), Mapping) else {}
         run_id = str(report["run_id"])
-        for row in [
+        rows = [
             _cell_confidence_row(
                 run_id,
                 str(sid),
@@ -1129,8 +1129,8 @@ def persist(connection: Connection[Any], report: Mapping[str, Any]) -> str:
             if isinstance(fcells, Mapping)
             for sid, cell in sorted(fcells.items())
             if isinstance(cell, Mapping)
-        ]:
-            connection.execute(_CELL_CONFIDENCE_INSERT_SQL, row)
+        ]
+        execute_many(connection, _CELL_CONFIDENCE_INSERT_SQL, rows)
     return report_id
 
 
@@ -1147,6 +1147,7 @@ def evaluate_and_persist_run_cell_confidence(
     subjects = load_run_subjects(connection, run_id, cutoff, allow_integration_parser=True)
     oracle_rows, outcome_mass_by_origin = _oracle_context(connection, run_id, cutoff)
     out: dict[tuple[str, str], Decimal] = {}
+    pending_rows: list[tuple[Any, ...]] = []
 
     def _record(
         subject_id: str,
@@ -1159,8 +1160,7 @@ def evaluate_and_persist_run_cell_confidence(
         out[(subject_id, metric)] = grade.confidence
         if listing_alias and listing_alias != subject_id:
             out[(listing_alias, metric)] = grade.confidence
-        connection.execute(
-            _CELL_CONFIDENCE_INSERT_SQL,
+        pending_rows.append(
             _cell_confidence_row(
                 run_id,
                 subject_id,
@@ -1171,7 +1171,7 @@ def evaluate_and_persist_run_cell_confidence(
                 grade.policy_hash,
                 grade.input_hash,
                 grade.reason_codes,
-            ),
+            )
         )
 
     for policy in FAMILIES:
@@ -1235,6 +1235,7 @@ def evaluate_and_persist_run_cell_confidence(
                 )
                 _record(sid, "financial-fact", fld, grd, alias)
 
+    execute_many(connection, _CELL_CONFIDENCE_INSERT_SQL, pending_rows)
     for subject_id_raw, metric_raw, conf_raw in connection.execute(
         "select subject_id, metric, confidence from mart.cell_confidence where run_id = %s", (run_id,)
     ).fetchall():

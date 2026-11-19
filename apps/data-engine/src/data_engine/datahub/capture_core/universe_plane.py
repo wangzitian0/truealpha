@@ -20,6 +20,7 @@ from truealpha_contracts.models import DataSource
 from truealpha_contracts.universes import lane_name, record
 
 from data_engine import raw_store
+from data_engine.datahub._helpers import execute_many
 from data_engine.datahub.capture_core.concept_mapping import publish_governed_object
 from data_engine.datahub.capture_core.universe_corpus import TOPT_CORPUS_FILENAME, corpus_list_version, load_corpus
 from data_engine.datahub.fetch_key import FetchKey
@@ -334,6 +335,19 @@ def _seed_sec_listing_mic_aliases(
                 )
 
 
+def _insert_constituent_facts(connection: Connection[Any], rows: Sequence[tuple[Any, ...]]) -> None:
+    execute_many(
+        connection,
+        """
+        insert into staging.etf_constituent_facts
+            (etf_symbol, as_of, source, raw_fetch_id, ticker, company_name, weight,
+             cik, figi, knowable_at, market_cap, last_sale_price)
+        values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """,
+        rows,
+    )
+
+
 def _refresh_nport_constituents(
     connection: Connection[Any],
     source: UniverseSource,
@@ -379,27 +393,26 @@ def _refresh_nport_constituents(
     by_ticker = _aggregate_nport_holdings(holdings, resolved_ids, etf=source.etf, title_tickers=title_tickers)
     _ensure_ciks_for_tickers(list(by_ticker), cik_index, etf=source.etf, user_agent=_settings.sec_user_agent)
 
-    for ticker in sorted(by_ticker):
-        name, weight, figi = by_ticker[ticker]
-        connection.execute(
-            """
-            insert into staging.etf_constituent_facts
-                (etf_symbol, as_of, source, raw_fetch_id, ticker, company_name, weight, cik, figi, knowable_at)
-            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """,
+    _insert_constituent_facts(
+        connection,
+        [
             (
                 source.etf,
                 effective_as_of,
                 DataSource.NPORT.value,
                 fetch_id,
                 ticker,
-                name,
-                weight,
+                by_ticker[ticker][0],
+                by_ticker[ticker][1],
                 cik_index[ticker.replace(".", "-")],
-                figi,
+                by_ticker[ticker][2],
                 filing_dt,
-            ),
-        )
+                None,
+                None,
+            )
+            for ticker in sorted(by_ticker)
+        ],
+    )
     if source.mic is None:
         mic_index = sec.ticker_mic_index(http) if http is not None else sec.ticker_mic_index()
         _seed_sec_listing_mic_aliases(
@@ -543,14 +556,9 @@ def refresh_etf_constituents(
     figis = _resolve_figis(connection, tickers, as_of=as_of, api_key=openfigi_api_key)
     _ensure_ciks_for_tickers(tickers, cik_index, etf=source.etf, user_agent=_settings.sec_user_agent, figis=figis)
 
-    for row in rows:
-        connection.execute(
-            """
-            insert into staging.etf_constituent_facts
-                (etf_symbol, as_of, source, raw_fetch_id, ticker, company_name, market_cap, last_sale_price,
-                 cik, figi, knowable_at)
-            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """,
+    _insert_constituent_facts(
+        connection,
+        [
             (
                 source.etf,
                 as_of,
@@ -558,13 +566,16 @@ def refresh_etf_constituents(
                 fetch_id,
                 row["ticker"],
                 row["name"],
-                row.get("market_cap"),
-                row.get("last_sale_price"),
+                None,
                 cik_index[row["ticker"].replace(".", "-")],
                 figis[row["ticker"]],
                 fetched_at,
-            ),
-        )
+                row.get("market_cap"),
+                row.get("last_sale_price"),
+            )
+            for row in rows
+        ],
+    )
     return len(rows)
 
 

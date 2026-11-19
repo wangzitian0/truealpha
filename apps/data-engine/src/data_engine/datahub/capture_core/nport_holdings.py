@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import Any
 
 from factors.shared import entity_resolution as er
 from truealpha_contracts.models import DataSource
@@ -64,6 +65,20 @@ def capture_fund_holdings(connection, etf_ticker: str, *, http=None) -> Holdings
 
     fund_ref = f"etf:series:{series_id}"
     report_period = info["report_period"] or filing_date
+
+    def _record_id(entity_id: Any, source: str, id_type: str, id_value: str) -> None:
+        er.assert_identifier(
+            connection,
+            entity_id=entity_id,
+            source=source,
+            identifier_type=id_type,
+            identifier_value=id_value,
+            confidence=CONF_FILING,
+            transaction_time=filing_dt,
+            valid_from=report_period,
+            raw_ref=filing_ref,
+        )
+
     fund_uuid = er.ensure_entity(
         connection,
         fund_ref,
@@ -73,17 +88,7 @@ def capture_fund_holdings(connection, etf_ticker: str, *, http=None) -> Holdings
         raw_ref=filing_ref,
     )
     for id_type, id_value in (("ticker", etf_ticker.upper()), ("sec_series", series_id)):
-        er.assert_identifier(
-            connection,
-            entity_id=fund_uuid,
-            source="sec",
-            identifier_type=id_type,
-            identifier_value=id_value,
-            confidence=CONF_FILING,
-            transaction_time=filing_dt,
-            valid_from=report_period,
-            raw_ref=filing_ref,
-        )
+        _record_id(fund_uuid, "sec", id_type, id_value)
 
     inserted = resolved = minted = skipped = 0
     edged: set[str] = set()
@@ -92,36 +97,22 @@ def capture_fund_holdings(connection, etf_ticker: str, *, http=None) -> Holdings
             skipped += 1
             continue
         holding_id = er.resolve(connection, "isin", h.isin, as_of=filing_dt)
+        holding_name = h.name or h.isin
         if holding_id is None:
             holding_uuid = er.ensure_entity(
                 connection,
                 f"company:isin:{h.isin}",
                 "instrument",
-                h.name or h.isin,
+                holding_name,
                 transaction_time=filing_dt,
                 raw_ref=filing_ref,
             )
-            er.assert_identifier(
-                connection,
-                entity_id=holding_uuid,
-                source="nport",
-                identifier_type="isin",
-                identifier_value=h.isin,
-                confidence=CONF_FILING,
-                transaction_time=filing_dt,
-                valid_from=report_period,
-                raw_ref=filing_ref,
-            )
+            _record_id(holding_uuid, "nport", "isin", h.isin)
             holding_id = str(holding_uuid)
             minted += 1
         else:
             holding_uuid = er.coerce_entity_uuid(connection, holding_id, as_of=filing_dt) or er.ensure_entity(
-                connection,
-                holding_id,
-                "instrument",
-                h.name or h.isin,
-                transaction_time=filing_dt,
-                raw_ref=filing_ref,
+                connection, holding_id, "instrument", holding_name, transaction_time=filing_dt, raw_ref=filing_ref
             )
             resolved += 1
         if holding_id not in edged:

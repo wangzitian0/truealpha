@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
 
@@ -14,20 +13,6 @@ from truealpha_contracts.execution import AvailabilityStatus, FactorValidationSt
 from truealpha_contracts.universes import universes_with_role
 
 LOW_CONFIDENCE_FLOOR = Decimal("0.50")
-
-
-@dataclass(frozen=True)
-class StatusDimensions:
-    availability_status: AvailabilityStatus
-    source_evidence_status: InputEvidenceStatus
-    factor_validation_status: FactorValidationStatus
-
-    def as_columns(self) -> tuple[str, str, str]:
-        return (
-            self.availability_status.value,
-            self.source_evidence_status.value,
-            self.factor_validation_status.value,
-        )
 
 
 def contract_not_applicable_issuer_ids(

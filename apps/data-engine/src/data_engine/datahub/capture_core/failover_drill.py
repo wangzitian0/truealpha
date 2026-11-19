@@ -19,10 +19,7 @@ if TYPE_CHECKING:
         MarketPriceQuote,
     )
 
-DRILL_TAG = "truealpha/drill"
-DRILL_SEMANTIC = "market-price"
 MAX_DRILL_TICKERS = 3
-DRILL_KEY = "drill"
 _PRODUCTION_NAMES = frozenset({"production", "prod"})
 
 

@@ -25,6 +25,7 @@ from data_engine.datahub.capture_core.executor import (
     FetchSuccess,
     NormalizedRecord,
     RawResponse,
+    build_corroboration,
 )
 from data_engine.datahub.capture_core.failover_drill import FailoverDrill
 from data_engine.datahub.capture_core.parser_identity import MAPPING_VERSION, PARSER_VERSION
@@ -257,17 +258,18 @@ class MarketPriceAdapter:
             **bar_payload(quote, close_key=origin.value_key),
             "origin": origin.origin,
         }
-        return Corroboration(
+        return build_corroboration(
             origin=origin.origin,
+            parser_version=origin.parser_version,
+            mapping_version=origin.mapping_version,
+            payload=payload,
             transaction_time=quote.knowable_at,
-            record=NormalizedRecord(
-                payload=payload,
-                parser_version=origin.parser_version,
-                mapping_version=origin.mapping_version,
-            ),
             confidence=origin.confidence,
-            raw=self._raw(origin, target, quote),
-            normalized_sha256=canonical_sha256(payload),
+            raw_bytes=quote.raw_bytes,
+            raw_source=origin.raw_source,
+            record_id=f"{origin.origin}:{target.symbol}:{quote.as_of.isoformat()}",
+            existing_raw_fetch_id=quote.existing_raw_fetch_id,
+            existing_raw_sha256=quote.existing_raw_sha256,
         )
 
 

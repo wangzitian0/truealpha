@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any
 
 from factors.shared import entity_resolution as er
 from truealpha_contracts.models import DataSource
@@ -14,7 +15,6 @@ from data_engine.sources import openfigi, sec
 from data_engine.universe import pick_listing, sec_ticker
 
 CONF_OPENFIGI = 0.98
-_MINTED_PREFIX = "company:isin:"
 
 
 @dataclass(frozen=True)
@@ -159,6 +159,20 @@ def enrich_holding_identities(
             continue
         raw_ref, transaction_time = provenance[isin]
         valid_from = transaction_time.date().isoformat()
+
+        def _record_id(entity_id: Any, source: str, id_type: str, id_value: str) -> None:
+            er.assert_identifier(
+                connection,
+                entity_id=entity_id,
+                source=source,
+                identifier_type=id_type,
+                identifier_value=id_value,
+                confidence=CONF_OPENFIGI,
+                transaction_time=transaction_time,
+                valid_from=valid_from,
+                raw_ref=raw_ref,
+            )
+
         inst_uuid = er.ensure_entity(
             connection,
             f"company:isin:{isin}",
@@ -167,28 +181,8 @@ def enrich_holding_identities(
             transaction_time=transaction_time,
             raw_ref=raw_ref,
         )
-        er.assert_identifier(
-            connection,
-            entity_id=inst_uuid,
-            source="openfigi",
-            identifier_type="isin",
-            identifier_value=isin,
-            confidence=CONF_OPENFIGI,
-            transaction_time=transaction_time,
-            valid_from=valid_from,
-            raw_ref=raw_ref,
-        )
-        er.assert_identifier(
-            connection,
-            entity_id=inst_uuid,
-            source="openfigi-listing",
-            identifier_type="ticker",
-            identifier_value=ticker,
-            confidence=CONF_OPENFIGI,
-            transaction_time=transaction_time,
-            valid_from=valid_from,
-            raw_ref=raw_ref,
-        )
+        _record_id(inst_uuid, "openfigi", "isin", isin)
+        _record_id(inst_uuid, "openfigi-listing", "ticker", ticker)
         if index is None:
             index = sec.ticker_cik_index(http) if http is not None else sec.ticker_cik_index()
         cik = index.get(ticker)
@@ -204,29 +198,9 @@ def enrich_holding_identities(
             transaction_time=transaction_time,
             raw_ref=raw_ref,
         )
-        er.assert_identifier(
-            connection,
-            entity_id=issuer_uuid,
-            source="openfigi",
-            identifier_type="cik",
-            identifier_value=f"{cik:010d}",
-            confidence=CONF_OPENFIGI,
-            transaction_time=transaction_time,
-            valid_from=valid_from,
-            raw_ref=raw_ref,
-        )
-        er.assert_identifier(
-            connection,
-            entity_id=issuer_uuid,
-            source="openfigi",
-            identifier_type="ticker",
-            identifier_value=ticker,
-            confidence=CONF_OPENFIGI,
-            transaction_time=transaction_time,
-            valid_from=valid_from,
-            raw_ref=raw_ref,
-        )
-        added = er.add_edge(
+        _record_id(issuer_uuid, "openfigi", "cik", f"{cik:010d}")
+        _record_id(issuer_uuid, "openfigi", "ticker", ticker)
+        if er.add_edge(
             connection,
             from_id=issuer_uuid,
             to_id=inst_uuid,
@@ -236,8 +210,7 @@ def enrich_holding_identities(
             transaction_time=transaction_time,
             valid_from=valid_from,
             raw_ref=raw_ref,
-        )
-        if added:
+        ):
             repointed += 1
 
     return EnrichmentOutcome(
