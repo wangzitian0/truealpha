@@ -141,3 +141,50 @@ async def test_entities_http_and_mcp_usecases(monkeypatch: pytest.MonkeyPatch) -
     assert esc["result"]["module"] == "supply_chain_exposure"
     assert ear["result"]["module"] == "analyst_ratings"
     assert ed["tier"] == "tier_1"
+
+
+def test_entities_removes_thread_pools_and_fails_closed_on_db_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    import psycopg
+    from llm_service.services.auth_service import PrincipalRecord, access_context_for
+
+    assert not hasattr(entities_service, "ThreadPoolExecutor")
+
+    def _boom(*_a: Any, **_k: Any) -> Any:
+        raise psycopg.OperationalError("connection refused")
+
+    monkeypatch.setattr(entities_service, "with_mart_readonly", _boom)
+    monkeypatch.setattr(entities_service, "load_entity_display_items", lambda **_k: {})
+    monkeypatch.setattr(
+        entities_service,
+        "get_strategy_run_page",
+        lambda *_a, **_k: strategy_service.StrategyRunPageResponse(
+            available=False, reason="empty", strategy_id="large_model_value_v0"
+        ),
+    )
+
+    ctx = access_context_for(PrincipalRecord(principal_id="p:1", tenant_id="t:1", principal_kind="member"))
+    with pytest.raises(psycopg.OperationalError, match="connection refused"):
+        entities_service.get_entity_detail(ctx, issuer_id="issuer:nvda", database_url="postgresql://unused")
+    with pytest.raises(psycopg.OperationalError, match="connection refused"):
+        entities_service.get_themes_overview(database_url="postgresql://unused")
+    with pytest.raises(psycopg.OperationalError, match="connection refused"):
+        entities_service.get_fund_valuations(database_url="postgresql://unused")
+    with pytest.raises(psycopg.OperationalError, match="connection refused"):
+        entities_service.PostgresCompanyProfileReader(database_url="postgresql://unused").get_company_profile(
+            issuer_id="issuer:nvda"
+        )
+    with pytest.raises(psycopg.OperationalError, match="connection refused"):
+        entities_service.PostgresThemePurityLeaderboardReader(database_url="postgresql://unused").get_leaderboard(
+            theme_id="ai-infrastructure"
+        )
+    with pytest.raises(psycopg.OperationalError, match="connection refused"):
+        entities_service.PostgresEtfProfileReader(database_url="postgresql://unused").get_etf_profile(fund_id="QQQ")
+    with pytest.raises(psycopg.OperationalError, match="connection refused"):
+        entities_service.get_trace(
+            ctx,
+            issuer_id="issuer:nvda",
+            page=strategy_service.StrategyRunPageResponse(
+                available=True, strategy_id="large_model_value_v0", strategy_run_id="r:1", decisions=[]
+            ),
+            database_url="postgresql://unused",
+        )
