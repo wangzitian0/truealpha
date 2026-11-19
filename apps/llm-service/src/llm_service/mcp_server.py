@@ -66,6 +66,7 @@ from llm_service.services.panel_service import (
     load_macro_curve,
     load_universes_panel,
     load_wide_panel_coverage,
+    metric_node_values,
 )
 from llm_service.services.strategy_service import (
     DASHBOARD_STRATEGY_ID,
@@ -332,9 +333,19 @@ def build_mcp_server(
     ) -> PanelCoverageResponse | MetricNodeValueReport | MetricNodeValueUnavailable:
         req = request or PanelCoverageToolRequest()
         if req.node_key is not None and metric_node_repository is not None:
-            return active_metric_node.latest(node_key=req.node_key, issuer_id=req.issuer_id, limit=req.limit)
+            return metric_node_values(
+                node_key=req.node_key,
+                issuer_id=req.issuer_id,
+                limit=req.limit,
+                metric_node_repository=active_metric_node,
+            )
         if req.node_key is not None and req.universe is None and req.cutoff is None:
-            return active_metric_node.latest(node_key=req.node_key, issuer_id=req.issuer_id, limit=req.limit)
+            return metric_node_values(
+                node_key=req.node_key,
+                issuer_id=req.issuer_id,
+                limit=req.limit,
+                metric_node_repository=active_metric_node,
+            )
         return load_wide_panel_coverage(
             resolve_mcp_access_context(),
             strategy_id=req.strategy_id,
@@ -343,6 +354,7 @@ def build_mcp_server(
             node_key=req.node_key,
             issuer_id=req.issuer_id,
             limit=req.limit,
+            metric_node_repository=metric_node_repository,
         )
 
     @server.tool(
