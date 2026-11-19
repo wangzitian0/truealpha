@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Iterable
+from collections.abc import Collection, Iterable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
@@ -116,10 +116,15 @@ def _red_reasons(window: list[Run], in_a_row: int, newest_failed: bool, others_r
     return tuple(reasons)
 
 
-def judge(runs: Iterable[Run], *, now: datetime) -> Judgement:
+def judge(runs: Iterable[Run], *, now: datetime, active_jobs: Collection[str] | None = None) -> Judgement:
     baseline_start = now - timedelta(days=BASELINE_DAYS)
     window_start = now - timedelta(days=WINDOW_DAYS)
-    kept = sorted((r for r in runs if baseline_start <= r.created_at <= now), key=lambda r: r.created_at, reverse=True)
+    active = None if active_jobs is None else frozenset(active_jobs)
+    kept = sorted(
+        (r for r in runs if baseline_start <= r.created_at <= now and (active is None or r.job in active)),
+        key=lambda r: r.created_at,
+        reverse=True,
+    )
     jobs: list[JobHealth] = []
     for job in sorted({r.job for r in kept}):
         history = [r for r in kept if r.job == job]

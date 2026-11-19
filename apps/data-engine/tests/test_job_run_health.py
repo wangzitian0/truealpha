@@ -287,36 +287,59 @@ def run_check(url: str, monkeypatch: pytest.MonkeyPatch, tick: datetime = TICK) 
     }
 
 
-def test_this_morning_on_staging_is_red_for_the_two_jobs_that_fail_by_design(
+def test_this_morning_on_staging_is_red_for_active_failing_job_and_ignores_retired_jobs(
     run_storage_url: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The real history. `output_invariants_check` failed 15 of its 22 runs in 7 days. `runtime_shape_check`
-    failed 2 of its 3. The single failure of `topt_live_pipeline` and the three manual failures of
-    `head_reports_pipeline` stay under the bound; `/admin` surfaces them via `dagster.runs`."""
+    """Active `output_invariants_check` stays red (15/22 failures), while retired `runtime_shape_check`
+    and `release_fetch_proof` absent from live Dagster definitions do not poison `job_run_health`."""
     load_runs(run_storage_url, fixture_rows())
 
     verdict = run_check(run_storage_url, monkeypatch)
 
     assert verdict["ok"] is False
     assert verdict["ran_at"] == TICK
-    assert [name for name in verdict["output"]["red"]] == ["output_invariants_check", "runtime_shape_check"]
+    assert [name for name in verdict["output"]["red"]] == ["output_invariants_check"]
     assert verdict["summary"].startswith("failed: output_invariants_check (15 of 22 runs failed")
-    assert "runtime_shape_check (2 of 3 runs failed" in verdict["summary"]
+    assert "runtime_shape_check" not in verdict["summary"]
     assert "topt_live_pipeline" not in verdict["summary"]
     assert "head_reports_pipeline" not in verdict["summary"]
+
+
+def test_retired_jobs_outside_active_jobs_are_excluded_while_active_failures_stay_red() -> None:
+    retired_failures = runs_of("runtime_shape_check", "fffss")
+    active_failures = runs_of("topt_live_pipeline", "ssssff")
+    judgement_retired_only = job_run_health.judge(
+        newest_first(QUIET, retired_failures),
+        now=NOW,
+        active_jobs={"quiet_job", "topt_live_pipeline"},
+    )
+    judgement_with_active = job_run_health.judge(
+        newest_first(QUIET, retired_failures, active_failures),
+        now=NOW,
+        active_jobs={"quiet_job", "topt_live_pipeline"},
+    )
+
+    assert judgement_retired_only.red == ()
+    assert [job.job for job in judgement_with_active.red] == ["topt_live_pipeline"]
+
+    active = quality._active_dagster_job_names()
+    assert {"job_run_health_check", "output_invariants_check", "topt_live_pipeline"} <= active
+    assert "runtime_shape_check" not in active
+    assert "release_fetch_proof" not in active
 
 
 def test_this_morning_on_staging_is_green_without_the_two_jobs_that_fail_by_design(
     run_storage_url: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The other 13 jobs, with their real failures: 1 of 12 for `topt_live_pipeline` and 3 of 13 for
-    `head_reports_pipeline` in the 22 hours before the tick. None of them is red."""
+    """The 12 active non-verdict jobs (retired `release_fetch_proof` and VERDICT_JOBS excluded),
+    with 1 of 12 for `topt_live_pipeline` and 3 of 13 for `head_reports_pipeline` failing.
+    None of them is red."""
     load_runs(run_storage_url, [row for row in fixture_rows() if row[0] not in VERDICT_JOBS])
 
     verdict = run_check(run_storage_url, monkeypatch)
 
     assert verdict["ok"] is True
-    assert verdict["summary"].startswith("ok: 13 jobs")
+    assert verdict["summary"].startswith("ok: 12 jobs")
     assert verdict["output"]["red"] == []
 
 
@@ -379,3 +402,10 @@ def test_the_verdict_is_registered_once_and_the_schedule_runs_before_runtime_sha
     assert request.tags[TICK_TAG] == "2026-10-22T06:20:00+00:00"
     assert quality.JOB_RUN_HEALTH_CRON == "20 6 * * *"
     assert quality.job_run_health_schedule.cron_schedule == quality.JOB_RUN_HEALTH_CRON
+
+    from data_engine.lanes.standards import HEAD_REPORTS_CRON
+
+    head_min, head_hour, *_ = [int(x) for x in HEAD_REPORTS_CRON.split()[:2]]
+    health_min, health_hour, *_ = [int(x) for x in quality.JOB_RUN_HEALTH_CRON.split()[:2]]
+    base_min, base_hour, *_ = [int(x) for x in quality.TOPT_BASELINE_CRON.split()[:2]]
+    assert (head_hour, head_min) < (health_hour, health_min) < (base_hour, base_min)
