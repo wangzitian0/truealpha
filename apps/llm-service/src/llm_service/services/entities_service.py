@@ -102,8 +102,6 @@ _COMPANY_DECISION_SQL = f"""
     and {served_or_empty_head_predicate("scope.capture_run_id")}
   order by d.cutoff_at desc limit 1
 """
-
-_THEME_VALID_PREDICATE = f"p.partition_id is not null and {served_or_empty_head_predicate('p.run_id')}"
 _FUND_VIRTUAL_COLS = (
     "fund_id, coalesce(fund_name, fund_id) as fund_name,"
     ' to_char(cutoff, \'YYYY-MM-DD"T"HH24:MI:SS"Z"\') as cutoff,'
@@ -316,8 +314,8 @@ def _fetch_issuer_display_map_from_cursor(
             out.setdefault(leg, item)
     if issuer_id not in out:
         for cand in candidates:
-            if item := out.get(cand):
-                out[issuer_id] = item
+            if matched := out.get(cand):
+                out[issuer_id] = matched
                 break
     if issuer_id not in out:
         resolved_id, static_ticker, static_label = resolve_static_entity_display(issuer_id)
@@ -787,7 +785,8 @@ def _fetch_company_themes_from_cursor(cur: Any, candidates: list[str]) -> list[d
                  coalesce(p.availability_status, 'unavailable') as availability_status
           from mart.issuer_theme_purity p
           where p.issuer_id = any(%s::text[])
-            and {_THEME_VALID_PREDICATE}
+            and p.partition_id is not null
+            and {served_or_empty_head_predicate("p.run_id")}
           order by p.theme_id, p.cutoff desc, p.created_at desc
         ) latest_per_theme
         order by raw_share desc nulls last, theme asc
@@ -907,7 +906,8 @@ class PostgresThemePurityLeaderboardReader:
                            p.cutoff, p.created_at
                     from mart.issuer_theme_purity p
                     where (p.theme_id = %s or p.theme_id = %s or lower(p.theme) = lower(%s))
-                      and {_THEME_VALID_PREDICATE}
+                      and p.partition_id is not null
+                      and {served_or_empty_head_predicate("p.run_id")}
                     order by p.issuer_id, p.cutoff desc, p.created_at desc
                 )
                 select coalesce(ei.legacy_id, l.issuer_id) as issuer_id,
