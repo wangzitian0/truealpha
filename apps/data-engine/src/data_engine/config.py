@@ -1,7 +1,6 @@
 from typing import Literal
 
 from infra2_sdk.runtime.environment import RuntimeEnvKey
-from pydantic import AliasChoices
 from truealpha_contracts.common import CaptureEnvironment
 from truealpha_runtime import RuntimeSettings, database_url_field
 from truealpha_runtime.config import _schema_field as _f
@@ -20,16 +19,14 @@ class Settings(RuntimeSettings):
     def capture_environment(self) -> CaptureEnvironment:
         return CaptureEnvironment(self.environment_tier.value)
 
-    release_manifest_id: str = _f(
-        "", "release", "release", validation_alias=AliasChoices(RuntimeEnvKey.RELEASE_ID.value, "RELEASE_MANIFEST_ID")
-    )
+    release_manifest_id: str = _f("", "release", "release", validation_alias=RuntimeEnvKey.RELEASE_ID.value)
     data_engine_image_digest: str = _f("", "release", "release", validation_alias=RuntimeEnvKey.IMAGE_DIGEST.value)
     configuration_sha256: str = _f("", "release", "release", validation_alias=RuntimeEnvKey.CONFIGURATION_SHA256.value)
     capture_approved_by: str = _f(
         "",
         "decision",
         "release",
-        validation_alias=AliasChoices("CAPTURE_APPROVED_BY", "TRUEALPHA_CAPTURE_APPROVED_BY"),
+        validation_alias="CAPTURE_APPROVED_BY",
     )
     database_url: str = database_url_field(
         composed_from="postgresql://postgres:{POSTGRES_PASSWORD}@127.0.0.1:{env:TA_POSTGRES_PORT}/truealpha",

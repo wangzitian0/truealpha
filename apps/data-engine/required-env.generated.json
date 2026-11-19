@@ -214,9 +214,7 @@
     {
       "field": "release_manifest_id",
       "env": "RELEASE_ID",
-      "aliases": [
-        "RELEASE_MANIFEST_ID"
-      ],
+      "aliases": [],
       "required": false,
       "injected": true,
       "has_default": true,
@@ -273,9 +271,7 @@
     {
       "field": "capture_approved_by",
       "env": "CAPTURE_APPROVED_BY",
-      "aliases": [
-        "TRUEALPHA_CAPTURE_APPROVED_BY"
-      ],
+      "aliases": [],
       "required": false,
       "injected": true,
       "has_default": true,

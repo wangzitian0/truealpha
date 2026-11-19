@@ -177,16 +177,16 @@ def test_the_release_ref_comes_from_settings_not_from_the_process_environment(
     )
 
 
-def test_the_settings_model_resolves_canonical_and_legacy_release_keys(
+def test_the_settings_model_resolves_canonical_release_keys(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Settings resolves canonical SDK environment variables and legacy Vault aliases (#1367)."""
+    """Settings resolves canonical SDK environment variables (#1367)."""
     digest = "sha256:" + "d" * 64
     release_id = "release-manifest:" + "e" * 64
     config_sha = "a" * 64
     monkeypatch.setenv("IMAGE_DIGEST", digest)
     monkeypatch.setenv("RELEASE_ID", release_id)
-    monkeypatch.setenv("TRUEALPHA_CAPTURE_APPROVED_BY", "zitian")
+    monkeypatch.setenv("CAPTURE_APPROVED_BY", "zitian")
     monkeypatch.setenv("CONFIGURATION_SHA256", config_sha)
     monkeypatch.setenv("LLM_MODEL", "glm-5.3-flash")
     settings = Settings(_env_file=None)
@@ -197,10 +197,19 @@ def test_the_settings_model_resolves_canonical_and_legacy_release_keys(
     assert settings.llm_model == "glm-5.3-flash"
     assert "migrations_database_url" not in Settings.model_fields
 
-    monkeypatch.delenv("RELEASE_ID")
-    monkeypatch.delenv("TRUEALPHA_CAPTURE_APPROVED_BY")
-    monkeypatch.setenv("RELEASE_MANIFEST_ID", release_id)
+
+def test_retired_aliases_do_not_populate_release_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    """RELEASE_MANIFEST_ID and TRUEALPHA_CAPTURE_APPROVED_BY no longer populate Settings (#1727)."""
+    for key in ("RELEASE_ID", "CAPTURE_APPROVED_BY"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("RELEASE_MANIFEST_ID", "release-manifest:" + "e" * 64)
+    monkeypatch.setenv("TRUEALPHA_CAPTURE_APPROVED_BY", "zitian")
+    retired = Settings(_env_file=None)
+    assert retired.release_manifest_id == Settings.model_fields["release_manifest_id"].default
+    assert retired.capture_approved_by == Settings.model_fields["capture_approved_by"].default
+
+    monkeypatch.setenv("RELEASE_ID", "release-manifest:" + "f" * 64)
     monkeypatch.setenv("CAPTURE_APPROVED_BY", "wangzitian0")
-    legacy = Settings(_env_file=None)
-    assert legacy.release_manifest_id == release_id
-    assert legacy.capture_approved_by == "wangzitian0"
+    canonical = Settings(_env_file=None)
+    assert canonical.release_manifest_id == "release-manifest:" + "f" * 64
+    assert canonical.capture_approved_by == "wangzitian0"
