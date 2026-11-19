@@ -19,6 +19,11 @@ from llm_service.config import settings
 from llm_service.services._db import with_app_runtime
 
 SESSION_COOKIE_NAME = "truealpha_session"
+MCP_SERVICE_PRINCIPAL_ID = "principal:llm-service-mcp"
+MCP_OWNER_PRINCIPAL_ID = "principal:owner"
+MCP_SERVICE_TENANT_ID = "tenant:truealpha"
+MCP_DELEGATION_ID = "delegation:mcp-bearer-token"
+MCP_CONTEXT_LIFETIME = timedelta(minutes=5)
 _JWT_ALGORITHM = "HS256"
 _DUMMY_BCRYPT_HASH = bcrypt.hashpw(b"timing-equalizer-secret", bcrypt.gensalt(rounds=10)).decode("ascii")
 
@@ -282,4 +287,22 @@ def access_context_for(principal: PrincipalRecord) -> AccessContext:
         authentication_method=AuthenticationMethod.BROWSER_SESSION,
         issued_at=now,
         expires_at=now + timedelta(minutes=settings.access_token_expire_minutes),
+    )
+
+
+def resolve_mcp_access_context() -> AccessContext:
+    """Build the owner-delegated AccessContext for authenticated MCP callers."""
+    issued_at = datetime.now(UTC)
+    stamp = issued_at.timestamp()
+    return AccessContext(
+        context_id=f"ctx:mcp-owner:{stamp}",
+        principal_id=MCP_OWNER_PRINCIPAL_ID,
+        tenant_id=MCP_SERVICE_TENANT_ID,
+        session_id=f"session:mcp-owner:{stamp}",
+        authentication_method=AuthenticationMethod.DELEGATED_MCP,
+        principal_kind=PrincipalKind.ADMINISTRATOR,
+        issued_at=issued_at,
+        expires_at=issued_at + MCP_CONTEXT_LIFETIME,
+        delegated_by_service_principal_id=MCP_SERVICE_PRINCIPAL_ID,
+        delegation_id=MCP_DELEGATION_ID,
     )

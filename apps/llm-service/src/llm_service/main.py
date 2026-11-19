@@ -7,9 +7,10 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.routing import APIRoute
 from infra2_sdk.fastapi import init_service
+from starlette.types import ASGIApp, Receive, Scope, Send
 from truealpha_contracts.environment_contract import load_environment_contract
 from truealpha_runtime.boot import assert_environment
 from truealpha_runtime.telemetry import telemetry_config_error
@@ -18,7 +19,7 @@ from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 from llm_service.api.v1 import admin, auth, entities, library, panel, strategy
 from llm_service.config import settings
 from llm_service.mcp_auth import BearerTokenGate
-from llm_service.mcp_server import mcp
+from llm_service.mcp_server import build_mcp_server
 
 ENV_MANIFEST_PATH = Path("apps/llm-service/required-env.generated.json")
 ROUTED_PREFIX = "/api"
@@ -40,6 +41,33 @@ _SYSTEM_PROBES: dict[str, str] = {
 }
 
 
+class _McpRuntime:
+    """Host FastMCP Streamable HTTP inside FastAPI's ASGI lifespan without eager import side effects."""
+
+    def __init__(self) -> None:
+        self._http_app: ASGIApp | None = None
+
+    @asynccontextmanager
+    async def lifespan(self) -> AsyncIterator[None]:
+        server = build_mcp_server()
+        self._http_app = server.streamable_http_app()
+        try:
+            async with server.session_manager.run():
+                yield
+        finally:
+            self._http_app = None
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if self._http_app is None:
+            resp = JSONResponse({"error": "mcp_unavailable"}, status_code=503)
+            await resp(scope, receive, send)
+            return
+        await self._http_app(scope, receive, send)
+
+
+_mcp_runtime = _McpRuntime()
+
+
 def refuse_to_boot_on_a_missing_environment() -> None:
     assert_environment(ENV_MANIFEST_PATH, require_injected=settings.is_deployed)
 
@@ -47,7 +75,7 @@ def refuse_to_boot_on_a_missing_environment() -> None:
 @asynccontextmanager
 async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
     refuse_to_boot_on_a_missing_environment()
-    async with mcp.session_manager.run():
+    async with _mcp_runtime.lifespan():
         yield
 
 
@@ -63,7 +91,7 @@ def mcp_slash(request: Request) -> RedirectResponse:
 
 app.mount(
     "/mcp",
-    BearerTokenGate(mcp.streamable_http_app(), expected_token=lambda: settings.mcp_bearer_token),
+    BearerTokenGate(_mcp_runtime, expected_token=lambda: settings.mcp_bearer_token),
 )
 
 
