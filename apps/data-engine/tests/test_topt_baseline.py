@@ -19,6 +19,7 @@ import re
 import time
 from collections.abc import Iterator
 from datetime import UTC, date, datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -30,7 +31,7 @@ from data_engine.datahub import market_prices
 from data_engine.lanes import quality
 from data_engine.quality import topt_baseline
 from data_engine.quality.nightly_verdicts import SUMMARY_LIMIT, TICK_TAG
-from data_engine.quality.topt_baseline import MIB, Row
+from data_engine.quality.topt_baseline import MIB, Row, SupplyChainParityRow, ThemePurityParityRow
 from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.environment_contract import load_environment_contract
 from truealpha_runtime.testing import isolated_test_database
@@ -189,37 +190,36 @@ def passing() -> dict[str, Row]:
     }
 
 
-def test_the_verdict_is_never_green_while_a_row_is_not_measured() -> None:
-    """Unknown is not OK. Q3 compares two environments and cannot run in one, so four passing rows stay red."""
-    judgement = topt_baseline.judge(**passing())
+def test_the_verdict_stays_red_while_a_single_db_row_is_not_measured() -> None:
+    """Unknown is not OK. An unmeasured single-DB check keeps the verdict red."""
+    rows = passing() | {"server": Row("C1", "unmeasured", "C1 code server 100/260 MiB, measured at 13 h")}
+    judgement = topt_baseline.judge(**rows)
 
     assert judgement.ok is False
-    assert [row.key for row in judgement.unmeasured] == ["Q3"]
-    assert judgement.summary == (
-        "Q3 not measured: compares two environments; no database sees the other. passed: Q1, R1, C1, S"
-    )
+    assert [row.key for row in judgement.unmeasured] == ["C1"]
+    assert judgement.summary == "C1 code server 100/260 MiB, measured at 13 h. passed: Q1, R1, S"
 
 
 def test_a_red_summary_with_no_failed_row_leads_with_the_reason_and_not_with_the_passed_rows() -> None:
     """`verdict()` writes "failed: " before it. A text that starts with the passed rows would read "failed: passed:"."""
-    summary = topt_baseline.judge(**passing()).summary
+    rows = passing() | {"server": Row("C1", "unmeasured", "C1 unmeasured: waiting for 13 h")}
+    summary = topt_baseline.judge(**rows).summary
 
-    assert summary.startswith("Q3 not measured: "), summary
+    assert summary.startswith("C1 unmeasured: "), summary
     assert "failed: passed" not in f"failed: {summary}"
-    assert "not measured: Q3" not in summary, "the keys of the rows that are not measured are named once"
+    assert "not measured: C1" not in summary, "the keys of the rows that are not measured are named once"
 
 
-def test_the_verdict_is_green_when_every_row_passes(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(topt_baseline, "NOT_MEASURED", {})
-
+def test_the_verdict_is_green_when_every_single_db_row_passes() -> None:
+    """Q3 compares staging vs production out-of-band, so single-DB Q1, R1, C1, S green means ok=True."""
     judgement = topt_baseline.judge(**passing())
 
     assert judgement.ok is True
+    assert judgement.unmeasured == ()
     assert judgement.summary == "ok: Q1 ok; R1 ok; C1 ok; S ok"
 
 
-def test_one_failing_row_makes_the_verdict_red_even_with_nothing_unmeasured(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(topt_baseline, "NOT_MEASURED", {})
+def test_one_failing_row_makes_the_verdict_red_even_with_nothing_unmeasured() -> None:
     rows = passing() | {"quota": Row("R1", "fail", "R1 over")}
 
     judgement = topt_baseline.judge(**rows)
@@ -238,10 +238,24 @@ def test_the_summary_of_today_fits_the_column_and_names_every_failure() -> None:
 
     assert judgement.summary == (
         "Q1 GPPE 16/20 (80.0%) against 95.0%; R1 twelvedata 408/480 on 11-10 (85.0%) against 70.0%;"
-        " C1 code server 268/260 MiB, age 14.0 h; S schema differs from the chain in 790 places."
-        " not measured: Q3"
+        " C1 code server 268/260 MiB, age 14.0 h; S schema differs from the chain in 790 places"
     )
     assert len(judgement.summary) <= SUMMARY_LIMIT
+
+
+def test_q3_cross_environment_parity_passes_on_match_and_fails_on_drift_or_empty() -> None:
+    sc = (SupplyChainParityRow("issuer:cik:1", "ext:v1", "available", Decimal("0.25")),)
+    tp = (ThemePurityParityRow("issuer:cik:1", "theme:ai", "ext:v1", "available", Decimal("0.60")),)
+    assert topt_baseline.judge_q3_parity(sc, sc, tp, tp) == Row(
+        "Q3", "pass", "Q3 parity matched (1 supply-chain, 1 theme-purity rows)"
+    )
+
+    drifted_sc = (SupplyChainParityRow("issuer:cik:1", "ext:v1", "unavailable", Decimal("0.25")),)
+    fail_row = topt_baseline.judge_q3_parity(sc, drifted_sc, tp, tp)
+    assert fail_row.state == "fail" and "supply_chain=1, theme_purity=0" in fail_row.text
+
+    empty_row = topt_baseline.judge_q3_parity((), sc, tp, tp)
+    assert empty_row.state == "fail" and "missing comparable" in empty_row.text
 
 
 # --- the readers ----------------------------------------------------------------------------------------------
@@ -387,8 +401,8 @@ def test_the_deployed_job_records_a_red_verdict_and_ends_green(
     assert summary.startswith("failed: Q1 no served TOPT head"), "verdict() adds the prefix once"
     assert "failed: failed:" not in summary
     assert "C1 the size of the code server cannot be read" in summary
-    assert "R1 twelvedata" not in summary.split("not measured")[0], "an empty ledger is inside its share"
-    assert summary.endswith("not measured: Q3")
+    assert "R1 twelvedata" not in summary, "an empty ledger is inside its share"
+    assert "not measured:" not in summary
     assert "S schema" not in summary, "a database that ran the chain has no drift: the row S is green"
     assert json.loads(result.output_for_node("run_topt_baseline"))["failed"] == ["Q1", "C1"]
     assert len(summary) <= SUMMARY_LIMIT
@@ -893,13 +907,16 @@ def test_s_sweeps_the_references_that_a_killed_run_left_behind(
     assert schema_drift.REFERENCE_PREFIX == "truealpha_chain_reference_"
 
 
-def test_the_summary_lists_failed_texts_passed_names_and_not_measured_names() -> None:
+def test_the_summary_lists_failed_texts_passed_names_and_unmeasured_names() -> None:
     """A green row must be visible: without the list, a row that passed looks like a row that did not run."""
-    rows = passing() | {"quota": Row("R1", "fail", "R1 over")}
+    rows = passing() | {
+        "quota": Row("R1", "fail", "R1 over"),
+        "server": Row("C1", "unmeasured", "C1 waiting"),
+    }
 
     judgement = topt_baseline.judge(**rows)
 
-    assert judgement.summary == "R1 over. passed: Q1, C1, S. not measured: Q3"
+    assert judgement.summary == "R1 over. passed: Q1, S. not measured: C1"
 
 
 def test_the_image_carries_what_the_schema_row_needs() -> None:

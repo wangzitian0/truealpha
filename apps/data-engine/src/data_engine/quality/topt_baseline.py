@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -31,7 +31,8 @@ QUOTA_SOURCE = TWELVE_DATA_SEAT
 QUOTA_DAYS = 7
 MATURE_SERVER_HOURS = 13
 
-NOT_MEASURED: Mapping[str, str] = {"Q3": "compares two environments; no database sees the other"}
+#: Cross-environment Q3 parity runs via `read_q3_rows` + `judge_q3_parity`, not single-DB `topt_baseline_check`.
+NOT_MEASURED: Mapping[str, str] = {}
 IMAGE_DB_DIR = Path("/app/db")
 MASKED_ENVIRONMENT = ("APP_SERVICE_DB_PASSWORD",)
 
@@ -147,9 +148,87 @@ def judge_schema(*, differences: int | None, failure: str = "") -> Row:
     return Row("S", "fail", f"S schema differs from the chain in {differences} {places}")
 
 
-def judge(*, gppe: Row, quota: Row, server: Row, schema: Row) -> Judgement:
+@dataclass(frozen=True)
+class SupplyChainParityRow:
+    issuer_id: str
+    extractor: str
+    availability_status: str
+    exposure_score: Decimal | None
+
+
+@dataclass(frozen=True)
+class ThemePurityParityRow:
+    issuer_id: str
+    theme_id: str
+    extractor: str
+    availability_status: str
+    theme_share: Decimal | None
+
+
+def judge_q3_parity(
+    staging_supply_chain: Iterable[SupplyChainParityRow],
+    prod_supply_chain: Iterable[SupplyChainParityRow],
+    staging_theme_purity: Iterable[ThemePurityParityRow],
+    prod_theme_purity: Iterable[ThemePurityParityRow],
+) -> Row:
+    """Compare staging and production supply-chain and theme-purity rows on matched extractor identities."""
+    st_sc = {(r.issuer_id, r.extractor): (r.availability_status, r.exposure_score) for r in staging_supply_chain}
+    pr_sc = {(r.issuer_id, r.extractor): (r.availability_status, r.exposure_score) for r in prod_supply_chain}
+    st_tp = {
+        (r.issuer_id, r.theme_id, r.extractor): (r.availability_status, r.theme_share) for r in staging_theme_purity
+    }
+    pr_tp = {(r.issuer_id, r.theme_id, r.extractor): (r.availability_status, r.theme_share) for r in prod_theme_purity}
+    sc_common = st_sc.keys() & pr_sc.keys()
+    tp_common = st_tp.keys() & pr_tp.keys()
+    if not sc_common or not tp_common:
+        return Row("Q3", "fail", "Q3 missing comparable supply-chain or theme-purity rows across environments")
+    sc_diffs = len(st_sc.keys() ^ pr_sc.keys()) + sum(1 for k in sc_common if st_sc[k] != pr_sc[k])
+    tp_diffs = len(st_tp.keys() ^ pr_tp.keys()) + sum(1 for k in tp_common if st_tp[k] != pr_tp[k])
+    if sc_diffs or tp_diffs:
+        return Row("Q3", "fail", f"Q3 parity drift: supply_chain={sc_diffs}, theme_purity={tp_diffs}")
+    return Row("Q3", "pass", f"Q3 parity matched ({len(sc_common)} supply-chain, {len(tp_common)} theme-purity rows)")
+
+
+def judge(*, gppe: Row, quota: Row, server: Row, schema: Row, q3: Row | None = None) -> Judgement:
+    base = (gppe, quota, server, schema) if q3 is None else (gppe, quota, server, schema, q3)
     waiting = tuple(Row(key, "unmeasured", f"{key} not measured: {reason}") for key, reason in NOT_MEASURED.items())
-    return Judgement((gppe, quota, server, schema, *waiting))
+    return Judgement((*base, *waiting))
+
+
+def read_q3_rows(
+    connection: Any, run_id: str
+) -> tuple[tuple[SupplyChainParityRow, ...], tuple[ThemePurityParityRow, ...]]:
+    sc_rows = connection.execute(
+        "select issuer_id, extractor, availability_status, exposure_score "
+        "from mart.issuer_supply_chain_exposure where run_id = %s order by issuer_id, extractor",
+        (run_id,),
+    ).fetchall()
+    tp_rows = connection.execute(
+        "select issuer_id, theme_id, extractor, availability_status, theme_share "
+        "from mart.issuer_theme_purity where run_id = %s order by issuer_id, theme_id, extractor",
+        (run_id,),
+    ).fetchall()
+    return (
+        tuple(
+            SupplyChainParityRow(
+                str(issuer_id),
+                str(extractor),
+                str(status),
+                None if score is None else Decimal(str(score)),
+            )
+            for issuer_id, extractor, status, score in sc_rows
+        ),
+        tuple(
+            ThemePurityParityRow(
+                str(issuer_id),
+                str(theme_id),
+                str(extractor),
+                str(status),
+                None if share is None else Decimal(str(share)),
+            )
+            for issuer_id, theme_id, extractor, status, share in tp_rows
+        ),
+    )
 
 
 HEAD_SQL = "select run_id, freshness, availability from mart.served_head where universe_id like %s order by advanced_at desc limit 1"
