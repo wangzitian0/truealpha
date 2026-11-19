@@ -9,7 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 from llm_service.main import app
 from llm_service.mcp_server import build_mcp_server
-from llm_service.services import panel_service, strategy_service
+from llm_service.services import panel_service
 
 from ._helpers import auth_client
 
@@ -105,21 +105,25 @@ async def test_panel_http_and_mcp_usecases(monkeypatch: pytest.MonkeyPatch) -> N
                 return [{"series_id": "us_treasury_note_10_year", "observation_day": "2026-11-16", "value": "4.25"}]
             return []
 
+    from truealpha_runtime.strategy_run import StrategyRunReport
+
+    class _FakeStrategyRepo:
+        def __init__(self, **_k: Any) -> None:
+            pass
+
+        def get_latest(self, *, strategy_id: str, context: Any) -> StrategyRunReport:
+            del context
+            return StrategyRunReport(
+                strategy_id=strategy_id,
+                strategy_run_id="strategy-run:1",
+                corpus_sha256="a" * 64,
+                source="mart",
+                decisions=(),
+            )
+
     monkeypatch.setattr(panel_service, "with_ops_reader", lambda fn, **_k: fn(_FakeOpsCur()))
     monkeypatch.setattr(panel_service, "with_mart_readonly", lambda fn, **_k: fn(_FakeMartCur()))
-    monkeypatch.setattr(
-        strategy_service,
-        "get_strategy_run_page",
-        lambda *_a, **_k: strategy_service.StrategyRunPageResponse(
-            available=True,
-            strategy_id="large_model_value_v0",
-            strategy_run_id="strategy-run:1",
-            cutoff_at="2026-06-30T00:00:00Z",
-            universe="all",
-            total_decisions=0,
-            decisions=[],
-        ),
-    )
+    monkeypatch.setattr(panel_service, "PostgresStrategyRunRepository", _FakeStrategyRepo)
 
     client, headers = auth_client(monkeypatch)
     uni_res = client.get("/api/v1/panel/universes", headers=headers)
@@ -151,3 +155,52 @@ async def test_panel_http_and_mcp_usecases(monkeypatch: pytest.MonkeyPatch) -> N
     assert uni_mcp["heads"][0]["kind"] == "topt"
     assert cov_mcp["result"]["node_key"] == "gppe_uniform_charge_v0"
     assert mac_mcp["available"] is True
+
+
+def test_panel_decouples_from_strategy_and_fails_closed_on_db_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    import psycopg
+    from llm_service.services import strategy_service
+    from truealpha_runtime.strategy_run import StrategyRunUnavailable
+
+    # 1. Calling load_wide_panel_coverage never crosses into strategy_service.get_strategy_run_page.
+    monkeypatch.setattr(
+        strategy_service,
+        "get_strategy_run_page",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("panel must not call strategy_service")),
+    )
+
+    class _FakeStrategyRepo:
+        def __init__(self, **_k: Any) -> None:
+            pass
+
+        def get_latest(self, *, strategy_id: str, context: Any) -> StrategyRunUnavailable:
+            del context
+            return StrategyRunUnavailable(strategy_id=strategy_id, reason="no_runs_recorded")
+
+    monkeypatch.setattr(panel_service, "PostgresStrategyRunRepository", _FakeStrategyRepo, raising=False)
+    from llm_service.services.auth_service import PrincipalRecord, access_context_for
+
+    ctx = access_context_for(PrincipalRecord(principal_id="p:1", tenant_id="t:1", principal_kind="member"))
+    cov = panel_service.load_wide_panel_coverage(ctx, database_url="postgresql://unused")
+    assert cov.available is False and cov.reason == "no_runs_recorded"
+
+    # 2. OperationalError is never silently swallowed into {} or generic available=False.
+    def _op_fail(*_a: Any, **_k: Any) -> Any:
+        raise psycopg.OperationalError("connection refused")
+
+    monkeypatch.setattr(panel_service, "with_mart_readonly", _op_fail)
+    with pytest.raises(psycopg.OperationalError, match="connection refused"):
+        panel_service.load_entity_display_items(database_url="postgresql://unused")
+    with pytest.raises(psycopg.OperationalError, match="connection refused"):
+        panel_service._load_wide_panel(("gross_profit",), database_url="postgresql://unused")
+    with pytest.raises(psycopg.OperationalError, match="connection refused"):
+        panel_service.load_macro_curve(database_url="postgresql://unused")
+
+    # 3. UndefinedTable on macro_series_status still degrades cleanly until migrated.
+    monkeypatch.setattr(
+        panel_service,
+        "with_mart_readonly",
+        lambda *_a, **_k: (_ for _ in ()).throw(psycopg.errors.UndefinedTable("missing macro view")),
+    )
+    macro = panel_service.load_macro_curve(database_url="postgresql://unused")
+    assert macro.available is False and macro.reason == "Macro mart views not yet migrated"

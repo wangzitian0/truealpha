@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
 from typing import Any
 
 import psycopg
 from pydantic import BaseModel, Field
-from truealpha_contracts.environment_contract import EnvironmentContract
+from truealpha_contracts.environment_contract import EnvironmentContract, UnknownUniverse, load_environment_contract
+from truealpha_contracts.strategy import ExclusionReason
 from truealpha_contracts.universes import id_prefix_like, key_of_lane, keys, lane_name, universe_with_role
 from truealpha_runtime.access import AccessContext
 from truealpha_runtime.issuer_modules_mart import ENTITY_DISPLAY_SQL, resolve_static_entity_display
@@ -16,12 +18,17 @@ from truealpha_runtime.research_report_mart import (
     MetricNodeValueUnavailable,
     PostgresMetricNodeValueRepository,
 )
+from truealpha_runtime.strategy_run import StrategyRunReport, StrategyRunUnavailable
+from truealpha_runtime.strategy_run_postgres import PostgresStrategyRunRepository, read_strategy_provenance
 
 from llm_service.config import settings
 from llm_service.services._db import with_mart_readonly, with_ops_reader
 
 SERVED_HEAD_SQL = "select run_id, freshness, availability from mart.served_head"
-_UNDEFINED_TABLE = "42P01"
+DASHBOARD_STRATEGY_ID = "large_model_value_v0"
+_EXCLUSION_LABELS: dict[str, str] = {
+    reason.value: reason.value.replace("_", " ").capitalize() for reason in ExclusionReason
+}
 
 
 def served_run_predicate(column: str) -> str:
@@ -190,10 +197,7 @@ def load_entity_display_items(*, database_url: str | None = None) -> dict[str, E
                 out[legacy_id] = item
         return out
 
-    try:
-        return with_mart_readonly(_q, database_url=database_url)
-    except psycopg.Error:
-        return {}
+    return with_mart_readonly(_q, database_url=database_url)
 
 
 def _load_wide_panel(
@@ -234,16 +238,20 @@ def _load_wide_panel(
             )
         return by_issuer
 
-    try:
-        return with_mart_readonly(_q, database_url=database_url)
-    except psycopg.Error:
-        return {}
+    return with_mart_readonly(_q, database_url=database_url)
 
 
 def metric_node_values(
-    *, node_key: str, issuer_id: str | None = None, limit: int = 100, database_url: str | None = None
+    *,
+    node_key: str,
+    issuer_id: str | None = None,
+    limit: int = 100,
+    metric_node_repository: Any | None = None,
+    database_url: str | None = None,
 ) -> MetricNodeValueReport | MetricNodeValueUnavailable:
-    repo = PostgresMetricNodeValueRepository(database_url=database_url or settings.database_url)
+    repo = metric_node_repository or PostgresMetricNodeValueRepository(
+        database_url=database_url or settings.database_url
+    )
     return repo.latest(node_key=node_key, issuer_id=issuer_id, limit=limit)
 
 
@@ -303,10 +311,8 @@ def load_macro_curve(*, database_url: str | None = None) -> MacroPanelResponse:
 
     try:
         return with_mart_readonly(_q, database_url=database_url)
-    except psycopg.Error as exc:
-        if exc.sqlstate == _UNDEFINED_TABLE:
-            return MacroPanelResponse(available=False, reason="Macro mart views not yet migrated")
-        return MacroPanelResponse(available=False, reason=str(exc))
+    except psycopg.errors.UndefinedTable:
+        return MacroPanelResponse(available=False, reason="Macro mart views not yet migrated")
 
 
 def load_universes_panel(*, database_url: str | None = None) -> UniverseOverviewResponse:
@@ -353,65 +359,114 @@ def load_universes_panel(*, database_url: str | None = None) -> UniverseOverview
     return with_ops_reader(_q, database_url=database_url)
 
 
+def _normalize_coverage_universe(value: str | None) -> str:
+    clean = (value or "").strip().lower()
+    if not clean or clean == "all":
+        return "all"
+    contract = load_environment_contract()
+    return clean if clean in contract.universes else "all"
+
+
+def _matches_coverage_universe(universe_id: str | None, universe: str) -> bool:
+    if universe == "all":
+        return True
+    if not universe_id:
+        return False
+    try:
+        return load_environment_contract().universe_of_id(universe_id) == universe
+    except UnknownUniverse:
+        return False
+
+
 def load_wide_panel_coverage(
     context: AccessContext,
     *,
-    strategy_id: str = "large_model_value_v0",
+    strategy_id: str = DASHBOARD_STRATEGY_ID,
     universe: str | None = None,
     cutoff: str | None = None,
     node_key: str | None = None,
     issuer_id: str | None = None,
     limit: int = 100,
+    metric_node_repository: Any | None = None,
     database_url: str | None = None,
 ) -> PanelCoverageResponse:
-    from llm_service.services.strategy_service import get_strategy_run_page
-
-    page = get_strategy_run_page(
-        context,
-        strategy_id=strategy_id,
-        universe=universe,
-        cutoff=cutoff,
-        database_url=database_url,
-    )
+    db_url = database_url or settings.database_url
+    norm_universe = _normalize_coverage_universe(universe)
     node_report_dict: dict[str, Any] | None = None
     if node_key:
         node_report_dict = metric_node_values(
             node_key=node_key,
             issuer_id=issuer_id,
             limit=limit,
+            metric_node_repository=metric_node_repository,
             database_url=database_url,
         ).model_dump(mode="json")
 
-    decisions = [
-        CoverageDecisionDto(
-            issuer_id=d.issuer_id,
-            label=d.label,
-            cutoff_at=d.cutoff_at,
-            outcome=d.outcome,
-            eligible=d.eligible,
-            exclusion_reason=d.exclusion_reason,
-            exclusion_label=d.exclusion_label,
-            trace_id=d.trace_id,
+    report: StrategyRunReport | StrategyRunUnavailable = PostgresStrategyRunRepository(database_url=db_url).get_latest(
+        strategy_id=strategy_id, context=context
+    )
+    if isinstance(report, StrategyRunUnavailable):
+        return PanelCoverageResponse(
+            available=False,
+            reason=report.reason,
+            strategy_id=strategy_id,
+            universe=norm_universe,
+            node_values_report=node_report_dict,
         )
-        for d in page.decisions
+
+    display_map = load_entity_display_items(database_url=database_url)
+    prov_map: dict[str, dict[str, Any]] = {}
+    if run_id := report.strategy_run_id:
+        prov_map = with_mart_readonly(
+            lambda cur: read_strategy_provenance(cur, run_id),
+            database_url=database_url,
+        )
+    wide_panel = _load_wide_panel(
+        WIDE_PANEL_INPUT_KEYS + GPPE_VARIANT_KEYS + RANKING_PANEL_INPUT_KEYS,
+        database_url=database_url,
+    )
+    target_cutoff = cutoff or max((d.cutoff_at.isoformat() for d in report.decisions), default=None)
+    filtered = [
+        d
+        for d in report.decisions
+        if (target_cutoff is None or d.cutoff_at.isoformat() == target_cutoff)
+        and _matches_coverage_universe(prov_map.get(d.issuer_id, {}).get("universe_id"), norm_universe)
     ]
+    ordered = sorted(filtered, key=lambda d: (0, d.rank, d.issuer_id) if d.rank is not None else (1, 0, d.issuer_id))
+
+    decisions: list[CoverageDecisionDto] = []
+    for d in ordered:
+        excl = d.exclusion_reason.value if isinstance(d.exclusion_reason, ExclusionReason) else d.exclusion_reason
+        trace_payload = f"{report.source}:{report.corpus_sha256[:12]}:{d.issuer_id}:{d.cutoff_at.isoformat()}"
+        decisions.append(
+            CoverageDecisionDto(
+                issuer_id=d.issuer_id,
+                label=_display_label(d.issuer_id, display_map),
+                cutoff_at=d.cutoff_at.isoformat(),
+                outcome=d.outcome.value,
+                eligible=d.eligible,
+                exclusion_reason=excl,
+                exclusion_label=_EXCLUSION_LABELS.get(excl) if excl else None,
+                trace_id=f"trace:{hashlib.sha256(trace_payload.encode()).hexdigest()[:16]}",
+            )
+        )
     return PanelCoverageResponse(
-        available=page.available,
-        reason=page.reason,
-        strategy_id=page.strategy_id,
-        strategy_run_id=page.strategy_run_id,
-        cutoff_at=page.cutoff_at,
-        universe=page.universe,
-        total_decisions=page.total_decisions,
+        available=True,
+        strategy_id=report.strategy_id,
+        strategy_run_id=report.strategy_run_id,
+        cutoff_at=target_cutoff,
+        universe=norm_universe,
+        total_decisions=len(decisions),
         decisions=decisions,
-        wide_panel=page.wide_panel,
-        display_map=page.display_map,
+        wide_panel=wide_panel,
+        display_map=display_map,
         node_values_report=node_report_dict,
     )
 
 
 __all__ = [
     "CoverageDecisionDto",
+    "DASHBOARD_STRATEGY_ID",
     "ENTITY_DISPLAY_SQL",
     "EntityDisplayItem",
     "GPPE_VARIANT_KEYS",

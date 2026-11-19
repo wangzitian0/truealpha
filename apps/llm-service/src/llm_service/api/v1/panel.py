@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, Query
 from llm_service.api.v1._deps import require_principal
 from llm_service.services.auth_service import PrincipalRecord, access_context_for
 from llm_service.services.panel_service import (
+    DASHBOARD_STRATEGY_ID,
     MacroPanelResponse,
     PanelCoverageResponse,
     UniverseOverviewResponse,
@@ -14,7 +15,6 @@ from llm_service.services.panel_service import (
     load_universes_panel,
     load_wide_panel_coverage,
 )
-from llm_service.services.strategy_service import DASHBOARD_STRATEGY_ID
 
 router = APIRouter(prefix="/api/v1/panel", tags=["panel"])
 
