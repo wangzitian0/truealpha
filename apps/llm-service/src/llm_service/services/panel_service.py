@@ -392,7 +392,7 @@ def load_wide_panel_coverage(
         ).model_dump(mode="json")
 
     report: StrategyRunReport | StrategyRunUnavailable = PostgresStrategyRunRepository(database_url=db_url).get_latest(
-        strategy_id=strategy_id, context=context
+        strategy_id=strategy_id, context=context, universe=norm_universe
     )
     if isinstance(report, StrategyRunUnavailable):
         return PanelCoverageResponse(

@@ -160,20 +160,28 @@ def test_panel_decouples_from_strategy_and_fails_closed_on_db_errors(monkeypatch
         lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("panel must not call strategy_service")),
     )
 
+    from truealpha_contracts import universes
+
+    assert not hasattr(universes, "universe_with_role")
+
+    seen_universes: list[str | None] = []
+
     class _FakeStrategyRepo:
         def __init__(self, **_k: Any) -> None:
             pass
 
         def get_latest(self, *, strategy_id: str, context: Any, universe: str | None = None) -> StrategyRunUnavailable:
-            del context, universe
+            del context
+            seen_universes.append(universe)
             return StrategyRunUnavailable(strategy_id=strategy_id, reason="no_runs_recorded")
 
     monkeypatch.setattr(panel_service, "PostgresStrategyRunRepository", _FakeStrategyRepo, raising=False)
     from llm_service.services.auth_service import PrincipalRecord, access_context_for
 
     ctx = access_context_for(PrincipalRecord(principal_id="p:1", tenant_id="t:1", principal_kind="member"))
-    cov = panel_service.load_wide_panel_coverage(ctx, database_url="postgresql://unused")
+    cov = panel_service.load_wide_panel_coverage(ctx, universe="qqq", database_url="postgresql://unused")
     assert cov.available is False and cov.reason == "no_runs_recorded"
+    assert seen_universes == ["qqq"]
 
     # 2. OperationalError is never silently swallowed into {} or generic available=False.
     def _op_fail(*_a: Any, **_k: Any) -> Any:

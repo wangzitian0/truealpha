@@ -5,7 +5,6 @@ from __future__ import annotations
 from truealpha_contracts.environment_contract import (
     UniverseRecord,
     UniverseRole,
-    UnknownUniverse,
     load_environment_contract,
 )
 
@@ -32,13 +31,6 @@ def key_of_lane(name: str) -> str:
 
 def universe_of(universe_id: str) -> str:
     return load_environment_contract().universe_of_id(universe_id)
-
-
-def universe_with_role(role: UniverseRole) -> str:
-    holders = universes_with_role(role)
-    if len(holders) != 1:
-        raise UnknownUniverse(f"the role {role!r} needs exactly one universe, the record holds {list(holders)}")
-    return holders[0]
 
 
 def universes_with_role(role: UniverseRole) -> tuple[str, ...]:
