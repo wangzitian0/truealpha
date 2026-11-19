@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -46,10 +45,9 @@ from truealpha_contracts.common import (
 from truealpha_contracts.environment_contract import UnknownUniverse, load_environment_contract
 from truealpha_contracts.execution import InputEvidenceStatus
 from truealpha_contracts.strategy import LargeModelValueV0Definition, load_live_strategy_definition
-from truealpha_runtime.storage import StorageError
 
-from data_engine import raw_store
 from data_engine.contracts.concept_mapping import ConceptMappingRuleset
+from data_engine.datahub._helpers import read_raw_json
 from data_engine.datahub.capture_core.concept_mapping import DEFAULT_RULESET, resolve_ruleset
 from data_engine.datahub.capture_core.metric_node_values import (
     load_financial_payloads_by_listing,
@@ -481,13 +479,7 @@ def _observation_documents(connection: Connection[Any], observation_id: str) -> 
         """,
         (observation_id,),
     ).fetchall()
-    documents: list[dict[str, Any]] = []
-    for (raw_fetch_id,) in rows:
-        try:
-            documents.append(json.loads(raw_store.get_payload(connection, raw_fetch_id)))
-        except (LookupError, StorageError, ValueError):
-            continue
-    return documents
+    return [doc for (raw_fetch_id,) in rows if (doc := read_raw_json(connection, raw_fetch_id)) is not None]
 
 
 def _universe_stores_price_series(universe_id: str) -> bool:
@@ -1029,8 +1021,7 @@ class PostgresToptCoreRepository:
             raise ValueError("materialization denominator drifted from the snapshot's issuers")
 
         with self._connection.transaction():
-            evidence_by_listing = self._load_source_evidence(snapshot)
-            periods_by_listing = self._load_result_periods(snapshot)
+            evidence_by_listing, periods_by_listing = self._load_evidence_and_periods(snapshot)
             for factor_input in factor_inputs:
                 if factor_input.listing_id not in periods_by_listing:
                     raise ValueError(f"no financial-fact observation for {factor_input.listing_id} in its own snapshot")
@@ -1051,10 +1042,15 @@ class PostgresToptCoreRepository:
         return factor_inputs
 
     def _load_source_evidence(self, snapshot: ToptCoreSnapshot) -> dict[str, InputEvidenceStatus]:
+        return self._load_evidence_and_periods(snapshot)[0]
+
+    def _load_evidence_and_periods(
+        self, snapshot: ToptCoreSnapshot
+    ) -> tuple[dict[str, InputEvidenceStatus], dict[str, tuple[date | None, date | None, date | None]]]:
         all_ids = sorted({oid for member in snapshot.members for oid in member.observation_ids})
         resolved = resolve_raw_pointers(self._connection, all_ids)
         payloads_by_listing = load_financial_payloads_by_listing(self._connection, all_ids)
-        return {
+        evidence_by_listing = {
             member.listing_id: source_evidence_status_for(
                 self._connection,
                 member.observation_ids,
@@ -1063,31 +1059,16 @@ class PostgresToptCoreRepository:
             )
             for member in snapshot.members
         }
-
-    def _load_result_periods(
-        self, snapshot: ToptCoreSnapshot
-    ) -> dict[str, tuple[date | None, date | None, date | None]]:
-        observation_ids = sorted({oid for member in snapshot.members for oid in member.observation_ids})
-        rows = self._connection.execute(
-            """
-            select coalesce(p.normalized_payload->>'listing_id', o.subject_id),
-                   p.normalized_payload->>'operating_period_end',
-                   p.normalized_payload->>'revenue_period_end',
-                   p.normalized_payload->>'shares_period_end'
-            from staging.capture_normalized_observations o
-            join staging.capture_observation_payloads p using (observation_id)
-            where o.observation_id = any(%s) and o.semantic_type = 'financial-fact'
-            """,
-            (observation_ids,),
-        ).fetchall()
-        return {
-            str(subject_id): (
-                None if operating is None else date.fromisoformat(operating),
-                None if revenue is None else date.fromisoformat(revenue),
-                None if shares is None else date.fromisoformat(shares),
+        periods_by_listing = {
+            listing_id: (
+                None if (op := payloads[-1].get("operating_period_end")) is None else date.fromisoformat(str(op)),
+                None if (rev := payloads[-1].get("revenue_period_end")) is None else date.fromisoformat(str(rev)),
+                None if (sh := payloads[-1].get("shares_period_end")) is None else date.fromisoformat(str(sh)),
             )
-            for subject_id, operating, revenue, shares in rows
+            for listing_id, payloads in payloads_by_listing.items()
+            if payloads
         }
+        return evidence_by_listing, periods_by_listing
 
 
 __all__ = [

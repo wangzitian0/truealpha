@@ -17,7 +17,9 @@ from psycopg import Connection
 
 from data_engine.datahub._helpers import (
     DEFAULT_CONFIDENCE_POLICY,
+    execute_many,
     has_table,
+    parse_decimal,
     safe_call,
     safe_case_id_part,
     safe_fetchall,
@@ -424,21 +426,6 @@ class _ExtractionDiagnostics:
     issuer_raw_refs: dict[str, str] = field(default_factory=dict)
 
 
-def _issuer_display_name(connection: Connection[Any], canonical_issuer_id: str, ticker: str, tx_time: datetime) -> str:
-    clean_ticker = ticker.strip().upper()
-    if is_uuid(canonical_issuer_id):
-        row = connection.execute(
-            "select btrim(value) from staging.entity_aliases "
-            "where entity_id = %s::uuid and scheme = 'name' and nullif(btrim(value), '') is not null "
-            "and upper(btrim(value)) <> %s and transaction_time <= %s "
-            "order by confidence desc, transaction_time desc, alias_id desc limit 1",
-            (canonical_issuer_id, clean_ticker, tx_time),
-        ).fetchone()
-        if row and row[0]:
-            return str(row[0])
-    return ""
-
-
 def persist_extracted_supply_chain_edges(
     connection: Connection[Any],
     *,
@@ -629,20 +616,23 @@ def materialize_supply_chain_exposure(
 ) -> int:
     """Materialize exposure rows into `mart.issuer_supply_chain_exposure`."""
     as_of, source_status, val_status = unbacked_status_values(cutoff)
-    for item in exposure_data:
-        issuer_id, *fields = _exposure_params(item, as_of=as_of, default_extractor=default_extractor)
-        connection.execute(_INSERT_SQL, (run_id, issuer_id, as_of, *fields, source_status, val_status))
+    rows = [
+        (run_id, issuer_id, as_of, *fields, source_status, val_status)
+        for item in exposure_data
+        for issuer_id, *fields in (_exposure_params(item, as_of=as_of, default_extractor=default_extractor),)
+    ]
+    execute_many(connection, _INSERT_SQL, rows)
     return len(exposure_data)
 
 
 def _parse_revenue_share_pct(raw_pct: object) -> Decimal | None:
-    if raw_pct is None or isinstance(raw_pct, bool) or not (text := str(raw_pct).strip()):
-        return None
-    try:
-        pct = Decimal(text)
-    except Exception:  # noqa: BLE001
-        return None
-    return pct / Decimal("100") if pct.is_finite() and Decimal("0") < pct <= Decimal("100") else None
+    return (
+        pct / Decimal("100")
+        if (pct := parse_decimal(raw_pct)) is not None
+        and not isinstance(raw_pct, bool)
+        and Decimal("0") < pct <= Decimal("100")
+        else None
+    )
 
 
 def _partner_index_keys(rel_type: str, partner_id: str, partner_name: str) -> tuple[tuple[str, str], ...]:

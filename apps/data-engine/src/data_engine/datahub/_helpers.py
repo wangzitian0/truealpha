@@ -106,10 +106,6 @@ def safe_call(connection: Any, fn: Any, default: Any = None) -> Any:
         return default
 
 
-def safe_execute(connection: Any, sql: str, params: Sequence[Any] = ()) -> bool:
-    return bool(safe_call(connection, lambda: (connection.execute(sql, tuple(params)), True)[1], False))
-
-
 def safe_fetchall(connection: Any, sql: str, params: Sequence[Any] = ()) -> list[Any]:
     return list(safe_call(connection, lambda: connection.execute(sql, tuple(params)).fetchall(), ()))
 
@@ -198,3 +194,32 @@ def execute_many(connection: Any, query: str, rows: Sequence[Any]) -> int:
     for row in rows:
         connection.execute(query, row)
     return len(rows)
+
+
+def read_raw_json(connection: Any, fetch_id: int) -> dict[str, Any] | None:
+    """Load and parse one raw fetch payload as a JSON dict, returning None if absent or unreadable."""
+    import json
+
+    from truealpha_runtime.storage import StorageError
+
+    from data_engine import raw_store
+
+    try:
+        document = json.loads(raw_store.get_payload(connection, fetch_id))
+    except (LookupError, StorageError, ValueError):
+        return None
+    return document if isinstance(document, dict) else None
+
+
+def gppe_branch_predicate(
+    mnv_alias: str = "mv",
+    cil_alias: str = "cil",
+    *,
+    bank_param: str = "%s",
+    base_param: str = "%s",
+) -> str:
+    """SQL predicate matching the operating-branch-aware GPPE metric node."""
+    return (
+        f"(({cil_alias}.operating_branch = 'financial' and {mnv_alias}.node_key = {bank_param}) "
+        f"or {mnv_alias}.node_key = {base_param})"
+    )

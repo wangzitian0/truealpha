@@ -21,6 +21,7 @@ from truealpha_contracts.question_requirements import (
 )
 from truealpha_contracts.universes import key_of_lane, record
 
+from data_engine.datahub._helpers import gppe_branch_predicate
 from data_engine.datahub.repository import persist_run_report
 
 GOVERNING_FACTOR = "gross_profit_per_employee"
@@ -123,8 +124,7 @@ def gppe_cells(connection: Connection[Any], run_id: str) -> tuple[Cell, ...]:
         "from mart.metric_node_values mnv "
         "left join mart.capture_issuer_lineage cil using (run_id, issuer_id) "
         "where mnv.run_id = %(run_id)s "
-        "and ((cil.operating_branch = 'financial' and mnv.node_key = %(bank_key)s) "
-        "or mnv.node_key = %(base_key)s) "
+        f"and {gppe_branch_predicate('mnv', 'cil', bank_param='%(bank_key)s', base_param='%(base_key)s')} "
         "order by mnv.issuer_id, (mnv.node_key = %(bank_key)s) desc",
         {"run_id": run_id, "bank_key": GPPE_BANKING_TCE_SPEC.root, "base_key": GPPE_V0_SPEC.root},
     ).fetchall()

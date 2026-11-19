@@ -87,6 +87,37 @@ class Corroboration:
             raise ValueError("corroboration transaction_time must be timezone-aware")
 
 
+def build_corroboration(
+    *,
+    origin: str,
+    parser_version: str,
+    mapping_version: str,
+    payload: Mapping[str, Any],
+    transaction_time: datetime,
+    confidence: Decimal | None,
+    raw_bytes: bytes,
+    raw_source: DataSource,
+    record_id: str,
+    existing_raw_fetch_id: int | None = None,
+    existing_raw_sha256: str | None = None,
+) -> Corroboration:
+    """Build a content-addressed `Corroboration` record for a second-origin assertion."""
+    return Corroboration(
+        origin=origin,
+        transaction_time=transaction_time,
+        record=NormalizedRecord(payload=payload, parser_version=parser_version, mapping_version=mapping_version),
+        confidence=confidence,
+        raw=RawResponse(
+            body=raw_bytes,
+            source=raw_source,
+            record_id=record_id,
+            existing_raw_fetch_id=existing_raw_fetch_id,
+            existing_raw_sha256=existing_raw_sha256,
+        ),
+        normalized_sha256=canonical_sha256(dict(payload)),
+    )
+
+
 @dataclass(frozen=True)
 class FetchSuccess:
     raw: RawResponse

@@ -27,6 +27,7 @@ from data_engine.datahub.capture_core.executor import (
     FetchSuccess,
     NormalizedRecord,
     RawResponse,
+    build_corroboration,
 )
 from data_engine.datahub.capture_core.issuer_registry import (
     ANNUAL_STATEMENT_FORMS,
@@ -46,8 +47,6 @@ if TYPE_CHECKING:
 
 _ANNUAL_MINIMUM_DAYS = 350
 _DOCUMENT_KEY = "_document"
-_INSTANT_INPUTS = frozenset({"total_assets", "shares_outstanding", "financial_assets"})
-_ANNUAL_INPUTS = frozenset({"gross_profit", "revenue", "net_income", "financial_returns"})
 SHARES_POINT_IN_TIME = "point_in_time"
 SHARES_WEIGHTED_AVERAGE_BASIC = "weighted_average_basic"
 
@@ -875,21 +874,16 @@ class SecFinancialFactAdapter:
             for name in CORROBORATED_FINANCIAL_FIELDS:
                 payload[name] = _s(assertion.values.get(name))
             found.append(
-                Corroboration(
+                build_corroboration(
                     origin=origin.origin,
+                    parser_version=origin.parser_version,
+                    mapping_version=origin.mapping_version,
+                    payload=payload,
                     transaction_time=assertion.knowable_at,
-                    record=NormalizedRecord(
-                        payload=payload,
-                        parser_version=origin.parser_version,
-                        mapping_version=origin.mapping_version,
-                    ),
                     confidence=origin.confidence,
-                    raw=RawResponse(
-                        body=assertion.raw_bytes,
-                        source=origin.raw_source,
-                        record_id=f"{origin.origin}:{target.ticker}:{assertion.period_end.isoformat()}",
-                    ),
-                    normalized_sha256=canonical_sha256(payload),
+                    raw_bytes=assertion.raw_bytes,
+                    raw_source=origin.raw_source,
+                    record_id=f"{origin.origin}:{target.ticker}:{assertion.period_end.isoformat()}",
                 )
             )
         return tuple(found)

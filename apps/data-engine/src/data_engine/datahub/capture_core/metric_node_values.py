@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from datetime import date
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from typing import Any
 
 import polars as pl
@@ -41,6 +41,7 @@ from psycopg import Connection
 from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.execution import FactorValidationStatus, InputEvidenceStatus
 
+from data_engine.datahub._helpers import parse_decimal
 from data_engine.datahub.capture_core.status_dimensions import (
     availability_status_for,
     contract_not_applicable_issuer_ids,
@@ -74,16 +75,6 @@ def _snapshot_freshness(factor_input: ToptCoreSnapshotInput) -> MetricFreshness:
     return MetricFreshness.FRESH
 
 
-def _parse_decimal(raw: Any) -> Decimal | None:
-    if raw is None or isinstance(raw, bool):
-        return None
-    try:
-        value = Decimal(str(raw))
-    except (InvalidOperation, ValueError):
-        return None
-    return value if value.is_finite() else None
-
-
 def _spec_for_column(
     col: str,
     metrics: Mapping[str, PanelMetricSpec],
@@ -111,7 +102,7 @@ def _resolve_from_payload(
 ) -> tuple[Decimal | None, str | None, Decimal | None] | None:
     for candidate_key in (spec.alias(AliasKind.METRIC), spec.alias(AliasKind.INPUT_KEY), spec.key):
         if candidate_key and candidate_key in financial_payload:
-            parsed = _parse_decimal(financial_payload[candidate_key])
+            parsed = parse_decimal(financial_payload[candidate_key])
             if parsed is not None:
                 if spec.key == "employees_total" and parsed <= 0:
                     return None, "nonpositive_headcount", None
@@ -158,7 +149,7 @@ def _resolve_input_value(
     parameter = spec.alias(AliasKind.DEFINITION_PARAMETER)
     if parameter is not None:
         val = getattr(gppe_definition, parameter, None)
-        return (_parse_decimal(val), None if val is not None else f"missing_{parameter}", None)
+        return (parse_decimal(val), None if val is not None else f"missing_{parameter}", None)
 
     from_snapshot = _resolve_snapshot_metric(spec, factor_input)
     if from_snapshot is not None:
@@ -492,39 +483,51 @@ def _materialize_issuer_tree(
     metrics: Mapping[str, PanelMetricSpec] = PANEL_METRICS,
     not_applicable: bool = False,
 ) -> int:
+    def _emit(
+        node: PanelMetricSpec,
+        *,
+        value: Decimal | None,
+        availability: str,
+        confidence: Decimal,
+        reason_codes: list[str],
+    ) -> int:
+        period_str, period_tag = _node_period(
+            node, factor_input=factor_input, periods=periods, financial_payload=financial_payload
+        )
+        return _insert_metric_node_value(
+            connection,
+            run_id=factor_input.run_id,
+            issuer_id=factor_input.issuer_id,
+            node_id=node.node_id,
+            node_key=node.key,
+            period=period_str,
+            period_tag=period_tag,
+            value=value,
+            unit=node.unit.value if node.unit is not None else None,
+            availability=availability,
+            freshness=freshness,
+            confidence=confidence,
+            reason_codes=reason_codes,
+            source_evidence=source_evidence,
+            validation_status=validation_status,
+            tree_id=tree.tree_id,
+            tree_version=tree.version,
+            tree_sha256=tree_sha256,
+            observation_ids=factor_input.observation_ids,
+            not_applicable=not_applicable,
+        )
+
     if factor_input.primary_listing_undeclared:
-        count = 0
-        for node_key in sorted(reachable_derived_columns(tree.root, issuer_class=issuer_class, metrics=metrics)):
-            node = metrics[node_key]
-            period_str, period_tag = _node_period(
-                node,
-                factor_input=factor_input,
-                periods=periods,
-                financial_payload=financial_payload,
-            )
-            count += _insert_metric_node_value(
-                connection,
-                run_id=factor_input.run_id,
-                issuer_id=factor_input.issuer_id,
-                node_id=node.node_id,
-                node_key=node.key,
-                period=period_str,
-                period_tag=period_tag,
+        return sum(
+            _emit(
+                metrics[node_key],
                 value=None,
-                unit=node.unit.value if node.unit is not None else None,
                 availability="unavailable",
-                freshness=freshness,
                 confidence=Decimal("0"),
                 reason_codes=["primary_listing_undeclared"],
-                source_evidence=source_evidence,
-                validation_status=validation_status,
-                tree_id=tree.tree_id,
-                tree_version=tree.version,
-                tree_sha256=tree_sha256,
-                observation_ids=factor_input.observation_ids,
-                not_applicable=not_applicable,
             )
-        return count
+            for node_key in sorted(reachable_derived_columns(tree.root, issuer_class=issuer_class, metrics=metrics))
+        )
 
     inputs: dict[str, Decimal | None] = {}
     input_reasons: dict[str, str] = {}
@@ -552,7 +555,6 @@ def _materialize_issuer_tree(
     evaluation = evaluate_panel_variant(tree, issuer_class=issuer_class, inputs=inputs, metrics=metrics)
     count = 0
     for node_key in sorted(reachable_derived_columns(tree.root, issuer_class=issuer_class, metrics=metrics)):
-        node = metrics[node_key]
         raw_val = evaluation.values.get(node_key)
         consumed_keys = leaf_consumed_columns(node_key, issuer_class=issuer_class, metrics=metrics)
         subtree_reasons = [input_reasons[k] for k in consumed_keys if k in input_reasons]
@@ -565,32 +567,11 @@ def _materialize_issuer_tree(
             persisted_value, availability_str = raw_val, "available"
             consumed_confs = [input_confidences[k] for k in consumed_keys if k in input_confidences]
             node_confidence = min(consumed_confs) if consumed_confs else base_confidence
-        period_str, period_tag = _node_period(
-            node,
-            factor_input=factor_input,
-            periods=periods,
-            financial_payload=financial_payload,
-        )
-        count += _insert_metric_node_value(
-            connection,
-            run_id=factor_input.run_id,
-            issuer_id=factor_input.issuer_id,
-            node_id=node.node_id,
-            node_key=node.key,
-            period=period_str,
-            period_tag=period_tag,
+        count += _emit(
+            metrics[node_key],
             value=persisted_value,
-            unit=node.unit.value if node.unit is not None else None,
             availability=availability_str,
-            freshness=freshness,
             confidence=node_confidence,
             reason_codes=node_reasons,
-            source_evidence=source_evidence,
-            validation_status=validation_status,
-            tree_id=tree.tree_id,
-            tree_version=tree.version,
-            tree_sha256=tree_sha256,
-            observation_ids=factor_input.observation_ids,
-            not_applicable=not_applicable,
         )
     return count
