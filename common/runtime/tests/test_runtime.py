@@ -250,7 +250,7 @@ def test_importing_runtime_and_llm_service_does_not_instantiate_runtime_settings
 
 
 def test_database_url_field_shares_default_and_metadata_across_services() -> None:
-    """#1375 (G4): CoreRuntimeSettings, data-engine, and llm-service share database_url_field."""
+    """#1375 (G4): CoreRuntimeSettings and data-engine share database_url_field; llm-service uses app_service_login."""
     from data_engine.config import Settings as DataEngineSettings
     from llm_service.config import Settings as LlmSettings
     from truealpha_runtime import CoreRuntimeSettings
@@ -261,6 +261,9 @@ def test_database_url_field_shares_default_and_metadata_across_services() -> Non
         assert field.default == DEFAULT_DATABASE_URL
         extra = field.json_schema_extra
         assert isinstance(extra, dict)
-        assert extra["source"] == "runtime"
         assert extra["group"] == "postgres"
-        assert extra["provided_by"] == POSTGRES_PROVIDED_BY
+        if cls is LlmSettings:
+            assert str(extra["composed_from"]).startswith("postgresql://app_service_login:")
+        else:
+            assert extra["source"] == "runtime"
+            assert extra["provided_by"] == POSTGRES_PROVIDED_BY
