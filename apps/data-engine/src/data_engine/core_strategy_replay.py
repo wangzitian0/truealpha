@@ -92,11 +92,20 @@ def _risk_free_rate(definition_rates: list[dict[str, Any]], cutoff_at: str) -> D
     raise ValueError(f"no risk-free rate declared for cutoff {cutoff_at}")
 
 
+# These fields persist to mart.metric_node_values, not to the decision row.
+_METRIC_NODE_ONLY_FIELDS = (
+    "peg_consensus",
+    "peg_consensus_rank",
+    "peg_consensus_reason_codes",
+    "peg_consensus_confidence",
+)
+
+
 def _to_decision(evaluated: EvaluatedDecision, cutoff_at: str) -> Decision:
     attrs = {
         k: getattr(evaluated, k)
         for k in EvaluatedDecision.__dataclass_fields__
-        if k not in ("issuer_id", "outcome", "exclusion_reason")
+        if k not in ("issuer_id", "outcome", "exclusion_reason", *_METRIC_NODE_ONLY_FIELDS)
     }
     return Decision(
         issuer_id=evaluated.issuer_id,

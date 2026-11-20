@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Any
 
 import pytest
@@ -33,8 +34,8 @@ async def test_strategy_http_and_mcp_usecases(monkeypatch: pytest.MonkeyPatch) -
         start_date="2025-01-01",
         end_date="2026-03-31",
         status="succeeded",
-        cagr_monthly=0.25,
-        benchmark_cagr=0.15,
+        cagr_monthly=Decimal("0.25"),
+        benchmark_cagr=Decimal("0.15"),
         executed_at="2026-03-31T00:00:00Z",
         created_at="2026-03-31T00:00:00Z",
     )
@@ -123,6 +124,79 @@ def test_multi_universe_strategy_role_helpers_do_not_require_singleton() -> None
     assert strategy_service.normalize_ranking_universe("qqq") == "qqq"
     assert strategy_service.normalize_ranking_universe("sp500") == "sp500"
     assert strategy_service.normalize_ranking_universe("all") == "all"
+
+
+@pytest.mark.criterion("R3.C4")
+@pytest.mark.anyio
+async def test_r3_c4_rest_and_mcp_switch_peg_conventions_and_unblock_sp500_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R3.C4: /api/v1/strategy/rankings and MCP strategy_rankings switch between historical_cagr and consensus."""
+    from datetime import UTC, datetime
+
+    from truealpha_runtime.strategy_run import StrategyRunDecision, StrategyRunOutcome, StrategyRunReport
+
+    recorded: list[tuple[str | None, str | None]] = []
+
+    class _DualConventionRepo:
+        def get_latest(
+            self,
+            *,
+            strategy_id: str,
+            context: Any,
+            universe: str | None = None,
+            convention: str | None = None,
+        ) -> StrategyRunReport:
+            del context
+            recorded.append((universe, convention))
+            is_cons = convention == "consensus"
+            decisions = tuple(
+                StrategyRunDecision(
+                    issuer_id=f"issuer:sp{idx:03d}",
+                    cutoff_at=datetime(2026, 3, 31, 23, 59, 59, tzinfo=UTC),
+                    outcome=StrategyRunOutcome.RANKED_BEYOND_SELECTION_COUNT,
+                    eligible=True,
+                    peg=Decimal("0.42") if is_cons else Decimal("1.15"),
+                    peg_rank=1 if is_cons else 2,
+                    rank=idx + 1,
+                )
+                for idx in range(250)
+            )
+            return StrategyRunReport(
+                strategy_id=strategy_id,  # type: ignore[arg-type]
+                source="mart",
+                corpus_sha256="a" * 64,
+                decisions=decisions,
+                strategy_run_id="strategy-run:" + "b" * 64,
+            )
+
+    repo = _DualConventionRepo()
+    monkeypatch.setattr(strategy_service, "PostgresStrategyRunRepository", lambda **_k: repo)
+    monkeypatch.setattr(strategy_service, "load_entity_display_items", lambda **_k: {})
+    monkeypatch.setattr(strategy_service, "_load_strategy_provenance", lambda *_a, **_k: {})
+    monkeypatch.setattr(strategy_service, "_load_wide_panel", lambda *_a, **_k: {})
+    monkeypatch.setattr(strategy_service, "matches_ranking_universe", lambda *_a, **_k: True)
+
+    client, headers = auth_client(monkeypatch)
+    hist_res = client.get("/api/v1/strategy/rankings?universe=all&convention=historical_cagr", headers=headers)
+    cons_res = client.get("/api/v1/strategy/rankings?universe=all&convention=consensus", headers=headers)
+    assert hist_res.status_code == 200 and cons_res.status_code == 200
+    assert hist_res.json()["convention"] == "historical_cagr"
+    assert cons_res.json()["convention"] == "consensus"
+    assert len(cons_res.json()["rows"]) == 250  # Default limit=1000 no longer truncates at 200!
+    assert cons_res.json()["rows"][0]["peg"] == "0.42"
+    assert cons_res.json()["rows"][0]["peg_rank"] == 1
+    assert hist_res.json()["rows"][0]["peg"] == "1.15"
+    assert hist_res.json()["rows"][0]["peg_rank"] == 2
+
+    server = build_mcp_server(repository=repo)
+    _, cons_mcp = await server.call_tool(
+        "strategy_rankings",
+        {"request": {"strategy_id": "large_model_value_v0", "universe": "sp500", "convention": "consensus"}},
+    )  # type: ignore[misc]
+    assert cons_mcp["result"]["decisions"][0]["peg"] == "0.42"
+    assert cons_mcp["result"]["decisions"][0]["peg_rank"] == 1
+    assert recorded[-1] == ("sp500", "consensus")
 
 
 def test_strategy_page_passes_universe_and_drops_float_casts(monkeypatch: pytest.MonkeyPatch) -> None:

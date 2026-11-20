@@ -28,7 +28,7 @@ export default async function RankingsPage({ searchParams }: { searchParams: Pro
       ? strategyUniverses
       : UNIVERSES.filter((u) => !u.roles.includes("sentinel") && u.scheduled_somewhere).map((u) => u.key);
   const universe = params.universe || universesWithRole("strategy")[0] || universes[0] || "all";
-  const { data, error } = await loadAuthed("/research/rankings", (opts) => api.getRankings({ cutoff: params.cutoff, universe }, opts));
+  const { data, error } = await loadAuthed("/research/rankings", (opts) => api.getRankings({ cutoff: params.cutoff, universe, convention }, opts));
   const rows = data?.rows ?? [];
   const basisLabel = valuationBasisLabel(rows.find((r) => r.valuation_basis)?.valuation_basis);
   const headers = ["Rank", "Issuer", "Tier", "Current P/S", `Current ${basisLabel}`, `Target ${basisLabel}`, `Valuation gap (${basisLabel})`, "GPPE (uniform)", "GPPE (banking)", "GPPE (opfin)", "Employees", `PEG (${PEG_CONVENTION_LABELS[convention]})`, "PEG rank", "Confidence", "Availability", "Inputs"];
@@ -71,8 +71,8 @@ export default async function RankingsPage({ searchParams }: { searchParams: Pro
                 <PanelNodeTd node={row.gppe_variants?.gppe_banking_tce_v1} formatted={formatUsdMagnitude(row.gppe_variants?.gppe_banking_tce_v1?.value ?? null)} />
                 <PanelNodeTd node={row.gppe_variants?.gppe_operating_financial_v1} formatted={formatUsdMagnitude(row.gppe_variants?.gppe_operating_financial_v1?.value ?? null)} />
                 <PanelNodeTd node={row.panel_inputs?.employees_total} formatted={formatNumberMagnitude(row.panel_inputs?.employees_total?.value ?? null)} />
-                <td className={`${c} tabular-nums`}>{convention === "historical_cagr" ? formatCell(formatRatio(row.peg)) : "unsourced"}</td>
-                <td className={`${c} tabular-nums`}>{convention === "historical_cagr" ? formatCell(row.peg_rank) : "—"}</td>
+                <td className={`${c} tabular-nums`}>{row.peg != null ? formatCell(formatRatio(row.peg)) : convention === "historical_cagr" ? formatCell(null) : "unsourced"}</td>
+                <td className={`${c} tabular-nums`}>{formatCell(row.peg_rank)}</td>
                 <td className={`${c} tabular-nums`}>{formatCell(formatRatio(row.confidence))}</td>
                 <td className={c}><AvailabilityBadge status={row.availability ?? "unavailable"} /></td>
                 <td className={c}><ProvenanceCell row={row} /></td>

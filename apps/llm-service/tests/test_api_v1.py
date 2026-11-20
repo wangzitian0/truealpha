@@ -167,6 +167,7 @@ def test_unified_card_export_prefers_governed_artifact_and_persists_document(
     assert denied.status_code == 403
 
 
+@pytest.mark.criterion("R5.E9")
 def test_real_postgres_auth_admin_ledger_documents_rls_and_served_head_withholding(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

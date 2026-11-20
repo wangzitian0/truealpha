@@ -62,6 +62,38 @@ class CardPreset(StrictFrozenModel):
     chip_bg: str = _NE
 
 
+def _hex_rgb(color: str) -> tuple[float, float, float]:
+    raw = color.strip().lstrip("#")
+    if len(raw) == 3:
+        raw = "".join(ch * 2 for ch in raw)
+    if len(raw) != 6 or any(ch not in "0123456789abcdefABCDEF" for ch in raw):
+        raise ValueError(f"expected #RGB or #RRGGBB hex color, got {color!r}")
+    return (int(raw[0:2], 16) / 255.0, int(raw[2:4], 16) / 255.0, int(raw[4:6], 16) / 255.0)
+
+
+def _relative_luminance(color: str) -> float:
+    r, g, b = (c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4 for c in _hex_rgb(color))
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def contrast_ratio(hex_a: str, hex_b: str) -> float:
+    """Return WCAG 2.1 contrast ratio (`1.0`..`21.0`) between two hex colors."""
+    la, lb = _relative_luminance(hex_a), _relative_luminance(hex_b)
+    return (max(la, lb) + 0.05) / (min(la, lb) + 0.05)
+
+
+def verify_preset_contrast(preset: CardPreset) -> tuple[bool, tuple[str, ...]]:
+    """Enforce WCAG AA contrast minimums on `fg` (`>= 4.5`) and `mute` (`>= 3.0`) over `surface_bg`."""
+    violations: list[str] = []
+    fg_ratio = contrast_ratio(preset.fg, preset.surface_bg)
+    if fg_ratio < 4.5:
+        violations.append(f"low_fg_contrast:{preset.preset_id}:{fg_ratio:.2f}")
+    mute_ratio = contrast_ratio(preset.mute, preset.surface_bg)
+    if mute_ratio < 3.0:
+        violations.append(f"low_mute_contrast:{preset.preset_id}:{mute_ratio:.2f}")
+    return (not violations, tuple(violations))
+
+
 CARD_PRESETS: Final[dict[str, CardPreset]] = {
     r[0]: CardPreset(
         preset_id=r[0],
@@ -436,6 +468,10 @@ def verify_card_html(card: ResearchCard, html: str) -> tuple[bool, tuple[str, ..
     ):
         if bad:
             v.append(code)
+    preset_id = card.style_preset or _DEFAULT_PRESET.get(card.card_kind, "study-notes")
+    if (preset := CARD_PRESETS.get(preset_id)) is not None:
+        _, preset_violations = verify_preset_contrast(preset)
+        v.extend(preset_violations)
     for s in card.subjects:
         if not _has(html, s.display_name, norm) and s.subject_id not in html:
             v.append(f"missing_subject:{s.subject_id}")

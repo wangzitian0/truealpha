@@ -23,8 +23,8 @@ export function BacktestChart({ valuationsMonthly, valuationsDaily }: Props) {
 
   const benchmark = activeTab === "nav" ? valuationsDaily.filter((v) => v.benchmark_cum_nav !== null) : [];
   const plotted = [
-    ...allVals.map((v) => (activeTab === "nav" ? v.cum_nav : v.drawdown)),
-    ...benchmark.map((v) => v.benchmark_cum_nav as number),
+    ...allVals.map((v) => Number(activeTab === "nav" ? v.cum_nav : v.drawdown)),
+    ...benchmark.map((v) => Number(v.benchmark_cum_nav)),
   ];
   const minNav = Math.min(...plotted);
   const maxNav = Math.max(...plotted);
@@ -36,7 +36,7 @@ export function BacktestChart({ valuationsMonthly, valuationsDaily }: Props) {
   const toX = (idx: number, total: number) => pad + (idx / Math.max(total - 1, 1)) * (width - 2 * pad);
   const toY = (val: number) => height - pad - ((val - minNav) / rangeNav) * (height - 2 * pad);
 
-  const renderPath = (data: BacktestValuationRecord[], color: string, sw = 2, val: (d: BacktestValuationRecord) => number = (d) => (activeTab === "nav" ? d.cum_nav : d.drawdown)) =>
+  const renderPath = (data: BacktestValuationRecord[], color: string, sw = 2, val: (d: BacktestValuationRecord) => number = (d) => Number(activeTab === "nav" ? d.cum_nav : d.drawdown)) =>
     data.length ? <path d={`M ${data.map((d, i) => `${toX(i, data.length)},${toY(val(d))}`).join(" L ")}`} fill="none" stroke={color} strokeWidth={sw} strokeLinecap="round" strokeLinejoin="round" /> : null;
 
   return (
@@ -61,7 +61,7 @@ export function BacktestChart({ valuationsMonthly, valuationsDaily }: Props) {
           <text x={pad} y={toY(minNav) + 16} fill="#888" fontSize="10">{formatRatio(minNav) ?? String(minNav)}</text>
           {resolution !== "1D" && renderPath(valuationsMonthly, "#3b82f6", 2.5)}
           {resolution !== "1M" && renderPath(valuationsDaily, "#10b981", 1.5)}
-          {renderPath(benchmark, "#a3a3a3", 1.5, (d) => d.benchmark_cum_nav as number)}
+          {renderPath(benchmark, "#a3a3a3", 1.5, (d) => Number(d.benchmark_cum_nav))}
         </svg>
       </div>
 

@@ -8,7 +8,7 @@ implementation to drift from.
 
 import hashlib
 import json
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -19,6 +19,7 @@ from factors.composite.strategy_evaluator import (
     evaluate_cutoff,
     rank_and_select,
 )
+from factors.measure import Measure, Money
 from factors.panel import IssuerClass, bound_tree, uniform_tree_pins
 from truealpha_contracts.strategy import (
     LIVE_STRATEGY_DEFINITION_RESOURCE,
@@ -1082,3 +1083,84 @@ def test_restated_2018_period_filed_in_2026_is_excluded_with_stale_period() -> N
     assert decision.eligible is False
     assert decision.outcome is GoldenDecisionOutcome.EXCLUDED
     assert decision.exclusion_reason == "stale_period"
+
+
+@pytest.mark.criterion("R3.C4")
+def test_dual_convention_peg_evaluates_and_ranks_historical_and_consensus_independently() -> None:
+    """R3.C4: evaluate_cutoff computes both historical_cagr PEG and consensus PEG + ranks, matching panel.py."""
+    from datetime import UTC, datetime
+
+    import polars as pl
+    from factors.panel import EXPR_PEG_CONSENSUS, evaluate_wide_panel
+    from truealpha_contracts.fiscal_period import FiscalPeriod
+
+    cutoff = datetime(2026, 3, 31, 23, 59, 59, tzinfo=UTC)
+    known = datetime(2026, 2, 15, tzinfo=UTC)
+    fy22 = FiscalPeriod(filing_fiscal_year=2022, kind="FY", start=date(2022, 1, 1), end=date(2022, 12, 31))
+    fy23 = FiscalPeriod(filing_fiscal_year=2023, kind="FY", start=date(2023, 1, 1), end=date(2023, 12, 31))
+    fy24 = FiscalPeriod(filing_fiscal_year=2024, kind="FY", start=date(2024, 1, 1), end=date(2024, 12, 31))
+    fy25 = FiscalPeriod(filing_fiscal_year=2025, kind="FY", start=date(2025, 1, 1), end=date(2025, 12, 31))
+
+    def _k(p: FiscalPeriod) -> str:
+        return f"FY{p.filing_fiscal_year}:{p.kind}:{p.start.isoformat()}:{p.end.isoformat()}"
+
+    def _issuer(iid: str, ni25: str, growth_pct: str | None) -> IssuerInput:
+        recs: dict[str, tuple[Measure | Decimal, Decimal]] = {
+            "gross_profit": (Measure(Decimal("40000"), Money("USD"), period=fy25, knowable_at=known), Decimal("0.92")),
+            "total_assets": (Decimal("100000"), Decimal("0.92")),
+            "headcount": (Decimal("100"), Decimal("0.90")),
+            "revenue": (Measure(Decimal("50000"), Money("USD"), period=fy25, knowable_at=known), Decimal("0.92")),
+            "shares_outstanding": (Decimal("1000"), Decimal("0.92")),
+            "last_close": (Decimal("100"), Decimal("0.90")),
+            "net_income": (Measure(Decimal(ni25), Money("USD"), period=fy25, knowable_at=known), Decimal("0.92")),
+        }
+        if growth_pct is not None:
+            recs["consensus_profit_growth"] = (Decimal(growth_pct), Decimal("0.96"))
+        return IssuerInput(
+            issuer_id=iid,
+            records=recs,
+            knowable_at=dict.fromkeys(recs, known),
+            periodic_records={
+                "net_income": {
+                    _k(fy22): (Decimal("8000"), Decimal("0.92")),
+                    _k(fy23): (Decimal("10000"), Decimal("0.92")),
+                    _k(fy24): (Decimal("13000"), Decimal("0.92")),
+                    _k(fy25): (Decimal(ni25), Decimal("0.92")),
+                }
+            },
+            issuer_class=IssuerClass.NON_FINANCIAL,
+        )
+
+    decisions = evaluate_cutoff(
+        [_issuer("issuer:fast-cons", "16000", "50"), _issuer("issuer:slow-cons", "16000", "10")],
+        definition=_definition(),
+        cutoff_at=cutoff,
+        risk_free_rate=Decimal("0"),
+    )
+    by_id = {d.issuer_id: d for d in decisions}
+    # Market cap = 100_000, earnings = 16_000 -> P/E = 6.25.
+    # Consensus: fast-cons 6.25/50 = 0.125 (rank 1), slow-cons 6.25/10 = 0.625 (rank 2).
+    assert by_id["issuer:fast-cons"].peg_consensus == Decimal("0.125")
+    assert by_id["issuer:fast-cons"].peg_consensus_rank == 1
+    assert by_id["issuer:slow-cons"].peg_consensus == Decimal("0.625")
+    assert by_id["issuer:slow-cons"].peg_consensus_rank == 2
+    assert by_id["issuer:fast-cons"].peg == by_id["issuer:slow-cons"].peg
+
+    wide = evaluate_wide_panel(
+        pl.DataFrame(
+            [
+                {
+                    "issuer_id": "issuer:fast-cons",
+                    "period": "2025-12-31",
+                    "price": 100.0,
+                    "shares_outstanding": 1000.0,
+                    "net_income": 16000.0,
+                    "consensus_profit_growth": 50.0,
+                }
+            ]
+        ),
+        targets=("peg_consensus",),
+        include_confidence=False,
+    )
+    assert EXPR_PEG_CONSENSUS is not None
+    assert wide["peg_consensus"].to_list() == [0.125]

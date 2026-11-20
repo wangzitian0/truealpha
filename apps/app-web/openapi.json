@@ -218,14 +218,30 @@
             }
           },
           {
+            "name": "convention",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Convention"
+            }
+          },
+          {
             "name": "limit",
             "in": "query",
             "required": false,
             "schema": {
               "type": "integer",
-              "maximum": 500,
+              "maximum": 1000,
               "minimum": 1,
-              "default": 200,
+              "default": 1000,
               "title": "Limit"
             }
           }
@@ -1395,7 +1411,8 @@
           "cagr_monthly": {
             "anyOf": [
               {
-                "type": "number"
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
               },
               {
                 "type": "null"
@@ -1406,7 +1423,8 @@
           "sharpe_daily": {
             "anyOf": [
               {
-                "type": "number"
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
               },
               {
                 "type": "null"
@@ -1417,7 +1435,8 @@
           "max_dd_daily": {
             "anyOf": [
               {
-                "type": "number"
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
               },
               {
                 "type": "null"
@@ -1428,7 +1447,8 @@
           "vol_daily": {
             "anyOf": [
               {
-                "type": "number"
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
               },
               {
                 "type": "null"
@@ -1439,7 +1459,8 @@
           "turnover_monthly": {
             "anyOf": [
               {
-                "type": "number"
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
               },
               {
                 "type": "null"
@@ -1450,7 +1471,8 @@
           "calmar_daily": {
             "anyOf": [
               {
-                "type": "number"
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
               },
               {
                 "type": "null"
@@ -1529,7 +1551,8 @@
           "benchmark_cagr": {
             "anyOf": [
               {
-                "type": "number"
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
               },
               {
                 "type": "null"
@@ -1540,7 +1563,8 @@
           "benchmark_max_dd": {
             "anyOf": [
               {
-                "type": "number"
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
               },
               {
                 "type": "null"
@@ -1599,27 +1623,33 @@
             "title": "Side"
           },
           "shares": {
-            "type": "number",
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
             "title": "Shares"
           },
           "execution_price": {
-            "type": "number",
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
             "title": "Execution Price"
           },
           "trade_value": {
-            "type": "number",
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
             "title": "Trade Value"
           },
           "weight_before": {
-            "type": "number",
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
             "title": "Weight Before"
           },
           "weight_after": {
-            "type": "number",
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
             "title": "Weight After"
           },
           "fee_paid": {
-            "type": "number",
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
             "title": "Fee Paid"
           }
         },
@@ -1654,25 +1684,30 @@
             "title": "Valuation Date"
           },
           "cum_nav": {
-            "type": "number",
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
             "title": "Cum Nav"
           },
           "drawdown": {
-            "type": "number",
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
             "title": "Drawdown"
           },
           "gross_exposure": {
-            "type": "number",
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
             "title": "Gross Exposure"
           },
           "cash_weight": {
-            "type": "number",
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
             "title": "Cash Weight"
           },
           "benchmark_cum_nav": {
             "anyOf": [
               {
-                "type": "number"
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
               },
               {
                 "type": "null"
@@ -3200,6 +3235,11 @@
             "type": "string",
             "title": "Universe",
             "default": "all"
+          },
+          "convention": {
+            "type": "string",
+            "title": "Convention",
+            "default": "historical_cagr"
           },
           "total": {
             "type": "integer",

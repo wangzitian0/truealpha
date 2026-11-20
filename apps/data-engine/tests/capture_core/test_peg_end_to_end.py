@@ -22,6 +22,7 @@ from __future__ import annotations
 import os
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from typing import Any
 
 import psycopg
 import pytest
@@ -222,3 +223,137 @@ def _definition() -> LargeModelValueV0Definition:
     from truealpha_contracts.strategy import load_live_strategy_definition
 
     return load_live_strategy_definition()
+
+
+@pytest.mark.criterion("R3.C4")
+def test_r3_c4_consensus_peg_end_to_end_from_moomoo_valuation_to_strategy_run_repository(connection) -> None:
+    """R3.C4: Moomoo valuation_detail -> MoomooFinancialsFetcher -> strategy_bridge -> mart.metric_node_values -> PostgresStrategyRunRepository(convention='consensus')."""
+    import secrets
+
+    from data_engine.datahub.capture_core.moomoo_origin import MoomooFinancialsFetcher
+    from data_engine.datahub.strategy_bridge import _persist_peg_consensus_nodes
+    from data_engine.sources import gateway
+    from data_engine.sources.landed_keys import MemoryLandedKeys
+    from data_engine.sources.memory_ledger import MemoryLedger
+    from psycopg.rows import dict_row
+    from truealpha_runtime.strategy_run_postgres import _DECISIONS_SQL, _decision_from_row
+
+    class _FakeClient:
+        def financial_statements(self, code: str, *, statement_type: int, identity: Any) -> dict[str, Any]:
+            del code, identity
+            tag = "income" if statement_type == 1 else "balance"
+            return {
+                "report_list": [
+                    {
+                        "financial_type": 7,
+                        "report_date": "2025-12-31",
+                        "currency_code": "USD",
+                        "accounting_standards": "US-GAAP",
+                        "item_list": [{"field_id": 8001, "data": 50_000 if tag == "income" else 100_000}],
+                    }
+                ]
+            }
+
+        def valuation_detail(self, code: str, *, identity: Any) -> dict[str, Any]:
+            del code, identity
+            return {
+                "profit_growth_rate": {
+                    "profit_data": [
+                        {
+                            "period_str": "2025/FY",
+                            "financial_quarter": 4,
+                            "report_date_str": "2025-12-31",
+                            "profit_growth_rate": 25,
+                        }
+                    ]
+                }
+            }
+
+    gateway.set_ledger(MemoryLedger())
+    gateway.set_landed_keys(MemoryLandedKeys())
+    assertion = MoomooFinancialsFetcher(_FakeClient())("E2ER3C4", _CUTOFF.date())
+    assert assertion is not None
+    assert assertion.values.get("consensus_profit_growth") == Decimal("25")
+
+    bundle = build_bundle(_company_facts(), _CUTOFF.date(), OperatingBranch.NON_FINANCIAL)
+    records = {
+        "gross_profit": (Decimal("40000"), Decimal("0.92")),
+        "total_assets": (Decimal("100000"), Decimal("0.92")),
+        "headcount": (Decimal("100"), Decimal("0.90")),
+        "revenue": (Decimal("50000"), Decimal("0.92")),
+        "shares_outstanding": (Decimal("1000"), Decimal("0.92")),
+        "last_close": (Decimal("100"), Decimal("0.90")),
+        "net_income": (bundle.net_income, Decimal("0.92")),
+        "consensus_profit_growth": (Decimal("25"), Decimal("0.96")),
+    }
+    issuer = IssuerInput(
+        issuer_id=_ISSUER,
+        records=records,
+        knowable_at=dict.fromkeys(records, bundle.knowable_at),
+        periodic_records={
+            "net_income": {
+                f"FY{end.year}:FY:{end.replace(year=end.year - 1) + timedelta(days=1)}:{end}": (
+                    value,
+                    Decimal("0.92"),
+                )
+                for end, value in bundle.net_income_by_period.items()
+            }
+        },
+        issuer_class=IssuerClass.NON_FINANCIAL,
+    )
+    decisions = evaluate_cutoff([issuer], definition=_definition(), cutoff_at=_CUTOFF, risk_free_rate=Decimal("0"))
+    assert decisions[0].peg_consensus == Decimal("0.25")  # P/E 6.25 / 25
+    assert decisions[0].peg_consensus_rank == 1
+
+    hx = secrets.token_hex(32)
+    run_id = f"strategy-run:{hx}"
+    capture_run_id = f"capture-run:{hx}"
+    dec_id = f"strategy-decision:{hx}"
+    connection.execute(
+        "insert into mart.strategy_runs "
+        "(strategy_run_id, content_sha256, strategy_key, strategy_version, "
+        " definition_content_sha256, corpus_sha256, claim_ceiling, executed_at) "
+        "values (%s, %s, 'large_model_value_v0', %s, %s, %s, 'preview', '2099-01-01T00:00:00Z')",
+        (run_id, hx, _definition().version, _definition().content_sha256, hx),
+    )
+    connection.execute(
+        "insert into mart.strategy_decisions "
+        "(strategy_decision_id, content_sha256, strategy_run_id, issuer_id, cutoff_at, "
+        " capital_adjusted_labor_efficiency, tier, current_price_to_sales, "
+        " target_price_to_sales, valuation_gap, eligible, outcome, exclusion_reason, "
+        " rank, target_weight, peg, peg_rank) "
+        "values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, null, %s, %s, %s, %s)",
+        (
+            dec_id,
+            hx,
+            run_id,
+            _ISSUER,
+            _CUTOFF,
+            decisions[0].capital_adjusted_labor_efficiency,
+            decisions[0].tier,
+            decisions[0].current_price_to_sales,
+            decisions[0].target_price_to_sales,
+            decisions[0].valuation_gap,
+            decisions[0].eligible,
+            decisions[0].outcome.value,
+            decisions[0].rank,
+            decisions[0].target_weight,
+            decisions[0].peg,
+            decisions[0].peg_rank,
+        ),
+    )
+    _persist_peg_consensus_nodes(connection, capture_run_id=capture_run_id, cutoff=_CUTOFF, evaluated=decisions)
+
+    scoped_sql = _DECISIONS_SQL.replace(
+        "left join mart.strategy_run_capture scope on scope.strategy_run_id = d.strategy_run_id",
+        "left join (select %s::text as strategy_run_id, %s::text as capture_run_id) scope on scope.strategy_run_id = d.strategy_run_id",
+    )
+    with connection.cursor(row_factory=dict_row) as cur:
+        cur.execute(scoped_sql, (run_id, capture_run_id, run_id))
+        row = cur.fetchone()
+    assert row is not None
+    cons_decision = _decision_from_row(dict(row), convention="consensus")
+    hist_decision = _decision_from_row(dict(row), convention="historical_cagr")
+    assert cons_decision.peg is not None and cons_decision.peg.quantize(Decimal("0.01")) == Decimal("0.25")
+    assert cons_decision.peg_rank == 1
+    assert hist_decision.peg is not None and hist_decision.peg.quantize(Decimal("0.0001")) == Decimal("0.2431")

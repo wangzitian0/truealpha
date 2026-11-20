@@ -873,6 +873,15 @@ class SecFinancialFactAdapter:
             }
             for name in CORROBORATED_FINANCIAL_FIELDS:
                 payload[name] = _s(assertion.values.get(name))
+            if (consensus_growth := assertion.values.get("consensus_profit_growth")) is not None:
+                payload["consensus_profit_growth"] = _s(consensus_growth)
+            growth_by_period = {
+                end.isoformat(): _s(rate)
+                for end, values in sorted(assertion.by_period_end.items())
+                if (rate := values.get("consensus_profit_growth")) is not None
+            }
+            if growth_by_period:
+                payload["consensus_profit_growth_by_period"] = growth_by_period
             found.append(
                 build_corroboration(
                     origin=origin.origin,

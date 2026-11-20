@@ -53,6 +53,24 @@ DECISIONS_FROM_SQL = """
         limit 1
     ) m on true
     left join lateral (
+        select mc.value
+        from mart.metric_node_values mc
+        where mc.run_id = scope.capture_run_id
+          and mc.issuer_id = d.issuer_id
+          and mc.node_key = 'peg_consensus'
+        order by mc.period desc, mc.node_id
+        limit 1
+    ) peg_c on true
+    left join lateral (
+        select mcr.value
+        from mart.metric_node_values mcr
+        where mcr.run_id = scope.capture_run_id
+          and mcr.issuer_id = d.issuer_id
+          and mcr.node_key = 'peg_consensus_rank'
+        order by mcr.period desc, mcr.node_id
+        limit 1
+    ) peg_cr on true
+    left join lateral (
         select ei.legacy_id from mart.entity_identity ei where ei.entity_id::text = d.issuer_id limit 1
     ) ei on true
     where d.strategy_run_id = %s
@@ -63,6 +81,7 @@ _DECISIONS_SQL = (
     " d.capital_adjusted_labor_efficiency, d.tier, d.current_price_to_sales, d.target_price_to_sales,"
     " d.current_price_to_gross_profit, d.target_price_to_gross_profit, d.valuation_gap,"
     " d.eligible, d.outcome, d.exclusion_reason, d.availability_status, d.rank, d.target_weight, d.peg, d.peg_rank,"
+    " peg_c.value as peg_consensus, peg_cr.value as peg_consensus_rank,"
     " d.labor_efficiency_metric, m.confidence " + DECISIONS_FROM_SQL
 )
 
@@ -132,17 +151,34 @@ def latest_run_params(strategy_key: str, *, universe: str | None = None) -> tupl
     return ([id_prefix_like(k) for k in universes_with_role("strategy")], strategy_key)
 
 
-def _decision_from_row(row: dict[str, Any]) -> StrategyRunDecision:
+def _normalize_convention(convention: str | None) -> str:
+    if convention in {"consensus", "analyst_consensus"}:
+        return "consensus"
+    if convention in {"guidance", "company_guidance"}:
+        return "guidance"
+    return "historical_cagr"
+
+
+def _decision_from_row(row: dict[str, Any], *, convention: str = "historical_cagr") -> StrategyRunDecision:
+    data = dict(row)
+    peg_consensus = data.pop("peg_consensus", None)
+    peg_consensus_rank = data.pop("peg_consensus_rank", None)
+    if convention == "consensus":
+        data["peg"] = peg_consensus
+        data["peg_rank"] = int(peg_consensus_rank) if peg_consensus_rank is not None else None
+    elif convention == "guidance":
+        data["peg"] = None
+        data["peg_rank"] = None
     return StrategyRunDecision(
         **(
-            row
+            data
             | {
-                "cutoff_at": row["cutoff_at"].astimezone(UTC),
-                "outcome": StrategyRunOutcome(row["outcome"]),
-                "tier": ValuationTier(row["tier"]) if row["tier"] is not None else None,
+                "cutoff_at": data["cutoff_at"].astimezone(UTC),
+                "outcome": StrategyRunOutcome(data["outcome"]),
+                "tier": ValuationTier(data["tier"]) if data["tier"] is not None else None,
                 "availability_status": (
-                    AvailabilityStatus(row["availability_status"])
-                    if row.get("availability_status") is not None
+                    AvailabilityStatus(data["availability_status"])
+                    if data.get("availability_status") is not None
                     else None
                 ),
             }
@@ -160,8 +196,10 @@ class PostgresStrategyRunRepository:
         strategy_id: str,
         context: AccessContext,
         universe: str | None = None,
+        convention: str | None = None,
     ) -> StrategyRunReport | StrategyRunUnavailable:
         del context
+        norm_convention = _normalize_convention(convention)
         try:
             with (
                 psycopg.connect(self._database_url, connect_timeout=5) as connection,
@@ -188,7 +226,7 @@ class PostgresStrategyRunRepository:
                 strategy_id=strategy_id,  # type: ignore[arg-type]
                 source="mart",
                 corpus_sha256=run_row["corpus_sha256"],
-                decisions=tuple(_decision_from_row(row) for row in decision_rows),
+                decisions=tuple(_decision_from_row(row, convention=norm_convention) for row in decision_rows),
                 strategy_run_id=run_row["strategy_run_id"],
                 governed=bool(run_row["is_governed"]),
                 definition=StrategyRunDefinition.resolve(

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
+from decimal import Decimal
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -117,6 +119,7 @@ class StrategyRunPageResponse(BaseModel):
     review_state: str | None = None
     cutoff_at: str | None = None
     universe: str = "all"
+    convention: str = "historical_cagr"
     total_decisions: int = 0
     decisions: list[StrategyDecisionItemDto] = Field(default_factory=list)
     wide_panel: dict[str, dict[str, WidePanelCellDto]] = Field(default_factory=dict)
@@ -132,6 +135,7 @@ class RankingsResponse(BaseModel):
     review_state: str | None = None
     cutoff_at: str | None = None
     universe: str = "all"
+    convention: str = "historical_cagr"
     total: int = 0
     rows: list[StrategyDecisionItemDto] = Field(default_factory=list)
     display_map: dict[str, EntityDisplayItem] = Field(default_factory=dict)
@@ -145,12 +149,12 @@ class BacktestRunDto(BaseModel):
     start_date: str
     end_date: str
     status: str
-    cagr_monthly: float | None = None
-    sharpe_daily: float | None = None
-    max_dd_daily: float | None = None
-    vol_daily: float | None = None
-    turnover_monthly: float | None = None
-    calmar_daily: float | None = None
+    cagr_monthly: Decimal | None = None
+    sharpe_daily: Decimal | None = None
+    max_dd_daily: Decimal | None = None
+    vol_daily: Decimal | None = None
+    turnover_monthly: Decimal | None = None
+    calmar_daily: Decimal | None = None
     metrics_payload: dict[str, Any] = Field(default_factory=dict)
     error_message: str | None = None
     executed_at: str
@@ -159,19 +163,19 @@ class BacktestRunDto(BaseModel):
     price_basis: str | None = None
     claim_ceiling: str | None = None
     benchmark_rule: str | None = None
-    benchmark_cagr: float | None = None
-    benchmark_max_dd: float | None = None
+    benchmark_cagr: Decimal | None = None
+    benchmark_max_dd: Decimal | None = None
 
 
 class BacktestValuationDto(BaseModel):
     run_id: str
     resolution: str
     valuation_date: str
-    cum_nav: float
-    drawdown: float
-    gross_exposure: float
-    cash_weight: float
-    benchmark_cum_nav: float | None = None
+    cum_nav: Decimal
+    drawdown: Decimal
+    gross_exposure: Decimal
+    cash_weight: Decimal
+    benchmark_cum_nav: Decimal | None = None
 
 
 class BacktestTradeDto(BaseModel):
@@ -180,12 +184,12 @@ class BacktestTradeDto(BaseModel):
     trade_date: str
     symbol: str
     side: str
-    shares: float
-    execution_price: float
-    trade_value: float
-    weight_before: float
-    weight_after: float
-    fee_paid: float
+    shares: Decimal
+    execution_price: Decimal
+    trade_value: Decimal
+    weight_before: Decimal
+    weight_after: Decimal
+    fee_paid: Decimal
 
 
 class BacktestRunsResponse(BaseModel):
@@ -315,15 +319,35 @@ def _load_strategy_provenance(
     return with_mart_readonly(lambda cur: read_strategy_provenance(cur, strategy_run_id), database_url=database_url)
 
 
+def call_strategy_repository(
+    repo: Any,
+    *,
+    strategy_id: str,
+    context: AccessContext,
+    universe: str | None = None,
+    convention: str | None = None,
+) -> StrategyRunReport | StrategyRunUnavailable:
+    params = inspect.signature(repo.get_latest).parameters
+    kwargs: dict[str, Any] = {"strategy_id": strategy_id, "context": context}
+    if "universe" in params:
+        kwargs["universe"] = universe
+    if "convention" in params:
+        kwargs["convention"] = convention
+    return repo.get_latest(**kwargs)
+
+
 def _load_strategy_report(
     context: AccessContext,
     *,
     strategy_id: str = DASHBOARD_STRATEGY_ID,
     universe: str | None = None,
+    convention: str | None = None,
     database_url: str | None = None,
 ) -> StrategyRunReport | StrategyRunUnavailable:
     repo = PostgresStrategyRunRepository(database_url=database_url or settings.database_url)
-    return repo.get_latest(strategy_id=strategy_id, context=context, universe=universe)
+    return call_strategy_repository(
+        repo, strategy_id=strategy_id, context=context, universe=universe, convention=convention
+    )
 
 
 def get_strategy_run_page(
@@ -332,13 +356,25 @@ def get_strategy_run_page(
     strategy_id: str = DASHBOARD_STRATEGY_ID,
     universe: str | None = None,
     cutoff: str | None = None,
+    convention: str | None = None,
     database_url: str | None = None,
 ) -> StrategyRunPageResponse:
     norm_universe = "all" if universe is None else (normalize_ranking_universe(universe) or "all")
-    report = _load_strategy_report(context, strategy_id=strategy_id, universe=norm_universe, database_url=database_url)
+    norm_convention = normalize_peg_convention(convention)
+    report = _load_strategy_report(
+        context,
+        strategy_id=strategy_id,
+        universe=norm_universe,
+        convention=norm_convention,
+        database_url=database_url,
+    )
     if isinstance(report, StrategyRunUnavailable):
         return StrategyRunPageResponse(
-            available=False, reason=report.reason, strategy_id=strategy_id, universe=norm_universe
+            available=False,
+            reason=report.reason,
+            strategy_id=strategy_id,
+            universe=norm_universe,
+            convention=norm_convention,
         )
     display_map = load_entity_display_items(database_url=database_url)
     prov_map = _load_strategy_provenance(report.strategy_run_id, database_url=database_url)
@@ -376,6 +412,7 @@ def get_strategy_run_page(
         review_state=report.definition.review_state if report.definition else None,
         cutoff_at=target_cutoff,
         universe=norm_universe,
+        convention=norm_convention,
         total_decisions=len(items),
         decisions=items,
         wide_panel=wide_panel,
@@ -389,11 +426,17 @@ def get_rankings(
     strategy_id: str = DASHBOARD_STRATEGY_ID,
     universe: str | None = "all",
     cutoff: str | None = None,
-    limit: int = 200,
+    convention: str | None = None,
+    limit: int = 1000,
     database_url: str | None = None,
 ) -> RankingsResponse:
     page = get_strategy_run_page(
-        context, strategy_id=strategy_id, universe=universe, cutoff=cutoff, database_url=database_url
+        context,
+        strategy_id=strategy_id,
+        universe=universe,
+        cutoff=cutoff,
+        convention=convention,
+        database_url=database_url,
     )
     return RankingsResponse(
         available=page.available,
@@ -404,36 +447,23 @@ def get_rankings(
         review_state=page.review_state,
         cutoff_at=page.cutoff_at,
         universe=page.universe,
+        convention=page.convention,
         total=page.total_decisions,
         rows=page.decisions[:limit],
         display_map=page.display_map,
     )
 
 
-def _backtest_run_select(*, as_text: bool = False) -> str:
-    cast = "::text" if as_text else ""
-    metric_cols = ", ".join(
-        f"{col}{cast} as {col}" if as_text else col
-        for col in ("cagr_monthly", "sharpe_daily", "max_dd_daily", "vol_daily", "turnover_monthly", "calmar_daily")
-    )
-    bench_cols = ", ".join(
-        f"{col}{cast} as {col}" if as_text else col for col in ("benchmark_cagr", "benchmark_max_dd")
-    )
-    payload_col = "metrics_payload" if as_text else "coalesce(metrics_payload, '{}'::jsonb) as metrics_payload"
-    return f"""
+_BACKTEST_RUN_SELECT = """
   select run_id, strategy_key, strategy_version, universe_id,
          start_date::text, end_date::text, status,
-         {metric_cols},
-         {payload_col}, error_message,
+         cagr_monthly, sharpe_daily, max_dd_daily, vol_daily, turnover_monthly, calmar_daily,
+         coalesce(metrics_payload, '{}'::jsonb) as metrics_payload, error_message,
          executed_at::text, created_at::text,
          definition_content_sha256, price_basis, claim_ceiling,
-         benchmark_rule, {bench_cols}
+         benchmark_rule, benchmark_cagr, benchmark_max_dd
   from mart.backtest_runs
 """
-
-
-_BACKTEST_RUN_SELECT = _backtest_run_select(as_text=False)
-_MCP_BACKTEST_RUN_SELECT = _backtest_run_select(as_text=True)
 
 
 def list_backtest_runs(
@@ -504,45 +534,15 @@ class PostgresBacktestReader:
         runs: list[dict[str, Any]] = []
         valuations: list[dict[str, Any]] = []
         trades: list[dict[str, Any]] = []
-
-        def _load(cur: Any) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
-            out_runs: list[dict[str, Any]] = []
-            out_vals: list[dict[str, Any]] = []
-            out_trades: list[dict[str, Any]] = []
-            if run_id:
-                cur.execute(f"{_MCP_BACKTEST_RUN_SELECT} where run_id = %s limit 1", (run_id,))
-                if run_row := cur.fetchone():
-                    out_runs.append(dict(run_row))
-                    cur.execute(
-                        """
-                        select run_id, resolution, valuation_date::text,
-                               cum_nav::text as cum_nav, drawdown::text as drawdown,
-                               gross_exposure::text as gross_exposure, cash_weight::text as cash_weight,
-                               benchmark_cum_nav::text as benchmark_cum_nav
-                        from mart.backtest_valuations where run_id = %s order by valuation_date desc limit 100
-                        """,
-                        (run_id,),
-                    )
-                    out_vals = [dict(r) for r in cur.fetchall()]
-                    cur.execute(
-                        """
-                        select trade_id, run_id, trade_date::text, symbol, side,
-                               shares::text as shares, execution_price::text as execution_price,
-                               trade_value::text as trade_value, weight_before::text as weight_before,
-                               weight_after::text as weight_after, fee_paid::text as fee_paid
-                        from mart.backtest_trades where run_id = %s order by trade_date desc limit 100
-                        """,
-                        (run_id,),
-                    )
-                    out_trades = [dict(r) for r in cur.fetchall()]
-            else:
-                where = " where strategy_key = %s" if strategy_key else ""
-                params = (strategy_key, limit) if strategy_key else (limit,)
-                cur.execute(f"{_MCP_BACKTEST_RUN_SELECT}{where} order by created_at desc limit %s", params)
-                out_runs = [dict(r) for r in cur.fetchall()]
-            return out_runs, out_vals, out_trades
-
-        runs, valuations, trades = with_mart_readonly(_load, database_url=self._database_url)
+        if run_id:
+            detail = get_backtest_detail(run_id, database_url=self._database_url)
+            if detail is not None:
+                runs = [detail.run.model_dump(mode="json")]
+                valuations = [v.model_dump(mode="json") for v in detail.valuations[:100]]
+                trades = [t.model_dump(mode="json") for t in detail.trades[:100]]
+        else:
+            resp = list_backtest_runs(limit=limit, strategy_key=strategy_key, database_url=self._database_url)
+            runs = [r.model_dump(mode="json") for r in resp.runs]
 
         for run in runs:
             run["limitations"] = backtest_run_limitations(run)
@@ -568,6 +568,7 @@ __all__ = [
     "StrategyDecisionItemDto",
     "StrategyRunPageResponse",
     "backtest_run_limitations",
+    "call_strategy_repository",
     "get_backtest_detail",
     "get_rankings",
     "get_strategy_run_page",

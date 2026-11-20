@@ -326,9 +326,9 @@
       "threshold": "2 conventions",
       "window": null,
       "oracle": "repository",
-      "status": "pending",
+      "status": "backed",
       "verdict_keys": [],
-      "pending_on": "#1419"
+      "pending_on": null
     },
     {
       "id": "R3.C5",
@@ -591,9 +591,9 @@
       "threshold": null,
       "window": null,
       "oracle": "repository",
-      "status": "pending",
+      "status": "backed",
       "verdict_keys": [],
-      "pending_on": "#44, #1744"
+      "pending_on": null
     },
     {
       "id": "R5.E10",
