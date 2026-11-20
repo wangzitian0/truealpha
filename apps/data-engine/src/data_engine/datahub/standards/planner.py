@@ -107,15 +107,15 @@ def _resolve_headcount_row(connection: Any, cik: int, cutoff: datetime, priority
         knowable_at=first_row[1], source=str(first_row[0]), evidence_ref=str(first_row[2]), period_end=first_row[3]
     ):
         return None
-    try:
-        rows = connection.execute(
-            f"select source, knowable_at, evidence_ref, period_end from {_HEADCOUNT_TABLE} "
-            "where cik = %s and knowable_at <= %s and source <> 'curated-10k-2025' "
-            "order by array_position(%s::text[], source) nulls last, knowable_at desc, id desc",
-            (cik, cutoff, priority),
-        ).fetchall()
-    except Exception:  # noqa: BLE001
+    if not hasattr(connection, "execute"):
         return first_row
+    cursor = connection.execute(
+        f"select source, knowable_at, evidence_ref, period_end from {_HEADCOUNT_TABLE} "
+        "where cik = %s and knowable_at <= %s and source <> 'curated-10k-2025' "
+        "order by array_position(%s::text[], source) nulls last, knowable_at desc, id desc",
+        (cik, cutoff, priority),
+    )
+    rows = cursor.fetchall() if hasattr(cursor, "fetchall") else []
     if not rows:
         return first_row
     return next(
@@ -130,20 +130,20 @@ def _resolve_headcount_row(connection: Any, cik: int, cutoff: datetime, priority
 
 
 def _has_newer_annual_filing(connection: Any, cik: int, fact_knowable_at: datetime, cutoff: datetime) -> bool:
-    try:
-        row = connection.execute(
-            _NEWER_ANNUAL_FILING_SQL,
-            (
-                f"filing-document:CIK{cik:010d}:%",
-                fact_knowable_at,
-                cutoff,
-                f"companyfacts:CIK{cik:010d}",
-                fact_knowable_at,
-                cutoff,
-            ),
-        ).fetchone()
-    except Exception:  # noqa: BLE001
+    if not hasattr(connection, "execute"):
         return False
+    cursor = connection.execute(
+        _NEWER_ANNUAL_FILING_SQL,
+        (
+            f"filing-document:CIK{cik:010d}:%",
+            fact_knowable_at,
+            cutoff,
+            f"companyfacts:CIK{cik:010d}",
+            fact_knowable_at,
+            cutoff,
+        ),
+    )
+    row = cursor.fetchone() if hasattr(cursor, "fetchone") else None
     return row is not None
 
 

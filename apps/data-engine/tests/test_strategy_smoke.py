@@ -90,6 +90,7 @@ def test_below_confidence_floor_issuer_is_excluded_despite_complete_inputs() -> 
 
 
 def test_main_writes_json_and_markdown_and_exits_zero(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(RUNNER, "CANONICAL_FIXTURE_PATH", tmp_path / "strategy_run_preview.v1.json")
     monkeypatch.setattr(sys, "argv", ["run_strategy_smoke.py", "--output-dir", str(tmp_path)])
 
     exit_code = RUNNER.main()

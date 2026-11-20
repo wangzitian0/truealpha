@@ -37,9 +37,13 @@ Two naming forms are therefore legal (#731):
 from __future__ import annotations
 
 import collections
+import os
 import re
+import subprocess
 from datetime import datetime
 from pathlib import Path
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 MIGRATIONS = REPO_ROOT / "db/migrations"
@@ -181,3 +185,50 @@ def test_every_timestamped_migration_applies_after_the_whole_legacy_chain() -> N
         assert max(legacy) < min(timestamped), f"{min(timestamped)} would apply before {max(legacy)} in glob order"
     # And the order the runner sees is the order this module reasons about.
     assert names == sorted(names)
+
+
+def monotonic_timestamp_problems(current_names: list[str], base_names: list[str]) -> list[str]:
+    """Reject timestamped migrations on a branch whose prefix precedes origin/main's newest timestamp (#1774)."""
+    base_ts = [match.group(1) for name in base_names if (match := TIMESTAMPED_RE.match(name))]
+    if not base_ts:
+        return []
+    ceiling = max(base_ts)
+    added = sorted(set(current_names) - set(base_names))
+    problems: list[str] = []
+    for name in added:
+        if match := TIMESTAMPED_RE.match(name):
+            if match.group(1) < ceiling:
+                problems.append(
+                    f"{name}: timestamp {match.group(1)} precedes origin/main newest migration {ceiling}; "
+                    "rename to a UTC timestamp >= origin/main head (#1774)"
+                )
+    return problems
+
+
+def test_new_timestamped_migrations_are_monotonic_relative_to_origin_main() -> None:
+    check = subprocess.run(
+        ["git", "rev-parse", "--verify", "origin/main"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+    )
+    if check.returncode != 0:
+        if os.environ.get("CI") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
+            pytest.fail("origin/main ref must be present in CI to verify monotonic migration timestamps")
+        pytest.skip("origin/main ref unavailable in local checkout")
+    base_raw = subprocess.check_output(
+        ["git", "ls-tree", "--name-only", "origin/main", "db/migrations/"],
+        cwd=REPO_ROOT,
+        text=True,
+    )
+    base_names = sorted(Path(p).name for p in base_raw.splitlines() if p.endswith(".sql"))
+    problems = monotonic_timestamp_problems(_names(), base_names)
+    assert problems == [], "\n".join(problems)
+
+
+def test_monotonic_timestamp_guard_rejects_out_of_order_addition() -> None:
+    base = ["0001_raw.sql", "20261119T1200_datahub_second.sql"]
+    bad = ["0001_raw.sql", "20261119T0900_datahub_earlier.sql", "20261119T1200_datahub_second.sql"]
+    good = ["0001_raw.sql", "20261119T1200_datahub_second.sql", "20261119T1201_datahub_next.sql"]
+    assert len(monotonic_timestamp_problems(bad, base)) == 1
+    assert monotonic_timestamp_problems(good, base) == []
