@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Mapping
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
@@ -56,6 +57,8 @@ INCOME_FIELDS: Mapping[str, int] = {
 BALANCE_SHEET_FIELDS: Mapping[str, int] = {"total_assets": 8001}
 _SESSION_STAMP_LENGTH = len("2026-07-29 00:00:00")
 _MIDNIGHT = " 00:00:00"
+
+logger = logging.getLogger(__name__)
 
 
 class NotASessionCloseError(ValueError):
@@ -360,8 +363,9 @@ class MoomooFinancialsFetcher:
 
         try:
             return json.loads(gateway.fetch_once(key, fetch).decode())
-        except Exception:  # noqa: BLE001
-            return {}
+        except Exception as exc:  # noqa: BLE001 - one failed enrichment must not drop the statements
+            logger.warning("moomoo valuation detail fetch failed for %s: %s", symbol, type(exc).__name__)
+            return {"fetch_error": type(exc).__name__}
 
     def _statement(self, code: str, symbol: str, label: str, statement_type: int) -> Any:
         key = FetchKey("moomoo", f"financial_statements:{label}", f"symbol:{symbol}", gateway.utc_day())

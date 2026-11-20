@@ -1091,7 +1091,7 @@ def test_dual_convention_peg_evaluates_and_ranks_historical_and_consensus_indepe
     from datetime import UTC, datetime
 
     import polars as pl
-    from factors.panel import EXPR_PEG_CONSENSUS, evaluate_wide_panel
+    from factors.panel import evaluate_wide_panel
     from truealpha_contracts.fiscal_period import FiscalPeriod
 
     cutoff = datetime(2026, 3, 31, 23, 59, 59, tzinfo=UTC)
@@ -1162,5 +1162,4 @@ def test_dual_convention_peg_evaluates_and_ranks_historical_and_consensus_indepe
         targets=("peg_consensus",),
         include_confidence=False,
     )
-    assert EXPR_PEG_CONSENSUS is not None
     assert wide["peg_consensus"].to_list() == [0.125]

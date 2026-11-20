@@ -95,8 +95,9 @@ def seed_strategy_inputs_from_capture(
         "where ob.run_id = %s and o.semantic_type in ('financial-fact', 'market-price', 'listing-identity') "
         "and (o.parser_version = %s or o.semantic_type = 'listing-identity' "
         "or (o.semantic_type = 'market-price' and p.normalized_payload ->> %s is not null) "
-        "or (o.semantic_type = 'financial-fact' and p.normalized_payload ->> 'consensus_profit_growth' is not null))",
-        (run_id, parser_version, SERVED_BY_FAILOVER),
+        "or (o.semantic_type = 'financial-fact' and p.normalized_payload ->> 'consensus_profit_growth' is not null)) "
+        "order by (o.parser_version = %s) desc, o.knowable_at desc, o.observation_id",
+        (run_id, parser_version, SERVED_BY_FAILOVER, parser_version),
     ).fetchall()
     rows = [
         (r[0], None, r[1], r[2], parser_version)
@@ -163,10 +164,13 @@ def seed_strategy_inputs_from_capture(
             )
         if issuer_id in consensus_growth and not any(c.input_key == "consensus_profit_growth" for c in inputs):
             cg_listing, cg_raw_conf, cg_payload, cg_observed_at = consensus_growth[issuer_id]
+            cg_measured = cell_confidences.get((cg_listing, "consensus_profit_growth"))
+            if cg_measured is None:
+                cg_measured = cg_raw_conf
             cg_conf = (
-                cell_confidences.get((cg_listing, "consensus_profit_growth"))
-                or cg_raw_conf
-                or single_origin_confidence(
+                cg_measured
+                if cg_measured is not None
+                else single_origin_confidence(
                     case_id=f"cell:consensus_profit_growth:{cg_listing}",
                     provider_id="origin:moomoo-financials:v1",
                     lineage="moomoo",
@@ -393,7 +397,7 @@ def _persist_peg_consensus_nodes(
         has_val = item.peg_consensus is not None
         avail = "available" if has_val else "unavailable"
         src_status = "verified" if has_val else "degraded"
-        conf = item.peg_consensus_confidence if item.peg_consensus_confidence is not None else Decimal("0")
+        conf = item.peg_consensus_confidence
         reasons = list(item.peg_consensus_reason_codes)
         for node_key, val, unit in (
             ("peg_consensus", item.peg_consensus, "ratio"),
@@ -432,10 +436,7 @@ def _persist_peg_consensus_nodes(
         "value, unit, availability_status, reason_codes, "
         "source_evidence_status, factor_validation_status, confidence, tree_id, tree_version, tree_sha256"
         ") values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
-        "on conflict (run_id, issuer_id, node_id, period) do update set "
-        "value = excluded.value, availability_status = excluded.availability_status, "
-        "reason_codes = excluded.reason_codes, source_evidence_status = excluded.source_evidence_status, "
-        "confidence = excluded.confidence",
+        "on conflict (run_id, issuer_id, node_id, period) do nothing",
         rows,
     )
 

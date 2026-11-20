@@ -82,15 +82,28 @@ def contrast_ratio(hex_a: str, hex_b: str) -> float:
     return (max(la, lb) + 0.05) / (min(la, lb) + 0.05)
 
 
+_ON_ACCENT_CANDIDATES: Final[tuple[str, str]] = ("#FFFFFF", "#111111")
+
+
+def on_accent_color(preset: CardPreset) -> str:
+    """Return the candidate text color with the higher contrast over `accent`."""
+    return max(_ON_ACCENT_CANDIDATES, key=lambda c: contrast_ratio(c, preset.accent))
+
+
 def verify_preset_contrast(preset: CardPreset) -> tuple[bool, tuple[str, ...]]:
-    """Enforce WCAG AA contrast minimums on `fg` (`>= 4.5`) and `mute` (`>= 3.0`) over `surface_bg`."""
-    violations: list[str] = []
-    fg_ratio = contrast_ratio(preset.fg, preset.surface_bg)
-    if fg_ratio < 4.5:
-        violations.append(f"low_fg_contrast:{preset.preset_id}:{fg_ratio:.2f}")
-    mute_ratio = contrast_ratio(preset.mute, preset.surface_bg)
-    if mute_ratio < 3.0:
-        violations.append(f"low_mute_contrast:{preset.preset_id}:{mute_ratio:.2f}")
+    """Enforce WCAG AA minimums on each text and background pair that the card CSS template uses."""
+    pairs = (
+        ("fg", preset.fg, preset.surface_bg, 4.5),
+        ("mute", preset.mute, preset.surface_bg, 3.0),
+        ("fg_on_chip", preset.fg, preset.chip_bg, 4.5),
+        ("mute_on_chip", preset.mute, preset.chip_bg, 3.0),
+        ("on_accent", on_accent_color(preset), preset.accent, 4.5),
+    )
+    violations = [
+        f"low_{name}_contrast:{preset.preset_id}:{ratio:.2f}"
+        for name, text, background, minimum in pairs
+        if (ratio := contrast_ratio(text, background)) < minimum
+    ]
     return (not violations, tuple(violations))
 
 
@@ -550,6 +563,7 @@ def render_card_html(card: ResearchCard, *, preset: str | CardPreset | None = No
         fg=theme.fg,
         mute=theme.mute,
         accent=theme.accent,
+        on_accent=on_accent_color(theme),
         border=theme.border,
         chip_bg=theme.chip_bg,
     )

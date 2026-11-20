@@ -561,7 +561,7 @@ def test_theme_ranking_filters_by_target_entity_ids_when_specific_issuers_reques
 
 @pytest.mark.criterion("R5.E9")
 def test_r5_e9_card_presets_wcag_contrast_all_card_kinds_and_fail_on_low_contrast() -> None:
-    """R5.E9 (#44/#1744): All 10 presets pass WCAG AA contrast, all 6 CardKinds verify, and low contrast fails."""
+    """R5.E9: each preset passes WCAG AA on every CSS text pair, each CardKind verifies, and low contrast fails."""
     from truealpha_runtime.research_cards import (
         CARD_PRESETS,
         build_strategy_context_from_report,
@@ -575,6 +575,16 @@ def test_r5_e9_card_presets_wcag_contrast_all_card_kinds_and_fail_on_low_contras
     bad_preset = preset.model_copy(update={"fg": "#CCCCCC", "surface_bg": "#DDDDDD"})
     ok_bad, bad_violations = verify_preset_contrast(bad_preset)
     assert not ok_bad and any("low_fg_contrast" in code for code in bad_violations)
+
+    grey_accent = preset.model_copy(update={"accent": "#777777"})
+    ok_grey, grey_violations = verify_preset_contrast(grey_accent)
+    assert not ok_grey and any("low_on_accent_contrast" in code for code in grey_violations)
+
+    light_accent = preset.model_copy(update={"accent": "#FFD84D"})
+    assert research_cards.on_accent_color(light_accent) == "#111111"
+    assert "color:#FFF;" not in research_cards.render_card_html(
+        build_card(_report(ResearchReportKind.COMPANY, ("issuer:nice",)), CardKind.COMPANY), preset=light_accent
+    )
 
     for kind in CardKind:
         report_kind = {

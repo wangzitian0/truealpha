@@ -20,6 +20,7 @@ real database rather than asserting layer by layer.
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
@@ -227,7 +228,7 @@ def _definition() -> LargeModelValueV0Definition:
 
 @pytest.mark.criterion("R3.C4")
 def test_r3_c4_consensus_peg_end_to_end_from_moomoo_valuation_to_strategy_run_repository(connection) -> None:
-    """R3.C4: Moomoo valuation_detail -> MoomooFinancialsFetcher -> strategy_bridge -> mart.metric_node_values -> PostgresStrategyRunRepository(convention='consensus')."""
+    """R3.C4 partial: fetcher parse, evaluator, node persistence, and repository read. The seed step is not covered."""
     import secrets
 
     from data_engine.datahub.capture_core.moomoo_origin import MoomooFinancialsFetcher
@@ -343,6 +344,13 @@ def test_r3_c4_consensus_peg_end_to_end_from_moomoo_valuation_to_strategy_run_re
         ),
     )
     _persist_peg_consensus_nodes(connection, capture_run_id=capture_run_id, cutoff=_CUTOFF, evaluated=decisions)
+    rewritten = [replace(decisions[0], peg_consensus=Decimal("9.99"))]
+    _persist_peg_consensus_nodes(connection, capture_run_id=capture_run_id, cutoff=_CUTOFF, evaluated=rewritten)
+    kept = connection.execute(
+        "select value from mart.metric_node_values where run_id = %s and node_key = 'peg_consensus'",
+        (capture_run_id,),
+    ).fetchall()
+    assert kept == [(Decimal("0.25"),)], "a second write must not overwrite a persisted consensus PEG node"
 
     scoped_sql = _DECISIONS_SQL.replace(
         "left join mart.strategy_run_capture scope on scope.strategy_run_id = d.strategy_run_id",
