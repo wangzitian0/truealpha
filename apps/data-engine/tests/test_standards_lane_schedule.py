@@ -20,10 +20,10 @@ from data_engine.lanes.standards import (
 )
 from truealpha_contracts.universes import lane_name, record, served_keys
 
-#: What each environment runs (the contract lists them): production runs TOPT and QQQ, staging TOPT only.
+#: What each environment runs (the contract lists them): production runs TOPT and QQQ, staging runs TOPT, QQQ, and S&P 500.
 UNIVERSES_BY_ENVIRONMENT = [
     pytest.param("production", ("topt", "universe-list:qqq"), id="production"),
-    pytest.param("staging", ("topt",), id="staging"),
+    pytest.param("staging", ("topt", "universe-list:qqq", "universe-list:sp500"), id="staging"),
 ]
 
 
@@ -315,7 +315,11 @@ def _pointer(monkeypatch, *, heads: dict[str, str | None], stored: dict[str, str
     import psycopg
     from data_engine.datahub import question_coverage
 
-    ids = {"topt": TOPT_ID, "universe-list:qqq": QQQ_ID}
+    ids = {
+        "topt": TOPT_ID,
+        "universe-list:qqq": QQQ_ID,
+        "universe-list:sp500": "universe:sp500-us-2026-09-30",
+    }
 
     def governed_head(_connection, *, universe_prefix):
         # #756 replaced #826's literal: the head is resolved under the environment the
@@ -627,12 +631,16 @@ def test_nothing_is_launched_where_every_standard_has_been_backfilled(monkeypatc
 
 @pytest.mark.parametrize(
     ("app_env", "universes"),
-    [("production", ("topt", "universe-list:qqq")), ("staging", ("topt",)), ("typo-in-app-env", ("topt",))],
+    [
+        ("production", ("topt", "universe-list:qqq")),
+        ("staging", ("topt", "universe-list:qqq", "universe-list:sp500")),
+        ("typo-in-app-env", ("topt", "universe-list:qqq", "universe-list:sp500")),
+    ],
 )
 def test_the_catchup_asks_only_for_the_universes_the_environment_schedules(
     monkeypatch, app_env: str, universes: tuple[str, ...]
 ) -> None:
-    """Staging runs TOPT only. An environment that the contract does not name takes the rule of staging."""
+    """Staging runs TOPT, QQQ, and S&P 500. An unrecognised environment takes the staging rule."""
     from data_engine.lanes import standards
 
     asked: list[tuple[str, ...]] = []
@@ -659,14 +667,25 @@ def test_the_catchup_says_so_when_the_environment_schedules_no_universe(monkeypa
 
 
 def test_the_head_reports_sensor_follows_the_heads_of_the_universes_the_environment_schedules(monkeypatch) -> None:
-    """Staging runs TOPT only: a QQQ head in its database launches no run and enters no cursor."""
+    """In production S&P 500 is stopped, so an sp500 head enters neither launches nor cursor; in staging it runs."""
+    monkeypatch.setattr(settings, "app_env", "production")
+    _pointer(
+        monkeypatch,
+        heads={"topt": TOPT_NEW, "universe-list:qqq": QQQ_HEAD, "universe-list:sp500": QQQ_HEAD},
+        stored={},
+    )
+    prod = _tick({"topt": TOPT_OLD, "universe-list:qqq": QQQ_HEAD})
+    assert [request.run_key for request in prod.run_requests] == [f"head:topt:{TOPT_NEW}"]
+    assert _cursor(prod) == {"topt": TOPT_NEW, "universe-list:qqq": QQQ_HEAD}
+
     monkeypatch.setattr(settings, "app_env", "staging")
-    _pointer(monkeypatch, heads={"topt": TOPT_NEW, "universe-list:qqq": QQQ_HEAD}, stored={})
-
-    data = _tick({"topt": TOPT_OLD})
-
-    assert [request.run_key for request in data.run_requests] == [f"head:topt:{TOPT_NEW}"]
-    assert _cursor(data) == {"topt": TOPT_NEW}
+    staging = _tick({"topt": TOPT_OLD})
+    assert [request.run_key for request in staging.run_requests] == [
+        f"head:topt:{TOPT_NEW}",
+        f"head:universe-list:qqq:{QQQ_HEAD}",
+        f"head:universe-list:sp500:{QQQ_HEAD}",
+    ]
+    assert _cursor(staging) == {"topt": TOPT_NEW, "universe-list:qqq": QQQ_HEAD, "universe-list:sp500": QQQ_HEAD}
 
 
 def _db():

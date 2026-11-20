@@ -97,10 +97,10 @@
         "mic": "xnas",
         "nport_ticker": "QQQ"
       },
-      "roles": ["fund_consolidation"],
+      "roles": ["strategy", "fund_consolidation"],
       "price_series": true,
       "report_sample": ["listing:xnas:aapl", "listing:xnas:msft", "listing:xnas:nvda", "listing:xnas:amzn", "listing:xnas:googl"],
-      "cron": {"production": "20 23 * * *"}
+      "cron": {"staging": "5 1 * * *", "production": "20 23 * * *"}
     },
     "sp500": {
       "region": "us",
@@ -111,10 +111,10 @@
         "kind": "nport",
         "nport_ticker": "IVV"
       },
-      "roles": [],
+      "roles": ["strategy"],
       "price_series": false,
       "report_sample": [],
-      "cron": {"production": "15 1 * * *"}
+      "cron": {"staging": "45 1 * * *", "production": "15 1 * * *"}
     },
     "canary": {
       "region": "us",
@@ -141,11 +141,14 @@
       "trigger": "auto_batch_on_main_and_scheduled",
       "live_vendor_calls": true,
       "universes": [
-        {"key": "topt", "status": "scheduled"}
+        {"key": "topt", "status": "scheduled"},
+        {"key": "qqq", "status": "scheduled"},
+        {"key": "sp500", "status": "scheduled"}
       ],
-      "list_refresh": ["qqq"],
       "ticks": {
         "topt": {},
+        "qqq": {},
+        "sp500": {},
         "canary": {}
       }
     },
@@ -492,6 +495,58 @@
       "approved_by": "owner",
       "approved_at": "2026-11-16T15:28:17+08:00",
       "tracking_issue": "#1664"
+    },
+    {
+      "metric": "gppe",
+      "universe": "sp500",
+      "ticker": "XOM",
+      "cik": "0000034088",
+      "lei": "J3WHBG0MTS7O8ZVMDC91",
+      "legacy_ids": ["issuer:lei:J3WHBG0MTS7O8ZVMDC91", "issuer:cik:0000034088"],
+      "status": "not_applicable",
+      "reason": "no_us_gaap_gross_profit_tag",
+      "approved_by": "owner",
+      "approved_at": "2026-11-16T15:28:17+08:00",
+      "tracking_issue": "#1661"
+    },
+    {
+      "metric": "gppe",
+      "universe": "sp500",
+      "ticker": "V",
+      "cik": "0001403161",
+      "lei": "549300JZ4OKEHW3DPJ59",
+      "legacy_ids": ["issuer:cik:0001403161", "issuer:lei:549300JZ4OKEHW3DPJ59"],
+      "status": "not_applicable",
+      "reason": "no_us_gaap_gross_profit_tag",
+      "approved_by": "owner",
+      "approved_at": "2026-11-16T15:28:17+08:00",
+      "tracking_issue": "#1661"
+    },
+    {
+      "metric": "gppe",
+      "universe": "sp500",
+      "ticker": "MA",
+      "cik": "0001141391",
+      "lei": "AR5L2ODV9HN37376R084",
+      "legacy_ids": ["issuer:cik:0001141391", "issuer:lei:AR5L2ODV9HN37376R084"],
+      "status": "not_applicable",
+      "reason": "no_us_gaap_gross_profit_tag",
+      "approved_by": "owner",
+      "approved_at": "2026-11-16T15:28:17+08:00",
+      "tracking_issue": "#1661"
+    },
+    {
+      "metric": "gppe",
+      "universe": "sp500",
+      "ticker": "BRK.B",
+      "cik": "0001067983",
+      "lei": "5493000C01ZX7D35SD85",
+      "legacy_ids": ["issuer:cik:0001067983", "issuer:lei:5493000C01ZX7D35SD85"],
+      "status": "not_applicable",
+      "reason": "no_us_gaap_gross_profit_tag",
+      "approved_by": "owner",
+      "approved_at": "2026-11-16T15:28:17+08:00",
+      "tracking_issue": "#1661"
     }
   ]
 }

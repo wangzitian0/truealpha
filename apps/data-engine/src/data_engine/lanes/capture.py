@@ -91,7 +91,9 @@ def tick_cron(key: str, app_env: str) -> str:
 def universe_tick(key: str, app_env: str = settings.app_env) -> UniverseTick:
     universe = record(key)
     objectives = (
-        SENTINEL_OBJECTIVES if universe.is_sentinel else (None if universe.runs_strategy else DATA_UNIVERSE_OBJECTIVES)
+        SENTINEL_OBJECTIVES
+        if universe.is_sentinel
+        else (None if universe.membership.kind == "frozen_corpus" else DATA_UNIVERSE_OBJECTIVES)
     )
     return UniverseTick(
         key=key,

@@ -1005,7 +1005,10 @@ def test_the_compile_time_is_not_part_of_the_content_address() -> None:
 
 @pytest.mark.parametrize(
     ("app_env", "universes"),
-    [("production", ("topt", "universe-list:qqq")), ("staging", ("topt",))],
+    [
+        ("production", ("topt", "universe-list:qqq")),
+        ("staging", ("topt", "universe-list:qqq", "universe-list:sp500")),
+    ],
 )
 def test_the_confidence_job_is_scheduled_after_the_invariants_and_runs_per_universe_of_the_environment(
     monkeypatch: pytest.MonkeyPatch, app_env: str, universes: tuple[str, ...]

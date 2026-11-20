@@ -187,3 +187,84 @@ def test_entities_removes_thread_pools_and_fails_closed_on_db_errors(monkeypatch
             ),
             database_url="postgresql://unused",
         )
+
+
+def test_get_trace_falls_back_to_company_decision_for_non_topt_issuer(monkeypatch: pytest.MonkeyPatch) -> None:
+    """QQQ/SP500 issuers outside TOPT's page still resolve their trace decision and lineage via mart."""
+    from llm_service.services.auth_service import PrincipalRecord, access_context_for
+
+    seen_calls: list[tuple[str, str, str]] = []
+    decision_row = {
+        "issuer_id": "issuer:cik:0000882095",
+        "strategy_run_id": "strategy-run:qqq-1",
+        "corpus_sha256": "b" * 64,
+        "cutoff_at": "2026-11-20T01:05:00Z",
+        "eligible": True,
+        "tier": "tier_1",
+        "capital_adjusted_labor_efficiency": "125000",
+        "labor_efficiency_metric": "gppe_uniform_charge_v0",
+        "valuation_gap": "0.18",
+        "current_price_to_sales": "4.2",
+        "target_price_to_sales": "5.0",
+        "current_price_to_gross_profit": "8.1",
+        "target_price_to_gross_profit": "9.6",
+        "outcome": "ranked",
+        "exclusion_reason": None,
+        "rank": 4,
+        "target_weight": "0.05",
+        "peg": "1.1",
+        "peg_rank": 3,
+        "peg_reason_codes": [],
+        "availability_status": "available",
+        "confidence": "0.88",
+        "reason_codes": [],
+    }
+
+    monkeypatch.setattr(
+        entities_service,
+        "with_mart_readonly",
+        lambda fn, database_url=None: fn(object()),
+    )
+    monkeypatch.setattr(
+        entities_service,
+        "resolve_issuer_identity_from_cursor",
+        lambda _cur, iid: ([iid], {}),
+    )
+    monkeypatch.setattr(
+        entities_service,
+        "_fetch_company_decision_from_cursor",
+        lambda _cur, _cand, _leg: decision_row,
+    )
+    monkeypatch.setattr(
+        entities_service,
+        "_fetch_issuer_display_map_from_cursor",
+        lambda _cur, iid, _cand, _leg: {
+            iid: entities_service.EntityDisplayItem(
+                issuer_id=iid, ticker="GILD", display_name="GILEAD SCIENCES", label="GILD · GILEAD SCIENCES"
+            )
+        },
+    )
+    monkeypatch.setattr(entities_service, "_fetch_trace_nodes_from_cursor", lambda _cur, _cand: [])
+
+    def _fake_lineage(_cur: Any, strategy_run_id: str, issuer_id: str, cutoff_at: str) -> tuple[str, str, list[Any]]:
+        seen_calls.append((strategy_run_id, issuer_id, cutoff_at))
+        return "result:qqq-1", "listing:xnas:gild", []
+
+    monkeypatch.setattr(entities_service, "read_trace_lineage", _fake_lineage)
+
+    ctx = access_context_for(PrincipalRecord(principal_id="p:1", tenant_id="t:1", principal_kind="member"))
+    topt_page = strategy_service.StrategyRunPageResponse(
+        available=True,
+        strategy_id="large_model_value_v0",
+        strategy_run_id="strategy-run:topt-1",
+        corpus_sha256="a" * 64,
+        decisions=[],
+    )
+    resp = entities_service.get_trace(ctx, issuer_id="issuer:cik:0000882095", page=topt_page)
+    assert resp.available is True
+    assert resp.issuer_id == "issuer:cik:0000882095"
+    assert resp.label == "GILD · GILEAD SCIENCES"
+    assert resp.corpus_sha256 == "b" * 64
+    assert resp.lineage_result_id == "result:qqq-1"
+    assert resp.decision is not None and resp.decision.tier == "tier_1" and resp.decision.peg == "1.1"
+    assert seen_calls == [("strategy-run:qqq-1", "issuer:cik:0000882095", "2026-11-20T01:05:00Z")]

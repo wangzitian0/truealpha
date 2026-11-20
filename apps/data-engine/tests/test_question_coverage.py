@@ -35,6 +35,8 @@ from truealpha_contracts.question_requirements import (
 
 TOPT = "universe:topt-us-2026-03-31"
 QQQ = "universe:qqq-us-2026-06-30"
+SP500 = "universe:sp500-us-2026-09-30"
+CANARY = "universe:canary-us-2026-06-30"
 REQ = {item.question: item for item in QUESTION_REQUIREMENTS}
 
 
@@ -74,20 +76,23 @@ def test_removing_the_left_join_is_red() -> None:
     assert unbound["missing"] == 2 and unbound["column"] is None and unbound["tracking_issue"] == "#772"
 
 
-def test_peg_applies_to_topt_only() -> None:
-    """PEG has a column, but only for TOPT. On QQQ no column governs the universe,
-    so every subject is graded missing with full denominator, never not_applicable."""
+def test_peg_applies_to_strategy_universes_only() -> None:
+    """PEG is scoped to the `strategy` role (`topt`, `qqq`, `sp500`). On non-strategy sentinel `canary`,
+    no column governs the universe, so every subject is graded missing with full denominator."""
     peg = REQ[Question.Q2_VALUATION_VS_GROWTH]
     cells = {"mart.strategy_decisions.peg": (Cell("issuer:a", True), Cell("issuer:b", False, "excluded:financial"))}
-    topt = classify_question(peg, universe_id=TOPT, issuers=["issuer:a", "issuer:b"], cells_by_column=cells)
-    qqq_issuers = [f"issuer:{n}" for n in range(100)]
-    qqq = classify_question(peg, universe_id=QQQ, issuers=qqq_issuers, cells_by_column=cells)
-    assert topt["answered"] == 1 and topt["unavailable"] == {"excluded:financial": 1}
-    assert topt["denominator"] == 2 and topt["missing"] == 0
-    assert qqq["missing"] == 100
-    assert qqq["denominator"] == 100
-    assert qqq["answered"] == 0 and qqq["unavailable"] == {}
-    assert qqq["column"] is None and qqq["columns"] == []
+    for strategy_universe in (TOPT, QQQ, SP500):
+        res = classify_question(
+            peg, universe_id=strategy_universe, issuers=["issuer:a", "issuer:b"], cells_by_column=cells
+        )
+        assert res["answered"] == 1 and res["unavailable"] == {"excluded:financial": 1}
+        assert res["denominator"] == 2 and res["missing"] == 0
+    canary_issuers = [f"issuer:{n}" for n in range(6)]
+    canary = classify_question(peg, universe_id=CANARY, issuers=canary_issuers, cells_by_column=cells)
+    assert canary["missing"] == 6
+    assert canary["denominator"] == 6
+    assert canary["answered"] == 0 and canary["unavailable"] == {}
+    assert canary["column"] is None and canary["columns"] == []
 
 
 def test_a_question_with_no_column_at_all_stays_missing() -> None:
@@ -374,10 +379,10 @@ def test_coverage_verdict_failure_flags_zero_answered_applicable_questions_only(
                 issuers=["issuer:a"],
                 cells_by_column={"mart.metric_node_values.value": (Cell("issuer:a", True),)},
             ),
-            # Q2 has no column on QQQ (missing == denominator), so it is not applicable.
+            # Q2 is scoped to strategy role; on sentinel CANARY it has no column (missing == denominator).
             "q2": classify_question(
                 REQ[Question.Q2_VALUATION_VS_GROWTH],
-                universe_id=QQQ,
+                universe_id=CANARY,
                 issuers=["issuer:a"],
                 cells_by_column={},
             ),
@@ -392,6 +397,20 @@ def test_coverage_verdict_failure_flags_zero_answered_applicable_questions_only(
         },
     }
     assert coverage_verdict_failure(healthy_report) is None
+
+    zero_q2_report = {
+        "universe_id": QQQ,
+        "questions": {
+            **healthy_report["questions"],
+            "q2": classify_question(
+                REQ[Question.Q2_VALUATION_VS_GROWTH],
+                universe_id=QQQ,
+                issuers=["issuer:a"],
+                cells_by_column={},
+            ),
+        },
+    }
+    assert coverage_verdict_failure(zero_q2_report) == f"zero answered for q2=0/1 on {QQQ}"
 
     zero_q5_report = {
         "universe_id": QQQ,
@@ -411,6 +430,47 @@ def test_coverage_verdict_failure_flags_zero_answered_applicable_questions_only(
         },
     }
     assert coverage_verdict_failure(zero_q5_report) == f"zero answered for q5=0/1 on {QQQ}"
+
+
+def test_compile_report_qqq_empty_fund_virtual_company_fails_q5_via_expected_fund_ids(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When mart.fund_virtual_company has 0 rows for QQQ, expected_fund_ids prevents GREEN-WHILE-EMPTY on q5."""
+    from data_engine.datahub import question_coverage as qc
+
+    head = GovernedHead(universe_id=QQQ, run_id="capture-run:qqq-empty-q5", cutoff=datetime(2026, 10, 6, tzinfo=UTC))
+
+    class _FakeCursor(_Rows):
+        def fetchone(self):
+            return self.rows[0] if self.rows else None
+
+    class _FakeConn:
+        def execute(self, sql: str, params=None):
+            if "from mart.environment_identity" in sql:
+                return _FakeCursor([("staging",)])
+            if "from mart.fund_holdings_resolved" in sql:
+                return _FakeCursor([("etf:series:S000101292",)])
+            return _FakeCursor([])
+
+    monkeypatch.setattr(qc, "governed_head", lambda *_a, **_k: head)
+    monkeypatch.setattr(qc, "gppe_cells", lambda *_a, **_k: (Cell("issuer:a", True),))
+    monkeypatch.setattr(
+        qc,
+        "peg_cells",
+        lambda *_a, **_k: (Cell("issuer:a", True),),
+    )
+    monkeypatch.setattr(qc, "supply_chain_cells", lambda *_a, **_k: (Cell("issuer:a", True),))
+    monkeypatch.setattr(qc, "analyst_rating_cells", lambda *_a, **_k: (Cell("issuer:a", True),))
+    monkeypatch.setattr(qc, "fund_cells", lambda *_a, **_k: ())
+    monkeypatch.setattr(qc, "theme_purity_cells", lambda *_a, **_k: (Cell("issuer:a", True),))
+
+    report = qc.compile_report(_FakeConn(), universe="universe-list:qqq", executed_at=datetime(2026, 10, 6, tzinfo=UTC))  # type: ignore[arg-type]
+    assert report is not None
+    q5 = report["questions"]["q5"]
+    assert q5["denominator"] == 1
+    assert q5["answered"] == 0
+    assert q5["unavailable"] == {NO_ROW: 1}
+    assert coverage_verdict_failure(report) == f"zero answered for q5=0/1 on {QQQ}"
 
 
 def test_reports_current_for_head_requires_both_coverage_and_confidence_reports() -> None:

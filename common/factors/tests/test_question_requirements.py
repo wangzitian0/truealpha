@@ -75,7 +75,10 @@ def test_the_registry_sha_moves_with_the_mapping() -> None:
 
 def test_universe_scoping_is_explicit() -> None:
     peg = next(c for item in QUESTION_REQUIREMENTS for c in item.columns if c.factor == "peg")
-    assert peg.applies_to("universe:topt-us-2026-03-31") and not peg.applies_to("universe:qqq-us-2026-06-30")
+    assert peg.applies_to("universe:topt-us-2026-03-31")
+    assert peg.applies_to("universe:qqq-us-2026-06-30")
+    assert peg.applies_to("universe:sp500-us-2026-09-30")
+    assert not peg.applies_to("universe:canary-us-2026-06-30")
     gppe = next(c for item in QUESTION_REQUIREMENTS for c in item.columns if c.factor == "gross_profit_per_employee")
     assert gppe.applies_to("universe:qqq-us-2026-06-30")
 
