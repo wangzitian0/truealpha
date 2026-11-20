@@ -242,16 +242,25 @@ def leaf_consumed_columns(
     expressions: _Exprs = PANEL_EXPRESSIONS,
 ) -> tuple[str, ...]:
     seen: list[str] = []
+    visiting: set[str] = set()
 
     def _visit(cur: str | pl.Expr) -> None:
         if isinstance(cur, str):
             if cur in PANEL_INDEX_COLUMNS:
                 return
+            if cur in visiting:
+                raise ValueError(f"cyclic expression dependency involving {cur!r}")
             if (sub := _expr_of(cur, issuer_class, metrics, expressions)) is None:
                 if cur not in seen:
                     seen.append(cur)
                 return
-            cur = sub
+            visiting.add(cur)
+            try:
+                for root in consumed_columns(sub):
+                    _visit(root)
+            finally:
+                visiting.remove(cur)
+            return
         for root in consumed_columns(cur):
             _visit(root)
 
@@ -267,12 +276,19 @@ def reachable_derived_columns(
     expressions: _Exprs = PANEL_EXPRESSIONS,
 ) -> tuple[str, ...]:
     ordered: list[str] = []
+    visiting: set[str] = set()
 
     def _visit(key: str) -> None:
+        if key in visiting:
+            raise ValueError(f"cyclic expression dependency involving {key!r}")
         if key not in ordered and key not in PANEL_INDEX_COLUMNS:
             if (expr := _expr_of(key, issuer_class, metrics, expressions)) is not None:
-                for dep in consumed_columns(expr):
-                    _visit(dep)
+                visiting.add(key)
+                try:
+                    for dep in consumed_columns(expr):
+                        _visit(dep)
+                finally:
+                    visiting.remove(key)
                 if key not in ordered:
                     ordered.append(key)
 
@@ -466,10 +482,11 @@ def published_node(table: str, column: str, *, metrics: _Specs = PANEL_METRICS) 
     return metrics[PUBLISHED_COLUMNS[table][column]]
 
 
-def ratio_operands_of(spec: PanelMetricSpec) -> tuple[str, str] | None:
-    if spec.expr is None:
+def ratio_operands_of(spec: PanelMetricSpec, issuer_class: IssuerClass | None = None) -> tuple[str, str] | None:
+    expr = spec.expr_for(issuer_class)
+    if expr is None:
         return None
-    ast = json.loads(spec.expr.meta.serialize(format="json"))
+    ast = json.loads(expr.meta.serialize(format="json"))
     div = ast.get("Ternary", {}).get("truthy", {}).get("BinaryExpr") or ast.get("BinaryExpr")
     if div and div.get("op") == "TrueDivide":
         num, den = div.get("left", {}).get("Column"), div.get("right", {}).get("Column")
@@ -512,7 +529,7 @@ bound_tree = bound_variant
 
 
 def capital_adjusted_node(v: FactorVariantSpec, cls: IssuerClass, *, metrics: _Specs = PANEL_METRICS) -> str:
-    if (pair := ratio_operands_of(metrics[v.root])) is None:
+    if (pair := ratio_operands_of(metrics[v.root], cls)) is None:
         raise ValueError(f"root {v.root} of {v.key} is not a ratio expression")
     return pair[0]
 
@@ -520,8 +537,10 @@ def capital_adjusted_node(v: FactorVariantSpec, cls: IssuerClass, *, metrics: _S
 def operating_numerator_node(
     v: FactorVariantSpec, cls: IssuerClass, *, metrics: _Specs = PANEL_METRICS
 ) -> PanelMetricSpec:
-    expr = metrics[capital_adjusted_node(v, cls, metrics=metrics)].expr_for(cls)
-    assert expr is not None
+    num_key = capital_adjusted_node(v, cls, metrics=metrics)
+    expr = metrics[num_key].expr_for(cls)
+    if expr is None:
+        raise ValueError(f"metric {num_key!r} has no expression for issuer class {cls.value!r}")
     first = consumed_columns(expr)[0]
     req = [
         m

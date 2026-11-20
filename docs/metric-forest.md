@@ -1,10 +1,10 @@
 # Metric forest
 
-Design for #528, following the owner decision of 2026-09-17. Status: active.
+Design for #528, following the owner decision of 2026-09-17. Status: active (`#1610` converged formula expressions onto native Polars `pl.Expr` entries in `common/factors/src/factors/panel.py` while preserving minted node/tree UUIDs and frozen hashes).
 Step B (the registry, with GPPE v0.2.0 as its first tree) merged in #909 (§11),
 which adds `common/factors/src/factors/panel.py`. `init.md` stays the authority.
 This document describes how rule 17 and §7 module 2 are implemented without a
-hardcoded formula.
+hardcoded per-company formula branch.
 
 ## 0. The decisions this implements
 

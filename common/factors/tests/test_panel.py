@@ -35,16 +35,23 @@ from factors.panel import (
     PANEL_METRICS,
     PANEL_VARIANTS,
     PHYSICALLY_NON_NEGATIVE,
+    FactorVariantSpec,
     IssuerClass,
+    PanelMetricSpec,
+    PeriodSemantics,
     SignPolicy,
+    UnitFamily,
     build_wide_panel,
+    capital_adjusted_node,
     consumed_columns,
     evaluate_panel_variant,
     evaluate_wide_panel,
     judge_sign,
     leaf_consumed_columns,
     node_id_for,
+    operating_numerator_node,
     published_node,
+    reachable_derived_columns,
     tree_id_for,
     variant_sha256,
 )
@@ -366,6 +373,8 @@ def test_null_filling_and_positivity_conditions_in_polars_expressions() -> None:
 
 def test_deterministic_node_and_tree_uuids_preserve_minted_identities_and_use_uuid5_for_new_keys() -> None:
     """Existing 26 nodes and 3 variants keep their minted UUIDs; new factor keys derive deterministic uuid5."""
+    assert len(MINTED_NODE_IDS) == 26
+    assert len(MINTED_TREE_IDS) == 3
     for key, expected_uuid in MINTED_NODE_IDS.items():
         assert node_id_for(key) == expected_uuid
         assert PANEL_METRICS[key].node_id == expected_uuid
@@ -439,3 +448,50 @@ def test_must_be_non_negative_is_reserved_for_physical_quantities_and_judge_sign
     assert finding_violation is not None
     assert finding_violation.violation is True
     assert finding_violation.signal is False
+
+
+def test_cyclic_expressions_are_rejected_and_bound_node_helpers_respect_issuer_class() -> None:
+    """Expression DAG traversals reject direct/indirect cycles and bound helpers respect issuer_class (#1618)."""
+    self_cycle = {"node_a": pl.col("node_a") + 1}
+    two_cycle = {"node_a": pl.col("node_b") + 1, "node_b": pl.col("node_a") * 2}
+
+    with pytest.raises(ValueError, match="cyclic expression dependency involving 'node_a'"):
+        leaf_consumed_columns("node_a", metrics={}, expressions=self_cycle)
+    with pytest.raises(ValueError, match="cyclic expression dependency involving 'node_a'"):
+        reachable_derived_columns("node_a", metrics={}, expressions=self_cycle)
+    with pytest.raises(ValueError, match="cyclic expression dependency involving 'node_a'"):
+        leaf_consumed_columns("node_a", metrics={}, expressions=two_cycle)
+    with pytest.raises(ValueError, match="cyclic expression dependency involving 'node_a'"):
+        reachable_derived_columns("node_a", metrics={}, expressions=two_cycle)
+
+    every = frozenset(IssuerClass)
+    num_spec = PanelMetricSpec(
+        "class_numerator",
+        UnitFamily.CURRENCY,
+        PeriodSemantics.FISCAL_YEAR_FLOW,
+        every,
+        {},
+        expr_by_class={IssuerClass.FINANCIAL: pl.col("pre_provision_profit") - pl.col("capital_charge")},
+    )
+    root_spec = PanelMetricSpec(
+        "class_ratio_root",
+        UnitFamily.PER_EMPLOYEE,
+        PeriodSemantics.FISCAL_YEAR_FLOW,
+        every,
+        {},
+        expr_by_class={IssuerClass.FINANCIAL: pl.col("class_numerator") / pl.col("employees_total")},
+    )
+    custom_metrics = {
+        **PANEL_METRICS,
+        num_spec.key: num_spec,
+        root_spec.key: root_spec,
+    }
+    variant = FactorVariantSpec("custom_class_tree", "1.0.0", "class_ratio_root", every)
+    assert capital_adjusted_node(variant, IssuerClass.FINANCIAL, metrics=custom_metrics) == "class_numerator"
+    with pytest.raises(ValueError, match="not a ratio expression"):
+        capital_adjusted_node(variant, IssuerClass.NON_FINANCIAL, metrics=custom_metrics)
+
+    no_num_expr = num_spec.with_updates(expr=None, expr_by_class={})
+    missing_num_metrics = {**custom_metrics, num_spec.key: no_num_expr}
+    with pytest.raises(ValueError, match="has no expression for issuer class 'financial'"):
+        operating_numerator_node(variant, IssuerClass.FINANCIAL, metrics=missing_num_metrics)

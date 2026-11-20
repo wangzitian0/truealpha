@@ -243,6 +243,7 @@ def test_a_marker_backs_a_criterion_with_no_verdict_key() -> None:
         ({"status": "backed"}, "must not name pending_on"),
         ({"pending_on": None}, "must name pending_on"),
         ({"oracle": "self"}, "oracle"),
+        ({"oracle": "owner"}, "oracle"),
     ],
 )
 def test_a_malformed_criterion_is_refused(change: dict, message: str) -> None:
@@ -259,3 +260,12 @@ def test_a_duplicate_id_and_a_missing_m0_are_refused() -> None:
         _with([*criteria, criteria[0]])
     with pytest.raises(ValidationError, match="R2 has no M0"):
         _with([c for c in criteria if c["id"] != "R2.M0"])
+
+
+def test_r4_d1_uses_panel_expressions_and_r5_e9_uses_automated_repository_oracle() -> None:
+    """#1610 & #44: R4.D1 points to panel.py (0 migrations) and R5.E9 uses automated Playwright checks."""
+    d1, e9 = _criterion("R4.D1"), _criterion("R5.E9")
+    assert "panel.py" in d1.statement
+    assert d1.threshold == "0 migrations"
+    assert e9.oracle == "repository"
+    assert "Playwright" in e9.statement
