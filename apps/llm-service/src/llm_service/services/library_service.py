@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import threading
 import uuid
 from datetime import datetime
 from typing import Any, Literal
@@ -159,19 +160,32 @@ class LibraryReportResponse(BaseModel):
     markdown: str | None = None
 
 
+_s3_client_lock = threading.Lock()
+_s3_client_cache: tuple[tuple[Any, Any], Any] | None = None
+
+
+def _s3_client() -> Any:
+    global _s3_client_cache
+    key = (create_s3_client, settings.to_s3_settings())
+    with _s3_client_lock:
+        if _s3_client_cache is not None and _s3_client_cache[0] == key:
+            return _s3_client_cache[1]
+        client = create_s3_client(key[1])
+        _s3_client_cache = (key, client)
+        return client
+
+
 def _put_s3_bytes(principal_id: str, data: bytes, content_type: str) -> tuple[str, str, int]:
     digest = hashlib.sha256(data).hexdigest()
     prefix = settings.s3_documents_prefix.strip("/") or "documents"
     key = f"{prefix}/{principal_id}/{digest[:2]}/{digest}"
-    client = create_s3_client(settings.to_s3_settings())
-    put_object_bytes(client, bucket=settings.s3_bucket, key=key, data=data, content_type=content_type)
+    put_object_bytes(_s3_client(), bucket=settings.s3_bucket, key=key, data=data, content_type=content_type)
     return key, digest, len(data)
 
 
 def _get_s3_bytes(key: str) -> bytes | None:
     try:
-        client = create_s3_client(settings.to_s3_settings())
-        return read_object_bytes(client, bucket=settings.s3_bucket, key=key)
+        return read_object_bytes(_s3_client(), bucket=settings.s3_bucket, key=key)
     except Exception as exc:  # noqa: BLE001
         if is_not_found(exc):
             return None

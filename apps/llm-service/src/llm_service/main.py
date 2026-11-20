@@ -152,10 +152,10 @@ def _nightly_verdicts(cursor: Any, contract: Any) -> list[dict[str, Any]]:
     ]
 
 
-def _data_engine_facts() -> tuple[str, str, str, list[dict[str, Any]] | str, list[dict[str, Any]] | str]:
+def _data_engine_facts() -> tuple[str, str, list[dict[str, Any]] | str, list[dict[str, Any]] | str]:
     import psycopg
 
-    parser, git_sha, image_digest = "unknown", "unknown", "unknown"
+    git_sha, image_digest = "unknown", "unknown"
     pointers: list[dict[str, Any]] | str = "unknown"
     verdicts: list[dict[str, Any]] | str = "unknown"
     contract = load_environment_contract()
@@ -183,13 +183,12 @@ def _data_engine_facts() -> tuple[str, str, str, list[dict[str, Any]] | str, lis
             )
     except degraded_errors as exc:
         logger.warning("health database unavailable: %s", redact_db_error(exc, database_url=settings.database_url))
-    return parser, git_sha, image_digest, pointers, verdicts
+    return git_sha, image_digest, pointers, verdicts
 
 
 def _data_engine_health_extra() -> dict[str, Any]:
-    parser, git_sha, image_digest, pointers, verdicts = _data_engine_facts()
+    git_sha, image_digest, pointers, verdicts = _data_engine_facts()
     return {
-        "data_engine_parser": parser,
         "data_engine_git_sha": git_sha,
         "data_engine_image_digest": image_digest,
         "governed_pointers": pointers,

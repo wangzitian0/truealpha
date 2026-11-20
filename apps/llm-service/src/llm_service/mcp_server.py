@@ -39,10 +39,10 @@ from truealpha_runtime.strategy_run_postgres import PostgresStrategyRunRepositor
 from llm_service.config import settings
 from llm_service.services.auth_service import MCP_OWNER_PRINCIPAL_ID, resolve_mcp_access_context
 from llm_service.services.entities_service import (
-    PostgresCompanyProfileReader,
-    PostgresEtfProfileReader,
-    PostgresThemePurityLeaderboardReader,
     TraceResponse,
+    get_company_profile_payload,
+    get_etf_profile_payload,
+    get_theme_purity_leaderboard,
     get_trace,
     normalize_theme_slug,
     resolve_fund_resolution_candidates,
@@ -76,11 +76,11 @@ from llm_service.services.strategy_service import (
 
 __all__ = [
     "PostgresBacktestReader",
-    "PostgresCompanyProfileReader",
-    "PostgresEtfProfileReader",
-    "PostgresThemePurityLeaderboardReader",
     "backtest_run_limitations",
     "build_mcp_server",
+    "get_company_profile_payload",
+    "get_etf_profile_payload",
+    "get_theme_purity_leaderboard",
     "normalize_theme_slug",
     "resolve_fund_resolution_candidates",
 ]
@@ -269,18 +269,6 @@ class BacktestReader(Protocol):
     ) -> dict[str, Any]: ...
 
 
-def _default_company_profile_reader() -> CompanyProfileReader:
-    return PostgresCompanyProfileReader(database_url=settings.database_url)
-
-
-def _default_theme_purity_reader() -> ThemePurityLeaderboardReader:
-    return PostgresThemePurityLeaderboardReader(database_url=settings.database_url)
-
-
-def _default_etf_profile_reader() -> EtfProfileReader:
-    return PostgresEtfProfileReader(database_url=settings.database_url)
-
-
 def _default_backtest_reader() -> BacktestReader:
     return PostgresBacktestReader(database_url=settings.database_url)
 
@@ -309,9 +297,6 @@ def build_mcp_server(
     active_repository = repository or _default_repository()
     active_metric_node = metric_node_repository or PostgresMetricNodeValueRepository(database_url=url)
     active_research = research_repository or _default_research_report_repository()
-    active_company_profile = company_profile_reader or _default_company_profile_reader()
-    active_theme_purity = theme_purity_reader or _default_theme_purity_reader()
-    active_etf_profile = etf_profile_reader or _default_etf_profile_reader()
     active_backtest = backtest_reader or _default_backtest_reader()
     active_modules = issuer_module_reader or _default_issuer_module_reader()
 
@@ -394,14 +379,18 @@ def build_mcp_server(
         description="Read an ETF virtual-company consolidation profile and holdings valuation from mart.",
     )
     def entities_holdings(request: EntitiesHoldingsToolRequest) -> dict[str, Any]:
-        return active_etf_profile.get_etf_profile(fund_id=request.fund_id)
+        if etf_profile_reader is not None:
+            return etf_profile_reader.get_etf_profile(fund_id=request.fund_id)
+        return get_etf_profile_payload(fund_id=request.fund_id)
 
     @server.tool(
         name="entities_themes",
         description="Read the theme purity leaderboard ranking the purest issuers under a thematic definition.",
     )
     def entities_themes(request: EntitiesThemesToolRequest) -> dict[str, Any]:
-        return active_theme_purity.get_leaderboard(theme_id=request.theme_id, limit=request.limit)
+        if theme_purity_reader is not None:
+            return theme_purity_reader.get_leaderboard(theme_id=request.theme_id, limit=request.limit)
+        return get_theme_purity_leaderboard(theme_id=request.theme_id, limit=request.limit)
 
     @server.tool(
         name="entities_trace",
@@ -443,7 +432,9 @@ def build_mcp_server(
         description="Read an issuer's 360 profile across GPPE, valuation tier, valuation gap, PEG, and theme purity.",
     )
     def entities_detail(request: EntitiesDetailToolRequest) -> dict[str, Any]:
-        return active_company_profile.get_company_profile(issuer_id=request.issuer_id)
+        if company_profile_reader is not None:
+            return company_profile_reader.get_company_profile(issuer_id=request.issuer_id)
+        return get_company_profile_payload(issuer_id=request.issuer_id)
 
     # --- Domain 4: library (5) ---
 

@@ -830,54 +830,50 @@ def _fetch_company_themes_from_cursor(cur: Any, candidates: list[str]) -> list[d
     return [dict(r) for r in cur.fetchall()]
 
 
-class PostgresCompanyProfileReader:
-    def __init__(self, *, database_url: str) -> None:
-        self._database_url = database_url
+def get_company_profile_payload(
+    *,
+    issuer_id: str,
+    candidates: list[str] | tuple[str, ...] | None = None,
+    include_decision: bool = True,
+    database_url: str | None = None,
+) -> dict[str, Any]:
+    clean = issuer_id.strip()
 
-    def get_company_profile(
-        self,
-        *,
-        issuer_id: str,
-        candidates: list[str] | tuple[str, ...] | None = None,
-        include_decision: bool = True,
-    ) -> dict[str, Any]:
-        clean = issuer_id.strip()
+    def _q(cur: Any) -> tuple[dict[str, Any] | None, dict[str, Any] | None, list[dict[str, Any]]]:
+        if candidates is not None:
+            cand = list(candidates)
+            legacy_by_entity: dict[str, str] = {}
+        else:
+            cand, legacy_by_entity = resolve_issuer_identity_from_cursor(cur, clean)
+        decision: dict[str, Any] | None = None
+        gppe: dict[str, Any] | None = None
+        if include_decision:
+            decision = _fetch_company_decision_from_cursor(cur, cand, legacy_by_entity)
+            cur.execute(
+                f"""
+                select v.value::text as gppe, v.node_key as operating_branch,
+                       v.confidence::text as confidence,
+                       coalesce(v.availability_status, 'unavailable') as availability_status,
+                       v.reason_codes
+                from mart.metric_node_values v
+                where v.issuer_id = any(%s::text[])
+                  and v.node_key = any(%s::text[])
+                  and {served_run_predicate("v.run_id")}
+                order by (v.availability_status = 'available') desc, v.period desc limit 1
+                """,
+                (cand, list(GPPE_VARIANT_KEYS)),
+            )
+            gppe = cur.fetchone()
+        themes = _fetch_company_themes_from_cursor(cur, cand)
+        return decision, gppe, themes
 
-        def _q(cur: Any) -> tuple[dict[str, Any] | None, dict[str, Any] | None, list[dict[str, Any]]]:
-            if candidates is not None:
-                cand = list(candidates)
-                legacy_by_entity: dict[str, str] = {}
-            else:
-                cand, legacy_by_entity = resolve_issuer_identity_from_cursor(cur, clean)
-            decision: dict[str, Any] | None = None
-            gppe: dict[str, Any] | None = None
-            if include_decision:
-                decision = _fetch_company_decision_from_cursor(cur, cand, legacy_by_entity)
-                cur.execute(
-                    f"""
-                    select v.value::text as gppe, v.node_key as operating_branch,
-                           v.confidence::text as confidence,
-                           coalesce(v.availability_status, 'unavailable') as availability_status,
-                           v.reason_codes
-                    from mart.metric_node_values v
-                    where v.issuer_id = any(%s::text[])
-                      and v.node_key = any(%s::text[])
-                      and {served_run_predicate("v.run_id")}
-                    order by (v.availability_status = 'available') desc, v.period desc limit 1
-                    """,
-                    (cand, list(GPPE_VARIANT_KEYS)),
-                )
-                gppe = cur.fetchone()
-            themes = _fetch_company_themes_from_cursor(cur, cand)
-            return decision, gppe, themes
-
-        decision_row, gppe_row, themes = with_mart_readonly(_q, database_url=self._database_url)
-        return _format_company_profile(
-            issuer_id=issuer_id,
-            decision_row=dict(decision_row) if decision_row else None,
-            gppe_row=dict(gppe_row) if gppe_row else None,
-            themes=themes,
-        )
+    decision_row, gppe_row, themes = with_mart_readonly(_q, database_url=database_url)
+    return _format_company_profile(
+        issuer_id=issuer_id,
+        decision_row=dict(decision_row) if decision_row else None,
+        gppe_row=dict(gppe_row) if gppe_row else None,
+        themes=themes,
+    )
 
 
 def _legacy_id_join(column: str) -> str:
@@ -921,44 +917,45 @@ def resolve_fund_resolution_candidates(fund_id: str) -> dict[str, Any]:
     }
 
 
-class PostgresThemePurityLeaderboardReader:
-    def __init__(self, *, database_url: str) -> None:
-        self._database_url = database_url
+def get_theme_purity_leaderboard(
+    *,
+    theme_id: str,
+    limit: int = 10,
+    database_url: str | None = None,
+) -> dict[str, Any]:
+    clamped_limit = max(1, min(limit, 100))
+    normalized_slug = normalize_theme_slug(theme_id)
 
-    def get_leaderboard(self, *, theme_id: str, limit: int = 10) -> dict[str, Any]:
-        clamped_limit = max(1, min(limit, 100))
-        normalized_slug = normalize_theme_slug(theme_id)
-
-        def _load(cur: Any) -> list[dict[str, Any]]:
-            cur.execute(
-                f"""
-                with latest_per_issuer as (
-                    select distinct on (p.issuer_id)
-                           p.issuer_id, p.cik, p.theme_id, p.theme, p.theme_share,
-                           p.in_theme_revenue, p.consolidated_revenue, p.segments, p.confidence,
-                           coalesce(p.availability_status, 'unavailable') as availability_status,
-                           p.cutoff, p.created_at
-                    from mart.issuer_theme_purity p
-                    where (p.theme_id = %s or p.theme_id = %s or lower(p.theme) = lower(%s))
-                      and p.partition_id is not null
-                      and {served_or_empty_head_predicate("p.run_id")}
-                    order by p.issuer_id, p.cutoff desc, p.created_at desc
-                )
-                select coalesce(ei.legacy_id, l.issuer_id) as issuer_id,
-                       l.cik, l.theme_id, l.theme, l.theme_share::text as theme_share,
-                       l.in_theme_revenue::text as in_theme_revenue,
-                       l.consolidated_revenue::text as consolidated_revenue,
-                       l.segments, l.confidence::text as confidence, l.availability_status
-                from latest_per_issuer l
-                {_legacy_id_join("l.issuer_id")}
-                order by (l.theme_share) desc nulls last, (l.confidence) desc nulls last limit %s
-                """,
-                (theme_id, normalized_slug, theme_id.strip(), clamped_limit),
+    def _load(cur: Any) -> list[dict[str, Any]]:
+        cur.execute(
+            f"""
+            with latest_per_issuer as (
+                select distinct on (p.issuer_id)
+                       p.issuer_id, p.cik, p.theme_id, p.theme, p.theme_share,
+                       p.in_theme_revenue, p.consolidated_revenue, p.segments, p.confidence,
+                       coalesce(p.availability_status, 'unavailable') as availability_status,
+                       p.cutoff, p.created_at
+                from mart.issuer_theme_purity p
+                where (p.theme_id = %s or p.theme_id = %s or lower(p.theme) = lower(%s))
+                  and p.partition_id is not null
+                  and {served_or_empty_head_predicate("p.run_id")}
+                order by p.issuer_id, p.cutoff desc, p.created_at desc
             )
-            return [_format_theme_row(r, include_issuer=True) for r in cur.fetchall()]
+            select coalesce(ei.legacy_id, l.issuer_id) as issuer_id,
+                   l.cik, l.theme_id, l.theme, l.theme_share::text as theme_share,
+                   l.in_theme_revenue::text as in_theme_revenue,
+                   l.consolidated_revenue::text as consolidated_revenue,
+                   l.segments, l.confidence::text as confidence, l.availability_status
+            from latest_per_issuer l
+            {_legacy_id_join("l.issuer_id")}
+            order by (l.theme_share) desc nulls last, (l.confidence) desc nulls last limit %s
+            """,
+            (theme_id, normalized_slug, theme_id.strip(), clamped_limit),
+        )
+        return [_format_theme_row(r, include_issuer=True) for r in cur.fetchall()]
 
-        issuers = with_mart_readonly(_load, database_url=self._database_url)
-        return {"theme_id": theme_id, "limit": clamped_limit, "count": len(issuers), "issuers": issuers}
+    issuers = with_mart_readonly(_load, database_url=database_url)
+    return {"theme_id": theme_id, "limit": clamped_limit, "count": len(issuers), "issuers": issuers}
 
 
 def _etf_match_clauses(prefix: str, id_param: str) -> tuple[str, str]:
@@ -979,76 +976,69 @@ def _etf_match_clauses(prefix: str, id_param: str) -> tuple[str, str]:
     return where_sql, rank_sql
 
 
-class PostgresEtfProfileReader:
-    def __init__(self, *, database_url: str) -> None:
-        self._database_url = database_url
+def get_etf_profile_payload(*, fund_id: str, database_url: str | None = None) -> dict[str, Any]:
+    query_params = resolve_fund_resolution_candidates(fund_id)
+    fund_where, fund_rank = _etf_match_clauses("", "clean_id")
+    hold_where, hold_rank = _etf_match_clauses("v.", "target_fund_id")
 
-    def get_etf_profile(self, *, fund_id: str) -> dict[str, Any]:
-        query_params = resolve_fund_resolution_candidates(fund_id)
-        fund_where, fund_rank = _etf_match_clauses("", "clean_id")
-        hold_where, hold_rank = _etf_match_clauses("v.", "target_fund_id")
+    def _load(cur: Any) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+        cur.execute(
+            f"""
+            select {_FUND_VIRTUAL_COLS}
+            from mart.fund_virtual_company
+            where ({fund_where})
+              and {served_or_empty_head_predicate("run_id", _id_prefix_like("fund_consolidation").removesuffix("%"))}
+            order by {fund_rank}, cutoff desc, created_at desc limit 1
+            """,
+            query_params,
+        )
+        f_row = cur.fetchone()
+        h_params = {**query_params, "target_fund_id": str(f_row["fund_id"]) if f_row else query_params["clean_id"]}
+        cur.execute(
+            f"""
+            select coalesce(fund_name, fund_id) as fund_name, to_char(report_period, 'YYYY-MM-DD') as report_period,
+                   holding_name, ticker, isin, percent_of_net_assets::text as weight_pct, value_usd::text as value_usd,
+                   coalesce(ei.legacy_id, v.issuer_entity) as issuer_entity, v.listing_id
+            from mart.fund_holdings_valuation v
+            {_legacy_id_join("v.issuer_entity")}
+            where {hold_where}
+            order by {hold_rank}, v.percent_of_net_assets desc nulls last, v.holding_name asc limit 100
+            """,
+            h_params,
+        )
+        return f_row, cur.fetchall()
 
-        def _load(cur: Any) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
-            cur.execute(
-                f"""
-                select {_FUND_VIRTUAL_COLS}
-                from mart.fund_virtual_company
-                where ({fund_where})
-                  and {served_or_empty_head_predicate("run_id", _id_prefix_like("fund_consolidation").removesuffix("%"))}
-                order by {fund_rank}, cutoff desc, created_at desc limit 1
-                """,
-                query_params,
-            )
-            f_row = cur.fetchone()
-            h_params = {**query_params, "target_fund_id": str(f_row["fund_id"]) if f_row else query_params["clean_id"]}
-            cur.execute(
-                f"""
-                select coalesce(fund_name, fund_id) as fund_name, to_char(report_period, 'YYYY-MM-DD') as report_period,
-                       holding_name, ticker, isin, percent_of_net_assets::text as weight_pct, value_usd::text as value_usd,
-                       coalesce(ei.legacy_id, v.issuer_entity) as issuer_entity, v.listing_id
-                from mart.fund_holdings_valuation v
-                {_legacy_id_join("v.issuer_entity")}
-                where {hold_where}
-                order by {hold_rank}, v.percent_of_net_assets desc nulls last, v.holding_name asc limit 100
-                """,
-                h_params,
-            )
-            return f_row, cur.fetchall()
-
-        fund_row, raw_holdings = with_mart_readonly(_load, database_url=self._database_url)
-        first_holding = raw_holdings[0] if raw_holdings else None
-        holdings = [
-            {
-                "holding_name": str(r.get("holding_name", "")),
-                **{
-                    k: _opt_str(r, k)
-                    for k in ("ticker", "isin", "weight_pct", "value_usd", "issuer_entity", "listing_id")
-                },
-            }
-            for r in raw_holdings
-        ]
-        lines = _opt_int(fund_row, "lines")
-        codes = fund_row.get("reason_codes") if fund_row else None
-        return {
-            "fund_id": fund_id,
-            "fund_name": _opt_str(fund_row, "fund_name") or _opt_str(first_holding, "fund_name") or fund_id,
-            "cutoff": _opt_str(fund_row, "cutoff"),
-            "report_period": _opt_str(fund_row, "report_period") or _opt_str(first_holding, "report_period"),
-            "weighted_valuation_gap": _opt_str(fund_row, "weighted_valuation_gap"),
-            "weighted_valuation_gap_basis": _opt_str(fund_row, "valuation_basis"),
-            "total_weight_pct": _opt_str(fund_row, "total_weight_pct") or "0.00",
-            "resolved_weight_pct": _opt_str(fund_row, "resolved_weight_pct") or "0.00",
-            "valued_weight_pct": _opt_str(fund_row, "valued_weight_pct") or "0.00",
-            "lines": lines if lines is not None else len(holdings),
-            "valued_lines": _opt_int(fund_row, "valued_lines") or 0,
-            "confidence": _opt_str(fund_row, "confidence"),
-            "availability_status": _opt_str(fund_row, "availability_status")
-            or ("available" if holdings else "unavailable"),
-            "reason_codes": list(codes)
-            if codes is not None
-            else ([] if holdings else ["no_virtual_company_consolidation_found"]),
-            "holdings": holdings,
+    fund_row, raw_holdings = with_mart_readonly(_load, database_url=database_url)
+    first_holding = raw_holdings[0] if raw_holdings else None
+    holdings = [
+        {
+            "holding_name": str(r.get("holding_name", "")),
+            **{k: _opt_str(r, k) for k in ("ticker", "isin", "weight_pct", "value_usd", "issuer_entity", "listing_id")},
         }
+        for r in raw_holdings
+    ]
+    lines = _opt_int(fund_row, "lines")
+    codes = fund_row.get("reason_codes") if fund_row else None
+    return {
+        "fund_id": fund_id,
+        "fund_name": _opt_str(fund_row, "fund_name") or _opt_str(first_holding, "fund_name") or fund_id,
+        "cutoff": _opt_str(fund_row, "cutoff"),
+        "report_period": _opt_str(fund_row, "report_period") or _opt_str(first_holding, "report_period"),
+        "weighted_valuation_gap": _opt_str(fund_row, "weighted_valuation_gap"),
+        "weighted_valuation_gap_basis": _opt_str(fund_row, "valuation_basis"),
+        "total_weight_pct": _opt_str(fund_row, "total_weight_pct") or "0.00",
+        "resolved_weight_pct": _opt_str(fund_row, "resolved_weight_pct") or "0.00",
+        "valued_weight_pct": _opt_str(fund_row, "valued_weight_pct") or "0.00",
+        "lines": lines if lines is not None else len(holdings),
+        "valued_lines": _opt_int(fund_row, "valued_lines") or 0,
+        "confidence": _opt_str(fund_row, "confidence"),
+        "availability_status": _opt_str(fund_row, "availability_status")
+        or ("available" if holdings else "unavailable"),
+        "reason_codes": list(codes)
+        if codes is not None
+        else ([] if holdings else ["no_virtual_company_consolidation_found"]),
+        "holdings": holdings,
+    }
 
 
 __all__ = [
@@ -1057,9 +1047,6 @@ __all__ = [
     "FundValuationDto",
     "FundValuationsResponse",
     "IssuerModuleUnavailable",
-    "PostgresCompanyProfileReader",
-    "PostgresEtfProfileReader",
-    "PostgresThemePurityLeaderboardReader",
     "SupplyChainExposure",
     "THEME_LATEST_RUN_SQL",
     "THEME_ROWS_SQL",
@@ -1070,8 +1057,11 @@ __all__ = [
     "TraceResponse",
     "ValuedHoldingRowDto",
     "_format_company_profile",
+    "get_company_profile_payload",
     "get_entity_detail",
+    "get_etf_profile_payload",
     "get_fund_valuations",
+    "get_theme_purity_leaderboard",
     "get_themes_overview",
     "get_trace",
     "load_analyst_ratings",

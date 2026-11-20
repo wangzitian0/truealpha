@@ -31,7 +31,7 @@ def test_system_probes_and_openapi_surface(monkeypatch: pytest.MonkeyPatch) -> N
     assert paths["/livez"]["get"]["operationId"] == "system_livez"
     assert paths["/readyz"]["get"]["operationId"] == "system_readyz"
 
-    monkeypatch.setattr(main_mod, "_data_engine_facts", lambda: ("unknown", "unknown", "unknown", "unknown", "unknown"))
+    monkeypatch.setattr(main_mod, "_data_engine_facts", lambda: ("unknown", "unknown", "unknown", "unknown"))
     client = TestClient(app)
     assert client.get("/health").status_code == 200
     assert client.get("/livez").status_code == 200
@@ -86,7 +86,7 @@ def test_data_engine_facts_avoids_staging_and_does_not_swallow_bugs(
     )
     caplog.set_level("WARNING")
     facts = main_mod._data_engine_facts()
-    assert facts == ("unknown", "unknown", "unknown", "unknown", "unknown")
+    assert facts == ("unknown", "unknown", "unknown", "unknown")
     assert "SuperSecret99" not in caplog.text
 
     # 3. Normal query path never reads staging.*.
