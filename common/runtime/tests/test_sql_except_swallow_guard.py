@@ -17,8 +17,20 @@ def _calls_execute(node: ast.AST) -> bool:
     return False
 
 
-def _handler_reraises(handler: ast.ExceptHandler) -> bool:
-    return any(isinstance(node, ast.Raise) for node in ast.walk(ast.Module(body=handler.body, type_ignores=[])))
+def _handler_terminates_by_raising(body: list[ast.stmt]) -> bool:
+    if not body:
+        return False
+    last = body[-1]
+    if isinstance(last, ast.Raise):
+        return True
+    if isinstance(last, ast.If):
+        return (
+            bool(last.body)
+            and bool(last.orelse)
+            and _handler_terminates_by_raising(last.body)
+            and _handler_terminates_by_raising(last.orelse)
+        )
+    return False
 
 
 def _catches_broad_type(expr: ast.expr | None) -> bool:
@@ -26,6 +38,8 @@ def _catches_broad_type(expr: ast.expr | None) -> bool:
         return True
     if isinstance(expr, ast.Name):
         return expr.id in FORBIDDEN_CATCH_NAMES
+    if isinstance(expr, ast.Attribute):
+        return expr.attr in FORBIDDEN_CATCH_NAMES
     if isinstance(expr, ast.Tuple):
         return any(_catches_broad_type(elt) for elt in expr.elts)
     return False
@@ -41,7 +55,7 @@ def find_sql_except_swallows(source: str, filename: str = "<string>") -> list[st
         if not any(_calls_execute(stmt) for stmt in node.body):
             continue
         for handler in node.handlers:
-            if _catches_broad_type(handler.type) and not _handler_reraises(handler):
+            if _catches_broad_type(handler.type) and not _handler_terminates_by_raising(handler.body):
                 caught = ast.unparse(handler.type) if handler.type is not None else "bare except"
                 offenders.append(f"{filename}:{handler.lineno}: swallows `{caught}` around .execute()")
     return offenders
@@ -86,3 +100,16 @@ def _ok(conn, log):
         raise
 """
     assert find_sql_except_swallows(narrow_or_reraised, "sample.py") == []
+
+    partial_raise = """
+def _partial(conn, flag):
+    try:
+        return conn.execute("select 1").fetchone()
+    except builtins.Exception:
+        if flag:
+            raise
+        return None
+"""
+    assert find_sql_except_swallows(partial_raise, "sample.py") == [
+        "sample.py:5: swallows `builtins.Exception` around .execute()"
+    ]

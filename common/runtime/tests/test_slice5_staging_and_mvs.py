@@ -326,11 +326,62 @@ def test_refresh_mart_materialized_views_respects_transaction_status(
     assert conn.autocommit is False
 
 
-def test_composition_run_topt_pipeline_commits_before_concurrent_mv_refresh() -> None:
+def test_composition_run_topt_pipeline_commits_before_concurrent_mv_refresh(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """composition.run_topt_pipeline must commit before refreshing entity_identity concurrently (#1774)."""
-    src = (REPO_ROOT / "apps/data-engine/src/data_engine/datahub/capture_core/composition.py").read_text(
-        encoding="utf-8"
+    from decimal import Decimal
+    from types import SimpleNamespace
+
+    from data_engine.datahub.capture_core import composition
+
+    conn = _FakeMvConnection(TransactionStatus.INTRANS, autocommit=False)
+    plan = SimpleNamespace(
+        run_id=f"capture-run:{'0' * 64}",
+        source_label="src:1",
+        timeline=None,
+        retry=None,
+        freshness_windows={},
+        default_freshness_max_age=None,
+        coordinates={"listing:xnas:aapl": ("i", "ins", "l", "AAPL")},
+        raw_coordinates={},
+        bindings={},
+        work_items=[],
+        release_manifest_id="rm:1",
+        forced_fetch=False,
     )
-    commit_idx = src.index("connection.commit()")
-    refresh_idx = src.index("refresh_mart_materialized_views(connection, (MART_ENTITY_IDENTITY,), concurrently=True)")
-    assert commit_idx < refresh_idx
+    status = SimpleNamespace(terminal_count=0, complete=True, success_count=1, unchanged_count=0, obligation_count=1)
+    monkeypatch.setattr(composition, "plan_and_persist", lambda *_a, **_k: plan)
+    monkeypatch.setattr(
+        composition,
+        "PostgresCaptureControlRepository",
+        lambda *_a, **_k: SimpleNamespace(status=lambda _run_id: status),
+    )
+    monkeypatch.setattr(composition, "PostgresCaptureControlSink", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        composition,
+        "PostgresEvidenceGraphRepository",
+        lambda *_a, **_k: SimpleNamespace(append=lambda *_a2, **_k2: None),
+    )
+    monkeypatch.setattr(composition, "risk_free_rate_at", lambda *_a, **_k: SimpleNamespace(value=Decimal("0.05")))
+    monkeypatch.setattr(
+        composition,
+        "PostgresToptCoreRepository",
+        lambda *_a, **_k: SimpleNamespace(
+            freeze_snapshot=lambda **_k2: SimpleNamespace(),
+            materialize=lambda *_a2, **_k2: [1],
+        ),
+    )
+    monkeypatch.setattr(composition.quality_report, "build_report", lambda *_a, **_k: SimpleNamespace())
+    monkeypatch.setattr(composition.quality_report, "persist", lambda *_a, **_k: "qr:1")
+
+    composition.run_topt_pipeline(
+        conn,  # type: ignore[arg-type]
+        cutoff=datetime(2026, 6, 1, tzinfo=UTC),
+        version="v1",
+    )
+
+    assert conn.committed == 1
+    refresh_sql = [stmt for stmt in conn.executed if "refresh materialized view" in stmt.lower()]
+    assert len(refresh_sql) == 1
+    assert "concurrently" in refresh_sql[0].lower()

@@ -37,10 +37,13 @@ Two naming forms are therefore legal (#731):
 from __future__ import annotations
 
 import collections
+import os
 import re
 import subprocess
 from datetime import datetime
 from pathlib import Path
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 MIGRATIONS = REPO_ROOT / "db/migrations"
@@ -210,7 +213,9 @@ def test_new_timestamped_migrations_are_monotonic_relative_to_origin_main() -> N
         text=True,
     )
     if check.returncode != 0:
-        return
+        if os.environ.get("CI") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
+            pytest.fail("origin/main ref must be present in CI to verify monotonic migration timestamps")
+        pytest.skip("origin/main ref unavailable in local checkout")
     base_raw = subprocess.check_output(
         ["git", "ls-tree", "--name-only", "origin/main", "db/migrations/"],
         cwd=REPO_ROOT,
