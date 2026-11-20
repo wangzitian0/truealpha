@@ -356,7 +356,20 @@ def build_route(
         except TypeError:
             td_origin = twelve_data_origin()
     origins = [origin for origin in (td_origin, moomoo_kline_origin()) if origin is not None]
-    fetcher: MarketPriceFetcher = yahoo_quote_fetcher
+    base_fetcher: MarketPriceFetcher = yahoo_quote_fetcher
+    conn = getattr(context, "connection", None)
+    if conn is not None and hasattr(conn, "cursor") and not uses_twelve_data(getattr(context, "universe_id", None)):
+        from data_engine.datahub.market_prices import ingest_yahoo_daily_series
+
+        def _yahoo_with_series(symbol: str, cutoff: date) -> MarketPriceQuote | None:
+            quote = base_fetcher(symbol, cutoff)
+            if quote is not None and quote.raw_bytes:
+                ingest_yahoo_daily_series(conn, symbol, quote.raw_bytes, now=context.cutoff)
+            return quote
+
+        fetcher: MarketPriceFetcher = _yahoo_with_series
+    else:
+        fetcher = base_fetcher
     effective_drill = drill or getattr(context, "drill", None)
     if effective_drill is not None and hasattr(effective_drill, "arm"):
         fetcher, armed_origins = effective_drill.arm(settings.app_env, fetcher, origins)
