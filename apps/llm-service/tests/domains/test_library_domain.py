@@ -309,3 +309,44 @@ def test_lookup_governed_card_artifact_does_not_swallow_db_errors(monkeypatch: p
     assert len(captured_sql) == 1
     assert "join mart.served_head" in captured_sql[0]
     assert "recorded_at desc" not in captured_sql[0]
+
+
+def test_library_s3_client_cached_when_settings_unchanged_and_recreated_on_change(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from infra2_sdk.runtime.s3 import S3Settings
+    from llm_service.config import settings
+    from pydantic import SecretStr
+
+    created: list[Any] = []
+
+    def _factory(s3_cfg: S3Settings) -> object:
+        client = object()
+        created.append((s3_cfg.bucket, client))
+        return client
+
+    monkeypatch.setattr(library_service, "_s3_client_cache", None)
+    monkeypatch.setattr(library_service, "create_s3_client", _factory)
+    monkeypatch.setattr(settings, "s3_bucket", "test-bucket-a")
+    monkeypatch.setattr(settings, "s3_endpoint", "http://127.0.0.1:9000")
+    monkeypatch.setattr(settings, "s3_access_key", "test-ak")
+    monkeypatch.setattr(settings, "s3_secret_key", SecretStr("test-sk"))
+    monkeypatch.setattr(library_service, "put_object_bytes", lambda *_a, **_k: {})
+    monkeypatch.setattr(library_service, "read_object_bytes", lambda *_a, **_k: b"payload")
+
+    library_service._put_s3_bytes("p:1", b"payload", "text/plain")
+    assert library_service._get_s3_bytes("documents/p:1/aa/bb") == b"payload"
+    assert len(created) == 1
+
+    monkeypatch.setattr(settings, "s3_bucket", "test-bucket-b")
+    assert library_service._get_s3_bytes("documents/p:1/aa/cc") == b"payload"
+    assert len(created) == 2
+
+    def _other_factory(s3_cfg: S3Settings) -> object:
+        client = object()
+        created.append((s3_cfg.bucket, client))
+        return client
+
+    monkeypatch.setattr(library_service, "create_s3_client", _other_factory)
+    assert library_service._get_s3_bytes("documents/p:1/aa/dd") == b"payload"
+    assert len(created) == 3

@@ -383,18 +383,15 @@ def test_default_repository_is_mart_backed_with_fixture_opt_out(monkeypatch: pyt
 def test_default_company_and_theme_and_etf_readers_are_postgres_backed() -> None:
     from llm_service.mcp_server import (
         PostgresBacktestReader,
-        PostgresCompanyProfileReader,
-        PostgresEtfProfileReader,
-        PostgresThemePurityLeaderboardReader,
         _default_backtest_reader,
-        _default_company_profile_reader,
-        _default_etf_profile_reader,
-        _default_theme_purity_reader,
+        get_company_profile_payload,
+        get_etf_profile_payload,
+        get_theme_purity_leaderboard,
     )
 
-    assert isinstance(_default_company_profile_reader(), PostgresCompanyProfileReader)
-    assert isinstance(_default_theme_purity_reader(), PostgresThemePurityLeaderboardReader)
-    assert isinstance(_default_etf_profile_reader(), PostgresEtfProfileReader)
+    assert callable(get_company_profile_payload)
+    assert callable(get_theme_purity_leaderboard)
+    assert callable(get_etf_profile_payload)
     assert isinstance(_default_backtest_reader(), PostgresBacktestReader)
 
 
@@ -573,13 +570,13 @@ def test_postgres_theme_purity_leaderboard_reader_normalizes_theme_slug(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import psycopg
-    from llm_service.mcp_server import PostgresThemePurityLeaderboardReader
+    from llm_service.mcp_server import get_theme_purity_leaderboard
     from llm_service.services import entities_service
 
     _stub_connection_error(monkeypatch)
-    reader = PostgresThemePurityLeaderboardReader(database_url="postgresql://invalid:invalid@127.0.0.1:59999/none")
+    db_url = "postgresql://invalid:invalid@127.0.0.1:59999/none"
     with pytest.raises(psycopg.OperationalError, match="connection refused"):
-        reader.get_leaderboard(theme_id="AI Infrastructure", limit=5)
+        get_theme_purity_leaderboard(theme_id="AI Infrastructure", limit=5, database_url=db_url)
 
     captured_params: list[tuple[Any, ...]] = []
 
@@ -591,7 +588,7 @@ def test_postgres_theme_purity_leaderboard_reader_normalizes_theme_slug(
             return []
 
     monkeypatch.setattr(entities_service, "with_mart_readonly", lambda fn, **_k: fn(_FakeCur()))
-    result = reader.get_leaderboard(theme_id="AI Infrastructure", limit=5)
+    result = get_theme_purity_leaderboard(theme_id="AI Infrastructure", limit=5, database_url=db_url)
     assert result["theme_id"] == "AI Infrastructure"
     assert result["limit"] == 5
     assert result["count"] == 0
@@ -649,24 +646,24 @@ def test_postgres_company_profile_reader_handles_connection_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import psycopg
-    from llm_service.mcp_server import PostgresCompanyProfileReader
+    from llm_service.mcp_server import get_company_profile_payload
 
     _stub_connection_error(monkeypatch)
-    reader = PostgresCompanyProfileReader(database_url="postgresql://invalid:invalid@127.0.0.1:59999/none")
     with pytest.raises(psycopg.OperationalError, match="connection refused"):
-        reader.get_company_profile(issuer_id="NVDA")
+        get_company_profile_payload(issuer_id="NVDA", database_url="postgresql://invalid:invalid@127.0.0.1:59999/none")
 
 
 def test_postgres_etf_profile_reader_handles_connection_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import psycopg
-    from llm_service.mcp_server import PostgresEtfProfileReader
+    from llm_service.mcp_server import get_etf_profile_payload
 
     _stub_connection_error(monkeypatch)
-    reader = PostgresEtfProfileReader(database_url="postgresql://invalid:invalid@127.0.0.1:59999/none")
     with pytest.raises(psycopg.OperationalError, match="connection refused"):
-        reader.get_etf_profile(fund_id="fund:nasdaq:qqq")
+        get_etf_profile_payload(
+            fund_id="fund:nasdaq:qqq", database_url="postgresql://invalid:invalid@127.0.0.1:59999/none"
+        )
 
 
 # --- #1117: the theme readers meet the unvisited fill rows of Q6 ---------------------------------
@@ -769,26 +766,16 @@ def _theme_row(
     )
 
 
-def _profile_reader() -> Any:
-    from llm_service.mcp_server import PostgresCompanyProfileReader
-
-    return PostgresCompanyProfileReader(database_url="postgresql://unused")
-
-
-def _leaderboard_reader() -> Any:
-    from llm_service.mcp_server import PostgresThemePurityLeaderboardReader
-
-    return PostgresThemePurityLeaderboardReader(database_url="postgresql://unused")
-
-
 def test_company_profile_ignores_legacy_fill_rows_and_stays_unavailable(theme_database: Any) -> None:
     import uuid
+
+    from llm_service.mcp_server import get_company_profile_payload
 
     issuer = str(uuid.uuid4())
     for theme_id in ("zz-theme-a", "zz-theme-b"):
         _theme_row(theme_database, issuer_id=issuer, theme_id=theme_id, cutoff=_NEW_CUTOFF, fill=True)
 
-    profile = _profile_reader().get_company_profile(issuer_id=issuer)
+    profile = get_company_profile_payload(issuer_id=issuer, database_url="postgresql://unused")
 
     assert profile["theme_purity"] == [], "fill rows are not data and are excluded from theme_purity"
     assert profile["availability_status"] == "unavailable", "an issuer with only fill rows has no profile data"
@@ -797,12 +784,14 @@ def test_company_profile_ignores_legacy_fill_rows_and_stays_unavailable(theme_da
 def test_company_profile_keeps_an_older_real_row_when_a_newer_run_holds_only_a_fill(theme_database: Any) -> None:
     import uuid
 
+    from llm_service.mcp_server import get_company_profile_payload
+
     issuer = str(uuid.uuid4())
     _theme_row(theme_database, issuer_id=issuer, theme_id="zz-theme-a", cutoff=_OLD_CUTOFF, fill=False)
     _theme_row(theme_database, issuer_id=issuer, theme_id="zz-theme-a", cutoff=_NEW_CUTOFF, fill=True)
     _theme_row(theme_database, issuer_id=issuer, theme_id="zz-theme-b", cutoff=_NEW_CUTOFF, fill=True)
 
-    profile = _profile_reader().get_company_profile(issuer_id=issuer)
+    profile = get_company_profile_payload(issuer_id=issuer, database_url="postgresql://unused")
 
     themes = {t["theme_id"]: t for t in profile["theme_purity"]}
     assert "zz-theme-a" in themes
@@ -816,13 +805,15 @@ def test_theme_leaderboard_lists_real_rows_only_and_keeps_the_older_row_of_an_is
 ) -> None:
     import uuid
 
+    from llm_service.mcp_server import get_theme_purity_leaderboard
+
     judged, later_fill, never_judged = (str(uuid.uuid4()) for _ in range(3))
     _theme_row(theme_database, issuer_id=judged, theme_id="zz-theme-a", cutoff=_NEW_CUTOFF, fill=False)
     _theme_row(theme_database, issuer_id=later_fill, theme_id="zz-theme-a", cutoff=_OLD_CUTOFF, fill=False)
     _theme_row(theme_database, issuer_id=later_fill, theme_id="zz-theme-a", cutoff=_NEW_CUTOFF, fill=True)
     _theme_row(theme_database, issuer_id=never_judged, theme_id="zz-theme-a", cutoff=_NEW_CUTOFF, fill=True)
 
-    board = _leaderboard_reader().get_leaderboard(theme_id="zz-theme-a", limit=10)
+    board = get_theme_purity_leaderboard(theme_id="zz-theme-a", limit=10, database_url="postgresql://unused")
 
     assert sorted(i["issuer_id"] for i in board["issuers"]) == sorted([judged, later_fill])
     assert board["count"] == 2
@@ -833,6 +824,8 @@ def test_company_profile_names_the_pgp_basis_of_a_definition_1_0_0_decision(them
     """#1235: a 1.0.0 decision's gap divides P/GP. The profile carries the P/GP pair and names
     the basis, so a caller never reads that gap against the P/S figure beside it."""
     import uuid
+
+    from llm_service.mcp_server import get_company_profile_payload
 
     issuer = str(uuid.uuid4())
     run_id = "strategy-run:" + "7" * 64
@@ -856,7 +849,7 @@ def test_company_profile_names_the_pgp_basis_of_a_definition_1_0_0_decision(them
         ("strategy-decision:" + "6" * 64, "6" * 64, run_id, issuer, _NEW_CUTOFF),
     )
 
-    profile = _profile_reader().get_company_profile(issuer_id=issuer)
+    profile = get_company_profile_payload(issuer_id=issuer, database_url="postgresql://unused")
 
     assert profile["valuation_basis"] == "price_to_gross_profit"
     assert profile["current_price_to_gross_profit"] == "5.1302"
@@ -915,7 +908,7 @@ def test_format_company_profile_surfaces_decision_confidence_and_reason_codes() 
 def test_etf_profile_names_the_basis_of_the_weighted_gap(theme_database: Any) -> None:
     """#1235 audit: the fund-level gap averages core gaps of one run, so it divides that run's
     multiple. The profile carries the producer's recorded basis next to the gap."""
-    from llm_service.mcp_server import PostgresEtfProfileReader
+    from llm_service.mcp_server import get_etf_profile_payload
 
     theme_database.execute(
         """
@@ -930,9 +923,7 @@ def test_etf_profile_names_the_basis_of_the_weighted_gap(theme_database: Any) ->
         (_NEW_CUTOFF, _NEW_CUTOFF, "c" * 64),
     )
 
-    profile = PostgresEtfProfileReader(database_url="postgresql://unused").get_etf_profile(
-        fund_id="etf:series:ZZPGP1235"
-    )
+    profile = get_etf_profile_payload(fund_id="etf:series:ZZPGP1235", database_url="postgresql://unused")
 
     assert profile["weighted_valuation_gap"] == "0.4200"
     assert profile["weighted_valuation_gap_basis"] == "price_to_gross_profit"

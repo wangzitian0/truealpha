@@ -169,15 +169,11 @@ def test_entities_removes_thread_pools_and_fails_closed_on_db_errors(monkeypatch
     with pytest.raises(psycopg.OperationalError, match="connection refused"):
         entities_service.get_fund_valuations(database_url="postgresql://unused")
     with pytest.raises(psycopg.OperationalError, match="connection refused"):
-        entities_service.PostgresCompanyProfileReader(database_url="postgresql://unused").get_company_profile(
-            issuer_id="issuer:nvda"
-        )
+        entities_service.get_company_profile_payload(issuer_id="issuer:nvda", database_url="postgresql://unused")
     with pytest.raises(psycopg.OperationalError, match="connection refused"):
-        entities_service.PostgresThemePurityLeaderboardReader(database_url="postgresql://unused").get_leaderboard(
-            theme_id="ai-infrastructure"
-        )
+        entities_service.get_theme_purity_leaderboard(theme_id="ai-infrastructure", database_url="postgresql://unused")
     with pytest.raises(psycopg.OperationalError, match="connection refused"):
-        entities_service.PostgresEtfProfileReader(database_url="postgresql://unused").get_etf_profile(fund_id="QQQ")
+        entities_service.get_etf_profile_payload(fund_id="QQQ", database_url="postgresql://unused")
     with pytest.raises(psycopg.OperationalError, match="connection refused"):
         entities_service.get_trace(
             ctx,

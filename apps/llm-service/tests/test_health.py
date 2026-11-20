@@ -34,9 +34,6 @@ def test_health(monkeypatch: pytest.MonkeyPatch):
     _stub_no_db_when_unarmed(monkeypatch)
     resp = TestClient(app).get("/health")
     assert resp.status_code == 200
-    # data_engine_parser is asserted separately (infra2_sdk.runtime.health): it
-    # reports the DATA ENGINE's vintage, which has no HTTP surface of its own (#712). With
-    # no database in a unit test the honest answer is "unknown" -- and it must never raise.
     payload = resp.json()
     # With a migrated but empty database (CI) the pointer view exists and reports no
     # head; with no database at all the read fails closed to "unknown". Both are honest
@@ -51,7 +48,6 @@ def test_health(monkeypatch: pytest.MonkeyPatch):
         "git_sha": "unknown",
         "checks": {},
         "reasons": [],
-        "data_engine_parser": "unknown",
         "data_engine_git_sha": "unknown",
         "data_engine_image_digest": "unknown",
     }
@@ -150,7 +146,7 @@ def test_health_reports_the_newest_verdict_per_nightly_check(monkeypatch) -> Non
     # A cap would silently drop checks past it, which the tool then reports as missing.
     assert "limit" not in verdict_sql.lower()
     # Additive: every fact the endpoint reported before is still there.
-    assert {"status", "git_sha", "data_engine_parser", "data_engine_git_sha", "governed_pointers"} <= set(payload)
+    assert {"status", "git_sha", "data_engine_git_sha", "governed_pointers"} <= set(payload)
 
 
 def test_health_hides_the_verdict_rows_of_a_universe_that_the_environment_does_not_schedule(monkeypatch) -> None:
@@ -267,7 +263,6 @@ TOP_LEVEL_KEYS = {
     "git_sha",
     "checks",
     "reasons",
-    "data_engine_parser",
     "data_engine_git_sha",
     "data_engine_image_digest",
     "governed_pointers",

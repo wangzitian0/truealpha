@@ -341,18 +341,11 @@ def test_real_postgres_auth_admin_ledger_documents_rls_and_served_head_withholdi
             conn.commit()
 
         # Unavailable heads must withhold strategy, theme, and ETF outputs without falling back to old_cap
-        withheld = entities_service.PostgresCompanyProfileReader(database_url=db_url).get_company_profile(
-            issuer_id=issuer
-        )
+        withheld = entities_service.get_company_profile_payload(issuer_id=issuer, database_url=db_url)
         assert withheld["strategy_decision"] is None and withheld["theme_purity"] == []
+        assert entities_service.get_theme_purity_leaderboard(theme_id="ai-infra", database_url=db_url)["count"] == 0
         assert (
-            entities_service.PostgresThemePurityLeaderboardReader(database_url=db_url).get_leaderboard(
-                theme_id="ai-infra"
-            )["count"]
-            == 0
-        )
-        assert (
-            entities_service.PostgresEtfProfileReader(database_url=db_url).get_etf_profile(fund_id="etf:series:ZZCI")[
+            entities_service.get_etf_profile_payload(fund_id="etf:series:ZZCI", database_url=db_url)[
                 "weighted_valuation_gap"
             ]
             is None
@@ -535,8 +528,7 @@ def test_company_profile_reader_resolves_legacy_id_without_lateral_entity_identi
     monkeypatch.setattr(entities_service, "with_mart_readonly", lambda fn, **_k: fn(_RecordingCur()))
     monkeypatch.setattr(entities_service, "resolve_issuer_identity_from_cursor", _fake_identity)
 
-    reader = entities_service.PostgresCompanyProfileReader(database_url="postgresql://x")
-    profile = reader.get_company_profile(issuer_id="NVDA")
+    profile = entities_service.get_company_profile_payload(issuer_id="NVDA", database_url="postgresql://x")
     assert resolve_calls == 1
     assert profile["issuer_id"] == "issuer:cik:0001045810"
     assert profile["tier"] == "high"
