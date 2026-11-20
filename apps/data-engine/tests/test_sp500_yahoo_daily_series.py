@@ -266,10 +266,10 @@ def test_cross_universe_route_fetches_each_yahoo_key_once_and_sp500_spends_zero_
     assert ("BRK.B", date(2026, 3, 31), UNADJUSTED) in price_conn.stored
 
 
-def test_share_basis_missing_warning_bounded_once_per_issuer_reason_per_run(
+def test_share_basis_missing_warning_bounded_once_per_listing_reason_per_run(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """#1606: missing split series warns once per (issuer, reason) per run while keeping shares NULL and recording reason."""
+    """#1606: missing split series warns once per (listing_id, reason) per run while keeping shares NULL and recording reason."""
     now = datetime(2026, 4, 1, 22, 15, tzinfo=UTC)
     warned: set[tuple[str, str]] = set()
     financial = FinancialFactPayload(
@@ -288,7 +288,7 @@ def test_share_basis_missing_warning_bounded_once_per_issuer_reason_per_run(
         pre_provision_profit=None,
     )
     caplog.set_level(logging.WARNING, logger="data_engine.datahub.capture_core.materialization")
-    for lid in ("listing:xnas:goog", "listing:xnas:googl"):
+    for lid in ("listing:xnas:goog", "listing:xnas:goog", "listing:xnas:googl"):
         fin_row = _ObservationRow(
             obligation_id=f"ob:{lid}:f",
             listing_id=lid,
@@ -332,4 +332,51 @@ def test_share_basis_missing_warning_bounded_once_per_issuer_reason_per_run(
         assert reason is not None and reason.value == "no_split_adjusted_series"
 
     share_warnings = [rec.message for rec in caplog.records if "share basis:" in rec.message]
-    assert len(share_warnings) == 1
+    assert len(share_warnings) == 2
+
+
+def test_cross_origin_isolation_twelvedata_price_store_qqq_newest_sessions_and_split_limit() -> None:
+    """TwelveDataOrigin & qqq_prices isolate `source='twelvedata'` from Yahoo bars; extreme 1:25 splits are skipped."""
+    from data_engine.datahub.capture_core.twelve_data_origin import TwelveDataQuoteFetcher
+    from data_engine.lanes import qqq_prices
+
+    executed_queries: list[tuple[str, Any]] = []
+
+    class _RecordingConn:
+        def execute(self, sql: str, params: Any = None) -> _RecordingConn:
+            executed_queries.append((sql, params))
+            return self
+
+        def fetchone(self) -> None:
+            return None
+
+        def fetchall(self) -> list[Any]:
+            return []
+
+    conn = _RecordingConn()
+    fetcher = TwelveDataQuoteFetcher("test-key", connection=conn)
+    assert fetcher._from_price_store("AAPL", date(2026, 3, 31)) is None
+    assert len(executed_queries) == 1
+    assert "source = 'twelvedata'" in executed_queries[0][0]
+    assert "adjust = 'none'" in executed_queries[0][0]
+
+    executed_queries.clear()
+    assert qqq_prices.newest_sessions(conn, ["AAPL"]) == {}  # type: ignore[arg-type]
+    assert len(executed_queries) == 2
+    assert all("source = %s" in sql and params[-1] == "twelvedata" for sql, params in executed_queries)
+
+    payload = {
+        "chart": {
+            "result": [
+                {
+                    "events": {
+                        "splits": {
+                            "1": {"date": 1718026200, "numerator": 1, "denominator": 25},
+                            "2": {"date": 1718112600, "numerator": 10, "denominator": 1},
+                        }
+                    }
+                }
+            ]
+        }
+    }
+    assert yahoo._parse_split_events("TEST", payload) == (SplitEvent("TEST", date(2024, 6, 11), 10, 1),)

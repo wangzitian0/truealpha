@@ -751,7 +751,7 @@ class PostgresToptCoreRepository:
         if price_value is None and financial.listing_units_per_share and financial.listing_units_per_share > 0:
             return shares_value / financial.listing_units_per_share, shares_knowable_at, None
         no_bar_stored = len(histories) > 0 and all(history is None for history in histories)
-        warn_subject = str(financial_row.payload.get("issuer_id") or listing_id)
+        warn_subject = listing_id
         if not stores_price_series and outcome.reason == NO_SPLIT_ADJUSTED_SERIES and no_bar_stored:
             log.info(
                 "share basis: %s has no stored daily bar and its universe declares price_series=false: %s; "

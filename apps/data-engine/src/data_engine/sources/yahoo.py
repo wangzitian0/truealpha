@@ -184,8 +184,17 @@ def _parse_split_events(symbol: str, payload: dict[str, Any]) -> tuple[SplitEven
         num_dec, den_dec = Decimal(str(raw_num)), Decimal(str(raw_den))
         if num_dec <= 0 or den_dec <= 0:
             continue
-        factor = (Fraction(num_dec) / Fraction(den_dec)).limit_denominator(MAX_FACTOR_DENOMINATOR)
-        if factor == 1 or factor.denominator > MAX_FACTOR_DENOMINATOR:
+        exact = Fraction(num_dec) / Fraction(den_dec)
+        factor = (
+            exact.limit_denominator(MAX_FACTOR_DENOMINATOR)
+            if exact >= 1
+            else 1 / (1 / exact).limit_denominator(MAX_FACTOR_DENOMINATOR)
+        )
+        if (
+            factor == 1
+            or factor.denominator > MAX_FACTOR_DENOMINATOR
+            or abs(exact - factor) / exact > Fraction(5, 1000)
+        ):
             continue
         ex_date = datetime.fromtimestamp(int(raw_ts), tz=UTC).date()
         parsed.append(SplitEvent(symbol, ex_date, factor.numerator, factor.denominator))
@@ -254,7 +263,13 @@ def parse_yahoo_daily_series(
         )
     if not settled_rows:
         return [], []
-    through = max(item[0] for item in settled_rows)
+    through = max(
+        [
+            *(item[0] for item in settled_rows),
+            *(split.ex_date for split in splits if now >= xnys_session_close_utc(split.ex_date)),
+        ],
+        default=now.date(),
+    )
     split_adjusted_records: list[PriceBarRecord] = []
     unadjusted_records: list[PriceBarRecord] = []
     for bar_date, raw_open, raw_high, raw_low, raw_close, raw_vol in settled_rows:
