@@ -1,4 +1,4 @@
-<!-- WS_STATIC_START adapter=rules-v2 inputs=ba346eac64972a51f869c8d2d7233bdc25de91c15851e975882fc2287f552486 -->
+<!-- WS_STATIC_START adapter=rules-v2 inputs=fcbe490ba09f57ebb75ad10b0f1834086f524c7b280f9654a0dd2cc5aeb73249 -->
 <!-- Generated file: do not edit by hand. These rules are maintained in the owner's rule source and re-rendered here. -->
 
 ## Engineering discipline
@@ -13,7 +13,7 @@
 - **Fix an owner hold by deletion:** Delete the rule or gate branch that holds non-production work. Do not add logic that reads a command to permit it. Such logic lets unsafe commands through.
 - **Define guard scope from what it must govern, not from today's passing tree.** Let the guard fail on existing violations, then repair them. A guard never seen failing is not yet evidence of protection.
 - **Worktree self-sufficiency:** Every worktree must resolve its dependencies, toolchain, skills, and configuration internally. Tools and tests must not navigate upward with `../..` to locate files in parent checkouts.
-- **Local and remote test segregation:** Inner-loop verification runs only focused tests on changed files (`pytest <file>::<test> -x`). Full-suite regression runs on remote CI, or locally at most once before merge.
+- **Local and remote test segregation:** Inner-loop verification runs single-process focused tests (`pytest -n0 --no-cov -o addopts= <file>::<test> -x`). Full-suite regression runs on remote CI, or locally once before merge.
 - **Bounded file reads:** Pass `StartLine` and `EndLine` (`<= 800` lines per call) when reading existing files with `read_file` or `view_file`.
 
 ## Delivery and merge
@@ -34,11 +34,11 @@
 
 The single definition of the production reservation. Other tiers, skills and gates point here.
 
-- **Only a production change returns to the owner.** A production change alters what production runs or stores. Examples: a deploy, promote or apply to production; a production secret write; a manual production data write or deletion. Also a production DNS, route or host change, and a release that cannot be recalled. Code that reaches production with no later owner approval, for example on a schedule, counts too. Each Repo tier names its production paths. A path can be a merge.
+- **Only a production change returns to the owner.** A production change alters what production runs or stores (deploy, promote or apply to production; production secret write; manual production data write or deletion; production DNS, route or host change; unrecallable release; or scheduled unapproved production code). Each Repo tier names its production paths. A path can be a merge or a release-checkout pull.
 - **Approval:** the owner approves the exact commit SHA or release tag of each production change, and is present when it runs. A "deploy" reply covers only the release that it names. Immediately before a production dispatch, get a live reply from the owner.
-- **Self-guard:** an edit that removes, narrows or redefines the production reservation needs the owner's approval of its head SHA. This includes an edit that makes fewer production runs wait for the owner. Examples: the owner-approval check of a deploy path, a production job classification, the settings of a production environment. It also includes an edit that removes or weakens a pin of this section or its dev_env pin test. The same holds for the required check that runs the test.
-- **Everything else is the agent's:** in a repository that the owner owns, every merge, staging and canary deploy, and release tag. Also rule text, skills, gate code, data and tests, required-check workflows and release code. Before you merge gate or release code, a read-only reviewer that did not write it checks the head. The review states whether the gate gets stricter, stays equal or gets looser. A looser edit in the self-guard list follows the self-guard.
-- **Every other hold is a defect:** a rule, skill, label or gate exit code that holds non-production work for the owner. Do the work, then fix the hold. `ws_owner_scope` fails on it.
+- **Self-guard:** an edit that removes, narrows or redefines the production reservation needs the owner's approval of its head SHA. This includes an edit that makes fewer production runs wait for the owner (deploy-path approval check, production job classification, or production environment settings). It also covers removing or weakening a pin of this section, its pin test, or the required check that runs the test.
+- **Everything else is the agent's:** in any repository the owner owns, every non-production change (including `dev_env` outside the self-guard), staging and canary deploy, release tag, rule text, skill, gate/release code, and required-check edit. Before merging gate or release code, an independent read-only reviewer inspects the head SHA and states whether the gate gets stricter, equal or looser. A looser edit in the self-guard follows the self-guard.
+- **Every other hold is a defect:** a rule, skill, label or gate holding non-production work for the owner is a defect. Do the work, then fix the hold. `ws_owner_scope` fails on it.
 
 ## Runtime safety
 
@@ -76,9 +76,9 @@ The single definition of the production reservation. Other tiers, skills and gat
    post-deploy effect probe, shows that a deployed change takes effect and that `main` still
    deploys. Class 3 requires the staging evidence of a release before its production deploy.
    Everything else is a dashboard.
-   Third-party and AI reviewer feedback is advisory: reviewer platform errors, timeouts, and
-   unparseable reviews warn and never block. Actionable review findings are tracked, with
-   unresolved blockers budgeted (High = 0, Medium <= 2, Low <= 4). Live dashboards
+   Third-party and AI reviewer feedback is optional and non-blocking: reviewer platform
+   errors, timeouts, and unparseable reviews warn and never block. Unresolved review threads
+   use the unified weighted `severity:` score (`>= 1.0` blocks; see `prr` skill). Live dashboards
    (`/admin/datahub`, `/research/backtest`, Postgres `mart` health tables) govern
    observability, not regexes on PR descriptions or issue comments. Once a PR is merge-ready,
    the agent that owns it merges it. That covers gate code, workflows and release code once
@@ -91,129 +91,28 @@ The single definition of the production reservation. Other tiers, skills and gat
    and evaluation evidence carry content hashes so a replay provably uses the same bytes.
    Records live under `governance/` (see its README); they document what happened and are
    never a merge gate.
-6. **Closed means verified on staging with real data.** A product issue closes only when staging
-   runs its capability on real captured data. The issue holds the evidence: the deployed call site
-   plus real-data output (SQL rows or an HTTP response). Code that merely exists is not done.
-   Where a capability has an owner-facing surface, name the page or response field that renders
-   it (#284). Fixture data lives in tests only; fixture assets are named `*_fixture` and are never
-   scheduled or reachable from a deployed route. An acceptance criterion is a check that runs
-   again. The skills `smoke` and `close` run acceptance; issue and PR text do not.
-   Production state is not an issue state.
-   (`init.md` section 0; drift audit #429, invariants I1–I4; root #434.)
+6. **Sub-issue closure and Staging verification.** A sub-issue closes after Stage 1 merge
+   and a passing `smoke` reality probe (`ws-delivery-status --assert-complete --reality-probe`,
+   with real captured data whenever testing Staging/Production); `infra2` `release-train`
+   handles Staging verification on real captured data and reopens on regression.
+   Fixture data lives in tests only (`*_fixture`, never scheduled or reachable from a deployed
+   route). An acceptance criterion is a check that runs again. The skills `smoke` and `close` run acceptance; issue and PR text do not. Production state is not an issue state. (`init.md` section 0; #429, #434.)
 
 Before editing or after compaction, re-read the prompt, run rule 4 checks, and note the issue,
 branch, and target files. On handoff, post done, verified, next, and failed items on the issue.
 
-## Project context
+## Architecture red lines (read `init.md` for full details)
 
-TrueAlpha is a fundamental and supply-chain research monorepo: raw source capture, a Postgres
-warehouse with knowledge-graph metadata, Dagster factors, and typed `mart` consumption through the
-Web App, MCP, and `/chat`. Read `init.md` before cross-service design, public contract, schema, or
-known-risk decisions. Reconnaissance findings live in `apps/data-engine/samples/README.md`.
+- **Secrets:** Never commit `.env`, `*.pem`, tokens, credentials, account IDs, or private hosts; redact live outputs.
+- **PIT & Restatements:** Distinguish `valid_time` from `transaction_time` (from source property, never insertion clock; `recorded_at` is ingestion-audit only). Never derive universe sizes, denominators, or freshness as constants (#539). Restatements insert rows with `is_restatement` + `mapping_version`; never update in place. Select `mart` assertions by `source_priority`, never latest row.
+- **Factors & Storage:** All computation lives in `common/factors` over provenance-neutral inputs (no vendor branching; composite confidence `<= min` consumed; continuous `0-100` LLM score; `numeric` for money). Consumers read `mart.served_head` (never mutable `latest`). LLM/Web surfaces use read-only `mart` queries (`mart_readonly`), never raw/staging or S3 paths; replay never calls models.
+- **Moomoo & Gateways:** All vendor/LLM calls go through the source gateway + `api_call_ledger`. Moomoo is Quote API read-only (all order/trading/unlock operations forbidden; rejected in CI).
 
-Repository shape:
+## Environments and load on demand
 
-- `apps/app-web/`: TypeScript/Next.js; reads `mart` through a read-only account.
-- `common/factors/src/factors/base/`: provenance-neutral PIT factors; modules 1-6.
-- `common/factors/src/factors/composite/`: factors that reload materialized upstream outputs; module 7.
-- `common/factors/src/factors/shared/`: KG entity resolution and the shared structured-extraction
-  primitive. Do not reimplement extraction per factor.
-- `db/migrations/`: the schema source of truth for `raw`, `staging`, `mart`, `dagster`,
-  and `app`.
-- `governance/`: historical delivery records (capabilities graph, evidence, handoffs).
+Target topology: Local (`make runtime-up`), GitHub CI, Staging (`infra2` release train), Production (explicit graduation via `infra2`). Staging/Production database and MinIO connection details plus bootstrap scripts live in [`init.md`](init.md) and [`docs/release-protocol.md`](docs/release-protocol.md).
 
-## Architecture red lines
-
-- Never commit `.env`, `*.pem`, tokens, credentials, account identifiers, private hosts,
-  or secrets in code, fixtures, comments, or docs. Redact live-session output before it
-  reaches a tracked file. Secret scanning is a backstop, not permission.
-- Point-in-time data distinguishes `valid_time` from `transaction_time` (knowable-at).
-  Write `transaction_time` explicitly from a source property, never an insertion-clock
-  default. `recorded_at` is ingestion audit time only.
-- A constant never stands in for a measurement. A run's shape (universe size, listing and
-  obligation counts), a record's time, and a field's freshness are derived from the run or
-  the source, never written down as a literal or a default. This is the most repeated
-  defect shape here; each instance passes every test built on the founding
-  assumption: an insertion-clock `transaction_time`, a stamped `freshness`, a hardcoded
-  84-cell denominator (#539).
-- Never overwrite a point-in-time record. Restatements insert new rows and set
-  `is_restatement`; they never update history in place. Parsed facts carry
-  `mapping_version` so reparses remain distinguishable from restatements.
-- Source fusion never selects the most recently inserted row. The metric registry's
-  per-field `source_priority` selects the mart assertion. Backtesting and factors operate
-  only on what was knowable at the historical cutoff.
-- Immutable source-response bytes live in S3-compatible object storage. Postgres
-  `raw.fetches` stores checksums, object pointers, timestamps, and lineage. Apps and LLM
-  services never use object storage as a service-to-service data path.
-- Never put computation logic outside `common/factors`. Application and LLM layers perform
-  only deterministic formatting and transport over materialized outputs. Screens and the
-  three-tier valuation framework are composite factors, not consumer-side rules.
-- Factor inputs are provenance-neutral typed records with opaque input identity, subject,
-  value/unit/currency and valid period where applicable, confidence, and snapshot cutoff.
-  Factor code never sees or branches on vendor, raw reference, accession, rights, source
-  priority, or extractor metadata. Composite confidence cannot exceed the minimum consumed
-  confidence unless a versioned policy is stricter.
-- Never write staging rows without `confidence`. Never use binary floating point where
-  monetary precision matters; database monetary columns use `numeric`.
-- LLM surfaces use typed `mart` reads only, never raw/staging access, arbitrary SQL, or
-  live factor computation. `mart_readonly` enforces the database boundary and
-  `ResearchQueryService` enforces allowed queries, pagination, and row limits.
-- LLM extraction is a versioned, append-only step. Bind model, instructions, schema, and
-  decoding settings; store semantic results and evidence spans. Replay never calls a model.
-  Confidence uses the continuous `0-100` score (`prior x agreement x freshness x lineage`), never
-  a constant. Single-source extraction lowers confidence and never blocks a row.
-- Every external request (SEC, Twelve Data, yfinance, OpenFIGI, N-PORT, moomoo, the LLM
-  extraction provider) goes through the source gateway and `api_call_ledger` with a declared
-  capacity. No module calls a vendor or a model directly (init.md rule 6). The ledger is
-  throttle and audit infrastructure, not a monthly-call quota: moomoo's quote/fundamental
-  endpoints use burst rate limits; do not confuse a tier ceiling with a call budget.
-- Moomoo access is Quote API read-only. Every trading context and every order placement,
-  modification, cancellation, or trade-unlock operation is forbidden. Security CI rejects
-  trading APIs rather than relying on review alone.
-- Consumers of data-engine outputs read through `mart.served_head` (or a pinned
-  `run_id` / `snapshot_id` / `evidence_hash`). A bare mutable `latest` is never a read path.
-  The pointer advances only on an accepted refresh, and consumers re-pull when it advances
-  (`docs/architecture-decisions/A1-evidence-chain-in-database.md`).
-
-## Environments and source gotchas
-
-Target topology: Local, GitHub CI, Staging, Production. Staging and Production are
-isolated namespaced stacks; infra2 owns external Vault, MinIO, deployment, and promotion.
-This repository consumes only released `infra2-sdk` contracts.
-
-| Environment | Postgres | Object storage | Provisioning |
-|---|---|---|---|
-| Local | `make runtime-up` or localhost | Local MinIO | `make db-reset`, `make db-migrate`, `make db-check` (see Commands); bucket bootstrap |
-| GitHub CI | Ephemeral service container | Ephemeral MinIO container | Per workflow run |
-| Staging | `truealpha-postgres-staging`, host loopback `:15432` | Platform MinIO staging, bucket `truealpha-raw` | infra2 release promotion and `apps/data-engine/scripts/setup_vps_ingest.sh` |
-| Production | `truealpha-postgres`, host loopback `:15433` | Platform MinIO, bucket `truealpha-raw` | Explicit graduation |
-
-- Current VPS host scripts and direct OpenD loopback access are reconnaissance/bootstrap
-  only; they are not scheduled-run evidence.
-- SEC XBRL concept tags and units vary across industries. Do not assume one field mapping
-  works for every issuer.
-- `yfinance` is the zero-quota default base for price and split coverage. Twelve Data and
-  moomoo corroborate within their quotas. Represent `yfinance`'s missing SLA through lower
-  confidence (`Low` when single-source), never a provenance branch in factors. Price reuse
-  keys on `(listing, session_date)`, not issuer namespace.
-- N-PORT holdings identify positions by CUSIP/ISIN, not ticker/CIK. Resolve identifiers
-  through OpenFIGI or equivalent before writing PIT `same_as` KG edges. Use
-  `staging.kg_entities`, `staging.kg_identifiers`, and `staging.kg_edges`, not a flat
-  symbol-mapping table.
-
-## Commands
-
-- Install/check/test: `make install`, `make check`, `make test`.
-- Database: `make db-up`, `make db-migrate` (apply the chain forward), `make db-reset`
-  (drop, recreate, re-apply — the repair path when a database has drifted; replay does not
-  repair a table already in a superseded shape), `make db-check` (diff a live database
-  against the declared chain).
-
-Reconnaissance/bootstrap ingestion runs these scripts of `apps/data-engine/scripts/` in order
-(`uv run --package truealpha-data-engine python <script>`): `bootstrap_universe.py`,
-`sweep_sec_facts.py`, `probe_moomoo_nonus.py`, `sweep_moomoo_fundamentals.py --dry-run`. The
-moomoo scripts need the OpenD host and `MOOMOO_LEDGER_BACKEND=postgres`. Probe non-US endpoints
-before a full sweep.
-
-Run the narrowest relevant tests first. Report what was not run and why.
+- Checks: `make install`, `make check`, `make test`, `make db-up`, `make db-migrate`, `make db-reset`, `make db-check`.
+- Vendor specifics: `yfinance` is zero-quota base (lower confidence `Low` when single-source; key `(listing, session_date)`); N-PORT positions use CUSIP/ISIN resolved via OpenFIGI into `staging.kg_*`.
+- Run the narrowest relevant tests first (`make test` / full suite on CI). Report what was not run and why.
 <!-- WS_STATIC_END -->
