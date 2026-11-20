@@ -613,12 +613,15 @@ def test_a_kline_request_is_gated_recorded_and_unadjusted(opend) -> None:
     assert (kwargs["start"], kwargs["end"]) == ("2026-07-15", "2026-07-29")
 
 
-def test_the_financials_request_is_two_gated_calls(opend) -> None:
+def test_the_financials_request_is_three_gated_calls_and_a_failed_valuation_detail_keeps_the_statements(
+    opend,
+) -> None:
     client = OpenDClient()
     assertion = MoomooFinancialsFetcher(client)("DDOG", _CUTOFF)
     assert assertion is not None and assertion.values["revenue"] == Decimal("3427158000")
+    assert "consensus_profit_growth" not in assertion.values
     assert opend.statement_types == [INCOME_STATEMENT, BALANCE_SHEET]
-    assert ledger.calls_this_month() == 2
+    assert ledger.calls_this_month() == 3, "income, balance sheet and valuation detail are each a ledger row"
 
 
 def test_the_7d_kline_quota_refuses_the_call_and_the_cell_stays_single_origin(opend, monkeypatch) -> None:

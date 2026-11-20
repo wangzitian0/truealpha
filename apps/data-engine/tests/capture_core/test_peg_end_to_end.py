@@ -233,9 +233,6 @@ def test_r3_c4_consensus_peg_end_to_end_from_moomoo_valuation_to_strategy_run_re
 
     from data_engine.datahub.capture_core.moomoo_origin import MoomooFinancialsFetcher
     from data_engine.datahub.strategy_bridge import _persist_peg_consensus_nodes
-    from data_engine.sources import gateway
-    from data_engine.sources.landed_keys import MemoryLandedKeys
-    from data_engine.sources.memory_ledger import MemoryLedger
     from psycopg.rows import dict_row
     from truealpha_runtime.strategy_run_postgres import _DECISIONS_SQL, _decision_from_row
 
@@ -270,8 +267,6 @@ def test_r3_c4_consensus_peg_end_to_end_from_moomoo_valuation_to_strategy_run_re
                 }
             }
 
-    gateway.set_ledger(MemoryLedger())
-    gateway.set_landed_keys(MemoryLandedKeys())
     assertion = MoomooFinancialsFetcher(_FakeClient())("E2ER3C4", _CUTOFF.date())
     assert assertion is not None
     assert assertion.values.get("consensus_profit_growth") == Decimal("25")
@@ -314,8 +309,8 @@ def test_r3_c4_consensus_peg_end_to_end_from_moomoo_valuation_to_strategy_run_re
         "insert into mart.strategy_runs "
         "(strategy_run_id, content_sha256, strategy_key, strategy_version, "
         " definition_content_sha256, corpus_sha256, claim_ceiling, executed_at) "
-        "values (%s, %s, 'large_model_value_v0', %s, %s, %s, 'preview', '2099-01-01T00:00:00Z')",
-        (run_id, hx, _definition().version, _definition().content_sha256, hx),
+        "values (%s, %s, 'large_model_value_v0', 'v0', %s, %s, 'preview', '2099-01-01T00:00:00Z')",
+        (run_id, hx, hx, hx),
     )
     connection.execute(
         "insert into mart.strategy_decisions "
