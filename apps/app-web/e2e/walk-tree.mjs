@@ -35,6 +35,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { assertRaceRequirement, runHydrationRace } from "./hydration-race.mjs";
+import { walkCardGeometry } from "./card-geometry.mjs";
 import { createPageErrorLedger, gotoStable } from "./navigation.mjs";
 import { walkSignOutJourney } from "./sign-out-journey.mjs";
 import { unexpectedStandaloneEntries } from "./standalone-shape.mjs";
@@ -637,6 +638,13 @@ try {
       console.log(
         `ok   [hydration-race] ${race.visits} visits, each with a late flight row (${race.jsRequestedWhileHeld} static chunk request(s) while held), raised no page error`,
       );
+    }
+    const cardProblems = await walkCardGeometry({ browser, base: BASE, email: EMAIL, password: PASSWORD });
+    for (const problem of cardProblems) console.log(`FAIL ${problem}`);
+    if (cardProblems.length > 0) {
+      failures += 1;
+    } else {
+      console.log("ok   [card-geometry] exported 1080x1440 Xiaohongshu HTML card with zero overflow");
     }
   }
   try {

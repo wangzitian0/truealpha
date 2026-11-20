@@ -288,7 +288,7 @@ async def test_context_is_the_owner_delegated_through_the_adapter_and_not_client
     tools = await server.list_tools()
     strat_tool = next(t for t in tools if t.name == "strategy_rankings")
     request_schema = strat_tool.inputSchema["$defs"]["StrategyRankingsToolRequest"]
-    assert set(request_schema["properties"]) == {"strategy_id"}
+    assert set(request_schema["properties"]) == {"strategy_id", "universe", "convention"}
 
 
 @pytest.mark.anyio

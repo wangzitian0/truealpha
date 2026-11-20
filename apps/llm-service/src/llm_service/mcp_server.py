@@ -72,6 +72,7 @@ from llm_service.services.strategy_service import (
     DASHBOARD_STRATEGY_ID,
     PostgresBacktestReader,
     backtest_run_limitations,
+    call_strategy_repository,
 )
 
 __all__ = [
@@ -106,6 +107,8 @@ class PanelCoverageToolRequest(_ToolModel):
 class StrategyRankingsToolRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     strategy_id: str = DASHBOARD_STRATEGY_ID
+    universe: str | None = None
+    convention: str = "historical_cagr"
 
 
 class StrategyBacktestsToolRequest(_ToolModel):
@@ -356,7 +359,13 @@ def build_mcp_server(
         description="Read the latest governed strategy rankings and definition review_state from mart.",
     )
     def strategy_rankings(request: StrategyRankingsToolRequest) -> StrategyRunReport | StrategyRunUnavailable:
-        return active_repository.get_latest(strategy_id=request.strategy_id, context=resolve_mcp_access_context())
+        return call_strategy_repository(
+            active_repository,
+            strategy_id=request.strategy_id,
+            context=resolve_mcp_access_context(),
+            universe=request.universe,
+            convention=request.convention,
+        )
 
     @server.tool(
         name="strategy_backtests",

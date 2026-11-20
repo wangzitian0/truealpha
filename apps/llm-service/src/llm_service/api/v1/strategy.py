@@ -24,11 +24,17 @@ def rankings(
     strategy_id: str = Query(default=DASHBOARD_STRATEGY_ID),
     universe: str | None = Query(default="all"),
     cutoff: str | None = Query(default=None),
-    limit: int = Query(default=200, ge=1, le=500),
+    convention: str | None = Query(default=None),
+    limit: int = Query(default=1000, ge=1, le=1000),
     principal: PrincipalRecord = Depends(require_principal),
 ) -> RankingsResponse:
     return get_rankings(
-        access_context_for(principal), strategy_id=strategy_id, universe=universe, cutoff=cutoff, limit=limit
+        access_context_for(principal),
+        strategy_id=strategy_id,
+        universe=universe,
+        cutoff=cutoff,
+        convention=convention,
+        limit=limit,
     )
 
 

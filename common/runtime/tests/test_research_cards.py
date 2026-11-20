@@ -24,6 +24,7 @@ from truealpha_runtime.research_cards import (
     render_card_html,
     render_card_json,
     verify_card_html,
+    verify_preset_contrast,
 )
 from truealpha_runtime.research_report import (
     EvidenceTrace,
@@ -556,3 +557,54 @@ def test_theme_ranking_filters_by_target_entity_ids_when_specific_issuers_reques
     card = build_card(filtered_report, CardKind.RANKING)
     assert [s.subject_id for s in card.subjects] == ["issuer:nice", "issuer:adm"]
     assert all(len(s.metrics) > 0 for s in card.subjects)
+
+
+@pytest.mark.criterion("R5.E9")
+def test_r5_e9_card_presets_wcag_contrast_all_card_kinds_and_fail_on_low_contrast() -> None:
+    """R5.E9: each preset passes WCAG AA on every CSS text pair, each CardKind verifies, and low contrast fails."""
+    from truealpha_runtime.research_cards import (
+        CARD_PRESETS,
+        build_strategy_context_from_report,
+        enrich_card_metadata,
+    )
+
+    for preset_id, preset in CARD_PRESETS.items():
+        ok, violations = verify_preset_contrast(preset)
+        assert ok, f"preset {preset_id} failed WCAG contrast: {violations}"
+
+    bad_preset = preset.model_copy(update={"fg": "#CCCCCC", "surface_bg": "#DDDDDD"})
+    ok_bad, bad_violations = verify_preset_contrast(bad_preset)
+    assert not ok_bad and any("low_fg_contrast" in code for code in bad_violations)
+
+    grey_accent = preset.model_copy(update={"accent": "#777777"})
+    ok_grey, grey_violations = verify_preset_contrast(grey_accent)
+    assert not ok_grey and any("low_on_accent_contrast" in code for code in grey_violations)
+
+    light_accent = preset.model_copy(update={"accent": "#FFD84D"})
+    assert research_cards.on_accent_color(light_accent) == "#111111"
+    assert "color:#FFF;" not in research_cards.render_card_html(
+        build_card(_report(ResearchReportKind.COMPANY, ("issuer:nice",)), CardKind.COMPANY), preset=light_accent
+    )
+
+    for kind in CardKind:
+        report_kind = {
+            CardKind.COMPANY: ResearchReportKind.COMPANY,
+            CardKind.COMPARISON: ResearchReportKind.COMPANY,
+            CardKind.RANKING: ResearchReportKind.THEME_RANKING,
+            CardKind.ETF: ResearchReportKind.ETF,
+            CardKind.SUPPLY_CHAIN: ResearchReportKind.COMPANY,
+            CardKind.STRATEGY_SUMMARY: ResearchReportKind.THEME_RANKING,
+        }[kind]
+        targets = (
+            ("theme:large_model_value",)
+            if kind in (CardKind.RANKING, CardKind.STRATEGY_SUMMARY)
+            else (("issuer:nice", "issuer:adm") if kind is CardKind.COMPARISON else ("issuer:nice",))
+        )
+        rep = _report(report_kind, targets)
+        card = build_card(rep, kind)
+        ctx = build_strategy_context_from_report(rep) if kind in (CardKind.RANKING, CardKind.STRATEGY_SUMMARY) else None
+        card = enrich_card_metadata(card, rep, strategy_context=ctx, include_rendered_html=False)
+        html_doc = render_card_html(card)
+        ok_html, html_violations = verify_card_html(card, html_doc)
+        assert ok_html, f"{kind.value} card failed verify_card_html: {html_violations}"
+        assert f"width:{research_cards.XHS_CARD_WIDTH_PX}px;height:{research_cards.XHS_CARD_HEIGHT_PX}px;" in html_doc

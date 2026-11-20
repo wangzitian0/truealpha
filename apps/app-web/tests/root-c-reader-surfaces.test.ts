@@ -42,6 +42,7 @@ const ISSUER_ID = "018f9e6a-0001-7a1b-8c2d-9e0f1a2b3c4d";
 __setApiFetch(async (input) => {
   const url = String(input);
   if (url.includes("/api/v1/strategy/rankings")) {
+    const unsourced = url.includes("convention=guidance");
     return new Response(
       JSON.stringify({
         available: true,
@@ -58,8 +59,8 @@ __setApiFetch(async (input) => {
             current_multiple: "12.40",
             target_multiple: "15.00",
             valuation_gap: "0.21",
-            peg: "1.35",
-            peg_rank: 1,
+            peg: unsourced ? null : "1.35",
+            peg_rank: unsourced ? null : 1,
             confidence: "0.91",
             availability: "available",
             gppe_variants: {},
@@ -129,7 +130,13 @@ try {
     await RankingsPage({ searchParams: Promise.resolve({ convention: "consensus", universe: "qqq" }) }),
   );
   assert(rankingsHtml.includes("AAPL · APPLE INC"), "RankingsPage renders resolved issuer label");
+  assert(rankingsHtml.includes("1.35"), "RankingsPage renders consensus PEG value when served");
   assert(rankingsHtml.includes("convention=guidance") && rankingsHtml.includes("universe=qqq"), "RankingsPage keeps convention + universe switch links");
+
+  const guidanceHtml = renderToStaticMarkup(
+    await RankingsPage({ searchParams: Promise.resolve({ convention: "guidance", universe: "qqq" }) }),
+  );
+  assert(guidanceHtml.includes("unsourced"), "RankingsPage renders unsourced when guidance PEG is null");
 
   const entityHtml = renderToStaticMarkup(
     await EntityDetailPage({ params: Promise.resolve({ id: ISSUER_ID }), searchParams: Promise.resolve({ convention: "historical_cagr" }) }),

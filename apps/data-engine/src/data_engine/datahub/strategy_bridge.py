@@ -12,19 +12,31 @@ from functools import cache, partial
 from typing import Any
 
 import psycopg
-from factors.composite.strategy_evaluator import IssuerInput, Measure, evaluate_cutoff, required_input_keys
-from factors.panel import IssuerClass
+from factors.composite.strategy_evaluator import (
+    EvaluatedDecision,
+    IssuerInput,
+    Measure,
+    evaluate_cutoff,
+    required_input_keys,
+)
+from factors.panel import IssuerClass, node_id_for, tree_id_for
+from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.fiscal_period import FiscalPeriod as AnnualFiscalPeriod
 from truealpha_contracts.strategy import ExclusionReason, LargeModelValueV0Definition, load_live_strategy_definition
 from truealpha_runtime.storage import StorageError
 
 from data_engine import raw_store
 from data_engine.core_strategy_replay import _to_decision
-from data_engine.datahub._helpers import CAPTURE_OBSERVATION_JOIN, execute_many, require_registered_input_key
+from data_engine.datahub._helpers import (
+    CAPTURE_OBSERVATION_JOIN,
+    execute_many,
+    require_registered_input_key,
+    single_origin_confidence,
+)
 from data_engine.datahub.capture_core.concept_mapping import resolve_ruleset
 from data_engine.datahub.capture_core.executor import SERVED_BY_FAILOVER
 from data_engine.datahub.capture_core.parser_identity import PARSER_VERSION as PRIMARY_PARSER_VERSION
-from data_engine.datahub.input_cells import InputCell, financial_input_rows, last_close_cell, live_knowable_at
+from data_engine.datahub.input_cells import InputCell, financial_input_rows, last_close_cell, live_knowable_at, unit_of
 from data_engine.datahub.primary_listing import choose_primary_listings
 from data_engine.datahub.risk_free import RiskFreeRate
 from data_engine.datahub.share_basis import (
@@ -79,15 +91,22 @@ def seed_strategy_inputs_from_capture(
     connection: psycopg.Connection[Any], run_id: str, *, cutoff: datetime, parser_version: str = PRIMARY_PARSER_VERSION
 ) -> int:
     raw_rows = connection.execute(
-        f"select o.semantic_type, o.confidence, p.normalized_payload, o.knowable_at {CAPTURE_OBSERVATION_JOIN} "
+        f"select o.semantic_type, o.confidence, p.normalized_payload, o.knowable_at, o.parser_version {CAPTURE_OBSERVATION_JOIN} "
         "where ob.run_id = %s and o.semantic_type in ('financial-fact', 'market-price', 'listing-identity') "
         "and (o.parser_version = %s or o.semantic_type = 'listing-identity' "
-        "or (o.semantic_type = 'market-price' and p.normalized_payload ->> %s is not null))",
-        (run_id, parser_version, SERVED_BY_FAILOVER),
+        "or (o.semantic_type = 'market-price' and p.normalized_payload ->> %s is not null) "
+        "or (o.semantic_type = 'financial-fact' and p.normalized_payload ->> 'consensus_profit_growth' is not null)) "
+        "order by (o.parser_version = %s) desc, o.knowable_at desc, o.observation_id",
+        (run_id, parser_version, SERVED_BY_FAILOVER, parser_version),
     ).fetchall()
-    rows = [(r[0], None, r[1], r[2]) if len(r) == 3 else (r[0], r[1], r[2], r[3]) for r in raw_rows]
+    rows = [
+        (r[0], None, r[1], r[2], parser_version)
+        if len(r) == 3
+        else ((r[0], r[1], r[2], r[3], parser_version) if len(r) == 4 else (r[0], r[1], r[2], r[3], r[4]))
+        for r in raw_rows
+    ]
     listing_to_issuer: dict[str, str] = {}
-    for sem, _c, p, _o in rows:
+    for sem, _c, p, _o, _pv in rows:
         if sem == "listing-identity":
             listing_to_issuer[str(p["listing_id"])] = str(p["issuer_id"])
         elif sem in ("financial-fact", "market-price"):
@@ -98,12 +117,23 @@ def seed_strategy_inputs_from_capture(
 
     cell_confidences = evaluate_and_persist_run_cell_confidence(connection, run_id, cutoff=cutoff)
     financial: dict[str, tuple[str, Decimal | None, dict, datetime]] = {}
+    consensus_growth: dict[str, tuple[str, Decimal | None, dict, datetime]] = {}
     price: dict[str, tuple[str, Decimal | None, dict, datetime]] = {}
-    for semantic_type, raw_conf, payload, observed_at in rows:
+    for semantic_type, raw_conf, payload, observed_at, row_parser_version in rows:
         if semantic_type == "listing-identity":
             continue
         listing_id = str(payload["listing_id"])
         issuer_id = listing_to_issuer.get(listing_id, str(payload["issuer_id"]))
+        if semantic_type == "financial-fact" and payload.get("consensus_profit_growth") is not None:
+            if primary.get(issuer_id) == listing_id and issuer_id not in consensus_growth:
+                consensus_growth[issuer_id] = (
+                    listing_id,
+                    Decimal(str(raw_conf)) if raw_conf is not None else None,
+                    payload,
+                    observed_at,
+                )
+        if semantic_type == "financial-fact" and row_parser_version != parser_version:
+            continue
         bucket = financial if semantic_type == "financial-fact" else price
         if primary.get(issuer_id) == listing_id and issuer_id not in bucket:
             bucket[issuer_id] = (
@@ -121,7 +151,7 @@ def seed_strategy_inputs_from_capture(
         parser_version=parser_version,
     )
     written = 0
-    for issuer_id in sorted(set(financial) | set(price)):
+    for issuer_id in sorted(set(financial) | set(price) | set(consensus_growth)):
         inputs: list[InputCell] = []
         if issuer_id in financial:
             fin_listing, fallback_conf, payload, observed_at = financial[issuer_id]
@@ -130,6 +160,34 @@ def seed_strategy_inputs_from_capture(
                 _on_close_basis_rows(
                     financial_input_rows(payload, fallback_conf, observed_at, confidence_by_key=listing_confs),
                     on_basis.get(issuer_id),
+                )
+            )
+        if issuer_id in consensus_growth and not any(c.input_key == "consensus_profit_growth" for c in inputs):
+            cg_listing, cg_raw_conf, cg_payload, cg_observed_at = consensus_growth[issuer_id]
+            cg_measured = cell_confidences.get((cg_listing, "consensus_profit_growth"))
+            if cg_measured is None:
+                cg_measured = cg_raw_conf
+            cg_conf = (
+                cg_measured
+                if cg_measured is not None
+                else single_origin_confidence(
+                    case_id=f"cell:consensus_profit_growth:{cg_listing}",
+                    provider_id="origin:moomoo-financials:v1",
+                    lineage="moomoo",
+                    fallback_prior_id="origin:moomoo-financials:v1",
+                    evidence_id="obs:consensus_profit_growth",
+                    extra_reason_codes=("reason:single_origin",),
+                )
+            )
+            cg_currency = str(cg_payload.get("currency") or "")
+            inputs.append(
+                InputCell(
+                    "consensus_profit_growth",
+                    Decimal(str(cg_payload["consensus_profit_growth"])),
+                    unit_of("consensus_profit_growth", cg_currency),
+                    cg_conf,
+                    cg_observed_at,
+                    None,
                 )
             )
         if issuer_id in price:
@@ -321,7 +379,66 @@ def run_strategy_replay_for_cutoff(
         risk_free_rate=risk_free_rate,
     )
     bind_strategy_run_to_capture(connection, strategy_run_id=run_id, capture_run_id=capture_run_id)
+    _persist_peg_consensus_nodes(connection, capture_run_id=capture_run_id, cutoff=cutoff, evaluated=evaluated)
     return run_id, len(decision_ids), snapshot_id
+
+
+def _persist_peg_consensus_nodes(
+    connection: psycopg.Connection[Any],
+    *,
+    capture_run_id: str,
+    cutoff: datetime,
+    evaluated: Sequence[EvaluatedDecision],
+) -> None:
+    period = cutoff.astimezone(UTC).date().isoformat()
+    tree_id = tree_id_for("peg_consensus", "v1")
+    rows: list[tuple[Any, ...]] = []
+    for item in evaluated:
+        has_val = item.peg_consensus is not None
+        avail = "available" if has_val else "unavailable"
+        src_status = "verified" if has_val else "degraded"
+        conf = item.peg_consensus_confidence
+        reasons = list(item.peg_consensus_reason_codes)
+        for node_key, val, unit in (
+            ("peg_consensus", item.peg_consensus, "ratio"),
+            (
+                "peg_consensus_rank",
+                Decimal(item.peg_consensus_rank) if item.peg_consensus_rank is not None else None,
+                "count",
+            ),
+        ):
+            rows.append(
+                (
+                    capture_run_id,
+                    item.issuer_id,
+                    node_id_for(node_key),
+                    node_key,
+                    period,
+                    "cutoff",
+                    val,
+                    unit,
+                    avail,
+                    reasons,
+                    src_status,
+                    "not_evaluated",
+                    conf,
+                    tree_id,
+                    "v1",
+                    canonical_sha256({"node_key": node_key, "convention": "analyst_consensus"}),
+                )
+            )
+    if not rows:
+        return
+    execute_many(
+        connection,
+        "insert into mart.metric_node_values ("
+        "run_id, issuer_id, node_id, node_key, period, period_tag, "
+        "value, unit, availability_status, reason_codes, "
+        "source_evidence_status, factor_validation_status, confidence, tree_id, tree_version, tree_sha256"
+        ") values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+        "on conflict (run_id, issuer_id, node_id, period) do nothing",
+        rows,
+    )
 
 
 def _with_periods(issuer: IssuerInput, periods: Mapping[str, AnnualFiscalPeriod]) -> IssuerInput:

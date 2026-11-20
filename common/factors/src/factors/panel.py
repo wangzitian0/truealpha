@@ -93,6 +93,16 @@ _NI_POS: pl.Expr = (_NI_Y0 > 0) & (_NI_Y1 > 0) & (_NI_Y2 > 0) & (_NI_Y3 > 0) & (
 _PEG_VALID: pl.Expr = (pl.col("price") > 0) & (pl.col("shares_outstanding") > 0) & _NI_POS
 _PEG_VAL: pl.Expr = ((pl.col("price") * pl.col("shares_outstanding")) / _NI_Y3) / (_WEIGHTED_GROWTH_3Y * 100.0)
 EXPR_PEG: pl.Expr = pl.when(_PEG_VALID).then(_PEG_VAL).otherwise(None)
+EXPR_PEG_CONSENSUS: pl.Expr = (
+    pl.when(
+        (pl.col("price") > 0)
+        & (pl.col("shares_outstanding") > 0)
+        & (pl.col("net_income") > 0)
+        & (pl.col("consensus_profit_growth") > 0)
+    )
+    .then(((pl.col("price") * pl.col("shares_outstanding")) / pl.col("net_income")) / pl.col("consensus_profit_growth"))
+    .otherwise(None)
+)
 
 INTERMEDIATE_EXPRESSIONS: Mapping[str, pl.Expr] = {
     "operating_gross_profit": EXPR_OPERATING_GROSS_PROFIT,
@@ -113,6 +123,7 @@ FACTOR_EXPRESSIONS: Mapping[str, pl.Expr] = {
     "price_to_sales": EXPR_PRICE_TO_SALES,
     "price_to_gross_profit": EXPR_PRICE_TO_GROSS_PROFIT,
     "peg": EXPR_PEG,
+    "peg_consensus": EXPR_PEG_CONSENSUS,
 }
 PANEL_EXPRESSIONS: Mapping[str, pl.Expr] = {**INTERMEDIATE_EXPRESSIONS, **FACTOR_EXPRESSIONS}
 PANEL_INDEX_COLUMNS: frozenset[str] = frozenset({"issuer_id", "period", "issuer_class"})
@@ -368,7 +379,8 @@ def evaluate_wide_panel(
                 needed.append(col)
     for name in needed:
         expr = expressions[name]
-        if missing := [col for col in consumed_columns(expr) if col not in out.columns and col not in expressions]:
+        consumed = dict.fromkeys(consumed_columns(expr))
+        if missing := [col for col in consumed if col not in out.columns and col not in expressions]:
             out = out.with_columns([pl.lit(None, dtype=pl.Float64).alias(col) for col in missing])
         out = out.with_columns(expr.alias(name))
         if include_confidence and (

@@ -103,7 +103,7 @@ export const api = {
   getPanelCoverage: (params?: { strategy_id?: string; universe?: string; cutoff?: string; node_key?: string; issuer_id?: string; limit?: number }, opts?: RequestOpts) =>
     apiRequest<PanelCoverageResponse>(`/api/v1/panel/coverage${qs(params ?? {})}`, opts),
   getPanelMacro: (opts?: RequestOpts) => apiRequest<MacroPanelResponse>("/api/v1/panel/macro", opts),
-  getRankings: (params?: { strategy_id?: string; universe?: string; cutoff?: string; limit?: number }, opts?: RequestOpts) =>
+  getRankings: (params?: { strategy_id?: string; universe?: string; cutoff?: string; convention?: string; limit?: number }, opts?: RequestOpts) =>
     apiRequest<RankingsResponse>(`/api/v1/strategy/rankings${qs(params ?? {})}`, opts),
   listBacktests: (limit = 20, opts?: RequestOpts) =>
     apiRequest<BacktestRunsResponse>(`/api/v1/strategy/backtests${qs({ limit })}`, opts),

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Mapping
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
@@ -57,6 +58,8 @@ BALANCE_SHEET_FIELDS: Mapping[str, int] = {"total_assets": 8001}
 _SESSION_STAMP_LENGTH = len("2026-07-29 00:00:00")
 _MIDNIGHT = " 00:00:00"
 
+logger = logging.getLogger(__name__)
+
 
 class NotASessionCloseError(ValueError):
     pass
@@ -95,6 +98,15 @@ class OpenDClient:
                 ctx, code, statement_type=statement_type, caller=CALLER, identity=identity
             )
         normalized = to_jsonable(statements)
+        return normalized if isinstance(normalized, Mapping) else {}
+
+    def valuation_detail(self, code: str, *, identity: FetchKey) -> Mapping[str, Any]:
+        from data_engine.jsonable import to_jsonable
+        from data_engine.sources import moomoo
+
+        with moomoo.connect() as ctx:
+            detail = moomoo.get_valuation_detail(ctx, code, valuation_type=1, caller=CALLER, identity=identity)
+        normalized = to_jsonable(detail)
         return normalized if isinstance(normalized, Mapping) else {}
 
 
@@ -334,7 +346,26 @@ class MoomooFinancialsFetcher:
         code = moomoo_code(symbol)
         income = self._statement(code, symbol, "income", INCOME_STATEMENT)
         balance = self._statement(code, symbol, "balance_sheet", BALANCE_SHEET)
-        return parse_annual_financials(canonical_bytes({"income": income, "balance_sheet": balance}), cutoff=cutoff)
+        valuation = self._valuation_detail(code, symbol)
+        return parse_annual_financials(
+            canonical_bytes({"income": income, "balance_sheet": balance, "valuation_detail": valuation}),
+            cutoff=cutoff,
+        )
+
+    def _valuation_detail(self, code: str, symbol: str) -> Any:
+        fetcher = getattr(self._client, "valuation_detail", None)
+        if not callable(fetcher):
+            return {}
+        key = FetchKey("moomoo", "get_valuation_detail", f"symbol:{symbol}", gateway.utc_day())
+
+        def fetch(identity: FetchKey) -> bytes:
+            return canonical_bytes(fetcher(code, identity=identity))
+
+        try:
+            return json.loads(gateway.fetch_once(key, fetch).decode())
+        except Exception as exc:  # noqa: BLE001 - one failed enrichment must not drop the statements
+            logger.warning("moomoo valuation detail fetch failed for %s: %s", symbol, type(exc).__name__)
+            return {"fetch_error": type(exc).__name__}
 
     def _statement(self, code: str, symbol: str, label: str, statement_type: int) -> Any:
         key = FetchKey("moomoo", f"financial_statements:{label}", f"symbol:{symbol}", gateway.utc_day())

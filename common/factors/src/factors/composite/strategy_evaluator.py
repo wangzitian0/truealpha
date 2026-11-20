@@ -200,6 +200,10 @@ class EvaluatedDecision:
     peg: Decimal | None = None
     peg_rank: int | None = None
     peg_reason_codes: tuple[str, ...] = ()
+    peg_consensus: Decimal | None = None
+    peg_consensus_rank: int | None = None
+    peg_consensus_reason_codes: tuple[str, ...] = ()
+    peg_consensus_confidence: Decimal | None = None
     labor_efficiency_metric: str | None = None
     current_price_to_gross_profit: Decimal | None = None
     target_price_to_gross_profit: Decimal | None = None
@@ -208,7 +212,11 @@ class EvaluatedDecision:
 def peg_reason_codes(result: FactorResult) -> tuple[str, ...]:
     if result.value is not None:
         return ()
-    return tuple(flag for flag in result.flags if not flag.startswith(("cagr_years:", "window:")))
+    return tuple(
+        flag
+        for flag in result.flags
+        if not flag.startswith(("cagr_years:", "window:", "growth_convention:", "period_end:"))
+    )
 
 
 def _quantize(value: Decimal, quantization: DecimalQuantization) -> Decimal:
@@ -391,6 +399,13 @@ def _evaluate_issuer(
         as_of=as_of,
         cagr_years=3,
     )
+    peg_consensus_result = peg(
+        _facts_for(issuer, (*_input_keys("peg"), "consensus_profit_growth"), as_of=as_of),
+        entity_id=issuer.issuer_id,
+        growth_convention=GrowthConvention.ANALYST_CONSENSUS,
+        as_of=as_of,
+        cagr_years=3,
+    )
     labor_efficiency = _quantize(gppe_result.value, definition.labor_efficiency.quantization)
     current_ps = None if ps_result.value is None else _quantize(ps_result.value, definition.price_to_sales.quantization)
     current_multiple = _quantize(multiple_result.value, definition.valuation_quantization)
@@ -425,6 +440,9 @@ def _evaluate_issuer(
         valuation_gap=valuation_gap,
         peg=peg_result.value,
         peg_reason_codes=peg_reason_codes(peg_result),
+        peg_consensus=peg_consensus_result.value,
+        peg_consensus_reason_codes=peg_reason_codes(peg_consensus_result),
+        peg_consensus_confidence=peg_consensus_result.confidence if peg_consensus_result.value is not None else None,
         eligible=True,
         outcome=GoldenDecisionOutcome.RANKED_BEYOND_SELECTION_COUNT,
         exclusion_reason=None,
@@ -466,7 +484,24 @@ def rank_and_select(
             sorted((d for d in decisions if d.peg is not None), key=lambda d: (d.peg, d.issuer_id)), start=1
         )
     }
-    with_peg = [replace(d, peg_rank=peg_positions.get(d.issuer_id)) for d in decisions]
+    consensus_positions = {
+        d.issuer_id: pos
+        for pos, d in enumerate(
+            sorted(
+                (d for d in decisions if d.peg_consensus is not None),
+                key=lambda d: (d.peg_consensus, d.issuer_id),
+            ),
+            start=1,
+        )
+    }
+    with_peg = [
+        replace(
+            d,
+            peg_rank=peg_positions.get(d.issuer_id),
+            peg_consensus_rank=consensus_positions.get(d.issuer_id),
+        )
+        for d in decisions
+    ]
     candidates = sorted(
         (d for d in with_peg if d.outcome is GoldenDecisionOutcome.RANKED_BEYOND_SELECTION_COUNT),
         key=lambda d: (-(d.valuation_gap or Decimal(0)), d.issuer_id),
