@@ -286,6 +286,7 @@ class TwelveDataQuoteFetcher:
             where symbol = %s
               and trading_date <= %s
               and adjust = 'none'
+              and source = 'twelvedata'
             order by trading_date desc, recorded_at desc
             limit 1
             """,

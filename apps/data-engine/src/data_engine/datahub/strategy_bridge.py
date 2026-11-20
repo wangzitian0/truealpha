@@ -200,6 +200,7 @@ def _counts_on_close_basis(
     symbols = sorted({ticker for names in tickers.values() for ticker in names})
     histories = load_split_histories(connection, symbols)
     ruleset = cache(partial(resolve_ruleset, connection))
+    warned_share_reasons: set[tuple[str, str]] = set()
     for issuer_id in meeting:
         fin_listing, payload, observed_at = financial[issuer_id]
         _price_listing, close_payload, close_observed_at = price[issuer_id]
@@ -222,14 +223,16 @@ def _counts_on_close_basis(
             ruleset=ruleset,
         )
         if isinstance(outcome, Unavailable):
-            log.warning(
-                "share basis: %s (%s) gets no share row beside the close %s: %s: %s",
-                issuer_id,
-                ", ".join(names) or "no listing ticker",
-                close_payload.get("close"),
-                outcome.reason,
-                outcome.detail,
-            )
+            if (issuer_id, outcome.reason) not in warned_share_reasons:
+                warned_share_reasons.add((issuer_id, outcome.reason))
+                log.warning(
+                    "share basis: %s (%s) gets no share row beside the close %s: %s: %s",
+                    issuer_id,
+                    ", ".join(names) or "no listing ticker",
+                    close_payload.get("close"),
+                    outcome.reason,
+                    outcome.detail,
+                )
         elif outcome.factor != 1:
             log.info(
                 "share basis: %s (%s) filed count %s multiplied by %s for splits before the close",

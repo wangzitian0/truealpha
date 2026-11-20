@@ -15,13 +15,25 @@ DailySeries = dict[str, dict[date, tuple[Decimal | None, Decimal | None]]]
 _SERIES_SQL = (
     "select distinct on (symbol, trading_date) symbol, trading_date, open, close "
     "from staging.market_prices_daily where symbol = any(%s) and adjust = %s "
+    "order by symbol, trading_date, (source = 'twelvedata') desc, recorded_at desc"
+)
+_SERIES_BY_SOURCE_SQL = (
+    "select distinct on (symbol, trading_date) symbol, trading_date, open, close "
+    "from staging.market_prices_daily where symbol = any(%s) and adjust = %s and source = %s "
     "order by symbol, trading_date, recorded_at desc"
 )
 
 
-def load_daily_series(connection: psycopg.Connection[Any], symbols: Sequence[str], *, adjust: str) -> DailySeries:
+def load_daily_series(
+    connection: psycopg.Connection[Any], symbols: Sequence[str], *, adjust: str, source: str | None = None
+) -> DailySeries:
     series: DailySeries = {}
-    for symbol, trading_date, open_, close in connection.execute(_SERIES_SQL, (list(symbols), adjust)).fetchall():
+    rows = (
+        connection.execute(_SERIES_SQL, (list(symbols), adjust)).fetchall()
+        if source is None
+        else connection.execute(_SERIES_BY_SOURCE_SQL, (list(symbols), adjust, source)).fetchall()
+    )
+    for symbol, trading_date, open_, close in rows:
         series.setdefault(symbol, {})[trading_date] = (open_, close)
     return series
 

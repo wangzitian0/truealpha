@@ -387,7 +387,7 @@ def _materialize_extra_expressions(
         consumed_leaves.update(leaf_consumed_columns(expr, metrics=metrics, expressions=all_expressions))
 
     panel_rows: list[dict[str, Any]] = []
-    meta_by_row: dict[tuple[str, str], tuple[ToptCoreSnapshotInput, dict[str, str], MetricFreshness]] = {}
+    meta_by_row: dict[tuple[str, str], tuple[ToptCoreSnapshotInput, dict[str, str], MetricFreshness, str]] = {}
     for factor_input in factor_inputs:
         if factor_input.primary_listing_undeclared:
             continue
@@ -396,7 +396,9 @@ def _materialize_extra_expressions(
         base_conf = float(_snapshot_leaf_confidence(factor_input))
         financial_payload = financial_by_listing.get(factor_input.listing_id, {})
         periods = periods_by_listing.get(factor_input.listing_id, (None, None, None))
-        period_str = (periods[0] or periods[1] or factor_input.cutoff.date()).isoformat()
+        period_date = periods[0] or periods[1]
+        period_str = (period_date or factor_input.cutoff.date()).isoformat()
+        period_tag = "FY" if period_date is not None else "cutoff"
         row: dict[str, Any] = {
             "issuer_id": factor_input.issuer_id,
             "period": period_str,
@@ -416,7 +418,7 @@ def _materialize_extra_expressions(
             if reason is not None:
                 reasons[col] = reason
         panel_rows.append(row)
-        meta_by_row[(factor_input.issuer_id, period_str)] = (factor_input, reasons, freshness)
+        meta_by_row[(factor_input.issuer_id, period_str)] = (factor_input, reasons, freshness, period_tag)
 
     if not panel_rows:
         return 0
@@ -429,7 +431,7 @@ def _materialize_extra_expressions(
     count = 0
     for eval_row in evaluated.iter_rows(named=True):
         issuer_id, period_str = str(eval_row["issuer_id"]), str(eval_row["period"])
-        factor_input, input_reasons, freshness = meta_by_row[(issuer_id, period_str)]
+        factor_input, input_reasons, freshness, period_tag = meta_by_row[(issuer_id, period_str)]
         source_evidence = evidence_by_listing.get(factor_input.listing_id, InputEvidenceStatus.DEGRADED)
         for name, expr in extra_expressions.items():
             spec = _spec_for_column(name, metrics, all_expressions)
@@ -451,7 +453,7 @@ def _materialize_extra_expressions(
                 node_id=node_id_for(name),
                 node_key=name,
                 period=period_str,
-                period_tag="FY",
+                period_tag=period_tag,
                 value=persisted_val,
                 unit=spec.unit.value if spec.unit is not None else "ratio",
                 availability=avail_str,

@@ -548,6 +548,7 @@ class PostgresToptCoreRepository:
 
         cell_confidences = evaluate_and_persist_run_cell_confidence(self._connection, run_id, cutoff=cutoff)
         stores_price_series = _universe_stores_price_series(universe_id)
+        warned_share_reasons: set[tuple[str, str]] = set()
         members = tuple(
             self._snapshot_member(
                 listing_id,
@@ -568,6 +569,7 @@ class PostgresToptCoreRepository:
                     metric: conf for (subj, metric), conf in cell_confidences.items() if subj == listing_id
                 },
                 stores_price_series=stores_price_series,
+                warned_share_reasons=warned_share_reasons,
             )
             for listing_id, by_type in grouped.items()
         )
@@ -722,6 +724,7 @@ class PostgresToptCoreRepository:
         documents: Callable[[], Sequence[Mapping[str, Any]]] | None,
         ruleset: Callable[[], ConceptMappingRuleset] | None,
         stores_price_series: bool = True,
+        warned_share_reasons: set[tuple[str, str]] | None = None,
     ) -> tuple[Decimal | None, datetime, ToptCoreReasonCode | None]:
         shares_value = financial.shares_outstanding
         shares_knowable_at = financial_row.knowable_at if shares_cell is None else shares_cell.knowable_at
@@ -748,6 +751,7 @@ class PostgresToptCoreRepository:
         if price_value is None and financial.listing_units_per_share and financial.listing_units_per_share > 0:
             return shares_value / financial.listing_units_per_share, shares_knowable_at, None
         no_bar_stored = len(histories) > 0 and all(history is None for history in histories)
+        warn_subject = listing_id
         if not stores_price_series and outcome.reason == NO_SPLIT_ADJUSTED_SERIES and no_bar_stored:
             log.info(
                 "share basis: %s has no stored daily bar and its universe declares price_series=false: %s; "
@@ -755,7 +759,9 @@ class PostgresToptCoreRepository:
                 listing_id,
                 outcome.reason,
             )
-        else:
+        elif warned_share_reasons is None or (warn_subject, outcome.reason) not in warned_share_reasons:
+            if warned_share_reasons is not None:
+                warned_share_reasons.add((warn_subject, outcome.reason))
             log.warning(
                 "share basis: %s gets no share count beside the close %s: %s: %s",
                 listing_id,
@@ -777,6 +783,7 @@ class PostgresToptCoreRepository:
         input_age: InputAgeLimit | None = None,
         listing_confidences: Mapping[str, Decimal] | None = None,
         stores_price_series: bool = True,
+        warned_share_reasons: set[tuple[str, str]] | None = None,
     ) -> SnapshotMember:
         listing, financial, price = _validate_member_rows(listing_id, by_type)
         financial_row, market_row = by_type["financial-fact"], by_type["market-price"]
@@ -809,6 +816,7 @@ class PostgresToptCoreRepository:
             documents=documents,
             ruleset=ruleset,
             stores_price_series=stores_price_series,
+            warned_share_reasons=warned_share_reasons,
         )
 
         if input_age is not None and input_age.is_stale(

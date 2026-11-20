@@ -305,29 +305,32 @@ def parse_monthly_bars(
 
 def _latest_vintages(
     connection: psycopg.Connection, table: str, records: Sequence[PriceBarRecord]
-) -> dict[tuple[str, date, str], tuple[Any, Any, Any, Any, Any]]:
+) -> dict[tuple[str, date, str], tuple[Any, Any, Any, Any, Any, str]]:
     if not records:
         return {}
     query = (
-        f"select distinct on (symbol, trading_date, adjust) symbol, trading_date, adjust, open, high, low, close, volume "
+        f"select distinct on (symbol, trading_date, adjust) symbol, trading_date, adjust, open, high, low, close, volume, source "
         f"from {table} where symbol = any(%s) and trading_date = any(%s) order by symbol, trading_date, adjust, recorded_at desc;"
     )
     with connection.cursor() as cur:
         cur.execute(query, (sorted({r.symbol for r in records}), sorted({r.date for r in records})))
         rows = cur.fetchall()
-    return {(r[0], r[1], r[2]): (r[3], r[4], r[5], r[6], r[7]) for r in rows}
+    return {(r[0], r[1], r[2]): (r[3], r[4], r[5], r[6], r[7], str(r[8])) for r in rows}
 
 
 def _provenance(record: PriceBarRecord, *, adjust: str) -> tuple[datetime, Decimal, str]:
-    raw_ref = (
-        f"{_RAW_REF_PREFIX}:{record.source}:{record.symbol}:{record.resolution}:{record.date.isoformat()}:{adjust}"
-    )
     safe_symbol = safe_case_id_part(record.symbol, "symbol")
     date_iso = record.date.isoformat()
+    if record.source == "yahoo":
+        raw_ref = f"yahoo:chart:{record.symbol}:{record.resolution}:{date_iso}:{adjust}"
+        provider_id, lineage = "origin:yahoo:v1", "yahoo"
+    else:
+        raw_ref = f"{_RAW_REF_PREFIX}:{record.source}:{record.symbol}:{record.resolution}:{date_iso}:{adjust}"
+        provider_id, lineage = "origin:twelve-data:v1", "twelve-data"
     confidence = single_origin_confidence(
         case_id=f"market-prices:{safe_symbol}:{date_iso}",
-        provider_id="origin:twelve-data:v1",
-        lineage="twelve-data",
+        provider_id=provider_id,
+        lineage=lineage,
         evidence_id=f"bar:{safe_symbol}:{date_iso}",
     )
     return xnys_session_close_utc(record.date), confidence, raw_ref
@@ -339,11 +342,28 @@ def _insert_market_prices(
     if not records:
         return 0
     existing = _latest_vintages(connection, table, records)
-    rows = [
-        (r.symbol, r.date, r.open, r.high, r.low, r.close, r.volume, r.source, adjust, *_provenance(r, adjust=adjust))
-        for r in records
-        if existing.get((r.symbol, r.date, adjust)) != (r.open, r.high, r.low, r.close, r.volume)
-    ]
+    rows: list[tuple[Any, ...]] = []
+    for r in records:
+        prev = existing.get((r.symbol, r.date, adjust))
+        if prev is not None and (
+            (r.source == "yahoo" and prev[5] == "twelvedata")
+            or prev == (r.open, r.high, r.low, r.close, r.volume, r.source)
+        ):
+            continue
+        rows.append(
+            (
+                r.symbol,
+                r.date,
+                r.open,
+                r.high,
+                r.low,
+                r.close,
+                r.volume,
+                r.source,
+                adjust,
+                *_provenance(r, adjust=adjust),
+            )
+        )
     if not rows:
         return 0
     query = (
@@ -470,3 +490,26 @@ def ingest_daily_series(
         if not bars[adjust]:
             raise TwelveDataApiError(f"Twelve Data answered no closed daily bar for {symbol} (adjust={adjust})")
     return {adjust: insert_market_prices_daily(connection, records, adjust=adjust) for adjust, records in bars.items()}
+
+
+def ingest_yahoo_daily_series(
+    connection: psycopg.Connection,
+    symbol: str,
+    raw_bytes: bytes,
+    *,
+    now: datetime,
+) -> dict[str, int]:
+    """Persist split-adjusted and unadjusted daily bars from one captured Yahoo chart payload."""
+    from data_engine.sources.yahoo import parse_yahoo_daily_series
+
+    try:
+        payload = json.loads(raw_bytes.decode("utf-8"), parse_float=Decimal)
+    except (UnicodeDecodeError, ValueError):
+        return {SPLIT_ADJUSTED: 0, UNADJUSTED: 0}
+    if not isinstance(payload, dict):
+        return {SPLIT_ADJUSTED: 0, UNADJUSTED: 0}
+    split_adj, unadj = parse_yahoo_daily_series(symbol, payload, daily_lookback_floor(now), now=now)
+    return {
+        SPLIT_ADJUSTED: insert_market_prices_daily(connection, split_adj, adjust=SPLIT_ADJUSTED),
+        UNADJUSTED: insert_market_prices_daily(connection, unadj, adjust=UNADJUSTED),
+    }

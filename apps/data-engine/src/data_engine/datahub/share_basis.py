@@ -318,9 +318,10 @@ def load_split_histories(
     *,
     unadjusted_adjust: str = UNADJUSTED,
     split_adjusted_adjust: str = SPLIT_ADJUSTED,
+    source: str | None = None,
 ) -> dict[str, SplitHistory | Unavailable | None]:
-    unadjusted = load_daily_series(connection, symbols, adjust=unadjusted_adjust)
-    split_adjusted = load_daily_series(connection, symbols, adjust=split_adjusted_adjust)
+    unadjusted = load_daily_series(connection, symbols, adjust=unadjusted_adjust, source=source)
+    split_adjusted = load_daily_series(connection, symbols, adjust=split_adjusted_adjust, source=source)
     return {symbol: split_history(symbol, unadjusted, split_adjusted) for symbol in symbols}
 
 

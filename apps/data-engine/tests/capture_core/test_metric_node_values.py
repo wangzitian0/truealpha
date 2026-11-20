@@ -565,3 +565,20 @@ def test_node_period_uses_cutoff_tag_when_fiscal_periods_missing() -> None:
         periods=(date(2025, 12, 31), None, None),
         financial_payload={},
     ) == ("2025-12-31", "FY")
+
+    conn = _FakeNodeConnection()
+    count = materialize_metric_node_values(
+        conn,  # type: ignore[arg-type]
+        factor_inputs=(factor_input,),
+        gppe_definition=GppeV0Definition(risk_free_rate=Decimal("0.05")),
+        tier_definition_id="strategy-definition:" + "e" * 64,
+        periods_by_listing={},
+        evidence_by_listing={"listing:xnas:nvda": InputEvidenceStatus.VERIFIED},
+        extra_expressions={"gppe_raw": pl.col("gross_profit") / pl.col("employees_total")},
+    )
+    assert count == 9
+    assert all(row[5] == "cutoff" for row in conn.inserted_rows if row[5] != "definitional")
+    extra_rows = [row for row in conn.inserted_rows if row[3] == "gppe_raw"]
+    assert len(extra_rows) == 1
+    assert extra_rows[0][4] == CUTOFF.date().isoformat()
+    assert extra_rows[0][5] == "cutoff"

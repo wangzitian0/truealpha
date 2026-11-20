@@ -110,7 +110,7 @@ def environment_share(environment: str) -> int | None:
 
 
 def newest_sessions(connection: psycopg.Connection, symbols: Sequence[str]) -> dict[str, date]:
-    histories = load_split_histories(connection, symbols)
+    histories = load_split_histories(connection, symbols, source="twelvedata")
     return {symbol: history.last_session for symbol, history in histories.items() if isinstance(history, SplitHistory)}
 
 
