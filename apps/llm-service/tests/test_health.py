@@ -154,8 +154,8 @@ def test_health_reports_the_newest_verdict_per_nightly_check(monkeypatch) -> Non
 
 
 def test_health_hides_the_verdict_rows_of_a_universe_that_the_environment_does_not_schedule(monkeypatch) -> None:
-    """Staging runs TOPT only (owner decision of 2026-10-21). The verdict table is append-only, so the QQQ
-    rows that staging wrote before stay in it. /health reports them in production and not in staging."""
+    """Staging schedules TOPT, QQQ, and S&P 500; production stops S&P 500. Append-only rows for
+    unscheduled universes or retired checks are omitted by /health in the environment that stops them."""
     from datetime import UTC, datetime
 
     import psycopg
@@ -167,6 +167,9 @@ def test_health_hides_the_verdict_rows_of_a_universe_that_the_environment_does_n
         ("theme_purity@universe-list:qqq", ran, True, "ok"),
         ("question_coverage@universe-list:qqq", ran, True, "ok"),
         ("datahub_confidence_report@universe-list:qqq", ran, True, "ok"),
+        ("theme_purity@universe-list:sp500", ran, True, "ok"),
+        ("question_coverage@universe-list:sp500", ran, True, "ok"),
+        ("datahub_confidence_report@universe-list:sp500", ran, True, "ok"),
         ("job_run_health", ran, True, "ok"),
         ("fetch_keys_once", ran, True, "ok: retired check row in append-only table"),
     ]
@@ -177,8 +180,10 @@ def test_health_hides_the_verdict_rows_of_a_universe_that_the_environment_does_n
     monkeypatch.setattr(settings, "app_env", "production")
     production = [entry["check"] for entry in TestClient(app).get("/health").json()["nightly_verdicts"]]
 
-    assert staging == ["theme_purity@topt", "job_run_health"]
-    assert production == [row[0] for row in rows if row[0] != "fetch_keys_once"]
+    assert staging == [row[0] for row in rows if row[0] != "fetch_keys_once"]
+    assert production == [
+        row[0] for row in rows if row[0] != "fetch_keys_once" and not row[0].endswith("@universe-list:sp500")
+    ]
 
 
 def test_a_pending_verdict_is_reported_as_null_not_as_red(monkeypatch) -> None:
@@ -308,14 +313,24 @@ def test_health_reports_each_pointer_with_its_label_limit_reason_and_availabilit
 
 
 def test_health_hides_the_pointer_rows_of_a_universe_that_the_environment_does_not_schedule(monkeypatch) -> None:
-    """#1416: staging runs TOPT only. Historical one-off rows like `universe:qqq-us-2026-09-30` stay in
-    `mart.served_head` and must be omitted in staging while reported in production."""
+    """#1416 / #1651 / #1661: staging schedules TOPT, QQQ, and S&P 500; production schedules TOPT and QQQ
+    and leaves S&P 500 stopped. Historical one-off rows stay in `mart.served_head` and must be omitted where
+    their environment does not schedule them."""
     from llm_service.config import settings
 
     rows = [
         (
             "universe:qqq-us-2026-09-30",
             datetime(2026, 9, 23, 23, 20, tzinfo=UTC),
+            Decimal("366.0"),
+            "stale",
+            72,
+            "older_than_3d",
+            "available",
+        ),
+        (
+            "universe:sp500-us-2026-09-30",
+            datetime(2026, 9, 24, 1, 45, tzinfo=UTC),
             Decimal("366.0"),
             "stale",
             72,
@@ -338,7 +353,11 @@ def test_health_hides_the_pointer_rows_of_a_universe_that_the_environment_does_n
     staging_resp = TestClient(app).get("/health")
     assert staging_resp.status_code == 200
     staging_pointers = staging_resp.json()["governed_pointers"]
-    assert [entry["universe_id"] for entry in staging_pointers] == ["universe:topt-us-2026-03-31"]
+    assert [entry["universe_id"] for entry in staging_pointers] == [
+        "universe:qqq-us-2026-09-30",
+        "universe:sp500-us-2026-09-30",
+        "universe:topt-us-2026-03-31",
+    ]
 
     monkeypatch.setattr(settings, "app_env", "production")
     production_pointers = TestClient(app).get("/health").json()["governed_pointers"]

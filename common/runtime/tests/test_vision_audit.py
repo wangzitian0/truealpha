@@ -115,19 +115,20 @@ def test_vision_audit_refuses_pass_when_served_head_freshness_is_stale_or_missin
     assert report_missing.all_passed is False
     assert report_missing.status == "fail"
 
-    # Manual-only unscheduled QQQ pointer in staging does not fail when TOPT is fresh (#1256)
-    staging_pointers = [
+    # Unscheduled stale S&P 500 pointer in production does not fail when TOPT and QQQ are fresh (#1256)
+    prod_pointers_with_unscheduled_sp500 = [
         {"universe_id": "universe:topt-us-2026-03-31", "freshness": "fresh", "availability": "available"},
-        {"universe_id": "universe:qqq-us-2026-09-30", "freshness": "stale", "availability": "available"},
+        {"universe_id": "universe:qqq-us-2026-09-30", "freshness": "fresh", "availability": "available"},
+        {"universe_id": "universe:sp500-us-2026-09-30", "freshness": "stale", "availability": "available"},
     ]
     monkeypatch.setattr(
         _module,
         "read_report",
-        lambda _url, _http_get: _FakeHealthReport(fake_verdicts, "v0.1.2", staging_pointers),
+        lambda _url, _http_get: _FakeHealthReport(fake_verdicts, "v0.1.2", prod_pointers_with_unscheduled_sp500),
     )
-    report_staging: VisionAuditReport = audit_vision(env="staging")
-    assert report_staging.all_passed is True
-    assert report_staging.status == "pass"
+    report_prod_unscheduled: VisionAuditReport = audit_vision(env="production")
+    assert report_prod_unscheduled.all_passed is True
+    assert report_prod_unscheduled.status == "pass"
 
 
 def test_vision_audit_fails_gate_3_when_nightly_backtest_verdict_is_missing(
@@ -190,6 +191,7 @@ def _verdicts_without(*dropped: str) -> list[Any]:
         _FakeVerdict("report_surface_proof", True, "5/5 surfaces ok"),
         _FakeVerdict("output_invariants", True, "6 held, 0 empty"),
         _FakeVerdict("question_coverage@universe-list:qqq", True, "coverage ok"),
+        _FakeVerdict("question_coverage@universe-list:sp500", True, "coverage ok"),
         _FakeVerdict("question_coverage@topt", True, "coverage ok"),
         _FakeVerdict("nightly_backtest", True, "backtest executed ok"),
         _FakeVerdict("market_data_freshness", True, "freshness within 72h"),
@@ -197,17 +199,24 @@ def _verdicts_without(*dropped: str) -> list[Any]:
     return [verdict for verdict in everything if verdict.check not in dropped]
 
 
-def test_gate_2_asks_staging_for_the_topt_coverage_only(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Staging runs TOPT only (owner decision of 2026-10-21): it records no QQQ coverage verdict."""
-    verdicts = _verdicts_without("question_coverage@universe-list:qqq")
+def test_gate_2_asks_production_for_topt_and_qqq_only_and_staging_for_sp500_too(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Production stops S&P 500; staging schedules TOPT, QQQ, and S&P 500 under #1651/#1661."""
+    verdicts = _verdicts_without("question_coverage@universe-list:sp500")
     monkeypatch.setattr(_module, "read_report", lambda _url, _http_get: _FakeHealthReport(verdicts, "v0.1.2"))
 
-    report: VisionAuditReport = audit_vision(env="staging")
+    prod_report: VisionAuditReport = audit_vision(env="production")
+    prod_gate_2 = next(g for g in prod_report.gates if g.gate_id == "#30")
+    assert prod_gate_2.verified is True and prod_gate_2.status == "VERIFIED"
+    assert "sp500" not in prod_gate_2.evidence
+    assert prod_report.all_passed is True
 
-    gate_2 = next(g for g in report.gates if g.gate_id == "#30")
-    assert gate_2.verified is True and gate_2.status == "VERIFIED"
-    assert "qqq" not in gate_2.evidence
-    assert report.all_passed is True
+    staging_report: VisionAuditReport = audit_vision(env="staging")
+    staging_gate_2 = next(g for g in staging_report.gates if g.gate_id == "#30")
+    assert staging_gate_2.verified is False and staging_gate_2.status == "OPEN"
+    assert "universe-list:sp500 coverage: missing" in staging_gate_2.evidence
+    assert staging_report.all_passed is False
 
 
 def test_gate_2_asks_production_for_the_qqq_coverage_too(monkeypatch: pytest.MonkeyPatch) -> None:

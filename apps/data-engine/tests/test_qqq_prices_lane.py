@@ -637,14 +637,15 @@ def test_the_job_and_its_weekday_schedule_are_deployed() -> None:
     ("app_env", "expected"),
     [
         ("production", dg.DefaultScheduleStatus.RUNNING),
-        ("staging", dg.DefaultScheduleStatus.STOPPED),
-        ("development", dg.DefaultScheduleStatus.STOPPED),
+        ("staging", dg.DefaultScheduleStatus.RUNNING),
+        ("development", dg.DefaultScheduleStatus.RUNNING),
+        ("preview", dg.DefaultScheduleStatus.STOPPED),
     ],
 )
 def test_the_schedule_runs_where_the_contract_schedules_the_qqq_universe(
     monkeypatch: pytest.MonkeyPatch, app_env: str, expected: dg.DefaultScheduleStatus
 ) -> None:
-    """Staging runs TOPT only (#1416), so its QQQ prices wait: the status follows the contract, not an environment case."""
+    """Staging and production schedule QQQ under #1651; preview stops it. Status follows the contract."""
     monkeypatch.setattr(settings, "app_env", app_env)
     try:
         reloaded = importlib.reload(qqq_prices)

@@ -33,9 +33,14 @@ def test_sentinels_universes_ticks_and_lanes(monkeypatch: pytest.MonkeyPatch) ->
         c.universe_of_id("universe:unknown-us-2026-09-30")
     st, pu = c.environments["staging"], [(e.key, e.status) for e in c.environments["production"].universes]
     assert pu == [("topt", "scheduled"), ("qqq", "scheduled"), ("sp500", "stopped")]
-    assert [(e.key, e.status) for e in st.universes] == [("topt", "scheduled")] and st.list_refresh == ("qqq",)
-    assert not c.is_universe_scheduled("qqq", "staging") and c.is_universe_list_refresh_scheduled("qqq", "staging")
-    assert not c.is_universe_list_refresh_scheduled("sp500", "staging") and set(st.ticks) == {"topt", "canary"}
+    assert [(e.key, e.status) for e in st.universes] == [
+        ("topt", "scheduled"),
+        ("qqq", "scheduled"),
+        ("sp500", "scheduled"),
+    ] and st.list_refresh == ()
+    assert c.is_universe_scheduled("qqq", "staging") and c.is_universe_list_refresh_scheduled("qqq", "staging")
+    assert c.is_universe_scheduled("sp500", "staging") and c.is_universe_list_refresh_scheduled("sp500", "staging")
+    assert set(st.ticks) == {"topt", "qqq", "sp500", "canary"}
     assert c.contract_version == raw["contract_version"] == "3.0.0" and c.schema_version == 1
     for s in raw["environments"].values():
         assert "strategy_universe" not in s and "target_strategy_universe" not in s
@@ -155,6 +160,10 @@ def test_metric_applicability_declares_owner_approved_topt_gppe_exclusions() -> 
     c = _ec.load_environment_contract()
     gppe = c.not_applicable_for_universe_id("gppe", "universe:topt-us-2026-03-31")
     assert {e.ticker for e in gppe} == {"XOM", "V", "MA", "BRK.B"} and all(e.status == "not_applicable" for e in gppe)
+    sp500_gppe = c.not_applicable_for_universe_id("gppe", "universe:sp500-us-2026-09-30")
+    assert {e.ticker for e in sp500_gppe} == {"XOM", "V", "MA", "BRK.B"} and all(
+        e.status == "not_applicable" for e in sp500_gppe
+    )
     assert c.not_applicable_for_universe_id("gppe", "universe:qqq-us-2026-06-30") == ()
     for ops, msg in _C["bad_applicability"]:
         data = c.model_dump(mode="json")

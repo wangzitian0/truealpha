@@ -8,7 +8,7 @@ import { PanelNodeTd } from "@/components/panel-node-cell";
 import { ProvenanceCell } from "@/components/provenance-cell";
 import { AvailabilityBadge, ReadStateNotice } from "@/components/read-state";
 import { ResearchTable } from "@/components/research-table";
-import { UNIVERSES } from "@/contracts/environmentContract.generated";
+import { UNIVERSES, isHeadScheduledFromContract } from "@/contracts/environmentContract.generated";
 import { universesWithRole } from "@/contracts/universes";
 import { loadAuthed } from "../../_load";
 
@@ -20,7 +20,13 @@ const pill = (active: boolean) =>
 export default async function RankingsPage({ searchParams }: { searchParams: Promise<{ cutoff?: string; convention?: string; universe?: string }> }) {
   const params = await searchParams;
   const convention: PegGrowthConvention = params.convention === "consensus" || params.convention === "guidance" ? params.convention : "historical_cagr";
-  const universes = UNIVERSES.filter((u) => !u.roles.includes("sentinel") && u.scheduled_somewhere).map((u) => u.key);
+  const strategyUniverses = UNIVERSES.filter(
+    (u) => u.roles.includes("strategy") && isHeadScheduledFromContract(u.id_prefix, process.env.ENVIRONMENT),
+  ).map((u) => u.key);
+  const universes =
+    strategyUniverses.length > 0
+      ? strategyUniverses
+      : UNIVERSES.filter((u) => !u.roles.includes("sentinel") && u.scheduled_somewhere).map((u) => u.key);
   const universe = params.universe || universesWithRole("strategy")[0] || universes[0] || "all";
   const { data, error } = await loadAuthed("/research/rankings", (opts) => api.getRankings({ cutoff: params.cutoff, universe }, opts));
   const rows = data?.rows ?? [];

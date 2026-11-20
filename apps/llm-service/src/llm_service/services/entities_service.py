@@ -437,29 +437,63 @@ def get_trace(
     )
     target_iid = decision.issuer_id if decision else issuer_id
 
-    def _q(cur: Any) -> tuple[list[TraceNodeValueDto], str | None, list[dict[str, Any]]]:
-        cand = list(candidates) if candidates else resolve_issuer_candidates_from_cursor(cur, target_iid)
+    def _q(
+        cur: Any,
+    ) -> tuple[
+        StrategyDecisionItemDto | None,
+        str,
+        str,
+        list[TraceNodeValueDto],
+        str | None,
+        list[dict[str, Any]],
+    ]:
+        if decision is not None:
+            cand = list(candidates) if candidates else resolve_issuer_candidates_from_cursor(cur, target_iid)
+            resolved_dec: StrategyDecisionItemDto | None = decision
+            resolved_iid = target_iid
+            run_id = page.strategy_run_id
+            corpus_sha = page.corpus_sha256
+        else:
+            if candidates is not None:
+                cand = list(candidates)
+                legacy_by_entity: dict[str, str] = {}
+            else:
+                cand, legacy_by_entity = resolve_issuer_identity_from_cursor(cur, target_iid)
+            row = _fetch_company_decision_from_cursor(cur, cand, legacy_by_entity)
+            if row is not None:
+                resolved_iid = str(row["issuer_id"])
+                display_map = _fetch_issuer_display_map_from_cursor(cur, resolved_iid, cand, legacy_by_entity)
+                resolved_dec = _decision_row_to_dto(row, display_map=display_map)
+                run_id = str(row.get("strategy_run_id") or "") or page.strategy_run_id
+                corpus_sha = str(row.get("corpus_sha256") or "") or page.corpus_sha256
+            else:
+                resolved_dec = None
+                resolved_iid = target_iid
+                run_id = page.strategy_run_id
+                corpus_sha = page.corpus_sha256
         nodes = _fetch_trace_nodes_from_cursor(cur, cand)
         res_id: str | None = None
         lin_inputs: list[dict[str, Any]] = []
-        target_cutoff = decision.cutoff_at if decision else cutoff
-        if page.strategy_run_id and target_cutoff:
-            res_id, list_id, lineage = read_trace_lineage(cur, page.strategy_run_id, target_iid, target_cutoff)
+        target_cutoff = resolved_dec.cutoff_at if resolved_dec else cutoff
+        if run_id and target_cutoff:
+            res_id, list_id, lineage = read_trace_lineage(cur, run_id, resolved_iid, target_cutoff)
             lin_inputs = _extract_lineage_inputs(lineage, list_id)
-        return nodes, res_id, lin_inputs
+        return resolved_dec, resolved_iid, corpus_sha, nodes, res_id, lin_inputs
 
-    nodes, lineage_result_id, lineage_inputs = with_mart_readonly(_q, database_url=database_url)
+    resolved_dec, resolved_iid, corpus_sha, nodes, lineage_result_id, lineage_inputs = with_mart_readonly(
+        _q, database_url=database_url
+    )
     return TraceResponse(
-        available=decision is not None or bool(nodes),
-        reason=None if (decision or nodes) else "trace_not_found",
-        trace_id=decision.trace_id if decision else "",
-        issuer_id=target_iid,
-        label=decision.label if decision else target_iid,
-        cutoff_at=decision.cutoff_at if decision else (cutoff or ""),
-        corpus_sha256=page.corpus_sha256,
+        available=resolved_dec is not None or bool(nodes),
+        reason=None if (resolved_dec or nodes) else "trace_not_found",
+        trace_id=resolved_dec.trace_id if resolved_dec else "",
+        issuer_id=resolved_iid,
+        label=resolved_dec.label if resolved_dec else resolved_iid,
+        cutoff_at=resolved_dec.cutoff_at if resolved_dec else (cutoff or ""),
+        corpus_sha256=corpus_sha,
         lineage_result_id=lineage_result_id,
         lineage_inputs=lineage_inputs,
-        decision=decision,
+        decision=resolved_dec,
         node_values=nodes,
     )
 

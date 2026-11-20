@@ -119,7 +119,8 @@ def test_a_missing_check_fails(capsys: pytest.CaptureFixture[str]) -> None:
 def test_an_empty_report_fails_for_every_expected_check(capsys: pytest.CaptureFixture[str]) -> None:
     assert _run([]) == 1
     err = capsys.readouterr().err
-    assert all(name in err for name in EXPECTED)
+    expected_in_prod = {name for name in EXPECTED if not name.endswith("@universe-list:sp500")}
+    assert all(name in err for name in expected_in_prod)
 
 
 def test_the_newest_verdict_per_check_is_the_one_judged() -> None:
@@ -330,6 +331,10 @@ def _qqq_checks() -> list[str]:
     return [name for name in EXPECTED if name.endswith("@universe-list:qqq")]
 
 
+def _sp500_checks() -> list[str]:
+    return [name for name in EXPECTED if name.endswith("@universe-list:sp500")]
+
+
 def test_the_per_universe_checks_of_the_qqq_universe_are_the_three_the_owner_named() -> None:
     assert _qqq_checks() == [
         "datahub_confidence_report@universe-list:qqq",
@@ -338,10 +343,10 @@ def test_the_per_universe_checks_of_the_qqq_universe_are_the_three_the_owner_nam
     ]
 
 
-def test_staging_is_not_asked_for_a_qqq_verdict_and_production_is(capsys: pytest.CaptureFixture[str]) -> None:
-    """Staging runs TOPT only (owner decision of 2026-10-21). The same report is red in production."""
-    qqq = set(_qqq_checks())
-    verdicts = [v for v in _all_green() if v["check"] not in qqq]
+def test_production_is_not_asked_for_an_sp500_verdict_and_staging_is(capsys: pytest.CaptureFixture[str]) -> None:
+    """Production leaves S&P 500 stopped; staging schedules QQQ and S&P 500 under #1651/#1661."""
+    sp500 = set(_sp500_checks())
+    verdicts = [v for v in _all_green() if v["check"] not in sp500]
 
     def run(environment: str) -> int:
         return check(
@@ -353,22 +358,22 @@ def test_staging_is_not_asked_for_a_qqq_verdict_and_production_is(capsys: pytest
             contract_reader=_main_contract,
         )
 
-    assert run("staging") == 0, capsys.readouterr().err
-    assert run("production") == 1
+    assert run("production") == 0, capsys.readouterr().err
+    assert run("prod") == 0, "the alias of production is production"
+    assert run("staging") == 1
     err = capsys.readouterr().err
-    assert all(f"{name}: no verdict at all" in err for name in sorted(qqq)), err
-    assert run("prod") == 1, "the alias of production is production"
+    assert all(f"{name}: no verdict at all" in err for name in sorted(sp500)), err
 
 
-def test_a_report_that_holds_the_staging_checks_only_is_green_in_staging_with_the_expected_count(
+def test_a_report_that_holds_the_production_checks_only_is_green_in_production_with_the_expected_count(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    qqq = set(_qqq_checks())
-    verdicts = [v for v in _all_green() if v["check"] not in qqq]
+    sp500 = set(_sp500_checks())
+    verdicts = [v for v in _all_green() if v["check"] not in sp500]
     assert (
         check(
             URL,
-            environment="staging",
+            environment="production",
             http_get=_health(verdicts),
             now=NOW,
             reader=_main_set,
@@ -376,7 +381,7 @@ def test_a_report_that_holds_the_staging_checks_only_is_green_in_staging_with_th
         )
         == 0
     )
-    assert f"all {len(EXPECTED) - len(qqq)} nightly checks are green" in capsys.readouterr().out
+    assert f"all {len(EXPECTED) - len(sp500)} nightly checks are green" in capsys.readouterr().out
 
 
 def _named_set(_ref: str) -> str:
@@ -521,13 +526,13 @@ def _release_repo(tmp_path: Path, tag: str = "v0.0.70") -> Path:
     return tmp_path
 
 
-def _health_without_qqq(reference: datetime):
-    """Both environments report the verdicts that staging records: no QQQ check, each 7 hours old at `reference`."""
-    qqq = set(_qqq_checks())
+def _health_without_sp500(reference: datetime):
+    """Both environments report the production set (no S&P 500 checks), each 7 hours old at `reference`."""
+    sp500 = set(_sp500_checks())
     verdicts = [
         {"check": name, "ran_at": (reference - timedelta(hours=7)).isoformat(), "ok": True, "summary": "ok"}
         for name in sorted(EXPECTED)
-        if name not in qqq
+        if name not in sp500
     ]
 
     def get(url: str) -> tuple[int, str]:
@@ -543,13 +548,13 @@ def test_the_command_line_asks_each_environment_for_the_universes_its_release_sc
     import infra2_sdk.deploy
 
     repo = _release_repo(tmp_path)
-    monkeypatch.setattr(infra2_sdk.deploy, "default_http_get", lambda: _health_without_qqq(datetime.now(UTC)))
+    monkeypatch.setattr(infra2_sdk.deploy, "default_http_get", lambda: _health_without_sp500(datetime.now(UTC)))
 
     def run(environment: str) -> int:
         return _module.main([URL, "--environment", environment, "--repo", str(repo)])
 
-    assert run("staging") == 0
-    assert run("production") == 1
+    assert run("production") == 0
+    assert run("staging") == 1
 
 
 def test_the_tool_and_the_contract_agree_on_which_checks_an_environment_expects() -> None:
@@ -569,9 +574,8 @@ def test_the_tool_and_the_contract_agree_on_which_checks_an_environment_expects(
 def test_the_lanes_record_in_each_environment_exactly_the_checks_the_tool_expects_there(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The standing check of owner decision 2026-10-21 (staging runs TOPT only). Both sides read the contract:
-    the lanes through `is_registered`, the tool through `expectations_for`. A check that a lane records and
-    the tool does not expect is un-watched; a check that the tool expects and no lane records is red forever."""
+    """Both sides read the contract: the lanes through `is_registered`, the tool through `expectations_for`.
+    Staging expects TOPT, QQQ, and S&P 500; production expects TOPT and QQQ while S&P 500 stays stopped."""
     from importlib import import_module
 
     from data_engine.config import settings
@@ -590,8 +594,10 @@ def test_the_lanes_record_in_each_environment_exactly_the_checks_the_tool_expect
             f"{environment}: expected but not recorded {sorted(set(expected) - recorded)}; "
             f"recorded but not expected {sorted(recorded - set(expected))}"
         )
+    monkeypatch.setattr(settings, "app_env", "production")
+    assert not {name for name in declared if is_registered(name, declared)} & set(_sp500_checks())
     monkeypatch.setattr(settings, "app_env", "staging")
-    assert not {name for name in declared if is_registered(name, declared)} & set(_qqq_checks())
+    assert (set(_qqq_checks()) | set(_sp500_checks())) <= {name for name in declared if is_registered(name, declared)}
 
 
 def test_the_market_data_check_is_watched_and_survives_a_weekend() -> None:
@@ -673,8 +679,10 @@ def test_an_unknown_first_declaration_gives_no_grace(capsys: pytest.CaptureFixtu
 def test_the_grace_never_excuses_a_red_or_stale_verdict() -> None:
     """Pending is for a check with NO row; a check that ran and failed, or went quiet, is judged."""
     recent = lambda _check, _release: NOW - timedelta(minutes=5)  # noqa: E731
-    red = [*_all_green()[:-1], _verdict(sorted(EXPECTED)[-1], 1, ok=False, summary="failed: x")]
-    stale = [*_all_green()[:-1], _verdict(sorted(EXPECTED)[-1], 60)]
+    target_check = "theme_purity@topt"
+    base = [entry for entry in _all_green() if entry["check"] != target_check]
+    red = [*base, _verdict(target_check, 1, ok=False, summary="failed: x")]
+    stale = [*base, _verdict(target_check, 60)]
     assert _run(red, first_declared=recent) == 1
     assert _run(stale, first_declared=recent) == 1
 
@@ -803,7 +811,7 @@ def _patched_proof(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, object]]:
 
 
 FRESH_TOPT = ("universe:topt-us-2026-03-31", "fresh", "available", None)
-STALE_MANUAL_QQQ = ("universe:qqq-us-2026-09-30", "stale", "available", "older_than_3d")
+STALE_MANUAL_SP500 = ("universe:sp500-us-2026-09-30", "stale", "available", "older_than_3d")
 
 
 def test_quality_surface_proof_requires_fresh_served_head(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -821,10 +829,14 @@ def test_quality_surface_proof_requires_fresh_served_head(monkeypatch: pytest.Mo
     assert json.loads(out)["status"] == "pass"
     assert recorded[-1]["ok"] is True
 
-    # 2. Manual-only unscheduled QQQ head in staging, beside a fresh scheduled head -> ignored per #1256
-    monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: _ProofConnection([STALE_MANUAL_QQQ, FRESH_TOPT]))
-    out_staging = quality.run_report_surface_proof(dg.build_op_context())
-    assert json.loads(out_staging)["status"] == "pass"
+    # 2. Unscheduled stale SP500 head in production, beside a fresh scheduled head -> ignored per #1256
+    monkeypatch.setattr(
+        psycopg,
+        "connect",
+        lambda *_a, **_k: _ProofConnection([STALE_MANUAL_SP500, FRESH_TOPT], environment="production"),
+    )
+    out_prod = quality.run_report_surface_proof(dg.build_op_context())
+    assert json.loads(out_prod)["status"] == "pass"
     assert recorded[-1]["ok"] is True
 
     # 3. Stale scheduled served_head -> raises dg.Failure and records ok=False
@@ -840,14 +852,14 @@ def test_quality_surface_proof_requires_fresh_served_head(monkeypatch: pytest.Mo
 
 
 @pytest.mark.parametrize(
-    "rows",
+    ("rows", "environment"),
     [
-        pytest.param([], id="no-head-at-all"),
-        pytest.param([STALE_MANUAL_QQQ], id="only-a-head-with-no-schedule-here"),
+        pytest.param([], "staging", id="no-head-at-all"),
+        pytest.param([STALE_MANUAL_SP500], "production", id="only-a-head-with-no-schedule-here"),
     ],
 )
 def test_the_surface_proof_fails_closed_without_a_scheduled_head(
-    monkeypatch: pytest.MonkeyPatch, rows: list[tuple[object, ...]]
+    monkeypatch: pytest.MonkeyPatch, rows: list[tuple[object, ...]], environment: str
 ) -> None:
     """#28 V3: unknown is not OK. Zero scheduled heads in `mart.served_head` proves nothing about
     freshness: no run was ever governed, or the identity row hides every head (the state that
@@ -857,7 +869,7 @@ def test_the_surface_proof_fails_closed_without_a_scheduled_head(
     from data_engine.lanes import quality
 
     recorded = _patched_proof(monkeypatch)
-    monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: _ProofConnection(rows))
+    monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: _ProofConnection(rows, environment=environment))
 
     with pytest.raises(dg.Failure, match="no scheduled governed head"):
         quality.run_report_surface_proof(dg.build_op_context())

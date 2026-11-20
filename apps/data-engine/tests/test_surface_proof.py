@@ -17,8 +17,10 @@ NOW = datetime(2026, 9, 16, 0, 15, tzinfo=UTC)
 NEW = "capture-run:" + "a" * 64
 OLD = "capture-run:" + "b" * 64
 QQQ = "capture-run:" + "c" * 64
+SP500 = "capture-run:" + "e" * 64
 TOPT_UNIVERSE = "universe:topt-us-2026-03-31"
 QQQ_UNIVERSE = "universe:qqq-us-2026"
+SP500_UNIVERSE = "universe:sp500-us-2026-09-30"
 REPORT = {"questions": {"q1": {"answered": 18, "unavailable": {"x": 2}, "missing": 0}}}
 
 
@@ -74,7 +76,15 @@ class _Tables:
         elif "from mart.issuer_theme_purity where run_id = %s" in text:
             self._rows = [(params[0] in self.theme_runs,)]
         elif "mart.governed_strategy_run" in text:
-            self._rows = [(self.strategy, "strategy-run:x")] if self.strategy else []
+            if isinstance(self.strategy, list | tuple):
+                self._rows = list(self.strategy)
+            elif self.strategy:
+                rows = [(TOPT_UNIVERSE, self.strategy, "strategy-run:topt")]
+                if self.holdings:
+                    rows.append((QQQ_UNIVERSE, self.holdings, "strategy-run:qqq"))
+                self._rows = rows
+            else:
+                self._rows = []
         elif "from mart.issuer_theme_purity" in text and "group by run_id" in text:
             self._rows = [(self.themes, NOW)] if self.themes else []
         elif "from mart.question_coverage_report" in text:
@@ -96,15 +106,19 @@ class _Tables:
         return list(self._rows)
 
 
-def _heads(monkeypatch, *, topt=NEW, qqq=QQQ, topt_cutoff=NOW, qqq_cutoff=NOW):
+def _heads(monkeypatch, *, topt=NEW, qqq=QQQ, sp500=None, topt_cutoff=NOW, qqq_cutoff=NOW, sp500_cutoff=NOW):
     def governed_head(_connection, *, universe_prefix):
         # #756: no environment argument to check. The signature is the assertion now -- a
         # caller that still names one raises TypeError here instead of quietly resolving a
         # lineage this database stopped advancing.
-        is_topt = universe_prefix.startswith("universe:topt")
-        run = topt if is_topt else qqq
-        universe_id = TOPT_UNIVERSE if is_topt else QQQ_UNIVERSE
-        cutoff = topt_cutoff if is_topt else qqq_cutoff
+        if universe_prefix.startswith("universe:topt"):
+            run, universe_id, cutoff = topt, TOPT_UNIVERSE, topt_cutoff
+        elif universe_prefix.startswith("universe:qqq"):
+            run, universe_id, cutoff = qqq, QQQ_UNIVERSE, qqq_cutoff
+        elif universe_prefix.startswith("universe:sp500"):
+            run, universe_id, cutoff = sp500, SP500_UNIVERSE, sp500_cutoff
+        else:
+            return None
         return None if run is None else surface_proof.GovernedHead(universe_id, run, cutoff)
 
     monkeypatch.setattr(surface_proof, "governed_head", governed_head)
@@ -127,7 +141,7 @@ def test_a_surface_serving_the_previous_head_is_a_mismatch_by_name(monkeypatch) 
     assert not by_surface["/admin/datahub coverage [topt]"].ok
     assert by_surface["/research/holdings"].ok, "no QQQ head and nothing served: not run here, not a mismatch"
     assert summary_lines(verdicts)[-1].endswith("2 do not")
-    assert summary_lines(verdicts)[1].startswith("MISMATCH /research/themes: serves capture-run:bbbbbbbbbbbb")
+    assert by_surface["/research/themes"].line.startswith("MISMATCH /research/themes: serves capture-run:bbbbbbbbbbbb")
 
 
 def test_every_surface_on_the_head_with_an_agreeing_report_is_green(monkeypatch) -> None:
@@ -142,12 +156,12 @@ def test_every_surface_on_the_head_with_an_agreeing_report_is_green(monkeypatch)
     )
     verdicts = prove(tables, executed_at=NOW)
     assert all(v.ok for v in verdicts), [v.line for v in verdicts if not v.ok]
-    assert summary_lines(verdicts)[-1] == "report surface proof: 6/6 surfaces serve the governed head"
+    assert summary_lines(verdicts)[-1] == "report surface proof: 8/8 surfaces serve the governed head"
 
 
 def test_a_stale_head_on_an_unscheduled_universe_gives_a_green_proof(monkeypatch) -> None:
-    """A stale head on an unscheduled universe (such as QQQ on staging) is not a failure."""
-    _heads(monkeypatch)
+    """A stale head on an unscheduled universe (such as SP500 in production) is not a failure."""
+    _heads(monkeypatch, sp500=SP500)
     fresh_report = {"questions": {"q1": {"answered": 99, "unavailable": {}, "missing": 0}}}
     _reports(monkeypatch, fresh_report)
     tables = _Tables(
@@ -155,17 +169,22 @@ def test_a_stale_head_on_an_unscheduled_universe_gives_a_green_proof(monkeypatch
         themes=NEW,
         holdings=QQQ,
         funds=1,
-        coverage=[(QQQ_UNIVERSE, QQQ, REPORT), (TOPT_UNIVERSE, NEW, fresh_report)],
-        environment="staging",
+        coverage=[
+            (QQQ_UNIVERSE, QQQ, fresh_report),
+            (SP500_UNIVERSE, SP500, REPORT),
+            (TOPT_UNIVERSE, NEW, fresh_report),
+        ],
+        environment="production",
     )
     verdicts = prove(tables, executed_at=NOW)
     by_surface = {v.surface: v for v in verdicts}
-    qqq_cov = by_surface["/admin/datahub coverage [universe-list:qqq]"]
-    assert qqq_cov.ok, f"expected qqq coverage to be ok when unscheduled, got: {qqq_cov.line}"
+    sp500_cov = by_surface["/admin/datahub coverage [universe-list:sp500]"]
+    assert sp500_cov.ok, f"expected sp500 coverage to be ok when unscheduled, got: {sp500_cov.line}"
+    assert by_surface["/research/rankings [universe-list:sp500]"].ok
 
 
 def test_a_stale_head_on_a_scheduled_universe_stays_red(monkeypatch) -> None:
-    """A stale head on a scheduled universe (such as QQQ on production) must still fail."""
+    """A stale head on a scheduled universe (such as QQQ in production or staging) must still fail."""
     _heads(monkeypatch)
     fresh_report = {"questions": {"q1": {"answered": 99, "unavailable": {}, "missing": 0}}}
     _reports(monkeypatch, fresh_report)
@@ -274,7 +293,7 @@ def test_production_2026_09_17_names_both_mismatches_and_what_the_theme_plane_ho
     )
     verdicts = prove(tables, executed_at=NOW)
     lines = summary_lines(verdicts)
-    assert lines[-1] == "report surface proof: 4/6 surfaces serve the governed head; 2 do not"
+    assert lines[-1] == "report surface proof: 6/8 surfaces serve the governed head; 2 do not"
     themes = next(v for v in verdicts if v.surface == "/research/themes")
     assert themes.state == "MISMATCH"
     assert "no segment partition is knowable at the head's cutoff" in themes.line
@@ -302,7 +321,7 @@ def test_a_mismatch_in_a_settling_universe_is_in_progress_and_named(monkeypatch)
     # A quiet universe's mismatch is not excused by another universe settling.
     assert by_surface["/research/themes"].state == "MISMATCH"
     assert summary_lines(verdicts)[-1] == (
-        "report surface proof: 4/6 surfaces serve the governed head; 1 in progress; 1 do not"
+        "report surface proof: 6/8 surfaces serve the governed head; 1 in progress; 1 do not"
     )
 
 
@@ -383,7 +402,7 @@ def test_production_2026_09_17_themes_serve_the_qqq_head_whose_tick_cuts_off_las
         "MATCH /research/themes: serves capture-run:a62da9660ff9 vs head capture-run:a62da9660ff9"
         " — the universe-list:qqq head, the newest of a universe with theme rows"
     )
-    assert summary_lines(verdicts)[-1] == "report surface proof: 6/6 surfaces serve the governed head"
+    assert summary_lines(verdicts)[-1] == "report surface proof: 8/8 surfaces serve the governed head"
 
 
 def test_a_themes_page_serving_no_governed_head_is_still_a_mismatch(monkeypatch) -> None:
@@ -463,7 +482,7 @@ def test_a_universe_the_theme_lane_never_covered_is_not_expected_on_the_themes_p
 
 
 def test_staging_with_only_a_topt_head_serves_the_topt_head_on_the_themes_page(monkeypatch) -> None:
-    """Staging captures no QQQ: TOPT's head is the only candidate, as before #910."""
+    """When only TOPT has a head so far, TOPT's head is the only candidate for themes."""
     _heads(monkeypatch, topt=TOPT_HEAD, qqq=None, topt_cutoff=TOPT_CUTOFF)
     _reports(monkeypatch, REPORT)
     tables = _Tables(
@@ -476,7 +495,34 @@ def test_staging_with_only_a_topt_head_serves_the_topt_head_on_the_themes_page(m
     verdicts = prove(tables, executed_at=NOW)
     themes = _themes(verdicts)
     assert (themes.state, themes.universe, themes.expected_run) == ("MATCH", "topt", TOPT_HEAD)
-    assert summary_lines(verdicts)[-1] == "report surface proof: 6/6 surfaces serve the governed head"
+    assert summary_lines(verdicts)[-1] == "report surface proof: 8/8 surfaces serve the governed head"
+
+
+def test_multi_universe_strategy_proof_checks_qqq_and_sp500_independently(monkeypatch) -> None:
+    """When qqq and sp500 heads exist in staging, matching qqq and stale sp500 are judged separately."""
+    _heads(monkeypatch, topt=NEW, qqq=QQQ, sp500=SP500)
+    _reports(monkeypatch, REPORT)
+    tables = _Tables(
+        strategy=[
+            (TOPT_UNIVERSE, NEW, "strategy-run:topt"),
+            (QQQ_UNIVERSE, QQQ, "strategy-run:qqq"),
+            (SP500_UNIVERSE, OLD, "strategy-run:sp500-old"),
+        ],
+        themes=NEW,
+        holdings=QQQ,
+        funds=1,
+        coverage=[
+            (TOPT_UNIVERSE, NEW, REPORT),
+            (QQQ_UNIVERSE, QQQ, REPORT),
+            (SP500_UNIVERSE, SP500, REPORT),
+        ],
+        environment="staging",
+    )
+    by_surface = {v.surface: v for v in prove(tables, executed_at=NOW)}
+    assert by_surface["/research/rankings [universe-list:qqq]"].state == "MATCH"
+    sp500_v = by_surface["/research/rankings [universe-list:sp500]"]
+    assert sp500_v.state == "MISMATCH"
+    assert sp500_v.served_run == OLD and sp500_v.expected_run == SP500
 
 
 # --- the settling window, against the real schema ---------------------------------------

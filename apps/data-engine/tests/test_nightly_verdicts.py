@@ -281,19 +281,22 @@ def test_output_invariants_waits_for_in_flight_ticks_before_running_suite(monkey
 
 @pytest.mark.parametrize(
     ("app_env", "universes"),
-    [("production", ("topt", "universe-list:qqq")), ("prod", ("topt", "universe-list:qqq")), ("staging", ("topt",))],
+    [
+        ("production", ("topt", "universe-list:qqq")),
+        ("prod", ("topt", "universe-list:qqq")),
+        ("staging", ("topt", "universe-list:qqq", "universe-list:sp500")),
+    ],
 )
 def test_the_confidence_report_records_a_verdict_for_each_universe_the_environment_runs(
     monkeypatch, written, app_env: str, universes: tuple[str, ...]
 ) -> None:
-    """The contract lists the universes of each environment: staging runs TOPT only, so a QQQ report launched
-    by hand records no verdict there (owner decision of 2026-10-21)."""
+    """The contract lists the universes of each environment: production skips S&P 500 while staging runs all three."""
     from data_engine.datahub import confidence_report
 
     monkeypatch.setattr(settings, "app_env", app_env)
     monkeypatch.setattr(psycopg, "connect", _Sink())
     monkeypatch.setattr(confidence_report, "compile_report", lambda *_a, **_k: None)
-    for universe in ("topt", "universe-list:qqq"):
+    for universe in ("topt", "universe-list:qqq", "universe-list:sp500"):
         config = quality.ConfidenceReportConfig(executed_at="2026-09-16T00:45:00+00:00", universe=universe)
         quality.run_confidence_report(dg.build_op_context(), config)
     assert [(row["check"], row["ok"], row["summary"]) for row in written] == [
@@ -305,18 +308,18 @@ def test_the_confidence_report_records_a_verdict_for_each_universe_the_environme
 @pytest.mark.parametrize(
     ("check", "universe"),
     [
-        (standards.THEME_PURITY_VERDICT, "universe-list:qqq"),
-        (standards.QUESTION_COVERAGE_VERDICT, "universe-list:qqq"),
-        (quality.CONFIDENCE_REPORT_VERDICT, "universe-list:qqq"),
+        (standards.THEME_PURITY_VERDICT, "universe-list:sp500"),
+        (standards.QUESTION_COVERAGE_VERDICT, "universe-list:sp500"),
+        (quality.CONFIDENCE_REPORT_VERDICT, "universe-list:sp500"),
     ],
 )
-def test_staging_records_no_qqq_verdict_and_production_does(written, monkeypatch, check: str, universe: str) -> None:
-    """The three QQQ verdicts of #1410 are registered from the contract, per environment."""
+def test_production_records_no_sp500_verdict_and_staging_does(written, monkeypatch, check: str, universe: str) -> None:
+    """Per-universe verdicts are registered from the contract: production skips stopped sp500; staging records it."""
     name = nightly_verdicts.check_name(check, universe)
     declared = {*standards.NIGHTLY_VERDICTS, *quality.NIGHTLY_VERDICTS}
     assert name in declared, "every environment declares the name; the contract decides where it is recorded"
 
-    for app_env, recorded in (("staging", False), ("production", True)):
+    for app_env, recorded in (("production", False), ("prod", False), ("staging", True)):
         monkeypatch.setattr(settings, "app_env", app_env)
         written.clear()
         with nightly_verdicts.verdict(name, registered=declared, run_id="r", tick=None):
@@ -591,8 +594,6 @@ def test_head_reports_record_purity_and_coverage_per_universe(monkeypatch, writt
     from data_engine.datahub import question_coverage
     from data_engine.datahub.capture_core import theme_purity
 
-    monkeypatch.setattr(settings, "app_env", "production")  # production runs TOPT and QQQ
-
     class _NoHead(_Sink):
         def execute(self, *_a: Any, **_k: Any) -> _NoHead:
             return self
@@ -608,6 +609,9 @@ def test_head_reports_record_purity_and_coverage_per_universe(monkeypatch, writt
     monkeypatch.setattr(question_coverage, "compile_report", lambda *_a, **_k: None)
     monkeypatch.setattr(theme_purity, "materialize_theme_purity", lambda *_a, **_k: ())
     tick = datetime(2026, 9, 16, 23, 30, tzinfo=UTC)
+
+    monkeypatch.setattr(settings, "app_env", "staging")
+    written.clear()
     for request in standards.head_reports_schedule.evaluate_tick(
         dg.build_schedule_context(scheduled_execution_time=tick)
     ).run_requests:
@@ -615,6 +619,17 @@ def test_head_reports_record_purity_and_coverage_per_universe(monkeypatch, writt
         assert result.success
     assert sorted(row["check"] for row in written) == sorted(standards.NIGHTLY_VERDICTS)
     assert all(row["ok"] is None and row["ran_at"] == tick for row in written)
+
+    monkeypatch.setattr(settings, "app_env", "production")
+    written.clear()
+    for request in standards.head_reports_schedule.evaluate_tick(
+        dg.build_schedule_context(scheduled_execution_time=tick)
+    ).run_requests:
+        result = standards.head_reports_pipeline_job.execute_in_process(run_config=request.run_config)
+        assert result.success
+    assert sorted(row["check"] for row in written) == sorted(
+        check for check in standards.NIGHTLY_VERDICTS if not check.endswith("@universe-list:sp500")
+    )
 
 
 def test_the_purity_summary_counts_rows_and_carries_no_value(monkeypatch, written) -> None:

@@ -282,11 +282,13 @@
       "verdict_keys": [
         "question_coverage@topt",
         "question_coverage@universe-list:qqq",
+        "question_coverage@universe-list:sp500",
         "theme_purity@topt",
         "theme_purity@universe-list:qqq",
+        "theme_purity@universe-list:sp500",
         "model_key_health"
       ],
-      "pending_on": "#1416 E4 (the verdicts read the TOPT and QQQ heads, not the sentinel set)"
+      "pending_on": "#1416 E4 (the verdicts read the TOPT, QQQ, and S&P 500 heads, not the sentinel set)"
     },
     {
       "id": "R3.C2",
@@ -311,7 +313,8 @@
       "status": "partial",
       "verdict_keys": [
         "datahub_confidence_report@topt",
-        "datahub_confidence_report@universe-list:qqq"
+        "datahub_confidence_report@universe-list:qqq",
+        "datahub_confidence_report@universe-list:sp500"
       ],
       "pending_on": "#1419 C3 (labelled classification sample)"
     },

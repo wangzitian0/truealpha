@@ -30,9 +30,9 @@ from data_engine.sources import llm
 _NOT_SCHEDULED = "not_scheduled"
 
 #: `apps/llm-service/src/llm_service/services/strategy_service.py` resolves the governed strategy
-#: run through this view (`db/migrations/20260907T0630_bt_governed_strategy_run.sql`):
-#: /research/rankings, /trace and /coverage all read it.
-_STRATEGY_HEAD_SQL = "select target_run_id, strategy_run_id from mart.governed_strategy_run"
+#: run through this view (`db/migrations/20261119T1000_bt_governed_strategy_run_multi_universe.sql`):
+#: /research/rankings, /trace and /coverage read it.
+_STRATEGY_HEAD_SQL = "select universe_id, target_run_id, strategy_run_id from mart.governed_strategy_run"
 #: `apps/llm-service/src/llm_service/services/entities_service.py` `THEME_LATEST_RUN_SQL`: the newest run in the
 #: table, deliberately not the pointer — which is exactly why it has to be checked against it.
 #: No universe filter: every universe's head gets purity rows, and the page names a run and a
@@ -202,17 +202,55 @@ def prove(
     topt, qqq = lane_name(strategy_keys[0]), lane_name(fund_key)
     verdicts: list[SurfaceVerdict] = []
 
-    row = connection.execute(_STRATEGY_HEAD_SQL).fetchone()
-    verdicts.append(
-        SurfaceVerdict(
-            surface="/research/rankings, /strategy, /compare, /trace, /coverage",
-            reader="mart.governed_strategy_run",
-            expected_run=_run(heads.get(topt)),
-            served_run=str(row[0]) if row else None,
-            detail=f"strategy run {row[1]}" if row else "the view is empty: no strategy run at the head's cutoff",
-            universe=topt,
+    strategy_rows = connection.execute(_STRATEGY_HEAD_SQL).fetchall()
+    for idx, key in enumerate(strategy_keys):
+        lane = lane_name(key)
+        surface = (
+            "/research/rankings, /strategy, /compare, /trace, /coverage" if idx == 0 else f"/research/rankings [{lane}]"
         )
-    )
+        if idx > 0 and not is_universe_scheduled(key, environment) and lane not in (settling or {}):
+            verdicts.append(
+                _off_verdict(
+                    surface, "mart.governed_strategy_run", "not_scheduled in this environment", lane, _NOT_SCHEDULED
+                )
+            )
+            continue
+        head = heads.get(lane)
+        prefix = record(key).id_prefix
+        match = next(
+            (
+                r
+                for r in strategy_rows
+                if (head is not None and str(r[0]) == head.universe_id)
+                or (head is None and str(r[0]).startswith(prefix))
+                or (idx == 0 and len(r) == 2)
+            ),
+            None,
+        )
+        if idx > 0 and head is None and match is None:
+            verdicts.append(
+                _off_verdict(
+                    surface,
+                    "mart.governed_strategy_run",
+                    f"no {key} head and no strategy run in this environment",
+                    lane,
+                )
+            )
+            continue
+        served_run = str(match[1] if len(match) >= 3 else match[0]) if match else None
+        strategy_run = str(match[2] if len(match) >= 3 else match[1]) if match else None
+        verdicts.append(
+            SurfaceVerdict(
+                surface=surface,
+                reader="mart.governed_strategy_run",
+                expected_run=_run(head),
+                served_run=served_run,
+                detail=f"strategy run {strategy_run}"
+                if match
+                else "the view is empty: no strategy run at the head's cutoff",
+                universe=lane,
+            )
+        )
 
     row = connection.execute(_THEMES_HEAD_SQL).fetchone()
     if row is None and not llm.is_configured():

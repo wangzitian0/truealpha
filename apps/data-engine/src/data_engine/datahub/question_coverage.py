@@ -162,6 +162,14 @@ def fund_cells(connection: Connection[Any], run_id: str) -> tuple[Cell, ...]:
     )
 
 
+def expected_fund_ids(connection: Connection[Any], cutoff: datetime) -> tuple[str, ...]:
+    rows = connection.execute(
+        "select distinct fund_id from mart.fund_holdings_resolved where transaction_time <= %s order by fund_id",
+        (cutoff,),
+    ).fetchall()
+    return tuple(str(r[0]) for r in rows if r and r[0])
+
+
 def theme_purity_cells(connection: Connection[Any], run_id: str) -> tuple[Cell, ...]:
     rows = connection.execute(
         "select issuer_id, availability_status, reason_codes, theme_share from mart.issuer_theme_purity where run_id = %s order by issuer_id, theme_id",
@@ -257,7 +265,16 @@ def compile_report(connection: Connection[Any], *, universe: str, executed_at: d
         return None
     gppe = gppe_cells(connection, head.run_id)
     issuers = [cell.subject_id for cell in gppe]
-    funds_observed = fund_cells(connection, head.run_id)
+    consolidates_fund = "fund_consolidation" in record(key).roles
+    funds_observed = fund_cells(connection, head.run_id) if consolidates_fund else ()
+    fund_subjects = tuple(
+        dict.fromkeys(
+            [
+                *(expected_fund_ids(connection, head.cutoff) if consolidates_fund else ()),
+                *(c.subject_id for c in funds_observed),
+            ]
+        )
+    )
     cells_by_column = {
         "mart.metric_node_values.value": gppe,
         "mart.strategy_decisions.peg": peg_cells(connection, run_id=head.run_id)
@@ -282,7 +299,7 @@ def compile_report(connection: Connection[Any], *, universe: str, executed_at: d
                 req,
                 universe_id=head.universe_id,
                 issuers=issuers,
-                funds=[c.subject_id for c in funds_observed],
+                funds=fund_subjects,
                 cells_by_column=cells_by_column,
             )
             for req in QUESTION_REQUIREMENTS

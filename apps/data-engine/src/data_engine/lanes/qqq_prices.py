@@ -258,18 +258,29 @@ def qqq_price_refresh_pipeline_job() -> None:
     refresh_qqq_prices_op()
 
 
-@dg.schedule(
-    job=qqq_price_refresh_pipeline_job,
-    cron_schedule=QQQ_PRICE_REFRESH_CRON,
-    execution_timezone="UTC",
-    default_status=(
-        dg.DefaultScheduleStatus.RUNNING
-        if is_universe_scheduled("qqq", settings.app_env)
-        else dg.DefaultScheduleStatus.STOPPED
-    ),
-)
-def qqq_price_refresh_schedule(context: dg.ScheduleEvaluationContext) -> dg.RunRequest:
-    return dg.RunRequest(run_key=context.scheduled_execution_time.isoformat())
+def _build_schedule(app_env: str = settings.app_env) -> dg.ScheduleDefinition:
+    @dg.schedule(
+        name="qqq_price_refresh_schedule",
+        job=qqq_price_refresh_pipeline_job,
+        cron_schedule=QQQ_PRICE_REFRESH_CRON,
+        execution_timezone="UTC",
+        default_status=(
+            dg.DefaultScheduleStatus.RUNNING
+            if is_universe_scheduled("qqq", app_env)
+            else dg.DefaultScheduleStatus.STOPPED
+        ),
+    )
+    def qqq_price_refresh_schedule(context: dg.ScheduleEvaluationContext) -> dg.RunRequest:
+        return dg.RunRequest(run_key=context.scheduled_execution_time.isoformat())
+
+    return qqq_price_refresh_schedule
 
 
-defs = dg.Definitions(jobs=[qqq_price_refresh_pipeline_job], schedules=[qqq_price_refresh_schedule])
+qqq_price_refresh_schedule = _build_schedule()
+
+
+def build_definitions(app_env: str = settings.app_env) -> dg.Definitions:
+    return dg.Definitions(jobs=[qqq_price_refresh_pipeline_job], schedules=[_build_schedule(app_env)])
+
+
+defs = build_definitions()
