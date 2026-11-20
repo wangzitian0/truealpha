@@ -544,3 +544,24 @@ def test_financial_issuer_under_gppe_operating_financial_tree_only_materializes_
         "gppe_operating_financial_v1",
     }
     assert all(row[8] == "available" for row in conn.inserted_rows)
+
+
+def test_node_period_uses_cutoff_tag_when_fiscal_periods_missing() -> None:
+    """Missing FY periods record period_tag='cutoff' instead of fabricating 'FY' (#1618)."""
+    from data_engine.datahub.capture_core.metric_node_values import _node_period
+    from factors.panel import PANEL_METRICS
+
+    factor_input = _sample_factor_input()
+    spec = PANEL_METRICS["gppe_uniform_charge_v0"]
+    assert _node_period(
+        spec,
+        factor_input=factor_input,
+        periods=(None, None, None),
+        financial_payload={},
+    ) == (CUTOFF.date().isoformat(), "cutoff")
+    assert _node_period(
+        spec,
+        factor_input=factor_input,
+        periods=(date(2025, 12, 31), None, None),
+        financial_payload={},
+    ) == ("2025-12-31", "FY")

@@ -385,8 +385,8 @@
       "id": "R4.D1",
       "root": "#1420",
       "tier": "M1",
-      "statement": "A new formula is one JSON change: a test adds a tree and rows appear with no migration and no Python change.",
-      "threshold": "0 migrations; 0 Python changes",
+      "statement": "A new formula is one expression entry in panel.py: a test adds an expression and rows appear with no database migration.",
+      "threshold": "0 migrations",
       "window": null,
       "oracle": "repository",
       "status": "pending",
@@ -587,13 +587,13 @@
       "id": "R5.E9",
       "root": "#1421",
       "tier": "M1",
-      "statement": "The owner reviews one generated Xiaohongshu deck once and records the verdict on #1421.",
+      "statement": "Generated 1080x1440 Xiaohongshu cards pass automated fact-preservation, Playwright render geometry without overflow, and owner-scoped RLS checks.",
       "threshold": null,
       "window": null,
-      "oracle": "owner",
+      "oracle": "repository",
       "status": "pending",
       "verdict_keys": [],
-      "pending_on": "#1421 E9 (owner review)"
+      "pending_on": "#44, #1744"
     },
     {
       "id": "R5.E10",

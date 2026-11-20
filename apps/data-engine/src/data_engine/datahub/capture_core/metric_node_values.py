@@ -187,7 +187,9 @@ def _node_period(
     if isinstance(tce_end_raw, str) and tce_end_raw and "tce" in spec.key:
         return tce_end_raw, "FY"
     period_date = operating_end or revenue_end
-    return (period_date.isoformat() if period_date is not None else cutoff_iso), "FY"
+    if period_date is None:
+        return cutoff_iso, "cutoff"
+    return period_date.isoformat(), "FY"
 
 
 def load_financial_payloads_by_listing(

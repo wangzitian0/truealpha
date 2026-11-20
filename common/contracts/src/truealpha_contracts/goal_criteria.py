@@ -26,7 +26,7 @@ ROOTS: Mapping[int, tuple[str, str]] = {
 _ID = re.compile(r"^R(?P<root>[1-5])\.(?:(?P<letter>[A-E])(?P<number>[1-9][0-9]?)|M0)$")
 
 Tier = Literal["M0", "M1"]
-Oracle = Literal["repository", "filing", "second_vendor", "label", "platform", "owner"]
+Oracle = Literal["repository", "filing", "second_vendor", "label", "platform"]
 Status = Literal["backed", "partial", "pending"]
 
 

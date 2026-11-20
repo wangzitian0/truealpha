@@ -2,7 +2,7 @@
 
 ## 0. Goal: a personal research workbench
 
-TrueAlpha is a personal research workbench. The owner asks questions in conversation and gets traceable answers. The owner changes one JSON formula definition and gets a trusted backtest. The owner turns results into cards.
+TrueAlpha is a personal research workbench. The owner asks questions in conversation and gets traceable answers. The owner adds one Polars expression in `common/factors/src/factors/panel.py` and gets a trusted backtest with no database migration. The owner turns results into cards.
 
 ### 0.1 Research questions
 
@@ -24,7 +24,7 @@ Data sources (SEC, yfinance, Twelve Data, moomoo) are the raw material. The seve
 The loop has four steps: data, formula, backtest, and conversation with reports. Each step feeds the next.
 
 1. **Data.** The pipeline runs automatically each day after the close. It captures the latest settled session (T-1, rule 27). It fetches each fetch key once per environment per day (rule 28). Sections 3 and 5 name the sources and their capacity.
-2. **Formula.** A formula is data. It is a typed forest node that loads from JSON. A strategy definition references trees by key (#1413, rule 17, `docs/metric-forest.md`). A new formula is a new node with a new key.
+2. **Formula.** Each metric and factor expression is declared once as a Polars expression in `common/factors/src/factors/panel.py`. A strategy definition references variants by key, version and content hash (#1413, #1610, rule 17, `docs/metric-forest.md`). A new formula is one expression entry with a deterministic key and no database migration.
 3. **Backtest.** A backtest runs any registered strategy definition. An override or a window makes a variant of that definition. Every run binds the definition hash. The live run stays unchanged. Inputs are point-in-time, so no look-ahead occurs. Total return comes from explicit corporate actions (rule 16). The window is a parameter of the definition. No result claims alpha before the evaluation protocol exists.
 4. **Conversation and reports.** MCP comes first, then `/chat`. Typed tools over `ResearchQueryService` read `mart` only (rule 4). Every numeric answer carries its confidence, availability, version, cutoff and trace id. Reports come from deterministic templates, and Xiaohongshu `1080x1440` cards are rendered as prompt-driven self-contained HTML over canonical `ResearchCard` payloads verified by a deterministic fact-preservation guard. The model never rewrites or invents a fact. Cards feed the owner's short-form video channel in a cold-verdict register.
 
@@ -75,7 +75,7 @@ The seven success statements below keep their numbers. Other documents cite them
 4. A previously unseen company or theme enters through reviewed, versioned catalog or configuration changes. Factor formulas, schemas and consumer business logic stay unchanged.
 5. A source for an existing semantic type enters through one isolated adapter or normalizer registration. A semantic record type enters through one typed schema, storage and projector registration. The generic capture, snapshot, factor-runner, lineage, usage and consumer paths hold no source or type branch.
 6. *Demoted (owner decision 2026-10-20, #1410; rules 23 and 24):* The system reports how often declared data is captured and consumed. It runs an immutable strategy-to-source data-quality review. The review exposes required-but-missing inputs and the decisions they affected. Restore this item when the core path is green in production for two nights in a row. That is the exit condition of `governance/freezes/core-path-2026-10-12.md`.
-7. A new formula is one JSON change. A variant definition backtests through the command with its own definition hash. The live run stays unchanged.
+7. A new formula is one expression entry in `panel.py` with no database migration. A variant definition backtests through the command with its own definition hash. The live run stays unchanged.
 
 "Continuously producing" means the versioned production universe has graduated beyond canary and shadow operation. It meets explicit per-module objectives for applicability, usable coverage, freshness and traceability across real source refreshes. An `unavailable`, stale, unresolved or sentinel placeholder does not count as a produced result for an applicable subject. A computed value with a low confidence score counts, and its score is shown beside it (owner decision 2026-10-15, #1333).
 
