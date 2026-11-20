@@ -187,3 +187,73 @@ def test_squashed_baseline_replays_idempotently_and_preserves_mv_grants(slice5_d
             assert conn.execute(
                 "select has_table_privilege('app_ops_reader', %s, 'SELECT')", (f"mart.{view_name}",)
             ).fetchone() == (True,), view_name
+
+
+def test_squashed_baseline_upgrades_pre_mv_regular_views_and_retires_analyst_rating_events() -> None:
+    """Replaying the 4-file baseline on a pre-Slice-5 DB (v0.2.114 Production shape) converts
+    regular views to materialized views cleanly without crashing on CREATE UNIQUE INDEX."""
+    admin_url = _admin_url()
+    name = f"truealpha_slice5_upg_{os.getpid()}_{uuid.uuid4().hex[:8]}"
+    try:
+        with psycopg.connect(admin_url, connect_timeout=3, autocommit=True) as admin:
+            admin.execute(sql.SQL("create database {}").format(sql.Identifier(name)))
+    except psycopg.OperationalError as error:
+        if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
+            pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
+        pytest.skip("no local Postgres; CI runs required DB tests")
+
+    db_url = make_conninfo(**(conninfo_to_dict(admin_url) | {"dbname": name}))
+    try:
+        apply_migration_chain(db_url)
+        with psycopg.connect(db_url, autocommit=True) as conn:
+            conn.execute("create table staging.analyst_rating_events (id bigint primary key)")
+            for rel in (
+                "mart.entity_identity",
+                "mart.fund_holdings_valuation",
+                "mart.fund_holdings_coverage",
+                "mart.fund_holdings_resolved",
+                "mart.fund_holdings",
+            ):
+                conn.execute(f"drop materialized view {rel}")
+            conn.execute("create view mart.entity_identity as select null::text as entity_id, null::text as listing_id")
+            conn.execute(
+                "create view mart.fund_holdings as select null::text as fund_id, null::date as report_period, "
+                "null::timestamptz as transaction_time, null::text as isin, null::text as cusip, null::text as holding_name"
+            )
+            conn.execute("create view mart.fund_holdings_resolved as select * from mart.fund_holdings")
+            conn.execute(
+                "create view mart.fund_holdings_coverage as select fund_id, report_period, transaction_time from mart.fund_holdings_resolved"
+            )
+            conn.execute("create view mart.fund_holdings_valuation as select * from mart.fund_holdings_resolved")
+
+        # Upgrade via the production 4-file chain (previously failed at CREATE UNIQUE INDEX ON mart.entity_identity).
+        apply_migration_chain(db_url)
+        # Replay once more to confirm zero-change idempotency.
+        apply_migration_chain(db_url)
+
+        with psycopg.connect(db_url) as conn:
+            assert conn.execute("select to_regclass('staging.analyst_rating_events')").fetchone() == (None,)
+            rels = dict(
+                conn.execute(
+                    """
+                    select c.relname, c.relkind
+                    from pg_class c
+                    join pg_namespace n on n.oid = c.relnamespace
+                    where n.nspname = 'mart' and c.relname = any(%s)
+                    """,
+                    ([rel for rel, _ in EXPECTED_MVS],),
+                ).fetchall()
+            )
+            assert rels == {rel: "m" for rel, _ in EXPECTED_MVS}, rels
+            idxs = {
+                idx
+                for (idx,) in conn.execute(
+                    "select c.relname from pg_class c join pg_namespace n on n.oid = c.relnamespace "
+                    "where n.nspname = 'mart' and c.relname = any(%s)",
+                    ([idx for _, idx in EXPECTED_MVS],),
+                ).fetchall()
+            }
+            assert idxs == {idx for _, idx in EXPECTED_MVS}, idxs
+    finally:
+        with psycopg.connect(admin_url, autocommit=True) as admin:
+            admin.execute(sql.SQL("drop database if exists {} with (force)").format(sql.Identifier(name)))

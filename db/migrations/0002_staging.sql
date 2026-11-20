@@ -1553,7 +1553,8 @@ execute $vc$create or replace view staging.entity_alias_resolution as
    FROM staging.entity_aliases alias
      JOIN staging.entities entity ON entity.entity_id = alias.entity_id$vc$;
 end if; end $$;
-do $$ begin if to_regclass('staging.entity_backfill_plan') is null then
+do $$ begin if to_regclass('staging.analyst_rating_events') is not null then drop table staging.analyst_rating_events; end if; end $$;
+do $$ begin if not exists (select 1 from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'staging' and c.relname = 'entity_backfill_plan' and md5(pg_get_viewdef(c.oid)) = '4fd2a143d605c541e78246cea4279cc5') then
 execute $vc$create or replace view staging.entity_backfill_plan as
 with usage as (
     select payload.normalized_payload->>'issuer_id' as issuer_id,

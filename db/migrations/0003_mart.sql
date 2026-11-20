@@ -734,6 +734,14 @@ execute $vc$create or replace view mart.entity_display_resolution as
      LEFT JOIN constituent_names cn ON cn.ticker = upper(rt.ticker)
   ORDER BY rt.issuer_id$vc$;
 end if; end $$;
+do $$ begin
+    if exists (
+        select 1 from pg_class c join pg_namespace n on n.oid = c.relnamespace
+        where n.nspname = 'mart' and c.relname = 'entity_identity' and c.relkind = 'v'
+    ) then
+        drop view mart.entity_identity;
+    end if;
+end $$;
 do $$ begin if to_regclass('mart.entity_identity') is null then
 execute $vc$create materialized view mart.entity_identity as
  WITH RECURSIVE merge_edges AS (
@@ -867,6 +875,31 @@ execute $vc$create materialized view mart.entity_identity as
      LEFT JOIN issuer_listings ilist ON ilist.issuer_id = survivor.id
 WITH DATA$vc$;
 end if; end $$;
+do $$
+declare
+    v_rel text;
+    v_kind "char";
+begin
+    if exists (
+        select 1 from pg_class c join pg_namespace n on n.oid = c.relnamespace
+        where n.nspname = 'mart'
+          and c.relname in ('fund_holdings', 'fund_holdings_resolved', 'fund_holdings_coverage', 'fund_holdings_valuation')
+          and c.relkind = 'v'
+    ) then
+        for v_rel in
+            select unnest(array['fund_holdings_valuation', 'fund_holdings_coverage', 'fund_holdings_resolved', 'fund_holdings'])
+        loop
+            select c.relkind into v_kind
+            from pg_class c join pg_namespace n on n.oid = c.relnamespace
+            where n.nspname = 'mart' and c.relname = v_rel;
+            if v_kind = 'm' then
+                execute format('drop materialized view mart.%I', v_rel);
+            elsif v_kind = 'v' then
+                execute format('drop view mart.%I', v_rel);
+            end if;
+        end loop;
+    end if;
+end $$;
 do $$ begin if to_regclass('mart.fund_holdings') is null then
 execute $vc$create materialized view mart.fund_holdings as
  SELECT DISTINCT ON (facts.fund_id, facts.report_period, facts.transaction_time, (COALESCE(facts.isin, ''::text)), (COALESCE(facts.cusip, ''::text)), facts.holding_name) facts.fund_id::text AS fund_id,
@@ -1019,7 +1052,7 @@ execute $vc$create or replace view mart.capture_status as
      LEFT JOIN raw.capture_obligation_results result ON result.capture_obligation_id = obligation.obligation_id
   GROUP BY run.run_id, run.campaign_id, campaign.environment, campaign.cutoff, list_version.universe_id, list_version.universe_version, list_version.universe_sha256$vc$;
 end if; end $$;
-do $$ begin if to_regclass('mart.capture_issuer_lineage') is null then
+do $$ begin if not exists (select 1 from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'mart' and c.relname = 'capture_issuer_lineage' and md5(pg_get_viewdef(c.oid)) = '059da77fe78ca5c7d1b9ce526f8b5029') then
 execute $vc$create or replace view mart.capture_issuer_lineage as
  SELECT ('core-result:'::text || m.member_sha256) AS result_id,
     s.snapshot_id,
