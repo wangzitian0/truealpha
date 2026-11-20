@@ -98,8 +98,13 @@ def main() -> int:
         + "\n"
     )
 
+    location = (
+        CANONICAL_FIXTURE_PATH.relative_to(REPOSITORY_ROOT)
+        if CANONICAL_FIXTURE_PATH.is_relative_to(REPOSITORY_ROOT)
+        else CANONICAL_FIXTURE_PATH
+    )
     print(f"OK: all {len(decisions)} decisions reproduced the golden fixture exactly.")
-    print(f"Canonical fixture refreshed at {CANONICAL_FIXTURE_PATH.relative_to(REPOSITORY_ROOT)}")
+    print(f"Canonical fixture refreshed at {location}")
     return 0
 
 

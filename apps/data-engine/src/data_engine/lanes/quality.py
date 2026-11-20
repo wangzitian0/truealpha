@@ -517,7 +517,7 @@ def output_invariants_on_advance_sensor(context: dg.SensorEvaluationContext):
             rows = connection.execute(
                 "select universe_id, coalesce(run_id, head_run_id, '') from mart.served_head order by universe_id"
             ).fetchall()
-    except Exception as exc:  # noqa: BLE001
+    except psycopg.Error as exc:
         yield dg.SkipReason(f"cannot read mart.served_head: {type(exc).__name__}")
         return
     state_key = f"heal:{build[:19]}:{','.join(f'{u}={r}' for u, r in rows)}"

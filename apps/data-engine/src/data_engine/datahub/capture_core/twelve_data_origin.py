@@ -277,23 +277,20 @@ class TwelveDataQuoteFetcher:
         self._index_hits = 0
 
     def _from_price_store(self, symbol: str, cutoff: date) -> MarketPriceQuote | None:
-        if self._connection is None:
+        if self._connection is None or not hasattr(self._connection, "execute"):
             return None
-        try:
-            row = self._connection.execute(
-                """
-                select trading_date, open, high, low, close, volume, transaction_time
-                from staging.market_prices_daily
-                where symbol = %s
-                  and trading_date <= %s
-                  and adjust = 'none'
-                order by trading_date desc, recorded_at desc
-                limit 1
-                """,
-                (symbol, cutoff),
-            ).fetchone()
-        except Exception:  # noqa: BLE001
-            return None
+        row = self._connection.execute(
+            """
+            select trading_date, open, high, low, close, volume, transaction_time
+            from staging.market_prices_daily
+            where symbol = %s
+              and trading_date <= %s
+              and adjust = 'none'
+            order by trading_date desc, recorded_at desc
+            limit 1
+            """,
+            (symbol, cutoff),
+        ).fetchone()
         if row is None:
             return None
         trading_date, open_, high, low, close, volume, transaction_time = row

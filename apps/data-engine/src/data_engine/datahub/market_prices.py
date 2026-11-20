@@ -394,17 +394,14 @@ def latest_closed_monthly_session(now: datetime) -> date:
 def should_fetch_monthly_series(
     connection: psycopg.Connection | None, symbol: str, *, now: datetime, adjust: str = DEFAULT_ADJUST
 ) -> bool:
-    if connection is None:
+    if connection is None or not hasattr(connection, "cursor"):
         return True
-    try:
-        with connection.cursor() as cur:
-            cur.execute(
-                f"select 1 from {_MONTHLY_TABLE} where symbol = %s and trading_date = %s and adjust = %s limit 1",
-                (symbol, latest_closed_monthly_session(now), adjust),
-            )
-            return cur.fetchone() is None
-    except Exception:  # noqa: BLE001
-        return True
+    with connection.cursor() as cur:
+        cur.execute(
+            f"select 1 from {_MONTHLY_TABLE} where symbol = %s and trading_date = %s and adjust = %s limit 1",
+            (symbol, latest_closed_monthly_session(now), adjust),
+        )
+        return cur.fetchone() is None
 
 
 def ingest_twelve_data_market_prices(

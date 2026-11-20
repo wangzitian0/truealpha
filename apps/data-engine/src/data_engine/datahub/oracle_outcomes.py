@@ -730,14 +730,11 @@ def _query_oracle_rows(
 ) -> list[dict[str, Any]]:
     if not hasattr(connection, "execute"):
         return []
-    try:
-        rows = connection.execute(
-            f"select {', '.join(cols)} from mart.oracle_outcomes {where_sql} order by compared_at asc, recorded_at asc, outcome_id asc",  # noqa: S608
-            params,
-        ).fetchall()
-        return [dict(zip(cols, row, strict=True)) for row in rows]
-    except Exception:
-        return []
+    rows = connection.execute(
+        f"select {', '.join(cols)} from mart.oracle_outcomes {where_sql} order by compared_at asc, recorded_at asc, outcome_id asc",  # noqa: S608
+        params,
+    ).fetchall()
+    return [dict(zip(cols, row, strict=True)) for row in rows]
 
 
 def load_oracle_outcomes_rollup(connection: psycopg.Connection[Any], *, run_id: str | None = None) -> dict[str, Any]:

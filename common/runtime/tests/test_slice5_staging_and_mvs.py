@@ -8,11 +8,13 @@ import uuid
 from collections.abc import Generator
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import psycopg
 import pytest
 from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
+from psycopg.pq import TransactionStatus
 from truealpha_runtime.mart_refresh import MART_MV_REFRESH_ORDER, refresh_mart_materialized_views
 from truealpha_runtime.testing import apply_migration_chain, guard_db_write
 
@@ -257,3 +259,78 @@ def test_squashed_baseline_upgrades_pre_mv_regular_views_and_retires_analyst_rat
     finally:
         with psycopg.connect(admin_url, autocommit=True) as admin:
             admin.execute(sql.SQL("drop database if exists {} with (force)").format(sql.Identifier(name)))
+
+
+class _FakeInfo:
+    def __init__(self, status: TransactionStatus) -> None:
+        self.transaction_status = status
+
+
+class _FakeResult:
+    def __init__(self, rows: list[tuple[str, str]]) -> None:
+        self._rows = rows
+
+    def fetchall(self) -> list[tuple[str, str]]:
+        return self._rows
+
+
+class _FakeMvConnection:
+    def __init__(self, status: TransactionStatus, *, autocommit: bool = False) -> None:
+        self.info = _FakeInfo(status)
+        self.autocommit = autocommit
+        self.executed: list[str] = []
+        self.committed = 0
+
+    def commit(self) -> None:
+        self.committed += 1
+        self.info.transaction_status = TransactionStatus.IDLE
+
+    def execute(self, statement: Any, _params: Any = None) -> _FakeResult:
+        rendered = statement.as_string(None) if hasattr(statement, "as_string") else str(statement)
+        self.executed.append(rendered)
+        if "from pg_class" in rendered:
+            return _FakeResult([("mart", "entity_identity")])
+        return _FakeResult([])
+
+
+@pytest.mark.parametrize(
+    ("status", "commit_before", "expect_concurrently", "expect_commit"),
+    [
+        (TransactionStatus.IDLE, False, True, 0),
+        (TransactionStatus.INTRANS, False, False, 0),
+        (TransactionStatus.INTRANS, True, True, 1),
+        (TransactionStatus.INERROR, False, False, 0),
+        (TransactionStatus.ACTIVE, False, False, 0),
+        (TransactionStatus.UNKNOWN, False, False, 0),
+    ],
+)
+def test_refresh_mart_materialized_views_respects_transaction_status(
+    status: TransactionStatus,
+    commit_before: bool,
+    expect_concurrently: bool,
+    expect_commit: int,
+) -> None:
+    """Only TransactionStatus.IDLE may run REFRESH MATERIALIZED VIEW CONCURRENTLY (#1730, #1774)."""
+    conn = _FakeMvConnection(status, autocommit=False)
+    refreshed = refresh_mart_materialized_views(
+        conn,
+        ("mart.entity_identity",),
+        concurrently=True,
+        commit_before=commit_before,
+    )
+    assert refreshed == ("mart.entity_identity",)
+    assert conn.committed == expect_commit
+    refresh_sql = [stmt for stmt in conn.executed if "refresh materialized view" in stmt.lower()]
+    assert len(refresh_sql) == 1
+    assert ("concurrently" in refresh_sql[0].lower()) is expect_concurrently
+    assert conn.autocommit is False
+
+
+def test_composition_run_topt_pipeline_commits_before_concurrent_mv_refresh() -> None:
+    """composition.run_topt_pipeline must commit before refreshing entity_identity concurrently (#1774)."""
+    src = (REPO_ROOT / "apps/data-engine/src/data_engine/datahub/capture_core/composition.py").read_text(
+        encoding="utf-8"
+    )
+    commit_idx = src.index("connection.commit()")
+    refresh_idx = src.index("refresh_mart_materialized_views(connection, (MART_ENTITY_IDENTITY,), concurrently=True)")
+    assert commit_idx < refresh_idx
