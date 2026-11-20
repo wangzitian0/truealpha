@@ -30,7 +30,7 @@ from data_engine.sources import llm
 _NOT_SCHEDULED = "not_scheduled"
 
 #: `apps/llm-service/src/llm_service/services/strategy_service.py` resolves the governed strategy
-#: run through this view (`db/migrations/20261119T1000_bt_governed_strategy_run_multi_universe.sql`):
+#: run through this view (`db/migrations/0003_mart.sql`):
 #: /research/rankings, /trace and /coverage read it.
 _STRATEGY_HEAD_SQL = "select universe_id, target_run_id, strategy_run_id from mart.governed_strategy_run"
 #: `apps/llm-service/src/llm_service/services/entities_service.py` `THEME_LATEST_RUN_SQL`: the newest run in the

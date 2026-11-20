@@ -5,9 +5,8 @@ runtime dependencies. Applications consume PostgreSQL and the S3 API; they do
 not branch on whether infra2, Docker Compose, MinIO, or another S3-compatible
 backend provides those services.
 
-The logical graph store is `staging.kg_entities`/`staging.kg_edges` in
-PostgreSQL, as required by `init.md`. It is probed independently so a reachable
-database with missing KG migrations still fails runtime validation.
+The entity graph lives in PostgreSQL: `staging.entities`, `staging.entity_aliases`
+and `staging.entity_relations` (`docs/entity-identity.md`).
 
 Environment model:
 

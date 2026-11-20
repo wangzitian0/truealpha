@@ -253,7 +253,8 @@
     "materialize_production_topt_core.py", "query_production_topt_datahub.py",
     "capture_strategy_evidence.py", "capture_fundamental_samples.py", "probe_etf_holdings.py",
     "pull_sec_samples.py", "seed_issuer_headcounts.py", "canary_assert.py",
-    "assert_data_invariants.py", "export_issue58.py"
+    "assert_data_invariants.py", "export_issue58.py",
+    "backfill_slice2_kg_to_uuid.py"
   ],
   "deleted_app_web": [
     "src/app/research/conversations/page.tsx",
