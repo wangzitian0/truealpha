@@ -227,6 +227,9 @@ def test_cli_check_live_runs_check_health_and_exits_nonzero_when_required_probe_
 ) -> None:
     fake_conn = FakeConnection(query_result=(1,))
     monkeypatch.setattr(psycopg, "connect", lambda *args, **kwargs: fake_conn)
+    # Port 9 (discard) has no S3 listener, so the absent probe does not depend on the host's S3 or test order.
+    monkeypatch.setenv("S3_ENDPOINT", "http://127.0.0.1:9")
+    monkeypatch.setenv("S3_CONNECT_TIMEOUT_SECONDS", "1")
 
     exit_code = cli_main(["check", "--live"])
     out = capsys.readouterr().out
