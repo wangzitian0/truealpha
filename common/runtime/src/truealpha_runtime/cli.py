@@ -23,7 +23,7 @@ def main(argv: list[str] | None = None) -> int:
         # Creates the bucket only in local and CI tiers (`may_create_bucket`); elsewhere it only checks access.
         try:
             S3RawObjectStore(settings).ensure_bucket()
-        except StorageError as exc:
+        except (RuntimeError, StorageError) as exc:
             print(f"object_storage: {exc}")
             return 1
         print(f"object_storage: bucket {settings.s3_bucket} ready")

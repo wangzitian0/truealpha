@@ -83,7 +83,7 @@ jobs:
       # The compose `s3` service is the one pin of the local and CI S3 engine (RustFS, the
       # engine of the infra2 platform service). `--wait` blocks on its healthcheck.
       - name: Start S3
-        run: docker compose up -d --wait s3
+        run: docker compose up -d --wait s3 || { docker compose logs s3; exit 1; }
       - name: Apply the migration chain
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/truealpha
@@ -150,7 +150,7 @@ jobs:
           enable-cache: true
       - run: uv sync --all-packages --frozen
       - name: Start S3
-        run: docker compose up -d --wait s3
+        run: docker compose up -d --wait s3 || { docker compose logs s3; exit 1; }
       - name: Apply the migration chain
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/truealpha

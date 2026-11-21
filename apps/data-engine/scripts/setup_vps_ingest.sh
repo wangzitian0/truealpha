@@ -91,7 +91,7 @@ if [ -z "${S3_ENDPOINT:-}" ]; then
   fi
 fi
 for ip in $(docker inspect "$S3_CONTAINER" --format '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}'); do
-  if curl -sf -m 3 "http://$ip:9000/health" >/dev/null; then
+  if curl -sf -m 3 "http://$ip:9000/minio/health/live" >/dev/null; then
     S3_ENDPOINT="http://$ip:9000"
     break
   fi

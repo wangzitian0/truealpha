@@ -41,7 +41,9 @@ install:
 
 runtime-up:
 	docker compose up -d --wait postgres s3
-	uv run --package truealpha-runtime truealpha-runtime ensure-bucket
+	S3_ENDPOINT=$${S3_ENDPOINT:-http://localhost:9000} S3_ACCESS_KEY=$${S3_ACCESS_KEY:-s3local} \
+		S3_SECRET_KEY=$${S3_SECRET_KEY:-s3_local_secret} \
+		uv run --package truealpha-runtime truealpha-runtime ensure-bucket
 
 # #447 preflight: the app-web image runs NODE_ENV=production and refuses to
 # serve without a real SECRET_KEY; without this check an unset key surfaces
