@@ -243,3 +243,14 @@ def test_panel_head_resolution_has_no_fallback_and_node_latest_uses_mart_readonl
     assert sqls[1] == "select set_config('statement_timeout', '5s', true)"
     assert sqls[-1] == "reset role"
     assert all("capture_status" not in s and "datahub_quality_report" not in s for s in sqls)
+
+
+def test_the_peg_section_is_available_when_an_excluded_decision_carries_a_peg() -> None:
+    """#1804: PEG has its own availability. A decision status applies only when PEG is absent."""
+    from truealpha_contracts.execution import AvailabilityStatus
+    from truealpha_runtime.research_report_mart import _peg_availability
+
+    assert _peg_availability(True, AvailabilityStatus.EXCLUDED) is AvailabilityStatus.AVAILABLE
+    assert _peg_availability(True, AvailabilityStatus.NOT_APPLICABLE) is AvailabilityStatus.AVAILABLE
+    assert _peg_availability(False, AvailabilityStatus.AVAILABLE) is AvailabilityStatus.UNAVAILABLE
+    assert _peg_availability(False, AvailabilityStatus.EXCLUDED) is AvailabilityStatus.EXCLUDED

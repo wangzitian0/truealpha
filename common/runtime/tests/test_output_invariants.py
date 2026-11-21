@@ -993,6 +993,35 @@ def test_governed_entities_resolve_display_name_passes_with_real_names_and_fails
     assert run_id is not None
 
 
+REASON_INVARIANT = "unavailable-means-a-reason"
+
+
+def test_an_unavailable_node_value_without_a_reason_fails_and_names_the_node(
+    conn: psycopg.Connection, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """#1804: an unavailable node value with a reason passes. One with empty `reason_codes` fails."""
+    issuer = SeededIssuer(
+        "issuer:reasoned", ("listing:xnas:rsn0",), True, False, ("missing_gross_profit",), date(2025, 12, 31)
+    )
+    run_id = _seed_head(conn, REVENUE_UNIVERSE, [issuer])
+    code, output = _parity_verdict(conn, capsys, REASON_INVARIANT)
+    assert code == 0, output
+    assert f"ok       {REASON_INVARIANT}: 1 row(s) examined" in output
+
+    conn.execute(
+        "insert into mart.metric_node_values (run_id, issuer_id, node_id, node_key, period, period_tag, value, unit,"
+        " availability_status, reason_codes, source_evidence_status, factor_validation_status, confidence, tree_id,"
+        " tree_version, tree_sha256) values (%s, 'issuer:reasoned', '7f4b0c1e-3d0a-5c57-9d59-1f0d6f3c1804'::uuid,"
+        " 'peg_consensus', '2026-03-31', 'cutoff', null, 'ratio', 'unavailable', '{}', 'degraded', 'not_evaluated',"
+        " null, 'ef13b940-b695-5f5f-846a-a36face5cc3e'::uuid, 'v1', %s)",
+        (run_id, SEED_SHA256),
+    )
+    code, output = _parity_verdict(conn, capsys, REASON_INVARIANT)
+    assert code == 1, output
+    assert f"{REASON_INVARIANT}: 1 violation(s)" in output
+    assert "peg_consensus" in output
+
+
 ENTITY_IDENTITY_UNIQUE_INVARIANT = "entity-identity-unique-per-entity"
 FUND_WEIGHTS_INVARIANT = "fund-virtual-company-weights-conserved"
 

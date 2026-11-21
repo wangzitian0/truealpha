@@ -152,10 +152,10 @@ def peg_cells(connection: Connection[Any], *, run_id: str) -> tuple[Cell, ...]:
     for subject_id, peg, availability_status, exclusion_reason, peg_reason_codes in rows:
         if peg is not None:
             cells.append(Cell(str(subject_id), True))
-        elif availability_status == "excluded" and exclusion_reason:
-            cells.append(Cell(str(subject_id), False, f"excluded:{exclusion_reason}"))
         elif peg_reason_codes:
             cells.append(Cell(str(subject_id), False, str(peg_reason_codes[0])))
+        elif availability_status == "excluded" and exclusion_reason:
+            cells.append(Cell(str(subject_id), False, f"excluded:{exclusion_reason}"))
         else:
             cells.append(Cell(str(subject_id), False, UNRECORDED_REASON))
     return tuple(cells)

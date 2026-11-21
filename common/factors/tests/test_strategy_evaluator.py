@@ -356,6 +356,62 @@ def test_an_issuer_without_a_peg_gets_no_peg_rank() -> None:
     assert decisions[0].peg_rank is None, "an absent PEG must not be ranked as if it were the worst"
 
 
+def _peg_decision(issuer: IssuerInput, **kwargs) -> EvaluatedDecision:
+    return evaluate_cutoff(
+        [issuer], definition=_definition(), cutoff_at=_PEG_CUTOFF, risk_free_rate=Decimal("0"), **kwargs
+    )[0]
+
+
+def test_an_issuer_without_gross_profit_is_excluded_and_still_gets_peg() -> None:
+    """#1804: PEG reads the price, the share count and the net income. A missing gross profit
+    excludes the issuer from the labor-efficiency valuation and does not withhold PEG."""
+    decision = _peg_decision(_peg_inputs(gross_profit="__absent__"))
+    assert decision.exclusion_reason is ExclusionReason.MISSING_GROSS_PROFIT_FACT
+    assert decision.eligible is False
+    assert decision.peg is not None
+    assert decision.peg.quantize(Decimal("0.01")) == Decimal("0.50")
+    assert decision.peg_reason_codes == ()
+    assert decision.peg_rank == 1
+
+
+def test_an_excluded_issuer_without_peg_carries_the_reason_of_the_peg_factor() -> None:
+    """#1804: no decision has an absent PEG without a reason."""
+    decision = _peg_decision(_peg_inputs(series={}, gross_profit="__absent__"))
+    assert decision.exclusion_reason is ExclusionReason.MISSING_GROSS_PROFIT_FACT
+    assert decision.peg is None
+    assert decision.peg_reason_codes == ("missing_net_income",)
+    assert decision.peg_consensus is None
+    assert decision.peg_consensus_reason_codes != ()
+
+
+def test_a_stale_issuer_gets_no_peg_and_the_exclusion_is_the_reason() -> None:
+    """#1804: an exclusion that distrusts the data of the issuer withholds PEG."""
+    inputs = _peg_inputs()
+    stale = IssuerInput(
+        issuer_id=inputs.issuer_id,
+        records=inputs.records,
+        knowable_at=dict.fromkeys(inputs.records, _PEG_CUTOFF - timedelta(days=3650)),
+        periodic_records=inputs.periodic_records,
+        issuer_class=inputs.issuer_class,
+    )
+    decision = _peg_decision(stale)
+    assert decision.exclusion_reason is ExclusionReason.STALE_REQUIRED_INPUT
+    assert decision.peg is None
+    assert decision.peg_reason_codes == ("excluded:stale_required_input",)
+    assert decision.peg_consensus_reason_codes == ("excluded:stale_required_input",)
+
+
+def test_a_plausibility_refusal_gets_no_peg_and_the_refusal_is_the_reason() -> None:
+    """#1804: a refused input can be the price, so the refusal withholds PEG."""
+    decision = _peg_decision(
+        _peg_inputs(), plausibility_refusals={"issuer:peg": ExclusionReason.MISSING_MARKET_VALUE_INPUT}
+    )
+    assert decision.exclusion_reason is ExclusionReason.MISSING_MARKET_VALUE_INPUT
+    assert decision.peg is None
+    assert decision.peg_reason_codes == ("excluded:missing_market_value_input",)
+    assert decision.peg_consensus_reason_codes == ("excluded:missing_market_value_input",)
+
+
 def test_the_peg_reason_keeps_parameterised_refusals_and_drops_only_window_metadata() -> None:
     """Review on #838: filtering by shape (`":" not in flag`) would have dropped
     `growth_convention_unsourced:<convention>`, a refusal the factor names for the two
