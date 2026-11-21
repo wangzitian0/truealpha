@@ -48,7 +48,7 @@ def test_the_image_ships_the_manifest_where_boot_validation_and_the_identity_rea
     its own manifest, `apps/llm-service/tests/test_boot.py`).
 
     Red before #784: the data-engine image shipped no `required-env.generated.json` at all,
-    so infra2's entrypoint could not run `truealpha_runtime.boot.assert_environment` for it
+    so infra2's entrypoint could not run `infra2_sdk.runtime.config_schema.assert_environment` for it
     and the absence was invisible from outside the container.
     """
     lines = DOCKERFILE.read_text(encoding="utf-8").splitlines()
@@ -62,7 +62,7 @@ def test_the_image_ships_the_manifest_where_boot_validation_and_the_identity_rea
 
 def test_a_missing_input_is_a_named_failure_never_a_default(tmp_path: Path) -> None:
     """An identity computed from whatever happened to be present would be a DIFFERENT
-    identity, silently. Both failures name the file, the way `truealpha_runtime.boot` does."""
+    identity, silently. Both failures name the file, the way `infra2_sdk.runtime.config_schema.assert_environment` does."""
     with pytest.raises(RuntimeError, match="environment manifest"):
         _measure(env_manifest_path=tmp_path / "required-env.generated.json")
     with pytest.raises(RuntimeError, match="migration set"):

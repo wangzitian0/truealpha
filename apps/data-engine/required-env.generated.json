@@ -514,6 +514,44 @@
       "mirror_to_1password": false,
       "ci": "forbidden",
       "store_key": ""
+    },
+    {
+      "field": "dagster_home",
+      "env": "DAGSTER_HOME",
+      "aliases": [],
+      "required": false,
+      "injected": false,
+      "has_default": true,
+      "sensitive": false,
+      "group": "dagster",
+      "description": "",
+      "source": "code",
+      "empty_ok": false,
+      "scope": "env",
+      "provided_by": "",
+      "composed_from": "",
+      "mirror_to_1password": false,
+      "ci": "forbidden",
+      "store_key": ""
+    },
+    {
+      "field": "dagster_postgres_url",
+      "env": "DAGSTER_POSTGRES_URL",
+      "aliases": [],
+      "required": false,
+      "injected": false,
+      "has_default": true,
+      "sensitive": true,
+      "group": "dagster",
+      "description": "",
+      "source": "runtime",
+      "empty_ok": true,
+      "scope": "env",
+      "provided_by": "",
+      "composed_from": "",
+      "mirror_to_1password": false,
+      "ci": "forbidden",
+      "store_key": ""
     }
   ]
 }

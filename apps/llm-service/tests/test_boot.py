@@ -34,6 +34,7 @@ def test_a_deployed_boot_refuses_a_missing_injected_value_by_name(monkeypatch: p
 def test_a_deployed_boot_refuses_a_missing_mcp_credential(monkeypatch: pytest.MonkeyPatch) -> None:
     """#42: the deployment must inject MCP_BEARER_TOKEN, SECRET_KEY, and S3_ENDPOINT."""
     monkeypatch.setenv("GIT_COMMIT_SHA", "abc1234")
+    monkeypatch.setenv("CONFIGURATION_SHA256", "c" * 64)
     monkeypatch.setenv("ENVIRONMENT", "staging")
     monkeypatch.setenv("SECRET_KEY", "test-secret-key")
     monkeypatch.setenv("S3_ENDPOINT", "http://127.0.0.1:9000")
@@ -43,8 +44,25 @@ def test_a_deployed_boot_refuses_a_missing_mcp_credential(monkeypatch: pytest.Mo
         main.refuse_to_boot_on_a_missing_environment()
     assert "MCP_BEARER_TOKEN" in str(failure.value)
     assert "GIT_COMMIT_SHA" not in str(failure.value)
+    assert "CONFIGURATION_SHA256" not in str(failure.value)
     monkeypatch.setenv("MCP_BEARER_TOKEN", "test-mcp-token")
     assert main.refuse_to_boot_on_a_missing_environment() is None
+
+
+def test_a_deployed_boot_refuses_a_missing_configuration_hash(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The deployment injects CONFIGURATION_SHA256 (infra2_sdk shared env); a deployed boot without it fails."""
+    for name, value in {
+        "GIT_COMMIT_SHA": "abc1234",
+        "ENVIRONMENT": "staging",
+        "SECRET_KEY": "test-secret-key",
+        "S3_ENDPOINT": "http://127.0.0.1:9000",
+        "MCP_BEARER_TOKEN": "test-mcp-token",
+    }.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.delenv("CONFIGURATION_SHA256", raising=False)
+    monkeypatch.setattr(main, "settings", Settings(_env_file=None, app_env="staging"))
+    with pytest.raises(RuntimeError, match="CONFIGURATION_SHA256"):
+        main.refuse_to_boot_on_a_missing_environment()
 
 
 def test_a_local_boot_tolerates_what_nothing_injects(monkeypatch: pytest.MonkeyPatch) -> None:

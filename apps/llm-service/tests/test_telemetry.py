@@ -115,13 +115,16 @@ def test_with_an_endpoint_and_the_rendered_identity_the_app_exports_without_the_
     }
 
 
-@pytest.mark.parametrize("missing", ["OTEL_SERVICE_NAME", "OTEL_RESOURCE_ATTRIBUTES"])
-def test_with_an_endpoint_but_without_the_identity_the_app_refuses_to_import(missing: str) -> None:
+@pytest.mark.parametrize(
+    ("missing", "named"),
+    [("OTEL_SERVICE_NAME", "OTEL_SERVICE_NAME"), ("OTEL_RESOURCE_ATTRIBUTES", "infra.iac.ref")],
+)
+def test_with_an_endpoint_but_without_the_identity_the_app_refuses_to_import(missing: str, named: str) -> None:
     environ = {key: value for key, value in DEPLOYED.items() if key != missing}
     result = run_python_probe(STATE_PROBE, {**environ, "OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:9"})
     assert result.returncode != 0, "the service started and would have exported untagged telemetry"
-    assert "TelemetryConfigError" in result.stderr
-    assert missing in result.stderr
+    assert "requires ServiceIdentity attributes when an OTLP endpoint is set" in result.stderr
+    assert named in result.stderr
     assert IAC_REF not in result.stderr, "names only, never values"
 
 
@@ -167,9 +170,9 @@ def test_a_request_and_an_error_log_reach_the_collector_under_the_rendered_ident
 
 
 METRIC_PROBE = """
-from truealpha_runtime.telemetry import init_telemetry
+from infra2_sdk.runtime.otel import init_worker
 
-providers = init_telemetry()
+providers = init_worker("truealpha", strict=True, require_issued_identity=True)
 meter = providers.meter_provider.get_meter("probe")
 meter.create_histogram("demo.duration", unit="s").record(0.25, {"http.route": "/x", "http.response.status_code": 307})
 meter.create_counter("demo.count", unit="1").add(3, {"outcome": "ok"})

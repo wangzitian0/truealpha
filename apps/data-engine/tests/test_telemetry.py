@@ -96,13 +96,16 @@ def test_with_an_endpoint_and_the_rendered_identity_the_code_location_configures
     }
 
 
-@pytest.mark.parametrize("missing", ["OTEL_SERVICE_NAME", "OTEL_RESOURCE_ATTRIBUTES"])
-def test_with_an_endpoint_but_without_the_identity_the_code_location_refuses_to_load(missing: str) -> None:
+@pytest.mark.parametrize(
+    ("missing", "named"),
+    [("OTEL_SERVICE_NAME", "OTEL_SERVICE_NAME"), ("OTEL_RESOURCE_ATTRIBUTES", "infra.iac.ref")],
+)
+def test_with_an_endpoint_but_without_the_identity_the_code_location_refuses_to_load(missing: str, named: str) -> None:
     environ = {key: value for key, value in DEPLOYED.items() if key != missing}
     result = run_python_probe(STATE_PROBE, {**environ, "OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:9"})
     assert result.returncode != 0, "the code location loaded and would have exported untagged telemetry"
-    assert "TelemetryConfigError" in result.stderr
-    assert missing in result.stderr
+    assert "requires ServiceIdentity attributes when an OTLP endpoint is set" in result.stderr
+    assert named in result.stderr
     assert IAC_REF not in result.stderr, "names only, never values"
 
 
