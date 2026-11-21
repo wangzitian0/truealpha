@@ -80,6 +80,11 @@ def test_runtime_hooks_cells_run_their_checks_and_report_a_failed_check(tmp_path
         )
         assert result.status == "pass"
         assert [c.name for c in result.checks] == EXPECTED_CELL_CHECKS[cell]
+        record = json.loads((cwd / hooks.artifacts_dir / "checks.jsonl").read_text().splitlines()[-1])
+        assert len(record["checks"]) >= 1
+        assert all(
+            isinstance(check.get("seconds"), (int, float)) and check["seconds"] >= 0 for check in record["checks"]
+        )
 
     ran: list[str] = []
 
@@ -106,6 +111,8 @@ def test_runtime_hooks_cells_run_their_checks_and_report_a_failed_check(tmp_path
     assert CELL_POLICIES["staging.post"].stop_on_fail is False
     assert [(c.name, c.ok) for c in result.checks] == [("health", True), ("warm_surface", False), ("walk_tree", True)]
     assert any("walk-tree" in command for command in ran)
+    record = json.loads((cwd / hooks.artifacts_dir / "checks.jsonl").read_text().splitlines()[-1])
+    assert record["checks"][1]["detail"] == "boom: first line"
 
 
 def test_runtime_hooks_manifest_refuses_schema_2_and_shell_chains() -> None:
@@ -125,12 +132,12 @@ def test_runtime_hooks_manifest_refuses_schema_2_and_shell_chains() -> None:
         RuntimeHooksManifest.from_dict(with_empty_checks)
 
 
-def test_browser_check_uses_headless_shell_and_fits_every_cell_budget() -> None:
+def test_browser_check_uses_headless_shell_and_each_cell_fits_its_budget() -> None:
     from infra2_sdk.manifests import CELL_POLICIES
 
     hooks = _load_hooks()
     walk_tree = next(row for row in hooks.checks if row.id == "walk_tree")
     assert "--only-shell" in walk_tree.bootstrap
     for cell in EXPECTED_CELL_CHECKS:
-        for row in hooks.checks_for_cell(cell):
-            assert row.timeout_seconds <= CELL_POLICIES[cell].budget_seconds, (cell, row.id)
+        total = sum(row.timeout_seconds for row in hooks.checks_for_cell(cell))
+        assert total <= CELL_POLICIES[cell].budget_seconds, (cell, total)

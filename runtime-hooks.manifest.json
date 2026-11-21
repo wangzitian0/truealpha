@@ -21,14 +21,14 @@
       "argv": [
         "sh",
         "-c",
-        "uv run python -m infra2_sdk.deploy --url \"$APP_URL/api/health\" --expected-version \"$APP_VERSION_REF\" --max-attempts 36 --interval-seconds 5 --no-follow-redirects"
+        "uv run python -m infra2_sdk.deploy --url \"$APP_URL/api/health\" --expected-version \"$APP_VERSION_REF\" --max-attempts 12 --interval-seconds 5 --no-follow-redirects"
       ],
       "needs": [
         "running_service"
       ],
       "writes": false,
       "accepts_scale": false,
-      "timeout_seconds": 180,
+      "timeout_seconds": 90,
       "cells": {
         "remove": {
           "scheduled_audit": {
@@ -50,7 +50,7 @@
       ],
       "writes": false,
       "accepts_scale": false,
-      "timeout_seconds": 60,
+      "timeout_seconds": 30,
       "cells": {
         "remove": {
           "prod.post": {
@@ -76,7 +76,7 @@
       ],
       "writes": false,
       "accepts_scale": false,
-      "timeout_seconds": 360,
+      "timeout_seconds": 240,
       "bootstrap": "cd apps/app-web && bun install --frozen-lockfile && bunx playwright install --with-deps --only-shell chromium",
       "required_env": [
         "TA_EMAIL",

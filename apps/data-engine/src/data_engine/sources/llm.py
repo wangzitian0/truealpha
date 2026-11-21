@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextvars
 import hashlib
 import json
@@ -13,7 +14,7 @@ from contextlib import contextmanager, nullcontext
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Any, Literal, cast
+from typing import Any
 from urllib.parse import urlparse
 
 import httpx2
@@ -596,8 +597,10 @@ class _GatewayWire(httpx2.AsyncBaseTransport):
         request_params: dict[str, Any],
         answer_required: bool,
         captured: _Captured,
+        wire_body: bytes,
     ) -> None:
         self._send = send
+        self._wire_body = wire_body
         self._budget = budget
         self._pacer = pacer
         self._identity = identity
@@ -611,7 +614,8 @@ class _GatewayWire(httpx2.AsyncBaseTransport):
         attempt = self._budget.begin_attempt()
         req_url = str(request.url)
         headers = {name.title(): value for name, value in request.headers.items() if name.lower() in _WIRE_HEADERS}
-        wire_body = await request.aread()
+        await request.aread()  # the SDK body is dropped: the stored request is what goes on the wire
+        wire_body = self._wire_body
         try:
             with (
                 self._pacer.admitted(self._budget.remaining_seconds) if self._pacer is not None else nullcontext(),
@@ -678,24 +682,8 @@ class _SeatRetry(AbstractCapability[Any]):
         raise RetryModelRequest()
 
 
-_THINKING_EFFORTS = ("minimal", "low", "medium", "high", "xhigh")
-
-
 def _call_site(task: ModelTask) -> str:
     return "data-engine." + re.sub(r"[^a-z0-9_.-]+", "-", task.prompt_version.split(":")[0].lower())[:48]
-
-
-def _thinking_level(
-    decoding: model_decoding.DecodingVersion,
-) -> bool | Literal["minimal", "low", "medium", "high", "xhigh"]:
-    if decoding.thinking == "disabled":
-        return False
-    effort = decoding.reasoning_effort
-    if effort is None:
-        return True
-    if effort not in _THINKING_EFFORTS:
-        raise ValueError(f"unknown reasoning effort {effort!r}; known: {_THINKING_EFFORTS}")
-    return cast(Any, effort)
 
 
 def _call_provider(
@@ -708,7 +696,11 @@ def _call_provider(
     identity: FetchKey,
     transport: Transport | None,
 ) -> tuple[int, bytes, dict[str, Any], dict[str, Any], str | None]:
-    """Run one model call through the SDK agent; the gateway answer bytes stay the source of truth."""
+    """Run one model call through the SDK agent.
+
+    The SDK drives retry, telemetry and guards. The gateway sends `_request_bytes(request_body)`, the stored
+    request, so the wire bytes equal what `request_sha256` hashes. The answer bytes are the source of truth.
+    """
     budget = model_policy.RetryBudget()
     captured = _Captured()
     wire = _GatewayWire(
@@ -720,31 +712,33 @@ def _call_provider(
         request_params=_request_params(request_body, decoding),
         answer_required=task.answer_required,
         captured=captured,
+        wire_body=_request_bytes(request_body),
     )
+    http_client = httpx2.AsyncClient(transport=wire)
     client = AsyncOpenAI(
         api_key=llm_cfg.api_key,
         base_url=llm_cfg.base_url,
         max_retries=0,
-        http_client=httpx2.AsyncClient(transport=wire),
+        http_client=http_client,
     )
     agent = create_llm_agent(
         llm_cfg,
         model=ZaiModel(str(request_body["model"]), provider=ZaiProvider(openai_client=client)),
         call_site=_call_site(task),
-        decoding=DecodingSpec(decoding.name, thinking=_thinking_level(decoding), temperature=0),
+        decoding=DecodingSpec(decoding.name),
         instructions=task.instructions,
         usage_limits=UsageLimits(request_limit=1),
         max_attempts=1,
         retries=0,
         capabilities=[_SeatRetry(budget, captured)],
-        # Z.AI reads `max_tokens`; the SDK would send `max_completion_tokens`, so the task limit goes in the body here.
-        model_settings={"extra_body": {"response_format": {"type": "json_object"}, "max_tokens": task.max_tokens}},
     )
     with _attempt_context(task.timeout_seconds, identity):
         try:
             agent.run_sync(user_content)
         except Exception as failure:
             return _after_failed_run(captured, failure)
+        finally:
+            asyncio.run(http_client.aclose())
     return _answered(captured)
 
 

@@ -147,23 +147,13 @@ def test_an_unknown_version_in_the_contract_is_refused_before_any_call(monkeypat
 
 
 def test_an_environment_on_v1_sends_thinking_disabled_and_the_task_max_tokens(monkeypatch) -> None:
-    monkeypatch.setattr(settings, "llm_small_model", "glm-4.7")  # a model that can switch thinking off
+    monkeypatch.setattr(settings, "llm_small_model", "glm-5.3-flash")  # the production model
     in_environment(monkeypatch, "production")
     transport = Capture()
     ask(transport=transport)
     (body,) = transport.bodies
-    assert body["thinking"]["type"] == "disabled" and "reasoning_effort" not in body
-    assert body["max_tokens"] == model_key_health.PROBE_TASK.max_tokens and "max_completion_tokens" not in body
-
-
-def test_v1_on_a_model_that_always_thinks_sends_the_lowest_effort_the_sdk_allows(monkeypatch) -> None:
-    """GLM-5.3 rejects `thinking: disabled`; the SDK Z.AI model translates V1 to enabled at effort low."""
-    monkeypatch.setattr(settings, "llm_small_model", "glm-5.3-flash")
-    in_environment(monkeypatch, "production")
-    transport = Capture()
-    ask(transport=transport)
-    (body,) = transport.bodies
-    assert body["thinking"]["type"] == "enabled" and body["reasoning_effort"] == "low"
+    assert body["thinking"] == {"type": "disabled"} and "reasoning_effort" not in body
+    assert body["max_tokens"] == model_key_health.PROBE_TASK.max_tokens
 
 
 def test_an_environment_on_v2_sends_the_documented_body_and_the_same_max_tokens(monkeypatch, call_ledger) -> None:
@@ -172,7 +162,7 @@ def test_an_environment_on_v2_sends_the_documented_body_and_the_same_max_tokens(
     transport = Capture()
     ask(transport=transport)
     (body,) = transport.bodies
-    assert body["thinking"]["type"] == "enabled" and body["reasoning_effort"] == "low"
+    assert body["thinking"] == {"type": "enabled"} and body["reasoning_effort"] == "low"
     assert "disabled" not in json.dumps(body)
     assert body["max_tokens"] == model_key_health.PROBE_TASK.max_tokens, "no more room without evidence"
     (row,) = call_ledger

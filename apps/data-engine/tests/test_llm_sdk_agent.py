@@ -11,7 +11,7 @@ from typing import Any
 import pytest
 from data_engine.config import settings
 from data_engine.quality import model_key_health
-from data_engine.sources import gateway, llm, model_policy
+from data_engine.sources import gateway, llm, model_decoding, model_policy
 
 KEY = "sk-test-not-a-real-key-0123456789"
 TRANSIENT = json.dumps({"error": {"code": "1302", "message": "rate limit"}}).encode()
@@ -123,3 +123,40 @@ def test_an_empty_cut_off_answer_is_kept_as_the_stored_bytes_after_one_request()
     invocation = ask(script)
     assert len(script.requests) == 1
     assert invocation.response_sha256 is not None and invocation.completion_tokens == 300
+
+
+@pytest.mark.parametrize("model", ["glm-5.3-flash", "glm-4.7"])
+@pytest.mark.parametrize("version", ["v1", "v2"])
+def test_the_bytes_on_the_wire_are_the_stored_request(
+    monkeypatch: pytest.MonkeyPatch, model: str, version: str
+) -> None:
+    monkeypatch.setattr(settings, "llm_small_model", model)
+    monkeypatch.setattr(model_policy, "seat_contract", _seat_with(version))
+    sent: list[bytes] = []
+
+    def transport(url: str, headers: dict[str, str], body: bytes) -> tuple[int, bytes]:
+        sent.append(body)
+        return 200, OK
+
+    ask_with(transport)
+    task = model_key_health.PROBE_TASK
+    stored = llm.build_chat_request(task, "ping", model=model, decoding=model_decoding.named(version))
+    assert sent == [llm._request_bytes(stored)]
+    assert json.loads(sent[0]) == stored
+    assert ("thinking" in stored, "clear_thinking" in json.dumps(stored)) == (True, False)
+
+
+def _seat_with(version: str):  # type: ignore[no-untyped-def]
+    seat = model_policy.seat_contract()
+    limits = seat.limits_for("staging")
+    assert limits is not None
+    named = seat.model_copy(
+        update={
+            "environments": {**seat.environments, "staging": limits.model_copy(update={"decoding_version": version})}
+        }
+    )
+    return lambda: named
+
+
+def ask_with(transport: Any) -> llm.ModelInvocation:
+    return ask(transport)  # type: ignore[arg-type]
