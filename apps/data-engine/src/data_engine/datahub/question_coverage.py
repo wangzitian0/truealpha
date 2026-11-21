@@ -60,15 +60,22 @@ def declared_environment(connection: Connection[Any]) -> str:
     return str(row[0])
 
 
+#: The newest head of one universe prefix that has a capture status. The lateral subquery
+#: filters mart.capture_status on the head's run before its GROUP BY, so Postgres reads
+#: only that run's obligations by index. A plain join aggregates every run first: on
+#: staging that read 16k obligations, spilled to disk and took 128 ms per call (#1699).
+GOVERNED_HEAD_SQL = (
+    "select h.universe_id, h.target_run_id, cs.cutoff from mart.current_pointer_head h "
+    "cross join lateral (select min(s.cutoff) as cutoff from mart.capture_status s "
+    "where s.run_id = h.target_run_id having count(*) > 0) cs "
+    "where h.environment = (select environment from mart.environment_identity) "
+    "and h.factor_id = %s and h.universe_id like %s "
+    "order by h.advanced_at desc limit 1"
+)
+
+
 def governed_head(connection: Connection[Any], *, universe_prefix: str) -> GovernedHead | None:
-    row = connection.execute(
-        "select h.universe_id, h.target_run_id, min(cs.cutoff) from mart.current_pointer_head h "
-        "join mart.capture_status cs on cs.run_id = h.target_run_id "
-        "where h.environment = (select environment from mart.environment_identity) "
-        "and h.factor_id = %s and h.universe_id like %s "
-        "group by h.universe_id, h.target_run_id, h.advanced_at order by h.advanced_at desc limit 1",
-        (GOVERNING_FACTOR, universe_prefix + "%"),
-    ).fetchone()
+    row = connection.execute(GOVERNED_HEAD_SQL, (GOVERNING_FACTOR, universe_prefix + "%")).fetchone()
     return None if row is None else GovernedHead(universe_id=str(row[0]), run_id=str(row[1]), cutoff=row[2])
 
 
