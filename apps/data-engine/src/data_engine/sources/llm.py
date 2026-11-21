@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import contextvars
 import hashlib
 import json
@@ -17,16 +16,8 @@ from decimal import Decimal
 from typing import Any
 from urllib.parse import urlparse
 
-import httpx2
 from factors.shared import extraction as extraction_primitive
-from infra2_sdk.runtime.llm import DecodingSpec, LlmSettings, create_llm_agent
-from openai import AsyncOpenAI
-from pydantic_ai.capabilities import AbstractCapability
-from pydantic_ai.exceptions import ModelHTTPError as SdkModelHTTPError
-from pydantic_ai.exceptions import RetryModelRequest
-from pydantic_ai.models.zai import ZaiModel
-from pydantic_ai.providers.zai import ZaiProvider
-from pydantic_ai.usage import UsageLimits
+from infra2_sdk.runtime.llm import LlmSettings
 from truealpha_contracts.common import canonical_sha256
 from truealpha_runtime.research_cards import (
     XHS_CARD_INSTRUCTIONS,
@@ -41,7 +32,6 @@ from truealpha_runtime.research_cards import (
 from data_engine.config import settings
 from data_engine.datahub.fetch_key import FetchKey
 from data_engine.sources import gateway, model_decoding, model_policy
-from data_engine.sources.gateway import record_call
 
 logger = logging.getLogger(__name__)
 
@@ -568,124 +558,6 @@ def _request_bytes(request_body: dict[str, Any]) -> bytes:
     return json.dumps(request_body, sort_keys=True, ensure_ascii=False).encode()
 
 
-_WIRE_HEADERS = frozenset({"authorization", "content-type", "accept"})
-_JSON_HEADERS = {"content-type": "application/json"}
-
-
-@dataclass
-class _Captured:
-    """What the gateway answered on the latest HTTP attempt of one model call."""
-
-    status: int = 0
-    body: bytes = b""
-    provider_code: str | None = None
-    parsed: dict[str, Any] | None = None
-    error: BaseException | None = None
-
-
-class _GatewayWire(httpx2.AsyncBaseTransport):
-    """Send each SDK request through the gateway: pacer, `api_call_ledger` row, and raw answer bytes."""
-
-    def __init__(
-        self,
-        *,
-        send: Transport,
-        budget: model_policy.RetryBudget,
-        pacer: model_policy.ModelPacer | None,
-        identity: FetchKey,
-        caller: str,
-        request_params: dict[str, Any],
-        answer_required: bool,
-        captured: _Captured,
-        wire_body: bytes,
-    ) -> None:
-        self._send = send
-        self._wire_body = wire_body
-        self._budget = budget
-        self._pacer = pacer
-        self._identity = identity
-        self._caller = caller
-        self._request_params = request_params
-        self._answer_required = answer_required
-        self._captured = captured
-
-    async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
-        captured = self._captured
-        attempt = self._budget.begin_attempt()
-        req_url = str(request.url)
-        headers = {name.title(): value for name, value in request.headers.items() if name.lower() in _WIRE_HEADERS}
-        await request.aread()  # the SDK body is dropped: the stored request is what goes on the wire
-        wire_body = self._wire_body
-        try:
-            with (
-                self._pacer.admitted(self._budget.remaining_seconds) if self._pacer is not None else nullcontext(),
-                record_call(
-                    SOURCE,
-                    ENDPOINT,
-                    identity=self._identity,
-                    caller=self._caller,
-                    request_uri=req_url,
-                    cost=0,
-                    admit=False,
-                ) as call,
-            ):
-                call.attempt = attempt
-                call.request_params = self._request_params
-                status, raw_body = self._send(req_url, headers, wire_body)
-                call.observe(status_code=status, body=raw_body)
-                captured.status, captured.body, captured.provider_code, captured.parsed = status, raw_body, None, None
-                if status >= 400:
-                    provider_code = model_policy.provider_code(raw_body)
-                    captured.provider_code = provider_code
-                    call.provider_code = provider_code
-                    call.fail(f"HTTP {status}: {raw_body[:200]!r}")
-                    return httpx2.Response(status, content=raw_body, headers=_JSON_HEADERS)
-                parsed = json.loads(raw_body.decode())
-                captured.parsed = parsed
-                usage = parsed.get("usage") or {}
-                call.cost = Decimal(int(usage.get("total_tokens") or 0))
-                call.completion_tokens = _token_count(usage.get("completion_tokens"))
-                call.reasoning_tokens = _token_count(
-                    (usage.get("completion_tokens_details") or {}).get("reasoning_tokens")
-                )
-                if self._answer_required and _cut_off(parsed):
-                    call.fail(f"finish_reason={FINISH_REASON_CUT_OFF}: the answer was cut at max_tokens")
-                return httpx2.Response(status, content=raw_body, headers=_JSON_HEADERS)
-        except BaseException as exc:
-            captured.error = exc
-            raise
-
-
-class _SeatRetry(AbstractCapability[Any]):
-    """The only retry layer: wait and retry when the seat contract calls the HTTP answer transient."""
-
-    def __init__(self, budget: model_policy.RetryBudget, captured: _Captured) -> None:
-        super().__init__()
-        self._budget = budget
-        self._captured = captured
-
-    async def on_model_request_error(self, ctx: Any, *, request_context: Any, error: Exception) -> Any:
-        status = self._captured.status
-        if not isinstance(error, SdkModelHTTPError) or status < 400:
-            raise error
-        wait = self._budget.wait_before_next(status, self._captured.provider_code)
-        if wait is None:
-            raise error
-        logger.warning(
-            "model call answered HTTP %s (provider code %s) on attempt %s; waiting %.1f s",
-            status,
-            self._captured.provider_code,
-            self._budget.attempts,
-            wait,
-        )
-        model_policy.sleep(wait)
-        raise RetryModelRequest()
-
-
-def _call_site(task: ModelTask) -> str:
-    return "data-engine." + re.sub(r"[^a-z0-9_.-]+", "-", task.prompt_version.split(":")[0].lower())[:48]
-
-
 def _call_provider(
     llm_cfg: LlmSettings,
     user_content: str,
@@ -696,74 +568,10 @@ def _call_provider(
     identity: FetchKey,
     transport: Transport | None,
 ) -> tuple[int, bytes, dict[str, Any], dict[str, Any], str | None]:
-    """Run one model call through the SDK agent.
+    """Run one model call through the SDK agent (imported here: it loads openai and pydantic_ai)."""
+    from data_engine.sources import llm_agent
 
-    The SDK drives retry, telemetry and guards. The gateway sends `_request_bytes(request_body)`, the stored
-    request, so the wire bytes equal what `request_sha256` hashes. The answer bytes are the source of truth.
-    """
-    budget = model_policy.RetryBudget()
-    captured = _Captured()
-    wire = _GatewayWire(
-        send=transport or _gateway_transport,
-        budget=budget,
-        pacer=model_policy.pacer_for(gateway.capacity_environment()),
-        identity=identity,
-        caller=caller,
-        request_params=_request_params(request_body, decoding),
-        answer_required=task.answer_required,
-        captured=captured,
-        wire_body=_request_bytes(request_body),
-    )
-    http_client = httpx2.AsyncClient(transport=wire)
-    client = AsyncOpenAI(
-        api_key=llm_cfg.api_key,
-        base_url=llm_cfg.base_url,
-        max_retries=0,
-        http_client=http_client,
-    )
-    agent = create_llm_agent(
-        llm_cfg,
-        model=ZaiModel(str(request_body["model"]), provider=ZaiProvider(openai_client=client)),
-        call_site=_call_site(task),
-        decoding=DecodingSpec(decoding.name),
-        instructions=task.instructions,
-        usage_limits=UsageLimits(request_limit=1),
-        max_attempts=1,
-        retries=0,
-        capabilities=[_SeatRetry(budget, captured)],
-    )
-    with _attempt_context(task.timeout_seconds, identity):
-        try:
-            agent.run_sync(user_content)
-        except Exception as failure:
-            return _after_failed_run(captured, failure)
-        finally:
-            asyncio.run(http_client.aclose())
-    return _answered(captured)
-
-
-def _answered(captured: _Captured) -> tuple[int, bytes, dict[str, Any], dict[str, Any], str | None]:
-    if captured.status >= 400:
-        return captured.status, captured.body, {}, {}, captured.provider_code
-    payload = dict(captured.parsed or {})
-    return captured.status, captured.body, payload, payload.get("usage") or {}, None
-
-
-def _after_failed_run(
-    captured: _Captured, failure: Exception
-) -> tuple[int, bytes, dict[str, Any], dict[str, Any], str | None]:
-    """Map an agent failure back to the gateway answer, as the pre-SDK path did."""
-    error = captured.error
-    if isinstance(error, gateway.CapacityExceeded):
-        if captured.status == 0:
-            raise ModelCapacityRefused(error.reason) from error
-        return _answered(captured)
-    if error is not None:
-        raise error
-    if captured.status >= 400 or captured.parsed is not None:
-        # The agent judged the answer (empty text after a cut-off, a usage limit); the stored bytes decide.
-        return _answered(captured)
-    raise failure
+    return llm_agent.call_provider(llm_cfg, user_content, request_body, decoding, task, caller, identity, transport)
 
 
 def _cut_off(payload: dict[str, Any]) -> bool:

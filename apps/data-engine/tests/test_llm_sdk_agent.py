@@ -160,3 +160,17 @@ def _seat_with(version: str):  # type: ignore[no-untyped-def]
 
 def ask_with(transport: Any) -> llm.ModelInvocation:
     return ask(transport)  # type: ignore[arg-type]
+
+
+def test_importing_the_llm_source_loads_neither_openai_nor_pydantic_ai() -> None:
+    """The code server imports `llm` at start; the agent stack (about 50 MiB) loads on the first model call."""
+    import subprocess
+    import sys
+
+    code = (
+        "import sys, data_engine.sources.llm\n"
+        "bad = sorted(m for m in sys.modules if m.split('.')[0] in {'openai', 'pydantic_ai', 'httpx2'})\n"
+        "print(','.join(bad)); sys.exit(1 if bad else 0)"
+    )
+    done = subprocess.run([sys.executable, "-I", "-c", code], capture_output=True, text=True, timeout=120)
+    assert done.returncode == 0, f"loaded at import: {done.stdout.strip()[:300]}"
