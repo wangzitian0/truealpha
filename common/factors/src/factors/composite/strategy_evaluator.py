@@ -392,20 +392,6 @@ def _evaluate_issuer(
         )
         return _excluded(issuer.issuer_id, reason, consumed_confidence, tree.root)
 
-    peg_result = peg(
-        _facts_for(issuer, _input_keys("peg"), as_of=as_of),
-        entity_id=issuer.issuer_id,
-        growth_convention=GrowthConvention.HISTORICAL_CAGR,
-        as_of=as_of,
-        cagr_years=3,
-    )
-    peg_consensus_result = peg(
-        _facts_for(issuer, (*_input_keys("peg"), "consensus_profit_growth"), as_of=as_of),
-        entity_id=issuer.issuer_id,
-        growth_convention=GrowthConvention.ANALYST_CONSENSUS,
-        as_of=as_of,
-        cagr_years=3,
-    )
     labor_efficiency = _quantize(gppe_result.value, definition.labor_efficiency.quantization)
     current_ps = None if ps_result.value is None else _quantize(ps_result.value, definition.price_to_sales.quantization)
     current_multiple = _quantize(multiple_result.value, definition.valuation_quantization)
@@ -438,11 +424,6 @@ def _evaluate_issuer(
         current_price_to_gross_profit=current_multiple if by_gross_profit else None,
         target_price_to_gross_profit=target_multiple if by_gross_profit else None,
         valuation_gap=valuation_gap,
-        peg=peg_result.value,
-        peg_reason_codes=peg_reason_codes(peg_result),
-        peg_consensus=peg_consensus_result.value,
-        peg_consensus_reason_codes=peg_reason_codes(peg_consensus_result),
-        peg_consensus_confidence=peg_consensus_result.confidence if peg_consensus_result.value is not None else None,
         eligible=True,
         outcome=GoldenDecisionOutcome.RANKED_BEYOND_SELECTION_COUNT,
         exclusion_reason=None,
@@ -452,6 +433,59 @@ def _evaluate_issuer(
     if current_multiple > band.target_upper_bound:
         return replace(decision, outcome=GoldenDecisionOutcome.REJECTED_VALUATION_ABOVE_TIER_BAND)
     return decision
+
+
+#: The PEG inputs that carry one current value. The net income is a history: `peg` reads its window.
+_PEG_CURRENT_INPUTS = ("last_close", "shares_outstanding")
+
+
+def _withheld_peg(decision: EvaluatedDecision) -> EvaluatedDecision:
+    """A plausibility refusal distrusts an input of the issuer, and the input can be the price."""
+    assert decision.exclusion_reason is not None
+    codes = (f"excluded:{decision.exclusion_reason.value}",)
+    return replace(decision, peg_reason_codes=codes, peg_consensus_reason_codes=codes)
+
+
+def _with_peg(
+    decision: EvaluatedDecision, issuer: IssuerInput, *, as_of: datetime, maximum_age: timedelta
+) -> EvaluatedDecision:
+    """Attach PEG to a decision (#1804).
+
+    PEG reads the price, the share count and the net income. It does not read an input of the
+    labor-efficiency valuation, so an exclusion of that valuation does not withhold it. PEG has
+    its own look-ahead check and its own age limit, because an excluded issuer returns before
+    the checks of the valuation.
+    """
+    for key, knowable_instant in issuer.knowable_at.items():
+        if knowable_instant > as_of:
+            raise LookAheadError(
+                f"{issuer.issuer_id}: input {key!r} has knowable_at {knowable_instant.isoformat()} > cutoff {as_of.isoformat()}"
+            )
+    if any(as_of - issuer.knowable_at[key] > maximum_age for key in _PEG_CURRENT_INPUTS if key in issuer.knowable_at):
+        codes = (ExclusionReason.STALE_REQUIRED_INPUT.value,)
+        return replace(decision, peg_reason_codes=codes, peg_consensus_reason_codes=codes)
+    historical = peg(
+        _facts_for(issuer, _input_keys("peg"), as_of=as_of),
+        entity_id=issuer.issuer_id,
+        growth_convention=GrowthConvention.HISTORICAL_CAGR,
+        as_of=as_of,
+        cagr_years=3,
+    )
+    consensus = peg(
+        _facts_for(issuer, (*_input_keys("peg"), "consensus_profit_growth"), as_of=as_of),
+        entity_id=issuer.issuer_id,
+        growth_convention=GrowthConvention.ANALYST_CONSENSUS,
+        as_of=as_of,
+        cagr_years=3,
+    )
+    return replace(
+        decision,
+        peg=historical.value,
+        peg_reason_codes=peg_reason_codes(historical),
+        peg_consensus=consensus.value,
+        peg_consensus_reason_codes=peg_reason_codes(consensus),
+        peg_consensus_confidence=consensus.confidence if consensus.value is not None else None,
+    )
 
 
 def _excluded(
@@ -539,10 +573,20 @@ def evaluate_cutoff(
         IssuerClass(name): bound_tree(definition, IssuerClass(name), metrics=metrics, pins=tree_pins) for name in pins
     }
     decisions = [
-        _excluded(issuer.issuer_id, plausibility_refusals[issuer.issuer_id])
+        _withheld_peg(_excluded(issuer.issuer_id, plausibility_refusals[issuer.issuer_id]))
         if issuer.issuer_id in plausibility_refusals
-        else _evaluate_issuer(
-            issuer, definition=definition, risk_free_rate=risk_free_rate, as_of=cutoff_at, trees=trees, metrics=metrics
+        else _with_peg(
+            _evaluate_issuer(
+                issuer,
+                definition=definition,
+                risk_free_rate=risk_free_rate,
+                as_of=cutoff_at,
+                trees=trees,
+                metrics=metrics,
+            ),
+            issuer,
+            as_of=cutoff_at,
+            maximum_age=timedelta(days=definition.eligibility.maximum_input_age_days),
         )
         for issuer in issuers
     ]

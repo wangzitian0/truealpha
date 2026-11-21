@@ -193,6 +193,13 @@ def _strategy_summary_section(d: StrategyRunDecision, source: str, corpus_sha256
     )
 
 
+def _peg_availability(peg_present: bool, decision: AvailabilityStatus) -> AvailabilityStatus:
+    """PEG has its own availability: an excluded decision can carry a PEG value (#1804)."""
+    if peg_present:
+        return AvailabilityStatus.AVAILABLE
+    return AvailabilityStatus.UNAVAILABLE if decision is AvailabilityStatus.AVAILABLE else decision
+
+
 def _peg_section(d: StrategyRunDecision, source: str, corpus_sha256: str) -> ReportSection:
     st = _decision_availability(d)
     return _decision_section(
@@ -202,7 +209,7 @@ def _peg_section(d: StrategyRunDecision, source: str, corpus_sha256: str) -> Rep
         ReportSectionKind.PEG_CONVENTIONS,
         "PEG",
         (("peg", _opt_str(d.peg), None), ("peg_rank", _opt_str(d.peg_rank), None)),
-        status_override=AvailabilityStatus.UNAVAILABLE if d.peg is None and st is AvailabilityStatus.AVAILABLE else st,
+        status_override=_peg_availability(d.peg is not None, st),
         reason_codes=(PEG_NOT_RECORDED,) if d.peg is None else (),
     )
 
