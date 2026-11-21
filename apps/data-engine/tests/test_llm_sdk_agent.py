@@ -174,3 +174,17 @@ def test_importing_the_llm_source_loads_neither_openai_nor_pydantic_ai() -> None
     )
     done = subprocess.run([sys.executable, "-I", "-c", code], capture_output=True, text=True, timeout=120)
     assert done.returncode == 0, f"loaded at import: {done.stdout.strip()[:300]}"
+
+
+def test_a_read_timeout_is_the_error_that_each_caller_handles_for_one_filing() -> None:
+    """A provider that does not answer raised a bare `TimeoutError`. The supply-chain lane handles
+    `ModelHTTPError` for one filing, so the bare error stopped the lane of the whole universe."""
+
+    def no_answer(url: str, headers: dict[str, str], body: bytes) -> tuple[int, bytes]:
+        raise TimeoutError("The read operation timed out")
+
+    with pytest.raises(llm.ModelHTTPError) as raised:
+        ask(no_answer)  # type: ignore[arg-type]
+    assert raised.value.status_code == 0
+    assert "TimeoutError" in str(raised.value)
+    assert isinstance(raised.value.__cause__, TimeoutError)

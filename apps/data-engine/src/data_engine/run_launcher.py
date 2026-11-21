@@ -22,16 +22,27 @@ logger = logging.getLogger(__name__)
 RUN_WORKER_LOST = "run worker lost"
 CONTRACT_BOUND_TAG = "truealpha/contract_max_runtime"
 MAX_RUNTIME_ALIAS_TAG = "dagster/max_runtime_seconds"
+#: The universe of a run. One job serves universes of 20 and of 500 issuers, so the measured
+#: run times of one universe do not bound a run of another.
+UNIVERSE_TAG = "truealpha/universe"
 
 
-def max_runtime_tags(job_name: str, instance: dg.DagsterInstance | None = None) -> dict[str, str]:
+def max_runtime_tags(
+    job_name: str, instance: dg.DagsterInstance | None = None, *, universe: str | None = None
+) -> dict[str, str]:
+    """The bound of a run: margin x the longest SUCCESS run of the same job and the same universe."""
     if instance is None:
         return {}
     try:
         contract = load_environment_contract()
         cutoff = datetime.now(UTC) - timedelta(days=contract.job_runtime_bounds.window_days)
         records = instance.get_run_records(
-            filters=dg.RunsFilter(job_name=job_name, statuses=[dg.DagsterRunStatus.SUCCESS], created_after=cutoff)
+            filters=dg.RunsFilter(
+                job_name=job_name,
+                statuses=[dg.DagsterRunStatus.SUCCESS],
+                created_after=cutoff,
+                tags={UNIVERSE_TAG: universe} if universe else None,
+            )
         )
         durations = [
             record.end_time - record.start_time
@@ -55,7 +66,7 @@ def bound_tags_to_write(
     present = run_tags.get(MAX_RUNTIME_SECONDS_TAG)
     if present is not None and present != run_tags.get(CONTRACT_BOUND_TAG):
         return {}
-    return max_runtime_tags(job_name, instance=instance)
+    return max_runtime_tags(job_name, instance=instance, universe=run_tags.get(UNIVERSE_TAG))
 
 
 class MonitoredRunLauncher(DefaultRunLauncher):

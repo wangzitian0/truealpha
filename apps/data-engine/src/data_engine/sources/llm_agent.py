@@ -245,6 +245,10 @@ def _after_failed_run(
         if captured.status == 0:
             raise ModelCapacityRefused(error.reason) from error
         return _answered(captured)
+    if isinstance(error, OSError):
+        # A read timeout or a refused connection. Each caller handles ModelHTTPError for one filing;
+        # a bare OSError stopped the lane of the whole universe.
+        raise llm.ModelHTTPError(0, f"{SOURCE}: no answer: {type(error).__name__}: {error}") from error
     if error is not None:
         raise error
     if captured.status >= 400 or captured.parsed is not None:

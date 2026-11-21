@@ -28,6 +28,7 @@ from data_engine.datahub.standards.planner import universe_issuers
 from data_engine.environment_universes import any_environment_universe_names, scheduled_universe_names
 from data_engine.external_op import external_op
 from data_engine.quality.nightly_verdicts import check_name, is_registered, newest_is_red, tick_from_config, verdict
+from data_engine.run_launcher import UNIVERSE_TAG
 from data_engine.sources import gateway
 
 STANDARD_BACKFILL_JOB_NAME = "standard_backfill_pipeline"
@@ -63,7 +64,6 @@ STANDARDS_PLANE_CRONS: Mapping[str, str] = {
 }
 STANDARDS_PLANE_SCHEDULE_STATUS = dg.DefaultScheduleStatus.STOPPED
 
-UNIVERSE_TAG = "truealpha/universe"
 HEAD_RUN_TAG = "truealpha/head_run"
 
 REPORTS_CURRENT = "reports_current"
