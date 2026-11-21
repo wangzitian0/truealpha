@@ -232,9 +232,9 @@ names six logical tiers (`local_dev`, `local_test`, `github_ci`, `preview`, `sta
 This section states the principle only. The scope, sentinel set, cadence and trigger of
 each environment have one source:
 `common/contracts/src/truealpha_contracts/data/environment_contract.v1.json` (with sentinel known
-answers in `sentinel_known_answers.v1.json`, #1416). The delivery tiers
-(what each tier must catch, and its time budget) are in
-`docs/architecture-decisions/A4-the-iteration-loop-is-the-product.md`. Do not copy either
+answers in `sentinel_known_answers.v1.json`, #1416). What each delivery
+stage must catch is in `docs/architecture-decisions/A4-the-iteration-loop-is-the-product.md`.
+The time budget of each stage is in `stages.yaml` of infra2-sdk. Do not copy any of these
 into a document.
 
 Promotion is artifact-based. PRs prove code in CI. One signed release manifest then runs
