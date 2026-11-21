@@ -193,6 +193,92 @@ def test_no_redundant_indexes_in_catalog(migrated_db: str) -> None:
     assert not redundant, "redundant indexes in live catalog:\n" + "\n".join(redundant)
 
 
+# Non-unique index pairs where one key is a strict trailing suffix of the other, kept on purpose.
+# Key: (table, shorter index, longer index). Value: the reader or constraint that needs both.
+SUFFIX_PAIR_EXEMPTIONS: dict[tuple[str, str, str], str] = {
+    (
+        "app.conversation_messages",
+        "idx_conversation_messages_owner",
+        "idx_conversation_messages_conv_tenant_owner",
+    ): "owner index supports the owner_principal_id FK; composite supports the conversation FK",
+    (
+        "app.research_document_download_tickets",
+        "idx_research_document_download_tickets_owner",
+        "idx_research_document_download_tickets_doc_tenant_owner",
+    ): "owner index supports the owner_principal_id FK; composite supports the document FK",
+    (
+        "app.research_document_download_tickets",
+        "idx_research_document_download_tickets_owner",
+        "idx_research_document_download_tickets_rev_doc_tenant_owner",
+    ): "owner index supports the owner_principal_id FK; composite supports the revision FK",
+    (
+        "app.research_document_download_tickets",
+        "idx_research_document_download_tickets_doc_tenant_owner",
+        "idx_research_document_download_tickets_rev_doc_tenant_owner",
+    ): "each composite supports a separate composite FK (document, revision)",
+    (
+        "app.research_document_revisions",
+        "idx_research_document_revisions_owner",
+        "idx_research_document_revisions_doc_tenant_owner",
+    ): "owner index supports the owner_principal_id FK; composite supports the document FK",
+    (
+        "staging.api_call_ledger",
+        "ix_api_call_ledger_called_at",
+        "ix_api_call_ledger_source_called_at",
+    ): "admin_service reads all sources by called_at; moomoo_ledger and topt_baseline filter source first",
+}
+
+
+def test_no_unexempted_suffix_pair_indexes_in_catalog(migrated_db: str) -> None:
+    """Reject a non-unique index pair where one key is a strict trailing suffix of the other.
+
+    A pair such as (kind, id) and (id) usually means the leading column adds no selectivity.
+    The prefix rule above does not see it. Drop one index or list the pair with a reason.
+    """
+    with psycopg.connect(migrated_db) as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                n.nspname || '.' || t.relname AS tbl,
+                i.relname AS idx_name,
+                am.amname,
+                pg_get_expr(x.indpred, x.indrelid) AS pred,
+                array(
+                    SELECT coalesce(a.attname, pg_get_indexdef(x.indexrelid, k.ord::int, true))
+                    FROM unnest(x.indkey::int2[]) WITH ORDINALITY AS k(attnum, ord)
+                    LEFT JOIN pg_attribute a ON a.attrelid = x.indrelid AND a.attnum = k.attnum AND k.attnum > 0
+                    ORDER BY k.ord
+                ) AS cols
+            FROM pg_index x
+            JOIN pg_class t ON t.oid = x.indrelid
+            JOIN pg_class i ON i.oid = x.indexrelid
+            JOIN pg_namespace n ON n.oid = t.relnamespace
+            JOIN pg_am am ON am.oid = i.relam
+            WHERE n.nspname = ANY(%s) AND NOT x.indisunique
+            ORDER BY 1, 2
+            """,
+            (list(SCHEMAS),),
+        ).fetchall()
+
+    assert len(rows) > 50, f"expected >50 non-unique indexes in pg_catalog, got {len(rows)}"
+
+    by_table: dict[str, list[tuple[str, str, str | None, tuple[str, ...]]]] = defaultdict(list)
+    for tbl, idx_name, am, pred, cols in rows:
+        by_table[tbl].append((idx_name, am, pred, tuple(cols)))
+
+    found: set[tuple[str, str, str]] = set()
+    for tbl, idxs in by_table.items():
+        for short_name, am1, pred1, short in idxs:
+            for long_name, am2, pred2, long in idxs:
+                if am1 == am2 and pred1 == pred2 and len(short) < len(long) and long[-len(short) :] == short:
+                    found.add((tbl, short_name, long_name))
+
+    unexempted = sorted(found - SUFFIX_PAIR_EXEMPTIONS.keys())
+    stale = sorted(SUFFIX_PAIR_EXEMPTIONS.keys() - found)
+    assert not unexempted, "suffix-pair indexes without an exemption reason:\n" + "\n".join(map(str, unexempted))
+    assert not stale, "exemptions that match no index pair; remove them:\n" + "\n".join(map(str, stale))
+
+
 def test_all_non_vocabulary_foreign_keys_have_supporting_index(migrated_db: str) -> None:
     """Every non-vocabulary foreign key must have a leading-column supporting index."""
     with psycopg.connect(migrated_db) as conn:
@@ -305,6 +391,14 @@ def _plan_node_types(plan: dict) -> list[str]:
         (
             "SELECT source_vintage_id FROM raw.capture_source_vintages WHERE raw_fetch_id = 1",
             "idx_capture_vintages_fetch",
+        ),
+        (
+            "SELECT to_id FROM staging.evidence_edges WHERE from_id = 'node-1'",
+            "idx_evidence_edges_from_id",
+        ),
+        (
+            "SELECT from_id FROM staging.evidence_edges WHERE to_id = 'node-1'",
+            "idx_evidence_edges_to_id",
         ),
     ],
 )
