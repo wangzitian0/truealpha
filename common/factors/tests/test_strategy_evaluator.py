@@ -384,21 +384,54 @@ def test_an_excluded_issuer_without_peg_carries_the_reason_of_the_peg_factor() -
     assert decision.peg_consensus_reason_codes != ()
 
 
-def test_a_stale_issuer_gets_no_peg_and_the_exclusion_is_the_reason() -> None:
-    """#1804: an exclusion that distrusts the data of the issuer withholds PEG."""
-    inputs = _peg_inputs()
-    stale = IssuerInput(
+def _aged(inputs: IssuerInput, **knowable_at: datetime) -> IssuerInput:
+    return IssuerInput(
         issuer_id=inputs.issuer_id,
         records=inputs.records,
-        knowable_at=dict.fromkeys(inputs.records, _PEG_CUTOFF - timedelta(days=3650)),
+        knowable_at={**inputs.knowable_at, **knowable_at},
         periodic_records=inputs.periodic_records,
         issuer_class=inputs.issuer_class,
     )
-    decision = _peg_decision(stale)
-    assert decision.exclusion_reason is ExclusionReason.STALE_REQUIRED_INPUT
+
+
+_TEN_YEARS_BEFORE = _PEG_CUTOFF - timedelta(days=3650)
+
+
+@pytest.mark.parametrize("stale_key", ["last_close", "shares_outstanding"])
+@pytest.mark.parametrize("gross_profit", ["40000", "__absent__"])
+def test_a_stale_price_or_share_count_withholds_peg_whatever_the_exclusion(stale_key: str, gross_profit: str) -> None:
+    """#1804: PEG has its own age limit. An issuer without gross profit returns before the age
+    check of the valuation, so the exclusion of the decision cannot stand in for it."""
+    decision = _peg_decision(_aged(_peg_inputs(gross_profit=gross_profit), **{stale_key: _TEN_YEARS_BEFORE}))
     assert decision.peg is None
-    assert decision.peg_reason_codes == ("excluded:stale_required_input",)
-    assert decision.peg_consensus_reason_codes == ("excluded:stale_required_input",)
+    assert decision.peg_rank is None
+    assert decision.peg_reason_codes == ("stale_required_input",)
+    assert decision.peg_consensus_reason_codes == ("stale_required_input",)
+
+
+@pytest.mark.parametrize("gross_profit", ["40000", "__absent__"])
+def test_a_price_known_after_the_cutoff_stops_the_evaluation_whatever_the_exclusion(gross_profit: str) -> None:
+    """#1804: no PEG is computed from an input that the cutoff could not know."""
+    from factors.composite.strategy_evaluator import LookAheadError
+
+    ahead = _aged(_peg_inputs(gross_profit=gross_profit), last_close=_PEG_CUTOFF + timedelta(days=30))
+    with pytest.raises(LookAheadError, match="last_close"):
+        _peg_decision(ahead)
+
+
+def test_an_issuer_without_a_class_still_gets_peg() -> None:
+    """#1804: the issuer class selects the labor-efficiency tree. PEG does not read it."""
+    inputs = _peg_inputs()
+    classless = IssuerInput(
+        issuer_id=inputs.issuer_id,
+        records=inputs.records,
+        knowable_at=inputs.knowable_at,
+        periodic_records=inputs.periodic_records,
+        issuer_class=None,
+    )
+    decision = _peg_decision(classless)
+    assert decision.exclusion_reason is ExclusionReason.MISSING_ISSUER_CLASS
+    assert decision.peg is not None and decision.peg.quantize(Decimal("0.01")) == Decimal("0.50")
 
 
 def test_a_plausibility_refusal_gets_no_peg_and_the_refusal_is_the_reason() -> None:

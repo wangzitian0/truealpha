@@ -435,27 +435,35 @@ def _evaluate_issuer(
     return decision
 
 
-#: An exclusion that distrusts the data of the issuer. It withholds PEG. Each other exclusion
-#: names an input that only the labor-efficiency valuation reads, and PEG does not read it (#1804).
-_DATA_TRUST_EXCLUSIONS = frozenset(
-    {
-        ExclusionReason.STALE_REQUIRED_INPUT,
-        ExclusionReason.STALE_PERIOD,
-        ExclusionReason.BELOW_CONFIDENCE_FLOOR,
-    }
-)
+#: The PEG inputs that carry one current value. The net income is a history: `peg` reads its window.
+_PEG_CURRENT_INPUTS = ("last_close", "shares_outstanding")
 
 
 def _withheld_peg(decision: EvaluatedDecision) -> EvaluatedDecision:
+    """A plausibility refusal distrusts an input of the issuer, and the input can be the price."""
     assert decision.exclusion_reason is not None
     codes = (f"excluded:{decision.exclusion_reason.value}",)
     return replace(decision, peg_reason_codes=codes, peg_consensus_reason_codes=codes)
 
 
-def _with_peg(decision: EvaluatedDecision, issuer: IssuerInput, *, as_of: datetime) -> EvaluatedDecision:
-    """Attach PEG to a decision. PEG reads the price, the share count and the net income only."""
-    if decision.exclusion_reason in _DATA_TRUST_EXCLUSIONS:
-        return _withheld_peg(decision)
+def _with_peg(
+    decision: EvaluatedDecision, issuer: IssuerInput, *, as_of: datetime, maximum_age: timedelta
+) -> EvaluatedDecision:
+    """Attach PEG to a decision (#1804).
+
+    PEG reads the price, the share count and the net income. It does not read an input of the
+    labor-efficiency valuation, so an exclusion of that valuation does not withhold it. PEG has
+    its own look-ahead check and its own age limit, because an excluded issuer returns before
+    the checks of the valuation.
+    """
+    for key, knowable_instant in issuer.knowable_at.items():
+        if knowable_instant > as_of:
+            raise LookAheadError(
+                f"{issuer.issuer_id}: input {key!r} has knowable_at {knowable_instant.isoformat()} > cutoff {as_of.isoformat()}"
+            )
+    if any(as_of - issuer.knowable_at[key] > maximum_age for key in _PEG_CURRENT_INPUTS if key in issuer.knowable_at):
+        codes = (ExclusionReason.STALE_REQUIRED_INPUT.value,)
+        return replace(decision, peg_reason_codes=codes, peg_consensus_reason_codes=codes)
     historical = peg(
         _facts_for(issuer, _input_keys("peg"), as_of=as_of),
         entity_id=issuer.issuer_id,
@@ -578,6 +586,7 @@ def evaluate_cutoff(
             ),
             issuer,
             as_of=cutoff_at,
+            maximum_age=timedelta(days=definition.eligibility.maximum_input_age_days),
         )
         for issuer in issuers
     ]

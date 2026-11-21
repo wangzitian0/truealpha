@@ -23,6 +23,7 @@ import uuid
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from datetime import date, timedelta
+from decimal import Decimal
 from pathlib import Path
 
 import psycopg
@@ -999,7 +1000,8 @@ REASON_INVARIANT = "unavailable-means-a-reason"
 def test_an_unavailable_node_value_without_a_reason_fails_and_names_the_node(
     conn: psycopg.Connection, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """#1804: an unavailable node value with a reason passes. One with empty `reason_codes` fails."""
+    """#1804: an unavailable node value with a reason passes. One with empty `reason_codes` fails.
+    A `low_confidence` value carries a value and needs no reason."""
     issuer = SeededIssuer(
         "issuer:reasoned", ("listing:xnas:rsn0",), True, False, ("missing_gross_profit",), date(2025, 12, 31)
     )
@@ -1008,14 +1010,19 @@ def test_an_unavailable_node_value_without_a_reason_fails_and_names_the_node(
     assert code == 0, output
     assert f"ok       {REASON_INVARIANT}: 1 row(s) examined" in output
 
-    conn.execute(
+    insert = (
         "insert into mart.metric_node_values (run_id, issuer_id, node_id, node_key, period, period_tag, value, unit,"
         " availability_status, reason_codes, source_evidence_status, factor_validation_status, confidence, tree_id,"
-        " tree_version, tree_sha256) values (%s, 'issuer:reasoned', '7f4b0c1e-3d0a-5c57-9d59-1f0d6f3c1804'::uuid,"
-        " 'peg_consensus', '2026-03-31', 'cutoff', null, 'ratio', 'unavailable', '{}', 'degraded', 'not_evaluated',"
-        " null, 'ef13b940-b695-5f5f-846a-a36face5cc3e'::uuid, 'v1', %s)",
-        (run_id, SEED_SHA256),
+        " tree_version, tree_sha256) values (%s, 'issuer:reasoned', %s::uuid, %s, '2026-03-31', 'cutoff', %s, 'ratio',"
+        " %s, '{}', 'degraded', 'not_evaluated', %s, 'ef13b940-b695-5f5f-846a-a36face5cc3e'::uuid, 'v1', %s)"
     )
+    low_node, peg_node = "7f4b0c1e-3d0a-5c57-9d59-1f0d6f3c1803", "7f4b0c1e-3d0a-5c57-9d59-1f0d6f3c1804"
+    conn.execute(insert, (run_id, low_node, "peg_low", Decimal("1.5"), "low_confidence", Decimal("0.4"), SEED_SHA256))
+    code, output = _parity_verdict(conn, capsys, REASON_INVARIANT)
+    assert code == 0, output
+    assert f"ok       {REASON_INVARIANT}: 1 row(s) examined" in output
+
+    conn.execute(insert, (run_id, peg_node, "peg_consensus", None, "unavailable", None, SEED_SHA256))
     code, output = _parity_verdict(conn, capsys, REASON_INVARIANT)
     assert code == 1, output
     assert f"{REASON_INVARIANT}: 1 violation(s)" in output

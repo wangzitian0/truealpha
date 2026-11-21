@@ -278,7 +278,7 @@ _TEMPLATES: tuple[Invariant, ...] = (
     Invariant(
         id="unavailable-means-a-reason",
         claim=(
-            "a node value of a scheduled head that is not `available` names a reason — "
+            "an `unavailable` or `not_applicable` node value of a scheduled head names a reason — "
             "a reader cannot act on an absence that has no cause (#1804)"
         ),
         violations=f"""
@@ -286,7 +286,7 @@ _TEMPLATES: tuple[Invariant, ...] = (
             select heads.universe_id, mv.run_id, mv.issuer_id, mv.node_key, mv.availability_status
             from heads
             join mart.metric_node_values mv on mv.run_id = heads.run_id
-            where mv.availability_status <> 'available'
+            where mv.availability_status in ('unavailable', 'not_applicable')
               and cardinality(mv.reason_codes) = 0
             order by 1, 2, 3, 4
         """,
@@ -295,7 +295,7 @@ _TEMPLATES: tuple[Invariant, ...] = (
             select count(*)
             from heads
             join mart.metric_node_values mv on mv.run_id = heads.run_id
-            where mv.availability_status <> 'available'
+            where mv.availability_status in ('unavailable', 'not_applicable')
         """,
     ),
     Invariant(
