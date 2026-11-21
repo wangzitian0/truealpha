@@ -450,7 +450,10 @@ def _is_settled_session(knowable_at: datetime, settled: date) -> bool:
 def _satisfy_from_recent_observations(
     connection: psycopg.Connection[Any], plan: PlannedRun, *, cutoff: datetime
 ) -> frozenset[str]:
-    """Satisfy obligations from committed observations within `_REUSE_MAX_AGE` (#635, #788, #885)."""
+    """Satisfy obligations from committed observations within `_REUSE_MAX_AGE` (#635, #788, #885).
+
+    A reused observation carries the issuer, instrument and listing of the run that binds it (#1798).
+    """
     coordinates_param = json.dumps(
         [
             {"subject_id": subject_id, "issuer_id": issuer_id, "instrument_id": instrument_id, "listing_id": listing_id}
@@ -512,6 +515,8 @@ def _satisfy_from_recent_observations(
             join staging.capture_observation_payloads anchor_payload
               on anchor_payload.observation_id = o.observation_id
              and anchor_payload.normalized_payload->>'listing_id' = m.listing_id
+             and anchor_payload.normalized_payload->>'issuer_id' = m.issuer_id
+             and anchor_payload.normalized_payload->>'instrument_id' = m.instrument_id
              and anchor_payload.normalized_payload->>%(unavailable_key)s is distinct from 'true'
         ), bound_set as (
             select a.target_obligation_id, a.semantic_type, a.anchor_vintage_id, a.knowable_at,
