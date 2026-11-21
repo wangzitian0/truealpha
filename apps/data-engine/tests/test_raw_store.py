@@ -1,5 +1,5 @@
 """raw_store integration: needs BOTH Postgres and reachable object storage
-(make runtime-up locally, service containers in CI) — skips cleanly otherwise.
+(CI service containers run it) — skips cleanly otherwise.
 Object writes are content-addressed and harmless to a shared dev bucket; the
 pointer rows ride a rolled-back transaction."""
 
@@ -20,7 +20,7 @@ def conn():
     try:
         c = psycopg.connect(settings.database_url, connect_timeout=3)
     except psycopg.OperationalError:
-        skip_or_fail("no reachable Postgres (make runtime-up && make db-migrate)")
+        skip_or_fail("no reachable Postgres; CI runs the integration tests")
     yield c
     c.rollback()
     c.close()
@@ -32,7 +32,7 @@ def s3(conn):
     try:
         store.ensure_bucket()
     except Exception:
-        skip_or_fail("no reachable object storage (make runtime-up)")
+        skip_or_fail("no reachable object storage; CI runs the integration tests")
     return store
 
 

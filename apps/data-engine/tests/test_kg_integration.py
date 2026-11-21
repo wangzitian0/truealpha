@@ -1,5 +1,5 @@
-"""Integration tests against a real Postgres (make runtime-up / make db-migrate,
-or the CI service container). Skip cleanly when none is reachable. Every test
+"""Integration tests against a real Postgres (the CI service container runs them).
+Skip cleanly when none is reachable. Every test
 runs inside one never-committed transaction with uuid-suffixed ids, so a dev
 database with real universe data is never polluted or depended on.
 
@@ -31,7 +31,7 @@ def conn():
     try:
         c = psycopg.connect(settings.database_url, connect_timeout=3)
     except psycopg.OperationalError:
-        skip_or_fail("no reachable Postgres (make runtime-up && make db-migrate)")
+        skip_or_fail("no reachable Postgres; CI runs the integration tests")
     yield c
     c.rollback()
     c.close()

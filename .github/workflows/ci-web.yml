@@ -103,8 +103,7 @@ jobs:
       # parse is one rename away from keying on a constant, and a cache key
       # that never changes is a cache that serves a stale browser forever.
       # Requires `actions: write` on the caller's web job — without it this
-      # restores, never saves, and reports success while doing nothing
-      # (test_anything_that_caches_can_actually_save).
+      # restores, never saves, and reports success while doing nothing.
       - name: Restore chromium
         id: chromium_cache
         uses: actions/cache@v4

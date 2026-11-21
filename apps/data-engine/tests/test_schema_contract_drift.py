@@ -55,7 +55,7 @@ def columns():
     try:
         conn = psycopg.connect(settings.database_url, connect_timeout=3)
     except psycopg.OperationalError:
-        skip_or_fail("no reachable Postgres (make runtime-up && make db-migrate)")
+        skip_or_fail("no reachable Postgres; CI runs the integration tests")
     rows = conn.execute(
         """
         select column_name, is_nullable, column_default
@@ -123,7 +123,7 @@ def test_entity_relations_carries_both_time_axes():
     try:
         conn = psycopg.connect(settings.database_url, connect_timeout=3)
     except psycopg.OperationalError:
-        skip_or_fail("no reachable Postgres (make runtime-up && make db-migrate)")
+        skip_or_fail("no reachable Postgres; CI runs the integration tests")
     rows = conn.execute(
         """
         select column_name, column_default

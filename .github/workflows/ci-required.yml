@@ -73,11 +73,8 @@ jobs:
               # skipped job as success — so the gate tooling could merge with
               # zero tests executed (A4 review finding, #673).
               - 'tools/**'
-              # Same class, one directory over, exposed by #689's own checks:
-              # test_ci_workflows.py pins the SHAPE of deploy-release,
-              # delivery-report, issue-close-guard and mutation-reproof — and a
-              # PR editing those workflows matched no python filter, so the
-              # tests that pin them were exactly the ones that did not run.
+              # Same class, one directory over: test_ci_workflows.py reads the
+              # workflows, so a PR that edits a workflow must run it.
               - '.github/workflows/**'
               - 'apps/data-engine/**'
               - 'apps/llm-service/**'
@@ -91,24 +88,16 @@ jobs:
               - '.github/workflows/ci-python.yml'
               - '.github/workflows/ci-required.yml'
               - '.github/actions/**'
-              # dagster_liveness below must stay a SUBSET of this list (pinned in
-              # test_ci_workflows.py): otherwise a docker-compose-only change can set
+              # dagster_liveness below must stay a SUBSET of this list: otherwise a docker-compose-only change can set
               # dagster_liveness true while ci-python.yml — and the liveness job
               # inside it — never runs at all, since `python` below gates the call.
               - 'docker-compose.yml'
-              # What the shared rule source publishes, all of it read by
-              # test_ci_workflows.py: skills/ is a scan root, .claude/, .agents/
-              # and .ws-publish/ are excluded only on premises asserted there, and
-              # AGENTS.md is a root file. #1018 touched
-              # only such paths, matched no filter, and merged with that file red
-              # on main.
-              - 'skills/**'
+              # What the shared rule source publishes. #1018 touched only such paths,
+              # matched no filter, and merged with a red test on main.
               - '.claude/**'
               - '.agents/**'
               - '.ws-publish/**'
-              # #1412: a document starts this lane only when a test reads it, and
-              # test_a_document_selects_the_lanes_that_read_it_and_no_other derives
-              # the readers from the tests. Every top-level markdown file is read:
+              # #1412: a document starts this lane only when a test reads it. Every top-level markdown file is read:
               # by the reintroduction sweep, or by name (init.md, README.md,
               # AGENTS.md). Three files under docs/ are read by name. Other files
               # under docs/ start no lane.

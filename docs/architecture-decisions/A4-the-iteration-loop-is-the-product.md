@@ -52,17 +52,20 @@ matched nothing after a formatter pass (each discovered 10–40 min later), 2
 red-case sessions run on a branch that lacked the source change under test, and
 2 tags cut before the PR they described had actually merged.
 
-## Decision: three latency budgets, each tier catches its own class
+## Decision: each stage catches its own class
 
-| tier | budget | must catch |
-|---|---|---|
-| pre-push (laptop, scoped) | ≤ 60 s | unit tests of the **changed module only**, plus instant static checks (ruff on touched files, YAML parse). Nothing heavier runs on the laptop — it is measurably slower than the runners and thermally limited; full pytest sweeps, data-engine, browser suites, docker and mypy-wide all belong to the tiers below. |
-| remote inner loop | ≤ 2 min | **runtime-shape**: proxy topology, effective entrypoint, migration replay over seeded rows, page-renders-field — as a CI job and as a VPS-side target (`make parity-remote`, executing over SSH where docker already lives), never on the laptop |
-| PR CI | budget: Workspace tier, `Pipeline time contract` | everything the inner loops catch, plus cross-package and the browser walk |
-| merge → prod | ≤ 20 min | only environment-exclusive truths: real data, infra2 dispatch, deployed walk |
-| standing probes | ≤ 24 h | drift between repo assumptions and runtime truth |
+The stages and their time budgets are the infra2-sdk hook grid (5 stages: Local, CI,
+Preview, Staging, Prod; 3 phases: pre, operation, post). `stages.yaml` of infra2-sdk is the
+one source of each budget. This document states no budget.
 
-A defect class sitting in a slower tier than its budget row is a bug in the
+| stage | must catch |
+|---|---|
+| Local pre | static checks on the changed files and the focused tests of the change, in one process (`make check FILES=<test paths>`). Full pytest runs, data-engine, browser suites, container stacks and whole-repository mypy do not run on the laptop. |
+| CI | the full suites, whole-repository type checks, cross-package tests, the browser walk and **runtime-shape**: proxy topology, effective entrypoint, migration replay over seeded rows, page-renders-field |
+| Preview, Staging, Prod | only environment-exclusive truths: real data, infra2 dispatch, deployed walk |
+| standing probes | drift between repo assumptions and runtime truth |
+
+A defect class sitting in a later stage than its row is a bug in the
 pipeline, tracked like any other.
 
 ## Changes, ordered by leverage
@@ -71,10 +74,8 @@ pipeline, tracked like any other.
 app containers the way infra2 actually runs them: the same entrypoint contract
 (imported from infra2 as a versioned file, not re-guessed), a minimal Traefik in
 front that strips `/api` and terminates TLS, and Postgres migrated by the real
-chain then seeded with production-shaped rows. It runs in two places and neither
-is the laptop: a CI job, and the VPS docker engine over SSH (`make
-parity-remote`) — the same host where the isolated `probe615` databases already
-proved this pattern during the #615 and job_name incidents. Budget ≤ 90 s.
+chain then seeded with production-shaped rows. It runs as a CI job, not on the
+laptop.
 This single harness would have caught, locally, every one of the four redirect
 releases and both migration crash-loops — the two most expensive defect families
 of the sprint. Cross-repo ask: infra2 publishes its entrypoint/compose contract
@@ -103,22 +104,12 @@ package's tests serially (259 s). Split into a fast lint+types job (~40 s) and
 per-package test jobs in parallel (pole becomes data-engine ~150 s). PR wall
 drops from ~6 to ~3 min. Pure mechanics, no contract touched.
 
-**D4 — Promote detection.** mutation-reproof runs weekly; it costs ~1–2 min, so
-run it path-filtered on PRs that touch a guard or a guarded file — detection
-latency for a dead guard drops from 7 days to minutes. Output invariants run
-against production daily; also run them against each environment **in the deploy
-run itself, right after the walk** (+~10 s) so a data-shape regression surfaces
-at deploy time, not next morning.
+**D4 — Promote detection.** Output invariants run against production daily;
+also run them against each environment **in the deploy run itself, right after
+the walk** (+~10 s) so a data-shape regression surfaces at deploy time, not next
+morning.
 
-**D5 — Script the release.** `tools/cut_release.sh`: assert the named PRs are <!-- doc-drift: history -->
-MERGED and their review threads resolved, assert main is green at HEAD, tag,
-push, dispatch staging, wait, probe, dispatch prod. This mechanizes exactly the
-two premature-tag mistakes made by hand that sprint, and turns ~15 min of
-hand-stepping into one command. Default cadence becomes batched — a tag per
-day or on demand, not a tag per PR; 11 tags in 4 days each paid the full
-pipeline. Break-glass stays: an incident label releases a single PR immediately.
-
-**D6 — Agent-loop mechanics** (no approval needed, self-imposed): every scripted
+**D5 — Agent-loop mechanics** (no approval needed, self-imposed): every scripted
 edit is followed by a non-empty-diff assertion; a red case first asserts the
 symbol under test exists on the current branch; `tools/runtime_truth.py` <!-- doc-drift: history --> prints
 each deployed container's effective entrypoint/command/image so "what actually
@@ -134,7 +125,7 @@ real time that sprint.
 
 ## Sequencing
 
-1. D3, D4, D5, D6 — no contract changes; immediate.
-2. D1 — harness in-repo behind `make parity`; the infra2 entrypoint-contract
-   artifact is the one external dependency.
+1. D3, D4, D5 — no contract changes; immediate.
+2. D1 — harness in-repo; the infra2 entrypoint-contract artifact is the one
+   external dependency.
 3. D2 — last; contract change, both-sides sign-off.

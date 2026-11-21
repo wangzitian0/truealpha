@@ -109,9 +109,6 @@ jobs:
           S3_BUCKET: truealpha-raw
           TRUEALPHA_REQUIRE_RUNTIME: "1"
 
-  # A4 B1 (#673): this was ONE 207 s job — 168 s of pytest — and the pole of
-  # every PR's CI wall (run 33361977933; next-slowest job 163 s). The tree has
-  # no conftest.py and every fixture is defined in the file that uses it, so it
   # Run data-engine tests across deterministic index-strided shards.
   # fail-fast is off so one red shard does not hide the other lanes.
   #
@@ -172,10 +169,7 @@ jobs:
           fi
           echo "shard ${{ matrix.shard }}: ${#FILES[@]} files"
           # --durations-min=0 as well as --durations=0: the min defaults to 5 ms,
-          # so an all-fast file prints NOTHING and a harvest cannot tell it from a
-          # file that did not exist yet. Both are log lines only, no time cost, and
-          # keeping them on means ANY green run can refresh the shard weights —
-          # which is what keeps them from going stale.
+          # so an all-fast file prints nothing. Both are log lines only, no time cost.
           # #1412 L1: through the make target; FILES is this shard.
           PYTEST_ADDOPTS="--durations=0 --durations-min=0" make test-python FILES="${FILES[*]}"
         env:
@@ -201,12 +195,12 @@ jobs:
   # #855 A4: this job was 151-160s (now ~110s after #871's 75s window) of every PR's
   # and every main push's critical path, for a regression class unrelated to ~95% of
   # PR diffs. It is unconditional off `pull_request` -- a push to main, `merge_group`,
-  # `workflow_dispatch`, and this workflow's own nightly `schedule` -- and gated on a
+  # `workflow_dispatch` -- and gated on a
   # PR by ci-required.yml's narrow `dagster_liveness` path filter (the composition
   # root, its lanes, the image, docker-compose.yml, this file). Owner-accepted trade-off
   # (2026-09-16): a green `ci-required` on a PR the filter does not match no longer
   # proves the #454 class stays fixed on THAT diff -- it proves everything ELSE, and the
-  # #454 class is still caught within a day, on main or the nightly run, for every PR.
+  # #454 class is still caught on main, for every PR.
   dagster-code-server-liveness:
     if: inputs.dagster_liveness_required
     runs-on: ubuntu-latest
@@ -296,8 +290,7 @@ jobs:
       # the extra 50s was margin nobody had sized, and it made this job the pole of
       # every PR's and every main push's critical path at 2.5 min (runs 35051480691,
       # 35051670287). If the cadence is ever re-measured longer, raise this number
-      # and the comment above together: test_ci_workflows.py holds the window above
-      # the cadence the job documents, and refuses a drift back toward two cycles.
+      # and the comment above together.
       - name: Observe for 75s (one full old ~68-70s churn cycle, plus margin) and assert no heartbeat churn
         run: |
           sleep 75

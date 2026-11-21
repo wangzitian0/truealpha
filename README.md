@@ -22,14 +22,13 @@ db                  SQL     raw / staging / mart / dagster / app schemas + mart_
 ## Quickstart
 
 ```bash
-make install        # uv sync + bun install
-make runtime-up     # Postgres/KG + S3 (RustFS) with schemas/bucket initialized
+make install        # uv sync + bun install + per-commit hook
 cp .env.example .env  # then set SEC_USER_AGENT
-make sample         # capture the checked-in SEC reconnaissance corpus
 make check FILES=<test paths>  # static checks on the changed files + the named tests; CI runs the full suite
 ```
 
-`make stack-up` additionally builds and starts Web + LLM locally. Application
+CI runs the integration tests against Postgres and S3. `make runtime-up` and
+`make stack-up` start the local stack only when a task needs one. Application
 code consumes only `DATABASE_URL` and the S3-compatible `S3_*` contract; local
 Compose, GitHub CI, and infra2 may provide different backends behind it.
 
@@ -38,7 +37,7 @@ row-complete, versioned [data-quality report](docs/datahub-quality-report.md). T
 report preserves missing and conflicted requested cells in its denominator and is the
 machine-readable input to later mart/dashboard presentation.
 
-Requires: [uv](https://docs.astral.sh/uv/), [Bun](https://bun.sh), Docker.
+Requires: [uv](https://docs.astral.sh/uv/), [Bun](https://bun.sh). The local stack also requires Docker.
 
 ## DataHub Demand
 
