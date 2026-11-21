@@ -8,8 +8,12 @@ from data_engine.datahub.fetch_key import FetchKey
 from data_engine.sources import gateway
 
 MF_TICKERS_URL = "https://www.sec.gov/files/company_tickers_mf.json"
+# EDGAR accepts only these page sizes. Since 2026-11 it answers 400 to any other `count` (`count=1` failed).
+EDGAR_BROWSE_COUNTS = (10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 500)
+EDGAR_BROWSE_COUNT = EDGAR_BROWSE_COUNTS[0]
 BROWSE_URL = (
-    "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK={series_id}&type=NPORT-P&count=1&output=atom"
+    "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK={series_id}&type=NPORT-P"
+    f"&count={EDGAR_BROWSE_COUNT}&output=atom"
 )
 ARCHIVE_URL = "https://www.sec.gov/Archives/edgar/data/{cik}/{accession}/primary_doc.xml"
 
@@ -61,12 +65,24 @@ def latest_nport_accession(client, series_id: str) -> tuple[str, str]:
         "nport.latest_nport_accession",
         FetchKey("nport", "browse", f"series:{series_id}", gateway.utc_day()),
     )
-    atom = ET.fromstring(body)
-    acc = atom.findtext(".//a:entry/a:content/a:accession-number", None, _ATOM_NS)
-    filing_date = atom.findtext(".//a:entry/a:content/a:filing-date", None, _ATOM_NS)
-    if acc is None or filing_date is None:
+    newest = newest_filing(body)
+    if newest is None:
         raise LookupError(f"no NPORT-P filing (with a filing date) found for series {series_id}")
-    return acc.replace("-", ""), filing_date
+    return newest
+
+
+def newest_filing(atom_body: bytes) -> tuple[str, str] | None:
+    """Return (accession without dashes, filing date) of the newest entry of an EDGAR browse feed."""
+    filings = [
+        (filing_date, accession.replace("-", ""))
+        for entry in ET.fromstring(atom_body).iterfind(".//a:entry", _ATOM_NS)
+        if (accession := entry.findtext("a:content/a:accession-number", None, _ATOM_NS))
+        and (filing_date := entry.findtext("a:content/a:filing-date", None, _ATOM_NS))
+    ]
+    if not filings:
+        return None
+    filing_date, accession = max(filings)
+    return accession, filing_date
 
 
 def fetch_nport_xml(client, cik: int, accession: str) -> bytes:

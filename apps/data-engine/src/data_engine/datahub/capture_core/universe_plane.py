@@ -24,7 +24,7 @@ from data_engine.datahub._helpers import execute_many
 from data_engine.datahub.capture_core.concept_mapping import publish_governed_object
 from data_engine.datahub.capture_core.universe_corpus import TOPT_CORPUS_FILENAME, corpus_list_version, load_corpus
 from data_engine.datahub.fetch_key import FetchKey
-from data_engine.sources import gateway
+from data_engine.sources import gateway, nport
 
 log = logging.getLogger(__name__)
 
@@ -357,7 +357,7 @@ def _refresh_nport_constituents(
     http: Any = None,
 ) -> int:
     from data_engine.config import settings as _settings
-    from data_engine.sources import nport, sec
+    from data_engine.sources import sec
 
     assert source.nport_ticker is not None
     fetched_at = datetime.now(UTC)
@@ -460,7 +460,8 @@ def _parse_edgar_cik(body: bytes) -> int | None:
 
 def _resolve_cik_via_edgar(ticker: str, *, user_agent: str) -> int | None:
     status, body = _get(
-        f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&ticker={ticker}&type=10-K&output=atom&count=1",
+        "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany"
+        f"&ticker={ticker}&type=10-K&output=atom&count={nport.EDGAR_BROWSE_COUNT}",
         headers={"User-Agent": user_agent, "Accept": "application/atom+xml"},
         identity=FetchKey(DataSource.SEC.value, "browse-edgar", f"symbol:{ticker}", gateway.utc_day()),
         source=DataSource.SEC.value,
