@@ -120,3 +120,17 @@ def test_ssot_guard_zero_duplicate_in_memory_object_stores() -> None:
         f"Found duplicate _InMemoryObjectStore implementations in {violations}. "
         "Import InMemoryRawObjectStore from truealpha_runtime.testing instead."
     )
+
+
+def test_a_named_database_that_exists_is_not_dropped() -> None:
+    """#1803: `name` sets the exact name and `apply_chain=False` gives an empty database.
+    A second call with a name that exists must fail and must leave that database in place."""
+    with isolated_test_database("owner_check", apply_chain=False) as first:
+        with pytest.raises(psycopg.errors.DuplicateDatabase):
+            with isolated_test_database(name=first.name, apply_chain=False):
+                pass
+        with psycopg.connect(first, connect_timeout=3) as conn:
+            row = conn.execute(
+                "select count(*) from information_schema.tables where table_schema in ('raw', 'staging', 'mart')"
+            ).fetchone()
+            assert row is not None and row[0] == 0, "apply_chain=False gave a database with the chain applied"
