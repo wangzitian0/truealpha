@@ -98,7 +98,7 @@ jobs:
             exit 1
           fi
           echo "shard ${{ matrix.shard }}: ${#FILES[@]} files"
-          # #1412 L1: through the make target the laptop runs; FILES is this shard.
+          # #1412 L1: through the make target; FILES is this shard.
           PYTEST_ADDOPTS="--durations=0 --durations-min=0" make test-python FILES="${FILES[*]}"
         env:
           ENVIRONMENT: ci
@@ -176,7 +176,7 @@ jobs:
           # file that did not exist yet. Both are log lines only, no time cost, and
           # keeping them on means ANY green run can refresh the shard weights —
           # which is what keeps them from going stale.
-          # #1412 L1: through the make target the laptop runs; FILES is this shard.
+          # #1412 L1: through the make target; FILES is this shard.
           PYTEST_ADDOPTS="--durations=0 --durations-min=0" make test-python FILES="${FILES[*]}"
         env:
           ENVIRONMENT: ci

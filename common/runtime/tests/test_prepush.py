@@ -150,7 +150,7 @@ def test_the_local_entries_never_run_the_whole_repository() -> None:
     # `FILES=` on the command line: CI runs this test inside `make test-python FILES=<shard>`,
     # and make exports that value to a child make.
     refused = subprocess.run(
-        ["make", "test-python", "FILES="], capture_output=True, text=True, cwd=REPO_ROOT, check=False
+        ["make", "test-python", "FILES="], capture_output=True, text=True, cwd=REPO_ROOT, check=False, timeout=30
     )
     assert refused.returncode != 0, "make test-python with no FILES ran instead of refusing"
     assert "set FILES=" in refused.stderr
