@@ -60,12 +60,12 @@ create table if not exists staging.api_call_ledger (
  cost numeric default 1 not null,
  capacity_window_id text,
  run_key text,
- fetch_key text,
  attempt smallint,
  provider_code text,
  request_params jsonb,
  completion_tokens integer,
  reasoning_tokens integer,
+ fetch_key text,
  repeat_reason text,
  constraint api_call_ledger_pkey PRIMARY KEY (id),
  constraint api_call_ledger_cost_check CHECK ((cost >= (0)::numeric)),
@@ -1536,23 +1536,6 @@ execute $vc$create or replace view staging.accepted_ruleset_head as
    FROM staging.accepted_rulesets
   ORDER BY accepted_rulesets.kind, accepted_rulesets.sequence DESC$vc$;
 end if; end $$;
-do $$ begin if to_regclass('staging.entity_alias_resolution') is null then
-execute $vc$create or replace view staging.entity_alias_resolution as
- SELECT alias.alias_id,
-    alias.scheme,
-    alias.value,
-    alias.entity_id AS holder_entity_id,
-    staging.entity_survivor(alias.entity_id, 'infinity'::timestamp with time zone) AS entity_id,
-    entity.kind,
-    alias.valid_from,
-    staging.entity_alias_valid_to(alias.alias_id, 'infinity'::timestamp with time zone) AS valid_to,
-    alias.transaction_time,
-    alias.source,
-    alias.method,
-    alias.confidence
-   FROM staging.entity_aliases alias
-     JOIN staging.entities entity ON entity.entity_id = alias.entity_id$vc$;
-end if; end $$;
 do $$ begin if to_regclass('staging.analyst_rating_events') is not null then drop table staging.analyst_rating_events; end if; end $$;
 do $$ begin if not exists (select 1 from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'staging' and c.relname = 'entity_backfill_plan' and md5(pg_get_viewdef(c.oid)) = '4fd2a143d605c541e78246cea4279cc5') then
 execute $vc$create or replace view staging.entity_backfill_plan as
@@ -1985,48 +1968,6 @@ select 'relation',
            else 'planned'
        end
 from relation_state$vc$;
-end if; end $$;
-do $$ begin if to_regclass('staging.entity_graph_edges') is null then
-execute $vc$create or replace view staging.entity_graph_edges as
- SELECT relation.relation_id,
-    relation.relation_type,
-    relation_type.is_identity,
-    relation.from_entity_id,
-    relation.to_entity_id,
-    relation.valid_from,
-    staging.entity_relation_valid_to(relation.relation_id, 'infinity'::timestamp with time zone) AS valid_to,
-    relation.transaction_time,
-    relation.confidence,
-    relation.source,
-    relation.attributes
-   FROM staging.entity_relations relation
-     JOIN staging.entity_relation_types relation_type USING (relation_type)
-  WHERE NOT (EXISTS ( SELECT 1
-           FROM staging.entity_retractions retraction
-          WHERE retraction.relation_id = relation.relation_id AND (relation_type.is_identity OR retraction.valid_to <= relation.valid_from)))$vc$;
-end if; end $$;
-do $$ begin if to_regclass('staging.entity_graph_nodes') is null then
-execute $vc$create or replace view staging.entity_graph_nodes as
- SELECT entity.entity_id,
-    entity.kind,
-    ( WITH RECURSIVE lineage(kind, depth) AS (
-                 SELECT entity.kind,
-                    0 AS "?column?"
-                UNION ALL
-                 SELECT parent.parent_kind,
-                    lineage_1.depth + 1
-                   FROM lineage lineage_1
-                     JOIN staging.entity_kinds parent ON parent.kind = lineage_1.kind
-                  WHERE parent.parent_kind IS NOT NULL AND lineage_1.depth < 16
-                )
-         SELECT array_agg(lineage.kind ORDER BY lineage.depth) AS array_agg
-           FROM lineage) AS labels,
-    staging.entity_survivor(entity.entity_id, 'infinity'::timestamp with time zone) AS survivor_entity_id,
-    COALESCE(( SELECT jsonb_agg(jsonb_build_object('scheme', current.scheme, 'value', current.value, 'valid_from', current.valid_from, 'valid_to', current.valid_to) ORDER BY current.scheme, current.value, current.valid_from) AS jsonb_agg
-           FROM staging.entity_alias_resolution current
-          WHERE current.holder_entity_id = entity.entity_id AND (current.valid_to IS NULL OR current.valid_to > current.valid_from)), '[]'::jsonb) AS aliases,
-    entity.minted_at
-   FROM staging.entities entity$vc$;
 end if; end $$;
 
 do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'staging.accepted_rulesets'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = '30ab83bc19361d65b937ab567f44c01e') then drop trigger if exists reject_mutation on staging.accepted_rulesets; CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON staging.accepted_rulesets FOR EACH ROW EXECUTE FUNCTION raw.reject_mutation(); end if; end $$;

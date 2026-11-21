@@ -250,9 +250,6 @@ than guessing.
   - Returns null when nothing matches.
   - Both times are required. A default of "now" would let a replay see the future.
 - `staging.entity_survivor(entity_id, known_at) → uuid`: where an entity's identity continues.
-- `staging.entity_alias_resolution`: every alias with its effective end and current survivor.
-  Use it for set-based joins.
-- `staging.entity_graph_nodes` and `staging.entity_graph_edges`: the export views (§8).
 
 **Python** (PR-3, in `data_engine.datahub`):
 
@@ -451,24 +448,11 @@ and CIK entities separately and held back 26 `listed_as` claims. After the N-POR
 rows were loaded, the next run added 25 `same_as` and `superseded_by` pairs and the 13 missing
 edges, and changed no alias row.
 
-## 8. Exports: graph database and embedding store
+## 8. Exports: embedding store
 
-**Graph database.**
-
-- Nodes come from `staging.entity_graph_nodes`:
-  - `entity_id` is the node key;
-  - labels come from the kind path (`issuer`, `organization`, `agent`, `entity`);
-  - `aliases` holds the current alias list;
-  - `survivor_entity_id` points to the survivor.
-- Edges come from `staging.entity_graph_edges`:
-  - `relation_id` is the edge key;
-  - each edge carries its type, `valid_from`, `valid_to`, `transaction_time`, `confidence`,
-    `source` and `attributes`;
-  - identity edges are flagged.
-- A loader upserts by UUID (`MERGE (n {id: $entity_id})`) and never deletes: a retracted
-  edge leaves the view, and the loader closes it with `valid_to`.
-- Point-in-time graph queries filter on `transaction_time` and validity, the same way the SQL
-  resolver does.
+No graph-database export exists. The export views `staging.entity_graph_nodes`,
+`staging.entity_graph_edges` and `staging.entity_alias_resolution` had no reader and were
+retired in #1699.
 
 **Embedding store.**
 

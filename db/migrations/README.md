@@ -10,18 +10,19 @@ Two forms are legal; `common/runtime/tests/test_migration_chain.py` enforces bot
 
 | form | status | example |
 |---|---|---|
-| `00NN_<slug>.sql` | frozen as the exact 45-file list in the test, no new files | `0048_per_isin_ticker_crosswalk.sql` |
-| `YYYYMMDDTHHMM_<lane>_<slug>.sql` | every new migration | `20260905T0930_datahub_holdings_vintage.sql` |
+| `000N_<schema>.sql` | the squashed baseline, frozen to `0001_raw.sql` .. `0004_app.sql` (#1726, #1775) | `0002_staging.sql` |
+| `YYYYMMDDTHHMM_<lane>_<slug>.sql` | every new migration | `20261120T1252_runtime_retire_entity_graph_views.sql` |
 
-* The timestamp is the UTC minute you created the file (`date -u +%Y%m%dT%H%M`).
+* The timestamp is the UTC minute you created the file (`date -u +%Y%m%dT%H%M`). It must
+  not precede the newest timestamp on `origin/main` (#1774).
 * `<lane>` is your workspace name from the PR title prefix: `datahub`, `factors`,
   `bt`, `web`, `llm`, `runtime`.
 * Lower-case `a-z0-9_` only in the slug.
 
-Why: four lanes added 47 migrations in the repository's first sixty days and took
-"the next number" at the same time seven times (`0019 0029 0030 0031 0037 0039 0040`,
-frozen in the test as `KNOWN_COLLISIONS`). A timestamp plus a lane name cannot
-collide, and because `"2"` sorts after `"0"` every timestamped file applies after the
-whole legacy chain, so nothing already deployed reorders (#576, #731).
+No ledger records which files ran. Every boot replays the whole chain, so each statement
+must be idempotent and guarded by a catalog check (`to_regclass(...)`), and a drop must
+run only while its object exists (`test_migration_boot_locks.py`).
 
-Never rename a migration that has reached staging or production.
+A timestamped file can fold into the baseline after every environment carries its effect.
+Move the statement into the baseline file, delete the timestamped file, and keep the
+resulting definition identical, so `make db-check` shows no difference.

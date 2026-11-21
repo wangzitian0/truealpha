@@ -144,7 +144,7 @@ def test_no_runtime_python_code_queries_retired_kg_tables() -> None:
     for root_name in ("apps", "common"):
         root = REPO_ROOT / root_name
         for path in root.rglob("*.py"):
-            if "tests" in path.parts or path.name == "backfill_slice2_kg_to_uuid.py":
+            if "tests" in path.parts:
                 continue
             text = path.read_text(encoding="utf-8", errors="ignore")
             if RETIRED_PATTERN.search(text):

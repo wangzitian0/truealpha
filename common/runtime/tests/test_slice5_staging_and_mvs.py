@@ -61,7 +61,6 @@ def test_analyst_rating_events_retired_from_runtime_and_schema(slice5_db: str) -
         Path(__file__).resolve(),
         (REPO_ROOT / "common/runtime/tests/test_slice2_kg_retirement.py").resolve(),
         (REPO_ROOT / "apps/data-engine/tests/test_analyst_ratings.py").resolve(),
-        (REPO_ROOT / "apps/data-engine/scripts/backfill_slice2_kg_to_uuid.py").resolve(),
     }
     offenders: list[str] = []
     for root in (REPO_ROOT / "apps", REPO_ROOT / "common"):

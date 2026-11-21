@@ -209,32 +209,3 @@ def test_the_moomoo_reads_count_the_rows_the_one_writer_wrote(conn, monkeypatch)
     monkeypatch.setattr(ledger, "distinct_stock_quota", lambda: len(ledger.kline_distinct_stocks_7d()))
     with pytest.raises(ledger.BudgetExceededError):
         ledger.gate("request_history_kline", "test", request_uri="moomoo://US.NEW_STOCK_OVER_QUOTA")
-
-
-def test_slice2_backfill_cli_verifies_fk_refs_without_legacy_tables(conn):
-    import importlib.util
-    from pathlib import Path
-
-    script_path = Path(__file__).resolve().parents[1] / "scripts" / "backfill_slice2_kg_to_uuid.py"
-    spec = importlib.util.spec_from_file_location("backfill_slice2_kg_to_uuid", script_path)
-    assert spec is not None and spec.loader is not None
-    mod = importlib.util.module_from_spec(spec)
-    import sys
-
-    sys.modules[spec.name] = mod
-    spec.loader.exec_module(mod)
-
-    fund_uuid = er.ensure_entity(conn, "etf:series:S000004310", "fund", "Test Fund", transaction_time=T1)
-    company_uuid = er.ensure_entity(conn, "issuer:cik:0000320193", "issuer", "Apple Inc.", transaction_time=T1)
-    conn.execute(
-        """
-        insert into staging.fund_holding_facts
-            (fund_id, holding_id, holding_name, report_period, transaction_time, value_usd, percent_of_net_assets, confidence, raw_ref)
-        values (%s, %s, 'Apple Inc.', '2026-03-31', %s, 1000, 5.0, 0.9, 'test:slice2-cli')
-        """,
-        (fund_uuid, company_uuid, T1),
-    )
-    report = mod.backfill_legacy_kg_to_uuid(conn, apply=False)
-    assert report.applied is False
-    assert report.holding_refs_checked >= 2
-    assert report.unmapped_refs == ()

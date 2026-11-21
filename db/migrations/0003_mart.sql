@@ -1110,41 +1110,49 @@ execute $vc$create or replace view mart.capture_issuer_lineage as
 end if; end $$;
 do $$ begin if to_regclass('mart.governed_strategy_run') is null then
 execute $vc$create or replace view mart.governed_strategy_run as
- WITH head AS (
-         SELECT current_pointer_head.environment,
+    with head as (
+        select distinct on (regexp_replace(current_pointer_head.universe_id, '-[0-9]{4}-[0-9]{2}-[0-9]{2}$', ''))
+            current_pointer_head.environment,
             current_pointer_head.universe_id,
             current_pointer_head.universe_version,
             current_pointer_head.factor_id,
             current_pointer_head.target_run_id,
             current_pointer_head.sequence,
             current_pointer_head.advanced_at
-           FROM mart.current_pointer_head
-          WHERE current_pointer_head.environment = (( SELECT environment_identity.environment
-                   FROM mart.environment_identity)) AND current_pointer_head.factor_id = 'gross_profit_per_employee'::text AND current_pointer_head.universe_id ~~ 'universe:topt-%'::text
-          ORDER BY current_pointer_head.advanced_at DESC
-         LIMIT 1
-        )
- SELECT head.environment,
-    head.universe_id,
-    head.universe_version,
-    head.factor_id,
-    head.target_run_id,
-    head.sequence,
-    head.advanced_at,
-    campaign.cutoff,
-    run.strategy_run_id,
-    run.strategy_key,
-    run.executed_at
-   FROM head
-     JOIN raw.capture_runs cr ON cr.run_id = head.target_run_id
-     JOIN raw.capture_campaigns campaign USING (campaign_id)
-     JOIN LATERAL ( SELECT DISTINCT ON (candidate.strategy_key) candidate.strategy_run_id,
+        from mart.current_pointer_head
+        where current_pointer_head.environment = ((
+            select environment_identity.environment
+            from mart.environment_identity
+        ))
+          and current_pointer_head.factor_id = 'gross_profit_per_employee'::text
+          and current_pointer_head.universe_id not like 'universe:canary-%'::text
+        order by regexp_replace(current_pointer_head.universe_id, '-[0-9]{4}-[0-9]{2}-[0-9]{2}$', ''),
+                 current_pointer_head.advanced_at desc
+    )
+    select head.environment,
+        head.universe_id,
+        head.universe_version,
+        head.factor_id,
+        head.target_run_id,
+        head.sequence,
+        head.advanced_at,
+        campaign.cutoff,
+        run.strategy_run_id,
+        run.strategy_key,
+        run.executed_at
+    from head
+    join raw.capture_runs cr on cr.run_id = head.target_run_id
+    join raw.capture_campaigns campaign using (campaign_id)
+    join lateral (
+        select distinct on (candidate.strategy_key)
+            candidate.strategy_run_id,
             candidate.strategy_key,
             candidate.executed_at
-           FROM mart.strategy_run_capture_bindings binding
-             JOIN mart.strategy_runs candidate ON candidate.strategy_run_id = binding.strategy_run_id
-          WHERE binding.capture_run_id = head.target_run_id
-          ORDER BY candidate.strategy_key, binding.bound_at DESC, candidate.strategy_run_id DESC) run ON true$vc$;
+        from mart.strategy_run_capture_bindings binding
+        join mart.strategy_runs candidate on candidate.strategy_run_id = binding.strategy_run_id
+        where binding.capture_run_id = head.target_run_id
+        order by candidate.strategy_key, binding.bound_at desc, candidate.strategy_run_id desc
+    ) run on true$vc$;
 end if; end $$;
 do $$ begin if to_regclass('mart.served_head') is null then
 execute $vc$create or replace view mart.served_head as
