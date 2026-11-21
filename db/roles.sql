@@ -25,26 +25,26 @@ alter role app_runtime set statement_timeout = '5s';
 
 grant usage on schema app to app_runtime;
 -- #495: the ONE staging write exception — the DB-mediated pipeline trigger
--- (migration 0034). USAGE on staging plus exactly this table exposes nothing
+-- USAGE on staging plus exactly this table exposes nothing
 -- else; consume-UPDATEs stay with the data-engine/migration role, and the
 -- table's own triggers enforce append-only/consume-once.
 grant usage on schema staging to app_runtime;
 grant select, insert on staging.pipeline_trigger_requests to app_runtime;
 
--- Login front door (#368, migration 0029). Login itself runs before any
+-- Login front door (#368). Login itself runs before any
 -- tenant/principal GUC is set (it is what *establishes* that context), so
 -- these are plain schema-level grants, not RLS-scoped. principal_credentials
 -- carries no research content, so it needs no RLS policy of its own.
 grant select, insert, update on app.principal_credentials to app_runtime;
 grant select on app.principals, app.tenants to app_runtime;
 
--- Conversation persistence (#396, migration 0030). RLS-scoped: app_runtime
+-- Conversation persistence (#396). RLS-scoped: app_runtime
 -- authenticates as itself, then the transaction-local tenant/principal GUCs
 -- (set by withOwnerScopedRuntime) are what the row security policies actually check.
 grant select, insert on app.conversations, app.conversation_messages to app_runtime;
 revoke select on app.conversation_audit_metadata from app_runtime;
 
--- Document lifecycle (#373, migration 0031). Same RLS-scoped shape as
+-- Document lifecycle (#373). Same RLS-scoped shape as
 -- conversations above. Revisions and tombstones are fully append-only (no
 -- UPDATE grant at all); tickets receive a redeemed_at-only UPDATE column grant.
 grant select, insert on app.research_documents, app.research_document_revisions,
@@ -187,11 +187,9 @@ begin
     end loop;
 end $$;
 
--- 20261015T0900_datahub_mart_entity_identity_set_based.sql (20261015T0900_inline_entity_identity_view.sql)
--- made mart.entity_identity set-based, so the view no longer calls these helpers (#1344).
--- Explicitly revoke EXECUTE from mart_readonly, app_ops_reader and app_runtime so replaying
--- db/roles.sql on an already-provisioned database strips the legacy grants. Guarded on the
--- catalog because a partial chain has not created them yet.
+-- mart.entity_identity is set-based and calls neither helper (#1344). A fresh chain still
+-- leaves EXECUTE on them reachable by these roles, so revoke it on every replay.
+-- role_boundary_contract.sql and test_entity_identity_view.py assert the result.
 do $$
 declare
     routine text;

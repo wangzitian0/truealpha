@@ -82,9 +82,8 @@ endef
 #
 # What replay actually is: every file in the chain re-applied, in order, over whatever
 # the database already holds. That fixes a database that is BEHIND the chain. It does
-# not fix one that is beside it. The chain carries 113 `alter table` and 162 `drop`
-# statements against 176 `create ... if not exists` (grep -ohiE over db/migrations/*.sql,
-# 2026-09-23), so a relation left in a superseded shape keeps that shape: the `create` is
+# not fix one that is beside it. A `create ... if not exists` does not reshape a
+# relation that already exists, so a relation left in a superseded shape keeps that shape: the `create` is
 # a no-op and the `alter` that would have reshaped it already ran, back when this database
 # had the shape it was written against. (Before #984 these three lines claimed "All DDL is
 # `if not exists`, so re-applying everything is safe and cheap" — measured against the

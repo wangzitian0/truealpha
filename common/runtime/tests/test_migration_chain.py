@@ -48,11 +48,6 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[3]
 MIGRATIONS = REPO_ROOT / "db/migrations"
 
-#: Collisions that predate the guard. Frozen, never extended — a new number in
-#: here means two lanes collided again and one of them must renumber before
-#: merge, which is cheap while the migration is unreleased and expensive after.
-KNOWN_COLLISIONS: set[str] = set()
-
 #: Every file of the sequential form, frozen at the squashed baseline.
 #: New migrations take `YYYYMMDDTHHMM_<lane>_<slug>.sql` and run after `0004_app.sql`.
 LEGACY_NAMES: tuple[str, ...] = (
@@ -95,37 +90,14 @@ def _by_key() -> dict[str, list[str]]:
 
 
 def test_no_new_migration_number_collides() -> None:
-    """A new ordering key used more than once, or a known collision growing a third
-    file, both mean two lanes took the same slot again."""
+    """An ordering key used more than once means two lanes took the same slot."""
     collisions = {key: names for key, names in _by_key().items() if len(names) > 1}
-    fresh = set(collisions) - KNOWN_COLLISIONS
-    assert not fresh, (
-        f"migration ordering key(s) {sorted(fresh)} are used more than once: "
-        + "; ".join(f"{key} -> {collisions[key]}" for key in sorted(fresh))
+    assert not collisions, (
+        f"migration ordering key(s) {sorted(collisions)} are used more than once: "
+        + "; ".join(f"{key} -> {collisions[key]}" for key in sorted(collisions))
         + ". apply_migrations.sh replays the chain in glob order, so which of them runs first "
         "is decided by the alphabet of the suffix, not by intent. Rename the unreleased one "
         "(#576, #731)"
-    )
-    grown = {key: names for key, names in collisions.items() if key in KNOWN_COLLISIONS and len(names) > 2}
-    assert not grown, (
-        f"known collision(s) {sorted(grown)} grew a third file: "
-        + "; ".join(f"{key} -> {grown[key]}" for key in sorted(grown))
-        + ". The frozen set never extends; name the new migration by timestamp and lane (#731)"
-    )
-
-
-def test_the_frozen_collisions_are_still_collisions() -> None:
-    """A baseline that outlives its defect hides the next one.
-
-    Same rule the invariant exemptions carry: if a number was renumbered or a
-    file deleted, the entry must leave this set rather than sit here granting
-    permission nobody needs.
-    """
-    by_key = _by_key()
-    stale = {number for number in KNOWN_COLLISIONS if len(by_key.get(number, [])) < 2}
-    assert not stale, (
-        f"{sorted(stale)} no longer collide — drop them from KNOWN_COLLISIONS so the set keeps "
-        f"shrinking instead of granting permission for a collision that is gone"
     )
 
 

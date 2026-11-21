@@ -731,7 +731,6 @@ def test_role_boundary_contract_and_roles_sql_text() -> None:
     roles_sql = (REPO_ROOT / "db" / "roles.sql").read_text(encoding="utf-8")
     contract_sql = (REPO_ROOT / "db" / "tests" / "role_boundary_contract.sql").read_text(encoding="utf-8")
 
-    assert "20261015T0900_inline_entity_identity_view.sql" in roles_sql
     assert "revoke all on function %s from public" in roles_sql
     assert "revoke execute on function %s from mart_readonly, app_ops_reader" in roles_sql
     assert "grant execute on function %s to mart_readonly, app_ops_reader" not in roles_sql

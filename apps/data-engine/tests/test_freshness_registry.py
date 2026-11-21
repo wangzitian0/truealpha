@@ -4,7 +4,7 @@
 read-time age limit. A lane that has no registry row would serve data with no limit at all.
 
 No database here. The registry is the seed in
-`db/migrations/20261006T1020_datahub_served_head_freshness.sql`, read from the file text. The
+`db/migrations/0003_mart.sql`, read from the file text. The
 lanes are the Dagster definitions that the deployed image loads.
 `common/runtime/tests/test_served_head_freshness.py` proves that the file text and the real
 database agree. So reading the text is reading the registry.

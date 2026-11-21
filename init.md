@@ -404,14 +404,14 @@ axes are `issuer x cutoff x metric x fiscal_period x vintage`:
   `raw_ref` or accession. Traceability is served by lineage recorded OUTSIDE factor
   computation (rule 3): `staging.evidence_nodes` / `evidence_edges`.
 
-**Knowledge graph.** Entity resolution is not unique to companies — companies, ETFs, analysts, and supply-chain nodes all have the same "same real-world thing, different IDs per source" problem, so it's modeled once as a graph, implemented as plain Postgres tables (no separate graph engine — the query patterns needed here are shallow joins, not deep multi-hop traversal). The tables are `staging.kg_entities`, `staging.kg_identifiers` and `staging.kg_edges`; `db/migrations` holds their DDL. These rules hold:
+**Knowledge graph.** Entity resolution is not unique to companies — companies, ETFs, analysts, and supply-chain nodes all have the same "same real-world thing, different IDs per source" problem, so it's modeled once as a graph, implemented as plain Postgres tables (no separate graph engine — the query patterns needed here are shallow joins, not deep multi-hop traversal). The tables are `staging.entities`, `staging.entity_aliases` and `staging.entity_relations` (the `kg_*` tables retired in #1738); `db/migrations` holds their DDL. These rules hold:
 
 - An entity has one type: issuer, security, listing, analyst, universe, theme or supply-chain node.
 - A source identifier row locates a source-specific node. Resolution traverses a `same_as` edge to the unified entity at the requested transaction-time cutoff.
 - An edge carries a relation type (`same_as` for the cross-source ID crosswalk, `supplies_to`, `holds` for ETF to company, `covers` for analyst to company), `valid_time`, an explicit `transaction_time`, `recorded_at`, `confidence`, `source` and `raw_ref`.
 - Scenario propagation enforces a versioned minimum edge confidence. Edge confidence alone cannot prove causality (rule 10).
 
-Mart's flattened 2D tables (e.g. a company-to-ticker lookup, or a supply-chain adjacency table for a given company) are SQL views/materializations over `kg_entities` + `kg_edges`, not separately maintained.
+Mart's flattened 2D tables (e.g. a company-to-ticker lookup, or a supply-chain adjacency table for a given company) are SQL views/materializations over `staging.entities` + `staging.entity_relations`, not separately maintained.
 
 The entity identity store (#877, `docs/entity-identity.md`) reads the graph's rows as evidence (the N-PORT/OpenFIGI ISIN crosswalk). Its `company:*` nodes become aliases, and its writers move to the store in #877 PR-5.
 
@@ -535,7 +535,7 @@ defined in `AGENTS.md`.
 at each read. It uses the time of the last good refresh and the data cadence. No consumer relies on a stamp written at publication.
 
 The limits live in `mart.freshness_limit`. Git is the authority for the rows that the seed
-lists. The seed in `db/migrations/20261006T1020_datahub_served_head_freshness.sql` restores
+lists. The seed in `db/migrations/0003_mart.sql` restores
 them at every boot. A row removed from the seed stays in deployed databases until a migration
 removes it. Change a limit with a reviewed edit to that seed. The table cannot hold a limit
 above 720 hours.

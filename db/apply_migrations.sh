@@ -16,9 +16,8 @@
 # lived in the test suite. `common/runtime/tests/test_migration_applier.py` fails if a
 # second chain loop appears anywhere in the tree.
 #
-# REPLAY IS NOT A REPAIR PATH. The chain holds 113 `alter table` and 162 `drop <object>`
-# statements against 176 `create ... if not exists` (grep -ohiE over db/migrations/*.sql,
-# 2026-09-23), so a relation left in a superseded shape stays in that shape forever: the
+# REPLAY IS NOT A REPAIR PATH. A `create ... if not exists` does not reshape a relation
+# that already exists, so a relation left in a superseded shape stays in that shape forever: the
 # `create ... if not exists` does nothing, and the `alter` that would have reshaped it
 # already ran against the shape that environment used to have.
 # `db/reset_database.sh` (`make db-reset`) is the repair path — it recreates the database

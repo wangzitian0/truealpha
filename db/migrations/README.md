@@ -11,7 +11,7 @@ Two forms are legal; `common/runtime/tests/test_migration_chain.py` enforces bot
 | form | status | example |
 |---|---|---|
 | `000N_<schema>.sql` | the squashed baseline, frozen to `0001_raw.sql` .. `0004_app.sql` (#1726, #1775) | `0002_staging.sql` |
-| `YYYYMMDDTHHMM_<lane>_<slug>.sql` | every new migration | `20261120T1252_runtime_retire_entity_graph_views.sql` |
+| `YYYYMMDDTHHMM_<lane>_<slug>.sql` | every new migration | `20261201T0930_datahub_add_listing_index.sql` |
 
 * The timestamp is the UTC minute you created the file (`date -u +%Y%m%dT%H%M`). It must
   not precede the newest timestamp on `origin/main` (#1774).
