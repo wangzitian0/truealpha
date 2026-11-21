@@ -2,13 +2,14 @@ import Link from "next/link";
 import { api } from "@/client/api";
 import { decodeRouteParam } from "@/client/format";
 import { loadAuthed } from "../../../_load";
+import { ReadStateNotice } from "@/components/read-state";
 
 export const dynamic = "force-dynamic";
 
 export default async function DocumentDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const { data: detail, error } = await loadAuthed("/research/library", (opts) => api.getDocument(decodeRouteParam(id), opts), { notFoundOn404: true });
-  if (!detail) return <p className="text-sm text-rose-400">{error ?? "Document unavailable."}</p>;
+  if (!detail) return error ? <ReadStateNotice state={{ kind: "error", message: error }} /> : <p className="text-sm text-rose-400">Document unavailable.</p>;
   const revs = detail.revisions ?? [];
   const isHtml = revs[revs.length - 1]?.artifact_content_type.toLowerCase().includes("text/html") ?? false;
 

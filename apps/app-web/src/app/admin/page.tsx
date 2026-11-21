@@ -5,6 +5,7 @@ import { RUNS_EMPTY_MESSAGE, RUNS_UNAVAILABLE_MESSAGE } from "@/client/read-stat
 import { ResearchTable } from "@/components/research-table";
 import { TriggerRunButton } from "@/components/trigger-run-button";
 import { loadAuthed } from "../_load";
+import { ReadStateNotice } from "@/components/read-state";
 
 export const dynamic = "force-dynamic";
 
@@ -22,7 +23,7 @@ export default async function AdminOpsPage() {
         </div>
         <TriggerRunButton />
       </div>
-      {error && <p className="text-sm text-rose-400">{error}</p>}
+      {error && <ReadStateNotice state={{ kind: "error", message: error }} />}
       {ops && (
         <>
           <div className="grid gap-4 md:grid-cols-3">

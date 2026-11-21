@@ -5,6 +5,7 @@ import { TriggerRunButton } from "@/components/trigger-run-button";
 import { UNIVERSES } from "@/contracts/environmentContract.generated";
 import { loadAuthed } from "../../_load";
 import { LedgerCoverageTable, type LedgerCoverageRow } from "./ledger-coverage";
+import { ReadStateNotice } from "@/components/read-state";
 
 export const dynamic = "force-dynamic";
 const METRICS = ["listed_units", "shares_outstanding", "revenue", "gross_profit", "total_assets", "employees_total", "operating_branch", "gross_profit_per_employee", "last_close"];
@@ -39,7 +40,7 @@ export default async function AdminDatahubPage() {
         <div><h1 id="datahub-heading" className="text-2xl font-bold tracking-tight">Datahub</h1><p className="mt-1 text-sm text-gray-400">Question coverage, oracle outcomes, capture runs, and API ledger.</p></div>
         <TriggerRunButton />
       </div>
-      {error && <p className="text-sm text-rose-400">{error}</p>}
+      {error && <ReadStateNotice state={{ kind: "error", message: error }} />}
       <DataSection title="Question coverage matrix" headers={["Universe", "Cutoff", "Created"]} rows={(stats?.question_coverage ?? []).map((q) => [String(q.universe_id ?? ""), String(q.cutoff ?? ""), String(q.created_at ?? "")])} />
       <div className="space-y-2">
         <h2 className="text-lg font-semibold">Oracle outcomes (mart.oracle_outcomes)</h2>

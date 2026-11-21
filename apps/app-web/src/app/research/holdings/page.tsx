@@ -3,6 +3,7 @@ import { formatCell, formatRatio } from "@/client/format";
 import { valuationBasisLabel } from "@/client/strategy";
 import { ResearchTable } from "@/components/research-table";
 import { loadAuthed } from "../../_load";
+import { ReadStateNotice } from "@/components/read-state";
 
 export const dynamic = "force-dynamic";
 
@@ -16,7 +17,7 @@ export default async function HoldingsPage() {
         <h1 id="holdings-heading" className="text-2xl font-bold tracking-tight">Fund holdings &amp; valuation</h1>
         <p className="mt-2 text-sm text-gray-400">SEC N-PORT weights joined to governed strategy valuation outputs.</p>
       </div>
-      {error && <p className="text-sm text-red-400">{error}</p>}
+      {error && <ReadStateNotice state={{ kind: "error", message: error }} />}
       {funds.length === 0 && !error ? (
         <p className="text-sm text-gray-400">No holdings captured yet.</p>
       ) : (

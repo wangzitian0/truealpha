@@ -37,6 +37,7 @@ import { chromium } from "playwright";
 import { assertRaceRequirement, runHydrationRace } from "./hydration-race.mjs";
 import { walkCardGeometry } from "./card-geometry.mjs";
 import { createPageErrorLedger, gotoStable } from "./navigation.mjs";
+import { assertNoReadError } from "./read-error.mjs";
 import { walkSignOutJourney } from "./sign-out-journey.mjs";
 import { unexpectedStandaloneEntries } from "./standalone-shape.mjs";
 
@@ -524,6 +525,7 @@ async function checkRoute(page, path, role, pageErrors) {
   const finalPath = new URL(page.url()).pathname;
   const problems = [];
   if (finalPath === "/login" && path !== "/login") problems.push("bounced to /login while authenticated");
+  await assertNoReadError(page, path, problems);
 
   await assertNoVisibleRawIds(page, path, problems);
   await assertNoBlankResearchTableCells(page, path, problems);

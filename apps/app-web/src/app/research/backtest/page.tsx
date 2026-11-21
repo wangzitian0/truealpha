@@ -4,6 +4,7 @@ import { formatCell, formatPercentFromFraction, formatRatio } from "@/client/for
 import { BacktestLimitations, backtestStatusStyle, runLimitations } from "@/components/backtest-basis";
 import { ResearchTable } from "@/components/research-table";
 import { loadAuthed } from "../../_load";
+import { ReadStateNotice } from "@/components/read-state";
 
 export const dynamic = "force-dynamic";
 
@@ -17,7 +18,7 @@ export default async function BacktestListPage() {
         <h1 id="backtest-list-heading" className="text-2xl font-bold tracking-tight">Portfolio Backtests</h1>
         <p className="mt-1 text-sm text-gray-400">Quarter-end PIT backtests with explicit price basis and claim ceiling.</p>
       </div>
-      {error && <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-400">{error}</div>}
+      {error && <ReadStateNotice state={{ kind: "error", message: error }} />}
       {runs.length === 0 && !error ? (
         <div className="rounded-xl border border-border bg-card p-12 text-center text-gray-300">No backtest runs found.</div>
       ) : (
