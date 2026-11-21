@@ -194,7 +194,7 @@ def _fake_tick(monkeypatch, registration: PointerRegistration) -> None:
     """Fake every collaborator the op calls, so only the op's own reporting is under
     test. `register_run_evidence` returns the given verdict verbatim."""
     monkeypatch.setattr(psycopg, "connect", lambda *args, **kwargs: _FakeConnection())
-    # The registry write has its own test (production_topt/test_head_registry_tick.py); this one asserts the op's reporting.
+    # The registry write has its own test (capture_core/test_head_registry_tick.py); this one asserts the op's reporting.
     monkeypatch.setattr(capture, "ensure_served_head_artifacts", lambda *_a, **_k: 0)
     monkeypatch.setattr(
         capture,
@@ -218,7 +218,7 @@ def _fake_tick(monkeypatch, registration: PointerRegistration) -> None:
     monkeypatch.setattr(capture, "register_run_evidence", lambda *a, **k: registration)
     # #544: the plausibility gate reads mart through the connection; these tests fake the
     # connection, so the gate is stubbed to a passing verdict (its own tests are
-    # production_topt/test_plausibility_gate.py, against a real database).
+    # capture_core/test_plausibility_gate.py, against a real database).
     from data_engine.datahub.capture_core.plausibility_gate import Verdict
 
     passing = Verdict("v4", (), (), ())
@@ -228,7 +228,7 @@ def _fake_tick(monkeypatch, registration: PointerRegistration) -> None:
     monkeypatch.setattr(capture, "registry_unavailable_issuers", lambda *a, **k: [])
     # #1518: the tick also reads the issuers with several listings and no declared primary listing, through the
     # connection. These tests fake the connection, so none exists here. The real op is driven in
-    # production_topt/test_primary_listing_one_producer.py, against a database.
+    # capture_core/test_primary_listing_one_producer.py, against a database.
     monkeypatch.setattr(capture, "undeclared_primary_listing_issuers", lambda *a, **k: ())
 
 
@@ -1313,7 +1313,7 @@ def test_issue_1310_registered_schedules_fit_within_twelve_data_daily_allowance_
         assert "sp500_live_schedule" in running_schedules
 
     topt_corpus = universe_corpus.load_corpus(universe_corpus.TOPT_CORPUS_FILENAME)
-    topt_symbols = {str(row[3]) for row in topt_corpus["topt_denominator"]["instruments"]}
+    topt_symbols = {str(row[3]) for row in topt_corpus["denominator"]["instruments"]}
     nasdaq100_path = Path(__file__).parent / "capture_core" / "cassettes" / "nasdaq100_index.bcc3fb15.json"
     qqq_tickers = {row["ticker"] for row in parse_nasdaq_index_rows(nasdaq100_path.read_bytes())}
     qqq_outside_topt = qqq_tickers - topt_symbols

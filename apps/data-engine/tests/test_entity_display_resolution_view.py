@@ -3,7 +3,7 @@
 The member table is content-addressed with a full dependency spine (snapshot →
 capture run → release manifest), so synthetic rows cannot be inserted directly;
 this test reuses the SAME seeding machinery as
-production_topt/test_materialization.py to produce a real frozen snapshot
+capture_core/test_materialization.py to produce a real frozen snapshot
 (20 members, one per issuer in the frozen corpus), then asserts the view's
 contract against it:
 

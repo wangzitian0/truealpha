@@ -2,7 +2,7 @@
  "corpus_id": "996a1ab3e2f441100116990cc6743987",
  "fixture_kind": "frozen-universe-scope (not input data; init.md rule 13)",
  "schema_version": 1,
- "topt_denominator": {
+ "denominator": {
   "accession": null,
   "identity_assertions": [],
   "instrument_count": 102,

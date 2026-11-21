@@ -3,7 +3,7 @@
 The first part drives the pure comparisons with hand-built snapshot inputs and stored documents. The second
 part drives `record_oracle_outcomes` on a real schema over a frozen snapshot, with operator lists and stored
 SEC documents of the test's own. The third part checks that the report op calls the writer. The deployed tick
-is in `production_topt/test_oracle_outcomes_tick.py`.
+is in `capture_core/test_oracle_outcomes_tick.py`.
 """
 
 from __future__ import annotations

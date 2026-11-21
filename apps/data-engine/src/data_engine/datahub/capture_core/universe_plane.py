@@ -593,7 +593,7 @@ def resolve_listing_mics(
     wanted = {ticker.upper() for ticker in tickers}
     mics: dict[str, str] = dict.fromkeys(wanted, source.mic) if source.mic is not None else {}
 
-    for row in load_corpus(TOPT_CORPUS_FILENAME)["topt_denominator"]["instruments"]:
+    for row in load_corpus(TOPT_CORPUS_FILENAME)["denominator"]["instruments"]:
         listing_id, ticker = str(row[2]), str(row[3]).upper()
         parts = listing_id.split(":")
         if ticker in wanted and len(parts) == 3 and parts[0] == "listing":
@@ -789,6 +789,6 @@ def resolve_universe_corpus(connection: Connection[Any], head_kind: str) -> dict
     if row is None:
         raise LookupError(f"no published universe head for {head_kind}; publish one from the constituent plane")
     payload, recorded_at = row
-    corpus = {"topt_denominator": payload, "published_at": recorded_at.isoformat()}
+    corpus = {"denominator": payload, "published_at": recorded_at.isoformat()}
     corpus_list_version(corpus)
     return corpus

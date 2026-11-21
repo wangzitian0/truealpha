@@ -41,7 +41,7 @@ def replay_retry_policy(max_attempts: int) -> RetryPolicy:
 def frozen_topt_universe(corpus: Mapping[str, Any]) -> UniverseRef:
     """Reconstruct the frozen TOPT universe coordinate."""
     return UniverseRef(
-        universe_id=corpus["topt_denominator"]["universe_id"],
+        universe_id=corpus["denominator"]["universe_id"],
         universe_version="topt-candidate-2026-03-31-v1",
         content_sha256="8b2f885e6161c01603b9d78882d411c7984ff6a3dbf35d636cb11e8c2ecfcf8f",
     )

@@ -179,7 +179,7 @@ def _seed_complete_production_run(
     valid_from_by_semantic = valid_from_by_semantic or {}
     valid_to_by_semantic = valid_to_by_semantic or {}
     corpus = corpus if corpus is not None else json.loads(CORPUS.read_text())
-    denominator = corpus["topt_denominator"]
+    denominator = corpus["denominator"]
     coordinates = {row[2]: tuple(row) for row in denominator["instruments"]}
     # The same dispatch composition.plan_and_persist ships: a self-pinned corpus
     # (universe-as-data, #539) resolves through corpus_list_version; only the
@@ -1545,7 +1545,7 @@ def _synthetic_corpus() -> dict:
         ["issuer:cik:0000000202", "security:figi:SYNTH003", "listing:xsyn:brav", "BRAV"],
     ]
     return {
-        "topt_denominator": {
+        "denominator": {
             "universe_id": f"universe:synthetic-{_SYNTHETIC_REPORT_DATE}",
             "report_date": _SYNTHETIC_REPORT_DATE,
             "instrument_count": 3,

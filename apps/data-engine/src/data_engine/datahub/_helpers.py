@@ -177,7 +177,7 @@ def unbacked_status_values(cutoff: datetime | None) -> tuple[datetime, str, str]
     return cutoff or datetime.now(tz=UTC), source_evidence.value, factor_validation.value
 
 
-def fetch_topt_cutoff(connection: Any, run_id: str) -> datetime | None:
+def fetch_run_cutoff(connection: Any, run_id: str) -> datetime | None:
     row = connection.execute("select cutoff from mart.capture_status where run_id = %s", (run_id,)).fetchone()
     return row[0] if row is not None else None
 

@@ -41,7 +41,7 @@ from truealpha_runtime.reconciliation_policies import (
     RECONCILIATION_POLICY,
 )
 
-from data_engine.datahub._helpers import CAPTURE_OBSERVATION_JOIN, fetch_topt_cutoff
+from data_engine.datahub._helpers import CAPTURE_OBSERVATION_JOIN, fetch_run_cutoff
 from data_engine.datahub.capture_core.executor import SERVED_BY_FAILOVER
 from data_engine.datahub.capture_core.materialization import (
     FinancialFactPayload,
@@ -545,7 +545,7 @@ def graded_cell(result: ReconciliationResult, assertions: Sequence[SourceAsserti
 def _query_semantic_observations(
     conn: psycopg.Connection[Any], run_id: str, semantic_type: str
 ) -> tuple[datetime | None, list[Any]]:
-    if (cutoff := fetch_topt_cutoff(conn, run_id)) is None:
+    if (cutoff := fetch_run_cutoff(conn, run_id)) is None:
         return None, []
     rows = conn.execute(
         f"select o.subject_id, o.parser_version, o.knowable_at, o.normalized_payload_sha256, o.observation_id, "

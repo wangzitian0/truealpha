@@ -16,7 +16,7 @@ from data_engine.datahub.resolve_coordinates import primary_listing_ids
 
 def topt_symbols() -> tuple[str, ...]:
     """The ticker of the primary listing of each TOPT issuer, by symbol."""
-    denominator = load_corpus(TOPT_CORPUS_FILENAME)["topt_denominator"]
+    denominator = load_corpus(TOPT_CORPUS_FILENAME)["denominator"]
     fields = list(denominator["instrument_tuple_fields"])
     issuer_at, listing_at, ticker_at = (fields.index(name) for name in ("issuer_id", "listing_id", "ticker"))
     declared = primary_listing_ids()

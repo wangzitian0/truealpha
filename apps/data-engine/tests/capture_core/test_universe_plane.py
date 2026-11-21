@@ -539,7 +539,7 @@ def test_canary_static_members_refresh_publish_resolve(connection, monkeypatch) 
     )
     assert contract_id.startswith("universe-list:") and sequence >= 1
     corpus = up.resolve_universe_corpus(connection, "universe-list:canary")
-    denominator = corpus["topt_denominator"]
+    denominator = corpus["denominator"]
     assert denominator["instrument_count"] == 6
     assert denominator["issuer_count"] == 5  # GOOGL+GOOG collapse to one issuer
     assert denominator["universe_id"] == "universe:canary-us-2026-06-30"
@@ -555,7 +555,7 @@ def _frozen_corpus() -> dict:
 
 def _self_pinned(corpus: dict) -> dict:
     """The same denominator, self-pinned the way `build_denominator` pins a generated one."""
-    denominator = corpus["topt_denominator"]
+    denominator = corpus["denominator"]
     denominator["instrument_mapping_sha256"] = canonical_sha256(
         {"fields": denominator["instrument_tuple_fields"], "instruments": denominator["instruments"]}
     )
@@ -597,14 +597,14 @@ def test_the_frozen_topt_list_version_loads_the_pinned_denominator() -> None:
     version = frozen_topt_list_version(corpus)
 
     assert len(version.members) == 21
-    assert len({row[0] for row in corpus["topt_denominator"]["instruments"]}) == 20
-    assert version.list_version_id == corpus["topt_denominator"]["list_version_id"]
+    assert len({row[0] for row in corpus["denominator"]["instruments"]}) == 20
+    assert version.list_version_id == corpus["denominator"]["list_version_id"]
 
 
 @pytest.mark.parametrize(("mutate", "message"), _DENOMINATOR_DRIFT)
 def test_the_frozen_topt_list_version_refuses_a_drifted_denominator(mutate, message: str) -> None:
     corpus = _frozen_corpus()
-    mutate(corpus["topt_denominator"])
+    mutate(corpus["denominator"])
 
     with pytest.raises(ValueError, match=f"TOPT {message}"):
         frozen_topt_list_version(corpus)
@@ -614,7 +614,7 @@ def test_the_frozen_topt_pin_refuses_a_shrunk_denominator_whose_counts_agree() -
     """The counts below agree with the rows, so the shared check passes. Only the pin
     refuses. The loader once refused this input with a literal count of 21."""
     corpus = _frozen_corpus()
-    _drop_last_row_consistently(corpus["topt_denominator"])
+    _drop_last_row_consistently(corpus["denominator"])
 
     with pytest.raises(ValueError, match="frozen TOPT instrument mapping drift"):
         frozen_topt_list_version(corpus)
@@ -622,7 +622,7 @@ def test_the_frozen_topt_pin_refuses_a_shrunk_denominator_whose_counts_agree() -
 
 def test_the_frozen_topt_pin_refuses_an_edited_identity() -> None:
     corpus = _frozen_corpus()
-    corpus["topt_denominator"]["instruments"][3][0] = "issuer:lei:REPLACED-IDENTITY"
+    corpus["denominator"]["instruments"][3][0] = "issuer:lei:REPLACED-IDENTITY"
 
     with pytest.raises(ValueError, match="frozen TOPT instrument mapping drift"):
         frozen_topt_list_version(corpus)
@@ -630,7 +630,7 @@ def test_the_frozen_topt_pin_refuses_an_edited_identity() -> None:
 
 def test_the_frozen_topt_list_identity_must_match_the_corpus() -> None:
     corpus = _frozen_corpus()
-    corpus["topt_denominator"]["list_version_id"] = "list-version:" + "0" * 64
+    corpus["denominator"]["list_version_id"] = "list-version:" + "0" * 64
 
     with pytest.raises(ValueError, match="frozen TOPT list identity drift"):
         frozen_topt_list_version(corpus)
@@ -643,7 +643,7 @@ def test_a_self_pinned_corpus_loads() -> None:
 @pytest.mark.parametrize(("mutate", "message"), _DENOMINATOR_DRIFT)
 def test_a_self_pinned_corpus_refuses_a_drifted_denominator(mutate, message: str) -> None:
     corpus = _self_pinned(_frozen_corpus())
-    mutate(corpus["topt_denominator"])
+    mutate(corpus["denominator"])
 
     with pytest.raises(ValueError, match=f"universe corpus {message}"):
         corpus_list_version(corpus)
@@ -651,7 +651,7 @@ def test_a_self_pinned_corpus_refuses_a_drifted_denominator(mutate, message: str
 
 def test_a_self_pinned_corpus_refuses_rows_that_do_not_reproduce_its_sha() -> None:
     corpus = _self_pinned(_frozen_corpus())
-    corpus["topt_denominator"]["instruments"][3][0] = "issuer:lei:REPLACED-IDENTITY"
+    corpus["denominator"]["instruments"][3][0] = "issuer:lei:REPLACED-IDENTITY"
 
     with pytest.raises(ValueError, match="universe corpus instrument mapping drift"):
         corpus_list_version(corpus)
@@ -812,7 +812,7 @@ def corpus_rows(monkeypatch):
             ]
             for ticker, mic in rows
         ]
-        corpus = {"topt_denominator": {"instruments": instruments}}
+        corpus = {"denominator": {"instruments": instruments}}
         monkeypatch.setattr(universe_plane, "load_corpus", lambda _name: corpus)
 
     install()

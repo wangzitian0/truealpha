@@ -20,7 +20,7 @@ from data_engine.contracts.oracle_policy import load_oracle_policy
 from data_engine.contracts.sentinel_known_answers import SentinelKnownAnswer, load_sentinel_known_answers
 from data_engine.datahub._helpers import (
     CAPTURE_OBSERVATION_JOIN,
-    fetch_topt_cutoff,
+    fetch_run_cutoff,
     gppe_branch_predicate,
     read_raw_json,
 )
@@ -604,7 +604,7 @@ def known_answer_outcomes(
 
 
 def record_oracle_outcomes(connection: psycopg.Connection[Any], run_id: str, *, compared_at: datetime) -> int:
-    if (cutoff := fetch_topt_cutoff(connection, run_id)) is None:
+    if (cutoff := fetch_run_cutoff(connection, run_id)) is None:
         return 0
     factor_inputs = [
         CoreSnapshotInput.model_validate(row[0]) for row in connection.execute(_FROZEN_FACTOR_INPUTS_SQL, (run_id,))

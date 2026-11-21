@@ -19,7 +19,7 @@
     "attempt_numbers_start_at": 1,
     "mutable_aliases_forbidden": true
   },
-  "topt_denominator": {
+  "denominator": {
     "universe_id": "universe:topt-us-2026-03-31",
     "list_version_id": "list-version:fa1456cd9ff5c635d0bd3ceb6b8b446889ef80b0dd28f70f951ad08ac30a3c9d",
     "list_label": "topt-us-2026-03-31",

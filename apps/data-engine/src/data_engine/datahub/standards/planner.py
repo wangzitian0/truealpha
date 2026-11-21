@@ -74,7 +74,7 @@ def universe_issuers(connection: Any, universe: str, *, cutoff: datetime | None 
         else resolve_universe_corpus(connection, universe)
     )
     rows_by_issuer: dict[str, list[list[str]]] = {}
-    for row in corpus["topt_denominator"]["instruments"]:
+    for row in corpus["denominator"]["instruments"]:
         rows_by_issuer.setdefault(row[0], []).append(row)
     primary = choose_primary_listings(
         connection,

@@ -199,7 +199,7 @@ def _refresh_qqq_prices(
 ) -> RefreshOutcome:
     corpus = resolve_universe_corpus(connection, lane_name("qqq"))
     covered = stored_symbols(connection, known_at=now)
-    symbols = target_symbols(connection, corpus["topt_denominator"], covered=covered, known_at=now)
+    symbols = target_symbols(connection, corpus["denominator"], covered=covered, known_at=now)
     spend = ledger_spend(now.astimezone(UTC).date())
     budget = credit_budget(
         share=environment_share(environment),

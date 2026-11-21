@@ -184,7 +184,7 @@ def _qqq_denominator(report_date: date, *, without: str | None = None) -> dict[s
     from data_engine.datahub.capture_core.universe_corpus import _mapping_sha256
 
     qqq_path = Path(__file__).resolve().parent / "fixtures" / "corpus.qqq.v1.json"
-    instruments = json.loads(qqq_path.read_text())["topt_denominator"]["instruments"][:21]
+    instruments = json.loads(qqq_path.read_text())["denominator"]["instruments"][:21]
     if without is not None:
         instruments = [row for row in instruments if row[0] != without]
     denominator: dict[str, Any] = {
@@ -215,7 +215,7 @@ def _capture_qqq_head(
     import capture_core.test_persistence as persistence  # noqa: E402
 
     monkeypatch.setattr(
-        composition, "_load_capture_corpus", lambda *_a, **_k: {"topt_denominator": _qqq_denominator(QQQ_REPORT_DATE)}
+        composition, "_load_capture_corpus", lambda *_a, **_k: {"denominator": _qqq_denominator(QQQ_REPORT_DATE)}
     )
     monkeypatch.setattr(persistence, "CUTOFF", QQQ_CUTOFF)
     plan = persistence._capture(connection, version="test-1079-qqq")
@@ -224,7 +224,7 @@ def _capture_qqq_head(
 
 def _publish_universe(monkeypatch: pytest.MonkeyPatch, report_date: date, *, without: str | None = None) -> None:
     """The universe as currently published: a later report date, and perhaps one issuer fewer."""
-    corpus = {"topt_denominator": _qqq_denominator(report_date, without=without)}
+    corpus = {"denominator": _qqq_denominator(report_date, without=without)}
     monkeypatch.setattr(planner, "resolve_universe_corpus", lambda _connection, _kind: corpus)
 
 
@@ -1195,7 +1195,7 @@ def test_the_head_report_date_is_the_partition_its_capture_wrote(
     """
     from data_engine.datahub.capture_core.universe_corpus import TOPT_CORPUS_FILENAME, load_corpus
 
-    corpus_date = date.fromisoformat(load_corpus(TOPT_CORPUS_FILENAME)["topt_denominator"]["report_date"])
+    corpus_date = date.fromisoformat(load_corpus(TOPT_CORPUS_FILENAME)["denominator"]["report_date"])
     assert question_coverage.head_report_date(connection, head) == corpus_date == REPORT_DATE
     assert head.universe_id.endswith(REPORT_DATE.isoformat())
 
