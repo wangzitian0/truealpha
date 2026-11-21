@@ -31,7 +31,7 @@
     "keys": [
       "LLM_API_KEY",
       "LLM_BASE_URL",
-      "LLM_MODEL",
+      "LLM_SMALL_MODEL",
       "LLM_PROVIDER"
     ],
     "never": "in code, fixtures, logs or issue text"

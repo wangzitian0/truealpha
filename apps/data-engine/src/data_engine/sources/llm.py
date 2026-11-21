@@ -13,12 +13,19 @@ from contextlib import contextmanager, nullcontext
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
-from types import SimpleNamespace
-from typing import Any
+from typing import Any, Literal, cast
 from urllib.parse import urlparse
 
+import httpx2
 from factors.shared import extraction as extraction_primitive
-from infra2_sdk.runtime.llm import LlmClient, LlmSettings
+from infra2_sdk.runtime.llm import DecodingSpec, LlmSettings, create_llm_agent
+from openai import AsyncOpenAI
+from pydantic_ai.capabilities import AbstractCapability
+from pydantic_ai.exceptions import ModelHTTPError as SdkModelHTTPError
+from pydantic_ai.exceptions import RetryModelRequest
+from pydantic_ai.models.zai import ZaiModel
+from pydantic_ai.providers.zai import ZaiProvider
+from pydantic_ai.usage import UsageLimits
 from truealpha_contracts.common import canonical_sha256
 from truealpha_runtime.research_cards import (
     XHS_CARD_INSTRUCTIONS,
@@ -404,7 +411,7 @@ def invoke(
     if not is_configured():
         raise ModelNotConfigured(f"{settings.llm_api_key_env} is not set; no provider seated (#70 scope 1)")
     cik = cik if cik > 0 else _synthetic_cik(accession)
-    model = settings.llm_model
+    model = settings.llm_small_model
     decoding = model_decoding.for_environment(gateway.capacity_environment())
     request_body = build_chat_request(task, user_content, model=model, decoding=decoding)
     active_conn = connection if persist and connection is not None else None
@@ -425,12 +432,9 @@ def invoke(
             provider=settings.llm_provider,
             base_url=settings.llm_base_url,
             api_key=settings.llm_api_key,
-            json_timeout_seconds=float(task.timeout_seconds),
-            json_max_tokens=task.max_tokens,
-            json_disable_thinking=False,
+            small_model=model,
         )
         request_sha256 = _request_sha256(request_body)
-        url = f"{llm_cfg.base_url.rstrip('/')}{llm_cfg.chat_completions_path}"
         started_at = now()
         usage: dict[str, Any] = {}
         payload: dict[str, Any] = {}
@@ -518,7 +522,7 @@ def invoke(
                     invocation.invocation_id,
                     settings.llm_provider,
                     invocation.model,
-                    urlparse(url).hostname or "",
+                    urlparse(llm_cfg.base_url).hostname or "",
                     standard,
                     cik,
                     accession,
@@ -563,6 +567,137 @@ def _request_bytes(request_body: dict[str, Any]) -> bytes:
     return json.dumps(request_body, sort_keys=True, ensure_ascii=False).encode()
 
 
+_WIRE_HEADERS = frozenset({"authorization", "content-type", "accept"})
+_JSON_HEADERS = {"content-type": "application/json"}
+
+
+@dataclass
+class _Captured:
+    """What the gateway answered on the latest HTTP attempt of one model call."""
+
+    status: int = 0
+    body: bytes = b""
+    provider_code: str | None = None
+    parsed: dict[str, Any] | None = None
+    error: BaseException | None = None
+
+
+class _GatewayWire(httpx2.AsyncBaseTransport):
+    """Send each SDK request through the gateway: pacer, `api_call_ledger` row, and raw answer bytes."""
+
+    def __init__(
+        self,
+        *,
+        send: Transport,
+        budget: model_policy.RetryBudget,
+        pacer: model_policy.ModelPacer | None,
+        identity: FetchKey,
+        caller: str,
+        request_params: dict[str, Any],
+        answer_required: bool,
+        captured: _Captured,
+    ) -> None:
+        self._send = send
+        self._budget = budget
+        self._pacer = pacer
+        self._identity = identity
+        self._caller = caller
+        self._request_params = request_params
+        self._answer_required = answer_required
+        self._captured = captured
+
+    async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
+        captured = self._captured
+        attempt = self._budget.begin_attempt()
+        req_url = str(request.url)
+        headers = {name.title(): value for name, value in request.headers.items() if name.lower() in _WIRE_HEADERS}
+        wire_body = await request.aread()
+        try:
+            with (
+                self._pacer.admitted(self._budget.remaining_seconds) if self._pacer is not None else nullcontext(),
+                record_call(
+                    SOURCE,
+                    ENDPOINT,
+                    identity=self._identity,
+                    caller=self._caller,
+                    request_uri=req_url,
+                    cost=0,
+                    admit=False,
+                ) as call,
+            ):
+                call.attempt = attempt
+                call.request_params = self._request_params
+                status, raw_body = self._send(req_url, headers, wire_body)
+                call.observe(status_code=status, body=raw_body)
+                captured.status, captured.body, captured.provider_code, captured.parsed = status, raw_body, None, None
+                if status >= 400:
+                    provider_code = model_policy.provider_code(raw_body)
+                    captured.provider_code = provider_code
+                    call.provider_code = provider_code
+                    call.fail(f"HTTP {status}: {raw_body[:200]!r}")
+                    return httpx2.Response(status, content=raw_body, headers=_JSON_HEADERS)
+                parsed = json.loads(raw_body.decode())
+                captured.parsed = parsed
+                usage = parsed.get("usage") or {}
+                call.cost = Decimal(int(usage.get("total_tokens") or 0))
+                call.completion_tokens = _token_count(usage.get("completion_tokens"))
+                call.reasoning_tokens = _token_count(
+                    (usage.get("completion_tokens_details") or {}).get("reasoning_tokens")
+                )
+                if self._answer_required and _cut_off(parsed):
+                    call.fail(f"finish_reason={FINISH_REASON_CUT_OFF}: the answer was cut at max_tokens")
+                return httpx2.Response(status, content=raw_body, headers=_JSON_HEADERS)
+        except BaseException as exc:
+            captured.error = exc
+            raise
+
+
+class _SeatRetry(AbstractCapability[Any]):
+    """The only retry layer: wait and retry when the seat contract calls the HTTP answer transient."""
+
+    def __init__(self, budget: model_policy.RetryBudget, captured: _Captured) -> None:
+        super().__init__()
+        self._budget = budget
+        self._captured = captured
+
+    async def on_model_request_error(self, ctx: Any, *, request_context: Any, error: Exception) -> Any:
+        status = self._captured.status
+        if not isinstance(error, SdkModelHTTPError) or status < 400:
+            raise error
+        wait = self._budget.wait_before_next(status, self._captured.provider_code)
+        if wait is None:
+            raise error
+        logger.warning(
+            "model call answered HTTP %s (provider code %s) on attempt %s; waiting %.1f s",
+            status,
+            self._captured.provider_code,
+            self._budget.attempts,
+            wait,
+        )
+        model_policy.sleep(wait)
+        raise RetryModelRequest()
+
+
+_THINKING_EFFORTS = ("minimal", "low", "medium", "high", "xhigh")
+
+
+def _call_site(task: ModelTask) -> str:
+    return "data-engine." + re.sub(r"[^a-z0-9_.-]+", "-", task.prompt_version.split(":")[0].lower())[:48]
+
+
+def _thinking_level(
+    decoding: model_decoding.DecodingVersion,
+) -> bool | Literal["minimal", "low", "medium", "high", "xhigh"]:
+    if decoding.thinking == "disabled":
+        return False
+    effort = decoding.reasoning_effort
+    if effort is None:
+        return True
+    if effort not in _THINKING_EFFORTS:
+        raise ValueError(f"unknown reasoning effort {effort!r}; known: {_THINKING_EFFORTS}")
+    return cast(Any, effort)
+
+
 def _call_provider(
     llm_cfg: LlmSettings,
     user_content: str,
@@ -573,82 +708,68 @@ def _call_provider(
     identity: FetchKey,
     transport: Transport | None,
 ) -> tuple[int, bytes, dict[str, Any], dict[str, Any], str | None]:
-    request_params = _request_params(request_body, decoding)
+    """Run one model call through the SDK agent; the gateway answer bytes stay the source of truth."""
     budget = model_policy.RetryBudget()
-    pacer = model_policy.pacer_for(gateway.capacity_environment())
-    send = transport or _gateway_transport
-    messages = [{"role": "system", "content": task.instructions}, {"role": "user", "content": user_content}]
-    extra_body = {"temperature": 0, **decoding.parameters()}
-
-    def _run_attempt(attempt: int) -> tuple[int, bytes, dict[str, Any], dict[str, Any], str | None]:
-        captured: dict[str, Any] = {"status": 0, "body": b"", "provider_code": None}
-
-        def _dispatch(_method: str, req_url: str, *, headers: dict[str, str], **req_kwargs: Any) -> Any:
-            with (
-                pacer.admitted(budget.remaining_seconds) if pacer is not None else nullcontext(),
-                record_call(
-                    SOURCE, ENDPOINT, identity=identity, caller=caller, request_uri=req_url, cost=0, admit=False
-                ) as call,
-            ):
-                call.attempt = attempt
-                call.request_params = request_params
-                status, raw_body = send(req_url, dict(headers), _request_bytes(req_kwargs["json"]))
-                call.observe(status_code=status, body=raw_body)
-                captured["status"], captured["body"] = status, raw_body
-                if status >= 400:
-                    provider_code = model_policy.provider_code(raw_body)
-                    captured["provider_code"] = provider_code
-                    call.provider_code = provider_code
-                    call.fail(f"HTTP {status}: {raw_body[:200]!r}")
-                    return SimpleNamespace(status_code=status, headers={}, json=dict)
-                parsed = json.loads(raw_body.decode())
-                usage = parsed.get("usage") or {}
-                call.cost = Decimal(int(usage.get("total_tokens") or 0))
-                call.completion_tokens = _token_count(usage.get("completion_tokens"))
-                call.reasoning_tokens = _token_count(
-                    (usage.get("completion_tokens_details") or {}).get("reasoning_tokens")
-                )
-                if task.answer_required and _cut_off(parsed):
-                    call.fail(f"finish_reason={FINISH_REASON_CUT_OFF}: the answer was cut at max_tokens")
-                return SimpleNamespace(status_code=status, headers={}, json=lambda: parsed)
-
-        sdk_client = LlmClient(llm_cfg, client=SimpleNamespace(request=_dispatch), max_retries=1)
-        try:
-            response = sdk_client.chat(
-                messages,
-                model=str(request_body["model"]),
-                json_mode=True,
-                max_tokens=task.max_tokens,
-                extra_body=extra_body,
-            )
-        except RuntimeError:
-            if captured["status"] >= 400:
-                return captured["status"], captured["body"], {}, {}, captured["provider_code"]
-            raise
-        payload = dict(response.raw)
-        return captured["status"], captured["body"], payload, payload.get("usage") or {}, None
-
+    captured = _Captured()
+    wire = _GatewayWire(
+        send=transport or _gateway_transport,
+        budget=budget,
+        pacer=model_policy.pacer_for(gateway.capacity_environment()),
+        identity=identity,
+        caller=caller,
+        request_params=_request_params(request_body, decoding),
+        answer_required=task.answer_required,
+        captured=captured,
+    )
+    client = AsyncOpenAI(
+        api_key=llm_cfg.api_key,
+        base_url=llm_cfg.base_url,
+        max_retries=0,
+        http_client=httpx2.AsyncClient(transport=wire),
+    )
+    agent = create_llm_agent(
+        llm_cfg,
+        model=ZaiModel(str(request_body["model"]), provider=ZaiProvider(openai_client=client)),
+        call_site=_call_site(task),
+        decoding=DecodingSpec(decoding.name, thinking=_thinking_level(decoding), temperature=0),
+        instructions=task.instructions,
+        usage_limits=UsageLimits(request_limit=1),
+        max_attempts=1,
+        retries=0,
+        capabilities=[_SeatRetry(budget, captured)],
+        # Z.AI reads `max_tokens`; the SDK would send `max_completion_tokens`, so the task limit goes in the body here.
+        model_settings={"extra_body": {"response_format": {"type": "json_object"}, "max_tokens": task.max_tokens}},
+    )
     with _attempt_context(task.timeout_seconds, identity):
-        last: tuple[int, bytes, dict[str, Any], dict[str, Any], str | None] | None = None
-        while True:
-            attempt = budget.begin_attempt()
-            try:
-                last = _run_attempt(attempt)
-            except gateway.CapacityExceeded as refusal:
-                if last is None:
-                    raise ModelCapacityRefused(refusal.reason) from refusal
-                return last
-            wait = None if last[0] < 400 else budget.wait_before_next(last[0], last[4])
-            if wait is None:
-                return last
-            logger.warning(
-                "model call answered HTTP %s (provider code %s) on attempt %s; waiting %.1f s",
-                last[0],
-                last[4],
-                attempt,
-                wait,
-            )
-            model_policy.sleep(wait)
+        try:
+            agent.run_sync(user_content)
+        except Exception as failure:
+            return _after_failed_run(captured, failure)
+    return _answered(captured)
+
+
+def _answered(captured: _Captured) -> tuple[int, bytes, dict[str, Any], dict[str, Any], str | None]:
+    if captured.status >= 400:
+        return captured.status, captured.body, {}, {}, captured.provider_code
+    payload = dict(captured.parsed or {})
+    return captured.status, captured.body, payload, payload.get("usage") or {}, None
+
+
+def _after_failed_run(
+    captured: _Captured, failure: Exception
+) -> tuple[int, bytes, dict[str, Any], dict[str, Any], str | None]:
+    """Map an agent failure back to the gateway answer, as the pre-SDK path did."""
+    error = captured.error
+    if isinstance(error, gateway.CapacityExceeded):
+        if captured.status == 0:
+            raise ModelCapacityRefused(error.reason) from error
+        return _answered(captured)
+    if error is not None:
+        raise error
+    if captured.status >= 400 or captured.parsed is not None:
+        # The agent judged the answer (empty text after a cut-off, a usage limit); the stored bytes decide.
+        return _answered(captured)
+    raise failure
 
 
 def _cut_off(payload: dict[str, Any]) -> bool:

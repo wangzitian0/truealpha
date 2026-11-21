@@ -43,7 +43,7 @@ class Settings(RuntimeSettings):
         "", "human", "llm", validation_alias=LLM_API_KEY_ENV, scope="project", empty_ok=True, sensitive=True
     )
     llm_base_url: str = _f("https://open.bigmodel.cn/api/coding/paas/v4", "code", "llm")
-    llm_model: str = _f("glm-5.3-flash", "code", "llm")
+    llm_small_model: str = _f("glm-5.3-flash", "code", "llm")
     llm_provider: str = _f("zhipu-glm-coding-plan", "code", "llm")
 
 

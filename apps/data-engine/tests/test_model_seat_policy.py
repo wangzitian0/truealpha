@@ -553,7 +553,7 @@ def test_each_attempt_records_the_request_parameters_without_the_key(world, call
     ask(Transport([(429, rate_limited()), (200, OK_BODY)], world))
     assert len(call_ledger) == 2
     expected = {
-        "model": settings.llm_model,
+        "model": settings.llm_small_model,
         "decoding_version": "v1",
         "thinking": "disabled",
         "reasoning_effort": None,

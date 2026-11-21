@@ -580,7 +580,7 @@ def test_a_seated_model_resolves_a_multi_candidate_filing_with_its_invocation_on
     from data_engine.config import settings
 
     monkeypatch.setattr(settings, "llm_api_key", "test-key")
-    monkeypatch.setattr(settings, "llm_model", "glm-test")
+    monkeypatch.setattr(settings, "llm_small_model", "glm-test")
     answer = json.dumps(
         {
             "choices": [
@@ -692,7 +692,7 @@ def test_the_model_path_passes_a_selector_to_extract_metric(monkeypatch) -> None
     from factors.shared.extraction import Selector
 
     monkeypatch.setattr(settings, "llm_api_key", "test-key")
-    monkeypatch.setattr(settings, "llm_model", "glm-test")
+    monkeypatch.setattr(settings, "llm_small_model", "glm-test")
     answer = json.dumps(
         {
             "choices": [
@@ -741,7 +741,7 @@ def test_a_replayed_model_answer_is_marked_replayed_and_asks_the_provider_nothin
         raise AssertionError("a replayed answer must not reach the provider")
 
     monkeypatch.setattr(settings, "llm_api_key", "test-key")
-    monkeypatch.setattr(settings, "llm_model", "glm-test")
+    monkeypatch.setattr(settings, "llm_small_model", "glm-test")
     connection = ReplayConnection()
     outcome = extract_headcount(
         59478,
@@ -767,7 +767,7 @@ def test_a_declining_model_reports_its_reason_and_the_primitive_returns_no_selec
     from data_engine.config import settings
 
     monkeypatch.setattr(settings, "llm_api_key", "test-key")
-    monkeypatch.setattr(settings, "llm_model", "glm-test")
+    monkeypatch.setattr(settings, "llm_small_model", "glm-test")
     answer = json.dumps(
         {
             "choices": [

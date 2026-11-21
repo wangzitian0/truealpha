@@ -13,13 +13,9 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 WORKFLOWS = REPO_ROOT / ".github" / "workflows"
 
 
-def _hook_slot_chain_violations(hooks: object) -> list[str]:
-    slots = getattr(hooks, "slots", {})
-    violations: list[str] = []
-    for name, spec in slots.items():
-        if spec.run and "&&" in spec.run:
-            violations.append(f"{name}: run still chains checks with '&&'")
-    return violations
+def _chained_checks(hooks: object) -> list[str]:
+    """Names of checks whose shell command chains two commands with `&&`."""
+    return [row.id for row in getattr(hooks, "checks") if any("&&" in part for part in row.argv)]
 
 
 def test_workflows_parse_and_ci_required_pins_tag_and_jobs() -> None:
@@ -38,75 +34,103 @@ def test_pyproject_and_lockfile_do_not_depend_on_qlib() -> None:
     assert 'name = "pyqlib"' not in (REPO_ROOT / "uv.lock").read_text(encoding="utf-8").lower()
 
 
-def test_runtime_hooks_manifest_and_fail_fast_slots(tmp_path: Path) -> None:
-    from infra2_sdk.manifests import load_hooks_manifest, run_hook_slot
+EXPECTED_CELL_CHECKS = {
+    "preview.operation": ["smoke"],
+    "preview.post": ["health", "warm_surface", "walk_tree"],
+    "staging.operation": ["smoke"],
+    "staging.post": ["health", "warm_surface", "walk_tree"],
+    "prod.operation": ["smoke"],
+    "prod.post": ["health"],
+    "scheduled_audit": ["nightly_verdicts"],
+}
 
-    hooks = load_hooks_manifest(REPO_ROOT / "runtime-hooks.manifest.json")
-    assert _hook_slot_chain_violations(hooks) == []
-    assert hooks.slots["preview_gate"].checks
-    assert hooks.slots["preview_gate"].checks == hooks.slots["staging_gate"].checks
-    env = {key: "x" for spec in hooks.slots.values() for key in spec.required_env}
-    for slot_name in ("smoke", "preview_gate", "staging_gate", "prod_gate", "scheduled_audit"):
-        cwd = tmp_path / f"pass_{slot_name}"
+
+def _load_hooks():  # type: ignore[no-untyped-def]
+    from infra2_sdk.manifests import load_hooks_manifest
+
+    return load_hooks_manifest(REPO_ROOT / "runtime-hooks.manifest.json")
+
+
+def test_runtime_hooks_manifest_is_schema_3_and_maps_each_check_to_its_cells() -> None:
+    from infra2_sdk.manifests import CELL_POLICIES
+
+    hooks = _load_hooks()
+    assert hooks.schema_version == 3
+    assert _chained_checks(hooks) == []
+    resolved = {cell: [c.id for c in hooks.checks_for_cell(cell)] for cell in CELL_POLICIES}
+    assert {cell: ids for cell, ids in resolved.items() if ids} == EXPECTED_CELL_CHECKS
+
+
+def test_runtime_hooks_cells_run_their_checks_and_report_a_failed_check(tmp_path: Path) -> None:
+    from infra2_sdk.manifests import run_cell
+
+    hooks = _load_hooks()
+    env = {key: "x" for row in hooks.checks for key in row.required_env}
+    for cell in EXPECTED_CELL_CHECKS:
+        cwd = tmp_path / f"pass_{cell}"
         cwd.mkdir()
-        run_hook_slot(
+        result = run_cell(
             hooks,
-            slot_name,
+            cell,
             app_url="https://fake.invalid",
+            version_ref="v0.0.1",
             cwd=cwd,
             ambient_env=env,
             runner=lambda argv, **_kw: subprocess.CompletedProcess(argv, 0, "", ""),
         )
-        record = json.loads((cwd / hooks.slots[slot_name].artifacts_dir / "checks.jsonl").read_text().splitlines()[-1])
-        assert len(record["checks"]) >= 1
-        assert all(
-            isinstance(check.get("seconds"), (int, float)) and check["seconds"] >= 0 for check in record["checks"]
-        )
+        assert result.status == "pass"
+        assert [c.name for c in result.checks] == EXPECTED_CELL_CHECKS[cell]
 
-    checks = hooks.slots["staging_gate"].checks
-    assert len(checks) >= 2
-    fail_argv = tuple(checks[1].argv)
     ran: list[str] = []
 
     def fake(argv, **_kw):  # type: ignore[no-untyped-def]
         ran.append(argv[-1])
-        if tuple(argv) == fail_argv:
+        if "warm_surface.sh" in argv[-1]:
             return subprocess.CompletedProcess(argv, 1, "", "boom: first line\nsecond line")
         return subprocess.CompletedProcess(argv, 0, "", "")
 
-    cwd = tmp_path / "staging_gate"
+    cwd = tmp_path / "staging_post"
     cwd.mkdir()
-    run_hook_slot(hooks, "staging_gate", app_url="https://fake.invalid", cwd=cwd, ambient_env=env, runner=fake)
-    record = json.loads((cwd / hooks.slots["staging_gate"].artifacts_dir / "checks.jsonl").read_text().splitlines()[-1])
-    assert [(c["name"], c["ok"]) for c in record["checks"]] == [(checks[0].id, True), (checks[1].id, False)]
-    assert record["checks"][1]["detail"] == "boom: first line"
-    if len(checks) > 2:
-        assert checks[2].argv[-1] not in ran
+    result = run_cell(
+        hooks,
+        "staging.post",
+        app_url="https://fake.invalid",
+        version_ref="v0.0.1",
+        cwd=cwd,
+        ambient_env=env,
+        runner=fake,
+    )
+    assert result.status == "fail"
+    from infra2_sdk.manifests import CELL_POLICIES
+
+    assert CELL_POLICIES["staging.post"].stop_on_fail is False
+    assert [(c.name, c.ok) for c in result.checks] == [("health", True), ("warm_surface", False), ("walk_tree", True)]
+    assert any("walk-tree" in command for command in ran)
 
 
-def test_runtime_hooks_manifest_rejects_shell_chains_and_empty_checks() -> None:
+def test_runtime_hooks_manifest_refuses_schema_2_and_shell_chains() -> None:
     from infra2_sdk.manifests import RuntimeHooksManifest
 
     raw = json.loads((REPO_ROOT / "runtime-hooks.manifest.json").read_text(encoding="utf-8"))
-    with_chain = json.loads(json.dumps(raw))
-    with_chain["slots"]["staging_gate"] = {
-        "run": "first && second",
-        "timeout_seconds": 60,
-        "required_env": ["APP_URL"],
-    }
-    parsed_chain = RuntimeHooksManifest.from_dict(with_chain)
-    assert _hook_slot_chain_violations(parsed_chain) == ["staging_gate: run still chains checks with '&&'"]
+    schema_2 = {**raw, "schema_version": 2}
+    with pytest.raises(ValueError, match="schema_version"):
+        RuntimeHooksManifest.from_dict(schema_2)
 
-    with_empty_checks = json.loads(json.dumps(raw))
-    with_empty_checks["slots"]["staging_gate"]["checks"] = []
-    with pytest.raises(ValueError, match="needs a non-empty 'run' or 'checks'"):
+    with_chain = json.loads(json.dumps(raw))
+    with_chain["checks"][0]["argv"] = ["sh", "-c", "first && second"]
+    assert _chained_checks(RuntimeHooksManifest.from_dict(with_chain)) == ["smoke"]
+
+    with_empty_checks = {**raw, "checks": []}
+    with pytest.raises(ValueError, match="checks"):
         RuntimeHooksManifest.from_dict(with_empty_checks)
 
 
-def test_browser_hook_slots_use_headless_shell_and_staging_budget() -> None:
-    from infra2_sdk.manifests import SLOT_MAX_TIMEOUT_SECONDS, load_hooks_manifest
+def test_browser_check_uses_headless_shell_and_fits_every_cell_budget() -> None:
+    from infra2_sdk.manifests import CELL_POLICIES
 
-    hooks = load_hooks_manifest(REPO_ROOT / "runtime-hooks.manifest.json")
-    for slot_name in ("preview_gate", "staging_gate"):
-        assert "--only-shell" in hooks.slots[slot_name].bootstrap
-    assert hooks.slots["staging_gate"].timeout_seconds == SLOT_MAX_TIMEOUT_SECONDS["staging_gate"]
+    hooks = _load_hooks()
+    walk_tree = next(row for row in hooks.checks if row.id == "walk_tree")
+    assert "--only-shell" in walk_tree.bootstrap
+    for cell in EXPECTED_CELL_CHECKS:
+        for row in hooks.checks_for_cell(cell):
+            assert row.timeout_seconds <= CELL_POLICIES[cell].budget_seconds, (cell, row.id)

@@ -1,116 +1,133 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "service": "truealpha/app",
-  "slots": {
-    "smoke": {
-      "run": "uv run python -m infra2_sdk.deploy --url \"$APP_URL/api/health\" --expected-version \"$APP_VERSION_REF\" --max-attempts 36 --interval-seconds 5 --no-follow-redirects",
-      "timeout_seconds": 120,
-      "required_env": [
-        "APP_URL",
-        "APP_VERSION_REF"
-      ]
+  "checks": [
+    {
+      "id": "smoke",
+      "argv": [
+        "sh",
+        "-c",
+        "uv run python -m infra2_sdk.deploy --url \"$APP_URL/api/health\" --expected-version \"$APP_VERSION_REF\" --max-attempts 36 --interval-seconds 5 --no-follow-redirects"
+      ],
+      "needs": [
+        "running_service"
+      ],
+      "writes": false,
+      "accepts_scale": false,
+      "timeout_seconds": 120
     },
-    "preview_gate": {
-      "bootstrap": "cd apps/app-web && bun install --frozen-lockfile && bunx playwright install --with-deps --only-shell chromium",
+    {
+      "id": "health",
+      "argv": [
+        "sh",
+        "-c",
+        "uv run python -m infra2_sdk.deploy --url \"$APP_URL/api/health\" --expected-version \"$APP_VERSION_REF\" --max-attempts 36 --interval-seconds 5 --no-follow-redirects"
+      ],
+      "needs": [
+        "running_service"
+      ],
+      "writes": false,
+      "accepts_scale": false,
+      "timeout_seconds": 180,
+      "cells": {
+        "remove": {
+          "scheduled_audit": {
+            "reason": "The nightly audit reads /api/health in nightly_verdicts; a second health wait adds nothing.",
+            "issue": "wangzitian0/truealpha#1745"
+          }
+        }
+      }
+    },
+    {
+      "id": "warm_surface",
+      "argv": [
+        "sh",
+        "-c",
+        "bash tools/warm_surface.sh \"$APP_URL\" / /research/rankings"
+      ],
+      "needs": [
+        "running_service"
+      ],
+      "writes": false,
+      "accepts_scale": false,
+      "timeout_seconds": 60,
+      "cells": {
+        "remove": {
+          "prod.post": {
+            "reason": "Warming and walking the surface logs in with Staging test accounts; production runs the health check only.",
+            "issue": "wangzitian0/truealpha#1745"
+          },
+          "scheduled_audit": {
+            "reason": "Warming and walking the surface logs in with Staging test accounts; production runs the health check only.",
+            "issue": "wangzitian0/truealpha#1745"
+          }
+        }
+      }
+    },
+    {
+      "id": "walk_tree",
+      "argv": [
+        "sh",
+        "-c",
+        "cd apps/app-web || exit 1; TA_BASE_URL=\"$APP_URL\" exec node e2e/walk-tree.mjs"
+      ],
+      "needs": [
+        "running_service"
+      ],
+      "writes": false,
+      "accepts_scale": false,
       "timeout_seconds": 360,
-      "required_env": [
-        "APP_URL",
-        "APP_VERSION_REF",
-        "TA_EMAIL",
-        "TA_MEMBER_EMAIL",
-        "TA_PASSWORD",
-        "TA_MCP_TOKEN"
-      ],
-      "checks": [
-        {
-          "id": "health",
-          "argv": [
-            "sh",
-            "-c",
-            "uv run python -m infra2_sdk.deploy --url \"$APP_URL/api/health\" --expected-version \"$APP_VERSION_REF\" --max-attempts 36 --interval-seconds 5 --no-follow-redirects"
-          ]
-        },
-        {
-          "id": "warm_surface",
-          "argv": [
-            "sh",
-            "-c",
-            "bash tools/warm_surface.sh \"$APP_URL\" / /research/rankings"
-          ]
-        },
-        {
-          "id": "walk_tree",
-          "argv": [
-            "sh",
-            "-c",
-            "cd apps/app-web && TA_BASE_URL=\"$APP_URL\" node e2e/walk-tree.mjs"
-          ]
-        }
-      ]
-    },
-    "staging_gate": {
       "bootstrap": "cd apps/app-web && bun install --frozen-lockfile && bunx playwright install --with-deps --only-shell chromium",
-      "timeout_seconds": 600,
       "required_env": [
-        "APP_URL",
-        "APP_VERSION_REF",
         "TA_EMAIL",
         "TA_MEMBER_EMAIL",
         "TA_PASSWORD",
         "TA_MCP_TOKEN"
       ],
-      "checks": [
-        {
-          "id": "health",
-          "argv": [
-            "sh",
-            "-c",
-            "uv run python -m infra2_sdk.deploy --url \"$APP_URL/api/health\" --expected-version \"$APP_VERSION_REF\" --max-attempts 36 --interval-seconds 5 --no-follow-redirects"
-          ]
-        },
-        {
-          "id": "warm_surface",
-          "argv": [
-            "sh",
-            "-c",
-            "bash tools/warm_surface.sh \"$APP_URL\" / /research/rankings"
-          ]
-        },
-        {
-          "id": "walk_tree",
-          "argv": [
-            "sh",
-            "-c",
-            "cd apps/app-web && TA_BASE_URL=\"$APP_URL\" node e2e/walk-tree.mjs"
-          ]
+      "cells": {
+        "remove": {
+          "prod.post": {
+            "reason": "Warming and walking the surface logs in with Staging test accounts; production runs the health check only.",
+            "issue": "wangzitian0/truealpha#1745"
+          },
+          "scheduled_audit": {
+            "reason": "Warming and walking the surface logs in with Staging test accounts; production runs the health check only.",
+            "issue": "wangzitian0/truealpha#1745"
+          }
         }
-      ]
+      }
     },
-    "prod_gate": {
-      "run": "uv run python -m infra2_sdk.deploy --url \"$APP_URL/api/health\" --max-attempts 12 --interval-seconds 5 --no-follow-redirects",
-      "timeout_seconds": 240,
-      "required_env": [
-        "APP_URL"
-      ]
-    },
-    "scheduled_audit": {
-      "bootstrap": "uv sync --frozen",
-      "timeout_seconds": 600,
-      "required_env": [
-        "APP_URL",
-        "ENVIRONMENT"
+    {
+      "id": "nightly_verdicts",
+      "argv": [
+        "sh",
+        "-c",
+        "uv run python -m truealpha_tools.nightly_verdicts \"$APP_URL/api/health\" --environment \"$ENVIRONMENT\" --repo ."
       ],
+      "needs": [
+        "running_service"
+      ],
+      "writes": false,
+      "accepts_scale": false,
+      "timeout_seconds": 600,
+      "bootstrap": "uv sync --frozen",
       "checkout_lineage": true,
-      "checks": [
-        {
-          "id": "nightly_verdicts",
-          "argv": [
-            "sh",
-            "-c",
-            "uv run python -m truealpha_tools.nightly_verdicts \"$APP_URL/api/health\" --environment \"$ENVIRONMENT\" --repo ."
-          ]
+      "cells": {
+        "remove": {
+          "preview.post": {
+            "reason": "The nightly verdict audit runs on the schedule only.",
+            "issue": "wangzitian0/truealpha#1745"
+          },
+          "staging.post": {
+            "reason": "The nightly verdict audit runs on the schedule only.",
+            "issue": "wangzitian0/truealpha#1745"
+          },
+          "prod.post": {
+            "reason": "The nightly verdict audit runs on the schedule only.",
+            "issue": "wangzitian0/truealpha#1745"
+          }
         }
-      ]
+      }
     }
-  }
+  ]
 }

@@ -8,13 +8,17 @@ reporting, and scheduler-liveness checks run centrally in wangzitian0/infra2
 
 ## Central release train and `runtime-hooks.manifest.json`
 
-`runtime-hooks.manifest.json` (`schema_version: 2`, `service: "truealpha/app"`)
+`runtime-hooks.manifest.json` (`schema_version: 3`, `service: "truealpha/app"`)
 is the single contract between `truealpha` and the `infra2` release train.
 `infra2_sdk.manifests` (`python -m infra2_sdk.manifests check`) validates it alongside
 `env.manifest.json` on every CI run.
 
-It declares five `Pre -> Deploy -> Post` verification slots that `infra2` invokes. Each slot lists
-its checks in the manifest; the SDK runner runs them in order and writes `checks.jsonl`.
+It lists each check once, with its `needs`, `writes`, `accepts_scale` and `timeout_seconds`. The SDK
+maps each check to the cells of the stage grid (`infra2_sdk.manifests.CELL_POLICIES`) and runs a cell with
+`run_cell`; the cell budget comes from `CELL_POLICIES[cell].budget_seconds`. Run
+`python -m infra2_sdk.manifests --check-hooks runtime-hooks.manifest.json` to print the check-to-cell result.
+A check leaves a default cell through `cells.remove` with a reason and an issue.
+The hook environment carries `APP_URL`, `APP_VERSION_REF` and `ENVIRONMENT`.
 
 The `infra2` release train enforces its own daily automatic-release cap
 (`DEFAULT_DAILY_CAP` in the `infra2` release controller) and staging soak rules.
