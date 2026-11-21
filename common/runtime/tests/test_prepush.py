@@ -14,8 +14,8 @@ all of them learned the hard way:
 - untracked files are examined: a brand-new tool is invisible to every
   `git diff` until it is added, and dogfooding caught the script skipping
   ITSELF for that reason;
-- tests run through the diff scope, never the whole suite — the laptop tier
-  is <= 60 s by design (A4 budget table, #1412 T1).
+- the script checks the changed files only, never the whole repository: the
+  Local pre cell is 30 s (#1803).
 """
 
 from __future__ import annotations
@@ -128,17 +128,32 @@ def test_it_names_its_own_preconditions_instead_of_failing_cryptically() -> None
     - the YAML check must use uv's interpreter, since PyYAML is a workspace
       dependency and a bare `python3` may not have it — reporting FAIL on a
       perfectly valid workflow;
-    - `make prepush` must be .PHONY, or a file named `prepush` silences it.
+    - `make check` must be .PHONY and run the script, or the one pre-PR command checks nothing.
     """
     script = PREPUSH.read_text(encoding="utf-8")
     assert "not inside a git working tree" in script, "the work-tree precondition is unchecked again"
     assert 'run "yaml parses: $path" uv run python' in script, (
         "the YAML check is back on the system interpreter, which may lack PyYAML and will report FAIL on a valid file"
     )
-    phony = next(
-        line for line in (REPO_ROOT / "Makefile").read_text(encoding="utf-8").splitlines() if line.startswith(".PHONY")
+    makefile = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")
+    phony = next(line for line in makefile.splitlines() if line.startswith(".PHONY"))
+    assert " check" in phony.split(":", 1)[1], "make check is not .PHONY — a file of that name would silence it"
+    assert "check:\n\t@tools/prepush.sh $(BASE)\n" in makefile, "make check does not run tools/prepush.sh"
+
+
+def test_the_local_entries_never_run_the_whole_repository() -> None:
+    """#1803: an empty FILES ran about 3,150 tests, and the script ran ruff and mypy on
+    every package. The whole-repository runs are CI's."""
+    script = PREPUSH.read_text(encoding="utf-8")
+    assert "uv run mypy" not in script, "prepush.sh runs whole-repository mypy again"
+    assert "ruff check apps common tools" not in script, "prepush.sh runs whole-repository ruff again"
+    # `FILES=` on the command line: CI runs this test inside `make test-python FILES=<shard>`,
+    # and make exports that value to a child make.
+    refused = subprocess.run(
+        ["make", "test-python", "FILES="], capture_output=True, text=True, cwd=REPO_ROOT, check=False
     )
-    assert " prepush" in phony, "make prepush is not .PHONY — a file of that name would silence it"
+    assert refused.returncode != 0, "make test-python with no FILES ran instead of refusing"
+    assert "set FILES=" in refused.stderr
 
 
 def test_it_runs_the_same_fast_stdlib_gates_as_ci_python_gates() -> None:

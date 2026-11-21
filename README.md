@@ -26,7 +26,7 @@ make install        # uv sync + bun install
 make runtime-up     # Postgres/KG + S3 (RustFS) with schemas/bucket initialized
 cp .env.example .env  # then set SEC_USER_AGENT
 make sample         # capture the checked-in SEC reconnaissance corpus
-make check          # lint + typecheck + test of what the diff reaches; FULL=1 for all
+make check FILES=<test paths>  # static checks on the changed files + the named tests; CI runs the full suite
 ```
 
 `make stack-up` additionally builds and starts Web + LLM locally. Application

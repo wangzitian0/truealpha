@@ -15,10 +15,11 @@
 # `|| true` is fail-open or intentional. It puts the question in front of you
 # while the diff is still cheap to change.
 #
-# Fast pre-push tier running local gates, lint, and typecheck before pushing.
-# Browser walks, docker and whole-repository runs belong to CI.
+# `make check` runs this script: local gates and ruff on the changed files.
+# Browser walks, docker and whole-repository runs (mypy, full ruff) belong to CI.
 #
 # Usage:
+#   make check [BASE=<base-ref>] [FILES=<test paths>]
 #   tools/prepush.sh            # against origin/main
 #   tools/prepush.sh <base-ref>
 set -uo pipefail
@@ -95,8 +96,7 @@ done
 
 if [ "${#PY[@]}" -gt 0 ]; then
   run "factor contract gate" python3 tools/check_factor_contract.py
-  run "ruff check" uv run ruff check apps common tools
-  run "mypy" uv run mypy
+  run "ruff check (changed files)" uv run ruff check --force-exclude "${PY[@]}"
 fi
 for path in "${YML[@]}"; do
   run "yaml parses: $path" uv run python -c "import sys,yaml; yaml.safe_load(open(sys.argv[1]))" "$path"

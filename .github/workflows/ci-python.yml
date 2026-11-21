@@ -33,9 +33,9 @@ jobs:
       # #284: the factor surface is frozen — public signatures (defaults included) and
       # the datahub columns factors read. Stdlib only, no database, so it runs here.
       - run: python3 tools/check_factor_contract.py
-      - run: make lint FULL=1
-      - run: make typecheck-python FULL=1
-      - run: make contract-conformance FULL=1
+      - run: make lint
+      - run: make typecheck-python
+      - run: make contract-conformance
       # #759 environment manifests & hooks: validated directly via infra2_sdk.manifests.
       - run: |
           uv run python -c '
@@ -99,7 +99,7 @@ jobs:
           fi
           echo "shard ${{ matrix.shard }}: ${#FILES[@]} files"
           # #1412 L1: through the make target the laptop runs; FILES is this shard.
-          PYTEST_ADDOPTS="--durations=0 --durations-min=0" make test-python FULL=1 FILES="${FILES[*]}"
+          PYTEST_ADDOPTS="--durations=0 --durations-min=0" make test-python FILES="${FILES[*]}"
         env:
           ENVIRONMENT: ci
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/truealpha
@@ -177,7 +177,7 @@ jobs:
           # keeping them on means ANY green run can refresh the shard weights —
           # which is what keeps them from going stale.
           # #1412 L1: through the make target the laptop runs; FILES is this shard.
-          PYTEST_ADDOPTS="--durations=0 --durations-min=0" make test-python FULL=1 FILES="${FILES[*]}"
+          PYTEST_ADDOPTS="--durations=0 --durations-min=0" make test-python FILES="${FILES[*]}"
         env:
           ENVIRONMENT: ci
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/truealpha
