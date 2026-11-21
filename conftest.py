@@ -1,7 +1,7 @@
 """Local/CI object-store coordinates, supplied to tests rather than shipped in Settings.
 
 `RuntimeSettings` used to default `s3_endpoint` to `http://localhost:9000` with the
-credentials `minio` / `minio_local_secret` baked into tracked source. Those defaults made
+placeholder credentials baked into tracked source. Those defaults made
 the whole suite pass without configuring anything — and made PRODUCTION dial its own
 loopback with placeholder credentials when no `S3_*` variables reached the container,
 which is #531.
@@ -20,8 +20,8 @@ from truealpha_runtime.testing import install_db_write_gate
 
 _LOCAL_OBJECT_STORE = {
     "S3_ENDPOINT": "http://localhost:9000",
-    "S3_ACCESS_KEY": "minio",
-    "S3_SECRET_KEY": "minio_local_secret",
+    "S3_ACCESS_KEY": "s3local",
+    "S3_SECRET_KEY": "s3_local_secret",
 }
 
 for _name, _value in _LOCAL_OBJECT_STORE.items():

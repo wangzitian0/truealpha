@@ -9,7 +9,7 @@ VPS (the same host truealpha deploys to, identified as
 reflect the network/IP conditions the real ingestion pipeline will see).
 
 Purpose: ground schema design and data-quality profiling for `db/migrations`
-and `common/factors` in real payloads before building the `raw.fetches` + MinIO
+and `common/factors` in real payloads before building the `raw.fetches` + object-storage
 ingestion pipeline (Phase -1 reconnaissance; see `init.md` "Current Baseline and Next Gate"). Not refreshed by CI;
 re-run the scripts in `../scripts/` manually to recapture a new snapshot.
 

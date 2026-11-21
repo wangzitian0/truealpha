@@ -6,7 +6,7 @@ help:
 	@echo "Setup:"
 	@echo "  make bootstrap    Full physical bootstrap: uv sync + bun install"
 	@echo "  make install      uv sync + bun install + per-commit hook"
-	@echo "  make runtime-up   Start Postgres/KG + MinIO and create the raw bucket"
+	@echo "  make runtime-up   Start Postgres/KG + S3 and create the raw bucket"
 	@echo "  make stack-up     Build/start runtime + web + llm-service"
 	@echo "  make runtime-check Probe Postgres, KG tables, and object storage"
 	@echo "  make runtime-down Stop the local stack (keeps volumes)"
@@ -40,8 +40,10 @@ install:
 	git config core.hooksPath tools/git-hooks
 
 runtime-up:
-	docker compose up -d --wait postgres minio
-	docker compose run --rm minio-init
+	docker compose up -d --wait postgres s3
+	S3_ENDPOINT=$${S3_ENDPOINT:-http://localhost:9000} S3_ACCESS_KEY=$${S3_ACCESS_KEY:-s3local} \
+		S3_SECRET_KEY=$${S3_SECRET_KEY:-s3_local_secret} \
+		uv run --package truealpha-runtime truealpha-runtime ensure-bucket
 
 # #447 preflight: the app-web image runs NODE_ENV=production and refuses to
 # serve without a real SECRET_KEY; without this check an unset key surfaces

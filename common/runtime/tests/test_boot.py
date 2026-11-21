@@ -80,7 +80,7 @@ def test_canonical_environment_and_sdk_shared_contract() -> None:
                 "ENVIRONMENT": "staging",
                 "GIT_COMMIT_SHA": "v0.2.101",
                 "MCP_BEARER_TOKEN": "tok",
-                "S3_ENDPOINT": "http://minio:9000",
+                "S3_ENDPOINT": "http://s3:9000",
                 "SECRET_KEY": "sec",
             },
             require_injected=True,
@@ -95,7 +95,7 @@ def test_retired_app_env_alias_does_not_satisfy_environment() -> None:
         "APP_ENV": "staging",
         "GIT_COMMIT_SHA": "v0.2.101",
         "MCP_BEARER_TOKEN": "tok",
-        "S3_ENDPOINT": "http://minio:9000",
+        "S3_ENDPOINT": "http://s3:9000",
         "SECRET_KEY": "sec",
     }
     with pytest.raises(RuntimeError, match="ENVIRONMENT"):

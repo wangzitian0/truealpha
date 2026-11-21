@@ -4,7 +4,7 @@
 # The sweeps run as host processes because moomoo OpenD only listens on the
 # host's 127.0.0.1; Postgres is reached through the loopback port the
 # truealpha/01.postgres compose publishes (infra2: staging 15432, prod 15433),
-# and MinIO through its compose bridge IP, resolved fresh on every run
+# and the platform S3 service through its compose bridge IP, resolved fresh on every run
 # (container IPs change on recreation — rerun this script after redeploys).
 #
 # Reads DB password / SEC_USER_AGENT / S3 credentials out of the app
@@ -28,7 +28,7 @@ esac
 
 REPO_DIR="$(cd "$(dirname "$0")/../../.." && pwd)"
 AGENT="truealpha-app-vault-agent${SUFFIX}"
-MINIO="platform-minio${SUFFIX}"
+S3_CONTAINER="platform-s3${SUFFIX}"
 echo "== repo: $REPO_DIR  env: $ENV_NAME"
 
 echo "== uv"
@@ -79,18 +79,18 @@ PG_USER=$(echo "$DB_URL" | sed -nE 's|^postgres(ql)?://([^:/@]+):.*|\2|p')
 PG_PASSWORD=$(echo "$DB_URL" | sed -nE 's|^postgres(ql)?://[^:/@]+:([^@]*)@.*|\2|p')
 [ -n "$PG_USER" ] && [ -n "$PG_PASSWORD" ] || { echo "could not parse user/password from the rendered DATABASE_URL" >&2; exit 1; }
 
-# MinIO: prefer a host-routable container address (fast, LAN-local). Docker
+# Platform S3: prefer a host-routable container address (fast, LAN-local). Docker
 # bridge subnets are configurable, so probe EVERY address the container holds
 # instead of pattern-matching ranges — the health check decides reachability
 # (overlay addresses simply fail it). Fall back to the Traefik route.
-if [ -z "$S3_ENDPOINT" ]; then
-  if [ -n "$INTERNAL_DOMAIN" ]; then
+if [ -z "${S3_ENDPOINT:-}" ]; then
+  if [ -n "${INTERNAL_DOMAIN:-}" ]; then
     S3_ENDPOINT="https://s3${SUFFIX}.${INTERNAL_DOMAIN}"
   else
     S3_ENDPOINT="http://127.0.0.1:9000"
   fi
 fi
-for ip in $(docker inspect "$MINIO" --format '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}'); do
+for ip in $(docker inspect "$S3_CONTAINER" --format '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}'); do
   if curl -sf -m 3 "http://$ip:9000/minio/health/live" >/dev/null; then
     S3_ENDPOINT="http://$ip:9000"
     break

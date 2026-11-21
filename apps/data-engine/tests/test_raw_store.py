@@ -1,6 +1,6 @@
 """raw_store integration: needs BOTH Postgres and reachable object storage
 (make runtime-up locally, service containers in CI) — skips cleanly otherwise.
-Object writes are content-addressed and harmless to a shared dev MinIO; the
+Object writes are content-addressed and harmless to a shared dev bucket; the
 pointer rows ride a rolled-back transaction."""
 
 import uuid

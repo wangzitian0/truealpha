@@ -27,43 +27,26 @@ services:
       retries: 10
     networks: [runtime]
 
-  minio:
-    # MinIO discontinued free distribution entirely (#1041); see ci-python.yml for the
-    # evidence. This repo's own GHCR mirror, built from MinIO's still-public source.
-    image: ghcr.io/wangzitian0/minio-mirror@sha256:986342c576435342b38fa75d14ed2bb63831242f37907fd1c83239631f9c5b80
-    container_name: truealpha-minio${ENV_SUFFIX:-}
+  s3:
+    # The same S3 engine as the infra2 platform service (platform/03.s3: RustFS 1.0.0).
+    # Multi-arch index digest. The app creates its bucket (`make runtime-up`).
+    image: docker.io/rustfs/rustfs@sha256:8cc9801755448b71a786705ce76692c77e14936cccd87cf2fc31842e58f4d1ff
+    container_name: truealpha-s3${ENV_SUFFIX:-}
     restart: ${RESTART_POLICY:-unless-stopped}
     logging: *default-logging
     environment:
-      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-minio}
-      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-minio_local_secret}
-    command: server /data --console-address ":9001"
+      RUSTFS_ACCESS_KEY: ${S3_ACCESS_KEY:-s3local}
+      RUSTFS_SECRET_KEY: ${S3_SECRET_KEY:-s3_local_secret}
+    command: ["--address", ":9000", "/data"]
     volumes:
-      - minio_data:/data
+      - s3_data:/data
     ports:
-      - "${MINIO_API_PORTS:-127.0.0.1:9000:9000}"
-      - "${MINIO_CONSOLE_PORTS:-127.0.0.1:9001:9001}"
+      - "${S3_API_PORTS:-127.0.0.1:9000:9000}"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:9000/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 10
-    networks: [runtime]
-
-  minio-init:
-    # MinIO discontinued free distribution entirely (#1041); see the `minio` service
-    # above. This repo's own GHCR mirror of mc, built from its still-public source.
-    image: ghcr.io/wangzitian0/mc-mirror@sha256:94c4c001e47985ca3e609e50e0239b33c3f48ca95e0d04122f7935fb8166e4d2
-    container_name: truealpha-minio-init${ENV_SUFFIX:-}
-    logging: *default-logging
-    depends_on:
-      minio:
-        condition: service_healthy
-    entrypoint: >
-      /bin/sh -c "
-      mc alias set local http://minio:9000 ${S3_ACCESS_KEY:-minio} ${S3_SECRET_KEY:-minio_local_secret};
-      mc mb local/${S3_BUCKET:-truealpha-raw} --ignore-existing;
-      "
     networks: [runtime]
 
   llm-service:
@@ -80,9 +63,9 @@ services:
       GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-}
       SECRET_KEY: ${SECRET_KEY:-}
       DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-truealpha}
-      S3_ENDPOINT: http://minio:9000
-      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minio}
-      S3_SECRET_KEY: ${S3_SECRET_KEY:-minio_local_secret}
+      S3_ENDPOINT: http://s3:9000
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-s3local}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-s3_local_secret}
       S3_BUCKET: ${S3_BUCKET:-truealpha-raw}
       S3_REGION: ${S3_REGION:-us-east-1}
       S3_DOCUMENTS_PREFIX: ${S3_DOCUMENTS_PREFIX:-documents}
@@ -90,8 +73,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      minio-init:
-        condition: service_completed_successfully
+      s3:
+        condition: service_healthy
     ports:
       - "${LLM_PORTS:-127.0.0.1:8000:8000}"
     healthcheck:
@@ -130,7 +113,7 @@ services:
 
 volumes:
   postgres_data:
-  minio_data:
+  s3_data:
 
 networks:
   runtime:

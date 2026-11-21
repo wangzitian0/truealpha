@@ -227,6 +227,9 @@ def test_cli_check_live_runs_check_health_and_exits_nonzero_when_required_probe_
 ) -> None:
     fake_conn = FakeConnection(query_result=(1,))
     monkeypatch.setattr(psycopg, "connect", lambda *args, **kwargs: fake_conn)
+    # Port 9 (discard) has no S3 listener, so the absent probe does not depend on the host's S3 or test order.
+    monkeypatch.setenv("S3_ENDPOINT", "http://127.0.0.1:9")
+    monkeypatch.setenv("S3_CONNECT_TIMEOUT_SECONDS", "1")
 
     exit_code = cli_main(["check", "--live"])
     out = capsys.readouterr().out
@@ -274,3 +277,46 @@ def test_orchestrator_check_reports_absent_when_probe_fails(monkeypatch: pytest.
     assert result.present is False
     assert result.name == "orchestrator"
     assert "connection refused" in result.detail
+
+
+class _RecordingStore:
+    calls: list[str] = []
+    fail = False
+
+    def __init__(self, settings: RuntimeSettings) -> None:
+        self.settings = settings
+
+    def ensure_bucket(self) -> None:
+        type(self).calls.append(self.settings.s3_bucket)
+        if type(self).fail:
+            from truealpha_runtime.storage import StorageError
+
+            raise StorageError("cannot access or create bucket truealpha-raw: refused")
+
+
+def test_cli_ensure_bucket_calls_the_store_once_and_exits_zero(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import truealpha_runtime.cli as cli_module
+
+    monkeypatch.setattr(_RecordingStore, "calls", [])
+    monkeypatch.setattr(_RecordingStore, "fail", False)
+    monkeypatch.setattr(cli_module, "S3RawObjectStore", _RecordingStore)
+
+    assert cli_main(["ensure-bucket"]) == 0
+    assert _RecordingStore.calls == ["truealpha-raw"]
+    assert "bucket truealpha-raw ready" in capsys.readouterr().out
+
+
+def test_cli_ensure_bucket_exits_one_when_the_store_refuses(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import truealpha_runtime.cli as cli_module
+
+    monkeypatch.setattr(_RecordingStore, "calls", [])
+    monkeypatch.setattr(_RecordingStore, "fail", True)
+    monkeypatch.setattr(cli_module, "S3RawObjectStore", _RecordingStore)
+
+    assert cli_main(["ensure-bucket"]) == 1
+    assert _RecordingStore.calls == ["truealpha-raw"]
+    assert "cannot access or create bucket" in capsys.readouterr().out

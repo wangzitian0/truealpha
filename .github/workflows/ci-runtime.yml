@@ -11,8 +11,8 @@ jobs:
       ENVIRONMENT: ci
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/truealpha
       S3_ENDPOINT: http://localhost:9000
-      S3_ACCESS_KEY: minio
-      S3_SECRET_KEY: minio_local_secret
+      S3_ACCESS_KEY: s3local
+      S3_SECRET_KEY: s3_local_secret
       S3_BUCKET: truealpha-raw
       S3_REGION: us-east-1
     steps:
@@ -23,8 +23,8 @@ jobs:
       - run: uv sync --package truealpha-runtime --frozen
       - name: Start app-owned runtime
         run: |
-          docker compose up -d --wait postgres minio
-          docker compose run --rm minio-init
+          docker compose up -d --wait postgres s3
+          uv run --package truealpha-runtime truealpha-runtime ensure-bucket
       - name: Assert declared dependencies
         run: uv run --package truealpha-runtime truealpha-runtime check --live
       - name: Assert point-in-time persistence contract
@@ -42,7 +42,7 @@ jobs:
         run: uv run --no-sync python tools/schema_drift.py --database-url "$DATABASE_URL"
       - name: Show runtime logs on failure
         if: failure()
-        run: docker compose logs postgres minio
+        run: docker compose logs postgres s3
       - name: Stop runtime
         if: always()
         run: docker compose down -v
