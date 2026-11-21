@@ -112,12 +112,10 @@ jobs:
   # Run data-engine tests across deterministic index-strided shards.
   # fail-fast is off so one red shard does not hide the other lanes.
   #
-  # The lane count lives in ONE place: the matrix. --shard/--of come from
-  # strategy.job-index/job-total, so `--of` cannot drift out of step with the
-  # matrix length. It could before: two independent literals, and raising only
-  # `--of` to 4 would leave every file at position 4k+3 assigned to a shard
-  # nobody runs — green, forever, which is the exact green-while-empty shape
-  # (#527) this whole job exists to avoid.
+  # The lane count lives in ONE place: the matrix. The shard index and the shard
+  # total come from strategy.job-index/job-total, so the total cannot drift out
+  # of step with the matrix length. A file assigned to a shard that no lane runs
+  # is green-while-empty (#527).
   test-data-engine:
     if: ${{ inputs.data_engine_required }}
     runs-on: ubuntu-latest

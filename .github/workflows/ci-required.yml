@@ -97,10 +97,9 @@ jobs:
               - '.claude/**'
               - '.agents/**'
               - '.ws-publish/**'
-              # #1412: a document starts this lane only when a test reads it. Every top-level markdown file is read:
-              # by the reintroduction sweep, or by name (init.md, README.md,
-              # AGENTS.md). Three files under docs/ are read by name. Other files
-              # under docs/ start no lane.
+              # #1412: a document starts this lane only when a test reads it. Tests read
+              # init.md and README.md by name, and three files under docs/ by name.
+              # Other files under docs/ start no lane.
               - '*.md'
               - 'docs/architecture-decisions/A3-source-governance.md'
               - 'docs/datahub-quality-report.md'

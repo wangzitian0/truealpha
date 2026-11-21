@@ -55,8 +55,9 @@ red-case sessions run on a branch that lacked the source change under test, and
 ## Decision: each stage catches its own class
 
 The stages and their time budgets are the infra2-sdk hook grid (5 stages: Local, CI,
-Preview, Staging, Prod; 3 phases: pre, operation, post). `stages.yaml` of infra2-sdk is the
-one source of each budget. This document states no budget.
+Preview, Staging, Prod; 3 phases: pre, operation, post) plus its `scheduled_audit` cell
+for the standing probes. `stages.yaml` of infra2-sdk is the one source of each budget.
+This document states no budget.
 
 | stage | must catch |
 |---|---|
