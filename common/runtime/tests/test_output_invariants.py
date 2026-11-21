@@ -1029,6 +1029,49 @@ def test_an_unavailable_node_value_without_a_reason_fails_and_names_the_node(
     assert "peg_consensus" in output
 
 
+LISTING_INVARIANT = "listing-names-one-issuer-and-one-instrument"
+
+
+def _relate(conn: psycopg.Connection, relation_type: str, source: uuid.UUID, target: uuid.UUID) -> None:
+    conn.execute(
+        "insert into staging.entity_relations (relation_id, relation_type, from_entity_id, to_entity_id, valid_from,"
+        " transaction_time, source, raw_ref, method, confidence, mapping_version)"
+        " select staging.entity_relation_uuid(%(type)s, %(from)s, %(to)s, '-infinity'::date,"
+        " '2026-01-01T00:00:00Z'::timestamptz, 'test', 'asserted'), %(type)s, %(from)s, %(to)s, '-infinity'::date,"
+        " '2026-01-01T00:00:00Z'::timestamptz, 'test', 'test', 'asserted', 1.0, 'v1'",
+        {"type": relation_type, "from": source, "to": target},
+    )
+
+
+def test_a_listing_with_two_issuers_fails_until_the_issuers_are_merged(
+    conn: psycopg.Connection, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """#1798: one listing, one instrument, two issuers fails by the listing id. A `superseded_by`
+    merge of the two issuers makes it pass."""
+
+    def mint(kind: str, scheme: str, value: str) -> uuid.UUID:
+        return conn.execute("select staging.entity_mint(%s, %s, %s, 'test')", (kind, scheme, value)).fetchone()[0]
+
+    listing = uuid.UUID(_mint_listing(conn, "listing:xnys:xom0"))
+    instrument = mint("instrument", "cusip", "30231G102")
+    first, second = mint("issuer", "lei", "J3WHBG0MTS7O8ZVMDC91"), mint("issuer", "cik", "0002115436")
+    _relate(conn, "listed_as", instrument, listing)
+    _relate(conn, "issues", first, instrument)
+    code, output = _parity_verdict(conn, capsys, LISTING_INVARIANT)
+    assert code == 0, output
+
+    _relate(conn, "issues", second, instrument)
+    code, output = _parity_verdict(conn, capsys, LISTING_INVARIANT)
+    assert code == 1, output
+    assert f"{LISTING_INVARIANT}: 1 violation(s)" in output
+    assert str(listing) in output
+
+    for relation_type in ("same_as", "superseded_by"):
+        _relate(conn, relation_type, second, first)
+    code, output = _parity_verdict(conn, capsys, LISTING_INVARIANT)
+    assert code == 0, output
+
+
 ENTITY_IDENTITY_UNIQUE_INVARIANT = "entity-identity-unique-per-entity"
 FUND_WEIGHTS_INVARIANT = "fund-virtual-company-weights-conserved"
 

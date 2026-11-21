@@ -282,10 +282,27 @@ Keeping it out of the payload matters for two reasons:
 `legacy-id` alias, so `entity_resolve('legacy-id', payload->>'issuer_id', …)` maps old rows to
 UUIDs without touching them.
 
+**A listing has one instrument and one issuer (#1798).** `resolve_coordinates` resolves the
+listing first. The oldest entity that holds `listed_as` to the listing is its instrument, and
+the oldest entity that holds `issues` to that instrument is its issuer.
+
+- A second spelling of the same listing resolves to those entities. TOPT spells a member as
+  LEI + CUSIP and a plane list spells it as CIK + FIGI. A spelling that names no entity becomes
+  an alias. A spelling that names another entity is merged into them with `same_as` and
+  `superseded_by` (source `datahub.capture`, method `merge`, evidence: the listing).
+- The first capture that reads a split listing makes it one. No backfill proof is necessary.
+- The invariant `listing-names-one-issuer-and-one-instrument` of `output_invariants` fails on
+  a listing with two surviving instruments or two surviving issuers.
+- The rule trusts the listing id, and it reads each claim of any date. A list that gives a
+  wrong listing id to a member merges two different companies. A retraction of the
+  `superseded_by` row ends such a merge. `resolve_coordinates` then stops on that member until
+  the list is corrected; it does not write the merge again.
+
 ## 6. Reuse, reports and consumers
 
 - **Reuse (#635).** `_satisfy_from_recent_observations` compares payload UUIDs with plan
-  UUIDs.
+  UUIDs. A `market-price` compares the listing. A `financial-fact` also compares the issuer
+  and the instrument (#1798).
   - It does not resolve legacy payloads for reuse. A reused legacy observation would put
     legacy ids into a UUID snapshot, so the first tick after PR-3 fetches its cells once.
   - After that tick, QQQ and canary reuse TOPT's captures for shared listings.
@@ -487,14 +504,12 @@ holding type.
 - **D4: ExxonMobil, now an ontology question.** The TOPT LEI names the pre-reorganization
   parent (predecessor CIK 34088). Since the 2026 holdco reorganization, the listed shares
   belong to the holdco (index CIK 2115436).
-  - The ontology answer is two issuer entities and a `successor_of` edge, with the owner-signed
-    #496 row as its evidence. The XOM listing's `issues` and `listed_as` edges then carry the
-    reorganization date.
-  - Until the owner decides, `predecessor_ciks` resolves its `issuer:lei:J3WH…` key through
-    the `legacy-id` alias (the earlier D4a), and the row is untouched.
-  - An automatic N-PORT proof for XOM would link the LEI to whichever CIK OpenFIGI and SEC
-    return today, so the backfill must not link XOM without that decision. It is unlinked
-    today in both environments.
+  - Since #1798 the XOM listing has one issuer entity, as each listing does. The LEI spelling
+    and the CIK spelling of the holding company are aliases of it. The predecessor CIK stays a
+    lookup of `staging.issuer_cik_predecessors`, not a second issuer of the listing.
+  - The owner approved this on 2026-11-21 (plan of #1798). `predecessor_ciks` resolves its
+    `issuer:lei:J3WH…` key through the `legacy-id` alias of the surviving entity, and the
+    signed row is untouched.
 
 **Hazards from the earlier design:**
 

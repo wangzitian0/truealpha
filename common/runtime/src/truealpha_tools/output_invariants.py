@@ -561,6 +561,51 @@ _TEMPLATES: tuple[Invariant, ...] = (
         population="select count(*) from mart.entity_identity",
     ),
     Invariant(
+        id="listing-names-one-issuer-and-one-instrument",
+        claim=(
+            "a listing has one instrument and one issuer — two universes that spell one listing in "
+            "two ways resolve to the same entities, or a run of one refuses the rows of the other (#1798)"
+        ),
+        violations="""
+            with listed as (
+                select relation.to_entity_id as listing_id, relation.from_entity_id as claimant_id,
+                       staging.entity_survivor(relation.from_entity_id, 'infinity'::timestamptz) as instrument_id
+                from staging.entity_relations relation
+                where relation.relation_type = 'listed_as'
+                  and not exists (select 1 from staging.entity_retractions retraction
+                                  where retraction.relation_id = relation.relation_id)
+            ),
+            issuing as (
+                select listed.listing_id,
+                       staging.entity_survivor(relation.from_entity_id, 'infinity'::timestamptz) as issuer_id
+                from listed
+                join staging.entity_relations relation
+                  on relation.relation_type = 'issues'
+                 and relation.to_entity_id in (listed.claimant_id, listed.instrument_id)
+                where not exists (select 1 from staging.entity_retractions retraction
+                                  where retraction.relation_id = relation.relation_id)
+            )
+            select listed.listing_id::text, count(distinct listed.instrument_id)::text as instruments,
+                   count(distinct issuing.issuer_id)::text as issuers
+            from listed
+            left join issuing using (listing_id)
+            group by listed.listing_id
+            having count(distinct listed.instrument_id) > 1 or count(distinct issuing.issuer_id) > 1
+            order by 1
+        """,
+        population="""
+            with listed as (
+                select relation.to_entity_id as listing_id, relation.from_entity_id as claimant_id,
+                       staging.entity_survivor(relation.from_entity_id, 'infinity'::timestamptz) as instrument_id
+                from staging.entity_relations relation
+                where relation.relation_type = 'listed_as'
+                  and not exists (select 1 from staging.entity_retractions retraction
+                                  where retraction.relation_id = relation.relation_id)
+            )
+            select count(distinct listing_id) from listed
+        """,
+    ),
+    Invariant(
         id="fund-virtual-company-weights-conserved",
         claim="every mart.fund_virtual_company row conserves portfolio weight (0 <= valued_weight_pct <= resolved_weight_pct <= total_weight_pct <= 105) (#1641)",
         violations="""

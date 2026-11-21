@@ -114,6 +114,87 @@ def test_aapl_resolves_identically_across_topt_and_qqq(connection) -> None:
     assert topt_res[aapl_listing][2] == qqq_res[aapl_listing][2]
 
 
+def _two_spellings() -> tuple[list[str], list[str], str]:
+    """One listing spelled as a corpus spells it (LEI + CUSIP) and as a plane list spells it (CIK + FIGI)."""
+    number = uuid.uuid4().int
+    listing = f"listing:xnys:t{number % 10**10:010d}"
+    corpus = [f"issuer:lei:5493{number % 10**14:014d}18", f"security:cusip:{number % 10**8:08d}7", listing, "TST"]
+    plane = [f"issuer:cik:{number % 10**10:010d}", f"security:figi:BBG{number % 10**8:08d}3", listing, "TST"]
+    return corpus, plane, listing
+
+
+def _split_listings(connection, listing_uuid: str) -> tuple[int, int]:
+    """The count of distinct surviving instruments of the listing, and of distinct surviving issuers of those."""
+    return connection.execute(
+        """
+        with instruments as (
+            select relation.from_entity_id as id,
+                   staging.entity_survivor(relation.from_entity_id, 'infinity'::timestamptz) as survivor
+            from staging.entity_relations relation
+            where relation.relation_type = 'listed_as' and relation.to_entity_id = %s::uuid
+        )
+        select (select count(distinct survivor) from instruments),
+               (select count(distinct staging.entity_survivor(relation.from_entity_id, 'infinity'::timestamptz))
+                from staging.entity_relations relation
+                where relation.relation_type = 'issues'
+                  and relation.to_entity_id in (select id from instruments union select survivor from instruments))
+        """,
+        (listing_uuid,),
+    ).fetchone()
+
+
+def test_two_spellings_of_one_listing_resolve_to_one_issuer_and_one_instrument(connection) -> None:
+    """#1798: a listing has one issuer and one instrument in each universe. The second spelling
+    becomes an alias of the entities that the first spelling named."""
+    corpus, plane, listing = _two_spellings()
+    first = resolve_coordinates(connection, [corpus], as_of=TODAY, known_at=CUTOFF, refresh_mart=False)[listing]
+    second = resolve_coordinates(connection, [plane], as_of=TODAY, known_at=CUTOFF, refresh_mart=False)[listing]
+    assert second == first
+    assert _split_listings(connection, first[2]) == (1, 1)
+    assert str(resolve_entity(connection, plane[0], "issuer", as_of=TODAY, known_at=CUTOFF)) == first[0]
+    assert str(resolve_entity(connection, plane[1], "instrument", as_of=TODAY, known_at=CUTOFF)) == first[1]
+
+
+def test_a_spelling_that_already_names_other_entities_is_merged_into_the_listing(connection) -> None:
+    """#1798: the plane spelling has its own entities before the first capture (the universe head
+    minted them). The capture merges them into the entities of the listing."""
+    corpus, plane, listing = _two_spellings()
+    first = resolve_coordinates(connection, [corpus], as_of=TODAY, known_at=CUTOFF, refresh_mart=False)[listing]
+    plane_issuer = resolve_entity(connection, plane[0], "issuer", as_of=TODAY, known_at=CUTOFF)
+    plane_instrument = resolve_entity(connection, plane[1], "instrument", as_of=TODAY, known_at=CUTOFF)
+    assert str(plane_issuer) != first[0] and str(plane_instrument) != first[1]
+
+    second = resolve_coordinates(connection, [plane], as_of=TODAY, known_at=CUTOFF, refresh_mart=False)[listing]
+    assert second == first
+    survivors = connection.execute(
+        "select staging.entity_survivor(%s, 'infinity'::timestamptz)::text,"
+        " staging.entity_survivor(%s, 'infinity'::timestamptz)::text",
+        (plane_issuer, plane_instrument),
+    ).fetchone()
+    assert survivors == (first[0], first[1])
+    again = resolve_coordinates(connection, [plane], as_of=TODAY, known_at=CUTOFF, refresh_mart=False)[listing]
+    assert again == first, "a second resolution writes no second merge and returns the same trio"
+
+
+def test_a_listing_that_is_already_split_is_made_one_at_the_next_resolution(connection) -> None:
+    """#1798: staging holds a listing with two instruments and two issuers. The next resolution
+    merges the newer claimants into the oldest claimant."""
+    from data_engine.datahub.resolve_coordinates import _assert_relation
+
+    corpus, plane, listing = _two_spellings()
+    first = resolve_coordinates(connection, [corpus], as_of=TODAY, known_at=CUTOFF, refresh_mart=False)[listing]
+    plane_issuer = resolve_entity(connection, plane[0], "issuer", as_of=TODAY, known_at=CUTOFF)
+    plane_instrument = resolve_entity(connection, plane[1], "instrument", as_of=TODAY, known_at=CUTOFF)
+    later = datetime(2026, 4, 1, 1, 45, tzinfo=UTC)
+    _assert_relation(connection, "issues", plane_issuer, plane_instrument, known_at=later)
+    _assert_relation(connection, "listed_as", plane_instrument, uuid.UUID(first[2]), known_at=later)
+    assert _split_listings(connection, first[2]) == (2, 2)
+
+    healed = resolve_coordinates(connection, [corpus], as_of=TODAY, known_at=later, refresh_mart=False)[listing]
+    assert healed == first
+    assert _split_listings(connection, first[2]) == (1, 1)
+
+
 def test_plan_and_persist_coordinates_are_uuids(connection) -> None:
     """plan_and_persist produces canonical UUIDs for all coordinates."""
     from data_engine.datahub.capture_core.composition import plan_and_persist
@@ -191,3 +272,20 @@ def test_resolve_coordinates_holds_no_hardcoded_issuer_name_dictionary() -> None
     assert _holding_display_name(conn_empty, isin="US0378331005", ticker="AAPL", listing_name="APPLE INC") == (
         "APPLE INC"
     )
+
+
+def test_a_merge_that_a_retraction_ended_is_not_written_again(connection) -> None:
+    """#1798: a retraction of the `superseded_by` row says the two entities are different. The
+    next resolution of the same spelling stops with the listing and both entity ids."""
+    corpus, plane, listing = _two_spellings()
+    first = resolve_coordinates(connection, [corpus], as_of=TODAY, known_at=CUTOFF, refresh_mart=False)[listing]
+    plane_issuer = resolve_entity(connection, plane[0], "issuer", as_of=TODAY, known_at=CUTOFF)
+    resolve_coordinates(connection, [plane], as_of=TODAY, known_at=CUTOFF, refresh_mart=False)
+    connection.execute(
+        "insert into staging.entity_retractions (relation_id, valid_to, reason, transaction_time, source, raw_ref)"
+        " select relation_id, %s, 'wrong-listing-id', %s, 'test', 'test' from staging.entity_relations"
+        " where relation_type in ('same_as', 'superseded_by') and from_entity_id = %s and to_entity_id = %s::uuid",
+        (TODAY, CUTOFF, plane_issuer, first[0]),
+    )
+    with pytest.raises(ValueError, match=f"issuer {plane_issuer} was separated from {first[0]}"):
+        resolve_coordinates(connection, [plane], as_of=TODAY, known_at=CUTOFF, refresh_mart=False)
