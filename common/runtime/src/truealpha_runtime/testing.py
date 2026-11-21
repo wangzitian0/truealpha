@@ -382,11 +382,15 @@ def isolated_test_database(
     template: str | None = "truealpha",
     database_url: str | None = None,
     connect_timeout: int = 3,
+    apply_chain: bool = True,
+    name: str | None = None,
 ) -> Iterator[IsolatedDatabase]:
+    """Create a database, yield its URL, and drop it. `apply_chain=False` gives an empty database.
+    `name` sets the exact database name."""
     import pytest
 
     base_url = guard_db_write(database_url)
-    name = _new_db_name(name_prefix)
+    name = name or _new_db_name(name_prefix)
     target_url = _admin_url_for(base_url, name)
     try:
         admin_conn = psycopg.connect(_admin_url_for(base_url), connect_timeout=connect_timeout, autocommit=True)
@@ -397,7 +401,7 @@ def isolated_test_database(
         return
     try:
         cloned = False
-        if template is not None:
+        if template is not None and apply_chain:
             template_name = _dbname_for(template)
             if admin_conn.execute("select 1 from pg_database where datname = %s", (template_name,)).fetchone():
                 try:
@@ -407,7 +411,8 @@ def isolated_test_database(
                     cloned = False
         if not cloned:
             admin_conn.execute(sql.SQL("create database {}").format(sql.Identifier(name)))
-        apply_migration_chain(target_url)
+        if apply_chain:
+            apply_migration_chain(target_url)
         yield IsolatedDatabase(target_url, name)
     finally:
         _drop_database_and_close(admin_conn, name)

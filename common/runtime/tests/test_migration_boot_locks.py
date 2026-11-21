@@ -43,8 +43,7 @@ from pathlib import Path
 import psycopg
 import pytest
 from psycopg import sql
-from psycopg.conninfo import conninfo_to_dict, make_conninfo
-from truealpha_runtime.testing import guard_db_write
+from truealpha_runtime.testing import isolated_test_database
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DB_DIR = REPO_ROOT / "db"
@@ -59,30 +58,11 @@ APPLICATION_SCHEMAS = ("raw", "staging", "mart", "app", "ops", "dagster")
 STRICT = {"TRUEALPHA_MIGRATION_LOCK_TIMEOUT": "1s", "TRUEALPHA_MIGRATION_LOCK_ATTEMPTS": "1"}
 
 
-def _admin_url() -> str:
-    parameters = conninfo_to_dict(guard_db_write())
-    return make_conninfo(**(parameters | {"dbname": "postgres"}))
-
-
 @pytest.fixture
 def empty_database() -> Iterator[str]:
     """A database of its own, so holding locks and replaying the chain touch nothing shared."""
-    admin_url = _admin_url()
-    name = f"truealpha_bootlocks_{os.getpid()}_{uuid.uuid4().hex[:8]}"
-    try:
-        with psycopg.connect(admin_url, connect_timeout=3, autocommit=True) as admin:
-            admin.execute(sql.SQL("create database {}").format(sql.Identifier(name)))
-    except psycopg.OperationalError as error:
-        if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
-            pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
-        pytest.skip("no local Postgres; CI runs the required integration coverage")
-    parameters = conninfo_to_dict(admin_url)
-    try:
-        yield make_conninfo(**(parameters | {"dbname": name}))
-    finally:
-        with psycopg.connect(admin_url, autocommit=True) as admin:
-            admin.execute("select pg_terminate_backend(pid) from pg_stat_activity where datname = %s", (name,))
-            admin.execute(sql.SQL("drop database if exists {}").format(sql.Identifier(name)))
+    with isolated_test_database("bootlocks", apply_chain=False) as db:
+        yield str(db)
 
 
 def run_runner(
@@ -110,18 +90,7 @@ def _output(completed: subprocess.CompletedProcess[str]) -> str:
 def migrated_database() -> Iterator[str]:
     """The chain applied, rows seeded, and the chain applied again — the state every
     deployed database is in when the next boot replays it."""
-    admin_url = _admin_url()
-    name = f"truealpha_bootlocks_migrated_{os.getpid()}_{uuid.uuid4().hex[:8]}"
-    try:
-        with psycopg.connect(admin_url, connect_timeout=3, autocommit=True) as admin:
-            admin.execute(sql.SQL("create database {}").format(sql.Identifier(name)))
-    except psycopg.OperationalError as error:
-        if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
-            pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
-        pytest.skip("no local Postgres; CI runs the required integration coverage")
-    parameters = conninfo_to_dict(admin_url)
-    db_url = make_conninfo(**(parameters | {"dbname": name}))
-    try:
+    with isolated_test_database("bootlocks_migrated", apply_chain=False) as db_url:
         completed, _ = run_runner(db_url)
         assert completed.returncode == 0, _output(completed)[-4000:]
         seeded = subprocess.run(
@@ -133,11 +102,7 @@ def migrated_database() -> Iterator[str]:
         assert seeded.returncode == 0, seeded.stdout + seeded.stderr
         completed, _ = run_runner(db_url)
         assert completed.returncode == 0, _output(completed)[-4000:]
-        yield db_url
-    finally:
-        with psycopg.connect(admin_url, autocommit=True) as admin:
-            admin.execute("select pg_terminate_backend(pid) from pg_stat_activity where datname = %s", (name,))
-            admin.execute(sql.SQL("drop database if exists {}").format(sql.Identifier(name)))
+        yield str(db_url)
 
 
 def _insert_contract_object(connection: psycopg.Connection) -> None:

@@ -7,39 +7,21 @@ expression index each lookup scans the whole view; on staging the wide panel rea
 
 from __future__ import annotations
 
-import os
 import uuid
-from collections.abc import Generator
+from collections.abc import Iterator
 
 import psycopg
 import pytest
-from psycopg import sql
-from psycopg.conninfo import conninfo_to_dict, make_conninfo
-from truealpha_runtime.testing import apply_migration_chain, guard_db_write
+from truealpha_runtime.testing import isolated_test_database
 
 #: The lookup shape that panel_service._load_wide_panel and strategy_run_postgres use.
 LOOKUP = "select ei.legacy_id from mart.entity_identity ei where ei.entity_id::text = %s order by ei.legacy_id limit 1"
 
 
 @pytest.fixture(scope="module")
-def chain_db() -> Generator[str]:
-    params = conninfo_to_dict(guard_db_write())
-    admin_url = make_conninfo(**(params | {"dbname": "postgres"}))
-    name = f"truealpha_eitext_{os.getpid()}_{uuid.uuid4().hex[:8]}"
-    try:
-        with psycopg.connect(admin_url, connect_timeout=3, autocommit=True) as admin:
-            admin.execute(sql.SQL("create database {}").format(sql.Identifier(name)))
-    except psycopg.OperationalError as error:
-        if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
-            pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
-        pytest.skip("no local Postgres; CI runs required DB tests")
-    db_url = make_conninfo(**(params | {"dbname": name}))
-    try:
-        apply_migration_chain(db_url)
-        yield db_url
-    finally:
-        with psycopg.connect(admin_url, autocommit=True) as admin:
-            admin.execute(sql.SQL("drop database if exists {} with (force)").format(sql.Identifier(name)))
+def chain_db() -> Iterator[str]:
+    with isolated_test_database("eitext", template=None) as db:
+        yield str(db)
 
 
 def test_text_key_lookup_uses_an_index_scan(chain_db: str) -> None:

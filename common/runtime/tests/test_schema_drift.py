@@ -8,8 +8,8 @@ what broke — including the exact shape that cost 27 `UndefinedColumn` failures
 developer machine: `staging.market_prices_daily` without `trading_date`.
 
 Cost control, because these tests run in CI: the chain is applied ONCE, to a template
-database, and every case gets a `create database ... template` copy of it. A clone is a
-file copy; re-running 73 migrations per test would not be.
+database, and every case gets a clone of it. A clone is a file copy; re-running 73
+migrations per test would not be.
 """
 
 from __future__ import annotations
@@ -19,13 +19,19 @@ import subprocess
 import time
 import uuid
 from collections.abc import Iterator
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
-from urllib.parse import urlsplit, urlunsplit
 
 import psycopg
 import pytest
 from psycopg import sql
-from truealpha_runtime.testing import apply_migration_chain, guard_db_write, load_tool
+from truealpha_runtime.testing import (
+    IsolatedDatabase,
+    apply_migration_chain,
+    clone_test_database,
+    isolated_test_database,
+    load_tool,
+)
 
 drift = load_tool("schema_drift")
 
@@ -36,65 +42,34 @@ DRIFTED_TABLE = "staging.market_prices_daily"
 DRIFTED_COLUMN = "trading_date"
 
 
-def _named(database: str) -> str:
-    """The configured server, naming a different database — as a URI, because that is
-    what this repository's DATABASE_URL contract is (RuntimeSettings.validate_database_url)
-    and what db/reset_database.sh takes."""
-    base = urlsplit(guard_db_write())
-    return urlunsplit((base.scheme, base.netloc, f"/{database}", base.query, ""))
-
-
-def _admin_url() -> str:
-    return _named("postgres")
-
-
-def _create(statement: sql.Composed) -> None:
-    with psycopg.connect(_admin_url(), connect_timeout=5, autocommit=True) as admin:
-        admin.execute(statement)
-
-
-def _drop(database: str) -> None:
-    with psycopg.connect(_admin_url(), connect_timeout=5, autocommit=True) as admin:
-        admin.execute(sql.SQL("drop database if exists {} with (force)").format(sql.Identifier(database)))
-
-
 @pytest.fixture(scope="module")
-def chain_template() -> Iterator[str]:
+def chain_template() -> Iterator[IsolatedDatabase]:
     """One database with the declared chain applied, used as a template by everything below."""
-    name = f"truealpha_drift_template_{os.getpid()}_{uuid.uuid4().hex[:8]}"
-    try:
-        _create(sql.SQL("create database {}").format(sql.Identifier(name)))
-    except psycopg.OperationalError as error:
-        if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
-            pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
-        pytest.skip("no local Postgres; CI runs the required integration coverage")
-    try:
-        apply_migration_chain(_named(name))
-        yield name
-    finally:
-        _drop(name)
+    with isolated_test_database("drift_template", template=None) as db:
+        yield db
 
 
 @pytest.fixture
-def clone(chain_template: str) -> Iterator[str]:
+def clone(chain_template: IsolatedDatabase) -> Iterator[str]:
     """A throwaway copy of the migrated template. Function scope: tests break it on purpose."""
-    name = f"truealpha_drift_{os.getpid()}_{uuid.uuid4().hex[:8]}"
-    _create(sql.SQL("create database {} template {}").format(sql.Identifier(name), sql.Identifier(chain_template)))
-    try:
-        yield _named(name)
-    finally:
-        _drop(name)
+    with clone_test_database(chain_template.name, "drift") as db:
+        yield str(db)
 
 
 @pytest.fixture
-def reference(chain_template: str) -> Iterator[str]:
+def reference(chain_template: IsolatedDatabase) -> Iterator[str]:
     """A second copy, standing in for the database the tool builds from the chain itself."""
-    name = f"truealpha_drift_ref_{os.getpid()}_{uuid.uuid4().hex[:8]}"
-    _create(sql.SQL("create database {} template {}").format(sql.Identifier(name), sql.Identifier(chain_template)))
-    try:
-        yield _named(name)
-    finally:
-        _drop(name)
+    with clone_test_database(chain_template.name, "drift_ref") as db:
+        yield str(db)
+
+
+@contextmanager
+def _empty_databases(*names: str) -> Iterator[None]:
+    """Empty databases with these exact names. The exit drops each one that still exists."""
+    with ExitStack() as stack:
+        for name in names:
+            stack.enter_context(isolated_test_database(name=name, apply_chain=False))
+        yield
 
 
 def _execute(database_url: str, statement: str) -> None:
@@ -158,14 +133,10 @@ def test_a_changed_column_type_is_named(clone: str, reference: str) -> None:
 def test_comparing_against_an_unmigrated_database_fails_rather_than_reporting_clean(clone: str) -> None:
     """If the reference never ran the chain, every relation in the target reads as
     "extra" and an empty target reads as a perfect match. Neither is an answer."""
-    name = f"truealpha_drift_empty_{os.getpid()}_{uuid.uuid4().hex[:8]}"
-    _create(sql.SQL("create database {}").format(sql.Identifier(name)))
-    try:
+    with isolated_test_database("drift_empty", apply_chain=False) as empty:
         with pytest.raises(RuntimeError, match="did not reach it"):
-            drift.compare(clone, _named(name))
-        assert drift.main(["--database-url", clone, "--reference-database-url", _named(name)]) == 2
-    finally:
-        _drop(name)
+            drift.compare(clone, empty)
+        assert drift.main(["--database-url", clone, "--reference-database-url", empty]) == 2
 
 
 def test_the_tool_builds_its_own_reference_and_leaves_the_target_alone(clone: str) -> None:
@@ -220,7 +191,7 @@ def test_the_reset_turns_the_drift_check_from_red_to_green(clone: str, reference
     assert drift.compare(clone, reference)[0] == []
 
 
-def test_the_containerised_psql_transport_lands_the_whole_chain(chain_template: str) -> None:
+def test_the_containerised_psql_transport_lands_the_whole_chain(chain_template: IsolatedDatabase) -> None:
     """The applier's OTHER transport, proved by its result rather than its exit code.
 
     The Makefile's compose branch and the VPS bootstrap run psql inside a container
@@ -234,15 +205,11 @@ def test_the_containerised_psql_transport_lands_the_whole_chain(chain_template: 
     result against one the normal transport built. A transport that applies nothing
     cannot pass it.
     """
-    name = f"truealpha_drift_stdin_{os.getpid()}_{uuid.uuid4().hex[:8]}"
-    _create(sql.SQL("create database {}").format(sql.Identifier(name)))
-    try:
-        apply_migration_chain(_named(name), psql_command="psql")
-        report, counts = drift.compare(_named(name), _named(chain_template))
+    with isolated_test_database("drift_stdin", apply_chain=False) as empty:
+        apply_migration_chain(empty, psql_command="psql")
+        report, counts = drift.compare(empty, chain_template)
         assert report == []
         assert counts["relations"] > drift.MINIMUM_REFERENCE_RELATIONS, counts
-    finally:
-        _drop(name)
 
 
 # --- it does not create a database on somebody else's cluster -------------------------
@@ -349,11 +316,6 @@ def test_the_default_chain_directory_is_the_one_of_the_checkout(monkeypatch, clo
     assert seen == {}
 
 
-def _create_database(admin_url: str, name: str) -> None:
-    with psycopg.connect(admin_url, autocommit=True) as admin:
-        admin.execute(sql.SQL("create database {}").format(sql.Identifier(name)))
-
-
 def _left(admin_url: str) -> set[str]:
     with psycopg.connect(admin_url, autocommit=True) as admin:
         return {r[0] for r in admin.execute("select datname from pg_database").fetchall()}
@@ -372,16 +334,11 @@ def test_the_sweep_drops_only_stale_references_of_the_known_shape(clone: str) ->
     fresh = f"{drift.REFERENCE_PREFIX}{now - 60}_222_abcdef02"
     other_shape = f"{drift.REFERENCE_PREFIX}manual_copy"
     old_format = f"{drift.REFERENCE_PREFIX}333_abcdef03"
-    names = [stale, fresh, other_shape, old_format]
-    for name in names:
-        _create_database(admin_url, name)
-    try:
+    with _empty_databases(stale, fresh, other_shape, old_format):
         dropped = drift.drop_stale_references(clone, now=now)
         left = _left(admin_url)
         assert dropped == [stale]
         assert stale not in left and {fresh, other_shape, old_format} <= left
-    finally:
-        _drop_all(admin_url, names)
 
 
 def test_the_sweep_keeps_a_database_whose_name_only_starts_like_a_stale_reference(clone: str) -> None:
@@ -391,15 +348,10 @@ def test_the_sweep_keeps_a_database_whose_name_only_starts_like_a_stale_referenc
     old = int(time.time()) - 7200
     backup = f"{drift.REFERENCE_PREFIX}{old}_111_abcdef01_backup"
     wildcard_only = f"truealpha{'x'}chain{'x'}reference{'x'}{old}_111_abcdef02"
-    names = [backup, wildcard_only]
-    for name in names:
-        _create_database(admin_url, name)
-    try:
+    with _empty_databases(backup, wildcard_only):
         dropped = drift.drop_stale_references(clone)
         assert dropped == []
-        assert set(names) <= _left(admin_url)
-    finally:
-        _drop_all(admin_url, names)
+        assert {backup, wildcard_only} <= _left(admin_url)
 
 
 def test_the_sweep_does_not_read_a_digit_of_another_script_as_an_age(clone: str) -> None:
@@ -407,12 +359,9 @@ def test_the_sweep_does_not_read_a_digit_of_another_script_as_an_age(clone: str)
     no run of this code ever wrote."""
     admin_url = drift._with_database(clone, "postgres")
     foreign = f"{drift.REFERENCE_PREFIX}{chr(0x660) * 10}_111_abcdef01"
-    _create_database(admin_url, foreign)
-    try:
+    with _empty_databases(foreign):
         assert drift.drop_stale_references(clone) == []
         assert foreign in _left(admin_url)
-    finally:
-        _drop_all(admin_url, [foreign])
 
 
 def test_the_sweep_leaves_the_target_and_an_unrelated_database_alone(clone: str) -> None:
@@ -420,15 +369,11 @@ def test_the_sweep_leaves_the_target_and_an_unrelated_database_alone(clone: str)
     now = int(time.time())
     unrelated = f"ta_unrelated_{uuid.uuid4().hex[:8]}"
     stale = f"{drift.REFERENCE_PREFIX}{now - 7200}_111_abcdef01"
-    for name in (unrelated, stale):
-        _create_database(admin_url, name)
-    try:
+    with _empty_databases(unrelated, stale):
         assert drift.drop_stale_references(clone, now=now) == [stale]
         left = _left(admin_url)
         assert unrelated in left, "a database without the prefix is not a candidate"
         assert {"postgres", psycopg.conninfo.conninfo_to_dict(clone)["dbname"]} <= left, "the target stays"
-    finally:
-        _drop_all(admin_url, [unrelated, stale])
 
 
 def test_the_sweep_goes_on_after_a_drop_that_fails_and_returns_only_what_it_dropped(clone: str) -> None:
@@ -437,19 +382,17 @@ def test_the_sweep_goes_on_after_a_drop_that_fails_and_returns_only_what_it_drop
     now = int(time.time())
     undroppable = f"{drift.REFERENCE_PREFIX}{now - 7300}_111_abcdef01"
     droppable = f"{drift.REFERENCE_PREFIX}{now - 7200}_222_abcdef02"
-    for name in (undroppable, droppable):
-        _create_database(admin_url, name)
-    with psycopg.connect(admin_url, autocommit=True) as admin:
-        admin.execute(sql.SQL("alter database {} is_template true").format(sql.Identifier(undroppable)))
-    try:
-        dropped = drift.drop_stale_references(clone, now=now)
-        left = _left(admin_url)
-        assert dropped == [droppable]
-        assert undroppable in left and droppable not in left
-    finally:
+    with _empty_databases(undroppable, droppable):
         with psycopg.connect(admin_url, autocommit=True) as admin:
-            admin.execute(sql.SQL("alter database {} is_template false").format(sql.Identifier(undroppable)))
-        _drop_all(admin_url, [undroppable, droppable])
+            admin.execute(sql.SQL("alter database {} is_template true").format(sql.Identifier(undroppable)))
+        try:
+            dropped = drift.drop_stale_references(clone, now=now)
+            left = _left(admin_url)
+            assert dropped == [droppable]
+            assert undroppable in left and droppable not in left
+        finally:
+            with psycopg.connect(admin_url, autocommit=True) as admin:
+                admin.execute(sql.SQL("alter database {} is_template false").format(sql.Identifier(undroppable)))
 
 
 def test_the_sweep_connection_stops_a_statement_after_the_timeout(monkeypatch, clone: str) -> None:
