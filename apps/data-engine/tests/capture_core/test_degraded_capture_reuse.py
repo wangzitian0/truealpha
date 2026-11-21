@@ -533,10 +533,9 @@ def test_a_fully_reused_run_still_exists_on_the_evidence_plane(tick_database_url
 
 
 def test_reuse_requires_identity_coordinate_equality(tick_database_url, monkeypatch) -> None:
-    """#684 / #1333 / #1352 / #1517: `market-price` and `financial-fact` reuse keys on `listing_id`
-    so universes that key the same listing under different issuer namespaces (TOPT's LEI vs
-    the planes' CIK) share captured price and financial observations, while a different
-    `listing_id` fetches fresh."""
+    """#1352 / #1798: `market-price` reuse compares the listing. `financial-fact` reuse compares
+    the issuer, the instrument and the listing, because `_validate_member_rows` refuses a
+    financial fact of another issuer or instrument."""
     _arm(monkeypatch)
     cutoff = datetime(2026, 3, 31, 22, 15, tzinfo=UTC)
     _run_tick(tick_database_url, version="coordinate-source", cutoff=cutoff)
@@ -547,14 +546,17 @@ def test_reuse_requires_identity_coordinate_equality(tick_database_url, monkeypa
         subjects = sorted(plan.coordinates)
         victim_issuer = subjects[0]
         victim_listing = subjects[1]
+        victim_instrument = subjects[2]
         _iss0, inst0, list0, tick0 = plan.coordinates[victim_issuer]
         iss1, inst1, _list1, tick1 = plan.coordinates[victim_listing]
+        iss2, _inst2, list2, tick2 = plan.coordinates[victim_instrument]
         patched = dataclasses.replace(
             plan,
             coordinates={
                 **plan.coordinates,
                 victim_issuer: ("issuer:cik:0000999999", inst0, list0, tick0),
                 victim_listing: (iss1, inst1, "listing:xnas:unmatched-999", tick1),
+                victim_instrument: (iss2, "security:figi:BBG000UNMTCH9", list2, tick2),
             },
         )
         satisfied = composition._satisfy_from_recent_observations(probe, patched, cutoff=cutoff)
@@ -564,14 +566,17 @@ def test_reuse_requires_identity_coordinate_equality(tick_database_url, monkeypa
             semantic = binding.obligation.capture_requirement_id.removesuffix(":v1")
             cells = reused_by_subject.setdefault(binding.obligation.subject.id, {})
             cells[semantic] = work_item_id in satisfied
-        # Same listing_id + different issuer_id: both market-price and financial-fact reuse.
-        assert reused_by_subject[victim_issuer]["market-price"] is True
-        assert reused_by_subject[victim_issuer]["financial-fact"] is True
-        # Different listing_id: both market-price and financial-fact fetch fresh.
+        # A different issuer or instrument on the same listing: the price is reused, the financial
+        # fact fetches fresh.
+        for victim in (victim_issuer, victim_instrument):
+            assert reused_by_subject[victim]["market-price"] is True, victim
+            assert reused_by_subject[victim]["financial-fact"] is False, victim
+        # A different listing: both fetch fresh.
         assert reused_by_subject[victim_listing]["market-price"] is False
         assert reused_by_subject[victim_listing]["financial-fact"] is False
-        others = [subject for subject in reused_by_subject if subject not in {victim_issuer, victim_listing}]
-        assert others, "the corpus has more than two subjects"
+        victims = {victim_issuer, victim_listing, victim_instrument}
+        others = [subject for subject in reused_by_subject if subject not in victims]
+        assert others, "the corpus has more than three subjects"
         assert all(reused_by_subject[s]["market-price"] and reused_by_subject[s]["financial-fact"] for s in others)
         assert not any(
             cells.get("listing-identity") or cells.get("universe-membership") for cells in reused_by_subject.values()
