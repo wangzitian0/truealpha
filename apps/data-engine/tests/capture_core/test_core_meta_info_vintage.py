@@ -24,7 +24,7 @@ from pathlib import Path
 import psycopg
 import pytest
 from data_engine.config import settings
-from data_engine.datahub.capture_core import PostgresToptCoreRepository
+from data_engine.datahub.capture_core import PostgresCoreRepository
 from factors.snapshot_inputs import GppeV0Definition
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -195,7 +195,7 @@ def test_the_vintage_in_the_payload_table_reaches_the_lineage_of_the_served_row(
     }
     vintage = {"revenue": filing, "total_assets": filing}
     (_, run, _, release_manifest_id, *_rest) = _seed_complete_production_run(connection, financial_vintage=vintage)
-    core = PostgresToptCoreRepository(connection)
+    core = PostgresCoreRepository(connection)
     snapshot = core.freeze_snapshot(run_id=run.run_id, release_manifest_id=release_manifest_id)
     assert len(core.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate="0.05"))) == 20
 
@@ -230,7 +230,7 @@ def test_the_view_keeps_every_column_when_inputs_is_added(connection) -> None:
 
 def _seed_and_materialize(connection):
     (_, run, _, release_manifest_id, *_rest) = _seed_complete_production_run(connection)
-    core = PostgresToptCoreRepository(connection)
+    core = PostgresCoreRepository(connection)
     snapshot = core.freeze_snapshot(run_id=run.run_id, release_manifest_id=release_manifest_id)
     assert len(core.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate="0.05"))) == 20
     return run

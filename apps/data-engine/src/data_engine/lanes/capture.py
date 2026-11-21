@@ -18,7 +18,7 @@ from data_engine.datahub.a1_evidence import ACCEPTED_SERVICE_OBJECTIVES, Service
 from data_engine.datahub.capture_core.composition import (
     ensure_served_head_artifacts,
     live_version_for,
-    run_topt_pipeline,
+    run_capture_pipeline,
 )
 from data_engine.datahub.capture_core.corroboration_audit import CorroborationTally, corroboration_tally
 from data_engine.datahub.capture_core.fund_consolidation import (
@@ -41,7 +41,7 @@ from data_engine.external_op import external_op
 from data_engine.sources import gateway
 
 
-class ToptLiveTickConfig(dg.Config):
+class LiveTickConfig(dg.Config):
     executed_at: str
     force_fetch: bool = False
 
@@ -157,7 +157,7 @@ def _registry_unavailable(
     return flagged
 
 
-def _run_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfig, tick: UniverseTick) -> str:
+def _run_tick(context: dg.OpExecutionContext, config: LiveTickConfig, tick: UniverseTick) -> str:
     cutoff = datetime.fromisoformat(config.executed_at)
     version = live_version_for(cutoff)
     with (
@@ -168,7 +168,7 @@ def _run_tick(context: dg.OpExecutionContext, config: ToptLiveTickConfig, tick: 
         psycopg.connect(settings.database_url) as connection,
     ):
         ensure_served_head_artifacts(connection)
-        pipeline = run_topt_pipeline(
+        pipeline = run_capture_pipeline(
             connection,
             cutoff=cutoff,
             version=version,
@@ -307,7 +307,7 @@ def build_schedule(
         executed_at = context.scheduled_execution_time.isoformat()
         return dg.RunRequest(
             run_key=executed_at,
-            run_config=dg.RunConfig(ops={tick.op_name: ToptLiveTickConfig(executed_at=executed_at, force_fetch=False)}),
+            run_config=dg.RunConfig(ops={tick.op_name: LiveTickConfig(executed_at=executed_at, force_fetch=False)}),
         )
 
     return tick_schedule
@@ -315,7 +315,7 @@ def build_schedule(
 
 def build_tick(tick: UniverseTick) -> tuple[dg.OpDefinition, dg.JobDefinition, dg.ScheduleDefinition | None]:
     @external_op(name=tick.op_name)
-    def tick_op(context: dg.OpExecutionContext, config: ToptLiveTickConfig) -> str:
+    def tick_op(context: dg.OpExecutionContext, config: LiveTickConfig) -> str:
         return _run_tick(context, config, tick)
 
     @dg.job(name=tick.job_name)

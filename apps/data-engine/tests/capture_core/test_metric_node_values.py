@@ -25,14 +25,14 @@ from factors.panel import (
     variant_sha256,
 )
 from factors.snapshot_inputs import (
+    CellQualityInput,
+    CoreSnapshotInput,
     GppeV0Definition,
+    MarketValueComponent,
     MetricAvailability,
     MetricFreshness,
+    MetricInput,
     OperatingBranch,
-    ToptCellQualityInput,
-    ToptCoreSnapshotInput,
-    ToptMarketValueComponent,
-    ToptMetricInput,
 )
 from truealpha_contracts.execution import InputEvidenceStatus
 from truealpha_contracts.strategy import (
@@ -74,10 +74,10 @@ class _FakeNodeConnection:
         return _RecordingCursor([])
 
 
-def _sample_factor_input() -> ToptCoreSnapshotInput:
+def _sample_factor_input() -> CoreSnapshotInput:
     obs_ids = tuple(f"normalized-observation:{i:064x}" for i in range(1, 5))
     cells = tuple(
-        ToptCellQualityInput(
+        CellQualityInput(
             input_id=oid,
             confidence=Decimal("0.92"),
             knowable_at=KNOWN,
@@ -85,7 +85,7 @@ def _sample_factor_input() -> ToptCoreSnapshotInput:
         )
         for oid in obs_ids
     )
-    gp = ToptMetricInput(
+    gp = MetricInput(
         input_id=obs_ids[0],
         metric="gross_profit",
         value=Decimal("10000000000"),
@@ -94,7 +94,7 @@ def _sample_factor_input() -> ToptCoreSnapshotInput:
         freshness=MetricFreshness.FRESH,
         availability=MetricAvailability.AVAILABLE,
     )
-    assets = ToptMetricInput(
+    assets = MetricInput(
         input_id=obs_ids[0],
         metric="total_assets",
         value=Decimal("20000000000"),
@@ -103,7 +103,7 @@ def _sample_factor_input() -> ToptCoreSnapshotInput:
         freshness=MetricFreshness.FRESH,
         availability=MetricAvailability.AVAILABLE,
     )
-    headcount = ToptMetricInput(
+    headcount = MetricInput(
         input_id=obs_ids[0],
         metric="headcount",
         value=Decimal("1000"),
@@ -112,7 +112,7 @@ def _sample_factor_input() -> ToptCoreSnapshotInput:
         freshness=MetricFreshness.FRESH,
         availability=MetricAvailability.AVAILABLE,
     )
-    revenue = ToptMetricInput(
+    revenue = MetricInput(
         input_id=obs_ids[0],
         metric="revenue",
         value=Decimal("25000000000"),
@@ -121,7 +121,7 @@ def _sample_factor_input() -> ToptCoreSnapshotInput:
         freshness=MetricFreshness.FRESH,
         availability=MetricAvailability.AVAILABLE,
     )
-    price = ToptMetricInput(
+    price = MetricInput(
         input_id=obs_ids[1],
         metric="market_price",
         value=Decimal("150"),
@@ -130,7 +130,7 @@ def _sample_factor_input() -> ToptCoreSnapshotInput:
         freshness=MetricFreshness.FRESH,
         availability=MetricAvailability.AVAILABLE,
     )
-    shares = ToptMetricInput(
+    shares = MetricInput(
         input_id=obs_ids[0],
         metric="shares_outstanding",
         value=Decimal("100000000"),
@@ -139,7 +139,7 @@ def _sample_factor_input() -> ToptCoreSnapshotInput:
         freshness=MetricFreshness.FRESH,
         availability=MetricAvailability.AVAILABLE,
     )
-    return ToptCoreSnapshotInput(
+    return CoreSnapshotInput(
         snapshot_id="topt-core-snapshot:" + "a" * 64,
         run_id="capture-run:" + "b" * 64,
         release_manifest_id="release-manifest:" + "c" * 64,
@@ -159,7 +159,7 @@ def _sample_factor_input() -> ToptCoreSnapshotInput:
         revenue=revenue,
         pre_provision_profit=None,
         market_value_components=(
-            ToptMarketValueComponent(
+            MarketValueComponent(
                 instrument_id="security:nvda",
                 listing_id="listing:xnas:nvda",
                 market_price=price,
@@ -181,7 +181,7 @@ def test_f2_polars_expr_factor_iteration_materializes_node_values_without_ddl_or
 
     factor_2024 = _sample_factor_input()
     obs_id = factor_2024.observation_ids[0]
-    ni_2024 = ToptMetricInput(
+    ni_2024 = MetricInput(
         input_id=obs_id,
         metric="net_income",
         value=Decimal("5000000000"),
@@ -190,7 +190,7 @@ def test_f2_polars_expr_factor_iteration_materializes_node_values_without_ddl_or
         freshness=MetricFreshness.FRESH,
         availability=MetricAvailability.AVAILABLE,
     )
-    ni_2025 = ToptMetricInput(
+    ni_2025 = MetricInput(
         input_id=obs_id,
         metric="net_income",
         value=Decimal("7500000000"),
@@ -210,7 +210,7 @@ def test_f2_polars_expr_factor_iteration_materializes_node_values_without_ddl_or
             "inputs": {"net_income": ni_2025},
             "cell_inputs": (
                 *_sample_factor_input().cell_inputs[:-1],
-                ToptCellQualityInput(
+                CellQualityInput(
                     input_id=_sample_factor_input().observation_ids[-1],
                     confidence=Decimal("0.36"),
                     knowable_at=KNOWN,
@@ -491,8 +491,8 @@ def test_financial_issuer_under_gppe_operating_financial_tree_only_materializes_
     base = _sample_factor_input()
     obs_id = base.observation_ids[0]
 
-    def _m(metric: str, val: str) -> ToptMetricInput:
-        return ToptMetricInput(
+    def _m(metric: str, val: str) -> MetricInput:
+        return MetricInput(
             input_id=obs_id,
             metric=metric,
             value=Decimal(val),

@@ -16,7 +16,7 @@ from pathlib import Path
 import psycopg
 import pytest
 from data_engine.config import settings
-from data_engine.datahub.capture_core import PostgresToptCoreRepository, plausibility_gate
+from data_engine.datahub.capture_core import PostgresCoreRepository, plausibility_gate
 from factors.composite import plausibility_policy
 from factors.composite.plausibility_policy import RULE_EMPTY_ELIGIBLE, RULE_NODE_SIGN_POLICY
 from factors.panel import GPPE_BANKING_TCE_SPEC, GPPE_V0_SPEC, IssuerClass, SignPolicy, published_node
@@ -46,7 +46,7 @@ def connection():
 
 def _materialized_run(connection):
     _repository, run, _list_version, release_manifest_id, *_ = _seed_strategy_capture(connection)
-    core = PostgresToptCoreRepository(connection)
+    core = PostgresCoreRepository(connection)
     snapshot = core.freeze_snapshot(run_id=run.run_id, release_manifest_id=release_manifest_id)
     results = core.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate="0.05"))
     assert len(results) == 20

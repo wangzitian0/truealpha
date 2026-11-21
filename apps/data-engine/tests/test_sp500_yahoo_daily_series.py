@@ -17,7 +17,7 @@ from data_engine.datahub.capture_core.executor import FetchSuccess
 from data_engine.datahub.capture_core.materialization import (
     FinancialFactPayload,
     MarketPricePayload,
-    PostgresToptCoreRepository,
+    PostgresCoreRepository,
     _ObservationRow,
 )
 from data_engine.datahub.capture_core.source_registrations import RouteCell, RouteContext
@@ -314,7 +314,7 @@ def test_share_basis_missing_warning_bounded_once_per_listing_reason_per_run(
             currency="USD",
             close=Decimal("150"),
         )
-        val, _ts, reason = PostgresToptCoreRepository._resolve_shares_on_close_basis(
+        val, _ts, reason = PostgresCoreRepository._resolve_shares_on_close_basis(
             lid,
             financial=financial,
             financial_row=fin_row,

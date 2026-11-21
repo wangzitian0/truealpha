@@ -457,7 +457,7 @@ def test_rows_are_the_governed_runs_members_under_the_ids_the_run_gives_them(con
     """
     from pathlib import Path
 
-    from data_engine.datahub.capture_core import PostgresToptCoreRepository
+    from data_engine.datahub.capture_core import PostgresCoreRepository
     from data_engine.datahub.capture_core.theme_purity import governed_members
     from data_engine.datahub.question_coverage import gppe_cells, theme_purity_cells
     from factors.snapshot_inputs import GppeV0Definition
@@ -468,7 +468,7 @@ def test_rows_are_the_governed_runs_members_under_the_ids_the_run_gives_them(con
     from capture_core.test_persistence import _capture  # noqa: E402
 
     plan = _capture(connection, version="test-828-governed-members")
-    core = PostgresToptCoreRepository(connection)
+    core = PostgresCoreRepository(connection)
     snapshot = core.freeze_snapshot(run_id=plan.run_id, release_manifest_id=plan.release_manifest_id)
     core.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate="0.05"))
 
@@ -513,7 +513,7 @@ def test_a_run_that_fetched_unchanged_bytes_still_resolves_every_member(connecti
     none. What the run's GPPE rows consumed still names every member's CIK."""
     from pathlib import Path
 
-    from data_engine.datahub.capture_core import PostgresToptCoreRepository
+    from data_engine.datahub.capture_core import PostgresCoreRepository
     from data_engine.datahub.capture_core.theme_purity import governed_members
     from data_engine.datahub.question_coverage import gppe_cells
     from factors.snapshot_inputs import GppeV0Definition
@@ -521,7 +521,7 @@ def test_a_run_that_fetched_unchanged_bytes_still_resolves_every_member(connecti
     monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1]))
     import capture_core.test_persistence as persistence  # noqa: E402
 
-    core = PostgresToptCoreRepository(connection)
+    core = PostgresCoreRepository(connection)
     # Two daily ticks of ONE universe partition: same version, the next day's cutoff. The
     # financial facts are the same bytes both days, which is exactly what staging fetched.
     first = persistence._capture(connection, version="test-839")

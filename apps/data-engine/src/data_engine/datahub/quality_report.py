@@ -100,7 +100,7 @@ _CORE_COMPLETE_LISTINGS_SQL = (
 def _operating_numerator_field(branch: OperatingBranch) -> str:
     issuer_class = IssuerClass(branch.value)
     node = operating_numerator_node(bound_tree(load_live_strategy_definition(), issuer_class), issuer_class)
-    field = node.alias(AliasKind.TOPT_SNAPSHOT_FIELD)
+    field = node.alias(AliasKind.CORE_SNAPSHOT_FIELD)
     assert field is not None, f"the numerator {node.key} names no snapshot field"
     return field
 
@@ -144,7 +144,7 @@ def _core_payload_fields(branch: OperatingBranch) -> tuple[str, ...]:
     issuer_class = IssuerClass(branch.value)
     definition = load_live_strategy_definition()
     fields = (
-        node.alias(AliasKind.TOPT_SNAPSHOT_FIELD)
+        node.alias(AliasKind.CORE_SNAPSHOT_FIELD)
         for node in required_inputs(bound_tree(definition, issuer_class), issuer_class)
     )
     extra = (

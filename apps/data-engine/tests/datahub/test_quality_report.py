@@ -253,8 +253,8 @@ def test_financial_fact_usability_matches_strategy_evaluator_availability_across
     from typing import Any
 
     from data_engine.datahub.capture_core.materialization import (
-        PostgresToptCoreRepository,
-        ToptCoreSnapshot,
+        CoreSnapshot,
+        PostgresCoreRepository,
         _ObservationRow,
     )
     from factors.composite.strategy_evaluator import IssuerInput, evaluate_cutoff
@@ -405,8 +405,8 @@ def test_financial_fact_usability_matches_strategy_evaluator_availability_across
                     payload=fin_payload,
                 ),
             }
-            member = PostgresToptCoreRepository._snapshot_member("listing:xnys:brk.b", by_type, histories=histories)
-            snapshot = ToptCoreSnapshot(
+            member = PostgresCoreRepository._snapshot_member("listing:xnys:brk.b", by_type, histories=histories)
+            snapshot = CoreSnapshot(
                 run_id="capture-run:" + "1" * 64,
                 release_manifest_id="release-manifest:" + "2" * 64,
                 universe_id="universe:topt-us-2026-03-31",

@@ -24,8 +24,8 @@ from data_engine.config import settings
 from data_engine.contracts.datahub import ObligationTerminalState
 from data_engine.contracts.obligation_reason_codes import ObligationReasonCode
 from data_engine.datahub import quality_report
-from data_engine.datahub.capture_core import PostgresToptCoreRepository
-from data_engine.datahub.capture_core.capture_orchestration import run_topt_capture
+from data_engine.datahub.capture_core import PostgresCoreRepository
+from data_engine.datahub.capture_core.capture_orchestration import run_capture
 from data_engine.datahub.capture_core.composition import PlannedRun, plan_and_persist
 from data_engine.datahub.capture_core.executor import FetchSuccess, NormalizedRecord, RawResponse, SourceFetchPort
 from data_engine.datahub.capture_core.headcount import PostgresHeadcountExtractor, record_headcount
@@ -390,7 +390,7 @@ def _capture(
         coordinates=plan.coordinates,
         raw_coordinates=plan.raw_coordinates,
     )
-    report = run_topt_capture(
+    report = run_capture(
         plan.run_id,
         plan.work_items,
         _routes(
@@ -570,7 +570,7 @@ def test_the_report_and_the_mart_agree_about_the_same_broken_run(connection) -> 
     )
 
     store_flat_topt_series(connection, last=CUTOFF.date())
-    core = PostgresToptCoreRepository(connection)
+    core = PostgresCoreRepository(connection)
     snapshot = core.freeze_snapshot(run_id=plan.run_id, release_manifest_id=plan.release_manifest_id)
     core.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate="0.05"))
     unavailable = connection.execute(
@@ -633,7 +633,7 @@ def test_factor_availability_reads_core_availability_when_issuer_is_unavailable_
         broken=_OneBrokenCell(financial_fact_numerator=True),
     )
     store_flat_topt_series(connection, last=CUTOFF.date())
-    core = PostgresToptCoreRepository(connection)
+    core = PostgresCoreRepository(connection)
     snapshot = core.freeze_snapshot(run_id=plan.run_id, release_manifest_id=plan.release_manifest_id)
     core.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate="0.05"))
 
@@ -1097,7 +1097,7 @@ def test_the_vintage_axis_reaches_the_served_mart_row(connection) -> None:
     import datetime as _dt
 
     plan = _capture(connection, version="test-530-periods")
-    core = PostgresToptCoreRepository(connection)
+    core = PostgresCoreRepository(connection)
     snapshot = core.freeze_snapshot(run_id=plan.run_id, release_manifest_id=plan.release_manifest_id)
     core.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate="0.05"))
 
@@ -1146,7 +1146,7 @@ def test_a_listing_whose_share_count_the_core_drops_is_not_complete_in_the_repor
 
     The test runs in a database of its own: the symbol must have no committed bar, and a shared database
     could hold one. The other tick tests call `freeze_snapshot` and `build_report` in the order of
-    `composition.run_topt_pipeline`; `test_live_share_basis.py` pins that order through the deployed op.
+    `composition.run_capture_pipeline`; `test_live_share_basis.py` pins that order through the deployed op.
     """
     from truealpha_runtime.testing import isolated_test_database
 
@@ -1155,7 +1155,7 @@ def test_a_listing_whose_share_count_the_core_drops_is_not_complete_in_the_repor
         plan = _capture(connection, version="test-1346-share-count", object_store=store)
         stored = [symbol for symbol in TOPT_SYMBOLS if symbol != _NO_BAR_TICKER]
         store_flat_daily_series(connection, stored, first=date(2026, 1, 2), last=CUTOFF.date())
-        core = PostgresToptCoreRepository(connection)
+        core = PostgresCoreRepository(connection)
         snapshot = core.freeze_snapshot(run_id=plan.run_id, release_manifest_id=plan.release_manifest_id)
         results = core.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate="0.05"))
         report = quality_report.build_report(connection, plan.run_id, object_store=store)

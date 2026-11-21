@@ -9,14 +9,14 @@ from data_engine.contracts.datahub import CaptureWorkItem
 from data_engine.contracts.evidence_graph import EvidenceGraphWriter
 from data_engine.contracts.obligation_reason_codes import ObligationReasonCode
 from data_engine.datahub.capture_core.executor import (
+    CaptureExecutor,
+    CaptureRunReport,
     FailoverFetchPort,
     FetchFailure,
     FetchOutcome,
     FetchSuccess,
     ObligationSink,
     SourceFetchPort,
-    ToptCaptureExecutor,
-    ToptCaptureRunReport,
 )
 
 
@@ -37,7 +37,7 @@ class CompositeSourceFetchPort:
         return adapter.failover(work_item, primary_reason)
 
 
-def run_topt_capture(
+def run_capture(
     run_id: str,
     work_items: Sequence[CaptureWorkItem],
     routes: Mapping[str, SourceFetchPort],
@@ -47,7 +47,7 @@ def run_topt_capture(
     cutoff: datetime,
     recorded_at: datetime,
     max_attempts: int = 3,
-) -> ToptCaptureRunReport:
+) -> CaptureRunReport:
     port = CompositeSourceFetchPort(routes)
-    executor = ToptCaptureExecutor(writer, sink=sink, max_attempts=max_attempts)
+    executor = CaptureExecutor(writer, sink=sink, max_attempts=max_attempts)
     return executor.run(run_id, work_items, port, cutoff=cutoff, recorded_at=recorded_at)

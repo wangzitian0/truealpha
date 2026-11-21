@@ -14,15 +14,15 @@ from factors.composite.strategy_evaluator import deciding_input_keys
 from factors.panel import IssuerClass, definition_pins
 from factors.snapshot_inputs import (
     OPTIONAL_SNAPSHOT_FIELDS,
+    CellQualityInput,
+    CoreReasonCode,
+    CoreSnapshotInput,
     GppeV0Definition,
+    MarketValueComponent,
     MetricAvailability,
     MetricFreshness,
+    MetricInput,
     OperatingBranch,
-    ToptCellQualityInput,
-    ToptCoreReasonCode,
-    ToptCoreSnapshotInput,
-    ToptMarketValueComponent,
-    ToptMetricInput,
     drop_absent_banking_leaves,
 )
 from psycopg import Connection
@@ -219,22 +219,22 @@ class SnapshotMember(FrozenModel):
     listing_id: str
     operating_branch: OperatingBranch
     observation_ids: tuple[str, str, str, str]
-    cell_inputs: tuple[ToptCellQualityInput, ToptCellQualityInput, ToptCellQualityInput, ToptCellQualityInput]
-    gross_profit: ToptMetricInput | None
-    total_assets: ToptMetricInput | None
-    headcount: ToptMetricInput | None
-    revenue: ToptMetricInput | None
-    pre_provision_profit: ToptMetricInput | None
-    shares_outstanding: ToptMetricInput
-    market_price: ToptMetricInput
+    cell_inputs: tuple[CellQualityInput, CellQualityInput, CellQualityInput, CellQualityInput]
+    gross_profit: MetricInput | None
+    total_assets: MetricInput | None
+    headcount: MetricInput | None
+    revenue: MetricInput | None
+    pre_provision_profit: MetricInput | None
+    shares_outstanding: MetricInput
+    market_price: MetricInput
     is_primary: bool = False
-    stockholders_equity: ToptMetricInput | None = None
-    preferred_stock_value: ToptMetricInput | None = None
-    goodwill: ToptMetricInput | None = None
-    intangible_assets_net_excluding_goodwill: ToptMetricInput | None = None
-    financial_assets: ToptMetricInput | None = None
-    financial_returns: ToptMetricInput | None = None
-    bank_net_revenue: ToptMetricInput | None = None
+    stockholders_equity: MetricInput | None = None
+    preferred_stock_value: MetricInput | None = None
+    goodwill: MetricInput | None = None
+    intangible_assets_net_excluding_goodwill: MetricInput | None = None
+    financial_assets: MetricInput | None = None
+    financial_returns: MetricInput | None = None
+    bank_net_revenue: MetricInput | None = None
 
     @model_serializer(mode="wrap")
     def omit_absent_optional_fields(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
@@ -251,7 +251,7 @@ class SnapshotMember(FrozenModel):
         return values
 
 
-class ToptCoreSnapshot(IdentifiedFrozenModel):
+class CoreSnapshot(IdentifiedFrozenModel):
     id_field: ClassVar[str] = "snapshot_id"
     id_prefix: ClassVar[str] = "topt-core-snapshot"
 
@@ -283,13 +283,13 @@ class ToptCoreSnapshot(IdentifiedFrozenModel):
             raise ValueError("core snapshot must bind exactly four distinct observations per member")
         object.__setattr__(self, "members", members)
 
-    def factor_inputs(self) -> tuple[ToptCoreSnapshotInput, ...]:
+    def factor_inputs(self) -> tuple[CoreSnapshotInput, ...]:
         grouped: dict[str, list[SnapshotMember]] = {}
         for member in self.members:
             grouped.setdefault(member.issuer_id, []).append(member)
         return tuple(self._issuer_factor_input(grouped[issuer_id]) for issuer_id in sorted(grouped))
 
-    def _issuer_factor_input(self, members: list[SnapshotMember]) -> ToptCoreSnapshotInput:
+    def _issuer_factor_input(self, members: list[SnapshotMember]) -> CoreSnapshotInput:
         ordered = sorted(members, key=lambda member: (not member.is_primary, member.instrument_id))
         execution = ordered[0]
         if sum(member.is_primary for member in ordered) > 1:
@@ -298,7 +298,7 @@ class ToptCoreSnapshot(IdentifiedFrozenModel):
         if len({member.operating_branch for member in ordered}) != 1:
             raise ValueError(f"issuer {execution.issuer_id} has inconsistent operating branches")
 
-        def common_metric(field_name: str) -> ToptMetricInput | None:
+        def common_metric(field_name: str) -> MetricInput | None:
             metrics = [getattr(member, field_name) for member in ordered]
             signatures = {None if metric is None else (metric.value, metric.availability) for metric in metrics}
             if len(signatures) != 1:
@@ -310,7 +310,7 @@ class ToptCoreSnapshot(IdentifiedFrozenModel):
             sorted((item for member in ordered for item in member.cell_inputs), key=lambda item: item.input_id)
         )
         components = tuple(
-            ToptMarketValueComponent(
+            MarketValueComponent(
                 instrument_id=member.instrument_id,
                 listing_id=member.listing_id,
                 market_price=member.market_price,
@@ -318,7 +318,7 @@ class ToptCoreSnapshot(IdentifiedFrozenModel):
             )
             for member in ordered
         )
-        return ToptCoreSnapshotInput(
+        return CoreSnapshotInput(
             snapshot_id=self.snapshot_id,
             run_id=self.run_id,
             release_manifest_id=self.release_manifest_id,
@@ -363,8 +363,8 @@ def _metric(
     cell: InputCell | None = None,
     confidence: Decimal | None = None,
     knowable_at: datetime | None = None,
-    unavailable_reason: ToptCoreReasonCode | None = None,
-) -> ToptMetricInput:
+    unavailable_reason: CoreReasonCode | None = None,
+) -> MetricInput:
     resolved_knowable = (
         knowable_at if knowable_at is not None else (row.knowable_at if cell is None else cell.knowable_at)
     )
@@ -375,7 +375,7 @@ def _metric(
             confidence if confidence is not None else (row.confidence if row.confidence is not None else Decimal("0"))
         )
     )
-    return ToptMetricInput(
+    return MetricInput(
         input_id=row.observation_id,
         metric=name,
         value=value,
@@ -389,7 +389,7 @@ def _metric(
 
 def _price_in_financial_currency(
     listing_id: str, financial_currency: str, price: Any
-) -> tuple[Decimal | None, ToptCoreReasonCode | None]:
+) -> tuple[Decimal | None, CoreReasonCode | None]:
     if financial_currency == price.currency:
         return price.close, None
     log.warning(
@@ -398,7 +398,7 @@ def _price_in_financial_currency(
         financial_currency,
         price.currency,
     )
-    return None, ToptCoreReasonCode.CURRENCY_MISMATCH
+    return None, CoreReasonCode.CURRENCY_MISMATCH
 
 
 @dataclass(frozen=True)
@@ -421,9 +421,9 @@ def _period_checked_value(
     value: Decimal | None,
     period_end: date | None,
     input_age: InputAgeLimit | None,
-) -> tuple[Decimal | None, ToptCoreReasonCode | None]:
+) -> tuple[Decimal | None, CoreReasonCode | None]:
     if value is not None and input_age is not None and input_age.is_period_stale(period_end):
-        return None, ToptCoreReasonCode.STALE_PERIOD
+        return None, CoreReasonCode.STALE_PERIOD
     return value, None
 
 
@@ -458,8 +458,8 @@ def _shares_cell_at(cell: InputCell | None, knowable_at: datetime) -> dict[str, 
     return {} if cell is None else {SHARES_KEY: cell._replace(knowable_at=knowable_at)}
 
 
-def _cell(row: _ObservationRow, confidence: Decimal | None = None) -> ToptCellQualityInput:
-    return ToptCellQualityInput(
+def _cell(row: _ObservationRow, confidence: Decimal | None = None) -> CellQualityInput:
+    return CellQualityInput(
         input_id=row.observation_id,
         confidence=confidence
         if confidence is not None
@@ -490,11 +490,11 @@ def _universe_stores_price_series(universe_id: str) -> bool:
         return True
 
 
-class PostgresToptCoreRepository:
+class PostgresCoreRepository:
     def __init__(self, connection: Connection[Any]) -> None:
         self._connection = connection
 
-    def freeze_snapshot(self, *, run_id: str, release_manifest_id: str) -> ToptCoreSnapshot:
+    def freeze_snapshot(self, *, run_id: str, release_manifest_id: str) -> CoreSnapshot:
         existing = self._connection.execute(
             """
             select snapshot_id, content_sha256, release_manifest_id, payload
@@ -505,7 +505,7 @@ class PostgresToptCoreRepository:
         if existing is not None:
             if existing[2] != release_manifest_id:
                 raise ValueError("frozen TOPT snapshot is bound to a different release manifest")
-            return ToptCoreSnapshot.model_validate(
+            return CoreSnapshot.model_validate(
                 {**existing[3], "snapshot_id": existing[0], "content_sha256": existing[1]}
             )
         status = self._connection.execute(
@@ -573,7 +573,7 @@ class PostgresToptCoreRepository:
             )
             for listing_id, by_type in grouped.items()
         )
-        snapshot = ToptCoreSnapshot(
+        snapshot = CoreSnapshot(
             run_id=run_id,
             release_manifest_id=release_manifest_id,
             universe_id=universe_id,
@@ -725,11 +725,11 @@ class PostgresToptCoreRepository:
         ruleset: Callable[[], ConceptMappingRuleset] | None,
         stores_price_series: bool = True,
         warned_share_reasons: set[tuple[str, str]] | None = None,
-    ) -> tuple[Decimal | None, datetime, ToptCoreReasonCode | None]:
+    ) -> tuple[Decimal | None, datetime, CoreReasonCode | None]:
         shares_value = financial.shares_outstanding
         shares_knowable_at = financial_row.knowable_at if shares_cell is None else shares_cell.knowable_at
         if shares_value is None:
-            reason = ToptCoreReasonCode.MISSING_CLASS_RATIO if financial.shares_basis == MISSING_CLASS_RATIO else None
+            reason = CoreReasonCode.MISSING_CLASS_RATIO if financial.shares_basis == MISSING_CLASS_RATIO else None
             return None, shares_knowable_at, reason
         outcome = live_on_close_basis(
             LiveShareCount(
@@ -769,7 +769,7 @@ class PostgresToptCoreRepository:
                 outcome.reason,
                 outcome.detail,
             )
-        return None, shares_knowable_at, ToptCoreReasonCode(outcome.reason)
+        return None, shares_knowable_at, CoreReasonCode(outcome.reason)
 
     @staticmethod
     def _snapshot_member(
@@ -804,7 +804,7 @@ class PostgresToptCoreRepository:
         price_cell = last_close_cell(market_row.payload, close_conf, market_row.knowable_at)
 
         shares_cell = cells.get(SHARES_KEY)
-        shares_value, shares_knowable_at, shares_reason = PostgresToptCoreRepository._resolve_shares_on_close_basis(
+        shares_value, shares_knowable_at, shares_reason = PostgresCoreRepository._resolve_shares_on_close_basis(
             listing_id,
             financial=financial,
             financial_row=financial_row,
@@ -857,8 +857,8 @@ class PostgresToptCoreRepository:
             cell: InputCell | None = None,
             conf: Decimal | None = None,
             knowable_at: datetime | None = None,
-            reason: ToptCoreReasonCode | None = None,
-        ) -> ToptMetricInput:
+            reason: CoreReasonCode | None = None,
+        ) -> MetricInput:
             return _metric(
                 financial_row,
                 name=name,
@@ -924,7 +924,7 @@ class PostgresToptCoreRepository:
             },
         )
 
-    def _put_snapshot(self, snapshot: ToptCoreSnapshot) -> None:
+    def _put_snapshot(self, snapshot: CoreSnapshot) -> None:
         payload = snapshot.model_dump(mode="json", exclude={"snapshot_id", "content_sha256"})
         with self._connection.transaction():
             _insert_or_verify(
@@ -1013,11 +1013,11 @@ class PostgresToptCoreRepository:
 
     def materialize(
         self,
-        snapshot: ToptCoreSnapshot,
+        snapshot: CoreSnapshot,
         *,
         gppe_definition: GppeV0Definition,
         definition: LargeModelValueV0Definition | None = None,
-    ) -> tuple[ToptCoreSnapshotInput, ...]:
+    ) -> tuple[CoreSnapshotInput, ...]:
         definition = definition or load_live_strategy_definition()
         factor_inputs = snapshot.factor_inputs()
         gppe_definition = gppe_definition.pinned_by(definition)
@@ -1049,11 +1049,11 @@ class PostgresToptCoreRepository:
             )
         return factor_inputs
 
-    def _load_source_evidence(self, snapshot: ToptCoreSnapshot) -> dict[str, InputEvidenceStatus]:
+    def _load_source_evidence(self, snapshot: CoreSnapshot) -> dict[str, InputEvidenceStatus]:
         return self._load_evidence_and_periods(snapshot)[0]
 
     def _load_evidence_and_periods(
-        self, snapshot: ToptCoreSnapshot
+        self, snapshot: CoreSnapshot
     ) -> tuple[dict[str, InputEvidenceStatus], dict[str, tuple[date | None, date | None, date | None]]]:
         all_ids = sorted({oid for member in snapshot.members for oid in member.observation_ids})
         resolved = resolve_raw_pointers(self._connection, all_ids)
@@ -1083,7 +1083,7 @@ __all__ = [
     "FinancialFactPayload",
     "IdentityPayload",
     "MarketPricePayload",
-    "PostgresToptCoreRepository",
+    "PostgresCoreRepository",
     "SnapshotMember",
-    "ToptCoreSnapshot",
+    "CoreSnapshot",
 ]

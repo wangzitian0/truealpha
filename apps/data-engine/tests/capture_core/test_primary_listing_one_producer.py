@@ -208,7 +208,7 @@ def _run_tick(*, declared: bool) -> Iterator[Tick]:
     """
     import dagster as dg
     from data_engine.datahub import a1_evidence, resolve_coordinates
-    from data_engine.lanes.capture import ToptLiveTickConfig, run_topt_live_tick
+    from data_engine.lanes.capture import LiveTickConfig, run_topt_live_tick
     from truealpha_runtime import EnvironmentTier as RuntimeEnvironmentTier
 
     with isolated_test_database("primarylisting") as url, pytest.MonkeyPatch.context() as monkeypatch:
@@ -233,7 +233,7 @@ def _run_tick(*, declared: bool) -> Iterator[Tick]:
             seed_rate_for_cutoff(connection, TICK)
             connection.commit()
         context = dg.build_op_context()
-        run_topt_live_tick(context, ToptLiveTickConfig(executed_at=TICK.isoformat()))
+        run_topt_live_tick(context, LiveTickConfig(executed_at=TICK.isoformat()))
         yield Tick(url, context.get_output_metadata("result"), alphabet)
 
 
@@ -427,13 +427,13 @@ def test_the_frozen_snapshot_records_the_primary_listing_on_that_member_only(dec
 def test_a_snapshot_stored_before_the_flag_reloads_and_leaves_only_alphabet_undeclared(declared_tick: Tick) -> None:
     """A stored snapshot without `is_primary` reloads. Its sole-listing issuers keep their values. Alphabet has two
     listings and no flag, so its factor input is unavailable (a replay of such a run reads no relation)."""
-    from data_engine.datahub.capture_core.materialization import ToptCoreSnapshot
+    from data_engine.datahub.capture_core.materialization import CoreSnapshot
 
     payload = _stored_snapshot_payload(declared_tick)
     for member in payload["members"]:
         member.pop("is_primary", None)
 
-    snapshot = ToptCoreSnapshot.model_validate(payload)
+    snapshot = CoreSnapshot.model_validate(payload)
 
     undeclared = [item.issuer_id for item in snapshot.factor_inputs() if item.primary_listing_undeclared]
     assert undeclared == [declared_tick.alphabet.issuer]

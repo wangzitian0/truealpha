@@ -7,7 +7,7 @@ the run that fetched it. 20261012T1130 joined the source request on both request
 join dropped every reused item. On staging, /research/trace then showed "6 input rows, 0 with a
 value" after every deploy.
 
-The seed is the deployed entry point. `run_topt_pipeline` runs twice at one cutoff, with offline
+The seed is the deployed entry point. `run_capture_pipeline` runs twice at one cutoff, with offline
 vendor routes. The first run fetches. The second run reuses, as the staging boot tick does. The
 tests read the view that the migrations installed. The old definition comes from the text of
 20261012T1130, so the fresh-run comparison reads the definition that production served before.
@@ -24,7 +24,7 @@ from typing import Any
 import psycopg
 import pytest
 from data_engine.contracts.datahub import SourceRequest
-from data_engine.datahub.capture_core import PostgresToptCoreRepository, composition
+from data_engine.datahub.capture_core import PostgresCoreRepository, composition
 from factors.snapshot_inputs import GppeV0Definition
 from truealpha_contracts.common import CaptureEnvironment, canonical_sha256
 
@@ -197,7 +197,7 @@ def _seed_integration_run(conn: psycopg.Connection) -> str:
         financial_vintage={"revenue": filing},
         environment=CaptureEnvironment(identity[0]),
     )
-    core = PostgresToptCoreRepository(conn)
+    core = PostgresCoreRepository(conn)
     snapshot = core.freeze_snapshot(run_id=run.run_id, release_manifest_id=release_manifest_id)
     assert len(core.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate="0.05"))) == 20
     return run.run_id

@@ -87,7 +87,7 @@ class OperatingBranch(StrEnum):
     INSURANCE = "insurance"
 
 
-class ToptCoreReasonCode(StrEnum):
+class CoreReasonCode(StrEnum):
     MISSING_GROSS_PROFIT = "missing_gross_profit"
     MISSING_TOTAL_ASSETS = "missing_total_assets"
     MISSING_HEADCOUNT = "missing_headcount"
@@ -128,16 +128,16 @@ class ToptCoreReasonCode(StrEnum):
 
 SHARE_BASIS_REASON_CODES = frozenset(
     {
-        ToptCoreReasonCode.NO_SPLIT_ADJUSTED_SERIES,
-        ToptCoreReasonCode.NO_UNADJUSTED_SERIES,
-        ToptCoreReasonCode.SPLIT_DERIVATION_FAILED,
-        ToptCoreReasonCode.SPLIT_SERIES_DO_NOT_COVER_THE_WINDOW,
-        ToptCoreReasonCode.LISTINGS_DISAGREE_ON_SPLITS,
-        ToptCoreReasonCode.SHARE_COUNT_UNDATED,
-        ToptCoreReasonCode.SHARE_BASIS_AMBIGUOUS,
-        ToptCoreReasonCode.CLOSE_JUMP_BEYOND_SERIES,
-        ToptCoreReasonCode.MISSING_LISTING_UNIT_RATIO,
-        ToptCoreReasonCode.MISSING_CLASS_RATIO,
+        CoreReasonCode.NO_SPLIT_ADJUSTED_SERIES,
+        CoreReasonCode.NO_UNADJUSTED_SERIES,
+        CoreReasonCode.SPLIT_DERIVATION_FAILED,
+        CoreReasonCode.SPLIT_SERIES_DO_NOT_COVER_THE_WINDOW,
+        CoreReasonCode.LISTINGS_DISAGREE_ON_SPLITS,
+        CoreReasonCode.SHARE_COUNT_UNDATED,
+        CoreReasonCode.SHARE_BASIS_AMBIGUOUS,
+        CoreReasonCode.CLOSE_JUMP_BEYOND_SERIES,
+        CoreReasonCode.MISSING_LISTING_UNIT_RATIO,
+        CoreReasonCode.MISSING_CLASS_RATIO,
     }
 )
 
@@ -157,7 +157,7 @@ def drop_absent_banking_leaves(data: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in data.items() if key not in OPTIONAL_SNAPSHOT_FIELDS or value is not None}
 
 
-class ToptMetricInput(OmitNoneFields, FrozenModel):
+class MetricInput(OmitNoneFields, FrozenModel):
     omit_none_fields = ("unavailable_reason",)
     input_id: str = content_ref("normalized-observation")
     metric: str = Field(min_length=1)
@@ -166,7 +166,7 @@ class ToptMetricInput(OmitNoneFields, FrozenModel):
     knowable_at: _UtcDatetime
     freshness: MetricFreshness
     availability: MetricAvailability
-    unavailable_reason: ToptCoreReasonCode | None = None
+    unavailable_reason: CoreReasonCode | None = None
 
     @model_validator(mode="after")
     def validate_value(self) -> Self:
@@ -178,18 +178,18 @@ class ToptMetricInput(OmitNoneFields, FrozenModel):
         return self
 
 
-class ToptCellQualityInput(FrozenModel):
+class CellQualityInput(FrozenModel):
     input_id: str = content_ref("normalized-observation")
     confidence: _FloatFreeDecimal = Field(ge=0, le=1)
     knowable_at: _UtcDatetime
     freshness: MetricFreshness
 
 
-class ToptMarketValueComponent(FrozenModel):
+class MarketValueComponent(FrozenModel):
     instrument_id: str = Field(min_length=1)
     listing_id: str = Field(min_length=1)
-    market_price: ToptMetricInput
-    shares_outstanding: ToptMetricInput
+    market_price: MetricInput
+    shares_outstanding: MetricInput
 
     @model_validator(mode="after")
     def validate_metrics(self) -> Self:
@@ -222,7 +222,7 @@ class GppeV0Definition(OmitNoneFields, IdentifiedFrozenModel):
         return type(self)(risk_free_rate=self.risk_free_rate, labor_efficiency_trees=dict(definition_pins(definition)))
 
 
-class ToptCoreSnapshotInput(FrozenModel):
+class CoreSnapshotInput(FrozenModel):
     snapshot_id: str = content_ref("topt-core-snapshot")
     run_id: str = content_ref("capture-run")
     release_manifest_id: str = Field(pattern=_CONTENT_ID_PATTERN)
@@ -235,22 +235,22 @@ class ToptCoreSnapshotInput(FrozenModel):
     listing_id: str = Field(min_length=1)
     operating_branch: OperatingBranch
     observation_ids: tuple[str, ...]
-    cell_inputs: tuple[ToptCellQualityInput, ...]
-    gross_profit: ToptMetricInput | None
-    total_assets: ToptMetricInput | None
-    headcount: ToptMetricInput | None
-    revenue: ToptMetricInput | None
-    pre_provision_profit: ToptMetricInput | None
-    market_value_components: tuple[ToptMarketValueComponent, ...]
+    cell_inputs: tuple[CellQualityInput, ...]
+    gross_profit: MetricInput | None
+    total_assets: MetricInput | None
+    headcount: MetricInput | None
+    revenue: MetricInput | None
+    pre_provision_profit: MetricInput | None
+    market_value_components: tuple[MarketValueComponent, ...]
     primary_listing_undeclared: bool = False
-    stockholders_equity: ToptMetricInput | None = None
-    preferred_stock_value: ToptMetricInput | None = None
-    goodwill: ToptMetricInput | None = None
-    intangible_assets_net_excluding_goodwill: ToptMetricInput | None = None
-    financial_assets: ToptMetricInput | None = None
-    financial_returns: ToptMetricInput | None = None
-    bank_net_revenue: ToptMetricInput | None = None
-    inputs: Mapping[str, ToptMetricInput] = Field(default_factory=dict)
+    stockholders_equity: MetricInput | None = None
+    preferred_stock_value: MetricInput | None = None
+    goodwill: MetricInput | None = None
+    intangible_assets_net_excluding_goodwill: MetricInput | None = None
+    financial_assets: MetricInput | None = None
+    financial_returns: MetricInput | None = None
+    bank_net_revenue: MetricInput | None = None
+    inputs: Mapping[str, MetricInput] = Field(default_factory=dict)
 
     @model_serializer(mode="wrap")
     def omit_absent_optional_fields(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
@@ -265,11 +265,11 @@ class ToptCoreSnapshotInput(FrozenModel):
             data.pop("inputs", None)
         return drop_absent_banking_leaves(data)
 
-    def metric_input(self, key: str) -> ToptMetricInput | None:
+    def metric_input(self, key: str) -> MetricInput | None:
         if key == "employees_total" and self.headcount is not None:
             return self.headcount
         attr = getattr(self, key, None)
-        return attr if isinstance(attr, ToptMetricInput) else self.inputs.get(key)
+        return attr if isinstance(attr, MetricInput) else self.inputs.get(key)
 
     @field_validator("observation_ids")
     @classmethod
@@ -285,7 +285,7 @@ class ToptCoreSnapshotInput(FrozenModel):
             raise ValueError("snapshot members must use normalized observation identities")
         return values
 
-    def _check_selected_metric(self, metric: ToptMetricInput, missing_msg: str, future_msg: str) -> None:
+    def _check_selected_metric(self, metric: MetricInput, missing_msg: str, future_msg: str) -> None:
         if metric.input_id not in self.observation_ids:
             raise ValueError(missing_msg)
         if metric.knowable_at > self.cutoff:
@@ -293,7 +293,7 @@ class ToptCoreSnapshotInput(FrozenModel):
 
     @model_validator(mode="after")
     def validate_inputs(self) -> Self:
-        expected_metrics: dict[str, ToptMetricInput | None] = {
+        expected_metrics: dict[str, MetricInput | None] = {
             **{name: getattr(self, name) for name in (*_BASE_SNAPSHOT_FIELDS, *OPTIONAL_SNAPSHOT_FIELDS)},
         }
         merged_inputs = dict(self.inputs)
@@ -343,10 +343,10 @@ __all__ = [
     "MetricAvailability",
     "MetricFreshness",
     "OperatingBranch",
-    "ToptCellQualityInput",
-    "ToptCoreReasonCode",
-    "ToptCoreSnapshotInput",
-    "ToptMarketValueComponent",
-    "ToptMetricInput",
+    "CellQualityInput",
+    "CoreReasonCode",
+    "CoreSnapshotInput",
+    "MarketValueComponent",
+    "MetricInput",
     "drop_absent_banking_leaves",
 ]

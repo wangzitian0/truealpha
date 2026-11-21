@@ -32,10 +32,10 @@ from factors.panel import (
     variant_sha256,
 )
 from factors.snapshot_inputs import (
+    CoreSnapshotInput,
     GppeV0Definition,
     MetricAvailability,
     MetricFreshness,
-    ToptCoreSnapshotInput,
 )
 from psycopg import Connection
 from truealpha_contracts.common import canonical_sha256
@@ -67,7 +67,7 @@ _INSERT_NODE_VALUE_SQL = """
 """
 
 
-def _snapshot_freshness(factor_input: ToptCoreSnapshotInput) -> MetricFreshness:
+def _snapshot_freshness(factor_input: CoreSnapshotInput) -> MetricFreshness:
     if any(cell.freshness is MetricFreshness.STALE for cell in factor_input.cell_inputs):
         return MetricFreshness.STALE
     if any(cell.freshness is MetricFreshness.UNKNOWN for cell in factor_input.cell_inputs):
@@ -112,7 +112,7 @@ def _resolve_from_payload(
 
 def _resolve_market_component(
     spec: PanelMetricSpec,
-    factor_input: ToptCoreSnapshotInput,
+    factor_input: CoreSnapshotInput,
 ) -> tuple[Decimal | None, str | None, Decimal | None] | None:
     if spec.key not in ("price", "market_price", "shares_outstanding") or not factor_input.market_value_components:
         return None
@@ -128,9 +128,9 @@ def _resolve_market_component(
 
 def _resolve_snapshot_metric(
     spec: PanelMetricSpec,
-    factor_input: ToptCoreSnapshotInput,
+    factor_input: CoreSnapshotInput,
 ) -> tuple[Decimal | None, str | None, Decimal | None] | None:
-    field_name = spec.alias(AliasKind.TOPT_SNAPSHOT_FIELD) or spec.key
+    field_name = spec.alias(AliasKind.CORE_SNAPSHOT_FIELD) or spec.key
     metric = factor_input.metric_input(field_name) or factor_input.metric_input(spec.key)
     if metric is not None and metric.availability is MetricAvailability.AVAILABLE and metric.value is not None:
         if field_name in ("headcount", "employees_total") and metric.value <= 0:
@@ -142,7 +142,7 @@ def _resolve_snapshot_metric(
 def _resolve_input_value(
     spec: PanelMetricSpec,
     *,
-    factor_input: ToptCoreSnapshotInput,
+    factor_input: CoreSnapshotInput,
     gppe_definition: GppeV0Definition,
     financial_payload: Mapping[str, Any],
 ) -> tuple[Decimal | None, str | None, Decimal | None]:
@@ -155,7 +155,7 @@ def _resolve_input_value(
     if from_snapshot is not None:
         return from_snapshot
 
-    field_name = spec.alias(AliasKind.TOPT_SNAPSHOT_FIELD) or spec.key
+    field_name = spec.alias(AliasKind.CORE_SNAPSHOT_FIELD) or spec.key
     if hasattr(factor_input, field_name) and not financial_payload.get(field_name):
         if spec.default_when_missing is not None:
             return spec.default_when_missing, None, None
@@ -173,7 +173,7 @@ def _resolve_input_value(
 def _node_period(
     spec: PanelMetricSpec,
     *,
-    factor_input: ToptCoreSnapshotInput,
+    factor_input: CoreSnapshotInput,
     periods: tuple[date | None, date | None, date | None],
     financial_payload: Mapping[str, Any],
 ) -> tuple[str, str | None]:
@@ -215,7 +215,7 @@ def load_financial_payloads_by_listing(
     return grouped
 
 
-def _snapshot_leaf_confidence(factor_input: ToptCoreSnapshotInput) -> Decimal:
+def _snapshot_leaf_confidence(factor_input: CoreSnapshotInput) -> Decimal:
     leaf_confs = [
         m.confidence
         for m in (
@@ -293,7 +293,7 @@ def _insert_metric_node_value(
 def materialize_metric_node_values(
     connection: Connection[Any],
     *,
-    factor_inputs: tuple[ToptCoreSnapshotInput, ...],
+    factor_inputs: tuple[CoreSnapshotInput, ...],
     gppe_definition: GppeV0Definition,
     tier_definition_id: str,
     periods_by_listing: Mapping[str, tuple[date | None, date | None, date | None]],
@@ -372,7 +372,7 @@ def materialize_metric_node_values(
 def _materialize_extra_expressions(
     connection: Connection[Any],
     *,
-    factor_inputs: tuple[ToptCoreSnapshotInput, ...],
+    factor_inputs: tuple[CoreSnapshotInput, ...],
     gppe_definition: GppeV0Definition,
     periods_by_listing: Mapping[str, tuple[date | None, date | None, date | None]],
     evidence_by_listing: Mapping[str, InputEvidenceStatus],
@@ -387,7 +387,7 @@ def _materialize_extra_expressions(
         consumed_leaves.update(leaf_consumed_columns(expr, metrics=metrics, expressions=all_expressions))
 
     panel_rows: list[dict[str, Any]] = []
-    meta_by_row: dict[tuple[str, str], tuple[ToptCoreSnapshotInput, dict[str, str], MetricFreshness, str]] = {}
+    meta_by_row: dict[tuple[str, str], tuple[CoreSnapshotInput, dict[str, str], MetricFreshness, str]] = {}
     for factor_input in factor_inputs:
         if factor_input.primary_listing_undeclared:
             continue
@@ -475,7 +475,7 @@ def _materialize_issuer_tree(
     *,
     tree: FactorVariantSpec,
     tree_sha256: str,
-    factor_input: ToptCoreSnapshotInput,
+    factor_input: CoreSnapshotInput,
     issuer_class: IssuerClass,
     gppe_definition: GppeV0Definition,
     financial_payload: Mapping[str, Any],

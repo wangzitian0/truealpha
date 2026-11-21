@@ -6,7 +6,7 @@ after the refresh of its night is safe. A reader that fires before the refresh o
 series that is a day old, and on the first night after a deploy it reads an empty series.
 
 The test finds the readers in the code. It does not list them from memory. A module that calls
-`risk_free_rate_at`, or a function that reaches it (`run_topt_pipeline`, `run_core_strategy_backtest`),
+`risk_free_rate_at`, or a function that reaches it (`run_capture_pipeline`, `run_core_strategy_backtest`),
 is a reader, and the test names the job that runs it. A new reader module turns the test red until
 its job is named here.
 
@@ -31,7 +31,7 @@ MAX_HOURS_AFTER_THE_REFRESH = 6
 #: The functions that read the rate, or reach a function that does.
 READER_FUNCTIONS = {
     "risk_free_rate_at",
-    "run_topt_pipeline",
+    "run_capture_pipeline",
     "run_core_strategy_backtest",
 }
 
@@ -39,7 +39,7 @@ READER_FUNCTIONS = {
 def _jobs_of_the_readers() -> dict[str, set[str]]:
     """The modules that read the rate, with the Dagster jobs that run them.
 
-    `run_topt_pipeline` reads the rate once per capture tick (TOPT, QQQ, S&P 500 and the canary). Its caller
+    `run_capture_pipeline` reads the rate once per capture tick (TOPT, QQQ, S&P 500 and the canary). Its caller
     is the capture lane. `run_core_strategy_backtest` reads one rate per cutoff. Its caller is the nightly
     backtest lane. The modules that define the two functions call `risk_free_rate_at` or each other."""
     ticks = {tick.job_name for tick in capture.TICKS}

@@ -24,7 +24,7 @@ from data_engine.datahub.capture_core import composition
 from data_engine.datahub.capture_core.composition import (
     CaptureNotPublishableError,
     PlannedRun,
-    run_topt_pipeline,
+    run_capture_pipeline,
 )
 from data_engine.datahub.capture_core.executor import (
     FetchFailure,
@@ -297,7 +297,7 @@ def _arm(
 
 def _run_tick(url: str, *, version: str, cutoff: datetime = CUTOFF, force_fetch: bool = False):
     with psycopg.connect(url) as tick:
-        result = run_topt_pipeline(tick, cutoff=cutoff, version=version, force_fetch=force_fetch)
+        result = run_capture_pipeline(tick, cutoff=cutoff, version=version, force_fetch=force_fetch)
         tick.commit()
         return result
 
@@ -373,7 +373,7 @@ def _fetches_by_semantic(fetched: list[tuple[str, str, str]], run_id: str) -> Co
 def _live_topt_tick(url: str, monkeypatch, *, executed_at: datetime, force_fetch: bool = False, accept: bool) -> dict:
     import dagster as dg
     from data_engine.datahub import a1_evidence
-    from data_engine.lanes.capture import ToptLiveTickConfig, run_topt_live_tick
+    from data_engine.lanes.capture import LiveTickConfig, run_topt_live_tick
 
     monkeypatch.setattr(settings, "database_url", url)
     unmet = (
@@ -381,7 +381,7 @@ def _live_topt_tick(url: str, monkeypatch, *, executed_at: datetime, force_fetch
     )
     monkeypatch.setattr(a1_evidence, "unmet_objectives", lambda *_args, **_kwargs: unmet)
     context = dg.build_op_context()
-    run_topt_live_tick(context, ToptLiveTickConfig(executed_at=executed_at.isoformat(), force_fetch=force_fetch))
+    run_topt_live_tick(context, LiveTickConfig(executed_at=executed_at.isoformat(), force_fetch=force_fetch))
     metadata = context.get_output_metadata("result")
     assert metadata["pointer_advanced"] is True
     assert metadata["is_degraded"] is not accept

@@ -193,10 +193,10 @@ class World:
 
     def tick(self) -> dict:
         """The deployed op, as the schedule launches it."""
-        from data_engine.lanes.capture import ToptLiveTickConfig, run_topt_live_tick
+        from data_engine.lanes.capture import LiveTickConfig, run_topt_live_tick
 
         context = dg.build_op_context()
-        run_topt_live_tick(context, ToptLiveTickConfig(executed_at=TICK.isoformat()))
+        run_topt_live_tick(context, LiveTickConfig(executed_at=TICK.isoformat()))
         return dict(context.get_output_metadata("result"))
 
     def store_rates(self, rows: dict[date, str]) -> dict[date, int]:

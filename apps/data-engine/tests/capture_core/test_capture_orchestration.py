@@ -9,7 +9,7 @@ from data_engine.contracts.evidence_graph import EvidenceEdge, EvidenceNode
 from data_engine.contracts.obligation_reason_codes import ObligationReasonCode
 from data_engine.datahub.capture_core.capture_orchestration import (
     CompositeSourceFetchPort,
-    run_topt_capture,
+    run_capture,
 )
 from data_engine.datahub.capture_core.executor import FetchFailure, FetchSuccess
 from data_engine.datahub.capture_core.market_price_adapter import (
@@ -64,7 +64,7 @@ def test_composite_routes_and_fails_closed_on_unmapped() -> None:
     assert miss.reason_code is ObligationReasonCode.CONTRACT_VIOLATION
 
 
-def test_run_topt_capture_across_two_semantics() -> None:
+def test_run_capture_across_two_semantics() -> None:
     price_item = _work_item("5" * 64)
     member_item = _work_item("6" * 64)
     price = MarketPriceAdapter(
@@ -85,7 +85,7 @@ def test_run_topt_capture_across_two_semantics() -> None:
     )
     routes = {price_item.work_item_id: price, member_item.work_item_id: membership}
     writer = _FakeWriter()
-    report = run_topt_capture(
+    report = run_capture(
         "capture-run:" + "a" * 64,
         [price_item, member_item],
         routes,

@@ -12,7 +12,7 @@ from typing import Any, Protocol
 
 import psycopg
 from factors.panel import GPPE_BANKING_TCE_SPEC, GPPE_V0_SPEC
-from factors.snapshot_inputs import MetricAvailability, ToptCoreSnapshotInput
+from factors.snapshot_inputs import CoreSnapshotInput, MetricAvailability
 from truealpha_contracts.metrics import INPUT_KEY_ALIASES, METRICS
 from truealpha_contracts.models import DataSource
 
@@ -129,7 +129,7 @@ def run_tickers(connection: psycopg.Connection[Any], run_id: str) -> dict[str, s
     return _run_payload_pairs(connection, run_id, "listing_id", "ticker")
 
 
-def served_listed_units(factor_input: ToptCoreSnapshotInput) -> Decimal | None:
+def served_listed_units(factor_input: CoreSnapshotInput) -> Decimal | None:
     counts: list[Decimal] = []
     for component in factor_input.market_value_components:
         metric = component.shares_outstanding
@@ -146,7 +146,7 @@ def _scalar_result(ratio: Decimal, tolerance: Decimal) -> str:
 
 
 def compare_listed_units(
-    factor_input: ToptCoreSnapshotInput,
+    factor_input: CoreSnapshotInput,
     figures: dict[str, OperatorFigure],
     *,
     ticker: str | None,
@@ -229,7 +229,7 @@ def operator_figures(
 
 
 def operator_outcomes(
-    connection: psycopg.Connection[Any], run_id: str, cutoff: datetime, factor_inputs: Sequence[ToptCoreSnapshotInput]
+    connection: psycopg.Connection[Any], run_id: str, cutoff: datetime, factor_inputs: Sequence[CoreSnapshotInput]
 ) -> list[Outcome]:
     figures, list_as_of = operator_figures(connection, cutoff)
     if list_as_of is None:
@@ -251,7 +251,7 @@ def _ratio_and_sign(served: Decimal, target: Decimal) -> tuple[Decimal, str | No
 
 
 def compare_independent_parse(
-    factor_input: ToptCoreSnapshotInput,
+    factor_input: CoreSnapshotInput,
     field: str,
     facts: dict[str, Any] | None,
     *,
@@ -311,7 +311,7 @@ def compare_independent_parse(
 stored_document = read_raw_json
 
 
-def _financial_observation(factor_input: ToptCoreSnapshotInput) -> str | None:
+def _financial_observation(factor_input: CoreSnapshotInput) -> str | None:
     for field in INDEPENDENT_PARSERS:
         if (metric := getattr(factor_input, field)) is not None:
             return str(metric.input_id)
@@ -319,7 +319,7 @@ def _financial_observation(factor_input: ToptCoreSnapshotInput) -> str | None:
 
 
 def independent_parse_outcomes(
-    connection: psycopg.Connection[Any], cutoff: datetime, factor_inputs: Sequence[ToptCoreSnapshotInput]
+    connection: psycopg.Connection[Any], cutoff: datetime, factor_inputs: Sequence[CoreSnapshotInput]
 ) -> list[Outcome]:
     observations = {fi.issuer_id: _financial_observation(fi) for fi in factor_inputs}
     wanted = sorted({obs for obs in observations.values() if obs is not None})
@@ -500,7 +500,7 @@ def _extract_metric_from_payload(
 
 
 def _extract_metric_from_factor_input(
-    fi: ToptCoreSnapshotInput, canonical_field: str
+    fi: CoreSnapshotInput, canonical_field: str
 ) -> tuple[Decimal | None, str | None, datetime | None]:
     metric = {
         "revenue": fi.revenue,
@@ -533,7 +533,7 @@ def _first_match(mapping: Mapping[str, Any], *keys: str) -> Any:
 
 
 def known_answer_outcomes(
-    connection: psycopg.Connection[Any], run_id: str, cutoff: datetime, factor_inputs: Sequence[ToptCoreSnapshotInput]
+    connection: psycopg.Connection[Any], run_id: str, cutoff: datetime, factor_inputs: Sequence[CoreSnapshotInput]
 ) -> list[Outcome]:
     catalog = load_sentinel_known_answers()
     try:
@@ -607,7 +607,7 @@ def record_oracle_outcomes(connection: psycopg.Connection[Any], run_id: str, *, 
     if (cutoff := fetch_topt_cutoff(connection, run_id)) is None:
         return 0
     factor_inputs = [
-        ToptCoreSnapshotInput.model_validate(row[0]) for row in connection.execute(_FROZEN_FACTOR_INPUTS_SQL, (run_id,))
+        CoreSnapshotInput.model_validate(row[0]) for row in connection.execute(_FROZEN_FACTOR_INPUTS_SQL, (run_id,))
     ]
     outcomes = [
         *operator_outcomes(connection, run_id, cutoff, factor_inputs),

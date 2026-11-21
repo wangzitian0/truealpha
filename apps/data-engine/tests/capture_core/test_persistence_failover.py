@@ -26,8 +26,8 @@ from data_engine.config import settings
 from data_engine.contracts.datahub import ObligationTerminalState
 from data_engine.contracts.obligation_reason_codes import ObligationReasonCode
 from data_engine.datahub import quality_report
-from data_engine.datahub.capture_core import PostgresToptCoreRepository
-from data_engine.datahub.capture_core.capture_orchestration import run_topt_capture
+from data_engine.datahub.capture_core import PostgresCoreRepository
+from data_engine.datahub.capture_core.capture_orchestration import run_capture
 from data_engine.datahub.capture_core.composition import PlannedRun, plan_and_persist
 from data_engine.datahub.capture_core.executor import SourceFetchPort
 from data_engine.datahub.capture_core.headcount import PostgresHeadcountExtractor, record_headcount
@@ -394,7 +394,7 @@ def _capture(
         coordinates=plan.coordinates,
         raw_coordinates=plan.raw_coordinates,
     )
-    report = run_topt_capture(
+    report = run_capture(
         plan.run_id,
         plan.work_items,
         _routes(
@@ -451,7 +451,7 @@ def test_fusion_invariant_judges_the_selected_observation_not_the_contest(connec
         invariant for invariant in tool.INVARIANTS if invariant.id == "fusion-selects-by-priority-not-recency"
     )
     plan = _capture(connection, version="test-fusion-selection", corroborate=True)
-    core = PostgresToptCoreRepository(connection)
+    core = PostgresCoreRepository(connection)
     snapshot = core.freeze_snapshot(run_id=plan.run_id, release_manifest_id=plan.release_manifest_id)
     assert snapshot.run_id == plan.run_id
     # The invariant judges the governed heads only: point the pointer at this run
@@ -528,7 +528,7 @@ def test_the_governed_head_selects_the_strategy_run_not_recency(connection) -> N
     from truealpha_runtime.strategy_run_postgres import LATEST_RUN_SQL, latest_run_params
 
     plan = _capture(connection, version="test-governed-strategy-run")
-    core = PostgresToptCoreRepository(connection)
+    core = PostgresCoreRepository(connection)
     snapshot = core.freeze_snapshot(run_id=plan.run_id, release_manifest_id=plan.release_manifest_id)
     seed_strategy_inputs_from_capture(connection, plan.run_id, cutoff=CUTOFF)
     governed_run_id, _count, _snapshot = run_strategy_replay_for_cutoff(
@@ -604,7 +604,7 @@ def test_a_governed_head_with_no_bound_strategy_run_is_a_visible_gap_not_a_silen
     Reverse-verified: deleting the strategy-bridge lines the fixed script now runs turns
     this from a documented gap into a caught one — this test is what would have caught it."""
     plan = _capture(connection, version="test-unbound-strategy-gap")
-    core = PostgresToptCoreRepository(connection)
+    core = PostgresCoreRepository(connection)
     snapshot = core.freeze_snapshot(run_id=plan.run_id, release_manifest_id=plan.release_manifest_id)
 
     env = connection.execute("select environment from mart.environment_identity").fetchone()[0]
@@ -871,7 +871,7 @@ def test_a_cell_the_primary_cannot_serve_is_served_by_the_next_registered_origin
     ).fetchall()
     assert others == [(["success"],)]
 
-    core = PostgresToptCoreRepository(connection)
+    core = PostgresCoreRepository(connection)
     snapshot = core.freeze_snapshot(run_id=plan.run_id, release_manifest_id=plan.release_manifest_id)
     victim_listing_id = plan.coordinates[victim_listing][2]
     member = next(member for member in snapshot.members if member.listing_id == victim_listing_id)
@@ -984,7 +984,7 @@ def test_a_failover_cell_is_graded_on_what_actually_corroborated_it(connection, 
     fusion = next(
         invariant for invariant in tool.INVARIANTS if invariant.id == "fusion-selects-by-priority-not-recency"
     )
-    snapshot = PostgresToptCoreRepository(connection).freeze_snapshot(
+    snapshot = PostgresCoreRepository(connection).freeze_snapshot(
         run_id=plan.run_id, release_manifest_id=plan.release_manifest_id
     )
     pointer_sha = canonical_sha256({"probe": plan.run_id})
@@ -1019,7 +1019,7 @@ def test_a_failover_substitution_the_payload_does_not_declare_is_a_fusion_violat
         invariant for invariant in tool.INVARIANTS if invariant.id == "fusion-selects-by-priority-not-recency"
     )
     plan = _capture(connection, version="test-862-silent", corroborate=True, outage=_PrimaryOutage())
-    snapshot = PostgresToptCoreRepository(connection).freeze_snapshot(
+    snapshot = PostgresCoreRepository(connection).freeze_snapshot(
         run_id=plan.run_id, release_manifest_id=plan.release_manifest_id
     )
     pointer_sha = canonical_sha256({"probe": plan.run_id})
@@ -1078,7 +1078,7 @@ def test_a_higher_ranked_origin_passed_over_is_a_fusion_violation(connection, ca
     )
     plan = _capture(connection, version="test-1061-passed-over", corroborate=True, outage=_PrimaryOutage())
     victim_listing, _ticker = _victim(plan)
-    snapshot = PostgresToptCoreRepository(connection).freeze_snapshot(
+    snapshot = PostgresCoreRepository(connection).freeze_snapshot(
         run_id=plan.run_id, release_manifest_id=plan.release_manifest_id
     )
     pointer_sha = canonical_sha256({"probe": plan.run_id})
@@ -1157,7 +1157,7 @@ def test_when_every_origin_fails_the_cell_stays_unavailable_as_before(connection
     ).fetchone()
     assert bound == (0,)
     with pytest.raises(ValueError, match="completely successful"):
-        PostgresToptCoreRepository(connection).freeze_snapshot(
+        PostgresCoreRepository(connection).freeze_snapshot(
             run_id=plan.run_id, release_manifest_id=plan.release_manifest_id
         )
 

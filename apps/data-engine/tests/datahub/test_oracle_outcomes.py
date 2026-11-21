@@ -24,7 +24,7 @@ from data_engine.config import settings
 from data_engine.contracts.oracle_policy import load_oracle_policy
 from data_engine.contracts.sentinel_known_answers import SentinelKnownAnswer
 from data_engine.datahub import confidence_report, oracle_outcomes
-from data_engine.datahub.capture_core import PostgresToptCoreRepository
+from data_engine.datahub.capture_core import PostgresCoreRepository
 from data_engine.datahub.oracle_outcomes import (
     AGREE,
     DISAGREE,
@@ -48,13 +48,13 @@ from data_engine.lanes import quality
 from data_engine.quality import nightly_verdicts, vendor_oracle
 from data_engine.sources import gateway
 from factors.snapshot_inputs import (
+    CellQualityInput,
+    CoreSnapshotInput,
+    MarketValueComponent,
     MetricAvailability,
     MetricFreshness,
+    MetricInput,
     OperatingBranch,
-    ToptCellQualityInput,
-    ToptCoreSnapshotInput,
-    ToptMarketValueComponent,
-    ToptMetricInput,
 )
 from truealpha_contracts.models import DataSource
 from truealpha_runtime.testing import InMemoryRawObjectStore
@@ -96,9 +96,9 @@ AS_OF = date(2026, 3, 30)
 # -- the pure comparison ---------------------------------------------------------------
 
 
-def _metric(metric: str, value: Decimal | None, input_id: str, unit: str | None = None) -> ToptMetricInput:
+def _metric(metric: str, value: Decimal | None, input_id: str, unit: str | None = None) -> MetricInput:
     del unit
-    return ToptMetricInput(
+    return MetricInput(
         input_id=input_id,
         metric=metric,
         value=value,
@@ -115,9 +115,9 @@ def _factor_input(
     gross_profit: Decimal | None = None,
     total_assets: Decimal | None = None,
     unit: str | None = None,
-) -> ToptCoreSnapshotInput:
+) -> CoreSnapshotInput:
     observation_ids = tuple(f"normalized-observation:{index:064x}" for index in range(1, 4 * len(listings) + 1))
-    return ToptCoreSnapshotInput(
+    return CoreSnapshotInput(
         snapshot_id="topt-core-snapshot:" + "b" * 64,
         run_id="capture-run:" + "c" * 64,
         release_manifest_id="release-manifest:" + "d" * 64,
@@ -131,7 +131,7 @@ def _factor_input(
         operating_branch=OperatingBranch.NON_FINANCIAL,
         observation_ids=observation_ids,
         cell_inputs=tuple(
-            ToptCellQualityInput(
+            CellQualityInput(
                 input_id=observation_id, confidence=Decimal("0.85"), knowable_at=KNOWN, freshness=MetricFreshness.FRESH
             )
             for observation_id in observation_ids
@@ -142,7 +142,7 @@ def _factor_input(
         revenue=_metric("revenue", revenue, observation_ids[0], unit),
         pre_provision_profit=None,
         market_value_components=tuple(
-            ToptMarketValueComponent(
+            MarketValueComponent(
                 instrument_id=f"instrument:{listing}",
                 listing_id=listing,
                 market_price=_metric("market_price", Decimal("40"), observation_ids[4 * index]),
@@ -165,7 +165,7 @@ def _figure(cap: str | None, price: str | None, *, row_id: int = 7) -> OperatorF
     )
 
 
-def _compare(factor_input: ToptCoreSnapshotInput, figure: OperatorFigure | None, ticker: str | None = "PDD"):
+def _compare(factor_input: CoreSnapshotInput, figure: OperatorFigure | None, ticker: str | None = "PDD"):
     return compare_listed_units(
         factor_input,
         {} if figure is None else {figure.ticker: figure},
@@ -591,7 +591,7 @@ def _frozen(connection) -> tuple[Any, dict[str, Decimal]]:
             "shares_outstanding": share_count_vintage(filed=date(2026, 3, 2), own_date=date(2026, 2, 20))
         },
     )
-    PostgresToptCoreRepository(connection).freeze_snapshot(run_id=run.run_id, release_manifest_id=release_manifest_id)
+    PostgresCoreRepository(connection).freeze_snapshot(run_id=run.run_id, release_manifest_id=release_manifest_id)
     rows = connection.execute(
         """
         select member.factor_input from staging.core_snapshots snapshot

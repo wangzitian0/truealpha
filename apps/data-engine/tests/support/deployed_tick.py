@@ -13,7 +13,7 @@ from typing import Any
 import dagster as dg
 import psycopg
 from data_engine.datahub.a1_evidence import PointerRegistration
-from data_engine.datahub.capture_core.composition import ToptPipelineResult
+from data_engine.datahub.capture_core.composition import PipelineResult
 from data_engine.datahub.capture_core.plausibility_gate import Verdict
 from data_engine.lanes import capture
 from macro_seed import stub_rate
@@ -54,8 +54,8 @@ def run_deployed_tick(monkeypatch: Any, op: Any, *, connection: Any = None, mate
     monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: lent)
     monkeypatch.setattr(
         capture,
-        "run_topt_pipeline",
-        lambda *_a, **_k: ToptPipelineResult(
+        "run_capture_pipeline",
+        lambda *_a, **_k: PipelineResult(
             run_id=RUN,
             release_manifest_id="release-manifest:" + "b" * 64,
             core_result_count=20,
@@ -81,4 +81,4 @@ def run_deployed_tick(monkeypatch: Any, op: Any, *, connection: Any = None, mate
     # production_topt/test_primary_listing_one_producer.py, against a database.
     monkeypatch.setattr(capture, "undeclared_primary_listing_issuers", lambda *_a, **_k: ())
     monkeypatch.setattr(capture, "materialize_fund_consolidation", materialize or (lambda *_a, **_k: ()))
-    op(dg.build_op_context(), capture.ToptLiveTickConfig(executed_at=CUTOFF.isoformat()))
+    op(dg.build_op_context(), capture.LiveTickConfig(executed_at=CUTOFF.isoformat()))

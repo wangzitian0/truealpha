@@ -22,7 +22,7 @@ from data_engine.config import settings
 from data_engine.datahub.capture_core import composition, twelve_data_origin
 from data_engine.datahub.capture_core.composition import (
     PlannedRun,
-    run_topt_pipeline,
+    run_capture_pipeline,
 )
 from data_engine.datahub.capture_core.executor import (
     SourceFetchPort,
@@ -230,7 +230,7 @@ def _arm(
 
 def _run_tick(url: str, *, version: str, cutoff: datetime = CUTOFF, force_fetch: bool = False):
     with psycopg.connect(url) as tick:
-        result = run_topt_pipeline(tick, cutoff=cutoff, version=version, force_fetch=force_fetch)
+        result = run_capture_pipeline(tick, cutoff=cutoff, version=version, force_fetch=force_fetch)
         tick.commit()
         return result
 
@@ -324,7 +324,7 @@ def _served_identity(reader, entity_id: str) -> str:
 def _live_topt_tick(url: str, monkeypatch, *, executed_at: datetime, force_fetch: bool = False, accept: bool) -> dict:
     import dagster as dg
     from data_engine.datahub import a1_evidence
-    from data_engine.lanes.capture import ToptLiveTickConfig, run_topt_live_tick
+    from data_engine.lanes.capture import LiveTickConfig, run_topt_live_tick
 
     monkeypatch.setattr(settings, "database_url", url)
     unmet = (
@@ -332,7 +332,7 @@ def _live_topt_tick(url: str, monkeypatch, *, executed_at: datetime, force_fetch
     )
     monkeypatch.setattr(a1_evidence, "unmet_objectives", lambda *_args, **_kwargs: unmet)
     context = dg.build_op_context()
-    run_topt_live_tick(context, ToptLiveTickConfig(executed_at=executed_at.isoformat(), force_fetch=force_fetch))
+    run_topt_live_tick(context, LiveTickConfig(executed_at=executed_at.isoformat(), force_fetch=force_fetch))
     metadata = context.get_output_metadata("result")
     assert metadata["pointer_advanced"] is accept
     assert metadata["forced_fetch"] is force_fetch
@@ -425,7 +425,7 @@ def test_another_universe_at_the_same_cutoff_is_neither_reused_nor_joined(tick_d
 
     _arm(monkeypatch, quote=lambda: _leg_quote(qqq_partition, Decimal("50")), price_cutoff=day)
     with psycopg.connect(tick_database_url) as tick:
-        qqq = run_topt_pipeline(
+        qqq = run_capture_pipeline(
             tick,
             cutoff=cutoff,
             version=composition.live_version_for(cutoff),
@@ -519,7 +519,7 @@ def test_two_universes_at_one_cutoff_share_a_valid_price_and_are_not_joined(tick
 
     _arm(monkeypatch, quote=lambda: _leg_quote(Decimal("50")), price_cutoff=day)
     with psycopg.connect(tick_database_url) as tick:
-        qqq = run_topt_pipeline(
+        qqq = run_capture_pipeline(
             tick,
             cutoff=cutoff,
             version=composition.live_version_for(cutoff),

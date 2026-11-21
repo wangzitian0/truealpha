@@ -28,13 +28,13 @@ import pytest
 from data_engine import dagster_defs
 from data_engine.config import settings
 from data_engine.dagster_defs import (
-    ToptLiveTickConfig,
+    LiveTickConfig,
     defs,
     run_topt_live_tick,
     topt_live_schedule,
 )
 from data_engine.datahub.a1_evidence import PointerRegistration, UnmetObjective
-from data_engine.datahub.capture_core.composition import ToptPipelineResult, live_version_for
+from data_engine.datahub.capture_core.composition import PipelineResult, live_version_for
 from data_engine.datahub.fetch_key import FetchKey
 from data_engine.lanes import LANE_MODULES, capture, lane_definitions
 from data_engine.lanes.capture import tick_cron
@@ -142,7 +142,7 @@ def test_no_schedule_ever_forces_a_fetch() -> None:
         request = schedule(dg.build_schedule_context(scheduled_execution_time=tick))
         config = request.run_config["ops"][declared.op_name]["config"]
         assert config.get("force_fetch", False) is False, declared.key
-    assert ToptLiveTickConfig(executed_at=tick.isoformat()).force_fetch is False
+    assert LiveTickConfig(executed_at=tick.isoformat()).force_fetch is False
 
 
 def test_live_version_is_tick_deterministic() -> None:
@@ -198,8 +198,8 @@ def _fake_tick(monkeypatch, registration: PointerRegistration) -> None:
     monkeypatch.setattr(capture, "ensure_served_head_artifacts", lambda *_a, **_k: 0)
     monkeypatch.setattr(
         capture,
-        "run_topt_pipeline",
-        lambda *args, **kwargs: ToptPipelineResult(
+        "run_capture_pipeline",
+        lambda *args, **kwargs: PipelineResult(
             run_id="capture-run:" + "a" * 64,
             release_manifest_id="release-manifest:" + "b" * 64,
             core_result_count=20,
@@ -235,7 +235,7 @@ def _fake_tick(monkeypatch, registration: PointerRegistration) -> None:
 def _run_tick(monkeypatch, registration: PointerRegistration):
     _fake_tick(monkeypatch, registration)
     context = dg.build_op_context()
-    run_topt_live_tick(context, ToptLiveTickConfig(executed_at=TICK))
+    run_topt_live_tick(context, LiveTickConfig(executed_at=TICK))
     return context.get_output_metadata("result")
 
 
@@ -296,8 +296,8 @@ def test_the_strategy_replay_gets_the_rate_the_core_engine_used_and_the_op_repor
     rate = stub_rate("0.0431", observation_date=datetime(2026, 7, 29, tzinfo=UTC).date())
     monkeypatch.setattr(
         capture,
-        "run_topt_pipeline",
-        lambda *args, **kwargs: ToptPipelineResult(
+        "run_capture_pipeline",
+        lambda *args, **kwargs: PipelineResult(
             run_id="capture-run:" + "a" * 64,
             release_manifest_id="release-manifest:" + "b" * 64,
             core_result_count=20,
@@ -315,7 +315,7 @@ def test_the_strategy_replay_gets_the_rate_the_core_engine_used_and_the_op_repor
     monkeypatch.setattr(capture, "run_strategy_replay_for_cutoff", replay)
     context = dg.build_op_context()
 
-    run_topt_live_tick(context, ToptLiveTickConfig(executed_at=TICK))
+    run_topt_live_tick(context, LiveTickConfig(executed_at=TICK))
 
     assert passed["risk_free_rate"] == rate, "the replay gets the resolved rate of the pipeline, with its lineage"
     metadata = context.get_output_metadata("result")
@@ -344,7 +344,7 @@ def test_a_tick_without_a_strategy_refuses_a_run_in_which_the_registry_classifie
     _two_issuers_flagged(monkeypatch, ["issuer:a", "issuer:b"])
 
     with pytest.raises(dg.Failure, match="classified none of 2 issuers"):
-        capture.run_canary_live_tick(dg.build_op_context(), ToptLiveTickConfig(executed_at=TICK))
+        capture.run_canary_live_tick(dg.build_op_context(), LiveTickConfig(executed_at=TICK))
 
 
 def test_a_tick_without_a_strategy_publishes_the_issuers_the_registry_classified(monkeypatch) -> None:
@@ -352,7 +352,7 @@ def test_a_tick_without_a_strategy_publishes_the_issuers_the_registry_classified
     _two_issuers_flagged(monkeypatch, ["issuer:a"])
     context = dg.build_op_context()
 
-    capture.run_canary_live_tick(context, ToptLiveTickConfig(executed_at=TICK))
+    capture.run_canary_live_tick(context, LiveTickConfig(executed_at=TICK))
 
     assert context.get_output_metadata("result")["registry_unavailable_excluded"] == ["issuer:a"]
 
@@ -364,7 +364,7 @@ def _logged_tick(monkeypatch, op, registration: PointerRegistration) -> tuple[li
     lines: list[str] = []
     monkeypatch.setattr(context.log, "info", lambda message, *args, **kwargs: lines.append(message))
     monkeypatch.setattr(context.log, "warning", lambda message, *args, **kwargs: lines.append(message))
-    op(context, ToptLiveTickConfig(executed_at=TICK))
+    op(context, LiveTickConfig(executed_at=TICK))
     return lines, context.get_output_metadata("result")
 
 
@@ -426,7 +426,7 @@ def test_lost_corroborations_reach_the_tick_summary(monkeypatch, caplog) -> None
             ),
         ),
     )
-    pipeline = ToptPipelineResult(
+    pipeline = PipelineResult(
         run_id="capture-run:" + "a" * 64,
         release_manifest_id="release-manifest:" + "b" * 64,
         core_result_count=20,
@@ -435,12 +435,12 @@ def test_lost_corroborations_reach_the_tick_summary(monkeypatch, caplog) -> None
         risk_free_rate=stub_rate(),
     )
 
-    def capture_through_the_adapter(*args, **kwargs) -> ToptPipelineResult:
+    def capture_through_the_adapter(*args, **kwargs) -> PipelineResult:
         for item in items:
             assert isinstance(adapter.fetch(item), FetchSuccess), "the primary capture must not fail"
         return pipeline
 
-    monkeypatch.setattr(capture, "run_topt_pipeline", capture_through_the_adapter)
+    monkeypatch.setattr(capture, "run_capture_pipeline", capture_through_the_adapter)
     with caplog.at_level(logging.WARNING):
         lines, metadata = _logged_tick(monkeypatch, run_topt_live_tick, registration)
 
@@ -479,8 +479,8 @@ def test_a_tick_names_the_cells_served_by_failover(monkeypatch) -> None:
     _fake_tick(monkeypatch, registration)
     monkeypatch.setattr(
         capture,
-        "run_topt_pipeline",
-        lambda *args, **kwargs: ToptPipelineResult(
+        "run_capture_pipeline",
+        lambda *args, **kwargs: PipelineResult(
             run_id="capture-run:" + "a" * 64,
             release_manifest_id="release-manifest:" + "b" * 64,
             core_result_count=20,
@@ -576,7 +576,7 @@ def test_an_exhausted_budget_is_named_by_the_deployed_tick(monkeypatch, call_led
     deployed_primary = MarketPriceAdapter({items[1].work_item_id: target}, yahoo_quote_fetcher)
     outcomes: list = []
 
-    def capture_under_the_gate(*args, **kwargs) -> ToptPipelineResult:
+    def capture_under_the_gate(*args, **kwargs) -> PipelineResult:
         outcomes.append(corroborated.fetch(items[0]))
         # Production's Yahoo pace is 2 a second. Rows stamped a moment ahead keep the window full however slow the host is.
         ahead = datetime.now(UTC) + timedelta(seconds=5)
@@ -584,7 +584,7 @@ def test_an_exhausted_budget_is_named_by_the_deployed_tick(monkeypatch, call_led
             [gateway.CallRecord(source="yahoo", endpoint="x", caller="earlier", called_at=ahead, ok=True)] * 2
         )
         outcomes.append(deployed_primary.fetch(items[1]))
-        return ToptPipelineResult(
+        return PipelineResult(
             run_id="capture-run:" + "a" * 64,
             release_manifest_id="release-manifest:" + "b" * 64,
             core_result_count=20,
@@ -593,7 +593,7 @@ def test_an_exhausted_budget_is_named_by_the_deployed_tick(monkeypatch, call_led
             risk_free_rate=stub_rate(),
         )
 
-    monkeypatch.setattr(capture, "run_topt_pipeline", capture_under_the_gate)
+    monkeypatch.setattr(capture, "run_capture_pipeline", capture_under_the_gate)
     lines, metadata = _logged_tick(monkeypatch, run_topt_live_tick, registration)
 
     single_origin, deferred = outcomes
@@ -621,12 +621,12 @@ def test_a_failed_tick_still_says_what_the_gate_refused(monkeypatch, call_ledger
         with gateway.record_call("twelvedata", "eod", caller="test", identity=_key("twelvedata", "eod")):
             raise AssertionError("a refused request ran")
 
-    monkeypatch.setattr(capture, "run_topt_pipeline", refused_capture)
+    monkeypatch.setattr(capture, "run_capture_pipeline", refused_capture)
     context = dg.build_op_context()
     lines: list[str] = []
     monkeypatch.setattr(context.log, "warning", lambda message, *args, **kwargs: lines.append(message))
     with pytest.raises(gateway.BudgetExhausted):
-        run_topt_live_tick(context, ToptLiveTickConfig(executed_at=TICK))
+        run_topt_live_tick(context, LiveTickConfig(executed_at=TICK))
     assert lines == [
         f"topt live tick {TICK} failed; corroborations refused 0; capacity refused 1 (twelvedata budget 1)"
     ]
@@ -700,7 +700,7 @@ def _capturing_tick(monkeypatch, calls: list[dict]) -> None:
 
     def pipeline(*args, **kwargs):
         calls.append(kwargs)
-        return ToptPipelineResult(
+        return PipelineResult(
             run_id="capture-run:" + "a" * 64,
             release_manifest_id="release-manifest:" + "b" * 64,
             core_result_count=20,
@@ -710,19 +710,19 @@ def _capturing_tick(monkeypatch, calls: list[dict]) -> None:
             forced_fetch=kwargs.get("force_fetch", False),
         )
 
-    monkeypatch.setattr(capture, "run_topt_pipeline", pipeline)
+    monkeypatch.setattr(capture, "run_capture_pipeline", pipeline)
 
 
 def test_a_forced_launch_reaches_the_pipeline_and_says_so_in_op_metadata(monkeypatch) -> None:
     """Through the deployed op, not the pipeline function: the config an operator
-    launches with (GraphQL or the admin trigger) must arrive at `run_topt_pipeline`."""
+    launches with (GraphQL or the admin trigger) must arrive at `run_capture_pipeline`."""
     calls: list[dict] = []
     _capturing_tick(monkeypatch, calls)
 
     forced = dg.build_op_context()
-    run_topt_live_tick(forced, ToptLiveTickConfig(executed_at=TICK, force_fetch=True))
+    run_topt_live_tick(forced, LiveTickConfig(executed_at=TICK, force_fetch=True))
     ordinary = dg.build_op_context()
-    run_topt_live_tick(ordinary, ToptLiveTickConfig(executed_at=TICK))
+    run_topt_live_tick(ordinary, LiveTickConfig(executed_at=TICK))
 
     assert [call["force_fetch"] for call in calls] == [True, False]
     # One tick time, one version handed down; the pipeline owns the forced identity.
@@ -880,7 +880,7 @@ def test_all_active_universes_and_standards_planes_are_scheduled_and_enabled_in_
 
 def test_sp500_and_standards_plane_schedules_yield_valid_run_requests(monkeypatch) -> None:
     """Every newly registered schedule builds valid RunRequests and the SP500 tick op invokes
-    `run_topt_pipeline` read-only with its existing signature."""
+    `run_capture_pipeline` read-only with its existing signature."""
     tick = datetime(2026, 10, 15, 1, 15, tzinfo=UTC)
     context = dg.build_schedule_context(scheduled_execution_time=tick)
 
@@ -917,7 +917,7 @@ def test_sp500_and_standards_plane_schedules_yield_valid_run_requests(monkeypatc
     calls: list[dict] = []
     _capturing_tick(monkeypatch, calls)
     op_ctx = dg.build_op_context()
-    dagster_defs.run_sp500_live_tick(op_ctx, ToptLiveTickConfig(executed_at=TICK))
+    dagster_defs.run_sp500_live_tick(op_ctx, LiveTickConfig(executed_at=TICK))
     assert len(calls) == 1
     assert calls[0]["universe_head_kind"] == "universe-list:sp500"
     assert calls[0]["label_prefix"] == "production-sp500"

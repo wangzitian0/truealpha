@@ -1,17 +1,17 @@
 """Production TOPT capture package exports."""
 
 from data_engine.datahub.capture_core.materialization import (
+    CoreSnapshot,
     FinancialFactPayload,
     IdentityPayload,
     MarketPricePayload,
-    PostgresToptCoreRepository,
-    ToptCoreSnapshot,
+    PostgresCoreRepository,
 )
 
 __all__ = [
     "FinancialFactPayload",
     "IdentityPayload",
     "MarketPricePayload",
-    "PostgresToptCoreRepository",
-    "ToptCoreSnapshot",
+    "PostgresCoreRepository",
+    "CoreSnapshot",
 ]

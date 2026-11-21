@@ -26,7 +26,7 @@ from pathlib import Path
 import psycopg
 import pytest
 from data_engine.config import settings
-from data_engine.datahub.capture_core import PostgresToptCoreRepository
+from data_engine.datahub.capture_core import PostgresCoreRepository
 
 sys.path.insert(0, str(Path(__file__).parent))
 from capture_core.test_materialization import _seed_complete_production_run  # noqa: E402
@@ -52,7 +52,7 @@ def connection():
 def frozen_members(connection):
     seeded = _seed_complete_production_run(connection)
     run, release_manifest_id = seeded[1], seeded[3]
-    repository = PostgresToptCoreRepository(connection)
+    repository = PostgresCoreRepository(connection)
     snapshot = repository.freeze_snapshot(run_id=run.run_id, release_manifest_id=release_manifest_id)
     return connection, snapshot
 
