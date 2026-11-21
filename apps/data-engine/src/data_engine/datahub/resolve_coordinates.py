@@ -216,6 +216,87 @@ def _assert_relation(
         )
 
 
+def _claimants(
+    connection: psycopg.Connection[Any], relation_type: str, targets: Sequence[uuid.UUID]
+) -> tuple[list[uuid.UUID], list[uuid.UUID]]:
+    """The entities that hold `relation_type` to one of `targets`: their ids and their survivors, oldest claim first."""
+    rows = connection.execute(
+        "select relation.from_entity_id, staging.entity_survivor(relation.from_entity_id, 'infinity'::timestamptz)"
+        " from staging.entity_relations relation"
+        " where relation.relation_type = %s and relation.to_entity_id = any(%s)"
+        " and not exists (select 1 from staging.entity_retractions retraction"
+        "                 where retraction.relation_id = relation.relation_id)"
+        " order by relation.transaction_time, relation.relation_id",
+        (relation_type, list(targets)),
+    ).fetchall()
+    return list(dict.fromkeys(row[0] for row in rows)), list(dict.fromkeys(row[1] for row in rows))
+
+
+def _merge(
+    connection: psycopg.Connection[Any],
+    loser: uuid.UUID,
+    survivor: uuid.UUID,
+    *,
+    listing: uuid.UUID,
+    known_at: datetime,
+) -> None:
+    """Record that `loser` and `survivor` are one entity, because one listing names both (#1798)."""
+    connection.execute(
+        "with t as (select least(%(known_at)s::timestamptz, clock_timestamp()) as tx_time)"
+        " insert into staging.entity_relations (relation_id, relation_type, from_entity_id, to_entity_id, valid_from,"
+        " transaction_time, source, raw_ref, method, confidence, evidence, mapping_version)"
+        " select staging.entity_relation_uuid(edge.relation_type, %(loser)s, %(survivor)s, '-infinity'::date,"
+        "                                     t.tx_time, 'datahub.capture', 'merge'),"
+        " edge.relation_type, %(loser)s, %(survivor)s, '-infinity'::date, t.tx_time, 'datahub.capture',"
+        " %(raw_ref)s, 'merge', 1.0, jsonb_build_object('listing', %(listing)s::text), 'datahub:v1'"
+        " from t cross join (values ('same_as'), ('superseded_by')) as edge (relation_type)",
+        {
+            "known_at": known_at,
+            "loser": loser,
+            "survivor": survivor,
+            "raw_ref": f"listing:{listing}",
+            "listing": listing,
+        },
+    )
+
+
+def _one_entity(
+    connection: psycopg.Connection[Any],
+    raw_id: str,
+    role: str,
+    claimants: Sequence[uuid.UUID],
+    *,
+    listing: uuid.UUID,
+    as_of: date,
+    known_at: datetime,
+) -> uuid.UUID:
+    """Resolve `raw_id` to the one entity that the listing already names (#1798).
+
+    A listing has one instrument and one issuer. The oldest claimant is that entity. Each other
+    claimant, and the entity that `raw_id` spells, is merged into it. A spelling that names no
+    entity becomes an alias of it. With no claimant, `raw_id` resolves or mints as before.
+    """
+    if not claimants:
+        return resolve_entity(connection, raw_id, role, as_of=as_of, known_at=known_at)
+    anchor = claimants[0]
+    spelled = lookup_entity(connection, raw_id, role, as_of=as_of, known_at=known_at)
+    if spelled is None:
+        raw = raw_id.strip()
+        scheme, value = parse_alias(raw, role)
+        raw_ref = f"listing:{listing}"
+        _insert_entity_alias(connection, anchor, scheme, value, known_at=known_at, raw_ref=raw_ref)
+        if scheme != "legacy-id":
+            _insert_entity_alias(connection, anchor, "legacy-id", raw, known_at=known_at, raw_ref=raw_ref)
+    others = [*claimants[1:], *(() if spelled is None else (spelled,))]
+    for other in dict.fromkeys(others):
+        current = connection.execute(
+            "select staging.entity_survivor(%s, 'infinity'::timestamptz)", (other,)
+        ).fetchone()[0]
+        if current != anchor:
+            _merge(connection, current, anchor, listing=listing, known_at=known_at)
+    return anchor
+
+
 def resolve_coordinates(
     connection: psycopg.Connection[Any] | None,
     instruments: Sequence[Sequence[str]],
@@ -232,9 +313,15 @@ def resolve_coordinates(
         if connection is None:
             result[listing_raw] = (issuer_raw, instrument_raw, listing_raw, ticker)
             continue
-        issuer_uuid = resolve_entity(connection, issuer_raw, "issuer", as_of=as_of, known_at=known_at)
-        instrument_uuid = resolve_entity(connection, instrument_raw, "instrument", as_of=as_of, known_at=known_at)
         listing_uuid = resolve_entity(connection, listing_raw, "listing", as_of=as_of, known_at=known_at)
+        listed_ids, listed = _claimants(connection, "listed_as", [listing_uuid])
+        instrument_uuid = _one_entity(
+            connection, instrument_raw, "instrument", listed, listing=listing_uuid, as_of=as_of, known_at=known_at
+        )
+        _issuing_ids, issuing = _claimants(connection, "issues", [*listed_ids, instrument_uuid])
+        issuer_uuid = _one_entity(
+            connection, issuer_raw, "issuer", issuing, listing=listing_uuid, as_of=as_of, known_at=known_at
+        )
         _assert_relation(connection, "issues", issuer_uuid, instrument_uuid, known_at=known_at)
         _assert_relation(connection, "listed_as", instrument_uuid, listing_uuid, known_at=known_at)
         if listing_raw in primary_listing_ids():
