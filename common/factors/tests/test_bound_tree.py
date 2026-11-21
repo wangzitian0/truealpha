@@ -184,7 +184,7 @@ def test_the_numerator_of_p_over_gp_is_the_captured_input_of_the_pinned_tree(
     # Hand reading of the trees: the uniform tree binds `operating_gross_profit` to gross profit, or to a bank's
     # pre-provision profit. The banking tree subtracts its charge from the pre-provision profit.
     node = operating_numerator_node(tree, issuer_class)
-    assert node.alias(AliasKind.TOPT_SNAPSHOT_FIELD) == field
+    assert node.alias(AliasKind.CORE_SNAPSHOT_FIELD) == field
 
 
 @pytest.mark.parametrize("issuer_class", sorted(IssuerClass))

@@ -158,7 +158,7 @@ def test_the_frozen_snapshot_carries_the_banking_leaves_of_the_bank_only_and_an_
     unavailable with the four fields named (a replay of such a run reads nothing else)."""
     from datetime import datetime
 
-    from data_engine.datahub.capture_core.materialization import ToptCoreSnapshot
+    from data_engine.datahub.capture_core.materialization import CoreSnapshot
     from factors.composite.strategy_evaluator import IssuerInput, evaluate_cutoff
     from factors.panel import IssuerClass
     from factors.snapshot_inputs import TCE_SNAPSHOT_FIELDS, MetricAvailability
@@ -179,7 +179,7 @@ def test_the_frozen_snapshot_carries_the_banking_leaves_of_the_bank_only_and_an_
     for member in payload["members"]:
         for name in TCE_SNAPSHOT_FIELDS:
             member.pop(name, None)
-    reloaded = ToptCoreSnapshot.model_validate(payload)
+    reloaded = CoreSnapshot.model_validate(payload)
     (bank_input,) = [item for item in reloaded.factor_inputs() if item.operating_branch.value == "financial"]
     records: dict[str, tuple[Decimal, Decimal]] = {}
     knowable: dict[str, datetime] = {}

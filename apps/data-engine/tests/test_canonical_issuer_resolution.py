@@ -148,10 +148,10 @@ def _advance_pointer(
 def _materialize_head(
     connection: psycopg.Connection[Any], plan: Any, universe_prefix: str
 ) -> question_coverage.GovernedHead:
-    from data_engine.datahub.capture_core import PostgresToptCoreRepository
+    from data_engine.datahub.capture_core import PostgresCoreRepository
     from factors.snapshot_inputs import GppeV0Definition
 
-    core = PostgresToptCoreRepository(connection)
+    core = PostgresCoreRepository(connection)
     snapshot = core.freeze_snapshot(run_id=plan.run_id, release_manifest_id=plan.release_manifest_id)
     core.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate="0.05"))
     return _advance_pointer(connection, snapshot, plan.run_id, universe_prefix)
@@ -1230,7 +1230,7 @@ def test_the_planner_and_the_capture_share_one_topt_corpus_filename() -> None:
     from data_engine.datahub.capture_core import composition, universe_corpus
 
     assert planner.TOPT_CORPUS_FILENAME is universe_corpus.TOPT_CORPUS_FILENAME
-    for function in (composition._load_capture_corpus, composition.plan_and_persist, composition.run_topt_pipeline):
+    for function in (composition._load_capture_corpus, composition.plan_and_persist, composition.run_capture_pipeline):
         default = inspect.signature(function).parameters["corpus_filename"].default
         assert default is universe_corpus.TOPT_CORPUS_FILENAME, function.__name__
 

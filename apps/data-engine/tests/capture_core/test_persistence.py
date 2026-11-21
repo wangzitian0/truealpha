@@ -25,8 +25,8 @@ import pytest
 from data_engine.config import settings
 from data_engine.contracts.datahub import ObligationTerminalState
 from data_engine.datahub import quality_report
-from data_engine.datahub.capture_core import PostgresToptCoreRepository
-from data_engine.datahub.capture_core.capture_orchestration import run_topt_capture
+from data_engine.datahub.capture_core import PostgresCoreRepository
+from data_engine.datahub.capture_core.capture_orchestration import run_capture
 from data_engine.datahub.capture_core.composition import PlannedRun, plan_and_persist
 from data_engine.datahub.capture_core.corroboration_audit import corroboration_tally
 from data_engine.datahub.capture_core.executor import SourceFetchPort
@@ -387,7 +387,7 @@ def _capture(
         coordinates=plan.coordinates,
         raw_coordinates=plan.raw_coordinates,
     )
-    report = run_topt_capture(
+    report = run_capture(
         plan.run_id,
         plan.work_items,
         _routes(
@@ -414,7 +414,7 @@ def test_executor_run_reconstructs_the_snapshot_and_mart(connection) -> None:
 
     # The core drops a filed count that no stored series puts on the basis of the close (#1277).
     store_flat_topt_series(connection, last=CUTOFF.date())
-    core = PostgresToptCoreRepository(connection)
+    core = PostgresCoreRepository(connection)
     snapshot = core.freeze_snapshot(run_id=plan.run_id, release_manifest_id=plan.release_manifest_id)
     assert len(snapshot.members) == 21
     results = core.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate="0.05"))
@@ -592,7 +592,7 @@ def test_a_corroboration_that_cannot_be_persisted_never_fails_the_primary(connec
 
     report = quality_report.build_report(connection, plan.run_id)
     assert {cell["origin_groups"] for cell in report["reconciliation_cells"].values()} == {2}
-    core = PostgresToptCoreRepository(connection)
+    core = PostgresCoreRepository(connection)
     snapshot = core.freeze_snapshot(run_id=plan.run_id, release_manifest_id=plan.release_manifest_id)
     assert len(core.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate="0.05"))) == 20
 

@@ -8,9 +8,9 @@ from data_engine.contracts.datahub import CaptureWorkItem, ObligationTerminalSta
 from data_engine.contracts.evidence_graph import EvidenceEdge, EvidenceNode
 from data_engine.contracts.obligation_reason_codes import ObligationReasonCode
 from data_engine.datahub.capture_core.executor import (
+    CaptureExecutor,
     FetchFailure,
     FetchSuccess,
-    ToptCaptureExecutor,
 )
 from data_engine.datahub.capture_core.market_price_adapter import (
     CorroboratingOrigin,
@@ -107,7 +107,7 @@ def test_end_to_end_through_executor() -> None:
     item = _work_item("8" * 64)
     adapter = _adapter(item, lambda s, c: _quote(date(2026, 3, 31), "99.99"))
     writer = _FakeWriter()
-    report = ToptCaptureExecutor(writer).run(
+    report = CaptureExecutor(writer).run(
         "capture-run:" + "a" * 64,
         [item],
         adapter,
@@ -362,7 +362,7 @@ def _failover_adapter(item: CaptureWorkItem, primary, *origins: CorroboratingOri
 
 def _capture(item: CaptureWorkItem, adapter: MarketPriceAdapter):
     sink = _Recorder()
-    report = ToptCaptureExecutor(_FakeWriter(), sink=sink).run(
+    report = CaptureExecutor(_FakeWriter(), sink=sink).run(
         "capture-run:" + "c" * 64,
         [item],
         adapter,

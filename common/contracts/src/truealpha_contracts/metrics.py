@@ -97,7 +97,7 @@ class AliasKind(StrEnum):
     KEY = "key"
     METRIC = "metric"
     INPUT_KEY = "input_key"
-    TOPT_SNAPSHOT_FIELD = "topt_snapshot_field"
+    CORE_SNAPSHOT_FIELD = "snapshot_field"
     DEFINITION_PARAMETER = "definition_parameter"
 
 
@@ -145,7 +145,7 @@ class PanelMetricSpec:
         return self.expr_by_class[issuer_class] if issuer_class and issuer_class in self.expr_by_class else self.expr
 
     def alias(self, kind: AliasKind) -> str | None:
-        return getattr(self, kind.value.removeprefix("topt_"))
+        return getattr(self, kind.value)
 
     def with_updates(self, **changes: Any) -> PanelMetricSpec:
         return replace(self, **changes)

@@ -8,12 +8,12 @@ from data_engine.contracts.datahub import CaptureWorkItem, ObligationTerminalSta
 from data_engine.contracts.evidence_graph import EvidenceEdge, EvidenceNode
 from data_engine.contracts.obligation_reason_codes import ObligationReasonCode
 from data_engine.datahub.capture_core.executor import (
+    CaptureExecutor,
     FetchFailure,
     FetchOutcome,
     FetchSuccess,
     NormalizedRecord,
     RawResponse,
-    ToptCaptureExecutor,
 )
 from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.models import DataSource
@@ -61,7 +61,7 @@ def _success(digest: str) -> FetchSuccess:
 
 def _run(script: dict[str, list[FetchOutcome]], items: list[CaptureWorkItem], *, max_attempts: int = 3):
     writer = _FakeWriter()
-    executor = ToptCaptureExecutor(writer, max_attempts=max_attempts)
+    executor = CaptureExecutor(writer, max_attempts=max_attempts)
     report = executor.run(_RUN, items, _ScriptedFetch(script), cutoff=_CUTOFF, recorded_at=_RECORDED)
     return report, writer
 
@@ -160,7 +160,7 @@ class _RecordingSink:
 
 def _run_failover(fetch: _FailoverFetch, items: list[CaptureWorkItem]):
     writer, sink = _FakeWriter(), _RecordingSink()
-    report = ToptCaptureExecutor(writer, sink=sink, max_attempts=3).run(
+    report = CaptureExecutor(writer, sink=sink, max_attempts=3).run(
         _RUN, items, fetch, cutoff=_CUTOFF, recorded_at=_RECORDED
     )
     return report, writer, sink

@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from data_engine.datahub.capture_core.materialization import SnapshotMember, ToptCoreSnapshot
+from data_engine.datahub.capture_core.materialization import CoreSnapshot, SnapshotMember
 from factors.snapshot_inputs import TCE_SNAPSHOT_FIELDS
 from truealpha_contracts.common import canonical_sha256
 
@@ -25,7 +25,7 @@ _FIXTURE = json.loads(
 
 def test_the_stored_snapshot_reloads_under_its_stored_id_and_content_hash() -> None:
     # The model checks the identity: it raises when the given id or hash is not the one of the content.
-    snapshot = ToptCoreSnapshot.model_validate(
+    snapshot = CoreSnapshot.model_validate(
         {**_FIXTURE["payload"], "snapshot_id": _FIXTURE["snapshot_id"], "content_sha256": _FIXTURE["content_sha256"]}
     )
     assert snapshot.snapshot_id == _FIXTURE["snapshot_id"]
@@ -36,7 +36,7 @@ def test_the_stored_snapshot_reloads_under_its_stored_id_and_content_hash() -> N
 
 
 def test_the_stored_factor_inputs_keep_the_member_hashes_that_were_stored() -> None:
-    snapshot = ToptCoreSnapshot.model_validate(_FIXTURE["payload"])
+    snapshot = CoreSnapshot.model_validate(_FIXTURE["payload"])
     rebuilt = {item.issuer_id: canonical_sha256(item.model_dump(mode="json")) for item in snapshot.factor_inputs()}
     stored = {item["factor_input"]["issuer_id"]: item["member_sha256"] for item in _FIXTURE["members"]}
     assert rebuilt == stored
@@ -58,6 +58,6 @@ def test_a_leaf_that_is_present_enters_the_content_hash() -> None:
         "value": "3000000",
     }
     bank["goodwill"] = leaf
-    with_leaf = ToptCoreSnapshot.model_validate(payload)
+    with_leaf = CoreSnapshot.model_validate(payload)
     assert with_leaf.snapshot_id != _FIXTURE["snapshot_id"]
     assert isinstance(with_leaf.members[0], SnapshotMember)

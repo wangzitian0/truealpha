@@ -9,7 +9,7 @@ import pytest
 from data_engine.config import settings
 from data_engine.datahub import quality_report
 from data_engine.datahub.a1_evidence import register_run_evidence
-from data_engine.datahub.capture_core import PostgresToptCoreRepository
+from data_engine.datahub.capture_core import PostgresCoreRepository
 from factors.snapshot_inputs import GppeV0Definition
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -43,7 +43,7 @@ def _materialized_run(connection):
     )
     connection.execute("set session_replication_role = origin")
     _repository, run, _list_version, release_manifest_id, *_ = _seed_complete_production_run(connection)
-    core = PostgresToptCoreRepository(connection)
+    core = PostgresCoreRepository(connection)
     snapshot = core.freeze_snapshot(run_id=run.run_id, release_manifest_id=release_manifest_id)
     assert len(core.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate="0.05"))) == 20
     return run, release_manifest_id

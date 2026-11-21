@@ -38,11 +38,11 @@ from data_engine.contracts.evidence_graph import (
 )
 from data_engine.contracts.obligation_reason_codes import ObligationReasonCode
 from data_engine.datahub import quality_report
-from data_engine.datahub.capture_core.capture_orchestration import run_topt_capture
+from data_engine.datahub.capture_core.capture_orchestration import run_capture
 from data_engine.datahub.capture_core.executor import SourceFetchPort
 from data_engine.datahub.capture_core.issuer_registry import UNAVAILABLE_PAYLOAD_KEY
 from data_engine.datahub.capture_core.market_price_adapter import last_settled_session_date
-from data_engine.datahub.capture_core.materialization import PostgresToptCoreRepository
+from data_engine.datahub.capture_core.materialization import PostgresCoreRepository
 from data_engine.datahub.capture_core.parser_identity import PARSER_VERSION, PARSER_VERSION_HISTORY
 from data_engine.datahub.capture_core.persistence import (
     CaptureTimeline,
@@ -72,7 +72,7 @@ from data_engine.datahub.capture_core.universe_corpus import (
 )
 from data_engine.datahub.control_plane import AttemptLedger, expand_obligations, replay_retry_policy
 from data_engine.datahub.evidence_graph_repository import PostgresEvidenceGraphRepository
-from data_engine.datahub.repository import PostgresCaptureControlRepository, ToptCaptureStatus
+from data_engine.datahub.repository import CaptureStatus, PostgresCaptureControlRepository
 from data_engine.datahub.risk_free import RiskFreeRate, risk_free_rate_at
 from data_engine.release_identity import measure as measure_release_identity
 
@@ -92,7 +92,7 @@ def forced_capture_version(version: str) -> str:
 
 
 @dataclass(frozen=True)
-class ToptPipelineResult:
+class PipelineResult:
     run_id: str
     release_manifest_id: str
     core_result_count: int
@@ -403,7 +403,7 @@ def _unresolved_obligations(connection: psycopg.Connection[Any], run_id: str) ->
     ]
 
 
-def _shortfall_text(status: ToptCaptureStatus) -> str:
+def _shortfall_text(status: CaptureStatus) -> str:
     return (
         f"terminally resolved {status.success_count} of {status.obligation_count} obligations "
         f"(unchanged {status.unchanged_count}, unavailable {status.unavailable_count}, "
@@ -414,7 +414,7 @@ def _shortfall_text(status: ToptCaptureStatus) -> str:
 def _record_and_refuse(
     connection: psycopg.Connection[Any],
     plan: PlannedRun,
-    status: ToptCaptureStatus,
+    status: CaptureStatus,
     *,
     halt_reason: ObligationReasonCode | None = None,
 ) -> NoReturn:
@@ -613,7 +613,7 @@ def _satisfy_from_recent_observations(
     return frozenset(satisfied)
 
 
-def run_topt_pipeline(
+def run_capture_pipeline(
     connection: psycopg.Connection[Any],
     *,
     cutoff: datetime,
@@ -624,7 +624,7 @@ def run_topt_pipeline(
     universe_head_kind: str | None = None,
     force_fetch: bool = False,
     drill: Any | None = None,
-) -> ToptPipelineResult:
+) -> PipelineResult:
     """Capture, commit durable evidence, then freeze, materialize, and grade in the caller's transaction."""
     if cutoff.tzinfo is None or cutoff.utcoffset() is None:
         raise ValueError("cutoff must be timezone-aware")
@@ -666,7 +666,7 @@ def run_topt_pipeline(
         satisfied = frozenset() if force_fetch else _satisfy_from_recent_observations(connection, plan, cutoff=cutoff)
         live_items = [item for item in plan.work_items if item.work_item_id not in satisfied]
         if live_items:
-            report = run_topt_capture(
+            report = run_capture(
                 plan.run_id,
                 live_items,
                 build_routes(plan, connection),
@@ -696,12 +696,12 @@ def run_topt_pipeline(
         refresh_mart_materialized_views(connection, (MART_ENTITY_IDENTITY,), concurrently=True)
 
     rate = risk_free_rate_at(connection, cutoff)
-    core = PostgresToptCoreRepository(connection)
+    core = PostgresCoreRepository(connection)
     snapshot = core.freeze_snapshot(run_id=plan.run_id, release_manifest_id=plan.release_manifest_id)
     results = core.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate=rate.value))
 
     graded = quality_report.build_report(connection, plan.run_id)
-    return ToptPipelineResult(
+    return PipelineResult(
         run_id=plan.run_id,
         release_manifest_id=plan.release_manifest_id,
         core_result_count=len(results),
@@ -716,12 +716,12 @@ __all__ = [
     "CaptureNotPublishableError",
     "FORCED_VERSION_SUFFIX",
     "PlannedRun",
-    "ToptPipelineResult",
+    "PipelineResult",
     "build_routes",
     "ensure_environment_identity",
     "ensure_served_head_artifacts",
     "forced_capture_version",
     "live_version_for",
     "plan_and_persist",
-    "run_topt_pipeline",
+    "run_capture_pipeline",
 ]

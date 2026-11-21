@@ -134,7 +134,7 @@ async def test_panel_coverage_serializes_the_injected_metric_node_repository() -
     """Proves panel_coverage wiring/serialization with an injected metric node repository."""
     from truealpha_runtime.research_report_mart import MetricNodeValueCell, MetricNodeValueReport
 
-    class _FakeTopt:
+    class _FakeMetricNodes:
         def latest(self, *, node_key: str, issuer_id: str | None = None, limit: int = 100) -> MetricNodeValueReport:
             return MetricNodeValueReport(
                 run_id="capture-run:" + "a" * 64,
@@ -155,7 +155,7 @@ async def test_panel_coverage_serializes_the_injected_metric_node_repository() -
                 ),
             )
 
-    server = build_mcp_server(repository=FixtureStrategyRunRepository(), metric_node_repository=_FakeTopt())
+    server = build_mcp_server(repository=FixtureStrategyRunRepository(), metric_node_repository=_FakeMetricNodes())
     content_blocks, structured = await server.call_tool(
         "panel_coverage", {"request": {"node_key": "gppe_uniform_charge_v0"}}
     )  # type: ignore[misc]

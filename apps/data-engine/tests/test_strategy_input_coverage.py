@@ -24,7 +24,7 @@ from pathlib import Path
 import psycopg
 import pytest
 from data_engine.config import settings
-from data_engine.datahub.capture_core import PostgresToptCoreRepository
+from data_engine.datahub.capture_core import PostgresCoreRepository
 from data_engine.datahub.strategy_bridge import (
     persist_strategy_input_coverage,
     seed_strategy_inputs_from_capture,
@@ -54,7 +54,7 @@ def connection():
 def test_coverage_rows_land_per_issuer_and_arithmetic_holds(connection) -> None:
     seeded = _seed_complete_production_run(connection)
     run, release_manifest_id = seeded[1], seeded[3]
-    repository = PostgresToptCoreRepository(connection)
+    repository = PostgresCoreRepository(connection)
     snapshot = repository.freeze_snapshot(run_id=run.run_id, release_manifest_id=release_manifest_id)
     repository.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate="0.05"))
     seed_strategy_inputs_from_capture(connection, run.run_id, cutoff=CUTOFF)

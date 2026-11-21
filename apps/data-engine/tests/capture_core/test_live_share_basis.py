@@ -218,10 +218,10 @@ def _with_series(url: str, shapes: dict[str, SeriesShape]) -> None:
 def _live_tick() -> dict:
     """The deployed op, as the schedule launches it."""
     import dagster as dg
-    from data_engine.lanes.capture import ToptLiveTickConfig, run_topt_live_tick
+    from data_engine.lanes.capture import LiveTickConfig, run_topt_live_tick
 
     context = dg.build_op_context()
-    run_topt_live_tick(context, ToptLiveTickConfig(executed_at=TICK.isoformat()))
+    run_topt_live_tick(context, LiveTickConfig(executed_at=TICK.isoformat()))
     return context.get_output_metadata("result")
 
 
@@ -447,7 +447,7 @@ def test_a_close_that_jumps_beyond_the_series_makes_the_issuer_unavailable_with_
 def test_the_persisted_report_of_the_tick_excludes_the_listings_whose_share_count_the_core_dropped(
     tick: Tick,
 ) -> None:
-    """Production calls `build_report` after `freeze_snapshot` and `materialize` (`composition.run_topt_pipeline`).
+    """Production calls `build_report` after `freeze_snapshot` and `materialize` (`composition.run_capture_pipeline`).
 
     This test reads the report row that the deployed op persisted. The symbols of `UNAVAILABLE` have no
     proven share basis in this fixture, and their financial facts are complete, so the core marks exactly

@@ -261,9 +261,9 @@ def test_a_registry_outage_costs_one_attempt_per_issuer_after_three_and_commits_
     with psycopg.connect(tick_database_url) as reader:
         head_before = reader.execute(_HEAD_SQL).fetchone()
 
-    from data_engine.lanes.capture import ToptLiveTickConfig, run_topt_live_tick
+    from data_engine.lanes.capture import LiveTickConfig, run_topt_live_tick
 
-    config = ToptLiveTickConfig(executed_at=_at(23, 0).isoformat(), force_fetch=True)
+    config = LiveTickConfig(executed_at=_at(23, 0).isoformat(), force_fetch=True)
     run_topt_live_tick(dg.build_op_context(), config)
 
     # `_offline_routes` gives each of the 21 listings its own fake CIK (GOOG and GOOGL are two listings of one

@@ -12,7 +12,7 @@ distinct row — while Staging carried 8 Dagster FAILUREs. `failed_count`,
 `unavailable_count` and `skipped_count` exist to record degradation and had never held a
 non-zero value.
 
-These tests drive the deployed `run_topt_pipeline` over the real schema with fake
+These tests drive the deployed `run_capture_pipeline` over the real schema with fake
 fetchers, sabotage exactly one of the 84 obligations, and then assert on a SEPARATE
 connection, after the tick's transaction has been rolled back, that:
 
@@ -47,7 +47,7 @@ from data_engine.datahub.capture_core import composition
 from data_engine.datahub.capture_core.composition import (
     CaptureNotPublishableError,
     PlannedRun,
-    run_topt_pipeline,
+    run_capture_pipeline,
 )
 from data_engine.datahub.capture_core.executor import (
     FetchFailure,
@@ -313,7 +313,7 @@ def _run_tick(url: str, *, version: str, cutoff: datetime = CUTOFF, force_fetch:
     cutoff, more than the reuse window apart. The reuse test itself runs two ticks
     at ONE cutoff, which is the feature."""
     with psycopg.connect(url) as tick:
-        result = run_topt_pipeline(tick, cutoff=cutoff, version=version, force_fetch=force_fetch)
+        result = run_capture_pipeline(tick, cutoff=cutoff, version=version, force_fetch=force_fetch)
         tick.commit()
         return result
 
@@ -500,12 +500,12 @@ def test_a_freeze_failure_no_longer_erases_the_committed_capture(tick_database_u
     when freeze failed inside the same transaction. The capture now commits the moment
     it is complete and successful: a publish-side crash aborts only the cheap half."""
     _arm(monkeypatch)
-    from data_engine.datahub.capture_core.materialization import PostgresToptCoreRepository
+    from data_engine.datahub.capture_core.materialization import PostgresCoreRepository
 
     def _boom(self, *, run_id: str, release_manifest_id: str):
         raise RuntimeError("injected freeze failure (#628)")
 
-    monkeypatch.setattr(PostgresToptCoreRepository, "freeze_snapshot", _boom)
+    monkeypatch.setattr(PostgresCoreRepository, "freeze_snapshot", _boom)
     with pytest.raises(RuntimeError, match="injected freeze failure"):
         _run_tick(tick_database_url, version="freeze-dies", cutoff=CUTOFF + timedelta(days=4))
 
@@ -532,22 +532,22 @@ def test_a_retry_after_freeze_failure_resumes_without_recapturing(tick_database_
     histories) and never re-fetches a vendor byte."""
     _arm(monkeypatch)
     from data_engine.datahub.capture_core import capture_orchestration
-    from data_engine.datahub.capture_core.materialization import PostgresToptCoreRepository
+    from data_engine.datahub.capture_core.materialization import PostgresCoreRepository
 
     def _boom(self, *, run_id: str, release_manifest_id: str):
         raise RuntimeError("injected freeze failure (#628)")
 
-    real_freeze = PostgresToptCoreRepository.freeze_snapshot
-    monkeypatch.setattr(PostgresToptCoreRepository, "freeze_snapshot", _boom)
+    real_freeze = PostgresCoreRepository.freeze_snapshot
+    monkeypatch.setattr(PostgresCoreRepository, "freeze_snapshot", _boom)
     with pytest.raises(RuntimeError, match="injected freeze failure"):
         _run_tick(tick_database_url, version="resume-after-freeze", cutoff=CUTOFF + timedelta(days=5))
-    monkeypatch.setattr(PostgresToptCoreRepository, "freeze_snapshot", real_freeze)
+    monkeypatch.setattr(PostgresCoreRepository, "freeze_snapshot", real_freeze)
 
     def _no_recapture(*args, **kwargs):
         raise AssertionError("resume must not re-run capture")
 
-    monkeypatch.setattr(capture_orchestration, "run_topt_capture", _no_recapture)
-    monkeypatch.setattr(composition, "run_topt_capture", _no_recapture)
+    monkeypatch.setattr(capture_orchestration, "run_capture", _no_recapture)
+    monkeypatch.setattr(composition, "run_capture", _no_recapture)
 
     result = _run_tick(tick_database_url, version="resume-after-freeze", cutoff=CUTOFF + timedelta(days=5))
     assert result.core_result_count == 20

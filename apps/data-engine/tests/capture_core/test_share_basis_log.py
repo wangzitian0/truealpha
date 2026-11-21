@@ -26,9 +26,9 @@ from pathlib import Path
 import psycopg
 import pytest
 from data_engine.config import settings
-from data_engine.datahub.capture_core import PostgresToptCoreRepository
+from data_engine.datahub.capture_core import PostgresCoreRepository
 from data_engine.datahub.share_basis import NO_SPLIT_ADJUSTED_SERIES, SPLIT_DERIVATION_FAILED, Unavailable
-from factors.snapshot_inputs import MetricAvailability, ToptCoreReasonCode
+from factors.snapshot_inputs import CoreReasonCode, MetricAvailability
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
 sys.path.insert(0, str(Path(__file__).parents[1] / "support"))
@@ -87,7 +87,7 @@ def test_a_universe_without_a_price_series_logs_each_share_gap_once_at_info(conn
     )
     caplog.set_level(logging.INFO, logger=MATERIALIZATION_LOGGER)
 
-    snapshot = PostgresToptCoreRepository(connection).freeze_snapshot(
+    snapshot = PostgresCoreRepository(connection).freeze_snapshot(
         run_id=run.run_id, release_manifest_id=release_manifest_id
     )
 
@@ -103,7 +103,7 @@ def test_a_universe_without_a_price_series_logs_each_share_gap_once_at_info(conn
     # The market value stays NULL and the member keeps the cause.
     assert {member.shares_outstanding.value for member in snapshot.members} == {None}
     assert {member.shares_outstanding.unavailable_reason for member in snapshot.members} == {
-        ToptCoreReasonCode.NO_SPLIT_ADJUSTED_SERIES
+        CoreReasonCode.NO_SPLIT_ADJUSTED_SERIES
     }
 
 
@@ -114,7 +114,7 @@ def test_a_universe_with_a_price_series_keeps_one_warning_for_each_listing_and_r
     """
     (_, run, _, release_manifest_id, *_rest) = _seed_complete_production_run(connection, financial_vintage=VINTAGE)
     caplog.set_level(logging.INFO, logger=MATERIALIZATION_LOGGER)
-    repository = PostgresToptCoreRepository(connection)
+    repository = PostgresCoreRepository(connection)
 
     snapshot = repository.freeze_snapshot(run_id=run.run_id, release_manifest_id=release_manifest_id)
     first = _share_basis_records(caplog)
@@ -135,7 +135,7 @@ def test_a_universe_id_outside_the_contract_keeps_the_warning(connection, caplog
     )
     caplog.set_level(logging.INFO, logger=MATERIALIZATION_LOGGER)
 
-    PostgresToptCoreRepository(connection).freeze_snapshot(run_id=run.run_id, release_manifest_id=release_manifest_id)
+    PostgresCoreRepository(connection).freeze_snapshot(run_id=run.run_id, release_manifest_id=release_manifest_id)
 
     assert [record.levelno for record in _share_basis_records(caplog)] == [logging.WARNING] * 3
 
@@ -167,7 +167,7 @@ def test_a_universe_without_a_price_series_keeps_the_warning_for_a_genuine_loss(
     rows["financial-fact"].payload.update(payload_edit)
     caplog.set_level(logging.INFO, logger=MATERIALIZATION_LOGGER)
 
-    member = PostgresToptCoreRepository._snapshot_member(
+    member = PostgresCoreRepository._snapshot_member(
         "listing:xnas:nvda", rows, histories=histories, stores_price_series=False
     )
 
@@ -175,7 +175,7 @@ def test_a_universe_without_a_price_series_keeps_the_warning_for_a_genuine_loss(
     assert [record.levelno for record in records] == [logging.WARNING]
     assert reason in records[0].getMessage()
     assert member.shares_outstanding.value is None
-    assert member.shares_outstanding.unavailable_reason is ToptCoreReasonCode(reason)
+    assert member.shares_outstanding.unavailable_reason is CoreReasonCode(reason)
 
 
 def test_a_share_count_that_the_source_never_published_keeps_no_cause_and_logs_nothing(caplog) -> None:
@@ -189,7 +189,7 @@ def test_a_share_count_that_the_source_never_published_keeps_no_cause_and_logs_n
     rows["financial-fact"].payload.pop("shares_period_end", None)
     caplog.set_level(logging.DEBUG, logger=MATERIALIZATION_LOGGER)
 
-    member = PostgresToptCoreRepository._snapshot_member("listing:xnas:nvda", rows, histories=(None,))
+    member = PostgresCoreRepository._snapshot_member("listing:xnas:nvda", rows, histories=(None,))
 
     assert member.shares_outstanding.value is None
     assert member.shares_outstanding.availability is MetricAvailability.UNAVAILABLE

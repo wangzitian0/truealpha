@@ -9,7 +9,7 @@ from decimal import Decimal
 import psycopg
 import pytest
 from data_engine.config import settings
-from data_engine.datahub.capture_core import PostgresToptCoreRepository
+from data_engine.datahub.capture_core import PostgresCoreRepository
 from data_engine.datahub.capture_core.source_registrations import (
     SOURCE_RELIABILITY_PRIORS,
     source_reliability_prior,
@@ -157,7 +157,7 @@ def test_snapshot_member_financial_cell_confidence_bounds_by_deciding_keys_only(
         "financial_returns": Decimal("0.36"),
         "close": Decimal("0.91"),
     }
-    member = PostgresToptCoreRepository._snapshot_member(
+    member = PostgresCoreRepository._snapshot_member(
         "listing:xnas:aapl",
         by_type,
         histories=(),
@@ -192,7 +192,7 @@ def test_snapshot_member_financial_cell_confidence_bounds_by_deciding_keys_only(
             )
         },
     )
-    bank_member = PostgresToptCoreRepository._snapshot_member(
+    bank_member = PostgresCoreRepository._snapshot_member(
         "listing:xnas:aapl",
         bank_by_type,
         histories=(),
@@ -246,7 +246,7 @@ def test_capture_leaves_observation_confidence_null_and_persists_cell_confidence
     assert persisted_count >= 21 * 8
     assert null_hash_count == 0
 
-    core = PostgresToptCoreRepository(connection)
+    core = PostgresCoreRepository(connection)
     snapshot = core.freeze_snapshot(run_id=plan.run_id, release_manifest_id=plan.release_manifest_id)
     results = core.materialize(snapshot, gppe_definition=GppeV0Definition(risk_free_rate="0.05"))
     assert len(results) == 20

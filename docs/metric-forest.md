@@ -80,7 +80,7 @@ A node is one metric with one meaning.
 | `sign_policy` | per applicable class: `may-be-negative`, `must-be-non-negative` or `sign-is-signal` (§6) |
 | `provenance` | `metric-registry:<METRICS name>` with an optional specialisation note (e.g. the financial-issuer split of `gross_profit`), `definition-parameter:<name>`, or `derived:<tree>`. Never a vendor (rule 3). |
 | `confidence` | `as-captured` with the confidence-report family that bands the input, `minimum-consumed` for a derived node, or `definitional` for a parameter (§8) |
-| `aliases` | typed: `metric`, `input_key`, `topt_snapshot_field`, `definition_parameter`, and later `mart_column`, `xbrl_concept` or `kg_identifier` |
+| `aliases` | typed: `metric`, `input_key`, `snapshot_field`, `definition_parameter`, and later `mart_column`, `xbrl_concept` or `kg_identifier` |
 
 ### 2.2 Decomposition (edge)
 
@@ -278,7 +278,7 @@ same situation headcount was in.
 | `numerator − charge` | `capital_adjusted_gross_profit ← difference(operating_gross_profit, capital_charge)` |
 | `capital_adjusted / headcount` | `gppe ← ratio(capital_adjusted_gross_profit, employees_total)` |
 | `localcontext(prec=34, ROUND_HALF_EVEN)` | `tree.decimal_precision = 34`, `rounding = ROUND_HALF_EVEN` |
-| the required inputs per branch, and their `missing_*` reasons | `required_inputs(tree, class)`: each input names its `topt_snapshot_field` alias, and the reason is `missing_<field>` |
+| the required inputs per branch, and their `missing_*` reasons | `required_inputs(tree, class)`: each input names its `snapshot_field` alias, and the reason is `missing_<field>` |
 
 In #909, `compute_topt_gppe` evaluates the tree. Three tests, added by #909 in
 `common/factors/tests/test_panel.py`, show that nothing moves:
@@ -319,9 +319,9 @@ strategy path, so it is its own versioned step (H).
 - A new node gets a new UUID. So does a derived node whose formula changes, because a
   different formula is a different node.
 - Every other name is an alias of a declared kind: `metric`, `input_key`,
-  `topt_snapshot_field` and `definition_parameter` today, and `mart_column`, `xbrl_concept`
+  `snapshot_field` and `definition_parameter` today, and `mart_column`, `xbrl_concept`
   and `kg_identifier` later. `input_key` is how `INPUT_KEY_ALIASES` (`headcount`,
-  `last_close`) migrates into the forest, and `topt_snapshot_field` is how `compute_topt_gppe`
+  `last_close`) migrates into the forest, and `snapshot_field` is how `compute_topt_gppe`
   finds a value without naming it.
 - Rows that hold node values key on the UUID, never on the key (§7).
 

@@ -46,7 +46,7 @@ from data_engine.datahub.capture_core.sec_financial_adapter import (
     SecTarget,
     sec_financial_fetcher,
 )
-from data_engine.lanes.capture import ToptLiveTickConfig, run_topt_live_tick
+from data_engine.lanes.capture import LiveTickConfig, run_topt_live_tick
 from data_engine.sources import gateway
 from factors.snapshot_inputs import OperatingBranch
 from truealpha_runtime import EnvironmentTier as RuntimeEnvironmentTier
@@ -204,7 +204,7 @@ def _routes(plan: PlannedRun, connection) -> dict[str, SourceFetchPort]:
 
 
 def _tick(*, force_fetch: bool) -> None:
-    run_topt_live_tick(dg.build_op_context(), ToptLiveTickConfig(executed_at=TICK.isoformat(), force_fetch=force_fetch))
+    run_topt_live_tick(dg.build_op_context(), LiveTickConfig(executed_at=TICK.isoformat(), force_fetch=force_fetch))
 
 
 @dataclass(frozen=True)

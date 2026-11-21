@@ -12,7 +12,7 @@ from data_engine.lanes.capture import (
     CANARY_JOB_NAME,
     TICK_BY_JOB,
     TOPT_LIVE_JOB_NAME,
-    ToptLiveTickConfig,
+    LiveTickConfig,
     UniverseTick,
 )
 from data_engine.lanes.capture import defs as capture_defs
@@ -31,9 +31,7 @@ def _tick_run_request(
     return dg.RunRequest(
         run_key=run_key,
         job_name=tick.job_name,
-        run_config=dg.RunConfig(
-            ops={tick.op_name: ToptLiveTickConfig(executed_at=executed_at, force_fetch=force_fetch)}
-        ),
+        run_config=dg.RunConfig(ops={tick.op_name: LiveTickConfig(executed_at=executed_at, force_fetch=force_fetch)}),
         tags=tags,
     )
 

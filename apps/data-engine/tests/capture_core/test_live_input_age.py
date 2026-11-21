@@ -204,10 +204,10 @@ def _routes(plan: PlannedRun, connection) -> dict[str, SourceFetchPort]:
 def _live_tick() -> dict:
     """The deployed op, as the schedule launches it."""
     import dagster as dg
-    from data_engine.lanes.capture import ToptLiveTickConfig, run_topt_live_tick
+    from data_engine.lanes.capture import LiveTickConfig, run_topt_live_tick
 
     context = dg.build_op_context()
-    run_topt_live_tick(context, ToptLiveTickConfig(executed_at=TICK.isoformat()))
+    run_topt_live_tick(context, LiveTickConfig(executed_at=TICK.isoformat()))
     return context.get_output_metadata("result")
 
 

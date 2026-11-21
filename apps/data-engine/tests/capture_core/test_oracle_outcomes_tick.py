@@ -47,7 +47,7 @@ from data_engine.datahub.capture_core.sec_financial_adapter import (
     SecTarget,
 )
 from data_engine.datahub.capture_core.universe_plane import parse_nasdaq_index_rows
-from data_engine.lanes.capture import ToptLiveTickConfig, run_qqq_live_tick
+from data_engine.lanes.capture import LiveTickConfig, run_qqq_live_tick
 from factors.snapshot_inputs import OperatingBranch
 from psycopg.rows import dict_row
 from truealpha_runtime import EnvironmentTier as RuntimeEnvironmentTier
@@ -226,7 +226,7 @@ def _tick(prepare: Callable[[pytest.MonkeyPatch], None] | None = None) -> Iterat
             seed_rate_for_cutoff(connection, TICK)
             connection.commit()
         context = dg.build_op_context()
-        run_qqq_live_tick(context, ToptLiveTickConfig(executed_at=TICK.isoformat()))
+        run_qqq_live_tick(context, LiveTickConfig(executed_at=TICK.isoformat()))
         yield Tick(url, context.get_output_metadata("result"))
 
 

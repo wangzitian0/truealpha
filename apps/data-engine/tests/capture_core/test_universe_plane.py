@@ -347,20 +347,20 @@ def test_snapshot_invariants_are_self_consistent_not_universe_literals() -> None
     from decimal import Decimal as _D
 
     import pytest as _pytest
-    from data_engine.datahub.capture_core.materialization import SnapshotMember, ToptCoreSnapshot
+    from data_engine.datahub.capture_core.materialization import CoreSnapshot, SnapshotMember
     from factors.snapshot_inputs import (
+        CellQualityInput,
         MetricAvailability,
         MetricFreshness,
+        MetricInput,
         OperatingBranch,
-        ToptCellQualityInput,
-        ToptMetricInput,
     )
 
     def oid(member: int, k: int) -> str:
         return "normalized-observation:" + f"{member:x}{k:x}".ljust(64, "0")
 
-    def metric(name: str, member: int, k: int) -> ToptMetricInput:
-        return ToptMetricInput(
+    def metric(name: str, member: int, k: int) -> MetricInput:
+        return MetricInput(
             input_id=oid(member, k),
             metric=name,
             value=_D("100"),
@@ -373,7 +373,7 @@ def test_snapshot_invariants_are_self_consistent_not_universe_literals() -> None
     def member(i: int) -> SnapshotMember:
         observation_ids = tuple(oid(i, k) for k in range(4))
         cells = tuple(
-            ToptCellQualityInput(
+            CellQualityInput(
                 input_id=one,
                 confidence=_D("0.9"),
                 knowable_at=_dt(2026, 8, 1, tzinfo=_UTC),
@@ -397,7 +397,7 @@ def test_snapshot_invariants_are_self_consistent_not_universe_literals() -> None
             market_price=metric("market_price", i, 1),
         )
 
-    snapshot = ToptCoreSnapshot(
+    snapshot = CoreSnapshot(
         run_id="capture-run:" + "a" * 64,
         release_manifest_id="release-manifest:" + "b" * 64,
         universe_id="universe:test-2026-06-30",
@@ -410,7 +410,7 @@ def test_snapshot_invariants_are_self_consistent_not_universe_literals() -> None
 
     twin = member(3)
     with _pytest.raises(ValueError, match="four distinct observations per member"):
-        ToptCoreSnapshot(
+        CoreSnapshot(
             run_id="capture-run:" + "a" * 64,
             release_manifest_id="release-manifest:" + "b" * 64,
             universe_id="universe:test-2026-06-30",
@@ -430,7 +430,7 @@ def test_snapshot_invariants_are_self_consistent_not_universe_literals() -> None
         {**first.model_dump(), "observation_ids": (*first.observation_ids[:3], first.observation_ids[2])}
     )
     with _pytest.raises(ValueError, match="four distinct observations per member"):
-        ToptCoreSnapshot(
+        CoreSnapshot(
             run_id="capture-run:" + "a" * 64,
             release_manifest_id="release-manifest:" + "b" * 64,
             universe_id="universe:test-2026-06-30",
@@ -447,7 +447,7 @@ def test_snapshot_invariants_are_self_consistent_not_universe_literals() -> None
     # QQQ run passed every model check and then died on `values (..., 20, 21, 84, ...)`
     # hardcoded in _put_snapshot's SQL, which the 0042 trigger rightly refused
     # (obligation_count 408 <> observation_count 84). Pin the bound parameters.
-    from data_engine.datahub.capture_core.materialization import PostgresToptCoreRepository
+    from data_engine.datahub.capture_core.materialization import PostgresCoreRepository
 
     captured: list[tuple[str, tuple]] = []
 
@@ -470,7 +470,7 @@ def test_snapshot_invariants_are_self_consistent_not_universe_literals() -> None
                 return _Cursor(("row",))
             return _Cursor(None)
 
-    store = PostgresToptCoreRepository.__new__(PostgresToptCoreRepository)
+    store = PostgresCoreRepository.__new__(PostgresCoreRepository)
     store._connection = _Conn()
     store._put_snapshot(snapshot)
     head_sql, head_params = captured[0]

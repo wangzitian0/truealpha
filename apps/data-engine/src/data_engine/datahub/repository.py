@@ -61,7 +61,7 @@ def persist_run_report(
 
 
 @dataclass(frozen=True)
-class ToptCaptureStatus:
+class CaptureStatus:
     run_id: str
     campaign_id: str
     environment: str
@@ -80,7 +80,7 @@ class ToptCaptureStatus:
 
 
 @dataclass(frozen=True)
-class ToptCaptureMetaInfo:
+class CaptureMetaInfo:
     run_id: str
     obligation_id: str
     logical_obligation_id: str | None
@@ -403,7 +403,7 @@ class PostgresCaptureControlRepository:
             payload=Jsonb(self._payload(result)),
         )
 
-    def status(self, run_id: str) -> ToptCaptureStatus:
+    def status(self, run_id: str) -> CaptureStatus:
         row = self._connection.execute(
             "select run_id, campaign_id, environment, cutoff, universe_id, universe_version, universe_sha256, "
             "obligation_count, terminal_count, success_count, unchanged_count, unavailable_count, skipped_count, "
@@ -412,9 +412,9 @@ class PostgresCaptureControlRepository:
         ).fetchone()
         if row is None:
             raise LookupError(f"capture run not found: {run_id}")
-        return ToptCaptureStatus(*row)
+        return CaptureStatus(*row)
 
-    def meta_info(self, run_id: str, *, limit: int = 100, offset: int = 0) -> tuple[ToptCaptureMetaInfo, ...]:
+    def meta_info(self, run_id: str, *, limit: int = 100, offset: int = 0) -> tuple[CaptureMetaInfo, ...]:
         if not 1 <= limit <= 500 or offset < 0:
             raise ValueError("meta_info pagination is outside the bounded range")
         rows = self._connection.execute(
@@ -426,7 +426,7 @@ class PostgresCaptureControlRepository:
             (run_id, limit, offset),
         ).fetchall()
         return tuple(
-            ToptCaptureMetaInfo(
+            CaptureMetaInfo(
                 *(list(row[:13]) + [tuple(row[13]) if row[13] is not None else None] + list(row[14:]))  # type: ignore[arg-type]
             )
             for row in rows

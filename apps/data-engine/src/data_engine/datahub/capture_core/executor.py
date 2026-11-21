@@ -190,7 +190,7 @@ class ObligationOutcome:
 
 
 @dataclass(frozen=True)
-class ToptCaptureRunReport:
+class CaptureRunReport:
     run_id: str
     outcomes: tuple[ObligationOutcome, ...]
     halted: bool
@@ -221,7 +221,7 @@ class ToptCaptureRunReport:
         return not self.halted and self.total == len(self.outcomes)
 
 
-class ToptCaptureExecutor:
+class CaptureExecutor:
     def __init__(
         self,
         writer: EvidenceGraphWriter,
@@ -243,7 +243,7 @@ class ToptCaptureExecutor:
         *,
         cutoff: datetime,
         recorded_at: datetime,
-    ) -> ToptCaptureRunReport:
+    ) -> CaptureRunReport:
         if not run_id.startswith("capture-run:"):
             raise ValueError("run_id must be a capture-run identity")
         run_ref = EvidenceNodeRef(kind=EvidenceNodeKind.CAPTURE_RUN, node_id=run_id)
@@ -258,13 +258,13 @@ class ToptCaptureExecutor:
             outcome, halt = self._run_item(item, fetch, run_ref, recorded_at)
             outcomes.append(outcome)
             if halt:
-                return ToptCaptureRunReport(
+                return CaptureRunReport(
                     run_id=run_id,
                     outcomes=tuple(outcomes),
                     halted=True,
                     halt_reason=outcome.reason_code,
                 )
-        return ToptCaptureRunReport(run_id=run_id, outcomes=tuple(outcomes), halted=False, halt_reason=None)
+        return CaptureRunReport(run_id=run_id, outcomes=tuple(outcomes), halted=False, halt_reason=None)
 
     def _run_item(
         self,
