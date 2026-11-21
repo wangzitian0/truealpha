@@ -399,8 +399,9 @@ def isolated_test_database(
             pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
         skip_or_fail(f"no local Postgres; CI runs the required integration coverage ({error})")
         return
+    # The create is outside the `try`: the `finally` must not drop a database that this call did not create.
+    cloned = False
     try:
-        cloned = False
         if template is not None and apply_chain:
             template_name = _dbname_for(template)
             if admin_conn.execute("select 1 from pg_database where datname = %s", (template_name,)).fetchone():
@@ -411,6 +412,10 @@ def isolated_test_database(
                     cloned = False
         if not cloned:
             admin_conn.execute(sql.SQL("create database {}").format(sql.Identifier(name)))
+    except BaseException:
+        admin_conn.close()
+        raise
+    try:
         if apply_chain:
             apply_migration_chain(target_url)
         yield IsolatedDatabase(target_url, name)
