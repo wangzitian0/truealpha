@@ -374,6 +374,7 @@ async function assertTraceRendersDecisionInputs(page, path, problems) {
   const response = await gotoStable(page, `${BASE}${href}`);
   const status = response ? response.status() : null;
   if (status === null || status >= 400) problems.push(`trace: ${href} answered HTTP ${status}`);
+  await assertNoReadError(page, href, problems);
   const section = page.locator('section[aria-labelledby="trace-heading"]');
   try {
     await section.getByRole("heading", { name: "Output trace", exact: true }).waitFor({ state: "visible", timeout: 15000 });
@@ -480,6 +481,7 @@ async function assertDynamicDetailRenders(page, path, problems, spec) {
     problems.push(`${spec.name}: ${href} answered HTTP ${status}`);
     return;
   }
+  await assertNoReadError(page, href, problems);
   const section = page.locator(`section[aria-labelledby="${spec.headingId}"]`);
   try {
     await section.locator(`#${spec.headingId}`).waitFor({ state: "visible", timeout: 15000 });
