@@ -1,4 +1,4 @@
-.PHONY: help install bootstrap runtime-up runtime-down runtime-check stack-up db-up db-migrate db-reset db-check db-down web llm strategy-smoke lint format typecheck typecheck-python typecheck-web test test-python test-web smoke prepush contract-conformance check clean vision-audit
+.PHONY: help install bootstrap runtime-up runtime-down runtime-check stack-up db-up db-migrate db-reset db-check db-down web llm strategy-smoke lint format typecheck-python typecheck-web test-python test-web contract-conformance check clean vision-audit
 
 help:
 	@echo "TrueAlpha — Development Commands"
@@ -20,14 +20,12 @@ help:
 	@echo "  make strategy-smoke Preview replay of large_model_value_v0 against #335's golden fixture"
 	@echo "  make vision-audit Standing audit of Vision & Gate epics (#28/#54)"
 	@echo ""
-	@echo "Quality:"
-	@echo "  make lint         ruff on apps, common, and tools"
-	@echo "  make typecheck    mypy + tsc"
-	@echo "  make test         pytest + bun web tests"
-	@echo "  make smoke        lint + typecheck + test"
-	@echo "  make check        lint + typecheck + test + contract-conformance"
-	@echo "  make contract-conformance Verify Python/TypeScript contract parity"
-	@echo "  make typecheck-python|typecheck-web|test-python|test-web  one language half"
+	@echo "Before a PR (Local pre cell, 30 seconds):"
+	@echo "  make check FILES=<test paths>  static checks on the changed files + the named tests"
+	@echo ""
+	@echo "CI entries (CI runs the full suite; do not run these whole on a laptop):"
+	@echo "  make lint | typecheck-python | typecheck-web | contract-conformance | test-web"
+	@echo "  make test-python FILES=<test paths>  pytest on the named files; FILES is required"
 
 bootstrap:
 	uv sync --all-packages
@@ -128,32 +126,28 @@ format:
 	uv run ruff check apps common tools --fix
 	uv run ruff format apps common tools
 
-typecheck: typecheck-python typecheck-web
-
 typecheck-python:
 	uv run mypy
 
 typecheck-web:
 	cd apps/app-web && bun run typecheck
 
-prepush:
-	@tools/prepush.sh $(BASE)
-
-test: test-python test-web
-
+# An empty FILES made pytest run the whole suite (about 3,150 tests). CI passes one shard.
 test-python:
+	@test -n "$(strip $(FILES))" || { echo "test-python: set FILES=<test paths>. CI runs the full suite." >&2; exit 2; }
 	uv run pytest $(FILES)
 
 test-web:
 	cd apps/app-web && for f in tests/*.test.ts; do bun run "$$f" || exit $$?; done
 
-smoke: lint typecheck test
-
 contract-conformance:
 	uv run python common/contracts/conformance/export_environment_contract.py --check
 	uv run python common/contracts/conformance/export_strategy_definitions.py --check
 
-check: lint typecheck test contract-conformance
+# The one pre-PR command: static checks on the changed files, then the named tests.
+check:
+	@tools/prepush.sh $(BASE)
+	@if [ -n "$(strip $(FILES))" ]; then uv run pytest $(FILES); fi
 
 clean:
 	find . -type d \( -name __pycache__ -o -name .pytest_cache -o -name .ruff_cache \) -exec rm -rf {} + 2>/dev/null || true

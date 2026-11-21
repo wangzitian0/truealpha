@@ -34,11 +34,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
-      - run: make typecheck-web FULL=1
+      - run: make typecheck-web
         working-directory: .
       - name: Run zero-DB unit tests
         working-directory: .
-        run: make test-web FULL=1
+        run: make test-web
 
   # The browser half: a production build, then the frozen route tree walked
   # against two data states.
