@@ -1,17 +1,17 @@
 ---
 name: deploy-evidence
-description: TrueAlpha Deploy Evidence & Issue Closure Guard. Automates AGENTS.md Rule 6 ("Closed means verified on staging with real data") verification before any product issue can be closed.
+description: TrueAlpha Deploy Evidence & Release Proof Guard. Verifies Staging and Production deployments on real captured data after release promotion.
 ---
 
-# TrueAlpha Deploy Evidence & Closure Guard
+# TrueAlpha Deploy Evidence & Release Guard
 
-> **Core Axiom (AGENTS.md Rule 6)**:
-> *"A product issue closes only when staging runs its capability on real captured data. The issue holds the evidence: the deployed call site plus real-data output (SQL rows or an HTTP response)."*
+> **Core Axiom (`AGENTS.md` Rule 6 & `close` skill)**:
+> *"A sub-issue closes after Stage 1 merge and a passing `smoke` reality probe (`ws-delivery-status --assert-complete --reality-probe`, with real captured data whenever testing Staging/Production); `infra2` `release-train` handles Staging verification on real captured data and reopens on regression."*
 
 ## 1. When to Activate This Skill
-- Before marking any TrueAlpha product issue as `Closed`.
-- When verifying whether a PR actually closed an issue or merely merged code into `main`.
-- When auditing staging or production deployment evidence.
+- When auditing Stage 2 Staging verification or Stage 3 Production promotion evidence for a `vX.Y.Z` release tag.
+- When confirming deployed execution paths and real captured Postgres `mart` rows.
+- Never use this skill to block Stage 1 sub-issue closure that already passed its `smoke` reality probe; it gates deployment and Staging/Production claims.
 
 ## 2. The Verification Protocol (Step-by-Step)
 
@@ -52,7 +52,7 @@ LIMIT 5;
 ```
 
 ## 3. Red Lines (Instant Rejection)
-- ❌ Code merged into `main` without deployed proof: **DO NOT CLOSE ISSUE**.
-- ❌ Green tests using fixture data or mocked responses: **DO NOT CLOSE ISSUE**.
-- ❌ Output says `unavailable`, `unsourced`, or returns a sentinel placeholder / hardcoded confidence stamp (`0.85`, `0.92`, `1.00`) without an explicit scope demotion note (a real computed value with a `low_confidence` continuous score is valid and counts as produced): **DO NOT CLOSE ISSUE**.
+- ❌ Claiming Staging or Production deployment from a `main` merge without matching release proof: **REJECT DEPLOYMENT EVIDENCE**.
+- ❌ Green tests using fixture data or mocked responses cited as Staging/Production proof: **REJECT DEPLOYMENT EVIDENCE**.
+- ❌ Output says `unavailable`, `unsourced`, or returns a sentinel placeholder / hardcoded confidence stamp (`0.85`, `0.92`, `1.00`) without an explicit scope demotion note (a real computed value with a `low_confidence` continuous score is valid and counts as produced): **REJECT DEPLOYMENT EVIDENCE**.
 - ❌ Standing checks supply parameters that deployed callers omit (#284): **REJECT EVIDENCE**.
