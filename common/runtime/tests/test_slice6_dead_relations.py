@@ -8,7 +8,7 @@ from pathlib import Path
 
 import psycopg
 import pytest
-from truealpha_runtime.testing import apply_migration_chain, isolated_test_database
+from truealpha_runtime.testing import isolated_test_database
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 RETIRED_VIEWS = (
