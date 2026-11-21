@@ -329,7 +329,7 @@ def test_the_task_timeout_does_not_outlive_its_call(world, monkeypatch, transpor
     before = llm._attempt_timeout.set(47)
     try:
         if transport_raises:
-            with pytest.raises(TimeoutError):
+            with pytest.raises(llm.ModelHTTPError):
                 llm.invoke(None, **call)
         else:
             llm.invoke(None, **call)
@@ -469,13 +469,15 @@ def test_only_a_transient_answer_is_retried(world, call_ledger, monkeypatch, sta
     assert transport.asked == attempts == len(call_ledger)
 
 
-def test_a_transport_error_is_one_failed_row_and_is_raised_unchanged(world, call_ledger, monkeypatch) -> None:
+def test_a_transport_error_is_one_failed_row_and_is_raised_with_status_0(world, call_ledger, monkeypatch) -> None:
+    """#1816: each caller handles `ModelHTTPError` for one filing. Status 0 says that the provider
+    gave no answer, and the cause keeps the transport error."""
     in_environment(monkeypatch, "staging")
 
     def broken(url: str, headers: dict[str, str], body: bytes) -> tuple[int, bytes]:
         raise TimeoutError("timed out")
 
-    with pytest.raises(TimeoutError):
+    with pytest.raises(llm.ModelHTTPError) as raised:
         llm.invoke(
             None,
             task=model_key_health.PROBE_TASK,
@@ -489,6 +491,7 @@ def test_a_transport_error_is_one_failed_row_and_is_raised_unchanged(world, call
             persist=False,
             transport=broken,
         )
+    assert raised.value.status_code == 0 and isinstance(raised.value.__cause__, TimeoutError)
     ((row),) = call_ledger
     assert row.ok is False and row.attempt == 1 and "TimeoutError" in (row.error or "")
 

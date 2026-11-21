@@ -1004,3 +1004,123 @@ def test_empty_10k_partners_records_model_extractor_and_scopes_to_current_raw_re
     assert row[4] == 0
     assert row[10] == "model:glm-5.3-flash:aaaaaaaaaaaa"
     assert "graph:kg-edges:v1" not in str(row[10])
+
+
+def test_a_filing_with_no_model_answer_costs_one_filing_and_each_answered_filing_is_checkpointed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1816: the model gives no answer for the first filing and answers the second. The loop
+    continues, counts one model error, and runs the checkpoint once, after the answered filing.
+    The lane passes its commit as the checkpoint, so a stopped run keeps the answered filings."""
+    from data_engine import raw_store
+    from data_engine.datahub.standards import supply_chain_extraction
+    from data_engine.datahub.standards.supply_chain_extraction import persist_extracted_supply_chain_edges
+
+    monkeypatch.setattr(raw_store, "get_payload", lambda _conn, _fid, **_kw: b"<html><body>10-K</body></html>")
+    nvda, amd = _issuer_id("nvda"), _issuer_id("amd")
+
+    class _FirstUnanswered(_StubLLMGateway):
+        def identify_supply_chain_partners(self, _conn: Any, **kwargs: Any) -> llm.SupplyChainExtraction:
+            if kwargs["cik"] == 1045810:
+                raise llm.ModelHTTPError(0, "filing-extraction-model: no answer: TimeoutError")
+            return super().identify_supply_chain_partners(_conn, **kwargs)
+
+    class _TwoFilings(_MockConnection):
+        def cursor(self):
+            class _Exists(_MockCursor):
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *args: object):
+                    pass
+
+                def fetchone(self):
+                    return ("exists",)
+
+            return _Exists()
+
+        def execute(self, sql: str, params: object = None):
+            cur = _MockCursor()
+            if "from raw.fetches" in sql:
+                cur.fetchall = lambda: [  # type: ignore[method-assign]
+                    (
+                        number,
+                        f"filing-document:CIK{cik:010d}:{cik:010d}-26-000001",
+                        "s3://truealpha-raw/raw/sec/10k.htm",
+                        datetime(2026, 2, 26, tzinfo=UTC),
+                        {"cik": cik, "form": "10-K", "accession": f"{cik:010d}-26-000001", "plain_text": "X" * 200},
+                    )
+                    for number, cik in ((1, 1045810), (2, 2488))
+                ]
+            return cur
+
+    checkpoints: list[int] = []
+    diagnostics = supply_chain_extraction._ExtractionDiagnostics()
+    persist_extracted_supply_chain_edges(
+        _TwoFilings(),  # type: ignore[arg-type]
+        issuers=[
+            CanonicalIssuer(issuer_id=nvda, legacy_id="issuer:cik:0001045810", ticker="NVDA"),
+            CanonicalIssuer(issuer_id=amd, legacy_id="issuer:cik:0000002488", ticker="AMD"),
+        ],
+        cutoff=datetime(2026, 10, 20, tzinfo=UTC),
+        llm_gateway=_FirstUnanswered(),
+        _diagnostics=diagnostics,
+        checkpoint=lambda: checkpoints.append(diagnostics.model_extracted),
+    )
+
+    assert diagnostics.model_errors == 1
+    assert diagnostics.no_answer == 1
+    assert diagnostics.model_extracted == 1
+    assert checkpoints == [1], "one checkpoint, after the one answered filing"
+
+
+@pytest.mark.parametrize(("status", "expected"), [(0, 1), (503, 1), (400, 0), (429, 0)])
+def test_only_a_missing_answer_or_a_server_error_counts_as_no_answer(
+    monkeypatch: pytest.MonkeyPatch, status: int, expected: int
+) -> None:
+    """#1816: a refusal (4xx) of one filing repeats on each run. It is a model error of that filing
+    and does not fail the lane. Status 0 and 5xx can succeed on the next run, and they do."""
+    from data_engine import raw_store
+    from data_engine.datahub.standards import supply_chain_extraction
+    from data_engine.datahub.standards.supply_chain_extraction import persist_extracted_supply_chain_edges
+
+    monkeypatch.setattr(raw_store, "get_payload", lambda _conn, _fid, **_kw: b"<html><body>10-K</body></html>")
+
+    class _OneFiling(_MockConnection):
+        def cursor(self):
+            class _Exists(_MockCursor):
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *args: object):
+                    pass
+
+                def fetchone(self):
+                    return ("exists",)
+
+            return _Exists()
+
+        def execute(self, sql: str, params: object = None):
+            cur = _MockCursor()
+            if "from raw.fetches" in sql:
+                cur.fetchall = lambda: [  # type: ignore[method-assign]
+                    (
+                        1,
+                        "filing-document:CIK0001045810:0001045810-26-000001",
+                        "s3://truealpha-raw/raw/sec/10k.htm",
+                        datetime(2026, 2, 26, tzinfo=UTC),
+                        {"cik": 1045810, "form": "10-K", "accession": "0001045810-26-000001", "plain_text": "X" * 200},
+                    )
+                ]
+            return cur
+
+    diagnostics = supply_chain_extraction._ExtractionDiagnostics()
+    persist_extracted_supply_chain_edges(
+        _OneFiling(),  # type: ignore[arg-type]
+        issuers=[CanonicalIssuer(issuer_id=_issuer_id("nvda"), legacy_id="issuer:cik:0001045810", ticker="NVDA")],
+        cutoff=datetime(2026, 10, 20, tzinfo=UTC),
+        llm_gateway=_StubLLMGateway(error=llm.ModelHTTPError(status, f"HTTP {status}")),
+        _diagnostics=diagnostics,
+    )
+    assert diagnostics.model_errors == 1
+    assert diagnostics.no_answer == expected

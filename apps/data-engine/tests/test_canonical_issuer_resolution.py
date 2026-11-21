@@ -1572,3 +1572,29 @@ def test_the_supply_chain_op_commits_every_partner_it_mints_with_its_birth_alias
         """
     ).fetchone()
     assert partner_edges == (2,)
+
+
+def test_the_supply_chain_op_reports_a_filing_with_no_model_answer_as_a_lane_failure(
+    connection: psycopg.Connection[Any],
+    head: question_coverage.GovernedHead,
+    committing_lane: _CommitRunsDeferredConstraints,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1816: the model gives no answer. The op ends, writes a row for each issuer, and names the
+    count in `lane_failure`. An op that ends green with nothing extracted hides the outage."""
+    from data_engine.sources import llm
+
+    _capture_filing(connection, head)
+
+    def no_answer(_connection: Any, **_kwargs: Any) -> Any:
+        raise llm.ModelHTTPError(0, "filing-extraction-model: no answer: TimeoutError")
+
+    monkeypatch.setattr(llm, "identify_supply_chain_partners", no_answer)
+    config = standards.StandardBackfillConfig(executed_at=EXECUTED_AT, universe=UNIVERSE)
+
+    summary = json.loads(standards.run_supply_chain_exposure(dg.build_op_context(), config, "{}"))
+
+    assert summary["lane_failure"] == "supply chain: 1 filings got no model answer"
+    assert summary["model_errors"] == 1
+    assert summary["no_answer"] == 1
+    assert summary["rows"] == ISSUERS

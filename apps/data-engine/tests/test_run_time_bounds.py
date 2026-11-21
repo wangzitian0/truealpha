@@ -13,7 +13,13 @@ from pathlib import Path
 
 import dagster as dg
 from dagster._core.storage.tags import MAX_RUNTIME_SECONDS_TAG
-from data_engine.run_launcher import CONTRACT_BOUND_TAG, MAX_RUNTIME_ALIAS_TAG, bound_tags_to_write, max_runtime_tags
+from data_engine.run_launcher import (
+    CONTRACT_BOUND_TAG,
+    MAX_RUNTIME_ALIAS_TAG,
+    UNIVERSE_TAG,
+    bound_tags_to_write,
+    max_runtime_tags,
+)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "support"))
 from run_seed import seed_success_run  # noqa: E402
@@ -97,3 +103,28 @@ def test_operator_explicit_max_runtime_tag_is_preserved() -> None:
         MAX_RUNTIME_SECONDS_TAG: contract_bound,
         CONTRACT_BOUND_TAG: contract_bound,
     }
+
+
+def test_the_bound_of_a_run_reads_the_runs_of_its_own_universe() -> None:
+    """One job serves a universe of 20 issuers and one of 500. The short runs of the first must
+    not bound a run of the second: staging stopped each QQQ and S&P 500 head report at the
+    bound that the TOPT runs set, so neither universe ever had a SUCCESS run to raise it."""
+    instance = dg.DagsterInstance.ephemeral()
+    job_name = "head_reports_pipeline"
+    seed_success_run(instance, job_name, 200.0, tags={UNIVERSE_TAG: "topt"})
+
+    floor_seconds = str(int(load_environment_contract().job_runtime_bounds.floor_minutes * 60))
+    assert bound_tags_to_write(job_name, {UNIVERSE_TAG: "topt"}, instance=instance) == {
+        MAX_RUNTIME_SECONDS_TAG: floor_seconds,
+        CONTRACT_BOUND_TAG: floor_seconds,
+    }
+    assert bound_tags_to_write(job_name, {UNIVERSE_TAG: "universe-list:sp500"}, instance=instance) == {}
+
+    seed_success_run(instance, job_name, 2000.0, tags={UNIVERSE_TAG: "universe-list:sp500"})
+    assert bound_tags_to_write(job_name, {UNIVERSE_TAG: "universe-list:sp500"}, instance=instance) == {
+        MAX_RUNTIME_SECONDS_TAG: "4000",
+        CONTRACT_BOUND_TAG: "4000",
+    }
+    assert bound_tags_to_write(job_name, {UNIVERSE_TAG: "topt"}, instance=instance)[MAX_RUNTIME_SECONDS_TAG] == (
+        floor_seconds
+    )

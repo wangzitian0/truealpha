@@ -28,6 +28,7 @@ from data_engine.datahub.standards.planner import universe_issuers
 from data_engine.environment_universes import any_environment_universe_names, scheduled_universe_names
 from data_engine.external_op import external_op
 from data_engine.quality.nightly_verdicts import check_name, is_registered, newest_is_red, tick_from_config, verdict
+from data_engine.run_launcher import UNIVERSE_TAG
 from data_engine.sources import gateway
 
 STANDARD_BACKFILL_JOB_NAME = "standard_backfill_pipeline"
@@ -63,7 +64,6 @@ STANDARDS_PLANE_CRONS: Mapping[str, str] = {
 }
 STANDARDS_PLANE_SCHEDULE_STATUS = dg.DefaultScheduleStatus.STOPPED
 
-UNIVERSE_TAG = "truealpha/universe"
 HEAD_RUN_TAG = "truealpha/head_run"
 
 REPORTS_CURRENT = "reports_current"
@@ -434,7 +434,7 @@ def run_supply_chain_exposure(
         early := _downstream_canonical_op(context, config, purity_summary, "supply chain exposure follows theme purity")
     ) is not None:
         return early
-    joined = model_extracted = replayed = exceeded = 0
+    joined = model_extracted = replayed = exceeded = model_errors = no_answer = 0
     exceeded_filings: tuple[str, ...] = ()
     with gateway.capacity_scope(), psycopg.connect(settings.database_url) as connection:
         head, universe, early = _prepare_canonical_head(
@@ -447,7 +447,11 @@ def run_supply_chain_exposure(
         floor_failure = universe.lane_failure()
         if floor_failure is None:
             sc_report = materialize_universe_supply_chain_exposure(
-                connection, run_id=head.run_id, cutoff=head.cutoff, issuers=universe.issuers
+                connection,
+                run_id=head.run_id,
+                cutoff=head.cutoff,
+                issuers=universe.issuers,
+                checkpoint=connection.commit,
             )
             connection.commit()
             from truealpha_runtime.mart_refresh import MART_ENTITY_IDENTITY, refresh_mart_materialized_views
@@ -457,6 +461,8 @@ def run_supply_chain_exposure(
             model_extracted = int(getattr(sc_report, "model_extracted", 0))
             replayed = int(getattr(sc_report, "replayed", 0))
             exceeded = int(getattr(sc_report, "context_window_exceeded", 0))
+            model_errors = int(getattr(sc_report, "model_errors", 0))
+            no_answer = int(getattr(sc_report, "no_answer", 0))
             exceeded_filings = tuple(getattr(sc_report, "exceeded_filings", ()))
     if exceeded > 0:
         context.log.error(
@@ -473,8 +479,10 @@ def run_supply_chain_exposure(
         replayed,
         exceeded,
     )
-    failure = floor_failure or (
-        f"supply chain: {exceeded} of {joined} filings exceeded 1M context window" if exceeded > 0 else None
+    failure = (
+        floor_failure
+        or (f"supply chain: {exceeded} of {joined} filings exceeded 1M context window" if exceeded > 0 else None)
+        or (f"supply chain: {no_answer} filings got no model answer" if no_answer > 0 else None)
     )
     return _finish_canonical_lane(
         context,
@@ -487,6 +495,8 @@ def run_supply_chain_exposure(
         model_extracted=model_extracted,
         replayed=replayed,
         context_window_exceeded=exceeded,
+        model_errors=model_errors,
+        no_answer=no_answer,
     )
 
 

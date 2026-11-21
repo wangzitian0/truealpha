@@ -6,7 +6,7 @@ import json
 import logging
 import re
 import uuid
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from decimal import Decimal
@@ -75,6 +75,9 @@ class SupplyChainRunReport(int):
     replayed: int
     context_window_exceeded: int
     model_errors: int
+    #: Filings for which the provider gave no answer (status 0) or a server error (5xx). The next
+    #: run can get an answer. A refusal or a cut-off answer of one filing repeats on each run.
+    no_answer: int
     exceeded_filings: tuple[str, ...]
 
     def __new__(
@@ -86,6 +89,7 @@ class SupplyChainRunReport(int):
         replayed: int = 0,
         context_window_exceeded: int = 0,
         model_errors: int = 0,
+        no_answer: int = 0,
         exceeded_filings: Sequence[str] = (),
     ) -> SupplyChainRunReport:
         obj = super().__new__(cls, rows)
@@ -95,6 +99,7 @@ class SupplyChainRunReport(int):
             int(context_window_exceeded),
             int(model_errors),
         )
+        obj.no_answer = int(no_answer)
         obj.exceeded_filings = tuple(exceeded_filings)
         return obj
 
@@ -421,6 +426,7 @@ class _ExtractionDiagnostics:
     replayed: int = 0
     context_window_exceeded: int = 0
     model_errors: int = 0
+    no_answer: int = 0
     exceeded_issuers: dict[str, str] = field(default_factory=dict)
     issuer_extractors: dict[str, str] = field(default_factory=dict)
     issuer_raw_refs: dict[str, str] = field(default_factory=dict)
@@ -435,8 +441,14 @@ def persist_extracted_supply_chain_edges(
     object_store: Any | None = None,
     llm_gateway: Any | None = None,
     _diagnostics: _ExtractionDiagnostics | None = None,
+    checkpoint: Callable[[], None] | None = None,
 ) -> int:
-    """Extract and persist supply-chain edges from 10-K filings."""
+    """Extract and persist supply-chain edges from 10-K filings.
+
+    `checkpoint` runs after each filing that has an extraction. The lane passes the commit of its
+    connection: a run that the runtime bound stops keeps the model answers of the filings it
+    finished, and the next run replays them without a model call (#1816).
+    """
     if not has_table(connection, "raw.fetches"):
         return 0
     diag = _diagnostics if _diagnostics is not None else _ExtractionDiagnostics()
@@ -497,6 +509,9 @@ def persist_extracted_supply_chain_edges(
             continue
         except (llm.ModelNotConfigured, llm.ModelHTTPError) as exc:
             diag.model_errors += 1
+            status = getattr(exc, "status_code", None)
+            if status is not None and (status == 0 or status >= 500):
+                diag.no_answer += 1
             logger.warning(
                 "Supply chain LLM extraction unavailable for %s (CIK %s, %s): %s",
                 matched.ticker,
@@ -558,6 +573,9 @@ def persist_extracted_supply_chain_edges(
                 )
                 if row:
                     inserted += 1
+        diag.edges_inserted = inserted
+        if checkpoint is not None:
+            checkpoint()
     diag.edges_inserted = inserted
     return inserted
 
@@ -758,6 +776,7 @@ def materialize_universe_supply_chain_exposure(
     issuers: Sequence[CanonicalIssuer],
     object_store: Any | None = None,
     llm_gateway: Any | None = None,
+    checkpoint: Callable[[], None] | None = None,
 ) -> SupplyChainRunReport:
     """Materialize supply-chain exposure for a universe run."""
     count = 0
@@ -772,6 +791,7 @@ def materialize_universe_supply_chain_exposure(
             object_store=object_store,
             llm_gateway=llm_gateway,
             _diagnostics=diag,
+            checkpoint=checkpoint,
         )
     cutoff_date = cutoff.date() if hasattr(cutoff, "date") else cutoff
     supplies_to_edges_exist = has_edges_table and _supplies_to_edges_exist(connection, cutoff)
@@ -815,6 +835,7 @@ def materialize_universe_supply_chain_exposure(
         replayed=diag.replayed,
         context_window_exceeded=diag.context_window_exceeded,
         model_errors=diag.model_errors,
+        no_answer=diag.no_answer,
         exceeded_filings=tuple(diag.exceeded_issuers.values()),
     )
 

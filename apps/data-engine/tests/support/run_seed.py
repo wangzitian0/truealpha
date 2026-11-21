@@ -11,13 +11,15 @@ from dagster._core.events.log import EventLogEntry
 from dagster._core.storage.dagster_run import DagsterRun, DagsterRunStatus
 
 
-def seed_success_run(instance: dg.DagsterInstance, job_name: str, duration_seconds: float) -> str:
+def seed_success_run(
+    instance: dg.DagsterInstance, job_name: str, duration_seconds: float, *, tags: dict[str, str] | None = None
+) -> str:
     """Record a SUCCESS run of `job_name` with elapsed runtime `duration_seconds`."""
     now = datetime.now(UTC).timestamp()
     start_time = now - duration_seconds
     end_time = now
     run_id = str(uuid.uuid4())
-    run = DagsterRun(job_name=job_name, run_id=run_id, status=DagsterRunStatus.STARTING)
+    run = DagsterRun(job_name=job_name, run_id=run_id, status=DagsterRunStatus.STARTING, tags=tags or {})
     instance.add_run(run)
     instance.handle_new_event(
         EventLogEntry(
