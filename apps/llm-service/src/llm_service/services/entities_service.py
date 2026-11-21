@@ -329,13 +329,20 @@ def _fetch_issuer_display_map_from_cursor(
 
 
 def _fetch_trace_nodes_from_cursor(cur: Any, candidates: list[str]) -> list[TraceNodeValueDto]:
-    node_sql = f"""
-      select v.node_key, v.period, v.value::text as value, v.unit, v.confidence::text as confidence,
-             coalesce(v.availability_status, 'unavailable') as availability_status, v.reason_codes
-      from mart.metric_node_values v
-      where {served_run_predicate("v.run_id")}
-        and v.issuer_id = any(%s::text[])
-      order by v.node_key, v.period desc
+    # An issuer can be a member of several universes, and each universe has its own served head.
+    # Keep one row for each node and period: the row of the most recently advanced head.
+    node_sql = """
+      select node_key, period, value, unit, confidence, availability_status, reason_codes
+      from (
+        select distinct on (v.node_id, v.period)
+               v.node_key, v.period, v.value::text as value, v.unit, v.confidence::text as confidence,
+               coalesce(v.availability_status, 'unavailable') as availability_status, v.reason_codes
+        from mart.metric_node_values v
+        join mart.served_head h on h.run_id = v.run_id
+        where v.issuer_id = any(%s::text[])
+        order by v.node_id, v.period, h.advanced_at desc, v.run_id
+      ) one_head_per_node
+      order by node_key, period desc
       limit 100
     """
     cur.execute(node_sql, (candidates,))
