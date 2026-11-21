@@ -221,8 +221,8 @@ REMOTE_URL = "postgresql://postgres:hunter2@db.example.invalid:5432/truealpha"
 
 
 def test_building_a_reference_on_a_remote_server_is_refused(monkeypatch) -> None:
-    """The #990 review finding. Omitting --reference-database-url means CREATE DATABASE
-    and then DROP DATABASE ... WITH (FORCE) on whatever server --database-url names. The
+    """The #990 review finding. Omitting --reference-database-url means the tool creates a
+    reference database and then force-drops it on whatever server --database-url names. The
     target being read-only does not cover that: the reference is not the target.
 
     Nothing connects — the refusal happens before the admin connection, which is also
