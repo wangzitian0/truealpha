@@ -75,6 +75,9 @@ class SupplyChainRunReport(int):
     replayed: int
     context_window_exceeded: int
     model_errors: int
+    #: Filings for which the provider gave no answer (status 0) or a server error (5xx). The next
+    #: run can get an answer. A refusal or a cut-off answer of one filing repeats on each run.
+    no_answer: int
     exceeded_filings: tuple[str, ...]
 
     def __new__(
@@ -86,6 +89,7 @@ class SupplyChainRunReport(int):
         replayed: int = 0,
         context_window_exceeded: int = 0,
         model_errors: int = 0,
+        no_answer: int = 0,
         exceeded_filings: Sequence[str] = (),
     ) -> SupplyChainRunReport:
         obj = super().__new__(cls, rows)
@@ -95,6 +99,7 @@ class SupplyChainRunReport(int):
             int(context_window_exceeded),
             int(model_errors),
         )
+        obj.no_answer = int(no_answer)
         obj.exceeded_filings = tuple(exceeded_filings)
         return obj
 
@@ -421,6 +426,7 @@ class _ExtractionDiagnostics:
     replayed: int = 0
     context_window_exceeded: int = 0
     model_errors: int = 0
+    no_answer: int = 0
     exceeded_issuers: dict[str, str] = field(default_factory=dict)
     issuer_extractors: dict[str, str] = field(default_factory=dict)
     issuer_raw_refs: dict[str, str] = field(default_factory=dict)
@@ -503,6 +509,9 @@ def persist_extracted_supply_chain_edges(
             continue
         except (llm.ModelNotConfigured, llm.ModelHTTPError) as exc:
             diag.model_errors += 1
+            status = getattr(exc, "status_code", None)
+            if status is not None and (status == 0 or status >= 500):
+                diag.no_answer += 1
             logger.warning(
                 "Supply chain LLM extraction unavailable for %s (CIK %s, %s): %s",
                 matched.ticker,
@@ -826,6 +835,7 @@ def materialize_universe_supply_chain_exposure(
         replayed=diag.replayed,
         context_window_exceeded=diag.context_window_exceeded,
         model_errors=diag.model_errors,
+        no_answer=diag.no_answer,
         exceeded_filings=tuple(diag.exceeded_issuers.values()),
     )
 

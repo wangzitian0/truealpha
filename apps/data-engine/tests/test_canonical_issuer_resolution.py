@@ -1596,4 +1596,5 @@ def test_the_supply_chain_op_reports_a_filing_with_no_model_answer_as_a_lane_fai
 
     assert summary["lane_failure"] == "supply chain: 1 filings got no model answer"
     assert summary["model_errors"] == 1
+    assert summary["no_answer"] == 1
     assert summary["rows"] == ISSUERS

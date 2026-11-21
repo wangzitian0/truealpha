@@ -1069,5 +1069,58 @@ def test_a_filing_with_no_model_answer_costs_one_filing_and_each_answered_filing
     )
 
     assert diagnostics.model_errors == 1
+    assert diagnostics.no_answer == 1
     assert diagnostics.model_extracted == 1
     assert checkpoints == [1], "one checkpoint, after the one answered filing"
+
+
+@pytest.mark.parametrize(("status", "expected"), [(0, 1), (503, 1), (400, 0), (429, 0)])
+def test_only_a_missing_answer_or_a_server_error_counts_as_no_answer(
+    monkeypatch: pytest.MonkeyPatch, status: int, expected: int
+) -> None:
+    """#1816: a refusal (4xx) of one filing repeats on each run. It is a model error of that filing
+    and does not fail the lane. Status 0 and 5xx can succeed on the next run, and they do."""
+    from data_engine import raw_store
+    from data_engine.datahub.standards import supply_chain_extraction
+    from data_engine.datahub.standards.supply_chain_extraction import persist_extracted_supply_chain_edges
+
+    monkeypatch.setattr(raw_store, "get_payload", lambda _conn, _fid, **_kw: b"<html><body>10-K</body></html>")
+
+    class _OneFiling(_MockConnection):
+        def cursor(self):
+            class _Exists(_MockCursor):
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *args: object):
+                    pass
+
+                def fetchone(self):
+                    return ("exists",)
+
+            return _Exists()
+
+        def execute(self, sql: str, params: object = None):
+            cur = _MockCursor()
+            if "from raw.fetches" in sql:
+                cur.fetchall = lambda: [  # type: ignore[method-assign]
+                    (
+                        1,
+                        "filing-document:CIK0001045810:0001045810-26-000001",
+                        "s3://truealpha-raw/raw/sec/10k.htm",
+                        datetime(2026, 2, 26, tzinfo=UTC),
+                        {"cik": 1045810, "form": "10-K", "accession": "0001045810-26-000001", "plain_text": "X" * 200},
+                    )
+                ]
+            return cur
+
+    diagnostics = supply_chain_extraction._ExtractionDiagnostics()
+    persist_extracted_supply_chain_edges(
+        _OneFiling(),  # type: ignore[arg-type]
+        issuers=[CanonicalIssuer(issuer_id=_issuer_id("nvda"), legacy_id="issuer:cik:0001045810", ticker="NVDA")],
+        cutoff=datetime(2026, 10, 20, tzinfo=UTC),
+        llm_gateway=_StubLLMGateway(error=llm.ModelHTTPError(status, f"HTTP {status}")),
+        _diagnostics=diagnostics,
+    )
+    assert diagnostics.model_errors == 1
+    assert diagnostics.no_answer == expected
