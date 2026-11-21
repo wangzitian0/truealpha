@@ -43,9 +43,6 @@ def test_legacy_production_topt_directories_and_code_references_retired() -> Non
 
     exempt_files = {
         Path(__file__).resolve(),
-        (REPO_ROOT / "common/runtime/tests/test_migration_applier.py").resolve(),
-        (REPO_ROOT / "common/runtime/tests/test_migration_boot_locks.py").resolve(),
-        (REPO_ROOT / "common/contracts/tests/fixtures/contract_cases.json").resolve(),
     }
     offenders: list[str] = []
     for root in (REPO_ROOT / "apps", REPO_ROOT / "common", REPO_ROOT / "db"):
@@ -54,8 +51,6 @@ def test_legacy_production_topt_directories_and_code_references_retired() -> Non
                 continue
             resolved = path.resolve()
             if resolved in exempt_files:
-                continue
-            if resolved.parent == (REPO_ROOT / "db/migrations").resolve() and path.name.startswith("2026"):
                 continue
             text = path.read_text(encoding="utf-8")
             for match in LEGACY_IDENTIFIERS_RE.finditer(text):

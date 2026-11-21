@@ -1,7 +1,6 @@
 """#1235: the P/GP columns of definition 1.0.0 reach mart, and a P/S column never holds a P/GP value.
 
-Migration ``20261013T0201_factors_price_to_gross_profit.sql`` adds named P/GP columns to
-``mart.strategy_decisions`` and ``mart.topt_core_results``. These tests run against a
+``db/migrations/0003_mart.sql`` declares named P/GP columns on ``mart.strategy_decisions``. These tests run against a
 database built from the chain (``make db-reset``) and fail on a chain without it.
 """
 

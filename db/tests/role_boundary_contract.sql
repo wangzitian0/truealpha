@@ -41,7 +41,7 @@ begin
 end;
 $$;
 
--- #1344: 20261015T0900_datahub_mart_entity_identity_set_based.sql made mart.entity_identity
+-- #1344 made mart.entity_identity
 -- set-based, so neither mart_readonly nor app_ops_reader may hold EXECUTE on the helpers,
 -- while both roles still select from mart.entity_identity.
 do $$
