@@ -293,8 +293,10 @@ the oldest entity that holds `issues` to that instrument is its issuer.
 - The first capture that reads a split listing makes it one. No backfill proof is necessary.
 - The invariant `listing-names-one-issuer-and-one-instrument` of `output_invariants` fails on
   a listing with two surviving instruments or two surviving issuers.
-- The rule trusts the listing id. A list that gives a wrong listing id to a member merges two
-  different companies. `staging.entity_retractions` ends such a merge.
+- The rule trusts the listing id, and it reads each claim of any date. A list that gives a
+  wrong listing id to a member merges two different companies. A retraction of the
+  `superseded_by` row ends such a merge. `resolve_coordinates` then stops on that member until
+  the list is corrected; it does not write the merge again.
 
 ## 6. Reuse, reports and consumers
 

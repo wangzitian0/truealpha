@@ -272,3 +272,20 @@ def test_resolve_coordinates_holds_no_hardcoded_issuer_name_dictionary() -> None
     assert _holding_display_name(conn_empty, isin="US0378331005", ticker="AAPL", listing_name="APPLE INC") == (
         "APPLE INC"
     )
+
+
+def test_a_merge_that_a_retraction_ended_is_not_written_again(connection) -> None:
+    """#1798: a retraction of the `superseded_by` row says the two entities are different. The
+    next resolution of the same spelling stops with the listing and both entity ids."""
+    corpus, plane, listing = _two_spellings()
+    first = resolve_coordinates(connection, [corpus], as_of=TODAY, known_at=CUTOFF, refresh_mart=False)[listing]
+    plane_issuer = resolve_entity(connection, plane[0], "issuer", as_of=TODAY, known_at=CUTOFF)
+    resolve_coordinates(connection, [plane], as_of=TODAY, known_at=CUTOFF, refresh_mart=False)
+    connection.execute(
+        "insert into staging.entity_retractions (relation_id, valid_to, reason, transaction_time, source, raw_ref)"
+        " select relation_id, %s, 'wrong-listing-id', %s, 'test', 'test' from staging.entity_relations"
+        " where relation_type in ('same_as', 'superseded_by') and from_entity_id = %s and to_entity_id = %s::uuid",
+        (TODAY, CUTOFF, plane_issuer, first[0]),
+    )
+    with pytest.raises(ValueError, match=f"issuer {plane_issuer} was separated from {first[0]}"):
+        resolve_coordinates(connection, [plane], as_of=TODAY, known_at=CUTOFF, refresh_mart=False)

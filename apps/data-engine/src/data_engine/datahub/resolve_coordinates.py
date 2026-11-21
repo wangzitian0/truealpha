@@ -289,11 +289,22 @@ def _one_entity(
             _insert_entity_alias(connection, anchor, "legacy-id", raw, known_at=known_at, raw_ref=raw_ref)
     others = [*claimants[1:], *(() if spelled is None else (spelled,))]
     for other in dict.fromkeys(others):
-        current = connection.execute(
-            "select staging.entity_survivor(%s, 'infinity'::timestamptz)", (other,)
-        ).fetchone()[0]
-        if current != anchor:
-            _merge(connection, current, anchor, listing=listing, known_at=known_at)
+        row = connection.execute("select staging.entity_survivor(%s, 'infinity'::timestamptz)", (other,)).fetchone()
+        current: uuid.UUID = row[0] if row and row[0] else other
+        if current == anchor:
+            continue
+        if connection.execute(
+            "select 1 from staging.entity_relations relation"
+            " join staging.entity_retractions retraction using (relation_id)"
+            " where relation.relation_type = 'superseded_by'"
+            " and relation.from_entity_id = %s and relation.to_entity_id = %s limit 1",
+            (current, anchor),
+        ).fetchone():
+            raise ValueError(
+                f"listing {listing}: {role} {current} was separated from {anchor} by a retraction, "
+                f"and {raw_id!r} names it again; the list gives this member a wrong listing id"
+            )
+        _merge(connection, current, anchor, listing=listing, known_at=known_at)
     return anchor
 
 
