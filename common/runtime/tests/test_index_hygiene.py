@@ -2,18 +2,14 @@
 
 from __future__ import annotations
 
-import os
 import re
-import uuid
 from collections import defaultdict
 from collections.abc import Iterator
 from pathlib import Path
-from urllib.parse import urlsplit, urlunsplit
 
 import psycopg
 import pytest
-from psycopg import sql
-from truealpha_runtime.testing import apply_migration_chain, guard_db_write
+from truealpha_runtime.testing import isolated_test_database
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 MIGRATIONS = REPO_ROOT / "db/migrations"
@@ -38,31 +34,10 @@ _CREATE_INDEX_RE = re.compile(
 )
 
 
-def _named(database: str) -> str:
-    base = urlsplit(guard_db_write())
-    return urlunsplit((base.scheme, base.netloc, f"/{database}", base.query, ""))
-
-
-def _admin_url() -> str:
-    return _named("postgres")
-
-
 @pytest.fixture(scope="module")
 def migrated_db() -> Iterator[str]:
-    name = f"truealpha_idx_{os.getpid()}_{uuid.uuid4().hex[:8]}"
-    try:
-        with psycopg.connect(_admin_url(), connect_timeout=5, autocommit=True) as admin:
-            admin.execute(sql.SQL("create database {}").format(sql.Identifier(name)))
-    except psycopg.OperationalError as error:
-        if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
-            pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
-        pytest.skip("no local Postgres; CI runs the required integration coverage")
-    try:
-        apply_migration_chain(_named(name))
-        yield _named(name)
-    finally:
-        with psycopg.connect(_admin_url(), connect_timeout=5, autocommit=True) as admin:
-            admin.execute(sql.SQL("drop database if exists {} with (force)").format(sql.Identifier(name)))
+    with isolated_test_database("idx", template=None) as db:
+        yield str(db)
 
 
 def _split_cols(raw_cols: str) -> tuple[str, ...]:

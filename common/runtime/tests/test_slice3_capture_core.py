@@ -2,17 +2,13 @@
 
 from __future__ import annotations
 
-import os
 import re
-import uuid
-from collections.abc import Generator
+from collections.abc import Iterator
 from pathlib import Path
 
 import psycopg
 import pytest
-from psycopg import sql
-from psycopg.conninfo import conninfo_to_dict, make_conninfo
-from truealpha_runtime.testing import apply_migration_chain, guard_db_write
+from truealpha_runtime.testing import isolated_test_database
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 LEGACY_PACKAGE_DIR = REPO_ROOT / "apps/data-engine/src/data_engine/datahub/production_topt"
@@ -34,31 +30,10 @@ LEGACY_IDENTIFIERS_RE = re.compile(
 )
 
 
-def _admin_url() -> str:
-    params = conninfo_to_dict(guard_db_write())
-    return make_conninfo(**(params | {"dbname": "postgres"}))
-
-
 @pytest.fixture(scope="module")
-def slice3_db() -> Generator[str]:
-    admin_url = _admin_url()
-    name = f"truealpha_slice3_{os.getpid()}_{uuid.uuid4().hex[:8]}"
-    try:
-        with psycopg.connect(admin_url, connect_timeout=3, autocommit=True) as admin:
-            admin.execute(sql.SQL("create database {}").format(sql.Identifier(name)))
-    except psycopg.OperationalError as error:
-        if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
-            pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
-        pytest.skip("no local Postgres; CI runs required DB tests")
-
-    params = conninfo_to_dict(admin_url)
-    db_url = make_conninfo(**(params | {"dbname": name}))
-    try:
-        apply_migration_chain(db_url)
-        yield db_url
-    finally:
-        with psycopg.connect(admin_url, autocommit=True) as admin:
-            admin.execute(sql.SQL("drop database if exists {} with (force)").format(sql.Identifier(name)))
+def slice3_db() -> Iterator[str]:
+    with isolated_test_database("slice3", template=None) as db:
+        yield str(db)
 
 
 def test_legacy_production_topt_directories_and_code_references_retired() -> None:

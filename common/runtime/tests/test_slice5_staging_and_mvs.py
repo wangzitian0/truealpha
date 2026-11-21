@@ -2,21 +2,17 @@
 
 from __future__ import annotations
 
-import os
 import re
-import uuid
-from collections.abc import Generator
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import psycopg
 import pytest
-from psycopg import sql
-from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from psycopg.pq import TransactionStatus
 from truealpha_runtime.mart_refresh import MART_MV_REFRESH_ORDER, refresh_mart_materialized_views
-from truealpha_runtime.testing import apply_migration_chain, guard_db_write
+from truealpha_runtime.testing import apply_migration_chain, isolated_test_database
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 EXPECTED_MVS = (
@@ -28,31 +24,10 @@ EXPECTED_MVS = (
 )
 
 
-def _admin_url() -> str:
-    params = conninfo_to_dict(guard_db_write())
-    return make_conninfo(**(params | {"dbname": "postgres"}))
-
-
 @pytest.fixture(scope="module")
-def slice5_db() -> Generator[str]:
-    admin_url = _admin_url()
-    name = f"truealpha_slice5_{os.getpid()}_{uuid.uuid4().hex[:8]}"
-    try:
-        with psycopg.connect(admin_url, connect_timeout=3, autocommit=True) as admin:
-            admin.execute(sql.SQL("create database {}").format(sql.Identifier(name)))
-    except psycopg.OperationalError as error:
-        if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
-            pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
-        pytest.skip("no local Postgres; CI runs required DB tests")
-
-    params = conninfo_to_dict(admin_url)
-    db_url = make_conninfo(**(params | {"dbname": name}))
-    try:
-        apply_migration_chain(db_url)
-        yield db_url
-    finally:
-        with psycopg.connect(admin_url, autocommit=True) as admin:
-            admin.execute(sql.SQL("drop database if exists {} with (force)").format(sql.Identifier(name)))
+def slice5_db() -> Iterator[str]:
+    with isolated_test_database("slice5", template=None) as db:
+        yield str(db)
 
 
 def test_analyst_rating_events_retired_from_runtime_and_schema(slice5_db: str) -> None:
@@ -193,19 +168,7 @@ def test_squashed_baseline_replays_idempotently_and_preserves_mv_grants(slice5_d
 def test_squashed_baseline_upgrades_pre_mv_regular_views_and_retires_analyst_rating_events() -> None:
     """Replaying the 4-file baseline on a pre-Slice-5 DB (v0.2.114 Production shape) converts
     regular views to materialized views cleanly without crashing on CREATE UNIQUE INDEX."""
-    admin_url = _admin_url()
-    name = f"truealpha_slice5_upg_{os.getpid()}_{uuid.uuid4().hex[:8]}"
-    try:
-        with psycopg.connect(admin_url, connect_timeout=3, autocommit=True) as admin:
-            admin.execute(sql.SQL("create database {}").format(sql.Identifier(name)))
-    except psycopg.OperationalError as error:
-        if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
-            pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
-        pytest.skip("no local Postgres; CI runs required DB tests")
-
-    db_url = make_conninfo(**(conninfo_to_dict(admin_url) | {"dbname": name}))
-    try:
-        apply_migration_chain(db_url)
+    with isolated_test_database("slice5_upg", template=None) as db_url:
         with psycopg.connect(db_url, autocommit=True) as conn:
             conn.execute("create table staging.analyst_rating_events (id bigint primary key)")
             for rel in (
@@ -255,9 +218,6 @@ def test_squashed_baseline_upgrades_pre_mv_regular_views_and_retires_analyst_rat
                 ).fetchall()
             }
             assert idxs == {idx for _, idx in EXPECTED_MVS}, idxs
-    finally:
-        with psycopg.connect(admin_url, autocommit=True) as admin:
-            admin.execute(sql.SQL("drop database if exists {} with (force)").format(sql.Identifier(name)))
 
 
 class _FakeInfo:

@@ -896,14 +896,9 @@ def test_s_sweeps_the_references_that_a_killed_run_left_behind(
     from truealpha_tools import schema_drift
 
     old = f"truealpha_chain_reference_{int(time.time()) - 7200}_1234_deadbeef"
-    with psycopg.connect(database_url, autocommit=True) as admin:
-        admin.execute(f'create database "{old}"')
-    try:
+    with isolated_test_database(name=old, apply_chain=False):
         topt_baseline.read_schema(database_url, db_dir=Path(__file__).resolve().parents[3] / "db")
         assert old not in reference_names(database_url)
-    finally:
-        with psycopg.connect(database_url, autocommit=True) as admin:
-            admin.execute(f'drop database if exists "{old}" with (force)')
     assert schema_drift.REFERENCE_PREFIX == "truealpha_chain_reference_"
 
 

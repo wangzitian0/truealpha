@@ -1,21 +1,19 @@
 import json
-import os
 import re
 import uuid
 from collections.abc import Callable, Iterator
+from contextlib import ExitStack
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
-from urllib.parse import urlsplit, urlunsplit
 
 import psycopg
 import pytest
 from fastapi.testclient import TestClient
 from llm_service import main
 from llm_service.main import ROUTED_PREFIX, app
-from psycopg import sql
 from pydantic import SecretStr
-from truealpha_runtime.testing import db_writes_allowed, isolated_test_database, load_tool
+from truealpha_runtime.testing import clone_test_database, db_writes_allowed, isolated_test_database, load_tool
 
 #: A test value for the MCP credential; the deployment generates the real one.
 MCP_TEST_TOKEN = "test-mcp-token"
@@ -450,16 +448,8 @@ def test_the_vision_audit_fails_closed_on_unknown_pointers(monkeypatch) -> None:
     )
 
 
-#: The real `psycopg.connect`, kept before any test replaces it. A fixture that runs its teardown
-#: while a test's patch is still in place must still reach the database.
+#: The real `psycopg.connect`, kept before any test replaces it. The patch of `health_of` calls it.
 REAL_CONNECT = psycopg.connect
-
-
-def _named(database: str) -> str:
-    from truealpha_runtime.testing import guard_db_write
-
-    base = urlsplit(guard_db_write())
-    return urlunsplit((base.scheme, base.netloc, f"/{database}", base.query, ""))
 
 
 @pytest.fixture(scope="module")
@@ -485,7 +475,7 @@ def clone(template_database: str) -> Iterator[Callable[..., str]]:
     environment of None means the identity row's own. The sequence is 0 when it is not given.
     `identity` is "keep", "missing", or the environment name to store.
     """
-    made: list[str] = []
+    clones = ExitStack()
 
     def capture_run(connection: psycopg.Connection) -> str:
         digest = uuid.uuid4().hex * 2
@@ -498,15 +488,9 @@ def clone(template_database: str) -> Iterator[Callable[..., str]]:
         return run_id
 
     def make(heads=(), identity: str = "keep") -> str:
-        name = f"truealpha_health_clone_{os.getpid()}_{uuid.uuid4().hex[:8]}"
-        made.append(name)
-        with REAL_CONNECT(_named("postgres"), autocommit=True) as admin:
-            admin.execute(
-                sql.SQL("create database {} template {}").format(
-                    sql.Identifier(name), sql.Identifier(template_database)
-                )
-            )
-        with REAL_CONNECT(_named(name)) as connection:
+        # The clone opens its admin connection here, before the test replaces `psycopg.connect`.
+        database = clones.enter_context(clone_test_database(template_database, "health_clone"))
+        with REAL_CONNECT(database) as connection:
             own = connection.execute("select environment from mart.environment_identity").fetchone()[0]
             for universe, age, environment, *rest in heads:
                 sequence = rest[0] if rest else 0
@@ -534,12 +518,10 @@ def clone(template_database: str) -> Iterator[Callable[..., str]]:
             elif identity != "keep":
                 connection.execute("update mart.environment_identity set environment = %s", (identity,))
             connection.commit()
-        return _named(name)
+        return str(database)
 
-    yield make
-    with REAL_CONNECT(_named("postgres"), autocommit=True) as admin:
-        for name in made:
-            admin.execute(sql.SQL("drop database if exists {} with (force)").format(sql.Identifier(name)))
+    with clones:
+        yield make
 
 
 def health_of(monkeypatch, database: str) -> dict:
