@@ -73,7 +73,7 @@ OK_WITHOUT_FINISH_REASON = json.dumps(
 @pytest.fixture(autouse=True)
 def seated(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "llm_api_key", KEY)
-    monkeypatch.setattr(settings, "llm_model", "glm-test")
+    monkeypatch.setattr(settings, "llm_small_model", "glm-test")
     monkeypatch.setattr(model_policy, "pacer_for", lambda environment: None)  # pacing has its own tests
 
 
@@ -147,6 +147,7 @@ def test_an_unknown_version_in_the_contract_is_refused_before_any_call(monkeypat
 
 
 def test_an_environment_on_v1_sends_thinking_disabled_and_the_task_max_tokens(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "llm_small_model", "glm-5.3-flash")  # the production model
     in_environment(monkeypatch, "production")
     transport = Capture()
     ask(transport=transport)
@@ -156,6 +157,7 @@ def test_an_environment_on_v1_sends_thinking_disabled_and_the_task_max_tokens(mo
 
 
 def test_an_environment_on_v2_sends_the_documented_body_and_the_same_max_tokens(monkeypatch, call_ledger) -> None:
+    monkeypatch.setattr(settings, "llm_small_model", "glm-5.3-flash")
     in_environment(monkeypatch, "staging", decoding="v2")
     transport = Capture()
     ask(transport=transport)

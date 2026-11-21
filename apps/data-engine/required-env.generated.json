@@ -478,8 +478,8 @@
       "store_key": ""
     },
     {
-      "field": "llm_model",
-      "env": "LLM_MODEL",
+      "field": "llm_small_model",
+      "env": "LLM_SMALL_MODEL",
       "aliases": [],
       "required": false,
       "injected": false,

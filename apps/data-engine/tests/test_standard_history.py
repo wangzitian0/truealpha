@@ -284,7 +284,7 @@ def _run_twice(connection: Any, monkeypatch: pytest.MonkeyPatch) -> Runs:
     assert leftovers == 0, "the fixture CIKs must start without facts"
     model = StubModel()
     monkeypatch.setattr(settings, "llm_api_key", "test-key")
-    monkeypatch.setattr(settings, "llm_model", "glm-test")
+    monkeypatch.setattr(settings, "llm_small_model", "glm-test")
     monkeypatch.setattr(llm, "_gateway_transport", model)
     monkeypatch.setattr(backfill_module, "universe_issuers", lambda _c, _u: ISSUERS)
     edgar = FakeEdgar(ALL_FILINGS)

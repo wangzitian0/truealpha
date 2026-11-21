@@ -66,7 +66,7 @@ def connection():
 @pytest.fixture
 def seated(monkeypatch):
     monkeypatch.setattr(settings, "llm_api_key", "test-key")
-    monkeypatch.setattr(settings, "llm_model", "glm-test")
+    monkeypatch.setattr(settings, "llm_small_model", "glm-test")
     ledger = gateway.MemoryLedger()
     previous = gateway.set_writer(ledger)
     yield ledger
@@ -145,11 +145,11 @@ def test_replay_returns_the_first_answer_not_the_newest(connection, seated) -> N
 
 
 def test_an_answer_served_by_the_configured_model_replays_under_a_pinned_name(connection, seated, monkeypatch) -> None:
-    """The provider serves the `glm-4.7` alias with `glm-5.3-flash`. Pinning `LLM_MODEL` to
+    """The provider serves the `glm-4.7` alias with `glm-5.3-flash`. Pinning `LLM_SMALL_MODEL` to
     the served name changes the request digest but not the model that answers, so the stored
     answer replays. A row whose served model was never reported replays only under the
     name it was asked with, which is the key every existing row was stored under."""
-    monkeypatch.setattr(settings, "llm_model", "glm-alias")
+    monkeypatch.setattr(settings, "llm_small_model", "glm-alias")
     cik, accession = _fresh_filing()
     served = _classify(connection, cik, accession, lambda *_: (200, _reply([True, None], served="glm-revision")))
     legacy_cik, legacy_accession = _fresh_filing()
@@ -158,7 +158,7 @@ def test_an_answer_served_by_the_configured_model_replays_under_a_pinned_name(co
     )
     assert served.invocation.served_model == "glm-revision" and unreported.invocation.served_model is None
 
-    monkeypatch.setattr(settings, "llm_model", "glm-revision")
+    monkeypatch.setattr(settings, "llm_small_model", "glm-revision")
     pinned = _classify(connection, cik, accession, _never)
     assert pinned.invocation.replayed and pinned.invocation.invocation_id == served.invocation.invocation_id
     assert pinned.verdicts == (True, None)
@@ -173,7 +173,7 @@ def test_an_answer_served_by_the_configured_model_replays_under_a_pinned_name(co
     reasked = _classify(connection, legacy_cik, legacy_accession, transport)
     assert asked == ["glm-revision"] and not reasked.invocation.replayed
 
-    monkeypatch.setattr(settings, "llm_model", "glm-alias")
+    monkeypatch.setattr(settings, "llm_small_model", "glm-alias")
     legacy = _classify(connection, legacy_cik, legacy_accession, _never)
     assert legacy.invocation.replayed and legacy.verdicts == (False, False)
 

@@ -1358,7 +1358,7 @@ def _seed_one_partition(
         knowable=datetime(2026, 2, 1, tzinfo=UTC),
     )
     monkeypatch.setattr(settings, "llm_api_key", "test-key")
-    monkeypatch.setattr(settings, "llm_model", "glm-test")
+    monkeypatch.setattr(settings, "llm_small_model", "glm-test")
     monkeypatch.setattr(
         llm,
         "_gateway_transport",

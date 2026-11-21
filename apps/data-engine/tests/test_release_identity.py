@@ -188,13 +188,13 @@ def test_the_settings_model_resolves_canonical_release_keys(
     monkeypatch.setenv("RELEASE_ID", release_id)
     monkeypatch.setenv("CAPTURE_APPROVED_BY", "zitian")
     monkeypatch.setenv("CONFIGURATION_SHA256", config_sha)
-    monkeypatch.setenv("LLM_MODEL", "glm-5.3-flash")
+    monkeypatch.setenv("LLM_SMALL_MODEL", "glm-5.3-flash")
     settings = Settings(_env_file=None)
     assert settings.data_engine_image_digest == digest
     assert settings.release_manifest_id == release_id
     assert settings.capture_approved_by == "zitian"
     assert settings.configuration_sha256 == config_sha
-    assert settings.llm_model == "glm-5.3-flash"
+    assert settings.llm_small_model == "glm-5.3-flash"
     assert "migrations_database_url" not in Settings.model_fields
 
 

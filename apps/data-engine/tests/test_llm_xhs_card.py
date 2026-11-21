@@ -101,7 +101,7 @@ def _provider_payload(html: str, served: str = "glm-5.3-flash") -> bytes:
 @pytest.fixture
 def seated(monkeypatch):
     monkeypatch.setattr(settings, "llm_api_key", "test-key")
-    monkeypatch.setattr(settings, "llm_model", "glm-5.3-flash")
+    monkeypatch.setattr(settings, "llm_small_model", "glm-5.3-flash")
     ledger = gateway.MemoryLedger()
     previous = gateway.set_writer(ledger)
     yield ledger

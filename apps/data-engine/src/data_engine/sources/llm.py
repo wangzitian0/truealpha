@@ -13,12 +13,11 @@ from contextlib import contextmanager, nullcontext
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
-from types import SimpleNamespace
 from typing import Any
 from urllib.parse import urlparse
 
 from factors.shared import extraction as extraction_primitive
-from infra2_sdk.runtime.llm import LlmClient, LlmSettings
+from infra2_sdk.runtime.llm import LlmSettings
 from truealpha_contracts.common import canonical_sha256
 from truealpha_runtime.research_cards import (
     XHS_CARD_INSTRUCTIONS,
@@ -33,7 +32,6 @@ from truealpha_runtime.research_cards import (
 from data_engine.config import settings
 from data_engine.datahub.fetch_key import FetchKey
 from data_engine.sources import gateway, model_decoding, model_policy
-from data_engine.sources.gateway import record_call
 
 logger = logging.getLogger(__name__)
 
@@ -404,7 +402,7 @@ def invoke(
     if not is_configured():
         raise ModelNotConfigured(f"{settings.llm_api_key_env} is not set; no provider seated (#70 scope 1)")
     cik = cik if cik > 0 else _synthetic_cik(accession)
-    model = settings.llm_model
+    model = settings.llm_small_model
     decoding = model_decoding.for_environment(gateway.capacity_environment())
     request_body = build_chat_request(task, user_content, model=model, decoding=decoding)
     active_conn = connection if persist and connection is not None else None
@@ -425,12 +423,9 @@ def invoke(
             provider=settings.llm_provider,
             base_url=settings.llm_base_url,
             api_key=settings.llm_api_key,
-            json_timeout_seconds=float(task.timeout_seconds),
-            json_max_tokens=task.max_tokens,
-            json_disable_thinking=False,
+            small_model=model,
         )
         request_sha256 = _request_sha256(request_body)
-        url = f"{llm_cfg.base_url.rstrip('/')}{llm_cfg.chat_completions_path}"
         started_at = now()
         usage: dict[str, Any] = {}
         payload: dict[str, Any] = {}
@@ -518,7 +513,7 @@ def invoke(
                     invocation.invocation_id,
                     settings.llm_provider,
                     invocation.model,
-                    urlparse(url).hostname or "",
+                    urlparse(llm_cfg.base_url).hostname or "",
                     standard,
                     cik,
                     accession,
@@ -573,82 +568,10 @@ def _call_provider(
     identity: FetchKey,
     transport: Transport | None,
 ) -> tuple[int, bytes, dict[str, Any], dict[str, Any], str | None]:
-    request_params = _request_params(request_body, decoding)
-    budget = model_policy.RetryBudget()
-    pacer = model_policy.pacer_for(gateway.capacity_environment())
-    send = transport or _gateway_transport
-    messages = [{"role": "system", "content": task.instructions}, {"role": "user", "content": user_content}]
-    extra_body = {"temperature": 0, **decoding.parameters()}
+    """Run one model call through the SDK agent (imported here: it loads openai and pydantic_ai)."""
+    from data_engine.sources import llm_agent
 
-    def _run_attempt(attempt: int) -> tuple[int, bytes, dict[str, Any], dict[str, Any], str | None]:
-        captured: dict[str, Any] = {"status": 0, "body": b"", "provider_code": None}
-
-        def _dispatch(_method: str, req_url: str, *, headers: dict[str, str], **req_kwargs: Any) -> Any:
-            with (
-                pacer.admitted(budget.remaining_seconds) if pacer is not None else nullcontext(),
-                record_call(
-                    SOURCE, ENDPOINT, identity=identity, caller=caller, request_uri=req_url, cost=0, admit=False
-                ) as call,
-            ):
-                call.attempt = attempt
-                call.request_params = request_params
-                status, raw_body = send(req_url, dict(headers), _request_bytes(req_kwargs["json"]))
-                call.observe(status_code=status, body=raw_body)
-                captured["status"], captured["body"] = status, raw_body
-                if status >= 400:
-                    provider_code = model_policy.provider_code(raw_body)
-                    captured["provider_code"] = provider_code
-                    call.provider_code = provider_code
-                    call.fail(f"HTTP {status}: {raw_body[:200]!r}")
-                    return SimpleNamespace(status_code=status, headers={}, json=dict)
-                parsed = json.loads(raw_body.decode())
-                usage = parsed.get("usage") or {}
-                call.cost = Decimal(int(usage.get("total_tokens") or 0))
-                call.completion_tokens = _token_count(usage.get("completion_tokens"))
-                call.reasoning_tokens = _token_count(
-                    (usage.get("completion_tokens_details") or {}).get("reasoning_tokens")
-                )
-                if task.answer_required and _cut_off(parsed):
-                    call.fail(f"finish_reason={FINISH_REASON_CUT_OFF}: the answer was cut at max_tokens")
-                return SimpleNamespace(status_code=status, headers={}, json=lambda: parsed)
-
-        sdk_client = LlmClient(llm_cfg, client=SimpleNamespace(request=_dispatch), max_retries=1)
-        try:
-            response = sdk_client.chat(
-                messages,
-                model=str(request_body["model"]),
-                json_mode=True,
-                max_tokens=task.max_tokens,
-                extra_body=extra_body,
-            )
-        except RuntimeError:
-            if captured["status"] >= 400:
-                return captured["status"], captured["body"], {}, {}, captured["provider_code"]
-            raise
-        payload = dict(response.raw)
-        return captured["status"], captured["body"], payload, payload.get("usage") or {}, None
-
-    with _attempt_context(task.timeout_seconds, identity):
-        last: tuple[int, bytes, dict[str, Any], dict[str, Any], str | None] | None = None
-        while True:
-            attempt = budget.begin_attempt()
-            try:
-                last = _run_attempt(attempt)
-            except gateway.CapacityExceeded as refusal:
-                if last is None:
-                    raise ModelCapacityRefused(refusal.reason) from refusal
-                return last
-            wait = None if last[0] < 400 else budget.wait_before_next(last[0], last[4])
-            if wait is None:
-                return last
-            logger.warning(
-                "model call answered HTTP %s (provider code %s) on attempt %s; waiting %.1f s",
-                last[0],
-                last[4],
-                attempt,
-                wait,
-            )
-            model_policy.sleep(wait)
+    return llm_agent.call_provider(llm_cfg, user_content, request_body, decoding, task, caller, identity, transport)
 
 
 def _cut_off(payload: dict[str, Any]) -> bool:

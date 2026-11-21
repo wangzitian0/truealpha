@@ -151,7 +151,7 @@ def test_every_model_call_names_its_fetch_key(moomoo_ledger_db: str, monkeypatch
     from data_engine.sources import llm
 
     monkeypatch.setattr(settings, "llm_api_key", "test-key")
-    monkeypatch.setattr(settings, "llm_model", "glm-test")
+    monkeypatch.setattr(settings, "llm_small_model", "glm-test")
     answer = json.dumps(
         {
             "model": "glm-served",
@@ -282,7 +282,7 @@ def test_a_model_attempt_writes_the_reason_model_call(moomoo_ledger_db: str, mon
     from data_engine.sources import llm
 
     monkeypatch.setattr(settings, "llm_api_key", "test-key")
-    monkeypatch.setattr(settings, "llm_model", "glm-test")
+    monkeypatch.setattr(settings, "llm_small_model", "glm-test")
     answer = json.dumps(
         {
             "model": "glm-served",

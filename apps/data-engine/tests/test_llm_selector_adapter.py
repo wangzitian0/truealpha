@@ -59,7 +59,7 @@ def _answer(value, index, reason="x", served="glm-served"):
 @pytest.fixture
 def seated(monkeypatch):
     monkeypatch.setattr(settings, "llm_api_key", "test-key")
-    monkeypatch.setattr(settings, "llm_model", "glm-test")
+    monkeypatch.setattr(settings, "llm_small_model", "glm-test")
     ledger = gateway.MemoryLedger()
     previous = gateway.set_writer(ledger)
     yield ledger
