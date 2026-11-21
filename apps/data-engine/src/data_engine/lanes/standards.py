@@ -434,7 +434,7 @@ def run_supply_chain_exposure(
         early := _downstream_canonical_op(context, config, purity_summary, "supply chain exposure follows theme purity")
     ) is not None:
         return early
-    joined = model_extracted = replayed = exceeded = 0
+    joined = model_extracted = replayed = exceeded = model_errors = 0
     exceeded_filings: tuple[str, ...] = ()
     with gateway.capacity_scope(), psycopg.connect(settings.database_url) as connection:
         head, universe, early = _prepare_canonical_head(
@@ -447,7 +447,11 @@ def run_supply_chain_exposure(
         floor_failure = universe.lane_failure()
         if floor_failure is None:
             sc_report = materialize_universe_supply_chain_exposure(
-                connection, run_id=head.run_id, cutoff=head.cutoff, issuers=universe.issuers
+                connection,
+                run_id=head.run_id,
+                cutoff=head.cutoff,
+                issuers=universe.issuers,
+                checkpoint=connection.commit,
             )
             connection.commit()
             from truealpha_runtime.mart_refresh import MART_ENTITY_IDENTITY, refresh_mart_materialized_views
@@ -457,6 +461,7 @@ def run_supply_chain_exposure(
             model_extracted = int(getattr(sc_report, "model_extracted", 0))
             replayed = int(getattr(sc_report, "replayed", 0))
             exceeded = int(getattr(sc_report, "context_window_exceeded", 0))
+            model_errors = int(getattr(sc_report, "model_errors", 0))
             exceeded_filings = tuple(getattr(sc_report, "exceeded_filings", ()))
     if exceeded > 0:
         context.log.error(
@@ -473,8 +478,10 @@ def run_supply_chain_exposure(
         replayed,
         exceeded,
     )
-    failure = floor_failure or (
-        f"supply chain: {exceeded} of {joined} filings exceeded 1M context window" if exceeded > 0 else None
+    failure = (
+        floor_failure
+        or (f"supply chain: {exceeded} of {joined} filings exceeded 1M context window" if exceeded > 0 else None)
+        or (f"supply chain: {model_errors} filings got no model answer" if model_errors > 0 else None)
     )
     return _finish_canonical_lane(
         context,
@@ -487,6 +494,7 @@ def run_supply_chain_exposure(
         model_extracted=model_extracted,
         replayed=replayed,
         context_window_exceeded=exceeded,
+        model_errors=model_errors,
     )
 
 

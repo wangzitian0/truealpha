@@ -37,6 +37,9 @@ def classify(error: BaseException | None, *, served_model: str | None = None) ->
         return KeyHealth(
             False, "provider-error", None, "provider-error: no call slot or rate window before the deadline"
         )
+    if isinstance(error, llm.ModelHTTPError) and error.status_code == 0:
+        # Status 0: the provider gave no answer (#1816). The cause is the transport error.
+        return KeyHealth(False, "unreachable", None, f"unreachable: {type(error.__cause__ or error).__name__}")
     if isinstance(error, llm.ModelHTTPError):
         status = error.status_code
         if status in AUTH_REJECTED:
