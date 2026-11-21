@@ -452,7 +452,9 @@ def _satisfy_from_recent_observations(
 ) -> frozenset[str]:
     """Satisfy obligations from committed observations within `_REUSE_MAX_AGE` (#635, #788, #885).
 
-    A reused observation carries the issuer, instrument and listing of the run that binds it (#1798).
+    A price belongs to a listing, so `market-price` reuse compares the listing (#1352). A financial
+    fact belongs to an issuer, so `financial-fact` reuse also compares the issuer and the
+    instrument, as `_validate_member_rows` does (#1798).
     """
     coordinates_param = json.dumps(
         [
@@ -515,8 +517,9 @@ def _satisfy_from_recent_observations(
             join staging.capture_observation_payloads anchor_payload
               on anchor_payload.observation_id = o.observation_id
              and anchor_payload.normalized_payload->>'listing_id' = m.listing_id
-             and anchor_payload.normalized_payload->>'issuer_id' = m.issuer_id
-             and anchor_payload.normalized_payload->>'instrument_id' = m.instrument_id
+             and (m.semantic_type <> 'financial-fact'
+                  or (anchor_payload.normalized_payload->>'issuer_id' = m.issuer_id
+                      and anchor_payload.normalized_payload->>'instrument_id' = m.instrument_id))
              and anchor_payload.normalized_payload->>%(unavailable_key)s is distinct from 'true'
         ), bound_set as (
             select a.target_obligation_id, a.semantic_type, a.anchor_vintage_id, a.knowable_at,

@@ -533,8 +533,9 @@ def test_a_fully_reused_run_still_exists_on_the_evidence_plane(tick_database_url
 
 
 def test_reuse_requires_identity_coordinate_equality(tick_database_url, monkeypatch) -> None:
-    """#684 / #1798: a run reuses an observation only when its issuer, instrument and listing
-    equal the coordinates of the run. `_validate_member_rows` refuses any other member."""
+    """#1352 / #1798: `market-price` reuse compares the listing. `financial-fact` reuse compares
+    the issuer, the instrument and the listing, because `_validate_member_rows` refuses a
+    financial fact of another issuer or instrument."""
     _arm(monkeypatch)
     cutoff = datetime(2026, 3, 31, 22, 15, tzinfo=UTC)
     _run_tick(tick_database_url, version="coordinate-source", cutoff=cutoff)
@@ -565,13 +566,17 @@ def test_reuse_requires_identity_coordinate_equality(tick_database_url, monkeypa
             semantic = binding.obligation.capture_requirement_id.removesuffix(":v1")
             cells = reused_by_subject.setdefault(binding.obligation.subject.id, {})
             cells[semantic] = work_item_id in satisfied
-        # A different issuer, listing or instrument: market-price and financial-fact fetch fresh.
-        victims = {victim_issuer, victim_listing, victim_instrument}
-        for victim in sorted(victims):
-            assert reused_by_subject[victim]["market-price"] is False, victim
+        # A different issuer or instrument on the same listing: the price is reused, the financial
+        # fact fetches fresh.
+        for victim in (victim_issuer, victim_instrument):
+            assert reused_by_subject[victim]["market-price"] is True, victim
             assert reused_by_subject[victim]["financial-fact"] is False, victim
+        # A different listing: both fetch fresh.
+        assert reused_by_subject[victim_listing]["market-price"] is False
+        assert reused_by_subject[victim_listing]["financial-fact"] is False
+        victims = {victim_issuer, victim_listing, victim_instrument}
         others = [subject for subject in reused_by_subject if subject not in victims]
-        assert others, "the corpus has more than two subjects"
+        assert others, "the corpus has more than three subjects"
         assert all(reused_by_subject[s]["market-price"] and reused_by_subject[s]["financial-fact"] for s in others)
         assert not any(
             cells.get("listing-identity") or cells.get("universe-membership") for cells in reused_by_subject.values()
