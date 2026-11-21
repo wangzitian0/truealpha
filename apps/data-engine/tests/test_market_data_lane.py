@@ -841,9 +841,7 @@ def test_the_lane_stores_the_primary_listing_of_a_21st_issuer(monkeypatch, writt
     gains is stored with no edit in the lane. The 20-symbol tuple used to ignore it. This runs the deployed job."""
     from data_engine.datahub.capture_core import universe_corpus
 
-    monkeypatch.setattr(
-        universe_corpus, "load_corpus", lambda _filename: {"topt_denominator": _denominator("AAPL", "ZZZZ")}
-    )
+    monkeypatch.setattr(universe_corpus, "load_corpus", lambda _filename: {"denominator": _denominator("AAPL", "ZZZZ")})
     asked: list[tuple[str, ...]] = []
     monkeypatch.setattr(
         market_data, "_refresh_market_data", lambda _context, _connection, *, symbols, now: asked.append(tuple(symbols))

@@ -52,7 +52,7 @@ def lookup_minted_entity(
 def _corpus_issuer_names() -> dict[str, str]:
     from data_engine.datahub.capture_core.universe_corpus import TOPT_CORPUS_FILENAME, load_corpus
 
-    names = load_corpus(TOPT_CORPUS_FILENAME)["topt_denominator"].get("issuer_names", {})
+    names = load_corpus(TOPT_CORPUS_FILENAME)["denominator"].get("issuer_names", {})
     return {str(k).strip().upper(): str(v).strip() for k, v in names.items() if str(v).strip()}
 
 

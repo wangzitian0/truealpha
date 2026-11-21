@@ -547,7 +547,7 @@ def test_a_holdco_with_no_filing_under_its_new_cik_falls_back_to_the_predecessor
     monkeypatch.setattr(
         planner_module,
         "load_corpus",
-        lambda _f: {"topt_denominator": {"instruments": [["issuer:lei:XOM", "security:x", "listing:xnys:xom", "XOM"]]}},
+        lambda _f: {"denominator": {"instruments": [["issuer:lei:XOM", "security:x", "listing:xnys:xom", "XOM"]]}},
     )
     issuers = planner_module.universe_issuers(connection, "topt")
     assert issuers[0].cik is None and issuers[0].predecessor_cik == 34088
@@ -970,7 +970,7 @@ def test_universe_issuers_passes_cutoff_instead_of_wall_clock(monkeypatch) -> No
         planner_module,
         "load_corpus",
         lambda _f: {
-            "topt_denominator": {
+            "denominator": {
                 "instruments": [
                     [uuid_issuer, "sec:1", "listing:xnas:aapl", "AAPL"],
                     ["issuer:lei:TEST", "sec:2", "listing:xnys:msft", "MSFT"],

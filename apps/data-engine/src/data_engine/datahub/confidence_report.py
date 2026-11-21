@@ -31,7 +31,7 @@ from truealpha_runtime.reconciliation_policies import (
     INDEX_MEMBERSHIP_POLICY,
 )
 
-from data_engine.datahub._helpers import CAPTURE_OBSERVATION_JOIN, execute_many, fetch_topt_cutoff, parse_decimal
+from data_engine.datahub._helpers import CAPTURE_OBSERVATION_JOIN, execute_many, fetch_run_cutoff, parse_decimal
 from data_engine.datahub.capture_core.executor import SERVED_BY_FAILOVER
 from data_engine.datahub.capture_core.headcount import is_eligible_headcount_row
 from data_engine.datahub.capture_core.parser_identity import PARSER_VERSION_HISTORY
@@ -1143,7 +1143,7 @@ def evaluate_and_persist_run_cell_confidence(
     if not hasattr(connection, "cursor"):
         return {}
     if cutoff is None:
-        cutoff = fetch_topt_cutoff(connection, run_id) or datetime.now(UTC)
+        cutoff = fetch_run_cutoff(connection, run_id) or datetime.now(UTC)
     subjects = load_run_subjects(connection, run_id, cutoff, allow_integration_parser=True)
     oracle_rows, outcome_mass_by_origin = _oracle_context(connection, run_id, cutoff)
     out: dict[tuple[str, str], Decimal] = {}

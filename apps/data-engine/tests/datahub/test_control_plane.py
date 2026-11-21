@@ -33,7 +33,7 @@ def retry_policy(max_attempts: int) -> RetryPolicy:
 
 def test_frozen_topt_denominator_expands_without_share_class_collapse() -> None:
     corpus = json.loads(CORPUS.read_text())
-    denominator = corpus["topt_denominator"]
+    denominator = corpus["denominator"]
     listings = tuple(row[2] for row in denominator["instruments"])
     list_version = CaptureListVersion(
         universe=UniverseRef(
@@ -60,7 +60,7 @@ def test_frozen_topt_denominator_expands_without_share_class_collapse() -> None:
 def test_frozen_tiny_list_ids_reconstruct_from_security_members() -> None:
     corpus = json.loads(CORPUS.read_text())
     universe = UniverseRef(
-        universe_id=corpus["topt_denominator"]["universe_id"],
+        universe_id=corpus["denominator"]["universe_id"],
         universe_version="topt-candidate-2026-03-31-v1",
         content_sha256="8b2f885e6161c01603b9d78882d411c7984ff6a3dbf35d636cb11e8c2ecfcf8f",
     )
@@ -108,7 +108,7 @@ def test_obligation_expansion_rejects_empty_semantic_denominator() -> None:
     frozen = corpus["tiny_lists"][0]
     list_version = CaptureListVersion(
         universe=UniverseRef(
-            universe_id=corpus["topt_denominator"]["universe_id"],
+            universe_id=corpus["denominator"]["universe_id"],
             universe_version="topt-candidate-2026-03-31-v1",
             content_sha256="8b2f885e6161c01603b9d78882d411c7984ff6a3dbf35d636cb11e8c2ecfcf8f",
         ),

@@ -76,7 +76,7 @@ def _lines_naming(records: list[logging.LogRecord], listing_id: str) -> list[str
 def _canary_corpus() -> dict:
     """The synthetic 3-listing corpus under a canary universe id. The contract record of the canary has no price series."""
     corpus = _synthetic_corpus()
-    corpus["topt_denominator"]["universe_id"] = f"universe:canary-us-{_SYNTHETIC_REPORT_DATE}"
+    corpus["denominator"]["universe_id"] = f"universe:canary-us-{_SYNTHETIC_REPORT_DATE}"
     return corpus
 
 

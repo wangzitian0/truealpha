@@ -362,9 +362,9 @@ def _key_topt_like_the_planes(monkeypatch) -> dict[str, tuple[str, str]]:
 
     plane = {
         str(row[2]): (str(row[0]), str(row[1]))
-        for row in _load_corpus_with_qqq("corpus.qqq.v1.json")["topt_denominator"]["instruments"]
+        for row in _load_corpus_with_qqq("corpus.qqq.v1.json")["denominator"]["instruments"]
     }
-    topt = {str(row[2]) for row in _load_corpus_with_qqq("corpus.v1.json")["topt_denominator"]["instruments"]}
+    topt = {str(row[2]) for row in _load_corpus_with_qqq("corpus.v1.json")["denominator"]["instruments"]}
     shared = {listing: ids for listing, ids in plane.items() if listing in topt}
     real = composition.plan_and_persist
 

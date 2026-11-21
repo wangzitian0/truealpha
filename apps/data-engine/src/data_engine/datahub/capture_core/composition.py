@@ -217,7 +217,7 @@ def plan_and_persist(
         corpus = resolve_universe_corpus(connection, universe_head_kind)
     else:
         corpus = _load_capture_corpus(corpus_filename)
-    denominator = corpus["topt_denominator"]
+    denominator = corpus["denominator"]
     published_at_raw = corpus.get("published_at")
     universe_published_at = datetime.fromisoformat(published_at_raw) if published_at_raw else None
     raw_coordinates = {

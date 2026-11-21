@@ -112,7 +112,7 @@ def _plane_corpus() -> dict:
     ]
     report_date = CUTOFF.date().isoformat()
     return {
-        "topt_denominator": {
+        "denominator": {
             "universe_id": f"universe:entity-plane-{report_date}",
             "report_date": report_date,
             "instrument_count": len(instruments),

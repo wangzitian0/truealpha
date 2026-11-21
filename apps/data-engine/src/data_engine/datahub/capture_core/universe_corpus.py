@@ -25,7 +25,7 @@ def load_corpus(filename: str) -> dict[str, Any]:
 
 
 def corpus_universe(corpus: dict[str, Any]) -> UniverseRef:
-    denominator = corpus["topt_denominator"]
+    denominator = corpus["denominator"]
     return UniverseRef(
         universe_id=denominator["universe_id"],
         universe_version=f"{denominator['universe_id'].removeprefix('universe:')}-v1",
@@ -71,7 +71,7 @@ def _build_list_version(
 
 
 def corpus_list_version(corpus: dict[str, Any]) -> CaptureListVersion:
-    denominator = corpus["topt_denominator"]
+    denominator = corpus["denominator"]
     effective_at = datetime.combine(
         datetime.strptime(denominator["report_date"], "%Y-%m-%d").date(),
         datetime.min.time(),
@@ -88,7 +88,7 @@ def corpus_list_version(corpus: dict[str, Any]) -> CaptureListVersion:
 
 
 def frozen_topt_list_version(corpus: Mapping[str, Any]) -> CaptureListVersion:
-    denominator = corpus["topt_denominator"]
+    denominator = corpus["denominator"]
     version = _build_list_version(
         denominator,
         subject="TOPT",

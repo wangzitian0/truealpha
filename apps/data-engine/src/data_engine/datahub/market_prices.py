@@ -42,7 +42,7 @@ def stored_symbols(connection: psycopg.Connection, *, known_at: datetime) -> tup
             and contract.is_universe_scheduled(key, environment)
         ):
             corpus = universe_corpus.load_corpus(universe_corpus.TOPT_CORPUS_FILENAME)
-            symbols.update(primary_symbols(connection, corpus["topt_denominator"], known_at=known_at))
+            symbols.update(primary_symbols(connection, corpus["denominator"], known_at=known_at))
     return tuple(sorted(symbols))
 
 
