@@ -41,7 +41,7 @@ export function ReadStateNotice({
   if (message === null) return null;
 
   return (
-    <p role="status" className={`mt-4 rounded-lg border border-border bg-card p-4 ${NOTICE_STYLE[state.kind]}`}>
+    <p role="status" data-read-state={state.kind} className={`mt-4 rounded-lg border border-border bg-card p-4 ${NOTICE_STYLE[state.kind]}`}>
       {message}
     </p>
   );

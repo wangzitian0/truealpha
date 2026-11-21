@@ -3,6 +3,7 @@ import { api } from "@/client/api";
 import { CreateDocumentForm, DeleteDocumentButton } from "@/components/document-actions";
 import { LibraryReportPreviewCard } from "@/components/library-report-preview-card";
 import { loadAuthed } from "../../_load";
+import { ReadStateNotice } from "@/components/read-state";
 
 export const dynamic = "force-dynamic";
 
@@ -21,7 +22,7 @@ export default async function LibraryPage({ searchParams }: { searchParams: Prom
       </div>
       <CreateDocumentForm />
       <LibraryReportPreviewCard />
-      {error && <p className="text-sm text-rose-400">{error}</p>}
+      {error && <ReadStateNotice state={{ kind: "error", message: error }} />}
       {docs.length === 0 ? (
         <p className="text-sm text-gray-400">No documents saved yet.</p>
       ) : (

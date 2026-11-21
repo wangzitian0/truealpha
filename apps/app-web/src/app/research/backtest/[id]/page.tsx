@@ -5,6 +5,7 @@ import { BacktestBasis, backtestStatusStyle } from "@/components/backtest-basis"
 import { BacktestChart } from "@/components/backtest-chart";
 import { ResearchTable } from "@/components/research-table";
 import { loadAuthed } from "../../../_load";
+import { ReadStateNotice } from "@/components/read-state";
 
 export const dynamic = "force-dynamic";
 
@@ -12,7 +13,7 @@ export default async function BacktestDetailPage({ params }: { params: Promise<{
   const { id } = await params;
   const runId = decodeRouteParam(id);
   const { data: detail, error } = await loadAuthed("/research/backtest", (opts) => api.getBacktest(runId, opts), { notFoundOn404: true });
-  if (!detail) return <p className="text-sm text-red-400">{error ?? "Failed to load backtest."}</p>;
+  if (!detail) return error ? <ReadStateNotice state={{ kind: "error", message: error }} /> : <p className="text-sm text-red-400">Failed to load backtest.</p>;
   const { run, valuations = [], trades = [] } = detail;
 
   return (

@@ -37,6 +37,7 @@ import { chromium } from "playwright";
 import { assertRaceRequirement, runHydrationRace } from "./hydration-race.mjs";
 import { walkCardGeometry } from "./card-geometry.mjs";
 import { createPageErrorLedger, gotoStable } from "./navigation.mjs";
+import { assertNoReadError } from "./read-error.mjs";
 import { walkSignOutJourney } from "./sign-out-journey.mjs";
 import { unexpectedStandaloneEntries } from "./standalone-shape.mjs";
 
@@ -373,6 +374,7 @@ async function assertTraceRendersDecisionInputs(page, path, problems) {
   const response = await gotoStable(page, `${BASE}${href}`);
   const status = response ? response.status() : null;
   if (status === null || status >= 400) problems.push(`trace: ${href} answered HTTP ${status}`);
+  await assertNoReadError(page, href, problems);
   const section = page.locator('section[aria-labelledby="trace-heading"]');
   try {
     await section.getByRole("heading", { name: "Output trace", exact: true }).waitFor({ state: "visible", timeout: 15000 });
@@ -479,6 +481,7 @@ async function assertDynamicDetailRenders(page, path, problems, spec) {
     problems.push(`${spec.name}: ${href} answered HTTP ${status}`);
     return;
   }
+  await assertNoReadError(page, href, problems);
   const section = page.locator(`section[aria-labelledby="${spec.headingId}"]`);
   try {
     await section.locator(`#${spec.headingId}`).waitFor({ state: "visible", timeout: 15000 });
@@ -524,6 +527,7 @@ async function checkRoute(page, path, role, pageErrors) {
   const finalPath = new URL(page.url()).pathname;
   const problems = [];
   if (finalPath === "/login" && path !== "/login") problems.push("bounced to /login while authenticated");
+  await assertNoReadError(page, path, problems);
 
   await assertNoVisibleRawIds(page, path, problems);
   await assertNoBlankResearchTableCells(page, path, problems);

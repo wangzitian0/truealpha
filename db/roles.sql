@@ -64,18 +64,19 @@ grant usage on schema app to app_audit_reader;
 grant select on app.conversation_audit_metadata to app_audit_reader;
 grant select on app.document_audit_metadata to app_audit_reader;
 
--- Scoped runtime login for app-web + llm-service (#432). Today both containers'
--- DATABASE_URL is the postgres superuser -- a compromised or buggy query has DDL-level
--- access, not just this grant set. This role is Stage A of the fix: it exists and its
--- password stays current, but nothing points at it yet (DATABASE_URL is unchanged) --
--- switching DATABASE_URL to it is a deliberate, separate cutover. Migrations keep using
--- the superuser via MIGRATIONS_DATABASE_URL (db/apply_migrations.sh), never this role.
+-- Scoped runtime login for app-web + llm-service (#432). Since Stage B both containers'
+-- DATABASE_URL logs in as this role (llm_service.config DEFAULT_DATABASE_URL). Migrations
+-- keep using the superuser via MIGRATIONS_DATABASE_URL (db/apply_migrations.sh), never this role.
 do $$ begin
     create role app_service_login login;
 exception when duplicate_object then null;
 end $$;
 
 alter role app_service_login set statement_timeout = '5s';
+-- API reads return in milliseconds. JIT compiled for seconds whenever a plan's cost estimate
+-- drifted above jit_above_cost: /api/v1/entities/holdings ran 0.02 s with JIT off and 2.8 s
+-- with it on, and timed out under the 5 s limit above (#1707). Role settings apply at login.
+alter role app_service_login set jit = off;
 grant mart_readonly to app_service_login;
 grant app_runtime to app_service_login;
 

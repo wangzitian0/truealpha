@@ -4,6 +4,7 @@ import { formatCell, formatPercentFromFraction, formatRatio, formatShortSha } fr
 import { classifiedShare } from "@/client/strategy";
 import { ResearchTable } from "@/components/research-table";
 import { loadAuthed } from "../../_load";
+import { ReadStateNotice } from "@/components/read-state";
 
 export const dynamic = "force-dynamic";
 
@@ -23,7 +24,7 @@ export default async function ThemesPage() {
         <h1 id="themes-heading" className="text-2xl font-bold tracking-tight">Theme purity</h1>
         <p className="mt-2 text-sm text-gray-400">Revenue share per theme over consolidated revenue from <code className="mx-1 rounded bg-card px-1">mart.issuer_theme_purity</code>.</p>
       </div>
-      {error && <p className="text-sm text-red-400">{error}</p>}
+      {error && <ReadStateNotice state={{ kind: "error", message: error }} />}
       {groups.length === 0 && !error ? (
         <p className="text-sm text-gray-400">No theme purity materialized yet.</p>
       ) : (
