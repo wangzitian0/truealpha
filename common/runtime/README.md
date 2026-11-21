@@ -2,8 +2,7 @@
 
 `truealpha_runtime` owns the boundary between application code and external
 runtime dependencies. Applications consume PostgreSQL and the S3 API; they do
-not branch on whether infra2, Docker Compose, MinIO, or another S3-compatible
-backend provides those services.
+not branch on which S3-compatible backend provides object storage.
 
 The entity graph lives in PostgreSQL: `staging.entities`, `staging.entity_aliases`
 and `staging.entity_relations` (`docs/entity-identity.md`).
@@ -21,7 +20,7 @@ the dependency instances and which tiers require each service remain TrueAlpha-o
 - The target rollout uses four actual environments: Local (covering both local
   tiers), GitHub CI, Staging, and Production. This is a target topology, not a
   readiness claim.
-- Local and GitHub CI use app-owned Compose PostgreSQL + MinIO.
+- Local and GitHub CI use app-owned Compose PostgreSQL + RustFS (S3 API).
 - Persistent Staging enters during Gate 1. Production is initialized only as an
   isolated Gate 4 shadow and remains non-authoritative until deployed-consumer,
   natural-cadence SLO, curated-universe, and human-graduation evidence pass. Both

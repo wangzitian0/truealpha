@@ -506,7 +506,7 @@ def test_second_origin_reaches_two_independent_origins(connection) -> None:
 class _CorroborationBlipStore(_InMemoryObjectStore):
     """Object storage that fails under ONE vendor's bytes: the second origin's (#885).
 
-    `object_store` is MinIO blinking while Twelve Data's bytes land — the raise the sink
+    `object_store` is object storage blinking while Twelve Data's bytes land — the raise the sink
     used to propagate out of `record_outcome`, failing a tick whose primary capture was
     complete. `database` is the same loss surfacing as a failed statement on the tick's
     own transaction, which aborts it: only a savepoint keeps the rest of the tick usable.

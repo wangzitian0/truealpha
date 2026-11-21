@@ -163,8 +163,8 @@ def test_s3_raw_object_store_and_check_refuse_blank_endpoint():
 
 def test_s3_client_construction_uses_infra2_sdk_and_forces_path_style_addressing():
     """S3RawObjectStore.__init__ builds its client through infra2_sdk.runtime.s3 from
-    resolved RuntimeSettings values. It forces addressing_style="path" because MinIO
-    requires path-style routing and S3Settings defaults addressing_style to None."""
+    resolved RuntimeSettings values. It forces addressing_style="path" because the local
+    S3 engine requires path-style routing and S3Settings defaults addressing_style to None."""
     settings = RuntimeSettings(_env_file=None, app_env="test")
 
     store = S3RawObjectStore(settings)

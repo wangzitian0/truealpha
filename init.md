@@ -200,7 +200,7 @@ the immutable raw archive; object storage is not an App/LLM integration path.
 | Data ingestion | dlt |
 | Orchestration/scheduling | Dagster (asset-based, code_version + data_version tracked; **runtime metadata explicitly pointed at Postgres's `dagster` schema, not the default local store**) |
 | Factor expression and backtest engine | Native Decimal implementations in `common/factors` compute every factor. Native `polars.Expr` definitions over the standardized wide panel in `common/factors/src/factors/panel.py` evaluate panel expressions and cross-check base factors. `factors.backtest.engine` simulates portfolios in Decimal from the strategy definition's rules. VectorBT was selected in A5 and never adopted |
-| Storage | Postgres for raw metadata/staging/mart/KG + S3-compatible object storage for immutable raw bytes (MinIO in Local/CI) |
+| Storage | Postgres for raw metadata/staging/mart/KG + S3-compatible object storage for immutable raw bytes (RustFS in Local, CI and the infra2 platform) |
 | TS package management/runtime | Bun |
 | App frontend | Next.js + TypeScript (zero DB drivers) |
 | App data display | OpenAPI 3.1 client (`openapi-typescript`) calling FastAPI |

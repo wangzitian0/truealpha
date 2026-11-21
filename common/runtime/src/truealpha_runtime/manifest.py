@@ -11,7 +11,6 @@ from truealpha_runtime.config import CoreRuntimeSettings, RuntimeSettings
 class RuntimeBackend(StrEnum):
     POSTGRES = "postgres"
     POSTGRES_KG = "postgres_kg"
-    MINIO = "minio"
     S3_COMPATIBLE = "s3_compatible"
 
 
@@ -47,7 +46,7 @@ DEPENDENCY_MANIFEST = DependencyManifest(
             kind=DependencyKind.CODE_DOMINANT,
             required_in=_ALL,
             env_vars=_OBJECT_STORAGE_ENV_VARS,
-            local_backend=RuntimeBackend.MINIO,
+            local_backend=RuntimeBackend.S3_COMPATIBLE,
             deployed_backend=RuntimeBackend.S3_COMPATIBLE,
         ),
     )

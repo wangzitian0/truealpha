@@ -8,16 +8,26 @@ from infra2_sdk.runtime.health import check_health
 from truealpha_runtime.checks import DatabaseCheck, GraphStoreCheck, ObjectStorageCheck
 from truealpha_runtime.config import RuntimeSettings
 from truealpha_runtime.manifest import DEPENDENCY_MANIFEST
+from truealpha_runtime.storage import S3RawObjectStore, StorageError
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Validate TrueAlpha runtime dependencies")
-    parser.add_argument("check", nargs="?", choices=("check", "health-check"), default="check")
+    parser.add_argument("check", nargs="?", choices=("check", "health-check", "ensure-bucket"), default="check")
     parser.add_argument("--live", action="store_true", help="probe PostgreSQL, KG tables, and object storage")
     args = parser.parse_args(argv)
     settings = RuntimeSettings()
     required = DEPENDENCY_MANIFEST.required_for(settings.environment_tier)
     print(f"runtime tier={settings.environment_tier.value} required={','.join(sorted(required))}")
+    if args.check == "ensure-bucket":
+        # Creates the bucket only in local and CI tiers (`may_create_bucket`); elsewhere it only checks access.
+        try:
+            S3RawObjectStore(settings).ensure_bucket()
+        except StorageError as exc:
+            print(f"object_storage: {exc}")
+            return 1
+        print(f"object_storage: bucket {settings.s3_bucket} ready")
+        return 0
     if not args.live and args.check != "health-check":
         return 0
     checks = (DatabaseCheck(settings), GraphStoreCheck(settings), ObjectStorageCheck(settings))
