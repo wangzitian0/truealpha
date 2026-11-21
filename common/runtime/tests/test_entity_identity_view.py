@@ -674,65 +674,24 @@ def test_mart_readonly_reads_the_view(conn: psycopg.Connection) -> None:
     assert len(as_owner) == len(ids)
 
 
-def test_roles_sql_revokes_helper_grants_and_is_idempotent(conn: psycopg.Connection) -> None:
-    """#1344: replaying db/roles.sql revokes legacy helper grants and passes role_boundary_contract.sql."""
-    roles_sql = (REPO_ROOT / "db" / "roles.sql").read_text(encoding="utf-8")
-    roles_sql_clean = "\n".join(
-        line
-        for line in roles_sql.splitlines()
-        if not line.startswith(("\\if", "\\endif", "select format('alter role", "  where nullif("))
-    )
+def test_no_consumer_role_can_execute_the_helpers(conn: psycopg.Connection) -> None:
+    """#1344: the chain grants no consumer role EXECUTE on the entity helpers."""
     contract_sql = (REPO_ROOT / "db" / "tests" / "role_boundary_contract.sql").read_text(encoding="utf-8")
     contract_body = contract_sql.replace("begin;", "").replace("rollback;", "")
-
-    signatures = (
-        "staging.entity_survivor(uuid, timestamptz)",
-        "staging.entity_alias_valid_to(bigint, timestamptz)",
-    )
-    restricted_roles = ("mart_readonly", "app_ops_reader", "app_runtime")
-
-    # Seed legacy EXECUTE grants as existed before #1344.
-    for sig in signatures:
-        conn.execute(f"grant execute on function {sig} to mart_readonly, app_ops_reader, app_runtime")  # noqa: S608
-        for role in ("mart_readonly", "app_ops_reader"):
-            has_exec = conn.execute("select has_function_privilege(%s, %s, 'EXECUTE')", (role, sig)).fetchone()
-            assert has_exec == (True,)
-
-    # Replay 1 strips the legacy grants.
-    conn.execute(roles_sql_clean)
-    # Replay 2 is idempotent and changes nothing.
-    conn.execute(roles_sql_clean)
-
-    for sig in signatures:
-        public_exec = conn.execute(
-            """
-            select exists (
-                select 1
-                from pg_proc p
-                cross join lateral aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) entry
-                where p.oid = to_regprocedure(%s)
-                  and entry.grantee = 0
-                  and entry.privilege_type = 'EXECUTE'
-            )
-            """,
-            (sig,),
-        ).fetchone()
-        assert public_exec == (False,), sig
-        for role in restricted_roles:
+    for sig in ("staging.entity_survivor(uuid, timestamptz)", "staging.entity_alias_valid_to(bigint, timestamptz)"):
+        for role in ("mart_readonly", "app_ops_reader", "app_runtime"):
             has_exec = conn.execute("select has_function_privilege(%s, %s, 'EXECUTE')", (role, sig)).fetchone()
             assert has_exec == (False,), (role, sig)
-
-    # Execute the full role_boundary_contract.sql body (verifies both roles lack EXECUTE and can SELECT mart.entity_identity).
+    # The contract also checks that both roles can still select mart.entity_identity.
     conn.execute(contract_body)
 
 
 def test_role_boundary_contract_and_roles_sql_text() -> None:
-    """#1344 static contract check: db/roles.sql revokes helper EXECUTE and role_boundary_contract.sql asserts it."""
+    """#1344 static contract check: db/roles.sql grants no helper EXECUTE and role_boundary_contract.sql asserts it."""
     roles_sql = (REPO_ROOT / "db" / "roles.sql").read_text(encoding="utf-8")
     contract_sql = (REPO_ROOT / "db" / "tests" / "role_boundary_contract.sql").read_text(encoding="utf-8")
 
     assert "revoke all on function %s from public" in roles_sql
-    assert "revoke execute on function %s from mart_readonly, app_ops_reader" in roles_sql
     assert "grant execute on function %s to mart_readonly, app_ops_reader" not in roles_sql
 
     for role in ("mart_readonly", "app_ops_reader"):

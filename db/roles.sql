@@ -187,24 +187,6 @@ begin
     end loop;
 end $$;
 
--- mart.entity_identity is set-based and calls neither helper (#1344). A fresh chain still
--- leaves EXECUTE on them reachable by these roles, so revoke it on every replay.
--- role_boundary_contract.sql and test_entity_identity_view.py assert the result.
-do $$
-declare
-    routine text;
-begin
-    foreach routine in array array[
-        'staging.entity_survivor(uuid, timestamptz)',
-        'staging.entity_alias_valid_to(bigint, timestamptz)'
-    ] loop
-        if to_regprocedure(routine) is not null then
-            execute format('revoke execute on function %s from mart_readonly, app_ops_reader, app_runtime',
-                           to_regprocedure(routine)::text);
-        end if;
-    end loop;
-end $$;
-
 -- #877 PR-4: mart.entity_identity + entity_display_resolution for consumer entity display and resolution
 grant select on mart.entity_identity to mart_readonly;
 grant select on mart.entity_identity to app_ops_reader;
