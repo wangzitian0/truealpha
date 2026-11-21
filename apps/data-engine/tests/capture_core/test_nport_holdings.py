@@ -153,3 +153,48 @@ def test_known_isin_resolves_to_existing_entity_not_a_mint(connection) -> None:
         (inst_uuid,),
     ).fetchone()
     assert linked == (issuer_uuid,)
+
+
+def test_edgar_browse_urls_use_a_page_size_that_edgar_accepts(monkeypatch: pytest.MonkeyPatch) -> None:
+    """EDGAR answered 400 to `count=1` on 2026-11-21: "Count must be one of: 10, 20, ..., 100, 500"."""
+    from urllib.parse import parse_qs, urlsplit
+
+    from data_engine.datahub.capture_core import universe_plane
+
+    accepted = {"10", "20", "30", "40", "50", "60", "70", "80", "90", "100", "500"}
+    requested: list[str] = []
+
+    def _capture(url: str, *_args: object, **_kwargs: object) -> tuple[int, bytes]:
+        requested.append(url)
+        return 404, b""
+
+    monkeypatch.setattr(universe_plane, "_get", _capture)
+    assert universe_plane._resolve_cik_via_edgar("AEP", user_agent="test-agent") is None
+    requested.append(nport.BROWSE_URL.format(series_id=_SERIES))
+
+    assert len(requested) == 2
+    for url in requested:
+        assert "browse-edgar" in url
+        assert parse_qs(urlsplit(url).query)["count"][0] in accepted, url
+
+
+def test_newest_filing_takes_the_latest_filing_date_of_a_multi_entry_feed() -> None:
+    """A page of 10 entries replaced the page of 1. The reader must not depend on the entry order."""
+    entries = (
+        ("0001067839-26-000020", "2026-05-28"),
+        ("0001067839-26-000030", "2026-08-28"),
+        ("0001067839-26-000010", "2026-02-27"),
+    )
+    feed = (
+        '<feed xmlns="http://www.w3.org/2005/Atom">'
+        + "".join(
+            f'<entry><content type="text/xml"><accession-number>{acc}</accession-number>'
+            f"<filing-date>{day}</filing-date></content></entry>"
+            for acc, day in entries
+        )
+        + "</feed>"
+    )
+
+    assert nport.newest_filing(feed.encode()) == ("000106783926000030", "2026-08-28")
+    assert nport.newest_filing(b'<feed xmlns="http://www.w3.org/2005/Atom"></feed>') is None
+    assert nport.newest_filing(_ATOM) == (_ACCESSION, _FILING_DATE)
