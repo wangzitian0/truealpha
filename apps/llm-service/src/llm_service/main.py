@@ -10,10 +10,9 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.routing import APIRoute
 from infra2_sdk.fastapi import init_service
+from infra2_sdk.runtime.config_schema import assert_environment
 from starlette.types import ASGIApp, Receive, Scope, Send
 from truealpha_contracts.environment_contract import load_environment_contract
-from truealpha_runtime.boot import assert_environment
-from truealpha_runtime.telemetry import telemetry_config_error
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from llm_service.api.v1 import admin, auth, entities, library, panel, strategy
@@ -205,16 +204,13 @@ app.include_router(admin.router)
 
 # Replace FastMCP's default Rich stderr handler so init_service installs SDK stdout JSON logging.
 logging.getLogger().handlers.clear()
-try:
-    init_service(
-        app,
-        "truealpha-llm-service",
-        require_issued_identity=True,
-        suppress_probe_telemetry=True,
-        health_extra=_data_engine_health_extra,
-    )
-except ValueError as exc:
-    raise telemetry_config_error(exc) from exc
+init_service(
+    app,
+    "truealpha-llm-service",
+    require_issued_identity=True,
+    suppress_probe_telemetry=True,
+    health_extra=_data_engine_health_extra,
+)
 
 for route in app.routes:
     if isinstance(route, APIRoute) and route.path in _SYSTEM_PROBES:

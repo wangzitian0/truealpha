@@ -1,49 +1,44 @@
 import { getBackendBaseUrl } from "../src/client/api";
+import { resolveBackendOrigin } from "../src/backend-origin";
 
-function assert(condition: unknown, message: string): asserts condition {
-  if (!condition) throw new Error(message);
+function assertEqual(actual: string, expected: string, message: string): void {
+  if (actual !== expected) throw new Error(`${message}: got ${actual}, expected ${expected}`);
 }
 
-const saved = {
-  LLM_SERVICE_URL: process.env.LLM_SERVICE_URL,
-  ENV_SUFFIX: process.env.ENV_SUFFIX,
-  ENVIRONMENT: process.env.ENVIRONMENT,
-  APP_ENV: process.env.APP_ENV,
-};
+// The middleware and the API client share this one resolver.
+assertEqual(
+  resolveBackendOrigin({ LLM_SERVICE_URL: " http://llm.example:9000// ", ENVIRONMENT: "staging" }),
+  "http://llm.example:9000",
+  "LLM_SERVICE_URL must win over every fallback and lose its trailing slashes",
+);
+assertEqual(
+  resolveBackendOrigin({ ENV_SUFFIX: "-pr-12", ENVIRONMENT: "staging" }),
+  "http://truealpha-llm-pr-12:8000",
+  "ENV_SUFFIX must name the llm container before ENVIRONMENT does",
+);
+assertEqual(
+  resolveBackendOrigin({ ENVIRONMENT: "staging" }),
+  "http://truealpha-llm-staging:8000",
+  "ENVIRONMENT=staging must route to the staging llm container",
+);
+assertEqual(
+  resolveBackendOrigin({ ENVIRONMENT: "production" }),
+  "http://truealpha-llm:8000",
+  "ENVIRONMENT=production must route to the production llm container",
+);
+assertEqual(
+  resolveBackendOrigin({ APP_ENV: "staging" }),
+  "http://127.0.0.1:8000",
+  "retired APP_ENV alias must not act as a fallback for ENVIRONMENT",
+);
 
-function resetEnv(): void {
-  delete process.env.LLM_SERVICE_URL;
-  delete process.env.ENV_SUFFIX;
-  delete process.env.ENVIRONMENT;
-  delete process.env.APP_ENV;
-}
-
+const saved = process.env.LLM_SERVICE_URL;
 try {
-  resetEnv();
-  process.env.ENVIRONMENT = "staging";
-  assert(
-    getBackendBaseUrl() === "http://truealpha-llm-staging:8000",
-    "ENVIRONMENT=staging must route to truealpha-llm-staging",
-  );
-
-  resetEnv();
-  process.env.ENVIRONMENT = "production";
-  assert(
-    getBackendBaseUrl() === "http://truealpha-llm:8000",
-    "ENVIRONMENT=production must route to truealpha-llm",
-  );
-
-  resetEnv();
-  process.env.APP_ENV = "staging";
-  assert(
-    getBackendBaseUrl() === "http://127.0.0.1:8000",
-    "retired APP_ENV alias must not act as a fallback for ENVIRONMENT",
-  );
+  process.env.LLM_SERVICE_URL = "http://from-process-env:8000";
+  assertEqual(getBackendBaseUrl(), "http://from-process-env:8000", "the API client must read process.env through the resolver");
 } finally {
-  for (const [k, v] of Object.entries(saved)) {
-    if (v === undefined) delete process.env[k];
-    else process.env[k] = v;
-  }
+  if (saved === undefined) delete process.env.LLM_SERVICE_URL;
+  else process.env.LLM_SERVICE_URL = saved;
 }
 
 console.log("backend-origin-env passed");

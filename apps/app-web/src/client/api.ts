@@ -1,3 +1,4 @@
+import { resolveBackendOrigin } from "../backend-origin";
 import type { components } from "./openapi.generated";
 
 export type Schemas = components["schemas"];
@@ -48,15 +49,7 @@ export class ApiError extends Error {
 }
 
 export function getBackendBaseUrl(): string {
-  if (typeof window !== "undefined") return "";
-  const configured = process.env.LLM_SERVICE_URL?.trim();
-  if (configured) return configured.replace(/\/+$/, "");
-  const suffix = process.env.ENV_SUFFIX;
-  if (suffix !== undefined) return `http://truealpha-llm${suffix}:8000`;
-  const env = (process.env.ENVIRONMENT || "").trim().toLowerCase();
-  if (env === "staging") return "http://truealpha-llm-staging:8000";
-  if (env === "prod" || env === "production") return "http://truealpha-llm:8000";
-  return "http://127.0.0.1:8000";
+  return typeof window !== "undefined" ? "" : resolveBackendOrigin();
 }
 
 export interface RequestOpts {

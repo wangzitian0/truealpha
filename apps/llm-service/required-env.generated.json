@@ -212,6 +212,25 @@
       "store_key": ""
     },
     {
+      "field": "configuration_sha256",
+      "env": "CONFIGURATION_SHA256",
+      "aliases": [],
+      "required": false,
+      "injected": true,
+      "has_default": true,
+      "sensitive": false,
+      "group": "release",
+      "description": "",
+      "source": "release",
+      "empty_ok": false,
+      "scope": "env",
+      "provided_by": "",
+      "composed_from": "",
+      "mirror_to_1password": false,
+      "ci": "forbidden",
+      "store_key": ""
+    },
+    {
       "field": "app_service_db_password",
       "env": "APP_SERVICE_DB_PASSWORD",
       "aliases": [],

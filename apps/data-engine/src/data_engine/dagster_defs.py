@@ -1,7 +1,9 @@
 """Deployable Dagster definitions across all lanes (#27, #731)."""
 
+import logging
+
 import dagster as dg
-from truealpha_runtime.telemetry import init_telemetry
+from infra2_sdk.runtime.otel import init_worker
 
 from data_engine.config import settings
 from data_engine.lanes import LANE_MODULES, lane_definitions
@@ -87,7 +89,7 @@ __all__ = [
     "topt_live_schedule",
 ]
 
-init_telemetry()
+init_worker("truealpha", strict=True, require_issued_identity=True, log_level=logging.INFO)
 
 
 def with_in_process_executor(definitions: dg.Definitions) -> dg.Definitions:

@@ -45,6 +45,11 @@ class Settings(RuntimeSettings):
     llm_base_url: str = _f("https://open.bigmodel.cn/api/coding/paas/v4", "code", "llm")
     llm_small_model: str = _f("glm-5.3-flash", "code", "llm")
     llm_provider: str = _f("zhipu-glm-coding-plan", "code", "llm")
+    # Dagster reads these two names itself; the Settings model only declares them in the manifest.
+    # The image sets DAGSTER_HOME (Dockerfile). The infra2 entrypoint derives DAGSTER_POSTGRES_URL
+    # from DATABASE_URL with the search path `dagster` (dagster.yaml).
+    dagster_home: str = _f("/opt/dagster", "code", "dagster")
+    dagster_postgres_url: str = _f("", "runtime", "dagster", empty_ok=True, sensitive=True)
 
 
 settings = Settings()

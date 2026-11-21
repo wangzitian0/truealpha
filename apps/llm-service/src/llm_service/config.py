@@ -1,5 +1,6 @@
 from typing import Any
 
+from infra2_sdk.runtime.environment import RuntimeEnvKey
 from pydantic import Field, SecretStr
 from truealpha_runtime import RuntimeSettings
 from truealpha_runtime.config import DEFAULT_DATABASE_URL, POSTGRES_PROVIDED_BY, _schema_field
@@ -23,6 +24,10 @@ class Settings(RuntimeSettings):
     AGENTS.md: fixture data lives in tests only and is never reachable from a deployed route.
     """
 
+    # The deployment injects the hash of the configuration it rendered (infra2_sdk shared env).
+    configuration_sha256: str = _schema_field(
+        "", "release", "release", validation_alias=RuntimeEnvKey.CONFIGURATION_SHA256.value
+    )
     database_url: str = _schema_field(DEFAULT_DATABASE_URL, "code", "postgres", composed_from=_APP_STACK_DSN)
     app_service_db_password: SecretStr = Field(
         default=SecretStr(""),

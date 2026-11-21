@@ -10,10 +10,10 @@ dependencies = [
     "truealpha-contracts",
     # S3RawObjectStore's client construction (bucket/endpoint/credential validation)
     # via infra2_sdk.runtime.s3 — boto3 above already satisfies its optional-dependency
-    # check. The `otel` extra is the OTLP/HTTP exporter stack truealpha_runtime.telemetry
-    # (#1034) configures through infra2_sdk.runtime.otel; it ships in every service image
-    # because every Python service calls init_telemetry() at startup.
-    "infra2-sdk[http,otel,pydantic-ai] @ https://github.com/wangzitian0/infra2-sdk/releases/download/v4.0.0/infra2_sdk-4.0.0-py3-none-any.whl",
+    # check. The `otel` extra is the OTLP/HTTP exporter stack of infra2_sdk.runtime.otel
+    # (#1034); it ships in every service image because every Python service starts
+    # telemetry through it (init_service or init_worker).
+    "infra2-sdk[http,otel,pydantic-ai] @ https://github.com/wangzitian0/infra2-sdk/releases/download/v4.3.0/infra2_sdk-4.3.0-py3-none-any.whl",
 ]
 
 [project.scripts]

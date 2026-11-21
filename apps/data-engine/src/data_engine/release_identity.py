@@ -43,7 +43,7 @@ from data_engine.config import settings
 from data_engine.contracts.release import live_release_payload
 
 #: The environment contract this image ships and infra2's entrypoint boot-validates the
-#: process environment against (`truealpha_runtime.boot.assert_environment`, #759).
+#: process environment against (`infra2_sdk.runtime.config_schema.assert_environment`, #759).
 ENV_MANIFEST_PATH = Path("apps/data-engine/required-env.generated.json")
 
 #: The migration set this image ships. `db/apply_migrations.sh` applies `db/migrations/*.sql`

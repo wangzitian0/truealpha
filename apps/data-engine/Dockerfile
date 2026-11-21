@@ -60,7 +60,7 @@ COPY common/runtime/src/truealpha_tools/output_invariants.py /app/common/runtime
 # The environment contract this image ships (#784, #759). Two readers, one file, at the
 # repository path under /app -- the working directory this image already runs in:
 #   * infra2's entrypoint boot-validates the process environment against it
-#     (`truealpha_runtime.boot.assert_environment`), which it could not do before because
+#     (`infra2_sdk.runtime.config_schema.assert_environment`), which it could not do before because
 #     the file was simply absent from this image, exactly as `apps/llm-service/Dockerfile`
 #     ships its own;
 #   * `data_engine.release_identity` fingerprints it into the release manifest id, so a
