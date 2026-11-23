@@ -330,9 +330,10 @@ def materialize_theme_purity(
 ) -> tuple[ThemePurity, ...]:
     """Write one row for each issuer and theme.
 
-    `checkpoint` runs after each issuer. The lane passes the commit of its connection: a run that the
-    runtime bound stops keeps the rows and the stored model answers of the issuers it finished, and
-    the next run replays them with no model call (#1816).
+    The rows are written together, after every issuer is classified, so a reader never sees a part of
+    a run. `checkpoint` runs after each issuer is classified. The lane passes the commit of its
+    connection: a run that the runtime bound stops keeps the model answers of the issuers it
+    finished, and the next run replays them with no model call (#1816).
     """
     connection.execute(
         "delete from mart.issuer_theme_purity where run_id = %s and extractor = 'lane:unvisited:v1'",
@@ -341,7 +342,7 @@ def materialize_theme_purity(
     members = governed_members(connection, run_id=run_id)
     partitions = load_partitions(connection, cutoff=cutoff, ciks=members.keys())
     resolved_tickers = _resolve_member_tickers(connection, partitions, members, tickers=tickers, known_at=cutoff)
-    written: list[ThemePurity] = []
+    computed: list[tuple[IssuerPartition, ThemeDefinition, str, ThemePurity, str]] = []
     for partition in partitions:
         subject_id = members[partition.cik]
         for definition in themes:
@@ -354,39 +355,40 @@ def materialize_theme_purity(
                 ticker=resolved_tickers.get(subject_id),
                 persist_invocations=persist_invocations,
             )
-            availability, evidence, validation = _status_dimensions(purity, definition)
-            connection.execute(
-                _INSERT_SQL,
-                (
-                    run_id,
-                    subject_id,
-                    partition.cik,
-                    definition.theme_id,
-                    definition.theme,
-                    definition.factor_version,
-                    definition.content_sha256,
-                    cutoff,
-                    partition.period_end,
-                    partition.partition_id,
-                    purity.result.value,
-                    purity.consolidated_revenue,
-                    purity.in_theme_revenue,
-                    purity.out_of_theme_revenue,
-                    purity.unclassified_revenue,
-                    purity.partition_residual,
-                    purity.segments,
-                    purity.result.confidence,
-                    list(purity.result.flags),
-                    extractor,
-                    availability.value,
-                    evidence.value,
-                    validation.value,
-                ),
-            )
-            written.append(purity)
+            computed.append((partition, definition, subject_id, purity, extractor))
         if checkpoint is not None:
             checkpoint()
-    return tuple(written)
+    for partition, definition, subject_id, purity, extractor in computed:
+        availability, evidence, validation = _status_dimensions(purity, definition)
+        connection.execute(
+            _INSERT_SQL,
+            (
+                run_id,
+                subject_id,
+                partition.cik,
+                definition.theme_id,
+                definition.theme,
+                definition.factor_version,
+                definition.content_sha256,
+                cutoff,
+                partition.period_end,
+                partition.partition_id,
+                purity.result.value,
+                purity.consolidated_revenue,
+                purity.in_theme_revenue,
+                purity.out_of_theme_revenue,
+                purity.unclassified_revenue,
+                purity.partition_residual,
+                purity.segments,
+                purity.result.confidence,
+                list(purity.result.flags),
+                extractor,
+                availability.value,
+                evidence.value,
+                validation.value,
+            ),
+        )
+    return tuple(purity for *_, purity, _extractor in computed)
 
 
 def _short_id(entity_id: str) -> str:

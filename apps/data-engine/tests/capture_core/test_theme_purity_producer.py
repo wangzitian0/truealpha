@@ -773,3 +773,45 @@ def test_a_refusal_of_the_model_still_stops_the_lane(connection, seated, monkeyp
     with pytest.raises(llm.ModelHTTPError) as raised:
         materialize_theme_purity(connection, run_id=RUN_ID, cutoff=CUTOFF, themes=(AI,))
     assert raised.value.status_code == 400 and not raised.value.no_answer
+
+
+def test_a_run_that_dies_keeps_the_model_answers_and_publishes_no_part_of_the_rows(seated, monkeypatch) -> None:
+    """#1816: the checkpoint is a real commit here. The run dies on the second issuer (the bound of the
+    runtime, a lost worker). The answer for the first issuer is kept, no row is published, and the
+    next run asks the provider only for the second issuer. A reader of `mart.issuer_theme_purity`
+    never sees a part of a run."""
+    from truealpha_runtime.testing import isolated_test_database
+
+    with isolated_test_database("purity") as url, psycopg.connect(url) as connection:
+        _two_members(connection, monkeypatch)
+        connection.commit()
+        transport = _replies(0)
+        transport.failing = False
+        calls: list[int] = []
+
+        def dies_on_the_second_call(url_, headers, body):
+            calls.append(1)
+            if len(calls) == 2:
+                raise ValueError("the run was stopped")
+            return transport(url_, headers, body)
+
+        monkeypatch.setattr(llm, "_gateway_transport", dies_on_the_second_call)
+        with pytest.raises(ValueError, match="stopped"):
+            materialize_theme_purity(
+                connection, run_id=RUN_ID, cutoff=CUTOFF, themes=(AI,), checkpoint=connection.commit
+            )
+        connection.rollback()
+
+        assert connection.execute(
+            "select count(*) from mart.issuer_theme_purity where run_id = %s", (RUN_ID,)
+        ).fetchone() == (0,)
+        kept = connection.execute(
+            "select count(*) from staging.model_invocations where subject_cik = %s", (CIK,)
+        ).fetchone()
+        assert kept == (1,), "the answer for the first issuer was committed by the checkpoint"
+
+        monkeypatch.setattr(llm, "_gateway_transport", transport)
+        transport.asked = 0
+        written = materialize_theme_purity(connection, run_id=RUN_ID, cutoff=CUTOFF, themes=(AI,))
+        assert transport.asked == 1, "the next run asks only the issuer that has no stored answer"
+        assert len(written) == 2 and all(row.result.value is not None for row in written)
