@@ -142,7 +142,9 @@ class FakeSecHost:
             recent: dict[str, list[str]] = {}
             if cover is not None:
                 recent = {
-                    "form": ["20-F" if ticker == "NVDA" else "10-K"],
+                    # META files a 20-F here so that its renamed ticker stays the `ticker_not_on_cover` case:
+                    # a 10-K filer with a read cover and no depositary title lists one share (#1606).
+                    "form": ["20-F" if ticker in ("NVDA", "META") else "10-K"],
                     "filingDate": [FILED],
                     "reportDate": [PERIOD],
                     "accessionNumber": [_dashed(_accession_of(cik))],

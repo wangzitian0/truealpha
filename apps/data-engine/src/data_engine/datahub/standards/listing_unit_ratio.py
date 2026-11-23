@@ -79,9 +79,12 @@ _SHARE = (
     r"(?: of beneficial interest)?"
     r"(?:,? (?:non[- ])?voting)?"
 )
+_PAR = r"(?:par|nominal|no par|without par)\b"
 _TAIL = (
-    r"(?=\s*$|\s*(?:[,;().]|[-–—])\s*"
-    r"|\s+(?:of )?(?:par|nominal|no par|without par)\b|\s+(?:of )?[$€£¥]\s*[\d.])"
+    r"(?=\s*$|\s*(?:[,;()]|[-–—])\s*"
+    r"|\.\s*(?:$|[$€£¥]|" + _PAR + r")"
+    r"|\s+(?:of )?" + _PAR + r"|\s+[$€£¥]\s*[\d.]"
+    r"|\s+of\s+[$€£¥]\s*[\d.]+\s+" + _PAR + r")"
 )
 _DEPOSITARY_WORD = re.compile(r"\b(?:depositary|adss?|adrs?)\b")
 _DEPOSITARY_EACH = re.compile(
@@ -220,13 +223,15 @@ def ratio_for_ticker(
     accession: str,
     form: str,
     filed: date,
-    depositary_on_cover: bool = True,
+    titles: Sequence[str] = (),
 ) -> ListingUnitRatio:
+    """`titles` are every security title that the cover tags, paired with a ticker or not."""
     filing: dict[str, Any] = {"accession": accession, "form": form, "filed": filed}
     wanted = _symbol_key(ticker)
     matches = [line for line in securities if _symbol_key(line.symbol) == wanted]
     if not matches:
-        if form in DOMESTIC_ANNUAL_FORMS and not depositary_on_cover:
+        # A cover with no tagged title (an older filing, an 8-K) is no evidence; only a read cover is.
+        if form in DOMESTIC_ANNUAL_FORMS and titles and not names_a_depositary_security(titles):
             return ListingUnitRatio(Decimal(1), PATTERN_DOMESTIC_FILER, **filing)
         return unparsed(REASON_TICKER_NOT_ON_COVER, **filing)
     lines = [line for line in matches if not is_debt_security_title(line.title)]
@@ -248,7 +253,7 @@ class _Cover:
     form: str
     filed: date
     securities: tuple[CoverSecurity, ...]
-    depositary_on_cover: bool = True
+    titles: tuple[str, ...] = ()
 
 
 FilingFinder = Callable[[int, datetime], "FilingDocument | None"]
@@ -284,7 +289,7 @@ class CoverRatioReader:
             accession=cover.accession,
             form=cover.form,
             filed=cover.filed,
-            depositary_on_cover=cover.depositary_on_cover,
+            titles=cover.titles,
         )
 
     def _read_cover(self, cik: int, cutoff: date) -> _Cover | ListingUnitRatio:
@@ -303,7 +308,7 @@ class CoverRatioReader:
                 form=document.form,
                 filed=document.filing_date,
                 securities=cover_securities(document.body),
-                depositary_on_cover=names_a_depositary_security(cover_titles(document.body)),
+                titles=cover_titles(document.body),
             )
         except Exception as error:  # noqa: BLE001
             self._failed_in_a_row = self._failed_in_a_row + 1 if _may_repeat(error) else 0

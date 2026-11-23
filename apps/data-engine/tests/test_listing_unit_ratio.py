@@ -623,15 +623,10 @@ def test_a_measured_cell_is_never_replaced_by_a_not_measured_one_of_the_same_sub
 
 
 def _domestic(body: bytes, ticker: str, *, form: str = "10-K") -> ListingUnitRatio:
-    from data_engine.datahub.standards.listing_unit_ratio import cover_titles, names_a_depositary_security
+    from data_engine.datahub.standards.listing_unit_ratio import cover_titles
 
     return ratio_for_ticker(
-        cover_securities(body),
-        ticker,
-        accession=ACCESSION,
-        form=form,
-        filed=FILED,
-        depositary_on_cover=names_a_depositary_security(cover_titles(body)),
+        cover_securities(body), ticker, accession=ACCESSION, form=form, filed=FILED, titles=cover_titles(body)
     )
 
 
@@ -665,3 +660,24 @@ def test_a_20f_filer_whose_ticker_is_not_paired_gets_no_ratio() -> None:
 
     assert ratio.listing_units_per_share is None
     assert ratio.reason == REASON_TICKER_NOT_ON_COVER
+
+
+def test_a_10k_document_without_a_tagged_cover_gives_no_ratio() -> None:
+    """A document with no tagged title (an 8-K, a 10-K before inline XBRL) proves nothing about the listing."""
+    ratio = _domestic(b"<html><body><p>Item 8.01 Other Events</p></body></html>", "META")
+
+    assert ratio.listing_units_per_share is None
+    assert ratio.reason == REASON_TICKER_NOT_ON_COVER
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "Class A Common Stock. Class B Common Stock",
+        "Common Stock.Warrants",
+        "Depositary Shares, each representing 1 share of $25 liquidation preference Series A Preferred Stock",
+    ],
+)
+def test_the_widened_grammar_still_refuses_two_classes_warrants_and_preferred(title: str) -> None:
+    """Review of #1833: the `.` separator and `of $` par value must not open a way past the refusals."""
+    assert read_title(title).listing_units_per_share is None, title
