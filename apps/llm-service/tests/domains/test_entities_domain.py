@@ -264,3 +264,31 @@ def test_get_trace_falls_back_to_company_decision_for_non_topt_issuer(monkeypatc
     assert resp.lineage_result_id == "result:qqq-1"
     assert resp.decision is not None and resp.decision.tier == "tier_1" and resp.decision.peg == "1.1"
     assert seen_calls == [("strategy-run:qqq-1", "issuer:cik:0000882095", "2026-11-20T01:05:00Z")]
+
+
+@pytest.mark.parametrize("cutoff", ["bad", "2026-13-45", "yesterday", "'; drop table x--"])
+def test_get_trace_refuses_a_cutoff_that_is_not_a_timestamp_before_any_database_read(
+    monkeypatch: pytest.MonkeyPatch, cutoff: str
+) -> None:
+    """A bad `cutoff` once reached `%s::timestamptz` and ended in HTTP 500 (found 2026-11-21 on both environments)."""
+    from llm_service.services.auth_service import PrincipalRecord, access_context_for
+
+    def _no_database(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("an invalid cutoff must not reach the database")
+
+    monkeypatch.setattr(entities_service, "get_strategy_run_page", _no_database)
+    monkeypatch.setattr(entities_service, "with_mart_readonly", _no_database)
+    ctx = access_context_for(PrincipalRecord(principal_id="p:1", tenant_id="t:1", principal_kind="member"))
+
+    resp = entities_service.get_trace(ctx, issuer_id="issuer:cik:1", cutoff=cutoff)
+
+    assert resp.available is False
+    assert resp.reason == "invalid_cutoff"
+    assert resp.issuer_id == "issuer:cik:1"
+
+
+@pytest.mark.parametrize(
+    "cutoff", ["2026-11-20", "2026-11-20T01:05:00Z", "2026-11-20T01:05:00+00:00", "2026-11-20T09:05:00+08:00"]
+)
+def test_a_timestamp_cutoff_is_accepted(cutoff: str) -> None:
+    assert entities_service._parses_as_instant(cutoff) is True
