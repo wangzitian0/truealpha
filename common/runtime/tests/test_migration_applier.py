@@ -188,7 +188,6 @@ FILE_CALL_SITES = {
     "Makefile": (APPLIER, "db/reset_database.sh"),
     "db/docker-init.sh": ("apply_migrations.sh",),
     "db/reset_database.sh": ("apply_migrations.sh",),
-    "apps/data-engine/scripts/setup_vps_ingest.sh": (APPLIER,),
     "apps/llm-service/Dockerfile": (APPLIER,),
     "common/runtime/src/truealpha_runtime/testing.py": ("apply_migrations.sh",),
 }
