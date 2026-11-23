@@ -582,3 +582,38 @@ def test_node_period_uses_cutoff_tag_when_fiscal_periods_missing() -> None:
     assert len(extra_rows) == 1
     assert extra_rows[0][4] == CUTOFF.date().isoformat()
     assert extra_rows[0][5] == "cutoff"
+
+
+def test_an_input_the_snapshot_withholds_with_a_reason_is_not_read_from_the_raw_payload() -> None:
+    """#1828, staging 2026-11-23: the snapshot withheld the 689-day-old gross profit of LHX as
+    `stale_period`, and the strategy excluded LHX. The node materializer then read the same value
+    from the raw financial payload and served GPPE as `available`. A withheld input stays withheld,
+    with the snapshot's reason, whatever the payload holds."""
+    from factors.snapshot_inputs import CoreReasonCode
+
+    factor_input = _sample_factor_input()
+    withheld = factor_input.gross_profit.model_copy(
+        update={
+            "value": None,
+            "availability": MetricAvailability.UNAVAILABLE,
+            "unavailable_reason": CoreReasonCode.STALE_PERIOD,
+        }
+    )
+    factor_input = factor_input.model_copy(update={"gross_profit": withheld})
+    conn = _FakeNodeConnection({"listing:xnas:nvda": {"gross_profit": "5524000000", "revenue": "21325000000"}})
+
+    materialize_metric_node_values(
+        conn,  # type: ignore[arg-type]
+        factor_inputs=(factor_input,),
+        gppe_definition=GppeV0Definition(risk_free_rate=Decimal("0.05")),
+        tier_definition_id="strategy-definition:" + "e" * 64,
+        periods_by_listing={"listing:xnas:nvda": (date(2025, 1, 3), date(2025, 1, 3), date(2025, 1, 3))},
+        evidence_by_listing={"listing:xnas:nvda": InputEvidenceStatus.VERIFIED},
+        not_applicable_issuers=set(),
+    )
+
+    rows = {(row[14], row[3]): (row[6], row[8], row[9]) for row in conn.inserted_rows}
+    gppe = rows[("production-topt-v0.2.0", "gppe_uniform_charge_v0")]
+    assert gppe[0] is None and gppe[1] != "available"
+    assert "stale_period" in gppe[2]
+    assert rows[("production-topt-v0.2.0", "operating_gross_profit")][0] is None
