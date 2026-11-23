@@ -50,6 +50,13 @@ class Settings(RuntimeSettings):
     # from DATABASE_URL with the search path `dagster` (dagster.yaml).
     dagster_home: str = _f("/opt/dagster", "code", "dagster")
     dagster_postgres_url: str = _f("", "runtime", "dagster", empty_ok=True, sensitive=True)
+    # The compose gives the webserver role this port; the image CMD uses 3001 (Dockerfile).
+    dagster_webserver_port: int = _f(3001, "code", "dagster")
+    # infra2_sdk.runtime.otel.init_worker reads these three names itself (dagster_defs.py).
+    # An empty endpoint keeps telemetry off. The service name defaults to "truealpha".
+    otel_exporter_otlp_endpoint: str = _f("", "code", "otel", empty_ok=True)
+    otel_service_name: str = _f("truealpha", "code", "otel")
+    otel_resource_attributes: str = _f("", "code", "otel", empty_ok=True)
 
 
 settings = Settings()

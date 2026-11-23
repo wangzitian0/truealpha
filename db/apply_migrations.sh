@@ -7,7 +7,6 @@
 #   4    apps/llm-service/Dockerfile CMD             every staging/production/preview boot
 #   5    Makefile db-migrate / db-reset              local: compose exec, or host psql
 #   6    db/docker-init.sh                           compose initdb, on a fresh volume only
-#   7    apps/data-engine/scripts/setup_vps_ingest.sh   VPS: docker exec into the container
 #
 # Until #984 those were seven independently written loops, and they had drifted: the
 # three CI copies, the Makefile and the compose initdb hook bounded no lock and set no
@@ -35,16 +34,15 @@
 #                            preview, where it is still the superuser.
 #   TRUEALPHA_PSQL           the psql command, default `psql`. Set it when psql runs
 #                            somewhere else: `docker compose exec -T postgres psql`
-#                            (Makefile) or `docker exec -i truealpha-postgres psql`
-#                            (the VPS). When it is set, each file is streamed on stdin
+#                            (Makefile). When it is set, each file is streamed on stdin
 #                            rather than passed with --file, because the repository path
 #                            does not exist wherever that command lands.
 #   TRUEALPHA_DB_DIR         the directory holding migrations/ and roles.sql. Defaults to
-#                            this script's own directory, which is right in all seven
-#                            places: db/ in a checkout, /app/db in the llm-service image,
+#                            this script's own directory, which is right in every
+#                            place: db/ in a checkout, /app/db in the llm-service image,
 #                            /truealpha-db in the compose Postgres container.
 #   APP_SERVICE_DB_PASSWORD  rotated app_service_login password, applied by roles.sql.
-#                            Empty (local, CI, the VPS) is a complete no-op there.
+#                            Empty (local, CI) is a complete no-op there.
 #
 # A boot never waits on a lock (2026-09-17 incident). The v0.0.81 production boot sat
 # 108 s in 0017_contract_objects.sql behind a backfill's open transaction, the llm
