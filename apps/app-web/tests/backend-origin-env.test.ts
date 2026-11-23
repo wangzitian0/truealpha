@@ -9,28 +9,15 @@ function assertEqual(actual: string, expected: string, message: string): void {
 assertEqual(
   resolveBackendOrigin({ LLM_SERVICE_URL: " http://llm.example:9000// ", ENVIRONMENT: "staging" }),
   "http://llm.example:9000",
-  "LLM_SERVICE_URL must win over every fallback and lose its trailing slashes",
+  "LLM_SERVICE_URL sets the origin and loses its trailing slashes",
 );
-assertEqual(
-  resolveBackendOrigin({ ENV_SUFFIX: "-pr-12", ENVIRONMENT: "staging" }),
-  "http://truealpha-llm-pr-12:8000",
-  "ENV_SUFFIX must name the llm container before ENVIRONMENT does",
-);
-assertEqual(
-  resolveBackendOrigin({ ENVIRONMENT: "staging" }),
-  "http://truealpha-llm-staging:8000",
-  "ENVIRONMENT=staging must route to the staging llm container",
-);
-assertEqual(
-  resolveBackendOrigin({ ENVIRONMENT: "production" }),
-  "http://truealpha-llm:8000",
-  "ENVIRONMENT=production must route to the production llm container",
-);
-assertEqual(
-  resolveBackendOrigin({ APP_ENV: "staging" }),
-  "http://127.0.0.1:8000",
-  "retired APP_ENV alias must not act as a fallback for ENVIRONMENT",
-);
+for (const env of [{ ENV_SUFFIX: "-pr-12" }, { ENVIRONMENT: "staging" }, { ENVIRONMENT: "production" }, { APP_ENV: "staging" }]) {
+  assertEqual(
+    resolveBackendOrigin(env),
+    "http://127.0.0.1:8000",
+    `without LLM_SERVICE_URL no fixed host is derived from ${JSON.stringify(env)}`,
+  );
+}
 
 const saved = process.env.LLM_SERVICE_URL;
 try {
