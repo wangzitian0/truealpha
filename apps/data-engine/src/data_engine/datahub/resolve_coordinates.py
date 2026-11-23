@@ -347,6 +347,31 @@ def resolve_coordinates(
     return result
 
 
+# The merge set of each id in `%(entity_ids)s` as known at `%(known_at)s` (#1829): each entity whose
+# `staging.entity_survivor` is the survivor of that id. `walk` starts at each survivor and follows every
+# `superseded_by` edge into it (`idx_entity_relations_to`), so it reaches each member. It can also reach
+# an entity of a retracted, later or replaced edge. `staging.entity_survivor` stays the one definition
+# of the time, retraction, latest-edge and depth rules: `merge_set` keeps a reached entity only when the
+# function names the same survivor. The function runs once for each reached entity, not for each alias.
+# Write `with recursive` before it and read `merge_set (asked_id, entity_id)`.
+MERGE_SET_CTE = (
+    "asked as ("
+    "  select asked.entity_id,"
+    "         staging.entity_survivor(asked.entity_id, %(known_at)s::timestamptz) as survivor"
+    "  from unnest(%(entity_ids)s::uuid[]) as asked (entity_id)),"
+    " walk (survivor, entity_id) as ("
+    "  select asked.survivor, asked.survivor from asked"
+    "  union"
+    "  select walk.survivor, edge.from_entity_id"
+    "  from walk join staging.entity_relations edge"
+    "    on edge.to_entity_id = walk.entity_id and edge.relation_type = 'superseded_by'),"
+    " merge_set (asked_id, entity_id) as ("
+    "  select asked.entity_id, walk.entity_id"
+    "  from asked join walk using (survivor)"
+    "  where staging.entity_survivor(walk.entity_id, %(known_at)s::timestamptz) = walk.survivor)"
+)
+
+
 def alias_of(
     connection: psycopg.Connection[Any],
     entity_id: uuid.UUID | str,
@@ -355,13 +380,14 @@ def alias_of(
     valid_at: date,
     known_at: datetime,
 ) -> str | None:
-    entity_uuid = uuid.UUID(str(entity_id))
+    """The `scheme` alias of the entity or of an entity merged with it, valid at `valid_at` as known at `known_at`."""
     row = connection.execute(
-        "select alias.value from staging.entity_aliases alias"
-        " where staging.entity_survivor(alias.entity_id, %s) = staging.entity_survivor(%s, %s)"
-        " and alias.scheme = %s and alias.valid_from <= %s"
-        " and coalesce(%s < staging.entity_alias_valid_to(alias.alias_id, %s), true)"
-        " and alias.transaction_time <= %s order by alias.confidence desc, alias.transaction_time desc limit 1",
-        (known_at, entity_uuid, known_at, scheme, valid_at, valid_at, known_at, known_at),
+        f"with recursive {MERGE_SET_CTE}"
+        " select alias.value from staging.entity_aliases alias"
+        " where alias.entity_id = any(array(select merge_set.entity_id from merge_set))"
+        " and alias.scheme = %(scheme)s and alias.valid_from <= %(valid_at)s"
+        " and coalesce(%(valid_at)s < staging.entity_alias_valid_to(alias.alias_id, %(known_at)s), true)"
+        " and alias.transaction_time <= %(known_at)s order by alias.confidence desc, alias.transaction_time desc limit 1",
+        {"entity_ids": [uuid.UUID(str(entity_id))], "known_at": known_at, "scheme": scheme, "valid_at": valid_at},
     ).fetchone()
     return row[0] if row else None

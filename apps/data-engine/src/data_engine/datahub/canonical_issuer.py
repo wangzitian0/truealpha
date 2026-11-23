@@ -12,7 +12,7 @@ from typing import Any
 import psycopg
 
 from data_engine.datahub.primary_listing import choose_primary_listings
-from data_engine.datahub.resolve_coordinates import is_uuid, lookup_entity, parse_alias
+from data_engine.datahub.resolve_coordinates import MERGE_SET_CTE, is_uuid, lookup_entity, parse_alias
 
 __all__ = (
     "DUPLICATE_CORPUS_ID",
@@ -229,6 +229,7 @@ def expand_issuer_alias_ids(
     *,
     candidate_ids_by_key: Mapping[str, Sequence[str]] | None = None,
 ) -> dict[str, tuple[str, ...]]:
+    """Add to each key the legacy ids and LEIs of each entity merged with a UUID candidate, as known now (#1829)."""
     candidates: dict[str, set[str]] = {
         key: {*(candidate_ids_by_key.get(key, ()) if candidate_ids_by_key is not None else ()), issuer_id}
         for key, issuer_id in issuer_by_key.items()
@@ -236,12 +237,11 @@ def expand_issuer_alias_ids(
     uuid_ids = sorted({cid.lower() for cids in candidates.values() for cid in cids if is_uuid(cid)})
     if uuid_ids:
         alias_rows = connection.execute(
-            """
-            select entity_id::text, scheme, value
-            from staging.entity_aliases
-            where entity_id = any(%s::uuid[]) and scheme in ('legacy-id', 'lei')
-            """,
-            (uuid_ids,),
+            f"with recursive {MERGE_SET_CTE}"
+            " select merge_set.asked_id::text, alias.scheme, alias.value"
+            " from merge_set join staging.entity_aliases alias on alias.entity_id = merge_set.entity_id"
+            " where alias.scheme in ('legacy-id', 'lei')",
+            {"entity_ids": uuid_ids, "known_at": "infinity"},
         ).fetchall()
         aliases_by_uuid: dict[str, set[str]] = {}
         for entity_id, scheme, value in alias_rows:
