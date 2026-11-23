@@ -136,6 +136,10 @@ def _resolve_snapshot_metric(
         if field_name in ("headcount", "employees_total") and metric.value <= 0:
             return None, "nonpositive_headcount", None
         return metric.value, None, metric.confidence
+    if metric is not None and metric.unavailable_reason is not None:
+        # The snapshot withheld the input and named why (for example `stale_period`). The raw payload
+        # still holds the value; reading it would serve what the snapshot refused (#1828).
+        return None, metric.unavailable_reason.value, None
     return _resolve_market_component(spec, factor_input)
 
 
