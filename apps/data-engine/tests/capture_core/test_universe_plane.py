@@ -1313,6 +1313,8 @@ def test_sp500_universe_builds_from_ivv_nport_with_filing_knowable_at(in_memory_
                 return _FakeCursor([("AAPL",)])
             if "from staging.entity_aliases alias" in norm:
                 return _FakeCursor([(val,) for scheme, val in self.aliases if scheme == "mic-ticker"])
+            if "select distinct on (ticker) ticker, cik from staging.etf_constituent_facts" in norm:
+                return _FakeCursor([])  # no CIK landed before this refresh
             if "select entity_id from staging.entity_aliases" in norm:
                 return _FakeCursor([])
             if "select staging.entity_mint(" in norm:
@@ -1546,3 +1548,70 @@ def test_sec_ticker_mic_index_and_seed_listing_mic_aliases_resolve_multi_exchang
     assert denominator["excluded"] == [
         {"ticker": "ZQNUL", "issuer_id": "issuer:cik:0009999999", "reason": _UNKNOWN_EXCHANGE}
     ]
+
+
+# --- A holding of an older N-PORT filing can leave the SEC ticker index (merger, delisting) -------------
+
+
+def test_a_holding_that_left_the_sec_index_keeps_the_cik_this_universe_landed(monkeypatch) -> None:
+    """KVUE left the SEC index between 2026-11-05 and 2026-11-21. It was in IVV on 2026-06-30, so it stays a member."""
+    from data_engine.datahub.capture_core import universe_plane
+
+    monkeypatch.setattr(universe_plane, "_resolve_cik_via_edgar", lambda *_a, **_k: None)
+    cik_index = {"AAPL": 320193}
+
+    universe_plane._ensure_ciks_for_tickers(
+        ["AAPL", "KVUE", "BRK.B"],
+        cik_index,
+        etf="sp500",
+        user_agent="test-agent",
+        landed_ciks={"KVUE": 1944048, "BRK.B": 1067983},
+    )
+
+    assert cik_index == {"AAPL": 320193, "KVUE": 1944048, "BRK-B": 1067983}
+
+
+def test_a_holding_with_no_cik_anywhere_still_fails_loud(monkeypatch) -> None:
+    from data_engine.datahub.capture_core import universe_plane
+
+    monkeypatch.setattr(universe_plane, "_resolve_cik_via_edgar", lambda *_a, **_k: None)
+
+    with pytest.raises(LookupError, match=r"unresolved identifiers for sp500: ZZZZ"):
+        universe_plane._ensure_ciks_for_tickers(
+            ["KVUE", "ZZZZ"], {}, etf="sp500", user_agent="test-agent", landed_ciks={"KVUE": 1944048}
+        )
+
+
+def test_the_sec_index_wins_over_the_landed_cik(monkeypatch) -> None:
+    """A company that changed its CIK keeps the CIK that the SEC index names today."""
+    from data_engine.datahub.capture_core import universe_plane
+
+    monkeypatch.setattr(universe_plane, "_resolve_cik_via_edgar", lambda *_a, **_k: None)
+    cik_index = {"KMB": 55785}
+
+    universe_plane._ensure_ciks_for_tickers(
+        ["KMB"], cik_index, etf="sp500", user_agent="test-agent", landed_ciks={"KMB": 1}
+    )
+
+    assert cik_index == {"KMB": 55785}
+
+
+def test_landed_ciks_read_the_newest_cik_of_this_universe_only(connection, in_memory_objects) -> None:
+    from data_engine.datahub.capture_core import universe_plane
+
+    _land_constituents(connection, "SPXTEST", [("KVUE", 1944048, "BBG01"), ("MSFT", 789019, "BBG02")])
+    _land_constituents(connection, "OTHERTEST", [("KVUE", 999, "BBG03")])
+    # A later refresh of the same universe names another CIK for MSFT. Facts are append-only: add a row.
+    connection.execute(
+        """
+        insert into staging.etf_constituent_facts
+            (etf_symbol, as_of, source, raw_fetch_id, ticker, company_name, cik, figi, knowable_at)
+        select etf_symbol, %s, source, raw_fetch_id, ticker, company_name, %s, figi, knowable_at
+        from staging.etf_constituent_facts where etf_symbol = 'SPXTEST' and ticker = 'MSFT' limit 1
+        """,
+        (date(2026, 9, 30), 1),
+    )
+
+    landed = universe_plane._landed_ciks(connection, "SPXTEST", ["KVUE", "MSFT", "ABSENT"])
+
+    assert landed == {"KVUE": 1944048, "MSFT": 1}
