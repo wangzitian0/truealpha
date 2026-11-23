@@ -643,7 +643,7 @@ def test_the_purity_summary_counts_rows_and_carries_no_value(monkeypatch, writte
     run = "capture-run:" + "c" * 64
     head = question_coverage.GovernedHead("universe:topt-us-2026-03-31", run, datetime(2026, 9, 16, 22, 45, tzinfo=UTC))
     rows = tuple(
-        SimpleNamespace(entity_id=f"issuer:cik:{cik}", theme=theme, result=SimpleNamespace(value=value))
+        SimpleNamespace(entity_id=f"issuer:cik:{cik}", theme=theme, result=SimpleNamespace(value=value, flags=[]))
         for cik, theme, value in (
             (1, "ai", Decimal("0.8123")),
             (1, "cloud", None),

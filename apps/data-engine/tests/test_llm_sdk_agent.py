@@ -188,3 +188,18 @@ def test_a_read_timeout_is_the_error_that_each_caller_handles_for_one_filing() -
     assert raised.value.status_code == 0
     assert "TimeoutError" in str(raised.value)
     assert isinstance(raised.value.__cause__, TimeoutError)
+
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (llm.ModelHTTPError(0, "no answer"), True),
+        (llm.ModelHTTPError(503, "provider down"), True),
+        (llm.ModelHTTPError(400, "refused"), False),
+        (llm.ModelCapacityRefused("no call slot"), False),
+        (llm.ModelOutputTruncated(2400), False),
+    ],
+)
+def test_only_status_0_and_a_server_error_are_a_missing_answer(error: llm.ModelHTTPError, expected: bool) -> None:
+    """#1816: the next run can get an answer after status 0 or 5xx. A refusal or a cut-off answer repeats."""
+    assert error.no_answer is expected

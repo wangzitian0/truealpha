@@ -12,6 +12,8 @@ RULE_SINGLE_CANDIDATE = "rule:single-candidate:v1"
 RULE_EXHAUSTIVE_PARTITION = "rule:exhaustive-partition:v1"
 RULE_SINGLE_SEGMENT = "rule:single-segment:v4"
 RULE_NO_DESCRIPTION = "rule:no-description:v1"
+#: A model call that gave no answer (status 0 or 5xx). The row is refused and names the cause (#1816).
+RULE_MODEL_NO_ANSWER = "rule:model-no-answer:v1"
 
 
 @dataclass(frozen=True)

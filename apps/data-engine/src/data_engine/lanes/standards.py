@@ -328,7 +328,7 @@ def _downstream_canonical_op(
 
 @external_op
 def run_theme_purity(context: dg.OpExecutionContext, config: StandardBackfillConfig, backfill_summary: str) -> str:
-    from data_engine.datahub.capture_core.theme_purity import materialize_theme_purity, summary_line
+    from data_engine.datahub.capture_core.theme_purity import NO_ANSWER, materialize_theme_purity, summary_line
     from data_engine.datahub.question_coverage import NoHead, governed_head_of
 
     if (
@@ -346,13 +346,29 @@ def run_theme_purity(context: dg.OpExecutionContext, config: StandardBackfillCon
             outcome.pending, outcome.summary = True, head.summary
             return _no_head_response(context, config.universe, "theme purity rows")
         rows = materialize_theme_purity(
-            connection, run_id=head.run_id, cutoff=head.cutoff, tickers=_universe_tickers(connection, config.universe)
+            connection,
+            run_id=head.run_id,
+            cutoff=head.cutoff,
+            tickers=_universe_tickers(connection, config.universe),
+            checkpoint=connection.commit,
         )
         connection.commit()
         published = sum(1 for row in rows if row.result.value is not None)
-        outcome.summary = f"{published}/{len(rows)} theme-purity rows published on {head.run_id[:24]}"
+        no_answer = sum(1 for row in rows if NO_ANSWER in row.result.flags)
+        outcome.summary = f"{published}/{len(rows)} theme-purity rows published on {head.run_id[:24]}" + (
+            f"; {no_answer} got no model answer" if no_answer else ""
+        )
     context.log.info(summary_line(rows))
-    summary = {"universe": config.universe, "run_id": head.run_id, "rows": len(rows), "published": published}
+    summary: dict[str, Any] = {
+        "universe": config.universe,
+        "run_id": head.run_id,
+        "rows": len(rows),
+        "published": published,
+        "no_answer": no_answer,
+    }
+    if no_answer:
+        summary[LANE_FAILURE] = summary[VERDICT_TEXT] = f"theme purity: {no_answer} rows got no model answer"
+        context.log.error("%s: %s", config.universe, summary[LANE_FAILURE])
     context.add_output_metadata(summary)
     return json.dumps(summary)
 
@@ -483,6 +499,7 @@ def run_supply_chain_exposure(
         floor_failure
         or (f"supply chain: {exceeded} of {joined} filings exceeded 1M context window" if exceeded > 0 else None)
         or (f"supply chain: {no_answer} filings got no model answer" if no_answer > 0 else None)
+        or _json_dict(purity_summary).get(LANE_FAILURE)
     )
     return _finish_canonical_lane(
         context,

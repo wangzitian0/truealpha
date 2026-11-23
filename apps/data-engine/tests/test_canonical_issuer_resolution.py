@@ -1598,3 +1598,54 @@ def test_the_supply_chain_op_reports_a_filing_with_no_model_answer_as_a_lane_fai
     assert summary["model_errors"] == 1
     assert summary["no_answer"] == 1
     assert summary["rows"] == ISSUERS
+
+
+def _purity_row_without_answer() -> Any:
+    from types import SimpleNamespace
+
+    from data_engine.datahub.capture_core.theme_purity import NO_ANSWER
+
+    return SimpleNamespace(result=SimpleNamespace(value=None, flags=[NO_ANSWER]), entity_id="issuer:test", theme="t")
+
+
+def test_the_theme_purity_op_commits_after_each_issuer_and_reports_rows_without_a_model_answer(
+    head: question_coverage.GovernedHead,
+    committing_lane: _CommitRunsDeferredConstraints,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1816, staging 2026-11-23: the op committed once at its end, so a run that stopped after two
+    hours kept nothing, and a missing model answer ended the lane. Now the op passes its commit as the
+    checkpoint of the issuers, and it names the rows without an answer as the failure of the lane."""
+    seen: dict[str, Any] = {}
+
+    def materialize(connection: Any, *, checkpoint: Any, **_kwargs: Any) -> tuple[Any, ...]:
+        seen["checkpoint"] = checkpoint
+        before = committing_lane.commits
+        checkpoint()
+        checkpoint()
+        seen["commits_by_the_checkpoint"] = committing_lane.commits - before
+        return (_purity_row_without_answer(), _purity_row_without_answer())
+
+    monkeypatch.setattr(theme_purity, "materialize_theme_purity", materialize)
+
+    summary = _run_purity_op()
+
+    assert seen["checkpoint"] is not None and seen["commits_by_the_checkpoint"] == 2
+    assert summary["no_answer"] == 2 and summary["published"] == 0
+    assert summary["lane_failure"] == "theme purity: 2 rows got no model answer"
+    assert summary["verdict_text"] == summary["lane_failure"]
+
+
+def test_the_failure_of_the_theme_purity_lane_reaches_the_end_of_the_chain(
+    head: question_coverage.GovernedHead,
+    committing_lane: _CommitRunsDeferredConstraints,
+) -> None:
+    """#1816: `fail_if_a_lane_failed` reads the summary of the last lane. A lane failure that the
+    chain does not carry leaves the job green with rows that say nothing."""
+    config = standards.StandardBackfillConfig(executed_at=EXECUTED_AT, universe=UNIVERSE)
+    purity_summary = json.dumps({"lane_failure": "theme purity: 2 rows got no model answer", "rows": 2})
+
+    summary = json.loads(standards.run_supply_chain_exposure(dg.build_op_context(), config, purity_summary))
+
+    assert summary["lane_failure"] == "theme purity: 2 rows got no model answer"
+    assert summary["rows"] == ISSUERS

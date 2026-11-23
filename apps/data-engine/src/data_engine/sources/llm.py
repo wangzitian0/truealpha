@@ -121,6 +121,14 @@ class ModelHTTPError(RuntimeError):
         self.status_code = status_code
         self.provider_code = provider_code
 
+    @property
+    def no_answer(self) -> bool:
+        """The provider gave no answer (status 0) or failed on its side (5xx). The next run can get one.
+
+        A refusal (4xx) or a cut-off answer repeats on each run, so it is not a missing answer (#1816).
+        """
+        return self.status_code == 0 or self.status_code >= 500
+
 
 class ModelCapacityRefused(ModelHTTPError):
     def __init__(self, detail: str) -> None:
