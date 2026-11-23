@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -427,6 +428,15 @@ def _decision_row_to_dto(row: dict[str, Any], *, display_map: dict[str, EntityDi
     )
 
 
+def _parses_as_instant(value: str) -> bool:
+    """True when `value` is an ISO 8601 date or timestamp. The lineage query casts it with `::timestamptz`."""
+    try:
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return True
+
+
 def get_trace(
     context: AccessContext,
     *,
@@ -436,6 +446,8 @@ def get_trace(
     candidates: list[str] | None = None,
     database_url: str | None = None,
 ) -> TraceResponse:
+    if cutoff is not None and not _parses_as_instant(cutoff):
+        return TraceResponse(available=False, reason="invalid_cutoff", issuer_id=issuer_id)
     page = page if page is not None else get_strategy_run_page(context, cutoff=cutoff, database_url=database_url)
     if not page.available:
         return TraceResponse(available=False, reason=page.reason, issuer_id=issuer_id)
