@@ -573,3 +573,10 @@ def test_a_question_without_a_column_fails_on_a_served_universe_and_not_on_the_c
         == f"zero answered for q2=0/1 on {QQQ}"
     )
     assert coverage_verdict_failure({"universe_id": CANARY, "questions": {"q2": entry}}) is None
+
+
+def test_a_report_of_an_unknown_universe_is_judged_as_served() -> None:
+    """A report whose universe the contract does not name fails closed: a question without a column fails."""
+    entry = _q2_without_a_column()
+    report = {"universe_id": "universe:unknown-us-2026-01-01", "questions": {"q2": entry}}
+    assert coverage_verdict_failure(report) == "zero answered for q2=0/1 on universe:unknown-us-2026-01-01"
