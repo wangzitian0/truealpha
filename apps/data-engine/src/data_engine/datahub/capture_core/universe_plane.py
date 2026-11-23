@@ -242,14 +242,28 @@ def _ensure_ciks_for_tickers(
     etf: str,
     user_agent: str,
     figis: Mapping[str, str] | None = None,
+    landed_ciks: Mapping[str, int] | None = None,
 ) -> None:
-    """Resolve missing CIKs via EDGAR fallback and raise if any constituent identifier remains unresolved."""
+    """Resolve missing CIKs and raise if any constituent identifier remains unresolved.
+
+    Order: the SEC ticker index, the EDGAR lookup, then `landed_ciks`. A holding of an older N-PORT filing can
+    leave the SEC index after the report date (merger, delisting). It still belongs to the membership of that
+    date, so the CIK that this universe already landed for the ticker answers the question.
+    """
     for ticker in tickers:
         normalized = ticker.replace(".", "-")
         if normalized not in cik_index:
             fallback = _resolve_cik_via_edgar(ticker, user_agent=user_agent)
             if fallback is not None:
                 cik_index[normalized] = fallback
+        if normalized not in cik_index and landed_ciks and ticker in landed_ciks:
+            cik_index[normalized] = landed_ciks[ticker]
+            log.warning(
+                "%s: %s has left the SEC ticker index; its CIK %s is the one already landed for this universe",
+                etf,
+                ticker,
+                landed_ciks[ticker],
+            )
     missing = [
         ticker
         for ticker in tickers
@@ -257,6 +271,20 @@ def _ensure_ciks_for_tickers(
     ]
     if missing:
         raise LookupError(f"unresolved identifiers for {etf}: {', '.join(sorted(missing))}")
+
+
+def _landed_ciks(connection: Connection[Any], etf: str, tickers: Sequence[str]) -> dict[str, int]:
+    """The newest CIK that `etf` has landed for each ticker (a ticker with no landed CIK is absent)."""
+    rows = connection.execute(
+        """
+        select distinct on (ticker) ticker, cik
+        from staging.etf_constituent_facts
+        where etf_symbol = %s and ticker = any(%s) and cik is not null
+        order by ticker, as_of desc, knowable_at desc
+        """,
+        (etf, list(tickers)),
+    ).fetchall()
+    return {str(ticker): int(cik) for ticker, cik in rows}
 
 
 def _load_sec_nport_indexes(
@@ -391,7 +419,13 @@ def _refresh_nport_constituents(
     resolved_ids = _resolve_nport_identifiers(connection, job_keys, as_of=effective_as_of, api_key=openfigi_api_key)
     cik_index, title_tickers = _load_sec_nport_indexes(http, resolved_ids)
     by_ticker = _aggregate_nport_holdings(holdings, resolved_ids, etf=source.etf, title_tickers=title_tickers)
-    _ensure_ciks_for_tickers(list(by_ticker), cik_index, etf=source.etf, user_agent=_settings.sec_user_agent)
+    _ensure_ciks_for_tickers(
+        list(by_ticker),
+        cik_index,
+        etf=source.etf,
+        user_agent=_settings.sec_user_agent,
+        landed_ciks=_landed_ciks(connection, source.etf, list(by_ticker)),
+    )
 
     _insert_constituent_facts(
         connection,
