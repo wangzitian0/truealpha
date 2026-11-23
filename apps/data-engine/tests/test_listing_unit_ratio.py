@@ -24,6 +24,7 @@ from data_engine.datahub.standards.listing_unit_ratio import (
     OUTCOME_PARSED,
     OUTCOME_UNPARSED,
     PATTERN_DEPOSITARY,
+    PATTERN_DOMESTIC_FILER,
     PATTERN_PLAIN_SHARE,
     PATTERN_UNPARSED,
     PAYLOAD_KEYS,
@@ -146,6 +147,14 @@ def test_the_quantity_of_a_depositary_title_is_the_number_it_states(title: str, 
         "Common Stock - par value $0.01 per share",
         "Class A Voting Common Stock, par value $0.01 per share",
         "Class B Non-Voting Common Stock, par value $0.01 per share",
+        # #1606: the cover titles of S&P 500 members that the grammar refused on staging, 2026-11-23.
+        "Ordinary Shares. $0.01 par value per share",
+        "Registered Shares, $0.01 par value per share",
+        "Registered Shares, $0.10 Per Share Par Value",
+        "Common Shares of Beneficial Interest, $.01 par value",
+        "Common Stock of $0.50 par value per share",
+        "Common Stock Non-Voting, Par Value $0.01 per share",
+        "Common Stock voting, $0.0025 par value",
     ],
 )
 def test_a_plain_share_title_is_one_ordinary_share(title: str) -> None:
@@ -611,3 +620,64 @@ def test_a_measured_cell_is_never_replaced_by_a_not_measured_one_of_the_same_sub
     record_listing_ratio(cells, "listing:xnas:acme", unparsed)
     assert cells["listing:xnas:acme"]["outcome"] == OUTCOME_UNPARSED, "a later measurement replaces an earlier one"
     assert cells["listing:xnas:acme"]["ticker"] == "ACME", "ticker survives replacement by a later measurement"
+
+
+def _domestic(body: bytes, ticker: str, *, form: str = "10-K") -> ListingUnitRatio:
+    from data_engine.datahub.standards.listing_unit_ratio import cover_titles
+
+    return ratio_for_ticker(
+        cover_securities(body), ticker, accession=ACCESSION, form=form, filed=FILED, titles=cover_titles(body)
+    )
+
+
+def test_a_10k_filer_with_no_depositary_security_lists_one_share_when_its_ticker_is_not_paired() -> None:
+    """#1606, staging 2026-11-23: BAX, BNY, C, CBRE and ECHO file 10-K, and their ticker is not paired
+    on the cover. A domestic filer lists its own shares unless the cover names a depositary security."""
+    body = cover_html(("BAX.PRA", "5.00% Series A Preferred Stock"), (None, "Common Stock, $1.00 par value"))
+
+    ratio = _domestic(body, "BAX")
+
+    assert ratio.listing_units_per_share == Decimal(1)
+    assert ratio.pattern == PATTERN_DOMESTIC_FILER
+    assert ratio.outcome == OUTCOME_ORDINARY
+    assert ratio.reason is None and ratio.title is None
+
+
+def test_a_cover_that_names_a_depositary_security_keeps_the_ticker_unread() -> None:
+    """A 10-K filer can list depositary shares (a foreign issuer that files 10-K). Then no ratio is assumed."""
+    body = cover_html((None, "American Depositary Shares, each representing 13 Ordinary Shares"))
+
+    ratio = _domestic(body, "ONC")
+
+    assert ratio.listing_units_per_share is None
+    assert ratio.reason == REASON_TICKER_NOT_ON_COVER
+
+
+def test_a_20f_filer_whose_ticker_is_not_paired_gets_no_ratio() -> None:
+    body = cover_html((None, "Ordinary Shares, nominal value EUR 0.09 per share"))
+
+    ratio = _domestic(body, "ASML", form="20-F")
+
+    assert ratio.listing_units_per_share is None
+    assert ratio.reason == REASON_TICKER_NOT_ON_COVER
+
+
+def test_a_10k_document_without_a_tagged_cover_gives_no_ratio() -> None:
+    """A document with no tagged title (an 8-K, a 10-K before inline XBRL) proves nothing about the listing."""
+    ratio = _domestic(b"<html><body><p>Item 8.01 Other Events</p></body></html>", "META")
+
+    assert ratio.listing_units_per_share is None
+    assert ratio.reason == REASON_TICKER_NOT_ON_COVER
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "Class A Common Stock. Class B Common Stock",
+        "Common Stock.Warrants",
+        "Depositary Shares, each representing 1 share of $25 liquidation preference Series A Preferred Stock",
+    ],
+)
+def test_the_widened_grammar_still_refuses_two_classes_warrants_and_preferred(title: str) -> None:
+    """Review of #1833: the `.` separator and `of $` par value must not open a way past the refusals."""
+    assert read_title(title).listing_units_per_share is None, title
