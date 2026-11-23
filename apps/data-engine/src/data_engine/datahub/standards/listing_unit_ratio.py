@@ -20,6 +20,9 @@ SYMBOL_CONCEPT = "dei:TradingSymbol"
 
 PATTERN_DEPOSITARY = "depositary_each_representing"
 PATTERN_PLAIN_SHARE = "plain_share_title"
+#: A 10-K filer whose cover names no depositary security: its listed unit is one share, whatever the
+#: cover pairs with the ticker (#1606).
+PATTERN_DOMESTIC_FILER = "domestic_filer_without_depositary"
 PATTERN_UNPARSED = "unparsed"
 
 OUTCOME_PARSED = "parsed"
@@ -30,8 +33,11 @@ OUTCOMES = (OUTCOME_PARSED, OUTCOME_ORDINARY, OUTCOME_UNPARSED, OUTCOME_NOT_MEAS
 _OUTCOME_BY_PATTERN = {
     PATTERN_DEPOSITARY: OUTCOME_PARSED,
     PATTERN_PLAIN_SHARE: OUTCOME_ORDINARY,
+    PATTERN_DOMESTIC_FILER: OUTCOME_ORDINARY,
     PATTERN_UNPARSED: OUTCOME_UNPARSED,
 }
+#: The annual form of a domestic filer. `latest_annual_filing` reads 10-K and 20-F only.
+DOMESTIC_ANNUAL_FORMS = frozenset({"10-K", "10-K/A"})
 
 REASON_NO_TICKER = "no_ticker"
 REASON_NO_ANNUAL_FILING = "no_annual_filing"
@@ -68,12 +74,14 @@ _QUANTITY = (
 )
 _SHARE = (
     r"(?:(?:class|series) [a-z0-9]+ )?"
-    r"(?:(?:ordinary|common|capital|subordinate voting|non[- ]voting|voting) )*"
+    r"(?:(?:ordinary|common|capital|registered|subordinate voting|non[- ]voting|voting) )*"
     r"(?:shares?|stock)"
+    r"(?: of beneficial interest)?"
+    r"(?:,? (?:non[- ])?voting)?"
 )
 _TAIL = (
-    r"(?=\s*$|\s*(?:[,;()]|[-–—])\s*"
-    r"|\s+(?:of )?(?:par|nominal|no par|without par)\b|\s+[$€£¥]\s*[\d.])"
+    r"(?=\s*$|\s*(?:[,;().]|[-–—])\s*"
+    r"|\s+(?:of )?(?:par|nominal|no par|without par)\b|\s+(?:of )?[$€£¥]\s*[\d.])"
 )
 _DEPOSITARY_WORD = re.compile(r"\b(?:depositary|adss?|adrs?)\b")
 _DEPOSITARY_EACH = re.compile(
@@ -170,6 +178,17 @@ class CoverSecurity:
     title: str
 
 
+def cover_titles(body: bytes) -> tuple[str, ...]:
+    """Every security title of the cover, paired with a ticker or not."""
+    from data_engine.datahub.standards.inline_xbrl import InlineXbrl
+
+    return tuple(fact.text for fact in InlineXbrl(body).text_facts((TITLE_CONCEPT,), limit=_TITLE_LIMIT))
+
+
+def names_a_depositary_security(titles: Sequence[str]) -> bool:
+    return any(_DEPOSITARY_WORD.search(" ".join(title.split()).lower()) for title in titles)
+
+
 def cover_securities(body: bytes) -> tuple[CoverSecurity, ...]:
     from data_engine.datahub.standards.inline_xbrl import InlineXbrl
 
@@ -195,12 +214,20 @@ def _symbol_key(symbol: str) -> str:
 
 
 def ratio_for_ticker(
-    securities: Sequence[CoverSecurity], ticker: str, *, accession: str, form: str, filed: date
+    securities: Sequence[CoverSecurity],
+    ticker: str,
+    *,
+    accession: str,
+    form: str,
+    filed: date,
+    depositary_on_cover: bool = True,
 ) -> ListingUnitRatio:
     filing: dict[str, Any] = {"accession": accession, "form": form, "filed": filed}
     wanted = _symbol_key(ticker)
     matches = [line for line in securities if _symbol_key(line.symbol) == wanted]
     if not matches:
+        if form in DOMESTIC_ANNUAL_FORMS and not depositary_on_cover:
+            return ListingUnitRatio(Decimal(1), PATTERN_DOMESTIC_FILER, **filing)
         return unparsed(REASON_TICKER_NOT_ON_COVER, **filing)
     lines = [line for line in matches if not is_debt_security_title(line.title)]
     if not lines:
@@ -221,6 +248,7 @@ class _Cover:
     form: str
     filed: date
     securities: tuple[CoverSecurity, ...]
+    depositary_on_cover: bool = True
 
 
 FilingFinder = Callable[[int, datetime], "FilingDocument | None"]
@@ -250,7 +278,14 @@ class CoverRatioReader:
         cover = self._covers[key]
         if isinstance(cover, ListingUnitRatio):
             return cover
-        return ratio_for_ticker(cover.securities, ticker, accession=cover.accession, form=cover.form, filed=cover.filed)
+        return ratio_for_ticker(
+            cover.securities,
+            ticker,
+            accession=cover.accession,
+            form=cover.form,
+            filed=cover.filed,
+            depositary_on_cover=cover.depositary_on_cover,
+        )
 
     def _read_cover(self, cik: int, cutoff: date) -> _Cover | ListingUnitRatio:
         from data_engine.datahub.standards.filing_extraction import format_accession
@@ -268,6 +303,7 @@ class CoverRatioReader:
                 form=document.form,
                 filed=document.filing_date,
                 securities=cover_securities(document.body),
+                depositary_on_cover=names_a_depositary_security(cover_titles(document.body)),
             )
         except Exception as error:  # noqa: BLE001
             self._failed_in_a_row = self._failed_in_a_row + 1 if _may_repeat(error) else 0
