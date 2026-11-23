@@ -9,7 +9,10 @@ from datetime import UTC, date, datetime
 import psycopg
 import pytest
 from data_engine.config import settings
+from data_engine.datahub.canonical_issuer import expand_issuer_alias_ids
 from data_engine.datahub.resolve_coordinates import (
+    MERGE_SET_CTE,
+    _merge,
     alias_of,
     parse_alias,
     resolve_coordinates,
@@ -18,6 +21,7 @@ from data_engine.datahub.resolve_coordinates import (
 
 CUTOFF = datetime(2026, 3, 31, 22, 15, tzinfo=UTC)
 TODAY = date(2026, 3, 31)
+MERGED_AT = datetime(2026, 4, 1, 1, 45, tzinfo=UTC)
 
 
 @pytest.fixture
@@ -289,3 +293,129 @@ def test_a_merge_that_a_retraction_ended_is_not_written_again(connection) -> Non
     )
     with pytest.raises(ValueError, match=f"issuer {plane_issuer} was separated from {first[0]}"):
         resolve_coordinates(connection, [plane], as_of=TODAY, known_at=CUTOFF, refresh_mart=False)
+
+
+def _issuer(connection, raw_id: str) -> tuple[uuid.UUID, str]:
+    """Mint an issuer at CUTOFF from `raw_id`. Return its id and the value of its LEI or CIK alias."""
+    return resolve_entity(connection, raw_id, "issuer", as_of=TODAY, known_at=CUTOFF), parse_alias(raw_id, "issuer")[1]
+
+
+def _retract_merge(connection, loser: uuid.UUID, survivor: uuid.UUID, *, known_at: datetime) -> None:
+    connection.execute(
+        "insert into staging.entity_retractions (relation_id, valid_to, reason, transaction_time, source, raw_ref)"
+        " select relation_id, %s, 'wrong-listing-id', %s, 'test', 'test' from staging.entity_relations"
+        " where relation_type in ('same_as', 'superseded_by') and from_entity_id = %s and to_entity_id = %s",
+        (TODAY, known_at, loser, survivor),
+    )
+
+
+def _merged_pair(connection) -> tuple[uuid.UUID, str, str, uuid.UUID, str, str]:
+    """An issuer minted from an LEI, and an issuer minted from a CIK that is merged into it at MERGED_AT.
+
+    Return (survivor, its LEI, its legacy id, loser, its CIK, its legacy id). Only the survivor has
+    an LEI and only the loser has a CIK, so each `alias_of` below has one candidate row.
+    """
+    corpus, plane, _listing = _two_spellings()
+    survivor, lei = _issuer(connection, corpus[0])
+    loser, cik = _issuer(connection, plane[0])
+    _merge(connection, loser, survivor, listing=uuid.uuid4(), known_at=MERGED_AT)
+    return survivor, lei, corpus[0], loser, cik, plane[0]
+
+
+def test_alias_of_reads_the_aliases_of_each_entity_that_is_merged_with_the_asked_entity(connection) -> None:
+    """#1829: an alias of the loser is an alias of the survivor, and an alias of the survivor is an alias of the loser."""
+    survivor, lei, _, loser, cik, _ = _merged_pair(connection)
+    assert alias_of(connection, survivor, "cik", valid_at=TODAY, known_at=MERGED_AT) == cik
+    assert alias_of(connection, loser, "lei", valid_at=TODAY, known_at=MERGED_AT) == lei
+    assert alias_of(connection, loser, "cik", valid_at=TODAY, known_at=MERGED_AT) == cik
+    assert alias_of(connection, survivor, "lei", valid_at=TODAY, known_at=MERGED_AT) == lei
+
+
+def test_alias_of_stops_reading_the_aliases_of_an_entity_after_its_merge_is_retracted(connection) -> None:
+    """#1829: a retraction of the merge, as known at `known_at`, separates the aliases of the two entities again."""
+    survivor, lei, _, loser, cik, _ = _merged_pair(connection)
+    retracted_at = datetime(2026, 4, 2, 9, 0, tzinfo=UTC)
+    _retract_merge(connection, loser, survivor, known_at=retracted_at)
+    assert alias_of(connection, survivor, "cik", valid_at=TODAY, known_at=MERGED_AT) == cik
+    assert alias_of(connection, survivor, "cik", valid_at=TODAY, known_at=retracted_at) is None
+    assert alias_of(connection, loser, "lei", valid_at=TODAY, known_at=retracted_at) is None
+    assert alias_of(connection, loser, "cik", valid_at=TODAY, known_at=retracted_at) == cik
+
+
+def test_alias_of_does_not_follow_a_merge_recorded_after_known_at(connection) -> None:
+    """#1829: point in time. Before MERGED_AT, the two entities and their aliases are separate."""
+    survivor, lei, _, loser, cik, _ = _merged_pair(connection)
+    before = datetime(2026, 4, 1, 0, 0, tzinfo=UTC)
+    assert alias_of(connection, survivor, "cik", valid_at=TODAY, known_at=before) is None
+    assert alias_of(connection, loser, "lei", valid_at=TODAY, known_at=before) is None
+    assert alias_of(connection, survivor, "lei", valid_at=TODAY, known_at=before) == lei
+    assert alias_of(connection, loser, "cik", valid_at=TODAY, known_at=before) == cik
+
+
+def test_expand_issuer_alias_ids_reads_the_legacy_ids_and_lei_of_each_merged_entity(connection) -> None:
+    """#1829, review of #1812: the legacy id of a merged-in entity expands the survivor. The legacy id
+    and the LEI of the survivor expand the loser."""
+    survivor, lei, survivor_legacy, loser, _cik, loser_legacy = _merged_pair(connection)
+    expanded = expand_issuer_alias_ids(connection, {"survivor": str(survivor), "loser": str(loser)})
+    aliases = {survivor_legacy, loser_legacy, f"issuer:lei:{lei}"}
+    assert set(expanded["survivor"]) == aliases | {str(survivor)}
+    assert set(expanded["loser"]) == aliases | {str(loser)}
+
+
+def _remerged_issuer(connection) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID, str, dict[str, datetime]]:
+    """Issuer `moved` is merged into `first` at MERGED_AT. That merge is retracted at `retracted`.
+    Then `moved` is merged into `second` with the earlier transaction time `remerged`.
+
+    Between `remerged` and `retracted`, `moved` has two live `superseded_by` edges.
+    `staging.entity_survivor` follows only the latest one, so `moved` survives as `second`.
+    """
+    corpus, plane, _listing = _two_spellings()
+    first, _ = _issuer(connection, corpus[0])
+    moved, cik = _issuer(connection, plane[0])
+    second, _ = _issuer(connection, _two_spellings()[0][0])
+    times = {
+        "before": datetime(2026, 4, 1, 0, 0, tzinfo=UTC),
+        "merged": MERGED_AT,
+        "remerged": datetime(2026, 4, 2, 0, 0, tzinfo=UTC),
+        "both_live": datetime(2026, 4, 2, 12, 0, tzinfo=UTC),
+        "retracted": datetime(2026, 4, 3, 0, 0, tzinfo=UTC),
+    }
+    _merge(connection, moved, first, listing=uuid.uuid4(), known_at=times["merged"])
+    _retract_merge(connection, moved, first, known_at=times["retracted"])
+    _merge(connection, moved, second, listing=uuid.uuid4(), known_at=times["remerged"])
+    return first, moved, second, cik, times
+
+
+def test_alias_of_follows_only_the_latest_live_merge_of_an_entity(connection) -> None:
+    """#1829: an entity with two live `superseded_by` edges is in the merge set of the latest
+    target only, as `staging.entity_survivor` decides."""
+    first, _moved, second, cik, times = _remerged_issuer(connection)
+    assert alias_of(connection, first, "cik", valid_at=TODAY, known_at=times["merged"]) == cik
+    assert alias_of(connection, second, "cik", valid_at=TODAY, known_at=times["merged"]) is None
+    assert alias_of(connection, first, "cik", valid_at=TODAY, known_at=times["both_live"]) is None
+    assert alias_of(connection, second, "cik", valid_at=TODAY, known_at=times["both_live"]) == cik
+
+
+def test_merge_set_is_the_set_of_entities_with_the_survivor_of_the_asked_entity(connection) -> None:
+    """#1829: for each entity and each known_at, `merge_set` holds the entities whose
+    `staging.entity_survivor` is the survivor of the asked entity: the predicate before #1829."""
+    first, moved, second, _cik, times = _remerged_issuer(connection)
+    entities = [first, moved, second]
+    survivors_of_moved = set()
+    for known_at in times.values():
+        survivors = dict(
+            connection.execute(
+                "select id, staging.entity_survivor(id, %s) from unnest(%s::uuid[]) as id", (known_at, entities)
+            ).fetchall()
+        )
+        survivors_of_moved.add(survivors[moved])
+        for asked in entities:
+            merge_set = {
+                row[0]
+                for row in connection.execute(
+                    f"with recursive {MERGE_SET_CTE} select entity_id from merge_set",
+                    {"entity_ids": [asked], "known_at": known_at},
+                ).fetchall()
+            }
+            assert merge_set == {e for e in entities if survivors[e] == survivors[asked]}, (asked, known_at)
+    assert survivors_of_moved == {moved, first, second}, "the times cover each survivor of `moved`"
