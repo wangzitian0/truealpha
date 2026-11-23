@@ -223,9 +223,11 @@ def test_theme_purity_finds_the_head_the_capture_tick_registers_in_every_deploym
         "the op must find the head through mart.environment_identity, not through a named environment"
     )
     assert out["run_id"] == head[1]
+    checkpoints = [kwargs.pop("checkpoint") for kwargs in materialized]
     assert materialized == [{"run_id": head[1], "cutoff": head[2], "tickers": {"issuer:lei:X": "NFLX"}}], (
         "rows are written for THAT run, at ITS cutoff, and the classifier is told the ticker (#849)"
     )
+    assert len(checkpoints) == 1 and callable(checkpoints[0]), "the op commits after each issuer (#1816)"
 
 
 @pytest.mark.parametrize(("app_env", "universes"), UNIVERSES_BY_ENVIRONMENT)

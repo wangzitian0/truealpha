@@ -5,6 +5,7 @@ No test reaches the live provider. The transport double stands in for the gatewa
 
 from __future__ import annotations
 
+import http.client
 import json
 from typing import Any
 
@@ -188,3 +189,31 @@ def test_a_read_timeout_is_the_error_that_each_caller_handles_for_one_filing() -
     assert raised.value.status_code == 0
     assert "TimeoutError" in str(raised.value)
     assert isinstance(raised.value.__cause__, TimeoutError)
+
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (llm.ModelHTTPError(0, "no answer"), True),
+        (llm.ModelHTTPError(503, "provider down"), True),
+        (llm.ModelHTTPError(400, "refused"), False),
+        (llm.ModelCapacityRefused("no call slot"), False),
+        (llm.ModelOutputTruncated(2400), False),
+    ],
+)
+def test_only_status_0_and_a_server_error_are_a_missing_answer(error: llm.ModelHTTPError, expected: bool) -> None:
+    """#1816: the next run can get an answer after status 0 or 5xx. A refusal or a cut-off answer repeats."""
+    assert error.no_answer is expected
+
+
+@pytest.mark.parametrize("failure", [TimeoutError("timed out"), http.client.IncompleteRead(b"part")])
+def test_a_body_cut_short_is_a_missing_answer_like_a_timeout(failure: Exception) -> None:
+    """#1816: `http.client.HTTPException` is not an `OSError`. A reply cut short stopped the lane of a
+    universe, the symptom that the status 0 mapping removes for a timeout."""
+
+    def broken(url: str, headers: dict[str, str], body: bytes) -> tuple[int, bytes]:
+        raise failure
+
+    with pytest.raises(llm.ModelHTTPError) as raised:
+        ask(broken)  # type: ignore[arg-type]
+    assert raised.value.status_code == 0 and raised.value.no_answer

@@ -668,3 +668,150 @@ def test_canonical_uuid_member_resolves_ticker_from_entity_identity_when_tickers
         (RUN_ID,),
     ).fetchone()[0]
     assert stale_unvisited == 0
+
+
+def _two_members(connection, monkeypatch):
+    """Two issuers with one partition each. The first, by CIK, is asked first."""
+    from data_engine.datahub.capture_core import theme_purity
+
+    second_cik = CIK + 1
+    second_issuer = f"issuer:cik:{second_cik:010d}"
+    _seed(connection)
+    _seed(connection, cik=second_cik, partition="segment-partition:" + "e" * 64)
+    monkeypatch.setattr(
+        theme_purity, "governed_members", lambda _connection, *, run_id: {CIK: ISSUER, second_cik: second_issuer}
+    )
+    return second_issuer
+
+
+def _replies(first_status: int):
+    """The first provider call fails with `first_status` (0: no answer at all); the later calls answer."""
+    answer = json.dumps(
+        {
+            "model": "glm-served",
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(
+                            {
+                                "verdicts": [
+                                    {"index": 0, "in_theme": True, "reason": "a"},
+                                    {"index": 1, "in_theme": False, "reason": "b"},
+                                ]
+                            }
+                        )
+                    }
+                }
+            ],
+            "usage": {"prompt_tokens": 200, "completion_tokens": 60, "total_tokens": 260},
+        }
+    ).encode()
+
+    def transport(url, headers, body):  # noqa: ARG001
+        transport.asked += 1
+        if transport.asked == 1 and transport.failing:
+            if first_status == 0:
+                raise TimeoutError("The read operation timed out")
+            return first_status, b'{"error": {"code": "1210", "message": "refused"}}'
+        return 200, answer
+
+    transport.asked = 0
+    transport.failing = True
+    return transport
+
+
+def test_a_model_that_does_not_answer_costs_one_issuer_not_the_lane(connection, seated, monkeypatch) -> None:
+    """#1816, staging 2026-11-23: one provider read timeout in `classify_segments` stopped the lane of
+    the whole S&P 500 twice, after about two hours each, and the coverage row of the head was never
+    written. The issuer gets a refused row that names the cause, the others publish, and the
+    checkpoint runs after each issuer so that a stopped run keeps what it finished."""
+    from data_engine.datahub.capture_core.theme_purity import NO_ANSWER, NO_ANSWER_EXTRACTOR
+
+    second_issuer = _two_members(connection, monkeypatch)
+    transport = _replies(0)
+    monkeypatch.setattr(llm, "_gateway_transport", transport)
+    checkpoints: list[int] = []
+
+    written = materialize_theme_purity(
+        connection, run_id=RUN_ID, cutoff=CUTOFF, themes=(AI,), checkpoint=lambda: checkpoints.append(len(checkpoints))
+    )
+
+    assert len(written) == 2
+    assert [NO_ANSWER in row.result.flags for row in written] == [True, False]
+    assert written[0].result.value is None and written[1].result.value is not None
+    assert checkpoints == [0, 1], "one checkpoint after each issuer, the failed one included"
+    stored = {
+        issuer: (status, codes, extractor)
+        for issuer, status, codes, extractor in connection.execute(
+            "select issuer_id, availability_status, reason_codes, extractor from mart.issuer_theme_purity where run_id = %s",
+            (RUN_ID,),
+        ).fetchall()
+    }
+    assert stored[ISSUER][0] == "unavailable" and stored[ISSUER][1][0] == NO_ANSWER
+    assert stored[ISSUER][2] == NO_ANSWER_EXTRACTOR
+    assert stored[second_issuer][0] != "unavailable"
+
+    transport.failing = False
+    again = materialize_theme_purity(connection, run_id=RUN_ID, cutoff=CUTOFF, themes=(AI,))
+    assert all(NO_ANSWER not in row.result.flags and row.result.value is not None for row in again)
+    assert transport.asked == 3, "the first run asked twice; the second asks only the issuer without an answer"
+    extractors = {
+        extractor
+        for (extractor,) in connection.execute(
+            "select extractor from mart.issuer_theme_purity where run_id = %s", (RUN_ID,)
+        )
+    }
+    assert NO_ANSWER_EXTRACTOR not in extractors, "the next run replaces the refused row"
+
+
+def test_a_refusal_of_the_model_still_stops_the_lane(connection, seated, monkeypatch) -> None:
+    """#1816: only a missing answer (status 0 or 5xx) is skipped. A refusal (4xx) repeats on each run and
+    keeps its earlier meaning: it raises."""
+    _two_members(connection, monkeypatch)
+    monkeypatch.setattr(llm, "_gateway_transport", _replies(400))
+
+    with pytest.raises(llm.ModelHTTPError) as raised:
+        materialize_theme_purity(connection, run_id=RUN_ID, cutoff=CUTOFF, themes=(AI,))
+    assert raised.value.status_code == 400 and not raised.value.no_answer
+
+
+def test_a_run_that_dies_keeps_the_model_answers_and_publishes_no_part_of_the_rows(seated, monkeypatch) -> None:
+    """#1816: the checkpoint is a real commit here. The run dies on the second issuer (the bound of the
+    runtime, a lost worker). The answer for the first issuer is kept, no row is published, and the
+    next run asks the provider only for the second issuer. A reader of `mart.issuer_theme_purity`
+    never sees a part of a run."""
+    from truealpha_runtime.testing import isolated_test_database
+
+    with isolated_test_database("purity") as url, psycopg.connect(url) as connection:
+        _two_members(connection, monkeypatch)
+        connection.commit()
+        transport = _replies(0)
+        transport.failing = False
+        calls: list[int] = []
+
+        def dies_on_the_second_call(url_, headers, body):
+            calls.append(1)
+            if len(calls) == 2:
+                raise ValueError("the run was stopped")
+            return transport(url_, headers, body)
+
+        monkeypatch.setattr(llm, "_gateway_transport", dies_on_the_second_call)
+        with pytest.raises(ValueError, match="stopped"):
+            materialize_theme_purity(
+                connection, run_id=RUN_ID, cutoff=CUTOFF, themes=(AI,), checkpoint=connection.commit
+            )
+        connection.rollback()
+
+        assert connection.execute(
+            "select count(*) from mart.issuer_theme_purity where run_id = %s", (RUN_ID,)
+        ).fetchone() == (0,)
+        kept = connection.execute(
+            "select count(*) from staging.model_invocations where subject_cik = %s", (CIK,)
+        ).fetchone()
+        assert kept == (1,), "the answer for the first issuer was committed by the checkpoint"
+
+        monkeypatch.setattr(llm, "_gateway_transport", transport)
+        transport.asked = 0
+        written = materialize_theme_purity(connection, run_id=RUN_ID, cutoff=CUTOFF, themes=(AI,))
+        assert transport.asked == 1, "the next run asks only the issuer that has no stored answer"
+        assert len(written) == 2 and all(row.result.value is not None for row in written)

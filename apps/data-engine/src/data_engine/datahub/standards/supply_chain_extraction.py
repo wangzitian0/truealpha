@@ -509,8 +509,7 @@ def persist_extracted_supply_chain_edges(
             continue
         except (llm.ModelNotConfigured, llm.ModelHTTPError) as exc:
             diag.model_errors += 1
-            status = getattr(exc, "status_code", None)
-            if status is not None and (status == 0 or status >= 500):
+            if getattr(exc, "no_answer", False):
                 diag.no_answer += 1
             logger.warning(
                 "Supply chain LLM extraction unavailable for %s (CIK %s, %s): %s",

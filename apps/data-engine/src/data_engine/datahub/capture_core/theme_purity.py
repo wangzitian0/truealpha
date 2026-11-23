@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Collection, Mapping
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
 from factors.base.theme_purity import ThemePurity, ThemeSegment, theme_purity
-from factors.shared.extraction import RULE_NO_DESCRIPTION
+from factors.shared.extraction import RULE_MODEL_NO_ANSWER, RULE_NO_DESCRIPTION
 from psycopg import Connection
 from truealpha_contracts.execution import AvailabilityStatus, FactorValidationStatus, InputEvidenceStatus
 
@@ -55,6 +55,10 @@ _SINGLE_SEGMENT_MARKER = "single_segment_statement="
 _SINGLE_SEGMENT_RULES = "rule:single-segment:"
 NO_DESCRIPTION = "no_description"
 NO_DESCRIPTION_EXTRACTOR = RULE_NO_DESCRIPTION
+#: The model gave no answer for the partition (status 0 or 5xx). The row is refused and names the cause.
+#: The next run replaces it: the lane fails, and a failed lane makes the head reports recompute (#1816).
+NO_ANSWER = "model_no_answer"
+NO_ANSWER_EXTRACTOR = RULE_MODEL_NO_ANSWER
 
 _INSERT_SQL = """
 insert into mart.issuer_theme_purity
@@ -182,6 +186,30 @@ def _status_dimensions(
     )
 
 
+def _refused(
+    partition: IssuerPartition,
+    definition: ThemeDefinition,
+    *,
+    cutoff: datetime,
+    subject_id: str | None,
+    flag: str,
+    extractor: str,
+) -> tuple[ThemePurity, str]:
+    """A row that classifies no segment: the cause is its first flag, the extractor says who refused."""
+    refused = theme_purity(
+        [ThemeSegment(segment_name=name, revenue=revenue, in_theme=None) for name, revenue in partition.parts],
+        entity_id=subject_id or partition.issuer_id,
+        theme=definition.theme,
+        as_of=cutoff,
+        consolidated_revenue=partition.consolidated_revenue,
+        partition_residual=partition.partition_residual,
+        confidence=partition.extraction_confidence,
+        minimum_classified_share=definition.minimum_classified_share,
+    )
+    flagged = refused.result.model_copy(update={"flags": [flag, *refused.result.flags]})
+    return replace(refused, result=flagged), extractor
+
+
 def compute_for_theme(
     connection: Connection[Any],
     partition: IssuerPartition,
@@ -193,30 +221,33 @@ def compute_for_theme(
     persist_invocations: bool = True,
 ) -> tuple[ThemePurity, str]:
     if undescribed(partition):
-        refused = theme_purity(
-            [ThemeSegment(segment_name=name, revenue=revenue, in_theme=None) for name, revenue in partition.parts],
-            entity_id=subject_id or partition.issuer_id,
-            theme=definition.theme,
-            as_of=cutoff,
-            consolidated_revenue=partition.consolidated_revenue,
-            partition_residual=partition.partition_residual,
-            confidence=partition.extraction_confidence,
-            minimum_classified_share=definition.minimum_classified_share,
+        return _refused(
+            partition,
+            definition,
+            cutoff=cutoff,
+            subject_id=subject_id,
+            flag=NO_DESCRIPTION,
+            extractor=NO_DESCRIPTION_EXTRACTOR,
         )
-        flagged = refused.result.model_copy(update={"flags": [NO_DESCRIPTION, *refused.result.flags]})
-        return replace(refused, result=flagged), NO_DESCRIPTION_EXTRACTOR
     canonical_ticker = ticker.strip().upper().replace("-", ".") if ticker else None
-    classification = llm.classify_segments(
-        connection,
-        cik=partition.cik,
-        accession=partition.accession,
-        issuer_label=f"{canonical_ticker} ({partition.issuer_id})" if canonical_ticker else partition.issuer_id,
-        theme=definition.theme,
-        inclusion=definition.inclusion,
-        segments=list(partition.descriptions),
-        caller="theme-purity",
-        persist=persist_invocations,
-    )
+    try:
+        classification = llm.classify_segments(
+            connection,
+            cik=partition.cik,
+            accession=partition.accession,
+            issuer_label=f"{canonical_ticker} ({partition.issuer_id})" if canonical_ticker else partition.issuer_id,
+            theme=definition.theme,
+            inclusion=definition.inclusion,
+            segments=list(partition.descriptions),
+            caller="theme-purity",
+            persist=persist_invocations,
+        )
+    except llm.ModelHTTPError as error:
+        if not error.no_answer:
+            raise
+        return _refused(
+            partition, definition, cutoff=cutoff, subject_id=subject_id, flag=NO_ANSWER, extractor=NO_ANSWER_EXTRACTOR
+        )
     segments = [
         ThemeSegment(segment_name=name, revenue=revenue, in_theme=verdict)
         for (name, revenue), verdict in zip(partition.parts, classification.verdicts, strict=True)
@@ -295,7 +326,15 @@ def materialize_theme_purity(
     themes: tuple[ThemeDefinition, ...] = tuple(THEMES.values()),
     tickers: Mapping[str, str] | None = None,
     persist_invocations: bool = True,
+    checkpoint: Callable[[], None] | None = None,
 ) -> tuple[ThemePurity, ...]:
+    """Write one row for each issuer and theme.
+
+    The rows are written together, after every issuer is classified, so a reader never sees a part of
+    a run. `checkpoint` runs after each issuer is classified. The lane passes the commit of its
+    connection: a run that the runtime bound stops keeps the model answers of the issuers it
+    finished, and the next run replays them with no model call (#1816).
+    """
     connection.execute(
         "delete from mart.issuer_theme_purity where run_id = %s and extractor = 'lane:unvisited:v1'",
         (run_id,),
@@ -303,7 +342,7 @@ def materialize_theme_purity(
     members = governed_members(connection, run_id=run_id)
     partitions = load_partitions(connection, cutoff=cutoff, ciks=members.keys())
     resolved_tickers = _resolve_member_tickers(connection, partitions, members, tickers=tickers, known_at=cutoff)
-    written: list[ThemePurity] = []
+    computed: list[tuple[IssuerPartition, ThemeDefinition, str, ThemePurity, str]] = []
     for partition in partitions:
         subject_id = members[partition.cik]
         for definition in themes:
@@ -316,37 +355,40 @@ def materialize_theme_purity(
                 ticker=resolved_tickers.get(subject_id),
                 persist_invocations=persist_invocations,
             )
-            availability, evidence, validation = _status_dimensions(purity, definition)
-            connection.execute(
-                _INSERT_SQL,
-                (
-                    run_id,
-                    subject_id,
-                    partition.cik,
-                    definition.theme_id,
-                    definition.theme,
-                    definition.factor_version,
-                    definition.content_sha256,
-                    cutoff,
-                    partition.period_end,
-                    partition.partition_id,
-                    purity.result.value,
-                    purity.consolidated_revenue,
-                    purity.in_theme_revenue,
-                    purity.out_of_theme_revenue,
-                    purity.unclassified_revenue,
-                    purity.partition_residual,
-                    purity.segments,
-                    purity.result.confidence,
-                    list(purity.result.flags),
-                    extractor,
-                    availability.value,
-                    evidence.value,
-                    validation.value,
-                ),
-            )
-            written.append(purity)
-    return tuple(written)
+            computed.append((partition, definition, subject_id, purity, extractor))
+        if checkpoint is not None:
+            checkpoint()
+    for partition, definition, subject_id, purity, extractor in computed:
+        availability, evidence, validation = _status_dimensions(purity, definition)
+        connection.execute(
+            _INSERT_SQL,
+            (
+                run_id,
+                subject_id,
+                partition.cik,
+                definition.theme_id,
+                definition.theme,
+                definition.factor_version,
+                definition.content_sha256,
+                cutoff,
+                partition.period_end,
+                partition.partition_id,
+                purity.result.value,
+                purity.consolidated_revenue,
+                purity.in_theme_revenue,
+                purity.out_of_theme_revenue,
+                purity.unclassified_revenue,
+                purity.partition_residual,
+                purity.segments,
+                purity.result.confidence,
+                list(purity.result.flags),
+                extractor,
+                availability.value,
+                evidence.value,
+                validation.value,
+            ),
+        )
+    return tuple(purity for *_, purity, _extractor in computed)
 
 
 def _short_id(entity_id: str) -> str:
