@@ -385,12 +385,11 @@ def test_coverage_verdict_failure_flags_zero_answered_applicable_questions_only(
                 issuers=["issuer:a"],
                 cells_by_column={"mart.metric_node_values.value": (Cell("issuer:a", True),)},
             ),
-            # Q2 is scoped to strategy role; on sentinel CANARY it has no column (missing == denominator).
             "q2": classify_question(
                 REQ[Question.Q2_VALUATION_VS_GROWTH],
-                universe_id=CANARY,
+                universe_id=QQQ,
                 issuers=["issuer:a"],
-                cells_by_column={},
+                cells_by_column={"mart.strategy_decisions.peg": (Cell("issuer:a", True),)},
             ),
             # Q5 with no fund subjects (denominator == 0) is not applicable.
             "q5": classify_question(
@@ -553,3 +552,24 @@ def test_gppe_cells_and_classify_question_honor_persisted_not_applicable_status(
     assert degraded_q1["answered"] == 15
     assert degraded_q1["denominator"] == 16
     assert degraded_q1["unavailable"] == {"missing_headcount": 1}
+
+
+def _q2_without_a_column() -> dict:
+    """Q2 is scoped to the strategy role. The canary has no such role, so Q2 has no column there."""
+    return classify_question(
+        REQ[Question.Q2_VALUATION_VS_GROWTH], universe_id=CANARY, issuers=["issuer:a"], cells_by_column={}
+    )
+
+
+def test_a_question_without_a_column_fails_on_a_served_universe_and_not_on_the_canary() -> None:
+    """#1651: QQQ had no strategy role for a month, so q2 had no column, every member counted as
+    `missing`, and the verdict stayed true. On a universe that the App serves, a question with members
+    and no column is a wiring gap. Only a sentinel may leave a question without a column."""
+    entry = _q2_without_a_column()
+    assert entry["columns"] == [] and entry["denominator"] == 1 and entry["missing"] == 1
+
+    assert (
+        coverage_verdict_failure({"universe_id": QQQ, "questions": {"q2": entry}})
+        == f"zero answered for q2=0/1 on {QQQ}"
+    )
+    assert coverage_verdict_failure({"universe_id": CANARY, "questions": {"q2": entry}}) is None

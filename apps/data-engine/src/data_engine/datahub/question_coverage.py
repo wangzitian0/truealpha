@@ -19,7 +19,7 @@ from truealpha_contracts.question_requirements import (
     QuestionRequirement,
     QuestionScope,
 )
-from truealpha_contracts.universes import key_of_lane, record
+from truealpha_contracts.universes import key_of_lane, record, universe_of
 
 from data_engine.datahub._helpers import gppe_branch_predicate
 from data_engine.datahub.repository import persist_run_report
@@ -356,10 +356,23 @@ def reports_current_for_head(connection: Connection[Any], head: GovernedHead) ->
     return stored_confidence_report_run(connection, head.universe_id) == head.run_id
 
 
-def _is_applicable_question(entry: Mapping[str, Any]) -> bool:
+def _serves_consumers(universe_id: object) -> bool:
+    """A universe that the App serves. A sentinel (the canary) is checked by operators only."""
+    try:
+        return not record(universe_of(str(universe_id))).is_sentinel
+    except (LookupError, ValueError):
+        return True
+
+
+def _is_applicable_question(entry: Mapping[str, Any], *, served: bool) -> bool:
+    """A question with members applies. On a served universe a question with no column is a wiring gap,
+    not a decision: it fails like a question that answers nothing (#1651). Only a sentinel may leave a
+    question without a column."""
     denominator = int(entry.get("denominator", 0))
     if denominator <= 0:
         return False
+    if served:
+        return True
     if "columns" in entry or "column" in entry:
         return bool(entry.get("columns")) or bool(entry.get("column"))
     return int(entry.get("missing", 0)) < denominator
@@ -369,10 +382,13 @@ def coverage_verdict_failure(report: Mapping[str, Any]) -> str | None:
     questions = report.get("questions")
     if not isinstance(questions, Mapping):
         return None
+    served = _serves_consumers(report.get("universe_id"))
     zero_questions = [
         f"{question}=0/{int(entry['denominator'])}"
         for question, entry in questions.items()
-        if isinstance(entry, Mapping) and _is_applicable_question(entry) and int(entry.get("answered", 0)) == 0
+        if isinstance(entry, Mapping)
+        and _is_applicable_question(entry, served=served)
+        and int(entry.get("answered", 0)) == 0
     ]
     return f"zero answered for {', '.join(zero_questions)} on {report['universe_id']}" if zero_questions else None
 
