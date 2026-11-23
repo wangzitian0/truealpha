@@ -58,6 +58,9 @@ confidence threshold.
   covering all 4 tickers. Endpoints were chosen by reading moomoo's proto defs and SDK
   source first (57 calls total, no repeated trial-and-error against the live API — the
   relevant endpoints use burst rate limits, not a monthly quota; see `init.md` Section 5).
+- `moomoo/XOM_valuation_detail_<day>.json` — two `get_valuation_detail` (P/E) answers, copied
+  read-only from staging `raw.fetches` (#1791). `tests/support/moomoo_valuation_sample.py` pins
+  their sha256 and vendor instants. The consensus growth parser reads them.
 
 **The `yfinance` PyPI package gets HTTP 429 from this VPS's IP on every
 endpoint** (a real Phase -1 finding — Yahoo appears to fingerprint at the

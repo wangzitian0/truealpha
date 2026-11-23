@@ -43,6 +43,7 @@ from truealpha_runtime import EnvironmentTier as RuntimeEnvironmentTier
 SAMPLES = Path(__file__).resolve().parents[1] / "samples" / "moomoo"
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "support"))
+from moomoo_valuation_sample import XOM_2026_11_21  # noqa: E402
 from variant_contract import serve_variant, variant_text  # noqa: E402
 
 
@@ -1652,21 +1653,7 @@ def test_rating_summary_and_valuation_detail_enrich_consensus_with_pit_vendor_ti
             return 0, summary_payload
 
         def get_valuation_detail(self, code: str, **kwargs: Any):
-            return (
-                0,
-                {
-                    "profit_growth_rate": {
-                        "profit_data": [
-                            {
-                                "period_str": "2025/FY",
-                                "financial_quarter": 4,
-                                "report_date_str": "2025-12-31",
-                                "profit_growth_rate": 24.5,
-                            }
-                        ]
-                    }
-                },
-            )
+            return 0, XOM_2026_11_21.answer()
 
     conn = _MockConnection()
     res = materialize_universe_analyst_ratings(
@@ -1681,9 +1668,18 @@ def test_rating_summary_and_valuation_detail_enrich_consensus_with_pit_vendor_ti
     _, params = conn.executed[0]
     assert params[3] == Decimal("4.5"), "continuous track-record rating replaces coarse integer 4"
     assert "vendor_timestamp" in params[9]
-    assert "valuation_profit_growth" in params[9]
+    assert "valuation_profit_growth" not in params[9], "the vendor stamped the answer after the 2026-10-06 cutoff"
     assert Decimal("0.40") < params[8] < Decimal("0.85")
     assert not any("analyst_rating_events" in sql for sql, _ in conn.executed)
+
+    later = _MockConnection()
+    after_stamp = datetime(2026, 11, 21, 22, 45, tzinfo=UTC)
+    assert XOM_2026_11_21.knowable_at < after_stamp
+    materialize_universe_analyst_ratings(
+        later, run_id="run:rich-later", cutoff=after_stamp, tickers={DDOG: "DDOG"}, ctx=_FullQuoteContext()
+    )
+    _, later_params = later.executed[0]
+    assert "valuation_profit_growth" in later_params[9], "16.459 / 10.861 - 1 is a growth knowable at this cutoff"
 
 
 def test_ticker_row_prefers_track_record_rating_and_preserves_consensus_targets() -> None:

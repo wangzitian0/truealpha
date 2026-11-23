@@ -227,14 +227,31 @@ def _definition() -> LargeModelValueV0Definition:
 
 
 @pytest.mark.criterion("R3.C4")
-def test_r3_c4_consensus_peg_end_to_end_from_moomoo_valuation_to_strategy_run_repository(connection) -> None:
-    """R3.C4 partial: fetcher parse, evaluator, node persistence, and repository read. The seed step is not covered."""
+def test_r3_c4_consensus_peg_end_to_end_from_moomoo_valuation_to_strategy_run_repository(
+    connection, monkeypatch
+) -> None:
+    """R3.C4 partial: the real XOM valuation answer, fetcher parse, corroboration payload, evaluator, node
+    persistence, and repository read. `test_strategy_bridge` covers the seed of the payload (#1791)."""
     import secrets
+    import sys
+    from pathlib import Path
+    from zoneinfo import ZoneInfo
 
-    from data_engine.datahub.capture_core.moomoo_origin import MoomooFinancialsFetcher
+    from data_engine.datahub.capture_core.moomoo_origin import CONSENSUS_GROWTH_KEY, MoomooFinancialsFetcher
+    from data_engine.datahub.capture_core.sec_financial_adapter import _snapshot_payload
+    from data_engine.datahub.input_cells import vintage_knowable_at
     from data_engine.datahub.strategy_bridge import _persist_peg_consensus_nodes
+    from data_engine.sources import gateway
     from psycopg.rows import dict_row
     from truealpha_runtime.strategy_run_postgres import _DECISIONS_SQL, _decision_from_row
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
+    from moomoo_valuation_sample import XOM_2026_11_21
+
+    # The real fetch of 2026-11-21 03:03:34 UTC. The vendor stamped its answer 03:03:35 UTC.
+    monkeypatch.setattr(gateway, "_utcnow", lambda: datetime(2026, 11, 21, 3, 3, 34, tzinfo=UTC))
+    cutoff = datetime(2026, 11, 21, 22, 45, tzinfo=UTC)
+    fiscal_year_end = int(datetime(2025, 12, 31, tzinfo=ZoneInfo("Asia/Shanghai")).timestamp())
 
     class _FakeClient:
         def financial_statements(self, code: str, *, statement_type: int, identity: Any) -> dict[str, Any]:
@@ -244,6 +261,7 @@ def test_r3_c4_consensus_peg_end_to_end_from_moomoo_valuation_to_strategy_run_re
                 "report_list": [
                     {
                         "financial_type": 7,
+                        "date_time": fiscal_year_end,
                         "report_date": "2025-12-31",
                         "currency_code": "USD",
                         "accounting_standards": "US-GAAP",
@@ -254,24 +272,17 @@ def test_r3_c4_consensus_peg_end_to_end_from_moomoo_valuation_to_strategy_run_re
 
         def valuation_detail(self, code: str, *, identity: Any) -> dict[str, Any]:
             del code, identity
-            return {
-                "profit_growth_rate": {
-                    "profit_data": [
-                        {
-                            "period_str": "2025/FY",
-                            "financial_quarter": 4,
-                            "report_date_str": "2025-12-31",
-                            "profit_growth_rate": 25,
-                        }
-                    ]
-                }
-            }
+            return XOM_2026_11_21.answer()
 
-    assertion = MoomooFinancialsFetcher(_FakeClient())("E2ER3C4", _CUTOFF.date())
+    assertion = MoomooFinancialsFetcher(_FakeClient())("XOM", cutoff.date())
     assert assertion is not None
-    assert assertion.values.get("consensus_profit_growth") == Decimal("25")
+    payload = _snapshot_payload(assertion.snapshots)
+    growth = Decimal(payload[CONSENSUS_GROWTH_KEY])
+    growth_knowable_at = vintage_knowable_at(payload)(CONSENSUS_GROWTH_KEY, None)
+    assert growth.quantize(Decimal("0.0001")) == Decimal("51.5422"), "16.459 / 10.861 - 1, in percent"
+    assert growth_knowable_at == XOM_2026_11_21.knowable_at, "the vendor stamp, not the cutoff stamp"
 
-    bundle = build_bundle(_company_facts(), _CUTOFF.date(), OperatingBranch.NON_FINANCIAL)
+    bundle = build_bundle(_company_facts(), cutoff.date(), OperatingBranch.NON_FINANCIAL)
     records = {
         "gross_profit": (Decimal("40000"), Decimal("0.92")),
         "total_assets": (Decimal("100000"), Decimal("0.92")),
@@ -280,12 +291,12 @@ def test_r3_c4_consensus_peg_end_to_end_from_moomoo_valuation_to_strategy_run_re
         "shares_outstanding": (Decimal("1000"), Decimal("0.92")),
         "last_close": (Decimal("100"), Decimal("0.90")),
         "net_income": (bundle.net_income, Decimal("0.92")),
-        "consensus_profit_growth": (Decimal("25"), Decimal("0.96")),
+        CONSENSUS_GROWTH_KEY: (growth, Decimal("0.96")),
     }
     issuer = IssuerInput(
         issuer_id=_ISSUER,
         records=records,
-        knowable_at=dict.fromkeys(records, bundle.knowable_at),
+        knowable_at={**dict.fromkeys(records, bundle.knowable_at), CONSENSUS_GROWTH_KEY: growth_knowable_at},
         periodic_records={
             "net_income": {
                 f"FY{end.year}:FY:{end.replace(year=end.year - 1) + timedelta(days=1)}:{end}": (
@@ -297,8 +308,9 @@ def test_r3_c4_consensus_peg_end_to_end_from_moomoo_valuation_to_strategy_run_re
         },
         issuer_class=IssuerClass.NON_FINANCIAL,
     )
-    decisions = evaluate_cutoff([issuer], definition=_definition(), cutoff_at=_CUTOFF, risk_free_rate=Decimal("0"))
-    assert decisions[0].peg_consensus == Decimal("0.25")  # P/E 6.25 / 25
+    decisions = evaluate_cutoff([issuer], definition=_definition(), cutoff_at=cutoff, risk_free_rate=Decimal("0"))
+    peg_consensus = decisions[0].peg_consensus
+    assert peg_consensus is not None and peg_consensus.quantize(Decimal("0.0001")) == Decimal("0.1213")  # 6.25 / 51.54
     assert decisions[0].peg_consensus_rank == 1
 
     hx = secrets.token_hex(32)
@@ -324,7 +336,7 @@ def test_r3_c4_consensus_peg_end_to_end_from_moomoo_valuation_to_strategy_run_re
             hx,
             run_id,
             _ISSUER,
-            _CUTOFF,
+            cutoff,
             decisions[0].capital_adjusted_labor_efficiency,
             decisions[0].tier,
             decisions[0].current_price_to_sales,
@@ -338,14 +350,14 @@ def test_r3_c4_consensus_peg_end_to_end_from_moomoo_valuation_to_strategy_run_re
             decisions[0].peg_rank,
         ),
     )
-    _persist_peg_consensus_nodes(connection, capture_run_id=capture_run_id, cutoff=_CUTOFF, evaluated=decisions)
+    _persist_peg_consensus_nodes(connection, capture_run_id=capture_run_id, cutoff=cutoff, evaluated=decisions)
     rewritten = [replace(decisions[0], peg_consensus=Decimal("9.99"))]
-    _persist_peg_consensus_nodes(connection, capture_run_id=capture_run_id, cutoff=_CUTOFF, evaluated=rewritten)
+    _persist_peg_consensus_nodes(connection, capture_run_id=capture_run_id, cutoff=cutoff, evaluated=rewritten)
     kept = connection.execute(
         "select value from mart.metric_node_values where run_id = %s and node_key = 'peg_consensus'",
         (capture_run_id,),
     ).fetchall()
-    assert kept == [(Decimal("0.25"),)], "a second write must not overwrite a persisted consensus PEG node"
+    assert kept == [(peg_consensus,)], "a second write must not overwrite a persisted consensus PEG node"
 
     scoped_sql = _DECISIONS_SQL.replace(
         "left join mart.strategy_run_capture scope on scope.strategy_run_id = d.strategy_run_id",
@@ -357,6 +369,6 @@ def test_r3_c4_consensus_peg_end_to_end_from_moomoo_valuation_to_strategy_run_re
     assert row is not None
     cons_decision = _decision_from_row(dict(row), convention="consensus")
     hist_decision = _decision_from_row(dict(row), convention="historical_cagr")
-    assert cons_decision.peg is not None and cons_decision.peg.quantize(Decimal("0.01")) == Decimal("0.25")
+    assert cons_decision.peg is not None and cons_decision.peg.quantize(Decimal("0.0001")) == Decimal("0.1213")
     assert cons_decision.peg_rank == 1
     assert hist_decision.peg is not None and hist_decision.peg.quantize(Decimal("0.0001")) == Decimal("0.2431")

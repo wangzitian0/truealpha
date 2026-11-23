@@ -146,8 +146,20 @@ FinancialFactsFetcher = Callable[[int, date, OperatingBranch], FinancialFactsBun
 
 
 @dataclass(frozen=True)
+class SnapshotValue:
+    """A live value that an origin asserts with its own vendor `knowable_at`, or the reason for no value (#1791)."""
+
+    value: Decimal | None
+    knowable_at: datetime | None
+    reason: str | None = None
+
+
+@dataclass(frozen=True)
 class FinancialFactAssertion:
-    """Annual figures asserted by a corroborating second origin at a cutoff."""
+    """Annual figures asserted by a corroborating second origin at a cutoff.
+
+    `snapshots` holds live values. Each one has its own `knowable_at`, not the `knowable_at` of the annual figures.
+    """
 
     raw_bytes: bytes
     period_end: date
@@ -156,6 +168,7 @@ class FinancialFactAssertion:
     knowable_at: datetime
     currency: str | None = None
     accounting_standards: str | None = None
+    snapshots: Mapping[str, SnapshotValue] = field(default_factory=dict)
 
 
 FinancialFactCorroborator = Callable[[str, date], FinancialFactAssertion | None]
@@ -873,15 +886,7 @@ class SecFinancialFactAdapter:
             }
             for name in CORROBORATED_FINANCIAL_FIELDS:
                 payload[name] = _s(assertion.values.get(name))
-            if (consensus_growth := assertion.values.get("consensus_profit_growth")) is not None:
-                payload["consensus_profit_growth"] = _s(consensus_growth)
-            growth_by_period = {
-                end.isoformat(): _s(rate)
-                for end, values in sorted(assertion.by_period_end.items())
-                if (rate := values.get("consensus_profit_growth")) is not None
-            }
-            if growth_by_period:
-                payload["consensus_profit_growth_by_period"] = growth_by_period
+            payload.update(_snapshot_payload(assertion.snapshots))
             found.append(
                 build_corroboration(
                     origin=origin.origin,
@@ -1081,6 +1086,21 @@ def _newest_period_end(*candidates: _Datum | None) -> date | None:
 
 def _s(value: Decimal | None) -> str | None:
     return None if value is None else str(value)
+
+
+def _snapshot_payload(snapshots: Mapping[str, SnapshotValue]) -> dict[str, Any]:
+    """Write each live value with its vendor `knowable_at` under `vintage`, or write its reason."""
+    payload: dict[str, Any] = {}
+    vintage: dict[str, dict[str, str]] = {}
+    for name, snapshot in sorted(snapshots.items()):
+        if snapshot.value is not None and snapshot.knowable_at is not None:
+            payload[name] = _s(snapshot.value)
+            vintage[name] = {"knowable_at": snapshot.knowable_at.astimezone(UTC).isoformat()}
+        elif snapshot.reason is not None:
+            payload[f"{name}_reason"] = snapshot.reason
+    if vintage:
+        payload["vintage"] = vintage
+    return payload
 
 
 def _d(value: date | None) -> str | None:

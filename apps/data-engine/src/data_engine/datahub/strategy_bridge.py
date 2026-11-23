@@ -36,7 +36,14 @@ from data_engine.datahub._helpers import (
 from data_engine.datahub.capture_core.concept_mapping import resolve_ruleset
 from data_engine.datahub.capture_core.executor import SERVED_BY_FAILOVER
 from data_engine.datahub.capture_core.parser_identity import PARSER_VERSION as PRIMARY_PARSER_VERSION
-from data_engine.datahub.input_cells import InputCell, financial_input_rows, last_close_cell, live_knowable_at, unit_of
+from data_engine.datahub.input_cells import (
+    InputCell,
+    financial_input_rows,
+    last_close_cell,
+    live_knowable_at,
+    unit_of,
+    vintage_knowable_at,
+)
 from data_engine.datahub.primary_listing import choose_primary_listings
 from data_engine.datahub.risk_free import RiskFreeRate
 from data_engine.datahub.share_basis import (
@@ -124,13 +131,18 @@ def seed_strategy_inputs_from_capture(
             continue
         listing_id = str(payload["listing_id"])
         issuer_id = listing_to_issuer.get(listing_id, str(payload["issuer_id"]))
-        if semantic_type == "financial-fact" and payload.get("consensus_profit_growth") is not None:
+        if (
+            semantic_type == "financial-fact"
+            and payload.get("consensus_profit_growth") is not None
+            and (vendor_at := vintage_knowable_at(payload)("consensus_profit_growth", None)) is not None
+        ):
+            # A live snapshot is knowable at its vendor stamp, not at the observation's cutoff stamp (#1791).
             if primary.get(issuer_id) == listing_id and issuer_id not in consensus_growth:
                 consensus_growth[issuer_id] = (
                     listing_id,
                     Decimal(str(raw_conf)) if raw_conf is not None else None,
                     payload,
-                    observed_at,
+                    vendor_at,
                 )
         if semantic_type == "financial-fact" and row_parser_version != parser_version:
             continue
@@ -163,7 +175,7 @@ def seed_strategy_inputs_from_capture(
                 )
             )
         if issuer_id in consensus_growth and not any(c.input_key == "consensus_profit_growth" for c in inputs):
-            cg_listing, cg_raw_conf, cg_payload, cg_observed_at = consensus_growth[issuer_id]
+            cg_listing, cg_raw_conf, cg_payload, cg_knowable_at = consensus_growth[issuer_id]
             cg_measured = cell_confidences.get((cg_listing, "consensus_profit_growth"))
             if cg_measured is None:
                 cg_measured = cg_raw_conf
@@ -186,7 +198,7 @@ def seed_strategy_inputs_from_capture(
                     Decimal(str(cg_payload["consensus_profit_growth"])),
                     unit_of("consensus_profit_growth", cg_currency),
                     cg_conf,
-                    cg_observed_at,
+                    cg_knowable_at,
                     None,
                 )
             )

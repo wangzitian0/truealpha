@@ -312,3 +312,53 @@ def test_seed_strategy_inputs_maps_listing_reused_financial_fact_to_target_issue
     assert by_key["revenue"][0] == "issuer:cik:0000320193"
     assert by_key["gross_profit"][0] == "issuer:cik:0000320193"
     assert by_key["last_close"][0] == "issuer:cik:0000320193"
+
+
+def test_the_consensus_growth_cell_carries_the_vendor_instant_not_the_observation_stamp() -> None:
+    """#1791: the moomoo corroboration is stamped at the settled session close of its cutoff. The consensus growth
+    in it is a live snapshot, so its cell carries the vendor `last_update_time` that the payload keeps under
+    `vintage`. A payload without that instant seeds no consensus cell."""
+    import sys
+    from pathlib import Path
+
+    import data_engine.datahub.strategy_bridge as strategy_bridge
+    from data_engine.datahub.capture_core.moomoo_origin import CONSENSUS_GROWTH_KEY, parse_consensus_growth
+    from data_engine.datahub.capture_core.sec_financial_adapter import _snapshot_payload
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent / "support"))
+    from moomoo_valuation_sample import XOM_2026_11_21
+
+    cutoff = datetime(2026, 11, 21, 22, 45, tzinfo=UTC)
+    observation_stamp = datetime(2026, 11, 21, 21, 0, tzinfo=UTC)
+    listing_payload = {
+        "issuer_id": "issuer:cik:0000034088",
+        "instrument_id": "instrument:us30231g1022",
+        "listing_id": "listing:xnys:xom",
+        "ticker": "XOM",
+    }
+    moomoo_payload = {
+        "issuer_id": "issuer:cik:0000034088",
+        "instrument_id": "instrument:us30231g1022",
+        "listing_id": "listing:xnys:xom",
+        "currency": "USD",
+        **_snapshot_payload({CONSENSUS_GROWTH_KEY: parse_consensus_growth(XOM_2026_11_21.answer())}),
+    }
+    moomoo_parser = "moomoo-financials-parser:v1"
+
+    def seeded(payload: dict[str, Any]) -> dict[str, tuple]:
+        fake = _FakeConnection(
+            [
+                ("listing-identity", "1.00", listing_payload, observation_stamp, "listing-identity-parser:v1"),
+                ("financial-fact", "0.95", payload, observation_stamp, moomoo_parser),
+            ]
+        )
+        strategy_bridge.seed_strategy_inputs_from_capture(fake, run_id="run:test-consensus", cutoff=cutoff)
+        return {params[2]: params for params in fake.inserts}
+
+    by_key = seeded(moomoo_payload)
+    # (issuer_id, cutoff, input_key, value, confidence, knowable_at, fiscal_period)
+    cell = by_key[CONSENSUS_GROWTH_KEY]
+    assert cell[3].quantize(Decimal("0.0001")) == Decimal("51.5422")
+    assert cell[5] == XOM_2026_11_21.knowable_at, "the vendor stamp, not the observation stamp"
+    unstamped = {key: value for key, value in moomoo_payload.items() if key != "vintage"}
+    assert CONSENSUS_GROWTH_KEY not in seeded(unstamped), "a value without its vendor instant is not seeded"

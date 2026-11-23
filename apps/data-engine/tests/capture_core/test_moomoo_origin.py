@@ -21,6 +21,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import sys
 from contextlib import contextmanager
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -43,6 +44,8 @@ from data_engine.datahub.capture_core.market_price_adapter import (
 from data_engine.datahub.capture_core.moomoo_origin import (
     BALANCE_SHEET,
     BALANCE_SHEET_FIELDS,
+    CONSENSUS_GROWTH_KEY,
+    CONSENSUS_LOOKBACK_DAYS,
     INCOME_FIELDS,
     INCOME_STATEMENT,
     MoomooFinancialsFetcher,
@@ -53,14 +56,17 @@ from data_engine.datahub.capture_core.moomoo_origin import (
     canonical_bytes,
     moomoo_code,
     parse_annual_financials,
+    parse_consensus_growth,
     parse_settled_close,
     period_end_of,
+    valuation_detail_key,
 )
 from data_engine.datahub.capture_core.parser_identity import PARSER_VERSION
 from data_engine.datahub.capture_core.sec_financial_adapter import (
     FinancialFactCorroboratingOrigin,
     SecFinancialFactAdapter,
     SecTarget,
+    SnapshotValue,
     build_bundle,
     resolve_field,
 )
@@ -83,6 +89,9 @@ from truealpha_runtime.reconciliation_policies import (
     FINANCIAL_FACT_RECONCILIATION_POLICY,
     RECONCILIATION_POLICY,
 )
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
+from moomoo_valuation_sample import XOM_2026_11_20, XOM_2026_11_21  # noqa: E402
 
 _SAMPLES = Path(__file__).resolve().parents[2] / "samples"
 # The 2026-07-10 reconnaissance capture, byte-pinned: a hand-edited fixture turns this red.
@@ -619,7 +628,8 @@ def test_the_financials_request_is_three_gated_calls_and_a_failed_valuation_deta
     client = OpenDClient()
     assertion = MoomooFinancialsFetcher(client)("DDOG", _CUTOFF)
     assert assertion is not None and assertion.values["revenue"] == Decimal("3427158000")
-    assert "consensus_profit_growth" not in assertion.values
+    growth = assertion.snapshots[CONSENSUS_GROWTH_KEY]
+    assert growth.value is None and str(growth.reason).startswith("valuation_fetch_error:")
     assert opend.statement_types == [INCOME_STATEMENT, BALANCE_SHEET]
     assert ledger.calls_this_month() == 3, "income, balance sheet and valuation detail are each a ledger row"
 
@@ -699,54 +709,144 @@ def test_the_price_route_wires_the_third_origin_only_when_enabled(monkeypatch) -
     assert [o.origin for o in build_route(context, cells)._corroborating_origins] == ["moomoo-kline"]
 
 
-def test_parse_valuation_profit_growth_filters_annual_periods_by_cutoff() -> None:
-    valuation = {
-        "profit_growth_rate": {
-            "profit_data": [
-                {
-                    "period_str": "2024/FY",
-                    "financial_quarter": 4,
-                    "report_date_str": "2024-12-31",
-                    "profit_growth_rate": 24.5,
-                },
-                {
-                    "period_str": "2025/Q2",
-                    "financial_quarter": 2,
-                    "report_date_str": "2025-06-30",
-                    "profit_growth_rate": 12.0,
-                },
-                {
-                    "period_str": "2025/FY",
-                    "financial_quarter": 4,
-                    "report_date_str": "2025-12-31",
-                    "profit_growth_rate": 18.25,
-                },
-            ]
-        }
-    }
-    parsed = origin_module.parse_valuation_profit_growth(valuation, cutoff=date(2025, 6, 30))
-    assert parsed == {date(2024, 12, 31): Decimal("24.5")}
+# -- consensus earnings growth: the real valuation answer and its vendor instant (#1791) ---------
 
 
-def test_parse_annual_financials_attaches_consensus_profit_growth_from_valuation_detail() -> None:
+def test_the_real_valuation_answer_gives_the_consensus_growth_in_percent_and_the_vendor_instant() -> None:
+    """XOM, stored 2026-11-21: trailing P/E 16.459 and forward P/E 10.861. The price cancels, so the forward
+    consensus earnings are 16.459 / 10.861 = 1.515422 times the trailing earnings: growth 51.5422 percent."""
+    answer = XOM_2026_11_21.answer()
+    growth = parse_consensus_growth(answer)
+    assert growth.reason is None
+    assert growth.value is not None and growth.value.quantize(Decimal("0.0001")) == Decimal("51.5422")
+    assert growth.knowable_at == datetime(2026, 11, 21, 3, 3, 35, tzinfo=UTC), "the epoch field, not the Eastern string"
+    assert answer["last_update_time_str"] == "2026-11-20 22:03:35"
+    rows = answer["profit_growth_rate"]["profit_data"]
+    assert rows and not any("profit_growth_rate" in row for row in rows), "profit_data holds indexed multiples"
+
+
+def _without(mapping: dict[str, Any], key: str) -> dict[str, Any]:
+    return {name: value for name, value in mapping.items() if name != key}
+
+
+@pytest.mark.parametrize(
+    ("edit", "reason"),
+    [
+        (lambda a: {**a, "trend": {**a["trend"], "current_value": -7.723}}, "non_positive_trailing_pe"),
+        (lambda a: {**a, "trend": {**a["trend"], "forward_value": 0.0}}, "non_positive_forward_pe"),
+        (lambda a: {**a, "trend": {**a["trend"], "forward_value": -7.723}}, "non_positive_forward_pe"),
+        (lambda a: {**a, "trend": _without(a["trend"], "forward_value")}, "missing_forward_pe"),
+        (lambda a: {**a, "trend": _without(a["trend"], "current_value")}, "missing_trailing_pe"),
+        (lambda a: {**a, "valuation_type": 2}, "not_a_pe_valuation"),
+    ],
+)
+def test_a_non_positive_or_missing_pe_gives_no_growth_and_names_the_reason(edit, reason) -> None:
+    """-7.723 is a real vendor P/E: US.SLNG in the `plate_distribution` of the same answer."""
+    answer = XOM_2026_11_21.answer()
+    assert -7.723 in [item["value"] for item in answer["plate_distribution"]["stock_items"]]
+    growth = parse_consensus_growth(edit(answer))
+    assert growth == SnapshotValue(None, XOM_2026_11_21.knowable_at, reason)
+
+
+def test_parse_annual_financials_attaches_the_consensus_growth_only_when_knowable_at_the_cutoff() -> None:
+    """The bound is the settled session close of the cutoff: 2026-11-20 21:00 UTC is before the vendor stamp."""
     income, balance = _statements("DDOG")
-    valuation = {
-        "profit_growth_rate": {
-            "profit_data": [
-                {
-                    "period_str": "2025/FY",
-                    "financial_quarter": 4,
-                    "report_date_str": "2025-12-31",
-                    "profit_growth_rate": 24.5,
-                }
-            ]
-        }
-    }
-    raw = canonical_bytes({"income": income, "balance_sheet": balance, "valuation_detail": valuation})
-    assertion = parse_annual_financials(raw, cutoff=_CUTOFF)
+    raw = canonical_bytes({"income": income, "balance_sheet": balance, "valuation_detail": XOM_2026_11_21.answer()})
+    known = parse_annual_financials(raw, cutoff=date(2026, 11, 21))
+    assert known is not None
+    growth = known.snapshots[CONSENSUS_GROWTH_KEY]
+    assert growth.value is not None and growth.value.quantize(Decimal("0.0001")) == Decimal("51.5422")
+    assert growth.knowable_at == XOM_2026_11_21.knowable_at
+    assert CONSENSUS_GROWTH_KEY not in known.values, "a live snapshot is not an annual figure of the period end"
+    early = parse_annual_financials(raw, cutoff=date(2026, 11, 20))
+    assert early is not None
+    assert early.snapshots[CONSENSUS_GROWTH_KEY] == SnapshotValue(
+        None, XOM_2026_11_21.knowable_at, "consensus_after_cutoff"
+    )
+
+
+class _ValuationClient(_CassetteClient):
+    """`_CassetteClient` that also answers `valuation_detail` with one real stored answer."""
+
+    def __init__(self, answer: dict[str, Any]) -> None:
+        # The DDOG statements only give the assertion a period end; these tests read the valuation answer.
+        super().__init__(statements={"US.XOM": _statements("DDOG")})
+        self.answer = answer
+
+    def valuation_detail(self, code: str, *, identity: FetchKey) -> dict[str, Any]:
+        self.calls.append(("valuation_detail", code, identity.as_of))
+        return self.answer
+
+
+@pytest.fixture
+def after_the_session_of_2026_11_20(monkeypatch) -> datetime:
+    """The real fetch instant of the 2026-11-21 answer: 03:03:34 UTC, after the 21:00 UTC close of 2026-11-20."""
+    instant = datetime(2026, 11, 21, 3, 3, 34, tzinfo=UTC)
+    monkeypatch.setattr(gateway, "_utcnow", lambda: instant)
+    return instant
+
+
+@pytest.mark.usefixtures("after_the_session_of_2026_11_20")
+def test_the_fetcher_reads_the_stored_answer_of_yesterday_when_todays_answer_is_after_the_cutoff(landed_keys) -> None:
+    """The real staging state: the answer of today is stamped after the close of the cutoff session. The answer
+    stored under 2026-11-20 is stamped 03:52:54 UTC that day, before the close. The run reads it with no vendor call."""
+    landed_keys.bodies[valuation_detail_key("XOM", date(2026, 11, 20))] = XOM_2026_11_20.raw_bytes()
+    client = _ValuationClient(XOM_2026_11_21.answer())
+    assertion = MoomooFinancialsFetcher(client)("XOM", date(2026, 11, 20))
     assert assertion is not None
-    assert assertion.by_period_end[date(2025, 12, 31)]["consensus_profit_growth"] == Decimal("24.5")
-    assert assertion.values.get("consensus_profit_growth") == Decimal("24.5")
+    growth = assertion.snapshots[CONSENSUS_GROWTH_KEY]
+    assert growth.knowable_at == XOM_2026_11_20.knowable_at
+    assert growth.value is not None and growth.value.quantize(Decimal("0.0001")) == Decimal("51.5432")
+    vendor_calls = [call for call in client.calls if call[0] == "valuation_detail"]
+    assert vendor_calls == [("valuation_detail", "US.XOM", "2026-11-21")], "only the key of today calls the vendor"
+    assert json.loads(assertion.raw_bytes)["valuation_detail"] == XOM_2026_11_20.answer(), (
+        "the bytes hold what was read"
+    )
+
+
+@pytest.mark.usefixtures("after_the_session_of_2026_11_20")
+def test_the_search_checks_the_vendor_stamp_of_each_stored_answer_not_its_key_day(landed_keys) -> None:
+    """A stored answer stamped after the cutoff is passed over, and the next older answer that is knowable is read."""
+    landed_keys.bodies[valuation_detail_key("XOM", date(2026, 11, 20))] = XOM_2026_11_21.raw_bytes()
+    landed_keys.bodies[valuation_detail_key("XOM", date(2026, 11, 19))] = XOM_2026_11_20.raw_bytes()
+    assertion = MoomooFinancialsFetcher(_ValuationClient(XOM_2026_11_21.answer()))("XOM", date(2026, 11, 20))
+    assert assertion is not None
+    assert assertion.snapshots[CONSENSUS_GROWTH_KEY].knowable_at == XOM_2026_11_20.knowable_at
+
+
+@pytest.mark.usefixtures("after_the_session_of_2026_11_20")
+def test_the_fetcher_gives_no_growth_when_no_answer_is_knowable_at_the_cutoff(landed_keys) -> None:
+    """The close of 2026-11-19 is before every stored stamp, so no answer qualifies."""
+    landed_keys.bodies[valuation_detail_key("XOM", date(2026, 11, 20))] = XOM_2026_11_20.raw_bytes()
+    assertion = MoomooFinancialsFetcher(_ValuationClient(XOM_2026_11_21.answer()))("XOM", date(2026, 11, 19))
+    assert assertion is not None
+    growth = assertion.snapshots[CONSENSUS_GROWTH_KEY]
+    assert growth.value is None and growth.reason == "consensus_after_cutoff"
+
+
+@pytest.mark.usefixtures("after_the_session_of_2026_11_20")
+def test_the_search_reads_no_answer_older_than_the_lookback(landed_keys) -> None:
+    """The answer qualifies by its stamp. One day past the window of the look-back, the run does not read it."""
+    oldest_read = date(2026, 11, 20) - timedelta(days=CONSENSUS_LOOKBACK_DAYS - 1)
+    landed_keys.bodies[valuation_detail_key("XOM", oldest_read - timedelta(days=1))] = XOM_2026_11_20.raw_bytes()
+    outside = MoomooFinancialsFetcher(_ValuationClient(XOM_2026_11_21.answer()))("XOM", date(2026, 11, 20))
+    assert outside is not None and outside.snapshots[CONSENSUS_GROWTH_KEY].reason == "consensus_after_cutoff"
+    landed_keys.bodies[valuation_detail_key("XOM", oldest_read)] = XOM_2026_11_20.raw_bytes()
+    inside = MoomooFinancialsFetcher(_ValuationClient(XOM_2026_11_21.answer()))("XOM", date(2026, 11, 20))
+    assert inside is not None and inside.snapshots[CONSENSUS_GROWTH_KEY].knowable_at == XOM_2026_11_20.knowable_at
+
+
+def test_the_corroboration_payload_carries_the_vendor_instant_or_the_reason() -> None:
+    """The adapter writes the instant under `vintage`, the key that the strategy seed reads (`vintage_knowable_at`)."""
+    from data_engine.datahub.capture_core.sec_financial_adapter import _snapshot_payload
+    from data_engine.datahub.input_cells import vintage_knowable_at
+
+    growth = parse_consensus_growth(XOM_2026_11_21.answer())
+    payload = _snapshot_payload({CONSENSUS_GROWTH_KEY: growth})
+    assert payload[CONSENSUS_GROWTH_KEY] == str(growth.value)
+    assert vintage_knowable_at(payload)(CONSENSUS_GROWTH_KEY, None) == XOM_2026_11_21.knowable_at
+    refused = _snapshot_payload({CONSENSUS_GROWTH_KEY: SnapshotValue(None, None, "consensus_after_cutoff")})
+    assert refused == {"consensus_profit_growth_reason": "consensus_after_cutoff"}
 
 
 # -- fetch keys (#1411 K3): the second reader of a landed key never asks OpenD ----------

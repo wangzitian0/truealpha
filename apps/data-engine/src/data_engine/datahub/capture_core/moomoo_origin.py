@@ -5,8 +5,8 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Mapping
-from datetime import date, datetime, timedelta
-from decimal import Decimal, InvalidOperation
+from datetime import UTC, date, datetime, timedelta
+from decimal import ROUND_HALF_EVEN, Context, Decimal, InvalidOperation, localcontext
 from typing import Any, Protocol
 from zoneinfo import ZoneInfo
 
@@ -18,6 +18,7 @@ from data_engine.datahub.capture_core.market_price_adapter import CorroboratingO
 from data_engine.datahub.capture_core.sec_financial_adapter import (
     FinancialFactAssertion,
     FinancialFactCorroboratingOrigin,
+    SnapshotValue,
 )
 from data_engine.datahub.capture_core.source_registrations import (
     MOOMOO_FINANCIALS_MAPPING_VERSION,
@@ -57,6 +58,13 @@ INCOME_FIELDS: Mapping[str, int] = {
 BALANCE_SHEET_FIELDS: Mapping[str, int] = {"total_assets": 8001}
 _SESSION_STAMP_LENGTH = len("2026-07-29 00:00:00")
 _MIDNIGHT = " 00:00:00"
+CONSENSUS_GROWTH_KEY = "consensus_profit_growth"
+VALUATION_DETAIL_ENDPOINT = "get_valuation_detail"
+_PE_VALUATION_TYPE = 1  # Qot_Common.ValuationType_PE
+# A stored answer is a live snapshot. Seven UTC days cover a long holiday weekend plus one missed tick,
+# keep the value at most one week old, and limit the reads to seven landed-key lookups for each issuer.
+CONSENSUS_LOOKBACK_DAYS = 7
+_GROWTH_CONTEXT = Context(prec=28, rounding=ROUND_HALF_EVEN)
 
 logger = logging.getLogger(__name__)
 
@@ -283,9 +291,6 @@ def parse_annual_financials(raw_bytes: bytes, *, cutoff: date) -> FinancialFactA
         return None
     income: Mapping[str, Any] = payload["income"] if isinstance(payload.get("income"), Mapping) else {}
     balance: Mapping[str, Any] = payload["balance_sheet"] if isinstance(payload.get("balance_sheet"), Mapping) else {}
-    valuation: Mapping[str, Any] = (
-        payload["valuation_detail"] if isinstance(payload.get("valuation_detail"), Mapping) else {}
-    )
     by_period: dict[date, dict[str, Decimal | None]] = {}
     for statement, fields, annual_only in (
         (income, INCOME_FIELDS, True),
@@ -294,8 +299,6 @@ def parse_annual_financials(raw_bytes: bytes, *, cutoff: date) -> FinancialFactA
         for end, values in annual_values_by_period_end(statement, fields, annual_only=annual_only).items():
             if end <= cutoff:
                 by_period.setdefault(end, {}).update(values)
-    for end, growth_rate in parse_valuation_profit_growth(valuation, cutoff=cutoff).items():
-        by_period.setdefault(end, {})["consensus_profit_growth"] = growth_rate
     if not by_period:
         return None
     fiscal_years = [
@@ -304,8 +307,6 @@ def parse_annual_financials(raw_bytes: bytes, *, cutoff: date) -> FinancialFactA
     newest = max(fiscal_years) if fiscal_years else max(by_period)
     currency, standards = _statement_meta(income) or _statement_meta(balance) or (None, None)
     headline_values = {name: by_period[newest].get(name) for name in (*INCOME_FIELDS, *BALANCE_SHEET_FIELDS)}
-    if "consensus_profit_growth" in by_period[newest]:
-        headline_values["consensus_profit_growth"] = by_period[newest]["consensus_profit_growth"]
     return FinancialFactAssertion(
         raw_bytes=raw_bytes,
         period_end=newest,
@@ -314,7 +315,86 @@ def parse_annual_financials(raw_bytes: bytes, *, cutoff: date) -> FinancialFactA
         knowable_at=knowable_instant(AsOfAxis.SETTLED_SESSION, cutoff),
         currency=currency,
         accounting_standards=standards,
+        snapshots={CONSENSUS_GROWTH_KEY: consensus_growth_at(payload.get("valuation_detail"), cutoff=cutoff)},
     )
+
+
+def _vendor_instant(stamp: object) -> datetime | None:
+    if isinstance(stamp, bool) or not isinstance(stamp, int | float) or stamp <= 0:
+        return None
+    return datetime.fromtimestamp(stamp, tz=UTC)
+
+
+def parse_consensus_growth(valuation: object) -> SnapshotValue:
+    """The consensus earnings growth that one moomoo P/E valuation answer implies, in percent (#1791).
+
+    `trend.current_value` is the trailing P/E and `trend.forward_value` is the forward P/E
+    (SDK proto `Qot_GetValuationDetail`). The price cancels, so `current / forward - 1` is the
+    forward consensus earnings over the trailing earnings, minus one. `knowable_at` is the epoch
+    field `last_update_time`; the string `last_update_time_str` is in the market time zone.
+    """
+    if not isinstance(valuation, Mapping) or not valuation:
+        return SnapshotValue(None, None, "missing_valuation_detail")
+    if (error := valuation.get("fetch_error")) is not None:
+        return SnapshotValue(None, None, f"valuation_fetch_error:{error}")
+    knowable_at = _vendor_instant(valuation.get("last_update_time"))
+    if knowable_at is None:
+        return SnapshotValue(None, None, "missing_last_update_time")
+    if valuation.get("valuation_type") != _PE_VALUATION_TYPE:
+        return SnapshotValue(None, knowable_at, "not_a_pe_valuation")
+    trend = valuation.get("trend")
+    trend = trend if isinstance(trend, Mapping) else {}
+    trailing = _statement_value(trend.get("current_value"))
+    forward = _statement_value(trend.get("forward_value"))
+    if trailing is None:
+        return SnapshotValue(None, knowable_at, "missing_trailing_pe")
+    if forward is None:
+        return SnapshotValue(None, knowable_at, "missing_forward_pe")
+    if trailing <= 0:
+        return SnapshotValue(None, knowable_at, "non_positive_trailing_pe")
+    if forward <= 0:
+        return SnapshotValue(None, knowable_at, "non_positive_forward_pe")
+    with localcontext(_GROWTH_CONTEXT):
+        growth_pct = (trailing / forward - 1) * 100
+    return SnapshotValue(growth_pct, knowable_at)
+
+
+def consensus_growth_at(valuation: object, *, cutoff: date) -> SnapshotValue:
+    """The growth that a run with this cutoff can read. An answer stamped after the settled session close gives none."""
+    growth = parse_consensus_growth(valuation)
+    if growth.knowable_at is not None and growth.knowable_at > knowable_instant(AsOfAxis.SETTLED_SESSION, cutoff):
+        return SnapshotValue(None, growth.knowable_at, "consensus_after_cutoff")
+    return growth
+
+
+def _knowable_by(valuation: object, cutoff: date) -> bool:
+    stamp = parse_consensus_growth(valuation).knowable_at
+    return stamp is not None and stamp <= knowable_instant(AsOfAxis.SETTLED_SESSION, cutoff)
+
+
+def valuation_detail_key(symbol: str, day: date) -> FetchKey:
+    return FetchKey("moomoo", VALUATION_DETAIL_ENDPOINT, f"symbol:{symbol}", day.isoformat())
+
+
+def stored_valuation_detail_at(symbol: str, *, cutoff: date, today: date) -> Mapping[str, Any] | None:
+    """The newest stored answer that is knowable at the cutoff, read from the landed keys without a vendor call.
+
+    The gateway keys each answer by the UTC day of its fetch. The vendor stamps it at the fetch instant (all 54
+    XOM and WMT answers on staging, 2026-10-27 to 2026-11-23). So the search starts at the earlier of yesterday
+    and the cutoff day, and goes back `CONSENSUS_LOOKBACK_DAYS`. It checks the stamp of each answer it reads.
+    """
+    newest = min(today - timedelta(days=1), cutoff)
+    for back in range(CONSENSUS_LOOKBACK_DAYS):
+        body = gateway.landed(valuation_detail_key(symbol, newest - timedelta(days=back)))
+        if body is None:
+            continue
+        try:
+            answer = json.loads(body.decode())
+        except (UnicodeDecodeError, ValueError):
+            continue
+        if isinstance(answer, Mapping) and _knowable_by(answer, cutoff):
+            return answer
+    return None
 
 
 def _statement_meta(statement: Mapping[str, Any]) -> tuple[str | None, str | None] | None:
@@ -346,26 +426,34 @@ class MoomooFinancialsFetcher:
         code = moomoo_code(symbol)
         income = self._statement(code, symbol, "income", INCOME_STATEMENT)
         balance = self._statement(code, symbol, "balance_sheet", BALANCE_SHEET)
-        valuation = self._valuation_detail(code, symbol)
+        valuation = self._valuation_detail(code, symbol, cutoff)
         return parse_annual_financials(
             canonical_bytes({"income": income, "balance_sheet": balance, "valuation_detail": valuation}),
             cutoff=cutoff,
         )
 
-    def _valuation_detail(self, code: str, symbol: str) -> Any:
+    def _valuation_detail(self, code: str, symbol: str, cutoff: date) -> Any:
+        """Today's answer if it is knowable at the cutoff, else the newest stored answer that is (#1791).
+
+        A live tick fetches after its own cutoff, so today's answer is often stamped after it. The
+        earlier answers come from the landed keys; only today's key can call the vendor.
+        """
         fetcher = getattr(self._client, "valuation_detail", None)
         if not callable(fetcher):
             return {}
-        key = FetchKey("moomoo", "get_valuation_detail", f"symbol:{symbol}", gateway.utc_day())
+        today = date.fromisoformat(gateway.utc_day())
 
         def fetch(identity: FetchKey) -> bytes:
             return canonical_bytes(fetcher(code, identity=identity))
 
         try:
-            return json.loads(gateway.fetch_once(key, fetch).decode())
+            answer: Any = json.loads(gateway.fetch_once(valuation_detail_key(symbol, today), fetch).decode())
         except Exception as exc:  # noqa: BLE001 - one failed enrichment must not drop the statements
             logger.warning("moomoo valuation detail fetch failed for %s: %s", symbol, type(exc).__name__)
-            return {"fetch_error": type(exc).__name__}
+            answer = {"fetch_error": type(exc).__name__}
+        if _knowable_by(answer, cutoff):
+            return answer
+        return stored_valuation_detail_at(symbol, cutoff=cutoff, today=today) or answer
 
     def _statement(self, code: str, symbol: str, label: str, statement_type: int) -> Any:
         key = FetchKey("moomoo", f"financial_statements:{label}", f"symbol:{symbol}", gateway.utc_day())
@@ -391,36 +479,6 @@ def moomoo_financials_origin() -> FinancialFactCorroboratingOrigin | None:
     )
 
 
-def parse_valuation_profit_growth(valuation: Mapping[str, Any], *, cutoff: date) -> dict[date, Decimal]:
-    pg = valuation.get("profit_growth_rate")
-    if not isinstance(pg, Mapping):
-        return {}
-    rows = pg.get("profit_data")
-    if not isinstance(rows, list):
-        return {}
-    out: dict[date, Decimal] = {}
-    for row in rows:
-        if not isinstance(row, Mapping):
-            continue
-        period_str = row.get("period_str")
-        fq = row.get("financial_quarter")
-        if not ((isinstance(period_str, str) and period_str.endswith("/FY")) or fq == 4):
-            continue
-        report_date_str = row.get("report_date_str")
-        if not isinstance(report_date_str, str) or len(report_date_str) < 10:
-            continue
-        try:
-            end_date = date.fromisoformat(report_date_str[:10])
-        except ValueError:
-            continue
-        if end_date > cutoff or end_date in out:
-            continue
-        rate = _statement_value(row.get("profit_growth_rate"))
-        if rate is not None:
-            out[end_date] = rate
-    return out
-
-
 def _require_opend() -> None:
     if not settings.moomoo_opend_host or not settings.moomoo_opend_port:
         raise ValueError(
@@ -431,6 +489,8 @@ def _require_opend() -> None:
 
 __all__ = (
     "BALANCE_SHEET_FIELDS",
+    "CONSENSUS_GROWTH_KEY",
+    "CONSENSUS_LOOKBACK_DAYS",
     "INCOME_FIELDS",
     "MoomooClient",
     "MoomooFinancialsFetcher",
@@ -439,11 +499,14 @@ __all__ = (
     "OpenDClient",
     "annual_values_by_period_end",
     "canonical_bytes",
+    "consensus_growth_at",
     "moomoo_code",
     "moomoo_financials_origin",
     "moomoo_kline_origin",
     "parse_annual_financials",
+    "parse_consensus_growth",
     "parse_settled_close",
-    "parse_valuation_profit_growth",
     "period_end_of",
+    "stored_valuation_detail_at",
+    "valuation_detail_key",
 )
