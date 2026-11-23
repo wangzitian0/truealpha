@@ -1307,8 +1307,11 @@ def test_sp500_universe_builds_from_ivv_nport_with_filing_knowable_at(in_memory_
             if norm.startswith("insert into staging.etf_constituent_facts"):
                 self.constituents.append(params)
                 return _FakeCursor([])
-            if "select ticker, cik, figi from staging.etf_constituent_facts" in norm:
-                return _FakeCursor([(r[4], r[7], r[8]) for r in sorted(self.constituents, key=lambda x: x[4])])
+            if "select ticker, cik, figi from staging.etf_constituent_facts where etf_symbol = %s and as_of" in norm:
+                return _FakeCursor([(r[4], r[7], r[8]) for r in self.constituents])  # rows of this vintage
+            if "select distinct on (ticker) ticker, cik, figi from staging.etf_constituent_facts" in norm:
+                newest = {r[4]: r for r in self.constituents}  # the newest row of each ticker wins
+                return _FakeCursor([(r[4], r[7], r[8]) for r in sorted(newest.values(), key=lambda x: x[4])])
             if "from staging.etf_constituent_facts where etf_symbol = 'qqq'" in norm:
                 return _FakeCursor([("AAPL",)])
             if "from staging.entity_aliases alias" in norm:
@@ -1333,6 +1336,15 @@ def test_sp500_universe_builds_from_ivv_nport_with_filing_knowable_at(in_memory_
         http=_FakeSecHttp(),
     )
     assert landed == 3
+    # The weekly refresh reads the same filing again. Facts are append-only: it must add no second row.
+    again = up.refresh_etf_constituents(
+        conn,  # type: ignore[arg-type]
+        source,
+        openfigi_api_key="test-key",
+        http=_FakeSecHttp(),
+    )
+    assert again == 3
+    assert len(conn.constituents) == 3, "a second refresh of the same filing added rows"
     expected_knowable = datetime(2026, 8, 25, 0, 0, tzinfo=UTC)
     assert fetches[0] == (DataSource.NPORT, f"nport-constituents:sp500:{accession}", expected_knowable)
     assert fetches[1][0] == DataSource.OPENFIGI
@@ -1495,7 +1507,7 @@ def test_sec_ticker_mic_index_and_seed_listing_mic_aliases_resolve_multi_exchang
 
         def execute(self, sql: str, params: tuple = ()):
             norm = " ".join(sql.split()).lower()
-            if "select ticker, cik, figi from staging.etf_constituent_facts" in norm:
+            if "select distinct on (ticker) ticker, cik, figi from staging.etf_constituent_facts" in norm:
                 return _FakeCursor(self.constituents)
             if "from staging.etf_constituent_facts where etf_symbol = 'qqq'" in norm:
                 return _FakeCursor([])
@@ -1615,3 +1627,65 @@ def test_landed_ciks_read_the_newest_cik_of_this_universe_only(connection, in_me
     landed = universe_plane._landed_ciks(connection, "SPXTEST", ["KVUE", "MSFT", "ABSENT"])
 
     assert landed == {"KVUE": 1944048, "MSFT": 1}
+
+
+# --- One vintage of an N-PORT list is listed once, however often the refresh reads the filing ------------
+
+
+def test_insert_new_constituent_facts_adds_only_the_rows_that_the_vintage_lacks(connection, in_memory_objects) -> None:
+    from data_engine import raw_store
+    from data_engine.datahub.capture_core import universe_plane
+
+    fetched_at = datetime(2026, 8, 25, 12, 0, tzinfo=UTC)
+    fetch_id = raw_store.insert_fetch(
+        connection,
+        source=DataSource.NPORT,
+        source_record_id="nport-constituents:SPXTEST:0001",
+        body=b"filing",
+        content_type="application/xml",
+        fetched_at=fetched_at,
+        recorded_at=fetched_at,
+    )
+    knowable = datetime(2026, 8, 25, 0, 0, tzinfo=UTC)
+
+    def _row(ticker: str, cik: int, figi: str) -> tuple:
+        return (
+            "SPXTEST",
+            date(2026, 6, 30),
+            DataSource.NPORT.value,
+            fetch_id,
+            ticker,
+            ticker,
+            None,
+            cik,
+            figi,
+            knowable,
+            None,
+            None,
+        )
+
+    first = [_row("AAPL", 320193, "bbg1"), _row("KVUE", 1944048, "bbg2")]
+    assert universe_plane._insert_new_constituent_facts(connection, first) == 2
+    assert universe_plane._insert_new_constituent_facts(connection, first) == 0
+    # A changed resolution of one member is new information: it adds one row.
+    assert universe_plane._insert_new_constituent_facts(connection, [_row("AAPL", 320193, "bbg9"), first[1]]) == 1
+    assert universe_plane._insert_new_constituent_facts(connection, []) == 0
+
+    count = connection.execute(
+        "select count(*) from staging.etf_constituent_facts where etf_symbol = 'SPXTEST'"
+    ).fetchone()[0]
+    assert count == 3
+
+
+def test_the_denominator_lists_each_ticker_of_a_vintage_once_and_takes_the_newest_row(
+    connection, in_memory_objects
+) -> None:
+    """Staging held every S&P 500 member twice at one vintage (1,006 rows) and published a head of 1,002 instruments."""
+    _land_constituents(connection, "canary", [("HBAN", 49196, "bbg000bhp8x8"), ("CINF", 20286, "bbg000bd7q91")])
+    _land_constituents(connection, "canary", [("HBAN", 49196, "bbg000bhp8x8"), ("CINF", 20286, "bbgnewfigi")])
+
+    denominator = build_denominator(connection, UNIVERSE_SOURCES["canary"], report_date=date(2026, 8, 17))
+
+    assert [row[3] for row in denominator["instruments"]] == ["CINF", "HBAN"]
+    assert denominator["instrument_count"] == 2
+    assert {row[3]: row[1] for row in denominator["instruments"]}["CINF"] == "security:figi:bbgnewfigi"

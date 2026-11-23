@@ -827,7 +827,7 @@ def test_k6_d4_sp500_resolves_aapl_to_xnas_and_jpm_to_xnys() -> None:
             return _FakeTx()
 
         def execute(self, sql: str, _params: tuple[Any, ...] = ()) -> _FakeResult:
-            if "from staging.etf_constituent_facts" in sql and "select ticker, cik, figi" in sql:
+            if "from staging.etf_constituent_facts" in sql and "select distinct on (ticker) ticker, cik, figi" in sql:
                 return _FakeResult(
                     [
                         ("AAPL", 320193, "bbg001s5n8v8"),

@@ -363,6 +363,28 @@ def _seed_sec_listing_mic_aliases(
                 )
 
 
+def _insert_new_constituent_facts(connection: Connection[Any], rows: Sequence[tuple[Any, ...]]) -> int:
+    """Insert the rows that this vintage does not hold yet and return how many were inserted.
+
+    An N-PORT list has one vintage: (report date, filing date). The weekly refresh reads the same filing again.
+    Facts are append-only, so a second insert of the same row would list the member twice.
+    """
+    if not rows:
+        return 0
+    etf, as_of, source, knowable_at = rows[0][0], rows[0][1], rows[0][2], rows[0][9]
+    held = {
+        (str(ticker), int(cik), figi)
+        for ticker, cik, figi in connection.execute(
+            "select ticker, cik, figi from staging.etf_constituent_facts "
+            "where etf_symbol = %s and as_of = %s and source = %s and knowable_at = %s",
+            (etf, as_of, source, knowable_at),
+        ).fetchall()
+    }
+    new_rows = [row for row in rows if (str(row[4]), int(row[7]), row[8]) not in held]
+    _insert_constituent_facts(connection, new_rows)
+    return len(new_rows)
+
+
 def _insert_constituent_facts(connection: Connection[Any], rows: Sequence[tuple[Any, ...]]) -> None:
     execute_many(
         connection,
@@ -427,7 +449,7 @@ def _refresh_nport_constituents(
         landed_ciks=_landed_ciks(connection, source.etf, list(by_ticker)),
     )
 
-    _insert_constituent_facts(
+    _insert_new_constituent_facts(
         connection,
         [
             (
@@ -671,7 +693,7 @@ def build_denominator(connection: Connection[Any], source: UniverseSource, *, re
     """Build a self-pinned denominator dict from the newest landed constituent snapshot."""
     rows = connection.execute(
         """
-        select ticker, cik, figi from staging.etf_constituent_facts
+        select distinct on (ticker) ticker, cik, figi from staging.etf_constituent_facts
         where etf_symbol = %s and (as_of, knowable_at) = (
             select as_of, max(knowable_at) from staging.etf_constituent_facts
             where etf_symbol = %s and as_of = (
@@ -679,7 +701,7 @@ def build_denominator(connection: Connection[Any], source: UniverseSource, *, re
             )
             group by as_of
         )
-        order by ticker
+        order by ticker, id desc
         """,
         (source.etf, source.etf, source.etf),
     ).fetchall()
