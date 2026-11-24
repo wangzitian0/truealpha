@@ -14,7 +14,7 @@
  */
 export const HYDRATED_DOCUMENT = 'html[data-hydrated="true"]';
 
-/** @typedef {{ gotoMs: number, mainMs: number, hydrationMs: number }} NavigationTimeouts */
+/** @typedef {{ gotoMs: number, mainMs: number, hydrationMs: number, errorPageMs: number }} NavigationTimeouts */
 
 /** @type {Readonly<NavigationTimeouts>} */
 export const NAVIGATION_TIMEOUTS = Object.freeze({
@@ -29,10 +29,33 @@ export const NAVIGATION_TIMEOUTS = Object.freeze({
   // bound is three of those windows. Moved from sign-out-journey.mjs (#1412),
   // which now uses this value.
   hydrationMs: 45_000,
+  // #1856: after a network error, Chromium commits its own error page before a
+  // retry can navigate. Measured on a local reset: 95-356 ms. The bound only
+  // matters when the error page never commits; the retry then runs anyway.
+  errorPageMs: 10_000,
 });
 
 const seconds = (ms) => `${ms / 1000} s`;
 const firstLine = (error) => String(error?.message ?? error).split("\n")[0];
+
+/** A Chromium network error, for example `net::ERR_CONNECTION_RESET`. */
+const NETWORK_ERROR = /\bnet::ERR_[A-Z_]+/;
+
+/** #1856: wait until Chromium has committed its error page (`chrome-error://chromewebdata/`).
+ *
+ * After `net::ERR_*`, Chromium starts its own navigation to the error page. A `goto` that
+ * starts before that navigation commits fails with "interrupted by another navigation to
+ * chrome-error://chromewebdata/". On staging (infra2 run 45359474875) one connection reset
+ * failed both attempts this way. A local server that resets one connection failed 5 of 5
+ * runs; with this wait, 6 of 6 passed. `waitForLoadState` does not wait for the error page.
+ * The wait has no failure of its own: when it times out, the retry runs and must pass alone. */
+async function settleOnErrorPage(page, timeoutMs) {
+  try {
+    await page.waitForURL((url) => url.protocol === "chrome-error:", { timeout: timeoutMs, waitUntil: "commit" });
+  } catch {
+    // The retry below decides the verdict.
+  }
+}
 
 /** The path and query of a URL: the route that a failure names. */
 function routeOf(url) {
@@ -54,7 +77,8 @@ function routeOf(url) {
  * region to exist (the assertions read rendered DOM, so `domcontentloaded` alone is not
  * enough for an app-router page), then for the page to hydrate, and retry ONCE. A real
  * outage fails both attempts and still fails fast; a saturation blip no longer costs a
- * deploy. The walk prints a failed first attempt, so a retry is never silent.
+ * deploy. The walk prints a failed first attempt, so a retry is never silent. After a
+ * network error (`net::ERR_*`) the retry first waits for Chromium's error page (#1856).
  *
  * #1412 W2: the hydration wait applies to every page and has no catch. Before, the walk
  * waited only when a sign-out control was on the page, and a timeout of that wait was
@@ -86,7 +110,10 @@ export async function gotoStable(page, url, { timeouts = NAVIGATION_TIMEOUTS, lo
       return response;
     } catch (error) {
       failed.push(`attempt ${attempt}: ${firstLine(error)}`);
-      if (attempt === 1) log(`  retry ${route}: attempt 1 failed: ${firstLine(error)}`);
+      if (attempt === 1) {
+        log(`  retry ${route}: attempt 1 failed: ${firstLine(error)}`);
+        if (NETWORK_ERROR.test(firstLine(error))) await settleOnErrorPage(page, timeouts.errorPageMs);
+      }
     }
   }
   throw new Error(`gotoStable: ${route} failed twice. ${failed.join("; ")}`);
