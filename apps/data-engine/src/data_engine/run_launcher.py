@@ -6,6 +6,7 @@ import json
 import logging
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import dagster as dg
 from dagster._core.launcher import CheckRunHealthResult, LaunchRunContext, WorkerStatus
@@ -58,6 +59,34 @@ def max_runtime_tags(
         return {}
 
 
+def config_universe(run_config: Mapping[str, Any]) -> str | None:
+    """The universe that an op config of the run names, or None for a job of one universe."""
+    ops = run_config.get("ops")
+    for op in ops.values() if isinstance(ops, Mapping) else ():
+        config = op.get("config") if isinstance(op, Mapping) else None
+        if isinstance(config, Mapping) and (universe := config.get("universe")):
+            return str(universe)
+    return None
+
+
+def launch_tags(
+    job_name: str,
+    run_tags: Mapping[str, str],
+    run_config: Mapping[str, Any],
+    instance: dg.DagsterInstance | None = None,
+) -> dict[str, str]:
+    """The tags the launcher adds: the universe of the run config, then the bound of that universe.
+
+    The launcher, not each schedule or sensor, names the universe. A schedule that sets no tag
+    (the confidence report, #1839) and a manual launch get the bound of their own universe. The
+    run config wins over a tag: a re-execution copies the tag of its parent, also when an
+    operator changes the universe in the config.
+    """
+    universe = config_universe(run_config) or run_tags.get(UNIVERSE_TAG)
+    named = {UNIVERSE_TAG: universe} if universe and run_tags.get(UNIVERSE_TAG) != universe else {}
+    return named | bound_tags_to_write(job_name, {**run_tags, **named}, instance=instance)
+
+
 def bound_tags_to_write(
     job_name: str, run_tags: Mapping[str, str], instance: dg.DagsterInstance | None = None
 ) -> dict[str, str]:
@@ -72,7 +101,7 @@ def bound_tags_to_write(
 class MonitoredRunLauncher(DefaultRunLauncher):
     def launch_run(self, context: LaunchRunContext) -> None:
         run = context.dagster_run
-        if tags := bound_tags_to_write(run.job_name, run.tags, instance=self._instance):
+        if tags := launch_tags(run.job_name, run.tags, run.run_config or {}, instance=self._instance):
             self._instance.add_run_tags(run.run_id, tags)
         super().launch_run(context)
 

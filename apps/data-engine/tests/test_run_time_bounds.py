@@ -12,12 +12,14 @@ import sys
 from pathlib import Path
 
 import dagster as dg
+import pytest
 from dagster._core.storage.tags import MAX_RUNTIME_SECONDS_TAG
 from data_engine.run_launcher import (
     CONTRACT_BOUND_TAG,
     MAX_RUNTIME_ALIAS_TAG,
     UNIVERSE_TAG,
     bound_tags_to_write,
+    launch_tags,
     max_runtime_tags,
 )
 
@@ -128,3 +130,78 @@ def test_the_bound_of_a_run_reads_the_runs_of_its_own_universe() -> None:
     assert bound_tags_to_write(job_name, {UNIVERSE_TAG: "topt"}, instance=instance)[MAX_RUNTIME_SECONDS_TAG] == (
         floor_seconds
     )
+
+
+def test_the_launcher_names_the_universe_that_the_run_config_names() -> None:
+    """#1839: the confidence report schedule sets no universe tag. Its S&P 500 run got the 600 s
+    floor that the short TOPT and QQQ runs give, and stopped there each night."""
+    instance = dg.DagsterInstance.ephemeral()
+    job_name = "datahub_confidence_report"
+    seed_success_run(instance, job_name, 200.0, tags={UNIVERSE_TAG: "topt"})
+    sp500 = {"ops": {"run_confidence_report": {"config": {"universe": "universe-list:sp500"}}}}
+
+    assert launch_tags(job_name, {}, sp500, instance=instance) == {UNIVERSE_TAG: "universe-list:sp500"}
+
+    seed_success_run(instance, job_name, 2000.0, tags={UNIVERSE_TAG: "universe-list:sp500"})
+    assert launch_tags(job_name, {}, sp500, instance=instance) == {
+        UNIVERSE_TAG: "universe-list:sp500",
+        MAX_RUNTIME_SECONDS_TAG: "4000",
+        CONTRACT_BOUND_TAG: "4000",
+    }
+    # A tag that the request set stays; the launcher writes only the bound.
+    assert launch_tags(job_name, {UNIVERSE_TAG: "universe-list:sp500"}, sp500, instance=instance) == {
+        MAX_RUNTIME_SECONDS_TAG: "4000",
+        CONTRACT_BOUND_TAG: "4000",
+    }
+    # A re-execution copies the tag of its parent; the run config wins.
+    assert launch_tags(job_name, {UNIVERSE_TAG: "topt"}, sp500, instance=instance) == {
+        UNIVERSE_TAG: "universe-list:sp500",
+        MAX_RUNTIME_SECONDS_TAG: "4000",
+        CONTRACT_BOUND_TAG: "4000",
+    }
+    # A job of one universe names none and keeps the bound of all its runs.
+    assert launch_tags(job_name, {}, {"ops": {"run_confidence_report": {"config": {}}}}, instance=instance) == {
+        MAX_RUNTIME_SECONDS_TAG: "4000",
+        CONTRACT_BOUND_TAG: "4000",
+    }
+
+    # An op config that is not a mapping names no universe and does not stop the launch.
+    assert launch_tags(job_name, {}, {"ops": {"run_confidence_report": {"config": "text"}}}, instance=instance) == {
+        MAX_RUNTIME_SECONDS_TAG: "4000",
+        CONTRACT_BOUND_TAG: "4000",
+    }
+
+
+def test_launch_run_writes_the_universe_of_the_run_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#1839: the launch itself stores the tag, so later runs of that universe find this run."""
+    from dagster._core.launcher import LaunchRunContext
+    from dagster._core.launcher.default_run_launcher import DefaultRunLauncher
+    from dagster._core.storage.dagster_run import DagsterRun
+    from data_engine.run_launcher import MonitoredRunLauncher
+
+    instance = dg.DagsterInstance.ephemeral()
+    launched: list[str] = []
+    monkeypatch.setattr(
+        DefaultRunLauncher, "launch_run", lambda self, context: launched.append(context.dagster_run.run_id)
+    )
+    launcher = MonitoredRunLauncher()
+    launcher.register_instance(instance)
+    run = instance.add_run(
+        DagsterRun(
+            job_name="datahub_confidence_report",
+            run_id="ta1839-run",
+            run_config={"ops": {"run_confidence_report": {"config": {"universe": "universe-list:sp500"}}}},
+            tags={UNIVERSE_TAG: "topt"},
+        )
+    )
+
+    launcher.launch_run(LaunchRunContext(dagster_run=run, workspace=None))
+
+    stored = instance.get_run_by_id("ta1839-run")
+    assert stored is not None
+    assert stored.tags[UNIVERSE_TAG] == "universe-list:sp500"
+    assert launched == ["ta1839-run"]
+    # The bound reads the run through the tag filter, so the stored tag must answer it.
+    by_tag = instance.get_run_records(filters=dg.RunsFilter(tags={UNIVERSE_TAG: "universe-list:sp500"}))
+    assert [record.dagster_run.run_id for record in by_tag] == ["ta1839-run"]
+    assert instance.get_run_records(filters=dg.RunsFilter(tags={UNIVERSE_TAG: "topt"})) == []
