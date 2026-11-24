@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 import math
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -870,8 +870,27 @@ def _agreement_from_outcome_row(row: Mapping[str, Any]) -> Decimal:
     return Decimal("0.65") if delta <= Decimal("0.05") else Decimal("0.25")
 
 
+class OracleRowsBySubject:
+    """Oracle outcome rows grouped by subject: a cell reads the rows of its own subjects only.
+
+    A report grades each subject in each family. A scan of every stored row for each cell
+    multiplies the history by the cell count (#1839).
+    """
+
+    __slots__ = ("_by_subject",)
+
+    def __init__(self, rows: Iterable[Mapping[str, Any] | Outcome]) -> None:
+        by_subject: dict[str, list[Mapping[str, Any] | Outcome]] = {}
+        for row in rows:
+            by_subject.setdefault(str(_row_attr(row, "subject_id") or ""), []).append(row)
+        self._by_subject = by_subject
+
+    def of(self, subject_ids: Iterable[str]) -> list[Mapping[str, Any] | Outcome]:
+        return [row for subject_id in subject_ids for row in self._by_subject.get(subject_id, ())]
+
+
 def oracle_cell_agreement(
-    rows: Sequence[Mapping[str, Any] | Outcome],
+    rows: Sequence[Mapping[str, Any] | Outcome] | OracleRowsBySubject,
     *,
     subject_ids: Sequence[str] | str,
     field: str,
@@ -894,7 +913,8 @@ def oracle_cell_agreement(
             return None
         return (str(item.get("oracle_kind") or "oracle"), subj, canonical_field)
 
-    deduped = _dedupe_rows_by_cutoff(rows, cutoff, _key)
+    grouped = rows if isinstance(rows, OracleRowsBySubject) else OracleRowsBySubject(rows)
+    deduped = _dedupe_rows_by_cutoff(grouped.of(sorted(targets)), cutoff, _key)
     comparable = [item for item in deduped if str(item.get("result") or "") in (AGREE, DISAGREE)]
     if not comparable:
         return Decimal("1"), ("oracle:none",)

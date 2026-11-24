@@ -44,6 +44,7 @@ from data_engine.datahub.capture_core.source_registrations import (
 )
 from data_engine.datahub.capture_core.universe_plane import UNIVERSE_SOURCES, UniverseSource, resolve_listing_mics
 from data_engine.datahub.oracle_outcomes import (
+    OracleRowsBySubject,
     canonical_metric,
     load_oracle_confidence_inputs,
     oracle_cell_agreement,
@@ -360,7 +361,7 @@ def classify_cell(
     cutoff: datetime,
     *,
     outcome_mass_by_origin: Mapping[str, tuple[Decimal, Decimal]] | None = None,
-    oracle_outcomes: Sequence[Mapping[str, Any]] = (),
+    oracle_outcomes: Sequence[Mapping[str, Any]] | OracleRowsBySubject = (),
     subject_aliases: Sequence[str] = (),
 ) -> CellGrade:
     """Grade one cell from what its origins asserted."""
@@ -978,9 +979,9 @@ def _subject_aliases(subject: _Subject | None) -> tuple[str, ...]:
 
 def _oracle_context(
     connection: Connection[Any], run_id: str, cutoff: datetime
-) -> tuple[list[dict[str, Any]], dict[str, tuple[Decimal, Decimal]]]:
+) -> tuple[OracleRowsBySubject, dict[str, tuple[Decimal, Decimal]]]:
     oracle_rows = load_oracle_confidence_inputs(connection, run_id=run_id, cutoff=cutoff)
-    return oracle_rows, oracle_outcome_mass_by_origin(oracle_rows, cutoff=cutoff)
+    return OracleRowsBySubject(oracle_rows), oracle_outcome_mass_by_origin(oracle_rows, cutoff=cutoff)
 
 
 def build_report(

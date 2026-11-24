@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+from collections.abc import Iterator, KeysView, Mapping
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -1198,6 +1199,91 @@ def test_oracle_cell_agreement_applies_delta_curve_and_reports_oracle_none() -> 
     assert oracle_cell_agreement(rows, subject_ids="issuer:cik:9999999999", field="revenue") == (
         Decimal("1"),
         ("oracle:none",),
+    )
+
+
+class _CountedRow(Mapping[str, Any]):
+    """An oracle row that records each conversion to a dict (`dict(row)` calls `keys`)."""
+
+    def __init__(self, reads: list[str], **values: Any) -> None:
+        self._reads, self._values = reads, values
+
+    def __getitem__(self, key: str) -> Any:
+        return self._values[key]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._values)
+
+    def __len__(self) -> int:
+        return len(self._values)
+
+    def keys(self) -> KeysView[str]:
+        self._reads.append(str(self._values["subject_id"]))
+        return self._values.keys()
+
+
+def test_oracle_cell_agreement_reads_only_the_rows_of_its_subjects() -> None:
+    """#1839: a cell converts the rows of its own subjects only, not every stored row."""
+    from data_engine.datahub.oracle_outcomes import OracleRowsBySubject, oracle_cell_agreement
+
+    t_cmp = datetime(2026, 11, 23, 12, 0, tzinfo=UTC)
+    reads: list[str] = []
+    common = {"field": "revenue", "oracle_kind": "filing", "compared_at": t_cmp}
+    rows = [
+        _CountedRow(reads, subject_id="issuer:cik:0000000002", result="agree", ratio=Decimal("1"), **common)
+        for _ in range(50)
+    ]
+    rows.append(
+        _CountedRow(reads, subject_id="issuer:cik:0000320193", result="disagree", ratio=Decimal("1.2"), **common)
+    )
+    grouped = OracleRowsBySubject(rows)
+    reads.clear()
+
+    assert oracle_cell_agreement(grouped, subject_ids="issuer:cik:0000320193", field="revenue") == (
+        Decimal("0.25"),
+        ("oracle:disagree",),
+    )
+    assert reads == ["issuer:cik:0000320193"]
+
+
+def test_grouped_oracle_rows_keep_the_newest_row_of_each_key() -> None:
+    """#1839: grouping keeps the row order of a subject, the cutoff, and both spellings of a CIK."""
+    from data_engine.datahub.oracle_outcomes import OracleRowsBySubject, oracle_cell_agreement
+
+    early, late = datetime(2026, 11, 20, tzinfo=UTC), datetime(2026, 11, 22, tzinfo=UTC)
+
+    def row(subject_id: str, result: str, ratio: str, compared_at: datetime) -> dict[str, Any]:
+        return {
+            "subject_id": subject_id,
+            "field": "revenue",
+            "oracle_kind": "filing",
+            "result": result,
+            "ratio": Decimal(ratio),
+            "compared_at": compared_at,
+        }
+
+    rows = [
+        row("issuer:cik:0000320193", "agree", "1", early),
+        row("issuer:cik:0000000002", "agree", "1", early),
+        row("issuer:cik:0000320193", "disagree", "1.2", early),
+        row("0000320193", "disagree", "1.03", early),
+        row("issuer:cik:0000320193", "agree", "1", late),
+    ]
+    grouped = OracleRowsBySubject(rows)
+
+    # Same stamp: the later row of the subject wins, and the bare CIK spelling is a second key.
+    assert oracle_cell_agreement(grouped, subject_ids="issuer:cik:0000320193", field="revenue", cutoff=early) == (
+        Decimal("0.25"),
+        ("oracle:disagree",),
+    )
+    assert oracle_cell_agreement(grouped, subject_ids="0000320193", field="revenue", cutoff=early) == (
+        Decimal("0.25"),
+        ("oracle:disagree",),
+    )
+    # A newer row inside the cutoff replaces the older rows of its key.
+    assert oracle_cell_agreement(grouped, subject_ids="issuer:cik:0000320193", field="revenue", cutoff=late) == (
+        Decimal("0.65"),
+        ("oracle:agree", "oracle:disagree"),
     )
 
 
