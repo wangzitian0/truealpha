@@ -13,7 +13,10 @@ from decimal import Decimal
 from typing import Any
 
 from factors.shared.extraction import (
+    RULE_ELIMINATION_PARTITION,
     RULE_SINGLE_SEGMENT,
+    RULE_SUBTOTAL_FREE_ELIMINATION_PARTITION,
+    RULE_SUBTOTAL_FREE_PARTITION,
     Candidate,
     Partition,
     PartitionRefusal,
@@ -178,7 +181,9 @@ def _reconciling_items(current: Sequence[TaggedFact]) -> tuple[tuple[str, Decima
     return tuple(sorted((member, min(values)) for member, values in items.items() if len(values) == 1))
 
 
-_ELIMINATION_WORD = re.compile(r"elimination", re.IGNORECASE)
+#: An intersegment elimination member only. A member that also names corporate or other
+#: reconciling items (`CorporateReconcilingItemsAndEliminationsMember`) is no elimination alone.
+_ELIMINATION_WORD = re.compile(r"^(?!.*(?:corporate|reconciling|other|unallocated)).*elimination", re.IGNORECASE)
 _SUBTOTAL_SEARCH_LIMIT = 14
 
 
@@ -201,10 +206,11 @@ def _is_sum_of_others(value: Decimal, others: Sequence[Decimal], unit: Decimal) 
     positive = [other for other in others if other > 0]
     if value <= 0 or len(positive) < 2 or len(positive) > _SUBTOTAL_SEARCH_LIMIT:
         return False
+    # The most addends that reach each sum: a single member equal to `value` hides no sum of two.
     sums: dict[Decimal, int] = {Decimal(0): 0}
     for other in positive:
         for subtotal, count in list(sums.items()):
-            sums.setdefault(subtotal + other, count + 1)
+            sums[subtotal + other] = max(sums.get(subtotal + other, 0), count + 1)
     return any(count >= 2 and abs(subtotal - value) <= (count + 1) * unit / 2 for subtotal, count in sums.items())
 
 
@@ -337,11 +343,20 @@ class TaggedPartition:
     verdict: Partition
     elimination: str | None = None
 
+    @property
+    def extractor(self) -> str:
+        """The rule that accepted the set, so that `withdrawn_extractors` can retract one rule."""
+        if self.segments.subtotals_removed:
+            return RULE_SUBTOTAL_FREE_ELIMINATION_PARTITION if self.elimination else RULE_SUBTOTAL_FREE_PARTITION
+        return RULE_ELIMINATION_PARTITION if self.elimination else self.verdict.extractor
+
 
 def accepted_tagged_partition(
     tagged: Sequence[TaggedSegments], *, total: Decimal, period_end: date | None
 ) -> TaggedPartition | list[str]:
-    """Select first balancing tagged segment set."""
+    """Select the first balancing tagged segment set. The sets are tried as tagged (plain, then
+    with one reconciling item), then closed by one tagged elimination, and only then without
+    subtotals: a tagged elimination is the filer's own fact, a subtotal is an inference from sums."""
     refusals: list[str] = []
     eligible: list[TaggedSegments] = []
     for segments in tagged:
@@ -712,7 +727,7 @@ def extract_segment_revenue(
             oracle=oracle,
             parts=parts,
             residual=Decimal(str(verdict.residual)),
-            extractor=verdict.extractor,
+            extractor=accepted.extractor,
             evidence_ref=(
                 f"{base_ref} recall=xbrl concept={accepted.segments.concept} "
                 f"shape={accepted.segments.shape} members={members_csv}{reconciling_ref}"

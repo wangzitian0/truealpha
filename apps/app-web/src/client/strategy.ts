@@ -34,10 +34,13 @@ export function classifiedShare(row: {
   in_theme_revenue?: string | null;
   out_of_theme_revenue?: string | null;
   consolidated_revenue?: string | null;
+  partition_residual?: string | null;
 }): string | null {
   const inRev = Number(row.in_theme_revenue ?? 0);
   const outRev = Number(row.out_of_theme_revenue ?? 0);
   const total = Number(row.consolidated_revenue ?? 0);
   if (!Number.isFinite(total) || total <= 0) return null;
-  return (((inRev + outRev) / total) * 100).toFixed(1) + "%";
+  // Gross segments with an intersegment elimination as the residual count against their own sum (#1851).
+  const accounted = total - Math.min(Number(row.partition_residual ?? 0) || 0, 0);
+  return (((inRev + outRev) / accounted) * 100).toFixed(1) + "%";
 }

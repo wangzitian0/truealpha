@@ -31,7 +31,9 @@ AVGO = (
 AVGO_TOTAL = Decimal("63887")
 
 
-def purity(segments, *, total=AVGO_TOTAL, residual=Decimal(0), confidence=Decimal("0.9")) -> ThemePurity:
+def purity(
+    segments, *, total=AVGO_TOTAL, residual=Decimal(0), confidence=Decimal("0.9"), minimum=Decimal(0)
+) -> ThemePurity:
     return theme_purity(
         list(segments),
         entity_id=ISSUER,
@@ -40,6 +42,7 @@ def purity(segments, *, total=AVGO_TOTAL, residual=Decimal(0), confidence=Decima
         consolidated_revenue=total,
         partition_residual=residual,
         confidence=confidence,
+        minimum_classified_share=minimum,
     )
 
 
@@ -195,18 +198,20 @@ def test_classified_share_counts_the_residual_against_the_claim() -> None:
     assert result.classified_share + result.unclassified_share < Decimal(1), "the residual is the gap"
 
 
-def test_gross_segments_with_an_elimination_serve_no_share_above_one() -> None:
-    """#1851: segments land gross with the intersegment elimination as the residual. In INTC's
-    10-K the segments sum to 70,536M against 52,853M; if 60,000M of them are in the theme, the
-    elimination cannot be placed, and a share of 1.14 is no fact."""
-    result = purity(
-        [ThemeSegment("A", Decimal("60000"), True), ThemeSegment("B", Decimal("10536"), False)],
-        total=Decimal("52853"),
-        residual=Decimal("-17683"),
-    )
-    assert result.result.value is None
-    assert "in_theme_exceeds_consolidated_revenue" in result.result.flags
-    assert result.in_theme_revenue + result.out_of_theme_revenue + result.partition_residual == Decimal("52853")
+def test_gross_segments_in_and_out_of_the_theme_serve_no_share() -> None:
+    """#1851: INTC's segments land gross, 70,536M against 52,853M, with the elimination as the
+    residual. Foundry sells almost all to the other segments, so the elimination belongs to no
+    known segment, and a share of in-theme gross over net revenue (0.66 here) is no fact."""
+    for in_theme in (Decimal("34745"), Decimal("60000")):
+        result = purity(
+            [ThemeSegment("A", in_theme, True), ThemeSegment("B", Decimal("70536") - in_theme, False)],
+            total=Decimal("52853"),
+            residual=Decimal("-17683"),
+        )
+        assert result.result.value is None
+        assert "elimination_not_allocated" in result.result.flags
+        assert result.in_theme_revenue + result.out_of_theme_revenue + result.partition_residual == Decimal("52853")
+        assert result.classified_share == Decimal(1), "gross segments count against their own sum"
 
 
 def test_every_segment_in_the_theme_is_all_of_the_revenue_whatever_the_elimination() -> None:
@@ -217,3 +222,25 @@ def test_every_segment_in_the_theme_is_all_of_the_revenue_whatever_the_eliminati
     )
     assert result.result.value == Decimal(1)
     assert "partition_residual" in result.result.flags
+
+
+def test_no_segment_in_the_theme_is_none_of_the_revenue_whatever_the_elimination() -> None:
+    result = purity(
+        [ThemeSegment("A", Decimal("60000"), False), ThemeSegment("B", Decimal("10536"), False)],
+        total=Decimal("52853"),
+        residual=Decimal("-17683"),
+    )
+    assert result.result.value == Decimal(0)
+    assert "elimination_not_allocated" not in result.result.flags
+
+
+def test_the_classified_share_floor_counts_gross_segments_against_their_own_sum() -> None:
+    """35% of the gross segment sum unclassified: below the 0.80 floor, though 0.86 of net revenue."""
+    result = purity(
+        [ThemeSegment("A", Decimal("45848"), False), ThemeSegment("B", Decimal("24688"), None)],
+        total=Decimal("52853"),
+        residual=Decimal("-17683"),
+        minimum=Decimal("0.80"),
+    )
+    assert result.result.value is None
+    assert "below_minimum_classified_share" in result.result.flags

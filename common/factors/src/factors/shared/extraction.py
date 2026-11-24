@@ -11,6 +11,12 @@ from typing import Protocol, runtime_checkable
 RULE_SINGLE_CANDIDATE = "rule:single-candidate:v1"
 RULE_EXHAUSTIVE_PARTITION = "rule:exhaustive-partition:v1"
 RULE_SINGLE_SEGMENT = "rule:single-segment:v4"
+#: Gross segments that sum over the total, closed by one tagged intersegment elimination (#1851).
+RULE_ELIMINATION_PARTITION = "rule:elimination-partition:v1"
+#: Segments without the members that are sums of other members (subtotals) (#1851).
+RULE_SUBTOTAL_FREE_PARTITION = "rule:subtotal-free-partition:v1"
+#: Both rules: the segments without subtotals, closed by one tagged intersegment elimination (#1851).
+RULE_SUBTOTAL_FREE_ELIMINATION_PARTITION = "rule:subtotal-free-elimination-partition:v1"
 RULE_NO_DESCRIPTION = "rule:no-description:v1"
 #: A model call that gave no answer (status 0 or 5xx). The row is refused and names the cause (#1816).
 RULE_MODEL_NO_ANSWER = "rule:model-no-answer:v1"
