@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from datetime import date
 from typing import Any
 
@@ -30,8 +31,10 @@ _QUARTERLY, _ANNUAL = pb.EarningsCalendarPeriodType_Quarterly, pb.EarningsCalend
 _IDENTITY = FetchKey("moomoo", "get_earnings_calendar", "market:US:2026-11-24:2026-11-30", "2026-11-24")
 
 
-def _answer(ret_type: int = 0, ret_msg: str = "") -> pb.Response:
+def _answer(ret_type: int = 0, ret_msg: str = "", err_code: int | None = None) -> pb.Response:
     response = pb.Response(retType=ret_type, retMsg=ret_msg)
+    if err_code is not None:
+        response.errCode = err_code
     if ret_type != 0:
         return response
     item = response.s2c.itemList.add()
@@ -42,6 +45,7 @@ def _answer(ret_type: int = 0, ret_msg: str = "") -> pb.Response:
     item.estimateList.add(estimateType=_EPS, predictValue=2.47, currency="USD", periodType=_QUARTERLY)
     item.estimateList.add(estimateType=_EPS, actualValue=6.38, predictValue=7.95, currency="USD", periodType=_ANNUAL)
     item.estimateList.add(estimateType=_REVENUE, predictValue=2.7e10, currency="USD", periodType=_QUARTERLY)
+    item.estimateList.add(estimateType=pb.EarningsCalendarEstimateType_EBIT, actualValue=0.0, periodType=_QUARTERLY)
     return response
 
 
@@ -84,22 +88,27 @@ def test_the_wrapper_keeps_the_period_and_currency_of_every_estimate(monkeypatch
         {"estimateType": _EPS, "predictValue": 2.47, "currency": "USD", "periodType": _QUARTERLY},
         {"estimateType": _EPS, "actualValue": 6.38, "predictValue": 7.95, "currency": "USD", "periodType": _ANNUAL},
         {"estimateType": _REVENUE, "predictValue": 2.7e10, "currency": "USD", "periodType": _QUARTERLY},
-    ], "an estimate the vendor sent is missing, merged or changed"
+        {"estimateType": pb.EarningsCalendarEstimateType_EBIT, "actualValue": 0.0, "periodType": _QUARTERLY},
+    ], "an estimate the vendor sent is missing, merged or changed (a stated zero is a value)"
     (row,) = call_ledger
     assert (row.endpoint, row.fetch_key, row.ok) == ("get_earnings_calendar", _IDENTITY.ledger_key, True)
     assert row.payload_sha256 == hashlib.sha256(mm.canonical_moomoo_bytes(items)).hexdigest()
 
 
 def test_a_refused_request_raises_and_is_one_failed_ledger_row(monkeypatch, call_ledger) -> None:
-    opend = _OpenD(_answer(ret_type=-1, ret_msg="no permission"), monkeypatch)
+    opend = _OpenD(_answer(ret_type=-1, ret_msg="no permission", err_code=1201), monkeypatch)
 
-    with pytest.raises(mm.MoomooConnectionError, match="no permission"):
+    with pytest.raises(mm.MoomooConnectionError, match="retType -1 errCode 1201: no permission"):
         mm.get_earnings_calendar(
             opend, "US", begin_date="2026-11-24", end_date="2026-11-30", caller="test", identity=_IDENTITY
         )
 
     (row,) = call_ledger
-    assert (row.endpoint, row.ok, row.error) == ("get_earnings_calendar", False, "no permission")
+    assert (row.endpoint, row.ok, row.error) == (
+        "get_earnings_calendar",
+        False,
+        "retType -1 errCode 1201: no permission",
+    )
 
 
 class _Client:
@@ -122,6 +131,40 @@ def test_one_capture_per_utc_day_lands_the_answer_and_a_second_capture_reads_it(
     assert client.calls[0][3] == _IDENTITY
     assert first == second
     assert json.loads(first) == [{"estimateList": [], "security": {"code": "DELL", "market": _US_MARKET}}]
+
+
+def test_the_deployed_client_asks_opend_for_the_range_and_the_ledger_names_the_landed_key(
+    monkeypatch, call_ledger, landed_keys
+) -> None:
+    monkeypatch.setattr(gateway, "utc_day", lambda: "2026-11-24")
+    opend = _OpenD(_answer(), monkeypatch)
+
+    @contextmanager
+    def connect() -> Iterator[_OpenD]:
+        yield opend
+
+    monkeypatch.setattr(mm, "connect", connect)
+
+    body = moomoo_origin.capture_earnings_calendar("US", date(2026, 11, 20), date(2026, 11, 26))
+
+    ((_proto_id, request),) = opend.requests
+    assert (request.c2s.beginDate, request.c2s.endDate) == ("2026-11-20", "2026-11-26")
+    key = moomoo_origin.earnings_calendar_key("US", date(2026, 11, 20), date(2026, 11, 26))
+    (row,) = call_ledger
+    assert (row.fetch_key, row.caller, row.payload_sha256) == (
+        key.ledger_key,
+        moomoo_origin.CALLER,
+        hashlib.sha256(body).hexdigest(),
+    )
+    assert landed_keys.lookup(key) == body, "the answer the ledger hashed is not the landed answer"
+
+
+def test_a_range_of_exactly_seven_days_is_asked() -> None:
+    client = _Client()
+
+    moomoo_origin.capture_earnings_calendar("US", date(2026, 11, 24), date(2026, 12, 1), client=client)
+
+    assert [(begin, end) for _market, begin, end, _key in client.calls] == [(date(2026, 11, 24), date(2026, 12, 1))]
 
 
 @pytest.mark.parametrize(

@@ -197,7 +197,8 @@ def _proto_fields(message) -> dict:
 
 def _earnings_calendar_items(response) -> tuple[int, str, list[dict] | None]:
     if response.retType != moomoo.RET_OK:
-        return moomoo.RET_ERROR, response.retMsg, None
+        error_code = f" errCode {response.errCode}" if response.HasField("errCode") else ""
+        return moomoo.RET_ERROR, f"retType {response.retType}{error_code}: {response.retMsg}", None
     return moomoo.RET_OK, "", [_proto_fields(item) for item in response.s2c.itemList]
 
 
