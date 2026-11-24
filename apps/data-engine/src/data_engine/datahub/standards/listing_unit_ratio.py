@@ -98,17 +98,46 @@ _PLAIN_SHARE = re.compile(r"^" + _SHARE + _TAIL)
 #: The words that may follow the share words of a plain-share title: a par or nominal value clause.
 #: Review of #1842: any other word (`; Class B Common Stock`, `, each with one-half of one Warrant`,
 #: `- Units`) names a second security, and the title is not read.
+_CURRENCY_CODES = "usd eur chf gbp cad dkk sek nok hkd jpy aud nis ils cny rmb inr brl mxn zar sgd nzd twd krw"
 _PAR_CLAUSE_WORDS = frozenset(
-    "par value nominal no without per share shares of each stated voting non-voting cent cents dollar dollars one"
-    " us usd eur chf gbp cad dkk sek nok hkd jpy aud".split()
+    ("par value nominal no without per of stated cent cents dollar dollars " + _CURRENCY_CODES).split()
 )
 _PAR_CLAUSE_SEPARATORS = re.compile(r"[,;:()–—]|(?<![\d\w])-|-(?![\d\w])")
-_AMOUNT = re.compile(r"^[$€£¥]?(?:\d+(?:[.,]\d+)*|\.\d+)?(?:-?\d+/\d+)?¢?$")
+_CURRENCY_PREFIX = r"(?:(?:us|hk|nt|a|c|s|r)?\$|[€£¥]|(?:" + _CURRENCY_CODES.replace(" ", "|") + r"))"
+_AMOUNT = re.compile(
+    r"^" + _CURRENCY_PREFIX + r"?(?:\d+(?:[.,]\d+)*|\.\d+)(?:-\d+/\d+)?¢?$|^" + _CURRENCY_PREFIX + r"$"
+)
+_FRACTION = re.compile(r"^\d+/\d+¢?$")
+#: A rights plan attaches one right to each share; the listing stays one share.
+_ASSOCIATED_RIGHTS = re.compile(
+    r"[,;]?\s*\(?\s*(?:and\s+|with\s+)?(?:the\s+)?associated\s+(?:[a-z-]+\s+){0,5}rights\s*\)?\.?$"
+)
+_FOOTNOTE = re.compile(r"\s*(?:\*+|\(\d\))$")
 
 
 def _only_a_par_clause(rest: str) -> bool:
+    """Each word after the share words belongs to one par or nominal value clause. Position rules
+    keep a second security out: `share` only after `per`, `each` and `voting` only last, `one`
+    only before `dollar`, a fraction only after an amount (#1842 review)."""
+    rest = _ASSOCIATED_RIGHTS.sub("", _FOOTNOTE.sub("", rest))
     words = [word.strip(".") for word in _PAR_CLAUSE_SEPARATORS.sub(" ", rest).split()]
-    return all(not word or word in _PAR_CLAUSE_WORDS or (_AMOUNT.match(word) and word != "-") for word in words)
+    words = [word for word in words if word]
+    for index, word in enumerate(words):
+        before = words[index - 1] if index else ""
+        after = words[index + 1] if index + 1 < len(words) else ""
+        last = index == len(words) - 1
+        if word in _PAR_CLAUSE_WORDS or _AMOUNT.match(word):
+            continue
+        if word == "share" and before == "per":
+            continue
+        if word in ("each", "voting") and last:
+            continue
+        if word == "one" and after in ("dollar", "dollars"):
+            continue
+        if _FRACTION.match(word) and _AMOUNT.match(before) and any(ch.isdigit() for ch in before):
+            continue
+        return False
+    return True
 
 
 _DEBT_NOTE = re.compile(
@@ -242,15 +271,23 @@ def _symbol_key(symbol: str) -> str:
     return symbol.strip().upper().replace("-", ".")
 
 
+def _name_pattern(name: str) -> re.Pattern[str] | None:
+    """A filer name as whole words; commas and periods between and after its words may differ."""
+    words = re.findall(r"[^\s,.]+", name)
+    if not words:
+        return None
+    return re.compile(r"(?:\bof\s+)?(?<![\w])" + r"[\s,.]*".join(map(re.escape, words)) + r"(?![\w])\.?", re.IGNORECASE)
+
+
 def without_registrant(title: str, registrants: Sequence[str]) -> str:
-    """The title without the filer's own names, with an `of` before a name (#1606):
+    """The title without one filer name, the longest that it holds, with an `of` before it (#1606):
     `Evergy, Inc. common stock` and `Common Stock of PPL Corporation` keep only the security.
-    The plain-share grammar then reads all that remains."""
+    A second filer name of a combined report stays, so the grammar refuses that title."""
     text = " ".join(title.split())
-    names = {name for name in (" ".join(n.split()).rstrip(".") for n in registrants) if name}
-    for name in sorted(names, key=len, reverse=True):
-        text = re.sub(r"(?:\bof\s+)?" + re.escape(name) + r"\.?", " ", text, flags=re.IGNORECASE)
-    return " ".join(text.split()).strip(" ,")
+    for pattern in (_name_pattern(name) for name in sorted(set(registrants), key=len, reverse=True)):
+        if pattern is not None and pattern.search(text):
+            return " ".join(pattern.sub(" ", text).split()).strip(" ,")
+    return text
 
 
 def ratio_for_ticker(

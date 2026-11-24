@@ -777,6 +777,16 @@ def test_a_title_that_names_another_instrument_gets_no_ratio_with_or_without_the
         "Common Stock, $0.001",
         "Common Stock, $ 0.00000625 par value per share",
         "Common Stock,",
+        # Third review of #1842: a currency in letters, a rights plan, a footnote mark.
+        "Common Stock, par value US$0.0001 per share",
+        "Ordinary Shares, par value HK$0.01 per share",
+        "Ordinary Shares, par value NIS 0.01 per share",
+        "Common Shares, CHF0.57 par value",
+        "Ordinary shares, EUR0.01 nominal value",
+        "Common Stock, $0.01 par value per share, and associated Preferred Stock Purchase Rights",
+        "Common Stock, $.10 par value (and associated Rights)",
+        "Common Stock, $0.01 par value, and associated rights",
+        "Common Stock, par value $0.01 per share*",
     ],
 )
 def test_a_par_value_clause_in_any_real_form_follows_a_plain_share(title: str) -> None:
@@ -813,8 +823,12 @@ def test_the_filer_name_inside_a_par_value_clause_is_not_a_second_security(
         "Common Stock, each with one-half of one Warrant",
         "Common Stock, together with Preferred Stock Purchase Rights",
         "Ordinary Shares, each representing one-tenth",
-        "Common Stock, $0.01 par value, and associated rights",
         "Common, $. par value",
+        # Third review of #1842: words of a par-value clause in another order name another security.
+        "Common Stock, $0.01 par value; Non-Voting Shares",
+        "Common Stock, 1/10 of one share",
+        "Common Stock (1/1,000 of one share)",
+        "Common Stock, each 1/2 share",
     ],
 )
 def test_a_plain_share_followed_by_any_word_outside_a_par_value_clause_is_not_read(title: str) -> None:
@@ -825,3 +839,30 @@ def test_a_filer_name_that_is_only_a_period_removes_nothing() -> None:
     assert read_title("Units of .", ("...",)).listing_units_per_share is None
     assert read_title("Common Stock, $0.01 par value", ("...", "ACME Corp")).listing_units_per_share == Decimal(1)
     assert read_title("Common Stock, Inc. Warrants", ("Common Stock, Inc.",)).listing_units_per_share is None
+
+
+def test_a_filer_name_matches_as_whole_words_and_two_filer_names_keep_the_title_whole() -> None:
+    assert read_title(
+        "Common Stock, $.0001 par value (Essex Property Trust, Inc.)", ("Essex Property Trust Inc",)
+    ).listing_units_per_share == Decimal(1)
+    assert read_title("Units", ("Unit",)).listing_units_per_share is None
+    # A filer name inside a word is not that name: `Mon` and `Comm` leave `Common Stock` whole.
+    assert read_title("Common Stock, $0.01 par value", ("Mon",)).listing_units_per_share == Decimal(1)
+    assert read_title("Common Stock, $0.01 par value", ("Comm",)).listing_units_per_share == Decimal(1)
+    assert read_title("Common Units of ACME", ("Unit", "ACME")).listing_units_per_share is None
+    two = ("ACME Inc.", "ACME Preferred Funding Trust")
+    assert read_title("Common Stock of ACME Inc., ACME Preferred Funding Trust", two).listing_units_per_share is None
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "Common Stock, $1 share",  # `share` only after `per`
+        "Common Stock, each $0.01 par value",  # `each` only last
+        "Common Stock, $1 voting par value",  # `voting` only last
+        "Common Stock, one par value",  # `one` only before `dollar`
+        "Common Stock, 1/2 par value",  # a fraction only after an amount
+    ],
+)
+def test_each_position_rule_of_the_par_value_clause_refuses_a_word_out_of_place(title: str) -> None:
+    assert read_title(title).listing_units_per_share is None, title
