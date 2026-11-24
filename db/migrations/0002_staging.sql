@@ -303,26 +303,6 @@ create table if not exists staging.market_prices_daily (
  constraint market_prices_daily_confidence_check CHECK (((confidence >= (0)::numeric) AND (confidence <= (1)::numeric)))
 );
 
-create table if not exists staging.market_prices_monthly (
- id bigint generated always as identity,
- symbol text not null,
- trading_date date not null,
- open numeric,
- high numeric,
- low numeric,
- close numeric,
- volume numeric,
- source text default 'twelvedata'::text not null,
- adjust text not null,
- transaction_time timestamp with time zone not null,
- recorded_at timestamp with time zone default clock_timestamp() not null,
- confidence numeric not null,
- raw_ref text not null,
- constraint market_prices_monthly_pkey PRIMARY KEY (id),
- constraint market_prices_monthly_check CHECK ((recorded_at >= transaction_time)),
- constraint market_prices_monthly_confidence_check CHECK (((confidence >= (0)::numeric) AND (confidence <= (1)::numeric)))
-);
-
 create table if not exists staging.model_invocations (
  id bigint generated always as identity,
  invocation_id text not null,
@@ -426,16 +406,6 @@ create table if not exists staging.core_snapshots (
  constraint core_snapshots_snapshot_id_check CHECK ((snapshot_id ~ '^topt-core-snapshot:[0-9a-f]{64}$'::text)),
  constraint core_snapshots_universe_sha256_check CHECK ((universe_sha256 ~ '^[0-9a-f]{64}$'::text)),
  constraint core_snapshots_run_id_fkey FOREIGN KEY (run_id) REFERENCES raw.capture_runs(run_id)
-);
-
-create table if not exists staging.universe_mask (
- symbol text not null,
- cutoff_date date not null,
- resolution text not null,
- eligible boolean not null,
- reason_code text not null,
- computed_at timestamp with time zone default clock_timestamp() not null,
- constraint universe_mask_pkey PRIMARY KEY (symbol, cutoff_date, resolution)
 );
 
 create table if not exists staging.capture_observation_obligations (
@@ -574,21 +544,6 @@ create table if not exists staging.core_snapshot_members (
  constraint core_snapshot_members_member_sha256_check CHECK ((member_sha256 ~ '^[0-9a-f]{64}$'::text)),
  constraint core_snapshot_members_observation_ids_check CHECK (((cardinality(observation_ids) >= 4) AND ((cardinality(observation_ids) % 4) = 0))),
  constraint core_snapshot_members_snapshot_id_fkey FOREIGN KEY (snapshot_id) REFERENCES staging.core_snapshots(snapshot_id)
-);
-
-create table if not exists staging.capture_entity_refs (
- observation_id text not null,
- role text not null,
- entity_id uuid not null,
- scheme text not null,
- value text not null,
- known_at timestamp with time zone not null,
- recorded_at timestamp with time zone default clock_timestamp() not null,
- constraint capture_entity_refs_pkey PRIMARY KEY (observation_id, role),
- constraint capture_entity_refs_role_check CHECK ((role = ANY (ARRAY['issuer'::text, 'instrument'::text, 'listing'::text]))),
- constraint capture_entity_refs_entity_id_fkey FOREIGN KEY (entity_id) REFERENCES staging.entities(entity_id),
- constraint capture_entity_refs_observation_id_fkey FOREIGN KEY (observation_id) REFERENCES staging.capture_normalized_observations(observation_id),
- constraint capture_entity_refs_scheme_fkey FOREIGN KEY (scheme) REFERENCES staging.entity_alias_schemes(scheme)
 );
 
 create table if not exists staging.entity_aliases (
@@ -1971,7 +1926,6 @@ from relation_state$vc$;
 end if; end $$;
 
 do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'staging.accepted_rulesets'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = '30ab83bc19361d65b937ab567f44c01e') then drop trigger if exists reject_mutation on staging.accepted_rulesets; CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON staging.accepted_rulesets FOR EACH ROW EXECUTE FUNCTION raw.reject_mutation(); end if; end $$;
-do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'staging.capture_entity_refs'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = '788a191badb30e518bf2d920ba99e613') then drop trigger if exists reject_mutation on staging.capture_entity_refs; CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON staging.capture_entity_refs FOR EACH ROW EXECUTE FUNCTION staging.reject_entity_mutation(); end if; end $$;
 do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'staging.capture_normalized_observations'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = '6f51a39c2f4039549a3690d013a02642') then drop trigger if exists reject_mutation on staging.capture_normalized_observations; CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON staging.capture_normalized_observations FOR EACH ROW EXECUTE FUNCTION staging.reject_point_in_time_mutation(); end if; end $$;
 do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'staging.capture_observation_obligations'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = '93403becc156e47f1b723c6a5098884e') then drop trigger if exists reject_mutation on staging.capture_observation_obligations; CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON staging.capture_observation_obligations FOR EACH ROW EXECUTE FUNCTION raw.reject_capture_control_mutation(); end if; end $$;
 do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'staging.capture_observation_payloads'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = 'f5ad787327c1627169c17aabc17a3018') then drop trigger if exists reject_mutation on staging.capture_observation_payloads; CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON staging.capture_observation_payloads FOR EACH ROW EXECUTE FUNCTION raw.reject_capture_control_mutation(); end if; end $$;
@@ -1996,7 +1950,6 @@ do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'staging.iss
 do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'staging.issuer_headcount_facts'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = '4e060aa7687460b6e7a3a7a68975faf9') then drop trigger if exists reject_mutation on staging.issuer_headcount_facts; CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON staging.issuer_headcount_facts FOR EACH ROW EXECUTE FUNCTION raw.reject_mutation(); end if; end $$;
 do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'staging.issuer_segment_revenue_facts'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = '6f6441f8cbf8b43ad6db6cca44cab3ed') then drop trigger if exists reject_mutation on staging.issuer_segment_revenue_facts; CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON staging.issuer_segment_revenue_facts FOR EACH ROW EXECUTE FUNCTION raw.reject_mutation(); end if; end $$;
 do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'staging.market_prices_daily'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = '1afdcd030642604e375467d5deafaa36') then drop trigger if exists trg_market_prices_daily_append_only on staging.market_prices_daily; CREATE TRIGGER trg_market_prices_daily_append_only BEFORE DELETE OR UPDATE ON staging.market_prices_daily FOR EACH ROW EXECUTE FUNCTION staging.reject_point_in_time_mutation(); end if; end $$;
-do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'staging.market_prices_monthly'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = 'ef67524e52b3fd8f6439fefc23ba258e') then drop trigger if exists trg_market_prices_monthly_append_only on staging.market_prices_monthly; CREATE TRIGGER trg_market_prices_monthly_append_only BEFORE DELETE OR UPDATE ON staging.market_prices_monthly FOR EACH ROW EXECUTE FUNCTION staging.reject_point_in_time_mutation(); end if; end $$;
 do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'staging.model_invocations'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = 'f4eed3ab505235da7ad42f852a85b296') then drop trigger if exists reject_mutation on staging.model_invocations; CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON staging.model_invocations FOR EACH ROW EXECUTE FUNCTION raw.reject_mutation(); end if; end $$;
 do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'staging.pipeline_trigger_requests'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = '60b2cbed702e09257811e325bd3d8422') then drop trigger if exists reject_trigger_delete on staging.pipeline_trigger_requests; CREATE TRIGGER reject_trigger_delete BEFORE DELETE ON staging.pipeline_trigger_requests FOR EACH ROW EXECUTE FUNCTION staging.reject_pipeline_trigger_delete(); end if; end $$;
 do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'staging.pipeline_trigger_requests'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = 'ccb40a047cd2d232acdbb00c9659605b') then drop trigger if exists validate_trigger_update on staging.pipeline_trigger_requests; CREATE TRIGGER validate_trigger_update BEFORE UPDATE ON staging.pipeline_trigger_requests FOR EACH ROW EXECUTE FUNCTION staging.validate_pipeline_trigger_update(); end if; end $$;
@@ -2008,7 +1961,6 @@ do $$ begin if to_regclass('staging.ix_api_call_ledger_called_at') is null then 
 do $$ begin if to_regclass('staging.ix_api_call_ledger_fetch_key') is null then CREATE INDEX ix_api_call_ledger_fetch_key ON staging.api_call_ledger USING btree (called_at, fetch_key) WHERE (fetch_key IS NOT NULL); end if; end $$;
 do $$ begin if to_regclass('staging.ix_api_call_ledger_payload_sha256') is null then CREATE INDEX ix_api_call_ledger_payload_sha256 ON staging.api_call_ledger USING btree (payload_sha256) WHERE (payload_sha256 IS NOT NULL); end if; end $$;
 do $$ begin if to_regclass('staging.ix_api_call_ledger_source_called_at') is null then CREATE INDEX ix_api_call_ledger_source_called_at ON staging.api_call_ledger USING btree (source, called_at DESC); end if; end $$;
-do $$ begin if to_regclass('staging.idx_capture_entity_refs_entity') is null then CREATE INDEX idx_capture_entity_refs_entity ON staging.capture_entity_refs USING btree (entity_id); end if; end $$;
 do $$ begin if to_regclass('staging.idx_contract_objects_kind_recorded') is null then CREATE INDEX idx_contract_objects_kind_recorded ON staging.contract_objects USING btree (contract_kind, recorded_at DESC); end if; end $$;
 do $$ begin if to_regclass('staging.idx_contract_objects_quality_review_run') is null then CREATE INDEX idx_contract_objects_quality_review_run ON staging.contract_objects USING btree (((payload ->> 'strategy_run_id'::text)), recorded_at DESC) WHERE (contract_kind = 'strategy_data_quality_review'::text); end if; end $$;
 do $$ begin if to_regclass('staging.idx_contract_objects_usage_audit_run') is null then CREATE INDEX idx_contract_objects_usage_audit_run ON staging.contract_objects USING btree (((payload ->> 'strategy_run_id'::text)), recorded_at DESC) WHERE (contract_kind = 'strategy_usage_audit'::text); end if; end $$;
@@ -2023,12 +1975,10 @@ do $$ begin if to_regclass('staging.uq_fund_holding_line_vintage') is null then 
 do $$ begin if to_regclass('staging.idx_issuer_headcount_pit') is null then CREATE INDEX idx_issuer_headcount_pit ON staging.issuer_headcount_facts USING btree (cik, knowable_at DESC); end if; end $$;
 do $$ begin if to_regclass('staging.ix_issuer_segment_revenue_facts_pit') is null then CREATE INDEX ix_issuer_segment_revenue_facts_pit ON staging.issuer_segment_revenue_facts USING btree (cik, knowable_at DESC); end if; end $$;
 do $$ begin if to_regclass('staging.idx_market_prices_daily_symbol_date') is null then CREATE INDEX idx_market_prices_daily_symbol_date ON staging.market_prices_daily USING btree (symbol, trading_date, transaction_time DESC, recorded_at DESC); end if; end $$;
-do $$ begin if to_regclass('staging.idx_market_prices_monthly_symbol_date') is null then CREATE INDEX idx_market_prices_monthly_symbol_date ON staging.market_prices_monthly USING btree (symbol, trading_date, transaction_time DESC, recorded_at DESC); end if; end $$;
 do $$ begin if to_regclass('staging.ix_model_invocations_subject') is null then CREATE INDEX ix_model_invocations_subject ON staging.model_invocations USING btree (subject_cik, accession, prompt_sha256, model, id DESC); end if; end $$;
 do $$ begin if to_regclass('staging.idx_strategy_backtest_inputs_asof') is null then CREATE INDEX idx_strategy_backtest_inputs_asof ON staging.strategy_backtest_inputs USING btree (cutoff_at, issuer_id, input_key, recorded_at DESC); end if; end $$;
 do $$ begin if to_regclass('staging.idx_strategy_backtest_inputs_period') is null then CREATE INDEX idx_strategy_backtest_inputs_period ON staging.strategy_backtest_inputs USING btree (cutoff_at, issuer_id, input_key, fiscal_period, recorded_at DESC); end if; end $$;
 do $$ begin if to_regclass('staging.strategy_backtest_inputs_identity') is null then CREATE UNIQUE INDEX strategy_backtest_inputs_identity ON staging.strategy_backtest_inputs USING btree (issuer_id, cutoff_at, input_key, COALESCE(fiscal_period, ''::text), recorded_at); end if; end $$;
-do $$ begin if to_regclass('staging.idx_universe_mask_cutoff_eligible') is null then CREATE INDEX idx_universe_mask_cutoff_eligible ON staging.universe_mask USING btree (resolution, cutoff_date, eligible); end if; end $$;
 do $$ begin if to_regclass('staging.idx_capture_obs_obligation') is null then CREATE INDEX idx_capture_obs_obligation ON staging.capture_normalized_observations USING btree (capture_obligation_id); end if; end $$;
 do $$ begin if to_regclass('staging.idx_capture_obs_vintage') is null then CREATE INDEX idx_capture_obs_vintage ON staging.capture_normalized_observations USING btree (source_vintage_id); end if; end $$;
 do $$ begin if to_regclass('staging.idx_capture_obs_supersedes') is null then CREATE INDEX idx_capture_obs_supersedes ON staging.capture_normalized_observations USING btree (supersedes_observation_id) WHERE (supersedes_observation_id IS NOT NULL); end if; end $$;
@@ -2141,3 +2091,16 @@ where not exists (
     where issuer_id = 'issuer:lei:J3WHBG0MTS7O8ZVMDC91'
 )
 on conflict (issuer_id) do nothing;
+
+do $$
+begin
+    if to_regclass('staging.capture_entity_refs') is not null then
+        drop table staging.capture_entity_refs;
+    end if;
+    if to_regclass('staging.market_prices_monthly') is not null then
+        drop table staging.market_prices_monthly;
+    end if;
+    if to_regclass('staging.universe_mask') is not null then
+        drop table staging.universe_mask;
+    end if;
+end $$;

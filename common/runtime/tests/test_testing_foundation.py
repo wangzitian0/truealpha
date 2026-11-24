@@ -66,7 +66,7 @@ def test_isolated_test_database_lifecycle_and_table_parity() -> None:
                 "select count(*) from information_schema.tables where table_schema in ('raw', 'staging', 'mart')"
             ).fetchone()
             assert row is not None
-            assert row[0] >= 85
+            assert row[0] >= 80
             mv_row = conn.execute("select count(*) from pg_matviews where schemaname = 'mart'").fetchone()
             assert mv_row is not None
             assert mv_row[0] >= 5
