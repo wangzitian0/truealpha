@@ -422,7 +422,7 @@
     "probe": {"hour_utc": 6, "slot_minutes": 7, "attempt_timeout_seconds": 60, "launch_margin_seconds": 60},
     "environments": {
       "production": {"max_concurrent_calls": 2, "calls_per_minute": 10, "probe_offset_minutes": 0, "decoding_version": "v1"},
-      "staging": {"max_concurrent_calls": 1, "calls_per_minute": 3, "probe_offset_minutes": 7, "decoding_version": "v1"}
+      "staging": {"max_concurrent_calls": 2, "calls_per_minute": 10, "probe_offset_minutes": 7, "decoding_version": "v1"}
     }
   },
   "nightly_verdicts": {
