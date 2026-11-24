@@ -61,8 +61,10 @@ def max_runtime_tags(
 
 def config_universe(run_config: Mapping[str, Any]) -> str | None:
     """The universe that an op config of the run names, or None for a job of one universe."""
-    for op in (run_config.get("ops") or {}).values():
-        if universe := ((op or {}).get("config") or {}).get("universe"):
+    ops = run_config.get("ops")
+    for op in ops.values() if isinstance(ops, Mapping) else ():
+        config = op.get("config") if isinstance(op, Mapping) else None
+        if isinstance(config, Mapping) and (universe := config.get("universe")):
             return str(universe)
     return None
 
@@ -76,10 +78,12 @@ def launch_tags(
     """The tags the launcher adds: the universe of the run config, then the bound of that universe.
 
     The launcher, not each schedule or sensor, names the universe. A schedule that sets no tag
-    (the confidence report, #1839) and a manual launch get the bound of their own universe.
+    (the confidence report, #1839) and a manual launch get the bound of their own universe. The
+    run config wins over a tag: a re-execution copies the tag of its parent, also when an
+    operator changes the universe in the config.
     """
-    universe = run_tags.get(UNIVERSE_TAG) or config_universe(run_config)
-    named = {UNIVERSE_TAG: universe} if universe and UNIVERSE_TAG not in run_tags else {}
+    universe = config_universe(run_config) or run_tags.get(UNIVERSE_TAG)
+    named = {UNIVERSE_TAG: universe} if universe and run_tags.get(UNIVERSE_TAG) != universe else {}
     return named | bound_tags_to_write(job_name, {**run_tags, **named}, instance=instance)
 
 

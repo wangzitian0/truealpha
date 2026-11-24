@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 
 import dagster as dg
+import pytest
 from dagster._core.storage.tags import MAX_RUNTIME_SECONDS_TAG
 from data_engine.run_launcher import (
     CONTRACT_BOUND_TAG,
@@ -152,8 +153,51 @@ def test_the_launcher_names_the_universe_that_the_run_config_names() -> None:
         MAX_RUNTIME_SECONDS_TAG: "4000",
         CONTRACT_BOUND_TAG: "4000",
     }
+    # A re-execution copies the tag of its parent; the run config wins.
+    assert launch_tags(job_name, {UNIVERSE_TAG: "topt"}, sp500, instance=instance) == {
+        UNIVERSE_TAG: "universe-list:sp500",
+        MAX_RUNTIME_SECONDS_TAG: "4000",
+        CONTRACT_BOUND_TAG: "4000",
+    }
     # A job of one universe names none and keeps the bound of all its runs.
     assert launch_tags(job_name, {}, {"ops": {"run_confidence_report": {"config": {}}}}, instance=instance) == {
         MAX_RUNTIME_SECONDS_TAG: "4000",
         CONTRACT_BOUND_TAG: "4000",
     }
+
+    # An op config that is not a mapping names no universe and does not stop the launch.
+    assert launch_tags(job_name, {}, {"ops": {"run_confidence_report": {"config": "text"}}}, instance=instance) == {
+        MAX_RUNTIME_SECONDS_TAG: "4000",
+        CONTRACT_BOUND_TAG: "4000",
+    }
+
+
+def test_launch_run_writes_the_universe_of_the_run_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#1839: the launch itself stores the tag, so later runs of that universe find this run."""
+    from dagster._core.launcher import LaunchRunContext
+    from dagster._core.launcher.default_run_launcher import DefaultRunLauncher
+    from dagster._core.storage.dagster_run import DagsterRun
+    from data_engine.run_launcher import MonitoredRunLauncher
+
+    instance = dg.DagsterInstance.ephemeral()
+    launched: list[str] = []
+    monkeypatch.setattr(
+        DefaultRunLauncher, "launch_run", lambda self, context: launched.append(context.dagster_run.run_id)
+    )
+    launcher = MonitoredRunLauncher()
+    launcher.register_instance(instance)
+    run = instance.add_run(
+        DagsterRun(
+            job_name="datahub_confidence_report",
+            run_id="ta1839-run",
+            run_config={"ops": {"run_confidence_report": {"config": {"universe": "universe-list:sp500"}}}},
+            tags={UNIVERSE_TAG: "topt"},
+        )
+    )
+
+    launcher.launch_run(LaunchRunContext(dagster_run=run, workspace=None))
+
+    stored = instance.get_run_by_id("ta1839-run")
+    assert stored is not None
+    assert stored.tags[UNIVERSE_TAG] == "universe-list:sp500"
+    assert launched == ["ta1839-run"]
