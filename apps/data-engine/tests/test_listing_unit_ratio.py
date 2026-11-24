@@ -681,3 +681,56 @@ def test_a_10k_document_without_a_tagged_cover_gives_no_ratio() -> None:
 def test_the_widened_grammar_still_refuses_two_classes_warrants_and_preferred(title: str) -> None:
     """Review of #1833: the `.` separator and `of $` par value must not open a way past the refusals."""
     assert read_title(title).listing_units_per_share is None, title
+
+
+_STAGING_10K_TITLES = [
+    ("EVRG", "Evergy, Inc. common stock"),
+    ("CB", "Comm on Shares, par value CHF 0.50 per share"),
+    ("CMS", "CMS Energy Corporation Common Stock"),
+    ("KR", "Common, $1.00 Par Value"),
+    ("NSC", "Norfolk Southern Corporation Common Stock (Par Value $1.00)"),
+    ("PPL", "Common Stock of PPL Corporation"),
+]
+
+
+@pytest.mark.parametrize(("ticker", "title"), _STAGING_10K_TITLES)
+def test_a_10k_filer_lists_one_share_under_a_share_title_that_the_grammar_does_not_know(
+    ticker: str, title: str
+) -> None:
+    """#1606, staging 2026-11-24: six S&P 500 10-K filers pair their ticker with a share title in other
+    words, and got `unfamiliar_title`. A domestic filer lists its own shares."""
+    ratio = _domestic(cover_html((ticker, title)), ticker)
+
+    assert ratio.listing_units_per_share == Decimal(1)
+    assert ratio.pattern == PATTERN_DOMESTIC_FILER
+    assert ratio.title == title
+
+
+@pytest.mark.parametrize(("ticker", "title"), _STAGING_10K_TITLES)
+def test_a_20f_filer_keeps_an_unknown_share_title_unread(ticker: str, title: str) -> None:
+    ratio = _domestic(cover_html((ticker, title)), ticker, form="20-F")
+
+    assert ratio.listing_units_per_share is None
+    assert ratio.reason == REASON_UNFAMILIAR_TITLE
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "Units, each consisting of one share of Class A Common Stock and one-half of one redeemable Warrant",
+        "Warrants, each exercisable for one share of common stock",
+        "Rights to receive one-tenth of one share of Common Stock",
+        "Class A Common Stock and Class B Common Stock",
+        "Depositary Shares, each representing a 1/1,000th interest in a share of Series A Preferred Stock",
+        "5.75% Series A Cumulative Preferred Stock",
+        "Common Stock.Warrants",
+        "Trust Units",
+        "Global Medium Term Securities",
+        "",
+    ],
+)
+def test_a_10k_title_that_names_another_instrument_gets_no_ratio(title: str) -> None:
+    ratio = _domestic(cover_html(("ACME", title)), "ACME")
+
+    assert ratio.listing_units_per_share is None, title
+    assert ratio.pattern == PATTERN_UNPARSED

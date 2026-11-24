@@ -105,6 +105,24 @@ def is_debt_security_title(title: str) -> bool:
     return _DEBT_NOTE.search(" ".join(title.split())) is not None
 
 
+_A_SHARE = re.compile(r"\b(?:shares?|stock|common)\b")
+_OTHER_INSTRUMENT = re.compile(
+    r"\b(?:depositary|adss?|adrs?|units?|warrants?|rights?|preferred|preference|notes?|debentures?|bonds?"
+    r"|fractional|interests?|each|exercisable|convertible)\b"
+)
+
+
+def is_one_listed_share(title: str) -> bool:
+    """The title names a share and no other instrument: no unit, warrant, right, preferred share,
+    debt, depositary security, fraction or second class."""
+    text = " ".join(title.split()).lower()
+    return (
+        _A_SHARE.search(text) is not None
+        and _OTHER_INSTRUMENT.search(text) is None
+        and len(re.findall(r"\bclass\b", text)) <= 1
+    )
+
+
 @dataclass(frozen=True)
 class TitleReading:
     listing_units_per_share: Decimal | None
@@ -216,6 +234,16 @@ def _symbol_key(symbol: str) -> str:
     return symbol.strip().upper().replace("-", ".")
 
 
+def _read_listed_title(title: str, form: str) -> TitleReading:
+    """A 10-K filer lists its own shares. A share title in words that the grammar does not know
+    (`Evergy, Inc. common stock`, `Common, $1.00 Par Value`) is one share, unless it names
+    another instrument (#1606)."""
+    reading = read_title(title)
+    if reading.reason == REASON_UNFAMILIAR_TITLE and form in DOMESTIC_ANNUAL_FORMS and is_one_listed_share(title):
+        return TitleReading(Decimal(1), PATTERN_DOMESTIC_FILER, None)
+    return reading
+
+
 def ratio_for_ticker(
     securities: Sequence[CoverSecurity],
     ticker: str,
@@ -237,7 +265,7 @@ def ratio_for_ticker(
     lines = [line for line in matches if not is_debt_security_title(line.title)]
     if not lines:
         return unparsed(REASON_DEBT_SECURITY_ON_EQUITY_TICKER, title=matches[0].title, **filing)
-    readings = [(line, read_title(line.title)) for line in lines]
+    readings = [(line, _read_listed_title(line.title, form)) for line in lines]
     for line, reading in readings:
         if reading.listing_units_per_share is None:
             return unparsed(reading.reason or REASON_UNFAMILIAR_TITLE, title=line.title, **filing)
