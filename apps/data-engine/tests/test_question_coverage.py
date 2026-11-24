@@ -199,11 +199,19 @@ def test_the_report_persists_append_only_and_reads_back() -> None:
         connection.close()
 
 
-def test_the_previous_head_is_found_by_the_lane_and_a_report_of_old_rules_is_not_current() -> None:
-    """A list universe changes its id with its membership, so the lane name finds the previous head.
-    A stored report without the current reason registry is not current, so the head reports run again."""
+def test_the_previous_head_is_found_by_the_lane_and_a_report_of_old_rules_is_not_current(monkeypatch) -> None:
+    """A list universe changes its id with its membership, so the lane name and the lane's id prefix find
+    the previous head; an id outside the prefix is never read. A stored report without the current reason
+    registry still names its head but is not current."""
+    from types import SimpleNamespace
+
+    from data_engine.datahub import question_coverage
+
     connection = _connection()
-    lane = f"universe-list:t1851-{os.getpid()}"
+    lane, tag = "universe-list:t1851", os.getpid()
+    # A lane of its own: a committed report of a real lane in a shared CI database cannot be newer.
+    monkeypatch.setattr(question_coverage, "key_of_lane", lambda name: "t1851" if name == lane else "none")
+    monkeypatch.setattr(question_coverage, "record", lambda key: SimpleNamespace(id_prefix=f"universe:{key}-us-{tag}-"))
 
     def report(universe_id: str, run: str, *, registry: str | None) -> dict:
         body = {
@@ -220,13 +228,14 @@ def test_the_previous_head_is_found_by_the_lane_and_a_report_of_old_rules_is_not
         return body | ({"reason_registry_sha256": registry} if registry else {})
 
     try:
-        older, newer = "capture-run:" + "1" * 64, "capture-run:" + "2" * 64
-        old_id, new_id = f"universe:t1851a-us-{os.getpid()}", f"universe:t1851b-us-{os.getpid()}"
+        older, newer, stray = ("capture-run:" + c * 64 for c in "123")
+        old_id, new_id = f"universe:t1851-us-{tag}-2099-01-01", f"universe:t1851-us-{tag}-2099-02-15"
         persist(connection, report(old_id, older, registry=None))
         assert stored_report_run(connection, old_id) == older, "a report of the old rules still names its head"
         assert stored_report_rules_current(connection, old_id) is False, "but it is not current"
         persist(connection, report(new_id, newer, registry=REGISTRY_SHA256))
         assert stored_report_rules_current(connection, new_id) is True
+        persist(connection, report(f"universe:t1851-{tag}-2099", stray, registry=REGISTRY_SHA256))
 
         previous = previous_head(connection, lane, newer)
         assert previous is not None and (previous.universe_id, previous.run_id) == (old_id, older)
@@ -669,6 +678,22 @@ def test_the_served_status_alone_says_a_measure_does_not_apply() -> None:
         _Rows([("issuer:c", "unavailable", ["missing_headcount", "nonpositive_revenue"], None)]), "run"
     )
     assert applicable.reason == "missing_headcount", "in an applicable cell the first outcome code is the reason"
+
+
+def test_an_applicable_cell_with_a_not_applicable_reason_is_a_conflict_not_a_class() -> None:
+    """#1851 review: PEG serves `non_positive_growth` on an applicable row. Counted as not applicable
+    it sat in the class and in the denominator at once; it is a conflict the producer or the registry fixes."""
+    entry = classify_question(
+        REQ[Question.Q2_VALUATION_VS_GROWTH],
+        universe_id=TOPT,
+        issuers=["issuer:a", "issuer:b"],
+        cells_by_column={
+            "mart.strategy_decisions.peg": (Cell("issuer:a", False, "non_positive_growth"), Cell("issuer:b", True))
+        },
+    )
+    assert entry["denominator"] == 2 and entry["unavailable"] == {"non_positive_growth": 1}
+    assert entry["by_class"] == {} and entry["violations"] == {"status_class_conflict": 1}
+    assert "not_applicable" not in entry
 
 
 def test_the_reason_of_peg_wins_over_the_exclusion_of_its_decision() -> None:

@@ -839,3 +839,18 @@ def test_a_universe_whose_runs_hold_only_fill_rows_is_not_covered_by_the_theme_l
     finally:
         connection.rollback()
         connection.close()
+
+
+def test_a_stored_report_of_other_reason_rules_is_compared_on_answered_only() -> None:
+    """#1851: new reason rules relabel the reasons of the same cells, never whether a cell is answered."""
+    from data_engine.quality.surface_proof import _drift
+
+    stored = {"questions": {"q6": {"answered": 3, "unavailable": {"partition_residual": 1}, "missing": 0}}}
+    fresh = {
+        "reason_registry_sha256": "a" * 64,
+        "questions": {"q6": {"answered": 3, "unavailable": {"below_minimum_classified_share": 1}, "missing": 0}},
+    }
+    assert _drift(stored, fresh) == ""
+    assert _drift({**stored, "reason_registry_sha256": "a" * 64}, fresh).startswith("q6: unavailable")
+    moved = {"questions": {"q6": {**stored["questions"]["q6"], "answered": 2}}}
+    assert _drift(moved, fresh) == "q6: stored 2 answered, tables say 3"
