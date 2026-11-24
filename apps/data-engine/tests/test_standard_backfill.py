@@ -1169,3 +1169,28 @@ def test_a_model_error_of_one_filing_is_that_filings_outcome(monkeypatch, error,
     assert outcome.status == status
     assert "model selection" in outcome.detail
     assert connection.headcount_rows == []
+
+
+def test_an_issuer_without_a_cik_is_a_standing_gap_and_not_a_failed_cell(monkeypatch) -> None:
+    """#1851: the planner keeps such an issuer open, so an `error` status failed every run until
+    the crosswalk changed. The cell names the gap, and the run fails only on a cell without an answer."""
+    connection = FakeConnection()
+    issuers = [UniverseIssuer("issuer:lei:A", "BRK.B", "listing:xnys:brk.b", None)]
+    monkeypatch.setattr(backfill_module, "universe_issuers", lambda _c, _u, **_k: issuers)
+    monkeypatch.setattr(backfill_module.sec, "ticker_cik_index", lambda _http, **_k: {})
+
+    report = run_standard_backfill(
+        connection,
+        universe="topt",
+        standard_name="employees_total",
+        cutoff=CUTOFF,
+        mode="backfill",
+        http=FakeHttp({}),
+        gateway=_gateway(connection),
+        store=FakeStore(),
+        log=lambda _l: None,
+    )
+
+    assert dict(report.outcomes) == {"no_identifier": 1}
+    assert report.failed == 0
+    assert report.cells[0]["detail"] == "issuer has no CIK in the universe plane or the SEC crosswalk"

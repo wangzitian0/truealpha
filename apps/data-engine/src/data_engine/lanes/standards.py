@@ -464,6 +464,10 @@ def _finish_canonical_lane(
 def run_supply_chain_exposure(
     context: dg.OpExecutionContext, config: StandardBackfillConfig, purity_summary: str
 ) -> str:
+    return _with_upstream_failure(_supply_chain_exposure(context, config, purity_summary), purity_summary)
+
+
+def _supply_chain_exposure(context: dg.OpExecutionContext, config: StandardBackfillConfig, purity_summary: str) -> str:
     from data_engine.datahub.standards.supply_chain_extraction import materialize_universe_supply_chain_exposure
 
     if (
@@ -539,6 +543,10 @@ def run_supply_chain_exposure(
 
 @external_op
 def run_analyst_ratings(context: dg.OpExecutionContext, config: StandardBackfillConfig, sc_summary: str) -> str:
+    return _with_upstream_failure(_analyst_ratings(context, config, sc_summary), sc_summary)
+
+
+def _analyst_ratings(context: dg.OpExecutionContext, config: StandardBackfillConfig, sc_summary: str) -> str:
     from data_engine.datahub.analyst_ratings import materialize_universe_analyst_ratings
 
     if (

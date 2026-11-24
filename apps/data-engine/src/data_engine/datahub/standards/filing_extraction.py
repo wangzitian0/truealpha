@@ -67,6 +67,7 @@ ExtractionStatus = Literal[
     "model_declined",
     "no_candidate",
     "no_annual_filing",
+    "no_identifier",
     "deferred_capacity",
     "error",
 ]

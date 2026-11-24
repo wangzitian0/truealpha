@@ -206,20 +206,39 @@ def test_a_backfill_without_a_failed_cell_has_no_lane_failure(monkeypatch: pytes
     assert summary["universe"] == "topt"
 
 
-def test_theme_purity_carries_the_backfill_failure_when_it_has_none_of_its_own(
+def test_the_backfill_failure_reaches_the_last_op_through_every_lane_without_a_head(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Theme purity ends without a head here; the failure of the backfill before it still reaches the run."""
+    """Every lane ends without a head here, as on the first backfill of a new universe; the failure
+    of the backfill before them still makes the last op record a red verdict and fail the run."""
     monkeypatch.setattr(question_coverage, "governed_head_of", lambda _c, _k: question_coverage.NoHead("no head"))
     monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: _StubConnection())
-    monkeypatch.setattr(nightly_verdicts, "record", lambda *_a, **_k: None)
+    recorded: list[dict[str, Any]] = []
+    monkeypatch.setattr(nightly_verdicts, "record", lambda name, **row: recorded.append({"check": name, **row}))
     failure = "standard backfill: employees_total: 2 of 17 cells got no answer"
     upstream = json.dumps({standards.LANE_FAILURE: failure, standards.VERDICT_TEXT: failure})
     config = standards.StandardBackfillConfig(executed_at=EXECUTED_AT, universe="topt")
+    context = dg.build_op_context()
 
-    carried = json.loads(standards.run_theme_purity(dg.build_op_context(), config, upstream))
-    clean = json.loads(standards.run_theme_purity(dg.build_op_context(), config, "{}"))
+    purity = standards.run_theme_purity(context, config, upstream)
+    supply_chain = standards.run_supply_chain_exposure(context, config, purity)
+    analyst = standards.run_analyst_ratings(context, config, supply_chain)
+    with pytest.raises(RuntimeError, match="2 of 17 cells got no answer"):
+        standards.fail_if_a_lane_failed(context, analyst, "{}")
 
-    assert carried[standards.LANE_FAILURE] == carried[standards.VERDICT_TEXT] == failure
-    assert carried["reason"] == "no_governed_head"
-    assert standards.LANE_FAILURE not in clean
+    for summary in (purity, supply_chain, analyst):
+        assert json.loads(summary)["reason"] == "no_governed_head"
+        assert json.loads(summary)[standards.LANE_FAILURE] == failure
+    assert [(row["check"], row["ok"]) for row in recorded] == [
+        ("theme_purity@topt", None),
+        ("question_coverage@topt", False),
+    ]
+    assert failure in recorded[-1]["summary"]
+
+
+def test_a_lane_without_an_upstream_failure_carries_none() -> None:
+    clean = json.dumps({"universe": "topt", "rows": 0})
+    assert standards._with_upstream_failure(clean, "{}") == clean
+    own = json.dumps({standards.LANE_FAILURE: "own", standards.VERDICT_TEXT: "own"})
+    upstream = json.dumps({standards.LANE_FAILURE: "upstream"})
+    assert json.loads(standards._with_upstream_failure(own, upstream))[standards.LANE_FAILURE] == "own"
