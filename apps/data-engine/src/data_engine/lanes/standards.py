@@ -355,6 +355,7 @@ def run_theme_purity(context: dg.OpExecutionContext, config: StandardBackfillCon
         outcome.summary = f"{published}/{len(rows)} theme-purity rows published on {head.run_id[:24]}" + (
             f"; {no_answer} got no model answer" if no_answer else ""
         )
+        outcome.failed = no_answer > 0
     context.log.info(summary_line(rows))
     summary: dict[str, Any] = {
         "universe": config.universe,

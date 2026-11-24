@@ -1627,6 +1627,8 @@ def test_the_theme_purity_op_commits_after_each_issuer_and_reports_rows_without_
         return (_purity_row_without_answer(), _purity_row_without_answer())
 
     monkeypatch.setattr(theme_purity, "materialize_theme_purity", materialize)
+    recorded: list[dict[str, Any]] = []
+    monkeypatch.setattr(nightly_verdicts, "record", lambda name, **row: recorded.append({"check": name, **row}))
 
     summary = _run_purity_op()
 
@@ -1634,6 +1636,9 @@ def test_the_theme_purity_op_commits_after_each_issuer_and_reports_rows_without_
     assert summary["no_answer"] == 2 and summary["published"] == 0
     assert summary["lane_failure"] == "theme purity: 2 rows got no model answer"
     assert summary["verdict_text"] == summary["lane_failure"]
+    assert [(row["check"], row["ok"]) for row in recorded] == [(f"theme_purity@{UNIVERSE}", False)], (
+        "#1851: the theme purity verdict itself is red, not only the coverage verdict at the end"
+    )
 
 
 def test_the_failure_of_the_theme_purity_lane_reaches_the_end_of_the_chain(

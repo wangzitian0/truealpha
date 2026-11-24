@@ -1074,12 +1074,11 @@ def test_a_filing_with_no_model_answer_costs_one_filing_and_each_answered_filing
     assert checkpoints == [1], "one checkpoint, after the one answered filing"
 
 
-@pytest.mark.parametrize(("status", "expected"), [(0, 1), (503, 1), (400, 0), (429, 0)])
-def test_only_a_missing_answer_or_a_server_error_counts_as_no_answer(
-    monkeypatch: pytest.MonkeyPatch, status: int, expected: int
-) -> None:
-    """#1816: a refusal (4xx) of one filing repeats on each run. It is a model error of that filing
-    and does not fail the lane. Status 0 and 5xx can succeed on the next run, and they do."""
+@pytest.mark.parametrize(("status", "expected"), [(0, 1), (503, 1), (429, 1), (400, 0)])
+def test_only_a_missing_answer_counts_as_no_answer(monkeypatch: pytest.MonkeyPatch, status: int, expected: int) -> None:
+    """#1816, #1851: a refusal (4xx) of one filing repeats on each run. It is a model error of that
+    filing and does not fail the lane. Status 0, 429 and 5xx can succeed on the next run: they are a
+    missing answer, which the lane reports (a 429 was counted silently before #1851)."""
     from data_engine import raw_store
     from data_engine.datahub.standards import supply_chain_extraction
     from data_engine.datahub.standards.supply_chain_extraction import persist_extracted_supply_chain_edges

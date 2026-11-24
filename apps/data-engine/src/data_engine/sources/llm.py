@@ -123,11 +123,13 @@ class ModelHTTPError(RuntimeError):
 
     @property
     def no_answer(self) -> bool:
-        """The provider gave no answer (status 0) or failed on its side (5xx). The next run can get one.
+        """No answer this time; the next run can get one: no reply (status 0), no capacity or a rate
+        limit (429, also the local `ModelCapacityRefused`), or a failure on the provider's side (5xx).
 
-        A refusal (4xx) or a cut-off answer repeats on each run, so it is not a missing answer (#1816).
+        Any other refusal (4xx) or a cut-off answer repeats on each run, so it is not a missing answer
+        (#1816). Every lane treats a missing answer the same way: the item is refused for this run (#1851).
         """
-        return self.status_code == 0 or self.status_code >= 500
+        return self.status_code in (0, 429) or self.status_code >= 500
 
 
 class ModelCapacityRefused(ModelHTTPError):
