@@ -248,13 +248,20 @@ def cover_registrants(body: bytes) -> tuple[str, ...]:
 
 
 _PREFERRED_WORD = re.compile(r"\b(?:preferred|preference)\b")
+_COMMON_OR_RECEIPT_WORD = re.compile(r"\b(?:ordinary|common|american|global|adss?|adrs?)\b")
+
+
+def is_preferred_depositary_share(text: str) -> bool:
+    """`Depositary Shares, each representing a 1/4,000th interest in a share of Series K … Preferred
+    Stock`: a preferred share, and no ordinary or common share and no ADS or ADR in the title."""
+    return _PREFERRED_WORD.search(text) is not None and _COMMON_OR_RECEIPT_WORD.search(text) is None
 
 
 def names_a_depositary_security(titles: Sequence[str]) -> bool:
-    """A depositary security of common or ordinary shares. A depositary share of a preferred share
-    says nothing about the common listing (BNY lists one, #1606)."""
+    """A depositary security other than a depositary share of a preferred share. That one says nothing
+    about the common listing (BNY lists one, #1606)."""
     texts = (" ".join(title.split()).lower() for title in titles)
-    return any(_DEPOSITARY_WORD.search(text) and not _PREFERRED_WORD.search(text) for text in texts)
+    return any(_DEPOSITARY_WORD.search(text) and not is_preferred_depositary_share(text) for text in texts)
 
 
 def cover_securities(body: bytes) -> tuple[CoverSecurity, ...]:
