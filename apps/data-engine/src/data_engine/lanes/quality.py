@@ -15,6 +15,7 @@ import psycopg
 from truealpha_contracts.environment_contract import load_environment_contract
 from truealpha_contracts.universes import key_of_lane, lane_name, record, served_keys, universes_with_role
 
+from data_engine import db
 from data_engine.config import settings
 from data_engine.datahub.oracle_outcomes import load_oracle_outcomes_rollup, record_oracle_outcomes_safely
 from data_engine.datahub.question_coverage import NO_HEAD_SUMMARY, declared_environment
@@ -159,7 +160,7 @@ _sleep = time.sleep
 def _await_settled(context: dg.OpExecutionContext) -> None:
     deadline = time.monotonic() + SURFACE_SETTLE_TIMEOUT.total_seconds()
     while True:
-        with psycopg.connect(settings.database_url) as connection:
+        with db.connect() as connection:
             pending = settling(connection, context.instance, now=datetime.now(UTC))
         if not pending:
             return
@@ -214,7 +215,7 @@ def run_report_surface_proof(context: dg.OpExecutionContext) -> str:
 
     with _op_verdict(context, REPORT_SURFACE_VERDICT) as outcome:
         _await_settled(context)
-        with psycopg.connect(settings.database_url) as connection:
+        with db.connect() as connection:
             connection.isolation_level = psycopg.IsolationLevel.REPEATABLE_READ
             connection.read_only = True
             now = datetime.now(UTC)
@@ -305,7 +306,7 @@ def run_confidence_report(context: dg.OpExecutionContext, config: ConfidenceRepo
         context, check_name(CONFIDENCE_REPORT_VERDICT, config.universe), tick=tick_from_config(config.executed_at)
     ) as outcome:
         _await_settled(context)
-        with psycopg.connect(settings.database_url) as connection:
+        with db.connect() as connection:
             stale_heads = stale_served_heads(connection, universe_prefix=record(key_of_lane(config.universe)).id_prefix)
             if stale_heads:
                 outcome.summary = f"stale served_head: {', '.join(stale_heads)}"
@@ -417,7 +418,7 @@ def _run_dashboard_verdict(
     try:
         with (
             _op_verdict(context, verdict_name, tick=tick) as outcome,
-            psycopg.connect(settings.database_url, autocommit=True) as connection,
+            db.connect(autocommit=True) as connection,
         ):
             summary, is_red, metadata, payload = evaluate(connection, outcome, now)
             context.log.info(f"{label}: {summary}")
@@ -513,7 +514,7 @@ OUTPUT_INVARIANTS_SENSOR_INTERVAL_SECONDS = 60
 def output_invariants_on_advance_sensor(context: dg.SensorEvaluationContext):
     build = (settings.data_engine_image_digest or "").strip() or "unversioned"
     try:
-        with psycopg.connect(settings.database_url) as connection:
+        with db.connect() as connection:
             rows = connection.execute(
                 "select universe_id, coalesce(run_id, head_run_id, '') from mart.served_head order by universe_id"
             ).fetchall()

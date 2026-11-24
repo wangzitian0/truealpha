@@ -951,7 +951,7 @@ def test_refresh_universes_skips_stopped_sp500_and_isolates_per_universe_transac
         def commit(self) -> None:
             commits.append(self.cid)
 
-    def fake_connect(_dsn: str):
+    def fake_connect(_dsn: str, **_options: object):
         nonlocal conn_counter
         conn_counter += 1
         return _FakeConn(conn_counter)

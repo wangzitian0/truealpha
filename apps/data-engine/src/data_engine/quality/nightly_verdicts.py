@@ -10,10 +10,9 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-import psycopg
 from truealpha_contracts.environment_contract import load_environment_contract
 
-from data_engine.config import settings
+from data_engine import db
 from data_engine.environment_universes import rule_environment
 
 log = logging.getLogger(__name__)
@@ -29,7 +28,7 @@ NEWEST_SQL = "select ok from mart.nightly_verdicts where check_name = %s order b
 
 
 def newest_is_red(name: str) -> bool:
-    with psycopg.connect(settings.database_url, autocommit=True) as connection:
+    with db.connect(autocommit=True) as connection:
         row = connection.execute(NEWEST_SQL, (name,)).fetchone()
     return row is not None and row[0] is False
 
@@ -73,7 +72,7 @@ def bounded(summary: str) -> str:
 def record(name: str, *, ran_at: datetime, ok: bool | None, summary: str, run_id: str) -> None:
     if not is_valid_name(name):
         raise ValueError(f"not a verdict name: {name!r}")
-    with psycopg.connect(settings.database_url, autocommit=True) as connection:
+    with db.connect(autocommit=True) as connection:
         connection.execute(INSERT_SQL, (name, ran_at, ok, bounded(summary), run_id[:64] or "unknown"))
 
 

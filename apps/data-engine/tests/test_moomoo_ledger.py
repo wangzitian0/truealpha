@@ -2,6 +2,7 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 
 import dagster as dg
+import psycopg
 import pytest
 from data_engine.datahub.analyst_ratings import UniverseCapture
 from data_engine.datahub.fetch_key import FetchKey
@@ -104,7 +105,7 @@ def test_two_moomoo_calls_at_share_one_capture_then_run_analyst_ratings(call_led
     monkeypatch.setattr(gateway, "capacity_scope", fake_scope)
 
     # Setup mocks for run_analyst_ratings DB and universe
-    monkeypatch.setattr(standards.psycopg, "connect", MagicMock())
+    monkeypatch.setattr(psycopg, "connect", MagicMock())
     monkeypatch.setattr(
         "data_engine.datahub.question_coverage.governed_head_of",
         lambda *a, **k: GovernedHead("topt", "run_1", datetime.now(UTC)),

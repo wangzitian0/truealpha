@@ -13,6 +13,7 @@ from pydantic import Field
 from truealpha_contracts.environment_contract import UTILIZATION_CEILING
 from truealpha_contracts.universes import lane_name
 
+from data_engine import db
 from data_engine.config import settings
 from data_engine.datahub.capture_core.source_registrations import origin_per_key_cost
 from data_engine.datahub.capture_core.universe_plane import resolve_universe_corpus
@@ -231,7 +232,7 @@ class QqqPriceRefreshConfig(dg.Config):
 
 @external_op
 def refresh_qqq_prices_op(context: dg.OpExecutionContext, config: QqqPriceRefreshConfig) -> None:
-    with gateway.capacity_scope(), psycopg.connect(settings.database_url) as connection:
+    with gateway.capacity_scope(), db.connect() as connection:
         outcome = _refresh_qqq_prices(
             context,
             connection,

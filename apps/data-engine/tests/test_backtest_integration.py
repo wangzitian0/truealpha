@@ -248,7 +248,7 @@ def _seeded(
     _seed_prices(connection)
     _seed_rates(connection, skip=skip_rates)
     monkeypatch.setattr(connection, "commit", lambda: None)
-    monkeypatch.setattr(lane.psycopg, "connect", lambda *_args, **_kwargs: _Borrowed(connection))
+    monkeypatch.setattr(psycopg, "connect", lambda *_args, **_kwargs: _Borrowed(connection))
     verdicts: list[tuple[bool | None, str]] = []
     monkeypatch.setattr(
         "data_engine.quality.nightly_verdicts.record",

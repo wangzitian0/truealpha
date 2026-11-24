@@ -9,6 +9,7 @@ import dagster as dg
 import psycopg
 from truealpha_contracts.environment_contract import load_environment_contract
 
+from data_engine import db
 from data_engine.config import settings
 from data_engine.external_op import external_op
 from data_engine.lanes.capture import is_universe_list_refresh_scheduled, is_universe_scheduled
@@ -32,7 +33,7 @@ def _isolated_db_step(
     fn: Callable[[psycopg.Connection[Any]], None],
 ) -> None:
     try:
-        with psycopg.connect(settings.database_url) as connection:
+        with db.connect() as connection:
             fn(connection)
             connection.commit()
     except Exception as error:  # noqa: BLE001

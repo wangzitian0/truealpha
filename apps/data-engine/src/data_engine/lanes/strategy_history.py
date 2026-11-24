@@ -3,8 +3,8 @@
 from datetime import datetime
 
 import dagster as dg
-import psycopg
 
+from data_engine import db
 from data_engine.config import settings
 from data_engine.datahub.strategy_history import DEFAULT_MONTHS, project_deployed_history
 from data_engine.external_op import external_op
@@ -25,7 +25,7 @@ class StrategyHistoryConfig(dg.Config):
 def project_strategy_history_op(context: dg.OpExecutionContext, config: StrategyHistoryConfig) -> None:
     """Project point-in-time strategy inputs across historical cutoffs."""
     tick = datetime.fromisoformat(config.executed_at)
-    with psycopg.connect(settings.database_url) as connection:
+    with db.connect() as connection:
         summary = project_deployed_history(connection, tick=tick, months=config.months)
         connection.commit()
     metadata = {

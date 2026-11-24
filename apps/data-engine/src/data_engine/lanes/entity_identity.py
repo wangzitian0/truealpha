@@ -10,7 +10,7 @@ import dagster as dg
 import psycopg
 from truealpha_runtime.mart_refresh import refresh_mart_materialized_views
 
-from data_engine.config import settings
+from data_engine import db
 from data_engine.external_op import external_op
 
 ENTITY_BACKFILL_JOB_NAME = "entity_identity_backfill"
@@ -33,7 +33,7 @@ def _count(section: Mapping[str, Any]) -> int:
 
 @external_op
 def entity_identity_backfill_op(context: dg.OpExecutionContext) -> dg.Output[dict[str, Any]]:
-    with psycopg.connect(settings.database_url) as connection:
+    with db.connect() as connection:
         summary = run_entity_backfill(connection, refresh_mart=False)
         connection.commit()
         refresh_mart_materialized_views(connection, concurrently=True)
@@ -86,7 +86,7 @@ def evaluate_backfill_due(connection: psycopg.Connection[Any], cursor: str | Non
     default_status=dg.DefaultSensorStatus.RUNNING,
 )
 def entity_identity_backfill_sensor(context: dg.SensorEvaluationContext):
-    with psycopg.connect(settings.database_url, autocommit=True) as connection:
+    with db.connect(autocommit=True) as connection:
         reason, next_cursor = evaluate_backfill_due(connection, context.cursor)
     if next_cursor is not None and next_cursor != context.cursor:
         context.update_cursor(next_cursor)

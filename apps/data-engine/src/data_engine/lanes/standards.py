@@ -10,6 +10,7 @@ import dagster as dg
 import psycopg
 from truealpha_contracts.universes import key_of_lane, lane_name, universes_with_role
 
+from data_engine import db
 from data_engine.config import settings
 from data_engine.contracts.standards import STANDARDS
 from data_engine.datahub import analyst_ratings, question_coverage
@@ -278,7 +279,7 @@ def run_standard_backfill(context: dg.OpExecutionContext, config: StandardBackfi
     names = standards_to_run(config.standard)
     summaries = []
     meta: dict[str, Any] = {"universe": config.universe, "standards": ", ".join(names), "mode": config.mode}
-    with gateway.capacity_scope(), psycopg.connect(settings.database_url) as connection:
+    with gateway.capacity_scope(), db.connect() as connection:
         for name in names:
             report = _run_standard_backfill(
                 connection,
@@ -335,7 +336,7 @@ def run_theme_purity(context: dg.OpExecutionContext, config: StandardBackfillCon
         return early
     with (
         _verdict(context, THEME_PURITY_VERDICT, config.universe, config.executed_at) as outcome,
-        psycopg.connect(settings.database_url) as connection,
+        db.connect() as connection,
     ):
         head = governed_head_of(connection, key_of_lane(config.universe))
         if isinstance(head, NoHead):
@@ -448,7 +449,7 @@ def run_supply_chain_exposure(
         return early
     joined = model_extracted = replayed = exceeded = model_errors = no_answer = 0
     exceeded_filings: tuple[str, ...] = ()
-    with gateway.capacity_scope(), psycopg.connect(settings.database_url) as connection:
+    with gateway.capacity_scope(), db.connect() as connection:
         head, universe, early = _prepare_canonical_head(
             context, connection, config, lane_label="supply chain exposure", verdict_prefix="supply chain"
         )
@@ -522,7 +523,7 @@ def run_analyst_ratings(context: dg.OpExecutionContext, config: StandardBackfill
     ) is not None:
         return early
     captured = analyst_ratings.UniverseCapture(rows=0)
-    with gateway.capacity_scope(), psycopg.connect(settings.database_url) as connection:
+    with gateway.capacity_scope(), db.connect() as connection:
         head, universe, early = _prepare_canonical_head(
             context,
             connection,
@@ -630,7 +631,7 @@ def run_question_coverage(context: dg.OpExecutionContext, config: StandardBackfi
     executed_at = datetime.fromisoformat(config.executed_at)
     with (
         _verdict(context, QUESTION_COVERAGE_VERDICT, config.universe, config.executed_at) as outcome,
-        psycopg.connect(settings.database_url) as connection,
+        db.connect() as connection,
     ):
         report = compile_report(connection, universe=config.universe, executed_at=executed_at)
         if report is None:
@@ -789,7 +790,7 @@ def run_standard_history(context: dg.OpExecutionContext, config: StandardHistory
     tick = datetime.fromisoformat(config.executed_at)
     names = history_standards(config.standard)
     reports = []
-    with gateway.capacity_scope(), psycopg.connect(settings.database_url) as connection:
+    with gateway.capacity_scope(), db.connect() as connection:
         for name in names:
             reports.append(
                 _run_standard_history(
@@ -860,7 +861,7 @@ def standard_backfill_catchup_sensor(context: dg.SensorEvaluationContext):
     if not (universes := scheduled_universe_names()):
         yield dg.SkipReason("the environment contract schedules no universe in this environment")
         return
-    with psycopg.connect(settings.database_url) as connection:
+    with db.connect() as connection:
         missing = never_backfilled(connection, universes=universes, standards=standards_to_run(""))
     if not missing:
         yield dg.SkipReason("every registered standard has completed a backfill over every universe here")
@@ -883,7 +884,7 @@ def head_reports_start(context: dg.OpExecutionContext, config: HeadReportsStartC
     summary: dict[str, Any] = {"universe": config.universe, "mode": "head-reports", "executed_at": config.executed_at}
     if config.only_if_stale:
         outcome = "no current reports; recomputing"
-        with psycopg.connect(settings.database_url) as connection:
+        with db.connect() as connection:
             head = question_coverage.governed_head_of(connection, key_of_lane(config.universe))
             if not isinstance(head, question_coverage.NoHead) and question_coverage.reports_current_for_head(
                 connection, head
@@ -954,7 +955,7 @@ def head_reports_sensor(context: dg.SensorEvaluationContext):
     followed = _followed(context.cursor)
     executed_at = _utc_now_iso()
     requests: list[dg.RunRequest] = []
-    with psycopg.connect(settings.database_url) as connection:
+    with db.connect() as connection:
         for universe in scheduled_universe_names():
             head = question_coverage.governed_head_of(connection, key_of_lane(universe))
             if isinstance(head, question_coverage.NoHead) or followed.get(universe) == head.run_id:

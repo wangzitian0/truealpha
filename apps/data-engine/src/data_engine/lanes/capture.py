@@ -8,11 +8,11 @@ from decimal import Decimal
 from typing import Any
 
 import dagster as dg
-import psycopg
 from truealpha_contracts.environment_contract import load_environment_contract
 from truealpha_contracts.strategy import ExclusionReason
 from truealpha_contracts.universes import job_name, keys, lane_name, op_name, record, schedule_name
 
+from data_engine import db
 from data_engine.config import settings
 from data_engine.datahub.a1_evidence import ACCEPTED_SERVICE_OBJECTIVES, ServiceObjectives, register_run_evidence
 from data_engine.datahub.capture_core.composition import (
@@ -165,7 +165,7 @@ def _run_tick(context: dg.OpExecutionContext, config: LiveTickConfig, tick: Univ
         corroboration_tally() as corroborations,
         _summary_on_failure(context, f"{tick.log_label} {config.executed_at}", corroborations),
         gateway.capacity_scope(),
-        psycopg.connect(settings.database_url) as connection,
+        db.connect() as connection,
     ):
         ensure_served_head_artifacts(connection)
         pipeline = run_capture_pipeline(

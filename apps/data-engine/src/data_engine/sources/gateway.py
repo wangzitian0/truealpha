@@ -25,6 +25,7 @@ from infra2_sdk.capacity import RateLimitWindow
 from infra2_sdk.runtime.http import request_with_retry
 from truealpha_contracts.environment_contract import DAY_SECONDS, load_environment_contract
 
+from data_engine import db
 from data_engine.config import settings
 from data_engine.datahub.capture_core.source_registrations import LEDGER_CAPACITIES, CapacityDeclaration
 from data_engine.datahub.fetch_key import FetchKey
@@ -218,9 +219,7 @@ _pg_conn = None
 def _pg():
     global _pg_conn
     if _pg_conn is None or _pg_conn.closed:
-        import psycopg
-
-        _pg_conn = psycopg.connect(settings.database_url, autocommit=True)
+        _pg_conn = db.connect(autocommit=True)
     return _pg_conn
 
 
