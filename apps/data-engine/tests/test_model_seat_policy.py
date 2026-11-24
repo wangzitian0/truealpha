@@ -258,14 +258,14 @@ def test_every_attempt_is_admitted_and_no_slot_is_held_while_the_call_waits(worl
     assert held_during_waits and set(held_during_waits) == {0}, "a waiting call holds no concurrency slot"
 
 
-def test_the_task_timeout_reaches_the_network_call_of_its_own_thread(world, monkeypatch) -> None:
+def test_the_task_timeout_reaches_the_network_call_of_its_own_thread(world, monkeypatch, slow_staging) -> None:
     """Two calls wait for the one concurrency slot of staging while a third holds it. Each socket
     call then carries the timeout of its own task. A shared module global gives both the value
     that was set last."""
     import dataclasses
     import time as real_time
 
-    in_environment(monkeypatch, "staging")  # one concurrent call
+    assert slow_staging.max_concurrent_calls == 1
     seen: dict[str, float] = {}
     holder_in_flight, release_holder = threading.Event(), threading.Event()
 
@@ -829,7 +829,7 @@ def test_the_missing_key_message_names_the_variable_that_settings_reads(monkeypa
 
 
 def test_the_registry_holds_no_summed_model_limit_and_names_model_plan() -> None:
-    """#1520 step 5: `LEDGER_CAPACITIES` no longer sums environment limits (13/min, 3 concurrent).
+    """#1520 step 5: `LEDGER_CAPACITIES` no longer sums environment limits (20/min, 4 concurrent since #1861).
     The whole-account figure is `none_published` (`None`), and per-environment pacing stays in `model_seat`."""
     from data_engine.datahub.capture_core import source_registrations as registry
 

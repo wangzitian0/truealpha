@@ -406,7 +406,7 @@
     "seat": "filing-extraction-model",
     "shared_credential": "single_coding_plan_account",
     "measured_at": "2026-10-21",
-    "source": "staging.api_call_ledger (#1444) and https://docs.z.ai/api-reference/api-code",
+    "source": "staging.api_call_ledger (#1444) and https://docs.z.ai/api-reference/api-code; staging set to the production pace on 2026-11-24 by owner decision, not measured (#1851)",
     "retry": {
       "transient_http_statuses": [429],
       "transient_provider_codes": ["1302", "1305"],
