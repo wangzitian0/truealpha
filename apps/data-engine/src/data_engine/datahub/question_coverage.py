@@ -451,7 +451,7 @@ def stored_report_rules_current(connection: Connection[Any], universe_id: str) -
         "where universe_id = %s order by created_at desc limit 1",
         (universe_id,),
     ).fetchone()
-    return bool(row) and row[0] == REGISTRY_SHA256
+    return row is not None and row[0] == REGISTRY_SHA256
 
 
 def stored_confidence_report_run(connection: Connection[Any], universe_id: str) -> str | None:
