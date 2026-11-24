@@ -557,7 +557,7 @@ def test_lineage_completeness_falls_when_the_stored_bytes_are_not_the_bytes_clai
 def test_the_report_and_the_mart_agree_about_the_same_broken_run(connection) -> None:
     """The report cannot call a run whole while the mart calls part of it unavailable.
 
-    Production's report said `84/84` for a run `mart.topt_gppe_results` scored
+    Production's report said `84/84` for a run `mart.topt_gppe_results` (retired in #1730) scored
     19 available / 1 unavailable, and the App renders the mart's number. Both now read
     the same payload fields, so one run cannot produce two answers.
     """
@@ -670,7 +670,7 @@ def test_factor_availability_reads_core_availability_when_issuer_is_unavailable_
 
 def test_factor_availability_halted_run_reports_not_computed(connection) -> None:
     """#1518 Step 5 acceptance: When the run halted before core materialization
-    (0 rows in mart.topt_core_results), factor_availability records status = not_computed,
+    (0 rows in mart.topt_core_results, retired in #1730), factor_availability records status = not_computed,
     complete_subjects = 0, complete_subject_ids = [], ratio = '0.0000'.
     """
     store = _InMemoryObjectStore()
@@ -1090,7 +1090,7 @@ def test_the_vintage_axis_reaches_the_served_mart_row(connection) -> None:
     """#530 slice 4: 'how old is the number this row serves' is a SQL question.
 
     The fixture's fiscal periods (FY-end 2025-12-31, shares cover date 2026-03-15)
-    must arrive as typed columns on mart.topt_core_results — the V-2010 incident's
+    must arrive as typed columns on mart.topt_core_results (retired in #1730) — the V-2010 incident's
     blind spot was exactly that mart rows carried no period, so a 16-year-old share
     count was indistinguishable from a fresh one without re-deriving from the
     vendor."""

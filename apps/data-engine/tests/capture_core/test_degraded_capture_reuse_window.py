@@ -289,7 +289,7 @@ def _served_report(url: str):
 
 
 #: The identity the READ PATH serves for an entity coordinate: mart.entity_identity's
-#: symbolic legacy id, else the coordinate itself. `mart.topt_core_results.issuer_id` and
+#: symbolic legacy id, else the coordinate itself. `mart.topt_core_results.issuer_id` (retired in #1730) and
 #: `mart.strategy_decisions.issuer_id` hold the opaque entity UUID (#928), and
 #: PostgresStrategyRunRepository translates it on the way out (#953) so MCP callers get an
 #: id they can resolve. A test that correlates a served decision with a mart row therefore

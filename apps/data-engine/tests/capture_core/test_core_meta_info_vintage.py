@@ -1,4 +1,4 @@
-"""`mart.topt_core_meta_info` projects the vintage from the payload table (#530 item 4).
+"""`mart.capture_issuer_lineage` projects the vintage from the payload table (#530 item 4; the view was `mart.topt_core_meta_info`, retired in #1730).
 
 20260908T1014 added `'vintage', observation.payload -> 'vintage'` so a served number could
 name its filing, and read the wrong column. `capture_normalized_observations.payload` is the
@@ -178,7 +178,7 @@ def test_the_envelope_carries_no_business_fields(connection) -> None:
 
 
 def test_the_vintage_in_the_payload_table_reaches_the_lineage_of_the_served_row(connection) -> None:
-    """The other half: a vintage in the payload table reaches `mart.topt_core_meta_info`.
+    """The other half: a vintage in the payload table reaches `mart.capture_issuer_lineage`.
     The seeded financial-fact payloads carry a vintage. So a green projection test cannot be
     green because no row has a vintage. test_sec_financial_adapter.py covers the adapter side.
     `test_the_bundle_names_the_filing_behind_each_input` pins the entry shape.

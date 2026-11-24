@@ -1,7 +1,7 @@
 """A boot never waits on a lock (2026-09-17 production incident).
 
 `db/apply_migrations.sh` replays every migration on every llm-service boot. The v0.0.81
-production boot spent 108 s of its 132 s inside `0017_contract_objects.sql`: a
+production boot spent 108 s of its 132 s inside `0017_contract_objects.sql` (folded into the baseline since): a
 `standard_backfill_pipeline` run held ROW EXCLUSIVE on `staging.contract_objects` in a
 long transaction, and 0017 re-ran `alter column ... set default` (ACCESS EXCLUSIVE),
 `create index if not exists` (SHARE, taken before the name is looked up) and

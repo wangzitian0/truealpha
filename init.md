@@ -313,7 +313,7 @@ moomoo codes and the legacy `issuer:…`/`security:…`/`listing:…` strings ar
 validity interval, a knowable-at time, provenance and confidence. Merges and splits add edges
 and rewrite nothing, and every read resolves an alias at an explicit valid date and
 knowable-at time. The store is `staging.entities` / `entity_aliases` / `entity_relations`
-(migration `20260917T0412`, filled by the Dagster job `entity_identity_backfill`, never at
+(`db/migrations/0002_staging.sql`, filled by the Dagster job `entity_identity_backfill`, never at
 boot); the ontology, rules, backfill and
 switch-over plan are `docs/entity-identity.md`. Until captures carry UUIDs (#877 PR-3), the
 legacy strings remain the payload ids, and each one resolves through its `legacy-id` alias.

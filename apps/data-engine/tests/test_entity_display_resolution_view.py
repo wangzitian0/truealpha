@@ -10,8 +10,8 @@ contract against it:
   * exactly one row per issuer, 20/20, every ticker non-null and parsed from
     `listing:<mic>:<symbol>` uppercased (issue #495 acceptance #1, corrected
     denominator — see the 2026-07-27 issue comment);
-  * display_name is NULL without a KG entity (staging.kg_entities is empty in
-    production today) and fills through the LEFT JOIN when one exists;
+  * display_name is NULL without a KG entity (staging.kg_entities, retired in #1730, was empty in
+    production) and fills through the LEFT JOIN when one exists;
   * mart_readonly can select the view but still cannot touch staging directly
     (view-owner permission semantics keep the consumer boundary intact).
 

@@ -9,7 +9,7 @@ The checks:
 
 1. The view returns the rows of the old definition. The old definition is the `$view$` text of
    20260923T1800. Two seeds hold merge chains, a retracted merge, expired and withdrawn aliases,
-   a tie on confidence, a double match in `staging.kg_entities` and entities without an alias.
+   a tie on confidence, a double match in `staging.kg_entities` (retired in #1730) and entities without an alias.
 2. Each case of the small seed has an explicit expected row. So the rules have a pin that does
    not depend on the old text.
 3. One evaluation calls `staging.entity_survivor` at most once for each alias row and each

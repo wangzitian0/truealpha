@@ -20,7 +20,7 @@ from macro_seed import stub_rate
 
 RUN = "capture-run:" + "f" * 64
 #: A HISTORICAL replay cutoff. The look-ahead the consolidation tests guard against is not a filing dated
-#: in the future (`staging.kg_identifiers` already refuses to record one: recorded_at >= transaction_time).
+#: in the future (`staging.kg_identifiers`, retired in #1730, refused to record one: recorded_at >= transaction_time).
 #: It is a filing that has landed since, applied to a replay of an earlier date: the shape a backtest meets (#758/M3).
 CUTOFF = datetime(2026, 7, 1, 12, 0, tzinfo=UTC)
 
