@@ -77,7 +77,7 @@
       "writes": false,
       "accepts_scale": false,
       "timeout_seconds": 240,
-      "bootstrap": "cd apps/app-web && bun install --frozen-lockfile && bunx playwright install --with-deps --only-shell chromium",
+      "bootstrap": "cd apps/app-web && bun install --frozen-lockfile && bunx playwright install --only-shell chromium",
       "required_env": [
         "TA_EMAIL",
         "TA_MEMBER_EMAIL",

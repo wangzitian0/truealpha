@@ -19,6 +19,8 @@ maps each check to the cells of the stage grid (`infra2_sdk.manifests.CELL_POLIC
 `python -m infra2_sdk.manifests --check-hooks runtime-hooks.manifest.json` to print the check-to-cell result.
 A check leaves a default cell through `cells.remove` with a reason and an issue.
 The hook environment carries `APP_URL`, `APP_VERSION_REF` and `ENVIRONMENT`.
+A check `bootstrap` runs inside the cell budget. It installs no OS package: the `ubuntu-24.04`
+runner image holds every library of the Playwright headless shell (#1843).
 
 The `infra2` release train enforces its own daily automatic-release cap
 (`DEFAULT_DAILY_CAP` in the `infra2` release controller) and staging soak rules.

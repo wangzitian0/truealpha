@@ -141,3 +141,37 @@ def test_browser_check_uses_headless_shell_and_each_cell_fits_its_budget() -> No
     for cell in EXPECTED_CELL_CHECKS:
         total = sum(row.timeout_seconds for row in hooks.checks_for_cell(cell))
         assert total <= CELL_POLICIES[cell].budget_seconds, (cell, total)
+
+
+# Tokens that install or upgrade OS packages on the runner. A hook bootstrap runs inside the
+# cell budget; on infra2 run 45331134994 the apt part alone took about 260 s of the 360 s
+# `staging.post` cell (#1843).
+_OS_PACKAGE_TOKENS = frozenset({"--with-deps", "install-deps", "apt", "apt-get", "dpkg", "sudo"})
+
+
+def _os_package_tokens(command: str) -> set[str]:
+    words = command.replace("&&", " ").replace(";", " ").split()
+    return {word for word in words if word in _OS_PACKAGE_TOKENS}
+
+
+def test_browser_installs_change_no_os_package() -> None:
+    """#1843: no hook bootstrap and no CI browser install runs apt.
+
+    Measured on ubuntu-24.04: the headless shell has no missing library, and apt added
+    fonts only. The staging walk and the CI walk must run on the same OS packages.
+    """
+    hooks = _load_hooks()
+    bootstraps = {row.id: row.bootstrap for row in hooks.checks if row.bootstrap.strip()}
+    assert "walk_tree" in bootstraps
+    assert {cid: _os_package_tokens(cmd) for cid, cmd in bootstraps.items() if _os_package_tokens(cmd)} == {}
+
+    browser_steps = yaml.safe_load((WORKFLOWS / "ci-web.yml").read_text(encoding="utf-8"))["jobs"]["browser"]["steps"]
+    installs = [str(step["run"]) for step in browser_steps if "playwright install" in str(step.get("run", ""))]
+    assert len(installs) == 1, installs
+    assert _os_package_tokens(installs[0]) == set()
+
+    # The predicate finds each form that the manifest used before #1843.
+    with_deps = bootstraps["walk_tree"].replace("playwright install", "playwright install --with-deps")
+    assert _os_package_tokens(with_deps) == {"--with-deps"}
+    assert _os_package_tokens("bunx playwright install-deps chromium") == {"install-deps"}
+    assert _os_package_tokens("sudo apt-get install -y fonts-unifont") == {"sudo", "apt-get"}
