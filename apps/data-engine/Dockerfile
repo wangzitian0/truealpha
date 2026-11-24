@@ -78,6 +78,12 @@ COPY db/migrations ./db/migrations
 COPY db/roles.sql ./db/roles.sql
 COPY db/apply_migrations.sh ./db/apply_migrations.sh
 
+# The deployment entrypoint (Refs wangzitian0/infra2#1822). infra2's compose runs
+# `/bin/sh /app/dagster-entrypoint.sh <command>`, so the image carries the script and no
+# bind mount from the infra2 checkout is needed. The bytes equal the infra2 copy: the script reads
+# only /secrets/.env and `apps/data-engine/required-env.generated.json` under WORKDIR /app.
+COPY --chmod=0755 apps/data-engine/dagster-entrypoint.sh /app/dagster-entrypoint.sh
+
 # Default to the webserver role; the compose pins each role's command explicitly.
 EXPOSE 3001
 CMD ["dagster-webserver", "-m", "data_engine.dagster_defs", "--host", "127.0.0.1", "--port", "3001"]
