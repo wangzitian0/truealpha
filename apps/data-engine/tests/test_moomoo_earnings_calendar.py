@@ -12,7 +12,7 @@ import json
 from collections import Counter
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -182,10 +182,16 @@ def test_a_range_moomoo_refuses_is_refused_before_any_call(begin: date, end: dat
     assert client.calls == []
 
 
-# The stored staging answer of 2026-11-24 07:12:48 UTC: `raw.fetches` key
-# `get_earnings_calendar:market:US:2026-11-20:2026-11-26:2026-11-24`, byte-pinned.
-_SAMPLE = Path(__file__).resolve().parents[1] / "samples" / "moomoo" / "earnings_calendar_US_2026-11-20_2026-11-26.json"
-_SAMPLE_SHA256 = "e1abb01685316b7f8498d4ca534c53ca589b34219c82c7d87faf6b8a10ec6b98"
+# Stored staging answers of 2026-11-24, byte-pinned: `raw.fetches` keys
+# `get_earnings_calendar:market:US:<begin>:<end>:2026-11-24`, fetched 07:12:48 and 07:42:01 UTC.
+_SAMPLES = Path(__file__).resolve().parents[1] / "samples" / "moomoo"
+_SAMPLE_SHA256 = {
+    "earnings_calendar_US_2026-11-20_2026-11-26.json": "e1abb01685316b7f8498d4ca534c53ca589b34219c82c7d87faf6b8a10ec6b98",
+    "earnings_calendar_US_2026-02-02_2026-02-08.json": "4e5a42edabe3084e500cb880fdd2bb124913731b9ddcb80f3e526398120db0cb",
+}
+_NOVEMBER = "earnings_calendar_US_2026-11-20_2026-11-26.json"
+_FEBRUARY = "earnings_calendar_US_2026-02-02_2026-02-08.json"
+_SEMI_ANNUAL = pb.EarningsCalendarPeriodType_SemiAnnual
 # GAAP diluted EPS of the quarter, from the earnings release (8-K exhibit 99.1) of each company, 2026-11-23.
 _GAAP_DILUTED_EPS_OF_THE_RELEASE = {
     "CRWD": 0.02,  # sec.gov/Archives/edgar/data/1535527/000153552726000035/crwd-20261123xex991.htm (non-GAAP 0.34)
@@ -195,36 +201,70 @@ _GAAP_DILUTED_EPS_OF_THE_RELEASE = {
 }
 
 
-def _sample_items() -> list[dict[str, Any]]:
-    body = _SAMPLE.read_bytes()
-    assert hashlib.sha256(body).hexdigest() == _SAMPLE_SHA256, "the captured answer changed"
+def _sample_items(name: str) -> list[dict[str, Any]]:
+    body = (_SAMPLES / name).read_bytes()
+    assert hashlib.sha256(body).hexdigest() == _SAMPLE_SHA256[name], f"the captured answer {name} changed"
     return json.loads(body)
 
 
-def test_the_captured_calendar_has_no_annual_eps_estimate_so_consensus_growth_has_no_source() -> None:
-    """#1791: each event carries one EPS estimate of its own quarter; no event carries an annual one.
+def _eps_by_code(items: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    return {item["security"]["code"]: [e for e in item["estimateList"] if e["estimateType"] == _EPS] for item in items}
 
-    One quarter cannot stand for annual growth, so the analyst-consensus PEG convention stays
-    `growth_convention_unsourced:analyst_consensus`. Fiscal-year-end reports (HPQ, ADI, DE, A) are no exception.
+
+@pytest.mark.parametrize(
+    ("name", "events", "fiscal_q4", "eps_periods"),
+    [
+        (_NOVEMBER, 91, 20, {_QUARTERLY: 69, _SEMI_ANNUAL: 1, None: 21}),
+        (_FEBRUARY, 474, 272, {_QUARTERLY: 445, None: 29}),
+    ],
+)
+def test_a_captured_week_has_no_annual_eps_estimate(
+    name: str, events: int, fiscal_q4: int, eps_periods: dict[int | None, int]
+) -> None:
+    """#1791: each report has one EPS estimate, of its own quarter or empty; no report has an annual one.
+
+    The February week holds the fiscal-year-end reports of most calendar-year filers.
     """
-    items = _sample_items()
-    eps = {item["security"]["code"]: [e for e in item["estimateList"] if e["estimateType"] == _EPS] for item in items}
+    items = _sample_items(name)
+    eps = _eps_by_code(items)
 
-    assert len(items) == 91 and all(len(estimates) == 1 for estimates in eps.values())
-    assert Counter(e.get("periodType") for (e,) in eps.values()) == Counter({_QUARTERLY: 69, None: 21, 2: 1})
-    assert [code for code, (e,) in eps.items() if e.get("periodType") == _ANNUAL] == []
-    fiscal_year_ends = {item["security"]["code"] for item in items if item["periodText"].endswith("Q4")}
-    assert {"HPQ", "ADI", "DE", "A"} <= fiscal_year_ends
-    assert {eps[code][0]["periodType"] for code in ("HPQ", "ADI", "DE", "A")} == {_QUARTERLY}
+    assert len(items) == events and all(len(estimates) == 1 for estimates in eps.values())
+    assert sum(item["periodText"].endswith("Q4") for item in items) == fiscal_q4
+    assert Counter(e.get("periodType") for (e,) in eps.values()) == Counter(eps_periods)
+
+
+def test_fiscal_year_end_reports_carry_a_quarterly_eps_estimate() -> None:
+    eps = {**_eps_by_code(_sample_items(_FEBRUARY)), **_eps_by_code(_sample_items(_NOVEMBER))}
+
+    assert {
+        code: eps[code][0]["periodType"] for code in ("GOOGL", "AMZN", "LLY", "HPQ", "ADI", "DE", "A")
+    } == dict.fromkeys(("GOOGL", "AMZN", "LLY", "HPQ", "ADI", "DE", "A"), _QUARTERLY)
 
 
 def test_the_reported_eps_of_the_calendar_is_the_gaap_eps_of_the_company_release() -> None:
-    """The vendor labels the EPS estimate type GAAP; four reported actuals match the GAAP line of the release."""
-    eps = {
-        item["security"]["code"]: next(e for e in item["estimateList"] if e["estimateType"] == _EPS)
-        for item in _sample_items()
-    }
+    """The vendor labels the EPS type GAAP; four reported actuals match the GAAP line of the release.
 
-    assert {code: eps[code]["actualValue"] for code in _GAAP_DILUTED_EPS_OF_THE_RELEASE} == (
+    The basis of the estimates is not proved: ABBV in February has an estimate of 2.8741 against 1.02 reported.
+    """
+    eps = _eps_by_code(_sample_items(_NOVEMBER))
+
+    assert {code: eps[code][0]["actualValue"] for code in _GAAP_DILUTED_EPS_OF_THE_RELEASE} == (
         _GAAP_DILUTED_EPS_OF_THE_RELEASE
     )
+
+
+def test_an_actual_value_can_precede_the_release() -> None:
+    """DKS and NXGL release at 14:30 UTC on 2026-11-24; the answer fetched at 07:12:48 UTC already has an actual.
+
+    A rule that reads `actualValue` as the result of the event must check the release instant first.
+    """
+    fetched_at = datetime(2026, 11, 24, 7, 12, 48, tzinfo=UTC).timestamp()
+    items = _sample_items(_NOVEMBER)
+
+    early = sorted(
+        item["security"]["code"]
+        for item in items
+        if item["earningsTimestamp"] > fetched_at
+        and any(e["estimateType"] == _EPS and "actualValue" in e for e in item["estimateList"])
+    )
+    assert early == ["DKS", "NXGL"]
