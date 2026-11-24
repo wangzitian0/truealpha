@@ -705,6 +705,10 @@
         "class": "pipeline_gap",
         "tracking_issue": "#1851"
       },
+      "fetch_error:MoomooConnectionError": {
+        "kind": "outcome",
+        "class": "transient"
+      },
       "fetch_error:RuntimeError": {
         "kind": "outcome",
         "class": "pipeline_gap",
@@ -1322,6 +1326,11 @@
         "kind": "outcome",
         "class": "not_applicable"
       },
+      "unknown": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
       "unknown_freshness": {
         "kind": "outcome",
         "class": "pipeline_gap",
@@ -1367,7 +1376,8 @@
       },
       "fetch_error:": {
         "kind": "outcome",
-        "class": "transient"
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
       },
       "growth_convention:": {
         "kind": "evidence"
