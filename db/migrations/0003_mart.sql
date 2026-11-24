@@ -391,20 +391,6 @@ create table if not exists mart.research_card_artifacts (
  constraint research_card_artifacts_pkey PRIMARY KEY (run_id, card_kind, subject_key, convention, universe)
 );
 
-create table if not exists mart.strategy_input_coverage (
- run_id text not null,
- issuer_id text not null,
- required_count integer not null,
- present_count integer not null,
- missing_keys text[] not null,
- created_at timestamp with time zone default clock_timestamp() not null,
- constraint strategy_input_coverage_pkey PRIMARY KEY (run_id, issuer_id),
- constraint strategy_input_coverage_check CHECK ((present_count <= required_count)),
- constraint strategy_input_coverage_check1 CHECK ((cardinality(missing_keys) = (required_count - present_count))),
- constraint strategy_input_coverage_present_count_check CHECK ((present_count >= 0)),
- constraint strategy_input_coverage_required_count_check CHECK ((required_count > 0))
-);
-
 create table if not exists mart.strategy_runs (
  strategy_run_id text not null,
  content_sha256 text not null,
@@ -1456,7 +1442,6 @@ do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'mart.nightl
 do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'mart.oracle_outcomes'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = 'a1de3f75d3d027f7da5c6e9aca69587e') then drop trigger if exists reject_mutation on mart.oracle_outcomes; CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON mart.oracle_outcomes FOR EACH ROW EXECUTE FUNCTION mart.reject_mutation(); end if; end $$;
 do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'mart.research_card_artifacts'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = 'e6ccf7c0b2df791fad40662767958804') then drop trigger if exists trg_mart_research_card_artifacts_immutable on mart.research_card_artifacts; CREATE TRIGGER trg_mart_research_card_artifacts_immutable BEFORE DELETE OR UPDATE ON mart.research_card_artifacts FOR EACH ROW EXECUTE FUNCTION raw.reject_mutation(); end if; end $$;
 do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'mart.strategy_decisions'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = '6ced65234b03ac485076628b5baa0008') then drop trigger if exists trg_strategy_decisions_append_only on mart.strategy_decisions; CREATE TRIGGER trg_strategy_decisions_append_only BEFORE DELETE OR UPDATE ON mart.strategy_decisions FOR EACH ROW EXECUTE FUNCTION mart.reject_mutation(); end if; end $$;
-do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'mart.strategy_input_coverage'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = '98ecb5f99989100dba04a66d60c2b9ee') then drop trigger if exists reject_mutation on mart.strategy_input_coverage; CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON mart.strategy_input_coverage FOR EACH ROW EXECUTE FUNCTION mart.reject_mutation(); end if; end $$;
 do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'mart.strategy_run_capture_bindings'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = '0b9cdaf2ffa58ea702e3cb6685d4ba43') then drop trigger if exists trg_strategy_run_capture_bindings_append_only on mart.strategy_run_capture_bindings; CREATE TRIGGER trg_strategy_run_capture_bindings_append_only BEFORE DELETE OR UPDATE ON mart.strategy_run_capture_bindings FOR EACH ROW EXECUTE FUNCTION mart.reject_mutation(); end if; end $$;
 do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'mart.strategy_runs'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = '955638e2a1989bd4f24a4ff64a3b690a') then drop trigger if exists require_stored_fetch on mart.strategy_runs; CREATE TRIGGER require_stored_fetch BEFORE INSERT ON mart.strategy_runs FOR EACH ROW EXECUTE FUNCTION mart.require_stored_fetch('risk_free_fetch_id'); end if; end $$;
 do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'mart.strategy_runs'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = '12e3dbdeafd06c9d14e5130eee178e38') then drop trigger if exists trg_strategy_runs_append_only on mart.strategy_runs; CREATE TRIGGER trg_strategy_runs_append_only BEFORE DELETE OR UPDATE ON mart.strategy_runs FOR EACH ROW EXECUTE FUNCTION mart.reject_mutation(); end if; end $$;
@@ -1643,3 +1628,10 @@ execute $vc$create or replace view mart.universe_constituents as
      where f2.etf_symbol = f.etf_symbol
   )$vc$;
 end if; end $$;
+
+do $$
+begin
+    if to_regclass('mart.strategy_input_coverage') is not null then
+        drop table mart.strategy_input_coverage;
+    end if;
+end $$;

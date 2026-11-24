@@ -1,4 +1,4 @@
-"""#496 (metric first), #1852: count_complete_strategy_inputs computes readiness in memory without writing mart.strategy_input_coverage.
+"""#496 (metric first), #1852: count_complete_strategy_inputs computes readiness directly from staging inputs.
 
 Reuses the materialization suite's real seeding spine (same pattern as
 test_entity_display_resolution_view.py): seed a complete production run,
@@ -6,8 +6,7 @@ freeze + materialize, seed strategy inputs, then verify:
 
   * required inputs derive from the trees that the frozen definition pins for the issuer's
     class (`required_input_keys`): 6 for a non-financial issuer or insurer, 9 for a bank;
-  * returned (complete, total) counts match the seeded rows;
-  * zero rows are persisted into retired `mart.strategy_input_coverage`.
+  * returned (complete, total) counts match the seeded rows and rise when missing keys land.
 
 Skips without a local Postgres; ci-python/ci-db run it migrated.
 """
@@ -85,9 +84,6 @@ def test_complete_strategy_input_count_derives_required_keys_without_writing_tab
     assert total == len(branches)
     assert present_by_issuer, "expected seeded inputs in staging.strategy_backtest_inputs"
     assert complete == expected_complete
-    assert connection.execute(
-        "select count(*) from mart.strategy_input_coverage where run_id = %s", (run.run_id,)
-    ).fetchone() == (0,)
 
     incomplete = [
         (issuer_id, set(required_input_keys(definition, IssuerClass(branch))) - present_by_issuer.get(issuer_id, set()))

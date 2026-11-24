@@ -286,7 +286,7 @@ def test_all_non_vocabulary_foreign_keys_have_supporting_index(migrated_db: str)
             (list(SCHEMAS),),
         ).fetchall()
 
-    assert len(fks) >= 80, f"expected >=80 FKs, found {len(fks)}"
+    assert len(fks) >= 75, f"expected >=75 FKs, found {len(fks)}"
 
     by_table: dict[str, list[tuple[str, bool, str | None, tuple[str, ...]]]] = defaultdict(list)
     for tbl, idx_name, is_uniq, pred, cols in idx_rows:

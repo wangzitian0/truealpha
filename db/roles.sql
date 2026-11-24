@@ -140,8 +140,6 @@ grant select on staging.contract_objects to app_ops_reader;
 -- #729: the external call ledger — /admin/datahub's Capacity and Traffic sections read
 -- every vendor request (success or failure) and join it to the landed raw.fetches row.
 grant select on staging.api_call_ledger to app_ops_reader;
--- #877 PR-3: capture external entity references side table
-grant select on staging.capture_entity_refs to app_ops_reader;
 grant usage on schema mart to app_ops_reader;
 grant select on mart.current_pointer_head to app_ops_reader;
 -- #1062: the served head, with its age, limit, label and availability.

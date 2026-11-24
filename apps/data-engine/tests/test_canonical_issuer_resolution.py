@@ -1316,7 +1316,6 @@ WRITERS = {
     "issuer_supply_chain_exposure": "run_supply_chain_exposure",
     "issuer_analyst_ratings": "run_analyst_ratings",
 }
-RETIRED_WITHOUT_WRITER = {"strategy_input_coverage"}
 
 
 def run_scoped_issuer_tables(connection: psycopg.Connection[Any]) -> set[str]:
@@ -1332,7 +1331,7 @@ def run_scoped_issuer_tables(connection: psycopg.Connection[Any]) -> set[str]:
                       where c.table_schema = 'mart' and c.table_name = t.table_name and c.column_name = 'issuer_id')
         """
     ).fetchall()
-    return {name for (name,) in rows} - RETIRED_WITHOUT_WRITER
+    return {name for (name,) in rows}
 
 
 def issuer_ids_outside_the_wide_row(
@@ -1402,7 +1401,6 @@ def test_every_run_scoped_issuer_table_stores_the_wide_row_form(
         assert stored, f"{table} holds no row for the head: the guard checked nothing"
         assert issuer_ids_outside_the_wide_row(connection, table, head.run_id, wide) == set(), table
         assert all(is_canonical_issuer_id(issuer_id) for issuer_id in stored), table
-    assert _stored_ids(connection, "mart.strategy_input_coverage", head.run_id) == set()
 
 
 def test_the_guard_flags_a_table_that_stores_the_legacy_form(connection: psycopg.Connection[Any]) -> None:
