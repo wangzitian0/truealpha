@@ -20,11 +20,15 @@ from data_engine.datahub.question_coverage import (
     gppe_cells,
     peg_cells,
     persist,
+    previous_head,
     reports_current_for_head,
     stored_confidence_report_run,
+    stored_report_rules_current,
+    stored_report_run,
     summary_line,
     supply_chain_cells,
     theme_purity_cells,
+    with_change,
 )
 from truealpha_contracts.question_requirements import (
     QUESTION_REQUIREMENTS,
@@ -32,6 +36,7 @@ from truealpha_contracts.question_requirements import (
     Question,
     QuestionRequirement,
 )
+from truealpha_contracts.reasons import REGISTRY_SHA256
 
 TOPT = "universe:topt-us-2026-03-31"
 QQQ = "universe:qqq-us-2026-06-30"
@@ -189,6 +194,43 @@ def test_the_report_persists_append_only_and_reads_back() -> None:
         ).fetchone()
         assert row == (TOPT, QUESTION_REQUIREMENTS_SHA256, "0", "1")
         assert "q1: 0/1 answered" in summary_line(report)
+    finally:
+        connection.rollback()
+        connection.close()
+
+
+def test_the_previous_head_is_found_by_the_lane_and_a_report_of_old_rules_is_not_current() -> None:
+    """A list universe changes its id with its membership, so the lane name finds the previous head.
+    A stored report without the current reason registry is not current, so the head reports run again."""
+    connection = _connection()
+    lane = f"universe-list:t1851-{os.getpid()}"
+
+    def report(universe_id: str, run: str, *, registry: str | None) -> dict:
+        body = {
+            "universe": lane,
+            "universe_id": universe_id,
+            "run_id": run,
+            "cutoff": datetime(2026, 11, 22, tzinfo=UTC).isoformat(),
+            "environment": "test",
+            "requirements_sha256": QUESTION_REQUIREMENTS_SHA256,
+            "generated_at": datetime(2026, 11, 22, 9, 7, tzinfo=UTC).isoformat(),
+            "denominator": 1,
+            "questions": {},
+        }
+        return body | ({"reason_registry_sha256": registry} if registry else {})
+
+    try:
+        older, newer = "capture-run:" + "1" * 64, "capture-run:" + "2" * 64
+        old_id, new_id = f"universe:t1851a-us-{os.getpid()}", f"universe:t1851b-us-{os.getpid()}"
+        persist(connection, report(old_id, older, registry=None))
+        assert stored_report_run(connection, old_id) == older, "a report of the old rules still names its head"
+        assert stored_report_rules_current(connection, old_id) is False, "but it is not current"
+        persist(connection, report(new_id, newer, registry=REGISTRY_SHA256))
+        assert stored_report_rules_current(connection, new_id) is True
+
+        previous = previous_head(connection, lane, newer)
+        assert previous is not None and (previous.universe_id, previous.run_id) == (old_id, older)
+        assert previous_head(connection, "universe-list:none", newer) is None
     finally:
         connection.rollback()
         connection.close()
@@ -484,13 +526,18 @@ def test_reports_current_for_head_requires_both_coverage_and_confidence_reports(
     head = GovernedHead(universe_id=TOPT, run_id="capture-run:new", cutoff=datetime(2026, 10, 6, tzinfo=UTC))
 
     class _ReportConnection:
-        def __init__(self, coverage_run: str | None, confidence_run: str | None) -> None:
+        def __init__(
+            self, coverage_run: str | None, confidence_run: str | None, registry: str = REGISTRY_SHA256
+        ) -> None:
             self.coverage_run = coverage_run
             self.confidence_run = confidence_run
+            self.registry = registry
             self._row: tuple[str] | None = None
 
         def execute(self, sql: str, params=None):
-            if "mart.question_coverage_report" in sql:
+            if "reason_registry_sha256" in sql:
+                self._row = (self.registry,) if self.coverage_run is not None else None
+            elif "mart.question_coverage_report" in sql:
                 self._row = (self.coverage_run,) if self.coverage_run is not None else None
             elif "mart.datahub_confidence_report" in sql:
                 self._row = (self.confidence_run,) if self.confidence_run is not None else None
@@ -509,6 +556,8 @@ def test_reports_current_for_head_requires_both_coverage_and_confidence_reports(
     assert reports_current_for_head(_ReportConnection("capture-run:new", "capture-run:old"), head) is False
     assert reports_current_for_head(_ReportConnection("capture-run:old", "capture-run:new"), head) is False
     assert reports_current_for_head(_ReportConnection("capture-run:new", "capture-run:new"), head) is True
+    old_rules = _ReportConnection("capture-run:new", "capture-run:new", registry="0" * 64)
+    assert reports_current_for_head(old_rules, head) is False, "a report of other rules is not current (#1851)"
 
 
 def test_gppe_cells_and_classify_question_honor_persisted_not_applicable_status() -> None:
@@ -553,3 +602,113 @@ def test_gppe_cells_and_classify_question_honor_persisted_not_applicable_status(
     assert degraded_q1["answered"] == 15
     assert degraded_q1["denominator"] == 16
     assert degraded_q1["unavailable"] == {"missing_headcount": 1}
+
+
+# --- #1851 layer 1 step 2: classes, violations, change -------------------------------------------------
+
+
+def _q1(cells, issuers):
+    return classify_question(
+        REQ[Question.Q1_MODEL_LEVERAGE],
+        universe_id=QQQ,
+        issuers=issuers,
+        cells_by_column={"mart.metric_node_values.value": cells},
+    )
+
+
+def test_every_empty_cell_is_in_one_class_or_one_violation() -> None:
+    cells = (
+        Cell("issuer:a", True),
+        Cell("issuer:b", False, "missing_headcount"),
+        Cell("issuer:c", False, "model_no_answer"),
+        Cell("issuer:d", False, "no_us_gaap_gross_profit_tag", not_applicable=True),
+        Cell("issuer:e", False, UNRECORDED_REASON),
+        Cell("issuer:f", False, "no_such_registered_code"),
+        Cell("issuer:g", False, "nonpositive_headcount"),
+    )
+    entry = _q1(cells, [f"issuer:{x}" for x in "abcdefgh"])
+
+    assert entry["by_class"] == {"disputed": 1, "not_applicable": 1, "pipeline_gap": 1, "transient": 1}
+    assert entry["violations"] == {"no_reason": 1, "no_row": 1, "unregistered": 1}
+    assert entry["unregistered_reasons"] == {"no_such_registered_code": 1}
+    empty = 8 - entry["answered"]
+    assert sum(entry["by_class"].values()) + sum(entry["violations"].values()) == empty
+    assert entry["denominator"] == 7, "the not-applicable issuer leaves the denominator"
+    assert entry["reasons"] == {
+        "issuer:b": "missing_headcount",
+        "issuer:c": "model_no_answer",
+        "issuer:d": "no_us_gaap_gross_profit_tag",
+        "issuer:e": UNRECORDED_REASON,
+        "issuer:f": "no_such_registered_code",
+        "issuer:g": "nonpositive_headcount",
+        "issuer:h": NO_ROW,
+    }
+
+
+def test_an_evidence_code_is_never_the_reason_of_an_empty_cell() -> None:
+    """Theme purity writes its evidence flags first; the refusal is the floor (#1851 review)."""
+    rows = [
+        ("issuer:a", "unavailable", ["unclassified_revenue", "partition_residual", "below_minimum_classified_share"])
+    ]
+    (cell,) = theme_purity_cells(_Rows(rows), "run")
+    assert cell.reason == "below_minimum_classified_share"
+
+
+def test_the_served_status_alone_says_a_measure_does_not_apply() -> None:
+    """The producer sets `not_applicable` and the TOPT baseline counts it; a reason class only routes
+    the gap (#1851 review: `zero_denominator` would have left the q1 denominator)."""
+    (gap,) = gppe_cells(_Rows([("issuer:a", "unavailable", ["zero_denominator"], None)]), "run")
+    assert (gap.reason, gap.not_applicable) == ("zero_denominator", False)
+    (listed,) = gppe_cells(
+        _Rows([("issuer:b", "not_applicable", ["missing_headcount", "no_us_gaap_gross_profit_tag"], None)]), "run"
+    )
+    assert (listed.reason, listed.not_applicable) == ("no_us_gaap_gross_profit_tag", True)
+    entry = _q1((gap, listed), ["issuer:a", "issuer:b"])
+    assert entry["denominator"] == 1 and entry["by_class"] == {"not_applicable": 1, "pipeline_gap": 1}
+    (applicable,) = gppe_cells(
+        _Rows([("issuer:c", "unavailable", ["missing_headcount", "nonpositive_revenue"], None)]), "run"
+    )
+    assert applicable.reason == "missing_headcount", "in an applicable cell the first outcome code is the reason"
+
+
+def test_the_reason_of_peg_wins_over_the_exclusion_of_its_decision() -> None:
+    """#1804 and the #1851 review: PEG is computed for an excluded decision, so an exclusion of the
+    class not_applicable must not hide the PEG gap."""
+    rows = [
+        ("issuer:a", None, "excluded", "nonpositive_gross_profit", ["missing_net_income"]),
+        ("issuer:b", None, "excluded", "nonpositive_gross_profit", []),
+    ]
+    own, excluded = peg_cells(_Rows(rows), run_id="capture-run:" + "0" * 64)
+    assert (own.reason, own.not_applicable) == ("missing_net_income", False)
+    assert (excluded.reason, excluded.not_applicable) == ("excluded:nonpositive_gross_profit", False)
+
+
+def test_a_cell_without_any_code_is_no_reason_and_not_its_status() -> None:
+    (cell,) = supply_chain_cells(_Rows([("issuer:a", "unavailable", [])]), "run")
+    assert cell.reason == UNRECORDED_REASON
+
+
+def test_the_change_names_the_counts_and_the_subjects_that_moved() -> None:
+    issuers = ["issuer:a", "issuer:b"]
+    before = {
+        "q1": _q1((Cell("issuer:a", False, "missing_headcount"), Cell("issuer:b", False, "model_no_answer")), issuers)
+    }
+    after = {"q1": _q1((Cell("issuer:a", True), Cell("issuer:b", False, "missing_headcount")), issuers)}
+
+    change = with_change(after, before)["q1"]["change"]
+
+    assert change["answered"] == 1
+    assert change["by_class"] == {"transient": -1}
+    assert change["unavailable"] == {"model_no_answer": -1}
+    assert change["subjects_changed"] == 2
+    assert change["examples"] == [
+        {"subject": "issuer:a", "before": "missing_headcount", "after": None},
+        {"subject": "issuer:b", "before": "model_no_answer", "after": "missing_headcount"},
+    ]
+    assert "reasons" not in after["q1"], "the per-subject reasons are not stored"
+
+
+def test_without_a_previous_head_there_is_no_change() -> None:
+    questions = {"q1": _q1((Cell("issuer:a", True),), ["issuer:a"])}
+    assert "change" not in with_change(questions, None)["q1"]
+    assert "reasons" not in questions["q1"]

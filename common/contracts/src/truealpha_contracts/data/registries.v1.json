@@ -933,7 +933,8 @@
       },
       "negative_operand": {
         "kind": "outcome",
-        "class": "not_applicable"
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
       },
       "negative_tangible_common_equity": {
         "kind": "outcome",
@@ -1359,7 +1360,8 @@
       },
       "zero_denominator": {
         "kind": "outcome",
-        "class": "not_applicable"
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
       },
       "zero_oracle_value": {
         "kind": "outcome",
