@@ -24,6 +24,7 @@ from data_engine.datahub.standards.filing_extraction import (
     select_total,
 )
 from data_engine.datahub.standards.planner import UniverseIssuer, open_cells, resolve_missing_ciks
+from data_engine.sources import llm
 from data_engine.sources.gateway import SourceCapacity, SourceGateway
 from truealpha_contracts.models import RawCapture, RawIngestionEnvelope, RawObjectRef
 
@@ -1132,3 +1133,64 @@ def test_qqq_10k_human_capital_sentences_resolve_company_wide_headcount(
     assert status == "resolved" and chosen is not None, f"{ticker}: {found}"
     assert chosen.value == expected_value
     assert chosen.as_of == expected_as_of
+
+
+@pytest.mark.parametrize(
+    ("error", "status"),
+    [
+        (llm.ModelCapacityRefused("no call slot before the deadline"), "deferred_capacity"),
+        (llm.ModelHTTPError(0, "no answer: TimeoutError"), "deferred_capacity"),
+        (llm.ModelHTTPError(400, "refused"), "error"),
+    ],
+)
+def test_a_model_error_of_one_filing_is_that_filings_outcome(monkeypatch, error, status) -> None:
+    """#1851: the model selector of the headcount was outside any guard, so one filing whose two
+    totals went to the model ended the backfill of the universe and every lane after it."""
+    from data_engine.config import settings
+    from factors.shared import extraction as primitive
+
+    monkeypatch.setattr(settings, "llm_api_key", "test-key")
+
+    def no_selection(_candidates, _selector=None):
+        raise error
+
+    monkeypatch.setattr(primitive, "extract_metric", no_selection)
+    connection = FakeConnection()
+    outcome = extract_headcount(
+        59478,
+        connection=connection,
+        http=_fixture_edgar(),
+        gateway=_gateway(connection),
+        standard=STANDARD,
+        cutoff=CUTOFF,
+        write=True,
+        store=FakeStore(),
+    )
+    assert outcome.status == status
+    assert "model selection" in outcome.detail
+    assert connection.headcount_rows == []
+
+
+def test_an_issuer_without_a_cik_is_a_standing_gap_and_not_a_failed_cell(monkeypatch) -> None:
+    """#1851: the planner keeps such an issuer open, so an `error` status failed every run until
+    the crosswalk changed. The cell names the gap, and the run fails only on a cell without an answer."""
+    connection = FakeConnection()
+    issuers = [UniverseIssuer("issuer:lei:A", "BRK.B", "listing:xnys:brk.b", None)]
+    monkeypatch.setattr(backfill_module, "universe_issuers", lambda _c, _u, **_k: issuers)
+    monkeypatch.setattr(backfill_module.sec, "ticker_cik_index", lambda _http, **_k: {})
+
+    report = run_standard_backfill(
+        connection,
+        universe="topt",
+        standard_name="employees_total",
+        cutoff=CUTOFF,
+        mode="backfill",
+        http=FakeHttp({}),
+        gateway=_gateway(connection),
+        store=FakeStore(),
+        log=lambda _l: None,
+    )
+
+    assert dict(report.outcomes) == {"no_identifier": 1}
+    assert report.failed == 0
+    assert report.cells[0]["detail"] == "issuer has no CIK in the universe plane or the SEC crosswalk"

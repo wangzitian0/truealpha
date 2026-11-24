@@ -401,10 +401,6 @@ def build_model_key_health_schedule(environment: str) -> dg.ScheduleDefinition:
 model_key_health_schedule = build_model_key_health_schedule(gateway.capacity_environment())
 
 
-class _RedDashboardVerdict(dg.Failure):
-    pass
-
-
 def _run_dashboard_verdict(
     context: dg.OpExecutionContext,
     verdict_name: str,
@@ -415,19 +411,17 @@ def _run_dashboard_verdict(
     payload: dict[str, Any] = {}
     tick = tick_of(context)
     now = tick or datetime.now(UTC)
-    try:
-        with (
-            _op_verdict(context, verdict_name, tick=tick) as outcome,
-            db.connect(autocommit=True) as connection,
-        ):
-            summary, is_red, metadata, payload = evaluate(connection, outcome, now)
-            context.log.info(f"{label}: {summary}")
-            outcome.summary = outcome.summary or summary
-            context.add_output_metadata(metadata)
-            if is_red:
-                raise _RedDashboardVerdict(f"{label}: {summary} ({issue})")
-    except _RedDashboardVerdict as red:
-        context.log.warning(str(red))
+    with (
+        _op_verdict(context, verdict_name, tick=tick) as outcome,
+        db.connect(autocommit=True) as connection,
+    ):
+        summary, is_red, metadata, payload = evaluate(connection, outcome, now)
+        context.log.info(f"{label}: {summary}")
+        outcome.summary = outcome.summary or summary
+        context.add_output_metadata(metadata)
+        outcome.failed = is_red
+        if is_red:
+            context.log.warning(f"{label}: {summary} ({issue})")
     return json.dumps(payload)
 
 

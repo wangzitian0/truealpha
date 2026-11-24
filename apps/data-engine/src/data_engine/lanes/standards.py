@@ -278,6 +278,7 @@ def run_standard_backfill(context: dg.OpExecutionContext, config: StandardBackfi
         raise ValueError(f"mode must be backfill or probe, got {config.mode!r}")
     names = standards_to_run(config.standard)
     summaries = []
+    failures: list[str] = []
     meta: dict[str, Any] = {"universe": config.universe, "standards": ", ".join(names), "mode": config.mode}
     with gateway.capacity_scope(), db.connect() as connection:
         for name in names:
@@ -299,8 +300,14 @@ def run_standard_backfill(context: dg.OpExecutionContext, config: StandardBackfi
                     f"{name}_outcomes": str(dict(report.outcomes)),
                 }
             )
+            if report.failed:
+                failures.append(f"{name}: {report.failed} of {sum(report.outcomes.values())} cells got no answer")
     context.add_output_metadata(meta)
-    return json.dumps(summaries, sort_keys=True)
+    summary: dict[str, Any] = {"universe": config.universe, "standards": summaries}
+    if failures:
+        summary[LANE_FAILURE] = summary[VERDICT_TEXT] = "standard backfill: " + "; ".join(failures)
+        context.log.error("%s: %s", config.universe, summary[LANE_FAILURE])
+    return json.dumps(summary, sort_keys=True)
 
 
 def _downstream_canonical_op(
@@ -323,8 +330,23 @@ def _downstream_canonical_op(
     )
 
 
+def _with_upstream_failure(summary: str, upstream_summary: str) -> str:
+    """Keep the failure of an upstream lane when this lane reports none of its own."""
+    upstream = _json_dict(upstream_summary)
+    parsed = _json_dict(summary)
+    if not upstream.get(LANE_FAILURE) or parsed.get(LANE_FAILURE):
+        return summary
+    parsed[LANE_FAILURE] = upstream[LANE_FAILURE]
+    parsed[VERDICT_TEXT] = upstream.get(VERDICT_TEXT, upstream[LANE_FAILURE])
+    return json.dumps(parsed)
+
+
 @external_op
 def run_theme_purity(context: dg.OpExecutionContext, config: StandardBackfillConfig, backfill_summary: str) -> str:
+    return _with_upstream_failure(_theme_purity(context, config, backfill_summary), backfill_summary)
+
+
+def _theme_purity(context: dg.OpExecutionContext, config: StandardBackfillConfig, backfill_summary: str) -> str:
     from data_engine.datahub.capture_core.theme_purity import NO_ANSWER, materialize_theme_purity, summary_line
     from data_engine.datahub.question_coverage import NoHead, governed_head_of
 
@@ -355,6 +377,7 @@ def run_theme_purity(context: dg.OpExecutionContext, config: StandardBackfillCon
         outcome.summary = f"{published}/{len(rows)} theme-purity rows published on {head.run_id[:24]}" + (
             f"; {no_answer} got no model answer" if no_answer else ""
         )
+        outcome.failed = no_answer > 0
     context.log.info(summary_line(rows))
     summary: dict[str, Any] = {
         "universe": config.universe,
@@ -441,6 +464,10 @@ def _finish_canonical_lane(
 def run_supply_chain_exposure(
     context: dg.OpExecutionContext, config: StandardBackfillConfig, purity_summary: str
 ) -> str:
+    return _with_upstream_failure(_supply_chain_exposure(context, config, purity_summary), purity_summary)
+
+
+def _supply_chain_exposure(context: dg.OpExecutionContext, config: StandardBackfillConfig, purity_summary: str) -> str:
     from data_engine.datahub.standards.supply_chain_extraction import materialize_universe_supply_chain_exposure
 
     if (
@@ -496,7 +523,6 @@ def run_supply_chain_exposure(
         floor_failure
         or (f"supply chain: {exceeded} of {joined} filings exceeded 1M context window" if exceeded > 0 else None)
         or (f"supply chain: {no_answer} filings got no model answer" if no_answer > 0 else None)
-        or _json_dict(purity_summary).get(LANE_FAILURE)
     )
     return _finish_canonical_lane(
         context,
@@ -516,6 +542,10 @@ def run_supply_chain_exposure(
 
 @external_op
 def run_analyst_ratings(context: dg.OpExecutionContext, config: StandardBackfillConfig, sc_summary: str) -> str:
+    return _with_upstream_failure(_analyst_ratings(context, config, sc_summary), sc_summary)
+
+
+def _analyst_ratings(context: dg.OpExecutionContext, config: StandardBackfillConfig, sc_summary: str) -> str:
     from data_engine.datahub.analyst_ratings import materialize_universe_analyst_ratings
 
     if (
@@ -561,9 +591,6 @@ def run_analyst_ratings(context: dg.OpExecutionContext, config: StandardBackfill
     if lane_failure is None:
         lane_failure = floor_failure
         verdict_text = f"analyst ratings: {lane_failure}" if lane_failure else None
-        if lane_failure is None:
-            sc_parsed = _json_dict(sc_summary)
-            lane_failure, verdict_text = sc_parsed.get(LANE_FAILURE), sc_parsed.get(VERDICT_TEXT)
     for failure in captured.failures[: analyst_ratings.MAX_FAILURES_LOGGED]:
         context.log.error("analyst consensus fetch failed for %s: %s", failure.ticker, failure.error)
     if len(captured.failures) > analyst_ratings.MAX_FAILURES_LOGGED:

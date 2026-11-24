@@ -170,3 +170,75 @@ def test_head_reports_start_requires_fresh_confidence_report(
     summary = json.loads(standards.head_reports_start(dg.build_op_context(), config))
 
     assert (standards.REPORTS_CURRENT in summary) is is_current
+
+
+def _backfill_op_summary(monkeypatch: pytest.MonkeyPatch, outcomes: dict[str, int]) -> dict[str, Any]:
+    """Run the backfill op over one stub report per standard with the given cell outcomes."""
+    from collections import Counter
+
+    from data_engine.datahub.standards.backfill import BackfillReport
+    from data_engine.sources import gateway
+
+    def report(_connection: object, *, universe: str, standard_name: str, **_kwargs: object) -> BackfillReport:
+        return BackfillReport(universe, standard_name, "backfill", CUTOFF, issuers=3, outcomes=Counter(outcomes))
+
+    monkeypatch.setattr(standards, "_run_standard_backfill", report)
+    monkeypatch.setattr(standards.db, "connect", lambda: _StubConnection())
+    monkeypatch.setattr(gateway, "capacity_scope", lambda: nullcontext())
+    config = standards.StandardBackfillConfig(executed_at=EXECUTED_AT, universe="topt", standard="employees_total")
+    return json.loads(standards.run_standard_backfill(dg.build_op_context(), config))
+
+
+@pytest.mark.parametrize("failed_status", ["error", "deferred_capacity"])
+def test_a_backfill_cell_without_an_answer_is_a_lane_failure(monkeypatch: pytest.MonkeyPatch, failed_status) -> None:
+    """A failed cell does not stop the op (#1851): the summary carries it to the run's last op."""
+    summary = _backfill_op_summary(monkeypatch, {"resolved": 2, failed_status: 1})
+
+    assert summary[standards.LANE_FAILURE] == "standard backfill: employees_total: 1 of 3 cells got no answer"
+    assert summary[standards.VERDICT_TEXT] == summary[standards.LANE_FAILURE]
+    assert [s["outcomes"] for s in summary["standards"]] == [{"resolved": 2, failed_status: 1}]
+
+
+def test_a_backfill_without_a_failed_cell_has_no_lane_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    summary = _backfill_op_summary(monkeypatch, {"resolved": 2, "no_candidate": 1, "model_declined": 1})
+
+    assert standards.LANE_FAILURE not in summary
+    assert summary["universe"] == "topt"
+
+
+def test_the_backfill_failure_reaches_the_last_op_through_every_lane_without_a_head(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every lane ends without a head here, as on the first backfill of a new universe; the failure
+    of the backfill before them still makes the last op record a red verdict and fail the run."""
+    monkeypatch.setattr(question_coverage, "governed_head_of", lambda _c, _k: question_coverage.NoHead("no head"))
+    monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: _StubConnection())
+    recorded: list[dict[str, Any]] = []
+    monkeypatch.setattr(nightly_verdicts, "record", lambda name, **row: recorded.append({"check": name, **row}))
+    failure = "standard backfill: employees_total: 2 of 17 cells got no answer"
+    upstream = json.dumps({standards.LANE_FAILURE: failure, standards.VERDICT_TEXT: failure})
+    config = standards.StandardBackfillConfig(executed_at=EXECUTED_AT, universe="topt")
+    context = dg.build_op_context()
+
+    purity = standards.run_theme_purity(context, config, upstream)
+    supply_chain = standards.run_supply_chain_exposure(context, config, purity)
+    analyst = standards.run_analyst_ratings(context, config, supply_chain)
+    with pytest.raises(RuntimeError, match="2 of 17 cells got no answer"):
+        standards.fail_if_a_lane_failed(context, analyst, "{}")
+
+    for summary in (purity, supply_chain, analyst):
+        assert json.loads(summary)["reason"] == "no_governed_head"
+        assert json.loads(summary)[standards.LANE_FAILURE] == failure
+    assert [(row["check"], row["ok"]) for row in recorded] == [
+        ("theme_purity@topt", None),
+        ("question_coverage@topt", False),
+    ]
+    assert failure in recorded[-1]["summary"]
+
+
+def test_a_lane_without_an_upstream_failure_carries_none() -> None:
+    clean = json.dumps({"universe": "topt", "rows": 0})
+    assert standards._with_upstream_failure(clean, "{}") == clean
+    own = json.dumps({standards.LANE_FAILURE: "own", standards.VERDICT_TEXT: "own"})
+    upstream = json.dumps({standards.LANE_FAILURE: "upstream"})
+    assert json.loads(standards._with_upstream_failure(own, upstream))[standards.LANE_FAILURE] == "own"

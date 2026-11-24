@@ -27,6 +27,11 @@ from data_engine.sources.gateway import SourceGateway
 
 Mode = Literal["backfill", "probe"]
 HEALTH_LOG_SOURCE = "standard-backfill"
+#: The cells this run asked about and got no answer for. A cell without a CIK is a standing
+#: identity gap (`no_identifier`): the coverage report counts it, and it does not fail the run.
+FAILED_STATUSES = ("error", "deferred_capacity")
+#: The cells no source was asked about, for want of an identifier.
+UNASKED_STATUSES = ("no_identifier",)
 
 
 @dataclass
@@ -40,6 +45,11 @@ class BackfillReport:
     open_by_reason: Counter[str] = field(default_factory=Counter)
     outcomes: Counter[str] = field(default_factory=Counter)
     cells: list[dict[str, Any]] = field(default_factory=list)
+
+    @property
+    def failed(self) -> int:
+        """Count the cells that got no answer: an error or a refused capacity."""
+        return sum(self.outcomes.get(status, 0) for status in FAILED_STATUSES)
 
     def summary(self) -> dict[str, Any]:
         return {
@@ -134,7 +144,9 @@ def _resolve(
     store: RawObjectStore | None,
 ) -> ExtractionOutcome:
     if cell.issuer.cik is None:
-        return ExtractionOutcome(0, "error", detail="issuer has no CIK in the universe plane or the SEC crosswalk")
+        return ExtractionOutcome(
+            0, "no_identifier", detail="issuer has no CIK in the universe plane or the SEC crosswalk"
+        )
     if standard.evidence is not EvidenceRequirement.FILING_SPAN:
         return ExtractionOutcome(
             cell.issuer.cik,

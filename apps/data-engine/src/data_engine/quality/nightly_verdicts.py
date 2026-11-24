@@ -78,8 +78,11 @@ def record(name: str, *, ran_at: datetime, ok: bool | None, summary: str, run_id
 
 @dataclass
 class Outcome:
+    """`failed` records a red verdict without stopping the op: the lane reports a gap and goes on (#1851)."""
+
     summary: str = ""
     pending: bool = False
+    failed: bool = False
 
 
 @contextmanager
@@ -98,6 +101,9 @@ def verdict(name: str, *, registered: Collection[str], run_id: str, tick: dateti
         except Exception:  # noqa: BLE001 - raise the check failure, not the verdict write failure
             log.exception("could not record the red verdict of %s", name)
         raise
+    if outcome.failed:
+        record(name, ran_at=tick or datetime.now(UTC), ok=False, summary=f"failed: {outcome.summary}", run_id=run_id)
+        return
     record(
         name,
         ran_at=tick or datetime.now(UTC),

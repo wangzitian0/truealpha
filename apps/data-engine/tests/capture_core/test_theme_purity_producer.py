@@ -764,6 +764,33 @@ def test_a_model_that_does_not_answer_costs_one_issuer_not_the_lane(connection, 
     assert NO_ANSWER_EXTRACTOR not in extractors, "the next run replaces the refused row"
 
 
+def test_a_rate_limit_costs_one_issuer_not_the_lane(connection, seated, monkeypatch) -> None:
+    """#1851: a 429 stopped the theme purity of a whole universe, while the supply-chain lane skipped it.
+    The seat retries a provider 429 itself; what reaches the lane is the gateway's own refusal when no
+    call slot frees before the deadline. The issuer gets a refused row that the next run asks again."""
+    from data_engine.datahub.capture_core.theme_purity import NO_ANSWER
+
+    _two_members(connection, monkeypatch)
+    answering = _replies(0)
+    answering.failing = False
+    monkeypatch.setattr(llm, "_gateway_transport", answering)
+    classify = llm.classify_segments
+    calls: list[int] = []
+
+    def no_slot_first(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            raise llm.ModelCapacityRefused("no call slot before the deadline")
+        return classify(*args, **kwargs)
+
+    monkeypatch.setattr(llm, "classify_segments", no_slot_first)
+
+    written = materialize_theme_purity(connection, run_id=RUN_ID, cutoff=CUTOFF, themes=(AI,))
+
+    assert [NO_ANSWER in row.result.flags for row in written] == [True, False]
+    assert written[1].result.value is not None
+
+
 def test_a_refusal_of_the_model_still_stops_the_lane(connection, seated, monkeypatch) -> None:
     """#1816: only a missing answer (status 0 or 5xx) is skipped. A refusal (4xx) repeats on each run and
     keeps its earlier meaning: it raises."""

@@ -121,6 +121,24 @@ def test_a_failing_check_records_red_and_still_raises(monkeypatch) -> None:
     assert abs((datetime.now(UTC) - ran_at).total_seconds()) < 60
 
 
+def test_a_check_that_reports_a_gap_records_red_and_lets_the_op_go_on(monkeypatch) -> None:
+    """#1851, staging 2026-11-23: theme purity counted 10 rows without a model answer and recorded its
+    verdict green, because only an exception made a verdict red."""
+    sink = _Sink()
+    monkeypatch.setattr(psycopg, "connect", sink)
+    with nightly_verdicts.verdict(
+        "theme_purity@topt", registered={"theme_purity@topt"}, run_id="r" * 36, tick=None
+    ) as o:
+        o.summary = "18/20 theme-purity rows published; 2 got no model answer"
+        o.failed = True
+    ((name, _ran_at, ok, summary, _run_id),) = sink.rows
+    assert (name, ok, summary) == (
+        "theme_purity@topt",
+        False,
+        "failed: 18/20 theme-purity rows published; 2 got no model answer",
+    )
+
+
 def test_a_crash_is_summarized_by_its_type_never_its_text(monkeypatch) -> None:
     """A connection error's text names its server; the summary is published on /health."""
     sink = _Sink()

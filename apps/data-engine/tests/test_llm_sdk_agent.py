@@ -197,12 +197,18 @@ def test_a_read_timeout_is_the_error_that_each_caller_handles_for_one_filing() -
         (llm.ModelHTTPError(0, "no answer"), True),
         (llm.ModelHTTPError(503, "provider down"), True),
         (llm.ModelHTTPError(400, "refused"), False),
-        (llm.ModelCapacityRefused("no call slot"), False),
+        (llm.ModelHTTPError(429, "rate limited"), True),
+        (llm.ModelHTTPError(429, "account in arrears", provider_code="1113"), False),
+        (llm.ModelCapacityRefused("no call slot"), True),
+        (llm.ModelCapacityRefused("share_below_one_call", transient=False), False),
         (llm.ModelOutputTruncated(2400), False),
     ],
 )
-def test_only_status_0_and_a_server_error_are_a_missing_answer(error: llm.ModelHTTPError, expected: bool) -> None:
-    """#1816: the next run can get an answer after status 0 or 5xx. A refusal or a cut-off answer repeats."""
+def test_no_reply_no_capacity_and_a_server_error_are_a_missing_answer(
+    error: llm.ModelHTTPError, expected: bool
+) -> None:
+    """#1816, #1851: the next run can get an answer after status 0, 429 (no capacity, a rate limit) or 5xx.
+    Another refusal or a cut-off answer repeats on each run."""
     assert error.no_answer is expected
 
 
@@ -217,3 +223,23 @@ def test_a_body_cut_short_is_a_missing_answer_like_a_timeout(failure: Exception)
     with pytest.raises(llm.ModelHTTPError) as raised:
         ask(broken)  # type: ignore[arg-type]
     assert raised.value.status_code == 0 and raised.value.no_answer
+
+
+@pytest.mark.parametrize(
+    ("refusal", "missing_answer"),
+    [
+        (gateway.CapacityExceeded("filing-extraction-model", "no call slot before the deadline"), True),
+        (gateway.UndeclaredCapacity("filing-extraction-model"), False),
+        (gateway.ShareBelowOneCall("filing-extraction-model", environment="staging", account="shared"), False),
+    ],
+)
+def test_a_capacity_refusal_keeps_whether_a_later_call_can_pass(
+    refusal: gateway.CapacityExceeded, missing_answer: bool
+) -> None:
+    """#1851: a refusal of the configuration repeats on each run; it is no missing answer to ask
+    again tomorrow, so the lanes do not report it as one."""
+    from data_engine.sources import llm_agent
+
+    with pytest.raises(llm.ModelCapacityRefused) as raised:
+        llm_agent._after_failed_run(llm_agent._Captured(error=refusal), RuntimeError("agent stopped"))
+    assert raised.value.no_answer is missing_answer

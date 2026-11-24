@@ -1064,6 +1064,7 @@ def _execute_job(
     instance: dg.DagsterInstance | None = None,
     universe: str = QQQ,
     connects: list[int] | None = None,
+    backfill_outcomes: Mapping[str, int] | None = None,
 ):
     """Execute one deployed job over a faked world: real analyst and coverage ops, real SQL.
 
@@ -1073,10 +1074,14 @@ def _execute_job(
     verdict rows to `mart.nightly_verdicts` through the real recorder, in the shared transaction.
     `instance` is the Dagster instance to run on; a test passes one to read the run's log records.
     `universe` is the universe of the run. `connects` gets one entry per attempt to open the moomoo
-    context, so a test can tell a run that fetched from a run that found the head current."""
+    context, so a test can tell a run that fetched from a run that found the head current.
+    `backfill_outcomes` are the cell outcomes of every standard the backfill job visits."""
+    from collections import Counter
+
     from data_engine.datahub import question_coverage
     from data_engine.datahub.capture_core import theme_purity
     from data_engine.datahub.standards import planner, supply_chain_extraction
+    from data_engine.datahub.standards.backfill import BackfillReport
     from data_engine.lanes import standards
     from data_engine.quality import nightly_verdicts
 
@@ -1123,8 +1128,8 @@ def _execute_job(
     monkeypatch.setattr(
         standards,
         "_run_standard_backfill",
-        lambda *_a, **_k: SimpleNamespace(
-            summary=lambda: {"standard": "stub"}, issuers=3, open=0, open_by_reason={}, outcomes={}
+        lambda _c, *, universe, standard_name, cutoff, **_k: BackfillReport(
+            universe, standard_name, "backfill", cutoff, issuers=3, outcomes=Counter(backfill_outcomes or {})
         ),
     )
     monkeypatch.setattr(mm, "connect", fake_connect)
@@ -1246,6 +1251,28 @@ def test_a_run_without_a_failure_stays_green_and_the_terminal_op_does_no_work(
     assert "fail_if_a_lane_failed" in _steps(result, failed=False)
     assert shared_connection.commits == 4, "purity, supply chain, analyst ratings and coverage commit once each"
     assert [v["check"] for v in shared_connection.verdicts if v["ok"] is False] == [], "a clean run has no red row"
+
+
+def test_a_backfill_cell_without_an_answer_fails_the_run_after_every_lane_is_written(
+    monkeypatch, shared_connection
+) -> None:
+    """#1851: a model error in one filing no longer ends the backfill op; the run still ends red."""
+    responses = {f"US.{t}": _sample(t) for t in ("DDOG", "NICE", "SHOP")}
+    result = _execute_job(
+        monkeypatch,
+        shared_connection,
+        "standard_backfill_pipeline_job",
+        responses,
+        backfill_outcomes={"resolved": 1, "deferred_capacity": 2},
+    )
+
+    assert not result.success
+    assert _stored_analyst_rows(shared_connection) == {issuer_id: ("available", []) for issuer_id in TICKERS}
+    assert _coverage_report_exists(shared_connection)
+    assert _steps(result, failed=True) == ["fail_if_a_lane_failed"]
+    red = [v for v in shared_connection.verdicts if v["ok"] is False]
+    assert [v["check"] for v in red] == [f"question_coverage@{QQQ}"]
+    assert "employees_total: 2 of 3 cells got no answer" in red[0]["summary"]
 
 
 FALLBACK_AT = "2026-10-07T04:00:00+00:00"

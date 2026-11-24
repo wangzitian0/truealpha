@@ -433,6 +433,16 @@ def test_a_run_where_every_attempt_failed_raises() -> None:
         raise_if_every_attempt_failed(_report_with({"error": 2, "deferred_capacity": 1}))
 
 
+def test_a_cell_without_a_cik_is_no_attempt_so_the_others_still_decide() -> None:
+    """#1851: an issuer without a CIK lands `no_identifier`; no source was asked, so it does not
+    keep a run green when every cell that was asked failed."""
+    from data_engine.datahub.standards.history import HistoryFailure, raise_if_every_attempt_failed
+
+    with pytest.raises(HistoryFailure, match="5 of 5"):
+        raise_if_every_attempt_failed(_report_with({"no_identifier": 2, "deferred_capacity": 5}))
+    assert raise_if_every_attempt_failed(_report_with({"no_identifier": 2})) is None
+
+
 def test_a_run_with_one_landed_or_declined_attempt_or_none_does_not_raise() -> None:
     from data_engine.datahub.standards.history import raise_if_every_attempt_failed
 
