@@ -11,7 +11,7 @@ from pydantic import BaseModel
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 PACKAGE = REPO_ROOT / "common/contracts/src/truealpha_contracts"
-FROZEN_MODS = (16, "e1e87b31dcdaf8ad3b36ea6b7352b31108cb1c625df2b0d23d1687278e910a8f")
+FROZEN_MODS = (17, "c0a288f254eba1d62573c4285e16efab5721143ff71d0160f22015d28aa6563d")
 
 
 def _schema_references(v: object) -> set[str]:

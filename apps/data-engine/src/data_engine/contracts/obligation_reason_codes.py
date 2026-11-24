@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-from truealpha_contracts.common import ContentHash, FrozenModel, IdentifiedFrozenModel, content_id, load_data_json
+from truealpha_contracts.common import ContentHash, FrozenModel, IdentifiedFrozenModel, content_id
+from truealpha_contracts.reasons import dispositions
 
 
 class ObligationDisposition(StrEnum):
@@ -29,10 +30,7 @@ class ObligationReasonCode(StrEnum):
     DEFERRED_CAPACITY = "deferred_capacity"
 
 
-_CANONICAL = {
-    ObligationReasonCode(k): ObligationDisposition(v)
-    for k, v in load_data_json("registries.v1.json")["obligation_reasons"].items()
-}
+_CANONICAL = {ObligationReasonCode(k): ObligationDisposition(v) for k, v in dispositions().items()}
 
 
 def disposition_for(code: ObligationReasonCode) -> ObligationDisposition:
