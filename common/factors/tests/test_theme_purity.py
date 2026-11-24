@@ -193,3 +193,27 @@ def test_classified_share_counts_the_residual_against_the_claim() -> None:
     result = purity(incomplete, residual=Decimal("20000"))
     assert result.classified_share == Decimal("43887") / AVGO_TOTAL
     assert result.classified_share + result.unclassified_share < Decimal(1), "the residual is the gap"
+
+
+def test_gross_segments_with_an_elimination_serve_no_share_above_one() -> None:
+    """#1851: segments land gross with the intersegment elimination as the residual. In INTC's
+    10-K the segments sum to 70,536M against 52,853M; if 60,000M of them are in the theme, the
+    elimination cannot be placed, and a share of 1.14 is no fact."""
+    result = purity(
+        [ThemeSegment("A", Decimal("60000"), True), ThemeSegment("B", Decimal("10536"), False)],
+        total=Decimal("52853"),
+        residual=Decimal("-17683"),
+    )
+    assert result.result.value is None
+    assert "in_theme_exceeds_consolidated_revenue" in result.result.flags
+    assert result.in_theme_revenue + result.out_of_theme_revenue + result.partition_residual == Decimal("52853")
+
+
+def test_every_segment_in_the_theme_is_all_of_the_revenue_whatever_the_elimination() -> None:
+    result = purity(
+        [ThemeSegment("A", Decimal("60000"), True), ThemeSegment("B", Decimal("10536"), True)],
+        total=Decimal("52853"),
+        residual=Decimal("-17683"),
+    )
+    assert result.result.value == Decimal(1)
+    assert "partition_residual" in result.result.flags

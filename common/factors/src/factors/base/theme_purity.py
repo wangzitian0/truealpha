@@ -93,6 +93,13 @@ def theme_purity(
     refused = (in_theme + out_of_theme) / consolidated_revenue < minimum_classified_share
     if refused:
         flags.append("below_minimum_classified_share")
+    whole = partition_residual < _ZERO and in_theme > _ZERO and out_of_theme == _ZERO and unclassified == _ZERO
+    if in_theme > consolidated_revenue and not whole:
+        # Gross segments with an intersegment elimination as the residual (#1851): the elimination
+        # belongs to no known segment, so a share above one is no fact. The row keeps its revenue
+        # fields and serves no value.
+        refused = True
+        flags.append("in_theme_exceeds_consolidated_revenue")
 
     return ThemePurity(
         entity_id=entity_id,
@@ -100,7 +107,8 @@ def theme_purity(
         result=FactorResult(
             factor="theme_purity",
             entity_id=entity_id,
-            value=None if refused else in_theme / consolidated_revenue,
+            # Every segment in the theme: all consolidated revenue is in it, whatever the elimination.
+            value=None if refused else (Decimal(1) if whole else in_theme / consolidated_revenue),
             unit_family=UnitFamily.RATIO,
             confidence=_ZERO if refused else confidence,
             as_of=as_of,

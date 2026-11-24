@@ -19,6 +19,7 @@ from __future__ import annotations
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
 from data_engine.datahub.standards.filing_extraction import filing_plain_text
 from data_engine.datahub.standards.segment_extraction import (
     TaggedPartition,
@@ -230,3 +231,94 @@ def test_geographic_business_segments_are_refused_and_product_axis_fallback_bala
         "aapl:WearablesHomeandAccessoriesMember": Decimal("35686000000"),
         "us-gaap:ServiceMember": Decimal("109158000000"),
     }
+
+
+EXCERPTS = FILINGS / "segment_excerpts"
+
+
+def test_subtotals_and_second_spellings_on_the_segment_axis_are_not_segments() -> None:
+    """#1851, staging 2026-11-24: about 76 S&P 500 sets summed over consolidated revenue, many by
+    about 100 %, because the filer also tags a subtotal on the segment axis (MLM
+    `ReportableSegmentsMember` = all, `BuildingMaterialsBusinessMember` = East + West) or one
+    segment under two spellings (COO). The excerpts are the filers' own tags, verbatim."""
+    mlm = tagged_segment_revenues((EXCERPTS / "MLM_10K_000119312526059193_revenue.html").read_bytes())[0]
+    assert {m.split(":")[-1] for m in mlm.subtotals} == {"ReportableSegmentsMember", "BuildingMaterialsBusinessMember"}
+    assert len(mlm.parts) == 5, "the set as tagged stays; the variant is tried only after it fails"
+    assert sum((v for _, v in mlm.without_subtotals), Decimal(0)) == Decimal("6150000000")
+    accepted = accepted_tagged_partition([mlm], total=Decimal("6150000000"), period_end=mlm.period_end)
+    assert isinstance(accepted, TaggedPartition) and accepted.verdict.residual == 0
+    assert accepted.segments.subtotals_removed and len(accepted.parts) == 3
+
+    coo = tagged_segment_revenues((EXCERPTS / "COO_10K_000162828025055615_revenue.html").read_bytes())[0]
+    assert len(coo.without_subtotals) == 2 and len(coo.subtotals) == 2
+    accepted = accepted_tagged_partition([coo], total=Decimal("4092400000"), period_end=coo.period_end)
+    assert isinstance(accepted, TaggedPartition) and sum((v for _, v in accepted.parts), Decimal(0)) == Decimal(
+        "4092400000"
+    )
+
+
+@pytest.mark.parametrize(
+    ("name", "total", "subtotal", "elimination"),
+    [
+        ("WEC_10K_000078332526000018_revenue.html", "9800100000", "PublicUtilityMember", "-476700000"),
+        (
+            "INTC_10K_000005086326000011_revenue.html",
+            "52853000000",
+            "ClientComputingGroupDatacenterAndAIAndNetworkAndEdgeMember",
+            "-17683000000",
+        ),
+    ],
+)
+def test_a_subtotal_out_and_the_tagged_elimination_in_balance_the_segments(
+    name: str, total: str, subtotal: str, elimination: str
+) -> None:
+    tagged = tagged_segment_revenues((EXCERPTS / name).read_bytes())
+    assert subtotal in {m.split(":")[-1] for m in tagged[0].subtotals}
+    accepted = accepted_tagged_partition(tagged, total=Decimal(total), period_end=tagged[0].period_end)
+    assert isinstance(accepted, TaggedPartition), accepted
+    assert accepted.elimination is not None
+    assert accepted.verdict.residual == Decimal(total) - sum((v for _, v in accepted.parts), Decimal(0))
+    assert abs(accepted.verdict.residual - Decimal(elimination)) <= Decimal("5000000")
+
+
+def test_a_segment_that_merely_equals_one_other_is_no_subtotal() -> None:
+    """A subtotal is the sum of two or more members; two segments of equal revenue both stay."""
+    from data_engine.datahub.standards.segment_extraction import _without_subtotals
+
+    parts = (("x:AlphaMember", Decimal("100")), ("x:BetaMember", Decimal("100")), ("x:GammaMember", Decimal("50")))
+    kept, dropped = _without_subtotals(parts, Decimal("5"))
+    assert kept == parts and dropped == ()
+
+
+def test_a_set_that_balances_as_tagged_is_taken_as_tagged() -> None:
+    """#1851 replay on staging: LIN's Americas segment (15,208M) is within 2M of APAC plus EMEA
+    (15,210M), and a loose bound dropped it as a subtotal, so a set that balanced before was
+    refused. The set as tagged is tried first, and the bound is half a printed unit per figure."""
+    from datetime import date
+
+    from data_engine.datahub.standards.segment_extraction import TaggedSegments, _is_sum_of_others
+
+    unit = Decimal("1000000")
+    assert not _is_sum_of_others(Decimal("15208") * unit, [Decimal("6661") * unit, Decimal("8549") * unit], unit)
+    assert _is_sum_of_others(
+        Decimal("33079") * unit,
+        [Decimal("13976") * unit, Decimal("8815") * unit, Decimal("10287") * unit],
+        unit,
+    ), "MDT: three segments rounded to the million sum to 33,078M against a 33,079M subtotal"
+
+    lin = TaggedSegments(
+        concept="us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
+        shape="all",
+        period_end=date(2025, 12, 31),
+        parts=(
+            ("lin:APACSegmentMember", Decimal("6661000000")),
+            ("lin:AmericasSegmentMember", Decimal("15208000000")),
+            ("lin:EMEASegmentMember", Decimal("8549000000")),
+            ("lin:EngineeringSegmentMember", Decimal("2250000000")),
+            ("us-gaap:CorporateAndOtherMember", Decimal("1318000000")),
+        ),
+        scale=6,
+    )
+    accepted = accepted_tagged_partition([lin], total=Decimal("33986000000"), period_end=date(2025, 12, 31))
+    assert isinstance(accepted, TaggedPartition)
+    assert len(accepted.parts) == 5 and not accepted.segments.subtotals_removed
