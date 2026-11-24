@@ -145,6 +145,24 @@ Verified working end-to-end for all 4 tickers.
   "DDOG's suppliers are AWS/GCP/Azure" directly — the LLM-extraction path
   (`common/factors/shared/extraction.py`) is still the way to build `supplies_to` KG edges,
   not a shortcut moomoo replaces.
+- **The earnings calendar has no annual EPS estimate (2026-11-24, #1791).** Two stored staging
+  answers of `get_earnings_calendar` (US), fetched 2026-11-24 through
+  `moomoo_origin.capture_earnings_calendar`:
+  - `moomoo/earnings_calendar_US_2026-11-20_2026-11-26.json`: 07:12:48 UTC, 45769 bytes, sha256
+    `e1abb01685316b7f8498d4ca534c53ca589b34219c82c7d87faf6b8a10ec6b98`. 91 reports, 20 of them
+    fiscal Q4 (HPQ, ADI, DE, A). EPS periods: 69 quarterly, 1 semi-annual, 21 empty.
+  - `moomoo/earnings_calendar_US_2026-02-02_2026-02-08.json`: 07:42:01 UTC, 267356 bytes, sha256
+    `4e5a42edabe3084e500cb880fdd2bb124913731b9ddcb80f3e526398120db0cb`. 474 reports, 272 of them
+    fiscal Q4 (GOOGL, AMZN, LLY and others). EPS periods: 445 quarterly, 29 empty.
+
+  Each report has one EPS, one revenue and one EBIT entry. No EPS estimate is annual; 4 EBIT
+  entries are annual. The reported EPS of CRWD, A, HPE and ZM equals the GAAP diluted EPS of each
+  company release. The basis of the estimates is not proved (ABBV, February: estimate 2.8741,
+  reported 1.02). DKS and NXGL carry an EPS `actualValue` in the November answer although they
+  release at 14:30 UTC, after the fetch at 07:12:48 UTC: an actual value can precede the release.
+  The SDK table of this call keeps one EPS pair and drops `periodType` and `currency`, so the
+  wrapper reads the vendor proto. The list uses the default `Hot` sort and has no paging field;
+  its completeness is not checked. `tests/test_moomoo_earnings_calendar.py` byte-pins both files.
 - Ledger-recorded calls this capture run: 57 (the `api_call_ledger` is throttle and
   audit infrastructure, not a monthly quota).
 

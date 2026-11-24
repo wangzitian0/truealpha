@@ -1617,7 +1617,7 @@ def test_the_terminal_op_follows_coverage_and_the_analyst_summary(job_name) -> N
     assert upstream == {"analyst_summary": ["run_analyst_ratings"], "coverage_summary": ["run_question_coverage"]}
 
 
-def test_rating_summary_and_valuation_detail_enrich_consensus_with_pit_vendor_timestamp() -> None:
+def test_rating_summary_enriches_consensus_with_pit_vendor_timestamp() -> None:
     from data_engine.datahub.analyst_ratings import parse_rating_summary
 
     summary_payload = {
@@ -1652,21 +1652,14 @@ def test_rating_summary_and_valuation_detail_enrich_consensus_with_pit_vendor_ti
             return 0, summary_payload
 
         def get_valuation_detail(self, code: str, **kwargs: Any):
-            return (
-                0,
-                {
-                    "profit_growth_rate": {
-                        "profit_data": [
-                            {
-                                "period_str": "2025/FY",
-                                "financial_quarter": 4,
-                                "report_date_str": "2025-12-31",
-                                "profit_growth_rate": 24.5,
-                            }
-                        ]
-                    }
-                },
-            )
+            # The shape the deleted parser read (#1791): no row of the vendor answer has `profit_growth_rate`.
+            return 0, {
+                "profit_growth_rate": {
+                    "profit_data": [
+                        {"period_str": "2025/FY", "report_date_str": "2025-12-31", "profit_growth_rate": 24.5}
+                    ]
+                }
+            }
 
     conn = _MockConnection()
     res = materialize_universe_analyst_ratings(
@@ -1681,7 +1674,8 @@ def test_rating_summary_and_valuation_detail_enrich_consensus_with_pit_vendor_ti
     _, params = conn.executed[0]
     assert params[3] == Decimal("4.5"), "continuous track-record rating replaces coarse integer 4"
     assert "vendor_timestamp" in params[9]
-    assert "valuation_profit_growth" in params[9]
+    assert "valuation_profit_growth" not in params[9], "#1791: the valuation detail is no growth source"
+    assert not any("profit_growth" in repr(param) for param in params), "#1791: no growth is copied from it"
     assert Decimal("0.40") < params[8] < Decimal("0.85")
     assert not any("analyst_rating_events" in sql for sql, _ in conn.executed)
 

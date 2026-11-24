@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import logging
 from collections.abc import Mapping
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
@@ -58,8 +57,6 @@ BALANCE_SHEET_FIELDS: Mapping[str, int] = {"total_assets": 8001}
 _SESSION_STAMP_LENGTH = len("2026-07-29 00:00:00")
 _MIDNIGHT = " 00:00:00"
 
-logger = logging.getLogger(__name__)
-
 
 class NotASessionCloseError(ValueError):
     pass
@@ -102,15 +99,6 @@ class OpenDClient:
                 ctx, code, statement_type=statement_type, caller=CALLER, identity=identity
             )
         normalized = to_jsonable(statements)
-        return normalized if isinstance(normalized, Mapping) else {}
-
-    def valuation_detail(self, code: str, *, identity: FetchKey) -> Mapping[str, Any]:
-        from data_engine.jsonable import to_jsonable
-        from data_engine.sources import moomoo
-
-        with moomoo.connect() as ctx:
-            detail = moomoo.get_valuation_detail(ctx, code, valuation_type=1, caller=CALLER, identity=identity)
-        normalized = to_jsonable(detail)
         return normalized if isinstance(normalized, Mapping) else {}
 
     def earnings_calendar(self, market: str, *, begin: date, end: date, identity: FetchKey) -> list[dict[str, Any]]:
@@ -318,9 +306,6 @@ def parse_annual_financials(raw_bytes: bytes, *, cutoff: date) -> FinancialFactA
         return None
     income: Mapping[str, Any] = payload["income"] if isinstance(payload.get("income"), Mapping) else {}
     balance: Mapping[str, Any] = payload["balance_sheet"] if isinstance(payload.get("balance_sheet"), Mapping) else {}
-    valuation: Mapping[str, Any] = (
-        payload["valuation_detail"] if isinstance(payload.get("valuation_detail"), Mapping) else {}
-    )
     by_period: dict[date, dict[str, Decimal | None]] = {}
     for statement, fields, annual_only in (
         (income, INCOME_FIELDS, True),
@@ -329,8 +314,6 @@ def parse_annual_financials(raw_bytes: bytes, *, cutoff: date) -> FinancialFactA
         for end, values in annual_values_by_period_end(statement, fields, annual_only=annual_only).items():
             if end <= cutoff:
                 by_period.setdefault(end, {}).update(values)
-    for end, growth_rate in parse_valuation_profit_growth(valuation, cutoff=cutoff).items():
-        by_period.setdefault(end, {})["consensus_profit_growth"] = growth_rate
     if not by_period:
         return None
     fiscal_years = [
@@ -339,8 +322,6 @@ def parse_annual_financials(raw_bytes: bytes, *, cutoff: date) -> FinancialFactA
     newest = max(fiscal_years) if fiscal_years else max(by_period)
     currency, standards = _statement_meta(income) or _statement_meta(balance) or (None, None)
     headline_values = {name: by_period[newest].get(name) for name in (*INCOME_FIELDS, *BALANCE_SHEET_FIELDS)}
-    if "consensus_profit_growth" in by_period[newest]:
-        headline_values["consensus_profit_growth"] = by_period[newest]["consensus_profit_growth"]
     return FinancialFactAssertion(
         raw_bytes=raw_bytes,
         period_end=newest,
@@ -381,26 +362,7 @@ class MoomooFinancialsFetcher:
         code = moomoo_code(symbol)
         income = self._statement(code, symbol, "income", INCOME_STATEMENT)
         balance = self._statement(code, symbol, "balance_sheet", BALANCE_SHEET)
-        valuation = self._valuation_detail(code, symbol)
-        return parse_annual_financials(
-            canonical_bytes({"income": income, "balance_sheet": balance, "valuation_detail": valuation}),
-            cutoff=cutoff,
-        )
-
-    def _valuation_detail(self, code: str, symbol: str) -> Any:
-        fetcher = getattr(self._client, "valuation_detail", None)
-        if not callable(fetcher):
-            return {}
-        key = FetchKey("moomoo", "get_valuation_detail", f"symbol:{symbol}", gateway.utc_day())
-
-        def fetch(identity: FetchKey) -> bytes:
-            return canonical_bytes(fetcher(code, identity=identity))
-
-        try:
-            return json.loads(gateway.fetch_once(key, fetch).decode())
-        except Exception as exc:  # noqa: BLE001 - one failed enrichment must not drop the statements
-            logger.warning("moomoo valuation detail fetch failed for %s: %s", symbol, type(exc).__name__)
-            return {"fetch_error": type(exc).__name__}
+        return parse_annual_financials(canonical_bytes({"income": income, "balance_sheet": balance}), cutoff=cutoff)
 
     def _statement(self, code: str, symbol: str, label: str, statement_type: int) -> Any:
         key = FetchKey("moomoo", f"financial_statements:{label}", f"symbol:{symbol}", gateway.utc_day())
@@ -424,36 +386,6 @@ def moomoo_financials_origin() -> FinancialFactCorroboratingOrigin | None:
         fetch=MoomooFinancialsFetcher(OpenDClient()),
         raw_source=DataSource.MOOMOO,
     )
-
-
-def parse_valuation_profit_growth(valuation: Mapping[str, Any], *, cutoff: date) -> dict[date, Decimal]:
-    pg = valuation.get("profit_growth_rate")
-    if not isinstance(pg, Mapping):
-        return {}
-    rows = pg.get("profit_data")
-    if not isinstance(rows, list):
-        return {}
-    out: dict[date, Decimal] = {}
-    for row in rows:
-        if not isinstance(row, Mapping):
-            continue
-        period_str = row.get("period_str")
-        fq = row.get("financial_quarter")
-        if not ((isinstance(period_str, str) and period_str.endswith("/FY")) or fq == 4):
-            continue
-        report_date_str = row.get("report_date_str")
-        if not isinstance(report_date_str, str) or len(report_date_str) < 10:
-            continue
-        try:
-            end_date = date.fromisoformat(report_date_str[:10])
-        except ValueError:
-            continue
-        if end_date > cutoff or end_date in out:
-            continue
-        rate = _statement_value(row.get("profit_growth_rate"))
-        if rate is not None:
-            out[end_date] = rate
-    return out
 
 
 def _require_opend() -> None:
@@ -481,6 +413,5 @@ __all__ = (
     "moomoo_kline_origin",
     "parse_annual_financials",
     "parse_settled_close",
-    "parse_valuation_profit_growth",
     "period_end_of",
 )

@@ -31,12 +31,11 @@ from data_engine.datahub._helpers import (
     CAPTURE_OBSERVATION_JOIN,
     execute_many,
     require_registered_input_key,
-    single_origin_confidence,
 )
 from data_engine.datahub.capture_core.concept_mapping import resolve_ruleset
 from data_engine.datahub.capture_core.executor import SERVED_BY_FAILOVER
 from data_engine.datahub.capture_core.parser_identity import PARSER_VERSION as PRIMARY_PARSER_VERSION
-from data_engine.datahub.input_cells import InputCell, financial_input_rows, last_close_cell, live_knowable_at, unit_of
+from data_engine.datahub.input_cells import InputCell, financial_input_rows, last_close_cell, live_knowable_at
 from data_engine.datahub.primary_listing import choose_primary_listings
 from data_engine.datahub.risk_free import RiskFreeRate
 from data_engine.datahub.share_basis import (
@@ -94,8 +93,7 @@ def seed_strategy_inputs_from_capture(
         f"select o.semantic_type, o.confidence, p.normalized_payload, o.knowable_at, o.parser_version {CAPTURE_OBSERVATION_JOIN} "
         "where ob.run_id = %s and o.semantic_type in ('financial-fact', 'market-price', 'listing-identity') "
         "and (o.parser_version = %s or o.semantic_type = 'listing-identity' "
-        "or (o.semantic_type = 'market-price' and p.normalized_payload ->> %s is not null) "
-        "or (o.semantic_type = 'financial-fact' and p.normalized_payload ->> 'consensus_profit_growth' is not null)) "
+        "or (o.semantic_type = 'market-price' and p.normalized_payload ->> %s is not null)) "
         "order by (o.parser_version = %s) desc, o.knowable_at desc, o.observation_id",
         (run_id, parser_version, SERVED_BY_FAILOVER, parser_version),
     ).fetchall()
@@ -117,21 +115,12 @@ def seed_strategy_inputs_from_capture(
 
     cell_confidences = evaluate_and_persist_run_cell_confidence(connection, run_id, cutoff=cutoff)
     financial: dict[str, tuple[str, Decimal | None, dict, datetime]] = {}
-    consensus_growth: dict[str, tuple[str, Decimal | None, dict, datetime]] = {}
     price: dict[str, tuple[str, Decimal | None, dict, datetime]] = {}
     for semantic_type, raw_conf, payload, observed_at, row_parser_version in rows:
         if semantic_type == "listing-identity":
             continue
         listing_id = str(payload["listing_id"])
         issuer_id = listing_to_issuer.get(listing_id, str(payload["issuer_id"]))
-        if semantic_type == "financial-fact" and payload.get("consensus_profit_growth") is not None:
-            if primary.get(issuer_id) == listing_id and issuer_id not in consensus_growth:
-                consensus_growth[issuer_id] = (
-                    listing_id,
-                    Decimal(str(raw_conf)) if raw_conf is not None else None,
-                    payload,
-                    observed_at,
-                )
         if semantic_type == "financial-fact" and row_parser_version != parser_version:
             continue
         bucket = financial if semantic_type == "financial-fact" else price
@@ -151,7 +140,7 @@ def seed_strategy_inputs_from_capture(
         parser_version=parser_version,
     )
     written = 0
-    for issuer_id in sorted(set(financial) | set(price) | set(consensus_growth)):
+    for issuer_id in sorted(set(financial) | set(price)):
         inputs: list[InputCell] = []
         if issuer_id in financial:
             fin_listing, fallback_conf, payload, observed_at = financial[issuer_id]
@@ -160,34 +149,6 @@ def seed_strategy_inputs_from_capture(
                 _on_close_basis_rows(
                     financial_input_rows(payload, fallback_conf, observed_at, confidence_by_key=listing_confs),
                     on_basis.get(issuer_id),
-                )
-            )
-        if issuer_id in consensus_growth and not any(c.input_key == "consensus_profit_growth" for c in inputs):
-            cg_listing, cg_raw_conf, cg_payload, cg_observed_at = consensus_growth[issuer_id]
-            cg_measured = cell_confidences.get((cg_listing, "consensus_profit_growth"))
-            if cg_measured is None:
-                cg_measured = cg_raw_conf
-            cg_conf = (
-                cg_measured
-                if cg_measured is not None
-                else single_origin_confidence(
-                    case_id=f"cell:consensus_profit_growth:{cg_listing}",
-                    provider_id="origin:moomoo-financials:v1",
-                    lineage="moomoo",
-                    fallback_prior_id="origin:moomoo-financials:v1",
-                    evidence_id="obs:consensus_profit_growth",
-                    extra_reason_codes=("reason:single_origin",),
-                )
-            )
-            cg_currency = str(cg_payload.get("currency") or "")
-            inputs.append(
-                InputCell(
-                    "consensus_profit_growth",
-                    Decimal(str(cg_payload["consensus_profit_growth"])),
-                    unit_of("consensus_profit_growth", cg_currency),
-                    cg_conf,
-                    cg_observed_at,
-                    None,
                 )
             )
         if issuer_id in price:
