@@ -37,6 +37,7 @@ DEFINED: dict[str, tuple[str, ...]] = {
         "no_agreement_policy",
         "two_origins_agree",
         "independent_origins_agree",
+        "unknown",
     ),  # fmt: skip
     "supply chain": (
         supply_chain_exposure.NO_SUPPLY_CHAIN_EXTRACTION,
@@ -95,10 +96,11 @@ def test_every_code_served_on_staging_and_production_is_registered() -> None:
     assert [code for code in SERVED_ON_2026_11_24 if not is_registered(code)] == []
 
 
-def test_a_vendor_payload_that_fails_validation_is_no_transient_fetch_error() -> None:
-    """`fetch_error:ValueError` repeats on the same payload; a connection error does not."""
+def test_only_a_connection_error_is_a_transient_fetch_error() -> None:
+    """`fetch_error:ValueError` repeats on the same payload; an unlisted exception is our own gap."""
     assert str(registration("fetch_error:ValueError").reason_class) == "disputed"  # type: ignore[union-attr]
     assert str(registration("fetch_error:MoomooConnectionError").reason_class) == "transient"  # type: ignore[union-attr]
+    assert str(registration("fetch_error:KeyError").reason_class) == "pipeline_gap"  # type: ignore[union-attr]
 
 
 @pytest.mark.parametrize("code", sorted(UNSERVED_REASONS))

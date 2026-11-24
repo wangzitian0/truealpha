@@ -44,6 +44,7 @@ def test_no_listed_prefix_starts_another_so_a_code_matches_one_prefix() -> None:
     ("code", "kind", "reason_class"),
     [
         ("fetch_error:MoomooConnectionError", ReasonKind.OUTCOME, ReasonClass.TRANSIENT),
+        ("fetch_error:KeyError", ReasonKind.OUTCOME, ReasonClass.PIPELINE_GAP),
         ("growth_convention_unsourced:analyst_consensus", ReasonKind.OUTCOME, ReasonClass.WORLD_ABSENCE),
         ("growth_convention:historical_cagr", ReasonKind.EVIDENCE, None),
         ("excluded:missing_gross_profit_fact", ReasonKind.OUTCOME, ReasonClass.PIPELINE_GAP),
