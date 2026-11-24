@@ -34,6 +34,8 @@ from dagster._core.errors import DagsterInvalidConfigError
 from dagster._core.instance.config import dagster_instance_config
 from dagster._core.instance.ref import InstanceRef
 from dagster._grpc.client import DagsterGrpcClient
+from dagster._grpc.types import ListRepositoriesResponse
+from dagster._serdes import deserialize_value
 from data_engine.dagster_defs import build_definitions, defs, with_in_process_executor
 from data_engine.lanes.quality import WAITS_FOR_RUNS_TAG
 from truealpha_contracts.environment_contract import UTILIZATION_CEILING, CodeServerCapacity, load_environment_contract
@@ -295,6 +297,12 @@ def _fresh_code_server_peak_mib() -> float:
                     if server.poll() is not None or time.monotonic() > deadline:
                         raise
                     time.sleep(0.5)
+            # The server imports the definitions before it answers the ping, but `--lazy-load-user-code`
+            # keeps it up when that import fails: the size of an empty server proves nothing (C1, #1851).
+            loaded = deserialize_value(client.list_repositories())
+            assert isinstance(loaded, ListRepositoriesResponse) and loaded.repository_symbols, (
+                f"the code server did not load data_engine.dagster_defs: {loaded}"
+            )
             return _peak_rss_mib(server.pid)
         finally:
             server.terminate()
@@ -312,6 +320,17 @@ def test_the_declared_process_size_covers_a_fresh_code_server() -> None:
         " measure the code server again and raise server_mib in environment_contract.v1.json"
         " (the run budget follows)"
     )
+
+
+def test_the_code_server_loads_no_dataframe_library() -> None:
+    """C1 (#1851, staging 2026-11-24): pandas and numpy held about 42 MiB of the code server, reached only
+    through two `isinstance` checks. The moomoo SDK imports pandas itself, in the runs that call moomoo."""
+    probe = "import sys, data_engine.dagster_defs; print(' '.join(m for m in ('pandas', 'numpy') if m in sys.modules))"
+    loaded = subprocess.run(  # noqa: S603 - the interpreter of this test run, fixed arguments
+        [sys.executable, "-I", "-c", probe], capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+    assert loaded == "", f"importing the code server loads {loaded}; import it inside the function that needs it"
 
 
 # --- the file is read strictly ---------------------------------------------------------
