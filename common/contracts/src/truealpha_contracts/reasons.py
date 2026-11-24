@@ -2,7 +2,7 @@
 
 An outcome code says why a cell has no value or why its value is disputed. An evidence code
 describes a served value. `registration` resolves a code exactly, then by its listed prefix;
-`excluded:<code>` takes the entry of `<code>`.
+`excluded:<code>` and `reason:<code>` take the entry of `<code>`.
 """
 
 from __future__ import annotations

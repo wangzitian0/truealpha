@@ -11,7 +11,7 @@ from data_engine.contracts.obligation_reason_codes import ObligationReasonCode
 from data_engine.datahub import oracle_outcomes
 from data_engine.datahub.capture_core import theme_purity as theme_purity_capture
 from data_engine.datahub.capture_core.executor import SERVED_BY_FAILOVER
-from data_engine.datahub.confidence_report import _OUTCOME_REASONS
+from data_engine.datahub.confidence_report import _OUTCOME_REASONS, UNSERVED_REASONS
 from factors.base import gross_profit_per_employee, supply_chain_exposure
 from factors.snapshot_inputs import CoreReasonCode
 from truealpha_contracts.reasons import ReasonKind, is_registered, registration
@@ -26,6 +26,18 @@ DEFINED: dict[str, tuple[str, ...]] = {
     "FetchAttemptOutcome": tuple(code.value for code in FetchAttemptOutcome),
     "ObligationTerminalState": tuple(code.value for code in ObligationTerminalState),
     "reconciliation outcomes": tuple(_OUTCOME_REASONS.values()),
+    "unserved cell confidence": tuple(sorted(UNSERVED_REASONS)),
+    # The literals of `confidence_report.classify_cell`, written as `reason:<code>` on `mart.cell_confidence`.
+    "cell confidence reasons": (
+        "no_origin_value",
+        "single_origin",
+        "second_origin_other_day",
+        "second_origin_other_period",
+        "same_lineage",
+        "no_agreement_policy",
+        "two_origins_agree",
+        "independent_origins_agree",
+    ),  # fmt: skip
     "supply chain": (
         supply_chain_exposure.NO_SUPPLY_CHAIN_EXTRACTION,
         supply_chain_exposure.NO_DISCLOSED_SUPPLIERS,
@@ -87,6 +99,12 @@ def test_a_vendor_payload_that_fails_validation_is_no_transient_fetch_error() ->
     """`fetch_error:ValueError` repeats on the same payload; a connection error does not."""
     assert str(registration("fetch_error:ValueError").reason_class) == "disputed"  # type: ignore[union-attr]
     assert str(registration("fetch_error:MoomooConnectionError").reason_class) == "transient"  # type: ignore[union-attr]
+
+
+@pytest.mark.parametrize("code", sorted(UNSERVED_REASONS))
+def test_the_reason_of_an_unserved_confidence_cell_is_an_outcome(code: str) -> None:
+    """On an unserved `mart.cell_confidence` row `reason:<code>` is the only reason (#1851 review)."""
+    assert registration(f"reason:{code}").kind is ReasonKind.OUTCOME  # type: ignore[union-attr]
 
 
 def test_a_strategy_exclusion_is_never_evidence() -> None:
