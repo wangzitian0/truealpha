@@ -213,3 +213,69 @@ def test_retired_aliases_do_not_populate_release_settings(monkeypatch: pytest.Mo
     canonical = Settings(_env_file=None)
     assert canonical.release_manifest_id == "release-manifest:" + "f" * 64
     assert canonical.capture_approved_by == "wangzitian0"
+
+
+# --- the image carries the deployment entrypoint (Refs wangzitian0/infra2#1822) ------------
+
+
+def test_the_image_carries_an_executable_dagster_entrypoint() -> None:
+    """infra2 runs `/bin/sh /app/dagster-entrypoint.sh <command>` without a bind mount.
+
+    Red when the COPY line, the 0755 mode, the shebang or the manifest path the script
+    validates is removed or changed.
+    """
+    lines = DOCKERFILE.read_text(encoding="utf-8").splitlines()
+    assert "COPY --chmod=0755 apps/data-engine/dagster-entrypoint.sh /app/dagster-entrypoint.sh" in lines
+    script = REPO_ROOT / "apps/data-engine/dagster-entrypoint.sh"
+    text = script.read_text(encoding="utf-8")
+    assert text.startswith("#!/bin/sh\n")
+    assert 'exec "$@"' in text
+    # The path the script validates is the one the Dockerfile ships.
+    assert f"assert_environment('{release_identity.ENV_MANIFEST_PATH}'" in text
+    assert f"COPY {release_identity.ENV_MANIFEST_PATH} ./{release_identity.ENV_MANIFEST_PATH}" in lines
+    # The git file mode is executable, so a checkout without `--chmod` support still runs it.
+    assert script.stat().st_mode & 0o111
+
+
+def test_the_entrypoint_waits_for_secrets_then_execs_the_command(tmp_path: Path) -> None:
+    """Run the script as `/bin/sh` runs it, with a tiny secrets file and a stub command."""
+    import subprocess
+    import sys
+
+    secrets = tmp_path / ".env"
+    secrets.write_text("DATABASE_URL=postgresql://u@h/db\n", encoding="utf-8")
+    env = {"PATH": str(Path(sys.executable).parent) + ":/usr/bin:/bin", "SECRETS_ENV_FILE": str(secrets)}
+    # `assert_environment` needs the injected variables the manifest names; none are set here, so
+    # the script must stop before `exec` and name the failure instead of running the command.
+    result = subprocess.run(
+        ["/bin/sh", str(REPO_ROOT / "apps/data-engine/dagster-entrypoint.sh"), "echo", "RAN"],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "RAN" not in result.stdout
+    assert "environment lacks" in result.stderr
+
+    # With every injected name present the script reaches `exec` and runs the command.
+    injected = {
+        name: "x"
+        for name in (
+            "CAPTURE_APPROVED_BY CONFIGURATION_SHA256 ENVIRONMENT GIT_COMMIT_SHA "
+            "IMAGE_DIGEST RELEASE_ID S3_ENDPOINT SEC_USER_AGENT"
+        ).split()
+    }
+    ok = subprocess.run(
+        ["/bin/sh", str(REPO_ROOT / "apps/data-engine/dagster-entrypoint.sh"), "echo", "RAN"],
+        cwd=REPO_ROOT,
+        env={**env, **injected},
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert ok.returncode == 0, ok.stderr
+    assert ok.stdout.strip() == "RAN"

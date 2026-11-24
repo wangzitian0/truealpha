@@ -91,8 +91,17 @@ jobs:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
           push: false
+          load: true
+          tags: ci-image-check/${{ matrix.image }}:build
           cache-from: type=gha,scope=${{ matrix.image }}
           cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+      # infra2 runs /app/dagster-entrypoint.sh from this image (Refs wangzitian0/infra2#1822).
+      - name: Check the data-engine image carries an executable entrypoint
+        if: matrix.image == 'truealpha-data-engine'
+        run: |
+          docker run --rm --entrypoint test ci-image-check/truealpha-data-engine:build -x /app/dagster-entrypoint.sh
+          docker run --rm --entrypoint cat ci-image-check/truealpha-data-engine:build /app/dagster-entrypoint.sh \
+            | cmp - apps/data-engine/dagster-entrypoint.sh
 
   # `!cancelled()` rather than the implicit success(): with `prebuilt` the build job is
   # skipped by design, and a job that `needs` a skipped job is itself skipped unless its
