@@ -1117,6 +1117,12 @@ def test_a_run_with_no_member_gets_no_fill_so_a_join_defect_still_reads_no_row(
     )
     assert report is not None
     assert report["questions"]["q6"]["unavailable"] == {question_coverage.NO_ROW: ISSUERS}
+    # #1851: a missing row is a violation of layer 1, in no class, and the report names its registry.
+    assert report["questions"]["q6"]["violations"] == {question_coverage.VIOLATION_NO_ROW: ISSUERS}
+    assert report["questions"]["q6"]["by_class"] == {}
+    from truealpha_contracts.reasons import REGISTRY_SHA256
+
+    assert report["reason_registry_sha256"] == REGISTRY_SHA256
 
 
 # --- the identity wrapper catches what identity code raises, and nothing else

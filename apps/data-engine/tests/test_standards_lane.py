@@ -163,6 +163,7 @@ def test_head_reports_start_requires_fresh_confidence_report(
     monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: _StubConnection())
     monkeypatch.setattr(question_coverage, "governed_head", lambda _c, **_k: head)
     monkeypatch.setattr(question_coverage, "stored_report_run", lambda _c, _u: coverage_run)
+    monkeypatch.setattr(question_coverage, "stored_report_rules_current", lambda _c, _u: True)
     monkeypatch.setattr(question_coverage, "stored_confidence_report_run", lambda _c, _u: confidence_run)
     monkeypatch.setattr(standards, "newest_is_red", lambda _name: False)
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -19,6 +19,7 @@ from truealpha_contracts.question_requirements import (
     QuestionRequirement,
     QuestionScope,
 )
+from truealpha_contracts.reasons import REGISTRY_SHA256, ReasonClass, ReasonKind, registration
 from truealpha_contracts.universes import key_of_lane, record
 
 from data_engine.datahub._helpers import gppe_branch_predicate
@@ -28,6 +29,10 @@ GOVERNING_FACTOR = "gross_profit_per_employee"
 UNRECORDED_REASON = "unrecorded_reason"
 NO_ROW = "no_row"
 NO_HEAD_SUMMARY = "no governed head"
+#: A cell outside the five classes is a violation of layer 1 (#1851): no row, no reason, or a
+#: reason the registry does not list.
+VIOLATION_NO_ROW, VIOLATION_NO_REASON, VIOLATION_UNREGISTERED = "no_row", "no_reason", "unregistered"
+MAX_CHANGED_SUBJECTS_LISTED = 20
 
 
 @dataclass(frozen=True)
@@ -101,23 +106,34 @@ def head_report_date(connection: Connection[Any], head: GovernedHead) -> date:
         raise ValueError(f"the partition key {keys[0]!r} of {head.run_id} is not an ISO date") from error
 
 
-def _classify_cell(
-    subject_id: Any,
-    status: Any,
-    reason_codes: Any,
-    value: Any,
-    *,
-    allow_not_applicable: bool = False,
-) -> Cell:
-    if allow_not_applicable and status == "not_applicable":
-        reason = (list(reason_codes or []) or [status])[0]
-        return Cell(str(subject_id), False, str(reason), not_applicable=True)
+def _reason_of(codes: Sequence[Any], *, not_applicable: bool = False) -> str:
+    """The code that explains an empty cell: its first outcome code in the reason registry.
+
+    An evidence code describes a value and never explains a gap, so it is skipped. In a cell that
+    the served status marks not applicable, a code of the class `not_applicable` comes first. A code
+    the registry does not list stays the reason, so the report counts it as a violation.
+    """
+    outcomes = [
+        str(code) for code in codes if (entry := registration(str(code))) is None or entry.kind is ReasonKind.OUTCOME
+    ]
+    if not_applicable:
+        for code in outcomes:
+            entry = registration(code)
+            if entry is not None and entry.reason_class is ReasonClass.NOT_APPLICABLE:
+                return code
+    return outcomes[0] if outcomes else UNRECORDED_REASON
+
+
+def _classify_cell(subject_id: Any, status: Any, reason_codes: Any, value: Any) -> Cell:
+    """The served status alone says that a measure does not apply (the producer sets it, the TOPT
+    baseline counts it); a reason class only routes the gap (#1851)."""
     if status == "available" and value is not None:
         return Cell(str(subject_id), True)
     if status == "available" and value is None:
         return Cell(str(subject_id), False, "null_metric_value")
-    reason = (list(reason_codes or []) or [status or UNRECORDED_REASON])[0]
-    return Cell(str(subject_id), False, str(reason))
+    not_applicable = status == "not_applicable"
+    reason = _reason_of(list(reason_codes or []), not_applicable=not_applicable)
+    return Cell(str(subject_id), False, reason, not_applicable=not_applicable)
 
 
 def _query_standard_cells(connection: Connection[Any], sql: str, run_id: str) -> tuple[Cell, ...]:
@@ -135,9 +151,7 @@ def gppe_cells(connection: Connection[Any], run_id: str) -> tuple[Cell, ...]:
         "order by mnv.issuer_id, (mnv.node_key = %(bank_key)s) desc",
         {"run_id": run_id, "bank_key": GPPE_BANKING_TCE_SPEC.root, "base_key": GPPE_V0_SPEC.root},
     ).fetchall()
-    return tuple(
-        _classify_cell(r[0], r[1], r[2], r[3] if len(r) > 3 else Decimal("1"), allow_not_applicable=True) for r in rows
-    )
+    return tuple(_classify_cell(r[0], r[1], r[2], r[3] if len(r) > 3 else Decimal("1")) for r in rows)
 
 
 def peg_cells(connection: Connection[Any], *, run_id: str) -> tuple[Cell, ...]:
@@ -152,12 +166,13 @@ def peg_cells(connection: Connection[Any], *, run_id: str) -> tuple[Cell, ...]:
     for subject_id, peg, availability_status, exclusion_reason, peg_reason_codes in rows:
         if peg is not None:
             cells.append(Cell(str(subject_id), True))
-        elif peg_reason_codes:
-            cells.append(Cell(str(subject_id), False, str(peg_reason_codes[0])))
-        elif availability_status == "excluded" and exclusion_reason:
-            cells.append(Cell(str(subject_id), False, f"excluded:{exclusion_reason}"))
-        else:
-            cells.append(Cell(str(subject_id), False, UNRECORDED_REASON))
+            continue
+        # #1804: PEG is computed for an excluded decision too, so its own reason wins; the exclusion
+        # explains the cell only when PEG gives none.
+        reason = _reason_of(list(peg_reason_codes or []))
+        if reason == UNRECORDED_REASON and availability_status == "excluded" and exclusion_reason:
+            reason = _reason_of([f"excluded:{exclusion_reason}"])
+        cells.append(Cell(str(subject_id), False, reason))
     return tuple(cells)
 
 
@@ -241,28 +256,98 @@ def classify_question(
         return entry
     observed = [{cell.subject_id: cell for cell in cells_by_column.get(key, ())} for key in col_keys]
     unavailable: Counter[str] = Counter()
+    by_class: Counter[str] = Counter()
+    violations: Counter[str] = Counter()
+    unregistered: Counter[str] = Counter()
+    reasons: dict[str, str] = {}
     answered = 0
     applicable = 0
     not_applicable_count = 0
     for subject_id in expected:
         cells = [lookup[subject_id] for lookup in observed if subject_id in lookup]
-        if not cells:
-            unavailable[NO_ROW] += 1
-            applicable += 1
-        elif all(cell.not_applicable for cell in cells):
-            not_applicable_count += 1
-        elif any(cell.answered for cell in cells):
+        if cells and any(cell.answered for cell in cells):
             answered += 1
             applicable += 1
+            continue
+        if not cells:
+            reason, not_applicable = NO_ROW, False
         else:
-            unavailable[cells[0].reason or UNRECORDED_REASON] += 1
-            applicable += 1
+            reason, not_applicable = cells[0].reason or UNRECORDED_REASON, all(cell.not_applicable for cell in cells)
+        reasons[subject_id] = reason
+        registered = registration(reason)
+        violation = (
+            VIOLATION_NO_ROW
+            if not cells
+            else VIOLATION_NO_REASON
+            if reason == UNRECORDED_REASON
+            else VIOLATION_UNREGISTERED
+            if registered is None or registered.reason_class is None
+            else None
+        )
+        if violation is not None:
+            violations[violation] += 1
+            if violation == VIOLATION_UNREGISTERED:
+                unregistered[reason] += 1
+        elif registered is not None and registered.reason_class is not None:
+            # Each empty cell is in one class or one violation, never both (#1851).
+            by_class[ReasonClass.NOT_APPLICABLE.value if not_applicable else registered.reason_class.value] += 1
+        if not_applicable:
+            not_applicable_count += 1
+            continue
+        applicable += 1
+        unavailable[reason] += 1
     entry["denominator"] = applicable
     entry["answered"] = answered
-    entry["unavailable"] = dict(sorted(unavailable.items(), key=lambda item: (-item[1], item[0])))
+    entry["unavailable"] = _by_count(unavailable)
     if not_applicable_count:
         entry["not_applicable"] = not_applicable_count
+    entry["by_class"] = _by_count(by_class)
+    entry["violations"] = _by_count(violations)
+    if unregistered:
+        entry["unregistered_reasons"] = _by_count(unregistered)
+    entry["reasons"] = dict(sorted(reasons.items()))
     return entry
+
+
+def _by_count(counts: Counter[str]) -> dict[str, int]:
+    return dict(sorted(counts.items(), key=lambda item: (-item[1], item[0])))
+
+
+def with_change(
+    questions: dict[str, dict[str, Any]], before: Mapping[str, Mapping[str, Any]] | None
+) -> dict[str, dict[str, Any]]:
+    """Add to each question what changed since `before`, the previous head classified under the same
+    rules: the answered count, each class, each reason, and the subjects whose reason moved (#1851
+    layer 2). The per-subject reasons are dropped from what is stored."""
+    for question, entry in questions.items():
+        now = entry.pop("reasons", {})
+        if before is None:
+            continue
+        then_entry = before.get(question) or {}
+        then = then_entry.get("reasons") or {}
+        moved = sorted(
+            (subject, then.get(subject), now.get(subject))
+            for subject in set(now) | set(then)
+            if then.get(subject) != now.get(subject)
+        )
+        entry["change"] = {
+            "answered": int(entry.get("answered", 0)) - int(then_entry.get("answered", 0)),
+            "by_class": _delta(entry.get("by_class") or {}, then_entry.get("by_class") or {}),
+            "unavailable": _delta(entry.get("unavailable") or {}, then_entry.get("unavailable") or {}),
+            "subjects_changed": len(moved),
+            "examples": [
+                {"subject": subject, "before": old, "after": new}
+                for subject, old, new in moved[:MAX_CHANGED_SUBJECTS_LISTED]
+            ],
+        }
+    return questions
+
+
+def _delta(now: Mapping[str, int], then: Mapping[str, int]) -> dict[str, int]:
+    keys = set(now) | set(then)
+    return {
+        key: int(now.get(key, 0)) - int(then.get(key, 0)) for key in sorted(keys) if now.get(key, 0) != then.get(key, 0)
+    }
 
 
 def compile_report(connection: Connection[Any], *, universe: str, executed_at: datetime) -> dict[str, Any] | None:
@@ -270,6 +355,27 @@ def compile_report(connection: Connection[Any], *, universe: str, executed_at: d
     head = governed_head_of(connection, key)
     if isinstance(head, NoHead):
         return None
+    issuers, questions = _questions(connection, key, head)
+    previous = previous_head(connection, universe, head.run_id)
+    previous_issuers, before = (0, None) if previous is None else _questions(connection, key, previous)
+    if not previous_issuers:
+        before = None  # no previous head, or its rows are gone: no change rather than a false one
+    return {
+        "universe": universe,
+        "universe_id": head.universe_id,
+        "run_id": head.run_id,
+        "cutoff": head.cutoff.astimezone(UTC).isoformat(),
+        "environment": declared_environment(connection),
+        "requirements_sha256": QUESTION_REQUIREMENTS_SHA256,
+        "reason_registry_sha256": REGISTRY_SHA256,
+        "generated_at": executed_at.astimezone(UTC).isoformat(),
+        "denominator": issuers,
+        "previous_run_id": None if before is None or previous is None else previous.run_id,
+        "questions": with_change(questions, before),
+    }
+
+
+def _questions(connection: Connection[Any], key: str, head: GovernedHead) -> tuple[int, dict[str, dict[str, Any]]]:
     gppe = gppe_cells(connection, head.run_id)
     issuers = [cell.subject_id for cell in gppe]
     consolidates_fund = "fund_consolidation" in record(key).roles
@@ -292,26 +398,27 @@ def compile_report(connection: Connection[Any], *, universe: str, executed_at: d
         "mart.fund_virtual_company.weighted_valuation_gap": funds_observed,
         "mart.issuer_theme_purity.theme_share": theme_purity_cells(connection, head.run_id),
     }
-    return {
-        "universe": universe,
-        "universe_id": head.universe_id,
-        "run_id": head.run_id,
-        "cutoff": head.cutoff.astimezone(UTC).isoformat(),
-        "environment": declared_environment(connection),
-        "requirements_sha256": QUESTION_REQUIREMENTS_SHA256,
-        "generated_at": executed_at.astimezone(UTC).isoformat(),
-        "denominator": len(issuers),
-        "questions": {
-            req.question.value: classify_question(
-                req,
-                universe_id=head.universe_id,
-                issuers=issuers,
-                funds=fund_subjects,
-                cells_by_column=cells_by_column,
-            )
-            for req in QUESTION_REQUIREMENTS
-        },
+    return len(issuers), {
+        req.question.value: classify_question(
+            req,
+            universe_id=head.universe_id,
+            issuers=issuers,
+            funds=fund_subjects,
+            cells_by_column=cells_by_column,
+        )
+        for req in QUESTION_REQUIREMENTS
     }
+
+
+def previous_head(connection: Connection[Any], universe: str, run_id: str) -> GovernedHead | None:
+    """The head of the newest stored report of the universe for another run. The universe id of a
+    list universe changes with its membership, so the lane name finds it (#1851 review)."""
+    row = connection.execute(
+        "select universe_id, run_id, cutoff from mart.question_coverage_report "
+        "where payload ->> 'universe' = %s and run_id <> %s order by created_at desc limit 1",
+        (universe, run_id),
+    ).fetchone()
+    return None if row is None else GovernedHead(universe_id=str(row[0]), run_id=str(row[1]), cutoff=row[2])
 
 
 def persist(connection: Connection[Any], report: Mapping[str, Any]) -> str:
@@ -336,6 +443,17 @@ def stored_report_run(connection: Connection[Any], universe_id: str) -> str | No
     return _newest_run_in(connection, "mart.question_coverage_report", universe_id)
 
 
+def stored_report_rules_current(connection: Connection[Any], universe_id: str) -> bool:
+    """Whether the newest stored report was compiled under this reason registry. A report of other
+    rules is not current, so the head reports run again (#1851)."""
+    row = connection.execute(
+        "select payload ->> 'reason_registry_sha256' from mart.question_coverage_report "
+        "where universe_id = %s order by created_at desc limit 1",
+        (universe_id,),
+    ).fetchone()
+    return bool(row) and row[0] == REGISTRY_SHA256
+
+
 def stored_confidence_report_run(connection: Connection[Any], universe_id: str) -> str | None:
     return _newest_run_in(connection, "mart.datahub_confidence_report", universe_id)
 
@@ -353,6 +471,8 @@ def reports_current_for_head(connection: Connection[Any], head: GovernedHead) ->
         and type(connection).__name__ == "_Connection"
     ):
         return True
+    if not stored_report_rules_current(connection, head.universe_id):
+        return False
     return stored_confidence_report_run(connection, head.universe_id) == head.run_id
 
 
