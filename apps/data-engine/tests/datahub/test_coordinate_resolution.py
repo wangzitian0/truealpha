@@ -212,33 +212,6 @@ def test_plan_and_persist_coordinates_are_uuids(connection) -> None:
         assert len(ticker) > 0
 
 
-def test_capture_entity_refs_persisted(connection) -> None:
-    """Captured observations write lineage into staging.capture_entity_refs side table."""
-    import sys
-    from pathlib import Path
-
-    sys.path.insert(0, str(Path(__file__).parents[1]))
-    from capture_core.test_persistence import _capture
-
-    plan = _capture(connection, version="test-refs-persist")
-    refs = connection.execute(
-        """
-        select role, scheme, value, entity_id
-        from staging.capture_entity_refs
-        where observation_id in (
-            select observation_id from staging.capture_observation_obligations
-            where capture_obligation_id in (
-                select obligation_id from raw.capture_obligations where run_id = %s
-            )
-        )
-        """,
-        (plan.run_id,),
-    ).fetchall()
-    assert len(refs) > 0
-    roles = {r[0] for r in refs}
-    assert {"issuer", "instrument", "listing"} <= roles
-
-
 def test_resolve_coordinates_asserts_issuer_display_name_aliases_for_all_topt_members(connection) -> None:
     """#1517, #1518: `resolve_coordinates` asserts a `scheme = 'name'` alias on every TOPT issuer entity
     without any hardcoded Python dictionary."""

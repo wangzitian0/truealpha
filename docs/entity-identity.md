@@ -266,17 +266,14 @@ than guessing.
 **The normalized payload carries only the UUIDs.** From PR-3 on, `issuer_id`, `instrument_id`
 and `listing_id` hold the entity UUIDs in canonical text form.
 
-**The alias a capture used is lineage, and stays out of the payload.** An example is the CIK
-sent to SEC or the ticker sent to Twelve Data. PR-3 records it in an append-only side table,
-`staging.capture_entity_refs(observation_id, role, entity_id, scheme, value, known_at)`.
-Keeping it out of the payload matters for two reasons:
+**The alias a capture used is kept out of the normalized payload.** An example is the CIK
+sent to SEC or the ticker sent to Twelve Data.
+Keeping it out of the payload matters for the observation identity:
 
 - **The payload hash is the observation's identity.** TOPT (which knows AAPL by its LEI) and
   QQQ (which knows it by its CIK) must produce the same hash for the same vendor bar. If the
   alias were in the payload, the id-only duplicate groups #877 set out to stop would come
   back.
-- **The side table still answers "which identifier did we send?"**, which makes the vendor
-  call reproducible.
 
 **Payloads written before PR-3 keep their legacy strings.** Every one of them is a
 `legacy-id` alias, so `entity_resolve('legacy-id', payload->>'issuer_id', …)` maps old rows to
@@ -531,7 +528,7 @@ holding type.
 2. **PR-3: captures write UUIDs.**
    - `resolve_coordinates` replaces the corpus trio in `plan_and_persist` for every universe.
      It mints on a miss and fails on an ambiguous alias.
-   - The payload carries UUIDs, and `capture_entity_refs` records the alias each fetch used.
+   - The payload carries UUIDs (side-table `capture_entity_refs` was later retired).
    - The SEC adapter and the standards planner read the CIK alias. The `issuer:lei:` branches
      become dead code and are removed.
    - Reuse compares UUIDs. Tests that pin payload hashes derive them instead of using

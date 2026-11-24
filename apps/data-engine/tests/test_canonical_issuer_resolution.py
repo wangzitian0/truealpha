@@ -1306,11 +1306,11 @@ def test_the_wide_row_form_is_the_lower_case_hyphenated_uuid(value: str, expecte
 #: `_write_every_table` and name it here.
 WRITERS = {
     "metric_node_values": "the capture tick, long-table node values from the snapshot",
-    "strategy_input_coverage": "persist_strategy_input_coverage, from the run's own issuers",
     "issuer_theme_purity": "materialize_theme_purity, members read from the snapshot/node values",
     "issuer_supply_chain_exposure": "run_supply_chain_exposure",
     "issuer_analyst_ratings": "run_analyst_ratings",
 }
+RETIRED_WITHOUT_WRITER = {"strategy_input_coverage"}
 
 
 def run_scoped_issuer_tables(connection: psycopg.Connection[Any]) -> set[str]:
@@ -1326,7 +1326,7 @@ def run_scoped_issuer_tables(connection: psycopg.Connection[Any]) -> set[str]:
                       where c.table_schema = 'mart' and c.table_name = t.table_name and c.column_name = 'issuer_id')
         """
     ).fetchall()
-    return {name for (name,) in rows}
+    return {name for (name,) in rows} - RETIRED_WITHOUT_WRITER
 
 
 def issuer_ids_outside_the_wide_row(
@@ -1370,11 +1370,8 @@ def _seed_one_partition(
 def _write_every_table(
     connection: psycopg.Connection[Any], head: question_coverage.GovernedHead, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Run the real writer of each lane table on the head. The capture fixture wrote the first two."""
+    """Run the real writer of each lane table on the head. The capture fixture wrote metric_node_values."""
     from data_engine.datahub.capture_core.theme_purity import materialize_theme_purity
-    from data_engine.datahub.strategy_bridge import persist_strategy_input_coverage
-
-    persist_strategy_input_coverage(connection, head.run_id, cutoff=head.cutoff)
 
     _seed_one_partition(connection, head, monkeypatch)
     materialize_theme_purity(connection, run_id=head.run_id, cutoff=head.cutoff, themes=(THEMES["ai-infrastructure"],))
@@ -1399,6 +1396,7 @@ def test_every_run_scoped_issuer_table_stores_the_wide_row_form(
         assert stored, f"{table} holds no row for the head: the guard checked nothing"
         assert issuer_ids_outside_the_wide_row(connection, table, head.run_id, wide) == set(), table
         assert all(is_canonical_issuer_id(issuer_id) for issuer_id in stored), table
+    assert _stored_ids(connection, "mart.strategy_input_coverage", head.run_id) == set()
 
 
 def test_the_guard_flags_a_table_that_stores_the_legacy_form(connection: psycopg.Connection[Any]) -> None:

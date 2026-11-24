@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -36,7 +35,6 @@ from data_engine.datahub.capture_core.executor import (
 from data_engine.datahub.capture_core.source_registrations import registration_for
 from data_engine.datahub.control_plane import AttemptLedger
 from data_engine.datahub.repository import PostgresCaptureControlRepository
-from data_engine.datahub.resolve_coordinates import parse_alias
 
 _ATTEMPT_OUTCOMES: Mapping[ObligationReasonCode, FetchAttemptOutcome] = {
     ObligationReasonCode.AUTH_FAILED: FetchAttemptOutcome.FAILED,
@@ -388,40 +386,3 @@ class PostgresCaptureControlSink:
                 else "stale"
             ),
         )
-        self._put_capture_entity_refs(observation.observation_id, binding=binding, knowable_at=knowable_at)
-
-    def _put_capture_entity_refs(
-        self,
-        observation_id: str,
-        *,
-        binding: ObligationBinding,
-        knowable_at: datetime,
-    ) -> None:
-        if not self._raw_coordinates or not self._coordinates:
-            return
-        subject_id = binding.obligation.subject.id
-        raw_trio = self._raw_coordinates.get(subject_id)
-        resolved_trio = self._coordinates.get(subject_id)
-        if not raw_trio or not resolved_trio:
-            return
-
-        for role, entity_id_str, raw_id in (
-            ("issuer", resolved_trio[0], raw_trio[0]),
-            ("instrument", resolved_trio[1], raw_trio[1]),
-            ("listing", resolved_trio[2], raw_trio[2]),
-        ):
-            try:
-                entity_uuid = uuid.UUID(entity_id_str)
-            except (ValueError, TypeError):
-                continue
-            scheme, value = parse_alias(raw_id, role)
-            with self._connection.transaction():
-                self._connection.execute(
-                    """
-                    insert into staging.capture_entity_refs (
-                        observation_id, role, entity_id, scheme, value, known_at
-                    ) values (%s, %s, %s, %s, %s, %s)
-                    on conflict (observation_id, role) do nothing
-                    """,
-                    (observation_id, role, entity_uuid, scheme, value, knowable_at),
-                )

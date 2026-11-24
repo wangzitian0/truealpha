@@ -2,8 +2,37 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import psycopg
 from truealpha_runtime.testing import apply_migration_chain, isolated_test_database
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+RETIRED_TABLE_NAMES = (
+    "research_document_download_tickets",
+    "capture_entity_refs",
+    "strategy_input_coverage",
+    "market_prices_monthly",
+    "universe_mask",
+)
+
+
+def test_no_runtime_source_references_retired_tables() -> None:
+    """Confirm apps/*/src and common/*/src do not read or write any retired table."""
+    offenders: list[str] = []
+    scanned = 0
+    for root in (REPO_ROOT / "apps", REPO_ROOT / "common"):
+        for src_dir in sorted(root.glob("*/src")):
+            for path in sorted(src_dir.rglob("*")):
+                if path.suffix not in {".py", ".ts", ".tsx", ".sql"} or not path.is_file():
+                    continue
+                scanned += 1
+                text = path.read_text(encoding="utf-8", errors="ignore")
+                for table_name in RETIRED_TABLE_NAMES:
+                    if table_name in text:
+                        offenders.append(f"{path.relative_to(REPO_ROOT).as_posix()}:{table_name}")
+    assert scanned > 0, "expected runtime source files under apps/*/src and common/*/src"
+    assert offenders == [], f"retired tables referenced in runtime sources: {offenders}"
 
 
 def test_fresh_migration_validates_all_constraints_and_retires_download_tickets() -> None:

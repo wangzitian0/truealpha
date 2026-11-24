@@ -5,7 +5,6 @@ from __future__ import annotations
 import ast
 import json
 import logging
-import urllib.parse
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -27,12 +26,6 @@ from data_engine.datahub.capture_core.universe_plane import (
     build_denominator,
 )
 from data_engine.datahub.fetch_key import FetchKey
-from data_engine.datahub.market_prices import (
-    TwelveDataClient,
-    ingest_twelve_data_market_prices,
-    latest_closed_monthly_session,
-    should_fetch_monthly_series,
-)
 from data_engine.datahub.standards.filing_extraction import latest_annual_filing
 from data_engine.lanes.qqq_prices import CREDITS_PER_SYMBOL
 from data_engine.sources import gateway, sec
@@ -665,60 +658,6 @@ def test_k4_d1_from_price_store_reuses_existing_raw_fetch_without_inserting_dupl
     finally:
         conn.rollback()
         conn.close()
-
-
-def test_k4_d2_monthly_series_skipped_mid_month_when_prior_closed_month_is_stored() -> None:
-    """Mid-month weekday run when the prior closed month-end bar is already stored makes 0 1month calls (#1411 K4 D2)."""
-    mid_month_now = datetime(2026, 10, 14, 21, 15, tzinfo=UTC)
-    closed_month_end = latest_closed_monthly_session(mid_month_now)
-    assert closed_month_end == date(2026, 9, 30)
-
-    class _StoredCursor:
-        def __init__(self) -> None:
-            self._last_query = ""
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_exc: object) -> bool:
-            return False
-
-        def execute(self, query: str, params: tuple[Any, ...] = ()) -> None:
-            self._last_query = query
-
-        def fetchone(self):
-            if "staging.market_prices_monthly" in self._last_query:
-                return (1,)
-            return None
-
-        def fetchall(self):
-            return []
-
-        def executemany(self, _query: str, _rows: Any) -> None:
-            pass
-
-    class _StoredConnection:
-        def cursor(self):
-            return _StoredCursor()
-
-    assert should_fetch_monthly_series(_StoredConnection(), "AAPL", now=mid_month_now) is False
-
-    intervals_called: list[str] = []
-
-    def transport(url: str) -> tuple[int, bytes]:
-        query = dict(urllib.parse.parse_qsl(urllib.parse.urlparse(url).query))
-        intervals_called.append(query["interval"])
-        return 200, json.dumps({"values": []}).encode()
-
-    client = TwelveDataClient(api_key="test", transport_fn=transport, sleep_fn=lambda _s: None)
-    summary = ingest_twelve_data_market_prices(
-        symbols=["AAPL"],
-        client=client,
-        connection=_StoredConnection(),  # type: ignore[arg-type]
-        now=mid_month_now,
-    )
-    assert "1month" not in intervals_called
-    assert summary.total_calls == 2
 
 
 # --- K5: SEC companyfacts & 10-K deduplication (D3) -----------------------------------

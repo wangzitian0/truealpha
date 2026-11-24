@@ -641,13 +641,11 @@ def test_a_governed_head_with_no_bound_strategy_run_is_a_visible_gap_not_a_silen
     # register_run_evidence call — not re-implemented, the same three functions — and the
     # gap must close for this same head.
     from data_engine.datahub.strategy_bridge import (
-        persist_strategy_input_coverage,
         run_strategy_replay_for_cutoff,
         seed_strategy_inputs_from_capture,
     )
 
     seed_strategy_inputs_from_capture(connection, plan.run_id, cutoff=CUTOFF)
-    persist_strategy_input_coverage(connection, plan.run_id, cutoff=CUTOFF)
     bound_run_id, _count, _snapshot = run_strategy_replay_for_cutoff(
         connection,
         cutoff=CUTOFF,

@@ -1,4 +1,4 @@
-"""Daily multi-resolution market data refresh and PIT universe mask (#938 layer 1)."""
+"""Daily market data refresh (#938 layer 1)."""
 
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -14,7 +14,6 @@ from data_engine.datahub.market_prices import (
     MAX_BAR_LAG_SESSIONS,
     SPLIT_ADJUSTED,
     UNADJUSTED,
-    latest_closed_monthly_session,
     most_recent_xnys_session,
     oldest_session_within_lag,
     xnys_session_close_utc,
@@ -43,10 +42,6 @@ def _daily_cutoff(now: datetime) -> date:
     return candidate
 
 
-def _monthly_cutoff(now: datetime) -> date:
-    return latest_closed_monthly_session(now)
-
-
 def _distinct_trading_dates(
     connection: psycopg.Connection, table: str, symbols: Sequence[str], *, adjust: str
 ) -> list[date]:
@@ -65,7 +60,6 @@ def _refresh_market_data(
     client: "TwelveDataClient | None" = None,
 ) -> dict[str, Any]:
     from data_engine.datahub.market_prices import ingest_twelve_data_market_prices
-    from data_engine.datahub.universe_mask import compute_and_persist_universe_mask_from_db
 
     symbols = tuple(symbols)
     if not symbols:
@@ -74,42 +68,17 @@ def _refresh_market_data(
     summary = ingest_twelve_data_market_prices(symbols=symbols, client=client, connection=connection, now=now)
     context.log.info(
         f"market_data: ingested {summary.daily_inserted} daily / {summary.unadjusted_daily_inserted} unadjusted "
-        f"daily / {summary.monthly_inserted} monthly new-vintage rows over {summary.total_calls} calls"
+        f"daily new-vintage rows over {summary.total_calls} calls"
     )
 
     daily_cutoffs = sorted(
         set(_distinct_trading_dates(connection, "staging.market_prices_daily", symbols, adjust=SPLIT_ADJUSTED))
         | {_daily_cutoff(now)}
     )
-    monthly_cutoffs = sorted(
-        set(_distinct_trading_dates(connection, "staging.market_prices_monthly", symbols, adjust=SPLIT_ADJUSTED))
-        | {_monthly_cutoff(now)}
-    )
-
-    daily_mask = compute_and_persist_universe_mask_from_db(
-        connection,
-        symbols=symbols,
-        cutoff_dates=daily_cutoffs,
-        source_table="staging.market_prices_daily",
-        adjust=SPLIT_ADJUSTED,
-        resolution="1D",
-    )
-    monthly_mask = compute_and_persist_universe_mask_from_db(
-        connection,
-        symbols=symbols,
-        cutoff_dates=monthly_cutoffs,
-        source_table="staging.market_prices_monthly",
-        adjust=SPLIT_ADJUSTED,
-        resolution="1M",
-    )
     return {
         "daily_inserted": summary.daily_inserted,
         "unadjusted_daily_inserted": summary.unadjusted_daily_inserted,
-        "monthly_inserted": summary.monthly_inserted,
-        "daily_mask_rows": len(daily_mask),
-        "monthly_mask_rows": len(monthly_mask),
         "daily_cutoffs": daily_cutoffs,
-        "monthly_cutoffs": monthly_cutoffs,
     }
 
 

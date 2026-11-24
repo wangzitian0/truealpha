@@ -435,7 +435,7 @@ The fixed columns were a compatibility projection. `mart.topt_gppe_results` and 
   `is_registered_input_key` consults the forest.
 - `strategy_bridge._STRATEGY_FINANCIAL_KEYS` becomes the forest's input nodes, which removes
   the rule-22 violation that init.md names.
-- `mart.strategy_input_coverage` measures, per issuer, `required_inputs(tree, class)` of the
+- `count_complete_strategy_inputs` measures, per issuer, `required_inputs(tree, class)` of the
   trees the strategy consumes. Since #1518, `factors.composite.strategy_evaluator.required_input_keys`
   derives the keys from the trees that the definition pins for the issuer class. A bank carries the
   strategy input key `gross_profit` (the node `pre_provision_profit` is the financial-issuer split of the
