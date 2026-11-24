@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 import dagster as dg
 import psycopg
 
+from data_engine import db
 from data_engine.config import settings
 from data_engine.datahub.treasury_rates import REGISTRATION, refresh_macro_series
 from data_engine.external_op import external_op
@@ -57,7 +58,7 @@ def refresh_macro_data_op(context: dg.OpExecutionContext) -> None:
         MACRO_FRESHNESS_VERDICT, registered=NIGHTLY_VERDICTS, run_id=context.run_id, tick=tick_of(context)
     ) as outcome:
         now = datetime.now(UTC)
-        with gateway.capacity_scope(), psycopg.connect(settings.database_url) as connection:
+        with gateway.capacity_scope(), db.connect() as connection:
             for result in refresh_macro_series(connection, today=now.date()):
                 context.log.info(
                     f"treasury {result.year}: inserted {result.inserted} rows"

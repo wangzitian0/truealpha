@@ -5,8 +5,8 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 
 import dagster as dg
-import psycopg
 
+from data_engine import db
 from data_engine.config import settings
 from data_engine.lanes.capture import (
     CANARY_JOB_NAME,
@@ -42,7 +42,7 @@ def _tick_run_request(
     default_status=dg.DefaultSensorStatus.RUNNING,
 )
 def pipeline_trigger_sensor(context: dg.SensorEvaluationContext):
-    with psycopg.connect(settings.database_url) as connection:
+    with db.connect() as connection:
         pending = connection.execute(
             "select request_id, executed_at, dedupe_key, job_name, "
             "coalesce((to_jsonb(request)->>'force_fetch')::boolean, false) "

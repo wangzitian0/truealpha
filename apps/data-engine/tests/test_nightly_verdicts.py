@@ -92,7 +92,10 @@ def test_a_green_check_records_ok_on_its_own_autocommit_connection(monkeypatch) 
         "output_invariants", registered={"output_invariants"}, run_id="r" * 36, tick=tick
     ) as o:
         o.summary = "19 held, 0 deferred, 0 empty"
-    assert sink.kwargs == {"autocommit": True}, "the verdict must survive the check's own transaction"
+    assert sink.kwargs == {
+        "connect_timeout": settings.database_connect_timeout_seconds,
+        "autocommit": True,
+    }, "the verdict must survive the check's own transaction, on a connection that times out"
     assert sink.rows == [("output_invariants", tick, True, "19 held, 0 deferred, 0 empty", "r" * 36)]
 
 

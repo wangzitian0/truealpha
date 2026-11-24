@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 import dagster as dg
 import psycopg
 
+from data_engine import db
 from data_engine.config import settings
 from data_engine.datahub.market_prices import (
     MAX_BAR_LAG_SESSIONS,
@@ -166,7 +167,7 @@ def refresh_market_data_op(context: dg.OpExecutionContext) -> None:
         MARKET_DATA_VERDICT, registered=NIGHTLY_VERDICTS, run_id=context.run_id, tick=tick_of(context)
     ) as outcome:
         now = datetime.now(UTC)
-        with gateway.capacity_scope(), psycopg.connect(settings.database_url) as connection:
+        with gateway.capacity_scope(), db.connect() as connection:
             symbols = stored_symbols(connection, known_at=now)
             _refresh_market_data(context, connection, symbols=symbols, now=now)
             connection.commit()

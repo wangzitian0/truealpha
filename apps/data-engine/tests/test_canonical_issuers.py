@@ -744,7 +744,7 @@ def test_the_history_lane_reports_how_each_share_count_was_classed(monkeypatch) 
         def commit(self) -> None:
             return None
 
-    monkeypatch.setattr(lane.psycopg, "connect", lambda *_args, **_kwargs: _Connection())
+    monkeypatch.setattr(psycopg, "connect", lambda *_args, **_kwargs: _Connection())
     monkeypatch.setattr(lane, "project_deployed_history", lambda *_args, **_kwargs: summary)
     context = dg.build_op_context()
 

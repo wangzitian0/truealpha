@@ -3,9 +3,9 @@
 import json
 
 import dagster as dg
-import psycopg
 from truealpha_contracts.strategy import load_strategy_definition as load_packaged_strategy_definition
 
+from data_engine import db
 from data_engine.config import settings
 from data_engine.datahub.backtest import DEPLOYED_ENVIRONMENTS, BacktestPending, run_core_strategy_backtest
 from data_engine.external_op import external_op
@@ -55,7 +55,7 @@ def run_nightly_backtest_op(context: dg.OpExecutionContext, config: NightlyBackt
     with verdict(
         NIGHTLY_BACKTEST_VERDICT, registered=NIGHTLY_VERDICTS, run_id=context.run_id, tick=tick_of(context)
     ) as outcome:
-        with psycopg.connect(settings.database_url) as connection:
+        with db.connect() as connection:
             try:
                 result = run_core_strategy_backtest(connection, tick=tick, **extra_kwargs)  # type: ignore[arg-type]
             except BacktestPending as pending:

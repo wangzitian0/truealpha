@@ -16,12 +16,11 @@ REQUIRED_TABLES = [
 
 
 def check_database() -> list[str]:
-    import psycopg
-    from data_engine.config import settings
+    from data_engine import db
 
     problems = []
     try:
-        with psycopg.connect(settings.database_url, connect_timeout=settings.database_connect_timeout_seconds) as conn:
+        with db.connect() as conn:
             for table in REQUIRED_TABLES:
                 if conn.execute("select to_regclass(%s)", (table,)).fetchone()[0] is None:
                     problems.append(f"missing table {table} (run the migrations: make db-migrate or docker-exec psql)")
@@ -31,13 +30,11 @@ def check_database() -> list[str]:
 
 
 def check_object_storage() -> list[str]:
-    import psycopg
-    from data_engine import raw_store
-    from data_engine.config import settings
+    from data_engine import db, raw_store
     from truealpha_contracts.models import DataSource
 
     try:
-        with psycopg.connect(settings.database_url, connect_timeout=settings.database_connect_timeout_seconds) as conn:
+        with db.connect() as conn:
             fetch_id = raw_store.insert_fetch(
                 conn,
                 source=DataSource.SEC,
