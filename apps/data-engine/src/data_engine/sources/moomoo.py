@@ -184,6 +184,54 @@ def get_owner_plate(ctx, code_list: list[str], *, caller: str = "probe_moomoo_ca
     return _call_method(ctx, "get_owner_plate", code_list, caller=caller, identity=identity)
 
 
+def _proto_fields(message) -> dict:
+    """Return the set fields of a vendor proto message by field name; an unset field is absent, not zero."""
+    out: dict = {}
+    for field, value in message.ListFields():
+        if field.type == field.TYPE_MESSAGE:
+            out[field.name] = [_proto_fields(v) for v in value] if field.is_repeated else _proto_fields(value)
+        else:
+            out[field.name] = list(value) if field.is_repeated else value
+    return out
+
+
+def _earnings_calendar_items(response) -> tuple[int, str, list[dict] | None]:
+    if response.retType != moomoo.RET_OK:
+        error_code = f" errCode {response.errCode}" if response.HasField("errCode") else ""
+        return moomoo.RET_ERROR, f"retType {response.retType}{error_code}: {response.retMsg}", None
+    return moomoo.RET_OK, "", [_proto_fields(item) for item in response.s2c.itemList]
+
+
+def get_earnings_calendar(
+    ctx,
+    market: str,
+    *,
+    begin_date: str,
+    end_date: str,
+    caller: str = "probe_moomoo_capabilities",
+    identity: FetchKey,
+) -> list[dict]:
+    """Fetch the reporting events of `market` from `begin_date` to `end_date` (at most 7 days apart).
+
+    Each item keeps its full `estimateList`. The SDK table keeps one EPS pair and drops `periodType` and `currency`.
+    """
+    from moomoo.quote.quote_query import GetEarningsCalendarQuery
+
+    def _invoke(c):
+        query = c._get_sync_query_processor(GetEarningsCalendarQuery.pack_req, _earnings_calendar_items)
+        ret, msg, items = query(
+            market=market,
+            sort_type=None,
+            begin_date=begin_date,
+            end_date=end_date,
+            filter_list=None,
+            conn_id=c.get_sync_conn_id(),
+        )
+        return (ret, items) if ret == moomoo.RET_OK else (ret, msg)
+
+    return _call(ctx, "get_earnings_calendar", caller, _invoke, identity=identity, request_uri=f"moomoo://{market}")
+
+
 def get_history_kline(
     ctx,
     code: str,

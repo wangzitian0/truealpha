@@ -71,6 +71,10 @@ class MoomooClient(Protocol):
     def financial_statements(self, code: str, *, statement_type: int, identity: FetchKey) -> Mapping[str, Any]: ...
 
 
+class EarningsCalendarClient(Protocol):
+    def earnings_calendar(self, market: str, *, begin: date, end: date, identity: FetchKey) -> list[dict[str, Any]]: ...
+
+
 class OpenDClient:
     def history_kline(self, code: str, *, start: date, end: date, identity: FetchKey) -> list[dict[str, Any]]:
         from data_engine.jsonable import to_jsonable
@@ -108,6 +112,37 @@ class OpenDClient:
             detail = moomoo.get_valuation_detail(ctx, code, valuation_type=1, caller=CALLER, identity=identity)
         normalized = to_jsonable(detail)
         return normalized if isinstance(normalized, Mapping) else {}
+
+    def earnings_calendar(self, market: str, *, begin: date, end: date, identity: FetchKey) -> list[dict[str, Any]]:
+        from data_engine.sources import moomoo
+
+        with moomoo.connect() as ctx:
+            return moomoo.get_earnings_calendar(
+                ctx, market, begin_date=begin.isoformat(), end_date=end.isoformat(), caller=CALLER, identity=identity
+            )
+
+
+EARNINGS_CALENDAR_MAX_SPAN = timedelta(days=7)
+
+
+def earnings_calendar_key(market: str, begin: date, end: date) -> FetchKey:
+    return FetchKey(
+        "moomoo", "get_earnings_calendar", f"market:{market}:{begin.isoformat()}:{end.isoformat()}", gateway.utc_day()
+    )
+
+
+def capture_earnings_calendar(
+    market: str, begin: date, end: date, *, client: EarningsCalendarClient | None = None
+) -> bytes:
+    """Land one moomoo earnings-calendar answer in `raw.fetches` and return its bytes (#1791)."""
+    if not begin <= end <= begin + EARNINGS_CALENDAR_MAX_SPAN:
+        raise ValueError(f"moomoo accepts an earnings-calendar range of at most 7 days, not {begin}..{end}")
+    source: EarningsCalendarClient = client if client is not None else OpenDClient()
+
+    def fetch(identity: FetchKey) -> bytes:
+        return canonical_bytes(source.earnings_calendar(market, begin=begin, end=end, identity=identity))
+
+    return gateway.fetch_once(earnings_calendar_key(market, begin, end), fetch)
 
 
 def moomoo_code(symbol: str) -> str:
@@ -439,6 +474,8 @@ __all__ = (
     "OpenDClient",
     "annual_values_by_period_end",
     "canonical_bytes",
+    "capture_earnings_calendar",
+    "earnings_calendar_key",
     "moomoo_code",
     "moomoo_financials_origin",
     "moomoo_kline_origin",
