@@ -110,9 +110,13 @@ jobs:
         with:
           path: ~/.cache/ms-playwright
           key: playwright-chromium-${{ runner.os }}-${{ hashFiles('apps/app-web/bun.lock', 'apps/app-web/bun.lockb', 'apps/app-web/package.json') }}
+      # No --with-deps (#1843): the ubuntu-24.04 image holds every library of
+      # the headless shell; apt only added fonts and upgraded mesa. The staging
+      # hook installs the same way, so a cache miss and a cache hit walk on the
+      # same OS packages.
       - name: Install chromium for the walk-tree suite
         if: steps.chromium_cache.outputs.cache-hit != 'true'
-        run: bunx playwright install --with-deps chromium
+        run: bunx playwright install chromium
       # The seed is about what the walk COVERS, not about whether it passes —
       # measured, not assumed. On a migrated database with principals but no
       # mart rows the suite is green (11/11), because every research surface
