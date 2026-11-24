@@ -34,6 +34,8 @@ from dagster._core.errors import DagsterInvalidConfigError
 from dagster._core.instance.config import dagster_instance_config
 from dagster._core.instance.ref import InstanceRef
 from dagster._grpc.client import DagsterGrpcClient
+from dagster._grpc.types import ListRepositoriesResponse
+from dagster._serdes import deserialize_value
 from data_engine.dagster_defs import build_definitions, defs, with_in_process_executor
 from data_engine.lanes.quality import WAITS_FOR_RUNS_TAG
 from truealpha_contracts.environment_contract import UTILIZATION_CEILING, CodeServerCapacity, load_environment_contract
@@ -295,9 +297,12 @@ def _fresh_code_server_peak_mib() -> float:
                     if server.poll() is not None or time.monotonic() > deadline:
                         raise
                     time.sleep(0.5)
-            # `--lazy-load-user-code` answers the ping before it imports the definitions; the deployed
-            # server imports them for the first caller. Ask for them, then read the size (C1, #1851).
-            client.list_repositories()
+            # The server imports the definitions before it answers the ping, but `--lazy-load-user-code`
+            # keeps it up when that import fails: the size of an empty server proves nothing (C1, #1851).
+            loaded = deserialize_value(client.list_repositories())
+            assert isinstance(loaded, ListRepositoriesResponse) and loaded.repository_symbols, (
+                f"the code server did not load data_engine.dagster_defs: {loaded}"
+            )
             return _peak_rss_mib(server.pid)
         finally:
             server.terminate()
