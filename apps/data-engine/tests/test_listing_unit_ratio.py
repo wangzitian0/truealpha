@@ -902,6 +902,11 @@ def test_a_depositary_share_of_a_preferred_share_does_not_stop_the_domestic_rule
         "American Depositary Shares, each representing 6 ordinary shares, and associated Preferred Share Purchase Rights",
         "American Depositary Shares, each representing 6 ordinary shares, nominal value £0.001, with no preference on liquidation",
         "American Depositary Shares, each representing one preference share",
+        # Sixth review of #1842: receipts and a share class name the listed equity, not a US preferred.
+        "GDSs, each representing 10 preference shares",
+        "GDRs representing preference shares",
+        "Depositary Receipts, each representing 5 preference shares",
+        "Depositary Shares, each representing 6 Class A preference shares",
     ],
 )
 def test_an_ads_that_names_a_preference_still_stops_the_domestic_rule(title: str) -> None:
@@ -909,3 +914,9 @@ def test_an_ads_that_names_a_preference_still_stops_the_domestic_rule(title: str
 
     assert ratio.listing_units_per_share is None, title
     assert ratio.reason == REASON_TICKER_NOT_ON_COVER
+
+
+def test_a_global_depositary_share_is_a_depositary_security() -> None:
+    """Sixth review of #1842: `GDS` and `GDR` were no depositary words, on `main` too."""
+    assert read_title("GDSs, each representing 10 ordinary shares").listing_units_per_share == Decimal(10)
+    assert read_title("GDRs").reason == REASON_DEPOSITARY_WITHOUT_QUANTITY

@@ -87,7 +87,7 @@ _TAIL = (
     r"|\s+(?:of )?" + _PAR + r"|\s+[$€£¥]\s*[\d.]"
     r"|\s+of\s+[$€£¥]\s*[\d.]+\s+" + _PAR + r")"
 )
-_DEPOSITARY_WORD = re.compile(r"\b(?:depositary|adss?|adrs?)\b")
+_DEPOSITARY_WORD = re.compile(r"\b(?:depositary|adss?|adrs?|gdss?|gdrs?)\b")
 _DEPOSITARY_EACH = re.compile(
     r"\b(?:each (?:(?:ads|adr|american depositary share|depositary share) )?"
     r"|(?:one|1) (?:ads|adr|american depositary share|depositary share) )"
@@ -248,7 +248,7 @@ def cover_registrants(body: bytes) -> tuple[str, ...]:
 
 
 _PREFERRED_WORD = re.compile(r"\b(?:preferred|preference)\b")
-_COMMON_OR_RECEIPT_WORD = re.compile(r"\b(?:ordinary|common|american|global|adss?|adrs?)\b")
+_COMMON_OR_RECEIPT_WORD = re.compile(r"\b(?:ordinary|common|american|global|class|adss?|adrs?|gdss?|gdrs?|receipts?)\b")
 
 
 def is_preferred_depositary_share(text: str) -> bool:
