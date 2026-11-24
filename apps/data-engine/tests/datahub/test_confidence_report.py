@@ -1235,3 +1235,42 @@ def test_lookup_outcome_mass_scopes_by_family_so_revenue_failures_do_not_bleed_i
         )
         assert scoped.confidence == baseline.confidence
         assert scoped.confidence >= Decimal("0.50")
+
+
+def test_oracle_context_groups_the_rows_once_for_every_cell() -> None:
+    """#1839: the report context hands each cell the rows grouped by subject, read once."""
+    from data_engine.datahub.oracle_outcomes import OracleRowsBySubject
+
+    columns = (
+        "observation_id",
+        "subject_id",
+        "field",
+        "period",
+        "served_value",
+        "oracle_value",
+        "oracle_kind",
+        "source",
+        "knowable_at",
+        "ratio",
+        "tolerance",
+        "result",
+        "reason",
+        "compared_at",
+    )
+    stored = [
+        dict.fromkeys(columns) | {"subject_id": subject, "field": "revenue", "result": "agree", "compared_at": CUTOFF}
+        for subject in ("issuer:cik:0000320193", "issuer:cik:0000000002", "issuer:cik:0000000002")
+    ]
+
+    class _Result:
+        def fetchall(self) -> list[tuple[object, ...]]:
+            return [tuple(row[column] for column in columns) for row in stored]
+
+    class _Conn:
+        def execute(self, sql: str, params: object = ()) -> _Result:
+            return _Result()
+
+    grouped, _mass = cr._oracle_context(_Conn(), "capture-run:x", CUTOFF)  # type: ignore[arg-type]
+
+    assert isinstance(grouped, OracleRowsBySubject)
+    assert len(grouped.of(["issuer:cik:0000000002"])) == 2
