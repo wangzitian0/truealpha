@@ -199,12 +199,19 @@ def test_the_report_persists_append_only_and_reads_back() -> None:
         connection.close()
 
 
-def test_the_previous_head_is_found_by_the_lane_and_a_report_of_old_rules_is_not_current() -> None:
+def test_the_previous_head_is_found_by_the_lane_and_a_report_of_old_rules_is_not_current(monkeypatch) -> None:
     """A list universe changes its id with its membership, so the lane name and the lane's id prefix find
     the previous head; an id outside the prefix is never read. A stored report without the current reason
     registry still names its head but is not current."""
+    from types import SimpleNamespace
+
+    from data_engine.datahub import question_coverage
+
     connection = _connection()
-    lane, tag = "universe-list:qqq", os.getpid()
+    lane, tag = "universe-list:t1851", os.getpid()
+    # A lane of its own: a committed report of a real lane in a shared CI database cannot be newer.
+    monkeypatch.setattr(question_coverage, "key_of_lane", lambda name: "t1851" if name == lane else "none")
+    monkeypatch.setattr(question_coverage, "record", lambda key: SimpleNamespace(id_prefix=f"universe:{key}-us-{tag}-"))
 
     def report(universe_id: str, run: str, *, registry: str | None) -> dict:
         body = {
@@ -222,16 +229,17 @@ def test_the_previous_head_is_found_by_the_lane_and_a_report_of_old_rules_is_not
 
     try:
         older, newer, stray = ("capture-run:" + c * 64 for c in "123")
-        old_id, new_id = f"universe:qqq-us-2099-0{tag % 9 + 1}-01", f"universe:qqq-us-2099-1{tag % 3}-15"
+        old_id, new_id = f"universe:t1851-us-{tag}-2099-01-01", f"universe:t1851-us-{tag}-2099-02-15"
         persist(connection, report(old_id, older, registry=None))
         assert stored_report_run(connection, old_id) == older, "a report of the old rules still names its head"
         assert stored_report_rules_current(connection, old_id) is False, "but it is not current"
         persist(connection, report(new_id, newer, registry=REGISTRY_SHA256))
         assert stored_report_rules_current(connection, new_id) is True
-        persist(connection, report(f"universe:qqq-2099-{tag}", stray, registry=REGISTRY_SHA256))
+        persist(connection, report(f"universe:t1851-{tag}-2099", stray, registry=REGISTRY_SHA256))
 
         previous = previous_head(connection, lane, newer)
         assert previous is not None and (previous.universe_id, previous.run_id) == (old_id, older)
+        assert previous_head(connection, "universe-list:none", newer) is None
     finally:
         connection.rollback()
         connection.close()
