@@ -462,9 +462,10 @@ async function assertTraceRendersDecisionInputs(page, path, problems) {
 /** Follow the first dynamic `[id]` link from a list page so dynamic routes are exercised alongside `livePages`.
  *
  * #1849: the list page shows a link, an empty-list notice or a read-error notice. A page that shows
- * none of them within the timeout fails, also for a spec that is not required. A read error fails
- * the spec too, so a notice that came after `assertNoReadError` cannot pass. An empty list fails a
- * required spec; for another spec the walk prints the branch that it took. */
+ * none of them within the timeout fails, also for a spec that is not required. A read-error notice
+ * fails the spec too, also one that came after `assertNoReadError`; `findDetailLink` reports it in
+ * place of an empty notice. An empty list fails a required spec; for another spec the walk prints
+ * the branch that it took. */
 async function assertDynamicDetailRenders(page, path, problems, spec) {
   if (path !== spec.listPath || DATA_STATE !== "populated") return;
 

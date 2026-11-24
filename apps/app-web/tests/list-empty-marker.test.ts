@@ -99,12 +99,13 @@ const cases: ListCase[] = [
 
 for (const listCase of cases) {
   const { default: Page } = await listCase.load();
-  for (const items of ["empty", "one"] as const) {
+  for (const items of ["empty", "one", "read error"] as const) {
     let served = 0;
     __setApiFetch(async (input) => {
       const url = String(input);
       if (url.includes(listCase.apiPath)) {
         served += 1;
+        if (items === "read error") return new Response(JSON.stringify({ detail: "statement timeout" }), { status: 500 });
         return new Response(JSON.stringify(listCase.body(items)), { status: 200, headers: { "Content-Type": "application/json" } });
       }
       return new Response(JSON.stringify({ detail: `unexpected read ${url}` }), { status: 500 });
@@ -116,11 +117,14 @@ for (const listCase of cases) {
     if (items === "empty") {
       assert(hasMarker, `${listCase.route} with an empty list renders no ${markerAttribute} notice`);
       assert(!hasLink, `${listCase.route} with an empty list renders a ${listCase.hrefPrefix} link`);
-    } else {
+    } else if (items === "one") {
       assert(hasLink, `${listCase.route} with one item renders no ${listCase.hrefPrefix} link`);
       assert(!hasMarker, `${listCase.route} with one item renders the ${markerAttribute} notice`);
+    } else {
+      // A failed read is not an empty list: the page shows the read-error notice only.
+      assert(!hasMarker, `${listCase.route} with a failed read renders the ${markerAttribute} notice`);
     }
   }
 }
 
-console.log(`ok   list-empty marker: ${cases.length} list pages render ${markerAttribute} when empty and a detail link when not`);
+console.log(`ok   list-empty marker: ${cases.length} list pages render ${markerAttribute} when empty, a detail link when not, and no empty notice on a failed read`);

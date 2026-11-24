@@ -29,13 +29,15 @@ export const DETAIL_LINK_TIMEOUT_MS = 15_000;
  * @param {string} hrefPrefix
  * @param {{ timeoutMs?: number }} [options]
  * @returns {Promise<{ kind: "link", href: string } | { kind: "empty" } | { kind: "read-error" } | { kind: "none" }>}
- *   `none`: the page showed no link and no notice within the timeout.
+ *   A link wins over a notice. A read-error notice wins over an empty notice, so a failed read is
+ *   never reported as an empty list. `none`: the page showed no link and no notice within the timeout.
  */
 export async function findDetailLink(page, hrefPrefix, { timeoutMs = DETAIL_LINK_TIMEOUT_MS } = {}) {
   const link = page.locator(`a[href^="${hrefPrefix}"]`);
   const empty = page.locator(READ_EMPTY_SELECTOR);
   const readError = page.locator(READ_ERROR_SELECTOR);
   try {
+    // `first()`: a Playwright `waitFor` is strict and fails when more than one element matches.
     await link.or(empty).or(readError).first().waitFor({ state: "attached", timeout: timeoutMs });
   } catch {
     return { kind: "none" };
@@ -44,6 +46,7 @@ export async function findDetailLink(page, hrefPrefix, { timeoutMs = DETAIL_LINK
     const href = await link.first().getAttribute("href");
     if (href) return { kind: "link", href };
   }
+  if ((await readError.count()) > 0) return { kind: "read-error" };
   if ((await empty.count()) > 0) return { kind: "empty" };
-  return { kind: "read-error" };
+  return { kind: "none" };
 }

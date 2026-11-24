@@ -23,7 +23,7 @@ export default async function LibraryPage({ searchParams }: { searchParams: Prom
       <CreateDocumentForm />
       <LibraryReportPreviewCard />
       {error && <ReadStateNotice state={{ kind: "error", message: error }} />}
-      {docs.length === 0 ? (
+      {docs.length === 0 && !error ? (
         <ReadStateNotice state={{ kind: "empty" }} overrides={{ empty: "No documents saved yet." }} />
       ) : (
         <ul className="divide-y divide-border rounded-xl border border-border bg-card">

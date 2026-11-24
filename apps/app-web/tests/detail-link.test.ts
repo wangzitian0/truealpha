@@ -55,14 +55,25 @@ class FakePage {
   }
 }
 
+/** Like Playwright, `waitFor` and `getAttribute` are strict: they fail when more than one element
+ * matches and the locator is not narrowed with `first()`. `count` is not strict. */
 class FakeLocator {
   constructor(
     private readonly page: FakePage,
     private readonly selectors: string[],
+    private readonly narrowed = false,
   ) {}
 
   private matching(): FakeElement[] {
     return this.page.present().filter((element) => this.selectors.some((selector) => matches(selector, element)));
+  }
+
+  private strict(action: string): FakeElement[] {
+    const found = this.matching();
+    if (!this.narrowed && found.length > 1) {
+      throw new Error(`strict mode violation: ${action} on ${this.selectors.join(" | ")} resolved to ${found.length} elements`);
+    }
+    return found;
   }
 
   or(other: FakeLocator): FakeLocator {
@@ -70,7 +81,7 @@ class FakeLocator {
   }
 
   first(): FakeLocator {
-    return this;
+    return new FakeLocator(this.page, this.selectors, true);
   }
 
   async count(): Promise<number> {
@@ -78,7 +89,7 @@ class FakeLocator {
   }
 
   async getAttribute(name: string): Promise<string | null> {
-    const [element] = this.matching();
+    const [element] = this.strict(`getAttribute(${name})`);
     assert(element !== undefined, `getAttribute(${name}) on a locator with no element: ${this.selectors.join(" | ")}`);
     return element.attributes[name] ?? null;
   }
@@ -86,7 +97,7 @@ class FakeLocator {
   async waitFor({ state, timeout }: { state: string; timeout: number }): Promise<void> {
     assert(state === "attached", `findDetailLink waits for state ${state}, not attached`);
     const deadline = Date.now() + timeout;
-    while (this.matching().length === 0) {
+    while (this.strict("waitFor").length === 0) {
       if (Date.now() >= deadline) throw new Error(`Timeout ${timeout}ms exceeded waiting for ${this.selectors.join(" | ")}`);
       await sleep(POLL_MS);
     }
@@ -100,6 +111,8 @@ const scenarios: Array<{ name: string; elements: FakeElement[]; expected: object
   { name: "an empty list", elements: [notice("empty")], expected: { kind: "empty" }, prompt: true },
   { name: "a link that renders after 30 ms", elements: [link("/research/library/doc%3A1", 30)], expected: { kind: "link", href: "/research/library/doc%3A1" }, prompt: true },
   { name: "a read error", elements: [notice("error")], expected: { kind: "read-error" }, prompt: true },
+  { name: "an empty notice and a read-error notice", elements: [notice("empty"), notice("error")], expected: { kind: "read-error" }, prompt: true },
+  { name: "two links", elements: [link("/research/library/doc%3A3"), link("/research/library/doc%3A4")], expected: { kind: "link", href: "/research/library/doc%3A3" }, prompt: true },
   { name: "a link and an empty notice", elements: [notice("empty"), link("/research/library/doc%3A2")], expected: { kind: "link", href: "/research/library/doc%3A2" }, prompt: true },
   { name: "a link of another list and an empty notice", elements: [link("/research/backtest/run%3A1"), notice("empty")], expected: { kind: "empty" }, prompt: true },
   { name: "an unavailable notice only", elements: [notice("unavailable")], expected: { kind: "none" }, prompt: false },
