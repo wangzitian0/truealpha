@@ -11,6 +11,7 @@ from typing import Any
 from truealpha_contracts.ports import RawObjectStore
 
 from data_engine.datahub.standards.backfill import (
+    FAILED_STATUSES,
     HEALTH_LOG_SOURCE,
     BackfillReport,
     resolve_issuers,
@@ -19,7 +20,6 @@ from data_engine.datahub.standards.backfill import (
 from data_engine.sources.gateway import SourceGateway
 
 MAX_HISTORY_MONTHS = 120
-FAILED_STATUSES = ("error", "deferred_capacity")
 
 
 class HistoryFailure(RuntimeError):

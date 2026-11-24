@@ -27,6 +27,7 @@ from data_engine.sources.gateway import SourceGateway
 
 Mode = Literal["backfill", "probe"]
 HEALTH_LOG_SOURCE = "standard-backfill"
+FAILED_STATUSES = ("error", "deferred_capacity")
 
 
 @dataclass
@@ -40,6 +41,11 @@ class BackfillReport:
     open_by_reason: Counter[str] = field(default_factory=Counter)
     outcomes: Counter[str] = field(default_factory=Counter)
     cells: list[dict[str, Any]] = field(default_factory=list)
+
+    @property
+    def failed(self) -> int:
+        """Count the cells that got no answer: an error or a refused capacity."""
+        return sum(self.outcomes.get(status, 0) for status in FAILED_STATUSES)
 
     def summary(self) -> dict[str, Any]:
         return {

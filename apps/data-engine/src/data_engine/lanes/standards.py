@@ -278,6 +278,7 @@ def run_standard_backfill(context: dg.OpExecutionContext, config: StandardBackfi
         raise ValueError(f"mode must be backfill or probe, got {config.mode!r}")
     names = standards_to_run(config.standard)
     summaries = []
+    failures: list[str] = []
     meta: dict[str, Any] = {"universe": config.universe, "standards": ", ".join(names), "mode": config.mode}
     with gateway.capacity_scope(), db.connect() as connection:
         for name in names:
@@ -299,8 +300,14 @@ def run_standard_backfill(context: dg.OpExecutionContext, config: StandardBackfi
                     f"{name}_outcomes": str(dict(report.outcomes)),
                 }
             )
+            if report.failed:
+                failures.append(f"{name}: {report.failed} of {sum(report.outcomes.values())} cells got no answer")
     context.add_output_metadata(meta)
-    return json.dumps(summaries, sort_keys=True)
+    summary: dict[str, Any] = {"universe": config.universe, "standards": summaries}
+    if failures:
+        summary[LANE_FAILURE] = summary[VERDICT_TEXT] = "standard backfill: " + "; ".join(failures)
+        context.log.error("%s: %s", config.universe, summary[LANE_FAILURE])
+    return json.dumps(summary, sort_keys=True)
 
 
 def _downstream_canonical_op(
@@ -323,8 +330,23 @@ def _downstream_canonical_op(
     )
 
 
+def _with_upstream_failure(summary: str, upstream_summary: str) -> str:
+    """Keep the failure of an upstream lane when this lane reports none of its own."""
+    upstream = _json_dict(upstream_summary)
+    parsed = _json_dict(summary)
+    if not upstream.get(LANE_FAILURE) or parsed.get(LANE_FAILURE):
+        return summary
+    parsed[LANE_FAILURE] = upstream[LANE_FAILURE]
+    parsed[VERDICT_TEXT] = upstream.get(VERDICT_TEXT, upstream[LANE_FAILURE])
+    return json.dumps(parsed)
+
+
 @external_op
 def run_theme_purity(context: dg.OpExecutionContext, config: StandardBackfillConfig, backfill_summary: str) -> str:
+    return _with_upstream_failure(_theme_purity(context, config, backfill_summary), backfill_summary)
+
+
+def _theme_purity(context: dg.OpExecutionContext, config: StandardBackfillConfig, backfill_summary: str) -> str:
     from data_engine.datahub.capture_core.theme_purity import NO_ANSWER, materialize_theme_purity, summary_line
     from data_engine.datahub.question_coverage import NoHead, governed_head_of
 
