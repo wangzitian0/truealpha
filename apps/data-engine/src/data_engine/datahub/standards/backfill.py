@@ -30,6 +30,8 @@ HEALTH_LOG_SOURCE = "standard-backfill"
 #: The cells this run asked about and got no answer for. A cell without a CIK is a standing
 #: identity gap (`no_identifier`): the coverage report counts it, and it does not fail the run.
 FAILED_STATUSES = ("error", "deferred_capacity")
+#: The cells no source was asked about, for want of an identifier.
+UNASKED_STATUSES = ("no_identifier",)
 
 
 @dataclass

@@ -13,6 +13,7 @@ from truealpha_contracts.ports import RawObjectStore
 from data_engine.datahub.standards.backfill import (
     FAILED_STATUSES,
     HEALTH_LOG_SOURCE,
+    UNASKED_STATUSES,
     BackfillReport,
     resolve_issuers,
     run_standard_backfill,
@@ -64,7 +65,7 @@ class HistoryReport:
         cells = list(self._cells())
         return {
             "cutoffs_visited": len(self.cutoffs),
-            "cells_attempted": len(cells),
+            "cells_attempted": sum(1 for cell in cells if cell["status"] not in UNASKED_STATUSES),
             "cells_failed": sum(1 for cell in cells if cell["status"] in FAILED_STATUSES),
             "extractions_asked": sum(1 for cell in cells if cell["model_replayed"] is False),
             "replays": sum(1 for cell in cells if cell["model_replayed"] is True),

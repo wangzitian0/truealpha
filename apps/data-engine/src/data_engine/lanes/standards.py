@@ -523,7 +523,6 @@ def _supply_chain_exposure(context: dg.OpExecutionContext, config: StandardBackf
         floor_failure
         or (f"supply chain: {exceeded} of {joined} filings exceeded 1M context window" if exceeded > 0 else None)
         or (f"supply chain: {no_answer} filings got no model answer" if no_answer > 0 else None)
-        or _json_dict(purity_summary).get(LANE_FAILURE)
     )
     return _finish_canonical_lane(
         context,
@@ -592,9 +591,6 @@ def _analyst_ratings(context: dg.OpExecutionContext, config: StandardBackfillCon
     if lane_failure is None:
         lane_failure = floor_failure
         verdict_text = f"analyst ratings: {lane_failure}" if lane_failure else None
-        if lane_failure is None:
-            sc_parsed = _json_dict(sc_summary)
-            lane_failure, verdict_text = sc_parsed.get(LANE_FAILURE), sc_parsed.get(VERDICT_TEXT)
     for failure in captured.failures[: analyst_ratings.MAX_FAILURES_LOGGED]:
         context.log.error("analyst consensus fetch failed for %s: %s", failure.ticker, failure.error)
     if len(captured.failures) > analyst_ratings.MAX_FAILURES_LOGGED:
