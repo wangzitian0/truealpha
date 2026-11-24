@@ -9,7 +9,7 @@ from decimal import Decimal
 from typing import Any
 
 from factors.base.theme_purity import ThemePurity, ThemeSegment, theme_purity
-from factors.shared.extraction import RULE_MODEL_NO_ANSWER, RULE_NO_DESCRIPTION
+from factors.shared.extraction import GROSS_PARTITION_RULES, RULE_MODEL_NO_ANSWER, RULE_NO_DESCRIPTION
 from psycopg import Connection
 from truealpha_contracts.execution import AvailabilityStatus, FactorValidationStatus, InputEvidenceStatus
 
@@ -205,6 +205,7 @@ def _refused(
         partition_residual=partition.partition_residual,
         confidence=partition.extraction_confidence,
         minimum_classified_share=definition.minimum_classified_share,
+        gross_segments=partition.extractor in GROSS_PARTITION_RULES,
     )
     flagged = refused.result.model_copy(update={"flags": [flag, *refused.result.flags]})
     return replace(refused, result=flagged), extractor
@@ -265,6 +266,7 @@ def compute_for_theme(
         partition_residual=partition.partition_residual,
         confidence=confidence,
         minimum_classified_share=definition.minimum_classified_share,
+        gross_segments=partition.extractor in GROSS_PARTITION_RULES,
     )
     return purity, classification.extractor
 

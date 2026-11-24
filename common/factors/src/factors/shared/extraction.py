@@ -17,6 +17,8 @@ RULE_ELIMINATION_PARTITION = "rule:elimination-partition:v1"
 RULE_SUBTOTAL_FREE_PARTITION = "rule:subtotal-free-partition:v1"
 #: Both rules: the segments without subtotals, closed by one tagged intersegment elimination (#1851).
 RULE_SUBTOTAL_FREE_ELIMINATION_PARTITION = "rule:subtotal-free-elimination-partition:v1"
+#: The rules whose segments land gross, with the intersegment elimination as the residual.
+GROSS_PARTITION_RULES = (RULE_ELIMINATION_PARTITION, RULE_SUBTOTAL_FREE_ELIMINATION_PARTITION)
 RULE_NO_DESCRIPTION = "rule:no-description:v1"
 #: A model call that gave no answer (status 0 or 5xx). The row is refused and names the cause (#1816).
 RULE_MODEL_NO_ANSWER = "rule:model-no-answer:v1"

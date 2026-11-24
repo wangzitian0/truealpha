@@ -32,7 +32,13 @@ AVGO_TOTAL = Decimal("63887")
 
 
 def purity(
-    segments, *, total=AVGO_TOTAL, residual=Decimal(0), confidence=Decimal("0.9"), minimum=Decimal(0)
+    segments,
+    *,
+    total=AVGO_TOTAL,
+    residual=Decimal(0),
+    confidence=Decimal("0.9"),
+    minimum=Decimal(0),
+    gross=False,
 ) -> ThemePurity:
     return theme_purity(
         list(segments),
@@ -43,6 +49,7 @@ def purity(
         partition_residual=residual,
         confidence=confidence,
         minimum_classified_share=minimum,
+        gross_segments=gross,
     )
 
 
@@ -207,6 +214,7 @@ def test_gross_segments_in_and_out_of_the_theme_serve_no_share() -> None:
             [ThemeSegment("A", in_theme, True), ThemeSegment("B", Decimal("70536") - in_theme, False)],
             total=Decimal("52853"),
             residual=Decimal("-17683"),
+            gross=True,
         )
         assert result.result.value is None
         assert "elimination_not_allocated" in result.result.flags
@@ -219,6 +227,7 @@ def test_every_segment_in_the_theme_is_all_of_the_revenue_whatever_the_eliminati
         [ThemeSegment("A", Decimal("60000"), True), ThemeSegment("B", Decimal("10536"), True)],
         total=Decimal("52853"),
         residual=Decimal("-17683"),
+        gross=True,
     )
     assert result.result.value == Decimal(1)
     assert "partition_residual" in result.result.flags
@@ -229,6 +238,7 @@ def test_no_segment_in_the_theme_is_none_of_the_revenue_whatever_the_elimination
         [ThemeSegment("A", Decimal("60000"), False), ThemeSegment("B", Decimal("10536"), False)],
         total=Decimal("52853"),
         residual=Decimal("-17683"),
+        gross=True,
     )
     assert result.result.value == Decimal(0)
     assert "elimination_not_allocated" not in result.result.flags
@@ -240,7 +250,21 @@ def test_the_classified_share_floor_counts_gross_segments_against_their_own_sum(
         [ThemeSegment("A", Decimal("45848"), False), ThemeSegment("B", Decimal("24688"), None)],
         total=Decimal("52853"),
         residual=Decimal("-17683"),
+        gross=True,
         minimum=Decimal("0.80"),
     )
     assert result.result.value is None
     assert "below_minimum_classified_share" in result.result.flags
+
+
+def test_a_plain_partition_that_rounds_over_the_total_still_serves_its_share() -> None:
+    """Segments rounded to the million can sum 1M over the total; that is rounding, not gross
+    segments, so the row with segments in and out of the theme serves its share."""
+    result = purity(
+        [ThemeSegment("A", Decimal("600"), True), ThemeSegment("B", Decimal("401"), False)],
+        total=Decimal("1000"),
+        residual=Decimal("-1"),
+    )
+    assert result.result.value == Decimal("0.6")
+    assert "elimination_not_allocated" not in result.result.flags
+    assert result.classified_share == Decimal(1), "never above one"

@@ -78,7 +78,17 @@ def seated(monkeypatch):
     gateway.set_writer(previous)
 
 
-def _seed(connection, *, segments=SEGMENTS, total=TOTAL, residual="0", partition=PARTITION, knowable=KNOWABLE, cik=CIK):
+def _seed(
+    connection,
+    *,
+    segments=SEGMENTS,
+    total=TOTAL,
+    residual="0",
+    partition=PARTITION,
+    knowable=KNOWABLE,
+    cik=CIK,
+    extractor="rule:exhaustive-partition:v1",
+):
     for name, revenue in segments:
         connection.execute(
             """
@@ -87,9 +97,9 @@ def _seed(connection, *, segments=SEGMENTS, total=TOTAL, residual="0", partition
                  partition_residual, knowable_at, period_end, source, evidence_ref,
                  extractor, confidence)
             values (%s, %s, %s, %s, %s, %s, %s, '2025-11-02', '10k-segment-extraction',
-                    'accession=0001730168-25-000121 form=10-K', 'rule:exhaustive-partition:v1', 0.85)
+                    'accession=0001730168-25-000121 form=10-K', %s, 0.85)
             """,
-            (cik, name, revenue, partition, total, Decimal(residual), knowable),
+            (cik, name, revenue, partition, total, Decimal(residual), knowable, extractor),
         )
 
 
@@ -328,6 +338,40 @@ def test_a_partition_that_rounds_still_lands(connection, seated, governed, monke
     assert in_theme + out_of_theme + unclassified + stored_residual == total, "the identity the check enforces"
     assert in_theme + out_of_theme + unclassified != total, "and it is NOT the identity without the residual"
     assert share == Decimal("36858000000") / TOTAL, "the share is over the total, so rounding does not move it"
+
+
+@pytest.mark.parametrize(
+    ("extractor", "residual", "share"),
+    [
+        ("rule:exhaustive-partition:v1", "-3000000", Decimal("36858000000") / TOTAL),
+        ("rule:elimination-partition:v1", "-3000000", None),
+    ],
+    ids=["rounding-over-the-total", "gross-with-an-elimination"],
+)
+def test_the_partition_rule_decides_whether_a_negative_residual_is_an_elimination(
+    connection, seated, governed, monkeypatch, extractor, residual, share
+) -> None:
+    """#1851: a plain partition 3M over its total is rounding and serves its share; segments
+    landed gross by the elimination rule, partly in the theme, serve none."""
+    over = (("Semiconductor solutions", Decimal("36858000000")), ("Infrastructure software", Decimal("27032000000")))
+    _seed(connection, segments=over, residual=residual, partition="segment-partition:" + "f" * 64, extractor=extractor)
+    monkeypatch.setattr(
+        llm,
+        "_gateway_transport",
+        _answers(
+            [
+                {"index": 0, "in_theme": True, "reason": "accelerators"},
+                {"index": 1, "in_theme": False, "reason": "enterprise software"},
+            ]
+        ),
+    )
+    materialize_theme_purity(connection, run_id=RUN_ID, cutoff=CUTOFF, themes=(AI,))
+    stored, reasons = connection.execute(
+        "select theme_share, reason_codes from mart.issuer_theme_purity where run_id = %s and cik = %s",
+        (RUN_ID, CIK),
+    ).fetchone()
+    assert stored == share
+    assert ("elimination_not_allocated" in reasons) is (share is None)
 
 
 def test_a_rerun_refreshes_provenance_not_just_the_numbers(connection, seated, governed, monkeypatch) -> None:

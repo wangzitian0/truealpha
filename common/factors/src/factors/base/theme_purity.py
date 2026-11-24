@@ -64,7 +64,11 @@ def theme_purity(
     partition_residual: Decimal = _ZERO,
     confidence: Decimal = _ZERO,
     minimum_classified_share: Decimal = _ZERO,
+    gross_segments: bool = False,
 ) -> ThemePurity:
+    """`gross_segments`: the partition rule landed the segments gross, with the intersegment
+    elimination as the residual. A negative residual of a plain partition is rounding."""
+
     def refusal(flag: str, total: Decimal) -> ThemePurity:
         return ThemePurity(
             entity_id=entity_id,
@@ -103,7 +107,7 @@ def theme_purity(
     # Gross segments with an intersegment elimination as the residual (#1851): the elimination
     # belongs to no known segment. The share is a fact only when every segment is in the theme (1)
     # or none is (0); otherwise the row keeps its revenue fields and serves no value.
-    gross = partition_residual < _ZERO
+    gross = gross_segments and partition_residual < _ZERO
     whole = gross and in_theme > _ZERO and out_of_theme == _ZERO and unclassified == _ZERO
     if gross and in_theme > _ZERO and not whole:
         refused = True
