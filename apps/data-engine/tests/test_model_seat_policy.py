@@ -88,6 +88,17 @@ def in_environment(monkeypatch: pytest.MonkeyPatch, name: str) -> None:
     monkeypatch.setattr(gateway, "capacity_environment", lambda: name)
 
 
+@pytest.fixture
+def slow_staging(monkeypatch: pytest.MonkeyPatch):
+    """A staging seat of one slot and 3 calls a minute, fewer than the retry attempts: these tests drive
+    the window and the slot, whatever pace the contract deploys (#1851 raised staging to 10/min)."""
+    limits = SEAT.limits_for("staging").model_copy(update={"max_concurrent_calls": 1, "calls_per_minute": 3})  # type: ignore[union-attr]
+    seat = SEAT.model_copy(update={"environments": {**SEAT.environments, "staging": limits}})
+    monkeypatch.setattr(model_policy, "seat_contract", lambda: seat)
+    in_environment(monkeypatch, "staging")
+    return limits
+
+
 class Transport:
     """A scripted provider. Each entry is a `(status, body)` answer; the last one repeats."""
 
@@ -185,10 +196,11 @@ def test_the_deadline_stops_a_call_before_its_attempts_are_used(world, call_ledg
     assert world.sleeps == [first, second]
 
 
-def test_the_wait_for_the_rate_window_counts_against_the_deadline(world, call_ledger, monkeypatch) -> None:
+def test_the_wait_for_the_rate_window_counts_against_the_deadline(
+    world, call_ledger, monkeypatch, slow_staging
+) -> None:
     """The window of a full minute must not hold a call past its deadline."""
-    in_environment(monkeypatch, "staging")
-    per_minute = SEAT.limits_for("staging").calls_per_minute  # type: ignore[union-attr]
+    per_minute = slow_staging.calls_per_minute
     waits = [RETRY.base_backoff_seconds(n) for n in range(1, per_minute + 1)]
     # The attempts after the first `per_minute` ones would wait for the window, about 60 s less
     # the age of the oldest attempt. One second is left of the deadline when that wait begins.
@@ -246,14 +258,14 @@ def test_every_attempt_is_admitted_and_no_slot_is_held_while_the_call_waits(worl
     assert held_during_waits and set(held_during_waits) == {0}, "a waiting call holds no concurrency slot"
 
 
-def test_the_task_timeout_reaches_the_network_call_of_its_own_thread(world, monkeypatch) -> None:
+def test_the_task_timeout_reaches_the_network_call_of_its_own_thread(world, monkeypatch, slow_staging) -> None:
     """Two calls wait for the one concurrency slot of staging while a third holds it. Each socket
     call then carries the timeout of its own task. A shared module global gives both the value
     that was set last."""
     import dataclasses
     import time as real_time
 
-    in_environment(monkeypatch, "staging")  # one concurrent call
+    assert slow_staging.max_concurrent_calls == 1
     seen: dict[str, float] = {}
     holder_in_flight, release_holder = threading.Event(), threading.Event()
 
@@ -346,10 +358,10 @@ def test_the_default_transport_keeps_the_three_argument_form_that_callers_patch(
 
 
 def test_a_call_that_finds_no_slot_before_its_deadline_is_refused_and_sends_nothing(
-    world, call_ledger, monkeypatch
+    world, call_ledger, monkeypatch, slow_staging
 ) -> None:
     """The wait for a concurrency slot counts against the deadline too. Real time, one second."""
-    in_environment(monkeypatch, "staging")  # one concurrent call
+    assert slow_staging.max_concurrent_calls == 1
     monkeypatch.setattr(model_policy, "retry_spec", lambda: RETRY.model_copy(update={"deadline_seconds": 1}))
     holding, release = threading.Event(), threading.Event()
 
@@ -526,10 +538,11 @@ def test_the_per_minute_limit_makes_the_next_attempt_wait_for_the_window(world, 
     assert 59 <= waited <= 61, "the wait runs to the end of the 60 s window of the oldest attempt"
 
 
-def test_the_retry_of_a_rate_limited_attempt_counts_in_the_per_minute_limit(world, call_ledger, monkeypatch) -> None:
+def test_the_retry_of_a_rate_limited_attempt_counts_in_the_per_minute_limit(
+    world, call_ledger, monkeypatch, slow_staging
+) -> None:
     """Each attempt is one request to the account, so a retry spends the same limit as a first try."""
-    in_environment(monkeypatch, "staging")
-    per_minute = SEAT.limits_for("staging").calls_per_minute  # type: ignore[union-attr]
+    per_minute = slow_staging.calls_per_minute
     ask(Transport([(429, rate_limited())] * (per_minute - 1) + [(200, OK_BODY)], world))
     assert len(call_ledger) == per_minute
     waits_so_far = len(world.sleeps)
@@ -816,7 +829,7 @@ def test_the_missing_key_message_names_the_variable_that_settings_reads(monkeypa
 
 
 def test_the_registry_holds_no_summed_model_limit_and_names_model_plan() -> None:
-    """#1520 step 5: `LEDGER_CAPACITIES` no longer sums environment limits (13/min, 3 concurrent).
+    """#1520 step 5: `LEDGER_CAPACITIES` no longer sums environment limits (20/min, 4 concurrent since #1861).
     The whole-account figure is `none_published` (`None`), and per-environment pacing stays in `model_seat`."""
     from data_engine.datahub.capture_core import source_registrations as registry
 
