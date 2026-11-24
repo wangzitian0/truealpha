@@ -20,7 +20,7 @@ export default async function BacktestListPage() {
       </div>
       {error && <ReadStateNotice state={{ kind: "error", message: error }} />}
       {runs.length === 0 && !error ? (
-        <div className="rounded-xl border border-border bg-card p-12 text-center text-gray-300">No backtest runs found.</div>
+        <ReadStateNotice state={{ kind: "empty" }} overrides={{ empty: "No backtest runs found." }} />
       ) : (
         <ResearchTable caption="Portfolio backtests" headers={["Strategy", "Universe", "Time Horizon", "Basis", "CAGR", "Benchmark CAGR", "Sharpe (rf 0)", "Max DD", "Turnover", "Status", "Action"]}>
           {runs.map((r) => (

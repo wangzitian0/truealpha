@@ -36,6 +36,7 @@ import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { assertRaceRequirement, runHydrationRace } from "./hydration-race.mjs";
 import { walkCardGeometry } from "./card-geometry.mjs";
+import { DETAIL_LINK_TIMEOUT_MS, findDetailLink } from "./detail-link.mjs";
 import { createPageErrorLedger, gotoStable } from "./navigation.mjs";
 import { assertNoReadError } from "./read-error.mjs";
 import { walkSignOutJourney } from "./sign-out-journey.mjs";
@@ -361,15 +362,12 @@ async function assertTraceRendersDecisionInputs(page, path, problems) {
   if (path !== "/research/trace" || DATA_STATE !== "populated") return;
 
   await gotoStable(page, `${BASE}/research/coverage`);
-  const href = await page
-    .locator('a[href^="/research/trace?"]')
-    .first()
-    .getAttribute("href", { timeout: 15000 })
-    .catch(() => null);
-  if (href === null) {
-    problems.push("trace: /research/coverage offers no trace link in the populated state");
+  const found = await findDetailLink(page, "/research/trace?");
+  if (found.kind !== "link") {
+    problems.push(`trace: /research/coverage offers no trace link in the populated state (${found.kind})`);
     return;
   }
+  const href = found.href;
 
   const response = await gotoStable(page, `${BASE}${href}`);
   const status = response ? response.status() : null;
@@ -461,19 +459,35 @@ async function assertTraceRendersDecisionInputs(page, path, problems) {
   }
 }
 
-/** Follow the first dynamic `[id]` link from a list page so dynamic routes are exercised alongside `livePages`. */
+/** Follow the first dynamic `[id]` link from a list page so dynamic routes are exercised alongside `livePages`.
+ *
+ * #1849: the list page shows a link, an empty-list notice or a read-error notice. A page that shows
+ * none of them within the timeout fails, also for a spec that is not required. A read error fails
+ * the spec too, so a notice that came after `assertNoReadError` cannot pass. An empty list fails a
+ * required spec; for another spec the walk prints the branch that it took. */
 async function assertDynamicDetailRenders(page, path, problems, spec) {
   if (path !== spec.listPath || DATA_STATE !== "populated") return;
 
-  const href = await page
-    .locator(`a[href^="${spec.hrefPrefix}"]`)
-    .first()
-    .getAttribute("href", { timeout: 15000 })
-    .catch(() => null);
-  if (href === null) {
-    if (spec.required) problems.push(`${spec.name}: ${spec.listPath} offers no ${spec.routePattern} link in the populated state`);
+  const found = await findDetailLink(page, spec.hrefPrefix);
+  if (found.kind === "none") {
+    problems.push(
+      `${spec.name}: ${spec.listPath} shows no ${spec.routePattern} link, no empty-list notice and no read-error notice within ${DETAIL_LINK_TIMEOUT_MS / 1000} s`,
+    );
     return;
   }
+  if (found.kind === "read-error") {
+    problems.push(`${spec.name}: ${spec.listPath} shows a read-error notice in place of its list`);
+    return;
+  }
+  if (found.kind === "empty") {
+    if (spec.required) {
+      problems.push(`${spec.name}: ${spec.listPath} offers no ${spec.routePattern} link in the populated state`);
+    } else {
+      console.log(`  ${spec.name}: ${spec.listPath} shows an empty list, so no ${spec.routePattern} page to open`);
+    }
+    return;
+  }
+  const href = found.href;
 
   const response = await gotoStable(page, `${BASE}${href}`);
   const status = response ? response.status() : null;
