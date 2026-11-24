@@ -31,7 +31,7 @@ from data_engine.datahub.capture_core.issuer_registry import registry_unavailabl
 from data_engine.datahub.capture_core.plausibility_gate import judge_issuers, judge_strategy
 from data_engine.datahub.oracle_outcomes import record_oracle_outcomes_safely
 from data_engine.datahub.strategy_bridge import (
-    persist_strategy_input_coverage,
+    count_complete_strategy_inputs,
     run_strategy_replay_for_cutoff,
     seed_strategy_inputs_from_capture,
     undeclared_primary_listing_issuers,
@@ -187,7 +187,7 @@ def _run_tick(context: dg.OpExecutionContext, config: LiveTickConfig, tick: Univ
         strategy: dict[str, Any] = {}
         if tick.run_strategy:
             seeded = seed_strategy_inputs_from_capture(connection, pipeline.run_id, cutoff=cutoff)
-            l2_complete, l2_total = persist_strategy_input_coverage(connection, pipeline.run_id, cutoff=cutoff)
+            l2_complete, l2_total = count_complete_strategy_inputs(connection, pipeline.run_id, cutoff=cutoff)
             strategy_run_id, decision_count, snapshot_id = run_strategy_replay_for_cutoff(
                 connection,
                 cutoff=cutoff,

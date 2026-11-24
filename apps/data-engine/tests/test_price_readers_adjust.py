@@ -21,7 +21,6 @@ from data_engine.config import settings
 from data_engine.datahub.market_prices import PriceBarRecord, insert_market_prices_daily
 from data_engine.datahub.price_series import load_daily_series
 from data_engine.datahub.strategy_history import postgres_last_close
-from data_engine.datahub.universe_mask import UniverseMaskReason, compute_and_persist_universe_mask_from_db
 from data_engine.lanes.market_data import _distinct_trading_dates
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -105,29 +104,6 @@ def test_distinct_trading_dates_lists_only_the_dates_of_the_asked_series(connect
     assert unadjusted_dates == [shared, only_unadjusted]
 
 
-def test_universe_mask_reads_only_the_series_it_asked_for(connection) -> None:
-    """A symbol with unadjusted bars and no split-adjusted bars has no split-adjusted history."""
-    symbol = "T1131MASK"
-    dates = [date(2026, 9, d) for d in (14, 15, 16, 17, 18)]
-    insert_market_prices_daily(connection, [_bar(symbol, d, UNADJUSTED_CLOSE) for d in dates], adjust="none")
-    cutoff = dates[-1]
-
-    def mask_for(adjust: str):
-        (record,) = compute_and_persist_universe_mask_from_db(
-            connection,
-            symbols=[symbol],
-            cutoff_dates=[cutoff],
-            source_table="staging.market_prices_daily",
-            adjust=adjust,
-            resolution="1D",
-            min_periods=1,
-        )
-        return record.eligible, record.reason_code
-
-    assert mask_for("none") == (True, UniverseMaskReason.OK)
-    assert mask_for("splits") == (False, UniverseMaskReason.UNLISTED)
-
-
 def test_the_last_close_reader_returns_the_unadjusted_bar_only(connection) -> None:
     """The strategy last-close reader filters on `adjust`.
 
@@ -160,7 +136,6 @@ def test_twelve_data_origin_reads_unadjusted_bar_only(connection) -> None:
 
 READER_FACTORIES = {
     "lane-cutoff-dates": lambda: _distinct_trading_dates,
-    "universe-mask": lambda: compute_and_persist_universe_mask_from_db,
     "backtest-datahub": lambda: load_daily_series,
 }
 
@@ -183,14 +158,13 @@ REVIEWED_PRICE_TABLE_FILES = {
     "apps/data-engine/src/data_engine/datahub/price_series.py": "reader, tested by test_load_daily_series_*",
     "apps/data-engine/src/data_engine/datahub/market_prices.py": "writer and latest-vintage lookup",
     "apps/data-engine/src/data_engine/datahub/capture_core/twelve_data_origin.py": "reader (`adjust = 'none'`), tested by test_twelve_data_origin_reads_unadjusted_bar_only",
-    "apps/data-engine/src/data_engine/datahub/universe_mask.py": "reader, tested by test_universe_mask_*",
     "apps/data-engine/src/data_engine/datahub/strategy_history.py": "reader, tested by test_the_last_close_reader_*",
     "apps/data-engine/src/data_engine/lanes/market_data.py": "reader, tested by test_distinct_trading_dates_*",
 }
 SCANNED_ROOTS = ("apps", "common", "tools")
 SCANNED_SUFFIXES = {".py", ".ts", ".tsx", ".sql", ".sh"}
 SKIPPED_DIRECTORIES = {"tests", "node_modules", ".venv", "__pycache__", ".next"}
-PRICE_TABLE_NAMES = ("market_prices_daily", "market_prices_monthly")
+PRICE_TABLE_NAMES = ("market_prices_daily",)
 
 
 def _files_naming_a_price_table(root: Path) -> set[str]:
@@ -215,7 +189,7 @@ def test_the_scan_finds_a_new_file_that_names_a_price_table(tmp_path: Path) -> N
     planted.write_text("select close from staging.market_prices_daily", encoding="utf-8")
     ignored = tmp_path / "apps" / "app-web" / "tests" / "prices.test.ts"
     ignored.parent.mkdir(parents=True)
-    ignored.write_text("staging.market_prices_monthly", encoding="utf-8")
+    ignored.write_text("staging.market_prices_daily", encoding="utf-8")
     (tmp_path / "common").mkdir()
     (tmp_path / "tools").mkdir()
 

@@ -1,8 +1,7 @@
-"""Twelve Data market prices ingestion and multi-resolution staging (#938 layer 1)."""
+"""Twelve Data daily market prices ingestion (#938 layer 1)."""
 
 from __future__ import annotations
 
-import calendar
 import json
 import logging
 import time
@@ -57,7 +56,6 @@ DAILY_LOOKBACK_YEARS = 3
 MAX_BAR_LAG_SESSIONS = 1
 _RAW_REF_PREFIX = "twelvedata:time_series"
 _DAILY_TABLE = "staging.market_prices_daily"
-_MONTHLY_TABLE = "staging.market_prices_monthly"
 _XNYS_TZ = ZoneInfo("America/New_York")
 _XNYS_CLOSE_HOUR = 16
 _XNYS_EARLY_CLOSE_HOUR = 13
@@ -113,14 +111,6 @@ def most_recent_xnys_session(day: date) -> date:
     while not is_xnys_trading_day(curr):
         curr -= timedelta(days=1)
     return curr
-
-
-def last_xnys_session_of_month(year: int, month: int) -> date:
-    return most_recent_xnys_session(date(year, month, calendar.monthrange(year, month)[1]))
-
-
-def snap_to_last_xnys_session_of_month(day: date) -> date:
-    return last_xnys_session_of_month(day.year, day.month)
 
 
 def oldest_session_within_lag(latest: date) -> date:
@@ -260,7 +250,6 @@ def _parse_bars(
     *,
     now: datetime,
     resolution: str,
-    snap_month: bool = False,
 ) -> list[PriceBarRecord]:
     if not isinstance(values := payload.get("values", []), list):
         return []
@@ -269,10 +258,9 @@ def _parse_bars(
         if not isinstance(item, dict):
             continue
         try:
-            raw_date = date.fromisoformat(str(item.get("datetime", ""))[:10])
+            bar_date = date.fromisoformat(str(item.get("datetime", ""))[:10])
         except (ValueError, TypeError):
             continue
-        bar_date = snap_to_last_xnys_session_of_month(raw_date) if snap_month else raw_date
         if now < xnys_session_close_utc(bar_date) or (min_date is not None and bar_date < min_date):
             continue
         records.append(
@@ -295,12 +283,6 @@ def parse_daily_bars(
     symbol: str, payload: dict[str, Any], min_date: date | None = None, *, now: datetime
 ) -> list[PriceBarRecord]:
     return _parse_bars(symbol, payload, min_date, now=now, resolution="1D")
-
-
-def parse_monthly_bars(
-    symbol: str, payload: dict[str, Any], min_date: date | None = None, *, now: datetime
-) -> list[PriceBarRecord]:
-    return _parse_bars(symbol, payload, min_date, now=now, resolution="1M", snap_month=True)
 
 
 def _latest_vintages(
@@ -381,47 +363,16 @@ def insert_market_prices_daily(
     return _insert_market_prices(connection, _DAILY_TABLE, records, adjust=adjust)
 
 
-def insert_market_prices_monthly(
-    connection: psycopg.Connection, records: Sequence[PriceBarRecord], *, adjust: str = DEFAULT_ADJUST
-) -> int:
-    return _insert_market_prices(connection, _MONTHLY_TABLE, records, adjust=adjust)
-
-
 @dataclass(frozen=True)
 class IngestionSummary:
     total_symbols: int
     total_calls: int
     daily_records_count: int
-    monthly_records_count: int
     daily_inserted: int
-    monthly_inserted: int
     daily_records: list[PriceBarRecord]
-    monthly_records: list[PriceBarRecord]
     unadjusted_daily_records_count: int = 0
     unadjusted_daily_inserted: int = 0
     unadjusted_daily_records: list[PriceBarRecord] = field(default_factory=list)
-
-
-def latest_closed_monthly_session(now: datetime) -> date:
-    """Return the last XNYS session of the latest closed calendar month at `now` (#1411 K4 D2)."""
-    current_month_end = last_xnys_session_of_month(now.year, now.month)
-    if now >= xnys_session_close_utc(current_month_end):
-        return current_month_end
-    prior_year, prior_month = (now.year - 1, 12) if now.month == 1 else (now.year, now.month - 1)
-    return last_xnys_session_of_month(prior_year, prior_month)
-
-
-def should_fetch_monthly_series(
-    connection: psycopg.Connection | None, symbol: str, *, now: datetime, adjust: str = DEFAULT_ADJUST
-) -> bool:
-    if connection is None or not hasattr(connection, "cursor"):
-        return True
-    with connection.cursor() as cur:
-        cur.execute(
-            f"select 1 from {_MONTHLY_TABLE} where symbol = %s and trading_date = %s and adjust = %s limit 1",
-            (symbol, latest_closed_monthly_session(now), adjust),
-        )
-        return cur.fetchone() is None
 
 
 def ingest_twelve_data_market_prices(
@@ -429,47 +380,45 @@ def ingest_twelve_data_market_prices(
     client: TwelveDataClient | None = None,
     connection: psycopg.Connection | None = None,
     daily_lookback_years: int = DAILY_LOOKBACK_YEARS,
-    monthly_lookback_years: int = 10,
     now: datetime | None = None,
     adjust: str = DEFAULT_ADJUST,
 ) -> IngestionSummary:
     now_instant = now or datetime.now(UTC)
     min_daily_date = daily_lookback_floor(now_instant, daily_lookback_years)
-    min_monthly_date = now_instant.date() - timedelta(days=monthly_lookback_years * 365 + 60)
     td_client = client or TwelveDataClient()
     all_daily: list[PriceBarRecord] = []
     all_unadjusted_daily: list[PriceBarRecord] = []
-    all_monthly: list[PriceBarRecord] = []
     calls_made = 0
     fetch_unadjusted = adjust != UNADJUSTED
 
-    def pull(interval: str, adj: str, parser: Callable[..., list[PriceBarRecord]], floor: date) -> list[PriceBarRecord]:
-        return parser(symbol, td_client.fetch_time_series(symbol, interval, adjust=adj), floor, now=now_instant)
-
     for symbol in symbols:
-        all_daily.extend(pull("1day", adjust, parse_daily_bars, min_daily_date))
+        all_daily.extend(
+            parse_daily_bars(
+                symbol, td_client.fetch_time_series(symbol, "1day", adjust=adjust), min_daily_date, now=now_instant
+            )
+        )
         calls_made += 1
         if fetch_unadjusted:
-            all_unadjusted_daily.extend(pull("1day", UNADJUSTED, parse_daily_bars, min_daily_date))
-            calls_made += 1
-        if should_fetch_monthly_series(connection, symbol, now=now_instant, adjust=adjust):
-            all_monthly.extend(pull("1month", adjust, parse_monthly_bars, min_monthly_date))
+            all_unadjusted_daily.extend(
+                parse_daily_bars(
+                    symbol,
+                    td_client.fetch_time_series(symbol, "1day", adjust=UNADJUSTED),
+                    min_daily_date,
+                    now=now_instant,
+                )
+            )
             calls_made += 1
 
-    daily_ins = unadj_ins = monthly_ins = 0
+    daily_ins = unadj_ins = 0
     if connection is not None:
         daily_ins = insert_market_prices_daily(connection, all_daily, adjust=adjust)
         unadj_ins = insert_market_prices_daily(connection, all_unadjusted_daily, adjust=UNADJUSTED)
-        monthly_ins = insert_market_prices_monthly(connection, all_monthly, adjust=adjust)
     return IngestionSummary(
         len(symbols),
         calls_made,
         len(all_daily),
-        len(all_monthly),
         daily_ins,
-        monthly_ins,
         all_daily,
-        all_monthly,
         len(all_unadjusted_daily),
         unadj_ins,
         all_unadjusted_daily,

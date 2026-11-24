@@ -112,7 +112,6 @@ SERVED = (
     "mart.datahub_quality_report",
     "mart.datahub_confidence_report",
     "mart.question_coverage_report",
-    "mart.strategy_input_coverage",
     "mart.capture_status",
     "mart.data_engine_identity",
     "mart.backtest_runs",
@@ -126,6 +125,7 @@ SERVED = (
 #: `test_no_consumer_reaches_a_relation_listed_as_not_served` fails when a file names one.
 NOT_SERVED = {
     "mart.capture_meta_info": "metadata of one capture run; no consumer reads it",
+    "mart.strategy_input_coverage": "retired write-only table; writer removed ahead of SQL drop (#1852)",
     "mart.strategy_run_capture_bindings": "the write side of the capture binding; no consumer reads it",
     "mart.cell_confidence": "append-only per-cell confidence of one run; no reader moves to it until stage B3 (#1517)",
 }

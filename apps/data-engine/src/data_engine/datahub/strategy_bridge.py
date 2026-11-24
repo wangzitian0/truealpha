@@ -460,9 +460,10 @@ def _issuer_classes_for_run(connection: psycopg.Connection[Any], run_id: str) ->
     return classes
 
 
-def persist_strategy_input_coverage(
+def count_complete_strategy_inputs(
     connection: psycopg.Connection[Any], run_id: str, *, cutoff: datetime
 ) -> tuple[int, int]:
+    """Count issuers with all required strategy inputs available as of cutoff."""
     definition = load_strategy_definition()
     classes = _issuer_classes_for_run(connection, run_id)
     issuers = [
@@ -480,15 +481,9 @@ def persist_strategy_input_coverage(
         (cutoff,),
     ).fetchall():
         present.setdefault(issuer_id, set()).add(input_key)
-    complete = 0
-    for issuer_id in issuers:
-        required = sorted(required_input_keys(definition, classes.get(issuer_id)))
-        missing = [key for key in required if key not in present.get(issuer_id, set())]
-        if not missing:
-            complete += 1
-        connection.execute(
-            "insert into mart.strategy_input_coverage (run_id, issuer_id, required_count, present_count, missing_keys) "
-            "values (%s, %s, %s, %s, %s) on conflict (run_id, issuer_id) do nothing",
-            (run_id, issuer_id, len(required), len(required) - len(missing), missing),
-        )
+    complete = sum(
+        1
+        for issuer_id in issuers
+        if not (set(required_input_keys(definition, classes.get(issuer_id))) - present.get(issuer_id, set()))
+    )
     return complete, len(issuers)

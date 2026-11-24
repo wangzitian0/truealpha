@@ -65,7 +65,7 @@ def run_deployed_tick(monkeypatch: Any, op: Any, *, connection: Any = None, mate
         ),
     )
     monkeypatch.setattr(capture, "seed_strategy_inputs_from_capture", lambda *_a, **_k: 21)
-    monkeypatch.setattr(capture, "persist_strategy_input_coverage", lambda *_a, **_k: (20, 20))
+    monkeypatch.setattr(capture, "count_complete_strategy_inputs", lambda *_a, **_k: (20, 20))
     monkeypatch.setattr(
         capture,
         "run_strategy_replay_for_cutoff",
