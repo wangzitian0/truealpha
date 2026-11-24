@@ -177,21 +177,6 @@ SUFFIX_PAIR_EXEMPTIONS: dict[tuple[str, str, str], str] = {
         "idx_conversation_messages_conv_tenant_owner",
     ): "owner index supports the owner_principal_id FK; composite supports the conversation FK",
     (
-        "app.research_document_download_tickets",
-        "idx_research_document_download_tickets_owner",
-        "idx_research_document_download_tickets_doc_tenant_owner",
-    ): "owner index supports the owner_principal_id FK; composite supports the document FK",
-    (
-        "app.research_document_download_tickets",
-        "idx_research_document_download_tickets_owner",
-        "idx_research_document_download_tickets_rev_doc_tenant_owner",
-    ): "owner index supports the owner_principal_id FK; composite supports the revision FK",
-    (
-        "app.research_document_download_tickets",
-        "idx_research_document_download_tickets_doc_tenant_owner",
-        "idx_research_document_download_tickets_rev_doc_tenant_owner",
-    ): "each composite supports a separate composite FK (document, revision)",
-    (
         "app.research_document_revisions",
         "idx_research_document_revisions_owner",
         "idx_research_document_revisions_doc_tenant_owner",

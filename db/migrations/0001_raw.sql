@@ -487,10 +487,24 @@ create table if not exists raw.capture_obligation_results (
  constraint capture_obligation_results_final_attempt_id_fkey FOREIGN KEY (final_attempt_id) REFERENCES raw.capture_attempts(attempt_id)
 );
 
-do $$ begin if not exists (select 1 from pg_constraint where conrelid = 'raw.capture_attempt_results'::regclass and conname = 'capture_attempt_results_reused_source_vintage_id_fkey') then alter table raw.capture_attempt_results add constraint capture_attempt_results_reused_source_vintage_id_fkey FOREIGN KEY (reused_source_vintage_id) REFERENCES raw.capture_source_vintages(source_vintage_id) NOT VALID; end if; end $$;
-do $$ begin if not exists (select 1 from pg_constraint where conrelid = 'raw.capture_attempt_results'::regclass and conname = 'capture_attempt_results_source_vintage_id_fkey') then alter table raw.capture_attempt_results add constraint capture_attempt_results_source_vintage_id_fkey FOREIGN KEY (source_vintage_id) REFERENCES raw.capture_source_vintages(source_vintage_id) NOT VALID; end if; end $$;
-do $$ begin if not exists (select 1 from pg_constraint where conrelid = 'raw.capture_runs'::regclass and conname = 'capture_runs_schedule_policy_id_fkey') then alter table raw.capture_runs add constraint capture_runs_schedule_policy_id_fkey FOREIGN KEY (schedule_policy_id) REFERENCES raw.capture_schedule_policies(schedule_policy_id) NOT VALID; end if; end $$;
-do $$ begin if not exists (select 1 from pg_constraint where conrelid = 'raw.capture_work_items'::regclass and conname = 'capture_work_items_source_request_id_fkey') then alter table raw.capture_work_items add constraint capture_work_items_source_request_id_fkey FOREIGN KEY (source_request_id) REFERENCES raw.capture_source_requests(source_request_id) NOT VALID; end if; end $$;
+do $$ begin if not exists (select 1 from pg_constraint where conrelid = 'raw.capture_attempt_results'::regclass and conname = 'capture_attempt_results_reused_source_vintage_id_fkey') then alter table raw.capture_attempt_results add constraint capture_attempt_results_reused_source_vintage_id_fkey FOREIGN KEY (reused_source_vintage_id) REFERENCES raw.capture_source_vintages(source_vintage_id); end if; end $$;
+do $$ begin if not exists (select 1 from pg_constraint where conrelid = 'raw.capture_attempt_results'::regclass and conname = 'capture_attempt_results_source_vintage_id_fkey') then alter table raw.capture_attempt_results add constraint capture_attempt_results_source_vintage_id_fkey FOREIGN KEY (source_vintage_id) REFERENCES raw.capture_source_vintages(source_vintage_id); end if; end $$;
+do $$ begin if not exists (select 1 from pg_constraint where conrelid = 'raw.capture_runs'::regclass and conname = 'capture_runs_schedule_policy_id_fkey') then alter table raw.capture_runs add constraint capture_runs_schedule_policy_id_fkey FOREIGN KEY (schedule_policy_id) REFERENCES raw.capture_schedule_policies(schedule_policy_id); end if; end $$;
+do $$ begin if not exists (select 1 from pg_constraint where conrelid = 'raw.capture_work_items'::regclass and conname = 'capture_work_items_source_request_id_fkey') then alter table raw.capture_work_items add constraint capture_work_items_source_request_id_fkey FOREIGN KEY (source_request_id) REFERENCES raw.capture_source_requests(source_request_id); end if; end $$;
+do $$ begin
+    if exists (select 1 from pg_constraint where conrelid = 'raw.capture_attempt_results'::regclass and conname = 'capture_attempt_results_reused_source_vintage_id_fkey' and not convalidated) then
+        alter table raw.capture_attempt_results validate constraint capture_attempt_results_reused_source_vintage_id_fkey;
+    end if;
+    if exists (select 1 from pg_constraint where conrelid = 'raw.capture_attempt_results'::regclass and conname = 'capture_attempt_results_source_vintage_id_fkey' and not convalidated) then
+        alter table raw.capture_attempt_results validate constraint capture_attempt_results_source_vintage_id_fkey;
+    end if;
+    if exists (select 1 from pg_constraint where conrelid = 'raw.capture_runs'::regclass and conname = 'capture_runs_schedule_policy_id_fkey' and not convalidated) then
+        alter table raw.capture_runs validate constraint capture_runs_schedule_policy_id_fkey;
+    end if;
+    if exists (select 1 from pg_constraint where conrelid = 'raw.capture_work_items'::regclass and conname = 'capture_work_items_source_request_id_fkey' and not convalidated) then
+        alter table raw.capture_work_items validate constraint capture_work_items_source_request_id_fkey;
+    end if;
+end $$;
 
 CREATE OR REPLACE FUNCTION raw.assert_content_address(actual_id text, id_prefix text, identity_payload jsonb, actual_content_sha256 text, content_payload jsonb)
  RETURNS void

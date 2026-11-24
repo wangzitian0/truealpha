@@ -1,4 +1,4 @@
--- #373: owner-scoped research document lifecycle + download tickets.
+-- #373: owner-scoped research document lifecycle.
 -- Run as: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/tests/documents_contract.sql
 -- Everything happens inside one transaction and rolls back at the end.
 
@@ -10,7 +10,6 @@ begin
     if to_regclass('app.research_documents') is null
        or to_regclass('app.research_document_revisions') is null
        or to_regclass('app.research_document_tombstones') is null
-       or to_regclass('app.research_document_download_tickets') is null
        or to_regclass('app.document_audit_metadata') is null then
         raise exception 'document lifecycle storage boundary is incomplete';
     end if;
@@ -23,11 +22,8 @@ begin
     ) or not exists (
         select 1 from pg_class
         where oid = 'app.research_document_tombstones'::regclass and relrowsecurity and relforcerowsecurity
-    ) or not exists (
-        select 1 from pg_class
-        where oid = 'app.research_document_download_tickets'::regclass and relrowsecurity and relforcerowsecurity
     ) then
-        raise exception 'all four document tables must force row-level security';
+        raise exception 'all three document tables must force row-level security';
     end if;
     if exists (
         select 1 from information_schema.columns
@@ -169,7 +165,7 @@ begin
 end;
 $$;
 
--- Deliberately no `reset role` here: tombstones and tickets below stay under
+-- Deliberately no `reset role` here: tombstones below stay under
 -- app_runtime + alice's GUCs, exercising the real owner-scoped RLS surface.
 
 -- --- tombstone: soft-delete makes get/list non-enumerating (repository layer's job) ---
@@ -234,13 +230,12 @@ select set_config('truealpha.tenant_id', 'tenant:alpha', true);
 select set_config('truealpha.principal_id', 'principal:alpha:alice', true);
 
 -- The app layer's guarded INSERT...SELECT...WHERE NOT EXISTS(tombstone)
--- pattern (documents.ts's insertRevision/issueDownloadTicket) must reject
--- writes against a tombstoned document — reproduce that exact pattern here
+-- pattern (documents.ts's insertRevision) must reject writes against
+-- a tombstoned document — reproduce that exact pattern here
 -- so a future schema change can't silently break it without this failing.
 do $$
 declare
     revision_rows integer;
-    ticket_rows integer;
 begin
     insert into app.research_document_revisions (
         revision_id, document_id, tenant_id, owner_principal_id,
@@ -255,26 +250,16 @@ begin
     if revision_rows <> 0 then
         raise exception 'appending a revision to a tombstoned document unexpectedly succeeded';
     end if;
-
-    insert into app.research_document_download_tickets (
-        ticket_id, document_id, revision_id, tenant_id, owner_principal_id, expires_at
-    )
-    select 'ticket:alpha:after-tombstone', 'document:alpha:alice-1', 'revision:alpha:alice-1',
-           'tenant:alpha', 'principal:alpha:alice', now() + interval '10 minutes'
-    where not exists (
-        select 1 from app.research_document_tombstones t where t.document_id = 'document:alpha:alice-1'
-    );
-    get diagnostics ticket_rows = row_count;
-    if ticket_rows <> 0 then
-        raise exception 'issuing a download ticket for a tombstoned document unexpectedly succeeded';
-    end if;
 end;
 $$;
 
--- a ticket cannot pair a real document_id with a real revision_id that
--- belongs to a DIFFERENT document, even when both are owned by the same
--- caller — the composite FK on (revision_id, document_id, tenant_id,
--- owner_principal_id) must catch this, not just two independent FKs.
+-- Two distinct revisions of two distinct documents may legitimately share
+-- one object_key: the store is content-addressed and deduplicates by
+-- design, so no schema-level uniqueness should ever reject this.
+insert into app.research_documents (document_id, tenant_id, owner_principal_id, created_at)
+    values ('document:alpha:alice-2', 'tenant:alpha', 'principal:alpha:alice', now())
+    on conflict do nothing;
+
 insert into app.research_document_revisions (
     revision_id, document_id, tenant_id, owner_principal_id,
     source_artifact_id, artifact_sha256, artifact_byte_length, artifact_content_type, object_key, created_at
@@ -284,9 +269,6 @@ insert into app.research_document_revisions (
     'documents/tenant:alpha/alice/revision:alpha:alice-2', now()
 );
 
--- Two distinct revisions of two distinct documents may legitimately share
--- one object_key: the store is content-addressed and deduplicates by
--- design, so no schema-level uniqueness should ever reject this.
 insert into app.research_document_revisions (
     revision_id, document_id, tenant_id, owner_principal_id,
     source_artifact_id, artifact_sha256, artifact_byte_length, artifact_content_type, object_key, created_at
@@ -295,68 +277,6 @@ insert into app.research_document_revisions (
     'report:' || repeat('a', 64), repeat('a', 64), 1024, 'application/json',
     'documents/tenant:alpha/alice/revision:alpha:alice-1', now()
 );
-
-do $$
-begin
-    begin
-        insert into app.research_document_download_tickets (
-            ticket_id, document_id, revision_id, tenant_id, owner_principal_id, expires_at
-        ) values (
-            'ticket:alpha:mismatched', 'document:alpha:alice-2', 'revision:alpha:alice-1',
-            'tenant:alpha', 'principal:alpha:alice', now() + interval '10 minutes'
-        );
-        raise exception 'a ticket pairing document:alpha:alice-2 with a different document''s revision unexpectedly succeeded';
-    exception
-        when foreign_key_violation then null; -- expected: revision_id does not belong to document_id
-    end;
-end;
-$$;
-
--- --- download tickets: single redemption, no other field mutable ---
-insert into app.research_document_download_tickets (
-    ticket_id, document_id, revision_id, tenant_id, owner_principal_id, expires_at, created_at
-) values (
-    'ticket:alpha:1', 'document:alpha:alice-1', 'revision:alpha:alice-1', 'tenant:alpha', 'principal:alpha:alice',
-    now() + interval '10 minutes', now()
-);
-
-do $$
-declare
-    first_redemption integer;
-    second_redemption integer;
-begin
-    update app.research_document_download_tickets
-        set redeemed_at = now()
-        where ticket_id = 'ticket:alpha:1' and redeemed_at is null and expires_at > now();
-    get diagnostics first_redemption = row_count;
-    if first_redemption <> 1 then
-        raise exception 'first redemption of a fresh ticket must affect exactly one row, affected %', first_redemption;
-    end if;
-
-    update app.research_document_download_tickets
-        set redeemed_at = now()
-        where ticket_id = 'ticket:alpha:1' and redeemed_at is null and expires_at > now();
-    get diagnostics second_redemption = row_count;
-    if second_redemption <> 0 then
-        raise exception 'replaying an already-redeemed ticket must affect zero rows (single redemption), affected %', second_redemption;
-    end if;
-end;
-$$;
-
-do $$
-begin
-    begin
-        update app.research_document_download_tickets set expires_at = now() + interval '1 day'
-            where ticket_id = 'ticket:alpha:1';
-        raise exception 'mutating a field other than redeemed_at unexpectedly succeeded';
-    exception
-        when insufficient_privilege then null;
-        when raise_exception then
-            if sqlerrm = 'mutating a field other than redeemed_at unexpectedly succeeded' then raise; end if;
-            if sqlerrm <> 'research_document_download_tickets: only redeemed_at may change after creation' then raise; end if;
-    end;
-end;
-$$;
 
 -- --- administrator audit projection: aggregate only, tenant-scoped, denied to non-admins ---
 set local role app_audit_reader;

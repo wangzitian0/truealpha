@@ -542,9 +542,20 @@ create table if not exists mart.strategy_run_capture_bindings (
  constraint strategy_run_capture_bindings_strategy_run_id_fkey FOREIGN KEY (strategy_run_id) REFERENCES mart.strategy_runs(strategy_run_id)
 );
 
-do $$ begin if not exists (select 1 from pg_constraint where conrelid = 'mart.backtest_runs'::regclass and conname = 'backtest_runs_succeeded_declares_basis') then alter table mart.backtest_runs add constraint backtest_runs_succeeded_declares_basis CHECK (((status <> 'succeeded'::text) OR ((definition_content_sha256 IS NOT NULL) AND (price_basis IS NOT NULL) AND (claim_ceiling IS NOT NULL) AND (benchmark_rule IS NOT NULL)))) NOT VALID; end if; end $$;
-do $$ begin if not exists (select 1 from pg_constraint where conrelid = 'mart.fund_virtual_company'::regclass and conname = 'fund_virtual_company_valuation_basis_check') then alter table mart.fund_virtual_company add constraint fund_virtual_company_valuation_basis_check CHECK ((((valuation_basis = ANY (ARRAY['price_to_sales'::text, 'price_to_gross_profit'::text])) AND (weighted_valuation_gap IS NOT NULL)) OR (valuation_basis IS NULL))) NOT VALID; end if; end $$;
-do $$ begin if not exists (select 1 from pg_constraint where conrelid = 'mart.strategy_decisions'::regclass and conname = 'strategy_decisions_one_valuation_basis_check') then alter table mart.strategy_decisions add constraint strategy_decisions_one_valuation_basis_check CHECK ((((target_price_to_sales IS NULL) OR (target_price_to_gross_profit IS NULL)) AND ((current_price_to_gross_profit IS NULL) = (target_price_to_gross_profit IS NULL)) AND ((current_price_to_gross_profit IS NULL) OR (current_price_to_gross_profit > (0)::numeric)))) NOT VALID; end if; end $$;
+do $$ begin if not exists (select 1 from pg_constraint where conrelid = 'mart.backtest_runs'::regclass and conname = 'backtest_runs_succeeded_declares_basis') then alter table mart.backtest_runs add constraint backtest_runs_succeeded_declares_basis CHECK (((status <> 'succeeded'::text) OR ((definition_content_sha256 IS NOT NULL) AND (price_basis IS NOT NULL) AND (claim_ceiling IS NOT NULL) AND (benchmark_rule IS NOT NULL)))); end if; end $$;
+do $$ begin if not exists (select 1 from pg_constraint where conrelid = 'mart.fund_virtual_company'::regclass and conname = 'fund_virtual_company_valuation_basis_check') then alter table mart.fund_virtual_company add constraint fund_virtual_company_valuation_basis_check CHECK ((((valuation_basis = ANY (ARRAY['price_to_sales'::text, 'price_to_gross_profit'::text])) AND (weighted_valuation_gap IS NOT NULL)) OR (valuation_basis IS NULL))); end if; end $$;
+do $$ begin if not exists (select 1 from pg_constraint where conrelid = 'mart.strategy_decisions'::regclass and conname = 'strategy_decisions_one_valuation_basis_check') then alter table mart.strategy_decisions add constraint strategy_decisions_one_valuation_basis_check CHECK ((((target_price_to_sales IS NULL) OR (target_price_to_gross_profit IS NULL)) AND ((current_price_to_gross_profit IS NULL) = (target_price_to_gross_profit IS NULL)) AND ((current_price_to_gross_profit IS NULL) OR (current_price_to_gross_profit > (0)::numeric)))); end if; end $$;
+do $$ begin
+    if exists (select 1 from pg_constraint where conrelid = 'mart.backtest_runs'::regclass and conname = 'backtest_runs_succeeded_declares_basis' and not convalidated) then
+        alter table mart.backtest_runs validate constraint backtest_runs_succeeded_declares_basis;
+    end if;
+    if exists (select 1 from pg_constraint where conrelid = 'mart.fund_virtual_company'::regclass and conname = 'fund_virtual_company_valuation_basis_check' and not convalidated) then
+        alter table mart.fund_virtual_company validate constraint fund_virtual_company_valuation_basis_check;
+    end if;
+    if exists (select 1 from pg_constraint where conrelid = 'mart.strategy_decisions'::regclass and conname = 'strategy_decisions_one_valuation_basis_check' and not convalidated) then
+        alter table mart.strategy_decisions validate constraint strategy_decisions_one_valuation_basis_check;
+    end if;
+end $$;
 
 CREATE OR REPLACE FUNCTION mart.head_freshness(p_refreshed_at timestamp with time zone, p_family text, p_as_of timestamp with time zone DEFAULT now())
  RETURNS TABLE(age_hours numeric, limit_hours integer, freshness text, availability text, staleness_reason text)
