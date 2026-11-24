@@ -623,10 +623,16 @@ def test_a_measured_cell_is_never_replaced_by_a_not_measured_one_of_the_same_sub
 
 
 def _domestic(body: bytes, ticker: str, *, form: str = "10-K") -> ListingUnitRatio:
-    from data_engine.datahub.standards.listing_unit_ratio import cover_titles
+    from data_engine.datahub.standards.listing_unit_ratio import cover_registrants, cover_titles
 
     return ratio_for_ticker(
-        cover_securities(body), ticker, accession=ACCESSION, form=form, filed=FILED, titles=cover_titles(body)
+        cover_securities(body),
+        ticker,
+        accession=ACCESSION,
+        form=form,
+        filed=FILED,
+        titles=cover_titles(body),
+        registrants=cover_registrants(body),
     )
 
 
@@ -683,32 +689,40 @@ def test_the_widened_grammar_still_refuses_two_classes_warrants_and_preferred(ti
     assert read_title(title).listing_units_per_share is None, title
 
 
-_STAGING_10K_TITLES = [
-    ("EVRG", "Evergy, Inc. common stock"),
-    ("CB", "Comm on Shares, par value CHF 0.50 per share"),
-    ("CMS", "CMS Energy Corporation Common Stock"),
-    ("KR", "Common, $1.00 Par Value"),
-    ("NSC", "Norfolk Southern Corporation Common Stock (Par Value $1.00)"),
-    ("PPL", "Common Stock of PPL Corporation"),
+_STAGING_TITLES = [
+    ("EVRG", "Evergy, Inc. common stock", ("EVERGY, INC.",)),
+    ("CMS", "CMS Energy Corporation Common Stock", ("CMS ENERGY CORPORATION", "CONSUMERS ENERGY COMPANY")),
+    ("KR", "Common, $1.00 Par Value", ("THE KROGER CO.",)),
+    ("NSC", "Norfolk Southern Corporation Common Stock (Par Value $1.00)", ("NORFOLK SOUTHERN CORPORATION",)),
+    ("PPL", "Common Stock of PPL Corporation", ("PPL Corporation",)),
 ]
 
 
-@pytest.mark.parametrize(("ticker", "title"), _STAGING_10K_TITLES)
-def test_a_10k_filer_lists_one_share_under_a_share_title_that_the_grammar_does_not_know(
-    ticker: str, title: str
+@pytest.mark.parametrize(("ticker", "title", "registrants"), _STAGING_TITLES)
+def test_a_share_title_that_names_its_own_filer_is_one_plain_share(
+    ticker: str, title: str, registrants: tuple[str, ...]
 ) -> None:
-    """#1606, staging 2026-11-24: six S&P 500 10-K filers pair their ticker with a share title in other
-    words, and got `unfamiliar_title`. A domestic filer lists its own shares."""
-    ratio = _domestic(cover_html((ticker, title)), ticker)
+    """#1606, staging 2026-11-24: S&P 500 filers pair the ticker with the share title and their own
+    name, or write `Common, $1.00 Par Value`. Without the filer name the grammar reads the title."""
+    ratio = _domestic(cover_html((ticker, title), registrants=registrants), ticker)
 
     assert ratio.listing_units_per_share == Decimal(1)
-    assert ratio.pattern == PATTERN_DOMESTIC_FILER
+    assert ratio.pattern == PATTERN_PLAIN_SHARE
     assert ratio.title == title
 
 
-@pytest.mark.parametrize(("ticker", "title"), _STAGING_10K_TITLES)
-def test_a_20f_filer_keeps_an_unknown_share_title_unread(ticker: str, title: str) -> None:
-    ratio = _domestic(cover_html((ticker, title)), ticker, form="20-F")
+def test_the_name_of_another_company_is_not_removed() -> None:
+    ratio = _domestic(cover_html(("ACME", "Common Stock of Other Holdings Inc."), registrants=("ACME Corp",)), "ACME")
+
+    assert ratio.listing_units_per_share is None
+    assert ratio.reason == REASON_UNFAMILIAR_TITLE
+
+
+def test_a_typing_error_in_the_title_stays_unread() -> None:
+    """CB (staging): `Comm on Shares` is no title of the grammar. No ratio is assumed."""
+    ratio = _domestic(
+        cover_html(("CB", "Comm on Shares, par value CHF 0.50 per share"), registrants=("Chubb Limited",)), "CB"
+    )
 
     assert ratio.listing_units_per_share is None
     assert ratio.reason == REASON_UNFAMILIAR_TITLE
@@ -717,20 +731,30 @@ def test_a_20f_filer_keeps_an_unknown_share_title_unread(ticker: str, title: str
 @pytest.mark.parametrize(
     "title",
     [
-        "Units, each consisting of one share of Class A Common Stock and one-half of one redeemable Warrant",
-        "Warrants, each exercisable for one share of common stock",
-        "Rights to receive one-tenth of one share of Common Stock",
-        "Class A Common Stock and Class B Common Stock",
-        "Depositary Shares, each representing a 1/1,000th interest in a share of Series A Preferred Stock",
-        "5.75% Series A Cumulative Preferred Stock",
-        "Common Stock.Warrants",
-        "Trust Units",
-        "Global Medium Term Securities",
-        "",
+        # Review of #1842: each of these got ratio 1 under a word list of refusals.
+        "American Depository Shares representing five ordinary shares",
+        "A.D.S. representing 5 ordinary shares",
+        "Global Depository Shares",
+        "6.375% Series A Cumulative Redeemable Perpetual Shares",
+        "Exchangeable Shares",
+        "Stapled Shares",
+        "Subscription Receipts for Common Shares",
+        "Stock Purchase Contracts",
+        "Common Securities of XYZ Capital Trust",
+        "Half-share of Common Stock",
+        "Series A Common Stock and Series C Common Stock",
+        "Voting Common Stock and Non-Voting Common Stock",
+        "Classes A and B Common Stock",
+        "Common Units representing limited partner interests",
+        # The filer name must not open a way past the refusals.
+        "ACME Corporation Warrants",
+        "Units of ACME Corporation",
+        "ACME Corporation Depository Shares",
+        "Common, $25 par value Preferred Stock",
     ],
 )
-def test_a_10k_title_that_names_another_instrument_gets_no_ratio(title: str) -> None:
-    ratio = _domestic(cover_html(("ACME", title)), "ACME")
+def test_a_title_that_names_another_instrument_gets_no_ratio_with_or_without_the_filer_name(title: str) -> None:
+    ratio = _domestic(cover_html(("ACME", title), registrants=("ACME Corporation",)), "ACME")
 
     assert ratio.listing_units_per_share is None, title
     assert ratio.pattern == PATTERN_UNPARSED

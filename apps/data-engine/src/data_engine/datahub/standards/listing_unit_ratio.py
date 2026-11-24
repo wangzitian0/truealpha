@@ -17,6 +17,7 @@ log = logging.getLogger(__name__)
 
 TITLE_CONCEPT = "dei:Security12bTitle"
 SYMBOL_CONCEPT = "dei:TradingSymbol"
+REGISTRANT_CONCEPT = "dei:EntityRegistrantName"
 
 PATTERN_DEPOSITARY = "depositary_each_representing"
 PATTERN_PLAIN_SHARE = "plain_share_title"
@@ -75,7 +76,7 @@ _QUANTITY = (
 _SHARE = (
     r"(?:(?:class|series) [a-z0-9]+ )?"
     r"(?:(?:ordinary|common|capital|registered|subordinate voting|non[- ]voting|voting) )*"
-    r"(?:shares?|stock)"
+    r"(?:shares?|stock|common(?=,\s*[$€£¥]\s*[\d.]+\s+par\s+value\s*$))"
     r"(?: of beneficial interest)?"
     r"(?:,? (?:non[- ])?voting)?"
 )
@@ -103,24 +104,6 @@ _DEBT_NOTE = re.compile(
 
 def is_debt_security_title(title: str) -> bool:
     return _DEBT_NOTE.search(" ".join(title.split())) is not None
-
-
-_A_SHARE = re.compile(r"\b(?:shares?|stock|common)\b")
-_OTHER_INSTRUMENT = re.compile(
-    r"\b(?:depositary|adss?|adrs?|units?|warrants?|rights?|preferred|preference|notes?|debentures?|bonds?"
-    r"|fractional|interests?|each|exercisable|convertible)\b"
-)
-
-
-def is_one_listed_share(title: str) -> bool:
-    """The title names a share and no other instrument: no unit, warrant, right, preferred share,
-    debt, depositary security, fraction or second class."""
-    text = " ".join(title.split()).lower()
-    return (
-        _A_SHARE.search(text) is not None
-        and _OTHER_INSTRUMENT.search(text) is None
-        and len(re.findall(r"\bclass\b", text)) <= 1
-    )
 
 
 @dataclass(frozen=True)
@@ -206,6 +189,13 @@ def cover_titles(body: bytes) -> tuple[str, ...]:
     return tuple(fact.text for fact in InlineXbrl(body).text_facts((TITLE_CONCEPT,), limit=_TITLE_LIMIT))
 
 
+def cover_registrants(body: bytes) -> tuple[str, ...]:
+    """The filer names of the cover. A combined 10-K names several."""
+    from data_engine.datahub.standards.inline_xbrl import InlineXbrl
+
+    return tuple(fact.text for fact in InlineXbrl(body).text_facts((REGISTRANT_CONCEPT,), limit=_TITLE_LIMIT))
+
+
 def names_a_depositary_security(titles: Sequence[str]) -> bool:
     return any(_DEPOSITARY_WORD.search(" ".join(title.split()).lower()) for title in titles)
 
@@ -234,13 +224,27 @@ def _symbol_key(symbol: str) -> str:
     return symbol.strip().upper().replace("-", ".")
 
 
-def _read_listed_title(title: str, form: str) -> TitleReading:
-    """A 10-K filer lists its own shares. A share title in words that the grammar does not know
-    (`Evergy, Inc. common stock`, `Common, $1.00 Par Value`) is one share, unless it names
-    another instrument (#1606)."""
+def without_registrant(title: str, registrants: Sequence[str]) -> str:
+    """The title without the filer's own name before it or after `of` (#1606):
+    `Evergy, Inc. common stock` and `Common Stock of PPL Corporation` keep only the security."""
+    text = " ".join(title.split())
+    for name in sorted({" ".join(n.split()).rstrip(".") for n in registrants if n.strip()}, key=len, reverse=True):
+        named = re.escape(name) + r"\.?"
+        stripped = re.sub(r"^" + named + r"[\s,]+|\s+of\s+" + named + r"\s*$", "", text, count=1, flags=re.IGNORECASE)
+        if stripped != text:
+            return stripped
+    return text
+
+
+def _read_listed_title(title: str, registrants: Sequence[str]) -> TitleReading:
+    """The grammar reads the title; a title that names its filer is read again without the name."""
     reading = read_title(title)
-    if reading.reason == REASON_UNFAMILIAR_TITLE and form in DOMESTIC_ANNUAL_FORMS and is_one_listed_share(title):
-        return TitleReading(Decimal(1), PATTERN_DOMESTIC_FILER, None)
+    if reading.reason == REASON_UNFAMILIAR_TITLE and (bare := without_registrant(title, registrants)) != " ".join(
+        title.split()
+    ):
+        again = read_title(bare)
+        if again.listing_units_per_share is not None:
+            return again
     return reading
 
 
@@ -252,8 +256,10 @@ def ratio_for_ticker(
     form: str,
     filed: date,
     titles: Sequence[str] = (),
+    registrants: Sequence[str] = (),
 ) -> ListingUnitRatio:
-    """`titles` are every security title that the cover tags, paired with a ticker or not."""
+    """`titles` are every security title that the cover tags, paired with a ticker or not.
+    `registrants` are the filer names of the cover (`dei:EntityRegistrantName`)."""
     filing: dict[str, Any] = {"accession": accession, "form": form, "filed": filed}
     wanted = _symbol_key(ticker)
     matches = [line for line in securities if _symbol_key(line.symbol) == wanted]
@@ -265,7 +271,7 @@ def ratio_for_ticker(
     lines = [line for line in matches if not is_debt_security_title(line.title)]
     if not lines:
         return unparsed(REASON_DEBT_SECURITY_ON_EQUITY_TICKER, title=matches[0].title, **filing)
-    readings = [(line, _read_listed_title(line.title, form)) for line in lines]
+    readings = [(line, _read_listed_title(line.title, registrants)) for line in lines]
     for line, reading in readings:
         if reading.listing_units_per_share is None:
             return unparsed(reading.reason or REASON_UNFAMILIAR_TITLE, title=line.title, **filing)
@@ -282,6 +288,7 @@ class _Cover:
     filed: date
     securities: tuple[CoverSecurity, ...]
     titles: tuple[str, ...] = ()
+    registrants: tuple[str, ...] = ()
 
 
 FilingFinder = Callable[[int, datetime], "FilingDocument | None"]
@@ -318,6 +325,7 @@ class CoverRatioReader:
             form=cover.form,
             filed=cover.filed,
             titles=cover.titles,
+            registrants=cover.registrants,
         )
 
     def _read_cover(self, cik: int, cutoff: date) -> _Cover | ListingUnitRatio:
@@ -337,6 +345,7 @@ class CoverRatioReader:
                 filed=document.filing_date,
                 securities=cover_securities(document.body),
                 titles=cover_titles(document.body),
+                registrants=cover_registrants(document.body),
             )
         except Exception as error:  # noqa: BLE001
             self._failed_in_a_row = self._failed_in_a_row + 1 if _may_repeat(error) else 0

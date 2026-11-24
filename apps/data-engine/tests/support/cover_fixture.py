@@ -18,8 +18,9 @@ def plain_share_ratio(_cik: int, _cutoff: date, _ticker: str | None) -> ListingU
     return ListingUnitRatio(Decimal(1), PATTERN_PLAIN_SHARE, title="Common stock")
 
 
-def cover_html(*lines: tuple[str | None, str]) -> bytes:
-    """An inline XBRL cover. Each line is (ticker or None, title); one line is one context."""
+def cover_html(*lines: tuple[str | None, str], registrants: tuple[str, ...] = ()) -> bytes:
+    """An inline XBRL cover. Each line is (ticker or None, title); one line is one context.
+    `registrants` are the filer names (`dei:EntityRegistrantName`) in the first context."""
     parts = ["<html><body><ix:header><ix:resources>"]
     for index in range(1, len(lines) + 1):
         parts.append(
@@ -28,6 +29,10 @@ def cover_html(*lines: tuple[str | None, str]) -> bytes:
             f"<xbrli:endDate>2025-12-31</xbrli:endDate></xbrli:period></xbrli:context>"
         )
     parts.append("</ix:resources></ix:header><p>Securities registered pursuant to Section 12(b) of the Act:</p>")
+    for index, name in enumerate(registrants, start=1):
+        parts.append(
+            f'<ix:nonNumeric contextRef="c-1" name="dei:EntityRegistrantName" id="r-{index}">{name}</ix:nonNumeric>'
+        )
     for index, (symbol, title) in enumerate(lines, start=1):
         parts.append(
             f'<ix:nonNumeric contextRef="c-{index}" name="dei:Security12bTitle" id="t-{index}">{title}</ix:nonNumeric>'
