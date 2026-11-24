@@ -787,6 +787,12 @@ def test_a_title_that_names_another_instrument_gets_no_ratio_with_or_without_the
         "Common Stock, $.10 par value (and associated Rights)",
         "Common Stock, $0.01 par value, and associated rights",
         "Common Stock, par value $0.01 per share*",
+        # Fourth review of #1842: real rights-plan forms and `one cent`.
+        "Common Stock, $1 par value, together with associated Preferred Stock Purchase Rights",
+        "Common Stock (including associated Preferred Stock Purchase Rights)",
+        "Common Stock, and attached Series A Participating Preferred Stock Purchase Rights",
+        "Common Stock, and associated Series A Junior Participating Preferred Stock Purchase Rights",
+        "Common Stock, par value one cent ($0.01) per share",
     ],
 )
 def test_a_par_value_clause_in_any_real_form_follows_a_plain_share(title: str) -> None:
@@ -829,6 +835,10 @@ def test_the_filer_name_inside_a_par_value_clause_is_not_a_second_security(
         "Common Stock, 1/10 of one share",
         "Common Stock (1/1,000 of one share)",
         "Common Stock, each 1/2 share",
+        # Fourth review of #1842: only rights-plan words stand before `rights`.
+        "Common Stock, and associated Warrants and Rights",
+        "Common Stock (and associated Class A Units rights)",
+        "Common Stock; associated redeemable warrant exercise rights",
     ],
 )
 def test_a_plain_share_followed_by_any_word_outside_a_par_value_clause_is_not_read(title: str) -> None:

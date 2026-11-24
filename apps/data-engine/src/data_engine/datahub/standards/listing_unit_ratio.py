@@ -109,8 +109,12 @@ _AMOUNT = re.compile(
 )
 _FRACTION = re.compile(r"^\d+/\d+¢?$")
 #: A rights plan attaches one right to each share; the listing stays one share.
+_RIGHTS_PLAN_WORD = (
+    r"(?:series\s+[a-z0-9]+|junior|participating|cumulative|preferred|preference|common|stock|shares?|purchase)"
+)
 _ASSOCIATED_RIGHTS = re.compile(
-    r"[,;]?\s*\(?\s*(?:and\s+|with\s+)?(?:the\s+)?associated\s+(?:[a-z-]+\s+){0,5}rights\s*\)?\.?$"
+    r"[,;]?\s*\(?\s*(?:(?:and|with|together\s+with|including)\s+)?(?:the\s+)?(?:associated|attached)\s+"
+    r"(?:" + _RIGHTS_PLAN_WORD + r"\s+){0,8}rights\s*\)?\.?$"
 )
 _FOOTNOTE = re.compile(r"\s*(?:\*+|\(\d\))$")
 
@@ -118,7 +122,7 @@ _FOOTNOTE = re.compile(r"\s*(?:\*+|\(\d\))$")
 def _only_a_par_clause(rest: str) -> bool:
     """Each word after the share words belongs to one par or nominal value clause. Position rules
     keep a second security out: `share` only after `per`, `each` and `voting` only last, `one`
-    only before `dollar`, a fraction only after an amount (#1842 review)."""
+    only before `dollar` or `cent`, a fraction only after an amount (#1842 review)."""
     rest = _ASSOCIATED_RIGHTS.sub("", _FOOTNOTE.sub("", rest))
     words = [word.strip(".") for word in _PAR_CLAUSE_SEPARATORS.sub(" ", rest).split()]
     words = [word for word in words if word]
@@ -132,7 +136,7 @@ def _only_a_par_clause(rest: str) -> bool:
             continue
         if word in ("each", "voting") and last:
             continue
-        if word == "one" and after in ("dollar", "dollars"):
+        if word == "one" and after in ("dollar", "dollars", "cent"):
             continue
         if _FRACTION.match(word) and _AMOUNT.match(before) and any(ch.isdigit() for ch in before):
             continue
