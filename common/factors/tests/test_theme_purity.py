@@ -265,6 +265,17 @@ def test_a_plain_partition_that_rounds_over_the_total_still_serves_its_share() -
         total=Decimal("1000"),
         residual=Decimal("-1"),
     )
-    assert result.result.value == Decimal("0.6")
+    assert result.result.value == Decimal("600") / Decimal("1001")
     assert "elimination_not_allocated" not in result.result.flags
     assert result.classified_share == Decimal(1), "never above one"
+
+
+@pytest.mark.parametrize(("in_theme", "out_of_theme"), [("1003", "0"), ("1002", "1")])
+def test_a_plain_partition_that_rounds_over_the_total_serves_no_share_above_one(in_theme, out_of_theme) -> None:
+    """`mart.issuer_theme_purity` checks theme_share <= 1; a share of 1.003 failed the whole run's insert."""
+    segments = [ThemeSegment("A", Decimal(in_theme), True)]
+    if out_of_theme != "0":
+        segments.append(ThemeSegment("B", Decimal(out_of_theme), False))
+    result = purity(segments, total=Decimal("1000"), residual=Decimal("-3"))
+    assert result.result.value == Decimal(in_theme) / Decimal("1003")
+    assert result.result.value <= 1

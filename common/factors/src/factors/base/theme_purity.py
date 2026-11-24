@@ -100,6 +100,8 @@ def theme_purity(
     availability: DataAvailability = (
         "verified" if unclassified == _ZERO and partition_residual == _ZERO else "unverified"
     )
+    # The shares count against the revenue the segments account for: consolidated revenue, or the
+    # segment sum when it is larger (rounding, or gross segments). So no share is above one.
     accounted = consolidated_revenue - min(partition_residual, _ZERO)
     refused = (in_theme + out_of_theme) / accounted < minimum_classified_share
     if refused:
@@ -107,9 +109,8 @@ def theme_purity(
     # Gross segments with an intersegment elimination as the residual (#1851): the elimination
     # belongs to no known segment. The share is a fact only when every segment is in the theme (1)
     # or none is (0); otherwise the row keeps its revenue fields and serves no value.
-    gross = gross_segments and partition_residual < _ZERO
-    whole = gross and in_theme > _ZERO and out_of_theme == _ZERO and unclassified == _ZERO
-    if gross and in_theme > _ZERO and not whole:
+    mixed = in_theme > _ZERO and (out_of_theme > _ZERO or unclassified > _ZERO)
+    if gross_segments and partition_residual < _ZERO and mixed:
         refused = True
         flags.append("elimination_not_allocated")
 
@@ -119,7 +120,7 @@ def theme_purity(
         result=FactorResult(
             factor="theme_purity",
             entity_id=entity_id,
-            value=None if refused else (Decimal(1) if whole else in_theme / consolidated_revenue),
+            value=None if refused else in_theme / accounted,
             unit_family=UnitFamily.RATIO,
             confidence=_ZERO if refused else confidence,
             as_of=as_of,

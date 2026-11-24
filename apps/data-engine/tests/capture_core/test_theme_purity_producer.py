@@ -343,7 +343,7 @@ def test_a_partition_that_rounds_still_lands(connection, seated, governed, monke
 @pytest.mark.parametrize(
     ("extractor", "residual", "share"),
     [
-        ("rule:exhaustive-partition:v1", "-3000000", Decimal("36858000000") / TOTAL),
+        ("rule:exhaustive-partition:v1", "-3000000", Decimal("36858000000") / (TOTAL + Decimal("3000000"))),
         ("rule:elimination-partition:v1", "-3000000", None),
     ],
     ids=["rounding-over-the-total", "gross-with-an-elimination"],
