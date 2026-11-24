@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import re
@@ -12,11 +13,15 @@ from decimal import Decimal
 from typing import Any
 
 from factors.shared.extraction import (
+    RULE_ELIMINATION_PARTITION,
     RULE_SINGLE_SEGMENT,
+    RULE_SUBTOTAL_FREE_ELIMINATION_PARTITION,
+    RULE_SUBTOTAL_FREE_PARTITION,
     Candidate,
     Partition,
     PartitionRefusal,
     SetPartition,
+    select_exhaustive_partition,
     select_first_balancing_set,
 )
 
@@ -132,11 +137,21 @@ class TaggedSegments:
     scale: int
     refusal: str | None = None
     reconciling: tuple[tuple[str, Decimal], ...] = ()
+    eliminations: tuple[tuple[str, Decimal], ...] = ()
+    #: The parts without the members that are subtotals or second spellings of others, and the
+    #: names of those members. The set is tried as tagged first; this variant only after it fails.
+    without_subtotals: tuple[tuple[str, Decimal], ...] = ()
+    subtotals: tuple[str, ...] = ()
+
+    @property
+    def subtotals_removed(self) -> bool:
+        return bool(self.subtotals) and not self.without_subtotals
 
     @property
     def label(self) -> str:
         concept = self.concept.split(":", 1)[-1]
-        return concept if self.shape == "all" else f"{concept} ({self.shape.replace('-', ' ')} only)"
+        label = concept if self.shape == "all" else f"{concept} ({self.shape.replace('-', ' ')} only)"
+        return f"{label} without subtotals" if self.subtotals_removed else label
 
 
 def _collect_axis_members(
@@ -166,6 +181,64 @@ def _reconciling_items(current: Sequence[TaggedFact]) -> tuple[tuple[str, Decima
     return tuple(sorted((member, min(values)) for member, values in items.items() if len(values) == 1))
 
 
+#: An intersegment elimination member only. A member that also names corporate or other
+#: reconciling items (`CorporateReconcilingItemsAndEliminationsMember`) is no elimination alone.
+_ELIMINATION_WORD = re.compile(r"^(?!.*(?:corporate|reconciling|other|unallocated)).*elimination", re.IGNORECASE)
+_SUBTOTAL_SEARCH_LIMIT = 14
+
+
+def _eliminations(current: Sequence[TaggedFact]) -> tuple[tuple[str, Decimal], ...]:
+    """Negative intersegment eliminations on the consolidation axis: the revenue the segments
+    sold to each other, which the filer subtracts from their sum to reach consolidated revenue."""
+    items: dict[str, set[Decimal]] = {}
+    for fact in current:
+        if len(fact.context.dimensions) != 1 or fact.value is None or fact.value >= 0:
+            continue
+        ((axis, member),) = fact.context.dimensions
+        if axis == _CONSOLIDATION_AXIS and _ELIMINATION_WORD.search(member.split(":", 1)[-1]):
+            items.setdefault(member, set()).add(fact.value)
+    return tuple(sorted((member, min(values)) for member, values in items.items() if len(values) == 1))
+
+
+def _is_sum_of_others(value: Decimal, others: Sequence[Decimal], unit: Decimal) -> bool:
+    """`value` equals the sum of two or more of `others` within their rounding: half of the printed
+    unit for each figure. LIN's 15,208M Americas is no sum of 6,661M and 8,549M (15,210M)."""
+    positive = [other for other in others if other > 0]
+    if value <= 0 or len(positive) < 2 or len(positive) > _SUBTOTAL_SEARCH_LIMIT:
+        return False
+    # The most addends that reach each sum: a single member equal to `value` hides no sum of two.
+    sums: dict[Decimal, int] = {Decimal(0): 0}
+    for other in positive:
+        for subtotal, count in list(sums.items()):
+            sums[subtotal + other] = max(sums.get(subtotal + other, 0), count + 1)
+    return any(count >= 2 and abs(subtotal - value) <= (count + 1) * unit / 2 for subtotal, count in sums.items())
+
+
+def _without_subtotals(
+    parts: tuple[tuple[str, Decimal], ...], unit: Decimal
+) -> tuple[tuple[tuple[str, Decimal], ...], tuple[str, ...]]:
+    """The segments without a member that repeats another under a second spelling (COO) or that
+    is the sum of other members on the same axis, a subtotal such as MDT
+    `TotalReportableSegmentsMember` or WEC `PublicUtilityMember` (#1851)."""
+    dropped: list[str] = []
+    unique: list[tuple[str, Decimal]] = []
+    seen: set[tuple[str, Decimal]] = set()
+    for member, value in parts:
+        key = (re.sub(r"[^a-z0-9]", "", segment_name_for(member).lower()), value)
+        if key in seen:
+            dropped.append(member)
+            continue
+        seen.add(key)
+        unique.append((member, value))
+    remaining = list(unique)
+    for member, value in sorted(unique, key=lambda part: part[1], reverse=True):
+        others = [(m, v) for m, v in remaining if m != member]
+        if _is_sum_of_others(value, [v for _, v in others], unit):
+            remaining = others
+            dropped.append(member)
+    return tuple(sorted(remaining)), tuple(dropped)
+
+
 def tagged_segment_revenues(filing: bytes | InlineXbrl) -> tuple[TaggedSegments, ...]:
     """Return candidate annual segment revenue sets ordered by priority."""
     document = filing if isinstance(filing, InlineXbrl) else InlineXbrl(filing)
@@ -181,6 +254,7 @@ def tagged_segment_revenues(filing: bytes | InlineXbrl) -> tuple[TaggedSegments,
     for concept in _REVENUE_CONCEPTS:
         current = [fact for fact in facts if fact.concept == concept and fact.context.end == latest]
         reconciling = _reconciling_items(current)
+        eliminations = _eliminations(current)
         by_shape: dict[str, dict[str, set[Decimal | None]]] = {}
         scale = 0
         for shape, extra in _SHAPES:
@@ -194,7 +268,8 @@ def tagged_segment_revenues(filing: bytes | InlineXbrl) -> tuple[TaggedSegments,
         candidates = [("all", union)] if union else []
         candidates += [(shape, members) for shape, members in by_shape.items() if members != union]
         concept_sets = [
-            _tagged_set(concept, shape, latest, members, scale, reconciling) for shape, members in candidates
+            _tagged_set(concept, shape, latest, members, scale, reconciling, eliminations)
+            for shape, members in candidates
         ]
         found.extend(concept_sets)
         if concept_sets and all(seg.refusal == "geographic_axis_members" for seg in concept_sets):
@@ -205,7 +280,14 @@ def tagged_segment_revenues(filing: bytes | InlineXbrl) -> tuple[TaggedSegments,
                 prod_members.pop("us-gaap:ProductMember", None)
             if prod_members:
                 prod_set = _tagged_set(
-                    concept, "product-axis", latest, prod_members, prod_scale, reconciling, check_geographic=False
+                    concept,
+                    "product-axis",
+                    latest,
+                    prod_members,
+                    prod_scale,
+                    reconciling,
+                    eliminations,
+                    check_geographic=False,
                 )
                 if prod_set.refusal is None and prod_set.parts:
                     found.append(prod_set)
@@ -219,11 +301,14 @@ def _tagged_set(
     members: dict[str, set[Decimal | None]],
     scale: int,
     reconciling: tuple[tuple[str, Decimal], ...],
+    eliminations: tuple[tuple[str, Decimal], ...] = (),
     *,
     check_geographic: bool = True,
 ) -> TaggedSegments:
     refusal: str | None = None
     parts: tuple[tuple[str, Decimal], ...] = ()
+    without: tuple[tuple[str, Decimal], ...] = ()
+    subtotals: tuple[str, ...] = ()
     if any(None in tagged for tagged in members.values()):
         refusal = "unreadable_value"
     elif any(len(tagged) > 1 for tagged in members.values()):
@@ -234,7 +319,20 @@ def _tagged_set(
             refusal, parts = "negative_part", ()
         elif check_geographic and parts and all(_is_geographic_member(member) for member, _ in parts):
             refusal, parts = "geographic_axis_members", ()
-    return TaggedSegments(concept, shape, period_end, parts, scale, refusal, () if refusal else reconciling)
+        else:
+            without, subtotals = _without_subtotals(parts, Decimal(10) ** scale)
+    return TaggedSegments(
+        concept,
+        shape,
+        period_end,
+        parts,
+        scale,
+        refusal,
+        () if refusal else reconciling,
+        () if refusal else eliminations,
+        without if subtotals else (),
+        subtotals,
+    )
 
 
 @dataclass(frozen=True)
@@ -243,12 +341,22 @@ class TaggedPartition:
     parts: tuple[tuple[str, Decimal], ...]
     reconciling: str | None
     verdict: Partition
+    elimination: str | None = None
+
+    @property
+    def extractor(self) -> str:
+        """The rule that accepted the set, so that `withdrawn_extractors` can retract one rule."""
+        if self.segments.subtotals_removed:
+            return RULE_SUBTOTAL_FREE_ELIMINATION_PARTITION if self.elimination else RULE_SUBTOTAL_FREE_PARTITION
+        return RULE_ELIMINATION_PARTITION if self.elimination else self.verdict.extractor
 
 
 def accepted_tagged_partition(
     tagged: Sequence[TaggedSegments], *, total: Decimal, period_end: date | None
 ) -> TaggedPartition | list[str]:
-    """Select first balancing tagged segment set."""
+    """Select the first balancing tagged segment set. The sets are tried as tagged (plain, then
+    with one reconciling item), then closed by one tagged elimination, and only then without
+    subtotals: a tagged elimination is the filer's own fact, a subtotal is an inference from sums."""
     refusals: list[str] = []
     eligible: list[TaggedSegments] = []
     for segments in tagged:
@@ -274,6 +382,19 @@ def accepted_tagged_partition(
             completion = segments.reconciling[result.completion_index]
             parts = (*parts, completion)
         return TaggedPartition(segments, parts, completion[0] if completion else None, result.partition)
+    for segments, refusal in zip(eligible, result, strict=False):
+        if (closed := _closed_by_elimination(segments, refusal, total=total)) is not None:
+            return closed
+    variants = [
+        dataclasses.replace(segments, parts=segments.without_subtotals, without_subtotals=())
+        for segments in eligible
+        if segments.without_subtotals
+    ]
+    if variants:
+        accepted = accepted_tagged_partition(variants, total=total, period_end=period_end)
+        if isinstance(accepted, TaggedPartition):
+            return accepted
+        refusals.extend(accepted)
     for segments, refusal in zip(eligible, result, strict=False):
         refusals.append(f"{segments.label}: {refusal.value} ({len(segments.parts)} members)")
         if refusal is PartitionRefusal.SHORT and segments.reconciling:
@@ -351,6 +472,34 @@ _CONSOLIDATED_REVENUE_SQL = (
 class ConsolidatedRevenue:
     value: Decimal
     period_end: date
+
+
+def _closed_by_elimination(
+    segments: TaggedSegments, refusal: PartitionRefusal, *, total: Decimal
+) -> TaggedPartition | None:
+    """Segments that sum over consolidated revenue by exactly one tagged intersegment elimination
+    (#1851: 15 of 30 S&P 500 refusals sampled on staging). The segments stay gross; the
+    elimination is the partition residual, which theme purity flags as `partition_residual`."""
+    if refusal is not PartitionRefusal.OVER:
+        return None
+    tolerance = SEGMENT_TOLERANCE * Decimal(10) ** segments.scale
+    candidates = [Candidate(float(value), member) for member, value in segments.parts]
+    for member, value in segments.eliminations:
+        verdict = select_exhaustive_partition(
+            [*candidates, Candidate(float(value), member)], total=total, tolerance=tolerance
+        )
+        if isinstance(verdict, Partition):
+            gross = sum((part for _, part in segments.parts), Decimal(0))
+            partition = Partition(
+                candidate_indices=tuple(range(len(segments.parts))),
+                total=total,
+                parts_sum=gross,
+                residual=total - gross,
+                extractor=verdict.extractor,
+                reason=f"{len(segments.parts)} parts sum to {gross}; the elimination {member} of {value} closes {total}",
+            )
+            return TaggedPartition(segments, segments.parts, None, partition, elimination=member)
+    return None
 
 
 def consolidated_revenue(connection: Any, cik: int, *, cutoff: datetime) -> ConsolidatedRevenue | None:
@@ -567,6 +716,9 @@ def extract_segment_revenue(
         named = ", ".join(f"{name}={value}" for name, value in parts)
         verdict = accepted.verdict
         reconciling_ref = f" reconciling={accepted.reconciling}" if accepted.reconciling else ""
+        reconciling_ref += f" elimination={accepted.elimination}" if accepted.elimination else ""
+        if accepted.segments.subtotals_removed:
+            reconciling_ref += f" subtotals={','.join(accepted.segments.subtotals)}"
         members_csv = ",".join(member for member, _ in accepted.segments.parts)
         return _land_partition(
             connection,
@@ -575,7 +727,7 @@ def extract_segment_revenue(
             oracle=oracle,
             parts=parts,
             residual=Decimal(str(verdict.residual)),
-            extractor=verdict.extractor,
+            extractor=accepted.extractor,
             evidence_ref=(
                 f"{base_ref} recall=xbrl concept={accepted.segments.concept} "
                 f"shape={accepted.segments.shape} members={members_csv}{reconciling_ref}"

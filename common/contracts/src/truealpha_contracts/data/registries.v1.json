@@ -530,6 +530,9 @@
   "confidence_policies": {
     "segment-revenue-confidence:v1": {
       "rule:exhaustive-partition:v1": "0.90",
+      "rule:elimination-partition:v1": "0.85",
+      "rule:subtotal-free-partition:v1": "0.80",
+      "rule:subtotal-free-elimination-partition:v1": "0.80",
       "rule:single-segment:v4": "0.75",
       "model-selection": "0.85"
     },
@@ -562,7 +565,7 @@
     "segment_revenue": {
       "metric": "segment_revenue",
       "definition": "Revenue attributed to one reportable segment, as the issuer's latest annual filing states it in its own segment table.",
-      "acceptance_rule": "The parts, not a part. A segment set is the value only when it accounts for the issuer's consolidated revenue: a missed segment silently raises every remaining segment's share, so a set that does not balance is refused rather than ranked. Intersegment revenue is excluded, not summed.",
+      "acceptance_rule": "The parts, not a part. A segment set is the value only when it accounts for the issuer's consolidated revenue: a missed segment silently raises every remaining segment's share, so a set that does not balance is refused rather than ranked. A set that sums over the total balances only when one tagged intersegment elimination closes the gap: the segments then land gross, as the segment table states them, and the elimination is the residual. A member that is the sum of other members is a subtotal, not a segment.",
       "kind": "hard",
       "evidence": "filing_span",
       "confidence_policy_id": "segment-revenue-confidence:v1",

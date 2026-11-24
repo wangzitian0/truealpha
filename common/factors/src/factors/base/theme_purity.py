@@ -38,13 +38,19 @@ class ThemePurity:
 
     @property
     def unclassified_share(self) -> Decimal:
-        return _ZERO if self.consolidated_revenue <= _ZERO else self.unclassified_revenue / self.consolidated_revenue
+        return _ZERO if self.accounted_revenue <= _ZERO else self.unclassified_revenue / self.accounted_revenue
 
     @property
     def classified_share(self) -> Decimal:
-        if self.consolidated_revenue <= _ZERO:
+        if self.accounted_revenue <= _ZERO:
             return _ZERO
-        return (self.in_theme_revenue + self.out_of_theme_revenue) / self.consolidated_revenue
+        return (self.in_theme_revenue + self.out_of_theme_revenue) / self.accounted_revenue
+
+    @property
+    def accounted_revenue(self) -> Decimal:
+        """The revenue the shares count against: consolidated revenue, or the gross segment sum
+        when the segments land gross with an intersegment elimination as the residual (#1851)."""
+        return self.consolidated_revenue - min(self.partition_residual, _ZERO)
 
 
 @factor("theme_purity", kind="base", module=6)
@@ -58,7 +64,11 @@ def theme_purity(
     partition_residual: Decimal = _ZERO,
     confidence: Decimal = _ZERO,
     minimum_classified_share: Decimal = _ZERO,
+    gross_segments: bool = False,
 ) -> ThemePurity:
+    """`gross_segments`: the partition rule landed the segments gross, with the intersegment
+    elimination as the residual. A negative residual of a plain partition is rounding."""
+
     def refusal(flag: str, total: Decimal) -> ThemePurity:
         return ThemePurity(
             entity_id=entity_id,
@@ -90,9 +100,19 @@ def theme_purity(
     availability: DataAvailability = (
         "verified" if unclassified == _ZERO and partition_residual == _ZERO else "unverified"
     )
-    refused = (in_theme + out_of_theme) / consolidated_revenue < minimum_classified_share
+    # The shares count against the revenue the segments account for: consolidated revenue, or the
+    # segment sum when it is larger (rounding, or gross segments). So no share is above one.
+    accounted = consolidated_revenue - min(partition_residual, _ZERO)
+    refused = (in_theme + out_of_theme) / accounted < minimum_classified_share
     if refused:
         flags.append("below_minimum_classified_share")
+    # Gross segments with an intersegment elimination as the residual (#1851): the elimination
+    # belongs to no known segment. The share is a fact only when every segment is in the theme (1)
+    # or none is (0); otherwise the row keeps its revenue fields and serves no value.
+    mixed = in_theme > _ZERO and (out_of_theme > _ZERO or unclassified > _ZERO)
+    if gross_segments and partition_residual < _ZERO and mixed:
+        refused = True
+        flags.append("elimination_not_allocated")
 
     return ThemePurity(
         entity_id=entity_id,
@@ -100,7 +120,7 @@ def theme_purity(
         result=FactorResult(
             factor="theme_purity",
             entity_id=entity_id,
-            value=None if refused else in_theme / consolidated_revenue,
+            value=None if refused else in_theme / accounted,
             unit_family=UnitFamily.RATIO,
             confidence=_ZERO if refused else confidence,
             as_of=as_of,

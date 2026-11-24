@@ -31,7 +31,15 @@ AVGO = (
 AVGO_TOTAL = Decimal("63887")
 
 
-def purity(segments, *, total=AVGO_TOTAL, residual=Decimal(0), confidence=Decimal("0.9")) -> ThemePurity:
+def purity(
+    segments,
+    *,
+    total=AVGO_TOTAL,
+    residual=Decimal(0),
+    confidence=Decimal("0.9"),
+    minimum=Decimal(0),
+    gross=False,
+) -> ThemePurity:
     return theme_purity(
         list(segments),
         entity_id=ISSUER,
@@ -40,6 +48,8 @@ def purity(segments, *, total=AVGO_TOTAL, residual=Decimal(0), confidence=Decima
         consolidated_revenue=total,
         partition_residual=residual,
         confidence=confidence,
+        minimum_classified_share=minimum,
+        gross_segments=gross,
     )
 
 
@@ -193,3 +203,79 @@ def test_classified_share_counts_the_residual_against_the_claim() -> None:
     result = purity(incomplete, residual=Decimal("20000"))
     assert result.classified_share == Decimal("43887") / AVGO_TOTAL
     assert result.classified_share + result.unclassified_share < Decimal(1), "the residual is the gap"
+
+
+def test_gross_segments_in_and_out_of_the_theme_serve_no_share() -> None:
+    """#1851: INTC's segments land gross, 70,536M against 52,853M, with the elimination as the
+    residual. Foundry sells almost all to the other segments, so the elimination belongs to no
+    known segment, and a share of in-theme gross over net revenue (0.66 here) is no fact."""
+    for in_theme in (Decimal("34745"), Decimal("60000")):
+        result = purity(
+            [ThemeSegment("A", in_theme, True), ThemeSegment("B", Decimal("70536") - in_theme, False)],
+            total=Decimal("52853"),
+            residual=Decimal("-17683"),
+            gross=True,
+        )
+        assert result.result.value is None
+        assert "elimination_not_allocated" in result.result.flags
+        assert result.in_theme_revenue + result.out_of_theme_revenue + result.partition_residual == Decimal("52853")
+        assert result.classified_share == Decimal(1), "gross segments count against their own sum"
+
+
+def test_every_segment_in_the_theme_is_all_of_the_revenue_whatever_the_elimination() -> None:
+    result = purity(
+        [ThemeSegment("A", Decimal("60000"), True), ThemeSegment("B", Decimal("10536"), True)],
+        total=Decimal("52853"),
+        residual=Decimal("-17683"),
+        gross=True,
+    )
+    assert result.result.value == Decimal(1)
+    assert "partition_residual" in result.result.flags
+
+
+def test_no_segment_in_the_theme_is_none_of_the_revenue_whatever_the_elimination() -> None:
+    result = purity(
+        [ThemeSegment("A", Decimal("60000"), False), ThemeSegment("B", Decimal("10536"), False)],
+        total=Decimal("52853"),
+        residual=Decimal("-17683"),
+        gross=True,
+    )
+    assert result.result.value == Decimal(0)
+    assert "elimination_not_allocated" not in result.result.flags
+
+
+def test_the_classified_share_floor_counts_gross_segments_against_their_own_sum() -> None:
+    """35% of the gross segment sum unclassified: below the 0.80 floor, though 0.86 of net revenue."""
+    result = purity(
+        [ThemeSegment("A", Decimal("45848"), False), ThemeSegment("B", Decimal("24688"), None)],
+        total=Decimal("52853"),
+        residual=Decimal("-17683"),
+        gross=True,
+        minimum=Decimal("0.80"),
+    )
+    assert result.result.value is None
+    assert "below_minimum_classified_share" in result.result.flags
+
+
+def test_a_plain_partition_that_rounds_over_the_total_still_serves_its_share() -> None:
+    """Segments rounded to the million can sum 1M over the total; that is rounding, not gross
+    segments, so the row with segments in and out of the theme serves its share."""
+    result = purity(
+        [ThemeSegment("A", Decimal("600"), True), ThemeSegment("B", Decimal("401"), False)],
+        total=Decimal("1000"),
+        residual=Decimal("-1"),
+    )
+    assert result.result.value == Decimal("600") / Decimal("1001")
+    assert "elimination_not_allocated" not in result.result.flags
+    assert result.classified_share == Decimal(1), "never above one"
+
+
+@pytest.mark.parametrize(("in_theme", "out_of_theme"), [("1003", "0"), ("1002", "1")])
+def test_a_plain_partition_that_rounds_over_the_total_serves_no_share_above_one(in_theme, out_of_theme) -> None:
+    """`mart.issuer_theme_purity` checks theme_share <= 1; a share of 1.003 failed the whole run's insert."""
+    segments = [ThemeSegment("A", Decimal(in_theme), True)]
+    if out_of_theme != "0":
+        segments.append(ThemeSegment("B", Decimal(out_of_theme), False))
+    result = purity(segments, total=Decimal("1000"), residual=Decimal("-3"))
+    assert result.result.value == Decimal(in_theme) / Decimal("1003")
+    assert result.result.value <= 1

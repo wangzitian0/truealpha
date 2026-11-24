@@ -16,21 +16,36 @@ do is recorded on that issue.
 
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 
+import pytest
+from data_engine.contracts.standards import confidence_for
 from data_engine.datahub.standards.filing_extraction import filing_plain_text
 from data_engine.datahub.standards.segment_extraction import (
     TaggedPartition,
+    TaggedSegments,
+    _eliminations,
     _is_geographic_member,
+    _is_sum_of_others,
+    _without_subtotals,
     accepted_tagged_partition,
     declared_segment_count,
     segment_name_for,
     single_segment_statement,
     tagged_segment_revenues,
 )
+from factors.shared.extraction import (
+    RULE_ELIMINATION_PARTITION,
+    RULE_EXHAUSTIVE_PARTITION,
+    RULE_SUBTOTAL_FREE_ELIMINATION_PARTITION,
+    RULE_SUBTOTAL_FREE_PARTITION,
+)
 
 FILINGS = Path(__file__).resolve().parents[1] / "samples" / "filings"
+CONSOLIDATION_AXIS = "srt:ConsolidationItemsAxis"
 
 
 def test_the_filers_tagged_count_decides_one_segment_and_a_sentence_does_not() -> None:
@@ -230,3 +245,183 @@ def test_geographic_business_segments_are_refused_and_product_axis_fallback_bala
         "aapl:WearablesHomeandAccessoriesMember": Decimal("35686000000"),
         "us-gaap:ServiceMember": Decimal("109158000000"),
     }
+
+
+EXCERPTS = FILINGS / "segment_excerpts"
+
+
+def test_subtotals_and_second_spellings_on_the_segment_axis_are_not_segments() -> None:
+    """#1851, staging 2026-11-24: about 76 S&P 500 sets summed over consolidated revenue, many by
+    about 100 %, because the filer also tags a subtotal on the segment axis (MLM
+    `ReportableSegmentsMember` = all, `BuildingMaterialsBusinessMember` = East + West) or one
+    segment under two spellings (COO). The excerpts are the filers' own tags, verbatim."""
+    mlm = tagged_segment_revenues((EXCERPTS / "MLM_10K_000119312526059193_revenue.html").read_bytes())[0]
+    assert {m.split(":")[-1] for m in mlm.subtotals} == {"ReportableSegmentsMember", "BuildingMaterialsBusinessMember"}
+    assert len(mlm.parts) == 5, "the set as tagged stays; the variant is tried only after it fails"
+    assert sum((v for _, v in mlm.without_subtotals), Decimal(0)) == Decimal("6150000000")
+    accepted = accepted_tagged_partition([mlm], total=Decimal("6150000000"), period_end=mlm.period_end)
+    assert isinstance(accepted, TaggedPartition) and accepted.verdict.residual == 0
+    assert accepted.segments.subtotals_removed and len(accepted.parts) == 3
+    assert accepted.extractor == RULE_SUBTOTAL_FREE_PARTITION
+
+    coo = tagged_segment_revenues((EXCERPTS / "COO_10K_000162828025055615_revenue.html").read_bytes())[0]
+    assert len(coo.without_subtotals) == 2 and len(coo.subtotals) == 2
+    accepted = accepted_tagged_partition([coo], total=Decimal("4092400000"), period_end=coo.period_end)
+    assert isinstance(accepted, TaggedPartition) and sum((v for _, v in accepted.parts), Decimal(0)) == Decimal(
+        "4092400000"
+    )
+
+
+@pytest.mark.parametrize(
+    ("name", "total", "subtotal", "elimination"),
+    [
+        ("WEC_10K_000078332526000018_revenue.html", "9800100000", "PublicUtilityMember", "-476700000"),
+        (
+            "INTC_10K_000005086326000011_revenue.html",
+            "52853000000",
+            "ClientComputingGroupDatacenterAndAIAndNetworkAndEdgeMember",
+            "-17683000000",
+        ),
+    ],
+)
+def test_a_subtotal_out_and_the_tagged_elimination_in_balance_the_segments(
+    name: str, total: str, subtotal: str, elimination: str
+) -> None:
+    tagged = tagged_segment_revenues((EXCERPTS / name).read_bytes())
+    assert subtotal in {m.split(":")[-1] for m in tagged[0].subtotals}
+    accepted = accepted_tagged_partition(tagged, total=Decimal(total), period_end=tagged[0].period_end)
+    assert isinstance(accepted, TaggedPartition), accepted
+    assert accepted.elimination is not None
+    assert accepted.extractor == RULE_SUBTOTAL_FREE_ELIMINATION_PARTITION
+    assert accepted.verdict.residual == Decimal(total) - sum((v for _, v in accepted.parts), Decimal(0))
+    assert abs(accepted.verdict.residual - Decimal(elimination)) <= Decimal("5000000")
+
+
+def test_a_segment_that_merely_equals_one_other_is_no_subtotal() -> None:
+    """A subtotal is the sum of two or more members; two segments of equal revenue both stay."""
+    from data_engine.datahub.standards.segment_extraction import _without_subtotals
+
+    parts = (("x:AlphaMember", Decimal("100")), ("x:BetaMember", Decimal("100")), ("x:GammaMember", Decimal("50")))
+    kept, dropped = _without_subtotals(parts, Decimal("5"))
+    assert kept == parts and dropped == ()
+
+
+def test_a_set_that_balances_as_tagged_is_taken_as_tagged() -> None:
+    """#1851 replay on staging: LIN's Americas segment (15,208M) is within 2M of APAC plus EMEA
+    (15,210M), and a loose bound dropped it as a subtotal, so a set that balanced before was
+    refused. The set as tagged is tried first, and the bound is half a printed unit per figure."""
+    from datetime import date
+
+    from data_engine.datahub.standards.segment_extraction import TaggedSegments, _is_sum_of_others
+
+    unit = Decimal("1000000")
+    assert not _is_sum_of_others(Decimal("15208") * unit, [Decimal("6661") * unit, Decimal("8549") * unit], unit)
+    assert _is_sum_of_others(
+        Decimal("33079") * unit,
+        [Decimal("13976") * unit, Decimal("8815") * unit, Decimal("10287") * unit],
+        unit,
+    ), "MDT: three segments rounded to the million sum to 33,078M against a 33,079M subtotal"
+
+    lin = TaggedSegments(
+        concept="us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
+        shape="all",
+        period_end=date(2025, 12, 31),
+        parts=(
+            ("lin:APACSegmentMember", Decimal("6661000000")),
+            ("lin:AmericasSegmentMember", Decimal("15208000000")),
+            ("lin:EMEASegmentMember", Decimal("8549000000")),
+            ("lin:EngineeringSegmentMember", Decimal("2250000000")),
+            ("us-gaap:CorporateAndOtherMember", Decimal("1318000000")),
+        ),
+        scale=6,
+    )
+    accepted = accepted_tagged_partition([lin], total=Decimal("33986000000"), period_end=date(2025, 12, 31))
+    assert isinstance(accepted, TaggedPartition)
+    assert len(accepted.parts) == 5 and not accepted.segments.subtotals_removed
+
+
+def _set(parts, *, reconciling=(), eliminations=(), without=(), subtotals=()) -> TaggedSegments:
+    return TaggedSegments(
+        concept="us-gaap:Revenues",
+        shape="all",
+        period_end=date(2025, 12, 31),
+        parts=tuple(parts),
+        scale=0,
+        reconciling=tuple(reconciling),
+        eliminations=tuple(eliminations),
+        without_subtotals=tuple(without),
+        subtotals=tuple(subtotals),
+    )
+
+
+def test_the_set_as_tagged_wins_over_its_variant_without_subtotals() -> None:
+    """A balances as B + C, and the set as tagged balances 200. The variant without A balances
+    too, with the reconciling item, but it is tried only after every set as tagged fails."""
+    tagged = _set(
+        [("x:AMember", Decimal(100)), ("x:BMember", Decimal(60)), ("x:CMember", Decimal(40))],
+        reconciling=[("us-gaap:CorporateNonSegmentMember", Decimal(100))],
+        without=[("x:BMember", Decimal(60)), ("x:CMember", Decimal(40))],
+        subtotals=["x:AMember"],
+    )
+    accepted = accepted_tagged_partition([tagged], total=Decimal(200), period_end=tagged.period_end)
+    assert isinstance(accepted, TaggedPartition)
+    assert [m for m, _ in accepted.parts] == ["x:AMember", "x:BMember", "x:CMember"]
+    assert accepted.reconciling is None and not accepted.segments.subtotals_removed
+    assert accepted.extractor == RULE_EXHAUSTIVE_PARTITION
+
+
+def test_a_tagged_elimination_wins_over_a_subtotal_inference() -> None:
+    """Both close 200: the elimination is the filer's own fact, the subtotal an inference from sums."""
+    tagged = _set(
+        [("x:AMember", Decimal(150)), ("x:BMember", Decimal(100)), ("x:CMember", Decimal(50))],
+        eliminations=[("us-gaap:IntersegmentEliminationMember", Decimal(-100))],
+        without=[("x:AMember", Decimal(150)), ("x:CMember", Decimal(50))],
+        subtotals=["x:BMember"],
+    )
+    accepted = accepted_tagged_partition([tagged], total=Decimal(200), period_end=tagged.period_end)
+    assert isinstance(accepted, TaggedPartition)
+    assert accepted.elimination == "us-gaap:IntersegmentEliminationMember"
+    assert accepted.verdict.residual == Decimal(-100) and accepted.extractor == RULE_ELIMINATION_PARTITION
+
+
+def _fact(member: str, value: str) -> SimpleNamespace:
+    return SimpleNamespace(value=Decimal(value), context=SimpleNamespace(dimensions=((CONSOLIDATION_AXIS, member),)))
+
+
+def test_only_a_negative_intersegment_elimination_is_an_elimination() -> None:
+    facts = [
+        _fact("us-gaap:IntersegmentEliminationMember", "-476700000"),
+        _fact("us-gaap:MaterialReconcilingItemsMember", "-90"),
+        _fact("x:InterSegmentEliminationsMember", "120"),
+        _fact("x:CorporateReconcilingItemsAndEliminationsMember", "-300"),
+        _fact("x:OtherEliminationMember", "-5"),
+    ]
+    assert _eliminations(facts) == (("us-gaap:IntersegmentEliminationMember", Decimal("-476700000")),)
+    twice = [_fact("x:EliminationsMember", "-10"), _fact("x:EliminationsMember", "-12")]
+    assert _eliminations(twice) == (), "one member with two values is no fact"
+
+
+def test_a_sum_of_two_members_is_found_whatever_their_order() -> None:
+    assert _is_sum_of_others(Decimal(100), [Decimal(100), Decimal(50), Decimal(50)], Decimal(1))
+    assert _is_sum_of_others(Decimal(100), [Decimal(50), Decimal(50), Decimal(100)], Decimal(1))
+    for names in (
+        ("x:AMember", "x:BMember", "x:CMember", "x:DMember"),
+        ("x:YMember", "x:ZMember", "x:AMember", "x:BMember"),
+    ):
+        parts = tuple(zip(names, (Decimal(100), Decimal(100), Decimal(50), Decimal(50)), strict=True))
+        kept, dropped = _without_subtotals(tuple(sorted(parts)), Decimal(1))
+        assert sorted(v for _, v in kept) == [Decimal(50), Decimal(50)] and len(dropped) == 2
+
+
+@pytest.mark.parametrize(
+    ("rule", "confidence"),
+    [
+        (RULE_EXHAUSTIVE_PARTITION, "0.90"),
+        (RULE_ELIMINATION_PARTITION, "0.85"),
+        (RULE_SUBTOTAL_FREE_PARTITION, "0.80"),
+        (RULE_SUBTOTAL_FREE_ELIMINATION_PARTITION, "0.80"),
+    ],
+)
+def test_every_partition_rule_has_its_own_confidence(rule: str, confidence: str) -> None:
+    """Each rule lands under its own extractor, so `withdrawn_extractors` can retract one rule."""
+    assert confidence_for("segment-revenue-confidence:v1", rule) == Decimal(confidence)

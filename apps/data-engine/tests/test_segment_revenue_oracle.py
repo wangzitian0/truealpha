@@ -574,16 +574,28 @@ def test_tagged_segment_revenue_lands_before_any_table_is_read(monkeypatch) -> N
     assert "aapl:IPhoneMember" in evidence
 
 
-def test_a_tagged_set_that_does_not_balance_is_refused_with_each_sets_reason(monkeypatch) -> None:
-    """ADP's two segments exceed its total by the intersegment revenue; JPM's three bank segments
-    fall short by Corporate, whose +7,025M is off by the -3,134M reconciling item beside it. Each is
-    a refusal naming the set, its shape and which way — never a landed set, and never a negative
-    part to make one balance."""
+def test_segments_over_the_total_by_one_tagged_elimination_land_gross_with_the_elimination_as_residual(
+    monkeypatch,
+) -> None:
+    """#1851, staging 2026-11-24: in 15 of 30 sampled S&P 500 refusals the segments exceeded
+    consolidated revenue by exactly the intersegment elimination the filer tags beside them. ADP's
+    two segments exceed its 21,947.4M by its `IntersegmentEliminationMember`. The segments land as
+    tagged (never a negative part), the elimination is the partition residual that theme purity
+    flags, and the row names it."""
     adp = _packaged("ADP_10K_000000867026000030.html", cik=8670, filed=date(2026, 8, 6))
     outcome, rows = _extract(monkeypatch, adp, ("21947400000", "2026-06-30"))
-    assert outcome.status == "no_candidate" and rows == []
-    assert "RevenueFromContractWithCustomerExcludingAssessedTax: sums_over_total (2 members)" in outcome.detail
+    assert outcome.status == "resolved", outcome.detail
+    assert len(rows) == 2 and all(r["segment_revenue"] > 0 for r in rows)
+    gross = sum(r["segment_revenue"] for r in rows)
+    assert gross > Decimal("21947400000")
+    assert {r["partition_residual"] for r in rows} == {Decimal("21947400000") - gross}
+    assert "elimination=us-gaap:IntersegmentEliminationMember" in rows[0]["evidence_ref"]
 
+
+def test_a_tagged_set_that_does_not_balance_is_refused_with_each_sets_reason(monkeypatch) -> None:
+    """JPM's three bank segments fall short by Corporate, whose +7,025M is off by the -3,134M
+    reconciling item beside it. The refusal names the set, its shape and which way — never a landed
+    set, and never a negative part to make one balance."""
     jpm = _packaged("JPM_10K_000162828026008131.html", cik=19617, filed=date(2026, 2, 13))
     outcome, rows = _extract(monkeypatch, jpm, ("182447000000", "2025-12-31"))
     assert outcome.status == "no_candidate" and rows == []
