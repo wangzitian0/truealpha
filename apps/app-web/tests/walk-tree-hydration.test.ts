@@ -66,10 +66,14 @@ class FakeResponse {
 /** One page. Each navigation renders `main` at once and hydrates after the
  * delay that the scenario gives for that attempt.
  *
- * #1856: a visit listed in `networkErrorVisits` fails like Chromium does on a
- * connection reset. `goto` throws `net::ERR_CONNECTION_RESET`, and the page
- * commits Chromium's error page ERROR_PAGE_COMMIT_MS later. A `goto` that starts
- * before that commit is interrupted by it, as measured in a real browser. */
+ * #1856: a visit listed in `networkErrors` fails like Chromium does on a network
+ * error. `goto` throws `net::ERR_<code>`. When `errorPage` is true, the page
+ * commits Chromium's error page ERROR_PAGE_COMMIT_MS later, and a `goto` that
+ * starts before that commit is interrupted by it, as measured in a real browser.
+ * When it is false (for example `ERR_ABORTED` on an HTTP 204), no error page comes. */
+type NetworkError = { code: string; errorPage: boolean };
+const RESET: NetworkError = { code: "CONNECTION_RESET", errorPage: true };
+
 class FakePage {
 	readonly visits: string[] = [];
 	private current = "about:blank";
@@ -77,7 +81,7 @@ class FakePage {
 	private errorPageAt = NEVER;
 	constructor(
 		private readonly hydrationDelayMs: number[],
-		private readonly networkErrorVisits: number[] = [],
+		private readonly networkErrors: Record<number, NetworkError> = {},
 	) {}
 
 	/** Commit Chromium's error page once its time has come. */
@@ -101,9 +105,10 @@ class FakePage {
 		if (this.errorPageAt !== NEVER) {
 			throw new Error(`page.goto: Navigation to "${url}" is interrupted by another navigation to "${CHROME_ERROR_PAGE}"`);
 		}
-		if (this.networkErrorVisits.includes(visit)) {
-			this.errorPageAt = Date.now() + ERROR_PAGE_COMMIT_MS;
-			throw new Error(`page.goto: net::ERR_CONNECTION_RESET at ${url}\nCall log:\n  - navigating to "${url}", waiting until "domcontentloaded"`);
+		const networkError = this.networkErrors[visit];
+		if (networkError !== undefined) {
+			if (networkError.errorPage) this.errorPageAt = Date.now() + ERROR_PAGE_COMMIT_MS;
+			throw new Error(`page.goto: net::ERR_${networkError.code} at ${url}\nCall log:\n  - navigating to "${url}", waiting until "domcontentloaded"`);
 		}
 		const delay = this.hydrationDelayMs[visit] ?? NEVER;
 		this.current = url;
@@ -155,8 +160,8 @@ class FakePage {
 	}
 }
 
-async function navigate(path: string, hydrationDelayMs: number[], timeouts = TIMEOUTS, networkErrorVisits: number[] = []) {
-	const page = new FakePage(hydrationDelayMs, networkErrorVisits);
+async function navigate(path: string, hydrationDelayMs: number[], timeouts = TIMEOUTS, networkErrors: Record<number, NetworkError> = {}) {
+	const page = new FakePage(hydrationDelayMs, networkErrors);
 	const lines: string[] = [];
 	const started = Date.now();
 	const outcome = await navigation
@@ -223,7 +228,7 @@ async function navigate(path: string, hydrationDelayMs: number[], timeouts = TIM
 
 // ─── (b5) #1856: a connection reset on attempt 1 costs one printed retry ─────
 {
-	const { outcome, page, lines, elapsedMs } = await navigate("/login", [NEVER, 20], TIMEOUTS, [0]);
+	const { outcome, page, lines, elapsedMs } = await navigate("/login", [NEVER, 20], TIMEOUTS, { 0: RESET });
 	assert(
 		outcome.kind === "resolved",
 		`one connection reset must cost one retry, not the route; Chromium's error page interrupted the retry (#1856): ${JSON.stringify(outcome)}`,
@@ -238,7 +243,7 @@ async function navigate(path: string, hydrationDelayMs: number[], timeouts = TIM
 
 // ─── (b6) #1856: a reset on both attempts is an outage and still fails ──────
 {
-	const { outcome, page } = await navigate("/login", [NEVER, NEVER], TIMEOUTS, [0, 1]);
+	const { outcome, page } = await navigate("/login", [NEVER, NEVER], TIMEOUTS, { 0: RESET, 1: RESET });
 	assert(outcome.kind === "rejected", "gotoStable resolved although both attempts got a connection reset");
 	assert(
 		outcome.message.includes("attempt 1: page.goto: net::ERR_CONNECTION_RESET") &&
@@ -246,6 +251,32 @@ async function navigate(path: string, hydrationDelayMs: number[], timeouts = TIM
 		`both attempts must reach the server and fail on their own reset, not on the error page: ${outcome.message}`,
 	);
 	assert(page.visits.length === 2, `an outage gets one retry; gotoStable navigated ${page.visits.length} times`);
+}
+
+// ─── (b7) #1856: every network error with an error page gets the wait, not only a reset
+{
+	const { outcome } = await navigate("/login", [NEVER, 20], TIMEOUTS, { 0: { code: "CONNECTION_REFUSED", errorPage: true } });
+	assert(outcome.kind === "resolved", `a refused connection on attempt 1 must cost one retry, like a reset: ${JSON.stringify(outcome)}`);
+}
+
+// ─── (b8) #1856: an error page that never commits bounds the wait, and the retry decides
+{
+	const { outcome, elapsedMs } = await navigate("/login", [NEVER, 20], TIMEOUTS, { 0: { code: "EMPTY_RESPONSE", errorPage: false } });
+	assert(
+		outcome.kind === "resolved",
+		`the error-page wait has no failure of its own; the retry hydrated, so gotoStable must resolve: ${JSON.stringify(outcome)}`,
+	);
+	assert(
+		elapsedMs >= TIMEOUTS.errorPageMs && elapsedMs < TIMEOUTS.errorPageMs + 500,
+		`the wait for an error page that never comes must end at its ${TIMEOUTS.errorPageMs} ms bound: ${elapsedMs} ms`,
+	);
+}
+
+// ─── (b9) #1856: net::ERR_ABORTED (an HTTP 204) shows no error page, so no wait
+{
+	const { outcome, elapsedMs } = await navigate("/login", [NEVER, 20], TIMEOUTS, { 0: { code: "ABORTED", errorPage: false } });
+	assert(outcome.kind === "resolved", `an aborted navigation on attempt 1 must cost one retry: ${JSON.stringify(outcome)}`);
+	assert(elapsedMs < TIMEOUTS.errorPageMs, `net::ERR_ABORTED commits no error page, so gotoStable must not wait for one: ${elapsedMs} ms`);
 }
 
 // ─── (c) every page error fails its route, React #418 included (#1468) ───────

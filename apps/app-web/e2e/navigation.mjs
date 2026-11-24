@@ -38,8 +38,10 @@ export const NAVIGATION_TIMEOUTS = Object.freeze({
 const seconds = (ms) => `${ms / 1000} s`;
 const firstLine = (error) => String(error?.message ?? error).split("\n")[0];
 
-/** A Chromium network error, for example `net::ERR_CONNECTION_RESET`. */
-const NETWORK_ERROR = /\bnet::ERR_[A-Z_]+/;
+/** A Chromium network error that makes Chromium show its error page, for example
+ * `net::ERR_CONNECTION_RESET`. `net::ERR_ABORTED` (for example an HTTP 204 answer) shows
+ * no error page, so a wait for one would run to its bound. */
+const NETWORK_ERROR = /\bnet::ERR_(?!ABORTED\b)[A-Z_]+/;
 
 /** #1856: wait until Chromium has committed its error page (`chrome-error://chromewebdata/`).
  *
