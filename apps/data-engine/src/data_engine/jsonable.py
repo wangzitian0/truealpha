@@ -2,12 +2,18 @@
 
 import json
 import math
+import sys
 
-import pandas as pd
+
+def is_dataframe(obj: object) -> bool:
+    """Tell a pandas DataFrame without an import of pandas. Only the moomoo SDK makes one, and it
+    imports pandas first; the code server and the runs that never call moomoo do not load it (C1)."""
+    pandas = sys.modules.get("pandas")
+    return pandas is not None and isinstance(obj, pandas.DataFrame)
 
 
 def to_jsonable(obj):
-    if isinstance(obj, pd.DataFrame):
+    if is_dataframe(obj):
         return json.loads(obj.to_json(orient="records"))
     if isinstance(obj, dict):
         return {k: to_jsonable(v) for k, v in obj.items()}

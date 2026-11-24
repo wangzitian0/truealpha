@@ -11,7 +11,6 @@ from decimal import ROUND_HALF_UP, Decimal
 from numbers import Real
 from typing import Any
 
-import pandas as pd
 from factors.base.analyst_track_record import AnalystRatingItem, AnalystTrackRecord, analyst_track_record
 from psycopg import Connection
 
@@ -22,6 +21,7 @@ from data_engine.datahub._helpers import (
 )
 from data_engine.datahub.canonical_issuer import require_canonical_issuer_id
 from data_engine.datahub.fetch_key import FetchKey
+from data_engine.jsonable import is_dataframe
 
 __all__ = (
     "MAX_FAILURES_LOGGED",
@@ -116,8 +116,8 @@ def _count_from_share(total: int, share: object) -> int:
 def _is_empty(payload: object) -> bool:
     if payload is None:
         return True
-    if isinstance(payload, pd.DataFrame):
-        return payload.empty
+    if is_dataframe(payload):
+        return bool(payload.empty)  # type: ignore[attr-defined]
     return isinstance(payload, (Mapping, list)) and not payload
 
 
