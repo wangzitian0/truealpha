@@ -244,7 +244,7 @@ def _after_failed_run(
     error = captured.error
     if isinstance(error, gateway.CapacityExceeded):
         if captured.status == 0:
-            raise ModelCapacityRefused(error.reason) from error
+            raise ModelCapacityRefused(error.reason, transient=error.transient) from error
         return _answered(captured)
     if isinstance(error, OSError | http.client.HTTPException):
         # A read timeout, a refused connection or a body cut short. Each caller handles ModelHTTPError for

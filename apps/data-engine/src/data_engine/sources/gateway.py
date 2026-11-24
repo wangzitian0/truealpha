@@ -348,10 +348,22 @@ def emit(record: CallRecord) -> None:
 
 
 class CapacityExceeded(RuntimeError):
+    """`transient`: a later call can pass (no slot before the deadline, a daily budget spent). A
+    refusal of the configuration repeats on each call until the configuration changes (#1851)."""
+
+    transient = True
+
     def __init__(self, source: str, reason: str) -> None:
         super().__init__(f"{source}: {reason}")
         self.source = source
         self.reason = reason
+
+
+class UndeclaredCapacity(CapacityExceeded):
+    transient = False
+
+    def __init__(self, source: str) -> None:
+        super().__init__(source, "no declared capacity — register the source before calling it")
 
 
 class BudgetExhausted(CapacityExceeded):
@@ -366,6 +378,8 @@ SHARE_BELOW_ONE_CALL = "share_below_one_call"
 
 
 class ShareBelowOneCall(CapacityExceeded):
+    transient = False
+
     def __init__(self, source: str, *, environment: str, account: str) -> None:
         super().__init__(
             source,
@@ -448,7 +462,7 @@ _EXPIRY_MARGIN_SECONDS = 0.01
 def _require_capacity(capacities: Mapping[str, SourceCapacity], source: str) -> SourceCapacity:
     declared = capacities.get(source)
     if declared is None:
-        _refuse(CapacityExceeded(source, "no declared capacity — register the source before calling it"))
+        _refuse(UndeclaredCapacity(source))
     return declared
 
 

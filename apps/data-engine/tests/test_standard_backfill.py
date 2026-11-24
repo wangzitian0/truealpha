@@ -24,6 +24,7 @@ from data_engine.datahub.standards.filing_extraction import (
     select_total,
 )
 from data_engine.datahub.standards.planner import UniverseIssuer, open_cells, resolve_missing_ciks
+from data_engine.sources import llm
 from data_engine.sources.gateway import SourceCapacity, SourceGateway
 from truealpha_contracts.models import RawCapture, RawIngestionEnvelope, RawObjectRef
 
@@ -1132,3 +1133,39 @@ def test_qqq_10k_human_capital_sentences_resolve_company_wide_headcount(
     assert status == "resolved" and chosen is not None, f"{ticker}: {found}"
     assert chosen.value == expected_value
     assert chosen.as_of == expected_as_of
+
+
+@pytest.mark.parametrize(
+    ("error", "status"),
+    [
+        (llm.ModelCapacityRefused("no call slot before the deadline"), "deferred_capacity"),
+        (llm.ModelHTTPError(0, "no answer: TimeoutError"), "deferred_capacity"),
+        (llm.ModelHTTPError(400, "refused"), "error"),
+    ],
+)
+def test_a_model_error_of_one_filing_is_that_filings_outcome(monkeypatch, error, status) -> None:
+    """#1851: the model selector of the headcount was outside any guard, so one filing whose two
+    totals went to the model ended the backfill of the universe and every lane after it."""
+    from data_engine.config import settings
+    from factors.shared import extraction as primitive
+
+    monkeypatch.setattr(settings, "llm_api_key", "test-key")
+
+    def no_selection(_candidates, _selector=None):
+        raise error
+
+    monkeypatch.setattr(primitive, "extract_metric", no_selection)
+    connection = FakeConnection()
+    outcome = extract_headcount(
+        59478,
+        connection=connection,
+        http=_fixture_edgar(),
+        gateway=_gateway(connection),
+        standard=STANDARD,
+        cutoff=CUTOFF,
+        write=True,
+        store=FakeStore(),
+    )
+    assert outcome.status == status
+    assert "model selection" in outcome.detail
+    assert connection.headcount_rows == []

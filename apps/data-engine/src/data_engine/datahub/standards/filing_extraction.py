@@ -448,7 +448,13 @@ def extract_headcount(
             transport=model_transport,
             on_model_selection=model_runs.append,
         )
-    selection = extraction_primitive.extract_metric(_shared_candidates(totals), selector).selection
+    try:
+        selection = extraction_primitive.extract_metric(_shared_candidates(totals), selector).selection
+    except llm.ModelHTTPError as error:
+        # One filing's model error is that filing's outcome; it never ends the backfill of a
+        # universe and the lanes after it (#1851). A missing answer is asked again next run.
+        status_of_error: ExtractionStatus = "deferred_capacity" if error.no_answer else "error"
+        return ExtractionOutcome(cik, status_of_error, detail=f"model selection: {error}")
     status: ExtractionStatus = (
         "resolved"
         if selection is not None

@@ -123,18 +123,29 @@ class ModelHTTPError(RuntimeError):
 
     @property
     def no_answer(self) -> bool:
-        """No answer this time; the next run can get one: no reply (status 0), no capacity or a rate
-        limit (429, also the local `ModelCapacityRefused`), or a failure on the provider's side (5xx).
+        """No answer this time; the next run can get one: no reply (status 0), a failure on the
+        provider's side (5xx), or an answer that the seat's retry policy calls transient (a 429 or
+        a rate-limit code, but never a terminal provider code such as an account in arrears).
 
         Any other refusal (4xx) or a cut-off answer repeats on each run, so it is not a missing answer
-        (#1816). Every lane treats a missing answer the same way: the item is refused for this run (#1851).
+        (#1816). Every lane refuses the item of a missing answer for this run and goes on (#1851).
         """
-        return self.status_code in (0, 429) or self.status_code >= 500
+        if self.status_code == 0 or self.status_code >= 500:
+            return True
+        return model_policy.RetryPolicy(model_policy.retry_spec()).is_transient(self.status_code, self.provider_code)
 
 
 class ModelCapacityRefused(ModelHTTPError):
-    def __init__(self, detail: str) -> None:
+    """The gateway gave no call slot. `transient` comes from the gateway's refusal: a slot or a daily
+    budget frees later; an undeclared source or a share below one call repeats until configured."""
+
+    def __init__(self, detail: str, *, transient: bool = True) -> None:
         super().__init__(429, f"{SOURCE}: {detail}")
+        self.transient = transient
+
+    @property
+    def no_answer(self) -> bool:
+        return self.transient
 
 
 class ModelOutputTruncated(ModelHTTPError):
