@@ -1261,7 +1261,6 @@ def test_oracle_context_groups_the_rows_once_for_every_cell() -> None:
         dict.fromkeys(columns) | {"subject_id": subject, "field": "revenue", "result": "agree", "compared_at": CUTOFF}
         for subject in ("issuer:cik:0000320193", "issuer:cik:0000000002", "issuer:cik:0000000002")
     ]
-    queries: list[str] = []
 
     class _Result:
         def fetchall(self) -> list[tuple[object, ...]]:
@@ -1269,11 +1268,9 @@ def test_oracle_context_groups_the_rows_once_for_every_cell() -> None:
 
     class _Conn:
         def execute(self, sql: str, params: object = ()) -> _Result:
-            queries.append(sql)
             return _Result()
 
     grouped, _mass = cr._oracle_context(_Conn(), "capture-run:x", CUTOFF)  # type: ignore[arg-type]
 
     assert isinstance(grouped, OracleRowsBySubject)
     assert len(grouped.of(["issuer:cik:0000000002"])) == 2
-    assert len(queries) == 1

@@ -1271,7 +1271,7 @@ def test_grouped_oracle_rows_keep_the_newest_row_of_each_key() -> None:
     ]
     grouped = OracleRowsBySubject(rows)
 
-    # Same stamp: the later row of the subject wins, and the bare CIK spelling is a second key.
+    # Same stamp: the later row of the subject wins. Both spellings of the CIK find the same rows.
     assert oracle_cell_agreement(grouped, subject_ids="issuer:cik:0000320193", field="revenue", cutoff=early) == (
         Decimal("0.25"),
         ("oracle:disagree",),
@@ -1280,7 +1280,7 @@ def test_grouped_oracle_rows_keep_the_newest_row_of_each_key() -> None:
         Decimal("0.25"),
         ("oracle:disagree",),
     )
-    # A newer row inside the cutoff replaces the older rows of its key.
+    # A newer row inside the cutoff replaces the older rows of its key; the bare-CIK row is a second key.
     assert oracle_cell_agreement(grouped, subject_ids="issuer:cik:0000320193", field="revenue", cutoff=late) == (
         Decimal("0.65"),
         ("oracle:agree", "oracle:disagree"),
