@@ -785,7 +785,7 @@ def test_load_issuer_graph_partners_reads_revenue_share_from_entity_relations_an
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """#1642 Q3: `revenue_share_pct` persisted to `staging.entity_relations` is read back into
-    `SupplyChainPartner.revenue_share` as a fraction in `(0, 1]`, merged onto `staging.kg_edges`
+    `SupplyChainPartner.revenue_share` as a fraction in `(0, 1]`, merged onto `staging.kg_edges` (retired in #1730)
     partners without double-counting, and produces non-zero `max_partner_share`."""
     import json
 

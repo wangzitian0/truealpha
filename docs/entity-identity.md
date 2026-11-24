@@ -1,9 +1,9 @@
 # Entity identity: opaque UUIDs, typed aliases
 
-Status: owner decision 2026-09-17 (#877). PR-2 of #877 adds the store
-(`db/migrations/0002_staging.sql`, historical migration `20260917T0412_datahub_entity_identity_store.sql`) and the Dagster job
-`entity_identity_backfill` fills it (definitions in
-`20260917T0604_datahub_entity_backfill_job.sql`). Nothing reads it yet.
+Status: owner decision 2026-09-17 (#877). PR-2 of #877 added the store and the Dagster job
+`entity_identity_backfill` fills it. The store and the backfill objects live in
+`db/migrations/0002_staging.sql`; the dated migrations of PR-2 were folded into it in #1726.
+Readers exist: the view `mart.entity_identity` and the modules that join it.
 
 This document replaces decision D1 of the
 [#877 design note](https://github.com/wangzitian0/truealpha/issues/877#issuecomment-5695658561),
@@ -353,8 +353,9 @@ the oldest entity that holds `issues` to that instrument is its issuer.
 
 ## 7. The backfill
 
-The backfill is defined in its own migration,
-`20260917T0604_datahub_entity_backfill_job.sql`, and run by a Dagster job, never by a boot.
+The backfill objects (`staging.entity_backfill()`, `staging.entity_backfill_plan`, `staging.entity_backfill_due()`,
+`staging.entity_evidence_watermark()`) are defined in `db/migrations/0002_staging.sql` (before #1726 in the dated
+migration `20260917T0604_datahub_entity_backfill_job.sql`), and run by a Dagster job, never by a boot.
 
 - `staging.entity_backfill_plan` is the whole plan as **one SELECT over tables that existed
   before either migration**, so it can run read-only against an environment before the
@@ -374,7 +375,7 @@ The backfill is defined in its own migration,
 **Why not at boot.** v0.0.80 ran the backfill inside this migration on every llm-service
 boot. On staging it held the boot for 34 s (2026-09-17 05:35), past the container
 healthcheck, and the rollout failed. The migration `20260917T0430_datahub_entity_backfill.sql`
-keeps its name (it ran on staging) and is now empty. A test holds every entity migration to
+kept its name (it ran on staging) and stayed empty until #1726 folded it away. A test holds every entity migration to
 definitions and registry seeds, and fails on any migration that calls the backfill.
 
 **What counts as a use of an id:**
@@ -554,8 +555,8 @@ holding type.
    - `holdings_enrichment` and `nport_holdings` write aliases and `holds` edges for funds
      (`sec-series`).
    - Universes get entities and `member_of` edges.
-   - The knowledge graph's `company:*` and `analyst:*` nodes become aliases, and
-     `staging.kg_*` is frozen as evidence.
+   - The knowledge graph's `company:*` and `analyst:*` nodes become aliases. `staging.kg_*` was
+     frozen as evidence, then dropped in #1730.
    - Add the graph and embedding export jobs.
 
 ## 11. Standing checks

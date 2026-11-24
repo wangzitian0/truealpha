@@ -45,7 +45,7 @@
 #                            Empty (local, CI) is a complete no-op there.
 #
 # A boot never waits on a lock (2026-09-17 incident). The v0.0.81 production boot sat
-# 108 s in 0017_contract_objects.sql behind a backfill's open transaction, the llm
+# 108 s in 0017_contract_objects.sql (folded into the baseline since) behind a backfill's open transaction, the llm
 # healthcheck gave up, the rollout failed and the API stayed down until the backfill
 # committed. Two things stop that from recurring:
 #

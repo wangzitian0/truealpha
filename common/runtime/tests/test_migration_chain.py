@@ -6,22 +6,10 @@ filename, so two migrations sharing a number are sequenced by the alphabet of
 their suffixes rather than by intent: `0039_peg_module_1.sql` runs before
 `0039_semantic_freshness_windows.sql` because "p" < "s".
 
-Seven such collisions exist. #576 recorded one of them (a duplicate 0037) in
-July and nothing was armed against it, so the v0.0.21 candidate added two more —
-0039 and 0040, each a factors migration and a datahub migration written the same
-week by two lanes that both took "the next number". Four lanes added 47 migration
-commits in the repository's first sixty days; "the next number" is a shared
-counter with no lock.
-
-Nothing has broken yet, and that is luck rather than design: within each
-colliding pair the two files touch disjoint objects. The day a pair touches the
-same table, which one wins is decided by a filename.
-
-The existing collisions are frozen below rather than renamed. Renaming changes
-apply order in every environment that has already run them, which is a bigger
-risk than the collision itself; freezing stops the bleeding without touching
-what is deployed. The baseline may only shrink — an entry that is no longer a
-collision fails, so it cannot outlive its defect.
+The sequential form had collisions before the squash of #1726 and #1775. #576 recorded a
+duplicate 0037, and the v0.0.21 candidate added two more (0039 and 0040), because "the next
+number" is a shared counter with no lock. The squash folded all of them into the four baseline
+files, so the chain has no collision now. The tests below keep it that way.
 
 Two naming forms are therefore legal (#731):
 

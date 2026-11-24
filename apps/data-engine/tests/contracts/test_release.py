@@ -6,7 +6,7 @@ import pytest
 from data_engine.contracts.release import live_release_payload
 from truealpha_contracts.common import canonical_sha256
 
-_MIGRATIONS = ("0001_schemas", "20260908T1055_factors_question_coverage_report")
+_MIGRATIONS = ("0001_raw", "0002_staging")
 _CONTRACT = "e" * 64
 
 
@@ -62,8 +62,8 @@ def test_an_unidentified_build_is_named_unknown_rather_than_refused() -> None:
         {"git_commit_sha": "-v0.0.49"},
         {"git_commit_sha": "v 0.0.49"},
         {"migration_ids": ()},
-        {"migration_ids": ("0001_schemas", "0001_schemas")},
-        {"migration_ids": ("0001_schemas", "")},
+        {"migration_ids": ("0001_raw", "0001_raw")},
+        {"migration_ids": ("0001_raw", "")},
         {"environment_contract_sha256": "not-a-hash"},
         {"environment_contract_sha256": ("E" * 64)},
     ],

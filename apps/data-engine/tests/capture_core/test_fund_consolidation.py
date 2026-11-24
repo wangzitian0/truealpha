@@ -347,7 +347,7 @@ def _insert_core_result(
 
 
 def test_materialize_resolves_canonical_entity_uuid_listing_id(connection) -> None:
-    """#1099: mart.topt_core_results stores canonical entity UUIDs.
+    """#1099: mart.topt_core_results (retired in #1730) stored canonical entity UUIDs.
 
     Fund consolidation joins through mart.entity_identity so canonical UUIDs resolve
     to the fund holding's listing_id and contribute to weighted valuation gap.
@@ -369,7 +369,7 @@ def test_materialize_resolves_canonical_entity_uuid_listing_id(connection) -> No
 
 
 def test_materialize_supports_legacy_string_listing_id(connection) -> None:
-    """#1099: mart.topt_core_results rows with legacy string listing_id still match directly."""
+    """#1099: rows of mart.topt_core_results (retired in #1730) with legacy string listing_id still match directly."""
     _seed(connection, isin="US0000000041", ticker="TCL", weight="70", filing=KNOWABLE_FILING, period="2026-06-30")
     fund_uuid = _fund_uuid(connection)
     _insert_core_result(connection, run_id=RUN, listing_id="listing:xnas:tcl", valuation_gap=-0.15, confidence=0.90)
@@ -387,7 +387,7 @@ def test_materialize_supports_legacy_string_listing_id(connection) -> None:
 def test_dual_class_holding_joins_issuer_core_valuation_row(connection) -> None:
     """Two share-class holdings of the same issuer (GOOGL and GOOG) resolved to unpadded
     company:cik:1652044 in staging.entities both value against the issuer's single
-    mart.topt_core_results row while keeping their own listing_ids."""
+    mart.topt_core_results (retired in #1730) row while keeping their own listing_ids."""
     _seed(connection, isin="US02079K3059", ticker="GOOGL", weight="40", filing=KNOWABLE_FILING, period="2026-06-30")
     _seed(connection, isin="US02079K1079", ticker="GOOG", weight="35", filing=KNOWABLE_FILING, period="2026-06-30")
     holding_uuid = er.ensure_entity(

@@ -10,7 +10,7 @@ The fixture universe is the 21-listing TOPT corpus. Every issuer files 10,000,00
 2026-02-01 (a cover count dated 2026-01-20), and every listing closes at 40 on 2026-03-31.
 
 The tick values each issuer twice, with the same share basis. The strategy seed writes
-`mart.strategy_decisions` (#1262). The TOPT core engine writes `mart.topt_core_results` (#1277).
+`mart.strategy_decisions` (#1262). The TOPT core engine wrote `mart.topt_core_results` (#1277; retired in #1730).
 The last section of this file reads the core rows.
 """
 

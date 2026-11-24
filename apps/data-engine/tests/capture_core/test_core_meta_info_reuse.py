@@ -1,4 +1,4 @@
-"""A reused observation keeps its lineage item in `mart.topt_core_meta_info` (#1331).
+"""A reused observation keeps its lineage item in `mart.capture_issuer_lineage` (#1331; the view was `mart.topt_core_meta_info`, retired in #1730).
 
 A TOPT tick reuses the observations that another run committed in the last 12 hours (#635).
 Its financial-fact and market-price obligations end `unchanged`. Their work items name source
@@ -38,7 +38,7 @@ from capture_core.test_degraded_capture_reuse import (  # noqa: E402
 from capture_core.test_materialization import _seed_complete_production_run  # noqa: E402
 
 MIGRATIONS = Path(__file__).resolve().parents[4] / "db" / "migrations"
-#: Squashed baseline defining `mart.topt_core_meta_info` (#1331).
+#: Squashed baseline defining `mart.capture_issuer_lineage` (#1331).
 INPUTS_MIGRATION = MIGRATIONS / "0003_mart.sql"
 REUSED_INPUTS_MIGRATION = INPUTS_MIGRATION
 

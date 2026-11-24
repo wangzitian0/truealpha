@@ -19,7 +19,10 @@ hardcoded per-company formula branch.
 | 2026-10-09 | #1176: split GPPE into two named metrics. `gppe_uniform_charge_v0` (total-assets charge, every class). `gppe_banking_tce_v1` (FINANCIAL only, measured tangible common equity). No constant stands in for a measurement. A missing input gives `unavailable`, never a fallback. |
 | 2026-10-26 | D2 (#1518): the bank capital base is measured tangible common equity. The strategy definition (1.1.0) pins one tree per issuer class by key, version and content hash. The core and the composite evaluate that pin. A negative tangible common equity gives no value (working choice of the delivery session, not an owner approval). |
 
-## 1. What exists, measured in code (`main@f5807a7`)
+## 1. What existed, measured in code (`main@f5807a7`, a snapshot of 2026-09)
+
+Since the snapshot: `factors.production_topt` no longer exists, `staging.kg_*` was dropped (#1730), and the wide
+tables were retired (#1664). Read this section as history.
 
 - **GPPE is written out by hand twice.**
   - `factors.production_topt.core.compute_topt_gppe` (L664-672) branches on
@@ -56,7 +59,7 @@ hardcoded per-company formula branch.
   - Ids are content addresses (`kind:sha256`) or semantic keys, and the semantic keys are not
     yet one scheme. For example, TOPT keys issuers `issuer:lei:…` / `security:cusip:…`, while QQQ
     and canary key them `issuer:cik:…` / `security:figi:…`. That split is #877's subject.
-  - `staging.kg_entities`, `kg_identifiers` and `kg_edges` exist.
+  - `staging.kg_entities`, `kg_identifiers` and `kg_edges` existed (dropped in #1730).
   - No pgvector table exists.
 
 ## 2. The model
@@ -456,8 +459,9 @@ The fixed columns were a compatibility projection. `mart.topt_gppe_results` and 
 
 ## 9. Graph and embedding stores
 
-- **KG projection (step I)**, generated from the forest at deploy, idempotent and keyed by
-  the forest's content hash:
+- **KG projection (step I)**, not built (the `staging.kg_*` tables below were dropped in #1730; a projection
+  would write `staging.entities` and `staging.entity_relations`). The design was: generated from the forest at
+  deploy, idempotent and keyed by the forest's content hash:
   - `staging.kg_entities` holds `metric_node` and `metric_tree` rows keyed by UUID;
   - `staging.kg_identifiers` holds the typed aliases, the same shape #877 uses for issuers;
   - `staging.kg_edges` holds `decomposes_into` (output → operand, with formula id, version,
