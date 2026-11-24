@@ -623,10 +623,16 @@ def test_a_measured_cell_is_never_replaced_by_a_not_measured_one_of_the_same_sub
 
 
 def _domestic(body: bytes, ticker: str, *, form: str = "10-K") -> ListingUnitRatio:
-    from data_engine.datahub.standards.listing_unit_ratio import cover_titles
+    from data_engine.datahub.standards.listing_unit_ratio import cover_registrants, cover_titles
 
     return ratio_for_ticker(
-        cover_securities(body), ticker, accession=ACCESSION, form=form, filed=FILED, titles=cover_titles(body)
+        cover_securities(body),
+        ticker,
+        accession=ACCESSION,
+        form=form,
+        filed=FILED,
+        titles=cover_titles(body),
+        registrants=cover_registrants(body),
     )
 
 
@@ -681,3 +687,236 @@ def test_a_10k_document_without_a_tagged_cover_gives_no_ratio() -> None:
 def test_the_widened_grammar_still_refuses_two_classes_warrants_and_preferred(title: str) -> None:
     """Review of #1833: the `.` separator and `of $` par value must not open a way past the refusals."""
     assert read_title(title).listing_units_per_share is None, title
+
+
+_STAGING_TITLES = [
+    ("EVRG", "Evergy, Inc. common stock", ("EVERGY, INC.",)),
+    ("CMS", "CMS Energy Corporation Common Stock", ("CMS ENERGY CORPORATION", "CONSUMERS ENERGY COMPANY")),
+    ("KR", "Common, $1.00 Par Value", ("THE KROGER CO.",)),
+    ("NSC", "Norfolk Southern Corporation Common Stock (Par Value $1.00)", ("NORFOLK SOUTHERN CORPORATION",)),
+    ("PPL", "Common Stock of PPL Corporation", ("PPL Corporation",)),
+]
+
+
+@pytest.mark.parametrize(("ticker", "title", "registrants"), _STAGING_TITLES)
+def test_a_share_title_that_names_its_own_filer_is_one_plain_share(
+    ticker: str, title: str, registrants: tuple[str, ...]
+) -> None:
+    """#1606, staging 2026-11-24: S&P 500 filers pair the ticker with the share title and their own
+    name, or write `Common, $1.00 Par Value`. Without the filer name the grammar reads the title."""
+    ratio = _domestic(cover_html((ticker, title), registrants=registrants), ticker)
+
+    assert ratio.listing_units_per_share == Decimal(1)
+    assert ratio.pattern == PATTERN_PLAIN_SHARE
+    assert ratio.title == title
+
+
+def test_the_name_of_another_company_is_not_removed() -> None:
+    ratio = _domestic(cover_html(("ACME", "Common Stock of Other Holdings Inc."), registrants=("ACME Corp",)), "ACME")
+
+    assert ratio.listing_units_per_share is None
+    assert ratio.reason == REASON_UNFAMILIAR_TITLE
+
+
+def test_a_typing_error_in_the_title_stays_unread() -> None:
+    """CB (staging): `Comm on Shares` is no title of the grammar. No ratio is assumed."""
+    ratio = _domestic(
+        cover_html(("CB", "Comm on Shares, par value CHF 0.50 per share"), registrants=("Chubb Limited",)), "CB"
+    )
+
+    assert ratio.listing_units_per_share is None
+    assert ratio.reason == REASON_UNFAMILIAR_TITLE
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        # Review of #1842: each of these got ratio 1 under a word list of refusals.
+        "American Depository Shares representing five ordinary shares",
+        "A.D.S. representing 5 ordinary shares",
+        "Global Depository Shares",
+        "6.375% Series A Cumulative Redeemable Perpetual Shares",
+        "Exchangeable Shares",
+        "Stapled Shares",
+        "Subscription Receipts for Common Shares",
+        "Stock Purchase Contracts",
+        "Common Securities of XYZ Capital Trust",
+        "Half-share of Common Stock",
+        "Series A Common Stock and Series C Common Stock",
+        "Voting Common Stock and Non-Voting Common Stock",
+        "Classes A and B Common Stock",
+        "Common Units representing limited partner interests",
+        # The filer name must not open a way past the refusals.
+        "ACME Corporation Warrants",
+        "Units of ACME Corporation",
+        "ACME Corporation Depository Shares",
+        "Common, $25 par value Preferred Stock",
+    ],
+)
+def test_a_title_that_names_another_instrument_gets_no_ratio_with_or_without_the_filer_name(title: str) -> None:
+    ratio = _domestic(cover_html(("ACME", title), registrants=("ACME Corporation",)), "ACME")
+
+    assert ratio.listing_units_per_share is None, title
+    assert ratio.pattern == PATTERN_UNPARSED
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        # Real par-value clauses of staging covers, 2026-11-24: each word belongs to the clause.
+        "Common Stock, par value 12 1/2¢ per share",
+        "Common Stock, par value 1-2/3 cents per share",
+        "Ordinary Shares, nominal value €0.01 each",
+        "Common Stock, one dollar par value",
+        "Common Stock – par value $1.66 2/3",
+        "Class B Common Stock, $0.10 par value (voting)",
+        "Common Stock, par value, $0.001 per share",
+        "Common Stock-$1.25 par value",
+        "Common Stock, $2.00 par",
+        "Ordinary Shares, EUR 0.20 par value",
+        "Common Stock, $0.001",
+        "Common Stock, $ 0.00000625 par value per share",
+        "Common Stock,",
+        # Third review of #1842: a currency in letters, a rights plan, a footnote mark.
+        "Common Stock, par value US$0.0001 per share",
+        "Ordinary Shares, par value HK$0.01 per share",
+        "Ordinary Shares, par value NIS 0.01 per share",
+        "Common Shares, CHF0.57 par value",
+        "Ordinary shares, EUR0.01 nominal value",
+        "Common Stock, $0.01 par value per share, and associated Preferred Stock Purchase Rights",
+        "Common Stock, $.10 par value (and associated Rights)",
+        "Common Stock, $0.01 par value, and associated rights",
+        "Common Stock, par value $0.01 per share*",
+        # Fourth review of #1842: real rights-plan forms and `one cent`.
+        "Common Stock, $1 par value, together with associated Preferred Stock Purchase Rights",
+        "Common Stock (including associated Preferred Stock Purchase Rights)",
+        "Common Stock, and attached Series A Participating Preferred Stock Purchase Rights",
+        "Common Stock, and associated Series A Junior Participating Preferred Stock Purchase Rights",
+        "Common Stock, par value one cent ($0.01) per share",
+    ],
+)
+def test_a_par_value_clause_in_any_real_form_follows_a_plain_share(title: str) -> None:
+    assert read_title(title).listing_units_per_share == Decimal(1), title
+
+
+@pytest.mark.parametrize(
+    ("title", "registrants"),
+    [
+        (
+            "Common Stock, $.0001 par value (Essex Property Trust, Inc.)",
+            ("ESSEX PROPERTY TRUST, INC.", "ESSEX PORTFOLIO, L.P."),
+        ),
+        (
+            "Common Stock, $.01 par value, of United Rentals, Inc.",
+            ("UNITED RENTALS, INC.", "UNITED RENTALS (NORTH AMERICA), INC."),
+        ),
+    ],
+)
+def test_the_filer_name_inside_a_par_value_clause_is_not_a_second_security(
+    title: str, registrants: tuple[str, ...]
+) -> None:
+    assert read_title(title, registrants).listing_units_per_share == Decimal(1)
+    assert read_title(title).listing_units_per_share is None, "without the filer name the name is an unknown word"
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        # Second review of #1842: the grammar read these through any text after the punctuation.
+        "Class A Common Stock; Class B Common Stock",
+        "Class A Common Stock (and Class B Common Stock)",
+        "Common Stock - Units",
+        "Common Stock, each with one-half of one Warrant",
+        "Common Stock, together with Preferred Stock Purchase Rights",
+        "Ordinary Shares, each representing one-tenth",
+        "Common, $. par value",
+        # Third review of #1842: words of a par-value clause in another order name another security.
+        "Common Stock, $0.01 par value; Non-Voting Shares",
+        "Common Stock, 1/10 of one share",
+        "Common Stock (1/1,000 of one share)",
+        "Common Stock, each 1/2 share",
+        # Fourth review of #1842: only rights-plan words stand before `rights`.
+        "Common Stock, and associated Warrants and Rights",
+        "Common Stock (and associated Class A Units rights)",
+        "Common Stock; associated redeemable warrant exercise rights",
+    ],
+)
+def test_a_plain_share_followed_by_any_word_outside_a_par_value_clause_is_not_read(title: str) -> None:
+    assert read_title(title).listing_units_per_share is None, title
+
+
+def test_a_filer_name_that_is_only_a_period_removes_nothing() -> None:
+    assert read_title("Units of .", ("...",)).listing_units_per_share is None
+    assert read_title("Common Stock, $0.01 par value", ("...", "ACME Corp")).listing_units_per_share == Decimal(1)
+    assert read_title("Common Stock, Inc. Warrants", ("Common Stock, Inc.",)).listing_units_per_share is None
+
+
+def test_a_filer_name_matches_as_whole_words_and_two_filer_names_keep_the_title_whole() -> None:
+    assert read_title(
+        "Common Stock, $.0001 par value (Essex Property Trust, Inc.)", ("Essex Property Trust Inc",)
+    ).listing_units_per_share == Decimal(1)
+    assert read_title("Units", ("Unit",)).listing_units_per_share is None
+    # A filer name inside a word is not that name: `Mon` and `Comm` leave `Common Stock` whole.
+    assert read_title("Common Stock, $0.01 par value", ("Mon",)).listing_units_per_share == Decimal(1)
+    assert read_title("Common Stock, $0.01 par value", ("Comm",)).listing_units_per_share == Decimal(1)
+    assert read_title("Common Units of ACME", ("Unit", "ACME")).listing_units_per_share is None
+    two = ("ACME Inc.", "ACME Preferred Funding Trust")
+    assert read_title("Common Stock of ACME Inc., ACME Preferred Funding Trust", two).listing_units_per_share is None
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "Common Stock, $1 share",  # `share` only after `per`
+        "Common Stock, each $0.01 par value",  # `each` only last
+        "Common Stock, $1 voting par value",  # `voting` only last
+        "Common Stock, one par value",  # `one` only before `dollar`
+        "Common Stock, 1/2 par value",  # a fraction only after an amount
+    ],
+)
+def test_each_position_rule_of_the_par_value_clause_refuses_a_word_out_of_place(title: str) -> None:
+    assert read_title(title).listing_units_per_share is None, title
+
+
+def test_a_depositary_share_of_a_preferred_share_does_not_stop_the_domestic_rule() -> None:
+    """#1606, staging 2026-11-24: the 10-K of BNY still pairs the common stock with the old ticker BK
+    and lists a depositary share of a Series K preferred share. The common listing is one share."""
+    body = cover_html(
+        ("BK", "Common Stock, $0.01 par value"),
+        (
+            "BK PRK",
+            "Depositary Shares, each representing a 1/4,000th interest in a share of Series K Noncumulative Perpetual Preferred Stock",
+        ),
+    )
+
+    ratio = _domestic(body, "BNY")
+
+    assert ratio.listing_units_per_share == Decimal(1)
+    assert ratio.pattern == PATTERN_DOMESTIC_FILER
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        # Fifth review of #1842: an ADS of ordinary shares that also names a preference or a preferred right.
+        "American Depositary Shares, each representing 6 ordinary shares, and associated Preferred Share Purchase Rights",
+        "American Depositary Shares, each representing 6 ordinary shares, nominal value £0.001, with no preference on liquidation",
+        "American Depositary Shares, each representing one preference share",
+        # Sixth review of #1842: receipts and a share class name the listed equity, not a US preferred.
+        "GDSs, each representing 10 preference shares",
+        "GDRs representing preference shares",
+        "Depositary Receipts, each representing 5 preference shares",
+        "Depositary Shares, each representing 6 Class A preference shares",
+    ],
+)
+def test_an_ads_that_names_a_preference_still_stops_the_domestic_rule(title: str) -> None:
+    ratio = _domestic(cover_html(("OLDT", "Common Stock, $0.01 par value"), (None, title)), "NEWT")
+
+    assert ratio.listing_units_per_share is None, title
+    assert ratio.reason == REASON_TICKER_NOT_ON_COVER
+
+
+def test_a_global_depositary_share_is_a_depositary_security() -> None:
+    """Sixth review of #1842: `GDS` and `GDR` were no depositary words, on `main` too."""
+    assert read_title("GDSs, each representing 10 ordinary shares").listing_units_per_share == Decimal(10)
+    assert read_title("GDRs").reason == REASON_DEPOSITARY_WITHOUT_QUANTITY

@@ -17,6 +17,7 @@ log = logging.getLogger(__name__)
 
 TITLE_CONCEPT = "dei:Security12bTitle"
 SYMBOL_CONCEPT = "dei:TradingSymbol"
+REGISTRANT_CONCEPT = "dei:EntityRegistrantName"
 
 PATTERN_DEPOSITARY = "depositary_each_representing"
 PATTERN_PLAIN_SHARE = "plain_share_title"
@@ -75,7 +76,7 @@ _QUANTITY = (
 _SHARE = (
     r"(?:(?:class|series) [a-z0-9]+ )?"
     r"(?:(?:ordinary|common|capital|registered|subordinate voting|non[- ]voting|voting) )*"
-    r"(?:shares?|stock)"
+    r"(?:shares?|stock|common(?=,\s*[$€£¥]\s*(?:\d[\d.,]*|\.\d+)\s+par\s+value\s*$))"
     r"(?: of beneficial interest)?"
     r"(?:,? (?:non[- ])?voting)?"
 )
@@ -86,7 +87,7 @@ _TAIL = (
     r"|\s+(?:of )?" + _PAR + r"|\s+[$€£¥]\s*[\d.]"
     r"|\s+of\s+[$€£¥]\s*[\d.]+\s+" + _PAR + r")"
 )
-_DEPOSITARY_WORD = re.compile(r"\b(?:depositary|adss?|adrs?)\b")
+_DEPOSITARY_WORD = re.compile(r"\b(?:depositary|adss?|adrs?|gdss?|gdrs?)\b")
 _DEPOSITARY_EACH = re.compile(
     r"\b(?:each (?:(?:ads|adr|american depositary share|depositary share) )?"
     r"|(?:one|1) (?:ads|adr|american depositary share|depositary share) )"
@@ -94,6 +95,55 @@ _DEPOSITARY_EACH = re.compile(
     r"(?:the right to receive )?" + _QUANTITY + r" " + _SHARE + _TAIL
 )
 _PLAIN_SHARE = re.compile(r"^" + _SHARE + _TAIL)
+#: The words that may follow the share words of a plain-share title: a par or nominal value clause.
+#: Review of #1842: any other word (`; Class B Common Stock`, `, each with one-half of one Warrant`,
+#: `- Units`) names a second security, and the title is not read.
+_CURRENCY_CODES = "usd eur chf gbp cad dkk sek nok hkd jpy aud nis ils cny rmb inr brl mxn zar sgd nzd twd krw"
+_PAR_CLAUSE_WORDS = frozenset(
+    ("par value nominal no without per of stated cent cents dollar dollars " + _CURRENCY_CODES).split()
+)
+_PAR_CLAUSE_SEPARATORS = re.compile(r"[,;:()–—]|(?<![\d\w])-|-(?![\d\w])")
+_CURRENCY_PREFIX = r"(?:(?:us|hk|nt|a|c|s|r)?\$|[€£¥]|(?:" + _CURRENCY_CODES.replace(" ", "|") + r"))"
+_AMOUNT = re.compile(
+    r"^" + _CURRENCY_PREFIX + r"?(?:\d+(?:[.,]\d+)*|\.\d+)(?:-\d+/\d+)?¢?$|^" + _CURRENCY_PREFIX + r"$"
+)
+_FRACTION = re.compile(r"^\d+/\d+¢?$")
+#: A rights plan attaches one right to each share; the listing stays one share.
+_RIGHTS_PLAN_WORD = (
+    r"(?:series\s+[a-z0-9]+|junior|participating|cumulative|preferred|preference|common|stock|shares?|purchase)"
+)
+_ASSOCIATED_RIGHTS = re.compile(
+    r"[,;]?\s*\(?\s*(?:(?:and|with|together\s+with|including)\s+)?(?:the\s+)?(?:associated|attached)\s+"
+    r"(?:" + _RIGHTS_PLAN_WORD + r"\s+){0,8}rights\s*\)?\.?$"
+)
+_FOOTNOTE = re.compile(r"\s*(?:\*+|\(\d\))$")
+
+
+def _only_a_par_clause(rest: str) -> bool:
+    """Each word after the share words belongs to one par or nominal value clause. Position rules
+    keep a second security out: `share` only after `per`, `each` and `voting` only last, `one`
+    only before `dollar` or `cent`, a fraction only after an amount (#1842 review)."""
+    rest = _ASSOCIATED_RIGHTS.sub("", _FOOTNOTE.sub("", rest))
+    words = [word.strip(".") for word in _PAR_CLAUSE_SEPARATORS.sub(" ", rest).split()]
+    words = [word for word in words if word]
+    for index, word in enumerate(words):
+        before = words[index - 1] if index else ""
+        after = words[index + 1] if index + 1 < len(words) else ""
+        last = index == len(words) - 1
+        if word in _PAR_CLAUSE_WORDS or _AMOUNT.match(word):
+            continue
+        if word == "share" and before == "per":
+            continue
+        if word in ("each", "voting") and last:
+            continue
+        if word == "one" and after in ("dollar", "dollars", "cent"):
+            continue
+        if _FRACTION.match(word) and _AMOUNT.match(before) and any(ch.isdigit() for ch in before):
+            continue
+        return False
+    return True
+
+
 _DEBT_NOTE = re.compile(
     r"(?:\b\d+(?:\.\d+)?%\s*(?:(?:senior|subordinated|floating[- ]rate|fixed[- ]rate)\s+)*(?:notes?|debentures?|bonds?)\b"
     r"|\b(?:(?:senior|subordinated|floating[- ]rate|fixed[- ]rate)\s+)*(?:notes?|debentures?|bonds?)\b.*?\bdue\s+\d{4}\b)",
@@ -112,7 +162,8 @@ class TitleReading:
     reason: str | None
 
 
-def read_title(title: str) -> TitleReading:
+def read_title(title: str, registrants: Sequence[str] = ()) -> TitleReading:
+    """`registrants` are the filer names of the cover: a title may name its own filer (#1606)."""
     text = " ".join(title.split()).lower()
     if _DEPOSITARY_WORD.search(text):
         match = _DEPOSITARY_EACH.search(text)
@@ -124,7 +175,8 @@ def read_title(title: str) -> TitleReading:
         if units <= 0:
             return TitleReading(None, PATTERN_UNPARSED, REASON_UNFAMILIAR_TITLE)
         return TitleReading(units, PATTERN_DEPOSITARY, None)
-    if _PLAIN_SHARE.search(text):
+    bare = without_registrant(text, registrants)
+    if (match := _PLAIN_SHARE.match(bare)) is not None and _only_a_par_clause(bare[match.end() :]):
         return TitleReading(Decimal(1), PATTERN_PLAIN_SHARE, None)
     return TitleReading(None, PATTERN_UNPARSED, REASON_UNFAMILIAR_TITLE)
 
@@ -188,8 +240,28 @@ def cover_titles(body: bytes) -> tuple[str, ...]:
     return tuple(fact.text for fact in InlineXbrl(body).text_facts((TITLE_CONCEPT,), limit=_TITLE_LIMIT))
 
 
+def cover_registrants(body: bytes) -> tuple[str, ...]:
+    """The filer names of the cover. A combined 10-K names several."""
+    from data_engine.datahub.standards.inline_xbrl import InlineXbrl
+
+    return tuple(fact.text for fact in InlineXbrl(body).text_facts((REGISTRANT_CONCEPT,), limit=_TITLE_LIMIT))
+
+
+_PREFERRED_WORD = re.compile(r"\b(?:preferred|preference)\b")
+_COMMON_OR_RECEIPT_WORD = re.compile(r"\b(?:ordinary|common|american|global|class|adss?|adrs?|gdss?|gdrs?|receipts?)\b")
+
+
+def is_preferred_depositary_share(text: str) -> bool:
+    """`Depositary Shares, each representing a 1/4,000th interest in a share of Series K … Preferred
+    Stock`: a preferred share, and no ordinary or common share and no ADS or ADR in the title."""
+    return _PREFERRED_WORD.search(text) is not None and _COMMON_OR_RECEIPT_WORD.search(text) is None
+
+
 def names_a_depositary_security(titles: Sequence[str]) -> bool:
-    return any(_DEPOSITARY_WORD.search(" ".join(title.split()).lower()) for title in titles)
+    """A depositary security other than a depositary share of a preferred share. That one says nothing
+    about the common listing (BNY lists one, #1606)."""
+    texts = (" ".join(title.split()).lower() for title in titles)
+    return any(_DEPOSITARY_WORD.search(text) and not is_preferred_depositary_share(text) for text in texts)
 
 
 def cover_securities(body: bytes) -> tuple[CoverSecurity, ...]:
@@ -216,6 +288,25 @@ def _symbol_key(symbol: str) -> str:
     return symbol.strip().upper().replace("-", ".")
 
 
+def _name_pattern(name: str) -> re.Pattern[str] | None:
+    """A filer name as whole words; commas and periods between and after its words may differ."""
+    words = re.findall(r"[^\s,.]+", name)
+    if not words:
+        return None
+    return re.compile(r"(?:\bof\s+)?(?<![\w])" + r"[\s,.]*".join(map(re.escape, words)) + r"(?![\w])\.?", re.IGNORECASE)
+
+
+def without_registrant(title: str, registrants: Sequence[str]) -> str:
+    """The title without one filer name, the longest that it holds, with an `of` before it (#1606):
+    `Evergy, Inc. common stock` and `Common Stock of PPL Corporation` keep only the security.
+    A second filer name of a combined report stays, so the grammar refuses that title."""
+    text = " ".join(title.split())
+    for pattern in (_name_pattern(name) for name in sorted(set(registrants), key=len, reverse=True)):
+        if pattern is not None and pattern.search(text):
+            return " ".join(pattern.sub(" ", text).split()).strip(" ,")
+    return text
+
+
 def ratio_for_ticker(
     securities: Sequence[CoverSecurity],
     ticker: str,
@@ -224,8 +315,10 @@ def ratio_for_ticker(
     form: str,
     filed: date,
     titles: Sequence[str] = (),
+    registrants: Sequence[str] = (),
 ) -> ListingUnitRatio:
-    """`titles` are every security title that the cover tags, paired with a ticker or not."""
+    """`titles` are every security title that the cover tags, paired with a ticker or not.
+    `registrants` are the filer names of the cover (`dei:EntityRegistrantName`)."""
     filing: dict[str, Any] = {"accession": accession, "form": form, "filed": filed}
     wanted = _symbol_key(ticker)
     matches = [line for line in securities if _symbol_key(line.symbol) == wanted]
@@ -237,7 +330,7 @@ def ratio_for_ticker(
     lines = [line for line in matches if not is_debt_security_title(line.title)]
     if not lines:
         return unparsed(REASON_DEBT_SECURITY_ON_EQUITY_TICKER, title=matches[0].title, **filing)
-    readings = [(line, read_title(line.title)) for line in lines]
+    readings = [(line, read_title(line.title, registrants)) for line in lines]
     for line, reading in readings:
         if reading.listing_units_per_share is None:
             return unparsed(reading.reason or REASON_UNFAMILIAR_TITLE, title=line.title, **filing)
@@ -254,6 +347,7 @@ class _Cover:
     filed: date
     securities: tuple[CoverSecurity, ...]
     titles: tuple[str, ...] = ()
+    registrants: tuple[str, ...] = ()
 
 
 FilingFinder = Callable[[int, datetime], "FilingDocument | None"]
@@ -290,6 +384,7 @@ class CoverRatioReader:
             form=cover.form,
             filed=cover.filed,
             titles=cover.titles,
+            registrants=cover.registrants,
         )
 
     def _read_cover(self, cik: int, cutoff: date) -> _Cover | ListingUnitRatio:
@@ -309,6 +404,7 @@ class CoverRatioReader:
                 filed=document.filing_date,
                 securities=cover_securities(document.body),
                 titles=cover_titles(document.body),
+                registrants=cover_registrants(document.body),
             )
         except Exception as error:  # noqa: BLE001
             self._failed_in_a_row = self._failed_in_a_row + 1 if _may_repeat(error) else 0
