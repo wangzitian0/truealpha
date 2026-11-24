@@ -247,8 +247,14 @@ def cover_registrants(body: bytes) -> tuple[str, ...]:
     return tuple(fact.text for fact in InlineXbrl(body).text_facts((REGISTRANT_CONCEPT,), limit=_TITLE_LIMIT))
 
 
+_PREFERRED_WORD = re.compile(r"\b(?:preferred|preference)\b")
+
+
 def names_a_depositary_security(titles: Sequence[str]) -> bool:
-    return any(_DEPOSITARY_WORD.search(" ".join(title.split()).lower()) for title in titles)
+    """A depositary security of common or ordinary shares. A depositary share of a preferred share
+    says nothing about the common listing (BNY lists one, #1606)."""
+    texts = (" ".join(title.split()).lower() for title in titles)
+    return any(_DEPOSITARY_WORD.search(text) and not _PREFERRED_WORD.search(text) for text in texts)
 
 
 def cover_securities(body: bytes) -> tuple[CoverSecurity, ...]:

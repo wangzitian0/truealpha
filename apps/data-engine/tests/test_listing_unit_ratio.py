@@ -876,3 +876,20 @@ def test_a_filer_name_matches_as_whole_words_and_two_filer_names_keep_the_title_
 )
 def test_each_position_rule_of_the_par_value_clause_refuses_a_word_out_of_place(title: str) -> None:
     assert read_title(title).listing_units_per_share is None, title
+
+
+def test_a_depositary_share_of_a_preferred_share_does_not_stop_the_domestic_rule() -> None:
+    """#1606, staging 2026-11-24: the 10-K of BNY still pairs the common stock with the old ticker BK
+    and lists a depositary share of a Series K preferred share. The common listing is one share."""
+    body = cover_html(
+        ("BK", "Common Stock, $0.01 par value"),
+        (
+            "BK PRK",
+            "Depositary Shares, each representing a 1/4,000th interest in a share of Series K Noncumulative Perpetual Preferred Stock",
+        ),
+    )
+
+    ratio = _domestic(body, "BNY")
+
+    assert ratio.listing_units_per_share == Decimal(1)
+    assert ratio.pattern == PATTERN_DOMESTIC_FILER
