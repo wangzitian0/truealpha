@@ -28,7 +28,7 @@ from data_engine.datahub.standards.planner import universe_issuers
 from data_engine.environment_universes import any_environment_universe_names, scheduled_universe_names
 from data_engine.external_op import external_op
 from data_engine.quality.nightly_verdicts import check_name, is_registered, newest_is_red, tick_from_config, verdict
-from data_engine.run_launcher import UNIVERSE_TAG
+from data_engine.run_launcher import UNIVERSE_TAG, config_universe
 from data_engine.sources import gateway
 
 STANDARD_BACKFILL_JOB_NAME = "standard_backfill_pipeline"
@@ -143,11 +143,7 @@ class HeadReportsStartConfig(StandardBackfillConfig):
 
 
 def run_universe(run_config: Mapping[str, Any]) -> str:
-    for op in (run_config.get("ops") or {}).values():
-        universe = ((op or {}).get("config") or {}).get("universe")
-        if universe:
-            return str(universe)
-    return str(StandardBackfillConfig.model_fields["universe"].default)
+    return config_universe(run_config) or str(StandardBackfillConfig.model_fields["universe"].default)
 
 
 def standards_to_run(selected: str) -> tuple[str, ...]:
