@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections import Counter
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import date
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -178,3 +180,51 @@ def test_a_range_moomoo_refuses_is_refused_before_any_call(begin: date, end: dat
         moomoo_origin.capture_earnings_calendar("US", begin, end, client=client)
 
     assert client.calls == []
+
+
+# The stored staging answer of 2026-11-24 07:12:48 UTC: `raw.fetches` key
+# `get_earnings_calendar:market:US:2026-11-20:2026-11-26:2026-11-24`, byte-pinned.
+_SAMPLE = Path(__file__).resolve().parents[1] / "samples" / "moomoo" / "earnings_calendar_US_2026-11-20_2026-11-26.json"
+_SAMPLE_SHA256 = "e1abb01685316b7f8498d4ca534c53ca589b34219c82c7d87faf6b8a10ec6b98"
+# GAAP diluted EPS of the quarter, from the earnings release (8-K exhibit 99.1) of each company, 2026-11-23.
+_GAAP_DILUTED_EPS_OF_THE_RELEASE = {
+    "CRWD": 0.02,  # sec.gov/Archives/edgar/data/1535527/000153552726000035/crwd-20261123xex991.htm (non-GAAP 0.34)
+    "A": 1.59,  # sec.gov/Archives/edgar/data/0001090872/000109087226000082/exhibit991-q426pressrelease.htm (1.86)
+    "HPE": 1.26,  # sec.gov/Archives/edgar/data/1645590/000164559026000097/ex-991x11232026x8k.htm (1.43)
+    "ZM": 1.05,  # sec.gov/Archives/edgar/data/0001585521/000158552126000170/zm-20261031ex991.htm (1.59)
+}
+
+
+def _sample_items() -> list[dict[str, Any]]:
+    body = _SAMPLE.read_bytes()
+    assert hashlib.sha256(body).hexdigest() == _SAMPLE_SHA256, "the captured answer changed"
+    return json.loads(body)
+
+
+def test_the_captured_calendar_has_no_annual_eps_estimate_so_consensus_growth_has_no_source() -> None:
+    """#1791: each event carries one EPS estimate of its own quarter; no event carries an annual one.
+
+    One quarter cannot stand for annual growth, so the analyst-consensus PEG convention stays
+    `growth_convention_unsourced:analyst_consensus`. Fiscal-year-end reports (HPQ, ADI, DE, A) are no exception.
+    """
+    items = _sample_items()
+    eps = {item["security"]["code"]: [e for e in item["estimateList"] if e["estimateType"] == _EPS] for item in items}
+
+    assert len(items) == 91 and all(len(estimates) == 1 for estimates in eps.values())
+    assert Counter(e.get("periodType") for (e,) in eps.values()) == Counter({_QUARTERLY: 69, None: 21, 2: 1})
+    assert [code for code, (e,) in eps.items() if e.get("periodType") == _ANNUAL] == []
+    fiscal_year_ends = {item["security"]["code"] for item in items if item["periodText"].endswith("Q4")}
+    assert {"HPQ", "ADI", "DE", "A"} <= fiscal_year_ends
+    assert {eps[code][0]["periodType"] for code in ("HPQ", "ADI", "DE", "A")} == {_QUARTERLY}
+
+
+def test_the_reported_eps_of_the_calendar_is_the_gaap_eps_of_the_company_release() -> None:
+    """The vendor labels the EPS estimate type GAAP; four reported actuals match the GAAP line of the release."""
+    eps = {
+        item["security"]["code"]: next(e for e in item["estimateList"] if e["estimateType"] == _EPS)
+        for item in _sample_items()
+    }
+
+    assert {code: eps[code]["actualValue"] for code in _GAAP_DILUTED_EPS_OF_THE_RELEASE} == (
+        _GAAP_DILUTED_EPS_OF_THE_RELEASE
+    )

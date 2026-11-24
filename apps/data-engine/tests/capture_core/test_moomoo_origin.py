@@ -613,15 +613,18 @@ def test_a_kline_request_is_gated_recorded_and_unadjusted(opend) -> None:
     assert (kwargs["start"], kwargs["end"]) == ("2026-07-15", "2026-07-29")
 
 
-def test_the_financials_request_is_three_gated_calls_and_a_failed_valuation_detail_keeps_the_statements(
-    opend,
-) -> None:
+def test_the_financials_request_is_two_gated_calls_for_the_two_statements(opend) -> None:
+    """#1791: the valuation detail carries no consensus growth, so the financials fetch no longer asks for it."""
     client = OpenDClient()
     assertion = MoomooFinancialsFetcher(client)("DDOG", _CUTOFF)
     assert assertion is not None and assertion.values["revenue"] == Decimal("3427158000")
-    assert "consensus_profit_growth" not in assertion.values
     assert opend.statement_types == [INCOME_STATEMENT, BALANCE_SHEET]
-    assert ledger.calls_this_month() == 3, "income, balance sheet and valuation detail are each a ledger row"
+    endpoints = gateway._pg_execute(
+        "select endpoint from staging.api_call_ledger where source = 'moomoo' order by id"
+    ).fetchall()
+    assert endpoints == [("get_financials_statements",), ("get_financials_statements",)], (
+        "income and balance sheet are each one ledger row, and nothing else is asked"
+    )
 
 
 def test_the_7d_kline_quota_refuses_the_call_and_the_cell_stays_single_origin(opend, monkeypatch) -> None:
@@ -697,56 +700,6 @@ def test_the_price_route_wires_the_third_origin_only_when_enabled(monkeypatch) -
     monkeypatch.setattr(origin_module.settings, "moomoo_opend_host", "opend.test")
     monkeypatch.setattr(origin_module.settings, "moomoo_opend_port", 11111)
     assert [o.origin for o in build_route(context, cells)._corroborating_origins] == ["moomoo-kline"]
-
-
-def test_parse_valuation_profit_growth_filters_annual_periods_by_cutoff() -> None:
-    valuation = {
-        "profit_growth_rate": {
-            "profit_data": [
-                {
-                    "period_str": "2024/FY",
-                    "financial_quarter": 4,
-                    "report_date_str": "2024-12-31",
-                    "profit_growth_rate": 24.5,
-                },
-                {
-                    "period_str": "2025/Q2",
-                    "financial_quarter": 2,
-                    "report_date_str": "2025-06-30",
-                    "profit_growth_rate": 12.0,
-                },
-                {
-                    "period_str": "2025/FY",
-                    "financial_quarter": 4,
-                    "report_date_str": "2025-12-31",
-                    "profit_growth_rate": 18.25,
-                },
-            ]
-        }
-    }
-    parsed = origin_module.parse_valuation_profit_growth(valuation, cutoff=date(2025, 6, 30))
-    assert parsed == {date(2024, 12, 31): Decimal("24.5")}
-
-
-def test_parse_annual_financials_attaches_consensus_profit_growth_from_valuation_detail() -> None:
-    income, balance = _statements("DDOG")
-    valuation = {
-        "profit_growth_rate": {
-            "profit_data": [
-                {
-                    "period_str": "2025/FY",
-                    "financial_quarter": 4,
-                    "report_date_str": "2025-12-31",
-                    "profit_growth_rate": 24.5,
-                }
-            ]
-        }
-    }
-    raw = canonical_bytes({"income": income, "balance_sheet": balance, "valuation_detail": valuation})
-    assertion = parse_annual_financials(raw, cutoff=_CUTOFF)
-    assert assertion is not None
-    assert assertion.by_period_end[date(2025, 12, 31)]["consensus_profit_growth"] == Decimal("24.5")
-    assert assertion.values.get("consensus_profit_growth") == Decimal("24.5")
 
 
 # -- fetch keys (#1411 K3): the second reader of a landed key never asks OpenD ----------

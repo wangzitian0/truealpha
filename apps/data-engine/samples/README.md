@@ -145,6 +145,17 @@ Verified working end-to-end for all 4 tickers.
   "DDOG's suppliers are AWS/GCP/Azure" directly — the LLM-extraction path
   (`common/factors/shared/extraction.py`) is still the way to build `supplies_to` KG edges,
   not a shortcut moomoo replaces.
+- **The earnings calendar has quarterly GAAP EPS estimates only (2026-11-24, #1791).**
+  `moomoo/earnings_calendar_US_2026-11-20_2026-11-26.json` (45769 bytes, sha256
+  `e1abb01685316b7f8498d4ca534c53ca589b34219c82c7d87faf6b8a10ec6b98`) is the stored staging
+  answer of `get_earnings_calendar` (US, 2026-11-20 to 2026-11-26, fetched 2026-11-24 07:12:48 UTC
+  through `moomoo_origin.capture_earnings_calendar`). It has 91 events. Each event has one EPS,
+  one revenue and one EBIT estimate. EPS periods: 69 quarterly, 1 semi-annual, 21 without a
+  period or a value, 0 annual; the fiscal-year-end reports (HPQ, ADI, DE, A) are quarterly too.
+  The reported EPS of CRWD, A, HPE and ZM equals the GAAP diluted EPS of each company release.
+  The SDK table of this call keeps one EPS pair and drops `periodType` and `currency`, so the
+  wrapper reads the vendor proto. The list uses the default `Hot` sort and has no paging field;
+  its completeness is not checked. `tests/test_moomoo_earnings_calendar.py` byte-pins it.
 - Ledger-recorded calls this capture run: 57 (the `api_call_ledger` is throttle and
   audit infrastructure, not a monthly quota).
 

@@ -400,6 +400,7 @@ _IDENTITY_FUNCTIONS = frozenset(
             "get_corporate_actions_dividends",
             "get_short_interest",
             "get_owner_plate",
+            "get_earnings_calendar",
             "get_history_kline",
             "get_history_kl_quota",
         )
@@ -407,7 +408,7 @@ _IDENTITY_FUNCTIONS = frozenset(
     | {"data_engine.datahub.capture_core.universe_plane._get"}
 )
 #: Methods of the moomoo client protocol; any owner (`client.history_kline`, `self._client.history_kline`).
-_IDENTITY_METHODS = frozenset({"history_kline", "financial_statements"})
+_IDENTITY_METHODS = frozenset({"history_kline", "financial_statements", "earnings_calendar"})
 
 
 def _module_of(path: Path, root: Path) -> str:

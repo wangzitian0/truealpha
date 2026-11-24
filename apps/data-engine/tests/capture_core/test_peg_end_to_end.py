@@ -23,7 +23,6 @@ import os
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
-from typing import Any
 
 import psycopg
 import pytest
@@ -227,49 +226,15 @@ def _definition() -> LargeModelValueV0Definition:
 
 
 @pytest.mark.criterion("R3.C4")
-def test_r3_c4_consensus_peg_end_to_end_from_moomoo_valuation_to_strategy_run_repository(connection) -> None:
-    """R3.C4 partial: fetcher parse, evaluator, node persistence, and repository read. The seed step is not covered."""
+def test_r3_c4_consensus_peg_end_to_end_from_a_consensus_input_to_strategy_run_repository(connection) -> None:
+    """R3.C4 partial: evaluator, node persistence, and repository read from a consensus growth input.
+
+    No licensed source gives annual consensus growth (#1791), so no fetcher feeds this input today."""
     import secrets
 
-    from data_engine.datahub.capture_core.moomoo_origin import MoomooFinancialsFetcher
     from data_engine.datahub.strategy_bridge import _persist_peg_consensus_nodes
     from psycopg.rows import dict_row
     from truealpha_runtime.strategy_run_postgres import _DECISIONS_SQL, _decision_from_row
-
-    class _FakeClient:
-        def financial_statements(self, code: str, *, statement_type: int, identity: Any) -> dict[str, Any]:
-            del code, identity
-            tag = "income" if statement_type == 1 else "balance"
-            return {
-                "report_list": [
-                    {
-                        "financial_type": 7,
-                        "report_date": "2025-12-31",
-                        "currency_code": "USD",
-                        "accounting_standards": "US-GAAP",
-                        "item_list": [{"field_id": 8001, "data": 50_000 if tag == "income" else 100_000}],
-                    }
-                ]
-            }
-
-        def valuation_detail(self, code: str, *, identity: Any) -> dict[str, Any]:
-            del code, identity
-            return {
-                "profit_growth_rate": {
-                    "profit_data": [
-                        {
-                            "period_str": "2025/FY",
-                            "financial_quarter": 4,
-                            "report_date_str": "2025-12-31",
-                            "profit_growth_rate": 25,
-                        }
-                    ]
-                }
-            }
-
-    assertion = MoomooFinancialsFetcher(_FakeClient())("E2ER3C4", _CUTOFF.date())
-    assert assertion is not None
-    assert assertion.values.get("consensus_profit_growth") == Decimal("25")
 
     bundle = build_bundle(_company_facts(), _CUTOFF.date(), OperatingBranch.NON_FINANCIAL)
     records = {
