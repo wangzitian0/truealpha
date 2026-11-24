@@ -446,13 +446,20 @@ def _drift(stored: Any, fresh: dict[str, Any] | None) -> str:
     if fresh is None:
         return "no governed head to recompute against"
     stored_questions = (stored or {}).get("questions", {})
+    # A report of other reason rules names other reasons for the same cells; the rules never change
+    # whether a cell is answered, so only that is compared until the head reports run again (#1851).
+    compared = (
+        _DRIFT_FIELDS
+        if (stored or {}).get("reason_registry_sha256") == fresh.get("reason_registry_sha256")
+        else ("answered",)
+    )
     changed = []
     for question, entry in fresh["questions"].items():
         before = stored_questions.get(question)
         if before is None:
             changed.append(f"{question}: absent from the stored report")
             continue
-        moved = [field for field in _DRIFT_FIELDS if _drift_value(before, field) != _drift_value(entry, field)]
+        moved = [field for field in compared if _drift_value(before, field) != _drift_value(entry, field)]
         if "answered" in moved:
             changed.append(f"{question}: stored {before.get('answered')} answered, tables say {entry['answered']}")
         elif moved:

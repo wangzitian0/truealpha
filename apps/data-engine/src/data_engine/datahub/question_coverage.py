@@ -32,6 +32,9 @@ NO_HEAD_SUMMARY = "no governed head"
 #: A cell outside the five classes is a violation of layer 1 (#1851): no row, no reason, or a
 #: reason the registry does not list.
 VIOLATION_NO_ROW, VIOLATION_NO_REASON, VIOLATION_UNREGISTERED = "no_row", "no_reason", "unregistered"
+#: The served status says the measure applies, but the reason is of the class `not_applicable`: the
+#: producer or the registry is wrong, and the report says so rather than count the cell twice.
+VIOLATION_STATUS_CLASS_CONFLICT = "status_class_conflict"
 MAX_CHANGED_SUBJECTS_LISTED = 20
 
 
@@ -282,6 +285,8 @@ def classify_question(
             if reason == UNRECORDED_REASON
             else VIOLATION_UNREGISTERED
             if registered is None or registered.reason_class is None
+            else VIOLATION_STATUS_CLASS_CONFLICT
+            if registered.reason_class is ReasonClass.NOT_APPLICABLE and not not_applicable
             else None
         )
         if violation is not None:
@@ -415,8 +420,8 @@ def previous_head(connection: Connection[Any], universe: str, run_id: str) -> Go
     list universe changes with its membership, so the lane name finds it (#1851 review)."""
     row = connection.execute(
         "select universe_id, run_id, cutoff from mart.question_coverage_report "
-        "where payload ->> 'universe' = %s and run_id <> %s order by created_at desc limit 1",
-        (universe, run_id),
+        "where universe_id like %s and payload ->> 'universe' = %s and run_id <> %s order by created_at desc limit 1",
+        (f"{record(key_of_lane(universe)).id_prefix}%", universe, run_id),
     ).fetchone()
     return None if row is None else GovernedHead(universe_id=str(row[0]), run_id=str(row[1]), cutoff=row[2])
 
