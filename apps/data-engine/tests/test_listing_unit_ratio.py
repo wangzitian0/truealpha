@@ -758,3 +758,70 @@ def test_a_title_that_names_another_instrument_gets_no_ratio_with_or_without_the
 
     assert ratio.listing_units_per_share is None, title
     assert ratio.pattern == PATTERN_UNPARSED
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        # Real par-value clauses of staging covers, 2026-11-24: each word belongs to the clause.
+        "Common Stock, par value 12 1/2¢ per share",
+        "Common Stock, par value 1-2/3 cents per share",
+        "Ordinary Shares, nominal value €0.01 each",
+        "Common Stock, one dollar par value",
+        "Common Stock – par value $1.66 2/3",
+        "Class B Common Stock, $0.10 par value (voting)",
+        "Common Stock, par value, $0.001 per share",
+        "Common Stock-$1.25 par value",
+        "Common Stock, $2.00 par",
+        "Ordinary Shares, EUR 0.20 par value",
+        "Common Stock, $0.001",
+        "Common Stock, $ 0.00000625 par value per share",
+        "Common Stock,",
+    ],
+)
+def test_a_par_value_clause_in_any_real_form_follows_a_plain_share(title: str) -> None:
+    assert read_title(title).listing_units_per_share == Decimal(1), title
+
+
+@pytest.mark.parametrize(
+    ("title", "registrants"),
+    [
+        (
+            "Common Stock, $.0001 par value (Essex Property Trust, Inc.)",
+            ("ESSEX PROPERTY TRUST, INC.", "ESSEX PORTFOLIO, L.P."),
+        ),
+        (
+            "Common Stock, $.01 par value, of United Rentals, Inc.",
+            ("UNITED RENTALS, INC.", "UNITED RENTALS (NORTH AMERICA), INC."),
+        ),
+    ],
+)
+def test_the_filer_name_inside_a_par_value_clause_is_not_a_second_security(
+    title: str, registrants: tuple[str, ...]
+) -> None:
+    assert read_title(title, registrants).listing_units_per_share == Decimal(1)
+    assert read_title(title).listing_units_per_share is None, "without the filer name the name is an unknown word"
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        # Second review of #1842: the grammar read these through any text after the punctuation.
+        "Class A Common Stock; Class B Common Stock",
+        "Class A Common Stock (and Class B Common Stock)",
+        "Common Stock - Units",
+        "Common Stock, each with one-half of one Warrant",
+        "Common Stock, together with Preferred Stock Purchase Rights",
+        "Ordinary Shares, each representing one-tenth",
+        "Common Stock, $0.01 par value, and associated rights",
+        "Common, $. par value",
+    ],
+)
+def test_a_plain_share_followed_by_any_word_outside_a_par_value_clause_is_not_read(title: str) -> None:
+    assert read_title(title).listing_units_per_share is None, title
+
+
+def test_a_filer_name_that_is_only_a_period_removes_nothing() -> None:
+    assert read_title("Units of .", ("...",)).listing_units_per_share is None
+    assert read_title("Common Stock, $0.01 par value", ("...", "ACME Corp")).listing_units_per_share == Decimal(1)
+    assert read_title("Common Stock, Inc. Warrants", ("Common Stock, Inc.",)).listing_units_per_share is None

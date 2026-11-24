@@ -76,7 +76,7 @@ _QUANTITY = (
 _SHARE = (
     r"(?:(?:class|series) [a-z0-9]+ )?"
     r"(?:(?:ordinary|common|capital|registered|subordinate voting|non[- ]voting|voting) )*"
-    r"(?:shares?|stock|common(?=,\s*[$€£¥]\s*[\d.]+\s+par\s+value\s*$))"
+    r"(?:shares?|stock|common(?=,\s*[$€£¥]\s*(?:\d[\d.,]*|\.\d+)\s+par\s+value\s*$))"
     r"(?: of beneficial interest)?"
     r"(?:,? (?:non[- ])?voting)?"
 )
@@ -95,6 +95,22 @@ _DEPOSITARY_EACH = re.compile(
     r"(?:the right to receive )?" + _QUANTITY + r" " + _SHARE + _TAIL
 )
 _PLAIN_SHARE = re.compile(r"^" + _SHARE + _TAIL)
+#: The words that may follow the share words of a plain-share title: a par or nominal value clause.
+#: Review of #1842: any other word (`; Class B Common Stock`, `, each with one-half of one Warrant`,
+#: `- Units`) names a second security, and the title is not read.
+_PAR_CLAUSE_WORDS = frozenset(
+    "par value nominal no without per share shares of each stated voting non-voting cent cents dollar dollars one"
+    " us usd eur chf gbp cad dkk sek nok hkd jpy aud".split()
+)
+_PAR_CLAUSE_SEPARATORS = re.compile(r"[,;:()–—]|(?<![\d\w])-|-(?![\d\w])")
+_AMOUNT = re.compile(r"^[$€£¥]?(?:\d+(?:[.,]\d+)*|\.\d+)?(?:-?\d+/\d+)?¢?$")
+
+
+def _only_a_par_clause(rest: str) -> bool:
+    words = [word.strip(".") for word in _PAR_CLAUSE_SEPARATORS.sub(" ", rest).split()]
+    return all(not word or word in _PAR_CLAUSE_WORDS or (_AMOUNT.match(word) and word != "-") for word in words)
+
+
 _DEBT_NOTE = re.compile(
     r"(?:\b\d+(?:\.\d+)?%\s*(?:(?:senior|subordinated|floating[- ]rate|fixed[- ]rate)\s+)*(?:notes?|debentures?|bonds?)\b"
     r"|\b(?:(?:senior|subordinated|floating[- ]rate|fixed[- ]rate)\s+)*(?:notes?|debentures?|bonds?)\b.*?\bdue\s+\d{4}\b)",
@@ -113,7 +129,8 @@ class TitleReading:
     reason: str | None
 
 
-def read_title(title: str) -> TitleReading:
+def read_title(title: str, registrants: Sequence[str] = ()) -> TitleReading:
+    """`registrants` are the filer names of the cover: a title may name its own filer (#1606)."""
     text = " ".join(title.split()).lower()
     if _DEPOSITARY_WORD.search(text):
         match = _DEPOSITARY_EACH.search(text)
@@ -125,7 +142,8 @@ def read_title(title: str) -> TitleReading:
         if units <= 0:
             return TitleReading(None, PATTERN_UNPARSED, REASON_UNFAMILIAR_TITLE)
         return TitleReading(units, PATTERN_DEPOSITARY, None)
-    if _PLAIN_SHARE.search(text):
+    bare = without_registrant(text, registrants)
+    if (match := _PLAIN_SHARE.match(bare)) is not None and _only_a_par_clause(bare[match.end() :]):
         return TitleReading(Decimal(1), PATTERN_PLAIN_SHARE, None)
     return TitleReading(None, PATTERN_UNPARSED, REASON_UNFAMILIAR_TITLE)
 
@@ -225,27 +243,14 @@ def _symbol_key(symbol: str) -> str:
 
 
 def without_registrant(title: str, registrants: Sequence[str]) -> str:
-    """The title without the filer's own name before it or after `of` (#1606):
-    `Evergy, Inc. common stock` and `Common Stock of PPL Corporation` keep only the security."""
+    """The title without the filer's own names, with an `of` before a name (#1606):
+    `Evergy, Inc. common stock` and `Common Stock of PPL Corporation` keep only the security.
+    The plain-share grammar then reads all that remains."""
     text = " ".join(title.split())
-    for name in sorted({" ".join(n.split()).rstrip(".") for n in registrants if n.strip()}, key=len, reverse=True):
-        named = re.escape(name) + r"\.?"
-        stripped = re.sub(r"^" + named + r"[\s,]+|\s+of\s+" + named + r"\s*$", "", text, count=1, flags=re.IGNORECASE)
-        if stripped != text:
-            return stripped
-    return text
-
-
-def _read_listed_title(title: str, registrants: Sequence[str]) -> TitleReading:
-    """The grammar reads the title; a title that names its filer is read again without the name."""
-    reading = read_title(title)
-    if reading.reason == REASON_UNFAMILIAR_TITLE and (bare := without_registrant(title, registrants)) != " ".join(
-        title.split()
-    ):
-        again = read_title(bare)
-        if again.listing_units_per_share is not None:
-            return again
-    return reading
+    names = {name for name in (" ".join(n.split()).rstrip(".") for n in registrants) if name}
+    for name in sorted(names, key=len, reverse=True):
+        text = re.sub(r"(?:\bof\s+)?" + re.escape(name) + r"\.?", " ", text, flags=re.IGNORECASE)
+    return " ".join(text.split()).strip(" ,")
 
 
 def ratio_for_ticker(
@@ -271,7 +276,7 @@ def ratio_for_ticker(
     lines = [line for line in matches if not is_debt_security_title(line.title)]
     if not lines:
         return unparsed(REASON_DEBT_SECURITY_ON_EQUITY_TICKER, title=matches[0].title, **filing)
-    readings = [(line, _read_listed_title(line.title, registrants)) for line in lines]
+    readings = [(line, read_title(line.title, registrants)) for line in lines]
     for line, reading in readings:
         if reading.listing_units_per_share is None:
             return unparsed(reading.reason or REASON_UNFAMILIAR_TITLE, title=line.title, **filing)
