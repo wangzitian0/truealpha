@@ -136,42 +136,6 @@ create table if not exists app.research_document_tombstones (
  constraint research_document_tombstones_tenant_id_fkey FOREIGN KEY (tenant_id) REFERENCES app.tenants(tenant_id)
 );
 
-create table if not exists app.research_document_download_tickets (
- ticket_id text not null,
- document_id text not null,
- revision_id text not null,
- tenant_id text not null,
- owner_principal_id text not null,
- expires_at timestamp with time zone not null,
- redeemed_at timestamp with time zone,
- created_at timestamp with time zone default now() not null,
- constraint research_document_download_tickets_pkey PRIMARY KEY (ticket_id),
- constraint research_document_download_tickets_check CHECK ((expires_at > created_at)),
- constraint research_document_download_tickets_check1 CHECK (((redeemed_at IS NULL) OR (redeemed_at >= created_at))),
- constraint research_document_download_tickets_ticket_id_check CHECK ((length(ticket_id) > 0)),
- constraint research_document_download_ti_document_id_tenant_id_owner__fkey FOREIGN KEY (document_id, tenant_id, owner_principal_id) REFERENCES app.research_documents(document_id, tenant_id, owner_principal_id),
- constraint research_document_download_ti_revision_id_document_id_tena_fkey FOREIGN KEY (revision_id, document_id, tenant_id, owner_principal_id) REFERENCES app.research_document_revisions(revision_id, document_id, tenant_id, owner_principal_id),
- constraint research_document_download_tickets_owner_principal_id_fkey FOREIGN KEY (owner_principal_id) REFERENCES app.principals(principal_id),
- constraint research_document_download_tickets_tenant_id_fkey FOREIGN KEY (tenant_id) REFERENCES app.tenants(tenant_id)
-);
-
-CREATE OR REPLACE FUNCTION app.reject_document_ticket_field_tamper()
- RETURNS trigger
- LANGUAGE plpgsql
-AS $function$
-begin
-    if new.document_id is distinct from old.document_id
-        or new.revision_id is distinct from old.revision_id
-        or new.tenant_id is distinct from old.tenant_id
-        or new.owner_principal_id is distinct from old.owner_principal_id
-        or new.expires_at is distinct from old.expires_at
-        or new.created_at is distinct from old.created_at
-    then
-        raise exception 'research_document_download_tickets: only redeemed_at may change after creation';
-    end if;
-    return new;
-end;
-$function$;
 CREATE OR REPLACE FUNCTION app.reject_mutation()
  RETURNS trigger
  LANGUAGE plpgsql
@@ -227,7 +191,6 @@ do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'app.convers
 do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'app.entitlement_grants'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = '048ed0aba0a5fc7d693e4702993a61e2') then drop trigger if exists trg_entitlement_grants_append_only on app.entitlement_grants; CREATE TRIGGER trg_entitlement_grants_append_only BEFORE DELETE OR UPDATE ON app.entitlement_grants FOR EACH ROW EXECUTE FUNCTION app.reject_mutation(); end if; end $$;
 do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'app.principal_credentials'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = '21a25999fa9aae01e02a421364744028') then drop trigger if exists trg_principal_credentials_touch on app.principal_credentials; CREATE TRIGGER trg_principal_credentials_touch BEFORE UPDATE ON app.principal_credentials FOR EACH ROW EXECUTE FUNCTION app.touch_principal_credentials_updated_at(); end if; end $$;
 do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'app.principals'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = '97a378d50d589530b576d03ba5607be6') then drop trigger if exists trg_principals_append_only on app.principals; CREATE TRIGGER trg_principals_append_only BEFORE DELETE OR UPDATE ON app.principals FOR EACH ROW EXECUTE FUNCTION app.reject_mutation(); end if; end $$;
-do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'app.research_document_download_tickets'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = 'f5ad70558980dc24f92c0dd4e94713bc') then drop trigger if exists trg_research_document_download_tickets_guard_update on app.research_document_download_tickets; CREATE TRIGGER trg_research_document_download_tickets_guard_update BEFORE UPDATE ON app.research_document_download_tickets FOR EACH ROW EXECUTE FUNCTION app.reject_document_ticket_field_tamper(); end if; end $$;
 do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'app.research_document_revisions'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = '22dc8ddb784a0deaf0ae26882df03e66') then drop trigger if exists trg_research_document_revisions_append_only on app.research_document_revisions; CREATE TRIGGER trg_research_document_revisions_append_only BEFORE DELETE OR UPDATE ON app.research_document_revisions FOR EACH ROW EXECUTE FUNCTION app.reject_mutation(); end if; end $$;
 do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'app.research_document_tombstones'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = 'e0037fa6e1d641cef08e59734f393360') then drop trigger if exists trg_research_document_tombstones_append_only on app.research_document_tombstones; CREATE TRIGGER trg_research_document_tombstones_append_only BEFORE DELETE OR UPDATE ON app.research_document_tombstones FOR EACH ROW EXECUTE FUNCTION app.reject_mutation(); end if; end $$;
 do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'app.tenants'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = 'fbbf4c5bbfb27354122774ceca0623f7') then drop trigger if exists trg_tenants_append_only on app.tenants; CREATE TRIGGER trg_tenants_append_only BEFORE DELETE OR UPDATE ON app.tenants FOR EACH ROW EXECUTE FUNCTION app.reject_mutation(); end if; end $$;
@@ -250,10 +213,6 @@ do $$ begin if to_regclass('app.idx_research_document_revisions_tenant') is null
 do $$ begin if to_regclass('app.idx_research_document_revisions_owner') is null then CREATE INDEX idx_research_document_revisions_owner ON app.research_document_revisions USING btree (owner_principal_id); end if; end $$;
 do $$ begin if to_regclass('app.idx_research_document_tombstones_tenant') is null then CREATE INDEX idx_research_document_tombstones_tenant ON app.research_document_tombstones USING btree (tenant_id); end if; end $$;
 do $$ begin if to_regclass('app.idx_research_document_tombstones_owner') is null then CREATE INDEX idx_research_document_tombstones_owner ON app.research_document_tombstones USING btree (owner_principal_id); end if; end $$;
-do $$ begin if to_regclass('app.idx_research_document_download_tickets_doc_tenant_owner') is null then CREATE INDEX idx_research_document_download_tickets_doc_tenant_owner ON app.research_document_download_tickets USING btree (document_id, tenant_id, owner_principal_id); end if; end $$;
-do $$ begin if to_regclass('app.idx_research_document_download_tickets_rev_doc_tenant_owner') is null then CREATE INDEX idx_research_document_download_tickets_rev_doc_tenant_owner ON app.research_document_download_tickets USING btree (revision_id, document_id, tenant_id, owner_principal_id); end if; end $$;
-do $$ begin if to_regclass('app.idx_research_document_download_tickets_tenant') is null then CREATE INDEX idx_research_document_download_tickets_tenant ON app.research_document_download_tickets USING btree (tenant_id); end if; end $$;
-do $$ begin if to_regclass('app.idx_research_document_download_tickets_owner') is null then CREATE INDEX idx_research_document_download_tickets_owner ON app.research_document_download_tickets USING btree (owner_principal_id); end if; end $$;
 
 do $$ begin
     if not exists (
@@ -271,15 +230,6 @@ do $$ begin
     ) then
         alter table app.conversations enable row level security;
         alter table app.conversations force row level security;
-    end if;
-end $$;
-do $$ begin
-    if not exists (
-        select 1 from pg_class c join pg_namespace n on n.oid = c.relnamespace
-        where n.nspname = 'app' and c.relname = 'research_document_download_tickets' and c.relrowsecurity and c.relforcerowsecurity
-    ) then
-        alter table app.research_document_download_tickets enable row level security;
-        alter table app.research_document_download_tickets force row level security;
     end if;
 end $$;
 do $$ begin
@@ -328,14 +278,6 @@ end $$;
 do $$ begin
     if not exists (
         select 1 from pg_policies
-        where schemaname = 'app' and tablename = 'research_document_download_tickets' and policyname = 'research_document_download_tickets_owner_isolation'
-    ) then
-        create policy research_document_download_tickets_owner_isolation on app.research_document_download_tickets as permissive for ALL to public using (((tenant_id = NULLIF(current_setting('truealpha.tenant_id'::text, true), ''::text)) AND (owner_principal_id = NULLIF(current_setting('truealpha.principal_id'::text, true), ''::text)))) with check (((tenant_id = NULLIF(current_setting('truealpha.tenant_id'::text, true), ''::text)) AND (owner_principal_id = NULLIF(current_setting('truealpha.principal_id'::text, true), ''::text))));
-    end if;
-end $$;
-do $$ begin
-    if not exists (
-        select 1 from pg_policies
         where schemaname = 'app' and tablename = 'research_document_revisions' and policyname = 'research_document_revisions_owner_isolation'
     ) then
         create policy research_document_revisions_owner_isolation on app.research_document_revisions as permissive for ALL to public using (((tenant_id = NULLIF(current_setting('truealpha.tenant_id'::text, true), ''::text)) AND (owner_principal_id = NULLIF(current_setting('truealpha.principal_id'::text, true), ''::text)))) with check (((tenant_id = NULLIF(current_setting('truealpha.tenant_id'::text, true), ''::text)) AND (owner_principal_id = NULLIF(current_setting('truealpha.principal_id'::text, true), ''::text))));
@@ -355,5 +297,14 @@ do $$ begin
         where schemaname = 'app' and tablename = 'research_documents' and policyname = 'research_documents_owner_isolation'
     ) then
         create policy research_documents_owner_isolation on app.research_documents as permissive for ALL to public using (((tenant_id = NULLIF(current_setting('truealpha.tenant_id'::text, true), ''::text)) AND (owner_principal_id = NULLIF(current_setting('truealpha.principal_id'::text, true), ''::text)))) with check (((tenant_id = NULLIF(current_setting('truealpha.tenant_id'::text, true), ''::text)) AND (owner_principal_id = NULLIF(current_setting('truealpha.principal_id'::text, true), ''::text))));
+    end if;
+end $$;
+
+do $$ begin
+    if to_regclass('app.research_document_download_tickets') is not null then
+        drop table app.research_document_download_tickets;
+    end if;
+    if to_regprocedure('app.reject_document_ticket_field_tamper()') is not null then
+        drop function app.reject_document_ticket_field_tamper();
     end if;
 end $$;

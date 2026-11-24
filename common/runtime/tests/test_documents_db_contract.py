@@ -1,8 +1,8 @@
 """#373: runs db/tests/documents_contract.sql against a live Postgres.
 
 Mirrors test_conversations_db_contract.py's pattern for #396: the contract
-SQL is the source of truth for RLS/composite-FK/append-only/single-
-redemption behavior; this test exists so it actually executes in CI.
+SQL is the source of truth for RLS/composite-FK/append-only behavior;
+this test exists so it actually executes in CI.
 """
 
 from __future__ import annotations
