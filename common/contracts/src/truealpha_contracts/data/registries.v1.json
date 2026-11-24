@@ -612,19 +612,806 @@
       "minimum_classified_share": "0.80"
     }
   ],
-  "obligation_reasons": {
-    "auth_failed": "stop",
-    "contract_violation": "stop",
-    "release_scope_mismatch": "stop",
-    "look_ahead_violation": "stop",
-    "checksum_mismatch": "stop",
-    "transient_network": "retry",
-    "timeout": "retry",
-    "rate_limited": "retry",
-    "server_error": "retry",
-    "not_yet_knowable": "trace_only",
-    "field_unavailable": "trace_only",
-    "low_confidence": "trace_only",
-    "deferred_capacity": "trace_only"
+  "reasons": {
+    "description": "One entry per reason code that a capture record, a served row or a report can carry (#1851). An outcome code says why a cell has no value or why its value is disputed, in one of five classes; pipeline_gap names the issue that tracks it. A code that covers several causes is a pipeline_gap until its producer splits it. An evidence code describes a served value and is never the reason that a value is missing. An exact entry wins over a prefix; a code that starts with a listed prefix takes that prefix's entry; excluded:<code> and reason:<code> take the entry of <code>. Capture obligations keep their disposition here.",
+    "classes": {
+      "world_absence": "The company or the source holds no such fact.",
+      "not_applicable": "The measure does not apply to this subject.",
+      "pipeline_gap": "Our capture, parse or computation did not produce the fact.",
+      "transient": "A source was briefly unavailable; the next run asks again.",
+      "disputed": "Evidence exists but sources disagree, or the value fails a plausibility check."
+    },
+    "codes": {
+      "auth_failed": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851",
+        "disposition": "stop"
+      },
+      "below_confidence_floor": {
+        "kind": "outcome",
+        "class": "disputed"
+      },
+      "below_minimum_classified_share": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "checksum_mismatch": {
+        "kind": "outcome",
+        "class": "disputed",
+        "disposition": "stop"
+      },
+      "close_jump_beyond_series": {
+        "kind": "outcome",
+        "class": "disputed"
+      },
+      "confidence.definitional": {
+        "kind": "evidence"
+      },
+      "confidence.evaluated": {
+        "kind": "evidence"
+      },
+      "confidence.no-origin-value": {
+        "kind": "evidence"
+      },
+      "context_window_exceeded": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "contract_violation": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851",
+        "disposition": "stop"
+      },
+      "cross_origin_conflict": {
+        "kind": "outcome",
+        "class": "disputed"
+      },
+      "currency_mismatch": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "customer_only_graph": {
+        "kind": "evidence"
+      },
+      "deferred_capacity": {
+        "kind": "outcome",
+        "class": "transient",
+        "disposition": "trace_only"
+      },
+      "elimination_not_allocated": {
+        "kind": "outcome",
+        "class": "world_absence"
+      },
+      "etf_valuation_not_materialized": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "etf_virtual_company_module_not_materialized": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "evidence.raw-transport-missing": {
+        "kind": "evidence"
+      },
+      "failed": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "fetch_error:MoomooConnectionError": {
+        "kind": "outcome",
+        "class": "transient"
+      },
+      "fetch_error:RuntimeError": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "fetch_error:TypeError": {
+        "kind": "outcome",
+        "class": "disputed"
+      },
+      "fetch_error:ValueError": {
+        "kind": "outcome",
+        "class": "disputed"
+      },
+      "field_unavailable": {
+        "kind": "outcome",
+        "class": "world_absence",
+        "disposition": "trace_only"
+      },
+      "fiscal_period_mismatch": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "independent_origins_agree": {
+        "kind": "evidence"
+      },
+      "insufficient_earnings_history": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "interrupted": {
+        "kind": "outcome",
+        "class": "transient"
+      },
+      "invalid_ratings_range": {
+        "kind": "outcome",
+        "class": "disputed"
+      },
+      "labor_efficiency_tree_unpinned": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "listings_disagree_on_splits": {
+        "kind": "outcome",
+        "class": "disputed"
+      },
+      "look_ahead_violation": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851",
+        "disposition": "stop"
+      },
+      "low_confidence": {
+        "kind": "outcome",
+        "class": "disputed",
+        "disposition": "trace_only"
+      },
+      "mart_read_failed": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "missing_audited_gross_profit_or_coordinate_join": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "missing_bank_net_revenue": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "missing_class_ratio": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "missing_employees_total": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "missing_financial_assets": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "missing_financial_returns": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "missing_goodwill": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "missing_gross_profit": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "missing_gross_profit_fact": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "missing_gross_profit_per_employee": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "missing_headcount": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "missing_headcount_disclosure": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "missing_input": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "missing_intangible_assets_net_excluding_goodwill": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "missing_issuer_class": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "missing_labor_cost_disclosure": {
+        "kind": "outcome",
+        "class": "world_absence"
+      },
+      "missing_listing_unit_ratio": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "missing_market_price": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "missing_market_value_input": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "missing_net_income": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "missing_pre_provision_profit": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "missing_preferred_stock_value": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "missing_price": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "missing_revenue": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "missing_revenue_fact": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "missing_risk_free_rate_parameter": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "missing_shares_outstanding": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "missing_stockholders_equity": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "missing_tangible_common_equity": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "missing_total_assets": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "missing_total_assets_fact": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "model_no_answer": {
+        "kind": "outcome",
+        "class": "transient"
+      },
+      "negative_operand": {
+        "kind": "outcome",
+        "class": "not_applicable"
+      },
+      "negative_tangible_common_equity": {
+        "kind": "outcome",
+        "class": "not_applicable"
+      },
+      "no_agreement_policy": {
+        "kind": "evidence"
+      },
+      "no_analyst_coverage": {
+        "kind": "outcome",
+        "class": "world_absence"
+      },
+      "no_consolidated_revenue": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "no_description": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "no_disclosed_suppliers": {
+        "kind": "outcome",
+        "class": "world_absence"
+      },
+      "no_document": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "no_eligible_origin": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "no_market_cap": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "no_observation": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "no_operator_row": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "no_oracle_value": {
+        "kind": "outcome",
+        "class": "world_absence"
+      },
+      "no_origin_value": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "no_price": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "no_row": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "no_row_in_served_head": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "no_segment_partition": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "no_segments": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "no_served_value": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "no_split_adjusted_series": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "no_supply_chain_extraction": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "no_unadjusted_series": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "no_us_gaap_gross_profit_tag": {
+        "kind": "outcome",
+        "class": "not_applicable"
+      },
+      "no_valued_mass": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "no_virtual_company_consolidation_found": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "non_positive_earnings": {
+        "kind": "outcome",
+        "class": "not_applicable"
+      },
+      "non_positive_employees_total": {
+        "kind": "outcome",
+        "class": "disputed"
+      },
+      "non_positive_growth": {
+        "kind": "outcome",
+        "class": "not_applicable"
+      },
+      "non_positive_price": {
+        "kind": "outcome",
+        "class": "disputed"
+      },
+      "non_positive_shares_outstanding": {
+        "kind": "outcome",
+        "class": "disputed"
+      },
+      "nonpositive_consolidated_revenue": {
+        "kind": "outcome",
+        "class": "not_applicable"
+      },
+      "nonpositive_gross_profit": {
+        "kind": "outcome",
+        "class": "not_applicable"
+      },
+      "nonpositive_headcount": {
+        "kind": "outcome",
+        "class": "disputed"
+      },
+      "nonpositive_labor_cost": {
+        "kind": "outcome",
+        "class": "disputed"
+      },
+      "nonpositive_market_price": {
+        "kind": "outcome",
+        "class": "disputed"
+      },
+      "nonpositive_market_value": {
+        "kind": "outcome",
+        "class": "disputed"
+      },
+      "nonpositive_revenue": {
+        "kind": "outcome",
+        "class": "not_applicable"
+      },
+      "nonpositive_shares_outstanding": {
+        "kind": "outcome",
+        "class": "disputed"
+      },
+      "not_agreed_within_tolerance": {
+        "kind": "outcome",
+        "class": "disputed"
+      },
+      "not_knowable_at_cutoff": {
+        "kind": "outcome",
+        "class": "world_absence"
+      },
+      "not_yet_knowable": {
+        "kind": "outcome",
+        "class": "world_absence",
+        "disposition": "trace_only"
+      },
+      "null_metric_value": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "oracle:disagree": {
+        "kind": "outcome",
+        "class": "disputed"
+      },
+      "partial_valued_mass": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "partition_residual": {
+        "kind": "evidence"
+      },
+      "peg_not_recorded": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "plausibility_refused_node_sign_policy": {
+        "kind": "outcome",
+        "class": "disputed"
+      },
+      "primary_listing_undeclared": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "prior_period": {
+        "kind": "outcome",
+        "class": "not_applicable"
+      },
+      "quality.lineage-penalty": {
+        "kind": "evidence"
+      },
+      "quality.required-component-penalty": {
+        "kind": "evidence"
+      },
+      "quality.semantic-mapping-penalty": {
+        "kind": "evidence"
+      },
+      "quality.source-disagreement": {
+        "kind": "evidence"
+      },
+      "rate_limited": {
+        "kind": "outcome",
+        "class": "transient",
+        "disposition": "retry"
+      },
+      "refresh_time_unknown": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "registry_unavailable": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "release_scope_mismatch": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851",
+        "disposition": "stop"
+      },
+      "reliability.provisional-unobserved-ceiling": {
+        "kind": "evidence"
+      },
+      "resolved_weight_below_minimum": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "same_lineage": {
+        "kind": "evidence"
+      },
+      "second_origin_other_day": {
+        "kind": "evidence"
+      },
+      "second_origin_other_period": {
+        "kind": "evidence"
+      },
+      "served_by_failover": {
+        "kind": "evidence"
+      },
+      "served_row_after_report_cutoff": {
+        "kind": "outcome",
+        "class": "world_absence"
+      },
+      "server_error": {
+        "kind": "outcome",
+        "class": "transient",
+        "disposition": "retry"
+      },
+      "share_basis_ambiguous": {
+        "kind": "outcome",
+        "class": "disputed"
+      },
+      "share_count_undated": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "sign_differs": {
+        "kind": "outcome",
+        "class": "disputed"
+      },
+      "single_eligible_origin": {
+        "kind": "evidence"
+      },
+      "single_origin": {
+        "kind": "evidence"
+      },
+      "skipped_by_policy": {
+        "kind": "outcome",
+        "class": "not_applicable"
+      },
+      "split_derivation_failed": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "split_series_do_not_cover_the_window": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "stale_input": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "stale_period": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "stale_required_input": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "strategy_run_unavailable": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "subject_not_in_strategy_run": {
+        "kind": "outcome",
+        "class": "not_applicable"
+      },
+      "success": {
+        "kind": "evidence"
+      },
+      "superseded": {
+        "kind": "evidence"
+      },
+      "support.same-origin-deduplicated": {
+        "kind": "evidence"
+      },
+      "support.single-origin-ceiling": {
+        "kind": "evidence"
+      },
+      "timeout": {
+        "kind": "outcome",
+        "class": "transient",
+        "disposition": "retry"
+      },
+      "transient_network": {
+        "kind": "outcome",
+        "class": "transient",
+        "disposition": "retry"
+      },
+      "transport_error": {
+        "kind": "outcome",
+        "class": "transient"
+      },
+      "two_origins_agree": {
+        "kind": "evidence"
+      },
+      "unavailable": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "unchanged": {
+        "kind": "evidence"
+      },
+      "unclassified_revenue": {
+        "kind": "evidence"
+      },
+      "undefined_operand": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "unit_mismatch": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "unit_not_usd": {
+        "kind": "outcome",
+        "class": "not_applicable"
+      },
+      "unknown": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "unknown_freshness": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "unquantified_partner_shares": {
+        "kind": "evidence"
+      },
+      "unrecorded_reason": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "unresolved_holdings": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "valued_weight_below_minimum": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "vendor_timestamp": {
+        "kind": "evidence"
+      },
+      "zero_denominator": {
+        "kind": "outcome",
+        "class": "not_applicable"
+      },
+      "zero_oracle_value": {
+        "kind": "outcome",
+        "class": "disputed"
+      }
+    },
+    "prefixes": {
+      "cagr_years:": {
+        "kind": "evidence"
+      },
+      "excluded:": {
+        "kind": "outcome",
+        "class_of_suffix": true
+      },
+      "fetch_error:": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "growth_convention:": {
+        "kind": "evidence"
+      },
+      "growth_convention_unsourced:": {
+        "kind": "outcome",
+        "class": "world_absence"
+      },
+      "head_unavailable:": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "older_than_": {
+        "kind": "outcome",
+        "class": "pipeline_gap",
+        "tracking_issue": "#1851"
+      },
+      "oracle:": {
+        "kind": "evidence"
+      },
+      "period_end:": {
+        "kind": "evidence"
+      },
+      "reason:": {
+        "kind": "outcome",
+        "class_of_suffix": true
+      },
+      "relation:": {
+        "kind": "evidence"
+      },
+      "window:": {
+        "kind": "evidence"
+      }
+    }
   }
 }
