@@ -201,3 +201,7 @@ def test_launch_run_writes_the_universe_of_the_run_config(monkeypatch: pytest.Mo
     assert stored is not None
     assert stored.tags[UNIVERSE_TAG] == "universe-list:sp500"
     assert launched == ["ta1839-run"]
+    # The bound reads the run through the tag filter, so the stored tag must answer it.
+    by_tag = instance.get_run_records(filters=dg.RunsFilter(tags={UNIVERSE_TAG: "universe-list:sp500"}))
+    assert [record.dagster_run.run_id for record in by_tag] == ["ta1839-run"]
+    assert instance.get_run_records(filters=dg.RunsFilter(tags={UNIVERSE_TAG: "topt"})) == []
