@@ -372,6 +372,6 @@ def build_route(
         fetcher = base_fetcher
     effective_drill = drill or getattr(context, "drill", None)
     if effective_drill is not None and hasattr(effective_drill, "arm"):
-        fetcher, armed_origins = effective_drill.arm(settings.app_env, fetcher, origins)
+        fetcher, armed_origins = effective_drill.arm(settings.environment, fetcher, origins)
         origins = list(armed_origins)
     return MarketPriceAdapter(targets, fetcher, corroborating_origins=tuple(origins))

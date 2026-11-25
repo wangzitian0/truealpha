@@ -37,8 +37,8 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.metadata]
-# infra2-sdk above is a direct URL reference (the immutable release wheel, matching
-# every other infra2-sdk consumer in this repo), which hatchling otherwise rejects.
+# infra2-sdk above is a direct URL reference (the immutable release wheel),
+# which hatchling otherwise rejects.
 allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]

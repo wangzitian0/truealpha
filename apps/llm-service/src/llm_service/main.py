@@ -13,13 +13,14 @@ from infra2_sdk.fastapi import init_service
 from infra2_sdk.runtime.config_schema import assert_environment
 from starlette.types import ASGIApp, Receive, Scope, Send
 from truealpha_contracts.environment_contract import load_environment_contract
+from truealpha_runtime.checks import redact_postgres_exception
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from llm_service.api.v1 import admin, auth, entities, library, panel, strategy
 from llm_service.config import settings
 from llm_service.mcp_auth import BearerTokenGate
 from llm_service.mcp_server import build_mcp_server
-from llm_service.services._db import redact_db_error, with_ops_reader
+from llm_service.services._db import with_ops_reader
 
 logger = logging.getLogger(__name__)
 
@@ -113,7 +114,14 @@ def _read_health_fact(cursor: Any, query: str, transform: Any, default: Any) -> 
             cursor.execute(query)
             return transform(cursor)
     except degraded_errors as exc:
-        logger.warning("health mart fact degraded: %s", redact_db_error(exc, database_url=settings.database_url))
+        logger.warning(
+            "health mart fact degraded: %s",
+            redact_postgres_exception(
+                exc,
+                database_url=settings.database_url,
+                connect_timeout_seconds=settings.database_connect_timeout_seconds,
+            ),
+        )
         if conn is not None and not hasattr(conn, "transaction") and hasattr(conn, "rollback"):
             conn.rollback()
         return default
@@ -149,7 +157,7 @@ def _served_pointers(cursor: Any, contract: Any) -> list[dict[str, Any]] | str:
             if isinstance(row, dict)
             else row
         )
-        if contract.is_head_scheduled(str(universe_id), settings.app_env):
+        if contract.is_head_scheduled(str(universe_id), settings.environment):
             out.append(
                 {
                     "universe_id": str(universe_id),
@@ -170,7 +178,7 @@ def _nightly_verdicts(cursor: Any, contract: Any) -> list[dict[str, Any]]:
         check, ran_at, ok, summary = (
             (row["check_name"], row["ran_at"], row["ok"], row["summary"]) if isinstance(row, dict) else row
         )
-        if contract.expects_verdict(str(check), settings.app_env):
+        if contract.expects_verdict(str(check), settings.environment):
             out.append(
                 {
                     "check": str(check),
@@ -209,7 +217,14 @@ def _data_engine_facts() -> tuple[str, str, list[dict[str, Any]] | str, list[dic
 
         git_sha, image_digest, pointers, verdicts = with_ops_reader(_collect)
     except degraded_errors as exc:
-        logger.warning("health database unavailable: %s", redact_db_error(exc, database_url=settings.database_url))
+        logger.warning(
+            "health database unavailable: %s",
+            redact_postgres_exception(
+                exc,
+                database_url=settings.database_url,
+                connect_timeout_seconds=settings.database_connect_timeout_seconds,
+            ),
+        )
     return git_sha, image_digest, pointers, verdicts
 
 

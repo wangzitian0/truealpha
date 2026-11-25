@@ -484,7 +484,9 @@ def get_datahub_stats(*, database_url: str | None = None) -> DatahubStatsRespons
 
     def _q(cur: Any) -> DatahubStatsResponse:
         env_rows = _optional_rows(cur, "select environment from mart.environment_identity limit 1")
-        env_name = str(env_rows[0]["environment"]) if env_rows and env_rows[0].get("environment") else settings.app_env
+        env_name = (
+            str(env_rows[0]["environment"]) if env_rows and env_rows[0].get("environment") else settings.environment
+        )
         normalized_env = contract.normalize_environment(env_name)
 
         sources = _rows(
@@ -734,7 +736,7 @@ def request_head_rollback(
         row = cur.fetchone()
         if row and row.get("environment"):
             return str(row["environment"])
-        return contract.normalize_environment(req.environment or settings.app_env)
+        return contract.normalize_environment(req.environment or settings.environment)
 
     declared_env = with_ops_reader(_read_env, database_url=database_url)
     if req.environment is not None and contract.normalize_environment(

@@ -96,8 +96,8 @@ def with_in_process_executor(definitions: dg.Definitions) -> dg.Definitions:
     return dg.Definitions.merge(definitions, dg.Definitions(executor=dg.in_process_executor))
 
 
-def build_definitions(app_env: str = settings.app_env) -> dg.Definitions:
-    return with_in_process_executor(dg.Definitions.merge(*lane_definitions(app_env).values()))
+def build_definitions(environment: str = settings.environment) -> dg.Definitions:
+    return with_in_process_executor(dg.Definitions.merge(*lane_definitions(environment).values()))
 
 
 defs = with_in_process_executor(dg.Definitions.merge(*lane_definitions().values()))

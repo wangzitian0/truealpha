@@ -122,12 +122,12 @@ def pipeline_trigger_sensor(context: dg.SensorEvaluationContext):
         connection.commit()
 
 
-def boot_canary_forces_fetch(app_env: str) -> bool:
-    return app_env.strip().lower() == "staging"
+def boot_canary_forces_fetch(environment: str) -> bool:
+    return environment.strip().lower() == "staging"
 
 
 def boot_deployment() -> str:
-    return f"{settings.data_engine_image_digest.strip()}|{settings.configuration_sha256.strip()}"
+    return f"{settings.image_digest.strip()}|{settings.configuration_sha256.strip()}"
 
 
 def _boot_cursor(cursor: str | None) -> tuple[str, int]:
@@ -146,7 +146,7 @@ def _boot_cursor(cursor: str | None) -> tuple[str, int]:
     default_status=dg.DefaultSensorStatus.RUNNING,
 )
 def boot_canary_sensor(context: dg.SensorEvaluationContext):
-    digest = (settings.data_engine_image_digest or "").strip()
+    digest = (settings.image_digest or "").strip()
     if not digest.startswith("sha256:"):
         yield dg.SkipReason("no data-engine image digest in the environment (local/CI)")
         return
@@ -157,7 +157,7 @@ def boot_canary_sensor(context: dg.SensorEvaluationContext):
         return
     ordinal = last_ordinal + 1
     executed_at = datetime.now(UTC).replace(microsecond=0).isoformat()
-    force_fetch = boot_canary_forces_fetch(settings.app_env)
+    force_fetch = boot_canary_forces_fetch(settings.environment)
     context.update_cursor(json.dumps({"deployment": deployment, "ordinal": ordinal}, sort_keys=True))
     build_tags = {
         "truealpha/build": settings.git_commit_sha or "unknown",

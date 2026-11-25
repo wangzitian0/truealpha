@@ -19,8 +19,8 @@ class Settings(RuntimeSettings):
     def capture_environment(self) -> CaptureEnvironment:
         return CaptureEnvironment(self.environment_tier.value)
 
-    release_manifest_id: str = _f("", "release", "release", validation_alias=RuntimeEnvKey.RELEASE_ID.value)
-    data_engine_image_digest: str = _f("", "release", "release", validation_alias=RuntimeEnvKey.IMAGE_DIGEST.value)
+    release_id: str = _f("", "release", "release")
+    image_digest: str = _f("", "release", "release")
     configuration_sha256: str = _f("", "release", "release", validation_alias=RuntimeEnvKey.CONFIGURATION_SHA256.value)
     capture_approved_by: str = _f(
         "",
@@ -42,6 +42,7 @@ class Settings(RuntimeSettings):
     llm_api_key: str = _f(
         "", "human", "llm", validation_alias=LLM_API_KEY_ENV, scope="project", empty_ok=True, sensitive=True
     )
+    # Keep coding-plan endpoint/provider defaults until infra2 injects LLM_BASE_URL (#1727).
     llm_base_url: str = _f("https://open.bigmodel.cn/api/coding/paas/v4", "code", "llm")
     llm_small_model: str = _f("glm-5.3-flash", "code", "llm")
     llm_provider: str = _f("zhipu-glm-coding-plan", "code", "llm")

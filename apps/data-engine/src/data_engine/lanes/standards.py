@@ -878,7 +878,7 @@ def _utc_now_iso() -> str:
     default_status=dg.DefaultSensorStatus.RUNNING,
 )
 def standard_backfill_catchup_sensor(context: dg.SensorEvaluationContext):
-    build = (settings.data_engine_image_digest or "").strip() or "unversioned"
+    build = (settings.image_digest or "").strip() or "unversioned"
     if context.cursor != build:
         context.update_cursor(build)
         yield dg.SkipReason(
@@ -1040,7 +1040,7 @@ def build_standards_plane_schedules() -> tuple[dg.ScheduleDefinition, ...]:
 ) = build_standards_plane_schedules()
 
 
-def build_definitions(app_env: str = settings.app_env) -> dg.Definitions:
+def build_definitions(environment: str = settings.environment) -> dg.Definitions:
     return dg.Definitions(
         jobs=[standard_backfill_pipeline_job, standard_history_backfill_pipeline_job, head_reports_pipeline_job],
         schedules=[

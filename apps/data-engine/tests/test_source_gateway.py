@@ -1348,3 +1348,39 @@ def test_llm_agent_binds_llm_call_context_and_preserves_replay_bytes(call_ledger
     assert seen_ctx and seen_ctx[0].get("infra.llm.domain_run_id") == "dagster:run-xyz"
     assert seen_ctx[0].get("infra.llm.prompt_sha256") == llm.HEADCOUNT_TASK.prompt_sha256
     assert hashlib.sha256(sent_bodies[0]).hexdigest() == inv.request_sha256
+
+
+def test_llm_schema_sha256_and_redacted_http_errors(call_ledger, monkeypatch) -> None:
+    from data_engine.sources import llm
+    from truealpha_contracts.common import canonical_sha256
+
+    assert llm.HEADCOUNT_TASK.schema_sha256 == canonical_sha256(llm.RESPONSE_SCHEMA)
+    summary = llm.redacted_http_error(429, "1302")
+    assert "HTTP 429" in summary and "1302" in summary
+
+    def fake_transport(_url: str, _headers: dict[str, str], _body: bytes) -> tuple[int, bytes]:
+        return 401, b'{"error": {"code": "invalid_key", "message": "secret-token-leaked-in-body"}}'
+
+    monkeypatch.setattr(llm.settings, "llm_api_key", "test-key")
+    with gateway.run_scope("dagster:run-err"):
+        with pytest.raises(llm.ModelHTTPError) as exc_info:
+            llm.invoke(
+                None,
+                task=llm.HEADCOUNT_TASK,
+                cik=320193,
+                accession="0000320193-26-000001",
+                user_content="[0] 100: Total employees 100",
+                caller="test",
+                standard="headcount",
+                parse=lambda raw: json.loads(raw),
+                refusal=lambda msg: {"value": None, "reason": msg},
+                persist=False,
+                transport=fake_transport,
+            )
+
+    assert "HTTP 401" in str(exc_info.value)
+    assert "invalid_key" in str(exc_info.value)
+    assert "secret-token-leaked-in-body" not in str(exc_info.value)
+    assert call_ledger[-1].error is not None
+    assert "HTTP 401" in call_ledger[-1].error
+    assert "secret-token-leaked-in-body" not in call_ledger[-1].error

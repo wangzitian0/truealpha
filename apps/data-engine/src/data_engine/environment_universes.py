@@ -10,14 +10,16 @@ from data_engine.config import settings
 UNRECOGNISED_ENVIRONMENT_RULE = "staging"
 
 
-def rule_environment(app_env: str | None = None) -> str:
+def rule_environment(environment: str | None = None) -> str:
     contract = load_environment_contract()
-    environment = contract.normalize_environment(settings.app_env if app_env is None else app_env)
-    return environment if environment in contract.environments else UNRECOGNISED_ENVIRONMENT_RULE
+    resolved = contract.normalize_environment(settings.environment if environment is None else environment)
+    return resolved if resolved in contract.environments else UNRECOGNISED_ENVIRONMENT_RULE
 
 
-def scheduled_universe_names(app_env: str | None = None) -> tuple[str, ...]:
-    return tuple(lane_name(key) for key in load_environment_contract().scheduled_universes(rule_environment(app_env)))
+def scheduled_universe_names(environment: str | None = None) -> tuple[str, ...]:
+    return tuple(
+        lane_name(key) for key in load_environment_contract().scheduled_universes(rule_environment(environment))
+    )
 
 
 def any_environment_universe_names() -> tuple[str, ...]:

@@ -519,3 +519,18 @@ def test_allow_remote_is_passed_by_one_module_only() -> None:
         if "tests" not in path.parts and ".venv" not in path.parts and "allow_remote=True" in path.read_text()
     )
     assert callers == ["apps/data-engine/src/data_engine/quality/topt_baseline.py"]
+
+
+def test_schema_drift_main_redacts_database_credentials(monkeypatch, capsys) -> None:
+    secret = "QueryStringSecret987"
+    dsn = f"postgresql://postgres@db.example:5432/truealpha?password={secret}"
+
+    def _boom(_url: str, **_kwargs: object):
+        raise RuntimeError(f"connection failed to {dsn} with {secret}")
+
+    monkeypatch.setattr(drift, "reference_database", _boom)
+    code = drift.main(["--database-url", dsn])
+    err = capsys.readouterr().err
+    assert code == 2
+    assert secret not in err
+    assert dsn not in err

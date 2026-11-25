@@ -80,9 +80,9 @@ def test_retired_app_env_alias_is_not_accepted_as_fallback(monkeypatch: pytest.M
 
     monkeypatch.delenv("ENVIRONMENT", raising=False)
     monkeypatch.setenv("APP_ENV", "staging")
-    assert CoreRuntimeSettings(_env_file=None).app_env == "dev"
+    assert CoreRuntimeSettings(_env_file=None).environment == "dev"
     monkeypatch.setenv("ENVIRONMENT", "staging")
-    assert CoreRuntimeSettings(_env_file=None).app_env == "staging"
+    assert CoreRuntimeSettings(_env_file=None).environment == "staging"
 
 
 def test_runtime_dependency_environment_keys_do_not_drift():
@@ -90,18 +90,18 @@ def test_runtime_dependency_environment_keys_do_not_drift():
     settings_keys = {
         field_name.upper()
         for field_name in RuntimeSettings.model_fields
-        if field_name not in {"app_env", "git_commit_sha"}
+        if field_name not in {"environment", "git_commit_sha"}
     }
     assert declared == settings_keys
 
 
 def test_an_empty_environment_value_does_not_shadow_the_default(monkeypatch):
-    """`DATABASE_URL=""` -- an unrendered template line -- falls through to the default
-    (or the next alias). Before `env_ignore_empty` it reached the URL validator as "" and
-    refused the whole service as not-PostgreSQL (#759, SDK 1.5.0 migration)."""
+    """`DATABASE_URL=""` -- an unrendered template line -- falls through to the default.
+    Before `env_ignore_empty` it reached the URL validator as "" and
+    refused the whole service as not-PostgreSQL (#759)."""
     monkeypatch.setenv("DATABASE_URL", "")
     monkeypatch.setenv("S3_BUCKET", "")
-    settings = RuntimeSettings(_env_file=None, app_env="test")
+    settings = RuntimeSettings(_env_file=None, environment="test")
     assert settings.database_url == RuntimeSettings.model_fields["database_url"].default
     assert settings.s3_bucket == "truealpha-raw"
 
@@ -111,7 +111,7 @@ def test_runtime_settings_converts_to_s3_settings():
 
     assert issubclass(RuntimeSettings, CoreRuntimeSettings)
     assert set(CoreRuntimeSettings.model_fields) == {
-        "app_env",
+        "environment",
         "git_commit_sha",
         "database_url",
         "database_connect_timeout_seconds",
@@ -119,7 +119,7 @@ def test_runtime_settings_converts_to_s3_settings():
     assert "s3_documents_prefix" not in RuntimeSettings.model_fields
     settings = RuntimeSettings(
         _env_file=None,
-        app_env="test",
+        environment="test",
         database_url="postgresql://user:pass@127.0.0.1:5432/testdb",
         s3_bucket="my-bucket",
     )
@@ -134,7 +134,7 @@ def test_s3_raw_object_store_and_check_refuse_blank_endpoint():
     from truealpha_contracts.models import RawObjectRef
     from truealpha_runtime.checks import ObjectStorageCheck
 
-    settings = RuntimeSettings(_env_file=None, app_env="test", s3_endpoint="   ")
+    settings = RuntimeSettings(_env_file=None, environment="test", s3_endpoint="   ")
     store = S3RawObjectStore(settings)
     capture = RawCapture(
         source=DataSource.SEC,
@@ -167,7 +167,7 @@ def test_s3_client_construction_uses_infra2_sdk_and_forces_path_style_addressing
     """S3RawObjectStore.__init__ builds its client through infra2_sdk.runtime.s3 from
     resolved RuntimeSettings values. It forces addressing_style="path" because the local
     S3 engine requires path-style routing and S3Settings defaults addressing_style to None."""
-    settings = RuntimeSettings(_env_file=None, app_env="test")
+    settings = RuntimeSettings(_env_file=None, environment="test")
 
     store = S3RawObjectStore(settings)
 
@@ -181,9 +181,7 @@ def test_run_python_probe_scrubs_runtime_env_contract_keys(monkeypatch):
     from infra2_sdk.runtime.environment import runtime_env_contract
     from truealpha_runtime.testing import run_python_probe
 
-    contract_keys = sorted(
-        {key for item in runtime_env_contract()["variables"] for key in (item["name"], *item["aliases"])}
-    )
+    contract_keys = sorted({item["name"] for item in runtime_env_contract()["variables"]})
     for key in contract_keys:
         monkeypatch.setenv(key, f"ambient-{key}")
     monkeypatch.setenv("OTEL_CUSTOM_AMBIENT", "ambient-otel")
@@ -207,7 +205,7 @@ def test_run_python_probe_scrubs_runtime_env_contract_keys(monkeypatch):
 
 def test_raw_storage_is_content_addressed_and_idempotent():
     client = FakeS3()
-    settings = RuntimeSettings(_env_file=None, app_env="test")
+    settings = RuntimeSettings(_env_file=None, environment="test")
     store = S3RawObjectStore(settings, client=client)
     capture = RawCapture(
         source=DataSource.SEC,
@@ -242,13 +240,13 @@ def test_importing_runtime_and_llm_service_does_not_instantiate_runtime_settings
     assert proc.returncode == 0, proc.stderr
 
     monkeypatch.setenv("S3_BUCKET", "INVALID_UPPERCASE")
-    core = CoreRuntimeSettings(_env_file=None, app_env="test")
-    assert core.app_env == "test"
+    core = CoreRuntimeSettings(_env_file=None, environment="test")
+    assert core.environment == "test"
 
     with pytest.raises(ValueError, match="S3_BUCKET must be a lowercase"):
-        LlmSettings(_env_file=None, app_env="test")
+        LlmSettings(_env_file=None, environment="test")
     with pytest.raises(ValueError, match="S3_BUCKET must be a lowercase"):
-        RuntimeSettings(_env_file=None, app_env="test")
+        RuntimeSettings(_env_file=None, environment="test")
 
 
 def test_database_url_field_shares_default_and_metadata_across_services() -> None:

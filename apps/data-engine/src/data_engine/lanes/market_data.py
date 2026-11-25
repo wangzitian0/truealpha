@@ -155,7 +155,7 @@ def market_data_refresh_pipeline_job() -> None:
     job=market_data_refresh_pipeline_job,
     cron_schedule=MARKET_DATA_REFRESH_CRON,
     execution_timezone="UTC",
-    default_status=schedule_status(settings.app_env),
+    default_status=schedule_status(settings.environment),
 )
 def market_data_refresh_schedule(context: dg.ScheduleEvaluationContext) -> dg.RunRequest:
     tick = context.scheduled_execution_time.isoformat()

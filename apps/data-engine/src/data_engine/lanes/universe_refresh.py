@@ -22,7 +22,7 @@ SP500_UNIVERSE_REFRESH_CRON = "37 8 * * 6"
 
 
 def _is_source_refresh_enabled(source: Any) -> bool:
-    return is_universe_list_refresh_scheduled(source.etf, settings.app_env)
+    return is_universe_list_refresh_scheduled(source.etf, settings.environment)
 
 
 def _isolated_db_step(
@@ -97,7 +97,7 @@ def _refresh_universes(
 
     for source in active_sources:
         ticker = source.nport_ticker
-        if ticker is None or not is_universe_scheduled(source.etf, settings.app_env):
+        if ticker is None or not is_universe_scheduled(source.etf, settings.environment):
             continue
 
         def _run_nport(conn: psycopg.Connection[Any], t: str = ticker) -> None:
@@ -151,33 +151,33 @@ def _build_schedule(name: str, cron: str, running: bool, key_prefix: str = "") -
     return _sched
 
 
-def build_universe_refresh_schedule(app_env: str = settings.app_env) -> dg.ScheduleDefinition:
+def build_universe_refresh_schedule(environment: str = settings.environment) -> dg.ScheduleDefinition:
     running = any(
-        is_universe_list_refresh_scheduled(key, app_env)
+        is_universe_list_refresh_scheduled(key, environment)
         for key, universe in load_environment_contract().universes.items()
         if universe.membership.kind == "nport"
     )
     return _build_schedule("universe_refresh_schedule", UNIVERSE_REFRESH_CRON, running)
 
 
-def build_sp500_universe_refresh_schedule(app_env: str = settings.app_env) -> dg.ScheduleDefinition:
+def build_sp500_universe_refresh_schedule(environment: str = settings.environment) -> dg.ScheduleDefinition:
     return _build_schedule(
         SP500_UNIVERSE_REFRESH_SCHEDULE_NAME,
         SP500_UNIVERSE_REFRESH_CRON,
-        is_universe_scheduled("sp500", app_env),
+        is_universe_scheduled("sp500", environment),
         key_prefix="sp500:",
     )
 
 
-universe_refresh_schedule = build_universe_refresh_schedule(settings.app_env)
-sp500_universe_refresh_schedule = build_sp500_universe_refresh_schedule(settings.app_env)
+universe_refresh_schedule = build_universe_refresh_schedule(settings.environment)
+sp500_universe_refresh_schedule = build_sp500_universe_refresh_schedule(settings.environment)
 
 
-def build_definitions(app_env: str = settings.app_env) -> dg.Definitions:
+def build_definitions(environment: str = settings.environment) -> dg.Definitions:
     schedules = (
         [universe_refresh_schedule, sp500_universe_refresh_schedule]
-        if app_env == settings.app_env
-        else [build_universe_refresh_schedule(app_env), build_sp500_universe_refresh_schedule(app_env)]
+        if environment == settings.environment
+        else [build_universe_refresh_schedule(environment), build_sp500_universe_refresh_schedule(environment)]
     )
     return dg.Definitions(jobs=[universe_refresh_pipeline_job], schedules=schedules)
 

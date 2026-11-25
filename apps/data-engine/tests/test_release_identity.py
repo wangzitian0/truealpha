@@ -192,8 +192,8 @@ def test_the_settings_model_resolves_canonical_release_keys(
     monkeypatch.setenv("CONFIGURATION_SHA256", config_sha)
     monkeypatch.setenv("LLM_SMALL_MODEL", "glm-5.3-flash")
     settings = Settings(_env_file=None)
-    assert settings.data_engine_image_digest == digest
-    assert settings.release_manifest_id == release_id
+    assert settings.image_digest == digest
+    assert settings.release_id == release_id
     assert settings.capture_approved_by == "zitian"
     assert settings.configuration_sha256 == config_sha
     assert settings.llm_small_model == "glm-5.3-flash"
@@ -207,13 +207,13 @@ def test_retired_aliases_do_not_populate_release_settings(monkeypatch: pytest.Mo
     monkeypatch.setenv("RELEASE_MANIFEST_ID", "release-manifest:" + "e" * 64)
     monkeypatch.setenv("TRUEALPHA_CAPTURE_APPROVED_BY", "zitian")
     retired = Settings(_env_file=None)
-    assert retired.release_manifest_id == Settings.model_fields["release_manifest_id"].default
+    assert retired.release_id == Settings.model_fields["release_id"].default
     assert retired.capture_approved_by == Settings.model_fields["capture_approved_by"].default
 
     monkeypatch.setenv("RELEASE_ID", "release-manifest:" + "f" * 64)
     monkeypatch.setenv("CAPTURE_APPROVED_BY", "wangzitian0")
     canonical = Settings(_env_file=None)
-    assert canonical.release_manifest_id == "release-manifest:" + "f" * 64
+    assert canonical.release_id == "release-manifest:" + "f" * 64
     assert canonical.capture_approved_by == "wangzitian0"
 
 

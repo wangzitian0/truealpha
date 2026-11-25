@@ -7,15 +7,18 @@ import logging
 import time
 import urllib.parse
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from functools import lru_cache
+from types import SimpleNamespace
 from typing import Any
 from zoneinfo import ZoneInfo
 
 import httpx
 import psycopg
+from infra2_sdk.runtime.http import request_with_retry
 from truealpha_contracts.environment_contract import load_environment_contract
 
 from data_engine.config import settings
@@ -156,6 +159,18 @@ class PriceBarRecord:
     resolution: str = "1D"
 
 
+def _decode_json_object(body: bytes) -> dict[str, Any]:
+    try:
+        parsed = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _is_rate_limited(status: int, data: Mapping[str, Any]) -> bool:
+    return status == 429 or data.get("code") == 429 or "api credits" in str(data.get("message", "")).lower()
+
+
 class TwelveDataClient:
     """Client for Twelve Data /time_series endpoint with rate-limit backoff."""
 
@@ -178,9 +193,9 @@ class TwelveDataClient:
         self.caller = caller
         self.call_count = 0
 
-    def _default_transport(self, url: str) -> tuple[int, bytes]:
+    def _time_series_identity(self, url: str) -> FetchKey:
         params = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(url).query))
-        identity = FetchKey.for_request(
+        return FetchKey.for_request(
             TWELVE_DATA_SEAT,
             "time_series",
             params,
@@ -189,6 +204,9 @@ class TwelveDataClient:
             default_as_of=gateway.utc_day(),
             exclude=("apikey",),
         )
+
+    def _default_transport(self, url: str) -> tuple[int, bytes]:
+        identity = self._time_series_identity(url)
         with httpx.Client(headers={"User-Agent": "TrueAlpha-DataEngine/1.0"}, timeout=30.0) as client:
             response = gateway.http_get(
                 client, TWELVE_DATA_SEAT, "time_series", url, identity=identity, caller=self.caller
@@ -212,35 +230,73 @@ class TwelveDataClient:
             **(extra_params or {}),
         }
         url = f"{self.base_url}/time_series?{urllib.parse.urlencode(params)}"
-        for attempt in range(self.max_retries + 1):
-            self.call_count += 1
-            status, body = self.transport_fn(url)
-            try:
-                data = json.loads(body.decode("utf-8"))
-            except (UnicodeDecodeError, ValueError):
-                data = {}
-            if status == 429 or data.get("code") == 429 or "api credits" in str(data.get("message", "")).lower():
-                if attempt < self.max_retries:
-                    wait_seconds = self.backoff_base**attempt
+        use_shared_client = self.transport_fn == self._default_transport
+        identity = self._time_series_identity(url) if use_shared_client else None
+        client_cm = (
+            httpx.Client(headers={"User-Agent": "TrueAlpha-DataEngine/1.0"}, timeout=30.0)
+            if use_shared_client
+            else nullcontext(None)
+        )
+
+        with client_cm as shared_client:
+
+            def _send(_method: str, req_url: str, **_kwargs: Any) -> SimpleNamespace:
+                attempt_num = self.call_count + 1
+                self.call_count = attempt_num
+                if shared_client is not None and identity is not None:
+                    raw_response = gateway.http_get(
+                        shared_client,
+                        TWELVE_DATA_SEAT,
+                        "time_series",
+                        req_url,
+                        identity=identity,
+                        caller=self.caller,
+                    )
+                    raw_status = int(raw_response.status_code)
+                    body = bytes(raw_response.content)
+                    headers = getattr(raw_response, "headers", {})
+                else:
+                    raw_status, body = self.transport_fn(req_url)
+                    headers = {}
+                data = _decode_json_object(body)
+                rate_limited = _is_rate_limited(raw_status, data)
+                if rate_limited and attempt_num <= self.max_retries:
                     log.warning(
-                        "Twelve Data 429 for %s (%s). Backing off for %.1f s (attempt %d/%d)",
+                        "Twelve Data 429 for %s (%s). Retrying attempt %d/%d",
                         symbol,
                         interval,
-                        wait_seconds,
-                        attempt + 1,
+                        attempt_num,
                         self.max_retries,
                     )
-                    self.sleep_fn(wait_seconds)
-                    continue
-                raise TwelveDataRateLimitError(
-                    f"Twelve Data 429 rate limit exceeded for {symbol} after {self.max_retries} retries"
+                return SimpleNamespace(
+                    status_code=429 if rate_limited else raw_status,
+                    raw_status=raw_status,
+                    content=body,
+                    headers=headers,
+                    data=data,
                 )
-            if status >= 400 or data.get("status") == "error":
-                raise TwelveDataApiError(
-                    f"Twelve Data error {data.get('code', status)}: {data.get('message', 'API error')}"
-                )
-            return data
-        raise TwelveDataRateLimitError(f"Rate limit retries exhausted for {symbol}")
+
+            final = request_with_retry(
+                SimpleNamespace(request=_send),
+                "GET",
+                url,
+                max_attempts=self.max_retries + 1,
+                retry_statuses=(429,),
+                backoff_base=self.backoff_base,
+                max_backoff=max(30.0, self.backoff_base ** max(0, self.max_retries - 1)),
+                sleep=self.sleep_fn,
+            )
+
+        if final.status_code == 429:
+            raise TwelveDataRateLimitError(
+                f"Twelve Data 429 rate limit exceeded for {symbol} after {self.max_retries} retries"
+            )
+        if final.raw_status >= 400 or final.data.get("status") == "error":
+            raise TwelveDataApiError(
+                f"Twelve Data error {final.data.get('code', final.raw_status)}: "
+                f"{final.data.get('message', 'API error')}"
+            )
+        return final.data
 
 
 def _parse_bars(

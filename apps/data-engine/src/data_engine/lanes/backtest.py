@@ -41,9 +41,9 @@ def _backtest_kwargs_from_config(config: NightlyBacktestConfig) -> dict[str, obj
     return kwargs
 
 
-def schedule_status(app_env: str) -> dg.DefaultScheduleStatus:
+def schedule_status(environment: str) -> dg.DefaultScheduleStatus:
     try:
-        scheduled = resolve_environment_tier(app_env) in _SCHEDULED_TIERS
+        scheduled = resolve_environment_tier(environment) in _SCHEDULED_TIERS
     except ValueError:
         scheduled = False
     return dg.DefaultScheduleStatus.RUNNING if scheduled else dg.DefaultScheduleStatus.STOPPED
@@ -91,7 +91,7 @@ def nightly_backtest_pipeline_job() -> None:
     job=nightly_backtest_pipeline_job,
     cron_schedule=BACKTEST_CRON,
     execution_timezone="UTC",
-    default_status=schedule_status(settings.app_env),
+    default_status=schedule_status(settings.environment),
 )
 def nightly_backtest_schedule(context: dg.ScheduleEvaluationContext) -> dg.RunRequest:
     tick = context.scheduled_execution_time.isoformat()

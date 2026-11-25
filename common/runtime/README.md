@@ -10,8 +10,8 @@ and `staging.entity_relations` (`docs/entity-identity.md`).
 Environment model:
 
 `infra2_sdk.runtime.environment` owns the tier enum and alias normalization.
-`truealpha_runtime.config` preserves the application's `app_env=` keyword
-and unknown-environment error. Canonical tier names and preview aliases are accepted;
+`truealpha_runtime.config` exposes `ENVIRONMENT` as `environment` and preserves the
+unknown-environment error. Canonical tier names and preview aliases are accepted;
 the dependency instances and which tiers require each service remain TrueAlpha-owned.
 `tests/test_runtime.py` proves this compatibility against the released SDK (#820).
 

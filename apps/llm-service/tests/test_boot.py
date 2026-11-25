@@ -26,7 +26,7 @@ def test_a_deployed_boot_refuses_a_missing_injected_value_by_name(monkeypatch: p
     """Through the app's own lifespan, not the helper: the wiring is the deliverable. The
     refusal happens before the MCP session manager starts, so nothing is left half-open."""
     monkeypatch.delenv("GIT_COMMIT_SHA", raising=False)
-    monkeypatch.setattr(main, "settings", Settings(_env_file=None, app_env="staging"))
+    monkeypatch.setattr(main, "settings", Settings(_env_file=None, environment="staging"))
     with pytest.raises(RuntimeError, match="GIT_COMMIT_SHA") as failure:
         with TestClient(main.app):
             pass
@@ -41,7 +41,7 @@ def test_a_deployed_boot_refuses_a_missing_mcp_credential(monkeypatch: pytest.Mo
     monkeypatch.setenv("SECRET_KEY", "test-secret-key")
     monkeypatch.setenv("S3_ENDPOINT", "http://127.0.0.1:9000")
     monkeypatch.delenv("MCP_BEARER_TOKEN", raising=False)
-    monkeypatch.setattr(main, "settings", Settings(_env_file=None, app_env="staging"))
+    monkeypatch.setattr(main, "settings", Settings(_env_file=None, environment="staging"))
     with pytest.raises(RuntimeError) as failure:
         main.refuse_to_boot_on_a_missing_environment()
     assert "MCP_BEARER_TOKEN" in str(failure.value)
@@ -62,14 +62,14 @@ def test_a_deployed_boot_refuses_a_missing_configuration_hash(monkeypatch: pytes
     }.items():
         monkeypatch.setenv(name, value)
     monkeypatch.delenv("CONFIGURATION_SHA256", raising=False)
-    monkeypatch.setattr(main, "settings", Settings(_env_file=None, app_env="staging"))
+    monkeypatch.setattr(main, "settings", Settings(_env_file=None, environment="staging"))
     with pytest.raises(RuntimeError, match="CONFIGURATION_SHA256"):
         main.refuse_to_boot_on_a_missing_environment()
 
 
 def test_a_local_boot_tolerates_what_nothing_injects(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("GIT_COMMIT_SHA", raising=False)
-    monkeypatch.setattr(main, "settings", Settings(_env_file=None, app_env="dev"))
+    monkeypatch.setattr(main, "settings", Settings(_env_file=None, environment="dev"))
     assert main.refuse_to_boot_on_a_missing_environment() is None
 
 

@@ -4,13 +4,26 @@ import os
 from functools import cached_property
 from typing import Any
 
-from infra2_sdk.runtime.environment import EnvironmentTier, RuntimeEnvKey
+from infra2_sdk.runtime.environment import EnvironmentTier
 from infra2_sdk.runtime.environment import resolve_environment_tier as _resolve_tier
+from infra2_sdk.runtime.postgres import PostgresSettings
+from infra2_sdk.runtime.s3 import S3Settings
 from pydantic import Field, SecretStr, field_validator
-from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEFAULT_DATABASE_URL = "postgresql://postgres:postgres@localhost:5432/truealpha"
 POSTGRES_PROVIDED_BY = "truealpha/postgres:POSTGRES_PASSWORD"
+_DEPLOYED_TIERS = frozenset(
+    {
+        EnvironmentTier.PREVIEW,
+        EnvironmentTier.STAGING,
+        EnvironmentTier.PRODUCTION,
+    }
+)
+
+
+def is_deployed_tier(tier: EnvironmentTier) -> bool:
+    return tier in _DEPLOYED_TIERS
 
 
 def _schema_field(default: Any, source: str, group: str, **kw: Any) -> Any:
@@ -24,11 +37,11 @@ def database_url_field(*, composed_from: str | None = None) -> Any:
     return _schema_field(DEFAULT_DATABASE_URL, "runtime", "postgres", provided_by=POSTGRES_PROVIDED_BY, **kw)
 
 
-def resolve_environment_tier(app_env: str, *, github_actions: bool = False) -> EnvironmentTier:
+def resolve_environment_tier(environment: str, *, github_actions: bool = False) -> EnvironmentTier:
     try:
-        return _resolve_tier(app_env, github_actions=github_actions)
+        return _resolve_tier(environment, github_actions=github_actions)
     except ValueError:
-        raise ValueError(f"unknown ENVIRONMENT: {app_env!r}") from None
+        raise ValueError(f"unknown ENVIRONMENT: {environment!r}") from None
 
 
 class CoreRuntimeSettings(BaseSettings):
@@ -37,32 +50,9 @@ class CoreRuntimeSettings(BaseSettings):
         extra="ignore",
         case_sensitive=False,
         env_ignore_empty=True,
-        populate_by_name=True,
     )
 
-    @classmethod
-    def settings_customise_sources(
-        cls,
-        settings_cls: type[BaseSettings],
-        init_settings: PydanticBaseSettingsSource,
-        env_settings: PydanticBaseSettingsSource,
-        dotenv_settings: PydanticBaseSettingsSource,
-        file_secret_settings: PydanticBaseSettingsSource,
-    ) -> tuple[PydanticBaseSettingsSource, ...]:
-        """Keep `app_env=` working for Python callers without reading `app_env` from env/dotenv."""
-        for source in (env_settings, dotenv_settings):
-            source.config = SettingsConfigDict(
-                **{**source.config, "populate_by_name": False, "validate_by_name": False}
-            )
-        return init_settings, env_settings, dotenv_settings, file_secret_settings
-
-    app_env: str = _schema_field(
-        "dev",
-        "code",
-        "runtime",
-        injected=True,
-        validation_alias=RuntimeEnvKey.ENVIRONMENT.value,
-    )
+    environment: str = _schema_field("dev", "code", "runtime", injected=True)
     git_commit_sha: str = _schema_field("unknown", "release", "runtime")
     database_url: str = database_url_field()
     database_connect_timeout_seconds: int = _schema_field(5, "code", "postgres", ge=1, le=60)
@@ -70,21 +60,19 @@ class CoreRuntimeSettings(BaseSettings):
     @field_validator("database_url")
     @classmethod
     def validate_database_url(cls, value: str) -> str:
-        if not value.startswith(("postgresql://", "postgres://")):
-            raise ValueError("DATABASE_URL must use PostgreSQL")
+        try:
+            PostgresSettings(dsn=value)
+        except ValueError as exc:
+            raise ValueError("DATABASE_URL must use PostgreSQL") from exc
         return value
 
     @cached_property
     def environment_tier(self) -> EnvironmentTier:
-        return resolve_environment_tier(self.app_env, github_actions=os.getenv("GITHUB_ACTIONS") == "true")
+        return resolve_environment_tier(self.environment, github_actions=os.getenv("GITHUB_ACTIONS") == "true")
 
     @property
     def is_deployed(self) -> bool:
-        return self.environment_tier in {
-            EnvironmentTier.PREVIEW,
-            EnvironmentTier.STAGING,
-            EnvironmentTier.PRODUCTION,
-        }
+        return is_deployed_tier(self.environment_tier)
 
 
 class RuntimeSettings(CoreRuntimeSettings):
@@ -99,8 +87,10 @@ class RuntimeSettings(CoreRuntimeSettings):
     @field_validator("s3_bucket")
     @classmethod
     def validate_bucket(cls, value: str) -> str:
-        if not 3 <= len(value) <= 63 or value.lower() != value or "_" in value:
-            raise ValueError("S3_BUCKET must be a lowercase S3-compatible bucket name")
+        try:
+            S3Settings(bucket=value)
+        except ValueError as exc:
+            raise ValueError("S3_BUCKET must be a lowercase S3-compatible bucket name") from exc
         return value
 
     @property
@@ -111,9 +101,7 @@ class RuntimeSettings(CoreRuntimeSettings):
             EnvironmentTier.GITHUB_CI,
         }
 
-    def to_s3_settings(self):
-        from infra2_sdk.runtime.s3 import S3Settings
-
+    def to_s3_settings(self) -> S3Settings:
         return S3Settings(
             bucket=self.s3_bucket,
             endpoint_url=(self.s3_endpoint or "").strip() or None,

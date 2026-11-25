@@ -21,14 +21,14 @@ LANE_MODULES: tuple[str, ...] = (
 )
 
 
-def lane_definitions(app_env: str | None = None) -> dict[str, dg.Definitions]:
+def lane_definitions(environment: str | None = None) -> dict[str, dg.Definitions]:
     """Import every registered lane and return its ``defs`` keyed by module."""
     definitions: dict[str, dg.Definitions] = {}
     for name in LANE_MODULES:
         module = import_module(name)
         definitions[name] = (
-            module.build_definitions(app_env)
-            if app_env is not None and hasattr(module, "build_definitions")
+            module.build_definitions(environment)
+            if environment is not None and hasattr(module, "build_definitions")
             else module.defs
         )
     return definitions

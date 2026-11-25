@@ -23,6 +23,7 @@ from typing import Any
 import psycopg
 from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
+from truealpha_runtime.checks import redact_postgres_exception
 from truealpha_runtime.testing import DB_DIR, apply_migration_chain
 
 log = logging.getLogger(__name__)
@@ -293,7 +294,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             with reference_database(arguments.database_url, keep=arguments.keep_reference) as reference_url:
                 report, counts = compare(arguments.database_url, reference_url)
     except (psycopg.Error, RuntimeError, AssertionError) as error:
-        print(f"schema_drift: cannot compare: {error}", file=sys.stderr)
+        message = redact_postgres_exception(error, database_url=arguments.database_url, connect_timeout_seconds=10)
+        if arguments.reference_database_url:
+            message = redact_postgres_exception(
+                RuntimeError(message), database_url=arguments.reference_database_url, connect_timeout_seconds=10
+            ).removeprefix("RuntimeError: ")
+        print(f"schema_drift: cannot compare: {message}", file=sys.stderr)
         return 2
 
     measured = ", ".join(f"{count} {name}" for name, count in counts.items() if count)

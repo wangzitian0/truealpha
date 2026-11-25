@@ -117,7 +117,7 @@ def test_deployed_module_contains_no_fixture_seeding() -> None:
 def test_schedule_is_enabled_hourly_with_tick_driven_identity() -> None:
     # ENABLED is deliberate (#27 appended acceptance: schedule running in Staging).
     assert topt_live_schedule.default_status == dg.DefaultScheduleStatus.RUNNING
-    assert topt_live_schedule.cron_schedule == tick_cron("topt", settings.app_env)
+    assert topt_live_schedule.cron_schedule == tick_cron("topt", settings.environment)
 
     # Same tick -> same run_key + executed_at (idempotent retry); distinct ticks ->
     # distinct run_key (two-cycle proof). No wall clock.
@@ -908,7 +908,7 @@ def test_refresh_universes_skips_stopped_sp500_and_isolates_per_universe_transac
     from data_engine.datahub.capture_core.universe_plane import UNIVERSE_SOURCES, latest_quarter_end
     from data_engine.lanes import universe_refresh
 
-    monkeypatch.setattr(settings, "app_env", "production")
+    monkeypatch.setattr(settings, "environment", "production")
     commits: list[int] = []
     conn_counter = 0
 
@@ -970,7 +970,7 @@ def test_refresh_universes_skips_stopped_sp500_and_isolates_per_universe_transac
     nport_calls.clear()
     commits.clear()
     mv_refresh_calls.clear()
-    monkeypatch.setattr(settings, "app_env", "staging")
+    monkeypatch.setattr(settings, "environment", "staging")
     universe_refresh._refresh_universes(
         ctx,
         UNIVERSE_SOURCES,
@@ -1031,13 +1031,13 @@ def test_the_sp500_entry_of_the_contract_holds_a_status_and_no_other_gate() -> N
 
 
 @pytest.mark.parametrize(
-    ("app_env", "expected_status"), [("production", "STOPPED"), ("prod", "STOPPED"), ("staging", "RUNNING")]
+    ("environment", "expected_status"), [("production", "STOPPED"), ("prod", "STOPPED"), ("staging", "RUNNING")]
 )
 def test_the_sp500_schedule_is_stopped_in_production_and_running_in_staging_with_registered_job(
-    app_env: str, expected_status: str
+    environment: str, expected_status: str
 ) -> None:
     """#1310 / #1661: S&P 500 stays STOPPED in production and is RUNNING in staging; its job stays registered."""
-    built = dagster_defs.build_definitions(app_env)
+    built = dagster_defs.build_definitions(environment)
 
     sp500_row = _schedule_rows(built).get("sp500_live_schedule")
     assert sp500_row == (dagster_defs.SP500_LIVE_JOB_NAME, expected_status), SP500_STOPPED_BECAUSE
@@ -1162,18 +1162,18 @@ def test_the_sp500_stop_is_read_from_the_contract_and_from_no_constant() -> None
         "print(json.dumps(rows))\n"
     )
     statuses: dict[str, dict[str, str]] = {}
-    for app_env in ("production", "staging"):
+    for environment in ("production", "staging"):
         finished = subprocess.run(
             [sys.executable, "-c", probe],
             cwd=Path(__file__).parent,  # a directory without a `.env` file
-            env={**os.environ, "ENVIRONMENT": app_env},
+            env={**os.environ, "ENVIRONMENT": environment},
             capture_output=True,
             text=True,
             timeout=120,
             check=False,
         )
         assert finished.returncode == 0, finished.stderr
-        statuses[app_env] = json.loads(finished.stdout.splitlines()[-1])
+        statuses[environment] = json.loads(finished.stdout.splitlines()[-1])
 
     for schedule in ("sp500_live_schedule", "sp500_universe_refresh_schedule"):
         assert statuses["production"][schedule] == "RUNNING", f"{schedule} ignores production mutation"
@@ -1202,32 +1202,32 @@ def test_the_refresh_of_a_universe_follows_the_contract_of_the_process_environme
     def enabled() -> dict[str, bool]:
         return {etf: universe_refresh._is_source_refresh_enabled(_Source(etf)) for etf in ("qqq", "sp500", "canary")}
 
-    monkeypatch.setattr(settings, "app_env", "production")
+    monkeypatch.setattr(settings, "environment", "production")
     assert enabled() == {"qqq": True, "sp500": False, "canary": True}, SP500_STOPPED_BECAUSE
-    monkeypatch.setattr(settings, "app_env", "staging")
+    monkeypatch.setattr(settings, "environment", "staging")
     assert enabled() == {"qqq": True, "sp500": True, "canary": True}
     assert capture.is_universe_scheduled("qqq", "staging") is True
     with pytest.raises(UnknownUniverse):
         universe_refresh._is_source_refresh_enabled(_Source("universe-the-contract-does-not-list"))
 
     monkeypatch.setattr(capture, "load_environment_contract", lambda: mutated_contract)
-    monkeypatch.setattr(settings, "app_env", "production")
+    monkeypatch.setattr(settings, "environment", "production")
     assert enabled() == {"qqq": True, "sp500": True, "canary": True}, (
         "a scheduled status in the contract schedules the SP500"
     )
-    monkeypatch.setattr(settings, "app_env", "staging")
+    monkeypatch.setattr(settings, "environment", "staging")
     assert enabled() == {"qqq": True, "sp500": False, "canary": True}, "a stopped status stops staging SP500"
 
 
-@pytest.mark.parametrize("app_env", ["dev", "typo-in-app-env", ""])
-def test_an_environment_the_contract_does_not_name_takes_the_staging_rule(app_env: str) -> None:
+@pytest.mark.parametrize("environment", ["dev", "typo-in-app-env", ""])
+def test_an_environment_the_contract_does_not_name_takes_the_staging_rule(environment: str) -> None:
     """An unrecognised ENVIRONMENT takes the staging rule (not production)."""
     from data_engine.environment_universes import rule_environment, scheduled_universe_names
 
-    rows = _schedule_rows(dagster_defs.build_definitions(app_env))
+    rows = _schedule_rows(dagster_defs.build_definitions(environment))
 
-    assert rule_environment(app_env) == "staging"
-    assert scheduled_universe_names(app_env) == ("topt", "universe-list:qqq", "universe-list:sp500")
+    assert rule_environment(environment) == "staging"
+    assert scheduled_universe_names(environment) == ("topt", "universe-list:qqq", "universe-list:sp500")
     assert rows["topt_live_schedule"][1] == "RUNNING" and rows["canary_daily_schedule"][1] == "RUNNING"
     assert rows["qqq_live_schedule"][1] == "RUNNING" and rows["sp500_live_schedule"][1] == "RUNNING"
     assert rows["universe_refresh_schedule"][1] == "RUNNING"

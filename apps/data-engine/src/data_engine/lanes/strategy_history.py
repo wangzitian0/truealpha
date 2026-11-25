@@ -57,7 +57,7 @@ def strategy_history_pipeline_job() -> None:
     job=strategy_history_pipeline_job,
     cron_schedule=STRATEGY_HISTORY_CRON,
     execution_timezone="UTC",
-    default_status=schedule_status(settings.app_env),
+    default_status=schedule_status(settings.environment),
 )
 def strategy_history_schedule(context: dg.ScheduleEvaluationContext) -> dg.RunRequest:
     tick = context.scheduled_execution_time.isoformat()

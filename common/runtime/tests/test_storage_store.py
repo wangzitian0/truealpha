@@ -44,7 +44,7 @@ def _capture() -> RawCapture:
 
 
 def _store(client: HeadScriptedS3) -> S3RawObjectStore:
-    return S3RawObjectStore(RuntimeSettings(_env_file=None, app_env="test"), client=client)
+    return S3RawObjectStore(RuntimeSettings(_env_file=None, environment="test"), client=client)
 
 
 def test_store_refuses_a_content_length_mismatch_with_the_collision_message() -> None:
