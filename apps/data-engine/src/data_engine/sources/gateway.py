@@ -200,7 +200,9 @@ class CallRecord:
 
 
 def redact_uri(uri: str | None) -> str | None:
-    return None if not uri else _sdk_redact_uri(uri)
+    if not uri or (not uri.startswith(("http://", "https://")) and "?" not in uri and "@" not in uri):
+        return uri
+    return _sdk_redact_uri(uri)
 
 
 _pg_conn = None

@@ -166,6 +166,7 @@ def test_credential_query_keys_are_blanked_whatever_their_casing() -> None:
         == "https://x/q?symbol=AAPL&APIKEY=REDACTED&ApiKey=REDACTED&access_token=REDACTED&X-Api-Key=REDACTED&client_secret=REDACTED"
     )
     assert gateway.redact_uri("https://x/q?symbol=AAPL&date=2026-09-04") == "https://x/q?symbol=AAPL&date=2026-09-04"
+    assert gateway.redact_uri("moomoo://US.AAPL") == "moomoo://US.AAPL"
     assert gateway.redact_uri(None) is None
 
 
