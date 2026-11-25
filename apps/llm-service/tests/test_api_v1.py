@@ -363,7 +363,7 @@ def test_real_postgres_auth_admin_ledger_documents_rls_and_served_head_withholdi
         assert dh.status_code == 200
         dh_json = dh.json()
         assert "capture_runs" in dh_json and "runs" not in dh_json
-        assert "heads" not in dh_json and "nightly_verdicts" not in dh_json
+        assert "heads" not in dh_json and "served_heads" in dh_json and "nightly_verdicts" in dh_json
         cov = dh_json["ledger_coverage"][0]
         assert cov["by_reason"] == {"probe": 2} and cov["keys_twice"] == 1
 
