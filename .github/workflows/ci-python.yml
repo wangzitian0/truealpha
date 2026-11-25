@@ -271,7 +271,7 @@ jobs:
             cat code_server.log >&2
             exit 1
           fi
-          setsid uv run --package truealpha-data-engine dagster-daemon run --grpc-socket "$SOCK" \
+          setsid uv run --package truealpha-data-engine dagster-daemon run --grpc-socket "$SOCK" --code-server-log-level info \
             > daemon.log 2>&1 &
           echo "DAEMON_PID=$!" >> "$GITHUB_ENV"
           echo "SOCK=$SOCK" >> "$GITHUB_ENV"
