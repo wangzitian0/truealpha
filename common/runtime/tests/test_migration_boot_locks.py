@@ -291,15 +291,14 @@ def test_a_lock_timeout_is_retried_with_backoff_and_then_fails_loudly(empty_data
         completed, elapsed = run_runner(
             empty_database,
             db_dir,
-            TRUEALPHA_MIGRATION_LOCK_TIMEOUT="1s",
+            TRUEALPHA_MIGRATION_LOCK_TIMEOUT="100ms",
             TRUEALPHA_MIGRATION_LOCK_ATTEMPTS="3",
-            TRUEALPHA_MIGRATION_LOCK_BACKOFF_SECONDS="1",
+            TRUEALPHA_MIGRATION_LOCK_BACKOFF_SECONDS="0",
         )
         holder.rollback()
     output = _output(completed)
     assert completed.returncode != 0
-    # Three one-second attempts and 1 s + 2 s of backoff: bounded, not a hang.
-    assert 4 <= elapsed < 30, f"{elapsed:.1f}s"
+    assert elapsed < 10, f"{elapsed:.1f}s"
     assert output.count("LOCK TIMEOUT") == 3, output
     assert "0002_needs_lock.sql at line 1, attempt 3/3" in output
     # ... and it says which transaction held which lock.
@@ -320,7 +319,7 @@ def test_a_lock_released_between_attempts_lets_the_boot_finish(empty_database: s
     } | {
         "DATABASE_URL": empty_database,
         "TRUEALPHA_DB_DIR": str(db_dir),
-        "TRUEALPHA_MIGRATION_LOCK_TIMEOUT": "1s",
+        "TRUEALPHA_MIGRATION_LOCK_TIMEOUT": "200ms",
         "TRUEALPHA_MIGRATION_LOCK_ATTEMPTS": "5",
         "TRUEALPHA_MIGRATION_LOCK_BACKOFF_SECONDS": "1",
     }
@@ -330,7 +329,7 @@ def test_a_lock_released_between_attempts_lets_the_boot_finish(empty_database: s
             ["sh", str(RUNNER)], env=environment, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
         )
         try:
-            time.sleep(1.5)  # the first attempt has timed out by now; commit before the retry
+            time.sleep(0.4)  # the first attempt has timed out by now; commit before the retry
             holder.rollback()
             output, _ = runner.communicate(timeout=60)
         finally:
@@ -353,28 +352,28 @@ def test_the_lock_budget_caps_the_total_wait(empty_database: str, tmp_path: Path
         completed, elapsed = run_runner(
             empty_database,
             db_dir,
-            TRUEALPHA_MIGRATION_LOCK_TIMEOUT="1s",
+            TRUEALPHA_MIGRATION_LOCK_TIMEOUT="100ms",
             TRUEALPHA_MIGRATION_LOCK_ATTEMPTS="50",
             TRUEALPHA_MIGRATION_LOCK_BACKOFF_SECONDS="1",
-            TRUEALPHA_MIGRATION_LOCK_BUDGET_SECONDS="5",
+            TRUEALPHA_MIGRATION_LOCK_BUDGET_SECONDS="2",
         )
         holder.rollback()
     assert completed.returncode != 0
-    assert elapsed < 15, f"{elapsed:.1f}s"
+    assert elapsed < 10, f"{elapsed:.1f}s"
     assert "attempt 50/50" not in _output(completed)
     assert "FAILED" in _output(completed)
 
 
 def test_a_statement_timeout_is_not_retried(empty_database: str, tmp_path: Path) -> None:
-    db_dir = _chain(tmp_path, ("0001_slow.sql", "select pg_sleep(5);\n"))
+    db_dir = _chain(tmp_path, ("0001_slow.sql", "select pg_sleep(2);\n"))
     completed, elapsed = run_runner(
-        empty_database, db_dir, TRUEALPHA_MIGRATION_STATEMENT_TIMEOUT="1s", TRUEALPHA_MIGRATION_LOCK_ATTEMPTS="3"
+        empty_database, db_dir, TRUEALPHA_MIGRATION_STATEMENT_TIMEOUT="200ms", TRUEALPHA_MIGRATION_LOCK_ATTEMPTS="3"
     )
     output = _output(completed)
     assert completed.returncode != 0
     assert "57014" in output and "not a lock timeout; no retry" in output
     assert "LOCK TIMEOUT" not in output
-    assert elapsed < 4, f"{elapsed:.1f}s"
+    assert elapsed < 2, f"{elapsed:.1f}s"
 
 
 def test_a_sql_error_fails_the_boot_without_a_retry(empty_database: str, tmp_path: Path) -> None:

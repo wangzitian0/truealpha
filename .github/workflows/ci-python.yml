@@ -163,8 +163,17 @@ jobs:
           if os.environ.get("DATA_ENGINE_REQUIRED", "").lower() == "true":
               roots.append("apps/data-engine/tests")
           s3_files = {pathlib.Path(p) for p in (os.environ.get("S3_CORE_TEST_FILES", "") + " " + os.environ.get("S3_DATA_ENGINE_TEST_FILES", "")).split()}
-          files = sorted({p for r in roots for pat in ("test_*.py", "*_test.py") for p in pathlib.Path(r).rglob(pat)} - s3_files)
-          print("\n".join(str(p) for p in files[idx::tot]))
+          files = sorted(
+              {p for r in roots for pat in ("test_*.py", "*_test.py") for p in pathlib.Path(r).rglob(pat)} - s3_files,
+              key=lambda p: (-os.path.getsize(p), str(p)),
+          )
+          buckets = [[] for _ in range(tot)]
+          sizes = [0] * tot
+          for p in files:
+              b = min(range(tot), key=lambda i: (sizes[i], len(buckets[i]), i))
+              buckets[b].append(p)
+              sizes[b] += os.path.getsize(p)
+          print("\n".join(str(p) for p in buckets[idx]))
           ')
           mapfile -t FILES <<< "$FILE_LIST"
           if [ "${#FILES[@]}" -eq 0 ]; then

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -80,7 +81,7 @@ EXPECTED_CELL_CHECKS = {
     "staging.operation": ["smoke"],
     "staging.post": ["health", "walk_tree"],
     "prod.operation": ["smoke"],
-    "prod.post": ["health"],
+    "prod.post": ["health", "prod_surface"],
     "scheduled_audit": ["nightly_verdicts"],
 }
 
@@ -181,3 +182,103 @@ def test_browser_check_uses_headless_shell_and_each_cell_fits_its_budget() -> No
     for cell in EXPECTED_CELL_CHECKS:
         total = sum(row.timeout_seconds for row in hooks.checks_for_cell(cell))
         assert total <= CELL_POLICIES[cell].budget_seconds, (cell, total)
+# Words that install or upgrade OS packages on the runner. SDK 4.5 separates hook bootstrap into
+# a 120s `bootstrap_cap_seconds` (`BOOTSTRAP_CAP_SECONDS`) outside the cell budget; before that
+# separation, on infra2 run 45331134994 the apt part alone took about 260 s of the 360 s
+# `staging.post` cell (#1843).
+_OS_PACKAGE_TOKENS = frozenset({"--with-deps", "install-deps", "apt", "apt-get", "aptitude", "dpkg"})
+
+
+def _os_package_tokens(command: str) -> set[str]:
+    """OS package words in a shell command, also inside quotes, pipes and absolute paths."""
+    words = re.split(r"[\s;&|()\"'`]+", command)
+    return {word.rsplit("/", 1)[-1] for word in words} & _OS_PACKAGE_TOKENS
+
+
+def test_browser_installs_change_no_os_package() -> None:
+    """#1843: no hook bootstrap and no step of the CI browser job runs apt.
+
+    Measured on ubuntu-24.04: the headless shell has no missing library; apt added fonts
+    and upgraded mesa. The staging walk and the CI walk must run on the same OS packages.
+    """
+    hooks = _load_hooks()
+    bootstraps = {row.id: row.bootstrap for row in hooks.checks if row.bootstrap.strip()}
+    assert "walk_tree" in bootstraps
+    assert {cid: _os_package_tokens(cmd) for cid, cmd in bootstraps.items() if _os_package_tokens(cmd)} == {}
+
+    browser_steps = yaml.safe_load((WORKFLOWS / "ci-web.yml").read_text(encoding="utf-8"))["jobs"]["browser"]["steps"]
+    runs = [str(step["run"]) for step in browser_steps if "run" in step]
+    assert sum("playwright install" in run for run in runs) == 1, runs
+    assert [_os_package_tokens(run) for run in runs if _os_package_tokens(run)] == []
+
+    # The predicate finds the form that the manifest used before #1843, and the usual others.
+    with_deps = bootstraps["walk_tree"].replace("playwright install", "playwright install --with-deps")
+    assert _os_package_tokens(with_deps) == {"--with-deps"}
+    assert _os_package_tokens("bunx playwright install-deps chromium") == {"install-deps"}
+    assert _os_package_tokens("sudo apt-get install -y fonts-unifont") == {"apt-get"}
+    assert _os_package_tokens('bash -c "x|/usr/bin/apt install -y fonts-unifont"') == {"apt"}
+    assert _os_package_tokens("sudo chown runner ~/.cache") == set()
+
+
+def test_tag_and_main_runs_of_one_commit_do_not_cancel_each_other() -> None:
+    group = yaml.safe_load((WORKFLOWS / "ci-required.yml").read_text(encoding="utf-8"))["concurrency"]["group"]
+    assert "github.ref_type" in group
+
+
+def test_a_tag_push_promotes_and_never_builds_and_push_builds_once() -> None:
+    req = yaml.safe_load((WORKFLOWS / "ci-required.yml").read_text(encoding="utf-8"))["jobs"]
+    images = yaml.safe_load((WORKFLOWS / "release-images.yml").read_text(encoding="utf-8"))["jobs"]
+    for name in ("security", "images_build", "images_release"):
+        assert "github.ref_type != 'tag'" in req[name]["if"], name
+    assert "github.event_name == 'push'" not in req["images_build"]["if"]
+    assert "needs.images_build.result == 'skipped'" in req["images_release"]["if"]
+    assert req["images_release"]["with"]["prebuilt"] is False
+    assert req["images_release"]["with"]["publish"] is True
+
+    promote_job = req["images_promote"]
+    assert "github.ref_type == 'tag'" in promote_job["if"]
+    assert promote_job["with"]["promote"] is True
+    assert "images_promote" in req["required"]["needs"]
+    for name in ("build", "publish"):
+        assert "!inputs.promote" in images[name]["if"], name
+    assert "inputs.promote" in images["promote"]["if"]
+    promote_runs = "\n".join(str(step.get("run", "")) for step in images["promote"]["steps"])
+    assert "docker buildx imagetools create" in promote_runs
+    assert "docker buildx imagetools inspect" in promote_runs
+    assert "promote_release_image.py" not in promote_runs
+    assert not [s for s in images["promote"]["steps"] if "build-push-action" in str(s.get("uses", ""))]
+    publish_tags = "\n".join(str(step.get("with", {}).get("tags", "")) for step in images["publish"]["steps"])
+    assert "type=semver" not in publish_tags
+
+
+def test_no_called_job_asks_for_more_than_any_caller_grants() -> None:
+    """A called job above its caller grant fails the run at startup (#1878, 2026-11-25)."""
+    req = yaml.safe_load((WORKFLOWS / "ci-required.yml").read_text(encoding="utf-8"))["jobs"]
+    images = yaml.safe_load((WORKFLOWS / "release-images.yml").read_text(encoding="utf-8"))["jobs"]
+    rank = {"none": 0, "read": 1, "write": 2}
+    callers = [job for job in req.values() if job.get("uses") == "./.github/workflows/release-images.yml"]
+    assert len(callers) == 3
+    for name, job in images.items():
+        for scope, level in (job.get("permissions") or {}).items():
+            for caller in callers:
+                granted = caller.get("permissions", {}).get(scope, "none")
+                assert rank[level] <= rank[granted], (name, scope, level, granted)
+
+
+def test_pr_image_filters_are_scoped_and_ci_web_and_python_use_speedups() -> None:
+    req = yaml.safe_load((WORKFLOWS / "ci-required.yml").read_text(encoding="utf-8"))["jobs"]
+    filter_step = next(s for s in req["changes"]["steps"] if s.get("id") == "filter")
+    filters = yaml.safe_load(filter_step["with"]["filters"])
+    assert "apps/data-engine/**" not in filters["image_data_engine"]
+    assert "apps/app-web/**" not in filters["image_app_web"]
+    assert "apps/llm-service/**" not in filters["image_llm_service"]
+    assert "apps/data-engine/Dockerfile*" in filters["image_data_engine"]
+
+    ci_web = yaml.safe_load((WORKFLOWS / "ci-web.yml").read_text(encoding="utf-8"))
+    for job_name in ("check", "browser"):
+        steps = ci_web["jobs"][job_name]["steps"]
+        assert any("~/.bun/install/cache" in str(s.get("with", {}).get("path", "")) for s in steps), job_name
+
+    ci_python = yaml.safe_load((WORKFLOWS / "ci-python.yml").read_text(encoding="utf-8"))
+    shard_run = "\n".join(str(s.get("run", "")) for s in ci_python["jobs"]["test-deps-smoke"]["steps"])
+    assert "os.path.getsize" in shard_run

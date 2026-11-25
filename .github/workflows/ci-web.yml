@@ -33,6 +33,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
+      - name: Restore bun install cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('apps/app-web/bun.lock*') }}
+          restore-keys: |
+            bun-${{ runner.os }}-
       - run: bun install --frozen-lockfile
       - run: make typecheck-web
         working-directory: .
@@ -74,6 +81,13 @@ jobs:
       - run: uv sync --package truealpha-llm-service --frozen
         working-directory: .
       - uses: oven-sh/setup-bun@v2
+      - name: Cache bun install
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('apps/app-web/bun.lock*') }}
+          restore-keys: |
+            bun-${{ runner.os }}-
       - run: bun install --frozen-lockfile
       - name: Apply the migration chain (populated and empty)
         working-directory: .

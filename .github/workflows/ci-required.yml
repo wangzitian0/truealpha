@@ -184,6 +184,7 @@ jobs:
               - '.github/workflows/ci-required.yml'
 
   security:
+    if: github.ref_type != 'tag'
     needs: changes
     permissions:
       contents: read
@@ -222,8 +223,7 @@ jobs:
   images_build:
     if: >-
       github.ref_type != 'tag' &&
-      (github.event_name == 'push' ||
-       github.event_name == 'merge_group' ||
+      (github.event_name == 'merge_group' ||
        (github.event_name == 'pull_request' &&
         (needs.changes.outputs.image_app_web == 'true' ||
          needs.changes.outputs.image_llm_service == 'true' ||
@@ -237,9 +237,9 @@ jobs:
     uses: ./.github/workflows/release-images.yml
     with:
       publish: false
-      app_web: ${{ github.event_name == 'push' || github.event_name == 'merge_group' || (github.event_name == 'workflow_dispatch' && inputs.force_images) || needs.changes.outputs.image_app_web == 'true' }}
-      llm_service: ${{ github.event_name == 'push' || github.event_name == 'merge_group' || (github.event_name == 'workflow_dispatch' && inputs.force_images) || needs.changes.outputs.image_llm_service == 'true' }}
-      data_engine: ${{ github.event_name == 'push' || github.event_name == 'merge_group' || (github.event_name == 'workflow_dispatch' && inputs.force_images) || needs.changes.outputs.image_data_engine == 'true' }}
+      app_web: ${{ github.event_name == 'merge_group' || (github.event_name == 'workflow_dispatch' && inputs.force_images) || needs.changes.outputs.image_app_web == 'true' }}
+      llm_service: ${{ github.event_name == 'merge_group' || (github.event_name == 'workflow_dispatch' && inputs.force_images) || needs.changes.outputs.image_llm_service == 'true' }}
+      data_engine: ${{ github.event_name == 'merge_group' || (github.event_name == 'workflow_dispatch' && inputs.force_images) || needs.changes.outputs.image_data_engine == 'true' }}
 
   images_release:
     if: >-
@@ -254,7 +254,7 @@ jobs:
       (needs.db.result == 'success' || needs.db.result == 'skipped') &&
       (needs.python.result == 'success' || needs.python.result == 'skipped') &&
       (needs.web.result == 'success' || needs.web.result == 'skipped') &&
-      needs.images_build.result == 'success'
+      (needs.images_build.result == 'success' || needs.images_build.result == 'skipped')
     needs: [changes, security, db, python, web, images_build]
     permissions:
       contents: read
@@ -265,7 +265,7 @@ jobs:
       app_web: true
       llm_service: true
       data_engine: true
-      prebuilt: true
+      prebuilt: false
 
   # A release tag reuses the main image of its commit; it builds nothing (#1878).
   images_promote:

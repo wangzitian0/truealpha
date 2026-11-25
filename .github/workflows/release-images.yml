@@ -212,12 +212,34 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       - name: Point ${{ github.ref_name }} at the main image of ${{ github.sha }}
         env:
-          GHCR_USER: ${{ github.actor }}
-          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          IMAGE_REPOSITORY: ${{ github.repository_owner }}/${{ matrix.image }}
-        run: >-
-          python3 tools/promote_release_image.py
-          --repository "$IMAGE_REPOSITORY" --commit "$GITHUB_SHA" --tag "$GITHUB_REF_NAME"
+          IMAGE_REPOSITORY: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}
+        run: |
+          set -euo pipefail
+          repo_lc="$(printf '%s' "$IMAGE_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
+          short_sha="$(printf '%s' "$GITHUB_SHA" | tr '[:upper:]' '[:lower:]' | cut -c1-7)"
+          source_ref="${repo_lc}:sha-${short_sha}"
+          target_ref="${repo_lc}:${GITHUB_REF_NAME}"
+          found=""
+          for attempt in $(seq 1 20); do
+            if docker buildx imagetools inspect "$source_ref" >/dev/null 2>&1; then
+              found=1
+              break
+            fi
+            if [ "$attempt" -lt 20 ]; then
+              sleep 30
+            fi
+          done
+          if [ -z "$found" ]; then
+            echo "::error::${source_ref} is not published; main must publish it first" >&2
+            exit 1
+          fi
+          docker buildx imagetools create --tag "$target_ref" "$source_ref"
+          docker buildx imagetools inspect "$target_ref" >/dev/null

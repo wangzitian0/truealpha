@@ -212,25 +212,6 @@
       "store_key": ""
     },
     {
-      "field": "release_id",
-      "env": "RELEASE_ID",
-      "aliases": [],
-      "required": false,
-      "injected": true,
-      "has_default": true,
-      "sensitive": false,
-      "group": "release",
-      "description": "",
-      "source": "release",
-      "empty_ok": false,
-      "scope": "env",
-      "provided_by": "",
-      "composed_from": "",
-      "mirror_to_1password": false,
-      "ci": "forbidden",
-      "store_key": ""
-    },
-    {
       "field": "image_digest",
       "env": "IMAGE_DIGEST",
       "aliases": [],
