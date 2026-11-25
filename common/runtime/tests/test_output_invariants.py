@@ -340,7 +340,7 @@ def test_extraction_citations_resolve_invariant_structure_and_behavior() -> None
 
 
 def test_hard_vs_fact_invariant_classification_and_persistence(capsys: pytest.CaptureFixture[str]) -> None:
-    """Exactly 4 structural/conservation invariants are `hard` and 8 are `fact`; `--persist` writes all rows."""
+    """Exactly 4 structural/conservation invariants are `hard` and 9 are `fact`; `--persist` writes all rows."""
     hard_ids = {inv.id for inv in _module.INVARIANTS if inv.kind == "hard"}
     fact_ids = {inv.id for inv in _module.INVARIANTS if inv.kind == "fact"}
     assert hard_ids == {
@@ -349,7 +349,8 @@ def test_hard_vs_fact_invariant_classification_and_persistence(capsys: pytest.Ca
         "listing-names-one-issuer-and-one-instrument",
         "fund-virtual-company-weights-conserved",
     }
-    assert len(fact_ids) == 8
+    assert "ledger-runs-in-dagster" in fact_ids
+    assert len(fact_ids) == 9
 
     recorded: list[tuple[str, tuple]] = []
 
@@ -1408,3 +1409,66 @@ def test_persist_records_hard_and_fact_invariants_and_only_hard_fails(
     assert by_hard[REASON_INVARIANT][0] == "fact" and by_hard[REASON_INVARIANT][2] == 1
     assert by_hard[LISTING_INVARIANT][0] == "hard" and by_hard[LISTING_INVARIANT][2] == 1
     assert len(by_hard[LISTING_INVARIANT][4]) == 1
+
+
+def test_ledger_runs_in_dagster_invariant_against_real_db(
+    conn: psycopg.Connection, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """#1649 H2: flag Dagster-scoped ledger run keys missing from dagster.runs; skip safely without dagster schema."""
+    (inv,) = [inv for inv in _module.INVARIANTS if inv.id == "ledger-runs-in-dagster"]
+    assert inv.kind == "fact" and inv.requires_table == "dagster.runs"
+
+    # Without dagster.runs (bare CI migrated schema), invariant skips cleanly without UndefinedTable.
+    code_no_dagster = check(
+        "postgresql://borrowed",
+        today=TODAY,
+        exemptions={},
+        invariants=(inv,),
+        connect=lambda _url: _Borrowed(conn),
+        commit=False,
+    )
+    out_no_dagster = capsys.readouterr().out
+    assert code_no_dagster == 0
+    assert "examined 0 rows" in out_no_dagster
+
+    conn.execute("create schema if not exists dagster")
+    conn.execute("create table if not exists dagster.runs (run_id text primary key)")
+    conn.execute("insert into dagster.runs (run_id) values ('run-known-1') on conflict do nothing")
+    conn.execute(
+        """
+        insert into staging.api_call_ledger (source, endpoint, caller, called_at, ok, run_key)
+        values
+            ('twelvedata', '/time_series', 'capture', now() - interval '1 day', true, 'dagster:run-known-1'),
+            ('twelvedata', '/time_series', 'rogue-caller', now() - interval '1 day', true, 'dagster:run-orphan-1'),
+            ('twelvedata', '/time_series', 'script', now() - interval '1 day', true, 'script:vendor_smoke:1'),
+            ('twelvedata', '/time_series', 'old-caller', now() - interval '8 days', true, 'dagster:run-old-1')
+        """
+    )
+
+    code_with_dagster = check(
+        "postgresql://borrowed",
+        today=TODAY,
+        exemptions={},
+        invariants=(inv,),
+        connect=lambda _url: _Borrowed(conn),
+        persist=True,
+        dagster_run_id="ledger-h2-test",
+        commit=False,
+    )
+    _ = capsys.readouterr()
+    assert code_with_dagster == 0
+
+    rows = conn.execute(
+        """
+        select invariant_id, kind, population, violation_count, sample_rows
+        from mart.output_invariant_results
+        where dagster_run_id = 'ledger-h2-test'
+        """
+    ).fetchall()
+    assert len(rows) == 1
+    invariant_id, kind, population, violation_count, sample_rows = rows[0]
+    assert invariant_id == "ledger-runs-in-dagster"
+    assert kind == "fact"
+    assert population == 2
+    assert violation_count == 1
+    assert len(sample_rows) == 1 and sample_rows[0][0] == "dagster:run-orphan-1"
