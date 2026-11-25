@@ -2,18 +2,14 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
-from datetime import UTC, date, datetime
 from decimal import Decimal
-from pathlib import Path
 from typing import Any
 
 from factors.composite.plausibility_policy import (
     EXCLUSION_REASON,
     POLICY_VERSION,
-    RULE_NODE_SIGN_POLICY,
     Row,
     Violation,
     empty_eligible_set,
@@ -22,10 +18,6 @@ from factors.composite.plausibility_policy import (
 )
 from factors.panel import GPPE_BANKING_TCE_SPEC, GPPE_V0_SPEC
 from truealpha_contracts.strategy import ExclusionReason
-
-_EXEMPTIONS_IMAGE = Path("/app/tools/output_invariant_exemptions.json")
-_EXEMPTIONS_REPO = Path(__file__).resolve().parents[6] / "tools" / "output_invariant_exemptions.json"
-_SHARED_EXEMPTION = {RULE_NODE_SIGN_POLICY: "node-sign-policy"}
 
 _ROWS_SQL = """
     select distinct on (m.listing_id)
@@ -112,45 +104,13 @@ def _rows(connection: Any, run_id: str) -> tuple[list[Row], dict[str, str]]:
     return rows, issuers
 
 
-def _exemptions(path: Path | None = None, today: date | None = None) -> dict[str, str]:
-    candidates = [path] if path is not None else [_EXEMPTIONS_IMAGE, _EXEMPTIONS_REPO]
-    for candidate in candidates:
-        if candidate is not None and candidate.exists():
-            payload = json.loads(candidate.read_text())
-            break
-    else:
-        return {}
-    today = today or datetime.now(UTC).date()
-    return {
-        str(entry["invariant"]): f"exempt until {expires} under {entry['issue']}"
-        for entry in payload.get("exemptions", [])
-        if (expires := date.fromisoformat(str(entry["expires"]))) >= today
-    }
-
-
-def judge_issuers(
-    connection: Any,
-    *,
-    run_id: str,
-    exemptions_path: Path | None = None,
-    today: date | None = None,
-) -> Verdict:
+def judge_issuers(connection: Any, *, run_id: str) -> Verdict:
     current, issuers = _rows(connection, run_id)
-    live = _exemptions(exemptions_path, today)
-    refusals: list[Violation] = []
-    deferred: list[tuple[Violation, str]] = []
-    for violation in node_sign_policy(current):
-        shared = _SHARED_EXEMPTION.get(violation.rule)
-        note = live.get(shared) if shared else None
-        if note:
-            deferred.append((violation, note))
-        else:
-            refusals.append(violation)
     return Verdict(
         policy_version=POLICY_VERSION,
-        refusals=tuple(refusals),
+        refusals=tuple(node_sign_policy(current)),
         run_refusals=(),
-        deferred=tuple(deferred),
+        deferred=(),
         signals=tuple(sign_signals(current)),
         issuers=issuers,
     )
