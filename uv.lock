@@ -1005,13 +1005,13 @@ wheels = [
 
 [[package]]
 name = "infra2-sdk"
-version = "4.8.0"
-source = { url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v4.8.0/infra2_sdk-4.8.0-py3-none-any.whl" }
+version = "4.9.0"
+source = { url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v4.9.0/infra2_sdk-4.9.0-py3-none-any.whl" }
 dependencies = [
     { name = "pyyaml" },
 ]
 wheels = [
-    { url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v4.8.0/infra2_sdk-4.8.0-py3-none-any.whl", hash = "sha256:709e18da89a0fd3affa95d9ff753e1b9abe1f63a90263be3f51b946dacd0e1bc" },
+    { url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v4.9.0/infra2_sdk-4.9.0-py3-none-any.whl", hash = "sha256:59a77992b7db796016b6fdda49e2ea67b110a0cd9fed3dddf9a3bf1423f8dbb4" },
 ]
 
 [package.optional-dependencies]
@@ -3280,7 +3280,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "boto3", specifier = ">=1.34.0" },
-    { name = "infra2-sdk", extras = ["http", "otel", "pydantic-ai"], url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v4.8.0/infra2_sdk-4.8.0-py3-none-any.whl" },
+    { name = "infra2-sdk", extras = ["http", "otel", "pydantic-ai"], url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v4.9.0/infra2_sdk-4.9.0-py3-none-any.whl" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2.0" },
     { name = "pydantic-settings", specifier = ">=2.2.0" },
     { name = "truealpha-contracts", editable = "common/contracts" },
