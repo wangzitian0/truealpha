@@ -21,7 +21,8 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: ci-required-${{ github.event_name == 'push' && github.sha || github.event.pull_request.number || github.ref }}-${{ github.event_name }}
+  # A tag push and the main push of one commit get separate groups: promote needs the main publish (#1878).
+  group: ci-required-${{ github.event_name == 'push' && github.sha || github.event.pull_request.number || github.ref }}-${{ github.event_name }}-${{ github.ref_type }}
   cancel-in-progress: true
 
 jobs:

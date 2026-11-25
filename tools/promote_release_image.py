@@ -29,6 +29,17 @@ MANIFEST_TYPES = ",".join(
     )
 )
 
+# 404: main has not published yet. 429 and 5xx: a transient registry fault.
+RETRY_STATUSES = frozenset({404, 429, 500, 502, 503, 504})
+PUSH_RETRIES = 3
+
+
+def source_tag_for(commit: str) -> str:
+    """Return the tag that docker/metadata-action `type=sha,format=short` writes on main."""
+    if len(commit) < 7 or any(c not in "0123456789abcdef" for c in commit.lower()):
+        raise ValueError(f"commit {commit!r} is not a hex SHA of 7 or more characters")
+    return f"sha-{commit.lower()[:7]}"
+
 
 @dataclass(frozen=True)
 class Response:
@@ -81,9 +92,9 @@ def promote(
     """Copy the source manifest to the release tag and return the shared digest."""
     source = fetch_manifest(repository, source_tag, token, transport)
     for _ in range(attempts - 1):
-        if source.status != 404:
+        if source.status not in RETRY_STATUSES:
             break
-        # The main publish can still run when the tag arrives; wait for it, do not build.
+        # The main publish can still run when the tag arrives, or GHCR can blip; wait, do not build.
         sleep(delay_seconds)
         source = fetch_manifest(repository, source_tag, token, transport)
     if source.status != 200:
@@ -98,7 +109,13 @@ def promote(
         raise RuntimeError(f"{repository}:{source_tag} has no manifest content type")
 
     put_headers = {"Authorization": f"Bearer {token}", "Content-Type": content_type}
-    put = transport("PUT", f"{REGISTRY}/v2/{repository}/manifests/{release_tag}", put_headers, source.body)
+    put_url = f"{REGISTRY}/v2/{repository}/manifests/{release_tag}"
+    put = transport("PUT", put_url, put_headers, source.body)
+    for _ in range(PUSH_RETRIES):
+        if put.status not in RETRY_STATUSES or put.status == 404:
+            break
+        sleep(delay_seconds)
+        put = transport("PUT", put_url, put_headers, source.body)
     if put.status not in (200, 201):
         raise RuntimeError(f"push of {repository}:{release_tag} returned HTTP {put.status}")
 
@@ -115,7 +132,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--tag", required=True, help="release tag vX.Y.Z")
     args = parser.parse_args(argv)
     token = registry_token(args.repository, os.environ["GHCR_USER"], os.environ["GHCR_TOKEN"], urllib_transport)
-    source_tag = f"sha-{args.commit[:7]}"
+    source_tag = source_tag_for(args.commit)
     digest = promote(args.repository, source_tag, args.tag, token, urllib_transport)
     print(f"{args.repository}:{args.tag} -> {source_tag} {digest}")
     return 0
