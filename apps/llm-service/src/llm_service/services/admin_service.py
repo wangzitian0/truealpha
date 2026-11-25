@@ -143,6 +143,44 @@ ROLLBACK_QUEUE_SQL = """
   limit 20
 """
 
+FAILED_JOB_ERRORS_SQL = """
+  with recent_failures as (
+    (select id, run_id, event, timestamp from dagster.event_logs where dagster_event_type = 'STEP_FAILURE' order by id desc limit 60)
+    union all
+    (select id, run_id, event, timestamp from dagster.event_logs where dagster_event_type = 'PIPELINE_FAILURE' order by id desc limit 60)
+    union all
+    (select id, run_id, event, timestamp from dagster.event_logs where dagster_event_type = 'RUN_FAILURE' order by id desc limit 60)
+  ),
+  deduped_runs as (
+    select distinct on (run_id) id, run_id, event, timestamp
+    from recent_failures
+    order by run_id, id desc
+  ),
+  top_runs as (
+    select id, run_id, event, timestamp
+    from deduped_runs
+    order by id desc
+    limit 25
+  )
+  select
+    t.run_id,
+    split_part(j.err_text, E'\\n', 1) as first_line_error,
+    to_char(t.timestamp, 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as logged_at
+  from top_runs t
+  cross join lateral (
+    select coalesce(
+      nullif(t.event::jsonb #>> '{dagster_event,event_specific_data,error,message}', ''),
+      nullif(t.event::jsonb #>> '{error_info,message}', ''),
+      nullif(t.event::jsonb ->> 'user_message', ''),
+      nullif(t.event::jsonb ->> 'message', ''),
+      ''
+    ) as err_text
+  ) j
+  where j.err_text <> ''
+  order by t.id desc
+  limit 20
+"""
+
 
 class OpsRunRowDto(BaseModel):
     run_id: str
@@ -417,21 +455,7 @@ def get_ops_overview(*, database_url: str | None = None) -> OpsOverviewResponse:
 
         served_heads = _optional_rows(cur, SERVED_HEADS_SQL)
         nightly_verdicts = _optional_rows(cur, NIGHTLY_VERDICTS_SQL)
-        failed_job_errors = _optional_rows(
-            cur,
-            """
-            select distinct on (run_id)
-              run_id,
-              split_part(coalesce(message, ''), E'\\n', 1) as first_line_error,
-              to_char(timestamp at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as logged_at
-            from dagster.event_logs
-            where dagster_event_type in ('STEP_FAILURE', 'RUN_FAILURE', 'ENGINE_EVENT')
-              and coalesce(message, '') <> ''
-            order by run_id, id desc
-            limit 20
-            """,
-            table_check="dagster.event_logs",
-        )
+        failed_job_errors = _optional_rows(cur, FAILED_JOB_ERRORS_SQL, table_check="dagster.event_logs")
         trigger_queue = _optional_rows(cur, TRIGGER_QUEUE_SQL)
         rollback_requests = _optional_rows(cur, ROLLBACK_QUEUE_SQL)
 
@@ -781,6 +805,7 @@ def build_datahub_fact_diff(stats: DatahubStatsResponse) -> dict[str, Any]:
 __all__ = [
     "CONFIDENCE_REPORT_SQL",
     "DatahubStatsResponse",
+    "FAILED_JOB_ERRORS_SQL",
     "HeadRollbackRequest",
     "HeadRollbackResponse",
     "LEDGER_COVERAGE_DAYS",
