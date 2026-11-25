@@ -30,7 +30,6 @@ files = [
     "common/contracts/src",
     "common/factors/src",
     "common/runtime/src",
-    "tools",
 ]
 
 # Only these ship no stubs (moomoo SDK; boto3/botocore's dynamic clients).

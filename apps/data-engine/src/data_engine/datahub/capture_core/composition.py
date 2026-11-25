@@ -290,7 +290,6 @@ def plan_and_persist(
         "release_manifest_id": release_manifest_id,
         "data_engine_git_sha": settings.git_commit_sha or "unknown",
         "data_engine_image_digest": settings.image_digest or "unknown",
-        "declared_release_manifest_id": settings.release_id or "unknown",
         "capture_approved_by": settings.capture_approved_by or "unknown",
         "forced_fetch": force_fetch,
     }

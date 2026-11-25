@@ -55,8 +55,7 @@
       "required_env": [
         "TA_EMAIL",
         "TA_MEMBER_EMAIL",
-        "TA_PASSWORD",
-        "TA_MCP_TOKEN"
+        "TA_PASSWORD"
       ],
       "cells": {
         "remove": {
@@ -99,6 +98,36 @@
           "prod.post": {
             "reason": "The nightly verdict audit runs on the schedule only.",
             "issue": "wangzitian0/truealpha#1745"
+          }
+        }
+      }
+    },
+    {
+      "id": "prod_surface",
+      "argv": [
+        "sh",
+        "-c",
+        "uv run python -m truealpha_tools.prod_surface"
+      ],
+      "needs": [
+        "running_service"
+      ],
+      "writes": false,
+      "accepts_scale": false,
+      "timeout_seconds": 60,
+      "cells": {
+        "remove": {
+          "preview.post": {
+            "reason": "Preview verifies the web surface with walk_tree.",
+            "issue": "wangzitian0/infra2#1877"
+          },
+          "staging.post": {
+            "reason": "Staging verifies the web surface with walk_tree.",
+            "issue": "wangzitian0/infra2#1877"
+          },
+          "scheduled_audit": {
+            "reason": "The nightly audit already reads /api/health in nightly_verdicts.",
+            "issue": "wangzitian0/infra2#1877"
           }
         }
       }
