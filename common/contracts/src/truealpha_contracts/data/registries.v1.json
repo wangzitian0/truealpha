@@ -763,6 +763,10 @@
         "tracking_issue": "#1851",
         "disposition": "stop"
       },
+      "loss_year_in_growth_window": {
+        "kind": "outcome",
+        "class": "world_absence"
+      },
       "low_confidence": {
         "kind": "outcome",
         "class": "disputed",
