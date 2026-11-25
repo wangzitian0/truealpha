@@ -297,24 +297,16 @@ def _research_payload(ctx: Any, code: str, endpoint: str, fn: Callable[..., Any]
     )
 
 
-def _fetch_rating_enrichment(ctx: Any, code: str, *, as_of: datetime) -> tuple[list[AnalystRatingItem], bool]:
-    from data_engine.sources.moomoo import get_rating_summary, get_valuation_detail
+def _fetch_rating_enrichment(ctx: Any, code: str, *, as_of: datetime) -> list[AnalystRatingItem]:
+    from data_engine.sources.moomoo import get_rating_summary
 
-    summary_items: list[AnalystRatingItem] = []
-    if hasattr(ctx, "get_research_rating_summary"):
-        try:
-            payload = _research_payload(ctx, code, "get_research_rating_summary", get_rating_summary)
-            summary_items = parse_rating_summary(payload, as_of=as_of)
-        except Exception:  # noqa: BLE001
-            summary_items = []
-    has_valuation = False
-    if hasattr(ctx, "get_valuation_detail"):
-        try:
-            val_payload = _research_payload(ctx, code, "get_valuation_detail", get_valuation_detail, valuation_type=1)
-            has_valuation = isinstance(val_payload, Mapping) and bool(val_payload)
-        except Exception:  # noqa: BLE001
-            has_valuation = False
-    return summary_items, has_valuation
+    if not hasattr(ctx, "get_research_rating_summary"):
+        return []
+    try:
+        payload = _research_payload(ctx, code, "get_research_rating_summary", get_rating_summary)
+        return parse_rating_summary(payload, as_of=as_of)
+    except Exception:  # noqa: BLE001
+        return []
 
 
 def _ticker_row(
@@ -338,7 +330,7 @@ def _ticker_row(
 
         payload = _research_payload(ctx, code, "get_research_analyst_consensus", get_analyst_consensus)
         consensus_row = _consensus_row(payload, company_id)
-        summary_items, has_valuation = _fetch_rating_enrichment(ctx, code, as_of=as_of)
+        summary_items = _fetch_rating_enrichment(ctx, code, as_of=as_of)
     except Exception as exc:
         failure = FetchFailure(ticker=ticker, error=f"{type(exc).__name__}: {exc}")
         log.error(
@@ -366,23 +358,23 @@ def _ticker_row(
             target_mean=mean,
             rating_items=list(summary_items),
         ), None
-    if summary_items or has_valuation:
-        if summary_rec is not None:
-            if summary_rec.consensus_rating is not None:
-                consensus_row["consensus_rating"] = summary_rec.consensus_rating
-            for key, val in (("target_high", high), ("target_low", low), ("target_mean", mean)):
-                if consensus_row.get(key) is None and val is not None:
-                    consensus_row[key] = val
-            consensus_row["rating_items"] = list(summary_items)
+    if summary_items:
+        assert summary_rec is not None
+        if summary_rec.consensus_rating is not None:
+            consensus_row["consensus_rating"] = summary_rec.consensus_rating
+        for key, val in (("target_high", high), ("target_low", low), ("target_mean", mean)):
+            if consensus_row.get(key) is None and val is not None:
+                consensus_row[key] = val
+        consensus_row["rating_items"] = list(summary_items)
         consensus_row["confidence"] = _moomoo_rating_confidence(
             f"consensus:{company_id}",
             f"consensus:{company_id}",
-            agreement=min(item.confidence for item in summary_items) if summary_items else Decimal("0.90"),
-            sample_conformance=Decimal("0.90") if summary_items else Decimal("0.95"),
+            agreement=min(item.confidence for item in summary_items),
+            sample_conformance=Decimal("0.90"),
             reason="vendor_timestamp",
         )
         reasons = list(consensus_row["reason_codes"])
-        if summary_items and "vendor_timestamp" not in reasons:
+        if "vendor_timestamp" not in reasons:
             reasons.append("vendor_timestamp")
         consensus_row["reason_codes"] = reasons
     return consensus_row, None
