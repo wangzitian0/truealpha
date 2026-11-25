@@ -21,13 +21,13 @@ import { preflightIdentities } from "./preflight.mjs";
 import { assertNoReadError } from "./read-error.mjs";
 import { walkSignOutJourney } from "./sign-out-journey.mjs";
 
-const BASE = process.env.APP_URL || process.env.TA_BASE_URL;
+const BASE = process.env.APP_URL;
 const EMAIL = process.env.TA_EMAIL;
 const PASSWORD = process.env.TA_PASSWORD;
 const MEMBER_EMAIL = process.env.TA_MEMBER_EMAIL;
 const DATA_STATE = process.env.TA_DATA_STATE || "populated";
 if (!BASE || !EMAIL || !PASSWORD) {
-  console.error("APP_URL (or TA_BASE_URL), TA_EMAIL, TA_PASSWORD are required");
+  console.error("APP_URL, TA_EMAIL, TA_PASSWORD are required");
   process.exit(2);
 }
 

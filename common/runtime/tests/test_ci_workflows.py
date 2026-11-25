@@ -215,8 +215,9 @@ def test_browser_check_uses_headless_shell_and_each_cell_fits_its_budget() -> No
         assert total <= CELL_POLICIES[cell].budget_seconds, (cell, total)
 
 
-# Words that install or upgrade OS packages on the runner. A hook bootstrap runs inside the
-# cell budget; on infra2 run 45331134994 the apt part alone took about 260 s of the 360 s
+# Words that install or upgrade OS packages on the runner. SDK 4.5 separates hook bootstrap into
+# a 120s `bootstrap_cap_seconds` (`BOOTSTRAP_CAP_SECONDS`) outside the cell budget; before that
+# separation, on infra2 run 45331134994 the apt part alone took about 260 s of the 360 s
 # `staging.post` cell (#1843).
 _OS_PACKAGE_TOKENS = frozenset({"--with-deps", "install-deps", "apt", "apt-get", "aptitude", "dpkg"})
 

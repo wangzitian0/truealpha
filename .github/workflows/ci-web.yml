@@ -162,7 +162,7 @@ jobs:
       # branch from the summary without opening a log.
       - name: Walk the live route tree in a browser (populated and empty)
         env:
-          TA_BASE_URL: http://127.0.0.1:3000
+          APP_URL: http://127.0.0.1:3000
           TA_EMAIL: admin@e2e.invalid
           # #371: the member pass. Both principals are seeded with the same
           # throwaway password, so one TA_PASSWORD covers both identities.
@@ -204,10 +204,10 @@ jobs:
               node .next/standalone/server.js &
             server_pid=$!
             for _ in $(seq 1 60); do
-              curl -fsS -o /dev/null "$TA_BASE_URL/login" && break
+              curl -fsS -o /dev/null "$APP_URL/login" && break
               sleep 1
             done
-            curl -fsS -o /dev/null "$TA_BASE_URL/login"
+            curl -fsS -o /dev/null "$APP_URL/login"
             if ! TA_PASSWORD="$E2E_PASSWORD" TA_DATA_STATE="$state" node e2e/walk-tree.mjs; then
               echo "::error::the walk failed against the ${state} database."
               cleanup
@@ -216,13 +216,13 @@ jobs:
             cleanup
             wait "$server_pid" "$backend_pid" 2>/dev/null || true
             for _ in $(seq 1 15); do
-              if ! curl -fsS -o /dev/null "http://127.0.0.1:8000/health" && ! curl -fsS -o /dev/null "$TA_BASE_URL/login"; then
+              if ! curl -fsS -o /dev/null "http://127.0.0.1:8000/health" && ! curl -fsS -o /dev/null "$APP_URL/login"; then
                 break
               fi
               sleep 1
             done
             ! curl -fsS -o /dev/null "http://127.0.0.1:8000/health"
-            ! curl -fsS -o /dev/null "$TA_BASE_URL/login"
+            ! curl -fsS -o /dev/null "$APP_URL/login"
             server_pid=""
             backend_pid=""
             echo "::endgroup::"
