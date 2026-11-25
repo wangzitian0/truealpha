@@ -317,3 +317,41 @@ def test_the_peg_section_is_available_when_an_excluded_decision_carries_a_peg() 
     assert _peg_availability(True, AvailabilityStatus.NOT_APPLICABLE) is AvailabilityStatus.AVAILABLE
     assert _peg_availability(False, AvailabilityStatus.AVAILABLE) is AvailabilityStatus.UNAVAILABLE
     assert _peg_availability(False, AvailabilityStatus.EXCLUDED) is AvailabilityStatus.EXCLUDED
+
+
+def test_peg_section_surfaces_stored_peg_reason_codes() -> None:
+    """#1851: PEG report section exposes stored peg_reason_codes when PEG is absent and falls back cleanly."""
+    from decimal import Decimal
+
+    from truealpha_runtime.research_report_mart import PEG_NOT_RECORDED, _peg_section
+    from truealpha_runtime.strategy_run import StrategyRunDecision, StrategyRunOutcome
+
+    with_reason = StrategyRunDecision(
+        issuer_id="issuer:test-peg-reason",
+        cutoff_at=_CUTOFF,
+        outcome=StrategyRunOutcome.SELECTED,
+        eligible=True,
+        peg=None,
+        peg_reason_codes=("loss_year_in_growth_window",),
+    )
+    assert _peg_section(with_reason, "mart", _HASH64).reason_codes == ("loss_year_in_growth_window",)
+
+    without_reason = StrategyRunDecision(
+        issuer_id="issuer:test-peg-empty",
+        cutoff_at=_CUTOFF,
+        outcome=StrategyRunOutcome.SELECTED,
+        eligible=True,
+        peg=None,
+        peg_reason_codes=(),
+    )
+    assert _peg_section(without_reason, "mart", _HASH64).reason_codes == (PEG_NOT_RECORDED,)
+
+    with_peg = StrategyRunDecision(
+        issuer_id="issuer:test-peg-ok",
+        cutoff_at=_CUTOFF,
+        outcome=StrategyRunOutcome.SELECTED,
+        eligible=True,
+        peg=Decimal("1.5"),
+        peg_reason_codes=("cagr_years:3",),
+    )
+    assert _peg_section(with_peg, "mart", _HASH64).reason_codes == ()

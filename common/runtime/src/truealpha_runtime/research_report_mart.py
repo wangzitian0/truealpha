@@ -210,7 +210,7 @@ def _peg_section(d: StrategyRunDecision, source: str, corpus_sha256: str) -> Rep
         "PEG",
         (("peg", _opt_str(d.peg), None), ("peg_rank", _opt_str(d.peg_rank), None)),
         status_override=_peg_availability(d.peg is not None, st),
-        reason_codes=(PEG_NOT_RECORDED,) if d.peg is None else (),
+        reason_codes=(d.peg_reason_codes or (PEG_NOT_RECORDED,)) if d.peg is None else (),
     )
 
 
