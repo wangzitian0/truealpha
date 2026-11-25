@@ -11,6 +11,8 @@ from data_engine.datahub.market_prices import (
     TwelveDataRateLimitError,
 )
 
+pytestmark = pytest.mark.contract
+
 
 def test_twelve_data_client_retries_http_200_rate_limit_via_sdk() -> None:
     sleeps: list[float] = []

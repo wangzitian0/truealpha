@@ -9,6 +9,8 @@ from types import SimpleNamespace
 import pytest
 from truealpha_runtime.checks import DependencyStatus, ProbeResult
 
+pytestmark = pytest.mark.gate
+
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "doctor_ingest.py"
 
 
