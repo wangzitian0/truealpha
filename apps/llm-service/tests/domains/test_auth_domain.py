@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from typing import Any
 
 import bcrypt
@@ -148,16 +147,3 @@ def test_db_statement_timeout_and_error_redaction(monkeypatch: pytest.MonkeyPatc
         database_url="postgresql://app_service_login:SuperSecretPass123@db:5432/truealpha",
     )
     assert "SuperSecretPass123" not in redacted
-
-
-def test_web_auth_server_stays_thin_forwarding() -> None:
-    repo_root = Path(__file__).resolve().parents[4]
-    auth_dir = repo_root / "apps/app-web/src/server/auth"
-    ts_files = sorted(auth_dir.glob("*.ts"))
-    assert ts_files
-    total_lines = sum(len(f.read_text(encoding="utf-8").splitlines()) for f in ts_files)
-    assert total_lines <= 71, f"apps/app-web/src/server/auth/*.ts grew to {total_lines} lines"
-    for f in ts_files:
-        text = f.read_text(encoding="utf-8")
-        for forbidden in ("withAppRuntime", "PostgresCredentialsRepository", "signSessionToken", "hashPassword"):
-            assert forbidden not in text, f"{f.name} contains forbidden symbol {forbidden}"

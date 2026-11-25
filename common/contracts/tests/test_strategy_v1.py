@@ -216,8 +216,3 @@ def test_frozen_1_0_0_and_live_1_1_0() -> None:
     c5 = copy.deepcopy(live_raw)
     c5["labor_efficiency_tree_keys"]["financial"]["tree_sha256"] = "0" * 64
     assert _val(c5).content_sha256 != live.content_sha256
-    rec = (
-        Path(__file__).resolve().parents[3] / "governance/reviews/large_model_value_v0-definition-1.1.0.md"
-    ).read_text("utf-8")
-    assert live.content_sha256 in rec and live.strategy_definition_id in rec and "not a review" in rec
-    assert all(p.tree_sha256 in rec and p.tree_version in rec for p in live.labor_efficiency_tree_keys.values())

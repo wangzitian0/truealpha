@@ -37,6 +37,7 @@ class Expectation:
     check: str
     cadence_hours: float
     job: str
+    kind: str = "hard"
 
     @property
     def max_age_hours(self) -> float:
@@ -58,12 +59,24 @@ class HealthReport:
     governed_pointers: object = None
 
 
+def _parse_kind(value: object, check: str) -> str:
+    kind = str(value or "hard")
+    if kind not in ("hard", "fact"):
+        raise VerdictCheckFailure(f"{check}: invalid verdict kind {kind!r}; expected 'hard' or 'fact'")
+    return kind
+
+
 def parse_expectations(text: str, lanes: Sequence[str] = ()) -> dict[str, Expectation]:
     raw = json.loads(text)
     entries = dict(raw["checks"])
     entries.update({f"{check}@{lane}": entry for check, entry in raw.get("per_universe", {}).items() for lane in lanes})
     return {
-        name: Expectation(name, float(entry["cadence_hours"]), str(entry.get("job", "")))
+        name: Expectation(
+            name,
+            float(entry["cadence_hours"]),
+            str(entry.get("job", "")),
+            _parse_kind(entry.get("kind", "hard"), name),
+        )
         for name, entry in entries.items()
     }
 
@@ -275,6 +288,7 @@ def judge(
     *,
     first_declared: Callable[[str], datetime | None] | None = None,
     notes: list[str] | None = None,
+    facts: list[str] | None = None,
 ) -> list[str]:
     newest: dict[str, Verdict] = {}
     for entry in verdicts:
@@ -310,7 +324,15 @@ def judge(
             elif notes is not None:
                 notes.append(f"{name}: pending ({verdict.summary})")
         elif not verdict.ok:
-            failures.append(f"{name}: red since {verdict.ran_at.isoformat()} ({age:.1f} h ago) — {verdict.summary}")
+            if age > expectation.max_age_hours:
+                failures.append(_stale_message(name, verdict, age, expectation))
+            elif expectation.kind == "fact":
+                if facts is not None:
+                    facts.append(
+                        f"{name}: red since {verdict.ran_at.isoformat()} ({age:.1f} h ago) — {verdict.summary}"
+                    )
+            else:
+                failures.append(f"{name}: red since {verdict.ran_at.isoformat()} ({age:.1f} h ago) — {verdict.summary}")
         elif age > expectation.max_age_hours:
             failures.append(_stale_message(name, verdict, age, expectation))
     return failures
@@ -352,11 +374,14 @@ def check_nightly_verdicts(
         return 0
     reference = now or datetime.now(UTC)
     notes: list[str] = []
+    facts: list[str] = []
     release = report.release
     since = (lambda check: first_declared(check, release)) if first_declared and release else None
-    failures = judge(report.verdicts, expectations, reference, first_declared=since, notes=notes)
+    failures = judge(report.verdicts, expectations, reference, first_declared=since, notes=notes, facts=facts)
     for note in notes:
         print(f"{name}: pending: {note}")
+    for fact in facts:
+        print(f"{name}: fact: {fact}")
     unexpected = sorted({entry.check for entry in report.verdicts} - set(expectations))
     if unexpected:
         print(f"{name}: not bounded (not declared by the deployed release): {', '.join(unexpected)}")
@@ -365,7 +390,10 @@ def check_nightly_verdicts(
             print(f"nightly verdict check failed: {name} {failure}", file=sys.stderr)
         print(f"({len(failures)} of {len(expectations)} expected checks; expectations {source})", file=sys.stderr)
         return 1
-    print(f"{name}: all {len(expectations)} nightly checks are green and on time ({source})")
+    fact_suffix = f" ({len(facts)} fact observation(s) logged)" if facts else ""
+    print(
+        f"{name}: all {len(expectations)} nightly checks are on time and hard gates are green{fact_suffix} ({source})"
+    )
     return 0
 
 

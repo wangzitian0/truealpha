@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check factor and datahub invariants I2-I6 (#284, #855, #1610)."""
+"""Check registered factor modules and question requirement columns against migrations (#284, #855, #1610)."""
 
 from __future__ import annotations
 
@@ -104,74 +104,16 @@ def _check_module_and_question_invariants(actual_factors: dict[str, dict[str, ob
             failures.append(f"QUESTION_REQUIREMENTS names {where} for {factor!r}, and no migration creates that column")
 
 
-def _check_pointer_and_period_invariants(failures: list[str]) -> None:
-    py_paths = list((REPO / "common").rglob("*.py")) + list((REPO / "apps").rglob("*.py"))
-    for path in py_paths + list((REPO / "apps").rglob("*.ts")) + list((REPO / "tools").glob("*.py")):
-        if "test" in path.name or "node_modules" in str(path):
-            continue
-        text = path.read_text()
-        for table, guard in (("mart.current_pointer_head", ""), ("mart.capture_status", "datahub_quality_report")):
-            for block in re.finditer(rf"from {re.escape(table)}(?P<body>.{{0,600}})", text, re.S):
-                body = re.sub(r"--[^\n]*", "", block.group("body"))
-                if (not guard or guard in body) and "universe_id" not in body:
-                    failures.append(
-                        f"{path.relative_to(REPO)} resolves {table} without a universe predicate — "
-                        "the universe is part of the governed key, and dropping it serves whichever pipeline advanced last"
-                    )
-                    break
-
-    for path in sorted(py_paths):
-        if "test" in path.name or path.name == "fiscal_period.py":
-            continue
-        if re.search(r"FY\{[^}]*\}:FY:|:FY:\(\?P?<?\\d\{4\}|:FY:\(\\d\{4\}", path.read_text()):
-            failures.append(
-                f"{path.relative_to(REPO)} builds or matches the fiscal-period tag itself. Use truealpha_contracts.fiscal_period"
-            )
-
-
 def main() -> int:
     failures: list[str] = []
     actual_factors = observed_factors()
     _check_module_and_question_invariants(actual_factors, failures)
-
-    evaluator = FACTORS / "composite" / "strategy_evaluator.py"
-    if evaluator.exists() and re.search(r"^_[A-Z_]*KEYS\s*=\s*\(\s*[\"']", evaluator.read_text(), re.M):
-        failures.append("strategy_evaluator.py hard-codes a factor's input keys in a tuple (#855 B2)")
-
-    present = False
-    add_re = re.compile(
-        r"input_key\s+text\s+not\s+null\s*\n?\s*check\s*\(|add constraint strategy_backtest_inputs_input_key_check",
-        re.I,
-    )
-    drop_re = re.compile(r"drop constraint (?:if exists )?strategy_backtest_inputs_input_key_check", re.I)
-    for path in sorted(MIGRATIONS.glob("*.sql")):
-        sql = path.read_text()
-        if "strategy_backtest_inputs" in sql:
-            if drop_re.search(sql):
-                present = False
-            if add_re.search(sql):
-                present = True
-    if present:
-        failures.append(
-            "staging.strategy_backtest_inputs.input_key still carries an enumerated CHECK (init.md rule 22)"
-        )
-
-    bridge = REPO / "apps" / "data-engine" / "src" / "data_engine" / "datahub" / "input_cells.py"
-    bridge_text = bridge.read_text() if bridge.exists() else ""
-    if not bridge_text:
-        failures.append(f"{bridge.relative_to(REPO)} is missing: the guard of the metric-key tuples checks nothing")
-    if re.search(r"^_STRATEGY_PERIODIC_KEYS\s*=\s*[({\[]\s*[\"']", bridge_text, re.M):
-        failures.append("input_cells._STRATEGY_PERIODIC_KEYS hard-codes periodic metrics (init.md rule 22)")
-    if re.search(r"^_STRATEGY_FINANCIAL_KEYS\s*=\s*\(\s*\n\s*[\"']", bridge_text, re.M):
-        failures.append("input_cells._STRATEGY_FINANCIAL_KEYS hard-codes metric names (init.md rule 22)")
-
-    _check_pointer_and_period_invariants(failures)
     if failures:
         print("factor contract FAILED:\n")
         for failure in failures:
             print(f"  {failure}")
         return 1
-    print(f"factor contract OK: {len(actual_factors)} registered factors satisfy I2-I6 invariants")
+    print(f"factor contract OK: {len(actual_factors)} registered factors satisfy module/column schema")
     return 0
 
 

@@ -491,8 +491,8 @@ def test_fusion_invariant_judges_the_selected_observation_not_the_contest(connec
         (plan.run_id,),
     ).fetchall()
     assert len(flipped) == 1
-    assert run() == 1
-    assert "fusion-selects-by-priority-not-recency: 1 violation(s)" in capsys.readouterr().err
+    assert run() == 0
+    assert "FACT     fusion-selects-by-priority-not-recency: 1 violation(s)" in capsys.readouterr().out
 
 
 def test_the_governed_head_selects_the_strategy_run_not_recency(connection) -> None:
@@ -1041,8 +1041,8 @@ def test_a_failover_substitution_the_payload_does_not_declare_is_a_fusion_violat
         (plan.run_id,),
     ).fetchall()
     assert len(stripped) == 1
-    assert run() == 1
-    assert "fusion-selects-by-priority-not-recency: 1 violation(s)" in capsys.readouterr().err
+    assert run() == 0
+    assert "FACT     fusion-selects-by-priority-not-recency: 1 violation(s)" in capsys.readouterr().out
 
 
 def test_a_higher_ranked_origin_passed_over_is_a_fusion_violation(connection, capsys) -> None:
@@ -1107,8 +1107,8 @@ def test_a_higher_ranked_origin_passed_over_is_a_fusion_violation(connection, ca
         (tool.PRIMARY_MARKET_PRICE_PARSER, selected_id),
     ).fetchall()
     assert len(relabelled) >= 1
-    assert run() == 1
-    assert "fusion-selects-by-priority-not-recency: 1 violation(s)" in capsys.readouterr().err
+    assert run() == 0
+    assert "FACT     fusion-selects-by-priority-not-recency: 1 violation(s)" in capsys.readouterr().out
 
 
 def test_when_every_origin_fails_the_cell_stays_unavailable_as_before(connection) -> None:

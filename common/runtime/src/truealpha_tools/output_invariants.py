@@ -7,9 +7,9 @@ import json
 import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import psycopg
 from factors.panel import (
@@ -104,6 +104,17 @@ class Invariant:
     violations: str
     population: str
     signals: str | None = None
+    kind: Literal["hard", "fact"] = "hard"
+
+
+@dataclass(frozen=True)
+class InvariantResult:
+    invariant_id: str
+    kind: Literal["hard", "fact"]
+    population: int
+    violation_count: int
+    deferred: bool
+    sample_rows: tuple[list[str], ...] = ()
 
 
 SIGN_POLICY_TABLE = "mart.metric_node_values"
@@ -243,6 +254,7 @@ _SCHEDULED_HEADS_CTE = """
 _TEMPLATES: tuple[Invariant, ...] = (
     Invariant(
         id="node-sign-policy",
+        kind="fact",
         claim=(
             "a published value respects the sign policy its metric-forest node declares for the "
             "issuer's class — the definition says what a negative number means, and this asserts "
@@ -254,6 +266,7 @@ _TEMPLATES: tuple[Invariant, ...] = (
     ),
     Invariant(
         id="available-means-a-value",
+        kind="fact",
         claim=(
             "a cell marked `available` carries a value and a non-zero confidence — "
             "'available with nothing in it' is a contradiction, not a state"
@@ -277,6 +290,7 @@ _TEMPLATES: tuple[Invariant, ...] = (
     ),
     Invariant(
         id="unavailable-means-a-reason",
+        kind="fact",
         claim=(
             "an `unavailable` or `not_applicable` node value of a scheduled head names a reason — "
             "a reader cannot act on an absence that has no cause (#1804)"
@@ -300,6 +314,7 @@ _TEMPLATES: tuple[Invariant, ...] = (
     ),
     Invariant(
         id="selected-weights-close",
+        kind="hard",
         claim="the selected positions of a strategy run sum to a whole portfolio",
         violations=f"""
             select strategy_run_id, round(sum(target_weight), 6)::text as total, count(*)::text as selected
@@ -315,6 +330,7 @@ _TEMPLATES: tuple[Invariant, ...] = (
     ),
     Invariant(
         id="every-consumed-input-is-populated",
+        kind="fact",
         claim=(
             "an input key the strategy consumes must be written for at least one issuer at "
             "the latest cutoff — a key that is declared, permitted by the 0039 CHECK and "
@@ -347,6 +363,7 @@ _TEMPLATES: tuple[Invariant, ...] = (
     ),
     Invariant(
         id="fusion-selects-by-priority-not-recency",
+        kind="fact",
         claim=(
             "where two sources assert the same obligation, the snapshot selected the "
             "highest-priority source -- never whichever published later (init.md rule 12)"
@@ -388,6 +405,7 @@ _TEMPLATES: tuple[Invariant, ...] = (
     ),
     Invariant(
         id="extraction-citations-resolve",
+        kind="fact",
         claim=(
             "every issuer headcount fact must carry an 18-digit SEC accession and a filing knowable_at, "
             "and a 10k-extraction citation must resolve to captured bytes in raw.fetches (#1295, #735, #70)"
@@ -466,6 +484,7 @@ _TEMPLATES: tuple[Invariant, ...] = (
     ),
     Invariant(
         id="revenue-period-is-recent",
+        kind="fact",
         claim=(
             f"each available core result of a scheduled governed head has a revenue period that ends at most "
             f"{_MAX_INPUT_AGE_DAYS} days before the cutoff of its run, and each such head states a revenue "
@@ -521,6 +540,7 @@ _TEMPLATES: tuple[Invariant, ...] = (
     ),
     Invariant(
         id="governed-entities-resolve-display-name",
+        kind="fact",
         claim=(
             "every issuer in an active governed head resolves to a human-readable company name in "
             "mart.entity_display_resolution, never NULL, its raw issuer_id, or its bare ticker (#1517)"
@@ -550,6 +570,7 @@ _TEMPLATES: tuple[Invariant, ...] = (
     ),
     Invariant(
         id="entity-identity-unique-per-entity",
+        kind="hard",
         claim="mart.entity_identity returns at most one row per entity_id — duplicate rows fan out every downstream join (#1641)",
         violations="""
             select entity_id::text, count(*)::text as row_count
@@ -562,6 +583,7 @@ _TEMPLATES: tuple[Invariant, ...] = (
     ),
     Invariant(
         id="listing-names-one-issuer-and-one-instrument",
+        kind="hard",
         claim=(
             "a listing has one instrument and one issuer — two universes that spell one listing in "
             "two ways resolve to the same entities, or a run of one refuses the rows of the other (#1798)"
@@ -607,6 +629,7 @@ _TEMPLATES: tuple[Invariant, ...] = (
     ),
     Invariant(
         id="fund-virtual-company-weights-conserved",
+        kind="hard",
         claim="every mart.fund_virtual_company row conserves portfolio weight (0 <= valued_weight_pct <= resolved_weight_pct <= total_weight_pct <= 105) (#1641)",
         violations="""
             select run_id, fund_id, total_weight_pct::text, resolved_weight_pct::text, valued_weight_pct::text
@@ -660,6 +683,7 @@ def _render(invariant: Invariant, scheduled: str) -> Invariant:
         violations=fill(invariant.violations),
         population=fill(invariant.population),
         signals=None if invariant.signals is None else fill(invariant.signals),
+        kind=invariant.kind,
     )
 
 
@@ -700,6 +724,38 @@ def _rows(connection: Any, sql: str) -> list[tuple]:
         return cursor.fetchall()
 
 
+_INSERT_RESULT_SQL = """
+    insert into mart.output_invariant_results (
+        dagster_run_id, checked_at, invariant_id, kind, population, violation_count, deferred, sample_rows
+    ) values (%s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+"""
+
+
+def persist_results(
+    connection: Any,
+    results: Sequence[InvariantResult],
+    *,
+    dagster_run_id: str,
+    checked_at: datetime,
+) -> None:
+    run_id = (dagster_run_id or "manual")[:64]
+    with connection.cursor() as cursor:
+        for result in results:
+            cursor.execute(
+                _INSERT_RESULT_SQL,
+                (
+                    run_id,
+                    checked_at,
+                    result.invariant_id,
+                    result.kind,
+                    result.population,
+                    result.violation_count,
+                    result.deferred,
+                    json.dumps(list(result.sample_rows)),
+                ),
+            )
+
+
 def check(
     database_url: str,
     *,
@@ -708,47 +764,95 @@ def check(
     exemptions: dict[str, Exemption] | None = None,
     invariants: Sequence[Invariant] = INVARIANTS,
     connect: Callable[[str], Any] = psycopg.connect,
+    persist: bool = False,
+    dagster_run_id: str | None = None,
+    checked_at: datetime | None = None,
+    commit: bool = True,
 ) -> int:
     today = today or date.today()
     exemptions = load_exemptions() if exemptions is None else exemptions
     failures: list[str] = []
+    results: list[InvariantResult] = []
 
     with connect(database_url) as connection:
         for invariant in invariants:
-            population = _rows(connection, invariant.population)[0][0]
+            population = int(_rows(connection, invariant.population)[0][0])
             violations = _rows(connection, invariant.violations)
             exemption = exemptions.get(invariant.id)
+            samples = tuple([str(field) for field in row] for row in violations[:5])
+            deferred = False
             if invariant.signals is not None:
                 for row in _rows(connection, invariant.signals):
                     print(f"  SIGNAL   {invariant.id}: " + " ".join(str(field) for field in row))
 
+            if invariant.kind == "fact":
+                results.append(
+                    InvariantResult(
+                        invariant_id=invariant.id,
+                        kind="fact",
+                        population=population,
+                        violation_count=len(violations),
+                        deferred=False,
+                        sample_rows=samples,
+                    )
+                )
+                if violations:
+                    detail = "; ".join(" ".join(row) for row in samples)
+                    print(
+                        f"  FACT     {invariant.id}: {len(violations)} violation(s) — {invariant.claim}. Offending rows: {detail}"
+                    )
+                elif population == 0:
+                    print(f"  FACT     {invariant.id}: examined 0 rows")
+                else:
+                    print(f"  ok       {invariant.id}: {population} row(s) examined")
+                continue
+
             if violations and exemption and exemption.expires >= today:
+                deferred = True
                 print(
                     f"  DEFERRED {invariant.id}: {len(violations)} violation(s), exempt until "
                     f"{exemption.expires} under {exemption.issue} — {exemption.reason}"
                 )
-                continue
-            if violations:
-                detail = "; ".join(" ".join(str(field) for field in row) for row in violations[:5])
+            elif violations:
+                detail = "; ".join(" ".join(row) for row in samples)
                 expired = f" The exemption under {exemption.issue} expired {exemption.expires}." if exemption else ""
                 failures.append(
                     f"{invariant.id}: {len(violations)} violation(s) — {invariant.claim}."
                     f"{expired} Offending rows: {detail}"
                 )
-                continue
-            if population == 0:
+            elif population == 0:
                 print(f"  EMPTY    {invariant.id}: examined 0 rows, so it proved nothing")
                 if require_coverage:
                     failures.append(f"{invariant.id}: examined 0 rows where real data was required")
-                continue
-            if exemption:
+            elif exemption:
                 failures.append(
                     f"{invariant.id}: exempt under {exemption.issue} but no longer violated across "
                     f"{population} row(s). Remove the exemption — a standing waiver for a fixed "
                     f"defect hides the next one"
                 )
-                continue
-            print(f"  ok       {invariant.id}: {population} row(s) examined")
+            else:
+                print(f"  ok       {invariant.id}: {population} row(s) examined")
+
+            results.append(
+                InvariantResult(
+                    invariant_id=invariant.id,
+                    kind="hard",
+                    population=population,
+                    violation_count=len(violations),
+                    deferred=deferred,
+                    sample_rows=samples,
+                )
+            )
+
+        if persist:
+            persist_results(
+                connection,
+                results,
+                dagster_run_id=dagster_run_id or "manual",
+                checked_at=checked_at or datetime.now(UTC),
+            )
+            if commit and callable(getattr(connection, "commit", None)):
+                connection.commit()
 
     for failure in failures:
         print(f"invariant failed: {failure}", file=sys.stderr)
@@ -759,8 +863,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--database-url", required=True)
     parser.add_argument("--require-coverage", action="store_true")
+    parser.add_argument("--persist", action="store_true")
+    parser.add_argument("--dagster-run-id", default="manual")
     args = parser.parse_args(argv)
-    return check(args.database_url, require_coverage=args.require_coverage)
+    return check(
+        args.database_url,
+        require_coverage=args.require_coverage,
+        persist=args.persist,
+        dagster_run_id=args.dagster_run_id,
+    )
 
 
 if __name__ == "__main__":

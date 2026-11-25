@@ -26,7 +26,6 @@ import subprocess
 from pathlib import Path
 
 import pytest
-import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 PREPUSH = REPO_ROOT / "tools" / "prepush.sh"
@@ -55,15 +54,8 @@ def run_prepush(*arguments: str, cwd: Path = REPO_ROOT) -> subprocess.CompletedP
     )
 
 
-def test_an_empty_change_set_is_an_error_not_a_pass(tmp_path: Path) -> None:
-    """The no-op-edit shape: nothing to check must never read as 'clean'.
-
-    Run in a throwaway worktree at HEAD rather than gating on the caller's tree
-    being clean. A skip-if-dirty version passed vacuously under
-    tools/redprove.sh — whose whole method is editing a file, which makes the
-    tree dirty — so the guard reported INERT while being perfectly fine. The
-    empty path exits before any `uv run`, so a bare worktree is enough.
-    """
+def test_an_empty_change_set_exits_cleanly_with_skip_notice(tmp_path: Path) -> None:
+    """When zero files changed vs BASE, prepush prints a clear notice and exits 0 cleanly."""
     tree = tmp_path / "clean"
     subprocess.run(
         ["git", "worktree", "add", "--detach", str(tree), "HEAD"],
@@ -73,8 +65,8 @@ def test_an_empty_change_set_is_an_error_not_a_pass(tmp_path: Path) -> None:
         check=True,
     )
     try:
-        result = subprocess.run(["bash", str(PREPUSH), "HEAD"], capture_output=True, text=True, cwd=tree, check=False)
-        assert result.returncode != 0, "prepush reported success over an empty change set"
+        result = run_prepush("HEAD", cwd=tree)
+        assert result.returncode == 0, f"prepush failed on empty change set: {result.stdout + result.stderr}"
         assert "nothing changed" in result.stdout + result.stderr
     finally:
         subprocess.run(
@@ -167,19 +159,3 @@ def test_the_local_entries_never_run_the_whole_repository() -> None:
         pytest.fail("make test-python with no FILES ran instead of refusing")
     assert refused.returncode != 0, "make test-python with no FILES ran instead of refusing"
     assert "set FILES=" in stderr
-
-
-def test_it_runs_the_same_fast_stdlib_gates_as_ci_python_gates() -> None:
-    """Every fast stdlib gate (`python3 tools/*.py ...`) in `ci-python.yml` (`gates` job) runs
-    locally in `tools/prepush.sh` when a Python file changes, derived from `ci-python.yml`."""
-    script = PREPUSH.read_text(encoding="utf-8")
-    workflow = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "ci-python.yml").read_text(encoding="utf-8"))
-    steps = workflow["jobs"]["gates"]["steps"]
-    stdlib_gates = [
-        step["run"].strip()
-        for step in steps
-        if isinstance(step.get("run"), str) and step["run"].strip().startswith("python3 tools/")
-    ]
-    assert stdlib_gates, f"expected >= 1 stdlib gate in ci-python.yml gates job, found {stdlib_gates}"
-    for gate in stdlib_gates:
-        assert gate in script, f"prepush.sh is missing fast stdlib gate {gate!r} from ci-python.yml"

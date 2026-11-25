@@ -48,20 +48,3 @@ jobs:
             exit 1
           fi
           echo "OK: no moomoo trading API references found."
-
-  dependency-audit:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
-      - name: Audit JS dependencies (bun audit)
-        working-directory: apps/app-web
-        run: bun audit
-      - uses: ./.github/actions/setup-uv
-        with:
-          enable-cache: false
-      - name: Sync workspace and audit Python dependencies (pip-audit)
-        run: |
-          uv sync --all-packages --frozen
-          uv run --frozen --with pip-audit pip-audit

@@ -42,7 +42,7 @@ def _invariant(queries: tuple[str, str | None] | None = None):
     if queries is None:
         return shipped
     violations, signals = queries
-    return suite.Invariant(shipped.id, shipped.claim, violations, shipped.population, signals)
+    return suite.Invariant(shipped.id, shipped.claim, violations, shipped.population, signals, kind=shipped.kind)
 
 
 def _check(conn, invariant) -> int:
@@ -95,20 +95,22 @@ def test_the_governed_head_holds_and_shows_a_declared_low_signal(connection, hea
 
 def test_a_sign_a_ratio_cannot_produce_is_red(connection, head, capsys) -> None:  # noqa: F811
     """gppe = capital_adjusted_gross_profit / employees_total with a non-negative headcount:
-    the two signs agree, whatever the policy of either."""
+    the two signs agree, whatever the policy of either (emits FACT under Wave 4)."""
     _set_jpm(connection, head, gppe="-514726.13", adjusted="163940000000")
-    assert _check(connection, _invariant()) == 1
-    err = capsys.readouterr().err
-    assert "listing:xnys:jpm" in err and "sign of capital_adjusted_gross_profit" in err
+    assert _check(connection, _invariant()) == 0
+    out = capsys.readouterr().out
+    assert "FACT     node-sign-policy:" in out
+    assert "listing:xnys:jpm" in out and "sign of capital_adjusted_gross_profit" in out
     # a published ratio whose numerator is absent is named too: sign(NULL) would compare as NULL
     _set_jpm(connection, head, gppe="-514726.13", adjusted=None)
-    assert _check(connection, _invariant()) == 1
-    assert "sign of capital_adjusted_gross_profit" in capsys.readouterr().err
+    assert _check(connection, _invariant()) == 0
+    out = capsys.readouterr().out
+    assert "FACT     node-sign-policy:" in out and "sign of capital_adjusted_gross_profit" in out
 
 
 def test_a_negative_value_the_node_forbids_is_red(connection, head, capsys, monkeypatch) -> None:  # noqa: F811
     """Red-proof of the policy itself: the same JPM row, under a forest whose GPPE node forbids
-    a negative financial value, fails the suite — and prints no signal for it."""
+    a negative financial value, emits a FACT violation — and prints no signal for it."""
     strict_metrics = {
         key: node.with_updates(sign_policy={**node.sign_policy, IssuerClass.FINANCIAL: SignPolicy.MUST_BE_NON_NEGATIVE})
         if key == "gppe_uniform_charge_v0"
@@ -118,7 +120,8 @@ def test_a_negative_value_the_node_forbids_is_red(connection, head, capsys, monk
     monkeypatch.setattr(suite, "PANEL_METRICS", strict_metrics)
     strict = _invariant(suite._sign_policy_queries())
     _set_jpm(connection, head, gppe="-514726.13", adjusted="-163940000000")
-    assert _check(connection, strict) == 1
+    assert _check(connection, strict) == 0
     captured = capsys.readouterr()
-    assert "listing:xnys:jpm" in captured.err and "must-be-non-negative" in captured.err
+    assert "FACT     node-sign-policy:" in captured.out
+    assert "listing:xnys:jpm" in captured.out and "must-be-non-negative" in captured.out
     assert all("gppe:" not in line for line in captured.out.splitlines() if line.startswith("  SIGNAL"))

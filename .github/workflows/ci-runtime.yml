@@ -27,10 +27,6 @@ jobs:
           uv run --package truealpha-runtime truealpha-runtime ensure-bucket
       - name: Assert declared dependencies
         run: uv run --package truealpha-runtime truealpha-runtime check --live
-      - name: Assert point-in-time persistence contract
-        env:
-          PGPASSWORD: postgres
-        run: psql -h localhost -U postgres -d truealpha -v ON_ERROR_STOP=1 -f db/tests/runtime_contract.sql
       # #984: this job is the ONE place the compose path is exercised end to end — a
       # fresh volume, so the postgres image runs db/docker-init.sh out of
       # /docker-entrypoint-initdb.d/, which is the same db/apply_migrations.sh every

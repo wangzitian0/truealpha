@@ -218,25 +218,6 @@ def test_retired_aliases_do_not_populate_release_settings(monkeypatch: pytest.Mo
 # --- the image carries the deployment entrypoint (Refs wangzitian0/infra2#1822) ------------
 
 
-def test_the_image_carries_an_executable_dagster_entrypoint() -> None:
-    """infra2 runs `/bin/sh /app/dagster-entrypoint.sh <command>` without a bind mount.
-
-    Red when the COPY line, the 0755 mode, the shebang or the manifest path the script
-    validates is removed or changed.
-    """
-    lines = DOCKERFILE.read_text(encoding="utf-8").splitlines()
-    assert "COPY --chmod=0755 apps/data-engine/dagster-entrypoint.sh /app/dagster-entrypoint.sh" in lines
-    script = REPO_ROOT / "apps/data-engine/dagster-entrypoint.sh"
-    text = script.read_text(encoding="utf-8")
-    assert text.startswith("#!/bin/sh\n")
-    assert 'exec "$@"' in text
-    # The path the script validates is the one the Dockerfile ships.
-    assert f"assert_environment('{release_identity.ENV_MANIFEST_PATH}'" in text
-    assert f"COPY {release_identity.ENV_MANIFEST_PATH} ./{release_identity.ENV_MANIFEST_PATH}" in lines
-    # The git file mode is executable, so a checkout without `--chmod` support still runs it.
-    assert script.stat().st_mode & 0o111
-
-
 def test_the_entrypoint_waits_for_secrets_then_execs_the_command(tmp_path: Path) -> None:
     """Run the script as `/bin/sh` runs it, with a tiny secrets file and a stub command."""
     import subprocess

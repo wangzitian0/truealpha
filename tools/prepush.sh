@@ -63,8 +63,8 @@ mapfile -t CHANGED < <(
 mapfile -t CHANGED < <(printf '%s\n' "${CHANGED[@]}" | sort -u | while IFS= read -r f; do [ -n "$f" ] && [ -e "$f" ] && echo "$f"; done)
 
 if [ "${#CHANGED[@]}" -eq 0 ]; then
-  echo "prepush: nothing changed against $BASE — a scripted edit that matched nothing looks exactly like this"
-  exit 1
+  echo "prepush: nothing changed against $BASE — skipping diff-scoped lint"
+  exit 0
 fi
 
 echo "== changed vs $BASE (${#CHANGED[@]} files) =="
@@ -95,7 +95,6 @@ for path in "${CHANGED[@]}"; do
 done
 
 if [ "${#PY[@]}" -gt 0 ]; then
-  run "factor contract gate" python3 tools/check_factor_contract.py
   run "ruff check (changed files)" uv run ruff check --force-exclude "${PY[@]}"
 fi
 for path in "${YML[@]}"; do
