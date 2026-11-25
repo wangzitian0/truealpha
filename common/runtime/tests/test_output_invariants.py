@@ -1316,50 +1316,93 @@ def test_persist_records_hard_and_fact_invariants_and_only_hard_fails(
     conn: psycopg.Connection, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """Persist both hard and fact results into mart.output_invariant_results inside a transaction."""
-    issuer = SeededIssuer("issuer:persist", ("listing:xnas:prs0",), True, False, (), date(2025, 12, 31))
-    _seed_head(conn, REVENUE_UNIVERSE, [issuer])
+    from truealpha_runtime.mart_refresh import MART_ENTITY_IDENTITY, refresh_mart_materialized_views
+
+    run_id = _seed_head(
+        conn,
+        REVENUE_UNIVERSE,
+        [
+            SeededIssuer(
+                "issuer:persist", ("listing:xnas:prs0",), True, False, ("missing_gross_profit",), date(2025, 12, 31)
+            )
+        ],
+    )
+    refresh_mart_materialized_views(conn, (MART_ENTITY_IDENTITY,))
+    conn.execute(
+        "insert into mart.metric_node_values (run_id, issuer_id, node_id, node_key, period, period_tag, value, unit,"
+        " availability_status, reason_codes, source_evidence_status, factor_validation_status, confidence, tree_id,"
+        " tree_version, tree_sha256) values (%s, 'issuer:persist', '7f4b0c1e-3d0a-5c57-9d59-1f0d6f3c1804'::uuid,"
+        " 'peg_consensus', '2026-03-31', 'cutoff', null, 'ratio', 'unavailable', '{}', 'degraded', 'not_evaluated',"
+        " null, 'ef13b940-b695-5f5f-846a-a36face5cc3e'::uuid, 'v1', %s)",
+        (run_id, SEED_SHA256),
+    )
+
     (fact_inv,) = [inv for inv in _module.INVARIANTS if inv.id == REASON_INVARIANT]
     (hard_inv,) = [inv for inv in _module.INVARIANTS if inv.id == ENTITY_IDENTITY_UNIQUE_INVARIANT]
-    conn.execute(
-        """
-        insert into mart.fund_virtual_company (
-            run_id, fund_id, report_period, transaction_time, cutoff,
-            definition_version, definition_sha256, weighted_valuation_gap, valuation_basis,
-            total_weight_pct, resolved_weight_pct, valued_weight_pct, lines, valued_lines, confidence,
-            availability_status, source_evidence_status, factor_validation_status
-        ) values (
-            'capture-run:persist', 'etf:series:QQQ', '2026-06-30', '2026-06-30T00:00:00Z',
-            '2026-06-30T00:00:00Z', 'v0', repeat('b', 64), 0.12, 'price_to_gross_profit',
-            199.0, 98.5, 95.0, 100, 95, 0.90,
-            'available', 'verified', 'accepted'
-        )
-        """
-    )
-    (hard_fail_inv,) = [inv for inv in _module.INVARIANTS if inv.id == FUND_WEIGHTS_INVARIANT]
 
-    code = check(
+    code_fact = check(
         "postgresql://borrowed",
         require_coverage=True,
         today=TODAY,
         exemptions={},
-        invariants=(fact_inv, hard_inv, hard_fail_inv),
+        invariants=(fact_inv, hard_inv),
         connect=lambda _url: _Borrowed(conn),
         persist=True,
-        dagster_run_id="persist-wave4-test",
+        dagster_run_id="persist-wave4-fact-only",
         commit=False,
     )
     _ = capsys.readouterr()
-    assert code == 1
-    rows = conn.execute(
+    assert code_fact == 0
+
+    rows_fact = conn.execute(
         """
         select invariant_id, kind, population, violation_count, deferred, sample_rows
         from mart.output_invariant_results
-        where dagster_run_id = 'persist-wave4-test'
+        where dagster_run_id = 'persist-wave4-fact-only'
         order by invariant_id
         """
     ).fetchall()
-    by_id = {row[0]: row[1:] for row in rows}
-    assert set(by_id) == {REASON_INVARIANT, ENTITY_IDENTITY_UNIQUE_INVARIANT, FUND_WEIGHTS_INVARIANT}
-    assert by_id[REASON_INVARIANT][0] == "fact" and by_id[REASON_INVARIANT][2] == 1
-    assert len(by_id[REASON_INVARIANT][4]) == 1
-    assert by_id[FUND_WEIGHTS_INVARIANT][0] == "hard" and by_id[FUND_WEIGHTS_INVARIANT][2] == 1
+    by_fact = {row[0]: row[1:] for row in rows_fact}
+    assert set(by_fact) == {REASON_INVARIANT, ENTITY_IDENTITY_UNIQUE_INVARIANT}
+    assert by_fact[REASON_INVARIANT][0] == "fact" and by_fact[REASON_INVARIANT][2] == 1
+    assert len(by_fact[REASON_INVARIANT][4]) == 1
+    assert by_fact[ENTITY_IDENTITY_UNIQUE_INVARIANT][0] == "hard" and by_fact[ENTITY_IDENTITY_UNIQUE_INVARIANT][2] == 0
+
+    def mint(kind: str, scheme: str, value: str) -> uuid.UUID:
+        return conn.execute("select staging.entity_mint(%s, %s, %s, 'test')", (kind, scheme, value)).fetchone()[0]
+
+    listing = uuid.UUID(_mint_listing(conn, "listing:xnys:prs1"))
+    instrument = mint("instrument", "cusip", "30231G199")
+    first, second = mint("issuer", "cik", "0002115498"), mint("issuer", "cik", "0002115499")
+    _relate(conn, "listed_as", instrument, listing)
+    _relate(conn, "issues", first, instrument)
+    _relate(conn, "issues", second, instrument)
+    (hard_fail_inv,) = [inv for inv in _module.INVARIANTS if inv.id == LISTING_INVARIANT]
+
+    code_hard = check(
+        "postgresql://borrowed",
+        require_coverage=True,
+        today=TODAY,
+        exemptions={},
+        invariants=(fact_inv, hard_fail_inv),
+        connect=lambda _url: _Borrowed(conn),
+        persist=True,
+        dagster_run_id="persist-wave4-hard",
+        commit=False,
+    )
+    _ = capsys.readouterr()
+    assert code_hard == 1
+
+    rows_hard = conn.execute(
+        """
+        select invariant_id, kind, population, violation_count, deferred, sample_rows
+        from mart.output_invariant_results
+        where dagster_run_id = 'persist-wave4-hard'
+        order by invariant_id
+        """
+    ).fetchall()
+    by_hard = {row[0]: row[1:] for row in rows_hard}
+    assert set(by_hard) == {REASON_INVARIANT, LISTING_INVARIANT}
+    assert by_hard[REASON_INVARIANT][0] == "fact" and by_hard[REASON_INVARIANT][2] == 1
+    assert by_hard[LISTING_INVARIANT][0] == "hard" and by_hard[LISTING_INVARIANT][2] == 1
+    assert len(by_hard[LISTING_INVARIANT][4]) == 1
