@@ -37,6 +37,8 @@ export type OpsOverviewResponse = Schemas["OpsOverviewResponse"];
 export type DatahubStatsResponse = Schemas["DatahubStatsResponse"];
 export type TriggerPipelineRequest = Schemas["TriggerPipelineRequest"];
 export type TriggerPipelineResponse = Schemas["TriggerPipelineResponse"];
+export type HeadRollbackRequest = Schemas["HeadRollbackRequest"];
+export type HeadRollbackResponse = Schemas["HeadRollbackResponse"];
 
 export class ApiError extends Error {
   readonly status: number;
@@ -125,4 +127,5 @@ export const api = {
   getAdminOps: (opts?: RequestOpts) => apiRequest<OpsOverviewResponse>("/api/v1/admin/ops", opts),
   triggerPipeline: (body: TriggerPipelineRequest, opts?: RequestOpts) => json<TriggerPipelineResponse>("/api/v1/admin/triggers", body, opts),
   getAdminDatahub: (opts?: RequestOpts) => apiRequest<DatahubStatsResponse>("/api/v1/admin/datahub", opts),
+  rollbackHead: (body: HeadRollbackRequest, opts?: RequestOpts) => json<HeadRollbackResponse>("/api/v1/admin/head-rollback", body, opts),
 };

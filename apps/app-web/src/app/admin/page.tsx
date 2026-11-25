@@ -1,25 +1,50 @@
 import Link from "next/link";
 import { api } from "@/client/api";
-import { formatCell, formatShortSha } from "@/client/format";
+import { formatCell, formatRatio, formatShortSha } from "@/client/format";
 import { RUNS_EMPTY_MESSAGE, RUNS_UNAVAILABLE_MESSAGE } from "@/client/read-state";
+import { HeadRollbackControl } from "@/components/head-rollback-control";
+import { ReadStateNotice } from "@/components/read-state";
 import { ResearchTable } from "@/components/research-table";
 import { TriggerRunButton } from "@/components/trigger-run-button";
 import { loadAuthed } from "../_load";
-import { ReadStateNotice } from "@/components/read-state";
 
 export const dynamic = "force-dynamic";
+
+function scalar(v: unknown): string {
+  if (v === null || v === undefined || v === "") return formatCell(null);
+  if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") return formatCell(v);
+  return formatCell(JSON.stringify(v));
+}
+
+function depTone(status: string): string {
+  if (status === "present") return "border-emerald-500/40 text-emerald-300";
+  if (status === "absent") return "border-red-500/40 text-red-300";
+  return "border-amber-500/40 text-amber-300";
+}
+
+function verdictLabel(ok: unknown): string {
+  if (ok === true) return "pass";
+  if (ok === false) return "fail";
+  return "pending";
+}
 
 export default async function AdminOpsPage() {
   const { data: ops, error } = await loadAuthed("/admin", (opts) => api.getAdminOps(opts), { admin: true });
   const card = "rounded-xl border border-border bg-card p-4";
   const td = "px-4 py-2";
+  const dependencies = (ops?.dependencies ?? []) as Record<string, unknown>[];
+  const servedHeads = (ops?.served_heads ?? []) as Record<string, unknown>[];
+  const nightlyVerdicts = (ops?.nightly_verdicts ?? []) as Record<string, unknown>[];
+  const failedJobErrors = (ops?.failed_job_errors ?? []) as Record<string, unknown>[];
+  const triggerQueue = (ops?.trigger_queue ?? []) as Record<string, unknown>[];
+  const rollbackRequests = (ops?.rollback_requests ?? []) as Record<string, unknown>[];
 
   return (
     <section aria-labelledby="admin-heading" className="space-y-8">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 id="admin-heading" className="text-2xl font-bold tracking-tight">Operations</h1>
-          <p className="mt-1 text-sm text-gray-400">Dagster runs, build identity, and manual pipeline triggers.</p>
+          <p className="mt-1 text-sm text-gray-400">Dagster runs, dependencies, served heads, nightly verdicts, and manual controls.</p>
         </div>
         <TriggerRunButton />
       </div>
@@ -36,6 +61,95 @@ export default async function AdminOpsPage() {
               </div>
             </div>
           </div>
+
+          {dependencies.length > 0 && (
+            <div className="space-y-2">
+              <h2 className="text-lg font-semibold">Dependencies</h2>
+              <div className="grid gap-4 md:grid-cols-3">
+                {dependencies.map((d) => {
+                  const status = String(d.status ?? "unknown");
+                  return (
+                    <div key={String(d.name ?? "")} className={card}>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-mono text-sm font-semibold">{scalar(d.name)}</span>
+                        <span className={`rounded-full border px-2 py-0.5 text-xs ${depTone(status)}`}>{status}</span>
+                      </div>
+                      <div className="mt-1 font-mono text-xs text-gray-400">
+                        {d.elapsed_ms !== undefined && d.elapsed_ms !== null ? `${String(d.elapsed_ms)} ms` : formatCell(null)}
+                      </div>
+                      <div className="mt-1 text-xs text-gray-400">{scalar(d.detail)}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          <div className="space-y-3">
+            <h2 className="text-lg font-semibold">Served heads</h2>
+            {servedHeads.length === 0 ? (
+              <p className="text-sm text-gray-400">No served heads recorded in mart.served_head yet.</p>
+            ) : (
+              <ResearchTable
+                caption="Served heads"
+                headers={["Universe", "Version", "Factor", "Seq", "Freshness", "Availability", "Age / Limit (h)", "Served run", "Head run", "Withhold / Staleness"]}
+              >
+                {servedHeads.map((h, i) => (
+                  <tr key={`${String(h.universe_id ?? "")}-${String(h.factor_id ?? "")}-${i}`} className="border-t border-border font-mono text-xs">
+                    <td className={td}>{scalar(h.universe_id)}</td>
+                    <td className={td}>{scalar(h.universe_version)}</td>
+                    <td className={td}>{scalar(h.factor_id)}</td>
+                    <td className={td}>{scalar(h.sequence)}</td>
+                    <td className={td}>{scalar(h.freshness)}</td>
+                    <td className={td}>{scalar(h.availability)}</td>
+                    <td className={td}>
+                      {formatCell(formatRatio(h.age_hours as number | string | null | undefined))} /{" "}
+                      {formatCell(formatRatio(h.limit_hours as number | string | null | undefined))}
+                    </td>
+                    <td className={td} title={String(h.run_id ?? "")}>{formatCell(h.run_id ? formatShortSha(String(h.run_id)) : "withheld")}</td>
+                    <td className={td} title={String(h.head_run_id ?? "")}>{formatShortSha(h.head_run_id as string | null | undefined)}</td>
+                    <td className={td}>{scalar(h.staleness_reason)}</td>
+                  </tr>
+                ))}
+              </ResearchTable>
+            )}
+            <HeadRollbackControl heads={servedHeads} />
+          </div>
+
+          <div className="space-y-2">
+            <h2 className="text-lg font-semibold">Nightly verdicts</h2>
+            {nightlyVerdicts.length === 0 ? (
+              <p className="text-sm text-gray-400">No nightly verdicts recorded yet.</p>
+            ) : (
+              <ResearchTable caption="Nightly verdicts" headers={["Check", "Verdict", "Ran at", "Summary", "Dagster run"]}>
+                {nightlyVerdicts.map((v) => (
+                  <tr key={String(v.check_name ?? "")} className="border-t border-border font-mono text-xs">
+                    <td className={td}>{scalar(v.check_name)}</td>
+                    <td className={td}>{verdictLabel(v.ok)}</td>
+                    <td className={td}>{scalar(v.ran_at)}</td>
+                    <td className={`${td} font-sans`}>{scalar(v.summary)}</td>
+                    <td className={`${td} text-gray-400`}>{scalar(v.dagster_run_id)}</td>
+                  </tr>
+                ))}
+              </ResearchTable>
+            )}
+          </div>
+
+          {failedJobErrors.length > 0 && (
+            <div className="space-y-2">
+              <h2 className="text-lg font-semibold">Failed job errors</h2>
+              <ResearchTable caption="Failed job errors" headers={["Dagster run ID", "Logged at", "First-line error"]}>
+                {failedJobErrors.map((e) => (
+                  <tr key={String(e.run_id ?? "")} className="border-t border-border font-mono text-xs">
+                    <td className={td}>{scalar(e.run_id)}</td>
+                    <td className={td}>{scalar(e.logged_at)}</td>
+                    <td className={`${td} text-red-300`}>{scalar(e.first_line_error)}</td>
+                  </tr>
+                ))}
+              </ResearchTable>
+            </div>
+          )}
+
           <div className="space-y-2">
             <h2 className="text-lg font-semibold">Recent runs</h2>
             {typeof ops.runs === "string" ? <p className="text-sm text-gray-400">{RUNS_UNAVAILABLE_MESSAGE}</p>
@@ -53,6 +167,49 @@ export default async function AdminOpsPage() {
               </ResearchTable>
             )}
           </div>
+
+          {(triggerQueue.length > 0 || rollbackRequests.length > 0) && (
+            <div className="grid gap-6 lg:grid-cols-2">
+              <div className="space-y-2">
+                <h2 className="text-lg font-semibold">Trigger queue</h2>
+                {triggerQueue.length === 0 ? (
+                  <p className="text-sm text-gray-400">No trigger requests queued.</p>
+                ) : (
+                  <ResearchTable caption="Trigger queue" headers={["ID", "Job", "Force fetch", "Requested at", "Consumed at", "Run key"]}>
+                    {triggerQueue.map((t) => (
+                      <tr key={String(t.request_id ?? "")} className="border-t border-border font-mono text-xs">
+                        <td className={td}>{scalar(t.request_id)}</td>
+                        <td className={td}>{scalar(t.job_name)}</td>
+                        <td className={td}>{scalar(t.force_fetch)}</td>
+                        <td className={td}>{scalar(t.requested_at)}</td>
+                        <td className={td}>{t.consumed_at ? scalar(t.consumed_at) : "pending"}</td>
+                        <td className={td}>{scalar(t.launched_run_key)}</td>
+                      </tr>
+                    ))}
+                  </ResearchTable>
+                )}
+              </div>
+              <div className="space-y-2">
+                <h2 className="text-lg font-semibold">Rollback queue</h2>
+                {rollbackRequests.length === 0 ? (
+                  <p className="text-sm text-gray-400">No rollback requests queued.</p>
+                ) : (
+                  <ResearchTable caption="Rollback queue" headers={["ID", "Universe", "Target run", "Reason", "Consumed at", "Pointer"]}>
+                    {rollbackRequests.map((rb) => (
+                      <tr key={String(rb.request_id ?? "")} className="border-t border-border font-mono text-xs">
+                        <td className={td}>{scalar(rb.request_id)}</td>
+                        <td className={td}>{scalar(rb.universe_id)}</td>
+                        <td className={td}>{formatShortSha(rb.target_run_id as string | null | undefined)}</td>
+                        <td className={`${td} font-sans`}>{scalar(rb.reason)}</td>
+                        <td className={td}>{rb.consumed_at ? scalar(rb.consumed_at) : "pending"}</td>
+                        <td className={td}>{formatShortSha(rb.result_pointer_id as string | null | undefined)}</td>
+                      </tr>
+                    ))}
+                  </ResearchTable>
+                )}
+              </div>
+            </div>
+          )}
         </>
       )}
     </section>

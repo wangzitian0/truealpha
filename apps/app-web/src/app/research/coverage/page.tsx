@@ -3,11 +3,11 @@ import { api } from "@/client/api";
 import { formatCell, formatMacroValue, formatNumberMagnitude, formatShortSha, formatUsdMagnitude, formatUtcMinute } from "@/client/format";
 import { DASHBOARD_STRATEGY_ID, WIDE_PANEL_INPUT_COLUMNS } from "@/client/strategy";
 import { DataTable, EmptyNotice } from "@/components/data-table";
+import { HeadFreshnessBadge } from "@/components/head-freshness-badge";
 import { PanelNodeTd } from "@/components/panel-node-cell";
 import { ReadStateNotice } from "@/components/read-state";
 import { ResearchTable } from "@/components/research-table";
 import { loadAuthed } from "../../_load";
-import { describeServedRunAge } from "../served-run-age";
 
 export const dynamic = "force-dynamic";
 
@@ -22,7 +22,6 @@ export default async function CoveragePage() {
   });
 
   const cov = data?.coverage ?? null;
-  const age = cov?.cutoff_at ? describeServedRunAge(cov.cutoff_at) : null;
   const decisions = cov?.decisions ?? [];
   const excluded = decisions.filter((d) => !d.eligible);
   const widePanel = cov?.wide_panel ?? {};
@@ -44,12 +43,13 @@ export default async function CoveragePage() {
           </p>
         </div>
         {cov?.cutoff_at && (
-          <span
-            data-served-run-age={age ? String(age.hours) : ""}
-            className={`rounded-full border px-3 py-1 font-mono text-xs ${age?.stale ? "border-amber-500/40 text-amber-300" : "border-emerald-500/40 text-emerald-300"}`}
-          >
-            as of {cov.cutoff_at.slice(0, 10)} ({age?.label ?? "unknown"})
-          </span>
+          <HeadFreshnessBadge
+            ageHours={cov.head_age_hours}
+            limitHours={cov.head_limit_hours}
+            freshness={cov.head_freshness}
+            cutoffAt={cov.cutoff_at}
+            governed={cov.governed}
+          />
         )}
       </div>
       {error && <ReadStateNotice state={{ kind: "error", message: error }} />}
@@ -133,7 +133,12 @@ export default async function CoveragePage() {
                 const latest = item.latest as Record<string, unknown> | null | undefined;
                 return (
                   <article key={item.series_id} data-series-id={item.series_id} data-fresh={item.is_fresh ? "true" : "false"} className="rounded-xl border border-border bg-card p-5">
-                    <h3 className="font-semibold">{item.label}</h3>
+                    <div className="flex items-center justify-between gap-2">
+                      <h3 className="font-semibold">{item.label}</h3>
+                      <span className={`rounded-full border px-2 py-0.5 font-mono text-[10px] ${item.is_fresh ? "border-emerald-500/40 text-emerald-300" : "border-amber-500/40 text-amber-300"}`}>
+                        {item.is_fresh ? "fresh" : "stale"}
+                      </span>
+                    </div>
                     <p className="text-xs font-mono text-gray-500">{item.series_id}</p>
                     <p className="mt-3 text-3xl font-bold">{formatCell(latest ? formatMacroValue(item.unit, String(latest.value ?? "")) : null)}</p>
                     <p className="mt-1 text-xs text-gray-400">

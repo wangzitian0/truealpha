@@ -157,6 +157,10 @@ class PanelCoverageResponse(BaseModel):
     reason: str | None = None
     strategy_id: str = "large_model_value_v0"
     strategy_run_id: str | None = None
+    governed: bool = False
+    head_age_hours: float | None = None
+    head_limit_hours: float | None = None
+    head_freshness: str | None = None
     cutoff_at: str | None = None
     universe: str | None = None
     total_decisions: int = 0
@@ -443,6 +447,10 @@ def load_wide_panel_coverage(
         available=True,
         strategy_id=report.strategy_id,
         strategy_run_id=report.strategy_run_id,
+        governed=bool(getattr(report, "governed", False)),
+        head_age_hours=getattr(report, "head_age_hours", None),
+        head_limit_hours=getattr(report, "head_limit_hours", None),
+        head_freshness=getattr(report, "head_freshness", None),
         cutoff_at=target_cutoff,
         universe=norm_universe,
         total_decisions=len(decisions),

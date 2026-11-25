@@ -16,6 +16,7 @@ function millions(value: string): string {
 export default async function ThemesPage() {
   const { data, error } = await loadAuthed("/research/themes", (opts) => api.getThemes(opts));
   const groups = data?.groups ?? [];
+  const unvisitedCount = Number(data?.unvisited_count ?? 0);
   const headers = ["Rank", "Issuer", "Theme share", "Classified", "In theme (m)", "Consolidated (m)", "Segments", "Period", "Confidence", "Status"];
 
   return (
@@ -25,6 +26,11 @@ export default async function ThemesPage() {
         <p className="mt-2 text-sm text-gray-400">Revenue share per theme over consolidated revenue from <code className="mx-1 rounded bg-card px-1">mart.issuer_theme_purity</code>.</p>
       </div>
       {error && <ReadStateNotice state={{ kind: "error", message: error }} />}
+      {unvisitedCount > 0 && (
+        <p role="note" data-testid="themes-unvisited-notice" className="rounded-lg border border-amber-400/40 bg-amber-400/10 px-4 py-2 text-xs text-amber-300">
+          Unvisited theme rows (no segment partition): <strong className="font-mono">{unvisitedCount}</strong>
+        </p>
+      )}
       {groups.length === 0 && !error ? (
         <p className="text-sm text-gray-400">No theme purity materialized yet.</p>
       ) : (
@@ -50,7 +56,14 @@ export default async function ThemesPage() {
                   <td className="px-4 py-3 tabular-nums">{formatCell(row.segments)}</td>
                   <td className="px-4 py-3">{row.period_end}</td>
                   <td className="px-4 py-3 tabular-nums">{formatCell(formatRatio(row.confidence))}</td>
-                  <td className="px-4 py-3 text-xs">{row.availability_status}</td>
+                  <td className="px-4 py-3 text-xs">
+                    <div>{row.availability_status}</div>
+                    {(row.source_evidence_status || row.factor_validation_status) && (
+                      <div className="font-mono text-[10px] text-gray-500">
+                        {[row.source_evidence_status, row.factor_validation_status].filter(Boolean).join(" / ")}
+                      </div>
+                    )}
+                  </td>
                 </tr>
               ))}
             </ResearchTable>
