@@ -5,27 +5,29 @@
  * visible raw entity IDs, claim-ceiling on rankings, and role boundaries.
  *
  * Runs against ANY environment:
- *   TA_BASE_URL=https://truealpha-staging.truealpha.club \
+ *   APP_URL=https://truealpha-staging.truealpha.club \
  *   TA_EMAIL=owner@truealpha.club TA_PASSWORD=… \
  *   node e2e/walk-tree.mjs
  */
 
+import { setDefaultResultOrder } from "node:dns";
 import { readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { DETAIL_LINK_TIMEOUT_MS, findDetailLink } from "./detail-link.mjs";
 import { createPageErrorLedger, gotoStable } from "./navigation.mjs";
+import { preflightIdentities } from "./preflight.mjs";
 import { assertNoReadError } from "./read-error.mjs";
 import { walkSignOutJourney } from "./sign-out-journey.mjs";
 
-const BASE = process.env.TA_BASE_URL;
+const BASE = process.env.APP_URL || process.env.TA_BASE_URL;
 const EMAIL = process.env.TA_EMAIL;
 const PASSWORD = process.env.TA_PASSWORD;
 const MEMBER_EMAIL = process.env.TA_MEMBER_EMAIL;
 const DATA_STATE = process.env.TA_DATA_STATE || "populated";
 if (!BASE || !EMAIL || !PASSWORD) {
-  console.error("TA_BASE_URL, TA_EMAIL, TA_PASSWORD are required");
+  console.error("APP_URL (or TA_BASE_URL), TA_EMAIL, TA_PASSWORD are required");
   process.exit(2);
 }
 
@@ -264,26 +266,6 @@ async function checkRoute(page, path, role, pageErrors) {
   return problems;
 }
 
-/** Verify every identity can authenticate before walking routes so credential drift fails fast. */
-async function preflightIdentities(browser, identities) {
-  const sessions = await Promise.all(
-    identities.map(async ({ role, email, password }) => {
-      const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
-      const login = await context.request.post(`${BASE}/api/v1/auth/login`, { data: { email, password } });
-      return { role, status: login.status(), context };
-    }),
-  );
-  const failed = sessions.filter((session) => session.status !== 200);
-  if (failed.length > 0) {
-    for (const { role, status } of failed) {
-      console.error(`login failed for ${role}: ${status}`);
-    }
-    await Promise.all(sessions.map((session) => session.context.close()));
-    process.exit(2);
-  }
-  return sessions;
-}
-
 /** Walk every discovered live static route under one already-authenticated identity. */
 async function walkRoutes(role, context, pageErrors) {
   for (const warmPath of ["/research/coverage", "/research/rankings", "/research/themes"]) {
@@ -321,6 +303,7 @@ async function walkRoutes(role, context, pageErrors) {
   return failures;
 }
 
+setDefaultResultOrder("ipv4first");
 const browser = await chromium.launch();
 const pageErrors = createPageErrorLedger();
 let failures = 0;
@@ -330,7 +313,7 @@ try {
   if (MEMBER_EMAIL) {
     identities.push({ role: "member", email: MEMBER_EMAIL, password: PASSWORD });
   }
-  sessions = await preflightIdentities(browser, identities);
+  sessions = await preflightIdentities(browser, identities, { base: BASE });
   for (const session of sessions) {
     failures += await walkRoutes(session.role, session.context, pageErrors);
   }

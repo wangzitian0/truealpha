@@ -53,7 +53,7 @@ services:
     build:
       context: .
       dockerfile: apps/llm-service/Dockerfile
-    image: ${REGISTRY:-ghcr.io}/${IMAGE_PREFIX:-wangzitian0/truealpha}-llm-service:${IMAGE_TAG:-local}
+    image: ${REGISTRY:-ghcr.io}/${IMAGE_PREFIX:-wangzitian0/truealpha}-llm-service:${SERVICE_VERSION:-local}
     container_name: truealpha-llm${ENV_SUFFIX:-}
     profiles: [app]
     restart: ${RESTART_POLICY:-unless-stopped}
@@ -88,7 +88,7 @@ services:
     build:
       context: apps/app-web
       dockerfile: Dockerfile
-    image: ${REGISTRY:-ghcr.io}/${IMAGE_PREFIX:-wangzitian0/truealpha}-app-web:${IMAGE_TAG:-local}
+    image: ${REGISTRY:-ghcr.io}/${IMAGE_PREFIX:-wangzitian0/truealpha}-app-web:${SERVICE_VERSION:-local}
     container_name: truealpha-web${ENV_SUFFIX:-}
     profiles: [app]
     restart: ${RESTART_POLICY:-unless-stopped}

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import psycopg
 import pytest
 from fastapi.testclient import TestClient
@@ -120,6 +122,57 @@ def test_all_seven_domains_http_and_mcp_on_real_postgres_as_app_service_login(
                     "(dagster_run_id, checked_at, invariant_id, kind, population, violation_count, deferred, sample_rows) "
                     "values ('dagster-smoke-1', now(), 'smoke-invariant-1', 'fact', 10, 0, false, '[]'::jsonb)"
                 )
+                su_conn.execute(
+                    """
+                    create schema if not exists dagster;
+                    create table if not exists dagster.event_logs (
+                        id bigserial primary key,
+                        run_id varchar(255),
+                        event text not null,
+                        dagster_event_type text,
+                        timestamp timestamp without time zone,
+                        step_key text,
+                        asset_key text,
+                        partition text
+                    );
+                    create index if not exists idx_event_type on dagster.event_logs (dagster_event_type, id);
+                    grant usage on schema dagster to app_ops_reader;
+                    grant select on dagster.event_logs to app_ops_reader;
+                    """
+                )
+                su_conn.execute(
+                    "insert into dagster.event_logs (run_id, event, dagster_event_type, timestamp) "
+                    "values (%s, %s, %s, %s::timestamp), (%s, %s, %s, %s::timestamp)",
+                    (
+                        "dagster-fail-1",
+                        json.dumps(
+                            {
+                                "user_message": "Execution of step failed.",
+                                "dagster_event": {
+                                    "event_specific_data": {
+                                        "error": {"message": "Failure: smoke step boom\ntraceback line 2"}
+                                    }
+                                },
+                            }
+                        ),
+                        "STEP_FAILURE",
+                        "2026-11-25 05:11:06",
+                        "dagster-ok-1",
+                        json.dumps({"user_message": "Executing steps in process"}),
+                        "ENGINE_EVENT",
+                        "2026-11-25 05:12:00",
+                    ),
+                )
+
+            ops_with_failures = client.get("/api/v1/admin/ops")
+            assert ops_with_failures.status_code == 200, ops_with_failures.text
+            assert ops_with_failures.json()["failed_job_errors"] == [
+                {
+                    "run_id": "dagster-fail-1",
+                    "first_line_error": "Failure: smoke step boom",
+                    "logged_at": "2026-11-25T05:11:06Z",
+                }
+            ]
 
             datahub_with_facts = client.get("/api/v1/admin/datahub").json()
             assert any(row["metric"] == "smoke_metric" for row in datahub_with_facts["backfill_health"])
@@ -134,7 +187,15 @@ def test_all_seven_domains_http_and_mcp_on_real_postgres_as_app_service_login(
         assert isinstance(call_mcp_tool(mcp, "entities_themes", {"request": {"theme_id": "ai-infrastructure"}}), dict)
         assert isinstance(call_mcp_tool(mcp, "entities_detail", {"request": {"issuer_id": "issuer:smoke"}}), dict)
         assert isinstance(call_mcp_tool(mcp, "library_documents_list"), dict)
-        assert isinstance(call_mcp_tool(mcp, "admin_ops_snapshot"), dict)
+        ops_snap = call_mcp_tool(mcp, "admin_ops_snapshot")
+        assert isinstance(ops_snap, dict)
+        assert ops_snap["failed_job_errors"] == [
+            {
+                "run_id": "dagster-fail-1",
+                "first_line_error": "Failure: smoke step boom",
+                "logged_at": "2026-11-25T05:11:06Z",
+            }
+        ]
         facts_payload = call_mcp_tool(mcp, "admin_datahub_facts")
         assert any(row["metric"] == "smoke_metric" for row in facts_payload["facts"]["backfill_health"])
         assert any(row["invariant_id"] == "smoke-invariant-1" for row in facts_payload["facts"]["output_invariants"])

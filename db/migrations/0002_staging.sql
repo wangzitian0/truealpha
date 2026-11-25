@@ -1962,8 +1962,6 @@ do $$ begin if to_regclass('staging.ix_api_call_ledger_fetch_key') is null then 
 do $$ begin if to_regclass('staging.ix_api_call_ledger_payload_sha256') is null then CREATE INDEX ix_api_call_ledger_payload_sha256 ON staging.api_call_ledger USING btree (payload_sha256) WHERE (payload_sha256 IS NOT NULL); end if; end $$;
 do $$ begin if to_regclass('staging.ix_api_call_ledger_source_called_at') is null then CREATE INDEX ix_api_call_ledger_source_called_at ON staging.api_call_ledger USING btree (source, called_at DESC); end if; end $$;
 do $$ begin if to_regclass('staging.idx_contract_objects_kind_recorded') is null then CREATE INDEX idx_contract_objects_kind_recorded ON staging.contract_objects USING btree (contract_kind, recorded_at DESC); end if; end $$;
-do $$ begin if to_regclass('staging.idx_contract_objects_quality_review_run') is null then CREATE INDEX idx_contract_objects_quality_review_run ON staging.contract_objects USING btree (((payload ->> 'strategy_run_id'::text)), recorded_at DESC) WHERE (contract_kind = 'strategy_data_quality_review'::text); end if; end $$;
-do $$ begin if to_regclass('staging.idx_contract_objects_usage_audit_run') is null then CREATE INDEX idx_contract_objects_usage_audit_run ON staging.contract_objects USING btree (((payload ->> 'strategy_run_id'::text)), recorded_at DESC) WHERE (contract_kind = 'strategy_usage_audit'::text); end if; end $$;
 do $$ begin if to_regclass('staging.idx_entity_aliases_entity') is null then CREATE INDEX idx_entity_aliases_entity ON staging.entity_aliases USING btree (entity_id); end if; end $$;
 do $$ begin if to_regclass('staging.idx_entity_relations_from') is null then CREATE INDEX idx_entity_relations_from ON staging.entity_relations USING btree (from_entity_id, relation_type); end if; end $$;
 do $$ begin if to_regclass('staging.idx_entity_relations_to') is null then CREATE INDEX idx_entity_relations_to ON staging.entity_relations USING btree (to_entity_id, relation_type); end if; end $$;
@@ -2003,7 +2001,7 @@ from (values
      'An organization that issues financial instruments (an operating company).'),
     ('fund', 'issuer', false,
      'A registered fund series (for example an ETF): issues its own shares and holds instruments.'),
-    ('person', 'agent', false, 'A natural person (analyst, executive). No writer yet.'),
+    ('person', 'agent', false, 'A natural person (analyst, executive).'),
     ('instrument', 'entity', false,
      'A financial instrument at share-class level (what CUSIP, ISIN and a share-class FIGI name).'),
     ('listing', 'entity', false,
@@ -2052,7 +2050,7 @@ from (values
     ('listed_as', 'instrument', 'listing', false, false, 'listing_of',
      'An instrument trades as this listing. A listing belongs to one instrument at a time.'),
     ('holds', 'fund', 'instrument', false, false, 'held_by',
-     'A fund holds an instrument. Weights stay in staging.fund_holding_facts. No writer yet.'),
+     'A fund holds an instrument. Weights stay in staging.fund_holding_facts.'),
     ('member_of', 'entity', 'universe', false, false, 'has_member',
      'Membership of a governed universe over a validity interval. No writer yet.'),
     ('subsidiary_of', 'organization', 'organization', false, false, 'parent_of',
@@ -2064,7 +2062,7 @@ from (values
     ('produces', 'organization', 'product', false, false, 'produced_by',
      'An organization offers a product. No writer yet.'),
     ('supplies_to', 'organization', 'organization', false, false, 'customer_of',
-     'A disclosed supplier relationship. No writer yet.'),
+     'A disclosed supplier relationship.'),
     ('covers', 'person', 'issuer', false, false, 'covered_by',
      'An analyst covers an issuer. No writer yet.'),
     ('same_as', 'entity', 'entity', true, true, 'same_as',
@@ -2102,5 +2100,11 @@ begin
     end if;
     if to_regclass('staging.universe_mask') is not null then
         drop table staging.universe_mask;
+    end if;
+    if to_regclass('staging.idx_contract_objects_quality_review_run') is not null then
+        drop index staging.idx_contract_objects_quality_review_run;
+    end if;
+    if to_regclass('staging.idx_contract_objects_usage_audit_run') is not null then
+        drop index staging.idx_contract_objects_usage_audit_run;
     end if;
 end $$;
