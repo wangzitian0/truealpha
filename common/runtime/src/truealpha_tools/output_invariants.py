@@ -103,6 +103,7 @@ class Invariant:
     population: str
     signals: str | None = None
     kind: Literal["hard", "fact"] = "hard"
+    requires_table: str | None = None
 
 
 @dataclass(frozen=True)
@@ -642,6 +643,34 @@ _TEMPLATES: tuple[Invariant, ...] = (
         """,
         population="select count(*) from mart.fund_virtual_company",
     ),
+    Invariant(
+        id="ledger-runs-in-dagster",
+        kind="fact",
+        requires_table="dagster.runs",
+        claim=(
+            "every Dagster-scoped staging.api_call_ledger run_key from the last 7 days "
+            "matches a row in dagster.runs (#1649 H2, #1622)"
+        ),
+        violations="""
+            select l.run_key, min(l.caller) as caller, count(*)::text as calls,
+                   to_char(min(l.called_at) at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as first_called_at
+            from staging.api_call_ledger l
+            where l.called_at >= now() - interval '7 days'
+              and l.run_key like 'dagster:%'
+              and not exists (
+                  select 1 from dagster.runs r
+                  where r.run_id = substr(l.run_key, 9)
+              )
+            group by l.run_key
+            order by count(*) desc, l.run_key
+        """,
+        population="""
+            select count(distinct run_key)
+            from staging.api_call_ledger
+            where called_at >= now() - interval '7 days'
+              and run_key like 'dagster:%'
+        """,
+    ),
 )
 
 
@@ -682,6 +711,7 @@ def _render(invariant: Invariant, scheduled: str) -> Invariant:
         population=fill(invariant.population),
         signals=None if invariant.signals is None else fill(invariant.signals),
         kind=invariant.kind,
+        requires_table=invariant.requires_table,
     )
 
 
@@ -774,12 +804,20 @@ def check(
 
     with connect(database_url) as connection:
         for invariant in invariants:
-            population = int(_rows(connection, invariant.population)[0][0])
-            violations = _rows(connection, invariant.violations)
+            missing_table = False
+            if invariant.requires_table is not None:
+                reg = _rows(connection, f"select to_regclass('{invariant.requires_table}')")
+                missing_table = not reg or reg[0][0] is None
+            if missing_table:
+                population = 0
+                violations = []
+            else:
+                population = int(_rows(connection, invariant.population)[0][0])
+                violations = _rows(connection, invariant.violations)
             exemption = exemptions.get(invariant.id)
             samples = tuple([str(field) for field in row] for row in violations[:5])
             deferred = False
-            if invariant.signals is not None:
+            if invariant.signals is not None and not missing_table:
                 for row in _rows(connection, invariant.signals):
                     print(f"  SIGNAL   {invariant.id}: " + " ".join(str(field) for field in row))
 
