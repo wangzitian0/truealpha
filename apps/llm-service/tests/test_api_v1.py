@@ -381,6 +381,8 @@ def test_real_postgres_auth_admin_ledger_documents_rls_and_served_head_withholdi
         dh_json = dh.json()
         assert "capture_runs" in dh_json and "runs" not in dh_json
         assert "heads" not in dh_json and "served_heads" in dh_json and "nightly_verdicts" in dh_json
+        assert len(dh_json["served_heads"]) >= 2, dh_json["served_heads"]
+        assert any(h.get("bound_strategy_run_id") == new_run for h in dh_json["served_heads"]), dh_json["served_heads"]
         assert "db_hygiene" in dh_json and "stats_reset" in dh_json["db_hygiene"]
         assert "zero_scan_indexes" in dh_json["db_hygiene"] and "idle_tables" in dh_json["db_hygiene"]
         cov = dh_json["ledger_coverage"][0]
@@ -390,6 +392,7 @@ def test_real_postgres_auth_admin_ledger_documents_rls_and_served_head_withholdi
         assert ops.status_code == 200
         ops_json = ops.json()
         assert "pointers" not in ops_json and "quota_today" not in ops_json
+        assert len(ops_json["served_heads"]) >= 2, ops_json["served_heads"]
 
         created = client.post(
             "/api/v1/library/documents", json={"source_artifact_id": "note:rls", "content": "rls-body"}

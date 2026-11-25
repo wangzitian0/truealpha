@@ -33,10 +33,9 @@ _NOT_SCHEDULED = "not_scheduled"
 #: run through this view (`db/migrations/0003_mart.sql`):
 #: /research/rankings, /trace and /coverage read it.
 _STRATEGY_HEAD_SQL = "select universe_id, target_run_id, strategy_run_id from mart.governed_strategy_run"
-#: `apps/llm-service/src/llm_service/services/entities_service.py` `THEME_LATEST_RUN_SQL`: the newest run in the
-#: table, deliberately not the pointer — which is exactly why it has to be checked against it.
-#: No universe filter: every universe's head gets purity rows, and the page names a run and a
-#: cutoff, never a universe, so it serves whichever head cut off last (`themes_verdict`).
+#: `apps/llm-service/src/llm_service/services/entities_service.py` `THEME_LATEST_RUN_SQL`: the newest populated run among
+#: non-canary `mart.served_head` rows (`h.run_id is not null and not starts_with(h.universe_id, 'universe:canary-')`).
+#: Both the App reader and the proof fail closed when `mart.served_head` has no available head (`themes_verdict`).
 #:
 #: A purity row has a segment partition. The fill row of an issuer without one has none (#1117).
 #: A run that holds only fill rows is not populated, so no query here counts a fill row.
