@@ -117,6 +117,11 @@ def smoke_app_service_db(monkeypatch: pytest.MonkeyPatch, name_prefix: str = "ll
                     "where datname = %s and usename = %s and pid != pg_backend_pid()",
                     (db.name, role_name),
                 )
+                cleanup_conn.execute(
+                    sql.SQL("revoke all privileges on database {} from {}").format(
+                        sql.Identifier(db.name), sql.Identifier(role_name)
+                    )
+                )
                 cleanup_conn.execute(sql.SQL("drop role if exists {}").format(sql.Identifier(role_name)))
 
 

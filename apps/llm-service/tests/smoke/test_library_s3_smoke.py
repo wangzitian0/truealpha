@@ -27,7 +27,7 @@ pytestmark = [pytest.mark.deps, pytest.mark.smoke]
 
 def _ensure_smoke_s3_bucket() -> Any:
     s3_settings = settings.to_s3_settings()
-    if not (s3_settings.endpoint or "").strip():
+    if not (s3_settings.endpoint_url or "").strip():
         skip_or_fail("S3_ENDPOINT is unset; CI runs the live S3 smoke test")
     client = create_s3_client(s3_settings)
     try:
