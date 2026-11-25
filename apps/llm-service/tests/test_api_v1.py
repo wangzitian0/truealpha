@@ -184,6 +184,7 @@ def test_real_postgres_auth_admin_ledger_documents_rls_and_served_head_withholdi
     with isolated_test_database("api_v1_e2e") as db:
         db_url = str(db)
         monkeypatch.setattr(settings, "database_url", db_url)
+        monkeypatch.setattr(settings, "s3_endpoint", "")
         monkeypatch.setattr(settings, "app_env", "ci")
         monkeypatch.setattr(settings, "secret_key", SecretStr("test-session-secret-for-ci"))
         pw_hash = bcrypt.hashpw(b"correct-horse-battery", bcrypt.gensalt(rounds=4)).decode("ascii")

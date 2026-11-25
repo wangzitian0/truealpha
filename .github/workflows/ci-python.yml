@@ -23,6 +23,7 @@ on:
 env:
   S3_CORE_TEST_FILES: >-
     common/runtime/tests/test_runtime.py
+    apps/llm-service/tests/smoke/test_api_and_mcp_real_db_smoke.py
     apps/llm-service/tests/smoke/test_library_s3_smoke.py
     apps/llm-service/tests/test_boot.py
   S3_DATA_ENGINE_TEST_FILES: >-
