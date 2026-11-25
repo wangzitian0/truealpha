@@ -3,17 +3,18 @@
 import json
 
 import dagster as dg
+from infra2_sdk.runtime.environment import EnvironmentTier, resolve_environment_tier
 from truealpha_contracts.strategy import load_strategy_definition as load_packaged_strategy_definition
 
 from data_engine import db
 from data_engine.config import settings
-from data_engine.datahub.backtest import DEPLOYED_ENVIRONMENTS, BacktestPending, run_core_strategy_backtest
+from data_engine.datahub.backtest import BacktestPending, run_core_strategy_backtest
 from data_engine.external_op import external_op
 from data_engine.quality.nightly_verdicts import TICK_TAG, tick_from_config, tick_of, verdict
 
 BACKTEST_JOB_NAME = "nightly_backtest_pipeline"
 BACKTEST_CRON = "45 21 * * 1-5"
-SCHEDULED_ENVIRONMENTS = DEPLOYED_ENVIRONMENTS
+_SCHEDULED_TIERS = frozenset({EnvironmentTier.STAGING, EnvironmentTier.PRODUCTION})
 
 NIGHTLY_BACKTEST_VERDICT = "nightly_backtest"
 NIGHTLY_VERDICTS: tuple[str, ...] = (NIGHTLY_BACKTEST_VERDICT,)
@@ -41,11 +42,11 @@ def _backtest_kwargs_from_config(config: NightlyBacktestConfig) -> dict[str, obj
 
 
 def schedule_status(app_env: str) -> dg.DefaultScheduleStatus:
-    return (
-        dg.DefaultScheduleStatus.RUNNING
-        if app_env.strip().lower() in SCHEDULED_ENVIRONMENTS
-        else dg.DefaultScheduleStatus.STOPPED
-    )
+    try:
+        scheduled = resolve_environment_tier(app_env) in _SCHEDULED_TIERS
+    except ValueError:
+        scheduled = False
+    return dg.DefaultScheduleStatus.RUNNING if scheduled else dg.DefaultScheduleStatus.STOPPED
 
 
 @external_op

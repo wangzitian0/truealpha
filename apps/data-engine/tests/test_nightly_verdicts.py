@@ -4,26 +4,25 @@ Every check asserted here through the deployed job (`execute_in_process` on the 
 registers), with the collaborators faked and the verdict writer captured: a red check must
 write `ok = false` AND leave the Dagster run red; a green one writes `ok = true`; a check whose
 name no lane declares writes nothing. The probe is driven through the real source gateway with
-`urllib.request.urlopen` faked, so the ledger row it leaves is the one production leaves.
+`httpx.Client.post` faked, so the ledger row it leaves is the one production leaves.
 """
 
 from __future__ import annotations
 
-import io
 import json
 import os
-import urllib.error
-import urllib.request
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Any
 
 import dagster as dg
+import httpx
 import psycopg
 import pytest
 from data_engine.config import settings
 from data_engine.lanes import quality, standards
 from data_engine.quality import model_key_health, nightly_verdicts
-from data_engine.sources import gateway, llm
+from data_engine.sources import gateway, llm, llm_agent
 from truealpha_runtime.testing import skip_or_fail
 
 pytestmark = pytest.mark.deps
@@ -726,38 +725,29 @@ def test_a_failing_purity_op_is_a_red_verdict_and_a_red_run(monkeypatch, written
 # --- the model-provider key probe (W2) --------------------------------------------------
 
 
-class _Answer:
-    def __init__(self, body: bytes, status: int = 200) -> None:
-        assert isinstance(body, bytes), "a urllib response reads bytes"
-        self._body = body
-        self.status = status
-
-    def read(self) -> bytes:
-        return self._body
-
-    def __enter__(self) -> _Answer:
-        return self
-
-    def __exit__(self, *_exc: object) -> bool:
-        return False
-
-
-def _provider(monkeypatch, answer: Any) -> list[urllib.request.Request]:
+def _provider(monkeypatch, answer: Any) -> list[Any]:
     """Fake the network under the real gateway: `answer` is an int (an HTTP error status),
     an exception to raise, or a body to return with 200."""
-    asked: list[urllib.request.Request] = []
+    asked: list[Any] = []
 
-    def urlopen(request: urllib.request.Request, timeout: float) -> _Answer:
-        asked.append(request)
-        if isinstance(answer, int):
-            raise urllib.error.HTTPError(
-                request.full_url, answer, "error", {}, io.BytesIO(b'{"error": {"message": "token expired"}}')
-            )
-        if isinstance(answer, BaseException):
-            raise answer
-        return _Answer(answer)
+    class _Client:
+        def __init__(self, **_kwargs: object) -> None: ...
 
-    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+        def __enter__(self) -> _Client:
+            return self
+
+        def __exit__(self, *_exc: object) -> None: ...
+
+        def post(self, url: str, *, content: bytes = b"", headers: dict[str, str] | None = None) -> Any:
+            hdrs = headers or {}
+            asked.append(SimpleNamespace(url=url, data=content, headers=hdrs, get_header=lambda k: hdrs.get(k)))
+            if isinstance(answer, int):
+                return SimpleNamespace(status_code=answer, content=b'{"error": {"message": "token expired"}}')
+            if isinstance(answer, BaseException):
+                raise answer
+            return SimpleNamespace(status_code=200, content=answer)
+
+    monkeypatch.setattr(llm_agent.httpx, "Client", _Client)
     monkeypatch.setattr(settings, "llm_api_key", FAKE_KEY)
     return asked
 
@@ -777,8 +767,8 @@ _OK_BODY = json.dumps(
         (401, "auth-rejected", 401),
         (403, "auth-rejected", 403),
         (503, "provider-error", 503),
-        (urllib.error.URLError("[Errno 8] nodename nor servname provided: provider.example"), "unreachable", None),
-        (TimeoutError("timed out"), "unreachable", None),
+        (httpx.ConnectError("[Errno 8] nodename nor servname provided: provider.example"), "unreachable", None),
+        (httpx.ReadTimeout("timed out"), "unreachable", None),
         (b"<html>not json</html>", "provider-error", None),
         (_OK_BODY, "answered", None),
     ],

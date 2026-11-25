@@ -6,9 +6,9 @@ from collections.abc import Callable
 from typing import Any, Literal
 
 import psycopg
-from infra2_sdk.runtime.postgres import PostgresSettings, redact_postgres_error
 from psycopg.rows import dict_row
 from truealpha_runtime.access import AccessContext
+from truealpha_runtime.checks import redact_postgres_exception
 
 from llm_service.config import settings
 
@@ -19,14 +19,11 @@ _STATEMENT_TIMEOUT = "5s"
 
 def redact_db_error(exc: Exception, *, database_url: str | None = None) -> str:
     """Redact credentials from a Postgres exception using SDK settings."""
-    try:
-        pg = PostgresSettings(
-            dsn=database_url or settings.database_url,
-            connect_timeout_seconds=settings.database_connect_timeout_seconds,
-        )
-        return f"{type(exc).__name__}: {redact_postgres_error(str(exc), pg)}"
-    except Exception:  # noqa: BLE001
-        return type(exc).__name__
+    return redact_postgres_exception(
+        exc,
+        database_url=database_url or settings.database_url,
+        connect_timeout_seconds=settings.database_connect_timeout_seconds,
+    )
 
 
 def _connect(*, database_url: str | None = None) -> psycopg.Connection[dict[str, Any]]:

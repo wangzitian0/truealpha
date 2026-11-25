@@ -5,13 +5,13 @@ from __future__ import annotations
 import json
 import logging
 import re
-import urllib.request
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any
 
+import httpx
 from psycopg import Connection
 from psycopg.types.json import Jsonb
 from truealpha_contracts.common import canonical_sha256
@@ -24,7 +24,7 @@ from data_engine.datahub._helpers import execute_many
 from data_engine.datahub.capture_core.concept_mapping import publish_governed_object
 from data_engine.datahub.capture_core.universe_corpus import TOPT_CORPUS_FILENAME, corpus_list_version, load_corpus
 from data_engine.datahub.fetch_key import FetchKey
-from data_engine.sources import gateway, nport
+from data_engine.sources import gateway, nport, openfigi
 
 log = logging.getLogger(__name__)
 
@@ -75,9 +75,10 @@ def _get(
     source: str = DataSource.SEC.value,
     endpoint: str = "browse-edgar",
     caller: str = "universe_plane._get",
-) -> tuple[int | None, bytes]:
-    request = urllib.request.Request(url, headers=headers or {})
-    return gateway.urlopen(source, endpoint, request, identity=identity, caller=caller, timeout=30)
+) -> tuple[int, bytes]:
+    with httpx.Client(headers=headers or {}, timeout=30.0, follow_redirects=True) as client:
+        response = gateway.http_get(client, source, endpoint, url, identity=identity, caller=caller, max_attempts=3)
+    return int(response.status_code), bytes(response.content)
 
 
 def _select_openfigi_match(result: dict[str, Any]) -> tuple[str, str, str] | None:
@@ -107,42 +108,35 @@ def _post_openfigi_batches(
     api_key: str,
     caller: str,
 ) -> list[tuple[Any, dict[str, Any]]]:
-    headers = {"Content-Type": "application/json", **({"X-OPENFIGI-APIKEY": api_key} if api_key else {})}
-    batch_size = 100 if api_key else 10
-    paired: list[tuple[Any, dict[str, Any]]] = []
-    for start in range(0, len(items), batch_size):
-        chunk = items[start : start + batch_size]
-        payload = [build_job(item) for item in chunk]
-        request = urllib.request.Request(
-            "https://api.openfigi.com/v3/mapping", data=json.dumps(payload).encode(), headers=headers
-        )
-        _status, body = gateway.urlopen(
-            DataSource.OPENFIGI.value,
-            "mapping",
-            request,
-            identity=FetchKey.for_batch(
-                DataSource.OPENFIGI.value,
-                "mapping",
-                [batch_token(item) for item in chunk],
-                gateway.utc_day(),
-            ),
-            caller=caller,
-            timeout=30,
-            raise_for_status=True,
-        )
+    offset = 0
+
+    def _record_batch(
+        chunk: list[Any], jobs: list[dict[str, Any]], body: bytes, _results: list[dict[str, Any]]
+    ) -> None:
+        nonlocal offset
         fetched_at = datetime.now(UTC)
         raw_store.insert_fetch(
             connection,
             source=DataSource.OPENFIGI,
-            source_record_id=f"{record_prefix}:{as_of.isoformat()}:{start}",
+            source_record_id=f"{record_prefix}:{as_of.isoformat()}:{offset}",
             body=body,
             content_type="application/json",
             fetched_at=fetched_at,
             recorded_at=fetched_at,
-            metadata={"request_jobs": payload},
+            metadata={"request_jobs": jobs},
         )
-        paired.extend(zip(chunk, json.loads(body)))
-    return paired
+        offset += len(chunk)
+
+    with httpx.Client(timeout=30.0) as client:
+        return openfigi.map_jobs(
+            client,
+            items,
+            build_job=build_job,
+            batch_token=batch_token,
+            api_key=api_key,
+            caller=caller,
+            on_batch=_record_batch,
+        )
 
 
 def _resolve_nport_identifiers(

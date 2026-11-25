@@ -6,7 +6,6 @@ import json
 import logging
 import time
 import urllib.parse
-import urllib.request
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
@@ -15,6 +14,7 @@ from functools import lru_cache
 from typing import Any
 from zoneinfo import ZoneInfo
 
+import httpx
 import psycopg
 from truealpha_contracts.environment_contract import load_environment_contract
 
@@ -179,7 +179,6 @@ class TwelveDataClient:
         self.call_count = 0
 
     def _default_transport(self, url: str) -> tuple[int, bytes]:
-        req = urllib.request.Request(url, headers={"User-Agent": "TrueAlpha-DataEngine/1.0"})
         params = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(url).query))
         identity = FetchKey.for_request(
             TWELVE_DATA_SEAT,
@@ -190,10 +189,11 @@ class TwelveDataClient:
             default_as_of=gateway.utc_day(),
             exclude=("apikey",),
         )
-        status, body = gateway.urlopen(
-            TWELVE_DATA_SEAT, "time_series", req, identity=identity, caller=self.caller, timeout=30
-        )
-        return status or 0, body
+        with httpx.Client(headers={"User-Agent": "TrueAlpha-DataEngine/1.0"}, timeout=30.0) as client:
+            response = gateway.http_get(
+                client, TWELVE_DATA_SEAT, "time_series", url, identity=identity, caller=self.caller
+            )
+        return int(response.status_code), bytes(response.content)
 
     def fetch_time_series(
         self,

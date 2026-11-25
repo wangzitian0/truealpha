@@ -2,6 +2,8 @@
 
 import json
 import re
+import time
+from collections.abc import Callable
 from typing import Any
 
 import httpx
@@ -55,14 +57,37 @@ def company_tickers_exchange_key() -> FetchKey:
     return FetchKey("sec", "company_tickers_exchange", "sec:company-tickers-exchange", gateway.utc_day())
 
 
-def client() -> httpx.Client:
-    if not settings.sec_user_agent:
+def client(user_agent: str | None = None, *, timeout: float = 30.0) -> httpx.Client:
+    ua = settings.sec_user_agent if user_agent is None else user_agent
+    if not ua:
         raise RuntimeError("Set SEC_USER_AGENT (must include a contact email) — see .env.example")
-    return httpx.Client(headers={"User-Agent": settings.sec_user_agent}, timeout=30.0, follow_redirects=True)
+    return httpx.Client(headers={"User-Agent": ua}, timeout=timeout, follow_redirects=True)
 
 
-def _get(http: httpx.Client, endpoint: str, url: str, caller: str, identity: FetchKey) -> bytes:
-    resp = gateway.http_get(http, "sec", endpoint, url, identity=identity, caller=caller)
+def _get(
+    http: httpx.Client,
+    endpoint: str,
+    url: str,
+    caller: str,
+    identity: FetchKey,
+    *,
+    max_attempts: int = 1,
+    retry_statuses: tuple[int, ...] = (429, 502, 503, 504),
+    backoff_base: float = 0.5,
+    sleep: Callable[[float], None] = time.sleep,
+) -> bytes:
+    resp = gateway.http_get(
+        http,
+        "sec",
+        endpoint,
+        url,
+        identity=identity,
+        caller=caller,
+        max_attempts=max_attempts,
+        retry_statuses=retry_statuses,
+        backoff_base=backoff_base,
+        sleep=sleep,
+    )
     resp.raise_for_status()
     return bytes(resp.content)
 
@@ -75,13 +100,37 @@ def _fetch_sec(
     http: httpx.Client | None = None,
     *,
     via: gateway.SourceGateway | None = None,
+    max_attempts: int = 1,
+    retry_statuses: tuple[int, ...] = (429, 502, 503, 504),
+    backoff_base: float = 0.5,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> bytes:
     def fetch(identity: FetchKey) -> bytes:
         def request() -> bytes:
             if http is None:
                 with client() as c:
-                    return _get(c, endpoint, url, caller, identity)
-            return _get(http, endpoint, url, caller, identity)
+                    return _get(
+                        c,
+                        endpoint,
+                        url,
+                        caller,
+                        identity,
+                        max_attempts=max_attempts,
+                        retry_statuses=retry_statuses,
+                        backoff_base=backoff_base,
+                        sleep=sleep,
+                    )
+            return _get(
+                http,
+                endpoint,
+                url,
+                caller,
+                identity,
+                max_attempts=max_attempts,
+                retry_statuses=retry_statuses,
+                backoff_base=backoff_base,
+                sleep=sleep,
+            )
 
         return request() if via is None else via.call("sec", endpoint, request, identity=identity)
 
@@ -96,8 +145,25 @@ def _fetch_sec_json(
     http: httpx.Client | None = None,
     *,
     via: gateway.SourceGateway | None = None,
+    max_attempts: int = 1,
+    retry_statuses: tuple[int, ...] = (429, 502, 503, 504),
+    backoff_base: float = 0.5,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> Any:
-    return json.loads(_fetch_sec(key, endpoint, url, caller, http, via=via).decode())
+    return json.loads(
+        _fetch_sec(
+            key,
+            endpoint,
+            url,
+            caller,
+            http,
+            via=via,
+            max_attempts=max_attempts,
+            retry_statuses=retry_statuses,
+            backoff_base=backoff_base,
+            sleep=sleep,
+        ).decode()
+    )
 
 
 def ticker_cik_index(http: httpx.Client | None = None, *, via: gateway.SourceGateway | None = None) -> dict[str, int]:
@@ -150,9 +216,25 @@ def _is_json_object(_key: FetchKey, body: bytes) -> bool:
         return False
 
 
-def fetch_company_submissions(cik: int, http: httpx.Client | None = None) -> dict[str, Any]:
+def fetch_company_submissions(
+    cik: int,
+    http: httpx.Client | None = None,
+    *,
+    max_attempts: int = 1,
+    retry_statuses: tuple[int, ...] = (429, 502, 503, 504),
+    backoff_base: float = 0.5,
+    sleep: Callable[[float], None] = time.sleep,
+) -> dict[str, Any]:
     payload = _fetch_sec_json(
-        submissions_key(cik), "submissions", SUBMISSIONS_URL.format(cik=cik), "sec.fetch_company_submissions", http
+        submissions_key(cik),
+        "submissions",
+        SUBMISSIONS_URL.format(cik=cik),
+        "sec.fetch_company_submissions",
+        http,
+        max_attempts=max_attempts,
+        retry_statuses=retry_statuses,
+        backoff_base=backoff_base,
+        sleep=sleep,
     )
     if not isinstance(payload, dict):
         raise ValueError(f"the submissions of CIK {cik} are not a JSON object")

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import json
-import urllib.request
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import date
@@ -11,10 +9,8 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from data_engine.datahub.capture_core.concept_mapping import DEFAULT_RULESET
-from data_engine.datahub.fetch_key import FetchKey
+from data_engine.sources import sec
 
-_COMPANY_FACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik:010d}.json"
-_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 _ANNUAL_MINIMUM_DAYS = 350
 
 
@@ -53,36 +49,14 @@ class VendorFact:
     filed: date
 
 
-def _http_json(url: str, user_agent: str, key: FetchKey) -> dict[str, Any]:
-    from data_engine.sources import gateway
-
-    def fetch(identity: FetchKey) -> bytes:
-        request = urllib.request.Request(url, headers={"User-Agent": user_agent})
-        _status, body = gateway.urlopen(
-            "sec",
-            "vendor-oracle",
-            request,
-            identity=identity,
-            caller="quality.vendor_oracle",
-            timeout=90,
-            raise_for_status=True,
-        )
-        return body
-
-    return json.loads(gateway.fetch_once(key, fetch).decode())
-
-
 def ticker_cik_index(user_agent: str) -> dict[str, int]:
-    from data_engine.sources import sec
-
-    payload = _http_json(_TICKERS_URL, user_agent, sec.company_tickers_key())
-    return {str(row["ticker"]).upper(): int(row["cik_str"]) for row in payload.values()}
+    with sec.client(user_agent=user_agent, timeout=90.0) as http:
+        return sec.ticker_cik_index(http)
 
 
 def company_facts(cik: int, user_agent: str) -> dict[str, Any]:
-    from data_engine.sources import sec
-
-    return _http_json(_COMPANY_FACTS_URL.format(cik=cik), user_agent, sec.company_facts_key(cik))
+    with sec.client(user_agent=user_agent, timeout=90.0) as http:
+        return sec.fetch_company_facts(cik, http)
 
 
 def _annual_entries(

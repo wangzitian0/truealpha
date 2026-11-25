@@ -5,13 +5,13 @@ from __future__ import annotations
 import csv
 import io
 import logging
-import urllib.request
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+import httpx
 import psycopg
 from truealpha_contracts.models import DataSource
 from truealpha_contracts.ports import RawObjectStore
@@ -103,18 +103,23 @@ def has_landed(connection: psycopg.Connection[Any], key: FetchKey) -> bool:
 
 
 def fetch_year(year: int, identity: FetchKey) -> bytes:
-    request = urllib.request.Request(year_url(year), headers={"User-Agent": USER_AGENT})
-    status, body = gateway.urlopen(
-        SOURCE.value,
-        ENDPOINT,
-        request,
-        identity=identity,
-        caller="treasury_rates.fetch_year",
-        timeout=REQUEST_TIMEOUT_SECONDS,
-    )
-    if status != 200:
-        raise TreasuryFetchError(f"the Treasury answered HTTP {status} for the {year} file ({len(body)} bytes)")
-    return body
+    with httpx.Client(
+        headers={"User-Agent": USER_AGENT}, timeout=REQUEST_TIMEOUT_SECONDS, follow_redirects=True
+    ) as client:
+        response = gateway.http_get(
+            client,
+            SOURCE.value,
+            ENDPOINT,
+            year_url(year),
+            identity=identity,
+            caller="treasury_rates.fetch_year",
+            max_attempts=3,
+        )
+    if response.status_code != 200:
+        raise TreasuryFetchError(
+            f"the Treasury answered HTTP {response.status_code} for the {year} file ({len(response.content)} bytes)"
+        )
+    return bytes(response.content)
 
 
 def _parse_date(text: str, number: int, year: int) -> date:

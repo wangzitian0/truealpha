@@ -2,7 +2,7 @@
 
 import logging
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 from pathlib import Path
 from typing import Any
 
@@ -19,7 +19,7 @@ from llm_service.api.v1 import admin, auth, entities, library, panel, strategy
 from llm_service.config import settings
 from llm_service.mcp_auth import BearerTokenGate
 from llm_service.mcp_server import build_mcp_server
-from llm_service.services._db import redact_db_error
+from llm_service.services._db import redact_db_error, with_ops_reader
 
 logger = logging.getLogger(__name__)
 
@@ -97,7 +97,7 @@ app.mount(
 )
 
 
-def _read_health_fact(conn: Any, query: str, transform: Any, default: Any) -> Any:
+def _read_health_fact(cursor: Any, query: str, transform: Any, default: Any) -> Any:
     import psycopg
 
     degraded_errors = (
@@ -106,49 +106,80 @@ def _read_health_fact(conn: Any, query: str, transform: Any, default: Any) -> An
         psycopg.errors.UndefinedColumn,
         psycopg.errors.InsufficientPrivilege,
     )
+    conn = getattr(cursor, "connection", None)
+    tx = conn.transaction() if conn is not None and hasattr(conn, "transaction") else nullcontext()
     try:
-        return transform(conn.execute(query))
+        with tx:
+            cursor.execute(query)
+            return transform(cursor)
     except degraded_errors as exc:
         logger.warning("health mart fact degraded: %s", redact_db_error(exc, database_url=settings.database_url))
-        conn.rollback()
+        if conn is not None and not hasattr(conn, "transaction") and hasattr(conn, "rollback"):
+            conn.rollback()
         return default
 
 
 def _identity(cursor: Any) -> tuple[str, str]:
     row = cursor.fetchone()
-    return (str(row[0] or "unknown"), str(row[1] or "unknown")) if row else ("unknown", "unknown")
+    if row is None:
+        return "unknown", "unknown"
+    git_sha = row["git_sha"] if isinstance(row, dict) else row[0]
+    image_digest = row["image_digest"] if isinstance(row, dict) else row[1]
+    return str(git_sha or "unknown"), str(image_digest or "unknown")
 
 
-def _served_pointers(conn: Any, cursor: Any, contract: Any) -> list[dict[str, Any]] | str:
+def _served_pointers(cursor: Any, contract: Any) -> list[dict[str, Any]] | str:
     rows = cursor.fetchall()
-    if not rows and conn.execute(HEAD_ENVIRONMENTS_SQL).fetchone() is not None:
-        return "unknown"
-    return [
-        {
-            "universe_id": str(universe_id),
-            "advanced_at": advanced_at.isoformat(),
-            "age_hours": round(float(age_hours), 1),
-            "freshness": str(freshness),
-            "limit_hours": int(limit_hours),
-            "staleness_reason": None if reason is None else str(reason),
-            "availability": str(availability),
-        }
-        for universe_id, advanced_at, age_hours, freshness, limit_hours, reason, availability in rows
-        if contract.is_head_scheduled(str(universe_id), settings.app_env)
-    ]
+    if not rows:
+        cursor.execute(HEAD_ENVIRONMENTS_SQL)
+        if cursor.fetchone() is not None:
+            return "unknown"
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        universe_id, advanced_at, age_hours, freshness, limit_hours, reason, availability = (
+            (
+                row["universe_id"],
+                row["advanced_at"],
+                row["age_hours"],
+                row["freshness"],
+                row["limit_hours"],
+                row["staleness_reason"],
+                row["availability"],
+            )
+            if isinstance(row, dict)
+            else row
+        )
+        if contract.is_head_scheduled(str(universe_id), settings.app_env):
+            out.append(
+                {
+                    "universe_id": str(universe_id),
+                    "advanced_at": advanced_at.isoformat(),
+                    "age_hours": round(float(age_hours), 1),
+                    "freshness": str(freshness),
+                    "limit_hours": int(limit_hours),
+                    "staleness_reason": None if reason is None else str(reason),
+                    "availability": str(availability),
+                }
+            )
+    return out
 
 
 def _nightly_verdicts(cursor: Any, contract: Any) -> list[dict[str, Any]]:
-    return [
-        {
-            "check": str(check),
-            "ran_at": ran_at.isoformat(),
-            "ok": None if ok is None else bool(ok),
-            "summary": str(summary),
-        }
-        for check, ran_at, ok, summary in cursor.fetchall()
-        if contract.expects_verdict(str(check), settings.app_env)
-    ]
+    out: list[dict[str, Any]] = []
+    for row in cursor.fetchall():
+        check, ran_at, ok, summary = (
+            (row["check_name"], row["ran_at"], row["ok"], row["summary"]) if isinstance(row, dict) else row
+        )
+        if contract.expects_verdict(str(check), settings.app_env):
+            out.append(
+                {
+                    "check": str(check),
+                    "ran_at": ran_at.isoformat(),
+                    "ok": None if ok is None else bool(ok),
+                    "summary": str(summary),
+                }
+            )
+    return out
 
 
 def _data_engine_facts() -> tuple[str, str, list[dict[str, Any]] | str, list[dict[str, Any]] | str]:
@@ -164,22 +195,19 @@ def _data_engine_facts() -> tuple[str, str, list[dict[str, Any]] | str, list[dic
         psycopg.errors.InsufficientPrivilege,
     )
     try:
-        with psycopg.connect(settings.database_url, connect_timeout=settings.database_connect_timeout_seconds) as conn:
-            if hasattr(conn, "cursor"):
-                conn.execute("set local role app_ops_reader")
-                conn.execute("select set_config('statement_timeout', '5s', true)")
-            git_sha, image_digest = _read_health_fact(
-                conn,
+
+        def _collect(cur: Any) -> tuple[str, str, list[dict[str, Any]] | str, list[dict[str, Any]] | str]:
+            sha, digest = _read_health_fact(
+                cur,
                 "select git_sha, image_digest from mart.data_engine_identity order by created_at desc limit 1",
                 _identity,
                 ("unknown", "unknown"),
             )
-            pointers = _read_health_fact(
-                conn, GOVERNED_POINTERS_SQL, lambda cur: _served_pointers(conn, cur, contract), "unknown"
-            )
-            verdicts = _read_health_fact(
-                conn, NIGHTLY_VERDICTS_SQL, lambda cur: _nightly_verdicts(cur, contract), "unknown"
-            )
+            ptr = _read_health_fact(cur, GOVERNED_POINTERS_SQL, lambda c: _served_pointers(c, contract), "unknown")
+            vrd = _read_health_fact(cur, NIGHTLY_VERDICTS_SQL, lambda c: _nightly_verdicts(c, contract), "unknown")
+            return sha, digest, ptr, vrd
+
+        git_sha, image_digest, pointers, verdicts = with_ops_reader(_collect)
     except degraded_errors as exc:
         logger.warning("health database unavailable: %s", redact_db_error(exc, database_url=settings.database_url))
     return git_sha, image_digest, pointers, verdicts

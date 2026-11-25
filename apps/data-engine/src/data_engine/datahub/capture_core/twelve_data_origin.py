@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import json
 import logging
-import urllib.parse
 from collections.abc import Mapping
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
+
+import httpx
 
 from data_engine.config import settings
 from data_engine.datahub.capture_core.corroboration_audit import cached_corroboration_fetch
@@ -395,7 +396,7 @@ class TwelveDataQuoteFetcher:
         return parse_last_settled_close(series, partition=cutoff)
 
     def _get(self, url: str, params: dict[str, str], *, final: bool = True, must_hold: date | None = None) -> bytes:
-        query = urllib.parse.urlencode({**params, "apikey": self._api_key})
+        request_params = {**params, "apikey": self._api_key}
         endpoint = url.rsplit("/", 1)[-1]
         key = FetchKey.for_request(
             "twelvedata",
@@ -411,9 +412,17 @@ class TwelveDataQuoteFetcher:
 
         def fetch(identity: FetchKey) -> bytes:
             self._requests += 1
-            status, body = gateway.urlopen(
-                "twelvedata", endpoint, f"{url}?{query}", identity=identity, caller="twelve_data_origin", timeout=20
-            )
+            with httpx.Client(timeout=20.0) as client:
+                response = gateway.http_get(
+                    client,
+                    "twelvedata",
+                    endpoint,
+                    url,
+                    params=request_params,
+                    identity=identity,
+                    caller="twelve_data_origin",
+                )
+            status, body = int(response.status_code), bytes(response.content)
             error = classify_error_body(status, body)
             if error is not None:
                 raise error

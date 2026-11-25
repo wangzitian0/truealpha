@@ -20,12 +20,23 @@ pytestmark = pytest.mark.gate
 
 def test_auth_login_session_logout_and_rate_limiter(monkeypatch: pytest.MonkeyPatch) -> None:
     clock = [100.0]
-    limiter = auth_service.FixedWindowRateLimiter(2, 60, now=lambda: clock[0])
+    limiter = auth_service.LoginRateLimiter(2, 60, now=lambda: clock[0])
     assert limiter.attempt("1.2.3.4") is True
+    clock[0] += 30.0
     assert limiter.attempt("1.2.3.4") is True
     assert limiter.attempt("1.2.3.4") is False
-    clock[0] += 61.0
+    # Sliding window: first attempt at 100s expires at 161s, second at 130s remains counted.
+    clock[0] = 161.0
     assert limiter.attempt("1.2.3.4") is True
+    assert limiter.attempt("1.2.3.4") is False
+
+    for env in ("dev", "local_dev", "test", "ci"):
+        monkeypatch.setattr(auth_service, "settings", Settings(_env_file=None, app_env=env, secret_key=SecretStr("")))
+        assert auth_service.resolve_signing_secret()
+    for env in ("preview", "staging", "production"):
+        monkeypatch.setattr(auth_service, "settings", Settings(_env_file=None, app_env=env, secret_key=SecretStr("")))
+        with pytest.raises(auth_service.AuthConfigurationError):
+            auth_service.resolve_signing_secret()
 
     test_settings = Settings(
         _env_file=None,
@@ -49,7 +60,7 @@ def test_auth_login_session_logout_and_rate_limiter(monkeypatch: pytest.MonkeyPa
             else None
         ),
     )
-    monkeypatch.setattr(auth_service, "login_rate_limiter", auth_service.FixedWindowRateLimiter(3, 60))
+    monkeypatch.setattr(auth_service, "login_rate_limiter", auth_service.LoginRateLimiter(3, 60))
 
     client = TestClient(app, base_url="https://testserver")
     assert client.get("/api/v1/auth/session").json() == {

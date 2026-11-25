@@ -12,6 +12,7 @@ from typing import Literal
 
 import bcrypt
 import jwt
+from infra2_sdk.capacity import RateLimitWindow
 from pydantic import BaseModel
 from truealpha_runtime.access import AccessContext, AuthenticationMethod, PrincipalKind
 
@@ -58,35 +59,31 @@ class LogoutResponse(BaseModel):
     ok: bool = True
 
 
-class FixedWindowRateLimiter:
-    """Per-key fixed-window attempt limiter."""
+class LoginRateLimiter:
+    """Per-key sliding-window attempt limiter backed by `infra2_sdk.capacity.RateLimitWindow`."""
 
     def __init__(self, max_attempts: int = 10, window_seconds: int = 300, *, now: Callable[[], float] | None = None):
-        self._max_attempts = max_attempts
+        self._limit = max_attempts
         self._window_seconds = window_seconds
-        self._now = now or time.monotonic
-        self._windows: dict[str, tuple[float, int]] = {}
+        self._clock = now or time.monotonic
+        self._buckets: dict[str, RateLimitWindow] = {}
         self._lock = threading.Lock()
 
     def attempt(self, key: str) -> bool:
-        t = self._now()
         with self._lock:
-            entry = self._windows.get(key)
-            if entry is None or (t - entry[0]) >= self._window_seconds:
-                self._windows[key] = (t, 1)
-                return True
-            start, count = entry
-            if count >= self._max_attempts:
-                return False
-            self._windows[key] = (start, count + 1)
-            return True
+            bucket = self._buckets.get(key)
+            if bucket is None:
+                bucket = RateLimitWindow(self._limit, self._window_seconds, clock=self._clock)
+                self._buckets[key] = bucket
+        allowed, _ = bucket.acquire()
+        return allowed
 
     def reset(self) -> None:
         with self._lock:
-            self._windows.clear()
+            self._buckets.clear()
 
 
-login_rate_limiter = FixedWindowRateLimiter(10, 5 * 60)
+login_rate_limiter = LoginRateLimiter(10, 5 * 60)
 
 
 class RateLimitExceededError(Exception):
@@ -104,7 +101,7 @@ class AuthConfigurationError(RuntimeError):
 def resolve_signing_secret(secret_override: str | None = None) -> str:
     secret = (secret_override if secret_override is not None else settings.secret_key.get_secret_value()).strip()
     if not secret:
-        if settings.app_env.strip().lower() in {"dev", "local", "test"}:
+        if not settings.is_deployed:
             return "truealpha-local-dev-insecure-secret-key-do-not-use-in-prod"
         raise AuthConfigurationError("SECRET_KEY must be set")
     return secret
@@ -220,7 +217,7 @@ def authenticate_login(
     email: str,
     password: str,
     client_ip: str,
-    limiter: FixedWindowRateLimiter | None = None,
+    limiter: LoginRateLimiter | None = None,
 ) -> tuple[PrincipalRecord, str]:
     """Authenticate credentials and return `(PrincipalRecord, jwt_token)`."""
     active_limiter = limiter or login_rate_limiter

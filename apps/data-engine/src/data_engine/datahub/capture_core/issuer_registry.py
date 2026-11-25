@@ -110,15 +110,20 @@ def _failure(error: Exception) -> tuple[bool, bool]:
 
 
 def _read_submissions(cik: int, http: httpx.Client, *, attempts: int) -> _Read:
-    for attempt in range(attempts):
-        try:
-            return _Read(sec.fetch_company_submissions(cik, http))
-        except (httpx.HTTPError, ValueError, CapacityExceeded) as error:
-            retry, outage = _failure(error)
-            if not retry or attempt == attempts - 1:
-                return _Read(None, f"{type(error).__name__}: {error}"[:300], outage)
-            _pause(REGISTRY_BACKOFF_SECONDS * 2**attempt)
-    raise AssertionError("unreachable")
+    try:
+        return _Read(
+            sec.fetch_company_submissions(
+                cik,
+                http,
+                max_attempts=attempts,
+                retry_statuses=(429, 500, 502, 503, 504),
+                backoff_base=REGISTRY_BACKOFF_SECONDS,
+                sleep=_pause,
+            )
+        )
+    except (httpx.HTTPError, ValueError, CapacityExceeded) as error:
+        _retry, outage = _failure(error)
+        return _Read(None, f"{type(error).__name__}: {error}"[:300], outage)
 
 
 def resolve_issuer_classifications(ciks: Mapping[str, int]) -> RegistryReading:
