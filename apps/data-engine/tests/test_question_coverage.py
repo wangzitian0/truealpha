@@ -5,12 +5,14 @@ from __future__ import annotations
 import os
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import Any
 
 import psycopg
 import pytest
 from data_engine.config import settings
 from data_engine.datahub.question_coverage import (
     NO_ROW,
+    REPORT_COMPILER_VERSION,
     UNRECORDED_REASON,
     Cell,
     GovernedHead,
@@ -215,7 +217,13 @@ def test_the_previous_head_is_found_by_the_lane_and_a_report_of_old_rules_is_not
     monkeypatch.setattr(question_coverage, "key_of_lane", lambda name: "t1851" if name == lane else "none")
     monkeypatch.setattr(question_coverage, "record", lambda key: SimpleNamespace(id_prefix=f"universe:{key}-us-{tag}-"))
 
-    def report(universe_id: str, run: str, *, registry: str | None) -> dict:
+    def report(
+        universe_id: str,
+        run: str,
+        *,
+        registry: str | None,
+        compiler_version: str | None = REPORT_COMPILER_VERSION,
+    ) -> dict:
         body = {
             "universe": lane,
             "universe_id": universe_id,
@@ -227,14 +235,20 @@ def test_the_previous_head_is_found_by_the_lane_and_a_report_of_old_rules_is_not
             "denominator": 1,
             "questions": {},
         }
-        return body | ({"reason_registry_sha256": registry} if registry else {})
+        if registry:
+            body["reason_registry_sha256"] = registry
+        if compiler_version:
+            body["compiler_version"] = compiler_version
+        return body
 
     try:
         older, newer, stray = ("capture-run:" + c * 64 for c in "123")
         old_id, new_id = f"universe:t1851-us-{tag}-2099-01-01", f"universe:t1851-us-{tag}-2099-02-15"
-        persist(connection, report(old_id, older, registry=None))
+        persist(connection, report(old_id, older, registry=None, compiler_version=None))
         assert stored_report_run(connection, old_id) == older, "a report of the old rules still names its head"
         assert stored_report_rules_current(connection, old_id) is False, "but it is not current"
+        persist(connection, report(new_id, newer, registry=REGISTRY_SHA256, compiler_version=None))
+        assert stored_report_rules_current(connection, new_id) is False, "missing compiler_version is not current"
         persist(connection, report(new_id, newer, registry=REGISTRY_SHA256))
         assert stored_report_rules_current(connection, new_id) is True
         persist(connection, report(f"universe:t1851-{tag}-2099", stray, registry=REGISTRY_SHA256))
@@ -564,16 +578,21 @@ def test_reports_current_for_head_requires_both_coverage_and_confidence_reports(
 
     class _ReportConnection:
         def __init__(
-            self, coverage_run: str | None, confidence_run: str | None, registry: str = REGISTRY_SHA256
+            self,
+            coverage_run: str | None,
+            confidence_run: str | None,
+            registry: str = REGISTRY_SHA256,
+            compiler_version: str | None = REPORT_COMPILER_VERSION,
         ) -> None:
             self.coverage_run = coverage_run
             self.confidence_run = confidence_run
             self.registry = registry
-            self._row: tuple[str] | None = None
+            self.compiler_version = compiler_version
+            self._row: tuple[Any, ...] | None = None
 
         def execute(self, sql: str, params=None):
             if "reason_registry_sha256" in sql:
-                self._row = (self.registry,) if self.coverage_run is not None else None
+                self._row = (self.registry, self.compiler_version) if self.coverage_run is not None else None
             elif "mart.question_coverage_report" in sql:
                 self._row = (self.coverage_run,) if self.coverage_run is not None else None
             elif "mart.datahub_confidence_report" in sql:
@@ -595,6 +614,50 @@ def test_reports_current_for_head_requires_both_coverage_and_confidence_reports(
     assert reports_current_for_head(_ReportConnection("capture-run:new", "capture-run:new"), head) is True
     old_rules = _ReportConnection("capture-run:new", "capture-run:new", registry="0" * 64)
     assert reports_current_for_head(old_rules, head) is False, "a report of other rules is not current (#1851)"
+    old_compiler = _ReportConnection("capture-run:new", "capture-run:new", compiler_version=None)
+    assert reports_current_for_head(old_compiler, head) is False, "an unversioned compiler report is stale (#1747)"
+
+
+def test_head_reports_sensor_retriggers_when_compiler_version_changes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """When the head run_id has not moved but stored report rules are stale, the sensor launches a refresh (#1747)."""
+    import json
+
+    import dagster as dg
+    from data_engine.datahub import question_coverage as qc
+    from data_engine.lanes import standards
+
+    head = GovernedHead(universe_id=SP500, run_id="capture-run:sp500", cutoff=datetime(2026, 11, 24, tzinfo=UTC))
+
+    class _DummyConn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_: object) -> None:
+            return None
+
+    monkeypatch.setattr(standards.db, "connect", lambda: _DummyConn())
+    monkeypatch.setattr(standards, "scheduled_universe_names", lambda: ("universe-list:sp500",))
+    monkeypatch.setattr(qc, "governed_head_of", lambda _conn, _key: head)
+    monkeypatch.setattr(qc, "stored_report_run", lambda _conn, _uid: head.run_id)
+    stale = {"current": False}
+    monkeypatch.setattr(qc, "stored_report_rules_current", lambda _conn, _uid: stale["current"])
+
+    ctx = dg.build_sensor_context(cursor=json.dumps({"universe-list:sp500": head.run_id}))
+    emitted = list(standards.head_reports_sensor(ctx))
+    assert len(emitted) == 1 and isinstance(emitted[0], dg.RunRequest)
+    expected_target = f"{head.run_id}:{qc.REPORT_RULES_TAG}"
+    assert emitted[0].run_key == f"head:universe-list:sp500:{expected_target}"
+    assert json.loads(ctx.cursor or "{}")["universe-list:sp500"] == expected_target
+
+    # Second tick with matching cursor skips without launching again.
+    emitted_again = list(standards.head_reports_sensor(ctx))
+    assert len(emitted_again) == 1 and isinstance(emitted_again[0], dg.SkipReason)
+
+    # Fresh cursor against already-current report rules skips without launching.
+    stale["current"] = True
+    fresh_ctx = dg.build_sensor_context()
+    emitted_current = list(standards.head_reports_sensor(fresh_ctx))
+    assert len(emitted_current) == 1 and isinstance(emitted_current[0], dg.SkipReason)
 
 
 def test_gppe_cells_and_classify_question_honor_persisted_not_applicable_status() -> None:
