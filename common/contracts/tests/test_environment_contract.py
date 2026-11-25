@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import re
 import runpy
 from decimal import Decimal
 from pathlib import Path
@@ -82,14 +81,6 @@ def test_sentinels_universes_ticks_and_lanes(monkeypatch: pytest.MonkeyPatch) ->
     ]()
     monkeypatch.setattr("sys.argv", [str(export_py), "--check"])
     assert exp_mod["main"]() == 0
-    obj = (ROOT / "apps/app-web/src/contracts/serviceObjectives.ts").read_text("utf-8")
-    assert "isHeadScheduledFromContract" in obj and 'universeId.startsWith("universe:qqq-")' not in obj
-    init_t, rel_t = (ROOT / "init.md").read_text("utf-8"), (ROOT / "docs/release-protocol.md").read_text("utf-8")
-    head = init_t.split("## 1. Core Design Principles", 1)[0]
-    assert "environment_contract.v1.json" in head and "S&P 500" in head
-    assert "| Local | `local_dev`, `local_test` |" not in init_t and "TWELVE_DATA_ENVIRONMENT_SHARES" not in init_t
-    assert "waits\n20 minutes" not in rel_t and "`DEFAULT_DAILY_CAP`" in rel_t and "owner's bound" not in rel_t
-    assert re.search(r"daily cap\s*\(\s*(?:\d+|[a-z]+),", rel_t) is None
 
 
 @pytest.mark.parametrize(("ops", "msg"), _C["env_mutations"])

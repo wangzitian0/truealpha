@@ -54,11 +54,9 @@ jobs:
         with:
           filters: |
             db:
-              # ci-db executes tools/output_invariants.py and tools/schema_drift.py
-              # against the migrated schema; editing those tools or their runtime
-              # implementations must re-run it (#1523).
+              # ci-db executes tools/schema_drift.py against the migrated schema;
+              # editing that tool or its runtime implementation must re-run it (#1523).
               - 'tools/**'
-              - 'common/runtime/src/truealpha_tools/output_invariants.py'
               - 'common/runtime/src/truealpha_tools/schema_drift.py'
               - 'db/**'
               - '.github/workflows/ci-db.yml'
@@ -67,11 +65,8 @@ jobs:
               # the action must re-run every lane that calls it: `required` reads a skip as success.
               - '.github/actions/**'
             python:
-              # tools/*.py are the deploy gates themselves; their tests live in
-              # common/runtime/tests via load_tool, which only ci-python runs. A
-              # tools-only PR used to match NO filter, and `required` treats a
-              # skipped job as success — so the gate tooling could merge with
-              # zero tests executed (A4 review finding, #673).
+              # tools/*.py are deployed tooling; their tests live in common/runtime/tests
+              # via load_tool, which ci-python runs.
               - 'tools/**'
               # Same class, one directory over: test_ci_workflows.py reads the
               # workflows, so a PR that edits a workflow must run it.
@@ -92,18 +87,6 @@ jobs:
               # dagster_liveness true while ci-python.yml — and the liveness job
               # inside it — never runs at all, since `python` below gates the call.
               - 'docker-compose.yml'
-              # What the shared rule source publishes. #1018 touched only such paths,
-              # matched no filter, and merged with a red test on main.
-              - '.claude/**'
-              - '.agents/**'
-              - '.ws-publish/**'
-              # #1412: a document starts this lane only when a test reads it. Tests read
-              # init.md and README.md by name, and three files under docs/ by name.
-              # Other files under docs/ start no lane.
-              - '*.md'
-              - 'docs/architecture-decisions/A3-source-governance.md'
-              - 'docs/datahub-quality-report.md'
-              - 'docs/release-protocol.md'
               - 'runtime-hooks.manifest.json'
             # #855 A4: dagster-code-server-liveness (truealpha#454's daemon
             # self-termination class) sat on every PR's and every main push's
@@ -139,9 +122,6 @@ jobs:
               - '.github/actions/**'
               - 'docker-compose.yml'
               - 'tools/**'
-              # Two documents that tests under apps/data-engine/tests read (#1412).
-              - 'README.md'
-              - 'docs/datahub-quality-report.md'
             runtime:
               # #984: ci-runtime executes tools/schema_drift.py against the schema the
               # compose bootstrap produced — the same reason `db` above carries

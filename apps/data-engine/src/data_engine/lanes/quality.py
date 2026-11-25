@@ -96,7 +96,16 @@ def run_output_invariants(context: dg.OpExecutionContext) -> str:
         module = runpy.run_path(str(_suite_path()), run_name="output_invariants")
         report = io.StringIO()
         with contextlib.redirect_stdout(report), contextlib.redirect_stderr(report):
-            exit_code = module["main"](["--database-url", settings.database_url, "--require-coverage"])
+            exit_code = module["main"](
+                [
+                    "--database-url",
+                    settings.database_url,
+                    "--require-coverage",
+                    "--persist",
+                    "--dagster-run-id",
+                    context.run_id,
+                ]
+            )
         lines = report.getvalue().splitlines()
         for line in lines:
             context.log.info(line)
@@ -108,7 +117,9 @@ def run_output_invariants(context: dg.OpExecutionContext) -> str:
 
 def invariants_summary(lines: list[str], exit_code: int) -> str:
     marks = [parts[0] for line in lines if line.startswith("  ") and (parts := line.split())]
-    counts = f"{marks.count('ok')} held, {marks.count('DEFERRED')} deferred, {marks.count('EMPTY')} empty"
+    fact_count = marks.count("FACT")
+    fact_part = f", {fact_count} fact" if fact_count > 0 else ""
+    counts = f"{marks.count('ok')} held{fact_part}, {marks.count('DEFERRED')} deferred, {marks.count('EMPTY')} empty"
     if exit_code == 0:
         return counts
     failed = [

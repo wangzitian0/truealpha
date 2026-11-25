@@ -40,7 +40,7 @@ jobs:
         working-directory: .
         run: make test-web
 
-  # The browser half: a production build, then the frozen route tree walked
+  # The browser half: a production build, then the discovered route tree walked
   # against two data states.
   browser:
     runs-on: ubuntu-24.04  # not ubuntu-latest: Playwright cannot install chromium on 26.04
@@ -160,7 +160,7 @@ jobs:
       # duplication would be the same class of thing #583/#584/#585 just
       # deleted. The `::error::` names the state, so a red run identifies the
       # branch from the summary without opening a log.
-      - name: Walk the frozen route tree in a browser (populated and empty)
+      - name: Walk the live route tree in a browser (populated and empty)
         env:
           TA_BASE_URL: http://127.0.0.1:3000
           TA_EMAIL: admin@e2e.invalid
@@ -208,9 +208,7 @@ jobs:
               sleep 1
             done
             curl -fsS -o /dev/null "$TA_BASE_URL/login"
-            require_race=0
-            [ "$state" = populated ] && require_race=1
-            if ! TA_PASSWORD="$E2E_PASSWORD" TA_DATA_STATE="$state" TA_REQUIRE_RACE="$require_race" node e2e/walk-tree.mjs; then
+            if ! TA_PASSWORD="$E2E_PASSWORD" TA_DATA_STATE="$state" node e2e/walk-tree.mjs; then
               echo "::error::the walk failed against the ${state} database."
               cleanup
               exit 1

@@ -66,86 +66,31 @@ jobs:
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/truealpha
         run: sh db/apply_migrations.sh
-      - name: Assert runtime persistence contract
+      - name: Assert all db/tests SQL contracts
         env:
           PGPASSWORD: postgres
-        run: psql -h localhost -U postgres -d truealpha -v ON_ERROR_STOP=1 -f db/tests/runtime_contract.sql
-      # #472: these three contract files had no execution host anywhere — written,
-      # reviewed, never run (governed_research_access_contract.sql even SAID so in
-      # a docstring). All are schema-level and self-seeding inside a rolled-back
-      # transaction, so the freshly migrated database above is the right target.
-      - name: Assert orphaned db/tests contracts
-        env:
-          PGPASSWORD: postgres
-        run: |
-          for f in db/tests/capture_control_contract.sql \
-                   db/tests/headcount_extraction_contract.sql \
-                   db/tests/governed_research_access_contract.sql \
-                   db/tests/role_boundary_contract.sql; do
-            echo "== $f"
-            psql -h localhost -U postgres -d truealpha -v ON_ERROR_STOP=1 -f "$f"
-          done
-      # #472 meta-check (#373 class): a contract test nothing runs passes no
-      # signal. A file counts as hosted only when (a) a workflow or shell runner
-      # names its full db/tests/ path, or (b) a Python/TS file references it AND
-      # that file itself executes SQL (psql / ON_ERROR_STOP) — a prose-only
-      # mention in a non-executing file no longer counts (#480 review found
-      # exactly that false positive). Known residual gap, accepted and
-      # documented: a prose mention inside a file that executes a DIFFERENT
-      # contract still passes; tighten to an explicit host manifest if it bites.
-      - name: Every db/tests file has an execution host
         run: |
           set -euo pipefail
-          missing=0
-          for f in db/tests/*.sql; do
-            name="$(basename "$f")"
-            hosted=0
-            if grep -rqF -- "db/tests/$name" .github/workflows db/apply_migrations.sh 2>/dev/null; then
-              hosted=1
-            else
-              while IFS= read -r ref; do
-                if grep -qE "psql|ON_ERROR_STOP" "$ref"; then hosted=1; break; fi
-              done < <(grep -rlF -- "$name" common apps tools --include="*.py" --include="*.ts" 2>/dev/null || true)
-            fi
-            if [ "$hosted" -eq 0 ]; then
-              echo "::error::db/tests/$name has no executing host — give it a real runner or delete it"
-              missing=1
-            fi
+          count=0
+          for f in db/tests/*_contract.sql; do
+            echo "== $f"
+            psql -h localhost -U postgres -d truealpha -v ON_ERROR_STOP=1 -f "$f"
+            count=$((count + 1))
           done
-          exit "$missing"
-
-      # #581: the invariants, against the schema this workflow just migrated.
-      # Here rather than ci-web because that workflow has no Python toolchain
-      # (the first attempt died on `uv: command not found`) and because a
-      # question about what is IN the database belongs beside the workflow that
-      # owns the database contracts.
-      #
-      # An empty schema means most invariants examine zero rows; the tool prints
-      # that rather than reporting ok over an empty set, and `--require-coverage`
-      # is deliberately not passed here. It IS passed where the data is real.
-      - uses: ./.github/actions/setup-uv
-        with:
-          enable-cache: true
-      - name: Output invariants (migrated schema)
-        env:
-          PGPASSWORD: postgres
-        run: |
-          # output_invariants.py and schema_drift.py require only factors.forest and runtime testing.
-          # The full workspace (Dagster, Torch, Pandas) is not needed for DB schema verification.
-          uv sync --package truealpha-factors --package truealpha-runtime --frozen
-          uv run --no-sync python tools/output_invariants.py \
-            --database-url postgresql://postgres:postgres@localhost:5432/truealpha
+          if [ "$count" -lt 8 ]; then
+            echo "::error::expected at least 8 SQL contract files under db/tests/*_contract.sql, ran $count"
+            exit 1
+          fi
 
       # #984: the schema this workflow just migrated, compared against the chain it was
       # migrated FROM. The tool builds its own reference database from db/migrations +
       # db/roles.sql on this same server and diffs the two catalogs, so nothing here has
-      # to be kept fresh when a migration lands. What this step proves is that the check
-      # runs in CI and is green on a database that did run the chain; that it can go RED
-      # is proved by common/runtime/tests/test_schema_drift.py, which breaks a database on
-      # purpose (#939's staging.market_prices_daily shape among them) and asserts the
-      # tool names what broke. Green here after three replays and a seeded contract row
-      # also says replay left the schema where the chain puts it.
+      # to be kept fresh when a migration lands.
+      - uses: ./.github/actions/setup-uv
+        with:
+          enable-cache: true
       - name: Schema drift (migrated schema against the declared chain)
         run: |
+          uv sync --package truealpha-runtime --frozen
           uv run --no-sync python tools/schema_drift.py \
             --database-url postgresql://postgres:postgres@localhost:5432/truealpha

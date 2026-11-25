@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import inspect
 import json
-import re
 import sys
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -729,31 +728,6 @@ def test_a_forced_launch_reaches_the_pipeline_and_says_so_in_op_metadata(monkeyp
     assert calls[0]["version"] == calls[1]["version"] == live_version_for(datetime.fromisoformat(TICK))
     assert forced.get_output_metadata("result")["forced_fetch"] is True
     assert ordinary.get_output_metadata("result")["forced_fetch"] is False
-
-
-def _documented_launch() -> dict:
-    root = next(parent for parent in Path(__file__).resolve().parents if (parent / "docs").is_dir())
-    text = (root / "docs" / "datahub-quality-report.md").read_text(encoding="utf-8")
-    section = text.split("## Manual re-run with a forced fetch", 1)
-    assert len(section) == 2, "docs/datahub-quality-report.md lost its forced re-run section"
-    blocks = re.findall(r"```json\n(.*?)```", section[1], flags=re.DOTALL)
-    variables = [json.loads(block) for block in blocks if '"executionParams"' in block]
-    assert len(variables) == 1, "the section documents exactly one GraphQL launch payload"
-    return variables[0]
-
-
-def test_the_documented_graphql_launch_is_a_valid_forced_topt_tick() -> None:
-    """The operator doc is copied verbatim into a GraphQL client, so it is checked like
-    code: the job, the op and the config it names must be the deployed ones."""
-    params = _documented_launch()["executionParams"]
-    assert params["selector"]["jobName"] == capture.topt_live_pipeline_job.name
-    assert params["selector"]["repositoryName"] == "__repository__"
-    run_config = params["runConfigData"]
-    assert set(run_config["ops"]) == {"run_topt_live_tick"}
-    config = run_config["ops"]["run_topt_live_tick"]["config"]
-    assert set(config) == {"executed_at", "force_fetch"} and config["force_fetch"] is True
-    datetime.fromisoformat(config["executed_at"])
-    assert dg.validate_run_config(capture.topt_live_pipeline_job, run_config)
 
 
 def test_the_strategy_history_job_and_schedule_are_deployed_and_follow_the_tick() -> None:

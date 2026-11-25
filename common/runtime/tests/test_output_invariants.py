@@ -18,11 +18,12 @@ from __future__ import annotations
 
 import calendar
 import hashlib
+import json
 import re
 import uuid
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -326,14 +327,110 @@ def test_extraction_citations_resolve_invariant_structure_and_behavior() -> None
     for source in ("10k-extraction", "manual-review", "sec-10k-regex-v1", "curated-10k-2025"):
         violation = ("1", "1018724", source, "missing-accession", "none")
         answers[invariant.violations.strip()] = [violation]
-        failing = check(
+        reported = check(
             "postgresql://unused",
             today=TODAY,
             exemptions={},
             invariants=(invariant,),
             connect=lambda _url: _Connection(answers),
         )
-        assert failing == 1
+        assert reported == 0
+
+
+def test_hard_vs_fact_invariant_classification_and_persistence(capsys: pytest.CaptureFixture[str]) -> None:
+    """Exactly 4 structural/conservation invariants are `hard` and 8 are `fact`; `--persist` writes all rows."""
+    hard_ids = {inv.id for inv in _module.INVARIANTS if inv.kind == "hard"}
+    fact_ids = {inv.id for inv in _module.INVARIANTS if inv.kind == "fact"}
+    assert hard_ids == {
+        "selected-weights-close",
+        "entity-identity-unique-per-entity",
+        "listing-names-one-issuer-and-one-instrument",
+        "fund-virtual-company-weights-conserved",
+    }
+    assert len(fact_ids) == 8
+
+    recorded: list[tuple[str, tuple]] = []
+
+    class _PersistCursor:
+        def __init__(self, answers: dict[str, list[tuple]]) -> None:
+            self._answers = answers
+            self._rows: list[tuple] = []
+
+        def execute(self, sql: str, params: tuple | None = None) -> None:
+            if params is not None:
+                recorded.append((sql, params))
+                self._rows = []
+            else:
+                self._rows = self._answers[sql.strip()]
+
+        def fetchall(self) -> list[tuple]:
+            return self._rows
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_: object) -> None:
+            return None
+
+    class _PersistConn:
+        def __init__(self, answers: dict[str, list[tuple]]) -> None:
+            self._answers = answers
+            self.committed = 0
+
+        def cursor(self) -> _PersistCursor:
+            return _PersistCursor(self._answers)
+
+        def commit(self) -> None:
+            self.committed += 1
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_: object) -> None:
+            return None
+
+    hard_inv = Invariant(id="hard-check", kind="hard", claim="hard must hold", violations="VH", population="PH")
+    fact_inv = Invariant(id="fact-check", kind="fact", claim="fact is observed", violations="VF", population="PF")
+    answers = {"VH": [], "PH": [(5,)], "VF": [("row-1", "bad-val")], "PF": [(5,)]}
+    conn_fact_only = _PersistConn(answers)
+    checked_at = datetime(2026, 11, 25, 0, 15, tzinfo=UTC)
+
+    code_fact = check(
+        "postgresql://unused",
+        require_coverage=True,
+        today=TODAY,
+        exemptions={},
+        invariants=(hard_inv, fact_inv),
+        connect=lambda _url: conn_fact_only,
+        persist=True,
+        dagster_run_id="run-wave4",
+        checked_at=checked_at,
+    )
+    assert code_fact == 0
+    assert conn_fact_only.committed == 1
+    out = capsys.readouterr().out
+    assert "FACT     fact-check: 1 violation(s)" in out
+    assert [(p[2], p[3], p[4], p[5]) for _, p in recorded] == [
+        ("hard-check", "hard", 5, 0),
+        ("fact-check", "fact", 5, 1),
+    ]
+    assert json.loads(recorded[1][1][7]) == [["row-1", "bad-val"]]
+
+    answers["VH"] = [("row-h",)]
+    recorded.clear()
+    code_hard = check(
+        "postgresql://unused",
+        require_coverage=True,
+        today=TODAY,
+        exemptions={},
+        invariants=(hard_inv, fact_inv),
+        connect=lambda _url: _PersistConn(answers),
+        persist=True,
+        dagster_run_id="run-wave4-hard",
+        checked_at=checked_at,
+    )
+    assert code_hard == 1
+    assert [(p[2], p[3], p[5]) for _, p in recorded] == [("hard-check", "hard", 1), ("fact-check", "fact", 1)]
 
 
 # --- revenue-period-is-recent on a migrated database (#1457) -------------------------------
@@ -760,7 +857,7 @@ def test_a_variant_record_that_schedules_sp500_makes_the_invariants_count_its_he
     from truealpha_contracts.environment_contract import load_environment_contract
 
     stopped_code, stopped_output = verdict(load_environment_contract())
-    assert stopped_code == 1 and "examined 0 rows where real data was required" in stopped_output, stopped_output
+    assert stopped_code == 0 and f"FACT     {REVENUE_INVARIANT}: examined 0 rows" in stopped_output, stopped_output
 
     code, output = verdict(_scheduled_sp500_contract())
     assert code == 0, output
@@ -820,7 +917,7 @@ def test_a_revenue_period_from_2018_fails_and_names_the_issuer(
 ) -> None:
     """The injected row is the XEL of production: an available result on a revenue of 2018-12-31.
 
-    Red without the invariant: no check judged the age of a served revenue (#1457).
+    Logged as a non-blocking `fact` invariant with sample rows (#1457, Wave 4).
     """
     issuers = [
         _issuer("current", "cur0", revenue_period_end=date(2025, 12, 31)),
@@ -830,25 +927,27 @@ def test_a_revenue_period_from_2018_fails_and_names_the_issuer(
 
     code, output = _parity_verdict(conn, capsys, REVENUE_INVARIANT)
 
-    assert code == 1, output
-    assert f"{REVENUE_INVARIANT}: 1 violation(s)" in output
+    assert code == 0, output
+    assert f"FACT     {REVENUE_INVARIANT}: 1 violation(s)" in output
     assert f"Offending rows: {REVENUE_UNIVERSE} {run_id} issuer:xel 2018-12-31 2026-03-31" in output
 
 
 def test_the_limit_is_the_maximum_input_age_days_of_the_live_definition(
     conn: psycopg.Connection, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """A period that ends exactly on the limit passes. A period that ends one day before it fails."""
+    """A period that ends exactly on the limit passes cleanly; one day before emits a FACT line."""
     assert _module._MAX_INPUT_AGE_DAYS == 455
     limit = SEEDED_CUTOFF - timedelta(days=_module._MAX_INPUT_AGE_DAYS)
     assert limit == date(2024, 12, 31)
     _seed_head(conn, REVENUE_UNIVERSE, [_issuer("edge", "edge0", revenue_period_end=limit)])
-    assert _parity_verdict(conn, capsys, REVENUE_INVARIANT)[0] == 0
+    edge_code, edge_out = _parity_verdict(conn, capsys, REVENUE_INVARIANT)
+    assert edge_code == 0 and f"ok       {REVENUE_INVARIANT}:" in edge_out
 
     conn.rollback()
     _seed_head(conn, REVENUE_UNIVERSE, [_issuer("late", "late0", revenue_period_end=limit - timedelta(days=1))])
     code, output = _parity_verdict(conn, capsys, REVENUE_INVARIANT)
-    assert code == 1, output
+    assert code == 0, output
+    assert f"FACT     {REVENUE_INVARIANT}: 1 violation(s)" in output
     assert f"issuer:late {limit - timedelta(days=1)} 2026-03-31" in output
 
 
@@ -871,31 +970,27 @@ def test_an_unavailable_result_with_a_named_reason_may_carry_an_old_period(
 def test_a_head_that_states_no_revenue_period_fails_by_name(
     conn: psycopg.Connection, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """A result with no stored period has an unknown age. A head where no result states one fails."""
+    """A result with no stored period has an unknown age. Emits FACT naming no-result-states-a-revenue-period."""
     run_id = _seed_head(conn, REVENUE_UNIVERSE, [_issuer("undated", "und0")])
 
     code, output = _parity_verdict(conn, capsys, REVENUE_INVARIANT)
 
-    assert code == 1, output
-    assert f"{REVENUE_INVARIANT}: 1 violation(s)" in output
+    assert code == 0, output
+    assert f"FACT     {REVENUE_INVARIANT}: 1 violation(s)" in output
     assert f"Offending rows: {REVENUE_UNIVERSE} {run_id} no-result-states-a-revenue-period - -" in output
 
 
 def test_a_head_with_dated_results_cannot_hide_a_head_with_none(
     conn: psycopg.Connection, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Two scheduled heads. The first states fresh periods. The second states none.
-
-    Red on the first version: coverage was one count over all heads, so the dated rows of the first
-    head hid the second head.
-    """
+    """Two scheduled heads. The first states fresh periods. The second states none -> still flagged in FACT."""
     _seed_head(conn, REVENUE_UNIVERSE, [_issuer("dated", "dat0", revenue_period_end=date(2025, 12, 31))])
     undated_run = _seed_head(conn, "universe:canary-us-2026-06-30", [_issuer("undated", "und0")])
 
     code, output = _parity_verdict(conn, capsys, REVENUE_INVARIANT)
 
-    assert code == 1, output
-    assert f"{REVENUE_INVARIANT}: 1 violation(s)" in output
+    assert code == 0, output
+    assert f"FACT     {REVENUE_INVARIANT}: 1 violation(s)" in output
     assert f"universe:canary-us-2026-06-30 {undated_run} no-result-states-a-revenue-period - -" in output
 
 
@@ -976,12 +1071,12 @@ def test_governed_entities_resolve_display_name_passes_with_real_names_and_fails
     ]
     run_id = _seed_head(conn, REVENUE_UNIVERSE, issuers)
 
-    # Without name aliases, mart.entity_display_resolution resolves display_name as NULL -> violation!
+    # Without name aliases, mart.entity_display_resolution resolves display_name as NULL -> FACT output
     code, output = _parity_verdict(conn, capsys, DISPLAY_NAME_INVARIANT)
-    assert code == 1, output
-    assert f"{DISPLAY_NAME_INVARIANT}: 2 violation(s)" in output
+    assert code == 0, output
+    assert f"FACT     {DISPLAY_NAME_INVARIANT}: 2 violation(s)" in output
 
-    # Insert real company names into staging.entity_aliases for both issuers -> passes!
+    # Insert real company names into staging.entity_aliases for both issuers -> clean ok
     for eid, _, name, _ in minted:
         conn.execute(
             "insert into staging.entity_aliases (entity_id, scheme, value, valid_from, transaction_time, source, raw_ref, method, confidence, mapping_version) "
@@ -1000,7 +1095,7 @@ REASON_INVARIANT = "unavailable-means-a-reason"
 def test_an_unavailable_node_value_without_a_reason_fails_and_names_the_node(
     conn: psycopg.Connection, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """#1804: an unavailable node value with a reason passes. One with empty `reason_codes` fails.
+    """#1804: an unavailable node value with a reason passes. One with empty `reason_codes` logs FACT.
     A `low_confidence` value carries a value and needs no reason."""
     issuer = SeededIssuer(
         "issuer:reasoned", ("listing:xnas:rsn0",), True, False, ("missing_gross_profit",), date(2025, 12, 31)
@@ -1024,8 +1119,8 @@ def test_an_unavailable_node_value_without_a_reason_fails_and_names_the_node(
 
     conn.execute(insert, (run_id, peg_node, "peg_consensus", None, "unavailable", None, SEED_SHA256))
     code, output = _parity_verdict(conn, capsys, REASON_INVARIANT)
-    assert code == 1, output
-    assert f"{REASON_INVARIANT}: 1 violation(s)" in output
+    assert code == 0, output
+    assert f"FACT     {REASON_INVARIANT}: 1 violation(s)" in output
     assert "peg_consensus" in output
 
 
@@ -1215,3 +1310,56 @@ def test_fund_virtual_company_weights_conserved_passes_valid_row_and_fails_on_fa
         connect=lambda _url: _Connection(answers),
     )
     assert failing == 1
+
+
+def test_persist_records_hard_and_fact_invariants_and_only_hard_fails(
+    conn: psycopg.Connection, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Persist both hard and fact results into mart.output_invariant_results inside a transaction."""
+    issuer = SeededIssuer("issuer:persist", ("listing:xnas:prs0",), True, False, (), date(2025, 12, 31))
+    _seed_head(conn, REVENUE_UNIVERSE, [issuer])
+    (fact_inv,) = [inv for inv in _module.INVARIANTS if inv.id == REASON_INVARIANT]
+    (hard_inv,) = [inv for inv in _module.INVARIANTS if inv.id == ENTITY_IDENTITY_UNIQUE_INVARIANT]
+    conn.execute(
+        """
+        insert into mart.fund_virtual_company (
+            run_id, fund_id, report_period, transaction_time, cutoff,
+            definition_version, definition_sha256, weighted_valuation_gap, valuation_basis,
+            total_weight_pct, resolved_weight_pct, valued_weight_pct, lines, valued_lines, confidence,
+            availability_status, source_evidence_status, factor_validation_status
+        ) values (
+            'capture-run:persist', 'etf:series:QQQ', '2026-06-30', '2026-06-30T00:00:00Z',
+            '2026-06-30T00:00:00Z', 'v0', repeat('b', 64), 0.12, 'price_to_gross_profit',
+            199.0, 98.5, 95.0, 100, 95, 0.90,
+            'available', 'verified', 'accepted'
+        )
+        """
+    )
+    (hard_fail_inv,) = [inv for inv in _module.INVARIANTS if inv.id == FUND_WEIGHTS_INVARIANT]
+
+    code = check(
+        "postgresql://borrowed",
+        require_coverage=True,
+        today=TODAY,
+        exemptions={},
+        invariants=(fact_inv, hard_inv, hard_fail_inv),
+        connect=lambda _url: _Borrowed(conn),
+        persist=True,
+        dagster_run_id="persist-wave4-test",
+        commit=False,
+    )
+    _ = capsys.readouterr()
+    assert code == 1
+    rows = conn.execute(
+        """
+        select invariant_id, kind, population, violation_count, deferred, sample_rows
+        from mart.output_invariant_results
+        where dagster_run_id = 'persist-wave4-test'
+        order by invariant_id
+        """
+    ).fetchall()
+    by_id = {row[0]: row[1:] for row in rows}
+    assert set(by_id) == {REASON_INVARIANT, ENTITY_IDENTITY_UNIQUE_INVARIANT, FUND_WEIGHTS_INVARIANT}
+    assert by_id[REASON_INVARIANT][0] == "fact" and by_id[REASON_INVARIANT][2] == 1
+    assert len(by_id[REASON_INVARIANT][4]) == 1
+    assert by_id[FUND_WEIGHTS_INVARIANT][0] == "hard" and by_id[FUND_WEIGHTS_INVARIANT][2] == 1

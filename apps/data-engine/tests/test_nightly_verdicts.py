@@ -231,17 +231,26 @@ def _surfaces(monkeypatch, *, mismatched: bool) -> None:
 
 
 def test_the_nightly_job_records_both_verdicts_green_at_its_tick(monkeypatch, written) -> None:
-    _suite(
-        monkeypatch, exit_code=0, printed="  ok       peg_bounded: 20 row(s) examined\n  DEFERRED gppe: 1 violation(s)"
-    )
+    seen_argv: list[list[str]] = []
+
+    def main(argv: list[str]) -> int:
+        seen_argv.append(list(argv))
+        print(
+            "  ok       selected-weights-close: 20 row(s) examined\n  FACT     node-sign-policy: 1 violation(s)\n  DEFERRED gppe: 1 violation(s)"
+        )
+        return 0
+
+    monkeypatch.setattr(quality, "_suite_path", lambda: "suite.py")
+    monkeypatch.setattr(quality.runpy, "run_path", lambda *_a, **_k: {"main": main})
     _surfaces(monkeypatch, mismatched=False)
     result = quality.output_invariants_job.execute_in_process(tags={nightly_verdicts.TICK_TAG: TICK})
     assert result.success
+    assert seen_argv and "--persist" in seen_argv[0] and "--dagster-run-id" in seen_argv[0]
     by_name = {row["check"]: row for row in written}
     assert set(by_name) == {"output_invariants", "report_surface_proof"}
     assert all(row["ok"] for row in written)
     assert all(row["ran_at"] == datetime.fromisoformat(TICK) for row in written), "ran_at is the tick"
-    assert by_name["output_invariants"]["summary"] == "1 held, 1 deferred, 0 empty"
+    assert by_name["output_invariants"]["summary"] == "1 held, 1 fact, 1 deferred, 0 empty"
     assert by_name["report_surface_proof"]["summary"] == "2/2 surfaces serve the governed head"
 
 

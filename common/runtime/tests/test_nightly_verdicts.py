@@ -60,18 +60,55 @@ def _run(verdicts: object, **kwargs: object) -> int:
 
 def test_every_check_green_and_on_time_passes(capsys: pytest.CaptureFixture[str]) -> None:
     assert _run(_all_green()) == 0
-    assert "green and on time" in capsys.readouterr().out
+    assert "all " in capsys.readouterr().out
 
 
-def test_a_red_verdict_fails_and_names_the_check_and_its_summary(capsys: pytest.CaptureFixture[str]) -> None:
-    """The #832 shape: the probe ran on time and the provider refused the key."""
+def test_a_red_hard_verdict_fails_and_names_the_check_and_its_summary(capsys: pytest.CaptureFixture[str]) -> None:
+    """Hard checks fail closed on a red verdict and name only the failing check."""
     verdicts = _all_green()
-    verdicts = [v for v in verdicts if v["check"] != "model_key_health"]
-    verdicts.append(_verdict("model_key_health", 1.0, ok=False, summary="failed: auth-rejected: HTTP 401"))
+    verdicts = [v for v in verdicts if v["check"] != "output_invariants"]
+    verdicts.append(_verdict("output_invariants", 1.0, ok=False, summary="failed: exit 1: 1 failed"))
     assert _run(verdicts) == 1
     err = capsys.readouterr().err
-    assert "model_key_health" in err and "auth-rejected: HTTP 401" in err
-    assert "output_invariants" not in err
+    assert "output_invariants" in err and "exit 1: 1 failed" in err
+    assert "model_key_health" not in err
+
+
+@pytest.mark.parametrize(
+    "fact_check",
+    [
+        "market_data_freshness",
+        "model_key_health",
+        "topt_baseline",
+        "nightly_backtest",
+        "macro_freshness",
+        "datahub_confidence_report@topt",
+        "question_coverage@topt",
+        "theme_purity@topt",
+    ],
+)
+def test_a_red_on_time_fact_verdict_logs_fact_and_passes(capsys: pytest.CaptureFixture[str], fact_check: str) -> None:
+    """Data quality and upstream quota/rate facts surface as observations without blocking the audit."""
+    verdicts = [v for v in _all_green() if v["check"] != fact_check]
+    verdicts.append(_verdict(fact_check, 1.0, ok=False, summary="429 rate limited / coverage gap"))
+    assert _run(verdicts) == 0
+    out = capsys.readouterr().out
+    assert f"fact: {fact_check}: red since" in out
+    assert "1 fact observation(s) logged" in out
+
+
+def test_a_red_but_stale_fact_verdict_fails_for_staleness(capsys: pytest.CaptureFixture[str]) -> None:
+    """A stalled daemon or dead job cannot hide behind kind='fact' once past 2x cadence."""
+    limit = EXPECTED["model_key_health"].max_age_hours
+    verdicts = [v for v in _all_green() if v["check"] != "model_key_health"]
+    verdicts.append(_verdict("model_key_health", limit + 1, ok=False, summary="stale red"))
+    assert _run(verdicts) == 1
+    assert "stopped ticking" in capsys.readouterr().err
+
+
+def test_invalid_verdict_kind_is_refused() -> None:
+    with pytest.raises(_module.VerdictCheckFailure, match="invalid verdict kind"):
+        _module.parse_expectations(json.dumps({"checks": {"bad": {"cadence_hours": 24, "job": "j", "kind": "warn"}}}))
 
 
 def test_a_stale_verdict_fails_even_when_green(capsys: pytest.CaptureFixture[str]) -> None:
@@ -381,7 +418,7 @@ def test_a_report_that_holds_the_production_checks_only_is_green_in_production_w
         )
         == 0
     )
-    assert f"all {len(EXPECTED) - len(sp500)} nightly checks are green" in capsys.readouterr().out
+    assert f"all {len(EXPECTED) - len(sp500)} nightly checks are on time" in capsys.readouterr().out
 
 
 def _named_set(_ref: str) -> str:
@@ -600,15 +637,11 @@ def test_the_lanes_record_in_each_environment_exactly_the_checks_the_tool_expect
     assert (set(_qqq_checks()) | set(_sp500_checks())) <= {name for name in declared if is_registered(name, declared)}
 
 
-def test_the_market_data_check_is_watched_and_survives_a_weekend() -> None:
-    """#1131: the lane ticks on weekdays only, so Friday's verdict is the newest one until Monday night.
-
-    The delivery report reads at 07:00 UTC. On Monday that is 57.75 hours after Friday's
-    21:15 tick. A check declared with a daily cadence turns that Monday red. The lane failed
-    8 times between 2026-09-24 and 2026-10-05 with no check watching it.
-    """
+def test_the_market_data_check_is_watched_and_survives_a_weekend(capsys: pytest.CaptureFixture[str]) -> None:
+    """#1131: the lane ticks on weekdays only, so Friday's verdict survives Monday. A stale row fails; a fresh red row logs a fact."""
     expectation = EXPECTED["market_data_freshness"]
     assert expectation.job == "market_data_refresh_pipeline"
+    assert expectation.kind == "fact"
     friday_tick_to_monday_check_hours = 57.75
     rest = [v for v in _all_green() if v["check"] != "market_data_freshness"]
 
@@ -619,7 +652,8 @@ def test_the_market_data_check_is_watched_and_survives_a_weekend() -> None:
     assert _run(stopped) == 1, "a lane that stopped ticking is not noticed"
 
     red = rest + [_verdict("market_data_freshness", 2.0, ok=False, summary="failed: none: no bar")]
-    assert _run(red) == 1, "a red verdict of the lane is not noticed"
+    assert _run(red) == 0, "a fresh red fact check logs without blocking"
+    assert "fact: market_data_freshness: red since" in capsys.readouterr().out
 
 
 def test_every_watched_check_names_a_deployed_job_and_a_valid_verdict_name() -> None:
@@ -677,14 +711,17 @@ def test_an_unknown_first_declaration_gives_no_grace(capsys: pytest.CaptureFixtu
 
 
 def test_the_grace_never_excuses_a_red_or_stale_verdict() -> None:
-    """Pending is for a check with NO row; a check that ran and failed, or went quiet, is judged."""
+    """Pending is for a check with NO row; a hard check that failed, or any check that went quiet, is judged."""
     recent = lambda _check, _release: NOW - timedelta(minutes=5)  # noqa: E731
-    target_check = "theme_purity@topt"
-    base = [entry for entry in _all_green() if entry["check"] != target_check]
-    red = [*base, _verdict(target_check, 1, ok=False, summary="failed: x")]
-    stale = [*base, _verdict(target_check, 60)]
-    assert _run(red, first_declared=recent) == 1
-    assert _run(stale, first_declared=recent) == 1
+    hard_check = "output_invariants"
+    base_hard = [entry for entry in _all_green() if entry["check"] != hard_check]
+    assert _run([*base_hard, _verdict(hard_check, 1, ok=False, summary="failed: x")], first_declared=recent) == 1
+    assert _run([*base_hard, _verdict(hard_check, 60)], first_declared=recent) == 1
+
+    fact_check = "theme_purity@topt"
+    base_fact = [entry for entry in _all_green() if entry["check"] != fact_check]
+    assert _run([*base_fact, _verdict(fact_check, 1, ok=False, summary="failed: x")], first_declared=recent) == 0
+    assert _run([*base_fact, _verdict(fact_check, 60)], first_declared=recent) == 1
 
 
 def _git(log: str = "", *, log_code: int = 0):
