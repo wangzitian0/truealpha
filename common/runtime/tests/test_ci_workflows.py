@@ -73,7 +73,7 @@ def test_ci_python_shards_cover_all_tests_and_isolate_s3() -> None:
     assert "S3_CORE_TEST_FILES" in s3_runs and "S3_DATA_ENGINE_TEST_FILES" in s3_runs
 
     deps_job = jobs["test-deps-smoke"]
-    assert deps_job["strategy"]["matrix"]["shard"] == [0, 1]
+    assert deps_job["strategy"]["matrix"]["shard"] == [0, 1, 2]
     deps_runs = "\n".join(str(step.get("run", "")) for step in deps_job["steps"])
     assert "docker compose up" not in deps_runs
     assert "S3_CORE_TEST_FILES" in deps_runs and "S3_DATA_ENGINE_TEST_FILES" in deps_runs

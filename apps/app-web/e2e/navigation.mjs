@@ -3,14 +3,12 @@
  *
  * `e2e/walk-tree.mjs` launches a browser when it is imported, so a test cannot
  * import a function from it. This module has no side effects at import.
- * `tests/walk-tree-hydration.test.ts` drives both exports against a fake page.
  */
 
 /**
  * Set by `HydrationMarker` (src/components/hydration-marker.tsx) in an effect.
  * The root layout renders it, so every page sets the attribute once React has
  * hydrated the page. The server HTML never carries it.
- * `tests/hydration-marker.test.ts` checks both halves.
  */
 export const HYDRATED_DOCUMENT = 'html[data-hydrated="true"]';
 
@@ -86,8 +84,7 @@ function routeOf(url) {
  * waited only when a sign-out control was on the page, and a timeout of that wait was
  * dropped. So the walk could read, leave or click a page before React had hydrated it,
  * and a hydration error of one page could reach the verdict of the next route. Every walk
- * navigation goes through this function (`tests/walk-tree-hydration.test.ts` fails on a
- * direct `goto()`), so every page that the walk leaves has hydrated. When the page never
+ * navigation goes through `gotoStable()`, so every page that the walk leaves has hydrated. When the page never
  * hydrates, the walk stops with an error that names the route and the HTTP status.
  *
  * @param {any} page a Playwright page

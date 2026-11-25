@@ -4,8 +4,7 @@ The market-data lane reads them from the TOPT corpus and the primary-listing rel
 (`market_prices.stored_symbols`). A test that seeds series before a tick cannot read the relation, because the
 tick writes it. This helper reads the same two sources as files: the packaged corpus and the classification
 file of primary listings that the coordinate resolver writes the relation from. No test holds this helper
-equal to `stored_symbols` against a database (a known residual of #1522 step 3); the tick tests that use it
-(`test_primary_listing_one_producer.py` runs the real op over a seeded relation) fail when the two differ.
+equal to `stored_symbols` against a database (a known residual of #1522 step 3); live op runs fail if the two differ.
 """
 
 from __future__ import annotations
