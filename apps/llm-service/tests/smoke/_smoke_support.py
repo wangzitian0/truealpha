@@ -61,47 +61,51 @@ def smoke_app_service_db(monkeypatch: pytest.MonkeyPatch, name_prefix: str = "ll
         user_password = f"smoke-pass-{secrets.token_hex(12)}"
         pw_hash = bcrypt.hashpw(user_password.encode("utf-8"), bcrypt.gensalt(rounds=4)).decode("ascii")
 
-        with psycopg.connect(superuser_url, autocommit=True) as admin_conn:
-            admin_conn.execute(
-                sql.SQL(
-                    "create role {} login password {} inherit nosuperuser nocreatedb nocreaterole nobypassrls "
-                    "in role app_service_login"
-                ).format(sql.Identifier(role_name), sql.Literal(role_password))
-            )
-            admin_conn.execute(
-                sql.SQL("grant connect on database {} to {}").format(sql.Identifier(db.name), sql.Identifier(role_name))
-            )
-            admin_conn.execute(
-                "insert into app.tenants (tenant_id) values (%s) on conflict do nothing", (SMOKE_TENANT_ID,)
-            )
-            for pid, kind in (
-                (auth_service.MCP_OWNER_PRINCIPAL_ID, "administrator"),
-                (ADMIN_PRINCIPAL_ID, "administrator"),
-                (OWNER_A_PRINCIPAL_ID, "member"),
-                (OWNER_B_PRINCIPAL_ID, "member"),
-            ):
-                admin_conn.execute(
-                    "insert into app.principals (principal_id, tenant_id, principal_kind) "
-                    "values (%s, %s, %s) on conflict (principal_id) do nothing",
-                    (pid, SMOKE_TENANT_ID, kind),
-                )
-            for pid, email in (
-                (ADMIN_PRINCIPAL_ID, ADMIN_EMAIL),
-                (OWNER_A_PRINCIPAL_ID, MEMBER_EMAIL),
-                (OWNER_B_PRINCIPAL_ID, OWNER_B_EMAIL),
-            ):
-                admin_conn.execute(
-                    "insert into app.principal_credentials (principal_id, email, hashed_password) "
-                    "values (%s, %s, %s) on conflict (principal_id) do update "
-                    "set email = excluded.email, hashed_password = excluded.hashed_password",
-                    (pid, email, pw_hash),
-                )
-
-        smoke_url = _with_credentials(superuser_url, role_name, role_password)
-        monkeypatch.setattr(settings, "database_url", smoke_url)
-        monkeypatch.setattr(settings, "secret_key", SecretStr("smoke-test-secret-key-at-least-32-bytes"))
-        auth_service.login_rate_limiter.reset()
+        role_created = False
         try:
+            with psycopg.connect(superuser_url, autocommit=True) as admin_conn:
+                admin_conn.execute(
+                    sql.SQL(
+                        "create role {} login password {} inherit nosuperuser nocreatedb nocreaterole nobypassrls "
+                        "in role app_service_login"
+                    ).format(sql.Identifier(role_name), sql.Literal(role_password))
+                )
+                role_created = True
+                admin_conn.execute(
+                    sql.SQL("grant connect on database {} to {}").format(
+                        sql.Identifier(db.name), sql.Identifier(role_name)
+                    )
+                )
+                admin_conn.execute(
+                    "insert into app.tenants (tenant_id) values (%s) on conflict do nothing", (SMOKE_TENANT_ID,)
+                )
+                for pid, kind in (
+                    (auth_service.MCP_OWNER_PRINCIPAL_ID, "administrator"),
+                    (ADMIN_PRINCIPAL_ID, "administrator"),
+                    (OWNER_A_PRINCIPAL_ID, "member"),
+                    (OWNER_B_PRINCIPAL_ID, "member"),
+                ):
+                    admin_conn.execute(
+                        "insert into app.principals (principal_id, tenant_id, principal_kind) "
+                        "values (%s, %s, %s) on conflict (principal_id) do nothing",
+                        (pid, SMOKE_TENANT_ID, kind),
+                    )
+                for pid, email in (
+                    (ADMIN_PRINCIPAL_ID, ADMIN_EMAIL),
+                    (OWNER_A_PRINCIPAL_ID, MEMBER_EMAIL),
+                    (OWNER_B_PRINCIPAL_ID, OWNER_B_EMAIL),
+                ):
+                    admin_conn.execute(
+                        "insert into app.principal_credentials (principal_id, email, hashed_password) "
+                        "values (%s, %s, %s) on conflict (principal_id) do update "
+                        "set email = excluded.email, hashed_password = excluded.hashed_password",
+                        (pid, email, pw_hash),
+                    )
+
+            smoke_url = _with_credentials(superuser_url, role_name, role_password)
+            monkeypatch.setattr(settings, "database_url", smoke_url)
+            monkeypatch.setattr(settings, "secret_key", SecretStr("smoke-test-secret-key-at-least-32-bytes"))
+            auth_service.login_rate_limiter.reset()
             yield SmokeDbContext(
                 superuser_url=superuser_url,
                 smoke_url=smoke_url,
@@ -111,18 +115,25 @@ def smoke_app_service_db(monkeypatch: pytest.MonkeyPatch, name_prefix: str = "ll
             )
         finally:
             auth_service.login_rate_limiter.reset()
-            with psycopg.connect(superuser_url, autocommit=True) as cleanup_conn:
-                cleanup_conn.execute(
-                    "select pg_terminate_backend(pid) from pg_stat_activity "
-                    "where datname = %s and usename = %s and pid != pg_backend_pid()",
-                    (db.name, role_name),
-                )
-                cleanup_conn.execute(
-                    sql.SQL("revoke all privileges on database {} from {}").format(
-                        sql.Identifier(db.name), sql.Identifier(role_name)
+            if role_created:
+                with psycopg.connect(superuser_url, autocommit=True) as cleanup_conn:
+                    cleanup_conn.execute(
+                        "select pg_terminate_backend(pid) from pg_stat_activity "
+                        "where datname = %s and usename = %s and pid != pg_backend_pid()",
+                        (db.name, role_name),
                     )
-                )
-                cleanup_conn.execute(sql.SQL("drop role if exists {}").format(sql.Identifier(role_name)))
+                    cleanup_conn.execute(
+                        sql.SQL("revoke all privileges on database {} from {}").format(
+                            sql.Identifier(db.name), sql.Identifier(role_name)
+                        )
+                    )
+                    cleanup_conn.execute(sql.SQL("drop role if exists {}").format(sql.Identifier(role_name)))
+
+
+def _unwrap_mcp_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    if list(payload.keys()) == ["result"] and isinstance(payload["result"], dict):
+        return payload["result"]
+    return payload
 
 
 def call_mcp_tool(server: FastMCP, name: str, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -131,13 +142,13 @@ def call_mcp_tool(server: FastMCP, name: str, arguments: dict[str, Any] | None =
     if isinstance(result, tuple) and len(result) >= 2:
         content, structured = result[0], result[1]
         if isinstance(structured, dict):
-            return structured
+            return _unwrap_mcp_payload(structured)
         if content and hasattr(content[0], "text"):
             parsed = json.loads(content[0].text)
             if isinstance(parsed, dict):
-                return parsed
+                return _unwrap_mcp_payload(parsed)
     if isinstance(result, list) and result and hasattr(result[0], "text"):
         parsed = json.loads(result[0].text)
         if isinstance(parsed, dict):
-            return parsed
+            return _unwrap_mcp_payload(parsed)
     raise AssertionError(f"unexpected MCP output for {name}: {result!r}")

@@ -22,6 +22,7 @@ jobs:
       - name: Run non-blocking vendor contract smoke
         env:
           TWELVE_DATA_API_KEY: ${{ secrets.TWELVE_DATA_API_KEY }}
+          EXTERNAL_CALL_LEDGER: "off"
         run: |
           set +e
           output="$(uv run --package truealpha-data-engine python apps/data-engine/scripts/vendor_contract_smoke.py --skip-unconfigured 2>&1)"
