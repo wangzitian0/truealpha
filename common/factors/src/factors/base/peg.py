@@ -141,6 +141,7 @@ def peg(
         shares.confidence,
         *(f.confidence for f in facts if f.entity_id == entity_id and f.metric == _NET_INCOME and f.value is not None),
     ]
+    loss_year_in_window = False
     if growth_convention is GrowthConvention.ANALYST_CONSENSUS:
         conv_flags = [f"growth_convention:{GrowthConvention.ANALYST_CONSENSUS.value}"]
         consensus_series = _annual_by_period_end(facts, entity_id, _CONSENSUS_GROWTH)
@@ -156,6 +157,7 @@ def peg(
     else:
         conv_flags = [f"cagr_years:{cagr_years}"]
         growth, base_end, latest_end = _recency_weighted_growth(series, cagr_years)
+        loss_year_in_window = growth is None and base_end is not None
         if base_end is not None and latest_end is not None:
             conv_flags.append(f"window:{base_end.isoformat()}..{latest_end.isoformat()}")
         with localcontext(_DECIMAL_CONTEXT):
@@ -164,7 +166,8 @@ def peg(
     if latest_earnings <= 0:
         return refused_factor_result("peg", entity_id, as_of, ["non_positive_earnings", *conv_flags])
     if rate_pct is None:
-        return refused_factor_result("peg", entity_id, as_of, ["insufficient_earnings_history", *conv_flags])
+        reason = "loss_year_in_growth_window" if loss_year_in_window else "insufficient_earnings_history"
+        return refused_factor_result("peg", entity_id, as_of, [reason, *conv_flags])
     if rate_pct <= 0:
         return refused_factor_result("peg", entity_id, as_of, ["non_positive_growth", *conv_flags])
     return _compute_peg_ratio(
