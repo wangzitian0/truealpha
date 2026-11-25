@@ -1,7 +1,5 @@
 -- idempotent: true
--- Canonical mart schema baseline (Wave 2 squash).
-set lock_timeout = '5s';
-set statement_timeout = '30s';
+-- Canonical mart schema baseline.
 
 create schema if not exists mart;
 
@@ -32,7 +30,8 @@ create table if not exists mart.backtest_runs (
  constraint backtest_runs_pkey PRIMARY KEY (run_id),
  constraint backtest_runs_definition_sha256_shape CHECK (((definition_content_sha256 IS NULL) OR (definition_content_sha256 ~ '^[0-9a-f]{64}$'::text))),
  constraint backtest_runs_run_id_check CHECK ((run_id ~ '^backtest-run:[0-9a-f]{64}$'::text)),
- constraint backtest_runs_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'running'::text, 'succeeded'::text, 'failed'::text])))
+ constraint backtest_runs_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'running'::text, 'succeeded'::text, 'failed'::text]))),
+ constraint backtest_runs_succeeded_declares_basis CHECK (((status <> 'succeeded'::text) OR ((definition_content_sha256 IS NOT NULL) AND (price_basis IS NOT NULL) AND (claim_ceiling IS NOT NULL) AND (benchmark_rule IS NOT NULL))))
 );
 
 create table if not exists mart.cell_confidence (
@@ -154,6 +153,7 @@ create table if not exists mart.fund_virtual_company (
  constraint fund_virtual_company_factor_validation_status_check CHECK ((factor_validation_status = ANY (ARRAY['accepted'::text, 'rejected'::text, 'not_evaluated'::text]))),
  constraint fund_virtual_company_lines_check CHECK ((lines >= 0)),
  constraint fund_virtual_company_source_evidence_status_check CHECK ((source_evidence_status = ANY (ARRAY['verified'::text, 'degraded'::text, 'rejected'::text]))),
+ constraint fund_virtual_company_valuation_basis_check CHECK ((((valuation_basis = ANY (ARRAY['price_to_sales'::text, 'price_to_gross_profit'::text])) AND (weighted_valuation_gap IS NOT NULL)) OR (valuation_basis IS NULL))),
  constraint fund_virtual_company_valued_lines_check CHECK ((valued_lines >= 0))
 );
 
@@ -318,6 +318,25 @@ create table if not exists mart.nightly_verdicts (
  constraint nightly_verdicts_check_name_check CHECK ((check_name ~ '^[a-z0-9_]+(@[a-z0-9_.:-]+)?$'::text)),
  constraint nightly_verdicts_dagster_run_id_check CHECK (((char_length(dagster_run_id) >= 1) AND (char_length(dagster_run_id) <= 64))),
  constraint nightly_verdicts_summary_check CHECK (((char_length(summary) >= 1) AND (char_length(summary) <= 300)))
+);
+
+create table if not exists mart.output_invariant_results (
+ result_id bigint generated always as identity,
+ dagster_run_id text not null,
+ checked_at timestamp with time zone not null,
+ invariant_id text not null,
+ kind text not null,
+ population integer not null,
+ violation_count integer not null,
+ deferred boolean default false not null,
+ sample_rows jsonb default '[]'::jsonb not null,
+ recorded_at timestamp with time zone default clock_timestamp() not null,
+ constraint output_invariant_results_pkey primary key (result_id),
+ constraint output_invariant_results_kind_check check (kind in ('hard', 'fact')),
+ constraint output_invariant_results_population_check check (population >= 0),
+ constraint output_invariant_results_violation_count_check check (violation_count >= 0),
+ constraint output_invariant_results_dagster_run_id_check check (char_length(dagster_run_id) between 1 and 64),
+ constraint output_invariant_results_invariant_id_check check (invariant_id ~ '^[a-z0-9-]+$')
 );
 
 create table if not exists mart.oracle_outcomes (
@@ -514,6 +533,7 @@ create table if not exists mart.strategy_decisions (
  constraint strategy_decisions_peg_rank_positive CHECK (((peg_rank IS NULL) OR ((peg IS NOT NULL) AND (peg_rank >= 1)))),
  constraint strategy_decisions_source_evidence_status_check CHECK ((source_evidence_status = ANY (ARRAY['verified'::text, 'degraded'::text, 'rejected'::text]))),
  constraint strategy_decisions_strategy_decision_id_check CHECK ((strategy_decision_id ~ '^strategy-decision:[0-9a-f]{64}$'::text)),
+ constraint strategy_decisions_one_valuation_basis_check CHECK ((((target_price_to_sales IS NULL) OR (target_price_to_gross_profit IS NULL)) AND ((current_price_to_gross_profit IS NULL) = (target_price_to_gross_profit IS NULL)) AND ((current_price_to_gross_profit IS NULL) OR (current_price_to_gross_profit > (0)::numeric)))),
  constraint strategy_decisions_strategy_run_id_fkey FOREIGN KEY (strategy_run_id) REFERENCES mart.strategy_runs(strategy_run_id)
 );
 
@@ -527,21 +547,6 @@ create table if not exists mart.strategy_run_capture_bindings (
  constraint strategy_run_capture_bindings_capture_run_id_fkey FOREIGN KEY (capture_run_id) REFERENCES raw.capture_runs(run_id),
  constraint strategy_run_capture_bindings_strategy_run_id_fkey FOREIGN KEY (strategy_run_id) REFERENCES mart.strategy_runs(strategy_run_id)
 );
-
-do $$ begin if not exists (select 1 from pg_constraint where conrelid = 'mart.backtest_runs'::regclass and conname = 'backtest_runs_succeeded_declares_basis') then alter table mart.backtest_runs add constraint backtest_runs_succeeded_declares_basis CHECK (((status <> 'succeeded'::text) OR ((definition_content_sha256 IS NOT NULL) AND (price_basis IS NOT NULL) AND (claim_ceiling IS NOT NULL) AND (benchmark_rule IS NOT NULL)))); end if; end $$;
-do $$ begin if not exists (select 1 from pg_constraint where conrelid = 'mart.fund_virtual_company'::regclass and conname = 'fund_virtual_company_valuation_basis_check') then alter table mart.fund_virtual_company add constraint fund_virtual_company_valuation_basis_check CHECK ((((valuation_basis = ANY (ARRAY['price_to_sales'::text, 'price_to_gross_profit'::text])) AND (weighted_valuation_gap IS NOT NULL)) OR (valuation_basis IS NULL))); end if; end $$;
-do $$ begin if not exists (select 1 from pg_constraint where conrelid = 'mart.strategy_decisions'::regclass and conname = 'strategy_decisions_one_valuation_basis_check') then alter table mart.strategy_decisions add constraint strategy_decisions_one_valuation_basis_check CHECK ((((target_price_to_sales IS NULL) OR (target_price_to_gross_profit IS NULL)) AND ((current_price_to_gross_profit IS NULL) = (target_price_to_gross_profit IS NULL)) AND ((current_price_to_gross_profit IS NULL) OR (current_price_to_gross_profit > (0)::numeric)))); end if; end $$;
-do $$ begin
-    if exists (select 1 from pg_constraint where conrelid = 'mart.backtest_runs'::regclass and conname = 'backtest_runs_succeeded_declares_basis' and not convalidated) then
-        alter table mart.backtest_runs validate constraint backtest_runs_succeeded_declares_basis;
-    end if;
-    if exists (select 1 from pg_constraint where conrelid = 'mart.fund_virtual_company'::regclass and conname = 'fund_virtual_company_valuation_basis_check' and not convalidated) then
-        alter table mart.fund_virtual_company validate constraint fund_virtual_company_valuation_basis_check;
-    end if;
-    if exists (select 1 from pg_constraint where conrelid = 'mart.strategy_decisions'::regclass and conname = 'strategy_decisions_one_valuation_basis_check' and not convalidated) then
-        alter table mart.strategy_decisions validate constraint strategy_decisions_one_valuation_basis_check;
-    end if;
-end $$;
 
 CREATE OR REPLACE FUNCTION mart.head_freshness(p_refreshed_at timestamp with time zone, p_family text, p_as_of timestamp with time zone DEFAULT now())
  RETURNS TABLE(age_hours numeric, limit_hours integer, freshness text, availability text, staleness_reason text)
@@ -731,14 +736,6 @@ execute $vc$create or replace view mart.entity_display_resolution as
      LEFT JOIN constituent_names cn ON cn.ticker = upper(rt.ticker)
   ORDER BY rt.issuer_id$vc$;
 end if; end $$;
-do $$ begin
-    if exists (
-        select 1 from pg_class c join pg_namespace n on n.oid = c.relnamespace
-        where n.nspname = 'mart' and c.relname = 'entity_identity' and c.relkind = 'v'
-    ) then
-        drop view mart.entity_identity;
-    end if;
-end $$;
 do $$ begin if to_regclass('mart.entity_identity') is null then
 execute $vc$create materialized view mart.entity_identity as
  WITH RECURSIVE merge_edges AS (
@@ -872,31 +869,6 @@ execute $vc$create materialized view mart.entity_identity as
      LEFT JOIN issuer_listings ilist ON ilist.issuer_id = survivor.id
 WITH DATA$vc$;
 end if; end $$;
-do $$
-declare
-    v_rel text;
-    v_kind "char";
-begin
-    if exists (
-        select 1 from pg_class c join pg_namespace n on n.oid = c.relnamespace
-        where n.nspname = 'mart'
-          and c.relname in ('fund_holdings', 'fund_holdings_resolved', 'fund_holdings_coverage', 'fund_holdings_valuation')
-          and c.relkind = 'v'
-    ) then
-        for v_rel in
-            select unnest(array['fund_holdings_valuation', 'fund_holdings_coverage', 'fund_holdings_resolved', 'fund_holdings'])
-        loop
-            select c.relkind into v_kind
-            from pg_class c join pg_namespace n on n.oid = c.relnamespace
-            where n.nspname = 'mart' and c.relname = v_rel;
-            if v_kind = 'm' then
-                execute format('drop materialized view mart.%I', v_rel);
-            elsif v_kind = 'v' then
-                execute format('drop view mart.%I', v_rel);
-            end if;
-        end loop;
-    end if;
-end $$;
 do $$ begin if to_regclass('mart.fund_holdings') is null then
 execute $vc$create materialized view mart.fund_holdings as
  SELECT DISTINCT ON (facts.fund_id, facts.report_period, facts.transaction_time, (COALESCE(facts.isin, ''::text)), (COALESCE(facts.cusip, ''::text)), facts.holding_name) facts.fund_id::text AS fund_id,
@@ -1105,52 +1077,6 @@ execute $vc$create or replace view mart.capture_issuer_lineage as
           ORDER BY o.knowable_at DESC, o.observation_id DESC
          LIMIT 1) periods ON true$vc$;
 end if; end $$;
-do $$ begin if to_regclass('mart.governed_strategy_run') is null then
-execute $vc$create or replace view mart.governed_strategy_run as
-    with head as (
-        select distinct on (regexp_replace(current_pointer_head.universe_id, '-[0-9]{4}-[0-9]{2}-[0-9]{2}$', ''))
-            current_pointer_head.environment,
-            current_pointer_head.universe_id,
-            current_pointer_head.universe_version,
-            current_pointer_head.factor_id,
-            current_pointer_head.target_run_id,
-            current_pointer_head.sequence,
-            current_pointer_head.advanced_at
-        from mart.current_pointer_head
-        where current_pointer_head.environment = ((
-            select environment_identity.environment
-            from mart.environment_identity
-        ))
-          and current_pointer_head.factor_id = 'gross_profit_per_employee'::text
-          and current_pointer_head.universe_id not like 'universe:canary-%'::text
-        order by regexp_replace(current_pointer_head.universe_id, '-[0-9]{4}-[0-9]{2}-[0-9]{2}$', ''),
-                 current_pointer_head.advanced_at desc
-    )
-    select head.environment,
-        head.universe_id,
-        head.universe_version,
-        head.factor_id,
-        head.target_run_id,
-        head.sequence,
-        head.advanced_at,
-        campaign.cutoff,
-        run.strategy_run_id,
-        run.strategy_key,
-        run.executed_at
-    from head
-    join raw.capture_runs cr on cr.run_id = head.target_run_id
-    join raw.capture_campaigns campaign using (campaign_id)
-    join lateral (
-        select distinct on (candidate.strategy_key)
-            candidate.strategy_run_id,
-            candidate.strategy_key,
-            candidate.executed_at
-        from mart.strategy_run_capture_bindings binding
-        join mart.strategy_runs candidate on candidate.strategy_run_id = binding.strategy_run_id
-        where binding.capture_run_id = head.target_run_id
-        order by candidate.strategy_key, binding.bound_at desc, candidate.strategy_run_id desc
-    ) run on true$vc$;
-end if; end $$;
 do $$ begin if to_regclass('mart.served_head') is null then
 execute $vc$create or replace view mart.served_head as
  SELECT h.environment,
@@ -1191,6 +1117,56 @@ execute $vc$create or replace view mart.served_head as
   WHERE h.environment = (( SELECT environment_identity.environment
            FROM mart.environment_identity)) AND h.version_rank = 1$vc$;
 end if; end $$;
+do $$ begin
+  if to_regclass('mart.governed_strategy_run') is null
+     or position('served_head' in pg_get_viewdef(to_regclass('mart.governed_strategy_run'), true)) = 0 then
+    execute $vc$create or replace view mart.governed_strategy_run as
+    with head as (
+        select distinct on (regexp_replace(served_head.universe_id, '-[0-9]{4}-[0-9]{2}-[0-9]{2}$', ''))
+            served_head.environment,
+            served_head.universe_id,
+            served_head.universe_version,
+            served_head.factor_id,
+            served_head.run_id as target_run_id,
+            served_head.sequence,
+            served_head.advanced_at
+        from mart.served_head
+        where served_head.environment = ((
+            select environment_identity.environment
+            from mart.environment_identity
+        ))
+          and served_head.factor_id = 'gross_profit_per_employee'::text
+          and served_head.universe_id not like 'universe:canary-%'::text
+          and served_head.run_id is not null
+        order by regexp_replace(served_head.universe_id, '-[0-9]{4}-[0-9]{2}-[0-9]{2}$', ''),
+                 served_head.advanced_at desc
+    )
+    select head.environment,
+        head.universe_id,
+        head.universe_version,
+        head.factor_id,
+        head.target_run_id,
+        head.sequence,
+        head.advanced_at,
+        campaign.cutoff,
+        run.strategy_run_id,
+        run.strategy_key,
+        run.executed_at
+    from head
+    join raw.capture_runs cr on cr.run_id = head.target_run_id
+    join raw.capture_campaigns campaign using (campaign_id)
+    join lateral (
+        select distinct on (candidate.strategy_key)
+            candidate.strategy_run_id,
+            candidate.strategy_key,
+            candidate.executed_at
+        from mart.strategy_run_capture_bindings binding
+        join mart.strategy_runs candidate on candidate.strategy_run_id = binding.strategy_run_id
+        where binding.capture_run_id = head.target_run_id
+        order by candidate.strategy_key, binding.bound_at desc, candidate.strategy_run_id desc
+    ) run on true$vc$;
+  end if;
+end $$;
 do $$ begin if to_regclass('mart.served_head_environments') is null then
 execute $vc$create or replace view mart.served_head_environments as
  SELECT h.environment,
@@ -1439,6 +1415,18 @@ do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'mart.macro_
 do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'mart.macro_series_daily'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = '80ea72b8d54b6e59b77365f89addbc47') then drop trigger if exists require_stored_fetch on mart.macro_series_daily; CREATE TRIGGER require_stored_fetch BEFORE INSERT ON mart.macro_series_daily FOR EACH ROW EXECUTE FUNCTION mart.require_stored_fetch('fetch_id'); end if; end $$;
 do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'mart.metric_node_values'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = '87be4c5c674fd7caced276389918dade') then drop trigger if exists reject_mutation on mart.metric_node_values; CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON mart.metric_node_values FOR EACH ROW EXECUTE FUNCTION raw.reject_capture_control_mutation(); end if; end $$;
 do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'mart.nightly_verdicts'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = '91f17ade1c36c49bd44a8723a9c9f0a7') then drop trigger if exists reject_mutation on mart.nightly_verdicts; CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON mart.nightly_verdicts FOR EACH ROW EXECUTE FUNCTION mart.reject_mutation(); end if; end $$;
+do $$ begin
+  if not exists (
+    select 1 from pg_trigger
+    where tgrelid = 'mart.output_invariant_results'::regclass
+      and not tgisinternal
+      and tgname = 'reject_mutation'
+  ) then
+    create trigger reject_mutation
+      before delete or update on mart.output_invariant_results
+      for each row execute function mart.reject_mutation();
+  end if;
+end $$;
 do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'mart.oracle_outcomes'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = 'a1de3f75d3d027f7da5c6e9aca69587e') then drop trigger if exists reject_mutation on mart.oracle_outcomes; CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON mart.oracle_outcomes FOR EACH ROW EXECUTE FUNCTION mart.reject_mutation(); end if; end $$;
 do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'mart.research_card_artifacts'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = 'e6ccf7c0b2df791fad40662767958804') then drop trigger if exists trg_mart_research_card_artifacts_immutable on mart.research_card_artifacts; CREATE TRIGGER trg_mart_research_card_artifacts_immutable BEFORE DELETE OR UPDATE ON mart.research_card_artifacts FOR EACH ROW EXECUTE FUNCTION raw.reject_mutation(); end if; end $$;
 do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'mart.strategy_decisions'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = '6ced65234b03ac485076628b5baa0008') then drop trigger if exists trg_strategy_decisions_append_only on mart.strategy_decisions; CREATE TRIGGER trg_strategy_decisions_append_only BEFORE DELETE OR UPDATE ON mart.strategy_decisions FOR EACH ROW EXECUTE FUNCTION mart.reject_mutation(); end if; end $$;
@@ -1458,6 +1446,7 @@ do $$ begin if to_regclass('mart.ix_macro_series_daily_asof') is null then CREAT
 do $$ begin if to_regclass('mart.ix_metric_node_values_issuer_key') is null then CREATE INDEX ix_metric_node_values_issuer_key ON mart.metric_node_values USING btree (issuer_id, node_key); end if; end $$;
 do $$ begin if to_regclass('mart.ix_metric_node_values_run_key') is null then CREATE INDEX ix_metric_node_values_run_key ON mart.metric_node_values USING btree (run_id, node_key); end if; end $$;
 do $$ begin if to_regclass('mart.ix_nightly_verdicts_latest') is null then CREATE INDEX ix_nightly_verdicts_latest ON mart.nightly_verdicts USING btree (check_name, ran_at DESC, recorded_at DESC); end if; end $$;
+do $$ begin if to_regclass('mart.ix_output_invariant_results_latest') is null then CREATE INDEX ix_output_invariant_results_latest ON mart.output_invariant_results USING btree (checked_at DESC, invariant_id); end if; end $$;
 do $$ begin if to_regclass('mart.ix_question_coverage_report_universe') is null then CREATE INDEX ix_question_coverage_report_universe ON mart.question_coverage_report USING btree (universe_id, created_at DESC); end if; end $$;
 do $$ begin if to_regclass('mart.idx_strategy_decisions_issuer_cutoff') is null then CREATE INDEX idx_strategy_decisions_issuer_cutoff ON mart.strategy_decisions USING btree (issuer_id, cutoff_at); end if; end $$;
 do $$ begin if to_regclass('mart.idx_strategy_run_capture_bindings_strategy_run') is null then CREATE INDEX idx_strategy_run_capture_bindings_strategy_run ON mart.strategy_run_capture_bindings USING btree (strategy_run_id); end if; end $$;
@@ -1553,44 +1542,6 @@ from seed
 where not exists (select 1 from mart.served_artifact as present where present.artifact_key = seed.artifact_key)
 on conflict (artifact_key) do nothing;
 
-do $$
-declare
-    tbl text;
-    cname text;
-begin
-    foreach tbl in array array['mart.metric_node_values', 'mart.strategy_decisions'] loop
-        if not exists (
-            select 1
-            from pg_constraint con
-            join pg_attribute att
-              on att.attrelid = con.conrelid and att.attnum = any(con.conkey)
-            where con.conrelid = tbl::regclass
-              and con.contype = 'c'
-              and att.attname = 'availability_status'
-              and not att.attisdropped
-              and pg_get_constraintdef(con.oid) like '%not_applicable%'
-        ) then
-            select con.conname into cname
-            from pg_constraint con
-            join pg_attribute att
-              on att.attrelid = con.conrelid and att.attnum = any(con.conkey)
-            where con.conrelid = tbl::regclass
-              and con.contype = 'c'
-              and att.attname = 'availability_status'
-              and not att.attisdropped
-            limit 1;
-            if cname is not null then
-                execute format('alter table %s drop constraint %I', tbl, cname);
-            end if;
-            execute format(
-                'alter table %s add constraint %I check (availability_status in (''available'', ''unavailable'', ''stale'', ''excluded'', ''low_confidence'', ''not_applicable'', ''error''))',
-                tbl,
-                split_part(tbl, '.', 2) || '_availability_status_check'
-            );
-        end if;
-    end loop;
-end $$;
-
 do $$ begin if to_regclass('mart.universe_heads') is null then
 execute $vc$create or replace view mart.universe_heads as
  select r.kind,
@@ -1604,42 +1555,30 @@ execute $vc$create or replace view mart.universe_heads as
      join staging.contract_objects o on o.contract_id = r.contract_id$vc$;
 end if; end $$;
 
-do $$ begin if to_regclass('mart.universe_constituents') is null then
-execute $vc$create or replace view mart.universe_constituents as
- select f.etf_symbol,
-    f.ticker,
-    f.company_name,
-    f.cik,
-    f.figi,
-    f.market_cap,
-    f.as_of,
-    f.source,
-    r.payload_sha256 as fetch_sha256,
-    r.object_uri
-   from staging.etf_constituent_facts f
-     join raw.fetches r on r.id = f.raw_fetch_id
-  where f.as_of = (
-    select max(f2.as_of)
-      from staging.etf_constituent_facts f2
-     where f2.etf_symbol = f.etf_symbol
-  )$vc$;
-end if; end $$;
-
-do $$
-begin
-    if to_regclass('mart.strategy_input_coverage') is not null then
-        drop table mart.strategy_input_coverage;
-    end if;
-    if to_regclass('mart.ix_issuer_analyst_ratings_cutoff') is not null then
-        drop index mart.ix_issuer_analyst_ratings_cutoff;
-    end if;
-    if to_regclass('mart.ix_issuer_supply_chain_exposure_cutoff') is not null then
-        drop index mart.ix_issuer_supply_chain_exposure_cutoff;
-    end if;
-    if to_regclass('mart.idx_mart_research_card_artifacts_card_id') is not null then
-        drop index mart.idx_mart_research_card_artifacts_card_id;
-    end if;
-    if to_regclass('mart.ix_mart_entity_identity_listing') is not null then
-        drop index mart.ix_mart_entity_identity_listing;
-    end if;
+do $$ begin
+  if to_regclass('mart.universe_constituents') is null
+     or exists (
+       select 1 from pg_attribute
+        where attrelid = to_regclass('mart.universe_constituents')
+          and attname = 'object_uri' and not attisdropped
+     ) then
+    drop view if exists mart.universe_constituents;
+    execute $vc$create view mart.universe_constituents as
+     select f.etf_symbol,
+        f.ticker,
+        f.company_name,
+        f.cik,
+        f.figi,
+        f.market_cap,
+        f.as_of,
+        f.source,
+        r.payload_sha256 as fetch_sha256
+       from staging.etf_constituent_facts f
+         join raw.fetches r on r.id = f.raw_fetch_id
+      where f.as_of = (
+        select max(f2.as_of)
+          from staging.etf_constituent_facts f2
+         where f2.etf_symbol = f.etf_symbol
+      )$vc$;
+  end if;
 end $$;

@@ -1,7 +1,5 @@
 -- idempotent: true
--- Canonical staging schema baseline (Wave 2 squash).
-set lock_timeout = '5s';
-set statement_timeout = '30s';
+-- Canonical staging schema baseline.
 
 create schema if not exists staging;
 
@@ -363,6 +361,27 @@ create table if not exists staging.pipeline_trigger_requests (
  constraint pipeline_trigger_requests_check CHECK (((consumed_at IS NULL) = (launched_run_key IS NULL))),
  constraint pipeline_trigger_requests_job_name_check CHECK ((job_name = ANY (ARRAY['topt_live_pipeline'::text, 'qqq_live_pipeline'::text, 'sp500_live_pipeline'::text, 'canary_live_pipeline'::text]))),
  constraint pipeline_trigger_requests_requested_by_check CHECK ((length(requested_by) > 0))
+);
+
+create table if not exists staging.head_rollback_requests (
+    request_id bigint generated always as identity,
+    environment text not null,
+    universe_id text not null,
+    universe_version text not null,
+    factor_id text not null,
+    target_run_id text not null,
+    reason text not null,
+    requested_by text not null,
+    dedupe_key text not null,
+    requested_at timestamp with time zone default clock_timestamp() not null,
+    consumed_at timestamp with time zone,
+    result_pointer_id text,
+    constraint head_rollback_requests_pkey primary key (request_id),
+    constraint head_rollback_requests_dedupe_key_key unique (dedupe_key),
+    constraint head_rollback_requests_consumed_pair_check check ((consumed_at is null) = (result_pointer_id is null)),
+    constraint head_rollback_requests_reason_check check (length(btrim(reason)) > 0),
+    constraint head_rollback_requests_requested_by_check check (length(btrim(requested_by)) > 0),
+    constraint head_rollback_requests_target_run_check check (split_part(target_run_id, ':', 1) = 'capture-run')
 );
 
 create table if not exists staging.strategy_backtest_inputs (
@@ -1273,6 +1292,14 @@ begin
     raise exception 'evidence records are append-only; append a new node/edge instead';
 end;
 $function$;
+CREATE OR REPLACE FUNCTION staging.reject_head_rollback_delete()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+begin
+    raise check_violation using message = 'head rollback requests are an append-only audit trail';
+end;
+$function$;
 CREATE OR REPLACE FUNCTION staging.reject_pipeline_trigger_delete()
  RETURNS trigger
  LANGUAGE plpgsql
@@ -1341,6 +1368,29 @@ begin
        or new.requested_at <> old.requested_at
        or new.force_fetch <> old.force_fetch then
         raise check_violation using message = 'pipeline trigger request fields are immutable';
+    end if;
+    return new;
+end;
+$function$;
+CREATE OR REPLACE FUNCTION staging.validate_head_rollback_update()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+begin
+    if old.consumed_at is not null then
+        raise check_violation using message = 'head rollback request already consumed';
+    end if;
+    if new.request_id <> old.request_id
+       or new.environment <> old.environment
+       or new.universe_id <> old.universe_id
+       or new.universe_version <> old.universe_version
+       or new.factor_id <> old.factor_id
+       or new.target_run_id <> old.target_run_id
+       or new.reason <> old.reason
+       or new.requested_by <> old.requested_by
+       or new.dedupe_key <> old.dedupe_key
+       or new.requested_at <> old.requested_at then
+        raise check_violation using message = 'head rollback request fields are immutable';
     end if;
     return new;
 end;
@@ -1491,7 +1541,6 @@ execute $vc$create or replace view staging.accepted_ruleset_head as
    FROM staging.accepted_rulesets
   ORDER BY accepted_rulesets.kind, accepted_rulesets.sequence DESC$vc$;
 end if; end $$;
-do $$ begin if to_regclass('staging.analyst_rating_events') is not null then drop table staging.analyst_rating_events; end if; end $$;
 do $$ begin if not exists (select 1 from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'staging' and c.relname = 'entity_backfill_plan' and md5(pg_get_viewdef(c.oid)) = '4fd2a143d605c541e78246cea4279cc5') then
 execute $vc$create or replace view staging.entity_backfill_plan as
 with usage as (
@@ -1953,6 +2002,30 @@ do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'staging.mar
 do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'staging.model_invocations'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = 'f4eed3ab505235da7ad42f852a85b296') then drop trigger if exists reject_mutation on staging.model_invocations; CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON staging.model_invocations FOR EACH ROW EXECUTE FUNCTION raw.reject_mutation(); end if; end $$;
 do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'staging.pipeline_trigger_requests'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = '60b2cbed702e09257811e325bd3d8422') then drop trigger if exists reject_trigger_delete on staging.pipeline_trigger_requests; CREATE TRIGGER reject_trigger_delete BEFORE DELETE ON staging.pipeline_trigger_requests FOR EACH ROW EXECUTE FUNCTION staging.reject_pipeline_trigger_delete(); end if; end $$;
 do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'staging.pipeline_trigger_requests'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = 'ccb40a047cd2d232acdbb00c9659605b') then drop trigger if exists validate_trigger_update on staging.pipeline_trigger_requests; CREATE TRIGGER validate_trigger_update BEFORE UPDATE ON staging.pipeline_trigger_requests FOR EACH ROW EXECUTE FUNCTION staging.validate_pipeline_trigger_update(); end if; end $$;
+do $$ begin
+  if not exists (
+    select 1 from pg_trigger
+    where tgrelid = 'staging.head_rollback_requests'::regclass
+      and not tgisinternal
+      and tgname = 'reject_head_rollback_delete'
+  ) then
+    create trigger reject_head_rollback_delete
+      before delete on staging.head_rollback_requests
+      for each row execute function staging.reject_head_rollback_delete();
+  end if;
+end $$;
+do $$ begin
+  if not exists (
+    select 1 from pg_trigger
+    where tgrelid = 'staging.head_rollback_requests'::regclass
+      and not tgisinternal
+      and tgname = 'validate_head_rollback_update'
+  ) then
+    create trigger validate_head_rollback_update
+      before update on staging.head_rollback_requests
+      for each row execute function staging.validate_head_rollback_update();
+  end if;
+end $$;
 do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'staging.core_snapshot_members'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = '56604115308729397b03ef37195b8e35') then drop trigger if exists reject_mutation on staging.core_snapshot_members; CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON staging.core_snapshot_members FOR EACH ROW EXECUTE FUNCTION raw.reject_capture_control_mutation(); end if; end $$;
 do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'staging.core_snapshot_members'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = '1824f0b6a6a1d9b451608875e265ddb7') then drop trigger if exists validate_member on staging.core_snapshot_members; CREATE TRIGGER validate_member BEFORE INSERT ON staging.core_snapshot_members FOR EACH ROW EXECUTE FUNCTION staging.validate_core_snapshot_member(); end if; end $$;
 do $$ begin if not exists (select 1 from pg_trigger where tgrelid = 'staging.core_snapshots'::regclass and not tgisinternal and md5(pg_get_triggerdef(oid)) = '7a1b7a74986466bcc6ce6aeecdbfa49f') then drop trigger if exists reject_mutation on staging.core_snapshots; CREATE TRIGGER reject_mutation BEFORE DELETE OR UPDATE ON staging.core_snapshots FOR EACH ROW EXECUTE FUNCTION raw.reject_capture_control_mutation(); end if; end $$;
@@ -2089,22 +2162,3 @@ where not exists (
     where issuer_id = 'issuer:lei:J3WHBG0MTS7O8ZVMDC91'
 )
 on conflict (issuer_id) do nothing;
-
-do $$
-begin
-    if to_regclass('staging.capture_entity_refs') is not null then
-        drop table staging.capture_entity_refs;
-    end if;
-    if to_regclass('staging.market_prices_monthly') is not null then
-        drop table staging.market_prices_monthly;
-    end if;
-    if to_regclass('staging.universe_mask') is not null then
-        drop table staging.universe_mask;
-    end if;
-    if to_regclass('staging.idx_contract_objects_quality_review_run') is not null then
-        drop index staging.idx_contract_objects_quality_review_run;
-    end if;
-    if to_regclass('staging.idx_contract_objects_usage_audit_run') is not null then
-        drop index staging.idx_contract_objects_usage_audit_run;
-    end if;
-end $$;

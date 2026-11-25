@@ -81,7 +81,7 @@ esac
 redacted="${redacted}/${database}"
 
 # The VPS publishes its Postgres containers on the VPS's own loopback: production on
-# 15433 and staging on 15432 (AGENTS.md, "Environments and source gotchas"). An operator
+# 15433 and staging on 15432 (AGENTS.md, "Environments and load on demand"). An operator
 # reaches them through an SSH tunnel, so on the operator's machine the DSN reads
 # `127.0.0.1:15433` and the host test below calls it local, while the database behind it
 # is production. The host cannot tell the two apart. The port can: no local database in

@@ -339,7 +339,7 @@ def load_universes_panel(*, database_url: str | None = None) -> UniverseOverview
             cur.execute(
                 """
                 select ticker, company_name, cik, figi, market_cap::text as market_cap,
-                       as_of::text as as_of, source, fetch_sha256, object_uri
+                       as_of::text as as_of, source, fetch_sha256
                 from mart.universe_constituents
                 where etf_symbol = %s
                 order by ticker
