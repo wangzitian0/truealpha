@@ -8,6 +8,8 @@ import pytest
 import yaml
 from truealpha_runtime.testing import load_tool
 
+pytestmark = pytest.mark.gate
+
 _tool = load_tool("promote_release_image")
 Response, digest_of, promote, source_tag_for = _tool.Response, _tool.digest_of, _tool.promote, _tool.source_tag_for
 
