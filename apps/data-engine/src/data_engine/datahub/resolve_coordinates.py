@@ -217,17 +217,24 @@ def _assert_relation(
 
 
 def _claimants(
-    connection: psycopg.Connection[Any], relation_type: str, targets: Sequence[uuid.UUID]
+    connection: psycopg.Connection[Any],
+    relation_type: str,
+    targets: Sequence[uuid.UUID],
+    *,
+    as_of: date,
 ) -> tuple[list[uuid.UUID], list[uuid.UUID]]:
-    """The entities that hold `relation_type` to one of `targets`: their ids and their survivors, oldest claim first."""
+    """The entities holding `relation_type` to one of `targets` at `as_of`: their ids and survivors, oldest first."""
     rows = connection.execute(
         "select relation.from_entity_id, staging.entity_survivor(relation.from_entity_id, 'infinity'::timestamptz)"
         " from staging.entity_relations relation"
-        " where relation.relation_type = %s and relation.to_entity_id = any(%s)"
+        " where relation.relation_type = %(relation_type)s and relation.to_entity_id = any(%(targets)s)"
+        " and relation.valid_from <= %(as_of)s"
+        " and coalesce(%(as_of)s < relation.valid_to, true)"
         " and not exists (select 1 from staging.entity_retractions retraction"
-        "                 where retraction.relation_id = relation.relation_id)"
+        "                 where retraction.relation_id = relation.relation_id"
+        "                 and retraction.valid_to <= %(as_of)s)"
         " order by relation.transaction_time, relation.relation_id",
-        (relation_type, list(targets)),
+        {"relation_type": relation_type, "targets": list(targets), "as_of": as_of},
     ).fetchall()
     return list(dict.fromkeys(row[0] for row in rows)), list(dict.fromkeys(row[1] for row in rows))
 
@@ -325,11 +332,11 @@ def resolve_coordinates(
             result[listing_raw] = (issuer_raw, instrument_raw, listing_raw, ticker)
             continue
         listing_uuid = resolve_entity(connection, listing_raw, "listing", as_of=as_of, known_at=known_at)
-        listed_ids, listed = _claimants(connection, "listed_as", [listing_uuid])
+        listed_ids, listed = _claimants(connection, "listed_as", [listing_uuid], as_of=as_of)
         instrument_uuid = _one_entity(
             connection, instrument_raw, "instrument", listed, listing=listing_uuid, as_of=as_of, known_at=known_at
         )
-        _issuing_ids, issuing = _claimants(connection, "issues", [*listed_ids, instrument_uuid])
+        _issuing_ids, issuing = _claimants(connection, "issues", [*listed_ids, instrument_uuid], as_of=as_of)
         issuer_uuid = _one_entity(
             connection, issuer_raw, "issuer", issuing, listing=listing_uuid, as_of=as_of, known_at=known_at
         )
