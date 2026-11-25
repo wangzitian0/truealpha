@@ -1453,22 +1453,18 @@ do $$ begin if to_regclass('mart.idx_backtest_trades_run') is null then CREATE I
 do $$ begin if to_regclass('mart.idx_mart_cell_confidence_observation') is null then CREATE INDEX idx_mart_cell_confidence_observation ON mart.cell_confidence USING btree (observation_id) WHERE (observation_id IS NOT NULL); end if; end $$;
 do $$ begin if to_regclass('mart.ix_datahub_confidence_report_universe') is null then CREATE INDEX ix_datahub_confidence_report_universe ON mart.datahub_confidence_report USING btree (universe_id, created_at DESC); end if; end $$;
 do $$ begin if to_regclass('mart.ix_fund_virtual_company_fund') is null then CREATE INDEX ix_fund_virtual_company_fund ON mart.fund_virtual_company USING btree (fund_id, cutoff DESC); end if; end $$;
-do $$ begin if to_regclass('mart.ix_issuer_analyst_ratings_cutoff') is null then CREATE INDEX ix_issuer_analyst_ratings_cutoff ON mart.issuer_analyst_ratings USING btree (cutoff DESC, consensus_rating DESC NULLS LAST); end if; end $$;
-do $$ begin if to_regclass('mart.ix_issuer_supply_chain_exposure_cutoff') is null then CREATE INDEX ix_issuer_supply_chain_exposure_cutoff ON mart.issuer_supply_chain_exposure USING btree (cutoff DESC, exposure_score DESC NULLS LAST); end if; end $$;
 do $$ begin if to_regclass('mart.ix_issuer_theme_purity_ranking') is null then CREATE INDEX ix_issuer_theme_purity_ranking ON mart.issuer_theme_purity USING btree (theme_id, cutoff DESC, theme_share DESC NULLS LAST); end if; end $$;
 do $$ begin if to_regclass('mart.ix_macro_series_daily_asof') is null then CREATE INDEX ix_macro_series_daily_asof ON mart.macro_series_daily USING btree (series_id, observation_date DESC, recorded_at DESC, id DESC); end if; end $$;
 do $$ begin if to_regclass('mart.ix_metric_node_values_issuer_key') is null then CREATE INDEX ix_metric_node_values_issuer_key ON mart.metric_node_values USING btree (issuer_id, node_key); end if; end $$;
 do $$ begin if to_regclass('mart.ix_metric_node_values_run_key') is null then CREATE INDEX ix_metric_node_values_run_key ON mart.metric_node_values USING btree (run_id, node_key); end if; end $$;
 do $$ begin if to_regclass('mart.ix_nightly_verdicts_latest') is null then CREATE INDEX ix_nightly_verdicts_latest ON mart.nightly_verdicts USING btree (check_name, ran_at DESC, recorded_at DESC); end if; end $$;
 do $$ begin if to_regclass('mart.ix_question_coverage_report_universe') is null then CREATE INDEX ix_question_coverage_report_universe ON mart.question_coverage_report USING btree (universe_id, created_at DESC); end if; end $$;
-do $$ begin if to_regclass('mart.idx_mart_research_card_artifacts_card_id') is null then CREATE INDEX idx_mart_research_card_artifacts_card_id ON mart.research_card_artifacts USING btree (card_id); end if; end $$;
 do $$ begin if to_regclass('mart.idx_strategy_decisions_issuer_cutoff') is null then CREATE INDEX idx_strategy_decisions_issuer_cutoff ON mart.strategy_decisions USING btree (issuer_id, cutoff_at); end if; end $$;
 do $$ begin if to_regclass('mart.idx_strategy_run_capture_bindings_strategy_run') is null then CREATE INDEX idx_strategy_run_capture_bindings_strategy_run ON mart.strategy_run_capture_bindings USING btree (strategy_run_id); end if; end $$;
 do $$ begin if to_regclass('mart.idx_strategy_runs_strategy_key_order') is null then CREATE INDEX idx_strategy_runs_strategy_key_order ON mart.strategy_runs USING btree (strategy_key, executed_at DESC, created_at DESC, strategy_run_id DESC); end if; end $$;
 do $$ begin if to_regclass('mart.idx_current_pointer_target_run') is null then CREATE INDEX idx_current_pointer_target_run ON mart.current_pointer USING btree (target_run_id); end if; end $$;
 do $$ begin if to_regclass('mart.idx_current_pointer_previous_run') is null then CREATE INDEX idx_current_pointer_previous_run ON mart.current_pointer USING btree (previous_run_id) WHERE (previous_run_id IS NOT NULL); end if; end $$;
 do $$ begin if to_regclass('mart.uq_mart_entity_identity') is null then CREATE UNIQUE INDEX uq_mart_entity_identity ON mart.entity_identity USING btree (entity_id) NULLS NOT DISTINCT; end if; end $$;
-do $$ begin if to_regclass('mart.ix_mart_entity_identity_listing') is null then CREATE INDEX ix_mart_entity_identity_listing ON mart.entity_identity USING btree (listing_id) WHERE (listing_id IS NOT NULL); end if; end $$;
 do $$ begin if to_regclass('mart.ix_mart_entity_identity_entity_text') is null then CREATE INDEX ix_mart_entity_identity_entity_text ON mart.entity_identity USING btree (((entity_id)::text)); end if; end $$;
 do $$ begin if to_regclass('mart.uq_mart_fund_holdings') is null then CREATE UNIQUE INDEX uq_mart_fund_holdings ON mart.fund_holdings USING btree (fund_id, report_period, transaction_time, isin, cusip, holding_name) NULLS NOT DISTINCT; end if; end $$;
 do $$ begin if to_regclass('mart.uq_mart_fund_holdings_resolved') is null then CREATE UNIQUE INDEX uq_mart_fund_holdings_resolved ON mart.fund_holdings_resolved USING btree (fund_id, report_period, transaction_time, isin, cusip, holding_name) NULLS NOT DISTINCT; end if; end $$;
@@ -1633,5 +1629,17 @@ do $$
 begin
     if to_regclass('mart.strategy_input_coverage') is not null then
         drop table mart.strategy_input_coverage;
+    end if;
+    if to_regclass('mart.ix_issuer_analyst_ratings_cutoff') is not null then
+        drop index mart.ix_issuer_analyst_ratings_cutoff;
+    end if;
+    if to_regclass('mart.ix_issuer_supply_chain_exposure_cutoff') is not null then
+        drop index mart.ix_issuer_supply_chain_exposure_cutoff;
+    end if;
+    if to_regclass('mart.idx_mart_research_card_artifacts_card_id') is not null then
+        drop index mart.idx_mart_research_card_artifacts_card_id;
+    end if;
+    if to_regclass('mart.ix_mart_entity_identity_listing') is not null then
+        drop index mart.ix_mart_entity_identity_listing;
     end if;
 end $$;

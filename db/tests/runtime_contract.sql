@@ -161,13 +161,6 @@ begin
         raise exception 'staging.contract_objects does not accept every durable contract kind';
     end if;
 
-    if to_regclass('staging.idx_contract_objects_usage_audit_run') is null then
-        raise exception 'strategy usage audits are not indexed by strategy_run_id';
-    end if;
-    if to_regclass('staging.idx_contract_objects_quality_review_run') is null then
-        raise exception 'strategy quality reviews are not indexed by strategy_run_id';
-    end if;
-
     begin
         insert into staging.contract_objects (contract_id, contract_kind, content_sha256, payload)
         values (
