@@ -1,4 +1,4 @@
-"""The MCP endpoint registering 17 1:1 research mart tools behind BearerTokenGate (#1748)."""
+"""The MCP endpoint registering read-only research mart and admin fact tools behind BearerTokenGate (#1748)."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
 from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import BaseModel, ConfigDict
+from truealpha_runtime.access import PrincipalKind
 from truealpha_runtime.issuer_modules_mart import (
     AnalystRatings,
     IssuerModuleReader,
@@ -37,6 +38,13 @@ from truealpha_runtime.strategy_run import StrategyRunReadRepository, StrategyRu
 from truealpha_runtime.strategy_run_postgres import PostgresStrategyRunRepository
 
 from llm_service.config import settings
+from llm_service.services.admin_service import (
+    DatahubStatsResponse,
+    OpsOverviewResponse,
+    build_datahub_fact_diff,
+    get_datahub_stats,
+    get_ops_overview,
+)
 from llm_service.services.auth_service import MCP_OWNER_PRINCIPAL_ID, resolve_mcp_access_context
 from llm_service.services.entities_service import (
     TraceResponse,
@@ -179,6 +187,17 @@ class LibraryDocumentCreateToolRequest(_ToolModel):
 
 class LibraryDocumentDetailToolRequest(_ToolModel):
     document_id: str
+
+
+class AdminDatahubFactsResponse(BaseModel):
+    facts: DatahubStatsResponse
+    diff: dict[str, Any]
+
+
+def _require_mcp_admin() -> None:
+    ctx = resolve_mcp_access_context()
+    if ctx.principal_kind is not PrincipalKind.ADMINISTRATOR:
+        raise ToolError("administrator principal required")
 
 
 class _AuditedFastMCP(FastMCP):
@@ -520,5 +539,22 @@ def build_mcp_server(
     )
     def library_document_detail(request: LibraryDocumentDetailToolRequest) -> DocumentDetailResponse | None:
         return get_document_detail(resolve_mcp_access_context(), document_id=request.document_id)
+
+    @server.tool(
+        name="admin_ops_snapshot",
+        description="Read operational Dagster run status, dependency health, served heads, and nightly verdicts.",
+    )
+    def admin_ops_snapshot() -> OpsOverviewResponse:
+        _require_mcp_admin()
+        return get_ops_overview()
+
+    @server.tool(
+        name="admin_datahub_facts",
+        description="Read full DataHub telemetry, oracle outcomes, quotas, invariants, and per-run deltas.",
+    )
+    def admin_datahub_facts() -> AdminDatahubFactsResponse:
+        _require_mcp_admin()
+        stats = get_datahub_stats()
+        return AdminDatahubFactsResponse(facts=stats, diff=build_datahub_fact_diff(stats))
 
     return server

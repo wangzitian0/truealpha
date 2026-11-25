@@ -1160,6 +1160,47 @@
         }
       }
     },
+    "/api/v1/admin/head-rollback": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Head Rollback",
+        "operationId": "admin_head_rollback",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HeadRollbackRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HeadRollbackResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/livez": {
       "get": {
         "tags": [
@@ -2112,6 +2153,78 @@
             },
             "type": "array",
             "title": "Oracle Outcomes"
+          },
+          "served_heads": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Served Heads"
+          },
+          "served_artifacts": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Served Artifacts"
+          },
+          "nightly_verdicts": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Nightly Verdicts"
+          },
+          "output_invariants": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Output Invariants"
+          },
+          "oracle_disagreements": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Oracle Disagreements"
+          },
+          "llm_usage": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Llm Usage"
+          },
+          "backfill_health": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Backfill Health"
+          },
+          "trigger_queue": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Trigger Queue"
+          },
+          "rollback_requests": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Rollback Requests"
           }
         },
         "type": "object",
@@ -2644,6 +2757,108 @@
         "type": "object",
         "title": "HTTPValidationError"
       },
+      "HeadRollbackRequest": {
+        "properties": {
+          "universe_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Universe Id"
+          },
+          "universe_version": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Universe Version"
+          },
+          "factor_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Factor Id",
+            "default": "gross_profit_per_employee"
+          },
+          "target_run_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Target Run Id"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Reason"
+          },
+          "environment": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Environment"
+          }
+        },
+        "type": "object",
+        "required": [
+          "universe_id",
+          "universe_version",
+          "target_run_id",
+          "reason"
+        ],
+        "title": "HeadRollbackRequest"
+      },
+      "HeadRollbackResponse": {
+        "properties": {
+          "request_id": {
+            "type": "integer",
+            "title": "Request Id"
+          },
+          "dedupe_key": {
+            "type": "string",
+            "title": "Dedupe Key"
+          },
+          "environment": {
+            "type": "string",
+            "title": "Environment"
+          },
+          "universe_id": {
+            "type": "string",
+            "title": "Universe Id"
+          },
+          "universe_version": {
+            "type": "string",
+            "title": "Universe Version"
+          },
+          "factor_id": {
+            "type": "string",
+            "title": "Factor Id"
+          },
+          "target_run_id": {
+            "type": "string",
+            "title": "Target Run Id"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "requested_at": {
+            "type": "string",
+            "title": "Requested At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "request_id",
+          "dedupe_key",
+          "environment",
+          "universe_id",
+          "universe_version",
+          "factor_id",
+          "target_run_id",
+          "reason",
+          "requested_at"
+        ],
+        "title": "HeadRollbackResponse"
+      },
       "HealthResponse": {
         "properties": {
           "status": {
@@ -2985,6 +3200,54 @@
             "type": "string",
             "title": "App Git Sha",
             "default": "unknown"
+          },
+          "served_heads": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Served Heads"
+          },
+          "nightly_verdicts": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Nightly Verdicts"
+          },
+          "dependencies": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Dependencies"
+          },
+          "failed_job_errors": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Failed Job Errors"
+          },
+          "trigger_queue": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Trigger Queue"
+          },
+          "rollback_requests": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Rollback Requests"
           }
         },
         "type": "object",
@@ -3197,6 +3460,44 @@
               }
             ],
             "title": "Strategy Run Id"
+          },
+          "governed": {
+            "type": "boolean",
+            "title": "Governed",
+            "default": false
+          },
+          "head_age_hours": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Head Age Hours"
+          },
+          "head_limit_hours": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Head Limit Hours"
+          },
+          "head_freshness": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Head Freshness"
           },
           "definition_version": {
             "anyOf": [
@@ -3564,6 +3865,35 @@
             "title": "Availability",
             "default": "unavailable"
           },
+          "source_evidence_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Evidence Status"
+          },
+          "factor_validation_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Factor Validation Status"
+          },
+          "peg_reason_codes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Peg Reason Codes"
+          },
           "trace_id": {
             "type": "string",
             "title": "Trace Id",
@@ -3853,6 +4183,11 @@
             },
             "type": "array",
             "title": "Groups"
+          },
+          "unvisited_count": {
+            "type": "integer",
+            "title": "Unvisited Count",
+            "default": 0
           }
         },
         "type": "object",

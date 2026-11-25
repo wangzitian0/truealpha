@@ -56,6 +56,8 @@ class _RecordingRepository:
 
 
 _EXPECTED_MCP_TOOLS = [
+    "admin_datahub_facts",
+    "admin_ops_snapshot",
     "entities_analyst_ratings",
     "entities_detail",
     "entities_holdings",
@@ -80,7 +82,7 @@ _EXPECTED_MCP_TOOLS = [
 async def test_advertises_the_expected_tools() -> None:
     tools = await build_mcp_server().list_tools()
     assert sorted(tool.name for tool in tools) == _EXPECTED_MCP_TOOLS
-    assert len(tools) == 17
+    assert len(tools) == 19
     strategy_tool = next(t for t in tools if t.name == "strategy_rankings")
     assert strategy_tool.inputSchema["required"] == ["request"]
     assert strategy_tool.outputSchema is not None

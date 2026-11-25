@@ -225,3 +225,74 @@ def test_strategy_page_passes_universe_and_drops_float_casts(monkeypatch: pytest
     assert not page.available
     assert page.universe == "qqq"
     assert recorded == [(strategy_service.DASHBOARD_STRATEGY_ID, "qqq")]
+
+
+@pytest.mark.parametrize("status_val", ["low_confidence", "stale", "error", "not_applicable"])
+def test_strategy_decision_preserves_degraded_availability_and_head_freshness(
+    monkeypatch: pytest.MonkeyPatch, status_val: str
+) -> None:
+    from datetime import UTC, datetime
+    from decimal import Decimal
+
+    from llm_service.services.auth_service import PrincipalRecord, access_context_for
+    from truealpha_contracts.execution import AvailabilityStatus
+    from truealpha_contracts.research import ValuationTier
+    from truealpha_runtime.strategy_run import (
+        StrategyRunDecision,
+        StrategyRunOutcome,
+        StrategyRunReport,
+    )
+
+    decision = StrategyRunDecision(
+        issuer_id="issuer:cik:0000000001",
+        cutoff_at=datetime(2026, 11, 20, tzinfo=UTC),
+        capital_adjusted_labor_efficiency=Decimal("2.5"),
+        tier=ValuationTier.TECH,
+        current_price_to_sales=Decimal("4.0"),
+        target_price_to_sales=Decimal("5.0"),
+        valuation_gap=Decimal("0.25"),
+        eligible=True,
+        outcome=StrategyRunOutcome.SELECTED,
+        availability_status=AvailabilityStatus(status_val),
+        source_evidence_status="degraded",
+        factor_validation_status="accepted",
+        peg_reason_codes=("low_filing_confidence",),
+        rank=1,
+        target_weight=Decimal("0.5"),
+    )
+    report = StrategyRunReport(
+        strategy_id="large_model_value_v0",
+        corpus_sha256="a" * 64,
+        decisions=(decision,),
+        strategy_run_id=f"strategy-run:{'b' * 64}",
+        governed=True,
+        head_age_hours=12.5,
+        head_limit_hours=72.0,
+        head_freshness="fresh",
+    )
+
+    class _FakeRepo:
+        def __init__(self, *, database_url: str) -> None:
+            del database_url
+
+        def get_latest(self, **_k: object) -> StrategyRunReport:
+            return report
+
+    monkeypatch.setattr(strategy_service, "PostgresStrategyRunRepository", _FakeRepo)
+    monkeypatch.setattr(strategy_service, "load_entity_display_items", lambda **_k: {})
+    monkeypatch.setattr(strategy_service, "_load_strategy_provenance", lambda *_a, **_k: {})
+    monkeypatch.setattr(strategy_service, "_load_wide_panel", lambda *_a, **_k: {})
+
+    ctx = access_context_for(PrincipalRecord(principal_id="p:1", tenant_id="t:1", principal_kind="member"))
+    page = strategy_service.get_strategy_run_page(ctx, universe="all", database_url="postgresql://unused")
+    rankings = strategy_service.get_rankings(ctx, universe="all", database_url="postgresql://unused")
+
+    assert page.governed is True
+    assert page.head_age_hours == 12.5
+    assert page.head_limit_hours == 72.0
+    assert page.head_freshness == "fresh"
+    assert page.decisions[0].availability == status_val
+    assert page.decisions[0].source_evidence_status == "degraded"
+    assert page.decisions[0].factor_validation_status == "accepted"
+    assert page.decisions[0].peg_reason_codes == ["low_filing_confidence"]
+    assert rankings.head_freshness == "fresh" and rankings.rows[0].availability == status_val

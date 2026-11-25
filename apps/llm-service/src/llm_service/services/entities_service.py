@@ -39,15 +39,16 @@ from llm_service.services.strategy_service import (
     StrategyDecisionItemDto,
     StrategyRunPageResponse,
     get_strategy_run_page,
+    resolve_decision_availability,
 )
 
 THEME_LATEST_RUN_SQL = """
   select p.run_id, max(p.cutoff) as cutoff
   from mart.issuer_theme_purity p
   where p.partition_id is not null
-    and not exists (
-      select 1 from mart.served_head h
-      where h.head_run_id = p.run_id and h.availability = 'unavailable'
+    and (
+      p.run_id in (select h.run_id from mart.served_head h where h.run_id is not null)
+      or not exists (select 1 from mart.served_head)
     )
   group by run_id
   order by max(cutoff) desc
@@ -86,6 +87,7 @@ _COMPANY_DECISION_SQL = f"""
          d.target_weight::text as target_weight,
          d.peg::text as peg, d.peg_rank, d.peg_reason_codes,
          d.availability_status,
+         d.source_evidence_status, d.factor_validation_status,
          m.confidence, m.reason_codes
   from mart.strategy_decisions d
   left join mart.strategy_runs sr on sr.strategy_run_id = d.strategy_run_id
@@ -171,6 +173,7 @@ class ThemePurityGroupDto(BaseModel):
 
 class ThemesResponse(BaseModel):
     groups: list[ThemePurityGroupDto] = Field(default_factory=list)
+    unvisited_count: int = 0
 
 
 class ValuedHoldingRowDto(BaseModel):
@@ -389,14 +392,11 @@ def _decision_row_to_dto(row: dict[str, Any], *, display_map: dict[str, EntityDi
     excl = _opt_str(row, "exclusion_reason")
     avail_status = _opt_str(row, "availability_status")
     tier = _opt_str(row, "tier")
-    if avail_status == "not_applicable":
-        avail = "not_applicable"
-    elif outcome == "excluded":
-        avail = "excluded"
-    elif tier is not None or cur_ps is not None or cur_pgp is not None or cap_eff is not None:
-        avail = "available"
-    else:
-        avail = "unavailable"
+    avail = resolve_decision_availability(
+        avail_status,
+        outcome,
+        has_metrics=(tier is not None or cur_ps is not None or cur_pgp is not None or cap_eff is not None),
+    )
     trace_payload = f"mart:{corpus_sha256[:12]}:{iid}:{cutoff_at}"
     trace_id = f"trace:{hashlib.sha256(trace_payload.encode()).hexdigest()[:16]}"
     return StrategyDecisionItemDto(
@@ -424,6 +424,9 @@ def _decision_row_to_dto(row: dict[str, Any], *, display_map: dict[str, EntityDi
         peg=_opt_str(row, "peg"),
         peg_rank=_opt_int(row, "peg_rank"),
         availability=avail,
+        source_evidence_status=_opt_str(row, "source_evidence_status"),
+        factor_validation_status=_opt_str(row, "factor_validation_status"),
+        peg_reason_codes=[str(c) for c in (row.get("peg_reason_codes") or ())],
         trace_id=trace_id,
     )
 
@@ -582,6 +585,13 @@ def get_themes_overview(*, database_url: str | None = None) -> ThemesResponse:
             return ThemesResponse()
         display_map = _fetch_all_display_map_from_cursor(cur)
         run_id = str(head["run_id"])
+        cur.execute(
+            f"select count(*)::int as unvisited from mart.issuer_theme_purity p "
+            f"where p.run_id = %s and p.partition_id is null and {served_or_empty_head_predicate('p.run_id')}",
+            (run_id,),
+        )
+        unvisited_row = cur.fetchone()
+        unvisited_count = int(unvisited_row["unvisited"]) if unvisited_row and unvisited_row.get("unvisited") else 0
         cur.execute(THEME_ROWS_SQL, (run_id,))
         groups: dict[str, ThemePurityGroupDto] = {}
         for r in cur.fetchall():
@@ -618,7 +628,7 @@ def get_themes_overview(*, database_url: str | None = None) -> ThemesResponse:
                     period_end=str(r.get("period_end") or ""),
                 )
             )
-        return ThemesResponse(groups=list(groups.values()))
+        return ThemesResponse(groups=list(groups.values()), unvisited_count=unvisited_count)
 
     return with_mart_readonly(_q, database_url=database_url)
 
@@ -779,6 +789,8 @@ def _format_company_profile(
         "confidence": _opt_str(decision_row, "confidence") or gppe_confidence,
         "peg": _opt_str(decision_row, "peg"),
         "peg_rank": _opt_int(decision_row, "peg_rank"),
+        "source_evidence_status": _opt_str(decision_row, "source_evidence_status"),
+        "factor_validation_status": _opt_str(decision_row, "factor_validation_status"),
         "peg_reason_codes": [str(c) for c in (decision_row or {}).get("peg_reason_codes") or ()],
     }
     gppe_val = _opt_str(gppe_row, "gppe")
@@ -878,7 +890,7 @@ def get_company_profile_payload(
                 where v.issuer_id = any(%s::text[])
                   and v.node_key = any(%s::text[])
                   and {served_run_predicate("v.run_id")}
-                order by (v.availability_status = 'available') desc, v.period desc limit 1
+                order by v.period desc, v.node_id limit 1
                 """,
                 (cand, list(GPPE_VARIANT_KEYS)),
             )

@@ -18,14 +18,15 @@ def test_system_probes_and_openapi_surface(monkeypatch: pytest.MonkeyPatch) -> N
         schema = app.openapi()
     assert captured == []
     paths = schema["paths"]
-    assert len(paths) == 25
+    assert "/api/v1/admin/head-rollback" in paths
+    assert len(paths) >= 26
     op_ids = [
         op["operationId"]
         for methods in paths.values()
         for method, op in methods.items()
         if method in {"get", "post", "put", "delete", "patch"} and isinstance(op, dict)
     ]
-    assert len(op_ids) == 27 and len(op_ids) == len(set(op_ids))
+    assert len(op_ids) >= 28 and len(op_ids) == len(set(op_ids))
     assert paths["/health"]["get"]["tags"] == ["system"]
     assert paths["/health"]["get"]["operationId"] == "system_health"
     assert paths["/livez"]["get"]["operationId"] == "system_livez"

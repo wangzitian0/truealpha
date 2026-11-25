@@ -480,6 +480,11 @@ def test_another_universe_at_the_same_cutoff_is_neither_reused_nor_joined(tick_d
         assert len(main_decisions) == 20 + len(shared_issuers)
         topt_confidence = _core_confidence(reader, topt["capture_run_id"])
         aapl_served = _served_identity(reader, aapl_issuer)
+        # #1062: age is evaluated at read time against now(). Stamping fresh advanced_at
+        # keeps the served head available rather than withheld past 30 days.
+        reader.execute("set session_replication_role = replica")
+        reader.execute("update mart.current_pointer set advanced_at = %s", (datetime.now(UTC),))
+        reader.execute("set session_replication_role = origin")
 
     report = _served_report(tick_database_url)
     assert len(report.decisions) == 20
@@ -564,6 +569,11 @@ def test_two_universes_at_one_cutoff_share_a_valid_price_and_are_not_joined(tick
         assert len(main_decisions) == 20 + len(shared_issuers)
         topt_confidence = _core_confidence(reader, topt["capture_run_id"])
         aapl_served = _served_identity(reader, aapl_issuer)
+        # #1062: age is evaluated at read time against now(). Stamping fresh advanced_at
+        # keeps the served head available rather than withheld past 30 days.
+        reader.execute("set session_replication_role = replica")
+        reader.execute("update mart.current_pointer set advanced_at = %s", (datetime.now(UTC),))
+        reader.execute("set session_replication_role = origin")
 
     report = _served_report(tick_database_url)
     assert len(report.decisions) == 20

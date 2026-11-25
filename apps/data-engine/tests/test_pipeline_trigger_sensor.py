@@ -243,3 +243,115 @@ class _reuse_without_commit(_reuse):
                 return None
 
         return _Uncommitted()
+
+
+def test_consume_head_rollback_requests_advances_with_original_cutoff_and_is_idempotent() -> None:
+    """Head rollback requests append sequence+1 using the target run's cutoff or mark consumed when already at target."""
+    from datetime import timedelta
+
+    from data_engine.contracts.evidence_graph import (
+        CurrentPointer,
+        CurrentPointerKey,
+        EvidenceNodeKind,
+        EvidenceNodeRef,
+    )
+    from data_engine.lanes import triggers
+    from truealpha_contracts.common import CaptureEnvironment, canonical_sha256
+
+    target_run = f"capture-run:{'a' * 64}"
+    current_run = f"capture-run:{'b' * 64}"
+    original_cutoff = datetime(2026, 11, 10, 0, 0, tzinfo=UTC)
+    key = CurrentPointerKey(
+        environment=CaptureEnvironment.STAGING,
+        universe_id="universe:topt-us-v1",
+        universe_version="2026-11-01",
+        factor_id="gross_profit_per_employee",
+    )
+    head_ptr = CurrentPointer(
+        key=key,
+        target_run=EvidenceNodeRef(kind=EvidenceNodeKind.CAPTURE_RUN, node_id=current_run),
+        sequence=2,
+        previous_run=EvidenceNodeRef(kind=EvidenceNodeKind.CAPTURE_RUN, node_id=f"capture-run:{'c' * 64}"),
+        advanced_at=original_cutoff + timedelta(days=5),
+    )
+
+    class _FakeRes:
+        def __init__(self, rows: list[tuple]):
+            self._rows = rows
+
+        def fetchone(self):
+            return self._rows[0] if self._rows else None
+
+        def fetchall(self):
+            return self._rows
+
+    class _FakeConn:
+        def __init__(self, requests: list[tuple]):
+            self.requests = requests
+            self.updates: list[tuple[str, int]] = []
+            self.current_head = head_ptr
+
+        def execute(self, sql: str, params=()):
+            low = sql.lower()
+            if "to_regclass('staging.head_rollback_requests')" in low:
+                return _FakeRes([("staging.head_rollback_requests",)])
+            if "from staging.head_rollback_requests" in low:
+                return _FakeRes(self.requests)
+            if "from raw.capture_runs" in low:
+                return _FakeRes([(original_cutoff,)])
+            if "update staging.head_rollback_requests" in low:
+                self.updates.append((str(params[0]), int(params[1])))
+                return _FakeRes([])
+            return _FakeRes([])
+
+    advances: list[CurrentPointer] = []
+
+    class _FakeRepo:
+        def __init__(self, conn: _FakeConn):
+            self._conn = conn
+
+        def head(self, k: CurrentPointerKey):
+            return self._conn.current_head
+
+        def advance(self, pointer: CurrentPointer):
+            advances.append(pointer)
+            self._conn.current_head = pointer
+            return pointer
+
+    orig_repo = triggers.PostgresEvidenceGraphRepository
+    triggers.PostgresEvidenceGraphRepository = _FakeRepo  # type: ignore[misc]
+    try:
+        conn1 = _FakeConn(
+            [
+                (
+                    11,
+                    "staging",
+                    key.universe_id,
+                    key.universe_version,
+                    key.factor_id,
+                    target_run,
+                    original_cutoff + timedelta(days=10),
+                )
+            ]
+        )
+        res1 = triggers.consume_head_rollback_requests(conn1)
+        assert len(advances) == 1
+        assert advances[0].sequence == 3
+        assert advances[0].previous_run is not None and advances[0].previous_run.node_id == current_run
+        assert advances[0].target_run.node_id == target_run
+        assert advances[0].advanced_at == original_cutoff
+        assert res1 == [advances[0].pointer_id]
+        assert conn1.updates == [(advances[0].pointer_id, 11)]
+
+        # Second request pointing to an already active target run completes idempotently without advancing.
+        same_target = f"capture-run:{canonical_sha256({'run': 'same'})}"
+        assert len(same_target) > 20
+        conn2 = _FakeConn(
+            [(12, "staging", key.universe_id, key.universe_version, key.factor_id, current_run, original_cutoff)]
+        )
+        res2 = triggers.consume_head_rollback_requests(conn2)
+        assert len(advances) == 1
+        assert res2 == [head_ptr.pointer_id]
+        assert conn2.updates == [(head_ptr.pointer_id, 12)]
+    finally:
+        triggers.PostgresEvidenceGraphRepository = orig_repo  # type: ignore[misc]

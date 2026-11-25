@@ -217,3 +217,60 @@ def test_latest_run_params_and_mart_readonly_scope(monkeypatch: pytest.MonkeyPat
     assert executed[1][0] == "select set_config('statement_timeout', '5s', true)"
     assert executed[2][1] == ([id_prefix_like("qqq")], "large_model_value_v0")
     assert executed[3][0] == "reset role"
+
+
+def test_get_latest_fails_closed_when_served_head_is_withheld(monkeypatch: pytest.MonkeyPatch) -> None:
+    from truealpha_runtime import strategy_run_postgres
+
+    class _Cur:
+        def __enter__(self) -> _Cur:
+            return self
+
+        def __exit__(self, *_a: object) -> None:
+            return None
+
+        def execute(self, sql: str, params: object = None) -> None:
+            del sql, params
+
+        def fetchone(self) -> dict[str, object]:
+            return {
+                "strategy_run_id": f"strategy-run:{'1' * 64}",
+                "corpus_sha256": "0" * 64,
+                "executed_at": datetime.now(UTC),
+                "is_governed": False,
+                "strategy_version": "v0",
+                "definition_content_sha256": "0" * 64,
+                "head_run_id": None,
+                "head_availability": "unavailable",
+                "head_age_hours": 800.0,
+                "head_limit_hours": 72.0,
+                "head_freshness": "withheld",
+            }
+
+    class _Conn:
+        def __enter__(self) -> _Conn:
+            return self
+
+        def __exit__(self, *_a: object) -> None:
+            return None
+
+        def cursor(self, **_k: object) -> _Cur:
+            return _Cur()
+
+    monkeypatch.setattr("psycopg.connect", lambda *_a, **_k: _Conn())
+    now = datetime.now(UTC)
+    ctx = AccessContext(
+        context_id="ctx:w",
+        principal_id="p:w",
+        tenant_id="t:w",
+        session_id="s:w",
+        authentication_method=AuthenticationMethod.SERVICE_IDENTITY,
+        principal_kind=PrincipalKind.SERVICE,
+        issued_at=now,
+        expires_at=now + timedelta(hours=1),
+    )
+    res = strategy_run_postgres.PostgresStrategyRunRepository(database_url="postgresql://fake").get_latest(
+        strategy_id="large_model_value_v0", context=ctx, universe="topt"
+    )
+    assert isinstance(res, StrategyRunUnavailable)
+    assert res.reason == "head_withheld"

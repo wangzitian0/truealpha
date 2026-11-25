@@ -651,13 +651,13 @@ def test_a_forced_tick_that_advances_the_head_is_read_once_through_its_own_run(t
         main_peg_runs = [row[0] for row in reader.execute(_MAIN_PEG_RUN_SQL, (cutoff,)).fetchall()[:2]]
         assert set(main_peg_runs) == {scheduled["strategy_run_id"], forced["strategy_run_id"]}
 
-        governed = reader.execute("select target_run_id, strategy_run_id from mart.governed_strategy_run").fetchall()
-        assert governed == [(forced["capture_run_id"], forced["strategy_run_id"])]
         # #1062: age is evaluated at read time against now(). Stamping fresh advanced_at
         # keeps the served head available rather than withheld past 30 days.
         reader.execute("set session_replication_role = replica")
         reader.execute("update mart.current_pointer set advanced_at = %s", (datetime.now(UTC),))
         reader.execute("set session_replication_role = origin")
+        governed = reader.execute("select target_run_id, strategy_run_id from mart.governed_strategy_run").fetchall()
+        assert governed == [(forced["capture_run_id"], forced["strategy_run_id"])]
         latest = reader.execute(LATEST_RUN_SQL, latest_run_params(_STRATEGY)).fetchone()
         assert (latest[0], latest[3]) == (forced["strategy_run_id"], True)
 

@@ -101,6 +101,9 @@ class StrategyDecisionItemDto(BaseModel):
     peg: str | None = None
     peg_rank: int | None = None
     availability: str = "unavailable"
+    source_evidence_status: str | None = None
+    factor_validation_status: str | None = None
+    peg_reason_codes: list[str] = Field(default_factory=list)
     trace_id: str = ""
     gppe_variants: dict[str, WidePanelCellDto | None] = Field(default_factory=dict)
     panel_inputs: dict[str, WidePanelCellDto | None] = Field(default_factory=dict)
@@ -112,6 +115,10 @@ class StrategyRunPageResponse(BaseModel):
     reason: str | None = None
     strategy_id: str
     strategy_run_id: str | None = None
+    governed: bool = False
+    head_age_hours: float | None = None
+    head_limit_hours: float | None = None
+    head_freshness: str | None = None
     executed_at: str | None = None
     source: str = "mart"
     corpus_sha256: str = ""
@@ -131,6 +138,10 @@ class RankingsResponse(BaseModel):
     reason: str | None = None
     strategy_id: str = DASHBOARD_STRATEGY_ID
     strategy_run_id: str | None = None
+    governed: bool = False
+    head_age_hours: float | None = None
+    head_limit_hours: float | None = None
+    head_freshness: str | None = None
     definition_version: str | None = None
     review_state: str | None = None
     cutoff_at: str | None = None
@@ -202,19 +213,30 @@ class BacktestDetailResponse(BaseModel):
     trades: list[BacktestTradeDto] = Field(default_factory=list)
 
 
-def _decision_availability(decision: Any) -> str:
-    if str(getattr(decision, "availability_status", None) or "") == "not_applicable":
-        return "not_applicable"
-    if decision.outcome.value == "excluded":
+_PRESERVED_AVAILABILITY_STATUSES = frozenset({"not_applicable", "low_confidence", "stale", "error"})
+
+
+def resolve_decision_availability(avail_status: Any, outcome_value: str, *, has_metrics: bool) -> str:
+    status = str(avail_status or "").strip()
+    if status in _PRESERVED_AVAILABILITY_STATUSES:
+        return status
+    if outcome_value == "excluded":
         return "excluded"
-    if (
+    return "available" if has_metrics else "unavailable"
+
+
+def _decision_availability(decision: Any) -> str:
+    has_metrics = (
         decision.tier is not None
         or decision.current_price_to_sales is not None
         or decision.current_price_to_gross_profit is not None
         or decision.capital_adjusted_labor_efficiency is not None
-    ):
-        return "available"
-    return "unavailable"
+    )
+    return resolve_decision_availability(
+        getattr(decision, "availability_status", None),
+        decision.outcome.value,
+        has_metrics=has_metrics,
+    )
 
 
 def _decision_to_dto(
@@ -304,6 +326,9 @@ def _decision_to_dto(
         peg=str(decision.peg) if getattr(decision, "peg", None) is not None else None,
         peg_rank=getattr(decision, "peg_rank", None),
         availability=avail,
+        source_evidence_status=getattr(decision, "source_evidence_status", None),
+        factor_validation_status=getattr(decision, "factor_validation_status", None),
+        peg_reason_codes=[str(c) for c in (getattr(decision, "peg_reason_codes", None) or ())],
         trace_id=trace_id,
         gppe_variants=gppe_variants,
         panel_inputs=panel_inputs,
@@ -405,6 +430,10 @@ def get_strategy_run_page(
         available=True,
         strategy_id=report.strategy_id,
         strategy_run_id=report.strategy_run_id,
+        governed=bool(getattr(report, "governed", False)),
+        head_age_hours=getattr(report, "head_age_hours", None),
+        head_limit_hours=getattr(report, "head_limit_hours", None),
+        head_freshness=getattr(report, "head_freshness", None),
         executed_at=None,
         source=report.source,
         corpus_sha256=report.corpus_sha256,
@@ -443,6 +472,10 @@ def get_rankings(
         reason=page.reason,
         strategy_id=page.strategy_id,
         strategy_run_id=page.strategy_run_id,
+        governed=page.governed,
+        head_age_hours=page.head_age_hours,
+        head_limit_hours=page.head_limit_hours,
+        head_freshness=page.head_freshness,
         definition_version=page.definition_version,
         review_state=page.review_state,
         cutoff_at=page.cutoff_at,
@@ -576,4 +609,5 @@ __all__ = [
     "matches_ranking_universe",
     "normalize_peg_convention",
     "normalize_ranking_universe",
+    "resolve_decision_availability",
 ]

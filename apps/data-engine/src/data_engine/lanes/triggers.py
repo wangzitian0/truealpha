@@ -3,11 +3,20 @@
 import json
 from collections.abc import Mapping
 from datetime import UTC, datetime
+from typing import Any
 
 import dagster as dg
+from truealpha_contracts.common import CaptureEnvironment
 
 from data_engine import db
 from data_engine.config import settings
+from data_engine.contracts.evidence_graph import (
+    CurrentPointer,
+    CurrentPointerKey,
+    EvidenceNodeKind,
+    EvidenceNodeRef,
+)
+from data_engine.datahub.evidence_graph_repository import PostgresEvidenceGraphRepository
 from data_engine.lanes.capture import (
     CANARY_JOB_NAME,
     TICK_BY_JOB,
@@ -18,6 +27,55 @@ from data_engine.lanes.capture import (
 from data_engine.lanes.capture import defs as capture_defs
 
 BOOT_CANARY_TAG = "truealpha/boot_canary"
+
+
+def consume_head_rollback_requests(connection: Any) -> list[str]:
+    """Advance append-only mart.current_pointer rows for any unconsumed rollback requests."""
+    reg = connection.execute("select to_regclass('staging.head_rollback_requests')").fetchone()
+    if not reg or reg[0] is None:
+        return []
+    pending = connection.execute(
+        "select request_id, environment, universe_id, universe_version, factor_id, target_run_id, requested_at "
+        "from staging.head_rollback_requests where consumed_at is null order by request_id limit 5"
+    ).fetchall()
+    if not pending:
+        return []
+    repo = PostgresEvidenceGraphRepository(connection)
+    advanced: list[str] = []
+    for request_id, environment, universe_id, universe_version, factor_id, target_run_id, requested_at in pending:
+        key = CurrentPointerKey(
+            environment=CaptureEnvironment(str(environment)),
+            universe_id=str(universe_id),
+            universe_version=str(universe_version),
+            factor_id=str(factor_id),
+        )
+        current = repo.head(key)
+        if current is not None and current.target_run.node_id == str(target_run_id):
+            pointer_id = current.pointer_id
+        else:
+            cutoff_row = connection.execute(
+                "select c.cutoff from raw.capture_runs r "
+                "join raw.capture_campaigns c using (campaign_id) "
+                "where r.run_id = %s",
+                (target_run_id,),
+            ).fetchone()
+            target_cutoff = cutoff_row[0] if cutoff_row and cutoff_row[0] is not None else requested_at
+            pointer = CurrentPointer(
+                key=key,
+                target_run=EvidenceNodeRef(kind=EvidenceNodeKind.CAPTURE_RUN, node_id=str(target_run_id)),
+                sequence=0 if current is None else current.sequence + 1,
+                previous_run=None if current is None else current.target_run,
+                advanced_at=target_cutoff,
+            )
+            repo.advance(pointer)
+            pointer_id = pointer.pointer_id
+        connection.execute(
+            "update staging.head_rollback_requests "
+            "set consumed_at = clock_timestamp(), result_pointer_id = %s where request_id = %s",
+            (pointer_id, request_id),
+        )
+        advanced.append(pointer_id)
+    return advanced
 
 
 def _tick_run_request(
@@ -43,6 +101,7 @@ def _tick_run_request(
 )
 def pipeline_trigger_sensor(context: dg.SensorEvaluationContext):
     with db.connect() as connection:
+        consume_head_rollback_requests(connection)
         pending = connection.execute(
             "select request_id, executed_at, dedupe_key, job_name, "
             "coalesce((to_jsonb(request)->>'force_fetch')::boolean, false) "
