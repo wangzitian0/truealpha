@@ -216,4 +216,97 @@ begin
 end;
 $$;
 
+do $$
+declare
+    mv_name text;
+    mv_kind "char";
+    has_unique_idx boolean;
+    gov_def text;
+    rollback_id bigint;
+    delete_rejected boolean := false;
+    immutable_rejected boolean := false;
+    reconsume_rejected boolean := false;
+begin
+    foreach mv_name in array array[
+        'entity_identity',
+        'fund_holdings',
+        'fund_holdings_resolved',
+        'fund_holdings_coverage',
+        'fund_holdings_valuation'
+    ] loop
+        select c.relkind into mv_kind
+        from pg_class c
+        join pg_namespace n on n.oid = c.relnamespace
+        where n.nspname = 'mart' and c.relname = mv_name;
+        if mv_kind is distinct from 'm' then
+            raise exception 'mart.% must be a materialized view, got %', mv_name, mv_kind;
+        end if;
+        if not has_table_privilege('mart_readonly', 'mart.' || mv_name, 'select') then
+            raise exception 'mart_readonly must hold select on mart.%', mv_name;
+        end if;
+        select exists (
+            select 1
+            from pg_index x
+            join pg_class c on c.oid = x.indrelid
+            join pg_namespace n on n.oid = c.relnamespace
+            where n.nspname = 'mart'
+              and c.relname = mv_name
+              and x.indisunique
+              and x.indisvalid
+              and x.indpred is null
+        ) into has_unique_idx;
+        if not has_unique_idx then
+            raise exception 'mart.% lacks a valid full unique index for CONCURRENTLY refresh', mv_name;
+        end if;
+    end loop;
+
+    select pg_get_viewdef('mart.governed_strategy_run'::regclass, true) into gov_def;
+    if position('served_head' in gov_def) = 0
+       or position('universe:canary-%' in gov_def) = 0
+       or position('run_id is not null' in lower(gov_def)) = 0 then
+        raise exception 'mart.governed_strategy_run must read mart.served_head, exclude canary, and require run_id is not null';
+    end if;
+
+    insert into staging.head_rollback_requests (
+        environment, universe_id, universe_version, factor_id, target_run_id, reason, requested_by, dedupe_key
+    ) values (
+        'ci', 'universe:topt-us-2026-03-31', 'v1', 'gross_profit_per_employee',
+        'capture-run:' || repeat('a', 64), 'contract test rollback', 'principal:admin', 'rollback-contract-1'
+    ) returning request_id into rollback_id;
+
+    begin
+        delete from staging.head_rollback_requests where request_id = rollback_id;
+    exception when check_violation then
+        delete_rejected := true;
+    end;
+    if not delete_rejected then
+        raise exception 'staging.head_rollback_requests accepted delete';
+    end if;
+
+    begin
+        update staging.head_rollback_requests set reason = 'tampered' where request_id = rollback_id;
+    exception when check_violation then
+        immutable_rejected := true;
+    end;
+    if not immutable_rejected then
+        raise exception 'staging.head_rollback_requests accepted immutable field update';
+    end if;
+
+    update staging.head_rollback_requests
+    set consumed_at = now(), result_pointer_id = 'current-pointer:' || repeat('b', 64)
+    where request_id = rollback_id;
+
+    begin
+        update staging.head_rollback_requests
+        set consumed_at = now(), result_pointer_id = 'current-pointer:' || repeat('c', 64)
+        where request_id = rollback_id;
+    exception when check_violation then
+        reconsume_rejected := true;
+    end;
+    if not reconsume_rejected then
+        raise exception 'staging.head_rollback_requests accepted second consume update';
+    end if;
+end;
+$$;
+
 rollback;

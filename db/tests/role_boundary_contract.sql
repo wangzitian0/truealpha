@@ -86,4 +86,43 @@ begin
 end;
 $$;
 
+do $$
+declare
+    login_inherits boolean;
+    restricted_tbl text;
+    row_count bigint;
+begin
+    select rolinherit into login_inherits
+    from pg_roles
+    where rolname = 'app_service_login';
+    if login_inherits is distinct from false then
+        raise exception 'app_service_login must be NOINHERIT (rolinherit=false), got %', login_inherits;
+    end if;
+
+    foreach restricted_tbl in array array[
+        'raw.fetches',
+        'staging.entities',
+        'mart.current_pointer',
+        'mart.current_pointer_head'
+    ] loop
+        if has_table_privilege('mart_readonly', restricted_tbl, 'select') then
+            raise exception 'mart_readonly must not select from %', restricted_tbl;
+        end if;
+    end loop;
+
+    if exists (
+        select 1 from pg_attribute
+        where attrelid = 'mart.universe_constituents'::regclass
+          and attname = 'object_uri'
+          and not attisdropped
+    ) then
+        raise exception 'mart.universe_constituents must not expose raw.fetches.object_uri';
+    end if;
+
+    set local role mart_readonly;
+    select count(*) into row_count from mart.universe_constituents;
+    reset role;
+end;
+$$;
+
 rollback;

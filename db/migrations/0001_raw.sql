@@ -1,7 +1,5 @@
 -- idempotent: true
--- Canonical raw schema baseline (Wave 2 squash).
-set lock_timeout = '5s';
-set statement_timeout = '30s';
+-- Canonical raw schema baseline.
 
 create extension if not exists pgcrypto;
 create schema if not exists raw;
@@ -324,7 +322,8 @@ create table if not exists raw.capture_runs (
  constraint capture_runs_run_id_check CHECK ((run_id ~ '^capture-run:[0-9a-f]{64}$'::text)),
  constraint capture_runs_run_sequence_check CHECK ((run_sequence > 0)),
  constraint capture_runs_schedule_policy_id_check CHECK ((schedule_policy_id ~ '^schedule-policy:[0-9a-f]{64}$'::text)),
- constraint capture_runs_campaign_id_fkey FOREIGN KEY (campaign_id) REFERENCES raw.capture_campaigns(campaign_id)
+ constraint capture_runs_campaign_id_fkey FOREIGN KEY (campaign_id) REFERENCES raw.capture_campaigns(campaign_id),
+ constraint capture_runs_schedule_policy_id_fkey FOREIGN KEY (schedule_policy_id) REFERENCES raw.capture_schedule_policies(schedule_policy_id)
 );
 
 create table if not exists raw.capture_work_items (
@@ -347,7 +346,8 @@ create table if not exists raw.capture_work_items (
  constraint capture_work_items_source_request_id_check CHECK ((source_request_id ~ '^source-request:[0-9a-f]{64}$'::text)),
  constraint capture_work_items_storage_envelope_sha256_check CHECK ((storage_envelope_sha256 ~ '^[0-9a-f]{64}$'::text)),
  constraint capture_work_items_work_item_id_check CHECK ((work_item_id ~ '^capture-work-item:[0-9a-f]{64}$'::text)),
- constraint capture_work_items_campaign_id_fkey FOREIGN KEY (campaign_id) REFERENCES raw.capture_campaigns(campaign_id)
+ constraint capture_work_items_campaign_id_fkey FOREIGN KEY (campaign_id) REFERENCES raw.capture_campaigns(campaign_id),
+ constraint capture_work_items_source_request_id_fkey FOREIGN KEY (source_request_id) REFERENCES raw.capture_source_requests(source_request_id)
 );
 
 create table if not exists raw.capture_source_vintages (
@@ -459,7 +459,9 @@ create table if not exists raw.capture_attempt_results (
  constraint capture_attempt_results_reused_source_vintage_id_check CHECK (((reused_source_vintage_id IS NULL) OR (reused_source_vintage_id ~ '^source-vintage:[0-9a-f]{64}$'::text))),
  constraint capture_attempt_results_source_vintage_id_check CHECK (((source_vintage_id IS NULL) OR (source_vintage_id ~ '^source-vintage:[0-9a-f]{64}$'::text))),
  constraint capture_attempt_results_status_code_check CHECK (((status_code >= 100) AND (status_code <= 599))),
- constraint capture_attempt_results_attempt_id_fkey FOREIGN KEY (attempt_id) REFERENCES raw.capture_attempts(attempt_id)
+ constraint capture_attempt_results_attempt_id_fkey FOREIGN KEY (attempt_id) REFERENCES raw.capture_attempts(attempt_id),
+ constraint capture_attempt_results_reused_source_vintage_id_fkey FOREIGN KEY (reused_source_vintage_id) REFERENCES raw.capture_source_vintages(source_vintage_id),
+ constraint capture_attempt_results_source_vintage_id_fkey FOREIGN KEY (source_vintage_id) REFERENCES raw.capture_source_vintages(source_vintage_id)
 );
 
 create table if not exists raw.capture_obligation_results (
@@ -486,25 +488,6 @@ create table if not exists raw.capture_obligation_results (
  constraint capture_obligation_results_capture_obligation_id_fkey FOREIGN KEY (capture_obligation_id) REFERENCES raw.capture_obligations(obligation_id),
  constraint capture_obligation_results_final_attempt_id_fkey FOREIGN KEY (final_attempt_id) REFERENCES raw.capture_attempts(attempt_id)
 );
-
-do $$ begin if not exists (select 1 from pg_constraint where conrelid = 'raw.capture_attempt_results'::regclass and conname = 'capture_attempt_results_reused_source_vintage_id_fkey') then alter table raw.capture_attempt_results add constraint capture_attempt_results_reused_source_vintage_id_fkey FOREIGN KEY (reused_source_vintage_id) REFERENCES raw.capture_source_vintages(source_vintage_id); end if; end $$;
-do $$ begin if not exists (select 1 from pg_constraint where conrelid = 'raw.capture_attempt_results'::regclass and conname = 'capture_attempt_results_source_vintage_id_fkey') then alter table raw.capture_attempt_results add constraint capture_attempt_results_source_vintage_id_fkey FOREIGN KEY (source_vintage_id) REFERENCES raw.capture_source_vintages(source_vintage_id); end if; end $$;
-do $$ begin if not exists (select 1 from pg_constraint where conrelid = 'raw.capture_runs'::regclass and conname = 'capture_runs_schedule_policy_id_fkey') then alter table raw.capture_runs add constraint capture_runs_schedule_policy_id_fkey FOREIGN KEY (schedule_policy_id) REFERENCES raw.capture_schedule_policies(schedule_policy_id); end if; end $$;
-do $$ begin if not exists (select 1 from pg_constraint where conrelid = 'raw.capture_work_items'::regclass and conname = 'capture_work_items_source_request_id_fkey') then alter table raw.capture_work_items add constraint capture_work_items_source_request_id_fkey FOREIGN KEY (source_request_id) REFERENCES raw.capture_source_requests(source_request_id); end if; end $$;
-do $$ begin
-    if exists (select 1 from pg_constraint where conrelid = 'raw.capture_attempt_results'::regclass and conname = 'capture_attempt_results_reused_source_vintage_id_fkey' and not convalidated) then
-        alter table raw.capture_attempt_results validate constraint capture_attempt_results_reused_source_vintage_id_fkey;
-    end if;
-    if exists (select 1 from pg_constraint where conrelid = 'raw.capture_attempt_results'::regclass and conname = 'capture_attempt_results_source_vintage_id_fkey' and not convalidated) then
-        alter table raw.capture_attempt_results validate constraint capture_attempt_results_source_vintage_id_fkey;
-    end if;
-    if exists (select 1 from pg_constraint where conrelid = 'raw.capture_runs'::regclass and conname = 'capture_runs_schedule_policy_id_fkey' and not convalidated) then
-        alter table raw.capture_runs validate constraint capture_runs_schedule_policy_id_fkey;
-    end if;
-    if exists (select 1 from pg_constraint where conrelid = 'raw.capture_work_items'::regclass and conname = 'capture_work_items_source_request_id_fkey' and not convalidated) then
-        alter table raw.capture_work_items validate constraint capture_work_items_source_request_id_fkey;
-    end if;
-end $$;
 
 CREATE OR REPLACE FUNCTION raw.assert_content_address(actual_id text, id_prefix text, identity_payload jsonb, actual_content_sha256 text, content_payload jsonb)
  RETURNS void

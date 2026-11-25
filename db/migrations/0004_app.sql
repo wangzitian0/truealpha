@@ -1,7 +1,5 @@
 -- idempotent: true
--- Canonical app schema baseline (Wave 2 squash).
-set lock_timeout = '5s';
-set statement_timeout = '30s';
+-- Canonical app schema baseline.
 
 create schema if not exists app;
 
@@ -297,14 +295,5 @@ do $$ begin
         where schemaname = 'app' and tablename = 'research_documents' and policyname = 'research_documents_owner_isolation'
     ) then
         create policy research_documents_owner_isolation on app.research_documents as permissive for ALL to public using (((tenant_id = NULLIF(current_setting('truealpha.tenant_id'::text, true), ''::text)) AND (owner_principal_id = NULLIF(current_setting('truealpha.principal_id'::text, true), ''::text)))) with check (((tenant_id = NULLIF(current_setting('truealpha.tenant_id'::text, true), ''::text)) AND (owner_principal_id = NULLIF(current_setting('truealpha.principal_id'::text, true), ''::text))));
-    end if;
-end $$;
-
-do $$ begin
-    if to_regclass('app.research_document_download_tickets') is not null then
-        drop table app.research_document_download_tickets;
-    end if;
-    if to_regprocedure('app.reject_document_ticket_field_tamper()') is not null then
-        drop function app.reject_document_ticket_field_tamper();
     end if;
 end $$;

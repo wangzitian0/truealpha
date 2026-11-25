@@ -573,10 +573,7 @@ The age source of a governed head is the pointer's `advanced_at`.
 
 There is one read point. A consumer reads `mart.served_head` and not
 `mart.current_pointer_head`. A consumer computes no head age of its own.
-`common/runtime/tests/test_served_head_guard.py` fails on the bypass shapes that it knows. It is a
-heuristic, and a new shape can pass it. Its BASELINE lists the exceptions, and it can only
-shrink. The guard works per file. It cannot prove that a run id flows from the head into a result
-query. Per-reader behaviour tests are the real proof.
+Per-reader behaviour tests prove that each consumer reads the served head.
 
 `/api/health` reads the head. It reports each governed pointer with `freshness`,
 `limit_hours`, `staleness_reason` and `availability`. Its `status` stays `ok` for a stale head.

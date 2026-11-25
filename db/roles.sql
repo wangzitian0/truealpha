@@ -13,6 +13,16 @@ alter role mart_readonly set statement_timeout = '5s';
 grant usage on schema mart to mart_readonly;
 grant select on all tables in schema mart to mart_readonly;
 alter default privileges in schema mart grant select on tables to mart_readonly;
+do $$
+declare
+    tbl text;
+begin
+    foreach tbl in array array['mart.current_pointer', 'mart.current_pointer_head'] loop
+        if to_regclass(tbl) is not null and has_table_privilege('mart_readonly', tbl, 'select') then
+            execute format('revoke select on %s from mart_readonly', tbl);
+        end if;
+    end loop;
+end $$;
 
 -- Trusted application repositories assume this group role only after deriving
 -- transaction-local tenant and principal context. It has no raw/staging access.
@@ -24,10 +34,10 @@ end $$;
 alter role app_runtime set statement_timeout = '5s';
 
 grant usage on schema app to app_runtime;
--- #495: the ONE staging write exception — the DB-mediated pipeline trigger
--- USAGE on staging plus exactly this table exposes nothing
--- else; consume-UPDATEs stay with the data-engine/migration role, and the
--- table's own triggers enforce append-only/consume-once.
+-- Staging write exceptions: DB-mediated pipeline trigger and head rollback
+-- requests. USAGE on staging plus these two tables exposes nothing else;
+-- consume-UPDATEs stay with the data-engine/migration role, and each table's
+-- triggers enforce append-only and consume-once invariants.
 grant usage on schema staging to app_runtime;
 grant select, insert on staging.pipeline_trigger_requests to app_runtime;
 grant select, insert on staging.head_rollback_requests to app_runtime;
@@ -68,8 +78,14 @@ grant select on app.document_audit_metadata to app_audit_reader;
 -- DATABASE_URL logs in as this role (llm_service.config DEFAULT_DATABASE_URL). Migrations
 -- keep using the superuser via MIGRATIONS_DATABASE_URL (db/apply_migrations.sh), never this role.
 do $$ begin
-    create role app_service_login login;
+    create role app_service_login login noinherit;
 exception when duplicate_object then null;
+end $$;
+
+do $$ begin
+    if exists (select 1 from pg_roles where rolname = 'app_service_login' and rolinherit) then
+        alter role app_service_login noinherit;
+    end if;
 end $$;
 
 alter role app_service_login set statement_timeout = '5s';
@@ -85,10 +101,9 @@ grant app_runtime to app_service_login;
 -- here so a Vault-side rotation takes effect on the next migration run without a manual
 -- psql step. Since #984 every environment reaches this file through
 -- db/apply_migrations.sh, which always passes `-v app_service_db_password=...` — empty
--- wherever APP_SERVICE_DB_PASSWORD is unset, which is local, CI and the VPS. The
+-- wherever APP_SERVICE_DB_PASSWORD is unset (such as local and CI). The
 -- `where nullif(...) is not null` below is what makes that a complete no-op there:
--- those environments neither provision nor use this role, and only staging/prod/preview
--- arrive with a value.
+-- only environments that set APP_SERVICE_DB_PASSWORD update the login password.
 -- The ALTER ROLE is built via \gexec rather than a dollar-quoted DO block: psql does
 -- NOT interpolate `:'var'` inside `$$...$$` bodies (verified empirically -- it sends
 -- the literal `:'...'` text and Postgres's parser rejects it), so the substitution has
@@ -100,13 +115,11 @@ select format('alter role app_service_login password %L', nullif(:'app_service_d
   where nullif(:'app_service_db_password', '') is not null \gexec
 \endif
 
--- #495 (surface 2b): the /admin ops overview reads run history, pointer
--- freshness, and per-source quota burn. No existing role may touch
--- dagster/raw (mart_readonly is mart-only; app_runtime is app-only + the
--- one trigger table), so the ops surface gets its own nologin role with
--- SELECT on exactly the three relations it renders — the app assumes it
--- per-request the same way it assumes mart_readonly. Granted to
--- app_service_login so the #432 cutover keeps working unchanged.
+-- The /admin ops and /admin/datahub surfaces read run history, pointer
+-- freshness, operational reports, and per-source quota burn. No existing consumer role
+-- may touch dagster/raw (mart_readonly is mart-only; app_runtime is app-only plus the
+-- two request tables), so the ops surface gets its own nologin role with explicit
+-- read-only grants below. Granted to app_service_login so the #432 cutover works unchanged.
 do $$ begin
     create role app_ops_reader nologin;
 exception when duplicate_object then null;
@@ -123,7 +136,7 @@ do $$ begin
                where table_schema = 'dagster' and table_name = 'runs') then
         grant select on dagster.runs to app_ops_reader;
     end if;
-    -- #1466: /admin/pipeline shows the first error line of the newest failed run of each job. The event
+    -- /admin ops shows the first error line of the newest failed run of each job. The event
     -- log holds that text. The administrator-only page is the one reader, and the text never reaches mart.
     if exists (select 1 from information_schema.tables
                where table_schema = 'dagster' and table_name = 'event_logs') then
@@ -161,16 +174,10 @@ grant select on mart.data_engine_identity to app_ops_reader;
 -- #756: the database environment identity, for admin / status readers.
 grant select on mart.environment_identity to app_ops_reader;
 -- #998: a SECURITY DEFINER routine runs with its OWNER's privileges, and PostgreSQL grants
--- EXECUTE on every new routine to PUBLIC. #996 made staging.entity_survivor and
--- staging.entity_alias_valid_to definers so that mart.entity_identity's own plumbing could
--- reach the staging tables the view owner already reads. PUBLIC EXECUTE plus the USAGE on
--- schema staging granted above (app_runtime, app_ops_reader) let either role call them
--- directly and receive values derived from relations it holds no SELECT on -- the boundary
--- that change was written to preserve.
---
--- Deny by default over the PROPERTY rather than over these two names, so the next definer
--- helper arrives locked instead of open: revoke PUBLIC from every SECURITY DEFINER routine
--- in staging, then grant EXECUTE by name to the roles that select the view needing them.
+-- EXECUTE on every new routine to PUBLIC. Revoke PUBLIC from every SECURITY DEFINER
+-- routine in staging so neither app_runtime nor app_ops_reader can execute staging
+-- definer helpers directly. Set-based views (like mart.entity_identity after #1344)
+-- do not grant EXECUTE to mart_readonly or app_ops_reader;
 -- db/tests/role_boundary_contract.sql fails when a definer routine here is PUBLIC-callable.
 do $$
 declare
