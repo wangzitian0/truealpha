@@ -1,11 +1,9 @@
-import os
 import sys
 from datetime import UTC, date, datetime
 from pathlib import Path
 
 import psycopg
 import pytest
-from data_engine.config import settings
 from data_engine.core_strategy_replay import run
 from data_engine.strategy_replay_repository import (
     CLAIM_CEILING,
@@ -19,21 +17,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "support"))
 from macro_seed import seed_risk_free_rate, stub_rate  # noqa: E402
 
 _EXECUTED_AT = datetime(2026, 7, 18, 12, 0, 0, tzinfo=UTC)
-
-
-@pytest.fixture
-def connection():
-    try:
-        active = psycopg.connect(settings.database_url, connect_timeout=3, autocommit=False)
-    except psycopg.OperationalError as error:
-        if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
-            pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
-        pytest.skip("no local Postgres; CI runs the required integration coverage")
-    try:
-        yield active
-    finally:
-        active.rollback()
-        active.close()
 
 
 def test_write_replay_persists_the_run_and_all_ten_decisions(connection) -> None:

@@ -13,7 +13,6 @@ The op's connection is the test's connection with `commit` disabled, so every ro
 
 from __future__ import annotations
 
-import os
 import re
 import sys
 from datetime import UTC, date, datetime, timedelta
@@ -89,24 +88,6 @@ RATE_TRAPS = {
 
 def _lei(name: str) -> str:
     return f"T758{name.upper()}".ljust(18, "X") + "00"
-
-
-@pytest.fixture
-def connection():
-    from truealpha_runtime.testing import guard_db_write
-
-    url = guard_db_write()
-    try:
-        active = psycopg.connect(url, connect_timeout=3, autocommit=False)
-    except psycopg.OperationalError as error:
-        if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
-            pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
-        pytest.skip("no local Postgres; CI runs the required integration coverage")
-    try:
-        yield active
-    finally:
-        active.rollback()
-        active.close()
 
 
 class _Borrowed:

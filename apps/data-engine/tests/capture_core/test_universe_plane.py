@@ -43,19 +43,6 @@ _CASSETTE = Path(__file__).parent / "cassettes" / "nasdaq100_index.bcc3fb15.json
 _CASSETTE_SHA = "bcc3fb150a3988b699eba12e798e950e0ec0e7d55f4d99765c69dd528f087518"
 
 
-@pytest.fixture
-def connection():
-    try:
-        active = psycopg.connect(settings.database_url, connect_timeout=3, autocommit=False)
-    except psycopg.OperationalError as error:
-        pytest.skip(f"no local database: {error}")
-    try:
-        yield active
-    finally:
-        active.rollback()
-        active.close()
-
-
 def _bytes() -> bytes:
     body = _CASSETTE.read_bytes()
     assert hashlib.sha256(body).hexdigest() == _CASSETTE_SHA, "cassette is not the operator's bytes"

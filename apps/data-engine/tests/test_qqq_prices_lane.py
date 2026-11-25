@@ -12,7 +12,6 @@ import importlib
 import io
 import json
 import math
-import os
 import sys
 import urllib.error
 import urllib.parse
@@ -57,21 +56,6 @@ STAGING_OTHER_CALLERS_DAY = 306
 TICK_MARGIN = timedelta(minutes=5)
 #: A caller other than this lane, as the capture ticks record it.
 OTHER_CALLER = "twelve_data_origin.eod"
-
-
-@pytest.fixture
-def connection():
-    try:
-        active = psycopg.connect(settings.database_url, connect_timeout=3, autocommit=False)
-    except psycopg.OperationalError as error:
-        if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
-            pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
-        pytest.skip("no local Postgres; CI runs the required integration coverage")
-    try:
-        yield active
-    finally:
-        active.rollback()
-        active.close()
 
 
 def _denominator(rows: Sequence[tuple[str, str]]) -> dict[str, Any]:

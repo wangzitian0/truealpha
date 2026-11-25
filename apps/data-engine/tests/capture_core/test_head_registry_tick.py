@@ -13,11 +13,10 @@ import uuid
 from datetime import timedelta
 from pathlib import Path
 
-import psycopg
 import pytest
-from data_engine.config import settings
 from data_engine.lanes import capture
 from truealpha_contracts import universes
+from truealpha_runtime.testing import open_test_connection
 
 _SUPPORT = Path(__file__).resolve().parents[1] / "support"
 sys.path.insert(0, str(_SUPPORT))
@@ -29,20 +28,13 @@ HISTORICAL_KEYS = ["head:canary", "head:qqq", "head:sp500", "head:topt"]
 
 @pytest.fixture
 def connection():
-    try:
-        active = psycopg.connect(settings.database_url, connect_timeout=3, autocommit=False)
-    except psycopg.OperationalError as error:
-        pytest.skip(f"no local database: {error}")
-    try:
+    with open_test_connection() as active:
         # The served head reads the environment this database declares.
         active.execute(
             "insert into mart.environment_identity (singleton, environment, declared_at) "
             "values (true, 'staging', now()) on conflict (singleton) do nothing"
         )
         yield active
-    finally:
-        active.rollback()
-        active.close()
 
 
 def _head_rows(connection) -> list[tuple]:

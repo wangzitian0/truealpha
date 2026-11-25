@@ -105,13 +105,35 @@ export class FakeDocument extends FakeNode {
 	}
 }
 
-/** Makes a new fake document the global `document` and returns it. */
+const _FAKE_DOM_KEYS = ["window", "document", "HTMLIFrameElement", "IS_REACT_ACT_ENVIRONMENT"] as const;
+let savedGlobals: Map<string, { present: boolean; value: unknown }> | null = null;
+
+/** Makes a new fake document the global `document` and saves prior globals for `uninstallFakeDom()`. */
 export function installFakeDom(): FakeDocument {
 	const fakeDocument = new FakeDocument();
 	const scope = globalThis as Record<string, unknown>;
+	if (savedGlobals === null) {
+		savedGlobals = new Map(
+			_FAKE_DOM_KEYS.map((key) => [
+				key,
+				{ present: Object.prototype.hasOwnProperty.call(scope, key), value: scope[key] },
+			]),
+		);
+	}
 	scope.window = globalThis;
 	scope.document = fakeDocument;
 	scope.HTMLIFrameElement = class {};
 	scope.IS_REACT_ACT_ENVIRONMENT = true;
 	return fakeDocument;
+}
+
+/** Restores the globals overwritten by `installFakeDom()` so tests stay isolated in `bun test`. */
+export function uninstallFakeDom(): void {
+	if (savedGlobals === null) return;
+	const scope = globalThis as Record<string, unknown>;
+	for (const [key, prev] of savedGlobals.entries()) {
+		if (prev.present) scope[key] = prev.value;
+		else delete scope[key];
+	}
+	savedGlobals = null;
 }

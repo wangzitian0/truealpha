@@ -18,7 +18,6 @@ from pathlib import Path
 
 import psycopg
 import pytest
-from data_engine.config import settings
 from data_engine.datahub.capture_core.fund_consolidation import (
     _LINES_SQL,
     load_fund_vintages,
@@ -38,19 +37,6 @@ KNOWABLE_FILING = datetime(2026, 5, 15, tzinfo=UTC)
 #: Filed after the cutoff but before today: the retroactive application #36 forbids, and
 #: the exact row `mart.fund_holdings_valuation`'s unconditional newest-per-fund returns.
 LATER_FILING = datetime(2026, 8, 15, tzinfo=UTC)
-
-
-@pytest.fixture
-def connection():
-    try:
-        active = psycopg.connect(settings.database_url, connect_timeout=3, autocommit=False)
-    except psycopg.OperationalError as error:
-        pytest.skip(f"no local database: {error}")
-    try:
-        yield active
-    finally:
-        active.rollback()
-        active.close()
 
 
 def _fund_uuid(connection) -> str:

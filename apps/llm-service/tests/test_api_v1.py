@@ -23,6 +23,7 @@ from pydantic import SecretStr
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
+@pytest.mark.contract
 def test_committed_openapi_json_matches_live_fastapi_spec() -> None:
     app.openapi_schema = None
     committed = json.loads((REPO_ROOT / "apps/app-web/openapi.json").read_text(encoding="utf-8"))

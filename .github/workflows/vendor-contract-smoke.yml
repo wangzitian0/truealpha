@@ -1,0 +1,36 @@
+name: vendor-contract-smoke
+
+on:
+  schedule:
+    - cron: "15 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-uv
+        with:
+          enable-cache: true
+      - run: uv sync --package truealpha-data-engine --frozen
+      - name: Run non-blocking vendor contract smoke
+        env:
+          TWELVE_DATA_API_KEY: ${{ secrets.TWELVE_DATA_API_KEY }}
+        run: |
+          set +e
+          output="$(uv run --package truealpha-data-engine python apps/data-engine/scripts/vendor_contract_smoke.py --skip-unconfigured 2>&1)"
+          rc=$?
+          {
+            echo "## Vendor Contract Smoke (exit $rc)"
+            echo '```text'
+            printf '%s\n' "$output"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          printf '%s\n' "$output"
+          exit "$rc"

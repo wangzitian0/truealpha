@@ -1,4 +1,4 @@
-.PHONY: help install bootstrap runtime-up runtime-down runtime-check stack-up db-up db-migrate db-reset db-check db-down web llm strategy-smoke lint format typecheck-python typecheck-web test-python test-web contract-conformance check clean vision-audit
+.PHONY: help install bootstrap runtime-up runtime-down runtime-check stack-up db-up db-migrate db-reset db-check db-down web llm strategy-smoke vendor-smoke smoke-deps lint format typecheck-python typecheck-web test-python test-web contract-conformance check clean vision-audit
 
 help:
 	@echo "TrueAlpha — Development Commands"
@@ -18,6 +18,8 @@ help:
 	@echo "  make web          Next.js dev server (apps/app-web)"
 	@echo "  make llm          FastAPI dev server  (apps/llm-service, :8000)"
 	@echo "  make strategy-smoke Preview replay of large_model_value_v0 against #335's golden fixture"
+	@echo "  make vendor-smoke   Live vendor contract smoke (ARGS=... for flags)"
+	@echo "  make smoke-deps     Run gate, dependency, and smoke Python tests"
 	@echo "  make vision-audit Standing audit of Vision & Gate epics (#28/#54)"
 	@echo ""
 	@echo "Before a PR (Local pre cell, 30 seconds):"
@@ -115,6 +117,12 @@ llm:
 strategy-smoke:
 	uv run --package truealpha-data-engine python apps/data-engine/scripts/run_strategy_smoke.py --output-dir .local/strategy-smoke
 
+vendor-smoke:
+	uv run --package truealpha-data-engine python apps/data-engine/scripts/vendor_contract_smoke.py $(ARGS)
+
+smoke-deps:
+	uv run pytest -m "gate or deps or smoke"
+
 vision-audit:
 	uv run python tools/vision_audit.py $(ARGS)
 
@@ -137,7 +145,7 @@ test-python:
 	uv run pytest $(FILES)
 
 test-web:
-	cd apps/app-web && for f in tests/*.test.ts; do bun run "$$f" || exit $$?; done
+	cd apps/app-web && bun test
 
 contract-conformance:
 	uv run python common/contracts/conformance/export_environment_contract.py --check

@@ -4,9 +4,11 @@ import argparse
 import time
 from datetime import UTC, datetime
 
+import data_engine.db as db
+import data_engine.raw_store as raw_store
+import data_engine.sources.gateway as gateway
+import data_engine.sources.sec as sec
 import httpx
-from data_engine import db, raw_store
-from data_engine.sources import gateway, sec
 from factors.shared import entity_resolution as er
 from truealpha_contracts.models import DataSource
 

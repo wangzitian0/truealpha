@@ -1,14 +1,10 @@
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
 
-import psycopg
-import pytest
-from data_engine.config import settings
 from data_engine.core_strategy_replay import (
     Decision,
     _compare_against_golden,
@@ -57,21 +53,6 @@ def run_backtest_from_staging(
 
 
 _EXECUTED_AT = datetime(2026, 7, 19, 12, 0, 0, tzinfo=UTC)
-
-
-@pytest.fixture
-def connection():
-    try:
-        active = psycopg.connect(settings.database_url, connect_timeout=3, autocommit=False)
-    except psycopg.OperationalError as error:
-        if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
-            pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
-        pytest.skip("no local Postgres; CI runs the required integration coverage")
-    try:
-        yield active
-    finally:
-        active.rollback()
-        active.close()
 
 
 def _definition() -> LargeModelValueV0Definition:

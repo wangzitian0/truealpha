@@ -17,6 +17,8 @@ from pathlib import Path
 import psycopg
 import pytest
 
+pytestmark = pytest.mark.deps
+
 _CONTRACT_SQL = Path(__file__).resolve().parents[3] / "db" / "tests" / "conversations_contract.sql"
 
 

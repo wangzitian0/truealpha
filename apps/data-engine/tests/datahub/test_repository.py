@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 import json
-import os
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
 import psycopg
 import pytest
-from data_engine.config import settings
 from data_engine.contracts.capture_control import CaptureObligationWorkBinding
 from data_engine.contracts.datahub import (
     CaptureCampaign,
@@ -30,22 +28,6 @@ from truealpha_contracts.universe import SubjectRef
 
 CORPUS = Path(__file__).parents[1] / "fixtures" / "capture_control" / "corpus.v1.json"
 STARTED_AT = datetime(2026, 4, 1, 1, tzinfo=UTC)
-
-
-@pytest.fixture
-def connection():
-    try:
-        active = psycopg.connect(settings.database_url, connect_timeout=3, autocommit=False)
-    except psycopg.OperationalError as error:
-        if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
-            pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
-        pytest.skip("no local Postgres; CI runs the required integration coverage")
-    try:
-        active.execute("select 1")
-        yield active
-    finally:
-        active.rollback()
-        active.close()
 
 
 # The three helpers below lived in `medium_replay` until #1061. Their values are unchanged.

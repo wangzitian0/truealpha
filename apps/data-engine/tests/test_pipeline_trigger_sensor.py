@@ -14,7 +14,6 @@ network path between app and daemon:
 Skips without a local Postgres; ci-python/ci-db run it migrated.
 """
 
-import os
 from datetime import UTC, datetime
 
 import dagster as dg
@@ -23,24 +22,6 @@ import pytest
 from data_engine.dagster_defs import pipeline_trigger_sensor
 
 _EXECUTED_AT = datetime(2026, 7, 27, 22, 15, tzinfo=UTC)
-
-
-@pytest.fixture
-def connection():
-    from truealpha_runtime.testing import guard_db_write
-
-    url = guard_db_write()
-    try:
-        active = psycopg.connect(url, connect_timeout=3, autocommit=False)
-    except psycopg.OperationalError as error:
-        if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
-            pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
-        pytest.skip("no local Postgres; CI runs the required integration coverage")
-    try:
-        yield active
-    finally:
-        active.rollback()
-        active.close()
 
 
 def _insert_request(connection, dedupe_key: str, *, force_fetch: bool | None = None) -> int:

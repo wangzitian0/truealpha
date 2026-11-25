@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import psycopg
+import pytest
+
+pytestmark = pytest.mark.deps
 
 
 def test_the_migrated_runtime_login_disables_jit_while_the_server_default_keeps_it_on() -> None:

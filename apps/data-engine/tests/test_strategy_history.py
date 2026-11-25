@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta, timezone
 from decimal import Decimal
@@ -20,7 +19,6 @@ from typing import Any
 import psycopg
 import pytest
 from data_engine import raw_store
-from data_engine.config import settings
 from data_engine.contracts.datahub import CaptureWorkItem
 from data_engine.datahub.capture_core.concept_mapping import DEFAULT_RULESET
 from data_engine.datahub.capture_core.headcount import PostgresHeadcountExtractor, record_headcount
@@ -185,21 +183,6 @@ def _at(cutoffs: list[HistoryRow], cutoff: datetime) -> dict[tuple[str, str | No
 
 def _utc(year: int, month: int, day: int) -> datetime:
     return datetime(year, month, day, tzinfo=UTC)
-
-
-@pytest.fixture
-def connection():
-    try:
-        active = psycopg.connect(settings.database_url, connect_timeout=3, autocommit=False)
-    except psycopg.OperationalError as error:
-        if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
-            pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
-        pytest.skip("no local Postgres; CI runs the required integration coverage")
-    try:
-        yield active
-    finally:
-        active.rollback()
-        active.close()
 
 
 # -- cutoffs ----------------------------------------------------------------------------

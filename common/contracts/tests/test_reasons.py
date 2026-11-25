@@ -8,6 +8,8 @@ import pytest
 from truealpha_contracts.common import load_data_json
 from truealpha_contracts.reasons import ReasonClass, ReasonKind, class_meanings, dispositions, registration
 
+pytestmark = pytest.mark.contract
+
 SECTION = load_data_json("registries.v1.json")["reasons"]
 
 

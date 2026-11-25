@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import dataclasses
 import json
-import os
 import sys
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -70,22 +69,6 @@ _CORPUS_OBJECTIVES = ServiceObjectives(
     minimum_independent_origin_groups=0,
     minimum_corroborated_share=Decimal("0"),
 )
-
-
-@pytest.fixture
-def connection():
-    try:
-        active = psycopg.connect(settings.database_url, connect_timeout=3, autocommit=False)
-    except psycopg.OperationalError as error:
-        if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
-            pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
-        pytest.skip("no local Postgres; CI runs the required integration coverage")
-    try:
-        active.execute("select 1")
-        yield active
-    finally:
-        active.rollback()
-        active.close()
 
 
 def _normalized_payload(
@@ -1266,7 +1249,7 @@ class _BorrowedConnection:
     still executes against the real schema; only connection acquisition is
     redirected, rows are shaped per cursor (dict_row, the repository's own row
     factory), and close/commit are withheld so the test's rollback owns the
-    data's lifetime. This is the same seam test_topt_read.py fakes — here the
+    data's lifetime. This is the same seam _topt_read_support.py fakes — here the
     backend is the real database."""
 
     def __init__(self, real: psycopg.Connection) -> None:

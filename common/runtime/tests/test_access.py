@@ -6,6 +6,8 @@ import pytest
 from pydantic import ValidationError
 from truealpha_runtime.access import AccessContext, ActiveEntitlementGrant, AuthenticationMethod, PrincipalKind
 
+pytestmark = pytest.mark.gate
+
 
 def test_access_context_grants_and_validation() -> None:
     issued = datetime(2026, 6, 30, 12, 0, tzinfo=UTC)

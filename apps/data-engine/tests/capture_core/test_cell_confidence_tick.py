@@ -2,13 +2,9 @@
 
 from __future__ import annotations
 
-import os
 from datetime import UTC, date
 from decimal import Decimal
 
-import psycopg
-import pytest
-from data_engine.config import settings
 from data_engine.datahub.capture_core import PostgresCoreRepository
 from data_engine.datahub.capture_core.source_registrations import (
     SOURCE_RELIABILITY_PRIORS,
@@ -19,22 +15,6 @@ from data_engine.datahub.strategy_bridge import seed_strategy_inputs_from_captur
 from factors.snapshot_inputs import GppeV0Definition
 
 from .test_persistence import CUTOFF, _capture
-
-
-@pytest.fixture
-def connection():
-    try:
-        active = psycopg.connect(settings.database_url, connect_timeout=3, autocommit=False)
-    except psycopg.OperationalError as error:
-        if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
-            pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
-        pytest.skip("no local Postgres; CI runs the required integration coverage")
-    try:
-        active.execute("select 1")
-        yield active
-    finally:
-        active.rollback()
-        active.close()
 
 
 def test_every_registered_source_declares_a_reliability_prior_in_order() -> None:

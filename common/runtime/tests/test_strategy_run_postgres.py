@@ -12,13 +12,11 @@ unaffected since it runs against an ephemeral Postgres container per run.
 
 from __future__ import annotations
 
-import os
 import re
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
 
-import psycopg
 import pytest
 from truealpha_contracts.research import ValuationTier
 from truealpha_contracts.strategy import (
@@ -29,7 +27,7 @@ from truealpha_contracts.strategy import (
 from truealpha_runtime.access import AccessContext, AuthenticationMethod, PrincipalKind
 from truealpha_runtime.strategy_run import StrategyRunReport, StrategyRunUnavailable
 from truealpha_runtime.strategy_run_postgres import PostgresStrategyRunRepository
-from truealpha_runtime.testing import guard_db_write, synthetic_provisional_strategy_definition
+from truealpha_runtime.testing import guard_db_write, open_test_connection, synthetic_provisional_strategy_definition
 
 _HASH64 = "c" * 64
 # The canonical 8-4-4-4-12 form. `mart` entity coordinates are UUIDs (#877/#928), so this
@@ -68,17 +66,8 @@ def _context() -> AccessContext:
 
 @pytest.fixture
 def connection():
-    url = guard_db_write()
-    try:
-        active = psycopg.connect(url, connect_timeout=3, autocommit=True)
-    except psycopg.OperationalError as error:
-        if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
-            pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
-        pytest.skip("no local Postgres; CI runs the required integration coverage")
-    try:
+    with open_test_connection(autocommit=True) as active:
         yield active
-    finally:
-        active.close()
 
 
 def _insert_run(

@@ -10,18 +10,16 @@ transaction).
 
 from __future__ import annotations
 
-import os
 import uuid
 from datetime import UTC, datetime, timedelta
 
-import psycopg
 import pytest
 from truealpha_contracts.execution import AvailabilityStatus
 from truealpha_contracts.research import ValuationTier
 from truealpha_runtime.access import AccessContext, AuthenticationMethod, PrincipalKind
 from truealpha_runtime.research_report import ResearchReportKind, ResearchReportRequest, build_research_report
 from truealpha_runtime.research_report_mart import MartResearchReadRepository
-from truealpha_runtime.testing import guard_db_write
+from truealpha_runtime.testing import guard_db_write, open_test_connection
 
 _HASH64 = "d" * 64
 _CUTOFF = datetime(2026, 6, 30, 23, 59, 59, tzinfo=UTC)
@@ -51,17 +49,8 @@ def _context() -> AccessContext:
 
 @pytest.fixture
 def connection():
-    url = guard_db_write()
-    try:
-        active = psycopg.connect(url, connect_timeout=3, autocommit=True)
-    except psycopg.OperationalError as error:
-        if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
-            pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
-        pytest.skip("no local Postgres; CI runs the required integration coverage")
-    try:
+    with open_test_connection(autocommit=True) as active:
         yield active
-    finally:
-        active.close()
 
 
 def _insert_run(connection, run_id: str, strategy_key: str) -> None:

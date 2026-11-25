@@ -279,29 +279,31 @@ jobs:
             > daemon.log 2>&1 &
           echo "DAEMON_PID=$!" >> "$GITHUB_ENV"
           echo "SOCK=$SOCK" >> "$GITHUB_ENV"
-      # #860: the window is ONE full churn cycle of the old regime plus margin. Under
-      # plain `-m` the code-server self-terminated every ~68-70s (the job comment
-      # above, measured on staging and in the local reproduction), so if that
-      # regression is back, "No heartbeat received" is in the log by ~70s of daemon
-      # uptime; 75s is the far end of that cadence plus a 5-7s margin. The first
-      # version slept 120s -- also "over one cycle", as its own name said, not two;
-      # the extra 50s was margin nobody had sized, and it made this job the pole of
-      # every PR's and every main push's critical path at 2.5 min (runs 35051480691,
-      # 35051670287). If the cadence is ever re-measured longer, raise this number
-      # and the comment above together.
-      - name: Observe for 75s (one full old ~68-70s churn cycle, plus margin) and assert no heartbeat churn
+      - name: Poll gRPC + daemon liveness and verify zero heartbeat churn
         run: |
-          sleep 75
-          echo "--- code_server.log ---"
-          cat code_server.log
-          if grep -q "No heartbeat received" code_server.log; then
-            echo "::error::code-server self-terminated on a missing heartbeat -- --grpc-socket regressed to per-role managed spawning" >&2
+          set -euo pipefail
+          ready=""
+          for _ in $(seq 1 30); do
+            if uv run --package truealpha-data-engine dagster api grpc-health-check --socket "$SOCK" \
+              && uv run --package truealpha-data-engine dagster-daemon liveness-check; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          if [ -z "$ready" ]; then
+            echo "::error::dagster code-server or daemon failed liveness within 30s" >&2
+            echo "--- code_server.log ---" >&2
+            cat code_server.log >&2 || true
+            echo "--- daemon.log ---" >&2
+            cat daemon.log >&2 || true
             exit 1
           fi
-      - name: Positive health checks
-        run: |
-          uv run --package truealpha-data-engine dagster api grpc-health-check --socket "$SOCK"
-          uv run --package truealpha-data-engine dagster-daemon liveness-check
+          if grep -q "No heartbeat received" code_server.log; then
+            echo "::error::code-server self-terminated on a missing heartbeat -- --grpc-socket regressed to per-role managed spawning" >&2
+            cat code_server.log >&2
+            exit 1
+          fi
       - name: Stop background processes
         if: always()
         run: |

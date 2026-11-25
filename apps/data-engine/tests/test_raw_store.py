@@ -14,6 +14,8 @@ from truealpha_runtime.testing import skip_or_fail
 
 psycopg = pytest.importorskip("psycopg")
 
+pytestmark = pytest.mark.deps
+
 
 @pytest.fixture
 def conn():

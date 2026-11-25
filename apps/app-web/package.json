@@ -7,6 +7,7 @@
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
+    "test": "bun test",
     "generate:api": "openapi-typescript openapi.json -o src/client/openapi.generated.ts && bun -e 'const f=\"src/client/openapi.generated.ts\",fs=require(\"fs\");let s=fs.readFileSync(f,\"utf8\").replace(/\\/\\*[\\s\\S]*?\\*\\//g,\"\").split(/\\r?\\n/).map(l=>l.trim()).filter(l=>l&&!/^[a-zA-Z0-9_?]+:\\s*never;?$/.test(l)&&!/^parameters:\\s*\\{\\s*\\};?$/.test(l)).join(\" \").replace(/\\s*([{};:,])\\s*/g,\"$1\").replace(/export(interface|type)/g,\"\\nexport $1\").replace(/(\\\"\\/[^\"]+\\\":\\{)/g,\"\\n$1\");fs.writeFileSync(f,\"// Auto-generated from openapi.json\\n\"+s.trim()+\"\\n\");'"
   },
   "dependencies": {

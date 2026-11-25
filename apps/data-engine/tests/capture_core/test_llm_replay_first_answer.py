@@ -35,6 +35,7 @@ from data_engine.contracts.theme_purity import THEMES
 from data_engine.datahub.capture_core import theme_purity
 from data_engine.datahub.capture_core.theme_purity import IssuerPartition, materialize_theme_purity
 from data_engine.sources import gateway, llm
+from truealpha_runtime.testing import guard_db_write, skip_or_fail
 
 AI = THEMES["ai-infrastructure"]
 SEGMENTS = (("Semiconductor solutions", Decimal("36858000000")), ("Infrastructure software", Decimal("27029000000")))
@@ -45,22 +46,14 @@ WAIT_SECONDS = 20
 
 
 def _connect(*, autocommit: bool = False) -> psycopg.Connection[Any]:
+    url = guard_db_write()
     try:
-        return psycopg.connect(settings.database_url, connect_timeout=3, autocommit=autocommit)
+        return psycopg.connect(url, connect_timeout=3, autocommit=autocommit)
     except psycopg.OperationalError as error:
         if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
             pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
-        pytest.skip("no local Postgres; CI runs the required integration coverage")
-
-
-@pytest.fixture
-def connection():
-    active = _connect()
-    try:
-        yield active
-    finally:
-        active.rollback()
-        active.close()
+        skip_or_fail("no local Postgres; CI runs the required integration coverage")
+        raise AssertionError("unreachable")
 
 
 @pytest.fixture

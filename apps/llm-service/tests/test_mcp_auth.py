@@ -16,6 +16,8 @@ from pydantic import SecretStr
 from starlette.types import Receive, Scope, Send
 from starlette.websockets import WebSocketDisconnect
 
+pytestmark = pytest.mark.gate
+
 TOKEN = "test-mcp-token"
 
 

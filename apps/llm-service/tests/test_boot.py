@@ -9,6 +9,8 @@ from fastapi.testclient import TestClient
 from llm_service import main
 from llm_service.config import Settings
 
+pytestmark = pytest.mark.gate
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 

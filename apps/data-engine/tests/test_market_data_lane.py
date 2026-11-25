@@ -5,7 +5,6 @@ from __future__ import annotations
 import importlib
 import json
 import math
-import os
 import sys
 import urllib.parse
 from collections import Counter
@@ -34,21 +33,6 @@ from data_engine.sources import gateway
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "support"))
 from topt_symbols import TOPT_SYMBOLS  # noqa: E402
-
-
-@pytest.fixture
-def connection():
-    try:
-        active = psycopg.connect(settings.database_url, connect_timeout=3, autocommit=False)
-    except psycopg.OperationalError as error:
-        if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
-            pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
-        pytest.skip("no local Postgres; CI runs the required integration coverage")
-    try:
-        yield active
-    finally:
-        active.rollback()
-        active.close()
 
 
 def test_daily_cutoff_falls_back_to_the_prior_closed_session_before_todays_close() -> None:

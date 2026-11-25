@@ -20,13 +20,10 @@ referencing it anywhere in the repo), not the whole thing.
 from __future__ import annotations
 
 import hashlib
-import os
 from datetime import date
 from decimal import Decimal
 
-import psycopg
 import pytest
-from data_engine.config import settings
 from data_engine.datahub.capture_core.materialization import FinancialFactPayload
 from data_engine.datahub.quality_report import (
     _FINANCIAL_FACT_OPERATING_NUMERATOR,
@@ -37,20 +34,13 @@ from data_engine.datahub.quality_report import (
 from data_engine.datahub.share_basis import SplitHistory, Unavailable
 from factors.snapshot_inputs import OperatingBranch
 from truealpha_contracts.models import RawObjectRef
+from truealpha_runtime.testing import open_test_connection
 
 
 @pytest.fixture
 def connection():
-    try:
-        active = psycopg.connect(settings.database_url, connect_timeout=3, autocommit=True)
-    except psycopg.OperationalError as error:
-        if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
-            pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
-        pytest.skip("no local Postgres; CI runs the required integration coverage")
-    try:
+    with open_test_connection(autocommit=True) as active:
         yield active
-    finally:
-        active.close()
 
 
 def _report(run_id: str, **overrides: object) -> dict[str, object]:

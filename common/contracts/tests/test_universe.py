@@ -4,6 +4,8 @@ import pytest
 from pydantic import ValidationError
 from truealpha_contracts.universe import SubjectKind, SubjectRef, UniverseRef
 
+pytestmark = pytest.mark.contract
+
 SHA = "0" * 64
 
 

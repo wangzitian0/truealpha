@@ -13,7 +13,6 @@ so what is exercised here is the path production takes rather than a shortcut ar
 from __future__ import annotations
 
 import json
-import os
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -39,21 +38,6 @@ AI = THEMES["ai-infrastructure"]
 #: The AVGO shape, in absolute dollars as the plane holds them.
 SEGMENTS = (("Semiconductor solutions", Decimal("36858000000")), ("Infrastructure software", Decimal("27029000000")))
 TOTAL = Decimal("63887000000")
-
-
-@pytest.fixture
-def connection():
-    try:
-        active = psycopg.connect(settings.database_url, connect_timeout=3, autocommit=False)
-    except psycopg.OperationalError as error:
-        if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
-            pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
-        pytest.skip("no local Postgres; CI runs the required integration coverage")
-    try:
-        yield active
-    finally:
-        active.rollback()
-        active.close()
 
 
 @pytest.fixture

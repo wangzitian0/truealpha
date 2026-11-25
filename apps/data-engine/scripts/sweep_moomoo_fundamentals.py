@@ -88,7 +88,8 @@ def main() -> None:
     )
     endpoints = list(mm.FUNDAMENTAL_ENDPOINTS) if args.all_endpoints else list(mm.CORE_ENDPOINTS)
     plan = plan_calls(conn, codes, endpoints, args.refetch)
-    rate = int(gateway.CAPACITIES["moomoo"].calls_per_window)
+    calls_per_window = gateway.CAPACITIES["moomoo"].calls_per_window
+    rate = int(calls_per_window) if calls_per_window is not None else 0
     print(f"universe: {len(codes)} x {len(endpoints)}; {len(plan)} to fetch; used={calls_this_month()} rate={rate}/30s")
     if args.dry_run:
         conn.close()

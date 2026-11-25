@@ -25,7 +25,7 @@ import { act, createElement, isValidElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { HYDRATED_DOCUMENT } from "../e2e/navigation.mjs";
 import { HydrationMarker } from "../src/components/hydration-marker";
-import { installFakeDom } from "./helpers/fake-dom";
+import { installFakeDom, uninstallFakeDom } from "./helpers/fake-dom";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -98,28 +98,32 @@ assert(
 // ─── (3) and (4) a render alone does not set it; the mounted effect does ─────
 {
 	const fakeDocument = installFakeDom();
-	renderToStaticMarkup(createElement(HydrationMarker));
-	assert(
-		fakeDocument.documentElement.getAttribute("data-hydrated") === null,
-		"HydrationMarker sets data-hydrated during render, before React has hydrated anything; set it in an effect",
-	);
+	try {
+		renderToStaticMarkup(createElement(HydrationMarker));
+		assert(
+			fakeDocument.documentElement.getAttribute("data-hydrated") === null,
+			"HydrationMarker sets data-hydrated during render, before React has hydrated anything; set it in an effect",
+		);
 
-	// Imported only now: react-dom/client reads the globals above when it loads.
-	const { createRoot } = await import("react-dom/client");
-	const container = fakeDocument.createElement("div");
-	const root = createRoot(container as unknown as Element);
-	// `act` flushes the render and its effects, which is what mounting means here.
-	await act(async () => {
-		root.render(createElement(HydrationMarker));
-	});
-	assert(container.childNodes.length === 0, "HydrationMarker must render no element of its own");
-	assert(
-		fakeDocument.documentElement.getAttribute("data-hydrated") === "true",
-		`after mount <html> does not say data-hydrated="true", so the walk's wait for ${HYDRATED_DOCUMENT} times out on every route; attributes: ${JSON.stringify([...fakeDocument.documentElement.attributes])}`,
-	);
-	await act(async () => {
-		root.unmount();
-	});
+		// Imported only now: react-dom/client reads the globals above when it loads.
+		const { createRoot } = await import("react-dom/client");
+		const container = fakeDocument.createElement("div");
+		const root = createRoot(container as unknown as Element);
+		// `act` flushes the render and its effects, which is what mounting means here.
+		await act(async () => {
+			root.render(createElement(HydrationMarker));
+		});
+		assert(container.childNodes.length === 0, "HydrationMarker must render no element of its own");
+		assert(
+			fakeDocument.documentElement.getAttribute("data-hydrated") === "true",
+			`after mount <html> does not say data-hydrated="true", so the walk's wait for ${HYDRATED_DOCUMENT} times out on every route; attributes: ${JSON.stringify([...fakeDocument.documentElement.attributes])}`,
+		);
+		await act(async () => {
+			root.unmount();
+		});
+	} finally {
+		uninstallFakeDom();
+	}
 }
 
 console.log("#1412 hydration marker passed");

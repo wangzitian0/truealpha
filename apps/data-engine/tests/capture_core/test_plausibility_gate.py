@@ -8,14 +8,10 @@ refuse the run."""
 from __future__ import annotations
 
 import json
-import os
 import sys
 from datetime import date
 from pathlib import Path
 
-import psycopg
-import pytest
-from data_engine.config import settings
 from data_engine.datahub.capture_core import PostgresCoreRepository, plausibility_gate
 from factors.composite import plausibility_policy
 from factors.composite.plausibility_policy import RULE_EMPTY_ELIGIBLE, RULE_NODE_SIGN_POLICY
@@ -26,22 +22,6 @@ from truealpha_contracts.strategy import ExclusionReason
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from capture_core.test_materialization import _seed_strategy_capture  # noqa: E402
-
-
-@pytest.fixture
-def connection():
-    try:
-        active = psycopg.connect(settings.database_url, connect_timeout=3, autocommit=False)
-    except psycopg.OperationalError as error:
-        if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
-            pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
-        pytest.skip("no local Postgres; CI runs the required integration coverage")
-    try:
-        active.execute("select 1")
-        yield active
-    finally:
-        active.rollback()
-        active.close()
 
 
 def _materialized_run(connection):

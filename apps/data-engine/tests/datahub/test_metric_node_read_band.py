@@ -20,7 +20,7 @@ from truealpha_contracts.confidence_bands import confidence_band
 from truealpha_runtime.research_report_mart import MetricNodeValueReport, PostgresMetricNodeValueRepository
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from datahub.test_topt_read import _accepted_run, connection  # noqa: E402, F401
+from datahub._topt_read_support import _accepted_run  # noqa: E402, F401
 
 # confidence stored on one row each -> the word the three sentences of init.md give.
 _EXPECTED_BANDS = {

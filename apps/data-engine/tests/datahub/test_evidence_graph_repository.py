@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import subprocess
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -32,22 +31,6 @@ _STAMP = BitemporalStamp(
     transaction_time=datetime(2026, 4, 1, tzinfo=UTC),
     recorded_at=datetime(2026, 4, 1, 12, tzinfo=UTC),
 )
-
-
-@pytest.fixture
-def connection():
-    try:
-        active = psycopg.connect(settings.database_url, connect_timeout=3, autocommit=False)
-    except psycopg.OperationalError as error:
-        if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
-            pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
-        pytest.skip("no local Postgres; CI runs the required integration coverage")
-    try:
-        active.execute("select 1")
-        yield active
-    finally:
-        active.rollback()
-        active.close()
 
 
 def _node(kind: EvidenceNodeKind, digest: str) -> EvidenceNode:

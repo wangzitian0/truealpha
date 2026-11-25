@@ -9,6 +9,8 @@ from truealpha_contracts.models import DataSource, RawCapture
 from truealpha_runtime import RuntimeSettings, S3RawObjectStore
 from truealpha_runtime.storage import StorageError
 
+pytestmark = pytest.mark.deps
+
 BODY = b'{"entityName":"Datadog, Inc."}'
 
 

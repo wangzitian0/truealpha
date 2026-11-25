@@ -11,7 +11,6 @@ know about this date before the value changed."
 from __future__ import annotations
 
 import json
-import os
 import sys
 import urllib.parse
 from datetime import date, timedelta
@@ -20,7 +19,6 @@ from zoneinfo import ZoneInfo
 
 import psycopg
 import pytest
-from data_engine.config import settings
 from data_engine.datahub.capture_core.twelve_data_origin import TwelveDataQuoteFetcher
 from data_engine.datahub.market_prices import (
     PriceBarRecord,
@@ -34,21 +32,6 @@ from data_engine.sources import gateway
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
 from topt_symbols import TOPT_SYMBOLS  # noqa: E402
-
-
-@pytest.fixture
-def connection():
-    try:
-        active = psycopg.connect(settings.database_url, connect_timeout=3, autocommit=False)
-    except psycopg.OperationalError as error:
-        if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
-            pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
-        pytest.skip("no local Postgres; CI runs the required integration coverage")
-    try:
-        yield active
-    finally:
-        active.rollback()
-        active.close()
 
 
 def _bar(symbol: str, d: date, close) -> PriceBarRecord:

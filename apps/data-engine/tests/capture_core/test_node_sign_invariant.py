@@ -18,7 +18,6 @@ from capture_core.test_plausibility_gate import (  # noqa: E402
     _bypass_append_only,
     _materialized_run,
     _point_head_at,
-    connection,  # noqa: F401  (the fixture)
 )
 
 suite = load_tool("output_invariants")

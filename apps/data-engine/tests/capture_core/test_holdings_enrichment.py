@@ -9,10 +9,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-import psycopg
-import pytest
 from data_engine import raw_store
-from data_engine.config import settings
 from data_engine.datahub.capture_core.holdings_enrichment import (
     enrich_holding_identities,
     figi_from_raw,
@@ -50,19 +47,6 @@ def _class_records(ticker: str) -> list[dict]:
             "marketSector": "Equity",
         }
     ]
-
-
-@pytest.fixture
-def connection():
-    try:
-        active = psycopg.connect(settings.database_url, connect_timeout=3, autocommit=False)
-    except psycopg.OperationalError as error:
-        pytest.skip(f"no local database: {error}")
-    try:
-        yield active
-    finally:
-        active.rollback()
-        active.close()
 
 
 def _seed_tranche_one(connection) -> None:

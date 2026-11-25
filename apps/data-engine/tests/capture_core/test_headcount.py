@@ -9,13 +9,10 @@ constant-stamped row can never outrank a cited 10-K filing.
 
 from __future__ import annotations
 
-import os
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
-import psycopg
 import pytest
-from data_engine.config import settings
 from data_engine.datahub.capture_core.headcount import (
     PostgresHeadcountExtractor,
     lookup_headcount,
@@ -24,22 +21,6 @@ from data_engine.datahub.capture_core.headcount import (
 from truealpha_runtime.reconciliation_policies import HEADCOUNT_RECONCILIATION_POLICY
 
 _CIK = 9991264
-
-
-@pytest.fixture
-def connection():
-    try:
-        active = psycopg.connect(settings.database_url, connect_timeout=3, autocommit=False)
-    except psycopg.OperationalError as error:
-        if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
-            pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
-        pytest.skip("no local Postgres; CI runs the required integration coverage")
-    try:
-        active.execute("select 1")
-        yield active
-    finally:
-        active.rollback()
-        active.close()
 
 
 def test_active_headcount_sources_excludes_curated_10k_2025() -> None:

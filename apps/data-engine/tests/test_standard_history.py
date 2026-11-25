@@ -12,7 +12,6 @@ append-only: a committed test row could not be deleted.
 from __future__ import annotations
 
 import json
-import os
 import re
 from collections import Counter
 from dataclasses import dataclass
@@ -30,6 +29,7 @@ from data_engine.datahub.standards.planner import UniverseIssuer
 from data_engine.sources import llm
 from data_engine.sources.gateway import SourceCapacity, SourceGateway
 from truealpha_contracts.models import RawCapture, RawIngestionEnvelope, RawObjectRef
+from truealpha_runtime.testing import open_test_connection
 
 TICK = datetime(2026, 10, 12, 9, 7, tzinfo=UTC)  # a Monday
 MONTHS = 36
@@ -215,17 +215,8 @@ class _NoCommit:
 
 @pytest.fixture
 def connection():
-    try:
-        active = psycopg.connect(settings.database_url, connect_timeout=3, autocommit=False)
-    except psycopg.OperationalError as error:
-        if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
-            pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
-        pytest.skip("no local Postgres; CI runs the required integration coverage")
-    try:
+    with open_test_connection() as active:
         yield _NoCommit(active)
-    finally:
-        active.rollback()
-        active.close()
 
 
 class StubModel:

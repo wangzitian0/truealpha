@@ -12,6 +12,8 @@ from truealpha_contracts import strategy as _st
 from truealpha_runtime.strategy_run import StrategyRunDefinition
 from truealpha_runtime.testing import synthetic_provisional_strategy_definition
 
+pytestmark = pytest.mark.contract
+
 _V1 = _st.StrategyDefinitionIdentity("1.0.0", "a0c6f1f003373b5eff85872fd493de91e2fd6d9fa3d15e78e278f96b88bd8803", False)
 _V11 = _st.StrategyDefinitionIdentity(
     "1.1.0", "b8768334a00f88f9f34244a758182454ef220343e161f6c5008dde5c9d4611e3", False

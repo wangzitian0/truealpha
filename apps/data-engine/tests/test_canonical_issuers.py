@@ -10,7 +10,6 @@ generations (`support/financial_lineage_seed.py`). Nothing in the resolution pat
 from __future__ import annotations
 
 import json
-import os
 import sys
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -44,24 +43,6 @@ def _plain_share_cover_for_history(monkeypatch: pytest.MonkeyPatch) -> None:
     import data_engine.datahub.strategy_history as history
 
     monkeypatch.setattr(history, "CoverRatioReader", lambda: plain_share_ratio)
-
-
-@pytest.fixture
-def connection():
-    from truealpha_runtime.testing import guard_db_write
-
-    url = guard_db_write()
-    try:
-        active = psycopg.connect(url, connect_timeout=3, autocommit=False)
-    except psycopg.OperationalError as error:
-        if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
-            pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
-        pytest.skip("no local Postgres; CI runs the required integration coverage")
-    try:
-        yield active
-    finally:
-        active.rollback()
-        active.close()
 
 
 @pytest.fixture

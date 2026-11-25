@@ -11,11 +11,15 @@ rows request the `call_ledger` fixture by name.
 
 import os
 import sys
+from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
+import psycopg
 import pytest
 from data_engine.sources import gateway
 from data_engine.sources.landed_keys import MemoryLandedKeys
+from truealpha_runtime.testing import open_test_connection
 
 _SUPPORT = str(Path(__file__).resolve().parent / "support")
 if _SUPPORT not in sys.path:
@@ -57,6 +61,13 @@ def isolate_ambient_database(monkeypatch: pytest.MonkeyPatch) -> None:
         from data_engine.config import settings
 
         monkeypatch.setattr(settings, "database_url", "postgresql://127.0.0.1:1/unreachable")
+
+
+@pytest.fixture
+def connection() -> Iterator[psycopg.Connection[Any]]:
+    """Shared fail-closed transaction connection for data-engine Postgres integration tests."""
+    with open_test_connection() as active:
+        yield active
 
 
 @pytest.fixture
