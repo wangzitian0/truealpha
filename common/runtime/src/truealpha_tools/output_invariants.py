@@ -42,14 +42,12 @@ GOVERNED_HEAD = f"""
 
 DASHBOARD_STRATEGY = "large_model_value_v0"
 LATEST_STRATEGY_RUN = f"""
-    select strategy_run_id from (
-        select r.strategy_run_id, r.executed_at, r.created_at,
-               exists (select 1 from mart.governed_strategy_run g
-                       where g.strategy_run_id = r.strategy_run_id) as is_governed
-        from mart.strategy_runs r
-        where r.strategy_key = '{DASHBOARD_STRATEGY}'
-        order by is_governed desc, r.executed_at desc, r.created_at desc, r.strategy_run_id desc limit 1
-    ) served
+    select r.strategy_run_id
+    from mart.strategy_runs r
+    where r.strategy_key = '{DASHBOARD_STRATEGY}'
+      and exists (select 1 from mart.governed_strategy_run g
+                  where g.strategy_run_id = r.strategy_run_id)
+    order by r.executed_at desc, r.created_at desc, r.strategy_run_id desc limit 1
 """
 
 

@@ -2225,6 +2225,11 @@
             },
             "type": "array",
             "title": "Rollback Requests"
+          },
+          "db_hygiene": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Db Hygiene"
           }
         },
         "type": "object",

@@ -151,13 +151,88 @@ def _seed_observation(
     return observation_id
 
 
+def _ensure_e2e_governed_head(conn: psycopg.Connection, capture_run_id: str) -> None:
+    env_row = conn.execute("select environment from mart.environment_identity").fetchone()
+    env_name = str(env_row[0]) if env_row else "production"
+    camp_id = f"capture-campaign:{_sha(f'e2e-campaign:{capture_run_id}')}"
+    conn.execute(
+        "insert into raw.capture_campaigns (campaign_id, content_sha256, policy_id, environment, cutoff, cutoff_canonical, universe_refs) "
+        "values (%s, %s, 'e2e-seed:v1', %s, %s::timestamptz, %s, %s::jsonb) on conflict (campaign_id) do nothing",
+        (
+            camp_id,
+            _sha(f"e2e-campaign:{capture_run_id}"),
+            env_name,
+            PREVIEW_CUTOFF,
+            PREVIEW_CUTOFF,
+            json.dumps(
+                [
+                    {
+                        "universe_id": "universe:topt-us-2026-03-31",
+                        "universe_version": "2026-03-31",
+                        "content_sha256": _sha("e2e-u"),
+                    }
+                ]
+            ),
+        ),
+    )
+    conn.execute(
+        "insert into raw.capture_runs (run_id, campaign_id, run_sequence, schedule_policy_id, capture_scope_id, content_sha256) "
+        "values (%s, %s, 1, %s, %s, %s) on conflict (run_id) do nothing",
+        (
+            capture_run_id,
+            camp_id,
+            f"schedule-policy:{_sha(f'e2e-sp:{capture_run_id}')}",
+            f"capture-scope:{_sha(f'e2e-scope:{capture_run_id}')}",
+            capture_run_id.split(":", 1)[1],
+        ),
+    )
+    conn.execute(
+        "insert into staging.evidence_nodes (node_id, kind, content_sha256, valid_from, transaction_time, recorded_at) "
+        "values (%s, 'capture_run', %s, '2026-03-31', now(), now()) on conflict (node_id) do nothing",
+        (capture_run_id, capture_run_id.split(":", 1)[1]),
+    )
+    existing_ptr = conn.execute(
+        "select 1 from mart.current_pointer where environment = (select environment from mart.environment_identity) "
+        "and universe_id = 'universe:topt-us-2026-03-31' and factor_id = 'gross_profit_per_employee' and target_run_id = %s limit 1",
+        (capture_run_id,),
+    ).fetchone()
+    if existing_ptr:
+        return
+    next_seq_row = conn.execute(
+        "select coalesce(max(sequence), -1) + 1 from mart.current_pointer "
+        "where environment = (select environment from mart.environment_identity) "
+        "and universe_id = 'universe:topt-us-2026-03-31' and universe_version = '2026-03-31' and factor_id = 'gross_profit_per_employee'"
+    ).fetchone()
+    next_seq = int(next_seq_row[0]) if next_seq_row else 0
+    prev_row = conn.execute(
+        "select target_run_id from mart.current_pointer_head "
+        "where environment = (select environment from mart.environment_identity) "
+        "and universe_id = 'universe:topt-us-2026-03-31' and universe_version = '2026-03-31' and factor_id = 'gross_profit_per_employee'"
+    ).fetchone()
+    prev_run_id = str(prev_row[0]) if prev_row and next_seq > 0 else None
+    if next_seq > 0 and prev_run_id == capture_run_id:
+        return
+    ptr_sha = _sha(f"e2e-pointer:{capture_run_id}:{next_seq}")
+    conn.execute(
+        "insert into mart.current_pointer (pointer_id, content_sha256, environment, universe_id, "
+        "universe_version, factor_id, target_run_id, sequence, previous_run_id, advanced_at) "
+        "values (%s, %s, (select environment from mart.environment_identity), 'universe:topt-us-2026-03-31', "
+        "'2026-03-31', 'gross_profit_per_employee', %s, %s, %s, now()) on conflict (pointer_id) do nothing",
+        (f"current-pointer:{ptr_sha}", ptr_sha, capture_run_id, next_seq, prev_run_id),
+    )
+
+
 def _seed_trace_lineage(
     conn: psycopg.Connection, preview_run_id: str, executed_at: str, first_selected_entity_id: str
-) -> None:
-    if conn.execute(
-        "select 1 from mart.strategy_run_capture_bindings where strategy_run_id = %s", (preview_run_id,)
-    ).fetchone():
-        return
+) -> str:
+    existing = conn.execute(
+        "select capture_run_id from mart.strategy_run_capture_bindings where strategy_run_id = %s limit 1",
+        (preview_run_id,),
+    ).fetchone()
+    if existing:
+        capture_run_id = str(existing[0])
+        _ensure_e2e_governed_head(conn, capture_run_id)
+        return capture_run_id
     snapshot_sha = _sha(f"e2e-preview-snapshot:{preview_run_id}")
     snapshot_id = f"topt-core-snapshot:{snapshot_sha}"
     capture_run_id = f"capture-run:{_hex()}"
@@ -294,6 +369,8 @@ def _seed_trace_lineage(
         "insert into mart.strategy_run_capture_bindings (capture_run_id, strategy_run_id, bound_by) values (%s, %s, 'tick')",
         (capture_run_id, preview_run_id),
     )
+    _ensure_e2e_governed_head(conn, capture_run_id)
+    return capture_run_id
 
 
 def main() -> int:
@@ -397,6 +474,21 @@ def main() -> int:
                 )
 
         conn.execute("set local session_replication_role = replica")
+        selected_rows = sorted(
+            (
+                d
+                for d in preview["decisions"]
+                if d["cutoff_at"] == PREVIEW_CUTOFF and d["issuer_id"] in PREVIEW_ISSUERS and d["outcome"] == "selected"
+            ),
+            key=lambda d: (d.get("rank") or 999, PREVIEW_ISSUERS[d["issuer_id"]][0]),
+        )
+        module_run_id = (
+            _seed_trace_lineage(
+                conn, preview_run_id, "2027-06-02T00:00:00Z", PREVIEW_ISSUERS[selected_rows[0]["issuer_id"]][0]
+            )
+            if selected_rows
+            else preview_run_id
+        )
         for entity_id, legacy_id, mic_ticker, _ticker, display_name in PREVIEW_ISSUERS.values():
             conn.execute(
                 "insert into staging.entities (entity_id, kind, mint_rule, minted_by, birth_scheme, birth_value) "
@@ -413,24 +505,12 @@ def main() -> int:
             conn.execute(
                 "insert into mart.issuer_analyst_ratings (run_id, issuer_id, cutoff, consensus_rating, analysts_count, buy_count, hold_count, sell_count, confidence, reason_codes, extractor, availability_status, source_evidence_status, factor_validation_status) "
                 "values (%s, %s, %s, 4.35, 18, 12, 5, 1, 0.88, %s, 'origin:moomoo:v1', 'available', 'verified', 'accepted') on conflict (run_id, issuer_id) do nothing",
-                (preview_run_id, entity_id, PREVIEW_CUTOFF, ["target_price:195.00", "consensus:buy"]),
+                (module_run_id, entity_id, PREVIEW_CUTOFF, ["target_price:195.00", "consensus:buy"]),
             )
             conn.execute(
                 "insert into mart.issuer_supply_chain_exposure (run_id, issuer_id, cutoff, exposure_score, direct_partners, suppliers_count, customers_count, max_partner_share, confidence, reason_codes, extractor, availability_status, source_evidence_status, factor_validation_status) "
                 "values (%s, %s, %s, 0.72, 6, 3, 3, 0.34, 0.85, %s, 'graph:kg-edges:v1', 'available', 'verified', 'accepted') on conflict (run_id, issuer_id) do nothing",
-                (preview_run_id, entity_id, PREVIEW_CUTOFF, ["supplier:tsmc", "customer:msft"]),
-            )
-        selected_rows = sorted(
-            (
-                d
-                for d in preview["decisions"]
-                if d["cutoff_at"] == PREVIEW_CUTOFF and d["issuer_id"] in PREVIEW_ISSUERS and d["outcome"] == "selected"
-            ),
-            key=lambda d: (d.get("rank") or 999, PREVIEW_ISSUERS[d["issuer_id"]][0]),
-        )
-        if selected_rows:
-            _seed_trace_lineage(
-                conn, preview_run_id, "2027-06-02T00:00:00Z", PREVIEW_ISSUERS[selected_rows[0]["issuer_id"]][0]
+                (module_run_id, entity_id, PREVIEW_CUTOFF, ["supplier:tsmc", "customer:msft"]),
             )
         conn.commit()
         from truealpha_runtime.mart_refresh import refresh_mart_materialized_views

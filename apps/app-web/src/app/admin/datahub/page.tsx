@@ -1,5 +1,5 @@
 import { api } from "@/client/api";
-import { formatCell } from "@/client/format";
+import { formatCell, formatShortSha } from "@/client/format";
 import { ReadStateNotice } from "@/components/read-state";
 import { TriggerRunButton } from "@/components/trigger-run-button";
 import { UNIVERSES } from "@/contracts/environmentContract.generated";
@@ -55,8 +55,15 @@ export default async function AdminDatahubPage() {
       {error && <ReadStateNotice state={{ kind: "error", message: error }} />}
       <DataSection
         title="Question coverage matrix"
-        headers={["Universe", "Cutoff", "Created"]}
-        rows={questionCoverage.map((q) => [safeCell(q.universe_id), safeCell(q.cutoff), safeCell(q.created_at)])}
+        headers={["Universe", "Report run", "Served head", "Aligned", "Cutoff", "Created"]}
+        rows={questionCoverage.map((q) => [
+          safeCell(q.universe_id),
+          formatShortSha((q.report_run_id as string | null | undefined) ?? null),
+          formatShortSha((q.served_head_run_id as string | null | undefined) ?? null),
+          q.matches_served_head === true ? "yes" : q.matches_served_head === false ? "no" : formatCell(null),
+          safeCell(q.cutoff),
+          safeCell(q.created_at),
+        ])}
       />
       <QuestionCoverageDetails questionCoverage={questionCoverage} />
       <div className="space-y-2">

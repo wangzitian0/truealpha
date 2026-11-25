@@ -44,9 +44,11 @@ _THEMES_HEAD_SQL = """
 select p.run_id, max(p.cutoff) as cutoff
 from mart.issuer_theme_purity p
 where p.partition_id is not null
-  and (
-    p.run_id in (select h.run_id from mart.served_head h where h.run_id is not null)
-    or not exists (select 1 from mart.served_head)
+  and p.run_id in (
+    select h.run_id
+    from mart.served_head h
+    where h.run_id is not null
+      and not starts_with(h.universe_id, 'universe:canary-')
   )
 group by run_id
 order by max(cutoff) desc
@@ -76,16 +78,14 @@ order by advanced_at desc limit 1
 _HOLDINGS_ROWS_SQL = "select count(*) from mart.fund_virtual_company where run_id = %s"
 #: `apps/llm-service/src/llm_service/services/admin_service.py` `QUESTION_COVERAGE_SQL`.
 _COVERAGE_HEAD_SQL = """
-select distinct on (universe_id) universe_id, run_id, payload
+select distinct on (r.universe_id) r.universe_id, r.run_id, r.payload
 from mart.question_coverage_report r
-where universe_id in (select universe_id from mart.served_head)
-order by universe_id,
-         exists (
-           select 1 from mart.served_head h
-           where h.universe_id = r.universe_id
-             and coalesce(h.run_id, h.head_run_id) = r.run_id
-         ) desc,
-         created_at desc
+join mart.served_head h on h.universe_id = r.universe_id
+where h.factor_id = 'gross_profit_per_employee'
+  and not starts_with(h.universe_id, 'universe:canary-')
+order by r.universe_id,
+         (r.run_id = coalesce(h.run_id, h.head_run_id)) desc,
+         r.created_at desc
 """
 #: What the theme lane had to work with, for a MISMATCH line on an empty table: the accepted
 #: segment partitions knowable at the head's cutoff (`theme_purity._PARTITION_SQL`'s vintage
