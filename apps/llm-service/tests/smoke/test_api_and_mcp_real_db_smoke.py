@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import psycopg
 import pytest
 from fastapi.testclient import TestClient
@@ -120,10 +122,56 @@ def test_all_seven_domains_http_and_mcp_on_real_postgres_as_app_service_login(
                     "(dagster_run_id, checked_at, invariant_id, kind, population, violation_count, deferred, sample_rows) "
                     "values ('dagster-smoke-1', now(), 'smoke-invariant-1', 'fact', 10, 0, false, '[]'::jsonb)"
                 )
+                su_conn.execute("create schema if not exists dagster")
+                su_conn.execute(
+                    """
+                    create table if not exists dagster.event_logs (
+                      id bigserial primary key,
+                      run_id varchar(255) not null,
+                      event text not null,
+                      dagster_event_type text,
+                      timestamp timestamp not null,
+                      step_key text,
+                      asset_key text,
+                      partition text
+                    )
+                    """
+                )
+                su_conn.execute("grant usage on schema dagster to app_ops_reader")
+                su_conn.execute("grant select on dagster.event_logs to app_ops_reader")
+                su_conn.execute(
+                    "insert into dagster.event_logs (run_id, event, dagster_event_type, timestamp) values "
+                    "(%s, %s, 'STEP_FAILURE', now() - interval '2 minutes'), "
+                    "(%s, %s, 'STEP_FAILURE', now() - interval '1 minute'), "
+                    "(%s, %s, 'RUN_FAILURE', now())",
+                    (
+                        "dagster-fail-1",
+                        json.dumps({"error_info": {"message": "older error\ntraceback"}}),
+                        "dagster-fail-1",
+                        json.dumps(
+                            {
+                                "dagster_event": {
+                                    "event_specific_data": {"error": {"message": "boom line 1\ntraceback line 2"}}
+                                },
+                                "user_message": "Step failed",
+                            }
+                        ),
+                        "dagster-fail-2",
+                        json.dumps({"user_message": "user message boom\ndetail"}),
+                    ),
+                )
 
             datahub_with_facts = client.get("/api/v1/admin/datahub").json()
             assert any(row["metric"] == "smoke_metric" for row in datahub_with_facts["backfill_health"])
             assert any(row["invariant_id"] == "smoke-invariant-1" for row in datahub_with_facts["output_invariants"])
+
+            ops_with_events = client.get("/api/v1/admin/ops")
+            assert ops_with_events.status_code == 200, ops_with_events.text
+            failed_by_run = {
+                row["run_id"]: row["first_line_error"] for row in ops_with_events.json()["failed_job_errors"]
+            }
+            assert failed_by_run.get("dagster-fail-1") == "boom line 1", failed_by_run
+            assert failed_by_run.get("dagster-fail-2") == "user message boom", failed_by_run
 
         mcp = build_mcp_server()
         assert isinstance(call_mcp_tool(mcp, "panel_universes"), dict)
@@ -134,7 +182,10 @@ def test_all_seven_domains_http_and_mcp_on_real_postgres_as_app_service_login(
         assert isinstance(call_mcp_tool(mcp, "entities_themes", {"request": {"theme_id": "ai-infrastructure"}}), dict)
         assert isinstance(call_mcp_tool(mcp, "entities_detail", {"request": {"issuer_id": "issuer:smoke"}}), dict)
         assert isinstance(call_mcp_tool(mcp, "library_documents_list"), dict)
-        assert isinstance(call_mcp_tool(mcp, "admin_ops_snapshot"), dict)
+        ops_payload = call_mcp_tool(mcp, "admin_ops_snapshot")
+        assert isinstance(ops_payload, dict)
+        mcp_failed = {row["run_id"]: row["first_line_error"] for row in ops_payload["overview"]["failed_job_errors"]}
+        assert mcp_failed.get("dagster-fail-1") == "boom line 1", mcp_failed
         facts_payload = call_mcp_tool(mcp, "admin_datahub_facts")
         assert any(row["metric"] == "smoke_metric" for row in facts_payload["facts"]["backfill_health"])
         assert any(row["invariant_id"] == "smoke-invariant-1" for row in facts_payload["facts"]["output_invariants"])

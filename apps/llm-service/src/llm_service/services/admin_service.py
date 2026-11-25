@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 import uuid
 from datetime import UTC, datetime
@@ -266,6 +267,62 @@ def _ledger_source_match(account_name: str, usage_by_source: dict[str, dict[str,
     return {}
 
 
+def _extract_dagster_event_error(raw_event: str | None) -> str:
+    """Return the first non-empty error line from a Dagster event JSON payload."""
+    text = (raw_event or "").strip()
+    if not text:
+        return ""
+    try:
+        payload = json.loads(text)
+    except ValueError:
+        payload = None
+    candidates: list[Any] = []
+    if isinstance(payload, dict):
+        dag_ev = payload.get("dagster_event")
+        err_info = payload.get("error_info")
+        if isinstance(dag_ev, dict):
+            spec = dag_ev.get("event_specific_data")
+            if isinstance(spec, dict) and isinstance(spec.get("error"), dict):
+                candidates.append(spec["error"].get("message"))
+            candidates.append(dag_ev.get("message"))
+        if isinstance(err_info, dict):
+            candidates.append(err_info.get("message"))
+        candidates.append(payload.get("message"))
+        candidates.append(payload.get("user_message"))
+    else:
+        candidates.append(text)
+    for item in candidates:
+        if isinstance(item, str) and item.strip():
+            for line in item.splitlines():
+                stripped = line.strip()
+                if stripped:
+                    return stripped[:300]
+    return ""
+
+
+def _build_failed_job_errors(rows: list[dict[str, Any]], *, limit: int = 20) -> list[dict[str, Any]]:
+    seen_runs: set[str] = set()
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        run_id = str(row.get("run_id") or "")
+        if not run_id or run_id in seen_runs:
+            continue
+        first_line = _extract_dagster_event_error(row.get("event"))
+        if not first_line:
+            continue
+        seen_runs.add(run_id)
+        out.append(
+            {
+                "run_id": run_id,
+                "first_line_error": first_line,
+                "logged_at": row.get("logged_at"),
+            }
+        )
+        if len(out) >= limit:
+            break
+    return out
+
+
 def _build_vendor_capacity(
     contract: Any, env_name: str, usage_rows: list[dict[str, Any]]
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -417,21 +474,22 @@ def get_ops_overview(*, database_url: str | None = None) -> OpsOverviewResponse:
 
         served_heads = _optional_rows(cur, SERVED_HEADS_SQL)
         nightly_verdicts = _optional_rows(cur, NIGHTLY_VERDICTS_SQL)
-        failed_job_errors = _optional_rows(
+        raw_event_rows = _optional_rows(
             cur,
             """
-            select distinct on (run_id)
+            select
               run_id,
-              split_part(coalesce(message, ''), E'\\n', 1) as first_line_error,
+              event,
               to_char(timestamp at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as logged_at
             from dagster.event_logs
             where dagster_event_type in ('STEP_FAILURE', 'RUN_FAILURE', 'ENGINE_EVENT')
-              and coalesce(message, '') <> ''
-            order by run_id, id desc
-            limit 20
+              and coalesce(event, '') <> ''
+            order by id desc
+            limit 200
             """,
             table_check="dagster.event_logs",
         )
+        failed_job_errors = _build_failed_job_errors(raw_event_rows)
         trigger_queue = _optional_rows(cur, TRIGGER_QUEUE_SQL)
         rollback_requests = _optional_rows(cur, ROLLBACK_QUEUE_SQL)
 
