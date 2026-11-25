@@ -21,7 +21,8 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: ci-required-${{ github.event_name == 'push' && github.sha || github.event.pull_request.number || github.ref }}-${{ github.event_name }}
+  # A tag push and the main push of one commit get separate groups: promote needs the main publish (#1878).
+  group: ci-required-${{ github.event_name == 'push' && github.sha || github.event.pull_request.number || github.ref }}-${{ github.event_name }}-${{ github.ref_type }}
   cancel-in-progress: true
 
 jobs:
@@ -226,6 +227,7 @@ jobs:
 
   images_build:
     if: >-
+      github.ref_type != 'tag' &&
       (github.event_name == 'push' ||
        github.event_name == 'merge_group' ||
        (github.event_name == 'pull_request' &&
@@ -248,6 +250,7 @@ jobs:
   images_release:
     if: >-
       always() &&
+      github.ref_type != 'tag' &&
       (github.event_name == 'push' ||
        (github.event_name == 'workflow_dispatch' &&
         github.ref == 'refs/heads/main' &&
@@ -271,10 +274,25 @@ jobs:
       data_engine: true
       prebuilt: true
 
+  # A release tag reuses the main image of its commit; it builds nothing (#1878).
+  images_promote:
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: changes
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/release-images.yml
+    with:
+      publish: false
+      promote: true
+      app_web: true
+      llm_service: true
+      data_engine: true
+
   required:
     name: ci-required
     if: always()
-    needs: [changes, security, db, python, runtime, web, images_build, images_release]
+    needs: [changes, security, db, python, runtime, web, images_build, images_release, images_promote]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
