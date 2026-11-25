@@ -120,6 +120,11 @@ def promote(
         raise RuntimeError(f"push of {repository}:{release_tag} returned HTTP {put.status}")
 
     check = fetch_manifest(repository, release_tag, token, transport)
+    for _ in range(PUSH_RETRIES):
+        if check.status not in RETRY_STATUSES:
+            break
+        sleep(delay_seconds)
+        check = fetch_manifest(repository, release_tag, token, transport)
     if check.status != 200 or digest_of(check.body) != digest:
         raise RuntimeError(f"{repository}:{release_tag} does not resolve to {digest} after the push")
     return digest

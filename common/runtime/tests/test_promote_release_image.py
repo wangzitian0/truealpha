@@ -102,6 +102,35 @@ def test_a_transient_registry_fault_is_retried() -> None:
     assert registry.manifests["v1.0.0"][1] == INDEX
 
 
+@pytest.mark.parametrize("failing_call", ["PUT", "GET v1.0.0"])
+def test_a_transient_fault_on_the_push_or_the_check_is_retried(failing_call: str) -> None:
+    registry = FakeRegistry({"sha-1cf29c9": (INDEX_TYPE, INDEX)})
+    faults = iter([Response(503, {}, b"")])
+
+    def transport(method: str, url: str, headers: dict[str, str], body: bytes | None) -> Response:
+        if f"{method} {url.rsplit('/', 1)[1]}" == failing_call or method == failing_call:
+            fault = next(faults, None)
+            if fault is not None:
+                return fault
+        return registry(method, url, headers, body)
+
+    assert promote("o/img", "sha-1cf29c9", "v1.0.0", "t", transport, sleep=lambda _: None) == digest_of(INDEX)
+
+
+def test_a_push_answered_404_is_not_retried() -> None:
+    puts: list[str] = []
+
+    def transport(method: str, url: str, headers: dict[str, str], body: bytes | None) -> Response:
+        if method == "PUT":
+            puts.append(url)
+            return Response(404, {}, b"")
+        return Response(200, {"content-type": INDEX_TYPE, "docker-content-digest": digest_of(INDEX)}, INDEX)
+
+    with pytest.raises(RuntimeError, match="returned HTTP 404"):
+        promote("o/img", "sha-1cf29c9", "v1.0.0", "t", transport, sleep=lambda _: None)
+    assert len(puts) == 1
+
+
 @pytest.mark.parametrize(
     ("commit", "tag"),
     [("1CF29C9e4b0d2a7c", "sha-1cf29c9"), ("1cf29c9", "sha-1cf29c9")],
