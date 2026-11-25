@@ -185,7 +185,11 @@ class FakeStore:
 
         sha = hashlib.sha256(capture.body).hexdigest()
         ref = RawObjectRef(
-            bucket="raw", key=f"k/{sha}", sha256=sha, byte_length=len(capture.body), content_type=capture.content_type
+            bucket="truealpha-raw",
+            key=f"k/{sha}",
+            sha256=sha,
+            byte_length=len(capture.body),
+            content_type=capture.content_type,
         )
         return RawIngestionEnvelope(
             source=capture.source,

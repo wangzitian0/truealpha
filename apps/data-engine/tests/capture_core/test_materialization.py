@@ -277,7 +277,7 @@ def _seed_complete_production_run(
                 "production-topt-integration",
                 source_record_id,
                 raw_sha256,
-                f"s3://production-topt-integration/{raw_sha256}",
+                f"s3://truealpha-raw/production-topt-integration/{raw_sha256}",
                 cutoff - timedelta(hours=2),
                 cutoff - timedelta(hours=2),
             ),

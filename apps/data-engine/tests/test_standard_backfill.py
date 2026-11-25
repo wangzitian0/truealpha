@@ -121,7 +121,11 @@ class FakeStore:
 
         sha = hashlib.sha256(capture.body).hexdigest()
         ref = RawObjectRef(
-            bucket="raw", key=f"k/{sha}", sha256=sha, byte_length=len(capture.body), content_type=capture.content_type
+            bucket="truealpha-raw",
+            key=f"k/{sha}",
+            sha256=sha,
+            byte_length=len(capture.body),
+            content_type=capture.content_type,
         )
         return RawIngestionEnvelope(
             source=capture.source,
@@ -1029,7 +1033,14 @@ def test_open_cells_reopens_for_newer_annual_filing_and_ignores_ineligible_rows(
         }
     )
     connection.raw_rows.append(
-        ("sec", "filing-document:CIK0000000100:000000010026000001:10k.htm", "s3://raw/k", "sha", 10, newer_filing)
+        (
+            "sec",
+            "filing-document:CIK0000000100:000000010026000001:10k.htm",
+            "s3://truealpha-raw/k",
+            "sha",
+            10,
+            newer_filing,
+        )
     )
     cells = {
         cell.issuer.cik: cell.reason

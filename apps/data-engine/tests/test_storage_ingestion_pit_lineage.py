@@ -727,7 +727,7 @@ def test_raw_vintage_lineage_trigger_enforces_byte_integrity(db_conn: psycopg.Co
             source, source_record_id, payload_sha256, object_uri,
             content_type, byte_length, fetched_at
         ) values (
-            'sec', '0000320193-23-000999', %s, 's3://bucket/test.json',
+            'sec', '0000320193-23-000999', %s, 's3://truealpha-raw/sec/test.json',
             'application/json', 100, now()
         ) returning id
         """,

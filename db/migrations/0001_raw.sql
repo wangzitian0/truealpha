@@ -283,7 +283,7 @@ create table if not exists raw.fetches (
  constraint fetches_source_source_record_id_payload_sha256_key UNIQUE (source, source_record_id, payload_sha256),
  constraint fetches_byte_length_check CHECK ((byte_length >= 0)),
  constraint fetches_check CHECK ((recorded_at >= fetched_at)),
- constraint fetches_object_uri_check CHECK ((object_uri ~~ 's3://%'::text)),
+ constraint raw_fetches_bucket_check CHECK ((object_uri ~ '^s3://truealpha-raw/.+'::text)),
  constraint fetches_payload_sha256_check CHECK ((payload_sha256 ~ '^[0-9a-f]{64}$'::text))
 );
 
