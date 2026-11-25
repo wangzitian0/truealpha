@@ -10,8 +10,9 @@ reporting, and scheduler-liveness checks run centrally in wangzitian0/infra2
 
 `runtime-hooks.manifest.json` (`schema_version: 3`, `service: "truealpha/app"`)
 is the single contract between `truealpha` and the `infra2` release train.
-`infra2_sdk.manifests` (`python -m infra2_sdk.manifests check`) validates it alongside
-`env.manifest.json` on every CI run.
+`infra2_sdk.manifests` (`python -m infra2_sdk.manifests --check`) validates it alongside
+`apps/app-web/required-env.manifest.json`, `apps/data-engine/required-env.generated.json`,
+and `apps/llm-service/required-env.generated.json` on every CI run.
 
 It lists each check once, with its `needs`, `writes`, `accepts_scale` and `timeout_seconds`. The SDK
 maps each check to the cells of the stage grid (`infra2_sdk.manifests.CELL_POLICIES`) and runs a cell with
