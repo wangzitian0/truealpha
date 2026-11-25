@@ -9,7 +9,7 @@ from pathlib import Path
 
 import psycopg
 import pytest
-from truealpha_runtime.testing import isolated_test_database
+from truealpha_runtime.testing import apply_migration_chain, isolated_test_database, load_tool
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 MIGRATIONS = REPO_ROOT / "db/migrations"
@@ -372,3 +372,57 @@ def test_hot_path_queries_can_use_index_scan(migrated_db: str, query: str, expec
     assert "Seq Scan" not in node_types, f"query fell back to Seq Scan: {node_types}"
     plan_text = str(root_plan)
     assert expected_index in plan_text, f"expected {expected_index} in plan: {plan_text}"
+
+
+def test_replaying_chain_drops_retired_zero_scan_indexes_with_zero_drift() -> None:
+    """Verify pre-existing retired non-FK indexes are dropped cleanly on replay (#1852)."""
+    legacy_indexes = (
+        (
+            "staging.idx_contract_objects_quality_review_run",
+            "CREATE INDEX idx_contract_objects_quality_review_run ON staging.contract_objects "
+            "USING btree (((payload ->> 'strategy_run_id'::text)), recorded_at DESC) "
+            "WHERE (contract_kind = 'strategy_data_quality_review'::text)",
+        ),
+        (
+            "staging.idx_contract_objects_usage_audit_run",
+            "CREATE INDEX idx_contract_objects_usage_audit_run ON staging.contract_objects "
+            "USING btree (((payload ->> 'strategy_run_id'::text)), recorded_at DESC) "
+            "WHERE (contract_kind = 'strategy_usage_audit'::text)",
+        ),
+        (
+            "mart.ix_issuer_analyst_ratings_cutoff",
+            "CREATE INDEX ix_issuer_analyst_ratings_cutoff ON mart.issuer_analyst_ratings "
+            "USING btree (cutoff DESC, consensus_rating DESC NULLS LAST)",
+        ),
+        (
+            "mart.ix_issuer_supply_chain_exposure_cutoff",
+            "CREATE INDEX ix_issuer_supply_chain_exposure_cutoff ON mart.issuer_supply_chain_exposure "
+            "USING btree (cutoff DESC, exposure_score DESC NULLS LAST)",
+        ),
+        (
+            "mart.idx_mart_research_card_artifacts_card_id",
+            "CREATE INDEX idx_mart_research_card_artifacts_card_id ON mart.research_card_artifacts USING btree (card_id)",
+        ),
+        (
+            "mart.ix_mart_entity_identity_listing",
+            "CREATE INDEX ix_mart_entity_identity_listing ON mart.entity_identity "
+            "USING btree (listing_id) WHERE (listing_id IS NOT NULL)",
+        ),
+    )
+    drift = load_tool("schema_drift")
+    with isolated_test_database("idx_upgrade_1852", template=None) as db_url:
+        with psycopg.connect(db_url, autocommit=True) as conn:
+            for qualified_name, create_sql in legacy_indexes:
+                conn.execute(create_sql)
+                assert conn.execute("select to_regclass(%s)", (qualified_name,)).fetchone() != (None,), qualified_name
+
+        apply_migration_chain(db_url)
+        apply_migration_chain(db_url)
+
+        with psycopg.connect(db_url) as conn:
+            for qualified_name, _ in legacy_indexes:
+                assert conn.execute("select to_regclass(%s)", (qualified_name,)).fetchone() == (None,), qualified_name
+
+        with drift.reference_database(db_url) as reference_url:
+            report, _ = drift.compare(db_url, reference_url)
+        assert report == [], report
