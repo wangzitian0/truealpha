@@ -4,6 +4,7 @@ import { formatCell, formatNumberMagnitude, formatRatio, formatSignedRatio, form
 import { PEG_CONVENTION_LABELS, PEG_GROWTH_CONVENTIONS, type PegGrowthConvention, valuationBasisLabel } from "@/client/strategy";
 import { CardExportButton } from "@/components/card-export-button";
 import { ClaimCeilingBanner } from "@/components/claim-ceiling";
+import { HeadFreshnessBadge } from "@/components/head-freshness-badge";
 import { PanelNodeTd } from "@/components/panel-node-cell";
 import { ProvenanceCell } from "@/components/provenance-cell";
 import { AvailabilityBadge, ReadStateNotice } from "@/components/read-state";
@@ -40,7 +41,18 @@ export default async function RankingsPage({ searchParams }: { searchParams: Pro
           <h1 id="rankings-heading" className="text-2xl font-bold tracking-tight">Valuation rankings</h1>
           <p className="mt-1 text-sm text-gray-400">Governed strategy rankings served from OpenAPI <code className="text-accent">/api/v1/strategy/rankings</code>.</p>
         </div>
-        <CardExportButton cutoff={data?.cutoff_at ?? undefined} convention={convention} universe={universe} />
+        <div className="flex flex-wrap items-center gap-3">
+          {data?.available && (
+            <HeadFreshnessBadge
+              ageHours={data.head_age_hours}
+              limitHours={data.head_limit_hours}
+              freshness={data.head_freshness}
+              cutoffAt={data.cutoff_at}
+              governed={data.governed}
+            />
+          )}
+          <CardExportButton cutoff={data?.cutoff_at ?? undefined} convention={convention} universe={universe} />
+        </div>
       </div>
       <div className="flex flex-wrap gap-2 text-xs">
         {universes.map((u) => (
@@ -50,7 +62,7 @@ export default async function RankingsPage({ searchParams }: { searchParams: Pro
           <Link key={c} href={`/research/rankings?universe=${encodeURIComponent(universe)}&convention=${c}`} className={`rounded-md px-2.5 py-1 ${pill(c === convention)}`}>{PEG_CONVENTION_LABELS[c]}</Link>
         ))}
       </div>
-      <ClaimCeilingBanner />
+      <ClaimCeilingBanner reviewState={data?.review_state} definitionVersion={data?.definition_version} />
       {error && <ReadStateNotice state={{ kind: "error", message: error }} />}
       {data && !data.available && <ReadStateNotice state={{ kind: "unavailable", reason: data.reason ?? "unavailable" }} />}
       {data?.available && rows.length === 0 && <ReadStateNotice state={{ kind: "empty" }} />}
@@ -71,10 +83,25 @@ export default async function RankingsPage({ searchParams }: { searchParams: Pro
                 <PanelNodeTd node={row.gppe_variants?.gppe_banking_tce_v1} formatted={formatUsdMagnitude(row.gppe_variants?.gppe_banking_tce_v1?.value ?? null)} />
                 <PanelNodeTd node={row.gppe_variants?.gppe_operating_financial_v1} formatted={formatUsdMagnitude(row.gppe_variants?.gppe_operating_financial_v1?.value ?? null)} />
                 <PanelNodeTd node={row.panel_inputs?.employees_total} formatted={formatNumberMagnitude(row.panel_inputs?.employees_total?.value ?? null)} />
-                <td className={`${c} tabular-nums`}>{row.peg != null ? formatCell(formatRatio(row.peg)) : convention === "historical_cagr" ? formatCell(null) : "unsourced"}</td>
+                <td className={`${c} tabular-nums`}>
+                  {row.peg != null
+                    ? formatCell(formatRatio(row.peg))
+                    : (row.peg_reason_codes?.length ?? 0) > 0
+                      ? <span className="text-xs text-gray-400">{row.peg_reason_codes!.join(", ")}</span>
+                      : convention === "historical_cagr"
+                        ? formatCell(null)
+                        : "unsourced"}
+                </td>
                 <td className={`${c} tabular-nums`}>{formatCell(row.peg_rank)}</td>
                 <td className={`${c} tabular-nums`}>{formatCell(formatRatio(row.confidence))}</td>
-                <td className={c}><AvailabilityBadge status={row.availability ?? "unavailable"} /></td>
+                <td className={c}>
+                  <AvailabilityBadge status={row.availability ?? "unavailable"} />
+                  {(row.source_evidence_status || row.factor_validation_status) && (
+                    <div className="mt-1 font-mono text-[10px] text-gray-500">
+                      {[row.source_evidence_status, row.factor_validation_status].filter(Boolean).join(" / ")}
+                    </div>
+                  )}
+                </td>
                 <td className={c}><ProvenanceCell row={row} /></td>
               </tr>
             );

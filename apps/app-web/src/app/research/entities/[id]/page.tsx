@@ -66,7 +66,18 @@ export default async function EntityDetailPage({
             <StatBox label="Labor efficiency" value={formatCell(formatUsdMagnitude(latest?.capital_adjusted_labor_efficiency))} />
             <StatBox label={`Current ${basisLabel}`} value={formatCell(formatRatio(latest?.current_multiple))} />
             <StatBox label={`Gap (${basisLabel})`} value={formatCell(formatSignedRatio(latest?.valuation_gap))} />
-            <StatBox label={`PEG (${PEG_CONVENTION_LABELS[convention]})`} value={convention === "historical_cagr" ? formatCell(formatRatio(latest?.peg)) : "unsourced"} />
+            <StatBox
+              label={`PEG (${PEG_CONVENTION_LABELS[convention]})`}
+              value={
+                latest?.peg != null
+                  ? formatCell(formatRatio(latest.peg))
+                  : (latest?.peg_reason_codes?.length ?? 0) > 0
+                    ? latest!.peg_reason_codes!.join(", ")
+                    : convention === "historical_cagr"
+                      ? formatCell(null)
+                      : "unsourced"
+              }
+            />
           </div>
           {rows.length > 0 && (
             <ResearchTable caption="Strategy decisions" headers={["Cutoff", "Rank", "Tier", `Current ${basisLabel}`, `Target ${basisLabel}`, "Gap", "Weight", "Availability", "Trace"]}>
@@ -79,11 +90,36 @@ export default async function EntityDetailPage({
                   <td className={`${td} tabular-nums`}>{formatCell(formatRatio(r.target_multiple))}</td>
                   <td className={`${td} tabular-nums ${signColor(r.valuation_gap)}`}>{formatCell(formatSignedRatio(r.valuation_gap))}</td>
                   <td className={`${td} tabular-nums`}>{formatCell(formatPercentFromFraction(r.target_weight))}</td>
-                  <td className={td}><AvailabilityBadge status={r.availability ?? "unavailable"} /></td>
+                  <td className={td}>
+                    <AvailabilityBadge status={r.availability ?? "unavailable"} />
+                    {(r.source_evidence_status || r.factor_validation_status) && (
+                      <div className="mt-1 font-mono text-[10px] text-gray-500">
+                        {[r.source_evidence_status, r.factor_validation_status].filter(Boolean).join(" / ")}
+                      </div>
+                    )}
+                  </td>
                   <td className={td}><Link href={`/research/trace?issuer=${encodeURIComponent(r.issuer_id)}&cutoff=${encodeURIComponent(r.cutoff_at)}`} className="text-accent hover:underline text-xs">trace →</Link></td>
                 </tr>
               ))}
             </ResearchTable>
+          )}
+          {(detail.themes?.length ?? 0) > 0 && (
+            <div className="space-y-2" data-testid="entity-themes-section">
+              <h2 className="text-base font-semibold">Theme purity</h2>
+              <ResearchTable caption="Entity themes" headers={["Theme", "Share", "In-theme rev", "Consolidated rev", "Segments", "Confidence", "Status"]}>
+                {(detail.themes ?? []).map((t) => (
+                  <tr key={String(t.theme_id ?? t.theme ?? "")} className="border-t border-border font-mono text-xs">
+                    <td className={`${td} font-sans font-medium`}>{formatCell(t.theme as string | null | undefined)}</td>
+                    <td className={td}>{formatCell(formatPercentFromFraction(t.theme_share as string | number | null | undefined))}</td>
+                    <td className={td}>{formatCell(formatUsdMagnitude(t.in_theme_revenue as string | number | null | undefined))}</td>
+                    <td className={td}>{formatCell(formatUsdMagnitude(t.consolidated_revenue as string | number | null | undefined))}</td>
+                    <td className={td}>{formatCell(t.segments as number | string | null | undefined)}</td>
+                    <td className={td}>{formatCell(formatRatio(t.confidence as string | number | null | undefined))}</td>
+                    <td className={td}>{formatCell(t.availability_status as string | null | undefined)}</td>
+                  </tr>
+                ))}
+              </ResearchTable>
+            </div>
           )}
           {(detail.node_values?.length ?? 0) > 0 && <div className="rounded-xl border border-border bg-card p-5"><h2 className="text-base font-semibold">Metric forest nodes</h2><TraceInputsTable nodeValues={detail.node_values ?? []} /></div>}
           {analystRatings && <div className="rounded-xl border border-border bg-card p-4 text-xs text-gray-300"><strong className="text-white">Analyst Consensus:</strong> {formatCell(analystRatings.consensus_rating as string | null)} · Analysts: {String(analystRatings.analysts_count ?? 0)}</div>}

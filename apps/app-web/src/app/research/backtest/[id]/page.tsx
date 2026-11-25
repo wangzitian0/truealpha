@@ -31,6 +31,15 @@ export default async function BacktestDetailPage({ params }: { params: Promise<{
         <span className={`rounded-full px-3 py-1 text-xs font-semibold uppercase ${backtestStatusStyle(run.status)}`}>{run.status}</span>
       </div>
       <BacktestBasis run={run} />
+      {run.error_message && (
+        <div
+          role="alert"
+          data-testid="backtest-error-message"
+          className="rounded-xl border border-red-500/40 bg-red-950/30 p-4 font-mono text-xs text-red-200"
+        >
+          {run.error_message}
+        </div>
+      )}
       <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
         {[
           ["CAGR", formatCell(formatPercentFromFraction(run.cagr_monthly)), `Benchmark ${formatCell(formatPercentFromFraction(run.benchmark_cagr))}`, "text-emerald-400"],

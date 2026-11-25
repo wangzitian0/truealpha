@@ -3325,6 +3325,44 @@
             ],
             "title": "Strategy Run Id"
           },
+          "governed": {
+            "type": "boolean",
+            "title": "Governed",
+            "default": false
+          },
+          "head_age_hours": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Head Age Hours"
+          },
+          "head_limit_hours": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Head Limit Hours"
+          },
+          "head_freshness": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Head Freshness"
+          },
           "cutoff_at": {
             "anyOf": [
               {
