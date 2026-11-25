@@ -184,7 +184,7 @@ def test_all_seven_domains_http_and_mcp_on_real_postgres_as_app_service_login(
         assert isinstance(call_mcp_tool(mcp, "library_documents_list"), dict)
         ops_payload = call_mcp_tool(mcp, "admin_ops_snapshot")
         assert isinstance(ops_payload, dict)
-        mcp_failed = {row["run_id"]: row["first_line_error"] for row in ops_payload["overview"]["failed_job_errors"]}
+        mcp_failed = {row["run_id"]: row["first_line_error"] for row in ops_payload["failed_job_errors"]}
         assert mcp_failed.get("dagster-fail-1") == "boom line 1", mcp_failed
         facts_payload = call_mcp_tool(mcp, "admin_datahub_facts")
         assert any(row["metric"] == "smoke_metric" for row in facts_payload["facts"]["backfill_health"])
