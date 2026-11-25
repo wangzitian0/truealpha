@@ -92,6 +92,11 @@ class Settings(RuntimeSettings):
     mcp_allowed_origins: list[str] = Field(
         default_factory=list, json_schema_extra={"source": "code", "empty_ok": True, "group": "mcp"}
     )
+    # infra2_sdk.fastapi.init_service reads these three names from the process environment (main.py).
+    # An empty endpoint keeps telemetry off.
+    otel_exporter_otlp_endpoint: str = _schema_field("", "code", "otel", empty_ok=True)
+    otel_service_name: str = _schema_field("truealpha-llm-service", "code", "otel")
+    otel_resource_attributes: str = _schema_field("", "code", "otel", empty_ok=True)
 
 
 class _LazySettings:

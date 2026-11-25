@@ -36,8 +36,9 @@ and `INFO+` logs to infra2's shared SigNoz; there is no exporter code in this re
 It is the application half of infra2 `ops.observability` section 4.2:
 
 - Off unless `OTEL_EXPORTER_OTLP_ENDPOINT` is set (or when `OTEL_SDK_DISABLED=true`), so
-  local development, CI and every test are unaffected. A process that cannot reach the
-  collector (the Dagster roles run on the host network) is simply issued no endpoint.
+  local development, CI and every test are unaffected. On the host network, the Dagster
+  roles export to the host-loopback collector (`127.0.0.1:14318`, `#1231`); a process with
+  no collector access is simply issued no endpoint.
 - On, the identity is consumed from infra2's deploy and never defaulted: `OTEL_SERVICE_NAME`
   plus `deployment.environment.name`, `infra.service.id`, `service.version` and
   `infra.iac.ref` in `OTEL_RESOURCE_ATTRIBUTES`. A missing key refuses startup by name.
