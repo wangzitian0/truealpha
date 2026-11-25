@@ -11,12 +11,11 @@ name: main-health
 #   success -> resolve it: main is green again, so the alert closes itself
 #   anything else (cancelled, skipped, ...) -> nothing; that run judged nothing.
 # A red commit followed by a green one closes the issue — intended: the alert
-# means "main HEAD's ci-required is red NOW", the same verdict cut_release reads
-# before it tags. With #883's sha-keyed groups main runs no longer cancel each
-# other, so every main commit reports its own conclusion (before it, a
-# superseded run concludes `cancelled` and is ignored here). Known limit: a
-# path-filtered green (a docs-only commit skips the python lane) closes the
-# issue too, exactly as it turns main's status green for cut_release.
+# means "main HEAD's ci-required is red NOW". With #883's sha-keyed groups main
+# runs no longer cancel each other, so every main commit reports its own
+# conclusion (before it, a superseded run concludes `cancelled` and is ignored
+# here). Known limit: a path-filtered green (a docs-only commit skips the python
+# lane) closes the issue too.
 #
 # workflow_run executes THIS file from the default branch with a write token,
 # so nothing from the triggering run is ever interpolated into a `run:` — the

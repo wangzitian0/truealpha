@@ -45,13 +45,11 @@ runtime-up:
 		S3_SECRET_KEY=$${S3_SECRET_KEY:-s3_local_secret} \
 		uv run --package truealpha-runtime truealpha-runtime ensure-bucket
 
-# #447 preflight: the app-web image runs NODE_ENV=production and refuses to
-# serve without a real SECRET_KEY; without this check an unset key surfaces
-# only as a healthcheck timeout after a full build. Compose reads .env itself;
-# make does not, hence the file fallback.
+# #447 preflight: llm-service owns SECRET_KEY and refuses deployed starts
+# without it. Compose reads .env itself; make does not, hence the file fallback.
 stack-up:
 	@if [ -z "$${SECRET_KEY}" ] && ! grep -qE '^SECRET_KEY=.+' .env 2>/dev/null; then \
-		echo "SECRET_KEY is not set (environment or .env). app-web runs NODE_ENV=production and refuses to serve without a real key — see .env.example"; \
+		echo "SECRET_KEY is not set (environment or .env). llm-service owns SECRET_KEY — see .env.example"; \
 		exit 1; \
 	fi
 	docker compose --profile app up -d --build --wait

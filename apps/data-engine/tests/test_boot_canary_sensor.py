@@ -1,7 +1,7 @@
 """#712: a deployed data-engine build asks for one canary tick, once per deployment.
 
-Driven through `settings` since #784 — `TRUEALPHA_DATA_ENGINE_IMAGE_DIGEST`,
-`TRUEALPHA_CONFIGURATION_SHA256` and `GIT_COMMIT_SHA` are declared in
+Driven through `settings` since #784 — `IMAGE_DIGEST`,
+`CONFIGURATION_SHA256` and `GIT_COMMIT_SHA` are declared in
 `apps/data-engine/required-env.generated.json`, so the sensor resolves them through the
 model that declares them instead of reading the process environment beside it.
 
@@ -189,8 +189,8 @@ def test_identity_comes_from_settings_not_from_the_process_environment(monkeypat
     """Red before #784: the sensor read `os.environ` directly, so the value the manifest
     declares and the value the sensor acted on were two different things."""
     _deploy(monkeypatch, digest=DIGEST, git_sha="v0.0.47", app_env="production")
-    monkeypatch.setenv("TRUEALPHA_DATA_ENGINE_IMAGE_DIGEST", "sha256:" + "9" * 64)
-    monkeypatch.setenv("TRUEALPHA_CONFIGURATION_SHA256", "c" * 64)
+    monkeypatch.setenv("IMAGE_DIGEST", "sha256:" + "9" * 64)
+    monkeypatch.setenv("CONFIGURATION_SHA256", "c" * 64)
     monkeypatch.setenv("GIT_COMMIT_SHA", "v9.9.9")
     monkeypatch.setenv("ENVIRONMENT", "staging")
     request, _ = _launch()
