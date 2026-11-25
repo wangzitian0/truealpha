@@ -24,8 +24,8 @@ Issue #14 adds a bounded evidence universe rather than a broad second sweep:
 - META — the FB to META symbol transition; and
 - PLUG — an original/amended filing pair with changed company-facts values.
 
-Run `make sample-evidence` to resume the public SEC/Yahoo/issuer capture. The
-command never overwrites differing bytes. Yahoo revised overlapping historical
+Run the capture scripts under `apps/data-engine/scripts/` manually when refreshing
+public SEC/Yahoo/issuer snapshots. Those scripts never overwrite differing bytes. Yahoo revised overlapping historical
 values during the 2026-07-12 capture itself; both the old one-year and new
 three-year files therefore remain immutable point-in-time vintages.
 
