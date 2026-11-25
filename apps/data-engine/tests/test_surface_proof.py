@@ -10,8 +10,11 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from data_engine.quality import surface_proof
 from data_engine.quality.surface_proof import prove, summary_lines
+
+pytestmark = pytest.mark.deps
 
 NOW = datetime(2026, 9, 16, 0, 15, tzinfo=UTC)
 NEW = "capture-run:" + "a" * 64

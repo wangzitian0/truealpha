@@ -20,6 +20,8 @@ from data_engine.config import Settings
 from infra2_sdk.runtime.config_schema import manifest_config_fingerprint
 from truealpha_contracts.common import canonical_sha256
 
+pytestmark = pytest.mark.gate
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DOCKERFILE = REPO_ROOT / "apps/data-engine/Dockerfile"
 

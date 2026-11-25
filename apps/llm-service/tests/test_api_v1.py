@@ -20,6 +20,8 @@ from llm_service.services import (
 )
 from pydantic import SecretStr
 
+pytestmark = [pytest.mark.contract, pytest.mark.deps]
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 

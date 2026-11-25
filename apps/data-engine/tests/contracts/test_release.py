@@ -6,6 +6,8 @@ import pytest
 from data_engine.contracts.release import live_release_payload
 from truealpha_contracts.common import canonical_sha256
 
+pytestmark = pytest.mark.contract
+
 _MIGRATIONS = ("0001_raw", "0002_staging")
 _CONTRACT = "e" * 64
 

@@ -7,7 +7,10 @@ from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
 from truealpha_contracts.etf_virtual_company import ETF_CONSOLIDATION_V0, EtfConsolidationDefinition
+
+pytestmark = pytest.mark.contract
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "fund_virtual_company.json"
 

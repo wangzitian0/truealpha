@@ -1,4 +1,7 @@
+import pytest
 from truealpha_contracts.metrics import METRICS, MetricSpec, UnitFamily, input_key_for_metric, is_registered_input_key
+
+pytestmark = pytest.mark.contract
 
 
 def test_metrics_registry_and_aliases():

@@ -29,6 +29,8 @@ from truealpha_contracts.strategy import (
     load_live_strategy_definition,
 )
 
+pytestmark = pytest.mark.contract
+
 _CUTOFF = datetime(2026, 6, 30, 23, 59, 59, tzinfo=UTC)
 _FRESH = timedelta(days=3)
 #: The inputs that exclude an issuer under the P/GP basis of the live definition (P/S inputs only record).

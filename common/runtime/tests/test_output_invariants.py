@@ -32,6 +32,8 @@ import pytest
 from psycopg.types.json import Jsonb
 from truealpha_runtime.testing import isolated_test_database, load_tool
 
+pytestmark = pytest.mark.deps
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 _module = load_tool("output_invariants")
 

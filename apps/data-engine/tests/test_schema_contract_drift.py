@@ -19,6 +19,8 @@ from data_engine.config import settings
 from data_engine.contracts.datahub import NormalizedObservation
 from truealpha_runtime.testing import skip_or_fail
 
+pytestmark = pytest.mark.contract
+
 psycopg = pytest.importorskip("psycopg")
 
 # NormalizedObservation field -> staging.capture_normalized_observations columns.

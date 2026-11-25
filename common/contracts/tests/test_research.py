@@ -12,6 +12,8 @@ from truealpha_contracts.research import (
     ValuationTier,
 )
 
+pytestmark = pytest.mark.contract
+
 
 def test_research_enums_and_policies() -> None:
     assert tuple(t.value for t in ValuationTier) == ("traditional", "tech", "large_model_native")

@@ -24,6 +24,8 @@ from truealpha_runtime.testing import (
     isolated_test_database,
 )
 
+pytestmark = pytest.mark.deps
+
 
 def test_in_memory_raw_object_store_conforms_to_contract() -> None:
     store = InMemoryRawObjectStore(bucket="test-bucket")

@@ -13,6 +13,8 @@ from factors import FACTOR_REGISTRY, Fact, FactorResult, UnitFamily
 from factors.registry import factor
 from pydantic import ValidationError
 
+pytestmark = pytest.mark.contract
+
 
 def test_every_registered_factor_is_registered_under_its_declared_kind():
     assert FACTOR_REGISTRY["peg"].kind == "base"

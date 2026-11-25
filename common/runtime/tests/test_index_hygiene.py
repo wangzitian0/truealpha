@@ -11,6 +11,8 @@ import psycopg
 import pytest
 from truealpha_runtime.testing import isolated_test_database
 
+pytestmark = pytest.mark.deps
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 MIGRATIONS = REPO_ROOT / "db/migrations"
 SCHEMAS = ("raw", "staging", "mart", "app")

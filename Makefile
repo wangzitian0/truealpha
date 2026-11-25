@@ -19,7 +19,7 @@ help:
 	@echo "  make llm          FastAPI dev server  (apps/llm-service, :8000)"
 	@echo "  make strategy-smoke Preview replay of large_model_value_v0 against #335's golden fixture"
 	@echo "  make vendor-smoke   Live vendor contract smoke (ARGS=... for flags)"
-	@echo "  make smoke-deps     Run gate, dependency, and smoke Python tests"
+	@echo "  make smoke-deps     Run gate, dependency, smoke, and contract Python tests"
 	@echo "  make vision-audit Standing audit of Vision & Gate epics (#28/#54)"
 	@echo ""
 	@echo "Before a PR (Local pre cell, 30 seconds):"
@@ -121,7 +121,7 @@ vendor-smoke:
 	uv run --package truealpha-data-engine python apps/data-engine/scripts/vendor_contract_smoke.py $(ARGS)
 
 smoke-deps:
-	uv run pytest -m "gate or deps or smoke"
+	uv run pytest -m "gate or deps or smoke or contract"
 
 vision-audit:
 	uv run python tools/vision_audit.py $(ARGS)

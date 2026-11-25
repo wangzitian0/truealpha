@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import pytest
 from llm_service.services import entities_service
+
+pytestmark = pytest.mark.deps
 
 ISSUER = "issuer:cik:0000723125"
 TOPT_RUN = "capture-run:" + "1" * 64

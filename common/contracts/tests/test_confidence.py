@@ -11,6 +11,8 @@ from truealpha_contracts.confidence import (
     SourceConfidenceEvidence,
 )
 
+pytestmark = pytest.mark.contract
+
 
 def _ev(**ch: Any) -> SourceConfidenceEvidence:
     return SourceConfidenceEvidence(

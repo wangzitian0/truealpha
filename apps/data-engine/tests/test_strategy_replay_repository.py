@@ -13,6 +13,8 @@ from data_engine.strategy_replay_repository import (
 )
 from truealpha_contracts.common import canonical_sha256
 
+pytestmark = pytest.mark.deps
+
 sys.path.insert(0, str(Path(__file__).resolve().parent / "support"))
 from macro_seed import seed_risk_free_rate, stub_rate  # noqa: E402
 

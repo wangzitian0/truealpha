@@ -3,6 +3,8 @@ from datetime import UTC, datetime
 import psycopg
 import pytest
 
+pytestmark = pytest.mark.deps
+
 _RUN_ID = "strategy-run:" + "a" * 64
 _DECISION_ID = "strategy-decision:" + "d" * 64
 _HASH64 = "b" * 64

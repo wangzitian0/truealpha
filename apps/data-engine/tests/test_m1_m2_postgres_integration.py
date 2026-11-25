@@ -36,6 +36,8 @@ from data_engine.datahub.standards.supply_chain_extraction import (
 )
 from truealpha_contracts.question_requirements import QUESTION_REQUIREMENTS_SHA256
 
+pytestmark = pytest.mark.deps
+
 
 def _issuer_id(name: str) -> str:
     """The wide row's issuer id for a test name: a lower-case UUID. A writer refuses any other (#1079)."""

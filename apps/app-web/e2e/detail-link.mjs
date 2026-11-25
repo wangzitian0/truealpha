@@ -9,8 +9,6 @@
  * (backtest and library, two roles).
  *
  * `e2e/walk-tree.mjs` launches a browser when it is imported, so this module holds the lookup.
- * `tests/detail-link.test.ts` drives it against a fake page. `tests/list-empty-marker.test.ts`
- * proves the other half: the list pages render the notice that this selector reads.
  */
 
 import { READ_ERROR_SELECTOR } from "./read-error.mjs";

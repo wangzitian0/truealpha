@@ -6,6 +6,8 @@ import pytest
 from pydantic import ValidationError
 from truealpha_contracts.models import DataSource, RawCapture, RawIngestionEnvelope, RawObjectRef
 
+pytestmark = pytest.mark.contract
+
 NOW = datetime(2026, 7, 10, tzinfo=UTC)
 SHA = "a" * 64
 

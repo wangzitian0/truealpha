@@ -127,7 +127,6 @@ export async function gotoStable(page, url, { timeouts = NAVIGATION_TIMEOUTS, lo
  * React error #418 ("Hydration failed because the server rendered HTML didn't match the client")
  * is a page error like any other. The walk ignored it from 8711285a until #1468. An ignored #418
  * hides a real defect: React throws away the server markup and renders the page again on the client.
- * The race check (hydration-race.mjs) shows #418 on Next 15.5.18 and none on Next 16.4.2.
  *
  * A page error can arrive after the walk read the verdict of a route. The ledger keeps it in
  * `unread`. The next route reports it, and `lateProblems()` reports it at the end of a pass.
@@ -168,7 +167,7 @@ export function createPageErrorLedger() {
      * @param {string} pagePath the path of the page that raised it
      */
     record(message, pagePath) {
-      // assertTraceRendersDecisionInputs opens /research first, so an error can come from another page.
+      // Errors emitted by a previous page during navigation are attributed explicitly to that path.
       const text = currentPath !== null && pagePath !== currentPath ? `${message} (raised on ${pagePath})` : message;
       failures.push(text);
       unread.push(text);

@@ -26,6 +26,8 @@ from data_engine.quality import model_key_health, nightly_verdicts
 from data_engine.sources import gateway, llm
 from truealpha_runtime.testing import skip_or_fail
 
+pytestmark = pytest.mark.deps
+
 TICK = "2026-09-16T00:15:00+00:00"
 FAKE_KEY = "sk-test-not-a-real-key-0123456789"
 

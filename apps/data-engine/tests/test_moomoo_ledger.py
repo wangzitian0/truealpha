@@ -13,6 +13,8 @@ from data_engine.sources import gateway
 from data_engine.sources import moomoo as mm
 from data_engine.sources import moomoo_ledger as ledger
 
+pytestmark = pytest.mark.deps
+
 
 def _kline(code: str) -> None:
     """One K-line call on ``code`` through the real wrapper: gate, call, record."""

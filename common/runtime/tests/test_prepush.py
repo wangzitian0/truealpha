@@ -8,9 +8,8 @@ A checker that silently examines an empty set is worse than none — it converts
 "I did not look" into "it passed". Three properties keep that from happening,
 all of them learned the hard way:
 
-- an empty change set is an ERROR, not a pass: ~6 scripted edits in the 08-28
-  sprint matched nothing after a formatter pass and looked exactly like a
-  clean run (the same lesson `tools/redprove.sh` bakes in as exit 3);
+- an empty change set exits 0 cleanly with a notice rather than failing a clean worktree
+  or accidentally diffing the whole repository;
 - untracked files are examined: a brand-new tool is invisible to every
   `git diff` until it is added, and dogfooding caught the script skipping
   ITSELF for that reason;
@@ -26,6 +25,8 @@ import subprocess
 from pathlib import Path
 
 import pytest
+
+pytestmark = pytest.mark.gate
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 PREPUSH = REPO_ROOT / "tools" / "prepush.sh"

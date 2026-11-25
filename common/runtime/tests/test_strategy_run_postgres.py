@@ -29,6 +29,8 @@ from truealpha_runtime.strategy_run import StrategyRunReport, StrategyRunUnavail
 from truealpha_runtime.strategy_run_postgres import PostgresStrategyRunRepository
 from truealpha_runtime.testing import guard_db_write, open_test_connection, synthetic_provisional_strategy_definition
 
+pytestmark = pytest.mark.deps
+
 _HASH64 = "c" * 64
 # The canonical 8-4-4-4-12 form. `mart` entity coordinates are UUIDs (#877/#928), so this
 # is what an untranslated identity looks like on a consumer surface (#953).

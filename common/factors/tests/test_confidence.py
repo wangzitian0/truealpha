@@ -15,6 +15,8 @@ from truealpha_contracts.confidence import (
 )
 from truealpha_contracts.confidence_bands import confidence_band
 
+pytestmark = pytest.mark.contract
+
 
 def _input(case_id: str) -> ContinuousConfidenceInput:
     source = SourceConfidenceEvidence(

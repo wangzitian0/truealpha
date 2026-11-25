@@ -30,6 +30,8 @@ from data_engine.quality.job_run_health import Run
 from data_engine.quality.nightly_verdicts import TICK_TAG
 from truealpha_runtime.testing import isolated_test_database
 
+pytestmark = pytest.mark.deps
+
 FIXTURE = Path(__file__).parent / "fixtures" / "dagster_runs" / "staging_2026-10-21.csv"
 #: A tick after the last run of the fixture (2026-10-21 10:05:57 UTC).
 TICK = datetime(2026, 10, 21, 10, 6, tzinfo=UTC)

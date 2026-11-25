@@ -40,6 +40,8 @@ from data_engine.lanes.capture import tick_cron
 from truealpha_contracts.environment_contract import UnknownUniverse, load_environment_contract
 from truealpha_contracts.universes import lane_name
 
+pytestmark = pytest.mark.smoke
+
 sys.path.insert(0, str(Path(__file__).resolve().parent / "support"))
 from macro_seed import stub_rate  # noqa: E402
 

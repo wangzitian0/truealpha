@@ -32,6 +32,8 @@ from truealpha_runtime.research_report import (
 )
 from truealpha_runtime.research_report_mart import MartResearchReadRepository
 
+pytestmark = pytest.mark.deps
+
 _SEED_PATH = Path(__file__).parent / "fixtures" / "issuer_modules_parity.py"
 _SPEC = importlib.util.spec_from_file_location("issuer_modules_parity_seed", _SEED_PATH)
 assert _SPEC is not None and _SPEC.loader is not None

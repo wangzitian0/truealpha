@@ -17,6 +17,8 @@ import json
 import pytest
 from truealpha_runtime.testing import OtlpCollectorStub, run_python_probe
 
+pytestmark = pytest.mark.smoke
+
 IAC_REF = "0123456789abcdef0123456789abcdef01234567"
 IDENTITY = {
     "deployment.environment.name": "production",
@@ -87,7 +89,8 @@ def test_the_host_network_roles_get_no_endpoint_and_stay_cleanly_disabled() -> N
 
 
 def test_with_an_endpoint_and_the_rendered_identity_the_code_location_configures_telemetry() -> None:
-    result = run_python_probe(STATE_PROBE, {**DEPLOYED, "OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:9"})
+    with OtlpCollectorStub() as collector:
+        result = run_python_probe(STATE_PROBE, {**DEPLOYED, "OTEL_EXPORTER_OTLP_ENDPOINT": collector.endpoint})
     assert result.returncode == 0, result.stderr
     assert _probe_state(result.stdout) == {
         "sdk_provider": True,

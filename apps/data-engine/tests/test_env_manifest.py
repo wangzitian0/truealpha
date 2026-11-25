@@ -14,6 +14,8 @@ import pytest
 from data_engine.config import Settings
 from infra2_sdk.runtime.environment import RuntimeEnvKey
 
+pytestmark = pytest.mark.contract
+
 APP_DIR = Path(__file__).resolve().parents[1]
 MANIFEST = APP_DIR / "required-env.generated.json"
 

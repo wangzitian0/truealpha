@@ -29,6 +29,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.gate
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 APPLIER = "db/apply_migrations.sh"
 
@@ -163,7 +165,6 @@ def test_the_detectors_leave_readers_alone() -> None:
         "common/runtime/tests/test_migration_vocabularies.py",
         "apps/data-engine/src/data_engine/release_identity.py",
         "apps/data-engine/tests/test_release_identity.py",
-        "apps/data-engine/tests/test_entity_identity_store.py",
     )
     for relative in readers:
         path = REPO_ROOT / relative
