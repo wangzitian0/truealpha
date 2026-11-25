@@ -1264,7 +1264,6 @@ def test_issue_1310_registered_schedules_fit_within_twelve_data_daily_allowance_
         RouteContext,
         origin_per_key_cost,
     )
-    from data_engine.datahub.capture_core.universe_plane import parse_nasdaq_index_rows
     from data_engine.lanes import market_data, qqq_prices
     from data_engine.sources import gateway
     from truealpha_contracts.environment_contract import EnvironmentContract, load_environment_contract
@@ -1287,14 +1286,13 @@ def test_issue_1310_registered_schedules_fit_within_twelve_data_daily_allowance_
 
     topt_corpus = universe_corpus.load_corpus(universe_corpus.TOPT_CORPUS_FILENAME)
     topt_symbols = {str(row[3]) for row in topt_corpus["denominator"]["instruments"]}
-    nasdaq100_path = Path(__file__).parent / "capture_core" / "cassettes" / "nasdaq100_index.bcc3fb15.json"
-    qqq_tickers = {row["ticker"] for row in parse_nasdaq_index_rows(nasdaq100_path.read_bytes())}
-    qqq_outside_topt = qqq_tickers - topt_symbols
+    # QQQ (Nasdaq-100) carries at most ~101 listings when no member overlaps with TOPT.
+    qqq_outside_topt_count = 101
 
-    # Issuers per universe: TOPT and canary from the contract/corpus; QQQ from its cassette; S&P 500 at full 503 scale.
+    # Issuers per universe: TOPT and canary from the contract/corpus; QQQ at upper bound; S&P 500 at full 503 scale.
     universe_issuers = {
         "topt": len(topt_symbols),
-        "qqq": len(qqq_outside_topt),
+        "qqq": qqq_outside_topt_count,
         "sp500": 503,
         "canary": len(scheduled_contract.universes["canary"].membership.members),
     }
@@ -1350,7 +1348,7 @@ def test_issue_1310_registered_schedules_fit_within_twelve_data_daily_allowance_
         non_core_calls = 0
         if "qqq_price_refresh_schedule" in running_schedules:
             fires = cron_tool.parse(qqq_prices.QQQ_PRICE_REFRESH_CRON).fires_between(day_start, day_end)
-            non_core_calls += len(fires) * qqq_prices.need_credits(len(qqq_outside_topt))
+            non_core_calls += len(fires) * qqq_prices.need_credits(qqq_outside_topt_count)
         for tick in capture.TICKS:
             if tick.key == "topt" or tick.schedule_name not in running_schedules:
                 continue

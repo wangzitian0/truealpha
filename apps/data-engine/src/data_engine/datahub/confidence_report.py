@@ -42,7 +42,12 @@ from data_engine.datahub.capture_core.source_registrations import (
     registration_for,
     source_reliability_prior,
 )
-from data_engine.datahub.capture_core.universe_plane import UNIVERSE_SOURCES, UniverseSource, resolve_listing_mics
+from data_engine.datahub.capture_core.universe_plane import (
+    UNIVERSE_SOURCES,
+    UniverseSource,
+    active_constituent_source,
+    resolve_listing_mics,
+)
 from data_engine.datahub.oracle_outcomes import (
     OracleRowsBySubject,
     canonical_metric,
@@ -842,10 +847,10 @@ def load_index_membership(
 ) -> tuple[dict[str, dict[str, list[OriginValue]]], dict[str, Any]]:
     constituents = connection.execute(
         "with q as (select ticker, weight, knowable_at, as_of from staging.etf_constituent_facts "
-        "where etf_symbol = %s and knowable_at <= %s) "
+        "where etf_symbol = %s and source = %s and knowable_at <= %s) "
         "select ticker, weight, knowable_at from q where (as_of, knowable_at) = ("
         "select as_of, max(knowable_at) from q where as_of = (select max(as_of) from q) group by as_of) order by ticker",
-        (source.etf, cutoff),
+        (source.etf, active_constituent_source(source), cutoff),
     ).fetchall()
     fund = connection.execute(
         "select e.entity_id::text from staging.entities e "

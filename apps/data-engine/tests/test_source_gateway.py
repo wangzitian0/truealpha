@@ -330,19 +330,20 @@ def test_an_httpx_error_status_carries_the_vendor_message(call_ledger) -> None:
     assert (row.ok, row.status_code, row.error) == (False, 429, "Request rate limit exceeded")
 
 
-def test_index_operator_fetch_is_one_nasdaq_index_row(call_ledger, monkeypatch) -> None:
+def test_universe_plane_edgar_fetch_is_one_sec_row(call_ledger, monkeypatch) -> None:
     from data_engine.datahub.capture_core import universe_plane
 
-    body = b'{"data": {"data": {"rows": []}}}'
+    body = b"<feed><entry></entry></feed>"
     monkeypatch.setattr(urllib.request, "urlopen", lambda request, timeout=None: io.BytesIO(body))
     status, returned = universe_plane._get(
-        "https://api.nasdaq.com/api/quote/list-type/nasdaq100",
-        identity=FetchKey("nasdaq-index", "constituents", "index:nasdaq100", "2026-10-27"),
+        "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&ticker=AAPL&type=10-K&output=atom&count=10",
+        headers={"User-Agent": "Test/1.0", "Accept": "application/atom+xml"},
+        identity=FetchKey("sec", "browse-edgar", "symbol:AAPL", "2026-10-27"),
     )
 
     assert returned == body and status is None, "a transport that reports no status is not a failure"
     (row,) = call_ledger
-    assert (row.source, row.endpoint, row.ok) == ("nasdaq-index", "constituents", True)
+    assert (row.source, row.endpoint, row.ok) == ("sec", "browse-edgar", True)
 
 
 @pytest.mark.usefixtures("idle_moomoo_gate")
