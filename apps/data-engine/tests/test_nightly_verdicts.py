@@ -311,7 +311,7 @@ def test_output_invariants_waits_for_in_flight_ticks_before_running_suite(monkey
 
 
 @pytest.mark.parametrize(
-    ("app_env", "universes"),
+    ("environment", "universes"),
     [
         ("production", ("topt", "universe-list:qqq")),
         ("prod", ("topt", "universe-list:qqq")),
@@ -319,12 +319,12 @@ def test_output_invariants_waits_for_in_flight_ticks_before_running_suite(monkey
     ],
 )
 def test_the_confidence_report_records_a_verdict_for_each_universe_the_environment_runs(
-    monkeypatch, written, app_env: str, universes: tuple[str, ...]
+    monkeypatch, written, environment: str, universes: tuple[str, ...]
 ) -> None:
     """The contract lists the universes of each environment: production skips S&P 500 while staging runs all three."""
     from data_engine.datahub import confidence_report
 
-    monkeypatch.setattr(settings, "app_env", app_env)
+    monkeypatch.setattr(settings, "environment", environment)
     monkeypatch.setattr(psycopg, "connect", _Sink())
     monkeypatch.setattr(confidence_report, "compile_report", lambda *_a, **_k: None)
     for universe in ("topt", "universe-list:qqq", "universe-list:sp500"):
@@ -350,12 +350,12 @@ def test_production_records_no_sp500_verdict_and_staging_does(written, monkeypat
     declared = {*standards.NIGHTLY_VERDICTS, *quality.NIGHTLY_VERDICTS}
     assert name in declared, "every environment declares the name; the contract decides where it is recorded"
 
-    for app_env, recorded in (("production", False), ("prod", False), ("staging", True)):
-        monkeypatch.setattr(settings, "app_env", app_env)
+    for environment, recorded in (("production", False), ("prod", False), ("staging", True)):
+        monkeypatch.setattr(settings, "environment", environment)
         written.clear()
         with nightly_verdicts.verdict(name, registered=declared, run_id="r", tick=None):
             pass
-        assert bool(written) is recorded, app_env
+        assert bool(written) is recorded, environment
 
 
 def test_a_crashing_confidence_report_is_a_red_verdict(monkeypatch, written) -> None:
@@ -641,7 +641,7 @@ def test_head_reports_record_purity_and_coverage_per_universe(monkeypatch, writt
     monkeypatch.setattr(theme_purity, "materialize_theme_purity", lambda *_a, **_k: ())
     tick = datetime(2026, 9, 16, 23, 30, tzinfo=UTC)
 
-    monkeypatch.setattr(settings, "app_env", "staging")
+    monkeypatch.setattr(settings, "environment", "staging")
     written.clear()
     for request in standards.head_reports_schedule.evaluate_tick(
         dg.build_schedule_context(scheduled_execution_time=tick)
@@ -651,7 +651,7 @@ def test_head_reports_record_purity_and_coverage_per_universe(monkeypatch, writt
     assert sorted(row["check"] for row in written) == sorted(standards.NIGHTLY_VERDICTS)
     assert all(row["ok"] is None and row["ran_at"] == tick for row in written)
 
-    monkeypatch.setattr(settings, "app_env", "production")
+    monkeypatch.setattr(settings, "environment", "production")
     written.clear()
     for request in standards.head_reports_schedule.evaluate_tick(
         dg.build_schedule_context(scheduled_execution_time=tick)
@@ -879,7 +879,7 @@ def test_output_invariants_on_advance_sensor_heals_a_red_verdict_once_per_state(
             return [("universe:topt-us-2026-03-31", "capture-run:abc")]
 
     monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: _HeadCursor())
-    monkeypatch.setattr(settings, "data_engine_image_digest", "sha256:1234567890abcdef")
+    monkeypatch.setattr(settings, "image_digest", "sha256:1234567890abcdef")
     monkeypatch.setattr(quality, "newest_is_red", lambda name: name == "output_invariants")
 
     ctx = dg.build_sensor_context()

@@ -8,22 +8,12 @@ from typing import Any, Literal
 import psycopg
 from psycopg.rows import dict_row
 from truealpha_runtime.access import AccessContext
-from truealpha_runtime.checks import redact_postgres_exception
 
 from llm_service.config import settings
 
 DatabaseRole = Literal["app_runtime", "mart_readonly", "app_ops_reader"]
 _ALLOWED_ROLES: frozenset[str] = frozenset({"app_runtime", "mart_readonly", "app_ops_reader"})
 _STATEMENT_TIMEOUT = "5s"
-
-
-def redact_db_error(exc: Exception, *, database_url: str | None = None) -> str:
-    """Redact credentials from a Postgres exception using SDK settings."""
-    return redact_postgres_exception(
-        exc,
-        database_url=database_url or settings.database_url,
-        connect_timeout_seconds=settings.database_connect_timeout_seconds,
-    )
 
 
 def _connect(*, database_url: str | None = None) -> psycopg.Connection[dict[str, Any]]:

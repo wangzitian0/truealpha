@@ -3,7 +3,7 @@
   "source": "apps/data-engine",
   "fields": [
     {
-      "field": "app_env",
+      "field": "environment",
       "env": "ENVIRONMENT",
       "aliases": [],
       "required": false,
@@ -212,7 +212,7 @@
       "store_key": ""
     },
     {
-      "field": "release_manifest_id",
+      "field": "release_id",
       "env": "RELEASE_ID",
       "aliases": [],
       "required": false,
@@ -231,7 +231,7 @@
       "store_key": ""
     },
     {
-      "field": "data_engine_image_digest",
+      "field": "image_digest",
       "env": "IMAGE_DIGEST",
       "aliases": [],
       "required": false,

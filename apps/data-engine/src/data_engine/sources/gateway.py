@@ -441,7 +441,7 @@ def capacity_environment() -> str:
     try:
         return settings.environment_tier.value
     except ValueError:
-        return settings.app_env
+        return settings.environment
 
 
 def _utcnow() -> datetime:

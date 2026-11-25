@@ -31,16 +31,20 @@ def test_auth_login_session_logout_and_rate_limiter(monkeypatch: pytest.MonkeyPa
     assert limiter.attempt("1.2.3.4") is False
 
     for env in ("dev", "local_dev", "test", "ci"):
-        monkeypatch.setattr(auth_service, "settings", Settings(_env_file=None, app_env=env, secret_key=SecretStr("")))
+        monkeypatch.setattr(
+            auth_service, "settings", Settings(_env_file=None, environment=env, secret_key=SecretStr(""))
+        )
         assert auth_service.resolve_signing_secret()
     for env in ("preview", "staging", "production"):
-        monkeypatch.setattr(auth_service, "settings", Settings(_env_file=None, app_env=env, secret_key=SecretStr("")))
+        monkeypatch.setattr(
+            auth_service, "settings", Settings(_env_file=None, environment=env, secret_key=SecretStr(""))
+        )
         with pytest.raises(auth_service.AuthConfigurationError):
             auth_service.resolve_signing_secret()
 
     test_settings = Settings(
         _env_file=None,
-        app_env="staging",
+        environment="staging",
         secret_key=SecretStr("unit-test-signing-key-32-chars-minimum"),
     )
     monkeypatch.setattr(auth_service, "settings", test_settings)
@@ -155,7 +159,9 @@ def test_db_statement_timeout_and_error_redaction(monkeypatch: pytest.MonkeyPatc
     _db.with_app_runtime(lambda _cur: None)
     assert ("select set_config('statement_timeout', %s, true)", ("5s",)) in executed
 
-    redacted = _db.redact_db_error(
+    from truealpha_runtime.checks import redact_postgres_exception
+
+    redacted = redact_postgres_exception(
         RuntimeError("connection failed: postgresql://app_service_login:SuperSecretPass123@db:5432/truealpha"),
         database_url="postgresql://app_service_login:SuperSecretPass123@db:5432/truealpha",
     )

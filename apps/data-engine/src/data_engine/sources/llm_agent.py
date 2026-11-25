@@ -114,7 +114,7 @@ class _GatewayWire(httpx2.AsyncBaseTransport):
                     provider_code = model_policy.provider_code(raw_body)
                     captured.provider_code = provider_code
                     call.provider_code = provider_code
-                    call.fail(f"HTTP {status}: {raw_body[:200]!r}")
+                    call.fail(llm.redacted_http_error(status, provider_code))
                     return httpx2.Response(status, content=raw_body, headers=_JSON_HEADERS)
                 parsed = json.loads(raw_body.decode())
                 captured.parsed = parsed

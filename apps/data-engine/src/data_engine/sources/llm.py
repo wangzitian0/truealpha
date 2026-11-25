@@ -15,7 +15,8 @@ from typing import Any
 from urllib.parse import urlparse
 
 from factors.shared import extraction as extraction_primitive
-from infra2_sdk.runtime.llm import DecodingSpec, LlmSettings
+from infra2_sdk.runtime.llm import DecodingSpec, LlmSettings, redact_llm_error
+from infra2_sdk.runtime.llm import schema_sha256 as sdk_schema_sha256
 from truealpha_contracts.common import canonical_sha256
 from truealpha_runtime.research_cards import (
     XHS_CARD_INSTRUCTIONS,
@@ -79,7 +80,7 @@ class ModelTask:
 
     @property
     def schema_sha256(self) -> str:
-        return canonical_sha256(self.response_schema)
+        return sdk_schema_sha256(self.response_schema)
 
 
 HEADCOUNT_TASK = ModelTask(prompt_version=PROMPT_VERSION, instructions=INSTRUCTIONS, response_schema=RESPONSE_SCHEMA)
@@ -111,6 +112,19 @@ Transport = Callable[[str, dict[str, str], bytes], tuple[int, bytes]]
 
 class ModelNotConfigured(RuntimeError):
     pass
+
+
+class _RedactedStatusError(RuntimeError):
+    def __init__(self, status_code: int, provider_error_code: str | None = None) -> None:
+        super().__init__()
+        self.status_code = status_code
+        self.provider_error_code = provider_error_code
+
+
+def redacted_http_error(status: int, provider_code: str | None = None) -> str:
+    """Format an HTTP failure with SDK redaction and without raw response bytes."""
+    detail = str(redact_llm_error(_RedactedStatusError(status, provider_code)))
+    return f"HTTP {status}: {detail}"
 
 
 class ModelHTTPError(RuntimeError):
@@ -458,11 +472,11 @@ def invoke(
             if status >= 400:
                 if _is_context_limit_response(status, body):
                     context_limit_exceeded = True
-                    limit_msg = f"{context_prefix} HTTP {status}: {body[:200]!r}"
+                    limit_msg = f"{context_prefix} {redacted_http_error(status, provider_code)}"
                     logger.error("LLM provider rejected prompt for exceeding context window: %s", limit_msg)
                     decision = refusal(limit_msg)
                 else:
-                    decision = refusal(f"HTTP {status}: {body[:200]!r}")
+                    decision = refusal(redacted_http_error(status, provider_code))
             else:
                 decision = _answer_decision(payload, request_body["max_tokens"], task.answer_required, parse, refusal)
         completed_at = now()
@@ -533,7 +547,7 @@ def invoke(
             status_code=status,
         )
     if status >= 400:
-        raise ModelHTTPError(status, f"{SOURCE}: HTTP {status}: {body[:200]!r}", provider_code)
+        raise ModelHTTPError(status, f"{SOURCE}: {redacted_http_error(status, provider_code)}", provider_code)
     if task.answer_required and _cut_off(payload):
         raise ModelOutputTruncated(request_body["max_tokens"])
     return invocation

@@ -3,7 +3,7 @@
   "source": "apps/llm-service",
   "fields": [
     {
-      "field": "app_env",
+      "field": "environment",
       "env": "ENVIRONMENT",
       "aliases": [],
       "required": false,

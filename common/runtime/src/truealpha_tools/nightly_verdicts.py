@@ -10,13 +10,10 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from infra2_sdk.runtime.environment import resolve_environment_tier
 
-if TYPE_CHECKING:
-    from infra2_sdk.deploy import HttpGet
-
+HttpGet = Callable[[str], tuple[int, str]]
 GitRun = Callable[..., subprocess.CompletedProcess[str]]
 FirstDeclared = Callable[[str, str], datetime | None]
 ReleaseReader = Callable[[str], str | None]

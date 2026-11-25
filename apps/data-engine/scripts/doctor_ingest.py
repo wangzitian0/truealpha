@@ -4,6 +4,14 @@ import argparse
 import socket
 import sys
 from datetime import UTC, datetime
+from urllib.parse import urlsplit
+
+from truealpha_runtime.checks import (
+    DatabaseCheck,
+    DependencyStatus,
+    ObjectStorageCheck,
+    redact_postgres_exception,
+)
 
 REQUIRED_TABLES = [
     "raw.fetches",
@@ -15,8 +23,21 @@ REQUIRED_TABLES = [
 ]
 
 
+def _safe_database_target(database_url: str) -> str:
+    parsed = urlsplit(database_url)
+    host = parsed.hostname or ""
+    port = f":{parsed.port}" if parsed.port else ""
+    path = parsed.path or ""
+    return f"{host}{port}{path}" or "<unparsed>"
+
+
 def check_database() -> list[str]:
     import data_engine.db as db
+    from data_engine.config import settings
+
+    probe = DatabaseCheck(settings).probe()
+    if probe.status is not DependencyStatus.PRESENT:
+        return [probe.detail or "database unreachable"]
 
     problems = []
     try:
@@ -25,15 +46,25 @@ def check_database() -> list[str]:
                 row = conn.execute("select to_regclass(%s)", (table,)).fetchone()
                 if row is None or row[0] is None:
                     problems.append(f"missing table {table} (run the migrations: make db-migrate or docker-exec psql)")
-    except Exception as e:
-        problems.append(f"cannot connect: {e}")
+    except Exception as exc:
+        redacted = redact_postgres_exception(
+            exc,
+            database_url=settings.database_url,
+            connect_timeout_seconds=settings.database_connect_timeout_seconds,
+        )
+        problems.append(f"cannot inspect tables: {redacted}")
     return problems
 
 
 def check_object_storage() -> list[str]:
     import data_engine.db as db
     import data_engine.raw_store as raw_store
+    from data_engine.config import settings
     from truealpha_contracts.models import DataSource
+
+    probe = ObjectStorageCheck(settings).probe()
+    if probe.status is not DependencyStatus.PRESENT:
+        return [probe.detail or "object storage unreachable"]
 
     try:
         with db.connect() as conn:
@@ -49,8 +80,13 @@ def check_object_storage() -> list[str]:
             if raw_store.get_payload(conn, fetch_id) != b"doctor smoke payload":
                 return ["S3 round-trip mismatch"]
             conn.commit()  # keep the pointer row: content-addressed, reruns dedupe onto it
-    except Exception as e:
-        return [f"raw_store round-trip failed: {e}"]
+    except Exception as exc:
+        redacted = redact_postgres_exception(
+            exc,
+            database_url=settings.database_url,
+            connect_timeout_seconds=settings.database_connect_timeout_seconds,
+        )
+        return [f"raw_store round-trip failed: {redacted}"]
     return []
 
 
@@ -74,7 +110,8 @@ def main() -> None:
     from data_engine.config import settings
 
     print(
-        f"env: ENVIRONMENT={settings.app_env}  db={settings.database_url.rsplit('@', 1)[-1]}  s3={'configured' if settings.s3_endpoint else 'UNCONFIGURED'}"
+        f"env: ENVIRONMENT={settings.environment}  db={_safe_database_target(settings.database_url)}  "
+        f"s3={'configured' if settings.s3_endpoint else 'UNCONFIGURED'}"
     )
     failed = False
     for name, problems, required in (

@@ -623,7 +623,7 @@ def test_the_lanes_record_in_each_environment_exactly_the_checks_the_tool_expect
 
     declared = frozenset().union(*(getattr(import_module(m), "NIGHTLY_VERDICTS", ()) for m in LANE_MODULES))
     for environment in ("staging", "production"):
-        monkeypatch.setattr(settings, "app_env", environment)
+        monkeypatch.setattr(settings, "environment", environment)
         recorded = {name for name in declared if is_registered(name, declared)}
         expected, _ = _module.expectations_for(
             "v0.0.70", _main_set, environment=environment, contract_reader=_main_contract
@@ -633,9 +633,9 @@ def test_the_lanes_record_in_each_environment_exactly_the_checks_the_tool_expect
             f"{environment}: expected but not recorded {sorted(set(expected) - recorded)}; "
             f"recorded but not expected {sorted(recorded - set(expected))}"
         )
-    monkeypatch.setattr(settings, "app_env", "production")
+    monkeypatch.setattr(settings, "environment", "production")
     assert not {name for name in declared if is_registered(name, declared)} & set(_sp500_checks())
-    monkeypatch.setattr(settings, "app_env", "staging")
+    monkeypatch.setattr(settings, "environment", "staging")
     assert (set(_qqq_checks()) | set(_sp500_checks())) <= {name for name in declared if is_registered(name, declared)}
 
 

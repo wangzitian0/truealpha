@@ -34,9 +34,10 @@ from factors.backtest.engine import (
 )
 from factors.composite.strategy_evaluator import IssuerInput, evaluate_cutoff
 from factors.panel import IssuerClass
-from infra2_sdk.runtime.environment import EnvironmentTier, resolve_environment_tier
+from infra2_sdk.runtime.environment import resolve_environment_tier
 from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.strategy import GoldenDecisionOutcome, LargeModelValueV0Definition, QuarterlyCutoffSchedule
+from truealpha_runtime.config import is_deployed_tier
 
 from data_engine.config import settings
 from data_engine.datahub.market_prices import SPLIT_ADJUSTED, UNADJUSTED
@@ -88,15 +89,17 @@ LIMITATIONS = (
     "An input is admitted only when it is knowable before the cutoff's calendar date.",
 )
 
-_DEPLOYED_TIERS = frozenset({EnvironmentTier.PREVIEW, EnvironmentTier.STAGING, EnvironmentTier.PRODUCTION})
 _NO_CODE_IDENTITY = ("", "unknown")
 
 
-def deployed_code_identity(app_env: str, git_commit_sha: str) -> str:
+def deployed_code_identity(environment: str, git_commit_sha: str) -> str:
     sha = (git_commit_sha or "").strip()
-    if resolve_environment_tier(app_env, unknown="production") in _DEPLOYED_TIERS and sha.lower() in _NO_CODE_IDENTITY:
+    if (
+        is_deployed_tier(resolve_environment_tier(environment, unknown="production"))
+        and sha.lower() in _NO_CODE_IDENTITY
+    ):
         raise RuntimeError(
-            f"the backtest refuses to run in {app_env!r} without a code identity: GIT_COMMIT_SHA is {git_commit_sha!r}; the deployment must inject the release ref"
+            f"the backtest refuses to run in {environment!r} without a code identity: GIT_COMMIT_SHA is {git_commit_sha!r}; the deployment must inject the release ref"
         )
     return sha
 
@@ -308,7 +311,7 @@ def run_core_strategy_backtest(
 ) -> BacktestOutcome:
     if tick.tzinfo is None or tick.utcoffset() is None:
         raise ValueError("tick must carry a time zone")
-    code_identity = deployed_code_identity(settings.app_env, settings.git_commit_sha)
+    code_identity = deployed_code_identity(settings.environment, settings.git_commit_sha)
     definition = apply_definition_overrides(definition or load_strategy_definition(), overrides or {})
     rules = execution_rules(definition)
     start_utc = start_cutoff.astimezone(UTC) if start_cutoff else None

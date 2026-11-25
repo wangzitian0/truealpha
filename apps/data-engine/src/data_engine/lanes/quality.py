@@ -197,7 +197,7 @@ def stale_served_heads(
         try:
             environment = declared_environment(connection)
         except Exception:  # noqa: BLE001
-            environment = settings.app_env
+            environment = settings.environment
     out: list[str] = []
     scheduled = 0
     contract = load_environment_contract()
@@ -517,7 +517,7 @@ OUTPUT_INVARIANTS_SENSOR_INTERVAL_SECONDS = 60
     default_status=dg.DefaultSensorStatus.RUNNING,
 )
 def output_invariants_on_advance_sensor(context: dg.SensorEvaluationContext):
-    build = (settings.data_engine_image_digest or "").strip() or "unversioned"
+    build = (settings.image_digest or "").strip() or "unversioned"
     try:
         with db.connect() as connection:
             rows = connection.execute(

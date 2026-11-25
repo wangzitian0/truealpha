@@ -40,8 +40,8 @@ class DrillRefused(ValueError):
     pass
 
 
-def is_production(app_env: str) -> bool:
-    return resolve_environment_tier(app_env, unknown="production") is EnvironmentTier.PRODUCTION
+def is_production(environment: str) -> bool:
+    return resolve_environment_tier(environment, unknown="production") is EnvironmentTier.PRODUCTION
 
 
 @dataclass(frozen=True)
@@ -61,7 +61,7 @@ class FailoverDrill:
     def for_launch(
         cls,
         *,
-        app_env: str,
+        environment: str,
         force_fetch: bool,
         tickers: Sequence[str],
         twelve_data_unavailable: bool = False,
@@ -74,8 +74,8 @@ class FailoverDrill:
             if primary_lagging:
                 raise DrillRefused("drill_primary_lagging needs drill tickers")
             return None
-        if is_production(app_env):
-            raise DrillRefused(f"a failover drill never runs in production (ENVIRONMENT={app_env!r})")
+        if is_production(environment):
+            raise DrillRefused(f"a failover drill never runs in production (ENVIRONMENT={environment!r})")
         if not force_fetch:
             raise DrillRefused("a failover drill must force a fetch (force_fetch: true), or it proves nothing")
         if primary_lagging and twelve_data_unavailable:
@@ -97,10 +97,10 @@ class FailoverDrill:
         return canonical_sha256({"kind": self.kind.value, "tickers": list(self.tickers)})
 
     def arm(
-        self, app_env: str, fetcher: MarketPriceFetcher, origins: Sequence[CorroboratingOrigin]
+        self, environment: str, fetcher: MarketPriceFetcher, origins: Sequence[CorroboratingOrigin]
     ) -> tuple[MarketPriceFetcher, tuple[CorroboratingOrigin, ...]]:
-        if is_production(app_env):
-            raise DrillRefused(f"a failover drill never arms in production (ENVIRONMENT={app_env!r})")
+        if is_production(environment):
+            raise DrillRefused(f"a failover drill never arms in production (ENVIRONMENT={environment!r})")
         down = set(self.origins_down)
         primary_fetcher = (
             self._lagged(fetcher) if self.kind is DrillKind.PRIMARY_LAGGING else self._broken(fetcher, "primary")

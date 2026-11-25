@@ -257,7 +257,7 @@ def run_python_probe(
     code: str, environ: Mapping[str, str], *, timeout: float = 120
 ) -> subprocess.CompletedProcess[str]:
     variables: Any = runtime_env_contract()["variables"]
-    declared = {key for item in variables for key in (item["name"], *item["aliases"])}
+    declared = {item["name"] for item in variables}
     scrubbed = {k: v for k, v in os.environ.items() if not k.startswith("OTEL_") and k not in declared}
     return subprocess.run(
         [sys.executable, "-c", code],

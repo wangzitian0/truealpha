@@ -201,9 +201,9 @@ def test_health_hides_the_verdict_rows_of_a_universe_that_the_environment_does_n
     ]
     monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: _VerdictsOnly(rows))
 
-    monkeypatch.setattr(settings, "app_env", "staging")
+    monkeypatch.setattr(settings, "environment", "staging")
     staging = [entry["check"] for entry in TestClient(app).get("/health").json()["nightly_verdicts"]]
-    monkeypatch.setattr(settings, "app_env", "production")
+    monkeypatch.setattr(settings, "environment", "production")
     production = [entry["check"] for entry in TestClient(app).get("/health").json()["nightly_verdicts"]]
 
     assert staging == [row[0] for row in rows if row[0] != "fetch_keys_once"]
@@ -374,7 +374,7 @@ def test_health_hides_the_pointer_rows_of_a_universe_that_the_environment_does_n
     ]
     monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: _PointersOnly(rows))
 
-    monkeypatch.setattr(settings, "app_env", "staging")
+    monkeypatch.setattr(settings, "environment", "staging")
     staging_resp = TestClient(app).get("/health")
     assert staging_resp.status_code == 200
     staging_pointers = staging_resp.json()["governed_pointers"]
@@ -384,7 +384,7 @@ def test_health_hides_the_pointer_rows_of_a_universe_that_the_environment_does_n
         "universe:topt-us-2026-03-31",
     ]
 
-    monkeypatch.setattr(settings, "app_env", "production")
+    monkeypatch.setattr(settings, "environment", "production")
     production_pointers = TestClient(app).get("/health").json()["governed_pointers"]
     assert [entry["universe_id"] for entry in production_pointers] == [
         "universe:qqq-us-2026-09-30",

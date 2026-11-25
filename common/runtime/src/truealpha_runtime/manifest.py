@@ -15,7 +15,7 @@ class RuntimeBackend(StrEnum):
 
 
 _ALL = frozenset(EnvironmentTier)
-_IDENTITY_FIELDS = frozenset({"app_env", "git_commit_sha"})
+_IDENTITY_FIELDS = frozenset({"environment", "git_commit_sha"})
 _DATABASE_ENV_VARS = frozenset(
     name.upper() for name in CoreRuntimeSettings.model_fields if name not in _IDENTITY_FIELDS
 )

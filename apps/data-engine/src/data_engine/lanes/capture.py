@@ -83,12 +83,12 @@ SENTINEL_OBJECTIVES = ServiceObjectives(
 )
 
 
-def tick_cron(key: str, app_env: str) -> str:
+def tick_cron(key: str, environment: str) -> str:
     universe = record(key)
-    return universe.cron_for(rule_environment(app_env)) or next(iter(universe.cron.values()))
+    return universe.cron_for(rule_environment(environment)) or next(iter(universe.cron.values()))
 
 
-def universe_tick(key: str, app_env: str = settings.app_env) -> UniverseTick:
+def universe_tick(key: str, environment: str = settings.environment) -> UniverseTick:
     universe = record(key)
     objectives = (
         SENTINEL_OBJECTIVES
@@ -105,7 +105,7 @@ def universe_tick(key: str, app_env: str = settings.app_env) -> UniverseTick:
         objectives=objectives,
         run_strategy=universe.runs_strategy,
         consolidate_funds=universe.consolidates_funds,
-        cron=tick_cron(key, app_env),
+        cron=tick_cron(key, environment),
     )
 
 
@@ -125,10 +125,10 @@ def is_universe_list_refresh_scheduled(universe: str, environment: str) -> bool:
     return load_environment_contract().is_universe_list_refresh_scheduled(universe, rule_environment(environment))
 
 
-def tick_schedule_status(tick: UniverseTick, app_env: str) -> dg.DefaultScheduleStatus:
+def tick_schedule_status(tick: UniverseTick, environment: str) -> dg.DefaultScheduleStatus:
     return (
         dg.DefaultScheduleStatus.RUNNING
-        if is_universe_scheduled(tick.key, app_env)
+        if is_universe_scheduled(tick.key, environment)
         else dg.DefaultScheduleStatus.STOPPED
     )
 
@@ -294,7 +294,7 @@ def build_schedule(
     effective_cron = tick.cron if cron is None else cron
     if effective_cron is None:
         return None
-    effective_status = tick_schedule_status(tick, settings.app_env) if default_status is None else default_status
+    effective_status = tick_schedule_status(tick, settings.environment) if default_status is None else default_status
 
     @dg.schedule(
         name=tick.schedule_name,
@@ -334,16 +334,16 @@ run_sp500_live_tick, sp500_live_pipeline_job, sp500_live_schedule = _BUILT["sp50
 run_canary_live_tick, canary_live_pipeline_job, canary_daily_schedule = _BUILT["canary"]
 
 
-def build_definitions(app_env: str = settings.app_env) -> dg.Definitions:
+def build_definitions(environment: str = settings.environment) -> dg.Definitions:
     schedules = (
         [schedule for _, _, schedule in _BUILT.values() if schedule is not None]
-        if app_env == settings.app_env
+        if environment == settings.environment
         else [
             build_schedule(
                 tick,
                 _BUILT[tick.key][1],
-                cron=tick_cron(tick.key, app_env),
-                default_status=tick_schedule_status(tick, app_env),
+                cron=tick_cron(tick.key, environment),
+                default_status=tick_schedule_status(tick, environment),
             )
             for tick in TICKS
         ]
