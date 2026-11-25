@@ -7,7 +7,7 @@
       "argv": [
         "sh",
         "-c",
-        "uv run python -m infra2_sdk.deploy --url \"$APP_URL/api/health\" --expected-version \"$APP_VERSION_REF\" --max-attempts 36 --interval-seconds 5 --no-follow-redirects"
+        "uv run python -m truealpha_tools.health_probe --url \"$APP_URL/api/health\" --expected-version \"$APP_VERSION_REF\" --expect-data-engine-version \"$APP_VERSION_REF\" --max-attempts 36 --interval-seconds 5 --no-follow-redirects"
       ],
       "needs": [
         "running_service"
@@ -21,7 +21,7 @@
       "argv": [
         "sh",
         "-c",
-        "uv run python -m infra2_sdk.deploy --url \"$APP_URL/api/health\" --expected-version \"$APP_VERSION_REF\" --max-attempts 12 --interval-seconds 5 --no-follow-redirects"
+        "uv run python -m truealpha_tools.health_probe --url \"$APP_URL/api/health\" --expected-version \"$APP_VERSION_REF\" --expect-data-engine-version \"$APP_VERSION_REF\" --max-attempts 12 --interval-seconds 5 --no-follow-redirects"
       ],
       "needs": [
         "running_service"
