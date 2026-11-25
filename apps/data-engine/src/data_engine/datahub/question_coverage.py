@@ -26,6 +26,8 @@ from data_engine.datahub._helpers import gppe_branch_predicate
 from data_engine.datahub.repository import persist_run_report
 
 GOVERNING_FACTOR = "gross_profit_per_employee"
+REPORT_COMPILER_VERSION = "v2-frozen-denominator-low-conf"
+REPORT_RULES_TAG = f"{REGISTRY_SHA256[:12]}:{REPORT_COMPILER_VERSION}"
 UNRECORDED_REASON = "unrecorded_reason"
 NO_ROW = "no_row"
 NO_HEAD_SUMMARY = "no governed head"
@@ -376,6 +378,7 @@ def compile_report(connection: Connection[Any], *, universe: str, executed_at: d
         "environment": declared_environment(connection),
         "requirements_sha256": QUESTION_REQUIREMENTS_SHA256,
         "reason_registry_sha256": REGISTRY_SHA256,
+        "compiler_version": REPORT_COMPILER_VERSION,
         "generated_at": executed_at.astimezone(UTC).isoformat(),
         "denominator": issuers,
         "previous_run_id": None if before is None or previous is None else previous.run_id,
@@ -463,14 +466,14 @@ def stored_report_run(connection: Connection[Any], universe_id: str) -> str | No
 
 
 def stored_report_rules_current(connection: Connection[Any], universe_id: str) -> bool:
-    """Whether the newest stored report was compiled under this reason registry. A report of other
-    rules is not current, so the head reports run again (#1851)."""
+    """Whether the newest stored report was compiled under this reason registry and compiler version.
+    A report of other rules is not current, so the head reports run again (#1851, #1747)."""
     row = connection.execute(
-        "select payload ->> 'reason_registry_sha256' from mart.question_coverage_report "
-        "where universe_id = %s order by created_at desc limit 1",
+        "select payload ->> 'reason_registry_sha256', payload ->> 'compiler_version' "
+        "from mart.question_coverage_report where universe_id = %s order by created_at desc limit 1",
         (universe_id,),
     ).fetchone()
-    return row is not None and row[0] == REGISTRY_SHA256
+    return row is not None and row[0] == REGISTRY_SHA256 and row[1] == REPORT_COMPILER_VERSION
 
 
 def stored_confidence_report_run(connection: Connection[Any], universe_id: str) -> str | None:

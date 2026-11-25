@@ -985,26 +985,32 @@ def head_reports_sensor(context: dg.SensorEvaluationContext):
     with db.connect() as connection:
         for universe in scheduled_universe_names():
             head = question_coverage.governed_head_of(connection, key_of_lane(universe))
-            if isinstance(head, question_coverage.NoHead) or followed.get(universe) == head.run_id:
+            if isinstance(head, question_coverage.NoHead):
                 continue
-            first_sight = universe not in followed
-            followed[universe] = head.run_id
-            if first_sight and question_coverage.stored_report_run(connection, head.universe_id) == head.run_id:
+            target = f"{head.run_id}:{question_coverage.REPORT_RULES_TAG}"
+            if followed.get(universe) == target:
+                continue
+            followed[universe] = target
+            if question_coverage.stored_report_run(
+                connection, head.universe_id
+            ) == head.run_id and question_coverage.stored_report_rules_current(connection, head.universe_id):
                 context.log.info("%s: reports already current on %s", universe, head.run_id[:24])
                 continue
-            context.log.info("%s: head advanced to %s; launching its reports", universe, head.run_id[:24])
+            context.log.info(
+                "%s: head advanced or report rules changed on %s; launching its reports", universe, head.run_id[:24]
+            )
             requests.append(
                 head_reports_request(
                     universe,
                     executed_at,
-                    run_key=f"head:{universe}:{head.run_id}",
+                    run_key=f"head:{universe}:{target}",
                     only_if_stale=False,
                     head_run_id=head.run_id,
                 )
             )
     context.update_cursor(json.dumps(followed, sort_keys=True))
     if not requests:
-        yield dg.SkipReason("no governed head has advanced since its reports were launched")
+        yield dg.SkipReason("no governed head has advanced or changed report rules since its reports were launched")
         return
     yield from requests
 
