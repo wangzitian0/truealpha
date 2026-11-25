@@ -2,7 +2,7 @@ import json
 import re
 import uuid
 from collections.abc import Callable, Iterator
-from contextlib import ExitStack
+from contextlib import ExitStack, nullcontext
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
@@ -86,6 +86,30 @@ class _VerdictsOnly:
     """A connection whose only readable relation is mart.nightly_verdicts: every other read
     fails the way a database that predates it does, and must not take this one down."""
 
+    class _Cursor:
+        def __init__(self, connection: "_VerdictsOnly") -> None:
+            self.connection = connection
+            self._result = _Rows([])
+
+        def __enter__(self) -> "_VerdictsOnly._Cursor":
+            return self
+
+        def __exit__(self, *_exc: object) -> bool:
+            return False
+
+        def execute(self, sql: str, *args: object) -> "_VerdictsOnly._Cursor":
+            if sql.startswith(("set local role ", "select set_config(")):
+                self._result = _Rows([])
+            else:
+                self._result = self.connection.execute(sql, *args)
+            return self
+
+        def fetchone(self) -> object:
+            return self._result.fetchone()
+
+        def fetchall(self) -> list[object]:
+            return self._result.fetchall()
+
     def __init__(self, rows):
         self.rows = rows
         self.asked = []
@@ -95,6 +119,12 @@ class _VerdictsOnly:
 
     def __exit__(self, *_exc):
         return False
+
+    def cursor(self) -> _Cursor:
+        return self._Cursor(self)
+
+    def transaction(self):
+        return nullcontext()
 
     def rollback(self):
         return None
