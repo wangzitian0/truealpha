@@ -21,20 +21,26 @@ Over successive iterations, defensive engineering mechanisms degenerated into br
 
 We adopt the foundational principle: **"Strong Dashboards, Weak Gates" (看板优于门禁，强看板，弱门禁)**.
 
-### 1. Three gate classes
+### 1. Three gate classes and four test classes
 A gate belongs to one of three classes. Everything else is a dashboard.
-- **Class 1, the merge gate:** compilation/build, typecheck, backward-compatible migrations, secret scanning, and focused unit tests. It also holds the review-finding budget and the independent review of gate and release code (`AGENTS.md` Rule 4).
+- **Class 1, the merge gate:** compilation/build, typecheck, backward-compatible migrations, secret scanning, security/role boundaries, and dependency/contract/smoke checks. It also holds the review-finding budget and the independent review of gate and release code (`AGENTS.md` Rule 4).
 - **Class 2, the post-deploy effect probe:** after a deploy, a read-only probe shows that the change takes effect. It also shows that `main` still deploys.
 - **Class 3, staging evidence before a production deploy:** a production deploy of a release waits for the staging evidence of that same release.
+- **Four-level classification rule (`dev_env#782`, MECE order):** evaluate every proposed check sequentially by first `Yes`:
+  1. **Gate** (blocks PR merge): prevents production-reservation bypass, cross-domain privilege leaks, secret exposure, Moomoo trading calls, or non-idempotent migrations.
+  2. **Dependency / Smoke** (CI contract + thin Staging smoke): depends on external runtime boundaries (Postgres/SQL/roles, S3, containers, OpenAPI/env manifests, Dagster, HTTP/SSR, external vendors).
+  3. **Fact** (dashboard only, non-blocking): measures operational metrics or data quality (coverage, reasons, freshness age, oracle disagreements, quotas, 429/1302, cost, vulnerabilities).
+  4. **None** (deleted): pure logic branches, prose regexes, AST static-police checks, count ratchets, history tombstones, or fake-DOM E2E proxies; AI review and Staging dashboards govern these.
 - Third-party and AI reviewer feedback is **advisory**: infrastructure timeouts, reviewer platform errors, or unclassified review comments log warnings and never fail-close PR readiness.
-- Mechanical text policing (regex matching on PR closing keywords, automated bot reopen scripts) is abolished.
+- Mechanical text policing (regex matching on PR closing keywords, AST style/count ratchets, automated bot reopen scripts) is abolished.
 
 ### 2. Strong Dashboards (Radical Observability as Primary Governance)
 - Reality, quality, and progress are verified through **live, transparent Observability Dashboards**:
-  - **DataHub Freshness (`/admin/datahub`)**: Directly exposes pointer timestamps, universe freshness, partition arrival times, and frozen head alerts.
-  - **Question Coverage (`/admin/datahub`)**: Renders row-by-row reality across the core questions (verified vs. degraded vs. unavailable with reason), leaving zero room for fake constants or hidden missing cells. It reads `mart.question_coverage_report`.
-  - **Strategy & Backtest Observability (`/research/backtest`)**: Exposes historical backtest cutoffs, returns, drawdowns, and live Dagster execution verdicts directly to researchers.
-- Single Source of Truth: Operational and data plane truth lives in Postgres `mart` models. A migration creates each one: `mart.served_head` (pointer freshness), `mart.question_coverage_report` (question coverage), and `mart.nightly_verdicts` (nightly check verdicts). The web surfaces above and the health endpoints read these models.
+  - **Operations & Recovery (`/admin`)**: Exposes runtime dependency probes (Postgres, Graph Store, S3), `mart.served_head` freshness, `mart.nightly_verdicts`, failed Dagster run errors, trigger queues across all universes, and append-only pointer rollback (`POST /api/v1/admin/head-rollback`).
+  - **DataHub Truth (`/admin/datahub`)**: Exposes question coverage matrices (`mart.question_coverage_report`, 5 reason categories, per-run deltas), full oracle agree/disagree counts and mismatch samples (`mart.oracle_outcomes`), `hard`/`fact` output invariants (`mart.output_invariant_results`), confidence reports, vendor quota capacity and 429/1302 trends, and LLM usage/model drift.
+  - **Strategy & Backtest Observability (`/research/backtest`, `/research/*`)**: Renders backend-computed head freshness/age limits, three-state availability, historical backtest cutoffs, returns, drawdowns, and live Dagster execution verdicts.
+  - **Read-only Admin MCP Tools (`admin_ops_snapshot`, `admin_datahub_facts`)**: Expose structured facts and prior-run diffs directly from the same Postgres views to AI reviewers and Staging verification.
+- Single Source of Truth: Operational and data plane truth lives in Postgres `mart` models. Migrations create each table/view (`mart.served_head`, `mart.question_coverage_report`, `mart.output_invariant_results`, `mart.nightly_verdicts`). Web surfaces and health/MCP endpoints read these models directly.
 
 ### 3. Issue Lifecycle and Verification
 - An agent or engineer independently verifies the change on staging. The verifier reads the relevant dashboard or runs a read-only probe (SQL rows, HTTP responses). Then `/close` walks the acceptance rows (ADR A2) and the issue closes.
