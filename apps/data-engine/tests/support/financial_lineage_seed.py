@@ -57,7 +57,7 @@ class MemoryStore:
     def store(self, capture: RawCapture) -> RawIngestionEnvelope:
         digest = hashlib.sha256(capture.body).hexdigest()
         ref = RawObjectRef(
-            bucket="memory-bucket",
+            bucket="truealpha-raw",
             key=f"{capture.source.value}/{digest}",
             sha256=digest,
             byte_length=len(capture.body),

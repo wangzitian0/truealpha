@@ -790,4 +790,55 @@ do $$ declare obligation_count integer; begin
     end if;
 end $$;
 
+do $$
+declare
+    unvalidated_count integer;
+    has_bucket_check boolean;
+    has_legacy_check boolean;
+begin
+    select count(*) into unvalidated_count from pg_constraint where not convalidated;
+    if unvalidated_count <> 0 then
+        raise exception 'expected zero unvalidated constraints, found %', unvalidated_count;
+    end if;
+
+    select exists (
+        select 1
+          from pg_constraint
+         where conrelid = 'raw.fetches'::regclass
+           and conname = 'raw_fetches_bucket_check'
+           and convalidated
+    ) into has_bucket_check;
+    if not has_bucket_check then
+        raise exception 'raw_fetches_bucket_check is missing or not validated on raw.fetches';
+    end if;
+
+    select exists (
+        select 1
+          from pg_constraint
+         where conrelid = 'raw.fetches'::regclass
+           and conname = 'fetches_object_uri_check'
+    ) into has_legacy_check;
+    if has_legacy_check then
+        raise exception 'legacy fetches_object_uri_check must not exist on raw.fetches';
+    end if;
+
+    begin
+        insert into raw.fetches (
+            source, source_record_id, payload_sha256, object_uri, content_type, byte_length, fetched_at
+        ) values (
+            'contract-test', 'bucket-bad', repeat('f', 64),
+            's3://legacy-bucket/bad.json', 'application/json', 1, '2026-04-01T00:00:00Z'
+        );
+        raise exception 'non-truealpha-raw object_uri unexpectedly succeeded';
+    exception when check_violation then null;
+    end;
+
+    insert into raw.fetches (
+        source, source_record_id, payload_sha256, object_uri, content_type, byte_length, fetched_at
+    ) values (
+        'contract-test', 'bucket-good', repeat('e', 64),
+        's3://truealpha-raw/good.json', 'application/json', 1, '2026-04-01T00:00:00Z'
+    );
+end $$;
+
 rollback;
