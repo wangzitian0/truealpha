@@ -15,6 +15,8 @@ import json
 import pytest
 from truealpha_runtime.testing import OtlpCollectorStub, run_python_probe
 
+pytestmark = pytest.mark.smoke
+
 IAC_REF = "0123456789abcdef0123456789abcdef01234567"
 IDENTITY = {
     "deployment.environment.name": "staging",
@@ -102,9 +104,9 @@ def test_with_an_endpoint_and_the_rendered_identity_the_app_exports_without_the_
         **DEPLOYED,
         "ENVIRONMENT": "staging",
         "OTEL_RESOURCE_ATTRIBUTES": _attributes(deployment_environment),
-        "OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:9",
     }
-    result = run_python_probe(STATE_PROBE, environ)
+    with OtlpCollectorStub() as collector:
+        result = run_python_probe(STATE_PROBE, {**environ, "OTEL_EXPORTER_OTLP_ENDPOINT": collector.endpoint})
     assert result.returncode == 0, result.stderr
     state = _probe_state(result.stdout)
     assert state == {

@@ -18,6 +18,8 @@ import pytest
 from psycopg import errors, sql
 from truealpha_runtime.testing import isolated_test_database
 
+pytestmark = pytest.mark.deps
+
 COMPARED_AT = datetime(2026, 10, 27, 0, 45, tzinfo=UTC)
 KNOWABLE_AT = datetime(2026, 10, 24, 8, 7, tzinfo=UTC)
 

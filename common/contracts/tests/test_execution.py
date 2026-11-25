@@ -1,4 +1,7 @@
+import pytest
 from truealpha_contracts.execution import AvailabilityStatus, FactorValidationStatus, InputEvidenceStatus
+
+pytestmark = pytest.mark.contract
 
 
 def test_execution_status_enums_preserve_wire_values() -> None:

@@ -20,6 +20,15 @@ on:
         default: true
 
 
+env:
+  S3_CORE_TEST_FILES: >-
+    common/runtime/tests/test_runtime.py
+    apps/llm-service/tests/smoke/test_api_and_mcp_real_db_smoke.py
+    apps/llm-service/tests/smoke/test_library_s3_smoke.py
+    apps/llm-service/tests/test_boot.py
+  S3_DATA_ENGINE_TEST_FILES: >-
+    apps/data-engine/tests/test_raw_store.py
+
 jobs:
   gates:
     runs-on: ubuntu-latest
@@ -49,15 +58,76 @@ jobs:
           '
           uv run python -m infra2_sdk.manifests --check-hooks runtime-hooks.manifest.json
 
-  test-core:
+  test-s3:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: truealpha
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-uv
+        with:
+          enable-cache: true
+      - run: uv sync --all-packages --frozen
+      # The compose `s3` service is the one pin of the local and CI S3 engine (RustFS, the
+      # engine of the infra2 platform service). `--wait` blocks on its healthcheck.
+      - name: Start S3
+        run: docker compose up -d --wait s3 || { docker compose logs s3; exit 1; }
+      - name: Apply the migration chain
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/truealpha
+        run: sh db/apply_migrations.sh
+      - name: Run S3 tests
+        run: |
+          set -euo pipefail
+          S3_LIST="$S3_CORE_TEST_FILES"
+          if [ "${{ inputs.data_engine_required }}" = "true" ]; then
+            S3_LIST="$S3_LIST $S3_DATA_ENGINE_TEST_FILES"
+          fi
+          read -r -a FILES <<< "$S3_LIST"
+          if [ "${#FILES[@]}" -eq 0 ]; then
+            echo "::error::test-s3 selected no files — refusing to run bare pytest"
+            exit 1
+          fi
+          for f in "${FILES[@]}"; do
+            if [ ! -f "$f" ]; then
+              echo "::error::declared S3 test file does not exist: $f"
+              exit 1
+            fi
+          done
+          echo "test-s3: ${#FILES[@]} files"
+          # #1412 L1: through the make target; FILES is the explicit S3 set.
+          PYTEST_ADDOPTS="--durations=0 --durations-min=0" make test-python FILES="${FILES[*]}"
+        env:
+          ENVIRONMENT: ci
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/truealpha
+          S3_ENDPOINT: http://localhost:9000
+          S3_ACCESS_KEY: s3local
+          S3_SECRET_KEY: s3_local_secret
+          S3_BUCKET: truealpha-raw
+          TRUEALPHA_REQUIRE_RUNTIME: "1"
+
+  # Run all non-S3 gate/deps/smoke/contract tests across deterministic index-strided shards.
+  # fail-fast is off so one red shard does not hide the other lane. Postgres 16 only (no S3 startup).
+  test-deps-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1]
-    # Real Postgres + S3 so the KG / raw-store / ledger integration tests run
-    # in CI instead of skipping (they skip gracefully where unreachable).
+        shard: [0, 1, 2, 3]
     services:
       postgres:
         image: postgres:16-alpine
@@ -80,72 +150,6 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --all-packages --frozen
-      # The compose `s3` service is the one pin of the local and CI S3 engine (RustFS, the
-      # engine of the infra2 platform service). `--wait` blocks on its healthcheck.
-      - name: Start S3
-        run: docker compose up -d --wait s3 || { docker compose logs s3; exit 1; }
-      - name: Apply the migration chain
-        env:
-          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/truealpha
-        run: sh db/apply_migrations.sh
-      - name: Run tests (shard ${{ matrix.shard }} of 2)
-        run: |
-          set -euo pipefail
-          FILE_LIST=$(python3 -c 'import pathlib; idx, tot = ${{ strategy.job-index }}, ${{ strategy.job-total }}; files = sorted({p for r in ("common/contracts/tests", "common/factors/tests", "common/runtime/tests", "apps/llm-service/tests") for pat in ("test_*.py", "*_test.py") for p in pathlib.Path(r).rglob(pat)}); print("\n".join(str(p) for p in files[idx::tot]))')
-          mapfile -t FILES <<< "$FILE_LIST"
-          if [ "${#FILES[@]}" -eq 0 ]; then
-            echo "::error::shard ${{ matrix.shard }} selected no files — refusing to run bare pytest"
-            exit 1
-          fi
-          echo "shard ${{ matrix.shard }}: ${#FILES[@]} files"
-          # #1412 L1: through the make target; FILES is this shard.
-          PYTEST_ADDOPTS="--durations=0 --durations-min=0" make test-python FILES="${FILES[*]}"
-        env:
-          ENVIRONMENT: ci
-          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/truealpha
-          S3_ENDPOINT: http://localhost:9000
-          S3_ACCESS_KEY: s3local
-          S3_SECRET_KEY: s3_local_secret
-          S3_BUCKET: truealpha-raw
-          TRUEALPHA_REQUIRE_RUNTIME: "1"
-
-  # Run data-engine tests across deterministic index-strided shards.
-  # fail-fast is off so one red shard does not hide the other lanes.
-  #
-  # The lane count lives in ONE place: the matrix. The shard index and the shard
-  # total come from strategy.job-index/job-total, so the total cannot drift out
-  # of step with the matrix length. A file assigned to a shard that no lane runs
-  # is green-while-empty (#527).
-  test-data-engine:
-    if: ${{ inputs.data_engine_required }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [0, 1, 2, 3, 4, 5]
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: truealpha
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 5
-    steps:
-      - uses: actions/checkout@v4
-      - uses: ./.github/actions/setup-uv
-        with:
-          enable-cache: true
-      - run: uv sync --all-packages --frozen
-      - name: Start S3
-        run: docker compose up -d --wait s3 || { docker compose logs s3; exit 1; }
       - name: Apply the migration chain
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/truealpha
@@ -153,30 +157,30 @@ jobs:
       - name: Run tests (shard ${{ matrix.shard }} of ${{ strategy.job-total }})
         run: |
           set -euo pipefail
-          # Command substitution, NOT `mapfile < <(...)`: a process
-          # substitution's exit status is invisible to both `set -e` and
-          # pipefail, so a failing shard tool would leave FILES empty and
-          # `pytest "${FILES[@]}"` would expand to bare `pytest` — which falls
-          # back to pyproject's testpaths and runs the WHOLE suite in a lane
-          # named for one shard. The count check is the second layer.
-          FILE_LIST=$(python3 -c 'import pathlib; idx, tot = ${{ strategy.job-index }}, ${{ strategy.job-total }}; files = sorted({p for pat in ("test_*.py", "*_test.py") for p in pathlib.Path("apps/data-engine/tests").rglob(pat)}); print("\n".join(str(p) for p in files[idx::tot]))')
+          # Command substitution, NOT `mapfile < <(...)`: a process substitution's exit status
+          # is invisible to `set -e` and pipefail. The count check is the second guard against bare pytest.
+          FILE_LIST=$(python3 -c '
+          import os, pathlib
+          idx, tot = ${{ strategy.job-index }}, ${{ strategy.job-total }}
+          roots = ["common/contracts/tests", "common/factors/tests", "common/runtime/tests", "apps/llm-service/tests"]
+          if os.environ.get("DATA_ENGINE_REQUIRED", "").lower() == "true":
+              roots.append("apps/data-engine/tests")
+          s3_files = {pathlib.Path(p) for p in (os.environ.get("S3_CORE_TEST_FILES", "") + " " + os.environ.get("S3_DATA_ENGINE_TEST_FILES", "")).split()}
+          files = sorted({p for r in roots for pat in ("test_*.py", "*_test.py") for p in pathlib.Path(r).rglob(pat)} - s3_files)
+          print("\n".join(str(p) for p in files[idx::tot]))
+          ')
           mapfile -t FILES <<< "$FILE_LIST"
           if [ "${#FILES[@]}" -eq 0 ]; then
             echo "::error::shard ${{ matrix.shard }} selected no files — refusing to run bare pytest"
             exit 1
           fi
           echo "shard ${{ matrix.shard }}: ${#FILES[@]} files"
-          # --durations-min=0 as well as --durations=0: the min defaults to 5 ms,
-          # so an all-fast file prints nothing. Both are log lines only, no time cost.
           # #1412 L1: through the make target; FILES is this shard.
           PYTEST_ADDOPTS="--durations=0 --durations-min=0" make test-python FILES="${FILES[*]}"
         env:
           ENVIRONMENT: ci
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/truealpha
-          S3_ENDPOINT: http://localhost:9000
-          S3_ACCESS_KEY: s3local
-          S3_SECRET_KEY: s3_local_secret
-          S3_BUCKET: truealpha-raw
+          DATA_ENGINE_REQUIRED: ${{ inputs.data_engine_required }}
           TRUEALPHA_REQUIRE_RUNTIME: "1"
 
   # truealpha#454: dagster-webserver/dagster-daemon under `-m data_engine.dagster_defs`

@@ -15,6 +15,8 @@ from pydantic import ValidationError
 from truealpha_contracts.metrics import METRICS
 from truealpha_runtime.reconciliation import ReconciliationPolicy
 
+pytestmark = pytest.mark.contract
+
 
 def test_every_standard_names_a_registered_metric_and_carries_the_loop_fields() -> None:
     for name, standard in STANDARDS.items():

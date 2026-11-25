@@ -41,6 +41,8 @@ import pytest
 from llm_service.mcp_server import build_mcp_server
 from psycopg.rows import dict_row
 
+pytestmark = [pytest.mark.gate, pytest.mark.deps]
+
 # The canonical 8-4-4-4-12 form. `staging.entities.entity_id` is a uuidv5, so this is
 # exactly what an untranslated mart entity coordinate looks like on the wire.
 _BARE_UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)

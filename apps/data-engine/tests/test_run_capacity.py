@@ -40,6 +40,8 @@ from data_engine.dagster_defs import build_definitions, defs, with_in_process_ex
 from data_engine.lanes.quality import WAITS_FOR_RUNS_TAG
 from truealpha_contracts.environment_contract import UTILIZATION_CEILING, CodeServerCapacity, load_environment_contract
 
+pytestmark = [pytest.mark.gate, pytest.mark.smoke]
+
 DAGSTER_YAML = Path(__file__).resolve().parents[1] / "dagster.yaml"
 CAPACITY: CodeServerCapacity = load_environment_contract().code_server_capacity
 #: The environments that run the deployed definitions.

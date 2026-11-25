@@ -14,6 +14,8 @@ import psycopg
 import pytest
 from truealpha_runtime.testing import isolated_test_database
 
+pytestmark = pytest.mark.deps
+
 #: The lookup shape that panel_service._load_wide_panel and strategy_run_postgres use.
 LOOKUP = "select ei.legacy_id from mart.entity_identity ei where ei.entity_id::text = %s order by ei.legacy_id limit 1"
 

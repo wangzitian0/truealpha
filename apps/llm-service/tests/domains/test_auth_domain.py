@@ -15,6 +15,8 @@ from llm_service.services import _db, auth_service
 from pydantic import SecretStr
 from truealpha_runtime.access import AuthenticationMethod, PrincipalKind
 
+pytestmark = pytest.mark.gate
+
 
 def test_auth_login_session_logout_and_rate_limiter(monkeypatch: pytest.MonkeyPatch) -> None:
     clock = [100.0]

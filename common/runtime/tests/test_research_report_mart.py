@@ -21,6 +21,8 @@ from truealpha_runtime.research_report import ResearchReportKind, ResearchReport
 from truealpha_runtime.research_report_mart import MartResearchReadRepository
 from truealpha_runtime.testing import guard_db_write, open_test_connection
 
+pytestmark = pytest.mark.deps
+
 _HASH64 = "d" * 64
 _CUTOFF = datetime(2026, 6, 30, 23, 59, 59, tzinfo=UTC)
 

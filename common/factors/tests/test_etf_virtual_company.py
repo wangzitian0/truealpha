@@ -16,6 +16,8 @@ from factors.base.etf_virtual_company import HoldingLine, consolidate_fund
 from factors.registry import FACTOR_REGISTRY
 from truealpha_contracts.etf_virtual_company import ETF_CONSOLIDATION_V0, EtfConsolidationDefinition
 
+pytestmark = pytest.mark.contract
+
 CUTOFF = datetime(2026, 9, 9, tzinfo=UTC)
 
 

@@ -40,6 +40,8 @@ from data_engine.lanes.capture import tick_cron
 from truealpha_contracts.environment_contract import UnknownUniverse, load_environment_contract
 from truealpha_contracts.universes import lane_name
 
+pytestmark = pytest.mark.smoke
+
 sys.path.insert(0, str(Path(__file__).resolve().parent / "support"))
 from macro_seed import stub_rate  # noqa: E402
 
@@ -193,7 +195,6 @@ def _fake_tick(monkeypatch, registration: PointerRegistration) -> None:
     """Fake every collaborator the op calls, so only the op's own reporting is under
     test. `register_run_evidence` returns the given verdict verbatim."""
     monkeypatch.setattr(psycopg, "connect", lambda *args, **kwargs: _FakeConnection())
-    # The registry write has its own test (capture_core/test_head_registry_tick.py); this one asserts the op's reporting.
     monkeypatch.setattr(capture, "ensure_served_head_artifacts", lambda *_a, **_k: 0)
     monkeypatch.setattr(
         capture,
@@ -216,8 +217,7 @@ def _fake_tick(monkeypatch, registration: PointerRegistration) -> None:
     )
     monkeypatch.setattr(capture, "register_run_evidence", lambda *a, **k: registration)
     # #544: the plausibility gate reads mart through the connection; these tests fake the
-    # connection, so the gate is stubbed to a passing verdict (its own tests are
-    # capture_core/test_plausibility_gate.py, against a real database).
+    # connection, so the gate is stubbed to a passing verdict.
     from data_engine.datahub.capture_core.plausibility_gate import Verdict
 
     passing = Verdict("v4", (), (), ())
@@ -226,8 +226,7 @@ def _fake_tick(monkeypatch, registration: PointerRegistration) -> None:
     # #1323: the tick also reads the issuers whose registry read failed, through the connection.
     monkeypatch.setattr(capture, "registry_unavailable_issuers", lambda *a, **k: [])
     # #1518: the tick also reads the issuers with several listings and no declared primary listing, through the
-    # connection. These tests fake the connection, so none exists here. The real op is driven in
-    # capture_core/test_primary_listing_one_producer.py, against a database.
+    # connection; these tests fake the connection, so none exists here.
     monkeypatch.setattr(capture, "undeclared_primary_listing_issuers", lambda *a, **k: ())
 
 

@@ -23,6 +23,8 @@ from pydantic import ValidationError
 from truealpha_contracts.common import CaptureEnvironment
 from truealpha_contracts.universe import SubjectKind, SubjectRef, UniverseRef
 
+pytestmark = pytest.mark.contract
+
 SHA = "a" * 64
 CUTOFF = datetime(2026, 4, 2, tzinfo=UTC)
 

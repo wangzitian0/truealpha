@@ -3,6 +3,8 @@ from datetime import date, timedelta
 import pytest
 from truealpha_contracts.fiscal_period import ANNUAL_MINIMUM_DAYS, encode_annual, parse_annual
 
+pytestmark = pytest.mark.contract
+
 
 @pytest.mark.parametrize(
     "end", [date(2025, 12, 31), date(2026, 1, 25), date(2022, 1, 2), date(2025, 11, 2), date(2024, 2, 29)]

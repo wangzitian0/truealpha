@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import json
 import re
 import subprocess
@@ -9,6 +10,8 @@ from pathlib import Path
 
 import pytest
 import yaml
+
+pytestmark = pytest.mark.gate
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 WORKFLOWS = REPO_ROOT / ".github" / "workflows"
@@ -28,6 +31,74 @@ def test_workflows_parse_and_ci_required_pins_tag_and_jobs() -> None:
     changes_steps = "\n".join(str(step.get("run", "")) for step in req["changes"]["steps"])
     assert "merge-base --is-ancestor" in changes_steps
     assert loaded["ci-web.yml"]["jobs"]["browser"]["runs-on"] == "ubuntu-24.04"
+
+
+def _declared_pytest_markers(path: Path) -> set[str]:
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    found: set[str] = set()
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if not any(isinstance(t, ast.Name) and t.id == "pytestmark" for t in node.targets):
+            continue
+        elts = node.value.elts if isinstance(node.value, (ast.List, ast.Tuple)) else [node.value]
+        for elt in elts:
+            if (
+                isinstance(elt, ast.Attribute)
+                and isinstance(elt.value, ast.Attribute)
+                and isinstance(elt.value.value, ast.Name)
+                and elt.value.value.id == "pytest"
+                and elt.value.attr == "mark"
+            ):
+                found.add(elt.attr)
+    return found
+
+
+def test_ci_python_shards_cover_all_tests_and_isolate_s3() -> None:
+    ci_python = yaml.safe_load((WORKFLOWS / "ci-python.yml").read_text(encoding="utf-8"))
+    jobs = ci_python["jobs"]
+    assert set(jobs) == {"gates", "test-s3", "test-deps-smoke", "dagster-code-server-liveness"}
+
+    wf_env = ci_python["env"]
+    s3_core = set(str(wf_env["S3_CORE_TEST_FILES"]).split())
+    s3_data_engine = set(str(wf_env["S3_DATA_ENGINE_TEST_FILES"]).split())
+    s3_declared = s3_core | s3_data_engine
+    assert s3_core and s3_data_engine
+    assert not (s3_core & s3_data_engine)
+    for rel in sorted(s3_declared):
+        assert (REPO_ROOT / rel).is_file(), f"declared S3 test file missing: {rel}"
+
+    s3_runs = "\n".join(str(step.get("run", "")) for step in jobs["test-s3"]["steps"])
+    assert "docker compose up -d --wait s3" in s3_runs
+    assert "S3_CORE_TEST_FILES" in s3_runs and "S3_DATA_ENGINE_TEST_FILES" in s3_runs
+
+    deps_job = jobs["test-deps-smoke"]
+    assert deps_job["strategy"]["matrix"]["shard"] == [0, 1, 2, 3]
+    deps_runs = "\n".join(str(step.get("run", "")) for step in deps_job["steps"])
+    assert "docker compose up" not in deps_runs
+    assert "S3_CORE_TEST_FILES" in deps_runs and "S3_DATA_ENGINE_TEST_FILES" in deps_runs
+
+    roots = (
+        "common/contracts/tests",
+        "common/factors/tests",
+        "common/runtime/tests",
+        "apps/llm-service/tests",
+        "apps/data-engine/tests",
+    )
+    all_tests = {
+        p.relative_to(REPO_ROOT).as_posix()
+        for r in roots
+        for pat in ("test_*.py", "*_test.py")
+        for p in (REPO_ROOT / r).rglob(pat)
+    }
+    deps_selected = all_tests - s3_declared
+    assert s3_declared <= all_tests
+    assert not (s3_declared & deps_selected)
+    assert (s3_declared | deps_selected) == all_tests
+
+    allowed_markers = {"gate", "deps", "smoke", "contract"}
+    unmarked = [p for p in sorted(all_tests) if not (_declared_pytest_markers(REPO_ROOT / p) & allowed_markers)]
+    assert unmarked == [], f"tests missing Class 1/2 pytestmark: {unmarked}"
 
 
 def test_pyproject_and_lockfile_do_not_depend_on_qlib() -> None:

@@ -21,6 +21,8 @@ import psycopg
 import pytest
 from data_engine.dagster_defs import pipeline_trigger_sensor
 
+pytestmark = pytest.mark.deps
+
 _EXECUTED_AT = datetime(2026, 7, 27, 22, 15, tzinfo=UTC)
 
 

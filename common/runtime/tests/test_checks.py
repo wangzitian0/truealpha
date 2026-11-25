@@ -16,6 +16,8 @@ from truealpha_runtime.checks import (
 from truealpha_runtime.cli import main as cli_main
 from truealpha_runtime.config import RuntimeSettings
 
+pytestmark = pytest.mark.smoke
+
 
 class FakeConnection:
     def __init__(self, query_result: tuple | None = None) -> None:

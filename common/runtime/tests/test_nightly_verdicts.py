@@ -16,6 +16,8 @@ from pathlib import Path
 import pytest
 from truealpha_runtime.testing import load_tool
 
+pytestmark = pytest.mark.deps
+
 _module = load_tool("nightly_verdicts")
 check = _module.check_nightly_verdicts
 REPO_ROOT = Path(__file__).resolve().parents[3]

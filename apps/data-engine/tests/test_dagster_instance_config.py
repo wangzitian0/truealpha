@@ -28,6 +28,8 @@ from dagster._core.instance.ref import InstanceRef
 from dagster._core.scheduler.instigation import TickStatus
 from truealpha_contracts.environment_contract import load_environment_contract
 
+pytestmark = pytest.mark.contract
+
 DAGSTER_YAML = Path(__file__).resolve().parents[1] / "dagster.yaml"
 
 #: Days after which the daemon deletes a tick. A value of -1 keeps the tick for ever.

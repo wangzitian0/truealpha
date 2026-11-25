@@ -35,8 +35,7 @@
  *      Then the cookie must be cleared and a protected route must bounce to
  *      /login.
  *
- * Every problem string names its own cause. `tests/sign-out-journey.test.ts`
- * drives both halves against a fake browser, one broken property at a time.
+ * Every problem string names its own cause.
  */
 
 import { NAVIGATION_TIMEOUTS } from "./navigation.mjs";

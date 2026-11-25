@@ -5,7 +5,10 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
 from truealpha_runtime.strategy_run_postgres import DECISIONS_FROM_SQL, LATEST_RUN_SQL
+
+pytestmark = pytest.mark.contract
 
 REPO = Path(__file__).resolve().parents[3]
 TS_TWIN = REPO / "apps" / "app-web" / "src" / "server" / "mart" / "strategy-run-repository.ts"

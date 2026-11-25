@@ -19,6 +19,8 @@ from data_engine.sources import gateway
 from data_engine.sources.landed_keys import PostgresLandedKeys
 from truealpha_runtime.testing import InMemoryRawObjectStore, isolated_test_database
 
+pytestmark = pytest.mark.deps
+
 BODY = b'{"cik":320193}'
 FETCHED_AT = datetime(2026, 10, 21, 12, 0, tzinfo=UTC)
 

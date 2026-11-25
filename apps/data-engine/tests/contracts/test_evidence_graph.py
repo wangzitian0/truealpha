@@ -16,6 +16,8 @@ from data_engine.contracts.evidence_graph import (
 from pydantic import ValidationError
 from truealpha_contracts.common import CaptureEnvironment
 
+pytestmark = pytest.mark.contract
+
 _H1 = "a" * 64
 _H2 = "b" * 64
 _H3 = "c" * 64

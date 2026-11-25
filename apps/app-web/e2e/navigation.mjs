@@ -3,14 +3,12 @@
  *
  * `e2e/walk-tree.mjs` launches a browser when it is imported, so a test cannot
  * import a function from it. This module has no side effects at import.
- * `tests/walk-tree-hydration.test.ts` drives both exports against a fake page.
  */
 
 /**
  * Set by `HydrationMarker` (src/components/hydration-marker.tsx) in an effect.
  * The root layout renders it, so every page sets the attribute once React has
  * hydrated the page. The server HTML never carries it.
- * `tests/hydration-marker.test.ts` checks both halves.
  */
 export const HYDRATED_DOCUMENT = 'html[data-hydrated="true"]';
 
@@ -86,8 +84,7 @@ function routeOf(url) {
  * waited only when a sign-out control was on the page, and a timeout of that wait was
  * dropped. So the walk could read, leave or click a page before React had hydrated it,
  * and a hydration error of one page could reach the verdict of the next route. Every walk
- * navigation goes through this function (`tests/walk-tree-hydration.test.ts` fails on a
- * direct `goto()`), so every page that the walk leaves has hydrated. When the page never
+ * navigation goes through `gotoStable()`, so every page that the walk leaves has hydrated. When the page never
  * hydrates, the walk stops with an error that names the route and the HTTP status.
  *
  * @param {any} page a Playwright page
@@ -127,7 +124,6 @@ export async function gotoStable(page, url, { timeouts = NAVIGATION_TIMEOUTS, lo
  * React error #418 ("Hydration failed because the server rendered HTML didn't match the client")
  * is a page error like any other. The walk ignored it from 8711285a until #1468. An ignored #418
  * hides a real defect: React throws away the server markup and renders the page again on the client.
- * The race check (hydration-race.mjs) shows #418 on Next 15.5.18 and none on Next 16.4.2.
  *
  * A page error can arrive after the walk read the verdict of a route. The ledger keeps it in
  * `unread`. The next route reports it, and `lateProblems()` reports it at the end of a pass.
@@ -168,7 +164,7 @@ export function createPageErrorLedger() {
      * @param {string} pagePath the path of the page that raised it
      */
     record(message, pagePath) {
-      // assertTraceRendersDecisionInputs opens /research first, so an error can come from another page.
+      // Errors emitted by a previous page during navigation are attributed explicitly to that path.
       const text = currentPath !== null && pagePath !== currentPath ? `${message} (raised on ${pagePath})` : message;
       failures.push(text);
       unread.push(text);

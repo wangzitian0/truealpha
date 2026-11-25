@@ -47,6 +47,8 @@ from data_engine.run_launcher import (
     max_runtime_tags,
 )
 
+pytestmark = pytest.mark.smoke
+
 sys.path.insert(0, str(Path(__file__).resolve().parent / "support"))
 from run_seed import seed_success_run  # noqa: E402
 

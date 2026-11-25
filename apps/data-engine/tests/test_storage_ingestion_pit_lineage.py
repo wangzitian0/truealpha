@@ -54,6 +54,8 @@ from truealpha_contracts.execution import AvailabilityStatus, FactorValidationSt
 from truealpha_contracts.universe import SubjectKind, SubjectRef, UniverseRef
 from truealpha_runtime.testing import skip_or_fail
 
+pytestmark = pytest.mark.deps
+
 # ======================================================================================
 # Pillar 1: Quota SSOT
 # ======================================================================================

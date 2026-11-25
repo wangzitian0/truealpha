@@ -10,6 +10,8 @@ from data_engine.contracts.datahub import ListObligation
 from pydantic import ValidationError
 from truealpha_contracts.universe import SubjectKind, SubjectRef, UniverseRef
 
+pytestmark = pytest.mark.contract
+
 SHA = "a" * 64
 AT = datetime(2026, 4, 1, tzinfo=UTC)
 

@@ -38,6 +38,8 @@ from truealpha_contracts.question_requirements import (
 )
 from truealpha_contracts.reasons import REGISTRY_SHA256
 
+pytestmark = pytest.mark.deps
+
 TOPT = "universe:topt-us-2026-03-31"
 QQQ = "universe:qqq-us-2026-06-30"
 SP500 = "universe:sp500-us-2026-09-30"

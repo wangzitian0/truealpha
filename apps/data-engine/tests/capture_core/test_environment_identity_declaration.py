@@ -20,6 +20,8 @@ from data_engine.datahub.capture_core.composition import ensure_environment_iden
 from truealpha_contracts.common import CaptureEnvironment
 from truealpha_runtime.testing import isolated_test_database
 
+pytestmark = pytest.mark.deps
+
 
 @pytest.fixture
 def database() -> Iterator[str]:

@@ -34,6 +34,8 @@ from truealpha_runtime.access import AccessContext, AuthenticationMethod, Princi
 from truealpha_runtime.strategy_run import StrategyRunReport, StrategyRunUnavailable
 from truealpha_runtime.strategy_run_postgres import PostgresStrategyRunRepository
 
+pytestmark = pytest.mark.deps
+
 _FIXTURE_PATH = Path(__file__).resolve().parents[2] / "contracts" / "tests" / "fixtures" / "strategy_run_parity.json"
 _FIXTURE = json.loads(_FIXTURE_PATH.read_text())
 _REPORT_CASES = sorted(name for name, case in _FIXTURE.items() if "expected_report" in case)

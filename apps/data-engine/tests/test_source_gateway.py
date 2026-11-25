@@ -27,6 +27,8 @@ import pytest
 from data_engine.datahub.fetch_key import FetchKey
 from data_engine.sources import gateway
 
+pytestmark = [pytest.mark.gate, pytest.mark.deps]
+
 SRC = Path(__file__).resolve().parents[1] / "src" / "data_engine"
 
 

@@ -1,12 +1,15 @@
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
+import pytest
 from data_engine.contracts.calendar import (
     XNYS_HOLIDAYS,
     is_market_session,
     previous_market_session,
     settled_session_for_cutoff,
 )
+
+pytestmark = pytest.mark.contract
 
 NY = ZoneInfo("America/New_York")
 

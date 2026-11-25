@@ -38,6 +38,8 @@ import pytest
 from truealpha_runtime.mart_refresh import MART_ENTITY_IDENTITY, refresh_mart_materialized_views
 from truealpha_runtime.testing import apply_migration_chain, isolated_test_database
 
+pytestmark = pytest.mark.deps
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 MIGRATIONS = REPO_ROOT / "db" / "migrations"
 #: Squashed baseline defining `mart.entity_identity` (#1337, #1518, #1641).

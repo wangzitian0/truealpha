@@ -23,6 +23,8 @@ from pathlib import Path
 import pytest
 from data_engine.lanes import backtest, capture, macro_data
 
+pytestmark = pytest.mark.contract
+
 REPO = Path(__file__).resolve().parents[3]
 SOURCE = REPO / "apps" / "data-engine" / "src"
 MAX_HOURS_AFTER_THE_REFRESH = 6

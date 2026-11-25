@@ -4,9 +4,12 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+import pytest
 from data_engine.contracts.sentinel_known_answers import load_sentinel_known_answers
 from truealpha_contracts.environment_contract import load_environment_contract
 from truealpha_contracts.metrics import is_registered_input_key
+
+pytestmark = pytest.mark.contract
 
 
 def test_sentinel_known_answers_cover_all_nine_sentinel_issuers_with_accessions() -> None:

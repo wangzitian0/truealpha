@@ -12,6 +12,8 @@ from truealpha_runtime import (
     resolve_environment_tier,
 )
 
+pytestmark = pytest.mark.deps
+
 
 class FakeS3:
     def __init__(self):

@@ -25,6 +25,8 @@ from truealpha_contracts.environment_contract import (
     load_environment_contract,
 )
 
+pytestmark = pytest.mark.gate
+
 ENVIRONMENTS = ("preview", "staging", "production")
 NOW = datetime(2026, 10, 27, 12, 0, tzinfo=UTC)
 

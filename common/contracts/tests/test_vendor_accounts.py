@@ -11,6 +11,8 @@ import pytest
 from pydantic import ValidationError
 from truealpha_contracts.environment_contract import DAY_SECONDS, UnknownVendorAccount, load_environment_contract
 
+pytestmark = pytest.mark.contract
+
 ENVIRONMENTS = ("preview", "staging", "production")
 _S = importlib.util.spec_from_file_location("ch", Path(__file__).parent / "fixtures/contract_helpers.py")
 assert _S and _S.loader

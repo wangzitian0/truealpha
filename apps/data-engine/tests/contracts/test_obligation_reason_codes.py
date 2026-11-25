@@ -8,6 +8,8 @@ from data_engine.contracts.obligation_reason_codes import (
 )
 from pydantic import ValidationError
 
+pytestmark = pytest.mark.contract
+
 
 def test_every_code_maps_to_exactly_one_disposition() -> None:
     registry = ObligationReasonCodeRegistry.canonical()

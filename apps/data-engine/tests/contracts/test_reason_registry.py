@@ -19,6 +19,8 @@ from truealpha_contracts.strategy import ExclusionReason
 from truealpha_runtime.issuer_modules_mart import NO_SERVED_ROW
 from truealpha_runtime.research_report_mart import MART_READ_FAILED, PEG_NOT_RECORDED, ROW_AFTER_REPORT_CUTOFF
 
+pytestmark = pytest.mark.contract
+
 DEFINED: dict[str, tuple[str, ...]] = {
     "CoreReasonCode": tuple(code.value for code in CoreReasonCode),
     "ExclusionReason": tuple(code.value for code in ExclusionReason),

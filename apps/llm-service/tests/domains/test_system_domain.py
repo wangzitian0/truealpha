@@ -10,6 +10,8 @@ from fastapi.testclient import TestClient
 from llm_service import main as main_mod
 from llm_service.main import app
 
+pytestmark = pytest.mark.contract
+
 
 def test_system_probes_and_openapi_surface(monkeypatch: pytest.MonkeyPatch) -> None:
     with warnings.catch_warnings(record=True) as captured:

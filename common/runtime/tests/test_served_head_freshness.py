@@ -28,6 +28,8 @@ import pytest
 from psycopg import errors, sql
 from truealpha_runtime.testing import isolated_test_database, read_seed_rows
 
+pytestmark = pytest.mark.deps
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 MIGRATION = REPO_ROOT / "db" / "migrations" / "0003_mart.sql"
 #: Squashed baseline defining `mart.served_head` and its seed rows.
