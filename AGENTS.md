@@ -1,4 +1,4 @@
-<!-- WS_STATIC_START adapter=rules-v2 inputs=0ba56e1978366868946ecfc4c3e02dcf0114530d4e0d6087ac6beefd6104e879 -->
+<!-- WS_STATIC_START adapter=rules-v2 inputs=20ea671c8d90fbe2838da74b61f61c7d8a5d9a6751c0407c488c03ea81d1d5fe -->
 <!-- Generated file: do not edit by hand. These rules are maintained in the owner's rule source and re-rendered here. -->
 
 ## Engineering discipline
@@ -97,6 +97,12 @@ The single definition of the production reservation. Other tiers, skills and gat
    handles Staging verification on real captured data and reopens on regression.
    Fixture data lives in tests only (`*_fixture`, never scheduled or reachable from a deployed
    route). An acceptance criterion is a check that runs again. The skills `smoke` and `close` run acceptance; issue and PR text do not. Production state is not an issue state. (`init.md` section 0; #429, #434.)
+7. **Classify checks before adding them (ordered MECE rule; `dev_env#782`).** Evaluate every check in this exact order:
+   1) **Gate** (blocks PR): stops production-reservation bypass, privilege leaks, secrets, Moomoo trading calls, or non-idempotent migrations.
+   2) **Dependency / Smoke** (CI contract or Staging smoke): validates external boundaries (Postgres, S3, containers, manifests, Dagster, HTTP/SSR, vendors).
+   3) **Fact** (dashboard only): records metrics or data quality on `/admin`, `/admin/datahub`, and admin MCP tools (`admin_ops_snapshot`, `admin_datahub_facts`). Never blocks merges or releases.
+   4) **None** (delete): pure logic branches, prose regexes, AST static-police checks, count ratchets, or fake-DOM E2E proxies.
+   Never add source-text regex, line-count, or AST static-police tests (`ruff` and contract tests cover static checks).
 
 Before editing or after compaction, re-read the prompt, run rule 4 checks, and note the issue,
 branch, and target files. On handoff, post done, verified, next, and failed items on the issue.
