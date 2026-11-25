@@ -233,9 +233,23 @@ class HeadRollbackResponse(BaseModel):
     requested_at: str
 
 
-def _optional_rows(cur: Any, sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
+def _optional_rows(
+    cur: Any,
+    sql: str,
+    params: tuple[Any, ...] = (),
+    *,
+    table_check: str | None = None,
+) -> list[dict[str, Any]]:
+    if table_check:
+        cur.execute("select to_regclass(%s) as reg", (table_check,))
+        reg_row = cur.fetchone()
+        if reg_row is not None and reg_row.get("reg") is None:
+            return []
     try:
-        cur.execute(sql, params)
+        if params:
+            cur.execute(sql, params)
+        else:
+            cur.execute(sql)
         return [dict(r) for r in cur.fetchall()]
     except (psycopg.errors.UndefinedTable, psycopg.errors.InsufficientPrivilege):
         cur.connection.rollback()
@@ -327,23 +341,26 @@ def get_ops_overview(*, database_url: str | None = None) -> OpsOverviewResponse:
 
         runs: list[OpsRunRowDto] | str = "unavailable"
         try:
-            cur.execute(
-                "select run_id, pipeline_name, status, create_timestamp, start_time, end_time from dagster.runs order by create_timestamp desc limit 10"
-            )
-            runs = [
-                OpsRunRowDto(
-                    run_id=str(r["run_id"]),
-                    job_name=str(r["pipeline_name"]),
-                    status=str(r["status"]),
-                    created_at=r["create_timestamp"].isoformat(),
-                    duration_seconds=(
-                        round(float(r["end_time"]) - float(r["start_time"]))
-                        if r.get("start_time") is not None and r.get("end_time") is not None
-                        else None
-                    ),
+            cur.execute("select to_regclass('dagster.runs') as reg")
+            dag_reg = cur.fetchone()
+            if dag_reg is None or dag_reg.get("reg") is not None:
+                cur.execute(
+                    "select run_id, pipeline_name, status, create_timestamp, start_time, end_time from dagster.runs order by create_timestamp desc limit 10"
                 )
-                for r in cur.fetchall()
-            ]
+                runs = [
+                    OpsRunRowDto(
+                        run_id=str(r["run_id"]),
+                        job_name=str(r["pipeline_name"]),
+                        status=str(r["status"]),
+                        created_at=r["create_timestamp"].isoformat(),
+                        duration_seconds=(
+                            round(float(r["end_time"]) - float(r["start_time"]))
+                            if r.get("start_time") is not None and r.get("end_time") is not None
+                            else None
+                        ),
+                    )
+                    for r in cur.fetchall()
+                ]
         except (psycopg.errors.UndefinedTable, psycopg.errors.InsufficientPrivilege):
             cur.connection.rollback()
 
@@ -413,6 +430,7 @@ def get_ops_overview(*, database_url: str | None = None) -> OpsOverviewResponse:
             order by run_id, id desc
             limit 20
             """,
+            table_check="dagster.event_logs",
         )
         trigger_queue = _optional_rows(cur, TRIGGER_QUEUE_SQL)
         rollback_requests = _optional_rows(cur, ROLLBACK_QUEUE_SQL)
@@ -471,7 +489,7 @@ def get_datahub_stats(*, database_url: str | None = None) -> DatahubStatsRespons
             select l.source,
                    (count(*) filter (where l.called_at > now() - interval '24 hours'))::int as calls_24h,
                    (count(*) filter (where l.called_at > now() - interval '24 hours' and not l.ok))::int as failed_24h,
-                   (count(*) filter (where l.called_at > now() - interval '24 hours' and (l.status_code = 429 or coalesce(l.error, '') ilike '%1302%')))::int as rate_limited_24h,
+                   (count(*) filter (where l.called_at > now() - interval '24 hours' and (l.status_code = 429 or coalesce(l.error, '') ilike %s)))::int as rate_limited_24h,
                    (count(*) filter (where l.called_at > now() - interval '7 days'))::int as calls_7d,
                    (count(*) filter (where l.called_at > now() - interval '7 days' and not l.ok))::int as failed_7d
             from staging.api_call_ledger l
@@ -479,6 +497,7 @@ def get_datahub_stats(*, database_url: str | None = None) -> DatahubStatsRespons
             group by l.source
             order by l.source
             """,
+            ("%1302%",),
         )
         vendor_accounts, capacity = _build_vendor_capacity(contract, normalized_env, usage_rows)
         model_1302_by_day = _optional_rows(
@@ -487,7 +506,7 @@ def get_datahub_stats(*, database_url: str | None = None) -> DatahubStatsRespons
             select to_char((l.called_at at time zone 'utc')::date, 'YYYY-MM-DD') as day,
                    l.source,
                    (count(*) filter (where l.status_code = 429))::int as status_429,
-                   (count(*) filter (where coalesce(l.error, '') ilike '%1302%' or coalesce(l.error, '') ilike '%rate limit%'))::int as code_1302,
+                   (count(*) filter (where coalesce(l.error, '') ilike %s or coalesce(l.error, '') ilike %s))::int as code_1302,
                    count(*)::int as total_calls,
                    (count(*) filter (where not l.ok))::int as failed_calls
             from staging.api_call_ledger l
@@ -496,6 +515,7 @@ def get_datahub_stats(*, database_url: str | None = None) -> DatahubStatsRespons
             having count(*) filter (where l.status_code = 429 or not l.ok) > 0
             order by 1 desc, 2
             """,
+            ("%1302%", "%rate limit%"),
         )
         recent_calls = _rows(
             cur,

@@ -65,6 +65,8 @@ _CUTOFF = "2026-03-31T23:59:59Z"
 # tool_is_covered` fails if this does not match what the server registers, so a new tool
 # cannot be added without deciding how it gets called here.
 _TOOL_CALLS: dict[str, dict[str, Any]] = {
+    "admin_ops_snapshot": {},
+    "admin_datahub_facts": {},
     "panel_universes": {},
     "panel_coverage": {"request": {"node_key": "gppe_uniform_charge_v0"}},
     "panel_macro": {},

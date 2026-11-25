@@ -32,12 +32,6 @@ LATEST_RUN_SQL = """
         where h.factor_id = 'gross_profit_per_employee'
           and h.universe_id like any(%s::text[])
     ),
-    top_head as (
-        select hs.run_id, hs.age_hours, hs.limit_hours, hs.freshness, hs.availability
-        from head_scope hs
-        order by (hs.run_id is not null) desc, hs.advanced_at desc, hs.universe_id desc, hs.universe_version desc
-        limit 1
-    ),
     chosen_run as (
         select r.strategy_run_id, r.corpus_sha256, r.executed_at,
                exists (
@@ -49,6 +43,12 @@ LATEST_RUN_SQL = """
         from mart.strategy_runs r
         where r.strategy_key = %s
         order by is_governed desc, r.executed_at desc, r.created_at desc, r.strategy_run_id desc
+        limit 1
+    ),
+    top_head as (
+        select hs.run_id, hs.age_hours, hs.limit_hours, hs.freshness, hs.availability
+        from head_scope hs
+        order by (hs.run_id is not null) desc, hs.advanced_at desc, hs.universe_id desc, hs.universe_version desc
         limit 1
     )
     select cr.strategy_run_id,

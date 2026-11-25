@@ -42,11 +42,14 @@ from llm_service.services.strategy_service import (
     resolve_decision_availability,
 )
 
-THEME_LATEST_RUN_SQL = f"""
+THEME_LATEST_RUN_SQL = """
   select p.run_id, max(p.cutoff) as cutoff
   from mart.issuer_theme_purity p
   where p.partition_id is not null
-    and {served_or_empty_head_predicate("p.run_id")}
+    and (
+      p.run_id in (select h.run_id from mart.served_head h where h.run_id is not null)
+      or not exists (select 1 from mart.served_head)
+    )
   group by run_id
   order by max(cutoff) desc
   limit 1
