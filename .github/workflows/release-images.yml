@@ -24,6 +24,11 @@ on:
         required: false
         type: boolean
         default: false
+      promote:
+        description: Point the caller's release tag at the published main image of the same commit; build nothing.
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   plan:
@@ -63,7 +68,7 @@ jobs:
           fi
 
   build:
-    if: needs.plan.outputs.has_images == 'true' && !inputs.prebuilt
+    if: needs.plan.outputs.has_images == 'true' && !inputs.prebuilt && !inputs.promote
     needs: plan
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -150,7 +155,7 @@ jobs:
   # or cancelled build is neither.
   publish:
     if: >-
-      !cancelled() && inputs.publish && needs.plan.outputs.has_images == 'true' &&
+      !cancelled() && inputs.publish && !inputs.promote && needs.plan.outputs.has_images == 'true' &&
       (needs.build.result == 'success' || (inputs.prebuilt && needs.build.result == 'skipped'))
     needs: [plan, build]
     runs-on: ubuntu-latest
@@ -182,7 +187,6 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha,format=short
             type=sha,prefix=,format=short
-            type=semver,pattern=v{{version}}
       - name: Publish ${{ matrix.image }}
         uses: docker/build-push-action@v6
         with:
@@ -194,3 +198,27 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.image }}
           provenance: mode=max
           sbom: true
+
+  # A release tag gets the bytes that main published and the preview gate tested (#1878).
+  # A rebuild here gave the tag a new, untested digest and moved the sha tag to it.
+  promote:
+    if: inputs.promote && needs.plan.outputs.has_images == 'true'
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Point ${{ github.ref_name }} at the main image of ${{ github.sha }}
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE_REPOSITORY: ${{ github.repository_owner }}/${{ matrix.image }}
+        run: >-
+          python3 tools/promote_release_image.py
+          --repository "$IMAGE_REPOSITORY" --commit "$GITHUB_SHA" --tag "$GITHUB_REF_NAME"
