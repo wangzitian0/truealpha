@@ -5,13 +5,13 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import json
-import urllib.parse
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
 import data_engine.db as db
+import httpx
 from data_engine.config import settings
 from data_engine.sources import gateway
 
@@ -50,8 +50,8 @@ def _json_or_none(body: bytes):
 def _twelve(path: str, params: dict[str, str], api_key: str) -> tuple[int, bytes]:
     from data_engine.datahub.fetch_key import FetchKey
 
-    query = urllib.parse.urlencode({**params, "apikey": api_key})
-    url = f"https://api.twelvedata.com/{path}?{query}"
+    request_params = {**params, "apikey": api_key}
+    url = f"https://api.twelvedata.com/{path}"
     identity = FetchKey.for_request(
         "twelvedata",
         f"contract_smoke:{path}",
@@ -61,11 +61,18 @@ def _twelve(path: str, params: dict[str, str], api_key: str) -> tuple[int, bytes
         default_as_of=gateway.utc_day(),
     )
     try:
-        status, body = gateway.urlopen(
-            "twelvedata", path, url, identity=identity, caller="vendor_contract_smoke._twelve", timeout=20
-        )
-        return status or 0, body
-    except OSError as error:
+        with httpx.Client(timeout=20.0) as client:
+            response = gateway.http_get(
+                client,
+                "twelvedata",
+                path,
+                url,
+                params=request_params,
+                identity=identity,
+                caller="vendor_contract_smoke._twelve",
+            )
+        return int(response.status_code), bytes(response.content)
+    except (httpx.HTTPError, OSError) as error:
         return 0, f'{{"transport_error": "{type(error).__name__}"}}'.encode()
 
 

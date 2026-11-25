@@ -12,6 +12,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from infra2_sdk.runtime.environment import resolve_environment_tier
+
 if TYPE_CHECKING:
     from infra2_sdk.deploy import HttpGet
 
@@ -116,7 +118,7 @@ def scheduled_lanes(contract_text: str, environment: str | None = None) -> list[
     if environment is None:
         specs = list(environments.values())
     else:
-        name = "production" if environment.strip().lower() == "prod" else environment.strip().lower()
+        name = resolve_environment_tier(environment).value
         specs = [environments[name]] if name in environments else []
     scheduled: list[str] = []
     for spec in specs:

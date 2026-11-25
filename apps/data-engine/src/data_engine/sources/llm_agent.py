@@ -7,7 +7,6 @@ the Dagster code server imports `llm` at start and makes no model call.
 from __future__ import annotations
 
 import asyncio
-import http.client
 import json
 import logging
 import re
@@ -16,8 +15,9 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
 
+import httpx
 import httpx2
-from infra2_sdk.runtime.llm import DecodingSpec, LlmSettings, create_llm_agent
+from infra2_sdk.runtime.llm import DecodingSpec, LlmSettings, create_llm_agent, llm_call_context
 from openai import AsyncOpenAI
 from pydantic_ai.capabilities import AbstractCapability
 from pydantic_ai.exceptions import ModelHTTPError as SdkModelHTTPError
@@ -27,7 +27,7 @@ from pydantic_ai.providers.zai import ZaiProvider
 from pydantic_ai.usage import UsageLimits
 
 from data_engine.datahub.fetch_key import FetchKey
-from data_engine.sources import gateway, llm, model_decoding, model_policy
+from data_engine.sources import gateway, llm, model_policy
 from data_engine.sources.gateway import record_call
 from data_engine.sources.llm import (
     ENDPOINT,
@@ -36,7 +36,6 @@ from data_engine.sources.llm import (
     ModelCapacityRefused,
     ModelTask,
     Transport,
-    _attempt_context,
     _cut_off,
     _request_bytes,
     _request_params,
@@ -174,11 +173,20 @@ def _close(http_client: httpx2.AsyncClient) -> None:
             logger.warning("closing the model HTTP client failed", exc_info=True)
 
 
+def _httpx_send(timeout_seconds: int) -> Transport:
+    def _send(url: str, headers: dict[str, str], body: bytes) -> tuple[int, bytes]:
+        with httpx.Client(timeout=float(timeout_seconds)) as http_client:
+            response = http_client.post(url, content=body, headers=headers)
+        return int(response.status_code), bytes(response.content)
+
+    return _send
+
+
 def call_provider(
     llm_cfg: LlmSettings,
     user_content: str,
     request_body: dict[str, Any],
-    decoding: model_decoding.DecodingVersion,
+    decoding: DecodingSpec,
     task: ModelTask,
     caller: str,
     identity: FetchKey,
@@ -192,7 +200,7 @@ def call_provider(
     budget = model_policy.RetryBudget()
     captured = _Captured()
     wire = _GatewayWire(
-        send=transport or llm._gateway_transport,
+        send=transport or _httpx_send(task.timeout_seconds),
         budget=budget,
         pacer=model_policy.pacer_for(gateway.capacity_environment()),
         identity=identity,
@@ -209,18 +217,31 @@ def call_provider(
         max_retries=0,
         http_client=http_client,
     )
+    call_site = _call_site(task)
+    agent_decoding = DecodingSpec(
+        decoding.decoding_version,
+        thinking=decoding.thinking,
+        temperature=decoding.temperature,
+        max_tokens=task.max_tokens,
+        timeout=float(task.timeout_seconds),
+    )
     agent = create_llm_agent(
         llm_cfg,
         model=ZaiModel(str(request_body["model"]), provider=ZaiProvider(openai_client=client)),
-        call_site=_call_site(task),
-        decoding=DecodingSpec(decoding.name),
+        call_site=call_site,
+        decoding=agent_decoding,
         instructions=task.instructions,
         usage_limits=UsageLimits(request_limit=1),
         max_attempts=1,
         retries=0,
         capabilities=[_SeatRetry(budget, captured)],
     )
-    with _attempt_context(task.timeout_seconds, identity):
+    with llm_call_context(
+        call_site=call_site,
+        decoding_version=decoding.decoding_version,
+        domain_run_id=gateway.current_run_key(),
+        prompt_sha256=task.prompt_sha256,
+    ):
         try:
             agent.run_sync(user_content)
         except Exception as failure:
@@ -246,7 +267,7 @@ def _after_failed_run(
         if captured.status == 0:
             raise ModelCapacityRefused(error.reason, transient=error.transient) from error
         return _answered(captured)
-    if isinstance(error, OSError | http.client.HTTPException):
+    if isinstance(error, OSError | httpx.HTTPError):
         # A read timeout, a refused connection or a body cut short. Each caller handles ModelHTTPError for
         # one filing; the bare error stopped the lane of the whole universe.
         raise llm.ModelHTTPError(0, f"{SOURCE}: no answer: {type(error).__name__}: {error}") from error

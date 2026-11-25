@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import contextvars
 import hashlib
 import json
 import logging
 import re
-import urllib.request
-from collections.abc import Callable, Iterator, Sequence
-from contextlib import contextmanager, nullcontext
+from collections.abc import Callable, Sequence
+from contextlib import nullcontext
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -17,7 +15,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from factors.shared import extraction as extraction_primitive
-from infra2_sdk.runtime.llm import LlmSettings
+from infra2_sdk.runtime.llm import DecodingSpec, LlmSettings
 from truealpha_contracts.common import canonical_sha256
 from truealpha_runtime.research_cards import (
     XHS_CARD_INSTRUCTIONS,
@@ -208,7 +206,7 @@ def build_chat_request(
     user_content: str,
     *,
     model: str,
-    decoding: model_decoding.DecodingVersion | None = None,
+    decoding: DecodingSpec | None = None,
 ) -> dict[str, Any]:
     """Build canonical chat request payload for replay key hashing."""
     version = decoding or model_decoding.for_environment(gateway.capacity_environment())
@@ -218,7 +216,7 @@ def build_chat_request(
         "max_tokens": task.max_tokens,
         "temperature": 0,
         "response_format": {"type": "json_object"},
-        **version.parameters(),
+        **model_decoding.wire_parameters(version),
     }
 
 
@@ -227,11 +225,11 @@ def _headcount_user_content(issuer_label: str, form: str, candidates: Sequence[C
     return f"Issuer: {issuer_label}, form {form}.\nCandidates:\n" + "\n".join(lines)
 
 
-def _request_params(request_body: dict[str, Any], decoding: model_decoding.DecodingVersion) -> dict[str, Any]:
+def _request_params(request_body: dict[str, Any], decoding: DecodingSpec) -> dict[str, Any]:
     thinking, response_format = request_body.get("thinking"), request_body.get("response_format")
     return {
         "model": request_body.get("model"),
-        "decoding_version": decoding.name,
+        "decoding_version": decoding.decoding_version,
         "thinking": thinking.get("type") if isinstance(thinking, dict) else None,
         "reasoning_effort": request_body.get("reasoning_effort"),
         "max_tokens": request_body.get("max_tokens"),
@@ -240,41 +238,10 @@ def _request_params(request_body: dict[str, Any], decoding: model_decoding.Decod
     }
 
 
-_attempt_timeout: contextvars.ContextVar[int] = contextvars.ContextVar(
-    "llm_attempt_timeout", default=ModelTask.timeout_seconds
-)
-_attempt_identity: contextvars.ContextVar[FetchKey] = contextvars.ContextVar("llm_attempt_identity")
-
-
-@contextmanager
-def _attempt_context(timeout_seconds: int, identity: FetchKey) -> Iterator[None]:
-    timeout_token = _attempt_timeout.set(timeout_seconds)
-    identity_token = _attempt_identity.set(identity)
-    try:
-        yield
-    finally:
-        _attempt_identity.reset(identity_token)
-        _attempt_timeout.reset(timeout_token)
-
-
 def _model_key(standard: str, cik: int, accession: str, request_sha256: str) -> FetchKey:
     target = f"filing:{cik:010d}:{accession}" if accession else f"seat:{SOURCE}"
     digest = request_sha256 if accession else f"{gateway.utc_day()}:{request_sha256}"
     return FetchKey(SOURCE, f"{ENDPOINT}?standard={standard}", target, digest)
-
-
-def _gateway_transport(url: str, headers: dict[str, str], body: bytes) -> tuple[int, bytes]:
-    request = urllib.request.Request(url, data=body, headers=headers, method="POST")
-    status, response = gateway.urlopen(
-        SOURCE,
-        ENDPOINT,
-        request,
-        identity=_attempt_identity.get(),
-        caller="llm",
-        timeout=_attempt_timeout.get(),
-        cost=0,
-    )
-    return int(status or 0), response
 
 
 def _stored_request(request_body: dict[str, Any]) -> dict[str, Any]:
@@ -440,7 +407,8 @@ def invoke(
                 replayed := _replay(active_conn, task=task, cik=cik, accession=accession, model=model, requests=known)
             ) is not None:
                 return replayed
-        llm_cfg = LlmSettings(
+        llm_cfg = LlmSettings.from_mapping(
+            {},
             provider=settings.llm_provider,
             base_url=settings.llm_base_url,
             api_key=settings.llm_api_key,
@@ -583,7 +551,7 @@ def _call_provider(
     llm_cfg: LlmSettings,
     user_content: str,
     request_body: dict[str, Any],
-    decoding: model_decoding.DecodingVersion,
+    decoding: DecodingSpec,
     task: ModelTask,
     caller: str,
     identity: FetchKey,

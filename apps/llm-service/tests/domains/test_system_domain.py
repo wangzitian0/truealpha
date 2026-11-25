@@ -92,10 +92,41 @@ def test_data_engine_facts_avoids_staging_and_does_not_swallow_bugs(
     assert facts == ("unknown", "unknown", "unknown", "unknown")
     assert "SuperSecret99" not in caplog.text
 
-    # 3. Normal query path never reads staging.*.
+    # 3. Normal query path never reads staging.*, and degraded query keeps app_ops_reader role via savepoint.
     executed_sql: list[str] = []
+    savepoints = {"entered": 0, "rolled_back": 0}
 
     class _FakeRows:
+        def fetchone(self) -> None:
+            return None
+
+        def fetchall(self) -> list[Any]:
+            return []
+
+    class _FakeSavepoint:
+        def __enter__(self) -> _FakeSavepoint:
+            savepoints["entered"] += 1
+            return self
+
+        def __exit__(self, exc_type: Any, *_a: Any) -> bool:
+            if exc_type is not None:
+                savepoints["rolled_back"] += 1
+            return False
+
+    class _FakeCur:
+        def __init__(self, conn: _FakeConn) -> None:
+            self.connection = conn
+
+        def __enter__(self) -> _FakeCur:
+            return self
+
+        def __exit__(self, *_a: Any) -> bool:
+            return False
+
+        def execute(self, sql: str, *_a: Any) -> _FakeCur:
+            executed_sql.append(sql)
+            return self
+
         def fetchone(self) -> None:
             return None
 
@@ -109,13 +140,38 @@ def test_data_engine_facts_avoids_staging_and_does_not_swallow_bugs(
         def __exit__(self, *_a: Any) -> bool:
             return False
 
-        def execute(self, sql: str, *_a: Any) -> _FakeRows:
-            executed_sql.append(sql)
-            return _FakeRows()
+        def cursor(self) -> _FakeCur:
+            return _FakeCur(self)
+
+        def transaction(self) -> _FakeSavepoint:
+            return _FakeSavepoint()
 
         def rollback(self) -> None:
             return None
 
     monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: _FakeConn())
     main_mod._data_engine_facts()
+    assert ("set local role app_ops_reader") in executed_sql
+    assert savepoints["entered"] == 3 and savepoints["rolled_back"] == 0
     assert executed_sql and not any("staging." in q for q in executed_sql)
+
+    # 4. If the first health fact fails with UndefinedTable, savepoint rolls back and later queries still run.
+    class _FirstFailsCur(_FakeCur):
+        def execute(self, sql: str, *_a: Any) -> _FirstFailsCur:
+            executed_sql.append(sql)
+            if "mart.data_engine_identity" in sql:
+                raise psycopg.errors.UndefinedTable("missing identity table")
+            return self
+
+    class _FirstFailsConn(_FakeConn):
+        def cursor(self) -> _FakeCur:
+            return _FirstFailsCur(self)
+
+    executed_sql.clear()
+    savepoints["entered"] = savepoints["rolled_back"] = 0
+    monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: _FirstFailsConn())
+    sha, digest, ptr, vrd = main_mod._data_engine_facts()
+    assert (sha, digest, ptr, vrd) == ("unknown", "unknown", [], [])
+    assert savepoints == {"entered": 3, "rolled_back": 1}
+    assert any("from mart.served_head" in q for q in executed_sql)
+    assert any("from mart.nightly_verdicts" in q for q in executed_sql)

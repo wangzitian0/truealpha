@@ -547,8 +547,9 @@ def test_an_exhausted_budget_is_named_by_the_deployed_tick(monkeypatch, call_led
         def __exit__(self, *_exc: object) -> None: ...
 
         get = staticmethod(no_request)
+        request = staticmethod(no_request)
 
-    monkeypatch.setattr(twelve_data_origin.urllib.request, "urlopen", no_request)
+    monkeypatch.setattr(twelve_data_origin.httpx, "Client", NoRequestClient)
     monkeypatch.setattr(yahoo.httpx, "Client", NoRequestClient)
     _spent_today(call_ledger, "twelvedata", 480)
     real_scope = gateway.capacity_scope

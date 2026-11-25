@@ -34,6 +34,7 @@ from factors.backtest.engine import (
 )
 from factors.composite.strategy_evaluator import IssuerInput, evaluate_cutoff
 from factors.panel import IssuerClass
+from infra2_sdk.runtime.environment import EnvironmentTier, resolve_environment_tier
 from truealpha_contracts.common import canonical_sha256
 from truealpha_contracts.strategy import GoldenDecisionOutcome, LargeModelValueV0Definition, QuarterlyCutoffSchedule
 
@@ -87,13 +88,13 @@ LIMITATIONS = (
     "An input is admitted only when it is knowable before the cutoff's calendar date.",
 )
 
-DEPLOYED_ENVIRONMENTS = ("production", "prod", "staging")
+_DEPLOYED_TIERS = frozenset({EnvironmentTier.PREVIEW, EnvironmentTier.STAGING, EnvironmentTier.PRODUCTION})
 _NO_CODE_IDENTITY = ("", "unknown")
 
 
 def deployed_code_identity(app_env: str, git_commit_sha: str) -> str:
     sha = (git_commit_sha or "").strip()
-    if app_env.strip().lower() in DEPLOYED_ENVIRONMENTS and sha.lower() in _NO_CODE_IDENTITY:
+    if resolve_environment_tier(app_env, unknown="production") in _DEPLOYED_TIERS and sha.lower() in _NO_CODE_IDENTITY:
         raise RuntimeError(
             f"the backtest refuses to run in {app_env!r} without a code identity: GIT_COMMIT_SHA is {git_commit_sha!r}; the deployment must inject the release ref"
         )
@@ -646,7 +647,6 @@ __all__ = [
     "BacktestPending",
     "BacktestRecord",
     "CutoffDecision",
-    "DEPLOYED_ENVIRONMENTS",
     "apply_definition_overrides",
     "benchmark_never_filled",
     "decide",

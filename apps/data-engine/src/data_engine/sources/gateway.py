@@ -8,9 +8,7 @@ import hashlib
 import json
 import logging
 import time
-import urllib.error
 import urllib.parse
-import urllib.request
 from collections import Counter
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
@@ -23,6 +21,7 @@ from typing import Any, NoReturn, TypeVar
 
 from infra2_sdk.capacity import RateLimitWindow
 from infra2_sdk.runtime.http import request_with_retry
+from infra2_sdk.runtime.llm import redact_uri as _sdk_redact_uri
 from truealpha_contracts.environment_contract import DAY_SECONDS, load_environment_contract
 
 from data_engine import db
@@ -40,7 +39,6 @@ PROBE = "probe"
 WINDOW_NOT_FINAL = "window_not_final"
 MODEL_CALL = "model_call"
 ANSWER_REFUSED = "answer_refused"
-_REDACTED_KEY_MARKERS = ("apikey", "api_key", "api-key", "token", "secret", "password", "auth", "key")
 
 
 @dataclass(frozen=True)
@@ -136,6 +134,10 @@ def run_scope(run_key: str) -> Iterator[None]:
         yield
 
 
+def current_run_key() -> str | None:
+    return _run_key.get()
+
+
 @contextmanager
 def script_run(name: str) -> Iterator[str]:
     run_key = f"script:{name}:{int(_utcnow().timestamp())}"
@@ -197,20 +199,8 @@ class CallRecord:
         return row
 
 
-def _is_credential_key(key: str) -> bool:
-    low = key.lower()
-    return any(m in low for m in _REDACTED_KEY_MARKERS)
-
-
 def redact_uri(uri: str | None) -> str | None:
-    if not uri or "?" not in uri:
-        return uri
-    parts = urllib.parse.urlsplit(uri)
-    q = [
-        (k, "***" if _is_credential_key(k) else v)
-        for k, v in urllib.parse.parse_qsl(parts.query, keep_blank_values=True)
-    ]
-    return urllib.parse.urlunsplit(parts._replace(query=urllib.parse.urlencode(q)))
+    return None if not uri else _sdk_redact_uri(uri)
 
 
 _pg_conn = None
@@ -719,13 +709,6 @@ def http_post(*args: Any, **kwargs: Any) -> Any:
     return _http_request("post", *args, **kwargs)
 
 
-class SourceHTTPError(Exception):
-    def __init__(self, status_code: int, body: bytes) -> None:
-        super().__init__(f"HTTP {status_code}: {body[:200]!r}")
-        self.status_code = status_code
-        self.body = body
-
-
 def _vendor_message(body: bytes) -> str | None:
     try:
         payload = json.loads(body.decode())
@@ -736,36 +719,6 @@ def _vendor_message(body: bytes) -> str | None:
             if isinstance(value := payload.get(key), str) and value:
                 return value[:300]
     return None
-
-
-def urlopen(
-    source: str,
-    endpoint: str,
-    request: str | urllib.request.Request,
-    *,
-    identity: FetchKey,
-    caller: str,
-    timeout: float,
-    cost: Decimal | int = 1,
-    raise_for_status: bool = False,
-) -> tuple[int | None, bytes]:
-    uri = request.full_url if isinstance(request, urllib.request.Request) else request
-    with record_call(source, endpoint, identity=identity, caller=caller, request_uri=uri, cost=cost) as call:
-        http_err: urllib.error.HTTPError | None = None
-        try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310
-                raw_status = getattr(response, "status", getattr(response, "getcode", lambda: None)())
-                status, body = (int(raw_status) if raw_status is not None else None), bytes(response.read())
-        except urllib.error.HTTPError as error:
-            http_err = error
-            with error:
-                status, body = int(error.code), bytes(error.read())
-        call.observe(status_code=status, body=body)
-        if http_err is not None or (raise_for_status and status is not None and status >= 400):
-            _fail_http(call, int(status or 0), body)
-            if raise_for_status:
-                raise SourceHTTPError(int(status or 0), body) from http_err
-        return status, body
 
 
 @contextmanager

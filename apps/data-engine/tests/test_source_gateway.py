@@ -13,11 +13,8 @@ from __future__ import annotations
 
 import ast
 import hashlib
-import io
 import json
 import logging
-import urllib.error
-import urllib.request
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -58,7 +55,7 @@ def test_a_successful_call_is_one_row_that_names_the_bytes_it_received(call_ledg
     assert row.byte_length == len(body)
     assert row.duration_ms is not None and row.duration_ms >= 0
     assert row.cost == 1 and isinstance(row.cost, Decimal), "numeric in the ledger, never a binary float"
-    assert row.request_uri == "https://x/eod?symbol=A&apikey=%2A%2A%2A", "credentials never reach the ledger"
+    assert row.request_uri == "https://x/eod?symbol=A&apikey=REDACTED", "credentials never reach the ledger"
     assert row.capacity_window_id == f"twelvedata:day:{datetime.now(UTC).date().isoformat()}"
 
 
@@ -93,44 +90,24 @@ def test_an_error_status_is_a_failed_row_even_though_nothing_raised(call_ledger)
     assert row.error == "HTTP 429", "a rate-limited request is a failed request that still spent quota"
 
 
-def test_urlopen_returns_the_error_body_and_records_the_vendor_message(call_ledger, monkeypatch) -> None:
+def test_http_get_returns_the_error_body_and_records_the_vendor_message(call_ledger) -> None:
     """Status-honest (#557): Twelve Data's 'no end of day' 400 must reach the parser
     AND be recorded as the failed call it is — with the vendor's own words."""
     body = json.dumps({"code": 400, "message": "No data is available on the specified dates"}).encode()
-
-    def fake_urlopen(url, timeout=None):
-        raise urllib.error.HTTPError(url, 400, "Bad Request", None, io.BytesIO(body))
-
-    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
-    status, returned = gateway.urlopen(
-        "twelvedata", "eod", "https://x/eod", caller="test", timeout=1, identity=_key("twelvedata", "eod")
+    response = gateway.http_get(
+        _Client(_Response(body, 400)),
+        "twelvedata",
+        "eod",
+        "https://x/eod",
+        caller="test",
+        identity=_key("twelvedata", "eod"),
     )
 
-    assert (status, returned) == (400, body)
+    assert (response.status_code, response.content) == (400, body)
     (row,) = call_ledger
     assert row.ok is False and row.status_code == 400
     assert row.error == "No data is available on the specified dates"
     assert row.payload_sha256 == hashlib.sha256(body).hexdigest()
-
-
-def test_urlopen_can_raise_on_an_error_status_when_the_caller_needs_that(call_ledger, monkeypatch) -> None:
-    def fake_urlopen(url, timeout=None):
-        raise urllib.error.HTTPError(url, 503, "Service Unavailable", None, io.BytesIO(b"busy"))
-
-    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
-    with pytest.raises(gateway.SourceHTTPError) as info:
-        gateway.urlopen(
-            "openfigi",
-            "mapping",
-            "https://x/mapping",
-            caller="test",
-            timeout=1,
-            raise_for_status=True,
-            identity=_key("openfigi", "mapping"),
-        )
-    assert info.value.status_code == 503
-    (row,) = call_ledger
-    assert row.ok is False and row.status_code == 503 and row.error == "HTTP 503"
 
 
 def test_a_ledger_write_failure_never_masks_the_vendor_result(monkeypatch, caplog) -> None:
@@ -182,13 +159,14 @@ def test_the_ledger_backend_setting_only_takes_its_two_values() -> None:
 
 def test_credential_query_keys_are_blanked_whatever_their_casing() -> None:
     redacted = gateway.redact_uri(
-        "https://x/q?symbol=AAPL&APIKEY=a&ApiKey=b&access_token=c&X-Api-Key=d&client_secret=e"
+        "https://user:s3cret@x/q?symbol=AAPL&APIKEY=a&ApiKey=b&access_token=c&X-Api-Key=d&client_secret=e"
     )
     assert (
         redacted
-        == "https://x/q?symbol=AAPL&APIKEY=%2A%2A%2A&ApiKey=%2A%2A%2A&access_token=%2A%2A%2A&X-Api-Key=%2A%2A%2A&client_secret=%2A%2A%2A"
+        == "https://x/q?symbol=AAPL&APIKEY=REDACTED&ApiKey=REDACTED&access_token=REDACTED&X-Api-Key=REDACTED&client_secret=REDACTED"
     )
     assert gateway.redact_uri("https://x/q?symbol=AAPL&date=2026-09-04") == "https://x/q?symbol=AAPL&date=2026-09-04"
+    assert gateway.redact_uri(None) is None
 
 
 def test_capacity_windows_follow_what_the_registry_declares() -> None:
@@ -256,11 +234,7 @@ def test_twelve_data_no_end_of_day_is_a_failed_twelvedata_row_with_the_key_redac
     from data_engine.datahub.capture_core import twelve_data_origin as origin
 
     body = json.dumps({"code": 400, "message": "No data is available on the specified dates"}).encode()
-
-    def fake_urlopen(url, timeout=None):
-        raise urllib.error.HTTPError(url, 400, "Bad Request", None, io.BytesIO(body))
-
-    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(origin.httpx, "Client", lambda **kwargs: _Client(_Response(body, 400)))
     fetcher = origin.TwelveDataQuoteFetcher("s3cret-key")
     assert fetcher._get(origin._EOD_URL, {"symbol": "AAPL", "date": "2026-08-29"}) == body
 
@@ -334,14 +308,14 @@ def test_universe_plane_edgar_fetch_is_one_sec_row(call_ledger, monkeypatch) -> 
     from data_engine.datahub.capture_core import universe_plane
 
     body = b"<feed><entry></entry></feed>"
-    monkeypatch.setattr(urllib.request, "urlopen", lambda request, timeout=None: io.BytesIO(body))
+    monkeypatch.setattr(universe_plane.httpx, "Client", lambda **kwargs: _Client(_Response(body, 200)))
     status, returned = universe_plane._get(
         "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&ticker=AAPL&type=10-K&output=atom&count=10",
         headers={"User-Agent": "Test/1.0", "Accept": "application/atom+xml"},
         identity=FetchKey("sec", "browse-edgar", "symbol:AAPL", "2026-10-27"),
     )
 
-    assert returned == body and status is None, "a transport that reports no status is not a failure"
+    assert returned == body and status == 200
     (row,) = call_ledger
     assert (row.source, row.endpoint, row.ok) == ("sec", "browse-edgar", True)
 
@@ -386,7 +360,7 @@ _CLIENT_TYPES = frozenset({"httpx.Client", "httpx.AsyncClient"})
 _CLIENT_FACTORIES = _CLIENT_TYPES | {"data_engine.sources.sec.client"}
 #: Calls that take the key of the resource as the keyword `identity` (#1521 step 2).
 _IDENTITY_FUNCTIONS = frozenset(
-    {"data_engine.sources.gateway." + name for name in ("record_call", "http_get", "http_post", "urlopen")}
+    {"data_engine.sources.gateway." + name for name in ("record_call", "http_get", "http_post")}
     | {
         "data_engine.sources.moomoo." + name
         for name in (
@@ -581,11 +555,6 @@ _MUTATIONS = [
     (
         "datahub/x.py",
         "from data_engine.sources import gateway\ngateway.http_get(c, 'sec', 'e', 'u', caller='x')\n",
-        "names no `identity`",
-    ),
-    (
-        "datahub/x.py",
-        "from data_engine.sources import gateway\ngateway.urlopen('sec', 'e', 'u', caller='x', timeout=1)\n",
         "names no `identity`",
     ),
     (
@@ -1234,3 +1203,147 @@ def test_capacity_gate_delegates_local_sliding_window_to_sdk_rate_limit_window()
     gate.admit("sec")
     assert slept == [pytest.approx(1.0)]
     assert all(isinstance(tracker, RateLimitWindow) for tracker in gate._windows.values())
+
+
+def test_model_decoding_preserves_historical_request_sha256_keys() -> None:
+    from data_engine.sources import llm, model_decoding
+
+    assert (
+        llm._request_sha256(
+            llm.build_chat_request(llm.HEADCOUNT_TASK, "sample", model="glm-5.3-flash", decoding=model_decoding.V1)
+        )
+        == "09f1cec75f1377d45dc479961acdf5371cef9bdcdae1629944af5f063a50666e"
+    )
+    assert (
+        llm._request_sha256(
+            llm.build_chat_request(llm.HEADCOUNT_TASK, "sample", model="glm-5.3-flash", decoding=model_decoding.V2)
+        )
+        == "4997efbf01f3d9d40ed53389c69353a886dd05a18ca188bb164c67a6c05c0012"
+    )
+
+
+def test_universe_plane_openfigi_batches_retries_429_via_openfigi_map_jobs(call_ledger, monkeypatch) -> None:
+    from data_engine import raw_store
+    from data_engine.datahub.capture_core import universe_plane
+    from data_engine.sources import openfigi
+
+    answer = json.dumps([{"data": [{"ticker": "AAPL", "shareClassFIGI": "BBG000B9XRY4"}]}]).encode()
+    client = _Client(_Response(b"", 429), _Response(answer))
+    monkeypatch.setattr(universe_plane.httpx, "Client", lambda **kwargs: client)
+    real_map_jobs = openfigi.map_jobs
+    monkeypatch.setattr(
+        openfigi,
+        "map_jobs",
+        lambda *a, **kw: real_map_jobs(*a, **{**kw, "sleep": lambda _s: None}),
+    )
+    stored: list[tuple[str, bytes]] = []
+    monkeypatch.setattr(
+        raw_store,
+        "insert_fetch",
+        lambda _conn, *, source_record_id, body, **kwargs: stored.append((source_record_id, body)),
+    )
+
+    paired = universe_plane._post_openfigi_batches(
+        object(),  # type: ignore[arg-type]
+        ["AAPL"],
+        build_job=lambda t: {"idType": "TICKER", "idValue": t},
+        batch_token=lambda t: t,
+        record_prefix="figi-mapping",
+        as_of=date(2026, 11, 25),
+        api_key="k",
+        caller="test",
+    )
+
+    assert paired == [("AAPL", {"data": [{"ticker": "AAPL", "shareClassFIGI": "BBG000B9XRY4"}]})]
+    assert stored == [("figi-mapping:2026-11-25:0", answer)]
+    assert [r.status_code for r in call_ledger] == [429, 200]
+
+
+def test_issuer_registry_and_vendor_oracle_delegate_to_sec(monkeypatch) -> None:
+    import httpx
+    from data_engine.datahub.capture_core import issuer_registry
+    from data_engine.quality import vendor_oracle
+    from data_engine.sources import sec
+
+    calls: list[dict[str, object]] = []
+
+    def fake_submissions(cik: int, http: object, **kwargs: object) -> dict[str, object]:
+        calls.append({"cik": cik, **kwargs})
+        return {"sic": "7370"}
+
+    monkeypatch.setattr(sec, "fetch_company_submissions", fake_submissions)
+    read = issuer_registry._read_submissions(320193, httpx.Client(), attempts=3)
+    assert read.submissions == {"sic": "7370"}
+    assert calls[0]["max_attempts"] == 3
+
+    monkeypatch.setattr(sec, "ticker_cik_index", lambda _http: {"AAPL": 320193})
+    monkeypatch.setattr(sec, "fetch_company_facts", lambda cik, _http: {"cik": cik})
+    assert vendor_oracle.ticker_cik_index("Test/1.0 test@example.com") == {"AAPL": 320193}
+    assert vendor_oracle.company_facts(320193, "Test/1.0 test@example.com") == {"cik": 320193}
+
+
+def test_environment_tier_helpers_converged() -> None:
+    import dagster as dg
+    from data_engine.datahub import backtest
+    from data_engine.datahub.capture_core import failover_drill
+    from data_engine.lanes import backtest as backtest_lane
+
+    for env in ("preview", "staging", "prod", "production", "unknown-typo"):
+        with pytest.raises(RuntimeError, match="without a code identity"):
+            backtest.deployed_code_identity(env, "unknown")
+    for env in ("dev", "ci", "local_dev"):
+        assert backtest.deployed_code_identity(env, "unknown") == "unknown"
+
+    assert backtest_lane.schedule_status("preview") is dg.DefaultScheduleStatus.STOPPED
+    assert backtest_lane.schedule_status("unknown-typo") is dg.DefaultScheduleStatus.STOPPED
+    assert backtest_lane.schedule_status("staging") is dg.DefaultScheduleStatus.RUNNING
+    assert backtest_lane.schedule_status("prod") is dg.DefaultScheduleStatus.RUNNING
+
+    assert failover_drill.is_production("prod") is True
+    assert failover_drill.is_production("production") is True
+    assert failover_drill.is_production("unknown-typo") is True
+    assert failover_drill.is_production("staging") is False
+    assert failover_drill.is_production("preview") is False
+
+
+def test_llm_agent_binds_llm_call_context_and_preserves_replay_bytes(call_ledger, monkeypatch) -> None:
+    from data_engine.sources import llm
+    from infra2_sdk.runtime import llm as sdk_llm
+
+    seen_ctx: list[dict[str, object]] = []
+    sent_bodies: list[bytes] = []
+
+    def fake_transport(_url: str, _headers: dict[str, str], body: bytes) -> tuple[int, bytes]:
+        seen_ctx.append(dict(sdk_llm._LLM_CONTEXT.get() or {}))
+        sent_bodies.append(body)
+        return (
+            200,
+            json.dumps(
+                {
+                    "model": "glm-5.3-flash",
+                    "choices": [{"message": {"content": '{"value": 100, "candidate_index": 0, "reason": "ok"}'}}],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+                }
+            ).encode(),
+        )
+
+    monkeypatch.setattr(llm.settings, "llm_api_key", "test-key")
+    with gateway.run_scope("dagster:run-xyz"):
+        inv = llm.invoke(
+            None,
+            task=llm.HEADCOUNT_TASK,
+            cik=320193,
+            accession="0000320193-26-000001",
+            user_content="[0] 100: Total employees 100",
+            caller="test",
+            standard="headcount",
+            parse=lambda raw: json.loads(raw),
+            refusal=lambda msg: {"value": None, "reason": msg},
+            persist=False,
+            transport=fake_transport,
+        )
+
+    assert inv.decision["value"] == 100
+    assert seen_ctx and seen_ctx[0].get("infra.llm.domain_run_id") == "dagster:run-xyz"
+    assert seen_ctx[0].get("infra.llm.prompt_sha256") == llm.HEADCOUNT_TASK.prompt_sha256
+    assert hashlib.sha256(sent_bodies[0]).hexdigest() == inv.request_sha256
