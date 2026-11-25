@@ -41,7 +41,7 @@ jobs:
       - run: uv sync --all-packages --frozen
       # #284: the factor surface is frozen — public signatures (defaults included) and
       # the datahub columns factors read. Stdlib only, no database, so it runs here.
-      - run: python3 tools/check_factor_contract.py
+      - run: uv run --no-sync python -m truealpha_tools.check_factor_contract
       - run: make lint
       - run: make typecheck-python
       - run: make contract-conformance

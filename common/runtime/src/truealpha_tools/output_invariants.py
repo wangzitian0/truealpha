@@ -7,8 +7,7 @@ import json
 import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
-from pathlib import Path
+from datetime import UTC, datetime
 from typing import Any, Literal
 
 import psycopg
@@ -26,7 +25,6 @@ from truealpha_contracts.strategy import load_live_strategy_definition
 from truealpha_contracts.universes import id_prefix_like, universes_with_role
 from truealpha_runtime import reconciliation_policies
 
-EXEMPTIONS_PATH = Path(__file__).resolve().parents[4] / "tools" / "output_invariant_exemptions.json"
 SERVED_UNIVERSE_LIKES = tuple(id_prefix_like(k) for k in universes_with_role("strategy"))
 _SERVED_UNIVERSE_SQL = " or ".join(f"universe_id like '{p}'" for p in SERVED_UNIVERSE_LIKES)
 _MAX_INPUT_AGE_DAYS = load_live_strategy_definition().eligibility.maximum_input_age_days
@@ -112,7 +110,7 @@ class InvariantResult:
     kind: Literal["hard", "fact"]
     population: int
     violation_count: int
-    deferred: bool
+    deferred: bool = False
     sample_rows: tuple[list[str], ...] = ()
 
 
@@ -723,29 +721,6 @@ def render_invariants(contract: EnvironmentContract) -> tuple[Invariant, ...]:
 INVARIANTS: tuple[Invariant, ...] = render_invariants(load_environment_contract())
 
 
-@dataclass(frozen=True)
-class Exemption:
-    invariant: str
-    issue: str
-    expires: date
-    reason: str
-
-
-def load_exemptions(path: Path = EXEMPTIONS_PATH) -> dict[str, Exemption]:
-    if not path.exists():
-        return {}
-    raw = json.loads(path.read_text(encoding="utf-8"))
-    return {
-        entry["invariant"]: Exemption(
-            invariant=entry["invariant"],
-            issue=entry["issue"],
-            expires=date.fromisoformat(entry["expires"]),
-            reason=entry["reason"],
-        )
-        for entry in raw["exemptions"]
-    }
-
-
 def _rows(connection: Any, sql: str) -> list[tuple]:
     with connection.cursor() as cursor:
         cursor.execute(sql)
@@ -788,8 +763,6 @@ def check(
     database_url: str,
     *,
     require_coverage: bool = False,
-    today: date | None = None,
-    exemptions: dict[str, Exemption] | None = None,
     invariants: Sequence[Invariant] = INVARIANTS,
     connect: Callable[[str], Any] = psycopg.connect,
     persist: bool = False,
@@ -797,8 +770,6 @@ def check(
     checked_at: datetime | None = None,
     commit: bool = True,
 ) -> int:
-    today = today or date.today()
-    exemptions = load_exemptions() if exemptions is None else exemptions
     failures: list[str] = []
     results: list[InvariantResult] = []
 
@@ -814,9 +785,7 @@ def check(
             else:
                 population = int(_rows(connection, invariant.population)[0][0])
                 violations = _rows(connection, invariant.violations)
-            exemption = exemptions.get(invariant.id)
             samples = tuple([str(field) for field in row] for row in violations[:5])
-            deferred = False
             if invariant.signals is not None and not missing_table:
                 for row in _rows(connection, invariant.signals):
                     print(f"  SIGNAL   {invariant.id}: " + " ".join(str(field) for field in row))
@@ -828,7 +797,6 @@ def check(
                         kind="fact",
                         population=population,
                         violation_count=len(violations),
-                        deferred=False,
                         sample_rows=samples,
                     )
                 )
@@ -843,29 +811,15 @@ def check(
                     print(f"  ok       {invariant.id}: {population} row(s) examined")
                 continue
 
-            if violations and exemption and exemption.expires >= today:
-                deferred = True
-                print(
-                    f"  DEFERRED {invariant.id}: {len(violations)} violation(s), exempt until "
-                    f"{exemption.expires} under {exemption.issue} — {exemption.reason}"
-                )
-            elif violations:
+            if violations:
                 detail = "; ".join(" ".join(row) for row in samples)
-                expired = f" The exemption under {exemption.issue} expired {exemption.expires}." if exemption else ""
                 failures.append(
-                    f"{invariant.id}: {len(violations)} violation(s) — {invariant.claim}."
-                    f"{expired} Offending rows: {detail}"
+                    f"{invariant.id}: {len(violations)} violation(s) — {invariant.claim}. Offending rows: {detail}"
                 )
             elif population == 0:
                 print(f"  EMPTY    {invariant.id}: examined 0 rows, so it proved nothing")
                 if require_coverage:
                     failures.append(f"{invariant.id}: examined 0 rows where real data was required")
-            elif exemption:
-                failures.append(
-                    f"{invariant.id}: exempt under {exemption.issue} but no longer violated across "
-                    f"{population} row(s). Remove the exemption — a standing waiver for a fixed "
-                    f"defect hides the next one"
-                )
             else:
                 print(f"  ok       {invariant.id}: {population} row(s) examined")
 
@@ -875,7 +829,6 @@ def check(
                     kind="hard",
                     population=population,
                     violation_count=len(violations),
-                    deferred=deferred,
                     sample_rows=samples,
                 )
             )

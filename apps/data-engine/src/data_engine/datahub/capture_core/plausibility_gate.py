@@ -51,7 +51,6 @@ class Verdict:
     policy_version: str
     refusals: tuple[Violation, ...]
     run_refusals: tuple[Violation, ...]
-    deferred: tuple[tuple[Violation, str], ...]
     signals: tuple[Violation, ...] = ()
     issuers: Mapping[str, str] = field(default_factory=dict)
 
@@ -71,8 +70,6 @@ class Verdict:
         out = [f"plausibility policy {self.policy_version}"]
         for signal in self.signals:
             out.append(f"  SIGNAL   {signal.rule} {signal.listing_id or ''}: {signal.detail} — a declared low signal")
-        for violation, note in self.deferred:
-            out.append(f"  DEFERRED {violation.rule} {violation.listing_id or ''}: {violation.detail} — {note}")
         for violation in self.refusals:
             out.append(
                 f"  EXCLUDED {violation.rule} {violation.listing_id or ''}: {violation.detail} — refused as "
@@ -80,7 +77,7 @@ class Verdict:
             )
         for violation in self.run_refusals:
             out.append(f"  REFUSED  {violation.rule}: {violation.detail}")
-        if not self.refusals and not self.run_refusals and not self.deferred:
+        if not self.refusals and not self.run_refusals:
             out.append("  ok: every published row respects its definition")
         return out
 
@@ -110,7 +107,6 @@ def judge_issuers(connection: Any, *, run_id: str) -> Verdict:
         policy_version=POLICY_VERSION,
         refusals=tuple(node_sign_policy(current)),
         run_refusals=(),
-        deferred=(),
         signals=tuple(sign_signals(current)),
         issuers=issuers,
     )

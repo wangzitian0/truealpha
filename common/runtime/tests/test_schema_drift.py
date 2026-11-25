@@ -30,12 +30,10 @@ from truealpha_runtime.testing import (
     apply_migration_chain,
     clone_test_database,
     isolated_test_database,
-    load_tool,
 )
+from truealpha_tools import schema_drift as drift
 
 pytestmark = pytest.mark.deps
-
-drift = load_tool("schema_drift")
 
 RESET = Path(__file__).resolve().parents[3] / "db" / "reset_database.sh"
 

@@ -220,7 +220,7 @@ def _fake_tick(monkeypatch, registration: PointerRegistration) -> None:
     # connection, so the gate is stubbed to a passing verdict.
     from data_engine.datahub.capture_core.plausibility_gate import Verdict
 
-    passing = Verdict("v4", (), (), ())
+    passing = Verdict("v4", (), ())
     monkeypatch.setattr(capture, "judge_issuers", lambda *a, **k: passing)
     monkeypatch.setattr(capture, "judge_strategy", lambda *a, **k: passing)
     # #1323: the tick also reads the issuers whose registry read failed, through the connection.
@@ -330,7 +330,7 @@ def _two_issuers_flagged(monkeypatch, flagged: list[str]) -> None:
     """The gate judged two issuers; the registry could not classify `flagged`."""
     from data_engine.datahub.capture_core.plausibility_gate import Verdict
 
-    judged = Verdict("v4", (), (), (), issuers={"listing:a": "issuer:a", "listing:b": "issuer:b"})
+    judged = Verdict("v4", (), (), issuers={"listing:a": "issuer:a", "listing:b": "issuer:b"})
     monkeypatch.setattr(capture, "judge_issuers", lambda *a, **k: judged)
     monkeypatch.setattr(capture, "registry_unavailable_issuers", lambda *a, **k: flagged)
 

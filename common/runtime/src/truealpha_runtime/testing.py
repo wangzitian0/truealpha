@@ -38,9 +38,6 @@ def load_tool(name: str) -> ModuleType:
     path = TOOLS / f"{name}.py"
     if not path.exists():
         raise FileNotFoundError(f"no tool named {name!r} in {TOOLS}")
-    impl_path = REPO_ROOT / "common" / "runtime" / "src" / "truealpha_tools" / f"{name}.py"
-    if impl_path.is_file():
-        return importlib.import_module(f"truealpha_tools.{name}")
     spec = importlib.util.spec_from_file_location(f"truealpha_tool_{name}", path)
     if spec is None or spec.loader is None:
         raise ImportError(f"cannot load {path}")
