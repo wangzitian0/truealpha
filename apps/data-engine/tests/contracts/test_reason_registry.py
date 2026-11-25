@@ -54,7 +54,7 @@ DEFINED: dict[str, tuple[str, ...]] = {
         gross_profit_per_employee.NONPOSITIVE_EMPLOYEES_FLAG,
     ),
     "theme purity": (theme_purity_capture.NO_DESCRIPTION, theme_purity_capture.NO_ANSWER),
-    "oracle": (oracle_outcomes.NO_SERVED_VALUE, oracle_outcomes.NO_OPERATOR_ROW),
+    "oracle": (oracle_outcomes.NO_SERVED_VALUE,),
     "served heads and reports": (
         SERVED_BY_FAILOVER,
         NO_SERVED_ROW,

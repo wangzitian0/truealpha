@@ -31,10 +31,9 @@ _EV_NEED = {
     "self_imposed": {"reason", "checked_at"},
 }
 _EV_OPT = {"measured": {"source"}, "none_published": {"source", "checked_at"}}
-_MEM_REQ = {"frozen_corpus": None, "index_api": "url", "nport": "nport_ticker", "static": "members"}
+_MEM_REQ = {"frozen_corpus": None, "nport": "nport_ticker", "static": "members"}
 _MEM_USE = {
     "frozen_corpus": set(),
-    "index_api": {"url", "mic", "nport_ticker"},
     "nport": {"nport_ticker", "mic"},
     "static": {"members", "mic"},
 }
@@ -337,7 +336,7 @@ def _check_env(
         k for k in ticks if not universes[k].is_sentinel
     }:
         raise ValueError(f"{env}: differ")
-    if any(universes[rk].membership.kind not in ("index_api", "nport") for rk in lr):
+    if any(universes[rk].membership.kind != "nport" for rk in lr):
         raise ValueError(f"{env}: invalid list_refresh")
     if rs["live_vendor_calls"] and seat.limits_for(env) is None:
         raise ValueError(f"{env} calls live vendors and declares no model seat limits")

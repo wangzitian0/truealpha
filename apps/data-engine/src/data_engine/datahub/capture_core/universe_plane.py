@@ -10,7 +10,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
-from typing import Any, TypedDict
+from typing import Any
 
 from psycopg import Connection
 from psycopg.types.json import Jsonb
@@ -29,11 +29,6 @@ from data_engine.sources import gateway, nport
 log = logging.getLogger(__name__)
 
 _TUPLE_FIELDS = ["issuer_id", "instrument_id", "listing_id", "ticker"]
-_BROWSER_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/126.0",
-    "Accept": "application/json",
-    "Accept-Language": "en-US",
-}
 UNRESOLVED_LISTING_EXCHANGE = "unresolved_listing_exchange"
 EXCLUDED_NAMES_SHOWN = 5
 
@@ -43,7 +38,6 @@ class UniverseSource:
     """ETF or index universe constituent source definition."""
 
     etf: str
-    index_api: str
     label: str
     mic: str | None
     static_members: tuple[str, ...] = ()
@@ -51,22 +45,26 @@ class UniverseSource:
 
 
 def universe_sources() -> dict[str, UniverseSource]:
-    """Return all governed universe sources driven by index API, N-PORT, or static lists."""
+    """Return all governed universe sources driven by N-PORT or static lists."""
     return {
         key: UniverseSource(
             etf=key,
-            index_api=universe.membership.url or "",
             label=universe.label,
             mic=universe.membership.mic,
             static_members=universe.membership.members,
             nport_ticker=universe.membership.nport_ticker,
         )
         for key, universe in load_environment_contract().universes.items()
-        if universe.membership.kind in ("index_api", "nport", "static")
+        if universe.membership.kind in ("nport", "static")
     }
 
 
 UNIVERSE_SOURCES: dict[str, UniverseSource] = universe_sources()
+
+
+def active_constituent_source(source: UniverseSource) -> str:
+    """Return the authoritative `staging.etf_constituent_facts.source` for `source`."""
+    return DataSource.NPORT.value if source.nport_ticker else DataSource.RELEASE.value
 
 
 def _get(
@@ -74,19 +72,12 @@ def _get(
     headers: dict[str, str] | None = None,
     *,
     identity: FetchKey,
-    source: str = DataSource.NASDAQ_INDEX.value,
-    endpoint: str = "constituents",
+    source: str = DataSource.SEC.value,
+    endpoint: str = "browse-edgar",
     caller: str = "universe_plane._get",
 ) -> tuple[int | None, bytes]:
-    request = urllib.request.Request(url, headers=headers or _BROWSER_HEADERS)
+    request = urllib.request.Request(url, headers=headers or {})
     return gateway.urlopen(source, endpoint, request, identity=identity, caller=caller, timeout=30)
-
-
-class ConstituentRow(TypedDict):
-    ticker: str
-    name: str
-    market_cap: str | None
-    last_sale_price: str | None
 
 
 def _select_openfigi_match(result: dict[str, Any]) -> tuple[str, str, str] | None:
@@ -481,32 +472,6 @@ def _refresh_nport_constituents(
     return len(by_ticker)
 
 
-def _decimal_text(raw: object, *, prefix: str = "") -> str | None:
-    text = str(raw if raw is not None else "").replace(",", "").strip().removeprefix(prefix).strip()
-    return text if text.replace(".", "", 1).isdigit() else None
-
-
-def parse_nasdaq_index_rows(body: bytes) -> list[ConstituentRow]:
-    payload = json.loads(body)
-    rows = (payload.get("data") or {}).get("data", {}).get("rows") or (payload.get("data") or {}).get("rows") or []
-    out: list[ConstituentRow] = [
-        {
-            "ticker": str(row["symbol"]).strip().upper(),
-            "name": str(row.get("companyName", "")).strip(),
-            "market_cap": _decimal_text(row.get("marketCap")),
-            "last_sale_price": _decimal_text(row.get("lastSalePrice"), prefix="$"),
-        }
-        for row in rows
-        if row.get("symbol")
-    ]
-    if len(out) < 90:
-        raise ValueError(f"index constituents response yielded only {len(out)} rows")
-    tickers = [row["ticker"] for row in out]
-    if len(set(tickers)) != len(tickers):
-        raise ValueError("index constituents response contains duplicate tickers")
-    return out
-
-
 def _parse_edgar_cik(body: bytes) -> int | None:
     if b"<feed" in body and b"<company-info>" not in body:
         return None
@@ -562,38 +527,19 @@ def refresh_etf_constituents(
     http: Any = None,
 ) -> int:
     """Fetch, store raw bytes, resolve CIK and FIGI identifiers, and insert constituent facts."""
-    if not source.index_api and not source.static_members and source.nport_ticker:
+    if not source.static_members and source.nport_ticker:
         return _refresh_nport_constituents(
             connection, source, as_of=as_of, openfigi_api_key=openfigi_api_key, http=http
         )
+    if not source.static_members:
+        raise ValueError(f"universe {source.etf!r} defines neither N-PORT ticker nor static members")
     fetched_at = datetime.now(UTC)
     as_of = as_of or fetched_at.date()
-    if source.static_members:
-        from data_engine.datahub.resolve_coordinates import _resolve_issuer_display_name
+    from data_engine.datahub.resolve_coordinates import _resolve_issuer_display_name
 
-        rows: list[ConstituentRow] = [
-            {
-                "ticker": ticker,
-                "name": _resolve_issuer_display_name(connection, ticker) or ticker,
-                "market_cap": None,
-                "last_sale_price": None,
-            }
-            for ticker in source.static_members
-        ]
-        body = json.dumps({"etf": source.etf, "members": list(source.static_members)}).encode()
-        fetch_source = DataSource.RELEASE
-    else:
-        index_key = FetchKey(
-            DataSource.NASDAQ_INDEX.value,
-            "constituents",
-            f"index:{source.index_api.rsplit('/', 1)[-1]}",
-            gateway.utc_day(),
-        )
-        status, body = _get(source.index_api, identity=index_key, caller="universe_plane.refresh_etf_constituents")
-        if status != 200:
-            raise RuntimeError(f"{source.etf} constituents endpoint answered {status}: {body[:120]!r}")
-        rows = parse_nasdaq_index_rows(body)
-        fetch_source = DataSource.NASDAQ_INDEX
+    rows = [(ticker, _resolve_issuer_display_name(connection, ticker) or ticker) for ticker in source.static_members]
+    body = json.dumps({"etf": source.etf, "members": list(source.static_members)}).encode()
+    fetch_source = DataSource.RELEASE
 
     fetch_id = raw_store.insert_fetch(
         connection,
@@ -608,7 +554,7 @@ def refresh_etf_constituents(
     from data_engine.config import settings as _settings
     from data_engine.sources import sec
 
-    tickers = [row["ticker"] for row in rows]
+    tickers = [ticker for ticker, _name in rows]
     cik_index = sec.ticker_cik_index()
     figis = _resolve_figis(connection, tickers, as_of=as_of, api_key=openfigi_api_key)
     _ensure_ciks_for_tickers(tickers, cik_index, etf=source.etf, user_agent=_settings.sec_user_agent, figis=figis)
@@ -619,18 +565,18 @@ def refresh_etf_constituents(
             (
                 source.etf,
                 as_of,
-                DataSource.NASDAQ_INDEX.value,
+                fetch_source.value,
                 fetch_id,
-                row["ticker"],
-                row["name"],
+                ticker,
+                company_name,
                 None,
-                cik_index[row["ticker"].replace(".", "-")],
-                figis[row["ticker"]],
+                cik_index[ticker.replace(".", "-")],
+                figis[ticker],
                 fetched_at,
-                row.get("market_cap"),
-                row.get("last_sale_price"),
+                None,
+                None,
             )
-            for row in rows
+            for ticker, company_name in rows
         ],
     )
     return len(rows)
@@ -691,19 +637,20 @@ def resolve_listing_mics(
 
 def build_denominator(connection: Connection[Any], source: UniverseSource, *, report_date: date) -> dict[str, Any]:
     """Build a self-pinned denominator dict from the newest landed constituent snapshot."""
+    fact_source = active_constituent_source(source)
     rows = connection.execute(
         """
         select distinct on (ticker) ticker, cik, figi from staging.etf_constituent_facts
-        where etf_symbol = %s and (as_of, knowable_at) = (
+        where etf_symbol = %s and source = %s and (as_of, knowable_at) = (
             select as_of, max(knowable_at) from staging.etf_constituent_facts
-            where etf_symbol = %s and as_of = (
-                select max(as_of) from staging.etf_constituent_facts where etf_symbol = %s
+            where etf_symbol = %s and source = %s and as_of = (
+                select max(as_of) from staging.etf_constituent_facts where etf_symbol = %s and source = %s
             )
             group by as_of
         )
         order by ticker, id desc
         """,
-        (source.etf, source.etf, source.etf),
+        (source.etf, fact_source, source.etf, fact_source, source.etf, fact_source),
     ).fetchall()
     if not rows:
         raise LookupError(f"no landed constituents for {source.etf}; run the refresh first")

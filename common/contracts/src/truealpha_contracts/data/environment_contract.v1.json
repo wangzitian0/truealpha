@@ -90,10 +90,9 @@
       "region": "us",
       "id_prefix": "universe:qqq-us-",
       "lane_name": "universe-list:qqq",
-      "label": "Nasdaq-100 (QQQ) constituents, from the index operator's API",
+      "label": "Nasdaq-100 (QQQ) constituents, from SEC N-PORT-P holdings",
       "membership": {
-        "kind": "index_api",
-        "url": "https://api.nasdaq.com/api/quote/list-type/nasdaq100",
+        "kind": "nport",
         "mic": "xnas",
         "nport_ticker": "QQQ"
       },

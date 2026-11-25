@@ -107,7 +107,7 @@
     [[["set", "environments.production.ticks.qqq.scheduled", true]], "scheduled"],
     [[["set", "universes.qqq.id_prefix", "universe:topt-us-"]], "share a id_prefix"],
     [[["set", "universes.qqq.lane_name", "topt"]], "share a lane_name"],
-    [[["pop", "universes.qqq.membership.url"]], "needs url"],
+    [[["pop", "universes.qqq.membership.nport_ticker"]], "needs nport_ticker"],
     [[["set", "universes.topt.membership.url", "https://example.invalid"]], "holds \\['url'\\]"],
     [[["pop", "universes.topt.cron.staging"]], "differ"],
     [[["pop", "universes.qqq.cron.staging"]], "differ"],

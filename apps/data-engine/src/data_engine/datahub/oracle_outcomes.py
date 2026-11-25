@@ -12,7 +12,7 @@ from typing import Any, Protocol
 
 import psycopg
 from factors.panel import GPPE_BANKING_TCE_SPEC, GPPE_V0_SPEC
-from factors.snapshot_inputs import CoreSnapshotInput, MetricAvailability
+from factors.snapshot_inputs import CoreSnapshotInput
 from truealpha_contracts.metrics import INPUT_KEY_ALIASES, METRICS
 from truealpha_contracts.models import DataSource
 
@@ -25,12 +25,8 @@ from data_engine.datahub._helpers import (
     read_raw_json,
 )
 from data_engine.datahub.capture_core.source_registrations import AsOfAxis, knowable_instant
-from data_engine.datahub.capture_core.universe_plane import UNIVERSE_SOURCES
 from data_engine.quality import vendor_oracle
 
-OPERATOR_COMPARATOR = "operator_listed_units"
-OPERATOR_FIELD = "listed_units"
-OPERATOR_KIND = "operator"
 INDEPENDENT_COMPARATOR = "independent_parse_annual_figures"
 INDEPENDENT_KIND = "independent_parse"
 INDEPENDENT_PARSERS: dict[str, Callable[[dict[str, Any], date], vendor_oracle.VendorFact | None]] = {
@@ -46,9 +42,6 @@ AGREE = "agree"
 DISAGREE = "disagree"
 NOT_COMPARABLE = "not_comparable"
 NO_SERVED_VALUE = "no_served_value"
-NO_OPERATOR_ROW = "no_operator_row"
-NO_MARKET_CAP = "no_market_cap"
-NO_PRICE = "no_price"
 NO_DOCUMENT = "no_document"
 NO_ORACLE_VALUE = "no_oracle_value"
 ZERO_ORACLE_VALUE = "zero_oracle_value"
@@ -85,17 +78,6 @@ class Logger(Protocol):
 
 
 @dataclass(frozen=True)
-class OperatorFigure:
-    row_id: int
-    ticker: str
-    as_of: date
-    source: str
-    market_cap: Decimal | None
-    last_sale_price: Decimal | None
-    knowable_at: datetime
-
-
-@dataclass(frozen=True)
 class Outcome:
     subject_id: str
     field: str
@@ -129,117 +111,8 @@ def run_tickers(connection: psycopg.Connection[Any], run_id: str) -> dict[str, s
     return _run_payload_pairs(connection, run_id, "listing_id", "ticker")
 
 
-def served_listed_units(factor_input: CoreSnapshotInput) -> Decimal | None:
-    counts: list[Decimal] = []
-    for component in factor_input.market_value_components:
-        metric = component.shares_outstanding
-        if metric.availability is not MetricAvailability.AVAILABLE or metric.value is None:
-            return None
-        counts.append(metric.value)
-    if not counts:
-        return None
-    return counts[0] if len(counts) > 1 and len(set(counts)) == 1 else sum(counts, start=Decimal(0))
-
-
 def _scalar_result(ratio: Decimal, tolerance: Decimal) -> str:
     return AGREE if abs(ratio - 1) <= tolerance else DISAGREE
-
-
-def compare_listed_units(
-    factor_input: CoreSnapshotInput,
-    figures: dict[str, OperatorFigure],
-    *,
-    ticker: str | None,
-    list_as_of: date,
-    tolerance: Decimal,
-) -> Outcome:
-    served = served_listed_units(factor_input)
-    figure = figures.get(ticker) if ticker else None
-    witness: Decimal | None = None
-    ratio: Decimal | None = None
-    tol_out: Decimal | None = None
-    reason: str | None = None
-    res = NOT_COMPARABLE
-    if figure is None:
-        period, source, row_ref, knowable, reason = (
-            list_as_of.isoformat(),
-            DataSource.NASDAQ_INDEX.value,
-            None,
-            None,
-            NO_OPERATOR_ROW,
-        )
-    else:
-        period, source, row_ref, knowable = (
-            figure.as_of.isoformat(),
-            figure.source,
-            f"etf-constituent-fact:{figure.row_id}",
-            figure.knowable_at,
-        )
-        reason = (
-            NO_MARKET_CAP
-            if figure.market_cap is None
-            else (NO_PRICE if figure.last_sale_price is None or figure.last_sale_price <= 0 else None)
-        )
-        if reason is None:
-            assert figure.market_cap is not None and figure.last_sale_price is not None
-            witness = figure.market_cap / figure.last_sale_price
-            if served is None:
-                reason = NO_SERVED_VALUE
-            else:
-                ratio, tol_out = served / witness, tolerance
-                res = _scalar_result(ratio, tolerance)
-    return Outcome(
-        factor_input.issuer_id,
-        OPERATOR_FIELD,
-        OPERATOR_KIND,
-        period,
-        served,
-        witness,
-        source,
-        row_ref,
-        knowable,
-        ratio,
-        tol_out,
-        res,
-        reason,
-    )
-
-
-def operator_figures(
-    connection: psycopg.Connection[Any], cutoff: datetime
-) -> tuple[dict[str, OperatorFigure], date | None]:
-    etfs = [source.etf for source in UNIVERSE_SOURCES.values() if source.index_api]
-    figures: dict[str, OperatorFigure] = {}
-    newest: date | None = None
-    for etf in etfs:
-        rows = connection.execute(
-            "select id, ticker, as_of, source, market_cap, last_sale_price, knowable_at from staging.etf_constituent_facts "
-            "where etf_symbol = %(etf)s and knowable_at <= %(cutoff)s and as_of = ("
-            "select max(as_of) from staging.etf_constituent_facts where etf_symbol = %(etf)s and knowable_at <= %(cutoff)s "
-            "and market_cap is not null and last_sale_price is not null and last_sale_price > 0) order by id",
-            {"etf": etf, "cutoff": cutoff},
-        ).fetchall()
-        for row_id, ticker, as_of, source, market_cap, last_sale_price, knowable_at in rows:
-            figures.setdefault(
-                str(ticker).upper(),
-                OperatorFigure(int(row_id), str(ticker), as_of, str(source), market_cap, last_sale_price, knowable_at),
-            )
-            newest = as_of if newest is None else max(newest, as_of)
-    return figures, newest
-
-
-def operator_outcomes(
-    connection: psycopg.Connection[Any], run_id: str, cutoff: datetime, factor_inputs: Sequence[CoreSnapshotInput]
-) -> list[Outcome]:
-    figures, list_as_of = operator_figures(connection, cutoff)
-    if list_as_of is None:
-        return []
-    tolerance = load_oracle_policy().relative_tolerance(OPERATOR_COMPARATOR)
-    tickers = run_tickers(connection, run_id)
-    return [
-        compare_listed_units(fi, figures, ticker=tickers.get(fi.listing_id), list_as_of=list_as_of, tolerance=tolerance)
-        for fi in factor_inputs
-    ]
 
 
 def _ratio_and_sign(served: Decimal, target: Decimal) -> tuple[Decimal, str | None]:
@@ -610,7 +483,6 @@ def record_oracle_outcomes(connection: psycopg.Connection[Any], run_id: str, *, 
         CoreSnapshotInput.model_validate(row[0]) for row in connection.execute(_FROZEN_FACTOR_INPUTS_SQL, (run_id,))
     ]
     outcomes = [
-        *operator_outcomes(connection, run_id, cutoff, factor_inputs),
         *independent_parse_outcomes(connection, cutoff, factor_inputs),
         *known_answer_outcomes(connection, run_id, cutoff, factor_inputs),
     ]
@@ -761,7 +633,7 @@ _SOURCE_SUBSTRING_ORIGINS = (
 
 def _resolve_row_origin_id(row: Mapping[str, Any]) -> str | None:
     oracle_kind = str(row.get("oracle_kind") or "")
-    if oracle_kind == OPERATOR_KIND or canonical_metric(str(row.get("field") or "")) == "gross_profit_per_employee":
+    if oracle_kind == "operator" or canonical_metric(str(row.get("field") or "")) == "gross_profit_per_employee":
         return None
     for key in ("origin_id", "lineage", "origin"):
         if isinstance(explicit := row.get(key), str) and explicit.startswith("origin:"):
