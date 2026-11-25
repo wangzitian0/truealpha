@@ -13,7 +13,7 @@ dependencies = [
     # check. The `otel` extra is the OTLP/HTTP exporter stack of infra2_sdk.runtime.otel
     # (#1034); it ships in every service image because every Python service starts
     # telemetry through it (init_service or init_worker).
-    "infra2-sdk[http,otel,pydantic-ai] @ https://github.com/wangzitian0/infra2-sdk/releases/download/v4.8.0/infra2_sdk-4.8.0-py3-none-any.whl",
+    "infra2-sdk[http,otel,pydantic-ai] @ https://github.com/wangzitian0/infra2-sdk/releases/download/v4.9.0/infra2_sdk-4.9.0-py3-none-any.whl",
 ]
 
 [project.scripts]
