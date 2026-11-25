@@ -206,9 +206,8 @@ jobs:
     needs: plan
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    permissions:
-      contents: read
-      packages: write
+    # No permissions block: the job inherits the caller grant. A called job that asks for
+    # more than a caller grants fails the whole run at startup (images_build grants read).
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}

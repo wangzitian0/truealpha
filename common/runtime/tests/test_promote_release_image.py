@@ -167,3 +167,17 @@ def test_a_tag_push_promotes_and_never_builds() -> None:
     assert not [s for s in images["promote"]["steps"] if "build-push-action" in str(s.get("uses", ""))]
     publish_tags = "\n".join(str(step.get("with", {}).get("tags", "")) for step in images["publish"]["steps"])
     assert "type=semver" not in publish_tags
+
+
+def test_no_called_job_asks_for_more_than_any_caller_grants() -> None:
+    """A called job above its caller grant fails the run at startup (#1878, 2026-11-25)."""
+    req = yaml.safe_load((WORKFLOWS / "ci-required.yml").read_text(encoding="utf-8"))["jobs"]
+    images = yaml.safe_load((WORKFLOWS / "release-images.yml").read_text(encoding="utf-8"))["jobs"]
+    rank = {"none": 0, "read": 1, "write": 2}
+    callers = [job for job in req.values() if job.get("uses") == "./.github/workflows/release-images.yml"]
+    assert len(callers) == 3
+    for name, job in images.items():
+        for scope, level in (job.get("permissions") or {}).items():
+            for caller in callers:
+                granted = caller.get("permissions", {}).get(scope, "none")
+                assert rank[level] <= rank[granted], (name, scope, level, granted)
