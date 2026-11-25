@@ -72,6 +72,79 @@ def connection():
         yield active
 
 
+def _govern_run(connection, strategy_run_id: str, *, capture_run_id: str | None = None) -> str:
+    if capture_run_id is None:
+        tok = uuid.uuid4().hex + "0" * 32
+        policy_id = f"pg-test-policy:{tok[:12]}"
+        sp_id = f"schedule-policy:{tok}"
+        scope_id = f"capture-scope:{tok}"
+        env_row = connection.execute("select environment from mart.environment_identity").fetchone()
+        env_name = str(env_row[0]) if env_row else "production"
+        cutoff = "2026-06-30T00:00:00Z"
+        camp_row = connection.execute(
+            "with p as (select jsonb_build_object('campaign_policy_id', %s::text, 'environment', %s::text, 'cutoff', %s::text, "
+            "'universe_refs', jsonb_build_array(jsonb_build_object('content_sha256', repeat('d', 64), 'universe_id', 'universe:topt-us-2026-03-31', 'universe_version', '2026-03-31'))) as payload) "
+            "select 'capture-campaign:' || raw.canonical_sha256(jsonb_build_object('kind', 'capture-campaign', 'identity', payload)), "
+            "raw.canonical_sha256(payload), (payload->'universe_refs')::text from p",
+            (policy_id, env_name, cutoff),
+        ).fetchone()
+        camp_id, camp_sha, urefs_json = str(camp_row[0]), str(camp_row[1]), str(camp_row[2])
+        connection.execute(
+            "insert into raw.capture_campaigns (campaign_id, content_sha256, policy_id, environment, cutoff, cutoff_canonical, universe_refs) "
+            "values (%s, %s, %s, %s, %s::timestamptz, %s, %s::jsonb)",
+            (camp_id, camp_sha, policy_id, env_name, cutoff, cutoff, urefs_json),
+        )
+        connection.execute(
+            "insert into raw.capture_schedule_policies (schedule_policy_id, content_sha256, policy_version, demanded_cadence, provider_availability_cadence, freshness_max_age, retry_policy, payload) "
+            "values (%s, %s, %s, interval '1 day', 'manual-only:v1', interval '30 days', '{}'::jsonb, '{}'::jsonb)",
+            (sp_id, tok, policy_id),
+        )
+        run_row = connection.execute(
+            "with p as (select jsonb_build_object('campaign_id', %s::text, 'run_sequence', 1, 'schedule_policy_id', %s::text, 'capture_scope_id', %s::text) as payload) "
+            "select 'capture-run:' || raw.canonical_sha256(jsonb_build_object('kind', 'capture-run', 'identity', payload)), "
+            "raw.canonical_sha256(payload) from p",
+            (camp_id, sp_id, scope_id),
+        ).fetchone()
+        capture_run_id, cap_sha = str(run_row[0]), str(run_row[1])
+        connection.execute(
+            "insert into raw.capture_runs (run_id, campaign_id, run_sequence, schedule_policy_id, capture_scope_id, content_sha256) "
+            "values (%s, %s, 1, %s, %s, %s)",
+            (capture_run_id, camp_id, sp_id, scope_id, cap_sha),
+        )
+        connection.execute(
+            "insert into staging.evidence_nodes (node_id, kind, content_sha256, valid_from, transaction_time, recorded_at) "
+            "values (%s, 'capture_run', %s, '2026-03-31', now(), now())",
+            (capture_run_id, capture_run_id.split(":", 1)[1]),
+        )
+        seq_row = connection.execute(
+            "select coalesce(max(sequence), -1) + 1 from mart.current_pointer "
+            "where environment = %s "
+            "and universe_id = 'universe:topt-us-2026-03-31' and universe_version = '2026-03-31' and factor_id = 'gross_profit_per_employee'",
+            (env_name,),
+        ).fetchone()
+        next_seq = int(seq_row[0]) if seq_row else 0
+        prev_row = connection.execute(
+            "select target_run_id from mart.current_pointer_head "
+            "where environment = %s "
+            "and universe_id = 'universe:topt-us-2026-03-31' and universe_version = '2026-03-31' and factor_id = 'gross_profit_per_employee'",
+            (env_name,),
+        ).fetchone()
+        prev_run_id = str(prev_row[0]) if prev_row and next_seq > 0 else None
+        connection.execute(
+            "insert into mart.current_pointer (pointer_id, content_sha256, environment, universe_id, universe_version, "
+            "factor_id, target_run_id, sequence, previous_run_id, advanced_at) "
+            "values (%s, %s, %s, 'universe:topt-us-2026-03-31', "
+            "'2026-03-31', 'gross_profit_per_employee', %s, %s, %s, now())",
+            (f"current-pointer:{tok}", tok, env_name, capture_run_id, next_seq, prev_run_id),
+        )
+    connection.execute(
+        "insert into mart.strategy_run_capture_bindings (capture_run_id, strategy_run_id, bound_by) "
+        "values (%s, %s, 'tick')",
+        (capture_run_id, strategy_run_id),
+    )
+    return capture_run_id
+
+
 def _insert_run(
     connection,
     run_id: str,
@@ -80,7 +153,9 @@ def _insert_run(
     executed_at: datetime,
     strategy_version: str = "v0",
     definition_sha256: str = _HASH64,
-) -> None:
+    govern: bool = True,
+    capture_run_id: str | None = None,
+) -> str | None:
     connection.execute(
         """
         insert into mart.strategy_runs (
@@ -90,6 +165,9 @@ def _insert_run(
         """,
         (run_id, _HASH64, strategy_key, strategy_version, definition_sha256, _HASH64, "preview", executed_at),
     )
+    if govern:
+        return _govern_run(connection, run_id, capture_run_id=capture_run_id)
+    return None
 
 
 def _insert_decision(connection, decision_id: str, run_id: str, *, issuer_id: str, cutoff_at: datetime) -> None:
@@ -151,7 +229,7 @@ def test_returns_the_latest_run_with_real_decisions(connection) -> None:
     strategy_key = "large_model_value_v0"
     older = "strategy-run:" + uuid.uuid4().hex + "0" * 32
     newer = "strategy-run:" + uuid.uuid4().hex + "0" * 32
-    _insert_run(connection, older, strategy_key, executed_at=datetime(2020, 1, 1, tzinfo=UTC))
+    _insert_run(connection, older, strategy_key, executed_at=datetime(2020, 1, 1, tzinfo=UTC), govern=False)
     _insert_run(connection, newer, strategy_key, executed_at=datetime.now(UTC))
     _insert_decision(
         connection,
@@ -168,7 +246,7 @@ def test_returns_the_latest_run_with_real_decisions(connection) -> None:
     assert result.source == "mart"
     assert result.corpus_sha256 == _HASH64
     assert result.strategy_run_id == newer
-    assert result.governed is False
+    assert result.governed is True
     assert len(result.decisions) == 1
     decision = result.decisions[0]
     assert decision.issuer_id == "issuer:adm"
@@ -233,8 +311,8 @@ def test_latest_run_tie_break_is_deterministic_when_executed_at_matches(connecti
     tied_at = datetime.now(UTC)
     first = "strategy-run:" + uuid.uuid4().hex + "0" * 32
     second = "strategy-run:" + uuid.uuid4().hex + "0" * 32
-    _insert_run(connection, first, strategy_key, executed_at=tied_at)
-    _insert_run(connection, second, strategy_key, executed_at=tied_at)
+    shared_capture_run_id = _insert_run(connection, first, strategy_key, executed_at=tied_at)
+    _insert_run(connection, second, strategy_key, executed_at=tied_at, capture_run_id=shared_capture_run_id)
     _insert_decision(
         connection,
         "strategy-decision:" + uuid.uuid4().hex + "0" * 32,
@@ -277,6 +355,32 @@ def test_fails_closed_on_database_unavailable() -> None:
 
     assert isinstance(result, StrategyRunUnavailable)
     assert result.reason == "database_unavailable"
+
+
+def test_fails_closed_when_served_head_is_empty() -> None:
+    import psycopg
+    from truealpha_runtime.testing import isolated_test_database
+
+    strategy_key = "large_model_value_v0"
+    run_id = "strategy-run:" + uuid.uuid4().hex + "0" * 32
+    with isolated_test_database("strategy_run_empty_head", template=None) as db:
+        db_url = str(db)
+        with psycopg.connect(db_url, autocommit=True) as isolated:
+            _insert_run(isolated, run_id, strategy_key, executed_at=datetime.now(UTC), govern=False)
+            _insert_decision(
+                isolated,
+                "strategy-decision:" + uuid.uuid4().hex + "0" * 32,
+                run_id,
+                issuer_id="issuer:adm",
+                cutoff_at=datetime(2026, 3, 31, 23, 59, 59, tzinfo=UTC),
+            )
+            head_count = isolated.execute("select count(*) from mart.served_head").fetchone()
+            assert head_count == (0,)
+        result = PostgresStrategyRunRepository(database_url=db_url).get_latest(
+            strategy_id=strategy_key, context=_context()
+        )
+    assert isinstance(result, StrategyRunUnavailable)
+    assert result.reason == "no_runs_recorded"
 
 
 def _mint_issuer_with_legacy_alias(connection) -> tuple[str, str]:

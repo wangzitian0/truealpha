@@ -164,7 +164,9 @@ def _module_sql(table: str, alias: str, cols: str, *, where_issuer: str | None =
         f"select {alias}.run_id, to_char({alias}.cutoff at time zone 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') as cutoff, {cols}, "
         f"{alias}.confidence::text as confidence, {alias}.reason_codes, {alias}.extractor, coalesce({alias}.availability_status, 'unavailable') as availability_status, "
         f"coalesce({alias}.source_evidence_status, 'degraded') as source_evidence_status, coalesce({alias}.factor_validation_status, 'not_evaluated') as factor_validation_status "
-        f"from {table} {alias} where {issuer_pred} and {alias}.run_id in (select h.run_id from mart.served_head h where h.run_id is not null) "
+        f"from {table} {alias} where {issuer_pred} and {alias}.run_id in ("
+        "select h.run_id from mart.served_head h where h.run_id is not null and not starts_with(h.universe_id, 'universe:canary-')"
+        ") "
         f"order by ({alias}.availability_status = 'available') desc, {alias}.cutoff desc, {alias}.created_at desc limit 1"
     )
 

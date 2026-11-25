@@ -34,15 +34,17 @@ LATEST_RUN_SQL = """
     ),
     chosen_run as (
         select r.strategy_run_id, r.corpus_sha256, r.executed_at,
-               exists (
-                   select 1 from head_scope hs
-                   join mart.strategy_run_capture b on b.capture_run_id = hs.run_id
-                   where b.strategy_run_id = r.strategy_run_id
-               ) as is_governed,
+               true as is_governed,
                r.strategy_version, r.definition_content_sha256
         from mart.strategy_runs r
         where r.strategy_key = %s
-        order by is_governed desc, r.executed_at desc, r.created_at desc, r.strategy_run_id desc
+          and exists (
+              select 1 from head_scope hs
+              join mart.strategy_run_capture b on b.capture_run_id = hs.run_id
+              where hs.run_id is not null
+                and b.strategy_run_id = r.strategy_run_id
+          )
+        order by r.executed_at desc, r.created_at desc, r.strategy_run_id desc
         limit 1
     ),
     top_head as (
@@ -59,9 +61,9 @@ LATEST_RUN_SQL = """
            cr.definition_content_sha256,
            th.run_id as head_run_id,
            th.availability as head_availability,
-           coalesce(matched.age_hours, th.age_hours) as head_age_hours,
-           coalesce(matched.limit_hours, th.limit_hours) as head_limit_hours,
-           coalesce(matched.freshness, th.freshness) as head_freshness
+           matched.age_hours as head_age_hours,
+           matched.limit_hours as head_limit_hours,
+           matched.freshness as head_freshness
     from (select 1 as anchor) a
     left join top_head th on true
     left join chosen_run cr on true
@@ -69,7 +71,8 @@ LATEST_RUN_SQL = """
         select hs.age_hours, hs.limit_hours, hs.freshness
         from head_scope hs
         join mart.strategy_run_capture b on b.capture_run_id = hs.run_id
-        where b.strategy_run_id = cr.strategy_run_id
+        where hs.run_id is not null
+          and b.strategy_run_id = cr.strategy_run_id
         order by hs.advanced_at desc, hs.universe_id desc, hs.universe_version desc
         limit 1
     ) matched on true

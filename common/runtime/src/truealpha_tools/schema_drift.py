@@ -104,6 +104,18 @@ CATEGORIES: tuple[Category, ...] = (
         "select n.nspname, c.relname, s.seqstart, s.seqincrement, s.seqmin, s.seqmax, s.seqcycle from pg_sequence as s "
         f"join pg_class as c on c.oid = s.seqrelid {_NS_C}{_W} order by 1, 2",
     ),
+    Category(
+        "rls",
+        2,
+        f"select n.nspname, c.relname, c.relrowsecurity, c.relforcerowsecurity from pg_class as c {_NS_C}"
+        f"{_W} and c.relkind in ('r', 'p') order by 1, 2",
+    ),
+    Category(
+        "policies",
+        3,
+        "select schemaname, tablename, policyname, permissive, roles::text, cmd, qual, with_check "
+        "from pg_policies where schemaname = any(%(schemas)s) order by 1, 2, 3",
+    ),
 )
 
 Fingerprint = dict[str, dict[tuple[Any, ...], tuple[Any, ...]]]

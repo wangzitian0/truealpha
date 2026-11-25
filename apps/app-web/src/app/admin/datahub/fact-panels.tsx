@@ -113,6 +113,10 @@ export function DatahubFactPanels({ stats }: { stats: Record<string, unknown> })
   const backfillHealth = (stats.backfill_health ?? []) as Record<string, unknown>[];
   const triggerQueue = (stats.trigger_queue ?? []) as Record<string, unknown>[];
   const rollbackRequests = (stats.rollback_requests ?? []) as Record<string, unknown>[];
+  const dbHygiene = (stats.db_hygiene ?? {}) as Record<string, unknown>;
+  const zeroScanIndexes = (dbHygiene.zero_scan_indexes ?? []) as Record<string, unknown>[];
+  const idleTables = (dbHygiene.idle_tables ?? []) as Record<string, unknown>[];
+  const statsReset = dbHygiene.stats_reset as string | null | undefined;
 
   return (
     <div className="space-y-8">
@@ -138,7 +142,20 @@ export function DatahubFactPanels({ stats }: { stats: Record<string, unknown> })
         <h2 className="text-lg font-semibold">Served heads & pipeline artifacts</h2>
         <ResearchTable
           caption="Served heads"
-          headers={["Universe", "Version", "Factor", "Seq", "Freshness", "Availability", "Age / Limit (h)", "Served run", "Head run", "Staleness reason"]}
+          headers={[
+            "Universe",
+            "Version",
+            "Factor",
+            "Seq",
+            "Freshness",
+            "Availability",
+            "Age / Limit (h)",
+            "Served run",
+            "Head run",
+            "Served to",
+            "Strategy run",
+            "Staleness reason",
+          ]}
         >
           {servedHeads.map((h, i) => (
             <tr key={`${String(h.universe_id ?? "")}-${i}`} className="border-t border-border font-mono text-xs">
@@ -154,6 +171,8 @@ export function DatahubFactPanels({ stats }: { stats: Record<string, unknown> })
               </td>
               <td className="px-3 py-2">{h.run_id ? formatShortSha(String(h.run_id)) : "withheld"}</td>
               <td className="px-3 py-2">{formatShortSha(h.head_run_id as string | null | undefined)}</td>
+              <td className="px-3 py-2">{safeCell(h.served_to)}</td>
+              <td className="px-3 py-2">{formatShortSha(h.bound_strategy_run_id as string | null | undefined)}</td>
               <td className="px-3 py-2">{safeCell(h.staleness_reason)}</td>
             </tr>
           ))}
@@ -318,6 +337,29 @@ export function DatahubFactPanels({ stats }: { stats: Record<string, unknown> })
             rb.consumed_at ? `consumed (${formatShortSha(rb.result_pointer_id as string | null | undefined)})` : "pending",
             safeCell(rb.requested_at),
             safeCell(rb.reason),
+          ]),
+        ]}
+      />
+
+      <DataSection
+        title={`DB hygiene facts${statsReset ? ` (stats reset: ${statsReset})` : ""}`}
+        headers={["Kind", "Schema", "Table", "Index", "Live tuples / Scans", "Size (bytes)"]}
+        rows={[
+          ...zeroScanIndexes.map((idx) => [
+            "zero-scan-index",
+            safeCell(idx.schemaname),
+            safeCell(idx.table_name),
+            safeCell(idx.index_name),
+            "0",
+            safeCell(idx.size_bytes),
+          ]),
+          ...idleTables.map((tbl) => [
+            "idle-table",
+            safeCell(tbl.schemaname),
+            safeCell(tbl.table_name),
+            formatCell(null),
+            `${safeCell(tbl.n_live_tup)} live / ${safeCell(tbl.total_scans)} scans`,
+            safeCell(tbl.size_bytes),
           ]),
         ]}
       />

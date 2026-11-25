@@ -55,6 +55,77 @@ def connection():
         yield active
 
 
+def _govern_run(connection, strategy_run_id: str) -> None:
+    tok = uuid.uuid4().hex + "0" * 32
+    policy_id = f"mart-test-policy:{tok[:12]}"
+    sp_id = f"schedule-policy:{tok}"
+    scope_id = f"capture-scope:{tok}"
+    env_row = connection.execute("select environment from mart.environment_identity").fetchone()
+    env_name = str(env_row[0]) if env_row else "production"
+    cutoff = "2026-06-30T00:00:00Z"
+    camp_row = connection.execute(
+        "with p as (select jsonb_build_object('campaign_policy_id', %s::text, 'environment', %s::text, 'cutoff', %s::text, "
+        "'universe_refs', jsonb_build_array(jsonb_build_object('content_sha256', repeat('d', 64), 'universe_id', 'universe:topt-us-2026-03-31', 'universe_version', '2026-03-31'))) as payload) "
+        "select 'capture-campaign:' || raw.canonical_sha256(jsonb_build_object('kind', 'capture-campaign', 'identity', payload)), "
+        "raw.canonical_sha256(payload), (payload->'universe_refs')::text from p",
+        (policy_id, env_name, cutoff),
+    ).fetchone()
+    camp_id, camp_sha, urefs_json = str(camp_row[0]), str(camp_row[1]), str(camp_row[2])
+    connection.execute(
+        "insert into raw.capture_campaigns (campaign_id, content_sha256, policy_id, environment, cutoff, cutoff_canonical, universe_refs) "
+        "values (%s, %s, %s, %s, %s::timestamptz, %s, %s::jsonb)",
+        (camp_id, camp_sha, policy_id, env_name, cutoff, cutoff, urefs_json),
+    )
+    connection.execute(
+        "insert into raw.capture_schedule_policies (schedule_policy_id, content_sha256, policy_version, demanded_cadence, provider_availability_cadence, freshness_max_age, retry_policy, payload) "
+        "values (%s, %s, %s, interval '1 day', 'manual-only:v1', interval '30 days', '{}'::jsonb, '{}'::jsonb)",
+        (sp_id, tok, policy_id),
+    )
+    run_row = connection.execute(
+        "with p as (select jsonb_build_object('campaign_id', %s::text, 'run_sequence', 1, 'schedule_policy_id', %s::text, 'capture_scope_id', %s::text) as payload) "
+        "select 'capture-run:' || raw.canonical_sha256(jsonb_build_object('kind', 'capture-run', 'identity', payload)), "
+        "raw.canonical_sha256(payload) from p",
+        (camp_id, sp_id, scope_id),
+    ).fetchone()
+    cap_id, cap_sha = str(run_row[0]), str(run_row[1])
+    connection.execute(
+        "insert into raw.capture_runs (run_id, campaign_id, run_sequence, schedule_policy_id, capture_scope_id, content_sha256) "
+        "values (%s, %s, 1, %s, %s, %s)",
+        (cap_id, camp_id, sp_id, scope_id, cap_sha),
+    )
+    connection.execute(
+        "insert into staging.evidence_nodes (node_id, kind, content_sha256, valid_from, transaction_time, recorded_at) "
+        "values (%s, 'capture_run', %s, '2026-03-31', now(), now())",
+        (cap_id, cap_id.split(":", 1)[1]),
+    )
+    connection.execute(
+        "insert into mart.strategy_run_capture_bindings (capture_run_id, strategy_run_id, bound_by) "
+        "values (%s, %s, 'tick')",
+        (cap_id, strategy_run_id),
+    )
+    seq_row = connection.execute(
+        "select coalesce(max(sequence), -1) + 1 from mart.current_pointer "
+        "where environment = %s "
+        "and universe_id = 'universe:topt-us-2026-03-31' and universe_version = '2026-03-31' and factor_id = 'gross_profit_per_employee'",
+        (env_name,),
+    ).fetchone()
+    next_seq = int(seq_row[0]) if seq_row else 0
+    prev_row = connection.execute(
+        "select target_run_id from mart.current_pointer_head "
+        "where environment = %s "
+        "and universe_id = 'universe:topt-us-2026-03-31' and universe_version = '2026-03-31' and factor_id = 'gross_profit_per_employee'",
+        (env_name,),
+    ).fetchone()
+    prev_run_id = str(prev_row[0]) if prev_row and next_seq > 0 else None
+    connection.execute(
+        "insert into mart.current_pointer (pointer_id, content_sha256, environment, universe_id, universe_version, "
+        "factor_id, target_run_id, sequence, previous_run_id, advanced_at) "
+        "values (%s, %s, %s, 'universe:topt-us-2026-03-31', "
+        "'2026-03-31', 'gross_profit_per_employee', %s, %s, %s, now())",
+        (f"current-pointer:{tok}", tok, env_name, cap_id, next_seq, prev_run_id),
+    )
+
+
 def _insert_run(connection, run_id: str, strategy_key: str) -> None:
     connection.execute(
         """
@@ -65,6 +136,7 @@ def _insert_run(connection, run_id: str, strategy_key: str) -> None:
         """,
         (run_id, _HASH64, strategy_key, "v0", _HASH64, _HASH64, "preview", datetime.now(UTC)),
     )
+    _govern_run(connection, run_id)
 
 
 def _insert_decision(connection, decision_id: str, run_id: str, *, issuer_id: str, rank: int | None) -> None:

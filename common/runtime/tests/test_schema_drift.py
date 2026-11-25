@@ -89,6 +89,7 @@ def test_a_database_that_ran_the_chain_matches_the_chain(clone: str, reference: 
     # mode this whole file exists to refuse.
     assert counts["relations"] > drift.MINIMUM_REFERENCE_RELATIONS, counts
     assert counts["columns"] > 500 and counts["constraints"] > 100, counts
+    assert counts["rls"] > 50 and counts["policies"] >= 5, counts
 
 
 def test_the_cli_exits_zero_on_a_matching_database(clone: str, reference: str) -> None:
@@ -127,6 +128,21 @@ def test_a_changed_column_type_is_named(clone: str, reference: str) -> None:
     _execute(clone, f"alter table {DRIFTED_TABLE} alter column symbol type varchar(8)")
     report, _ = drift.compare(clone, reference)
     assert any(f"{DRIFTED_TABLE}.symbol" in line and "DIFFERS" in line for line in report), report
+
+
+def test_rls_disabled_drift_is_named(clone: str, reference: str) -> None:
+    _execute(clone, "alter table app.conversations disable row level security")
+    report, _ = drift.compare(clone, reference)
+    assert any(line.startswith("rls: DIFFERS") and "app.conversations" in line for line in report), report
+
+
+def test_missing_policy_drift_is_named(clone: str, reference: str) -> None:
+    _execute(clone, "drop policy conversations_owner_isolation on app.conversations")
+    report, _ = drift.compare(clone, reference)
+    assert any(
+        line.startswith("policies: MISSING") and "app.conversations.conversations_owner_isolation" in line
+        for line in report
+    ), report
 
 
 # --- the check cannot pass by comparing against nothing --------------------------------

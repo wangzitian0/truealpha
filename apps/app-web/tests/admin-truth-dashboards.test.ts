@@ -97,6 +97,9 @@ __setApiFetch(async (input) => {
             question_coverage: [
               {
                 universe_id: "universe:topt-us-v1",
+                report_run_id: RUN_ID,
+                served_head_run_id: RUN_ID,
+                matches_served_head: true,
                 cutoff: "2026-11-25",
                 created_at: "2026-11-25T01:00:00Z",
                 payload: {
@@ -115,7 +118,7 @@ __setApiFetch(async (input) => {
               { universe_id: "universe:topt-us-v1", subject_id: ISSUER_ID, field: "revenue", period: "2025-12-31", oracle_kind: "filing", source: "sec", served_value: "100", oracle_value: "110", ratio: "0.09", tolerance: "0.02", reason: "mismatch", compared_at: "2026-11-25T00:00:00Z" },
             ],
             served_heads: [
-              { universe_id: "universe:topt-us-v1", universe_version: "2026-11-01", factor_id: "gross_profit_per_employee", sequence: 4, freshness: "fresh", availability: "available", age_hours: 14.5, limit_hours: 72.0, run_id: RUN_ID, head_run_id: RUN_ID, staleness_reason: null },
+              { universe_id: "universe:topt-us-v1", universe_version: "2026-11-01", factor_id: "gross_profit_per_employee", sequence: 4, freshness: "fresh", availability: "available", age_hours: 14.5, limit_hours: 72.0, run_id: RUN_ID, head_run_id: RUN_ID, served_to: "/research/rankings", bound_strategy_run_id: "strategy-run:" + "c".repeat(64), staleness_reason: null },
             ],
             served_artifacts: [
               { artifact_key: "topt_gppe", lane: "capture", schedule_name: "topt_daily", universe_like: "universe:topt-%", family: "daily_capture", served_to: "/research/rankings", wired: true },
@@ -135,6 +138,11 @@ __setApiFetch(async (input) => {
             backfill_health: [{ id: 1, source: "sec", metric: "backfill_lag_hours", value: "0", logged_at: "2026-11-25T00:00:00Z", note: "healthy" }],
             trigger_queue: [{ request_id: 11, job_name: "qqq_live_pipeline", force_fetch: false, requested_at: "2026-11-25T00:10:00Z", consumed_at: "2026-11-25T00:10:25Z", launched_run_key: "manual:d1", requested_by: "principal:admin" }],
             rollback_requests: [{ request_id: 3, universe_id: "universe:topt-us-v1", target_run_id: RUN_ID, reason: "revert spike", requested_at: "2026-11-25T00:20:00Z", consumed_at: null, result_pointer_id: null }],
+            db_hygiene: {
+              stats_reset: "2026-11-25T00:00:00Z",
+              zero_scan_indexes: [{ schemaname: "mart", table_name: "demo_tbl", index_name: "idx_demo_unused", size_bytes: 16384 }],
+              idle_tables: [{ schemaname: "app", table_name: "conversations", n_live_tup: 0, total_scans: 0, size_bytes: 8192 }],
+            },
           };
     return new Response(JSON.stringify(payload), { status: 200, headers: { "Content-Type": "application/json" } });
   }
@@ -312,6 +320,7 @@ try {
   assertCleanHtml(dhRich, "AdminDatahubPage(rich)");
   for (const needle of [
     "Question coverage matrix",
+    "Aligned",
     "Question coverage detail (layers &amp; deltas)",
     "95/100",
     "world_absence=3",
@@ -326,6 +335,9 @@ try {
     "glm-4.5",
     "Backfill health &amp; queues",
     "backfill_lag_hours",
+    "DB hygiene facts",
+    "idx_demo_unused",
+    "conversations",
   ]) {
     assert(dhRich.includes(needle), `AdminDatahubPage missing ${needle}`);
   }

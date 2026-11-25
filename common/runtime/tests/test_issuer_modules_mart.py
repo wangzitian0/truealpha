@@ -137,6 +137,19 @@ def _seed_strategy_decision(connection: psycopg.Connection, *, peg: str, peg_ran
             peg_rank,
         ),
     )
+    tok = uuid.uuid4().hex + "0" * 32
+    connection.execute(
+        "insert into mart.strategy_run_capture_bindings (capture_run_id, strategy_run_id, bound_by) "
+        "values (%s, %s, 'tick') on conflict do nothing",
+        (CANON["served_run_id"], run_id),
+    )
+    connection.execute(
+        "insert into mart.current_pointer (pointer_id, content_sha256, environment, universe_id, universe_version, "
+        "factor_id, target_run_id, sequence, previous_run_id, advanced_at) "
+        "values (%s, %s, (select environment from mart.environment_identity), 'universe:topt-us-2026-03-31', "
+        "%s, 'gross_profit_per_employee', %s, 0, null, now())",
+        (f"current-pointer:{tok}", tok, f"v1-{tok[:8]}", CANON["served_run_id"]),
+    )
 
 
 def _context() -> AccessContext:

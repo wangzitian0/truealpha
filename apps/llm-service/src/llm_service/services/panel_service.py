@@ -31,21 +31,12 @@ _EXCLUSION_LABELS: dict[str, str] = {
 }
 
 
-def served_run_predicate(column: str) -> str:
-    return f"{column} in (select h.run_id from mart.served_head h where h.run_id is not null)"
-
-
-def served_or_empty_head_predicate(column: str, universe_prefix: str | None = None) -> str:
-    """Require a governed `mart.served_head` match whenever heads exist for `universe_prefix`
-    (or any universe when None), failing closed (0 rows, no stale fallback) when `unavailable`."""
-    if universe_prefix:
-        return (
-            f"({column} in (select h.run_id from mart.served_head h where starts_with(h.universe_id, '{universe_prefix}') and h.run_id is not null)"
-            f" or not exists (select 1 from mart.served_head h where starts_with(h.universe_id, '{universe_prefix}')))"
-        )
+def served_run_predicate(column: str, universe_prefix: str | None = None) -> str:
+    """Require a non-withheld non-canary `mart.served_head` match, failing closed when empty."""
+    prefix_filter = f"starts_with(h.universe_id, '{universe_prefix}') and " if universe_prefix else ""
     return (
-        f"({column} in (select h.run_id from mart.served_head h where h.run_id is not null)"
-        f" or not exists (select 1 from mart.served_head))"
+        f"{column} in (select h.run_id from mart.served_head h "
+        f"where {prefix_filter}h.run_id is not null and not starts_with(h.universe_id, 'universe:canary-'))"
     )
 
 
@@ -488,6 +479,5 @@ __all__ = [
     "load_wide_panel_coverage",
     "metric_node_values",
     "resolve_governed_head_run_id",
-    "served_or_empty_head_predicate",
     "served_run_predicate",
 ]

@@ -306,6 +306,37 @@ def test_real_postgres_auth_admin_ledger_documents_rls_and_served_head_withholdi
                     (f"strategy-decision:{ssha}", ssha, srun, issuer, cut),
                 )
             old_cap, new_cap = caps
+            conn.execute(
+                "insert into mart.fund_virtual_company (run_id, fund_id, fund_name, report_period, transaction_time, "
+                "cutoff, definition_version, definition_sha256, weighted_valuation_gap, valuation_basis, "
+                "total_weight_pct, resolved_weight_pct, valued_weight_pct, lines, valued_lines, confidence, "
+                "reason_codes, availability_status, source_evidence_status, factor_validation_status) "
+                "values (%s, 'etf:series:ZZCI', 'CI Fund', '2026-06-30', '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z', 'v0', "
+                "%s, '0.4200', 'price_to_gross_profit', '99', '99', '90', 2, 2, '0.9', '{}', 'available', 'verified', 'not_evaluated')",
+                (old_cap, "c" * 64),
+            )
+            conn.execute(
+                "insert into mart.issuer_theme_purity (run_id, issuer_id, cik, theme_id, theme, definition_version, definition_sha256, "
+                "cutoff, period_end, partition_id, theme_share, consolidated_revenue, in_theme_revenue, out_of_theme_revenue, "
+                "unclassified_revenue, partition_residual, segments, confidence, reason_codes, extractor, availability_status, "
+                "source_evidence_status, factor_validation_status) "
+                "values (%s, %s, 4242, 'ai-infra', 'AI-INFRA', 'v0', %s, '2026-06-01T00:00:00Z', '2025-12-31', %s, '0.5', '100', '50', '50', '0', '0', "
+                "2, '0.9', '{}', 'rule:test', 'available', 'verified', 'not_evaluated')",
+                (old_cap, issuer, "a" * 64, f"segment-partition:{'b' * 64}"),
+            )
+            conn.commit()
+
+        # Empty served_head (0 rows) must fail closed across strategy, theme, and ETF outputs
+        empty_profile = entities_service.get_company_profile_payload(issuer_id=issuer, database_url=db_url)
+        assert empty_profile["strategy_decision"] is None and empty_profile["theme_purity"] == []
+        assert entities_service.get_themes_overview(database_url=db_url).groups == []
+        assert entities_service.get_theme_purity_leaderboard(theme_id="ai-infra", database_url=db_url)["count"] == 0
+        empty_etf = entities_service.get_etf_profile_payload(fund_id="etf:series:ZZCI", database_url=db_url)
+        assert empty_etf["weighted_valuation_gap"] is None
+        assert empty_etf["holdings"] == []
+        assert empty_etf["availability_status"] == "unavailable"
+
+        with psycopg.connect(db_url) as conn:
             # Set current_pointer to stale (>30d -> availability='unavailable') new_cap for both strategy and fund_consolidation
             conn.execute(
                 "insert into mart.current_pointer (pointer_id, content_sha256, environment, universe_id, "
@@ -324,24 +355,6 @@ def test_real_postgres_auth_admin_ledger_documents_rls_and_served_head_withholdi
                     new_cap,
                     old_cap,
                 ),
-            )
-            conn.execute(
-                "insert into mart.fund_virtual_company (run_id, fund_id, fund_name, report_period, transaction_time, "
-                "cutoff, definition_version, definition_sha256, weighted_valuation_gap, valuation_basis, "
-                "total_weight_pct, resolved_weight_pct, valued_weight_pct, lines, valued_lines, confidence, "
-                "reason_codes, availability_status, source_evidence_status, factor_validation_status) "
-                "values (%s, 'etf:series:ZZCI', 'CI Fund', '2026-06-30', '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z', 'v0', "
-                "%s, '0.4200', 'price_to_gross_profit', '99', '99', '90', 2, 2, '0.9', '{}', 'available', 'verified', 'not_evaluated')",
-                (old_cap, "c" * 64),
-            )
-            conn.execute(
-                "insert into mart.issuer_theme_purity (run_id, issuer_id, cik, theme_id, theme, definition_version, definition_sha256, "
-                "cutoff, period_end, partition_id, theme_share, consolidated_revenue, in_theme_revenue, out_of_theme_revenue, "
-                "unclassified_revenue, partition_residual, segments, confidence, reason_codes, extractor, availability_status, "
-                "source_evidence_status, factor_validation_status) "
-                "values (%s, %s, 4242, 'ai-infra', 'AI-INFRA', 'v0', %s, '2026-06-01T00:00:00Z', '2025-12-31', %s, '0.5', '100', '50', '50', '0', '0', "
-                "2, '0.9', '{}', 'rule:test', 'available', 'verified', 'not_evaluated')",
-                (old_cap, issuer, "a" * 64, f"segment-partition:{'b' * 64}"),
             )
             conn.commit()
 
@@ -368,6 +381,10 @@ def test_real_postgres_auth_admin_ledger_documents_rls_and_served_head_withholdi
         dh_json = dh.json()
         assert "capture_runs" in dh_json and "runs" not in dh_json
         assert "heads" not in dh_json and "served_heads" in dh_json and "nightly_verdicts" in dh_json
+        assert len(dh_json["served_heads"]) >= 2, dh_json["served_heads"]
+        assert any(h.get("bound_strategy_run_id") == new_run for h in dh_json["served_heads"]), dh_json["served_heads"]
+        assert "db_hygiene" in dh_json and "stats_reset" in dh_json["db_hygiene"]
+        assert "zero_scan_indexes" in dh_json["db_hygiene"] and "idle_tables" in dh_json["db_hygiene"]
         cov = dh_json["ledger_coverage"][0]
         assert cov["by_reason"] == {"probe": 2} and cov["keys_twice"] == 1
 
@@ -375,6 +392,7 @@ def test_real_postgres_auth_admin_ledger_documents_rls_and_served_head_withholdi
         assert ops.status_code == 200
         ops_json = ops.json()
         assert "pointers" not in ops_json and "quota_today" not in ops_json
+        assert len(ops_json["served_heads"]) >= 2, ops_json["served_heads"]
 
         created = client.post(
             "/api/v1/library/documents", json={"source_artifact_id": "note:rls", "content": "rls-body"}

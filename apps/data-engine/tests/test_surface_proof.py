@@ -765,8 +765,8 @@ def test_the_proof_and_the_holdings_and_coverage_readers_select_the_same_rows() 
 
     coverage_svc = " ".join(_governed_latest_per_universe_sql().split())
     coverage_py = " ".join(surface_proof._COVERAGE_HEAD_SQL.split())
-    assert coverage_svc.startswith("select distinct on (universe_id) ")
-    assert coverage_py.startswith("select distinct on (universe_id) ")
+    assert coverage_svc.startswith("select distinct on (r.universe_id) ")
+    assert coverage_py.startswith("select distinct on (r.universe_id) ")
     assert coverage_svc.split(" from ", 1)[1] == coverage_py.split(" from ", 1)[1]
 
 
@@ -784,6 +784,24 @@ def _governed_latest_per_universe_sql() -> str:
     return match.group("sql").replace("{table}", "mart.question_coverage_report").replace("{extra_cols}", "")
 
 
+def _seed_governed_theme_head(
+    connection, *, run_id: str, universe_id: str, sequence: int, previous_run_id: str | None
+) -> None:
+    digest = run_id.split(":", 1)[1]
+    connection.execute(
+        "insert into staging.evidence_nodes (node_id, kind, content_sha256, valid_from, transaction_time, recorded_at) "
+        "values (%s, 'capture_run', %s, '2026-03-31', now(), now()) on conflict (node_id) do nothing",
+        (run_id, digest),
+    )
+    connection.execute(
+        "insert into mart.current_pointer (pointer_id, content_sha256, environment, universe_id, "
+        "universe_version, factor_id, target_run_id, sequence, previous_run_id, advanced_at) "
+        "values (%s, %s, (select environment from mart.environment_identity), %s, 'v1', "
+        "'gross_profit_per_employee', %s, %s, %s, now())",
+        (f"current-pointer:{digest}", digest, universe_id, run_id, sequence, previous_run_id),
+    )
+
+
 def test_a_run_with_only_fill_rows_is_not_populated_for_the_proof_and_the_theme_reader() -> None:
     fill_only, populated = ("capture-run:" + digit * 64 for digit in "fe")
     connection = _db()
@@ -793,6 +811,19 @@ def test_a_run_with_only_fill_rows_is_not_populated_for_the_proof_and_the_theme_
 
         assert surface_proof._exists(connection, surface_proof._THEME_ROWS_SQL, (populated,)) is True
         assert surface_proof._exists(connection, surface_proof._THEME_ROWS_SQL, (fill_only,)) is False
+        # Fail-closed when mart.served_head is empty
+        for name, query in (
+            ("proof", surface_proof._THEMES_HEAD_SQL),
+            ("App reader", _service_query("THEME_LATEST_RUN_SQL")),
+        ):
+            assert connection.execute(query).fetchone() is None, f"{name} must fail closed on empty served_head"
+
+        _seed_governed_theme_head(
+            connection, run_id=fill_only, universe_id="universe:topt-us-2026-03-31", sequence=0, previous_run_id=None
+        )
+        _seed_governed_theme_head(
+            connection, run_id=populated, universe_id="universe:qqq-us-2026-09-30", sequence=0, previous_run_id=None
+        )
         for name, query in (
             ("proof", surface_proof._THEMES_HEAD_SQL),
             ("App reader", _service_query("THEME_LATEST_RUN_SQL")),

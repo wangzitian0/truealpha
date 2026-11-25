@@ -25,21 +25,24 @@ LEDGER_COVERAGE_DAYS = 8
 
 def governed_latest_per_universe_sql(table: str, extra_cols: str = "") -> str:
     return f"""
-  select distinct on (universe_id) universe_id{extra_cols}, cutoff::text, created_at::text, payload
+  select distinct on (r.universe_id)
+         r.universe_id{extra_cols},
+         r.run_id as report_run_id,
+         coalesce(h.run_id, h.head_run_id) as served_head_run_id,
+         (h.run_id is not null and r.run_id = h.run_id) as matches_served_head,
+         r.cutoff::text, r.created_at::text, r.payload
   from {table} r
-  where universe_id in (select universe_id from mart.served_head)
-  order by universe_id,
-           exists (
-             select 1 from mart.served_head h
-             where h.universe_id = r.universe_id
-               and coalesce(h.run_id, h.head_run_id) = r.run_id
-           ) desc,
-           created_at desc
+  join mart.served_head h on h.universe_id = r.universe_id
+  where h.factor_id = 'gross_profit_per_employee'
+    and not starts_with(h.universe_id, 'universe:canary-')
+  order by r.universe_id,
+           (r.run_id = coalesce(h.run_id, h.head_run_id)) desc,
+           r.created_at desc
 """
 
 
 QUESTION_COVERAGE_SQL = governed_latest_per_universe_sql("mart.question_coverage_report")
-CONFIDENCE_REPORT_SQL = governed_latest_per_universe_sql("mart.datahub_confidence_report", ", run_id")
+CONFIDENCE_REPORT_SQL = governed_latest_per_universe_sql("mart.datahub_confidence_report", ", r.run_id")
 ORACLE_OUTCOMES_SQL = """
   with deduped as (
     select distinct on (
@@ -105,13 +108,23 @@ ORACLE_DISAGREEMENTS_SQL = """
 """
 
 SERVED_HEADS_SQL = """
-  select environment, universe_id, universe_version, factor_id, sequence,
-         head_run_id, run_id, artifact_key, family,
-         age_hours::float as age_hours, limit_hours::float as limit_hours,
-         freshness, availability, staleness_reason,
-         to_char(advanced_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as advanced_at
-  from mart.served_head
-  order by universe_id, factor_id
+  select h.environment, h.universe_id, h.universe_version, h.factor_id, h.sequence,
+         h.head_run_id, h.run_id, h.artifact_key, h.family,
+         sa.served_to,
+         b.strategy_run_id as bound_strategy_run_id,
+         h.age_hours::float as age_hours, h.limit_hours::float as limit_hours,
+         h.freshness, h.availability, h.staleness_reason,
+         to_char(h.advanced_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as advanced_at
+  from mart.served_head h
+  left join mart.served_artifact sa on sa.artifact_key = h.artifact_key
+  left join lateral (
+    select b.strategy_run_id
+    from mart.strategy_run_capture_bindings b
+    where b.capture_run_id = coalesce(h.run_id, h.head_run_id)
+    order by b.bound_at desc, b.strategy_run_id desc
+    limit 1
+  ) b on true
+  order by h.universe_id, h.factor_id
 """
 
 NIGHTLY_VERDICTS_SQL = """
@@ -231,6 +244,7 @@ class DatahubStatsResponse(BaseModel):
     backfill_health: list[dict[str, Any]] = Field(default_factory=list)
     trigger_queue: list[dict[str, Any]] = Field(default_factory=list)
     rollback_requests: list[dict[str, Any]] = Field(default_factory=list)
+    db_hygiene: dict[str, Any] = Field(default_factory=dict)
 
 
 class TriggerPipelineRequest(BaseModel):
@@ -278,19 +292,19 @@ def _optional_rows(
     *,
     table_check: str | None = None,
 ) -> list[dict[str, Any]]:
-    if table_check:
-        cur.execute("select to_regclass(%s) as reg", (table_check,))
-        reg_row = cur.fetchone()
-        if reg_row is not None and reg_row.get("reg") is None:
-            return []
     try:
-        if params:
-            cur.execute(sql, params)
-        else:
-            cur.execute(sql)
-        return [dict(r) for r in cur.fetchall()]
+        with cur.connection.transaction():
+            if table_check:
+                cur.execute("select to_regclass(%s) as reg", (table_check,))
+                reg_row = cur.fetchone()
+                if reg_row is not None and reg_row.get("reg") is None:
+                    return []
+            if params:
+                cur.execute(sql, params)
+            else:
+                cur.execute(sql)
+            return [dict(r) for r in cur.fetchall()]
     except (psycopg.errors.UndefinedTable, psycopg.errors.InsufficientPrivilege):
-        cur.connection.rollback()
         return []
 
 
@@ -625,6 +639,36 @@ def get_datahub_stats(*, database_url: str | None = None) -> DatahubStatsRespons
         )
         trigger_queue = _optional_rows(cur, TRIGGER_QUEUE_SQL)
         rollback_requests = _optional_rows(cur, ROLLBACK_QUEUE_SQL)
+        stats_reset_rows = _optional_rows(
+            cur,
+            "select to_char(stats_reset at time zone 'utc', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') as stats_reset "
+            "from pg_stat_database where datname = current_database()",
+        )
+        zero_scan_indexes = _optional_rows(
+            cur,
+            "select s.schemaname, s.relname as table_name, s.indexrelname as index_name, "
+            "pg_relation_size(s.indexrelid)::bigint as size_bytes "
+            "from pg_stat_user_indexes s "
+            "join pg_index i on i.indexrelid = s.indexrelid "
+            "where s.schemaname in ('raw', 'staging', 'mart', 'app') "
+            "  and not i.indisprimary and not i.indisunique and s.idx_scan = 0 "
+            "order by pg_relation_size(s.indexrelid) desc, s.schemaname, s.relname, s.indexrelname limit 50",
+        )
+        idle_tables = _optional_rows(
+            cur,
+            "select schemaname, relname as table_name, coalesce(n_live_tup, 0)::bigint as n_live_tup, "
+            "(coalesce(seq_scan, 0) + coalesce(idx_scan, 0))::bigint as total_scans, "
+            "pg_total_relation_size(relid)::bigint as size_bytes "
+            "from pg_stat_user_tables "
+            "where schemaname in ('raw', 'staging', 'mart', 'app') "
+            "  and coalesce(seq_scan, 0) = 0 and coalesce(idx_scan, 0) = 0 "
+            "order by n_live_tup desc, pg_total_relation_size(relid) desc, schemaname, relname limit 50",
+        )
+        db_hygiene = {
+            "stats_reset": stats_reset_rows[0].get("stats_reset") if stats_reset_rows else None,
+            "zero_scan_indexes": zero_scan_indexes,
+            "idle_tables": idle_tables,
+        }
         validation = _rows(
             cur,
             f"select 'plausibility sign checks' as check, "
@@ -662,6 +706,7 @@ def get_datahub_stats(*, database_url: str | None = None) -> DatahubStatsRespons
             backfill_health=backfill_health,
             trigger_queue=trigger_queue,
             rollback_requests=rollback_requests,
+            db_hygiene=db_hygiene,
         )
 
     return with_ops_reader(_q, database_url=database_url)
@@ -776,9 +821,20 @@ def request_head_rollback(
 
 
 def build_datahub_fact_diff(stats: DatahubStatsResponse) -> dict[str, Any]:
-    """Summarize per-universe question deltas and head withhold/staleness state for AI/MCP consumers."""
+    """Summarize per-universe question deltas and head withhold/staleness/hygiene state for AI/MCP consumers."""
     withheld_heads = [h for h in stats.served_heads if h.get("run_id") is None]
     stale_heads = [h for h in stats.served_heads if h.get("freshness") == "stale"]
+    mismatched_reports = [
+        {
+            "universe_id": r.get("universe_id"),
+            "report_run_id": r.get("report_run_id"),
+            "served_head_run_id": r.get("served_head_run_id"),
+        }
+        for r in stats.question_coverage
+        if r.get("matches_served_head") is False
+    ]
+    zero_scan_indexes = stats.db_hygiene.get("zero_scan_indexes", [])
+    idle_tables = stats.db_hygiene.get("idle_tables", [])
     question_deltas: dict[str, Any] = {}
     for row in stats.question_coverage:
         universe_id = str(row.get("universe_id") or "")
@@ -800,6 +856,10 @@ def build_datahub_fact_diff(stats: DatahubStatsResponse) -> dict[str, Any]:
         "withheld_heads": withheld_heads,
         "stale_head_count": len(stale_heads),
         "stale_heads": stale_heads,
+        "mismatched_report_count": len(mismatched_reports),
+        "mismatched_reports": mismatched_reports,
+        "zero_scan_index_count": len(zero_scan_indexes),
+        "idle_table_count": len(idle_tables),
         "question_deltas": question_deltas,
     }
 

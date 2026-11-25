@@ -30,7 +30,6 @@ from llm_service.services.panel_service import (
     _display_label,
     _id_prefix_like,
     resolve_governed_head_run_id,
-    served_or_empty_head_predicate,
     served_run_predicate,
 )
 from llm_service.services.strategy_service import (
@@ -46,9 +45,11 @@ THEME_LATEST_RUN_SQL = """
   select p.run_id, max(p.cutoff) as cutoff
   from mart.issuer_theme_purity p
   where p.partition_id is not null
-    and (
-      p.run_id in (select h.run_id from mart.served_head h where h.run_id is not null)
-      or not exists (select 1 from mart.served_head)
+    and p.run_id in (
+      select h.run_id
+      from mart.served_head h
+      where h.run_id is not null
+        and not starts_with(h.universe_id, 'universe:canary-')
     )
   group by run_id
   order by max(cutoff) desc
@@ -102,7 +103,7 @@ _COMPANY_DECISION_SQL = f"""
     limit 1
   ) m on true
   where d.issuer_id = any(%s::text[])
-    and {served_or_empty_head_predicate("scope.capture_run_id")}
+    and {served_run_predicate("scope.capture_run_id")}
   order by d.cutoff_at desc limit 1
 """
 _FUND_VIRTUAL_COLS = (
@@ -344,6 +345,8 @@ def _fetch_trace_nodes_from_cursor(cur: Any, candidates: list[str]) -> list[Trac
         from mart.metric_node_values v
         join mart.served_head h on h.run_id = v.run_id
         where v.issuer_id = any(%s::text[])
+          and h.run_id is not null
+          and not starts_with(h.universe_id, 'universe:canary-')
         order by v.node_id, v.period, h.advanced_at desc, v.run_id
       ) one_head_per_node
       order by node_key, period desc
@@ -587,7 +590,7 @@ def get_themes_overview(*, database_url: str | None = None) -> ThemesResponse:
         run_id = str(head["run_id"])
         cur.execute(
             f"select count(*)::int as unvisited from mart.issuer_theme_purity p "
-            f"where p.run_id = %s and p.partition_id is null and {served_or_empty_head_predicate('p.run_id')}",
+            f"where p.run_id = %s and p.partition_id is null and {served_run_predicate('p.run_id')}",
             (run_id,),
         )
         unvisited_row = cur.fetchone()
@@ -851,7 +854,7 @@ def _fetch_company_themes_from_cursor(cur: Any, candidates: list[str]) -> list[d
           from mart.issuer_theme_purity p
           where p.issuer_id = any(%s::text[])
             and p.partition_id is not null
-            and {served_or_empty_head_predicate("p.run_id")}
+            and {served_run_predicate("p.run_id")}
           order by p.theme_id, p.cutoff desc, p.created_at desc
         ) latest_per_theme
         order by raw_share desc nulls last, theme asc
@@ -969,7 +972,7 @@ def get_theme_purity_leaderboard(
                 from mart.issuer_theme_purity p
                 where (p.theme_id = %s or p.theme_id = %s or lower(p.theme) = lower(%s))
                   and p.partition_id is not null
-                  and {served_or_empty_head_predicate("p.run_id")}
+                  and {served_run_predicate("p.run_id")}
                 order by p.issuer_id, p.cutoff desc, p.created_at desc
             )
             select coalesce(ei.legacy_id, l.issuer_id) as issuer_id,
@@ -1018,13 +1021,15 @@ def get_etf_profile_payload(*, fund_id: str, database_url: str | None = None) ->
             select {_FUND_VIRTUAL_COLS}
             from mart.fund_virtual_company
             where ({fund_where})
-              and {served_or_empty_head_predicate("run_id", _id_prefix_like("fund_consolidation").removesuffix("%"))}
+              and {served_run_predicate("run_id", _id_prefix_like("fund_consolidation").removesuffix("%"))}
             order by {fund_rank}, cutoff desc, created_at desc limit 1
             """,
             query_params,
         )
         f_row = cur.fetchone()
-        h_params = {**query_params, "target_fund_id": str(f_row["fund_id"]) if f_row else query_params["clean_id"]}
+        if f_row is None:
+            return None, []
+        h_params = {**query_params, "target_fund_id": str(f_row["fund_id"])}
         cur.execute(
             f"""
             select coalesce(fund_name, fund_id) as fund_name, to_char(report_period, 'YYYY-MM-DD') as report_period,
@@ -1063,11 +1068,8 @@ def get_etf_profile_payload(*, fund_id: str, database_url: str | None = None) ->
         "lines": lines if lines is not None else len(holdings),
         "valued_lines": _opt_int(fund_row, "valued_lines") or 0,
         "confidence": _opt_str(fund_row, "confidence"),
-        "availability_status": _opt_str(fund_row, "availability_status")
-        or ("available" if holdings else "unavailable"),
-        "reason_codes": list(codes)
-        if codes is not None
-        else ([] if holdings else ["no_virtual_company_consolidation_found"]),
+        "availability_status": _opt_str(fund_row, "availability_status") or "unavailable",
+        "reason_codes": list(codes) if codes is not None else ["no_virtual_company_consolidation_found"],
         "holdings": holdings,
     }
 
