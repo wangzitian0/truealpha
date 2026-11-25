@@ -69,7 +69,7 @@
       "argv": [
         "sh",
         "-c",
-        "cd apps/app-web || exit 1; TA_BASE_URL=\"$APP_URL\" exec node e2e/walk-tree.mjs"
+        "cd apps/app-web || exit 1; exec node e2e/walk-tree.mjs"
       ],
       "needs": [
         "running_service"

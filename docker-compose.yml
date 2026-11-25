@@ -19,7 +19,7 @@ services:
       - ./db:/truealpha-db:ro
       - ./db/docker-init.sh:/docker-entrypoint-initdb.d/00_truealpha.sh:ro
     ports:
-      - "${POSTGRES_PORTS:-127.0.0.1:5432:5432}"
+      - "127.0.0.1:${POSTGRES_PORT:-55432}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-truealpha}"]
       interval: 5s
@@ -53,7 +53,7 @@ services:
     build:
       context: .
       dockerfile: apps/llm-service/Dockerfile
-    image: ${REGISTRY:-ghcr.io}/${IMAGE_PREFIX:-wangzitian0/truealpha}-llm-service:${IMAGE_TAG:-local}
+    image: ${REGISTRY:-ghcr.io}/${IMAGE_PREFIX:-wangzitian0/truealpha}-llm-service:${SERVICE_VERSION:-local}
     container_name: truealpha-llm${ENV_SUFFIX:-}
     profiles: [app]
     restart: ${RESTART_POLICY:-unless-stopped}
@@ -88,7 +88,7 @@ services:
     build:
       context: apps/app-web
       dockerfile: Dockerfile
-    image: ${REGISTRY:-ghcr.io}/${IMAGE_PREFIX:-wangzitian0/truealpha}-app-web:${IMAGE_TAG:-local}
+    image: ${REGISTRY:-ghcr.io}/${IMAGE_PREFIX:-wangzitian0/truealpha}-app-web:${SERVICE_VERSION:-local}
     container_name: truealpha-web${ENV_SUFFIX:-}
     profiles: [app]
     restart: ${RESTART_POLICY:-unless-stopped}
