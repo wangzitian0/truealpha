@@ -104,7 +104,7 @@ db-reset:
 # there is no snapshot to keep fresh. Needs host psql and a host-reachable DATABASE_URL
 # (the compose Postgres publishes 127.0.0.1:5432 by default).
 db-check:
-	uv run python tools/schema_drift.py --database-url "$${DATABASE_URL:-postgresql://postgres@127.0.0.1:5432/truealpha}"
+	uv run python -m truealpha_tools.schema_drift --database-url "$${DATABASE_URL:-postgresql://postgres@127.0.0.1:5432/truealpha}"
 
 web:
 	cd apps/app-web && bun run dev
@@ -122,7 +122,7 @@ smoke-deps:
 	uv run pytest -m "gate or deps or smoke or contract"
 
 vision-audit:
-	uv run python tools/vision_audit.py $(ARGS)
+	uv run python -m truealpha_tools.vision_audit $(ARGS)
 
 lint:
 	uv run ruff check apps common tools

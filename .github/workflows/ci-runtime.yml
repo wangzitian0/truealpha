@@ -35,7 +35,7 @@ jobs:
       # chain it was produced from. A difference here is a difference between a
       # developer's database and CI's, which is the defect this issue exists for.
       - name: Schema drift (the compose bootstrap against the declared chain)
-        run: uv run --no-sync python tools/schema_drift.py --database-url "$DATABASE_URL"
+        run: uv run --no-sync python -m truealpha_tools.schema_drift --database-url "$DATABASE_URL"
       - name: Show runtime logs on failure
         if: failure()
         run: docker compose logs postgres s3

@@ -1,17 +1,8 @@
-"""Tests for tools/output_invariants.py — #581.
+"""Tests for truealpha_tools.output_invariants — #581.
 
-The SQL is verified against production separately (the tool's verbatim queries
-return JPM's negative GPPE and the 67.1h pointer lag there). These cover the
-part SQL cannot: what the tool does with a violation, and what an exemption is
-allowed to do.
-
-The exemption mechanism is the load-bearing piece. Invariant suites die by
-accumulating permanent waivers, so an exemption here defers and never disables:
-it carries an issue and a date, an expired one fails anyway, and one left behind
-after its defect is fixed also fails.
-
-The tests at the end of this file run `revenue-period-is-recent`
-against a database that the migration chain builds (#1457).
+The SQL is verified against production separately. These tests cover what the runner
+does with hard violations, non-blocking facts, and empty populations, plus
+`revenue-period-is-recent` against a database that the migration chain builds (#1457).
 """
 
 from __future__ import annotations
@@ -25,23 +16,17 @@ from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
-from pathlib import Path
 
 import psycopg
 import pytest
 from psycopg.types.json import Jsonb
-from truealpha_runtime.testing import isolated_test_database, load_tool
+from truealpha_runtime.testing import REPO_ROOT, isolated_test_database
+from truealpha_tools import output_invariants as _module
 
 pytestmark = pytest.mark.deps
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-_module = load_tool("output_invariants")
-
 check = _module.check
 Invariant = _module.Invariant
-Exemption = _module.Exemption
-
-TODAY = date(2026, 8, 17)
 
 ONE = Invariant(id="one", claim="a value must be possible", violations="V", population="P")
 
@@ -83,11 +68,9 @@ def _db(violations: list[tuple], population: int, signals: list[tuple] | None = 
     return lambda _url: _Connection(answers)
 
 
-def _run(violations, population, exemptions=None, *, invariant=ONE, signals=None, **kwargs):
+def _run(violations, population, *, invariant=ONE, signals=None, **kwargs):
     return check(
         "postgresql://unused",
-        today=TODAY,
-        exemptions=exemptions or {},
         invariants=(invariant,),
         connect=_db(violations, population, signals),
         **kwargs,
@@ -141,42 +124,6 @@ def test_a_violation_fails_and_prints_the_offending_rows(
     stderr = capsys.readouterr().err
     assert "listing:xnys:jpm" in stderr and "-528985.79" in stderr
     assert "a value must be possible" in stderr, "the claim must travel with the failure"
-
-
-def test_an_unexpired_exemption_defers_rather_than_hides(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    exemptions = {"one": Exemption("one", "#528", date(2026, 9, 16), "the financial branch")}
-    assert _run([("jpm",)], 20, exemptions) == 0
-    out = capsys.readouterr().out
-    assert "DEFERRED" in out
-    assert "#528" in out and "2026-09-16" in out, "a deferral must name its issue and its end"
-
-
-def test_an_expired_exemption_fails_anyway(capsys: pytest.CaptureFixture[str]) -> None:
-    """The whole point. `# TODO: exclude JPM` is how invariant suites die."""
-    exemptions = {"one": Exemption("one", "#528", date(2026, 8, 16), "the financial branch")}
-    assert _run([("jpm",)], 20, exemptions) == 1
-    assert "expired 2026-08-16" in capsys.readouterr().err
-
-
-def test_an_exemption_outliving_its_defect_fails(capsys: pytest.CaptureFixture[str]) -> None:
-    """A standing waiver for something already fixed hides the next occurrence."""
-    exemptions = {"one": Exemption("one", "#528", date(2026, 9, 16), "the financial branch")}
-    assert _run([], 20, exemptions) == 1
-    assert "no longer violated across 20 row(s)" in capsys.readouterr().err
-
-
-def test_an_exemption_is_not_judged_stale_over_no_rows(capsys: pytest.CaptureFixture[str]) -> None:
-    """Found by running it: on the CI fixture, which has neither JPM nor a
-    pointer row, "exempt but no longer violated" fired for both shipped
-    exemptions. An invariant that examined nothing proved nothing — including
-    about its own waiver."""
-    exemptions = {"one": Exemption("one", "#528", date(2026, 9, 16), "the financial branch")}
-    assert _run([], 0, exemptions) == 0
-    out = capsys.readouterr().out
-    assert "proved nothing" in out
-    assert "no longer violated" not in out
 
 
 def test_an_invariant_over_no_rows_says_so(capsys: pytest.CaptureFixture[str]) -> None:
@@ -275,28 +222,6 @@ def test_importerror_fallbacks_match_live_registries(monkeypatch: pytest.MonkeyP
     assert _module._rank_values(()) == "(null::text, null::integer)"
 
 
-def test_no_exemption_defers_the_sign_policy() -> None:
-    """#528: the per-node sign policy replaced the `gppe-not-negative` exemption; nothing
-    defers it, so a value a node forbids fails the day it is published."""
-    assert "node-sign-policy" not in _module.load_exemptions()
-    assert all(exemption.issue != "#528" for exemption in _module.load_exemptions().values())
-
-
-def test_every_shipped_exemption_names_an_issue_and_a_future_date() -> None:
-    """The file is the mechanism; a malformed entry silently disables a guard."""
-    assert not _module.EXEMPTIONS_PATH.exists(), "tools/output_invariant_exemptions.json was deleted (#1523 G20)"
-    exemptions = _module.load_exemptions()
-    assert exemptions == {}
-    ids = {invariant.id for invariant in _module.INVARIANTS}
-    for name, exemption in exemptions.items():
-        assert name in ids, f"{name} exempts an invariant that does not exist"
-        assert exemption.issue.startswith("#"), f"{name} must name the issue that resolves it"
-        assert exemption.reason.strip(), f"{name} must say why"
-        assert exemption.expires > date(2026, 8, 17), (
-            f"{name} ships already expired, which fails the gate on the first run"
-        )
-
-
 def test_extraction_citations_resolve_invariant_structure_and_behavior() -> None:
     """#1295, #735, #70, #1264: every issuer headcount fact must carry an 18-digit SEC accession and a
     real filing knowable_at, and 10k-extraction facts must resolve their evidence_ref pointer to
@@ -319,8 +244,6 @@ def test_extraction_citations_resolve_invariant_structure_and_behavior() -> None
     }
     holding = check(
         "postgresql://unused",
-        today=TODAY,
-        exemptions={},
         invariants=(invariant,),
         connect=lambda _url: _Connection(answers),
     )
@@ -331,8 +254,6 @@ def test_extraction_citations_resolve_invariant_structure_and_behavior() -> None
         answers[invariant.violations.strip()] = [violation]
         reported = check(
             "postgresql://unused",
-            today=TODAY,
-            exemptions={},
             invariants=(invariant,),
             connect=lambda _url: _Connection(answers),
         )
@@ -401,8 +322,6 @@ def test_hard_vs_fact_invariant_classification_and_persistence(capsys: pytest.Ca
     code_fact = check(
         "postgresql://unused",
         require_coverage=True,
-        today=TODAY,
-        exemptions={},
         invariants=(hard_inv, fact_inv),
         connect=lambda _url: conn_fact_only,
         persist=True,
@@ -424,8 +343,6 @@ def test_hard_vs_fact_invariant_classification_and_persistence(capsys: pytest.Ca
     code_hard = check(
         "postgresql://unused",
         require_coverage=True,
-        today=TODAY,
-        exemptions={},
         invariants=(hard_inv, fact_inv),
         connect=lambda _url: _PersistConn(answers),
         persist=True,
@@ -761,8 +678,6 @@ def _parity_verdict(
     code = check(
         "postgresql://borrowed",
         require_coverage=True,
-        today=TODAY,
-        exemptions={},
         invariants=(invariant,),
         connect=lambda _url: _Borrowed(conn),
     )
@@ -849,8 +764,6 @@ def test_a_variant_record_that_schedules_sp500_makes_the_invariants_count_its_he
         code = check(
             "postgresql://borrowed",
             require_coverage=True,
-            today=TODAY,
-            exemptions={},
             invariants=(invariant,),
             connect=lambda _url: _Borrowed(conn),
         )
@@ -875,8 +788,6 @@ def test_no_invariant_needs_the_sql_schedule_function(
     assert conn.execute("select to_regprocedure('mart.is_head_scheduled(text,text)') is null").fetchone() == (True,)
     code = check(
         "postgresql://borrowed",
-        today=TODAY,
-        exemptions={},
         invariants=_module.INVARIANTS,
         connect=lambda _url: _Borrowed(conn),
     )
@@ -1189,8 +1100,6 @@ def test_entity_identity_unique_and_fund_weights_conserved_structure_and_behavio
     assert (
         check(
             "postgresql://unused",
-            today=TODAY,
-            exemptions={},
             invariants=(unique_inv,),
             connect=lambda _url: _Connection(unique_answers),
         )
@@ -1200,8 +1109,6 @@ def test_entity_identity_unique_and_fund_weights_conserved_structure_and_behavio
     assert (
         check(
             "postgresql://unused",
-            today=TODAY,
-            exemptions={},
             invariants=(unique_inv,),
             connect=lambda _url: _Connection(unique_answers),
         )
@@ -1222,8 +1129,6 @@ def test_entity_identity_unique_and_fund_weights_conserved_structure_and_behavio
     assert (
         check(
             "postgresql://unused",
-            today=TODAY,
-            exemptions={},
             invariants=(weights_inv,),
             connect=lambda _url: _Connection(weights_answers),
         )
@@ -1235,8 +1140,6 @@ def test_entity_identity_unique_and_fund_weights_conserved_structure_and_behavio
     assert (
         check(
             "postgresql://unused",
-            today=TODAY,
-            exemptions={},
             invariants=(weights_inv,),
             connect=lambda _url: _Connection(weights_answers),
         )
@@ -1269,8 +1172,6 @@ def test_entity_identity_unique_per_entity_passes_with_dual_kg_rows_and_fails_on
     }
     failing = check(
         "postgresql://unused",
-        today=TODAY,
-        exemptions={},
         invariants=(invariant,),
         connect=lambda _url: _Connection(answers),
     )
@@ -1307,8 +1208,6 @@ def test_fund_virtual_company_weights_conserved_passes_valid_row_and_fails_on_fa
     }
     failing = check(
         "postgresql://unused",
-        today=TODAY,
-        exemptions={},
         invariants=(invariant,),
         connect=lambda _url: _Connection(answers),
     )
@@ -1346,8 +1245,6 @@ def test_persist_records_hard_and_fact_invariants_and_only_hard_fails(
     code_fact = check(
         "postgresql://borrowed",
         require_coverage=True,
-        today=TODAY,
-        exemptions={},
         invariants=(fact_inv, hard_inv),
         connect=lambda _url: _Borrowed(conn),
         persist=True,
@@ -1385,8 +1282,6 @@ def test_persist_records_hard_and_fact_invariants_and_only_hard_fails(
     code_hard = check(
         "postgresql://borrowed",
         require_coverage=True,
-        today=TODAY,
-        exemptions={},
         invariants=(fact_inv, hard_fail_inv),
         connect=lambda _url: _Borrowed(conn),
         persist=True,
@@ -1421,8 +1316,6 @@ def test_ledger_runs_in_dagster_invariant_against_real_db(
     # Without dagster.runs (bare CI migrated schema), invariant skips cleanly without UndefinedTable.
     code_no_dagster = check(
         "postgresql://borrowed",
-        today=TODAY,
-        exemptions={},
         invariants=(inv,),
         connect=lambda _url: _Borrowed(conn),
         commit=False,
@@ -1447,8 +1340,6 @@ def test_ledger_runs_in_dagster_invariant_against_real_db(
 
     code_with_dagster = check(
         "postgresql://borrowed",
-        today=TODAY,
-        exemptions={},
         invariants=(inv,),
         connect=lambda _url: _Borrowed(conn),
         persist=True,

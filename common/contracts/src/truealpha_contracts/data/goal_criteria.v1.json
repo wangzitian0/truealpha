@@ -546,7 +546,7 @@
       "id": "R5.E6",
       "root": "#1421",
       "tier": "M1",
-      "statement": "uv run python tools/vision_audit.py --env production prints every criterion of Roots 1 to 5 with a verdict.",
+      "statement": "uv run python -m truealpha_tools.vision_audit --env production prints every criterion of Roots 1 to 5 with a verdict.",
       "threshold": null,
       "window": null,
       "oracle": "repository",

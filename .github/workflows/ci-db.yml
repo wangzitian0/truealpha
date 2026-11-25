@@ -92,5 +92,5 @@ jobs:
       - name: Schema drift (migrated schema against the declared chain)
         run: |
           uv sync --package truealpha-runtime --frozen
-          uv run --no-sync python tools/schema_drift.py \
+          uv run --no-sync python -m truealpha_tools.schema_drift \
             --database-url postgresql://postgres:postgres@localhost:5432/truealpha

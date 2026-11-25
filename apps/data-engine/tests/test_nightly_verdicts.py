@@ -211,8 +211,7 @@ def _suite(monkeypatch, *, exit_code: int, printed: str) -> None:
         print(printed)
         return exit_code
 
-    monkeypatch.setattr(quality, "_suite_path", lambda: "suite.py")
-    monkeypatch.setattr(quality.runpy, "run_path", lambda *_a, **_k: {"main": main})
+    monkeypatch.setattr(quality.output_invariants, "main", main)
 
 
 def _surfaces(monkeypatch, *, mismatched: bool) -> None:
@@ -236,13 +235,10 @@ def test_the_nightly_job_records_both_verdicts_green_at_its_tick(monkeypatch, wr
 
     def main(argv: list[str]) -> int:
         seen_argv.append(list(argv))
-        print(
-            "  ok       selected-weights-close: 20 row(s) examined\n  FACT     node-sign-policy: 1 violation(s)\n  DEFERRED gppe: 1 violation(s)"
-        )
+        print("  ok       selected-weights-close: 20 row(s) examined\n  FACT     node-sign-policy: 1 violation(s)")
         return 0
 
-    monkeypatch.setattr(quality, "_suite_path", lambda: "suite.py")
-    monkeypatch.setattr(quality.runpy, "run_path", lambda *_a, **_k: {"main": main})
+    monkeypatch.setattr(quality.output_invariants, "main", main)
     _surfaces(monkeypatch, mismatched=False)
     result = quality.output_invariants_job.execute_in_process(tags={nightly_verdicts.TICK_TAG: TICK})
     assert result.success
@@ -251,7 +247,7 @@ def test_the_nightly_job_records_both_verdicts_green_at_its_tick(monkeypatch, wr
     assert set(by_name) == {"output_invariants", "report_surface_proof"}
     assert all(row["ok"] for row in written)
     assert all(row["ran_at"] == datetime.fromisoformat(TICK) for row in written), "ran_at is the tick"
-    assert by_name["output_invariants"]["summary"] == "1 held, 1 fact, 1 deferred, 0 empty"
+    assert by_name["output_invariants"]["summary"] == "1 held, 1 fact, 0 empty"
     assert by_name["report_surface_proof"]["summary"] == "2/2 surfaces serve the governed head"
 
 
@@ -268,9 +264,7 @@ def test_a_violated_invariant_is_a_red_verdict_and_a_red_run(monkeypatch, writte
     assert not result.success, "the Dagster run stays red"
     by_name = {row["check"]: row for row in written}
     assert by_name["output_invariants"]["ok"] is False
-    assert (
-        by_name["output_invariants"]["summary"] == "failed: exit 1: 1 failed (peg_bounded); 1 held, 0 deferred, 0 empty"
-    )
+    assert by_name["output_invariants"]["summary"] == "failed: exit 1: 1 failed (peg_bounded); 1 held, 0 empty"
     assert "NVDA" not in by_name["output_invariants"]["summary"], "offending rows stay in the run log"
     assert by_name["report_surface_proof"]["ok"] is False
     assert (
@@ -302,8 +296,7 @@ def test_output_invariants_waits_for_in_flight_ticks_before_running_suite(monkey
     monkeypatch.setattr(quality, "settling", settling)
     monkeypatch.setattr(quality, "_sleep", slept.append)
     monkeypatch.setattr(psycopg, "connect", _Sink())
-    monkeypatch.setattr(quality, "_suite_path", lambda: "suite.py")
-    monkeypatch.setattr(quality.runpy, "run_path", lambda *_a, **_k: {"main": main})
+    monkeypatch.setattr(quality.output_invariants, "main", main)
     quality.run_output_invariants(dg.build_op_context(run_tags={nightly_verdicts.TICK_TAG: TICK}))
     assert slept == [quality.SURFACE_SETTLE_POLL_SECONDS] * 2
     assert suite_called_when_settled == [True]

@@ -480,19 +480,9 @@ def stored_confidence_report_run(connection: Connection[Any], universe_id: str) 
     return _newest_run_in(connection, "mart.datahub_confidence_report", universe_id)
 
 
-_DEFAULT_STORED_REPORT_RUN = stored_report_run
-_DEFAULT_STORED_CONFIDENCE_REPORT_RUN = stored_confidence_report_run
-
-
 def reports_current_for_head(connection: Connection[Any], head: GovernedHead) -> bool:
     if stored_report_run(connection, head.universe_id) != head.run_id:
         return False
-    if (
-        stored_confidence_report_run is _DEFAULT_STORED_CONFIDENCE_REPORT_RUN
-        and stored_report_run is not _DEFAULT_STORED_REPORT_RUN
-        and type(connection).__name__ == "_Connection"
-    ):
-        return True
     if not stored_report_rules_current(connection, head.universe_id):
         return False
     return stored_confidence_report_run(connection, head.universe_id) == head.run_id

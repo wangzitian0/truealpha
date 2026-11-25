@@ -3,17 +3,16 @@
 import contextlib
 import io
 import json
-import runpy
 import time
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from typing import Any
 
 import dagster as dg
 import psycopg
 from truealpha_contracts.environment_contract import load_environment_contract
 from truealpha_contracts.universes import key_of_lane, lane_name, record, served_keys, universes_with_role
+from truealpha_tools import output_invariants
 
 from data_engine import db
 from data_engine.config import settings
@@ -74,17 +73,6 @@ NIGHTLY_VERDICTS: tuple[str, ...] = (
 )
 
 
-def _suite_path() -> Path:
-    candidates = (
-        Path("/app/common/runtime/src/truealpha_tools/output_invariants.py"),
-        Path(__file__).resolve().parents[5] / "common/runtime/src/truealpha_tools/output_invariants.py",
-    )
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate
-    raise FileNotFoundError(f"output_invariants.py is neither at {candidates[0]} nor {candidates[1]}")
-
-
 def _op_verdict(context: dg.OpExecutionContext, name: str, *, tick: datetime | None = None):
     return verdict(name, registered=NIGHTLY_VERDICTS, run_id=context.run_id, tick=tick or tick_of(context))
 
@@ -93,10 +81,9 @@ def _op_verdict(context: dg.OpExecutionContext, name: str, *, tick: datetime | N
 def run_output_invariants(context: dg.OpExecutionContext) -> str:
     with _op_verdict(context, OUTPUT_INVARIANTS_VERDICT) as outcome:
         _await_settled(context)
-        module = runpy.run_path(str(_suite_path()), run_name="output_invariants")
         report = io.StringIO()
         with contextlib.redirect_stdout(report), contextlib.redirect_stderr(report):
-            exit_code = module["main"](
+            exit_code = output_invariants.main(
                 [
                     "--database-url",
                     settings.database_url,
@@ -119,7 +106,7 @@ def invariants_summary(lines: list[str], exit_code: int) -> str:
     marks = [parts[0] for line in lines if line.startswith("  ") and (parts := line.split())]
     fact_count = marks.count("FACT")
     fact_part = f", {fact_count} fact" if fact_count > 0 else ""
-    counts = f"{marks.count('ok')} held{fact_part}, {marks.count('DEFERRED')} deferred, {marks.count('EMPTY')} empty"
+    counts = f"{marks.count('ok')} held{fact_part}, {marks.count('EMPTY')} empty"
     if exit_code == 0:
         return counts
     failed = [

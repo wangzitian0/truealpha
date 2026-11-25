@@ -13,7 +13,8 @@ from fastapi.testclient import TestClient
 from llm_service import main
 from llm_service.main import ROUTED_PREFIX, app
 from pydantic import SecretStr
-from truealpha_runtime.testing import clone_test_database, db_writes_allowed, isolated_test_database, load_tool
+from truealpha_runtime.testing import clone_test_database, db_writes_allowed, isolated_test_database
+from truealpha_tools import vision_audit as audit
 
 pytestmark = pytest.mark.smoke
 
@@ -429,12 +430,11 @@ def test_the_pointer_read_goes_through_the_served_head_and_computes_no_age(monke
 
 
 def test_the_vision_audit_reads_the_new_entries(monkeypatch) -> None:
-    """`tools/vision_audit.py` reads `governed_pointers` from this answer. It must parse the
+    """`truealpha_tools.vision_audit` reads `governed_pointers` from this answer. It must parse the
     richer entries and fail on a stale or withheld scheduled head."""
     monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: _PointersOnly(SERVED_ROWS))
     pointers = TestClient(app).get("/health").json()["governed_pointers"]
     assert [entry["universe_id"] for entry in pointers] == [row[0] for row in SERVED_ROWS]
-    audit = load_tool("vision_audit")
     fresh, detail = audit._assess_served_head_freshness(SimpleNamespace(governed_pointers=pointers))
     assert fresh is False
     assert "universe:canary-us-2026-06-30:stale/unavailable" in detail
@@ -473,7 +473,6 @@ def test_the_vision_audit_fails_closed_on_unknown_pointers(monkeypatch) -> None:
     """The marker "unknown" fails the reader that consumes it, with a clear text."""
     monkeypatch.setattr(psycopg, "connect", lambda *_a, **_k: _PointersOnly([], environments=[(1,)]))
     pointers = TestClient(app).get("/health").json()["governed_pointers"]
-    audit = load_tool("vision_audit")
     assert audit._assess_served_head_freshness(SimpleNamespace(governed_pointers=pointers)) == (
         False,
         "mart.served_head.freshness=unknown (no governed pointers)",
@@ -632,7 +631,6 @@ def test_a_universe_roll_lists_one_qqq_pointer_and_the_freshness_check_passes(mo
     assert [(entry["universe_id"], entry["freshness"]) for entry in payload["governed_pointers"]] == [
         ("universe:qqq-us-2026-09-30", "fresh")
     ]
-    audit = load_tool("vision_audit")
     report = SimpleNamespace(governed_pointers=payload["governed_pointers"])
     assert audit._assess_served_head_freshness(report, environment="production") == (
         True,

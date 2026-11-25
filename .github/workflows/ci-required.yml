@@ -55,7 +55,7 @@ jobs:
         with:
           filters: |
             db:
-              # ci-db executes tools/schema_drift.py against the migrated schema;
+              # ci-db executes truealpha_tools.schema_drift against the migrated schema;
               # editing that tool or its runtime implementation must re-run it (#1523).
               - 'tools/**'
               - 'common/runtime/src/truealpha_tools/schema_drift.py'
@@ -66,8 +66,7 @@ jobs:
               # the action must re-run every lane that calls it: `required` reads a skip as success.
               - '.github/actions/**'
             python:
-              # tools/*.py are deployed tooling; their tests live in common/runtime/tests
-              # via load_tool, which ci-python runs.
+              # tools/ contains deployed scripts; their tests live in common/runtime/tests.
               - 'tools/**'
               # Same class, one directory over: test_ci_workflows.py reads the
               # workflows, so a PR that edits a workflow must run it.
@@ -124,7 +123,7 @@ jobs:
               - 'docker-compose.yml'
               - 'tools/**'
             runtime:
-              # #984: ci-runtime executes tools/schema_drift.py against the schema the
+              # #984: ci-runtime executes truealpha_tools.schema_drift against the schema the
               # compose bootstrap produced — the same reason `db` above carries
               # tools/**. A tool this lane runs must re-run this lane.
               - 'tools/**'
