@@ -186,7 +186,7 @@ def select_total(found: list[FilingCandidate]) -> tuple[ExtractionStatus, Filing
 def parse_as_of(text: str | None) -> date | None:
     if text is None:
         return None
-    for pattern in ("%B %d, %Y", "%B %d %Y"):
+    for pattern in ("%B %d, %Y", "%B %d %Y", "%Y-%m-%d"):
         try:
             return datetime.strptime(text, pattern).date()
         except ValueError:
@@ -275,6 +275,8 @@ def format_accession(accession: str) -> str:
 
 
 _CLASS_OF_STOCK_AXIS = "us-gaap:StatementClassOfStockAxis"
+_DEI_EMPLOYEES_CONCEPT = "dei:EntityNumberOfEmployees"
+IXBRL_HEADCOUNT_EXTRACTOR = "ixbrl:dei:EntityNumberOfEmployees"
 _DEI_SHARES_CONCEPT = "dei:EntityCommonStockSharesOutstanding"
 _DEI_TRADING_SYMBOL_CONCEPT = "dei:TradingSymbol"
 _PAR_VALUE_CONCEPT = "us-gaap:CommonStockParOrStatedValuePerShare"
@@ -405,6 +407,37 @@ def require_annual_filing(
     return ExtractionOutcome(cik, "no_annual_filing", detail=no_filing_detail) if document is None else document
 
 
+def _ixbrl_headcount_candidate(document: FilingDocument) -> FilingCandidate | None:
+    """Extract unambiguous non-dimensional `dei:EntityNumberOfEmployees` from iXBRL (#1851)."""
+    from data_engine.datahub.standards.inline_xbrl import InlineXbrl
+
+    try:
+        ix = InlineXbrl(document.body)
+        facts = ix.facts((_DEI_EMPLOYEES_CONCEPT,))
+    except Exception:  # noqa: BLE001
+        return None
+    by_end: dict[date, set[int]] = {}
+    for fact in facts:
+        if fact.value is None or fact.value <= 0 or fact.value != int(fact.value):
+            continue
+        if fact.context.dimensions or fact.context.end > document.filing_date:
+            continue
+        by_end.setdefault(fact.context.end, set()).add(int(fact.value))
+    if not by_end:
+        return None
+    latest_end = max(by_end)
+    values = by_end[latest_end]
+    if len(values) != 1:
+        return None
+    val = next(iter(values))
+    return FilingCandidate(
+        value=val,
+        as_of=latest_end.isoformat(),
+        sentence=f"{_DEI_EMPLOYEES_CONCEPT}={val} end={latest_end.isoformat()}",
+        partial=False,
+    )
+
+
 def extract_headcount(
     cik: int,
     *,
@@ -429,49 +462,63 @@ def extract_headcount(
     if isinstance(document, ExtractionOutcome):
         return document
 
-    try:
-        found = candidates(filing_plain_text(document.body))
-    except Exception as error:  # noqa: BLE001
-        return ExtractionOutcome(cik, "error", detail=f"{type(error).__name__}: {error}")
-    totals = [c for c in found if not c.partial]
-    model_runs: list[llm.ModelSelection] = []
-    selector: extraction_primitive.Selector | None = None
-    if select_with_model and llm.is_configured():
-        selector = llm.as_selector(
-            connection if write else None,
-            cik=cik,
-            accession=document.accession,
-            form=document.form,
-            issuer_label=issuer_label or f"CIK {cik}",
-            caller=f"standard-backfill:{standard.metric}",
-            standard=standard.metric,
-            persist=write,
-            transport=model_transport,
-            on_model_selection=model_runs.append,
+    ixbrl_choice = _ixbrl_headcount_candidate(document)
+    if ixbrl_choice is not None:
+        found = [ixbrl_choice]
+        totals = [ixbrl_choice]
+        model_runs: list[llm.ModelSelection] = []
+        status: ExtractionStatus = "resolved"
+        chosen: FilingCandidate | None = ixbrl_choice
+        extractor = IXBRL_HEADCOUNT_EXTRACTOR
+        model_detail, model_replayed = "", None
+    else:
+        try:
+            found = candidates(filing_plain_text(document.body))
+        except Exception as error:  # noqa: BLE001
+            return ExtractionOutcome(cik, "error", detail=f"{type(error).__name__}: {error}")
+        totals = [c for c in found if not c.partial]
+        model_runs = []
+        selector: extraction_primitive.Selector | None = None
+        if select_with_model and llm.is_configured():
+            selector = llm.as_selector(
+                connection if write else None,
+                cik=cik,
+                accession=document.accession,
+                form=document.form,
+                issuer_label=issuer_label or f"CIK {cik}",
+                caller=f"standard-backfill:{standard.metric}",
+                standard=standard.metric,
+                persist=write,
+                transport=model_transport,
+                on_model_selection=model_runs.append,
+            )
+        try:
+            selection = extraction_primitive.extract_metric(_shared_candidates(totals), selector).selection
+        except llm.ModelHTTPError as error:
+            # One filing's model error is that filing's outcome; it never ends the backfill of a
+            # universe and the lanes after it (#1851). A missing answer is asked again next run.
+            status_of_error: ExtractionStatus = "deferred_capacity" if error.no_answer else "error"
+            return ExtractionOutcome(cik, status_of_error, detail=f"model selection: {error}")
+        status = (
+            "resolved"
+            if selection is not None
+            else (
+                "no_candidate"
+                if not totals
+                else ("model_declined" if selector is not None else "needs_model_selection")
+            )
         )
-    try:
-        selection = extraction_primitive.extract_metric(_shared_candidates(totals), selector).selection
-    except llm.ModelHTTPError as error:
-        # One filing's model error is that filing's outcome; it never ends the backfill of a
-        # universe and the lanes after it (#1851). A missing answer is asked again next run.
-        status_of_error: ExtractionStatus = "deferred_capacity" if error.no_answer else "error"
-        return ExtractionOutcome(cik, status_of_error, detail=f"model selection: {error}")
-    status: ExtractionStatus = (
-        "resolved"
-        if selection is not None
-        else ("no_candidate" if not totals else ("model_declined" if selector is not None else "needs_model_selection"))
-    )
-    chosen = _chosen_total(totals, selection) if selection is not None else None
-    extractor = selection.extractor if selection is not None else RULE_SINGLE_CANDIDATE
-    model_detail, model_replayed = "", None
-    if model_runs:
-        (model_run,) = model_runs
-        model_replayed = model_run.replayed
-        model_detail = f" model={model_run.model} invocation={model_run.invocation_id}" + (
-            " (replayed)" if model_run.replayed else ""
-        )
-        if status == "model_declined":
-            model_detail += f" reason={model_run.reason!r}"
+        chosen = _chosen_total(totals, selection) if selection is not None else None
+        extractor = selection.extractor if selection is not None else RULE_SINGLE_CANDIDATE
+        model_detail, model_replayed = "", None
+        if model_runs:
+            (model_run,) = model_runs
+            model_replayed = model_run.replayed
+            model_detail = f" model={model_run.model} invocation={model_run.invocation_id}" + (
+                " (replayed)" if model_run.replayed else ""
+            )
+            if status == "model_declined":
+                model_detail += f" reason={model_run.reason!r}"
     outcome = ExtractionOutcome(
         cik,
         status,

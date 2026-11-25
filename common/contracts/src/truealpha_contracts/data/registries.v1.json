@@ -538,6 +538,7 @@
     },
     "headcount-confidence:v1": {
       "rule:single-candidate:v1": "0.85",
+      "ixbrl:dei:EntityNumberOfEmployees": "0.95",
       "model-selection": "0.90",
       "manual-review": "0.70"
     }
