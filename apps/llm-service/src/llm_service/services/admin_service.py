@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -10,6 +11,7 @@ import psycopg
 from pydantic import BaseModel, Field
 from truealpha_contracts.environment_contract import load_environment_contract
 from truealpha_contracts.universes import id_prefix_like, job_name
+from truealpha_runtime.checks import ObjectStorageCheck
 
 from llm_service.config import settings
 from llm_service.services._db import with_app_runtime, with_ops_reader
@@ -40,11 +42,20 @@ QUESTION_COVERAGE_SQL = governed_latest_per_universe_sql("mart.question_coverage
 CONFIDENCE_REPORT_SQL = governed_latest_per_universe_sql("mart.datahub_confidence_report", ", run_id")
 ORACLE_OUTCOMES_SQL = """
   with deduped as (
-    select distinct on (h.universe_id, o.observation_id, o.subject_id, o.field)
+    select distinct on (
+      h.universe_id,
+      o.oracle_kind,
+      o.period,
+      coalesce(o.observation_id::text, o.outcome_id::text),
+      o.subject_id,
+      o.field
+    )
       h.universe_id, o.field, o.result, o.reason, o.compared_at
     from mart.served_head h
     join mart.oracle_outcomes o on o.run_id = coalesce(h.run_id, h.head_run_id)
-    order by h.universe_id, o.observation_id, o.subject_id, o.field, o.compared_at desc, o.recorded_at desc, o.outcome_id desc
+    order by h.universe_id, o.oracle_kind, o.period,
+             coalesce(o.observation_id::text, o.outcome_id::text),
+             o.subject_id, o.field, o.compared_at desc, o.recorded_at desc, o.outcome_id desc
   ),
   rolled as (
     select universe_id, field,
@@ -71,6 +82,67 @@ ORACLE_OUTCOMES_SQL = """
   order by r.universe_id, r.field
 """
 
+ORACLE_DISAGREEMENTS_SQL = """
+  select distinct on (h.universe_id, o.oracle_kind, o.period, o.subject_id, o.field)
+    h.universe_id,
+    o.subject_id,
+    o.field,
+    o.period,
+    o.oracle_kind,
+    o.source,
+    o.served_value::text as served_value,
+    o.oracle_value::text as oracle_value,
+    o.ratio::text as ratio,
+    o.tolerance::text as tolerance,
+    o.reason,
+    to_char(o.compared_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as compared_at
+  from mart.served_head h
+  join mart.oracle_outcomes o on o.run_id = coalesce(h.run_id, h.head_run_id)
+  where o.result = 'disagree'
+  order by h.universe_id, o.oracle_kind, o.period, o.subject_id, o.field,
+           o.compared_at desc, o.recorded_at desc, o.outcome_id desc
+  limit 100
+"""
+
+SERVED_HEADS_SQL = """
+  select environment, universe_id, universe_version, factor_id, sequence,
+         head_run_id, run_id, artifact_key, family,
+         age_hours::float as age_hours, limit_hours::float as limit_hours,
+         freshness, availability, staleness_reason,
+         to_char(advanced_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as advanced_at
+  from mart.served_head
+  order by universe_id, factor_id
+"""
+
+NIGHTLY_VERDICTS_SQL = """
+  select distinct on (check_name)
+    check_name, ok, summary, dagster_run_id,
+    to_char(ran_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as ran_at,
+    to_char(recorded_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as recorded_at
+  from mart.nightly_verdicts
+  order by check_name, ran_at desc, recorded_at desc, verdict_id desc
+"""
+
+TRIGGER_QUEUE_SQL = """
+  select request_id, job_name, requested_by, dedupe_key, force_fetch, launched_run_key,
+         to_char(executed_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as executed_at,
+         to_char(requested_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as requested_at,
+         to_char(consumed_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as consumed_at
+  from staging.pipeline_trigger_requests
+  order by request_id desc
+  limit 20
+"""
+
+ROLLBACK_QUEUE_SQL = """
+  select request_id, environment, universe_id, universe_version, factor_id,
+         target_run_id, reason, requested_by, dedupe_key, result_pointer_id,
+         to_char(requested_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as requested_at,
+         to_char(consumed_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as consumed_at
+  from staging.head_rollback_requests
+  order by request_id desc
+  limit 20
+"""
+
 
 class OpsRunRowDto(BaseModel):
     run_id: str
@@ -91,6 +163,12 @@ class OpsOverviewResponse(BaseModel):
     runs: list[OpsRunRowDto] | str = "unavailable"
     data_engine: OpsDataEngineBuildDto | None = None
     app_git_sha: str = "unknown"
+    served_heads: list[dict[str, Any]] = Field(default_factory=list)
+    nightly_verdicts: list[dict[str, Any]] = Field(default_factory=list)
+    dependencies: list[dict[str, Any]] = Field(default_factory=list)
+    failed_job_errors: list[dict[str, Any]] = Field(default_factory=list)
+    trigger_queue: list[dict[str, Any]] = Field(default_factory=list)
+    rollback_requests: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class DatahubStatsResponse(BaseModel):
@@ -106,6 +184,15 @@ class DatahubStatsResponse(BaseModel):
     question_coverage: list[dict[str, Any]] = Field(default_factory=list)
     confidence: list[dict[str, Any]] = Field(default_factory=list)
     oracle_outcomes: list[dict[str, Any]] = Field(default_factory=list)
+    served_heads: list[dict[str, Any]] = Field(default_factory=list)
+    served_artifacts: list[dict[str, Any]] = Field(default_factory=list)
+    nightly_verdicts: list[dict[str, Any]] = Field(default_factory=list)
+    output_invariants: list[dict[str, Any]] = Field(default_factory=list)
+    oracle_disagreements: list[dict[str, Any]] = Field(default_factory=list)
+    llm_usage: list[dict[str, Any]] = Field(default_factory=list)
+    backfill_health: list[dict[str, Any]] = Field(default_factory=list)
+    trigger_queue: list[dict[str, Any]] = Field(default_factory=list)
+    rollback_requests: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class TriggerPipelineRequest(BaseModel):
@@ -123,6 +210,105 @@ class TriggerPipelineResponse(BaseModel):
     force_fetch: bool
     job_name: str
     run_key: str
+
+
+class HeadRollbackRequest(BaseModel):
+    universe_id: str = Field(min_length=1)
+    universe_version: str = Field(min_length=1)
+    factor_id: str = Field(default="gross_profit_per_employee", min_length=1)
+    target_run_id: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+    environment: str | None = None
+
+
+class HeadRollbackResponse(BaseModel):
+    request_id: int
+    dedupe_key: str
+    environment: str
+    universe_id: str
+    universe_version: str
+    factor_id: str
+    target_run_id: str
+    reason: str
+    requested_at: str
+
+
+def _optional_rows(cur: Any, sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
+    try:
+        cur.execute(sql, params)
+        return [dict(r) for r in cur.fetchall()]
+    except (psycopg.errors.UndefinedTable, psycopg.errors.InsufficientPrivilege):
+        cur.connection.rollback()
+        return []
+
+
+def _ledger_source_match(account_name: str, usage_by_source: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    norm = account_name.strip().lower()
+    if norm in usage_by_source:
+        return usage_by_source[norm]
+    for source, stats in usage_by_source.items():
+        if norm in source.lower() or source.lower() in norm:
+            return stats
+    return {}
+
+
+def _build_vendor_capacity(
+    contract: Any, env_name: str, usage_rows: list[dict[str, Any]]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    usage_by_source = {str(r["source"]): r for r in usage_rows if r.get("source") is not None}
+    accounts_out: list[dict[str, Any]] = []
+    capacity_out: list[dict[str, Any]] = []
+    for name, acct in sorted(contract.vendor_accounts.accounts.items()):
+        share = contract.account_share(name, env_name)
+        usage = _ledger_source_match(name, usage_by_source)
+        calls_24h = int(usage.get("calls_24h") or 0)
+        calls_7d = int(usage.get("calls_7d") or 0)
+        rate_limited_24h = int(usage.get("rate_limited_24h") or 0)
+        limits_list = [
+            {
+                "limit_id": lim.limit_id,
+                "unit": lim.unit,
+                "window_seconds": lim.window_seconds,
+                "amount": lim.amount,
+                "share": lim.share,
+            }
+            for lim in share.limits
+        ]
+        accounts_out.append(
+            {
+                "account": name,
+                "holder": acct.holder,
+                "environment": share.environment,
+                "percent": share.percent,
+                "seats": list(acct.seats),
+                "outside_consumers": bool(acct.outside_consumers),
+                "calls_24h": calls_24h,
+                "calls_7d": calls_7d,
+                "rate_limited_24h": rate_limited_24h,
+                "limits": limits_list,
+            }
+        )
+        for lim in share.limits:
+            window = lim.window_seconds or 0
+            observed = calls_24h if window <= 86400 else calls_7d
+            share_val = lim.share
+            util = round((observed / share_val) * 100.0, 2) if share_val and share_val > 0 else None
+            remaining = max(share_val - observed, 0) if share_val is not None else None
+            capacity_out.append(
+                {
+                    "account": name,
+                    "environment": share.environment,
+                    "limit_id": lim.limit_id,
+                    "unit": lim.unit,
+                    "window_seconds": lim.window_seconds,
+                    "share": share_val,
+                    "observed_calls": observed,
+                    "remaining_estimate": remaining,
+                    "utilization_pct": util,
+                    "rate_limited_24h": rate_limited_24h,
+                }
+            )
+    return accounts_out, capacity_out
 
 
 def get_ops_overview(*, database_url: str | None = None) -> OpsOverviewResponse:
@@ -158,13 +344,89 @@ def get_ops_overview(*, database_url: str | None = None) -> OpsOverviewResponse:
                 )
                 for r in cur.fetchall()
             ]
-        except psycopg.errors.UndefinedTable:
+        except (psycopg.errors.UndefinedTable, psycopg.errors.InsufficientPrivilege):
             cur.connection.rollback()
+
+        pg_t0 = time.perf_counter()
+        cur.execute("select 1 as ok")
+        pg_row = cur.fetchone()
+        pg_ms = round((time.perf_counter() - pg_t0) * 1000, 2)
+        deps: list[dict[str, Any]] = [
+            {
+                "name": "database",
+                "status": "present" if pg_row is not None else "unknown",
+                "elapsed_ms": pg_ms,
+                "detail": "Postgres ops reader reachable" if pg_row is not None else "Probe unverified",
+            }
+        ]
+        graph_t0 = time.perf_counter()
+        cur.execute(
+            "select to_regclass('staging.entities') as e, "
+            "to_regclass('staging.entity_aliases') as a, "
+            "to_regclass('staging.entity_relations') as r"
+        )
+        graph_row = cur.fetchone()
+        graph_ms = round((time.perf_counter() - graph_t0) * 1000, 2)
+        if graph_row is None:
+            deps.append({"name": "graph_store", "status": "unknown", "elapsed_ms": graph_ms, "detail": "Not queried"})
+        elif all(graph_row.get(k) is not None for k in ("e", "a", "r")):
+            deps.append(
+                {
+                    "name": "graph_store",
+                    "status": "present",
+                    "elapsed_ms": graph_ms,
+                    "detail": "Postgres entity graph tables present",
+                }
+            )
+        else:
+            deps.append(
+                {
+                    "name": "graph_store",
+                    "status": "absent",
+                    "elapsed_ms": graph_ms,
+                    "detail": "Postgres entity graph tables missing",
+                }
+            )
+        if pg_row is not None and (settings.s3_endpoint or "").strip():
+            s3_res = ObjectStorageCheck(settings).probe()
+            deps.append(
+                {
+                    "name": s3_res.name,
+                    "status": s3_res.status.value,
+                    "elapsed_ms": round(s3_res.duration_ms, 2),
+                    "detail": s3_res.detail,
+                }
+            )
+
+        served_heads = _optional_rows(cur, SERVED_HEADS_SQL)
+        nightly_verdicts = _optional_rows(cur, NIGHTLY_VERDICTS_SQL)
+        failed_job_errors = _optional_rows(
+            cur,
+            """
+            select distinct on (run_id)
+              run_id,
+              split_part(coalesce(message, ''), E'\\n', 1) as first_line_error,
+              to_char(timestamp at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as logged_at
+            from dagster.event_logs
+            where dagster_event_type in ('STEP_FAILURE', 'RUN_FAILURE', 'ENGINE_EVENT')
+              and coalesce(message, '') <> ''
+            order by run_id, id desc
+            limit 20
+            """,
+        )
+        trigger_queue = _optional_rows(cur, TRIGGER_QUEUE_SQL)
+        rollback_requests = _optional_rows(cur, ROLLBACK_QUEUE_SQL)
 
         return OpsOverviewResponse(
             runs=runs,
             data_engine=de,
             app_git_sha=settings.git_commit_sha,
+            served_heads=served_heads,
+            nightly_verdicts=nightly_verdicts,
+            dependencies=deps,
+            failed_job_errors=failed_job_errors,
+            trigger_queue=trigger_queue,
+            rollback_requests=rollback_requests,
         )
 
     return with_ops_reader(_q, database_url=database_url)
@@ -179,6 +441,10 @@ def get_datahub_stats(*, database_url: str | None = None) -> DatahubStatsRespons
         return [dict(r) for r in cur.fetchall()]
 
     def _q(cur: Any) -> DatahubStatsResponse:
+        env_rows = _optional_rows(cur, "select environment from mart.environment_identity limit 1")
+        env_name = str(env_rows[0]["environment"]) if env_rows and env_rows[0].get("environment") else settings.app_env
+        normalized_env = contract.normalize_environment(env_name)
+
         sources = _rows(
             cur,
             f"select source, count(*)::int as fetches_total, "
@@ -198,6 +464,38 @@ def get_datahub_stats(*, database_url: str | None = None) -> DatahubStatsRespons
             f"round(avg(l.duration_ms))::int as avg_ms, "
             f"to_char(max(l.called_at) at time zone 'utc', 'YYYY-MM-DD HH24:MI:SS\"Z\"') as last_call "
             f"from staging.api_call_ledger l where l.called_at >= {UTC_DAY_START_SQL} group by l.source order by calls desc",
+        )
+        usage_rows = _optional_rows(
+            cur,
+            """
+            select l.source,
+                   (count(*) filter (where l.called_at > now() - interval '24 hours'))::int as calls_24h,
+                   (count(*) filter (where l.called_at > now() - interval '24 hours' and not l.ok))::int as failed_24h,
+                   (count(*) filter (where l.called_at > now() - interval '24 hours' and (l.status_code = 429 or coalesce(l.error, '') ilike '%1302%')))::int as rate_limited_24h,
+                   (count(*) filter (where l.called_at > now() - interval '7 days'))::int as calls_7d,
+                   (count(*) filter (where l.called_at > now() - interval '7 days' and not l.ok))::int as failed_7d
+            from staging.api_call_ledger l
+            where l.called_at > now() - interval '7 days'
+            group by l.source
+            order by l.source
+            """,
+        )
+        vendor_accounts, capacity = _build_vendor_capacity(contract, normalized_env, usage_rows)
+        model_1302_by_day = _optional_rows(
+            cur,
+            f"""
+            select to_char((l.called_at at time zone 'utc')::date, 'YYYY-MM-DD') as day,
+                   l.source,
+                   (count(*) filter (where l.status_code = 429))::int as status_429,
+                   (count(*) filter (where coalesce(l.error, '') ilike '%1302%' or coalesce(l.error, '') ilike '%rate limit%'))::int as code_1302,
+                   count(*)::int as total_calls,
+                   (count(*) filter (where not l.ok))::int as failed_calls
+            from staging.api_call_ledger l
+            where l.called_at >= {UTC_DAY_START_SQL} - interval '13 days'
+            group by 1, 2
+            having count(*) filter (where l.status_code = 429 or not l.ok) > 0
+            order by 1 desc, 2
+            """,
         )
         recent_calls = _rows(
             cur,
@@ -230,6 +528,57 @@ def get_datahub_stats(*, database_url: str | None = None) -> DatahubStatsRespons
         question_cov = _rows(cur, QUESTION_COVERAGE_SQL)
         confidence = _rows(cur, CONFIDENCE_REPORT_SQL)
         oracle_outcomes = _rows(cur, ORACLE_OUTCOMES_SQL)
+        oracle_disagreements = _optional_rows(cur, ORACLE_DISAGREEMENTS_SQL)
+        served_heads = _optional_rows(cur, SERVED_HEADS_SQL)
+        served_artifacts = _optional_rows(
+            cur,
+            "select artifact_key, lane, schedule_name, universe_like, family, served_to, wired "
+            "from mart.served_artifact order by lane, artifact_key",
+        )
+        nightly_verdicts = _optional_rows(cur, NIGHTLY_VERDICTS_SQL)
+        output_invariants = _optional_rows(
+            cur,
+            """
+            select distinct on (invariant_id)
+              invariant_id, kind, population, violation_count, deferred, sample_rows, dagster_run_id,
+              to_char(checked_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as checked_at
+            from mart.output_invariant_results
+            order by invariant_id, checked_at desc, result_id desc
+            """,
+        )
+        llm_usage = _optional_rows(
+            cur,
+            f"""
+            select to_char((started_at at time zone 'utc')::date, 'YYYY-MM-DD') as day,
+                   provider,
+                   coalesce(served_model, model) as served_model,
+                   standard,
+                   count(*)::int as calls,
+                   coalesce(sum(prompt_tokens), 0)::bigint as prompt_tokens,
+                   coalesce(sum(completion_tokens), 0)::bigint as completion_tokens,
+                   coalesce(sum(cost), 0)::text as cost,
+                   (count(*) filter (where status_code is distinct from 200))::int as error_calls,
+                   (count(*) filter (where coalesce(decision->>'abstained', 'false') = 'true'
+                                         or coalesce(decision->>'refusal', '') <> ''))::int as refusal_calls
+            from staging.model_invocations
+            where started_at >= {UTC_DAY_START_SQL} - interval '13 days'
+            group by 1, 2, 3, 4
+            order by 1 desc, calls desc
+            limit 100
+            """,
+        )
+        backfill_health = _optional_rows(
+            cur,
+            """
+            select id, source, metric, value::text as value, note,
+                   to_char(logged_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as logged_at
+            from staging.ingestion_health_log
+            order by logged_at desc, id desc
+            limit 40
+            """,
+        )
+        trigger_queue = _optional_rows(cur, TRIGGER_QUEUE_SQL)
+        rollback_requests = _optional_rows(cur, ROLLBACK_QUEUE_SQL)
         validation = _rows(
             cur,
             f"select 'plausibility sign checks' as check, "
@@ -249,12 +598,24 @@ def get_datahub_stats(*, database_url: str | None = None) -> DatahubStatsRespons
             sources=sources,
             capture_runs=capture_runs,
             validation=validation,
+            capacity=capacity,
+            vendor_accounts=vendor_accounts,
+            model_1302_by_day=model_1302_by_day,
             traffic=traffic,
             recent_calls=recent_calls,
             ledger_coverage=ledger_cov,
             question_coverage=question_cov,
             confidence=confidence,
             oracle_outcomes=oracle_outcomes,
+            served_heads=served_heads,
+            served_artifacts=served_artifacts,
+            nightly_verdicts=nightly_verdicts,
+            output_invariants=output_invariants,
+            oracle_disagreements=oracle_disagreements,
+            llm_usage=llm_usage,
+            backfill_health=backfill_health,
+            trigger_queue=trigger_queue,
+            rollback_requests=rollback_requests,
         )
 
     return with_ops_reader(_q, database_url=database_url)
@@ -309,23 +670,120 @@ def trigger_pipeline(
     )
 
 
+def request_head_rollback(
+    principal_id: str, req: HeadRollbackRequest, *, database_url: str | None = None
+) -> HeadRollbackResponse:
+    universe_id = req.universe_id.strip()
+    universe_version = req.universe_version.strip()
+    factor_id = req.factor_id.strip()
+    target_run_id = req.target_run_id.strip()
+    reason = req.reason.strip()
+    if not universe_id or not universe_version or not factor_id or not reason:
+        raise ValueError("universe_id, universe_version, factor_id, and reason must be non-empty")
+    if not target_run_id.startswith("capture-run:"):
+        raise ValueError("target_run_id must start with 'capture-run:'")
+
+    contract = load_environment_contract()
+
+    def _read_env(cur: Any) -> str:
+        cur.execute("select environment from mart.environment_identity limit 1")
+        row = cur.fetchone()
+        if row and row.get("environment"):
+            return str(row["environment"])
+        return contract.normalize_environment(req.environment or settings.app_env)
+
+    declared_env = with_ops_reader(_read_env, database_url=database_url)
+    if req.environment is not None and contract.normalize_environment(
+        req.environment
+    ) != contract.normalize_environment(declared_env):
+        raise ValueError(f"environment {req.environment!r} does not match declared environment {declared_env!r}")
+
+    dedupe_key = str(uuid.uuid4())
+
+    def _insert(cur: Any) -> tuple[int, str]:
+        cur.execute(
+            """
+            insert into staging.head_rollback_requests (
+                environment, universe_id, universe_version, factor_id,
+                target_run_id, reason, requested_by, dedupe_key
+            )
+            values (%s, %s, %s, %s, %s, %s, %s, %s)
+            returning request_id, to_char(requested_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as requested_at
+            """,
+            (declared_env, universe_id, universe_version, factor_id, target_run_id, reason, principal_id, dedupe_key),
+        )
+        row = cur.fetchone()
+        return int(row["request_id"]), str(row["requested_at"])
+
+    req_id, requested_at = with_app_runtime(_insert, database_url=database_url)
+    return HeadRollbackResponse(
+        request_id=req_id,
+        dedupe_key=dedupe_key,
+        environment=declared_env,
+        universe_id=universe_id,
+        universe_version=universe_version,
+        factor_id=factor_id,
+        target_run_id=target_run_id,
+        reason=reason,
+        requested_at=requested_at,
+    )
+
+
+def build_datahub_fact_diff(stats: DatahubStatsResponse) -> dict[str, Any]:
+    """Summarize per-universe question deltas and head withhold/staleness state for AI/MCP consumers."""
+    withheld_heads = [h for h in stats.served_heads if h.get("run_id") is None]
+    stale_heads = [h for h in stats.served_heads if h.get("freshness") == "stale"]
+    question_deltas: dict[str, Any] = {}
+    for row in stats.question_coverage:
+        universe_id = str(row.get("universe_id") or "")
+        payload = row.get("payload")
+        if not universe_id or not isinstance(payload, dict):
+            continue
+        q_map = payload.get("questions") or {}
+        deltas = {
+            q_key: q_val["change"]
+            for q_key, q_val in q_map.items()
+            if isinstance(q_val, dict) and q_val.get("change") is not None
+        }
+        question_deltas[universe_id] = {
+            "previous_run_id": payload.get("previous_run_id"),
+            "deltas": deltas,
+        }
+    return {
+        "withheld_head_count": len(withheld_heads),
+        "withheld_heads": withheld_heads,
+        "stale_head_count": len(stale_heads),
+        "stale_heads": stale_heads,
+        "question_deltas": question_deltas,
+    }
+
+
 __all__ = [
     "CONFIDENCE_REPORT_SQL",
     "DatahubStatsResponse",
+    "HeadRollbackRequest",
+    "HeadRollbackResponse",
     "LEDGER_COVERAGE_DAYS",
+    "NIGHTLY_VERDICTS_SQL",
     "NON_CANARY_UNIVERSE_WHERE",
+    "ORACLE_DISAGREEMENTS_SQL",
     "ORACLE_OUTCOMES_SQL",
     "OpsDataEngineBuildDto",
     "OpsOverviewResponse",
     "OpsRunRowDto",
     "QUESTION_COVERAGE_SQL",
     "REGISTERED_RAW_SOURCE_FILTER",
+    "ROLLBACK_QUEUE_SQL",
+    "SERVED_HEADS_SQL",
     "SWEEP_RUN_SOURCE_REGEX_SOURCE",
+    "TRIGGER_QUEUE_SQL",
     "TriggerPipelineRequest",
     "TriggerPipelineResponse",
     "UTC_DAY_START_SQL",
+    "build_datahub_fact_diff",
     "get_datahub_stats",
     "get_ops_overview",
     "governed_latest_per_universe_sql",
+    "request_head_rollback",
     "trigger_pipeline",
 ]

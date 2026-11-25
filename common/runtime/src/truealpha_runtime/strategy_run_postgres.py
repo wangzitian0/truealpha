@@ -25,19 +25,55 @@ from truealpha_runtime.strategy_run import (
 _ROW_VALIDATION_ERRORS = (KeyError, ValueError, TypeError, InvalidOperation, ValidationError)
 
 LATEST_RUN_SQL = """
-    select r.strategy_run_id, r.corpus_sha256, r.executed_at,
-           exists (
-               select 1 from mart.served_head h
-               join mart.strategy_run_capture b on b.capture_run_id = h.run_id
-               where b.strategy_run_id = r.strategy_run_id
-                 and h.factor_id = 'gross_profit_per_employee'
-                 and h.universe_id like any(%s::text[])
-           ) as is_governed,
-           r.strategy_version, r.definition_content_sha256
-    from mart.strategy_runs r
-    where r.strategy_key = %s
-    order by is_governed desc, r.executed_at desc, r.created_at desc, r.strategy_run_id desc
-    limit 1
+    with head_scope as (
+        select h.run_id, h.advanced_at, h.universe_id, h.universe_version,
+               h.age_hours, h.limit_hours, h.freshness, h.availability
+        from mart.served_head h
+        where h.factor_id = 'gross_profit_per_employee'
+          and h.universe_id like any(%s::text[])
+    ),
+    top_head as (
+        select hs.run_id, hs.age_hours, hs.limit_hours, hs.freshness, hs.availability
+        from head_scope hs
+        order by (hs.run_id is not null) desc, hs.advanced_at desc, hs.universe_id desc, hs.universe_version desc
+        limit 1
+    ),
+    chosen_run as (
+        select r.strategy_run_id, r.corpus_sha256, r.executed_at,
+               exists (
+                   select 1 from head_scope hs
+                   join mart.strategy_run_capture b on b.capture_run_id = hs.run_id
+                   where b.strategy_run_id = r.strategy_run_id
+               ) as is_governed,
+               r.strategy_version, r.definition_content_sha256
+        from mart.strategy_runs r
+        where r.strategy_key = %s
+        order by is_governed desc, r.executed_at desc, r.created_at desc, r.strategy_run_id desc
+        limit 1
+    )
+    select cr.strategy_run_id,
+           cr.corpus_sha256,
+           cr.executed_at,
+           coalesce(cr.is_governed, false) as is_governed,
+           cr.strategy_version,
+           cr.definition_content_sha256,
+           th.run_id as head_run_id,
+           th.availability as head_availability,
+           coalesce(matched.age_hours, th.age_hours) as head_age_hours,
+           coalesce(matched.limit_hours, th.limit_hours) as head_limit_hours,
+           coalesce(matched.freshness, th.freshness) as head_freshness
+    from (select 1 as anchor) a
+    left join top_head th on true
+    left join chosen_run cr on true
+    left join lateral (
+        select hs.age_hours, hs.limit_hours, hs.freshness
+        from head_scope hs
+        join mart.strategy_run_capture b on b.capture_run_id = hs.run_id
+        where b.strategy_run_id = cr.strategy_run_id
+        order by hs.advanced_at desc, hs.universe_id desc, hs.universe_version desc
+        limit 1
+    ) matched on true
+    where th.availability is not null or cr.strategy_run_id is not null
 """
 
 DECISIONS_FROM_SQL = """
@@ -80,7 +116,9 @@ _DECISIONS_SQL = (
     "select coalesce(ei.legacy_id, d.issuer_id) as issuer_id, d.cutoff_at,"
     " d.capital_adjusted_labor_efficiency, d.tier, d.current_price_to_sales, d.target_price_to_sales,"
     " d.current_price_to_gross_profit, d.target_price_to_gross_profit, d.valuation_gap,"
-    " d.eligible, d.outcome, d.exclusion_reason, d.availability_status, d.rank, d.target_weight, d.peg, d.peg_rank,"
+    " d.eligible, d.outcome, d.exclusion_reason, d.availability_status,"
+    " d.source_evidence_status, d.factor_validation_status, d.peg_reason_codes,"
+    " d.rank, d.target_weight, d.peg, d.peg_rank,"
     " peg_c.value as peg_consensus, peg_cr.value as peg_consensus_rank,"
     " d.labor_efficiency_metric, m.confidence " + DECISIONS_FROM_SQL
 )
@@ -169,6 +207,7 @@ def _decision_from_row(row: dict[str, Any], *, convention: str = "historical_cag
     elif convention == "guidance":
         data["peg"] = None
         data["peg_rank"] = None
+    peg_reason_codes = tuple(str(code) for code in (data.pop("peg_reason_codes", None) or ()))
     return StrategyRunDecision(
         **(
             data
@@ -181,6 +220,7 @@ def _decision_from_row(row: dict[str, Any], *, convention: str = "historical_cag
                     if data.get("availability_status") is not None
                     else None
                 ),
+                "peg_reason_codes": peg_reason_codes,
             }
         )
     )
@@ -200,6 +240,9 @@ class PostgresStrategyRunRepository:
     ) -> StrategyRunReport | StrategyRunUnavailable:
         del context
         norm_convention = _normalize_convention(convention)
+        head_age_hours: float | None = None
+        head_limit_hours: float | None = None
+        head_freshness: str | None = None
         try:
             with (
                 psycopg.connect(self._database_url, connect_timeout=5) as connection,
@@ -212,6 +255,17 @@ class PostgresStrategyRunRepository:
                 if run_row is None:
                     cursor.execute("reset role")
                     return StrategyRunUnavailable(strategy_id=strategy_id, reason="no_runs_recorded")
+                if run_row.get("head_availability") is not None and run_row.get("head_run_id") is None:
+                    cursor.execute("reset role")
+                    return StrategyRunUnavailable(strategy_id=strategy_id, reason="head_withheld")
+                if run_row.get("strategy_run_id") is None:
+                    cursor.execute("reset role")
+                    return StrategyRunUnavailable(strategy_id=strategy_id, reason="no_runs_recorded")
+                head_age_hours = float(run_row["head_age_hours"]) if run_row.get("head_age_hours") is not None else None
+                head_limit_hours = (
+                    float(run_row["head_limit_hours"]) if run_row.get("head_limit_hours") is not None else None
+                )
+                head_freshness = str(run_row["head_freshness"]) if run_row.get("head_freshness") is not None else None
                 cursor.execute(_DECISIONS_SQL, (run_row["strategy_run_id"],))
                 decision_rows = cursor.fetchall()
                 cursor.execute("reset role")
@@ -233,6 +287,9 @@ class PostgresStrategyRunRepository:
                     version=run_row["strategy_version"],
                     content_sha256=run_row["definition_content_sha256"],
                 ),
+                head_age_hours=head_age_hours,
+                head_limit_hours=head_limit_hours,
+                head_freshness=head_freshness,
             )
         except _ROW_VALIDATION_ERRORS:
             return StrategyRunUnavailable(strategy_id=strategy_id, reason="schema_mismatch")

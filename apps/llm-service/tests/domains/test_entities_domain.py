@@ -292,3 +292,28 @@ def test_get_trace_refuses_a_cutoff_that_is_not_a_timestamp_before_any_database_
 )
 def test_a_timestamp_cutoff_is_accepted(cutoff: str) -> None:
     assert entities_service._parses_as_instant(cutoff) is True
+
+
+@pytest.mark.parametrize("status_val", ["low_confidence", "stale", "error"])
+def test_entity_decision_row_preserves_status_and_reason_codes(status_val: str) -> None:
+    dto = entities_service._decision_row_to_dto(
+        {
+            "issuer_id": "issuer:aapl",
+            "cutoff_at": "2026-11-20T00:00:00Z",
+            "corpus_sha256": "c" * 64,
+            "tier": "tier_1",
+            "current_price_to_sales": "5.0",
+            "target_price_to_sales": "6.0",
+            "eligible": True,
+            "outcome": "selected",
+            "availability_status": status_val,
+            "source_evidence_status": "degraded",
+            "factor_validation_status": "accepted",
+            "peg_reason_codes": ["non_positive_growth"],
+        },
+        display_map={},
+    )
+    assert dto.availability == status_val
+    assert dto.source_evidence_status == "degraded"
+    assert dto.factor_validation_status == "accepted"
+    assert dto.peg_reason_codes == ["non_positive_growth"]

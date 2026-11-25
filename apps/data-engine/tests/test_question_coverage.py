@@ -135,7 +135,7 @@ def test_gppe_cells_use_persisted_availability_status() -> None:
         ("issuer:d", "stale", ["stale_input"], Decimal("1")),
     ]
     cells = gppe_cells(_Rows(rows), "run")
-    assert [c.answered for c in cells] == [True, False, False, False]
+    assert [c.answered for c in cells] == [True, True, False, False]
     assert cells[1].reason == "low_confidence"
     assert cells[2].reason == "missing_headcount" and cells[3].reason == "stale_input"
 
@@ -528,6 +528,32 @@ def test_compile_report_qqq_empty_fund_virtual_company_fails_q5_via_expected_fun
     assert q5["answered"] == 0
     assert q5["unavailable"] == {NO_ROW: 1}
     assert coverage_verdict_failure(report) == f"zero answered for q5=0/1 on {QQQ}"
+
+
+def test_questions_uses_frozen_snapshot_members_for_denominator(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Missing GPPE rows must not shrink the denominator when frozen core snapshot members exist (#1747)."""
+    from data_engine.datahub import question_coverage as qc
+
+    head = GovernedHead(universe_id=QQQ, run_id="capture-run:qqq-denom", cutoff=datetime(2026, 10, 6, tzinfo=UTC))
+
+    class _SnapshotConn:
+        def execute(self, sql: str, params=None):
+            if "from staging.core_snapshot_members" in sql:
+                return _Rows([("issuer:a",), ("issuer:b",)])
+            return _Rows([])
+
+    monkeypatch.setattr(qc, "gppe_cells", lambda *_a, **_k: (Cell("issuer:a", True),))
+    monkeypatch.setattr(qc, "peg_cells", lambda *_a, **_k: (Cell("issuer:a", True),))
+    monkeypatch.setattr(qc, "supply_chain_cells", lambda *_a, **_k: (Cell("issuer:a", True),))
+    monkeypatch.setattr(qc, "analyst_rating_cells", lambda *_a, **_k: (Cell("issuer:a", True),))
+    monkeypatch.setattr(qc, "fund_cells", lambda *_a, **_k: ())
+    monkeypatch.setattr(qc, "theme_purity_cells", lambda *_a, **_k: (Cell("issuer:a", True),))
+
+    issuer_count, questions = qc._questions(_SnapshotConn(), "qqq", head)  # type: ignore[arg-type]
+    assert issuer_count == 2
+    assert questions["q1"]["denominator"] == 2
+    assert questions["q1"]["answered"] == 1
+    assert questions["q1"]["unavailable"] == {NO_ROW: 1}
 
 
 def test_reports_current_for_head_requires_both_coverage_and_confidence_reports() -> None:

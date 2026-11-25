@@ -132,7 +132,10 @@ def _classify_cell(subject_id: Any, status: Any, reason_codes: Any, value: Any) 
     baseline counts it); a reason class only routes the gap (#1851)."""
     if status == "available" and value is not None:
         return Cell(str(subject_id), True)
-    if status == "available" and value is None:
+    if status == "low_confidence" and value is not None:
+        reason = _reason_of(list(reason_codes or []))
+        return Cell(str(subject_id), True, "low_confidence" if reason == UNRECORDED_REASON else reason)
+    if status in {"available", "low_confidence"} and value is None:
         return Cell(str(subject_id), False, "null_metric_value")
     not_applicable = status == "not_applicable"
     reason = _reason_of(list(reason_codes or []), not_applicable=not_applicable)
@@ -380,9 +383,20 @@ def compile_report(connection: Connection[Any], *, universe: str, executed_at: d
     }
 
 
+def _frozen_member_issuers(connection: Connection[Any], run_id: str) -> list[str]:
+    rows = connection.execute(
+        "select distinct m.issuer_id from staging.core_snapshot_members m "
+        "join staging.core_snapshots s on s.snapshot_id = m.snapshot_id "
+        "where s.run_id = %s order by m.issuer_id",
+        (run_id,),
+    ).fetchall()
+    return [str(r[0]) for r in rows]
+
+
 def _questions(connection: Connection[Any], key: str, head: GovernedHead) -> tuple[int, dict[str, dict[str, Any]]]:
     gppe = gppe_cells(connection, head.run_id)
-    issuers = [cell.subject_id for cell in gppe]
+    frozen_issuers = _frozen_member_issuers(connection, head.run_id)
+    issuers = list(dict.fromkeys([*frozen_issuers, *(cell.subject_id for cell in gppe)]))
     consolidates_fund = "fund_consolidation" in record(key).roles
     funds_observed = fund_cells(connection, head.run_id) if consolidates_fund else ()
     fund_subjects = tuple(

@@ -622,7 +622,7 @@ def test_a_governed_head_with_no_bound_strategy_run_is_a_visible_gap_not_a_silen
             snapshot.universe_id,
             snapshot.universe_version,
             plan.run_id,
-            CUTOFF,
+            datetime.now(UTC),
         ),
     )
 

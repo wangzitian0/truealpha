@@ -41,6 +41,9 @@ class StrategyRunDecision(StrictFrozenModel):
     confidence: Decimal | None = Field(default=None, ge=0, le=1)
     exclusion_reason: str | None = None
     availability_status: AvailabilityStatus | None = None
+    source_evidence_status: str | None = None
+    factor_validation_status: str | None = None
+    peg_reason_codes: tuple[str, ...] = ()
     rank: int | None = Field(default=None, ge=1)
     target_weight: Decimal | None = Field(default=None, ge=0, le=1)
 
@@ -51,7 +54,15 @@ class StrategyRunDecision(StrictFrozenModel):
 
     @model_serializer(mode="wrap")
     def _omit_absent_availability_status(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
-        return drop_none_fields(handler(self), "availability_status")
+        dumped = drop_none_fields(
+            handler(self),
+            "availability_status",
+            "source_evidence_status",
+            "factor_validation_status",
+        )
+        if not dumped.get("peg_reason_codes"):
+            dumped.pop("peg_reason_codes", None)
+        return dumped
 
     @model_validator(mode="after")
     def validate_one_valuation_basis(self) -> Self:
@@ -97,12 +108,24 @@ class StrategyRunReport(StrictFrozenModel):
     strategy_run_id: str | None = None
     governed: bool = False
     definition: StrategyRunDefinition | None = None
+    head_age_hours: float | None = None
+    head_limit_hours: float | None = None
+    head_freshness: str | None = None
+
+    @model_serializer(mode="wrap")
+    def _omit_absent_head_fields(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        return drop_none_fields(handler(self), "head_age_hours", "head_limit_hours", "head_freshness")
 
 
 class StrategyRunUnavailable(StrictFrozenModel):
     strategy_id: str = Field(min_length=1)
     reason: Literal[
-        "unknown_strategy_id", "no_runs_recorded", "database_unavailable", "schema_mismatch", "empty_decisions"
+        "unknown_strategy_id",
+        "no_runs_recorded",
+        "head_withheld",
+        "database_unavailable",
+        "schema_mismatch",
+        "empty_decisions",
     ]
 
 

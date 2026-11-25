@@ -30,6 +30,7 @@ grant usage on schema app to app_runtime;
 -- table's own triggers enforce append-only/consume-once.
 grant usage on schema staging to app_runtime;
 grant select, insert on staging.pipeline_trigger_requests to app_runtime;
+grant select, insert on staging.head_rollback_requests to app_runtime;
 
 -- Login front door (#368). Login itself runs before any
 -- tenant/principal GUC is set (it is what *establishes* that context), so
@@ -140,6 +141,7 @@ grant select on staging.contract_objects to app_ops_reader;
 -- #729: the external call ledger — /admin/datahub's Capacity and Traffic sections read
 -- every vendor request (success or failure) and join it to the landed raw.fetches row.
 grant select on staging.api_call_ledger to app_ops_reader;
+grant select on staging.model_invocations, staging.ingestion_health_log, staging.pipeline_trigger_requests, staging.head_rollback_requests to app_ops_reader;
 grant usage on schema mart to app_ops_reader;
 grant select on mart.current_pointer_head to app_ops_reader;
 -- #1062: the served head, with its age, limit, label and availability.
@@ -204,6 +206,8 @@ grant select on mart.capture_issuer_lineage to app_ops_reader;
 grant select on mart.nightly_verdicts to app_ops_reader;
 grant select on mart.oracle_outcomes to app_ops_reader;
 grant select on mart.cell_confidence to app_ops_reader;
+grant select on mart.capture_meta_info, mart.output_invariant_results to app_ops_reader;
+grant select on mart.output_invariant_results to mart_readonly;
 grant select on mart.fund_virtual_company to app_ops_reader;
 grant select on mart.issuer_analyst_ratings to app_ops_reader;
 grant select on mart.issuer_supply_chain_exposure to app_ops_reader;
