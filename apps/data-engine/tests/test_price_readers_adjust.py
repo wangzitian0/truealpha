@@ -15,9 +15,7 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
 
-import psycopg
 import pytest
-from data_engine.config import settings
 from data_engine.datahub.market_prices import PriceBarRecord, insert_market_prices_daily
 from data_engine.datahub.price_series import load_daily_series
 from data_engine.datahub.strategy_history import postgres_last_close
@@ -27,21 +25,6 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 SPLIT_CLOSE = 50
 UNADJUSTED_CLOSE = 500
 SERIES = {"splits": SPLIT_CLOSE, "none": UNADJUSTED_CLOSE}
-
-
-@pytest.fixture
-def connection():
-    try:
-        active = psycopg.connect(settings.database_url, connect_timeout=3, autocommit=False)
-    except psycopg.OperationalError as error:
-        if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
-            pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
-        pytest.skip("no local Postgres; CI runs the required integration coverage")
-    try:
-        yield active
-    finally:
-        active.rollback()
-        active.close()
 
 
 def _bar(symbol: str, d: date, close: int, resolution: str = "1D") -> PriceBarRecord:

@@ -107,6 +107,34 @@ def guard_db_write(database_url: str | None = None) -> str:
     return url
 
 
+@contextmanager
+def open_test_connection(
+    database_url: str | None = None,
+    *,
+    autocommit: bool = False,
+    connect_timeout: int = 3,
+) -> Iterator[psycopg.Connection[Any]]:
+    """Open a guarded test Postgres connection; skip locally when unconfigured, fail when runtime is required."""
+    import pytest
+
+    url = guard_db_write(database_url)
+    try:
+        active = psycopg.connect(url, connect_timeout=connect_timeout, autocommit=autocommit)
+    except psycopg.OperationalError as error:
+        if database_url or os.environ.get("DATABASE_URL") or os.environ.get(REQUIRE_RUNTIME_ENV):
+            pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
+        skip_or_fail(f"no local Postgres; CI runs the required integration coverage ({error})")
+        return
+    try:
+        if not autocommit:
+            active.execute("select 1")
+        yield active
+    finally:
+        if not autocommit:
+            active.rollback()
+        active.close()
+
+
 def apply_migration_chain(
     database_url: str,
     *,

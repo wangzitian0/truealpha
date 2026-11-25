@@ -23,15 +23,12 @@ commits.
 from __future__ import annotations
 
 import json
-import os
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-import psycopg
 import pytest
-from data_engine.config import settings
 from data_engine.contracts.capture_control import CaptureListVersion
 from data_engine.contracts.datahub import CaptureCampaign, CaptureRun, CaptureSchedulePolicy
 from data_engine.contracts.evidence_graph import BitemporalStamp, EvidenceNode, EvidenceNodeKind, EvidenceNodeRef
@@ -180,22 +177,6 @@ def test_a_malformed_report_fails_closed() -> None:
 
 
 # -- the pointer itself, against the real schema ----------------------------------------
-
-
-@pytest.fixture
-def connection():
-    try:
-        active = psycopg.connect(settings.database_url, connect_timeout=3, autocommit=False)
-    except psycopg.OperationalError as error:
-        if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
-            pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
-        pytest.skip("no local Postgres; CI runs the required integration coverage")
-    try:
-        active.execute("select 1")
-        yield active
-    finally:
-        active.rollback()
-        active.close()
 
 
 def _seed_runs(connection, *, label: str, count: int) -> tuple[str, ...]:

@@ -45,6 +45,8 @@ import pytest
 from psycopg import sql
 from truealpha_runtime.testing import isolated_test_database
 
+pytestmark = pytest.mark.gate
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DB_DIR = REPO_ROOT / "db"
 RUNNER = DB_DIR / "apply_migrations.sh"

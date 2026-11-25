@@ -18,14 +18,11 @@ The DB-backed tests skip without a local Postgres; ci-python runs them migrated.
 from __future__ import annotations
 
 import logging
-import os
 import sys
 from datetime import date
 from pathlib import Path
 
-import psycopg
 import pytest
-from data_engine.config import settings
 from data_engine.datahub.capture_core import PostgresCoreRepository
 from data_engine.datahub.share_basis import NO_SPLIT_ADJUSTED_SERIES, SPLIT_DERIVATION_FAILED, Unavailable
 from factors.snapshot_inputs import CoreReasonCode, MetricAvailability
@@ -42,22 +39,6 @@ from split_series_seed import share_count_vintage  # noqa: E402
 
 MATERIALIZATION_LOGGER = "data_engine.datahub.capture_core.materialization"
 VINTAGE = {"shares_outstanding": share_count_vintage(filed=date(2026, 3, 2), own_date=date(2026, 2, 20))}
-
-
-@pytest.fixture
-def connection():
-    try:
-        active = psycopg.connect(settings.database_url, connect_timeout=3, autocommit=False)
-    except psycopg.OperationalError as error:
-        if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
-            pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
-        pytest.skip("no local Postgres; CI runs the required integration coverage")
-    try:
-        active.execute("select 1")
-        yield active
-    finally:
-        active.rollback()
-        active.close()
 
 
 def _share_basis_records(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:

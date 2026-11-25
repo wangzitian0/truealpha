@@ -96,12 +96,52 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.image }}
           cache-to: type=gha,mode=max,scope=${{ matrix.image }}
       # infra2 runs /app/dagster-entrypoint.sh from this image (Refs wangzitian0/infra2#1822).
-      - name: Check the data-engine image carries an executable entrypoint
+      - name: Check the data-engine image carries an executable entrypoint and loads definitions
         if: matrix.image == 'truealpha-data-engine'
         run: |
           docker run --rm --entrypoint test ci-image-check/truealpha-data-engine:build -x /app/dagster-entrypoint.sh
           docker run --rm --entrypoint cat ci-image-check/truealpha-data-engine:build /app/dagster-entrypoint.sh \
             | cmp - apps/data-engine/dagster-entrypoint.sh
+          docker run --rm --entrypoint python ci-image-check/truealpha-data-engine:build \
+            -c "import data_engine.dagster_defs as m; jobs = list(m.defs.jobs); assert len(jobs) >= 1, jobs; print('data-engine defs ok:', len(jobs))"
+      - name: Smoke-test truealpha-llm-service container boot
+        if: matrix.image == 'truealpha-llm-service'
+        run: |
+          set -euo pipefail
+          docker run --rm -e ENVIRONMENT=ci --entrypoint python ci-image-check/truealpha-llm-service:build \
+            -c "import llm_service.main as m; assert m.ENV_MANIFEST_PATH.is_file(); print('llm-service import ok')"
+          cid="$(docker run -d -e ENVIRONMENT=ci -p 127.0.0.1:18000:8000 --entrypoint uvicorn \
+            ci-image-check/truealpha-llm-service:build llm_service.main:app --host 0.0.0.0 --port 8000)"
+          trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
+          for _ in $(seq 1 20); do
+            if curl -fsS http://127.0.0.1:18000/livez >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::truealpha-llm-service failed /livez container smoke" >&2
+          docker logs "$cid" >&2 || true
+          exit 1
+      - name: Smoke-test truealpha-app-web container boot
+        if: matrix.image == 'truealpha-app-web'
+        run: |
+          set -euo pipefail
+          docker run --rm --entrypoint sh ci-image-check/truealpha-app-web:build \
+            -c 'test -f /app/server.js && test -n "$(ls -A /app/.next/static)"'
+          smoke_secret="$(openssl rand -hex 32)"
+          cid="$(docker run -d -e HOSTNAME=0.0.0.0 -e PORT=3000 -e LLM_SERVICE_URL=http://127.0.0.1:8000 \
+            -e SECRET_KEY="$smoke_secret" \
+            -p 127.0.0.1:13000:3000 ci-image-check/truealpha-app-web:build)"
+          trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
+          for _ in $(seq 1 20); do
+            if body="$(curl -fsS http://127.0.0.1:13000/login)" && grep -q "Sign in" <<<"$body"; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::truealpha-app-web failed /login container smoke" >&2
+          docker logs "$cid" >&2 || true
+          exit 1
 
   # `!cancelled()` rather than the implicit success(): with `prebuilt` the build job is
   # skipped by design, and a job that `needs` a skipped job is itself skipped unless its

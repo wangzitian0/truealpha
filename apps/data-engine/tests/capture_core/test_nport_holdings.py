@@ -8,9 +8,7 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
-import psycopg
 import pytest
-from data_engine.config import settings
 from data_engine.datahub.capture_core.nport_holdings import capture_fund_holdings
 from data_engine.sources import nport
 from factors.shared import entity_resolution as er
@@ -67,19 +65,6 @@ class _FakeSec:
         if url == nport.ARCHIVE_URL.format(cik=_CIK, accession=_ACCESSION):
             return _Response(_XML)
         raise AssertionError(f"unexpected URL: {url}")
-
-
-@pytest.fixture
-def connection():
-    try:
-        active = psycopg.connect(settings.database_url, connect_timeout=3, autocommit=False)
-    except psycopg.OperationalError as error:
-        pytest.skip(f"no local database: {error}")
-    try:
-        yield active
-    finally:
-        active.rollback()
-        active.close()
 
 
 def test_capture_lands_filing_and_weighted_lines(connection) -> None:

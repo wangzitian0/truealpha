@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import inspect
 import json
-import os
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -52,21 +51,6 @@ CUTOFF = datetime(2026, 4, 2, tzinfo=UTC)
 #: The `report_date` of the packaged TOPT corpus. Capture resolves every id as of this date.
 REPORT_DATE = date(2026, 3, 31)
 HANDOVER = date(2026, 4, 1)
-
-
-@pytest.fixture
-def connection() -> Iterator[psycopg.Connection[Any]]:
-    try:
-        active = psycopg.connect(settings.database_url, connect_timeout=3, autocommit=False)
-    except psycopg.OperationalError as error:
-        if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
-            pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
-        pytest.skip("no local Postgres; CI runs the required integration coverage")
-    try:
-        yield active
-    finally:
-        active.rollback()
-        active.close()
 
 
 class _LaneConnection:

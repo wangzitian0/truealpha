@@ -27,6 +27,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.smoke
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 WARM = REPO_ROOT / "tools" / "warm_surface.sh"
 

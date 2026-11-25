@@ -19,7 +19,7 @@ from data_engine.config import settings
 from data_engine.lanes import quality
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from datahub.test_topt_read import _accepted_run, connection  # noqa: E402, F401
+from datahub._topt_read_support import _accepted_run  # noqa: E402, F401
 
 _YAHOO_PARSER = "production-topt-live-parser:v1"
 _EXECUTED_AT = "2026-09-16T00:45:00+00:00"

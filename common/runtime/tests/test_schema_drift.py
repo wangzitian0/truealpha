@@ -33,6 +33,8 @@ from truealpha_runtime.testing import (
     load_tool,
 )
 
+pytestmark = pytest.mark.deps
+
 drift = load_tool("schema_drift")
 
 RESET = Path(__file__).resolve().parents[3] / "db" / "reset_database.sh"

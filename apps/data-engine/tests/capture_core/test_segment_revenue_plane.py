@@ -12,36 +12,14 @@ state the same segment twice, and the identity columns are there to be re-checke
 
 from __future__ import annotations
 
-import os
 from decimal import Decimal
 
 import psycopg
 import pytest
-from data_engine.config import settings
 
 TABLE = "staging.issuer_segment_revenue_facts"
 CIK = 999_000_001  # outside the real corpus; these rows are this test's own
 PARTITION = "segment-partition:" + "b" * 64
-
-
-@pytest.fixture
-def connection():
-    try:
-        active = psycopg.connect(settings.database_url, connect_timeout=3, autocommit=False)
-    except psycopg.OperationalError as error:
-        # Fail where a database is configured; skip only on a bare developer machine
-        # (the convention every production_topt test follows, and the one I had to be
-        # told about on #798).
-        if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
-            pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
-        pytest.skip("no local Postgres; CI runs the required integration coverage")
-    try:
-        yield active
-    finally:
-        # Append-only by trigger, so cleanup by DELETE is impossible by design — the
-        # transaction is rolled back instead.
-        active.rollback()
-        active.close()
 
 
 def _insert(connection, *, segment: str, value: str, partition: str = PARTITION, residual: str = "0"):

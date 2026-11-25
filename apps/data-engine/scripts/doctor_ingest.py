@@ -16,13 +16,14 @@ REQUIRED_TABLES = [
 
 
 def check_database() -> list[str]:
-    from data_engine import db
+    import data_engine.db as db
 
     problems = []
     try:
         with db.connect() as conn:
             for table in REQUIRED_TABLES:
-                if conn.execute("select to_regclass(%s)", (table,)).fetchone()[0] is None:
+                row = conn.execute("select to_regclass(%s)", (table,)).fetchone()
+                if row is None or row[0] is None:
                     problems.append(f"missing table {table} (run the migrations: make db-migrate or docker-exec psql)")
     except Exception as e:
         problems.append(f"cannot connect: {e}")
@@ -30,7 +31,8 @@ def check_database() -> list[str]:
 
 
 def check_object_storage() -> list[str]:
-    from data_engine import db, raw_store
+    import data_engine.db as db
+    import data_engine.raw_store as raw_store
     from truealpha_contracts.models import DataSource
 
     try:

@@ -12,6 +12,8 @@ import pytest
 from pydantic import ValidationError
 from truealpha_contracts import environment_contract as _ec
 
+pytestmark = pytest.mark.contract
+
 _S = importlib.util.spec_from_file_location("ch", Path(__file__).parent / "fixtures/contract_helpers.py")
 assert _S and _S.loader
 _H = importlib.util.module_from_spec(_S)

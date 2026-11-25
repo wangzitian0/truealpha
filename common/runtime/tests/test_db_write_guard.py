@@ -22,7 +22,10 @@ from truealpha_runtime.testing import (
     db_writes_allowed,
     guard_db_write,
     isolated_test_database,
+    open_test_connection,
 )
+
+pytestmark = pytest.mark.gate
 
 
 @pytest.fixture(autouse=True)
@@ -143,3 +146,26 @@ def test_guard_fails_loudly_when_require_runtime_is_set(monkeypatch: pytest.Monk
     with pytest.warns(UserWarning, match="protect ambient databases"):
         with pytest.raises(pytest.fail.Exception, match="TRUEALPHA_REQUIRE_RUNTIME is set"):
             guard_db_write()
+
+
+def test_open_test_connection_skips_unarmed_and_fails_closed_when_required(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Shared open_test_connection skips without runtime creds and fails closed when armed or unreachable."""
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.delenv("ALLOW_CLEAR_TEST", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+
+    with patch("psycopg.connect") as mock_connect:
+        with pytest.warns(UserWarning, match="protect ambient databases"):
+            with pytest.raises(pytest.skip.Exception):
+                with open_test_connection():
+                    pass
+        mock_connect.assert_not_called()
+
+    monkeypatch.setenv("TRUEALPHA_REQUIRE_RUNTIME", "1")
+    monkeypatch.setenv("CI", "true")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://postgres:postgres@127.0.0.1:1/unreachable")
+    with pytest.raises(pytest.fail.Exception, match="configured Postgres is unreachable"):
+        with open_test_connection(connect_timeout=1):
+            pass

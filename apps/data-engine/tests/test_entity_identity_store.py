@@ -16,7 +16,6 @@ which builds (and drops) fresh databases of its own.
 from __future__ import annotations
 
 import contextlib
-import os
 import re
 import sys
 import uuid
@@ -79,22 +78,6 @@ GOOG = {
     "listing": "listing:xnas:goog",
 }
 GOOGL = {**GOOG, "cusip": "02079K305", "isin": "US02079K3059", "figi": "bbg009s39jy5", "listing": "listing:xnas:googl"}
-
-
-@pytest.fixture
-def connection():
-    try:
-        active = psycopg.connect(settings.database_url, connect_timeout=3, autocommit=False)
-    except psycopg.OperationalError as error:
-        if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
-            pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
-        pytest.skip("no local Postgres; CI runs the required integration coverage")
-    try:
-        active.execute("select 1")
-        yield active
-    finally:
-        active.rollback()
-        active.close()
 
 
 def _plane_corpus() -> dict:

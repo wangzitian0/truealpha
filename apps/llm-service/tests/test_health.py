@@ -15,6 +15,8 @@ from llm_service.main import ROUTED_PREFIX, app
 from pydantic import SecretStr
 from truealpha_runtime.testing import clone_test_database, db_writes_allowed, isolated_test_database, load_tool
 
+pytestmark = pytest.mark.smoke
+
 #: A test value for the MCP credential; the deployment generates the real one.
 MCP_TEST_TOKEN = "test-mcp-token"
 

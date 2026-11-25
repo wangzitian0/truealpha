@@ -16,6 +16,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.gate
+
 REPO = Path(__file__).resolve().parents[3]
 CONSUMPTION_SOURCES = (REPO / "apps" / "llm-service" / "src", REPO / "apps" / "app-web" / "src")
 # An instantiation or call of a Fixture* class; a `class FixtureX(...)` definition is not

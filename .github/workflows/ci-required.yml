@@ -117,9 +117,12 @@ jobs:
             # available proxy for the day it does, and it is why the entry
             # is also in `python` above.
             dagster_liveness:
-              - 'apps/data-engine/src/data_engine/dagster_defs.py'
-              - 'apps/data-engine/src/data_engine/lanes/**'
-              - 'apps/data-engine/Dockerfile'
+              - 'apps/data-engine/**'
+              - 'common/contracts/**'
+              - 'common/factors/**'
+              - 'common/runtime/**'
+              - 'pyproject.toml'
+              - 'uv.lock'
               - 'docker-compose.yml'
               - '.github/workflows/ci-python.yml'
             data_engine:

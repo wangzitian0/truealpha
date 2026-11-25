@@ -19,14 +19,12 @@ real database rather than asserting layer by layer.
 
 from __future__ import annotations
 
-import os
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 import psycopg
 import pytest
-from data_engine.config import settings
 from data_engine.datahub.capture_core.sec_financial_adapter import build_bundle
 from factors.composite.strategy_evaluator import IssuerInput, evaluate_cutoff
 from factors.panel import IssuerClass
@@ -35,22 +33,6 @@ from truealpha_contracts.strategy import LargeModelValueV0Definition
 
 _CUTOFF = datetime(2026, 3, 31, tzinfo=UTC)
 _ISSUER = "issuer:lei:E2EPEG00000000000000"
-
-
-@pytest.fixture
-def connection():
-    try:
-        active = psycopg.connect(settings.database_url, connect_timeout=3, autocommit=False)
-    except psycopg.OperationalError as error:
-        if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
-            pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
-        pytest.skip("no local Postgres; CI runs the required integration coverage")
-    try:
-        active.execute("select 1")
-        yield active
-    finally:
-        active.rollback()
-        active.close()
 
 
 def _annual(end: str, start: str, value: object, filed: str) -> dict:

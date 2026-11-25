@@ -27,14 +27,11 @@ sha256. No test here makes a network call.
 
 from __future__ import annotations
 
-import os
 import sys
 from datetime import date
 from pathlib import Path
 
-import psycopg
 import pytest
-from data_engine.config import settings
 from data_engine.contracts.concept_mapping import ConceptMappingRuleset
 from data_engine.datahub.capture_core.concept_mapping import DEFAULT_RULESET, publish_ruleset
 
@@ -124,22 +121,6 @@ def test_the_utility_total_never_replaces_the_figure_of_an_earlier_concept_for_t
     bundle = build_bundle(facts, _CUTOFF, OperatingBranch.NON_FINANCIAL, ruleset=DEFAULT_RULESET)
 
     assert (bundle.revenue, bundle.revenue_period_end) == (900, date(2025, 12, 31))
-
-
-@pytest.fixture
-def connection():
-    try:
-        active = psycopg.connect(settings.database_url, connect_timeout=3, autocommit=False)
-    except psycopg.OperationalError as error:
-        if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
-            pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
-        pytest.skip("no local Postgres; CI runs the required integration coverage")
-    try:
-        active.execute("select 1")
-        yield active
-    finally:
-        active.rollback()
-        active.close()
 
 
 def _ruleset_v3() -> ConceptMappingRuleset:

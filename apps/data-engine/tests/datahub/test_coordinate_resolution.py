@@ -2,13 +2,10 @@
 
 from __future__ import annotations
 
-import os
 import uuid
 from datetime import UTC, date, datetime
 
-import psycopg
 import pytest
-from data_engine.config import settings
 from data_engine.datahub.canonical_issuer import expand_issuer_alias_ids
 from data_engine.datahub.resolve_coordinates import (
     MERGE_SET_CTE,
@@ -22,22 +19,6 @@ from data_engine.datahub.resolve_coordinates import (
 CUTOFF = datetime(2026, 3, 31, 22, 15, tzinfo=UTC)
 TODAY = date(2026, 3, 31)
 MERGED_AT = datetime(2026, 4, 1, 1, 45, tzinfo=UTC)
-
-
-@pytest.fixture
-def connection():
-    try:
-        active = psycopg.connect(settings.database_url, connect_timeout=3, autocommit=False)
-    except psycopg.OperationalError as error:
-        if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
-            pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
-        pytest.skip("no local Postgres; CI runs the required integration coverage")
-    try:
-        active.execute("select 1")
-        yield active
-    finally:
-        active.rollback()
-        active.close()
 
 
 def test_parse_alias() -> None:

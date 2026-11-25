@@ -17,13 +17,9 @@ assert that, on a seeded run.
 
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 
-import psycopg
-import pytest
-from data_engine.config import settings
 from data_engine.datahub.capture_core import PostgresCoreRepository
 from factors.snapshot_inputs import GppeV0Definition
 
@@ -95,28 +91,6 @@ ENVELOPE_KEYS = {
     "semantic_type",
     "source_vintage_id",
 }
-
-
-@pytest.fixture
-def connection():
-    """One transaction per test. The view tests only read. The seeded tests write, and the
-    rollback removes every row they seed."""
-    try:
-        active = psycopg.connect(settings.database_url, connect_timeout=3, autocommit=False)
-    except psycopg.OperationalError as error:
-        # The repository's convention, which this file did not follow when it landed
-        # (review on #798): an UNCONDITIONAL skip silently drops this coverage in CI, where
-        # a Postgres service exists and a connection failure is a real failure. A guard that
-        # cannot go red where production runs is the shape AGENTS.md rule 7 forbids.
-        if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
-            pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
-        pytest.skip("no local Postgres; CI runs the required integration coverage")
-    try:
-        active.execute("select 1")
-        yield active
-    finally:
-        active.rollback()
-        active.close()
 
 
 def _viewdef(connection) -> str:

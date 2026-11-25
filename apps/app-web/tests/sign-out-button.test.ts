@@ -22,7 +22,7 @@ import { act, createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { HYDRATED_CONTROL } from "../e2e/sign-out-journey.mjs";
 import { SignOutButton } from "../src/components/sign-out-button";
-import { FakeElement, installFakeDom } from "./helpers/fake-dom";
+import { FakeElement, installFakeDom, uninstallFakeDom } from "./helpers/fake-dom";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -47,24 +47,28 @@ assert(
 // ─── (2) after mount the marker is present ───────────────────────────────────
 {
 	const fakeDocument = installFakeDom();
-	// Imported only now: react-dom/client reads the globals above when it loads.
-	const { createRoot } = await import("react-dom/client");
-	const container = fakeDocument.createElement("div");
-	const root = createRoot(container as unknown as Element);
-	// `act` flushes the render and its effects, which is what mounting means here.
-	await act(async () => {
-		root.render(createElement(SignOutButton));
-	});
-	const button = container.childNodes[0];
-	assert(button instanceof FakeElement && button.tagName === "BUTTON", "SignOutButton did not mount a <button>");
-	assert(button.getAttribute("data-sign-out") === "true", "the mounted control lost its selector");
-	assert(
-		button.getAttribute("data-hydrated") === "true",
-		`the mounted control never says data-hydrated="true", so every walk fails with "never hydrated" (#811); attributes: ${JSON.stringify([...button.attributes])}`,
-	);
-	await act(async () => {
-		root.unmount();
-	});
+	try {
+		// Imported only now: react-dom/client reads the globals above when it loads.
+		const { createRoot } = await import("react-dom/client");
+		const container = fakeDocument.createElement("div");
+		const root = createRoot(container as unknown as Element);
+		// `act` flushes the render and its effects, which is what mounting means here.
+		await act(async () => {
+			root.render(createElement(SignOutButton));
+		});
+		const button = container.childNodes[0];
+		assert(button instanceof FakeElement && button.tagName === "BUTTON", "SignOutButton did not mount a <button>");
+		assert(button.getAttribute("data-sign-out") === "true", "the mounted control lost its selector");
+		assert(
+			button.getAttribute("data-hydrated") === "true",
+			`the mounted control never says data-hydrated="true", so every walk fails with "never hydrated" (#811); attributes: ${JSON.stringify([...button.attributes])}`,
+		);
+		await act(async () => {
+			root.unmount();
+		});
+	} finally {
+		uninstallFakeDom();
+	}
 }
 
 console.log("#811 sign-out button hydration marker passed");

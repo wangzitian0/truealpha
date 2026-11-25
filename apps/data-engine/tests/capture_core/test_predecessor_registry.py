@@ -1,30 +1,12 @@
 """#496: the issuer CIK predecessor registry (migration 0037) and its
 resolution precedence in planning. Skips without a local Postgres."""
 
-import os
-
 import psycopg
 import pytest
-from data_engine.config import settings
 from data_engine.datahub.capture_core.composition import predecessor_ciks
 
 _XOM_ISSUER = "issuer:lei:J3WHBG0MTS7O8ZVMDC91"
 _XOM_LISTING = "listing:xnys:xom"
-
-
-@pytest.fixture
-def connection():
-    try:
-        active = psycopg.connect(settings.database_url, connect_timeout=3, autocommit=False)
-    except psycopg.OperationalError as error:
-        if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
-            pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
-        pytest.skip("no local Postgres; CI runs the required integration coverage")
-    try:
-        yield active
-    finally:
-        active.rollback()
-        active.close()
 
 
 def test_seeded_registry_row_resolves_xom(connection) -> None:

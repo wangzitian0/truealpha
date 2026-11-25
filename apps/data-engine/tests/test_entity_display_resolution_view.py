@@ -19,33 +19,15 @@ Skips without a local Postgres; ci-python/ci-db run it against the migrated
 service container. Everything rolls back — nothing persists.
 """
 
-import os
 import sys
 from pathlib import Path
 
 import psycopg
 import pytest
-from data_engine.config import settings
 from data_engine.datahub.capture_core import PostgresCoreRepository
 
 sys.path.insert(0, str(Path(__file__).parent))
 from capture_core.test_materialization import _seed_complete_production_run  # noqa: E402
-
-
-@pytest.fixture
-def connection():
-    try:
-        active = psycopg.connect(settings.database_url, connect_timeout=3, autocommit=False)
-    except psycopg.OperationalError as error:
-        if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
-            pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
-        pytest.skip("no local Postgres; CI runs the required integration coverage")
-    try:
-        active.execute("select 1")
-        yield active
-    finally:
-        active.rollback()
-        active.close()
 
 
 @pytest.fixture

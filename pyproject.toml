@@ -21,10 +21,13 @@ dev = [
 python_version = "3.12"
 files = [
     "apps/data-engine/src",
+    "apps/data-engine/scripts",
     "apps/llm-service/src",
+    "apps/llm-service/scripts",
     "common/contracts/src",
     "common/factors/src",
     "common/runtime/src",
+    "tools",
 ]
 
 # Only these ship no stubs (moomoo SDK; boto3/botocore's dynamic clients).
@@ -64,4 +67,9 @@ testpaths = [
 ]
 markers = [
     "criterion(id): the test backs this goal-criteria catalog id (common/contracts/src/truealpha_contracts/data/goal_criteria.v1.json, #28 D1)",
+    "gate: Class 1 hard merge, security, or boundary gate",
+    "deps: Class 2 real external dependency test (Postgres, S3, migrations, roles)",
+    "smoke: Class 2 live runtime, HTTP, MCP, or container smoke test",
+    "contract: Class 2 schema, OpenAPI, environment, or serialization contract test",
+    "logic: Class 4 pure business-logic test",
 ]

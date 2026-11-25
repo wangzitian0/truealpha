@@ -9,7 +9,6 @@ is in `capture_core/test_oracle_outcomes_tick.py`.
 from __future__ import annotations
 
 import json
-import os
 import sys
 from collections.abc import Iterator, KeysView, Mapping
 from datetime import UTC, date, datetime, timedelta
@@ -21,7 +20,6 @@ import dagster as dg
 import psycopg
 import pytest
 from data_engine import raw_store
-from data_engine.config import settings
 from data_engine.contracts.oracle_policy import load_oracle_policy
 from data_engine.contracts.sentinel_known_answers import SentinelKnownAnswer
 from data_engine.datahub import confidence_report, oracle_outcomes
@@ -64,21 +62,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "support"))
 from capture_core.test_materialization import _seed_complete_production_run  # noqa: E402
 from split_series_seed import share_count_vintage, store_flat_topt_series  # noqa: E402
-
-
-@pytest.fixture
-def connection():
-    try:
-        active = psycopg.connect(settings.database_url, connect_timeout=3, autocommit=False)
-    except psycopg.OperationalError as error:
-        if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
-            pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
-        pytest.skip("no local Postgres; CI runs the required integration coverage")
-    try:
-        yield active
-    finally:
-        active.rollback()
-        active.close()
 
 
 @pytest.fixture(autouse=True)

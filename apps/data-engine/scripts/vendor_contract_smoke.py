@@ -2,22 +2,34 @@
 
 from __future__ import annotations
 
+import argparse
 import dataclasses
 import json
 import urllib.parse
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from typing import Any
 
+import data_engine.db as db
 from data_engine.config import settings
 from data_engine.sources import gateway
 
 _FAILURES: list[str] = []
+_RESULTS: list[tuple[str, str, bool, str]] = []
+DEFAULT_VENDORS = ("yahoo", "twelvedata", "us-treasury", "moomoo")
 
 
-def _check(name: str, ok: bool, detail: str = "") -> None:
+def _check(name: str, ok: bool, detail: str = "", *, vendor: str | None = None) -> None:
     print(f"{'PASS' if ok else 'FAIL'}  {name}" + (f" — {detail}" if detail else ""))
+    resolved_vendor = vendor or (name.split(":", 1)[0].strip().lower() or "unknown")
+    _RESULTS.append((resolved_vendor, name, ok, detail))
     if not ok:
         _FAILURES.append(name)
+
+
+def _skip(name: str, detail: str) -> None:
+    print(f"SKIP  {name} — {detail}")
 
 
 def _try(name: str, fn):
@@ -80,9 +92,12 @@ def check_yahoo() -> None:
         )
 
 
-def check_twelve_data() -> None:
+def check_twelve_data(*, skip_unconfigured: bool = False) -> None:
     key = settings.twelve_data_api_key
     if not key:
+        if skip_unconfigured:
+            _skip("twelvedata: TWELVE_DATA_API_KEY provisioned", "checks skipped — key unset")
+            return
         _check("twelvedata: TWELVE_DATA_API_KEY provisioned", False, "checks skipped — provision the key")
         return
     tomorrow = datetime.now(UTC).date() + timedelta(days=1)
@@ -129,7 +144,7 @@ def check_twelve_data() -> None:
 
 
 def check_us_treasury() -> None:
-    from data_engine.datahub import treasury_rates
+    import data_engine.datahub.treasury_rates as treasury_rates
     from data_engine.datahub.risk_free import MAX_RATE_LAG_DAYS
 
     today = datetime.now(UTC).date()
@@ -165,7 +180,7 @@ def check_us_treasury() -> None:
         )
 
 
-def check_moomoo() -> None:
+def check_moomoo(*, skip_unconfigured: bool = False) -> None:
     from data_engine.datahub.capture_core.moomoo_origin import (
         BALANCE_SHEET_FIELDS,
         INCOME_FIELDS,
@@ -178,6 +193,9 @@ def check_moomoo() -> None:
     from data_engine.datahub.fetch_key import FetchKey
 
     if not settings.moomoo_opend_host or not settings.moomoo_opend_port:
+        if skip_unconfigured:
+            _skip("moomoo: OPEND coordinates configured", "checks skipped — MOOMOO_OPEND_HOST/PORT unset")
+            return
         _check("moomoo: OPEND coordinates configured", False, "checks skipped — set MOOMOO_OPEND_HOST/PORT")
         return
     client = OpenDClient()
@@ -230,11 +248,86 @@ def check_moomoo() -> None:
     _check("moomoo: balance-sheet field map declared", "total_assets" in BALANCE_SHEET_FIELDS)
 
 
-def main() -> int:
-    check_yahoo()
-    check_twelve_data()
-    check_us_treasury()
-    check_moomoo()
+def record_results_to_db(results: Sequence[tuple[str, str, bool, str]], connection: Any = None) -> int:
+    """Persist per-vendor contract smoke pass/fail summaries to `staging.ingestion_health_log`."""
+    grouped: dict[str, list[tuple[str, bool]]] = {}
+    for vendor, check_name, ok, _detail in results:
+        grouped.setdefault(vendor, []).append((check_name, ok))
+    if not grouped:
+        return 0
+
+    rows = [
+        (
+            "vendor_contract_smoke",
+            f"vendor:{vendor}:ok",
+            0 if any(not ok for _, ok in items) else 1,
+            json.dumps(
+                {
+                    "passed": sum(1 for _, ok in items if ok),
+                    "failed": sum(1 for _, ok in items if not ok),
+                    "failures": [name for name, ok in items if not ok],
+                },
+                sort_keys=True,
+            ),
+        )
+        for vendor, items in sorted(grouped.items())
+    ]
+
+    sql = "insert into staging.ingestion_health_log (source, metric, value, note) values (%s, %s, %s, %s)"
+    if connection is not None:
+        for row in rows:
+            connection.execute(sql, row)
+        return len(rows)
+
+    with db.connect() as owned:
+        for row in rows:
+            owned.execute(sql, row)
+        owned.commit()
+    return len(rows)
+
+
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Live vendor contract smoke against upstream APIs.")
+    parser.add_argument(
+        "--vendors",
+        default=",".join(DEFAULT_VENDORS),
+        help="Comma-separated vendors to check (yahoo,twelvedata,us-treasury,moomoo).",
+    )
+    parser.add_argument(
+        "--skip-unconfigured",
+        action="store_true",
+        help="Skip vendors whose credentials/host settings are unset instead of failing.",
+    )
+    parser.add_argument(
+        "--record-db",
+        action="store_true",
+        help="Persist per-vendor summary metrics into staging.ingestion_health_log.",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = parse_args(argv)
+    _FAILURES.clear()
+    _RESULTS.clear()
+
+    runners: dict[str, Callable[[], None]] = {
+        "yahoo": check_yahoo,
+        "twelvedata": lambda: check_twelve_data(skip_unconfigured=args.skip_unconfigured),
+        "us-treasury": check_us_treasury,
+        "moomoo": lambda: check_moomoo(skip_unconfigured=args.skip_unconfigured),
+    }
+    selected = [v.strip().lower() for v in args.vendors.split(",") if v.strip()]
+    unknown = [v for v in selected if v not in runners]
+    if unknown:
+        raise SystemExit(f"unknown vendor(s): {', '.join(unknown)}")
+
+    for vendor in selected:
+        runners[vendor]()
+
+    if args.record_db and _RESULTS:
+        record_results_to_db(_RESULTS)
+
     if _FAILURES:
         print(f"\n{len(_FAILURES)} contract assumption(s) drifted: {', '.join(_FAILURES)}")
         return 1

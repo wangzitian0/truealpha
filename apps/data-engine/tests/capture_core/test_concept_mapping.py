@@ -7,33 +7,14 @@ Those two together are what make a larger universe a configuration problem.
 
 from __future__ import annotations
 
-import os
-
 import psycopg
 import pytest
-from data_engine.config import settings
 from data_engine.contracts.concept_mapping import ConceptMappingRuleset, ResolutionKind
 from data_engine.datahub.capture_core.concept_mapping import (
     DEFAULT_RULESET,
     publish_ruleset,
     resolve_ruleset,
 )
-
-
-@pytest.fixture
-def connection():
-    try:
-        active = psycopg.connect(settings.database_url, connect_timeout=3, autocommit=False)
-    except psycopg.OperationalError as error:
-        if os.environ.get("DATABASE_URL") or os.environ.get("TRUEALPHA_REQUIRE_RUNTIME"):
-            pytest.fail(f"configured Postgres is unreachable: {error}", pytrace=False)
-        pytest.skip("no local Postgres; CI runs the required integration coverage")
-    try:
-        active.execute("select 1")
-        yield active
-    finally:
-        active.rollback()
-        active.close()
 
 
 def _with_extra_revenue_concept() -> ConceptMappingRuleset:
