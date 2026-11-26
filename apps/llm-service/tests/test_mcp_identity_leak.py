@@ -95,6 +95,7 @@ _TOOL_CALLS: dict[str, dict[str, Any]] = {
             "target_entity_ids": ["issuer:ranking-scope-unused"],
             "cutoff_at": _CUTOFF,
             "card_kind": "ranking",
+            "format": "json",
         }
     },
     "library_documents_list": {},

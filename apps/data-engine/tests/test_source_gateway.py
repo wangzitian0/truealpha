@@ -1384,3 +1384,84 @@ def test_llm_schema_sha256_and_redacted_http_errors(call_ledger, monkeypatch) ->
     assert call_ledger[-1].error is not None
     assert "HTTP 401" in call_ledger[-1].error
     assert "secret-token-leaked-in-body" not in call_ledger[-1].error
+
+
+def test_xhs_card_html_uses_subject_key_and_fails_closed_without_fallback(call_ledger, monkeypatch) -> None:
+    from data_engine.sources import llm
+    from truealpha_contracts.execution import AvailabilityStatus
+    from truealpha_runtime.research_cards import CardKind, CardSubject, ClaimClass, ResearchCard
+    from truealpha_runtime.research_report import ResultValue
+
+    cutoff = datetime(2026, 6, 30, 23, 59, 59, tzinfo=UTC)
+    card = ResearchCard(
+        card_kind=CardKind.COMPANY,
+        title="NVDA Card",
+        cutoff_at=cutoff,
+        generated_from_report_id="report:test:xhs",
+        research_risk_note="Research output only.",
+        source_attribution="TrueAlpha Test Source",
+        subjects=(
+            CardSubject(
+                subject_id="NVDA",
+                display_name="NVDA · NVIDIA",
+                availability=AvailabilityStatus.AVAILABLE,
+                claim_class=ClaimClass.EMPIRICALLY_VALIDATED,
+                metrics=(
+                    ResultValue(
+                        label="p_gp",
+                        value="18.25",
+                        cutoff_at=cutoff,
+                        availability=AvailabilityStatus.AVAILABLE,
+                    ),
+                ),
+            ),
+        ),
+    )
+    valid_html = (
+        "<!DOCTYPE html><html><body style='width:1080px;height:1440px'>"
+        "<p>NVDA · NVIDIA · available · empirically_validated</p>"
+        "<p>p_gp=18.25</p>"
+        f"<p>2026-06-30 · {card.card_id[:12]} · TrueAlpha Test Source · Research output only.</p>"
+        "</body></html>"
+    )
+    monkeypatch.setattr(llm.settings, "llm_api_key", "test-key")
+    with gateway.run_scope("dagster:run-xhs"):
+        res = llm.generate_xhs_card_html(
+            None,
+            card=card,
+            persist=False,
+            transport=lambda _u, _h, _b: (
+                200,
+                json.dumps(
+                    {
+                        "model": "glm-5.3-flash",
+                        "choices": [{"message": {"content": json.dumps({"html": valid_html})}}],
+                        "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+                    }
+                ).encode(),
+            ),
+        )
+        assert res.render_mode == "model_glm"
+        assert res.html == valid_html
+        assert call_ledger[-1].caller == "xhs_card_html"
+        assert call_ledger[-1].ok is True
+        assert call_ledger[-1].run_key == "dagster:run-xhs"
+
+        with pytest.raises(ValueError, match="failed fact-preservation verifier"):
+            llm.generate_xhs_card_html(
+                None,
+                card=card,
+                persist=False,
+                transport=lambda _u, _h, _b: (
+                    200,
+                    json.dumps(
+                        {
+                            "model": "glm-5.3-flash",
+                            "choices": [
+                                {"message": {"content": json.dumps({"html": valid_html.replace("18.25", "99.99")})}}
+                            ],
+                            "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+                        }
+                    ).encode(),
+                ),
+            )

@@ -4,18 +4,15 @@ from __future__ import annotations
 
 import hashlib
 import inspect
-import json
-import re
-import uuid
-from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
 from pydantic import BaseModel, Field
 from truealpha_contracts.environment_contract import UnknownUniverse, load_environment_contract
-from truealpha_contracts.strategy import ExclusionReason, load_strategy_definition
+from truealpha_contracts.strategy import ExclusionReason
 from truealpha_contracts.universes import universes_with_role
 from truealpha_runtime.access import AccessContext
+from truealpha_runtime.backtest_trigger import enqueue_backtest_trigger, prepare_backtest_trigger
 from truealpha_runtime.strategy_run import StrategyRunReport, StrategyRunUnavailable
 from truealpha_runtime.strategy_run_postgres import PostgresStrategyRunRepository, read_strategy_provenance
 
@@ -231,6 +228,8 @@ class BacktestDetailResponse(BaseModel):
 
 class TriggerBacktestRequest(BaseModel):
     definition_resource: str | None = None
+    custom_definition: dict[str, Any] | None = None
+    release_manifest_id: str | None = Field(default=None, max_length=128)
     start_cutoff: str | None = None
     end_cutoff: str | None = None
     executed_at: str | None = None
@@ -243,6 +242,9 @@ class TriggerBacktestResponse(BaseModel):
     job_name: str = "nightly_backtest_pipeline"
     run_key: str
     executed_at: str
+    custom_definition_sha256: str | None = None
+    release_manifest_id: str | None = None
+    exploratory: bool = False
 
 
 _PRESERVED_AVAILABILITY_STATUSES = frozenset({"not_applicable", "low_confidence", "stale", "error"})
@@ -583,17 +585,6 @@ def get_backtest_detail(run_id: str, *, database_url: str | None = None) -> Back
     return with_mart_readonly(_q, database_url=database_url)
 
 
-_SAFE_RESOURCE_RE = re.compile(r"^[A-Za-z0-9_.-]+\.json$")
-
-
-def _parse_utc_timestamp(raw: str, label: str) -> datetime:
-    try:
-        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-    except ValueError as exc:
-        raise ValueError(f"invalid {label} timestamp") from exc
-    return (dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)).astimezone(UTC)
-
-
 def trigger_backtest_run(
     principal_id: str,
     req: TriggerBacktestRequest | None = None,
@@ -602,62 +593,28 @@ def trigger_backtest_run(
 ) -> TriggerBacktestResponse:
     """Queue a governed nightly backtest execution via `staging.pipeline_trigger_requests`."""
     payload = req or TriggerBacktestRequest()
-    if payload.definition_resource:
-        if not _SAFE_RESOURCE_RE.match(payload.definition_resource) or ".." in payload.definition_resource:
-            raise ValueError("invalid strategy definition resource name")
-        try:
-            load_strategy_definition(payload.definition_resource)
-        except (FileNotFoundError, OSError, ValueError) as exc:
-            raise ValueError(f"unknown strategy definition: {payload.definition_resource}") from exc
-    executed_at_dt = (
-        _parse_utc_timestamp(payload.executed_at, "executed_at")
-        if payload.executed_at
-        else datetime.now(UTC).replace(microsecond=0)
+    prepared = prepare_backtest_trigger(
+        definition_resource=payload.definition_resource,
+        custom_definition=payload.custom_definition,
+        release_manifest_id=payload.release_manifest_id,
+        start_cutoff=payload.start_cutoff,
+        end_cutoff=payload.end_cutoff,
+        executed_at=payload.executed_at,
+        idempotency_key=payload.idempotency_key,
     )
-    executed_iso = executed_at_dt.isoformat()
-    config: dict[str, Any] = {}
-    if payload.definition_resource:
-        config["definition_resource"] = payload.definition_resource
-    start_dt = _parse_utc_timestamp(payload.start_cutoff, "start_cutoff") if payload.start_cutoff else None
-    end_dt = _parse_utc_timestamp(payload.end_cutoff, "end_cutoff") if payload.end_cutoff else None
-    if start_dt is not None and end_dt is not None and start_dt > end_dt:
-        raise ValueError("start_cutoff must not exceed end_cutoff")
-    if start_dt is not None:
-        config["start_cutoff"] = start_dt.isoformat()
-    if end_dt is not None:
-        config["end_cutoff"] = end_dt.isoformat()
-    raw_idem = (payload.idempotency_key or "").strip()
-    dedupe_key = raw_idem if raw_idem and re.fullmatch(r"[A-Za-z0-9._:@-]+", raw_idem) else str(uuid.uuid4())
-    config_json = json.dumps(config, sort_keys=True)
-
-    def _q(cur: Any) -> int:
-        cur.execute(
-            """
-            with inserted as (
-                insert into staging.pipeline_trigger_requests (
-                    job_name, executed_at, requested_by, dedupe_key, force_fetch, config_json
-                )
-                values ('nightly_backtest_pipeline', %s, %s, %s, false, %s::jsonb)
-                on conflict (dedupe_key) do nothing
-                returning request_id
-            )
-            select request_id from inserted
-            union all
-            select request_id from staging.pipeline_trigger_requests where dedupe_key = %s
-            limit 1
-            """,
-            (executed_at_dt, principal_id, dedupe_key, config_json, dedupe_key),
-        )
-        row = cur.fetchone()
-        return int(row["request_id"])
-
-    req_id = with_app_runtime(_q, database_url=database_url)
+    req_id = with_app_runtime(
+        lambda cur: enqueue_backtest_trigger(cur, principal_id=principal_id, prepared=prepared),
+        database_url=database_url,
+    )
     return TriggerBacktestResponse(
         request_id=req_id,
-        dedupe_key=dedupe_key,
+        dedupe_key=prepared.dedupe_key,
         job_name="nightly_backtest_pipeline",
-        run_key=f"manual:{dedupe_key}",
-        executed_at=executed_iso,
+        run_key=prepared.run_key,
+        executed_at=prepared.executed_iso,
+        custom_definition_sha256=prepared.custom_definition_sha256,
+        release_manifest_id=prepared.release_manifest_id,
+        exploratory=prepared.exploratory,
     )
 
 

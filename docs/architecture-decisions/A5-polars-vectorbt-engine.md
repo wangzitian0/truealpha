@@ -6,9 +6,10 @@ Status: Accepted. Owner decision 2026-09-23, carried out by #969. Supersedes `in
 selection of Qlib, which had been in force since 2026-07-17.
 Date: 2026-09-23
 Correction 2026-10-12 (#1239): the repository does not use VectorBT. See Decision 2.
-Amended 2026-10-13 (#758): the Polars expression definitions live in
-`common/factors/src/factors/panel.py`. The backtest engine is
-`factors.backtest.engine`. See Decisions 1 and 2.
+Amended 2026-10-13 (#758) & 2026-11-26 (Q07): the Polars expression definitions live in
+`common/factors/src/factors/panel.py`, which serves as the primary engine for derived factors,
+panel expressions, and custom backtests while raw/accounting leaf inputs remain exact `Decimal` in `mart`.
+The backtest engine is `factors.backtest.engine`. See Decisions 1 and 2.
 
 ## Context
 

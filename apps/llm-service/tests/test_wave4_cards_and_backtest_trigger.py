@@ -16,7 +16,6 @@ from truealpha_runtime.research_cards import (
     CardSubject,
     ClaimClass,
     ResearchCard,
-    render_card_html,
     verify_card_html,
 )
 from truealpha_runtime.research_report import (
@@ -100,7 +99,14 @@ def test_export_or_render_card_routes_etf_and_supply_chain_cards(monkeypatch: py
                 ),
             )
 
-    monkeypatch.setattr(library_service, "_lookup_governed_card_artifact", lambda **_k: None)
+    etf_html = "<!DOCTYPE html><html><body>Invesco QQQ Trust 0.14 1000000 Research output only.</body></html>"
+    sc_html = "<!DOCTYPE html><html><body>NVDA scenario_only 0.25 Research output only.</body></html>"
+    monkeypatch.setattr(
+        library_service,
+        "_lookup_governed_card_artifact",
+        lambda **k: (etf_html if k.get("card_kind") == "etf" else sc_html, "model_glm"),
+    )
+    monkeypatch.setattr(library_service, "verify_card_html", lambda *_a, **_k: (True, ()))
     principal = auth_service.PrincipalRecord(principal_id="p:1", tenant_id="t:1", principal_kind="member")
     ctx = auth_service.access_context_for(principal)
 
@@ -113,6 +119,7 @@ def test_export_or_render_card_routes_etf_and_supply_chain_cards(monkeypatch: py
             persist=False,
         ),
         research_repo=_FakeRepo(),
+        database_url="postgresql://test",
     )
     assert etf_card.card_kind == "etf"
     assert etf_card.rendered_html and "Invesco QQQ Trust" in etf_card.rendered_html
@@ -127,10 +134,24 @@ def test_export_or_render_card_routes_etf_and_supply_chain_cards(monkeypatch: py
             persist=False,
         ),
         research_repo=_FakeRepo(),
+        database_url="postgresql://test",
     )
     assert sc_card.card_kind == "supply_chain"
     assert sc_card.rendered_html and "scenario_only" in sc_card.rendered_html
     assert seen_requests[-1].report_kind is ResearchReportKind.COMPANY
+
+    monkeypatch.setattr(library_service, "_lookup_governed_card_artifact", lambda **_k: None)
+    with pytest.raises(LookupError):
+        library_service.export_or_render_card(
+            ctx,
+            library_service.CardExportRequest(
+                card_kind=CardKind.ETF,
+                issuer_id="etf:qqq",
+                cutoff=cutoff.isoformat(),
+                persist=False,
+            ),
+            research_repo=_FakeRepo(),
+        )
 
 
 def test_entity_detail_reads_materialized_geometric_cagr_peg_node() -> None:
@@ -182,7 +203,21 @@ def test_backtest_trigger_endpoint_requires_admin_and_inserts_into_pipeline_trig
     try:
         resp = TestClient(app).post(
             "/api/v1/strategy/backtests/trigger",
-            json={"definition_resource": "large_model_value_v0_definition_1_1_0.json", "idempotency_key": "bt-key-1"},
+            json={
+                "definition_resource": "large_model_value_v0_definition_1_1_0.json",
+                "idempotency_key": "bt-key-1",
+                "release_manifest_id": "release-manifest:test-1",
+            },
+        )
+        from truealpha_contracts.strategy import load_live_strategy_definition
+
+        custom_def_dict = load_live_strategy_definition().model_dump(mode="json")
+        custom_resp = TestClient(app).post(
+            "/api/v1/strategy/backtests/trigger",
+            json={
+                "custom_definition": custom_def_dict,
+                "idempotency_key": "bt-custom-1",
+            },
         )
         bad_range = TestClient(app).post(
             "/api/v1/strategy/backtests/trigger",
@@ -191,12 +226,18 @@ def test_backtest_trigger_endpoint_requires_admin_and_inserts_into_pipeline_trig
     finally:
         app.dependency_overrides.clear()
     assert resp.status_code == 202
+    assert custom_resp.status_code == 202
     assert bad_range.status_code == 400
     body = resp.json()
     assert body["request_id"] == 77
     assert body["dedupe_key"] == "bt-key-1"
     assert body["job_name"] == "nightly_backtest_pipeline"
     assert body["run_key"] == f"manual:{body['dedupe_key']}"
+    assert body["release_manifest_id"] == "release-manifest:test-1"
+    assert body["exploratory"] is False
+    custom_body = custom_resp.json()
+    assert custom_body["custom_definition_sha256"] and len(custom_body["custom_definition_sha256"]) == 64
+    assert custom_body["exploratory"] is True
     assert any("staging.pipeline_trigger_requests" in sql for sql, _ in recorded)
 
 
@@ -232,11 +273,71 @@ def test_verify_card_html_accepts_localized_labels_and_rejects_altered_numbers()
             ),
         ),
     )
-    fallback_html = render_card_html(card)
-    localized_html = fallback_html.replace("p_gp=", "当前市值/毛利 (P/GP)=")
+    localized_html = (
+        "<!DOCTYPE html><html><body style='width:1080px;height:1440px'>"
+        "<article><h1>Ranking Card</h1>"
+        "<p>AAPL · Apple Inc. · available · empirically_validated</p>"
+        "<p>当前市值/毛利 (p_gp): 18.25</p>"
+        f"<p>tier: tier_1 · 2026-06-30 · {card.card_id[:12]}</p>"
+        "<p>TrueAlpha Test Source · Research output only.</p>"
+        "</article></body></html>"
+    )
     ok, violations = verify_card_html(card, localized_html)
     assert ok, violations
     tampered_html = localized_html.replace("18.25", "19.99")
     ok_bad, bad_violations = verify_card_html(card, tampered_html)
     assert not ok_bad
     assert "missing_metric_value:AAPL:p_gp:18.25" in bad_violations
+
+
+def test_backtest_trigger_cli_uses_shared_contract(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import json
+
+    from truealpha_tools import backtest_trigger as cli
+
+    seen: list[str] = []
+
+    class _Cur:
+        def execute(self, sql: str, params: Any = None) -> None:
+            seen.append(sql)
+
+        def fetchone(self) -> tuple[int]:
+            return (99,)
+
+        def __enter__(self) -> _Cur:
+            return self
+
+        def __exit__(self, *_a: object) -> None:
+            return None
+
+    class _Conn:
+        def cursor(self) -> _Cur:
+            return _Cur()
+
+        def commit(self) -> None:
+            return None
+
+        def __enter__(self) -> _Conn:
+            return self
+
+        def __exit__(self, *_a: object) -> None:
+            return None
+
+    monkeypatch.setattr(cli.psycopg, "connect", lambda *_a, **_k: _Conn())
+    rc = cli.main(
+        [
+            "--definition-resource",
+            "large_model_value_v0_definition_1_1_0.json",
+            "--release-manifest-id",
+            "release-manifest:cli-1",
+            "--idempotency-key",
+            "cli-bt-1",
+        ]
+    )
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["request_id"] == 99 and payload["dedupe_key"] == "cli-bt-1"
+    assert payload["release_manifest_id"] == "release-manifest:cli-1" and payload["exploratory"] is False
+    assert seen and "staging.pipeline_trigger_requests" in seen[0]

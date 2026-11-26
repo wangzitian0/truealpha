@@ -24,7 +24,6 @@ from truealpha_runtime.research_cards import (
     ResearchCard,
     build_card_prompt,
     extract_html_document,
-    render_card_html,
     verify_card_html,
 )
 
@@ -252,8 +251,15 @@ def _request_params(request_body: dict[str, Any], decoding: DecodingSpec) -> dic
     }
 
 
-def _model_key(standard: str, cik: int, accession: str, request_sha256: str) -> FetchKey:
-    target = f"filing:{cik:010d}:{accession}" if accession else f"seat:{SOURCE}"
+def _model_key(
+    standard: str, cik: int | None, subject_key: str | None, accession: str, request_sha256: str
+) -> FetchKey:
+    if cik is not None and cik > 0:
+        target = f"filing:{cik:010d}:{accession}" if accession else f"seat:{SOURCE}"
+    elif subject_key:
+        target = f"subject:{subject_key}:{accession}" if accession else f"subject:{subject_key}"
+    else:
+        target = f"seat:{SOURCE}"
     digest = request_sha256 if accession else f"{gateway.utc_day()}:{request_sha256}"
     return FetchKey(SOURCE, f"{ENDPOINT}?standard={standard}", target, digest)
 
@@ -317,14 +323,15 @@ def _is_context_limit_response(status: int, body: bytes) -> bool:
     return any(phrase in lower for phrase in _CONTEXT_LIMIT_PHRASES)
 
 
-def _replay_sql(versions: int) -> str:
+def _replay_sql(versions: int, *, use_subject_key: bool) -> str:
     same_digest = " or ".join(["(request_sha256 = %s and model = %s)"] * versions)
     same_question = ", ".join(["%s::jsonb"] * versions)
+    subject_where = "subject_cik is null and subject_key = %s" if use_subject_key else "subject_cik = %s"
     return f"""
 select invocation_id, decision, response_sha256, prompt_tokens, completion_tokens, request_sha256, provider,
        served_model, model
 from staging.model_invocations
-where subject_cik = %s and accession = %s
+where {subject_where} and accession = %s
   and status_code is not null and status_code < 400
   and coalesce(response -> 'choices' -> 0 ->> 'finish_reason', '') <> '{FINISH_REASON_CUT_OFF}'
   and ({same_digest}
@@ -337,28 +344,36 @@ limit 1
 _LOCK_SQL = "select pg_advisory_xact_lock(hashtextextended(%s, 0))"
 
 
-def _lock_question(connection: Any, *, cik: int, accession: str, question: str) -> None:
+def _lock_question(
+    connection: Any, *, cik: int | None, subject_key: str | None = None, accession: str, question: str
+) -> None:
+    subject_token = subject_key if cik is None and subject_key else str(cik)
     digest = hashlib.sha256(question.encode()).hexdigest()
-    connection.execute(_LOCK_SQL, (f"staging.model_invocations:{cik}:{accession}:{digest}",))
+    connection.execute(_LOCK_SQL, (f"staging.model_invocations:{subject_token}:{accession}:{digest}",))
 
 
 def _replay(
     connection: Any,
     *,
     task: ModelTask,
-    cik: int,
+    cik: int | None,
+    subject_key: str | None = None,
     accession: str,
     model: str,
     requests: Sequence[dict[str, Any]],
 ) -> ModelInvocation | None:
+    use_subject_key = cik is None
+    if use_subject_key and not subject_key:
+        raise ValueError("either positive cik or non-empty subject_key is required")
+    subject_val: int | str = subject_key if use_subject_key and subject_key is not None else (cik or 0)
     params = (
-        cik,
+        subject_val,
         accession,
         *(value for request in requests for value in (_request_sha256(request), model)),
         model,
         *(_question(request) for request in requests),
     )
-    row = connection.execute(_replay_sql(len(requests)), params).fetchone()
+    row = connection.execute(_replay_sql(len(requests), use_subject_key=use_subject_key), params).fetchone()
     if row is None:
         return None
     decision = row[1] if isinstance(row[1], dict) else json.loads(row[1])
@@ -377,10 +392,6 @@ def _replay(
     )
 
 
-def _synthetic_cik(text: str) -> int:
-    return (int(hashlib.sha256(text.encode()).hexdigest()[:8], 16) & 0x7FFFFFFF) or 1
-
-
 def _utcnow() -> datetime:
     return datetime.now(UTC)
 
@@ -389,7 +400,7 @@ def invoke(
     connection: Any | None,
     *,
     task: ModelTask,
-    cik: int,
+    cik: int | None,
     accession: str,
     user_content: str,
     caller: str,
@@ -399,15 +410,19 @@ def invoke(
     persist: bool = True,
     transport: Transport | None = None,
     now: Callable[[], datetime] = _utcnow,
+    subject_key: str | None = None,
 ) -> ModelInvocation:
     """Invoke seated model with locked replay and append-only persistence."""
     if not is_configured():
         raise ModelNotConfigured(f"{settings.llm_api_key_env} is not set; no provider seated (#70 scope 1)")
-    cik = cik if cik > 0 else _synthetic_cik(accession)
+    resolved_cik = cik if cik is not None and cik > 0 else None
+    resolved_key = subject_key or (accession if resolved_cik is None else None)
     model = settings.llm_small_model
     decoding = model_decoding.for_environment(gateway.capacity_environment())
     request_body = build_chat_request(task, user_content, model=model, decoding=decoding)
     active_conn = connection if persist and connection is not None else None
+    if active_conn is not None and resolved_cik is None and not resolved_key:
+        raise ValueError("either positive cik or subject_key/accession must be provided when persist=True")
     tx_ctx = (
         active_conn.transaction()
         if active_conn is not None and getattr(active_conn, "autocommit", False)
@@ -416,9 +431,23 @@ def invoke(
     with tx_ctx:
         if active_conn is not None:
             known = [build_chat_request(task, user_content, model=model, decoding=v) for v in model_decoding.KNOWN]
-            _lock_question(active_conn, cik=cik, accession=accession, question=_question(known[0]))
+            _lock_question(
+                active_conn,
+                cik=resolved_cik,
+                subject_key=resolved_key,
+                accession=accession,
+                question=_question(known[0]),
+            )
             if (
-                replayed := _replay(active_conn, task=task, cik=cik, accession=accession, model=model, requests=known)
+                replayed := _replay(
+                    active_conn,
+                    task=task,
+                    cik=resolved_cik,
+                    subject_key=resolved_key,
+                    accession=accession,
+                    model=model,
+                    requests=known,
+                )
             ) is not None:
                 return replayed
         llm_cfg = LlmSettings(
@@ -463,7 +492,7 @@ def invoke(
                 decoding,
                 task,
                 caller,
-                _model_key(standard, cik, accession, request_sha256),
+                _model_key(standard, resolved_cik, resolved_key, accession, request_sha256),
                 transport,
             )
             prompt_tokens, completion_tokens = usage.get("prompt_tokens"), usage.get("completion_tokens")
@@ -507,9 +536,9 @@ def invoke(
         if active_conn is not None:
             active_conn.execute(
                 "insert into staging.model_invocations (invocation_id, provider, model, base_url_host, standard, subject_cik, "
-                "accession, prompt_version, prompt_sha256, schema_sha256, request_sha256, response_sha256, status_code, "
+                "subject_key, accession, prompt_version, prompt_sha256, schema_sha256, request_sha256, response_sha256, status_code, "
                 "prompt_tokens, completion_tokens, cost, decision, request, response, started_at, completed_at, served_model) "
-                "values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, %s, %s, %s) "
+                "values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, %s, %s, %s) "
                 "on conflict (invocation_id) do nothing",
                 (
                     invocation.invocation_id,
@@ -517,7 +546,8 @@ def invoke(
                     invocation.model,
                     urlparse(llm_cfg.base_url).hostname or "",
                     standard,
-                    cik,
+                    resolved_cik,
+                    resolved_key,
                     accession,
                     task.prompt_version,
                     task.prompt_sha256,
@@ -538,11 +568,11 @@ def invoke(
             )
     if context_limit_exceeded:
         raise ModelContextLimitError(
-            cik=cik,
+            cik=resolved_cik or 0,
             accession=accession,
             estimated_tokens=estimated_tokens,
             max_context_tokens=task.max_context_tokens,
-            detail=f"{SOURCE}: context_window_exceeded (cik={cik}, accession={accession}, estimated_tokens={estimated_tokens})",
+            detail=f"{SOURCE}: context_window_exceeded (subject={resolved_cik or resolved_key}, accession={accession}, estimated_tokens={estimated_tokens})",
             status_code=status,
         )
     if status >= 400:
@@ -1091,38 +1121,32 @@ def generate_xhs_card_html(
     transport: Transport | None = None,
     now: Callable[[], datetime] = _utcnow,
 ) -> XhsCardGenerationResult:
-    """Generate verified 1080x1440 Xiaohongshu HTML card with fallback."""
-    html, render_mode = render_card_html(card), "deterministic_fallback"
-    prompt_sha256, model, invocation_id, replayed = XHS_CARD_TASK.prompt_sha256, None, None, False
-    try:
-        invocation = invoke(
-            connection,
-            task=XHS_CARD_TASK,
-            cik=_synthetic_cik(card.card_id),
-            accession=card.card_id[:36],
-            user_content=build_card_prompt(card),
-            caller=caller,
-            standard=standard,
-            parse=_parse_xhs_card_html,
-            refusal=lambda detail: {"html": "", "reason": detail},
-            persist=persist,
-            transport=transport,
-            now=now,
-        )
-        candidate_html = str(invocation.decision.get("html") or "")
-        ok, violations = verify_card_html(card, candidate_html)
-        if ok:
-            html, render_mode = candidate_html, "model_glm"
-            prompt_sha256 = invocation.prompt_sha256
-            model = invocation.served_model or invocation.model
-            invocation_id = invocation.invocation_id
-            replayed = invocation.replayed
-        else:
-            logger.warning(
-                "xhs_card_html model output failed fact-preservation verifier for %s (%s); using deterministic fallback",
-                card.card_id,
-                violations,
-            )
-    except (ModelNotConfigured, ModelHTTPError) as exc:
-        logger.info("xhs_card_html falling back to deterministic Cold-Verdict HTML for %s: %s", card.card_id, exc)
-    return XhsCardGenerationResult(card.card_id, html, render_mode, prompt_sha256, model, invocation_id, replayed)
+    """Generate and verify 1080x1440 Xiaohongshu HTML card via the seated LLM without deterministic fallback."""
+    invocation = invoke(
+        connection,
+        task=XHS_CARD_TASK,
+        cik=None,
+        subject_key=card.card_id,
+        accession=card.card_id[:36],
+        user_content=build_card_prompt(card),
+        caller=caller,
+        standard=standard,
+        parse=_parse_xhs_card_html,
+        refusal=lambda detail: {"html": "", "reason": detail},
+        persist=persist,
+        transport=transport,
+        now=now,
+    )
+    candidate_html = str(invocation.decision.get("html") or "")
+    ok, violations = verify_card_html(card, candidate_html)
+    if not ok:
+        raise ValueError(f"xhs_card_html failed fact-preservation verifier for {card.card_id}: {violations}")
+    return XhsCardGenerationResult(
+        card.card_id,
+        candidate_html,
+        "model_glm",
+        invocation.prompt_sha256,
+        invocation.served_model or invocation.model,
+        invocation.invocation_id,
+        invocation.replayed,
+    )

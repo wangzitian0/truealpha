@@ -21,6 +21,7 @@ from data_engine.datahub._helpers import (
     unbacked_status_values,
 )
 from data_engine.datahub.canonical_issuer import require_canonical_issuer_id
+from data_engine.datahub.capture_core.source_registrations import SOURCE_RELIABILITY_PRIORS
 from data_engine.datahub.fetch_key import FetchKey
 from data_engine.jsonable import is_dataframe
 
@@ -592,7 +593,11 @@ def materialize_analyst_ratings(
                 confidence = (
                     Decimal(str(raw_conf))
                     if raw_conf is not None
-                    else (Decimal("0.8") if consensus_rating is not None else Decimal("0"))
+                    else (
+                        SOURCE_RELIABILITY_PRIORS["origin:moomoo-ratings:v1"]
+                        if consensus_rating is not None
+                        else Decimal("0")
+                    )
                 )
                 fields = (
                     consensus_rating,

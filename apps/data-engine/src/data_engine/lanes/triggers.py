@@ -115,6 +115,12 @@ def pipeline_trigger_sensor(context: dg.SensorEvaluationContext):
             exec_iso = executed_at.astimezone(UTC).isoformat()
             if job_name == BACKTEST_JOB_NAME:
                 cfg = raw_config if isinstance(raw_config, dict) else {}
+                custom_def = cfg.get("custom_definition")
+                custom_def_json = (
+                    json.dumps(custom_def)
+                    if isinstance(custom_def, dict)
+                    else (custom_def if isinstance(custom_def, str) else None)
+                )
                 overrides = cfg.get("overrides_json")
                 if isinstance(overrides, dict):
                     overrides = json.dumps(overrides)
@@ -122,6 +128,9 @@ def pipeline_trigger_sensor(context: dg.SensorEvaluationContext):
                     op_cfg = NightlyBacktestConfig(
                         executed_at=exec_iso,
                         definition_resource=cfg.get("definition_resource"),
+                        custom_definition_json=custom_def_json,
+                        release_manifest_id=cfg.get("release_manifest_id"),
+                        exploratory=bool(cfg.get("exploratory", False)),
                         overrides_json=overrides,
                         start_cutoff=cfg.get("start_cutoff"),
                         end_cutoff=cfg.get("end_cutoff"),

@@ -181,6 +181,7 @@ class LibraryCardExportToolRequest(_ToolModel):
     style_preset: str | None = None
     page: int | None = None
     title: str | None = None
+    format: Literal["html", "json"] = "html"
 
 
 class LibraryDocumentsListToolRequest(_ToolModel):
@@ -524,8 +525,8 @@ def build_mcp_server(
                 preset=request.style_preset,
                 page=request.page,
                 title=request.title,
-                format="html",
-                persist=getattr(active_research, "_database_url", None) is not None,
+                format=request.format,
+                persist=getattr(active_research, "_database_url", None) is not None and request.format == "html",
             ),
             research_repo=active_research,
             report_request=report_req,
