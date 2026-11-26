@@ -15,13 +15,33 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 
 from pydantic import SecretStr
 from starlette.types import ASGIApp, Receive, Scope, Send
+from truealpha_runtime.access import PrincipalKind
 
 #: RFC 6750 section 3: the challenge a client reads to know which credential to send.
 CHALLENGE = 'Bearer realm="truealpha-mcp"'
+MCP_PRINCIPAL_SCOPE_KEY = "truealpha_mcp_principal_kind"
+_MCP_PRINCIPAL_KIND: ContextVar[PrincipalKind | None] = ContextVar("mcp_principal_kind", default=None)
+
+
+def current_mcp_principal_kind() -> PrincipalKind | None:
+    """Return the active MCP principal kind bound by `BearerTokenGate`, if any."""
+    return _MCP_PRINCIPAL_KIND.get()
+
+
+@contextmanager
+def bind_mcp_principal_kind(kind: PrincipalKind | None) -> Iterator[None]:
+    """Bind `kind` on the current async context and always restore the previous value."""
+    token = _MCP_PRINCIPAL_KIND.set(kind)
+    try:
+        yield
+    finally:
+        _MCP_PRINCIPAL_KIND.reset(token)
 
 
 def presented_bearer(scope: Scope) -> str | None:
@@ -58,17 +78,38 @@ def token_matches(presented: str | None, expected: SecretStr | None) -> bool:
 
 
 class BearerTokenGate:
-    """Pass a request to `app` only when it presents the configured bearer token."""
+    """Pass a request to `app` only when it presents the configured admin or readonly bearer token."""
 
-    def __init__(self, app: ASGIApp, *, expected_token: Callable[[], SecretStr | None]) -> None:
+    def __init__(
+        self,
+        app: ASGIApp,
+        *,
+        expected_token: Callable[[], SecretStr | None],
+        readonly_token: Callable[[], SecretStr | None] | None = None,
+    ) -> None:
         self._app = app
         self._expected_token = expected_token
+        self._readonly_token = readonly_token
+
+    def _authenticate(self, scope: Scope) -> PrincipalKind | None:
+        token = presented_bearer(scope)
+        if token_matches(token, self._expected_token()):
+            return PrincipalKind.ADMINISTRATOR
+        if self._readonly_token is not None and token_matches(token, self._readonly_token()):
+            return PrincipalKind.MEMBER
+        return None
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         # Only a lifespan scope passes unchecked: it carries no request. HTTP and websocket
         # scopes both need the token, so a later websocket transport is not open by default.
-        if scope["type"] == "lifespan" or token_matches(presented_bearer(scope), self._expected_token()):
+        if scope["type"] == "lifespan":
             await self._app(scope, receive, send)
+            return
+        principal_kind = self._authenticate(scope)
+        if principal_kind is not None:
+            scope[MCP_PRINCIPAL_SCOPE_KEY] = principal_kind
+            with bind_mcp_principal_kind(principal_kind):
+                await self._app(scope, receive, send)
             return
         if scope["type"] == "websocket":
             # A close before accept makes the server answer the handshake with 403.

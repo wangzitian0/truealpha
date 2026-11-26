@@ -78,6 +78,11 @@ class Settings(RuntimeSettings):
         description="Bearer token that every request to the MCP route must present",
         json_schema_extra={"source": "runtime", "injected": True, "group": "mcp"},
     )
+    mcp_readonly_token: SecretStr | None = Field(
+        default=None,
+        description="Optional read-only MCP bearer token resolving to PrincipalKind.MEMBER (Q03)",
+        json_schema_extra={"source": "runtime", "sensitive": True, "empty_ok": True, "group": "mcp"},
+    )
 
     # MCP streamable-HTTP transport security (FastMCP DNS-rebinding protection).
     # The MCP credential is a bearer header, not a cookie, so a browser does not attach it

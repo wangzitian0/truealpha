@@ -95,7 +95,11 @@ def mcp_slash(request: Request) -> RedirectResponse:
 
 app.mount(
     "/mcp",
-    BearerTokenGate(_mcp_runtime, expected_token=lambda: settings.mcp_bearer_token),
+    BearerTokenGate(
+        _mcp_runtime,
+        expected_token=lambda: settings.mcp_bearer_token,
+        readonly_token=lambda: settings.mcp_readonly_token,
+    ),
 )
 
 

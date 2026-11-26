@@ -113,7 +113,9 @@ def test_mcp_access_context_and_reenterable_lifespan(monkeypatch: pytest.MonkeyP
 
     monkeypatch.setattr(main_mod, "refuse_to_boot_on_a_missing_environment", lambda: None)
     monkeypatch.setattr(main_mod.settings, "mcp_bearer_token", SecretStr("mcp-lifespan-secret"))
+    monkeypatch.setattr(main_mod.settings, "mcp_readonly_token", SecretStr("mcp-readonly-secret"))
     headers = {"Accept": "application/json, text/event-stream", "Authorization": "Bearer mcp-lifespan-secret"}
+    readonly_headers = {"Accept": "application/json, text/event-stream", "Authorization": "Bearer mcp-readonly-secret"}
     init_body = {
         "jsonrpc": "2.0",
         "id": 1,
@@ -130,6 +132,33 @@ def test_mcp_access_context_and_reenterable_lifespan(monkeypatch: pytest.MonkeyP
             assert unauth.status_code == 401 and unauth.headers["www-authenticate"].startswith("Bearer ")
             ok = client.post("/mcp/", headers=headers, json=init_body)
             assert ok.status_code == 200 and ok.headers.get("mcp-session-id")
+            sid = ok.headers["mcp-session-id"]
+
+            # Q03: Readonly bearer passes initialize/BearerTokenGate and resolves to MEMBER on HTTP & MCP.
+            ro_init = client.post("/mcp/", headers=readonly_headers, json=init_body)
+            assert ro_init.status_code == 200 and ro_init.headers.get("mcp-session-id")
+
+            # Readonly bearer cannot access HTTP /api/v1/admin/* (403).
+            admin_http = client.get("/api/v1/admin/settings", headers={"Authorization": "Bearer mcp-readonly-secret"})
+            assert admin_http.status_code == 403
+
+            # Even inside an established MCP session, calling an admin tool with readonly bearer fails closed.
+            admin_tool = client.post(
+                "/mcp/",
+                headers={**readonly_headers, "mcp-session-id": sid},
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "method": "tools/call",
+                    "params": {"name": "admin_ops_snapshot", "arguments": {}},
+                },
+            )
+            assert admin_tool.status_code == 200
+            assert "administrator principal required" in admin_tool.text
+
+    ro_principal = auth_service.resolve_principal_from_token(None, bearer_token="mcp-readonly-secret")
+    assert ro_principal is not None and ro_principal.principal_kind == "member"
+    assert ro_principal.principal_id == "principal:mcp-readonly"
 
 
 def test_db_statement_timeout_and_error_redaction(monkeypatch: pytest.MonkeyPatch) -> None:
