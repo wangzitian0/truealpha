@@ -31,9 +31,11 @@ The class sets how a cell's score can rise: class A reaches High by agreement, c
 oracle rules each ship with a fixture that fires them (D8: a rule that cannot fire measures
 nothing).
 
-## Decision 2 — the admission checklist (PR-blocking, five artifacts)
+## Decision 2 — the admission requirements (superseded by ADR A8 as PR-blocking gate)
 
-A PR that adds or materially changes a source must contain:
+> Superseded as a manual PR-blocking checklist by [ADR A8](A8-strong-dashboards-weak-gates.md) (`Q10`): source onboarding is enforced by CI smoke/contract suites (`vendor_contract_smoke.py`) and observed on `/admin/datahub`, not manual PR checklists.
+
+A PR that adds or materially changes a source must provide:
 
 1. an adapter behind the existing `SourceFetchPort` — the executor never learns vendors;
 2. a **cassette from the first real capture**, sha-anchored to `raw.fetches` (#569's pattern:

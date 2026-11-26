@@ -223,13 +223,15 @@ _SIGN_VIOLATIONS, _SIGN_SIGNALS = _sign_policy_queries()
 _FUSION_CTES = """
     selected as (
         select s.run_id, sel.observation_id
-        from mart.current_pointer_head head
+        from mart.served_head head
         join staging.core_snapshots s
-          on s.run_id = head.target_run_id
+          on s.run_id = head.run_id
          and s.universe_id = head.universe_id
          and s.universe_version = head.universe_version
         cross join lateral jsonb_array_elements(s.payload->'members') member
         cross join lateral jsonb_array_elements_text(member->'observation_ids') sel(observation_id)
+        where head.factor_id = 'gross_profit_per_employee'
+          and head.run_id is not null
     ), contested as (
         select uo.capture_obligation_id
         from staging.capture_observation_obligations uo

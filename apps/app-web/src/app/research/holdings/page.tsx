@@ -28,7 +28,17 @@ export default async function HoldingsPage() {
               <span className="text-xs text-gray-400">
                 period {fund.report_period} · filed weight {fund.total_weight_pct}% · resolved {fund.resolved_weight_pct}% · valued {fund.valued_weight_pct}%
                 {fund.weighted_gap ? ` · weighted gap (${valuationBasisLabel(fund.weighted_gap_basis)}) ${fund.weighted_gap}` : ""}
-                {fund.availability_status ? ` · ${fund.availability_status}/${fund.source_evidence_status}/${fund.factor_validation_status}` : ""}
+                {fund.availability_status
+                  ? ` · ${[
+                      fund.availability_status,
+                      fund.source_evidence_status,
+                      fund.factor_validation_status && fund.factor_validation_status !== "not_evaluated"
+                        ? fund.factor_validation_status
+                        : null,
+                    ]
+                      .filter(Boolean)
+                      .join("/")}`
+                  : ""}
               </span>
             </div>
             <ResearchTable caption={`Holdings for ${fund.fund_name}`} headers={["Holding", "Ticker", "Weight", "P/S", "P/GP", "Target mid", "Gap", "GPPE tier"]}>

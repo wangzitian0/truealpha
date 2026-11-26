@@ -35,6 +35,7 @@ export type CardExportRequest = Schemas["CardExportRequest"];
 export type CardExportResponse = Schemas["CardExportResponse"];
 export type OpsOverviewResponse = Schemas["OpsOverviewResponse"];
 export type DatahubStatsResponse = Schemas["DatahubStatsResponse"];
+export type AdminSettingsResponse = Schemas["AdminSettingsResponse"];
 export type TriggerPipelineRequest = Schemas["TriggerPipelineRequest"];
 export type TriggerPipelineResponse = Schemas["TriggerPipelineResponse"];
 export type TriggerBacktestRequest = Schemas["TriggerBacktestRequest"];
@@ -131,5 +132,6 @@ export const api = {
   getAdminOps: (opts?: RequestOpts) => apiRequest<OpsOverviewResponse>("/api/v1/admin/ops", opts),
   triggerPipeline: (body: TriggerPipelineRequest, opts?: RequestOpts) => json<TriggerPipelineResponse>("/api/v1/admin/triggers", body, opts),
   getAdminDatahub: (opts?: RequestOpts) => apiRequest<DatahubStatsResponse>("/api/v1/admin/datahub", opts),
+  getAdminSettings: (opts?: RequestOpts) => apiRequest<AdminSettingsResponse>("/api/v1/admin/settings", opts),
   rollbackHead: (body: HeadRollbackRequest, opts?: RequestOpts) => json<HeadRollbackResponse>("/api/v1/admin/head-rollback", body, opts),
 };

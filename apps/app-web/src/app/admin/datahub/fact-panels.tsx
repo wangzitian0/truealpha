@@ -273,7 +273,11 @@ export function DatahubFactPanels({ stats }: { stats: Record<string, unknown> })
             return (
               <tr key={`inv-${String(inv.invariant_id ?? "")}`} className="border-t border-border font-mono text-xs">
                 <td className="px-3 py-2">{safeCell(inv.invariant_id)}</td>
-                <td className="px-3 py-2"><span className={badgeTone(inv.kind === "hard" ? "amber" : "neutral")}>{safeCell(inv.kind)}</span></td>
+                <td className="px-3 py-2">
+                  <span className={badgeTone(inv.kind === "hard" ? "amber" : "neutral")}>
+                    {inv.kind === "hard" ? "critical (fact)" : safeCell(inv.kind)}
+                  </span>
+                </td>
                 <td className="px-3 py-2">{safeCell(inv.population)}</td>
                 <td className="px-3 py-2"><span className={badgeTone(vCount > 0 ? "red" : "emerald")}>{safeCell(inv.violation_count)}</span></td>
                 <td className="px-3 py-2">

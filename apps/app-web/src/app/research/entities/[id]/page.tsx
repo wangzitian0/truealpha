@@ -114,9 +114,14 @@ export default async function EntityDetailPage({
                   <td className={`${td} tabular-nums`}>{formatCell(formatPercentFromFraction(r.target_weight))}</td>
                   <td className={td}>
                     <AvailabilityBadge status={r.availability ?? "unavailable"} />
-                    {(r.source_evidence_status || r.factor_validation_status) && (
+                    {(r.source_evidence_status || (r.factor_validation_status && r.factor_validation_status !== "not_evaluated")) && (
                       <div className="mt-1 font-mono text-[10px] text-gray-500">
-                        {[r.source_evidence_status, r.factor_validation_status].filter(Boolean).join(" / ")}
+                        {[
+                          r.source_evidence_status,
+                          r.factor_validation_status !== "not_evaluated" ? r.factor_validation_status : null,
+                        ]
+                          .filter(Boolean)
+                          .join(" / ")}
                       </div>
                     )}
                   </td>

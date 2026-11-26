@@ -2,6 +2,7 @@ import Link from "next/link";
 import { api } from "@/client/api";
 import { formatCell, formatCompactUtc, formatRatio, formatShortSha } from "@/client/format";
 import { RUNS_EMPTY_MESSAGE, RUNS_UNAVAILABLE_MESSAGE } from "@/client/read-state";
+import { BacktestTriggerButton } from "@/components/backtest-trigger-button";
 import { HeadRollbackControl } from "@/components/head-rollback-control";
 import { ReadStateNotice } from "@/components/read-state";
 import { ResearchTable } from "@/components/research-table";
@@ -111,8 +112,9 @@ export default async function AdminOpsPage() {
           <h1 id="admin-heading" className="text-2xl font-bold tracking-tight">Operations</h1>
           <p className="mt-1 text-sm text-gray-400">Dagster runs, dependencies, served heads, nightly verdicts, and manual controls.</p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <TriggerRunButton />
+          <BacktestTriggerButton />
         </div>
       </div>
       {error && <ReadStateNotice state={{ kind: "error", message: error }} />}
@@ -230,82 +232,6 @@ export default async function AdminOpsPage() {
           </div>
 
           <div className="space-y-2">
-            {(() => {
-              const cp = (ops as Record<string, unknown> | null)?.construction_progress as Record<string, unknown> | null | undefined;
-              if (!cp) return null;
-              const universes = Array.isArray(cp.universes) ? (cp.universes as Record<string, unknown>[]) : [];
-              const strategyRuns = Array.isArray(cp.strategy_runs) ? (cp.strategy_runs as Record<string, unknown>[]) : [];
-              const backtests = Array.isArray(cp.backtest_runs) ? (cp.backtest_runs as Record<string, unknown>[]) : [];
-              return (
-                <div className="space-y-4">
-                  <h2 className="text-lg font-semibold">Construction &amp; 6-Scenario Progress Matrix</h2>
-                  <p className="text-xs font-mono text-gray-300">
-                    Criteria ({scalar(cp.environment)}): verified {scalar(cp.criteria_verified)}/{scalar(cp.criteria_total)} · partial{" "}
-                    {scalar(cp.criteria_partial)} · pending {scalar(cp.criteria_pending)} · failed/stale{" "}
-                    {scalar(cp.criteria_failed_or_stale)}
-                  </p>
-                  {universes.length > 0 && (
-                    <ResearchTable
-                      caption="6-Scenario Actionable Question Coverage"
-                      headers={["Universe", "Scheduled", "Freshness", "Q1–Q6 actionable coverage"]}
-                    >
-                      {universes.map((u) => {
-                        const qs = Array.isArray(u.questions) ? (u.questions as Record<string, unknown>[]) : [];
-                        const qSummary =
-                          qs.length > 0
-                            ? qs
-                                .map((q) => {
-                                  const pct = q.actionable_coverage_pct ?? "—";
-                                  return `${scalar(q.question_id)}:${scalar(q.answered)}/${scalar(q.actionable_denominator)}(${pct}%,gap=${scalar(q.pipeline_gap)})`;
-                                })
-                                .join(" · ")
-                            : "—";
-                        return (
-                          <tr key={String(u.universe_key ?? "")} className="border-t border-border font-mono text-xs">
-                            <td className={td}>{scalar(u.universe_key)}</td>
-                            <td className={td}>{u.scheduled ? "yes" : "no"}</td>
-                            <td className={td}>{scalar(u.freshness)}</td>
-                            <td className={td}>{qSummary}</td>
-                          </tr>
-                        );
-                      })}
-                    </ResearchTable>
-                  )}
-                  {(strategyRuns.length > 0 || backtests.length > 0) && (
-                    <ResearchTable
-                      caption="Strategy & Backtest Reality"
-                      headers={["Kind", "Strategy", "Universe / Run", "Status / Counts", "Executed at"]}
-                    >
-                      {strategyRuns.map((s) => (
-                        <tr key={`sr-${String(s.strategy_run_id ?? "")}`} className="border-t border-border font-mono text-xs">
-                          <td className={td}>strategy</td>
-                          <td className={td}>{scalar(s.strategy_key)}</td>
-                          <td className={td}>{scalar(s.strategy_run_id)}</td>
-                          <td className={td}>
-                            selected {scalar(s.selected_count)} / eligible {scalar(s.eligible_count)} / total {scalar(s.total_count)}
-                          </td>
-                          <td className={td}>{scalar(s.executed_at)}</td>
-                        </tr>
-                      ))}
-                      {backtests.map((b) => (
-                        <tr
-                          key={`bt-${String(b.strategy_key ?? "")}-${String(b.universe_id ?? "")}`}
-                          className="border-t border-border font-mono text-xs"
-                        >
-                          <td className={td}>backtest</td>
-                          <td className={td}>{scalar(b.strategy_key)}</td>
-                          <td className={td}>{scalar(b.universe_id)}</td>
-                          <td className={td}>
-                            {scalar(b.status)} · cagr={scalar(b.cagr_monthly)} · sharpe={scalar(b.sharpe_daily)}
-                          </td>
-                          <td className={td}>{scalar(b.executed_at)}</td>
-                        </tr>
-                      ))}
-                    </ResearchTable>
-                  )}
-                </div>
-              );
-            })()}
             <h2 className="text-lg font-semibold">Nightly verdicts</h2>
             {sortedVerdicts.length === 0 ? (
               <p className="text-sm text-gray-400">No nightly verdicts recorded yet.</p>
