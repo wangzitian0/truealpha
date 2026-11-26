@@ -78,8 +78,38 @@ __setApiFetch(async (input) => {
               },
             ],
             nightly_verdicts: [
-              { check_name: "output_invariants", ok: true, ran_at: "2026-11-25T01:00:00Z", summary: "all hard checks clean", dagster_run_id: "dag-1" },
+              { check_name: "output_invariants", ok: true, freshness_state: "pass", age_hours: 2.0, max_age_hours: 48.0, ran_at: "2026-11-25T01:00:00Z", summary: "all hard checks clean", dagster_run_id: "dag-1" },
+              { check_name: "topt_baseline", ok: true, freshness_state: "stale", age_hours: 72.0, max_age_hours: 48.0, ran_at: "2026-11-22T01:00:00Z", summary: "overdue check", dagster_run_id: "dag-0" },
+              { check_name: "model_key_health", ok: null, freshness_state: "missing", age_hours: null, max_age_hours: 48.0, ran_at: null, summary: "missing from mart.nightly_verdicts", dagster_run_id: null },
             ],
+            construction_progress: {
+              environment: "staging",
+              criteria_total: 30,
+              criteria_verified: 6,
+              criteria_partial: 14,
+              criteria_pending: 8,
+              criteria_failed_or_stale: 2,
+              criteria: [],
+              universes: [
+                {
+                  universe_key: "topt",
+                  universe_id: "universe:topt-us-v1",
+                  scheduled: true,
+                  freshness: "fresh",
+                  availability: "available",
+                  report_matches_head: true,
+                  questions: [
+                    { question_id: "q1", answered: 8, denominator: 10, actionable_denominator: 9, actionable_coverage_pct: 88.89, world_absence: 1, pipeline_gap: 1, not_applicable: 0 },
+                  ],
+                },
+              ],
+              strategy_runs: [
+                { strategy_key: "large_model_value_v0", strategy_run_id: "strategy-run:" + "c".repeat(64), executed_at: "2026-11-25T02:00:00Z", selected_count: 3, eligible_count: 5, total_count: 10 },
+              ],
+              backtest_runs: [
+                { strategy_key: "large_model_value_v0", universe_id: "universe:topt-us-v1", status: "succeeded", run_id: BT_RUN, executed_at: "2026-11-25T03:00:00Z", cagr_monthly: "0.12", sharpe_daily: "1.1" },
+              ],
+            },
             failed_job_errors: [{ run_id: "dag-err-1", logged_at: "2026-11-25T00:30:00Z", first_line_error: "Upstream timeout 504" }],
             runs: [{ run_id: "dag-1", job_name: "topt_live_pipeline", status: "SUCCESS", created_at: "2026-11-25T00:00:00Z", duration_seconds: 90 }],
             trigger_queue: [{ request_id: 11, job_name: "sp500_live_pipeline", force_fetch: true, requested_at: "2026-11-25T00:10:00Z", consumed_at: null, launched_run_key: null }],
@@ -105,7 +135,14 @@ __setApiFetch(async (input) => {
                 payload: {
                   previous_run_id: `capture-run:${"b".repeat(64)}`,
                   questions: {
-                    q1: { answered: 95, denominator: 100, not_applicable: 5, by_class: { world_absence: 3, transient: 2 }, violations: { no_row: 0 }, change: { answered: 2, subjects_changed: ["AAPL"] } },
+                    q1: {
+                      answered: 95,
+                      denominator: 100,
+                      not_applicable: 5,
+                      by_class: { world_absence: 3, transient: 2 },
+                      violations: { no_row: 0 },
+                      change: { answered: 2, subjects_changed: 2, examples: [{ subject: "AAPL" }, { subject: "MSFT" }] },
+                    },
                   },
                 },
               },
@@ -128,7 +165,30 @@ __setApiFetch(async (input) => {
             ],
             validation: [{ check: "plausibility sign checks", verdict: "pass", detail: "0 implausible cells" }],
             nightly_verdicts: [{ check_name: "output_invariants", ok: true, ran_at: "2026-11-25T01:00:00Z", summary: "ok", dagster_run_id: "dag-1" }],
-            confidence: [{ universe_id: "universe:topt-us-v1", cutoff: "2026-11-25", run_id: RUN_ID, created_at: "2026-11-25T01:00:00Z", payload: { mean_confidence: 0.91 } }],
+            confidence: [
+              {
+                universe_id: "universe:topt-us-v1",
+                cutoff: "2026-11-25",
+                run_id: RUN_ID,
+                created_at: "2026-11-25T01:00:00Z",
+                payload: {
+                  families: {
+                    close: {
+                      cells: 5,
+                      mean_confidence: "0.9100",
+                      by_independent_origins: { "1": 2, "2": 3 },
+                      agreement_rate: "1.0000",
+                    },
+                  },
+                  cells: {
+                    close: {
+                      "issuer:a": { tier: "High", confidence: "0.95" },
+                      "issuer:b": { tier: "Medium", confidence: "0.70" },
+                    },
+                  },
+                },
+              },
+            ],
             capacity: [{ account: "twelvedata", environment: "staging", limit_id: "per_day", window_seconds: 86400, share: 320, observed_calls: 64, remaining_estimate: 256, utilization_pct: 20.0, rate_limited_24h: 0 }],
             model_1302_by_day: [{ day: "2026-11-25", source: "zhipu", status_429: 1, code_1302: 2, total_calls: 20, failed_calls: 3 }],
             llm_usage: [{ day: "2026-11-25", provider: "zhipu", served_model: "glm-4.5", standard: "gppe", calls: 15, prompt_tokens: 1200, completion_tokens: 400, cost: "0.25", error_calls: 1, refusal_calls: 0 }],
@@ -312,7 +372,20 @@ try {
   mode = "rich";
   const opsRich = renderToStaticMarkup(await AdminOpsPage());
   assertCleanHtml(opsRich, "AdminOpsPage(rich)");
-  for (const needle of ["Dependencies", "Postgres ops reader reachable", "Served heads", "Nightly verdicts", "Failed job errors", "Upstream timeout 504", "Head rollback", "Target universe"]) {
+  for (const needle of [
+    "Dependencies",
+    "Postgres ops reader reachable",
+    "Served heads",
+    "Nightly verdicts",
+    "STALE",
+    "MISSING",
+    "Construction &amp; 6-Scenario Progress Matrix",
+    "selected 3 / eligible 5 / total 10",
+    "Failed job errors",
+    "Upstream timeout 504",
+    "Head rollback",
+    "Target universe",
+  ]) {
     assert(opsRich.includes(needle), `AdminOpsPage missing ${needle}`);
   }
 
@@ -323,8 +396,13 @@ try {
     "Aligned",
     "Question coverage detail (layers &amp; deltas)",
     "95/100",
+    "+2 (2: AAPL, MSFT)",
     "world_absence=3",
     "custom_extra_metric",
+    "0.9100",
+    "1 / 1 / 0",
+    "2 / 3",
+    "1.0000",
     "Oracle disagreements (sample)",
     "Served heads &amp; pipeline artifacts",
     "topt_gppe",

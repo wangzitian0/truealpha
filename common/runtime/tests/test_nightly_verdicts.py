@@ -929,3 +929,40 @@ def test_the_surface_proof_fails_closed_when_the_served_head_is_unreadable(monke
     with pytest.raises(psycopg.errors.UndefinedTable):
         quality.run_report_surface_proof(dg.build_op_context())
     assert recorded[-1]["ok"] is False
+
+
+def test_vision_audit_evaluates_all_30_criteria_and_separates_live_health_from_partial(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Honest metrics (#1747): vision_audit prints all 30 criteria, flags stale verdicts, and keeps partial unverified."""
+    from datetime import timedelta
+
+    from truealpha_tools import vision_audit
+    from truealpha_tools.nightly_verdicts import HealthReport, Verdict
+
+    now = datetime(2026, 11, 26, 12, 0, tzinfo=UTC)
+    stale_verdict = Verdict("output_invariants", now - timedelta(hours=72), True, "stale")
+    fresh_verdicts = [
+        Verdict(name, now - timedelta(hours=1), True, "ok") if name != "output_invariants" else stale_verdict
+        for name in EXPECTED
+        if "@" not in name or name.endswith(("@topt", "@universe-list:qqq", "@universe-list:sp500"))
+    ]
+    health = HealthReport(
+        verdicts=fresh_verdicts,
+        release="v1",
+        governed_pointers=[
+            {"universe_id": "universe:topt-us-2026-06-30", "freshness": "fresh", "availability": "available"},
+            {"universe_id": "universe:qqq-us-2026-06-30", "freshness": "fresh", "availability": "available"},
+            {"universe_id": "universe:sp500-us-2026-06-30", "freshness": "fresh", "availability": "available"},
+        ],
+    )
+    monkeypatch.setattr(vision_audit, "read_report", lambda *_a, **_k: health)
+    report = vision_audit.audit_vision(env="staging", now=now)
+    assert report.criteria_summary["total"] == 30
+    assert report.criteria_summary["partial"] > 0
+    assert report.criteria_summary["failed_or_stale"] > 0
+    assert report.live_health_ok is True
+    assert report.all_passed is False
+    by_id = {c.criterion_id: c for c in report.criteria}
+    assert any("STALE" in c.evidence for c in by_id.values())
+    assert by_id["R3.C1"].verified is False

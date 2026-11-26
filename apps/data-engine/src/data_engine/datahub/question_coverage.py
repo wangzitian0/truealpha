@@ -26,7 +26,7 @@ from data_engine.datahub._helpers import gppe_branch_predicate
 from data_engine.datahub.repository import persist_run_report
 
 GOVERNING_FACTOR = "gross_profit_per_employee"
-REPORT_COMPILER_VERSION = "v2-frozen-denominator-low-conf"
+REPORT_COMPILER_VERSION = "v3-actionable-coverage"
 REPORT_RULES_TAG = f"{REGISTRY_SHA256[:12]}:{REPORT_COMPILER_VERSION}"
 UNRECORDED_REASON = "unrecorded_reason"
 NO_ROW = "no_row"
@@ -254,6 +254,10 @@ def classify_question(
         "tracking_issue": requirement.tracking_issue,
         "scope": requirement.scope.value,
         "denominator": len(expected),
+        "world_absence": 0,
+        "pipeline_gap": len(expected) if not col_keys else 0,
+        "actionable_denominator": len(expected),
+        "actionable_coverage_pct": 0.0 if expected else 100.0,
         "column": col_keys[0] if col_keys else None,
         "columns": col_keys,
         "answered": 0,
@@ -308,6 +312,15 @@ def classify_question(
         unavailable[reason] += 1
     entry["denominator"] = applicable
     entry["answered"] = answered
+    world_absence = int(by_class.get(ReasonClass.WORLD_ABSENCE.value, 0))
+    pipeline_gap = max(0, applicable - answered - world_absence)
+    actionable_denom = max(0, applicable - world_absence)
+    entry["world_absence"] = world_absence
+    entry["pipeline_gap"] = pipeline_gap
+    entry["actionable_denominator"] = actionable_denom
+    entry["actionable_coverage_pct"] = (
+        round((answered * 100.0) / actionable_denom, 1) if actionable_denom > 0 else (100.0 if applicable == 0 else 0.0)
+    )
     entry["unavailable"] = _by_count(unavailable)
     if not_applicable_count:
         entry["not_applicable"] = not_applicable_count
@@ -515,8 +528,12 @@ def summary_line(report: Mapping[str, Any]) -> str:
         unavailable_map = entry["unavailable"] or {}
         exceeded = int(unavailable_map.get("context_window_exceeded", 0))
         exceeded_note = f" ({exceeded} >1M context_window_exceeded)" if exceeded > 0 else ""
+        act_denom = int(entry.get("actionable_denominator", entry["denominator"]))
+        act_pct = entry.get("actionable_coverage_pct")
+        gaps = entry.get("pipeline_gap")
+        pct_note = f" ({act_pct:.1f}% actionable, gaps={gaps})" if act_pct is not None and gaps is not None else ""
         parts.append(
-            f"{question}: {entry['answered']}/{entry['denominator']} answered, "
+            f"{question}: {entry['answered']}/{act_denom} answered{pct_note}, "
             f"{sum(unavailable_map.values())} unavailable{exceeded_note}, {entry['missing']} missing"
         )
     return f"{report['universe_id']} @ {report['cutoff']}: " + "; ".join(parts)

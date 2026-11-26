@@ -22,10 +22,21 @@ function depTone(status: string): string {
   return "border-amber-500/40 text-amber-300";
 }
 
-function verdictLabel(ok: unknown): string {
-  if (ok === true) return "pass";
-  if (ok === false) return "fail";
+function verdictLabel(row: Record<string, unknown>): string {
+  const state = row.freshness_state;
+  if (state === "stale") return "STALE";
+  if (state === "missing") return "MISSING";
+  if (row.ok === true) return "pass";
+  if (row.ok === false) return "fail";
   return "pending";
+}
+
+function ageLimitLabel(row: Record<string, unknown>): string {
+  const age = row.age_hours;
+  const maxAge = row.max_age_hours;
+  if (typeof age === "number" && typeof maxAge === "number") return `${age.toFixed(1)} / ${maxAge.toFixed(0)}h`;
+  if (typeof maxAge === "number") return `— / ${maxAge.toFixed(0)}h`;
+  return "—";
 }
 
 export default async function AdminOpsPage() {
@@ -117,15 +128,95 @@ export default async function AdminOpsPage() {
           </div>
 
           <div className="space-y-2">
+            {(() => {
+              const cp = (ops as Record<string, unknown> | null)?.construction_progress as Record<string, unknown> | null | undefined;
+              if (!cp) return null;
+              const universes = Array.isArray(cp.universes) ? (cp.universes as Record<string, unknown>[]) : [];
+              const strategyRuns = Array.isArray(cp.strategy_runs) ? (cp.strategy_runs as Record<string, unknown>[]) : [];
+              const backtests = Array.isArray(cp.backtest_runs) ? (cp.backtest_runs as Record<string, unknown>[]) : [];
+              return (
+                <div className="space-y-4">
+                  <h2 className="text-lg font-semibold">Construction &amp; 6-Scenario Progress Matrix</h2>
+                  <p className="text-xs font-mono text-gray-300">
+                    Criteria ({scalar(cp.environment)}): verified {scalar(cp.criteria_verified)}/{scalar(cp.criteria_total)} · partial{" "}
+                    {scalar(cp.criteria_partial)} · pending {scalar(cp.criteria_pending)} · failed/stale{" "}
+                    {scalar(cp.criteria_failed_or_stale)}
+                  </p>
+                  {universes.length > 0 && (
+                    <ResearchTable
+                      caption="6-Scenario Actionable Question Coverage"
+                      headers={["Universe", "Scheduled", "Freshness", "Q1–Q6 actionable coverage"]}
+                    >
+                      {universes.map((u) => {
+                        const qs = Array.isArray(u.questions) ? (u.questions as Record<string, unknown>[]) : [];
+                        const qSummary =
+                          qs.length > 0
+                            ? qs
+                                .map((q) => {
+                                  const pct = q.actionable_coverage_pct ?? "—";
+                                  return `${scalar(q.question_id)}:${scalar(q.answered)}/${scalar(q.actionable_denominator)}(${pct}%,gap=${scalar(q.pipeline_gap)})`;
+                                })
+                                .join(" · ")
+                            : "—";
+                        return (
+                          <tr key={String(u.universe_key ?? "")} className="border-t border-border font-mono text-xs">
+                            <td className={td}>{scalar(u.universe_key)}</td>
+                            <td className={td}>{u.scheduled ? "yes" : "no"}</td>
+                            <td className={td}>{scalar(u.freshness)}</td>
+                            <td className={td}>{qSummary}</td>
+                          </tr>
+                        );
+                      })}
+                    </ResearchTable>
+                  )}
+                  {(strategyRuns.length > 0 || backtests.length > 0) && (
+                    <ResearchTable
+                      caption="Strategy & Backtest Reality"
+                      headers={["Kind", "Strategy", "Universe / Run", "Status / Counts", "Executed at"]}
+                    >
+                      {strategyRuns.map((s) => (
+                        <tr key={`sr-${String(s.strategy_run_id ?? "")}`} className="border-t border-border font-mono text-xs">
+                          <td className={td}>strategy</td>
+                          <td className={td}>{scalar(s.strategy_key)}</td>
+                          <td className={td}>{scalar(s.strategy_run_id)}</td>
+                          <td className={td}>
+                            selected {scalar(s.selected_count)} / eligible {scalar(s.eligible_count)} / total {scalar(s.total_count)}
+                          </td>
+                          <td className={td}>{scalar(s.executed_at)}</td>
+                        </tr>
+                      ))}
+                      {backtests.map((b) => (
+                        <tr
+                          key={`bt-${String(b.strategy_key ?? "")}-${String(b.universe_id ?? "")}`}
+                          className="border-t border-border font-mono text-xs"
+                        >
+                          <td className={td}>backtest</td>
+                          <td className={td}>{scalar(b.strategy_key)}</td>
+                          <td className={td}>{scalar(b.universe_id)}</td>
+                          <td className={td}>
+                            {scalar(b.status)} · cagr={scalar(b.cagr_monthly)} · sharpe={scalar(b.sharpe_daily)}
+                          </td>
+                          <td className={td}>{scalar(b.executed_at)}</td>
+                        </tr>
+                      ))}
+                    </ResearchTable>
+                  )}
+                </div>
+              );
+            })()}
             <h2 className="text-lg font-semibold">Nightly verdicts</h2>
             {nightlyVerdicts.length === 0 ? (
               <p className="text-sm text-gray-400">No nightly verdicts recorded yet.</p>
             ) : (
-              <ResearchTable caption="Nightly verdicts" headers={["Check", "Verdict", "Ran at", "Summary", "Dagster run"]}>
+              <ResearchTable
+                caption="Nightly verdicts"
+                headers={["Check", "Verdict", "Age / Max", "Ran at", "Summary", "Dagster run"]}
+              >
                 {nightlyVerdicts.map((v) => (
                   <tr key={String(v.check_name ?? "")} className="border-t border-border font-mono text-xs">
                     <td className={td}>{scalar(v.check_name)}</td>
-                    <td className={td}>{verdictLabel(v.ok)}</td>
+                    <td className={td}>{verdictLabel(v)}</td>
+                    <td className={td}>{ageLimitLabel(v)}</td>
                     <td className={td}>{scalar(v.ran_at)}</td>
                     <td className={`${td} font-sans`}>{scalar(v.summary)}</td>
                     <td className={`${td} text-gray-400`}>{scalar(v.dagster_run_id)}</td>
