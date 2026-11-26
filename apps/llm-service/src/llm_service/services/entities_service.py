@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import hashlib
-from datetime import UTC, datetime
+import logging
+from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
-from factors.base.peg import peg as compute_peg
-from factors.types import Fact, GrowthConvention, UnitFamily
+import psycopg
 from pydantic import BaseModel, Field
-from truealpha_contracts.fiscal_period import encode_annual
 from truealpha_runtime.access import AccessContext
 from truealpha_runtime.issuer_modules_mart import (
     _ANALYST_RATINGS_BY_IDS_SQL,
@@ -601,7 +600,8 @@ def _fetch_issuer_basic_info_from_cursor(cur: Any, candidates: list[str]) -> Iss
                 (candidates,),
             )
             row = cur.fetchone()
-    except Exception:  # noqa: BLE001
+    except psycopg.Error as exc:
+        logging.getLogger(__name__).warning("issuer_basic_info lookup failed: %s", exc)
         return None
     if not row or not isinstance(row, dict):
         return None
@@ -644,99 +644,37 @@ def _apply_entity_peg_convention(
             ),
             *decisions[1:],
         ]
-    if norm == "consensus":
-        cons = next((n for n in node_values if n.node_key == "peg_consensus" and n.value is not None), None)
-        cons_rank = next((n for n in node_values if n.node_key == "peg_consensus_rank" and n.value is not None), None)
-        if cons is not None:
+    if norm in {"consensus", "geometric_cagr"}:
+        target_key = "peg_consensus" if norm == "consensus" else "peg_geometric_cagr"
+        rank_key = f"{target_key}_rank"
+        fallback_reason = (
+            "growth_convention_unsourced:analyst_consensus" if norm == "consensus" else "insufficient_earnings_history"
+        )
+        node = next((n for n in node_values if n.node_key == target_key), None)
+        node_rank = next((n for n in node_values if n.node_key == rank_key and n.value is not None), None)
+        if node is not None and node.value is not None:
             return [
                 d.model_copy(
                     update={
-                        "peg": cons.value,
-                        "peg_rank": int(Decimal(cons_rank.value)) if cons_rank and cons_rank.value else None,
+                        "peg": node.value,
+                        "peg_rank": int(Decimal(node_rank.value)) if node_rank and node_rank.value else None,
                         "peg_reason_codes": [],
                     }
                 ),
                 *decisions[1:],
             ]
+        reasons = list(node.reason_codes) if node is not None and node.reason_codes else [fallback_reason]
         return [
             d.model_copy(
                 update={
                     "peg": None,
                     "peg_rank": None,
-                    "peg_reason_codes": ["growth_convention_unsourced:analyst_consensus"],
+                    "peg_reason_codes": reasons,
                 }
             ),
             *decisions[1:],
         ]
-    # Compute geometric_cagr on the already-loaded wide panel leaves in-memory without adding DB queries.
-    as_of = datetime.now(UTC)
-    if d.cutoff_at:
-        try:
-            as_of = datetime.fromisoformat(d.cutoff_at.replace("Z", "+00:00")).astimezone(UTC)
-        except ValueError:
-            pass
-    facts: list[Fact] = []
-    seen_annual: set[str] = set()
-    for n in node_values:
-        if n.value is None:
-            continue
-        conf = Decimal(n.confidence) if n.confidence is not None else Decimal("0.8")
-        if n.node_key in {"last_close", "price"} and not any(f.metric == "price" for f in facts):
-            facts.append(
-                Fact(
-                    entity_id=d.issuer_id,
-                    metric="price",
-                    value=Decimal(n.value),
-                    unit_family=UnitFamily.PER_SHARE,
-                    confidence=conf,
-                    as_of=as_of,
-                )
-            )
-        elif n.node_key == "shares_outstanding" and not any(f.metric == "shares_outstanding" for f in facts):
-            facts.append(
-                Fact(
-                    entity_id=d.issuer_id,
-                    metric="shares_outstanding",
-                    value=Decimal(n.value),
-                    unit_family=UnitFamily.COUNT,
-                    confidence=conf,
-                    as_of=as_of,
-                )
-            )
-        elif n.node_key == "net_income" and n.period and n.period not in seen_annual:
-            try:
-                period_end = datetime.fromisoformat(n.period[:10]).date()
-            except ValueError:
-                continue
-            seen_annual.add(n.period)
-            facts.append(
-                Fact(
-                    entity_id=d.issuer_id,
-                    metric="net_income",
-                    value=Decimal(n.value),
-                    unit_family=UnitFamily.CURRENCY,
-                    confidence=conf,
-                    as_of=as_of,
-                    fiscal_period=encode_annual(period_end),
-                )
-            )
-    res = compute_peg(
-        facts,
-        entity_id=d.issuer_id,
-        growth_convention=GrowthConvention.GEOMETRIC_CAGR,
-        as_of=as_of,
-        cagr_years=3,
-    )
-    return [
-        d.model_copy(
-            update={
-                "peg": str(res.value) if res.value is not None else None,
-                "peg_rank": None,
-                "peg_reason_codes": list(res.flags),
-            }
-        ),
-        *decisions[1:],
-    ]
+    return decisions
 
 
 def get_entity_detail(

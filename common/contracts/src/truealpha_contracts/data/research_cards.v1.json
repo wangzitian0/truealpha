@@ -172,10 +172,10 @@
     "capital_adjusted_labor_efficiency": "人均资本调整毛利 (GPPE)",
     "tier": "所属估值档位",
     "current_price_to_gross_profit": "当前市值/毛利 (P/GP)",
-    "target_price_to_gross_profit": "本档 P/GP 上限",
+    "target_price_to_gross_profit": "本档 P/GP 目标中枢",
     "current_price_to_sales": "当前市销率 (P/S)",
-    "target_price_to_sales": "本档 P/S 上限",
-    "valuation_gap": "较上限折价空间",
+    "target_price_to_sales": "本档 P/S 目标中枢",
+    "valuation_gap": "较目标中枢折价空间",
     "outcome": "策略筛选结论",
     "eligible": "是否纳入排位",
     "rank": "当期策略排名",
@@ -198,9 +198,9 @@
     "lines": "披露持仓总条数"
   },
   "tier_labels_zh": {
-    "large_model_native": "大模型原生档 (上限 33.34x)",
-    "tech": "科技档 (上限 12.86x)",
-    "traditional": "传统档 (上限 8.75x)"
+    "large_model_native": "大模型原生档 (中枢 33.34x · 上限 40.00x)",
+    "tech": "科技档 (中枢 12.86x · 上限 14.29x)",
+    "traditional": "传统档 (中枢 8.75x · 上限 10.00x)"
   },
   "outcome_labels_zh": {
     "selected": "入选 (Top 2)",

@@ -15,7 +15,7 @@ from truealpha_contracts.execution import AvailabilityStatus, FactorValidationSt
 
 from data_engine.contracts.standards import STANDARDS
 from data_engine.contracts.theme_purity import THEMES, ThemeDefinition
-from data_engine.datahub._helpers import calibrated_confidence_for
+from data_engine.datahub._helpers import calibrated_confidence_for, safe_case_id_part
 from data_engine.datahub.canonical_issuer import expand_issuer_alias_ids, is_canonical_issuer_id
 from data_engine.datahub.capture_core.status_dimensions import coverage_status_dimensions
 from data_engine.datahub.primary_listing import choose_primary_listings
@@ -259,7 +259,11 @@ def compute_for_theme(
         calibrated_confidence_for(
             "segment-revenue-confidence:v1",
             classification.extractor,
-            case_id=f"theme:{definition.theme}:{partition.issuer_id}:{partition.accession}",
+            case_id=(
+                f"theme:{safe_case_id_part(definition.theme_id, 'theme')}:"
+                f"{safe_case_id_part(partition.issuer_id, 'issuer')}:"
+                f"{safe_case_id_part(partition.accession, 'accession')}"
+            ),
             evidence_id=f"accession:{partition.accession}",
         ),
     )

@@ -189,9 +189,24 @@ def load_entity_display_items(*, database_url: str | None = None) -> dict[str, E
     return with_mart_readonly(_q, database_url=database_url)
 
 
+_PANEL_NODE_KEY_ALIASES: dict[str, tuple[str, ...]] = {
+    "revenue_total": ("revenue_total", "revenue"),
+    "last_close": ("last_close", "price"),
+}
+
+
 def _load_wide_panel(
     node_keys: tuple[str, ...], *, database_url: str | None = None
 ) -> dict[str, dict[str, WidePanelCellDto]]:
+    requested = set(node_keys)
+    query_keys: list[str] = []
+    seen_q: set[str] = set()
+    for key in node_keys:
+        for candidate in _PANEL_NODE_KEY_ALIASES.get(key, (key,)):
+            if candidate not in seen_q:
+                seen_q.add(candidate)
+                query_keys.append(candidate)
+
     sql = f"""
       select coalesce(ei.legacy_id, v.issuer_id) as issuer_id,
              v.node_key, v.period, v.value::text as value,
@@ -207,8 +222,13 @@ def _load_wide_panel(
       order by coalesce(ei.legacy_id, v.issuer_id), v.node_key, v.period desc
     """
 
+    alias_targets = {
+        "revenue": "revenue_total",
+        "price": "last_close",
+    }
+
     def _q(cur: Any) -> dict[str, dict[str, WidePanelCellDto]]:
-        cur.execute(sql, (list(node_keys),))
+        cur.execute(sql, (query_keys,))
         by_issuer: dict[str, dict[str, WidePanelCellDto]] = {}
         for row in cur.fetchall():
             iid = row.get("issuer_id")
@@ -216,15 +236,21 @@ def _load_wide_panel(
             if not isinstance(iid, str) or not isinstance(nkey, str):
                 continue
             bucket = by_issuer.setdefault(iid, {})
-            if nkey in bucket:
-                continue
-            bucket[nkey] = WidePanelCellDto(
-                node_key=nkey,
-                period=row.get("period"),
-                value=row.get("value"),
-                confidence=row.get("confidence"),
-                availability=str(row.get("availability_status") or "unavailable"),
-            )
+            targets = [nkey] if nkey in requested else []
+            if (aliased := alias_targets.get(nkey)) and aliased in requested and aliased not in targets:
+                targets.append(aliased)
+            for target_key in targets:
+                if target_key in bucket and target_key != nkey:
+                    continue
+                if target_key in bucket and target_key == nkey:
+                    continue
+                bucket[target_key] = WidePanelCellDto(
+                    node_key=target_key,
+                    period=row.get("period"),
+                    value=row.get("value"),
+                    confidence=row.get("confidence"),
+                    availability=str(row.get("availability_status") or "unavailable"),
+                )
         return by_issuer
 
     return with_mart_readonly(_q, database_url=database_url)

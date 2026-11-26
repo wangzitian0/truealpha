@@ -877,13 +877,19 @@ def load_index_membership(
         src = INDEX_MEMBERSHIP_POLICY.source_priority[rank]
         lin = lineage_of(origin_id)
         w_val = None if weight is None else str(weight)
-        origins[INDEX_MEMBERSHIP_FAMILY].setdefault(listing_id, []).append(
-            OriginValue(origin_id, src, lin, MEMBER, knowable_at)
-        )
-        origins[ETF_WEIGHT_FAMILY].setdefault(listing_id, []).append(
-            OriginValue(origin_id, src, lin, w_val, knowable_at)
-        )
+        mem_list = origins[INDEX_MEMBERSHIP_FAMILY].setdefault(listing_id, [])
+        if not any(o.origin_id == origin_id for o in mem_list):
+            mem_list.append(OriginValue(origin_id, src, lin, MEMBER, knowable_at))
+        wt_list = origins[ETF_WEIGHT_FAMILY].setdefault(listing_id, [])
+        existing_wt = next((i for i, o in enumerate(wt_list) if o.origin_id == origin_id), None)
+        if existing_wt is None:
+            wt_list.append(OriginValue(origin_id, src, lin, w_val, knowable_at))
+        elif wt_list[existing_wt].value is None and w_val is not None:
+            wt_list[existing_wt] = OriginValue(origin_id, src, lin, w_val, knowable_at)
 
+    constituent_source = active_constituent_source(source)
+    constituent_origin = NPORT_ORIGIN if constituent_source == "nport" else NASDAQ_INDEX_ORIGIN
+    constituent_rank = 1 if constituent_source == "nport" else 0
     mics = resolve_listing_mics(
         connection, source, [str(t) for t, _, _ in constituents], valid_at=cutoff.date(), known_at=cutoff
     )
@@ -892,7 +898,13 @@ def load_index_membership(
         if (mic := mics.get(str(ticker))) is None:
             unresolved_exchange.append(str(ticker))
         else:
-            assert_route(f"listing:{mic}:{str(ticker).lower()}", NASDAQ_INDEX_ORIGIN, 0, weight, knowable_at)
+            assert_route(
+                f"listing:{mic}:{str(ticker).lower()}",
+                constituent_origin,
+                constituent_rank,
+                weight,
+                knowable_at,
+            )
     unresolved: list[str] = []
     for listing_id, holding_name, _isin, weight, report_period, transaction_time in holdings:
         vintage = {"report_period": report_period.isoformat(), "filed": transaction_time.astimezone(UTC).isoformat()}

@@ -234,6 +234,7 @@ class TriggerBacktestRequest(BaseModel):
     start_cutoff: str | None = None
     end_cutoff: str | None = None
     executed_at: str | None = None
+    idempotency_key: str | None = Field(default=None, max_length=128)
 
 
 class TriggerBacktestResponse(BaseModel):
@@ -625,19 +626,27 @@ def trigger_backtest_run(
         config["start_cutoff"] = start_dt.isoformat()
     if end_dt is not None:
         config["end_cutoff"] = end_dt.isoformat()
-    dedupe_key = str(uuid.uuid4())
+    raw_idem = (payload.idempotency_key or "").strip()
+    dedupe_key = raw_idem if raw_idem and re.fullmatch(r"[A-Za-z0-9._:@-]+", raw_idem) else str(uuid.uuid4())
     config_json = json.dumps(config, sort_keys=True)
 
     def _q(cur: Any) -> int:
         cur.execute(
             """
-            insert into staging.pipeline_trigger_requests (
-                job_name, executed_at, requested_by, dedupe_key, force_fetch, config_json
+            with inserted as (
+                insert into staging.pipeline_trigger_requests (
+                    job_name, executed_at, requested_by, dedupe_key, force_fetch, config_json
+                )
+                values ('nightly_backtest_pipeline', %s, %s, %s, false, %s::jsonb)
+                on conflict (dedupe_key) do nothing
+                returning request_id
             )
-            values ('nightly_backtest_pipeline', %s, %s, %s, false, %s::jsonb)
-            returning request_id
+            select request_id from inserted
+            union all
+            select request_id from staging.pipeline_trigger_requests where dedupe_key = %s
+            limit 1
             """,
-            (executed_at_dt, principal_id, dedupe_key, config_json),
+            (executed_at_dt, principal_id, dedupe_key, config_json, dedupe_key),
         )
         row = cur.fetchone()
         return int(row["request_id"])

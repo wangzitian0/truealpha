@@ -435,7 +435,16 @@ def build_card_prompt(card: ResearchCard) -> str:
             for s in card.subjects
         ],
     }
-    return f"{XHS_CARD_INSTRUCTIONS}\n\nPROMPT_VERSION: {XHS_CARD_PROMPT_VERSION}\nREQUIRED_DIMENSIONS: {XHS_CARD_WIDTH_PX}x{XHS_CARD_HEIGHT_PX}\nINPUT_RESEARCH_CARD_JSON:\n{json.dumps(payload, indent=2, ensure_ascii=False)}"
+    return (
+        f"{XHS_CARD_INSTRUCTIONS}\n\n"
+        f"PROMPT_VERSION: {XHS_CARD_PROMPT_VERSION}\n"
+        f"REQUIRED_DIMENSIONS: {XHS_CARD_WIDTH_PX}x{XHS_CARD_HEIGHT_PX}\n"
+        "VERIFICATION_CHECKLIST: Include verbatim card_id_required_prefix, cutoff_date, "
+        "research_risk_note, source_attribution, each subject's availability & claim_class "
+        "(and scenario_only if present), and every metric's exact raw value string, period, "
+        "confidence, and trace_prefix in the HTML text.\n"
+        f"INPUT_RESEARCH_CARD_JSON:\n{json.dumps(payload, indent=2, ensure_ascii=False)}"
+    )
 
 
 def extract_html_document(raw_text: str) -> str:
@@ -495,9 +504,22 @@ def verify_card_html(card: ResearchCard, html: str) -> tuple[bool, tuple[str, ..
         if s.causal_claim == "scenario_only" and "scenario_only" not in html:
             v.append(f"missing_scenario_only:{s.subject_id}")
         for m in s.metrics:
+            zh_label = _DATA["metric_labels_zh"].get(m.label)
+            label_ok = _has(html, m.label, norm) or (zh_label is not None and _has(html, zh_label, norm))
+            if not label_ok:
+                v.append(f"missing_metric_label:{s.subject_id}:{m.label}")
+            zh_val = (
+                _DATA["tier_labels_zh"].get(m.value, m.value)
+                if m.label == "tier" and m.value is not None
+                else (
+                    _DATA["outcome_labels_zh"].get(m.value, m.value)
+                    if m.label == "outcome" and m.value is not None
+                    else None
+                )
+            )
+            if m.value is not None and not _has(html, m.value, norm) and not (zh_val and _has(html, zh_val, norm)):
+                v.append(f"missing_metric_value:{s.subject_id}:{m.label}:{m.value}")
             for t, k in (
-                (m.label, "label"),
-                (m.value, "value"),
                 (m.currency if m.value is not None else None, "currency"),
                 (m.unit if m.value is not None else None, "unit"),
                 (m.period, "period"),
@@ -505,7 +527,7 @@ def verify_card_html(card: ResearchCard, html: str) -> tuple[bool, tuple[str, ..
                 (m.trace.reference_id[:16] if m.trace else None, "trace"),
             ):
                 if t is not None and not _has(html, t, norm):
-                    v.append(f"missing_metric_{k}:{s.subject_id}:{m.label}{f':{t}' if k != 'label' else ''}")
+                    v.append(f"missing_metric_{k}:{s.subject_id}:{m.label}:{t}")
     return (not v, tuple(v))
 
 

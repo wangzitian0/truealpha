@@ -6,7 +6,7 @@ import json
 import logging
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from numbers import Real
 from typing import Any
@@ -282,9 +282,18 @@ def parse_rating_summary(payload: object, *, as_of: datetime) -> list[AnalystRat
         points = [pt for item in items if (pt := _valid_rating_point(item, cutoff_iso)) is not None]
         if points:
             latest_date, latest_rating = max(points, key=lambda pt: pt[0])
+            latest_entry = next(
+                (
+                    item
+                    for item in items
+                    if isinstance(item, Mapping) and str(item.get("recommendation_date_str") or "")[:10] == latest_date
+                ),
+                {},
+            )
             rating_item = AnalystRatingItem(
                 analyst_id=analyst_id,
                 rating=latest_rating,
+                target_price=_optional_target(latest_entry, "target_price", "price_target", "target"),
                 confidence=_analyst_confidence(analyst_id, analyst_info.get("success_rate")),
             )
             try:
@@ -295,6 +304,116 @@ def parse_rating_summary(payload: object, *, as_of: datetime) -> list[AnalystRat
                 pass
             out.append(rating_item)
     return out
+
+
+_TRACK_HORIZON_DAYS = 90
+_TRACK_WINDOW_DAYS = 7
+
+
+def _load_pit_closes(connection: Connection[Any] | None, symbol: str, cutoff: datetime) -> list[tuple[date, Decimal]]:
+    if connection is None or not hasattr(connection, "execute"):
+        return []
+    clean = symbol.removeprefix("US.").strip().upper()
+    if not clean:
+        return []
+    rows = connection.execute(
+        """
+        select distinct on (trading_date) trading_date, close
+        from staging.market_prices_daily
+        where symbol = %s
+          and close is not null
+          and close > 0
+          and adjust in ('splits', 'none')
+          and trading_date <= %s
+          and transaction_time <= %s
+        order by trading_date asc, (adjust = 'splits') desc, recorded_at desc
+        """,
+        (clean, cutoff.astimezone(UTC).date(), cutoff),
+    ).fetchall()
+    out: list[tuple[date, Decimal]] = []
+    for td, cl in rows or ():
+        if isinstance(td, date) and cl is not None and (dec := _finite_decimal(cl)) is not None and dec > 0:
+            out.append((td, dec))
+    return out
+
+
+def _first_close_on_or_after(closes: Sequence[tuple[date, Decimal]], target: date) -> Decimal | None:
+    limit = target + timedelta(days=_TRACK_WINDOW_DAYS)
+    for d, price in closes:
+        if target <= d <= limit:
+            return price
+        if d > limit:
+            break
+    return None
+
+
+def _last_close_on_or_before(closes: Sequence[tuple[date, Decimal]], target: date) -> Decimal | None:
+    floor = target - timedelta(days=_TRACK_WINDOW_DAYS)
+    best: Decimal | None = None
+    for d, price in closes:
+        if floor <= d <= target:
+            best = price
+        elif d > target:
+            break
+    return best
+
+
+def compute_matured_track_record(
+    payload: object,
+    *,
+    closes: Sequence[tuple[date, Decimal]],
+    entity_id: str,
+    as_of: datetime,
+    horizon_days: int = _TRACK_HORIZON_DAYS,
+) -> Decimal | None:
+    if (
+        not closes
+        or _is_empty(payload)
+        or not isinstance(payload, Mapping)
+        or not isinstance(summaries := payload.get("analyst_rating_summary_list"), list)
+    ):
+        return None
+    cutoff_day = as_of.astimezone(UTC).date()
+    cutoff_iso = cutoff_day.isoformat()
+    matured: list[AnalystRatingItem] = []
+    for entry in summaries:
+        if not isinstance(entry, Mapping) or not isinstance(analyst_info := entry.get("analyst_info"), Mapping):
+            continue
+        analyst_id = str(analyst_info.get("analyst_id") or analyst_info.get("analyst_name") or "").strip()
+        if not analyst_id or not isinstance(items := entry.get("rating_item_list"), list):
+            continue
+        conf = _analyst_confidence(analyst_id, analyst_info.get("success_rate"))
+        for raw_item in items:
+            if (pt := _valid_rating_point(raw_item, cutoff_iso)) is None:
+                continue
+            rec_iso, rating_int = pt
+            try:
+                rec_day = date.fromisoformat(rec_iso)
+            except ValueError:
+                continue
+            outcome_day = rec_day + timedelta(days=horizon_days)
+            if outcome_day > cutoff_day:
+                continue
+            start_px = _first_close_on_or_after(closes, rec_day)
+            end_px = _last_close_on_or_before(closes, outcome_day)
+            if start_px is None or end_px is None or start_px <= 0:
+                continue
+            matured.append(
+                AnalystRatingItem(
+                    analyst_id=analyst_id,
+                    rating=rating_int,
+                    target_price=_optional_target(raw_item, "target_price", "price_target", "target")
+                    if isinstance(raw_item, Mapping)
+                    else None,
+                    confidence=conf,
+                    knowable_at=datetime.combine(rec_day, datetime.min.time(), tzinfo=UTC),
+                    outcome_end=datetime.combine(outcome_day, datetime.min.time(), tzinfo=UTC),
+                    realized_return=(end_px - start_px) / start_px,
+                )
+            )
+    if not matured:
+        return None
+    return analyst_track_record(matured, entity_id=entity_id, as_of=as_of).track_record_score
 
 
 def _fetch_error_row(company_id: str, exc: Exception) -> dict[str, Any]:
@@ -316,16 +435,22 @@ def _research_payload(ctx: Any, code: str, endpoint: str, fn: Callable[..., Any]
     )
 
 
-def _fetch_rating_enrichment(ctx: Any, code: str, *, as_of: datetime) -> list[AnalystRatingItem]:
+def _fetch_rating_enrichment_with_payload(
+    ctx: Any, code: str, *, as_of: datetime
+) -> tuple[list[AnalystRatingItem], object | None]:
     from data_engine.sources.moomoo import get_rating_summary
 
     if not hasattr(ctx, "get_research_rating_summary"):
-        return []
+        return [], None
     try:
         payload = _research_payload(ctx, code, "get_research_rating_summary", get_rating_summary)
-        return parse_rating_summary(payload, as_of=as_of)
+        return parse_rating_summary(payload, as_of=as_of), payload
     except Exception:  # noqa: BLE001
-        return []
+        return [], None
+
+
+def _fetch_rating_enrichment(ctx: Any, code: str, *, as_of: datetime) -> list[AnalystRatingItem]:
+    return _fetch_rating_enrichment_with_payload(ctx, code, as_of=as_of)[0]
 
 
 def _ticker_row(
@@ -336,6 +461,7 @@ def _ticker_row(
     as_of: datetime,
     open_error: Exception | None,
     log_traceback: bool,
+    connection: Connection[Any] | None = None,
 ) -> tuple[dict[str, Any] | AnalystTrackRecord, FetchFailure | None]:
     if ctx is None:
         if open_error is None:
@@ -349,7 +475,7 @@ def _ticker_row(
 
         payload = _research_payload(ctx, code, "get_research_analyst_consensus", get_analyst_consensus)
         consensus_row = _consensus_row(payload, company_id)
-        summary_items = _fetch_rating_enrichment(ctx, code, as_of=as_of)
+        summary_items, summary_payload = _fetch_rating_enrichment_with_payload(ctx, code, as_of=as_of)
     except Exception as exc:
         failure = FetchFailure(ticker=ticker, error=f"{type(exc).__name__}: {exc}")
         log.error(
@@ -359,6 +485,14 @@ def _ticker_row(
     if consensus_row is None and not summary_items:
         return analyst_track_record([], entity_id=company_id, as_of=as_of), None
     summary_rec = analyst_track_record(summary_items, entity_id=company_id, as_of=as_of) if summary_items else None
+    track_score = compute_matured_track_record(
+        summary_payload,
+        closes=_load_pit_closes(connection, ticker, as_of) if summary_payload is not None else (),
+        entity_id=company_id,
+        as_of=as_of,
+    )
+    if track_score is None and summary_rec is not None:
+        track_score = summary_rec.track_record_score
     high, low, mean = _target_stats(summary_items) if summary_items else (None, None, None)
     if consensus_row is None:
         assert summary_rec is not None
@@ -375,6 +509,7 @@ def _ticker_row(
             target_high=high,
             target_low=low,
             target_mean=mean,
+            track_record_score=track_score,
             rating_items=list(summary_items),
         ), None
     if summary_items:
@@ -384,6 +519,7 @@ def _ticker_row(
         for key, val in (("target_high", high), ("target_low", low), ("target_mean", mean)):
             if consensus_row.get(key) is None and val is not None:
                 consensus_row[key] = val
+        consensus_row["track_record_score"] = track_score
         consensus_row["rating_items"] = list(summary_items)
         consensus_row["confidence"] = _moomoo_rating_confidence(
             f"consensus:{company_id}",
@@ -396,6 +532,8 @@ def _ticker_row(
         if "vendor_timestamp" not in reasons:
             reasons.append("vendor_timestamp")
         consensus_row["reason_codes"] = reasons
+    elif track_score is not None:
+        consensus_row["track_record_score"] = track_score
     return consensus_row, None
 
 
@@ -516,6 +654,7 @@ def materialize_universe_analyst_ratings(
             as_of=cutoff,
             open_error=open_error,
             log_traceback=len(failures) < MAX_FAILURES_LOGGED,
+            connection=connection,
         )
         fetched.append(row)
         if failure is not None:

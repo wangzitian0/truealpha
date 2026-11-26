@@ -103,3 +103,5 @@ def test_qqq_build_denominator_and_confidence_prefer_active_nport_source_over_ne
     assert notes["constituent_count"] == 1
     assert "listing:xnas:aapl" in origins["index_membership"]
     assert "listing:xnas:oldleg" not in origins["index_membership"]
+    assert [o.origin_id for o in origins["index_membership"]["listing:xnas:aapl"]] == ["origin:nport:v1"]
+    assert [o.lineage for o in origins["index_membership"]["listing:xnas:aapl"]] == ["sec-nport"]

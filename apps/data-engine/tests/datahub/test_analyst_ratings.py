@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any
 
 import psycopg
 import pytest
-from data_engine.datahub.analyst_ratings import _consensus_confidence, materialize_universe_analyst_ratings
+from data_engine.datahub.analyst_ratings import (
+    _consensus_confidence,
+    compute_matured_track_record,
+    materialize_universe_analyst_ratings,
+)
 from data_engine.sources import moomoo as mm
 
 pytestmark = pytest.mark.deps
@@ -105,3 +109,36 @@ def test_nonempty_rating_summary_enriches_consensus_confidence(
     consensus_rating, reason_codes = stored
     assert Decimal(str(consensus_rating)) == Decimal("5")
     assert "vendor_timestamp" in (reason_codes or [])
+
+
+def test_compute_matured_track_record_evaluates_past_calls_against_pit_closes() -> None:
+    payload = {
+        "analyst_rating_summary_list": [
+            {
+                "analyst_info": {"analyst_id": "a-1", "success_rate": 85},
+                "rating_item_list": [
+                    {"recommendation_date_str": "2026-01-05", "rating": 5},
+                    {"recommendation_date_str": "2026-10-01", "rating": 5},  # unmatured as of 2026-11-24
+                ],
+            },
+            {
+                "analyst_info": {"analyst_id": "a-2", "success_rate": 60},
+                "rating_item_list": [
+                    {"recommendation_date_str": "2026-02-02", "rating": 2},
+                ],
+            },
+        ]
+    }
+    closes = [
+        (date(2026, 1, 5), Decimal("100")),
+        (date(2026, 2, 2), Decimal("110")),
+        (date(2026, 4, 3), Decimal("120")),  # +20% for a-1 buy -> hit (1)
+        (date(2026, 5, 1), Decimal("125")),  # +13.6% for a-2 sell -> miss (0)
+    ]
+    score = compute_matured_track_record(
+        payload,
+        closes=closes,
+        entity_id="issuer:cik:0000320193",
+        as_of=datetime(2026, 11, 24, tzinfo=UTC),
+    )
+    assert score == Decimal("0.5")

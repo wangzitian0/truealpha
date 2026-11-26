@@ -204,6 +204,10 @@ class EvaluatedDecision:
     peg_consensus_rank: int | None = None
     peg_consensus_reason_codes: tuple[str, ...] = ()
     peg_consensus_confidence: Decimal | None = None
+    peg_geometric_cagr: Decimal | None = None
+    peg_geometric_cagr_rank: int | None = None
+    peg_geometric_cagr_reason_codes: tuple[str, ...] = ()
+    peg_geometric_cagr_confidence: Decimal | None = None
     labor_efficiency_metric: str | None = None
     current_price_to_gross_profit: Decimal | None = None
     target_price_to_gross_profit: Decimal | None = None
@@ -443,7 +447,12 @@ def _withheld_peg(decision: EvaluatedDecision) -> EvaluatedDecision:
     """A plausibility refusal distrusts an input of the issuer, and the input can be the price."""
     assert decision.exclusion_reason is not None
     codes = (f"excluded:{decision.exclusion_reason.value}",)
-    return replace(decision, peg_reason_codes=codes, peg_consensus_reason_codes=codes)
+    return replace(
+        decision,
+        peg_reason_codes=codes,
+        peg_consensus_reason_codes=codes,
+        peg_geometric_cagr_reason_codes=codes,
+    )
 
 
 def _with_peg(
@@ -463,11 +472,24 @@ def _with_peg(
             )
     if any(as_of - issuer.knowable_at[key] > maximum_age for key in _PEG_CURRENT_INPUTS if key in issuer.knowable_at):
         codes = (ExclusionReason.STALE_REQUIRED_INPUT.value,)
-        return replace(decision, peg_reason_codes=codes, peg_consensus_reason_codes=codes)
+        return replace(
+            decision,
+            peg_reason_codes=codes,
+            peg_consensus_reason_codes=codes,
+            peg_geometric_cagr_reason_codes=codes,
+        )
+    peg_facts = _facts_for(issuer, _input_keys("peg"), as_of=as_of)
     historical = peg(
-        _facts_for(issuer, _input_keys("peg"), as_of=as_of),
+        peg_facts,
         entity_id=issuer.issuer_id,
         growth_convention=GrowthConvention.HISTORICAL_CAGR,
+        as_of=as_of,
+        cagr_years=3,
+    )
+    geometric = peg(
+        peg_facts,
+        entity_id=issuer.issuer_id,
+        growth_convention=GrowthConvention.GEOMETRIC_CAGR,
         as_of=as_of,
         cagr_years=3,
     )
@@ -485,6 +507,9 @@ def _with_peg(
         peg_consensus=consensus.value,
         peg_consensus_reason_codes=peg_reason_codes(consensus),
         peg_consensus_confidence=consensus.confidence if consensus.value is not None else None,
+        peg_geometric_cagr=geometric.value,
+        peg_geometric_cagr_reason_codes=peg_reason_codes(geometric),
+        peg_geometric_cagr_confidence=geometric.confidence if geometric.value is not None else None,
     )
 
 
@@ -528,11 +553,22 @@ def rank_and_select(
             start=1,
         )
     }
+    geometric_positions = {
+        d.issuer_id: pos
+        for pos, d in enumerate(
+            sorted(
+                (d for d in decisions if d.peg_geometric_cagr is not None),
+                key=lambda d: (d.peg_geometric_cagr, d.issuer_id),
+            ),
+            start=1,
+        )
+    }
     with_peg = [
         replace(
             d,
             peg_rank=peg_positions.get(d.issuer_id),
             peg_consensus_rank=consensus_positions.get(d.issuer_id),
+            peg_geometric_cagr_rank=geometric_positions.get(d.issuer_id),
         )
         for d in decisions
     ]
