@@ -17,11 +17,13 @@ from pydantic import BaseModel
 from truealpha_runtime.access import AccessContext, AuthenticationMethod, PrincipalKind
 
 from llm_service.config import settings
+from llm_service.mcp_auth import current_mcp_principal_kind
 from llm_service.services._db import with_app_runtime
 
 SESSION_COOKIE_NAME = "truealpha_session"
 MCP_SERVICE_PRINCIPAL_ID = "principal:llm-service-mcp"
 MCP_OWNER_PRINCIPAL_ID = "principal:owner"
+MCP_READONLY_PRINCIPAL_ID = "principal:mcp-readonly"
 MCP_SERVICE_TENANT_ID = "tenant:truealpha"
 MCP_DELEGATION_ID = "delegation:mcp-bearer-token"
 MCP_CONTEXT_LIFETIME = timedelta(minutes=5)
@@ -247,13 +249,20 @@ def authenticate_login(
 
 
 def resolve_principal_from_token(token: str | None, *, bearer_token: str | None = None) -> PrincipalRecord | None:
-    """Resolve active principal from session cookie JWT or static MCP service bearer token."""
+    """Resolve active principal from session cookie JWT or static MCP service bearer tokens."""
     configured_bearer = settings.mcp_bearer_token.get_secret_value() if settings.mcp_bearer_token else ""
     if bearer_token and configured_bearer and hmac.compare_digest(bearer_token, configured_bearer):
         return PrincipalRecord(
-            principal_id="principal:owner",
-            tenant_id="tenant:truealpha",
+            principal_id=MCP_OWNER_PRINCIPAL_ID,
+            tenant_id=MCP_SERVICE_TENANT_ID,
             principal_kind="administrator",
+        )
+    configured_readonly = settings.mcp_readonly_token.get_secret_value() if settings.mcp_readonly_token else ""
+    if bearer_token and configured_readonly and hmac.compare_digest(bearer_token, configured_readonly):
+        return PrincipalRecord(
+            principal_id=MCP_READONLY_PRINCIPAL_ID,
+            tenant_id=MCP_SERVICE_TENANT_ID,
+            principal_kind="member",
         )
     if not token:
         return None
@@ -288,16 +297,20 @@ def access_context_for(principal: PrincipalRecord) -> AccessContext:
 
 
 def resolve_mcp_access_context() -> AccessContext:
-    """Build the owner-delegated AccessContext for authenticated MCP callers."""
+    """Build the delegated AccessContext honoring the bound MCP bearer tier (Q03)."""
     issued_at = datetime.now(UTC)
     stamp = issued_at.timestamp()
+    kind = current_mcp_principal_kind() or PrincipalKind.ADMINISTRATOR
+    is_admin = kind is PrincipalKind.ADMINISTRATOR
+    principal_id = MCP_OWNER_PRINCIPAL_ID if is_admin else MCP_READONLY_PRINCIPAL_ID
+    ctx_prefix = "mcp-owner" if is_admin else "mcp-readonly"
     return AccessContext(
-        context_id=f"ctx:mcp-owner:{stamp}",
-        principal_id=MCP_OWNER_PRINCIPAL_ID,
+        context_id=f"ctx:{ctx_prefix}:{stamp}",
+        principal_id=principal_id,
         tenant_id=MCP_SERVICE_TENANT_ID,
-        session_id=f"session:mcp-owner:{stamp}",
+        session_id=f"session:{ctx_prefix}:{stamp}",
         authentication_method=AuthenticationMethod.DELEGATED_MCP,
-        principal_kind=PrincipalKind.ADMINISTRATOR,
+        principal_kind=kind,
         issued_at=issued_at,
         expires_at=issued_at + MCP_CONTEXT_LIFETIME,
         delegated_by_service_principal_id=MCP_SERVICE_PRINCIPAL_ID,

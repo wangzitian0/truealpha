@@ -11,10 +11,18 @@ from collections.abc import Callable
 
 import pytest
 from fastapi.testclient import TestClient
-from llm_service.mcp_auth import CHALLENGE, BearerTokenGate, presented_bearer, token_matches
+from llm_service.mcp_auth import (
+    CHALLENGE,
+    MCP_PRINCIPAL_SCOPE_KEY,
+    BearerTokenGate,
+    current_mcp_principal_kind,
+    presented_bearer,
+    token_matches,
+)
 from pydantic import SecretStr
 from starlette.types import Receive, Scope, Send
 from starlette.websockets import WebSocketDisconnect
+from truealpha_runtime.access import PrincipalKind
 
 pytestmark = pytest.mark.gate
 
@@ -130,3 +138,31 @@ def test_a_websocket_needs_the_token_too() -> None:
     with client.websocket_connect("/", headers={"Authorization": f"Bearer {TOKEN}"}):
         pass
     assert inner.reached == 1
+
+
+def test_dual_tier_gate_binds_admin_or_member_and_resets_after_request() -> None:
+    """Q03: Admin bearer binds ADMINISTRATOR; readonly bearer binds MEMBER; context resets after call."""
+    observed: list[tuple[PrincipalKind | None, PrincipalKind | None]] = []
+
+    class _InspectApp:
+        async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+            observed.append((current_mcp_principal_kind(), scope.get(MCP_PRINCIPAL_SCOPE_KEY)))
+            await send({"type": "http.response.start", "status": 200, "headers": [(b"content-length", b"2")]})
+            await send({"type": "http.response.body", "body": b"ok"})
+
+    gate = BearerTokenGate(
+        _InspectApp(),
+        expected_token=lambda: SecretStr(TOKEN),
+        readonly_token=lambda: SecretStr("readonly-mcp-token"),
+    )
+    client = TestClient(gate)
+
+    assert current_mcp_principal_kind() is None
+    assert client.post("/", headers={"Authorization": f"Bearer {TOKEN}"}).status_code == 200
+    assert client.post("/", headers={"Authorization": "Bearer readonly-mcp-token"}).status_code == 200
+    assert client.post("/", headers={"Authorization": "Bearer unknown-token"}).status_code == 401
+    assert current_mcp_principal_kind() is None
+    assert observed == [
+        (PrincipalKind.ADMINISTRATOR, PrincipalKind.ADMINISTRATOR),
+        (PrincipalKind.MEMBER, PrincipalKind.MEMBER),
+    ]

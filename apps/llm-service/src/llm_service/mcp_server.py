@@ -38,6 +38,11 @@ from truealpha_runtime.strategy_run import StrategyRunReadRepository, StrategyRu
 from truealpha_runtime.strategy_run_postgres import PostgresStrategyRunRepository
 
 from llm_service.config import settings
+from llm_service.mcp_auth import (
+    MCP_PRINCIPAL_SCOPE_KEY,
+    bind_mcp_principal_kind,
+    current_mcp_principal_kind,
+)
 from llm_service.services.admin_service import (
     DatahubStatsResponse,
     OpsOverviewResponse,
@@ -212,24 +217,37 @@ def _require_mcp_admin() -> None:
 
 
 class _AuditedFastMCP(FastMCP):
+    def _request_principal_kind(self) -> PrincipalKind | None:
+        try:
+            request = self._mcp_server.request_context.request
+        except LookupError:
+            return current_mcp_principal_kind()
+        scope = getattr(request, "scope", None)
+        if isinstance(scope, dict) and isinstance(scope.get(MCP_PRINCIPAL_SCOPE_KEY), PrincipalKind):
+            return scope[MCP_PRINCIPAL_SCOPE_KEY]
+        return current_mcp_principal_kind()
+
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> Any:
         from datetime import UTC
 
         started = datetime.now(UTC)
         outcome = "error"
-        try:
-            result = await super().call_tool(name, arguments)
-            outcome = "ok"
-            return result
-        finally:
-            elapsed_ms = round((datetime.now(UTC) - started).total_seconds() * 1000)
-            logger.info(
-                "mcp tool call: tool=%s principal=%s outcome=%s duration_ms=%d",
-                name,
-                MCP_OWNER_PRINCIPAL_ID,
-                outcome,
-                elapsed_ms,
-            )
+        principal_kind = self._request_principal_kind()
+        with bind_mcp_principal_kind(principal_kind):
+            principal_id = resolve_mcp_access_context().principal_id
+            try:
+                result = await super().call_tool(name, arguments)
+                outcome = "ok"
+                return result
+            finally:
+                elapsed_ms = round((datetime.now(UTC) - started).total_seconds() * 1000)
+                logger.info(
+                    "mcp tool call: tool=%s principal=%s outcome=%s duration_ms=%d",
+                    name,
+                    principal_id,
+                    outcome,
+                    elapsed_ms,
+                )
 
 
 def _default_repository() -> StrategyRunReadRepository:
