@@ -180,6 +180,27 @@ def test_browser_check_uses_headless_shell_and_each_cell_fits_its_budget() -> No
         assert total <= CELL_POLICIES[cell].budget_seconds, (cell, total)
 
 
+def test_checks_without_uv_sync_bootstrap_never_invoke_cold_uv_run() -> None:
+    """Checks without `uv sync` bootstrap run in clean temp checkouts; cold `uv run` rebuilds 140+ packages and times out."""
+    hooks = _load_hooks()
+    for check in hooks.checks:
+        cmd = " ".join(check.argv)
+        if "uv sync" not in (check.bootstrap or ""):
+            assert "uv run" not in cmd, f"{check.id} invokes `uv run` without `uv sync` bootstrap: {cmd}"
+
+    prod_surface = next(row for row in hooks.checks if row.id == "prod_surface")
+    res = subprocess.run(
+        ["sh", "-c", f"{prod_surface.argv[-1]} --help"],
+        cwd=REPO_ROOT,
+        env={"PATH": f"{Path(sys.executable).parent}:/usr/bin:/bin", "PYTHONSAFEPATH": "1"},
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert res.returncode == 0, res.stderr
+    assert "prod_surface" in res.stdout
+
+
 def test_tag_and_main_runs_of_one_commit_do_not_cancel_each_other() -> None:
     group = yaml.safe_load((WORKFLOWS / "ci-required.yml").read_text(encoding="utf-8"))["concurrency"]["group"]
     assert "github.ref_type" in group
