@@ -34,7 +34,9 @@ export default async function AdminSettingsPage() {
       <div>
         <h1 id="admin-settings-heading" className="text-2xl font-bold tracking-tight">Global Settings &amp; Contracts</h1>
         <p className="mt-1 text-sm text-gray-400">
-          Read-only view of `environment_contract.v1.json`, `confidence_bands.v1.json`, and `mart.freshness_limit`.
+          Read-only view of <code className="text-gray-300">environment_contract.v1.json</code>,{" "}
+          <code className="text-gray-300">confidence_bands.v1.json</code>, and{" "}
+          <code className="text-gray-300">mart.freshness_limit</code>.
         </p>
       </div>
       {error && <ReadStateNotice state={{ kind: "error", message: error }} />}
