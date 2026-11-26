@@ -812,6 +812,59 @@ def test_admin_service_capacity_buckets_confidence_summary_and_wilson() -> None:
     assert bounds[1]["wilson_95_upper_bound"] is None
 
 
+def test_admin_settings_returns_contract_thresholds_and_freshness_limits(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify /api/v1/admin/settings exposes global contracts, thresholds, and mart.freshness_limit."""
+
+    class _MockCur:
+        def __init__(self) -> None:
+            self._sql = ""
+            self.connection = self
+
+        def transaction(self) -> _MockCur:
+            return self
+
+        def execute(self, sql: str, _params: Any = None) -> None:
+            self._sql = sql
+
+        def fetchone(self) -> dict[str, Any]:
+            return {"reg": "present"}
+
+        def fetchall(self) -> list[dict[str, Any]]:
+            if "mart.environment_identity" in self._sql:
+                return [{"environment": "staging"}]
+            if "mart.freshness_limit" in self._sql:
+                return [{"limit_key": "daily", "hours": 72}, {"limit_key": "withhold", "hours": 720}]
+            return []
+
+        def __enter__(self) -> _MockCur:
+            return self
+
+        def __exit__(self, *_args: Any) -> bool:
+            return False
+
+    class _Conn:
+        def cursor(self, **_kwargs: Any) -> _MockCur:
+            return _MockCur()
+
+        def transaction(self) -> _MockCur:
+            return _MockCur()
+
+        def __enter__(self) -> _Conn:
+            return self
+
+        def __exit__(self, *_args: Any) -> bool:
+            return False
+
+    monkeypatch.setattr("llm_service.services._db.psycopg.connect", lambda *_a, **_k: _Conn())
+    out = admin_service.get_admin_settings()
+    assert out.environment == "staging"
+    assert out.confidence_thresholds == {"high_from": "0.80", "medium_from": "0.60"}
+    assert out.freshness_limits == [{"limit_key": "daily", "hours": 72}, {"limit_key": "withhold", "hours": 720}]
+    assert len(out.universes) >= 1 and len(out.vendor_accounts) >= 1 and len(out.sentinels) == 10
+    assert out.code_server_capacity["max_concurrent_runs"] >= 2
+    assert "environments" in out.model_seat
+
+
 def test_load_wide_panel_maps_canonical_revenue_and_price_aliases(monkeypatch: pytest.MonkeyPatch) -> None:
     from llm_service.services import panel_service
 

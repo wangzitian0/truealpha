@@ -31,8 +31,33 @@ export function formatCell(value: string | number | boolean | null | undefined):
   return typeof value === "number" ? (Number.isFinite(value) ? String(value) : "—") : value;
 }
 
+const SHORT_RUN_PREFIXES: Readonly<Record<string, string>> = {
+  "capture-run": "capture",
+  "strategy-run": "strategy",
+  "backtest-run": "backtest",
+};
+
 export function formatShortSha(sha: string | null | undefined): string {
-  return sha ? `${sha.slice(0, 12)}…` : "—";
+  if (!sha) return "—";
+  const trimmed = sha.trim();
+  if (!trimmed) return "—";
+  const colonIdx = trimmed.indexOf(":");
+  if (colonIdx > 0 && trimmed.length > 16) {
+    const rawPrefix = trimmed.slice(0, colonIdx);
+    const shortPrefix = SHORT_RUN_PREFIXES[rawPrefix] ?? rawPrefix.slice(0, 8);
+    const rest = trimmed.slice(colonIdx + 1);
+    return rest.length > 8 ? `${shortPrefix}:${rest.slice(0, 8)}` : `${shortPrefix}:${rest}`;
+  }
+  return trimmed.length <= 12 ? trimmed : `${trimmed.slice(0, 12)}…`;
+}
+
+export function formatCompactUtc(value: string | null | undefined): string {
+  if (!value) return "—";
+  const raw = value.trim();
+  if (!raw) return "—";
+  const m = /^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2})(?::\d{2}(?:\.\d+)?)?(?:Z|\+00(?::00)?|-00(?::00)?)?$/i.exec(raw);
+  if (m) return `${m[1]} ${m[2]} UTC`;
+  return raw;
 }
 
 export function formatUsdMagnitude(value: string | number | null | undefined): string | null {

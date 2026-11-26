@@ -67,7 +67,8 @@ def refresh_macro_data_op(context: dg.OpExecutionContext) -> None:
             freshness = judge_freshness(connection)
         outcome.summary = freshness.summary
         if not freshness.ok:
-            raise dg.Failure(f"macro freshness: {freshness.summary}")
+            outcome.failed = True
+            context.log.warning("macro freshness (fact): %s", freshness.summary)
 
 
 @dg.job(name=MACRO_DATA_REFRESH_JOB_NAME)

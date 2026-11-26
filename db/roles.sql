@@ -25,7 +25,8 @@ begin
 end $$;
 
 -- Trusted application repositories assume this group role only after deriving
--- transaction-local tenant and principal context. It has no raw/staging access.
+-- transaction-local tenant and principal context. It has no raw access and
+-- only the explicit staging queue exceptions granted below.
 do $$ begin
     create role app_runtime nologin;
 exception when duplicate_object then null;
@@ -230,7 +231,7 @@ grant select on mart.research_card_artifacts to app_ops_reader;
 -- obligation results — read-only, same posture.
 grant select on raw.capture_obligations to app_ops_reader;
 grant select on raw.capture_obligation_results to app_ops_reader;
--- The N-PORT holdings plane (#63): filed weights become the first non-admin
--- read surface — read-only, same posture.
+-- The N-PORT holdings plane (#63): read-only access for admin DataHub inspection
+-- of filed weights (same posture as raw capture obligations above).
 grant select on staging.fund_holding_facts to app_ops_reader;
 grant app_ops_reader to app_service_login;

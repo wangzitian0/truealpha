@@ -29,6 +29,7 @@ mock.module("@/server/auth/request-context", () => ({
 const { __setApiFetch } = await import("../src/client/api");
 const { default: AdminOpsPage } = await import("../src/app/admin/page");
 const { default: AdminDatahubPage } = await import("../src/app/admin/datahub/page");
+const { default: AdminSettingsPage } = await import("../src/app/admin/settings/page");
 const { default: CoveragePage } = await import("../src/app/research/coverage/page");
 const { default: RankingsPage } = await import("../src/app/research/rankings/page");
 const { default: ThemesPage } = await import("../src/app/research/themes/page");
@@ -378,30 +379,113 @@ __setApiFetch(async (input) => {
       { status: 200, headers: { "Content-Type": "application/json" } },
     );
   }
+  if (url.includes("/api/v1/admin/settings")) {
+    const payload =
+      mode === "empty"
+        ? {
+            environment: "staging",
+            contract_version: "1.0.0",
+            schema_version: 1,
+            utilization_ceiling: 0.7,
+            confidence_thresholds: { high_from: "0.80", medium_from: "0.60" },
+            freshness_limits: [],
+            environments: [],
+            universes: [],
+            vendor_accounts: [],
+            code_server_capacity: {},
+            model_seat: {},
+            sentinels: [],
+            metric_applicability: [],
+          }
+        : {
+            environment: "staging",
+            contract_version: "1.0.0",
+            schema_version: 1,
+            utilization_ceiling: 0.7,
+            confidence_thresholds: { high_from: "0.80", medium_from: "0.60" },
+            freshness_limits: [{ limit_key: "daily", hours: 72 }],
+            environments: [
+              {
+                environment: "staging",
+                trigger: "cron",
+                live_vendor_calls: true,
+                universes: [{ key: "topt", status: "scheduled" }],
+                list_refresh: [],
+                ticks: ["topt"],
+              },
+            ],
+            universes: [
+              {
+                key: "topt",
+                label: "Top Tech",
+                id_prefix: "universe:topt-us-",
+                lane_name: "topt",
+                membership_kind: "static",
+                roles: ["strategy"],
+                is_sentinel: false,
+                cron: { staging: "0 22 * * *" },
+              },
+            ],
+            vendor_accounts: [
+              {
+                account: "sec_edgar",
+                holder: "host_ip",
+                percent: 20,
+                seats: ["sec"],
+                limits: [{ limit_id: "per_second", unit: "request", window_seconds: 1, amount: 10, share: 2 }],
+              },
+            ],
+            code_server_capacity: { ceiling_mib: 4096, usable_mib: 2867, server_mib: 512, run_mib: 900, max_concurrent_runs: 2 },
+            model_seat: {
+              seat: "filing-extraction-model",
+              environments: {
+                staging: { max_concurrent_calls: 2, calls_per_minute: 15, probe_cron: "15 1 * * *", decoding_version: "v1" },
+              },
+            },
+            sentinels: [{ ticker: "AAPL", issuer_id: ISSUER_ID, trait: "tech_giant", defect_refs: ["#1"] }],
+            metric_applicability: [{ ticker: "JPM", universe: "topt", metric: "gppe", status: "not_applicable", tracking_issue: "#528" }],
+          };
+    return new Response(JSON.stringify(payload), { status: 200, headers: { "Content-Type": "application/json" } });
+  }
   return new Response(JSON.stringify({ detail: `unmatched ${url}` }), { status: 404 });
 });
 
 try {
-  // 1. Rich AdminOps + AdminDatahub
+  // 1. Rich AdminOps + AdminDatahub + AdminSettings
   mode = "rich";
   const opsRich = renderToStaticMarkup(await AdminOpsPage());
   assertCleanHtml(opsRich, "AdminOpsPage(rich)");
   for (const needle of [
     "admin-ops-summary",
+    "Run Backtest",
     "Dependencies",
     "Postgres ops reader reachable",
     "Served heads",
     "Nightly verdicts",
     "STALE",
     "MISSING",
-    "Construction &amp; 6-Scenario Progress Matrix",
-    "selected 3 / eligible 5 / total 10",
     "Failed job errors",
     "Upstream timeout 504",
     "Head rollback",
     "Target universe",
   ]) {
     assert(opsRich.includes(needle), `AdminOpsPage missing ${needle}`);
+  }
+  assert(!opsRich.includes("Construction &amp; 6-Scenario Progress Matrix"), "AdminOpsPage should omit R&D Construction matrix");
+
+  const settingsRich = renderToStaticMarkup(await AdminSettingsPage());
+  assertCleanHtml(settingsRich, "AdminSettingsPage(rich)");
+  for (const needle of [
+    "admin-settings-summary",
+    "Global Settings &amp; Contracts",
+    "Freshness limits (mart.freshness_limit)",
+    "high ≥ 0.80 · med ≥ 0.60",
+    "70% (0.7)",
+    "sec_edgar",
+    "filing-extraction-model",
+    "tech_giant",
+  ]) {
+    assert(settingsRich.includes(needle), `AdminSettingsPage missing ${needle}`);
   }
 
   const dhRich = renderToStaticMarkup(await AdminDatahubPage());
@@ -424,11 +508,12 @@ try {
     "topt_gppe",
     "Output invariants &amp; validation",
     "selected-weights-close",
+    "critical (fact)",
     "Capacity, Vendor Quotas &amp; 429/1302",
     "20.00%",
     "LLM usage &amp; model drift",
     "glm-4.5",
-    "Backfill health &amp; queues",
+    "Ingestion &amp; backfill health",
     "backfill_lag_hours",
     "DB hygiene facts",
     "idx_demo_unused",
@@ -437,10 +522,11 @@ try {
     assert(dhRich.includes(needle), `AdminDatahubPage missing ${needle}`);
   }
 
-  // 2. Empty AdminOps + AdminDatahub (zero leakage)
+  // 2. Empty AdminOps + AdminDatahub + AdminSettings (zero leakage)
   mode = "empty";
   assertCleanHtml(renderToStaticMarkup(await AdminOpsPage()), "AdminOpsPage(empty)");
   assertCleanHtml(renderToStaticMarkup(await AdminDatahubPage()), "AdminDatahubPage(empty)");
+  assertCleanHtml(renderToStaticMarkup(await AdminSettingsPage()), "AdminSettingsPage(empty)");
 
   // 3. Research pages
   const covHtml = renderToStaticMarkup(await CoveragePage());

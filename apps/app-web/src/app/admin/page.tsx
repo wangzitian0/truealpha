@@ -1,7 +1,8 @@
 import Link from "next/link";
 import { api } from "@/client/api";
-import { formatCell, formatRatio, formatShortSha } from "@/client/format";
+import { formatCell, formatCompactUtc, formatRatio, formatShortSha } from "@/client/format";
 import { RUNS_EMPTY_MESSAGE, RUNS_UNAVAILABLE_MESSAGE } from "@/client/read-state";
+import { BacktestTriggerButton } from "@/components/backtest-trigger-button";
 import { HeadRollbackControl } from "@/components/head-rollback-control";
 import { ReadStateNotice } from "@/components/read-state";
 import { ResearchTable } from "@/components/research-table";
@@ -23,10 +24,10 @@ function depTone(status: string): string {
 }
 
 function pillTone(tone: "emerald" | "red" | "amber" | "neutral"): string {
-  if (tone === "emerald") return "inline-block rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-emerald-300";
-  if (tone === "red") return "inline-block rounded-full border border-red-500/40 bg-red-500/10 px-2 py-0.5 text-red-300";
-  if (tone === "amber") return "inline-block rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-amber-300";
-  return "inline-block rounded-full border border-border bg-card px-2 py-0.5 text-gray-300";
+  if (tone === "emerald") return "inline-block whitespace-nowrap rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-emerald-300";
+  if (tone === "red") return "inline-block whitespace-nowrap rounded-full border border-red-500/40 bg-red-500/10 px-2 py-0.5 text-red-300";
+  if (tone === "amber") return "inline-block whitespace-nowrap rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-amber-300";
+  return "inline-block whitespace-nowrap rounded-full border border-border bg-card px-2 py-0.5 text-gray-300";
 }
 
 function verdictLabel(row: Record<string, unknown>): string {
@@ -84,6 +85,26 @@ export default async function AdminOpsPage() {
   const pendingTriggers = triggerQueue.filter((t) => !t.consumed_at).length;
   const pendingRollbacks = rollbackRequests.filter((rb) => !rb.consumed_at).length;
 
+  const groupedFailedErrors = Array.from(
+    failedJobErrors
+      .reduce((acc, row) => {
+        const msg = String(row.first_line_error ?? "").trim() || "Unknown error";
+        const existing = acc.get(msg);
+        if (existing) {
+          existing.count += 1;
+        } else {
+          acc.set(msg, {
+            msg,
+            latestRunId: String(row.run_id ?? ""),
+            latestLoggedAt: String(row.logged_at ?? ""),
+            count: 1,
+          });
+        }
+        return acc;
+      }, new Map<string, { msg: string; latestRunId: string; latestLoggedAt: string; count: number }>())
+      .values(),
+  );
+
   return (
     <section aria-labelledby="admin-heading" className="space-y-8">
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -91,11 +112,9 @@ export default async function AdminOpsPage() {
           <h1 id="admin-heading" className="text-2xl font-bold tracking-tight">Operations</h1>
           <p className="mt-1 text-sm text-gray-400">Dagster runs, dependencies, served heads, nightly verdicts, and manual controls.</p>
         </div>
-        <div className="flex items-center gap-3">
-          <Link href="/admin/datahub" className="rounded-lg border border-border bg-card px-3 py-2 text-xs text-accent hover:border-accent">
-            DataHub →
-          </Link>
+        <div className="flex flex-wrap items-center gap-3">
           <TriggerRunButton />
+          <BacktestTriggerButton />
         </div>
       </div>
       {error && <ReadStateNotice state={{ kind: "error", message: error }} />}
@@ -213,82 +232,6 @@ export default async function AdminOpsPage() {
           </div>
 
           <div className="space-y-2">
-            {(() => {
-              const cp = (ops as Record<string, unknown> | null)?.construction_progress as Record<string, unknown> | null | undefined;
-              if (!cp) return null;
-              const universes = Array.isArray(cp.universes) ? (cp.universes as Record<string, unknown>[]) : [];
-              const strategyRuns = Array.isArray(cp.strategy_runs) ? (cp.strategy_runs as Record<string, unknown>[]) : [];
-              const backtests = Array.isArray(cp.backtest_runs) ? (cp.backtest_runs as Record<string, unknown>[]) : [];
-              return (
-                <div className="space-y-4">
-                  <h2 className="text-lg font-semibold">Construction &amp; 6-Scenario Progress Matrix</h2>
-                  <p className="text-xs font-mono text-gray-300">
-                    Criteria ({scalar(cp.environment)}): verified {scalar(cp.criteria_verified)}/{scalar(cp.criteria_total)} · partial{" "}
-                    {scalar(cp.criteria_partial)} · pending {scalar(cp.criteria_pending)} · failed/stale{" "}
-                    {scalar(cp.criteria_failed_or_stale)}
-                  </p>
-                  {universes.length > 0 && (
-                    <ResearchTable
-                      caption="6-Scenario Actionable Question Coverage"
-                      headers={["Universe", "Scheduled", "Freshness", "Q1–Q6 actionable coverage"]}
-                    >
-                      {universes.map((u) => {
-                        const qs = Array.isArray(u.questions) ? (u.questions as Record<string, unknown>[]) : [];
-                        const qSummary =
-                          qs.length > 0
-                            ? qs
-                                .map((q) => {
-                                  const pct = q.actionable_coverage_pct ?? "—";
-                                  return `${scalar(q.question_id)}:${scalar(q.answered)}/${scalar(q.actionable_denominator)}(${pct}%,gap=${scalar(q.pipeline_gap)})`;
-                                })
-                                .join(" · ")
-                            : "—";
-                        return (
-                          <tr key={String(u.universe_key ?? "")} className="border-t border-border font-mono text-xs">
-                            <td className={td}>{scalar(u.universe_key)}</td>
-                            <td className={td}>{u.scheduled ? "yes" : "no"}</td>
-                            <td className={td}>{scalar(u.freshness)}</td>
-                            <td className={td}>{qSummary}</td>
-                          </tr>
-                        );
-                      })}
-                    </ResearchTable>
-                  )}
-                  {(strategyRuns.length > 0 || backtests.length > 0) && (
-                    <ResearchTable
-                      caption="Strategy & Backtest Reality"
-                      headers={["Kind", "Strategy", "Universe / Run", "Status / Counts", "Executed at"]}
-                    >
-                      {strategyRuns.map((s) => (
-                        <tr key={`sr-${String(s.strategy_run_id ?? "")}`} className="border-t border-border font-mono text-xs">
-                          <td className={td}>strategy</td>
-                          <td className={td}>{scalar(s.strategy_key)}</td>
-                          <td className={td}>{scalar(s.strategy_run_id)}</td>
-                          <td className={td}>
-                            selected {scalar(s.selected_count)} / eligible {scalar(s.eligible_count)} / total {scalar(s.total_count)}
-                          </td>
-                          <td className={td}>{scalar(s.executed_at)}</td>
-                        </tr>
-                      ))}
-                      {backtests.map((b) => (
-                        <tr
-                          key={`bt-${String(b.strategy_key ?? "")}-${String(b.universe_id ?? "")}`}
-                          className="border-t border-border font-mono text-xs"
-                        >
-                          <td className={td}>backtest</td>
-                          <td className={td}>{scalar(b.strategy_key)}</td>
-                          <td className={td}>{scalar(b.universe_id)}</td>
-                          <td className={td}>
-                            {scalar(b.status)} · cagr={scalar(b.cagr_monthly)} · sharpe={scalar(b.sharpe_daily)}
-                          </td>
-                          <td className={td}>{scalar(b.executed_at)}</td>
-                        </tr>
-                      ))}
-                    </ResearchTable>
-                  )}
-                </div>
-              );
-            })()}
             <h2 className="text-lg font-semibold">Nightly verdicts</h2>
             {sortedVerdicts.length === 0 ? (
               <p className="text-sm text-gray-400">No nightly verdicts recorded yet.</p>
@@ -304,9 +247,9 @@ export default async function AdminOpsPage() {
                       <td className={td}>{scalar(v.check_name)}</td>
                       <td className={td}><span className={pillTone(verdictTone(label))}>{label}</span></td>
                       <td className={td}>{ageLimitLabel(v)}</td>
-                      <td className={td}>{scalar(v.ran_at)}</td>
+                      <td className={`${td} whitespace-nowrap`}>{formatCompactUtc(v.ran_at as string | null | undefined)}</td>
                       <td className={`${td} font-sans`}>{scalar(v.summary)}</td>
-                      <td className={`${td} text-gray-400`}>{scalar(v.dagster_run_id)}</td>
+                      <td className={`${td} text-gray-400`} title={String(v.dagster_run_id ?? "")}>{formatShortSha(v.dagster_run_id as string | null | undefined)}</td>
                     </tr>
                   );
                 })}
@@ -314,15 +257,18 @@ export default async function AdminOpsPage() {
             )}
           </div>
 
-          {failedJobErrors.length > 0 && (
+          {groupedFailedErrors.length > 0 && (
             <div className="space-y-2">
-              <h2 className="text-lg font-semibold">Failed job errors</h2>
-              <ResearchTable caption="Failed job errors" headers={["Dagster run ID", "Logged at", "First-line error"]}>
-                {failedJobErrors.map((e) => (
-                  <tr key={String(e.run_id ?? "")} className="border-t border-border font-mono text-xs">
-                    <td className={td}>{scalar(e.run_id)}</td>
-                    <td className={td}>{scalar(e.logged_at)}</td>
-                    <td className={`${td} text-red-300`}>{scalar(e.first_line_error)}</td>
+              <h2 className="text-lg font-semibold">
+                Failed job errors ({failedJobErrors.length} recent · {groupedFailedErrors.length} unique)
+              </h2>
+              <ResearchTable caption="Failed job errors" headers={["Count", "Latest run", "Latest logged", "First-line error"]}>
+                {groupedFailedErrors.map((g) => (
+                  <tr key={`${g.latestRunId}-${g.msg.slice(0, 32)}`} className="border-t border-border font-mono text-xs">
+                    <td className={td}><span className={pillTone(g.count > 1 ? "red" : "amber")}>×{g.count}</span></td>
+                    <td className={td} title={g.latestRunId}>{formatShortSha(g.latestRunId)}</td>
+                    <td className={`${td} whitespace-nowrap`}>{formatCompactUtc(g.latestLoggedAt)}</td>
+                    <td className={`${td} text-red-300`}>{g.msg}</td>
                   </tr>
                 ))}
               </ResearchTable>
@@ -338,9 +284,9 @@ export default async function AdminOpsPage() {
                   <tr key={r.run_id} className="border-t border-border font-mono text-xs">
                     <td className={td}>{r.job_name}</td>
                     <td className={td}><span className={pillTone(r.status === "SUCCESS" ? "emerald" : r.status === "FAILURE" ? "red" : "amber")}>{r.status}</span></td>
-                    <td className={td}>{r.created_at}</td>
+                    <td className={`${td} whitespace-nowrap`}>{formatCompactUtc(r.created_at)}</td>
                     <td className={td}>{formatCell(r.duration_seconds)}</td>
-                    <td className={`${td} text-gray-400`}>{r.run_id}</td>
+                    <td className={`${td} text-gray-400`} title={r.run_id}>{formatShortSha(r.run_id)}</td>
                   </tr>
                 ))}
               </ResearchTable>

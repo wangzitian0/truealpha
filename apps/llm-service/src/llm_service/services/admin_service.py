@@ -5,12 +5,14 @@ from __future__ import annotations
 import time
 import uuid
 from datetime import UTC, datetime
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 import psycopg
 from pydantic import BaseModel, Field
 from truealpha_contracts.confidence import wilson_95_upper_bound
-from truealpha_contracts.environment_contract import load_environment_contract
+from truealpha_contracts.confidence_bands import confidence_band, confidence_band_thresholds
+from truealpha_contracts.environment_contract import UTILIZATION_CEILING, load_environment_contract
 from truealpha_contracts.goal_criteria import load_goal_criteria
 from truealpha_contracts.universes import id_prefix_like, job_name
 from truealpha_runtime.checks import ObjectStorageCheck
@@ -44,6 +46,7 @@ def governed_latest_per_universe_sql(table: str, extra_cols: str = "", payload_e
 
 
 QUESTION_COVERAGE_SQL = governed_latest_per_universe_sql("mart.question_coverage_report")
+_HIGH_CONFIDENCE_FROM, _MEDIUM_CONFIDENCE_FROM = confidence_band_thresholds()
 CONFIDENCE_REPORT_SQL = """
   with latest as (
     select distinct on (r.universe_id)
@@ -72,9 +75,9 @@ CONFIDENCE_REPORT_SQL = """
                from (
                  select fam.key as fam_key,
                    jsonb_build_object(
-                     'high', count(*) filter (where tier_val = 'high' or (tier_val = '' and conf_num >= 0.80)),
-                     'medium', count(*) filter (where tier_val = 'medium' or (tier_val = '' and conf_num >= 0.60 and conf_num < 0.80)),
-                     'low', count(*) filter (where not coalesce(tier_val in ('high', 'medium') or (tier_val = '' and conf_num >= 0.60), false))
+                     'high', count(*) filter (where tier_val = 'high' or (tier_val = '' and conf_num >= __HIGH_FROM__)),
+                     'medium', count(*) filter (where tier_val = 'medium' or (tier_val = '' and conf_num >= __MEDIUM_FROM__ and conf_num < __HIGH_FROM__)),
+                     'low', count(*) filter (where not coalesce(tier_val in ('high', 'medium') or (tier_val = '' and conf_num >= __MEDIUM_FROM__), false))
                    ) as counts
                  from jsonb_each(case when jsonb_typeof(latest.payload->'cells') = 'object' then latest.payload->'cells' else '{}'::jsonb end) as fam(key, value)
                  cross join lateral jsonb_each(case when jsonb_typeof(fam.value) = 'object' then fam.value else '{}'::jsonb end) as cell(key, value)
@@ -89,7 +92,7 @@ CONFIDENCE_REPORT_SQL = """
            end
          ) as payload
   from latest
-"""
+""".replace("__HIGH_FROM__", str(_HIGH_CONFIDENCE_FROM)).replace("__MEDIUM_FROM__", str(_MEDIUM_CONFIDENCE_FROM))
 ORACLE_OUTCOMES_SQL = """
   with deduped as (
     select distinct on (
@@ -676,6 +679,22 @@ class DatahubStatsResponse(BaseModel):
     db_hygiene: dict[str, Any] = Field(default_factory=dict)
 
 
+class AdminSettingsResponse(BaseModel):
+    environment: str
+    contract_version: str
+    schema_version: int
+    utilization_ceiling: float
+    confidence_thresholds: dict[str, str] = Field(default_factory=dict)
+    freshness_limits: list[dict[str, Any]] = Field(default_factory=list)
+    environments: list[dict[str, Any]] = Field(default_factory=list)
+    universes: list[dict[str, Any]] = Field(default_factory=list)
+    vendor_accounts: list[dict[str, Any]] = Field(default_factory=list)
+    code_server_capacity: dict[str, Any] = Field(default_factory=dict)
+    model_seat: dict[str, Any] = Field(default_factory=dict)
+    sentinels: list[dict[str, Any]] = Field(default_factory=list)
+    metric_applicability: list[dict[str, Any]] = Field(default_factory=list)
+
+
 class TriggerPipelineRequest(BaseModel):
     job_name: str | None = None
     pipeline: str | None = None
@@ -759,14 +778,24 @@ def _compute_tier_counts(cells_by_family: Any) -> dict[str, dict[str, int]]:
             if not isinstance(cell, dict):
                 continue
             tier = str(cell.get("tier") or "").strip().lower()
-            conf_raw = cell.get("confidence")
-            try:
-                conf_num = float(conf_raw) if conf_raw is not None and str(conf_raw).strip() != "" else None
-            except (TypeError, ValueError):
-                conf_num = None
-            if tier == "high" or (not tier and conf_num is not None and conf_num >= 0.80):
+            if tier in ("high", "medium", "low"):
+                band = tier
+            else:
+                conf_raw = cell.get("confidence")
+                try:
+                    conf_dec = (
+                        Decimal(str(conf_raw).strip()) if conf_raw is not None and str(conf_raw).strip() != "" else None
+                    )
+                except (TypeError, InvalidOperation, ValueError):
+                    conf_dec = None
+                band = (
+                    (confidence_band(conf_dec) or "low")
+                    if conf_dec is not None and Decimal(0) <= conf_dec <= Decimal(1)
+                    else "low"
+                )
+            if band == "high":
                 high += 1
-            elif tier == "medium" or (not tier and conf_num is not None and conf_num >= 0.60):
+            elif band == "medium":
                 med += 1
             else:
                 low += 1
@@ -1237,6 +1266,139 @@ def get_datahub_stats(*, database_url: str | None = None) -> DatahubStatsRespons
     return with_ops_reader(_q, database_url=database_url)
 
 
+def get_admin_settings(*, database_url: str | None = None) -> AdminSettingsResponse:
+    """Return global contract, threshold, freshness-limit, capacity, and sentinel settings."""
+    contract = load_environment_contract()
+    high_from, medium_from = confidence_band_thresholds()
+    thresholds = {"high_from": str(high_from), "medium_from": str(medium_from)}
+
+    def _q(cur: Any) -> AdminSettingsResponse:
+        env_rows = _optional_rows(cur, "select environment from mart.environment_identity limit 1")
+        env_name = (
+            str(env_rows[0]["environment"]) if env_rows and env_rows[0].get("environment") else settings.environment
+        )
+        normalized_env = contract.normalize_environment(env_name)
+        freshness_limits = _optional_rows(
+            cur,
+            "select limit_key, hours from mart.freshness_limit order by limit_key",
+            table_check="mart.freshness_limit",
+        )
+        cap = contract.code_server_capacity
+        ms = contract.model_seat
+        environments = [
+            {
+                "environment": env_key,
+                "trigger": env_spec.trigger,
+                "live_vendor_calls": bool(env_spec.live_vendor_calls),
+                "universes": [{"key": u.key, "status": u.status} for u in env_spec.universes],
+                "list_refresh": list(env_spec.list_refresh),
+                "ticks": sorted(env_spec.ticks.keys()),
+            }
+            for env_key, env_spec in sorted(contract.environments.items())
+        ]
+        universes = [
+            {
+                "key": u_key,
+                "label": u.label,
+                "region": u.region,
+                "id_prefix": u.id_prefix,
+                "lane_name": u.lane_name,
+                "membership_kind": u.membership.kind,
+                "roles": list(u.roles),
+                "price_series": bool(u.price_series),
+                "is_sentinel": bool(u.is_sentinel),
+                "cron": {env_k: cron_expr for env_k, cron_expr in sorted(u.cron.items())},
+            }
+            for u_key, u in sorted(contract.universes.items())
+        ]
+        vendor_accounts = []
+        for acct_name, acct in sorted(contract.vendor_accounts.accounts.items()):
+            share = contract.account_share(acct_name, normalized_env)
+            vendor_accounts.append(
+                {
+                    "account": acct_name,
+                    "holder": acct.holder,
+                    "environment": share.environment,
+                    "percent": share.percent,
+                    "seats": list(acct.seats),
+                    "outside_consumers": bool(acct.outside_consumers),
+                    "limits": [
+                        {
+                            "limit_id": lim.limit_id,
+                            "unit": lim.unit,
+                            "window_seconds": lim.window_seconds,
+                            "amount": lim.amount,
+                            "share": lim.share,
+                        }
+                        for lim in share.limits
+                    ],
+                }
+            )
+        return AdminSettingsResponse(
+            environment=normalized_env or env_name or "unknown",
+            contract_version=contract.contract_version,
+            schema_version=int(contract.schema_version),
+            utilization_ceiling=float(UTILIZATION_CEILING),
+            confidence_thresholds=thresholds,
+            freshness_limits=freshness_limits,
+            environments=environments,
+            universes=universes,
+            vendor_accounts=vendor_accounts,
+            code_server_capacity={
+                "ceiling_mib": cap.ceiling_mib,
+                "usable_mib": cap.usable_mib,
+                "server_mib": cap.server_mib,
+                "run_mib": cap.run_mib,
+                "max_concurrent_runs": cap.max_concurrent_runs,
+                "max_waiting_runs": cap.max_waiting_runs,
+                "server_processes": cap.server_processes,
+                "processes_per_run": cap.processes_per_run,
+            },
+            model_seat={
+                "seat": ms.seat,
+                "shared_credential": ms.shared_credential,
+                "measured_at": ms.measured_at,
+                "retry": {
+                    "max_attempts": ms.retry.max_attempts,
+                    "deadline_seconds": ms.retry.deadline_seconds,
+                },
+                "environments": {
+                    env_k: {
+                        "max_concurrent_calls": lim.max_concurrent_calls,
+                        "calls_per_minute": lim.calls_per_minute,
+                        "probe_cron": ms.probe_cron(env_k),
+                        "decoding_version": lim.decoding_version,
+                    }
+                    for env_k, lim in sorted(ms.environments.items())
+                },
+            },
+            sentinels=[
+                {
+                    "ticker": s.ticker,
+                    "issuer_id": s.issuer_id,
+                    "listing_id": s.listing_id,
+                    "trait": s.trait,
+                    "defect_refs": list(s.defect_refs),
+                }
+                for s in contract.sentinels
+            ],
+            metric_applicability=[
+                {
+                    "metric": e.metric,
+                    "universe": e.universe,
+                    "ticker": e.ticker,
+                    "status": e.status,
+                    "reason": e.reason,
+                    "approved_by": e.approved_by,
+                    "tracking_issue": e.tracking_issue,
+                }
+                for e in contract.metric_applicability
+            ],
+        )
+
+    return with_ops_reader(_q, database_url=database_url)
+
+
 def trigger_pipeline(
     principal_id: str, req: TriggerPipelineRequest, *, database_url: str | None = None
 ) -> TriggerPipelineResponse:
@@ -1390,6 +1552,7 @@ def build_datahub_fact_diff(stats: DatahubStatsResponse) -> dict[str, Any]:
 
 
 __all__ = [
+    "AdminSettingsResponse",
     "CONFIDENCE_REPORT_SQL",
     "DatahubStatsResponse",
     "FAILED_JOB_ERRORS_SQL",
@@ -1413,6 +1576,7 @@ __all__ = [
     "TriggerPipelineResponse",
     "UTC_DAY_START_SQL",
     "build_datahub_fact_diff",
+    "get_admin_settings",
     "get_datahub_stats",
     "get_ops_overview",
     "governed_latest_per_universe_sql",

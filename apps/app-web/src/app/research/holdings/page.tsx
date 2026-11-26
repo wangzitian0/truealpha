@@ -34,7 +34,17 @@ export default async function HoldingsPage() {
                   {fund.virtual_gross_profit ? ` · virtual GP ${formatUsdMagnitude(fund.virtual_gross_profit)}` : ""}
                   {fund.virtual_employees ? ` · virtual emp ${formatNumberMagnitude(fund.virtual_employees)}` : ""}
                   {fund.virtual_gppe ? ` · virtual GPPE ${formatUsdMagnitude(fund.virtual_gppe)}` : ""}
-                  {fund.availability_status ? ` · ${fund.availability_status}/${fund.source_evidence_status}/${fund.factor_validation_status}` : ""}
+                  {fund.availability_status
+                    ? ` · ${[
+                        fund.availability_status,
+                        fund.source_evidence_status,
+                        fund.factor_validation_status && fund.factor_validation_status !== "not_evaluated"
+                          ? fund.factor_validation_status
+                          : null,
+                      ]
+                        .filter(Boolean)
+                        .join("/")}`
+                    : ""}
                 </span>
               </div>
               <CardExportButton kind="etf" issuerId={fund.fund_id} />

@@ -138,3 +138,40 @@ def test_pipeline_trigger_sensor_dispatches_nightly_backtest(monkeypatch: pytest
 def test_sensor_targets_include_nightly_backtest_pipeline() -> None:
     target_names = {job.name for job in triggers.pipeline_trigger_sensor.jobs}
     assert BACKTEST_JOB_NAME in target_names
+
+
+def test_pipeline_trigger_sensor_skips_unknown_job_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    dedupe = str(uuid.uuid4())
+    executed_at = datetime(2026, 11, 26, 12, 0, tzinfo=UTC)
+    updates: list[Any] = []
+
+    class _FakeRes:
+        def __init__(self, rows: list[Any]) -> None:
+            self._rows = rows
+
+        def fetchall(self) -> list[Any]:
+            return self._rows
+
+    class _FakeConn:
+        def execute(self, sql: str, params: Any = None) -> _FakeRes:
+            if "from staging.pipeline_trigger_requests" in sql:
+                return _FakeRes([(77, executed_at, dedupe, "nonexistent_pipeline_job", False, {})])
+            if "update staging.pipeline_trigger_requests" in sql:
+                updates.append(params)
+            return _FakeRes([])
+
+        def commit(self) -> None:
+            return None
+
+        def __enter__(self) -> _FakeConn:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+    monkeypatch.setattr(triggers, "consume_head_rollback_requests", lambda _c: [])
+    monkeypatch.setattr(triggers.db, "connect", lambda: _FakeConn())
+
+    reqs = list(triggers.pipeline_trigger_sensor(dg.build_sensor_context()))
+    assert reqs == []
+    assert updates == [(f"invalid:{dedupe}", 77)]

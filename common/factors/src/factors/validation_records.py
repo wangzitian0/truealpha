@@ -1,4 +1,4 @@
-"""Sealed-holdout verdicts per factor definition (init.md §8, #65)."""
+"""Transitional factor-validation registry; live holdout/backtest metrics replace empty tuples (#65, Q10)."""
 
 from __future__ import annotations
 

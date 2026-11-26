@@ -6,12 +6,14 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from llm_service.api.v1._deps import require_admin
 from llm_service.services.admin_service import (
+    AdminSettingsResponse,
     DatahubStatsResponse,
     HeadRollbackRequest,
     HeadRollbackResponse,
     OpsOverviewResponse,
     TriggerPipelineRequest,
     TriggerPipelineResponse,
+    get_admin_settings,
     get_datahub_stats,
     get_ops_overview,
     request_head_rollback,
@@ -46,6 +48,11 @@ def pipeline_trigger(
 @router.get("/datahub", response_model=DatahubStatsResponse, operation_id="admin_datahub_stats")
 def datahub_stats(_admin: PrincipalRecord = Depends(require_admin)) -> DatahubStatsResponse:
     return get_datahub_stats()
+
+
+@router.get("/settings", response_model=AdminSettingsResponse, operation_id="admin_settings")
+def admin_settings(_admin: PrincipalRecord = Depends(require_admin)) -> AdminSettingsResponse:
+    return get_admin_settings()
 
 
 @router.post(

@@ -79,7 +79,7 @@
       "region": "us",
       "id_prefix": "universe:topt-us-",
       "lane_name": "topt",
-      "label": "TOPT: the frozen top-100 corpus",
+      "label": "TOPT: the frozen 20-issuer benchmark corpus",
       "membership": {"kind": "frozen_corpus"},
       "roles": ["strategy"],
       "price_series": true,
@@ -105,7 +105,7 @@
       "region": "us",
       "id_prefix": "universe:sp500-us-",
       "lane_name": "universe-list:sp500",
-      "label": "S&P 500 constituents, from the index constituent plane",
+      "label": "S&P 500 constituents, from IVV N-PORT holdings",
       "membership": {
         "kind": "nport",
         "nport_ticker": "IVV"
@@ -119,7 +119,7 @@
       "region": "us",
       "id_prefix": "universe:canary-us-",
       "lane_name": "universe-list:canary",
-      "label": "Deploy-verification canary: five issuers spanning every operating branch",
+      "label": "Deploy-verification canary: five issuers (six listings) spanning every operating branch",
       "membership": {"kind": "static", "members": ["AAPL", "GOOGL", "GOOG", "ASML", "HBAN", "CINF"], "mic": "xnas"},
       "roles": ["sentinel"],
       "price_series": false,

@@ -819,13 +819,13 @@ def test_the_probe_is_one_minimal_ask_that_persists_nothing(monkeypatch, call_le
 def test_a_revoked_key_is_a_red_run_and_a_red_verdict_through_the_deployed_job(
     monkeypatch, written, call_ledger
 ) -> None:
-    """#832, end to end: the provider answers 401, the job goes red, the verdict says why."""
+    """#832 + ADR A8: the provider answers 401, the verdict is red (ok=False), without crashing Dagster op."""
     _provider(monkeypatch, 401)
     tick = "2026-09-16T06:00:00+00:00"
     result = quality.model_key_health_job.execute_in_process(
         tags={nightly_verdicts.TICK_TAG: tick}, raise_on_error=False
     )
-    assert not result.success
+    assert result.success
     ((row),) = written
     assert (row["check"], row["ok"], row["ran_at"]) == ("model_key_health", False, datetime.fromisoformat(tick))
     assert "auth-rejected" in row["summary"] and "HTTP 401" in row["summary"]

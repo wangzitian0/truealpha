@@ -29,6 +29,9 @@ export default async function AdminLayout({ children }: { children: React.ReactN
           <Link href="/admin/datahub" className="rounded-md border border-border bg-card px-2.5 py-1 text-gray-200 hover:border-amber-400 hover:text-white">
             DataHub
           </Link>
+          <Link href="/admin/settings" className="rounded-md border border-border bg-card px-2.5 py-1 text-gray-200 hover:border-amber-400 hover:text-white">
+            Settings
+          </Link>
         </nav>
         <span className="text-xs text-gray-500">— administrator world, separately server-gated from research</span>
         <Link href="/research" data-world-switch="research" className="ml-auto rounded-lg border border-border px-3 py-1 text-xs text-gray-300 hover:border-accent hover:text-white">

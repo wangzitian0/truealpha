@@ -381,7 +381,8 @@ def run_model_key_health(context: dg.OpExecutionContext) -> str:
         context.log.info("model key health: %s", health.summary)
         context.add_output_metadata({"outcome": health.outcome, "status_code": health.status_code or 0})
         if not health.ok:
-            raise dg.Failure(f"model key health: {health.summary} (#832, #876 W2)")
+            outcome.failed = True
+            context.log.warning("model key health (fact): %s (#832, #876 W2)", health.summary)
     return json.dumps({"ok": health.ok, "outcome": health.outcome, "status_code": health.status_code})
 
 

@@ -1224,6 +1224,27 @@
         }
       }
     },
+    "/api/v1/admin/settings": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Admin Settings",
+        "operationId": "admin_settings",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminSettingsResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/head-rollback": {
       "post": {
         "tags": [
@@ -1351,6 +1372,99 @@
   },
   "components": {
     "schemas": {
+      "AdminSettingsResponse": {
+        "properties": {
+          "environment": {
+            "type": "string",
+            "title": "Environment"
+          },
+          "contract_version": {
+            "type": "string",
+            "title": "Contract Version"
+          },
+          "schema_version": {
+            "type": "integer",
+            "title": "Schema Version"
+          },
+          "utilization_ceiling": {
+            "type": "number",
+            "title": "Utilization Ceiling"
+          },
+          "confidence_thresholds": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Confidence Thresholds"
+          },
+          "freshness_limits": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Freshness Limits"
+          },
+          "environments": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Environments"
+          },
+          "universes": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Universes"
+          },
+          "vendor_accounts": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Vendor Accounts"
+          },
+          "code_server_capacity": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Code Server Capacity"
+          },
+          "model_seat": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Model Seat"
+          },
+          "sentinels": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Sentinels"
+          },
+          "metric_applicability": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Metric Applicability"
+          }
+        },
+        "type": "object",
+        "required": [
+          "environment",
+          "contract_version",
+          "schema_version",
+          "utilization_ceiling"
+        ],
+        "title": "AdminSettingsResponse"
+      },
       "AnalystRatings": {
         "additionalProperties": true,
         "type": "object"

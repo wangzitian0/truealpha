@@ -17,7 +17,7 @@ export function ResearchNav() {
   return (
     <nav aria-label="Research sections" className="flex flex-wrap gap-2">
       {LINKS.map((link) => {
-        const current = pathname === link.href;
+        const current = pathname === link.href || pathname.startsWith(`${link.href}/`);
         return (
           <Link
             key={link.href}
