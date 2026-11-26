@@ -1,5 +1,5 @@
 /**
- * #1716 / #1748: Zero-database frontend, single OpenAPI 3.1 contract ratchet, and active UI caller gate.
+ * #1716 / #1748: Zero-database frontend dependencies and single OpenAPI 3.1 contract conformance check.
  */
 
 import { execFileSync } from "node:child_process";

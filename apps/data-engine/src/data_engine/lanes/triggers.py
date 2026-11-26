@@ -140,7 +140,15 @@ def pipeline_trigger_sensor(context: dg.SensorEvaluationContext):
                     run_config=dg.RunConfig(ops={"run_nightly_backtest_op": op_cfg}),
                 )
             else:
-                tick = TICK_BY_JOB.get(job_name, TICK_BY_JOB[TOPT_LIVE_JOB_NAME])
+                tick = TICK_BY_JOB.get(job_name)
+                if tick is None:
+                    context.log.warning(f"Skipping unrecognized trigger job_name={job_name!r} (request {request_id})")
+                    connection.execute(
+                        "update staging.pipeline_trigger_requests "
+                        "set consumed_at = clock_timestamp(), launched_run_key = %s where request_id = %s",
+                        (f"invalid:{dedupe_key}", request_id),
+                    )
+                    continue
                 yield _tick_run_request(run_key, tick, exec_iso, force_fetch=bool(force_fetch))
             connection.execute(
                 "update staging.pipeline_trigger_requests "

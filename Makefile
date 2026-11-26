@@ -1,5 +1,7 @@
 .PHONY: help install bootstrap runtime-up runtime-down runtime-check stack-up db-up db-migrate db-reset db-check db-down web llm strategy-smoke vendor-smoke smoke-deps lint format typecheck-python typecheck-web test-python test-web contract-conformance check clean vision-audit
 
+COMPOSE ?= podman compose
+
 help:
 	@echo "TrueAlpha — Development Commands"
 	@echo ""
@@ -40,7 +42,7 @@ install:
 	git config core.hooksPath tools/git-hooks
 
 runtime-up:
-	docker compose up -d --wait postgres s3
+	$(COMPOSE) up -d --wait postgres s3
 	S3_ENDPOINT=$${S3_ENDPOINT:-http://localhost:9000} S3_ACCESS_KEY=$${S3_ACCESS_KEY:-s3local} \
 		S3_SECRET_KEY=$${S3_SECRET_KEY:-s3_local_secret} \
 		uv run --package truealpha-runtime truealpha-runtime ensure-bucket
@@ -52,13 +54,13 @@ stack-up:
 		echo "SECRET_KEY is not set (environment or .env). llm-service owns SECRET_KEY — see .env.example"; \
 		exit 1; \
 	fi
-	docker compose --profile app up -d --build --wait
+	$(COMPOSE) --profile app up -d --build --wait
 
 runtime-check:
 	uv run --package truealpha-runtime truealpha-runtime check --live
 
 runtime-down:
-	docker compose --profile app down
+	$(COMPOSE) --profile app down
 
 db-up: runtime-up
 
@@ -69,8 +71,8 @@ db-down: runtime-down
 # compose container so a machine with no host psql still migrates; otherwise talks to
 # whatever DATABASE_URL names, defaulting to the conventional local postgres.
 define local_db_target
-if [ -n "$$(docker compose ps -q postgres 2>/dev/null)" ]; then \
-	export TRUEALPHA_PSQL="docker compose exec -T postgres psql"; \
+if [ -n "$$($(COMPOSE) ps -q postgres 2>/dev/null)" ]; then \
+	export TRUEALPHA_PSQL="$(COMPOSE) exec -T postgres psql"; \
 	export DATABASE_URL="postgresql:///$${POSTGRES_DB:-truealpha}?user=$${POSTGRES_USER:-postgres}"; \
 else \
 	export DATABASE_URL="$${DATABASE_URL:-postgresql://postgres@127.0.0.1:5432/truealpha}"; \
@@ -125,11 +127,11 @@ vision-audit:
 	uv run python -m truealpha_tools.vision_audit $(ARGS)
 
 lint:
-	uv run ruff check apps common tools
+	uv run ruff check apps common
 
 format:
-	uv run ruff check apps common tools --fix
-	uv run ruff format apps common tools
+	uv run ruff check apps common --fix
+	uv run ruff format apps common
 
 typecheck-python:
 	uv run mypy

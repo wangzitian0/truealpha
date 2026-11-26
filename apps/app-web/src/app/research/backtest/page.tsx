@@ -4,21 +4,19 @@ import { formatCell, formatPercentFromFraction, formatRatio } from "@/client/for
 import { BacktestLimitations, backtestStatusStyle, runLimitations } from "@/components/backtest-basis";
 import { BacktestTriggerButton } from "@/components/backtest-trigger-button";
 import { ResearchTable } from "@/components/research-table";
+import { getServerPrincipal } from "@/server/auth/request-context";
 import { loadAuthed } from "../../_load";
 import { ReadStateNotice } from "@/components/read-state";
 
 export const dynamic = "force-dynamic";
 
 export default async function BacktestListPage() {
-  const { data, error } = await loadAuthed("/research/backtest", async (opts) => {
-    const [backtests, session] = await Promise.all([
-      api.listBacktests(50, opts),
-      api.getSession(opts).catch(() => null),
-    ]);
-    return { backtests, session };
-  });
-  const runs = data?.backtests.runs ?? [];
-  const isAdmin = data?.session?.principal_kind === "administrator";
+  const [{ data, error }, principal] = await Promise.all([
+    loadAuthed("/research/backtest", (opts) => api.listBacktests(50, opts)),
+    getServerPrincipal(),
+  ]);
+  const runs = data?.runs ?? [];
+  const isAdmin = principal?.principalKind === "administrator";
 
   return (
     <section aria-labelledby="backtest-list-heading" className="space-y-6">

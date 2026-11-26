@@ -428,7 +428,7 @@ try {
     "20.00%",
     "LLM usage &amp; model drift",
     "glm-4.5",
-    "Backfill health &amp; queues",
+    "Ingestion &amp; backfill health",
     "backfill_lag_hours",
     "DB hygiene facts",
     "idx_demo_unused",

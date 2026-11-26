@@ -1,3 +1,4 @@
+import { cache } from "react";
 import { cookies, headers } from "next/headers";
 import type { RequestOpts } from "@/client/api";
 import { resolveSessionPrincipal } from "./session";
@@ -19,7 +20,7 @@ export async function getServerRequestOpts(): Promise<RequestOpts> {
   return { cookieHeader: rawCookies || undefined, authorization };
 }
 
-export async function getServerPrincipal(): Promise<ServerPrincipal | null> {
+export const getServerPrincipal = cache(async (): Promise<ServerPrincipal | null> => {
   const requestOpts = await getServerRequestOpts();
   const session = await resolveSessionPrincipal(requestOpts);
   if (!session) return null;
@@ -32,4 +33,4 @@ export async function getServerPrincipal(): Promise<ServerPrincipal | null> {
     },
     requestOpts,
   };
-}
+});

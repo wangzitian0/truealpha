@@ -1,8 +1,7 @@
 import Link from "next/link";
 import { api } from "@/client/api";
-import { formatCell, formatRatio, formatShortSha } from "@/client/format";
+import { formatCell, formatCompactUtc, formatRatio, formatShortSha } from "@/client/format";
 import { ReadStateNotice } from "@/components/read-state";
-import { TriggerRunButton } from "@/components/trigger-run-button";
 import { UNIVERSES } from "@/contracts/environmentContract.generated";
 import { loadAuthed } from "../../_load";
 import { DataSection, DatahubFactPanels, QuestionCoverageDetails, badgeTone, safeCell } from "./fact-panels";
@@ -20,7 +19,7 @@ function formatOracleCell(c: Record<string, unknown> | undefined): string {
   const disagree = Number(c.disagree ?? 0);
   const noServed = Number(c.no_served_value_count ?? 0);
   const bound = safeCell(c.wilson_95_upper_bound ?? "n/a");
-  const newest = c.newest_compared_at ? ` · ${String(c.newest_compared_at)}` : "";
+  const newest = c.newest_compared_at ? ` · ${formatCompactUtc(String(c.newest_compared_at))}` : "";
   return `${compared} compared (${agree}/${disagree} disagree · nc=${notComp} no_served=${noServed} · wilson_95_upper_bound=${bound}${newest})`;
 }
 
@@ -83,17 +82,14 @@ export default async function AdminDatahubPage() {
     <section aria-labelledby="datahub-heading" className="space-y-8">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 id="datahub-heading" className="text-2xl font-bold tracking-tight">Datahub</h1>
+          <h1 id="datahub-heading" className="text-2xl font-bold tracking-tight">DataHub</h1>
           <p className="mt-1 text-sm text-gray-400">
-            Question coverage, oracle outcomes, served heads, invariants, quotas, LLM usage, capture runs, and API ledger.
+            Question coverage, oracle outcomes, confidence, invariants, vendor quotas, LLM usage, capture runs, and API ledger.
           </p>
         </div>
-        <div className="flex items-center gap-3">
-          <Link href="/admin" className="rounded-lg border border-border bg-card px-3 py-2 text-xs text-accent hover:border-accent">
-            ← Operations
-          </Link>
-          <TriggerRunButton />
-        </div>
+        <Link href="/admin" className="rounded-lg border border-border bg-card px-3 py-2 text-xs text-gray-300 hover:border-accent hover:text-white">
+          Triggers &amp; Operations →
+        </Link>
       </div>
       {error && <ReadStateNotice state={{ kind: "error", message: error }} />}
 
@@ -172,8 +168,8 @@ export default async function AdminDatahubPage() {
           formatShortSha((q.report_run_id as string | null | undefined) ?? null),
           formatShortSha((q.served_head_run_id as string | null | undefined) ?? null),
           q.matches_served_head === true ? "yes" : q.matches_served_head === false ? "no" : formatCell(null),
-          safeCell(q.cutoff),
-          safeCell(q.created_at),
+          formatCompactUtc(q.cutoff as string | null | undefined),
+          formatCompactUtc(q.created_at as string | null | undefined),
         ])}
       />
       <QuestionCoverageDetails questionCoverage={questionCoverage} />
@@ -205,12 +201,12 @@ export default async function AdminDatahubPage() {
 
       {stats && <DatahubFactPanels stats={stats as unknown as Record<string, unknown>} />}
 
-      <details open={hasFailedCapture} className="rounded-xl border border-border bg-card/40 p-4">
+      <details open={hasFailedCapture} className="min-w-0 rounded-xl border border-border bg-card/40 p-4">
         <summary className="cursor-pointer select-none text-sm font-semibold">
           Traffic, Sources &amp; Capture runs (sources: {(stats?.sources ?? []).length}, runs: {captureRuns.length}
           {hasFailedCapture ? " · has failures" : ""})
         </summary>
-        <div className="mt-4 space-y-6">
+        <div className="mt-4 min-w-0 space-y-6">
           <DataSection
             title="Traffic (external calls, today UTC)"
             headers={["Source", "Calls", "Failed", "Avg ms", "Last call"]}
@@ -219,7 +215,7 @@ export default async function AdminDatahubPage() {
               String(t.calls ?? 0),
               String(t.failed ?? 0),
               formatCell(t.avg_ms as string | number | null | undefined),
-              safeCell(t.last_call),
+              formatCompactUtc(t.last_call as string | null | undefined),
             ])}
           />
           <div className="space-y-2">
@@ -233,7 +229,7 @@ export default async function AdminDatahubPage() {
               safeCell(s.source),
               String(s.fetches_total ?? 0),
               String(s.fetches_24h ?? 0),
-              safeCell(s.last_fetch),
+              formatCompactUtc(s.last_fetch as string | null | undefined),
             ])}
           />
           <DataSection
@@ -241,11 +237,11 @@ export default async function AdminDatahubPage() {
             headers={["Universe", "Cutoff", "Resolved", "Failed", "Complete", "Run ID"]}
             rows={captureRuns.map((r) => [
               safeCell(r.universe_id),
-              safeCell(r.cutoff),
+              formatCompactUtc(r.cutoff as string | null | undefined),
               `${String(r.resolved ?? 0)}/${String(r.obligations ?? 0)}`,
               String(r.failed ?? 0),
               r.complete ? "yes" : "no",
-              safeCell(r.run_id),
+              formatShortSha(r.run_id as string | null | undefined),
             ])}
           />
         </div>

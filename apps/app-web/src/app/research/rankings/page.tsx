@@ -20,7 +20,10 @@ const pill = (active: boolean) =>
 
 export default async function RankingsPage({ searchParams }: { searchParams: Promise<{ cutoff?: string; convention?: string; universe?: string }> }) {
   const params = await searchParams;
-  const convention: PegGrowthConvention = params.convention === "consensus" || params.convention === "guidance" ? params.convention : "historical_cagr";
+  const convention: PegGrowthConvention =
+    params.convention === "consensus" || params.convention === "guidance" || params.convention === "geometric_cagr"
+      ? params.convention
+      : "historical_cagr";
   const strategyUniverses = UNIVERSES.filter(
     (u) => u.roles.includes("strategy") && isHeadScheduledFromContract(u.id_prefix, process.env.ENVIRONMENT),
   ).map((u) => u.key);
@@ -54,13 +57,17 @@ export default async function RankingsPage({ searchParams }: { searchParams: Pro
           <CardExportButton cutoff={data?.cutoff_at ?? undefined} convention={convention} universe={universe} />
         </div>
       </div>
-      <div className="flex flex-wrap gap-2 text-xs">
-        {universes.map((u) => (
-          <Link key={u} href={`/research/rankings?universe=${encodeURIComponent(u)}${convention !== "historical_cagr" ? `&convention=${convention}` : ""}`} className={`rounded-md px-2.5 py-1 ${pill(u === universe)}`}>{u}</Link>
-        ))}
-        {PEG_GROWTH_CONVENTIONS.map((c) => (
-          <Link key={c} href={`/research/rankings?universe=${encodeURIComponent(universe)}&convention=${c}`} className={`rounded-md px-2.5 py-1 ${pill(c === convention)}`}>{PEG_CONVENTION_LABELS[c]}</Link>
-        ))}
+      <div className="flex flex-wrap items-center gap-4 text-xs">
+        <div className="flex flex-wrap gap-2">
+          {universes.map((u) => (
+            <Link key={u} href={`/research/rankings?universe=${encodeURIComponent(u)}${convention !== "historical_cagr" ? `&convention=${convention}` : ""}`} className={`rounded-md px-2.5 py-1 ${pill(u === universe)}`}>{u}</Link>
+          ))}
+        </div>
+        <div className="flex flex-wrap gap-2 border-l border-border pl-4">
+          {PEG_GROWTH_CONVENTIONS.map((c) => (
+            <Link key={c} href={`/research/rankings?universe=${encodeURIComponent(universe)}&convention=${c}`} className={`rounded-md px-2.5 py-1 ${pill(c === convention)}`}>{PEG_CONVENTION_LABELS[c]}</Link>
+          ))}
+        </div>
       </div>
       <ClaimCeilingBanner reviewState={data?.review_state} definitionVersion={data?.definition_version} />
       {error && <ReadStateNotice state={{ kind: "error", message: error }} />}

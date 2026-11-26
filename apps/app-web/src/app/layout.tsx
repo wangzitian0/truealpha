@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { AppChrome } from "@/components/app-chrome";
 import { HydrationMarker } from "@/components/hydration-marker";
 import "./globals.css";
@@ -21,12 +22,14 @@ export default function RootLayout({
       <body className="bg-background text-foreground antialiased min-h-screen flex flex-col">
         <header className="border-b border-border bg-card/60 backdrop-blur-md sticky top-0 z-50">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center gap-3">
-            <div className="h-8 w-8 rounded-lg bg-gradient-to-tr from-accent to-violet-400 flex items-center justify-center font-bold text-white shadow-lg shadow-accent/20">
-              α
-            </div>
-            <span className="text-xl font-bold bg-gradient-to-r from-white to-gray-400 bg-clip-text text-transparent tracking-tight">
-              TrueAlpha
-            </span>
+            <Link href="/research" className="flex items-center gap-3">
+              <div className="h-8 w-8 rounded-lg bg-gradient-to-tr from-accent to-violet-400 flex items-center justify-center font-bold text-white shadow-lg shadow-accent/20">
+                α
+              </div>
+              <span className="text-xl font-bold bg-gradient-to-r from-white to-gray-400 bg-clip-text text-transparent tracking-tight">
+                TrueAlpha
+              </span>
+            </Link>
             <AppChrome />
           </div>
         </header>

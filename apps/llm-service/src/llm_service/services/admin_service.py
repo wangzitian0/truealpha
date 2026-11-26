@@ -5,11 +5,13 @@ from __future__ import annotations
 import time
 import uuid
 from datetime import UTC, datetime
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 import psycopg
 from pydantic import BaseModel, Field
 from truealpha_contracts.confidence import wilson_95_upper_bound
+from truealpha_contracts.confidence_bands import confidence_band, confidence_band_thresholds
 from truealpha_contracts.environment_contract import load_environment_contract
 from truealpha_contracts.goal_criteria import load_goal_criteria
 from truealpha_contracts.universes import id_prefix_like, job_name
@@ -44,6 +46,7 @@ def governed_latest_per_universe_sql(table: str, extra_cols: str = "", payload_e
 
 
 QUESTION_COVERAGE_SQL = governed_latest_per_universe_sql("mart.question_coverage_report")
+_HIGH_CONFIDENCE_FROM, _MEDIUM_CONFIDENCE_FROM = confidence_band_thresholds()
 CONFIDENCE_REPORT_SQL = """
   with latest as (
     select distinct on (r.universe_id)
@@ -69,9 +72,9 @@ CONFIDENCE_REPORT_SQL = """
              from (
                select fam.key as fam_key,
                  jsonb_build_object(
-                   'high', count(*) filter (where tier_val = 'high' or (tier_val = '' and conf_num >= 0.85)),
-                   'medium', count(*) filter (where tier_val = 'medium' or (tier_val = '' and conf_num >= 0.50 and conf_num < 0.85)),
-                   'low', count(*) filter (where not coalesce(tier_val in ('high', 'medium') or (tier_val = '' and conf_num >= 0.50), false))
+                   'high', count(*) filter (where tier_val = 'high' or (tier_val = '' and conf_num >= __HIGH_FROM__)),
+                   'medium', count(*) filter (where tier_val = 'medium' or (tier_val = '' and conf_num >= __MEDIUM_FROM__ and conf_num < __HIGH_FROM__)),
+                   'low', count(*) filter (where not coalesce(tier_val in ('high', 'medium') or (tier_val = '' and conf_num >= __MEDIUM_FROM__), false))
                  ) as counts
                from jsonb_each(case when jsonb_typeof(latest.payload->'cells') = 'object' then latest.payload->'cells' else '{}'::jsonb end) as fam(key, value)
                cross join lateral jsonb_each(case when jsonb_typeof(fam.value) = 'object' then fam.value else '{}'::jsonb end) as cell(key, value)
@@ -85,7 +88,7 @@ CONFIDENCE_REPORT_SQL = """
            ), '{}'::jsonb)
          ) as payload
   from latest
-"""
+""".replace("__HIGH_FROM__", str(_HIGH_CONFIDENCE_FROM)).replace("__MEDIUM_FROM__", str(_MEDIUM_CONFIDENCE_FROM))
 ORACLE_OUTCOMES_SQL = """
   with deduped as (
     select distinct on (
@@ -755,14 +758,24 @@ def _compute_tier_counts(cells_by_family: Any) -> dict[str, dict[str, int]]:
             if not isinstance(cell, dict):
                 continue
             tier = str(cell.get("tier") or "").strip().lower()
-            conf_raw = cell.get("confidence")
-            try:
-                conf_num = float(conf_raw) if conf_raw is not None and str(conf_raw).strip() != "" else None
-            except (TypeError, ValueError):
-                conf_num = None
-            if tier == "high" or (not tier and conf_num is not None and conf_num >= 0.85):
+            if tier in ("high", "medium", "low"):
+                band = tier
+            else:
+                conf_raw = cell.get("confidence")
+                try:
+                    conf_dec = (
+                        Decimal(str(conf_raw).strip()) if conf_raw is not None and str(conf_raw).strip() != "" else None
+                    )
+                except (TypeError, InvalidOperation, ValueError):
+                    conf_dec = None
+                band = (
+                    (confidence_band(conf_dec) or "low")
+                    if conf_dec is not None and Decimal(0) <= conf_dec <= Decimal(1)
+                    else "low"
+                )
+            if band == "high":
                 high += 1
-            elif tier == "medium" or (not tier and conf_num is not None and conf_num >= 0.50):
+            elif band == "medium":
                 med += 1
             else:
                 low += 1

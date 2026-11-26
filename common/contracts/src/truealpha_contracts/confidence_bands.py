@@ -21,6 +21,11 @@ def _thresholds() -> tuple[Decimal, Decimal]:
     return hi, med
 
 
+def confidence_band_thresholds() -> tuple[Decimal, Decimal]:
+    """Return canonical (high_from, medium_from) thresholds from confidence_bands.v1.json."""
+    return _thresholds()
+
+
 def confidence_band(confidence: Decimal | None) -> ConfidenceBand | None:
     if confidence is None:
         return None

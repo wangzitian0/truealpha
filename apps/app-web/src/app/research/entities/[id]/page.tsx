@@ -1,6 +1,6 @@
 import Link from "next/link";
-import { api, type AnalystRatings, type SupplyChainExposure } from "@/client/api";
-import { decodeRouteParam, formatCell, formatPercentFromFraction, formatRatio, formatSignedRatio, formatTierLabel, formatUsdMagnitude, signColor } from "@/client/format";
+import { api } from "@/client/api";
+import { decodeRouteParam, formatCell, formatNumberMagnitude, formatPercentFromFraction, formatRatio, formatSignedRatio, formatTierLabel, formatUsdMagnitude, signColor } from "@/client/format";
 import { PEG_CONVENTION_LABELS, PEG_GROWTH_CONVENTIONS, type PegGrowthConvention, valuationBasisLabel } from "@/client/strategy";
 import { CardExportButton } from "@/components/card-export-button";
 import { StatBox } from "@/components/entity-stat-card";
@@ -24,23 +24,11 @@ export default async function EntityDetailPage({
       ? sp.convention
       : "historical_cagr";
   const issuerId = decodeRouteParam(id);
-  const { data: loaded, error } = await loadAuthed("/research/entities", async (opts) => {
-    const [detail, supplyChain, ratings] = await Promise.all([
-      api.getEntity(issuerId, opts, convention),
-      api.getSupplyChain(issuerId, opts).catch(() => null),
-      api.getAnalystRatings(issuerId, opts).catch(() => null),
-    ]);
-    return { detail, supplyChain, ratings };
-  });
-  const detail = loaded?.detail ?? null;
-  const supplyExposure: Record<string, unknown> | null =
-    loaded?.supplyChain && !("reason" in loaded.supplyChain)
-      ? (loaded.supplyChain as SupplyChainExposure as unknown as Record<string, unknown>)
-      : (detail?.supply_chain_exposure ?? null);
-  const analystRatings: Record<string, unknown> | null =
-    loaded?.ratings && !("reason" in loaded.ratings)
-      ? (loaded.ratings as AnalystRatings as unknown as Record<string, unknown>)
-      : (detail?.analyst_ratings ?? null);
+  const { data: detail, error } = await loadAuthed("/research/entities", (opts) =>
+    api.getEntity(issuerId, opts, convention),
+  );
+  const supplyExposure: Record<string, unknown> | null = detail?.supply_chain_exposure ?? null;
+  const analystRatings: Record<string, unknown> | null = detail?.analyst_ratings ?? null;
   const rows = detail?.decisions ?? [];
   const latest = rows[0];
   const basisLabel = valuationBasisLabel(latest?.valuation_basis);
@@ -90,7 +78,7 @@ export default async function EntityDetailPage({
                 <div>
                   <div className="text-gray-400">Close · Shares · FYE</div>
                   <div className="font-mono text-white">
-                    {formatCell(formatRatio(detail.basic_info.close_price))} · {formatCell(detail.basic_info.shares_outstanding)} · {formatCell(detail.basic_info.fiscal_year_end)}
+                    {formatCell(formatRatio(detail.basic_info.close_price))} · {formatCell(formatNumberMagnitude(detail.basic_info.shares_outstanding))} · {formatCell(detail.basic_info.fiscal_year_end)}
                   </div>
                 </div>
               </div>
@@ -115,11 +103,11 @@ export default async function EntityDetailPage({
           </div>
           {rows.length > 0 && (
             <ResearchTable caption="Strategy decisions" headers={["Cutoff", "Rank", "Tier", `Current ${basisLabel}`, `Target ${basisLabel}`, "Gap", "Weight", "Availability", "Trace"]}>
-              {rows.map((r) => (
-                <tr key={r.cutoff_at} className="border-t border-border">
+              {rows.map((r, i) => (
+                <tr key={`${r.trace_id ?? i}-${r.cutoff_at}`} className="border-t border-border">
                   <td className={`${td} font-mono text-xs`}>{r.cutoff_at}</td>
                   <td className={`${td} font-mono`}>{formatCell(r.rank)}</td>
-                  <td className={td}>{formatCell(r.tier)}</td>
+                  <td className={td}>{formatCell(formatTierLabel(r.tier))}</td>
                   <td className={`${td} tabular-nums`}>{formatCell(formatRatio(r.current_multiple))}</td>
                   <td className={`${td} tabular-nums`}>{formatCell(formatRatio(r.target_multiple))}</td>
                   <td className={`${td} tabular-nums ${signColor(r.valuation_gap)}`}>{formatCell(formatSignedRatio(r.valuation_gap))}</td>

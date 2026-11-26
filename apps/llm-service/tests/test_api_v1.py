@@ -773,8 +773,10 @@ def test_admin_service_capacity_buckets_confidence_summary_and_wilson() -> None:
                 "cells": {
                     "close": {
                         "a": {"tier": "High", "confidence": "0.95"},
-                        "b": {"tier": "", "confidence": "0.60"},
-                        "c": {"tier": "Low", "confidence": "0.20"},
+                        "b": {"tier": "", "confidence": "0.82"},
+                        "c": {"tier": "", "confidence": "0.60"},
+                        "d": {"tier": "", "confidence": "0.55"},
+                        "e": {"tier": "Low", "confidence": "0.20"},
                     }
                 },
                 "sample": {"close": [{"subject": "a"}]},
@@ -782,7 +784,7 @@ def test_admin_service_capacity_buckets_confidence_summary_and_wilson() -> None:
         }
     )
     assert "cells" not in row["payload"] and "sample" not in row["payload"]
-    assert row["payload"]["tier_counts"] == {"close": {"high": 1, "medium": 1, "low": 1}}
+    assert row["payload"]["tier_counts"] == {"close": {"high": 2, "medium": 1, "low": 2}}
     assert row["summary"]["sources_count"] == 2 and row["summary"]["families_count"] == 1
 
     bounds = admin_service._attach_wilson_upper_bounds(

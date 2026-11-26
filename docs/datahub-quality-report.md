@@ -102,8 +102,7 @@ close of the target's settled session. The first that has it serves the cell:
 - declared: the payload carries `served_by_failover: "<origin>"`, and the obligation result
   carries `served_by_failover` beside the primary's reason codes (the attempts keep the
   primary's failure; the terminal attempt is `success` with the primary's reason);
-- one grade lower: the origin's normal confidence minus the 0.10 step a session of lag
-  costs (Twelve Data 0.85 -> 0.75, moomoo 0.80 -> 0.70), floored at 0.50;
+- continuous confidence scoring: failover-served cells receive continuous confidence scoring via `evaluate_continuous_confidence` in `confidence_report.py` (rather than discrete step drops);
 - only for the same session, knowable by the run's cutoff instant: another day's close, or
   one knowable after the cutoff, cannot serve. Without a market calendar a holiday tick's
   target session has no bar at any origin, so a primary failure on a holiday still leaves
@@ -227,20 +226,19 @@ A manual launch with `force_fetch: true` skips the reuse window for every obliga
   moving.
 
 **The staging boot canary forces a fetch without being asked** (owner decision
-2026-09-17). `boot_canary_sensor` launches one `canary_live_pipeline` run for each
+2026-09-17). `boot_canary_sensor` launches `canary_live_pipeline` for each
 deployment, meaning each new image digest or configuration hash, rollbacks included
-(#885). On staging that run has `force_fetch: true`, so a newly enabled source is proven
-by fresh vendor bytes on every staging deploy. Each such run costs 12 Twelve Data
-credits (6 canary listings × 2) from staging's 320/day share (#900). Production, and
-any environment name other than `staging`, gets the unforced canary and waits for the
-next cycle.
+(#885). On staging that canary run has `force_fetch: true` (spending Twelve Data
+credits from staging's 320/day share), and staging also queues an unforced
+`topt_live_pipeline` check (`triggers.py`). Production, and any environment name other
+than `staging`, gets the unforced canary and waits for the next cycle.
 
 There are two ways to launch a forced run by hand:
 
-1. **The admin page.** On `/admin`, tick "Force a fresh vendor fetch" and press
-   "Trigger a run now". This inserts a `staging.pipeline_trigger_requests` row with
-   `force_fetch = true`. `pipeline_trigger_sensor` launches `topt_live_pipeline` with
-   that config within about 30 seconds.
+1. **The admin page.** On `/admin`, pick the target universe (`topt`, `qqq`, `sp500`, or
+   `canary`), optionally tick "Force a fresh vendor fetch", and press "Trigger a run now".
+   This inserts a `staging.pipeline_trigger_requests` row consumed by `pipeline_trigger_sensor`
+   within about 30 seconds.
 2. **Dagster GraphQL.** Send `launchRun` to the webserver's `/graphql` endpoint:
 
    ```graphql

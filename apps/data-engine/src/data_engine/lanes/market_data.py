@@ -143,7 +143,8 @@ def refresh_market_data_op(context: dg.OpExecutionContext) -> None:
             freshness = judge_bar_freshness(connection, symbols, now=now)
         outcome.summary = freshness.summary
         if not freshness.ok:
-            raise dg.Failure(f"market data freshness: {freshness.summary}")
+            outcome.failed = True
+            context.log.warning("market data freshness (fact): %s", freshness.summary)
 
 
 @dg.job(name=MARKET_DATA_REFRESH_JOB_NAME)

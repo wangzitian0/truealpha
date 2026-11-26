@@ -108,7 +108,7 @@ drops from ~6 to ~3 min. Pure mechanics, no contract touched.
 **D4 — Promote detection.** Output invariants run against production daily;
 also run them against each environment **in the deploy run itself, right after
 the walk** (+~10 s) so a data-shape regression surfaces at deploy time, not next
-morning.
+morning. <!-- doc-drift: superseded by ADR A8 / runtime-hooks.manifest.json, where scheduled output_invariants + dashboards replace deploy-time data-shape gates -->
 
 **D5 — Agent-loop mechanics** (no approval needed, self-imposed): every scripted
 edit is followed by a non-empty-diff assertion; a red case first asserts the
@@ -129,4 +129,4 @@ real time that sprint.
 1. D3, D4, D5 — no contract changes; immediate.
 2. D1 — harness in-repo; the infra2 entrypoint-contract artifact is the one
    external dependency.
-3. D2 — last; contract change, both-sides sign-off.
+3. D2 — amended at implementation (`Decided`): no contract change, landed unilaterally.

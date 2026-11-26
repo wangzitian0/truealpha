@@ -1,4 +1,4 @@
-"""The MCP endpoint registering read-only research mart and admin fact tools behind BearerTokenGate (#1748)."""
+"""The MCP endpoint registering research mart, admin fact, and library/backtest action tools behind BearerTokenGate (#1748)."""
 
 from __future__ import annotations
 
@@ -381,7 +381,7 @@ def build_mcp_server(
     def panel_macro() -> MacroPanelResponse:
         return load_macro_curve()
 
-    # --- Domain 2: strategy (3) ---
+    # --- Domain 2: strategy (4) ---
 
     @server.tool(
         name="strategy_rankings",

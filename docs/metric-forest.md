@@ -461,11 +461,12 @@ The fixed columns were a compatibility projection. `mart.topt_gppe_results` and 
 - **KG projection (step I)**, not built (the `staging.kg_*` tables below were dropped in #1730; a projection
   would write `staging.entities` and `staging.entity_relations`). The design was: generated from the forest at
   deploy, idempotent and keyed by the forest's content hash:
-  - `staging.kg_entities` holds `metric_node` and `metric_tree` rows keyed by UUID;
-  - `staging.kg_identifiers` holds the typed aliases, the same shape #877 uses for issuers;
-  - `staging.kg_edges` holds `decomposes_into` (output → operand, with formula id, version,
-    issuer class, tree id and ordinal), `realizes` (tree → concept) and `member_of`
-    (node → tree).
+  - Historically (dropped in #1730; replaced by `staging.entities` and `staging.entity_relations`):
+    - `staging.kg_entities` held `metric_node` and `metric_tree` rows keyed by UUID;
+    - `staging.kg_identifiers` held the typed aliases, the same shape #877 uses for issuers;
+    - `staging.kg_edges` held `decomposes_into` (output → operand, with formula id, version,
+      issuer class, tree id and ordinal), `realizes` (tree → concept) and `member_of`
+      (node → tree).
   - Edges are append-only vintages, like every KG edge (rule 1).
 - **Embeddings:** no store exists. When one lands, it embeds a node's `definition` keyed by
   `(node_id, forest sha)`, never by key. Retrieval then answers "which metrics measure
@@ -514,12 +515,12 @@ Step B needs no migration.
 | id | decision | decided |
 |---|---|---|
 | D1 | GPPE may be negative: v0.2.0's sign policy is `sign-is-signal` for every class (#59's frozen reading), declared and printed rather than exempted. The datahub records the fact; the datahub/factor boundary is §6.1. | 2026-09-17 (#528) |
+| D2 | Bank capital base uses measured tangible common equity (`gppe_banking_tce_v1`); negative TCE gives no value (#1518). | 2026-10-26 (#1518) |
 
 ### Open
 
 | id | decision | needed by |
 |---|---|---|
-| D2 | A bank's `operating_capital` binding in step E: total assets − securities portfolio; equity-based; or no operating charge for banks at all | step E |
 | D3 | Invested capital for MVA: equity + debt − cash, or total assets − non-interest-bearing current liabilities; and whether market value is taken at the cutoff or at fiscal year end | step G |
 | D4 | Labor cost composition (#59 item 2: salaries + SBC). Which concepts to use, and whether the loop extracts salaries where `LaborAndRelatedExpense` is absent (2/9 samples) | step G |
 | D5 | The tier bands for the operating component per employee (recalibrate, or keep v0.2.0's) | step F |

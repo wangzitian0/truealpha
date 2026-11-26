@@ -1,6 +1,5 @@
 import Link from "next/link";
-import { formatCell, formatRatio, formatShortSha } from "@/client/format";
-import { HeadRollbackControl } from "@/components/head-rollback-control";
+import { formatCell, formatCompactUtc, formatRatio, formatShortSha } from "@/client/format";
 import { ResearchTable } from "@/components/research-table";
 
 export function safeCell(value: unknown): string {
@@ -10,10 +9,10 @@ export function safeCell(value: unknown): string {
 }
 
 export function badgeTone(tone: "emerald" | "red" | "amber" | "neutral"): string {
-  if (tone === "emerald") return "inline-block rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-emerald-300";
-  if (tone === "red") return "inline-block rounded-full border border-red-500/40 bg-red-500/10 px-2 py-0.5 text-red-300";
-  if (tone === "amber") return "inline-block rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-amber-300";
-  return "inline-block rounded-full border border-border bg-card px-2 py-0.5 text-gray-300";
+  if (tone === "emerald") return "inline-block whitespace-nowrap rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-emerald-300";
+  if (tone === "red") return "inline-block whitespace-nowrap rounded-full border border-red-500/40 bg-red-500/10 px-2 py-0.5 text-red-300";
+  if (tone === "amber") return "inline-block whitespace-nowrap rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-amber-300";
+  return "inline-block whitespace-nowrap rounded-full border border-border bg-card px-2 py-0.5 text-gray-300";
 }
 
 export function DataSection({ title, headers, rows }: { title: string; headers: string[]; rows: (string | number)[][] }) {
@@ -117,8 +116,8 @@ export function QuestionCoverageDetails({ questionCoverage }: { questionCoverage
           countMapSummary(qVal.by_class, QUESTION_CLASSES),
           countMapSummary(qVal.violations, QUESTION_VIOLATIONS),
           `${prevRun} · ${d.text}`,
-          cutoff,
-          safeCell(row.created_at),
+          formatCompactUtc(cutoff),
+          formatCompactUtc(row.created_at as string | null | undefined),
         ],
         delta: d.delta,
         hasGap: gapCount > 0,
@@ -142,10 +141,15 @@ export function QuestionCoverageDetails({ questionCoverage }: { questionCoverage
             </td>
             <td className="px-3 py-2">{String(row.cells[4])}</td>
             <td className="px-3 py-2">
-              <span className={badgeTone(row.delta > 0 ? "emerald" : row.delta < 0 ? "red" : "neutral")}>{String(row.cells[5])}</span>
+              <span
+                title={String(row.cells[5])}
+                className={`${badgeTone(row.delta > 0 ? "emerald" : row.delta < 0 ? "red" : "neutral")} max-w-[260px] truncate align-middle`}
+              >
+                {String(row.cells[5])}
+              </span>
             </td>
-            <td className="px-3 py-2">{String(row.cells[6])}</td>
-            <td className="px-3 py-2">{String(row.cells[7])}</td>
+            <td className="px-3 py-2 whitespace-nowrap">{String(row.cells[6])}</td>
+            <td className="px-3 py-2 whitespace-nowrap">{String(row.cells[7])}</td>
           </tr>
         ))}
       </ResearchTable>
@@ -170,11 +174,12 @@ function resolveTierSummary(
   let high = 0;
   let med = 0;
   let low = 0;
+  // Fallback thresholds match confidence_bands.v1.json (high_from=0.80, medium_from=0.60).
   for (const cell of cellEntries) {
-    const tier = typeof cell.tier === "string" ? cell.tier.toLowerCase() : "";
+    const tier = typeof cell.tier === "string" ? cell.tier.trim().toLowerCase() : "";
     const confNum = Number(cell.confidence);
-    if (tier === "high" || (!tier && Number.isFinite(confNum) && confNum >= 0.85)) high += 1;
-    else if (tier === "medium" || (!tier && Number.isFinite(confNum) && confNum >= 0.5)) med += 1;
+    if (tier === "high" || (!tier && Number.isFinite(confNum) && confNum >= 0.80)) high += 1;
+    else if (tier === "medium" || (!tier && Number.isFinite(confNum) && confNum >= 0.60)) med += 1;
     else low += 1;
   }
   return `${high} / ${med} / ${low}`;
@@ -184,26 +189,58 @@ export function DatahubFactPanels({ stats }: { stats: Record<string, unknown> })
   const oracleDisagreements = (stats.oracle_disagreements ?? []) as Record<string, unknown>[];
   const servedHeads = (stats.served_heads ?? []) as Record<string, unknown>[];
   const servedArtifacts = (stats.served_artifacts ?? []) as Record<string, unknown>[];
-  const captureRuns = (stats.capture_runs ?? []) as Record<string, unknown>[];
   const outputInvariants = (stats.output_invariants ?? []) as Record<string, unknown>[];
   const validation = (stats.validation ?? []) as Record<string, unknown>[];
-  const nightlyVerdicts = (stats.nightly_verdicts ?? []) as Record<string, unknown>[];
   const confidence = (stats.confidence ?? []) as Record<string, unknown>[];
   const capacity = (stats.capacity ?? []) as Record<string, unknown>[];
   const model1302 = (stats.model_1302_by_day ?? []) as Record<string, unknown>[];
   const llmUsage = (stats.llm_usage ?? []) as Record<string, unknown>[];
   const recentCalls = (stats.recent_calls ?? []) as Record<string, unknown>[];
   const backfillHealth = (stats.backfill_health ?? []) as Record<string, unknown>[];
-  const triggerQueue = (stats.trigger_queue ?? []) as Record<string, unknown>[];
-  const rollbackRequests = (stats.rollback_requests ?? []) as Record<string, unknown>[];
   const dbHygiene = (stats.db_hygiene ?? {}) as Record<string, unknown>;
   const zeroScanIndexes = (dbHygiene.zero_scan_indexes ?? []) as Record<string, unknown>[];
   const idleTables = (dbHygiene.idle_tables ?? []) as Record<string, unknown>[];
   const statsReset = dbHygiene.stats_reset as string | null | undefined;
 
   const hasHeadIssue = servedHeads.some((h) => h.freshness !== "fresh" || h.availability !== "available" || !h.run_id);
-  const hasBadVerdict = nightlyVerdicts.some((v) => v.ok === false || v.freshness_state === "stale" || v.freshness_state === "missing");
-  const hasPendingQueue = triggerQueue.some((t) => !t.consumed_at) || rollbackRequests.some((rb) => !rb.consumed_at);
+  const llmTotalCalls = llmUsage.reduce((acc, u) => acc + Number(u.calls ?? 0), 0);
+  const llmErrRef = llmUsage.reduce((acc, u) => acc + Number(u.error_calls ?? 0) + Number(u.refusal_calls ?? 0), 0);
+  const confidenceRows = confidence.flatMap((c) => {
+    const payload = (c.payload ?? {}) as Record<string, unknown>;
+    const families = (payload.families ?? {}) as Record<string, Record<string, unknown>>;
+    const tierCountsByFamily = (payload.tier_counts ?? {}) as Record<string, Record<string, unknown>>;
+    const cellsByFamily = (payload.cells ?? {}) as Record<string, Record<string, Record<string, unknown>>>;
+    const accuracy = (payload.accuracy ?? {}) as Record<string, Record<string, unknown>>;
+    const familyNames = Object.keys(families).sort();
+    if (familyNames.length === 0) {
+      return [[safeCell(c.universe_id), "—", "0", formatCell(null), formatCell(null), formatCell(null), formatCell(null), formatCompactUtc(c.cutoff as string | null | undefined)]];
+    }
+    return familyNames.map((famName) => {
+      const fam = families[famName] ?? {};
+      const tierSummary = resolveTierSummary(famName, tierCountsByFamily, cellsByFamily);
+      const originsMap = (fam.by_independent_origins ?? {}) as Record<string, unknown>;
+      let oneOrigin = 0;
+      let multiOrigin = 0;
+      for (const [k, raw] of Object.entries(originsMap)) {
+        const count = Number(raw ?? 0);
+        if (Number.isFinite(count)) {
+          if (Number(k) >= 2) multiOrigin += count;
+          else oneOrigin += count;
+        }
+      }
+      const agreement = fam.agreement_rate ?? accuracy[famName]?.agreement_rate;
+      return [
+        safeCell(c.universe_id),
+        famName,
+        Number(fam.cells ?? 0),
+        safeCell(fam.mean_confidence),
+        tierSummary,
+        `${oneOrigin} / ${multiOrigin}`,
+        agreement === null || agreement === undefined ? formatCell(null) : safeCell(agreement),
+        formatCompactUtc(c.cutoff as string | null | undefined),
+      ];
+    });
+  });
 
   return (
     <div className="space-y-8">
@@ -221,7 +258,7 @@ export function DatahubFactPanels({ stats }: { stats: Record<string, unknown> })
           safeCell(d.oracle_value),
           `${safeCell(d.ratio)} / ${safeCell(d.tolerance)}`,
           safeCell(d.reason),
-          safeCell(d.compared_at),
+          formatCompactUtc(d.compared_at as string | null | undefined),
         ])}
       />
 
@@ -242,7 +279,7 @@ export function DatahubFactPanels({ stats }: { stats: Record<string, unknown> })
                 <td className="px-3 py-2">
                   {Array.isArray(inv.sample_rows) && inv.sample_rows.length > 0 ? safeCell(inv.sample_rows.slice(0, 2)) : "0 samples"}
                 </td>
-                <td className="px-3 py-2">{safeCell(inv.checked_at)}</td>
+                <td className="px-3 py-2 whitespace-nowrap">{formatCompactUtc(inv.checked_at as string | null | undefined)}</td>
               </tr>
             );
           })}
@@ -259,55 +296,27 @@ export function DatahubFactPanels({ stats }: { stats: Record<string, unknown> })
         </ResearchTable>
       </div>
 
-      <DataSection
-        title="Confidence reports (mart.datahub_confidence_report)"
-        headers={[
-          "Universe",
-          "Family",
-          "Cells",
-          "Mean confidence",
-          "High / Med / Low",
-          "1-origin / 2+-origin",
-          "Agreement rate",
-          "Cutoff",
-        ]}
-        rows={confidence.flatMap((c) => {
-          const payload = (c.payload ?? {}) as Record<string, unknown>;
-          const families = (payload.families ?? {}) as Record<string, Record<string, unknown>>;
-          const tierCountsByFamily = (payload.tier_counts ?? {}) as Record<string, Record<string, unknown>>;
-          const cellsByFamily = (payload.cells ?? {}) as Record<string, Record<string, Record<string, unknown>>>;
-          const accuracy = (payload.accuracy ?? {}) as Record<string, Record<string, unknown>>;
-          const familyNames = Object.keys(families).sort();
-          if (familyNames.length === 0) {
-            return [[safeCell(c.universe_id), "—", "0", formatCell(null), formatCell(null), formatCell(null), formatCell(null), safeCell(c.cutoff)]];
-          }
-          return familyNames.map((famName) => {
-            const fam = families[famName] ?? {};
-            const tierSummary = resolveTierSummary(famName, tierCountsByFamily, cellsByFamily);
-            const originsMap = (fam.by_independent_origins ?? {}) as Record<string, unknown>;
-            let oneOrigin = 0;
-            let multiOrigin = 0;
-            for (const [k, raw] of Object.entries(originsMap)) {
-              const count = Number(raw ?? 0);
-              if (Number.isFinite(count)) {
-                if (Number(k) >= 2) multiOrigin += count;
-                else oneOrigin += count;
-              }
-            }
-            const agreement = fam.agreement_rate ?? accuracy[famName]?.agreement_rate;
-            return [
-              safeCell(c.universe_id),
-              famName,
-              Number(fam.cells ?? 0),
-              safeCell(fam.mean_confidence),
-              tierSummary,
-              `${oneOrigin} / ${multiOrigin}`,
-              agreement === null || agreement === undefined ? formatCell(null) : safeCell(agreement),
-              safeCell(c.cutoff),
-            ];
-          });
-        })}
-      />
+      <details className="min-w-0 rounded-xl border border-border bg-card/40 p-4">
+        <summary className="cursor-pointer select-none text-sm font-semibold">
+          Confidence reports (universes: {confidence.length}, family rows: {confidenceRows.length})
+        </summary>
+        <div className="mt-4 min-w-0">
+          <DataSection
+            title="Confidence reports (mart.datahub_confidence_report)"
+            headers={[
+              "Universe",
+              "Family",
+              "Cells",
+              "Mean confidence",
+              "High / Med / Low",
+              "1-origin / 2+-origin",
+              "Agreement rate",
+              "Cutoff",
+            ]}
+            rows={confidenceRows}
+          />
+        </div>
+      </details>
 
       <div className="space-y-2">
         <h2 className="text-lg font-semibold">Capacity, Vendor Quotas &amp; 429/1302</h2>
@@ -353,30 +362,42 @@ export function DatahubFactPanels({ stats }: { stats: Record<string, unknown> })
         />
       )}
 
-      <DataSection
-        title="LLM usage & model drift"
-        headers={["Day", "Provider", "Served model", "Standard", "Calls", "Prompt tokens", "Completion tokens", "Cost", "Errors", "Refusals"]}
-        rows={llmUsage.map((u) => [
-          safeCell(u.day),
-          safeCell(u.provider),
-          safeCell(u.served_model),
-          safeCell(u.standard),
-          safeCell(u.calls),
-          safeCell(u.prompt_tokens),
-          safeCell(u.completion_tokens),
-          safeCell(u.cost),
-          safeCell(u.error_calls),
-          safeCell(u.refusal_calls),
-        ])}
-      />
+      <details open={llmErrRef > 0} className="min-w-0 rounded-xl border border-border bg-card/40 p-4">
+        <summary className="cursor-pointer select-none text-sm font-semibold">
+          LLM usage &amp; model drift (rows: {llmUsage.length}, calls: {llmTotalCalls}, err/ref: {llmErrRef})
+        </summary>
+        <div className="mt-4 min-w-0">
+          <DataSection
+            title="LLM usage & model drift"
+            headers={["Day", "Provider", "Served model", "Standard", "Calls", "Prompt tokens", "Completion tokens", "Total tokens", "Errors", "Refusals"]}
+            rows={llmUsage.map((u) => [
+              safeCell(u.day),
+              safeCell(u.provider),
+              safeCell(u.served_model),
+              safeCell(u.standard),
+              safeCell(u.calls),
+              safeCell(u.prompt_tokens),
+              safeCell(u.completion_tokens),
+              safeCell(u.cost),
+              safeCell(u.error_calls),
+              safeCell(u.refusal_calls),
+            ])}
+          />
+        </div>
+      </details>
 
-      <details open={hasHeadIssue} className="rounded-xl border border-border bg-card/40 p-4">
+      <details open={hasHeadIssue} className="min-w-0 rounded-xl border border-border bg-card/40 p-4">
         <summary className="cursor-pointer select-none text-sm font-semibold">
           Served heads &amp; pipeline artifacts (heads: {servedHeads.length}, artifacts: {servedArtifacts.length}
           {hasHeadIssue ? " · attention needed" : ""})
         </summary>
-        <div className="mt-4 space-y-3">
-          <h2 className="text-lg font-semibold">Served heads &amp; pipeline artifacts</h2>
+        <div className="mt-4 min-w-0 space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-lg font-semibold">Served heads &amp; pipeline artifacts</h2>
+            <Link href="/admin" className="text-xs text-accent hover:underline">
+              Triggers, head rollback, queues &amp; nightly verdicts on Operations →
+            </Link>
+          </div>
           <ResearchTable
             caption="Served heads"
             headers={[
@@ -396,25 +417,24 @@ export function DatahubFactPanels({ stats }: { stats: Record<string, unknown> })
           >
             {servedHeads.map((h, i) => (
               <tr key={`${String(h.universe_id ?? "")}-${i}`} className="border-t border-border font-mono text-xs">
-                <td className="px-3 py-2">{safeCell(h.universe_id)}</td>
-                <td className="px-3 py-2">{safeCell(h.universe_version)}</td>
-                <td className="px-3 py-2">{safeCell(h.factor_id)}</td>
-                <td className="px-3 py-2">{safeCell(h.sequence)}</td>
-                <td className="px-3 py-2">{safeCell(h.freshness)}</td>
-                <td className="px-3 py-2">{safeCell(h.availability)}</td>
-                <td className="px-3 py-2">
+                <td className="px-2.5 py-2">{safeCell(h.universe_id)}</td>
+                <td className="px-2.5 py-2">{safeCell(h.universe_version)}</td>
+                <td className="px-2.5 py-2">{safeCell(h.factor_id)}</td>
+                <td className="px-2.5 py-2">{safeCell(h.sequence)}</td>
+                <td className="px-2.5 py-2 whitespace-nowrap">{safeCell(h.freshness)}</td>
+                <td className="px-2.5 py-2 whitespace-nowrap">{safeCell(h.availability)}</td>
+                <td className="px-2.5 py-2 whitespace-nowrap">
                   {formatCell(formatRatio(h.age_hours as number | string | null | undefined))} /{" "}
                   {formatCell(formatRatio(h.limit_hours as number | string | null | undefined))}
                 </td>
-                <td className="px-3 py-2">{h.run_id ? formatShortSha(String(h.run_id)) : "withheld"}</td>
-                <td className="px-3 py-2">{formatShortSha(h.head_run_id as string | null | undefined)}</td>
-                <td className="px-3 py-2">{safeCell(h.served_to)}</td>
-                <td className="px-3 py-2">{formatShortSha(h.bound_strategy_run_id as string | null | undefined)}</td>
-                <td className="px-3 py-2">{safeCell(h.staleness_reason)}</td>
+                <td className="px-2.5 py-2 whitespace-nowrap" title={String(h.run_id ?? "")}>{h.run_id ? formatShortSha(String(h.run_id)) : "withheld"}</td>
+                <td className="px-2.5 py-2 whitespace-nowrap" title={String(h.head_run_id ?? "")}>{formatShortSha(h.head_run_id as string | null | undefined)}</td>
+                <td className="px-2.5 py-2 whitespace-nowrap">{safeCell(h.served_to)}</td>
+                <td className="px-2.5 py-2 whitespace-nowrap" title={String(h.bound_strategy_run_id ?? "")}>{formatShortSha(h.bound_strategy_run_id as string | null | undefined)}</td>
+                <td className="px-2.5 py-2">{safeCell(h.staleness_reason)}</td>
               </tr>
             ))}
           </ResearchTable>
-          <HeadRollbackControl heads={servedHeads} captureRuns={captureRuns} />
           <ResearchTable
             caption="Served artifacts"
             headers={["Artifact key", "Lane", "Schedule", "Universe filter", "Family", "Served to", "Wired"]}
@@ -434,52 +454,17 @@ export function DatahubFactPanels({ stats }: { stats: Record<string, unknown> })
         </div>
       </details>
 
-      <details open={hasBadVerdict} className="rounded-xl border border-border bg-card/40 p-4">
-        <summary className="cursor-pointer select-none text-sm font-semibold">
-          Nightly verdicts ({nightlyVerdicts.length} checks{hasBadVerdict ? " · has red/stale" : " · all green"}) ·{" "}
-          <Link href="/admin" className="text-accent hover:underline">
-            View on Operations →
-          </Link>
-        </summary>
-        <div className="mt-4">
-          <DataSection
-            title="Nightly verdicts"
-            headers={["Check name", "Verdict", "Age / Max", "Ran at", "Summary", "Dagster run ID"]}
-            rows={nightlyVerdicts.map((v) => [
-              safeCell(v.check_name),
-              v.freshness_state === "stale"
-                ? "STALE"
-                : v.freshness_state === "missing"
-                  ? "MISSING"
-                  : v.ok === true
-                    ? "pass"
-                    : v.ok === false
-                      ? "fail"
-                      : "pending",
-              typeof v.age_hours === "number" && typeof v.max_age_hours === "number"
-                ? `${v.age_hours.toFixed(1)} / ${v.max_age_hours.toFixed(0)}h`
-                : typeof v.max_age_hours === "number"
-                  ? `— / ${v.max_age_hours.toFixed(0)}h`
-                  : formatCell(null),
-              safeCell(v.ran_at),
-              safeCell(v.summary),
-              safeCell(v.dagster_run_id),
-            ])}
-          />
-        </div>
-      </details>
-
-      <details className="rounded-xl border border-border bg-card/40 p-4">
+      <details className="min-w-0 rounded-xl border border-border bg-card/40 p-4">
         <summary className="cursor-pointer select-none text-sm font-semibold">
           Recent API calls (staging.api_call_ledger: {recentCalls.length} rows)
         </summary>
-        <div className="mt-4">
+        <div className="mt-4 min-w-0">
           <DataSection
             title="Recent API calls (staging.api_call_ledger)"
             headers={["ID", "Called at", "Source", "Endpoint", "Caller", "OK", "Status", "ms", "Run key", "Error"]}
             rows={recentCalls.map((c) => [
               safeCell(c.id),
-              safeCell(c.called_at),
+              formatCompactUtc(c.called_at as string | null | undefined),
               safeCell(c.source),
               safeCell(c.endpoint),
               safeCell(c.caller),
@@ -493,51 +478,32 @@ export function DatahubFactPanels({ stats }: { stats: Record<string, unknown> })
         </div>
       </details>
 
-      <details open={hasPendingQueue} className="rounded-xl border border-border bg-card/40 p-4">
+      <details className="min-w-0 rounded-xl border border-border bg-card/40 p-4">
         <summary className="cursor-pointer select-none text-sm font-semibold">
-          Backfill health &amp; queues (health: {backfillHealth.length}, triggers: {triggerQueue.length}, rollbacks: {rollbackRequests.length})
+          Ingestion &amp; backfill health (rows: {backfillHealth.length})
         </summary>
-        <div className="mt-4">
+        <div className="mt-4 min-w-0">
           <DataSection
-            title="Backfill health & queues"
-            headers={["Type", "Key / Source", "Detail / Metric", "Value / Status", "Timestamp", "Note / Reason"]}
-            rows={[
-              ...backfillHealth.map((b) => [
-                "health",
-                safeCell(b.source),
-                safeCell(b.metric),
-                safeCell(b.value),
-                safeCell(b.logged_at),
-                safeCell(b.note),
-              ]),
-              ...triggerQueue.map((t) => [
-                "trigger",
-                safeCell(t.job_name),
-                `#${safeCell(t.request_id)} force=${safeCell(t.force_fetch)}`,
-                t.consumed_at ? `consumed (${safeCell(t.launched_run_key)})` : "pending",
-                safeCell(t.requested_at),
-                safeCell(t.requested_by),
-              ]),
-              ...rollbackRequests.map((rb) => [
-                "rollback",
-                safeCell(rb.universe_id),
-                `#${safeCell(rb.request_id)} → ${formatShortSha(rb.target_run_id as string | null | undefined)}`,
-                rb.consumed_at ? `consumed (${formatShortSha(rb.result_pointer_id as string | null | undefined)})` : "pending",
-                safeCell(rb.requested_at),
-                safeCell(rb.reason),
-              ]),
-            ]}
+            title="Ingestion & backfill health"
+            headers={["Source", "Metric", "Value", "Logged at", "Note"]}
+            rows={backfillHealth.map((b) => [
+              safeCell(b.source),
+              safeCell(b.metric),
+              safeCell(b.value),
+              formatCompactUtc(b.logged_at as string | null | undefined),
+              safeCell(b.note),
+            ])}
           />
         </div>
       </details>
 
-      <details className="rounded-xl border border-border bg-card/40 p-4">
+      <details className="min-w-0 rounded-xl border border-border bg-card/40 p-4">
         <summary className="cursor-pointer select-none text-sm font-semibold">
           DB hygiene facts (zero-scan indexes: {zeroScanIndexes.length}, idle tables: {idleTables.length})
         </summary>
-        <div className="mt-4">
+        <div className="mt-4 min-w-0">
           <DataSection
-            title={`DB hygiene facts${statsReset ? ` (stats reset: ${statsReset})` : ""}`}
+            title={`DB hygiene facts${statsReset ? ` (stats reset: ${formatCompactUtc(statsReset)})` : ""}`}
             headers={["Kind", "Schema", "Table", "Index", "Live tuples / Scans", "Size (bytes)"]}
             rows={[
               ...zeroScanIndexes.map((idx) => [

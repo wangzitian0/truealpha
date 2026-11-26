@@ -1,6 +1,6 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  // No API proxy: the app reads the mart schema in Postgres directly via llm-service OpenAPI.
+  // Middleware proxies /api/v1/* to llm-service; app-web holds zero Postgres drivers or direct DB access (#1716).
   // Standalone output: the Docker runtime image runs `node server.js` without node_modules.
   output: "standalone",
   async redirects() {

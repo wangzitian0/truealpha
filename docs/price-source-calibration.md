@@ -37,21 +37,15 @@ origin (`apps/data-engine/src/data_engine/datahub/capture_core/moomoo_origin.py`
 asks `request_history_kline` for a bounded daily window ending on the price cutoff —
 the last settled session (#637) — UNADJUSTED (`AuType.NONE`) and regular-session only
 (`extended_time=False`), and refuses any bar stamped with an instant or dated after the
-cutoff (#535). It is fused by `market-price-fusion:v3` with priority yahoo, twelve-data,
-moomoo at the unchanged 0.3% tolerance; a disagreeing origin still abstains the cell. The
-same order is the failover order (#862): a cell Yahoo cannot serve is served by Twelve
-Data's settled close for the target session, else moomoo's, one confidence grade down
-(0.85 -> 0.75, 0.80 -> 0.70) — see `docs/datahub-quality-report.md`, "Primary failover".
+cutoff (#535). See `reconciliation_policies.py` (`RECONCILIATION_POLICY` = `market-price-fusion:v4`) and `confidence_report.py` for the active multi-origin fusion and continuous confidence scoring.
 
 The SDK speaks protobuf and returns DataFrames, so the landed bytes are the decoded bars
 in canonical JSON under raw/moomoo/ in object storage, and the parser identity (`moomoo-kline-parser:v1`)
-names that rendering. No K-line bytes have been captured yet: the first scheduled
-staging tick with `MOOMOO_KLINE_ORIGIN_ENABLED=true` is the cassette this origin's
-`test_real_vendor_bytes` entry must be sha-anchored to (A3 admission item 2).
+names that rendering. It is fused by `market-price-fusion:v4` (superseded `v3` at 0.3% abstention moved to `v4` at 0.1% tolerance with `MEDIAN_CONSENSUS` in `reconciliation_policies.py`), with failover priority `yahoo`, `twelve-data`, `moomoo-kline` scored continuously in `confidence_report.py` (#862).
 
-Quota: moomoo's historical-candlestick quota counts distinct stocks per rolling 30-day
-window (2,000), not calls; the governed universes use ~120. Every call is still gated by
-`moomoo_ledger` (8 per 30 s, monthly backstop) and recorded.
+Quota: moomoo's historical-candlestick quota counts distinct stocks per rolling 7-day
+window (`window_seconds: 604800`; account-tier stock limit `null` / unpublished by vendor in `environment_contract.v1.json`). Every call is gated by
+`moomoo_ledger` (30 per 30 s split 40%/60% -> 12/30s staging, 18/30s production) and recorded.
 
 ## Second financial-fact origin: moomoo statements (`moomoo-financials:v1`)
 

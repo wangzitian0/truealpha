@@ -447,7 +447,7 @@ instruments), META, MSFT, MU, NFLX, NVDA, TSLA, WMT.
 **Not linked in production:** ABBV, BRK.B, JNJ, JPM, LLY, MA, V and XOM.
 
 - None of them is in QQQ, so no plane trio shares their listing.
-- Production's N-PORT lane captures only QQQ, so no stored line proves their CIK.
+- Both QQQ and S&P 500 (`IVV`) are configured as SEC N-PORT constituent universes in `environment_contract.v1.json` (`sp500` runs on staging and stays `scheduled: false` in production until enabled).
 - They still get entities with their LEI and CUSIP aliases.
 
 Staging holds an S&P 500 fund's N-PORT (IVV, series S000004310), which proves CIKs for seven
@@ -488,9 +488,7 @@ holding type.
 
 - **D2: TOPT's eight unlinked listings.** Their entities exist. What they lack is a proven
   CIK, and a FIGI if a plane universe ever lists them.
-  - (a) **Recommended now:** capture an S&P 500 fund's N-PORT (IVV) in production through the
-    existing N-PORT lane and holdings enrichment. The backfill's existing proof then covers
-    seven of the eight, as staging already shows, with no new resolution rule.
+  - (a) **Enabled on staging (`R2.B12`):** S&P 500 `IVV` N-PORT capture is wired in `environment_contract.v1.json`; enabling `sp500` in production covers seven of the eight with no new resolution rule.
   - (b) The earlier option still works for FIGI: give each `UniverseSource` member its own
     MIC, normalize class tickers (BRK.B), and run an ids-only refresh through the SEC and
     OpenFIGI gateway. That evidence is ticker-based, so it needs its own proof rule: the

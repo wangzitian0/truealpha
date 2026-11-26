@@ -6,6 +6,7 @@ This directory holds records, not enforcement. Nothing here gates a merge. CI do
 
 - `sources/model-provider-zhipu-glm-coding-plan.v1.json`: the admission record of the model provider (`init.md` rule 19).
 - `reviews/large_model_value_v0-definition-1.0.0.md`: the owner review of strategy definition 1.0.0 (#1235), with its content hash and the production replay.
+- `reviews/large_model_value_v0-definition-1.1.0.md`: the active review record for strategy definition 1.1.0.
 - `freezes/core-path-2026-10-12.md`: the freeze of the non-core areas (#1237), lifted on 2026-10-20: the paths, the baseline, the exit condition, and how to measure it again.
 
 ## What was removed
