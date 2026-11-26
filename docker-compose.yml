@@ -19,7 +19,7 @@ services:
       - ./db:/truealpha-db:ro
       - ./db/docker-init.sh:/docker-entrypoint-initdb.d/00_truealpha.sh:ro
     ports:
-      - "${POSTGRES_PORTS:-127.0.0.1:5432:5432}"
+      - "${POSTGRES_PORTS:-127.0.0.1:55432:5432}"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-truealpha}"]
       interval: 5s
