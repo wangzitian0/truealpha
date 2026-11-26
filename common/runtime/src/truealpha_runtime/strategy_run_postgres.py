@@ -92,7 +92,7 @@ DECISIONS_FROM_SQL = """
         limit 1
     ) m on true
     left join lateral (
-        select mc.value
+        select mc.value, mc.reason_codes
         from mart.metric_node_values mc
         where mc.run_id = scope.capture_run_id
           and mc.issuer_id = d.issuer_id
@@ -110,7 +110,7 @@ DECISIONS_FROM_SQL = """
         limit 1
     ) peg_cr on true
     left join lateral (
-        select mc.value
+        select mc.value, mc.reason_codes
         from mart.metric_node_values mc
         where mc.run_id = scope.capture_run_id
           and mc.issuer_id = d.issuer_id
@@ -141,7 +141,9 @@ _DECISIONS_SQL = (
     " d.source_evidence_status, d.factor_validation_status, d.peg_reason_codes,"
     " d.rank, d.target_weight, d.peg, d.peg_rank,"
     " peg_c.value as peg_consensus, peg_cr.value as peg_consensus_rank,"
+    " peg_c.reason_codes as peg_consensus_reason_codes,"
     " peg_g.value as peg_geometric_cagr, peg_gr.value as peg_geometric_cagr_rank,"
+    " peg_g.reason_codes as peg_geometric_cagr_reason_codes,"
     " d.labor_efficiency_metric, m.confidence " + DECISIONS_FROM_SQL
 )
 
@@ -225,17 +227,32 @@ def _decision_from_row(row: dict[str, Any], *, convention: str = "historical_cag
     data = dict(row)
     peg_consensus = data.pop("peg_consensus", None)
     peg_consensus_rank = data.pop("peg_consensus_rank", None)
+    peg_consensus_reasons = data.pop("peg_consensus_reason_codes", None)
     peg_geometric = data.pop("peg_geometric_cagr", None)
     peg_geometric_rank = data.pop("peg_geometric_cagr_rank", None)
+    peg_geometric_reasons = data.pop("peg_geometric_cagr_reason_codes", None)
     if convention == "consensus":
         data["peg"] = peg_consensus
         data["peg_rank"] = int(peg_consensus_rank) if peg_consensus_rank is not None else None
+        if peg_consensus is not None:
+            data["peg_reason_codes"] = ()
+        elif peg_consensus_reasons is not None:
+            data["peg_reason_codes"] = peg_consensus_reasons
+        else:
+            data["peg_reason_codes"] = ("growth_convention_unsourced:analyst_consensus",)
     elif convention == "geometric_cagr":
         data["peg"] = peg_geometric
         data["peg_rank"] = int(peg_geometric_rank) if peg_geometric_rank is not None else None
+        if peg_geometric is not None:
+            data["peg_reason_codes"] = ()
+        elif peg_geometric_reasons is not None:
+            data["peg_reason_codes"] = peg_geometric_reasons
+        else:
+            data["peg_reason_codes"] = ("insufficient_earnings_history",)
     elif convention == "guidance":
         data["peg"] = None
         data["peg_rank"] = None
+        data["peg_reason_codes"] = ("growth_convention_unsourced:company_guidance",)
     peg_reason_codes = tuple(str(code) for code in (data.pop("peg_reason_codes", None) or ()))
     return StrategyRunDecision(
         **(

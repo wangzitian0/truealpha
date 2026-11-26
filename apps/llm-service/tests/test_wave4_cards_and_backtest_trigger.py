@@ -11,7 +11,14 @@ from llm_service.api.v1 import _deps
 from llm_service.main import app
 from llm_service.services import auth_service, entities_service, library_service, strategy_service
 from truealpha_contracts.execution import AvailabilityStatus
-from truealpha_runtime.research_cards import CardKind
+from truealpha_runtime.research_cards import (
+    CardKind,
+    CardSubject,
+    ClaimClass,
+    ResearchCard,
+    render_card_html,
+    verify_card_html,
+)
 from truealpha_runtime.research_report import (
     ReportSection,
     ReportSectionKind,
@@ -126,7 +133,7 @@ def test_export_or_render_card_routes_etf_and_supply_chain_cards(monkeypatch: py
     assert seen_requests[-1].report_kind is ResearchReportKind.COMPANY
 
 
-def test_entity_detail_computes_geometric_cagr_peg_across_loss_year() -> None:
+def test_entity_detail_reads_materialized_geometric_cagr_peg_node() -> None:
     decision = strategy_service.StrategyDecisionItemDto(
         issuer_id="issuer:cik:0001",
         label="TEST",
@@ -137,16 +144,13 @@ def test_entity_detail_computes_geometric_cagr_peg_across_loss_year() -> None:
         peg_reason_codes=["loss_year_in_growth_window"],
     )
     nodes = [
-        entities_service.TraceNodeValueDto(node_key="last_close", value="100", confidence="0.90"),
-        entities_service.TraceNodeValueDto(node_key="shares_outstanding", value="10", confidence="0.90"),
-        entities_service.TraceNodeValueDto(node_key="net_income", period="2022-12-31", value="100", confidence="0.80"),
-        entities_service.TraceNodeValueDto(node_key="net_income", period="2023-12-31", value="-50", confidence="0.70"),
-        entities_service.TraceNodeValueDto(node_key="net_income", period="2024-12-31", value="120", confidence="0.85"),
-        entities_service.TraceNodeValueDto(node_key="net_income", period="2025-12-31", value="150", confidence="0.90"),
+        entities_service.TraceNodeValueDto(node_key="peg_geometric_cagr", value="0.6842", confidence="0.80"),
+        entities_service.TraceNodeValueDto(node_key="peg_geometric_cagr_rank", value="3", confidence="0.80"),
     ]
     out = entities_service._apply_entity_peg_convention([decision], nodes, "geometric_cagr")
-    assert out[0].peg is not None
-    assert "growth_convention:geometric_cagr" in out[0].peg_reason_codes
+    assert out[0].peg == "0.6842"
+    assert out[0].peg_rank == 3
+    assert out[0].peg_reason_codes == []
 
 
 def test_backtest_trigger_endpoint_requires_admin_and_inserts_into_pipeline_trigger_requests(
@@ -178,7 +182,7 @@ def test_backtest_trigger_endpoint_requires_admin_and_inserts_into_pipeline_trig
     try:
         resp = TestClient(app).post(
             "/api/v1/strategy/backtests/trigger",
-            json={"definition_resource": "large_model_value_v0_definition_1_1_0.json"},
+            json={"definition_resource": "large_model_value_v0_definition_1_1_0.json", "idempotency_key": "bt-key-1"},
         )
         bad_range = TestClient(app).post(
             "/api/v1/strategy/backtests/trigger",
@@ -190,6 +194,49 @@ def test_backtest_trigger_endpoint_requires_admin_and_inserts_into_pipeline_trig
     assert bad_range.status_code == 400
     body = resp.json()
     assert body["request_id"] == 77
+    assert body["dedupe_key"] == "bt-key-1"
     assert body["job_name"] == "nightly_backtest_pipeline"
     assert body["run_key"] == f"manual:{body['dedupe_key']}"
     assert any("staging.pipeline_trigger_requests" in sql for sql, _ in recorded)
+
+
+def test_verify_card_html_accepts_localized_labels_and_rejects_altered_numbers() -> None:
+    cutoff = datetime(2026, 6, 30, 23, 59, 59, tzinfo=UTC)
+    card = ResearchCard(
+        card_kind=CardKind.RANKING,
+        title="Ranking Card",
+        cutoff_at=cutoff,
+        generated_from_report_id="report:test:1",
+        research_risk_note="Research output only.",
+        source_attribution="TrueAlpha Test Source",
+        subjects=(
+            CardSubject(
+                subject_id="AAPL",
+                display_name="AAPL · Apple Inc.",
+                availability=AvailabilityStatus.AVAILABLE,
+                claim_class=ClaimClass.EMPIRICALLY_VALIDATED,
+                metrics=(
+                    ResultValue(
+                        label="p_gp",
+                        value="18.25",
+                        cutoff_at=cutoff,
+                        availability=AvailabilityStatus.AVAILABLE,
+                    ),
+                    ResultValue(
+                        label="tier",
+                        value="tier_1",
+                        cutoff_at=cutoff,
+                        availability=AvailabilityStatus.AVAILABLE,
+                    ),
+                ),
+            ),
+        ),
+    )
+    fallback_html = render_card_html(card)
+    localized_html = fallback_html.replace("p_gp=", "当前市值/毛利 (P/GP)=")
+    ok, violations = verify_card_html(card, localized_html)
+    assert ok, violations
+    tampered_html = localized_html.replace("18.25", "19.99")
+    ok_bad, bad_violations = verify_card_html(card, tampered_html)
+    assert not ok_bad
+    assert "missing_metric_value:AAPL:p_gp:18.25" in bad_violations

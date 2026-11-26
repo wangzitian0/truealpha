@@ -98,6 +98,10 @@ _METRIC_NODE_ONLY_FIELDS = (
     "peg_consensus_rank",
     "peg_consensus_reason_codes",
     "peg_consensus_confidence",
+    "peg_geometric_cagr",
+    "peg_geometric_cagr_rank",
+    "peg_geometric_cagr_reason_codes",
+    "peg_geometric_cagr_confidence",
 )
 
 

@@ -20,7 +20,10 @@ const pill = (active: boolean) =>
 
 export default async function RankingsPage({ searchParams }: { searchParams: Promise<{ cutoff?: string; convention?: string; universe?: string }> }) {
   const params = await searchParams;
-  const convention: PegGrowthConvention = params.convention === "consensus" || params.convention === "guidance" ? params.convention : "historical_cagr";
+  const convention: PegGrowthConvention =
+    params.convention === "consensus" || params.convention === "guidance" || params.convention === "geometric_cagr"
+      ? params.convention
+      : "historical_cagr";
   const strategyUniverses = UNIVERSES.filter(
     (u) => u.roles.includes("strategy") && isHeadScheduledFromContract(u.id_prefix, process.env.ENVIRONMENT),
   ).map((u) => u.key);

@@ -91,7 +91,7 @@ def _is_non_split_price_adjustment(step: Decimal, previous_close: Decimal | None
         fwd = Fraction(step).limit_denominator(MAX_FORWARD_SPLIT_DENOMINATOR)
         if fwd > 1 and abs(Decimal(fwd.numerator) / Decimal(fwd.denominator) / step - 1) <= RATIO_TOLERANCE:
             return False
-        return abs((first_price * step / previous_close).ln()) < abs(step.ln()) / 2
+        return abs((first_price * step / previous_close).ln()) < max(abs(step.ln()) / 2, Decimal("0.06"))
     return False
 
 

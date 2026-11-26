@@ -1,6 +1,7 @@
 import { api } from "@/client/api";
-import { formatCell, formatRatio } from "@/client/format";
+import { formatCell, formatNumberMagnitude, formatRatio, formatUsdMagnitude } from "@/client/format";
 import { valuationBasisLabel } from "@/client/strategy";
+import { CardExportButton } from "@/components/card-export-button";
 import { ResearchTable } from "@/components/research-table";
 import { loadAuthed } from "../../_load";
 import { ReadStateNotice } from "@/components/read-state";
@@ -23,13 +24,20 @@ export default async function HoldingsPage() {
       ) : (
         funds.map((fund) => (
           <div key={fund.fund_id} className="space-y-3">
-            <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
-              <h2 className="text-lg font-semibold">{fund.fund_name}</h2>
-              <span className="text-xs text-gray-400">
-                period {fund.report_period} · filed weight {fund.total_weight_pct}% · resolved {fund.resolved_weight_pct}% · valued {fund.valued_weight_pct}%
-                {fund.weighted_gap ? ` · weighted gap (${valuationBasisLabel(fund.weighted_gap_basis)}) ${fund.weighted_gap}` : ""}
-                {fund.availability_status ? ` · ${fund.availability_status}/${fund.source_evidence_status}/${fund.factor_validation_status}` : ""}
-              </span>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
+                <h2 className="text-lg font-semibold">{fund.fund_name}</h2>
+                <span className="text-xs text-gray-400">
+                  period {fund.report_period} · filed weight {fund.total_weight_pct}% · resolved {fund.resolved_weight_pct}% · valued {fund.valued_weight_pct}%
+                  {fund.weighted_gap ? ` · weighted gap (${valuationBasisLabel(fund.weighted_gap_basis)}) ${fund.weighted_gap}` : ""}
+                  {fund.virtual_revenue ? ` · virtual rev ${formatUsdMagnitude(fund.virtual_revenue)}` : ""}
+                  {fund.virtual_gross_profit ? ` · virtual GP ${formatUsdMagnitude(fund.virtual_gross_profit)}` : ""}
+                  {fund.virtual_employees ? ` · virtual emp ${formatNumberMagnitude(fund.virtual_employees)}` : ""}
+                  {fund.virtual_gppe ? ` · virtual GPPE ${formatUsdMagnitude(fund.virtual_gppe)}` : ""}
+                  {fund.availability_status ? ` · ${fund.availability_status}/${fund.source_evidence_status}/${fund.factor_validation_status}` : ""}
+                </span>
+              </div>
+              <CardExportButton kind="etf" issuerId={fund.fund_id} />
             </div>
             <ResearchTable caption={`Holdings for ${fund.fund_name}`} headers={["Holding", "Ticker", "Weight", "P/S", "P/GP", "Target mid", "Gap", "GPPE tier"]}>
               {(fund.lines ?? []).map((line, index) => {
