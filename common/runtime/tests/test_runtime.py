@@ -189,10 +189,13 @@ def test_s3_client_construction_uses_infra2_sdk_and_forces_path_style_addressing
 
 
 def test_run_python_probe_scrubs_runtime_env_contract_keys(monkeypatch):
-    from infra2_sdk.config import shared_env_contract
+    from importlib.resources import files
+
+    import yaml
     from truealpha_runtime.testing import run_python_probe
 
-    contract_keys = sorted({item["name"] for group in shared_env_contract()["groups"].values() for item in group})
+    contract = yaml.safe_load(files("infra2_sdk").joinpath("data/shared_env.yaml").read_text(encoding="utf-8")) or {}
+    contract_keys = sorted({item["name"] for group in contract["groups"].values() for item in group})
     for key in contract_keys:
         monkeypatch.setenv(key, f"ambient-{key}")
     monkeypatch.setenv("OTEL_CUSTOM_AMBIENT", "ambient-otel")

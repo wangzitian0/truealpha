@@ -18,7 +18,7 @@ and `apps/llm-service/required-env.generated.json` on every CI run via
 
 It lists each check once, with its `needs`, `writes`, `accepts_scale` and `timeout_seconds`. The SDK
 maps each check to the cells of the stage grid (`infra2_sdk.delivery.CELL_POLICIES`) and runs a cell with
-`run_cell`; the cell budget comes from `CELL_POLICIES[cell].budget_seconds`. Run
+`python -m infra2_sdk.delivery run-cell`; the cell budget comes from `CELL_POLICIES[cell].budget_seconds`. Run
 `python -m infra2_sdk.delivery check-hooks runtime-hooks.manifest.json` to print the check-to-cell result.
 A check leaves a default cell through `cells.remove` with a reason and an issue.
 The hook environment carries `APP_URL`, `APP_VERSION_REF` and `ENVIRONMENT`.

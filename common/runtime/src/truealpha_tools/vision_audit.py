@@ -13,15 +13,12 @@ from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
-import infra2_sdk.delivery as _sdk_delivery
 from data_engine.environment_universes import scheduled_universe_names
-from infra2_sdk.delivery import default_http_get
 from truealpha_contracts.environment_contract import load_environment_contract
 from truealpha_contracts.goal_criteria import load_goal_criteria
 
 from truealpha_tools.nightly_verdicts import EXPECTATIONS_PATH, HealthReport, parse_expectations, read_report
 
-_SDK_DEFAULT_HTTP_GET = _sdk_delivery.default_http_get
 _AUDIT_USER_AGENT = "truealpha-ops-audit/1.0"
 
 
@@ -43,12 +40,6 @@ def _health_url_for(env: str, *, base_url: str | None = None, domain: str | None
 
 
 def _http_get(url: str) -> tuple[int, str]:
-    if _sdk_delivery.default_http_get is not _SDK_DEFAULT_HTTP_GET:
-        status, body = _sdk_delivery.default_http_get(url, 15.0)
-        return status, body.decode("utf-8", errors="replace")
-    if default_http_get is not _SDK_DEFAULT_HTTP_GET:
-        status, body = default_http_get(url, 15.0)
-        return status, body.decode("utf-8", errors="replace")
     req = urllib.request.Request(url, method="GET", headers={"User-Agent": _AUDIT_USER_AGENT})
     try:
         with urllib.request.urlopen(req, timeout=15.0) as resp:  # noqa: S310

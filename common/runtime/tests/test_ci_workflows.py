@@ -105,51 +105,56 @@ def test_runtime_hooks_manifest_is_schema_3_and_maps_each_check_to_its_cells() -
 
 
 def test_runtime_hooks_cells_run_their_checks_and_report_a_failed_check(tmp_path: Path) -> None:
-    from infra2_sdk.delivery import CELL_POLICIES, run_cell
+    from infra2_sdk.delivery import CELL_POLICIES
 
-    hooks = _load_hooks()
+    manifest = {
+        "schema_version": 3,
+        "service": "truealpha/app",
+        "checks": [
+            {
+                "id": "health",
+                "needs": ["running_service"],
+                "argv": [sys.executable, "-c", "import sys; print('boom: first line', file=sys.stderr); sys.exit(1)"],
+                "timeout_seconds": 30,
+            },
+            {
+                "id": "walk_tree",
+                "needs": ["running_service"],
+                "argv": [sys.executable, "-c", "import sys; sys.exit(0)"],
+                "timeout_seconds": 30,
+            },
+        ],
+    }
+    manifest_path = tmp_path / "runtime-hooks.manifest.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     env = {
+        **os.environ,
         "APP_URL": "https://fake.invalid",
         "APP_VERSION_REF": "v0.0.1",
         "ENVIRONMENT": "staging",
-        **{key: "x" for row in hooks.checks for key in row.required_env},
     }
-    for cell in EXPECTED_CELL_CHECKS:
-        cwd = tmp_path / f"pass_{cell}"
-        cwd.mkdir()
-        result = run_cell(
-            hooks,
-            cell,
-            environ=env,
-            cwd=cwd,
-            runner=lambda argv, **_kw: subprocess.CompletedProcess(argv, 0, "", ""),
-        )
-        assert result.passed is True
-        assert [v.id for v in result.verdicts] == EXPECTED_CELL_CHECKS[cell]
-        assert all(isinstance(v.duration_seconds, (int, float)) and v.duration_seconds >= 0 for v in result.verdicts)
-
-    ran: list[str] = []
-
-    def fake(argv, **_kw):  # type: ignore[no-untyped-def]
-        ran.append(argv[-1])
-        if "health_poll" in argv[-1]:
-            return subprocess.CompletedProcess(argv, 1, "", "boom: first line\nsecond line")
-        return subprocess.CompletedProcess(argv, 0, "", "")
-
-    cwd = tmp_path / "staging_post"
-    cwd.mkdir()
-    result = run_cell(
-        hooks,
-        "staging.post",
-        environ=env,
-        cwd=cwd,
-        runner=fake,
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "infra2_sdk.delivery",
+            "run-cell",
+            str(manifest_path),
+            "--cell",
+            "staging.post",
+        ],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
     )
-    assert result.passed is False
+    assert proc.returncode == 1
+    payload = json.loads(proc.stdout)
+    assert payload["passed"] is False
     assert CELL_POLICIES["staging.post"].stop_on_fail is False
-    assert [(v.id, v.passed) for v in result.verdicts] == [("health", False), ("walk_tree", True)]
-    assert any("walk-tree" in command for command in ran)
-    assert "boom: first line" in result.verdicts[0].stderr
+    assert [(v["id"], v["passed"]) for v in payload["verdicts"]] == [("health", False), ("walk_tree", True)]
+    assert "boom: first line" in payload["verdicts"][0]["stderr"]
 
 
 def test_runtime_hooks_manifest_refuses_schema_2_and_shell_chains() -> None:
