@@ -61,8 +61,7 @@
 #     rollout fails loudly instead of the boot hanging or silently skipping a file.
 #
 # The defaults keep a contended boot inside the llm healthcheck window (infra2
-# 10.app/compose.yaml: start_period 30 s, then 3 probes 10 s apart, so roughly 60 s from
-# start to `unhealthy`). A clean replay takes ~15 s on production; the lock budget adds at
+# 10.app/compose.yaml: start_period 120 s (#1513), then 3 probes 10 s apart). A clean replay takes ~15 s on production; the lock budget adds at
 # most 25 s of waiting plus the attempt that exhausts it (one lock_timeout), so the runner
 # gives up by ~45 s. A statement that legitimately needs longer than statement_timeout
 # does not belong in a boot migration (#914 moved the entity backfill to a Dagster job
