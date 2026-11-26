@@ -25,7 +25,7 @@ from llm_service.services._db import with_ops_reader
 logger = logging.getLogger(__name__)
 
 ENV_MANIFEST_PATH = Path("apps/llm-service/required-env.generated.json")
-ROUTED_PREFIX = settings.routed_prefix.rstrip("/")
+ROUTED_PREFIX = "/api"
 TRUSTED_PROXIES = ("127.0.0.1", "::1")
 NIGHTLY_VERDICTS_SQL = (
     "select distinct on (check_name) check_name, ran_at, ok, summary "

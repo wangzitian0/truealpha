@@ -15,7 +15,11 @@ begin
     end if;
 
     if to_regclass('ops.pipeline_trigger_requests') is null and to_regclass('staging.pipeline_trigger_requests') is not null then
-        execute 'create view ops.pipeline_trigger_requests as select * from staging.pipeline_trigger_requests';
+        execute $view$
+            create view ops.pipeline_trigger_requests as
+            select request_id, job_name, executed_at, requested_by, dedupe_key, requested_at, consumed_at, launched_run_key, config_json
+            from staging.pipeline_trigger_requests
+        $view$;
     end if;
 
     if to_regclass('ops.head_rollback_requests') is null and to_regclass('staging.head_rollback_requests') is not null then

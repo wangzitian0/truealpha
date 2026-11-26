@@ -19,8 +19,13 @@ def rule_environment(environment: str | None = None) -> str:
 
 def live_vendor_calls_enabled(environment: str | None = None) -> bool:
     contract = load_environment_contract()
-    spec = contract.environments.get(rule_environment(environment))
-    return bool(spec and spec.live_vendor_calls)
+    raw = settings.environment if environment is None else environment
+    normalized = contract.normalize_environment(raw)
+    if normalized in contract.environments:
+        return bool(contract.environments[normalized].live_vendor_calls)
+    if (raw or "").strip().lower() in {"dev", "ci", "local_dev"}:
+        return bool(contract.environments[UNRECOGNISED_ENVIRONMENT_RULE].live_vendor_calls)
+    return False
 
 
 def contract_schedule_status(environment: str | None = None) -> dg.DefaultScheduleStatus:
