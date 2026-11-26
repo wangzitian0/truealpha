@@ -827,11 +827,12 @@ class PostgresCoreRepository:
         xbrl_confs = [
             cell.confidence
             for key, cell in cells.items()
-            if key != "headcount"
+            if key not in ("headcount", SHARES_KEY)
             and not (financial.operating_branch is OperatingBranch.FINANCIAL and key == "revenue")
             and (deciding_keys is None or key in deciding_keys)
         ]
-        cell_confs = (xbrl_confs or [cell.confidence for cell in cells.values()]) + (
+        non_share_cells = [cell.confidence for key, cell in cells.items() if key != SHARES_KEY]
+        cell_confs = (xbrl_confs or non_share_cells) + (
             [financial_row.confidence] if financial_row.confidence is not None else []
         )
         financial_cell_confidence = min(cell_confs, default=Decimal("0"))
@@ -899,7 +900,14 @@ class PostgresCoreRepository:
                 name="shares_outstanding",
                 value=shares_value,
                 cell=shares_cell,
-                confidence=financial_cell_confidence,
+                confidence=(
+                    shares_cell.confidence
+                    if shares_cell is not None
+                    else (
+                        _override_confidence(listing_confidences, SHARES_KEY, financial_cell_confidence)
+                        or financial_cell_confidence
+                    )
+                ),
                 knowable_at=shares_knowable_at,
                 unavailable_reason=shares_reason,
             ),

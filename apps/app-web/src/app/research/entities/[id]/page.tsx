@@ -62,6 +62,37 @@ export default async function EntityDetailPage({
       {error && <ReadStateNotice state={{ kind: "error", message: error }} />}
       {detail && (
         <>
+          {detail.basic_info && (
+            <div className="rounded-xl border border-border bg-card p-4" data-testid="entity-basic-info">
+              <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-400">Stock Basic Profile &amp; Confidence</div>
+              <div className="grid gap-3 text-xs md:grid-cols-4">
+                <div>
+                  <div className="text-gray-400">Ticker / Exchange</div>
+                  <div className="font-mono text-white">
+                    {formatCell(detail.basic_info.primary_ticker)} · {formatCell(detail.basic_info.primary_exchange)}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-gray-400">CIK / SIC Sector</div>
+                  <div className="font-mono text-white">
+                    {formatCell(detail.basic_info.cik)} · {formatCell(detail.basic_info.sector_gics_or_sic)}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-gray-400">Market Cap (Conf)</div>
+                  <div className="font-mono text-white">
+                    {formatCell(formatUsdMagnitude(detail.basic_info.market_cap))} ({formatCell(formatRatio(detail.basic_info.market_cap_confidence))})
+                  </div>
+                </div>
+                <div>
+                  <div className="text-gray-400">Close · Shares · FYE</div>
+                  <div className="font-mono text-white">
+                    {formatCell(formatRatio(detail.basic_info.close_price))} · {formatCell(detail.basic_info.shares_outstanding)} · {formatCell(detail.basic_info.fiscal_year_end)}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
           <div className="grid gap-3 md:grid-cols-4">
             <StatBox label="Labor efficiency" value={formatCell(formatUsdMagnitude(latest?.capital_adjusted_labor_efficiency))} />
             <StatBox label={`Current ${basisLabel}`} value={formatCell(formatRatio(latest?.current_multiple))} />

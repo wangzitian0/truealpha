@@ -313,6 +313,23 @@ __setApiFetch(async (input) => {
       JSON.stringify({
         issuer_id: ISSUER_ID,
         label: "AAPL · APPLE",
+        basic_info: {
+          canonical_name: "Apple Inc.",
+          primary_ticker: "AAPL",
+          primary_exchange: "XNAS",
+          cik: "0000320193",
+          sic: "3571",
+          sic_description: "Electronic Computers",
+          sector_gics_or_sic: "Electronic Computers",
+          fiscal_year_end: "0930",
+          state_of_incorporation: "CA",
+          entity_type: "operating",
+          market_cap: "3000000000000",
+          market_cap_confidence: "0.92",
+          shares_outstanding: "15000000000",
+          close_price: "200",
+          as_of_cutoff: "2026-11-24",
+        },
         decisions: [
           {
             issuer_id: ISSUER_ID,
@@ -446,6 +463,7 @@ try {
     await EntityDetailPage({ params: Promise.resolve({ id: ISSUER_ID }), searchParams: Promise.resolve({}) }),
   );
   assertCleanHtml(entityHtml, "EntityDetailPage");
+  assert(entityHtml.includes('data-testid="entity-basic-info"') && entityHtml.includes("Electronic Computers") && entityHtml.includes("0.92"), "EntityDetailPage renders Stock Basic Profile");
   assert(entityHtml.includes('data-testid="entity-themes-section"') && entityHtml.includes("AI Infrastructure"), "EntityDetailPage renders themes");
   assert(entityHtml.includes("insufficient_earnings_history"), "EntityDetailPage renders peg_reason_codes");
 

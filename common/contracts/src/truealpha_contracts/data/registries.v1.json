@@ -684,6 +684,9 @@
         "class": "transient",
         "disposition": "trace_only"
       },
+      "elimination_allocated_pro_rata": {
+        "kind": "evidence"
+      },
       "elimination_not_allocated": {
         "kind": "outcome",
         "class": "world_absence"

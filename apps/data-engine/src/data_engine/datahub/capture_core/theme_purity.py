@@ -13,8 +13,9 @@ from factors.shared.extraction import GROSS_PARTITION_RULES, RULE_MODEL_NO_ANSWE
 from psycopg import Connection
 from truealpha_contracts.execution import AvailabilityStatus, FactorValidationStatus, InputEvidenceStatus
 
-from data_engine.contracts.standards import STANDARDS, confidence_for
+from data_engine.contracts.standards import STANDARDS
 from data_engine.contracts.theme_purity import THEMES, ThemeDefinition
+from data_engine.datahub._helpers import calibrated_confidence_for
 from data_engine.datahub.canonical_issuer import expand_issuer_alias_ids, is_canonical_issuer_id
 from data_engine.datahub.capture_core.status_dimensions import coverage_status_dimensions
 from data_engine.datahub.primary_listing import choose_primary_listings
@@ -255,7 +256,12 @@ def compute_for_theme(
     ]
     confidence = min(
         partition.extraction_confidence,
-        confidence_for("segment-revenue-confidence:v1", classification.extractor),
+        calibrated_confidence_for(
+            "segment-revenue-confidence:v1",
+            classification.extractor,
+            case_id=f"theme:{definition.theme}:{partition.issuer_id}:{partition.accession}",
+            evidence_id=f"accession:{partition.accession}",
+        ),
     )
     purity = theme_purity(
         segments,

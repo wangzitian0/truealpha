@@ -15,7 +15,8 @@ from factors.shared import extraction as extraction_primitive
 from truealpha_contracts.models import DataSource
 from truealpha_contracts.ports import RawObjectStore
 
-from data_engine.contracts.standards import MetricStandard, confidence_for
+from data_engine.contracts.standards import MetricStandard
+from data_engine.datahub._helpers import calibrated_confidence_for
 from data_engine.datahub.capture_core.headcount import record_headcount
 from data_engine.datahub.capture_core.issuer_registry import ANNUAL_STATEMENT_FORMS, STATEMENT_FORMS
 from data_engine.datahub.capture_core.source_registrations import AsOfAxis, knowable_instant
@@ -571,7 +572,12 @@ def extract_headcount(
         period_end=outcome.as_of,
         source=EXTRACTION_SOURCE,
         evidence_ref=evidence_ref,
-        confidence=confidence_for(standard.confidence_policy_id, extractor),
+        confidence=calibrated_confidence_for(
+            standard.confidence_policy_id,
+            extractor,
+            case_id=f"headcount:{record_cik}:{document.accession}",
+            evidence_id=f"accession:{document.accession}",
+        ),
     )
     return replace(outcome, cik=record_cik, raw_fetch_id=raw_id, fact_id=fact_id)
 

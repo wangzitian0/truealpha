@@ -88,6 +88,32 @@ def single_origin_confidence(
     ).confidence
 
 
+def calibrated_confidence_for(
+    policy_id: str,
+    extractor: str,
+    *,
+    case_id: str,
+    evidence_id: str,
+    provider_id: str = "origin:sec-10k:v1",
+    lineage: str = "sec-10k",
+    freshness: Decimal = Decimal("1"),
+    policy: ContinuousConfidencePolicy = DEFAULT_CONFIDENCE_POLICY,
+) -> Decimal:
+    """Route a discrete extractor policy weight through continuous single-origin cell calibration."""
+    from data_engine.contracts.standards import confidence_for
+
+    weight = confidence_for(policy_id, extractor)
+    return single_origin_confidence(
+        case_id=case_id,
+        provider_id=provider_id,
+        lineage=lineage,
+        evidence_id=evidence_id,
+        freshness=freshness,
+        semantic_mapping_quality=weight,
+        policy=policy,
+    )
+
+
 @contextlib.contextmanager
 def optional_savepoint(connection: Any) -> Iterator[None]:
     tx_fn = getattr(connection, "transaction", None)

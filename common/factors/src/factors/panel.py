@@ -82,6 +82,11 @@ EXPR_GPPE_BANKING_TCE_V1: pl.Expr = _emp_ratio("capital_adjusted_tce")
 EXPR_GPPE_OPERATING_FINANCIAL_V1: pl.Expr = _emp_ratio("capital_adjusted_operating_financial")
 EXPR_PRICE_TO_SALES: pl.Expr = _mkt_ratio("revenue")
 EXPR_PRICE_TO_GROSS_PROFIT: pl.Expr = _mkt_ratio("gross_profit")
+EXPR_MARKET_CAP: pl.Expr = (
+    pl.when((pl.col("price") > 0) & (pl.col("shares_outstanding") > 0))
+    .then(pl.col("price") * pl.col("shares_outstanding"))
+    .otherwise(None)
+)
 
 _NI_Y3, _NI_Y2, _NI_Y1, _NI_Y0 = (
     pl.col("net_income") if shift == 0 else pl.col("net_income").shift(shift).over("issuer_id") for shift in range(4)
@@ -206,6 +211,19 @@ CANONICAL_METRICS: tuple[PanelMetricSpec, ...] = (
         expr_by_class=_CAOF_MAP,
     ),
     _s("gppe_operating_financial_v1", _PER, _FLOW, _EVERY_CLASS, _SIGNAL, expr=EXPR_GPPE_OPERATING_FINANCIAL_V1),
+    _s("revenue", _CCY, _FLOW, _EVERY_CLASS, _MAY_NEG),
+    _s("net_income", _CCY, _FLOW, _EVERY_CLASS, _MAY_NEG),
+    _s(
+        "price",
+        _CCY,
+        PeriodSemantics.CUTOFF_INSTANT,
+        _EVERY_CLASS,
+        _NON_NEG,
+        input_key="close",
+        snapshot_field="market_price",
+    ),
+    _s("shares_outstanding", _CNT, PeriodSemantics.CUTOFF_INSTANT, _EVERY_CLASS, _NON_NEG),
+    _s("market_cap", _CCY, PeriodSemantics.CUTOFF_INSTANT, _EVERY_CLASS, _NON_NEG, expr=EXPR_MARKET_CAP),
 )
 PANEL_METRICS: Mapping[str, PanelMetricSpec] = {spec.key: spec for spec in CANONICAL_METRICS}
 

@@ -494,7 +494,8 @@ def test_entity_detail_resolves_candidates_once_and_avoids_duplicate_strategy_pa
     assert page_calls == 0
     assert mart_conn_calls == 1
     assert identity_resolve_calls == 1
-    assert len(executed_sqls) == 6
+    assert len(executed_sqls) == 7
+    assert any("from mart.issuer_basic_info" in sql for sql in executed_sqls)
     assert all("= any(%s::text[])" in sql for sql in executed_sqls)
     assert not any("in (select ei." in sql for sql in executed_sqls)
     assert not any("mart.entity_identity" in sql for sql in executed_sqls)

@@ -148,8 +148,11 @@ TCE_SNAPSHOT_FIELDS = (
     "goodwill",
     "intangible_assets_net_excluding_goodwill",
 )
+_EXPLICIT_NON_OPTIONAL_FIELDS = frozenset({"shares_outstanding", "market_price", "net_income"})
 OPTIONAL_SNAPSHOT_FIELDS: tuple[str, ...] = tuple(
-    field for field in snapshot_field_specs() if field not in _BASE_SNAPSHOT_FIELDS
+    field
+    for field in snapshot_field_specs()
+    if field not in _BASE_SNAPSHOT_FIELDS and field not in _EXPLICIT_NON_OPTIONAL_FIELDS
 )
 
 

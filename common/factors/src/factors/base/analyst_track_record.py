@@ -67,7 +67,7 @@ def analyst_track_record(
     count = len(valid)
     mean_rating = sum((Decimal(r.rating) for r in valid), _ZERO) / Decimal(count)
     confidences = [r.confidence for r in valid if r.confidence > _ZERO]
-    avg_confidence = (sum(confidences, _ZERO) / Decimal(len(confidences))) if confidences else Decimal("0.8")
+    composite_confidence = min(confidences, default=_ZERO)
     return AnalystTrackRecord(
         entity_id=entity_id,
         result=FactorResult(
@@ -75,7 +75,7 @@ def analyst_track_record(
             entity_id=entity_id,
             value=mean_rating,
             unit_family=UnitFamily.RATIO,
-            confidence=avg_confidence,
+            confidence=composite_confidence,
             as_of=as_of,
             data_availability="unverified",
             flags=[],

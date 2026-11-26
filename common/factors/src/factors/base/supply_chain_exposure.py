@@ -83,7 +83,7 @@ def supply_chain_exposure(
         *([CUSTOMER_ONLY_GRAPH] if not suppliers else []),
     ]
     confidences = [p.confidence for p in partners if p.confidence > _ZERO]
-    avg_confidence = (sum(confidences, start=_ZERO) / Decimal(len(confidences))) if confidences else Decimal("0.8")
+    composite_confidence = min(confidences, default=_ZERO)
     return SupplyChainExposure(
         entity_id=entity_id,
         result=FactorResult(
@@ -91,7 +91,7 @@ def supply_chain_exposure(
             entity_id=entity_id,
             value=exposure,
             unit_family=UnitFamily.RATIO,
-            confidence=avg_confidence,
+            confidence=composite_confidence,
             as_of=as_of,
             data_availability="unverified",
             flags=flags,

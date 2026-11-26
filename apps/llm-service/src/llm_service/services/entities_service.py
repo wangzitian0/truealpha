@@ -211,9 +211,28 @@ class FundValuationsResponse(BaseModel):
     funds: list[FundValuationDto] = Field(default_factory=list)
 
 
+class IssuerBasicInfoDto(BaseModel):
+    canonical_name: str | None = None
+    primary_ticker: str | None = None
+    primary_exchange: str | None = None
+    cik: str | None = None
+    sic: str | None = None
+    sic_description: str | None = None
+    sector_gics_or_sic: str | None = None
+    fiscal_year_end: str | None = None
+    state_of_incorporation: str | None = None
+    entity_type: str | None = None
+    market_cap: str | None = None
+    market_cap_confidence: str | None = None
+    shares_outstanding: str | None = None
+    close_price: str | None = None
+    as_of_cutoff: str | None = None
+
+
 class EntityDetailResponse(BaseModel):
     issuer_id: str
     label: str
+    basic_info: IssuerBasicInfoDto | None = None
     decisions: list[StrategyDecisionItemDto] = Field(default_factory=list)
     node_values: list[TraceNodeValueDto] = Field(default_factory=list)
     themes: list[dict[str, Any]] = Field(default_factory=list)
@@ -523,6 +542,75 @@ def get_trace(
     )
 
 
+def _fetch_issuer_basic_info_from_cursor(cur: Any, candidates: list[str]) -> IssuerBasicInfoDto | None:
+    tx = getattr(getattr(cur, "connection", None), "transaction", None)
+    try:
+        if callable(tx):
+            with tx():
+                cur.execute("select to_regclass('mart.issuer_basic_info') as reg")
+                reg_row = cur.fetchone()
+                if reg_row is not None and reg_row.get("reg") is None:
+                    return None
+                cur.execute(
+                    """
+                    select canonical_name, primary_ticker, primary_exchange, cik, sic,
+                           sic_description, sector_gics_or_sic, fiscal_year_end,
+                           state_of_incorporation, entity_type,
+                           market_cap::text as market_cap,
+                           market_cap_confidence::text as market_cap_confidence,
+                           shares_outstanding::text as shares_outstanding,
+                           close_price::text as close_price,
+                           as_of_cutoff
+                    from mart.issuer_basic_info
+                    where issuer_id = any(%s::text[])
+                    order by (market_cap is not null) desc
+                    limit 1
+                    """,
+                    (candidates,),
+                )
+                row = cur.fetchone()
+        else:
+            cur.execute(
+                """
+                select canonical_name, primary_ticker, primary_exchange, cik, sic,
+                       sic_description, sector_gics_or_sic, fiscal_year_end,
+                       state_of_incorporation, entity_type,
+                       market_cap::text as market_cap,
+                       market_cap_confidence::text as market_cap_confidence,
+                       shares_outstanding::text as shares_outstanding,
+                       close_price::text as close_price,
+                       as_of_cutoff
+                from mart.issuer_basic_info
+                where issuer_id = any(%s::text[])
+                order by (market_cap is not null) desc
+                limit 1
+                """,
+                (candidates,),
+            )
+            row = cur.fetchone()
+    except Exception:  # noqa: BLE001
+        return None
+    if not row or not isinstance(row, dict):
+        return None
+    return IssuerBasicInfoDto(
+        canonical_name=row.get("canonical_name"),
+        primary_ticker=row.get("primary_ticker"),
+        primary_exchange=row.get("primary_exchange"),
+        cik=row.get("cik"),
+        sic=row.get("sic"),
+        sic_description=row.get("sic_description"),
+        sector_gics_or_sic=row.get("sector_gics_or_sic"),
+        fiscal_year_end=row.get("fiscal_year_end"),
+        state_of_incorporation=row.get("state_of_incorporation"),
+        entity_type=row.get("entity_type"),
+        market_cap=row.get("market_cap"),
+        market_cap_confidence=row.get("market_cap_confidence"),
+        shares_outstanding=row.get("shares_outstanding"),
+        close_price=row.get("close_price"),
+        as_of_cutoff=row.get("as_of_cutoff"),
+    )
+
+
 def get_entity_detail(
     context: AccessContext,
     *,
@@ -534,6 +622,7 @@ def get_entity_detail(
     def _q(cur: Any) -> EntityDetailResponse:
         cand, legacy_by_entity = resolve_issuer_identity_from_cursor(cur, issuer_id)
         display_map = _fetch_issuer_display_map_from_cursor(cur, issuer_id, cand, legacy_by_entity)
+        basic_info = _fetch_issuer_basic_info_from_cursor(cur, cand)
         decision_row = _fetch_company_decision_from_cursor(cur, cand, legacy_by_entity)
         decisions = [_decision_row_to_dto(decision_row, display_map=display_map)] if decision_row else []
         node_values = _fetch_trace_nodes_from_cursor(cur, cand)
@@ -545,6 +634,7 @@ def get_entity_detail(
         return EntityDetailResponse(
             issuer_id=issuer_id,
             label=_display_label(issuer_id, display_map),
+            basic_info=basic_info,
             decisions=decisions,
             node_values=node_values,
             themes=themes,
