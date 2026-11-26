@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import dataclasses
-import math
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
@@ -13,6 +12,7 @@ from typing import Any, Protocol
 import psycopg
 from factors.panel import GPPE_BANKING_TCE_SPEC, GPPE_V0_SPEC
 from factors.snapshot_inputs import CoreSnapshotInput
+from truealpha_contracts.confidence import wilson_95_upper_bound
 from truealpha_contracts.metrics import INPUT_KEY_ALIASES, METRICS
 from truealpha_contracts.models import DataSource
 
@@ -506,19 +506,6 @@ def record_oracle_outcomes_safely(
     except Exception as error:
         log.warning(f"oracle outcomes of {run_id} were not written: {type(error).__name__}: {error}")
         return None
-
-
-_WILSON_Z_95 = 1.959963984540054
-
-
-def wilson_95_upper_bound(disagrees: int, compared: int) -> float | None:
-    if compared <= 0:
-        return None
-    z2 = _WILSON_Z_95 * _WILSON_Z_95
-    prob = disagrees / compared
-    centre = prob + z2 / (2.0 * compared)
-    half_width = _WILSON_Z_95 * math.sqrt((prob * (1.0 - prob) + z2 / (4.0 * compared)) / compared)
-    return min(1.0, round((centre + half_width) / (1.0 + z2 / compared), 6))
 
 
 def _iso_utc(value: Any) -> str | None:

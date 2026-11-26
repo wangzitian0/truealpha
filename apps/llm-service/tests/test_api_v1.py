@@ -724,3 +724,72 @@ def test_app_ops_reader_can_query_strategy_and_backtest_tables() -> None:
                 assert conn.execute("select count(*) from mart.strategy_runs").fetchone() == (0,)
                 assert conn.execute("select count(*) from mart.strategy_decisions").fetchone() == (0,)
                 assert conn.execute("select count(*) from mart.backtest_runs").fetchone() == (0,)
+
+
+def test_admin_service_capacity_buckets_confidence_summary_and_wilson() -> None:
+    """Verify rolling window capacity matching, confidence payload stripping with tier_counts, and Wilson single source."""
+    from truealpha_contracts.environment_contract import load_environment_contract
+
+    contract = load_environment_contract()
+    _, cap = admin_service._build_vendor_capacity(
+        contract,
+        "staging",
+        [
+            {
+                "source": "moomoo",
+                "calls_1s": 0,
+                "calls_30s": 0,
+                "calls_60s": 0,
+                "calls_24h": 3048,
+                "calls_7d": 15654,
+                "rate_limited_24h": 0,
+            },
+            {
+                "source": "twelvedata",
+                "calls_1s": 0,
+                "calls_30s": 0,
+                "calls_60s": 1,
+                "calls_24h": 329,
+                "calls_7d": 1200,
+                "rate_limited_24h": 0,
+            },
+        ],
+    )
+    by_key = {(r["account"], r["limit_id"]): r for r in cap}
+    moo_burst = by_key[("moomoo_opend", "burst")]
+    assert moo_burst["observed_calls"] == 0 and moo_burst["utilization_pct"] == 0.0
+    td_min = by_key[("twelvedata", "per_minute")]
+    assert td_min["observed_calls"] == 1 and td_min["utilization_pct"] == pytest.approx(33.33, abs=0.01)
+    td_day = by_key[("twelvedata", "per_day")]
+    assert td_day["observed_calls"] == 329 and td_day["utilization_pct"] == pytest.approx(102.81, abs=0.01)
+
+    row = admin_service._summarize_confidence_row(
+        {
+            "universe_id": "universe:qqq-us-2026-09-30",
+            "payload": {
+                "subjects": 102,
+                "sources_connected": ["sec", "moomoo"],
+                "families": {"close": {"cells": 3}},
+                "cells": {
+                    "close": {
+                        "a": {"tier": "High", "confidence": "0.95"},
+                        "b": {"tier": "", "confidence": "0.60"},
+                        "c": {"tier": "Low", "confidence": "0.20"},
+                    }
+                },
+                "sample": {"close": [{"subject": "a"}]},
+            },
+        }
+    )
+    assert "cells" not in row["payload"] and "sample" not in row["payload"]
+    assert row["payload"]["tier_counts"] == {"close": {"high": 1, "medium": 1, "low": 1}}
+    assert row["summary"]["sources_count"] == 2 and row["summary"]["families_count"] == 1
+
+    bounds = admin_service._attach_wilson_upper_bounds(
+        [
+            {"universe_id": "u1", "field": "revenue", "compared": 80, "disagree": 0},
+            {"universe_id": "u1", "field": "empty", "compared": 0, "disagree": 0},
+        ]
+    )
+    assert bounds[0]["wilson_95_upper_bound"] == "0.045818"
+    assert bounds[1]["wilson_95_upper_bound"] is None

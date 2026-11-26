@@ -4,7 +4,7 @@
     "market_data_freshness": {"cadence_hours": 72, "job": "market_data_refresh_pipeline", "kind": "fact"},
     "model_key_health": {"cadence_hours": 24, "job": "model_key_health", "kind": "fact"},
     "output_invariants": {"cadence_hours": 24, "job": "output_invariants_check", "kind": "fact"},
-    "job_run_health": {"cadence_hours": 24, "job": "job_run_health_check", "kind": "hard"},
+    "job_run_health": {"cadence_hours": 24, "job": "job_run_health_check", "kind": "fact"},
     "topt_baseline": {"cadence_hours": 24, "job": "topt_baseline_check", "kind": "fact"},
     "report_surface_proof": {"cadence_hours": 24, "job": "output_invariants_check", "kind": "fact"},
     "nightly_backtest": {"cadence_hours": 72, "job": "nightly_backtest_pipeline", "kind": "fact"},

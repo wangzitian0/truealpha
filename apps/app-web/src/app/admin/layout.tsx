@@ -20,8 +20,16 @@ export default async function AdminLayout({ children }: { children: React.ReactN
   return (
     <div className="space-y-6">
       <div className="-mx-4 border-t-[3px] border-amber-400" aria-hidden="true" />
-      <div className="flex items-center gap-2" data-operate-chrome="true">
+      <div className="flex flex-wrap items-center gap-3" data-operate-chrome="true">
         <span className="text-xs font-semibold uppercase tracking-wider text-amber-400">Operate</span>
+        <nav aria-label="Operate navigation" className="flex items-center gap-2 text-xs">
+          <Link href="/admin" className="rounded-md border border-border bg-card px-2.5 py-1 text-gray-200 hover:border-amber-400 hover:text-white">
+            Operations
+          </Link>
+          <Link href="/admin/datahub" className="rounded-md border border-border bg-card px-2.5 py-1 text-gray-200 hover:border-amber-400 hover:text-white">
+            DataHub
+          </Link>
+        </nav>
         <span className="text-xs text-gray-500">— administrator world, separately server-gated from research</span>
         <Link href="/research" data-world-switch="research" className="ml-auto rounded-lg border border-border px-3 py-1 text-xs text-gray-300 hover:border-accent hover:text-white">
           ← Research

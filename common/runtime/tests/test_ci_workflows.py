@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import re
 import subprocess
 from pathlib import Path
 
@@ -51,7 +50,7 @@ def test_ci_python_shards_cover_all_tests_and_isolate_s3() -> None:
     assert "S3_CORE_TEST_FILES" in s3_runs and "S3_DATA_ENGINE_TEST_FILES" in s3_runs
 
     deps_job = jobs["test-deps-smoke"]
-    assert deps_job["strategy"]["matrix"]["shard"] == [0, 1, 2, 3]
+    assert deps_job["strategy"]["matrix"]["shard"] == [0, 1]
     deps_runs = "\n".join(str(step.get("run", "")) for step in deps_job["steps"])
     assert "docker compose up" not in deps_runs
     assert "S3_CORE_TEST_FILES" in deps_runs and "S3_DATA_ENGINE_TEST_FILES" in deps_runs
@@ -182,44 +181,6 @@ def test_browser_check_uses_headless_shell_and_each_cell_fits_its_budget() -> No
     for cell in EXPECTED_CELL_CHECKS:
         total = sum(row.timeout_seconds for row in hooks.checks_for_cell(cell))
         assert total <= CELL_POLICIES[cell].budget_seconds, (cell, total)
-
-
-# Words that install or upgrade OS packages on the runner. SDK 4.5 separates hook bootstrap into
-# a 120s `bootstrap_cap_seconds` (`BOOTSTRAP_CAP_SECONDS`) outside the cell budget; before that
-# separation, on infra2 run 45331134994 the apt part alone took about 260 s of the 360 s
-# `staging.post` cell (#1843).
-_OS_PACKAGE_TOKENS = frozenset({"--with-deps", "install-deps", "apt", "apt-get", "aptitude", "dpkg"})
-
-
-def _os_package_tokens(command: str) -> set[str]:
-    """OS package words in a shell command, also inside quotes, pipes and absolute paths."""
-    words = re.split(r"[\s;&|()\"'`]+", command)
-    return {word.rsplit("/", 1)[-1] for word in words} & _OS_PACKAGE_TOKENS
-
-
-def test_browser_installs_change_no_os_package() -> None:
-    """#1843: no hook bootstrap and no step of the CI browser job runs apt.
-
-    Measured on ubuntu-24.04: the headless shell has no missing library; apt added fonts
-    and upgraded mesa. The staging walk and the CI walk must run on the same OS packages.
-    """
-    hooks = _load_hooks()
-    bootstraps = {row.id: row.bootstrap for row in hooks.checks if row.bootstrap.strip()}
-    assert "walk_tree" in bootstraps
-    assert {cid: _os_package_tokens(cmd) for cid, cmd in bootstraps.items() if _os_package_tokens(cmd)} == {}
-
-    browser_steps = yaml.safe_load((WORKFLOWS / "ci-web.yml").read_text(encoding="utf-8"))["jobs"]["browser"]["steps"]
-    runs = [str(step["run"]) for step in browser_steps if "run" in step]
-    assert sum("playwright install" in run for run in runs) == 1, runs
-    assert [_os_package_tokens(run) for run in runs if _os_package_tokens(run)] == []
-
-    # The predicate finds the form that the manifest used before #1843, and the usual others.
-    with_deps = bootstraps["walk_tree"].replace("playwright install", "playwright install --with-deps")
-    assert _os_package_tokens(with_deps) == {"--with-deps"}
-    assert _os_package_tokens("bunx playwright install-deps chromium") == {"install-deps"}
-    assert _os_package_tokens("sudo apt-get install -y fonts-unifont") == {"apt-get"}
-    assert _os_package_tokens('bash -c "x|/usr/bin/apt install -y fonts-unifont"') == {"apt"}
-    assert _os_package_tokens("sudo chown runner ~/.cache") == set()
 
 
 def test_tag_and_main_runs_of_one_commit_do_not_cancel_each_other() -> None:

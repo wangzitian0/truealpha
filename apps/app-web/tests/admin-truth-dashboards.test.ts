@@ -180,11 +180,8 @@ __setApiFetch(async (input) => {
                       agreement_rate: "1.0000",
                     },
                   },
-                  cells: {
-                    close: {
-                      "issuer:a": { tier: "High", confidence: "0.95" },
-                      "issuer:b": { tier: "Medium", confidence: "0.70" },
-                    },
+                  tier_counts: {
+                    close: { high: 3, medium: 2, low: 0 },
                   },
                 },
               },
@@ -390,6 +387,7 @@ try {
   const opsRich = renderToStaticMarkup(await AdminOpsPage());
   assertCleanHtml(opsRich, "AdminOpsPage(rich)");
   for (const needle of [
+    "admin-ops-summary",
     "Dependencies",
     "Postgres ops reader reachable",
     "Served heads",
@@ -409,6 +407,7 @@ try {
   const dhRich = renderToStaticMarkup(await AdminDatahubPage());
   assertCleanHtml(dhRich, "AdminDatahubPage(rich)");
   for (const needle of [
+    "datahub-summary-strip",
     "Question coverage matrix",
     "Aligned",
     "Question coverage detail (layers &amp; deltas)",
@@ -417,7 +416,7 @@ try {
     "world_absence=3",
     "custom_extra_metric",
     "0.9100",
-    "1 / 1 / 0",
+    "3 / 2 / 0",
     "2 / 3",
     "1.0000",
     "Oracle disagreements (sample)",
@@ -426,6 +425,7 @@ try {
     "Output invariants &amp; validation",
     "selected-weights-close",
     "Capacity, Vendor Quotas &amp; 429/1302",
+    "20.00%",
     "LLM usage &amp; model drift",
     "glm-4.5",
     "Backfill health &amp; queues",

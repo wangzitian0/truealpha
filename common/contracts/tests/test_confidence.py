@@ -9,6 +9,7 @@ from truealpha_contracts.confidence import (
     ContinuousConfidenceInput,
     ContinuousConfidencePolicy,
     SourceConfidenceEvidence,
+    wilson_95_upper_bound,
 )
 
 pytestmark = pytest.mark.contract
@@ -72,3 +73,9 @@ def test_policy_float_non_finite_and_input_order() -> None:
     for iv in (-Decimal("0.01"), Decimal("1.01"), 0.96):
         with pytest.raises(ValidationError):
             _ev(reliability_prior=iv)
+
+
+def test_wilson_95_upper_bound() -> None:
+    assert wilson_95_upper_bound(0, 0) is None
+    assert wilson_95_upper_bound(0, 80) == 0.045818
+    assert wilson_95_upper_bound(1, 10) == 0.40415
