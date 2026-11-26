@@ -415,6 +415,7 @@ def build_mcp_server(
         description="Queue a governed nightly backtest pipeline execution via staging.pipeline_trigger_requests.",
     )
     def strategy_backtest_trigger(request: StrategyBacktestTriggerToolRequest) -> TriggerBacktestResponse:
+        _require_mcp_admin()
         return trigger_backtest_run(
             MCP_OWNER_PRINCIPAL_ID,
             TriggerBacktestRequest(

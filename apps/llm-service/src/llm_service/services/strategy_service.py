@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import inspect
 import json
+import re
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -581,6 +582,17 @@ def get_backtest_detail(run_id: str, *, database_url: str | None = None) -> Back
     return with_mart_readonly(_q, database_url=database_url)
 
 
+_SAFE_RESOURCE_RE = re.compile(r"^[A-Za-z0-9_.-]+\.json$")
+
+
+def _parse_utc_timestamp(raw: str, label: str) -> datetime:
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(f"invalid {label} timestamp") from exc
+    return (dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)).astimezone(UTC)
+
+
 def trigger_backtest_run(
     principal_id: str,
     req: TriggerBacktestRequest | None = None,
@@ -590,12 +602,14 @@ def trigger_backtest_run(
     """Queue a governed nightly backtest execution via `staging.pipeline_trigger_requests`."""
     payload = req or TriggerBacktestRequest()
     if payload.definition_resource:
+        if not _SAFE_RESOURCE_RE.match(payload.definition_resource) or ".." in payload.definition_resource:
+            raise ValueError("invalid strategy definition resource name")
         try:
             load_strategy_definition(payload.definition_resource)
-        except FileNotFoundError as exc:
+        except (FileNotFoundError, OSError, ValueError) as exc:
             raise ValueError(f"unknown strategy definition: {payload.definition_resource}") from exc
     executed_at_dt = (
-        datetime.fromisoformat(payload.executed_at.replace("Z", "+00:00")).astimezone(UTC)
+        _parse_utc_timestamp(payload.executed_at, "executed_at")
         if payload.executed_at
         else datetime.now(UTC).replace(microsecond=0)
     )
@@ -603,12 +617,14 @@ def trigger_backtest_run(
     config: dict[str, Any] = {}
     if payload.definition_resource:
         config["definition_resource"] = payload.definition_resource
-    if payload.start_cutoff:
-        datetime.fromisoformat(payload.start_cutoff.replace("Z", "+00:00"))
-        config["start_cutoff"] = payload.start_cutoff
-    if payload.end_cutoff:
-        datetime.fromisoformat(payload.end_cutoff.replace("Z", "+00:00"))
-        config["end_cutoff"] = payload.end_cutoff
+    start_dt = _parse_utc_timestamp(payload.start_cutoff, "start_cutoff") if payload.start_cutoff else None
+    end_dt = _parse_utc_timestamp(payload.end_cutoff, "end_cutoff") if payload.end_cutoff else None
+    if start_dt is not None and end_dt is not None and start_dt > end_dt:
+        raise ValueError("start_cutoff must not exceed end_cutoff")
+    if start_dt is not None:
+        config["start_cutoff"] = start_dt.isoformat()
+    if end_dt is not None:
+        config["end_cutoff"] = end_dt.isoformat()
     dedupe_key = str(uuid.uuid4())
     config_json = json.dumps(config, sort_keys=True)
 

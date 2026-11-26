@@ -6,7 +6,8 @@ from typing import Any, Final, Literal, Protocol
 
 import psycopg
 from psycopg.rows import dict_row
-from truealpha_contracts.common import FrozenModel, load_data_json
+from pydantic import SerializerFunctionWrapHandler, model_serializer
+from truealpha_contracts.common import FrozenModel, drop_none_fields, load_data_json
 from truealpha_contracts.execution import AvailabilityStatus, FactorValidationStatus, InputEvidenceStatus
 
 NO_SERVED_ROW: Final = "no_row_in_served_head"
@@ -63,6 +64,10 @@ class AnalystRatings(_ModuleRow):
     buy_count: int
     hold_count: int
     sell_count: int
+
+    @model_serializer(mode="wrap")
+    def _omit_unset(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        return drop_none_fields(handler(self), "track_record_score")
 
 
 class IssuerModuleUnavailable(FrozenModel):

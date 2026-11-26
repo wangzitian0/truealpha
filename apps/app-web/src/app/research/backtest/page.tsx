@@ -10,8 +10,15 @@ import { ReadStateNotice } from "@/components/read-state";
 export const dynamic = "force-dynamic";
 
 export default async function BacktestListPage() {
-  const { data, error } = await loadAuthed("/research/backtest", (opts) => api.listBacktests(50, opts));
-  const runs = data?.runs ?? [];
+  const { data, error } = await loadAuthed("/research/backtest", async (opts) => {
+    const [backtests, session] = await Promise.all([
+      api.listBacktests(50, opts),
+      api.getSession(opts).catch(() => null),
+    ]);
+    return { backtests, session };
+  });
+  const runs = data?.backtests.runs ?? [];
+  const isAdmin = data?.session?.principal_kind === "administrator";
 
   return (
     <section aria-labelledby="backtest-list-heading" className="space-y-6">
@@ -20,7 +27,7 @@ export default async function BacktestListPage() {
           <h1 id="backtest-list-heading" className="text-2xl font-bold tracking-tight">Portfolio Backtests</h1>
           <p className="mt-1 text-sm text-gray-400">Quarter-end PIT backtests with explicit price basis and claim ceiling.</p>
         </div>
-        <BacktestTriggerButton />
+        {isAdmin && <BacktestTriggerButton />}
       </div>
       {error && <ReadStateNotice state={{ kind: "error", message: error }} />}
       {runs.length === 0 && !error ? (

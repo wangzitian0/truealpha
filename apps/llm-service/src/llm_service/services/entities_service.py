@@ -112,18 +112,18 @@ _COMPANY_DECISION_SQL = f"""
   order by d.cutoff_at desc limit 1
 """
 _FUND_VIRTUAL_COLS = (
-    "fund_id, coalesce(fund_name, fund_id) as fund_name,"
-    ' to_char(cutoff, \'YYYY-MM-DD"T"HH24:MI:SS"Z"\') as cutoff,'
-    " to_char(report_period, 'YYYY-MM-DD') as report_period,"
-    " weighted_valuation_gap::text as weighted_valuation_gap, valuation_basis,"
-    " total_weight_pct::text as total_weight_pct, resolved_weight_pct::text as resolved_weight_pct,"
-    " valued_weight_pct::text as valued_weight_pct, lines, valued_lines,"
-    " to_jsonb(mart.fund_virtual_company) ->> 'virtual_revenue' as virtual_revenue,"
-    " to_jsonb(mart.fund_virtual_company) ->> 'virtual_gross_profit' as virtual_gross_profit,"
-    " to_jsonb(mart.fund_virtual_company) ->> 'virtual_employees' as virtual_employees,"
-    " to_jsonb(mart.fund_virtual_company) ->> 'virtual_gppe' as virtual_gppe,"
-    " confidence::text as confidence, coalesce(availability_status, 'unavailable') as availability_status,"
-    " source_evidence_status, factor_validation_status, reason_codes"
+    "f.fund_id, coalesce(f.fund_name, f.fund_id) as fund_name,"
+    ' to_char(f.cutoff, \'YYYY-MM-DD"T"HH24:MI:SS"Z"\') as cutoff,'
+    " to_char(f.report_period, 'YYYY-MM-DD') as report_period,"
+    " f.weighted_valuation_gap::text as weighted_valuation_gap, f.valuation_basis,"
+    " f.total_weight_pct::text as total_weight_pct, f.resolved_weight_pct::text as resolved_weight_pct,"
+    " f.valued_weight_pct::text as valued_weight_pct, f.lines, f.valued_lines,"
+    " to_jsonb(f) ->> 'virtual_revenue' as virtual_revenue,"
+    " to_jsonb(f) ->> 'virtual_gross_profit' as virtual_gross_profit,"
+    " to_jsonb(f) ->> 'virtual_employees' as virtual_employees,"
+    " to_jsonb(f) ->> 'virtual_gppe' as virtual_gppe,"
+    " f.confidence::text as confidence, coalesce(f.availability_status, 'unavailable') as availability_status,"
+    " f.source_evidence_status, f.factor_validation_status, f.reason_codes"
 )
 
 
@@ -902,7 +902,7 @@ def get_fund_valuations(*, database_url: str | None = None) -> FundValuationsRes
     """
     consolidation_sql = f"""
       select {_FUND_VIRTUAL_COLS}
-      from mart.fund_virtual_company where run_id = %s
+      from mart.fund_virtual_company f where f.run_id = %s
     """
     coverage_sql = """
       select distinct on (fund_id) fund_id,
@@ -1242,17 +1242,17 @@ def _etf_match_clauses(prefix: str, id_param: str) -> tuple[str, str]:
 
 def get_etf_profile_payload(*, fund_id: str, database_url: str | None = None) -> dict[str, Any]:
     query_params = resolve_fund_resolution_candidates(fund_id)
-    fund_where, fund_rank = _etf_match_clauses("", "clean_id")
+    fund_where, fund_rank = _etf_match_clauses("f.", "clean_id")
     hold_where, hold_rank = _etf_match_clauses("v.", "target_fund_id")
 
     def _load(cur: Any) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
         cur.execute(
             f"""
             select {_FUND_VIRTUAL_COLS}
-            from mart.fund_virtual_company
+            from mart.fund_virtual_company f
             where ({fund_where})
-              and {served_run_predicate("run_id", _id_prefix_like("fund_consolidation").removesuffix("%"))}
-            order by {fund_rank}, cutoff desc, created_at desc limit 1
+              and {served_run_predicate("f.run_id", _id_prefix_like("fund_consolidation").removesuffix("%"))}
+            order by {fund_rank}, f.cutoff desc, f.created_at desc limit 1
             """,
             query_params,
         )

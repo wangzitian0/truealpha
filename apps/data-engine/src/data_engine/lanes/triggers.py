@@ -118,20 +118,26 @@ def pipeline_trigger_sensor(context: dg.SensorEvaluationContext):
                 overrides = cfg.get("overrides_json")
                 if isinstance(overrides, dict):
                     overrides = json.dumps(overrides)
+                try:
+                    op_cfg = NightlyBacktestConfig(
+                        executed_at=exec_iso,
+                        definition_resource=cfg.get("definition_resource"),
+                        overrides_json=overrides,
+                        start_cutoff=cfg.get("start_cutoff"),
+                        end_cutoff=cfg.get("end_cutoff"),
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    context.log.warning(f"Skipping invalid backtest trigger request {request_id}: {exc}")
+                    connection.execute(
+                        "update staging.pipeline_trigger_requests "
+                        "set consumed_at = clock_timestamp(), launched_run_key = %s where request_id = %s",
+                        (f"invalid:{dedupe_key}", request_id),
+                    )
+                    continue
                 yield dg.RunRequest(
                     run_key=run_key,
                     job_name=BACKTEST_JOB_NAME,
-                    run_config=dg.RunConfig(
-                        ops={
-                            "run_nightly_backtest_op": NightlyBacktestConfig(
-                                executed_at=exec_iso,
-                                definition_resource=cfg.get("definition_resource"),
-                                overrides_json=overrides,
-                                start_cutoff=cfg.get("start_cutoff"),
-                                end_cutoff=cfg.get("end_cutoff"),
-                            )
-                        }
-                    ),
+                    run_config=dg.RunConfig(ops={"run_nightly_backtest_op": op_cfg}),
                 )
             else:
                 tick = TICK_BY_JOB.get(job_name, TICK_BY_JOB[TOPT_LIVE_JOB_NAME])

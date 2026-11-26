@@ -149,7 +149,9 @@ def test_entity_detail_computes_geometric_cagr_peg_across_loss_year() -> None:
     assert "growth_convention:geometric_cagr" in out[0].peg_reason_codes
 
 
-def test_backtest_trigger_endpoint_inserts_into_pipeline_trigger_requests(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_backtest_trigger_endpoint_requires_admin_and_inserts_into_pipeline_trigger_requests(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     recorded: list[tuple[str, Any]] = []
 
     class _FakeCur:
@@ -160,16 +162,32 @@ def test_backtest_trigger_endpoint_inserts_into_pipeline_trigger_requests(monkey
             return {"request_id": 77}
 
     monkeypatch.setattr(strategy_service, "with_app_runtime", lambda fn, **_k: fn(_FakeCur()))
-    principal = auth_service.PrincipalRecord(principal_id="p:1", tenant_id="t:1", principal_kind="member")
-    app.dependency_overrides[_deps.require_principal] = lambda: principal
+    member = auth_service.PrincipalRecord(principal_id="p:mem", tenant_id="t:1", principal_kind="member")
+    admin = auth_service.PrincipalRecord(principal_id="p:adm", tenant_id="t:1", principal_kind="administrator")
+    app.dependency_overrides[_deps.require_principal] = lambda: member
     try:
-        resp = TestClient(app).post(
+        denied = TestClient(app).post(
             "/api/v1/strategy/backtests/trigger",
             json={"definition_resource": "large_model_value_v0_definition_1_1_0.json"},
         )
     finally:
         app.dependency_overrides.clear()
+    assert denied.status_code == 403
+
+    app.dependency_overrides[_deps.require_admin] = lambda: admin
+    try:
+        resp = TestClient(app).post(
+            "/api/v1/strategy/backtests/trigger",
+            json={"definition_resource": "large_model_value_v0_definition_1_1_0.json"},
+        )
+        bad_range = TestClient(app).post(
+            "/api/v1/strategy/backtests/trigger",
+            json={"start_cutoff": "2026-06-01T00:00:00Z", "end_cutoff": "2025-01-01T00:00:00Z"},
+        )
+    finally:
+        app.dependency_overrides.clear()
     assert resp.status_code == 202
+    assert bad_range.status_code == 400
     body = resp.json()
     assert body["request_id"] == 77
     assert body["job_name"] == "nightly_backtest_pipeline"

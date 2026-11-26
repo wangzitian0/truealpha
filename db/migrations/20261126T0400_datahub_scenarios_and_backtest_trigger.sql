@@ -67,4 +67,28 @@ begin
                 ]));
         end if;
     end if;
+    if to_regprocedure('staging.validate_pipeline_trigger_update()') is not null
+       and position('config_json' in pg_get_functiondef('staging.validate_pipeline_trigger_update()'::regprocedure)) = 0 then
+        create or replace function staging.validate_pipeline_trigger_update()
+         returns trigger
+         language plpgsql
+        as $function$
+        begin
+            if old.consumed_at is not null then
+                raise check_violation using message = 'pipeline trigger request already consumed';
+            end if;
+            if new.request_id <> old.request_id
+               or new.job_name <> old.job_name
+               or new.executed_at <> old.executed_at
+               or new.requested_by <> old.requested_by
+               or new.dedupe_key <> old.dedupe_key
+               or new.requested_at <> old.requested_at
+               or new.force_fetch <> old.force_fetch
+               or to_jsonb(new)->'config_json' is distinct from to_jsonb(old)->'config_json' then
+                raise check_violation using message = 'pipeline trigger request fields are immutable';
+            end if;
+            return new;
+        end;
+        $function$;
+    end if;
 end $$;

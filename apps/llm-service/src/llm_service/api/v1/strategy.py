@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from llm_service.api.v1._deps import require_principal
+from llm_service.api.v1._deps import require_admin, require_principal
 from llm_service.services.auth_service import PrincipalRecord, access_context_for
 from llm_service.services.strategy_service import (
     DASHBOARD_STRATEGY_ID,
@@ -58,10 +58,10 @@ def backtests_list(
 )
 def backtest_trigger(
     payload: TriggerBacktestRequest | None = None,
-    principal: PrincipalRecord = Depends(require_principal),
+    admin: PrincipalRecord = Depends(require_admin),
 ) -> TriggerBacktestResponse:
     try:
-        return trigger_backtest_run(principal.principal_id, payload)
+        return trigger_backtest_run(admin.principal_id, payload)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from None
 

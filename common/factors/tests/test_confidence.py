@@ -130,13 +130,13 @@ def test_modules_3_and_4_use_min_consumed_confidence() -> None:
     sc = supply_chain_exposure(
         [
             SupplyChainPartner("p1", "Partner 1", "supplier", Decimal("0.20"), Decimal("0.90")),
-            SupplyChainPartner("p2", "Partner 2", "supplier", Decimal("0.10"), Decimal("0.35")),
+            SupplyChainPartner("p2", "Partner 2", "supplier", Decimal("0.10"), Decimal("0.45")),
         ],
         entity_id="issuer:a",
         as_of=now,
         supplies_to_edges_exist=True,
     )
-    assert sc.result.confidence == Decimal("0.35")
+    assert sc.result.confidence == Decimal("0.45")
 
     ar = analyst_track_record(
         [
