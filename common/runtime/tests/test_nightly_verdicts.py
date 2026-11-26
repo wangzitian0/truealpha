@@ -593,15 +593,9 @@ def test_the_command_line_asks_each_environment_for_the_universes_its_release_sc
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Through `main([...])`, the entry point of `tools/nightly_verdicts.py`."""
-    import infra2_sdk.delivery
-
     repo = _release_repo(tmp_path)
     health_get = _health_without_sp500(datetime.now(UTC))
-    monkeypatch.setattr(
-        infra2_sdk.delivery,
-        "default_http_get",
-        lambda url, _timeout=15.0: (lambda s, b: (s, b.encode("utf-8")))(*health_get(url)),
-    )
+    monkeypatch.setattr(_module, "_default_http_get", lambda url: health_get(url))
 
     def run(environment: str) -> int:
         return _module.main([URL, "--environment", environment, "--repo", str(repo)])

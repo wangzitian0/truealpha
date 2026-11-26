@@ -13,7 +13,7 @@ dependencies = [
     # check. The `telemetry` extra is the OTLP/HTTP exporter stack of infra2_sdk.telemetry
     # (#1034); it ships in every service image because every Python service starts
     # telemetry through it (init_service or init_worker).
-    "infra2-sdk[http,telemetry,llm] @ https://github.com/wangzitian0/infra2-sdk/releases/download/v4.11.2/infra2_sdk-4.11.2-py3-none-any.whl",
+    "infra2-sdk[http,telemetry,llm] @ https://github.com/wangzitian0/infra2-sdk/releases/download/v4.12.0/infra2_sdk-4.12.0-py3-none-any.whl",
 ]
 
 [project.scripts]
