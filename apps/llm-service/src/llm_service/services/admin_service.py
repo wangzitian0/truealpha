@@ -9,6 +9,7 @@ from typing import Any
 
 import psycopg
 from pydantic import BaseModel, Field
+from truealpha_contracts.confidence import wilson_95_upper_bound
 from truealpha_contracts.environment_contract import load_environment_contract
 from truealpha_contracts.goal_criteria import load_goal_criteria
 from truealpha_contracts.universes import id_prefix_like, job_name
@@ -24,14 +25,14 @@ NON_CANARY_UNIVERSE_WHERE = "s.universe_id not like all (%s::text[])"
 LEDGER_COVERAGE_DAYS = 8
 
 
-def governed_latest_per_universe_sql(table: str, extra_cols: str = "") -> str:
+def governed_latest_per_universe_sql(table: str, extra_cols: str = "", payload_expr: str = "r.payload") -> str:
     return f"""
   select distinct on (r.universe_id)
          r.universe_id{extra_cols},
          r.run_id as report_run_id,
          coalesce(h.run_id, h.head_run_id) as served_head_run_id,
          (h.run_id is not null and r.run_id = h.run_id) as matches_served_head,
-         r.cutoff::text, r.created_at::text, r.payload
+         r.cutoff::text, r.created_at::text, {payload_expr} as payload
   from {table} r
   join mart.served_head h on h.universe_id = r.universe_id
   where h.factor_id = 'gross_profit_per_employee'
@@ -43,7 +44,48 @@ def governed_latest_per_universe_sql(table: str, extra_cols: str = "") -> str:
 
 
 QUESTION_COVERAGE_SQL = governed_latest_per_universe_sql("mart.question_coverage_report")
-CONFIDENCE_REPORT_SQL = governed_latest_per_universe_sql("mart.datahub_confidence_report", ", r.run_id")
+CONFIDENCE_REPORT_SQL = """
+  with latest as (
+    select distinct on (r.universe_id)
+           r.universe_id, r.run_id,
+           r.run_id as report_run_id,
+           coalesce(h.run_id, h.head_run_id) as served_head_run_id,
+           (h.run_id is not null and r.run_id = h.run_id) as matches_served_head,
+           r.cutoff::text, r.created_at::text, r.payload
+    from mart.datahub_confidence_report r
+    join mart.served_head h on h.universe_id = r.universe_id
+    where h.factor_id = 'gross_profit_per_employee'
+      and not starts_with(h.universe_id, 'universe:canary-')
+    order by r.universe_id,
+             (r.run_id = coalesce(h.run_id, h.head_run_id)) desc,
+             r.created_at desc
+  )
+  select universe_id, run_id, report_run_id, served_head_run_id,
+         matches_served_head, cutoff, created_at,
+         (payload - 'cells' - 'sample') || jsonb_build_object(
+           'tier_counts',
+           coalesce((
+             select jsonb_object_agg(fam_key, counts)
+             from (
+               select fam.key as fam_key,
+                 jsonb_build_object(
+                   'high', count(*) filter (where tier_val = 'high' or (tier_val = '' and conf_num >= 0.85)),
+                   'medium', count(*) filter (where tier_val = 'medium' or (tier_val = '' and conf_num >= 0.50 and conf_num < 0.85)),
+                   'low', count(*) filter (where not coalesce(tier_val in ('high', 'medium') or (tier_val = '' and conf_num >= 0.50), false))
+                 ) as counts
+               from jsonb_each(case when jsonb_typeof(latest.payload->'cells') = 'object' then latest.payload->'cells' else '{}'::jsonb end) as fam(key, value)
+               cross join lateral jsonb_each(case when jsonb_typeof(fam.value) = 'object' then fam.value else '{}'::jsonb end) as cell(key, value)
+               cross join lateral (
+                 select btrim(lower(coalesce(cell.value->>'tier', ''))) as tier_val,
+                        case when coalesce(cell.value->>'confidence', '') ~ '^-?[0-9]+(\\.[0-9]+)?$'
+                             then (cell.value->>'confidence')::numeric else null end as conf_num
+               ) parsed
+               group by fam.key
+             ) t
+           ), '{}'::jsonb)
+         ) as payload
+  from latest
+"""
 ORACLE_OUTCOMES_SQL = """
   with deduped as (
     select distinct on (
@@ -60,30 +102,17 @@ ORACLE_OUTCOMES_SQL = """
     order by h.universe_id, o.oracle_kind, o.period,
              coalesce(o.observation_id::text, o.outcome_id::text),
              o.subject_id, o.field, o.compared_at desc, o.recorded_at desc, o.outcome_id desc
-  ),
-  rolled as (
-    select universe_id, field,
-      (count(*) filter (where result in ('agree', 'disagree')))::int as compared,
-      (count(*) filter (where result = 'agree'))::int as agree,
-      (count(*) filter (where result = 'disagree'))::int as disagree,
-      (count(*) filter (where result = 'not_comparable'))::int as not_comparable,
-      (count(*) filter (where result = 'not_comparable' and reason = 'no_served_value'))::int as no_served_value_count,
-      to_char(max(compared_at) at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as newest_compared_at
-    from deduped
-    group by universe_id, field
   )
-  select r.universe_id, r.field, r.compared, r.agree, r.disagree, r.not_comparable, r.no_served_value_count, r.newest_compared_at,
-    case when r.compared <= 0 then null else least(1.0::numeric, greatest(0.0::numeric, round(((
-      (w.p + w.z2 / (2.0::numeric * r.compared::numeric)
-        + w.z * sqrt((w.p * (1.0::numeric - w.p) + w.z2 / (4.0::numeric * r.compared::numeric)) / r.compared::numeric)
-      ) / (1.0::numeric + w.z2 / r.compared::numeric)
-    )::numeric), 6)))::text end as wilson_95_upper_bound
-  from rolled r
-  cross join lateral (
-    select 1.959963984540054::numeric as z, (1.959963984540054::numeric * 1.959963984540054::numeric) as z2,
-           case when r.compared > 0 then r.disagree::numeric / r.compared::numeric else 0.0::numeric end as p
-  ) w
-  order by r.universe_id, r.field
+  select universe_id, field,
+    (count(*) filter (where result in ('agree', 'disagree')))::int as compared,
+    (count(*) filter (where result = 'agree'))::int as agree,
+    (count(*) filter (where result = 'disagree'))::int as disagree,
+    (count(*) filter (where result = 'not_comparable'))::int as not_comparable,
+    (count(*) filter (where result = 'not_comparable' and reason = 'no_served_value'))::int as no_served_value_count,
+    to_char(max(compared_at) at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as newest_compared_at
+  from deduped
+  group by universe_id, field
+  order by universe_id, field
 """
 
 ORACLE_DISAGREEMENTS_SQL = """
@@ -714,6 +743,72 @@ def _ledger_source_match(account_name: str, usage_by_source: dict[str, dict[str,
     return {}
 
 
+def _compute_tier_counts(cells_by_family: Any) -> dict[str, dict[str, int]]:
+    if not isinstance(cells_by_family, dict):
+        return {}
+    counts: dict[str, dict[str, int]] = {}
+    for fam_name, entries in cells_by_family.items():
+        if not isinstance(entries, dict):
+            continue
+        high = med = low = 0
+        for cell in entries.values():
+            if not isinstance(cell, dict):
+                continue
+            tier = str(cell.get("tier") or "").strip().lower()
+            conf_raw = cell.get("confidence")
+            try:
+                conf_num = float(conf_raw) if conf_raw is not None and str(conf_raw).strip() != "" else None
+            except (TypeError, ValueError):
+                conf_num = None
+            if tier == "high" or (not tier and conf_num is not None and conf_num >= 0.85):
+                high += 1
+            elif tier == "medium" or (not tier and conf_num is not None and conf_num >= 0.50):
+                med += 1
+            else:
+                low += 1
+        counts[str(fam_name)] = {"high": high, "medium": med, "low": low}
+    return counts
+
+
+def _summarize_confidence_row(row: dict[str, Any]) -> dict[str, Any]:
+    """Strip multi-megabyte per-entity maps from confidence report rows while preserving tier counts and summaries."""
+    out = dict(row)
+    raw_payload = out.get("payload")
+    if isinstance(raw_payload, dict):
+        tier_counts = raw_payload.get("tier_counts")
+        if not isinstance(tier_counts, dict) or not tier_counts:
+            tier_counts = _compute_tier_counts(raw_payload.get("cells"))
+        compact_payload = {k: v for k, v in raw_payload.items() if k not in ("cells", "sample")}
+        if tier_counts:
+            compact_payload["tier_counts"] = tier_counts
+        families = compact_payload.get("families")
+        accuracy = compact_payload.get("accuracy")
+        sources_connected = compact_payload.get("sources_connected")
+        out["payload"] = compact_payload
+        out["summary"] = {
+            "subjects": compact_payload.get("subjects"),
+            "sources_connected": sources_connected if isinstance(sources_connected, list) else [],
+            "sources_count": len(sources_connected) if isinstance(sources_connected, list) else 0,
+            "families_count": len(families) if isinstance(families, dict) else 0,
+            "accuracy_fields": len(accuracy) if isinstance(accuracy, dict) else 0,
+            "tier_counts": tier_counts,
+            "report_version": compact_payload.get("report_version"),
+            "generated_at": compact_payload.get("generated_at"),
+            "mean_confidence": compact_payload.get("mean_confidence"),
+        }
+    return out
+
+
+def _attach_wilson_upper_bounds(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        bound = wilson_95_upper_bound(int(item.get("disagree") or 0), int(item.get("compared") or 0))
+        item["wilson_95_upper_bound"] = f"{bound:.6f}" if bound is not None else None
+        out.append(item)
+    return out
+
+
 def _build_vendor_capacity(
     contract: Any, env_name: str, usage_rows: list[dict[str, Any]]
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -723,6 +818,9 @@ def _build_vendor_capacity(
     for name, acct in sorted(contract.vendor_accounts.accounts.items()):
         share = contract.account_share(name, env_name)
         usage = _ledger_source_match(name, usage_by_source)
+        calls_1s = int(usage.get("calls_1s") or 0)
+        calls_30s = int(usage.get("calls_30s") or 0)
+        calls_60s = int(usage.get("calls_60s") or 0)
         calls_24h = int(usage.get("calls_24h") or 0)
         calls_7d = int(usage.get("calls_7d") or 0)
         rate_limited_24h = int(usage.get("rate_limited_24h") or 0)
@@ -751,11 +849,25 @@ def _build_vendor_capacity(
             }
         )
         for lim in share.limits:
-            window = lim.window_seconds or 0
-            observed = calls_24h if window <= 86400 else calls_7d
+            window = lim.window_seconds
             share_val = lim.share
-            util = round((observed / share_val) * 100.0, 2) if share_val and share_val > 0 else None
-            remaining = max(share_val - observed, 0) if share_val is not None else None
+            if window is None:
+                observed = calls_24h
+                util = None
+                remaining = None
+            else:
+                if window <= 1:
+                    observed = calls_1s
+                elif window <= 30:
+                    observed = calls_30s
+                elif window <= 60:
+                    observed = calls_60s
+                elif window <= 86400:
+                    observed = calls_24h
+                else:
+                    observed = calls_7d
+                util = round((observed / share_val) * 100.0, 2) if share_val and share_val > 0 else None
+                remaining = max(share_val - observed, 0) if share_val is not None else None
             capacity_out.append(
                 {
                     "account": name,
@@ -932,6 +1044,9 @@ def get_datahub_stats(*, database_url: str | None = None) -> DatahubStatsRespons
             cur,
             """
             select l.source,
+                   (count(*) filter (where l.called_at > now() - interval '1 second'))::int as calls_1s,
+                   (count(*) filter (where l.called_at > now() - interval '30 seconds'))::int as calls_30s,
+                   (count(*) filter (where l.called_at > now() - interval '60 seconds'))::int as calls_60s,
                    (count(*) filter (where l.called_at > now() - interval '24 hours'))::int as calls_24h,
                    (count(*) filter (where l.called_at > now() - interval '24 hours' and not l.ok))::int as failed_24h,
                    (count(*) filter (where l.called_at > now() - interval '24 hours' and (l.status_code = 429 or coalesce(l.error, '') ilike %s)))::int as rate_limited_24h,
@@ -991,8 +1106,8 @@ def get_datahub_stats(*, database_url: str | None = None) -> DatahubStatsRespons
             (LEDGER_COVERAGE_DAYS,),
         )
         question_cov = _rows(cur, QUESTION_COVERAGE_SQL)
-        confidence = _rows(cur, CONFIDENCE_REPORT_SQL)
-        oracle_outcomes = _rows(cur, ORACLE_OUTCOMES_SQL)
+        confidence = [_summarize_confidence_row(r) for r in _rows(cur, CONFIDENCE_REPORT_SQL)]
+        oracle_outcomes = _attach_wilson_upper_bounds(_rows(cur, ORACLE_OUTCOMES_SQL))
         oracle_disagreements = _optional_rows(cur, ORACLE_DISAGREEMENTS_SQL)
         served_heads = _optional_rows(cur, SERVED_HEADS_SQL)
         served_artifacts = _optional_rows(

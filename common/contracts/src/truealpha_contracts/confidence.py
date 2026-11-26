@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from decimal import Decimal
 from typing import Annotated
 
@@ -132,3 +133,17 @@ class ContinuousConfidenceEvaluation(_c.IdentifiedFrozenModel):
             raise ValueError("policy/input identity and hash mismatch")
         object.__setattr__(self, "source_scores", sc)
         object.__setattr__(self, "origin_groups", gr)
+
+
+_WILSON_Z_95 = 1.959963984540054
+
+
+def wilson_95_upper_bound(disagrees: int, compared: int) -> float | None:
+    """95% Wilson score upper bound for oracle disagreement rate."""
+    if compared <= 0:
+        return None
+    z2 = _WILSON_Z_95 * _WILSON_Z_95
+    prob = disagrees / compared
+    centre = prob + z2 / (2.0 * compared)
+    half_width = _WILSON_Z_95 * math.sqrt((prob * (1.0 - prob) + z2 / (4.0 * compared)) / compared)
+    return min(1.0, round((centre + half_width) / (1.0 + z2 / compared), 6))

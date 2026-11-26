@@ -64,12 +64,19 @@ def test_every_check_green_and_on_time_passes(capsys: pytest.CaptureFixture[str]
     assert "all " in capsys.readouterr().out
 
 
+def _hard_set(_ref: str) -> str:
+    """Synthetic expectations marking `job_run_health` as kind='hard' to keep hard-verdict fail-closed coverage."""
+    data = json.loads(_module.EXPECTATIONS_PATH.read_text(encoding="utf-8"))
+    data["checks"]["job_run_health"]["kind"] = "hard"
+    return json.dumps(data)
+
+
 def test_a_red_hard_verdict_fails_and_names_the_check_and_its_summary(capsys: pytest.CaptureFixture[str]) -> None:
     """Hard checks fail closed on a red verdict and name only the failing check."""
     verdicts = _all_green()
     verdicts = [v for v in verdicts if v["check"] != "job_run_health"]
     verdicts.append(_verdict("job_run_health", 1.0, ok=False, summary="failed: 2 scheduled failures"))
-    assert _run(verdicts) == 1
+    assert _run(verdicts, reader=_hard_set) == 1
     err = capsys.readouterr().err
     assert "job_run_health" in err and "2 scheduled failures" in err
     assert "model_key_health" not in err
@@ -81,6 +88,7 @@ def test_a_red_hard_verdict_fails_and_names_the_check_and_its_summary(capsys: py
         "market_data_freshness",
         "model_key_health",
         "output_invariants",
+        "job_run_health",
         "report_surface_proof",
         "topt_baseline",
         "nightly_backtest",
@@ -718,8 +726,15 @@ def test_the_grace_never_excuses_a_red_or_stale_verdict() -> None:
     recent = lambda _check, _release: NOW - timedelta(minutes=5)  # noqa: E731
     hard_check = "job_run_health"
     base_hard = [entry for entry in _all_green() if entry["check"] != hard_check]
-    assert _run([*base_hard, _verdict(hard_check, 1, ok=False, summary="failed: x")], first_declared=recent) == 1
-    assert _run([*base_hard, _verdict(hard_check, 60)], first_declared=recent) == 1
+    assert (
+        _run(
+            [*base_hard, _verdict(hard_check, 1, ok=False, summary="failed: x")],
+            first_declared=recent,
+            reader=_hard_set,
+        )
+        == 1
+    )
+    assert _run([*base_hard, _verdict(hard_check, 60)], first_declared=recent, reader=_hard_set) == 1
 
     fact_check = "theme_purity@topt"
     base_fact = [entry for entry in _all_green() if entry["check"] != fact_check]
