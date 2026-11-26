@@ -71,12 +71,12 @@ CONFIDENCE_REPORT_SQL = """
                  jsonb_build_object(
                    'high', count(*) filter (where tier_val = 'high' or (tier_val = '' and conf_num >= 0.85)),
                    'medium', count(*) filter (where tier_val = 'medium' or (tier_val = '' and conf_num >= 0.50 and conf_num < 0.85)),
-                   'low', count(*) filter (where not (tier_val in ('high', 'medium') or (tier_val = '' and conf_num >= 0.50)))
+                   'low', count(*) filter (where not coalesce(tier_val in ('high', 'medium') or (tier_val = '' and conf_num >= 0.50), false))
                  ) as counts
-               from jsonb_each(coalesce(latest.payload->'cells', '{}'::jsonb)) as fam(key, value)
+               from jsonb_each(case when jsonb_typeof(latest.payload->'cells') = 'object' then latest.payload->'cells' else '{}'::jsonb end) as fam(key, value)
                cross join lateral jsonb_each(case when jsonb_typeof(fam.value) = 'object' then fam.value else '{}'::jsonb end) as cell(key, value)
                cross join lateral (
-                 select lower(coalesce(cell.value->>'tier', '')) as tier_val,
+                 select btrim(lower(coalesce(cell.value->>'tier', ''))) as tier_val,
                         case when coalesce(cell.value->>'confidence', '') ~ '^-?[0-9]+(\\.[0-9]+)?$'
                              then (cell.value->>'confidence')::numeric else null end as conf_num
                ) parsed
