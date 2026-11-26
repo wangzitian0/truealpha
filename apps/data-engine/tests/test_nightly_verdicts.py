@@ -708,6 +708,21 @@ def test_a_failing_purity_op_is_a_red_verdict_and_a_red_run(monkeypatch, written
     universe = "topt"
     assert [(row["check"], row["ok"]) for row in written] == [(f"theme_purity@{universe}", False)]
     assert written[0]["summary"].startswith("failed: RuntimeError — see Dagster run ")
+
+
+def test_calibrated_confidence_accepts_whitespace_in_theme_case_id() -> None:
+    """Real theme names like 'AI infrastructure' must not fail ContinuousConfidenceInput."""
+    from decimal import Decimal
+
+    from data_engine.datahub._helpers import calibrated_confidence_for
+
+    score = calibrated_confidence_for(
+        "segment-revenue-confidence:v1",
+        "model:glm-5.3-flash",
+        case_id="theme:AI infrastructure:company:cik:59478:000005947826000013",
+        evidence_id="accession:000005947826000013",
+    )
+    assert Decimal("0") < score <= Decimal("1")
     # Coverage never ran, so it wrote nothing: its verdict goes stale and the tool names it.
 
 
