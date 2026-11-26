@@ -156,3 +156,18 @@ def test_etf_virtual_company_consolidates_virtual_fundamentals() -> None:
     assert res.virtual_gross_profit == Decimal("500")
     assert res.virtual_employees == Decimal("80")
     assert res.virtual_gppe == Decimal("5.8")
+
+
+def test_corporate_actions_accepts_non_split_spinoff_adjustment_for_spgi() -> None:
+    from factors.backtest.corporate_actions import SeriesBar, derive_split_events
+
+    bars = [
+        SeriesBar(
+            date(2026, 6, 30),
+            Decimal("406.02"),
+            Decimal("406.70"),
+            Decimal("385.29473684210524"),
+        ),
+        SeriesBar(date(2026, 7, 1), Decimal("399.58"), Decimal("414.97"), Decimal("414.97")),
+    ]
+    assert derive_split_events("SPGI", bars) == ()

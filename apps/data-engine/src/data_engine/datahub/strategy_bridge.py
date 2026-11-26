@@ -352,42 +352,45 @@ def _persist_peg_consensus_nodes(
     evaluated: Sequence[EvaluatedDecision],
 ) -> None:
     period = cutoff.astimezone(UTC).date().isoformat()
-    tree_id = tree_id_for("peg_consensus", "v1")
+    specs = (
+        ("peg_consensus", "peg_consensus_rank", "analyst_consensus", "peg_consensus"),
+        ("peg_geometric_cagr", "peg_geometric_cagr_rank", "geometric_cagr", "peg_geometric_cagr"),
+    )
     rows: list[tuple[Any, ...]] = []
     for item in evaluated:
-        has_val = item.peg_consensus is not None
-        avail = "available" if has_val else "unavailable"
-        src_status = "verified" if has_val else "degraded"
-        conf = item.peg_consensus_confidence
-        reasons = list(item.peg_consensus_reason_codes)
-        for node_key, val, unit in (
-            ("peg_consensus", item.peg_consensus, "ratio"),
-            (
-                "peg_consensus_rank",
-                Decimal(item.peg_consensus_rank) if item.peg_consensus_rank is not None else None,
-                "count",
-            ),
-        ):
-            rows.append(
-                (
-                    capture_run_id,
-                    item.issuer_id,
-                    node_id_for(node_key),
-                    node_key,
-                    period,
-                    "cutoff",
-                    val,
-                    unit,
-                    avail,
-                    reasons,
-                    src_status,
-                    "not_evaluated",
-                    conf,
-                    tree_id,
-                    "v1",
-                    canonical_sha256({"node_key": node_key, "convention": "analyst_consensus"}),
+        for val_attr, rank_attr, convention, tree_name in specs:
+            val_metric = getattr(item, val_attr, None)
+            rank_metric = getattr(item, rank_attr, None)
+            conf_val = getattr(item, f"{val_attr}_confidence", None)
+            reasons = list(getattr(item, f"{val_attr}_reason_codes", ()))
+            has_val = val_metric is not None
+            avail = "available" if has_val else "unavailable"
+            src_status = "verified" if has_val else "degraded"
+            tree_id = tree_id_for(tree_name, "v1")
+            for node_key, val, unit in (
+                (val_attr, val_metric, "ratio"),
+                (rank_attr, Decimal(rank_metric) if rank_metric is not None else None, "count"),
+            ):
+                rows.append(
+                    (
+                        capture_run_id,
+                        item.issuer_id,
+                        node_id_for(node_key),
+                        node_key,
+                        period,
+                        "cutoff",
+                        val,
+                        unit,
+                        avail,
+                        reasons,
+                        src_status,
+                        "not_evaluated",
+                        conf_val,
+                        tree_id,
+                        "v1",
+                        canonical_sha256({"node_key": node_key, "convention": convention}),
+                    )
                 )
-            )
     if not rows:
         return
     execute_many(
@@ -397,7 +400,10 @@ def _persist_peg_consensus_nodes(
         "value, unit, availability_status, reason_codes, "
         "source_evidence_status, factor_validation_status, confidence, tree_id, tree_version, tree_sha256"
         ") values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
-        "on conflict (run_id, issuer_id, node_id, period) do nothing",
+        "on conflict (run_id, issuer_id, node_id, period) do update set "
+        "value = excluded.value, availability_status = excluded.availability_status, "
+        "reason_codes = excluded.reason_codes, source_evidence_status = excluded.source_evidence_status, "
+        "confidence = excluded.confidence",
         rows,
     )
 

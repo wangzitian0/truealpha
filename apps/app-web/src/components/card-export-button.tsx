@@ -8,10 +8,15 @@ import { universesWithRole } from "@/contracts/universes";
 interface CardExportButtonProps {
   cutoff?: string;
   issuerId?: string;
-  kind?: "ranking" | "entity";
+  kind?: "ranking" | "entity" | "etf";
   format?: "html" | "json";
   convention?: PegGrowthConvention;
   universe?: string;
+}
+
+function effectiveKindLabel(kind?: "ranking" | "entity" | "etf", issuerId?: string): string {
+  if (kind === "etf") return "Export ETF HTML Card (1080×1440)";
+  return issuerId ? "Export Entity 360 HTML Card (1080×1440)" : "Export Xiaohongshu HTML Card (1080×1440)";
 }
 
 export function CardExportButton({
@@ -28,13 +33,14 @@ export function CardExportButton({
     setDownloading(true);
     try {
       const effectiveKind = kind ?? (issuerId ? "entity" : "ranking");
+      const cardKind = effectiveKind === "entity" ? "company" : effectiveKind === "etf" ? "etf" : "ranking";
       const res = await api.exportCard({
-        card_kind: effectiveKind === "entity" ? "company" : "ranking",
+        card_kind: cardKind,
         cutoff: cutoff ?? null,
         issuer_id: issuerId ?? null,
         convention,
         preset: null,
-        universe: !issuerId ? universe : null,
+        universe: effectiveKind === "ranking" ? universe : null,
         format,
         persist: true,
       });
@@ -75,9 +81,7 @@ export function CardExportButton({
     >
       {downloading
         ? "Exporting..."
-        : issuerId
-          ? "Export Entity 360 HTML Card (1080×1440)"
-          : "Export Xiaohongshu HTML Card (1080×1440)"}
+        : effectiveKindLabel(kind, issuerId)}
     </button>
   );
 }
