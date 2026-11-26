@@ -116,15 +116,15 @@ jobs:
           S3_BUCKET: truealpha-raw
           TRUEALPHA_REQUIRE_RUNTIME: "1"
 
-  # Run all non-S3 gate/deps/smoke/contract tests across deterministic index-strided shards.
-  # fail-fast is off so one red shard does not hide the other lane. Postgres 16 only (no S3 startup).
+  # Run all non-S3 gate/deps/smoke/contract tests across duration-weighted LPT shards.
+  # fail-fast is off so one red shard does not hide the other lanes. Postgres 16 only (no S3 startup).
   test-deps-smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1]
+        shard: [0, 1, 2, 3]
     services:
       postgres:
         image: postgres:16-alpine
@@ -157,22 +157,25 @@ jobs:
           # Command substitution, NOT `mapfile < <(...)`: a process substitution's exit status
           # is invisible to `set -e` and pipefail. The count check is the second guard against bare pytest.
           FILE_LIST=$(python3 -c '
-          import os, pathlib
+          import json, os, pathlib
           idx, tot = ${{ strategy.job-index }}, ${{ strategy.job-total }}
+          durations = json.loads(pathlib.Path("common/runtime/data/python-test-durations.json").read_text(encoding="utf-8"))
           roots = ["common/contracts/tests", "common/factors/tests", "common/runtime/tests", "apps/llm-service/tests"]
           if os.environ.get("DATA_ENGINE_REQUIRED", "").lower() == "true":
               roots.append("apps/data-engine/tests")
           s3_files = {pathlib.Path(p) for p in (os.environ.get("S3_CORE_TEST_FILES", "") + " " + os.environ.get("S3_DATA_ENGINE_TEST_FILES", "")).split()}
+          def weight(p):
+              return float(durations.get(str(p), os.path.getsize(p) / 1000.0))
           files = sorted(
               {p for r in roots for pat in ("test_*.py", "*_test.py") for p in pathlib.Path(r).rglob(pat)} - s3_files,
-              key=lambda p: (-os.path.getsize(p), str(p)),
+              key=lambda p: (-weight(p), str(p)),
           )
           buckets = [[] for _ in range(tot)]
-          sizes = [0] * tot
+          loads = [0.0] * tot
           for p in files:
-              b = min(range(tot), key=lambda i: (sizes[i], len(buckets[i]), i))
+              b = min(range(tot), key=lambda i: (loads[i], len(buckets[i]), i))
               buckets[b].append(p)
-              sizes[b] += os.path.getsize(p)
+              loads[b] += weight(p)
           print("\n".join(str(p) for p in buckets[idx]))
           ')
           mapfile -t FILES <<< "$FILE_LIST"

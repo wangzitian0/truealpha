@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
+import re
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -50,7 +53,7 @@ def test_ci_python_shards_cover_all_tests_and_isolate_s3() -> None:
     assert "S3_CORE_TEST_FILES" in s3_runs and "S3_DATA_ENGINE_TEST_FILES" in s3_runs
 
     deps_job = jobs["test-deps-smoke"]
-    assert deps_job["strategy"]["matrix"]["shard"] == [0, 1]
+    assert deps_job["strategy"]["matrix"]["shard"] == [0, 1, 2, 3]
     deps_runs = "\n".join(str(step.get("run", "")) for step in deps_job["steps"])
     assert "docker compose up" not in deps_runs
     assert "S3_CORE_TEST_FILES" in deps_runs and "S3_DATA_ENGINE_TEST_FILES" in deps_runs
@@ -193,10 +196,23 @@ def test_a_tag_push_promotes_and_never_builds_and_push_builds_once() -> None:
     images = yaml.safe_load((WORKFLOWS / "release-images.yml").read_text(encoding="utf-8"))["jobs"]
     for name in ("security", "images_build", "images_release"):
         assert "github.ref_type != 'tag'" in req[name]["if"], name
-    assert "github.event_name == 'push'" not in req["images_build"]["if"]
-    assert "needs.images_build.result == 'skipped'" in req["images_release"]["if"]
-    assert req["images_release"]["with"]["prebuilt"] is False
-    assert req["images_release"]["with"]["publish"] is True
+    build_job = req["images_build"]
+    assert build_job["needs"] == "changes"
+    assert build_job["permissions"] == {"contents": "read"}
+    assert "github.event_name == 'push'" in build_job["if"]
+    assert "github.ref == 'refs/heads/main'" in build_job["if"]
+    assert build_job["with"]["publish"] is False
+    for img_input in ("app_web", "llm_service", "data_engine"):
+        expr = str(build_job["with"][img_input])
+        assert "github.event_name == 'push'" in expr
+        assert f"needs.changes.outputs.image_{img_input} == 'true'" in expr
+
+    release_job = req["images_release"]
+    assert release_job["needs"] == ["changes", "security", "db", "python", "web", "images_build"]
+    assert "needs.images_build.result == 'success'" in release_job["if"]
+    assert "needs.images_build.result == 'skipped'" not in release_job["if"]
+    assert release_job["with"]["prebuilt"] == "${{ github.event_name == 'push' }}"
+    assert release_job["with"]["publish"] is True
 
     promote_job = req["images_promote"]
     assert "github.ref_type == 'tag'" in promote_job["if"]
@@ -245,3 +261,163 @@ def test_pr_image_filters_are_scoped_and_ci_web_and_python_use_speedups() -> Non
     ci_python = yaml.safe_load((WORKFLOWS / "ci-python.yml").read_text(encoding="utf-8"))
     shard_run = "\n".join(str(s.get("run", "")) for s in ci_python["jobs"]["test-deps-smoke"]["steps"])
     assert "os.path.getsize" in shard_run
+
+
+def test_python_test_durations_seed_and_lpt_sharding() -> None:
+    durations_path = REPO_ROOT / "common" / "runtime" / "data" / "python-test-durations.json"
+    durations = json.loads(durations_path.read_text(encoding="utf-8"))
+    assert isinstance(durations, dict) and len(durations) >= 50
+    for rel, sec in durations.items():
+        assert isinstance(rel, str)
+        assert isinstance(sec, (int, float)) and not isinstance(sec, bool) and sec >= 0.0
+        assert (REPO_ROOT / rel).is_file(), f"stale duration entry for missing file: {rel}"
+
+    ci_python = yaml.safe_load((WORKFLOWS / "ci-python.yml").read_text(encoding="utf-8"))
+    wf_env = ci_python["env"]
+    s3_declared = set(str(wf_env["S3_CORE_TEST_FILES"]).split()) | set(str(wf_env["S3_DATA_ENGINE_TEST_FILES"]).split())
+    shard_step = next(
+        s for s in ci_python["jobs"]["test-deps-smoke"]["steps"] if "Run tests (shard" in str(s.get("name", ""))
+    )
+    match = re.search(r"python3 -c '\n(.*?)\n\s*'\)", shard_step["run"], re.DOTALL)
+    assert match is not None, "expected inline python3 sharding snippet in ci-python.yml"
+    snippet = "\n".join(line[10:] if line.startswith("          ") else line for line in match.group(1).splitlines())
+
+    for de_required in ("true", "false"):
+        roots = ["common/contracts/tests", "common/factors/tests", "common/runtime/tests", "apps/llm-service/tests"]
+        if de_required == "true":
+            roots.append("apps/data-engine/tests")
+        expected_files = {
+            (REPO_ROOT / r / p).relative_to(REPO_ROOT).as_posix()
+            for r in roots
+            for pat in ("test_*.py", "*_test.py")
+            for p in (REPO_ROOT / r).rglob(pat)
+        } - s3_declared
+
+        env = {
+            **os.environ,
+            "S3_CORE_TEST_FILES": str(wf_env["S3_CORE_TEST_FILES"]),
+            "S3_DATA_ENGINE_TEST_FILES": str(wf_env["S3_DATA_ENGINE_TEST_FILES"]),
+            "DATA_ENGINE_REQUIRED": de_required,
+        }
+        shards: list[list[str]] = []
+        for idx in range(4):
+            rendered = snippet.replace("${{ strategy.job-index }}", str(idx)).replace("${{ strategy.job-total }}", "4")
+            proc = subprocess.run(
+                [sys.executable, "-c", rendered],
+                cwd=REPO_ROOT,
+                env=env,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            chosen = [line.strip() for line in proc.stdout.splitlines() if line.strip()]
+            assert chosen, f"empty shard {idx} for DATA_ENGINE_REQUIRED={de_required}"
+            shards.append(chosen)
+
+        flattened = [p for shard in shards for p in shard]
+        assert len(flattened) == len(set(flattened)), "shards overlap"
+        assert set(flattened) == expected_files
+        assert not (set(flattened) & s3_declared)
+
+        weights = {p: float(durations.get(p, (REPO_ROOT / p).stat().st_size / 1000.0)) for p in expected_files}
+        shard_loads = [sum(weights[p] for p in shard) for shard in shards]
+        assert max(shard_loads) - min(shard_loads) <= max(weights.values()) + 1e-9
+
+
+def test_security_gate_runs_in_single_job() -> None:
+    security = yaml.safe_load((WORKFLOWS / "security-gate.yml").read_text(encoding="utf-8"))
+    assert list(security["jobs"]) == ["security-gate"]
+    steps = security["jobs"]["security-gate"]["steps"]
+    checkout = next(s for s in steps if str(s.get("uses", "")).startswith("actions/checkout@"))
+    assert checkout["with"]["fetch-depth"] == 0
+    assert any(str(s.get("uses", "")).startswith("gitleaks/gitleaks-action@") for s in steps)
+    assert any("Forbid moomoo trading APIs" in str(s.get("name", "")) for s in steps)
+
+
+def test_main_health_tracks_and_requires_all_failed_lanes(tmp_path: Path) -> None:
+    mh = yaml.safe_load((WORKFLOWS / "main-health.yml").read_text(encoding="utf-8"))
+    steps = mh["jobs"]["report"]["steps"]
+    open_step = next(s for s in steps if s.get("name") == "Open or update the red-main issue")
+    resolve_step = next(s for s in steps if s.get("name") == "Resolve the red-main issue")
+
+    def extract_py(run_script: str) -> str:
+        match = re.search(r"python3 - <<'PY'\n(.*?)\nPY", run_script, re.DOTALL)
+        assert match is not None
+        return match.group(1)
+
+    open_py = extract_py(open_step["run"])
+    resolve_py = extract_py(resolve_step["run"])
+
+    (tmp_path / "run_jobs.json").write_text(
+        json.dumps(
+            {
+                "jobs": [
+                    {"name": "python / test-deps-smoke (0)", "conclusion": "failure"},
+                    {"name": "web / browser", "conclusion": "failure"},
+                    {"name": "ci-required", "conclusion": "failure"},
+                    {"name": "security / security-gate", "conclusion": "success"},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    subprocess.run([sys.executable, "-c", open_py], cwd=tmp_path, check=True)
+    assert (tmp_path / "failed_lanes.txt").read_text(encoding="utf-8").strip() == "python, web"
+
+    # Incident has python in body and db in a later comment; web-only green must stay open.
+    (tmp_path / "issue.json").write_text(
+        json.dumps(
+            {
+                "body": "ci-required failed on a push to main.\nfailed-lanes: python\n",
+                "comments": [{"body": "ci-required failed on a push to main.\nfailed-lanes: db\n"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "run_jobs.json").write_text(
+        json.dumps(
+            {
+                "jobs": [
+                    {"name": "web / check", "conclusion": "success"},
+                    {"name": "db / migrate", "conclusion": "success"},
+                    {"name": "ci-required", "conclusion": "success"},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    partial = subprocess.run([sys.executable, "-c", resolve_py], cwd=tmp_path, capture_output=True, text=True)
+    assert partial.returncode != 0
+    assert "python" in partial.stdout
+
+    # Failing sub-job inside a required lane must keep incident open.
+    (tmp_path / "run_jobs.json").write_text(
+        json.dumps(
+            {
+                "jobs": [
+                    {"name": "python / gates", "conclusion": "success"},
+                    {"name": "python / test-deps-smoke (0)", "conclusion": "failure"},
+                    {"name": "db / migrate", "conclusion": "success"},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    red_sub = subprocess.run([sys.executable, "-c", resolve_py], cwd=tmp_path, capture_output=True, text=True)
+    assert red_sub.returncode != 0
+
+    # All recorded failed lanes ran and passed -> resolves cleanly.
+    (tmp_path / "run_jobs.json").write_text(
+        json.dumps(
+            {
+                "jobs": [
+                    {"name": "python / gates", "conclusion": "success"},
+                    {"name": "python / dagster-code-server-liveness", "conclusion": "skipped"},
+                    {"name": "db / migrate", "conclusion": "success"},
+                    {"name": "ci-required", "conclusion": "success"},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    subprocess.run([sys.executable, "-c", resolve_py], cwd=tmp_path, check=True)
