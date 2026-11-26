@@ -18,6 +18,7 @@ dependencies = [
 
 [project.scripts]
 truealpha-runtime = "truealpha_runtime.cli:main"
+truealpha-backtest-trigger = "truealpha_tools.backtest_trigger:main"
 
 [dependency-groups]
 dev = [

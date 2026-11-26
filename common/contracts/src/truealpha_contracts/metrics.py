@@ -59,7 +59,10 @@ _GPPE = MappingProxyType(
         "capital_adjusted_tce": "capital_adjusted_tce",
     }
 )
-PUBLISHED_COLUMNS: Mapping[str, Mapping[str, str]] = MappingProxyType({"mart.metric_node_values": _GPPE})
+PUBLISHED_SURFACE_METRICS: Mapping[str, Mapping[str, str]] = MappingProxyType({"metric_node_values": _GPPE})
+PUBLISHED_COLUMNS: Mapping[str, Mapping[str, str]] = MappingProxyType(
+    {"mart.metric_node_values": _GPPE, **PUBLISHED_SURFACE_METRICS}
+)
 
 
 def is_registered_input_key(input_key: str) -> bool:

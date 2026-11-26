@@ -63,6 +63,8 @@ def export_card(
 ) -> CardExportResponse:
     try:
         return export_or_render_card(access_context_for(principal), payload)
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from None
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from None
 

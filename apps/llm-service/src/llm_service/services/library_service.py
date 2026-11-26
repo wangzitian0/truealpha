@@ -20,7 +20,6 @@ from truealpha_runtime.research_cards import (
     build_strategy_context_from_report,
     enrich_card_metadata,
     paginate_card_series,
-    render_card_html,
     render_card_json,
     verify_card_html,
 )
@@ -668,16 +667,14 @@ def export_or_render_card(
         if req.page is None and postgres_db_url is not None
         else None
     )
-    html: str
-    render_mode: str
-    if pre is not None and verify_card_html(card, pre[0])[0]:
-        html, render_mode = pre
-    else:
-        html = render_card_html(card, preset=req.preset)
-        ok, violations = verify_card_html(card, html)
-        if not ok:
-            raise ValueError(f"rendered card HTML failed verification: {violations}")
-        render_mode = "cold_verdict_html"
+    if pre is None:
+        raise LookupError(
+            "No verified LLM HTML card artifact exists for this governed run; export JSON or wait for card materialization."
+        )
+    html, render_mode = pre
+    ok, violations = verify_card_html(card, html)
+    if not ok:
+        raise ValueError(f"governed card HTML artifact failed verification: {violations}")
 
     doc_id: str | None = None
     if req.persist:

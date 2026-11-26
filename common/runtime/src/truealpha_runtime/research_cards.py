@@ -7,7 +7,6 @@ import json
 import re
 from datetime import datetime
 from enum import StrEnum
-from string import Template
 from typing import Any, Final, Literal
 
 from pydantic import Field, SerializerFunctionWrapHandler, model_serializer, model_validator
@@ -356,11 +355,7 @@ def enrich_card_metadata(
         "series_total": series_total if series_total is not None else card.series_total,
     }
     base = ResearchCard(**data)
-    return (
-        base
-        if not include_rendered_html
-        else ResearchCard(**data, rendered_html=render_card_html(base, preset=base.style_preset))
-    )
+    return base
 
 
 def paginate_card_series(
@@ -529,139 +524,3 @@ def verify_card_html(card: ResearchCard, html: str) -> tuple[bool, tuple[str, ..
                 if t is not None and not _has(html, t, norm):
                     v.append(f"missing_metric_{k}:{s.subject_id}:{m.label}:{t}")
     return (not v, tuple(v))
-
-
-def _render_value(r: ResultValue) -> str:
-    return (
-        "—"
-        if r.value is None
-        else (
-            _esc(f"{r.value} {r.currency} ({r.unit})")
-            if r.currency and r.unit
-            else _esc(f"{r.value} {r.currency or r.unit}")
-            if (r.currency or r.unit)
-            else _esc(r.value)
-        )
-    )
-
-
-def _render_metric_card(r: ResultValue, *, compact: bool = False) -> str:
-    zh = _esc(_DATA["metric_labels_zh"].get(r.label, r.label))
-    val = (
-        "—"
-        if r.value is None
-        else (
-            _esc(_DATA["tier_labels_zh"].get(r.value, r.value))
-            if r.label == "tier"
-            else (_esc(_DATA["outcome_labels_zh"].get(r.value, r.value)) if r.label == "outcome" else _render_value(r))
-        )
-    )
-    return (
-        Template(_H["metric_compact"]).substitute(zh=zh, val=val)
-        if compact
-        else Template(_H["metric_full"]).substitute(
-            zh=zh,
-            av=r.availability.value,
-            val=val,
-            period=_esc(r.period or "—"),
-            conf=_esc("—" if r.confidence is None else str(r.confidence)),
-        )
-    )
-
-
-def render_card_html(card: ResearchCard, *, preset: str | CardPreset | None = None) -> str:
-    theme = (
-        preset
-        if isinstance(preset, CardPreset)
-        else CARD_PRESETS.get(preset or card.style_preset or "")
-        or CARD_PRESETS[_DEFAULT_PRESET.get(card.card_kind, "study-notes")]
-    )
-    css = Template(_DATA["css_template"]).substitute(
-        w=XHS_CARD_WIDTH_PX,
-        h=XHS_CARD_HEIGHT_PX,
-        mono="ui-monospace,SFMono-Regular,Menlo,monospace",
-        bg_css=theme.bg_css,
-        surface_bg=theme.surface_bg,
-        fg=theme.fg,
-        mute=theme.mute,
-        accent=theme.accent,
-        on_accent=on_accent_color(theme),
-        border=theme.border,
-        chip_bg=theme.chip_bg,
-    )
-    vis = card.subjects[:MAX_SUBJECTS_PER_CARD]
-    sub_html = "".join(
-        Template(_H["subject"]).substitute(
-            sfx=" compact" if len(vis) >= 3 else "",
-            rk=f'<span class="rank-badge">#{s.rank}</span>' if s.rank is not None else "",
-            name=_esc(s.display_name),
-            sid=_esc(s.subject_id),
-            bg=f'<span class="pill outcome-pill">{_esc(_DATA["outcome_labels_zh"].get(s.outcome, s.outcome))}</span>'
-            if s.outcome
-            else (
-                f'<span class="pill outcome-pill">剔除: {_esc(s.exclusion_reason)}</span>' if s.exclusion_reason else ""
-            ),
-            claim=s.claim_class.value,
-            avail=s.availability.value,
-            cs=_H["causal_banner"] if s.causal_claim == "scenario_only" else "",
-            tiles="".join(
-                _render_metric_card(r, compact=len(vis) >= 3) for r in s.metrics[: (4 if len(vis) >= 3 else 6)]
-            )
-            or _H["empty_tile"],
-        )
-        for s in vis
-    )
-    ov = (
-        Template(_H["series_note"]).substitute(shown=len(vis), total=len(card.subjects))
-        if len(card.subjects) > len(vis)
-        else ""
-    )
-    sb = (
-        f" · SERIES {card.series_index}/{card.series_total}"
-        if card.series_index is not None and card.series_total is not None
-        else ""
-    )
-    hl = (
-        card.title
-        if len(card.title) <= 68 and "issuer:cik:" not in card.title and "issuer:lei:" not in card.title
-        else f"{_H['headline_zh'].get(card.card_kind.value, card.card_kind.value.upper())}：{'、'.join(s.display_name.split(' · ')[0] for s in card.subjects[:3])}{f' 等 {len(card.subjects)} 家' if len(card.subjects) > 3 else ''}"
-    )
-    ctx = card.strategy_context
-    cb = (
-        ""
-        if ctx is None
-        else Template(_H["strategy_bar"]).substitute(
-            total=ctx.total_universe_count,
-            sel=ctx.selected_count,
-            k=ctx.selection_count,
-            beyond=ctx.ranked_beyond_selection_count,
-            rej=ctx.rejected_above_band_count,
-            excl=ctx.excluded_count,
-            ceil=_esc(" / ".join(f"{k}:{v}x" for k, v in ctx.tier_ceilings)),
-        )
-    )
-    ev = "".join(
-        f'<div class="ev-line">{" · ".join([f"id={_esc(s.subject_id)}", f"name={_esc(s.display_name)}", f"avail={_esc(s.availability.value)}", f"claim={_esc(s.claim_class.value)}"] + (["causal=scenario_only"] if s.causal_claim == "scenario_only" else []) + [f"{_esc(m.label)}={_render_value(m)}[p={_esc(m.period or '—')},v={_esc(m.factor_version or '—')},c={_esc(str(m.confidence) if m.confidence is not None else '—')},t={_esc(m.trace.reference_id[:16] if m.trace else '—')}]" for m in s.metrics])}</div>'
-        for s in card.subjects
-    )
-    return Template(_H["doc"]).substitute(
-        title=_esc(card.title),
-        css=css,
-        kind_zh=_esc(_CARD_KIND_ZH[card.card_kind]),
-        sb=sb,
-        preset_tag=f"{_esc(theme.style.upper())} × {_esc(theme.layout.upper())} · {XHS_CARD_WIDTH_PX}x{XHS_CARD_HEIGHT_PX}",
-        hl=_esc(hl),
-        cdate=card.cutoff_at.date().isoformat(),
-        ciso=card.cutoff_at.isoformat(),
-        sver=card.schema_version,
-        tver=card.template_version,
-        pver=XHS_CARD_PROMPT_VERSION,
-        cb=cb,
-        sub_html=sub_html,
-        ov=ov,
-        risk=_esc(card.research_risk_note),
-        attr=_esc(card.source_attribution),
-        cid=_esc(card.card_id),
-        rid=_esc(card.generated_from_report_id),
-        ev=ev,
-    )

@@ -5002,6 +5002,30 @@
             ],
             "title": "Definition Resource"
           },
+          "custom_definition": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Custom Definition"
+          },
+          "release_manifest_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Release Manifest Id"
+          },
           "start_cutoff": {
             "anyOf": [
               {
@@ -5073,6 +5097,33 @@
           "executed_at": {
             "type": "string",
             "title": "Executed At"
+          },
+          "custom_definition_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Custom Definition Sha256"
+          },
+          "release_manifest_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Release Manifest Id"
+          },
+          "exploratory": {
+            "type": "boolean",
+            "title": "Exploratory",
+            "default": false
           }
         },
         "type": "object",

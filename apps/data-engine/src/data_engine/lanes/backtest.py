@@ -4,7 +4,12 @@ import json
 
 import dagster as dg
 from infra2_sdk.config import EnvironmentTier, resolve_tier
-from truealpha_contracts.strategy import load_strategy_definition as load_packaged_strategy_definition
+from truealpha_contracts.strategy import (
+    LargeModelValueV0Definition,
+)
+from truealpha_contracts.strategy import (
+    load_strategy_definition as load_packaged_strategy_definition,
+)
 
 from data_engine import db
 from data_engine.config import settings
@@ -23,6 +28,9 @@ NIGHTLY_VERDICTS: tuple[str, ...] = (NIGHTLY_BACKTEST_VERDICT,)
 class NightlyBacktestConfig(dg.Config):
     executed_at: str
     definition_resource: str | None = None
+    custom_definition_json: str | None = None
+    release_manifest_id: str | None = None
+    exploratory: bool = False
     overrides_json: str | None = None
     start_cutoff: str | None = None
     end_cutoff: str | None = None
@@ -30,7 +38,9 @@ class NightlyBacktestConfig(dg.Config):
 
 def _backtest_kwargs_from_config(config: NightlyBacktestConfig) -> dict[str, object]:
     kwargs: dict[str, object] = {}
-    if config.definition_resource:
+    if config.custom_definition_json:
+        kwargs["definition"] = LargeModelValueV0Definition.model_validate_json(config.custom_definition_json)
+    elif config.definition_resource:
         kwargs["definition"] = load_packaged_strategy_definition(config.definition_resource)
     if config.overrides_json:
         kwargs["overrides"] = json.loads(config.overrides_json)

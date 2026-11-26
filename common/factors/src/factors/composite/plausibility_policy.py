@@ -19,7 +19,7 @@ EXCLUSION_REASON: Mapping[str, ExclusionReason] = {
     RULE_NODE_SIGN_POLICY: ExclusionReason.PLAUSIBILITY_REFUSED_NODE_SIGN_POLICY,
 }
 
-JUDGED_TABLE = "mart.metric_node_values"
+JUDGED_SURFACE = "metric_node_values"
 JUDGED_COLUMN = "gppe_uniform_charge_v0"
 
 
@@ -39,7 +39,7 @@ class Violation:
 
 
 def _collect_sign_violations(current: list[Row], predicate: Callable[[SignFinding], bool]) -> list[Violation]:
-    node = published_node(JUDGED_TABLE, JUDGED_COLUMN)
+    node = published_node(JUDGED_SURFACE, JUDGED_COLUMN)
     violations: list[Violation] = []
     for row in current:
         if row.availability != "available":

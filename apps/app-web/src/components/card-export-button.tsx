@@ -28,9 +28,11 @@ export function CardExportButton({
   universe = universesWithRole("strategy")[0] ?? "all",
 }: CardExportButtonProps) {
   const [downloading, setDownloading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const handleExport = async () => {
     setDownloading(true);
+    setErrorMessage(null);
     try {
       const effectiveKind = kind ?? (issuerId ? "entity" : "ranking");
       const cardKind = effectiveKind === "entity" ? "company" : effectiveKind === "etf" ? "etf" : "ranking";
@@ -61,27 +63,36 @@ export function CardExportButton({
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : "Card export failed");
     } finally {
       setTimeout(() => setDownloading(false), 500);
     }
   };
 
   return (
-    <button
-      type="button"
-      onClick={handleExport}
-      disabled={downloading}
-      data-testid="card-export-button"
-      data-export-kind={kind ?? (issuerId ? "entity" : "ranking")}
-      data-export-format={format}
-      data-export-convention={convention}
-      data-export-universe={universe}
-      className="inline-flex items-center gap-2 rounded-lg border border-accent/40 bg-accent/10 px-3.5 py-1.5 text-xs font-semibold text-accent transition hover:border-accent hover:bg-accent/20 focus:outline-none focus:ring-2 focus:ring-accent disabled:opacity-50"
-      title="Export 1080x1440 3:4 portrait HTML card for Xiaohongshu"
-    >
-      {downloading
-        ? "Exporting..."
-        : effectiveKindLabel(kind, issuerId)}
-    </button>
+    <div className="inline-flex flex-col items-end gap-1">
+      <button
+        type="button"
+        onClick={handleExport}
+        disabled={downloading}
+        data-testid="card-export-button"
+        data-export-kind={kind ?? (issuerId ? "entity" : "ranking")}
+        data-export-format={format}
+        data-export-convention={convention}
+        data-export-universe={universe}
+        className="inline-flex items-center gap-2 rounded-lg border border-accent/40 bg-accent/10 px-3.5 py-1.5 text-xs font-semibold text-accent transition hover:border-accent hover:bg-accent/20 focus:outline-none focus:ring-2 focus:ring-accent disabled:opacity-50"
+        title="Export 1080x1440 3:4 portrait HTML card for Xiaohongshu"
+      >
+        {downloading
+          ? "Exporting..."
+          : effectiveKindLabel(kind, issuerId)}
+      </button>
+      {errorMessage && (
+        <span role="alert" className="max-w-xs text-right text-[11px] text-amber-300">
+          {errorMessage}
+        </span>
+      )}
+    </div>
   );
 }

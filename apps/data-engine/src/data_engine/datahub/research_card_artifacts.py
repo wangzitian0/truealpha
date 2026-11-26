@@ -130,7 +130,7 @@ def materialize_head_research_cards(
 
     written = 0
     model_rendered = 0
-    fallback_rendered = 0
+    failed_count = 0
 
     for subject_key, card in cards_to_generate:
         existing = connection.execute(
@@ -142,12 +142,22 @@ def materialize_head_research_cards(
         ).fetchone()
         if existing is not None:
             continue
-        outcome = generate_xhs_card_html(
-            connection,
-            card=card,
-            transport=transport,
-            now=lambda: now,
-        )
+        try:
+            outcome = generate_xhs_card_html(
+                connection,
+                card=card,
+                transport=transport,
+                now=lambda: now,
+            )
+        except Exception as exc:  # noqa: BLE001
+            failed_count += 1
+            logger.warning(
+                "research_card_artifacts failed LLM card generation for %s (%s): %s",
+                subject_key,
+                card.card_kind.value,
+                exc,
+            )
+            continue
         persist_card_artifact(
             connection,
             run_id=run_id,
@@ -164,11 +174,9 @@ def materialize_head_research_cards(
         written += 1
         if outcome.render_mode == "model_glm":
             model_rendered += 1
-        else:
-            fallback_rendered += 1
 
     return {
         "written": written,
         "model_glm": model_rendered,
-        "deterministic_fallback": fallback_rendered,
+        "failed": failed_count,
     }

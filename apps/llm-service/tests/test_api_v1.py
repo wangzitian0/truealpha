@@ -124,6 +124,22 @@ def test_unified_card_export_prefers_governed_artifact_and_persists_document(
     principal = auth_service.PrincipalRecord(principal_id="principal:1", tenant_id="tenant:1", principal_kind="member")
     monkeypatch.setattr(auth_service, "resolve_principal_from_token", lambda *_a, **_k: principal)
     monkeypatch.setattr(library_service, "_lookup_governed_card_artifact", lambda **_k: None)
+    with pytest.raises(LookupError):
+        library_service.export_or_render_card(
+            auth_service.access_context_for(principal),
+            library_service.CardExportRequest(
+                card_kind=library_service.CardKind.COMPANY,
+                issuer_id="issuer:nvda",
+                cutoff="2026-06-30T23:59:59Z",
+                format="html",
+                persist=False,
+            ),
+            research_repo=fake_repo,
+        )
+
+    valid_html = "<!DOCTYPE html><html><body>NVIDIA NVDA 18.25 tier_1 Research output only.</body></html>"
+    monkeypatch.setattr(library_service, "_lookup_governed_card_artifact", lambda **_k: (valid_html, "model_glm"))
+    monkeypatch.setattr(library_service, "verify_card_html", lambda *_a, **_k: (True, ()))
     monkeypatch.setattr(
         library_service,
         "create_document",
@@ -158,11 +174,12 @@ def test_unified_card_export_prefers_governed_artifact_and_persists_document(
             persist=True,
         ),
         research_repo=fake_repo,
+        database_url="postgresql://test",
     )
     assert resp.card_id.startswith("card:")
-    assert resp.render_mode == "cold_verdict_html"
+    assert resp.render_mode == "model_glm"
     assert resp.document_id == "document:card-saved"
-    assert resp.rendered_html and "<!DOCTYPE html>" in resp.rendered_html
+    assert resp.rendered_html == valid_html
 
     # Also test HTTP route wiring with admin access check.
     monkeypatch.setattr(admin_service, "get_ops_overview", lambda **_k: admin_service.OpsOverviewResponse(runs=[]))
